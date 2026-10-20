@@ -8,10 +8,9 @@ use charliebot_agents::event_builders::make_master_done_event;
 use charliebot_core::config::BackendOption;
 use charliebot_core::event_types;
 use charliebot_registry::context::{FeatureContext, StartupState};
-use charliebot_store::StoreError;
-use charliebot_store::StoreResult;
-use charliebot_store::metadata::TaskProfile;
+use charliebot_store::metadata::{ColdReadSpec, SessionMetadata, TaskProfile, TaskSpec, TaskType};
 use charliebot_store::run_records::{self, RunKind, RunOutcome, RunOutcomeKind, RunRecord, SequenceRef};
+use charliebot_store::{CreateTask, StoreError, StoreResult, TaskCaller};
 use charliebot_tasks::dispatch::{
   DispatchExecutor, child_report_text, dispatcher, inputs_not_pending_conflict, note_run_liveness,
   unprocessed_input_blocker,
@@ -138,6 +137,61 @@ async fn worker_agent_messages_require_parent_identity_and_authorization() {
   ));
   harness.dispatcher.admit_input(&worker.id, event_types::AGENT_MESSAGE, "work", "agent", parent_fields).await.unwrap();
   assert_eq!(harness.dispatcher.pending_inputs(&worker.id).unwrap().len(), 1);
+}
+
+/// `test_artifact_check.py::test_agent_message_to_a_read_only_child_passes_without_takeoff`: a parent's agent message
+/// reaches a verify or cold-read child with no user message anywhere, and the same message to an implement child is
+/// refused without that takeoff.
+#[tokio::test]
+async fn agent_message_to_a_read_only_child_passes_without_takeoff() {
+  // Python: tests/core/test_artifact_check.py::test_agent_message_to_a_read_only_child_passes_without_takeoff.
+  let harness = Harness::new();
+  let root = harness.create_task("root", None, TaskProfile::Manager, "Root").await;
+  let parent_fields = json!({"from_session": root.id, "from_session_name": "Root"});
+  for task_type in [TaskType::Verify, TaskType::ColdRead] {
+    let child = typed_child(&harness, &root.id, task_type).await;
+    let event = harness
+      .dispatcher
+      .admit_input(&child.id, event_types::AGENT_MESSAGE, "a note from the parent", "agent", parent_fields.clone())
+      .await
+      .unwrap();
+    assert_eq!(event["content"], "a note from the parent");
+  }
+
+  // The control: an implement child refuses the same message without takeoff.
+  let implement = typed_child(&harness, &root.id, TaskType::Implement).await;
+  assert!(matches!(
+    harness.dispatcher.admit_input(&implement.id, event_types::AGENT_MESSAGE, "x", "agent", parent_fields).await,
+    Err(StoreError::Forbidden(_))
+  ));
+}
+
+/// A worker child of `parent` whose task record names `task_type`; a cold-read child names a page too.
+async fn typed_child(harness: &Harness, parent: &str, task_type: TaskType) -> SessionMetadata {
+  let cold_read = (task_type == TaskType::ColdRead).then(|| ColdReadSpec {
+    page_path: "/synthetic/plan.html".to_string(),
+    genre: "plan".to_string(),
+    trigger: "t".to_string(),
+  });
+  let task = TaskSpec { goal: "check it".to_string(), task_type: Some(task_type), cold_read, ..TaskSpec::default() };
+  harness
+    .store
+    .create_task(
+      CreateTask {
+        request_id: format!("child-{task_type:?}"),
+        task_parent_id: Some(parent.to_string()),
+        profile: TaskProfile::Worker,
+        task: Some(task),
+        name: Some("Child".to_string()),
+        backend: None,
+        group: None,
+        session_id: None,
+      },
+      TaskCaller::Operator,
+      Map::new(),
+    )
+    .await
+    .unwrap()
 }
 
 #[tokio::test]

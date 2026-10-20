@@ -7,6 +7,8 @@
 
 use std::path::Path;
 
+use sha2::{Digest, Sha256};
+
 use crate::spawner_prompt;
 
 /// The cold-reader template under `prompts/`.
@@ -24,6 +26,11 @@ pub const EVIDENCE_FILENAME: &str = "cold_read.json";
 pub enum ColdReadOutcome<'a> {
   Answered { backend_id: &'a str, answer: &'a str },
   AllFailed,
+}
+
+/// The SHA-256 digest of the page bytes a cold read read, as lowercase hexadecimal (`hashlib.sha256(...).hexdigest()`).
+pub fn page_sha256(page_bytes: &[u8]) -> String {
+  format!("{:x}", Sha256::digest(page_bytes))
 }
 
 /// The system prompt and the seven questions, read fresh from `prompts/cold_read.md`. Trailing newlines stay out of

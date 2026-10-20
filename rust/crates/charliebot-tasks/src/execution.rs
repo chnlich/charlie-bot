@@ -24,7 +24,9 @@ use charliebot_registry::backend::{Env, LaunchArgs, LaunchRefused};
 use charliebot_registry::context::FeatureContext;
 use charliebot_registry::sequence::{SequenceCompletion, SequenceExecutor, SequenceLaunchSettlement};
 use charliebot_store::control_events::{self, ACTOR_SYSTEM};
-use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskType, ThreadMetadata, ThreadStatus, UtcDateTime};
+use charliebot_store::metadata::{
+  ColdReadSpec, SessionMetadata, TaskProfile, TaskType, ThreadMetadata, ThreadStatus, UtcDateTime,
+};
 use charliebot_store::run_records::{self, RunKind, RunOutcome, RunOutcomeKind, RunRecord};
 use charliebot_store::{StoreError, StoreResult};
 use futures_util::future::BoxFuture;
@@ -32,6 +34,7 @@ use serde_json::{Map, Value, json};
 use tokio::sync::watch;
 use uuid::Uuid;
 
+use crate::cold_read::{self, ColdReadOutcome};
 use crate::dispatch::{DispatchExecutor, Dispatcher, RunFinishedCompletion};
 use crate::git;
 use crate::master_queue::{MasterQueue, PersistAndBroadcastFn, SessionCallbacks, TaskTreeActivityFn};
@@ -974,7 +977,7 @@ impl TaskExecutionAdapter {
     task_type: TaskType,
   ) -> anyhow::Result<String> {
     if task_type == TaskType::ColdRead {
-      return Err(recovery::owner_not_landed("cold-read", &format!("the cold-read context of run {}", run.id)));
+      return self.build_cold_read_context(meta, run);
     }
     let description = self.work_description(meta, run).await?;
     if task_type == TaskType::Verify {
@@ -1019,6 +1022,21 @@ impl TaskExecutionAdapter {
       parts.push(prompts::render_worktree_persistence(&checkout)?);
     }
     Ok(parts.into_iter().filter(|part| !part.is_empty()).collect::<Vec<_>>().join("\n\n"))
+  }
+
+  /// The cold-read run's whole input: the page text, one blank line, then the questions. The launch records the page's
+  /// sha256 on the run's evidence file first, so the report states what this run read (`_build_cold_read_context`).
+  fn build_cold_read_context(&self, meta: &SessionMetadata, run: &RunRecord) -> anyhow::Result<String> {
+    let cold = cold_spec(meta, &run.id)?;
+    let page_bytes = fs::read(&cold.page_path).with_context(|| format!("reading cold-read page {}", cold.page_path))?;
+    let evidence = json!({ "page_path": cold.page_path, "page_sha256": cold_read::page_sha256(&page_bytes) });
+    let evidence_path = self.features.store.run_dir(&meta.id, &run.id).join(cold_read::EVIDENCE_FILENAME);
+    fsutil::atomic_write_text(&evidence_path, &pyfmt::json_dumps(&evidence, &pyfmt::PYTHON_JSON_DEFAULT))?;
+    let checkout = self.features.startup.require::<charliebot_core::RepoRoot>()?;
+    let (_system_prompt, questions) = cold_read::load_texts(checkout.path())?;
+    let page_text =
+      String::from_utf8(page_bytes).with_context(|| format!("decoding cold-read page {}", cold.page_path))?;
+    Ok(cold_read::probe_input(&page_text, &questions, &cold.trigger))
   }
 
   fn build_step_context(
@@ -1261,7 +1279,7 @@ impl TaskExecutionAdapter {
     }
     let task_type = meta.task.as_ref().and_then(|task| task.task_type);
     if task_type == Some(TaskType::ColdRead) && matches!(durable_outcome, "success" | "failed") {
-      return Err(recovery::owner_not_landed("cold-read", &format!("the cold-read delivery of run {}", run.id)));
+      return self.after_cold_read_run(meta, run, durable_outcome).await;
     }
     if durable_outcome == "success" {
       if task_type.unwrap_or(TaskType::Implement) == TaskType::Implement {
@@ -1307,6 +1325,140 @@ impl TaskExecutionAdapter {
       self.report_failure_to_parent(session_id, run, durable_outcome, summary.as_deref()).await?;
     }
     Ok(())
+  }
+
+  /// The cold-read delivery chain: report the answer, retry the next backend, or report that every model failed
+  /// (`_after_cold_read_run`). An empty answer is a failed attempt. A retry takes a new work run in the same child.
+  pub(crate) async fn after_cold_read_run(
+    &self,
+    meta: &SessionMetadata,
+    run: &RunRecord,
+    durable_outcome: &str,
+  ) -> anyhow::Result<()> {
+    let session_id = meta.id.as_str();
+    let store = &self.features.store;
+    if durable_outcome == "success" {
+      let events_log = store.run_dir(session_id, &run.id).join(run_records::RUN_EVENTS_NAME);
+      if let Some(answer) = review::worker_summary_from_events_log(&run_events(&events_log)?) {
+        return self.complete_cold_read(meta, run, &answer).await;
+      }
+    }
+    let error = if durable_outcome == "success" {
+      "empty final answer".to_string()
+    } else {
+      self.cold_read_attempt_error(session_id, run)?
+    };
+    self.record_cold_read_attempt(meta, run, &error)?;
+    let work_runs = store
+      .list_run_records_sync(session_id)?
+      .into_iter()
+      .filter(|record| record.kind == RunKind::Work)
+      .collect::<Vec<_>>();
+    let tried = work_runs.iter().filter_map(|record| record.backend.clone()).collect::<Vec<_>>();
+    let cfg = self.features.config.get()?;
+    let pool = backend_pool::backend_pool(&self.features)?;
+    let parent_id = meta.task_parent_id.as_deref().unwrap_or_default();
+    let selection = spawner_backends::select_verify_backend(&cfg, store, parent_id, "cold_read", &tried, &pool).await?;
+    if let Some((backend, model, _tried)) = selection {
+      let run_id = control_events::stable_run_id(session_id, &format!("cold-read:work:{}", work_runs.len()));
+      {
+        let guard = store.control_lock().await;
+        let record = worker_run_record(session_id, &run_id, &backend, model.as_deref());
+        let task_spec = canonical_task_spec_text(meta.task.as_ref())?;
+        store.register_run_locked(&guard, session_id, record, task_spec.as_deref()).await?;
+      }
+      self.launch(session_id, &run_id)?;
+      return Ok(());
+    }
+    let body = self.cold_read_report(meta, run, ColdReadOutcome::AllFailed)?;
+    self.report_failure_to_parent(session_id, run, "failed", Some(&body)).await
+  }
+
+  /// The success report, then the automatic completion closes the child (`_complete_cold_read`).
+  async fn complete_cold_read(&self, meta: &SessionMetadata, run: &RunRecord, answer: &str) -> anyhow::Result<()> {
+    let backend_id = run.backend.as_deref().with_context(|| format!("cold-read run {} has no backend", run.id))?;
+    let body = self.cold_read_report(meta, run, ColdReadOutcome::Answered { backend_id, answer })?;
+    let completion = self.features.startup.require::<crate::completion::TaskCompletion>()?;
+    match completion.evaluate_automatic_completion(&meta.id, &run.id, Some(&body), None, None, None).await {
+      Ok(_) => Ok(()),
+      Err(StoreError::Conflict(blockers)) => {
+        tracing::warn!(
+          target: "charliebot_tasks",
+          session_id = %meta.id,
+          run_id = %run.id,
+          blockers = ?blockers,
+          "cold_read_delivery_close_blocked"
+        );
+        Ok(())
+      }
+      Err(error) => Err(error.into()),
+    }
+  }
+
+  /// The failed run's error for its attempt line: the error event, else its closing text, else a fallback.
+  fn cold_read_attempt_error(&self, session_id: &str, run: &RunRecord) -> anyhow::Result<String> {
+    let events_log = self.features.store.run_dir(session_id, &run.id).join(run_records::RUN_EVENTS_NAME);
+    if events_log.is_file() {
+      let events = run_events(&events_log)?;
+      if let Some(error) = review::worker_error_from_events_log(&events) {
+        return Ok(error);
+      }
+      if let Some(text) = review::worker_summary_from_events_log(&events) {
+        return Ok(text);
+      }
+    }
+    Ok(format!("run {} failed without a reportable output", run.id))
+  }
+
+  /// Record one failed attempt on the run's evidence file, which the report reads back (`_record_cold_read_attempt`).
+  fn record_cold_read_attempt(&self, meta: &SessionMetadata, run: &RunRecord, error: &str) -> anyhow::Result<()> {
+    let cold = cold_spec(meta, &run.id)?;
+    let evidence_path = self.features.store.run_dir(&meta.id, &run.id).join(cold_read::EVIDENCE_FILENAME);
+    let mut evidence = if evidence_path.is_file() {
+      serde_json::from_slice::<Value>(&fs::read(&evidence_path)?)?
+    } else {
+      json!({ "page_path": cold.page_path, "page_sha256": null })
+    };
+    evidence["error"] = json!(error);
+    fsutil::atomic_write_text(&evidence_path, &pyfmt::json_dumps(&evidence, &pyfmt::PYTHON_JSON_DEFAULT))?;
+    Ok(())
+  }
+
+  /// The report body for one settled cold read: the page and its sha256, every failed attempt in run order, then the
+  /// answer or the all-failed trailer (`_cold_read_report`). The sha256 is the settling run's, read at its launch.
+  fn cold_read_report(
+    &self,
+    meta: &SessionMetadata,
+    run: &RunRecord,
+    outcome: ColdReadOutcome<'_>,
+  ) -> anyhow::Result<String> {
+    let cold = cold_spec(meta, &run.id)?;
+    let session_id = meta.id.as_str();
+    let store = &self.features.store;
+    let mut attempts = Vec::new();
+    let mut page_sha256 = None;
+    for record in store.list_run_records_sync(session_id)? {
+      if record.kind != RunKind::Work {
+        continue;
+      }
+      let evidence_path = store.run_dir(session_id, &record.id).join(cold_read::EVIDENCE_FILENAME);
+      if !evidence_path.is_file() {
+        continue;
+      }
+      let evidence = serde_json::from_slice::<Value>(&fs::read(&evidence_path)?)?;
+      if record.id == run.id {
+        page_sha256 = evidence["page_sha256"].as_str().map(str::to_string);
+      }
+      if let (Some(error), Some(backend)) = (evidence["error"].as_str(), record.backend.as_deref()) {
+        attempts.push((backend.to_string(), error.to_string()));
+      }
+    }
+    let page_sha256 = match page_sha256 {
+      Some(digest) => digest,
+      // The settling run never read the page: its launch failed on the read, so the page is stated as it stands now.
+      None => cold_read::page_sha256(&fs::read(&cold.page_path)?),
+    };
+    Ok(cold_read::format_report(&cold.page_path, &page_sha256, &attempts, outcome))
   }
 
   pub(crate) async fn maybe_spawn_review(
@@ -2392,6 +2544,23 @@ fn events_log_result_success(path: &Path) -> anyhow::Result<bool> {
 
 fn worker_run_record(session_id: &str, run_id: &str, backend: &str, model: Option<&str>) -> RunRecord {
   RunRecord { kind: RunKind::Work, ..manager_run_record(session_id, run_id, backend, model) }
+}
+
+/// The parsed events of one run's events log. A run that wrote no log has none.
+fn run_events(events_log: &Path) -> anyhow::Result<Vec<Value>> {
+  if !events_log.is_file() {
+    return Ok(Vec::new());
+  }
+  Ok(charliebot_agents::transport::recovery::parse_raw_lines(&fs::read(events_log)?))
+}
+
+/// The cold-read spec of a task. Only a cold-read node carries one, and its runs read the page it names.
+fn cold_spec<'a>(meta: &'a SessionMetadata, run_id: &str) -> anyhow::Result<&'a ColdReadSpec> {
+  meta
+    .task
+    .as_ref()
+    .and_then(|task| task.cold_read.as_ref())
+    .with_context(|| format!("cold-read run {run_id} of task {} carries no cold_read spec", meta.id))
 }
 
 pub(crate) fn canonical_task_spec_text(

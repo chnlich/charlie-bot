@@ -798,11 +798,13 @@ def test_clock_derived_leaf_ids_sorting_in_opposite_order_get_the_same_placehold
   leaf_ids = ("20000000-0000-4000-8000-000000000003", "20000000-0000-4000-8000-000000000004")
   manager_runs = ("20000000-0000-4000-8000-000000000021", "20000000-0000-4000-8000-000000000022")
   leaf_runs = ("20000000-0000-4000-8000-000000000031", "20000000-0000-4000-8000-000000000032")
+  # The bound manager session is not a spawn, so its id stays minted and its raw form reorders too.
+  minted_ids = ("30000000-0000-4000-8000-000000000001", "30000000-0000-4000-8000-000000000002")
   sides = []
   snapshots = []
-  for label, manager_id, leaf_id, manager_run, leaf_run in (
-      ("base", manager_ids[0], leaf_ids[0], manager_runs[0], leaf_runs[0]),
-      ("cand", manager_ids[1], leaf_ids[1], manager_runs[1], leaf_runs[1]),
+  for label, manager_id, leaf_id, manager_run, leaf_run, minted_id in (
+      ("base", manager_ids[0], leaf_ids[0], manager_runs[0], leaf_runs[0], minted_ids[0]),
+      ("cand", manager_ids[1], leaf_ids[1], manager_runs[1], leaf_runs[1], minted_ids[1]),
   ):
     # Base sorts manager before leaf; candidate sorts leaf before manager.
     side = _spawn_side(
@@ -816,9 +818,15 @@ def test_clock_derived_leaf_ids_sorting_in_opposite_order_get_the_same_placehold
             compare.Entry("file", b'{"id": "%s"}\n' % manager_run.encode()),
         f"home/sessions/{leaf_id}/data/chat_events.jsonl":
             compare.Entry("file", b'{"id": "%s"}\n' % leaf_run.encode()),
+        f"home/sessions/{minted_id}/data/chat_events.jsonl":
+            compare.Entry("file", b'{"id": "40000000-0000-4000-8000-000000000003"}\n'),
     })
 
   parity._prepare_contexts(sides, snapshots)
+
+  for side, minted_id in zip(sides, minted_ids, strict=True):
+    assert side.ctx.minted_uuids[minted_id] == "<minted-1>"
+    assert normalize.normalize_text("40000000-0000-4000-8000-000000000003", side.ctx) == "<minted-2>"
 
   for side, manager_id, leaf_id, manager_run, leaf_run in zip(
       sides, manager_ids, leaf_ids, manager_runs, leaf_runs, strict=True):

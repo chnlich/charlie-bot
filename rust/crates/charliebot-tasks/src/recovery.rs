@@ -356,10 +356,10 @@ async fn replay_followups(
       }
       if outcome == RunOutcomeKind::Success {
         completion.after_run_finished(session_id, &run.id).await?;
-        if meta.task.is_some() && task_type == Some(TaskType::Implement) {
-          let paused = completion.pause_reason(session_id)?.is_some();
-          if !paused
-            && replay_owes_review(store.task_state(session_id)? == "open", &run_records, run)
+        if meta.task.is_some() && task_type == Some(TaskType::Implement) && run.repo_path.is_some() {
+          if let Some(reason) = completion.pause_reason(session_id)? {
+            tracing::info!(target: "charliebot_tasks", session_id, run_id = %run.id, reason, "worker_delivery_paused");
+          } else if replay_owes_review(store.task_state(session_id)? == "open", &run_records, run)
             && adapter.maybe_spawn_review(session_id, run).await?.is_none()
           {
             let cfg = features.config.get()?;

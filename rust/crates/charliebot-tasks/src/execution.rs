@@ -1313,9 +1313,9 @@ impl TaskExecutionAdapter {
         return Ok(Some(review_run.id.clone()));
       }
     }
-    for pending in &existing {
-      if run_records::terminal_outcome(&events, &pending.id)?.is_none() {
-        return Ok(Some(pending.id.clone()));
+    for review_run in &existing {
+      if run_records::terminal_outcome(&events, &review_run.id)?.is_none() {
+        return Ok(existing.first().map(|run| run.id.clone()));
       }
     }
     let tried_backends = existing.iter().filter_map(|run| run.backend.clone()).collect::<Vec<_>>();

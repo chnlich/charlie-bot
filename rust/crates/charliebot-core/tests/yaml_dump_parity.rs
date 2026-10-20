@@ -38,6 +38,12 @@ fn corpus() -> Vec<Value> {
   for value in ["1_000", "0x1F", "0b101", "12:30", "2026-10-20 08:00:00", "=", "<<", "1e3", "inf", "017", "+1", "y"] {
     corpus.push(json!({"k": value}));
   }
+  for value in ["-foo", "?foo", ":foo", "- foo", "? foo", "-"] {
+    corpus.push(json!({"k": value}));
+  }
+  for value in [json!(0.5), json!(1e20), json!(1e-7), json!(-0.0), json!(100.0)] {
+    corpus.push(json!({"k": value}));
+  }
   let folded = vec!["word"; 20].join(" ");
   corpus.push(json!({"prompt": folded}));
   corpus.push(json!({
@@ -50,6 +56,15 @@ fn corpus() -> Vec<Value> {
   corpus.push(json!({"prompt": "it's\nfine"}));
   corpus.push(json!({"prompt": "ends with a newline\n"}));
   corpus.push(json!({"prompt": LONG_PROMPT}));
+  corpus.push(json!({"prompt": format!("{}prompt\t{}", "long ".repeat(36), "tail ".repeat(8))}));
+  corpus.push(json!({"prompt": format!("{} \n{}", "a".repeat(90), "second line ".repeat(8))}));
+  corpus.push(json!({
+    "prompt": "\0\u{7}\u{8}\t\n\u{b}\u{c}\r\u{1b}\u{1}\u{7f}\u{85}\u{a0}\u{2028}\u{2029}\u{feff}\"\\"
+  }));
+  for value in ["\u{1}", "\u{1b}", "\u{7f}", "\u{85}", "\u{2028}", "\u{feff}"] {
+    corpus.push(json!({"prompt": value}));
+  }
+  corpus.push(json!({"key\tneeds quotes": "value"}));
   corpus
 }
 

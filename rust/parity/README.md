@@ -289,6 +289,12 @@ Scenario fields:
 
 - `fake_agent` gives the starts each fake agent consumes in order. `expect_starts` gives the required record count
   in each tree at scenario end.
+- `exclude_file_globs` omits matching tree-relative paths from file-delta comparison and UUID-normalization input.
+  Use a narrow pattern only for artifacts whose creation order is not part of the scenario contract; the remaining
+  files, including session events and loop state, still compare.
+- `compare_fake_agent_spawns: false` keeps the `expect_starts` count check but skips argv and launch-context equality,
+  and excludes spawn records from UUID-normalization input. Use it when asynchronous work can interleave launches in
+  either order and the scenario checks its durable events and state directly.
 - `directions` names a non-empty subset of `python-to-candidate` and `candidate-to-python`. Add it when a scenario
   has a `handover` step. A scenario without handover refuses this key.
 - `config` deep-merges into the synthetic `config.yaml`; nested mappings merge, while lists and scalar values
@@ -348,6 +354,17 @@ Scenario fields:
         second:
           type: run_finished
           match_fields: {outcome: success}
+  ```
+
+- `compare_event_type_streams` scopes to one session and compares selected event types in their own original order,
+  after the other events. Unselected events keep their order. Use it when independent workers can interleave event types
+  differently while each type's durable sequence still has to match:
+
+  ```yaml
+  comparison_rules:
+    - compare_event_type_streams:
+        session: ${sessions.atlas}
+        event_types: [improve_iteration_completed, child_report, master_done]
   ```
 
 Each fake-agent start names its executable, lists its steps and gives its exit code. A start without a matching

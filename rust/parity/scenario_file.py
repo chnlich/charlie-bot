@@ -33,7 +33,8 @@ MULTIPART_BOUNDARY = "charliebot-parity-multipart-boundary-1792318577"
 _REFERENCE = re.compile(r"\$\{(?P<ref>[A-Za-z0-9_.]+)\}")
 _SCENARIO_KEYS = {
     "stage", "name", "description", "steps", "fake_agent", "expect_starts", "directions", "config", "credentials",
-    "fakes", "fixture_extras", "voice_models", "headless_chrome", "comparison_rules"
+    "fakes", "fixture_extras", "voice_models", "headless_chrome", "comparison_rules", "exclude_file_globs",
+    "compare_fake_agent_spawns"
 }
 _HTTP_STEP_KEYS = {
     "kind", "name", "method", "path", "query", "headers", "json", "body_file", "multipart", "auth", "agent",
@@ -125,6 +126,8 @@ class Scenario:
   voice_models: bool
   headless_chrome: bool
   comparison_rules: tuple[dict[str, Any], ...]
+  exclude_file_globs: tuple[str, ...]
+  compare_fake_agent_spawns: bool
 
 
 def _placeholder(ref: str) -> str:
@@ -309,7 +312,8 @@ def _fixture_extras(raw: Any, path: pathlib.Path) -> tuple[str, ...]:
 
 EVENT_FIELD_RULE_NAME = "allowed_baseline_values_for_one_event_field"
 ADJACENT_ORDER_RULE_NAME = "either_order_of_adjacent_events"
-COMPARISON_RULE_NAMES = (EVENT_FIELD_RULE_NAME, ADJACENT_ORDER_RULE_NAME)
+EVENT_STREAM_RULE_NAME = "compare_event_type_streams"
+COMPARISON_RULE_NAMES = (EVENT_FIELD_RULE_NAME, ADJACENT_ORDER_RULE_NAME, EVENT_STREAM_RULE_NAME)
 
 
 def _event_selector(raw: Any, where: str) -> dict[str, Any]:
@@ -344,6 +348,21 @@ def _comparison_rules(raw: Any, path: pathlib.Path) -> tuple[dict[str, Any], ...
     if rule_name == ADJACENT_ORDER_RULE_NAME:
       rules.append({rule_name: _adjacent_order_rule(rule, f"{where}.{rule_name}")})
       continue
+    if rule_name == EVENT_STREAM_RULE_NAME:
+      stream_where = f"{where}.{rule_name}"
+      if not isinstance(rule, dict) or set(rule) != {"session", "event_types"}:
+        raise ScenarioError(f"{stream_where} requires session and event_types")
+      session = rule["session"]
+      if not isinstance(session, str) or not session:
+        raise ScenarioError(f"{stream_where}.session must be a non-empty string")
+      event_types = rule["event_types"]
+      if (not isinstance(event_types, list) or not event_types or
+          any(not isinstance(event_type, str) or not event_type for event_type in event_types)):
+        raise ScenarioError(f"{stream_where}.event_types must be a non-empty list of event type names")
+      if len(set(event_types)) != len(event_types):
+        raise ScenarioError(f"{stream_where}.event_types must not repeat a type")
+      rules.append({rule_name: {"session": session, "event_types": list(event_types)}})
+      continue
     required = {"event", "field", "allowed_baseline_values", "required_candidate_value"}
     if not isinstance(rule, dict) or set(rule) != required:
       raise ScenarioError(
@@ -369,6 +388,23 @@ def _comparison_rules(raw: Any, path: pathlib.Path) -> tuple[dict[str, Any], ...
                 }
         })
   return tuple(rules)
+
+
+def _exclude_file_globs(raw: Any, path: pathlib.Path) -> tuple[str, ...]:
+  if raw is None:
+    return ()
+  if not isinstance(raw, list):
+    raise ScenarioError(f"{path.name}.exclude_file_globs must be a list")
+  patterns = []
+  for index, pattern in enumerate(raw):
+    where = f"{path.name}.exclude_file_globs[{index}]"
+    if not isinstance(pattern, str) or not pattern or "\\" in pattern:
+      raise ScenarioError(f"{where} must be a non-empty POSIX path glob")
+    relative = pathlib.PurePosixPath(pattern)
+    if relative.is_absolute() or ".." in relative.parts:
+      raise ScenarioError(f"{where} must stay within the scenario tree")
+    patterns.append(pattern)
+  return tuple(patterns)
 
 
 def _step(raw: Any, where: str) -> Step:
@@ -707,6 +743,10 @@ def load(path: pathlib.Path) -> Scenario:
   fakes = _fake_seeds(raw.get("fakes", {}), path)
   fixture_extras = _fixture_extras(raw.get("fixture_extras", []), path)
   comparison_rules = _comparison_rules(raw.get("comparison_rules"), path)
+  exclude_file_globs = _exclude_file_globs(raw.get("exclude_file_globs"), path)
+  compare_fake_agent_spawns = raw.get("compare_fake_agent_spawns", True)
+  if not isinstance(compare_fake_agent_spawns, bool):
+    raise ScenarioError(f"{path.name}.compare_fake_agent_spawns must be a boolean")
   voice_models = raw.get("voice_models", False)
   if not isinstance(voice_models, bool):
     raise ScenarioError(f"{path.name}.voice_models must be a boolean")
@@ -774,6 +814,8 @@ def load(path: pathlib.Path) -> Scenario:
       voice_models=voice_models,
       headless_chrome=headless_chrome,
       comparison_rules=comparison_rules,
+      exclude_file_globs=exclude_file_globs,
+      compare_fake_agent_spawns=compare_fake_agent_spawns,
   )
 
 

@@ -1681,7 +1681,8 @@ impl TaskExecutionAdapter {
     (Some((target, commit, repo_path.to_string())), String::new())
   }
 
-  fn take_quota_failure(&self, session_id: &str, run_id: &str) -> Option<Option<UtcDateTime>> {
+  /// Remove and return the quota reset recorded for one run, distinguishing no failure from an unknown reset.
+  pub fn take_quota_failure(&self, session_id: &str, run_id: &str) -> Option<Option<UtcDateTime>> {
     self
       .quota_failures
       .lock()

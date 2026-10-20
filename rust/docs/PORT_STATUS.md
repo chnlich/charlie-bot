@@ -106,7 +106,7 @@ The order of the web reply audit's events is undefined. In the requested 20 Pyth
 | GET | `/api/sessions/{session_id}/explain` | features/explain | ported |  |
 | GET | `/api/sessions/{session_id}/explain/status` | features/explain | ported |  |
 | POST | `/api/internal/improve/stop` | features/improve | ported |  |
-| POST | `/api/internal/improve` | features/improve | ported |  |
+| POST | `/api/internal/improve` | features/improve | ported | Resolves the improve role before reservation; pooled iterations cool quota-failed members and retry with the next member. |
 | GET | `/ncu` | features/ncu | ported | a cache miss runs a Python child, `rust/helpers/ncu_report_helper.py`, when the Nsight install has `extras/python`; otherwise the native `ncu --import --csv` path answers. See `rust/docs/python_helper.md`. A CSV integer cell outside the 64-bit range fails the import with a `ValueError` internal error, while Python keeps the exact integer |
 | WS | `/ws/terminal` | features/terminal | ported |  |
 | GET | `/perfetto` | features/trace | ported |  |
@@ -282,7 +282,7 @@ run-record work is `S2`; task-tree runtime and feature-owned files remain with t
 | `sessions/<sid>/voice/<stamp>_<id>.wav` | features/voice | ported | 16 kHz mono PCM16 WAV |
 | `sessions/<sid>/voice/<stamp>_<id>.txt` | features/voice | ported | final transcript |
 | `sessions/<sid>/loops/active.lock` | features/improve | ported | |
-| `sessions/<sid>/loops/<n>/state.json` | features/improve | ported | |
+| `sessions/<sid>/loops/<n>/state.json` | features/improve | ported | Stores pool selection, quota blockers, iteration progress and the final close state. |
 | `sessions/<sid>/loops/<n>/goal.md` | features/improve | ported | |
 | `sessions/<sid>/loops/<n>/plan.md` | features/improve | ported | |
 | `sessions/<sid>/loops/<n>/iter_<n>.md` | features/improve | ported | |

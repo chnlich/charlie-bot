@@ -18,7 +18,6 @@ use charliebot_core::repo_root::RepoRoot;
 use charliebot_registry::context::FeatureContext;
 use charliebot_registry::sequence::SequenceTree;
 use charliebot_registry::task_errors::task_http_error;
-use charliebot_store::metadata::TaskType;
 use charliebot_tasks::execution::TaskExecutionAdapter;
 use charliebot_tasks::{recovery, spawner_backends};
 use serde::Deserialize;
@@ -91,6 +90,7 @@ fn runtime_error(error: impl Display) -> Response {
 
 /// A refusal of the start path. The start path threads it through `Result`, so it is boxed.
 type Refusal = Box<Response>;
+type ImproveRunnerParts = (Arc<dyn SequenceTree>, Arc<RepoRoot>, Arc<TaskExecutionAdapter>);
 
 fn refuse_runtime(error: impl Display) -> Refusal {
   Box::new(runtime_error(error))
@@ -137,18 +137,23 @@ async fn start_improve_sequence(features: &Arc<FeatureContext>, req: ImproveRequ
     (String::new(), String::new())
   } else {
     // The resolver's role picks only among pool members, and this call never reaches the pool: a pool with a requested
-    // backend returns that backend first, and a pool-less config skips the pool branch. The improve loop has no task
-    // type of its own, so the role is a carrier.
+    // backend returns that backend first, and a pool-less config skips the pool branch.
     let (backend, model, _from_pool) = spawner_backends::resolve_requested_subagent_backend_model(
       &cfg,
       store,
       &req.session_id,
       req.backend.as_deref(),
-      TaskType::Verify,
+      spawner_backends::SubagentRole::Improve,
       &pool,
     )
     .await
-    .map_err(|error| Box::new(bad_request(error)))?;
+    .map_err(|error| {
+      if error.downcast_ref::<spawner_backends::BackendResolutionValueError>().is_some() {
+        Box::new(bad_request(error))
+      } else {
+        refuse_runtime(error)
+      }
+    })?;
     (backend, model.unwrap_or_default())
   };
 
@@ -174,7 +179,7 @@ async fn start_improve_sequence(features: &Arc<FeatureContext>, req: ImproveRequ
 
   // The runner's collaborators come from the startup state. A failure after the reservation releases it, so no running
   // loop is left that no controller owns.
-  let (tree, repo_root) = match runner_parts(features) {
+  let (tree, repo_root, adapter) = match runner_parts(features) {
     Ok(parts) => parts,
     Err(error) => {
       fail_reserved_loop(&cfg, &req.session_id, state).map_err(refuse_runtime)?;
@@ -227,17 +232,17 @@ async fn start_improve_sequence(features: &Arc<FeatureContext>, req: ImproveRequ
   let child_id = child.id;
   tokio::spawn(async move {
     let spec = LoopSpec { session_id: &session_id, loop_id, iterations, child_id: &child_id, goal: &goal };
-    run_improve_sequence(&spec, &cfg, tree.as_ref(), &repo_root, &pool).await;
+    run_improve_sequence(&spec, &cfg, tree.as_ref(), &repo_root, &pool, &adapter).await;
   });
   Ok(response)
 }
 
 /// The task-tree handle and the repo root the loop runner reads from the startup state.
-fn runner_parts(features: &Arc<FeatureContext>) -> anyhow::Result<(Arc<dyn SequenceTree>, Arc<RepoRoot>)> {
+fn runner_parts(features: &Arc<FeatureContext>) -> anyhow::Result<ImproveRunnerParts> {
   let adapter = features.startup.require::<TaskExecutionAdapter>()?;
   let tree: Arc<dyn SequenceTree> = Arc::new(recovery::sequence_tree(features, &adapter)?);
   let repo_root = features.startup.require::<RepoRoot>()?;
-  Ok((tree, repo_root))
+  Ok((tree, repo_root, adapter))
 }
 
 /// The 400 answer for a refused backend or model: its detail is the refusal's message.

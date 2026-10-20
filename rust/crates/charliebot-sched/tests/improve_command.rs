@@ -53,6 +53,27 @@ fn a_second_reservation_names_the_running_loop() {
 }
 
 #[test]
+// Python: tests/test_cli_improve.py::test_session_takes_a_new_loop_after_stop
+fn a_stopped_loop_releases_its_lock_for_a_new_loop_id() {
+  let home = tempfile::tempdir().expect("temporary home");
+  let cfg = config(home.path());
+  let first = command::reserve_loop_state(&cfg, SESSION, &reservation("make it faster", "improve/first", None))
+    .expect("the first loop reserves");
+
+  assert!(command::stop_improve_loop(&cfg, SESSION).expect("the loop stops"));
+  command::clear_active_loop_lock(&cfg, SESSION).expect("the controller releases the active lock");
+  let second = command::reserve_loop_state(&cfg, SESSION, &reservation("make it clearer", "improve/second", None))
+    .expect("the session reserves another loop");
+
+  assert_ne!(second.loop_id, first.loop_id);
+  assert_eq!(
+    command::load_loop_state(&cfg, SESSION, first.loop_id).expect("the first state reads").unwrap().status,
+    "stopped"
+  );
+  assert_eq!(second.status, "running");
+}
+
+#[test]
 // Python: tests/test_improve_command.py::test_quota_blocker_reason_ignores_allowed_rate_limit_event
 fn an_allowed_rate_limit_event_is_no_blocker() {
   let events =

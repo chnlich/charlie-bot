@@ -166,3 +166,45 @@ def test_adjacent_pair_rule_does_not_mask_event_ids_embedded_in_other_text() -> 
   baseline[1]["content"] = "reply to nudge-1"
   candidate[2]["content"] = "reply to nudge-2"
   assert _ordered_diff(baseline, candidate) != []
+
+
+def _event_stream_diff(baseline: list[dict], candidate: list[dict]) -> list[str]:
+  event_types = ("improve_iteration_completed", "child_report", "master_done", "improve_failed")
+  path = "home/sessions/synthetic-session/data/chat_events.jsonl"
+  left = compare.order_event_type_streams_in_delta(_chat_delta(baseline), path, event_types)
+  right = compare.order_event_type_streams_in_delta(_chat_delta(candidate), path, event_types)
+  return compare.delta_diff(left, right, _context(), _context())
+
+
+def test_event_type_streams_allow_cross_type_interleaving() -> None:
+  iteration_one = {"type": "improve_iteration_completed", "id": "iteration-one", "iteration": 1}
+  iteration_two = {"type": "improve_iteration_completed", "id": "iteration-two", "iteration": 2}
+  report_one = {"type": "child_report", "id": "report-one", "summary": "first"}
+  report_two = {"type": "child_report", "id": "report-two", "summary": "second"}
+  manager_done = {"type": "master_done", "id": "manager-done", "exit_code": 0}
+  loop_closed = {"type": "improve_failed", "id": "loop-closed", "iterations_completed": 2}
+  assistant = {"type": "assistant", "id": "assistant", "content": "manager response"}
+  baseline = [iteration_one, report_one, assistant, manager_done, iteration_two, report_two, loop_closed]
+  candidate = [iteration_one, report_one, iteration_two, report_two, loop_closed, assistant, manager_done]
+
+  assert _event_stream_diff(baseline, candidate) == []
+
+
+def test_event_type_streams_keep_each_type_order_and_payload_compared() -> None:
+  baseline = [
+      {"type": "improve_iteration_completed", "id": "iteration-one", "iteration": 1},
+      {"type": "child_report", "id": "report-one", "summary": "first"},
+      {"type": "improve_iteration_completed", "id": "iteration-two", "iteration": 2},
+      {"type": "child_report", "id": "report-two", "summary": "second"},
+  ]
+  reordered_iterations = [
+      baseline[2],
+      baseline[1],
+      baseline[0],
+      baseline[3],
+  ]
+  changed_report = list(baseline)
+  changed_report[1] = {**changed_report[1], "summary": "changed"}
+
+  assert _event_stream_diff(baseline, reordered_iterations) != []
+  assert _event_stream_diff(baseline, changed_report) != []

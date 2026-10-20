@@ -466,6 +466,37 @@ def order_adjacent_pair(delta: Delta, first: EventSelector, second: EventSelecto
   return dataclasses.replace(delta, added=_masked_ids(added, masks), changed=_masked_ids(changed, masks))
 
 
+def order_event_type_streams(data: bytes, event_types: tuple[str, ...]) -> bytes:
+  """Group selected event types after other events while preserving each type's original order."""
+  lines = [line for line in data.splitlines() if line.strip()]
+  events = [_jsonl_line_value(line) for line in lines]
+  selected = {event_type: [] for event_type in event_types}
+  remaining = []
+  for event in events:
+    event_type = event.get("type") if isinstance(event, dict) else None
+    if isinstance(event_type, str) and event_type in selected:
+      selected[event_type].append(event)
+    else:
+      remaining.append(event)
+  ordered = [*remaining, *(event for event_type in event_types for event in selected[event_type])]
+  return b"".join(json.dumps(event).encode() + b"\n" for event in ordered)
+
+
+def order_event_type_streams_in_delta(delta: Delta, path: str, event_types: tuple[str, ...]) -> Delta:
+  """*delta* with one chat log's selected event types grouped in the declared order."""
+
+  def ordered(entries: dict[str, Entry]) -> dict[str, Entry]:
+    result: dict[str, Entry] = {}
+    for entry_path, entry in entries.items():
+      if entry_path == path and entry.kind == "file":
+        result[entry_path] = Entry(entry.kind, order_event_type_streams(entry.data, event_types))
+      else:
+        result[entry_path] = entry
+    return result
+
+  return dataclasses.replace(delta, added=ordered(delta.added), changed=ordered(delta.changed))
+
+
 def _masked_ids(entries: dict[str, Entry], masks: dict[str, str]) -> dict[str, Entry]:
   """*entries* with each file's references to a masked event id replaced by that event's placeholder."""
   result: dict[str, Entry] = {}

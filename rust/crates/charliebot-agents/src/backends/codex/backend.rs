@@ -8,6 +8,7 @@ use std::time::Duration;
 use anyhow::{Context, bail};
 use charliebot_core::event_types;
 use charliebot_core::pyfmt::{JsonStyle, json_dumps, python_str};
+use charliebot_core::pystr;
 use charliebot_registry::backend::{AgentBackend, Env, LaunchArgs, Translate, TransportKind};
 use futures_util::future::BoxFuture;
 use nix::sys::signal::Signal;
@@ -16,7 +17,7 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::process::{Child, ChildStderr, ChildStdout};
 
 use super::options::CodexOptions;
-use super::text::{py_strip, truthy};
+use super::text::truthy;
 use super::translate::CodexTranslator;
 use crate::cli_base::prepend_path_dir;
 use crate::one_shot::{assistant_text, frame_system_prompt};
@@ -198,7 +199,7 @@ impl CodexBackend {
     };
     let (text, structured_error, returncode) = collected?;
     let stderr = stderr_task.await.context("waiting for the codex one-shot stderr reader")??;
-    let stderr_text = py_strip(&String::from_utf8_lossy(&stderr)).to_string();
+    let stderr_text = pystr::strip(&String::from_utf8_lossy(&stderr)).to_string();
     let detail = if stderr_text.is_empty() { String::new() } else { format!(": {stderr_text}") };
     if let Some(error) = structured_error.filter(|error| !error.is_empty()) {
       bail!("Codex one-shot failed: {error}");
@@ -278,7 +279,7 @@ async fn collect(
           if let Some(message) = message.filter(|value| truthy(value))
             && structured_error.is_none()
           {
-            structured_error = Some(py_strip(&python_str(message)).to_string());
+            structured_error = Some(pystr::strip(&python_str(message)).to_string());
           }
         }
         Some(event_types::ASSISTANT)
@@ -291,7 +292,7 @@ async fn collect(
     }
   }
   let status = child.wait().await?;
-  Ok((py_strip(&parts.concat()).to_string(), structured_error, python_exit_code(status)))
+  Ok((pystr::strip(&parts.concat()).to_string(), structured_error, python_exit_code(status)))
 }
 
 /// One NDJSON line parsed, or `None` for a blank line or a line that is not JSON (logged, as the Python reader does).

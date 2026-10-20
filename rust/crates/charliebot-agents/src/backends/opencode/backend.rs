@@ -9,6 +9,7 @@ use std::time::Duration;
 use anyhow::{Context, bail};
 use charliebot_core::event_types;
 use charliebot_core::pyfmt::python_str;
+use charliebot_core::pystr;
 use charliebot_registry::backend::{AgentBackend, BackendFactory, Env, LaunchArgs, Translate, TransportKind};
 use futures_util::future::BoxFuture;
 use nix::sys::signal::Signal;
@@ -19,7 +20,7 @@ use uuid::Uuid;
 
 use super::options::OpenCodeOption;
 use super::server::{OpenCodeHost, OpenCodeServer, OpenCodeServerPool, Turn, TurnEvent};
-use crate::cli_base::{IMAGE_MIME_BY_EXT, apply_proxy_env, py_strip};
+use crate::cli_base::{IMAGE_MIME_BY_EXT, apply_proxy_env};
 use crate::event_builders;
 use crate::runner::EventFn;
 use crate::transport::cgroup::system_cgroup_base_dir;
@@ -912,7 +913,7 @@ async fn collect_one_shot(stdout: tokio::process::ChildStdout) -> anyhow::Result
   if let Some(error) = error {
     bail!(error);
   }
-  Ok(py_strip(&parts.concat()).to_string())
+  Ok(pystr::strip(&parts.concat()).to_string())
 }
 
 async fn wait_child_exit(exit: &mut watch::Receiver<Option<Result<i32, String>>>) -> anyhow::Result<i32> {

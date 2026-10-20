@@ -6,12 +6,13 @@
 use anyhow::{Context, bail};
 use charliebot_core::event_types;
 use charliebot_core::pyfmt::{PYTHON_JSON_DEFAULT, json_dumps, python_str};
+use charliebot_core::pystr;
 use charliebot_registry::backend::Translate;
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 
 use super::pricing;
-use super::text::{EMPTY_OBJECT, count_or_zero, py_len, py_slice_from, py_strip, truthy};
+use super::text::{EMPTY_OBJECT, count_or_zero, py_len, py_slice_from, truthy};
 use crate::event_builders::{
   make_error_event, make_result_event, make_text_event, make_tool_result_event, make_tool_use_event,
 };
@@ -345,7 +346,7 @@ fn mcp_tool_call(event: &Map<String, Value>, item: &Map<String, Value>) -> Vec<V
 fn todo_label(todo: &Map<String, Value>) -> String {
   for key in ["text", "label", "content", "step"] {
     if let Some(value) = text_of(todo, key) {
-      let stripped = py_strip(value);
+      let stripped = pystr::strip(value);
       if !stripped.is_empty() {
         return stripped.to_string();
       }

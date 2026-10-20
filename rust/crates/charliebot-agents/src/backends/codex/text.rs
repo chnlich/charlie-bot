@@ -1,10 +1,10 @@
-//! Python value semantics the codex port reproduces: `str.strip`, `str.splitlines`, `str` slicing and truthiness.
+//! Python value semantics the codex port reproduces: `str.splitlines`, `str` slicing and truthiness.
 
 use std::sync::LazyLock;
 
 use serde_json::{Map, Value};
 
-pub use crate::cli_base::{py_strip, truthy};
+pub use crate::cli_base::truthy;
 
 /// The empty object a missing `x.get(key, {})` falls back to.
 pub static EMPTY_OBJECT: LazyLock<Map<String, Value>> = LazyLock::new(Map::new);
@@ -69,6 +69,7 @@ pub fn count_or_zero(map: &Map<String, Value>, key: &str) -> anyhow::Result<i64>
 #[cfg(test)]
 mod tests {
   use super::*;
+  use charliebot_core::pystr;
   use serde_json::json;
 
   #[test]
@@ -81,7 +82,7 @@ mod tests {
 
   #[test]
   fn strip_takes_the_information_separators_too() {
-    assert_eq!(py_strip("\u{1c} padded \u{a0}"), "padded");
+    assert_eq!(pystr::strip("\u{1c} padded \u{a0}"), "padded");
   }
 
   #[test]

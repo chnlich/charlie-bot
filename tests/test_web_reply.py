@@ -26,7 +26,7 @@ from src.features.web_reply import audit, cli, metadata, reply, status
 from src.features.web_reply import turn_contribution as web_turn_contribution
 from src.infra import event_types as ET
 from src.infra import models
-from src.runtime import backend_pool, cold_read, file_urls, master_cc_state, streaming, task_prompts
+from src.runtime import backend_pool, file_urls, master_cc_state, streaming, task_prompts
 from src.runtime.api import deps, message_utils
 from src.runtime.cli import common
 from src.runtime.hooks import backend_types

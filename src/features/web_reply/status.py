@@ -1,10 +1,10 @@
 """A web session's status: the Goal, Now and Waiting on you items that ``charliebot web status`` sets and reads.
 
 A set replaces the items its file names, stores the status in the ``web_status`` metadata field, records one
-``web_status`` event and tells every ancestor page. Waiting items need non-blank context and a matching
-``web_ask_check`` digest before the set stores them. The set's return holds the stored status plus ``now_chars`` and
-``now_over_budget``; the stored status and event keep neither. A read lists open waiting descendants and open children
-with a Now, both newest first.
+``web_status`` event and tells every ancestor page. Waiting items need non-blank context before either the unread query
+or the set checks digests. The set stores them only after a matching ``web_ask_check`` digest. The set's return holds
+the stored status plus ``now_chars`` and ``now_over_budget``; the stored status and event keep neither. A read lists
+open waiting descendants and open children with a Now, both newest first.
 
 The cold-read side keeps one digest of a Waiting on you item. The unread query and set gate use the same digest and
 ``web_ask_check`` event lookup.
@@ -88,10 +88,8 @@ async def set_status(
   """
   meta = await reply.require_web_session(store, session_id)
   patch = parse_patch(text)
+  _require_waiting_context(patch)
   if "waiting" in patch.model_fields_set:
-    for item in patch.waiting:
-      if item.context is None:
-        raise reply.WebReplyError(422, f"Waiting item needs context: {item.text}")
     unread = _unread_items(patch.waiting, await _read_item_digests(session_id, events))
     if unread:
       names = "; ".join(item.text for item in unread)
@@ -147,6 +145,13 @@ def parse_item(raw: object) -> metadata.WaitingItem:
     raise reply.WebReplyError(422, f"Waiting item is invalid: {_error_summary(exc)}") from exc
 
 
+def _require_waiting_context(patch: StatusPatch) -> None:
+  """Refuse a waiting item without context before its digest is checked."""
+  for item in patch.waiting:
+    if item.context is None:
+      raise reply.WebReplyError(422, f"Waiting item needs context: {item.text}")
+
+
 async def record_ask_check(
     session_id: str, raw_item: object, backend: str, answer: str, store: session_store.SessionStore,
     events: session_events.SessionEvents) -> dict:
@@ -174,10 +179,12 @@ async def unread_waiting(
     session_id: str, text: str, store: session_store.SessionStore, events: session_events.SessionEvents) -> dict:
   """The waiting items of the status file *text* that no web_ask_check event of the session names.
 
-  The file is parsed and validated as a set parses it; refusals match the set's. Nothing is stored or recorded.
+  The file is parsed and validated as a set parses it, including the waiting-item context check; refusals match the
+  set's. Nothing is stored or recorded.
   """
   await reply.require_web_session(store, session_id)
   patch = parse_patch(text)
+  _require_waiting_context(patch)
   unread = _unread_items(patch.waiting, await _read_item_digests(session_id, events))
   return {"unread": [item.model_dump(mode="json") for item in unread]}
 

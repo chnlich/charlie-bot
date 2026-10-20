@@ -1054,6 +1054,14 @@ async def test_a_status_event_leaves_the_unread_mark_unchanged(tmp_path: pathlib
 
 _ASK_CHECK_URL = "/api/internal/web/ask-check"
 _UNREAD_URL = "/api/internal/web/status/unread"
+_CONTEXTED_DECIDE = json.dumps(
+    {
+        "waiting":
+            [{
+                "text": "Decide",
+                "context": "The line is active. Choose continue or stop; continue is recommended.",
+            }]
+    })
 
 
 def _ask_check(
@@ -1344,19 +1352,16 @@ async def test_the_unread_query_of_a_file_without_waiting_lists_nothing(tmp_path
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "case, text, status_code", [
-        ("unknown", json.dumps({"waiting": [{
-            "text": "Decide"
-        }]}), 404),
-        ("thread", json.dumps({"waiting": [{
-            "text": "Decide"
-        }]}), 409),
-        ("worker", json.dumps({"waiting": [{
-            "text": "Decide"
-        }]}), 409),
+        ("unknown", _CONTEXTED_DECIDE, 404),
+        ("thread", _CONTEXTED_DECIDE, 409),
+        ("worker", _CONTEXTED_DECIDE, 409),
         ("bad json", "not json", 422),
         ("names no item", "{}", 422),
         ("invalid item", json.dumps({"waiting": [{
             "text": " "
+        }]}), 422),
+        ("no context", json.dumps({"waiting": [{
+            "text": "Decide"
         }]}), 422),
     ])
 async def test_a_refused_unread_query_records_nothing(
@@ -1413,6 +1418,64 @@ def test_the_cli_status_set_posts_the_file_and_prints_the_stored_status_as_one_j
   out = capsys.readouterr().out
   assert out.count("\n") == 1
   assert json.loads(out) == stored
+
+
+@pytest.mark.asyncio
+async def test_the_cli_status_set_stops_on_missing_context_before_calling_a_light_backend(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+  blocks = _rig(tmp_path)
+  sid = await _session(blocks)
+  client = _status_client(blocks)
+  cli_cfg = conftest.setup_session_cwd(tmp_path, monkeypatch, sid)
+  option = types.SimpleNamespace(id="fake-light")
+  cli_cfg.backends = types.SimpleNamespace(pool=[option.id])
+  cli_cfg.charlie_bot_repo = conftest.ROOT
+  monkeypatch.setattr(common, "get_config", lambda: cli_cfg)
+  item = {"text": "Decide", "link": None}
+  status_file = tmp_path / "status.json"
+  status_file.write_text(json.dumps({"waiting": [item]}), encoding="utf-8")
+  monkeypatch.setattr(sys, "argv", ["web", "status", "set", "--file", str(status_file)])
+  api_calls: list[str] = []
+
+  def fake_transport_post(
+      url: str, *, json: dict | None, params: dict | None, headers: dict[str, str], timeout: float) -> httpx.Response:
+    del params, headers, timeout
+    endpoint = url[url.index("/api/internal"):]
+    api_calls.append(endpoint)
+    assert json is not None
+    return client.post(endpoint, json=json)
+
+  monkeypatch.setattr(common, "_request_post", fake_transport_post)
+  monkeypatch.setattr(common, "_maybe_version_skew_hint", lambda _base_url: None)
+  backend_builds: list[str] = []
+  backend_calls: list[str] = []
+
+  class FakeBackend:
+
+    async def one_shot_text(self, prompt: str, system_prompt: str, *, timeout: None) -> str:
+      backend_calls.append(prompt)
+      return "(1) Decide."
+
+  def build_backend(_option: object, _cfg: object) -> FakeBackend:
+    backend_builds.append(option.id)
+    return FakeBackend()
+
+  monkeypatch.setattr(
+      backend_pool, "select", lambda _cfg, *, caller, exclude: option if option.id not in exclude else None)
+  monkeypatch.setattr(backend_types, "build_backend", build_backend)
+
+  with pytest.raises(SystemExit) as exit_info:
+    await asyncio.to_thread(cli.main)
+
+  assert exit_info.value.code == 1
+  assert api_calls == [_UNREAD_URL]
+  assert backend_builds == []
+  assert backend_calls == []
+  assert json.loads(capsys.readouterr().err) == {
+      "error": "Waiting item needs context: Decide",
+      "code": "server_error",
+      "effect": "none",
+  }
 
 
 def test_the_cli_status_set_reads_and_records_each_unread_item_then_exits_three_before_storing(

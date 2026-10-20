@@ -437,9 +437,9 @@ async def test_persisted_master_done_fires_both_deliver_tasks(
   done = {"type": ET.MASTER_DONE, "exit_code": 0, "still_thinking": False}
   tasks: list[asyncio.Task] = []
   with (
-      mock.patch("src.features.slack.slack_listener.deliver_done",
+      mock.patch(conftest.SLACK_LISTENER_DELIVER_DONE_PATCH_TARGET,
                  new=mock.AsyncMock(return_value=True)) as slack_deliver,
-      mock.patch("src.features.discord.discord_listener.deliver_done", new=mock.AsyncMock(return_value=True)) as
+      mock.patch(conftest.DISCORD_LISTENER_DELIVER_DONE_PATCH_TARGET, new=mock.AsyncMock(return_value=True)) as
       discord_deliver,
       mock.patch(conftest.TASKS_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=conftest.make_task_spawner(tasks)),
       mock.patch(conftest.BROADCAST_PATCH_TARGET, new=mock.AsyncMock()),

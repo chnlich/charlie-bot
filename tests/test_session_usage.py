@@ -234,10 +234,10 @@ def test_declared_window_subtracts_reserves_from_declared_window(monkeypatch: py
 @pytest.mark.parametrize(
     ("run_kind", "window"), [
         pytest.param("manager_turn", 433_000, id="manager-turn"),
-        pytest.param("work", 133_000, id="work"),
-        pytest.param("review", 133_000, id="review"),
-        pytest.param("iteration", 133_000, id="iteration"),
-        pytest.param("scheduled_step", 133_000, id="scheduled-step"),
+        pytest.param("work", 433_000, id="work"),
+        pytest.param("review", 433_000, id="review"),
+        pytest.param("iteration", 433_000, id="iteration"),
+        pytest.param("scheduled_step", 433_000, id="scheduled-step"),
     ])
 def test_declared_window_is_the_run_kinds_window(run_kind: models.RunKind, window: int) -> None:
   """The usage page's compaction line follows the window the launch env declares for the kind."""
@@ -246,7 +246,7 @@ def test_declared_window_is_the_run_kinds_window(run_kind: models.RunKind, windo
 
 
 def test_usage_resolution_reports_the_sessions_kind_compaction_line() -> None:
-  """A manager node's page shows the manager window; a worker node's shows the other one."""
+  """The usage page reads the run kind from each session profile."""
   manager = models.SessionMetadata(profile="manager", id="m", name="M")
   worker = models.SessionMetadata(profile="worker", id="w", name="W")
   assert session_usage.usage_run_kind(manager) == "manager_turn"

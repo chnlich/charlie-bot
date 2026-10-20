@@ -39,17 +39,14 @@ HEADLESS_CLAUDE_INVARIANT_ENV: dict[str, str] = {
 
 # The auto-compact window each run kind declares, unless the host exports one.
 # Claude Code compacts at window - min(max_output_tokens, 20000) - 13000.
-# A 433000 window puts a manager turn's compaction point at 400000.
-# A 133000 window puts every other kind's compaction point at 100000.
+# A 433000 window puts every kind's compaction point at 400000.
 # See CLAUDE_COMPACT_OUTPUT_RESERVE and CLAUDE_COMPACT_CONTEXT_RESERVE below.
-# A manager turn spans many turns and must retain user instructions and delegation context.
-# A worker or review run does one job; its spec and repo stay readable after context drops detail.
 DECLARED_WINDOW_BY_RUN_KIND: dict[models.RunKind, int] = {
     "manager_turn": 433_000,
-    "work": 133_000,
-    "review": 133_000,
-    "iteration": 133_000,
-    "scheduled_step": 133_000,
+    "work": 433_000,
+    "review": 433_000,
+    "iteration": 433_000,
+    "scheduled_step": 433_000,
 }
 
 HEADLESS_CLAUDE_FORWARDED_ENV_NAMES: tuple[str, ...] = (

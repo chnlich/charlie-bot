@@ -145,10 +145,10 @@ def _settings_of(cmd: list[str]) -> dict:
 @pytest.mark.parametrize(
     ("run_kind", "window"), [
         pytest.param("manager_turn", "433000", id="manager-turn"),
-        pytest.param("work", "133000", id="work"),
-        pytest.param("review", "133000", id="review"),
-        pytest.param("iteration", "133000", id="iteration"),
-        pytest.param("scheduled_step", "133000", id="scheduled-step"),
+        pytest.param("work", "433000", id="work"),
+        pytest.param("review", "433000", id="review"),
+        pytest.param("iteration", "433000", id="iteration"),
+        pytest.param("scheduled_step", "433000", id="scheduled-step"),
     ])
 def test_a_claude_run_declares_its_kinds_window_and_disables_the_advisor(run_kind: models.RunKind, window: str) -> None:
   backend = claude_code.ClaudeCodeBackend(run_kind=run_kind)

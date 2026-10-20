@@ -18,10 +18,6 @@ from src.infra import config, metadata_slots
 from src.infra import event_types as ET
 
 
-def _read_events(path: pathlib.Path) -> list[dict]:
-  return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
-
-
 def _assert_manager_root(cfg: config.CharlieBotConfig, session_id: str) -> list[dict]:
   """The on-disk node is a parentless manager root whose created_by_event names its one task_created fact.
 
@@ -31,7 +27,7 @@ def _assert_manager_root(cfg: config.CharlieBotConfig, session_id: str) -> list[
   stored = json.loads((node_dir / "metadata.json").read_text(encoding="utf-8"))
   assert (stored["schema_version"], stored["profile"], stored["task_parent_id"],
           stored["task"]) == (2, "manager", None, None)
-  events = _read_events(node_dir / "data" / "chat_events.jsonl")
+  events = conftest.read_events(node_dir / "data" / "chat_events.jsonl")
   created = [e for e in events if e["type"] == ET.TASK_CREATED and e["source_session_id"] == session_id]
   assert len(created) == 1
   assert stored["created_by_event"] == {"session_id": session_id, "event_id": created[0]["id"]}
@@ -85,7 +81,7 @@ async def test_summon_creates_a_manager_root_under_its_thread_id_and_origin(
 async def test_fork_and_elone_birth_one_stream_without_syncing_the_copy(tmp_path: pathlib.Path, spawn: str) -> None:
   cfg, mgr, _ = conftest.build_env(tmp_path)
   parent = await conftest.make_parent(mgr)  # two seed events: e0, e1
-  parent_events = _read_events(mgr.events.get_chat_events_path(parent))
+  parent_events = conftest.read_events(mgr.events.get_chat_events_path(parent))
 
   with mock.patch("os.fdatasync") as fdatasync:
     if spawn == "fork":

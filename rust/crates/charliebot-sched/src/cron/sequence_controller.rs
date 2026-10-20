@@ -759,7 +759,10 @@ mod tests {
       .unwrap()
       .unwrap();
 
-    assert!(prefix.starts_with("[Auto-triggered scheduled task result for 'synthetic-cron']"));
+    assert_eq!(
+      prefix,
+      "[Auto-triggered scheduled task result for 'synthetic-cron']\nReview the worker/reviewer results below. Check: was the branch merged? Are there errors? Summarize the outcome.\n\n"
+    );
     let fresh = features.store.get_session(&node.id).await.unwrap().unwrap();
     assert_eq!(fresh.cc_session_id, None);
     assert_eq!(fresh.cc_session_started_at, None);

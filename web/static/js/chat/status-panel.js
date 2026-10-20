@@ -5,8 +5,8 @@
 // Goal, Now and Waiting on you, and in a parent session the Waiting on you items
 // of its open descendant sessions and a folded block of the Now of its open direct
 // children. A web session is one that Chat.ForYou.isWebSession (for-you.js) accepts.
-// A thread session and a worker session show no panel. On a phone (platform.isMobile)
-// the panel is one toggle row until a tap expands it.
+// A thread session and a worker session show no panel. Both platforms draw the
+// toggle row; the phone starts folded and desktop state persists in localStorage.
 //
 // The status is the session's web_status at open, then the web_status messages of
 // this session, live or in history: the newest updated_at wins, so an older page
@@ -17,13 +17,14 @@
   const Chat = globalThis.Chat;
 
   const PANEL_ID = 'chat-status-panel';
+  const PANEL_EXPANDED_STORAGE_KEY = 'chat-status-panel-expanded';
   // An item's link is text the agent wrote. Only web and host-absolute URLs become
   // anchors: any other scheme, javascript: above all, would run in this page.
   const SAFE_LINK = /^(https?:\/\/|\/)/;
 
   // The session the page shows the panel for, and what the panel draws from. A
-  // null panelSessionId means the page shows no panel. panelExpanded is the phone
-  // panel's tap state: it holds until the page reloads.
+  // null panelSessionId means the page shows no panel. panelExpanded holds the
+  // phone's tap state until reload; desktop reads its choice from localStorage.
   let panelSessionId = null;
   let panelStatus = null;
   let panelDescendants = [];
@@ -184,16 +185,20 @@
     return panelDescendants.reduce((total, row) => total + row.waiting.length, 0);
   }
 
-  // The phone panel's one row until a tap expands it: the Waiting on you count, then the
-  // descendants' item count when they hold items. Expanded, the same row stays at the top.
-  function toggleRow() {
+  // The shared toggle row counts Waiting on you items and any descendant items.
+  function toggleRow(expanded) {
     const row = document.createElement('button');
     row.type = 'button';
     row.className = 'sticky -top-2 z-10 bg-slate-900 block w-full text-left text-slate-200 hover:text-slate-100 transition-colors';
     row.dataset.statusRow = 'toggle';
-    row.setAttribute('aria-expanded', String(panelExpanded));
+    row.setAttribute('aria-expanded', String(expanded));
     row.onclick = () => {
-      panelExpanded = !panelExpanded;
+      const nextExpanded = !panelIsExpanded();
+      if (platform.isMobile) {
+        panelExpanded = nextExpanded;
+      } else {
+        localStorage.setItem(PANEL_EXPANDED_STORAGE_KEY, nextExpanded ? '1' : '0');
+      }
       renderPanel();
     };
     let summary = 'No status yet';
@@ -205,8 +210,16 @@
     const childCount = descendantItemCount();
     row.dataset.childCount = String(childCount);
     if (childCount) summary += ' · In child sessions · ' + childCount;
-    row.textContent = (panelExpanded ? '▾' : '▸') + ' ' + summary;
+    row.textContent = (expanded ? '▾' : '▸') + ' ' + summary;
     return row;
+  }
+
+  function panelIsExpanded() {
+    if (platform.isMobile) return panelExpanded;
+    const stored = localStorage.getItem(PANEL_EXPANDED_STORAGE_KEY);
+    if (stored === null || stored === '1') return true;
+    if (stored === '0') return false;
+    throw new Error('Invalid desktop status panel state: ' + stored);
   }
 
   // The row that counts the descendants' items and, opened, lists them. It starts folded.
@@ -280,11 +293,11 @@
       return;
     }
     el.classList.remove('hidden');
-    // The desktop panel scrolls past its height cap. A phone panel is the toggle row
-    // alone until it expands, and an expanded phone panel shows every row.
+    // Desktop scrolls within its height cap; an expanded phone panel uses its full height.
     el.classList.toggle('max-h-48', !platform.isMobile);
-    if (platform.isMobile) el.appendChild(toggleRow());
-    if (platform.isMobile && !panelExpanded) return;
+    const expanded = panelIsExpanded();
+    el.appendChild(toggleRow(expanded));
+    if (!expanded) return;
     if (panelStatus) {
       el.appendChild(goalRow(panelStatus.goal));
       el.appendChild(nowRow(panelStatus));
@@ -368,7 +381,7 @@
     if (panelSessionId) fetchDescendants(panelSessionId);
   }
 
-  // A fold-out or a rotation changes the phone layout: the panel redraws in the new one.
+  // A fold-out or rotation changes the platform layout, so redraw the panel.
   platform.onChange(renderPanel);
 
   Chat.wire({

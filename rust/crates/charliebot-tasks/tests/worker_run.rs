@@ -97,6 +97,8 @@ fn error_text(stack: &Stack, session_id: &str, run_id: &str) -> anyhow::Result<S
 }
 
 /// Wait until a node has no run without a terminal fact (`_settle_parent`, over the durable views).
+/// Waits until every run of `session_id` is terminal and no input is pending on it, so no launch of the test's
+/// making sits at the gate when the stack drops (`tests/test_task_execution.py` `_settle_parent`).
 async fn settle_node(stack: &Stack, session_id: &str) -> anyhow::Result<()> {
   settle_until(|| {
     let events = stack.run_events(session_id)?;
@@ -105,7 +107,7 @@ async fn settle_node(stack: &Stack, session_id: &str) -> anyhow::Result<()> {
         return Ok(false);
       }
     }
-    Ok(true)
+    Ok(stack.dispatch.pending_inputs(session_id)?.is_empty())
   })
   .await
 }
@@ -153,6 +155,7 @@ async fn bare_branch_base_with_unpushed_local_commit_launch_fails() -> anyhow::R
   let report = stack.child_reports(&manager.id)?.pop().expect("checked above");
   assert_eq!(report["outcome"], "failed");
   assert!(report["summary"].as_str().unwrap_or_default().contains("differs from origin/main"), "{report}");
+  settle_node(&stack, &manager.id).await?;
   Ok(())
 }
 
@@ -203,6 +206,9 @@ async fn bare_branch_base_behind_starts_from_origin_tip() -> anyhow::Result<()> 
   // The work branch started at the new origin tip, never at the stale local main.
   assert_eq!(synthetic_git(Path::new(&worktree), &["rev-parse", "HEAD"])?, origin_tip);
   assert_eq!(synthetic_git(&repo, &["rev-parse", "main"])?, local_main);
+  // The success wakes the parent in the background; wait for the turn it launches before the stack drops.
+  settle_until(|| Ok(!stack.run_ids_of_kind(&manager.id, RunKind::ManagerTurn)?.is_empty())).await?;
+  settle_node(&stack, &manager.id).await?;
   Ok(())
 }
 
@@ -486,6 +492,7 @@ async fn worktree_preparation_failure_lands_failed_run_and_reports_to_parent() -
   assert_eq!(closes[0]["actor"], "system");
   assert_eq!(closes[0]["request_id"], format!("unsuccessful:{run_id}"));
   assert_eq!(closes[0]["run_ids"], json!([run_id]));
+  settle_node(&stack, &parent.id).await?;
   Ok(())
 }
 
@@ -1218,6 +1225,10 @@ async fn quota_failure_fails_over_to_the_next_member(task_type: TaskType) -> any
   assert!(failures.is_empty(), "a failover sends no failure report: {failures:?}");
   let report = backend_pool::backend_pool(&stack.features)?.recovery_report(&stack.cfg);
   assert!(report.contains("fake2 cooling until"), "the failed member cooled: {report}");
+  // The retry's success wakes the parent in the background; wait for the turn it launches before the stack drops.
+  settle_until(|| Ok(!stack.run_ids_of_kind(&manager.id, RunKind::ManagerTurn)?.is_empty())).await?;
+  settle_node(&stack, &worker).await?;
+  settle_node(&stack, &manager.id).await?;
   Ok(())
 }
 
@@ -1268,6 +1279,7 @@ async fn a_pinned_worker_is_not_failed_over_and_its_member_is_not_cooled() -> an
   assert_eq!(reports[0]["outcome"], "failed");
   let report = backend_pool::backend_pool(&stack.features)?.recovery_report(&stack.cfg);
   assert!(report.contains("fake2 not cooling"), "the pinned member is not cooled: {report}");
+  settle_node(&stack, &manager.id).await?;
   Ok(())
 }
 
@@ -1292,5 +1304,6 @@ async fn failover_with_every_member_cooling_reports_each_recovery_time() -> anyh
   let summary = reports[0]["summary"].as_str().expect("the report names the recovery times");
   assert!(summary.contains("fake2 cooling until 2030-01-02T02:00"), "{summary}");
   assert!(summary.contains("fake3 cooling until 2030-01-02T03:04"), "{summary}");
+  settle_node(&stack, &manager.id).await?;
   Ok(())
 }

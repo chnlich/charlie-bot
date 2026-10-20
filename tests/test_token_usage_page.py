@@ -98,7 +98,7 @@ def _seeded_ledger(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path, *, c
   if captured:
     with usage_ledger.UsageLedger(ledger_path) as ledger:
       ledger.mark_capture_finished(socket.gethostname())
-  monkeypatch.setattr("src.features.usage.usage_ledger.default_ledger_path", lambda: ledger_path)
+  monkeypatch.setattr(conftest.USAGE_LEDGER_DEFAULT_LEDGER_PATH_PATCH_TARGET, lambda: ledger_path)
   monkeypatch.setattr("src.features.usage.token_tally.backend_registry", dict)
   return ledger_path
 

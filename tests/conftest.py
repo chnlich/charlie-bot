@@ -1725,6 +1725,12 @@ SPAWNER_BACKENDS_RESOLVE_BACKEND_OPTION_PATCH_TARGET = "src.runtime.spawner_back
 SCHEDULER_LOAD_CONFIG_PATCH_TARGET = "src.infra.config.load_config"
 SCHEDULER_GET_SCHEDULED_TASKS_PATCH_TARGET = "src.features.cron.loader.get_scheduled_tasks"
 
+# Import-path patch target for the usage-ledger default path. The ledger page, cli and
+# storage-cool capture resolve it through the home module at call time
+# (`usage_ledger.default_ledger_path()`), so monkeypatch.setattr lands the stand-in on the
+# home module's attribute.
+USAGE_LEDGER_DEFAULT_LEDGER_PATH_PATCH_TARGET = "src.features.usage.usage_ledger.default_ledger_path"
+
 
 @contextlib.contextmanager
 def registered_cron_handler(name: str, handler: Callable[[], Awaitable[str]]) -> Iterator[None]:

@@ -49,6 +49,8 @@ PYTHON = REPO_ROOT / ".venv" / "bin" / "python"
 FIXTURE = PARITY_DIR / "fixture.py"
 REPORT_PATH = PARITY_DIR / "out" / "last-report.txt"
 REQUEST_TIMEOUT_SECONDS = 30.0
+# A stopped fake agent's process can take a moment to exit after its signal; only "terminated" waits that long.
+AGENT_TERMINATION_TIMEOUT_SECONDS = 5.0
 # Each side's tree directory. The names have one length, so the two tree roots do too: the homes embed their
 # root in file content, and a file's size (and every ETag, memo revision or offset derived from it) matches
 # only when the roots are equally long.
@@ -471,14 +473,23 @@ def _capture(side: Side, step: scenario_file.Step, response: compare.Response) -
   return lines
 
 
+def _agent_state_meets(side: Side, record: dict, expected: str) -> bool:
+  exit_exists = (side.tree.root / "fake-agent" / f"exit-{record['index']}").is_file()
+  alive = _process_alive(record)
+  return {"alive": alive, "exited": exit_exists, "terminated": not alive and not exit_exists}[expected]
+
+
 def _check_agent_after_stop(side: Side, expected: str, starts: list[dict], pending_indices: set[int]) -> list[str]:
   lines = []
   for record in starts:
     if not record["scripted"] or record["index"] not in pending_indices:
       continue
-    exit_exists = (side.tree.root / "fake-agent" / f"exit-{record['index']}").is_file()
-    alive = _process_alive(record)
-    satisfied = {"alive": alive, "exited": exit_exists, "terminated": not alive and not exit_exists}[expected]
+    satisfied = _agent_state_meets(side, record, expected)
+    if expected == "terminated":
+      deadline = time.monotonic() + AGENT_TERMINATION_TIMEOUT_SECONDS
+      while not satisfied and time.monotonic() < deadline:
+        time.sleep(servers.POLL_INTERVAL_SECONDS)
+        satisfied = _agent_state_meets(side, record, expected)
     if not satisfied:
       lines.append(f"{side.label} fake-agent start {record['index']} did not meet {expected!r}: {record}")
   return lines

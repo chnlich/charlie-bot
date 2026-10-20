@@ -527,6 +527,33 @@ mod tests {
   }
 
   #[tokio::test]
+  async fn codex_one_shot_uses_its_session_cgroup() {
+    let root = tempfile::tempdir().unwrap();
+    let (base, procs) = temp_cgroup(root.path());
+    let spec = SpawnSpec::new(
+      "/bin/sleep",
+      ["30"].into_iter().map(OsString::from).collect(),
+      None,
+      HashMap::new(),
+      Some("test1234-session".into()),
+      base,
+      0,
+      0,
+      0,
+    );
+    let mut spawned = spawn_one_shot(&spec, None).await.unwrap();
+    let pid = spawned.child.id().unwrap();
+    let mut guard = ProcessGroupGuard::new(pid);
+    let child_nice = unsafe { libc::getpriority(libc::PRIO_PROCESS, pid) };
+    let child_session = unsafe { libc::getsid(pid as i32) };
+    let cgroup_procs = fs::read_to_string(procs).unwrap();
+    assert_eq!(cgroup_procs, pid.to_string());
+    assert_eq!(child_nice, 10);
+    assert_eq!(child_session, pid as i32);
+    stop_child(&mut spawned.child, &mut guard).await;
+  }
+
+  #[tokio::test]
   async fn one_shot_uses_null_stdin_and_piped_output() {
     let root = tempfile::tempdir().unwrap();
     let mut spawned = spawn_one_shot(

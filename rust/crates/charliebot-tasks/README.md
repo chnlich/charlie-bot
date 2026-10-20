@@ -186,6 +186,21 @@ The remaining unported follow-ups return an error that names the owner and the s
 
 `tests/recovery.rs` drives each row through the full execution stack; its `// Python:` comments name the cases it follows.
 
+### Sequence runs whose kind no controller claims
+
+A sequence Run whose kind no registered controller claims (its package was deleted) is never launched by the dispatcher
+(`dispatch::Dispatcher::dispatch_pending`). Its other three paths match Python's `sequence_run_without_controller`
+handling:
+
+| Path | Rust call site | Result | Python |
+| --- | --- | --- | --- |
+| finish | `execution::after_worker_run_inner` | logs `sequence_run_without_controller` with the session, run and owner_ref, then returns | `task_execution.py:2168-2176` |
+| launch | `execution::execute_worker_run` | fails before any process starts; the error event names the owner_ref | `task_execution.py:1390-1394` |
+| recovery | `recovery::replay_followups` | an unlaunched run gets one `interrupted` finish; a terminal or unlaunched run logs the warning; a launched run is followed as any other | `task_execution.py:2831-2847` |
+
+For a kind in `UNLANDED_SEQUENCE_KINDS`, each path fails by name instead, because its controller has not landed.
+`tests/dispatch.rs` and `tests/recovery.rs` port the seven cases of `tests/test_sequence_controller_runs.py`.
+
 ## Task-run worker
 
 `worker::Worker` runs one task run's process (`src/runtime/worker.py`). A run is one process, or a chain of processes

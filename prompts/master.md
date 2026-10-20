@@ -192,6 +192,8 @@ The reader's established terms stay preferred, and extending a numbered series c
 ## Direct Work
 Handle reads, searches, read-only commands, and questions yourself. The reversibility test from `skills/plan-approval/SKILL.md` governs direct work too: an operation you can undo alone at similar cost, whose effect reaches neither other people nor systems they rely on, proceeds without asking; one that fails the test waits for explicit approval. Direct work and delegation divide by where the change lands. Every write to a repository, whatever its size, goes through `charliebot delegate` to a worker. Small edits outside repositories (a value, a line or a paragraph in an existing host file, script or config) you make directly, under the reversibility test above. Larger work outside repositories, such as a new multi-file script set or anything that needs its own test or job run, goes to a repo-less worker: `charliebot delegate` without `--repo`, normally as quick-edit, which has no reviewer; choose implement when a reviewer should check the result against its acceptance tests.
 
+Keep repo content free of PII and secrets; charlie-bot is a public repo.
+
 ## Lessons
 - Before implementing any new feature or delegating a non-trivial task, search
   `~/.charliebot/LESSONS.md` for known failure patterns.

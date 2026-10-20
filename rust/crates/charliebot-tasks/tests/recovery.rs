@@ -1913,10 +1913,12 @@ async fn boot_past_a_refused_sequence_node(
   sequence_kind: &str,
   run_kind: RunKind,
   sequence_first: bool,
+  register_cron: bool,
 ) -> anyhow::Result<()> {
   let log = LogCapture::default();
   let _subscriber = log.install();
-  let stack = Stack::start("exit 0").await?;
+  let stack =
+    if register_cron { Stack::start_with_cron_controller("exit 0").await? } else { Stack::start("exit 0").await? };
   // The drain builds the manager run's child environment, which signs a run token with `charliebot.access_key`.
   std::fs::write(stack.cfg.credentials_file(), "charliebot:\n  access_key: synthetic-access-key\n")?;
   let (sequence_id, manager_id) =
@@ -1930,7 +1932,7 @@ async fn boot_past_a_refused_sequence_node(
   stack.queue_run(&manager.id, "run-manager-dead", RunKind::ManagerTurn).await?;
   stack.launch(&manager.id, "run-manager-dead", 424_821, "1-424000").await?;
 
-  let counters = stack.boot().await.expect("the boot pass returns Ok when one node is refused");
+  let counters = stack.boot().await.expect("the boot pass returns Ok");
 
   assert_eq!(counters.nodes, 2, "the boot pass visits both nodes");
   assert_eq!(counters.drained, 1, "the manager node drains its dead turn");
@@ -1938,16 +1940,25 @@ async fn boot_past_a_refused_sequence_node(
   let manager_events = stack.run_events(&manager.id)?;
   assert!(
     run_records::terminal_outcome(&manager_events, "run-manager-dead")?.is_some(),
-    "the manager node recovers its dead turn past the refused node"
+    "the manager node recovers its dead turn while the sequence node is visited"
   );
   let refused = stack.store().read_run_sync(&sequence.id, "run-sequence")?.expect("the queued run is recorded");
-  assert_eq!(refused.pid, None, "the refused run never launches");
+  assert_eq!(refused.pid, None, "the queued sequence run never launches during recovery");
   let sequence_events = stack.run_events(&sequence.id)?;
   assert!(
     run_records::terminal_outcome(&sequence_events, "run-sequence")?.is_none(),
-    "the refused run keeps no terminal fact"
+    "the queued sequence run keeps no terminal fact"
   );
-  assert_logged_node_failure(&log, sequence_kind);
+  if register_cron {
+    assert_eq!(counters.followups, 1, "the registered cron controller recovers the queued sequence run");
+    assert!(
+      !log.text().contains("task_recovery_node_failed"),
+      "the registered cron node is not refused: {}",
+      log.text()
+    );
+  } else {
+    assert_logged_node_failure(&log, sequence_kind);
+  }
   Ok(())
 }
 
@@ -1977,16 +1988,29 @@ async fn a_running_loop_beside_a_dead_manager_turn_leaves_the_turn_to_recover() 
   Ok(())
 }
 
-/// The same refusal for a `cron` run, in both node orders: the cron controller has not landed either.
+/// A refused `improve` run stops only its own node: the boot pass logs the named error and the manager node still
+/// recovers its dead turn, with the improve node first and with it second. There is no Python case, since Python runs
+/// the improve controller; this covers the interim refusal of `UNLANDED_SEQUENCE_KINDS`.
 #[tokio::test]
-async fn a_refused_cron_node_leaves_the_manager_node_to_recover() -> anyhow::Result<()> {
+async fn a_refused_improve_node_leaves_the_manager_node_to_recover() -> anyhow::Result<()> {
   for sequence_first in [true, false] {
-    boot_past_a_refused_sequence_node("cron", RunKind::ScheduledStep, sequence_first)
+    boot_past_a_refused_sequence_node("improve", RunKind::Iteration, sequence_first, false)
       .await
       .with_context(|| format!("with the sequence node first: {sequence_first}"))?;
   }
   Ok(())
 }
+
+async fn a_refused_cron_node_leaves_the_manager_node_to_recover() -> anyhow::Result<()> {
+  // Python: tests/test_cron_sequence.py::test_recovery_redrives_a_mid_chain_firing_from_durable_facts
+  for sequence_first in [true, false] {
+    boot_past_a_refused_sequence_node("cron", RunKind::ScheduledStep, sequence_first, true)
+      .await
+      .with_context(|| format!("with the sequence node first: {sequence_first}"))?;
+  }
+  Ok(())
+}
+
 /// fills ended_at from the raw log's last write and exit_code from its result line, and writes no second end record.
 #[tokio::test]
 async fn retry_repairs_a_half_written_end_record_from_the_raw_log() -> anyhow::Result<()> {

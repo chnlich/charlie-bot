@@ -55,12 +55,8 @@ def _events(blocks: conftest.SessionBlocks, sid: str) -> list[dict]:
   return blocks.events.load_chat_events_sync(sid)
 
 
-def _of_type(events: list[dict], event_type: str) -> list[dict]:
-  return [ev for ev in events if ev.get("type") == event_type]
-
-
 def _nudges(events: list[dict]) -> list[dict]:
-  return [ev for ev in _of_type(events, ET.AGENT_MESSAGE) if reply.nudge_of(ev) is not None]
+  return [ev for ev in conftest.events_of_type(events, ET.AGENT_MESSAGE) if reply.nudge_of(ev) is not None]
 
 
 def _done(input_event_ids: list[str], exit_code: int = 0) -> dict:
@@ -122,7 +118,7 @@ async def test_a_web_reply_records_the_text_and_reads_back_the_outcome(tmp_path:
 
   assert resp.status_code == 200
   assert resp.json() == {"posted": True, "chars": 10, "over_budget": False, "answers": None}
-  replies = _of_type(_events(blocks, sid), ET.WEB_REPLY)
+  replies = conftest.events_of_type(_events(blocks, sid), ET.WEB_REPLY)
   assert [(ev["content"], ev[ET.WEB_REPLY]) for ev in replies] == [("the answer", {"answers": None, "chars": 10})]
   assert (await blocks.store.get_session(sid)).has_unread
 
@@ -161,7 +157,7 @@ async def test_the_budget_flags_an_over_budget_reply_and_the_reply_still_posts(
   readback = await reply.post_web_reply(sid, text, blocks.store, blocks.events, blocks.lifecycle)
 
   assert readback == {"posted": True, "chars": chars, "over_budget": over_budget, "answers": None}
-  assert [ev["content"] for ev in _of_type(_events(blocks, sid), ET.WEB_REPLY)] == [text]
+  assert [ev["content"] for ev in conftest.events_of_type(_events(blocks, sid), ET.WEB_REPLY)] == [text]
 
 
 # ---------------------------------------------------------------------------
@@ -220,7 +216,7 @@ async def test_a_reply_with_a_keep_language_reason_posts_as_written_and_records_
       })
 
   assert resp.status_code == 200
-  replies = _of_type(_events(blocks, sid), ET.WEB_REPLY)
+  replies = conftest.events_of_type(_events(blocks, sid), ET.WEB_REPLY)
   assert [(ev["content"], ev[ET.WEB_REPLY]) for ev in replies] == [
       (_ENGLISH_REPLY, {
           "answers": None,
@@ -573,7 +569,7 @@ async def test_a_nudge_turn_without_a_reply_posts_one_notice_and_marks_the_sessi
     await audit.audit_turn(sid, done, blocks.store, blocks.events, blocks.lifecycle, blocks.successor)
     await asyncio.gather(*tasks)
 
-  notices = _of_type(_events(blocks, sid), ET.WEB_REPLY_NOTICE)
+  notices = conftest.events_of_type(_events(blocks, sid), ET.WEB_REPLY_NOTICE)
   assert [(ev["content"], ev[ET.WEB_REPLY_NOTICE]) for ev in notices] == [
       (reply.NOTICE_TEXT, {
           ET.INPUT_EVENT_ID: user["id"]
@@ -595,8 +591,8 @@ async def test_a_reply_in_the_nudge_turn_ends_the_audit_with_no_notice(tmp_path:
   await audit.audit_turn(sid, _done([nudge["id"]]), blocks.store, blocks.events, blocks.lifecycle, blocks.successor)
 
   events = _events(blocks, sid)
-  assert not _of_type(events, ET.WEB_REPLY_NOTICE)
-  assert [ev[ET.WEB_REPLY]["answers"] for ev in _of_type(events, ET.WEB_REPLY)] == [user["id"]]
+  assert not conftest.events_of_type(events, ET.WEB_REPLY_NOTICE)
+  assert [ev[ET.WEB_REPLY]["answers"] for ev in conftest.events_of_type(events, ET.WEB_REPLY)] == [user["id"]]
 
 
 @pytest.mark.asyncio
@@ -644,7 +640,7 @@ async def test_an_errored_turn_gets_no_audit(
   events = _events(blocks, sid)
   trigger.assert_not_awaited()
   assert len(_nudges(events)) == (1 if errored_input == "nudge" else 0)
-  assert not _of_type(events, ET.WEB_REPLY_NOTICE)
+  assert not conftest.events_of_type(events, ET.WEB_REPLY_NOTICE)
 
 
 # ---------------------------------------------------------------------------
@@ -720,7 +716,7 @@ async def _stored_status(blocks: conftest.SessionBlocks, sid: str) -> dict | Non
 
 
 def _status_events(blocks: conftest.SessionBlocks, sid: str) -> list[dict]:
-  return _of_type(_events(blocks, sid), ET.WEB_STATUS)
+  return conftest.events_of_type(_events(blocks, sid), ET.WEB_STATUS)
 
 
 @pytest.mark.asyncio
@@ -1037,7 +1033,7 @@ def _unread(client: testclient.TestClient, session_id: str, text: str) -> httpx.
 
 
 def _ask_checks(blocks: conftest.SessionBlocks, sid: str) -> list[dict]:
-  return _of_type(_events(blocks, sid), ET.WEB_ASK_CHECK)
+  return conftest.events_of_type(_events(blocks, sid), ET.WEB_ASK_CHECK)
 
 
 def _host_file_link(path: pathlib.Path) -> str:

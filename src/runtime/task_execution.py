@@ -1458,6 +1458,7 @@ class TaskExecutionAdapter:
           instructions_content=snapshot.instructions_text,
           session_meta=meta,
           held_native_id=continuation.native_id if continued else None,
+          run_kind=run.kind,
       )
       # Session-level notices (a pool login that needs re-login, a relay compaction) reach
       # the session chat through the successor chain.
@@ -2073,6 +2074,7 @@ class TaskExecutionAdapter:
         "",  # the follow builds nothing: the prompt text was the launch's
         self._cfg,
         backend_option=option,
+        run_kind=run.kind,
     )
     # Session-level notices reach the session chat exactly as a fresh run's do.
     worker_adapter.on_session_event = functools.partial(self._successor.deliver_to_successor, session_id)

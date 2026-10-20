@@ -65,6 +65,7 @@ def _worker(tmp_path: pathlib.Path, backend_type: str, instructions_content: str
       cfg=cfg,
       backend_option=conftest.backend_option(**option_kwargs),
       instructions_content=instructions_content,
+      run_kind="work",
   )
 
 

@@ -11,6 +11,7 @@ import pytest
 from src.backends.claude_code import claude_code, claude_compaction, claude_launch
 from src.backends.codex import codex_usage
 from src.infra import config, models
+from src.runtime import session_usage
 from src.runtime.agent_process import base
 
 
@@ -131,6 +132,7 @@ def _cumulative_result_with_assistant_reading() -> list[dict]:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.usefixtures("_clean_ceiling_env")
 @pytest.mark.asyncio
 async def test_claude_tier_uses_assistant_event_tokens_not_result_cumulative(tmp_path: pathlib.Path) -> None:
   session_blocks, meta = _session_rig(tmp_path, "session-assistant", "Assistant", conftest.OPUS_BACKEND_ID)
@@ -138,7 +140,9 @@ async def test_claude_tier_uses_assistant_event_tokens_not_result_cumulative(tmp
 
   usage = await _resolved_usage(session_blocks, meta)
   assert usage["context_tokens"] == 150_000  # assistant event sum, not 1.5M
-  assert usage["context_full"] == 200_000
+  # context_full is min(the model's 200k window, the manager turn's declared window).
+  assert usage["context_full"] == 183_000
+  assert usage["context_compact_at"] == 150_000
   assert usage["model"] == "claude-opus-4-6"
   assert usage["total_cost_usd"] == pytest.approx(0.5)
 
@@ -223,7 +227,30 @@ def _clean_ceiling_env(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_declared_window_subtracts_reserves_from_declared_window(monkeypatch: pytest.MonkeyPatch) -> None:
   monkeypatch.setenv(claude_launch.AUTO_COMPACT_WINDOW_ENV, "500000")
   expected_point = 500_000 - claude_launch.CLAUDE_COMPACT_OUTPUT_RESERVE - claude_launch.CLAUDE_COMPACT_CONTEXT_RESERVE
-  assert claude_code.headless_claude_declared_window() == (500_000, expected_point)
+  assert claude_code.headless_claude_declared_window("manager_turn") == (500_000, expected_point)
+
+
+@pytest.mark.usefixtures("_clean_ceiling_env")
+@pytest.mark.parametrize(
+    ("run_kind", "window"), [
+        pytest.param("manager_turn", 183_000, id="manager-turn"),
+        pytest.param("work", 133_000, id="work"),
+        pytest.param("review", 133_000, id="review"),
+        pytest.param("iteration", 133_000, id="iteration"),
+        pytest.param("scheduled_step", 133_000, id="scheduled-step"),
+    ])
+def test_declared_window_is_the_run_kinds_window(run_kind: models.RunKind, window: int) -> None:
+  """The usage page's compaction line follows the window the launch env declares for the kind."""
+  reserves = claude_launch.CLAUDE_COMPACT_OUTPUT_RESERVE + claude_launch.CLAUDE_COMPACT_CONTEXT_RESERVE
+  assert claude_code.headless_claude_declared_window(run_kind) == (window, window - reserves)
+
+
+def test_usage_resolution_reports_the_sessions_kind_compaction_line() -> None:
+  """A manager node's page shows the manager window; a worker node's shows the other one."""
+  manager = models.SessionMetadata(profile="manager", id="m", name="M")
+  worker = models.SessionMetadata(profile="worker", id="w", name="W")
+  assert session_usage.usage_run_kind(manager) == "manager_turn"
+  assert session_usage.usage_run_kind(worker) == "work"
 
 
 # ---------------------------------------------------------------------------

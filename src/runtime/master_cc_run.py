@@ -396,6 +396,9 @@ def _turn_launch_context(
       option=option,
       session_meta=session_meta,
       kind="turn",
+      # The master cc path runs manager turns only: task_execution launches this
+      # path for a Run whose kind is manager_turn.
+      run_kind="manager_turn",
       cwd=cwd,
       held_native_id=held_native_id,
       preassigned_native_id=None,

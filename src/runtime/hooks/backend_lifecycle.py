@@ -48,6 +48,10 @@ class LaunchRefused(Exception):  # noqa: N818  (a refusal is a run outcome, name
 class LaunchContext:
   """What the runtime gives the backend for one run: a master turn or a task run.
 
+  ``kind`` is the launch shape. ``run_kind`` is the Run's own kind (``models.RunKind``), which the
+  backend turns into its per-kind launch settings; it is the only route by which the kind reaches a
+  launch.
+
   ``emit`` writes one event for the user to see. On a turn it persists and broadcasts the event.
   On a task it writes to the run's event log through its open file descriptor and delivers the event
   to the session's successor chain.
@@ -56,6 +60,7 @@ class LaunchContext:
   option: models.BackendOption
   session_meta: models.SessionMetadata
   kind: Literal["turn", "task"]
+  run_kind: models.RunKind
   cwd: str
   held_native_id: str | None  # the conversation this run may resume; None starts fresh
   preassigned_native_id: str | None  # task: the id the runtime chose for the conversation its first process opens

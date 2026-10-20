@@ -58,6 +58,7 @@ def _worker(tmp_path: pathlib.Path, cfg: config.CharlieBotConfig) -> worker.Work
       cfg,
       backend_option=option,
       session_meta=models.SessionMetadata(profile="manager", id="s1", name="S", backend=conftest.POOLED_FABLE_ID),
+      run_kind="work",
   )
 
 

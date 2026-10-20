@@ -107,7 +107,7 @@ def test_schedule_trigger_cli_exits_nonzero_and_prints_the_refusal(
   port = httpd.server_address[1]
   threading.Thread(target=httpd.serve_forever, daemon=True).start()
   try:
-    monkeypatch.setattr("src.runtime.cli.common._internal_base_url", lambda: f"http://127.0.0.1:{port}")
+    monkeypatch.setattr(conftest.CLI_COMMON_BASE_URL_PATCH_TARGET, lambda: f"http://127.0.0.1:{port}")
     conftest.stub_credentials({"charliebot": {"access_key": "op-secret"}})
     monkeypatch.delenv("CHARLIEBOT_SESSION_ID", raising=False)
     monkeypatch.chdir(tmp_path)

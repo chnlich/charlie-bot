@@ -852,7 +852,7 @@ async def backfill_lost_summons(
 # Thread-follow windows: a batch sleeps out this quiet delay from the newest
 # message, and a chain never runs past this cap from its first message, so a
 # steady trickle still flushes.
-_FOLLOW_QUIET_SECONDS = 45
+_FOLLOW_QUIET_SECONDS = 10
 _FOLLOW_CHAIN_CAP_SECONDS = 300
 
 

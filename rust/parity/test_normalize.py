@@ -388,7 +388,8 @@ def test_interleaved_session_spawns_seed_uuid_normalization_in_group_order(
   parity._prepare_contexts(sides, snapshots)
 
   for side, child_id, manager_run, child_run in zip(sides, child_ids, manager_runs, child_runs, strict=True):
-    assert side.ctx.minted_uuids[child_id] == "<minted-1>"
+    # The child is a spawned session, so its id gets a stable spawn-order alias, not a minted one.
+    assert side.ctx.stable_uuids[child_id] == "<spawn-session-1>"
     assert manager_run not in side.ctx.minted_uuids
     assert child_run not in side.ctx.minted_uuids
     assert side.ctx.stable_uuids[manager_run] == sides[0].ctx.stable_uuids[manager_runs[0]]
@@ -782,3 +783,49 @@ def test_a_landed_event_of_another_type_keeps_its_spec_hash_compared() -> None:
       })
   assert opened != other_opened
   assert opened["result_refs"][1] == f"spec:{'a' * 64}"
+
+
+def test_clock_derived_leaf_ids_sorting_in_opposite_order_get_the_same_placeholders(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A cron firing's leaf session id is clock-derived, so the two trees' ids sort differently.
+
+  The spawn-order seeding must number the placeholders, so the minted ids inside the session
+  directories do not renumber when the leaf directory sorts before the manager directory in one tree
+  and after it in the other.
+  """
+  monkeypatch.delenv("CHARLIEBOT_RUN_TOKEN", raising=False)
+  manager_ids = ("20000000-0000-4000-8000-000000000001", "20000000-0000-4000-8000-000000000002")
+  leaf_ids = ("20000000-0000-4000-8000-000000000003", "20000000-0000-4000-8000-000000000004")
+  manager_runs = ("20000000-0000-4000-8000-000000000021", "20000000-0000-4000-8000-000000000022")
+  leaf_runs = ("20000000-0000-4000-8000-000000000031", "20000000-0000-4000-8000-000000000032")
+  sides = []
+  snapshots = []
+  for label, manager_id, leaf_id, manager_run, leaf_run in (
+      ("base", manager_ids[0], leaf_ids[0], manager_runs[0], leaf_runs[0]),
+      ("cand", manager_ids[1], leaf_ids[1], manager_runs[1], leaf_runs[1]),
+  ):
+    # Base sorts manager before leaf; candidate sorts leaf before manager.
+    side = _spawn_side(
+        tmp_path, monkeypatch, label, [
+            _spawn_record(0, leaf_id, leaf_run, b"Manual firing prompt."),
+            _spawn_record(1, manager_id, manager_run, b"Cron finish report."),
+        ])
+    sides.append(side)
+    snapshots.append({
+        f"home/sessions/{manager_id}/data/chat_events.jsonl":
+            compare.Entry("file", b'{"id": "%s"}\n' % manager_run.encode()),
+        f"home/sessions/{leaf_id}/data/chat_events.jsonl":
+            compare.Entry("file", b'{"id": "%s"}\n' % leaf_run.encode()),
+    })
+
+  parity._prepare_contexts(sides, snapshots)
+
+  for side, manager_id, leaf_id, manager_run, leaf_run in zip(
+      sides, manager_ids, leaf_ids, manager_runs, leaf_runs, strict=True):
+    assert side.ctx.stable_uuids[manager_id] == "<spawn-session-2>"
+    assert side.ctx.stable_uuids[leaf_id] == "<spawn-session-1>"
+    assert normalize.normalize_text(manager_id, side.ctx) == "<spawn-session-2>"
+    assert normalize.normalize_text(leaf_id, side.ctx) == "<spawn-session-1>"
+    assert side.ctx.stable_uuids[manager_run] == sides[0].ctx.stable_uuids[manager_runs[0]]
+    assert side.ctx.stable_uuids[leaf_run] == sides[0].ctx.stable_uuids[leaf_runs[0]]
+  assert parity._spawns_diff(sides, expect_starts=2) == []

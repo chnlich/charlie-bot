@@ -511,6 +511,15 @@ fn test_contract_part_names_the_read_command_and_the_summon_mark() {
   assert!(contract.contains("读线程里的新消息"));
 }
 
+#[test]
+fn test_thread_name_matches_python_thread_name() {
+  assert_eq!(thread_name("a<@1>b"), "ab");
+  assert_eq!(thread_name("<@١٢>x"), "x");
+  assert_eq!(thread_name("hi\u{1c}<@1>there"), "hi there");
+  assert_eq!(thread_name("<@1> <@!2>"), "CharlieBot");
+  assert_eq!(thread_name(&format!("<@1>{}", "é".repeat(90))), "é".repeat(80));
+}
+
 #[tokio::test]
 async fn test_thread_summon_binds_the_thread_and_labels_from_the_parent() {
   let home = Home::new(true).await;

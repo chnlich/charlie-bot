@@ -296,7 +296,7 @@ def _spawn_side(
   (root / "fake-agent").mkdir(parents=True)
   data = "".join(json.dumps(record) + "\n" for record in records)
   (root / "fake-agent" / "spawns.jsonl").write_text(data, encoding="utf-8")
-  return parity.Side(label, parity.servers.Tree(label=label, root=root), port=18600)
+  return parity.Side(label, parity.servers.Tree(label=label, root=root), port=18600, strace=parity.servers.STRACE_BIN)
 
 
 def _spawn_record(index: int, session: str, run: str, stdin: bytes) -> dict:
@@ -446,7 +446,8 @@ def test_interleaved_event_streams_do_not_seed_different_uuid_orders(tmp_path: p
   for label, events in zip(("base", "cand"), sequences, strict=True):
     root = tmp_path / label
     root.mkdir()
-    sides.append(parity.Side(label, parity.servers.Tree(label=label, root=root), port=18600))
+    sides.append(
+        parity.Side(label, parity.servers.Tree(label=label, root=root), port=18600, strace=parity.servers.STRACE_BIN))
     data = "".join(json.dumps(event) + "\n" for event in events).encode()
     snapshots.append({event_path: compare.Entry("file", data)})
 

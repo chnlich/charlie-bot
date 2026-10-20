@@ -96,10 +96,11 @@ class StepResult:
 class Side:
   """One server under comparison: its tree, process, normalization context and captures."""
 
-  def __init__(self, label: str, tree: servers.Tree, port: int) -> None:
+  def __init__(self, label: str, tree: servers.Tree, port: int, strace: pathlib.Path) -> None:
     self.label = label
     self.tree = tree
     self.port = port
+    self.strace = strace
     self.server: servers.ServerProcess | None = None
     self.server_processes: list[servers.ServerProcess] = []
     self.processes: dict[str, subprocess.Popen[bytes]] = {}
@@ -112,7 +113,15 @@ class Side:
     process_number = len(self.server_processes) + 1
     proxy_url = self.fake_set.proxy_url if self.fake_set is not None else None
     server = servers.ServerProcess(
-        self.label, argv, self.tree, self.port, REPO_ROOT, process_number, proxy_url=proxy_url, ca_file=self.ca_file)
+        self.label,
+        argv,
+        self.tree,
+        self.port,
+        REPO_ROOT,
+        process_number,
+        self.strace,
+        proxy_url=proxy_url,
+        ca_file=self.ca_file)
     server.start()
     self.server = server
     self.server_processes.append(server)
@@ -123,9 +132,8 @@ class Side:
     self.server.wait_ready()
 
 
-def _preflight(rust_bin: pathlib.Path | None) -> None:
-  for path, what in ((PYTHON, "the worktree venv (run `uv run python --version` once)"),
-                     (pathlib.Path("/usr/bin/strace"), "strace")):
+def _preflight(rust_bin: pathlib.Path | None, strace: pathlib.Path) -> None:
+  for path, what in ((PYTHON, "the worktree venv (run `uv run python --version` once)"), (strace, "strace")):
     if not os.access(path, os.X_OK):
       raise SystemExit(f"parity: missing {what}: {path}")
   if rust_bin is not None and not os.access(rust_bin, os.X_OK):
@@ -145,7 +153,8 @@ def _build_fixtures(sides: list[Side], extras: tuple[str, ...]) -> dict:
         tree=side.tree,
         repo_root=REPO_ROOT,
         trace_log=side.tree.root / "logs" / f"{side.tree.label}.fixture.strace",
-        log_path=side.tree.root / "logs" / f"{side.tree.label}.fixture.log")
+        log_path=side.tree.root / "logs" / f"{side.tree.label}.fixture.log",
+        strace=side.strace)
 
   with concurrent.futures.ThreadPoolExecutor(len(sides)) as pool:
     for future in [pool.submit(build, side) for side in sides]:
@@ -1185,6 +1194,7 @@ def _run_scenario(
     guard_report: guard.Report,
     certificates: authority.Certificates | None,
     voice_model_dir: pathlib.Path,
+    strace: pathlib.Path,
     headless_chrome: pathlib.Path,
     candidate_is_python: bool,
 ) -> list[StepResult]:
@@ -1194,7 +1204,7 @@ def _run_scenario(
   sides = []
   for label, port in (("baseline", ports[0]), ("candidate", ports[1])):
     tree = servers.make_tree(TREE_NAMES[label], work_dir / TREE_NAMES[label])
-    side = Side(label, tree, port)
+    side = Side(label, tree, port, strace)
     if scenario.fakes:
       if certificates is None:
         raise RuntimeError("a scenario declares fakes but no run certificate was generated")
@@ -1328,13 +1338,20 @@ def main() -> int:
       help="headless Chrome binary that scenarios with headless_chrome: true link into each tree's bin/",
   )
   parser.add_argument(
+      "--strace",
+      type=pathlib.Path,
+      default=servers.STRACE_BIN,
+      help="strace binary that traces every process under test",
+  )
+  parser.add_argument(
       "--tamper",
       action="store_true",
       help=f"rename session {TAMPER_SESSION!r} in the candidate home: the run must fail")
   parser.add_argument("--keep", action="store_true", help="keep the temporary trees and logs after the run")
   args = parser.parse_args()
   rust_bin = args.rust_bin.resolve() if args.rust_bin else None
-  _preflight(rust_bin)
+  strace = args.strace.expanduser().resolve()
+  _preflight(rust_bin, strace)
   servers.become_child_subreaper()
   candidate_argv = [str(rust_bin)] if rust_bin else [str(PYTHON), "server.py"]
   scenarios = scenario_file.load_all(args.stage)
@@ -1391,7 +1408,7 @@ def main() -> int:
         with servers.pick_ports(2) as ports:
           scenario_results = _run_scenario(
               scenario, scenario_dir, ports, candidate_first, candidate_handover, direction, args.tamper, guard_report,
-              certificates, voice_model_dir, headless_chrome, args.python_vs_python)
+              certificates, voice_model_dir, strace, headless_chrome, args.python_vs_python)
         for result in scenario_results:
           lines = _format_step(result)
           output.extend(lines)

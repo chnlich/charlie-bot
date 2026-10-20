@@ -174,7 +174,8 @@ def test_tree_path_missing_wait_checks_tree_containment(tmp_path: pathlib.Path) 
 
   tree_root = tmp_path / "tree"
   tree_root.mkdir()
-  side = parity.Side("candidate", types.SimpleNamespace(root=tree_root, home=tree_root / "home"), 18600)
+  side = parity.Side(
+      "candidate", types.SimpleNamespace(root=tree_root, home=tree_root / "home"), 18600, parity.servers.STRACE_BIN)
   side.captures["worktree"] = str(tree_root / "worktrees" / "synthetic-task")
   until = {"tree_path_missing": {"path": "${capture.worktree}"}}
   assert parity._condition_met(side, until, {})
@@ -466,7 +467,8 @@ def test_process_rejects_unknown_key(tmp_path: pathlib.Path) -> None:
 
 
 def test_scenario_cleanup_stops_leftover_synthetic_process_and_reports_it(tmp_path: pathlib.Path) -> None:
-  side = parity.Side("baseline", parity.servers.Tree(label="baseline", root=tmp_path), port=18600)
+  side = parity.Side(
+      "baseline", parity.servers.Tree(label="baseline", root=tmp_path), port=18600, strace=parity.servers.STRACE_BIN)
   process = subprocess.Popen(
       [sys.executable, "-c", "import time; time.sleep(60)"],
       stdin=subprocess.DEVNULL,
@@ -635,7 +637,8 @@ def test_fake_group_kill_passes_an_exited_or_recycled_pid_only_start(monkeypatch
 
 def test_scenario_cleanup_kills_a_fake_group_that_ignores_sigterm(
     tmp_path: pathlib.Path, sigterm_leader: subprocess.Popen) -> None:
-  side = parity.Side("candidate", parity.servers.Tree(label="candidate", root=tmp_path), port=18600)
+  side = parity.Side(
+      "candidate", parity.servers.Tree(label="candidate", root=tmp_path), port=18600, strace=parity.servers.STRACE_BIN)
   agent_dir = tmp_path / "fake-agent"
   agent_dir.mkdir()
   (agent_dir / "spawns.jsonl").write_text(json.dumps(_spawn_record(sigterm_leader)) + "\n", encoding="utf-8")
@@ -1356,7 +1359,7 @@ def _write(path: pathlib.Path, text: str) -> None:
 
 
 def _tree_side(root: pathlib.Path, label: str) -> parity.Side:
-  return parity.Side(label, parity.servers.Tree(label=label, root=root), port=18600)
+  return parity.Side(label, parity.servers.Tree(label=label, root=root), port=18600, strace=parity.servers.STRACE_BIN)
 
 
 def test_open_while_stopped_fails_a_start_that_stays_at_its_old_gate(tmp_path: pathlib.Path) -> None:

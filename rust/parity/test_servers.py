@@ -46,7 +46,8 @@ def test_wait_ready_refuses_a_listener_outside_the_server_tree(short_root: pathl
     listener.bind((servers.HOST, ports[0]))
     listener.listen()
     tree = servers.make_tree("candidate", short_root / "candidate")
-    server = servers.ServerProcess("candidate", ["/usr/bin/sleep", "60"], tree, ports[0], REPO_ROOT, 1)
+    server = servers.ServerProcess(
+        "candidate", ["/usr/bin/sleep", "60"], tree, ports[0], REPO_ROOT, 1, servers.STRACE_BIN)
     server.start()
     try:
       with pytest.raises(RuntimeError, match=f"port {ports[0]}") as error:
@@ -131,7 +132,10 @@ def test_log_event_wait_ignores_a_line_until_its_newline_arrives(tmp_path: pathl
 def test_headless_chrome_link_points_each_tree_at_the_binary(short_root: pathlib.Path) -> None:
   chrome = short_root / "headless_shell"
   chrome.write_bytes(b"")
-  sides = [parity.Side(label, servers.make_tree(label, short_root / label), 1) for label in ("base", "cand")]
+  sides = [
+      parity.Side(label, servers.make_tree(label, short_root / label), 1, servers.STRACE_BIN)
+      for label in ("base", "cand")
+  ]
   parity._link_headless_chrome(sides, chrome)
   for side in sides:
     link = side.tree.root / "bin" / "headless-chrome"
@@ -145,9 +149,23 @@ def test_stop_headless_browsers_counts_and_stops_a_browser_the_server_left(short
   browser = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", f"--user-data-dir={profile}"])
   try:
     with servers.pick_ports(1) as ports:
-      server = servers.ServerProcess("candidate", ["/usr/bin/sleep", "60"], tree, ports[0], REPO_ROOT, 1)
+      server = servers.ServerProcess(
+          "candidate", ["/usr/bin/sleep", "60"], tree, ports[0], REPO_ROOT, 1, servers.STRACE_BIN)
       assert server._stop_headless_browsers() == 1
     assert browser.poll() is not None
   finally:
     browser.kill()
     browser.wait()
+
+
+def test_traced_argv_runs_the_strace_it_is_given(tmp_path: pathlib.Path) -> None:
+  tree = servers.Tree(label="candidate", root=tmp_path)
+  argv = servers.traced_argv(["/usr/bin/true"], tree, tmp_path / "trace.log", pathlib.Path("/opt/tools/strace"))
+  assert argv[0] == "/opt/tools/strace"
+
+
+def test_preflight_exits_naming_a_missing_strace(tmp_path: pathlib.Path) -> None:
+  missing = tmp_path / "strace"
+  with pytest.raises(SystemExit, match="missing strace") as error:
+    parity._preflight(None, missing)
+  assert str(missing) in str(error.value)

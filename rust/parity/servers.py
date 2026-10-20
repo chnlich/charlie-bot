@@ -253,14 +253,15 @@ def _port_binds(port: int) -> bool:
 
 
 SANDBOX = pathlib.Path(__file__).resolve().parent / "sandbox.py"
+# The strace that traces every process under test. parity.py's --strace option names another binary.
+STRACE_BIN = pathlib.Path("/usr/bin/strace")
 
 
-def traced_argv(argv: list[str], tree: Tree, trace_log: pathlib.Path) -> list[str]:
+def traced_argv(argv: list[str], tree: Tree, trace_log: pathlib.Path, strace: pathlib.Path) -> list[str]:
   """*argv* inside the tree's write sandbox, under strace: every file-changing syscall of the process tree,
   completed or refused, lands in *trace_log*."""
   return [
-      "/usr/bin/strace", "-f", "-qq", "--seccomp-bpf", "-y", "-s", "4096", "-e", "trace=" + ",".join(TRACED_SYSCALLS),
-      "-o",
+      str(strace), "-f", "-qq", "--seccomp-bpf", "-y", "-s", "4096", "-e", "trace=" + ",".join(TRACED_SYSCALLS), "-o",
       str(trace_log), "--", sys.executable,
       str(SANDBOX), "--allow-write",
       str(tree.root), "--", *argv
@@ -268,11 +269,18 @@ def traced_argv(argv: list[str], tree: Tree, trace_log: pathlib.Path) -> list[st
 
 
 def run_traced(
-    argv: list[str], *, tree: Tree, repo_root: pathlib.Path, trace_log: pathlib.Path, log_path: pathlib.Path) -> None:
+    argv: list[str],
+    *,
+    tree: Tree,
+    repo_root: pathlib.Path,
+    trace_log: pathlib.Path,
+    log_path: pathlib.Path,
+    strace: pathlib.Path,
+) -> None:
   """Run one traced process under test to completion; a non-zero exit raises with its log tail."""
   with open(log_path, "wb") as log_file:
     proc = subprocess.run(
-        traced_argv(argv, tree, trace_log),
+        traced_argv(argv, tree, trace_log, strace),
         env=server_env(tree, repo_root),
         cwd=repo_root,
         stdin=subprocess.DEVNULL,
@@ -298,6 +306,7 @@ class ServerProcess:
       port: int,
       repo_root: pathlib.Path,
       process_number: int,
+      strace: pathlib.Path,
       proxy_url: str | None = None,
       ca_file: pathlib.Path | None = None,
   ) -> None:
@@ -306,6 +315,7 @@ class ServerProcess:
     self.tree = tree
     self.port = port
     self.repo_root = repo_root
+    self.strace = strace
     self.proxy_url = proxy_url
     self.ca_file = ca_file
     self.trace_log = tree.root / "logs" / f"{tree.label}.server-{process_number}.strace"
@@ -323,7 +333,7 @@ class ServerProcess:
     log_file = open(self.log_path, "wb")
     try:
       self._proc = subprocess.Popen(
-          traced_argv(self.argv, self.tree, self.trace_log),
+          traced_argv(self.argv, self.tree, self.trace_log, self.strace),
           env=server_env(self.tree, self.repo_root, self.proxy_url, self.ca_file),
           cwd=self.repo_root,
           stdin=subprocess.DEVNULL,

@@ -963,9 +963,7 @@ fn has_process_for_home_and_session(home: &Path, session_id: &str) -> anyhow::Re
       Err(error) => return Err(error.into()),
     };
     let variables = environment.split(|byte| *byte == 0).collect::<Vec<_>>();
-    if variables.iter().any(|value| *value == home_environment.as_bytes())
-      && variables.iter().any(|value| *value == session_environment.as_bytes())
-    {
+    if variables.contains(&home_environment.as_bytes()) && variables.contains(&session_environment.as_bytes()) {
       return Ok(true);
     }
   }

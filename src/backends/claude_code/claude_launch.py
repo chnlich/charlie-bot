@@ -1,14 +1,8 @@
-"""Claude CLI launch vocabulary: the per-run-kind env, the tool set and the name-only skill setting."""
+"""Claude CLI launch vocabulary: the per-run-kind environment and settings."""
 
 import os
-from typing import TYPE_CHECKING
-
-import pydantic
 
 from src.infra import models
-
-if TYPE_CHECKING:
-  from src.infra import config
 
 # CharlieBot sessions must not sync claude.ai connectors at all: the CLI
 # announces every unauthorized connector at startup, and its announce-once
@@ -16,8 +10,18 @@ if TYPE_CHECKING:
 # Every Claude launch path merges this into its single --settings JSON.
 DISABLE_CONNECTOR_SETTINGS = {"disableClaudeAiConnectors": True}
 
-# The single --settings value that lists a skill by name without its description.
-NAME_ONLY_SKILL = "name-only"
+
+def headless_claude_settings(run_kind: models.RunKind) -> dict[str, bool]:
+  """The ``--settings`` values for a headless Claude Code process of *run_kind*."""
+  settings = {
+      **DISABLE_CONNECTOR_SETTINGS,
+      "syncClaudeAiSkills": False,  # No run kind has used synced skills since 2026-10-12.
+  }
+  if run_kind != "manager_turn":
+    # Bundled skills have uses only in manager turns.
+    settings["disableBundledSkills"] = True
+  return settings
+
 
 # One spelling per Claude Code variable the declared-window logic touches: the
 # default pin, the forward allowlist, and the degradation checks must agree.
@@ -60,25 +64,6 @@ HEADLESS_CLAUDE_FORWARDED_ENV_NAMES: tuple[str, ...] = (
 # reach the real compaction point (see the comment above DECLARED_WINDOW_BY_RUN_KIND).
 CLAUDE_COMPACT_OUTPUT_RESERVE = 20_000
 CLAUDE_COMPACT_CONTEXT_RESERVE = 13_000
-
-
-class ClaudeLaunchConfig(pydantic.BaseModel):
-  """``claude_launch:`` section: the launch settings of this host's Claude CLI runs.
-
-  ``name_only_skills`` maps a run kind to the skills this host measured as never used
-  by that kind of run. Claude Code lists every skill with its description in every
-  request; a listed name ships without its description and stays callable. The names
-  are host data, so they live in config.yaml, never in the repo. A kind the map does
-  not name, and a skill it does not name, list exactly as before.
-  """
-  model_config = pydantic.ConfigDict(extra='forbid')
-
-  name_only_skills: dict[models.RunKind, list[str]] = {}
-
-
-def name_only_skills(cfg: config.CharlieBotConfig, run_kind: models.RunKind) -> tuple[str, ...]:
-  """The skill names this host lists by name only on a *run_kind* run; empty when it names none."""
-  return tuple(cfg.claude_launch.name_only_skills.get(run_kind, ()))
 
 
 def headless_claude_env(run_kind: models.RunKind) -> dict[str, str]:

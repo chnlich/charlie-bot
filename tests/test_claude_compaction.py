@@ -149,6 +149,16 @@ def _install_fake_exec(monkeypatch: pytest.MonkeyPatch, proc: _FakeProc) -> dict
   return captured
 
 
+def test_compaction_command_disables_skill_and_keeps_connector_settings() -> None:
+  command = claude_compaction.compaction_command("session-id")
+  disallowed_index = command.index("--disallowed-tools")
+
+  assert command[disallowed_index + 1] == claude_compaction.COMPACTION_DISALLOWED_TOOLS
+  assert "Skill" in command[disallowed_index + 1].split(",")
+  assert command.count("--settings") == 1
+  assert json.loads(command[command.index("--settings") + 1]) == {"disableClaudeAiConnectors": True}
+
+
 def _append_boundary(transcript: pathlib.Path, *, with_metadata: bool = True) -> None:
   meta = {"trigger": "manual", "preTokens": 123456, "postTokens": 9111} if with_metadata else None
   row: dict[str, Any] = {"type": "system", "subtype": "compact_boundary"}

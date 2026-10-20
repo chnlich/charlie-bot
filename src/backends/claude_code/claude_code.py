@@ -5,7 +5,7 @@ import json
 import pathlib
 import re
 import signal
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 
 from src.backends.claude_code import claude_launch
 from src.infra import constants, home, log_once, models, process
@@ -32,6 +32,9 @@ HEADLESS_DISALLOWED_TOOLS = (
 # only spend request tokens.
 REVIEW_ONLY_TOOLS: tuple[str, ...] = ("ReportFindings",)
 
+# Review runs called no skill since 2026-10-12. Without the Skill tool, Claude Code sends no skill listing.
+REVIEW_DISALLOWED_TOOLS: tuple[str, ...] = ("Skill",)
+
 BASE_COMMAND: list[str] = [
     "claude",
     "-p",
@@ -47,8 +50,10 @@ BASE_COMMAND: list[str] = [
 def headless_command(run_kind: models.RunKind) -> list[str]:
   """The ``claude -p`` argv head of a headless run of *run_kind*: BASE_COMMAND with the kind's tool set."""
   cmd = list(BASE_COMMAND)
-  if run_kind != "review":
-    index = cmd.index(base.DISALLOWED_TOOLS_FLAG)
+  index = cmd.index(base.DISALLOWED_TOOLS_FLAG)
+  if run_kind == "review":
+    cmd[index + 1] = f"{cmd[index + 1]},{','.join(REVIEW_DISALLOWED_TOOLS)}"
+  else:
     cmd[index + 1] = f"{cmd[index + 1]},{','.join(REVIEW_ONLY_TOOLS)}"
   return cmd
 
@@ -261,9 +266,8 @@ class ClaudeCodeBackend(base.AgentBackend):
 
   ``run_kind`` is the kind of Run the process serves; the lifecycle's launch arguments
   name it for every run process (``claude_lifecycle._launch_args``), and it decides the
-  declared auto-compact window, the tool set and the skill listing. ``name_only_skills``
-  are the host's name-only skill names for that kind. A build that spawns no run — a
-  translate-only or one-shot backend — keeps the defaults and reads neither.
+  declared auto-compact window, the tool set and the ``--settings`` object. A build that
+  spawns no run — a translate-only or one-shot backend — keeps the defaults.
   """
 
   def __init__(
@@ -274,7 +278,6 @@ class ClaudeCodeBackend(base.AgentBackend):
       cli_binary: str | None = None,
       fast_mode: bool = False,
       run_kind: models.RunKind = "work",
-      name_only_skills: Sequence[str] = (),
       claude_session_id: str | None = None,
       claude_config_dir: str | None = None,
       **kwargs: object) -> None:
@@ -292,16 +295,10 @@ class ClaudeCodeBackend(base.AgentBackend):
       self._cmd += ["--model", self._model]
     if self._effort:
       self._cmd += ["--effort", self._effort]
-    # One merged --settings object, the connector key always on it: the CLI's
-    # handling of repeated --settings flags is not a contract, so the argv
-    # never carries more than one.
-    settings = {**claude_launch.DISABLE_CONNECTOR_SETTINGS}
+    # The CLI's handling of repeated --settings flags is not a contract, so the argv carries one object.
+    settings = claude_launch.headless_claude_settings(run_kind)
     if self._fast_mode:
       settings["fastMode"] = True
-    # A listed skill ships as a name without its description and stays callable; a
-    # kind the host names no skills for lists every skill as before.
-    if name_only_skills:
-      settings["skillOverrides"] = dict.fromkeys(name_only_skills, claude_launch.NAME_ONLY_SKILL)
     self._cmd += ["--settings", json.dumps(settings, separators=(",", ":"))]
     if self._extra_flags:
       self._cmd += self._extra_flags

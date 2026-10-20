@@ -21,8 +21,8 @@ USAGE_SOURCE = "Claude Code"
 
 
 def register() -> None:
-  """Register the cc-claude backend type, the Claude Code usage source, the accounts and
-  claude_launch sections, its metadata keys and its setup check with the runtime."""
+  """Register the cc-claude backend type, the Claude Code usage source, the accounts section,
+  the metadata keys and the setup check with the runtime."""
   turn_contributions.register_turn_contribution(
       "claude_code", "src.backends.claude_code.turn_contribution:CONTRIBUTION")
   backend_type_registration.register_backend_type(
@@ -58,7 +58,6 @@ def register() -> None:
           "claude_compaction": "accounts.claude_compaction",
       },
   )
-  config_registry.register_config_section("claude_launch", "src.backends.claude_code.claude_launch:ClaudeLaunchConfig")
   config_registry.register_config_check("src.backends.claude_code.claude_config:check_claude_pools")
   metadata_slot_registration.register_metadata_fields(
       OWNER,

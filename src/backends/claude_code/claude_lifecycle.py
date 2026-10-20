@@ -26,7 +26,6 @@ from src.backends.claude_code import (
     claude_code,
     claude_config,
     claude_idle_compaction,
-    claude_launch,
     claude_metadata,
     claude_relay,
     login_dirs,
@@ -59,16 +58,13 @@ def cc_transcript_exists(config_dir: pathlib.Path, cc_session_id: str) -> bool:
 def _launch_args(ctx: backend_lifecycle.LaunchContext, *, first_process: bool) -> dict[str, Any]:
   """The factory arguments of one process.
 
-  Every process carries the run kind and the host's name-only skill list for that kind; the backend
-  turns them into its declared auto-compact window, its tool set and its --settings object. Every
-  process of a turn also carries the dynamic-sections flag, and the first process of a task opens the
-  conversation id the runtime chose (a later one resumes it). A task run that resumes a held
-  conversation (a worker-node continuation) opens no new id — the resume flag names it.
+  Every process carries the run kind. The backend uses it for the declared auto-compact window,
+  the tool set and the --settings object. Each turn process also carries the dynamic-sections flag.
+  The first task process opens the conversation id chosen by the runtime; later processes resume it.
+  A task run that resumes a held conversation (a worker-node continuation) opens no new id; the
+  resume flag names it.
   """
-  args: dict[str, Any] = {
-      "run_kind": ctx.run_kind,
-      "name_only_skills": claude_launch.name_only_skills(ctx.cfg, ctx.run_kind),
-  }
+  args: dict[str, Any] = {"run_kind": ctx.run_kind}
   if ctx.kind == "turn":
     return {**args, "extra_flags": [claude_code.EXCLUDE_DYNAMIC_SECTIONS_FLAG]}
   if ctx.kind == "task":

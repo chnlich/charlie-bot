@@ -118,8 +118,7 @@ print(json.dumps({"type": "result", "result": "", "usage": {}}), flush=True)
 
 
 # ---------------------------------------------------------------------------
-# Per-run-kind launch settings: the declared window, the tool set and the skill
-# listing each run kind launches with
+# Per-run-kind launch settings: the declared window, settings and tool set
 # ---------------------------------------------------------------------------
 
 _WINDOW_ENV_NAMES = (
@@ -159,23 +158,6 @@ def test_a_claude_run_declares_its_kinds_window_and_disables_the_advisor(run_kin
   assert env["CLAUDE_CODE_DISABLE_ADVISOR_TOOL"] == "1"
 
 
-@pytest.mark.parametrize(
-    ("run_kind", "report_findings"), [
-        pytest.param("manager_turn", False, id="manager-turn"),
-        pytest.param("work", False, id="work"),
-        pytest.param("review", True, id="review"),
-        pytest.param("iteration", False, id="iteration"),
-        pytest.param("scheduled_step", False, id="scheduled-step"),
-    ])
-def test_only_a_review_run_keeps_report_findings(run_kind: models.RunKind, report_findings: bool) -> None:
-  backend = claude_code.ClaudeCodeBackend(run_kind=run_kind)
-
-  tools = _disallowed_tool_values(backend._build_command("hi"))
-
-  assert "ShareOnboardingGuide" in tools
-  assert ("ReportFindings" not in tools) is report_findings
-
-
 def test_a_host_exported_window_beats_the_kinds_value(monkeypatch: pytest.MonkeyPatch) -> None:
   monkeypatch.setenv(claude_launch.AUTO_COMPACT_WINDOW_ENV, "500000")
 
@@ -184,22 +166,86 @@ def test_a_host_exported_window_beats_the_kinds_value(monkeypatch: pytest.Monkey
     assert backend._prepare_env({})[claude_launch.AUTO_COMPACT_WINDOW_ENV] == "500000"
 
 
-def test_name_only_skills_ride_the_one_merged_settings_object() -> None:
-  backend = claude_code.ClaudeCodeBackend(run_kind="review", name_only_skills=("synthetic-alpha", "synthetic-beta"))
+@pytest.mark.parametrize(
+    ("run_kind", "expected_settings", "skill_disallowed", "report_findings_disallowed"), [
+        pytest.param(
+            "manager_turn",
+            {
+                "disableClaudeAiConnectors": True,
+                "syncClaudeAiSkills": False
+            },
+            False,
+            True,
+            id="manager-turn",
+        ),
+        pytest.param(
+            "work",
+            {
+                "disableClaudeAiConnectors": True,
+                "syncClaudeAiSkills": False,
+                "disableBundledSkills": True
+            },
+            False,
+            True,
+            id="work",
+        ),
+        pytest.param(
+            "iteration",
+            {
+                "disableClaudeAiConnectors": True,
+                "syncClaudeAiSkills": False,
+                "disableBundledSkills": True
+            },
+            False,
+            True,
+            id="iteration",
+        ),
+        pytest.param(
+            "scheduled_step",
+            {
+                "disableClaudeAiConnectors": True,
+                "syncClaudeAiSkills": False,
+                "disableBundledSkills": True
+            },
+            False,
+            True,
+            id="scheduled-step",
+        ),
+        pytest.param(
+            "review",
+            {
+                "disableClaudeAiConnectors": True,
+                "syncClaudeAiSkills": False,
+                "disableBundledSkills": True
+            },
+            True,
+            False,
+            id="review",
+        ),
+    ])
+def test_each_run_kind_gets_its_settings_and_disallowed_tools(
+    run_kind: models.RunKind,
+    expected_settings: dict[str, bool],
+    skill_disallowed: bool,
+    report_findings_disallowed: bool,
+) -> None:
+  command = claude_code.ClaudeCodeBackend(run_kind=run_kind)._build_command("hi")
 
-  settings = _settings_of(backend._build_command("hi"))
+  assert command.count("--settings") == 1
+  assert _settings_of(command) == expected_settings
+  disallowed_tools = _disallowed_tool_values(command)
+  assert ("Skill" in disallowed_tools) is skill_disallowed
+  assert ("ReportFindings" in disallowed_tools) is report_findings_disallowed
+  assert "ShareOnboardingGuide" in disallowed_tools
 
-  assert settings == {
+
+def test_fast_mode_merges_into_the_single_settings_object() -> None:
+  command = claude_code.ClaudeCodeBackend(run_kind="work", fast_mode=True)._build_command("hi")
+
+  assert command.count("--settings") == 1
+  assert _settings_of(command) == {
       "disableClaudeAiConnectors": True,
-      "skillOverrides": {
-          "synthetic-alpha": "name-only",
-          "synthetic-beta": "name-only"
-      },
+      "syncClaudeAiSkills": False,
+      "disableBundledSkills": True,
+      "fastMode": True,
   }
-  assert backend._build_command("hi").count("--settings") == 1
-
-
-def test_a_kind_with_no_name_only_list_keeps_the_settings_object_as_before() -> None:
-  backend = claude_code.ClaudeCodeBackend(run_kind="review")
-
-  assert _settings_of(backend._build_command("hi")) == {"disableClaudeAiConnectors": True}

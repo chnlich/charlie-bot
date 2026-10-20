@@ -19,6 +19,12 @@ _MAX_ONE_SHOT_STDERR_BYTES = 4 * 1024
 # Codex is the only backend that emits it; the wire value is persisted in events.jsonl.
 FILE_WRITE = "file_write"
 
+# The compaction point a codex run gets when its backend entry sets no
+# model_auto_compact_token_limit. The model window is 258,400 tokens, and a codex run
+# does one job whose spec file and repo stay readable after the context drops the
+# detail, so the old context every request past this point re-reads buys little.
+CODEX_DEFAULT_AUTO_COMPACT_TOKEN_LIMIT = 100_000
+
 
 def _toml_basic_string(text: str) -> str:
   """The text as a TOML basic string, the value form that `codex -c key=value` parses.
@@ -70,18 +76,34 @@ class CodexBackend(base.AgentBackend):
     ]
 
   def _model_config_args(self) -> list[str]:
-    args = ["--config", f'model_reasoning_effort="{self._model_reasoning_effort}"']
-    if self._model_auto_compact_token_limit is not None:
-      args.append("--config")
-      args.append(f"model_auto_compact_token_limit={self._model_auto_compact_token_limit}")
-    return args
+    """The `--config` model overrides: the reasoning effort and the compaction point.
+
+    The effort defaults to xhigh; the compaction point is the configured limit or,
+    when the backend entry sets none, CharlieBot's default.
+    """
+    limit = (
+        CODEX_DEFAULT_AUTO_COMPACT_TOKEN_LIMIT
+        if self._model_auto_compact_token_limit is None else self._model_auto_compact_token_limit)
+    return [
+        "--config",
+        f'model_reasoning_effort="{self._model_reasoning_effort}"',
+        "--config",
+        f"model_auto_compact_token_limit={limit}",
+    ]
 
   def _exec_args(self) -> list[str]:
-    """argv shared by streaming, resume, and one-shot `codex exec` runs."""
+    """argv shared by streaming, resume, and one-shot `codex exec` runs.
+
+    ``--disable multi_agent`` drops codex's multi-agent instructions, which no
+    CharlieBot run uses (measured: the codex probe of 2026-10-19 saved 766 input
+    tokens per request with the feature off).
+    """
     return [
         "--json",
         "--skip-git-repo-check",
         "--dangerously-bypass-approvals-and-sandbox",
+        "--disable",
+        "multi_agent",
         "--model",
         self._model,
         *self._model_config_args(),

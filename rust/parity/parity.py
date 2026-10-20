@@ -523,6 +523,13 @@ def _owner_notes(sides: list[Side]) -> list[str]:
   return [f"{side.label} server owner pid {side.server.owner_pid} listens on port {side.port}" for side in sides]
 
 
+def _browser_notes(label: str, stopped: int) -> list[str]:
+  """The note for headless browsers a server left after SIGTERM; a server that left none adds no note."""
+  if stopped == 0:
+    return []
+  return [f"{label} server left {stopped} headless browsers; the harness stopped them"]
+
+
 def _recording_marks(sides: list[Side]) -> list[int]:
   return [side.fake_set.mark() if side.fake_set is not None else 0 for side in sides]
 
@@ -703,10 +710,11 @@ def _run_handover_step(
       for side, starts in zip(sides, starts_before_stop, strict=True)
   ]
   lines = _exit_lines(sides, f"before handover step {step.name!r} stopped it")
+  browser_notes = []
   for side in sides:
     if side.server is None:
       raise RuntimeError(f"{side.label} has no server to hand over")
-    side.server.stop_server()
+    browser_notes.extend(_browser_notes(side.label, side.server.stop_server()))
   if step.open_while_stopped is not None:
     if step.timeout_seconds is None:
       raise RuntimeError(f"handover step {step.name!r} has no validated timeout for open_while_stopped")
@@ -731,7 +739,7 @@ def _run_handover_step(
       step.route, (None, None),
       lines,
       compare.describe_delta(deltas[0]), [],
-      notes=_owner_notes(sides))
+      notes=[*_owner_notes(sides), *browser_notes])
   return result, after
 
 
@@ -945,7 +953,7 @@ def _cleanup_scenario(sides: list[Side]) -> tuple[list[str], list[str]]:
   for side in sides:
     if side.server is not None:
       try:
-        side.server.stop_server()
+        notes.extend(_browser_notes(side.label, side.server.stop_server()))
       except RuntimeError as error:
         lines.append(f"{side.label} server stop: {error}")
         side.server.kill()
@@ -1119,7 +1127,7 @@ def _run_scenario(
         _save_responses(log_dir, number, sides, result)
   finally:
     shutdown_marks = _recording_marks(sides)
-    cleanup_lines, refusal_notes = _cleanup_scenario(sides)
+    cleanup_lines, cleanup_notes = _cleanup_scenario(sides)
     after = _settle_sides(sides)
     _prepare_contexts(sides, after)
     deltas = [compare.delta(old, new) for old, new in zip(before, after, strict=True)]
@@ -1134,7 +1142,7 @@ def _run_scenario(
                 *_delta_diff_lines(scenario, sides, manifest, deltas, candidate_is_python),
             ],
             compare.describe_delta(deltas[0]), [],
-            notes=refusal_notes))
+            notes=cleanup_notes))
   for side in sides:
     trace_logs = [side.tree.root / "logs" / f"{side.tree.label}.fixture.strace"]
     trace_logs.extend(server.trace_log for server in side.server_processes)

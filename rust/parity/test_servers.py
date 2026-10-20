@@ -5,6 +5,8 @@ import os
 import pathlib
 import shutil
 import socket
+import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -135,3 +137,17 @@ def test_headless_chrome_link_points_each_tree_at_the_binary(short_root: pathlib
     link = side.tree.root / "bin" / "headless-chrome"
     assert link.is_symlink()
     assert link.resolve() == chrome.resolve()
+
+
+def test_stop_headless_browsers_counts_and_stops_a_browser_the_server_left(short_root: pathlib.Path) -> None:
+  tree = servers.make_tree("candidate", short_root / "candidate")
+  profile = tree.tmp / f"{servers.HEADLESS_PROFILE_PREFIX}leaked"
+  browser = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", f"--user-data-dir={profile}"])
+  try:
+    with servers.pick_ports(1) as ports:
+      server = servers.ServerProcess("candidate", ["/usr/bin/sleep", "60"], tree, ports[0], REPO_ROOT, 1)
+      assert server._stop_headless_browsers() == 1
+    assert browser.poll() is not None
+  finally:
+    browser.kill()
+    browser.wait()

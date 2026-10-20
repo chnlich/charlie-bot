@@ -397,11 +397,14 @@ class ServerProcess:
       raise RuntimeError(f"{self.label} server pid {server_pid} exited")
     return server_pid, identity[1]
 
-  def stop_server(self) -> None:
-    """Stop tmux, SIGTERM the server, then stop the spawn-pool workers and headless browsers it leaves behind."""
+  def stop_server(self) -> int:
+    """Stop tmux, SIGTERM the server, then stop the spawn-pool workers and headless browsers it leaves behind.
+
+    Returns the number of headless browsers that it stopped.
+    """
     self._kill_tmux_server()
     if self._proc is None or self._proc.poll() is not None:
-      return
+      return 0
     if self._server_identity is None:
       self._server_identity = self._capture_identity()
     server_pid, pid_start = self._server_identity
@@ -414,8 +417,7 @@ class ServerProcess:
       identity = process_identity(server_pid)
       if identity is None or identity[0] == "Z" or identity[1] != pid_start:
         self._stop_spawn_pool_workers()
-        self._stop_headless_browsers()
-        return
+        return self._stop_headless_browsers()
       time.sleep(POLL_INTERVAL_SECONDS)
     if self._proc.poll() is None:
       os.killpg(self._proc.pid, signal.SIGKILL)
@@ -433,10 +435,15 @@ class ServerProcess:
 
     self._stop_processes(self._processes_matching(spawn_worker), "process-pool workers")
 
-  def _stop_headless_browsers(self) -> None:
-    """Stop the headless Chrome that a server left running after SIGTERM, so the server's strace can exit."""
+  def _stop_headless_browsers(self) -> int:
+    """Stop the headless Chrome that a server left running after SIGTERM, so the server's strace can exit.
+
+    Returns the number of browsers that it stopped.
+    """
     profile = f"--user-data-dir={self.tree.tmp / HEADLESS_PROFILE_PREFIX}".encode()
-    self._stop_processes(self._processes_matching(lambda pid, command: profile in command), "headless browsers")
+    browsers = self._processes_matching(lambda pid, command: profile in command)
+    self._stop_processes(browsers, "headless browsers")
+    return len(browsers)
 
   def _processes_matching(self, matches: Callable[[int, bytes], bool]) -> dict[int, str]:
     """Live processes whose command line *matches* accepts, by pid and start time, so no signal reaches a reused pid."""

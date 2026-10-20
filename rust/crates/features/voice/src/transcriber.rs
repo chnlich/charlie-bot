@@ -11,8 +11,8 @@ use std::thread;
 
 use anyhow::{Context, bail};
 use charliebot_core::config::CharlieBotConfig;
-use charliebot_core::python_helper::{LongLived, PythonHelper};
 use charliebot_core::pystr;
+use charliebot_core::python_helper::{LongLived, PythonHelper};
 use sherpa_onnx::{
   OfflineModelConfig, OfflineQwen3ASRModelConfig, OfflineRecognizer, OfflineRecognizerConfig, SileroVadModelConfig,
   TenVadModelConfig, VadModelConfig, VoiceActivityDetector,

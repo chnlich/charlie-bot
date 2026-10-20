@@ -35,7 +35,6 @@ Known-alive symbols:
   `_fresh_user_agent_cache`, `_fresh_claude_accounts`, `_fresh_codex_account` (`tests/test_ext_usage.py`),
   `_fresh_pool_state` (`tests/test_claude_accounts.py`),
   `_reset_config_caches` (`tests/test_charliebot_home.py`),
-  `_fresh_unhandled_part_type_registry` (`tests/test_opencode_backend.py`),
   `_fresh_renderer_singleton` (`tests/core/test_headless_render.py`),
   `_stub_headless_renderer` (`tests/conftest.py`) — the renderer pair: the first resets the
   warm-renderer singleton around `tests/core/test_headless_render.py`, the second is the
@@ -110,7 +109,7 @@ Known-alive symbols:
   `schedule_timezone`/`schedule_project`/`schedule_allow_failure` on `SessionMetadata`,
   `parent_session_id` likewise,
   `fired_at` on `PendingTrigger`) as unused variables/attributes, but every
-  one of those names is grep-findable in repo (`_TRANSIENT_METADATA_FIELDS`, tests, web JS,
+  one of those names is grep-findable in repo (`TRANSIENT_METADATA_FIELDS`, tests, web JS,
   Jinja templates), so the Step 3 grep already protects them and they get no entries.
 - `pytestmark` (module-level assignment, e.g. `tests/test_task_prompts.py`) — module-level
   `pytest.mark.asyncio` assignments that pytest's collection reads by attribute name; each name
@@ -126,12 +125,10 @@ Known-alive symbols:
   string (`'do_' + self.command` through `getattr`, `log_message` by name). Vulture flags each
   as an unused method; the only other whole-repo matches are the perf doc's embedded collector
   and the handler docstring's own `log_message` mention.
-- The `if False: yield {}` lines in `tests/test_master_cc_consumer.py`,
-  `tests/conftest.py` (`CapturingBackend`, the shared master-cc round double), and
-  `tests/test_worker_diagnostics.py` are flagged as
-  100%-confidence unsatisfiable `if` conditions; the unreachable branch is what keeps each fake
+- The `if False: yield {}` line in `tests/test_worker_diagnostics.py` is flagged as a
+  100%-confidence unsatisfiable `if` condition; the unreachable branch is what keeps the fake
   backend's `run()` an async generator (the consumer's `async for` would TypeError a plain
-  coroutine), as each site's inline comment states. The condition is the point; nothing to
+  coroutine), as the site's inline comment states. The condition is the point; nothing to
   delete. The same marker takes a second form: an unreachable `yield` after a `raise` in
   `tests/test_task_run_backend_types.py` and `tests/test_turn_contributions.py`, which vulture
   reads as unreachable code after `raise` at 100% confidence; the yield is again what keeps each
@@ -322,13 +319,11 @@ Known-alive symbols:
   construction, never silently. Vulture flags each method as unused (60% confidence); the names
   match only the double and the real `SlackClient` in `src/features/slack/slack_listener.py`.
 - `raise_for_status`, `aclose`, `aiter_bytes` (the httpx response doubles: `FakeChunkedResponse`
-  in `tests/conftest.py`, `_FakeDelayedStreamResponse`/`_StubHttpResponse`/
-  `_StubEventStreamResponse` in `tests/test_opencode_backend.py`, `_FakeResponse` in
-  `tests/test_ext_usage.py`) — production reads each through the duck-typed
-  response surface: the SSE consumers iterate `response.aiter_bytes()` (`src/infra/sse.py`), the
-  fetch and Web-API paths call `response.raise_for_status()`, and the proxy paths await
-  `response.aclose()`. Each double name matches only its own definition, so vulture flags the
-  methods as unused.
+  in `tests/conftest.py` and `_FakeResponse` in `tests/test_ext_usage.py`) — production reads
+  each through the duck-typed response surface: the SSE consumers iterate
+  `response.aiter_bytes()` (`src/infra/sse.py`), the fetch and Web-API paths call
+  `response.raise_for_status()`, and the proxy paths await `response.aclose()`. Each double name
+  matches only its own definition, so vulture flags the methods as unused.
 - `_proc`, `_ws` (the fake `_launch` in `tests/core/test_headless_render.py`) —
   `_WarmRenderer._render_once`/`close` read `self._proc`/`self._ws`
   (`src/features/artifacts/headless_render.py`); the fake installs them by attribute write, which vulture

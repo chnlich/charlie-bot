@@ -2,7 +2,7 @@
 //! Fixtures of the startup-recovery tests (`tests/recovery.rs`): the task-execution stack over a temporary home, the
 //! scripted `/bin/sh` backend, a fault seam on the run-finish completion, and a capture of the node pass's log events.
 
-#[path = "process_guard.rs"]
+#[path = "recovery_process_guard.rs"]
 mod process_guard;
 
 use std::collections::{BTreeMap, HashMap, VecDeque};

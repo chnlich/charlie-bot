@@ -654,10 +654,6 @@ class UsageLedger:
     row = self._conn.execute("SELECT value FROM ledger_meta WHERE key = ?", (f"last_capture_at:{host}",)).fetchone()
     return None if row is None else datetime.datetime.fromisoformat(row["value"])
 
-  def model_rows(self) -> list[LedgerRow]:
-    """The /token-usage page rows, aggregated from counted records only."""
-    return self.model_rows_with_native_starts()[0]
-
   def model_rows_with_native_starts(self) -> tuple[list[LedgerRow], dict[str, str]]:
     """The page rows plus each source's first native day.
 

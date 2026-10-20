@@ -10,10 +10,14 @@ The For-you view shows your web replies and hides the rest of your turn output.
 
 - When a user message woke this turn, post exactly one web reply.
 - When the web reply nudge woke this turn, post the web reply that the last turn missed.
-- When another input woke this turn, post a web reply only for one of these results:
+- When another input woke this turn, post one web reply for the results of this turn:
+  - a page for the user;
+  - the approval of your plan;
   - a new or changed item in **Waiting on you**;
-  - the completion of a request that the user made in this session;
+  - a landed change;
+  - the completion of your task or of a request that the user made in this session;
   - a result that the user asked you to report.
+- Leave each child's results to the child's own web replies, the completion of work that you handed to it included.
 - When a turn has none of these results, post no web reply.
 
 ## When to set the session status
@@ -44,7 +48,8 @@ The For-you view shows your web replies and hides the rest of your turn output.
   - the links to the evidence: pages, diffs, PRs or logs.
 - Give each Waiting on you item the link to the place where the user answers it, when that place has a link.
 - List each Waiting on you item in the session where the user answers it.
-- When your approver is your parent node, keep Waiting on you empty: the user answers through your parent.
+- The user answers your Waiting on you items in your own session.
+- When your approver is your parent node, send your divergences to your parent instead.
 - The status panel shows the Waiting on you items of your open descendant sessions below your items.
 - The status panel shows the **Now** of each open child session in a folded block below your items.
 

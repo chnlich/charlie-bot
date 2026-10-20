@@ -196,10 +196,6 @@ RUN_DELIVERY = "run_delivery"
 # anything later stays pending.
 TASK_INPUT_ACKNOWLEDGED = "task_input_acknowledged"
 
-# -- Scheduled-task runs ------------------------------------------------------
-# TASK_TRIGGERED is the manual scheduled-task run endpoint's response type.
-TASK_TRIGGERED = "task_triggered"
-
 # -- Backend-specific --------------------------------------------------------
 THINKING = "thinking"
 # Claude Code emits this raw-stream event when the subscription/API answers

@@ -686,9 +686,10 @@ function renderDelegateMetadata(msg, sessionId) {
   }
   var html = '<div class="font-mono text-xs leading-5 bg-slate-950/35 border border-amber-700/20 rounded-lg px-3 py-2 space-y-1">'
     + rows.map(row => renderMetadataRow(row[0], row[1])).join('');
-  if (msg.route && Array.isArray(msg.route.backends) && msg.route.backends.length) {
+  if (msg.route && typeof msg.route === 'object') {
+    var routeBackends = msg.route.backends.length ? msg.route.backends.join(', ') : 'pool';
     html += '<div class="grid grid-cols-[9rem_minmax(0,1fr)] gap-3"><span class="text-slate-500 not-italic font-sans">route</span>'
-      + '<span class="min-w-0 break-words font-sans not-italic">' + escapeHtml(msg.route.backends.join(', '))
+      + '<span class="min-w-0 break-words font-sans not-italic">' + escapeHtml(routeBackends)
       + (msg.route.reason ? ' &middot; ' + escapeHtml(msg.route.reason) : '')
       + '</span></div>';
   }

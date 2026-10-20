@@ -50,8 +50,10 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
     validate_cron_fields,
   )?;
   registry.startup_check("cron_backend_refs", loader::backend_refs_check)?;
+  let (registry_sender, registry_receiver) = tokio::sync::watch::channel(None);
+  registry.service(Arc::new(sequence_controller::BindingContextService::new(registry_sender)))?;
   registry.service(Arc::new(scheduler::SchedulerService::default()))?;
-  registry.sequence_controller("cron", Arc::new(sequence_controller::CronSequenceController))
+  registry.sequence_controller("cron", Arc::new(sequence_controller::CronSequenceController::new(registry_receiver)))
 }
 
 fn validate_cron_fields(values: &mut Map<String, Value>) -> Option<String> {

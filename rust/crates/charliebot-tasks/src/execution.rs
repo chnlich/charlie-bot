@@ -455,21 +455,27 @@ impl TaskExecutionAdapter {
     if let Some(prefix) = apply_sequence_wake_duties(&self.features, meta, &events).await? {
       content = format!("{prefix}{content}");
     }
+    let wake_meta = self
+      .features
+      .store
+      .get_session(session_id)
+      .await?
+      .ok_or_else(|| anyhow!("session {session_id} disappeared after sequence wake duties"))?;
     let fresh_native = !native_continuation_matches(
-      meta.cc_session_id.as_deref(),
-      meta.native_prompt_hash.as_deref(),
-      meta.native_backend.as_deref(),
-      meta.native_model.as_deref(),
+      wake_meta.cc_session_id.as_deref(),
+      wake_meta.native_prompt_hash.as_deref(),
+      wake_meta.native_backend.as_deref(),
+      wake_meta.native_model.as_deref(),
       &snapshot.prompt_hash(),
       option,
     );
     let mut prompt = content;
-    if fresh_native && meta.cc_session_id.is_some() {
-      let reason = match meta.native_backend.as_deref().filter(|backend| !backend.is_empty() && *backend != option.id) {
+    if fresh_native && wake_meta.cc_session_id.is_some() {
+      let reason = match wake_meta.native_backend.as_deref().filter(|backend| !backend.is_empty() && *backend != option.id) {
         Some(previous) => session_anchors::backend_switch_reset_reason(previous, &option.id),
         None => "this task's managed instructions or sources changed since the previous turn, so this turn starts a fresh native conversation".to_string(),
       };
-      let goal = meta.task.as_ref().map_or(meta.name.as_str(), |task| task.goal.as_str());
+      let goal = wake_meta.task.as_ref().map_or(wake_meta.name.as_str(), |task| task.goal.as_str());
       prompt = format!("{}\n\n{prompt}", session_anchors::context_reset_note(&reason, goal));
     }
     self.persist_launch_text(session_id, run_id, &prompt)?;

@@ -15,7 +15,11 @@ pub fn utc_now_iso() -> String {
 
 /// [`utc_now_iso`] of a given instant.
 pub fn iso_from_system_time(instant: SystemTime) -> String {
-  let moment = OffsetDateTime::from(instant);
+  isoformat(OffsetDateTime::from(instant))
+}
+
+/// Render a datetime with Python `datetime.isoformat()`'s local clock, microsecond and UTC-offset form.
+pub fn isoformat(moment: OffsetDateTime) -> String {
   let micros = moment.microsecond();
   let base = format!(
     "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}",
@@ -26,7 +30,18 @@ pub fn iso_from_system_time(instant: SystemTime) -> String {
     moment.minute(),
     moment.second()
   );
-  if micros == 0 { format!("{base}+00:00") } else { format!("{base}.{micros:06}+00:00") }
+  let offset_seconds = moment.offset().whole_seconds();
+  let sign = if offset_seconds < 0 { '-' } else { '+' };
+  let offset_seconds = offset_seconds.abs();
+  let hours = offset_seconds / 3_600;
+  let minutes = offset_seconds % 3_600 / 60;
+  let seconds = offset_seconds % 60;
+  let offset = if seconds == 0 {
+    format!("{sign}{hours:02}:{minutes:02}")
+  } else {
+    format!("{sign}{hours:02}:{minutes:02}:{seconds:02}")
+  };
+  if micros == 0 { format!("{base}{offset}") } else { format!("{base}.{micros:06}{offset}") }
 }
 
 /// `email.utils.formatdate(seconds, usegmt=True)`: `Sun, 18 Oct 2026 07:15:40 GMT`.
@@ -86,6 +101,15 @@ mod tests {
     assert_eq!(iso_from_system_time(whole), "2025-10-18T07:15:40+00:00");
     let fractional = whole + Duration::from_micros(685_829);
     assert_eq!(iso_from_system_time(fractional), "2025-10-18T07:15:40.685829+00:00");
+  }
+
+  #[test]
+  fn isoformat_keeps_the_local_offset_and_six_digit_fraction() {
+    let utc = OffsetDateTime::from_unix_timestamp(1_760_771_740).unwrap();
+    let local = utc.to_offset(time::UtcOffset::from_hms(-7, 0, 0).unwrap());
+    assert_eq!(isoformat(local), "2025-10-18T00:15:40-07:00");
+    let fractional = local.replace_microsecond(685_829).unwrap();
+    assert_eq!(isoformat(fractional), "2025-10-18T00:15:40.685829-07:00");
   }
 
   #[test]

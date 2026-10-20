@@ -31,9 +31,9 @@ import yaml
 TREE_PLACEHOLDER = "<tree>"
 _UUID = re.compile(r"(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b")
 _VOICE_STEM = re.compile(r"\b\d{4}-\d{2}-\d{2}T\d{6}\.\d{3}Z_[0-9a-f]{8}\b")
-_ISO_WALL_CLOCK = r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})"
+_ISO_WALL_CLOCK = r"(?P<date>\d{4}-\d{2}-\d{2}T)(?P<value>\d{2}:\d{2}:\d{2}(?:\.\d{6})?)(?P<offset>[+-]\d{2}:\d{2})"
 _CRON_FIRING_STAMP = re.compile(
-    rf"(?P<prefix>cron:[^:\s]+:|[^:\n]* · )(?P<value>{_ISO_WALL_CLOCK})"
+    rf"(?P<prefix>cron:[^:\s]+:|[^:\n]* · ){_ISO_WALL_CLOCK}"
     r"(?P<suffix>:(?:leaf|work|step:\d+))?(?=$|\s)")
 _MERGED_TRACE_CACHE_PATH = re.compile(r"^home/cache/perfetto_merge/[0-9a-f]{64}\.json\.gz$")
 _TEMP_DIR_SUFFIX = re.compile(r"\bcharliebot-(?:explain|oneshot|run)-(?P<value>[a-z0-9_]{8})(?![a-z0-9_])")
@@ -111,10 +111,12 @@ class FieldRule:
     return f"<{self.name}>"
 
   def mask(self, value: Any) -> Any:
+    if value is None:
+      return None
     if self.pattern is None:
       return self.placeholder
     if not isinstance(value, str):
-      return value
+      raise TypeError(f"field rule {self.name!r} expects a string or null, got {type(value).__name__}")
     match = self.pattern.fullmatch(value)
     if match is None:
       return value
@@ -495,7 +497,7 @@ FILE_RULES: tuple[FieldRule, ...] = (
         target="home/sessions/*/metadata.json",
         field="last_scheduled_run",
         when=(),
-        pattern=re.compile(rf"(?P<value>{_ISO_WALL_CLOCK})"),
+        pattern=re.compile(_ISO_WALL_CLOCK),
         reason="wall-clock time: the scheduler records each server's cron firing on its own clock",
     ),
     FieldRule(
@@ -783,7 +785,9 @@ def normalize_text(text: str, ctx: Context) -> str:
   normalized = TEMP_DIR_SUFFIX_RULE.pattern.sub(_mask_temp_dir_suffix, normalized)
   normalized = TASK_BRANCH_TIMESTAMP_RULE.pattern.sub(_mask_task_branch_timestamp, normalized)
   normalized = _CRON_FIRING_STAMP.sub(
-      lambda match: f"{match['prefix']}<cron-firing-time>{match['suffix'] or ''}", normalized)
+      lambda match: (
+          f"{match['prefix']}{match['date']}<cron-firing-time>{match['offset']}{match['suffix'] or ''}"
+      ), normalized)
   return _UUID.sub(replace_uuid, normalized)
 
 

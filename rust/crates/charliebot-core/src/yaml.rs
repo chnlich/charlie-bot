@@ -142,11 +142,20 @@ fn write_double_quoted(output: &mut String, text: &str, indent: usize, split: bo
       }
     }
     let column_at_end = line.column as isize + end as isize - start as isize;
-    if end > 0 && end < chars.len() - 1 && ch == Some(' ') && column_at_end > BEST_WIDTH as isize && split {
+    if split
+      && ch == Some(' ')
+      && end > 0
+      && chars[end - 1] != ' '
+      && end < chars.len() - 1
+      && column_at_end > BEST_WIDTH as isize
+    {
       if start < end {
         line.push(&chars[start..end]);
       }
       line.fold();
+      if chars[end + 1] == ' ' {
+        line.push_str("\\");
+      }
       start = end + 1;
     }
     end += 1;
@@ -298,8 +307,8 @@ fn analyze_scalar(value: &str) -> ScalarAnalysis {
       line_breaks = true;
     }
     if ch != '\n' && !(' '..='~').contains(&ch) {
-      let allowed_unicode = matches!(ch, '\u{85}' | '\u{a0}'..='\u{d7ff}' | '\u{e000}'..='\u{fffd}' | '\u{10000}'..='\u{10fffe}')
-        && ch != '\u{feff}';
+      let allowed_unicode =
+        matches!(ch, '\u{85}' | '\u{a0}'..='\u{d7ff}' | '\u{e000}'..='\u{fffd}') && ch != '\u{feff}';
       if !allowed_unicode || ch == '\u{85}' {
         special_characters = true;
       }

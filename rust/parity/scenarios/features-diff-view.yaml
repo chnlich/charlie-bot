@@ -36,6 +36,7 @@ steps:
     method: GET
     path: /api/git/branches
     expect_status: 422
+    compare: status_and_shape
   - name: list the repos under the workspace
     method: GET
     path: /api/git/repos
@@ -74,6 +75,7 @@ steps:
       head: feature
       mode: sideways
     expect_status: 422
+    compare: status_and_shape
   - name: refuse a manifest of a stray repo outside the workspace
     method: GET
     path: /api/git/diff/files
@@ -182,6 +184,7 @@ steps:
       path: keep.txt
       force: maybe
     expect_status: 422
+    compare: status_and_shape
   - name: refuse a diff file without a path
     method: GET
     path: /api/git/diff/file
@@ -190,6 +193,7 @@ steps:
       base: main
       head: feature
     expect_status: 422
+    compare: status_and_shape
   - name: render the diff page
     method: GET
     path: /diff

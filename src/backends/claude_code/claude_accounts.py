@@ -17,6 +17,11 @@ newest rate-limit reading per account (from ``rate_limit_event`` and from the
 usage panel poller) and the time of the account's last authentication failure,
 all re-learned by any later run.
 
+Selection observes one tier rule, stated here and in ``select``: accounts whose
+headroom strictly exceeds ``1 - WARNING_UTILIZATION`` form the under-line tier,
+and when that tier holds any account only it contends -- an account at or above
+the warning line is a last resort shared with no rule of its own.
+
 A backend entry is *pooled* when it is a cc-claude entry and ``accounts.claude``
 is non-empty. A cc-claude entry has no login field of its own: with a non-empty
 ``accounts.claude`` every cc-claude entry is pooled, and with an empty one every
@@ -431,6 +436,12 @@ def select(
   than a last resort: running there would only be rejected again. None when no
   account qualifies, which the caller reports loudly together with
   ``earliest_reset``.
+
+  The tier rule (stated once in this module's docstring): accounts whose
+  headroom strictly exceeds ``1 - WARNING_UTILIZATION`` form the under-line
+  tier; when it holds any account, only that tier contends -- the idle-first
+  and score rules below apply inside it -- and when it is empty, every
+  available account does.
   """
   moment = now_or(now)
   excluded = set(exclude)
@@ -442,8 +453,10 @@ def select(
       available.append((account, hr))
   if not available:
     return None
-  idle = [(account, hr) for account, hr in available if busy_accounts is None or account.label not in busy_accounts]
-  contenders = idle or available
+  under_line = [(account, hr) for account, hr in available if hr > 1.0 - WARNING_UTILIZATION]
+  tier = under_line or available
+  idle = [(account, hr) for account, hr in tier if busy_accounts is None or account.label not in busy_accounts]
+  contenders = idle or tier
   scored = [(hr + _reset_bonus(account.label, model, moment, hr), account) for account, hr in contenders]
   best = max(score for score, _account in scored)
   tied = [account for score, account in scored if best - score <= _SCORE_TIE]

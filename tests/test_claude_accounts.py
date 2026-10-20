@@ -188,6 +188,67 @@ def test_a_label_in_two_pools_loads_and_selects_from_either(tmp_path: pathlib.Pa
   assert claude_accounts.select(cfg, conftest.FABLE_MODEL, now=NOW, account_pool="beta").label == "ext-1"
 
 
+def test_select_prefers_an_idle_under_line_account_over_a_busier_one(tmp_path: pathlib.Path) -> None:
+  """Inside the under-line tier an idle account still wins outright: idle first, then score."""
+  cfg = _pool_cfg(tmp_path, labels=("main", "ext-1"))
+  claude_accounts.observe_rate_limit("main", _event("allowed", 0.60, 0.10), now=NOW)
+  claude_accounts.observe_rate_limit("ext-1", _event("allowed", 0.10, 0.10), now=NOW)
+
+  chosen = claude_accounts.select(cfg, conftest.FABLE_MODEL, busy_accounts={"ext-1"}, now=NOW)
+
+  assert chosen is not None and chosen.label == "main"
+
+
+def test_select_without_an_under_line_account_keeps_idle_first(tmp_path: pathlib.Path) -> None:
+  """Every account at or above the line: the tier is empty, so all available accounts
+  contend under today's order and the idle account still wins."""
+  cfg = _pool_cfg(tmp_path, labels=("main", "ext-1"))
+  claude_accounts.observe_rate_limit("main", _event("allowed", 0.95, 0.10), now=NOW)
+  claude_accounts.observe_rate_limit("ext-1", _event("allowed", 0.92, 0.10), now=NOW)
+
+  chosen = claude_accounts.select(cfg, conftest.FABLE_MODEL, busy_accounts={"ext-1"}, now=NOW)
+
+  assert chosen is not None and chosen.label == "main"
+
+
+def test_select_boundary_exactly_at_the_line_sits_outside_the_under_line_tier(tmp_path: pathlib.Path) -> None:
+  """Headroom strictly greater than the line's share makes the tier: a busy account at
+  0.89 utilization is under the line and beats an idle account at exactly 0.90."""
+  cfg = _pool_cfg(tmp_path, labels=("main", "ext-1"))
+  claude_accounts.observe_rate_limit("main", _event("allowed", 0.90, 0.10), now=NOW)
+  claude_accounts.observe_rate_limit("ext-1", _event("allowed", 0.89, 0.10), now=NOW)
+
+  chosen = claude_accounts.select(cfg, conftest.FABLE_MODEL, busy_accounts={"ext-1"}, now=NOW)
+
+  assert chosen is not None and chosen.label == "ext-1"
+
+
+def test_select_without_a_busy_set_prefers_the_under_line_account_over_the_tie_rule(tmp_path: pathlib.Path) -> None:
+  """No busy set: the under-line tier shrinks the field before the score tie can hand
+  the choice to the older reading, and neither account holds a panel reset bonus."""
+  cfg = _pool_cfg(tmp_path, labels=("main", "ext-1"))
+  claude_accounts.observe_rate_limit("main", _event("allowed", 0.89, 0.10), now=NOW)
+  claude_accounts.observe_rate_limit("ext-1", _event("allowed", 0.90, 0.10), now=NOW - datetime.timedelta(hours=1))
+
+  chosen = claude_accounts.select(cfg, conftest.FABLE_MODEL, now=NOW)
+
+  assert chosen is not None and chosen.label == "main"
+
+
+def test_relay_move_lands_under_the_line_before_the_tie_rule_applies(tmp_path: pathlib.Path) -> None:
+  """Leaving main: ext-1 at 0.89 is under the line, ext-2 at 0.905 is older -- the tier
+  rule picks ext-1 where the score tie alone would have picked ext-2."""
+  cfg = _pool_cfg(tmp_path, labels=("main", "ext-1", "ext-2"))
+  conftest.make_transcript(tmp_path / "claude-main", "uuid-1")
+  current = claude_accounts.account_by_label(cfg, "main")
+  claude_accounts.observe_rate_limit("ext-1", _event("allowed", 0.89, 0.10), now=NOW)
+  claude_accounts.observe_rate_limit("ext-2", _event("allowed", 0.905, 0.10), now=NOW - datetime.timedelta(hours=1))
+
+  move = claude_relay.relay_move(cfg, conftest.FABLE_MODEL, current, "uuid-1", now=NOW)
+
+  assert move.account is not None and move.account.label == "ext-1"
+
+
 def test_relay_stays_inside_the_pool_and_names_it_when_exhausted(tmp_path: pathlib.Path) -> None:
   """relay_move picks the next account inside the pool only; a healthy account in
   another pool stays unused, and exhaustion names the pool and its earliest reset."""

@@ -36,7 +36,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
   reply = sub.add_parser(
       "reply", help="Post a reply to this session's Slack thread", formatter_class=help_formatter.CliHelpFormatter)
-  reply.add_argument("--file", required=True, help="File holding the reply text; - reads stdin")
+  common.add_reply_file_arg(reply)
   common.add_session_arg(reply)
 
   ack = sub.add_parser(

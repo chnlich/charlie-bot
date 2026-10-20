@@ -358,7 +358,7 @@ def _seed_spawn_session_ids(snapshot: compare.Snapshot, records: list[dict], ctx
   def alias_of(session_id: str) -> str:
     if session_id not in aliases:
       parent = parents[session_id]
-      group = "root" if parent is None else hashlib.sha256(parent_key(parent).encode()).hexdigest()
+      group = "root" if parent is None else hashlib.sha256(parent_key(parent).encode()).hexdigest()[:12]
       aliases[session_id] = f"<spawn-session-{group}-{places[session_id]}>"
     return aliases[session_id]
 

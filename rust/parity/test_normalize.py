@@ -2,6 +2,7 @@
 fake-agent start's stdin and stdout_path normalize under the rules that name them.
 """
 
+import hashlib
 import json
 import pathlib
 import re
@@ -446,6 +447,11 @@ def test_children_of_two_parents_that_start_in_opposite_order_keep_their_aliases
   parity._prepare_contexts(sides, snapshots)
 
   base, cand = sides
+  first_group = hashlib.sha256(first_parent.encode()).hexdigest()[:12]
+  second_group = hashlib.sha256(second_parent.encode()).hexdigest()[:12]
+  assert base.ctx.stable_uuids[first_child] == f"<spawn-session-{first_group}-1>"
+  assert base.ctx.stable_uuids[first_child_again] == f"<spawn-session-{first_group}-2>"
+  assert base.ctx.stable_uuids[second_child] == f"<spawn-session-{second_group}-1>"
   for session in parent_of:
     assert base.ctx.stable_uuids[session] == cand.ctx.stable_uuids[session]
   assert len({base.ctx.stable_uuids[session] for session in parent_of}) == 3

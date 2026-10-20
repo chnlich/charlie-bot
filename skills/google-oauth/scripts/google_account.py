@@ -183,8 +183,9 @@ def _load_table() -> AccountTable:
 
 
 def _account_for(table: AccountTable, name: str | None) -> Account:
-  account_name = name or next(account.name for account in table.accounts if account.is_default)
-  account = table.by_name.get(account_name)
+  if name is None:
+    name = next(account.name for account in table.accounts if account.is_default)
+  account = table.by_name.get(name)
   if account is None:
     names = ", ".join(account.name for account in table.accounts)
     raise CliError(f"unknown account. Available accounts: {names}", 2)

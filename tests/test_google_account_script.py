@@ -115,6 +115,14 @@ def test_unknown_account_lists_names(credentials_file: pathlib.Path, capsys: pyt
   assert "Available accounts:" in stderr
 
 
+def test_empty_account_name_is_rejected(credentials_file: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:
+  exit_code, stdout, stderr = run_cli(["token", "--account", ""], capsys)
+
+  assert exit_code == 2
+  assert stdout == ""
+  assert "Available accounts: default" in stderr
+
+
 def test_duplicate_account_names_are_rejected(
     credentials_file: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:
   credentials_file.write_text(

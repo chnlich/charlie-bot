@@ -265,7 +265,7 @@ class SessionEvents:
     # The init parses and folds the whole live corpus in one bounded span, and
     # the generational passes its dict churn triggers paused the event loop
     # up to ~74 ms at the session's first streamed event after a server start
-    # (measured 20534-event worst corpus, 2026-09-15). GC is process-global
+    # (measured 20534-event worst corpus). GC is process-global
     # and the init runs on server threads, so the disable spans the whole init.
     # The parse's dicts stay referenced by the events cache and the feed's
     # discards refcount-clear, so no collect rides the re-enable.

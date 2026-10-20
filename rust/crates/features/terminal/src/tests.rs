@@ -1,4 +1,5 @@
 use std::ffi::{OsStr, OsString};
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::{Mutex, MutexGuard};
@@ -166,6 +167,31 @@ fn tmux_environment_filters_session_identity_and_tmux_client_state() {
   assert!(attach_env.iter().all(|(key, _)| key != OsStr::new("CHARLIEBOT_SESSION_ID")));
   assert!(attach_env.iter().any(|(key, value)| key == OsStr::new("TMUX") && value == "stale-tmux"));
   assert!(attach_env.iter().any(|(key, value)| key == OsStr::new("TERM") && value == "xterm-256color"));
+}
+
+#[tokio::test]
+async fn failed_tmux_session_reports_stderr_from_the_temporary_file() {
+  let root = tempfile::tempdir().unwrap();
+  let fake_bin = root.path().join("fake-bin");
+  std::fs::create_dir(&fake_bin).unwrap();
+  let fake_tmux = fake_bin.join("tmux");
+  std::fs::write(
+    &fake_tmux,
+    "#!/bin/sh
+echo 'synthetic tmux stderr line' >&2
+exit 1
+",
+  )
+  .unwrap();
+  let mut permissions = std::fs::metadata(&fake_tmux).unwrap().permissions();
+  permissions.set_mode(0o755);
+  std::fs::set_permissions(&fake_tmux, permissions).unwrap();
+
+  let _env = ScopedEnv::new(&["PATH"]);
+  _env.set("PATH", Some(fake_bin.as_os_str()));
+  let error = pty::start_tmux_session("synthetic-session", root.path(), &[], &["/bin/true"]).await.unwrap_err();
+
+  assert_eq!(error, "tmux new-session failed for synthetic-session: synthetic tmux stderr line");
 }
 
 #[tokio::test]

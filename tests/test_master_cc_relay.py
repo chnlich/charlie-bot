@@ -10,8 +10,7 @@ import pytest
 from src.backends.claude_code import claude_accounts, claude_relay, master_cc_relay
 from src.infra import event_types as ET
 from src.infra import models
-from src.runtime import master_cc_run
-from src.runtime import master_cc_state
+from src.runtime import master_cc_run, master_cc_state
 from src.runtime.agent_process import base as backend_base
 
 NOW = datetime.datetime(2026, 9, 6, 20, 0, tzinfo=datetime.UTC)

@@ -80,9 +80,9 @@ class FieldRule:
   *target* is a route template ("GET /api/internal/version") for a response rule, or a glob over the
   tree-relative path ("home/state/writer_identity.json") of a JSON, JSONL or YAML file for a file rule.
   *field* is a dotted path; ``[*]`` steps into every list element and ``*`` into every mapping value. With
-  *when*, the field is masked only in an object whose own fields hold those values. *document_when* filters the
-  whole JSON document before the path is applied. With *pattern*, only the group ``value`` of a string that fully
-  matches it is masked, and any other value compares as it is.
+  *when*, the field is masked only in an object whose own fields hold those values: the object that names the
+  field, so ``result_refs[*]`` is filtered by the event that holds ``result_refs``. With *pattern*, only the group
+  ``value`` of a string that fully matches it is masked, and any other value compares as it is.
   """
 
   name: str
@@ -407,7 +407,7 @@ FILE_RULES: tuple[FieldRule, ...] = (
             name=f"{event_type}-landed-local-repo-spec-ref",
             target="home/sessions/*/data/chat_events.jsonl",
             field="result_refs[*]",
-            when=(),
+            when=(("type", event_type),),
             pattern=re.compile(r"spec:(?P<value>[0-9a-f]{64})"),
             sibling_prefix=(("result_refs", "landed:"),),
             reason="the canonical task spec hash includes the repository path inside each independent parity tree",
@@ -762,7 +762,7 @@ def _mask(value: Any, segments: list[str], rule: FieldRule) -> Any:
     return {key: _mask(item, rest, rule) for key, item in value.items()}
   if head not in value:
     return value
-  if not rest and any(value.get(key) != wanted for key, wanted in rule.when):
+  if all(segment == "[*]" for segment in rest) and any(value.get(key) != wanted for key, wanted in rule.when):
     return value
   return {**value, head: _mask(value[head], rest, rule)}
 

@@ -508,3 +508,18 @@ def test_task_close_without_a_landing_keeps_its_spec_hash_compared() -> None:
       })
   assert close != other_close
   assert close["result_refs"][1] == f"spec:{'a' * 64}"
+
+
+def test_a_landed_event_of_another_type_keeps_its_spec_hash_compared() -> None:
+  opened = _masked_chat_event(
+      {
+          "type": "task_opened",
+          "result_refs": ["run:synthetic-run", f"spec:{'a' * 64}", "landed:main@synthetic-commit"]
+      })
+  other_opened = _masked_chat_event(
+      {
+          "type": "task_opened",
+          "result_refs": ["run:synthetic-run", f"spec:{'b' * 64}", "landed:main@synthetic-commit"]
+      })
+  assert opened != other_opened
+  assert opened["result_refs"][1] == f"spec:{'a' * 64}"

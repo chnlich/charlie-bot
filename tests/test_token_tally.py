@@ -447,7 +447,7 @@ def _capture(ledger: usage_ledger.UsageLedger) -> dict[str, int]:
 
 
 def _ledger_row(ledger: usage_ledger.UsageLedger, source: str, model: str):
-  return next(r for r in ledger.model_rows() if r.source == source and r.model == model)
+  return next(r for r in ledger.model_rows_with_native_starts()[0] if r.source == source and r.model == model)
 
 
 def test_captured_rows_survive_deleting_the_source_files(tmp_path: pathlib.Path) -> None:
@@ -456,12 +456,12 @@ def test_captured_rows_survive_deleting_the_source_files(tmp_path: pathlib.Path)
   claude, codex = _claude_codex_corpus(tmp_path)
   with usage_ledger.UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
     _capture(ledger)
-    before = ledger.model_rows()
+    before = ledger.model_rows_with_native_starts()[0]
     shutil.rmtree(claude.work)
     shutil.rmtree(claude.ext)
     shutil.rmtree(codex.home)
     _capture(ledger)
-    assert ledger.model_rows() == before
+    assert ledger.model_rows_with_native_starts()[0] == before
 
 
 def test_second_capture_without_changes_writes_nothing(tmp_path: pathlib.Path) -> None:
@@ -686,7 +686,7 @@ def _capture_charliebot(ledger: usage_ledger.UsageLedger, sessions_dir: pathlib.
 
 
 def _ledger_rows(ledger: usage_ledger.UsageLedger) -> dict:
-  return {(r.source, r.model): r for r in ledger.model_rows()}
+  return {(r.source, r.model): r for r in ledger.model_rows_with_native_starts()[0]}
 
 
 def _codex_rollout(codex: Codex, sid: str, model: str, last: dict, total: dict, ts: str) -> pathlib.Path:
@@ -735,7 +735,7 @@ def test_charliebot_capture_rows(tmp_path: pathlib.Path, monkeypatch: pytest.Mon
   with usage_ledger.UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
     assert _capture_charliebot(ledger, cb.root) == 3
     assert _capture_charliebot(ledger, cb.root) == 0  # the unchanged corpus is skipped
-    rows = {(r.source, r.model): r for r in ledger.model_rows() if r.source == "charlie-bot"}
+    rows = {(r.source, r.model): r for r in ledger.model_rows_with_native_starts()[0] if r.source == "charlie-bot"}
 
   assert set(rows) == {("charlie-bot", "GLM-5.3-Flash"), ("charlie-bot", "GLM-5.4-Flash")}
   recorded = rows["charlie-bot", "GLM-5.3-Flash"]
@@ -951,7 +951,7 @@ def test_charliebot_capture_skips_unkeyable_threads(tmp_path: pathlib.Path, monk
       results=[("2026-09-12T20:00:00+00:00", _result_usage(200, 6))])
   with usage_ledger.UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
     assert _capture_charliebot(ledger, cb.root) == 0
-    assert ledger.model_rows() == []
+    assert ledger.model_rows_with_native_starts()[0] == []
     assert len(ledger.captured_sigs("host-a")) == 2
     assert _capture_charliebot(ledger, cb.root) == 0
 
@@ -1365,7 +1365,7 @@ def test_opencode_capture_rows(tmp_path: pathlib.Path) -> None:
 
   with usage_ledger.UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
     assert _capture(ledger)["opencode"] == 2
-    rows = {(r.source, r.model): r for r in ledger.model_rows() if r.source == "opencode"}
+    rows = {(r.source, r.model): r for r in ledger.model_rows_with_native_starts()[0] if r.source == "opencode"}
   assert set(rows) == {("opencode", NAME), ("opencode", "gpt-5")}
   anthropic = rows["opencode", NAME]
   assert (anthropic.calls, anthropic.in_fresh, anthropic.output) == (1, 100, 30)
@@ -1388,11 +1388,11 @@ def test_capture_opencode_rereads_updated_rows_and_keeps_deleted_rows_stored(tmp
     row = _ledger_row(ledger, "opencode", NAME)
     assert (row.in_fresh, row.output, row.calls) == (100 + 222, 10 + 22, 2)
 
-    before = ledger.model_rows()
+    before = ledger.model_rows_with_native_starts()[0]
     oc.delete("m1")
     oc.delete("m2")
     assert _capture(ledger)["opencode"] == 0
-    assert ledger.model_rows() == before
+    assert ledger.model_rows_with_native_starts()[0] == before
 
 
 def test_capture_opencode_skips_an_unchanged_db_and_never_writes_to_it(tmp_path: pathlib.Path) -> None:

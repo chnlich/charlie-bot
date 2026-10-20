@@ -742,9 +742,30 @@ def _observe(value: Any, ctx: Context) -> None:
       _observe(item, ctx)
 
 
+def path_sort_key(path: str, ctx: Context) -> str:
+  """The path with every UUID swapped for its stable name, so raw random bytes set no ordering.
+
+  A minted UUID's number must not depend on where its raw form sorts: two trees' ids differ, and a
+  clock-derived id sorts at a different place in each. Names the harness knows (fixture and stable
+  aliases) keep their own text; every other UUID collapses to one token, so paths that differ only
+  by their unknown UUIDs tie and their raw order breaks the tie.
+  """
+
+  def replace(match: re.Match[str]) -> str:
+    identifier = match[0]
+    if identifier in ctx.stable_uuids:
+      return ctx.stable_uuids[identifier]
+    if identifier in ctx.fixture_uuids:
+      return identifier
+    return "<uuid>"
+
+  return _UUID.sub(replace, path)
+
+
 def prepare_snapshot(entries: list[tuple[str, str, bytes]], ctx: Context) -> None:
-  """Assign minted UUID names by sorted tree path and each JSON document's stored order."""
-  for path, kind, data in sorted(entries, key=lambda entry: entry[0]):
+  """Assign minted UUID names by stable-name path order and each JSON document's stored order."""
+  ordered = sorted(entries, key=lambda entry: (path_sort_key(entry[0], ctx), entry[0]))
+  for path, kind, data in ordered:
     _observe(path, ctx)
     if kind != "file":
       continue

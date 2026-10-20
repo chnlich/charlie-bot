@@ -328,7 +328,7 @@ def _seed_spawn_run_ids(snapshot: compare.Snapshot, records: list[dict], ctx: no
       for path in snapshot
       if (parts := path.split("/")) and len(parts) >= 3 and parts[:2] == ["home", "sessions"]
   }
-  normalize.prepare_snapshot([(path, "dir", b"") for path in sorted(session_paths)], ctx)
+  normalize.prepare_snapshot([(path, "dir", b"") for path in sorted(session_paths, key=lambda p: normalize.path_sort_key(p, ctx))], ctx)
   for group in _spawn_groups(records, ctx):
     for launch_number, record in enumerate(group, start=1):
       claims = record["run_token_claims"]

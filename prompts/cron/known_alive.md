@@ -333,10 +333,6 @@ Known-alive symbols:
   `_WarmRenderer._render_once`/`close` read `self._proc`/`self._ws`
   (`src/features/artifacts/headless_render.py`); the fake installs them by attribute write, which vulture
   flags as an unused attribute.
-- `_sleep` (`tests/test_opencode_backend.py`, installed as `backend._sleep = _record_sleep`) —
-  the opencode lock-retry loop awaits `self._sleep(_LOCK_RETRY_BACKOFF_SECONDS)`
-  (`src/backends/opencode/opencode.py`); the write replaces the instance's `asyncio.sleep` seam
-  with a recorder, and vulture flags the write as an unused attribute.
 - `cgroup_exit_report` (the backend doubles `ScriptedRelayBackend` and `TerminateFlagBackend`
   in `tests/conftest.py`) — the worker finalize path
   (`self._backend.cgroup_exit_report()`, `src/runtime/worker.py`) and the master round's error

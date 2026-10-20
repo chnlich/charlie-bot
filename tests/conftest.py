@@ -1707,6 +1707,12 @@ MASTER_TRIGGER_PATCH_TARGET = "src.runtime.master_trigger.trigger_master"
 SLACK_LISTENER_BOT_CLIENT_PATCH_TARGET = "src.features.slack.slack_listener._bot_client"
 DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET = "src.features.discord.discord_listener._bot_client"
 
+# Import-path patch target for backend resolution at launch. The launch path resolves the
+# backend option through the spawner_backends module attribute at call time
+# (`spawner_backends.resolve_backend_option`), so monkeypatch.setattr lands the stand-in on
+# that module attribute.
+SPAWNER_BACKENDS_RESOLVE_BACKEND_OPTION_PATCH_TARGET = "src.runtime.spawner_backends.resolve_backend_option"
+
 # Import-path patch targets for the scheduler's config reads. src/features/cron/scheduler.py reads
 # both through their home modules at call time (`config.load_config`,
 # `loader.get_scheduled_tasks`), so monkeypatch.setattr lands the stand-in on the home module's

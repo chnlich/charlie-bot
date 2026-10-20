@@ -564,14 +564,14 @@ impl TaskExecutionAdapter {
         self.build_review_context(session_id, &work_run).await?
       }
     } else if let Some(sequence_ref) = &run.sequence_ref {
-      let controller = self
-        .features
-        .registry
-        .sequence_controllers()
-        .find(|controller| controller.sequence_kind() == sequence_ref.kind)
-        .ok_or_else(|| {
-          recovery::owner_not_landed(&sequence_ref.kind, &format!("the launch context of run {run_id}"))
-        })?;
+      let step = format!("the launch context of run {run_id}");
+      let Some(controller) = recovery::owning_controller(&self.features, &sequence_ref.kind, &step)? else {
+        // Python raises TaskInvalidError here (`task_execution.py:1390-1394`), before any process starts.
+        anyhow::bail!(
+          "sequence run {run_id} carries owner_ref {:?} and no registered controller owns its kind",
+          sequence_ref.owner_ref
+        );
+      };
       let launch_text = launch_prompt.unwrap_or_default();
       match controller.launch_context(meta, run, launch_text).await? {
         Some(context) => context,
@@ -1215,7 +1215,7 @@ impl TaskExecutionAdapter {
     if let Some(sequence_ref) = &run.sequence_ref {
       let step = format!("the after-run duty for run {}", run.id);
       let Some(controller) = recovery::owning_controller(&self.features, &sequence_ref.kind, &step)? else {
-        // A Run whose owning package is gone only logs its finish (`task_execution.py:2168-2177`).
+        // A Run whose owning package is gone only logs its finish (`task_execution.py:2168-2176`).
         tracing::warn!(
           target: "charliebot_tasks",
           session_id,

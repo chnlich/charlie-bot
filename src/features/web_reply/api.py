@@ -103,7 +103,8 @@ async def web_status_unread(
 ) -> dict:
   """Return the status file's waiting items that no cold read of this session has read as they stand.
 
-  The file parses and validates as a set's does; refusals match the set's. Nothing is stored or recorded.
+  The file parses and validates as a set's does, including the waiting-item context check; refusals match the set's.
+  Nothing is stored or recorded.
   """
   try:
     return await status.unread_waiting(req.session_id, req.text, store, events)

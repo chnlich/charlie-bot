@@ -20,6 +20,7 @@ pub mod session_anchors;
 pub mod spawner_backends;
 pub mod spawner_prompt;
 pub mod task_sessions;
+pub mod text_length;
 pub mod upload;
 pub mod verify_trailer;
 pub mod worker;

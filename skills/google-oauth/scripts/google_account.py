@@ -36,6 +36,8 @@ _SCOPES = " ".join(
         "https://www.googleapis.com/auth/gmail.readonly",
         "https://www.googleapis.com/auth/calendar.readonly",
     ))
+# yaml.safe_dump wraps plain scalars at spaces past its width; account values stay on one line.
+_DUMP_WIDTH = 1_000_000
 
 
 class CliError(Exception):
@@ -64,21 +66,6 @@ class AccountTable:
   accounts: list[Account]
   by_name: dict[str, Account]
   google: dict[str, object]
-
-
-@dataclasses.dataclass(frozen=True)
-class _BlockSectionEditPlan:
-  replacements: dict[str, int]
-  insert_line: int
-  indentation: str
-
-
-@dataclasses.dataclass(frozen=True)
-class _FlowSectionEditPlan:
-  replacements: dict[str, tuple[int, int]]
-  insert_offset: int
-  closing_offset: int
-  has_entries: bool
 
 
 def _profile_home() -> pathlib.Path:
@@ -312,8 +299,7 @@ def _redirect_code(redirect_url: str, name: str) -> str:
   return codes[0]
 
 
-def _section_edit_plan(
-    raw_text: str, section_name: str, keys: Sequence[str]) -> _BlockSectionEditPlan | _FlowSectionEditPlan:
+def _section_edit_plan(raw_text: str, section_name: str, keys: Sequence[str]) -> tuple[dict[str, int], int, str]:
   """Locate each key's line in one section, plus the insert point and indentation."""
   try:
     node = yaml.compose(raw_text, Loader=yaml.SafeLoader)
@@ -321,79 +307,27 @@ def _section_edit_plan(
     raise CliError("credentials.yaml is not valid YAML", 1) from error
   if not isinstance(node, yaml.MappingNode):
     raise CliError("credentials.yaml must contain a mapping", 1)
-  section_pairs = [
-      (key_node, value_node)
-      for key_node, value_node in node.value
+  section_nodes = [
+      value_node for key_node, value_node in node.value
       if isinstance(key_node, yaml.ScalarNode) and key_node.value == section_name
   ]
-  if len(section_pairs) != 1 or not isinstance(section_pairs[0][1], yaml.MappingNode):
+  if len(section_nodes) != 1 or not isinstance(section_nodes[0], yaml.MappingNode):
     raise CliError(f"credentials.{section_name} cannot be updated", 1)
-  section_key, section_node = section_pairs[0]
-  pairs = section_node.value
-  replacement_nodes: dict[str, yaml.Node] = {}
-  for key_node, value_node in pairs:
+  if section_nodes[0].flow_style:
+    raise CliError(f"credentials.{section_name} must be a block mapping", 1)
+  pairs = section_nodes[0].value
+  replacements: dict[str, int] = {}
+  for key_node, _ in pairs:
     if isinstance(key_node, yaml.ScalarNode) and key_node.value in keys:
-      if key_node.value in replacement_nodes:
+      if key_node.value in replacements:
         raise CliError(f"credentials.{section_name} contains more than one {key_node.value} line", 1)
-      replacement_nodes[key_node.value] = value_node
-  if section_node.flow_style:
-    replacements = {
-        key: (value_node.start_mark.index, value_node.end_mark.index) for key, value_node in replacement_nodes.items()
-    }
-    closing_offset = section_node.end_mark.index - 1
-    insert_offset = pairs[-1][1].end_mark.index if pairs else closing_offset
-    return _FlowSectionEditPlan(replacements, insert_offset, closing_offset, bool(pairs))
-  replacements = {key: value_node.start_mark.line for key, value_node in replacement_nodes.items()}
-  if not pairs:
-    indentation = " " * (section_key.start_mark.column + 2)
-    return _BlockSectionEditPlan(replacements, section_key.start_mark.line + 1, indentation)
+      replacements[key_node.value] = key_node.start_mark.line
   first_line = pairs[0][0].start_mark.line
   first_text = raw_text.splitlines(keepends=True)[first_line]
   indentation = first_text[:len(first_text) - len(first_text.lstrip(" \t"))]
   last_value = pairs[-1][1]
-  if isinstance(last_value, (yaml.MappingNode, yaml.SequenceNode)):
-    block_offset = 1 if last_value.flow_style else 0
-  else:
-    block_offset = 0 if last_value.style in ("|", ">") else 1
-  return _BlockSectionEditPlan(replacements, last_value.end_mark.line + block_offset, indentation)
-
-
-def _flow_entry(key: str, value: str) -> str:
-  rendered = yaml.safe_dump(
-      {
-          key: value
-      }, sort_keys=False, allow_unicode=True, default_flow_style=True, width=1_000_000).strip()
-  return rendered[1:-1]
-
-
-def _updated_flow_section(raw_text: str, plan: _FlowSectionEditPlan, values: dict[str, str]) -> str:
-  edits: list[tuple[int, int, str]] = []
-  for key, (start, end) in plan.replacements.items():
-    _, separator, rendered_value = _flow_entry(key, values[key]).partition(":")
-    if not separator:
-      raise AssertionError("flow entry did not contain a key separator")
-    edits.append((start, end, rendered_value.lstrip()))
-
-  inserted = [key for key in values if key not in plan.replacements]
-  if inserted:
-    entries = ", ".join(_flow_entry(key, values[key]) for key in inserted)
-    if not plan.has_entries:
-      insertion_offset = plan.closing_offset
-      insertion = entries
-    else:
-      suffix = raw_text[plan.insert_offset:plan.closing_offset]
-      whitespace = len(suffix) - len(suffix.lstrip())
-      if whitespace < len(suffix) and suffix[whitespace] == ",":
-        insertion_offset = plan.insert_offset + whitespace + 1
-        insertion = f" {entries}"
-      else:
-        insertion_offset = plan.insert_offset
-        insertion = f", {entries}"
-    edits.append((insertion_offset, insertion_offset, insertion))
-
-  for start, end, replacement in sorted(edits, key=lambda edit: edit[0], reverse=True):
-    raw_text = raw_text[:start] + replacement + raw_text[end:]
-  return raw_text
+  block_offset = 0 if isinstance(last_value, (yaml.MappingNode, yaml.SequenceNode)) else 1
+  return replacements, last_value.end_mark.line + block_offset, indentation
 
 
 def _parse_for_write(raw_bytes: bytes) -> dict[str, object]:
@@ -421,25 +355,22 @@ def _updated_content(
   expected_values = dict(write_values)
   if account.section in table.data:
     cast(dict[str, object], expected[account.section]).update(write_values)
-    edit_plan = _section_edit_plan(table.raw_text, account.section, tuple(write_values))
-    if isinstance(edit_plan, _FlowSectionEditPlan):
-      updated_text = _updated_flow_section(table.raw_text, edit_plan, write_values)
-      return updated_text.encode("utf-8"), expected
+    replacements, insert_line, indentation = _section_edit_plan(table.raw_text, account.section, tuple(write_values))
     lines = table.raw_text.splitlines(keepends=True)
-    for key, line_number in edit_plan.replacements.items():
+    for key, line_number in replacements.items():
       current_line = lines[line_number]
       line_ending = "\r\n" if current_line.endswith("\r\n") else "\n" if current_line.endswith("\n") else ""
-      replacement = yaml.safe_dump({key: write_values[key]}, sort_keys=False).splitlines()[0]
-      lines[line_number] = f"{edit_plan.indentation}{replacement}{line_ending}"
-    inserted = [key for key in write_values if key not in edit_plan.replacements]
+      replacement = yaml.safe_dump({key: write_values[key]}, sort_keys=False, width=_DUMP_WIDTH).splitlines()[0]
+      lines[line_number] = f"{indentation}{replacement}{line_ending}"
+    inserted = [key for key in write_values if key not in replacements]
     if inserted:
-      following = lines[edit_plan.insert_line] if edit_plan.insert_line < len(lines) else lines[-1]
+      following = lines[insert_line] if insert_line < len(lines) else lines[-1]
       line_ending = "\r\n" if following.endswith("\r\n") else "\n"
-      if edit_plan.insert_line >= len(lines) and not lines[-1].endswith(("\n", "\r")):
+      if insert_line >= len(lines) and not lines[-1].endswith(("\n", "\r")):
         lines[-1] += "\n"
       for offset, key in enumerate(inserted):
-        entry = yaml.safe_dump({key: write_values[key]}, sort_keys=False).splitlines()[0]
-        lines.insert(edit_plan.insert_line + offset, f"{edit_plan.indentation}{entry}{line_ending}")
+        entry = yaml.safe_dump({key: write_values[key]}, sort_keys=False, width=_DUMP_WIDTH).splitlines()[0]
+        lines.insert(insert_line + offset, f"{indentation}{entry}{line_ending}")
     return "".join(lines).encode("utf-8"), expected
 
   expected[account.section] = expected_values

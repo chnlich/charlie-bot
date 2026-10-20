@@ -646,6 +646,13 @@ def test_cron_firing_masks_the_clock_stamp_and_keeps_the_task_identity() -> None
                                       "cron:synthetic-cron:2026-10-20T09:26:06.696542001+00:00:leaf", _context())
 
 
+def test_dot_separated_stamp_after_a_slashed_topic_stays_visible() -> None:
+  # A memory index line is `<topic>/<slug> · <title>` (src/features/memory/memory.py:375), and no cron firing writes
+  # it, so its stamp is not a leaf name's wall-clock time.
+  memory_line = "charliebot/local-checks · 2026-10-20T09:26:06.696542+00:00"
+  assert normalize.normalize_text(memory_line, _context()) == memory_line
+
+
 def test_cron_last_scheduled_run_masks_the_stamp_and_keeps_the_expression() -> None:
   rules = normalize.file_rules("home/sessions/synthetic-session/metadata.json")
   earlier = normalize.normalize_json(

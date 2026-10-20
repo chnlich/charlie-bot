@@ -20,7 +20,7 @@ all re-learned by any later run.
 Selection observes one tier rule, stated here and in ``select``: accounts whose
 headroom strictly exceeds ``1 - WARNING_UTILIZATION`` form the under-line tier,
 and when that tier holds any account only it contends -- an account at or above
-the warning line is a last resort shared with no rule of its own.
+the warning line contends only when no account below it can.
 
 A backend entry is *pooled* when it is a cc-claude entry and ``accounts.claude``
 is non-empty. A cc-claude entry has no login field of its own: with a non-empty
@@ -428,20 +428,19 @@ def select(
   after a restart. Only pool *account_pool*'s accounts contend; None considers
   every configured account.
 
-  *busy_accounts* names accounts another running session holds: an idle account
-  wins outright, and only when every healthy account is busy does the choice
-  fall back to all of them. *exclude* names accounts a relay is leaving. An
-  account whose headroom is not strictly above *min_headroom* (zero headroom at
-  the default: a rejection whose reset is still ahead) is unavailable rather
-  than a last resort: running there would only be rejected again. None when no
-  account qualifies, which the caller reports loudly together with
-  ``earliest_reset``.
+  *busy_accounts* names accounts another running session holds: inside the
+  contending tier an idle account wins outright, and only when every account
+  there is busy does the choice fall back to all of them. *exclude* names
+  accounts a relay is leaving. An account whose headroom is not strictly above
+  *min_headroom* (zero headroom at the default: a rejection whose reset is
+  still ahead) is unavailable rather than a last resort: running there would
+  only be rejected again. None when no account qualifies, which the caller
+  reports loudly together with ``earliest_reset``.
 
-  The tier rule (stated once in this module's docstring): accounts whose
-  headroom strictly exceeds ``1 - WARNING_UTILIZATION`` form the under-line
-  tier; when it holds any account, only that tier contends -- the idle-first
-  and score rules below apply inside it -- and when it is empty, every
-  available account does.
+  The tier rule (also in this module's docstring): accounts whose headroom
+  strictly exceeds ``1 - WARNING_UTILIZATION`` form the under-line tier; when it
+  holds any account, only that tier contends -- the idle-first and score rules
+  above apply inside it -- and when it is empty, every available account does.
   """
   moment = now_or(now)
   excluded = set(exclude)

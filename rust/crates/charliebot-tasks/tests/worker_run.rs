@@ -41,6 +41,49 @@ use recovery_support::{
 use serde_json::{Map, Value, json};
 use time::{Duration as TimeDuration, OffsetDateTime};
 
+/// Tracks every run process in a test stack and kills its process group when the test scope ends.
+struct StackProcessGuard<'a> {
+  stack: &'a Stack,
+  groups: ProcessGroupGuard,
+}
+
+impl<'a> StackProcessGuard<'a> {
+  fn new(stack: &'a Stack) -> Self {
+    StackProcessGuard { stack, groups: ProcessGroupGuard::new() }
+  }
+
+  fn track_all(&self) -> anyhow::Result<()> {
+    for (_, run) in self.stack.store().list_all_run_records_sync()? {
+      if let Some(pid) = run.pid {
+        self.groups.track(pid);
+      }
+    }
+    Ok(())
+  }
+
+  async fn track_run(&self, session_id: &str, run_id: &str) -> anyhow::Result<()> {
+    settle_until(|| {
+      let run = self.stack.store().read_run_sync(session_id, run_id)?;
+      if let Some(pid) = run.and_then(|record| record.pid) {
+        self.groups.track(pid);
+        Ok(true)
+      } else {
+        Ok(false)
+      }
+    })
+    .await?;
+    Ok(())
+  }
+}
+
+impl Drop for StackProcessGuard<'_> {
+  fn drop(&mut self) {
+    if let Err(error) = self.track_all() {
+      eprintln!("test process cleanup could not read run records: {error:#}");
+    }
+  }
+}
+
 /// The Python `_task_spec` shape: a goal and a task type, no repository.
 fn spec(goal: &str, task_type: Option<TaskType>) -> TaskSpec {
   TaskSpec { goal: goal.to_string(), task_type, ..TaskSpec::default() }
@@ -384,6 +427,7 @@ async fn worker_run_kinds_deliver_snapshot_bytes_and_task_context() -> anyhow::R
     result_script("report noted"),
   ]);
   let stack = scripted_stack(&scripts).await?;
+  let process_guard = StackProcessGuard::new(&stack);
   let dir = tempfile::tempdir()?;
   let (repo, _origin) = init_repo_with_origin(dir.path())?;
   let manager = stack.node("root", None, TaskProfile::Manager, None).await?;
@@ -397,7 +441,9 @@ async fn worker_run_kinds_deliver_snapshot_bytes_and_task_context() -> anyhow::R
 
   stack.dispatch.admit_input(&worker.id, event_types::USER, "do the thing", "user", json!({})).await?;
   let run = launched_run_id(&stack.dispatch.dispatch_pending(&worker.id).await?)?;
+  process_guard.track_run(&worker.id, &run).await?;
   assert_eq!(stack.wait_terminal(&worker.id, &run).await?, RunOutcomeKind::Success);
+  process_guard.track_all()?;
   let record = stack.store().read_run_sync(&worker.id, &run)?.expect("the run is recorded");
   let snapshot = snapshot_of(&record)?;
   let joined = snapshot["blocks"]
@@ -431,7 +477,9 @@ async fn worker_run_kinds_deliver_snapshot_bytes_and_task_context() -> anyhow::R
   let verify = stack.node("v", Some(&manager.id), TaskProfile::Worker, Some(verify_task)).await?;
   stack.dispatch.admit_input(&verify.id, event_types::USER, "verify the result", "user", json!({})).await?;
   let verify_run = launched_run_id(&stack.dispatch.dispatch_pending(&verify.id).await?)?;
+  process_guard.track_run(&verify.id, &verify_run).await?;
   assert_eq!(stack.wait_terminal(&verify.id, &verify_run).await?, RunOutcomeKind::Success);
+  process_guard.track_all()?;
   let verify_record = stack.store().read_run_sync(&verify.id, &verify_run)?.expect("the verify run is recorded");
   let verify_refs = snapshot_source_refs(&snapshot_of(&verify_record)?);
   assert!(verify_refs.iter().any(|source| source == "prompts/verify.md"), "{verify_refs:?}");
@@ -688,6 +736,7 @@ async fn disk_headroom_precheck_withholds_worker_run_but_not_manager_turn() -> a
     1_000_000_000,
   )
   .await?;
+  let process_guard = StackProcessGuard::new(&stack);
   stack.write_access_key()?;
   let manager = stack.node("root", None, TaskProfile::Manager, None).await?;
   let worker = stack.node("w", Some(&manager.id), TaskProfile::Worker, Some(spec("do the work", None))).await?;
@@ -711,11 +760,13 @@ async fn disk_headroom_precheck_withholds_worker_run_but_not_manager_turn() -> a
   assert!(run_records::terminal_outcome(&stack.run_events(&worker.id)?, &run_id)?.is_none());
   assert!(scripts.builds().is_empty(), "the worker never reached its backend");
   settle_until(|| Ok(stack.child_reports(&manager.id)?.len() == 1)).await?;
+  process_guard.track_all()?;
   let outcomes: Vec<Value> = stack.child_reports(&manager.id)?.iter().map(|report| report["outcome"].clone()).collect();
   assert_eq!(outcomes, vec![json!("blocked")]);
 
   // A manager turn launches under the same threshold: the blocked report's own wake started one.
   settle_node(&stack, &manager.id).await?;
+  process_guard.track_all()?;
   let turns = stack.run_ids_of_kind(&manager.id, RunKind::ManagerTurn)?;
   assert_eq!(turns.len(), 1);
   assert_eq!(run_records::terminal_outcome(&stack.run_events(&manager.id)?, &turns[0])?, Some(RunOutcomeKind::Success));
@@ -723,7 +774,10 @@ async fn disk_headroom_precheck_withholds_worker_run_but_not_manager_turn() -> a
   // Threshold 0 skips the check, so the queued worker launches.
   stack.set_min_free_disk_gib(0)?;
   let decision = stack.dispatch.dispatch_pending(&worker.id).await?;
-  assert_eq!(stack.wait_terminal(&worker.id, &launched_run_id(&decision)?).await?, RunOutcomeKind::Success);
+  let run_id = launched_run_id(&decision)?;
+  process_guard.track_run(&worker.id, &run_id).await?;
+  assert_eq!(stack.wait_terminal(&worker.id, &run_id).await?, RunOutcomeKind::Success);
+  process_guard.track_all()?;
   settle_node(&stack, &manager.id).await?;
   Ok(())
 }

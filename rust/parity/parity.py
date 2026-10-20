@@ -281,6 +281,7 @@ def _prepare_contexts(
   for side, snapshot, side_rules in zip(sides, snapshots, rules_by_side, strict=True):
     spawns_path = _spawns_path(side.tree)
     spawn_records = _read_spawns(side.tree) if spawns_path.exists() else []
+    _seed_spawn_session_ids(spawn_records, side.ctx)
     _seed_spawn_run_ids(snapshot, spawn_records, side.ctx)
     comparable = dict(snapshot)
     for path, event_types in side_rules:
@@ -296,6 +297,28 @@ def _prepare_contexts(
       grouped = _spawn_groups(spawn_records, side.ctx)
       grouped_data = b"".join(json.dumps(record).encode() + b"\n" for group in grouped for record in group)
       normalize.prepare_snapshot([("fake-agent/spawns.jsonl", "file", grouped_data)], side.ctx)
+
+
+def _seed_spawn_session_ids(records: list[dict], ctx: normalize.Context) -> None:
+  """Give each spawned session id a stable name from its first launch order before the tree numbers it.
+
+  A cron firing's leaf session id derives from the firing's wall-clock stamp, so the two trees' ids
+  differ and their session directories sort at different places; numbering the minted ids by sorted
+  path then renumbers every id in the tree. The first-launch order is the scenario's own order, so it
+  is the stable key.
+  """
+  spawned = 0
+  for record in records:
+    claims = record["run_token_claims"]
+    if claims is None:
+      continue
+    session_id = claims["session_id"]
+    if not isinstance(session_id, str) or not normalize.is_uuid(session_id):
+      continue
+    if session_id in ctx.fixture_uuids or session_id in ctx.stable_uuids:
+      continue
+    spawned += 1
+    ctx.stable_uuids[session_id] = f"<spawn-session-{spawned}>"
 
 
 def _seed_spawn_run_ids(snapshot: compare.Snapshot, records: list[dict], ctx: normalize.Context) -> None:
@@ -336,7 +359,8 @@ def _spawn_groups(records: list[dict], ctx: normalize.Context) -> list[list[dict
       session_id = claims["session_id"]
       if not isinstance(session_id, str) or not session_id:
         raise RuntimeError(f"fake-agent spawn has an invalid session claim: {claims!r}")
-      known_before = session_id in ctx.fixture_uuids or session_id in ctx.minted_uuids
+      known_before = session_id in ctx.fixture_uuids or session_id in ctx.minted_uuids or (
+          session_id in ctx.stable_uuids)
       session_key = normalize.normalize_text(session_id, ctx)
       if not known_before and session_key != session_id:
         raise RuntimeError(f"fake-agent spawn session {session_id!r} is absent from the home snapshot")

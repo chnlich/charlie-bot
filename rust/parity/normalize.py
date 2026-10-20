@@ -722,6 +722,11 @@ def fixture_uuids(files: list[tuple[str, bytes]]) -> frozenset[str]:
   return frozenset(found)
 
 
+def is_uuid(text: str) -> bool:
+  """Report whether the whole text is one UUID, in the form the harness normalizes."""
+  return _UUID.fullmatch(text) is not None
+
+
 def _observe(value: Any, ctx: Context) -> None:
   if isinstance(value, str):
     for match in _UUID.finditer(value):

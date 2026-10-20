@@ -16,7 +16,7 @@ use charliebot_registry::context::FeatureContext;
 use charliebot_store::run_records::{RAW_LOG_NAME, STDERR_LOG_NAME};
 use futures_util::future::BoxFuture;
 use serde_json::Value;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Child;
 use tokio::sync::watch;
 
@@ -666,48 +666,54 @@ pub async fn capture_process_diagnostics(pid: u32) -> Value {
     ("pid".to_string(), Value::from(pid)),
     ("pgid".to_string(), pgid_field),
   ]);
-  let captures = [
-    (
-      "process_tree",
-      "ps",
-      vec![
-        "--forest".to_string(),
-        "-o".to_string(),
-        "pid,pgid,stat,etime,wchan,cmd".to_string(),
-        "-g".to_string(),
-        pgid_for_command.to_string(),
-      ],
-    ),
-    ("fds", "ls", vec!["-l".to_string(), format!("/proc/{pid}/fd")]),
-    ("status", "cat", vec![format!("/proc/{pid}/status")]),
-    ("children", "ps", vec!["-o".to_string(), "pid,stat,etime,cmd".to_string(), "--ppid".to_string(), pid.to_string()]),
-  ];
-  for (key, program, args) in captures {
-    diagnostics.insert(key.to_string(), capture_command(pid, key, program, &args).await);
+  for (key, command) in diagnostic_commands(pid, pgid_for_command) {
+    let args = ["-c".to_string(), command];
+    diagnostics.insert(key.to_string(), capture_command(pid, key, "bash", &args).await);
   }
   Value::Object(diagnostics)
 }
 
+/// The `bash -c` command of each field. The strings match `_capture_proc_diagnostics` (`base.py:107-110`) byte for
+/// byte, and each one's `2>&1` is part of the string.
+fn diagnostic_commands(pid: u32, pgid: i64) -> [(&'static str, String); 4] {
+  [
+    ("process_tree", format!("ps --forest -o pid,pgid,stat,etime,wchan,cmd -g {pgid} 2>&1")),
+    ("fds", format!("ls -l /proc/{pid}/fd 2>&1 | head -200")),
+    ("status", format!("cat /proc/{pid}/status 2>&1")),
+    ("children", format!("ps -o pid,stat,etime,cmd --ppid {pid} 2>&1")),
+  ]
+}
+
+/// Runs `program args` under the diagnostic timeout and returns its output, or `<capture failed: <error>>`.
 async fn capture_command(pid: u32, key: &str, program: &str, args: &[String]) -> Value {
-  let mut command = tokio::process::Command::new(program);
-  command.args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
-  match tokio::time::timeout(DIAGNOSTIC_CAPTURE_TIMEOUT, command.output()).await {
-    Ok(Ok(output)) => {
-      let mut bytes = output.stdout;
-      if !output.stderr.is_empty() {
-        bytes.extend_from_slice(&output.stderr);
-      }
-      Value::String(String::from_utf8_lossy(&bytes).into_owned())
-    }
-    Ok(Err(error)) => {
-      tracing::warn!(target: "charliebot_agents", pid, key, error = %error, "hang_diagnostics_capture_failed");
-      Value::String(format!("<capture failed: {error}>"))
-    }
-    Err(error) => {
-      tracing::warn!(target: "charliebot_agents", pid, key, error = %error, "hang_diagnostics_capture_failed");
-      Value::String(format!("<capture failed: {error}>"))
-    }
-  }
+  let error = match tokio::time::timeout(DIAGNOSTIC_CAPTURE_TIMEOUT, read_merged_output(program, args)).await {
+    Ok(Ok(bytes)) => return Value::String(String::from_utf8_lossy(&bytes).into_owned()),
+    Ok(Err(error)) => error.to_string(),
+    // Python's `asyncio.wait_for` raises a `TimeoutError` with no text, and the field records that empty text.
+    Err(_) => String::new(),
+  };
+  tracing::warn!(target: "charliebot_agents", pid, key, error = %error, "hang_diagnostics_capture_failed");
+  Value::String(format!("<capture failed: {error}>"))
+}
+
+/// Reads the child's stdout and stderr from one pipe, so the bytes come back in write order as Python's
+/// `stderr=STDOUT` returns them. The exit status is not part of the field.
+async fn read_merged_output(program: &str, args: &[String]) -> std::io::Result<Vec<u8>> {
+  let (reader, writer) = std::io::pipe()?;
+  let stderr = writer.try_clone()?;
+  // The command holds the write ends until this statement ends, so the reader sees EOF when the child exits.
+  let mut child = tokio::process::Command::new(program)
+    .args(args)
+    .stdin(Stdio::null())
+    .stdout(writer)
+    .stderr(stderr)
+    .kill_on_drop(true)
+    .spawn()?;
+  let mut output = tokio::net::unix::pipe::Receiver::from_owned_fd(reader.into())?;
+  let mut bytes = Vec::new();
+  output.read_to_end(&mut bytes).await?;
+  child.wait().await?;
+  Ok(bytes)
 }
 
 async fn prepare_cwd(
@@ -986,6 +992,43 @@ mod tests {
     assert!(diagnostics["children"].is_string());
     assert!(outcome.exit_code.is_some_and(|code| code != 0));
     assert_eq!(fs::read_to_string(logs.join(RAW_LOG_NAME)).unwrap(), "{\"type\":\"result\"}\n");
+  }
+
+  #[test]
+  fn diagnostic_commands_are_the_python_probe_strings() {
+    assert_eq!(
+      diagnostic_commands(4321, 4000),
+      [
+        ("process_tree", "ps --forest -o pid,pgid,stat,etime,wchan,cmd -g 4000 2>&1".to_string()),
+        ("fds", "ls -l /proc/4321/fd 2>&1 | head -200".to_string()),
+        ("status", "cat /proc/4321/status 2>&1".to_string()),
+        ("children", "ps -o pid,stat,etime,cmd --ppid 4321 2>&1".to_string()),
+      ]
+    );
+  }
+
+  #[tokio::test]
+  async fn capture_keeps_stdout_and_stderr_in_write_order() {
+    let args = ["-c".to_string(), "echo one; echo two >&2; echo three".to_string()];
+    let captured = capture_command(std::process::id(), "probe", "bash", &args).await;
+    assert_eq!(captured, json!("one\ntwo\nthree\n"));
+  }
+
+  #[tokio::test]
+  async fn fds_field_keeps_the_first_200_lines() {
+    // This test process holds 250 descriptors, so `ls` lists more entries than the field keeps.
+    let held: Vec<fs::File> = (0..250).map(|_| fs::File::open("/dev/null").unwrap()).collect();
+    let diagnostics = capture_process_diagnostics(std::process::id()).await;
+    assert_eq!(diagnostics["fds"].as_str().unwrap().lines().count(), 200);
+    drop(held);
+  }
+
+  #[tokio::test]
+  async fn a_probe_that_outlives_the_timeout_records_an_empty_error() {
+    // The diagnostic timeout drops the probe, and `kill_on_drop` kills the `sleep`.
+    let args = ["30".to_string()];
+    let captured = capture_command(std::process::id(), "probe", "sleep", &args).await;
+    assert_eq!(captured, json!("<capture failed: >"));
   }
 
   #[tokio::test]

@@ -21,7 +21,7 @@ use axum::http::{Request, StatusCode, header};
 use charliebot_agents::transport::identity;
 use charliebot_core::event_types;
 use charliebot_registry::caller::CallerIdentity;
-use charliebot_registry::sequence::SequenceCompletion;
+use charliebot_registry::sequence::{SequenceCompletion, SequenceExecutor};
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskSpec, TaskType, UtcDateTime};
 use charliebot_store::run_records::{self, RAW_LOG_NAME, RunKind, RunOutcome, RunOutcomeKind, RunRecord, SequenceRef};
 use charliebot_store::write_faults::{self, Hit};
@@ -1295,6 +1295,34 @@ async fn recovery_follows_a_live_sequence_run_without_its_controller() -> anyhow
   live.kill()?;
   live.wait()?;
   settle_until(|| Ok(!stack.adapter.resume_follows().contains(&key))).await?;
+  Ok(())
+}
+
+/// `test_sequence_controller_runs.py::test_a_launch_without_a_controller_fails_loudly_naming_the_owner_ref`: a launch
+/// that reaches a controller-less sequence Run fails before any process starts. The error names the owner_ref, rides the
+/// run's own events log, and lands the failed finish.
+#[tokio::test]
+async fn a_launch_without_a_controller_fails_loudly_naming_the_owner_ref() -> anyhow::Result<()> {
+  // Python: tests/test_sequence_controller_runs.py::test_a_launch_without_a_controller_fails_loudly_naming_the_owner_ref.
+  let stack = Stack::start("exit 0").await?;
+  let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
+  let leaf = stack.node("leaf", Some(&manager.id), TaskProfile::Worker, None).await?;
+  stack.register(orphan_run(&leaf.id, "orphan")).await?;
+
+  let observation = SequenceExecutor::launch_and_settle(&stack.adapter, &leaf.id, "orphan", None).await?;
+
+  assert_eq!(observation.withheld, None);
+  assert_eq!(observation.outcome.as_deref(), Some("failed"));
+  let stored = stack.store().read_run_sync(&leaf.id, "orphan")?.expect("the orphan run stays registered");
+  assert_eq!(stored.pid, None, "no process ever started");
+  let events_log = stack.store().run_dir(&leaf.id, "orphan").join(run_records::RUN_EVENTS_NAME);
+  let error_events =
+    std::fs::read_to_string(&events_log)?.lines().map(serde_json::from_str::<Value>).collect::<Result<Vec<_>, _>>()?;
+  assert_eq!(error_events.len(), 1, "the launch's one durable evidence: {error_events:?}");
+  assert_eq!(error_events[0]["type"], event_types::ERROR);
+  let message = error_events[0]["message"].as_str().unwrap_or_default();
+  assert!(message.contains(ORPHAN_OWNER), "the error names the owner_ref: {message}");
+  assert_eq!(run_records::terminal_outcome(&stack.run_events(&leaf.id)?, "orphan")?, Some(RunOutcomeKind::Failed));
   Ok(())
 }
 

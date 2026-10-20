@@ -1170,6 +1170,52 @@ async fn recovery_asks_the_owning_controller_and_counts_one_follow_up() -> anyho
   Ok(())
 }
 
+/// The owning package of an orphan Run is gone: no registered controller claims its kind, and the Run it left behind
+/// outlives it.
+const ORPHAN_KIND: &str = "deleted_feature";
+const ORPHAN_OWNER: &str = "deleted:loop-1";
+
+/// A queued Run whose sequence kind no registered controller claims.
+fn orphan_run(session_id: &str, run_id: &str) -> RunRecord {
+  RunRecord {
+    kind: RunKind::Iteration,
+    sequence_ref: Some(SequenceRef { kind: ORPHAN_KIND.to_string(), owner_ref: ORPHAN_OWNER.to_string(), position: 1 }),
+    ..queued_run(session_id, run_id, RunKind::Iteration)
+  }
+}
+
+/// Assert that the log holds exactly one `sequence_run_without_controller` warning, naming the session, the run and the
+/// owner_ref.
+fn assert_one_no_controller_warning(log: &LogCapture, session_id: &str, run_id: &str) {
+  let logged = log.text();
+  let warnings: Vec<&str> = logged.lines().filter(|line| line.contains("sequence_run_without_controller")).collect();
+  assert_eq!(warnings.len(), 1, "one no-controller warning: {logged}");
+  assert!(warnings[0].contains(session_id), "the warning names the session: {}", warnings[0]);
+  assert!(warnings[0].contains(&format!("run_id={run_id}")), "the warning names the run: {}", warnings[0]);
+  assert!(warnings[0].contains(&format!("owner_ref={ORPHAN_OWNER}")), "the warning names the owner: {}", warnings[0]);
+}
+
+/// `test_sequence_controller_runs.py::test_a_finish_without_a_controller_warns_and_does_nothing_else`: a Run whose kind
+/// no controller owns logs the warning with the session, run and owner_ref, and its finish lands nothing.
+#[tokio::test]
+async fn a_finish_without_a_controller_warns_and_does_nothing_else() -> anyhow::Result<()> {
+  // Python: tests/test_sequence_controller_runs.py::test_a_finish_without_a_controller_warns_and_does_nothing_else.
+  let stack = Stack::start("exit 0").await?;
+  let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
+  let leaf = stack.node("leaf", Some(&manager.id), TaskProfile::Worker, None).await?;
+  stack.register(orphan_run(&leaf.id, "orphan")).await?;
+  let log = LogCapture::default();
+  let _guard = log.install();
+
+  stack.adapter.after_worker_run_for_test(&leaf.id, "orphan", "success").await?;
+
+  assert_one_no_controller_warning(&log, &leaf.id, "orphan");
+  let stored = stack.store().read_run_sync(&leaf.id, "orphan")?.expect("the queued run stays registered");
+  assert_eq!(stored.pid, None, "nothing started");
+  assert!(run_records::terminal_outcome(&stack.run_events(&leaf.id)?, "orphan")?.is_none(), "nothing landed");
+  Ok(())
+}
+
 /// `test_task_sequences.py::test_restart_recovery_marks_improve_loop_through_registered_controller`: the registered
 /// controller marks a loop that a prior process left running as interrupted, during the boot pass.
 #[tokio::test]

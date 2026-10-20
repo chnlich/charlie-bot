@@ -685,6 +685,22 @@ fn controller_for_sequence(features: &FeatureContext, kind: &str) -> Option<Arc<
   features.registry.sequence_controllers().find(|controller| controller.sequence_kind() == kind).cloned()
 }
 
+/// The registered controller that owns a sequence kind, or `None` when no registered controller claims it (its package
+/// was deleted). A kind in `UNLANDED_SEQUENCE_KINDS` fails by name instead: its controller has not landed.
+pub(crate) fn owning_controller(
+  features: &FeatureContext,
+  kind: &str,
+  step: &str,
+) -> anyhow::Result<Option<Arc<dyn SequenceController>>> {
+  if let Some(controller) = controller_for_sequence(features, kind) {
+    return Ok(Some(controller));
+  }
+  if UNLANDED_SEQUENCE_KINDS.contains(&kind) {
+    bail!(owner_not_landed(kind, step));
+  }
+  Ok(None)
+}
+
 /// The task-tree handle the sequence controllers use: the dispatcher, the completion owner, the store's session events,
 /// and the adapter as the launch executor.
 pub(crate) fn sequence_tree(

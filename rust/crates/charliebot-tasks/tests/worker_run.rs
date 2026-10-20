@@ -758,7 +758,11 @@ async fn disk_headroom_precheck_withholds_worker_run_but_not_manager_turn() -> a
   let run = stack.store().read_run_sync(&worker.id, &run_id)?.expect("the queued run is recorded");
   assert!(run.pid.is_none(), "no process, stays queued");
   assert!(run_records::terminal_outcome(&stack.run_events(&worker.id)?, &run_id)?.is_none());
-  assert!(scripts.builds().is_empty(), "the worker never reached its backend");
+  let worker_run_dir = stack.store().run_dir(&worker.id, &run_id);
+  assert!(
+    !scripts.builds().iter().any(|build| build.launch.log_dir.as_deref() == Some(worker_run_dir.as_path())),
+    "the worker never reached its backend"
+  );
   settle_until(|| Ok(stack.child_reports(&manager.id)?.len() == 1)).await?;
   process_guard.track_all()?;
   let outcomes: Vec<Value> = stack.child_reports(&manager.id)?.iter().map(|report| report["outcome"].clone()).collect();

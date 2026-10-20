@@ -305,6 +305,11 @@ def _spawn_record(index: int, session: str, run: str, stdin: bytes) -> dict:
   return record
 
 
+def _task_metadata(task_parent_id: str | None) -> compare.Entry:
+  """A session's metadata.json entry carrying only the task parent the spawn aliases read."""
+  return compare.Entry("file", json.dumps({"task_parent_id": task_parent_id}).encode())
+
+
 def test_stdin_naming_only_the_tree_root_compares_equal(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   # Both tree roots have one length, as the harness gives them, so the stdin_bytes counts agree.
@@ -381,15 +386,18 @@ def test_interleaved_session_spawns_seed_uuid_normalization_in_group_order(
     side = _spawn_side(tmp_path, monkeypatch, label, records)
     side.ctx.fixture_uuids = frozenset({manager_id})
     sides.append(side)
-    snapshots.append({
-        f"home/sessions/{child_id}/data/chat_events.jsonl": compare.Entry("file", b"{}\n"),
-    })
+    snapshots.append(
+        {
+            f"home/sessions/{child_id}/metadata.json": _task_metadata(manager_id),
+            f"home/sessions/{child_id}/data/chat_events.jsonl": compare.Entry("file", b"{}\n"),
+        })
 
   parity._prepare_contexts(sides, snapshots)
 
   for side, child_id, manager_run, child_run in zip(sides, child_ids, manager_runs, child_runs, strict=True):
-    # The child is a spawned session, so its id gets a stable spawn-order alias, not a minted one.
-    assert side.ctx.stable_uuids[child_id] == "<spawn-session-1>"
+    # The child is a spawned session, so its id gets a stable alias under its task parent, not a minted one.
+    assert side.ctx.stable_uuids[child_id] == sides[0].ctx.stable_uuids[child_ids[0]]
+    assert child_id not in side.ctx.minted_uuids
     assert manager_run not in side.ctx.minted_uuids
     assert child_run not in side.ctx.minted_uuids
     assert side.ctx.stable_uuids[manager_run] == sides[0].ctx.stable_uuids[manager_runs[0]]
@@ -398,6 +406,50 @@ def test_interleaved_session_spawns_seed_uuid_normalization_in_group_order(
     assert normalize.normalize_text(child_run, side.ctx) == side.ctx.stable_uuids[child_run]
   assert sides[0].ctx.stable_uuids[manager_runs[0]] != sides[0].ctx.stable_uuids[child_runs[0]]
   assert parity._spawns_diff(sides, expect_starts=2) == []
+
+
+def test_children_of_two_parents_that_start_in_opposite_order_keep_their_aliases(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A child's alias names its task parent and its place among that parent's spawns, so no order across parents
+  reaches it: the baseline starts a child of the first parent before the second parent's child, and the candidate
+  starts them the other way round."""
+  monkeypatch.delenv("CHARLIEBOT_RUN_TOKEN", raising=False)
+  first_parent = "10000000-0000-4000-8000-000000000001"
+  second_parent = "10000000-0000-4000-8000-000000000002"
+  first_child = "10000000-0000-4000-8000-000000000011"
+  second_child = "10000000-0000-4000-8000-000000000012"
+  first_child_again = "10000000-0000-4000-8000-000000000013"
+  parent_of = {first_child: first_parent, second_child: second_parent, first_child_again: first_parent}
+  runs = {
+      first_child: "20000000-0000-4000-8000-000000000011",
+      second_child: "20000000-0000-4000-8000-000000000012",
+      first_child_again: "20000000-0000-4000-8000-000000000013",
+  }
+  starts = {
+      "base": (first_child, second_child, first_child_again),
+      "cand": (second_child, first_child, first_child_again),
+  }
+  sides = []
+  snapshots = []
+  for label, order in starts.items():
+    records = [
+        _spawn_record(index, session, runs[session], b"Iteration prompt.") for index, session in enumerate(order)
+    ]
+    side = _spawn_side(tmp_path, monkeypatch, label, records)
+    side.ctx.fixture_uuids = frozenset({first_parent, second_parent})
+    sides.append(side)
+    snapshots.append(
+        {
+            f"home/sessions/{session}/metadata.json": _task_metadata(parent) for session, parent in parent_of.items()
+        })
+
+  parity._prepare_contexts(sides, snapshots)
+
+  base, cand = sides
+  for session in parent_of:
+    assert base.ctx.stable_uuids[session] == cand.ctx.stable_uuids[session]
+  assert len({base.ctx.stable_uuids[session] for session in parent_of}) == 3
+  assert parity._spawns_diff(sides, expect_starts=3) == []
 
 
 def test_interleaved_event_streams_do_not_seed_different_uuid_orders(tmp_path: pathlib.Path) -> None:
@@ -823,6 +875,10 @@ def test_clock_derived_leaf_ids_sorting_in_opposite_order_get_the_same_placehold
     sides.append(side)
     snapshots.append(
         {
+            f"home/sessions/{manager_id}/metadata.json":
+                _task_metadata(None),
+            f"home/sessions/{leaf_id}/metadata.json":
+                _task_metadata(manager_id),
             f"home/sessions/{manager_id}/data/chat_events.jsonl":
                 compare.Entry("file", b'{"id": "%s"}\n' % manager_run.encode()),
             f"home/sessions/{leaf_id}/data/chat_events.jsonl":
@@ -839,10 +895,11 @@ def test_clock_derived_leaf_ids_sorting_in_opposite_order_get_the_same_placehold
 
   for side, manager_id, leaf_id, manager_run, leaf_run in zip(sides, manager_ids, leaf_ids, manager_runs, leaf_runs,
                                                               strict=True):
-    assert side.ctx.stable_uuids[manager_id] == "<spawn-session-2>"
-    assert side.ctx.stable_uuids[leaf_id] == "<spawn-session-1>"
-    assert normalize.normalize_text(manager_id, side.ctx) == "<spawn-session-2>"
-    assert normalize.normalize_text(leaf_id, side.ctx) == "<spawn-session-1>"
+    # The manager is a root spawn; the leaf is its child, so the leaf's alias is the same on both sides.
+    assert side.ctx.stable_uuids[manager_id] == "<spawn-session-root-1>"
+    assert side.ctx.stable_uuids[leaf_id] == sides[0].ctx.stable_uuids[leaf_ids[0]]
+    assert normalize.normalize_text(manager_id, side.ctx) == "<spawn-session-root-1>"
+    assert normalize.normalize_text(leaf_id, side.ctx) == side.ctx.stable_uuids[leaf_id]
     assert side.ctx.stable_uuids[manager_run] == sides[0].ctx.stable_uuids[manager_runs[0]]
     assert side.ctx.stable_uuids[leaf_run] == sides[0].ctx.stable_uuids[leaf_runs[0]]
   assert parity._spawns_diff(sides, expect_starts=2) == []

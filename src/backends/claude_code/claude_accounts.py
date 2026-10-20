@@ -207,19 +207,6 @@ def continuation_domain(option: models.BackendOption, cfg: config.CharlieBotConf
   return option.id
 
 
-def same_continuation_domain(current_id: str, target_id: str, cfg: config.CharlieBotConfig) -> bool:
-  """True when the two configured backend ids share one continuation domain.
-
-  False when either id is not a configured option: an unknown id has no domain
-  to share.
-  """
-  current = cfg.get_backend_option(current_id)
-  target = cfg.get_backend_option(target_id)
-  if current is None or target is None:
-    return False
-  return continuation_domain(current, cfg) == continuation_domain(target, cfg)
-
-
 # ---------------------------------------------------------------------------
 # Health
 # ---------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 stage: agent-orchestration
 name: agent-orchestration-cold-read
-# The manager uses Sonnet; the cold reader gets two pool members to try in order: Opus, then Haiku.
+# The manager uses Sonnet; the cold reader rotates through Opus and Haiku, then falls back to Sonnet.
 config:
   backends:
     pool: [claude-opus, claude-haiku]
@@ -79,13 +79,18 @@ fake_agent:
       exit_code: 0
     - name: claude
       steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-cold-read-all-failed-haiku}
+        - emit: {type: error, message: Synthetic Haiku failure., content: Synthetic Haiku failure.}
+      exit_code: 1
+    - name: claude
+      steps:
         - emit: {type: system, subtype: init, session_id: synthetic-cold-read-all-failed-opus}
         - emit: {type: error, message: Synthetic Opus failure., content: Synthetic Opus failure.}
       exit_code: 1
     - name: claude
       steps:
-        - emit: {type: system, subtype: init, session_id: synthetic-cold-read-all-failed-haiku}
-        - emit: {type: error, message: Synthetic Haiku failure., content: Synthetic Haiku failure.}
+        - emit: {type: system, subtype: init, session_id: synthetic-cold-read-all-failed-sonnet}
+        - emit: {type: error, message: Synthetic Sonnet failure., content: Synthetic Sonnet failure.}
       exit_code: 1
     - name: claude
       steps:
@@ -103,7 +108,7 @@ fake_agent:
             usage: {input_tokens: 3, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
             total_cost_usd: 0.0
       exit_code: 0
-expect_starts: 8
+expect_starts: 9
 steps:
   - name: delegate a cold read of the synthetic page
     method: POST
@@ -184,8 +189,8 @@ steps:
           summary: |-
             cold read of rust/parity/data/cold-read-sitrep.html
             page sha256 6d8877b679b04694b9c28b870f77e67463853c235ff0c7bacfb4b00b5a237b80
-            attempt claude-opus failed: Synthetic first reader failure.
-            backend claude-haiku
+            attempt claude-haiku failed: Synthetic first reader failure.
+            backend claude-opus
             Synthetic retry answer.
   - kind: wait
     name: wait for the manager after the retry report
@@ -221,9 +226,10 @@ steps:
           summary: |-
             cold read of rust/parity/data/cold-read-sitrep.html
             page sha256 6d8877b679b04694b9c28b870f77e67463853c235ff0c7bacfb4b00b5a237b80
-            attempt claude-opus failed: Synthetic Opus failure.
             attempt claude-haiku failed: Synthetic Haiku failure.
-            every model failed (2 tried)
+            attempt claude-opus failed: Synthetic Opus failure.
+            attempt claude-sonnet failed: Synthetic Sonnet failure.
+            every model failed (3 tried)
   - kind: wait
     name: wait for the manager after the all-failed cold-read report
     timeout_seconds: 30

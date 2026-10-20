@@ -30,10 +30,7 @@ DOUBLE_PAIRS = [
 
 # Known parameter drift, each entry a strict xfail. The mark must come off once the double's parameter names
 # match the real method's, so a fixed double never stays marked.
-KNOWN_PARAM_DRIFT = {
-    ("core.test_discord_listener.FakeDiscordClient", "start_thread_from_message"):
-        "the double omits DiscordClient's keyword-only auto_archive_duration",
-}
+KNOWN_PARAM_DRIFT = {}
 
 
 def _public_methods(double: type) -> list[str]:

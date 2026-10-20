@@ -65,7 +65,8 @@ async def _authorize_spawn_request(
   A task-tree node takes the one central authorization owner —
   ``task_sessions.TaskTreeManager.check_task_authorization``, the runtime gate (judged where
   the delegation request enters; the Run launch re-judges nothing): an open
-  manager chain with a real user message on some node of it.
+  manager chain with a real user message or a thread platform summon on some
+  node of it.
   """
   deps.require_found(await store.get_session(req.session_id))
 

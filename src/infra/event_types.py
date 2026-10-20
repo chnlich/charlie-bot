@@ -76,7 +76,8 @@ SESSION_ATTACHED = "session_attached"
 
 # -- Agent relay -------------------------------------------------------------
 # Cross-session agent message: carries the caller session's provenance and is
-# never a real user message (the authorization gate excludes it by type).
+# never a real user message. The authorization gate counts it as a user request
+# only when it carries a thread platform's summon block (``is_platform_summon``).
 AGENT_MESSAGE = "agent_message"
 
 # -- Web reply ---------------------------------------------------------------
@@ -270,10 +271,11 @@ def usage_counts(usage: dict) -> tuple[int, int, int, int]:
 
 
 # -- Shared event predicates -------------------------------------------------
-# One definition, two consumers: the runtime gate, which counts real user
-# messages on the task chain (src/runtime/takeoff_gate.py), and the task-tree
-# fold's input candidacy (src/runtime/task_sessions.py) both judge USER events
-# through this function, so no site can fork the rule.
+# The runtime gate (src/runtime/takeoff_gate.py) and the task-tree fold's input
+# candidacy (src/runtime/task_sessions.py) both judge USER events through
+# ``is_real_user_message``, so no site can fork that rule. The gate additionally
+# counts a thread platform's summon, whose platform keys live here because the
+# runtime layer cannot import the features layer.
 
 
 def is_real_user_message(event: dict) -> bool:
@@ -287,3 +289,22 @@ def is_real_user_message(event: dict) -> bool:
   if event.get("type") != USER:
     return False
   return isinstance(event.get("content"), str)
+
+
+# The thread platforms that can summon a session. Each platform listener writes
+# its summon block under its ``ThreadPlatform.name``; ``tests/test_run_token.py``
+# pins the two names to this tuple.
+THREAD_PLATFORM_KEYS = ("slack", "discord")
+
+
+def is_platform_summon(event: dict) -> bool:
+  """Platform summon = ET.AGENT_MESSAGE carrying a platform block that has no ``nudge_of``.
+
+  A summon records that the host owner mentioned the session in a platform
+  thread. A nudge wakes the session on a thread it already joined and repeats
+  no request, so its block carries ``nudge_of``.
+  """
+  if event.get("type") != AGENT_MESSAGE:
+    return False
+  return any(
+      key in event and isinstance(event[key], dict) and "nudge_of" not in event[key] for key in THREAD_PLATFORM_KEYS)

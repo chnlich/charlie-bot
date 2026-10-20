@@ -494,6 +494,21 @@ def _facts(root: pathlib.Path, home: pathlib.Path, session_id: str) -> None:
   (root / "expected.json").write_text(json.dumps(events), encoding="utf-8")
 
 
+def _archive_cases(root: pathlib.Path, cases: list[str]) -> None:
+  """Run archive_old_chat_events_sync on each case's Python home; a failed call archives nothing."""
+  cutoff = datetime(2025, 2, 3, tzinfo=timezone.utc)
+  result = {}
+  for case in cases:
+    store = _events_store(root / case / "python-home")
+    try:
+      archived = store.archive_old_chat_events_sync(SESSION_ID, cutoff)
+    except (UnicodeDecodeError, AttributeError, TypeError) as error:
+      result[case] = {"failed": True, "error": type(error).__name__, "events_archived": 0}
+    else:
+      result[case] = {"failed": False, "error": None, "events_archived": archived["events_archived"]}
+  (root / "archive-cases.json").write_text(json.dumps(result), encoding="utf-8")
+
+
 CASES = {
     "range_read": _range_read,
     "listing_raw_scan": _listing_raw_scan,
@@ -1017,5 +1032,7 @@ if __name__ == "__main__":
     _gate_parity(root)
   elif mode == "prepare_parity_gate":
     _prepare_parity_gate(root)
+  elif mode == "archive_cases":
+    _archive_cases(root, extra)
   else:
     raise ValueError(f"unknown mode {mode}")

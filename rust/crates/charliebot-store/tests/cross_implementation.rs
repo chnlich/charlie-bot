@@ -254,6 +254,130 @@ async fn archive_updates_global_indexes_and_control_appends_require_the_store_gu
   assert!(store.update_slot_fields_locked(&foreign_guard, SESSION_ID, "slack", foreign_values).await.is_err());
 }
 
+fn live_log_path(home: &Path) -> PathBuf {
+  home.join("sessions").join(SESSION_ID).join("data").join("chat_events.jsonl")
+}
+
+fn archive_log_path(home: &Path) -> PathBuf {
+  home.join("sessions").join(SESSION_ID).join("data").join("archives").join("chat_events.2025-W06.jsonl")
+}
+
+fn read_optional(path: &Path) -> Option<Vec<u8>> {
+  match fs::read(path) {
+    Ok(bytes) => Some(bytes),
+    Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+    Err(error) => panic!("{}: {error}", path.display()),
+  }
+}
+
+/// `src/runtime/chat_events.py::archive_old_chat_events_sync` and `Store::archive_events_before` on the same live-log
+/// bytes, one input per case. Each case must match in the failure outcome, the archived count, and the live and
+/// archive bytes; a failed call must also leave the live log, the archive and `archive_offset` unchanged.
+#[tokio::test]
+async fn archive_events_before_matches_python_archive_old_chat_events_sync() {
+  let cutoff = UtcDateTime::parse("2025-02-03T00:00:00Z").unwrap();
+  let cases: [(&str, &[u8]); 9] = [
+    (
+      "invalid_utf8_in_kept_line",
+      b"{\"id\": \"old\", \"timestamp\": \"2025-02-01T00:00:00Z\"}\n\
+        {\"id\": \"kept\xff\", \"timestamp\": \"2025-02-04T00:00:00Z\"}\n",
+    ),
+    (
+      "crlf_lines",
+      b"{\"id\": \"old\", \"timestamp\": \"2025-02-01T00:00:00Z\"}\r\n\
+        {\"id\": \"old-two\", \"timestamp\": \"2025-02-01T01:00:00Z\"}\r\n\
+        {\"id\": \"new\", \"timestamp\": \"2025-02-04T00:00:00Z\"}\r\n",
+    ),
+    (
+      "lone_cr_between_events",
+      b"{\"id\": \"old\", \"timestamp\": \"2025-02-01T00:00:00Z\"}\r\
+        {\"id\": \"new\", \"timestamp\": \"2025-02-04T00:00:00Z\"}\n",
+    ),
+    (
+      "blank_line_of_x1c",
+      b"{\"id\": \"old\", \"timestamp\": \"2025-02-01T00:00:00Z\"}\n\x1c\n\
+        {\"id\": \"new\", \"timestamp\": \"2025-02-04T00:00:00Z\"}\n",
+    ),
+    (
+      "json_array_line",
+      b"{\"id\": \"old\", \"timestamp\": \"2025-02-01T00:00:00Z\"}\n[1, 2]\n\
+        {\"id\": \"new\", \"timestamp\": \"2025-02-04T00:00:00Z\"}\n",
+    ),
+    (
+      "numeric_timestamp",
+      b"{\"id\": \"old\", \"timestamp\": \"2025-02-01T00:00:00Z\"}\n\
+        {\"id\": \"numeric\", \"timestamp\": 1738368000}\n\
+        {\"id\": \"new\", \"timestamp\": \"2025-02-04T00:00:00Z\"}\n",
+    ),
+    (
+      "zero_timestamp",
+      b"{\"id\": \"old\", \"timestamp\": \"2025-02-01T00:00:00Z\"}\n\
+        {\"id\": \"zero\", \"timestamp\": 0}\n\
+        {\"id\": \"old-two\", \"timestamp\": \"2025-02-01T01:00:00Z\"}\n",
+    ),
+    (
+      "empty_timestamp",
+      b"{\"id\": \"old\", \"timestamp\": \"2025-02-01T00:00:00Z\"}\n\
+        {\"id\": \"empty\", \"timestamp\": \"\"}\n\
+        {\"id\": \"old-two\", \"timestamp\": \"2025-02-01T01:00:00Z\"}\n",
+    ),
+    (
+      "last_line_without_newline",
+      b"{\"id\": \"old\", \"timestamp\": \"2025-02-01T00:00:00Z\"}\n\
+        {\"id\": \"new\", \"timestamp\": \"2025-02-04T00:00:00Z\"}",
+    ),
+  ];
+  let root = tempfile::tempdir().unwrap();
+  for (name, live) in cases {
+    let python_home = root.path().join(name).join("python-home");
+    let rust_home = root.path().join(name).join("rust-home");
+    for home in [&python_home, &rust_home] {
+      let path = live_log_path(home);
+      fs::create_dir_all(path.parent().unwrap()).unwrap();
+      fs::write(path, live).unwrap();
+    }
+    write_session_metadata(&rust_home, SESSION_ID, 0);
+  }
+
+  let names: Vec<&str> = cases.iter().map(|(name, _)| *name).collect();
+  run_python_helper("archive_cases", root.path(), &names);
+  let python: Value =
+    serde_json::from_str(&fs::read_to_string(root.path().join("archive-cases.json")).unwrap()).unwrap();
+
+  for (name, live) in cases {
+    let python_home = root.path().join(name).join("python-home");
+    let rust_home = root.path().join(name).join("rust-home");
+    let store = make_store(&rust_home);
+    let metadata_before = fs::read(store.metadata_path(SESSION_ID)).unwrap();
+
+    let result = store.archive_events_before(SESSION_ID, cutoff).await;
+    let rust_failed = result.is_err();
+    let rust_live = fs::read(live_log_path(&rust_home)).unwrap();
+    let rust_archive = read_optional(&archive_log_path(&rust_home));
+    let rust_count = rust_archive.as_ref().map_or(0, |bytes| bytes.iter().filter(|byte| **byte == b'\n').count());
+
+    let python_failed = python[name]["failed"].as_bool().unwrap();
+    let python_count = python[name]["events_archived"].as_u64().unwrap() as usize;
+    let python_live = fs::read(live_log_path(&python_home)).unwrap();
+    let python_archive = read_optional(&archive_log_path(&python_home));
+
+    println!(
+      "{name}: python failed={python_failed} archived={python_count}; rust failed={rust_failed} archived={rust_count}"
+    );
+    assert_eq!(rust_failed, python_failed, "{name}: failure outcome");
+    assert_eq!(rust_count, python_count, "{name}: archived count");
+    assert_eq!(rust_live, python_live, "{name}: live log bytes");
+    assert_eq!(rust_archive, python_archive, "{name}: archive bytes");
+    if rust_failed {
+      assert_eq!(rust_live, live, "{name}: a failed archive leaves the live log unchanged");
+      assert!(rust_archive.is_none(), "{name}: a failed archive writes no archive file");
+      assert_eq!(fs::read(store.metadata_path(SESSION_ID)).unwrap(), metadata_before, "{name}: archive_offset");
+    } else {
+      assert_eq!(store.read_metadata_fresh(SESSION_ID).unwrap().unwrap().archive_offset, rust_count as i64);
+    }
+  }
+}
+
 #[test]
 fn listing_filters_status_and_builds_stable_archived_pages() {
   let root = tempfile::tempdir().unwrap();

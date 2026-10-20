@@ -302,7 +302,7 @@ impl TaskExecutionAdapter {
       {
         return Err(error);
       }
-      self.land_launch_failure(&meta, &run, &error, "RuntimeError").await;
+      self.land_launch_failure(&meta, &run, &error, launch_error_class(&error, "RuntimeError")).await;
       return Err(error);
     }
     let outcome = self.await_terminal(session_id, run_id).await?;
@@ -1930,6 +1930,15 @@ fn manager_run_record(session_id: &str, run_id: &str, backend: &str, model: Opti
     events_ref: None,
     result_ref: None,
   }
+}
+
+/// The class name a launch failure's evidence carries (`type(exc).__name__`): the Python class of a Rust error type that
+/// has one, and otherwise the class the call site names.
+fn launch_error_class(error: &anyhow::Error, call_site: &'static str) -> &'static str {
+  if error.downcast_ref::<crate::git::BaseBranchResolutionError>().is_some() {
+    return "BaseBranchResolutionError";
+  }
+  call_site
 }
 
 fn is_worker_kind(kind: RunKind) -> bool {

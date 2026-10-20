@@ -297,7 +297,8 @@ def _redirect_code(redirect_url: str, name: str) -> str:
   return codes[0]
 
 
-def _section_line_number(raw_text: str, section_name: str) -> tuple[int, str]:
+def _section_edit_plan(raw_text: str, section_name: str, keys: Sequence[str]) -> tuple[dict[str, int], int, str]:
+  """Locate each key's line in one section, plus the insert point and indentation."""
   try:
     node = yaml.compose(raw_text, Loader=yaml.SafeLoader)
   except yaml.YAMLError as error:
@@ -310,13 +311,19 @@ def _section_line_number(raw_text: str, section_name: str) -> tuple[int, str]:
   ]
   if len(section_nodes) != 1 or not isinstance(section_nodes[0], yaml.MappingNode):
     raise CliError(f"credentials.{section_name} cannot be updated", 1)
-  refresh_nodes = [
-      key_node for key_node, _ in section_nodes[0].value
-      if isinstance(key_node, yaml.ScalarNode) and key_node.value == "refresh_token"
-  ]
-  if len(refresh_nodes) != 1:
-    raise CliError(f"credentials.{section_name} must contain one refresh_token line", 1)
-  return refresh_nodes[0].start_mark.line, section_name
+  pairs = section_nodes[0].value
+  replacements: dict[str, int] = {}
+  for key_node, _ in pairs:
+    if isinstance(key_node, yaml.ScalarNode) and key_node.value in keys:
+      if key_node.value in replacements:
+        raise CliError(f"credentials.{section_name} contains more than one {key_node.value} line", 1)
+      replacements[key_node.value] = key_node.start_mark.line
+  first_line = pairs[0][0].start_mark.line
+  first_text = raw_text.splitlines(keepends=True)[first_line]
+  indentation = first_text[:len(first_text) - len(first_text.lstrip(" \t"))]
+  last_value = pairs[-1][1]
+  block_offset = 0 if isinstance(last_value, (yaml.MappingNode, yaml.SequenceNode)) else 1
+  return replacements, last_value.end_mark.line + block_offset, indentation
 
 
 def _parse_for_write(raw_bytes: bytes) -> dict[str, object]:
@@ -336,22 +343,30 @@ def _updated_content(
     description: str | None,
 ) -> tuple[bytes, dict[str, object]]:
   write_values: dict[str, str] = {"refresh_token": refresh_token}
-  if account.section not in table.data and description is not None:
+  if description is not None:
     write_values["description"] = description
   assert all(value.strip() for value in write_values.values())
 
   expected = copy.deepcopy(table.data)
   expected_values = dict(write_values)
   if account.section in table.data:
-    expected_section = cast(dict[str, object], expected[account.section])
-    expected_section["refresh_token"] = refresh_token
-    line_number, _ = _section_line_number(table.raw_text, account.section)
+    cast(dict[str, object], expected[account.section]).update(write_values)
+    replacements, insert_line, indentation = _section_edit_plan(table.raw_text, account.section, tuple(write_values))
     lines = table.raw_text.splitlines(keepends=True)
-    current_line = lines[line_number]
-    indentation = current_line[:len(current_line) - len(current_line.lstrip(" \t"))]
-    replacement = yaml.safe_dump({"refresh_token": refresh_token}, sort_keys=False).splitlines()[0]
-    line_ending = "\r\n" if current_line.endswith("\r\n") else "\n" if current_line.endswith("\n") else ""
-    lines[line_number] = f"{indentation}{replacement}{line_ending}"
+    for key, line_number in replacements.items():
+      current_line = lines[line_number]
+      line_ending = "\r\n" if current_line.endswith("\r\n") else "\n" if current_line.endswith("\n") else ""
+      replacement = yaml.safe_dump({key: write_values[key]}, sort_keys=False).splitlines()[0]
+      lines[line_number] = f"{indentation}{replacement}{line_ending}"
+    inserted = [key for key in write_values if key not in replacements]
+    if inserted:
+      following = lines[insert_line] if insert_line < len(lines) else lines[-1]
+      line_ending = "\r\n" if following.endswith("\r\n") else "\n"
+      if insert_line >= len(lines) and not lines[-1].endswith(("\n", "\r")):
+        lines[-1] += "\n"
+      for offset, key in enumerate(inserted):
+        entry = yaml.safe_dump({key: write_values[key]}, sort_keys=False).splitlines()[0]
+        lines.insert(insert_line + offset, f"{indentation}{entry}{line_ending}")
     return "".join(lines).encode("utf-8"), expected
 
   expected[account.section] = expected_values

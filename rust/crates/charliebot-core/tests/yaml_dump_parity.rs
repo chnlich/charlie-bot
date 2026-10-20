@@ -65,6 +65,9 @@ fn corpus() -> Vec<Value> {
     corpus.push(json!({"prompt": value}));
   }
   corpus.push(json!({"key\tneeds quotes": "value"}));
+  corpus.push(json!({"prompt": "Ship it \u{1f680}"}));
+  corpus.push(json!({"prompt": "caf\u{e9} \u{1f600}\ttab"}));
+  corpus.push(json!({"prompt": format!("{}  \ttail", "a".repeat(90))}));
   corpus
 }
 

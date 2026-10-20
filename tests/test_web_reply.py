@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import importlib
 import io
 import json
 import pathlib
@@ -23,7 +22,7 @@ from fastapi import testclient
 from src.features.chat_threads import thread_sessions
 from src.features.discord import metadata as discord_metadata
 from src.features.slack import metadata as slack_metadata
-from src.features.web_reply import audit, metadata, reply, status
+from src.features.web_reply import audit, cli, metadata, reply, status
 from src.features.web_reply import turn_contribution as web_turn_contribution
 from src.infra import event_types as ET
 from src.infra import models
@@ -320,7 +319,7 @@ def test_the_cli_posts_the_reply_text_and_prints_the_readback_as_one_json_line(
     argv = ["web", "reply", "--file", str(reply_file)]
 
   with conftest.patched_cli_post(cfg, argv, return_value=conftest.make_json_response(readback)) as post_mock:
-    importlib.import_module("src.features.web_reply.cli").main()
+    cli.main()
 
   assert post_mock.call_args.args[0].endswith("/api/internal/web/reply")
   assert post_mock.call_args.kwargs["json"] == {"session_id": "abc", "text": "the answer"}
@@ -342,7 +341,7 @@ def test_the_cli_exits_non_zero_with_a_json_error_on_a_refusal(
       mock.patch(conftest.CLI_COMMON_MAYBE_VERSION_SKEW_HINT_PATCH_TARGET, return_value=None),
       pytest.raises(SystemExit) as exc_info,
   ):
-    importlib.import_module("src.features.web_reply.cli").main()
+    cli.main()
 
   assert exc_info.value.code == 1
   assert json.loads(capsys.readouterr().err) == {
@@ -361,7 +360,7 @@ def test_the_cli_sends_the_keep_language_reason_with_the_reply(
   readback = {"posted": True, "chars": 10, "over_budget": False, "answers": None}
 
   with conftest.patched_cli_post(cfg, argv, return_value=conftest.make_json_response(readback)) as post_mock:
-    importlib.import_module("src.features.web_reply.cli").main()
+    cli.main()
 
   assert post_mock.call_args.kwargs["json"] == {
       "session_id": "abc",
@@ -382,7 +381,7 @@ def test_the_cli_dialog_prints_the_for_you_layer_in_log_order(
   monkeypatch.setattr(common, "get_api", fake_get)
   monkeypatch.setattr(sys, "argv", ["web", "dialog"])
 
-  importlib.import_module("src.features.web_reply.cli").main()
+  cli.main()
 
   assert calls == [("/api/internal/web/dialog", {"session_id": "abc"})]
   out = capsys.readouterr().out
@@ -1257,7 +1256,7 @@ def test_the_cli_status_set_posts_the_file_and_prints_the_stored_status_as_one_j
     argv = ["web", "status", "set", "--file", str(status_file)]
 
   with conftest.patched_cli_post(cfg, argv, return_value=conftest.make_json_response(stored)) as post_mock:
-    importlib.import_module("src.features.web_reply.cli").main()
+    cli.main()
 
   assert post_mock.call_args.args[0].endswith("/api/internal/web/status")
   assert post_mock.call_args.kwargs["json"] == {"session_id": "abc", "text": '{"now": "n"}'}
@@ -1298,7 +1297,7 @@ def test_the_cli_status_show_prints_the_status_and_one_block_per_child_with_wait
   monkeypatch.setattr(common, "get_api", fake_get)
   monkeypatch.setattr(sys, "argv", ["web", "status", "show"])
 
-  importlib.import_module("src.features.web_reply.cli").main()
+  cli.main()
 
   assert calls == [("/api/internal/web/status", {"session_id": "abc"})]
   out = capsys.readouterr().out
@@ -1331,7 +1330,7 @@ def test_the_cli_status_show_prints_the_now_of_each_open_child_in_one_block_and_
       })
   monkeypatch.setattr(sys, "argv", ["web", "status", "show"])
 
-  importlib.import_module("src.features.web_reply.cli").main()
+  cli.main()
 
   out = capsys.readouterr().out
   if has_children:

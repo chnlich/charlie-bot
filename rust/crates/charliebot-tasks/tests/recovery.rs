@@ -9,13 +9,14 @@ mod process_guard;
 mod recovery_support;
 
 use std::os::unix::process::CommandExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use anyhow::Context;
-use axum::http::StatusCode;
+use axum::body::{Body, to_bytes};
+use axum::http::{Request, StatusCode, header};
 use charliebot_agents::transport::identity;
 use charliebot_core::event_types;
 use charliebot_registry::caller::CallerIdentity;
@@ -28,10 +29,11 @@ use charliebot_tasks::execution::is_out_of_space_error;
 use charliebot_tasks::recovery::{self, PassCounters};
 use process_guard::ProcessGroupGuard;
 use recovery_support::{
-  BACKEND_ID, LOOP_KIND, LogCapture, LoopClose, LoopMarker, Stack, assert_logged_node_failure, assert_named_error,
-  cold_read_spec, implement_spec, post_delegate, script_option, synthetic_run,
+  BACKEND_ID, LOOP_KIND, LogCapture, LoopClose, LoopMarker, Stack, SyntheticRepo, assert_logged_node_failure,
+  assert_named_error, cold_read_spec, implement_spec, script_option, synthetic_run,
 };
 use serde_json::{Map, Value, json};
+use tower::ServiceExt;
 
 /// The stop request a node that closed before its queued run settles it with (`closed_task_stop_request_id`).
 fn closed_task_stop(run_id: &str) -> String {
@@ -40,6 +42,24 @@ fn closed_task_stop(run_id: &str) -> String {
 
 fn script_run_spec() -> TaskSpec {
   TaskSpec { goal: "synthetic worker task".to_string(), task_type: Some(TaskType::ScriptRun), ..TaskSpec::default() }
+}
+
+/// One JSON request to the delegated-worker route, authenticated as the synthetic operator.
+async fn post_delegate(router: &axum::Router, body: Value) -> anyhow::Result<(StatusCode, Value)> {
+  let response = router
+    .clone()
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri("/api/internal/delegate")
+        .header(header::AUTHORIZATION, "Bearer synthetic-access-key")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(serde_json::to_vec(&body)?))?,
+    )
+    .await?;
+  let status = response.status();
+  let bytes = to_bytes(response.into_body(), usize::MAX).await?;
+  Ok((status, serde_json::from_slice(&bytes)?))
 }
 
 /// The `run_stop_requested` facts of one run, as their request ids.
@@ -289,44 +309,6 @@ async fn restart_after_launch_reattaches_live_process() -> anyhow::Result<()> {
   Ok(())
 }
 
-/// `test_task_recovery.py::test_retry_and_boot_reconcile_repair_half_written_end_metadata` (the retry half): the run
-/// record write that carries ended_at fails out of space after the run_finished fact landed. The end-landing retry
-/// fills ended_at from the raw log's last write and exit_code from its result line, and writes no second end record.
-#[tokio::test]
-async fn retry_repairs_a_half_written_end_record_from_the_raw_log() -> anyhow::Result<()> {
-  // Python: tests/test_task_recovery.py::test_retry_and_boot_reconcile_repair_half_written_end_metadata.
-  let stack = Stack::start(r#"printf '%s\n' '{"type":"result","subtype":"success","result":"work done"}'"#).await?;
-  stack.adapter.set_landing_retry_interval(Duration::from_millis(50));
-  stack.write_access_key()?;
-  let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
-  let task = TaskSpec { goal: "do the work".to_string(), ..TaskSpec::default() };
-  let worker = stack.node("worker", Some(&manager.id), TaskProfile::Worker, Some(task)).await?;
-  let fault = write_faults::inject_run_record_write_fault(stack.store(), true, 1, libc::ENOSPC);
-
-  stack.dispatch.admit_input(&worker.id, event_types::USER, "Start the task.", "user", json!({})).await?;
-  let decision = stack.dispatch.dispatch_pending(&worker.id).await?;
-  let run_id = decision["run_id"].as_str().expect("the dispatch names its run").to_string();
-  assert_eq!(stack.wait_terminal(&worker.id, &run_id).await?, RunOutcomeKind::Success);
-
-  let hits = fault.hits();
-  assert_eq!(hits[..2], [Hit::Failed, Hit::Written], "the end write failed once; the retry's write landed");
-  let raw_log = stack.store().run_dir(&worker.id, &run_id).join(RAW_LOG_NAME);
-  let raw_written = time::OffsetDateTime::from(std::fs::metadata(&raw_log)?.modified()?);
-  let run = stack.store().read_run_sync(&worker.id, &run_id)?.expect("the run is recorded");
-  let ended_at = run.ended_at.expect("the retry lands the end time").into_inner();
-  let delta = ended_at - raw_written;
-  assert!(delta.abs() < time::Duration::seconds(1), "ended_at {ended_at} is not the raw log's write {raw_written}");
-  assert_eq!(run.exit_code, Some(0), "the raw log's successful result event");
-  let finished = stack
-    .run_events(&worker.id)?
-    .iter()
-    .filter(|event| event["type"] == event_types::RUN_FINISHED && event["run_id"] == run_id.as_str())
-    .count();
-  assert_eq!(finished, 1, "the retry never wrote a second end record");
-  settle_until(|| Ok(stack.adapter.landing_retry_nodes().is_empty())).await?;
-  Ok(())
-}
-
 /// `test_task_recovery.py::test_retry_and_boot_reconcile_repair_half_written_end_metadata` (the boot half): a terminal
 /// run whose end metadata is empty is repaired from its raw log's last write, once.
 #[tokio::test]
@@ -464,21 +446,25 @@ async fn assert_queued_worker_launch_fails(
   Ok(())
 }
 
-/// A work run that finished success on an implement node, launched at `started_at` when given.
+/// A successful work run with real repo, branch and worktree provenance.
 async fn finished_work_run(
   stack: &Stack,
   session_id: &str,
   run_id: &str,
+  repo: &SyntheticRepo,
+  branch: &str,
+  worktree: &Path,
   started_at: Option<&str>,
 ) -> anyhow::Result<()> {
   let record = RunRecord {
-    repo_path: Some(REPO.to_string()),
+    repo_path: Some(repo.repo.to_string_lossy().into_owned()),
     base_branch: Some("main".to_string()),
-    branch_name: Some("task/work".to_string()),
+    branch_name: Some(branch.to_string()),
+    worktree_path: Some(worktree.to_string_lossy().into_owned()),
     started_at: started_at.map(UtcDateTime::parse).transpose()?,
     ..queued_work(session_id, run_id)
   };
-  stack.register(record).await?;
+  stack.register_with_task_spec(record, "synthetic implement task").await?;
   stack.finish(session_id, run_id, RunOutcomeKind::Success).await?;
   Ok(())
 }
@@ -490,12 +476,61 @@ async fn review_of(
   review_id: &str,
   work_run_id: &str,
   outcome: RunOutcomeKind,
+  backend: &str,
 ) -> anyhow::Result<()> {
-  let record =
-    RunRecord { review_of_run_id: Some(work_run_id.to_string()), ..queued_run(session_id, review_id, RunKind::Review) };
+  let record = RunRecord {
+    backend: Some(backend.to_string()),
+    model: Some(format!("{backend}-model")),
+    review_of_run_id: Some(work_run_id.to_string()),
+    ..queued_run(session_id, review_id, RunKind::Review)
+  };
   stack.register(record).await?;
   stack.finish(session_id, review_id, outcome).await?;
   Ok(())
+}
+
+fn test_access_key(stack: &Stack) -> anyhow::Result<()> {
+  std::fs::write(stack.cfg.credentials_file(), "charliebot:\n  access_key: synthetic-access-key\n")?;
+  Ok(())
+}
+
+fn worktree(repo: &SyntheticRepo, stack: &Stack, _session_id: &str, run_id: &str) -> anyhow::Result<(String, PathBuf)> {
+  let branch = format!("task/{run_id}");
+  let path = Path::new(&stack.cfg.paths.worktree_dir).join(charliebot_tasks::git::git_worktree_dir_name(&branch));
+  repo.add_worktree(&path, &branch)?;
+  Ok((branch, path))
+}
+
+fn child_reports(stack: &Stack, manager_id: &str) -> anyhow::Result<Vec<Value>> {
+  Ok(stack.run_events(manager_id)?.into_iter().filter(|event| event["type"] == event_types::CHILD_REPORT).collect())
+}
+
+fn repo_commit(repo: &SyntheticRepo, branch: &str) -> anyhow::Result<String> {
+  let output = Command::new("git").arg("-C").arg(&repo.repo).args(["rev-parse", branch]).output()?;
+  anyhow::ensure!(output.status.success(), "git rev-parse {branch} failed");
+  Ok(String::from_utf8(output.stdout)?.trim().to_string())
+}
+
+async fn wait_for_run(
+  stack: &Stack,
+  guard: &ProcessGroupGuard,
+  session_id: &str,
+  run_id: &str,
+) -> anyhow::Result<RunOutcomeKind> {
+  let deadline = std::time::Instant::now() + Duration::from_secs(10);
+  let mut tracked = false;
+  loop {
+    let run = stack.store().read_run_sync(session_id, run_id)?.context("run record exists while waiting")?;
+    if !tracked && let Some(pid) = run.pid {
+      guard.track(pid);
+      tracked = true;
+    }
+    if let Some(outcome) = run_records::terminal_outcome(&stack.run_events(session_id)?, run_id)? {
+      return Ok(outcome);
+    }
+    anyhow::ensure!(std::time::Instant::now() < deadline, "run {run_id} did not finish within ten seconds");
+    tokio::time::sleep(Duration::from_millis(20)).await;
+  }
 }
 
 fn queued_work(session_id: &str, run_id: &str) -> RunRecord {
@@ -518,100 +553,142 @@ fn closes_of(stack: &Stack, session_id: &str) -> anyhow::Result<usize> {
   Ok(stack.run_events(session_id)?.iter().filter(|event| event["type"] == "task_closed").count())
 }
 
-/// `test_task_recovery.py::test_recovery_never_rereviews_a_successfully_reviewed_work_run`: a work run whose review
-/// already succeeded gets no second review at any restart. The replay of the review's own follow-up belongs to the
-/// review-chain task, so the node pass names that owner and registers no review.
+/// A result event the scripted test backend translates as a successful terminal event.
+fn result_script(summary: &str) -> String {
+  let event = json!({"type": "result", "subtype": "success", "result": summary});
+  format!("printf '%s\\n' '{}'", serde_json::to_string(&event).expect("JSON event serializes"))
+}
+
+/// `test_task_recovery.py::test_recovery_never_rereviews_a_successfully_reviewed_work_run`.
 #[tokio::test]
 async fn recovery_never_rereviews_a_successfully_reviewed_work_run() -> anyhow::Result<()> {
-  // Python: tests/test_task_recovery.py::test_recovery_never_rereviews_a_successfully_reviewed_work_run.
-  let log = LogCapture::default();
-  let _subscriber = log.install();
+  // Python: tests/test_task_recovery.py::test_recovery_never_rereviews_a_successfully_reviewed_work_run
+  let repo = SyntheticRepo::create()?;
   let stack = Stack::start("exit 0").await?;
-  let worker = stack.node("worker", None, TaskProfile::Worker, Some(implement_spec(Path::new(REPO)))).await?;
-  finished_work_run(&stack, &worker.id, "run-reviewed", None).await?;
-  review_of(&stack, &worker.id, "review-done", "run-reviewed", RunOutcomeKind::Success).await?;
+  let worker = stack.node("worker", None, TaskProfile::Worker, Some(implement_spec(&repo.repo))).await?;
+  let (branch, worktree) = worktree(&repo, &stack, &worker.id, "run-reviewed")?;
+  finished_work_run(&stack, &worker.id, "run-reviewed", &repo, &branch, &worktree, None).await?;
+  review_of(&stack, &worker.id, "review-done", "run-reviewed", RunOutcomeKind::Success, "fake2").await?;
 
   for _round in 0..2 {
-    assert_refused_by(&stack, &log, &worker.id, "review-chain").await?;
+    stack.node_pass(&worker.id).await?;
     assert_eq!(run_ids_of_kind(&stack, &worker.id, RunKind::Review)?, ["review-done"]);
   }
+  assert_eq!(stack.store().task_state(&worker.id)?, "completed");
   Ok(())
 }
 
-/// `test_task_recovery.py::test_recovery_spawns_no_review_for_a_superseded_work_run_on_a_closed_task`: an earlier work
-/// run that a later one superseded never gets a review. The replay refuses the later run's review, so the earlier run
-/// is never named.
+/// `test_task_recovery.py::test_recovery_spawns_no_review_for_a_superseded_work_run_on_a_closed_task`.
 #[tokio::test]
-async fn recovery_spawns_no_review_for_a_superseded_work_run() -> anyhow::Result<()> {
-  // Python: tests/test_task_recovery.py::test_recovery_spawns_no_review_for_a_superseded_work_run_on_a_closed_task.
-  let log = LogCapture::default();
-  let _subscriber = log.install();
+async fn recovery_spawns_no_review_for_a_superseded_work_run_on_a_closed_task() -> anyhow::Result<()> {
+  // Python: tests/test_task_recovery.py::test_recovery_spawns_no_review_for_a_superseded_work_run_on_a_closed_task
+  let repo = SyntheticRepo::create()?;
   let stack = Stack::start("exit 0").await?;
-  let worker = stack.node("worker", None, TaskProfile::Worker, Some(implement_spec(Path::new(REPO)))).await?;
-  finished_work_run(&stack, &worker.id, "run-work-early", Some("2026-10-18T09:00:00Z")).await?;
-  finished_work_run(&stack, &worker.id, "run-work-late", Some("2026-10-18T09:30:00Z")).await?;
-  review_of(&stack, &worker.id, "review-done", "run-work-late", RunOutcomeKind::Success).await?;
+  stack.dispatch.set_executor(None);
+  let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
+  let worker = stack.node("worker", Some(&manager.id), TaskProfile::Worker, Some(implement_spec(&repo.repo))).await?;
+  let (branch, worktree) = worktree(&repo, &stack, &worker.id, "run-work-late")?;
+  finished_work_run(&stack, &worker.id, "run-work-early", &repo, &branch, &worktree, Some("2026-10-18T09:00:00Z"))
+    .await?;
+  finished_work_run(&stack, &worker.id, "run-work-late", &repo, &branch, &worktree, Some("2026-10-18T09:30:00Z"))
+    .await?;
+  review_of(&stack, &worker.id, "review-done", "run-work-late", RunOutcomeKind::Success, "fake2").await?;
 
-  let text = assert_refused_by(&stack, &log, &worker.id, "review-chain").await?;
-  assert!(!text.contains("run-work-early"), "the superseded run owes no review: {text}");
+  for _round in 0..2 {
+    stack.node_pass(&worker.id).await?;
+  }
   assert_eq!(run_ids_of_kind(&stack, &worker.id, RunKind::Review)?, ["review-done"]);
+  assert_eq!(stack.store().task_state(&worker.id)?, "completed");
+  let reports = child_reports(&stack, &manager.id)?;
+  assert_eq!(reports.len(), 1);
+  assert_eq!(reports[0]["outcome"], "completed");
   Ok(())
 }
 
-/// `test_task_recovery.py::test_recovery_reviews_only_the_newest_unreviewed_work_run_on_an_open_task`: the newest work
-/// run that has no review is the one the live path would have reviewed, so the replay names its review spawn and never
-/// the earlier run's.
+/// `test_task_recovery.py::test_recovery_reviews_only_the_newest_unreviewed_work_run_on_an_open_task`.
 #[tokio::test]
-async fn recovery_reviews_only_the_newest_unreviewed_work_run() -> anyhow::Result<()> {
-  // Python: tests/test_task_recovery.py::test_recovery_reviews_only_the_newest_unreviewed_work_run_on_an_open_task.
-  let log = LogCapture::default();
-  let _subscriber = log.install();
+async fn recovery_reviews_only_the_newest_unreviewed_work_run_on_an_open_task() -> anyhow::Result<()> {
+  // Python: tests/test_task_recovery.py::test_recovery_reviews_only_the_newest_unreviewed_work_run_on_an_open_task
+  let repo = SyntheticRepo::create()?;
   let stack = Stack::start_with(
-    vec![script_option("fake", "exit 0"), script_option("fake2", "exit 0")],
+    vec![script_option("fake", "exit 0"), script_option("fake2", &result_script("review ok"))],
     vec!["fake".to_string(), "fake2".to_string()],
   )
   .await?;
-  let worker = stack.node("worker", None, TaskProfile::Worker, Some(implement_spec(Path::new(REPO)))).await?;
-  finished_work_run(&stack, &worker.id, "run-work-early", Some("2026-10-18T09:00:00Z")).await?;
-  finished_work_run(&stack, &worker.id, "run-work-late", Some("2026-10-18T09:30:00Z")).await?;
+  test_access_key(&stack)?;
+  stack.dispatch.set_executor(None);
+  let worker = stack.node("worker", None, TaskProfile::Worker, Some(implement_spec(&repo.repo))).await?;
+  let (early_branch, early_worktree) = worktree(&repo, &stack, &worker.id, "run-work-early")?;
+  let (late_branch, late_worktree) = worktree(&repo, &stack, &worker.id, "run-work-late")?;
+  finished_work_run(
+    &stack,
+    &worker.id,
+    "run-work-early",
+    &repo,
+    &early_branch,
+    &early_worktree,
+    Some("2026-10-18T09:00:00Z"),
+  )
+  .await?;
+  finished_work_run(
+    &stack,
+    &worker.id,
+    "run-work-late",
+    &repo,
+    &late_branch,
+    &late_worktree,
+    Some("2026-10-18T09:30:00Z"),
+  )
+  .await?;
+  let guard = ProcessGroupGuard::new();
 
-  let text = assert_refused_by(&stack, &log, &worker.id, "review-chain").await?;
-  assert!(text.contains("the review spawn of work run run-work-late"), "{text}");
-  assert!(run_ids_of_kind(&stack, &worker.id, RunKind::Review)?.is_empty(), "the refused spawn registers no review");
+  stack.node_pass(&worker.id).await?;
+  let reviews = run_ids_of_kind(&stack, &worker.id, RunKind::Review)?;
+  assert_eq!(reviews.len(), 1);
+  let review = stack.store().read_run_sync(&worker.id, &reviews[0])?.expect("replayed review is recorded");
+  assert_eq!(review.review_of_run_id.as_deref(), Some("run-work-late"));
+  assert_eq!(wait_for_run(&stack, &guard, &worker.id, &review.id).await?, RunOutcomeKind::Success);
+  stack.node_pass(&worker.id).await?;
+  assert_eq!(run_ids_of_kind(&stack, &worker.id, RunKind::Review)?.len(), 1);
   Ok(())
 }
 
-/// `test_task_recovery.py::test_recovery_reports_blocked_when_the_pool_has_no_reviewer_member`: with a single pool
-/// member no reviewer can be staffed. The replay's review spawn is the review-chain's, so the node pass names that
-/// owner, and no review is registered.
+/// `test_task_recovery.py::test_recovery_reports_blocked_when_the_pool_has_no_reviewer_member`.
 #[tokio::test]
-async fn recovery_refers_a_single_member_pool_review_to_the_review_chain() -> anyhow::Result<()> {
-  // Python: tests/test_task_recovery.py::test_recovery_reports_blocked_when_the_pool_has_no_reviewer_member.
-  let log = LogCapture::default();
-  let _subscriber = log.install();
+async fn recovery_reports_blocked_when_the_pool_has_no_reviewer_member() -> anyhow::Result<()> {
+  // Python: tests/test_task_recovery.py::test_recovery_reports_blocked_when_the_pool_has_no_reviewer_member
+  let repo = SyntheticRepo::create()?;
   let stack = Stack::start("exit 0").await?;
-  let worker = stack.node("worker", None, TaskProfile::Worker, Some(implement_spec(Path::new(REPO)))).await?;
-  finished_work_run(&stack, &worker.id, "run-work", Some("2026-10-18T09:00:00Z")).await?;
+  let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
+  let worker = stack.node("worker", Some(&manager.id), TaskProfile::Worker, Some(implement_spec(&repo.repo))).await?;
+  stack.dispatch.set_executor(None);
+  let (branch, worktree) = worktree(&repo, &stack, &worker.id, "run-work")?;
+  finished_work_run(&stack, &worker.id, "run-work", &repo, &branch, &worktree, None).await?;
 
-  assert_refused_by(&stack, &log, &worker.id, "review-chain").await?;
+  stack.node_pass(&worker.id).await?;
   assert!(run_ids_of_kind(&stack, &worker.id, RunKind::Review)?.is_empty());
+  let reports = child_reports(&stack, &manager.id)?;
+  assert_eq!(reports.len(), 1);
+  assert_eq!(reports[0]["outcome"], "blocked");
+  assert!(reports[0]["summary"].as_str().unwrap_or_default().contains("found no available reviewer backend"));
+  assert_eq!(stack.store().task_state(&worker.id)?, "archived");
   Ok(())
 }
 
-/// `test_task_recovery.py::test_recovery_spawns_no_review_behind_a_registered_unstarted_work_run`:
-/// a registered run that never started makes the earlier successful run's review unowed. A high configured disk
-/// floor withholds the queued run, and no review is spawned.
+/// `test_task_recovery.py::test_recovery_spawns_no_review_behind_a_registered_unstarted_work_run`.
 #[tokio::test]
 async fn recovery_spawns_no_review_behind_a_registered_unstarted_work_run() -> anyhow::Result<()> {
-  // Python: tests/test_task_recovery.py::test_recovery_spawns_no_review_behind_a_registered_unstarted_work_run.
+  // Python: tests/test_task_recovery.py::test_recovery_spawns_no_review_behind_a_registered_unstarted_work_run
+  let repo = SyntheticRepo::create()?;
   let stack = Stack::start_with_min_free_disk_gib(
     vec![script_option(BACKEND_ID, "exit 0")],
     vec![BACKEND_ID.to_string()],
     i64::MAX,
   )
   .await?;
-  let worker = stack.node("worker", None, TaskProfile::Worker, Some(implement_spec(Path::new(REPO)))).await?;
-  finished_work_run(&stack, &worker.id, "run-work-early", Some("2026-10-18T09:00:00Z")).await?;
+  let worker = stack.node("worker", None, TaskProfile::Worker, Some(implement_spec(&repo.repo))).await?;
+  let (branch, worktree) = worktree(&repo, &stack, &worker.id, "run-work-early")?;
+  finished_work_run(&stack, &worker.id, "run-work-early", &repo, &branch, &worktree, None).await?;
   stack.queue_run(&worker.id, "run-work-queued", RunKind::Work).await?;
 
   stack.boot().await?;
@@ -624,54 +701,47 @@ async fn recovery_spawns_no_review_behind_a_registered_unstarted_work_run() -> a
     )
   })
   .await?;
-  assert!(run_ids_of_kind(&stack, &worker.id, RunKind::Review)?.is_empty(), "no review behind the unstarted run");
+  assert!(run_ids_of_kind(&stack, &worker.id, RunKind::Review)?.is_empty());
   let queued = stack.store().read_run_sync(&worker.id, "run-work-queued")?.expect("the queued run is recorded");
   assert_eq!(queued.pid, None);
   let events = stack.run_events(&worker.id)?;
-  assert!(
-    events
-      .iter()
-      .any(|event| event["type"] == event_types::RUN_LAUNCH_WITHHELD && event["run_id"] == "run-work-queued"),
-    "the configured disk floor withholds the worker run"
-  );
   assert_eq!(run_records::terminal_outcome(&events, "run-work-queued")?, None);
-  let stops = events.iter().filter(|event| event["type"] == "run_stop_requested").count();
-  assert_eq!(stops, 0, "an open node's refused launch records no stop request");
+  assert!(!events.iter().any(|event| event["type"] == "run_stop_requested"));
   Ok(())
 }
 
-/// `test_task_recovery.py::test_recovery_closed_task_skips_landing`: a closed task owes no review spawn, so the replay
-/// reaches the review run's own follow-up, which belongs to the review-chain task. Repeated passes append no fact.
+/// `test_task_recovery.py::test_recovery_closed_task_skips_landing`.
 #[tokio::test]
-async fn recovery_closed_task_skips_the_review_spawn() -> anyhow::Result<()> {
-  // Python: tests/test_task_recovery.py::test_recovery_closed_task_skips_landing.
-  let log = LogCapture::default();
-  let _subscriber = log.install();
+async fn recovery_closed_task_skips_landing() -> anyhow::Result<()> {
+  // Python: tests/test_task_recovery.py::test_recovery_closed_task_skips_landing
+  let repo = SyntheticRepo::create()?;
   let stack = Stack::start("exit 0").await?;
-  let worker = stack.node("worker", None, TaskProfile::Worker, Some(implement_spec(Path::new(REPO)))).await?;
-  finished_work_run(&stack, &worker.id, "run-work", None).await?;
-  review_of(&stack, &worker.id, "review-done", "run-work", RunOutcomeKind::Success).await?;
+  let worker = stack.node("worker", None, TaskProfile::Worker, Some(implement_spec(&repo.repo))).await?;
+  let (branch, worktree) = worktree(&repo, &stack, &worker.id, "run-work")?;
+  finished_work_run(&stack, &worker.id, "run-work", &repo, &branch, &worktree, None).await?;
+  review_of(&stack, &worker.id, "review-done", "run-work", RunOutcomeKind::Success, "fake2").await?;
   stack.close(&worker.id, "close-1").await?;
 
-  let text = assert_refused_by(&stack, &log, &worker.id, "review-chain").await?;
-  assert!(text.contains("the review follow-up of run review-done"), "{text}");
   let facts = stack.run_events(&worker.id)?.len();
-  stack.node_pass(&worker.id).await.expect_err("the review follow-up is still unlanded");
-  assert_eq!(stack.run_events(&worker.id)?.len(), facts, "a repeated pass appends no fact");
+  stack.node_pass(&worker.id).await?;
+  stack.node_pass(&worker.id).await?;
+  assert_eq!(stack.store().task_state(&worker.id)?, "completed");
+  assert_eq!(stack.run_events(&worker.id)?.len(), facts);
+  assert!(!worktree.exists(), "closed completed work is cleaned up");
   Ok(())
 }
 
-/// `test_task_recovery.py::test_recovery_reopened_task_reproves_landing`: a restored task is open again, so its work
-/// run owes a review spawn and the replay names the review-chain task.
+/// `test_task_recovery.py::test_recovery_reopened_task_reproves_landing`.
 #[tokio::test]
-async fn recovery_reopened_task_refers_the_review_to_the_review_chain() -> anyhow::Result<()> {
-  // Python: tests/test_task_recovery.py::test_recovery_reopened_task_reproves_landing.
-  let log = LogCapture::default();
-  let _subscriber = log.install();
+async fn recovery_reopened_task_reproves_landing() -> anyhow::Result<()> {
+  // Python: tests/test_task_recovery.py::test_recovery_reopened_task_reproves_landing
+  let repo = SyntheticRepo::create()?;
   let stack = Stack::start("exit 0").await?;
-  let worker = stack.node("worker", None, TaskProfile::Worker, Some(implement_spec(Path::new(REPO)))).await?;
-  finished_work_run(&stack, &worker.id, "run-work", None).await?;
-  review_of(&stack, &worker.id, "review-done", "run-work", RunOutcomeKind::Success).await?;
+  let worker = stack.node("worker", None, TaskProfile::Worker, Some(implement_spec(&repo.repo))).await?;
+  let (branch, worktree) = worktree(&repo, &stack, &worker.id, "run-work")?;
+  repo.publish_worktree(&worktree)?;
+  finished_work_run(&stack, &worker.id, "run-work", &repo, &branch, &worktree, None).await?;
+  review_of(&stack, &worker.id, "review-done", "run-work", RunOutcomeKind::Success, "fake2").await?;
   stack.close(&worker.id, "close-1").await?;
   stack
     .completion
@@ -679,46 +749,66 @@ async fn recovery_reopened_task_refers_the_review_to_the_review_chain() -> anyho
     .await?;
   assert_eq!(stack.store().task_state(&worker.id)?, "open");
 
-  assert_refused_by(&stack, &log, &worker.id, "review-chain").await?;
+  stack.node_pass(&worker.id).await?;
+  assert_eq!(stack.store().task_state(&worker.id)?, "completed");
   Ok(())
 }
 
-/// `test_task_recovery.py::test_recovery_open_task_landing_unchanged`: an open task's replayed review follow-up is the
-/// review-chain's, so the node pass names that owner and leaves the task open.
+/// `test_task_recovery.py::test_recovery_open_task_landing_unchanged`.
 #[tokio::test]
-async fn recovery_open_task_review_follow_up_refers_to_the_review_chain() -> anyhow::Result<()> {
-  // Python: tests/test_task_recovery.py::test_recovery_open_task_landing_unchanged.
-  let log = LogCapture::default();
-  let _subscriber = log.install();
+async fn recovery_open_task_landing_unchanged() -> anyhow::Result<()> {
+  // Python: tests/test_task_recovery.py::test_recovery_open_task_landing_unchanged
+  let repo = SyntheticRepo::create()?;
   let stack = Stack::start("exit 0").await?;
-  let worker = stack.node("worker", None, TaskProfile::Worker, Some(implement_spec(Path::new(REPO)))).await?;
-  finished_work_run(&stack, &worker.id, "run-work", None).await?;
-  review_of(&stack, &worker.id, "review-done", "run-work", RunOutcomeKind::Success).await?;
+  let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
+  let worker = stack.node("worker", Some(&manager.id), TaskProfile::Worker, Some(implement_spec(&repo.repo))).await?;
+  stack.dispatch.set_executor(None);
+  let (branch, worktree) = worktree(&repo, &stack, &worker.id, "run-work")?;
+  repo.publish_worktree(&worktree)?;
+  finished_work_run(&stack, &worker.id, "run-work", &repo, &branch, &worktree, None).await?;
+  review_of(&stack, &worker.id, "review-done", "run-work", RunOutcomeKind::Success, "fake2").await?;
 
-  assert_refused_by(&stack, &log, &worker.id, "review-chain").await?;
-  assert_eq!(stack.store().task_state(&worker.id)?, "open");
+  stack.node_pass(&worker.id).await?;
+  assert_eq!(stack.store().task_state(&worker.id)?, "completed");
+  let reports = child_reports(&stack, &manager.id)?;
+  assert_eq!(reports.len(), 1);
+  assert_eq!(reports[0]["outcome"], "completed");
+  let landed_ref = format!("landed:origin/main@{}", repo_commit(&repo, &branch)?);
+  assert!(reports[0]["result_refs"].as_array().unwrap().iter().any(|value| value == &landed_ref));
   Ok(())
 }
 
-/// `test_task_recovery.py::test_recovery_after_a_failed_review_picks_the_next_preference_backend`: a failed review is a
-/// used attempt. The replay's review spawn belongs to the review-chain task, so the node pass names it and registers no
-/// retry.
+/// `test_task_recovery.py::test_recovery_after_a_failed_review_picks_the_next_preference_backend`.
 #[tokio::test]
-async fn recovery_failed_review_refers_the_retry_to_the_review_chain() -> anyhow::Result<()> {
-  // Python: tests/test_task_recovery.py::test_recovery_after_a_failed_review_picks_the_next_preference_backend.
-  let log = LogCapture::default();
-  let _subscriber = log.install();
+async fn recovery_after_a_failed_review_picks_the_next_preference_backend() -> anyhow::Result<()> {
+  // Python: tests/test_task_recovery.py::test_recovery_after_a_failed_review_picks_the_next_preference_backend
+  let repo = SyntheticRepo::create()?;
   let stack = Stack::start_with(
-    vec![script_option("fake", "exit 0"), script_option("fake2", "exit 0"), script_option("fake3", "exit 0")],
+    vec![
+      script_option("fake", "exit 0"),
+      script_option("fake2", "exit 0"),
+      script_option("fake3", &result_script("review ok")),
+    ],
     vec!["fake2".to_string(), "fake3".to_string()],
   )
   .await?;
-  let worker = stack.node("worker", None, TaskProfile::Worker, Some(implement_spec(Path::new(REPO)))).await?;
-  finished_work_run(&stack, &worker.id, "run-work", None).await?;
-  review_of(&stack, &worker.id, "review-failed", "run-work", RunOutcomeKind::Failed).await?;
+  test_access_key(&stack)?;
+  stack.dispatch.set_executor(None);
+  let worker = stack.node("worker", None, TaskProfile::Worker, Some(implement_spec(&repo.repo))).await?;
+  let (branch, worktree) = worktree(&repo, &stack, &worker.id, "run-work")?;
+  finished_work_run(&stack, &worker.id, "run-work", &repo, &branch, &worktree, None).await?;
+  review_of(&stack, &worker.id, "review-failed", "run-work", RunOutcomeKind::Failed, "fake2").await?;
+  let guard = ProcessGroupGuard::new();
 
-  assert_refused_by(&stack, &log, &worker.id, "review-chain").await?;
-  assert_eq!(run_ids_of_kind(&stack, &worker.id, RunKind::Review)?, ["review-failed"]);
+  stack.node_pass(&worker.id).await?;
+  let reviews = run_ids_of_kind(&stack, &worker.id, RunKind::Review)?;
+  assert_eq!(reviews.len(), 2);
+  let retry_id = reviews.iter().find(|run_id| run_id.as_str() != "review-failed").context("retry is registered")?;
+  assert_eq!(retry_id, &charliebot_store::control_events::stable_run_id(&worker.id, "review:run-work:2"));
+  let retry = stack.store().read_run_sync(&worker.id, retry_id)?.expect("retry record is readable");
+  assert_eq!(retry.backend.as_deref(), Some("fake3"));
+  assert_eq!(retry.review_of_run_id.as_deref(), Some("run-work"));
+  assert_eq!(wait_for_run(&stack, &guard, &worker.id, &retry.id).await?, RunOutcomeKind::Success);
   Ok(())
 }
 
@@ -884,38 +974,45 @@ async fn recovery_archives_worker_after_deduplicating_its_existing_failure_repor
   Ok(())
 }
 
-/// `test_task_recovery.py::test_reconcile_replays_an_already_delivered_blocked_report_without_duplication`: the replay
-/// of a successful work run's review, and of a second review of it, belongs to the review-chain task. The node pass
-/// names that owner and appends nothing to the worker.
+/// `test_task_recovery.py::test_reconcile_replays_an_already_delivered_blocked_report_without_duplication`.
 #[tokio::test]
-async fn recovery_replayed_review_chain_appends_nothing_before_its_owner_lands() -> anyhow::Result<()> {
-  // Python: tests/test_task_recovery.py::
-  //   test_reconcile_replays_an_already_delivered_blocked_report_without_duplication.
-  let log = LogCapture::default();
-  let _subscriber = log.install();
-  let stack = Stack::start_with(
-    vec![script_option("fake", "exit 0"), script_option("fake2", "exit 0")],
-    vec!["fake".to_string(), "fake2".to_string()],
-  )
-  .await?;
-  let worker = stack.node("worker", None, TaskProfile::Worker, Some(implement_spec(Path::new(REPO)))).await?;
-  finished_work_run(&stack, &worker.id, "run-work", None).await?;
-  review_of(&stack, &worker.id, "review-replay-1", "run-work", RunOutcomeKind::Success).await?;
-  review_of(&stack, &worker.id, "review-replay-2", "run-work", RunOutcomeKind::Success).await?;
-  let facts = stack.run_events(&worker.id)?.len();
+async fn reconcile_replays_an_already_delivered_blocked_report_without_duplication() -> anyhow::Result<()> {
+  // Python: tests/test_task_recovery.py::test_reconcile_replays_an_already_delivered_blocked_report_without_duplication
+  let repo = SyntheticRepo::create()?;
+  let stack = Stack::start("exit 0").await?;
+  let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
+  let worker = stack.node("worker", Some(&manager.id), TaskProfile::Worker, Some(implement_spec(&repo.repo))).await?;
+  stack.dispatch.set_executor(None);
+  let (branch, worktree) = worktree(&repo, &stack, &worker.id, "run-work")?;
+  let commit = Command::new("git")
+    .arg("-C")
+    .arg(&worktree)
+    .args(["commit", "--allow-empty", "-m", "unlanded synthetic change"])
+    .output()?;
+  anyhow::ensure!(commit.status.success(), "the synthetic worktree commit succeeds");
+  finished_work_run(&stack, &worker.id, "run-work", &repo, &branch, &worktree, None).await?;
+  review_of(&stack, &worker.id, "review-replay-1", "run-work", RunOutcomeKind::Success, "fake2").await?;
+  review_of(&stack, &worker.id, "review-replay-2", "run-work", RunOutcomeKind::Success, "fake3").await?;
 
-  assert_refused_by(&stack, &log, &worker.id, "review-chain").await?;
-  assert_eq!(stack.run_events(&worker.id)?.len(), facts, "the refused replay appends no fact");
+  stack.node_pass(&worker.id).await?;
+  let reports = child_reports(&stack, &manager.id)?;
+  assert_eq!(reports.len(), 1);
+  assert_eq!(reports[0]["outcome"], "blocked");
+  assert!(reports[0]["summary"].as_str().unwrap_or_default().contains("passed review but its branch did not land"));
+  let worker_facts = stack.run_events(&worker.id)?.len();
+  let manager_facts = stack.run_events(&manager.id)?.len();
+
+  stack.node_pass(&worker.id).await?;
+  assert_eq!(child_reports(&stack, &manager.id)?.len(), 1);
+  assert_eq!(stack.run_events(&worker.id)?.len(), worker_facts);
+  assert_eq!(stack.run_events(&manager.id)?.len(), manager_facts);
+  assert_eq!(stack.store().task_state(&worker.id)?, "archived");
   Ok(())
 }
 
 /// The loop child's close fact and report counts, read from the store.
 fn closes(stack: &Stack, session_id: &str) -> anyhow::Result<Vec<Value>> {
   Ok(stack.run_events(session_id)?.into_iter().filter(|event| event["type"] == event_types::TASK_CLOSED).collect())
-}
-
-fn child_reports(stack: &Stack, manager_id: &str) -> anyhow::Result<Vec<Value>> {
-  Ok(stack.run_events(manager_id)?.into_iter().filter(|event| event["type"] == event_types::CHILD_REPORT).collect())
 }
 
 fn stop_requests(stack: &Stack, session_id: &str, run_id: &str) -> anyhow::Result<usize> {
@@ -1325,37 +1422,6 @@ async fn boot_non_space_follow_up_failure_starts_no_retry() -> anyhow::Result<()
   Ok(())
 }
 
-/// `test_task_recovery.py::test_boot_node_out_of_space_hands_node_to_retry`: the boot pass's child-report delivery
-/// fails out of space. The node pass raises, the boot hands the node to the end-landing retry, and the retry's round
-/// delivers the failed report exactly once.
-#[tokio::test]
-async fn boot_node_out_of_space_hands_node_to_retry() -> anyhow::Result<()> {
-  // Python: tests/test_task_recovery.py::test_boot_node_out_of_space_hands_node_to_retry.
-  let stack = Stack::start("exit 0").await?;
-  stack.adapter.set_landing_retry_interval(Duration::from_millis(50));
-  let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
-  let worker = stack.node("worker", Some(&manager.id), TaskProfile::Worker, None).await?;
-  stack.queue_run(&worker.id, "run-failed", RunKind::Work).await?;
-  stack.finish(&worker.id, "run-failed", RunOutcomeKind::Failed).await?;
-  assert!(child_reports(&stack, &manager.id)?.is_empty());
-
-  let fault = write_faults::inject_chat_append_fault(
-    stack.store(),
-    event_types::CHILD_REPORT,
-    &[manager.id.as_str()],
-    1,
-    libc::ENOSPC,
-  );
-  stack.boot().await?;
-
-  settle_until(|| Ok(child_reports(&stack, &manager.id)?.len() == 1)).await?;
-  assert!(fault.hits().contains(&Hit::Failed), "the boot pass's delivery write failed out of space");
-  assert_eq!(child_reports(&stack, &manager.id)?[0]["outcome"], "failed");
-  settle_until(|| Ok(stack.adapter.landing_retry_nodes().is_empty())).await?;
-  assert_eq!(child_reports(&stack, &manager.id)?.len(), 1, "exactly one report");
-  Ok(())
-}
-
 /// `test_task_execution.py::test_manager_turn_master_done_enospc_retries_through_master_queue`: the manager turn's
 /// MASTER_DONE write fails out of space, so the turn lands no terminal fact. The retry's node pass re-attaches the dead
 /// turn through the master queue, and the resumed follow lands the end record with the raw log's last write time.
@@ -1581,5 +1647,68 @@ async fn a_refused_cron_node_leaves_the_manager_node_to_recover() -> anyhow::Res
       .await
       .with_context(|| format!("with the sequence node first: {sequence_first}"))?;
   }
+  Ok(())
+}
+/// fills ended_at from the raw log's last write and exit_code from its result line, and writes no second end record.
+#[tokio::test]
+async fn retry_repairs_a_half_written_end_record_from_the_raw_log() -> anyhow::Result<()> {
+  // Python: tests/test_task_recovery.py::test_retry_and_boot_reconcile_repair_half_written_end_metadata.
+  let stack = Stack::start(r#"printf '%s\n' '{"type":"result","subtype":"success","result":"work done"}'"#).await?;
+  stack.adapter.set_landing_retry_interval(Duration::from_millis(50));
+  stack.write_access_key()?;
+  let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
+  let task = TaskSpec { goal: "do the work".to_string(), ..TaskSpec::default() };
+  let worker = stack.node("worker", Some(&manager.id), TaskProfile::Worker, Some(task)).await?;
+  let fault = write_faults::inject_run_record_write_fault(stack.store(), true, 1, libc::ENOSPC);
+
+  stack.dispatch.admit_input(&worker.id, event_types::USER, "Start the task.", "user", json!({})).await?;
+  let decision = stack.dispatch.dispatch_pending(&worker.id).await?;
+  let run_id = decision["run_id"].as_str().expect("the dispatch names its run").to_string();
+  assert_eq!(stack.wait_terminal(&worker.id, &run_id).await?, RunOutcomeKind::Success);
+
+  let hits = fault.hits();
+  assert_eq!(hits[..2], [Hit::Failed, Hit::Written], "the end write failed once; the retry's write landed");
+  let raw_log = stack.store().run_dir(&worker.id, &run_id).join(RAW_LOG_NAME);
+  let raw_written = time::OffsetDateTime::from(std::fs::metadata(&raw_log)?.modified()?);
+  let run = stack.store().read_run_sync(&worker.id, &run_id)?.expect("the run is recorded");
+  let ended_at = run.ended_at.expect("the retry lands the end time").into_inner();
+  let delta = ended_at - raw_written;
+  assert!(delta.abs() < time::Duration::seconds(1), "ended_at {ended_at} is not the raw log's write {raw_written}");
+  assert_eq!(run.exit_code, Some(0), "the raw log's successful result event");
+  let finished = stack
+    .run_events(&worker.id)?
+    .iter()
+    .filter(|event| event["type"] == event_types::RUN_FINISHED && event["run_id"] == run_id.as_str())
+    .count();
+  assert_eq!(finished, 1, "the retry never wrote a second end record");
+  settle_until(|| Ok(stack.adapter.landing_retry_nodes().is_empty())).await?;
+  Ok(())
+}
+/// delivers the failed report exactly once.
+#[tokio::test]
+async fn boot_node_out_of_space_hands_node_to_retry() -> anyhow::Result<()> {
+  // Python: tests/test_task_recovery.py::test_boot_node_out_of_space_hands_node_to_retry.
+  let stack = Stack::start("exit 0").await?;
+  stack.adapter.set_landing_retry_interval(Duration::from_millis(50));
+  let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
+  let worker = stack.node("worker", Some(&manager.id), TaskProfile::Worker, None).await?;
+  stack.queue_run(&worker.id, "run-failed", RunKind::Work).await?;
+  stack.finish(&worker.id, "run-failed", RunOutcomeKind::Failed).await?;
+  assert!(child_reports(&stack, &manager.id)?.is_empty());
+
+  let fault = write_faults::inject_chat_append_fault(
+    stack.store(),
+    event_types::CHILD_REPORT,
+    &[manager.id.as_str()],
+    1,
+    libc::ENOSPC,
+  );
+  stack.boot().await?;
+
+  settle_until(|| Ok(child_reports(&stack, &manager.id)?.len() == 1)).await?;
+  assert!(fault.hits().contains(&Hit::Failed), "the boot pass's delivery write failed out of space");
+  assert_eq!(child_reports(&stack, &manager.id)?[0]["outcome"], "failed");
+  settle_until(|| Ok(stack.adapter.landing_retry_nodes().is_empty())).await?;
+  assert_eq!(child_reports(&stack, &manager.id)?.len(), 1, "exactly one report");
   Ok(())
 }

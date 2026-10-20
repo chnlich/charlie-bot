@@ -1,5 +1,7 @@
 //! Backend-resolution refusals used by the manager spawner.
 
+use std::collections::HashSet;
+
 use charliebot_agents::backend_pool::BackendPool;
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_store::Store;
@@ -102,14 +104,20 @@ pub async fn select_verify_backend(
   store: &Store,
   session_id: &str,
   caller: &str,
+  tried_backends: &[String],
   pool: &BackendPool,
-) -> anyhow::Result<Option<(String, Option<String>)>> {
+) -> anyhow::Result<Option<(String, Option<String>, Vec<String>)>> {
   let meta = store.require_session(session_id).await?;
   let (session_backend, session_model) = resolve_session_default_backend_model(cfg, &meta)?;
-  let Some(option) = pool.select(cfg, caller, std::slice::from_ref(&session_backend))? else {
-    return Ok(Some((session_backend, session_model)));
-  };
-  Ok(Some((option.id.clone(), Some(required_model(&option.model, "backends.pool entry ", &option.id)?))))
+  crate::review::select_reviewer_backend(
+    cfg,
+    pool,
+    caller,
+    &session_backend,
+    session_model.as_deref(),
+    tried_backends,
+    &HashSet::new(),
+  )
 }
 
 fn required_model(model: &str, subject: &str, backend_id: &str) -> anyhow::Result<String> {

@@ -467,3 +467,29 @@ def test_the_task_created_hash_is_masked_only_for_the_delegate_request() -> None
   outside_other = _masked_chat_event(other)
   assert outside["task_spec_hash"] == "synthetic-hash"
   assert outside != outside_other
+
+
+def test_task_close_and_child_report_mask_only_spec_hashes_in_result_refs() -> None:
+  close = _masked_chat_event(
+      {
+          "type":
+              "task_closed",
+          "result_refs":
+              ["run:synthetic-run", f"spec:{'a' * 64}", "review:synthetic-review", "landed:main@synthetic-commit"],
+      })
+  other_close = _masked_chat_event(
+      {
+          "type":
+              "task_closed",
+          "result_refs":
+              ["run:synthetic-run", f"spec:{'b' * 64}", "review:synthetic-review", "landed:main@synthetic-commit"],
+      })
+  assert close == other_close
+  assert close["result_refs"] == [
+      "run:synthetic-run", "spec:<task_closed-local-repo-spec-ref>", "review:synthetic-review",
+      "landed:main@synthetic-commit"
+  ]
+
+  other_event = _masked_chat_event({"type": "task_opened", "result_refs": [f"spec:{'a' * 64}"]})
+  changed_event = _masked_chat_event({"type": "task_opened", "result_refs": [f"spec:{'b' * 64}"]})
+  assert other_event != changed_event

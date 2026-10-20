@@ -12,6 +12,7 @@ pub mod master_state;
 pub mod master_trigger;
 pub mod prompts;
 pub mod recovery;
+pub mod review;
 pub mod review_text;
 pub mod routes;
 mod run_support;

@@ -303,11 +303,12 @@ async fn delegate_task(State(features): State<Arc<FeatureContext>>, request: axu
       &features.store,
       &request.session_id,
       task_type_name(request.task_type),
+      &[],
       &pool,
     )
     .await
     .map(|resolved| {
-      resolved.map(|(backend, model)| {
+      resolved.map(|(backend, model, _tried_backends)| {
         let backend_from_pool = cfg.backends.pool.iter().any(|member| member == &backend);
         (backend, model, backend_from_pool)
       })

@@ -10,6 +10,7 @@ import subprocess
 import sys
 import threading
 import time
+import types
 from collections.abc import Iterator
 from typing import Any
 
@@ -155,6 +156,43 @@ def test_log_event_step_keeps_its_event_fields_and_timeout(tmp_path: pathlib.Pat
   assert parsed.log_event == "ext_usage_fetched"
   assert parsed.log_fields == {"ok": "false", "attempt": "2"}
   assert parsed.timeout_seconds == 5.0
+
+
+def test_tree_path_missing_wait_checks_tree_containment(tmp_path: pathlib.Path) -> None:
+  step = {
+      "kind": "wait",
+      "name": "worktree cleanup",
+      "timeout_seconds": 1,
+      "until": {
+          "tree_path_missing": {
+              "path": "${capture.worktree}"
+          }
+      },
+  }
+  scenario = _load(tmp_path, [step])
+  assert scenario.steps[0].until == {"tree_path_missing": {"path": "${capture.worktree}"}}
+
+  tree_root = tmp_path / "tree"
+  tree_root.mkdir()
+  side = parity.Side("candidate", types.SimpleNamespace(root=tree_root, home=tree_root / "home"), 18600)
+  side.captures["worktree"] = str(tree_root / "worktrees" / "synthetic-task")
+  until = {"tree_path_missing": {"path": "${capture.worktree}"}}
+  assert parity._condition_met(side, until, {})
+
+  worktree = tree_root / "worktrees" / "synthetic-task"
+  worktree.mkdir(parents=True)
+  assert not parity._condition_met(side, until, {})
+  worktree.rmdir()
+
+  outside = tmp_path / "outside"
+  outside.mkdir()
+  side.captures["worktree"] = str(outside)
+  with pytest.raises(RuntimeError, match="wait path escapes"):
+    parity._condition_met(side, until, {})
+
+  escaped = {**step, "until": {"tree_path_missing": {"path": "../outside"}}}
+  with pytest.raises(scenario_file.ScenarioError, match="must stay under the scenario tree"):
+    _load(tmp_path, [escaped])
 
 
 def test_ws_fake_handshake_requires_a_declared_fake(tmp_path: pathlib.Path) -> None:

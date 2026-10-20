@@ -514,6 +514,12 @@ impl Stack {
     &self.features.store
   }
 
+  /// Change the hot-reload source config and move its fingerprint so the next runtime read sees it.
+  pub fn replace_config(&self, config: CharlieBotConfig) -> anyhow::Result<()> {
+    *self.served.lock().expect("served configuration is not poisoned") = config;
+    std::fs::write(self.cfg.config_file(), "synthetic test config generation\n")?;
+    Ok(())
+  }
   /// Make the next `times` successful finishes fail their follow-up with `message`.
   pub fn fail_follow_up(&self, times: usize, message: &str) {
     *self.fault.message.lock().expect("fault message is not poisoned") = message.to_string();
@@ -559,6 +565,12 @@ impl Stack {
   }
 
   /// Persist a run record through the control lock, as a reservation does.
+  /// One create through the store, under the operator's caller, with the task spec text recorded with it.
+  pub async fn register_with_task_spec(&self, record: RunRecord, task_spec: &str) -> anyhow::Result<RunRecord> {
+    let session_id = record.session_id.clone();
+    let guard = self.store().control_lock().await;
+    Ok(self.store().register_run_locked(&guard, &session_id, record, Some(task_spec)).await?)
+  }
   pub async fn register(&self, record: RunRecord) -> anyhow::Result<RunRecord> {
     let session_id = record.session_id.clone();
     let guard = self.store().control_lock().await;
@@ -636,6 +648,23 @@ impl Stack {
 }
 
 /// A run record with only the identity fields set, as `process_guard`'s tests and the launch path build one.
+pub struct SyntheticRepo {
+  pub _dir: TempDir,
+  pub repo: PathBuf,
+  pub origin: PathBuf,
+}
+
+fn run_git(cwd: &Path, args: &[&str]) -> anyhow::Result<()> {
+  let output = Command::new("git").arg("-C").arg(cwd).args(args).output()?;
+  anyhow::ensure!(
+    output.status.success(),
+    "git {args:?} failed in {}: {}",
+    cwd.display(),
+    String::from_utf8_lossy(&output.stderr)
+  );
+  Ok(())
+}
+
 pub fn synthetic_run(session_id: &str, run_id: &str, kind: RunKind) -> RunRecord {
   RunRecord {
     id: run_id.to_string(),

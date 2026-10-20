@@ -29,6 +29,7 @@ from src.runtime import (
     session_search,
     session_sidebar,
     session_store,
+    session_usage,
     sidebar_state,
     spawner_backends,
     takeoff_gate,
@@ -1053,7 +1054,7 @@ async def get_session_usage(
 ) -> infra_responses.FastJsonResponse:
   """Return lazy session status and usage data for the active header."""
   if meta.profile == "worker":
-    usage = await message_utils._worker_usage(task_mgr, session_id)
+    usage = await message_utils._worker_usage(task_mgr, session_id, session_usage.usage_run_kind(meta))
   else:
     usage = await anchors.resolve_session_usage(session_id, meta)
   payload = {

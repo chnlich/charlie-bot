@@ -2896,6 +2896,7 @@ def make_worker(tmp_path: pathlib.Path, thread_id: str) -> worker_module.Worker:
       tmp_path / "events.jsonl",
       "",
       core_config.CharlieBotConfig(charliebot_home=tmp_path / "home"),
+      run_kind="work",
   )
 
 

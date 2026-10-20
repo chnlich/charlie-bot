@@ -185,16 +185,20 @@ def _compaction_process(
     account: claude_config.ClaudeAccount,
     session_id: str,
     cc_session_id: str,
+    run_kind: models.RunKind,
 ) -> tuple[list[str], dict[str, str]]:
   """The command line and environment of the session's next turn on *account*, the process the compaction runs as.
 
   The turn's extra flags resume the conversation and keep the per-machine sections out of the system
   prompt. No instructions content is passed, so the session's CLAUDE.md keeps the last turn's content.
+  *run_kind* is the kind of Run the compacted session serves, so the process declares the window the
+  session's own turns declare.
   """
   backend = backend_types.build_backend(
       option,
       cfg,
       claude_account=account,
+      run_kind=run_kind,
       extra_flags=["--resume", cc_session_id, claude_code.EXCLUDE_DYNAMIC_SECTIONS_FLAG],
       cgroup_session_id=session_id)
   process_env = master_cc_run._build_master_env(cfg, session_id)
@@ -215,7 +219,7 @@ async def _compact(
   session_id = ctx.session_meta.id
   model = models.option_default_model(option, subject="backend ")
   try:
-    argv, env = _compaction_process(cfg, option, account, session_id, cc_session_id)
+    argv, env = _compaction_process(cfg, option, account, session_id, cc_session_id, ctx.run_kind)
     outcome = await claude_compaction.run_compaction(
         argv=argv,
         env=env,

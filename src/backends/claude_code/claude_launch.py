@@ -1,12 +1,23 @@
-"""Claude CLI launch vocabulary: connector settings and the headless env."""
+"""Claude CLI launch vocabulary: the per-run-kind env, the tool set and the name-only skill setting."""
 
 import os
+from typing import TYPE_CHECKING
+
+import pydantic
+
+from src.infra import models
+
+if TYPE_CHECKING:
+  from src.infra import config
 
 # CharlieBot sessions must not sync claude.ai connectors at all: the CLI
 # announces every unauthorized connector at startup, and its announce-once
 # dedup cache (mcp-needs-auth-cache.json) lives in the config directory.
 # Every Claude launch path merges this into its single --settings JSON.
 DISABLE_CONNECTOR_SETTINGS = {"disableClaudeAiConnectors": True}
+
+# The single --settings value that lists a skill by name without its description.
+NAME_ONLY_SKILL = "name-only"
 
 # One spelling per Claude Code variable the declared-window logic touches: the
 # default pin, the forward allowlist, and the degradation checks must agree.
@@ -17,21 +28,31 @@ MAX_CONTEXT_TOKENS_ENV = "CLAUDE_CODE_MAX_CONTEXT_TOKENS"
 # The waiting rule in prompts/task_base.md sets a 15-minute foreground limit.
 # Claude Code's Bash tool defaults to 2 minutes and caps at 10 minutes without
 # these variables, so a foreground command the rule allows would be killed early.
+# The advisor tool went uncalled across a week of CharlieBot runs (2026-10-12 to
+# 10-19), so its tool description only spends request tokens.
 HEADLESS_CLAUDE_INVARIANT_ENV: dict[str, str] = {
     "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
     "BASH_DEFAULT_TIMEOUT_MS": "900000",
     "BASH_MAX_TIMEOUT_MS": "900000",
+    "CLAUDE_CODE_DISABLE_ADVISOR_TOOL": "1",
 }
 
-# CharlieBot-chosen defaults, applied only when the host has not set the variable.
-# Claude Code compacts at window - min(max_output_tokens, 20000) - 13000, so declaring
-# a 433000 window puts the compaction point at 400000 tokens (433000 = 400000 + 13000
-# + 20000) instead of ~967000 under the model's full 1M window. The 13000 and 20000
-# terms are Claude Code internals: if a CLI upgrade changes them the compaction point
-# drifts silently and this constant has to be recomputed.
-HEADLESS_CLAUDE_DEFAULT_ENV: dict[str, str] = {
-    AUTO_COMPACT_WINDOW_ENV: "433000",
+# The auto-compact window each run kind declares, unless the host exports one.
+# Claude Code compacts at window - min(max_output_tokens, 20000) - 13000, so 183000
+# puts a manager turn's compaction point at 150000 tokens and 133000 puts every
+# other kind's at 100000 (the 13000 and 20000 terms are Claude Code internals: see
+# CLAUDE_COMPACT_OUTPUT_RESERVE and CLAUDE_COMPACT_CONTEXT_RESERVE below). A
+# manager turn spans many turns and must remember what the user said and delegated;
+# a worker or review run does one job, and its spec file and repo stay readable
+# after the context drops the detail.
+DECLARED_WINDOW_BY_RUN_KIND: dict[models.RunKind, int] = {
+    "manager_turn": 183_000,
+    "work": 133_000,
+    "review": 133_000,
+    "iteration": 133_000,
+    "scheduled_step": 133_000,
 }
+
 HEADLESS_CLAUDE_FORWARDED_ENV_NAMES: tuple[str, ...] = (
     AUTOCOMPACT_PCT_OVERRIDE_ENV,
     MAX_CONTEXT_TOKENS_ENV,
@@ -40,18 +61,37 @@ HEADLESS_CLAUDE_FORWARDED_ENV_NAMES: tuple[str, ...] = (
 )
 
 # The two Claude Code internals subtracted from the declared auto-compact window to
-# reach the real compaction point (see comment above HEADLESS_CLAUDE_DEFAULT_ENV).
+# reach the real compaction point (see the comment above DECLARED_WINDOW_BY_RUN_KIND).
 CLAUDE_COMPACT_OUTPUT_RESERVE = 20_000
 CLAUDE_COMPACT_CONTEXT_RESERVE = 13_000
 
 
-def headless_claude_env() -> dict[str, str]:
-  """Environment for every headless Claude Code subprocess.
+class ClaudeLaunchConfig(pydantic.BaseModel):
+  """``claude_launch:`` section: the launch settings of this host's Claude CLI runs.
 
-  Layered so a host export beats CharlieBot's own default: invariants first,
-  CharlieBot defaults next, allowlisted host values last.
+  ``name_only_skills`` maps a run kind to the skills this host measured as never used
+  by that kind of run. Claude Code lists every skill with its description in every
+  request; a listed name ships without its description and stays callable. The names
+  are host data, so they live in config.yaml, never in the repo. A kind the map does
+  not name, and a skill it does not name, list exactly as before.
   """
-  env = {**HEADLESS_CLAUDE_INVARIANT_ENV, **HEADLESS_CLAUDE_DEFAULT_ENV}
+  model_config = pydantic.ConfigDict(extra='forbid')
+
+  name_only_skills: dict[models.RunKind, list[str]] = {}
+
+
+def name_only_skills(cfg: config.CharlieBotConfig, run_kind: models.RunKind) -> tuple[str, ...]:
+  """The skill names this host lists by name only on a *run_kind* run; empty when it names none."""
+  return tuple(cfg.claude_launch.name_only_skills.get(run_kind, ()))
+
+
+def headless_claude_env(run_kind: models.RunKind) -> dict[str, str]:
+  """Environment for every headless Claude Code subprocess of a *run_kind* run.
+
+  Layered so a host export beats CharlieBot's per-kind default: invariants first,
+  the kind's declared window next, allowlisted host values last.
+  """
+  env = {**HEADLESS_CLAUDE_INVARIANT_ENV, AUTO_COMPACT_WINDOW_ENV: str(DECLARED_WINDOW_BY_RUN_KIND[run_kind])}
   for name in HEADLESS_CLAUDE_FORWARDED_ENV_NAMES:
     if name in os.environ:
       env[name] = os.environ[name]

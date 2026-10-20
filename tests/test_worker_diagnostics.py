@@ -50,6 +50,7 @@ async def test_worker_writes_hang_diagnostics_and_emits_event(tmp_path: pathlib.
       events_log_path=events_log,
       task_description="ignored",
       cfg=cfg,
+      run_kind="work",
   )
 
   fake_backend = _FakeBackend(exit_code=143, hang_diagnostics=fake_diag)
@@ -91,6 +92,7 @@ async def test_worker_no_hang_diagnostics_does_not_write_file(tmp_path: pathlib.
       events_log_path=events_log,
       task_description="ignored",
       cfg=cfg,
+      run_kind="work",
   )
 
   fake_backend = _FakeBackend(exit_code=0, hang_diagnostics=None)

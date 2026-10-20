@@ -42,7 +42,7 @@ import re
 from collections.abc import Awaitable, Callable
 
 from src.backends.claude_code import claude_accounts, claude_code, claude_launch
-from src.infra import config, log_once, process
+from src.infra import config, log_once, models, process
 from src.infra import event_types as ET
 from src.runtime import model_family
 from src.runtime.agent_process import base
@@ -213,13 +213,13 @@ def compaction_command(cc_session_id: str) -> list[str]:
   ]
 
 
-def compaction_env(config_dir: str | pathlib.Path) -> dict[str, str]:
-  """Headless Claude Code environment pinned to one login directory.
+def compaction_env(config_dir: str | pathlib.Path, run_kind: models.RunKind) -> dict[str, str]:
+  """Headless Claude Code environment of a *run_kind* run, pinned to one login directory.
 
   The host's own CLAUDE_CONFIG_DIR never reaches the child: the pool chose the
   directory and an inherited value would silently pick another account.
   """
-  env = {**claude_code.claude_supervisor_env(os.environ), **claude_launch.headless_claude_env()}
+  env = {**claude_code.claude_supervisor_env(os.environ), **claude_launch.headless_claude_env(run_kind)}
   env.pop(config.CLAUDE_CONFIG_DIR_ENV_VAR, None)
   env[config.CLAUDE_CONFIG_DIR_ENV_VAR] = str(pathlib.Path(config_dir).expanduser())
   return env
@@ -393,10 +393,14 @@ async def compact_with_sonnet(
     pre_tokens: int | None,
     persist_and_broadcast: Callable[[dict], Awaitable[None]],
     log_context: dict,
+    run_kind: models.RunKind,
     timeout: float = CLAUDE_COMPACTION_TIMEOUT,
     cgroup_session_id: str | None = None,
 ) -> bool:
   """Compact *cc_session_id*'s transcript under *config_dir* with Sonnet; True on success.
+
+  *run_kind* is the kind of Run whose session is compacted: the subprocess declares that
+  kind's auto-compact window, as the session's own processes do.
 
   Emits one ``context_compacted`` (``model`` = Sonnet; ``compact_metadata`` is the new
   boundary row's payload, with the caller's pre-compaction reading winning for
@@ -405,7 +409,7 @@ async def compact_with_sonnet(
   """
   outcome = await run_compaction(
       argv=compaction_command(cc_session_id),
-      env=compaction_env(config_dir),
+      env=compaction_env(config_dir, run_kind),
       cwd=cwd,
       config_dir=config_dir,
       cc_session_id=cc_session_id,

@@ -159,15 +159,15 @@ async def _worker_messages_page(
   return (messages, entry.projection.pending_draft, entry.projection.event_count, oldest_ordinal, has_more, entry)
 
 
-async def _worker_usage(tree: task_sessions.TaskTreeManager, session_id: str) -> dict | None:
+async def _worker_usage(tree: task_sessions.TaskTreeManager, session_id: str, run_kind: models.RunKind) -> dict | None:
   """Display usage folded over a worker node's Run transcript events.
 
   The header's context reading is the newest Run's last context_reading event;
   the same tier resolution the chat usage applies picks it from the projected
-  event list.
+  event list, and *run_kind* is the node's kind (``session_usage.usage_run_kind``).
   """
   entry = await asyncio.to_thread(worker_transcript.load_worker_transcript, tree, session_id)
-  return await asyncio.to_thread(session_usage.resolve_events_usage, entry.events)
+  return await asyncio.to_thread(session_usage.resolve_events_usage, entry.events, run_kind)
 
 
 async def _messages_page(

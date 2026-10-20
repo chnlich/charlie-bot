@@ -181,6 +181,7 @@ async def _run(
       pre_tokens=pre_tokens,
       persist_and_broadcast=persist,
       log_context={"session": "s1"},
+      run_kind="manager_turn",
       timeout=timeout,
   )
   return ok, events, captured

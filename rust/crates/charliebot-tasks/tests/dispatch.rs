@@ -11,7 +11,7 @@ use charliebot_registry::context::{FeatureContext, StartupState};
 use charliebot_store::StoreError;
 use charliebot_store::StoreResult;
 use charliebot_store::metadata::TaskProfile;
-use charliebot_store::run_records::{self, RunOutcome, RunOutcomeKind};
+use charliebot_store::run_records::{self, RunKind, RunOutcome, RunOutcomeKind, RunRecord, SequenceRef};
 use charliebot_tasks::dispatch::{
   DispatchExecutor, child_report_text, dispatcher, inputs_not_pending_conflict, note_run_liveness,
   unprocessed_input_blocker,
@@ -240,6 +240,38 @@ async fn stopped_queued_run_releases_its_claim_and_is_not_launched() {
     run_records::terminal_outcome(&harness.store.load_all_facts(&task.id).unwrap(), "run-stopped").unwrap().is_none()
   );
   assert!(harness.store.facts_of(&task.id).unwrap().confirmed_input_ids.contains("retry-1"));
+}
+
+#[tokio::test]
+async fn dispatcher_never_launches_a_queued_sequence_run() {
+  // Python: tests/test_sequence_controller_runs.py::test_dispatcher_never_launches_a_queued_sequence_run.
+  let harness = Harness::new();
+  let manager = harness.create_task("root", None, TaskProfile::Manager, "PM").await;
+  let leaf = harness.create_task("leaf", Some(&manager.id), TaskProfile::Worker, "leaf").await;
+  // The owning package is gone: no registered controller claims this kind.
+  let run = RunRecord {
+    kind: RunKind::Iteration,
+    sequence_ref: Some(SequenceRef {
+      kind: "deleted_feature".to_string(),
+      owner_ref: "deleted:loop-1".to_string(),
+      position: 1,
+    }),
+    ..new_run(&leaf.id, "seq-run")
+  };
+  {
+    let guard = harness.store.control_lock().await;
+    harness.store.register_run_locked(&guard, &leaf.id, run, None).await.expect("queued run registers");
+  }
+  // The executor has no scripted outcome, so a launch would fail the dispatch instead of passing silently.
+  harness.install_executor(Vec::new());
+
+  let decision = harness.dispatcher.dispatch_pending(&leaf.id).await.unwrap();
+
+  assert_eq!(decision["launch"], false);
+  let stored = harness.store.read_run_sync(&leaf.id, "seq-run").unwrap().expect("the queued run stays registered");
+  assert_eq!(stored.pid, None, "nothing started");
+  let events = harness.store.load_all_facts(&leaf.id).unwrap();
+  assert!(run_records::terminal_outcome(&events, "seq-run").unwrap().is_none(), "nothing landed");
 }
 
 #[tokio::test]

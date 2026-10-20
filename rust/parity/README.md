@@ -86,6 +86,10 @@ uv run python rust/parity/parity.py --python-vs-python --stage features
   such a scenario exits before starting any server when the file is absent, and the message names this flag.
 - `--strace PATH` selects the strace binary that traces every process under test. Its default is `/usr/bin/strace`.
   A run exits before starting any server when PATH is not an executable file, and the message names PATH.
+- `--tmux PATH` selects the tmux executable that each server resolves on its PATH. Its default is
+  `/usr/bin/tmux`. The harness links PATH into each tree's fake-bin directory under the name `tmux`, so a server
+  reaches that file and none of the other programs beside it. A run exits before starting any server when PATH is
+  not an executable file, and the message names PATH.
 - `--keep` keeps the trees and logs after the run. Without it the run removes its scratch tree whether the steps
   pass or fail, and a failed run prints one line that names `--keep` as the way to inspect the trees. Each run's
   directory is named `NN-RR` (scenario index, run number), so the socket path under its tree stays within 107 bytes;

@@ -45,6 +45,8 @@ CLOSED_PROXY = "http://127.0.0.1:9"
 HARNESS_ENTRIES = (".opencode", "fake-agent", "fake-bin", "fixture-manifest.json", "logs")
 # The name prefix of the headless Chrome profile that each server makes under its tree's tmp/ (its TMPDIR).
 HEADLESS_PROFILE_PREFIX = "headless-render-"
+# The tmux a tree's server resolves on its PATH unless --tmux names another one.
+TMUX_BIN = pathlib.Path("/usr/bin/tmux")
 # Syscalls that change a file or directory. openat/open/creat count only with a write flag (guard.py checks).
 TRACED_SYSCALLS = (
     "open", "openat", "openat2", "creat", "mkdir", "mkdirat", "mknod", "mknodat", "rename", "renameat", "renameat2",
@@ -106,6 +108,16 @@ def make_tree(label: str, root: pathlib.Path) -> Tree:
   opencode_wrapper.write_text("\n".join(("#!/bin/sh", command)) + "\n", encoding="utf-8")
   opencode_wrapper.chmod(0o755)
   return tree
+
+
+def link_tmux(tree: Tree, tmux: pathlib.Path) -> None:
+  """Put *tmux* on the tree's PATH as ``tmux``, and nothing else from its directory.
+
+  A host may carry tmux only as a wrapper outside /usr/bin (a tools directory, say), so the harness links the
+  executable the option names into the tree's fake-bin, which comes first on the server's sanitized PATH. The server
+  then resolves ``tmux`` to that file and never sees the other programs beside it.
+  """
+  (tree.fake_bin / "tmux").symlink_to(tmux)
 
 
 def write_home_config(

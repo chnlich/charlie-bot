@@ -129,6 +129,29 @@ def test_log_event_wait_ignores_a_line_until_its_newline_arrives(tmp_path: pathl
     writer.join()
 
 
+def test_tmux_link_gives_each_tree_the_given_executable_and_nothing_beside_it(short_root: pathlib.Path) -> None:
+  tools = short_root / "tools" / "bin"
+  tools.mkdir(parents=True)
+  tmux = tools / "tmux"
+  tmux.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+  tmux.chmod(0o755)
+  beside = tools / "beside-tmux"
+  beside.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+  beside.chmod(0o755)
+  sides = [
+      parity.Side(label, servers.make_tree(label, short_root / label), 1, servers.STRACE_BIN)
+      for label in ("base", "cand")
+  ]
+  parity._link_tmux(sides, tmux)
+  for side in sides:
+    link = side.tree.fake_bin / "tmux"
+    assert link.is_symlink()
+    assert link.resolve() == tmux.resolve()
+    path = servers.server_env(side.tree, REPO_ROOT)["PATH"]
+    assert shutil.which("tmux", path=path) == str(link)
+    assert shutil.which("beside-tmux", path=path) is None
+
+
 def test_headless_chrome_link_points_each_tree_at_the_binary(short_root: pathlib.Path) -> None:
   chrome = short_root / "headless_shell"
   chrome.write_bytes(b"")
@@ -167,5 +190,20 @@ def test_traced_argv_runs_the_strace_it_is_given(tmp_path: pathlib.Path) -> None
 def test_preflight_exits_naming_a_missing_strace(tmp_path: pathlib.Path) -> None:
   missing = tmp_path / "strace"
   with pytest.raises(SystemExit, match="missing strace") as error:
-    parity._preflight(None, missing)
+    parity._preflight(None, missing, pathlib.Path(sys.executable))
   assert str(missing) in str(error.value)
+
+
+def test_preflight_exits_naming_a_missing_tmux(tmp_path: pathlib.Path) -> None:
+  missing = tmp_path / "tmux"
+  with pytest.raises(SystemExit, match="missing tmux") as error:
+    parity._preflight(None, pathlib.Path(sys.executable), missing)
+  assert str(missing) in str(error.value)
+
+
+def test_preflight_exits_naming_a_tmux_that_is_not_an_executable_file(tmp_path: pathlib.Path) -> None:
+  directory = tmp_path / "tmux"
+  directory.mkdir()
+  with pytest.raises(SystemExit, match="missing tmux") as error:
+    parity._preflight(None, pathlib.Path(sys.executable), directory)
+  assert str(directory) in str(error.value)

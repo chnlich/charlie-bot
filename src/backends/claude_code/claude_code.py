@@ -132,7 +132,7 @@ def headless_claude_declared_window(run_kind: models.RunKind) -> tuple[int, int 
 
   ``declared_window`` is the auto-compact window the CLI advertises. ``compact_point``
   is ``declared_window − CLAUDE_COMPACT_OUTPUT_RESERVE − CLAUDE_COMPACT_CONTEXT_RESERVE``
-  (150000 for a manager turn's 183000 window, 100000 for every other kind's 133000);
+  (400000 for a manager turn's 433000 window, 100000 for every other kind's 133000);
   the caller derives the real compaction point from the effective ``context_full``
   (``min(model contextWindow, declared_window)``) using the same constants. Degrades
   loudly, never silently:

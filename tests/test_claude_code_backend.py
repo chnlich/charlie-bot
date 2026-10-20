@@ -144,7 +144,7 @@ def _settings_of(cmd: list[str]) -> dict:
 @pytest.mark.usefixtures("_clean_window_env")
 @pytest.mark.parametrize(
     ("run_kind", "window"), [
-        pytest.param("manager_turn", "183000", id="manager-turn"),
+        pytest.param("manager_turn", "433000", id="manager-turn"),
         pytest.param("work", "133000", id="work"),
         pytest.param("review", "133000", id="review"),
         pytest.param("iteration", "133000", id="iteration"),

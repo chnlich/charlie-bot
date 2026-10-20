@@ -584,7 +584,7 @@ async fn verify_unknown_explicit_backend_returns_400() -> anyhow::Result<()> {
 
 /// `test_internal_delegate_takeoff.py::test_delegate_child_and_its_later_runs_keep_the_requested_backend` (partial):
 /// the requested backend stays on the child record, its first work run, and the next work run the dispatcher reserves.
-/// The review-chain half (a review on a pool member other than the work run's backend) is not ported: the review spawn
+/// The review half (a review on a pool member other than the work run's backend) is not ported: the review spawn
 /// is private to the task execution adapter.
 #[tokio::test]
 async fn delegate_child_and_its_later_runs_keep_the_requested_backend() -> anyhow::Result<()> {

@@ -33,12 +33,16 @@ _UUID = re.compile(r"(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-
 _VOICE_STEM = re.compile(r"\b\d{4}-\d{2}-\d{2}T\d{6}\.\d{3}Z_[0-9a-f]{8}\b")
 _ISO_WALL_CLOCK = r"(?P<date>\d{4}-\d{2}-\d{2}T)(?P<value>\d{2}:\d{2}:\d{2}(?:\.\d{6})?)(?P<offset>[+-]\d{2}:\d{2})"
 # The ` · ` form is the cron leaf session name `<task name> · <firing>` that cron_sequence.py:257 writes. It reaches the
-# compared files as metadata.json's `name`, as the `- Session:` line of launch_prompt.md (prompts/worker.md:3, rendered
-# by task_prompts.render_session_info) and in the spawn stdin. A task name is one word that starts with a letter or
-# digit (loader.py _valid_cron_name), so the form is that word at the start of a text or after whitespace.
+# compared files and responses as `SessionMetadata.name` (src/infra/models.py), in `run_token_claims.agent`
+# (task_execution.py:1146, recorded in fake-agent/spawns.jsonl), and as the `- Session:` line in the rendered prompt
+# (prompts/worker.md:3, task_prompts.render_session_info), which is also recorded in fake-agent stdin. Match the exact
+# name in session and run-claim JSON, plus that fixed prompt line; loader.py _valid_cron_name defines its slug.
 _CRON_FIRING_STAMP = re.compile(
-    rf"(?P<prefix>cron:[^:\s]+:|(?<!\S)[A-Za-z0-9][A-Za-z0-9._-]* · ){_ISO_WALL_CLOCK}"
+    rf"(?P<cron_prefix>cron:[^:\s]+:){_ISO_WALL_CLOCK}"
     r"(?P<suffix>:(?:leaf|work|step:\d+))?(?=$|\s)")
+_CRON_SESSION_LINE_STAMP = re.compile(
+    rf"(?m)^- Session: (?P<leaf_name>[A-Za-z0-9][A-Za-z0-9._-]* · ){_ISO_WALL_CLOCK}(?=\r?$)")
+_CRON_LEAF_NAME_STAMP = re.compile(rf"[A-Za-z0-9][A-Za-z0-9._-]* · {_ISO_WALL_CLOCK}")
 _MERGED_TRACE_CACHE_PATH = re.compile(r"^home/cache/perfetto_merge/[0-9a-f]{64}\.json\.gz$")
 _TEMP_DIR_SUFFIX = re.compile(r"\bcharliebot-(?:explain|oneshot|run)-(?P<value>[a-z0-9_]{8})(?![a-z0-9_])")
 _TASK_BRANCH_TIMESTAMP = re.compile(r"\b(?P<prefix>charliebot(?:/|-)task-)(?P<value>\d{10})(?P<suffix>-[0-9a-f]{8})\b")
@@ -815,8 +819,10 @@ def normalize_text(text: str, ctx: Context) -> str:
   normalized = TEMP_DIR_SUFFIX_RULE.pattern.sub(_mask_temp_dir_suffix, normalized)
   normalized = TASK_BRANCH_TIMESTAMP_RULE.pattern.sub(_mask_task_branch_timestamp, normalized)
   normalized = _CRON_FIRING_STAMP.sub(
-      lambda match: (f"{match['prefix']}{match['date']}<cron-firing-time>{match['offset']}{match['suffix'] or ''}"),
+      lambda match: f"{match['cron_prefix']}{match['date']}<cron-firing-time>{match['offset']}{match['suffix'] or ''}",
       normalized)
+  normalized = _CRON_SESSION_LINE_STAMP.sub(
+      lambda match: f"- Session: {match['leaf_name']}{match['date']}<cron-firing-time>{match['offset']}", normalized)
   return _UUID.sub(replace_uuid, normalized)
 
 
@@ -834,7 +840,20 @@ def _normalize_strings(value: Any, ctx: Context) -> Any:
   if isinstance(value, list):
     return [_normalize_strings(item, ctx) for item in value]
   if isinstance(value, dict):
-    return {normalize_text(key, ctx): _normalize_strings(item, ctx) for key, item in value.items()}
+    is_session = {"id", "name", "profile", "task_parent_id"} <= value.keys()
+    is_run_token_claims = {"agent", "run_id", "session_id"} <= value.keys()
+    normalized = {}
+    for key, item in value.items():
+      normalized_key = normalize_text(key, ctx)
+      normalized_item = _normalize_strings(item, ctx)
+      is_cron_leaf_name = (is_session and key == "name") or (is_run_token_claims and key == "agent")
+      if is_cron_leaf_name and isinstance(normalized_item, str):
+        match = _CRON_LEAF_NAME_STAMP.fullmatch(normalized_item)
+        if match is not None:
+          normalized_item = (
+              normalized_item[:match.start("value")] + "<cron-firing-time>" + normalized_item[match.end("value"):])
+      normalized[normalized_key] = normalized_item
+    return normalized
   return value
 
 

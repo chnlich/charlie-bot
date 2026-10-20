@@ -673,6 +673,21 @@ def test_cron_firing_masks_the_clock_stamp_and_keeps_the_task_identity() -> None
       "- Session: synthetic-cron · 2026-10-20T09:26:06.735915+00:00\n"
       "cron:synthetic-cron:2026-10-20T09:26:06.735915+00:00:leaf")
   assert normalize.normalize_text(earlier, _context()) == normalize.normalize_text(later, _context())
+  leaf = {
+      "id": "synthetic-session",
+      "name": "synthetic-cron · 2026-10-20T09:26:06.696542+00:00",
+      "profile": "worker",
+      "task_parent_id": "synthetic-parent",
+  }
+  normalized_leaf = normalize.normalize_json(leaf, (), _context())
+  assert normalized_leaf["name"] == "synthetic-cron · 2026-10-20T<cron-firing-time>+00:00"
+  claims = {
+      "session_id": "synthetic-session",
+      "run_id": "synthetic-run",
+      "agent": leaf["name"],
+  }
+  normalized_claims = normalize.normalize_json({"run_token_claims": claims}, (), _context())
+  assert normalized_claims["run_token_claims"]["agent"] == "synthetic-cron · 2026-10-20T<cron-firing-time>+00:00"
   assert normalize.normalize_text("cron:another-task:2026-10-20T09:26:06.696542+00:00:leaf", _context()) != (
       normalize.normalize_text("cron:synthetic-cron:2026-10-20T09:26:06.696542+00:00:leaf", _context()))
   assert normalize.normalize_text("cron:synthetic-cron:2026-10-20T09:26:06.696542+00:00:leaf",
@@ -686,11 +701,16 @@ def test_cron_firing_masks_the_clock_stamp_and_keeps_the_task_identity() -> None
                                       "cron:synthetic-cron:2026-10-20T09:26:06.696542001+00:00:leaf", _context())
 
 
-def test_dot_separated_stamp_after_a_slashed_topic_stays_visible() -> None:
+def test_dot_separated_stamp_in_other_text_stays_visible() -> None:
   # A memory index line is `<topic>/<slug> · <title>` (src/features/memory/memory.py:375), and no cron firing writes
   # it, so its stamp is not a leaf name's wall-clock time.
   memory_line = "charliebot/local-checks · 2026-10-20T09:26:06.696542+00:00"
   assert normalize.normalize_text(memory_line, _context()) == memory_line
+  leaf_shaped_text = "synthetic-cron · 2026-10-20T09:26:06.696542+00:00"
+  assert normalize.normalize_text(leaf_shaped_text, _context()) == leaf_shaped_text
+  note = "Operator note: synthetic-cron · 2026-10-20T09:26:06.696542+00:00 should remain visible."
+  assert normalize.normalize_text(note, _context()) == note
+  assert normalize.normalize_json({"name": leaf_shaped_text}, (), _context()) == {"name": leaf_shaped_text}
 
 
 def test_cron_last_scheduled_run_masks_the_stamp_and_keeps_the_expression() -> None:

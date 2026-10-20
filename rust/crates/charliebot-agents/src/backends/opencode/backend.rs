@@ -808,13 +808,19 @@ struct OpenCodeOneShotRequest {
   timeout: Option<Duration>,
 }
 
+/// The one-shot XDG root, matching Python's `charliebot-opencode-oneshot-*` mkdtemp in
+/// src/backends/opencode/opencode.py; removing it is the Drop of the returned TempDir.
+fn oneshot_root() -> anyhow::Result<tempfile::TempDir> {
+  Ok(tempfile::Builder::new().prefix("charliebot-opencode-oneshot-").tempdir()?)
+}
+
 async fn run_one_shot(request: OpenCodeOneShotRequest) -> anyhow::Result<String> {
   let OpenCodeOneShotRequest { host, model, proxy_url, cgroup_session_id, base_env, prompt, system, timeout } = request;
   if !host.program.program.is_file() {
     bail!("opencode 2.0 binary not found at {}", host.program.display.display());
   }
   let framed = crate::one_shot::frame_system_prompt(&system, &prompt);
-  let root = tempfile::Builder::new().prefix("charliebot-opencode-oneshot-").tempdir()?;
+  let root = oneshot_root()?;
   let mut env = base_env;
   env.extend(host.extra_env.clone());
   env.insert("XDG_DATA_HOME".to_string(), root.path().join("data").display().to_string());
@@ -956,4 +962,15 @@ fn object_or_empty(value: Option<&Value>) -> anyhow::Result<&Map<String, Value>>
     Some(Value::Object(object)) => Ok(object),
     Some(value) => bail!("OpenCode event data must be an object, got {value}"),
   }
+}
+
+#[test]
+fn oneshot_root_uses_the_python_prefix_and_is_removed_on_drop() {
+  let root = oneshot_root().expect("creating the opencode one-shot root");
+  let name = root.path().file_name().and_then(|n| n.to_str()).expect("one-shot root has a file name").to_string();
+  assert!(name.starts_with("charliebot-opencode-oneshot-"), "unexpected one-shot root name: {name}");
+  let path = root.path().to_path_buf();
+  assert!(path.exists());
+  drop(root);
+  assert!(!path.exists(), "one-shot root survived its drop: {}", path.display());
 }

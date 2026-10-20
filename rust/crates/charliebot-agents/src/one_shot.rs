@@ -108,7 +108,8 @@ pub(crate) fn assistant_text(event: &Value) -> String {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use std::path::Path;
+  use std::fs;
+  use std::path::{Path, PathBuf};
 
   use charliebot_registry::Registry;
   use charliebot_registry::backend::{AgentBackend, Env, LaunchArgs, Translate, TransportKind};
@@ -117,6 +118,8 @@ mod tests {
   struct ScriptedBackend {
     script: String,
     native_answer: Option<String>,
+    /// The transport directory the runner handed to `prepare_transport`.
+    seen_log_dir: Arc<Mutex<Option<PathBuf>>>,
   }
 
   impl AgentBackend for ScriptedBackend {
@@ -124,7 +127,8 @@ mod tests {
       None
     }
 
-    fn prepare_transport(&mut self, _log_dir: &Path) -> anyhow::Result<()> {
+    fn prepare_transport(&mut self, log_dir: &Path) -> anyhow::Result<()> {
+      *self.seen_log_dir.lock().expect("seen log dir lock is not poisoned") = Some(log_dir.to_path_buf());
       Ok(())
     }
 
@@ -191,8 +195,12 @@ mod tests {
       "EVENTS\n"
     )
     .to_string();
+    // The script records its working directory so the test can check the one-shot cwd removal.
+    let record = root.path().join("cwd.txt");
+    let script = format!("pwd > {};\n{}", record.display(), script);
+    let seen_log_dir = Arc::new(Mutex::new(None));
     let built = BuiltBackend {
-      backend: Box::new(ScriptedBackend { script, native_answer: None }),
+      backend: Box::new(ScriptedBackend { script, native_answer: None, seen_log_dir: Arc::clone(&seen_log_dir) }),
       launch: LaunchArgs {
         instructions_content: Some("must not be written".to_string()),
         instructions_file: Some(instructions_file.clone()),
@@ -209,13 +217,35 @@ mod tests {
 
     assert_eq!(answer, "first");
     assert!(!instructions_file.exists());
+
+    // The run's throwaway transport dir (`charliebot-run-*`, Python base.py's temp_log_dir) and the
+    // one-shot cwd (`charliebot-oneshot-*`) are both gone once the call returns.
+    let log_dir = seen_log_dir
+      .lock()
+      .expect("seen log dir lock is not poisoned")
+      .clone()
+      .expect("prepare_transport did not observe the run's log dir");
+    assert!(
+      log_dir.file_name().and_then(|name| name.to_str()).unwrap_or("").starts_with("charliebot-run-"),
+      "unexpected run log dir name: {}",
+      log_dir.display()
+    );
+    assert!(!log_dir.exists(), "run log dir survived the run: {}", log_dir.display());
+    let cwd = fs::read_to_string(&record).unwrap();
+    let cwd = cwd.trim();
+    assert!(cwd.rsplit('/').next().unwrap().starts_with("charliebot-oneshot-"), "unexpected one-shot cwd: {cwd}");
+    assert!(!Path::new(cwd).exists(), "one-shot cwd survived the call: {cwd}");
   }
 
   #[tokio::test]
   async fn dispatcher_takes_the_native_one_shot_and_falls_back_to_the_tool_capable_one() {
     let base_env = Env::from([("PATH".to_string(), "/bin:/usr/bin".to_string())]);
     let native = BuiltBackend {
-      backend: Box::new(ScriptedBackend { script: "exit 1".to_string(), native_answer: Some("native".to_string()) }),
+      backend: Box::new(ScriptedBackend {
+        script: "exit 1".to_string(),
+        native_answer: Some("native".to_string()),
+        seen_log_dir: Arc::new(Mutex::new(None)),
+      }),
       launch: LaunchArgs::default(),
       registry: Arc::new(Registry::new()),
     };
@@ -223,7 +253,11 @@ mod tests {
 
     let script = "printf '%s\\n' '{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"tool-capable\"}]}}' '{\"type\":\"result\"}'";
     let tool_capable = BuiltBackend {
-      backend: Box::new(ScriptedBackend { script: script.to_string(), native_answer: None }),
+      backend: Box::new(ScriptedBackend {
+        script: script.to_string(),
+        native_answer: None,
+        seen_log_dir: Arc::new(Mutex::new(None)),
+      }),
       launch: LaunchArgs::default(),
       registry: Arc::new(Registry::new()),
     };

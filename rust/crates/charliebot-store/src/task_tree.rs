@@ -1118,7 +1118,7 @@ impl Store {
     let sessions_dir = self.cfg.sessions_dir();
     fs::create_dir_all(&sessions_dir).map_err(|error| path_error(&sessions_dir, error))?;
     let final_dir = sessions_dir.join(&meta.id);
-    let temp_dir = sessions_dir.join(format!(".task-{}-{}.tmp", meta.id, uuid::Uuid::new_v4().simple()));
+    let temp_dir = sessions_dir.join(staging_dir_name(&meta.id));
     fs::create_dir(&temp_dir).map_err(|error| path_error(&temp_dir, error))?;
     let operation = (|| {
       let data_dir = temp_dir.join("data");
@@ -1599,6 +1599,12 @@ fn count_session_dirs(sessions_dir: &Path) -> StoreResult<i64> {
 
 fn path_error(path: &Path, error: impl std::fmt::Display) -> StoreError {
   StoreError::new(format!("{}: {error}", path.display()))
+}
+
+/// The unpublished create's staging directory name, matching Python's
+/// `.task-{task_id}-{os.getpid()}-{uuid4().hex}.tmp` in src/runtime/task_sessions.py.
+fn staging_dir_name(task_id: &str) -> String {
+  format!(".task-{}-{}-{}.tmp", task_id, std::process::id(), uuid::Uuid::new_v4().simple())
 }
 
 #[cfg(test)]
@@ -2735,4 +2741,22 @@ pub(crate) mod tests {
     );
     assert_eq!(task_spec_hash(&verify).unwrap(), "9e765c73c0cf10b2fbaef99cb808d77a04b4451cc5924cdaa17b7ddf4c6f106b");
   }
+}
+
+#[test]
+fn staging_dir_name_carries_task_id_process_id_and_uuid() {
+  let name = staging_dir_name("synthetic-task-id");
+  // The tree walkers skip staging dirs on the `.task-` prefix and `.tmp` suffix alone
+  // (task_tree.rs build_tree_index, charliebot-core v1_sessions count), so both ends must hold.
+  assert!(name.starts_with(".task-synthetic-task-id-"), "unexpected staging name prefix: {name}");
+  assert!(name.ends_with(".tmp"), "unexpected staging name suffix: {name}");
+  let body = name.trim_start_matches(".task-").trim_end_matches(".tmp");
+  let mut parts = body.rsplitn(3, '-');
+  let uuid_part = parts.next().expect("staging name has no uuid segment");
+  let pid_part = parts.next().expect("staging name has no pid segment");
+  let id_part = parts.next().expect("staging name has no task id segment");
+  assert_eq!(id_part, "synthetic-task-id");
+  assert_eq!(pid_part.parse::<u32>().unwrap(), std::process::id());
+  assert_eq!(uuid_part.len(), 32);
+  assert!(uuid_part.chars().all(|c| c.is_ascii_hexdigit()));
 }

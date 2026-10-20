@@ -3,7 +3,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use charliebot_core::fsutil;
+use charliebot_core::{fsutil, pystr};
 use serde_json::Value;
 
 use crate::metadata::{SessionMetadata, UtcDateTime};
@@ -326,6 +326,10 @@ impl Store {
   }
 
   /// Archive the oldest consecutive events before `cutoff` and advance metadata `archive_offset`.
+  ///
+  /// The live log is decoded as strict UTF-8 before any write, as Python's `open(encoding="utf-8")` does. Invalid
+  /// UTF-8, a non-object line, or a truthy non-string `timestamp` before the split point fails before any write, so
+  /// the live log, the archive and `archive_offset` stay unchanged.
   pub async fn archive_events_before(&self, session_id: &str, cutoff: UtcDateTime) -> StoreResult<Option<PathBuf>> {
     let live_path = self.chat_events_path(session_id);
     let raw = match fs::read(&live_path) {
@@ -333,47 +337,28 @@ impl Store {
       Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
       Err(error) => return Err(StoreError::new(format!("{}: {error}", live_path.display()))),
     };
+    let text = std::str::from_utf8(&raw).map_err(|error| {
+      StoreError::new(format!("{}: invalid UTF-8 at byte {}", live_path.display(), error.valid_up_to()))
+    })?;
+    // Universal newlines: `\r\n` and a lone `\r` end a line as `\n` does. `split_terminator` keeps a final line
+    // without a terminator and drops the empty tail after a terminated one.
+    let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
     let mut archived_raw = Vec::new();
     let mut kept_raw = Vec::new();
     let mut split_reached = false;
-    let mut lines: Vec<&[u8]> = raw.split(|byte| *byte == b'\n').collect();
-    if raw.is_empty() {
-      lines.clear();
-    } else if raw.ends_with(b"\n") {
-      lines.pop();
-    }
-    for line in lines {
-      let line = line.strip_suffix(b"\r").unwrap_or(line);
+    for (index, line) in normalized.split_terminator('\n').enumerate() {
       if split_reached {
-        kept_raw.push(line.to_vec());
+        kept_raw.push(line);
         continue;
       }
-      if line.iter().all(u8::is_ascii_whitespace) {
+      if pystr::strip(line).is_empty() {
         continue;
       }
-      let Some(event) = ndjson::parse_line(line) else {
-        split_reached = true;
-        kept_raw.push(line.to_vec());
-        continue;
-      };
-      let Some(timestamp) = event.get("timestamp").and_then(Value::as_str) else {
-        split_reached = true;
-        kept_raw.push(line.to_vec());
-        continue;
-      };
-      let parsed = match UtcDateTime::parse(timestamp) {
-        Ok(value) => value,
-        Err(_) => {
-          split_reached = true;
-          kept_raw.push(line.to_vec());
-          continue;
-        }
-      };
-      if parsed < cutoff {
-        archived_raw.push(line.to_vec());
+      if archives_line(line, cutoff, &live_path, index + 1)? {
+        archived_raw.push(line);
       } else {
         split_reached = true;
-        kept_raw.push(line.to_vec());
+        kept_raw.push(line);
       }
     }
     if archived_raw.is_empty() {
@@ -391,14 +376,14 @@ impl Store {
       .map_err(|error| StoreError::new(format!("{}: {error}", archive_path.display())))?;
     for line in &archived_raw {
       archive
-        .write_all(line)
+        .write_all(line.as_bytes())
         .and_then(|()| archive.write_all(b"\n"))
         .map_err(|error| StoreError::new(format!("{}: {error}", archive_path.display())))?;
     }
     drop(archive);
     let mut replacement = String::new();
     for line in kept_raw {
-      replacement.push_str(&String::from_utf8_lossy(&line));
+      replacement.push_str(line);
       replacement.push('\n');
     }
     fsutil::atomic_write_text(&live_path, &replacement)
@@ -475,6 +460,46 @@ fn python_event_timestamp(value: UtcDateTime) -> String {
     format!("{base}+00:00")
   } else {
     format!("{base}.{:06}+00:00", datetime.microsecond())
+  }
+}
+
+/// Whether a non-blank line before the split point is an event older than `cutoff`. A line that is not JSON, or
+/// whose `timestamp` is missing, falsy or unparsable, is not archived and starts the kept part. A JSON value that
+/// is not an object, or a truthy `timestamp` that is not a string, fails the archive, as Python raises on it.
+fn archives_line(line: &str, cutoff: UtcDateTime, live_path: &Path, line_number: usize) -> StoreResult<bool> {
+  let Ok(event) = serde_json::from_str::<Value>(pystr::strip(line)) else {
+    tracing::debug!(path = %live_path.display(), line = line_number, "chat_event_archive_parse_skip");
+    return Ok(false);
+  };
+  let Value::Object(event) = event else {
+    return Err(StoreError::new(format!("{}:{line_number}: chat event is not a JSON object", live_path.display())));
+  };
+  let timestamp = match event.get("timestamp") {
+    Some(timestamp) if python_truthy(timestamp) => timestamp,
+    _ => return Ok(false),
+  };
+  let Value::String(timestamp) = timestamp else {
+    return Err(StoreError::new(format!(
+      "{}:{line_number}: chat event timestamp is not a string",
+      live_path.display()
+    )));
+  };
+  let Ok(parsed) = UtcDateTime::parse(timestamp) else {
+    tracing::debug!(path = %live_path.display(), line = line_number, "chat_event_archive_ts_parse_skip");
+    return Ok(false);
+  };
+  Ok(parsed < cutoff)
+}
+
+/// Python's truth value for a parsed JSON value: `None`, `False`, zero, and empty strings, lists and objects are false.
+fn python_truthy(value: &Value) -> bool {
+  match value {
+    Value::Null => false,
+    Value::Bool(flag) => *flag,
+    Value::Number(number) => number.as_f64() != Some(0.0),
+    Value::String(text) => !text.is_empty(),
+    Value::Array(items) => !items.is_empty(),
+    Value::Object(fields) => !fields.is_empty(),
   }
 }
 

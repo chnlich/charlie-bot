@@ -75,7 +75,7 @@ the Python writer's no-fsync behavior.
 | `Store::load_chat_events_range(&self, session_id: &str, start: usize, end: usize) -> StoreResult<(Vec<ChatEvent>, bool)>` | `src/runtime/chat_events.py::ChatEventStore.load_chat_events_range` |
 | `Store::find_event_by_id(&self, session_id: &str, event_id: &str) -> StoreResult<Option<ChatEvent>>` | `src/runtime/session_dispatch.py` replay lookup |
 | `Store::get_chat_event_count_sync(&self, session_id: &str) -> StoreResult<usize>` | `src/runtime/chat_events.py::get_chat_event_count_sync`; `src/infra/ndjson.py::count_ndjson_lines` |
-| `Store::archive_events_before(&self, session_id: &str, cutoff: UtcDateTime) -> StoreResult<Option<PathBuf>>` | `src/runtime/chat_events.py::archive_old_chat_events_sync`; `src/runtime/session_lifecycle.py::recycle_history_before` |
+| `Store::archive_events_before(&self, session_id: &str, cutoff: UtcDateTime) -> StoreResult<Option<PathBuf>>` (strict UTF-8 decode; error cases below) | `src/runtime/chat_events.py::archive_old_chat_events_sync`; `src/runtime/session_lifecycle.py::recycle_history_before` |
 | `Store::append_control_fact(&self, guard: &ControlGuard, session_id: &str, event: Value) -> StoreResult<ChatEvent>` | `src/runtime/control_sink.py::ControlEventSink.append` |
 | `Store::control_lock(&self) -> ControlGuard` | `src/runtime/task_sessions.py::control_lock` |
 
@@ -103,6 +103,15 @@ agent-runtime caller switches to `SessionUsage::context_state`. `load_all_facts`
 minus the live event count, the archived events are the range read from 0 to that count, and archive files beyond
 that count stay unread. The shared form returns the live cache allocation directly when there are no archived
 events; with archived events it returns a shared allocation containing the composed history.
+
+`archive_events_before` decodes the whole live log as strict UTF-8 before any write, as Python's
+`open(encoding="utf-8")` does. Invalid UTF-8 returns a `StoreError` that names the path and the byte offset of the
+first invalid byte. Before the split point, a line that parses as JSON but is not an object returns a `StoreError`
+(Python's `AttributeError` on `event.get`), and so does a truthy `timestamp` that is not a string (Python's
+`TypeError` at the cutoff comparison). Each error returns before any write, so the live log, the archive file and
+`archive_offset` stay byte-identical. Lines end at `\r\n`, a lone `\r`, or `\n`, and a final line without an end is
+kept. A blank line before the split point (`pystr::strip` is empty) is dropped. Archived and kept lines are written
+with a trailing `\n`. A non-JSON line, or a falsy or unparsable `timestamp`, starts the kept part as in Python.
 
 ## Run records (S2, implemented)
 

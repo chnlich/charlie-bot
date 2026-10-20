@@ -5,7 +5,7 @@
 #[path = "support/recovery_process_guard.rs"]
 mod process_guard;
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -405,9 +405,11 @@ pub struct Stack {
 
 impl Drop for Stack {
   fn drop(&mut self) {
+    let mut session_ids = HashSet::new();
     match self.store().list_all_run_records_sync() {
       Ok(records) => {
-        for (_, run) in records {
+        for (session_id, run) in records {
+          session_ids.insert(session_id);
           if let Some(pid) = run.pid {
             self.process_guard.track(pid);
           }
@@ -415,6 +417,59 @@ impl Drop for Stack {
       }
       Err(error) => eprintln!("test process cleanup could not read run records: {error:#}"),
     }
+    track_processes_for_sessions(&self.process_guard, &session_ids);
+  }
+}
+
+fn track_processes_for_sessions(guard: &process_guard::ProcessGroupGuard, session_ids: &HashSet<String>) {
+  if session_ids.is_empty() {
+    return;
+  }
+  let session_environment = session_ids
+    .iter()
+    .map(|session_id| format!("CHARLIEBOT_SESSION_ID={session_id}").into_bytes())
+    .collect::<HashSet<_>>();
+  let entries = match std::fs::read_dir("/proc") {
+    Ok(entries) => entries,
+    Err(error) => {
+      let message = format!("test process cleanup could not read /proc: {error}");
+      if std::thread::panicking() {
+        eprintln!("{message}");
+      } else {
+        panic!("{message}");
+      }
+      return;
+    }
+  };
+  for entry in entries {
+    let entry = match entry {
+      Ok(entry) => entry,
+      Err(error) => {
+        report_process_scan_error(format!("test process cleanup could not read a /proc entry: {error}"));
+        return;
+      }
+    };
+    let Some(pid) = entry.file_name().to_str().and_then(|name| name.parse::<u32>().ok()) else { continue };
+    let environment = match std::fs::read(entry.path().join("environ")) {
+      Ok(environment) => environment,
+      // Processes can exit during this scan, and other users' /proc entries are not readable.
+      Err(error) if matches!(error.kind(), io::ErrorKind::NotFound | io::ErrorKind::PermissionDenied) => continue,
+      Err(error) => {
+        report_process_scan_error(format!("test process cleanup could not read pid {pid} environment: {error}"));
+        return;
+      }
+    };
+    if environment.split(|byte| *byte == 0).any(|variable| session_environment.contains(variable)) {
+      guard.track(pid);
+    }
+  }
+}
+
+fn report_process_scan_error(message: String) {
+  if std::thread::panicking() {
+    eprintln!("{message}");
+  } else {
+    panic!("{message}");
   }
 }
 

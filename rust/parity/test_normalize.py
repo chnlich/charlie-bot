@@ -452,6 +452,46 @@ def test_children_of_two_parents_that_start_in_opposite_order_keep_their_aliases
   assert parity._spawns_diff(sides, expect_starts=3) == []
 
 
+def test_children_of_a_bound_manager_group_under_its_name(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A cron task's manager is created by the scenario, so it is neither a fixture nor a spawn. Its leaf groups under
+  the manager's name, so a child of another parent that starts first in one tree does not move the leaf's alias."""
+  monkeypatch.delenv("CHARLIEBOT_RUN_TOKEN", raising=False)
+  fixture_parent = "10000000-0000-4000-8000-000000000001"
+  bound_manager = "10000000-0000-4000-8000-000000000002"
+  iteration = "10000000-0000-4000-8000-000000000011"
+  leaf = "10000000-0000-4000-8000-000000000012"
+  parent_of = {iteration: fixture_parent, leaf: bound_manager}
+  runs = {iteration: "20000000-0000-4000-8000-000000000011", leaf: "20000000-0000-4000-8000-000000000012"}
+  sides = []
+  snapshots = []
+  for label, order in (("base", (leaf, iteration)), ("cand", (iteration, leaf))):
+    records = [_spawn_record(index, session, runs[session], b"Firing prompt.") for index, session in enumerate(order)]
+    side = _spawn_side(tmp_path, monkeypatch, label, records)
+    side.ctx.fixture_uuids = frozenset({fixture_parent})
+    sides.append(side)
+    snapshots.append(
+        {
+            f"home/sessions/{bound_manager}/metadata.json":
+                compare.Entry("file",
+                              json.dumps({
+                                  "name": "synthetic-cron",
+                                  "task_parent_id": None
+                              }).encode()),
+            **{
+                f"home/sessions/{session}/metadata.json": _task_metadata(parent) for session, parent in parent_of.items(
+                )
+            },
+        })
+
+  parity._prepare_contexts(sides, snapshots)
+
+  base, cand = sides
+  for session in parent_of:
+    assert base.ctx.stable_uuids[session] == cand.ctx.stable_uuids[session]
+  assert parity._spawns_diff(sides, expect_starts=2) == []
+
+
 def test_interleaved_event_streams_do_not_seed_different_uuid_orders(tmp_path: pathlib.Path) -> None:
   ids = (
       "10000000-0000-4000-8000-000000000011",

@@ -311,10 +311,11 @@ def _prepare_contexts(
 def _seed_spawn_session_ids(snapshot: compare.Snapshot, records: list[dict], ctx: normalize.Context) -> None:
   """Give each spawned session an alias that names its task parent and its place among that parent's spawns.
 
-  The group is a hash of the parent's stable name (its fixture id, or its alias when the parent is itself a spawn),
-  or "root" for a session with no task parent. The position counts the group's spawns in first-launch order. No order
-  across groups reaches an alias. A cron firing's leaf session id derives from the firing's wall-clock stamp, so the two trees' ids differ;
-  the alias replaces each id before the tree numbers the minted ids.
+  The group is a hash of the parent's stable name: its fixture id, its alias when the parent is itself a spawn, or
+  its name for any other session the scenario created, such as a cron task's bound manager. A session with no task
+  parent is in the "root" group. The position counts the group's spawns in first-launch order, so no order across
+  groups reaches an alias. A cron firing's leaf session id derives from the firing's wall-clock stamp, so the two
+  trees' ids differ; the alias replaces each id before the tree numbers the minted ids.
   """
   parents: dict[str, str | None] = {}
   for record in records:
@@ -337,13 +338,22 @@ def _seed_spawn_session_ids(snapshot: compare.Snapshot, records: list[dict], ctx
     siblings[parent] += 1
     places[session_id] = siblings[parent]
   aliases: dict[str, str] = {}
+  parent_names: dict[str, str] = {}
 
   def parent_key(parent: str) -> str:
     if parent in ctx.fixture_uuids:
       return parent
-    if parent not in parents:
-      raise RuntimeError(f"task parent {parent!r} of a spawned session is neither a fixture nor a spawned session")
-    return alias_of(parent)
+    if parent in parents:
+      return alias_of(parent)
+    if parent not in parent_names:
+      metadata = snapshot.get(f"home/sessions/{parent}/metadata.json")
+      if metadata is None:
+        raise RuntimeError(f"task parent {parent!r} of a spawned session has no metadata.json in the home snapshot")
+      name = json.loads(metadata.data)["name"]
+      if name in parent_names.values():
+        raise RuntimeError(f"two task parents are named {name!r}, so their spawns would share one alias group")
+      parent_names[parent] = name
+    return f"name:{parent_names[parent]}"
 
   def alias_of(session_id: str) -> str:
     if session_id not in aliases:

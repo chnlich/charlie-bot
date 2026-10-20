@@ -28,9 +28,6 @@ The codebase has a single user. Apply these principles:
   - To wait on a condition, start a command that exits once the condition holds, with `--cmd`.
   - When no command can detect the condition, run `charliebot schedule-trigger --max-wait <seconds>`.
   - After the registration prints its result, end the turn.
-- **Text a model reads**: before you write text for a model, read the "Text a model reads"
-  subsection of `~/workspace/charlie-bot/prompts/master.md`. This text includes prompts, skills,
-  task specs, memory entries, and `CLAUDE.md` and `AGENTS.md` files.
 
 <!-- section: skills_discovery -->
 ## Skills Discovery
@@ -51,4 +48,10 @@ Every file you create on that host belongs in it, whatever produced it.
 
 A working directory carries only within one ssh one-shot, so each command creates that directory if absent and enters it
 before anything else.
+
+<!-- section: text_model_reads -->
+## Text a model reads
+- **Text a model reads**: before you write text for a model, read the "Text a model reads"
+  subsection of `~/workspace/charlie-bot/prompts/master.md`. This text includes prompts, skills,
+  task specs, memory entries, and `CLAUDE.md` and `AGENTS.md` files.
 

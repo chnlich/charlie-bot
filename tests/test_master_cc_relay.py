@@ -2,6 +2,7 @@
 
 import datetime
 import pathlib
+import types
 
 import conftest
 import pytest
@@ -10,6 +11,7 @@ from src.backends.claude_code import claude_accounts, claude_relay, master_cc_re
 from src.infra import event_types as ET
 from src.infra import models
 from src.runtime import master_cc_run
+from src.runtime import master_cc_state
 from src.runtime.agent_process import base as backend_base
 
 NOW = datetime.datetime(2026, 9, 6, 20, 0, tzinfo=datetime.UTC)
@@ -74,6 +76,35 @@ def test_choose_turn_account_reselects_inside_the_pool_when_the_current_account_
       cfg, meta, conftest.FABLE_MODEL, NOW - datetime.timedelta(minutes=10), now=NOW, account_pool="alpha")
 
   assert (chosen.label, cold) == ("main", False)
+
+
+def _hold_for_other_session(label: str, index: int) -> None:
+  """Park a running work item on *label* for a session other than the test's own."""
+  holder = models.SessionMetadata(
+      profile="manager", id=f"other-{index}", name="t", backend=conftest.POOLED_FABLE_ID, claude_account=label)
+  master_cc_state._current_items[holder.id] = types.SimpleNamespace(session_meta=holder)
+
+
+def test_choose_turn_account_replays_the_2026_10_19_line_bounce(tmp_path: pathlib.Path) -> None:
+  """Replay of 2026-10-19 23:23:37 UTC: with every under-line account busy and only the
+  at-line ext-2 idle, the tier rule still lands the turn on the healthiest under-line
+  account, ext-3, instead of bouncing ext-2 past 100 percent."""
+  cfg = conftest.fable_pool_cfg(tmp_path, labels=("main", "ext-1", "ext-2", "ext-3", "ext-4", "invite-1"))
+  readings = {"ext-3": 0.07, "invite-1": 0.23, "ext-4": 0.47, "ext-1": 0.73, "main": 0.96, "ext-2": 0.90}
+  for label, utilization in readings.items():
+    claude_accounts.observe_rate_limit(
+        label, conftest.rate_limit_event("allowed", utilization)["rate_limit_info"], now=NOW)
+  for index, label in enumerate(["ext-3", "invite-1", "ext-4", "ext-1", "main"]):
+    _hold_for_other_session(label, index)
+  meta = _session_on("ext-4")
+
+  try:
+    chosen, cold = master_cc_relay.choose_turn_account(
+        cfg, meta, conftest.FABLE_MODEL, NOW - datetime.timedelta(minutes=10), now=NOW)
+  finally:
+    master_cc_state._current_items.clear()
+
+  assert (chosen is not None and chosen.label, cold) == ("ext-3", False)
 
 
 @pytest.mark.asyncio

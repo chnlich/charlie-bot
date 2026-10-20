@@ -260,9 +260,10 @@ class ClaudeCodeLifecycle(ClaudeCliLifecycle):
 
     A login failure first marks the login unhealthy and tells the operator. The relay limit
     raises ``LaunchRefused`` with ``quota_exhausted`` False -- except a warning relay, which
-    passes the cap when a strictly-below-the-line destination exists (the counter still
-    counts it). The transcript moves to the login with the most headroom (a warning relay
-    lands only strictly below the warning line), a large Fable context is compacted there,
+    passes the cap when the safe-point gate finds a destination under the warning line (the
+    counter still counts it). The transcript moves to the next login by the account pool's
+    tier rule (claude_accounts.select: accounts under the warning line contend first), a
+    large Fable context is compacted there,
     and the next process resumes the same session with the continuation prompt. A pool
     without a login raises ``LaunchRefused`` with ``quota_exhausted`` True; a run without a
     session id and a failed copy raise it with ``quota_exhausted`` False.
@@ -289,13 +290,7 @@ class ClaudeCodeLifecycle(ClaudeCliLifecycle):
         raise backend_lifecycle.LaunchRefused(
             claude_relay.relay_limit_message(ctx.cfg, account_pool), quota_exhausted=False)
     relays = launch.relays + 1
-    next_account = await master_cc_relay.prepare_relay(
-        ctx,
-        current,
-        native_id,
-        decision,
-        relays,
-        min_headroom=1.0 - claude_accounts.WARNING_UTILIZATION if decision == claude_relay.RELAY_WARNING else 0.0)
+    next_account = await master_cc_relay.prepare_relay(ctx, current, native_id, decision, relays)
     if ctx.kind == "turn":
       # The relay's label persist point: disk carries the new account from the moment the
       # continuation is built, not at round end (an unchanged account skips the write inside

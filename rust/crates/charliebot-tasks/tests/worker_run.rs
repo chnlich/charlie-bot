@@ -484,6 +484,9 @@ async fn worker_run_kinds_deliver_snapshot_bytes_and_task_context() -> anyhow::R
   let verify_refs = snapshot_source_refs(&snapshot_of(&verify_record)?);
   assert!(verify_refs.iter().any(|source| source == "prompts/verify.md"), "{verify_refs:?}");
   assert!(!verify_refs.iter().any(|source| source == "prompts/worker.md"), "{verify_refs:?}");
+  settle_until(|| Ok(stack.child_reports(&manager.id)?.len() == 2)).await?;
+  settle_node(&stack, &manager.id).await?;
+  process_guard.track_all()?;
   Ok(())
 }
 

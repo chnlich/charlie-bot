@@ -470,7 +470,7 @@ def test_usage_ledger_handler_summarizes_and_propagates(
   a capture failure."""
   from src.features.usage import usage_ledger
 
-  monkeypatch.setattr("src.features.usage.usage_ledger.default_ledger_path", lambda: tmp_path / "ledger.sqlite3")
+  monkeypatch.setattr(conftest.USAGE_LEDGER_DEFAULT_LEDGER_PATH_PATCH_TARGET, lambda: tmp_path / "ledger.sqlite3")
   monkeypatch.setattr("src.features.usage.token_tally.capture_local", lambda ledger: {"claude": 3, "opencode": 7})
 
   summary = asyncio.run(usage_ledger.run_scheduled_usage_ledger())

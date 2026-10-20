@@ -1325,9 +1325,9 @@ async fn boot_non_space_follow_up_failure_starts_no_retry() -> anyhow::Result<()
   Ok(())
 }
 
-/// `test_task_recovery.py::test_boot_node_out_of_space_hands_node_to_retry`: the boot pass's child-report delivery fails
-/// out of space. The node pass raises, the boot hands the node to the end-landing retry, and the retry's round delivers
-/// the failed report exactly once.
+/// `test_task_recovery.py::test_boot_node_out_of_space_hands_node_to_retry`: the boot pass's child-report delivery
+/// fails out of space. The node pass raises, the boot hands the node to the end-landing retry, and the retry's round
+/// delivers the failed report exactly once.
 #[tokio::test]
 async fn boot_node_out_of_space_hands_node_to_retry() -> anyhow::Result<()> {
   // Python: tests/test_task_recovery.py::test_boot_node_out_of_space_hands_node_to_retry.

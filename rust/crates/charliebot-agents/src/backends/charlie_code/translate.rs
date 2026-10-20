@@ -6,10 +6,11 @@ use std::collections::HashMap;
 use anyhow::{Context, bail};
 use charliebot_core::event_types;
 use charliebot_core::pyfmt::{format_g, python_str};
+use charliebot_core::pystr;
 use charliebot_registry::backend::Translate;
 use serde_json::{Map, Value, json};
 
-use crate::cli_base::{int_field, py_split_whitespace, required_str, str_field, truthy};
+use crate::cli_base::{int_field, required_str, str_field, truthy};
 use crate::event_builders::{
   make_compact_boundary_event, make_context_reading_event, make_error_event, make_result_event, make_text_event,
   make_tool_result_event, make_tool_use_event,
@@ -168,7 +169,7 @@ fn duration_label(seconds: f64) -> String {
 
 /// `" ".join(raw.split())[:80]`: the command with its whitespace runs collapsed, cut to its first 80 characters.
 fn command_note(raw: &str) -> String {
-  py_split_whitespace(raw).collect::<Vec<_>>().join(" ").chars().take(COMMAND_NOTE_CHARS).collect()
+  pystr::split_whitespace(raw).join(" ").chars().take(COMMAND_NOTE_CHARS).collect()
 }
 
 #[cfg(test)]

@@ -131,21 +131,6 @@ pub fn strip_google_api_keys(env: &Env) -> Env {
   stripped
 }
 
-/// Python's `str.isspace` for one character: Unicode whitespace, which includes U+001C to U+001F.
-pub fn py_is_space(c: char) -> bool {
-  c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c)
-}
-
-/// Python's `str.strip()`: trims the characters `str.isspace` accepts.
-pub fn py_strip(text: &str) -> &str {
-  text.trim_matches(py_is_space)
-}
-
-/// Python's `str.split()` with no separator: the non-empty runs between `str.isspace` characters.
-pub fn py_split_whitespace(text: &str) -> impl Iterator<Item = &str> {
-  text.split(py_is_space).filter(|part| !part.is_empty())
-}
-
 /// Python truthiness of a JSON value: null, false, zero, and empty strings, arrays and objects are false.
 pub fn truthy(value: &Value) -> bool {
   match value {

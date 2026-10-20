@@ -39,6 +39,14 @@ def _rig(tmp_path: pathlib.Path) -> conftest.SessionBlocks:
   return conftest.build_session_blocks(conftest.build_master_cc_cfg(tmp_path))
 
 
+def _scan_context(blocks: conftest.SessionBlocks, session_id: str) -> file_urls.ScanContext:
+  return file_urls.ScanContext(
+      server_port=blocks.cfg.server.port,
+      charliebot_home=blocks.cfg.charliebot_home,
+      session_dir=blocks.store.session_dir(session_id),
+      user_home=blocks.cfg.charliebot_home.parent)
+
+
 async def _session(blocks: conftest.SessionBlocks, *, slack_origin: slack_metadata.SlackOrigin | None = None) -> str:
   """A root manager session: a web session, or a Slack thread session when *slack_origin* is given."""
   origin = {} if slack_origin is None else {"slack_origin": slack_origin}
@@ -148,6 +156,56 @@ async def test_a_refused_web_reply_records_nothing_and_marks_nothing(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("form", ["retired", "local", "canonical"])
+async def test_a_dead_file_link_refuses_a_web_reply_with_a_correct_link_and_records_nothing(
+    tmp_path: pathlib.Path, form: str) -> None:
+  blocks = _rig(tmp_path)
+  sid = await _session(blocks)
+  client = conftest.make_internal_router_client(blocks.cfg, blocks)
+  context = _scan_context(blocks, sid)
+  if form == "retired":
+    target = context.charliebot_home / "sessions" / tmp_path.name / "plan.html"
+    target.parent.mkdir(parents=True)
+    target.write_text("page", encoding="utf-8")
+    link = f"https://charliebot.example:{context.server_port}/files/sessions/{tmp_path.name}/plan.html"
+    correct = f"https://charliebot.example:{context.server_port}/absolute_filepath{target}"
+    detail = f"Dead file links; nothing was recorded.\n- {link}: /files/ is a retired prefix. Correct link: {correct}"
+  elif form == "local":
+    link = "[plan](artifacts/plan.html)"
+    correct = _host_file_link(context.session_dir / "artifacts" / "plan.html")
+    detail = (
+        f"Dead file links; nothing was recorded.\n- artifacts/plan.html: a local path opens nothing on the web page. "
+        f"Correct link: {correct}")
+  else:
+    target = tmp_path / "missing.html"
+    link = f"http://localhost:{context.server_port}/absolute_filepath{target}"
+    detail = f"Dead file links; nothing was recorded.\n- {link}: no file exists at {target}."
+  events_before = _events(blocks, sid)
+
+  response = client.post("/api/internal/web/reply", json={"session_id": sid, "text": f"See {link}"})
+
+  assert response.status_code == 422
+  assert response.json()["detail"] == detail
+  assert _events(blocks, sid) == events_before
+  assert conftest.events_of_type(_events(blocks, sid), ET.WEB_REPLY) == []
+
+
+@pytest.mark.asyncio
+async def test_a_live_file_link_posts_as_a_web_reply(tmp_path: pathlib.Path) -> None:
+  blocks = _rig(tmp_path)
+  sid = await _session(blocks)
+  page = tmp_path / "live.html"
+  page.write_text("page", encoding="utf-8")
+  link = _host_file_link(page)
+  client = conftest.make_internal_router_client(blocks.cfg, blocks)
+
+  response = client.post("/api/internal/web/reply", json={"session_id": sid, "text": f"See {link}"})
+
+  assert response.status_code == 200
+  assert [event["content"] for event in conftest.events_of_type(_events(blocks, sid), ET.WEB_REPLY)] == [f"See {link}"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("chars, over_budget", [(500, False), (501, True)])
 async def test_the_budget_flags_an_over_budget_reply_and_the_reply_still_posts(
     tmp_path: pathlib.Path, chars: int, over_budget: bool) -> None:
@@ -155,7 +213,8 @@ async def test_the_budget_flags_an_over_budget_reply_and_the_reply_still_posts(
   sid = await _session(blocks)
   text = "x" * chars
 
-  readback = await reply.post_web_reply(sid, text, blocks.store, blocks.events, blocks.lifecycle)
+  readback = await reply.post_web_reply(
+      sid, text, blocks.store, blocks.events, blocks.lifecycle, scan_context=_scan_context(blocks, sid))
 
   assert readback == {"posted": True, "chars": chars, "over_budget": over_budget, "answers": None}
   assert [ev["content"] for ev in conftest.events_of_type(_events(blocks, sid), ET.WEB_REPLY)] == [text]
@@ -182,7 +241,13 @@ def _user_message(text: str) -> dict:
 
 async def _post_reply(blocks: conftest.SessionBlocks, sid: str, text: str, keep_language: str | None = None) -> dict:
   return await reply.post_web_reply(
-      sid, text, blocks.store, blocks.events, blocks.lifecycle, keep_language=keep_language)
+      sid,
+      text,
+      blocks.store,
+      blocks.events,
+      blocks.lifecycle,
+      keep_language=keep_language,
+      scan_context=_scan_context(blocks, sid))
 
 
 @pytest.mark.asyncio
@@ -479,7 +544,7 @@ async def test_a_reply_answers_the_user_message_that_woke_its_turn(tmp_path: pat
   user = await _append(blocks, sid, conftest.user_event("the question"))
 
   with _running_turn(blocks, sid, [user["id"]]):
-    readback = await reply.post_web_reply(sid, "the answer", blocks.store, blocks.events, blocks.lifecycle)
+    readback = await _post_reply(blocks, sid, "the answer")
 
   assert readback["answers"] == user["id"]
 
@@ -499,7 +564,7 @@ async def test_a_reply_in_a_nudge_turn_answers_the_user_message_the_nudge_asks_a
       })
 
   with _running_turn(blocks, sid, [nudge["id"]]):
-    readback = await reply.post_web_reply(sid, "the answer", blocks.store, blocks.events, blocks.lifecycle)
+    readback = await _post_reply(blocks, sid, "the answer")
 
   assert readback["answers"] == user["id"]
 
@@ -511,7 +576,7 @@ async def test_a_reply_in_a_background_turn_answers_nothing(tmp_path: pathlib.Pa
   wake = await _append(blocks, sid, conftest.scheduled_trigger_event("wake"))
 
   with _running_turn(blocks, sid, [wake["id"]]):
-    readback = await reply.post_web_reply(sid, "the answer", blocks.store, blocks.events, blocks.lifecycle)
+    readback = await _post_reply(blocks, sid, "the answer")
 
   assert readback["answers"] is None
 
@@ -524,7 +589,7 @@ async def test_a_reply_answers_the_newest_input_in_log_order_not_in_input_order(
   second = await _append(blocks, sid, conftest.user_event("second"))
 
   with _running_turn(blocks, sid, [second["id"], first["id"]]):
-    readback = await reply.post_web_reply(sid, "the answer", blocks.store, blocks.events, blocks.lifecycle)
+    readback = await _post_reply(blocks, sid, "the answer")
 
   assert readback["answers"] == second["id"]
 
@@ -588,7 +653,7 @@ async def test_a_reply_in_the_nudge_turn_ends_the_audit_with_no_notice(tmp_path:
   nudge = await _post_nudge(blocks, sid, user["id"])
 
   with _running_turn(blocks, sid, [nudge["id"]]):
-    await reply.post_web_reply(sid, "the answer", blocks.store, blocks.events, blocks.lifecycle)
+    await _post_reply(blocks, sid, "the answer")
   await audit.audit_turn(sid, _done([nudge["id"]]), blocks.store, blocks.events, blocks.lifecycle, blocks.successor)
 
   events = _events(blocks, sid)
@@ -721,6 +786,57 @@ def _set_after_reads(client: testclient.TestClient, sid: str, text: str) -> http
   for item in json.loads(text).get("waiting", []):
     assert _ask_check(client, sid, item).status_code == 200
   return _set(client, sid, text)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint", ["set", "unread"])
+@pytest.mark.parametrize("field", ["goal", "now", "waiting_text", "waiting_context", "waiting_link"])
+async def test_dead_links_in_every_status_field_refuse_before_any_cold_read_or_write(
+    tmp_path: pathlib.Path, endpoint: str, field: str) -> None:
+  blocks = _rig(tmp_path)
+  sid = await _session(blocks)
+  client = _status_client(blocks)
+  context = _scan_context(blocks, sid)
+  missing = tmp_path / "missing-status-page.html"
+  canonical_link = f"http://localhost:{context.server_port}/absolute_filepath{missing}"
+  local_target = "artifacts/missing-status-page.html"
+  item = {
+      "text": "Decide",
+      "context": "The choice is ready. Options are keep or change; keep is recommended.",
+      "link": None,
+  }
+  if field in ("goal", "now"):
+    patch = {field: f"Review [the page]({local_target})"}
+    expected = (
+        f"Dead file links; nothing was recorded.\n- {local_target}: a local path opens nothing on the web page. "
+        f"Correct link: {_host_file_link(context.session_dir / local_target)}")
+  else:
+    if field == "waiting_text":
+      item["text"] = f"Review [the page]({local_target})"
+      expected = (
+          f"Dead file links; nothing was recorded.\n- {local_target}: a local path opens nothing on the web page. "
+          f"Correct link: {_host_file_link(context.session_dir / local_target)}")
+    elif field == "waiting_context":
+      item["context"] = f"Review [the page]({local_target})"
+      expected = (
+          f"Dead file links; nothing was recorded.\n- {local_target}: a local path opens nothing on the web page. "
+          f"Correct link: {_host_file_link(context.session_dir / local_target)}")
+    else:
+      item["link"] = canonical_link
+      expected = f"Dead file links; nothing was recorded.\n- {canonical_link}: no file exists at {missing}."
+    patch = {"waiting": [item]}
+  text = json.dumps(patch)
+  before = _events(blocks, sid)
+
+  with mock.patch.object(status, "_read_item_digests", side_effect=AssertionError("cold read ran")) as digest_reads:
+    response = _unread(client, sid, text) if endpoint == "unread" else _set(client, sid, text)
+
+  assert response.status_code == 422
+  assert response.json()["detail"] == expected
+  digest_reads.assert_not_called()
+  assert await _stored_status(blocks, sid) is None
+  assert _events(blocks, sid) == before
+  assert _ask_checks(blocks, sid) == []
 
 
 def _without_budget(status: dict) -> dict:
@@ -1092,6 +1208,87 @@ def _host_file_link(path: pathlib.Path) -> str:
   return file_urls.FILE_SERVER_MOUNTS[0] + str(path)
 
 
+def test_file_link_scanner_classifies_retired_and_markdown_local_targets(tmp_path: pathlib.Path) -> None:
+  home = tmp_path / "charliebot-home"
+  session_dir = tmp_path / "sessions" / "synthetic-session"
+  home.mkdir()
+  session_dir.mkdir(parents=True)
+  user_home = tmp_path / "user-home"
+  user_home.mkdir()
+  context = file_urls.ScanContext(18498, home, session_dir, user_home)
+  session_artifact = session_dir / "artifacts" / "plan.html"
+  session_artifact.parent.mkdir()
+  session_artifact.write_text("page", encoding="utf-8")
+  retired_session_file = home / "sessions" / tmp_path.name / "plan.html"
+  retired_session_file.parent.mkdir(parents=True)
+  retired_session_file.write_text("page", encoding="utf-8")
+  retired_home_file = home / "home" / tmp_path.name / "source.rs"
+  retired_home_file.parent.mkdir(parents=True)
+  retired_home_file.write_text("source", encoding="utf-8")
+  session_url = f"https://charliebot.example:18498/files/sessions/{tmp_path.name}/plan.html"
+  home_url = f"https://charliebot.example:18498/files/home/{tmp_path.name}/source.rs"
+  text = (
+      f"{session_url} {home_url} [plan](artifacts/plan.html) [script](~/scripts/x.sh) "
+      "[line](/home/u/x.rs:258)\n[artifact]: artifacts/plan.html")
+
+  findings = file_urls.scan_file_links(text, context)
+
+  assert [finding.form for finding in findings] == [
+      file_urls.FileLinkForm.RETIRED_PREFIX,
+      file_urls.FileLinkForm.RETIRED_PREFIX,
+      file_urls.FileLinkForm.LOCAL_PATH,
+      file_urls.FileLinkForm.LOCAL_PATH,
+      file_urls.FileLinkForm.LOCAL_PATH,
+      file_urls.FileLinkForm.LOCAL_PATH,
+  ]
+  assert [finding.link for finding in findings] == [
+      session_url,
+      home_url,
+      "artifacts/plan.html",
+      "~/scripts/x.sh",
+      "/home/u/x.rs:258",
+      "artifacts/plan.html",
+  ]
+  assert all(finding.dead for finding in findings)
+  assert findings[0].correct_link == f"https://charliebot.example:18498/absolute_filepath{retired_session_file}"
+  assert findings[1].correct_link == f"https://charliebot.example:18498/absolute_filepath{retired_home_file}"
+  assert findings[2].correct_link == _host_file_link(session_artifact)
+  assert findings[3].correct_link == _host_file_link(user_home / "scripts" / "x.sh")
+  assert findings[4].correct_link == "/absolute_filepath/home/u/x.rs:258"
+  assert findings[5].correct_link == _host_file_link(session_artifact)
+
+
+def test_file_link_scanner_checks_local_canonical_paths_and_ignores_non_file_links(tmp_path: pathlib.Path) -> None:
+  home = tmp_path / "charliebot-home"
+  session_dir = tmp_path / "sessions" / "synthetic-session"
+  home.mkdir()
+  session_dir.mkdir(parents=True)
+  context = file_urls.ScanContext(18498, home, session_dir, tmp_path / "user-home")
+  live_file = tmp_path / "live.html"
+  live_file.write_text("page", encoding="utf-8")
+  live_dir = tmp_path / "directory"
+  live_dir.mkdir()
+  missing_file = tmp_path / "missing.html"
+  missing_url = f"http://localhost:18498/absolute_filepath{missing_file}"
+  live_url = f"http://localhost:18498/absolute_filepath{live_file}"
+  directory_url = f"http://localhost:18498/absolute_filepath{live_dir}"
+  text = (
+      f"{live_url} {directory_url} {live_url}. {live_url}, {live_url}。 {missing_url} "
+      "[session](/?session=synthetic-id) https://code.example/o/r/pull/1/files "
+      "https://other.example/files/x https://charliebot.example:18499/files/x /diff?x "
+      "/files/x https://other.example/absolute_filepath/tmp/not-on-this-host")
+
+  findings = file_urls.scan_file_links(text, context)
+
+  assert [finding.link for finding in findings] == [
+      live_url, directory_url, live_url, live_url, live_url, missing_url,
+      "https://other.example/absolute_filepath/tmp/not-on-this-host"
+  ]
+  assert [finding.live for finding in findings] == [True, True, True, True, True, False, None]
+  assert [finding.dead for finding in findings] == [False, False, False, False, False, True, False]
+  assert findings[5].path == missing_file
+
+
 @pytest.mark.asyncio
 async def test_a_status_set_stores_context_after_the_item_was_read(tmp_path: pathlib.Path) -> None:
   blocks = _rig(tmp_path)
@@ -1230,7 +1427,7 @@ def test_the_item_digest_reads_a_bare_absolute_path_and_ignores_a_remote_link(tm
   page.write_text("first", encoding="utf-8")
   bare = metadata.WaitingItem(text="Pick a layout", link=str(page))
   served = metadata.WaitingItem(text="Pick a layout", link=_host_file_link(page))
-  remote = metadata.WaitingItem(text="Pick a layout", link="https://github.com/org/repo/pull/1")
+  remote = metadata.WaitingItem(text="Pick a layout", link="https://code.example/org/repo/pull/1")
   route = metadata.WaitingItem(text="Pick a layout", link="/?session=abc")
 
   assert len(status.item_sha256(bare)) == 64
@@ -1239,11 +1436,35 @@ def test_the_item_digest_reads_a_bare_absolute_path_and_ignores_a_remote_link(tm
   assert len(status.item_sha256(route)) == 64
 
 
-def test_the_item_digest_raises_for_a_missing_host_file(tmp_path: pathlib.Path) -> None:
+def test_the_item_digest_does_not_read_a_missing_file_or_directory(tmp_path: pathlib.Path) -> None:
   missing = metadata.WaitingItem(text="Pick a layout", link=_host_file_link(tmp_path / "missing.html"))
+  directory = tmp_path / "page-directory"
+  directory.mkdir()
+  directory_item = metadata.WaitingItem(text="Pick a layout", link=_host_file_link(directory))
 
-  with pytest.raises(FileNotFoundError):
-    status.item_sha256(missing)
+  assert len(status.item_sha256(missing)) == 64
+  assert len(status.item_sha256(directory_item)) == 64
+
+
+@pytest.mark.asyncio
+async def test_a_waiting_link_to_a_directory_can_be_cold_read_and_stored(tmp_path: pathlib.Path) -> None:
+  blocks = _rig(tmp_path)
+  sid = await _session(blocks)
+  client = _status_client(blocks)
+  directory = tmp_path / "linked-directory"
+  directory.mkdir()
+  item = {
+      "text": "Review the directory",
+      "context": "The directory lists the generated pages. Options are browse or wait; browse is recommended.",
+      "link": _host_file_link(directory),
+  }
+
+  assert _ask_check(client, sid, item).status_code == 200
+  response = _set(client, sid, json.dumps({"waiting": [item]}))
+
+  assert response.status_code == 200
+  assert response.json()["waiting"] == [item]
+  assert (await _stored_status(blocks, sid))["waiting"] == [item]
 
 
 @pytest.mark.asyncio
@@ -1420,6 +1641,46 @@ def test_the_cli_status_set_posts_the_file_and_prints_the_stored_status_as_one_j
   assert json.loads(out) == stored
 
 
+def test_the_cli_status_set_does_not_start_a_cold_read_after_a_link_rejection(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+  cfg = conftest.setup_session_cwd(tmp_path, monkeypatch, "abc")
+  status_file = tmp_path / "status.json"
+  status_file.write_text(
+      json.dumps(
+          {
+              "waiting":
+                  [
+                      {
+                          "text": "Review the page",
+                          "context": "The page is missing. Options are retry or stop; retry is recommended.",
+                          "link": "http://localhost:9443/absolute_filepath/tmp/missing-status-page.html",
+                      }
+                  ]
+          }),
+      encoding="utf-8")
+  detail = (
+      "Dead file links; nothing was recorded.\n- http://localhost:9443/absolute_filepath/tmp/missing-status-page.html: "
+      "no file exists at /tmp/missing-status-page.html.")
+  response = conftest.make_json_response({"detail": detail}, 422)
+
+  with (
+      conftest.patched_cli_post(cfg, ["web", "status", "set", "--file", str(status_file)], return_value=response) as
+      post,
+      mock.patch(conftest.CLI_COMMON_MAYBE_VERSION_SKEW_HINT_PATCH_TARGET, return_value=None),
+      mock.patch("src.runtime.cold_read.load_ask_texts") as load_ask_texts,
+      mock.patch("src.runtime.cold_read.run_light_probe") as run_light_probe,
+      pytest.raises(SystemExit) as exit_info,
+  ):
+    cli.main()
+
+  assert exit_info.value.code == 1
+  assert post.call_count == 1
+  assert post.call_args.args[0].endswith("/api/internal/web/status/unread")
+  load_ask_texts.assert_not_called()
+  run_light_probe.assert_not_called()
+  assert json.loads(capsys.readouterr().err)["error"] == detail
+
+
 @pytest.mark.asyncio
 async def test_the_cli_status_set_stops_on_missing_context_before_calling_a_light_backend(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
@@ -1484,7 +1745,7 @@ def test_the_cli_status_set_reads_and_records_each_unread_item_then_exits_three_
   page = tmp_path / "linked-page.html"
   page.write_text("HOST-SERVED-PAGE-CONTENT", encoding="utf-8")
   file_link = _host_file_link(page)
-  github_link = "https://github.com/example/project/pull/12"
+  remote_link = "https://code.example/example/project/pull/12"
   items = [
       {
           "text": "Should we use the file page?",
@@ -1492,9 +1753,9 @@ def test_the_cli_status_set_reads_and_records_each_unread_item_then_exits_three_
           "link": file_link,
       },
       {
-          "text": "Should we use the GitHub page?",
+          "text": "Should we use the remote page?",
           "context": "The review is open now. Options are merge or wait; wait is recommended.",
-          "link": github_link,
+          "link": remote_link,
       },
   ]
   status_file = tmp_path / "status.json"
@@ -1554,7 +1815,7 @@ def test_the_cli_status_set_reads_and_records_each_unread_item_then_exits_three_
   assert "HOST-SERVED-PAGE-CONTENT" in probes[0][1]
   assert probes[0][1].index(file_link) < probes[0][1].index("HOST-SERVED-PAGE-CONTENT")
   assert "HOST-SERVED-PAGE-CONTENT" not in probes[1][1]
-  assert github_link in probes[1][1]
+  assert remote_link in probes[1][1]
 
   cli.main()
 

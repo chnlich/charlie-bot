@@ -25,7 +25,7 @@ const {
   statusResponder,
 } = require('./file_link_dom_stub');
 
-const SCHEME_URL = 'https://host.example/absolute_filepath/tmp/run-17/debug_x_v1.html';
+const SCHEME_URL = 'https://charliebot.example/absolute_filepath/tmp/run-17/debug_x_v1.html';
 const SCHEME_PATHNAME = '/absolute_filepath/tmp/run-17/debug_x_v1.html';
 
 // One tail per glue family; the last is the screenshot sentence as one worked

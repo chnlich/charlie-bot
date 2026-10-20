@@ -8,6 +8,7 @@ string sort — is covered without any Slack fixture.
 
 import asyncio
 import dataclasses
+import pathlib
 import types
 import uuid
 from unittest import mock
@@ -18,6 +19,7 @@ import pytest
 from src.features.chat_threads import thread_entry
 from src.infra import config, metadata_slots, models
 from src.infra import event_types as ET
+from src.runtime import file_urls
 
 FAKECHAT = thread_entry.ThreadPlatform(
     name="fakechat",
@@ -253,6 +255,25 @@ def test_no_file_server_links_refuses_a_portless_link_the_same_way() -> None:
   assert excinfo.value.status == 422
   assert link in excinfo.value.detail
   assert "charliebot publish /home/u/page.html" in excinfo.value.detail
+
+
+@pytest.mark.parametrize(
+    "link", [
+        "https://charliebot.example:18498/files/sessions/synthetic/page.html",
+        "[plan](artifacts/plan.html)",
+    ])
+def test_no_file_server_links_refuses_retired_and_local_paths_with_publish_instruction(
+    tmp_path: pathlib.Path, link: str) -> None:
+  context = file_urls.ScanContext(
+      18498, tmp_path / "charliebot-home", tmp_path / "sessions" / "synthetic", tmp_path / "user-home")
+
+  with pytest.raises(thread_entry.ThreadReplyError) as excinfo:
+    thread_entry.assert_no_file_server_links(link, context)
+
+  assert excinfo.value.status == 422
+  assert ("artifacts/plan.html" if link.startswith("[plan]") else link) in excinfo.value.detail
+  assert "Publish the page with `charliebot publish " in excinfo.value.detail
+  assert "write the URL the command prints into the reply" in excinfo.value.detail
 
 
 def test_no_file_server_links_passes_a_published_url_and_names_route_links(tmp_path) -> None:

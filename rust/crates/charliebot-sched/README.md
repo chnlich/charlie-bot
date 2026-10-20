@@ -1,10 +1,11 @@
 # `charliebot-sched`
 
-Delayed and watched triggers for the Rust server. The crate owns the internal schedule and cancel routes, durable
-trigger records, waiters, and startup recovery. The trigger step is registered after task recovery has completed.
-It also owns the improve loop (`improve`): its internal start and stop routes, the loop's durable state, the
-judgments over an iteration's events, the fast-forward landing, and the sequence controller that runs and closes
-each loop.
+Scheduled cron tasks and delayed or watched triggers for the Rust server. The crate owns the five `/api/cron/tasks`
+routes, cron task loading and validation, the 60-second scheduler, scheduled handlers, task bindings and sequence
+recovery. It also owns the internal schedule and cancel routes, durable trigger records, waiters and startup recovery.
+The trigger step is registered after task recovery has completed. It also owns the improve loop (`improve`): its
+internal start and stop routes, the loop's durable state, the judgments over an iteration's events, the fast-forward
+landing, and the sequence controller that runs and closes each loop.
 
 ## Public API and Python sources
 
@@ -28,6 +29,21 @@ each loop.
 | `triggers::routes` | `src/runtime/api/internal.py:258-317` |
 | `triggers::matches` | `src/runtime/api/internal.py:258-317` |
 | `triggers::trigger_step` | `server.py:275-285` |
+| `cron::register` | `src/features/cron/__init__.py:5-14` |
+| `cron::config::DEFAULT_TIMEZONE` | `src/features/cron/config.py:14` |
+| `cron::config::StepConfig` | `src/features/cron/config.py:17-37` |
+| `cron::config::ScheduledTaskFields` | `src/features/cron/config.py:40-70` |
+| `cron::config::ScheduledTaskConfig` and its source/backend validation | `src/features/cron/config.py:73-145` |
+| `cron::config::ScheduledTaskError` | `src/features/cron/config.py:148-160` |
+| `GET /api/cron/tasks` | `src/features/cron/api.py:163-196` |
+| `PUT /api/cron/tasks/{name}` | `src/features/cron/api.py:257-267` |
+| `POST /api/cron/tasks` | `src/features/cron/api.py:270-300` |
+| `POST /api/cron/tasks/{name}/run` | `src/features/cron/api.py:302-327` |
+| `DELETE /api/cron/tasks/{name}` | `src/features/cron/api.py:330-344` |
+| `scheduler` service and 60-second tick | `src/features/cron/scheduler.py:26`, `:49-81`, `:108-152` |
+| Cron sequence binding and recovery hooks | `src/features/cron/sequence_controller.py:61-208` |
+| Cron startup backend reference check | `src/features/cron/backend_refs.py:7-25` |
+| Scheduled handler registration and lookup | `src/runtime/hooks/scheduled_handlers.py:14-29` |
 
 `TriggerManager::list_triggers` has the public signature
 `pub async fn list_triggers(&self, session_id: &str) -> anyhow::Result<Vec<PendingTrigger>>`.

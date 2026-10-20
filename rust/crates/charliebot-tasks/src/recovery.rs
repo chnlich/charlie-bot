@@ -341,23 +341,16 @@ pub async fn replay_followups(
     if run.kind == RunKind::Work {
       counters.followups += 1;
       if task_type == Some(TaskType::ColdRead) {
-        // The execution layer owns a cold-read run's delivery; the generic completion skips its task type. A failed run
-        // re-drives only when no retry run follows it, since a registered retry's own finish drives the rest. An
-        // interrupted run reports through the generic failure entry, never the next-backend retry.
-        match outcome {
-          RunOutcomeKind::Success => {
-            completion.after_run_finished(session_id, &run.id).await?;
-            adapter.after_cold_read_run(&meta, run, outcome_name(outcome)).await?;
-          }
-          RunOutcomeKind::Failed => {
-            let later_work = run_records[run_index + 1..].iter().any(|later| later.kind == RunKind::Work);
-            if !later_work {
-              adapter.after_cold_read_run(&meta, run, outcome_name(outcome)).await?;
-            }
-          }
-          RunOutcomeKind::Interrupted => {
-            adapter.report_failure_to_parent(session_id, run, outcome_name(outcome), None).await?;
-          }
+        if outcome == RunOutcomeKind::Success {
+          completion.after_run_finished(session_id, &run.id).await?;
+          bail!(owner_not_landed("cold-read", &format!("the cold-read delivery of run {}", run.id)));
+        }
+        let later_work = run_records[run_index + 1..].iter().any(|later| later.kind == RunKind::Work);
+        if outcome == RunOutcomeKind::Failed && !later_work {
+          bail!(owner_not_landed("cold-read", &format!("the cold-read failure chain of run {}", run.id)));
+        }
+        if outcome == RunOutcomeKind::Interrupted {
+          bail!(owner_not_landed("cold-read", &format!("the cold-read interrupted report of run {}", run.id)));
         }
         continue;
       }
@@ -710,7 +703,7 @@ pub(crate) fn owning_controller(
 
 /// The task-tree handle the sequence controllers use: the dispatcher, the completion owner, the store's session events,
 /// and the adapter as the launch executor.
-pub fn sequence_tree(
+pub(crate) fn sequence_tree(
   features: &Arc<FeatureContext>,
   adapter: &TaskExecutionAdapter,
 ) -> anyhow::Result<StoreSequenceTree> {
@@ -745,7 +738,7 @@ impl SequenceSessionEvents for StoreSessionEvents {
 /// The sequence kinds whose controllers Python registers but the port has not landed: a run of one of these kinds fails
 /// the node pass by name. The owning task is named by the kind. Each task deletes its entry when it registers its
 /// controller.
-const UNLANDED_SEQUENCE_KINDS: &[&str] = &["cron"];
+const UNLANDED_SEQUENCE_KINDS: &[&str] = &["improve"];
 
 /// The error of a replay step whose owning task has not landed: the node pass fails and names the owner.
 pub(crate) fn owner_not_landed(owner: &str, step: &str) -> anyhow::Error {
@@ -961,14 +954,17 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn a_queued_cron_run_fails_the_node_pass_and_keeps_no_terminal_fact() {
+  async fn a_queued_improve_run_fails_the_node_pass_and_keeps_no_terminal_fact() {
     let (_home, features) = startup_features().await;
-    let session_id = queue_sequence_run(&features, "cron", RunKind::ScheduledStep).await;
+    let session_id = queue_sequence_run(&features, "improve", RunKind::Iteration).await;
 
-    let error = node_pass(&features, &session_id).await.expect_err("the cron run has no controller to replay it");
+    let error = node_pass(&features, &session_id).await.expect_err("the improve run has no controller to replay it");
 
     let message = format!("{error:#}");
-    assert!(message.contains(QUEUED_RUN_ID) && message.contains("cron task"), "the error names the owner: {message}");
+    assert!(
+      message.contains(QUEUED_RUN_ID) && message.contains("improve task"),
+      "the error names the owner: {message}"
+    );
     let events = features.store.load_all_facts(&session_id).expect("the session facts load");
     assert!(!has_terminal_fact(&events, QUEUED_RUN_ID).expect("the terminal fact reads"));
   }

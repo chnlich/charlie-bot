@@ -25,6 +25,7 @@ pub mod tempdir;
 pub mod timefmt;
 pub mod v1_sessions;
 pub mod venv;
+pub mod yaml;
 
 pub use metadata_slot::{MetadataFile, MetadataSlot, MetadataSlotValidator, SlotField};
 pub use repo_root::RepoRoot;

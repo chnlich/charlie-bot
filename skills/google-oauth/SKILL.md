@@ -3,73 +3,88 @@ name: google-oauth
 description: >
   Use when a Google integration (Gmail, Docs, Sheets, Drive, Calendar) needs its
   OAuth client set up, its refresh token obtained again after expiry, or an
-  access token minted at runtime.
+  access token minted at runtime. Use when adding a Google account or choosing
+  among several accounts.
 ---
 
 # Google OAuth
 
-All Google integrations share a single OAuth client and refresh token.
+The `google_account.py` script reads the account table, mints access tokens, and adds accounts.
 
 ## Configuration
 
-Single home of the shared credential setup; integration skills point here instead of restating it.
-
-- Credentials location: `~/.charliebot/credentials.yaml`
-- Keys (section `google`): `client_id`, `client_secret`, `refresh_token`
-- Auth model: OAuth2 user token flow using a long-lived refresh token
-- Store only the `refresh_token` key in the `google` section. Access tokens are minted at runtime and discarded after use.
+- Credentials location: `$CHARLIEBOT_HOME/credentials.yaml`; the default home is `~/.charliebot`.
+- The `google` section holds the OAuth client and the default account.
+- The default account name is `google.name`, or `default` when that key is absent.
+- Each added account uses a `google_account_<name>` section.
+- Account names match `[a-z][a-z0-9-]*` and are unique across the table.
+- An added account can hold its own `client_id` and `client_secret` pair.
+- `google.docs_default_folder_id` applies only to the default account.
+- Access tokens are minted at runtime and are not persisted.
 
 ## Runtime Token Mint
 
-Every integration mints its access token at call time from the stored refresh
-token; access tokens are never persisted. Run this before the integration's own
-API calls:
+Mint an access token before the integration's API calls:
 
 ```bash
-# Read credentials (uses python3+pyyaml)
-read GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GOOGLE_REFRESH_TOKEN < <(python3 -c "
-import yaml
-c = yaml.safe_load(open('$HOME/.charliebot/credentials.yaml'))
-print(c['google']['client_id'], c['google']['client_secret'], c['google']['refresh_token'])
-")
-
-ACCESS_TOKEN=$(curl -s -X POST https://oauth2.googleapis.com/token \
-  -H "Content-Type: application/x-www-form-urlencoded" \
-  --data-urlencode "client_id=$GOOGLE_CLIENT_ID" \
-  --data-urlencode "client_secret=$GOOGLE_CLIENT_SECRET" \
-  --data-urlencode "refresh_token=$GOOGLE_REFRESH_TOKEN" \
-  --data-urlencode "grant_type=refresh_token" | jq -r '.access_token')
+ACCESS_TOKEN=$(python3 <skill-dir>/scripts/google_account.py token --account <name>)
 ```
+
+For the default account, omit `--account`. The command prints the access token on stdout.
+
+## Accounts
+
+A host holds one or more Google accounts. Each account has a short name, unique on the host.
+
+- The `google` section of `~/.charliebot/credentials.yaml` holds the OAuth client and the default account.
+- Each added account has its own section, `google_account_<name>`.
+- An added account section may carry its own `client_id` and `client_secret`.
+- `python3 <skill-dir>/scripts/google_account.py list` prints each account name and description.
+
+Choose the account before each Google API call:
+
+- When the request names an account, use that account.
+- Match the request words against each account name and description.
+- When the request names no account, use the default account.
+- When the request words match no account, stop and show the account list.
+- Name the account in each reply that carries Google data.
+- When the request names no account, also name in the reply the accounts not checked.
+- Name the target account in each write draft that waits for take off.
+
+Mint the access token for the chosen account:
+
+    ACCESS_TOKEN=$(python3 <skill-dir>/scripts/google_account.py token --account <name>)
+
+For the default account, omit `--account`.
+
+## Add or Re-Authorize an Account
+
+The account owner gives consent in a browser. Only the owner can do this step.
+
+1. Run `google_account.py consent-url <name>`. When you know the email address of the account, add `--email <email address>`.
+2. Send the URL to the account owner. When the email address is still unknown, ask the owner for it in the same message.
+3. The owner signs in to that account and approves.
+4. The owner copies the full URL from the browser address bar after the redirect to `http://localhost`.
+5. Run `google_account.py add <name> --email <email address> --redirect-url '<redirect URL>' --description '<one line>'`.
+6. Report the email address that `add` prints.
+
+`add` writes the token only when the consenting account has the given email address.
+
+When Google shows the error `org_internal`, the OAuth client accepts only users of its organization.
+Then put a Desktop-app `client_id` and `client_secret` into the `google_account_<name>` section, and start again at step 1.
 
 ## Bootstrap / Re-Authorization
 
-One-time setup to obtain a refresh token for the desktop-app OAuth flow:
-
 1. In Google Cloud Console, enable the APIs you need (Gmail, Docs, Sheets, Drive, Calendar).
 2. Create an OAuth client of type **Desktop app**.
-3. Open the consent URL with all scopes and offline access. Use `redirect_uri=http://localhost` (not `http://127.0.0.1:PORT`):
+3. Follow **Add or Re-Authorize an Account** to authorize an account. The consent flow requests these scopes:
 
 ```text
-response_type=code
-client_id=CLIENT_ID
-redirect_uri=http://localhost
-scope=https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/documents https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/calendar
-access_type=offline
-prompt=consent
+https://www.googleapis.com/auth/spreadsheets
+https://www.googleapis.com/auth/documents
+https://www.googleapis.com/auth/drive.file
+https://www.googleapis.com/auth/gmail.readonly
+https://www.googleapis.com/auth/calendar.readonly
 ```
 
-4. Authorize once, capture the `code` from the redirect, and exchange it for tokens:
-
-```bash
-curl -s -X POST https://oauth2.googleapis.com/token \
-  -H "Content-Type: application/x-www-form-urlencoded" \
-  --data-urlencode "client_id=CLIENT_ID" \
-  --data-urlencode "client_secret=CLIENT_SECRET" \
-  --data-urlencode "code=AUTH_CODE" \
-  --data-urlencode "grant_type=authorization_code" \
-  --data-urlencode "redirect_uri=http://localhost"
-```
-
-5. Save the returned `refresh_token` to the `refresh_token` key of the `google` section in `~/.charliebot/credentials.yaml`.
-
-**Note:** If the GCP project is in Testing mode, the refresh token expires in ~7 days. Publish the OAuth consent screen to Production for non-expiring tokens.
+If the GCP project is in Testing mode, the refresh token expires in about seven days. Publish the OAuth consent screen to Production for non-expiring tokens.

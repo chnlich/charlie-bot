@@ -8,9 +8,7 @@ version: 1.0.0
 
 # Gmail
 
-Read and search Gmail messages using the Gmail API with a user refresh token. Readonly scope only.
-
-**Note:** This account uses Gmailify, so emails from linked external accounts are also accessible.
+Read and search Gmail messages using the Gmail API with a selected Google account. Readonly scope only.
 
 ## Configuration
 
@@ -26,7 +24,13 @@ All Gmail API requests use:
 
 ### Refresh an Access Token
 
-Mint the access token from the stored refresh token with the recipe in the **google-oauth** skill: `skills/google-oauth/SKILL.md`.
+Choose the account using the **Accounts** section in the **google-oauth** skill, then mint its access token:
+
+```bash
+ACCESS_TOKEN=$(python3 <skill-dir>/scripts/google_account.py token --account <name>)
+```
+
+For the default account, omit `--account`.
 
 ### List Messages
 
@@ -72,12 +76,12 @@ curl -s "https://gmail.googleapis.com/gmail/v1/users/me/labels" \
 
 ## Bootstrap / Re-Authorization
 
-All Google integrations share one OAuth client and refresh token (the `google` section of `~/.charliebot/credentials.yaml`). One-time setup and re-authorization after expiry follow the **google-oauth** skill: `skills/google-oauth/SKILL.md`.
+Choose an account in the **Accounts** section and follow **Add or Re-Authorize an Account** in the **google-oauth** skill: `skills/google-oauth/SKILL.md`.
 
 ## Workflow
 
-1. Read credentials from `~/.charliebot/credentials.yaml` (section `google`).
-2. Mint an access token using the refresh token.
+1. Choose the account that matches the request using the **Accounts** section in the **google-oauth** skill.
+2. Mint its access token with `python3 <skill-dir>/scripts/google_account.py token --account <name>`. Omit `--account` for the default account.
 3. Search or list messages using Gmail search syntax (`q=` parameter).
 4. Fetch full message content and decode the body.
 5. Present extracted text to the user.

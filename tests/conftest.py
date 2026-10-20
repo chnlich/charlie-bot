@@ -1803,6 +1803,7 @@ RUNS_STOP_EXIT_WAIT_SECONDS_PATCH_TARGET = "src.runtime.runs.STOP_EXIT_WAIT_SECO
 # land the stand-in on the spawn module's one shared attribute; the caller-qualified
 # constant name records which backend's spawn a test drives.
 BASE_SPAWN_SUBPROCESS_PATCH_TARGET = "src.runtime.agent_process.spawn.spawn_subprocess"
+BASE_RESOLVE_BINARY_PATCH_TARGET = "src.runtime.agent_process.base.resolve_binary"
 OPENCODE_RESOLVE_BINARY_PATCH_TARGET = "src.runtime.agent_process.base.resolve_binary"
 OPENCODE_SPAWN_SUBPROCESS_PATCH_TARGET = "src.runtime.agent_process.spawn.spawn_subprocess"
 CODEX_RESOLVE_BINARY_PATCH_TARGET = "src.runtime.agent_process.base.resolve_binary"

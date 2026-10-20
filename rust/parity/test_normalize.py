@@ -390,3 +390,61 @@ def test_plan_close_time_masks_only_the_stamp_and_its_mode_still_differs() -> No
   assert _masked_plan_registry(earlier)["plans"][0]["closed"] == {"as": "completed", "at": "<plan-close-time>"}
   other_mode = _plan_registry(None, {"as": "abandoned", "at": "2026-10-19T09:42:07.512904+00:00"})
   assert _masked_plan_registry(later) != _masked_plan_registry(other_mode)
+
+
+SESSIONS_RUNS_ROUTE = "GET /api/sessions/{session_id}/runs"
+WORKER_REPO = f"{_context().tree_root}/workspace/worker-repo"
+ANOTHER_REPO = f"{_context().tree_root}/workspace/another-repo"
+DELEGATE_REQUEST = "synthetic-delegate-implement-failure"
+
+
+def _masked_run_item(item: dict) -> dict:
+  rules = normalize.response_rules(SESSIONS_RUNS_ROUTE)
+  return normalize.normalize_json({"items": [item]}, rules, _context())["items"][0]
+
+
+def _masked_run_metadata(metadata: dict) -> dict:
+  rules = normalize.file_rules("home/sessions/synthetic-session/data/runs/synthetic-run/metadata.json")
+  return normalize.normalize_json(metadata, rules, _context())
+
+
+def _masked_chat_event(event: dict) -> dict:
+  rules = normalize.file_rules("home/sessions/synthetic-session/data/chat_events.jsonl")
+  return normalize.normalize_json(event, rules, _context())
+
+
+def test_the_session_runs_task_spec_hash_is_masked_only_for_the_local_repository() -> None:
+  first = _masked_run_item({"repo_path": WORKER_REPO, "task_spec_hash": "synthetic-hash"})
+  second = _masked_run_item({"repo_path": WORKER_REPO, "task_spec_hash": "synthetic-other-hash"})
+  assert first["task_spec_hash"] == "<session-runs-local-repo-task-spec-hash>"
+  assert first == second
+  # A hash outside the condition still compares: another repository keeps its own value.
+  outside = _masked_run_item({"repo_path": ANOTHER_REPO, "task_spec_hash": "synthetic-hash"})
+  outside_other = _masked_run_item({"repo_path": ANOTHER_REPO, "task_spec_hash": "synthetic-other-hash"})
+  assert outside["task_spec_hash"] == "synthetic-hash"
+  assert outside != outside_other
+
+
+def test_the_run_metadata_task_spec_hash_is_masked_only_for_the_local_repository() -> None:
+  first = _masked_run_metadata({"repo_path": WORKER_REPO, "task_spec_hash": "synthetic-hash"})
+  second = _masked_run_metadata({"repo_path": WORKER_REPO, "task_spec_hash": "synthetic-other-hash"})
+  assert first["task_spec_hash"] == "<run-local-repo-task-spec-hash>"
+  assert first == second
+  # A hash outside the condition still compares: another repository keeps its own value.
+  outside = _masked_run_metadata({"repo_path": ANOTHER_REPO, "task_spec_hash": "synthetic-hash"})
+  outside_other = _masked_run_metadata({"repo_path": ANOTHER_REPO, "task_spec_hash": "synthetic-other-hash"})
+  assert outside["task_spec_hash"] == "synthetic-hash"
+  assert outside != outside_other
+
+
+def test_the_task_created_hash_is_masked_only_for_the_delegate_request() -> None:
+  first = _masked_chat_event({"request_id": DELEGATE_REQUEST, "task_spec_hash": "synthetic-hash"})
+  second = _masked_chat_event({"request_id": DELEGATE_REQUEST, "task_spec_hash": "synthetic-other-hash"})
+  assert first["task_spec_hash"] == "<local-repo-task-created-spec-hash>"
+  assert first == second
+  # A hash outside the condition still compares: another request keeps its own value.
+  outside = _masked_chat_event({"request_id": "synthetic-other-request", "task_spec_hash": "synthetic-hash"})
+  other = {"request_id": "synthetic-other-request", "task_spec_hash": "synthetic-other-hash"}
+  outside_other = _masked_chat_event(other)
+  assert outside["task_spec_hash"] == "synthetic-hash"
+  assert outside != outside_other

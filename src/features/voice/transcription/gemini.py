@@ -1,7 +1,7 @@
 """Gemini 3.5 Transcribe Live backend: the public Live API over client-delimited turns.
 
 The server's automatic segmentation drops speech, and nothing arrives after
-``audioStreamEnd`` (measured in the 2026-09-24 live probe): so this backend
+``audioStreamEnd``: so this backend
 disables automatic activity detection, opens the turn itself with
 ``activityStart`` before the first chunk, and closes it with ``activityEnd``
 after the last. The whole recording then comes back as one final, with

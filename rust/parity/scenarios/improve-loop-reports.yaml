@@ -1,20 +1,3 @@
-# A two-iteration improve loop writes both iteration reports, wakes its parent for each report and the close, then
-# closes its child. The comparison leaves the order open between each parent-turn type below and each loop-stream
-# type (improve_iteration_completed, child_report, improve_failed): the loop only delivers into the parent's queue
-# while the parent's turns run one at a time (src/features/improve/improve_sequence.py:285-288,
-# src/features/improve/improve_sequence.py:404-406), so a delivery lands at a different point of a turn on each
-# server. Where each parent-turn type comes from:
-#   system, assistant, result: the turn streams the backend's events as they arrive
-#     (src/runtime/master_cc_run.py:88-112);
-#   master_done: persisted when the turn ends, before the finish callback
-#     (src/runtime/master_cc_queue.py:298-309);
-#   run_finished: written when the turn's run records its finish (src/runtime/runs.py:1048-1057);
-#   resume_context_dropped: emitted during turn setup, before the process starts
-#     (src/runtime/master_cc_run.py:529-543);
-#   backend_overlay_inactive: emitted when the turn's overlay is unreadable
-#     (src/runtime/task_execution.py:1157-1180).
-# Preserve the combined parent stream; progress before child_report and the final outcome after the loop stay
-# strict (src/features/improve/improve_sequence.py:404-406, src/features/improve/improve_sequence.py:441-454).
 stage: triggers-cron-improve
 name: improve-loop-reports
 fixture_extras: [worker_repo]
@@ -22,14 +5,15 @@ fake_agent:
   starts:
     - name: claude
       steps:
-        - emit: {type: system, subtype: init, session_id: synthetic-improve-agent}
+        - emit: {type: system, subtype: init, session_id: synthetic-improve-parent-before-loop}
+        - gate: improve-reports-queued
         - emit:
             type: assistant
             message:
               role: assistant
               model: claude-sonnet-5
-              content: [{type: text, text: The synthetic improve iteration is complete.}]
-        - emit: {type: result, subtype: success, result: Synthetic iteration complete., usage: {input_tokens: 2, output_tokens: 1}}
+              content: [{type: text, text: The synthetic parent turn is complete.}]
+        - emit: {type: result, subtype: success, result: Synthetic parent turn complete., usage: {input_tokens: 2, output_tokens: 1}}
       exit_code: 0
     - name: claude
       steps:
@@ -55,44 +39,33 @@ fake_agent:
       exit_code: 0
     - name: claude
       steps:
-        - emit: {type: system, subtype: init, session_id: synthetic-improve-agent}
+        - emit: {type: system, subtype: init, session_id: synthetic-improve-parent-after-loop}
         - emit:
             type: assistant
             message:
               role: assistant
               model: claude-sonnet-5
-              content: [{type: text, text: The synthetic improve iteration is complete.}]
-        - emit: {type: result, subtype: success, result: Synthetic iteration complete., usage: {input_tokens: 2, output_tokens: 1}}
+              content: [{type: text, text: The three synthetic improve reports were received.}]
+        - emit: {type: result, subtype: success, result: Synthetic improve reports received., usage: {input_tokens: 2, output_tokens: 1}}
       exit_code: 0
-    - name: claude
-      steps:
-        - emit: {type: system, subtype: init, session_id: synthetic-improve-agent}
-        - emit:
-            type: assistant
-            message:
-              role: assistant
-              model: claude-sonnet-5
-              content: [{type: text, text: The synthetic improve iteration is complete.}]
-        - emit: {type: result, subtype: success, result: Synthetic iteration complete., usage: {input_tokens: 2, output_tokens: 1}}
-      exit_code: 0
-expect_starts: 5
-comparison_rules:
-  - compare_event_type_streams:
-      session: ${sessions.atlas}
-      event_types:
-        - system
-        - assistant
-        - result
-        - master_done
-        - run_finished
-        - backend_overlay_inactive
-        - resume_context_dropped
+expect_starts: 4
 steps:
+  - name: start the parent manager before the improve loop
+    method: POST
+    path: /api/chat/${sessions.delta}/message
+    json: {content: Start the parent manager before the improve loop.}
+    capture: {pre_loop_input: input_event_id}
+    expect_status: 202
+    defer_files: true
+  - kind: wait
+    name: wait for the parent manager at its gate
+    timeout_seconds: 30
+    until: {at_gate: improve-reports-queued}
   - name: start a two-iteration improve loop on the worker repository
     method: POST
     path: /api/internal/improve
     json:
-      session_id: ${sessions.atlas}
+      session_id: ${sessions.delta}
       repo_path: ${tree.root}/${extras.worker_repo.repo}
       base_branch: main
       goal: Improve the synthetic worker.
@@ -102,11 +75,11 @@ steps:
     expect_status: 200
     defer_files: true
   - kind: wait
-    name: wait for both iteration reports to wake the parent
+    name: wait for both iteration reports to reach the busy parent
     timeout_seconds: 60
     until:
       event:
-        session: ${sessions.atlas}
+        session: ${sessions.delta}
         type: child_report
         fields: {child_session_id: "${capture.child}"}
         count: 2
@@ -118,28 +91,30 @@ steps:
         session: ${capture.child}
         type: task_closed
   - kind: wait
-    name: wait for the close report and all three parent wakes
+    name: wait for the close report to reach the busy parent
     timeout_seconds: 60
     until:
       event:
-        session: ${sessions.atlas}
+        session: ${sessions.delta}
         type: child_report
         fields: {child_session_id: "${capture.child}"}
         count: 3
-  # The Atlas fixture has three completed manager turns before this loop.
+  - kind: gate
+    name: release the parent manager after all three reports arrive
+    open: improve-reports-queued
   - kind: wait
-    name: wait for all three parent manager turns to finish
+    name: wait for both parent manager turns to finish
     timeout_seconds: 60
     until:
       event:
-        session: ${sessions.atlas}
+        session: ${sessions.delta}
         type: master_done
-        count: 6
+        count: 3
   - kind: wait
     name: wait for the loop files to record the exhausted run
     timeout_seconds: 60
     until:
       file_field:
-        path: sessions/${sessions.atlas}/loops/1/state.json
+        path: sessions/${sessions.delta}/loops/1/state.json
         field: status
         equals: blocked

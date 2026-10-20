@@ -85,8 +85,8 @@ class CodexBackend(base.AgentBackend):
     """argv shared by streaming, resume, and one-shot `codex exec` runs.
 
     ``--disable multi_agent`` drops codex's multi-agent instructions, which no
-    CharlieBot run uses (measured: the codex probe of 2026-10-19 saved 766 input
-    tokens per request with the feature off).
+    CharlieBot run uses (measured: 766 input tokens per request saved with the
+    feature off).
     """
     return [
         "--json",

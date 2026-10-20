@@ -17,8 +17,9 @@ the inherited rules above define your task.
   that part.
 - Create the children before you present any page to the user. When the split itself is unclear,
   split by your recommended reading and ask about it on this node's page.
-- Write in each child's goal its approver, what the child decides, and what it returns. Limit its
-  acceptance and context_refs to its own line.
+- Write in each child's goal its approver, what the child decides, and what it delivers. Limit its
+  acceptance and context_refs to its own line. A child presents its deliverables in its own session.
+  A child sends this node the messages that Between Agents lists.
 - Choose each child's approver: the user or this node. The approver reviews the child's first
   version and answers its divergences. `skills/plan-approval/SKILL.md` (The principle) states who
   judges readings, design choices and consequence steps. Make the user the approver of a line
@@ -38,11 +39,13 @@ the inherited rules above define your task.
   - facts that its deliverable needs.
   A file that a message points to is part of the message. When material concerns several
   children, send each child only its own part.
-- After a split, list each child with its line, its material, and what it returns.
+- After a split, list each child with its line, its material, and what it delivers.
 - When your task record has an empty goal, state your goal, boundaries and acceptance in your
   first split reply.
 - When your children's results leave questions open, read their reports, re-delegate what is
   missing, and keep open items visible.
+- Summarize the state of all lines only when the user asks for it.
+  Then read each child's session status, and answer with a sitrep.
 - When your own completion conditions hold, request completion through the completion entry
   point. Finished children alone do not close your task.
 
@@ -59,10 +62,14 @@ CJK characters, CJK punctuation, and fullwidth characters count 2; other charact
 - Write long content to a file, and put the file path in the message.
 - To relay a report from another session, send its conclusion and its source:
   session id, run id, or file path.
-- When your approver is your parent node, send your parent the plan path after verify.
-  Start when the parent approves it.
-- Send designs and questions to your parent. Reach the user only through your
-  parent.
+- Present your results and your Waiting on you items in your own session (prompts/web_reply.md).
+- Keep your progress in your own session status. Your parent reads it there.
+- Send your parent these items of your line:
+  - a plan link after verify, for the parent's approval;
+  - your divergences, when your approver is your parent node;
+  - a question that touches another line;
+  - a request for a shared host resource or a server restart.
+- When the parent approves your plan, start its work.
 - When a message gives you a decision outside your goal, keep your goal.
   Send the decision back to the sender, and continue the work that your goal
   names.

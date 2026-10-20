@@ -1951,16 +1951,29 @@ async fn boot_past_a_refused_sequence_node(
   Ok(())
 }
 
-/// A refused `improve` run stops only its own node: the boot pass logs the named error and the manager node still
-/// recovers its dead turn, with the improve node first and with it second. There is no Python case, since Python runs
-/// the improve controller; this covers the interim refusal of `UNLANDED_SEQUENCE_KINDS`.
+/// A loop child that a prior process left running beside its manager's dead turn: the registered controller marks the
+/// loop interrupted, and the boot pass drains the manager's turn past it.
 #[tokio::test]
-async fn a_refused_improve_node_leaves_the_manager_node_to_recover() -> anyhow::Result<()> {
-  for sequence_first in [true, false] {
-    boot_past_a_refused_sequence_node("improve", RunKind::Iteration, sequence_first)
-      .await
-      .with_context(|| format!("with the sequence node first: {sequence_first}"))?;
-  }
+async fn a_running_loop_beside_a_dead_manager_turn_leaves_the_turn_to_recover() -> anyhow::Result<()> {
+  // Python: tests/test_task_sequences.py::test_restart_recovery_marks_improve_loop_through_registered_controller. The
+  // loop kind is the synthetic controller's; the improve controller itself is registered by charliebot-sched.
+  let stack = Stack::start("exit 0").await?;
+  // The drain builds the manager run's child environment, which signs a run token with `charliebot.access_key`.
+  stack.write_access_key()?;
+  let (manager, child) = loop_child(&stack, marker("running", None)).await?;
+  stack.queue_run(&manager, "run-manager-dead", RunKind::ManagerTurn).await?;
+  stack.launch(&manager, "run-manager-dead", 424_821, "1-424000").await?;
+
+  let counters = stack.boot().await?;
+
+  assert_eq!(counters.drained, 1, "the manager node drains its dead turn");
+  assert_eq!(stack.read_marker(&child)?.status, "interrupted");
+  settle_manager(&stack, &manager).await?;
+  let manager_events = stack.run_events(&manager)?;
+  assert!(
+    run_records::terminal_outcome(&manager_events, "run-manager-dead")?.is_some(),
+    "the manager node recovers its dead turn beside the loop"
+  );
   Ok(())
 }
 

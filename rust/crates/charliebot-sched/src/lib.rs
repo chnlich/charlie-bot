@@ -1,5 +1,6 @@
 //! Delayed and watched triggers that admit scheduled task inputs.
 
+pub mod improve;
 pub mod triggers;
 
 use charliebot_registry::{Registry, RegistryError};

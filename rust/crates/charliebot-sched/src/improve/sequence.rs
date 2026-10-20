@@ -116,7 +116,10 @@ pub async fn create_improve_child(
     group: None,
     session_id: None,
   };
-  store.create_task(request, TaskCaller::Operator, Map::new()).await
+  // Python passes the plain string "operator", which `_create_actor_for` does not take as an operator identity, so the
+  // creation fact's actor is "agent". The agent caller records that actor too. Its runtime gate passes here, because
+  // the route has checked the manager's authorization and the child's parent is that manager.
+  store.create_task(request, TaskCaller::Agent { session_id: session_id.to_string() }, Map::new()).await
 }
 
 /// The iteration report contract, rendered from the worker prompt's `iteration_reports` section.

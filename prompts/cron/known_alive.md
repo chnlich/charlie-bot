@@ -93,10 +93,12 @@ Known-alive symbols:
   model validation (it enforces the prompt-source and mode rules). The method name has
   exactly zero whole-repo matches outside its definition, so vulture flags it as an unused
   method.
-- `seed_default_cron_tasks` (`src/features/cron/seed.py`) — production-scope vulture (`src/ server.py`)
-  can flag it as an unused function. The only production caller is `setup_step` in the same file,
-  which `scripts/setup.sh` runs through `src.app.setup`. The server-start path never calls the function,
-  by design: only the setup command seeds cron config. `tests/test_cron_defaults.py` asserts that the name stays out of
+- `setup_step` (`src/features/cron/seed.py`) — production-scope vulture (`src/`, `server.py`) flags it
+  as an unused function; it is reached by string: `src/features/cron/__init__.py` registers it through
+  `wiring.register_setup_step("src.features.cron.seed", attr="setup_step")`, and `scripts/setup.sh`
+  runs the registered steps through `src.app.setup`. Its callee `seed_default_cron_tasks` rides along.
+  The server-start path never calls the pair, by design: only the setup command seeds cron config.
+  `tests/test_cron_defaults.py` asserts that `seed_default_cron_tasks` stays out of
   `init_charliebot_home.__code__.co_names`.
 - `threshold`, `min_silence_duration`, `min_speech_duration`, `max_speech_duration` (on
   `vad_config.silero_vad`) and `sample_rate` (on `vad_config`) — attribute writes on the
@@ -125,7 +127,7 @@ Known-alive symbols:
   string (`'do_' + self.command` through `getattr`, `log_message` by name). Vulture flags each
   as an unused method; the only other whole-repo matches are the perf doc's embedded collector
   and the handler docstring's own `log_message` mention.
-- The `if False: yield {}` line in `tests/test_worker_diagnostics.py` is flagged as a
+- The `if False:` / `yield {}` marker in `tests/test_worker_diagnostics.py` is flagged as a
   100%-confidence unsatisfiable `if` condition; the unreachable branch is what keeps the fake
   backend's `run()` an async generator (the consumer's `async for` would TypeError a plain
   coroutine), as the site's inline comment states. The condition is the point; nothing to

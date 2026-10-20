@@ -330,6 +330,9 @@ def test_task_branch_normalization_masks_only_the_wall_clock_second() -> None:
   other_run = normalize.normalize_text("charliebot/task-1792480596-81e5922c", _context())
   assert later != other_run
   assert normalize.normalize_text("task-1792480595-81e5922b", _context()) == "task-1792480595-81e5922b"
+  earlier_path = normalize.normalize_path("worktrees/charliebot-task-1792480595-81e5922b", _context())
+  later_path = normalize.normalize_path("worktrees/charliebot-task-1792480596-81e5922b", _context())
+  assert earlier_path == later_path == "worktrees/charliebot-task-<task-branch-timestamp>-81e5922b"
 
 
 PROXY_ROUTE = "POST /api/anthropic-proxy/openai-compatible/cc-glm52/v1/messages"

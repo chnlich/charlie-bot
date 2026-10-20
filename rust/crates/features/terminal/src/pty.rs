@@ -109,7 +109,8 @@ pub(super) async fn run_tmux(args: &[String], capture: bool) -> Result<(i32, Str
     .stdin(Stdio::null())
     .stdout(if capture { Stdio::piped() } else { Stdio::null() })
     .stderr(Stdio::from(child_stderr));
-  let output = command.output().await.map_err(|error| python_os_error(&error, Some(&binary)))?;
+  let child = command.spawn().map_err(|error| python_os_error(&error, Some(&binary)))?;
+  let output = child.wait_with_output().await.map_err(|error| python_os_error(&error, Some(&binary)))?;
   stderr_file.seek(SeekFrom::Start(0)).map_err(|error| python_os_error(&error, None))?;
   let mut stderr_bytes = Vec::new();
   stderr_file.read_to_end(&mut stderr_bytes).map_err(|error| python_os_error(&error, None))?;

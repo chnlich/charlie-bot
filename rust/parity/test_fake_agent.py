@@ -177,3 +177,31 @@ def test_opencode_fake_serves_api_and_uses_script_gates_and_spawn_record(
   (agent_dir / "open-opencode-turn").write_text("open\n", encoding="utf-8")
   assert _read_sse_event(stream) == {"type": "session.execution.succeeded", "data": {"sessionID": session_id}}
   stream.close()
+
+
+def test_the_nice_record_follows_the_parents_limits_not_the_spawn(tmp_path: pathlib.Path) -> None:
+  """The record point is the end of stdin: a parent that raises nice after the spawn and then sends the prompt, as
+  src/runtime/agent_process/base.py:1010 and :1016 do, is the value the fake records."""
+  home = tmp_path / "home"
+  agent_dir = _write_script(home, [{"gate": "never"}])
+  process = subprocess.Popen(
+      [sys.executable, str(FAKE_AGENT), "claude"],
+      env={
+          "HOME": str(home),
+          "PATH": os.environ["PATH"]
+      },
+      stdin=subprocess.PIPE,
+      stdout=subprocess.PIPE,
+      stderr=subprocess.PIPE,
+      start_new_session=True)
+  try:
+    raised = min(19, os.getpriority(os.PRIO_PROCESS, 0) + 5)
+    os.setpriority(os.PRIO_PROCESS, process.pid, raised)
+    process.stdin.write(b"a prompt\n")
+    process.stdin.close()
+    record = agent_dir / "spawns.jsonl"
+    _wait_for_file(record, process)
+    assert json.loads(record.read_text(encoding="utf-8"))["nice"] == raised
+  finally:
+    os.killpg(process.pid, signal.SIGKILL)
+    process.wait()

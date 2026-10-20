@@ -112,6 +112,12 @@ def _spawn_record(index: int, name: str, scripted: bool, stdin_bytes: bytes) -> 
       "stdout_path": stdout_path,
       "stdin_bytes": len(stdin_bytes),
       "stdin": _stdin_text(index, stdin_bytes),
+      # ``nice`` is sampled where this record is written, after the end of stdin in ``main``. A server sends a fake a
+      # stdin prompt only after it raised the turn-tree nice parent-side: Python spawns at
+      # src/runtime/agent_process/base.py:999, applies the limits at :1010 and starts the prompt writer at :1016-1017;
+      # Rust spawns at rust/crates/charliebot-agents/src/transport/spawn.rs:129, applies the limits at :130 and its
+      # caller writes the prompt afterwards. Spawns that get no stdin prompt, a one-shot argv spawn
+      # (base.py:834, spawn.rs:147-150) and the OpenCode server, have no input for this sample to order against.
       "nice": os.getpriority(os.PRIO_PROCESS, 0),
       "own_session": os.getsid(0) == pid,
       "pdeathsig": pdeathsig.value,

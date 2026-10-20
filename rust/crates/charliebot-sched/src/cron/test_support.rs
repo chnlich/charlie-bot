@@ -34,6 +34,7 @@ pub fn feature_context_with_extra_backends(extra_backend_ids: &[&str]) -> (tempf
   registry.register_package("test.cron_backend", register_test_backend).expect("backend registration");
   let registry = Arc::new(registry);
   let mut cfg = registry.load_config(home.path()).expect("default config loads");
+  cfg.paths.worktree_dir = home.path().join("worktrees").display().to_string();
   for id in std::iter::once("synthetic").chain(extra_backend_ids.iter().copied()) {
     cfg.backends.options.push(BackendOption {
       id: id.to_string(),

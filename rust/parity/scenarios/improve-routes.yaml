@@ -1,0 +1,65 @@
+# The internal improve routes refuse unknown sessions, malformed bodies and unknown backends, and answer a stop with no
+# running loop. No loop starts here, so no fake agent runs.
+stage: triggers-cron-improve
+name: improve-routes
+steps:
+  - name: start for a missing session returns 404
+    method: POST
+    path: /api/internal/improve
+    json:
+      session_id: synthetic-missing-improve-session
+      repo_path: /srv/atlas
+      base_branch: main
+      goal: Optimize the synthetic loop.
+    expect_status: 404
+  - name: start without a goal returns 422
+    method: POST
+    path: /api/internal/improve
+    json:
+      session_id: ${sessions.atlas}
+      repo_path: /srv/atlas
+      base_branch: main
+    expect_status: 422
+    compare: status_and_shape
+  - name: start with an unknown field returns 422
+    method: POST
+    path: /api/internal/improve
+    json:
+      session_id: ${sessions.atlas}
+      repo_path: /srv/atlas
+      base_branch: main
+      goal: Optimize the synthetic loop.
+      unexpected: true
+    expect_status: 422
+    compare: status_and_shape
+  - name: start with an unknown backend returns 400
+    method: POST
+    path: /api/internal/improve
+    json:
+      session_id: ${sessions.atlas}
+      repo_path: /srv/atlas
+      base_branch: main
+      goal: Optimize the synthetic loop.
+      backend: synthetic-missing-backend
+    expect_status: 400
+    compare: status_and_shape
+  - name: stop for a missing session returns 404
+    method: POST
+    path: /api/internal/improve/stop
+    json:
+      session_id: synthetic-missing-improve-session
+    expect_status: 404
+  - name: stop without a running loop returns 409
+    method: POST
+    path: /api/internal/improve/stop
+    json:
+      session_id: ${sessions.atlas}
+    expect_status: 409
+  - name: stop with an unknown field returns 422
+    method: POST
+    path: /api/internal/improve/stop
+    json:
+      session_id: ${sessions.atlas}
+      reason: synthetic
+    expect_status: 422
+    compare: status_and_shape

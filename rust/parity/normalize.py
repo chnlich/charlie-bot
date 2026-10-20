@@ -326,6 +326,27 @@ FILE_RULES: tuple[FieldRule, ...] = (
         reason="each server listens on its own port, written into its own config by the harness",
     ),
     FieldRule(
+        name="improve-loop-created-time",
+        target="home/sessions/*/loops/*/state.json",
+        field="created_at",
+        when=(),
+        reason="wall-clock time: each server records the loop's reservation on its own clock",
+    ),
+    FieldRule(
+        name="improve-loop-server-pid",
+        target="home/sessions/*/loops/*/state.json",
+        field="server_pid",
+        when=(),
+        reason="pid: the loop records the process that reserved it, and each tree runs its own server",
+    ),
+    FieldRule(
+        name="improve-child-spec-hash",
+        target="home/sessions/*/data/chat_events.jsonl",
+        field="task_spec_hash",
+        when=(("request_id", "improve:1"),),
+        reason="the canonical task spec includes the repository path inside each independent parity tree",
+    ),
+    FieldRule(
         name="holder-pid",
         target="home/state/writer_identity.json",
         field="pid",

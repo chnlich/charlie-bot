@@ -63,7 +63,7 @@ def _listener_seam(
       stack.enter_context(
           mock.patch(conftest.TASKS_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=conftest.make_task_spawner(tasks)))
     if trigger is not None:
-      stack.enter_context(mock.patch(conftest.THREAD_ENTRY_TRIGGER_MASTER_PATCH_TARGET, trigger))
+      stack.enter_context(mock.patch(conftest.MASTER_TRIGGER_PATCH_TARGET, trigger))
     if queued is not None:
       stack.enter_context(mock.patch(_QUEUED_USER_EVENT_IDS_PATCH_TARGET, return_value=queued))
     yield

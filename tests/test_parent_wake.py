@@ -16,8 +16,6 @@ import pytest
 from src.infra import event_types as ET
 from src.infra import models
 
-_MASTER_TRIGGER_PATCH_TARGET = "src.runtime.master_trigger.trigger_master"
-
 
 def child_report(child_session_id: str, *, outcome: str, summary: str, event_id: str) -> dict:
   return {
@@ -47,7 +45,7 @@ async def test_node_parent_dispatches_its_pending_inputs(
   dispatch = mock.AsyncMock(return_value={"session_id": node.id, "pending": 0, "launch": False})
   monkeypatch.setattr(tree.dispatch, "dispatch_pending", dispatch)
   trigger = mock.AsyncMock()
-  monkeypatch.setattr(_MASTER_TRIGGER_PATCH_TARGET, trigger)
+  monkeypatch.setattr(conftest.MASTER_TRIGGER_PATCH_TARGET, trigger)
 
   await tree.dispatch.wake_parent(
       node.id, report=child_report(node.id, outcome="completed", summary="done", event_id="report-node"))
@@ -75,7 +73,7 @@ async def test_failure_report_dispatches_a_task_tree_parents_pending_inputs(
   dispatch = mock.AsyncMock(return_value={"session_id": manager.id, "pending": 1, "launch": False})
   monkeypatch.setattr(tree.dispatch, "dispatch_pending", dispatch)
   trigger = mock.AsyncMock()
-  monkeypatch.setattr(_MASTER_TRIGGER_PATCH_TARGET, trigger)
+  monkeypatch.setattr(conftest.MASTER_TRIGGER_PATCH_TARGET, trigger)
 
   await adapter._report_failure_to_parent(worker.id, run, "failed")
 

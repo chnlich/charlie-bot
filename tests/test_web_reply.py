@@ -86,7 +86,7 @@ def _wake_seams(tasks: list[asyncio.Task]) -> Iterator[mock.AsyncMock]:
   """Replace the wake with a mock and collect the audit's spawned tasks; yields the wake mock."""
   trigger = mock.AsyncMock()
   with (
-      mock.patch(conftest.THREAD_ENTRY_TRIGGER_MASTER_PATCH_TARGET, trigger),
+      mock.patch(conftest.MASTER_TRIGGER_PATCH_TARGET, trigger),
       mock.patch(conftest.TASKS_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=conftest.make_task_spawner(tasks)),
   ):
     yield trigger

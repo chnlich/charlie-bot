@@ -31,8 +31,7 @@ use charliebot_tasks::recovery::{self, PassCounters};
 use process_guard::ProcessGroupGuard;
 use recovery_support::{
   BACKEND_ID, LOOP_KIND, LogCapture, LoopClose, LoopMarker, PROBE_KIND, Stack, SyntheticRepo,
-  assert_logged_node_failure, assert_named_error, cold_read_spec, implement_spec, last_child_report, script_option,
-  synthetic_run,
+  assert_logged_node_failure, cold_read_spec, implement_spec, last_child_report, script_option, synthetic_run,
 };
 use serde_json::{Map, Value, json};
 use tower::ServiceExt;

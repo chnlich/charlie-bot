@@ -121,7 +121,7 @@ def _cumulative_result_with_assistant_reading() -> list[dict]:
   the claude tier must prefer."""
   return [
       _result_event(0.5, {"claude-opus-4-6": {
-          "contextWindow": 200_000
+          "contextWindow": 500_000
       }}, input_tokens=1_500_000),
       _assistant_event("claude-opus-4-6", input_tokens=100_000, cache_creation=20_000, cache_read=30_000),
   ]
@@ -140,9 +140,9 @@ async def test_claude_tier_uses_assistant_event_tokens_not_result_cumulative(tmp
 
   usage = await _resolved_usage(session_blocks, meta)
   assert usage["context_tokens"] == 150_000  # assistant event sum, not 1.5M
-  # context_full is min(the model's 200k window, the manager turn's declared window).
-  assert usage["context_full"] == 183_000
-  assert usage["context_compact_at"] == 150_000
+  # context_full is min(the model's 500k window, the manager turn's declared window).
+  assert usage["context_full"] == 433_000
+  assert usage["context_compact_at"] == 400_000
   assert usage["model"] == "claude-opus-4-6"
   assert usage["total_cost_usd"] == pytest.approx(0.5)
 
@@ -233,7 +233,7 @@ def test_declared_window_subtracts_reserves_from_declared_window(monkeypatch: py
 @pytest.mark.usefixtures("_clean_ceiling_env")
 @pytest.mark.parametrize(
     ("run_kind", "window"), [
-        pytest.param("manager_turn", 183_000, id="manager-turn"),
+        pytest.param("manager_turn", 433_000, id="manager-turn"),
         pytest.param("work", 133_000, id="work"),
         pytest.param("review", 133_000, id="review"),
         pytest.param("iteration", 133_000, id="iteration"),

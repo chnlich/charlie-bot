@@ -300,6 +300,7 @@ fn registry(extra: Option<(&'static str, RegisterFn)>) -> anyhow::Result<Registr
   let mut registry = Registry::new();
   registry.register_package("test.recovery_backend", register_scripted_backend)?;
   registry.register_package("test.synthetic_loop", register_loop_controller)?;
+  registry.register_package("test.synthetic_probe", register_probe_controller)?;
   registry.register_package("src.features.backend_pool", charliebot_agents::backend_pool::register)?;
   if let Some((package, register)) = extra {
     registry.register_package(package, register)?;
@@ -957,6 +958,102 @@ impl SequenceController for SyntheticLoop {
 
 fn register_loop_controller(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.sequence_controller(LOOP_KIND, Arc::new(SyntheticLoop))
+}
+
+/// The sequence kind of the probe controller, which stands in for the cron controller. It owns no state: each after-run
+/// and recovery call appends one line to the session's probe log, and recovery answers as cron does (True for a
+/// terminal or unlaunched run).
+pub const PROBE_KIND: &str = "synthetic-probe";
+const PROBE_LOG: &str = "synthetic-probe.calls";
+
+pub struct SyntheticProbe;
+
+impl SyntheticProbe {
+  fn record(cfg: &CharlieBotConfig, session_id: &str, call: &str) -> anyhow::Result<()> {
+    let mut log = std::fs::OpenOptions::new().create(true).append(true).open(probe_log_path(cfg, session_id))?;
+    writeln!(log, "{call}")?;
+    Ok(())
+  }
+}
+
+impl SequenceController for SyntheticProbe {
+  fn sequence_kind(&self) -> &'static str {
+    PROBE_KIND
+  }
+
+  fn redrive<'a>(&'a self, _session_id: &'a str, _tree: &'a dyn SequenceTree) -> BoxFuture<'a, anyhow::Result<()>> {
+    Box::pin(async { Ok(()) })
+  }
+
+  fn launch_context<'a>(
+    &'a self,
+    _meta: &'a SessionMetadata,
+    _run: &'a RunRecord,
+    _launch_text: &'a str,
+  ) -> BoxFuture<'a, anyhow::Result<Option<String>>> {
+    Box::pin(async { Ok(None) })
+  }
+
+  fn after_run<'a>(
+    &'a self,
+    session_id: &'a str,
+    run: &'a RunRecord,
+    tree: &'a dyn SequenceTree,
+  ) -> BoxFuture<'a, anyhow::Result<()>> {
+    Box::pin(async move { SyntheticProbe::record(tree.config(), session_id, &format!("after_run {}", run.id)) })
+  }
+
+  fn recover_run<'a>(
+    &'a self,
+    session_id: &'a str,
+    run: &'a RunRecord,
+    outcome: Option<&'a str>,
+    tree: &'a dyn SequenceTree,
+  ) -> BoxFuture<'a, anyhow::Result<bool>> {
+    Box::pin(async move {
+      if outcome.is_none() && run.pid.is_some() {
+        return Ok(false);
+      }
+      let call = format!("recover_run {} {}", run.id, outcome.unwrap_or("none"));
+      SyntheticProbe::record(tree.config(), session_id, &call)?;
+      Ok(true)
+    })
+  }
+
+  fn reconcile_interrupted<'a>(&'a self, _tree: &'a dyn SequenceTree) -> BoxFuture<'a, anyhow::Result<()>> {
+    Box::pin(async { Ok(()) })
+  }
+
+  fn binding(&self, _session_id: &str) -> Option<Arc<dyn SequenceBinding>> {
+    None
+  }
+
+  fn owns_session(&self, _meta: &SessionMetadata) -> bool {
+    false
+  }
+
+  fn listing_fields(&self, _session_ids: &[String], _now: UtcDateTime) -> HashMap<String, Map<String, Value>> {
+    HashMap::new()
+  }
+}
+
+fn register_probe_controller(registry: &mut Registry) -> Result<(), RegistryError> {
+  registry.sequence_controller(PROBE_KIND, Arc::new(SyntheticProbe))
+}
+
+fn probe_log_path(cfg: &CharlieBotConfig, session_id: &str) -> PathBuf {
+  cfg.sessions_dir().join(session_id).join(PROBE_LOG)
+}
+
+impl Stack {
+  /// The probe controller's calls on one session, in call order; empty when it was never called.
+  pub fn probe_calls(&self, session_id: &str) -> anyhow::Result<Vec<String>> {
+    let path = probe_log_path(&self.cfg, session_id);
+    if !path.is_file() {
+      return Ok(Vec::new());
+    }
+    Ok(std::fs::read_to_string(&path)?.lines().map(str::to_string).collect())
+  }
 }
 
 fn marker_path(cfg: &CharlieBotConfig, session_id: &str) -> PathBuf {

@@ -28,7 +28,7 @@ from fastapi import testclient
 import src.runtime.task_execution as task_execution_module
 from src.backends.claude_code import claude_accounts, claude_relay, master_cc_relay
 from src.features.voice import turn_contribution
-from src.infra import constants, models
+from src.infra import config, constants, models
 from src.infra import event_types as ET
 from src.runtime import backend_pool, message_events, session_anchors, session_fork, task_errors, task_sessions
 from src.runtime import runs as runs_mod
@@ -2457,6 +2457,10 @@ async def test_worktree_preparation_failure_lands_failed_run_and_reports_to_pare
     assert parent_succeeded, "the parent's report turn never ran to success"
 
 
+def _explode_backend_resolution(cfg: config.CharlieBotConfig, backend: str | None, model: str | None) -> None:
+  raise ValueError(f"backend {backend!r} is not configured")
+
+
 @pytest.mark.asyncio
 async def test_backend_resolution_failure_lands_the_manager_runs_durable_failure(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2465,10 +2469,7 @@ async def test_backend_resolution_failure_lands_the_manager_runs_durable_failure
     with the error as evidence — never a queued run stranded without a fact."""
   _cfg, _session_blocks, tree, manager = await _wired_root_manager(tmp_path, monkeypatch)
 
-  def explode(cfg, backend: str | None, model: str | None):
-    raise ValueError(f"backend {backend!r} is not configured")
-
-  monkeypatch.setattr("src.runtime.spawner_backends.resolve_backend_option", explode)
+  monkeypatch.setattr(conftest.SPAWNER_BACKENDS_RESOLVE_BACKEND_OPTION_PATCH_TARGET, _explode_backend_resolution)
 
   await tree.dispatch.admit_input(
       manager.id, event_type=ET.USER, content="Take off. Reply with the phrase.", actor="user")
@@ -2502,7 +2503,7 @@ async def test_a_manager_turn_that_fails_to_launch_shows_one_error_row_on_the_pa
     raised.append(ValueError(f"backend {backend!r} is not configured"))
     raise raised[-1]
 
-  monkeypatch.setattr("src.runtime.spawner_backends.resolve_backend_option", explode)
+  monkeypatch.setattr(conftest.SPAWNER_BACKENDS_RESOLVE_BACKEND_OPTION_PATCH_TARGET, explode)
   await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="Take off.", actor="user")
   decision = await tree.dispatch.dispatch_pending(manager.id)
   run, outcome = await wait_for_terminal_run(tree, manager.id, decision["run_id"])
@@ -2558,10 +2559,7 @@ async def test_a_worker_launch_failure_writes_no_turn_launch_error(
       tree, parent=manager.id, request_id="w", profile="worker", task=_task_spec(tree, task_spec))
   await _launch_manager_turn(cfg, session_blocks, tree, monkeypatch, manager, "Take off and bump it.")
 
-  def explode(cfg, backend: str | None, model: str | None):
-    raise ValueError(f"backend {backend!r} is not configured")
-
-  monkeypatch.setattr("src.runtime.spawner_backends.resolve_backend_option", explode)
+  monkeypatch.setattr(conftest.SPAWNER_BACKENDS_RESOLVE_BACKEND_OPTION_PATCH_TARGET, _explode_backend_resolution)
   record = models.RunRecord(id="run-work", session_id=worker.id, kind="work", backend="fake", model="fake-model")
   await tree.runs.register_run(record, task_spec_text=task_spec["goal"])
   tree.dispatch.executor.launch(worker.id, "run-work")

@@ -1311,12 +1311,16 @@ async fn quota_failure_fails_over_to_the_next_member(task_type: TaskType) -> any
   assert_eq!(retry.model.as_deref(), Some("fake-model"));
   assert_eq!(retry.input_event_ids, interrupted.input_event_ids);
   assert_eq!(stack.wait_terminal(&worker, &retry.id).await?, RunOutcomeKind::Success);
+  settle_node(&stack, &worker).await?;
   let first = scripts.builds().into_iter().next().expect("the retry launched a process");
   assert!(first.prompt_contains(REVIEW_FEEDBACK), "the retry's launch names the feedback it answers");
   assert_eq!(stack.store().load_task_meta(&worker).await?.backend, "fake3", "the node moved");
+  settle_until(|| Ok(stack.child_reports(&manager.id)?.len() == 1)).await?;
   let failures: Vec<Value> =
     stack.child_reports(&manager.id)?.into_iter().filter(|report| report["outcome"] == "failed").collect();
   assert!(failures.is_empty(), "a failover sends no failure report: {failures:?}");
+  settle_until(|| Ok(stack.run_ids_of_kind(&manager.id, RunKind::ManagerTurn)?.len() == 1)).await?;
+  settle_node(&stack, &manager.id).await?;
   let report = backend_pool::backend_pool(&stack.features)?.recovery_report(&stack.cfg);
   assert!(report.contains("fake2 cooling until"), "the failed member cooled: {report}");
   // The retry's success wakes the parent in the background; wait for the turn it launches before the stack drops.
@@ -1373,7 +1377,9 @@ async fn a_pinned_worker_is_not_failed_over_and_its_member_is_not_cooled() -> an
   assert_eq!(reports[0]["outcome"], "failed");
   let report = backend_pool::backend_pool(&stack.features)?.recovery_report(&stack.cfg);
   assert!(report.contains("fake2 not cooling"), "the pinned member is not cooled: {report}");
+  settle_until(|| Ok(stack.run_ids_of_kind(&manager.id, RunKind::ManagerTurn)?.len() == 1)).await?;
   settle_node(&stack, &manager.id).await?;
+  assert_eq!(stack.run_ids_of_kind(&manager.id, RunKind::ManagerTurn)?.len(), 1);
   Ok(())
 }
 
@@ -1398,7 +1404,9 @@ async fn failover_with_every_member_cooling_reports_each_recovery_time() -> anyh
   let summary = reports[0]["summary"].as_str().expect("the report names the recovery times");
   assert!(summary.contains("fake2 cooling until 2030-01-02T02:00"), "{summary}");
   assert!(summary.contains("fake3 cooling until 2030-01-02T03:04"), "{summary}");
+  settle_until(|| Ok(stack.run_ids_of_kind(&manager.id, RunKind::ManagerTurn)?.len() == 1)).await?;
   settle_node(&stack, &manager.id).await?;
+  assert_eq!(stack.run_ids_of_kind(&manager.id, RunKind::ManagerTurn)?.len(), 1);
   Ok(())
 }
 

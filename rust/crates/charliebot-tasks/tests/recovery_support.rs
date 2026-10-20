@@ -397,6 +397,22 @@ pub struct Stack {
   pub dispatch: Arc<Dispatcher>,
   pub completion: Arc<TaskCompletion>,
   pub fault: Arc<FollowUpFault>,
+  process_guard: crate::process_guard::ProcessGroupGuard,
+}
+
+impl Drop for Stack {
+  fn drop(&mut self) {
+    match self.store().list_all_run_records_sync() {
+      Ok(records) => {
+        for (_, run) in records {
+          if let Some(pid) = run.pid {
+            self.process_guard.track(pid);
+          }
+        }
+      }
+      Err(error) => eprintln!("test process cleanup could not read run records: {error:#}"),
+    }
+  }
 }
 
 impl Stack {
@@ -494,7 +510,17 @@ impl Stack {
     let adapter = TaskExecutionAdapter::new(Arc::clone(&features), queue, Arc::clone(&dispatch));
     dispatch.set_executor(Some(Arc::new(adapter.clone())));
     features.startup.insert(adapter.clone())?;
-    Ok(Stack { home, cfg, served, features, adapter, dispatch, completion, fault })
+    Ok(Stack {
+      home,
+      cfg,
+      served,
+      features,
+      adapter,
+      dispatch,
+      completion,
+      fault,
+      process_guard: crate::process_guard::ProcessGroupGuard::new(),
+    })
   }
 
   /// Change the served disk-headroom threshold. The config file carries the change as well, so the reload check sees a

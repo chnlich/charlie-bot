@@ -961,8 +961,8 @@ fn register_loop_controller(registry: &mut Registry) -> Result<(), RegistryError
 }
 
 /// The sequence kind of the probe controller, which stands in for the cron controller. It owns no state: each after-run
-/// and recovery call appends one line to the session's probe log, and recovery answers as cron does (True for a
-/// terminal or unlaunched run).
+/// call appends one line to the session's probe log. Recovery answers as cron does (True for a terminal or unlaunched
+/// run) and logs only the calls it answers; a launched, live run is left unlogged.
 pub const PROBE_KIND: &str = "synthetic-probe";
 const PROBE_LOG: &str = "synthetic-probe.calls";
 

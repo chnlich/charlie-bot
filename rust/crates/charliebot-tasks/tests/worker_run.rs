@@ -54,8 +54,8 @@ impl<'a> StackProcessGuard<'a> {
 
   fn track_all(&self) -> anyhow::Result<()> {
     for (_, run) in self.stack.store().list_all_run_records_sync()? {
-      if let Some(pid) = run.pid {
-        self.groups.track(pid);
+      if let (Some(pid), Some(pid_start)) = (run.pid, run.pid_start.as_deref()) {
+        self.groups.track_if_start(pid, pid_start);
       }
     }
     Ok(())
@@ -64,9 +64,13 @@ impl<'a> StackProcessGuard<'a> {
   async fn track_run(&self, session_id: &str, run_id: &str) -> anyhow::Result<()> {
     settle_until(|| {
       let run = self.stack.store().read_run_sync(session_id, run_id)?;
-      if let Some(pid) = run.and_then(|record| record.pid) {
-        self.groups.track(pid);
-        Ok(true)
+      if let Some(record) = run {
+        if let (Some(pid), Some(pid_start)) = (record.pid, record.pid_start.as_deref()) {
+          self.groups.track_if_start(pid, pid_start);
+          Ok(true)
+        } else {
+          Ok(false)
+        }
       } else {
         Ok(false)
       }

@@ -410,18 +410,18 @@ impl Drop for Stack {
       Ok(records) => {
         for (session_id, run) in records {
           session_ids.insert(session_id);
-          if let Some(pid) = run.pid {
-            self.process_guard.track(pid);
+          if let (Some(pid), Some(pid_start)) = (run.pid, run.pid_start.as_deref()) {
+            self.process_guard.track_if_start(pid, pid_start);
           }
         }
       }
       Err(error) => eprintln!("test process cleanup could not read run records: {error:#}"),
     }
-    track_processes_for_sessions(&self.process_guard, &session_ids);
+    track_processes_for_sessions(&self.process_guard, &self.cfg.charliebot_home, &session_ids);
   }
 }
 
-fn track_processes_for_sessions(guard: &process_guard::ProcessGroupGuard, session_ids: &HashSet<String>) {
+fn track_processes_for_sessions(guard: &process_guard::ProcessGroupGuard, home: &Path, session_ids: &HashSet<String>) {
   if session_ids.is_empty() {
     return;
   }
@@ -429,6 +429,7 @@ fn track_processes_for_sessions(guard: &process_guard::ProcessGroupGuard, sessio
     .iter()
     .map(|session_id| format!("CHARLIEBOT_SESSION_ID={session_id}").into_bytes())
     .collect::<HashSet<_>>();
+  let home_environment = format!("CHARLIEBOT_HOME={}", home.display()).into_bytes();
   let entries = match std::fs::read_dir("/proc") {
     Ok(entries) => entries,
     Err(error) => {
@@ -450,17 +451,29 @@ fn track_processes_for_sessions(guard: &process_guard::ProcessGroupGuard, sessio
       }
     };
     let Some(pid) = entry.file_name().to_str().and_then(|name| name.parse::<u32>().ok()) else { continue };
+    let Some(stat) = charliebot_core::proc_identity::read_pid_stat(pid) else { continue };
     let environment = match std::fs::read(entry.path().join("environ")) {
       Ok(environment) => environment,
       // Processes can exit during this scan, and other users' /proc entries are not readable.
-      Err(error) if matches!(error.kind(), io::ErrorKind::NotFound | io::ErrorKind::PermissionDenied) => continue,
+      Err(error)
+        if matches!(error.kind(), io::ErrorKind::NotFound | io::ErrorKind::PermissionDenied)
+          || matches!(
+            error.raw_os_error(),
+            Some(libc::ENOENT) | Some(libc::ESRCH) | Some(libc::EACCES) | Some(libc::EPERM)
+          ) =>
+      {
+        continue;
+      }
       Err(error) => {
         report_process_scan_error(format!("test process cleanup could not read pid {pid} environment: {error}"));
         return;
       }
     };
-    if environment.split(|byte| *byte == 0).any(|variable| session_environment.contains(variable)) {
-      guard.track(pid);
+    let variables = environment.split(|byte| *byte == 0);
+    if variables.clone().any(|variable| variable == home_environment)
+      && variables.into_iter().any(|variable| session_environment.contains(variable))
+    {
+      guard.track_if_start(pid, &stat.pid_start);
     }
   }
 }

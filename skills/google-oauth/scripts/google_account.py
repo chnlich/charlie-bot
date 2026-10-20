@@ -443,20 +443,27 @@ def _parser() -> argparse.ArgumentParser:
   return parser
 
 
+def _is_pending(account: Account) -> bool:
+  refresh_token = account.values.get("refresh_token")
+  return not isinstance(refresh_token, str) or not refresh_token.strip()
+
+
 def _run_list(table: AccountTable, check: bool) -> int:
   checked_emails: dict[str, str] = {}
   if check:
     for account in table.accounts:
+      if _is_pending(account):
+        continue
       try:
         checked_emails[account.name] = _profile_email(_mint_access_token(table, account))
       except CliError as error:
         raise CliError(f"account {account.name}: {error.message}", 1) from error
   for account in table.accounts:
-    pending = not isinstance(account.values.get("refresh_token"), str) or not account.values["refresh_token"].strip()
+    pending = _is_pending(account)
     fields = [account.name, "default" if account.is_default else "", "pending" if pending else "ready"]
     fields.append(_validate_description(account.section, account.values))
     if check:
-      fields.append(checked_emails[account.name])
+      fields.append("" if pending else checked_emails[account.name])
     print("\t".join(fields))
   return 0
 

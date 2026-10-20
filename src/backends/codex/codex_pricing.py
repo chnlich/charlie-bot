@@ -3,7 +3,7 @@
 from collections.abc import Mapping
 from typing import Any
 
-# 2026-06-01: Codex rate-card credits / 25 = OpenAI API list price;
+# Codex rate-card credits / 25 = OpenAI API list price;
 # update if OpenAI changes pricing.
 _CODEX_USD_PER_1M_TOKENS: dict[str, tuple[float, float, float]] = {
     "gpt-5.6-sol": (5.00, 0.50, 30.0),

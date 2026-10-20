@@ -19,6 +19,15 @@ The `google_account.py` script reads the account table, mints access tokens, and
 - Each added account uses a `google_account_<name>` section.
 - Account names match `[a-z][a-z0-9-]*` and are unique across the table.
 - An added account can hold its own `client_id` and `client_secret` pair.
+- An account section can set `owner`: the person that the account belongs to.
+- The `google` section belongs to the host owner, the person who runs this CharlieBot.
+- An added account without `owner` belongs to the owner of the `google` section.
+- When one section sets `owner`, the `google` section sets `owner` too.
+- On a host with a Discord list, each `owner` value is a person name from `discord.allowed_users`.
+- On a host that serves several people, `slack.allowed_user_ids` lists only the host owner.
+- Each owner has one primary account.
+- The primary account of the host owner is the default account.
+- The primary account of another person is that person's section with `primary: true`, or that person's only section.
 - `google.docs_default_folder_id` applies only to the default account.
 - Access tokens are minted at runtime and are not persisted.
 
@@ -39,13 +48,19 @@ A host holds one or more Google accounts. Each account has a short name, unique 
 - The `google` section of `~/.charliebot/credentials.yaml` holds the OAuth client and the default account.
 - Each added account has its own section, `google_account_<name>`.
 - An added account section may carry its own `client_id` and `client_secret`.
-- `python3 <skill-dir>/scripts/google_account.py list` prints each account name and description.
+- `python3 <skill-dir>/scripts/google_account.py list` prints each account's name, mark, status, owner and description.
+- The mark is `default` for the default account and `primary` for the primary account of another person.
 
 Choose the account before each Google API call:
 
 - When the request names an account, use that account.
 - Match the request words against each account name and description.
-- When the request names no account, use the default account.
+- The asker is the person who sent the request.
+- In a Discord thread, the asker is the `person` that `charliebot discord read` gives for the request.
+- Outside Discord threads, the asker is the host owner.
+- When the request names no account, use the primary account of the asker.
+- When the asker owns no account, stop, and say that this host holds no Google account of the asker.
+- In a Discord thread, give email addresses of the asker's accounts only.
 - When the request words match no account, stop and show the account list.
 - Name the account in each reply that carries Google data.
 - When the request names no account, also name in the reply the accounts not checked.
@@ -65,8 +80,10 @@ The account owner gives consent in a browser. Only the owner can do this step.
 2. Send the URL to the account owner. When the email address is still unknown, ask the owner for it in the same message.
 3. The owner signs in to that account and approves.
 4. The owner copies the full URL from the browser address bar after the redirect to `http://localhost`.
-5. Run `google_account.py add <name> --email <email address> --redirect-url '<redirect URL>' --description '<one line>'`.
+5. Run `google_account.py add <name> --email <email address> --redirect-url '<redirect URL>' --description '<one line>' [--owner <person>]`.
 6. Report the email address that `add` prints.
+
+When the `google` section sets `owner`, pass `--owner` with the person name of the account owner.
 
 `add` writes the token only when the consenting account has the given email address.
 

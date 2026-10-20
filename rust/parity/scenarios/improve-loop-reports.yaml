@@ -1,5 +1,13 @@
 # A two-iteration improve loop writes both iteration reports, wakes its parent for each report and the close, then
-# closes its child. Parent wake completion can interleave with iteration 2's report on either server.
+# closes its child. Python leaves the order between the parent-turn stream (system, assistant, result, master_done,
+# run_finished, backend_overlay_inactive, resume_context_dropped) and the loop stream (improve_iteration_completed,
+# child_report, improve_failed) open: delivery wakes the parent's serialized audit while the loop moves on
+# (src/features/improve/improve_sequence.py:285-288, src/features/improve/improve_sequence.py:404-406); the parent
+# consumes backend events as they arrive (src/runtime/master_cc_run.py:88-112), persists master_done before its finish
+# callback (src/runtime/master_cc_queue.py:298-309), and emits resume/overlay notices during turn setup
+# (src/runtime/master_cc_run.py:529-543, src/runtime/task_execution.py:1157-1170). Preserve the combined parent stream;
+# progress before child_report and the final outcome after the loop stay strict
+# (src/features/improve/improve_sequence.py:404-406, src/features/improve/improve_sequence.py:441-454).
 stage: triggers-cron-improve
 name: improve-loop-reports
 fixture_extras: [worker_repo]
@@ -61,14 +69,17 @@ fake_agent:
         - emit: {type: result, subtype: success, result: Synthetic iteration complete., usage: {input_tokens: 2, output_tokens: 1}}
       exit_code: 0
 expect_starts: 5
-# Parent wake turns can interleave with the next iteration on either server; compare durable events and loop state.
-compare_fake_agent_spawns: false
-exclude_file_globs: [home/sessions/*/data/runs/**]
 comparison_rules:
-  # The manager turns and loop controller run independently; compare each durable event stream in its own order.
   - compare_event_type_streams:
       session: ${sessions.atlas}
-      event_types: [improve_iteration_completed, child_report, master_done, improve_failed]
+      event_types:
+        - system
+        - assistant
+        - result
+        - master_done
+        - run_finished
+        - backend_overlay_inactive
+        - resume_context_dropped
 steps:
   - name: start a two-iteration improve loop on the worker repository
     method: POST

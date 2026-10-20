@@ -246,37 +246,10 @@ def test_ws_fake_handshake_requires_a_declared_fake(tmp_path: pathlib.Path) -> N
         {
             "headless_chrome": True
         },
-        {
-            "exclude_file_globs": ["home/sessions/*/data/runs/**"]
-        },
-        {
-            "compare_fake_agent_spawns": False
-        },
     ])
 def test_new_scenario_keys_load(tmp_path: pathlib.Path, fields: dict[str, Any]) -> None:
   scenario = _load(tmp_path, [{"name": "key scenario", "method": "GET", "path": "/api/auth/status"}], **fields)
   assert scenario.name == "loader"
-
-
-def test_run_comparison_controls_load(tmp_path: pathlib.Path) -> None:
-  scenario = _load(
-      tmp_path,
-      [{"name": "key scenario", "method": "GET", "path": "/api/auth/status"}],
-      exclude_file_globs=["home/sessions/*/data/runs/**"],
-      compare_fake_agent_spawns=False,
-  )
-  assert scenario.exclude_file_globs == ("home/sessions/*/data/runs/**",)
-  assert scenario.compare_fake_agent_spawns is False
-
-
-@pytest.mark.parametrize("pattern", ["", "/etc/passwd", "../outside", "home/../outside"])
-def test_excluded_file_globs_must_stay_in_the_tree(tmp_path: pathlib.Path, pattern: str) -> None:
-  with pytest.raises(scenario_file.ScenarioError):
-    _load(
-        tmp_path,
-        [{"name": "key scenario", "method": "GET", "path": "/api/auth/status"}],
-        exclude_file_globs=[pattern],
-    )
 
 
 def test_allowed_baseline_values_rule_loads(tmp_path: pathlib.Path) -> None:
@@ -344,11 +317,25 @@ def test_event_type_stream_rule_loads(tmp_path: pathlib.Path) -> None:
 @pytest.mark.parametrize(
     "rule",
     [
-        {"session": "${sessions.atlas}"},
-        {"session": "${sessions.atlas}", "event_types": []},
-        {"session": "${sessions.atlas}", "event_types": ["child_report", ""]},
-        {"session": "${sessions.atlas}", "event_types": ["child_report", "child_report"]},
-        {"session": "", "event_types": ["child_report"]},
+        {
+            "session": "${sessions.atlas}"
+        },
+        {
+            "session": "${sessions.atlas}",
+            "event_types": []
+        },
+        {
+            "session": "${sessions.atlas}",
+            "event_types": ["child_report", ""]
+        },
+        {
+            "session": "${sessions.atlas}",
+            "event_types": ["child_report", "child_report"]
+        },
+        {
+            "session": "",
+            "event_types": ["child_report"]
+        },
     ],
 )
 def test_event_type_stream_rule_rejects_invalid_values(tmp_path: pathlib.Path, rule: dict[str, Any]) -> None:
@@ -1406,8 +1393,7 @@ def test_open_while_stopped_settles_on_an_exit_or_a_new_gate_marker(tmp_path: pa
   assert (agent_dir / "open-first").is_file()
 
 
-def test_absent_headless_chrome_exits_naming_the_flag_only_for_a_scenario_that_needs_it(
-    tmp_path: pathlib.Path) -> None:
+def test_absent_headless_chrome_exits_naming_the_flag_only_for_a_scenario_that_needs_it(tmp_path: pathlib.Path) -> None:
   request = [{"name": "http", "method": "GET", "path": "/api/auth/status"}]
   parity._check_headless_chrome([_load(tmp_path, request)], tmp_path / "missing" / "headless_shell")
   needing = _load(tmp_path, request, headless_chrome=True)

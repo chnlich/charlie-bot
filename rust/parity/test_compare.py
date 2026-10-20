@@ -169,33 +169,114 @@ def test_adjacent_pair_rule_does_not_mask_event_ids_embedded_in_other_text() -> 
 
 
 def _event_stream_diff(baseline: list[dict], candidate: list[dict]) -> list[str]:
-  event_types = ("improve_iteration_completed", "child_report", "master_done", "improve_failed")
+  event_types = (
+      "system", "assistant", "result", "master_done", "run_finished", "backend_overlay_inactive",
+      "resume_context_dropped")
   path = "home/sessions/synthetic-session/data/chat_events.jsonl"
   left = compare.order_event_type_streams_in_delta(_chat_delta(baseline), path, event_types)
   right = compare.order_event_type_streams_in_delta(_chat_delta(candidate), path, event_types)
   return compare.delta_diff(left, right, _context(), _context())
 
 
-def test_event_type_streams_allow_cross_type_interleaving() -> None:
+def test_event_type_streams_allow_parent_turns_to_interleave_with_loop_events() -> None:
   iteration_one = {"type": "improve_iteration_completed", "id": "iteration-one", "iteration": 1}
   iteration_two = {"type": "improve_iteration_completed", "id": "iteration-two", "iteration": 2}
   report_one = {"type": "child_report", "id": "report-one", "summary": "first"}
   report_two = {"type": "child_report", "id": "report-two", "summary": "second"}
-  manager_done = {"type": "master_done", "id": "manager-done", "exit_code": 0}
+  parent_turn = [
+      {
+          "type": "system",
+          "id": "manager-system"
+      },
+      {
+          "type": "assistant",
+          "id": "manager-assistant"
+      },
+      {
+          "type": "result",
+          "id": "manager-result"
+      },
+      {
+          "type": "master_done",
+          "id": "manager-done",
+          "exit_code": 0
+      },
+      {
+          "type": "run_finished",
+          "id": "manager-run-finished",
+          "outcome": "success"
+      },
+      {
+          "type": "backend_overlay_inactive",
+          "id": "manager-overlay"
+      },
+      {
+          "type": "resume_context_dropped",
+          "id": "manager-resume"
+      },
+  ]
   loop_closed = {"type": "improve_failed", "id": "loop-closed", "iterations_completed": 2}
-  assistant = {"type": "assistant", "id": "assistant", "content": "manager response"}
-  baseline = [iteration_one, report_one, assistant, manager_done, iteration_two, report_two, loop_closed]
-  candidate = [iteration_one, report_one, iteration_two, report_two, loop_closed, assistant, manager_done]
+  baseline = [iteration_one, report_one, *parent_turn[:3], iteration_two, *parent_turn[3:], report_two, loop_closed]
+  candidate = [iteration_one, report_one, *parent_turn, iteration_two, report_two, loop_closed]
+  for events in (baseline, candidate):
+    for index, event in enumerate(events):
+      event["event_index"] = index + 1
 
   assert _event_stream_diff(baseline, candidate) == []
+  out_of_order_parent_turn = [*candidate[:5], parent_turn[4], parent_turn[3], *candidate[7:]]
+  assert _event_stream_diff(baseline, out_of_order_parent_turn) != []
+
+
+def test_event_type_streams_keep_python_order_between_loop_event_types() -> None:
+  baseline = [
+      {
+          "type": "improve_iteration_completed",
+          "id": "iteration-one"
+      },
+      {
+          "type": "child_report",
+          "id": "report-one"
+      },
+      {
+          "type": "master_done",
+          "id": "manager-done"
+      },
+      {
+          "type": "improve_iteration_completed",
+          "id": "iteration-two"
+      },
+      {
+          "type": "child_report",
+          "id": "report-two"
+      },
+  ]
+  candidate = [baseline[0], baseline[3], baseline[1], baseline[2], baseline[4]]
+
+  assert _event_stream_diff(baseline, candidate) != []
 
 
 def test_event_type_streams_keep_each_type_order_and_payload_compared() -> None:
   baseline = [
-      {"type": "improve_iteration_completed", "id": "iteration-one", "iteration": 1},
-      {"type": "child_report", "id": "report-one", "summary": "first"},
-      {"type": "improve_iteration_completed", "id": "iteration-two", "iteration": 2},
-      {"type": "child_report", "id": "report-two", "summary": "second"},
+      {
+          "type": "improve_iteration_completed",
+          "id": "iteration-one",
+          "iteration": 1
+      },
+      {
+          "type": "child_report",
+          "id": "report-one",
+          "summary": "first"
+      },
+      {
+          "type": "improve_iteration_completed",
+          "id": "iteration-two",
+          "iteration": 2
+      },
+      {
+          "type": "child_report",
+          "id": "report-two",
+          "summary": "second"
+      },
   ]
   reordered_iterations = [
       baseline[2],

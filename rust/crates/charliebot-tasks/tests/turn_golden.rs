@@ -924,15 +924,10 @@ async fn cancel_gated_manager_runs_through_route(chat_cancel: bool) -> anyhow::R
     .with_context(|| format!("manager run {run_id} did not finish with the required event order"))??;
   }
 
-  let tracked = guard.tracked();
   drop(guard);
   tokio::time::timeout(Duration::from_secs(10), async {
     loop {
-      let all_gone = tracked.iter().all(|group| {
-        let alive = unsafe { libc::kill(-*group, 0) };
-        alive == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
-      });
-      if all_gone {
+      if !has_process_for_home_and_session(&home, SESSION_ID)? {
         break anyhow::Ok(());
       }
       tokio::time::sleep(Duration::from_millis(50)).await;
@@ -940,17 +935,41 @@ async fn cancel_gated_manager_runs_through_route(chat_cancel: bool) -> anyhow::R
   })
   .await
   .context("fake agents outlived the guard")??;
-  for group in tracked {
-    let alive = unsafe { libc::kill(-group, 0) };
-    assert!(
-      alive == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH),
-      "process group {group} still has a member after its run finished"
-    );
-  }
 
   features.startup.require::<master_queue::MasterQueue>()?.shutdown().await?;
   drop(cfg);
   Ok(())
+}
+
+fn has_process_for_home_and_session(home: &Path, session_id: &str) -> anyhow::Result<bool> {
+  let home_environment = format!("CHARLIEBOT_HOME={}", home.display());
+  let session_environment = format!("CHARLIEBOT_SESSION_ID={session_id}");
+  for entry in std::fs::read_dir("/proc")? {
+    let entry = entry?;
+    if entry.file_name().to_str().and_then(|name| name.parse::<u32>().ok()).is_none() {
+      continue;
+    }
+    let environment = match std::fs::read(entry.path().join("environ")) {
+      Ok(environment) => environment,
+      Err(error)
+        if matches!(error.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied)
+          || matches!(
+            error.raw_os_error(),
+            Some(libc::ENOENT) | Some(libc::ESRCH) | Some(libc::EACCES) | Some(libc::EPERM)
+          ) =>
+      {
+        continue;
+      }
+      Err(error) => return Err(error.into()),
+    };
+    let variables = environment.split(|byte| *byte == 0).collect::<Vec<_>>();
+    if variables.iter().any(|value| *value == home_environment.as_bytes())
+      && variables.iter().any(|value| *value == session_environment.as_bytes())
+    {
+      return Ok(true);
+    }
+  }
+  Ok(false)
 }
 
 #[tokio::test]

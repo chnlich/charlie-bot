@@ -1,14 +1,14 @@
-//! Test guard that SIGKILLs every recorded process group when dropped, on success and on failure.
-//!
-//! Fake agents outlive the run pid the server stops: a cancel hits the wrapper shell, and the
-//! agent under it keeps looping. Each test records a run's pid here as soon as the store
-//! persists it; the drop path resolves the group id early for exactly that reason, because a
-//! dead wrapper's pid can no longer be mapped to its group.
-//!
-//! Killing is not enough: a killed agent is a zombie until someone waits for it, and a zombie
-//! still counts as a process group member. The constructor turns the test process into a child
-//! subreaper, so an orphaned fake agent is adopted by the test process instead of the outer
-//! harness, and the drop path reaps the zombies of the groups it recorded.
+// Test guard that SIGKILLs every recorded process group when dropped, on success and on failure.
+//
+// Fake agents outlive the run pid the server stops: a cancel hits the wrapper shell, and the
+// agent under it keeps looping. Each test records a run's pid here as soon as the store
+// persists it; the drop path resolves the group id early for exactly that reason, because a
+// dead wrapper's pid can no longer be mapped to its group.
+//
+// Killing is not enough: a killed agent is a zombie until someone waits for it, and a zombie
+// still counts as a process group member. The constructor turns the test process into a child
+// subreaper, so an orphaned fake agent is adopted by the test process instead of the outer
+// harness, and the drop path reaps the zombies of the groups it recorded.
 
 use std::sync::Mutex;
 use std::time::{Duration, Instant};

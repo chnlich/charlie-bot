@@ -1690,11 +1690,10 @@ CLI_COMMON_CONNECT_TOTAL_TIMEOUT_PATCH_TARGET = "src.infra.timeouts.CLI_CONNECT_
 # test fires, whichever module fires it.
 TASKS_CREATE_LOGGED_TASK_PATCH_TARGET = "src.infra.tasks.create_logged_task"
 
-# Import-path patch target for the master wake the shared thread core's round-end audit fires
-# (the nudge): thread_entry reads it through its home module at call time
-# (`master_trigger.trigger_master`), so mock setattrs the stand-in on the
-# src.runtime.master_trigger module attribute.
-THREAD_ENTRY_TRIGGER_MASTER_PATCH_TARGET = "src.runtime.master_trigger.trigger_master"
+# Import-path patch target for the master wake. Its producers read trigger_master through
+# the src.runtime.master_trigger module at call time (`master_trigger.trigger_master`), so
+# mock setattrs the stand-in on that module attribute.
+MASTER_TRIGGER_PATCH_TARGET = "src.runtime.master_trigger.trigger_master"
 
 # Import-path patch targets for the platform client factories every listener outbound path
 # posts through. src/features/slack/slack_listener.py and src/features/discord/discord_listener.py each define
@@ -2450,7 +2449,7 @@ def mention_seam(tasks: list[asyncio.Task] | None = None) -> Iterator[mock.Async
   sibling context.
   """
   with contextlib.ExitStack() as stack:
-    trigger = stack.enter_context(mock.patch(THREAD_ENTRY_TRIGGER_MASTER_PATCH_TARGET, new=mock.AsyncMock()))
+    trigger = stack.enter_context(mock.patch(MASTER_TRIGGER_PATCH_TARGET, new=mock.AsyncMock()))
     if tasks is not None:
       stack.enter_context(mock.patch(TASKS_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=make_task_spawner(tasks)))
     yield trigger

@@ -989,7 +989,7 @@ def _session_cases(home: pathlib.Path) -> list[dict]:
 def main() -> None:
   sys.path.insert(0, str(REPO_ROOT))
   sys.path.insert(0, str(PARITY_DIR))
-  from servers import make_tree, pick_ports, run_traced, write_home_config
+  from servers import STRACE_BIN, make_tree, pick_ports, run_traced, write_home_config
 
   from src.app import registrations
 
@@ -1008,7 +1008,8 @@ def main() -> None:
         tree=tree,
         repo_root=REPO_ROOT,
         trace_log=tree.root / "logs/aggregator.fixture.strace",
-        log_path=tree.root / "logs/aggregator.fixture.log")
+        log_path=tree.root / "logs/aggregator.fixture.log",
+        strace=STRACE_BIN)
     logs = _session_cases(tree.home)
     normalized_logs = _normalize(_normalize(logs, tree.home), tree.root)
     synthetic = []

@@ -5,6 +5,7 @@ use anyhow::bail;
 use charliebot_registry::backend::LaunchArgs;
 
 use crate::backends::claude_code::AnthropicEndpointBackend;
+use crate::transport::cgroup::SessionCgroupLimits;
 
 /// The Moonshot endpoint. It routes every API call to api.moonshot.cn instead of api.anthropic.com.
 const MOONSHOT_BASE_URL: &str = "https://api.moonshot.cn/anthropic";
@@ -15,6 +16,7 @@ pub fn backend(
   model: &str,
   claude_config_dir: Option<String>,
   launch: LaunchArgs,
+  cgroup_limits: SessionCgroupLimits,
 ) -> anyhow::Result<AnthropicEndpointBackend> {
   if model.is_empty() {
     bail!("kimi backend requires a model");
@@ -25,6 +27,7 @@ pub fn backend(
     model.to_string(),
     claude_config_dir,
     launch,
+    cgroup_limits,
   )
 }
 
@@ -35,7 +38,14 @@ mod tests {
 
   #[test]
   fn the_prepared_environment_routes_the_key_to_the_moonshot_endpoint() {
-    let backend = backend("moonshot-test-key", "kimi-k2.5", None, LaunchArgs::default()).unwrap();
+    let backend = backend(
+      "moonshot-test-key",
+      "kimi-k2.5",
+      None,
+      LaunchArgs::default(),
+      SessionCgroupLimits { memory_max_mb: 0, swap_max_mb: 0, tasks_max: 0 },
+    )
+    .unwrap();
     let env = backend.prepare_env(Env::from([("PATH".to_string(), "/usr/bin".to_string())])).unwrap();
     assert_eq!(env["ANTHROPIC_BASE_URL"], "https://api.moonshot.cn/anthropic");
     assert_eq!(env["ANTHROPIC_AUTH_TOKEN"], "moonshot-test-key");
@@ -44,7 +54,15 @@ mod tests {
 
   #[test]
   fn an_empty_model_is_refused() {
-    let error = backend("moonshot-test-key", "", None, LaunchArgs::default()).err().unwrap();
+    let error = backend(
+      "moonshot-test-key",
+      "",
+      None,
+      LaunchArgs::default(),
+      SessionCgroupLimits { memory_max_mb: 0, swap_max_mb: 0, tasks_max: 0 },
+    )
+    .err()
+    .unwrap();
     assert!(format!("{error:#}").contains("requires a model"));
   }
 }

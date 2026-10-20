@@ -1,7 +1,8 @@
 //! The cc-claude command, environment, translator, and context reading.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::env;
+use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
@@ -11,9 +12,10 @@ use charliebot_registry::backend::{AgentBackend, ContextLimits, Env, LaunchArgs,
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value};
 use tokio::io::AsyncWriteExt;
-use tokio::process::Command;
 
+use crate::transport::cgroup::{SessionCgroupLimits, system_cgroup_base_dir};
 use crate::transport::kill::{kill_process_group, python_exit_code};
+use crate::transport::spawn::{ChildStdin, SpawnSetup, SpawnSpec, spawn_with_setup};
 
 use super::claude_launch;
 use super::login_dirs;
@@ -145,6 +147,8 @@ pub struct ClaudeCodeBackend {
   fast_mode: bool,
   claude_session_id: Option<String>,
   claude_config_dir: Option<String>,
+  cgroup_session_id: Option<String>,
+  cgroup_limits: SessionCgroupLimits,
   extra_flags: Vec<String>,
   instructions_file: Option<PathBuf>,
 }
@@ -157,6 +161,7 @@ impl ClaudeCodeBackend {
     fast_mode: bool,
     claude_config_dir: Option<String>,
     launch: LaunchArgs,
+    cgroup_limits: SessionCgroupLimits,
   ) -> anyhow::Result<Self> {
     let claude_session_id = launch.backend_kwargs.get("claude_session_id");
     let claude_session_id = match claude_session_id {
@@ -172,6 +177,8 @@ impl ClaudeCodeBackend {
       fast_mode,
       claude_session_id,
       claude_config_dir: claude_config_dir.filter(|value| !value.is_empty()),
+      cgroup_session_id: launch.cgroup_session_id,
+      cgroup_limits,
       extra_flags: launch.extra_flags,
       instructions_file: launch.instructions_file,
     })
@@ -234,16 +241,18 @@ impl ClaudeCodeBackend {
     let model =
       self.model.as_deref().filter(|value| !value.is_empty()).context("cc-claude one-shot requires a model")?;
     let command = one_shot_command(model, system);
-    let environment = base_env.clone();
-    let mut child = Command::new(&command[0]);
-    child
-      .args(&command[1..])
-      .env_clear()
-      .envs(environment)
-      .stdin(std::process::Stdio::piped())
-      .stdout(std::process::Stdio::piped());
-    child.stderr(std::process::Stdio::piped()).process_group(0);
-    let mut child = child.spawn()?;
+    let spec = SpawnSpec::new(
+      &command[0],
+      command[1..].iter().map(OsString::from).collect(),
+      None,
+      base_env.iter().map(|(name, value)| (OsString::from(name), OsString::from(value))).collect::<HashMap<_, _>>(),
+      self.cgroup_session_id.clone(),
+      system_cgroup_base_dir(),
+      self.cgroup_limits.memory_max_mb,
+      self.cgroup_limits.swap_max_mb,
+      self.cgroup_limits.tasks_max,
+    );
+    let mut child = spawn_with_setup(&spec, None, ChildStdin::Piped, SpawnSetup::ChildSideTurnTree).await?.child;
     let pid = child.id().context("claude CLI did not expose its process id")?;
     let mut stdin = child.stdin.take().context("claude CLI stdin was not piped")?;
     let prompt = prompt.as_bytes().to_vec();
@@ -350,8 +359,9 @@ impl AnthropicEndpointBackend {
     model: String,
     claude_config_dir: Option<String>,
     launch: LaunchArgs,
+    cgroup_limits: SessionCgroupLimits,
   ) -> anyhow::Result<Self> {
-    let backend = ClaudeCodeBackend::from_launch(None, None, None, false, claude_config_dir, launch)?;
+    let backend = ClaudeCodeBackend::from_launch(None, None, None, false, claude_config_dir, launch, cgroup_limits)?;
     Ok(Self { backend, base_url, auth_token, model })
   }
 }
@@ -500,6 +510,7 @@ mod tests {
       true,
       None,
       LaunchArgs { extra_flags: vec!["--resume".to_string(), "resume-id".to_string()], ..LaunchArgs::default() },
+      SessionCgroupLimits { memory_max_mb: 0, swap_max_mb: 0, tasks_max: 0 },
     )
     .unwrap();
     let command = backend.build_command("prompt").unwrap();
@@ -520,6 +531,7 @@ mod tests {
       "synthetic/model-1".to_string(),
       None,
       LaunchArgs { extra_flags: vec!["--resume".to_string(), "resume-id".to_string()], ..LaunchArgs::default() },
+      SessionCgroupLimits { memory_max_mb: 0, swap_max_mb: 0, tasks_max: 0 },
     )
     .unwrap();
     let command = backend.build_command("prompt").unwrap();

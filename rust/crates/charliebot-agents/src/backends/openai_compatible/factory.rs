@@ -7,6 +7,7 @@ use charliebot_registry::backend::{AgentBackend, BackendFactory, LaunchArgs};
 
 use super::openai_compatible_claude;
 use crate::backends::claude_code::factory::{launch_config_dir, launch_with_kwargs};
+use crate::transport::cgroup::SessionCgroupLimits;
 
 pub struct OpenAiCompatibleFactory;
 
@@ -28,7 +29,14 @@ impl BackendFactory for OpenAiCompatibleFactory {
     }
     let launch = launch_with_kwargs(launch)?;
     let config_dir = launch_config_dir(&launch)?;
-    let backend = openai_compatible_claude::backend(&proxy_base_url, &auth_token, &option.model, config_dir, launch)?;
+    let backend = openai_compatible_claude::backend(
+      &proxy_base_url,
+      &auth_token,
+      &option.model,
+      config_dir,
+      launch,
+      SessionCgroupLimits::from_server(&cfg.server),
+    )?;
     Ok(Box::new(backend))
   }
 }

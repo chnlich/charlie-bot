@@ -1,9 +1,9 @@
 //! Cold-cache Sonnet compaction of an account's Claude transcript.
 
+use std::collections::HashMap;
+use std::ffi::OsString;
 use std::io::BufRead;
-use std::os::unix::process::CommandExt;
 use std::path::Path;
-use std::process::Stdio;
 use std::time::Duration as StdDuration;
 
 use anyhow::Context;
@@ -12,9 +12,9 @@ use charliebot_registry::backend::{EmitFn, Env};
 use charliebot_store::metadata::UtcDateTime;
 use serde_json::{Map, Value, json};
 use tokio::io::AsyncWriteExt;
-use tokio::process::Command;
 use tokio::time::timeout;
 
+use crate::transport::spawn::{ChildStdin, SpawnSetup, SpawnSpec, spawn_with_setup};
 use crate::transport::{cgroup, kill};
 
 use super::{
@@ -349,44 +349,24 @@ async fn compact_with_sonnet_inner(
   let command = compaction_command(session_id);
   tracing::info!(target: "charliebot_agents", cc_session_id = session_id, pre_tokens, session = %session_id, account = account_label, trigger, "claude_compaction_starting");
   let env = make_env(config_dir)?;
-  let group = cgroup::prepare_session_cgroup(
-    &cgroup::system_cgroup_base_dir(),
-    session_cgroup_id,
+  let spec = SpawnSpec::new(
+    &command[0],
+    command[1..].iter().map(OsString::from).collect(),
+    Some(cwd.to_path_buf()),
+    env.into_iter().map(|(name, value)| (OsString::from(name), OsString::from(value))).collect::<HashMap<_, _>>(),
+    session_cgroup_id.map(str::to_string),
+    cgroup::system_cgroup_base_dir(),
     cfg.server.session_memory_max_mb,
     cfg.server.session_swap_max_mb,
     cfg.server.session_tasks_max,
   );
-  let mut process = Command::new(&command[0]);
-  process
-    .args(&command[1..])
-    .current_dir(cwd)
-    .env_clear()
-    .envs(env.iter())
-    .stdin(Stdio::piped())
-    .stdout(Stdio::piped())
-    .stderr(Stdio::piped())
-    .kill_on_drop(false);
-  unsafe {
-    process.as_std_mut().pre_exec(|| {
-      if libc::setsid() == -1 {
-        return Err(std::io::Error::last_os_error());
-      }
-      if libc::nice(10) == -1 {
-        return Err(std::io::Error::last_os_error());
-      }
-      Ok(())
-    });
-  }
-  let mut child = match process.spawn() {
-    Ok(child) => child,
+  let mut child = match spawn_with_setup(&spec, None, ChildStdin::Piped, SpawnSetup::ChildSideCgroup).await {
+    Ok(spawned) => spawned.child,
     Err(error) => {
       return fail(emit, &format!("could not start {}: {error}", command[0]), session_id, account_label, trigger).await;
     }
   };
   let pid = child.id().expect("spawned compaction process has a pid");
-  if let Some(group) = &group {
-    cgroup::move_process_to_cgroup(pid, group);
-  }
   let mut stdin = child.stdin.take().expect("compaction stdin is piped");
   stdin.write_all(COMPACT_PROMPT).await?;
   drop(stdin);

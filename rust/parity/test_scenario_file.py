@@ -246,10 +246,37 @@ def test_ws_fake_handshake_requires_a_declared_fake(tmp_path: pathlib.Path) -> N
         {
             "headless_chrome": True
         },
+        {
+            "exclude_file_globs": ["home/sessions/*/data/runs/**"]
+        },
+        {
+            "compare_fake_agent_spawns": False
+        },
     ])
 def test_new_scenario_keys_load(tmp_path: pathlib.Path, fields: dict[str, Any]) -> None:
   scenario = _load(tmp_path, [{"name": "key scenario", "method": "GET", "path": "/api/auth/status"}], **fields)
   assert scenario.name == "loader"
+
+
+def test_run_comparison_controls_load(tmp_path: pathlib.Path) -> None:
+  scenario = _load(
+      tmp_path,
+      [{"name": "key scenario", "method": "GET", "path": "/api/auth/status"}],
+      exclude_file_globs=["home/sessions/*/data/runs/**"],
+      compare_fake_agent_spawns=False,
+  )
+  assert scenario.exclude_file_globs == ("home/sessions/*/data/runs/**",)
+  assert scenario.compare_fake_agent_spawns is False
+
+
+@pytest.mark.parametrize("pattern", ["", "/etc/passwd", "../outside", "home/../outside"])
+def test_excluded_file_globs_must_stay_in_the_tree(tmp_path: pathlib.Path, pattern: str) -> None:
+  with pytest.raises(scenario_file.ScenarioError):
+    _load(
+        tmp_path,
+        [{"name": "key scenario", "method": "GET", "path": "/api/auth/status"}],
+        exclude_file_globs=[pattern],
+    )
 
 
 def test_allowed_baseline_values_rule_loads(tmp_path: pathlib.Path) -> None:
@@ -298,6 +325,43 @@ def test_either_order_rule_loads(tmp_path: pathlib.Path) -> None:
   loaded = scenario.comparison_rules[0]["either_order_of_adjacent_events"]
   assert loaded["first"] == _NUDGE_SELECTOR
   assert loaded["second"] == _FINISHED_SELECTOR
+
+
+def test_event_type_stream_rule_loads(tmp_path: pathlib.Path) -> None:
+  rule = {"session": "${sessions.atlas}", "event_types": ["improve_iteration_completed", "child_report"]}
+  scenario = _load(
+      tmp_path, [{
+          "name": "event streams",
+          "method": "GET",
+          "path": "/api/auth/status"
+      }],
+      comparison_rules=[{
+          "compare_event_type_streams": rule
+      }])
+  assert scenario.comparison_rules[0]["compare_event_type_streams"] == rule
+
+
+@pytest.mark.parametrize(
+    "rule",
+    [
+        {"session": "${sessions.atlas}"},
+        {"session": "${sessions.atlas}", "event_types": []},
+        {"session": "${sessions.atlas}", "event_types": ["child_report", ""]},
+        {"session": "${sessions.atlas}", "event_types": ["child_report", "child_report"]},
+        {"session": "", "event_types": ["child_report"]},
+    ],
+)
+def test_event_type_stream_rule_rejects_invalid_values(tmp_path: pathlib.Path, rule: dict[str, Any]) -> None:
+  with pytest.raises(scenario_file.ScenarioError):
+    _load(
+        tmp_path, [{
+            "name": "event streams",
+            "method": "GET",
+            "path": "/api/auth/status"
+        }],
+        comparison_rules=[{
+            "compare_event_type_streams": rule
+        }])
 
 
 @pytest.mark.parametrize(

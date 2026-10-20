@@ -355,6 +355,17 @@ pub async fn git_rev_parse(repo_path: &Path, rev: &str) -> Option<String> {
   }
 }
 
+/// Count commits in a range, or return None when git rev-list fails or prints no count.
+pub async fn git_rev_list_count(repo_path: &Path, range: &str) -> Option<i64> {
+  let (ok, output, _) =
+    git_stdout(repo_path, &["rev-list", "--count", range], SUBPROCESS_GIT_READ_TIMEOUT_ASYNC, "git rev-list --count")
+      .await;
+  if !ok || output.is_empty() || !output.chars().all(|character| character.is_ascii_digit()) {
+    return None;
+  }
+  output.parse().ok()
+}
+
 /// The remote's default branch and its tip SHA from ONE `git ls-remote --symref origin`
 /// (`src/infra/git.py:173`). Never consults `refs/remotes/origin/HEAD` or any local branch.
 /// The tip is `None` when the listing names a default branch without listing its ref.

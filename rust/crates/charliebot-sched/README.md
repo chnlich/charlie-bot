@@ -85,7 +85,5 @@ place of the improve stub.
 | `improve::controller::ImproveSequenceController` | `src/features/improve/sequence_controller.py:31` |
 | `improve::controller::register` | `src/features/improve/__init__.py:5` |
 
-The start route passes `TaskType::Verify` as the improve role. The Rust resolver takes a `TaskType` and reads it only for
-pool selection, and the start route never reaches that branch: a loop with no requested backend and a pool skips the
-resolver, and a requested backend returns before the role is read. Python passes `IMPROVE_ROLE`
-(`src/runtime/spawner_backends.py:11`).
+The start route passes the improve role to backend resolution. Each pooled iteration cools its member after a quota
+failure and selects again on the next iteration.

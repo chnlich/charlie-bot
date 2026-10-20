@@ -20,7 +20,8 @@ use crate::dispatch::{self, Dispatcher, RunFinishedCompletion};
 use crate::git;
 use crate::review_text;
 
-const RUN_REF_PREFIX: &str = "run:";
+/// Prefix for a run reference in a child report's result_refs.
+pub const RUN_REF_PREFIX: &str = "run:";
 const SPEC_REF_PREFIX: &str = "spec:";
 const REVIEW_REF_PREFIX: &str = "review:";
 const LANDING_REF_PREFIX: &str = "landed:";

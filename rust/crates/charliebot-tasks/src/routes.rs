@@ -322,7 +322,7 @@ async fn delegate_task(State(features): State<Arc<FeatureContext>>, request: axu
       &features.store,
       &request.session_id,
       request.backend.as_deref(),
-      request.task_type,
+      request.task_type.into(),
       &pool,
     )
     .await

@@ -313,6 +313,94 @@ def test_stdin_text_difference_names_the_stdin_field(tmp_path: pathlib.Path, mon
   assert lines[0].startswith("fake-agent spawns $[0].stdin:")
 
 
+def test_spawn_comparison_can_keep_the_count_check_only(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  baseline = _spawn_side(tmp_path, monkeypatch, "base", b"Summarize the notes.")
+  candidate = _spawn_side(tmp_path, monkeypatch, "cand", b"Summarize the draft.")
+  assert parity._spawns_diff([baseline, candidate], expect_starts=1, compare_spawns=False) == []
+
+
+def test_excluded_run_files_do_not_hide_loop_state() -> None:
+  run_file = "home/sessions/synthetic/data/runs/run-id/metadata.json"
+  loop_file = "home/sessions/synthetic/loops/1/state.json"
+  delta = compare.Delta(
+      added={run_file: compare.Entry("file", b"{}"), loop_file: compare.Entry("file", b"{}")},
+      removed=frozenset({run_file}),
+      changed={run_file: compare.Entry("file", b"{\"status\":\"running\"}"),
+               loop_file: compare.Entry("file", b"{\"status\":\"blocked\"}")},
+  )
+
+  filtered = parity._exclude_delta_paths(delta, ("home/sessions/*/data/runs/**",))
+
+  assert set(filtered.added) == {loop_file}
+  assert filtered.removed == frozenset()
+  assert set(filtered.changed) == {loop_file}
+
+
+def test_excluded_paths_do_not_seed_uuid_normalization(tmp_path: pathlib.Path) -> None:
+  run_id = "10000000-0000-4000-8000-000000000001"
+  unrelated_id = "10000000-0000-4000-8000-000000000002"
+  spawn_id = "10000000-0000-4000-8000-000000000003"
+  snapshots = []
+  sides = []
+  for label in ("base", "cand"):
+    root = tmp_path / label
+    root.mkdir()
+    side = parity.Side(label, parity.servers.Tree(label=label, root=root), port=18600)
+    sides.append(side)
+    (root / "fake-agent").mkdir()
+    (root / "fake-agent" / "spawns.jsonl").write_text(json.dumps({"run_id": spawn_id}) + "\n", encoding="utf-8")
+    snapshots.append({
+        "home/sessions/synthetic/data/runs/run-id/metadata.json": compare.Entry(
+            "file", json.dumps({"run_id": run_id, "other": unrelated_id}).encode()),
+        "home/sessions/synthetic/data/chat_events.jsonl": compare.Entry(
+            "file", (json.dumps({"run_id": run_id}) + "\n").encode()),
+    })
+
+  parity._prepare_contexts(sides, snapshots, ("home/sessions/*/data/runs/**",), compare_fake_agent_spawns=False)
+
+  for side in sides:
+    assert side.ctx.minted_uuids == {run_id: "<minted-1>"}
+
+
+def test_interleaved_event_streams_do_not_seed_different_uuid_orders(tmp_path: pathlib.Path) -> None:
+  ids = (
+      "10000000-0000-4000-8000-000000000011",
+      "10000000-0000-4000-8000-000000000012",
+      "10000000-0000-4000-8000-000000000013",
+      "10000000-0000-4000-8000-000000000014",
+      "10000000-0000-4000-8000-000000000015",
+      "10000000-0000-4000-8000-000000000016",
+  )
+  event_path = "home/sessions/synthetic-session/data/chat_events.jsonl"
+  event_types = ("improve_iteration_completed", "master_done")
+  sequences = (
+      [
+          {"type": "improve_iteration_completed", "id": ids[0]},
+          {"type": "master_done", "id": ids[1]},
+          {"type": "improve_iteration_completed", "id": ids[2]},
+      ],
+      [
+          {"type": "improve_iteration_completed", "id": ids[3]},
+          {"type": "improve_iteration_completed", "id": ids[4]},
+          {"type": "master_done", "id": ids[5]},
+      ],
+  )
+  sides = []
+  snapshots = []
+  for label, events in zip(("base", "cand"), sequences, strict=True):
+    root = tmp_path / label
+    root.mkdir()
+    sides.append(parity.Side(label, parity.servers.Tree(label=label, root=root), port=18600))
+    data = "".join(json.dumps(event) + "\n" for event in events).encode()
+    snapshots.append({event_path: compare.Entry("file", data)})
+
+  rules = [[(event_path, event_types)], [(event_path, event_types)]]
+  parity._prepare_contexts(sides, snapshots, event_type_stream_rules=rules)
+
+  assert list(sides[0].ctx.minted_uuids.values()) == ["<minted-1>", "<minted-2>", "<minted-3>"]
+  assert list(sides[1].ctx.minted_uuids.values()) == ["<minted-1>", "<minted-2>", "<minted-3>"]
+
+
 def test_probe_stdout_pipe_inodes_compare_equal_and_a_file_path_still_differs() -> None:
   rules = normalize.file_rules("fake-agent/spawns.jsonl")
   baseline = normalize.normalize_json({"stdout_path": "pipe:[100017684]"}, rules, _context())

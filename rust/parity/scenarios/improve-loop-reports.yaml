@@ -1,0 +1,127 @@
+# A two-iteration improve loop writes both iteration reports, wakes its parent for each report and the close, then
+# closes its child. Parent wake completion can interleave with iteration 2's report on either server.
+stage: triggers-cron-improve
+name: improve-loop-reports
+fixture_extras: [worker_repo]
+fake_agent:
+  starts:
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-improve-agent}
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: The synthetic improve iteration is complete.}]
+        - emit: {type: result, subtype: success, result: Synthetic iteration complete., usage: {input_tokens: 2, output_tokens: 1}}
+      exit_code: 0
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-improve-agent}
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: The synthetic improve iteration is complete.}]
+        - emit: {type: result, subtype: success, result: Synthetic iteration complete., usage: {input_tokens: 2, output_tokens: 1}}
+      exit_code: 0
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-improve-agent}
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: The synthetic improve iteration is complete.}]
+        - emit: {type: result, subtype: success, result: Synthetic iteration complete., usage: {input_tokens: 2, output_tokens: 1}}
+      exit_code: 0
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-improve-agent}
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: The synthetic improve iteration is complete.}]
+        - emit: {type: result, subtype: success, result: Synthetic iteration complete., usage: {input_tokens: 2, output_tokens: 1}}
+      exit_code: 0
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-improve-agent}
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: The synthetic improve iteration is complete.}]
+        - emit: {type: result, subtype: success, result: Synthetic iteration complete., usage: {input_tokens: 2, output_tokens: 1}}
+      exit_code: 0
+expect_starts: 5
+# Parent wake turns can interleave with the next iteration on either server; compare durable events and loop state.
+compare_fake_agent_spawns: false
+exclude_file_globs: [home/sessions/*/data/runs/**]
+comparison_rules:
+  # The manager turns and loop controller run independently; compare each durable event stream in its own order.
+  - compare_event_type_streams:
+      session: ${sessions.atlas}
+      event_types: [improve_iteration_completed, child_report, master_done, improve_failed]
+steps:
+  - name: start a two-iteration improve loop on the worker repository
+    method: POST
+    path: /api/internal/improve
+    json:
+      session_id: ${sessions.atlas}
+      repo_path: ${tree.root}/${extras.worker_repo.repo}
+      base_branch: main
+      goal: Improve the synthetic worker.
+      work_branch: improve/two-iteration
+      iterations: 2
+    capture: {child: child_session_id}
+    expect_status: 200
+    defer_files: true
+  - kind: wait
+    name: wait for both iteration reports to wake the parent
+    timeout_seconds: 60
+    until:
+      event:
+        session: ${sessions.atlas}
+        type: child_report
+        fields: {child_session_id: "${capture.child}"}
+        count: 2
+  - kind: wait
+    name: wait for the improve child to close
+    timeout_seconds: 60
+    until:
+      event:
+        session: ${capture.child}
+        type: task_closed
+  - kind: wait
+    name: wait for the close report and all three parent wakes
+    timeout_seconds: 60
+    until:
+      event:
+        session: ${sessions.atlas}
+        type: child_report
+        fields: {child_session_id: "${capture.child}"}
+        count: 3
+  # The Atlas fixture has three completed manager turns before this loop.
+  - kind: wait
+    name: wait for all three parent manager turns to finish
+    timeout_seconds: 60
+    until:
+      event:
+        session: ${sessions.atlas}
+        type: master_done
+        count: 6
+  - kind: wait
+    name: wait for the loop files to record the exhausted run
+    timeout_seconds: 60
+    until:
+      file_field:
+        path: sessions/${sessions.atlas}/loops/1/state.json
+        field: status
+        equals: blocked

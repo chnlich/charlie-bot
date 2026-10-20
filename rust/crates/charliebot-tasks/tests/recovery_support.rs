@@ -496,6 +496,17 @@ impl Stack {
     Stack::start_with_min_free_disk_gib(options, pool, 0).await
   }
 
+  /// A stack with scripted backend options and one additional package registration.
+  pub async fn start_with_package(
+    options: Vec<BackendOption>,
+    pool: Vec<String>,
+    extra: (&'static str, RegisterFn),
+  ) -> anyhow::Result<Stack> {
+    let home = tempfile::tempdir()?;
+    let cfg = config(home.path(), options, pool, 0);
+    Stack::assemble(home, cfg, registry(Some(extra))?).await
+  }
+
   pub async fn start_with_min_free_disk_gib(
     options: Vec<BackendOption>,
     pool: Vec<String>,

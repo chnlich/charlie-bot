@@ -36,7 +36,7 @@ shutdown and re-attachment into server lifespan.
 | `spawner_backends::unknown_backend_pin_refusal` | `src/runtime/spawner_backends.py:32` |
 | `spawner_backends::resolve_backend_option` | `src/runtime/spawner_backends.py:22` |
 | `spawner_backends::resolve_session_default_backend_model` | `src/runtime/spawner_backends.py:49` |
-| `spawner_backends::resolve_requested_subagent_backend_model` | `src/runtime/spawner_backends.py:85` |
+| `spawner_backends::resolve_requested_subagent_backend_model`, `SubagentRole`, `BackendResolutionValueError` | `src/runtime/spawner_backends.py:11-13`, `:85` |
 | `spawner_backends::select_verify_backend` | `src/runtime/spawner_backends.py:117` |
 | `review` module | `src/runtime/review.py:170-264` |
 | `review::worker_summary_from_events_log` | `src/runtime/review.py:170-198` |
@@ -48,6 +48,7 @@ shutdown and re-attachment into server lifespan.
 | `session_anchors::context_reset_note` and `backend_switch_reset_reason` | `src/runtime/session_anchors.py:46`, `:36` |
 | `execution::LaunchSettlement` | `src/runtime/task_execution.py:170` |
 | `execution::TaskExecutionAdapter` and `TaskExecutionAdapter::new` | `src/runtime/task_execution.py:388-433` |
+| `TaskExecutionAdapter::take_quota_failure` | `src/runtime/task_execution.py:2109` |
 | `TaskExecutionAdapter::call` | `src/runtime/task_execution.py:435-523` |
 | `TaskExecutionAdapter::launch`, `execute_run`, and `launch_and_settle` | `src/runtime/task_execution.py:589-605`, `:749-865`, `:1074-1124` |
 | `execution::pre_recovery_step` and crate `register` | `src/runtime/task_execution.py:2625-2638` |
@@ -68,6 +69,7 @@ shutdown and re-attachment into server lifespan.
 | `completion::CompletionEvidence` and its fields | `src/runtime/task_completion.py:143` |
 | `completion::SequenceCloseOutcome` | `src/runtime/task_completion.py:764` |
 | `completion::TaskCompletion` and `TaskCompletion::new` | `src/runtime/task_completion.py:168` |
+| `completion::RUN_REF_PREFIX` | `src/runtime/task_completion.py:121` |
 | `TaskCompletion::complete_task` | `src/runtime/task_completion.py:490` |
 | `TaskCompletion::cancel_task` | `src/runtime/task_completion.py:1176` |
 | `TaskCompletion::restore_task`, `restore_chain`, and `restore_chain_locked` | `src/runtime/task_completion.py:1264`, `:1287`, `:1297` |
@@ -107,6 +109,7 @@ git program; production builds keep the Python values.
 | `git::git_worktree_remove_reporting` | `src/infra/git.py:575` |
 | `git::git_worktree_prune` | `src/infra/git.py:623` |
 | `git::git_rev_parse` | `src/infra/git.py:658` |
+| `git::git_rev_list_count` | `src/features/improve/improve_command.py:303-330` |
 | `git::git_push_branch` | `src/infra/git.py:727` |
 | `git::git_push_refspec` | `src/infra/git.py:733` |
 | `git::SUBPROCESS_GIT_READ_TIMEOUT_ASYNC` | `src/infra/timeouts.py:14` |

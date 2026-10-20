@@ -18,6 +18,7 @@ import collections
 import concurrent.futures
 import contextlib
 import dataclasses
+import fnmatch
 import hashlib
 import hmac
 import http.client
@@ -233,6 +234,25 @@ def _adjacent_order_rules(
   return rules
 
 
+def _event_type_stream_rules(
+    scenario: scenario_file.Scenario,
+    side: Side,
+    manifest: dict,
+) -> list[tuple[str, tuple[str, ...]]]:
+  rules = []
+  rule_name = scenario_file.EVENT_STREAM_RULE_NAME
+  for raw_rule in scenario.comparison_rules:
+    if rule_name not in raw_rule:
+      continue
+    try:
+      raw = _substitute(side, raw_rule[rule_name], manifest)
+    except scenario_file.UnresolvedReferenceError:
+      continue
+    path = f"home/sessions/{raw['session']}/data/chat_events.jsonl"
+    rules.append((path, tuple(raw["event_types"])))
+  return rules
+
+
 def _delta_diff_lines(
     scenario: scenario_file.Scenario,
     sides: list[Side],
@@ -245,22 +265,53 @@ def _delta_diff_lines(
   for side, delta in zip(sides, deltas, strict=True):
     for first, second in _adjacent_order_rules(scenario, side, manifest):
       delta = compare.order_adjacent_pair(delta, first, second)
+    for path, event_types in _event_type_stream_rules(scenario, side, manifest):
+      delta = compare.order_event_type_streams_in_delta(delta, path, event_types)
+    delta = _exclude_delta_paths(delta, scenario.exclude_file_globs)
     ordered.append(delta)
   return compare.delta_diff(
       ordered[0], ordered[1], sides[0].ctx, sides[1].ctx, _event_field_rules(scenario, sides, manifest),
       candidate_is_python)
 
 
-def _prepare_contexts(sides: list[Side], snapshots: list[compare.Snapshot]) -> None:
-  for side, snapshot in zip(sides, snapshots, strict=True):
+def _exclude_delta_paths(delta: compare.Delta, patterns: tuple[str, ...]) -> compare.Delta:
+  if not patterns:
+    return delta
+  return compare.Delta(
+      added={path: entry for path, entry in delta.added.items() if not _path_is_excluded(path, patterns)},
+      removed=frozenset(path for path in delta.removed if not _path_is_excluded(path, patterns)),
+      changed={path: entry for path, entry in delta.changed.items() if not _path_is_excluded(path, patterns)},
+  )
+
+
+def _path_is_excluded(path: str, patterns: tuple[str, ...]) -> bool:
+  return any(fnmatch.fnmatchcase(path, pattern) for pattern in patterns)
+
+
+def _prepare_contexts(
+    sides: list[Side],
+    snapshots: list[compare.Snapshot],
+    excluded_paths: tuple[str, ...] = (),
+    compare_fake_agent_spawns: bool = True,
+    event_type_stream_rules: list[list[tuple[str, tuple[str, ...]]]] | None = None,
+) -> None:
+  rules_by_side = event_type_stream_rules or [[] for _ in sides]
+  for side, snapshot, side_rules in zip(sides, snapshots, rules_by_side, strict=True):
+    comparable = {
+        path: entry for path, entry in snapshot.items() if not _path_is_excluded(path, excluded_paths)
+    }
+    for path, event_types in side_rules:
+      entry = comparable.get(path)
+      if entry is not None and entry.kind == "file":
+        comparable[path] = compare.Entry(entry.kind, compare.order_event_type_streams(entry.data, event_types))
     extra_files = ()
     spawns_path = _spawns_path(side.tree)
-    if spawns_path.exists():
+    if compare_fake_agent_spawns and spawns_path.exists():
       extra_files = (("fake-agent/spawns.jsonl", spawns_path.read_bytes()),)
     fake_log = side.tree.root / "logs" / "fakes.jsonl"
     if fake_log.exists():
       extra_files += (("logs/fakes.jsonl", fake_log.read_bytes()),)
-    compare.prepare_context(snapshot, side.ctx, extra_files)
+    compare.prepare_context(comparable, side.ctx, extra_files)
 
 
 def _process_alive(record: dict) -> bool:
@@ -753,7 +804,9 @@ def _run_handover_step(
     side.wait_ready()
   lines.extend(_wait_for_provisioning(sides))
   after = _settle_sides(sides)
-  _prepare_contexts(sides, after)
+  _prepare_contexts(
+      sides, after, scenario.exclude_file_globs, scenario.compare_fake_agent_spawns,
+      [_event_type_stream_rules(scenario, side, manifest) for side in sides])
   deltas = [compare.delta(old, new) for old, new in zip(before, after, strict=True)]
   lines.extend(_delta_diff_lines(scenario, sides, manifest, deltas, candidate_is_python))
   lines.extend(_recording_diff_since(sides, record_marks, step.route))
@@ -875,7 +928,9 @@ def _run_step(
   else:
     raise ValueError(f"unknown scenario step kind {step.kind!r}")
   after = _settle_sides(sides)
-  _prepare_contexts(sides, after)
+  _prepare_contexts(
+      sides, after, scenario.exclude_file_globs, scenario.compare_fake_agent_spawns,
+      [_event_type_stream_rules(scenario, side, manifest) for side in sides])
   lines.extend(_exit_lines(sides, f"during step {step.name!r}"))
   if baseline is not None and candidate is not None:
     if step.kind == "http" and step.http_compare == "status_and_shape":
@@ -1016,13 +1071,15 @@ def _cleanup_scenario(sides: list[Side]) -> tuple[list[str], list[str]]:
   return lines, notes
 
 
-def _spawns_diff(sides: list[Side], expect_starts: int | None) -> list[str]:
+def _spawns_diff(sides: list[Side], expect_starts: int | None, compare_spawns: bool = True) -> list[str]:
   records = [_read_spawns(side.tree) for side in sides]
   lines = []
   if expect_starts is not None:
     for side, starts in zip(sides, records, strict=True):
       if len(starts) != expect_starts:
         lines.append(f"{side.label} has {len(starts)} fake-agent starts; scenario expects {expect_starts}")
+  if not compare_spawns:
+    return lines
   normalized = [
       [
           normalize.normalize_json(record, normalize.file_rules("fake-agent/spawns.jsonl"), side.ctx)
@@ -1126,9 +1183,11 @@ def _run_scenario(
         missing = side.fake_set.wait_ready(tuple(scenario.fakes), fakes.FAKE_READY_TIMEOUT_SECONDS)
         startup_lines.extend(f"{side.label} fake {name} did not become ready" for name in missing)
     after = _settle_sides(sides)
-    _prepare_contexts(sides, after)
+    _prepare_contexts(
+        sides, after, scenario.exclude_file_globs, scenario.compare_fake_agent_spawns,
+        [_event_type_stream_rules(scenario, side, manifest) for side in sides])
     deltas = [compare.delta(old, new) for old, new in zip(before, after, strict=True)]
-    startup_lines.extend(compare.delta_diff(deltas[0], deltas[1], sides[0].ctx, sides[1].ctx))
+    startup_lines.extend(_delta_diff_lines(scenario, sides, manifest, deltas, candidate_is_python))
     startup_lines.extend(_recording_diff_since(sides, startup_marks, "(startup)"))
     startup_lines.extend(_exit_lines(sides, "during server startup"))
     results.append(
@@ -1154,10 +1213,12 @@ def _run_scenario(
     shutdown_marks = _recording_marks(sides)
     cleanup_lines, cleanup_notes = _cleanup_scenario(sides)
     after = _settle_sides(sides)
-    _prepare_contexts(sides, after)
+    _prepare_contexts(
+        sides, after, scenario.exclude_file_globs, scenario.compare_fake_agent_spawns,
+        [_event_type_stream_rules(scenario, side, manifest) for side in sides])
     deltas = [compare.delta(old, new) for old, new in zip(before, after, strict=True)]
     cleanup_lines.extend(_recording_diff_since(sides, shutdown_marks, "(shutdown)"))
-    cleanup_lines.extend(_spawns_diff(sides, scenario.expect_starts))
+    cleanup_lines.extend(_spawns_diff(sides, scenario.expect_starts, scenario.compare_fake_agent_spawns))
     results.append(
         StepResult(
             scenario.name,

@@ -23,6 +23,8 @@ use charliebot_registry::sequence::SequenceTree;
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskSpec, TaskType};
 use charliebot_store::run_records::{RUN_EVENTS_NAME, RunKind, RunRecord, SequenceRef};
 use charliebot_store::{CreateTask, Store, StoreError, StoreResult, TaskCaller, control_events};
+use charliebot_tasks::completion::RUN_REF_PREFIX;
+use charliebot_tasks::execution::TaskExecutionAdapter;
 use charliebot_tasks::{git, prompts, spawner_prompt};
 use serde_json::{Map, Value, json};
 
@@ -42,9 +44,6 @@ pub const IMPROVE_COMPLETED: &str = "improve_completed";
 pub const IMPROVE_FAILED: &str = "improve_failed";
 /// The final report's type when a stop request ended the loop.
 pub const IMPROVE_STOPPED: &str = "improve_stopped";
-/// The prefix of a report's `run:` reference, as the completion owner writes it.
-const RUN_REF_PREFIX: &str = "run:";
-
 /// The fixed loop parameters one controller run carries.
 pub struct LoopSpec<'a> {
   pub session_id: &'a str,
@@ -289,10 +288,11 @@ pub async fn run_improve_sequence(
   tree: &dyn SequenceTree,
   repo_root: &RepoRoot,
   pool: &BackendPool,
+  adapter: &TaskExecutionAdapter,
 ) {
   let mut progress =
     Progress { goal: spec.goal.to_string(), previous_summaries: Vec::new(), blocked: None, completed_iterations: 0 };
-  if let Err(error) = run_loop(spec, cfg, tree, repo_root, pool, &mut progress).await {
+  if let Err(error) = run_loop(spec, cfg, tree, repo_root, pool, adapter, &mut progress).await {
     tracing::error!(
       target: "charliebot_sched",
       session = spec.session_id,
@@ -353,6 +353,7 @@ async fn run_loop(
   tree: &dyn SequenceTree,
   repo_root: &RepoRoot,
   pool: &BackendPool,
+  adapter: &TaskExecutionAdapter,
   progress: &mut Progress,
 ) -> anyhow::Result<()> {
   let state = command::require_loop_state(cfg, spec.session_id, spec.loop_id)?;
@@ -387,6 +388,7 @@ async fn run_loop(
     }
   };
 
+  let mut next_pool_member = None;
   for iteration in 1..=spec.iterations {
     let state = command::require_loop_state(cfg, spec.session_id, spec.loop_id)?;
     if state.status == "stopped" {
@@ -399,7 +401,11 @@ async fn run_loop(
     let tip_before = git::git_rev_parse(&wt_path, "HEAD").await.unwrap_or_default();
 
     let (iteration_backend, iteration_model) = if state.backend_from_pool {
-      match pool.select(cfg, "improve", &[])? {
+      let member = match next_pool_member.take() {
+        Some(member) => Some(member),
+        None => pool.select(cfg, "improve", &[])?,
+      };
+      match member {
         Some(member) => {
           if member.model.is_empty() {
             bail!("pool member '{}' has no default model", member.id);
@@ -447,28 +453,37 @@ async fn run_loop(
       outcome = settlement.outcome;
     }
     let outcome = outcome.context("the iteration's launch settled with no outcome")?;
+    let run =
+      tree.read_run_sync(spec.child_id, &run.id)?.context("the iteration run disappeared after its launch settled")?;
     progress.completed_iterations = iteration;
 
     if outcome != "success" {
       let (blocker_reason, failed_summary) = iteration_blocker(tree, spec.child_id, &run.id, iteration, &outcome)?;
+      let quota_failure = adapter.take_quota_failure(spec.child_id, &run.id);
       if let Some(reason) = blocker_reason {
         if state.backend_from_pool {
-          // The member's cooldown needs the reset time that the task execution adapter holds. That accessor is not
-          // reachable from this crate, so the loop fails here by name instead of cooling without it.
-          bail!(
-            "iteration {iteration} hit a quota blocker on pool member '{iteration_backend}', and the task execution adapter's quota reset time is not reachable from the improve sequence: {reason}"
+          pool.cool(&iteration_backend, quota_failure.flatten());
+          if quota_failure.is_some() && run.pid.is_none() && iteration < spec.iterations {
+            match pool.select(cfg, "improve", &[])? {
+              Some(member) => next_pool_member = Some(member),
+              None => {
+                progress.blocked = Some((iteration, reason, failed_summary));
+                break;
+              }
+            }
+          }
+        } else {
+          tracing::warn!(
+            target: "charliebot_sched",
+            session = spec.session_id,
+            loop_id = spec.loop_id,
+            iteration,
+            reason = reason.as_str(),
+            "improve_sequence_blocked"
           );
+          progress.blocked = Some((iteration, reason, failed_summary));
+          break;
         }
-        tracing::warn!(
-          target: "charliebot_sched",
-          session = spec.session_id,
-          loop_id = spec.loop_id,
-          iteration,
-          reason = reason.as_str(),
-          "improve_sequence_blocked"
-        );
-        progress.blocked = Some((iteration, reason, failed_summary));
-        break;
       }
     }
 

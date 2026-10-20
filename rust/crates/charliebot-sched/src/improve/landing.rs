@@ -2,14 +2,9 @@
 //! (`src/features/improve/improve_command.py:303-330`, `:370-423`, `:423-432`).
 
 use std::path::Path;
-use std::time::Duration;
 
 use charliebot_tasks::git;
 use serde_json::{Value, json};
-use tokio::process::Command;
-
-/// The read timeout of the git calls that count commits (the tasks crate's async git read budget).
-const GIT_READ_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The tip after an iteration and the commits it added over `tip_before` (`_worktree_commit_delta`). A failed count
 /// leaves the commit count at zero, as the Python helper does.
@@ -18,31 +13,11 @@ pub async fn commit_delta(wt_path: &Path, tip_before: &str) -> (String, i64) {
   let mut commits_added = 0;
   if !tip_before.is_empty() && !tip_after.is_empty() {
     let range = format!("{tip_before}..{tip_after}");
-    if let Some(count) = rev_list_count(wt_path, &range).await {
+    if let Some(count) = git::git_rev_list_count(wt_path, &range).await {
       commits_added = count;
     }
   }
   (tip_after, commits_added)
-}
-
-/// `git rev-list --count <range>` in `repo`, or `None` when the command fails or prints no count.
-async fn rev_list_count(repo: &Path, range: &str) -> Option<i64> {
-  let output = tokio::time::timeout(
-    GIT_READ_TIMEOUT,
-    Command::new("git").arg("-C").arg(repo).args(["rev-list", "--count", range]).output(),
-  )
-  .await
-  .ok()?
-  .ok()?;
-  if !output.status.success() {
-    return None;
-  }
-  let text = String::from_utf8_lossy(&output.stdout);
-  let text = text.trim();
-  if text.is_empty() || !text.chars().all(|character| character.is_ascii_digit()) {
-    return None;
-  }
-  text.parse().ok()
 }
 
 /// The fixed sentence a blocked loop's report opens with.

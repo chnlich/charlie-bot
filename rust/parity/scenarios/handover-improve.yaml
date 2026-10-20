@@ -25,6 +25,7 @@ steps:
       repo_path: ${tree.root}/${extras.worker_repo.repo}
       base_branch: main
       goal: Optimize the synthetic loop.
+      work_branch: improve/handover
       iterations: 1
     capture: {child: child_session_id}
     expect_status: 200

@@ -180,7 +180,6 @@ The remaining unported follow-ups return an error that names the owner and the s
 
 | Owner | Rust call site | Follow-up that Python replays (`task_execution.py:2802-2914`) |
 | --- | --- | --- |
-| cold-read | `replay_followups` for a cold-read run that succeeded, failed without later work, or was interrupted | cold-read delivery, failure chain and interrupted report |
 | improve | `replay_followups` for an improve sequence run, queued, launched or terminal; no terminal fact is written | the loop's close step (`ImproveSequenceController::recover_run`, `src/features/improve/sequence_controller.py:66-79`) |
 | cron | `replay_followups` for a cron sequence run, queued, launched or terminal; no terminal fact is written | the frontier redrive (`CronSequenceController::recover_run`, `src/features/cron/sequence_controller.py:135-149`) |
 
@@ -318,6 +317,11 @@ the validated checkout root held in typed startup state. Python reads this path 
 | `cold_read::load_texts` | `src/runtime/cold_read.py:32` |
 | `cold_read::probe_input` | `src/runtime/cold_read.py:43` |
 | `cold_read::format_report`, `cold_read::ColdReadOutcome` | `src/runtime/cold_read.py:49` (`ColdReadOutcome` has no Python class; `Answered` and `AllFailed` are the two branches of `format_report`) |
+| `cold_read::page_sha256` | `src/runtime/task_execution.py:1744-1748` (the sha256 `_build_cold_read_context` records) |
+| `execution::TaskExecutionAdapter::after_cold_read_run` (`pub(crate)`) | `src/runtime/task_execution.py:2454-2497` |
+| `recovery::replay_followups` cold-read rows (private) | `src/runtime/task_execution.py:2863-2890` |
+| `text_length::weighted_length` | `src/infra/text_length.py` (`weighted_length`) |
+| `routes::session_message` | `src/runtime/api/internal.py:320-375` |
 
 Known divergences from Python:
 
@@ -326,6 +330,8 @@ Known divergences from Python:
 - A snapshot field with the wrong type reports the Rust message, not Python's `TypeError` text.
 - Overlay and template read errors reproduce the common `OSError` and `UnicodeDecodeError` texts.
 - Assembly reads its files on the calling thread, where Python uses `asyncio.to_thread`.
+- The cold-read launch and report read the page and the evidence file on the calling thread, where Python uses
+  `asyncio.to_thread`.
 - The Rust `Store` replaces Python's `TaskTreeManager`.
 - The memory contribution (`src/features/memory/turn_contribution.py`) is not ported, so no rule source here emits
   `SCOPE_MEMORY`.
@@ -349,8 +355,13 @@ write-fault seam (`write-faults` feature) and a live `/bin/sh` turn, with the re
 `test-hooks` feature. The other Python startup-recovery cases in `tests/test_task_recovery.py`,
 `tests/test_task_execution.py`, `tests/test_task_completion.py`, `tests/test_task_prompt_change_durable.py`,
 `tests/test_home_writer_fence.py` and the startup cases of `tests/test_task_sequences.py` are not ported yet.
-The cases that replay a named follow-up above (cold-read, failed-run report, review spawn) need that replay
+The cases that replay a named follow-up above (failed-run report, review spawn) need that replay
 before they can pass, and the rest need a store fixture with live run processes.
+
+`tests/delegate.rs` ports the artifact check's cold-read delegation cases and the session-message relay cases of
+`tests/test_agent_message.py`. `tests/worker_run.rs` ports the cold-read run cases: the instructions and input, the
+report with its attempts, the empty answer, the next-backend retry and the all-failed archive. `tests/recovery.rs`
+ports the five cold-read replay cases. Each carries its `// Python:` comment.
 
 `tests/worker.rs` ports the cases of `tests/test_worker_account_relay.py`, `tests/test_worker_backend_build.py`,
 `tests/test_worker_diagnostics.py`, `tests/test_worker_event_line.py` and `tests/test_worker_quota_scan.py`, and the

@@ -19,7 +19,7 @@ That file holds the rules for these kinds of work:
 
 Before you start work of one of these kinds, read `prompts/manager_workflows.md` in full.
 
-- In this thread session, open the last message of each turn with the status block:
+- In this thread session, open your last session message of each turn with the status block:
   - Put the turn's one-line result into **Now**.
   - Write the labels **Goal**, **Now** and **Waiting on you** in English in every chat language.
   - The status block is a three-item markdown list of the session status.
@@ -28,3 +28,4 @@ Before you start work of one of these kinds, read `prompts/manager_workflows.md`
   - The chat renderer and the acceptance checks find the block by its labels.
   - Put an optional offer or a non-blocking approval in the body, after the status block.
   - When another rule asks for opening sentences, write them after the status block.
+- The status block stays in the session message. The thread reply follows `prompts/thread_reply_format.md`.

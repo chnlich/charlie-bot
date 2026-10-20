@@ -1712,6 +1712,14 @@ MASTER_TRIGGER_PATCH_TARGET = "src.runtime.master_trigger.trigger_master"
 SLACK_LISTENER_BOT_CLIENT_PATCH_TARGET = "src.features.slack.slack_listener._bot_client"
 DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET = "src.features.discord.discord_listener._bot_client"
 
+# Import-path patch targets for the round-end audit the master_done dispatch fires on both
+# platforms. src/features/slack/slack_listener.py and src/features/discord/discord_listener.py each
+# define deliver_done at module scope, and their turn-contribution hooks resolve the name on the
+# listener module at call time, so mock.patch lands the stand-in on that listener module's own
+# attribute.
+SLACK_LISTENER_DELIVER_DONE_PATCH_TARGET = "src.features.slack.slack_listener.deliver_done"
+DISCORD_LISTENER_DELIVER_DONE_PATCH_TARGET = "src.features.discord.discord_listener.deliver_done"
+
 # Import-path patch target for backend resolution at launch. The launch path resolves the
 # backend option through the spawner_backends module attribute at call time
 # (`spawner_backends.resolve_backend_option`), so monkeypatch.setattr lands the stand-in on

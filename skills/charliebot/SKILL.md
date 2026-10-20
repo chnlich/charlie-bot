@@ -119,23 +119,7 @@ Some proxied backends (e.g. an opencode GLM endpoint) cap generation far below t
 
 ## Claude Code Backend Context Window
 
-The declared auto-compact window is per run kind:
-
-- A manager turn declares 433000; its compaction point is 400000.
-- A work run declares 133000; its compaction point is 100000.
-- A review run declares 133000; its compaction point is 100000.
-- An iteration run declares 133000; its compaction point is 100000.
-- A scheduled-step run declares 133000; its compaction point is 100000.
-
-The `CLAUDE_CODE_AUTO_COMPACT_WINDOW` variable accepts values from 100k to 1M.
-Claude Code uses the lower of the model window and this value.
-A host export of this variable overrides the per-kind value.
-Claude Code 2.1.219 ignores `CLAUDE_CODE_MAX_CONTEXT_TOKENS` for `claude-*` models.
-Compaction triggers at window − min(max_output, 20k) − 13k.
-An early warmup runs at 0.8×.
-An overrun compacts silently.
-CharlieBot sets the variable in `src/backends/claude_code/claude_launch.py`.
-The session page reads that per-kind table.
+The declared window is per run kind: a manager turn declares 433000 (compaction point 400000) and every other kind 133000 (100000). The working knob is `CLAUDE_CODE_AUTO_COMPACT_WINDOW` (100k–1M, lowers only: it takes `Math.min(model window, set value)`), and a host export of it beats the per-kind value; `CLAUDE_CODE_MAX_CONTEXT_TOKENS` is a no-op for `claude-*` models in Claude Code 2.1.219. Compaction triggers at window − min(max_output, 20k) − 13k, with an early warmup at 0.8×; overrun compacts silently rather than erroring. charlie-bot side: `src/backends/claude_code/claude_launch.py` `headless_claude_env(run_kind)`, whose per-kind table the session page's compaction line reads too.
 
 ---
 

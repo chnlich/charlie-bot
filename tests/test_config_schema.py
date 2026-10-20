@@ -9,6 +9,7 @@ import pytest
 import yaml
 
 from src.app import registrations
+from src.backends.claude_code import claude_launch
 from src.features.cron import loader as cron_loader
 from src.infra import config
 from src.runtime import init_seed
@@ -346,3 +347,36 @@ def test_require_backends_rejects_duplicate_option_id(tmp_path: pathlib.Path) ->
   with pytest.raises(ValueError) as exc_info:
     config.require_backends(cfg)
   assert f"{tmp_path / 'config.yaml'}: backends.options[2] repeats id 'claude-opus'" in str(exc_info.value)
+
+
+# ---------------------------------------------------------------------------
+# claude_launch.name_only_skills: the host's per-run-kind name-only skill lists
+# ---------------------------------------------------------------------------
+
+
+def test_name_only_skill_lists_load_per_run_kind() -> None:
+  cfg = config.CharlieBotConfig(
+      claude_launch={
+          "name_only_skills": {
+              "manager_turn": ["synthetic-manager-skill"],
+              "work": ["synthetic-work-skill"],
+          }
+      })
+
+  assert claude_launch.name_only_skills(cfg, "manager_turn") == ("synthetic-manager-skill",)
+  assert claude_launch.name_only_skills(cfg, "work") == ("synthetic-work-skill",)
+  assert claude_launch.name_only_skills(cfg, "review") == ()
+
+
+def test_the_absent_name_only_setting_lists_no_skill_by_name() -> None:
+  cfg = config.CharlieBotConfig()
+
+  assert cfg.claude_launch.name_only_skills == {}
+  assert claude_launch.name_only_skills(cfg, "manager_turn") == ()
+
+
+def test_an_unknown_run_kind_key_is_rejected_at_load() -> None:
+  with pytest.raises(ValueError) as excinfo:
+    config.CharlieBotConfig(claude_launch={"name_only_skills": {"deep_work": ["synthetic-skill"]}})
+
+  assert "deep_work" in str(excinfo.value)

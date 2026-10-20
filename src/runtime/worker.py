@@ -92,6 +92,7 @@ class Worker:
       events_log_path: pathlib.Path,
       task_description: str,
       cfg: config.CharlieBotConfig,
+      run_kind: models.RunKind,
       backend_option: models.BackendOption | None = None,
       extra_env: dict[str, str] | None = None,
       on_spawned: Callable | None = None,
@@ -115,6 +116,9 @@ class Worker:
     # The conversation this task run resumes (a worker-node continuation);
     # None starts a fresh one, as every task run did before continuations.
     self._held_native_id = held_native_id
+    # The kind of Run this task executes (models.RunKind), which decides the
+    # backend's per-kind launch settings.
+    self._run_kind = run_kind
     self._backend: base.AgentBackend | None = None
     # The plan and the watch of the process now running; None outside a launched run.
     self._launch: backend_lifecycle.Launch | None = None
@@ -213,6 +217,7 @@ class Worker:
         option=self._backend_option,
         session_meta=self._session_meta,
         kind="task",
+        run_kind=self._run_kind,
         cwd=str(self._worktree),
         held_native_id=self._held_native_id,
         preassigned_native_id=lifecycle.thread_native_id(self._thread),

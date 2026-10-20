@@ -82,6 +82,7 @@ def _round_ctx(
       option=option,
       session_meta=meta,
       kind="turn",
+      run_kind="manager_turn",
       cwd=str(tmp_path / "session"),
       held_native_id=held_native_id,
       preassigned_native_id=None,
@@ -207,7 +208,7 @@ async def test_idle_argv_equals_the_master_turn_argv_for_the_same_option_and_acc
   )
   expected = turn_backend._build_command(item.user_content)
 
-  argv, _env = claude_idle_compaction._compaction_process(cfg, option, account, SESSION_ID, CC_ID)
+  argv, _env = claude_idle_compaction._compaction_process(cfg, option, account, SESSION_ID, CC_ID, ctx.run_kind)
 
   assert argv == expected
 
@@ -325,7 +326,8 @@ async def test_the_trigger_path_starts_one_idle_run_on_the_sessions_own_command_
 
   [run] = runs
   cfg = _cfg(tmp_path, option)
-  argv, _env = claude_idle_compaction._compaction_process(cfg, option, cfg.accounts.claude[0], SESSION_ID, CC_ID)
+  argv, _env = claude_idle_compaction._compaction_process(
+      cfg, option, cfg.accounts.claude[0], SESSION_ID, CC_ID, "manager_turn")
   assert run["argv"] == argv
   assert run["cwd"] == str(tmp_path / "session")
   assert run["config_dir"] == cfg.accounts.claude[0].config_dir

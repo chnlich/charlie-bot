@@ -5,7 +5,14 @@ resolver reads the reserve through ``register()`` in this package's ``__init__.p
 importing ``opencode.py``.
 """
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from src.runtime.hooks import backend_lifecycle
+
+if TYPE_CHECKING:
+  from src.infra import models
 
 # httpx client for the shared server's control API: version probe, session
 # create and get, environment, prompt, interrupt, shells, model list. The
@@ -59,6 +66,9 @@ OPENCODE_SSE_PROGRESS_TIMEOUT = 3600.0  # seconds
 OPENCODE_COMPACT_OUTPUT_RESERVE = 20_000
 
 
-def snapshot_reading_limits() -> backend_lifecycle.ContextLimits:
-  """The context limits of a ``snapshot`` reading: the model's limit comes with the snapshot, the reserve is opencode's."""
+def snapshot_reading_limits(run_kind: models.RunKind) -> backend_lifecycle.ContextLimits:
+  """The context limits of a ``snapshot`` reading: the model's limit comes with the snapshot, the reserve is opencode's.
+
+  The reserve is one value for every run kind, so *run_kind* changes nothing here.
+  """
   return backend_lifecycle.ContextLimits(declared_window=None, compact_reserve=OPENCODE_COMPACT_OUTPUT_RESERVE)

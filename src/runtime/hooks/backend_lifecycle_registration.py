@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 from src.infra import deferred
 
 if TYPE_CHECKING:
+  from src.infra import models
   from src.runtime.hooks import backend_lifecycle
 
 # ---------------------------------------------------------------------------
@@ -47,18 +48,21 @@ _reading_limits_fns: dict[str, str] = {}
 
 
 def register_reading_limits(reading_kind: str, fn: str) -> None:
-  """Register ``fn``, a "module:function" string: ``function() -> ContextLimits`` for ``reading_kind``."""
+  """Register ``fn``, a "module:function" string: ``function(run_kind) -> ContextLimits`` for ``reading_kind``."""
   if reading_kind in _reading_limits_fns:
     raise ValueError(f"reading limits for {reading_kind!r} are already registered")
   _reading_limits_fns[reading_kind] = fn
 
 
-def reading_limits(reading_kind: str) -> backend_lifecycle.ContextLimits | None:
-  """The limits of ``reading_kind``, computed per call; None when no package registered the kind."""
+def reading_limits(reading_kind: str, run_kind: models.RunKind) -> backend_lifecycle.ContextLimits | None:
+  """The limits of ``reading_kind`` for a run of *run_kind*, computed per call.
+
+  None when no package registered the reading kind.
+  """
   fn = _reading_limits_fns.get(reading_kind)
   if fn is None:
     return None
-  return deferred.import_attr(fn)()
+  return deferred.import_attr(fn)(run_kind)
 
 
 # ---------------------------------------------------------------------------

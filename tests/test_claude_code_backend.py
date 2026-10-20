@@ -1,11 +1,12 @@
+import json
 import os
 import pathlib
 
 import conftest
 import pytest
 
-from src.backends.claude_code import claude_code, claude_config
-from src.infra import config
+from src.backends.claude_code import claude_code, claude_config, claude_launch
+from src.infra import config, models
 from src.runtime.hooks import backend_types
 
 
@@ -38,6 +39,7 @@ def test_base_command_disallows_headless_unsafe_tools() -> None:
       "TaskOutput",
       "SendMessage",
       "ListAgents",
+      "ShareOnboardingGuide",
   }
 
   assert required_tools <= disallowed_tools
@@ -113,3 +115,91 @@ print(json.dumps({"type": "result", "result": "", "usage": {}}), flush=True)
 
   assert capture_path.read_text(encoding="utf-8") == prompt
   assert any(event.get("type") == "result" for event in events)
+
+
+# ---------------------------------------------------------------------------
+# Per-run-kind launch settings: the declared window, the tool set and the skill
+# listing each run kind launches with
+# ---------------------------------------------------------------------------
+
+_WINDOW_ENV_NAMES = (
+    claude_launch.AUTO_COMPACT_WINDOW_ENV,
+    claude_launch.AUTOCOMPACT_PCT_OVERRIDE_ENV,
+    claude_launch.MAX_CONTEXT_TOKENS_ENV,
+)
+
+
+@pytest.fixture
+def _clean_window_env(monkeypatch: pytest.MonkeyPatch) -> None:
+  """A host that exports none of the window variables, so the kind's own value is the one read."""
+  for name in _WINDOW_ENV_NAMES:
+    monkeypatch.delenv(name, raising=False)
+
+
+def _settings_of(cmd: list[str]) -> dict:
+  """The one --settings object a Claude argv carries."""
+  return json.loads(cmd[cmd.index("--settings") + 1])
+
+
+@pytest.mark.usefixtures("_clean_window_env")
+@pytest.mark.parametrize(
+    ("run_kind", "window"), [
+        pytest.param("manager_turn", "183000", id="manager-turn"),
+        pytest.param("work", "133000", id="work"),
+        pytest.param("review", "133000", id="review"),
+        pytest.param("iteration", "133000", id="iteration"),
+        pytest.param("scheduled_step", "133000", id="scheduled-step"),
+    ])
+def test_a_claude_run_declares_its_kinds_window_and_disables_the_advisor(run_kind: models.RunKind, window: str) -> None:
+  backend = claude_code.ClaudeCodeBackend(run_kind=run_kind)
+
+  env = backend._prepare_env({})
+
+  assert env[claude_launch.AUTO_COMPACT_WINDOW_ENV] == window
+  assert env["CLAUDE_CODE_DISABLE_ADVISOR_TOOL"] == "1"
+
+
+@pytest.mark.parametrize(
+    ("run_kind", "report_findings"), [
+        pytest.param("manager_turn", False, id="manager-turn"),
+        pytest.param("work", False, id="work"),
+        pytest.param("review", True, id="review"),
+        pytest.param("iteration", False, id="iteration"),
+        pytest.param("scheduled_step", False, id="scheduled-step"),
+    ])
+def test_only_a_review_run_keeps_report_findings(run_kind: models.RunKind, report_findings: bool) -> None:
+  backend = claude_code.ClaudeCodeBackend(run_kind=run_kind)
+
+  tools = _disallowed_tool_values(backend._build_command("hi"))
+
+  assert "ShareOnboardingGuide" in tools
+  assert ("ReportFindings" not in tools) is report_findings
+
+
+def test_a_host_exported_window_beats_the_kinds_value(monkeypatch: pytest.MonkeyPatch) -> None:
+  monkeypatch.setenv(claude_launch.AUTO_COMPACT_WINDOW_ENV, "500000")
+
+  for run_kind in ("manager_turn", "work", "review"):
+    backend = claude_code.ClaudeCodeBackend(run_kind=run_kind)
+    assert backend._prepare_env({})[claude_launch.AUTO_COMPACT_WINDOW_ENV] == "500000"
+
+
+def test_name_only_skills_ride_the_one_merged_settings_object() -> None:
+  backend = claude_code.ClaudeCodeBackend(run_kind="review", name_only_skills=("synthetic-alpha", "synthetic-beta"))
+
+  settings = _settings_of(backend._build_command("hi"))
+
+  assert settings == {
+      "disableClaudeAiConnectors": True,
+      "skillOverrides": {
+          "synthetic-alpha": "name-only",
+          "synthetic-beta": "name-only"
+      },
+  }
+  assert backend._build_command("hi").count("--settings") == 1
+
+
+def test_a_kind_with_no_name_only_list_keeps_the_settings_object_as_before() -> None:
+  backend = claude_code.ClaudeCodeBackend(run_kind="review")
+
+  assert _settings_of(backend._build_command("hi")) == {"disableClaudeAiConnectors": True}

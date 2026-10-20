@@ -118,7 +118,34 @@ async def test_cli_variant_turn_checks_the_transcript_and_adds_the_dynamic_secti
   assert present.resume_id == CC_ID
   assert fresh.resume_id is None
   for launch in (missing, present, fresh):
-    assert launch.backend_kwargs == {"extra_flags": [claude_code.EXCLUDE_DYNAMIC_SECTIONS_FLAG]}
+    assert launch.backend_kwargs == {
+        "extra_flags": [claude_code.EXCLUDE_DYNAMIC_SECTIONS_FLAG],
+        "run_kind": "manager_turn",
+        "name_only_skills": (),
+    }
+
+
+@pytest.mark.parametrize("backend_type", CLI_VARIANT_TYPES)
+@pytest.mark.asyncio
+async def test_a_turn_launch_carries_the_hosts_name_only_list_for_its_kind(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, backend_type: str) -> None:
+  monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude-default"))
+  option = _variant_option(backend_type)
+  cfg = config.CharlieBotConfig(
+      charliebot_home=tmp_path / "home",
+      backends={"options": [option]},
+      claude_launch={
+          "name_only_skills": {
+              "manager_turn": ["synthetic-manager-skill"],
+              "work": ["synthetic-work-skill"],
+          }
+      })
+  lifecycle = backend_types.lifecycle_for(option)
+
+  launch = await lifecycle.place(_turn_context(cfg, option, None, tmp_path))
+
+  assert launch.backend_kwargs["run_kind"] == "manager_turn"
+  assert launch.backend_kwargs["name_only_skills"] == ("synthetic-manager-skill",)
 
 
 @pytest.mark.parametrize("backend_type", CLI_VARIANT_TYPES)
@@ -159,8 +186,33 @@ async def test_non_pooled_cc_claude_turn_checks_the_transcript_and_selects_no_ac
   assert (missing.resume_id, present.resume_id) == (None, CC_ID)
   for launch in (missing, present):
     assert launch.account_label is None
-    assert launch.backend_kwargs == {"extra_flags": [claude_code.EXCLUDE_DYNAMIC_SECTIONS_FLAG]}
+    assert launch.backend_kwargs == {
+        "extra_flags": [claude_code.EXCLUDE_DYNAMIC_SECTIONS_FLAG],
+        "run_kind": "manager_turn",
+        "name_only_skills": (),
+    }
   assert lifecycle.watch(_turn_context(cfg, option, CC_ID, tmp_path), present) is None
+
+
+@pytest.mark.parametrize("backend_type", CLI_VARIANT_TYPES)
+@pytest.mark.asyncio
+async def test_a_review_task_launch_carries_its_kinds_name_only_list(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, backend_type: str) -> None:
+  monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude-default"))
+  option = _variant_option(backend_type)
+  cfg = config.CharlieBotConfig(
+      charliebot_home=tmp_path / "home",
+      backends={"options": [option]},
+      claude_launch={"name_only_skills": {
+          "review": ["synthetic-review-skill"],
+          "work": ["synthetic-work-skill"],
+      }})
+  lifecycle = backend_types.lifecycle_for(option)
+
+  launch = await lifecycle.place(_task_context(cfg, option, None, tmp_path, run_kind="review"))
+
+  assert launch.backend_kwargs["run_kind"] == "review"
+  assert launch.backend_kwargs["name_only_skills"] == ("synthetic-review-skill",)
 
 
 @pytest.mark.parametrize("backend_type", ["codex", "cc-kimi"])
@@ -179,6 +231,7 @@ async def test_non_claude_task_build_receives_no_claude_account(
       config.CharlieBotConfig(charliebot_home=tmp_path / "home"),
       backend_option=option,
       session_meta=models.SessionMetadata(profile="manager", id="s1", name="S", backend=option.id),
+      run_kind="work",
   )
 
   assert await built_worker.run() == 0
@@ -187,8 +240,11 @@ async def test_non_claude_task_build_receives_no_claude_account(
 
 
 def _task_context(
-    cfg: config.CharlieBotConfig, option, held_native_id: str | None,
-    tmp_path: pathlib.Path) -> backend_lifecycle.LaunchContext:
+    cfg: config.CharlieBotConfig,
+    option,
+    held_native_id: str | None,
+    tmp_path: pathlib.Path,
+    run_kind: models.RunKind = "work") -> backend_lifecycle.LaunchContext:
 
   async def unused(*args: object) -> None:
     raise AssertionError("placement emits nothing")
@@ -199,6 +255,7 @@ def _task_context(
       option=option,
       session_meta=meta,
       kind="task",
+      run_kind=run_kind,
       cwd=str(tmp_path),
       held_native_id=held_native_id,
       preassigned_native_id="99999999-2222-3333-4444-555555555555",

@@ -55,6 +55,7 @@ async def _compact_session_transcript(
       pre_tokens=context_tokens,
       persist_and_broadcast=ctx.emit,
       cgroup_session_id=ctx.session_meta.id,
+      run_kind=ctx.run_kind,
       log_context={
           "session": ctx.session_meta.id,
           "account": account_label,

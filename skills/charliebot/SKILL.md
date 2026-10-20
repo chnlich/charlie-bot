@@ -119,7 +119,7 @@ Some proxied backends (e.g. an opencode GLM endpoint) cap generation far below t
 
 ## Claude Code Backend Context Window
 
-The declared window is per run kind: a manager turn declares 433000 (compaction point 400000) and every other kind 133000 (100000). The working knob is `CLAUDE_CODE_AUTO_COMPACT_WINDOW` (100k–1M, lowers only: it takes `Math.min(model window, set value)`), and a host export of it beats the per-kind value; `CLAUDE_CODE_MAX_CONTEXT_TOKENS` is a no-op for `claude-*` models in Claude Code 2.1.219. Compaction triggers at window − min(max_output, 20k) − 13k, with an early warmup at 0.8×; overrun compacts silently rather than erroring. charlie-bot side: `src/backends/claude_code/claude_launch.py` `headless_claude_env(run_kind)`, whose per-kind table the session page's compaction line reads too.
+The declared window is 433000 (compaction point 400000) for every run kind. The working knob is `CLAUDE_CODE_AUTO_COMPACT_WINDOW` (100k–1M, lowers only: it takes `Math.min(model window, set value)`), and a host export of it beats the per-kind value; `CLAUDE_CODE_MAX_CONTEXT_TOKENS` is a no-op for `claude-*` models in Claude Code 2.1.219. Compaction triggers at window − min(max_output, 20k) − 13k, with an early warmup at 0.8×; overrun compacts silently rather than erroring. charlie-bot side: `src/backends/claude_code/claude_launch.py` `headless_claude_env(run_kind)`, whose per-kind table the session page's compaction line reads too.
 
 ---
 

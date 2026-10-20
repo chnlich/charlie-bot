@@ -1,13 +1,20 @@
 # A two-iteration improve loop writes both iteration reports, wakes its parent for each report and the close, then
-# closes its child. Python leaves the order between the parent-turn stream (system, assistant, result, master_done,
-# run_finished, backend_overlay_inactive, resume_context_dropped) and the loop stream (improve_iteration_completed,
-# child_report, improve_failed) open: delivery wakes the parent's serialized audit while the loop moves on
-# (src/features/improve/improve_sequence.py:285-288, src/features/improve/improve_sequence.py:404-406); the parent
-# consumes backend events as they arrive (src/runtime/master_cc_run.py:88-112), persists master_done before its finish
-# callback (src/runtime/master_cc_queue.py:298-309), and emits resume/overlay notices during turn setup
-# (src/runtime/master_cc_run.py:529-543, src/runtime/task_execution.py:1157-1170). Preserve the combined parent stream;
-# progress before child_report and the final outcome after the loop stay strict
-# (src/features/improve/improve_sequence.py:404-406, src/features/improve/improve_sequence.py:441-454).
+# closes its child. The comparison leaves the order open between each parent-turn type below and each loop-stream
+# type (improve_iteration_completed, child_report, improve_failed): the loop only delivers into the parent's queue
+# while the parent's turns run one at a time (src/features/improve/improve_sequence.py:285-288,
+# src/features/improve/improve_sequence.py:404-406), so a delivery lands at a different point of a turn on each
+# server. Where each parent-turn type comes from:
+#   system, assistant, result: the turn streams the backend's events as they arrive
+#     (src/runtime/master_cc_run.py:88-112);
+#   master_done: persisted when the turn ends, before the finish callback
+#     (src/runtime/master_cc_queue.py:298-309);
+#   run_finished: written when the turn's run records its finish (src/runtime/runs.py:1048-1057);
+#   resume_context_dropped: emitted during turn setup, before the process starts
+#     (src/runtime/master_cc_run.py:529-543);
+#   backend_overlay_inactive: emitted when the turn's overlay is unreadable
+#     (src/runtime/task_execution.py:1157-1180).
+# Preserve the combined parent stream; progress before child_report and the final outcome after the loop stay
+# strict (src/features/improve/improve_sequence.py:404-406, src/features/improve/improve_sequence.py:441-454).
 stage: triggers-cron-improve
 name: improve-loop-reports
 fixture_extras: [worker_repo]

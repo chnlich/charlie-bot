@@ -42,8 +42,7 @@ from typing import TYPE_CHECKING
 from src.features.artifacts import artifact_shared, constants, plan_diff
 from src.infra import constants as infra_constants
 from src.infra import text_length
-from src.runtime import backend_pool, cold_read
-from src.runtime.hooks import backend_types
+from src.runtime import cold_read
 
 if TYPE_CHECKING:
   from src.infra import config
@@ -757,8 +756,8 @@ def run_probe(cfg: config.CharlieBotConfig, artifact: pathlib.Path, trigger: str
   """Send the page's full text plus the seven-question prompt to the preferred light backends.
 
   The system prompt and the questions read from ``prompts/cold_read.md`` (their only home)
-  through :mod:`src.runtime.cold_read`. Backends are tried from backends.pool in rotation order
-  (iter_light_backends); each failure is recorded and the next member is tried.
+  through :mod:`src.runtime.cold_read`. Backends are tried from backends.pool in rotation order; each failure is
+  recorded and the next member is tried.
   Returns the answering backend's id and answer, or a ProbeResult of attempts only when
   every backend failed.
   """
@@ -766,22 +765,10 @@ def run_probe(cfg: config.CharlieBotConfig, artifact: pathlib.Path, trigger: str
   page_bytes = artifact.read_bytes()
   page_sha256 = hashlib.sha256(page_bytes).hexdigest()
   prompt = cold_read.probe_input(page_bytes.decode("utf-8"), questions, trigger)
-  # The autonamer import drags fastapi and the sessions stack (~250 ms of import) and asyncio another ~35 ms.
-  import asyncio
-
-  from src.runtime import autonamer  # deferred: charliebot plan --help
-  if not cfg.backends.pool:
-    raise ValueError("no light backends resolvable: backends.pool is empty")
-  attempts: list[tuple[str, str]] = []
-  for option in autonamer.iter_light_backends(cfg):
-    try:
-      # No cgroup_session_id: the artifact probe runs from the CLI with no
-      # CharlieBot session home, so it cannot enter any session's cgroup.
-      # timeout=None: a time limit would drop a slow answer and retry on the next backend.
-      answer = asyncio.run(backend_types.build_backend(option, cfg).one_shot_text(prompt, system_prompt, timeout=None))
-      return ProbeResult(attempts=attempts, backend_id=option.id, answer=answer, page_sha256=page_sha256)
-    except Exception as e:
-      attempts.append((option.id, f"{type(e).__name__}: {e}"))
-      if backend_pool.is_quota_error(str(e)):
-        backend_pool.cool(option.id, None)
-  return ProbeResult(attempts=attempts, backend_id=None, answer=None, page_sha256=page_sha256)
+  result = cold_read.run_light_probe(cfg, prompt, system_prompt)
+  return ProbeResult(
+      attempts=result.attempts,
+      backend_id=result.backend_id,
+      answer=result.answer,
+      page_sha256=page_sha256,
+  )

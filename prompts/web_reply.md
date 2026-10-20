@@ -36,7 +36,12 @@ The For-you view shows your web replies and hides the rest of your turn output.
 - Keep **Now** under 200 characters.
 - Each set replaces the whole **Now** text. Write only the open state of the next milestone into it.
 - Write your messages without the status block. The status panel is the one home of the session status.
-- Write each Waiting on you item as one decision or one action, in one sentence.
+- Put each decision or action that you ask of the user into a Waiting on you item.
+- Write the decision or the action in the item's `text`, in one sentence.
+- Write the item's `context` with these three parts:
+  - what the line does now, and why the decision comes now;
+  - the options, the consequence of each, and your recommendation;
+  - the links to the evidence: pages, diffs, PRs or logs.
 - Give each Waiting on you item the link to the place where the user answers it, when that place has a link.
 - List each Waiting on you item in the session where the user answers it.
 - When your approver is your parent node, keep Waiting on you empty: the user answers through your parent.
@@ -51,8 +56,18 @@ The For-you view shows your web replies and hides the rest of your turn output.
 - The readback sets `over_budget` for a reply over 500 characters.
 - Write the changed session status items to a JSON file.
 - The JSON object takes any of the keys `goal`, `now` and `waiting`.
-- `waiting` is a list of objects with the keys `text` and `link`. Set `link` to null when the place has no link.
+- `waiting` is a list of objects with the keys `text`, `context` and `link`. Set `link` to null when the place has no link.
 - Then run `charliebot web status set --file <path>`.
+- The command gives each Waiting on you item to a cold reader, unless the reader has already read it as it stands.
+- The cold reader reads the item, and the page at its link when this host serves that page. It has no other context.
+- The reader restates the decision and the three parts of its context, and names the kind of step.
+- When the command prints these restatements, it stored nothing.
+- Compare each restatement with your intent:
+  - When a part reads NOT STATED or differs from your intent, revise the item.
+  - When the reader names a step that you can undo, check that the step is no consequence step.
+    Then remove the item, and carry out the step on your recommendation.
+- Then run the command again.
+- The command stores the status when the reader has read every item as it stands.
 - The command replaces the items that the file names and keeps the other items. It prints the stored session status.
 - The printout also holds `now_chars` and `now_over_budget`.
 - When `now_over_budget` is true, shorten **Now** and set it again.

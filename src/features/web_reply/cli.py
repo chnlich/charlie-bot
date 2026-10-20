@@ -2,7 +2,7 @@
 
   charliebot web reply --file <path> [--keep-language <reason>]   (``-`` reads the reply from stdin)
   charliebot web dialog [--session ID]
-  charliebot web status set --file <path>       (``-`` reads the JSON from stdin)
+  charliebot web status set --file <path>       (``-`` reads JSON from stdin; cold reads exit 3 without storing)
   charliebot web status show [--session ID]
 
 ``reply`` records the file's text as the session's web reply through the internal web/reply endpoint and prints the
@@ -17,18 +17,20 @@ skips the check, and records the reason on the reply.
 as ``Reply:`` and each notice as ``Notice:``. The session resolves per ``resolve_session_id``; the reply rules are
 prompts/web_reply.md.
 
-``status set`` stores the items that the file's JSON object names (any of ``goal``, ``now``, ``waiting``) through the
-internal web/status endpoint and prints the stored status as one JSON line, with ``now_chars`` (the stored Now's length,
-0 without a Now) and ``now_over_budget`` (past the 200-character Now budget). An over-budget Now still stores. A refusal
-exits non-zero with a JSON error on stderr and stores nothing. ``status show`` prints the session's status as plain
-text, then the waiting items of its open child sessions, one block per child, then one line of Now per open child
-session that holds a Now, newest first.
+``status set`` first checks whether each Waiting on you item has a cold read of its current text, context, link and
+host-served page. It prints each new read and exits 3 without storing; revise the items and run the command again. When
+every item has a read, the command stores the named items and prints one JSON line with the status, ``now_chars`` and
+``now_over_budget``. A refusal exits non-zero with a JSON error on stderr and stores nothing. ``status show`` prints
+the session's status as plain text, including each item's context, then the waiting items of its open child sessions,
+then one line of Now per open child session that holds a Now, newest first.
 """
 
 import argparse
 import json
+import sys
 
 from src.infra import help_formatter
+from src.runtime import cold_read, file_urls
 from src.runtime.cli import common
 
 _LABELS = {"user": "You", "web_reply": "Reply", "web_reply_notice": "Notice"}
@@ -56,8 +58,13 @@ def _build_parser() -> argparse.ArgumentParser:
       "status", help="Set or show this session's status", formatter_class=help_formatter.CliHelpFormatter)
   status_sub = status.add_subparsers(dest="status_command", required=True)
   status_set = status_sub.add_parser(
-      "set", help="Store the status items that a JSON file names", formatter_class=help_formatter.CliHelpFormatter)
-  status_set.add_argument("--file", required=True, help="JSON object with any of goal, now, waiting; - reads stdin")
+      "set",
+      help="Cold read Waiting on you items before storing the status",
+      formatter_class=help_formatter.CliHelpFormatter)
+  status_set.add_argument(
+      "--file",
+      required=True,
+      help="JSON object with any of goal, now, waiting; prints cold reads and exits 3 before storing; - reads stdin")
   common.add_session_arg(status_set)
   status_show = status_sub.add_parser(
       "show",
@@ -88,12 +95,52 @@ def _cmd_dialog(args: argparse.Namespace) -> None:
 def _cmd_status_set(args: argparse.Namespace) -> None:
   session_id = common.resolve_session_id(args.session)
   text = common.read_reply_text(args.file)
-  result = common.post_internal_api("/api/internal/web/status", {"session_id": session_id, "text": text})
-  print(json.dumps(result))
+  request = {"session_id": session_id, "text": text}
+  unread = common.post_internal_api("/api/internal/web/status/unread", request)["unread"]
+  if not unread:
+    result = common.post_internal_api("/api/internal/web/status", request)
+    print(json.dumps(result))
+    return
+
+  cfg = common.get_config()
+  system_prompt, questions = cold_read.load_ask_texts(cfg.charlie_bot_repo)
+  for item in unread:
+    path = file_urls.host_file(item["link"])
+    linked_page = None if path is None else path.read_text(encoding="utf-8")
+    probe_prompt = cold_read.ask_probe_input(item, linked_page, questions)
+    probe = cold_read.run_light_probe(cfg, probe_prompt, system_prompt)
+    if probe.backend_id is None:
+      for backend, error in probe.attempts:
+        print(f"attempt {backend} failed: {error}", file=sys.stderr)
+      if not probe.attempts:
+        print("No light backend was available for this item.", file=sys.stderr)
+      sys.exit(1)
+    assert probe.answer is not None, "a successful ask probe has the answering backend's response"
+    common.post_internal_api(
+        "/api/internal/web/ask-check", {
+            "session_id": session_id,
+            "item": item,
+            "backend": probe.backend_id,
+            "answer": probe.answer,
+        })
+    print(f"Waiting on you: {item['text']}\nBackend: {probe.backend_id}\n{probe.answer}\n")
+  print("Nothing was stored.")
+  sys.exit(3)
 
 
 def _item_line(item: dict) -> str:
   return f"- {item['text']}" + (f" ({item['link']})" if item["link"] else "")
+
+
+def _item_lines(item: dict) -> list[str]:
+  """The item line and its context indented below it, when stored."""
+  lines = [_item_line(item)]
+  context = item.get("context")
+  if context is not None:
+    context_lines = context.splitlines()
+    lines.append(f"  context: {context_lines[0]}")
+    lines.extend(f"  {line}" for line in context_lines[1:])
+  return lines
 
 
 def _render_status(result: dict) -> str:
@@ -108,13 +155,13 @@ def _render_status(result: dict) -> str:
     lines.append(f"Now: {status['now'] or '(not set)'} (updated {status['updated_at']})")
     if status["waiting"]:
       lines.append("Waiting on you:")
-      lines.extend(_item_line(item) for item in status["waiting"])
+      lines.extend(line for item in status["waiting"] for line in _item_lines(item))
     else:
       lines.append("Waiting on you: Nothing")
   for row in result["descendants"]:
     lines.append("")
     lines.append(f"{row['name']} ({row['session_id'][:8]})")
-    lines.extend(_item_line(item) for item in row["waiting"])
+    lines.extend(line for item in row["waiting"] for line in _item_lines(item))
   if result["children"]:
     lines.append("")
     lines.append("Child sessions' Now:")

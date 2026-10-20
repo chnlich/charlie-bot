@@ -26,9 +26,10 @@ from src.features.web_reply import audit, cli, metadata, reply, status
 from src.features.web_reply import turn_contribution as web_turn_contribution
 from src.infra import event_types as ET
 from src.infra import models
-from src.runtime import file_urls, master_cc_state, streaming, task_prompts
+from src.runtime import backend_pool, cold_read, file_urls, master_cc_state, streaming, task_prompts
 from src.runtime.api import deps, message_utils
 from src.runtime.cli import common
+from src.runtime.hooks import backend_types
 
 _SLACK_ORIGIN = slack_metadata.SlackOrigin(team_id="T1", channel_id="C1", thread_ts="1700000000.000100")
 _DISCORD_ORIGIN = discord_metadata.DiscordOrigin(guild_id="G1", parent_channel_id="C1", thread_id="1234567890")
@@ -703,7 +704,23 @@ def _set(client: testclient.TestClient, sid: str, text: str) -> httpx.Response:
 
 
 def _waiting_set(text: str) -> str:
-  return json.dumps({"waiting": [{"text": text}]})
+  return json.dumps(
+      {
+          "waiting":
+              [
+                  {
+                      "text": text,
+                      "context": "The line is active now. Options are continue or stop; continue is recommended.",
+                  }
+              ]
+      })
+
+
+def _set_after_reads(client: testclient.TestClient, sid: str, text: str) -> httpx.Response:
+  """Record current digests for the waiting items in *text*, then set the patch."""
+  for item in json.loads(text).get("waiting", []):
+    assert _ask_check(client, sid, item).status_code == 200
+  return _set(client, sid, text)
 
 
 def _without_budget(status: dict) -> dict:
@@ -724,22 +741,40 @@ async def test_a_status_set_of_now_alone_keeps_the_other_items_and_records_one_e
   blocks = _rig(tmp_path)
   sid = await _session(blocks)
   client = _status_client(blocks)
+  page = tmp_path / "status-page.html"
+  page.write_text("status evidence", encoding="utf-8")
 
-  first = _set(
-      client, sid, json.dumps({
-          "goal": "Ship the panel",
-          "waiting": [{
-              "text": "Pick a layout",
-              "link": "/p"
-          }]
-      }))
+  first = _set_after_reads(
+      client, sid,
+      json.dumps(
+          {
+              "goal":
+                  "Ship the panel",
+              "waiting":
+                  [
+                      {
+                          "text":
+                              "Pick a layout",
+                          "context":
+                              "The panel is one row per item. Options: fold the line or show it. Fold is recommended.",
+                          "link":
+                              _host_file_link(page)
+                      }
+                  ]
+          }))
   second = _set(client, sid, _VALID_SET)
 
   assert first.status_code == 200 and second.status_code == 200
   stored = second.json()
   assert stored["goal"] == "Ship the panel"
   assert stored["now"] == "Running"
-  assert stored["waiting"] == [{"text": "Pick a layout", "link": "/p"}]
+  assert stored["waiting"] == [
+      {
+          "text": "Pick a layout",
+          "context": "The panel is one row per item. Options: fold the line or show it. Fold is recommended.",
+          "link": _host_file_link(page),
+      }
+  ]
   assert stored["updated_at"] != first.json()["updated_at"]
   assert await _stored_status(blocks, sid) == _without_budget(stored)
   events = _status_events(blocks, sid)
@@ -771,7 +806,7 @@ async def test_a_status_set_naming_no_now_on_a_session_without_one_reports_zero_
   sid = await _session(blocks)
   client = _status_client(blocks)
 
-  resp = _set(client, sid, _waiting_set("Pick a layout"))
+  resp = _set_after_reads(client, sid, _waiting_set("Pick a layout"))
 
   assert resp.json()["now_chars"] == 0
   assert resp.json()["now_over_budget"] is False
@@ -917,7 +952,7 @@ async def test_the_status_read_lists_open_waiting_descendants_newest_first(tmp_p
       (closed, _waiting_set("Closed decision")),
       (archived, _waiting_set("Archived decision")),
   ]:
-    _set(client, child.id, text)
+    _set_after_reads(client, child.id, text)
   await tree.archive_subtree(closed.id, caller=conftest.OPERATOR)
   await blocks.lifecycle.archive_session(archived.id)
 
@@ -926,18 +961,27 @@ async def test_the_status_read_lists_open_waiting_descendants_newest_first(tmp_p
   assert body["web_status"] is None
   assert [row["session_id"] for row in body["descendants"]] == [deep.id, new.id, old.id]
   assert [row["waiting"] for row in body["descendants"]] == [
-      [{
-          "text": "Deep decision",
-          "link": None
-      }],
-      [{
-          "text": "New decision",
-          "link": None
-      }],
-      [{
-          "text": "Old decision",
-          "link": None
-      }],
+      [
+          {
+              "text": "Deep decision",
+              "context": "The line is active now. Options are continue or stop; continue is recommended.",
+              "link": None
+          }
+      ],
+      [
+          {
+              "text": "New decision",
+              "context": "The line is active now. Options are continue or stop; continue is recommended.",
+              "link": None
+          }
+      ],
+      [
+          {
+              "text": "Old decision",
+              "context": "The line is active now. Options are continue or stop; continue is recommended.",
+              "link": None
+          }
+      ],
   ]
 
 
@@ -961,7 +1005,7 @@ async def test_the_status_read_lists_the_open_direct_children_with_a_now_newest_
       (closed, json.dumps({"now": "Closed step"})),
       (archived, json.dumps({"now": "Archived step"})),
   ]:
-    _set(client, child.id, text)
+    _set_after_reads(client, child.id, text)
   await tree.archive_subtree(closed.id, caller=conftest.OPERATOR)
   await blocks.lifecycle.archive_session(archived.id)
 
@@ -1041,7 +1085,7 @@ def _host_file_link(path: pathlib.Path) -> str:
 
 
 @pytest.mark.asyncio
-async def test_a_status_set_stores_context_when_given_and_an_item_without_one_unchanged(tmp_path: pathlib.Path) -> None:
+async def test_a_status_set_stores_context_after_the_item_was_read(tmp_path: pathlib.Path) -> None:
   blocks = _rig(tmp_path)
   sid = await _session(blocks)
   client = _status_client(blocks)
@@ -1050,14 +1094,106 @@ async def test_a_status_set_stores_context_when_given_and_an_item_without_one_un
       "context": "The panel is one row per item. Options: fold the line or show it. Fold is recommended.",
       "link": None,
   }
-  without_context = {"text": "Approve the deploy"}
-
-  resp = _set(client, sid, json.dumps({"waiting": [with_context, without_context]}))
+  _ask_check(client, sid, with_context)
+  resp = _set(client, sid, json.dumps({"waiting": [with_context]}))
 
   assert resp.status_code == 200
   stored = (await _stored_status(blocks, sid))["waiting"]
-  assert stored == [with_context, {"text": "Approve the deploy", "link": None}]
+  assert stored == [with_context]
   assert _status_events(blocks, sid)[-1]["web_status"]["waiting"] == stored
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "item",
+    [
+        pytest.param({"text": "Approve the deploy"}, id="missing"),
+        pytest.param({
+            "text": "Approve the deploy",
+            "context": ""
+        }, id="empty"),
+        pytest.param({
+            "text": "Approve the deploy",
+            "context": "  \n "
+        }, id="blank"),
+    ],
+)
+async def test_a_status_set_refuses_an_item_without_nonblank_context(
+    tmp_path: pathlib.Path, item: dict[str, str]) -> None:
+  blocks = _rig(tmp_path)
+  sid = await _session(blocks)
+  client = _status_client(blocks)
+
+  resp = _set(client, sid, json.dumps({"waiting": [item]}))
+
+  assert resp.status_code == 422
+  assert await _stored_status(blocks, sid) is None
+  assert _status_events(blocks, sid) == []
+  assert _ask_checks(blocks, sid) == []
+
+
+@pytest.mark.asyncio
+async def test_a_status_set_refuses_an_unread_item_without_writing_status_or_event(tmp_path: pathlib.Path) -> None:
+  blocks = _rig(tmp_path)
+  sid = await _session(blocks)
+  client = _status_client(blocks)
+  item = {
+      "text": "Approve the deploy",
+      "context": "The release is ready now. Options are deploy or wait; deploy is recommended.",
+      "link": None,
+  }
+
+  resp = _set(client, sid, json.dumps({"waiting": [item]}))
+
+  assert resp.status_code == 409
+  assert item["text"] in resp.json()["detail"]
+  assert await _stored_status(blocks, sid) is None
+  assert _status_events(blocks, sid) == []
+  assert _ask_checks(blocks, sid) == []
+
+
+@pytest.mark.asyncio
+async def test_a_status_set_stores_an_item_after_ask_check_with_the_same_digest(tmp_path: pathlib.Path) -> None:
+  blocks = _rig(tmp_path)
+  sid = await _session(blocks)
+  client = _status_client(blocks)
+  item = {
+      "text": "Approve the deploy",
+      "context": "The release is ready now. Options are deploy or wait; deploy is recommended.",
+      "link": None,
+  }
+  assert _ask_check(client, sid, item).status_code == 200
+
+  resp = _set(client, sid, json.dumps({"waiting": [item]}))
+
+  assert resp.status_code == 200
+  assert resp.json()["waiting"] == [item]
+  assert await _stored_status(blocks, sid) == _without_budget(resp.json())
+  assert len(_status_events(blocks, sid)) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_changed_linked_page_makes_a_status_item_unread_again(tmp_path: pathlib.Path) -> None:
+  blocks = _rig(tmp_path)
+  sid = await _session(blocks)
+  client = _status_client(blocks)
+  page = tmp_path / "page.html"
+  page.write_text("first page", encoding="utf-8")
+  item = {
+      "text": "Approve the deploy",
+      "context": "The release is ready now. Options are deploy or wait; deploy is recommended.",
+      "link": _host_file_link(page),
+  }
+  assert _ask_check(client, sid, item).status_code == 200
+  page.write_text("changed page", encoding="utf-8")
+
+  resp = _set(client, sid, json.dumps({"waiting": [item]}))
+
+  assert resp.status_code == 409
+  assert item["text"] in resp.json()["detail"]
+  assert await _stored_status(blocks, sid) is None
+  assert _status_events(blocks, sid) == []
+  assert len(_ask_checks(blocks, sid)) == 1
 
 
 def test_the_item_digest_names_the_item_and_every_part_and_the_linked_file_change_it(tmp_path: pathlib.Path) -> None:
@@ -1241,7 +1377,7 @@ async def test_a_refused_unread_query_records_nothing(
 @pytest.mark.parametrize("stdin", [False, True])
 def test_the_cli_status_set_posts_the_file_and_prints_the_stored_status_as_one_json_line(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], stdin: bool) -> None:
-  cfg = conftest.setup_session_cwd(tmp_path, monkeypatch, "abc")
+  conftest.setup_session_cwd(tmp_path, monkeypatch, "abc")
   stored = {"goal": "g", "now": "n", "waiting": [], "updated_at": "2026-10-16T21:00:00+00:00"}
   argv = ["web", "status", "set", "--file", "-"]
   if stdin:
@@ -1251,14 +1387,167 @@ def test_the_cli_status_set_posts_the_file_and_prints_the_stored_status_as_one_j
     status_file.write_text('{"now": "n"}', encoding="utf-8")
     argv = ["web", "status", "set", "--file", str(status_file)]
 
-  with conftest.patched_cli_post(cfg, argv, return_value=conftest.make_json_response(stored)) as post_mock:
-    cli.main()
+  calls: list[tuple[str, dict]] = []
 
-  assert post_mock.call_args.args[0].endswith("/api/internal/web/status")
-  assert post_mock.call_args.kwargs["json"] == {"session_id": "abc", "text": '{"now": "n"}'}
+  def fake_post(endpoint: str, payload: dict) -> dict:
+    calls.append((endpoint, payload))
+    if endpoint.endswith("/status/unread"):
+      return {"unread": []}
+    return stored
+
+  monkeypatch.setattr(common, "post_internal_api", fake_post)
+  monkeypatch.setattr(sys, "argv", argv)
+
+  cli.main()
+
+  assert calls == [
+      ("/api/internal/web/status/unread", {
+          "session_id": "abc",
+          "text": '{"now": "n"}'
+      }),
+      ("/api/internal/web/status", {
+          "session_id": "abc",
+          "text": '{"now": "n"}'
+      }),
+  ]
   out = capsys.readouterr().out
   assert out.count("\n") == 1
   assert json.loads(out) == stored
+
+
+def test_the_cli_status_set_reads_and_records_each_unread_item_then_exits_three_before_storing(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+  conftest.setup_session_cwd(tmp_path, monkeypatch, "abc")
+  page = tmp_path / "linked-page.html"
+  page.write_text("HOST-SERVED-PAGE-CONTENT", encoding="utf-8")
+  file_link = _host_file_link(page)
+  github_link = "https://github.com/example/project/pull/12"
+  items = [
+      {
+          "text": "Should we use the file page?",
+          "context": "The line is ready now. Options are keep or change; keep is recommended.",
+          "link": file_link,
+      },
+      {
+          "text": "Should we use the GitHub page?",
+          "context": "The review is open now. Options are merge or wait; wait is recommended.",
+          "link": github_link,
+      },
+  ]
+  status_file = tmp_path / "status.json"
+  status_file.write_text(json.dumps({"waiting": items}), encoding="utf-8")
+  monkeypatch.setattr(sys, "argv", ["web", "status", "set", "--file", str(status_file)])
+  options = [types.SimpleNamespace(id="fake-a"), types.SimpleNamespace(id="fake-b")]
+  cfg = types.SimpleNamespace(
+      backends=types.SimpleNamespace(pool=[option.id for option in options]), charlie_bot_repo=conftest.ROOT)
+  monkeypatch.setattr(common, "get_config", lambda: cfg)
+  monkeypatch.setattr(
+      backend_pool, "select", lambda _cfg, *, caller, exclude: next(
+          (option for option in options if option.id not in exclude), None))
+  answers = "(1) First answer.\n(2) Second answer.\n(3) Third answer.\n(4) Fourth answer.\n(5) Fifth answer."
+  probes: list[tuple[str, str, str | None]] = []
+
+  class FakeBackend:
+
+    def __init__(self, backend_id: str) -> None:
+      self.backend_id = backend_id
+
+    async def one_shot_text(self, prompt: str, system_prompt: str, *, timeout: None) -> str:
+      probes.append((self.backend_id, prompt, system_prompt))
+      return answers
+
+  monkeypatch.setattr(backend_types, "build_backend", lambda option, _cfg: FakeBackend(option.id))
+  recorded: list[dict] = []
+  status_calls: list[dict] = []
+
+  def fake_post(endpoint: str, payload: dict) -> dict:
+    if endpoint.endswith("/status/unread"):
+      read_items = {json.dumps(call["item"], sort_keys=True) for call in recorded}
+      waiting = json.loads(payload["text"]).get("waiting", [])
+      return {"unread": [item for item in waiting if json.dumps(item, sort_keys=True) not in read_items]}
+    if endpoint.endswith("/ask-check"):
+      recorded.append(payload)
+      return {"item_sha256": "digest"}
+    if endpoint.endswith("/web/status"):
+      status_calls.append(payload)
+      return {"goal": None, "now": None, "waiting": items, "updated_at": "now"}
+    raise AssertionError(f"unexpected endpoint: {endpoint}")
+
+  monkeypatch.setattr(common, "post_internal_api", fake_post)
+
+  with pytest.raises(SystemExit) as first_exit:
+    cli.main()
+
+  assert first_exit.value.code == 3
+  assert len(probes) == len(items) == len(recorded)
+  assert [call["item"] for call in recorded] == items
+  assert [call["backend"] for call in recorded] == ["fake-a", "fake-a"]
+  assert [call["answer"] for call in recorded] == [answers, answers]
+  assert status_calls == []
+  out = capsys.readouterr().out
+  assert out.count(answers) == 2
+  assert out.count("Backend: fake-a") == 2
+  assert out.endswith("Nothing was stored.\n")
+  assert "HOST-SERVED-PAGE-CONTENT" in probes[0][1]
+  assert probes[0][1].index(file_link) < probes[0][1].index("HOST-SERVED-PAGE-CONTENT")
+  assert "HOST-SERVED-PAGE-CONTENT" not in probes[1][1]
+  assert github_link in probes[1][1]
+
+  cli.main()
+
+  assert status_calls == [{"session_id": "abc", "text": json.dumps({"waiting": items})}]
+  assert len(recorded) == len(items)
+  assert len(probes) == len(items)
+  assert json.loads(capsys.readouterr().out)["waiting"] == items
+
+
+def test_the_cli_status_set_prints_each_backend_error_and_records_no_failed_item(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+  conftest.setup_session_cwd(tmp_path, monkeypatch, "abc")
+  item = {
+      "text": "Approve the deploy",
+      "context": "The release is ready now. Options are deploy or wait; deploy is recommended.",
+      "link": None,
+  }
+  status_file = tmp_path / "status.json"
+  status_file.write_text(json.dumps({"waiting": [item]}), encoding="utf-8")
+  monkeypatch.setattr(sys, "argv", ["web", "status", "set", "--file", str(status_file)])
+  options = [types.SimpleNamespace(id="fake-a"), types.SimpleNamespace(id="fake-b")]
+  cfg = types.SimpleNamespace(
+      backends=types.SimpleNamespace(pool=[option.id for option in options]), charlie_bot_repo=conftest.ROOT)
+  monkeypatch.setattr(common, "get_config", lambda: cfg)
+  monkeypatch.setattr(
+      backend_pool, "select", lambda _cfg, *, caller, exclude: next(
+          (option for option in options if option.id not in exclude), None))
+
+  class FailingBackend:
+
+    def __init__(self, backend_id: str) -> None:
+      self.backend_id = backend_id
+
+    async def one_shot_text(self, prompt: str, system_prompt: str, *, timeout: None) -> str:
+      raise RuntimeError(f"{self.backend_id} failed")
+
+  monkeypatch.setattr(backend_types, "build_backend", lambda option, _cfg: FailingBackend(option.id))
+  posts: list[str] = []
+
+  def fake_post(endpoint: str, _payload: dict) -> dict:
+    posts.append(endpoint)
+    if endpoint.endswith("/status/unread"):
+      return {"unread": [item]}
+    raise AssertionError(f"unexpected endpoint: {endpoint}")
+
+  monkeypatch.setattr(common, "post_internal_api", fake_post)
+
+  with pytest.raises(SystemExit) as exit_info:
+    cli.main()
+
+  assert exit_info.value.code == 1
+  assert posts == ["/api/internal/web/status/unread"]
+  output = capsys.readouterr()
+  assert "attempt fake-a failed: RuntimeError: fake-a failed" in output.err
+  assert "attempt fake-b failed: RuntimeError: fake-b failed" in output.err
+  assert output.out == ""
 
 
 @pytest.mark.parametrize("has_status", [False, True])
@@ -1269,20 +1558,31 @@ def test_the_cli_status_show_prints_the_status_and_one_block_per_child_with_wait
   web_status = {
       "goal": "Ship",
       "now": "Testing",
-      "waiting": [{
-          "text": "Pick a layout",
-          "link": None
-      }],
+      "waiting":
+          [
+              {
+                  "text": "Pick a layout",
+                  "context": "The line is ready. Options are fold or show; fold is recommended.",
+                  "link": None
+              }
+          ],
       "updated_at": "2026-10-16T21:00:00+00:00",
   } if has_status else None
   child = {
-      "session_id": "d7645e8f-0000-4000-8000-000000000000",
-      "name": "Panel child",
-      "updated_at": "2026-10-16T21:05:00+00:00",
-      "waiting": [{
-          "text": "Answer plan 5",
-          "link": "/x"
-      }],
+      "session_id":
+          "d7645e8f-0000-4000-8000-000000000000",
+      "name":
+          "Panel child",
+      "updated_at":
+          "2026-10-16T21:05:00+00:00",
+      "waiting":
+          [
+              {
+                  "text": "Answer plan 5",
+                  "context": "The plan needs review. Options are approve or revise; revise is recommended.",
+                  "link": "/x"
+              }
+          ],
   }
   calls: list[tuple[str, dict]] = []
 
@@ -1300,6 +1600,9 @@ def test_the_cli_status_show_prints_the_status_and_one_block_per_child_with_wait
   assert ("No status yet" in out) is (not has_status)
   assert "Panel child (d7645e8f)" in out
   assert out.index("Panel child (d7645e8f)") < out.index("Answer plan 5 (/x)")
+  if has_status:
+    assert "  context: The line is ready. Options are fold or show; fold is recommended." in out
+  assert "  context: The plan needs review. Options are approve or revise; revise is recommended." in out
 
 
 @pytest.mark.parametrize("has_children", [False, True])

@@ -16,3 +16,16 @@ own. List each project term, coined term, opaque identifier, or person whose glo
 missing from the sentence of its first use or sits only in a separate list or table; a term
 the page quotes as an object of discussion is a mention and stands as quoted.
 Write none when there is none.
+<!-- section: ask_system_prompt -->
+You are a careful cold reader. Answer every question from the request and its linked page alone.
+<!-- section: ask_questions -->
+You are reading one request to a user cold. The piped input holds the request text, its context, its link, and the text of the linked page when this host serves it. You have no other context. Answer five questions in the request's own language, each in one or two sentences. When the input does not give an answer, write NOT STATED.
+(1) What must the user decide or do?
+(2) What does the line of work do now, and why does the decision come now?
+(3) What are the options, what is the consequence of each, and which option does the request recommend?
+(4) Which links carry the evidence?
+(5) Which kind of step does the request ask about? Choose one:
+- a step that the agent can undo: code on a branch, a page, a draft, a local file, a design choice, or a plan;
+- a consequence step: deleting data without a backup, a message in the user's name or a publication, a merge into a shared main branch, a service restart, a job on a shared cluster, or spending money;
+- a fact or an action that only the user has;
+- the review of a delivered product.

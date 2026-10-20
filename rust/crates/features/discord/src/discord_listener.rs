@@ -241,9 +241,9 @@ pub async fn handle_message_create(
   let Some(guild_id) = guild_id else {
     if mentioned {
       client.create_message(channel_id, DM_NOTICE).await?;
-      // An eligible author always carries its id in `allowed_users`, so `author_id` is `Some` here; the bare
-      // string (not the `Option` debug form) is the field the log consumer matches.
-      let author = author_id.unwrap_or_default();
+      // The eligibility check admits only an author listed in `allowed_users`, so the id is present. The log
+      // consumer matches the bare id, not the `Option` debug form.
+      let author = author_id.context("an eligible gateway message carries its author id")?;
       tracing::info!(event = "discord_dm_notice_posted", channel = channel_id, user = author);
     }
     return Ok(None);

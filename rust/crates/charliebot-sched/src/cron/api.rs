@@ -354,7 +354,7 @@ mod tests {
 
   use super::routes;
   use crate::cron::scheduler::CronScheduler;
-  use crate::cron::test_support::{feature_context, manager};
+  use crate::cron::test_support::{feature_context, feature_context_with_extra_backends, manager};
 
   async fn send(router: &axum::Router, method: &str, path: &str, body: Value) -> (StatusCode, Value) {
     let response = router
@@ -431,6 +431,7 @@ mod tests {
   async fn delete_unlinks_the_yaml_and_keeps_the_bound_node_history() {
     // Python: tests/test_cron_delete.py::test_delete_unlinks_the_yaml_and_leaves_the_bound_node_untouched
     // Python: tests/test_cron_delete.py::test_delete_keeps_the_node_dir_and_history
+    // Python: tests/test_cron_auto_bind.py::test_task_delete_leaves_its_node_active
     let (home, features) = feature_context();
     let node = manager(&features, "synthetic-cron-node").await.unwrap();
     features.store.persist_and_broadcast(&node.id, json!({"type": "synthetic_history", "text": "kept"})).await.unwrap();
@@ -454,6 +455,10 @@ mod tests {
     assert_eq!(status, StatusCode::OK);
     assert!(features.store.get_session(&node.id).await.unwrap().is_some());
     assert_eq!(features.store.task_state(&node.id).unwrap(), "open");
+    assert_eq!(
+      features.store.get_session(&node.id).await.unwrap().unwrap().status,
+      charliebot_store::metadata::SessionStatus::Active
+    );
     let events = features.store.load_chat_events_sync(&node.id).unwrap();
     assert!(events.iter().any(|event| event["type"] == "synthetic_history"));
     assert!(!path.exists());
@@ -516,5 +521,143 @@ mod tests {
     assert!(events.iter().any(|event| event["type"] == charliebot_core::event_types::HANDLER_RESULT));
     let projection = features.store.get_message_projection(session_id).unwrap();
     assert!(projection.is_some());
+  }
+
+  #[tokio::test]
+  async fn cron_editor_switches_backend_on_the_bound_node_without_creating_a_session() {
+    // Python: tests/test_cron_auto_bind.py::test_cron_editor_backend_change_switches_bound_node_in_place
+    let (home, features) = feature_context_with_extra_backends(&["synthetic-alt"]);
+    let node = manager(&features, "synthetic-bound-node").await.unwrap();
+    let path = home.path().join("config.d/cron.d/synthetic-task.yaml");
+    std::fs::write(
+      &path,
+      charliebot_core::yaml::dump(&json!({
+        "cron": "0 8 * * *",
+        "handler": "synthetic_handler",
+        "session_id": node.id,
+        "backend": "synthetic",
+      }))
+      .unwrap(),
+    )
+    .unwrap();
+
+    let (status, updated) =
+      send(&routes(&features), "PUT", "/api/cron/tasks/synthetic-task", json!({"backend": "synthetic-alt"})).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(updated["backend"], "synthetic-alt");
+    assert_eq!(features.store.get_session(&node.id).await.unwrap().unwrap().backend, "synthetic-alt");
+    let sessions = features.store.list_sessions(None, None, None).unwrap();
+    assert_eq!(sessions.rows.iter().map(|session| session.id.as_str()).collect::<Vec<_>>(), [node.id.as_str()]);
+    assert_eq!(
+      serde_yaml::from_str::<serde_yaml::Value>(&std::fs::read_to_string(path).unwrap()).unwrap()["backend"],
+      "synthetic-alt"
+    );
+  }
+
+  #[tokio::test]
+  async fn cron_editor_refuses_a_busy_backend_switch_before_writing_yaml() {
+    // Python: tests/test_cron_auto_bind.py::test_cron_editor_backend_change_on_busy_node_409s_before_writing
+    let (home, features) = feature_context_with_extra_backends(&["synthetic-alt"]);
+    let node = manager(&features, "synthetic-busy-bound-node").await.unwrap();
+    let path = home.path().join("config.d/cron.d/synthetic-task.yaml");
+    let original = charliebot_core::yaml::dump(&json!({
+      "cron": "0 8 * * *",
+      "handler": "synthetic_handler",
+      "session_id": node.id,
+      "backend": "synthetic",
+    }))
+    .unwrap();
+    std::fs::write(&path, &original).unwrap();
+    features.store.mark_busy(&node.id, charliebot_store::metadata::UtcDateTime::now()).unwrap();
+
+    let (status, _) =
+      send(&routes(&features), "PUT", "/api/cron/tasks/synthetic-task", json!({"backend": "synthetic-alt"})).await;
+
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(std::fs::read_to_string(path).unwrap(), original);
+    assert_eq!(features.store.get_session(&node.id).await.unwrap().unwrap().backend, "synthetic");
+  }
+
+  #[tokio::test]
+  async fn enabling_a_bound_archived_node_restores_it_with_the_cron_enable_reason() {
+    // Python: tests/test_archive_cron_restore.py::test_cron_editor_enable_restores_the_bound_archived_node
+    use charliebot_registry::caller::CallerIdentity;
+
+    let (home, features) = feature_context();
+    let node = manager(&features, "synthetic-restore-bound-node").await.unwrap();
+    features.startup.insert(charliebot_tasks::completion::TaskCompletion::new(Arc::clone(&features))).unwrap();
+    let completion = features.startup.require::<charliebot_tasks::completion::TaskCompletion>().unwrap();
+    let sequence_completion: Arc<dyn charliebot_registry::sequence::SequenceCompletion> = completion.clone();
+    let run_completion: Arc<dyn charliebot_tasks::dispatch::RunFinishedCompletion> = completion.clone();
+    features
+      .startup
+      .insert(charliebot_tasks::dispatch::Dispatcher::new(
+        Arc::clone(&features.store),
+        sequence_completion,
+        run_completion,
+      ))
+      .unwrap();
+    completion
+      .cancel_task(&node.id, "synthetic-archive", "synthetic archive", &CallerIdentity::Operator { session_id: None })
+      .await
+      .unwrap();
+    features.store.archive_session(&node.id).await.unwrap();
+    let path = home.path().join("config.d/cron.d/synthetic-task.yaml");
+    std::fs::write(
+      &path,
+      charliebot_core::yaml::dump(&json!({
+        "cron": "0 8 * * *",
+        "handler": "synthetic_handler",
+        "session_id": node.id,
+        "enabled": false,
+      }))
+      .unwrap(),
+    )
+    .unwrap();
+
+    let (status, enabled) =
+      send(&routes(&features), "PUT", "/api/cron/tasks/synthetic-task", json!({"enabled": true})).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(enabled["enabled"], true);
+    assert_eq!(features.store.task_state(&node.id).unwrap(), "open");
+    let reopened = features.store.load_all_facts(&node.id).unwrap();
+    let reasons = reopened
+      .iter()
+      .filter(|event| event["type"] == event_types::TASK_REOPENED)
+      .map(|event| event["reason"].as_str().unwrap())
+      .collect::<Vec<_>>();
+    assert_eq!(reasons, ["cron enable"]);
+  }
+
+  #[tokio::test]
+  async fn task_listing_keeps_the_binding_and_mode_fields_used_by_clients() {
+    // Python: tests/test_cron_auto_bind.py::test_task_config_model_still_carries_the_fields_the_lists_read
+    let (home, features) = feature_context();
+    let path = home.path().join("config.d/cron.d/synthetic-task.yaml");
+    std::fs::write(
+      &path,
+      charliebot_core::yaml::dump(&json!({
+        "cron": "0 8 * * *",
+        "handler": "synthetic_handler",
+        "session_id": "synthetic-bound-node",
+        "mode": "worker",
+        "project": "synthetic-project",
+        "allow_failure": true,
+        "enabled": false,
+      }))
+      .unwrap(),
+    )
+    .unwrap();
+
+    let (status, listed) = send(&routes(&features), "GET", "/api/cron/tasks", json!(null)).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(listed[0]["session_id"], "synthetic-bound-node");
+    assert_eq!(listed[0]["mode"], "worker");
+    assert_eq!(listed[0]["project"], "synthetic-project");
+    assert_eq!(listed[0]["allow_failure"], true);
+    assert_eq!(listed[0]["enabled"], false);
   }
 }

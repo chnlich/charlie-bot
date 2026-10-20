@@ -29,6 +29,7 @@ tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+charliebot-agents.workspace = true
 charliebot-tasks = { workspace = true, features = ["test-hooks"] }
 serde_yaml.workspace = true
 tempfile.workspace = true

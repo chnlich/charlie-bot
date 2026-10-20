@@ -4,6 +4,7 @@ fake-agent start's stdin and stdout_path normalize under the rules that name the
 
 import json
 import pathlib
+import re
 
 import pytest
 
@@ -575,13 +576,19 @@ def test_cron_firing_masks_the_clock_stamp_and_keeps_the_task_identity() -> None
       "- Session: synthetic-cron · 2026-10-20T09:26:06.696542+00:00\n"
       "cron:synthetic-cron:2026-10-20T09:26:06.696542+00:00:leaf")
   later = (
-      "- Session: synthetic-cron · 2026-10-20T02:26:06.735915-07:00\n"
-      "cron:synthetic-cron:2026-10-20T02:26:06.735915-07:00:leaf")
+      "- Session: synthetic-cron · 2026-10-20T09:26:06.735915+00:00\n"
+      "cron:synthetic-cron:2026-10-20T09:26:06.735915+00:00:leaf")
   assert normalize.normalize_text(earlier, _context()) == normalize.normalize_text(later, _context())
   assert normalize.normalize_text("cron:another-task:2026-10-20T09:26:06.696542+00:00:leaf", _context()) != (
       normalize.normalize_text("cron:synthetic-cron:2026-10-20T09:26:06.696542+00:00:leaf", _context()))
+  assert normalize.normalize_text(
+      "cron:synthetic-cron:2026-10-20T09:26:06.696542+00:00:leaf", _context()) != normalize.normalize_text(
+          "cron:synthetic-cron:2026-10-20T02:26:06.696542-07:00:leaf", _context())
   assert normalize.normalize_text("2026-10-20T09:26:06.696542+00:00", _context()) != (
       normalize.normalize_text("2026-10-20T02:26:06.735915-07:00", _context()))
+  assert normalize.normalize_text(
+      "cron:synthetic-cron:2026-10-20T09:26:06.696542+00:00:leaf", _context()) != normalize.normalize_text(
+          "cron:synthetic-cron:2026-10-20T09:26:06.696542001+00:00:leaf", _context())
 
 
 def test_cron_last_scheduled_run_masks_the_stamp_and_keeps_the_expression() -> None:
@@ -592,13 +599,27 @@ def test_cron_last_scheduled_run_masks_the_stamp_and_keeps_the_expression() -> N
       _context(),
   )
   later = normalize.normalize_json(
-      {"last_scheduled_run": "2026-10-20T02:26:06.735915-07:00", "last_scheduled_cron": "0 8 * * *"},
+      {"last_scheduled_run": "2026-10-20T09:26:06.735915+00:00", "last_scheduled_cron": "0 8 * * *"},
       rules,
       _context(),
   )
   assert earlier == later
-  assert earlier == {"last_scheduled_run": "<cron-last-scheduled-run>", "last_scheduled_cron": "0 8 * * *"}
+  assert earlier == {
+      "last_scheduled_run": "2026-10-20T<cron-last-scheduled-run>+00:00",
+      "last_scheduled_cron": "0 8 * * *",
+  }
   assert normalize.normalize_json({"last_scheduled_run": None}, rules, _context()) == {"last_scheduled_run": None}
+  nine_fraction_digits = normalize.normalize_json(
+      {"last_scheduled_run": "2026-10-20T09:26:06.696542001+00:00"}, rules, _context())
+  assert earlier != nine_fraction_digits
+
+
+def test_field_rule_only_passes_null_through_as_a_non_string() -> None:
+  rule = normalize.FieldRule(
+      name="synthetic", target="", field="stamp", reason="test", when=(), pattern=re.compile(r"(?P<value>.+)"))
+  assert rule.mask(None) is None
+  with pytest.raises(TypeError, match="expects a string or null"):
+    rule.mask(1)
 
 
 SESSIONS_RUNS_ROUTE = "GET /api/sessions/{session_id}/runs"

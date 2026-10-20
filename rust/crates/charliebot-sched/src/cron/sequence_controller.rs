@@ -2,18 +2,23 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types;
 use charliebot_core::home;
 use charliebot_core::repo_root::REPO_ROOT_ENV;
+use charliebot_registry::Registry;
+use charliebot_registry::context::FeatureContext;
 use charliebot_registry::sequence::{SequenceBinding, SequenceController, SequenceTree};
+use charliebot_registry::wiring::{Phase, Service, ServiceContext};
 use charliebot_store::StoreResult;
 use charliebot_store::metadata::{SessionMetadata, UtcDateTime};
 use charliebot_store::run_records::{self, RunKind, RunRecord, SequenceRef};
+use chrono::{Datelike, TimeZone, Utc};
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value};
+use tokio::sync::watch;
 
 use super::config::{ScheduledTaskConfig, StepConfig};
 use super::{loader, scheduler};
@@ -22,6 +27,25 @@ use super::{loader, scheduler};
 pub struct CronBinding {
   name: String,
   names: Vec<String>,
+  registry: watch::Receiver<Option<Weak<Registry>>>,
+}
+
+impl CronBinding {
+  async fn feature_context(&self) -> anyhow::Result<Arc<FeatureContext>> {
+    let mut registry_receiver = self.registry.clone();
+    let registry = loop {
+      if let Some(registry) = registry_receiver.borrow_and_update().as_ref() {
+        break registry
+          .upgrade()
+          .ok_or_else(|| anyhow::anyhow!("the cron binding registry was dropped before its duties completed"))?;
+      }
+      registry_receiver
+        .changed()
+        .await
+        .map_err(|_| anyhow::anyhow!("the cron binding registry context service stopped before its duties"))?;
+    };
+    registry.feature_context().ok_or_else(|| anyhow::anyhow!("the cron binding registry has no live FeatureContext"))
+  }
 }
 
 impl SequenceBinding for CronBinding {
@@ -46,9 +70,31 @@ impl SequenceBinding for CronBinding {
     input_events: &'a [Value],
   ) -> BoxFuture<'a, anyhow::Result<Option<String>>> {
     Box::pin(async move {
+      let features = self.feature_context().await?;
+      let mut cc_session_id = meta.cc_session_id.clone();
+      if let (Some(_), Some(started_at)) = (cc_session_id.as_ref(), meta.cc_session_started_at) {
+        let now = UtcDateTime::now();
+        let instant = now.into_inner();
+        let now_chrono = chrono::DateTime::<Utc>::from_timestamp(instant.unix_timestamp(), instant.nanosecond())
+          .ok_or_else(|| anyhow::anyhow!("the current time is outside chrono's supported range"))?;
+        let cutoff = last_saturday_1am_utc(now_chrono)?;
+        if started_at < cutoff && cutoff < now {
+          tracing::info!(session = %meta.id, started_at = %started_at, "scheduled_cc_session_expired");
+          features.store.clear_cc_session_anchor(&meta.id).await?;
+          cc_session_id = None;
+          match features.store.archive_events_before(&meta.id, cutoff).await {
+            Ok(archive_path) => {
+              tracing::info!(session = %meta.id, archive = ?archive_path, "scheduled_session_recycled");
+            }
+            Err(error) => {
+              tracing::error!(session = %meta.id, error = %error, "scheduled_session_recycle_failed");
+            }
+          }
+        }
+      }
       let woken_by_report =
         input_events.iter().any(|event| event.get("type").and_then(Value::as_str) == Some(event_types::CHILD_REPORT));
-      if woken_by_report && meta.cc_session_id.is_none() {
+      if woken_by_report && cc_session_id.is_none() {
         return Ok(Some(format!(
           "[Auto-triggered scheduled task result for '{}']\nReview the worker/reviewer results below. Check: was the branch merged? Are there errors? Summarize the outcome.\n\n",
           self.name
@@ -60,9 +106,10 @@ impl SequenceBinding for CronBinding {
 
   fn on_archive<'a>(&'a self) -> BoxFuture<'a, anyhow::Result<()>> {
     Box::pin(async move {
-      let home = cron_home();
+      let features = self.feature_context().await?;
+      let cfg = features.config.get()?;
       for name in &self.names {
-        write_task_key(&home, name, "enabled", Value::Bool(false))?;
+        write_task_key(&cfg.charliebot_home, name, "enabled", Value::Bool(false))?;
       }
       Ok(())
     })
@@ -70,7 +117,47 @@ impl SequenceBinding for CronBinding {
 }
 
 /// The durable `cron_steps` sequence controller.
-pub struct CronSequenceController;
+pub struct CronSequenceController {
+  registry: watch::Receiver<Option<Weak<Registry>>>,
+}
+
+impl CronSequenceController {
+  pub fn new(registry: watch::Receiver<Option<Weak<Registry>>>) -> Self {
+    Self { registry }
+  }
+}
+
+/// Makes the registry available to cron bindings before crash recovery can wake a session.
+pub struct BindingContextService {
+  registry: watch::Sender<Option<Weak<Registry>>>,
+}
+
+impl BindingContextService {
+  pub fn new(registry: watch::Sender<Option<Weak<Registry>>>) -> Self {
+    Self { registry }
+  }
+}
+
+impl Service for BindingContextService {
+  fn name(&self) -> &'static str {
+    "cron_binding_context"
+  }
+
+  fn phase(&self) -> Phase {
+    Phase::Early
+  }
+
+  fn start<'a>(&'a self, ctx: ServiceContext) -> BoxFuture<'a, anyhow::Result<()>> {
+    Box::pin(async move {
+      self.registry.send_replace(Some(Arc::downgrade(&ctx.features.registry)));
+      Ok(())
+    })
+  }
+
+  fn stop<'a>(&'a self) -> BoxFuture<'a, anyhow::Result<()>> {
+    Box::pin(async { Ok(()) })
+  }
+}
 
 impl SequenceController for CronSequenceController {
   fn sequence_kind(&self) -> &'static str {
@@ -122,7 +209,7 @@ impl SequenceController for CronSequenceController {
   fn binding(&self, session_id: &str) -> Option<Arc<dyn SequenceBinding>> {
     let names = names_for_binding(session_id);
     let name = names.first()?.clone();
-    Some(Arc::new(CronBinding { name, names }))
+    Some(Arc::new(CronBinding { name, names, registry: self.registry.clone() }))
   }
 
   fn owns_session(&self, meta: &SessionMetadata) -> bool {
@@ -170,6 +257,22 @@ impl SequenceController for CronSequenceController {
       Ok(!names.is_empty())
     })
   }
+}
+
+fn last_saturday_1am_utc(now: chrono::DateTime<Utc>) -> anyhow::Result<UtcDateTime> {
+  let timezone = chrono_tz::America::Los_Angeles;
+  let now_pt = now.with_timezone(&timezone);
+  let days_since_saturday = (i64::from(now_pt.weekday().num_days_from_sunday()) + 1).rem_euclid(7);
+  let saturday_1am = now_pt
+    .date_naive()
+    .and_hms_opt(1, 0, 0)
+    .ok_or_else(|| anyhow::anyhow!("Saturday 01:00 is not a valid local time"))?
+    - chrono::Duration::days(days_since_saturday);
+  let saturday_1am = timezone
+    .from_local_datetime(&saturday_1am)
+    .single()
+    .ok_or_else(|| anyhow::anyhow!("Saturday 01:00 is ambiguous or nonexistent in America/Los_Angeles"))?;
+  UtcDateTime::parse(&saturday_1am.with_timezone(&Utc).to_rfc3339()).map_err(Into::into)
 }
 
 async fn redrive_firing(leaf_id: &str, tree: &dyn SequenceTree) -> anyhow::Result<()> {
@@ -595,4 +698,164 @@ fn write_task_key(home: &Path, name: &str, key: &str, value: Value) -> anyhow::R
   object.insert(key.to_string(), value);
   std::fs::write(path, charliebot_core::yaml::dump(&data)?)?;
   Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+  use std::sync::Arc;
+
+  use charliebot_core::event_types;
+  use charliebot_registry::sequence::SequenceBinding;
+  use charliebot_store::metadata::UtcDateTime;
+  use serde_json::{Value, json};
+  use tokio::sync::watch;
+
+  use super::CronBinding;
+  use crate::cron::test_support::{feature_context, manager};
+
+  fn binding(features: &Arc<charliebot_registry::context::FeatureContext>, names: &[&str]) -> CronBinding {
+    features.registry.bind_feature_context(features).unwrap();
+    let (sender, receiver) = watch::channel(None);
+    sender.send_replace(Some(Arc::downgrade(&features.registry)));
+    CronBinding {
+      name: names[0].to_string(),
+      names: names.iter().map(|name| (*name).to_string()).collect(),
+      registry: receiver,
+    }
+  }
+
+  fn write_cron(home: &std::path::Path, name: &str, value: Value) {
+    let path = home.join("config.d/cron.d").join(format!("{name}.yaml"));
+    std::fs::write(&path, charliebot_core::yaml::dump(&value).unwrap()).unwrap();
+  }
+
+  #[tokio::test]
+  async fn stale_anchor_wake_recycles_chat_events_and_keeps_worker_threads() {
+    // Python: tests/test_cron_auto_bind.py::test_bound_node_wake_preserves_old_worker_threads_and_prefixes_the_firing_report
+    let (home, features) = feature_context();
+    let node = manager(&features, "synthetic-stale-anchor-node").await.unwrap();
+    features
+      .store
+      .persist_cc_session_id_at(
+        &node.id,
+        "synthetic-native-session",
+        Some("synthetic"),
+        UtcDateTime::parse("2020-01-01T00:00:00Z").unwrap(),
+      )
+      .await
+      .unwrap();
+    let events_path = features.store.chat_events_path(&node.id);
+    std::fs::create_dir_all(events_path.parent().unwrap()).unwrap();
+    let old_event = json!({"id":"synthetic-old-event","timestamp":"2020-01-01T00:00:00+00:00"});
+    std::fs::write(&events_path, format!("{}\n", serde_json::to_string(&old_event).unwrap())).unwrap();
+    let thread_file = features.store.session_dir(&node.id).join("threads/legacy-round/sentinel.txt");
+    std::fs::create_dir_all(thread_file.parent().unwrap()).unwrap();
+    std::fs::write(&thread_file, "retained").unwrap();
+    let meta = features.store.get_session(&node.id).await.unwrap().unwrap();
+
+    let prefix = binding(&features, &["synthetic-cron"])
+      .on_wake(&meta, &[json!({"type": event_types::CHILD_REPORT})])
+      .await
+      .unwrap()
+      .unwrap();
+
+    assert!(prefix.starts_with("[Auto-triggered scheduled task result for 'synthetic-cron']"));
+    let fresh = features.store.get_session(&node.id).await.unwrap().unwrap();
+    assert_eq!(fresh.cc_session_id, None);
+    assert_eq!(fresh.cc_session_started_at, None);
+    assert_eq!(fresh.archive_offset, 1);
+    assert!(std::fs::read_to_string(&events_path).unwrap().is_empty());
+    assert_eq!(std::fs::read_to_string(thread_file).unwrap(), "retained");
+    let archive_dir = home.path().join("sessions").join(&node.id).join("data/archives");
+    let archive = std::fs::read_dir(archive_dir).unwrap().next().unwrap().unwrap().path();
+    assert_eq!(std::fs::read_to_string(archive).unwrap(), format!("{}\n", serde_json::to_string(&old_event).unwrap()));
+  }
+
+  #[tokio::test]
+  async fn live_anchor_wake_keeps_its_conversation_and_has_no_prefix() {
+    // Python: tests/test_cron_auto_bind.py::test_bound_node_wake_on_a_live_anchor_carries_no_prefix
+    let (_home, features) = feature_context();
+    let node = manager(&features, "synthetic-live-anchor-node").await.unwrap();
+    features.store.persist_cc_session_id(&node.id, "synthetic-live-native", Some("synthetic")).await.unwrap();
+    let events_path = features.store.chat_events_path(&node.id);
+    std::fs::create_dir_all(events_path.parent().unwrap()).unwrap();
+    let old_event = json!({"id":"synthetic-unrecycled-event","timestamp":"2020-01-01T00:00:00+00:00"});
+    std::fs::write(&events_path, format!("{}\n", serde_json::to_string(&old_event).unwrap())).unwrap();
+    let meta = features.store.get_session(&node.id).await.unwrap().unwrap();
+
+    let prefix = binding(&features, &["synthetic-cron"])
+      .on_wake(&meta, &[json!({"type": event_types::CHILD_REPORT})])
+      .await
+      .unwrap();
+
+    assert_eq!(prefix, None);
+    let fresh = features.store.get_session(&node.id).await.unwrap().unwrap();
+    assert_eq!(fresh.cc_session_id.as_deref(), Some("synthetic-live-native"));
+    assert_eq!(fresh.archive_offset, 0);
+    assert_eq!(
+      std::fs::read_to_string(events_path).unwrap(),
+      format!("{}\n", serde_json::to_string(&old_event).unwrap())
+    );
+  }
+
+  #[tokio::test]
+  async fn failed_history_recycle_keeps_the_cleared_anchor_and_wake_prefix() {
+    let (_home, features) = feature_context();
+    let node = manager(&features, "synthetic-recycle-failure-node").await.unwrap();
+    features
+      .store
+      .persist_cc_session_id_at(
+        &node.id,
+        "synthetic-old-native",
+        Some("synthetic"),
+        UtcDateTime::parse("2020-01-01T00:00:00Z").unwrap(),
+      )
+      .await
+      .unwrap();
+    let events_path = features.store.chat_events_path(&node.id);
+    std::fs::remove_file(&events_path).unwrap();
+    std::fs::create_dir_all(&events_path).unwrap();
+    let meta = features.store.get_session(&node.id).await.unwrap().unwrap();
+
+    let prefix = binding(&features, &["synthetic-cron"])
+      .on_wake(&meta, &[json!({"type": event_types::CHILD_REPORT})])
+      .await
+      .unwrap();
+
+    assert!(prefix.is_some());
+    let fresh = features.store.get_session(&node.id).await.unwrap().unwrap();
+    assert_eq!(fresh.cc_session_id, None);
+    assert_eq!(fresh.cc_session_started_at, None);
+  }
+
+  #[tokio::test]
+  async fn archiving_a_bound_node_disables_every_task_and_preserves_other_yaml_fields() {
+    // Python: tests/test_cron_auto_bind.py::test_archiving_bound_node_writes_enabled_false
+    // Python: tests/test_archive_cron_restore.py::test_archive_disables_every_task_bound_to_the_node
+    let (home, features) = feature_context();
+    let node = manager(&features, "synthetic-archive-bound-node").await.unwrap();
+    for name in ["synthetic-nightly", "synthetic-weekly"] {
+      write_cron(
+        home.path(),
+        name,
+        json!({
+          "cron": "0 8 * * *",
+          "handler": "synthetic_handler",
+          "session_id": node.id,
+          "enabled": true,
+          "project": "synthetic-project",
+        }),
+      );
+    }
+
+    binding(&features, &["synthetic-nightly", "synthetic-weekly"]).on_archive().await.unwrap();
+
+    for name in ["synthetic-nightly", "synthetic-weekly"] {
+      let path = home.path().join("config.d/cron.d").join(format!("{name}.yaml"));
+      let task: serde_yaml::Value = serde_yaml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+      assert_eq!(task["enabled"].as_bool(), Some(false));
+      assert_eq!(task["session_id"].as_str(), Some(node.id.as_str()));
+      assert_eq!(task["project"].as_str(), Some("synthetic-project"));
+    }
+  }
 }

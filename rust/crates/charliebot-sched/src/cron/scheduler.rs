@@ -13,7 +13,7 @@ use charliebot_store::control_events::ACTOR_SYSTEM;
 use charliebot_store::metadata::{SessionMetadata, SessionStatus, TaskProfile, TaskSpec, UtcDateTime};
 use charliebot_store::run_records::{RunKind, RunRecord, SequenceRef};
 use charliebot_store::{CreateTask, TaskCaller};
-use chrono::{Datelike, Timelike};
+use chrono::{Datelike, Offset, Timelike};
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
 use tokio::task::JoinHandle;
@@ -197,7 +197,7 @@ impl CronScheduler {
       update_cron_slots(
         &self.features,
         &session.id,
-        json!({"last_scheduled_run": now.to_rfc3339(), "last_scheduled_cron": task.cron}),
+        json!({"last_scheduled_run": python_isoformat(&now)?, "last_scheduled_cron": task.cron}),
       )
       .await?;
       tracing::info!(task = %task.name, old = ?last_cron, new = %task.cron, "scheduler_cron_changed");
@@ -227,7 +227,7 @@ impl CronScheduler {
         .map(|handle| handle.id().to_string())
     };
     if let Some(handle_id) = running_handle {
-      let now_text = now.to_rfc3339();
+      let now_text = python_isoformat(&now)?;
       update_cron_slots(
         &self.features,
         &session.id,
@@ -249,7 +249,7 @@ impl CronScheduler {
         .await?;
       return Ok(());
     }
-    self.execute_task(task.clone(), Some(due.to_rfc3339()), true, cfg.clone()).await?;
+    self.execute_task(task.clone(), Some(python_isoformat(&due)?), true, cfg.clone()).await?;
     Ok(())
   }
 
@@ -456,7 +456,7 @@ impl CronScheduler {
 
   async fn record_bound_fire(&self, session: &SessionMetadata, task: &ScheduledTaskConfig) -> anyhow::Result<()> {
     let timezone = task.timezone.parse::<chrono_tz::Tz>()?;
-    let now = chrono::Utc::now().with_timezone(&timezone).to_rfc3339();
+    let now = python_isoformat(&chrono::Utc::now().with_timezone(&timezone))?;
     update_cron_slots(
       &self.features,
       &session.id,
@@ -643,7 +643,18 @@ pub(super) fn next_fire_iso(expression: &str, timezone: &str, now_utc: UtcDateTi
   let inner = now_utc.into_inner();
   let now = chrono::DateTime::<chrono::Utc>::from_timestamp(inner.unix_timestamp(), inner.nanosecond())
     .ok_or_else(|| anyhow::anyhow!("UTC timestamp is outside the supported range"))?;
-  Ok(CronExpression::parse(expression)?.next_after(now.with_timezone(&timezone))?.with_timezone(&timezone).to_rfc3339())
+  python_isoformat(&CronExpression::parse(expression)?.next_after(now.with_timezone(&timezone))?)
+}
+
+fn python_isoformat<Tz>(moment: &chrono::DateTime<Tz>) -> anyhow::Result<String>
+where
+  Tz: chrono::TimeZone,
+  Tz::Offset: Offset,
+{
+  let instant = time::OffsetDateTime::from_unix_timestamp(moment.timestamp())?
+    .replace_microsecond(moment.timestamp_subsec_micros())?;
+  let offset = time::UtcOffset::from_whole_seconds(moment.offset().fix().local_minus_utc())?;
+  Ok(charliebot_core::timefmt::isoformat(instant.to_offset(offset)))
 }
 
 fn write_cron_key(cfg: &CharlieBotConfig, name: &str, key: &str, value: Value) -> anyhow::Result<()> {
@@ -772,15 +783,17 @@ fn parse_cron_value(value: &str, names: &[(&str, u32)]) -> anyhow::Result<u32> {
 
 #[cfg(test)]
 mod tests {
+  use std::collections::HashMap;
   use std::path::Path;
   use std::sync::Arc;
 
-  use charliebot_store::metadata::{SessionStatus, TaskProfile};
+  use charliebot_store::metadata::{SessionStatus, TaskProfile, UtcDateTime};
   use charliebot_store::{CreateTask, TaskCaller};
-  use chrono::{TimeZone, Utc};
+  use chrono::{TimeZone, Timelike, Utc};
   use serde_json::{Map, Value, json};
 
-  use super::{CronExpression, CronScheduler};
+  use super::{CronExpression, CronScheduler, python_isoformat};
+  use crate::cron::config::ScheduledTaskConfig;
   use crate::cron::test_support::feature_context;
 
   fn write_task(home: &Path, name: &str, body: &Value) -> std::path::PathBuf {
@@ -795,6 +808,16 @@ mod tests {
     let expression = CronExpression::parse("0 8 1 * mon").unwrap();
     let base = Utc.with_ymd_and_hms(2026, 6, 2, 8, 0, 0).unwrap();
     assert_eq!(expression.next_after(base).unwrap().to_rfc3339(), "2026-06-08T08:00:00+00:00");
+  }
+
+  #[test]
+  fn cron_stamps_use_python_microseconds_and_keep_the_task_timezone_offset() {
+    let timezone = "America/Los_Angeles".parse::<chrono_tz::Tz>().unwrap();
+    let whole_seconds = timezone.with_ymd_and_hms(2026, 10, 20, 2, 26, 6).single().unwrap();
+    let fractional = whole_seconds.with_nanosecond(685_829_123).unwrap();
+
+    assert_eq!(python_isoformat(&whole_seconds).unwrap(), "2026-10-20T02:26:06-07:00");
+    assert_eq!(python_isoformat(&fractional).unwrap(), "2026-10-20T02:26:06.685829-07:00");
   }
 
   #[tokio::test]
@@ -938,5 +961,356 @@ mod tests {
     let bound = features.store.get_session(bound_id).await.unwrap().unwrap();
     assert_eq!(bound.extra.get("scheduled_task"), Some(&Value::Null));
     assert_eq!(bound.extra.get("last_scheduled_run"), Some(&json!("2026-10-01T08:00:00-07:00")));
+  }
+
+  #[tokio::test]
+  async fn auto_bind_migration_registers_the_due_fire_leaf_under_its_node() {
+    // Python: tests/test_cron_auto_bind.py::test_due_fire_after_migration_creates_its_leaf_under_the_node
+    let (home, features) = feature_context();
+    let repo_home = tempfile::tempdir().unwrap();
+    let repo = crate::cron::test_support::init_repo_with_origin(repo_home.path()).unwrap();
+    let task_name = "synthetic-migrated-task";
+    let mut legacy_extra = Map::new();
+    legacy_extra.insert("scheduled_task".to_string(), json!(task_name));
+    legacy_extra.insert("last_scheduled_run".to_string(), json!("2026-06-07T03:00:00-07:00"));
+    legacy_extra.insert("last_scheduled_cron".to_string(), json!("0 3 * * *"));
+    let legacy = features
+      .store
+      .create_task(
+        CreateTask {
+          request_id: "synthetic-legacy-cron-session".to_string(),
+          task_parent_id: None,
+          profile: TaskProfile::Manager,
+          task: None,
+          name: Some(task_name.to_string()),
+          backend: Some("synthetic".to_string()),
+          group: None,
+          session_id: None,
+        },
+        TaskCaller::System,
+        legacy_extra,
+      )
+      .await
+      .unwrap();
+    write_task(
+      home.path(),
+      task_name,
+      &json!({"cron":"0 3 * * *","prompt":"Synthetic migration work","repo":repo,"backend":"synthetic","enabled":true}),
+    );
+    let mut task = ScheduledTaskConfig {
+      name: task_name.to_string(),
+      cron: "0 3 * * *".to_string(),
+      prompt_file: None,
+      repo: Some(repo.display().to_string()),
+      backend: Some("synthetic".to_string()),
+      timezone: "America/Los_Angeles".to_string(),
+      enabled: true,
+      project: None,
+      allow_failure: false,
+      session_id: None,
+      mode: None,
+      prompt: Some("Synthetic migration work".to_string()),
+      handler: None,
+      steps: None,
+    };
+    let scheduler = CronScheduler::new(Arc::clone(&features));
+    let old_by_task = HashMap::from([(task_name.to_string(), vec![legacy.clone()])]);
+    scheduler.auto_bind(&mut task, &features.config.get().unwrap(), &old_by_task).await.unwrap();
+
+    let node_id = task.session_id.as_deref().unwrap();
+    let node = features.store.get_session(node_id).await.unwrap().unwrap();
+    let (leaf, run, prompt, _) = scheduler
+      .register_fire_work(
+        &task,
+        &node,
+        "2026-06-08T03:00:00-07:00",
+        "synthetic",
+        Some("synthetic-model"),
+        &features.config.get().unwrap(),
+      )
+      .await
+      .unwrap();
+
+    assert_eq!(leaf.task_parent_id.as_deref(), Some(node_id));
+    assert_eq!(leaf.task.as_ref().unwrap().task_type, None);
+    assert_eq!(leaf.task.as_ref().unwrap().repo_path.as_deref(), Some(repo.to_str().unwrap()));
+    assert_eq!(leaf.task.as_ref().unwrap().base_branch, None);
+    assert_eq!(run.backend.as_deref(), Some("synthetic"));
+    assert_eq!(run.model.as_deref(), Some("synthetic-model"));
+    assert_eq!(prompt, "Synthetic migration work");
+    assert_eq!(features.store.get_session(&legacy.id).await.unwrap().unwrap().status, SessionStatus::Archived);
+    assert!(features.store.child_ids(&legacy.id).unwrap().is_empty());
+
+    std::fs::write(
+      features.config.get().unwrap().credentials_file(),
+      "charliebot:\n  access_key: synthetic-access-key\n",
+    )
+    .unwrap();
+    charliebot_tasks::execution::pre_recovery_step(Arc::clone(&features)).await.unwrap();
+    let dispatcher = features.startup.require::<charliebot_tasks::dispatch::Dispatcher>().unwrap();
+    dispatcher.set_executor(None);
+    let adapter = features.startup.require::<charliebot_tasks::execution::TaskExecutionAdapter>().unwrap();
+    let mut process_guard = crate::cron::test_support::ProcessGroupGuard::new();
+    adapter.launch(&leaf.id, &run.id).unwrap();
+
+    let (finished_run, outcome) = tokio::time::timeout(std::time::Duration::from_secs(15), async {
+      loop {
+        let current = features.store.read_run_sync(&leaf.id, &run.id).unwrap().unwrap();
+        if let Some(pid) = current.pid {
+          process_guard.track(pid);
+        }
+        if let Some(outcome) =
+          charliebot_store::run_records::terminal_outcome(&features.store.load_all_facts(&leaf.id).unwrap(), &run.id)
+            .unwrap()
+        {
+          break (current, outcome);
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+      }
+    })
+    .await
+    .expect("migrated repo-bound work run reaches a terminal fact");
+    assert_eq!(outcome, charliebot_store::run_records::RunOutcomeKind::Success);
+    assert_eq!(finished_run.kind, charliebot_store::run_records::RunKind::Work);
+    assert!(finished_run.pid.is_some());
+    assert!(finished_run.pid_start.is_some());
+    assert_eq!(finished_run.backend.as_deref(), Some("synthetic"));
+    assert_eq!(finished_run.model.as_deref(), Some("synthetic-model"));
+  }
+
+  #[tokio::test]
+  async fn auto_bind_replays_each_durable_migration_boundary_to_one_node_and_binding() {
+    // Python: tests/test_cron_auto_bind.py::test_crash_replay_after_each_step_ends_in_one_node_one_binding_no_active_cron_session
+    for fail_after in ["create", "copy", "write"] {
+      let (home, features) = feature_context();
+      let task_name = format!("synthetic-replay-{fail_after}");
+      let mut extra = Map::new();
+      extra.insert("scheduled_task".to_string(), json!(task_name));
+      extra.insert("last_scheduled_run".to_string(), json!("2026-10-19T09:00:00+00:00"));
+      let legacy = features
+        .store
+        .create_task(
+          CreateTask {
+            request_id: format!("synthetic-replay-legacy-{fail_after}"),
+            task_parent_id: None,
+            profile: TaskProfile::Manager,
+            task: None,
+            name: Some(task_name.clone()),
+            backend: Some("synthetic".to_string()),
+            group: None,
+            session_id: None,
+          },
+          TaskCaller::System,
+          extra,
+        )
+        .await
+        .unwrap();
+      let path =
+        write_task(home.path(), &task_name, &json!({"cron":"0 8 * * *","handler":"synthetic_handler","enabled":false}));
+      let node = features
+        .store
+        .create_task(
+          CreateTask {
+            request_id: format!("scheduled-node:{task_name}"),
+            task_parent_id: None,
+            profile: TaskProfile::Manager,
+            task: None,
+            name: Some(task_name.clone()),
+            backend: Some("synthetic".to_string()),
+            group: None,
+            session_id: None,
+          },
+          TaskCaller::System,
+          Map::new(),
+        )
+        .await
+        .unwrap();
+      if fail_after != "create" {
+        let guard = features.store.control_lock().await;
+        features
+          .store
+          .adopt_metadata_slot_locked(
+            &guard,
+            &node.id,
+            &legacy,
+            "cron",
+            Some(&["last_scheduled_run", "last_scheduled_cron", "last_run_status"]),
+          )
+          .await
+          .unwrap();
+      }
+      if fail_after == "write" {
+        let mut body = serde_yaml::from_str::<Value>(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        body.as_object_mut().unwrap().insert("session_id".to_string(), json!(node.id));
+        std::fs::write(&path, charliebot_core::yaml::dump(&body).unwrap()).unwrap();
+      }
+
+      CronScheduler::new(Arc::clone(&features)).tick().await.unwrap();
+
+      let replayed: serde_yaml::Value = serde_yaml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+      assert_eq!(replayed["session_id"].as_str(), Some(node.id.as_str()), "after {fail_after}");
+      let stored_node = features.store.get_session(&node.id).await.unwrap().unwrap();
+      assert_eq!(stored_node.extra.get("last_scheduled_run"), Some(&json!("2026-10-19T09:00:00+00:00")));
+      assert_eq!(features.store.get_session(&legacy.id).await.unwrap().unwrap().status, SessionStatus::Archived);
+      let active = features.store.list_sessions(Some(SessionStatus::Active), None, None).unwrap();
+      assert_eq!(active.rows.iter().filter(|session| session.name == task_name).count(), 1, "after {fail_after}");
+    }
+  }
+
+  #[tokio::test]
+  async fn scheduler_sweep_archives_a_busy_legacy_cron_session() {
+    // Python: tests/test_cron_auto_bind.py::test_sweep_archives_active_cron_session_of_bound_task_despite_stuck_running_thread
+    let (home, features) = feature_context();
+    let task_name = "synthetic-sweep-task";
+    let node = crate::cron::test_support::manager(&features, "synthetic-sweep-node").await.unwrap();
+    let mut extra = Map::new();
+    extra.insert("scheduled_task".to_string(), json!(task_name));
+    let legacy = features
+      .store
+      .create_task(
+        CreateTask {
+          request_id: "synthetic-stuck-cron-session".to_string(),
+          task_parent_id: None,
+          profile: TaskProfile::Manager,
+          task: None,
+          name: Some(task_name.to_string()),
+          backend: Some("synthetic".to_string()),
+          group: None,
+          session_id: None,
+        },
+        TaskCaller::System,
+        extra,
+      )
+      .await
+      .unwrap();
+    features.store.mark_busy(&legacy.id, UtcDateTime::now()).unwrap();
+    write_task(
+      home.path(),
+      task_name,
+      &json!({"cron":"0 8 * * *","handler":"synthetic_handler","session_id":node.id,"enabled":false}),
+    );
+
+    CronScheduler::new(Arc::clone(&features)).tick().await.unwrap();
+
+    assert_eq!(features.store.get_session(&legacy.id).await.unwrap().unwrap().status, SessionStatus::Archived);
+    assert!(features.store.busy_since(&legacy.id).is_some());
+    assert_eq!(features.store.get_session(&node.id).await.unwrap().unwrap().status, SessionStatus::Active);
+  }
+
+  #[tokio::test]
+  async fn edited_yaml_backend_is_aligned_on_the_next_tick_without_rebinding() {
+    // Python: tests/test_cron_auto_bind.py::test_hand_edited_yaml_backend_is_followed_on_the_next_tick
+    let (home, features) = crate::cron::test_support::feature_context_with_extra_backends(&["synthetic-alt"]);
+    let node = crate::cron::test_support::manager(&features, "synthetic-edit-backend-node").await.unwrap();
+    let path = write_task(
+      home.path(),
+      "synthetic-edit-backend",
+      &json!({"cron":"0 8 * * *","handler":"synthetic_handler","session_id":node.id,"backend":"synthetic","enabled":false}),
+    );
+    let scheduler = CronScheduler::new(Arc::clone(&features));
+    scheduler.tick().await.unwrap();
+    let mut body = serde_yaml::from_str::<Value>(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    body.as_object_mut().unwrap().insert("backend".to_string(), json!("synthetic-alt"));
+    std::fs::write(&path, charliebot_core::yaml::dump(&body).unwrap()).unwrap();
+
+    scheduler.tick().await.unwrap();
+
+    assert_eq!(features.store.get_session(&node.id).await.unwrap().unwrap().backend, "synthetic-alt");
+    assert_eq!(features.store.list_sessions(None, None, None).unwrap().rows.len(), 1);
+    let persisted: serde_yaml::Value = serde_yaml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    assert_eq!(persisted["session_id"].as_str(), Some(node.id.as_str()));
+  }
+
+  #[tokio::test]
+  async fn scheduler_aligns_a_bound_node_backend_in_place() {
+    // Python: tests/test_cron_backend.py::test_scheduler_aligns_bound_node_backend_in_place
+    let (home, features) = crate::cron::test_support::feature_context_with_extra_backends(&["synthetic-alt"]);
+    let node = crate::cron::test_support::manager(&features, "synthetic-align-backend-node").await.unwrap();
+    write_task(
+      home.path(),
+      "synthetic-align-backend",
+      &json!({"cron":"0 8 * * *","handler":"synthetic_handler","session_id":node.id,"backend":"synthetic-alt","enabled":false}),
+    );
+
+    CronScheduler::new(Arc::clone(&features)).tick().await.unwrap();
+
+    assert_eq!(features.store.get_session(&node.id).await.unwrap().unwrap().backend, "synthetic-alt");
+    assert_eq!(features.store.list_sessions(None, None, None).unwrap().rows.len(), 1);
+  }
+
+  #[tokio::test]
+  async fn an_upcoming_occurrence_preserves_last_run_and_does_not_catch_up() {
+    // Python: tests/test_cron_backend.py::test_backend_alignment_preserves_last_run_to_avoid_catchup_fire
+    let (home, features) = feature_context();
+    let node = crate::cron::test_support::manager(&features, "synthetic-no-catchup-node").await.unwrap();
+    let last_run = UtcDateTime::now().to_python_isoformat();
+    let guard = features.store.control_lock().await;
+    features
+      .store
+      .update_slot_fields_locked(
+        &guard,
+        &node.id,
+        "cron",
+        Map::from_iter([
+          ("last_scheduled_run".to_string(), json!(last_run)),
+          ("last_scheduled_cron".to_string(), json!("0 0 1 1 *")),
+        ]),
+      )
+      .await
+      .unwrap();
+    drop(guard);
+    write_task(
+      home.path(),
+      "synthetic-no-catchup",
+      &json!({"cron":"0 0 1 1 *","handler":"synthetic_handler","session_id":node.id,"enabled":true}),
+    );
+
+    CronScheduler::new(Arc::clone(&features)).tick().await.unwrap();
+
+    let fresh = features.store.get_session(&node.id).await.unwrap().unwrap();
+    assert_eq!(fresh.extra.get("last_scheduled_run").and_then(Value::as_str), Some(last_run.as_str()));
+    assert_eq!(fresh.extra.get("last_run_status"), Some(&Value::Null));
+    assert!(
+      !features
+        .store
+        .load_chat_events_sync(&node.id)
+        .unwrap()
+        .iter()
+        .any(|event| event["type"] == charliebot_core::event_types::HANDLER_RESULT)
+    );
+  }
+
+  #[tokio::test]
+  async fn auto_bind_restores_a_status_archived_node_without_a_task_reopened_fact() {
+    // Python: tests/test_archive_cron_restore.py::test_auto_bind_restore_leaves_the_legacy_status_branch_alone
+    let (home, features) = feature_context();
+    let task_name = "synthetic-legacy-restore";
+    let path =
+      write_task(home.path(), task_name, &json!({"cron":"0 8 * * *","handler":"synthetic_handler","enabled":false}));
+    let scheduler = CronScheduler::new(Arc::clone(&features));
+    scheduler.tick().await.unwrap();
+    let first: serde_yaml::Value = serde_yaml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let node_id = first["session_id"].as_str().unwrap().to_string();
+    let mut unbound = serde_yaml::from_str::<Value>(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    unbound.as_object_mut().unwrap().remove("session_id");
+    std::fs::write(&path, charliebot_core::yaml::dump(&unbound).unwrap()).unwrap();
+    features.store.archive_session(&node_id).await.unwrap();
+    assert_eq!(features.store.task_state(&node_id).unwrap(), "open");
+
+    scheduler.tick().await.unwrap();
+
+    let restored = features.store.get_session(&node_id).await.unwrap().unwrap();
+    assert_eq!(restored.status, SessionStatus::Active);
+    assert_eq!(features.store.task_state(&node_id).unwrap(), "open");
+    assert!(
+      !features
+        .store
+        .load_all_facts(&node_id)
+        .unwrap()
+        .iter()
+        .any(|event| event["type"] == charliebot_core::event_types::TASK_REOPENED)
+    );
+    let rebound: serde_yaml::Value = serde_yaml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    assert_eq!(rebound["session_id"].as_str(), Some(node_id.as_str()));
   }
 }

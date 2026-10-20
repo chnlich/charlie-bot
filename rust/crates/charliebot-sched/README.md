@@ -41,7 +41,7 @@ landing, and the sequence controller that runs and closes each loop.
 | `POST /api/cron/tasks/{name}/run` | `src/features/cron/api.py:302-327` |
 | `DELETE /api/cron/tasks/{name}` | `src/features/cron/api.py:330-344` |
 | `scheduler` service and 60-second tick | `src/features/cron/scheduler.py:26`, `:49-81`, `:108-152` |
-| Cron sequence binding and recovery hooks | `src/features/cron/sequence_controller.py:61-208` |
+| Cron sequence binding, stale-anchor wake duties, weekly chat-history recycle and recovery hooks | `src/features/cron/sequence_controller.py:61-208` |
 | Cron startup backend reference check | `src/features/cron/backend_refs.py:7-25` |
 | Scheduled handler registration and lookup | `src/runtime/hooks/scheduled_handlers.py:14-29` |
 

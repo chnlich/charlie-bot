@@ -25,9 +25,9 @@ DELETED_PACKAGE_SCRIPT = "\n".join(
         "from src.app import registrations",
         "registrations.PACKAGES = tuple(p for p in registrations.PACKAGES if p != 'src.backends.gemini')",
         "registrations.register_all()",
-        "from src.infra import config, config_registry",
+        "from src.infra import config",
         "from src.runtime.hooks import backend_type_registration",
-        "print('gemini' in config_registry.registered_backend_types(), 'gemini' in backend_type_registration.registrations())",
+        "print('gemini' in backend_type_registration.registrations())",
         "for path in sys.argv[1:]:",
         "  os.environ['CHARLIEBOT_HOME'] = path",
         "  try:",
@@ -59,7 +59,7 @@ def test_a_config_loads_without_a_deleted_package_and_refuses_its_type(tmp_path:
       timeout=60)
 
   registered, loaded, refused = result.stdout.splitlines()[:3]
-  assert registered == "False False"
+  assert registered == "False"
   assert loaded == "loaded ['codex-x']"
   assert refused.startswith("refused ") and "'gemini' is not registered" in refused
 

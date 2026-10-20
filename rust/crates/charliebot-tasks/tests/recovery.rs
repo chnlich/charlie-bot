@@ -2009,17 +2009,10 @@ async fn retry_repairs_a_half_written_end_record_from_the_raw_log() -> anyhow::R
   assert_eq!(finished, 1, "the retry never wrote a second end record");
   settle_until(|| Ok(stack.adapter.landing_retry_nodes().is_empty())).await?;
   // The success reports to the manager; wait for the turn it launches before the stack drops.
+  settle_until(|| Ok(!stack.child_reports(&manager.id)?.is_empty())).await?;
   settle_until(|| Ok(!stack.run_ids_of_kind(&manager.id, RunKind::ManagerTurn)?.is_empty())).await?;
-  settle_until(|| {
-    let events = stack.run_events(&manager.id)?;
-    for run in stack.run_records(&manager.id)? {
-      if run_records::terminal_outcome(&events, &run.id)?.is_none() {
-        return Ok(false);
-      }
-    }
-    Ok(stack.dispatch.pending_inputs(&manager.id)?.is_empty())
-  })
-  .await?;
+  settle_manager(&stack, &manager.id).await?;
+  assert!(stack.dispatch.pending_inputs(&manager.id)?.is_empty());
   Ok(())
 }
 /// delivers the failed report exactly once.

@@ -1,10 +1,10 @@
-//! The worker-run cases of `tests/test_task_execution.py` over the task-execution stack: a worker Run launches through the
-//! adapter, its process is a `/bin/sh` script, and its delivery chain runs on the real store. Each test names the Python
-//! case it ports in a `// Python:` comment.
+//! The worker-run cases of `tests/test_task_execution.py` over the task-execution stack: a worker Run launches through
+//! the adapter, its process is a `/bin/sh` script, and its delivery chain runs on the real store. Each test names the
+//! Python case it ports in a `// Python:` comment.
 //!
 //! The review spawn of an implement Run belongs to the review-chain task. The chain returns its named error at that
-//! step, so a case that ends at a review is asserted up to that step. The work and verify launches are asserted here;
-//! the review, iteration and scheduled-step launches stay with the review-chain, improve and cron tasks.
+//! step, so a case that ends at a review is asserted up to that step. The work and verify launches are asserted
+//! here; the review, iteration and scheduled-step launches stay with the review-chain, improve and cron tasks.
 
 #[allow(dead_code)]
 mod process_guard;
@@ -34,8 +34,8 @@ use charliebot_store::{CreateTask, PatchTask, TaskCaller};
 use charliebot_tasks::task_sessions;
 use process_guard::ProcessGroupGuard;
 use recovery_support::{
-  BACKEND_ID, BACKEND_TYPE, Build, Scripts, Stack, init_repo_with_origin, post_delegate, scripted_type, settle_until,
-  synthetic_git, synthetic_run,
+  BACKEND_ID, BACKEND_TYPE, Build, Scripts, Stack, init_repo_with_origin, post_delegate, result_script, scripted_type,
+  settle_until, synthetic_git, synthetic_run,
 };
 use serde_json::{Map, Value, json};
 use time::{Duration as TimeDuration, OffsetDateTime};
@@ -54,11 +54,6 @@ fn implement_task(repo: &Path, goal: &str) -> TaskSpec {
     task_type: Some(TaskType::Implement),
     ..TaskSpec::default()
   }
-}
-
-/// A `/bin/sh` script that prints one successful result line.
-fn result_script(text: &str) -> String {
-  format!("printf '%s\\n' '{}'", json!({"type": "result", "subtype": "success", "result": text}))
 }
 
 /// A stack whose one backend option runs `scripts` in order, one per build, with the operator's access key on disk.
@@ -161,7 +156,8 @@ async fn bare_branch_base_with_unpushed_local_commit_launch_fails() -> anyhow::R
   Ok(())
 }
 
-/// Advance origin's main from a second clone, so the fixture's local main falls behind it (`_advance_origin_from_second_clone`).
+/// Advance origin's main from a second clone, so the fixture's local main falls behind it
+/// (`_advance_origin_from_second_clone`).
 fn advance_origin(dir: &Path, origin: &Path, file: &str) -> anyhow::Result<String> {
   let second = dir.join("second");
   synthetic_git(dir, &["clone", "-q", &origin.display().to_string(), &second.display().to_string()])?;
@@ -283,9 +279,9 @@ async fn repo_less_quick_edit_closes_without_review() -> anyhow::Result<()> {
   Ok(())
 }
 
-/// `test_task_execution.py::test_a_follow_up_upload_on_a_worker_node_reaches_its_continuation_prompt`: an upload admitted
-/// while a worker run holds its slot waits for that run's end. The continuation resumes the run's native conversation,
-/// and its prompt names the upload's path.
+/// `test_task_execution.py::test_a_follow_up_upload_on_a_worker_node_reaches_its_continuation_prompt`: an upload
+/// admitted while a worker run holds its slot waits for that run's end. The continuation resumes the run's native
+/// conversation, and its prompt names the upload's path.
 #[tokio::test]
 async fn a_follow_up_upload_on_a_worker_node_reaches_its_continuation_prompt() -> anyhow::Result<()> {
   // Python: tests/test_task_execution.py::test_a_follow_up_upload_on_a_worker_node_reaches_its_continuation_prompt.
@@ -358,9 +354,10 @@ fn snapshot_source_refs(snapshot: &Value) -> Vec<String> {
     .collect()
 }
 
-/// `test_task_execution.py::test_worker_run_kinds_deliver_snapshot_bytes_and_task_context`: a script-run work launch and a
-/// verify launch ride the same assembler with their own contracts. The work launch carries the worker contract, the goal
-/// and the input in its launch text, and a repository sandbox; the verify launch carries the verify contract only.
+/// `test_task_execution.py::test_worker_run_kinds_deliver_snapshot_bytes_and_task_context`: a script-run work launch
+/// and a verify launch ride the same assembler with their own contracts. The work launch carries the worker contract,
+/// the goal and the input in its launch text, and a repository sandbox; the verify launch carries the verify contract
+/// only.
 #[tokio::test]
 async fn worker_run_kinds_deliver_snapshot_bytes_and_task_context() -> anyhow::Result<()> {
   // Python: tests/test_task_execution.py::test_worker_run_kinds_deliver_snapshot_bytes_and_task_context.
@@ -426,10 +423,10 @@ async fn worker_run_kinds_deliver_snapshot_bytes_and_task_context() -> anyhow::R
   Ok(())
 }
 
-/// `test_task_execution.py::test_worktree_preparation_failure_lands_failed_run_and_reports_to_parent`: a repository whose
-/// local base is ahead of origin fails worktree preparation after the Run was admitted. The Run lands its durable failed
-/// fact with the actual error as evidence in its own events log, and the parent receives a failure report naming it. The
-/// report's delivery archives the worker.
+/// `test_task_execution.py::test_worktree_preparation_failure_lands_failed_run_and_reports_to_parent`: a repository
+/// whose local base is ahead of origin fails worktree preparation after the Run was admitted. The Run lands its durable
+/// failed fact with the actual error as evidence in its own events log, and the parent receives a failure report naming
+/// it. The report's delivery archives the worker.
 #[tokio::test]
 async fn worktree_preparation_failure_lands_failed_run_and_reports_to_parent() -> anyhow::Result<()> {
   // Python: tests/test_task_execution.py::test_worktree_preparation_failure_lands_failed_run_and_reports_to_parent.
@@ -492,8 +489,9 @@ async fn worktree_preparation_failure_lands_failed_run_and_reports_to_parent() -
   Ok(())
 }
 
-/// `test_task_execution.py::test_recovery_after_rule_deletion_uses_the_original_snapshot`: a manager turn's stored snapshot
-/// reads on after its rule body is deleted, and an explicit retry is a new Run that assembles from the current sources.
+/// `test_task_execution.py::test_recovery_after_rule_deletion_uses_the_original_snapshot`: a manager turn's stored
+/// snapshot reads on after its rule body is deleted, and an explicit retry is a new Run that assembles from the current
+/// sources.
 #[tokio::test]
 async fn recovery_after_rule_deletion_uses_the_original_snapshot() -> anyhow::Result<()> {
   // Python: tests/test_task_execution.py::test_recovery_after_rule_deletion_uses_the_original_snapshot.
@@ -529,8 +527,8 @@ async fn recovery_after_rule_deletion_uses_the_original_snapshot() -> anyhow::Re
   Ok(())
 }
 
-/// `test_task_execution.py::test_a_worker_launch_failure_writes_no_turn_launch_error`: a worker Run whose backend cannot
-/// be resolved fails at launch, and no manager-turn launch notice is written for it.
+/// `test_task_execution.py::test_a_worker_launch_failure_writes_no_turn_launch_error`: a worker Run whose backend
+/// cannot be resolved fails at launch, and no manager-turn launch notice is written for it.
 #[tokio::test]
 async fn a_worker_launch_failure_writes_no_turn_launch_error() -> anyhow::Result<()> {
   // Python: tests/test_task_execution.py::test_a_worker_launch_failure_writes_no_turn_launch_error.
@@ -566,9 +564,9 @@ fn launched_run_id(decision: &Value) -> anyhow::Result<String> {
   Ok(decision["run_id"].as_str().ok_or_else(|| anyhow::anyhow!("the dispatch names no run: {decision}"))?.to_string())
 }
 
-/// `test_task_execution.py::test_worker_run_finished_enospc_retries_and_lands_without_restart`: the `run_finished` write
-/// of a successful worker run fails out of space. The end-landing retry drains the run from its raw log and lands the
-/// end record, the parent gets exactly one completed report, and no second process starts.
+/// `test_task_execution.py::test_worker_run_finished_enospc_retries_and_lands_without_restart`: the `run_finished`
+/// write of a successful worker run fails out of space. The end-landing retry drains the run from its raw log and lands
+/// the end record, the parent gets exactly one completed report, and no second process starts.
 #[tokio::test]
 async fn worker_run_finished_enospc_retries_and_lands_without_restart() -> anyhow::Result<()> {
   // Python: tests/test_task_execution.py::test_worker_run_finished_enospc_retries_and_lands_without_restart.
@@ -700,8 +698,9 @@ fn withheld_reason(stack: &Stack, session_id: &str) -> anyhow::Result<Option<Str
   )
 }
 
-/// `test_task_execution.py::test_non_space_end_failure_lands_immediately_and_starts_no_retry`: a non-space failure in the
-/// end path lands the run at once and starts no retry. A success fact whose delivery hits EIO sends no failed report.
+/// `test_task_execution.py::test_non_space_end_failure_lands_immediately_and_starts_no_retry`: a non-space failure in
+/// the end path lands the run at once and starts no retry. A success fact whose delivery hits EIO sends no failed
+/// report.
 #[tokio::test]
 async fn non_space_end_failure_lands_immediately_and_starts_no_retry() -> anyhow::Result<()> {
   // Python: tests/test_task_execution.py::test_non_space_end_failure_lands_immediately_and_starts_no_retry.
@@ -833,14 +832,15 @@ fn pooled_config(root: &Root, labels: &[&str], pools: &[(&str, &[&str])], token:
     }
   }
   let pool = pools.first().map(|(name, _)| format!("      account_pool: {name}\n")).unwrap_or_default();
+  let option = format!("      model: test-model\n      token: {token}\n{pool}");
   text.push_str(&format!(
-    "backends:\n  options:\n    - id: {POOLED}\n      label: {POOLED}\n      type: cc-claude\n      model: test-model\n      token: {token}\n{pool}"
+    "backends:\n  options:\n    - id: {POOLED}\n      label: {POOLED}\n      type: cc-claude\n{option}"
   ));
   Ok(text)
 }
 
-/// A stack over a pooled Claude configuration whose one `cc-claude` option runs `scripts` in order. Its lifecycle selects
-/// through `state`, which the test has observed its readings into.
+/// A stack over a pooled Claude configuration whose one `cc-claude` option runs `scripts` in order. Its lifecycle
+/// selects through `state`, which the test has observed its readings into.
 async fn pooled_stack(
   root: &Root,
   labels: &[&str],
@@ -929,9 +929,9 @@ fn run_log(stack: &Stack, session_id: &str, run_id: &str) -> anyhow::Result<Vec<
     .collect()
 }
 
-/// `test_task_execution.py::test_pooled_fresh_worker_launches_build_on_the_selected_account`: a fresh work Run on a pooled
-/// cc-claude option launches on the account the pool selects, and its build receives that account. The review that the
-/// implement Run's success spawns is the review-chain task's, so the case stops at the work launch.
+/// `test_task_execution.py::test_pooled_fresh_worker_launches_build_on_the_selected_account`: a fresh work Run on a
+/// pooled cc-claude option launches on the account the pool selects, and its build receives that account. The review
+/// that the implement Run's success spawns is the review-chain task's, so the case stops at the work launch.
 #[tokio::test]
 async fn pooled_fresh_worker_launches_build_on_the_selected_account() -> anyhow::Result<()> {
   // Python: tests/test_task_execution.py::test_pooled_fresh_worker_launches_build_on_the_selected_account.
@@ -948,8 +948,9 @@ async fn pooled_fresh_worker_launches_build_on_the_selected_account() -> anyhow:
   Ok(())
 }
 
-/// `test_task_execution.py::test_pooled_worker_launch_selects_inside_the_option_pool`: with pools defined, the launch picks
-/// an account of its option's pool. The untouched beta accounts hold more headroom than the alpha member, and stay unused.
+/// `test_task_execution.py::test_pooled_worker_launch_selects_inside_the_option_pool`: with pools defined, the launch
+/// picks an account of its option's pool. The untouched beta accounts hold more headroom than the alpha member, and
+/// stay unused.
 #[tokio::test]
 async fn pooled_worker_launch_selects_inside_the_option_pool() -> anyhow::Result<()> {
   // Python: tests/test_task_execution.py::test_pooled_worker_launch_selects_inside_the_option_pool.
@@ -973,8 +974,8 @@ async fn pooled_worker_launch_selects_inside_the_option_pool() -> anyhow::Result
   Ok(())
 }
 
-/// `test_task_execution.py::test_unpooled_fresh_worker_launch_carries_no_account`, over an empty pool: the cc-claude option
-/// runs on no account, so its launch carries no `claude_account` and runs on the default login.
+/// `test_task_execution.py::test_unpooled_fresh_worker_launch_carries_no_account`, over an empty pool: the cc-claude
+/// option runs on no account, so its launch carries no `claude_account` and runs on the default login.
 #[tokio::test]
 async fn unpooled_fresh_worker_launch_carries_no_account_on_an_empty_pool() -> anyhow::Result<()> {
   // Python: tests/test_task_execution.py::test_unpooled_fresh_worker_launch_carries_no_account.
@@ -991,8 +992,8 @@ async fn unpooled_fresh_worker_launch_carries_no_account_on_an_empty_pool() -> a
   Ok(())
 }
 
-/// `test_task_execution.py::test_unpooled_fresh_worker_launch_carries_no_account`, over a non-Claude backend: the launch
-/// carries no `claude_account` either.
+/// `test_task_execution.py::test_unpooled_fresh_worker_launch_carries_no_account`, over a non-Claude backend: the
+/// launch carries no `claude_account` either.
 #[tokio::test]
 async fn unpooled_fresh_worker_launch_carries_no_account_on_a_non_claude_backend() -> anyhow::Result<()> {
   // Python: tests/test_task_execution.py::test_unpooled_fresh_worker_launch_carries_no_account.
@@ -1007,9 +1008,9 @@ async fn unpooled_fresh_worker_launch_carries_no_account_on_a_non_claude_backend
   Ok(())
 }
 
-/// `test_task_execution.py::test_pool_exhausted_launch_fails_the_run_with_evidence_and_no_process`: with no account left to
-/// select, the Run fails before any process starts. Its events log carries the pool-exhausted error, which names the
-/// earliest reset, and the error event is flagged as quota exhaustion.
+/// `test_task_execution.py::test_pool_exhausted_launch_fails_the_run_with_evidence_and_no_process`: with no account
+/// left to select, the Run fails before any process starts. Its events log carries the pool-exhausted error, which
+/// names the earliest reset, and the error event is flagged as quota exhaustion.
 #[tokio::test]
 async fn pool_exhausted_launch_fails_the_run_with_evidence_and_no_process() -> anyhow::Result<()> {
   // Python: tests/test_task_execution.py::test_pool_exhausted_launch_fails_the_run_with_evidence_and_no_process.
@@ -1041,9 +1042,9 @@ async fn pool_exhausted_launch_fails_the_run_with_evidence_and_no_process() -> a
   Ok(())
 }
 
-/// `test_task_execution.py::test_rejected_first_process_relays_to_another_pool_account_and_succeeds`: a Run launched through
-/// task execution relays like a directly driven worker. The first process's rejected reading moves the run to the account
-/// with the most headroom, on the same Claude conversation, and the Run ends successfully.
+/// `test_task_execution.py::test_rejected_first_process_relays_to_another_pool_account_and_succeeds`: a Run launched
+/// through task execution relays like a directly driven worker. The first process's rejected reading moves the run to
+/// the account with the most headroom, on the same Claude conversation, and the Run ends successfully.
 #[tokio::test]
 async fn rejected_first_process_relays_to_another_pool_account_and_succeeds() -> anyhow::Result<()> {
   // Python: tests/test_task_execution.py::test_rejected_first_process_relays_to_another_pool_account_and_succeeds.
@@ -1101,8 +1102,8 @@ async fn failover_stack(scripts: &Scripts) -> anyhow::Result<Stack> {
   Ok(stack)
 }
 
-/// A worker on `fake2` whose run ended on quota exhaustion, with its revision batch bound (`_interrupted_worker_run`). A
-/// pool-chosen node carries the pool's backend-from-pool flag. Returns the worker's id and the run's id.
+/// A worker on `fake2` whose run ended on quota exhaustion, with its revision batch bound (`_interrupted_worker_run`).
+/// A pool-chosen node carries the pool's backend-from-pool flag. Returns the worker's id and the run's id.
 async fn interrupted_worker_run(
   stack: &Stack,
   parent: &str,
@@ -1145,8 +1146,9 @@ async fn interrupted_worker_run(
   Ok((worker.id, "run-revision".to_string()))
 }
 
-/// The failover of a pool-chosen worker whose run ended on quota exhaustion: the member cools, the node moves to the next
-/// member, and a retry run on it binds the interrupted run's input batch and launches with the feedback it answers.
+/// The failover of a pool-chosen worker whose run ended on quota exhaustion: the member cools, the node moves to the
+/// next member, and a retry run on it binds the interrupted run's input batch and launches with the feedback it
+/// answers.
 async fn quota_failure_fails_over_to_the_next_member(task_type: TaskType) -> anyhow::Result<()> {
   let scripts = Scripts::new(vec![result_script("retry done"), result_script("report noted")]);
   let stack = failover_stack(&scripts).await?;
@@ -1205,8 +1207,9 @@ async fn quota_failure_on_a_verify_pool_node_fails_over_to_the_next_member() -> 
   quota_failure_fails_over_to_the_next_member(TaskType::Verify).await
 }
 
-/// `test_task_execution.py::test_a_pinned_worker_is_not_failed_over_and_its_member_is_not_cooled`: a node whose delegation
-/// named its backend keeps the quota behavior of before: the failure is reported, nothing retries, and the pool is untouched.
+/// `test_task_execution.py::test_a_pinned_worker_is_not_failed_over_and_its_member_is_not_cooled`: a node whose
+/// delegation named its backend keeps the quota behavior of before: the failure is reported, nothing retries, and the
+/// pool is untouched.
 #[tokio::test]
 async fn a_pinned_worker_is_not_failed_over_and_its_member_is_not_cooled() -> anyhow::Result<()> {
   // Python: tests/test_task_execution.py::test_a_pinned_worker_is_not_failed_over_and_its_member_is_not_cooled.

@@ -240,7 +240,6 @@ class ThreadMetadata(pydantic.BaseModel):
   status: ThreadStatus = ThreadStatus.IDLE
   created_at: UtcDatetime = pydantic.Field(default_factory=utc_now)
   started_at: UtcDatetime | None = None
-  completed_at: UtcDatetime | None = None
   pid: int | None = None
   # Field 22 of /proc/<pid>/stat (process start time in clock ticks since host
   # boot). Together with pid it pins a run to one process instance, so pid

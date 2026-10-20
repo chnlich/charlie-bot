@@ -383,7 +383,8 @@ Known-alive symbols:
   definition, so vulture flags it as an unused method. Same framework-registered class as the
   `check_sources_and_mode` entry above.
 - `check_default_backend` (`src/features/voice/config_check.py`), `check_claude_pools`
-  (`src/backends/claude_code/claude_config.py`), `AccountsConfig` (same file), each option model class in
+  (`src/backends/claude_code/claude_config.py`), `AccountsConfig` (same file), `ClaudeLaunchConfig`
+  (`src/backends/claude_code/claude_launch.py`), each option model class in
   `src/backends/*/options.py`, `snapshot_reading_limits` (`src/backends/opencode/opencode_limits.py`), and
   `claude_reading_limits` (`src/backends/claude_code/claude_code.py`) —
   reached by string: the `register()` of each package passes a "module:attr" string to
@@ -451,6 +452,15 @@ Known-alive symbols:
   (`ClaudeSessionFields`, `ClaudeThreadFields` in `src/backends/claude_code/claude_metadata.py`)
   register through the same call; a direct reference (`cast` in `discord_commands.py`, the
   module's own `isinstance` checks) keeps vulture silent on them today.
+- `last_run_status` (`CronMetadata` in `src/features/cron/metadata.py`) and `slack_watermark_ts`
+  (`SlackSessionFields` in `src/features/slack/metadata.py`) — fields of string-registered slot
+  models, set by keyword and read by string. The scheduler writes `last_run_status` through
+  `update_slot_fields(..., last_run_status=...)` (`src/features/cron/scheduler.py`), and
+  `src/features/cron/static/cron.js` renders `s.last_run_status` off the payload. The slack
+  listener names `slack_watermark_ts` by string as the shared mention path's `watermark_field`
+  (`src/features/slack/slack_listener.py`), and `thread_entry.py` reads and writes it through
+  `getattr(fields, platform.watermark_field)`. Vulture sees neither keyword nor string reach, so
+  it flags each declaration as an unused variable.
 - `__getattr__` (`src/features/explain/explain.py`, `src/infra/constants.py`,
   `src/infra/models.py`) — the PEP 562 lazy-attribute hooks, same class as the
   worker/autonamer entry above. The explain hook serves the deferred `base_one_shot_text` and
@@ -585,6 +595,14 @@ Known-alive symbols:
   tree-page row and the tree-changed signal, `tree_revision` rides every tree page, and the
   tree and archive tests read those keys off the decoded bodies. Vulture flags each field
   declaration (plus the sidebar probe's attribute write) as an unused variable or attribute.
+- `has_pending_trigger` and `has_pending_plan_approval` (`SessionMetadata` in
+  `src/infra/models.py`, written by the sidebar probe in `src/runtime/session_sidebar.py`
+  through the `sidebar_state.HAS_PENDING_*` string constants) — the same wire-read class as the
+  `pending_trigger_count` entry above: the status scope reads `dump["has_pending_trigger"]`
+  (`src/runtime/api/sessions.py`), `web/static/js/sidebar/status.js` reads
+  `session.has_pending_trigger` and `session.has_pending_plan_approval` off status payloads, and
+  the status-scope tests assert `row.has_pending_plan_approval`. Vulture flags each declaration
+  (plus the probe's attribute writes) as an unused variable or attribute.
 - `subtree_prompt` and `node_prompt` (`PatchSessionTaskRequest` in `src/infra/models.py`) —
   read by string: `task_sessions.patch_task` tests `req.model_fields_set` for the two field
   names and reads each value through `getattr(req, f"{scope}_prompt")`, and the task-prompt

@@ -59,9 +59,16 @@ class FakeDiscordClient:
     self.calls.append(("get_channel", {"channel_id": channel_id}))
     return self.channels[channel_id]
 
-  async def start_thread_from_message(self, channel_id: str, message_id: str, name: str) -> dict:
-    self.calls.append(("start_thread_from_message", {"channel_id": channel_id, "message_id": message_id, "name": name}))
-    self.started_threads.append({"channel_id": channel_id, "message_id": message_id, "name": name})
+  async def start_thread_from_message(
+      self, channel_id: str, message_id: str, name: str, *, auto_archive_duration: int = 10080) -> dict:
+    payload = {
+        "channel_id": channel_id,
+        "message_id": message_id,
+        "name": name,
+        "auto_archive_duration": auto_archive_duration,
+    }
+    self.calls.append(("start_thread_from_message", payload))
+    self.started_threads.append(dict(payload))
     return {"id": self.thread_id, "name": name, "type": 11}
 
   async def create_message(self, channel_id: str, content: str) -> dict:
@@ -184,11 +191,14 @@ async def test_text_channel_summon_starts_thread_and_session(
   # and the only Discord traffic is the thread start plus the 👀 ack on the
   # mention — no posted acceptance message. The completeness assertions below
   # fail on any other client call.
-  assert client.started_threads == [{
-      "channel_id": _PARENT,
-      "message_id": _MENTION,
-      "name": "plan the release",
-  }]
+  assert client.started_threads == [
+      {
+          "channel_id": _PARENT,
+          "message_id": _MENTION,
+          "name": "plan the release",
+          "auto_archive_duration": 10080,
+      }
+  ]
   reactions = [c for name, c in client.calls if name == "add_reaction"]
   assert reactions == [{"channel_id": _PARENT, "message_id": _MENTION, "emoji": "👀"}]
   assert not [name for name, _ in client.calls if name == "create_message"]

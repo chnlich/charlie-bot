@@ -786,11 +786,11 @@ def rate_limit_event(
 
 
 def patch_select_with_transient_reading(monkeypatch: pytest.MonkeyPatch, reading_now: datetime.datetime) -> None:
-  """Patch ``claude_accounts.select`` so an account move's below-line select sees ext-1 cross the line.
+  """Patch ``claude_accounts.select`` so the move's select sees ext-1 cross the line.
 
-  The wrapper recognizes the move's select by ``min_headroom`` with exclusions, records a
-  line-crossing reading for ext-1 at *reading_now* just before it, and forwards every call to the
-  real select.
+  The wrapper recognizes the move's select by its non-empty ``exclude`` -- only
+  ``relay_move`` excludes the account it is leaving -- records a line-crossing reading for
+  ext-1 at *reading_now* just before it, and forwards every call to the real select.
   """
   real_select = claude_accounts.select
 
@@ -803,7 +803,7 @@ def patch_select_with_transient_reading(monkeypatch: pytest.MonkeyPatch, reading
       account_pool: str | None = None,
       min_headroom: float = 0.0,
   ) -> claude_config.ClaudeAccount | None:
-    if min_headroom > 0 and exclude:
+    if exclude:
       # The move's below-line select: the target's reading crosses the line first.
       claude_accounts.observe_rate_limit(
           "ext-1", rate_limit_event("allowed_warning", 0.95)["rate_limit_info"], now=reading_now)

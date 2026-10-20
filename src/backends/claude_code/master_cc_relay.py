@@ -14,9 +14,10 @@ line, or a busy one frees the turn to pick the idle account with the most
 headroom, moving the transcript with it and, on a cold cache, compacting a
 large Fable context with Sonnet first (src/backends/claude_code/claude_compaction.py).
 
-Relay: the transcript moves to the account with the most headroom among the
-others, a large Fable context is compacted by Sonnet there, and Claude Code
-resumes the same session id with the shared continuation prompt. The user sees
+Relay: the transcript moves to the next account by the account pool's tier
+rule (claude_accounts.select: accounts under the warning line contend first),
+a large Fable context is compacted by Sonnet there, and Claude Code resumes
+the same session id with the shared continuation prompt. The user sees
 the compaction notice only; account names stay in the server log, metadata and
 the usage panel.
 """
@@ -266,13 +267,11 @@ async def prepare_relay(
     cc_session_id: str | None,
     reason: str | None,
     relays: int,
-    min_headroom: float = 0.0,
 ) -> claude_config.ClaudeAccount:
   """Move the run to the next account and compact a large Fable context there.
 
-  A *min_headroom* above zero (the warning relay's strictly-below-the-line bar)
-  raises the destination bar; ``relay_move`` falls back to the regular select
-  when nothing qualifies.
+  The destination follows the account pool's tier rule
+  (claude_accounts.select): accounts under the warning line contend first.
 
   Returns the account the run continues on. Raises ``LaunchRefused`` when the
   pool is exhausted (a spent quota), the transcript has no id yet, or the copy
@@ -285,13 +284,7 @@ async def prepare_relay(
   """
   cfg, option, session_meta = ctx.cfg, ctx.option, ctx.session_meta
   move = claude_relay.relay_move(
-      cfg,
-      option.model,
-      current,
-      cc_session_id,
-      None,
-      account_pool=claude_accounts.option_pool(option),
-      min_headroom=min_headroom)
+      cfg, option.model, current, cc_session_id, None, account_pool=claude_accounts.option_pool(option))
   if move.account is None:
     assert move.error is not None
     if move.refused_holder is None or ctx.kind == "task":

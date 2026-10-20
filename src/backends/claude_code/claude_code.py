@@ -32,7 +32,7 @@ HEADLESS_DISALLOWED_TOOLS = (
 # only spend request tokens.
 REVIEW_ONLY_TOOLS: tuple[str, ...] = ("ReportFindings",)
 
-# Review runs called no skill since 2026-10-12. Without the Skill tool, Claude Code sends no skill listing.
+# Review runs call no skill. Without the Skill tool, Claude Code sends no skill listing.
 REVIEW_DISALLOWED_TOOLS: tuple[str, ...] = ("Skill",)
 
 BASE_COMMAND: list[str] = [

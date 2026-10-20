@@ -15,7 +15,7 @@ def headless_claude_settings(run_kind: models.RunKind) -> dict[str, bool]:
   """The ``--settings`` values for a headless Claude Code process of *run_kind*."""
   settings = {
       **DISABLE_CONNECTOR_SETTINGS,
-      "syncClaudeAiSkills": False,  # No run kind has used synced skills since 2026-10-12.
+      "syncClaudeAiSkills": False,  # No run kind uses synced skills.
   }
   if run_kind != "manager_turn":
     # Bundled skills have uses only in manager turns.

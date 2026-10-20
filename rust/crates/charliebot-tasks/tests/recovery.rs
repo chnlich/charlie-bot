@@ -1321,7 +1321,14 @@ async fn a_launch_without_a_controller_fails_loudly_naming_the_owner_ref() -> an
   assert_eq!(error_events.len(), 1, "the launch's one durable evidence: {error_events:?}");
   assert_eq!(error_events[0]["type"], event_types::ERROR);
   let message = error_events[0]["message"].as_str().unwrap_or_default();
-  assert!(message.contains(ORPHAN_OWNER), "the error names the owner_ref: {message}");
+  assert_eq!(
+    message,
+    format!(
+      "TaskInvalidError: sequence run orphan carries owner_ref {} and no registered controller owns its kind",
+      charliebot_core::pyfmt::str_repr(ORPHAN_OWNER)
+    ),
+    "the error matches Python's class and message"
+  );
   assert_eq!(run_records::terminal_outcome(&stack.run_events(&leaf.id)?, "orphan")?, Some(RunOutcomeKind::Failed));
   Ok(())
 }

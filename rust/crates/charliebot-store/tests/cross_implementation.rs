@@ -1868,3 +1868,29 @@ async fn load_all_facts_matches_python_fact_history_over_a_stale_archive_file() 
   let facts = store.load_all_facts(SESSION_ID).unwrap();
   assert_eq!(serde_json::to_value(&facts).unwrap(), Value::Array(expected));
 }
+
+// The legacy layouts Python's readers still walk: a master run's raw log under
+// `data/master_runs/<started_at>/` and a pre-task-tree thread's event log under
+// `threads/<tid>/data/` (src/runtime/runs.py's DATA_DIR_NAME / MASTER_RUNS_DIR_NAME /
+// THREADS_DIR_NAME). The store's readers (Python runs.py, Rust run_records.rs) must keep
+// agreeing on these names.
+#[test]
+fn legacy_master_run_and_thread_log_readers_walk_the_python_layouts() {
+  let home = tempfile::tempdir().unwrap();
+  let sessions = home.path().join("sessions");
+  let session = sessions.join("legacy-session");
+  let master_log = session.join("data").join("master_runs").join("2025-02-03T04:05:06Z").join("agent.raw.ndjson");
+  fs::create_dir_all(master_log.parent().unwrap()).unwrap();
+  fs::write(&master_log, b"{}\n").unwrap();
+  let thread_log = session.join("threads").join("legacy-thread").join("data").join("events.jsonl");
+  fs::create_dir_all(thread_log.parent().unwrap()).unwrap();
+  fs::write(&thread_log, b"{}\n").unwrap();
+  // A non-legacy sibling the readers must not pick up: a task-tree run dir and a session file.
+  let task_tree_run = session.join("data").join("runs").join("2025-02-03T04:05:07Z").join("agent.raw.ndjson");
+  fs::create_dir_all(task_tree_run.parent().unwrap()).unwrap();
+  fs::write(&task_tree_run, b"{}\n").unwrap();
+
+  let store = make_store(home.path());
+  assert_eq!(store.master_run_log_paths_sync().unwrap(), vec![master_log]);
+  assert_eq!(store.thread_event_log_paths_sync().unwrap(), vec![thread_log]);
+}

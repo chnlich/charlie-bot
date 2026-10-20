@@ -248,7 +248,7 @@ run-record work is `S2`; task-tree runtime and feature-owned files remain with t
 | `opencode/` | backends/opencode | ported | The shared server creates the store's `data/`, `state/` and `cache/` roots (`charliebot-core/src/home.rs`); the usage source reads and vacuums `data/opencode/opencode.db`. |
 | `sessions/.counter` | agent-runtime | ported | Read, count-dirs fallback and rewrite in `next_session_name` (`charliebot-store/src/task_tree.rs:877-897`); Python `src/runtime/task_sessions.py:1130-1151`. Deviation: Rust logs `session_counter_unparsable` or `session_counter_unreadable` at warn on the fallback; Python falls back silently. |
 | `sessions/.task-<id>-<pid>-<uuid>.tmp/` | agent-runtime | todo | Rust writes `.task-<id>-<uuid>.tmp`, without the pid component (`charliebot-store/src/task_tree.rs:846`). |
-| in-memory usage caches | features/usage | todo | Not persisted files. |
+| in-memory usage caches | features/usage | ported | Python `src/features/usage/ext_usage.py:28` (`_cached_usage`) and `:31` (`_accounts`); Rust `rust/crates/features/usage/src/ext_usage.rs:17-42` (`Panel`). Not persisted files. |
 | `sessions/<sid>/metadata.json` | S1 | ported | Ordered typed metadata, registered slots, unknown keys, atomic writes. |
 | `sessions/<sid>/threads/<tid>/metadata.json` | S1 | ported | Typed thread model and registered slots. |
 | `sessions/<sid>/data/chat_events.jsonl` | S1 | ported | Append, sync, tolerant NDJSON reads, cache and ranges. |
@@ -298,7 +298,6 @@ run-record work is `S2`; task-tree runtime and feature-owned files remain with t
 | one-shot backend temporary directories | backends | todo | Outside the home. |
 | explain temporary directories | features/explain | ported | Outside the home. A read-only history copy per run, removed when the run ends. |
 | headless-render temporary directories | features/artifacts | ported | Outside the home. Removed when a renderer closes or a measurement fails. |
-| trace-merge temporary directories | features/trace | todo | Outside the home. |
 | memory proposal temporary extraction | features/memory | not applicable | Outside the home. The Python CLI stays (Trade-off 2). |
 | SSH ControlMaster sockets | foundation | ported | Outside the home. The control directory (mode 0700), `ControlPath`, `ControlPersist`, `ConnectTimeout` and `BatchMode` match Python (`charliebot-core/src/ssh.rs:17`, `:23`, `:35`; Python `src/infra/ssh.py:17-24`, `:27-53`). The host-auth probe and the sched launcher build their argv through it (`features/host_auth/src/probe.rs:57`, `charliebot-sched/src/triggers.rs:624`). |
 | artifact page-height probe files | features/artifacts | ported | Beside an artifact. Removed after every measurement outcome. |

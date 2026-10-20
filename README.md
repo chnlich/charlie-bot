@@ -93,6 +93,7 @@ CharlieBot is a self-hosted multi-agent orchestration system: a master agent dri
 - `charliebot voice-replay-eval` — replay recorded dictations through the transcription backends and score latency and accuracy
 - `charliebot usage-ledger` — `capture` writes this host's per-call usage into the ledger
 - `charliebot gc-trash` — inspect and purge quarantined worktree trash
+- `charliebot web` — reply to a web session, print its For-you layer as plain text, or set and show its status
 
 ## Repository layout
 

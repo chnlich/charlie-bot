@@ -637,6 +637,13 @@ def _until(raw: Any, where: str) -> dict:
     if not isinstance(field, str) or not field:
       raise ScenarioError(f"{where}: until.file_field.field must be a non-empty dotted field")
     return {"file_field": condition}
+  if kind == "tree_path_missing":
+    if not isinstance(condition, dict) or set(condition) != {"path"}:
+      raise ScenarioError(f"{where}: until.tree_path_missing requires path")
+    path = condition["path"]
+    if not isinstance(path, str) or not path or pathlib.PurePosixPath(path).is_absolute() or ".." in path.split("/"):
+      raise ScenarioError(f"{where}: until.tree_path_missing.path must stay under the scenario tree")
+    return {"tree_path_missing": condition}
   if kind == "at_gate":
     if not isinstance(condition, str) or not condition:
       raise ScenarioError(f"{where}: until.at_gate must be a non-empty string")

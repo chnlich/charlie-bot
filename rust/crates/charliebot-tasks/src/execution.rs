@@ -39,6 +39,8 @@ use crate::master_run;
 use crate::master_state::{MasterTurnRequest, TaskFinishCallback, TaskRunBinding, TaskSpawnCallback};
 use crate::prompts::{self, PromptEnv, PromptSnapshot, TaskPromptError};
 use crate::recovery::{self, RecoveryState};
+use crate::review;
+use crate::review_text;
 use crate::session_anchors;
 use crate::spawner_backends;
 use crate::worker::{self, Worker, WorkerSpec};
@@ -559,12 +561,7 @@ impl TaskExecutionAdapter {
       if continued {
         self.batch_only_context(meta, run).await?
       } else {
-        let owner_step = if work_run.repo_path.is_some() {
-          format!("the review context for work run {}", work_run.id)
-        } else {
-          format!("the repo-less review context for work run {}", work_run.id)
-        };
-        return Err(recovery::owner_not_landed("review-chain", &owner_step));
+        self.build_review_context(session_id, &work_run).await?
       }
     } else if let Some(sequence_ref) = &run.sequence_ref {
       let controller = self
@@ -830,6 +827,104 @@ impl TaskExecutionAdapter {
       anyhow::bail!("run {} continues a conversation but claims no consumable input", run.id);
     }
     Ok(content)
+  }
+
+  async fn later_messages_section(&self, meta: &SessionMetadata, work_run: &RunRecord) -> anyhow::Result<String> {
+    let mut claimed_ids = Vec::new();
+    let mut found_work_run = false;
+    for run in self.features.store.list_run_records_sync(&meta.id)? {
+      if run.kind != RunKind::Work {
+        continue;
+      }
+      claimed_ids.extend(run.input_event_ids);
+      if run.id == work_run.id {
+        found_work_run = true;
+        break;
+      }
+    }
+    anyhow::ensure!(found_work_run, "review of run {}: it is not a work run of node {}", work_run.id, meta.id);
+    if claimed_ids.is_empty() {
+      return Ok(String::new());
+    }
+    let mut events_by_id = HashMap::new();
+    for event in self.features.store.load_all_facts(&meta.id)? {
+      if let Some(id) = event.get("id").and_then(Value::as_str) {
+        events_by_id.insert(id.to_string(), event);
+      }
+    }
+    let events = claimed_ids
+      .iter()
+      .map(|event_id| {
+        events_by_id
+          .get(event_id)
+          .cloned()
+          .ok_or_else(|| anyhow!("review input event {event_id} is missing from node {} history", meta.id))
+      })
+      .collect::<anyhow::Result<Vec<_>>>()?;
+    let provenance = self.dispatch.child_report_provenances(&events).await?;
+    let (content, _) = compose_input_prompt(&self.features, meta, &events, &provenance)?;
+    if content.trim().is_empty() {
+      return Ok(String::new());
+    }
+    Ok(format!("**Later Messages:**\n{content}"))
+  }
+
+  async fn build_review_context(&self, session_id: &str, work_run: &RunRecord) -> anyhow::Result<String> {
+    if work_run.repo_path.as_deref().is_none_or(str::is_empty) {
+      return self.build_repo_less_review_context(session_id, work_run).await;
+    }
+    anyhow::ensure!(
+      work_run.branch_name.as_deref().is_some_and(|value| !value.is_empty())
+        && work_run.worktree_path.as_deref().is_some_and(|value| !value.is_empty())
+        && work_run.repo_path.as_deref().is_some_and(|value| !value.is_empty())
+        && work_run.base_branch.as_deref().is_some_and(|value| !value.is_empty()),
+      "review of work run {} needs its exact repo/base/branch/worktree provenance; an unset base is never silently replaced with main",
+      work_run.id
+    );
+    let meta = self.features.store.load_meta(session_id).await?;
+    anyhow::ensure!(
+      meta.as_ref().is_some_and(|meta| meta.task.is_some()),
+      "review of work run {} needs its node's task record for the spec",
+      work_run.id
+    );
+    let meta = meta.expect("the task record was checked above");
+    let spec = review_text::review_spec_text(meta.task.as_ref().expect("the task record was checked above"))?;
+    let worker_log_path = self.features.store.run_dir(session_id, &work_run.id).join(run_records::RUN_EVENTS_NAME);
+    let worker_summary = review::extract_review_context(session_id, &work_run.id, &worker_log_path).await;
+    let context_lines = review_text::review_context_lines(
+      &spec,
+      &self.later_messages_section(&meta, work_run).await?,
+      worker_summary.as_deref(),
+      &format!("(work run {})", work_run.id),
+    );
+    Ok(prompts::review_task_context(
+      work_run.branch_name.as_deref().expect("the review provenance was checked above"),
+      work_run.worktree_path.as_deref().expect("the review provenance was checked above"),
+      work_run.base_branch.as_deref().expect("the review provenance was checked above"),
+      &self.features.store.chat_events_path(session_id),
+      &worker_log_path,
+      &context_lines.join("\n"),
+    ))
+  }
+
+  async fn build_repo_less_review_context(&self, session_id: &str, work_run: &RunRecord) -> anyhow::Result<String> {
+    let meta = self.features.store.load_meta(session_id).await?;
+    anyhow::ensure!(
+      meta.as_ref().is_some_and(|meta| meta.task.is_some()),
+      "review of work run {} needs its node's task record for the spec",
+      work_run.id
+    );
+    let meta = meta.expect("the task record was checked above");
+    let spec = review_text::review_spec_text(meta.task.as_ref().expect("the task record was checked above"))?;
+    let worker_log_path = self.features.store.run_dir(session_id, &work_run.id).join(run_records::RUN_EVENTS_NAME);
+    let worker_summary = review::extract_review_context(session_id, &work_run.id, &worker_log_path).await;
+    Ok(prompts::repo_less_review_task_context(
+      &self.features.store.chat_events_path(session_id),
+      &worker_log_path,
+      &spec,
+      &self.later_messages_section(&meta, work_run).await?,
+      worker_summary.as_deref(),
+    ))
   }
 
   async fn work_description(&self, meta: &SessionMetadata, run: &RunRecord) -> anyhow::Result<String> {
@@ -1140,7 +1235,7 @@ impl TaskExecutionAdapter {
     let quota_failed = quota_failure.is_some();
 
     if run.kind == RunKind::Review {
-      return Err(recovery::owner_not_landed("review-chain", &format!("the review follow-up of run {}", run.id)));
+      return self.after_review_run(meta, run, durable_outcome).await;
     }
     let task_type = meta.task.as_ref().and_then(|task| task.task_type);
     if task_type == Some(TaskType::ColdRead) && matches!(durable_outcome, "success" | "failed") {
@@ -1153,7 +1248,22 @@ impl TaskExecutionAdapter {
           tracing::info!(target: "charliebot_tasks", session_id, run_id = %run.id, reason, "worker_delivery_paused");
           return Ok(());
         }
-        return Err(recovery::owner_not_landed("review-chain", &format!("the review spawn of work run {}", run.id)));
+        if self.maybe_spawn_review(session_id, run).await?.is_none() {
+          let cfg = self.features.config.get()?;
+          let recovery = backend_pool::backend_pool(&self.features)?.recovery_report(cfg.as_ref());
+          self
+            .report_failure_to_parent(
+              session_id,
+              run,
+              "blocked",
+              Some(&format!(
+                "review of work run {} found no available reviewer backend; backends.pool: {recovery}",
+                run.id
+              )),
+            )
+            .await?;
+        }
+        return Ok(());
       }
       self.cleanup_worktree_if_delivered(session_id, run).await?;
       return Ok(());
@@ -1175,6 +1285,224 @@ impl TaskExecutionAdapter {
       self.report_failure_to_parent(session_id, run, durable_outcome, summary.as_deref()).await?;
     }
     Ok(())
+  }
+
+  pub(crate) async fn maybe_spawn_review(
+    &self,
+    session_id: &str,
+    work_run: &RunRecord,
+  ) -> anyhow::Result<Option<String>> {
+    let store = &self.features.store;
+    let guard = store.control_lock().await;
+    let events = store.load_all_facts(session_id)?;
+    if run_records::terminal_outcome(&events, &work_run.id)? != Some(RunOutcomeKind::Success) {
+      return Ok(None);
+    }
+    let mut work_run = work_run.clone();
+    if let Some(fresh) = store.read_run_sync(session_id, &work_run.id)? {
+      work_run = fresh;
+    }
+    let runs = store.list_run_records_sync(session_id)?;
+    let existing = runs
+      .iter()
+      .filter(|run| run.kind == RunKind::Review && run.review_of_run_id.as_deref() == Some(work_run.id.as_str()))
+      .cloned()
+      .collect::<Vec<_>>();
+    for review_run in &existing {
+      if run_records::terminal_outcome(&events, &review_run.id)? == Some(RunOutcomeKind::Success) {
+        return Ok(Some(review_run.id.clone()));
+      }
+    }
+    for pending in &existing {
+      if run_records::terminal_outcome(&events, &pending.id)?.is_none() {
+        return Ok(Some(pending.id.clone()));
+      }
+    }
+    let tried_backends = existing.iter().filter_map(|run| run.backend.clone()).collect::<Vec<_>>();
+    let used_backends = runs.iter().filter_map(|run| run.backend.clone()).collect::<HashSet<_>>();
+    let cfg = self.features.config.get()?;
+    let pool = backend_pool::backend_pool(&self.features)?;
+    let Some((backend, model, _tried)) = review::select_reviewer_backend(
+      &cfg,
+      &pool,
+      "reviewer",
+      work_run.backend.as_deref().unwrap_or_default(),
+      work_run.model.as_deref(),
+      &tried_backends,
+      &used_backends,
+    )?
+    else {
+      tracing::warn!(target: "charliebot_tasks", session_id, work_run = %work_run.id, "reviewer_backends_exhausted");
+      return Ok(None);
+    };
+    let attempt = existing.len() + 1;
+    let run_id = control_events::stable_run_id(session_id, &format!("review:{}:{attempt}", work_run.id));
+    let record = RunRecord {
+      kind: RunKind::Review,
+      review_of_run_id: Some(work_run.id.clone()),
+      backend: Some(backend),
+      model,
+      repo_path: work_run.repo_path.clone(),
+      base_branch: work_run.base_branch.clone(),
+      branch_name: work_run.branch_name.clone(),
+      worktree_path: work_run.worktree_path.clone(),
+      ..worker_run_record(session_id, &run_id, "", None)
+    };
+    store.register_run_locked(&guard, session_id, record, Some(&format!("review of work run {}", work_run.id))).await?;
+    drop(guard);
+    self.launch(session_id, &run_id)?;
+    Ok(Some(run_id))
+  }
+
+  pub(crate) async fn after_review_run(
+    &self,
+    meta: &SessionMetadata,
+    run: &RunRecord,
+    durable_outcome: &str,
+  ) -> anyhow::Result<()> {
+    let session_id = meta.id.as_str();
+    let work_run = self
+      .features
+      .store
+      .read_run_sync(session_id, run.review_of_run_id.as_deref().unwrap_or_default())?
+      .ok_or_else(|| anyhow!("review run {} names no recorded work Run", run.id))?;
+    if durable_outcome == "failed" {
+      let retried = self.maybe_spawn_review(session_id, &work_run).await?;
+      if retried.is_none() {
+        let cfg = self.features.config.get()?;
+        let recovery = backend_pool::backend_pool(&self.features)?.recovery_report(cfg.as_ref());
+        self
+          .report_failure_to_parent_with_decider(
+            session_id,
+            &work_run,
+            "blocked",
+            Some(&format!(
+              "review of work run {} failed on every configured reviewer backend; backends.pool: {recovery}",
+              work_run.id
+            )),
+            Some(run),
+          )
+          .await?;
+      } else if let Some(retried_id) = retried {
+        let events = self.features.store.load_all_facts(session_id)?;
+        if run_records::terminal_outcome(&events, &retried_id)? == Some(RunOutcomeKind::Success) {
+          self.report_failure_to_parent(session_id, run, durable_outcome, None).await?;
+        }
+      }
+      return Ok(());
+    }
+    if durable_outcome == "interrupted" {
+      self.report_failure_to_parent(session_id, run, durable_outcome, None).await?;
+      return Ok(());
+    }
+    if durable_outcome != "success" {
+      return Ok(());
+    }
+    let task_state = self.features.store.task_state(session_id)?;
+    if task_state != "open" {
+      tracing::debug!(
+        target: "charliebot_tasks",
+        session_id,
+        run_id = %run.id,
+        work_run = %work_run.id,
+        task_state,
+        "review_followup_skipped_closed_task"
+      );
+      self.cleanup_worktree_if_delivered(session_id, &work_run).await?;
+      return Ok(());
+    }
+    let completion = self.features.startup.require::<crate::completion::TaskCompletion>()?;
+    if let Some(reason) = completion.pause_reason(session_id)? {
+      tracing::info!(target: "charliebot_tasks", session_id, run_id = %run.id, reason, "worker_delivery_paused");
+      return Ok(());
+    }
+    let mut result_refs = vec![format!("run:{}", work_run.id)];
+    if let Some(spec_hash) = &work_run.task_spec_hash {
+      result_refs.push(format!("spec:{spec_hash}"));
+    }
+    result_refs.push(format!("review:{}", run.id));
+    let evidence = if work_run.repo_path.as_deref().is_some_and(|repo_path| !repo_path.is_empty()) {
+      let (landing, reason) = self.landing_for_work(&work_run).await;
+      let Some((branch, commit, repo_path)) = landing else {
+        self
+          .report_failure_to_parent_with_decider(
+            session_id,
+            &work_run,
+            "blocked",
+            Some(&format!(
+              "work run {} passed review but its branch did not land on {}: {reason}",
+              work_run.id,
+              work_run.base_branch.as_deref().unwrap_or("the requested base")
+            )),
+            Some(run),
+          )
+          .await?;
+        self.cleanup_worktree_if_delivered(session_id, &work_run).await?;
+        return Ok(());
+      };
+      result_refs.push(format!("landed:{branch}@{commit}"));
+      crate::completion::CompletionEvidence {
+        summary: format!(
+          "work run {} delivered after review {} landed {} on {branch}",
+          work_run.id,
+          run.id,
+          commit.chars().take(12).collect::<String>()
+        ),
+        result_refs,
+        run_ids: vec![work_run.id.clone()],
+        review_run_ids: vec![run.id.clone()],
+        landing: Some(crate::completion::LandingEvidence { branch, commit, repo_path: Some(repo_path) }),
+      }
+    } else {
+      crate::completion::CompletionEvidence {
+        summary: format!(
+          "work run {} delivered after review {} checked the reported paths against the acceptance tests",
+          work_run.id, run.id
+        ),
+        result_refs,
+        run_ids: vec![work_run.id.clone()],
+        review_run_ids: vec![run.id.clone()],
+        landing: None,
+      }
+    };
+    let completion_result =
+      completion.evaluate_automatic_completion(session_id, &work_run.id, None, None, None, Some(&evidence)).await;
+    let cleanup_result = self.cleanup_worktree_if_delivered(session_id, &work_run).await;
+    match completion_result {
+      Ok(_) => cleanup_result?,
+      Err(StoreError::Conflict(blockers)) => {
+        tracing::warn!(
+          target: "charliebot_tasks",
+          session_id,
+          run_id = %work_run.id,
+          blockers = ?blockers,
+          "task_delivery_close_blocked"
+        );
+        cleanup_result?;
+      }
+      Err(error) => {
+        cleanup_result?;
+        return Err(error.into());
+      }
+    }
+    Ok(())
+  }
+
+  async fn landing_for_work(&self, work_run: &RunRecord) -> (Option<(String, String, String)>, String) {
+    let (Some(repo_path), Some(branch_name), Some(base_branch)) =
+      (work_run.repo_path.as_deref(), work_run.branch_name.as_deref(), work_run.base_branch.as_deref())
+    else {
+      return (None, format!("work run {} records no repo, branch and base to verify", work_run.id));
+    };
+    let Some(commit) = git::git_rev_parse(Path::new(repo_path), branch_name).await else {
+      return (None, format!("branch {branch_name} does not resolve in {repo_path}"));
+    };
+    let target = review_text::review_landing_target(base_branch);
+    let (landed, reason) = git::git_verify_commit_landed(Path::new(repo_path), &target, &commit).await;
+    if !landed {
+      return (None, reason);
+    }
+    (Some((target, commit, repo_path.to_string())), String::new())
   }
 
   fn take_quota_failure(&self, session_id: &str, run_id: &str) -> Option<Option<UtcDateTime>> {
@@ -1233,12 +1561,23 @@ impl TaskExecutionAdapter {
     Ok(true)
   }
 
-  async fn report_failure_to_parent(
+  pub(crate) async fn report_failure_to_parent(
     &self,
     session_id: &str,
     run: &RunRecord,
     outcome: &str,
     summary: Option<&str>,
+  ) -> anyhow::Result<()> {
+    self.report_failure_to_parent_with_decider(session_id, run, outcome, summary, None).await
+  }
+
+  async fn report_failure_to_parent_with_decider(
+    &self,
+    session_id: &str,
+    run: &RunRecord,
+    outcome: &str,
+    summary: Option<&str>,
+    deciding_run: Option<&RunRecord>,
   ) -> anyhow::Result<()> {
     let Some(meta) = self.features.store.load_meta(session_id).await? else { return Ok(()) };
     let Some(parent_id) = meta.task_parent_id.as_deref() else { return Ok(()) };
@@ -1256,7 +1595,8 @@ impl TaskExecutionAdapter {
       .deliver_child_report(session_id, source, outcome, &summary, Some(&[format!("run:{}", run.id)]), Some(parent_id))
       .await?;
     let guard = self.features.store.control_lock().await;
-    self.features.store.archive_unsuccessful_worker(&guard, session_id, &run.id, outcome).await?;
+    let archive_run = deciding_run.unwrap_or(run);
+    self.features.store.archive_unsuccessful_worker(&guard, session_id, &archive_run.id, outcome).await?;
     Ok(())
   }
 
@@ -1264,10 +1604,10 @@ impl TaskExecutionAdapter {
     let events_path = self.features.store.run_dir(session_id, &run.id).join(run_records::RUN_EVENTS_NAME);
     if events_path.is_file() {
       let events = charliebot_agents::transport::recovery::parse_raw_lines(&fs::read(&events_path)?);
-      if let Some(summary) = worker_summary_from_events_log(&events) {
+      if let Some(summary) = review::worker_summary_from_events_log(&events) {
         return Ok(summary);
       }
-      if let Some(error) = worker_error_from_events_log(&events) {
+      if let Some(error) = review::worker_error_from_events_log(&events) {
         return Ok(error);
       }
     }
@@ -2022,50 +2362,6 @@ fn events_log_result_success(path: &Path) -> anyhow::Result<bool> {
       .rev()
       .find(|event| event.get("type").and_then(Value::as_str) == Some(event_types::RESULT))
       .is_some_and(result_success),
-  )
-}
-
-fn worker_summary_from_events_log(events: &[Value]) -> Option<String> {
-  for event in events.iter().rev() {
-    match event.get("type").and_then(Value::as_str) {
-      Some(event_types::RESULT) => {
-        if let Some(result) = event.get("result").and_then(Value::as_str).map(str::trim).filter(|text| !text.is_empty())
-        {
-          return Some(result.to_string());
-        }
-      }
-      Some(event_types::ASSISTANT) => {
-        if let Some(text) =
-          assistant_event_text(event).map(|text| text.trim().to_string()).filter(|text| !text.is_empty())
-        {
-          return Some(text);
-        }
-      }
-      _ => {}
-    }
-  }
-  None
-}
-
-fn worker_error_from_events_log(events: &[Value]) -> Option<String> {
-  events.iter().rev().find_map(|event| {
-    if event.get("type").and_then(Value::as_str) != Some(event_types::ERROR) {
-      return None;
-    }
-    ["message", "content"].into_iter().find_map(|key| {
-      event.get(key).and_then(Value::as_str).map(str::trim).filter(|text| !text.is_empty()).map(str::to_string)
-    })
-  })
-}
-
-fn assistant_event_text(event: &Value) -> Option<String> {
-  let blocks = event.pointer("/message/content")?.as_array()?;
-  Some(
-    blocks
-      .iter()
-      .filter(|block| block.get("type").and_then(Value::as_str) == Some("text"))
-      .filter_map(|block| block.get("text").and_then(Value::as_str))
-      .collect(),
   )
 }
 

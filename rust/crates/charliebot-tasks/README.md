@@ -38,6 +38,12 @@ shutdown and re-attachment into server lifespan.
 | `spawner_backends::resolve_session_default_backend_model` | `src/runtime/spawner_backends.py:49` |
 | `spawner_backends::resolve_requested_subagent_backend_model` | `src/runtime/spawner_backends.py:85` |
 | `spawner_backends::select_verify_backend` | `src/runtime/spawner_backends.py:117` |
+| `review` module | `src/runtime/review.py:170-264` |
+| `review::worker_summary_from_events_log` | `src/runtime/review.py:170-198` |
+| `review::worker_error_from_events_log` | `src/runtime/review.py:201-218` |
+| `review::extract_review_context` | `src/runtime/review.py:221-233` |
+| `review::select_reviewer_backend` | `src/runtime/review.py:236-264` |
+| `review::ReviewerBackendSelection` | `src/runtime/review.py:254-264` |
 | `task_sessions::create_retry` | `src/runtime/task_sessions.py:1328` |
 | `session_anchors::context_reset_note` and `backend_switch_reset_reason` | `src/runtime/session_anchors.py:46`, `:36` |
 | `execution::LaunchSettlement` | `src/runtime/task_execution.py:170` |
@@ -174,8 +180,6 @@ The remaining unported follow-ups return an error that names the owner and the s
 
 | Owner | Rust call site | Follow-up that Python replays (`task_execution.py:2802-2914`) |
 | --- | --- | --- |
-| review-chain | `replay_followups` for a successful implement run that owes a review | review spawn |
-| review-chain | `replay_followups` for a finished review run | review-run follow-up |
 | cold-read | `replay_followups` for a cold-read run that succeeded, failed without later work, or was interrupted | cold-read delivery, failure chain and interrupted report |
 | improve | `replay_followups` for an improve sequence run, queued, launched or terminal; no terminal fact is written | the loop's close step (`ImproveSequenceController::recover_run`, `src/features/improve/sequence_controller.py:66-79`) |
 | cron | `replay_followups` for a cron sequence run, queued, launched or terminal; no terminal fact is written | the frontier redrive (`CronSequenceController::recover_run`, `src/features/cron/sequence_controller.py:135-149`) |

@@ -356,10 +356,20 @@ async fn replay_followups(
       }
       if outcome == RunOutcomeKind::Success {
         completion.after_run_finished(session_id, &run.id).await?;
-        if task_type == Some(TaskType::Implement) && run.repo_path.is_some() {
+        if meta.task.is_some() && task_type == Some(TaskType::Implement) {
           let paused = completion.pause_reason(session_id)?.is_some();
-          if !paused && replay_owes_review(store.task_state(session_id)? == "open", &run_records, run) {
-            bail!(owner_not_landed("review-chain", &format!("the review spawn of work run {}", run.id)));
+          if !paused
+            && replay_owes_review(store.task_state(session_id)? == "open", &run_records, run)
+            && adapter.maybe_spawn_review(session_id, run).await?.is_none()
+          {
+            let cfg = features.config.get()?;
+            let pool = charliebot_agents::backend_pool::backend_pool(features)?;
+            let summary = format!(
+              "review of work run {} found no available reviewer backend; backends.pool: {}",
+              run.id,
+              pool.recovery_report(&cfg)
+            );
+            adapter.report_failure_to_parent(session_id, run, "blocked", Some(&summary)).await?;
           }
         }
         continue;
@@ -367,7 +377,7 @@ async fn replay_followups(
       adapter.after_worker_run(&meta, run, outcome_name(outcome)).await?;
     } else if run.kind == RunKind::Review {
       counters.followups += 1;
-      bail!(owner_not_landed("review-chain", &format!("the review follow-up of run {}", run.id)));
+      adapter.after_review_run(&meta, run, outcome_name(outcome)).await?;
     }
   }
   Ok(())

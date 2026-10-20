@@ -80,8 +80,9 @@ class FieldRule:
   *target* is a route template ("GET /api/internal/version") for a response rule, or a glob over the
   tree-relative path ("home/state/writer_identity.json") of a JSON, JSONL or YAML file for a file rule.
   *field* is a dotted path; ``[*]`` steps into every list element and ``*`` into every mapping value. With
-  *when*, the field is masked only in an object whose own fields hold those values. With *pattern*, only the
-  group ``value`` of a string that fully matches it is masked, and any other value compares as it is.
+  *when*, the field is masked only in an object whose own fields hold those values. *document_when* filters the
+  whole JSON document before the path is applied. With *pattern*, only the group ``value`` of a string that fully
+  matches it is masked, and any other value compares as it is.
   """
 
   name: str
@@ -90,6 +91,7 @@ class FieldRule:
   reason: str
   when: tuple[tuple[str, str], ...]
   pattern: re.Pattern[str] | None = None
+  document_when: tuple[tuple[str, str], ...] = ()
 
   @property
   def placeholder(self) -> str:
@@ -400,6 +402,16 @@ FILE_RULES: tuple[FieldRule, ...] = (
         when=(("request_id", "synthetic-delegate-implement-failure"),),
         reason="the canonical task spec includes the repository path inside each independent parity tree",
     ),
+    *(
+        FieldRule(
+            name=f"{event_type}-local-repo-spec-ref",
+            target="home/sessions/*/data/chat_events.jsonl",
+            field="result_refs[*]",
+            when=(),
+            pattern=re.compile(r"spec:(?P<value>[0-9a-f]{64})"),
+            document_when=(("type", event_type),),
+            reason="the canonical task spec hash includes the repository path inside each independent parity tree",
+        ) for event_type in ("task_closed", "child_report")),
     FieldRule(
         name="master-done-total-time",
         target="home/sessions/*/data/chat_events.jsonl",
@@ -768,9 +780,12 @@ def _split_field(field: str) -> list[str]:
 
 
 def normalize_json(value: Any, rules: tuple[FieldRule, ...], ctx: Context) -> Any:
-  """Apply the tree path rule to every string, then every field rule in *rules*."""
+  """Apply the tree path rule to every string, then matching field rules in *rules*."""
   value = _normalize_strings(value, ctx)
   for rule in rules:
+    if rule.document_when and (not isinstance(value, dict) or
+                               any(value.get(key) != wanted for key, wanted in rule.document_when)):
+      continue
     value = _mask(value, _split_field(rule.field), rule)
   return value
 

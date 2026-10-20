@@ -293,6 +293,18 @@ def _file_field_condition(side: Side, condition: dict, manifest: dict) -> bool:
   return not compare.json_diff(value, resolved["equals"])
 
 
+def _tree_path_missing_condition(side: Side, condition: dict, manifest: dict) -> bool:
+  resolved = _substitute(side, condition, manifest)
+  path = pathlib.Path(resolved["path"])
+  if not path.is_absolute():
+    path = side.tree.root / path
+  tree_root = side.tree.root.resolve()
+  resolved_path = path.resolve()
+  if os.path.commonpath((str(resolved_path), str(tree_root))) != str(tree_root):
+    raise RuntimeError(f"wait path escapes {tree_root}: {resolved['path']}")
+  return not resolved_path.exists()
+
+
 def _at_gate_condition(side: Side, name: str) -> bool:
   agent_dir = side.tree.root / "fake-agent"
   marker = agent_dir / f"at-{name}"
@@ -321,6 +333,8 @@ def _condition_met(side: Side, until: dict, manifest: dict) -> bool:
       return _file_field_condition(side, until["file_field"], manifest)
     except (FileNotFoundError, scenario_file.ScenarioError):
       return False
+  if "tree_path_missing" in until:
+    return _tree_path_missing_condition(side, until["tree_path_missing"], manifest)
   if "at_gate" in until:
     return _at_gate_condition(side, until["at_gate"])
   raise ValueError(f"unknown wait condition: {until}")

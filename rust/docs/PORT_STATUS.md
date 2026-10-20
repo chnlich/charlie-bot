@@ -105,8 +105,8 @@ The order of the web reply audit's events is undefined. In the requested 20 Pyth
 | POST | `/api/sessions/{session_id}/explain` | features/explain | ported |  |
 | GET | `/api/sessions/{session_id}/explain` | features/explain | ported |  |
 | GET | `/api/sessions/{session_id}/explain/status` | features/explain | ported |  |
-| POST | `/api/internal/improve/stop` | features/improve | todo |  |
-| POST | `/api/internal/improve` | features/improve | todo |  |
+| POST | `/api/internal/improve/stop` | features/improve | ported |  |
+| POST | `/api/internal/improve` | features/improve | ported |  |
 | GET | `/ncu` | features/ncu | ported | a cache miss runs a Python child, `rust/helpers/ncu_report_helper.py`, when the Nsight install has `extras/python`; otherwise the native `ncu --import --csv` path answers. See `rust/docs/python_helper.md`. A CSV integer cell outside the 64-bit range fails the import with a `ValueError` internal error, while Python keeps the exact integer |
 | WS | `/ws/terminal` | features/terminal | ported |  |
 | GET | `/perfetto` | features/trace | ported |  |
@@ -281,11 +281,11 @@ run-record work is `S2`; task-tree runtime and feature-owned files remain with t
 | `sessions/<sid>/uploads/<filename>` | chat | ported | |
 | `sessions/<sid>/voice/<stamp>_<id>.wav` | features/voice | ported | 16 kHz mono PCM16 WAV |
 | `sessions/<sid>/voice/<stamp>_<id>.txt` | features/voice | ported | final transcript |
-| `sessions/<sid>/loops/active.lock` | features/improve | todo | |
-| `sessions/<sid>/loops/<n>/state.json` | features/improve | todo | |
-| `sessions/<sid>/loops/<n>/goal.md` | features/improve | todo | |
-| `sessions/<sid>/loops/<n>/plan.md` | features/improve | todo | |
-| `sessions/<sid>/loops/<n>/iter_<n>.md` | features/improve | todo | |
+| `sessions/<sid>/loops/active.lock` | features/improve | ported | |
+| `sessions/<sid>/loops/<n>/state.json` | features/improve | ported | |
+| `sessions/<sid>/loops/<n>/goal.md` | features/improve | ported | |
+| `sessions/<sid>/loops/<n>/plan.md` | features/improve | ported | |
+| `sessions/<sid>/loops/<n>/iter_<n>.md` | features/improve | ported | |
 | `sessions/<sid>/CLAUDE.md` instructions | agent-runtime | ported | Written into the run cwd by `prepare_cwd` (`charliebot-agents/src/runner.rs:600-616`); the claude-code target is `charliebot-agents/src/backends/claude_code/claude_code.rs:281`, the launch content `charliebot-tasks/src/master_run.rs:530`. Python: `src/runtime/agent_process/base.py:728-739`, `src/backends/claude_code/claude_code.py:276-277`. |
 | `sessions/<sid>/AGENTS.md` instructions | agent-runtime | ported | Same `prepare_cwd` path (`charliebot-agents/src/runner.rs:600-616`); the codex target is `charliebot-agents/src/backends/codex/backend.rs:218`, charlie-code's `charliebot-agents/src/backends/charlie_code/charlie_code_cli.rs:164-165`. Python: `src/runtime/agent_process/base.py:728-739`, `src/backends/codex/codex.py:55`, `src/backends/charlie_code/charlie_code.py:133`. |
 | session cgroup directories | agent-runtime | ported | Created or refreshed per spawn by `prepare_session_cgroup` (`charliebot-agents/src/transport/cgroup.rs:141-154`, called from `charliebot-agents/src/transport/spawn.rs:68`); Python `src/infra/process.py:110`, `:272`. Outside the home. |

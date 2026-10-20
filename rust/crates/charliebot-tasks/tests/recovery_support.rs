@@ -694,7 +694,6 @@ impl SyntheticRepo {
   }
 }
 
-
 fn run_git(cwd: &Path, args: &[&str]) -> anyhow::Result<()> {
   let output = Command::new("git").arg("-C").arg(cwd).args(args).output()?;
   anyhow::ensure!(

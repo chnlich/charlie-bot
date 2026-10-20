@@ -2,9 +2,9 @@
 //! the adapter, its process is a `/bin/sh` script, and its delivery chain runs on the real store. Each test names the
 //! Python case it ports in a `// Python:` comment.
 //!
-//! The review spawn of an implement Run belongs to the review-chain task. The chain returns its named error at that
-//! step, so a case that ends at a review is asserted up to that step. The work and verify launches are asserted
-//! here; the review, iteration and scheduled-step launches stay with the review-chain, improve and cron tasks.
+//! The review spawn and follow-up of an implement Run run for real (the review chain is ported). The work and verify
+//! launches are asserted here; the review launch itself, iteration and scheduled-step launches stay with their
+//! owners' test files.
 
 #[allow(dead_code)]
 mod process_guard;
@@ -172,8 +172,8 @@ fn advance_origin(dir: &Path, origin: &Path, file: &str) -> anyhow::Result<Strin
 
 /// `test_task_execution.py::test_bare_branch_base_behind_starts_from_origin_tip`: the bare base form when the shared
 /// checkout's local main is only behind origin. The Run launches anyway, its work branch starts at the origin tip, and
-/// the local main ref is untouched. The review that lands the work is the review-chain task's, so the case stops at the
-/// work Run's success.
+/// the local main ref is untouched. The review that lands the work runs on the review chain, so the case asserts the
+/// work Run's launch and success.
 #[tokio::test]
 async fn bare_branch_base_behind_starts_from_origin_tip() -> anyhow::Result<()> {
   // Python: tests/test_task_execution.py::test_bare_branch_base_behind_starts_from_origin_tip.
@@ -589,10 +589,12 @@ async fn worker_run_finished_enospc_retries_and_lands_without_restart() -> anyho
   assert_eq!(fault.hits(), [Hit::Failed, Hit::Written], "one failed write; the retry's write landed");
   assert_eq!(stack.store().busy_since(&worker.id), None, "the dead process's busy timer is closed");
 
-  settle_until(|| Ok(stack.child_reports(&manager.id)?.len() == 1)).await?;
+  // The task's type is unset, so the completion follow-up auto-completes it (no review evidence needed) while the
+  // adapter's implement branch also reports blocked: the pool's only member is the worker's own backend.
+  settle_until(|| Ok(stack.child_reports(&manager.id)?.len() == 2)).await?;
   settle_node(&stack, &manager.id).await?;
   let outcomes: Vec<Value> = stack.child_reports(&manager.id)?.iter().map(|report| report["outcome"].clone()).collect();
-  assert_eq!(outcomes, vec![json!("completed")], "success-based, once");
+  assert_eq!(outcomes, vec![json!("completed"), json!("blocked")], "success-based, once");
   assert!(stack.adapter.landing_retry_nodes().is_empty(), "a clean round ended the retry task");
   let work_prompts = scripts.builds().iter().filter(|build| build.prompt_contains("Start the task.")).count();
   assert_eq!(work_prompts, 1, "one process: the retry drained, never relaunched");
@@ -931,7 +933,7 @@ fn run_log(stack: &Stack, session_id: &str, run_id: &str) -> anyhow::Result<Vec<
 
 /// `test_task_execution.py::test_pooled_fresh_worker_launches_build_on_the_selected_account`: a fresh work Run on a
 /// pooled cc-claude option launches on the account the pool selects, and its build receives that account. The review
-/// that the implement Run's success spawns is the review-chain task's, so the case stops at the work launch.
+/// that the implement Run's success spawns takes another member, so the case asserts the work launch.
 #[tokio::test]
 async fn pooled_fresh_worker_launches_build_on_the_selected_account() -> anyhow::Result<()> {
   // Python: tests/test_task_execution.py::test_pooled_fresh_worker_launches_build_on_the_selected_account.

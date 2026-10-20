@@ -606,15 +606,36 @@ async fn worker_run_finished_enospc_retries_and_lands_without_restart() -> anyho
   assert_eq!(fault.hits(), [Hit::Failed, Hit::Written], "one failed write; the retry's write landed");
   assert_eq!(stack.store().busy_since(&worker.id), None, "the dead process's busy timer is closed");
 
-  // The task's type is unset, so the completion follow-up auto-completes it (no review evidence needed) while the
-  // adapter's implement branch also reports blocked: the pool's only member is the worker's own backend.
-  settle_until(|| Ok(stack.child_reports(&manager.id)?.len() == 2)).await?;
+  // The task's type is unset, so the worker takes the non-implement branch: no review, and the completion follow-up
+  // closes it with one completed report.
+  settle_until(|| Ok(stack.child_reports(&manager.id)?.len() == 1)).await?;
   settle_node(&stack, &manager.id).await?;
   let outcomes: Vec<Value> = stack.child_reports(&manager.id)?.iter().map(|report| report["outcome"].clone()).collect();
-  assert_eq!(outcomes, vec![json!("completed"), json!("blocked")], "success-based, once");
+  assert_eq!(outcomes, vec![json!("completed")], "success-based, once");
   assert!(stack.adapter.landing_retry_nodes().is_empty(), "a clean round ended the retry task");
   let work_prompts = scripts.builds().iter().filter(|build| build.prompt_contains("Start the task.")).count();
   assert_eq!(work_prompts, 1, "one process: the retry drained, never relaunched");
+  Ok(())
+}
+
+/// A worker whose task record leaves the task type unset takes the non-implement branch: its success spawns no review,
+/// and the completion follow-up closes it with one completed report.
+#[tokio::test]
+async fn unset_task_type_success_takes_the_non_implement_branch() -> anyhow::Result<()> {
+  // Python: src/runtime/task_execution.py:2190
+  let scripts = Scripts::new(vec![result_script("work done")]);
+  let stack = scripted_stack(&scripts).await?;
+  let manager = stack.node("root", None, TaskProfile::Manager, None).await?;
+  let worker = stack.node("w", Some(&manager.id), TaskProfile::Worker, Some(spec("do the work", None))).await?;
+
+  stack.dispatch.admit_input(&worker.id, event_types::USER, "Start the task.", "user", json!({})).await?;
+  let run_id = launched_run_id(&stack.dispatch.dispatch_pending(&worker.id).await?)?;
+  assert_eq!(stack.wait_terminal(&worker.id, &run_id).await?, RunOutcomeKind::Success);
+  settle_until(|| Ok(stack.child_reports(&manager.id)?.len() == 1)).await?;
+  settle_node(&stack, &manager.id).await?;
+  let outcomes: Vec<Value> = stack.child_reports(&manager.id)?.iter().map(|report| report["outcome"].clone()).collect();
+  assert_eq!(outcomes, vec![json!("completed")]);
+  assert!(stack.run_ids_of_kind(&worker.id, RunKind::Review)?.is_empty(), "no review run is spawned");
   Ok(())
 }
 

@@ -1282,7 +1282,9 @@ impl TaskExecutionAdapter {
       return self.after_cold_read_run(meta, run, durable_outcome).await;
     }
     if durable_outcome == "success" {
-      if task_type.unwrap_or(TaskType::Implement) == TaskType::Implement {
+      // A node without a task record is an implement node; a record whose task type is unset takes the
+      // non-implement branch (`src/runtime/task_execution.py:2190`).
+      if meta.task.as_ref().is_none_or(|task| task.task_type == Some(TaskType::Implement)) {
         let completion = self.features.startup.require::<crate::completion::TaskCompletion>()?;
         if let Some(reason) = completion.pause_reason(session_id)? {
           tracing::info!(target: "charliebot_tasks", session_id, run_id = %run.id, reason, "worker_delivery_paused");

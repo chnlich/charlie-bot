@@ -41,7 +41,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
   reply = sub.add_parser(
       "reply", help="Record a web reply for this session", formatter_class=help_formatter.CliHelpFormatter)
-  reply.add_argument("--file", required=True, help="File holding the reply text; - reads stdin")
+  common.add_reply_file_arg(reply)
   reply.add_argument(
       "--keep-language", metavar="REASON", help="Post the reply as written and record REASON; skips the language check")
   common.add_session_arg(reply)

@@ -454,6 +454,11 @@ def read_required_text_file(flag_name: str, file_path: str) -> str:
   return content
 
 
+def add_reply_file_arg(parser: argparse.ArgumentParser) -> None:
+  """Add the reply verb's required ``--file`` flag; ``read_reply_text`` reads its value."""
+  parser.add_argument("--file", required=True, help="File holding the reply text; - reads stdin")
+
+
 def read_reply_text(file_arg: str) -> str:
   """The reply verb's ``--file`` read: stdin when the arg is ``-``, else the file's text."""
   if file_arg == "-":

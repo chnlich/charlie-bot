@@ -486,10 +486,25 @@ def test_task_close_and_child_report_mask_only_spec_hashes_in_result_refs() -> N
       })
   assert close == other_close
   assert close["result_refs"] == [
-      "run:synthetic-run", "spec:<task_closed-local-repo-spec-ref>", "review:synthetic-review",
+      "run:synthetic-run", "spec:<task_closed-landed-local-repo-spec-ref>", "review:synthetic-review",
       "landed:main@synthetic-commit"
   ]
 
   other_event = _masked_chat_event({"type": "task_opened", "result_refs": [f"spec:{'a' * 64}"]})
   changed_event = _masked_chat_event({"type": "task_opened", "result_refs": [f"spec:{'b' * 64}"]})
   assert other_event != changed_event
+
+
+def test_task_close_without_a_landing_keeps_its_spec_hash_compared() -> None:
+  close = _masked_chat_event(
+      {
+          "type": "task_closed",
+          "result_refs": ["run:synthetic-run", f"spec:{'a' * 64}", "review:synthetic-review"]
+      })
+  other_close = _masked_chat_event(
+      {
+          "type": "task_closed",
+          "result_refs": ["run:synthetic-run", f"spec:{'b' * 64}", "review:synthetic-review"]
+      })
+  assert close != other_close
+  assert close["result_refs"][1] == f"spec:{'a' * 64}"

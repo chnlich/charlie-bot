@@ -91,7 +91,7 @@ class FieldRule:
   reason: str
   when: tuple[tuple[str, str], ...]
   pattern: re.Pattern[str] | None = None
-  document_when: tuple[tuple[str, str], ...] = ()
+  sibling_prefix: tuple[tuple[str, str], ...] = ()
 
   @property
   def placeholder(self) -> str:
@@ -404,12 +404,12 @@ FILE_RULES: tuple[FieldRule, ...] = (
     ),
     *(
         FieldRule(
-            name=f"{event_type}-local-repo-spec-ref",
+            name=f"{event_type}-landed-local-repo-spec-ref",
             target="home/sessions/*/data/chat_events.jsonl",
             field="result_refs[*]",
             when=(),
             pattern=re.compile(r"spec:(?P<value>[0-9a-f]{64})"),
-            document_when=(("type", event_type),),
+            sibling_prefix=(("result_refs", "landed:"),),
             reason="the canonical task spec hash includes the repository path inside each independent parity tree",
         ) for event_type in ("task_closed", "child_report")),
     FieldRule(
@@ -783,8 +783,10 @@ def normalize_json(value: Any, rules: tuple[FieldRule, ...], ctx: Context) -> An
   """Apply the tree path rule to every string, then matching field rules in *rules*."""
   value = _normalize_strings(value, ctx)
   for rule in rules:
-    if rule.document_when and (not isinstance(value, dict) or
-                               any(value.get(key) != wanted for key, wanted in rule.document_when)):
+    if rule.sibling_prefix and (not isinstance(value, dict) or
+                                any(not any(isinstance(item, str) and item.startswith(prefix)
+                                            for item in value.get(field) or [])
+                                    for field, prefix in rule.sibling_prefix)):
       continue
     value = _mask(value, _split_field(rule.field), rule)
   return value

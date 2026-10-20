@@ -570,6 +570,37 @@ def test_plan_close_time_masks_only_the_stamp_and_its_mode_still_differs() -> No
   assert _masked_plan_registry(later) != _masked_plan_registry(other_mode)
 
 
+def test_cron_firing_masks_the_clock_stamp_and_keeps_the_task_identity() -> None:
+  earlier = (
+      "- Session: synthetic-cron · 2026-10-20T09:26:06.696542+00:00\n"
+      "cron:synthetic-cron:2026-10-20T09:26:06.696542+00:00:leaf")
+  later = (
+      "- Session: synthetic-cron · 2026-10-20T02:26:06.735915-07:00\n"
+      "cron:synthetic-cron:2026-10-20T02:26:06.735915-07:00:leaf")
+  assert normalize.normalize_text(earlier, _context()) == normalize.normalize_text(later, _context())
+  assert normalize.normalize_text("cron:another-task:2026-10-20T09:26:06.696542+00:00:leaf", _context()) != (
+      normalize.normalize_text("cron:synthetic-cron:2026-10-20T09:26:06.696542+00:00:leaf", _context()))
+  assert normalize.normalize_text("2026-10-20T09:26:06.696542+00:00", _context()) != (
+      normalize.normalize_text("2026-10-20T02:26:06.735915-07:00", _context()))
+
+
+def test_cron_last_scheduled_run_masks_the_stamp_and_keeps_the_expression() -> None:
+  rules = normalize.file_rules("home/sessions/synthetic-session/metadata.json")
+  earlier = normalize.normalize_json(
+      {"last_scheduled_run": "2026-10-20T09:26:06.696542+00:00", "last_scheduled_cron": "0 8 * * *"},
+      rules,
+      _context(),
+  )
+  later = normalize.normalize_json(
+      {"last_scheduled_run": "2026-10-20T02:26:06.735915-07:00", "last_scheduled_cron": "0 8 * * *"},
+      rules,
+      _context(),
+  )
+  assert earlier == later
+  assert earlier == {"last_scheduled_run": "<cron-last-scheduled-run>", "last_scheduled_cron": "0 8 * * *"}
+  assert normalize.normalize_json({"last_scheduled_run": None}, rules, _context()) == {"last_scheduled_run": None}
+
+
 SESSIONS_RUNS_ROUTE = "GET /api/sessions/{session_id}/runs"
 WORKER_REPO = f"{_context().tree_root}/workspace/worker-repo"
 ANOTHER_REPO = f"{_context().tree_root}/workspace/another-repo"

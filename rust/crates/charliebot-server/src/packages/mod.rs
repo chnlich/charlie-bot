@@ -5,8 +5,6 @@
 //! metadata slots, its backend types) registers that data; a stub with no data makes no registration. The list keeps
 //! every package, so the page parts, the static mounts and the template search path follow the Python order.
 
-mod features;
-
 use charliebot_registry::{RegisterFn, Registry, RegistryError};
 
 /// Runtime registrations run before the Python package list, matching the server's pre-recovery ordering.
@@ -25,7 +23,7 @@ pub const PACKAGES: &[(&str, RegisterFn)] = &[
   ("src.features.backend_pool", charliebot_agents::backend_pool::register),
   ("src.features.chat_threads", charliebot_chat_threads::register),
   ("src.features.code_server", charliebot_code_server::register),
-  ("src.features.cron", features::cron), // stub: src.features.cron
+  ("src.features.cron", charliebot_sched::cron::register),
   ("src.features.diag", charliebot_diag::register),
   ("src.features.slack", charliebot_slack::register),
   ("src.features.discord", charliebot_discord::register),
@@ -69,6 +67,7 @@ mod tests {
 
   #[test]
   fn the_listed_packages_render_the_five_chat_lines() {
+    // Python: tests/test_scheduled_handlers.py::test_the_packages_register_the_built_in_handlers
     let registry = registry().expect("the listed packages register");
     for event_type in [
       "slack_reply",
@@ -83,5 +82,8 @@ mod tests {
     }
     assert!(registry.event_renderer("assistant").is_none());
     assert!(registry.websocket_match("/ws/sessions/synthetic").is_some());
+    for name in ["backup", "usage_ledger", "cool_storage"] {
+      assert!(registry.scheduled_handler_named(name).is_some(), "no scheduled handler for {name}");
+    }
   }
 }

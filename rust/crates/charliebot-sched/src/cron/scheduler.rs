@@ -1,0 +1,942 @@
+//! The scheduled-task service and its croniter-compatible five-field scan.
+
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use charliebot_core::config::CharlieBotConfig;
+use charliebot_core::event_types;
+use charliebot_registry::context::FeatureContext;
+use charliebot_registry::sequence::SequenceExecutor;
+use charliebot_registry::wiring::{Phase, Service, ServiceContext};
+use charliebot_store::control_events::ACTOR_SYSTEM;
+use charliebot_store::metadata::{SessionMetadata, SessionStatus, TaskProfile, TaskSpec, UtcDateTime};
+use charliebot_store::run_records::{RunKind, RunRecord, SequenceRef};
+use charliebot_store::{CreateTask, TaskCaller};
+use chrono::{Datelike, Timelike};
+use futures_util::future::BoxFuture;
+use serde_json::{Map, Value, json};
+use tokio::task::JoinHandle;
+
+use super::config::ScheduledTaskConfig;
+use super::loader;
+
+const TICK_SECONDS: u64 = 60;
+const AUTO_BIND_PREFIX: &str = "scheduled-node:";
+
+/// The shared scheduler runtime installed after recovery finishes.
+#[derive(Clone)]
+pub struct CronScheduler {
+  features: Arc<FeatureContext>,
+  handles: Arc<Mutex<HashMap<String, JoinHandle<()>>>>,
+}
+
+impl CronScheduler {
+  pub(super) fn new(features: Arc<FeatureContext>) -> Self {
+    Self { features, handles: Arc::new(Mutex::new(HashMap::new())) }
+  }
+
+  async fn loop_forever(&self) {
+    loop {
+      tokio::time::sleep(Duration::from_secs(TICK_SECONDS)).await;
+      if let Err(error) = self.tick().await {
+        tracing::error!(error = %error, "scheduler_tick_error");
+      }
+    }
+  }
+
+  async fn tick(&self) -> anyhow::Result<()> {
+    let cfg = self.features.config.get()?;
+    let snapshot = loader::load_snapshot(&self.features, &cfg)?;
+    if snapshot.tasks.is_empty() {
+      return Ok(());
+    }
+    let old_sessions = self.features.store.list_sessions(Some(SessionStatus::Active), None, Some(true))?.rows;
+    let mut old_by_task: HashMap<String, Vec<SessionMetadata>> = HashMap::new();
+    for session in old_sessions {
+      if let Some(name) = session.extra.get("scheduled_task").and_then(Value::as_str) {
+        old_by_task.entry(name.to_string()).or_default().push(session);
+      }
+    }
+    let mut tasks = snapshot.tasks;
+    for task in &mut tasks {
+      if task.session_id.is_none() {
+        if let Err(error) = self.auto_bind(task, &cfg, &old_by_task).await {
+          tracing::error!(task = %task.name, error = %error, "scheduler_bind_error");
+        }
+      } else if let Err(error) = self.archive_legacy(&task.name, &old_by_task).await {
+        tracing::error!(task = %task.name, error = %error, "scheduler_bind_error");
+      }
+    }
+    for task in &tasks {
+      if task.session_id.is_some()
+        && let Err(error) = self.align_backend(task, &cfg).await
+      {
+        tracing::error!(task = %task.name, error = %error, "scheduler_backend_align_error");
+      }
+    }
+    for task in &tasks {
+      if !task.enabled || task.session_id.is_none() {
+        continue;
+      }
+      if let Err(error) = self.maybe_run(task, &cfg).await {
+        tracing::error!(task = %task.name, error = %error, "scheduler_task_error");
+      }
+    }
+    for error in snapshot.errors {
+      tracing::warn!(task = %error.name, error = %error.error, "scheduler_invalid_task_skipped");
+    }
+    Ok(())
+  }
+
+  async fn auto_bind(
+    &self,
+    task: &mut ScheduledTaskConfig,
+    cfg: &CharlieBotConfig,
+    old_by_task: &HashMap<String, Vec<SessionMetadata>>,
+  ) -> anyhow::Result<()> {
+    let backend = effective_backend(task, cfg)?;
+    let node = self
+      .features
+      .store
+      .create_task(
+        CreateTask {
+          request_id: format!("{AUTO_BIND_PREFIX}{}", task.name),
+          task_parent_id: None,
+          profile: TaskProfile::Manager,
+          task: None,
+          name: Some(task.name.clone()),
+          backend: Some(backend.clone()),
+          group: task.project.clone(),
+          session_id: None,
+        },
+        TaskCaller::System,
+        Map::new(),
+      )
+      .await?;
+    let mut node = node;
+    if node.status == SessionStatus::Archived {
+      node =
+        self.features.store.unarchive_session(&node.id).await?.ok_or_else(|| {
+          anyhow::anyhow!("scheduled task '{}' node {} vanished during unarchive", task.name, node.id)
+        })?;
+    }
+    if self.features.store.task_state(&node.id)? != "open" {
+      let completion = self.features.startup.require::<charliebot_tasks::completion::TaskCompletion>()?;
+      let request_id = format!("{AUTO_BIND_PREFIX}{}:restore", task.name);
+      let restored = completion.restore_chain(&node.id, &request_id, "cron auto-bind").await?;
+      if restored.is_empty() {
+        anyhow::bail!("scheduled task '{}' node {} stayed archived during auto-bind", task.name, node.id);
+      }
+      node = self
+        .features
+        .store
+        .load_meta(&node.id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("scheduled task '{}' node {} vanished after restore", task.name, node.id))?;
+    }
+    if let Some(old) = old_by_task.get(&task.name).and_then(|sessions| newest_session(sessions)) {
+      let guard = self.features.store.control_lock().await;
+      self
+        .features
+        .store
+        .adopt_metadata_slot_locked(
+          &guard,
+          &node.id,
+          old,
+          "cron",
+          Some(&["last_scheduled_run", "last_scheduled_cron", "last_run_status"]),
+        )
+        .await?;
+    }
+    write_cron_key(cfg, &task.name, "session_id", Value::String(node.id.clone()))?;
+    task.session_id = Some(node.id.clone());
+    self.archive_legacy(&task.name, old_by_task).await?;
+    tracing::info!(task = %task.name, session = %node.id, backend, "scheduled_task_auto_bound");
+    Ok(())
+  }
+
+  async fn archive_legacy(
+    &self,
+    task_name: &str,
+    old_by_task: &HashMap<String, Vec<SessionMetadata>>,
+  ) -> anyhow::Result<()> {
+    if let Some(sessions) = old_by_task.get(task_name) {
+      for session in sessions {
+        if session.status == SessionStatus::Active {
+          self.features.store.archive_session(&session.id).await?;
+        }
+      }
+    }
+    Ok(())
+  }
+
+  async fn align_backend(&self, task: &ScheduledTaskConfig, cfg: &CharlieBotConfig) -> anyhow::Result<()> {
+    let session_id = task.session_id.as_deref().expect("the task binding pass supplied a session id");
+    let backend = effective_backend(task, cfg)?;
+    let Some(node) = self.features.store.get_session(session_id).await? else {
+      anyhow::bail!("scheduled task '{}' bound node {session_id} not found", task.name);
+    };
+    if node.backend == backend {
+      return Ok(());
+    }
+    if self.features.store.busy_since(session_id).is_some() {
+      anyhow::bail!("scheduled node {session_id} is busy while aligning backend to '{backend}'");
+    }
+    self.features.store.switch_backend(session_id, &backend).await?;
+    tracing::info!(task = %task.name, session = %session_id, backend, "scheduled_node_backend_aligned");
+    Ok(())
+  }
+
+  async fn maybe_run(&self, task: &ScheduledTaskConfig, cfg: &CharlieBotConfig) -> anyhow::Result<()> {
+    let session = self.fireable_binding(task).await?;
+    let timezone = task.timezone.parse::<chrono_tz::Tz>()?;
+    let now = chrono::Utc::now().with_timezone(&timezone);
+    let last_cron = metadata_string(&session, "last_scheduled_cron");
+    if last_cron.as_deref().is_some_and(|previous| previous != task.cron) {
+      update_cron_slots(
+        &self.features,
+        &session.id,
+        json!({"last_scheduled_run": now.to_rfc3339(), "last_scheduled_cron": task.cron}),
+      )
+      .await?;
+      tracing::info!(task = %task.name, old = ?last_cron, new = %task.cron, "scheduler_cron_changed");
+      return Ok(());
+    }
+    let base = match metadata_string(&session, "last_scheduled_run") {
+      Some(value) => match chrono::DateTime::parse_from_rfc3339(&value) {
+        Ok(value) => value.with_timezone(&timezone),
+        Err(error) => {
+          tracing::warn!(task = %task.name, value, error = %error, "scheduler_bad_last_run");
+          now - chrono::Duration::seconds(TICK_SECONDS as i64)
+        }
+      },
+      None => now - chrono::Duration::seconds(TICK_SECONDS as i64),
+    };
+    let due = CronExpression::parse(&task.cron)?.next_after(base)?;
+    if due > now {
+      return Ok(());
+    }
+    let running_handle = {
+      self
+        .handles
+        .lock()
+        .expect("cron handle mutex is not poisoned")
+        .get(&task.name)
+        .filter(|handle| !handle.is_finished())
+        .map(|handle| handle.id().to_string())
+    };
+    if let Some(handle_id) = running_handle {
+      let now_text = now.to_rfc3339();
+      update_cron_slots(
+        &self.features,
+        &session.id,
+        json!({"last_scheduled_run": now_text, "last_run_status": "skipped"}),
+      )
+      .await?;
+      self
+        .features
+        .store
+        .persist_and_broadcast(
+          &session.id,
+          json!({
+            "type": event_types::SCHEDULED_RUN_SKIPPED,
+            "task": task.name,
+            "skipped_at": now_text,
+            "reason": format!("previous round still running ({handle_id})"),
+          }),
+        )
+        .await?;
+      return Ok(());
+    }
+    self.execute_task(task.clone(), Some(due.to_rfc3339()), true, cfg.clone()).await?;
+    Ok(())
+  }
+
+  async fn execute_task(
+    &self,
+    mut task: ScheduledTaskConfig,
+    firing: Option<String>,
+    scheduled: bool,
+    cfg: CharlieBotConfig,
+  ) -> anyhow::Result<TaskRunResult> {
+    if task.session_id.is_none() {
+      let sessions = self.features.store.list_sessions(Some(SessionStatus::Active), None, Some(true))?.rows;
+      let mut old_by_task: HashMap<String, Vec<SessionMetadata>> = HashMap::new();
+      for session in sessions {
+        if let Some(name) = session.extra.get("scheduled_task").and_then(Value::as_str) {
+          old_by_task.entry(name.to_string()).or_default().push(session);
+        }
+      }
+      self.auto_bind(&mut task, &cfg, &old_by_task).await?;
+    }
+    let session = self.fireable_binding(&task).await?;
+    let firing = firing.unwrap_or_else(|| UtcDateTime::now().to_python_isoformat());
+    if task.mode.as_deref() == Some("master") {
+      let dispatcher = charliebot_tasks::dispatch::dispatcher(&self.features)?;
+      let input_id = firing_ref(&task, &firing);
+      dispatcher
+        .admit_input(
+          &session.id,
+          event_types::SCHEDULED_TRIGGER,
+          task.prompt.as_deref().unwrap_or_default(),
+          ACTOR_SYSTEM,
+          json!({"input_id": input_id}),
+        )
+        .await?;
+      dispatcher.dispatch_pending(&session.id).await?;
+      self.record_bound_fire(&session, &task).await?;
+      return Ok(TaskRunResult { session_id: session.id, thread_id: None });
+    }
+    if let Some(handler) = task.handler.as_deref() {
+      self.record_bound_fire(&session, &task).await?;
+      let handler = self
+        .features
+        .registry
+        .scheduled_handler_named(handler)
+        .ok_or_else(|| anyhow::anyhow!("Unknown handler: {handler:?}"))?;
+      let event = match handler(Arc::clone(&self.features)).await {
+        Ok(message) => {
+          json!({"type": event_types::HANDLER_RESULT, "task": task.name, "status": event_types::HANDLER_STATUS_OK, "message": message})
+        }
+        Err(error) => {
+          tracing::warn!(task = %task.name, error = %error, "handler_task_error");
+          json!({"type": event_types::HANDLER_RESULT, "task": task.name, "status": event_types::HANDLER_STATUS_ERROR, "message": error.to_string()})
+        }
+      };
+      let status = if event.get("status").and_then(Value::as_str) == Some(event_types::HANDLER_STATUS_OK) {
+        "success"
+      } else {
+        "failed"
+      };
+      self.update_status(&session.id, status).await?;
+      self.features.store.persist_and_broadcast(&session.id, event).await?;
+      return Ok(TaskRunResult { session_id: session.id, thread_id: None });
+    }
+    let executor: Arc<dyn SequenceExecutor> =
+      self.features.startup.require::<charliebot_tasks::execution::TaskExecutionAdapter>()?;
+    let backend = effective_backend(&task, &cfg)?;
+    let option = cfg
+      .get_backend_option(&backend)
+      .ok_or_else(|| anyhow::anyhow!("scheduled task backend '{backend}' is not configured"))?;
+    let model = (!option.model.is_empty()).then(|| option.model.clone());
+    let (leaf, run, prompt, _steps) =
+      self.register_fire_work(&task, &session, &firing, &backend, model.as_deref(), &cfg).await?;
+    self.record_bound_fire(&session, &task).await?;
+    if scheduled {
+      let executor = Arc::clone(&executor);
+      let leaf_id = leaf.id.clone();
+      let run_id = run.id.clone();
+      let task_name = task.name.clone();
+      let owner_ref = firing_ref(&task, &firing);
+      let step_count = task.steps.as_ref().map_or(0, Vec::len);
+      let features = Arc::clone(&self.features);
+      let prompt = prompt.clone();
+      let handle = tokio::spawn(async move {
+        match executor.launch_and_settle(&leaf_id, &run_id, Some(&prompt)).await {
+          Ok(settlement) if settlement.withheld.is_none() && step_count > 0 => {
+            wait_for_steps_boundary(&features, &leaf_id, &owner_ref, step_count).await;
+          }
+          Ok(_) => {}
+          Err(error) => tracing::error!(task = %task_name, error = %error, "scheduled_round_failed"),
+        }
+      });
+      self.handles.lock().expect("cron handle mutex is not poisoned").insert(task.name.clone(), handle);
+    } else {
+      executor.launch(&leaf.id, &run.id, Some(&prompt)).await?;
+    }
+    Ok(TaskRunResult { session_id: session.id, thread_id: None })
+  }
+
+  async fn register_fire_work(
+    &self,
+    task: &ScheduledTaskConfig,
+    parent: &SessionMetadata,
+    firing: &str,
+    backend: &str,
+    model: Option<&str>,
+    _cfg: &CharlieBotConfig,
+  ) -> anyhow::Result<(SessionMetadata, RunRecord, String, bool)> {
+    if parent.profile != TaskProfile::Manager {
+      anyhow::bail!(
+        "scheduled task '{}' cannot create a worker leaf under {}: the parent is not a manager task",
+        task.name,
+        parent.id
+      );
+    }
+    let steps = task.steps.as_ref().is_some_and(|steps| !steps.is_empty());
+    let goal = if steps { format!("{} steps", task.name) } else { task.prompt.clone().unwrap_or_default() };
+    let request_id = format!("{}:leaf", firing_ref(task, firing));
+    let leaf = self
+      .features
+      .store
+      .create_task(
+        CreateTask {
+          request_id,
+          task_parent_id: Some(parent.id.clone()),
+          profile: TaskProfile::Worker,
+          task: Some(TaskSpec { goal, repo_path: task.repo.clone(), ..TaskSpec::default() }),
+          name: Some(format!("{} · {}", task.name, firing)),
+          backend: None,
+          group: None,
+          session_id: None,
+        },
+        TaskCaller::System,
+        Map::new(),
+      )
+      .await?;
+    let run_request =
+      if steps { format!("{}:step:0", firing_ref(task, firing)) } else { format!("{}:work", firing_ref(task, firing)) };
+    let run_id = charliebot_store::control_events::stable_run_id(&leaf.id, &run_request);
+    let sequence_ref = if steps {
+      Some(SequenceRef { kind: "cron_steps".to_string(), owner_ref: firing_ref(task, firing), position: 0 })
+    } else {
+      None
+    };
+    let record = RunRecord {
+      id: run_id,
+      session_id: leaf.id.clone(),
+      kind: if steps { RunKind::ScheduledStep } else { RunKind::Work },
+      input_event_ids: Vec::new(),
+      task_spec_hash: None,
+      task_spec_ref: None,
+      prompt_snapshot_ref: None,
+      retry_of_run_id: None,
+      review_of_run_id: None,
+      backend: Some(backend.to_string()),
+      model: model.map(str::to_string),
+      native_session_id: None,
+      pid: None,
+      pid_start: None,
+      started_at: None,
+      ended_at: None,
+      exit_code: None,
+      repo_path: task.repo.clone(),
+      base_branch: None,
+      branch_name: None,
+      worktree_path: None,
+      sequence_ref,
+      raw_log_ref: None,
+      events_ref: None,
+      result_ref: None,
+    };
+    {
+      let guard = self.features.store.control_lock().await;
+      self.features.store.register_run_locked(&guard, &leaf.id, record.clone(), None).await?;
+    }
+    let first_prompt = task
+      .steps
+      .as_ref()
+      .and_then(|steps| steps.first())
+      .and_then(|step| step.prompt.clone())
+      .or_else(|| task.prompt.clone())
+      .unwrap_or_default();
+    Ok((leaf, record, first_prompt, steps))
+  }
+
+  async fn fireable_binding(&self, task: &ScheduledTaskConfig) -> anyhow::Result<SessionMetadata> {
+    let session_id = task
+      .session_id
+      .as_deref()
+      .ok_or_else(|| anyhow::anyhow!("scheduled task '{}' has no session binding", task.name))?;
+    let meta = self
+      .features
+      .store
+      .load_meta(session_id)
+      .await?
+      .ok_or_else(|| anyhow::anyhow!("scheduled task '{}' bound session {session_id} does not exist", task.name))?;
+    if self.features.store.task_state(session_id)? != "open" {
+      anyhow::bail!("scheduled task '{}' bound task {session_id} is archived", task.name);
+    }
+    if task.mode.as_deref() == Some("master") && meta.profile != TaskProfile::Manager {
+      anyhow::bail!("scheduled task '{}' (mode master) binds task {session_id}, which is not a manager", task.name);
+    }
+    Ok(meta)
+  }
+
+  async fn record_bound_fire(&self, session: &SessionMetadata, task: &ScheduledTaskConfig) -> anyhow::Result<()> {
+    let timezone = task.timezone.parse::<chrono_tz::Tz>()?;
+    let now = chrono::Utc::now().with_timezone(&timezone).to_rfc3339();
+    update_cron_slots(
+      &self.features,
+      &session.id,
+      json!({"last_scheduled_run": now, "last_scheduled_cron": task.cron}),
+    )
+    .await?;
+    Ok(())
+  }
+
+  async fn update_status(&self, session_id: &str, status: &str) -> anyhow::Result<()> {
+    update_cron_slots(&self.features, session_id, json!({"last_run_status": status})).await
+  }
+
+  async fn run_now(&self, name: &str) -> Result<TaskRunResult, RunError> {
+    let cfg = self.features.config.get().map_err(|error| RunError::Failed(error.to_string()))?;
+    let snapshot = loader::load_snapshot(&self.features, &cfg).map_err(|error| RunError::Failed(error.to_string()))?;
+    let task =
+      snapshot.tasks.into_iter().find(|task| task.name == name).ok_or_else(|| RunError::Missing(name.to_string()))?;
+    self
+      .execute_task(task, None, false, cfg.as_ref().clone())
+      .await
+      .map_err(|error| RunError::Failed(format!("{error:#}")))
+  }
+}
+
+/// The HTTP result of one manual fire.
+pub struct TaskRunResult {
+  /// The bound node that received the fire.
+  pub session_id: String,
+  /// The worker run id, absent for master and handler modes.
+  pub thread_id: Option<String>,
+}
+
+/// Whether the manual fire could resolve its service and task.
+pub enum RunError {
+  /// Scheduler service has not started.
+  Unavailable,
+  /// No valid task by this name exists.
+  Missing(String),
+  /// The task fire failed visibly.
+  Failed(String),
+}
+
+/// Run one task through the scheduler instance registered at startup.
+pub async fn run_task_now(features: &Arc<FeatureContext>, name: &str) -> Result<TaskRunResult, RunError> {
+  let scheduler = features.startup.get::<CronScheduler>().ok_or(RunError::Unavailable)?;
+  scheduler.run_now(name).await
+}
+
+/// The scheduler lifecycle registration (`service` phase `Ready`).
+#[derive(Default)]
+pub struct SchedulerService {
+  task: Mutex<Option<JoinHandle<()>>>,
+}
+
+impl Service for SchedulerService {
+  fn name(&self) -> &'static str {
+    "scheduler"
+  }
+
+  fn phase(&self) -> Phase {
+    Phase::Ready
+  }
+
+  fn start<'a>(&'a self, ctx: ServiceContext) -> BoxFuture<'a, anyhow::Result<()>> {
+    Box::pin(async move {
+      ctx.recovery_done.await;
+      let scheduler = CronScheduler::new(Arc::clone(&ctx.features));
+      ctx.features.startup.insert(scheduler.clone())?;
+      let run_scheduler = scheduler.clone();
+      let task = tokio::spawn(async move { run_scheduler.loop_forever().await });
+      *self.task.lock().expect("scheduler task mutex is not poisoned") = Some(task);
+      tracing::info!("scheduler_started");
+      Ok(())
+    })
+  }
+
+  fn stop<'a>(&'a self) -> BoxFuture<'a, anyhow::Result<()>> {
+    Box::pin(async move {
+      let task = { self.task.lock().expect("scheduler task mutex is not poisoned").take() };
+      if let Some(task) = task {
+        task.abort();
+        if let Err(error) = task.await
+          && !error.is_cancelled()
+        {
+          return Err(error.into());
+        }
+      }
+      tracing::info!("scheduler_stopped");
+      Ok(())
+    })
+  }
+}
+
+fn newest_session(sessions: &[SessionMetadata]) -> Option<&SessionMetadata> {
+  sessions.iter().max_by_key(|session| session.created_at)
+}
+
+fn metadata_string(session: &SessionMetadata, key: &str) -> Option<String> {
+  session.extra.get(key).and_then(Value::as_str).map(str::to_string)
+}
+
+async fn update_cron_slots(features: &FeatureContext, session_id: &str, values: Value) -> anyhow::Result<()> {
+  let values = values.as_object().cloned().ok_or_else(|| anyhow::anyhow!("cron slot updates must be an object"))?;
+  features.store.update_slot_fields(session_id, "cron", values).await?;
+  Ok(())
+}
+
+fn effective_backend(task: &ScheduledTaskConfig, cfg: &CharlieBotConfig) -> anyhow::Result<String> {
+  if let Some(backend) = task.backend.as_deref().filter(|backend| !backend.is_empty()) {
+    if cfg.get_backend_option(backend).is_none() {
+      anyhow::bail!("scheduled task backend '{backend}' is not in backends.options");
+    }
+    return Ok(backend.to_string());
+  }
+  cfg
+    .backends
+    .options
+    .first()
+    .map(|option| option.id.clone())
+    .ok_or_else(|| anyhow::anyhow!("scheduled task backend resolution requires a configured backends.options entry"))
+}
+
+fn firing_ref(task: &ScheduledTaskConfig, firing: &str) -> String {
+  format!("cron:{}:{firing}", task.name)
+}
+
+async fn wait_for_steps_boundary(features: &FeatureContext, leaf_id: &str, owner_ref: &str, step_count: usize) {
+  loop {
+    let state = match steps_boundary_state(features, leaf_id, owner_ref, step_count) {
+      Ok(state) => state,
+      Err(error) => {
+        tracing::error!(leaf = leaf_id, owner_ref, error = %error, "cron_sequence_overlap_watch_failed");
+        return;
+      }
+    };
+    if state {
+      return;
+    }
+    tokio::time::sleep(Duration::from_millis(25)).await;
+  }
+}
+
+fn steps_boundary_state(
+  features: &FeatureContext,
+  leaf_id: &str,
+  owner_ref: &str,
+  step_count: usize,
+) -> anyhow::Result<bool> {
+  let records = features.store.list_run_records_sync(leaf_id)?;
+  let events = features.store.load_all_facts(leaf_id)?;
+  let mut positions = HashMap::new();
+  for run in records {
+    if let Some(sequence) =
+      run.sequence_ref.as_ref().filter(|sequence| sequence.kind == "cron_steps" && sequence.owner_ref == owner_ref)
+    {
+      positions.insert(sequence.position as usize, run);
+    }
+  }
+  let Some((&position, run)) = positions.iter().max_by_key(|(position, _)| *position) else {
+    return Ok(true);
+  };
+  if events.iter().any(|event| {
+    event.get("type").and_then(Value::as_str) == Some(event_types::RUN_LAUNCH_WITHHELD)
+      && event.get("run_id").and_then(Value::as_str) == Some(run.id.as_str())
+  }) {
+    return Ok(true);
+  }
+  let Some(outcome) = charliebot_store::run_records::terminal_outcome(&events, &run.id)? else {
+    return Ok(false);
+  };
+  if outcome != charliebot_store::run_records::RunOutcomeKind::Success || run.exit_code != Some(0) {
+    return Ok(true);
+  }
+  if position + 1 >= step_count {
+    return Ok(true);
+  }
+  Ok(!positions.contains_key(&(position + 1)))
+}
+
+/// Return the next cron occurrence in the configured time zone.
+pub(super) fn next_fire_iso(expression: &str, timezone: &str, now_utc: UtcDateTime) -> anyhow::Result<String> {
+  let timezone = timezone.parse::<chrono_tz::Tz>()?;
+  let inner = now_utc.into_inner();
+  let now = chrono::DateTime::<chrono::Utc>::from_timestamp(inner.unix_timestamp(), inner.nanosecond())
+    .ok_or_else(|| anyhow::anyhow!("UTC timestamp is outside the supported range"))?;
+  Ok(CronExpression::parse(expression)?.next_after(now.with_timezone(&timezone))?.with_timezone(&timezone).to_rfc3339())
+}
+
+fn write_cron_key(cfg: &CharlieBotConfig, name: &str, key: &str, value: Value) -> anyhow::Result<()> {
+  let path = loader::cron_path(cfg, name);
+  let raw = std::fs::read_to_string(&path)?;
+  let yaml = serde_yaml::from_str::<serde_yaml::Value>(&raw)?;
+  let mut value_json = serde_json::to_value(yaml)?;
+  let object = value_json.as_object_mut().ok_or_else(|| anyhow::anyhow!("cron config must be a mapping"))?;
+  object.insert(key.to_string(), value);
+  std::fs::write(&path, charliebot_core::yaml::dump(&value_json)?)?;
+  Ok(())
+}
+
+#[derive(Clone)]
+struct CronField {
+  values: HashSet<u32>,
+  wildcard: bool,
+}
+
+struct CronExpression {
+  minute: CronField,
+  hour: CronField,
+  day: CronField,
+  month: CronField,
+  weekday: CronField,
+}
+
+impl CronExpression {
+  fn parse(expression: &str) -> anyhow::Result<Self> {
+    let fields = expression.split_whitespace().collect::<Vec<_>>();
+    if fields.len() != 5 {
+      anyhow::bail!("cron expression must have five fields: {expression:?}");
+    }
+    Ok(Self {
+      minute: parse_field(fields[0], 0, 59, &[])?,
+      hour: parse_field(fields[1], 0, 23, &[])?,
+      day: parse_field(fields[2], 1, 31, &[])?,
+      month: parse_field(fields[3], 1, 12, &MONTH_NAMES)?,
+      weekday: parse_field(fields[4], 0, 7, &WEEKDAY_NAMES)?,
+    })
+  }
+
+  fn next_after<Tz: chrono::TimeZone + Clone>(
+    &self,
+    base: chrono::DateTime<Tz>,
+  ) -> anyhow::Result<chrono::DateTime<Tz>> {
+    let base_utc = base.with_timezone(&chrono::Utc);
+    let timezone = base.timezone().clone();
+    let start = base_utc.timestamp().div_euclid(60) * 60 + 60;
+    let end = start + 8 * 366 * 24 * 60;
+    for timestamp in (start..end).step_by(60) {
+      let instant = chrono::DateTime::from_timestamp(timestamp, 0).expect("a bounded Unix minute is representable");
+      let local = instant.with_timezone(&timezone);
+      let day_match = self.day.values.contains(&local.day());
+      let weekday = local.weekday().num_days_from_sunday();
+      let weekday_match = self.weekday.values.contains(&weekday) || (weekday == 0 && self.weekday.values.contains(&7));
+      let date_matches = match (self.day.wildcard, self.weekday.wildcard) {
+        (true, true) => true,
+        (true, false) => weekday_match,
+        (false, true) => day_match,
+        (false, false) => day_match || weekday_match,
+      };
+      if self.minute.values.contains(&local.minute())
+        && self.hour.values.contains(&local.hour())
+        && self.month.values.contains(&local.month())
+        && date_matches
+      {
+        return Ok(instant.with_timezone(&timezone));
+      }
+    }
+    anyhow::bail!("cron expression has no fire within eight years")
+  }
+}
+
+const MONTH_NAMES: [(&str, u32); 12] = [
+  ("jan", 1),
+  ("feb", 2),
+  ("mar", 3),
+  ("apr", 4),
+  ("may", 5),
+  ("jun", 6),
+  ("jul", 7),
+  ("aug", 8),
+  ("sep", 9),
+  ("oct", 10),
+  ("nov", 11),
+  ("dec", 12),
+];
+const WEEKDAY_NAMES: [(&str, u32); 7] =
+  [("sun", 0), ("mon", 1), ("tue", 2), ("wed", 3), ("thu", 4), ("fri", 5), ("sat", 6)];
+
+fn parse_field(field: &str, min: u32, max: u32, names: &[(&str, u32)]) -> anyhow::Result<CronField> {
+  let wildcard = field == "*" || field == "?";
+  let mut values = HashSet::new();
+  for member in field.split(',') {
+    let (range, step) =
+      member.split_once('/').map_or((member, 1), |(range, step)| (range, step.parse::<u32>().unwrap_or(0)));
+    if step == 0 {
+      anyhow::bail!("invalid cron step in {field:?}");
+    }
+    let (start, end) = if range == "*" || range == "?" {
+      (min, max)
+    } else if let Some((start, end)) = range.split_once('-') {
+      (parse_cron_value(start, names)?, parse_cron_value(end, names)?)
+    } else {
+      let value = parse_cron_value(range, names)?;
+      (value, if member.contains('/') { max } else { value })
+    };
+    if start < min || end > max || start > end {
+      anyhow::bail!("cron field {field:?} is outside {min}..={max}");
+    }
+    values.extend((start..=end).step_by(step as usize));
+  }
+  if values.is_empty() {
+    anyhow::bail!("cron field {field:?} has no values");
+  }
+  Ok(CronField { values, wildcard })
+}
+
+fn parse_cron_value(value: &str, names: &[(&str, u32)]) -> anyhow::Result<u32> {
+  if let Some((_, number)) = names.iter().find(|(name, _)| value.eq_ignore_ascii_case(name)) {
+    return Ok(*number);
+  }
+  value.parse().map_err(|_| anyhow::anyhow!("invalid cron field value {value:?}"))
+}
+
+#[cfg(test)]
+mod tests {
+  use std::path::Path;
+  use std::sync::Arc;
+
+  use charliebot_store::metadata::{SessionStatus, TaskProfile};
+  use charliebot_store::{CreateTask, TaskCaller};
+  use chrono::{TimeZone, Utc};
+  use serde_json::{Map, Value, json};
+
+  use super::{CronExpression, CronScheduler};
+  use crate::cron::test_support::feature_context;
+
+  fn write_task(home: &Path, name: &str, body: &Value) -> std::path::PathBuf {
+    let path = home.join("config.d/cron.d").join(format!("{name}.yaml"));
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, charliebot_core::yaml::dump(body).unwrap()).unwrap();
+    path
+  }
+
+  #[test]
+  fn cron_expression_uses_minute_grid_and_croniter_day_union() {
+    let expression = CronExpression::parse("0 8 1 * mon").unwrap();
+    let base = Utc.with_ymd_and_hms(2026, 6, 2, 8, 0, 0).unwrap();
+    assert_eq!(expression.next_after(base).unwrap().to_rfc3339(), "2026-06-08T08:00:00+00:00");
+  }
+
+  #[tokio::test]
+  async fn tick_binds_disabled_tasks_without_projects_once_and_reuses_the_stable_node() {
+    // Python: tests/test_cron_auto_bind.py::test_task_without_project_lands_ungrouped
+    // Python: tests/test_cron_auto_bind.py::test_disabled_task_and_task_without_prior_cron_session_are_bound_too
+    // Python: tests/test_cron_auto_bind.py::test_recreated_task_reattaches_to_its_original_node
+    let (home, features) = feature_context();
+    let path = write_task(
+      home.path(),
+      "synthetic-task",
+      &json!({"cron":"0 8 * * *","handler":"synthetic_handler","enabled":false}),
+    );
+    let scheduler = CronScheduler::new(Arc::clone(&features));
+    let enabled_path = write_task(
+      home.path(),
+      "synthetic-enabled-task",
+      &json!({"cron":"0 8 * * *","handler":"synthetic_handler","enabled":true}),
+    );
+
+    scheduler.tick().await.unwrap();
+    let first: serde_yaml::Value = serde_yaml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let first_id = first["session_id"].as_str().unwrap().to_string();
+    let first_node = features.store.get_session(&first_id).await.unwrap().unwrap();
+    assert_eq!(first_node.extra.get("scheduled_task"), Some(&Value::Null));
+    assert_eq!(first_node.group, None);
+    assert_eq!(features.store.task_state(&first_id).unwrap(), "open");
+    let enabled: serde_yaml::Value = serde_yaml::from_str(&std::fs::read_to_string(&enabled_path).unwrap()).unwrap();
+    let enabled_id = enabled["session_id"].as_str().unwrap();
+    let enabled_node = features.store.get_session(enabled_id).await.unwrap().unwrap();
+    assert_eq!(enabled_node.name, "synthetic-enabled-task");
+    assert_eq!(enabled_node.group, None);
+
+    scheduler.tick().await.unwrap();
+    let bound: serde_yaml::Value = serde_yaml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(bound["session_id"].as_str(), Some(first_id.as_str()));
+    let scheduled = features.store.list_sessions(None, None, Some(true)).unwrap();
+    assert!(scheduled.rows.is_empty());
+
+    std::fs::remove_file(&path).unwrap();
+    let recreated = write_task(
+      home.path(),
+      "synthetic-task",
+      &json!({"cron":"0 8 * * *","handler":"synthetic_handler","enabled":false}),
+    );
+    scheduler.tick().await.unwrap();
+    let rebound: serde_yaml::Value = serde_yaml::from_str(&std::fs::read_to_string(recreated).unwrap()).unwrap();
+    assert_eq!(rebound["session_id"].as_str(), Some(first_id.as_str()));
+  }
+
+  #[tokio::test]
+  async fn scheduler_tick_runs_handlers_and_updates_the_shared_session_views() {
+    // Python: tests/test_cron_auto_bind.py::test_handler_task_binds_and_records_its_result_on_the_node
+    // Python: tests/test_scheduler_shared_session_blocks.py::test_scheduled_fire_bookkeeping_writes_the_injected_session_blocks
+    // Python: tests/test_scheduler_shared_session_blocks.py::test_scheduled_round_events_reach_shared_read_cache
+    let (home, features) = feature_context();
+    let path = write_task(
+      home.path(),
+      "synthetic-handler",
+      &json!({"cron":"0 8 * * *","handler":"synthetic_handler","enabled":true}),
+    );
+    let scheduler = CronScheduler::new(Arc::clone(&features));
+
+    scheduler.tick().await.unwrap();
+    let bound: serde_yaml::Value = serde_yaml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let session_id = bound["session_id"].as_str().unwrap();
+    let guard = features.store.control_lock().await;
+    features
+      .store
+      .update_slot_fields_locked(
+        &guard,
+        session_id,
+        "cron",
+        Map::from_iter([("last_scheduled_run".to_string(), json!("2026-01-01T03:00:00+00:00"))]),
+      )
+      .await
+      .unwrap();
+    drop(guard);
+
+    scheduler.tick().await.unwrap();
+
+    let meta = features.store.get_session(session_id).await.unwrap().unwrap();
+    assert_eq!(meta.extra.get("last_run_status").and_then(Value::as_str), Some("success"));
+    assert!(meta.extra.get("last_scheduled_run").and_then(Value::as_str).is_some());
+    let events = features.store.load_chat_events_sync(session_id).unwrap();
+    assert!(events.iter().any(|event| event["type"] == charliebot_core::event_types::HANDLER_RESULT));
+    let projection = features.store.get_message_projection(session_id).unwrap().unwrap();
+    assert_eq!(projection.history().len(), 1);
+    assert!(features.store.child_ids(session_id).unwrap().is_empty());
+  }
+
+  #[tokio::test]
+  async fn tick_archives_the_old_active_cron_session_when_it_binds_a_new_node() {
+    // Python: tests/test_cron_auto_bind.py::test_tick_auto_binds_unbound_task_with_active_legacy_cron_session
+    let (home, features) = feature_context();
+    let mut legacy_extra = Map::new();
+    legacy_extra.insert("scheduled_task".to_string(), json!("legacy-task"));
+    legacy_extra.insert("last_scheduled_run".to_string(), json!("2026-10-01T08:00:00-07:00"));
+    let legacy = features
+      .store
+      .create_task(
+        CreateTask {
+          request_id: "legacy-cron-session".to_string(),
+          task_parent_id: None,
+          profile: TaskProfile::Manager,
+          task: None,
+          name: Some("legacy-task".to_string()),
+          backend: Some("synthetic".to_string()),
+          group: None,
+          session_id: None,
+        },
+        TaskCaller::System,
+        legacy_extra,
+      )
+      .await
+      .unwrap();
+    assert_eq!(legacy.status, SessionStatus::Active);
+    assert_eq!(legacy.extra.get("scheduled_task").and_then(Value::as_str), Some("legacy-task"));
+    assert!(
+      features
+        .store
+        .list_sessions(Some(SessionStatus::Active), None, Some(true))
+        .unwrap()
+        .rows
+        .iter()
+        .any(|session| session.id == legacy.id)
+    );
+    let path = write_task(
+      home.path(),
+      "legacy-task",
+      &json!({"cron":"0 8 * * *","handler":"synthetic_handler","enabled":false}),
+    );
+
+    CronScheduler::new(Arc::clone(&features)).tick().await.unwrap();
+
+    let task: serde_yaml::Value = serde_yaml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let bound_id = task["session_id"].as_str().unwrap();
+    assert_ne!(bound_id, legacy.id);
+    let archived_legacy = features.store.get_session(&legacy.id).await.unwrap().unwrap();
+    assert_eq!(archived_legacy.status, SessionStatus::Archived);
+    let bound = features.store.get_session(bound_id).await.unwrap().unwrap();
+    assert_eq!(bound.extra.get("scheduled_task"), Some(&Value::Null));
+    assert_eq!(bound.extra.get("last_scheduled_run"), Some(&json!("2026-10-01T08:00:00-07:00")));
+  }
+}

@@ -79,11 +79,11 @@ The order of the web reply audit's events is undefined. In the requested 20 Pyth
 | POST | `/api/internal/plan/close` | features/artifacts | ported |  |
 | GET | `/api/sessions/{session_id}/plans` | features/artifacts | ported |  |
 | GET | `/api/code-server/open` | features/code_server | ported |  |
-| GET | `/api/cron/tasks` | features/cron | todo |  |
-| PUT | `/api/cron/tasks/{name}` | features/cron | todo |  |
-| POST | `/api/cron/tasks` | features/cron | todo |  |
-| POST | `/api/cron/tasks/{name}/run` | features/cron | todo |  |
-| DELETE | `/api/cron/tasks/{name}` | features/cron | todo |  |
+| GET | `/api/cron/tasks` | features/cron | ported | Broken files are returned after valid tasks with their raw `enabled` value. |
+| PUT | `/api/cron/tasks/{name}` | features/cron | ported | Backend switches are refused with 409 before the file is written when the bound node is busy. |
+| POST | `/api/cron/tasks` | features/cron | ported | Writes through the PyYAML-compatible core writer. |
+| POST | `/api/cron/tasks/{name}/run` | features/cron | ported | Manual fires use the same bound execution path as scheduler fires. |
+| DELETE | `/api/cron/tasks/{name}` | features/cron | ported | Unlinks the config and leaves its bound node and history in place. |
 | POST | `/api/diag/switch-events` | features/diag | ported |  |
 | POST | `/api/internal/slack/reply` | features/slack | ported |  |
 | POST | `/api/internal/slack/ack` | features/slack | ported |  |
@@ -173,7 +173,7 @@ implemented.
 | pre-loop | `config.get_config` | foundation | ported | |
 | pre-loop | `config.require_backends` | foundation | ported | |
 | pre-loop | `v1_sessions.require_no_v1_sessions` | foundation | ported | Runs before bind. |
-| pre-loop | Registered startup checks | foundation | todo | The loop runs registered checks (`charliebot-server/src/main.rs:226`). Usage's `backend_ids` check is registered and ported; the cron check is not registered yet, so the row stays todo. |
+| pre-loop | Registered startup checks | foundation | ported | The loop runs registered checks (`charliebot-server/src/main.rs:226`); usage `backend_ids` and cron `cron_backend_refs` both register their checks. |
 | pre-loop | Start server on configured host and port | foundation | ported | |
 | lifespan | 1. Read config | foundation | ported | |
 | lifespan | 2. Acquire home writer fence | foundation | ported | |
@@ -188,7 +188,7 @@ implemented.
 | lifespan | 11. Log ready and serve | foundation | ported | |
 | lifespan | 12. Stop services and close shared clients | services | ported | Services stop in reverse registration order, then the let-go steps run (`charliebot-registry/src/lifespan.rs:142`). The shared HTTP client then closes and is timed as `http_client_ms` on the `charliebot_shutdown` line (`charliebot-compat/src/http_client.rs:34`, `charliebot-server/src/main.rs:208`; Python `server.py:305`). The open session WebSockets close next, with code 1000, and are timed as `ws_close_ms` (`Lifespan::shutdown`, `charliebot-store/src/streaming.rs` `close_all`; Python `server.py:306`, `src/runtime/streaming.py:131`). Uvicorn sends close code 1012 to each open WebSocket before the lifespan shutdown starts (`uvicorn/server.py`, `Server.shutdown`). The port closes each socket with code 1000 at the `ws_close_ms` step. The web UI reconnects on any close and does not read the code (`web/static/js/websocket.js`, `socket.onclose`). The writer-fence release is implemented. The usage quota builds its own client, so it is not closed here. |
 | lifespan | 13. Release home writer fence | foundation | ported | |
-| service | `scheduler` | features/cron | todo | |
+| service | `scheduler` | features/cron | ported | Waits for task-tree recovery, binds each unbound cron task to one manager node, and scans enabled tasks every 60 seconds. |
 | service | `slack` | features/slack | ported | Starts Socket Mode and the lost-summon backfill when both Slack tokens and an allowed-user id are configured. |
 | service | `discord` | features/discord | ported | Starts the Discord gateway and lost-summon backfill when the bot token and an allowed user are configured. |
 | service | `host_auth` | features/host_auth | ported | one round at start, then one per 1800 s |
@@ -197,9 +197,9 @@ implemented.
 | service | `ext_usage` | features/usage | ported | one account per 60 s, round-robin; the account set is re-derived every round. Deviation: `ext_usage_poll_error` formats the error with its cause chain (`{error:#}`); Python logs `str(e)` for a fetch error, and the traceback for a round error. |
 | service | `headless_renderer` | features/artifacts | ported | Lazy per-process Chrome renderer; the artifacts let-go step closes it. Deviation: the browser leads its own process group, and close sends SIGKILL to that group, so Chrome's child processes stop with it. Python kills only the browser pid (`src/features/artifacts/headless_render.py:159`). No client reads the group. |
 | service | `speech` | features/voice | ported | Sherpa and `qwen3_hf` provisioning and the warm-up event are ported, in the early background service. `qwen3_hf` runs its model in the long-lived helper `rust/helpers/qwen3_hf_helper.py` (see `rust/docs/python_helper.md`): the warm-up builds the bundle, and the service's stop kills the helper's process group. Deviation: `qwen3_hf` readiness does not wait for the transformers snapshot, which the helper's `create_qwen3_hf_bundle` fetches. A snapshot failure therefore falls back to sherpa, where Python parks the provisioning error. A helper outlives the server only when the server exits without running its service stop. |
-| registration | scheduled handler `backup` | features/backup | ported | `run_scheduled_backup` creates the archive and applies retention off the async runtime, and returns the archive path as the fire's summary. The cron scheduler that fires it is not ported yet (agent-runtime). |
-| registration | scheduled handler `usage_ledger` | features/usage | ported | Captures registered log sources and CharlieBot threads, master captures and Runs off the async runtime. The cron scheduler that fires it is not ported yet (agent-runtime). |
-| registration | scheduled handler `cool_storage` | features/usage | ported | Real run only (no dry run, session scope or vacuum): captures usage into the ledger, deletes cold sessions' raw transport files, then calls each usage source's sweep, off the async runtime. Returns `format_sweep_line` as the summary. The cold rule reads `updated_at` as `models.parse_utc_datetime` does (`utc_datetime.rs`), and a rotation suffix is `str.isdigit` (`charliebot_core::pystr`). Deviations: a metadata document with a NaN or infinite number fails the run, where Python loads it; `updated_at` text with a week date, a stray final character or a fractional offset keeps its session, where Python may read it as cold; `storage_cool_sweep_done` logs `session_id` as Debug text (`None`), not JSON null. The cron scheduler that fires it is not ported yet (agent-runtime). |
+| registration | scheduled handler `backup` | features/backup | ported | `run_scheduled_backup` creates the archive and applies retention off the async runtime, and returns the archive path as the fire's summary. |
+| registration | scheduled handler `usage_ledger` | features/usage | ported | Captures registered log sources and CharlieBot threads, master captures and Runs off the async runtime. |
+| registration | scheduled handler `cool_storage` | features/usage | ported | Real run only (no dry run, session scope or vacuum): captures usage into the ledger, deletes cold sessions' raw transport files, then calls each usage source's sweep, off the async runtime. Returns `format_sweep_line` as the summary. The cold rule reads `updated_at` as `models.parse_utc_datetime` does (`utc_datetime.rs`), and a rotation suffix is `str.isdigit` (`charliebot_core::pystr`). Deviations: a metadata document with a NaN or infinite number fails the run, where Python loads it; `updated_at` text with a week date, a stray final character or a fractional offset keeps its session, where Python may read it as cold; `storage_cool_sweep_done` logs `session_id` as Debug text (`None`), not JSON null. |
 | registration | backend type `opencode` | backends/opencode | ported | Registers the option model, factory, native-id traits, shared serve manager, usage source attribution and `snapshot` reading limits (`charliebot-agents/src/backends/opencode/mod.rs`). |
 | registration | usage source `opencode` | backends/opencode | ported | Registers id prefixes `opencode-` and `oc-`. The log side reads the store database (`usage_logs.rs`); the sweep vacuums it and reports its freelist (`usage_sweep.rs`). |
 | registration | diff root `memory` | features/memory | ported | `<home>/memory`. The diff view that reads it is not ported (features/diff_view). |
@@ -221,11 +221,11 @@ run-record work is `S2`; task-tree runtime and feature-owned files remain with t
 | --- | --- | --- | --- |
 | `config.yaml` | foundation | ported | |
 | `credentials.yaml` | foundation | ported | |
-| `config.d/cron.d/<name>.yaml` | features/cron | todo | |
+| `config.d/cron.d/<name>.yaml` | features/cron | ported | Read and written by the Rust cron loader and API; task writes use the PyYAML-compatible writer. |
 | `MASTER_AGENT_PROMPT.md` | agent-runtime | ported | Read only: the host supplement of a manager prompt, with `YOUR_SESSION_UUID` replaced (`charliebot-tasks/src/prompts/sources.rs:91`, `:125-134`); Python `src/runtime/task_prompts.py:233-238`, path `src/infra/config.py:287-289`. |
 | `state/home_writer.lock` | foundation | ported | |
 | `state/writer_identity.json` | foundation | ported | |
-| `state/cron_alert_fingerprint.json` | features/cron | todo | |
+| `state/cron_alert_fingerprint.json` | features/cron | ported | Sorted broken-task names; alerts transition once per changed set. |
 | `cache/cli_base_url.json` | foundation | not applicable | Written and read by the Python CLI (`src/runtime/cli/common.py:335`), which stays (Trade-off 2). |
 | `cache/perfetto_merge/` | features/trace | ported | Cache directory for merged Perfetto traces. |
 | `cache/perfetto_merge/<sha256>.json.gz` | features/trace | ported | |

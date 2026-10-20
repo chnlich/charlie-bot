@@ -9,6 +9,8 @@ of rule live here:
   and the ETags and revisions derived from them still compare exactly);
 - the minted UUID rule leaves fixture UUIDs intact and maps each other UUID by first appearance in sorted paths
   and document order, because requests and runs create different random ids in each tree;
+- the cron firing rule masks only the timestamp in a cron firing id or leaf name, and the scheduler's standalone
+  `last_scheduled_run` field, because each server reads its own wall clock;
 - field rules mask one JSON field of one route's response body or of one home file, or only the digits of a
   value of one form;
 - text rules mask one pattern in one route's non-JSON body (a page that embeds JSON in its HTML);
@@ -29,6 +31,10 @@ import yaml
 TREE_PLACEHOLDER = "<tree>"
 _UUID = re.compile(r"(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b")
 _VOICE_STEM = re.compile(r"\b\d{4}-\d{2}-\d{2}T\d{6}\.\d{3}Z_[0-9a-f]{8}\b")
+_ISO_WALL_CLOCK = r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})"
+_CRON_FIRING_STAMP = re.compile(
+    rf"(?P<prefix>cron:[^:\s]+:|[^:\n]* · )(?P<value>{_ISO_WALL_CLOCK})"
+    r"(?P<suffix>:(?:leaf|work|step:\d+))?(?=$|\s)")
 _MERGED_TRACE_CACHE_PATH = re.compile(r"^home/cache/perfetto_merge/[0-9a-f]{64}\.json\.gz$")
 _TEMP_DIR_SUFFIX = re.compile(r"\bcharliebot-(?:explain|oneshot|run)-(?P<value>[a-z0-9_]{8})(?![a-z0-9_])")
 _TASK_BRANCH_TIMESTAMP = re.compile(r"\b(?P<prefix>charliebot(?:/|-)task-)(?P<value>\d{10})(?P<suffix>-[0-9a-f]{8})\b")
@@ -107,6 +113,8 @@ class FieldRule:
   def mask(self, value: Any) -> Any:
     if self.pattern is None:
       return self.placeholder
+    if not isinstance(value, str):
+      return value
     match = self.pattern.fullmatch(value)
     if match is None:
       return value
@@ -483,6 +491,14 @@ FILE_RULES: tuple[FieldRule, ...] = (
         reason="wall-clock time: the session records its creation on each server's clock",
     ),
     FieldRule(
+        name="cron-last-scheduled-run",
+        target="home/sessions/*/metadata.json",
+        field="last_scheduled_run",
+        when=(),
+        pattern=re.compile(rf"(?P<value>{_ISO_WALL_CLOCK})"),
+        reason="wall-clock time: the scheduler records each server's cron firing on its own clock",
+    ),
+    FieldRule(
         name="web-status-file-time",
         target="home/sessions/*/metadata.json",
         field="web_status.updated_at",
@@ -766,6 +782,8 @@ def normalize_text(text: str, ctx: Context) -> str:
   normalized = VOICE_STEM_RULE.pattern.sub(f"<{VOICE_STEM_RULE.name}>", normalized)
   normalized = TEMP_DIR_SUFFIX_RULE.pattern.sub(_mask_temp_dir_suffix, normalized)
   normalized = TASK_BRANCH_TIMESTAMP_RULE.pattern.sub(_mask_task_branch_timestamp, normalized)
+  normalized = _CRON_FIRING_STAMP.sub(
+      lambda match: f"{match['prefix']}<cron-firing-time>{match['suffix'] or ''}", normalized)
   return _UUID.sub(replace_uuid, normalized)
 
 

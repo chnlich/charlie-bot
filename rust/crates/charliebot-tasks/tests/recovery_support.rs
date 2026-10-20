@@ -517,6 +517,16 @@ impl Stack {
     Stack::assemble(home, cfg, registry(None)?).await
   }
 
+  /// A recovery stack with a registered cron controller, used to exercise the recovery dispatch hook.
+  pub async fn start_with_cron_controller(script: &str) -> anyhow::Result<Stack> {
+    let home = tempfile::tempdir()?;
+    let options = vec![script_option(BACKEND_ID, script)];
+    let pool = vec![BACKEND_ID.to_string()];
+    let cfg = config(home.path(), options, pool, 0);
+    let registry = registry(Some(("test.cron_recovery", register_cron_recovery)))?;
+    Stack::assemble(home, cfg, registry).await
+  }
+
   /// A stack over the `config.yaml` the test writes, loaded through a registry that also holds `extra`: the test's own
   /// backend types and config sections, such as the Claude account type and its accounts section.
   pub async fn start_from_config(config_text: &str, extra: (&'static str, RegisterFn)) -> anyhow::Result<Stack> {
@@ -1184,6 +1194,66 @@ impl Stack {
     }
     Ok(std::fs::read_to_string(&path)?.lines().map(str::to_string).collect())
   }
+}
+
+struct CronRecoveryProbe;
+
+impl SequenceController for CronRecoveryProbe {
+  fn sequence_kind(&self) -> &'static str {
+    "cron"
+  }
+
+  fn redrive<'a>(&'a self, _session_id: &'a str, _tree: &'a dyn SequenceTree) -> BoxFuture<'a, anyhow::Result<()>> {
+    Box::pin(async { Ok(()) })
+  }
+
+  fn launch_context<'a>(
+    &'a self,
+    _meta: &'a SessionMetadata,
+    _run: &'a RunRecord,
+    _launch_text: &'a str,
+  ) -> BoxFuture<'a, anyhow::Result<Option<String>>> {
+    Box::pin(async { Ok(None) })
+  }
+
+  fn after_run<'a>(
+    &'a self,
+    _session_id: &'a str,
+    _run: &'a RunRecord,
+    _tree: &'a dyn SequenceTree,
+  ) -> BoxFuture<'a, anyhow::Result<()>> {
+    Box::pin(async { Ok(()) })
+  }
+
+  fn recover_run<'a>(
+    &'a self,
+    _session_id: &'a str,
+    run: &'a RunRecord,
+    _outcome: Option<&'a str>,
+    _tree: &'a dyn SequenceTree,
+  ) -> BoxFuture<'a, anyhow::Result<bool>> {
+    Box::pin(async move { Ok(run.sequence_ref.as_ref().is_some_and(|sequence| sequence.kind == "cron")) })
+  }
+
+  fn reconcile_interrupted<'a>(&'a self, _tree: &'a dyn SequenceTree) -> BoxFuture<'a, anyhow::Result<()>> {
+    Box::pin(async { Ok(()) })
+  }
+
+  fn binding(&self, _session_id: &str) -> Option<Arc<dyn SequenceBinding>> {
+    None
+  }
+
+  fn owns_session(&self, _meta: &SessionMetadata) -> bool {
+    false
+  }
+
+  fn listing_fields(&self, _session_ids: &[String], _now: UtcDateTime) -> HashMap<String, Map<String, Value>> {
+    HashMap::new()
+  }
+}
+
+fn register_cron_recovery(registry: &mut Registry) -> Result<(), RegistryError> {
+  registry.sequence_controller("cron", Arc::new(CronRecoveryProbe))
 }
 
 fn marker_path(cfg: &CharlieBotConfig, session_id: &str) -> PathBuf {

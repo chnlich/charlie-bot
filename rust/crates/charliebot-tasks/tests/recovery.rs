@@ -289,6 +289,44 @@ async fn restart_after_launch_reattaches_live_process() -> anyhow::Result<()> {
   Ok(())
 }
 
+/// `test_task_recovery.py::test_retry_and_boot_reconcile_repair_half_written_end_metadata` (the retry half): the run
+/// record write that carries ended_at fails out of space after the run_finished fact landed. The end-landing retry
+/// fills ended_at from the raw log's last write and exit_code from its result line, and writes no second end record.
+#[tokio::test]
+async fn retry_repairs_a_half_written_end_record_from_the_raw_log() -> anyhow::Result<()> {
+  // Python: tests/test_task_recovery.py::test_retry_and_boot_reconcile_repair_half_written_end_metadata.
+  let stack = Stack::start(r#"printf '%s\n' '{"type":"result","subtype":"success","result":"work done"}'"#).await?;
+  stack.adapter.set_landing_retry_interval(Duration::from_millis(50));
+  stack.write_access_key()?;
+  let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
+  let task = TaskSpec { goal: "do the work".to_string(), ..TaskSpec::default() };
+  let worker = stack.node("worker", Some(&manager.id), TaskProfile::Worker, Some(task)).await?;
+  let fault = write_faults::inject_run_record_write_fault(stack.store(), true, 1, libc::ENOSPC);
+
+  stack.dispatch.admit_input(&worker.id, event_types::USER, "Start the task.", "user", json!({})).await?;
+  let decision = stack.dispatch.dispatch_pending(&worker.id).await?;
+  let run_id = decision["run_id"].as_str().expect("the dispatch names its run").to_string();
+  assert_eq!(stack.wait_terminal(&worker.id, &run_id).await?, RunOutcomeKind::Success);
+
+  let hits = fault.hits();
+  assert_eq!(hits[..2], [Hit::Failed, Hit::Written], "the end write failed once; the retry's write landed");
+  let raw_log = stack.store().run_dir(&worker.id, &run_id).join(RAW_LOG_NAME);
+  let raw_written = time::OffsetDateTime::from(std::fs::metadata(&raw_log)?.modified()?);
+  let run = stack.store().read_run_sync(&worker.id, &run_id)?.expect("the run is recorded");
+  let ended_at = run.ended_at.expect("the retry lands the end time").into_inner();
+  let delta = ended_at - raw_written;
+  assert!(delta.abs() < time::Duration::seconds(1), "ended_at {ended_at} is not the raw log's write {raw_written}");
+  assert_eq!(run.exit_code, Some(0), "the raw log's successful result event");
+  let finished = stack
+    .run_events(&worker.id)?
+    .iter()
+    .filter(|event| event["type"] == event_types::RUN_FINISHED && event["run_id"] == run_id.as_str())
+    .count();
+  assert_eq!(finished, 1, "the retry never wrote a second end record");
+  settle_until(|| Ok(stack.adapter.landing_retry_nodes().is_empty())).await?;
+  Ok(())
+}
+
 /// `test_task_recovery.py::test_retry_and_boot_reconcile_repair_half_written_end_metadata` (the boot half): a terminal
 /// run whose end metadata is empty is repaired from its raw log's last write, once.
 #[tokio::test]
@@ -1284,6 +1322,37 @@ async fn boot_non_space_follow_up_failure_starts_no_retry() -> anyhow::Result<()
   assert_eq!(stack.store().task_state(&worker.id)?, "open", "no retry completed the follow-up");
   stack.boot().await?;
   assert_eq!(stack.store().task_state(&worker.id)?, "completed", "the next pass completes it");
+  Ok(())
+}
+
+/// `test_task_recovery.py::test_boot_node_out_of_space_hands_node_to_retry`: the boot pass's child-report delivery fails
+/// out of space. The node pass raises, the boot hands the node to the end-landing retry, and the retry's round delivers
+/// the failed report exactly once.
+#[tokio::test]
+async fn boot_node_out_of_space_hands_node_to_retry() -> anyhow::Result<()> {
+  // Python: tests/test_task_recovery.py::test_boot_node_out_of_space_hands_node_to_retry.
+  let stack = Stack::start("exit 0").await?;
+  stack.adapter.set_landing_retry_interval(Duration::from_millis(50));
+  let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
+  let worker = stack.node("worker", Some(&manager.id), TaskProfile::Worker, None).await?;
+  stack.queue_run(&worker.id, "run-failed", RunKind::Work).await?;
+  stack.finish(&worker.id, "run-failed", RunOutcomeKind::Failed).await?;
+  assert!(child_reports(&stack, &manager.id)?.is_empty());
+
+  let fault = write_faults::inject_chat_append_fault(
+    stack.store(),
+    event_types::CHILD_REPORT,
+    &[manager.id.as_str()],
+    1,
+    libc::ENOSPC,
+  );
+  stack.boot().await?;
+
+  settle_until(|| Ok(child_reports(&stack, &manager.id)?.len() == 1)).await?;
+  assert!(fault.hits().contains(&Hit::Failed), "the boot pass's delivery write failed out of space");
+  assert_eq!(child_reports(&stack, &manager.id)?[0]["outcome"], "failed");
+  settle_until(|| Ok(stack.adapter.landing_retry_nodes().is_empty())).await?;
+  assert_eq!(child_reports(&stack, &manager.id)?.len(), 1, "exactly one report");
   Ok(())
 }
 

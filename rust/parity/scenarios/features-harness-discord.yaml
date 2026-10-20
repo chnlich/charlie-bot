@@ -52,6 +52,38 @@ fake_agent:
             total_cost_usd: 0.0
       exit_code: 0
 expect_starts: 2
+comparison_rules:
+  # Python does not order the round-end audit's nudge (agent_message, written at
+  # src/features/chat_threads/thread_entry.py:700-704) against the turn's run_finished. The Discord after_turn calls
+  # discord_listener.deliver_done (src/features/discord/turn_contribution.py:24-27) in its own task
+  # (src/runtime/session_events.py:156-161), while the finish callback writes run_finished after the master_done
+  # broadcast (src/runtime/master_cc_queue.py:304-309). The rule accepts either order for this pair only: the nudge is
+  # the one agent_message with the nudge's content.
+  - either_order_of_adjacent_events:
+      first:
+        type: agent_message
+        match_fields:
+          content: |-
+            Discord thread: the round answering this mention ended without posting a reply. Decide now:
+            when the thread should hear something, post a reply; when there is nothing to say, end this
+            round and the thread gets a one-line notice pointing to this session.
+      second:
+        type: run_finished
+        match_fields: {outcome: success}
+  # Python does not order the no-reply notice (assistant_error, written at
+  # src/features/chat_threads/thread_entry.py:732-739) against run_finished either. It comes from the same Discord
+  # after_turn (src/features/discord/turn_contribution.py:24-27) in its own task
+  # (src/runtime/session_events.py:156-161), while run_finished follows the master_done broadcast
+  # (src/runtime/master_cc_queue.py:304-309). The rule accepts either order for this pair only: the notice is the one
+  # assistant_error with the notice's content.
+  - either_order_of_adjacent_events:
+      first:
+        type: assistant_error
+        match_fields:
+          content: This Discord mention got no reply from its round or the nudge round; the thread was told so.
+      second:
+        type: run_finished
+        match_fields: {outcome: success}
 steps:
   - kind: log_event
     name: boot backfill reports the lost Discord summon

@@ -31,7 +31,7 @@ _UUID = re.compile(r"(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-
 _VOICE_STEM = re.compile(r"\b\d{4}-\d{2}-\d{2}T\d{6}\.\d{3}Z_[0-9a-f]{8}\b")
 _MERGED_TRACE_CACHE_PATH = re.compile(r"^home/cache/perfetto_merge/[0-9a-f]{64}\.json\.gz$")
 _TEMP_DIR_SUFFIX = re.compile(r"\bcharliebot-(?:explain|oneshot|run)-(?P<value>[a-z0-9_]{8})(?![a-z0-9_])")
-_TASK_BRANCH_TIMESTAMP = re.compile(r"\b(?P<prefix>charliebot/task-)(?P<value>\d{10})(?P<suffix>-[0-9a-f]{8})\b")
+_TASK_BRANCH_TIMESTAMP = re.compile(r"\b(?P<prefix>charliebot(?:/|-)task-)(?P<value>\d{10})(?P<suffix>-[0-9a-f]{8})\b")
 _PIPE_INODE = re.compile(r"pipe:\[(?P<value>\d+)\]")
 
 

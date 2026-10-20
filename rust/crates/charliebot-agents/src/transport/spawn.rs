@@ -588,6 +588,54 @@ mod tests {
   }
 
   #[tokio::test]
+  async fn claude_compaction_keeps_its_nice_and_enters_the_session_cgroup_before_exec() {
+    let root = tempfile::tempdir().unwrap();
+    let (base, procs) = temp_cgroup(root.path());
+    let own_nice = unsafe { libc::getpriority(libc::PRIO_PROCESS, 0) };
+    assert!(own_nice < 10, "test process nice must be below 10, got {own_nice}");
+    let group = cgroup::prepare_session_cgroup(&base, Some("test1234-session"), 64, 0, 16).unwrap();
+    let script = r#"printf '%s\n' "$(ps -o ni= -p $$ | tr -d ' ')" "$(cat "$CGROUP_PROCS")"; read -r line"#;
+    let mut command = Command::new("/bin/sh");
+    command
+      .args(["-c", script])
+      .env_clear()
+      .env("CGROUP_PROCS", &procs)
+      .env("PATH", "/usr/bin:/bin")
+      .stdin(std::process::Stdio::piped())
+      .stdout(std::process::Stdio::piped())
+      .stderr(std::process::Stdio::piped());
+    unsafe {
+      command.as_std_mut().pre_exec(|| {
+        if libc::setsid() == -1 {
+          return Err(io::Error::last_os_error());
+        }
+        if libc::nice(10) == -1 {
+          return Err(io::Error::last_os_error());
+        }
+        Ok(())
+      });
+    }
+    let mut child = command.spawn().unwrap();
+    let pid = child.id().unwrap();
+    let mut guard = ProcessGroupGuard::new(pid);
+    cgroup::move_process_to_cgroup(pid, &group);
+    let mut stdout = tokio::io::BufReader::new(child.stdout.take().unwrap());
+    let mut recorded_nice = String::new();
+    let mut recorded_cgroup = String::new();
+    stdout.read_line(&mut recorded_nice).await.unwrap();
+    stdout.read_line(&mut recorded_cgroup).await.unwrap();
+    let child_nice = unsafe { libc::getpriority(libc::PRIO_PROCESS, pid) };
+    let child_session = unsafe { libc::getsid(pid as i32) };
+    let cgroup_procs = fs::read_to_string(procs).unwrap();
+    assert_eq!(recorded_nice.trim().parse::<i32>().unwrap(), own_nice);
+    assert_eq!(recorded_cgroup.trim(), pid.to_string());
+    assert_eq!(child_nice, own_nice);
+    assert_eq!(child_session, pid as i32);
+    assert_eq!(cgroup_procs, pid.to_string());
+    stop_child(&mut child, &mut guard).await;
+  }
+
+  #[tokio::test]
   async fn one_shot_uses_null_stdin_and_piped_output() {
     let root = tempfile::tempdir().unwrap();
     let mut spawned = spawn_one_shot(

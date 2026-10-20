@@ -90,15 +90,6 @@ accounts:
     relay_tokens: 100000
     expired_cache_tokens: 50000
 
-# Claude launch: per-run-kind settings of this host's Claude CLI runs.
-# claude_launch:
-#   # Skills listed by name only (no description in each request, still callable),
-#   # per run kind: manager_turn, work, review, iteration, scheduled_step. List the
-#   # skills a kind of run never used; every other skill lists as before.
-#   name_only_skills:
-#     work:
-#       - some-skill-name
-
 # Voice: transcription backend and local-engine selection.
 voice:
   engine: sherpa

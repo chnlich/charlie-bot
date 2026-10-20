@@ -376,8 +376,8 @@ Known-alive symbols:
   definition, so vulture flags it as an unused method. Same framework-registered class as the
   `check_sources_and_mode` entry above.
 - `check_default_backend` (`src/features/voice/config_check.py`), `check_claude_pools`
-  (`src/backends/claude_code/claude_config.py`), `AccountsConfig` (same file), `ClaudeLaunchConfig`
-  (`src/backends/claude_code/claude_launch.py`), each option model class in
+  (`src/backends/claude_code/claude_config.py`), `AccountsConfig` (same file),
+  each option model class in
   `src/backends/*/options.py`, `snapshot_reading_limits` (`src/backends/opencode/opencode_limits.py`), and
   `claude_reading_limits` (`src/backends/claude_code/claude_code.py`) —
   reached by string: the `register()` of each package passes a "module:attr" string to

@@ -140,7 +140,8 @@ impl Build {
   }
 }
 
-/// The scripts of one test: one script per launched process, taken in order by every option that names this queue's token.
+/// The scripts of one test: one script per launched process, taken in order by every option that names this queue's
+/// token.
 pub struct Scripts {
   token: String,
   run: Arc<ScriptRun>,
@@ -320,6 +321,11 @@ pub fn scripted_type(
     lifecycle,
     translate_fallback: false,
   }
+}
+
+/// A script that prints one successful result event carrying `text`.
+pub fn result_script(text: &str) -> String {
+  format!("printf '%s\\n' '{}'", json!({"type": "result", "subtype": "success", "result": text}))
 }
 
 /// The synthetic option a node runs on: a `/bin/sh` script that prints nothing.
@@ -979,13 +985,23 @@ pub fn synthetic_git(dir: &Path, args: &[&str]) -> anyhow::Result<String> {
 
 /// One JSON request to the delegated-worker route, authenticated as the synthetic operator.
 pub async fn post_delegate(router: &axum::Router, body: Value) -> anyhow::Result<(StatusCode, Value)> {
+  post_delegate_as(router, body, "Bearer synthetic-access-key").await
+}
+
+/// One JSON request to the delegated-worker route under the given `Authorization` header: the operator key, or a run
+/// token signed with it.
+pub async fn post_delegate_as(
+  router: &axum::Router,
+  body: Value,
+  authorization: &str,
+) -> anyhow::Result<(StatusCode, Value)> {
   let response = router
     .clone()
     .oneshot(
       Request::builder()
         .method("POST")
         .uri("/api/internal/delegate")
-        .header(header::AUTHORIZATION, "Bearer synthetic-access-key")
+        .header(header::AUTHORIZATION, authorization)
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(serde_json::to_vec(&body)?))?,
     )

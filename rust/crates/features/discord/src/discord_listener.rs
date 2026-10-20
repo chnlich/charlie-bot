@@ -11,6 +11,7 @@ use charliebot_chat_threads::thread_entry::{self, Summon, ThreadAdapter, ThreadM
 use charliebot_compat::http_client;
 use charliebot_compat::ws_client::{self, CloseFrame, Message as WsMessage, Options, Receiver, Sender};
 use charliebot_core::config::CharlieBotConfig;
+use charliebot_core::pystr;
 use charliebot_registry::FeatureContext;
 use charliebot_sched::triggers::TriggerManager;
 use futures_util::future::BoxFuture;
@@ -44,7 +45,7 @@ const STOP_CLOSE_CODES: &[(u16, &str)] = &[
   (4014, "disallowed intents: enable the Message Content intent in the Discord developer portal"),
 ];
 static MENTION_TOKEN_RE: LazyLock<Regex> =
-  LazyLock::new(|| Regex::new(r"<@[!&]?[0-9]+>").expect("the Discord mention pattern is valid"));
+  LazyLock::new(|| Regex::new(r"<@[!&]?\d+>").expect("the Discord mention pattern is valid"));
 
 /// The deterministic session id of the Discord thread `thread_id` in `guild_id` (`summon_session_id`).
 pub fn summon_session_id(guild_id: &str, thread_id: &str) -> String {
@@ -340,10 +341,8 @@ fn mention_ids(message: &Value) -> Vec<&str> {
 
 /// The thread name made from the mention's content (`_thread_name`).
 fn thread_name(content: &str) -> String {
-  let stripped = MENTION_TOKEN_RE.replace_all(content, " ");
-  let words = stripped.split(|character: char| character.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&character));
-  let collapsed = words.filter(|word| !word.is_empty()).collect::<Vec<_>>().join(" ");
-  let name: String = collapsed.chars().take(THREAD_NAME_CHARS).collect();
+  let stripped = MENTION_TOKEN_RE.replace_all(content, "");
+  let name: String = pystr::collapse_whitespace(&stripped).chars().take(THREAD_NAME_CHARS).collect();
   if name.is_empty() { "CharlieBot".to_string() } else { name }
 }
 

@@ -290,7 +290,7 @@ def _prepare_contexts(
   for side, snapshot, side_rules in zip(sides, snapshots, rules_by_side, strict=True):
     spawns_path = _spawns_path(side.tree)
     spawn_records = _read_spawns(side.tree) if spawns_path.exists() else []
-    _seed_spawn_session_ids(spawn_records, side.ctx)
+    _seed_spawn_session_ids(snapshot, spawn_records, side.ctx)
     _seed_spawn_run_ids(snapshot, spawn_records, side.ctx)
     comparable = dict(snapshot)
     for path, event_types in side_rules:
@@ -308,15 +308,15 @@ def _prepare_contexts(
       normalize.prepare_snapshot([("fake-agent/spawns.jsonl", "file", grouped_data)], side.ctx)
 
 
-def _seed_spawn_session_ids(records: list[dict], ctx: normalize.Context) -> None:
-  """Give each spawned session id a stable name from its first launch order before the tree numbers it.
+def _seed_spawn_session_ids(snapshot: compare.Snapshot, records: list[dict], ctx: normalize.Context) -> None:
+  """Give each spawned session an alias that names its task parent and its place among that parent's spawns.
 
-  A cron firing's leaf session id derives from the firing's wall-clock stamp, so the two trees' ids
-  differ and their session directories sort at different places; numbering the minted ids by sorted
-  path then renumbers every id in the tree. The first-launch order is the scenario's own order, so it
-  is the stable key.
+  The group is a hash of the parent's stable name (its fixture id, or its alias when the parent is itself a spawn),
+  or "root" for a session with no task parent. The position counts the group's spawns in first-launch order. No order
+  across groups reaches an alias. A cron firing's leaf session id derives from the firing's wall-clock stamp, so the two trees' ids differ;
+  the alias replaces each id before the tree numbers the minted ids.
   """
-  spawned = 0
+  parents: dict[str, str | None] = {}
   for record in records:
     claims = record["run_token_claims"]
     if claims is None:
@@ -324,10 +324,36 @@ def _seed_spawn_session_ids(records: list[dict], ctx: normalize.Context) -> None
     session_id = claims["session_id"]
     if not isinstance(session_id, str) or not normalize.is_uuid(session_id):
       continue
-    if session_id in ctx.fixture_uuids or session_id in ctx.stable_uuids:
+    if session_id in ctx.fixture_uuids or session_id in ctx.stable_uuids or session_id in parents:
       continue
-    spawned += 1
-    ctx.stable_uuids[session_id] = f"<spawn-session-{spawned}>"
+    metadata = snapshot.get(f"home/sessions/{session_id}/metadata.json")
+    if metadata is None:
+      raise RuntimeError(f"fake-agent spawn session {session_id!r} has no metadata.json in the home snapshot")
+    parents[session_id] = json.loads(metadata.data)["task_parent_id"]
+
+  siblings: collections.Counter[str | None] = collections.Counter()
+  places: dict[str, int] = {}
+  for session_id, parent in parents.items():
+    siblings[parent] += 1
+    places[session_id] = siblings[parent]
+  aliases: dict[str, str] = {}
+
+  def parent_key(parent: str) -> str:
+    if parent in ctx.fixture_uuids:
+      return parent
+    if parent not in parents:
+      raise RuntimeError(f"task parent {parent!r} of a spawned session is neither a fixture nor a spawned session")
+    return alias_of(parent)
+
+  def alias_of(session_id: str) -> str:
+    if session_id not in aliases:
+      parent = parents[session_id]
+      group = "root" if parent is None else hashlib.sha256(parent_key(parent).encode()).hexdigest()
+      aliases[session_id] = f"<spawn-session-{group}-{places[session_id]}>"
+    return aliases[session_id]
+
+  for session_id in parents:
+    ctx.stable_uuids[session_id] = alias_of(session_id)
 
 
 def _seed_spawn_run_ids(snapshot: compare.Snapshot, records: list[dict], ctx: normalize.Context) -> None:

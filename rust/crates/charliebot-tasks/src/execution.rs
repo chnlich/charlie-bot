@@ -1088,6 +1088,28 @@ impl TaskExecutionAdapter {
     result
   }
 
+  /// Test hooks over the worker's delivery chain (feature `test-hooks`): one run's chain for its durable outcome, and
+  /// the quota failure a launch records before its chain runs.
+  #[cfg(feature = "test-hooks")]
+  pub async fn after_worker_run_for_test(&self, session_id: &str, run_id: &str, outcome: &str) -> anyhow::Result<()> {
+    let meta = self.features.store.load_task_meta(session_id).await?;
+    let run = self
+      .features
+      .store
+      .read_run_sync(session_id, run_id)?
+      .ok_or_else(|| anyhow!("run {run_id} not found in session {session_id}"))?;
+    self.after_worker_run(&meta, &run, outcome).await
+  }
+
+  #[cfg(feature = "test-hooks")]
+  pub fn record_quota_failure_for_test(&self, session_id: &str, run_id: &str, resets_at: Option<UtcDateTime>) {
+    self
+      .quota_failures
+      .lock()
+      .expect("worker quota failure map is not poisoned")
+      .insert((session_id.to_string(), run_id.to_string()), resets_at);
+  }
+
   async fn after_worker_run_inner(
     &self,
     meta: &SessionMetadata,

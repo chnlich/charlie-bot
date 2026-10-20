@@ -15,8 +15,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use anyhow::Context;
-use axum::body::{Body, to_bytes};
-use axum::http::{Request, StatusCode, header};
+use axum::http::StatusCode;
 use charliebot_agents::transport::identity;
 use charliebot_core::event_types;
 use charliebot_registry::caller::CallerIdentity;
@@ -30,10 +29,9 @@ use charliebot_tasks::recovery::{self, PassCounters};
 use process_guard::ProcessGroupGuard;
 use recovery_support::{
   BACKEND_ID, LOOP_KIND, LogCapture, LoopClose, LoopMarker, Stack, assert_logged_node_failure, assert_named_error,
-  cold_read_spec, implement_spec, script_option, synthetic_run,
+  cold_read_spec, implement_spec, post_delegate, script_option, synthetic_run,
 };
 use serde_json::{Map, Value, json};
-use tower::ServiceExt;
 
 /// The stop request a node that closed before its queued run settles it with (`closed_task_stop_request_id`).
 fn closed_task_stop(run_id: &str) -> String {
@@ -42,24 +40,6 @@ fn closed_task_stop(run_id: &str) -> String {
 
 fn script_run_spec() -> TaskSpec {
   TaskSpec { goal: "synthetic worker task".to_string(), task_type: Some(TaskType::ScriptRun), ..TaskSpec::default() }
-}
-
-/// One JSON request to the delegated-worker route, authenticated as the synthetic operator.
-async fn post_delegate(router: &axum::Router, body: Value) -> anyhow::Result<(StatusCode, Value)> {
-  let response = router
-    .clone()
-    .oneshot(
-      Request::builder()
-        .method("POST")
-        .uri("/api/internal/delegate")
-        .header(header::AUTHORIZATION, "Bearer synthetic-access-key")
-        .header(header::CONTENT_TYPE, "application/json")
-        .body(Body::from(serde_json::to_vec(&body)?))?,
-    )
-    .await?;
-  let status = response.status();
-  let bytes = to_bytes(response.into_body(), usize::MAX).await?;
-  Ok((status, serde_json::from_slice(&bytes)?))
 }
 
 /// The `run_stop_requested` facts of one run, as their request ids.

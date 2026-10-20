@@ -2,13 +2,16 @@
 //! Fixtures of the startup-recovery tests (`tests/recovery.rs`): the task-execution stack over a temporary home, the
 //! scripted `/bin/sh` backend, a fault seam on the run-finish completion, and a capture of the node pass's log events.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 
 use anyhow::Context;
+use axum::body::{Body, to_bytes};
+use axum::http::{Request, StatusCode, header};
 use charliebot_agents::agent_environment::AgentBaseEnvironment;
 use charliebot_agents::backend_pool::BackendPool;
 use charliebot_core::config::{
@@ -18,11 +21,12 @@ use charliebot_core::credentials::load_credentials;
 use charliebot_core::event_types;
 use charliebot_core::hot_reload::HotReload;
 use charliebot_core::repo_root::RepoRoot;
+use charliebot_registry::RegisterFn;
 use charliebot_registry::Registry;
 use charliebot_registry::RegistryError;
 use charliebot_registry::backend::{
-  AgentBackend, BackendFactory, BackendTraits, BackendTypeRegistration, Env, LaunchArgs, ResumeStyle, Translate,
-  TransportKind,
+  AgentBackend, BackendFactory, BackendLifecycle, BackendTraits, BackendTypeRegistration, Env, LaunchArgs, ResumeStyle,
+  Translate, TransportKind,
 };
 use charliebot_registry::context::{FeatureContext, StartupState};
 use charliebot_registry::sequence::{SequenceBinding, SequenceCompletion, SequenceController, SequenceTree};
@@ -43,6 +47,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use serde_yaml::{Mapping, Value as YamlValue};
 use tempfile::TempDir;
+use tower::ServiceExt;
 use tracing_subscriber::fmt::MakeWriter;
 
 /// The backend type every synthetic option of these tests uses.
@@ -106,26 +111,116 @@ impl SequenceListingFields for TestHooks {
   }
 }
 
-/// A `/bin/sh -c` backend whose script is the option's `script` field.
-struct ScriptFactory;
+/// The option field of a fixed script (`script_option`).
+const SCRIPT_FIELD: &str = "script";
+/// The option field that names a test's script queue (`Scripts`).
+pub const TOKEN_FIELD: &str = "token";
+
+/// One test's scripted processes: the script each launched process takes, in order, and what each process was given.
+#[derive(Default)]
+struct ScriptRun {
+  scripts: Mutex<VecDeque<String>>,
+  builds: Mutex<Vec<Build>>,
+}
+
+static SCRIPT_RUNS: LazyLock<Mutex<BTreeMap<String, Arc<ScriptRun>>>> = LazyLock::new(Mutex::default);
+static NEXT_TOKEN: AtomicUsize = AtomicUsize::new(0);
+
+/// One build of a scripted backend: the launch it was given, and the prompt its process was sent.
+#[derive(Clone)]
+pub struct Build {
+  pub launch: LaunchArgs,
+  pub prompt: Arc<Mutex<Option<String>>>,
+}
+
+impl Build {
+  /// Whether the prompt its process was sent contains `text`.
+  pub fn prompt_contains(&self, text: &str) -> bool {
+    self.prompt.lock().expect("prompt mutex is not poisoned").as_deref().is_some_and(|prompt| prompt.contains(text))
+  }
+}
+
+/// The scripts of one test: one script per launched process, taken in order by every option that names this queue's token.
+pub struct Scripts {
+  token: String,
+  run: Arc<ScriptRun>,
+}
+
+impl Scripts {
+  pub fn new(scripts: Vec<String>) -> Self {
+    let token = format!("recovery-test-{}", NEXT_TOKEN.fetch_add(1, Ordering::Relaxed));
+    let run = Arc::new(ScriptRun { scripts: Mutex::new(scripts.into()), builds: Mutex::default() });
+    SCRIPT_RUNS.lock().expect("script registry is not poisoned").insert(token.clone(), Arc::clone(&run));
+    Self { token, run }
+  }
+
+  /// A backend option of `backend_type` whose builds take this queue's scripts.
+  pub fn option(&self, id: &str, backend_type: &str) -> BackendOption {
+    let mut type_fields = Mapping::new();
+    type_fields.insert(YamlValue::String(TOKEN_FIELD.to_string()), YamlValue::String(self.token.clone()));
+    BackendOption {
+      id: id.to_string(),
+      label: id.to_string(),
+      prompt_overlay: None,
+      model: format!("{id}-model"),
+      backend_type: backend_type.to_string(),
+      type_fields,
+    }
+  }
+
+  /// The token a config file names this queue with.
+  pub fn token(&self) -> &str {
+    &self.token
+  }
+
+  pub fn builds(&self) -> Vec<Build> {
+    self.run.builds.lock().expect("builds mutex is not poisoned").clone()
+  }
+}
+
+/// Builds a scripted backend: from the option's fixed `script` field, or from the next script of the queue its token
+/// names. A queue's process is recorded with its launch arguments when it launches.
+pub struct ScriptFactory;
 
 impl BackendFactory for ScriptFactory {
   fn build(
     &self,
     option: Option<&BackendOption>,
     _cfg: &CharlieBotConfig,
-    _launch: LaunchArgs,
+    launch: LaunchArgs,
   ) -> anyhow::Result<Box<dyn AgentBackend>> {
     let option = option.context("scripted backend requires an option")?;
-    let key = YamlValue::String("script".to_string());
-    let script =
-      option.type_fields.get(&key).and_then(YamlValue::as_str).context("scripted option has no script")?.to_string();
-    Ok(Box::new(ScriptBackend { script }))
+    let prompt = Arc::new(Mutex::new(None));
+    if let Some(script) = option.type_fields.get(YamlValue::String(SCRIPT_FIELD.to_string())) {
+      let script = script.as_str().context("scripted option has a non-string script")?.to_string();
+      return Ok(Box::new(ScriptBackend { script: Script::Fixed(script), launch, prompt }));
+    }
+    let token = option
+      .type_fields
+      .get(YamlValue::String(TOKEN_FIELD.to_string()))
+      .and_then(YamlValue::as_str)
+      .context("scripted option names neither a script nor a token")?;
+    let run = SCRIPT_RUNS
+      .lock()
+      .expect("script registry is not poisoned")
+      .get(token)
+      .cloned()
+      .with_context(|| format!("no scripts registered for token {token}"))?;
+    Ok(Box::new(ScriptBackend { script: Script::Queue(run), launch, prompt }))
   }
 }
 
+/// Where a build's script comes from. A queue's next script is taken when the build launches a process; a build that
+/// only translates output never launches one, as the worker's translator does.
+enum Script {
+  Fixed(String),
+  Queue(Arc<ScriptRun>),
+}
+
 struct ScriptBackend {
-  script: String,
+  script: Script,
+  launch: LaunchArgs,
+  prompt: Arc<Mutex<Option<String>>>,
 }
 
 impl AgentBackend for ScriptBackend {
@@ -137,8 +232,22 @@ impl AgentBackend for ScriptBackend {
     Ok(())
   }
 
-  fn build_command(&self, _prompt: &str) -> anyhow::Result<Vec<String>> {
-    Ok(vec!["/bin/sh".to_string(), "-c".to_string(), self.script.clone()])
+  fn build_command(&self, prompt: &str) -> anyhow::Result<Vec<String>> {
+    let script = match &self.script {
+      Script::Fixed(script) => script.clone(),
+      Script::Queue(run) => {
+        let script = run.scripts.lock().expect("scripts mutex is not poisoned").pop_front();
+        let script = script.context("the scripted backend ran out of scripts")?;
+        run
+          .builds
+          .lock()
+          .expect("builds mutex is not poisoned")
+          .push(Build { launch: self.launch.clone(), prompt: Arc::clone(&self.prompt) });
+        script
+      }
+    };
+    *self.prompt.lock().expect("prompt mutex is not poisoned") = Some(prompt.to_string());
+    Ok(vec!["/bin/sh".to_string(), "-c".to_string(), script])
   }
 
   fn prepare_env(&self, env: Env) -> anyhow::Result<Env> {
@@ -184,11 +293,33 @@ fn register_scripted_backend(registry: &mut Registry) -> Result<(), charliebot_r
   })
 }
 
-fn registry() -> anyhow::Result<Registry> {
+/// The recovery stack's registry: the scripted backend type, the synthetic loop controller and the backend pool's
+/// metadata slot (as the server registers it), plus the test's `extra` package when it has one.
+fn registry(extra: Option<(&'static str, RegisterFn)>) -> anyhow::Result<Registry> {
   let mut registry = Registry::new();
   registry.register_package("test.recovery_backend", register_scripted_backend)?;
   registry.register_package("test.synthetic_loop", register_loop_controller)?;
+  registry.register_package("src.features.backend_pool", charliebot_agents::backend_pool::register)?;
+  if let Some((package, register)) = extra {
+    registry.register_package(package, register)?;
+  }
   Ok(registry)
+}
+
+/// A backend type over the scripted factory, for a test's own type names (the Claude account type takes its lifecycle).
+pub fn scripted_type(
+  type_name: &'static str,
+  traits: BackendTraits,
+  lifecycle: Option<Arc<dyn BackendLifecycle>>,
+) -> BackendTypeRegistration {
+  BackendTypeRegistration {
+    type_name,
+    traits,
+    option_model: |_| Ok(()),
+    factory: Arc::new(ScriptFactory),
+    lifecycle,
+    translate_fallback: false,
+  }
 }
 
 /// The synthetic option a node runs on: a `/bin/sh` script that prints nothing.
@@ -218,7 +349,7 @@ fn config(home: &Path, options: Vec<BackendOption>, pool: Vec<String>, min_free_
       session_tasks_max: 0,
       min_free_disk_gib,
     },
-    paths: PathsConfig { workspace_dirs: Vec::new(), worktree_dir: "/synthetic/worktrees".to_string() },
+    paths: PathsConfig { workspace_dirs: Vec::new(), worktree_dir: home.join("worktrees").display().to_string() },
     backends: BackendsConfig { pool, options },
     ui: UiConfig { home_services: Vec::new() },
     telegram: TelegramConfig { chat_id: None },
@@ -251,6 +382,9 @@ impl RunFinishedCompletion for FollowUpFault {
 pub struct Stack {
   pub home: TempDir,
   pub cfg: Arc<CharlieBotConfig>,
+  /// The configuration the reload serves: the file holds no values, so a test changes the served copy through
+  /// `set_min_free_disk_gib`.
+  served: Arc<Mutex<CharlieBotConfig>>,
   pub features: Arc<FeatureContext>,
   pub adapter: TaskExecutionAdapter,
   pub dispatch: Arc<Dispatcher>,
@@ -274,8 +408,23 @@ impl Stack {
     min_free_disk_gib: i64,
   ) -> anyhow::Result<Stack> {
     let home = tempfile::tempdir()?;
-    let cfg = Arc::new(config(home.path(), options, pool, min_free_disk_gib));
-    let registry = Arc::new(registry()?);
+    let cfg = config(home.path(), options, pool, min_free_disk_gib);
+    Stack::assemble(home, cfg, registry(None)?).await
+  }
+
+  /// A stack over the `config.yaml` the test writes, loaded through a registry that also holds `extra`: the test's own
+  /// backend types and config sections, such as the Claude account type and its accounts section.
+  pub async fn start_from_config(config_text: &str, extra: (&'static str, RegisterFn)) -> anyhow::Result<Stack> {
+    let home = tempfile::tempdir()?;
+    std::fs::write(home.path().join("config.yaml"), config_text)?;
+    let registry = registry(Some(extra))?;
+    let cfg = registry.load_config(home.path())?;
+    Stack::assemble(home, cfg, registry).await
+  }
+
+  async fn assemble(home: TempDir, cfg: CharlieBotConfig, registry: Registry) -> anyhow::Result<Stack> {
+    let cfg = Arc::new(cfg);
+    let registry = Arc::new(registry);
     let hooks = Arc::new(TestHooks);
     let store = Store::new(
       (*cfg).clone(),
@@ -299,9 +448,13 @@ impl Stack {
       .nth(3)
       .context("tasks crate manifest has no repository root ancestor")?;
     startup.insert(RepoRoot::new(Some(checkout.as_os_str().to_os_string()))?)?;
-    let config_value = Arc::clone(&cfg);
-    let config_reload =
-      HotReload::new(cfg.config_file(), "recovery_config_reload_failed", Box::new(move || Ok((*config_value).clone())));
+    let served = Arc::new(Mutex::new((*cfg).clone()));
+    let config_source = Arc::clone(&served);
+    let config_reload = HotReload::new(
+      cfg.config_file(),
+      "recovery_config_reload_failed",
+      Box::new(move || Ok(config_source.lock().expect("served configuration is not poisoned").clone())),
+    );
     let credential_home = cfg.charliebot_home.clone();
     let credentials_reload = HotReload::new(
       cfg.credentials_file(),
@@ -334,7 +487,21 @@ impl Stack {
     let adapter = TaskExecutionAdapter::new(Arc::clone(&features), queue, Arc::clone(&dispatch));
     dispatch.set_executor(Some(Arc::new(adapter.clone())));
     features.startup.insert(adapter.clone())?;
-    Ok(Stack { home, cfg, features, adapter, dispatch, completion, fault })
+    Ok(Stack { home, cfg, served, features, adapter, dispatch, completion, fault })
+  }
+
+  /// Change the served disk-headroom threshold. The config file carries the change as well, so the reload check sees a
+  /// new fingerprint and re-runs the loader, which serves the new value.
+  pub fn set_min_free_disk_gib(&self, min_free_disk_gib: i64) -> anyhow::Result<()> {
+    self.served.lock().expect("served configuration is not poisoned").server.min_free_disk_gib = min_free_disk_gib;
+    std::fs::write(self.cfg.config_file(), format!("server:\n  min_free_disk_gib: {min_free_disk_gib}\n"))?;
+    Ok(())
+  }
+
+  /// The operator's access key on disk: run-token signing reads it, so a stack that launches agent processes needs it.
+  pub fn write_access_key(&self) -> anyhow::Result<()> {
+    std::fs::write(self.cfg.credentials_file(), "charliebot:\n  access_key: synthetic-access-key\n")?;
+    Ok(())
   }
 
   pub fn store(&self) -> &Store {
@@ -743,4 +910,95 @@ impl Stack {
   pub fn read_marker(&self, session_id: &str) -> anyhow::Result<LoopMarker> {
     read_marker_at(&self.cfg, session_id)?.context("the loop child has no marker")
   }
+}
+
+/// Poll until `condition` holds, failing after ten seconds.
+pub async fn settle_until(mut condition: impl FnMut() -> anyhow::Result<bool>) -> anyhow::Result<()> {
+  let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+  while !condition()? {
+    anyhow::ensure!(std::time::Instant::now() < deadline, "the condition did not hold within ten seconds");
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+  }
+  Ok(())
+}
+
+impl Stack {
+  /// Poll one run until its terminal fact and its end record both landed (the launch is fire-and-forget), then return
+  /// the fact's outcome.
+  pub async fn wait_terminal(&self, session_id: &str, run_id: &str) -> anyhow::Result<RunOutcomeKind> {
+    settle_until(|| {
+      let landed = self.store().read_run_sync(session_id, run_id)?.is_some_and(|run| run.ended_at.is_some());
+      Ok(landed && run_records::terminal_outcome(&self.run_events(session_id)?, run_id)?.is_some())
+    })
+    .await?;
+    Ok(run_records::terminal_outcome(&self.run_events(session_id)?, run_id)?.expect("the wait saw a terminal fact"))
+  }
+
+  /// The `child_report` facts a manager node holds, in order.
+  pub fn child_reports(&self, manager_id: &str) -> anyhow::Result<Vec<Value>> {
+    Ok(self.run_events(manager_id)?.into_iter().filter(|event| event["type"] == event_types::CHILD_REPORT).collect())
+  }
+
+  /// The `task_closed` facts of one node, in order.
+  pub fn closes(&self, session_id: &str) -> anyhow::Result<Vec<Value>> {
+    Ok(self.run_events(session_id)?.into_iter().filter(|event| event["type"] == event_types::TASK_CLOSED).collect())
+  }
+
+  /// The ids of the node's runs of one kind, in record order.
+  pub fn run_ids_of_kind(&self, session_id: &str, kind: RunKind) -> anyhow::Result<Vec<String>> {
+    Ok(self.run_records(session_id)?.into_iter().filter(|run| run.kind == kind).map(|run| run.id).collect())
+  }
+}
+
+/// A synthetic repository and its bare `origin`, both on `main` with one seed commit (`init_repo_with_origin`).
+pub fn init_repo_with_origin(dir: &Path) -> anyhow::Result<(PathBuf, PathBuf)> {
+  let origin = dir.join("origin.git");
+  let repo = dir.join("repo");
+  synthetic_git(dir, &["init", "-q", "--bare", "-b", "main", &origin.display().to_string()])?;
+  synthetic_git(dir, &["clone", "-q", &origin.display().to_string(), &repo.display().to_string()])?;
+  synthetic_git(&repo, &["config", "user.email", "t@example.com"])?;
+  synthetic_git(&repo, &["config", "user.name", "t"])?;
+  std::fs::write(repo.join("seed.txt"), "seed\n")?;
+  synthetic_git(&repo, &["add", "."])?;
+  synthetic_git(&repo, &["commit", "-q", "-m", "seed"])?;
+  synthetic_git(&repo, &["push", "-q", "origin", "main"])?;
+  Ok((repo, origin))
+}
+
+/// Run one git command in `dir`, failing on a non-zero exit.
+pub fn synthetic_git(dir: &Path, args: &[&str]) -> anyhow::Result<String> {
+  let output = Command::new("git").arg("-C").arg(dir).args(args).output()?;
+  anyhow::ensure!(
+    output.status.success(),
+    "git {args:?} failed in {}: {}",
+    dir.display(),
+    String::from_utf8_lossy(&output.stderr)
+  );
+  Ok(String::from_utf8(output.stdout)?.trim().to_string())
+}
+
+/// One JSON request to the delegated-worker route, authenticated as the synthetic operator.
+pub async fn post_delegate(router: &axum::Router, body: Value) -> anyhow::Result<(StatusCode, Value)> {
+  let response = router
+    .clone()
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri("/api/internal/delegate")
+        .header(header::AUTHORIZATION, "Bearer synthetic-access-key")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(serde_json::to_vec(&body)?))?,
+    )
+    .await?;
+  let status = response.status();
+  // A plain-text failure carries its kind and detail as an extension (`responses::internal_error`).
+  let failure = response
+    .extensions()
+    .get::<charliebot_compat::responses::Failure>()
+    .map(|failure| format!(" ({}: {})", failure.kind, failure.detail))
+    .unwrap_or_default();
+  let bytes = to_bytes(response.into_body(), usize::MAX).await?;
+  let json = serde_json::from_slice(&bytes)
+    .with_context(|| format!("{status}{failure}: {}", String::from_utf8_lossy(&bytes)))?;
+  Ok((status, json))
 }

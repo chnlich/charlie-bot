@@ -129,11 +129,6 @@ async fn start_improve_sequence(features: &Arc<FeatureContext>, req: ImproveRequ
   store.check_task_authorization(&req.session_id).map_err(|error| Box::new(task_http_error(error)))?;
   let cfg = features.config.get().map_err(refuse_runtime)?;
   let pool = backend_pool::backend_pool(features).map_err(refuse_runtime)?;
-  let adapter = features.startup.require::<TaskExecutionAdapter>().map_err(refuse_runtime)?;
-  // The tree and the repo root are built before the reservation: a failure here must not leave a running loop that no
-  // controller owns.
-  let tree: Arc<dyn SequenceTree> = Arc::new(recovery::sequence_tree(features, &adapter).map_err(refuse_runtime)?);
-  let repo_root = features.startup.require::<RepoRoot>().map_err(refuse_runtime)?;
 
   // Backend and model resolve before the reservation, so an unknown backend never leaves a running loop behind. A loop
   // that names no backend takes a backends.pool member for each iteration, so it reserves no backend here.
@@ -176,6 +171,16 @@ async fn start_improve_sequence(features: &Arc<FeatureContext>, req: ImproveRequ
       refuse_runtime(error)
     }
   })?;
+
+  // The runner's collaborators come from the startup state. A failure after the reservation releases it, so no running
+  // loop is left that no controller owns.
+  let (tree, repo_root) = match runner_parts(features) {
+    Ok(parts) => parts,
+    Err(error) => {
+      fail_reserved_loop(&cfg, &req.session_id, state).map_err(refuse_runtime)?;
+      return Err(refuse_runtime(error));
+    }
+  };
 
   let child = match sequence::create_improve_child(
     store,
@@ -225,6 +230,14 @@ async fn start_improve_sequence(features: &Arc<FeatureContext>, req: ImproveRequ
     run_improve_sequence(&spec, &cfg, tree.as_ref(), &repo_root, &pool).await;
   });
   Ok(response)
+}
+
+/// The task-tree handle and the repo root the loop runner reads from the startup state.
+fn runner_parts(features: &Arc<FeatureContext>) -> anyhow::Result<(Arc<dyn SequenceTree>, Arc<RepoRoot>)> {
+  let adapter = features.startup.require::<TaskExecutionAdapter>()?;
+  let tree: Arc<dyn SequenceTree> = Arc::new(recovery::sequence_tree(features, &adapter)?);
+  let repo_root = features.startup.require::<RepoRoot>()?;
+  Ok((tree, repo_root))
 }
 
 /// The 400 answer for a refused backend or model: its detail is the refusal's message.

@@ -10,23 +10,35 @@
 mod process_guard;
 mod recovery_support;
 
-use std::path::Path;
+use std::cell::RefCell;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
 use axum::http::StatusCode;
+use charliebot_agents::backend_pool;
+use charliebot_agents::backends::claude_code::claude_accounts::{self, ClaudeAccountState};
+use charliebot_agents::backends::claude_code::claude_config;
+use charliebot_agents::backends::claude_code::claude_lifecycle::ClaudeCodeLifecycle;
+use charliebot_agents::backends::claude_code::claude_relay;
+use charliebot_agents::backends::claude_code::login_dirs;
+use charliebot_core::config::{BackendOption, ConfigSection};
 use charliebot_core::event_types;
-use charliebot_store::metadata::{TaskProfile, TaskSpec, TaskType};
+use charliebot_registry::backend::{BackendLifecycle, BackendTraits, ResumeStyle};
+use charliebot_registry::{RegisterFn, Registry, RegistryError};
+use charliebot_store::metadata::{TaskProfile, TaskSpec, TaskType, UtcDateTime};
 use charliebot_store::run_records::{self, RunKind, RunOutcome, RunOutcomeKind, RunRecord};
 use charliebot_store::write_faults::{self, Hit};
-use charliebot_store::{PatchTask, TaskCaller};
+use charliebot_store::{CreateTask, PatchTask, TaskCaller};
 use charliebot_tasks::task_sessions;
 use process_guard::ProcessGroupGuard;
 use recovery_support::{
-  BACKEND_ID, BACKEND_TYPE, Scripts, Stack, init_repo_with_origin, post_delegate, settle_until, synthetic_git,
-  synthetic_run,
+  BACKEND_ID, BACKEND_TYPE, Build, Scripts, Stack, init_repo_with_origin, post_delegate, scripted_type, settle_until,
+  synthetic_git, synthetic_run,
 };
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
+use time::{Duration as TimeDuration, OffsetDateTime};
 
 /// The Python `_task_spec` shape: a goal and a task type, no repository.
 fn spec(goal: &str, task_type: Option<TaskType>) -> TaskSpec {
@@ -736,5 +748,504 @@ async fn non_space_end_failure_lands_immediately_and_starts_no_retry() -> anyhow
   settle_until(|| Ok(stack.adapter.landing_retry_nodes().is_empty())).await?;
   let outcomes: Vec<Value> = stack.child_reports(&manager.id)?.iter().map(|report| report["outcome"].clone()).collect();
   assert!(!outcomes[1..].contains(&json!("failed")), "{outcomes:?}");
+  Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Pooled cc-claude launches
+// ---------------------------------------------------------------------------
+
+/// The pooled Fable option's id; its configuration names the `cc-claude` type under this id.
+const POOLED: &str = "claude-fable-5";
+
+thread_local! {
+  /// The Claude account state the next `cc-claude` registration drives. The test sets it on the thread that registers.
+  static CLAUDE_STATE: RefCell<Option<Arc<ClaudeAccountState>>> = const { RefCell::new(None) };
+}
+
+fn register_pooled_claude(registry: &mut Registry) -> Result<(), RegistryError> {
+  let state = CLAUDE_STATE
+    .with(|cell| cell.borrow_mut().take())
+    .expect("the test sets the Claude account state before registering");
+  registry.config_section(ConfigSection { key: "accounts", legacy_keys: &[], parse: claude_config::parse_accounts })?;
+  let lifecycle: Arc<dyn BackendLifecycle> = Arc::new(ClaudeCodeLifecycle::with_state(state));
+  let traits = BackendTraits {
+    resume: ResumeStyle::CliFlag,
+    restart_reattach: true,
+    preassigned_session_id: true,
+    family_prefix: None,
+    manual_compact: true,
+    compact_hint: None,
+  };
+  registry.backend_type(scripted_type("cc-claude", traits, Some(lifecycle)))
+}
+
+/// One pooled test's directories: the Claude config dirs of its accounts and the configuration's worktree root.
+struct Root {
+  dir: tempfile::TempDir,
+}
+
+impl Root {
+  fn new() -> anyhow::Result<Self> {
+    Ok(Self { dir: tempfile::tempdir()? })
+  }
+
+  fn path(&self) -> &Path {
+    self.dir.path()
+  }
+
+  fn claude(&self, label: &str) -> PathBuf {
+    self.path().join(format!("claude-{label}"))
+  }
+}
+
+/// Writes the Claude OAuth credentials that mark an account's login present.
+fn plant_credentials(config_dir: &Path) -> anyhow::Result<()> {
+  std::fs::create_dir_all(config_dir)?;
+  let credentials = json!({"claudeAiOauth": {"accessToken": "token", "refreshToken": "r"}});
+  std::fs::write(config_dir.join(login_dirs::CREDENTIALS_FILE), credentials.to_string())?;
+  Ok(())
+}
+
+/// A session transcript of `session_id` under a config dir, as a Claude Code login writes it.
+fn make_transcript(config_dir: &Path, session_id: &str) -> anyhow::Result<PathBuf> {
+  let transcript = config_dir.join("projects").join("slug").join(format!("{session_id}.jsonl"));
+  std::fs::create_dir_all(transcript.parent().expect("a transcript has a directory"))?;
+  std::fs::write(&transcript, "[]")?;
+  Ok(transcript)
+}
+
+/// The `config.yaml` of a pooled test: the Claude accounts with their credentials, the pools, and the one `cc-claude`
+/// option, which draws from the first pool when pools are given.
+fn pooled_config(root: &Root, labels: &[&str], pools: &[(&str, &[&str])], token: &str) -> anyhow::Result<String> {
+  let mut text = format!("paths:\n  worktree_dir: {}\n", root.path().join("worktrees").display());
+  if !labels.is_empty() {
+    text.push_str("accounts:\n  claude:\n");
+    for label in labels {
+      plant_credentials(&root.claude(label))?;
+      text.push_str(&format!("    - label: {label}\n      config_dir: {}\n", root.claude(label).display()));
+    }
+    if !pools.is_empty() {
+      text.push_str("  claude_pools:\n");
+      for (name, members) in pools {
+        text.push_str(&format!("    {name}: [{}]\n", members.join(", ")));
+      }
+    }
+  }
+  let pool = pools.first().map(|(name, _)| format!("      account_pool: {name}\n")).unwrap_or_default();
+  text.push_str(&format!(
+    "backends:\n  options:\n    - id: {POOLED}\n      label: {POOLED}\n      type: cc-claude\n      model: test-model\n      token: {token}\n{pool}"
+  ));
+  Ok(text)
+}
+
+/// A stack over a pooled Claude configuration whose one `cc-claude` option runs `scripts` in order. Its lifecycle selects
+/// through `state`, which the test has observed its readings into.
+async fn pooled_stack(
+  root: &Root,
+  labels: &[&str],
+  pools: &[(&str, &[&str])],
+  scripts: &Scripts,
+  state: &Arc<ClaudeAccountState>,
+) -> anyhow::Result<Stack> {
+  CLAUDE_STATE.with(|cell| *cell.borrow_mut() = Some(Arc::clone(state)));
+  let config = pooled_config(root, labels, pools, scripts.token())?;
+  let stack = Stack::start_from_config(&config, ("test.pooled_claude", register_pooled_claude as RegisterFn)).await?;
+  stack.write_access_key()?;
+  Ok(stack)
+}
+
+/// A work run on a pooled cc-claude option, whose model is the option's test model (`_register_work_run`).
+fn pooled_run(session_id: &str, run_id: &str, backend: &str) -> RunRecord {
+  RunRecord {
+    backend: Some(backend.to_string()),
+    model: Some("test-model".to_string()),
+    ..synthetic_run(session_id, run_id, RunKind::Work)
+  }
+}
+
+/// A `/bin/sh` script that prints each event as one JSON line and then runs `tail`.
+fn script_lines(events: &[Value], tail: &str) -> String {
+  let mut commands = vec![":".to_string()];
+  for event in events {
+    let line = serde_json::to_string(event).expect("a JSON value serializes");
+    assert!(!line.contains('\''), "a scripted event line must not contain a single quote");
+    commands.push(format!("printf '%s\\n' '{line}'"));
+  }
+  commands.push(tail.to_string());
+  commands.join("; ")
+}
+
+/// A script that prints its events and exits with `code`.
+fn exits(events: &[Value], code: i32) -> String {
+  script_lines(events, &format!("exit {code}"))
+}
+
+/// A script that waits until `gate` exists before it runs, so the test can read the launch it was given first.
+fn gated(gate: &Path, script: String) -> String {
+  format!("while [ ! -f '{}' ]; do sleep 0.05; done; {script}", gate.display())
+}
+
+fn assistant_text(text: &str) -> Value {
+  json!({"type": event_types::ASSISTANT, "message": {"content": [{"type": "text", "text": text}]}})
+}
+
+fn result() -> Value {
+  json!({"type": event_types::RESULT, "subtype": "success", "is_error": false, "result": "done"})
+}
+
+/// A rate-limit observation: the five-hour window at `utilization`, resetting three hours from now.
+fn rate_limit_info(status: &str, utilization: f64) -> Value {
+  let resets_at = (OffsetDateTime::now_utc() + TimeDuration::hours(3)).unix_timestamp();
+  json!({
+    "status": status,
+    "rateLimitType": "five_hour",
+    "resetsAt": resets_at,
+    "unifiedWindows": {"five_hour": {"utilization": utilization}, "seven_day": {"utilization": 0.3}},
+  })
+}
+
+fn rate_limit(status: &str, utilization: f64) -> Value {
+  json!({"type": event_types::RATE_LIMIT_EVENT, "rate_limit_info": rate_limit_info(status, utilization)})
+}
+
+/// The label of the account a launch was given (`claude_account`).
+fn account_label(build: &Build) -> Option<&str> {
+  build.launch.backend_kwargs.get("claude_account")?.get("label")?.as_str()
+}
+
+/// The config dir of the account a launch was given (`claude_account`).
+fn account_dir(build: &Build) -> Option<PathBuf> {
+  Some(PathBuf::from(build.launch.backend_kwargs.get("claude_account")?.get("config_dir")?.as_str()?))
+}
+
+/// The events of a run's events log, one per line.
+fn run_log(stack: &Stack, session_id: &str, run_id: &str) -> anyhow::Result<Vec<Value>> {
+  let path = stack.store().run_dir(session_id, run_id).join(run_records::RUN_EVENTS_NAME);
+  std::fs::read_to_string(path)?
+    .lines()
+    .filter(|line| !line.trim().is_empty())
+    .map(|line| Ok(serde_json::from_str(line)?))
+    .collect()
+}
+
+/// `test_task_execution.py::test_pooled_fresh_worker_launches_build_on_the_selected_account`: a fresh work Run on a pooled
+/// cc-claude option launches on the account the pool selects, and its build receives that account. The review that the
+/// implement Run's success spawns is the review-chain task's, so the case stops at the work launch.
+#[tokio::test]
+async fn pooled_fresh_worker_launches_build_on_the_selected_account() -> anyhow::Result<()> {
+  // Python: tests/test_task_execution.py::test_pooled_fresh_worker_launches_build_on_the_selected_account.
+  let root = Root::new()?;
+  let state = Arc::new(ClaudeAccountState::new());
+  let scripts = Scripts::new(vec![exits(&[assistant_text("work done"), result()], 0)]);
+  let stack = pooled_stack(&root, &["main", "ext-1", "ext-2"], &[], &scripts, &state).await?;
+  let worker = stack.node("w", None, TaskProfile::Worker, Some(spec("ship it", Some(TaskType::Implement)))).await?;
+  register_run(&stack, pooled_run(&worker.id, "run-work", POOLED), "ship it").await?;
+  stack.adapter.launch(&worker.id, "run-work")?;
+
+  assert_eq!(stack.wait_terminal(&worker.id, "run-work").await?, RunOutcomeKind::Success);
+  assert_eq!(account_label(&scripts.builds()[0]), Some("main"), "the work launch takes the account the pool selects");
+  Ok(())
+}
+
+/// `test_task_execution.py::test_pooled_worker_launch_selects_inside_the_option_pool`: with pools defined, the launch picks
+/// an account of its option's pool. The untouched beta accounts hold more headroom than the alpha member, and stay unused.
+#[tokio::test]
+async fn pooled_worker_launch_selects_inside_the_option_pool() -> anyhow::Result<()> {
+  // Python: tests/test_task_execution.py::test_pooled_worker_launch_selects_inside_the_option_pool.
+  let root = Root::new()?;
+  let state = Arc::new(ClaudeAccountState::new());
+  // main sits at half a window; across all accounts an untouched beta account wins.
+  claude_accounts::observe_rate_limit(&state, "main", &rate_limit_info("allowed", 0.50), None);
+  let scripts = Scripts::new(vec![exits(&[assistant_text("done"), result()], 0)]);
+  let pools: &[(&str, &[&str])] = &[("alpha", &["main"]), ("beta", &["ext-1", "ext-2"])];
+  let stack = pooled_stack(&root, &["main", "ext-1", "ext-2"], pools, &scripts, &state).await?;
+  let worker = stack.node("w", None, TaskProfile::Worker, Some(spec("ship it", Some(TaskType::QuickEdit)))).await?;
+  register_run(&stack, pooled_run(&worker.id, "run-pool", POOLED), "ship it").await?;
+  stack.adapter.launch(&worker.id, "run-pool")?;
+
+  assert_eq!(stack.wait_terminal(&worker.id, "run-pool").await?, RunOutcomeKind::Success);
+  assert_eq!(account_label(&scripts.builds()[0]), Some("main"), "the launch stays inside the option's pool");
+  let unpooled =
+    claude_accounts::select(&state, &stack.cfg, Some("test-model"), &HashSet::new(), None, None, None, 0.0)?
+      .expect("an account is available");
+  assert_ne!(unpooled.label, "main", "without the pool, the untouched beta account would win");
+  Ok(())
+}
+
+/// `test_task_execution.py::test_unpooled_fresh_worker_launch_carries_no_account`, over an empty pool: the cc-claude option
+/// runs on no account, so its launch carries no `claude_account` and runs on the default login.
+#[tokio::test]
+async fn unpooled_fresh_worker_launch_carries_no_account_on_an_empty_pool() -> anyhow::Result<()> {
+  // Python: tests/test_task_execution.py::test_unpooled_fresh_worker_launch_carries_no_account.
+  let root = Root::new()?;
+  let state = Arc::new(ClaudeAccountState::new());
+  let scripts = Scripts::new(vec![exits(&[assistant_text("done"), result()], 0)]);
+  let stack = pooled_stack(&root, &[], &[], &scripts, &state).await?;
+  let worker = stack.node("w", None, TaskProfile::Worker, Some(spec("ship it", Some(TaskType::QuickEdit)))).await?;
+  register_run(&stack, pooled_run(&worker.id, "run-work", POOLED), "ship it").await?;
+  stack.adapter.launch(&worker.id, "run-work")?;
+
+  assert_eq!(stack.wait_terminal(&worker.id, "run-work").await?, RunOutcomeKind::Success);
+  assert!(scripts.builds()[0].launch.backend_kwargs.get("claude_account").is_none());
+  Ok(())
+}
+
+/// `test_task_execution.py::test_unpooled_fresh_worker_launch_carries_no_account`, over a non-Claude backend: the launch
+/// carries no `claude_account` either.
+#[tokio::test]
+async fn unpooled_fresh_worker_launch_carries_no_account_on_a_non_claude_backend() -> anyhow::Result<()> {
+  // Python: tests/test_task_execution.py::test_unpooled_fresh_worker_launch_carries_no_account.
+  let scripts = Scripts::new(vec![result_script("done")]);
+  let stack = scripted_stack(&scripts).await?;
+  let worker = stack.node("w", None, TaskProfile::Worker, Some(spec("ship it", Some(TaskType::QuickEdit)))).await?;
+  register_run(&stack, work_run(&worker.id, "run-work", None), "ship it").await?;
+  stack.adapter.launch(&worker.id, "run-work")?;
+
+  assert_eq!(stack.wait_terminal(&worker.id, "run-work").await?, RunOutcomeKind::Success);
+  assert!(scripts.builds()[0].launch.backend_kwargs.get("claude_account").is_none());
+  Ok(())
+}
+
+/// `test_task_execution.py::test_pool_exhausted_launch_fails_the_run_with_evidence_and_no_process`: with no account left to
+/// select, the Run fails before any process starts. Its events log carries the pool-exhausted error, which names the
+/// earliest reset, and the error event is flagged as quota exhaustion.
+#[tokio::test]
+async fn pool_exhausted_launch_fails_the_run_with_evidence_and_no_process() -> anyhow::Result<()> {
+  // Python: tests/test_task_execution.py::test_pool_exhausted_launch_fails_the_run_with_evidence_and_no_process.
+  let root = Root::new()?;
+  let state = Arc::new(ClaudeAccountState::new());
+  for label in ["main", "ext-1", "ext-2"] {
+    claude_accounts::observe_rate_limit(&state, label, &rate_limit_info("rejected", 1.0), None);
+  }
+  let scripts = Scripts::new(vec![]);
+  let stack = pooled_stack(&root, &["main", "ext-1", "ext-2"], &[], &scripts, &state).await?;
+  let worker = stack.node("w", None, TaskProfile::Worker, Some(spec("ship it", None))).await?;
+  register_run(&stack, pooled_run(&worker.id, "run-x", POOLED), "ship it").await?;
+  stack.adapter.launch(&worker.id, "run-x")?;
+
+  assert_eq!(stack.wait_terminal(&worker.id, "run-x").await?, RunOutcomeKind::Failed);
+  let run = stack.store().read_run_sync(&worker.id, "run-x")?.expect("the run is recorded");
+  assert!(run.pid.is_none(), "no process started");
+  assert!(scripts.builds().is_empty(), "the backend was never invoked");
+  let error = error_text(&stack, &worker.id, "run-x")?;
+  assert!(error.contains(claude_relay::POOL_EXHAUSTED_PHRASE), "{error}");
+  assert!(error.contains("earliest reset") && error.contains("UTC"), "{error}");
+  assert_eq!(error, claude_relay::pool_exhausted_message(&state, &stack.cfg, None, None)?);
+  let flags: Vec<Value> = run_log(&stack, &worker.id, "run-x")?
+    .iter()
+    .filter(|event| event["type"] == event_types::ERROR)
+    .map(|event| event[event_types::QUOTA_EXHAUSTED].clone())
+    .collect();
+  assert_eq!(flags, [json!(true)], "the refusal's flag rides the launch error event");
+  Ok(())
+}
+
+/// `test_task_execution.py::test_rejected_first_process_relays_to_another_pool_account_and_succeeds`: a Run launched through
+/// task execution relays like a directly driven worker. The first process's rejected reading moves the run to the account
+/// with the most headroom, on the same Claude conversation, and the Run ends successfully.
+#[tokio::test]
+async fn rejected_first_process_relays_to_another_pool_account_and_succeeds() -> anyhow::Result<()> {
+  // Python: tests/test_task_execution.py::test_rejected_first_process_relays_to_another_pool_account_and_succeeds.
+  let root = Root::new()?;
+  let state = Arc::new(ClaudeAccountState::new());
+  let gate = root.path().join("gate");
+  let scripts = Scripts::new(vec![
+    gated(&gate, exits(&[assistant_text("halfway"), rate_limit("rejected", 1.0)], 1)),
+    exits(&[assistant_text("done after relay"), result()], 0),
+  ]);
+  let stack = pooled_stack(&root, &["main", "ext-1", "ext-2"], &[], &scripts, &state).await?;
+  let worker = stack.node("w", None, TaskProfile::Worker, Some(spec("ship it", Some(TaskType::QuickEdit)))).await?;
+  register_run(&stack, pooled_run(&worker.id, "run-relay", POOLED), "ship it").await?;
+  stack.adapter.launch(&worker.id, "run-relay")?;
+
+  // The fresh launch binds a Claude conversation of its own: its transcript exists under the first account before the
+  // first process is released to reach its rejection, so the relay has a transcript to move.
+  settle_until(|| Ok(!scripts.builds().is_empty())).await?;
+  let first = scripts.builds()[0].clone();
+  let conversation = first.launch.backend_kwargs["claude_session_id"]
+    .as_str()
+    .expect("a fresh launch pins its conversation")
+    .to_string();
+  make_transcript(&account_dir(&first).expect("the first launch names its account"), &conversation)?;
+  settle_until(|| Ok(stack.store().read_run_sync(&worker.id, "run-relay")?.is_some_and(|run| run.pid.is_some())))
+    .await?;
+  let first_pid = stack.store().read_run_sync(&worker.id, "run-relay")?.and_then(|run| run.pid);
+  std::fs::write(&gate, "")?;
+
+  assert_eq!(stack.wait_terminal(&worker.id, "run-relay").await?, RunOutcomeKind::Success);
+  let run = stack.store().read_run_sync(&worker.id, "run-relay")?.expect("the run is recorded");
+  assert_eq!(run.exit_code, Some(0));
+  assert_ne!(run.pid, first_pid, "the Run's identity follows the relay's second process");
+  let builds = scripts.builds();
+  assert_eq!([account_label(&builds[0]), account_label(&builds[1])], [Some("main"), Some("ext-1")]);
+  let moved = root.claude("ext-1").join("projects").join("slug").join(format!("{conversation}.jsonl"));
+  assert!(moved.is_file(), "the transcript moved with the run to {}", moved.display());
+  Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Quota failover over the backend pool
+// ---------------------------------------------------------------------------
+
+/// The review feedback an interrupted run answered, bound to its revision batch.
+const REVIEW_FEEDBACK: &str = "Review: the rename missed the call in foo.py";
+
+/// A stack with three options over one scripted type, `fake`, `fake2` and `fake3`, and the pool `fake2` then `fake3`.
+async fn failover_stack(scripts: &Scripts) -> anyhow::Result<Stack> {
+  let options = ["fake", "fake2", "fake3"]
+    .map(|id| BackendOption { model: "fake-model".to_string(), ..scripts.option(id, BACKEND_TYPE) })
+    .to_vec();
+  let stack = Stack::start_with(options, vec!["fake2".to_string(), "fake3".to_string()]).await?;
+  stack.write_access_key()?;
+  Ok(stack)
+}
+
+/// A worker on `fake2` whose run ended on quota exhaustion, with its revision batch bound (`_interrupted_worker_run`). A
+/// pool-chosen node carries the pool's backend-from-pool flag. Returns the worker's id and the run's id.
+async fn interrupted_worker_run(
+  stack: &Stack,
+  parent: &str,
+  task_type: TaskType,
+  from_pool: bool,
+) -> anyhow::Result<(String, String)> {
+  let worker = stack
+    .store()
+    .create_task(
+      CreateTask {
+        request_id: "worker".to_string(),
+        task_parent_id: Some(parent.to_string()),
+        profile: TaskProfile::Worker,
+        task: Some(spec("do the work", Some(task_type))),
+        name: Some("Synthetic worker".to_string()),
+        backend: Some("fake2".to_string()),
+        group: None,
+        session_id: None,
+      },
+      TaskCaller::Operator,
+      Map::new(),
+    )
+    .await?;
+  if from_pool {
+    let guard = stack.store().control_lock().await;
+    let flag = Map::from_iter([("backend_from_pool".to_string(), json!(true))]);
+    stack.store().update_task_slot_fields_locked(&guard, &worker.id, backend_pool::METADATA_OWNER, flag).await?;
+  }
+  let feedback = stack.dispatch.admit_input(&worker.id, event_types::USER, REVIEW_FEEDBACK, "user", json!({})).await?;
+  let input = feedback["id"].as_str().expect("an admitted input has an id").to_string();
+  let record = RunRecord {
+    backend: Some("fake2".to_string()),
+    model: Some("fake-model".to_string()),
+    input_event_ids: vec![input],
+    ..synthetic_run(&worker.id, "run-revision", RunKind::Work)
+  };
+  register_run(stack, record, "do the work").await?;
+  let failed = RunOutcome { exit_code: Some(1), ..RunOutcome::new(RunOutcomeKind::Failed) };
+  stack.dispatch.finish_run(&worker.id, "run-revision", failed).await?;
+  Ok((worker.id, "run-revision".to_string()))
+}
+
+/// The failover of a pool-chosen worker whose run ended on quota exhaustion: the member cools, the node moves to the next
+/// member, and a retry run on it binds the interrupted run's input batch and launches with the feedback it answers.
+async fn quota_failure_fails_over_to_the_next_member(task_type: TaskType) -> anyhow::Result<()> {
+  let scripts = Scripts::new(vec![result_script("retry done"), result_script("report noted")]);
+  let stack = failover_stack(&scripts).await?;
+  let manager = stack.node("root", None, TaskProfile::Manager, None).await?;
+  let (worker, run) = interrupted_worker_run(&stack, &manager.id, task_type, true).await?;
+  stack.adapter.record_quota_failure_for_test(&worker, &run, None);
+  stack.adapter.after_worker_run_for_test(&worker, &run, "failed").await?;
+
+  let interrupted =
+    stack.run_records(&worker)?.into_iter().find(|record| record.id == run).expect("the run is recorded");
+  let retry = stack
+    .run_records(&worker)?
+    .into_iter()
+    .find(|record| record.retry_of_run_id.as_deref() == Some(run.as_str()))
+    .expect("the failover registers a retry run");
+  assert_eq!(retry.backend.as_deref(), Some("fake3"));
+  assert_eq!(retry.model.as_deref(), Some("fake-model"));
+  assert_eq!(retry.input_event_ids, interrupted.input_event_ids);
+  assert_eq!(stack.wait_terminal(&worker, &retry.id).await?, RunOutcomeKind::Success);
+  let first = scripts.builds().into_iter().next().expect("the retry launched a process");
+  assert!(first.prompt_contains(REVIEW_FEEDBACK), "the retry's launch names the feedback it answers");
+  assert_eq!(stack.store().load_task_meta(&worker).await?.backend, "fake3", "the node moved");
+  let failures: Vec<Value> =
+    stack.child_reports(&manager.id)?.into_iter().filter(|report| report["outcome"] == "failed").collect();
+  assert!(failures.is_empty(), "a failover sends no failure report: {failures:?}");
+  let report = backend_pool::backend_pool(&stack.features)?.recovery_report(&stack.cfg);
+  assert!(report.contains("fake2 cooling until"), "the failed member cooled: {report}");
+  Ok(())
+}
+
+/// `test_task_execution.py::test_quota_failure_on_a_pool_node_fails_over_to_the_next_member`, over an implement task.
+#[tokio::test]
+async fn quota_failure_on_an_implement_pool_node_fails_over_to_the_next_member() -> anyhow::Result<()> {
+  // Python: tests/test_task_execution.py::test_quota_failure_on_a_pool_node_fails_over_to_the_next_member.
+  quota_failure_fails_over_to_the_next_member(TaskType::Implement).await
+}
+
+/// `test_task_execution.py::test_quota_failure_on_a_pool_node_fails_over_to_the_next_member`, over a quick edit.
+#[tokio::test]
+async fn quota_failure_on_a_quick_edit_pool_node_fails_over_to_the_next_member() -> anyhow::Result<()> {
+  // Python: tests/test_task_execution.py::test_quota_failure_on_a_pool_node_fails_over_to_the_next_member.
+  quota_failure_fails_over_to_the_next_member(TaskType::QuickEdit).await
+}
+
+/// `test_task_execution.py::test_quota_failure_on_a_pool_node_fails_over_to_the_next_member`, over a script run.
+#[tokio::test]
+async fn quota_failure_on_a_script_run_pool_node_fails_over_to_the_next_member() -> anyhow::Result<()> {
+  // Python: tests/test_task_execution.py::test_quota_failure_on_a_pool_node_fails_over_to_the_next_member.
+  quota_failure_fails_over_to_the_next_member(TaskType::ScriptRun).await
+}
+
+/// `test_task_execution.py::test_quota_failure_on_a_pool_node_fails_over_to_the_next_member`, over a verify task.
+#[tokio::test]
+async fn quota_failure_on_a_verify_pool_node_fails_over_to_the_next_member() -> anyhow::Result<()> {
+  // Python: tests/test_task_execution.py::test_quota_failure_on_a_pool_node_fails_over_to_the_next_member.
+  quota_failure_fails_over_to_the_next_member(TaskType::Verify).await
+}
+
+/// `test_task_execution.py::test_a_pinned_worker_is_not_failed_over_and_its_member_is_not_cooled`: a node whose delegation
+/// named its backend keeps the quota behavior of before: the failure is reported, nothing retries, and the pool is untouched.
+#[tokio::test]
+async fn a_pinned_worker_is_not_failed_over_and_its_member_is_not_cooled() -> anyhow::Result<()> {
+  // Python: tests/test_task_execution.py::test_a_pinned_worker_is_not_failed_over_and_its_member_is_not_cooled.
+  let scripts = Scripts::new(vec![result_script("report noted")]);
+  let stack = failover_stack(&scripts).await?;
+  let manager = stack.node("root", None, TaskProfile::Manager, None).await?;
+  let (worker, run) = interrupted_worker_run(&stack, &manager.id, TaskType::Implement, false).await?;
+  stack.adapter.record_quota_failure_for_test(&worker, &run, None);
+  stack.adapter.after_worker_run_for_test(&worker, &run, "failed").await?;
+
+  assert!(stack.run_records(&worker)?.iter().all(|record| record.retry_of_run_id.is_none()), "no retry starts");
+  let reports = stack.child_reports(&manager.id)?;
+  assert_eq!(reports.len(), 1, "the failure is reported once: {reports:?}");
+  assert_eq!(reports[0]["outcome"], "failed");
+  let report = backend_pool::backend_pool(&stack.features)?.recovery_report(&stack.cfg);
+  assert!(report.contains("fake2 not cooling"), "the pinned member is not cooled: {report}");
+  Ok(())
+}
+
+/// `test_task_execution.py::test_failover_with_every_member_cooling_reports_each_recovery_time`: with the next member
+/// cooling too, no retry starts, and the parent's report names each member's recovery time.
+#[tokio::test]
+async fn failover_with_every_member_cooling_reports_each_recovery_time() -> anyhow::Result<()> {
+  // Python: tests/test_task_execution.py::test_failover_with_every_member_cooling_reports_each_recovery_time.
+  let scripts = Scripts::new(vec![result_script("report noted")]);
+  let stack = failover_stack(&scripts).await?;
+  let manager = stack.node("root", None, TaskProfile::Manager, None).await?;
+  let (worker, run) = interrupted_worker_run(&stack, &manager.id, TaskType::Implement, true).await?;
+  let fake3_reset = UtcDateTime::parse("2030-01-02T03:04:00+00:00").expect("a fixed instant parses");
+  backend_pool::backend_pool(&stack.features)?.cool("fake3", Some(fake3_reset));
+  let fake2_reset = UtcDateTime::parse("2030-01-02T02:00:00+00:00").expect("a fixed instant parses");
+  stack.adapter.record_quota_failure_for_test(&worker, &run, Some(fake2_reset));
+  stack.adapter.after_worker_run_for_test(&worker, &run, "failed").await?;
+
+  assert!(stack.run_records(&worker)?.iter().all(|record| record.retry_of_run_id.is_none()), "no retry starts");
+  let reports = stack.child_reports(&manager.id)?;
+  assert_eq!(reports.len(), 1, "the failure is reported once: {reports:?}");
+  let summary = reports[0]["summary"].as_str().expect("the report names the recovery times");
+  assert!(summary.contains("fake2 cooling until 2030-01-02T02:00"), "{summary}");
+  assert!(summary.contains("fake3 cooling until 2030-01-02T03:04"), "{summary}");
   Ok(())
 }

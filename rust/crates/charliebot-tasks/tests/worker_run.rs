@@ -866,6 +866,18 @@ fn pooled_run(session_id: &str, run_id: &str, backend: &str) -> RunRecord {
   }
 }
 
+/// Record a run's process group as soon as the spawn callback persists its pid.
+async fn track_run_pid(stack: &Stack, guard: &ProcessGroupGuard, session_id: &str, run_id: &str) -> anyhow::Result<()> {
+  settle_until(|| {
+    if let Some(pid) = stack.store().read_run_sync(session_id, run_id)?.and_then(|run| run.pid) {
+      guard.track(pid);
+      return Ok(true);
+    }
+    Ok(false)
+  })
+  .await
+}
+
 /// A `/bin/sh` script that prints each event as one JSON line and then runs `tail`.
 fn script_lines(events: &[Value], tail: &str) -> String {
   let mut commands = vec![":".to_string()];
@@ -931,22 +943,50 @@ fn run_log(stack: &Stack, session_id: &str, run_id: &str) -> anyhow::Result<Vec<
     .collect()
 }
 
-/// `test_task_execution.py::test_pooled_fresh_worker_launches_build_on_the_selected_account`: a fresh work Run on a
-/// pooled cc-claude option launches on the account the pool selects, and its build receives that account. The review
-/// that the implement Run's success spawns takes another member, so the case asserts the work launch.
+/// `test_task_execution.py::test_pooled_fresh_worker_launches_build_on_the_selected_account`: a fresh work Run and its
+/// spawned review on a pooled cc-claude option both launch on the account the pool selects.
 #[tokio::test]
 async fn pooled_fresh_worker_launches_build_on_the_selected_account() -> anyhow::Result<()> {
   // Python: tests/test_task_execution.py::test_pooled_fresh_worker_launches_build_on_the_selected_account.
   let root = Root::new()?;
   let state = Arc::new(ClaudeAccountState::new());
-  let scripts = Scripts::new(vec![exits(&[assistant_text("work done"), result()], 0)]);
+  let scripts = Scripts::new(vec![
+    exits(&[assistant_text("work done"), result()], 0),
+    exits(&[assistant_text("review ok"), result()], 0),
+  ]);
   let stack = pooled_stack(&root, &["main", "ext-1", "ext-2"], &[], &scripts, &state).await?;
+  let expected =
+    claude_accounts::select(&state, &stack.cfg, Some("test-model"), &HashSet::new(), None, None, None, 0.0)?
+      .expect("an account is available");
+  assert_eq!(expected.label, "main");
+  let guard = ProcessGroupGuard::new();
   let worker = stack.node("w", None, TaskProfile::Worker, Some(spec("ship it", Some(TaskType::Implement)))).await?;
   register_run(&stack, pooled_run(&worker.id, "run-work", POOLED), "ship it").await?;
   stack.adapter.launch(&worker.id, "run-work")?;
+  track_run_pid(&stack, &guard, &worker.id, "run-work").await?;
 
   assert_eq!(stack.wait_terminal(&worker.id, "run-work").await?, RunOutcomeKind::Success);
-  assert_eq!(account_label(&scripts.builds()[0]), Some("main"), "the work launch takes the account the pool selects");
+  let mut review_pid_tracked = false;
+  settle_until(|| {
+    let Some(review) = stack.run_records(&worker.id)?.into_iter().find(|run| run.kind == RunKind::Review) else {
+      return Ok(false);
+    };
+    if let Some(pid) = review.pid
+      && !review_pid_tracked
+    {
+      guard.track(pid);
+      review_pid_tracked = true;
+    }
+    Ok(run_records::terminal_outcome(&stack.run_events(&worker.id)?, &review.id)?.is_some())
+  })
+  .await?;
+  let builds = scripts.builds();
+  assert_eq!(builds.len(), 2, "the work and review each launch a build");
+  assert_eq!(
+    builds.iter().map(account_label).collect::<Vec<_>>(),
+    vec![Some(expected.label.as_str()), Some(expected.label.as_str())],
+    "both launches take the account claude_accounts.select returns"
+  );
   Ok(())
 }
 

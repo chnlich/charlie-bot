@@ -8,6 +8,7 @@
 mod process_guard;
 mod recovery_support;
 
+use std::collections::HashSet;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -197,6 +198,33 @@ async fn delegate_creates_one_worker_and_replays_the_same_run() -> anyhow::Resul
     .find(|event| event["type"] == event_types::TASK_DELEGATED && event["child_session_id"] == child_id)
     .expect("the parent's chat holds the delegated-task card");
   assert_eq!(card["thread_id"], run_id);
+
+  // The completed child report schedules manager turns in the background. Wait for the report to be consumed and
+  // track each turn's process so a test exit cannot leave one stopped at its launch gate.
+  let mut tracked_parent_runs = HashSet::new();
+  settle_until(|| {
+    let events = stack.run_events(&parent.id)?;
+    let runs = stack.run_records(&parent.id)?;
+    let mut all_runs_terminal = true;
+    for run in &runs {
+      if let Some(pid) = run.pid
+        && tracked_parent_runs.insert(run.id.clone())
+      {
+        guard.track(pid);
+      }
+      if run_records::terminal_outcome(&events, &run.id)?.is_none() {
+        all_runs_terminal = false;
+      }
+    }
+    let has_manager_turn = runs.iter().any(|run| run.kind == RunKind::ManagerTurn);
+    Ok(
+      has_manager_turn
+        && all_runs_terminal
+        && stack.dispatch.pending_inputs(&parent.id)?.is_empty()
+        && !stack.child_reports(&parent.id)?.is_empty(),
+    )
+  })
+  .await?;
   Ok(())
 }
 

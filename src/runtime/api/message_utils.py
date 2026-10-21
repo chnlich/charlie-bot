@@ -160,15 +160,21 @@ async def _worker_messages_page(
   return (messages, entry.projection.pending_draft, entry.projection.event_count, oldest_ordinal, has_more, entry)
 
 
-async def _worker_usage(tree: task_sessions.TaskTreeManager, session_id: str, run_kind: models.RunKind) -> dict | None:
+async def _worker_usage(
+    tree: task_sessions.TaskTreeManager,
+    session_id: str,
+    run_kind: models.RunKind,
+    backend_option: models.BackendOption | None = None,
+) -> dict | None:
   """Display usage folded over a worker node's Run transcript events.
 
   The header's context reading is the newest Run's last context_reading event;
   the same tier resolution the chat usage applies picks it from the projected
-  event list, and *run_kind* is the node's kind (``session_usage.usage_run_kind``).
+  event list. *backend_option* selects type-specific reading limits.
   """
   entry = await asyncio.to_thread(worker_transcript.load_worker_transcript, tree, session_id)
-  return await asyncio.to_thread(session_usage.resolve_events_usage, entry.events, run_kind)
+  return await asyncio.to_thread(
+      session_usage.resolve_events_usage, entry.events, run_kind, backend_option=backend_option)
 
 
 async def _messages_page(

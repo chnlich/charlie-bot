@@ -1612,7 +1612,14 @@ AGY_BACKEND_OPTION = backend_option(id="agy", label="Antigravity", type="antigra
 THREE_BACKEND_OPTIONS = [
     OPUS_BACKEND_OPTION,
     CODEX_BACKEND_OPTION,
-    backend_option(id="kimi-k2.5", label="Kimi", type="cc-kimi", model="kimi-k2.5", credential="test-kimi"),
+    backend_option(
+        id="kimi-k2.5",
+        label="Kimi",
+        type="cc-anthropic-compatible",
+        model="kimi-k2.5",
+        api_base="https://test.invalid",
+        context_window=409600,
+    ),
 ]
 
 PLAN_TEST_BACKEND_OPTIONS = [OPUS_BACKEND_OPTION]

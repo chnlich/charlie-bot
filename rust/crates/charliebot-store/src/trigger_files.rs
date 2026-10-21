@@ -88,6 +88,22 @@ mod tests {
   }
 
   #[test]
+  fn walk_returns_trigger_files_sorted_by_name() {
+    // Python: src/runtime/trigger_files.py:24
+    let root = tempfile::tempdir().unwrap();
+    for name in ["e.json", "b.json", "h.json", "a.json", "g.json", "c.json", "f.json", "d.json"] {
+      fs::write(root.path().join(name), "{}").unwrap();
+    }
+
+    let walked: Vec<String> = iter_trigger_file_stats(root.path())
+      .unwrap()
+      .iter()
+      .map(|(path, _)| path.file_name().unwrap().to_string_lossy().into_owned())
+      .collect();
+    assert_eq!(walked, ["a.json", "b.json", "c.json", "d.json", "e.json", "f.json", "g.json", "h.json"]);
+  }
+
+  #[test]
   fn directory_scan_errors_are_returned() {
     let root = tempfile::tempdir().unwrap();
     let missing = root.path().join("missing");

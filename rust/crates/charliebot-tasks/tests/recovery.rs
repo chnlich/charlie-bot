@@ -1099,7 +1099,7 @@ async fn reconcile_replays_an_already_delivered_blocked_report_without_duplicati
   let reports = child_reports(&stack, &manager.id)?;
   assert_eq!(reports.len(), 1);
   assert_eq!(reports[0]["outcome"], "blocked");
-  assert!(reports[0]["summary"].as_str().unwrap_or_default().contains("passed review but its branch did not land"));
+  assert!(reports[0]["summary"].as_str().unwrap_or_default().contains("ended without landing work run"));
   let worker_facts = stack.run_events(&worker.id)?.len();
   let manager_facts = stack.run_events(&manager.id)?.len();
 

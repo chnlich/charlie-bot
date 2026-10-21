@@ -311,7 +311,7 @@ run-record work is `S2`; task-tree runtime and feature-owned files remain with t
 ## Catch-up e44c9ccef open steps
 
 Each non-intermittent row is one failing Rust parity step from the all-stage run
-(1,014/1,122 steps matched). The intermittent row records its observed failure
+(1,016/1,122 steps matched). The intermittent row records its observed failure
 count and may pass in a run.
 
 | Scenario | Step | Stage | Main commit | Difference |
@@ -331,11 +331,17 @@ count and may pass in a run.
 | task-completion-routes | replay the input acknowledgement | agent-orchestration | `d401d9a2a` | The new task stop/completion events shift the returned or persisted event id by one. |
 | task-completion-routes | operator restores an archived ancestor chain | agent-orchestration | `d401d9a2a` | The new task stop/completion events shift the returned or persisted event id by one. |
 | task-completion-routes | server shutdown and fake-agent cleanup | agent-orchestration | `3cd98aa21`, `2fa0a4ce2` | Claude launch argv and env lag Python's per-run-kind tools, settings, and advisor disablement. |
+| agent-orchestration-delegate | delegate one repo-less script run | agent-orchestration | `253e0dcbe`, `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
+| agent-orchestration-delegate | delegate a failing repo-less worker | agent-orchestration | `253e0dcbe`, `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
 | agent-orchestration-delegate | let the manager finish the failed-script report | agent-orchestration | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
+| agent-orchestration-delegate | delegate a failing implement worker on the local repository | agent-orchestration | `253e0dcbe`, `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
 | agent-orchestration-delegate | let the manager finish the failed-repository report | agent-orchestration | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
 | agent-orchestration-delegate | server shutdown and fake-agent cleanup | agent-orchestration | `3cd98aa21`, `2fa0a4ce2` | Claude launch argv and env lag Python's per-run-kind tools, settings, and advisor disablement. |
 | manager-turn-execution-and-routes | server shutdown and fake-agent cleanup | agent-orchestration | `3cd98aa21`, `2fa0a4ce2` | Claude launch argv and env lag Python's per-run-kind tools, settings, and advisor disablement. |
 | manager-turn-opencode | wait for the OpenCode manager run to finish | agent-orchestration | `d401d9a2a` | Python persists the completed OpenCode manager run directory; Rust leaves no matching run directory. |
+| implement-review-chain | delegate a repo task whose unchanged branch already landed on origin main | agent-orchestration | `253e0dcbe`, `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
+| implement-review-chain | delegate a repo-less implement task | agent-orchestration | `253e0dcbe`, `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
+| implement-review-chain | delegate a task whose reviewer exhausts the configured pool | agent-orchestration | `253e0dcbe`, `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
 | implement-review-chain | server shutdown and fake-agent cleanup | agent-orchestration | `3cd98aa21`, `2fa0a4ce2` | Claude launch argv and env lag Python's per-run-kind tools, settings, and advisor disablement. |
 | agent-orchestration-session-message | server shutdown and fake-agent cleanup | agent-orchestration | `3cd98aa21`, `2fa0a4ce2` | Claude launch argv and env lag Python's per-run-kind tools, settings, and advisor disablement. |
 | cron-routes-and-ticks | wait for the manual cron firing report | triggers-cron-improve | `f77008f66` | Python persists the scheduled task's canonical `task_spec.md` and references; Rust omits them. |
@@ -359,17 +365,21 @@ count and may pass in a run.
 | handover-admitted-input | server shutdown and fake-agent cleanup · candidate-to-python | agent-orchestration | `3cd98aa21`, `2fa0a4ce2` | Claude launch argv and env lag Python's per-run-kind tools, settings, and advisor disablement. |
 | handover-drain | server shutdown and fake-agent cleanup · candidate-to-python | agent-orchestration | `3cd98aa21`, `2fa0a4ce2` | Claude launch argv and env lag Python's per-run-kind tools, settings, and advisor disablement. |
 | handover-improve | server shutdown and fake-agent cleanup · python-to-candidate | triggers-cron-improve | `3cd98aa21`, `2fa0a4ce2` | Claude launch argv and env lag Python's per-run-kind tools, settings, and advisor disablement. |
+| handover-improve | wait for the iteration at its first gate · candidate-to-python | triggers-cron-improve | `253e0dcbe`, `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
 | handover-improve | server shutdown and fake-agent cleanup · candidate-to-python | triggers-cron-improve | `3cd98aa21`, `2fa0a4ce2` | Claude launch argv and env lag Python's per-run-kind tools, settings, and advisor disablement. |
 | handover-manager-turn | server shutdown and fake-agent cleanup · candidate-to-python | agent-orchestration | `3cd98aa21`, `2fa0a4ce2` | Claude launch argv and env lag Python's per-run-kind tools, settings, and advisor disablement. |
 | handover-review-run | server shutdown and fake-agent cleanup · python-to-candidate | agent-orchestration | `3cd98aa21`, `2fa0a4ce2` | Claude launch argv and env lag Python's per-run-kind tools, settings, and advisor disablement. |
+| handover-review-run | delegate an implement task whose reviewer remains alive through handover · candidate-to-python | agent-orchestration | `253e0dcbe`, `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
 | handover-review-run | release the adopted reviewer · candidate-to-python | agent-orchestration | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
 | handover-review-run | server shutdown and fake-agent cleanup · candidate-to-python | agent-orchestration | `3cd98aa21`, `2fa0a4ce2` | Claude launch argv and env lag Python's per-run-kind tools, settings, and advisor disablement. |
 | handover-stop-request | hand over the durable interrupted outcome · python-to-candidate | agent-orchestration | `d401d9a2a` | Python records the terminated run's `-9` exit code and interrupted outcome; Rust leaves the exit code unset. Intermittent: it failed in two of four all-stage runs and passed in seven agent-orchestration-only runs. |
 | handover-stop-request | request the stop of the gated run; the agent ignores the signal · candidate-to-python | agent-orchestration | `d401d9a2a` | Python escalates an ignored stop, terminates the agent, and records the interrupted outcome and exit code; Rust does not. |
 | handover-stop-request | hand over the durable interrupted outcome · candidate-to-python | agent-orchestration | `d401d9a2a` | Python escalates an ignored stop, terminates the agent, and records the interrupted outcome and exit code; Rust does not. |
 | handover-stop-request | server shutdown and fake-agent cleanup · candidate-to-python | agent-orchestration | `3cd98aa21`, `2fa0a4ce2` | Claude launch argv and env lag Python's per-run-kind tools, settings, and advisor disablement. |
+| handover-worker-run | wait for the worker agent at its live gate · candidate-to-python | agent-orchestration | `253e0dcbe`, `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
 | handover-worker-run | release the adopted worker agent · candidate-to-python | agent-orchestration | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
 | handover-worker-run | server shutdown and fake-agent cleanup · candidate-to-python | agent-orchestration | `3cd98aa21`, `2fa0a4ce2` | Claude launch argv and env lag Python's per-run-kind tools, settings, and advisor disablement. |
+| improve-loop-reports | wait for both iteration reports to reach the busy parent | triggers-cron-improve | `253e0dcbe`, `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
 | improve-loop-reports | server shutdown and fake-agent cleanup | triggers-cron-improve | `3cd98aa21`, `2fa0a4ce2` | Claude launch argv and env lag Python's per-run-kind tools, settings, and advisor disablement. |
 | skeleton | page with a session, bearer key | server-skeleton | `ae5555da7` | Python records the router's quota failover message; Rust retains the old prompt-overlay warning. |
 | skeleton | page with a session, no key | server-skeleton | `ae5555da7` | Python records the router's quota failover message; Rust retains the old prompt-overlay warning. |

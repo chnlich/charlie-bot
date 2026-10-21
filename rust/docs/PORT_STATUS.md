@@ -21,6 +21,12 @@ first write of the run's terminal record: the stopper records the interrupted ou
 (`runs.py:1036-1047`). The `interrupted-run-exit-code` rule of `handover-stop-request` accepts `null` and `-9` in that
 run's record and compares every other code (see `rust/parity/README.md`).
 
+The order of an interrupted run's `master_done` and `run_finished` is undefined for a related reason. The stop request's
+SIGKILL path records the interrupted finish (`runs.py:1225`), which appends `run_finished` at `runs.py:1114-1124`, while
+the master queue writes `master_done` after the agent exits (`master_cc_queue.py:298-309`). The
+`either_order_of_adjacent_events` rule of `handover-stop-request` accepts either order for that run's pair only, pinned
+by the run id its stop request captured (see `rust/parity/README.md`).
+
 | Method | Path | Stage | Status | Note |
 | --- | --- | --- | --- | --- |
 | GET, HEAD | `/openapi.json` | api-docs | not ported | No client reads this route. The Rust server answers it as an unknown path. |
@@ -317,14 +323,12 @@ run-record work is `S2`; task-tree runtime and feature-owned files remain with t
 
 ## Catch-up 78e0d10e2 open steps
 
-Each row is one failing Rust parity step of the all-stage run on this head. The Rust run with the debug binary
-matches 1,160 of 1,160 steps; the single row left fails in 1 of 4 runs, so it leaves 1,159 of 1,160 on the runs where
-it fails. The Python-vs-Python run matches 1,097 of 1,097. The row is the Intermittent row: its prompt difference from
-`8b85da74d` is fixed, and its chat-event difference stays for a later task.
+Each row is one failing Rust parity step of the all-stage run on this head. The `handover-stop-request` row is gone:
+its interrupted run's chat-event order is accepted by that scenario's `either_order_of_adjacent_events` rule (see
+`rust/parity/README.md`).
 
 | Scenario | Step | Stage | Commits | Difference |
 | --- | --- | --- | --- | --- |
-| handover-stop-request | hand over the durable interrupted outcome · candidate-to-python | agent-orchestration | f6ae0c844 (inferred) | Intermittent. In 1 of 4 runs the interrupted outcome's chat events also differ: the candidate writes run_finished before master_done, the baseline the reverse. Attributed to f6ae0c844 by code reading; not bisected. |
 
 ## Catch-up 78e0d10e2 ignored Cargo tests
 

@@ -147,3 +147,8 @@ steps:
     path: /static/js/no-such-file.js
     auth: none
     expect_status: 404
+  - name: router feature static mount
+    method: GET
+    path: /static/features/router/
+    auth: none
+    expect_status: 500

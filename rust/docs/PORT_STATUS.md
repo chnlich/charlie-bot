@@ -345,7 +345,7 @@ count and may pass in a run.
 | features-harness-slack | allowed app mention starts its Slack thread session | features | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
 | features-harness-slack | release summon agent after its result | features | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
 | features-web-reply-audit | wait for the audit nudge | features | `854286c2a` | Python's web reply nudge includes the reason and full-reply instruction; Rust still sends the short prompt. |
-| features-web-reply-audit | server shutdown and fake-agent cleanup | features | `854286c2a` | The fake-agent spawn capture differs because the audit nudge still uses the short Rust prompt; see the failing wait row. |
+| features-web-reply-audit | server shutdown and fake-agent cleanup | features | `3cd98aa21`, `2fa0a4ce2`, `854286c2a` | The fake-agent spawn capture differs because the audit nudge still uses the short Rust prompt; see the failing wait row. |
 | features-web-reply | a status set of now alone | features | `854286c2a` | Python's status-set response adds `now_chars` and `now_over_budget`; Rust omits both. |
 | features-web-reply | a status set with a null goal | features | `854286c2a` | Python's status-set response adds `now_chars` and `now_over_budget`; Rust omits both. |
 | features-web-reply | the status read lists the open waiting descendant only | features | `854286c2a` | Python's status response includes open direct children with a Now item; Rust omits `children`. |

@@ -1,7 +1,353 @@
+//! Timed, same-model compaction for idle Claude master sessions.
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
+
+use anyhow::Context;
+use charliebot_core::config::{BackendOption, CharlieBotConfig};
+use charliebot_registry::Registry;
+use charliebot_registry::backend::{Env, LaunchArgs};
+use charliebot_store::metadata::UtcDateTime;
+use charliebot_store::run_records::RunKind;
+use futures_util::future::BoxFuture;
+use serde_json::{Map, json};
+use tokio::sync::watch;
+use tokio::task::JoinHandle;
+use tokio::time::sleep;
+
+use super::{EXCLUDE_DYNAMIC_SECTIONS_FLAG, claude_accounts, claude_compaction, claude_config};
+
+pub const IDLE_DELAY: Duration = Duration::from_secs(54 * 60);
+
+pub type InspectFn = Arc<dyn Fn(UtcDateTime) -> anyhow::Result<Option<IdleCandidate>> + Send + Sync>;
+pub type BusyFn = Arc<dyn Fn(&str) -> anyhow::Result<bool> + Send + Sync>;
+pub type RunFn = Arc<dyn Fn() -> BoxFuture<'static, anyhow::Result<()>> + Send + Sync>;
+
+/// Facts used by the idle-compaction decision.
+#[derive(Clone, Debug)]
+pub struct IdleFacts {
+  pub archived: bool,
+  pub backend_unchanged: bool,
+  pub turn_busy: bool,
+  pub armed_at: Option<UtcDateTime>,
+  pub last_request_at: Option<UtcDateTime>,
+  pub compacted_after_request: bool,
+  pub context_tokens: Option<i64>,
+  pub resume_id: Option<String>,
+  pub transcript_present: bool,
+}
+
+/// One refreshed candidate and the operation to run if every gate holds.
+pub struct IdleCandidate {
+  pub facts: IdleFacts,
+  pub idle_tokens: u64,
+  pub run: RunFn,
+}
+
+/// Session identity and turn kind used to construct the resumed Claude process.
+pub struct IdleProcessIdentity {
+  pub session_id: String,
+  pub cc_session_id: String,
+  pub run_kind: RunKind,
+}
+
+/// Session-specific timer callbacks supplied by the task layer.
+#[derive(Clone)]
+pub struct IdleTimerInput {
+  pub session_id: String,
+  pub armed_at: UtcDateTime,
+  pub inspect: InspectFn,
+  pub is_busy: BusyFn,
+}
+
+struct Timer {
+  task: JoinHandle<()>,
+  input: IdleTimerInput,
+}
+
+struct Running {
+  id: u64,
+  done: watch::Receiver<bool>,
+}
+
+#[derive(Default)]
+struct State {
+  timers: HashMap<String, Timer>,
+  running: HashMap<String, Running>,
+  next_running_id: u64,
+}
+
+/// Owns pending idle timers and running compactions.
+#[derive(Clone, Default)]
+pub struct IdleCompaction {
+  state: Arc<Mutex<State>>,
+}
+
+impl IdleCompaction {
+  pub fn new() -> Self {
+    Self::default()
+  }
+
+  /// The server-wide idle timer owner used by lifecycle placement and the task queue.
+  pub fn shared() -> &'static Self {
+    static IDLE: OnceLock<IdleCompaction> = OnceLock::new();
+    IDLE.get_or_init(IdleCompaction::new)
+  }
+
+  /// Replace any timer for this session and schedule the supplied timer after `delay`.
+  pub async fn arm_for_test(&self, input: IdleTimerInput, delay: Duration) {
+    self.arm_after(input, delay);
+  }
+
+  /// Replace any timer for this session and schedule it for the supplied request time plus `IDLE_DELAY`.
+  pub fn arm(&self, input: IdleTimerInput) {
+    let remaining = input.armed_at.into_inner() + time::Duration::seconds(IDLE_DELAY.as_secs() as i64)
+      - UtcDateTime::now().into_inner();
+    let delay = Duration::from_nanos(remaining.whole_nanoseconds().max(0) as u64);
+    self.arm_after(input, delay);
+  }
+
+  fn arm_after(&self, input: IdleTimerInput, delay: Duration) {
+    let session_id = input.session_id.clone();
+    let stored_input = input.clone();
+    self.disarm(&session_id);
+    let manager = self.clone();
+    let task_session_id = session_id.clone();
+    let (start, ready) = tokio::sync::oneshot::channel();
+    let task = tokio::spawn(async move {
+      ready.await.expect("idle timer is released after its handle is stored");
+      sleep(delay).await;
+      match manager.fire_at_inner(&task_session_id, UtcDateTime::now(), true) {
+        Ok(Some(compaction)) => {
+          if let Err(error) = compaction.await {
+            tracing::error!(target: "charliebot_agents", session = %task_session_id, error = %error, "claude_idle_compaction_task_join_failed");
+          }
+        }
+        Ok(None) => {}
+        Err(error) => {
+          tracing::error!(target: "charliebot_agents", session = %task_session_id, error = %error, "claude_idle_compaction_trigger_failed");
+        }
+      }
+    });
+    self
+      .state
+      .lock()
+      .expect("idle compaction state mutex is not poisoned")
+      .timers
+      .insert(session_id, Timer { task, input: stored_input });
+    start.send(()).expect("idle timer task is waiting for its start signal");
+  }
+
+  /// Disarm a pending timer. A running compaction keeps going.
+  pub fn disarm(&self, session_id: &str) {
+    if let Some(timer) =
+      self.state.lock().expect("idle compaction state mutex is not poisoned").timers.remove(session_id)
+    {
+      timer.task.abort();
+    }
+  }
+
+  /// Evaluate a timer at a supplied instant; return the spawned compaction when it qualifies.
+  pub fn fire_at(&self, session_id: &str, now: UtcDateTime) -> anyhow::Result<Option<JoinHandle<()>>> {
+    self.fire_at_inner(session_id, now, false)
+  }
+
+  fn fire_at_inner(
+    &self,
+    session_id: &str,
+    now: UtcDateTime,
+    fired_by_timer: bool,
+  ) -> anyhow::Result<Option<JoinHandle<()>>> {
+    let (timer, already_running) = {
+      let mut state = self.state.lock().expect("idle compaction state mutex is not poisoned");
+      (state.timers.remove(session_id), state.running.contains_key(session_id))
+    };
+    let Some(timer) = timer else {
+      return Ok(None);
+    };
+    if !fired_by_timer {
+      timer.task.abort();
+    }
+    if already_running {
+      return Ok(None);
+    }
+    let Some(mut candidate) = (timer.input.inspect)(now)? else {
+      return Ok(None);
+    };
+    candidate.facts.turn_busy = false;
+    if !should_compact(&candidate.facts, candidate.idle_tokens, now) {
+      return Ok(None);
+    }
+    if (timer.input.is_busy)(session_id)? {
+      return Ok(None);
+    }
+    candidate.facts.turn_busy = false;
+    if !should_compact(&candidate.facts, candidate.idle_tokens, now) {
+      return Ok(None);
+    }
+    let run = Arc::clone(&candidate.run);
+    let (done_sender, done_receiver) = watch::channel(false);
+    let run_id = {
+      let mut state = self.state.lock().expect("idle compaction state mutex is not poisoned");
+      if state.running.contains_key(session_id) {
+        return Ok(None);
+      }
+      state.next_running_id += 1;
+      let id = state.next_running_id;
+      state.running.insert(session_id.to_string(), Running { id, done: done_receiver });
+      id
+    };
+    let manager = self.clone();
+    let session_id = session_id.to_string();
+    let task = tokio::spawn(async move {
+      if let Err(error) = run().await {
+        tracing::error!(target: "charliebot_agents", session = %session_id, error = %error, "claude_idle_compaction_run_failed");
+      }
+      done_sender.send_replace(true);
+      let mut state = manager.state.lock().expect("idle compaction state mutex is not poisoned");
+      if state.running.get(&session_id).is_some_and(|running| running.id == run_id) {
+        state.running.remove(&session_id);
+      }
+    });
+    Ok(Some(task))
+  }
+
+  /// Cancel a pending timer and wait for a running compaction without cancelling that compaction.
+  pub async fn settle_for_turn(&self, session_id: &str) -> anyhow::Result<()> {
+    self.disarm(session_id);
+    let Some(mut done) = self
+      .state
+      .lock()
+      .expect("idle compaction state mutex is not poisoned")
+      .running
+      .get(session_id)
+      .map(|running| running.done.clone())
+    else {
+      return Ok(());
+    };
+    while !*done.borrow() {
+      done.changed().await.context("waiting for idle compaction to finish")?;
+    }
+    Ok(())
+  }
+
+  pub fn timer_count(&self) -> usize {
+    self.state.lock().expect("idle compaction state mutex is not poisoned").timers.len()
+  }
+
+  pub fn running_count(&self) -> usize {
+    self.state.lock().expect("idle compaction state mutex is not poisoned").running.len()
+  }
+}
+
+/// Whether the last request still merits a same-model compaction.
+pub fn should_compact(facts: &IdleFacts, idle_tokens: u64, now: UtcDateTime) -> bool {
+  let Some(last_request_at) = facts.last_request_at else {
+    return false;
+  };
+  !facts.archived
+    && facts.backend_unchanged
+    && !facts.turn_busy
+    && facts.armed_at == Some(last_request_at)
+    && now.into_inner() - last_request_at.into_inner() < time::Duration::hours(1)
+    && !facts.compacted_after_request
+    && facts.context_tokens.is_some_and(|tokens| u64::try_from(tokens).is_ok_and(|tokens| tokens >= idle_tokens))
+    && facts.resume_id.as_ref().is_some_and(|value| !value.is_empty())
+    && facts.transcript_present
+}
+
+/// Pick the selected Claude account or the process login directory for an unpooled session.
+pub fn account_for_session(
+  cfg: &CharlieBotConfig,
+  option: &BackendOption,
+  account_label: Option<&str>,
+  default_dir: &Path,
+) -> anyhow::Result<Option<claude_config::ClaudeAccount>> {
+  if let Some(account) = claude_accounts::account_by_label(cfg, account_label)? {
+    return Ok(Some(account));
+  }
+  if claude_accounts::is_pooled(option, cfg) {
+    return Ok(None);
+  }
+  Ok(Some(claude_config::ClaudeAccount {
+    label: "default".to_string(),
+    config_dir: default_dir.to_string_lossy().into_owned(),
+  }))
+}
+
+/// Build the session's resumed Claude command and its selected-account environment.
+pub fn build_idle_process(
+  registry: Arc<Registry>,
+  cfg: &CharlieBotConfig,
+  option: &BackendOption,
+  account: &claude_config::ClaudeAccount,
+  identity: IdleProcessIdentity,
+  base_env: &Env,
+) -> anyhow::Result<(Vec<String>, Env)> {
+  let mut backend_kwargs = Map::new();
+  backend_kwargs
+    .insert("claude_account".to_string(), json!({"label": account.label, "config_dir": account.config_dir}));
+  backend_kwargs.insert("run_kind".to_string(), json!(identity.run_kind));
+  let launch = LaunchArgs {
+    extra_flags: vec!["--resume".to_string(), identity.cc_session_id, EXCLUDE_DYNAMIC_SECTIONS_FLAG.to_string()],
+    cgroup_session_id: Some(identity.session_id.clone()),
+    backend_kwargs,
+    ..LaunchArgs::default()
+  };
+  let built = crate::backend_types::build_backend(Arc::clone(&registry), option, cfg, launch)?;
+  let argv = built.backend.build_command("/compact\n")?;
+  let child_env = crate::launch_loop::build_child_env(
+    base_env,
+    &registry,
+    crate::launch_loop::ChildEnvPolicy::RegisteredEdits,
+    Some(&identity.session_id),
+    &Env::new(),
+  );
+  let env = built.backend.prepare_env(child_env)?;
+  Ok((argv, env))
+}
+
+/// Arguments and account metadata for one idle compaction.
+pub struct IdleRunOptions {
+  pub config_dir: String,
+  pub cwd: PathBuf,
+  pub pre_tokens: Option<i64>,
+  pub argv: Vec<String>,
+  pub env: Env,
+  pub trigger: String,
+  pub failure_trigger: Option<String>,
+  pub model: String,
+  pub family: String,
+}
+
+/// Describe the idle event and model identity alongside the built command.
+pub fn idle_run_options(
+  option: &BackendOption,
+  account: &claude_config::ClaudeAccount,
+  cwd: &Path,
+  pre_tokens: Option<i64>,
+  argv: Vec<String>,
+  env: Env,
+) -> IdleRunOptions {
+  IdleRunOptions {
+    config_dir: account.config_dir.clone(),
+    cwd: cwd.to_path_buf(),
+    pre_tokens,
+    argv,
+    env,
+    trigger: "idle".to_string(),
+    failure_trigger: Some("idle".to_string()),
+    model: option.model.clone(),
+    family: claude_compaction::model_family(Some(&option.model)),
+  }
+}
+
 #[cfg(test)]
 mod tests {
-  use std::sync::atomic::{AtomicUsize, Ordering};
   use std::sync::Arc;
+  use std::sync::atomic::{AtomicUsize, Ordering};
   use std::time::Duration;
 
   use charliebot_core::config::CharlieBotConfig;
@@ -11,7 +357,7 @@ mod tests {
   use charliebot_store::run_records::RunKind;
   use serde_json::{Map, json};
 
-  use crate::backends::claude_code::{claude_config, claude_lifecycle::EXCLUDE_DYNAMIC_SECTIONS_FLAG};
+  use crate::backends::claude_code::claude_config;
 
   use super::*;
 
@@ -106,7 +452,8 @@ mod tests {
   #[test]
   fn every_idle_compaction_gate_rejects_its_python_case() {
     let now = at("2026-09-06T20:00:00Z");
-    let cases: [(&str, fn(&mut IdleFacts)); 11] = [
+    type GateCase = (&'static str, fn(&mut IdleFacts));
+    let cases: [GateCase; 11] = [
       ("archived", |facts| facts.archived = true),
       ("backend_switched", |facts| facts.backend_unchanged = false),
       ("turn_running_or_queued", |facts| facts.turn_busy = true),
@@ -139,11 +486,7 @@ mod tests {
   // Python: tests/test_claude_idle_compaction.py:176.
   #[test]
   fn every_idle_compaction_gate_true_starts_a_qualifying_candidate() {
-    assert!(should_compact(
-      &base_facts(),
-      IDLE_TOKENS,
-      at("2026-09-06T20:00:00Z"),
-    ));
+    assert!(should_compact(&base_facts(), IDLE_TOKENS, at("2026-09-06T20:00:00Z"),));
   }
 
   // Python: tests/test_claude_idle_compaction.py:186.
@@ -152,7 +495,8 @@ mod tests {
     let root = tempfile::tempdir().unwrap();
     let (registry, cfg) = config(root.path(), true);
     let option = cfg.backends.options[0].clone();
-    let account = claude_config::ClaudeAccount { label: "acct-a".to_string(), config_dir: "/synthetic/account-a".to_string() };
+    let account =
+      claude_config::ClaudeAccount { label: "acct-a".to_string(), config_dir: "/synthetic/account-a".to_string() };
     let base_env = Env::from([
       ("HOME".to_string(), "/synthetic/home".to_string()),
       ("PATH".to_string(), "/synthetic/bin:/usr/bin:/bin".to_string()),
@@ -162,29 +506,25 @@ mod tests {
       &cfg,
       &option,
       &account,
-      SESSION_ID,
-      CC_SESSION_ID,
-      RunKind::ManagerTurn,
+      IdleProcessIdentity {
+        session_id: SESSION_ID.to_string(),
+        cc_session_id: CC_SESSION_ID.to_string(),
+        run_kind: RunKind::ManagerTurn,
+      },
       &base_env,
     )
     .unwrap();
 
     let mut backend_kwargs = Map::new();
-    backend_kwargs.insert(
-      "claude_account".to_string(),
-      json!({"label": account.label, "config_dir": account.config_dir}),
-    );
+    backend_kwargs
+      .insert("claude_account".to_string(), json!({"label": account.label, "config_dir": account.config_dir}));
     backend_kwargs.insert("run_kind".to_string(), json!(RunKind::ManagerTurn));
     let expected = crate::backend_types::build_backend(
       Arc::clone(&registry),
       &option,
       &cfg,
       LaunchArgs {
-        extra_flags: vec![
-          "--resume".to_string(),
-          CC_SESSION_ID.to_string(),
-          EXCLUDE_DYNAMIC_SECTIONS_FLAG.to_string(),
-        ],
+        extra_flags: vec!["--resume".to_string(), CC_SESSION_ID.to_string(), EXCLUDE_DYNAMIC_SECTIONS_FLAG.to_string()],
         cgroup_session_id: Some(SESSION_ID.to_string()),
         backend_kwargs,
         ..LaunchArgs::default()
@@ -203,18 +543,8 @@ mod tests {
   async fn a_second_arm_keeps_one_timer_and_replaces_the_first() {
     let idle = IdleCompaction::new();
     let runs = Arc::new(AtomicUsize::new(0));
-    idle
-      .arm_for_test(
-        input(base_facts(), false, Arc::clone(&runs), None, None),
-        Duration::from_millis(10),
-      )
-      .await;
-    idle
-      .arm_for_test(
-        input(base_facts(), false, runs.clone(), None, None),
-        Duration::from_secs(3600),
-      )
-      .await;
+    idle.arm_for_test(input(base_facts(), false, Arc::clone(&runs), None, None), Duration::from_millis(10)).await;
+    idle.arm_for_test(input(base_facts(), false, runs.clone(), None, None), Duration::from_secs(3600)).await;
     tokio::time::sleep(Duration::from_millis(25)).await;
 
     assert_eq!(idle.timer_count(), 1);
@@ -226,9 +556,7 @@ mod tests {
   async fn a_turn_start_cancels_the_pending_idle_timer() {
     let idle = IdleCompaction::new();
     let runs = Arc::new(AtomicUsize::new(0));
-    idle
-      .arm_for_test(input(base_facts(), false, Arc::clone(&runs), None, None), Duration::from_secs(3600))
-      .await;
+    idle.arm_for_test(input(base_facts(), false, Arc::clone(&runs), None, None), Duration::from_secs(3600)).await;
 
     idle.settle_for_turn(SESSION_ID).await.unwrap();
     tokio::task::yield_now().await;
@@ -250,10 +578,7 @@ mod tests {
         Duration::from_secs(3600),
       )
       .await;
-    let compaction = idle
-      .fire_at(SESSION_ID, at("2026-09-06T19:55:00Z"))
-      .unwrap()
-      .expect("all idle conditions hold");
+    let compaction = idle.fire_at(SESSION_ID, at("2026-09-06T19:55:00Z")).unwrap().expect("all idle conditions hold");
     started.notified().await;
     let waiting_idle = idle.clone();
     let turn = tokio::spawn(async move { waiting_idle.settle_for_turn(SESSION_ID).await.unwrap() });
@@ -270,9 +595,7 @@ mod tests {
   async fn a_queued_turn_makes_the_idle_trigger_skip() {
     let idle = IdleCompaction::new();
     let runs = Arc::new(AtomicUsize::new(0));
-    idle
-      .arm_for_test(input(base_facts(), true, Arc::clone(&runs), None, None), Duration::from_secs(3600))
-      .await;
+    idle.arm_for_test(input(base_facts(), true, Arc::clone(&runs), None, None), Duration::from_secs(3600)).await;
 
     assert!(idle.fire_at(SESSION_ID, at("2026-09-06T19:55:00Z")).unwrap().is_none());
     assert_eq!(runs.load(Ordering::SeqCst), 0);
@@ -285,12 +608,11 @@ mod tests {
     let root = tempfile::tempdir().unwrap();
     let (_registry, cfg) = config(root.path(), true);
     let option = cfg.backends.options[0].clone();
-    let account = claude_config::ClaudeAccount { label: "acct-a".to_string(), config_dir: "/synthetic/account-a".to_string() };
+    let account =
+      claude_config::ClaudeAccount { label: "acct-a".to_string(), config_dir: "/synthetic/account-a".to_string() };
     let run = idle_run_options(
       &option,
       &account,
-      SESSION_ID,
-      CC_SESSION_ID,
       std::path::Path::new("/synthetic/session"),
       Some(120_000),
       vec!["claude".to_string()],
@@ -321,9 +643,11 @@ mod tests {
       &cfg,
       &option,
       &account,
-      SESSION_ID,
-      CC_SESSION_ID,
-      RunKind::ManagerTurn,
+      IdleProcessIdentity {
+        session_id: SESSION_ID.to_string(),
+        cc_session_id: CC_SESSION_ID.to_string(),
+        run_kind: RunKind::ManagerTurn,
+      },
       &base_env,
     )
     .unwrap();

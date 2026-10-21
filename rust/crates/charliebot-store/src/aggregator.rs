@@ -446,8 +446,14 @@ fn render_builtin(event_type: &str, event: &Value) -> StoreResult<Option<Value>>
     }
     event_types::CONTEXT_COMPACTED => render_context_compacted(event)?,
     event_types::CONTEXT_COMPACT_FAILED => {
+      let trigger = event.get("trigger").filter(|value| is_truthy(value)).and_then(Value::as_str);
       let note = model_note(event);
-      let head = if note.is_empty() { "Compaction failed".to_string() } else { format!("Compaction {note} failed") };
+      let mut head = trigger.map_or_else(|| "Compaction".to_string(), |trigger| format!("Compaction ({trigger})"));
+      if !note.is_empty() {
+        head.push(' ');
+        head.push_str(&note);
+      }
+      head.push_str(" failed");
       let error = event.get("error").filter(|value| is_truthy(value));
       let content = error.map_or(head.clone(), |error| format!("{head} — {}", python_string(error)));
       json!({"role": "system", "kind": event_types::CONTEXT_COMPACT_FAILED, "content": content})

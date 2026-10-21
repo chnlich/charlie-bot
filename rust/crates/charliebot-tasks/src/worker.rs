@@ -836,7 +836,7 @@ async fn handle_compaction_events(sink: &RunSink, event: &Value) -> anyhow::Resu
     Some("status") if event.get("compact_result").and_then(Value::as_str) == Some("failed") => {
       let error = event.get("compact_error").and_then(Value::as_str);
       tracing::info!(target: "charliebot_tasks", thread = %sink.channel, error = ?error, "cc_context_compact_failed");
-      sink.persist_and_broadcast(event_builders::make_context_compact_failed_event(error, None)).await
+      sink.persist_and_broadcast(event_builders::make_context_compact_failed_event(error, None, None)).await
     }
     _ => Ok(()),
   }

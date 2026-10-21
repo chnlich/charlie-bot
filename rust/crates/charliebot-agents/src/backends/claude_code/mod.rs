@@ -3,10 +3,9 @@
 pub mod claude_accounts;
 pub mod claude_compaction;
 pub mod claude_config;
+pub mod claude_idle_compaction;
 pub mod claude_launch;
 pub mod claude_lifecycle;
-#[cfg(test)]
-mod claude_idle_compaction;
 pub mod claude_metadata;
 pub mod claude_relay;
 pub mod event_types;
@@ -23,9 +22,10 @@ pub mod usage_sweep;
 mod backend;
 
 pub use backend::{
-  AnthropicEndpointBackend, ClaudeCodeBackend, DISALLOWED_TOOLS_FLAG, HEADLESS_DISALLOWED_TOOLS,
-  INSTRUCTIONS_FILE_NAME, INSTRUCTIONS_WRITTEN_EVENT, SKIP_PERMISSIONS_FLAG, claude_child_env, claude_model_env,
-  claude_reading_limits, claude_reading_limits_from, headless_claude_env, out_of_family_served_models,
+  AnthropicEndpointBackend, ClaudeCodeBackend, DISALLOWED_TOOLS_FLAG, EXCLUDE_DYNAMIC_SECTIONS_FLAG,
+  HEADLESS_DISALLOWED_TOOLS, INSTRUCTIONS_FILE_NAME, INSTRUCTIONS_WRITTEN_EVENT, SKIP_PERMISSIONS_FLAG,
+  claude_child_env, claude_model_env, claude_reading_limits, claude_reading_limits_from, headless_claude_env,
+  out_of_family_served_models,
 };
 
 use std::path::PathBuf;

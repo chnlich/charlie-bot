@@ -16,4 +16,3 @@ fn idle_compaction_failure_line_names_its_trigger() {
 
   assert_eq!(deltas[0]["message"]["content"], "Compaction (idle) by Opus failed — boom");
 }
-

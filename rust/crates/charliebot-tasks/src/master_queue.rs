@@ -986,6 +986,7 @@ mod tests {
   use charliebot_core::config::BackendOption;
   use charliebot_core::credentials::load_credentials;
   use charliebot_core::hot_reload::HotReload;
+  use charliebot_registry::backend::Env;
   use charliebot_registry::backend::UsageResolver;
   use charliebot_registry::context::StartupState;
   use charliebot_registry::store_hooks;
@@ -996,6 +997,7 @@ mod tests {
 
   use super::*;
   use crate::master_state::{TaskFinishCallback, TaskRunBinding};
+  use crate::test_fixtures;
 
   struct SyntheticUsageResolver;
 
@@ -1331,6 +1333,246 @@ mod tests {
       assert_eq!(*first_observed.lock().unwrap(), [true], "delay {delay}");
       assert_eq!(*second_observed.lock().unwrap(), [true], "delay {delay}");
       assert!(busy_interval_closes(&features, &session_id).await, "delay {delay}");
+    }
+  }
+
+  const CC_SESSION_ID: &str = "11111111-2222-3333-4444-555555555555";
+
+  /// One idle compaction the fake runner received, with the fields the trigger path passes.
+  #[derive(Clone, Debug)]
+  struct RecordedRun {
+    argv: Vec<String>,
+    env: Env,
+    cwd: PathBuf,
+    config_dir: PathBuf,
+    account_label: String,
+    pre_tokens: Option<i64>,
+    trigger: String,
+    failure_trigger: Option<String>,
+    model: String,
+    family: String,
+  }
+
+  /// A compaction runner that records each run and reports a successful compaction.
+  fn recording_runner(runs: Arc<Mutex<Vec<RecordedRun>>>) -> CompactionRunFn {
+    runner(move |run| {
+      runs.lock().unwrap().push(RecordedRun {
+        argv: run.argv.clone(),
+        env: run.env.clone(),
+        cwd: run.cwd.to_path_buf(),
+        config_dir: run.config_dir.to_path_buf(),
+        account_label: run.account_label.to_string(),
+        pre_tokens: run.pre_tokens,
+        trigger: run.trigger.to_string(),
+        failure_trigger: run.failure_trigger.map(str::to_string),
+        model: run.model.to_string(),
+        family: run.family.to_string(),
+      });
+      Box::pin(async {
+        Ok(claude_compaction::CompactionOutcome {
+          ok: true,
+          error: None,
+          models: Vec::new(),
+          post_tokens: Some(9_111),
+          cache_read_tokens: Some(118_000),
+        })
+      })
+    })
+  }
+
+  /// Wrap a closure as a compaction runner; the bound gives the closure its lifetime-generic signature.
+  fn runner<F>(run: F) -> CompactionRunFn
+  where
+    F: for<'a> Fn(
+        claude_compaction::CompactionRun<'a>,
+      ) -> BoxFuture<'a, anyhow::Result<claude_compaction::CompactionOutcome>>
+      + Send
+      + Sync
+      + 'static,
+  {
+    Arc::new(run)
+  }
+
+  /// Arm the trigger path for a session's last round, as `arm_idle_after_round` does at the round's end.
+  async fn arm_round(queue: &Arc<MasterQueue>, features: &Arc<FeatureContext>, session_id: &str, backend: &str) {
+    let persist: PersistAndBroadcastFn =
+      Arc::new(|_: String, _: Value| -> BoxFuture<'static, anyhow::Result<()>> { Box::pin(async { Ok(()) }) });
+    arm_idle_compaction(
+      Arc::clone(features),
+      Arc::downgrade(queue),
+      features.config.get().unwrap(),
+      session_id.to_string(),
+      backend.to_string(),
+      persist,
+    )
+    .await
+    .unwrap();
+  }
+
+  /// The idle command line of the session's Claude session on `account_label`, as the trigger path builds it.
+  fn expected_idle_argv(features: &FeatureContext, session_id: &str, account_label: &str) -> Vec<String> {
+    let cfg = features.config.get().unwrap();
+    let option = cfg.get_backend_option("fable").unwrap().clone();
+    let account = claude_accounts::account_by_label(&cfg, Some(account_label)).unwrap().unwrap();
+    let identity = claude_idle_compaction::IdleProcessIdentity {
+      session_id: session_id.to_string(),
+      cc_session_id: CC_SESSION_ID.to_string(),
+      run_kind: RunKind::ManagerTurn,
+    };
+    let (argv, _env) = claude_idle_compaction::build_idle_process(
+      Arc::clone(&features.registry),
+      &cfg,
+      &option,
+      &account,
+      identity,
+      &Env::new(),
+    )
+    .unwrap();
+    argv
+  }
+
+  // Python: tests/test_claude_idle_compaction.py:280.
+  #[tokio::test]
+  async fn a_turn_queued_before_the_trigger_registers_makes_it_skip() {
+    let root = tempfile::tempdir().unwrap();
+    let account_dir = root.path().join("account-a");
+    test_fixtures::write_transcript(&account_dir, CC_SESSION_ID);
+    let features = test_fixtures::claude_features(
+      &root.path().join("home"),
+      &test_fixtures::claude_config(Some(account_dir.as_path())),
+    );
+    let meta = test_fixtures::manager_session(
+      &features,
+      "a_turn_queued_before_the_trigger_registers_makes_it_skip",
+      "fable",
+      Some("acct-a"),
+      CC_SESSION_ID,
+    )
+    .await;
+    let request = UtcDateTime::now().to_python_string();
+    test_fixtures::append_reading_and_request(&features, &meta.id, 120_000, &request).await;
+    let runs = Arc::new(Mutex::new(Vec::new()));
+    let queue = Arc::new(MasterQueue::with_compaction_runner(
+      Arc::new(BackendPool::default()),
+      recording_runner(Arc::clone(&runs)),
+    ));
+    arm_round(&queue, &features, &meta.id, "fable").await;
+    let queued = test_fixtures::work_item(&queue, &features, meta.clone());
+    queue.state.lock().unwrap().session_queues.entry(meta.id.clone()).or_default().push_back(queued);
+
+    let started = claude_idle_compaction::IdleCompaction::shared().fire_at(&meta.id, UtcDateTime::now()).unwrap();
+
+    assert!(started.is_none());
+    assert!(runs.lock().unwrap().is_empty());
+    assert!(!claude_idle_compaction::IdleCompaction::shared().is_running(&meta.id));
+  }
+
+  // Python: tests/test_claude_idle_compaction.py:309.
+  #[tokio::test]
+  async fn the_trigger_path_starts_one_idle_run_on_the_sessions_own_command_line() {
+    let root = tempfile::tempdir().unwrap();
+    let account_dir = root.path().join("account-a");
+    test_fixtures::write_transcript(&account_dir, CC_SESSION_ID);
+    let features = test_fixtures::claude_features(
+      &root.path().join("home"),
+      &test_fixtures::claude_config(Some(account_dir.as_path())),
+    );
+    let meta = test_fixtures::manager_session(
+      &features,
+      "the_trigger_path_starts_one_idle_run_on_the_sessions_own_command_line",
+      "fable",
+      Some("acct-a"),
+      CC_SESSION_ID,
+    )
+    .await;
+    let request = UtcDateTime::now().to_python_string();
+    test_fixtures::append_reading_and_request(&features, &meta.id, 120_000, &request).await;
+    let runs = Arc::new(Mutex::new(Vec::new()));
+    let queue = Arc::new(MasterQueue::with_compaction_runner(
+      Arc::new(BackendPool::default()),
+      recording_runner(Arc::clone(&runs)),
+    ));
+    arm_round(&queue, &features, &meta.id, "fable").await;
+
+    let started = claude_idle_compaction::IdleCompaction::shared()
+      .fire_at(&meta.id, UtcDateTime::now())
+      .unwrap()
+      .expect("every idle condition holds");
+    started.await.unwrap();
+
+    let [run]: [RecordedRun; 1] = runs.lock().unwrap().clone().try_into().unwrap();
+    let cfg = features.config.get().unwrap();
+    assert_eq!(run.argv, expected_idle_argv(&features, &meta.id, "acct-a"));
+    assert_eq!(run.cwd, cfg.sessions_dir().join(&meta.id));
+    assert_eq!(run.config_dir, account_dir);
+    assert_eq!(run.pre_tokens, Some(120_000));
+    assert_eq!((run.trigger.as_str(), run.failure_trigger.as_deref()), ("idle", Some("idle")));
+    assert_eq!((run.model.as_str(), run.family.as_str()), ("claude-fable-5-1", "fable"));
+    assert!(!claude_idle_compaction::IdleCompaction::shared().is_running(&meta.id));
+  }
+
+  // Python: tests/test_claude_idle_compaction.py:341.
+  #[tokio::test]
+  async fn an_unpooled_session_uses_its_default_login_directory() {
+    let root = tempfile::tempdir().unwrap();
+    let default_dir = root.path().join("default-claude");
+    test_fixtures::write_transcript(&default_dir, CC_SESSION_ID);
+    let _login = ClaudeConfigDirGuard::set(&default_dir);
+    let features = test_fixtures::claude_features(&root.path().join("home"), &test_fixtures::claude_config(None));
+    let meta = test_fixtures::manager_session(
+      &features,
+      "an_unpooled_session_uses_its_default_login_directory",
+      "fable",
+      None,
+      CC_SESSION_ID,
+    )
+    .await;
+    let request = UtcDateTime::now().to_python_string();
+    test_fixtures::append_reading_and_request(&features, &meta.id, 120_000, &request).await;
+    let runs = Arc::new(Mutex::new(Vec::new()));
+    let queue = Arc::new(MasterQueue::with_compaction_runner(
+      Arc::new(BackendPool::default()),
+      recording_runner(Arc::clone(&runs)),
+    ));
+    arm_round(&queue, &features, &meta.id, "fable").await;
+
+    let started = claude_idle_compaction::IdleCompaction::shared()
+      .fire_at(&meta.id, UtcDateTime::now())
+      .unwrap()
+      .expect("every idle condition holds");
+    started.await.unwrap();
+
+    let [run]: [RecordedRun; 1] = runs.lock().unwrap().clone().try_into().unwrap();
+    assert_eq!(run.config_dir, default_dir);
+    assert_eq!(run.env.get(login_dirs::CLAUDE_CONFIG_DIR_ENV), Some(&default_dir.to_string_lossy().into_owned()));
+    assert_eq!(run.account_label, "default");
+  }
+
+  /// Sets `CLAUDE_CONFIG_DIR` for one test: the trigger path reads the process login directory from it.
+  struct ClaudeConfigDirGuard {
+    _lock: std::sync::MutexGuard<'static, ()>,
+    previous: Option<std::ffi::OsString>,
+  }
+
+  static CLAUDE_CONFIG_DIR_LOCK: Mutex<()> = Mutex::new(());
+
+  impl ClaudeConfigDirGuard {
+    fn set(dir: &Path) -> Self {
+      let lock = CLAUDE_CONFIG_DIR_LOCK.lock().expect("the login directory lock is not poisoned");
+      let previous = std::env::var_os(login_dirs::CLAUDE_CONFIG_DIR_ENV);
+      // SAFETY: every test that sets this variable holds CLAUDE_CONFIG_DIR_LOCK.
+      unsafe { std::env::set_var(login_dirs::CLAUDE_CONFIG_DIR_ENV, dir) };
+      Self { _lock: lock, previous }
+    }
+  }
+
+  impl Drop for ClaudeConfigDirGuard {
+    fn drop(&mut self) {
+      // SAFETY: the guard still holds CLAUDE_CONFIG_DIR_LOCK here.
+      match &self.previous {
+        Some(value) => unsafe { std::env::set_var(login_dirs::CLAUDE_CONFIG_DIR_ENV, value) },
+        None => unsafe { std::env::remove_var(login_dirs::CLAUDE_CONFIG_DIR_ENV) },
+      }
     }
   }
 }

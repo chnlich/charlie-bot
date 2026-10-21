@@ -25,6 +25,9 @@ pub mod upload;
 pub mod verify_trailer;
 pub mod worker;
 
+#[cfg(test)]
+mod test_fixtures;
+
 use charliebot_registry::{Registry, RegistryError};
 
 /// Register task orchestration routes and the execution startup step.

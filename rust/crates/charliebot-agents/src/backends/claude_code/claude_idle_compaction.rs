@@ -236,6 +236,26 @@ impl IdleCompaction {
   pub fn running_count(&self) -> usize {
     self.state.lock().expect("idle compaction state mutex is not poisoned").running.len()
   }
+
+  pub fn has_timer(&self, session_id: &str) -> bool {
+    self.state.lock().expect("idle compaction state mutex is not poisoned").timers.contains_key(session_id)
+  }
+
+  pub fn is_running(&self, session_id: &str) -> bool {
+    self.state.lock().expect("idle compaction state mutex is not poisoned").running.contains_key(session_id)
+  }
+
+  /// The abort handle of the session's pending timer, for a test that checks the timer was cancelled.
+  #[cfg(test)]
+  pub(crate) fn timer_abort_handle(&self, session_id: &str) -> Option<tokio::task::AbortHandle> {
+    self
+      .state
+      .lock()
+      .expect("idle compaction state mutex is not poisoned")
+      .timers
+      .get(session_id)
+      .map(|timer| timer.task.abort_handle())
+  }
 }
 
 /// Whether the last request still merits a same-model compaction.
@@ -337,6 +357,58 @@ pub fn idle_run_options(
     failure_trigger: Some("idle".to_string()),
     model: option.model.clone(),
     family: claude_compaction::model_family(Some(&option.model)),
+  }
+}
+
+/// Timer inputs for the idle compaction tests here and in the Claude lifecycle tests.
+#[cfg(test)]
+pub(crate) mod test_support {
+  use super::*;
+
+  const IDLE_TOKENS: u64 = 100_000;
+
+  /// An inspect that finds no candidate, so the timer's fire starts nothing.
+  pub fn no_candidate() -> InspectFn {
+    Arc::new(|_: UtcDateTime| -> anyhow::Result<Option<IdleCandidate>> { Ok(None) })
+  }
+
+  /// A timer whose fire reads no candidate and whose busy check reads idle.
+  pub fn timer_input(session_id: &str, armed_at: UtcDateTime, inspect: InspectFn) -> IdleTimerInput {
+    IdleTimerInput {
+      session_id: session_id.to_string(),
+      armed_at,
+      inspect,
+      is_busy: Arc::new(|_: &str| -> anyhow::Result<bool> { Ok(false) }),
+    }
+  }
+
+  /// A timer whose fire reads `facts` and starts `run` when every idle condition holds.
+  pub fn candidate_input(session_id: &str, facts: IdleFacts, busy: bool, run: RunFn) -> IdleTimerInput {
+    let armed_at = facts.armed_at.expect("a candidate's facts name the armed request");
+    let inspect = Arc::new(move |_: UtcDateTime| -> anyhow::Result<Option<IdleCandidate>> {
+      Ok(Some(IdleCandidate { facts: facts.clone(), idle_tokens: IDLE_TOKENS, run: Arc::clone(&run) }))
+    });
+    IdleTimerInput {
+      session_id: session_id.to_string(),
+      armed_at,
+      inspect,
+      is_busy: Arc::new(move |_: &str| -> anyhow::Result<bool> { Ok(busy) }),
+    }
+  }
+
+  /// Facts of a session whose last request is `request` and whose every idle condition holds.
+  pub fn armed_facts(request: UtcDateTime, resume_id: &str) -> IdleFacts {
+    IdleFacts {
+      archived: false,
+      backend_unchanged: true,
+      turn_busy: false,
+      armed_at: Some(request),
+      last_request_at: Some(request),
+      compacted_after_request: false,
+      context_tokens: Some(IDLE_TOKENS as i64),
+      resume_id: Some(resume_id.to_string()),
+      transcript_present: true,
+    }
   }
 }
 
@@ -490,50 +562,88 @@ mod tests {
     let idle = IdleCompaction::new();
     let runs = Arc::new(AtomicUsize::new(0));
     idle.arm_for_test(input(base_facts(), false, Arc::clone(&runs), None, None), Duration::from_millis(10)).await;
+    let first_task = idle.timer_abort_handle(SESSION_ID).expect("the first arm leaves a timer");
     idle.arm_for_test(input(base_facts(), false, runs.clone(), None, None), Duration::from_secs(3600)).await;
-    tokio::time::sleep(Duration::from_millis(25)).await;
+    tokio::task::yield_now().await;
 
     assert_eq!(idle.timer_count(), 1);
+    assert!(first_task.is_finished(), "the first timer is cancelled");
+    tokio::time::sleep(Duration::from_millis(25)).await;
     assert_eq!(runs.load(Ordering::SeqCst), 0);
   }
 
-  // Python: tests/test_claude_idle_compaction.py:237.
-  #[tokio::test]
-  async fn a_turn_start_cancels_the_pending_idle_timer() {
-    let idle = IdleCompaction::new();
-    let runs = Arc::new(AtomicUsize::new(0));
-    idle.arm_for_test(input(base_facts(), false, Arc::clone(&runs), None, None), Duration::from_secs(3600)).await;
-
-    idle.settle_for_turn(SESSION_ID).await.unwrap();
-    tokio::task::yield_now().await;
-
-    assert_eq!(idle.timer_count(), 0);
-    assert_eq!(runs.load(Ordering::SeqCst), 0);
+  /// A run that starts, waits for `release`, and then returns `outcome`.
+  fn gated_run(release: Arc<tokio::sync::Notify>, outcome: fn() -> anyhow::Result<()>) -> RunFn {
+    Arc::new(move || {
+      let release = Arc::clone(&release);
+      Box::pin(async move {
+        release.notified().await;
+        outcome()
+      }) as BoxFuture<'static, anyhow::Result<()>>
+    })
   }
 
-  // Python: tests/test_claude_idle_compaction.py:256.
+  fn fail_after_release() -> anyhow::Result<()> {
+    Err(anyhow::anyhow!("synthetic compaction failure"))
+  }
+
+  fn panic_after_release() -> anyhow::Result<()> {
+    panic!("synthetic compaction panic")
+  }
+
+  // Python: src/backends/claude_code/claude_idle_compaction.py:_compact, whose finally pops the running entry.
   #[tokio::test]
-  async fn a_turn_waits_until_the_running_idle_compaction_finishes() {
+  async fn a_failed_compaction_fails_the_turn_that_waits_and_the_next_turn_starts() {
     let idle = IdleCompaction::new();
-    let runs = Arc::new(AtomicUsize::new(0));
-    let started = Arc::new(tokio::sync::Notify::new());
     let release = Arc::new(tokio::sync::Notify::new());
+    let run = gated_run(Arc::clone(&release), fail_after_release);
     idle
-      .arm_for_test(
-        input(base_facts(), false, runs, Some(Arc::clone(&started)), Some(Arc::clone(&release))),
-        Duration::from_secs(3600),
-      )
+      .arm_for_test(test_support::candidate_input(SESSION_ID, base_facts(), false, run), Duration::from_secs(3600))
       .await;
     let compaction = idle.fire_at(SESSION_ID, at("2026-09-06T19:55:00Z")).unwrap().expect("all idle conditions hold");
-    started.notified().await;
     let waiting_idle = idle.clone();
-    let turn = tokio::spawn(async move { waiting_idle.settle_for_turn(SESSION_ID).await.unwrap() });
+    let turn = tokio::spawn(async move { waiting_idle.settle_for_turn(SESSION_ID).await });
     tokio::task::yield_now().await;
-    assert!(!turn.is_finished());
+    assert!(!turn.is_finished(), "the turn waits for the running compaction");
 
     release.notify_one();
-    turn.await.unwrap();
+    let settled = turn.await.unwrap();
     compaction.await.unwrap();
+
+    assert!(
+      settled.as_ref().is_err_and(|error| format!("{error:#}").contains("synthetic compaction failure")),
+      "the waiting turn ends with the compaction's error: {settled:?}"
+    );
+    assert!(!idle.is_running(SESSION_ID));
+    idle.settle_for_turn(SESSION_ID).await.unwrap();
+  }
+
+  // Python: src/backends/claude_code/claude_idle_compaction.py:_compact, whose finally pops the running entry.
+  #[tokio::test]
+  async fn a_panicking_compaction_fails_the_turn_that_waits_and_leaves_no_running_entry() {
+    let idle = IdleCompaction::new();
+    let release = Arc::new(tokio::sync::Notify::new());
+    let run = gated_run(Arc::clone(&release), panic_after_release);
+    idle
+      .arm_for_test(test_support::candidate_input(SESSION_ID, base_facts(), false, run), Duration::from_secs(3600))
+      .await;
+    let compaction = idle.fire_at(SESSION_ID, at("2026-09-06T19:55:00Z")).unwrap().expect("all idle conditions hold");
+    let waiting_idle = idle.clone();
+    let turn = tokio::spawn(async move { waiting_idle.settle_for_turn(SESSION_ID).await });
+    tokio::task::yield_now().await;
+    assert!(!turn.is_finished(), "the turn waits for the running compaction");
+
+    release.notify_one();
+    let settled = turn.await.unwrap();
+    let finished = compaction.await;
+
+    assert!(
+      settled.as_ref().is_err_and(|error| format!("{error:#}").contains("panicked")),
+      "the waiting turn ends with the panic: {settled:?}"
+    );
+    assert!(finished.is_ok(), "the compaction task ends normally: {finished:?}");
+    assert!(!idle.is_running(SESSION_ID));
+    idle.settle_for_turn(SESSION_ID).await.unwrap();
   }
 
   // Python: tests/test_claude_idle_compaction.py:280.

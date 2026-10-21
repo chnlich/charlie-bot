@@ -1028,11 +1028,17 @@ pub(crate) async fn resume_cc(item: &mut WorkItem) -> anyhow::Result<MasterRunOu
 
 #[cfg(test)]
 mod tests {
-  use charliebot_registry::backend::ResumeStyle;
+  use charliebot_agents::backends::claude_code::claude_accounts;
+  use charliebot_agents::backends::claude_code::claude_idle_compaction::{self, IdleProcessIdentity};
+  use charliebot_agents::backends::claude_code::claude_lifecycle::ClaudeCodeLifecycle;
+  use charliebot_registry::backend::{BackendLifecycle, ResumeStyle};
   use charliebot_store::metadata::TaskProfile;
 
   use super::*;
   use crate::run_support::route_resume_session_style;
+  use crate::test_fixtures;
+
+  const CC_SESSION_ID: &str = "11111111-2222-3333-4444-555555555555";
 
   #[test]
   fn resume_session_routing_matches_backend_style() {
@@ -1062,5 +1068,80 @@ mod tests {
     session_meta.lock().unwrap().backend = "synthetic-updated-backend".to_string();
 
     assert_eq!(context_state().await.unwrap(), (Some(17), None));
+  }
+
+  // Python: tests/test_claude_idle_compaction.py:186.
+  #[tokio::test]
+  async fn idle_argv_equals_the_master_turn_argv_for_the_same_option_and_account() {
+    let root = tempfile::tempdir().unwrap();
+    let account_dir = root.path().join("account-a");
+    test_fixtures::write_login(&account_dir);
+    test_fixtures::write_transcript(&account_dir, CC_SESSION_ID);
+    let features = test_fixtures::claude_features(
+      &root.path().join("home"),
+      &test_fixtures::claude_config(Some(account_dir.as_path())),
+    );
+    let queue = Arc::new(crate::master_queue::MasterQueue::new(Arc::new(
+      charliebot_agents::backend_pool::BackendPool::default(),
+    )));
+    let meta = test_fixtures::manager_session(
+      &features,
+      "idle_argv_equals_the_master_turn_argv_for_the_same_option_and_account",
+      "fable",
+      Some("acct-a"),
+      CC_SESSION_ID,
+    )
+    .await;
+    let cfg = features.config.get().unwrap();
+    let option = cfg.get_backend_option("fable").unwrap().clone();
+    let item = test_fixtures::work_item(&queue, &features, meta.clone());
+    let ctx = turn_launch_context(
+      Arc::clone(&queue),
+      &item,
+      option.clone(),
+      root.path().join("session"),
+      Some(CC_SESSION_ID.to_string()),
+    )
+    .unwrap();
+
+    // The master turn path, as TurnProcess::run builds one process of a turn.
+    let launch = ClaudeCodeLifecycle::new().place(&ctx).await.unwrap();
+    let (extra_flags, resume_session_id) = build_extra_flags(&features, &option, &launch, &item).unwrap();
+    let launch_args = LaunchArgs {
+      extra_flags,
+      buffer_limit: Some(subprocess_buffer_bytes(&cfg).unwrap()),
+      instructions_content: item.task_instructions.clone(),
+      resume_session_id,
+      log_dir: Some(root.path().join("run")),
+      cgroup_session_id: Some(meta.id.clone()),
+      backend_kwargs: launch
+        .backend_kwargs
+        .iter()
+        .filter(|(key, _)| key.as_str() != "extra_flags")
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect(),
+      ..LaunchArgs::default()
+    };
+    let turn = backend_types::build_backend(Arc::clone(&features.registry), &option, &cfg, launch_args).unwrap();
+    let expected = turn.backend.build_command(&item.user_content).unwrap();
+
+    // The idle path, as the trigger path builds its process for the same account.
+    let account = claude_accounts::account_by_label(&cfg, launch.account_label.as_deref()).unwrap().unwrap();
+    let identity = IdleProcessIdentity {
+      session_id: meta.id.clone(),
+      cc_session_id: CC_SESSION_ID.to_string(),
+      run_kind: RunKind::ManagerTurn,
+    };
+    let (argv, _env) = claude_idle_compaction::build_idle_process(
+      Arc::clone(&features.registry),
+      &cfg,
+      &option,
+      &account,
+      identity,
+      &Env::new(),
+    )
+    .unwrap();
+
+    assert_eq!(argv, expected);
   }
 }

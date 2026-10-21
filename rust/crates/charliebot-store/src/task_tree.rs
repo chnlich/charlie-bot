@@ -16,6 +16,8 @@ use crate::{ControlGuard, Store, StoreError, StoreResult};
 
 const TREE_INDEX_TTL: Duration = Duration::from_secs(2);
 const TASK_ANCESTOR_HOP_LIMIT: usize = 1000;
+// Bound on the non-archived descendants one subtree walk may hold; archived ones do not count.
+const TASK_DESCENDANT_NODE_LIMIT: usize = 1000;
 const SUCCESSOR_HOP_LIMIT: usize = 100;
 /// The refusal for an agent create outside its own open manager task (`task_sessions.AGENT_CREATE_SCOPE_REFUSAL`).
 pub const AGENT_CREATE_SCOPE_REFUSAL: &str = "an agent may only create a task directly under its own open manager task";
@@ -212,15 +214,16 @@ impl Store {
   /// Return every descendant in the task index’s depth-first order.
   pub fn descendant_ids(&self, session_id: &str) -> StoreResult<Vec<String>> {
     let index = self.tree_index()?;
-    descendant_ids(&index, session_id)
+    descendant_ids(self, &index, session_id)
   }
 
   /// Return every task node whose effective archive state is inherited or fact-derived.
   pub fn derived_archived_ids(&self) -> StoreResult<Vec<String>> {
     let index = self.tree_index()?;
+    let mut memo = HashMap::new();
     let mut ids = Vec::new();
     for meta in index.metas.values() {
-      if meta.status != SessionStatus::Archived && archived_of(self, &index, &meta.id)? {
+      if meta.status != SessionStatus::Archived && archived_of(self, &index, &meta.id, &mut memo)? {
         ids.push(meta.id.clone());
       }
     }
@@ -230,7 +233,7 @@ impl Store {
 
   /// Return a task’s effective archive state, including archived ancestors.
   pub fn archived_of(&self, session_id: &str) -> StoreResult<bool> {
-    archived_of(self, &self.tree_index()?, session_id)
+    archived_of(self, &self.tree_index()?, session_id, &mut HashMap::new())
   }
 
   /// Require every ancestor of a node to remain open.
@@ -605,7 +608,7 @@ impl Store {
     if !self.run_blockers(session_id)?.is_empty() {
       return Ok(false);
     }
-    for descendant in descendant_ids(&index, session_id)? {
+    for descendant in descendant_ids(self, &index, session_id)? {
       if self.task_state(&descendant)? == "open" {
         return Ok(false);
       }
@@ -649,7 +652,7 @@ impl Store {
       return Ok(Vec::new());
     }
     let mut subtree = vec![session_id.to_string()];
-    subtree.extend(descendant_ids(&index, session_id)?);
+    subtree.extend(descendant_ids(self, &index, session_id)?);
     let mut blocked = Vec::new();
     for node in &subtree {
       for blocker in self.run_blockers(node)? {
@@ -909,7 +912,7 @@ impl Store {
         }
       }
     }
-    let subtree = std::iter::once(session_id.to_string()).chain(descendant_ids(index, session_id)?);
+    let subtree = std::iter::once(session_id.to_string()).chain(descendant_ids(self, index, session_id)?);
     for node in subtree {
       for blocker in self.structural_blockers(&node, guards)? {
         blockers.push(format!("{node}: {blocker}"));
@@ -1064,7 +1067,7 @@ impl Store {
     let object = detail.as_object_mut().expect("session metadata serializes to an object");
     object.insert("task_state".to_string(), Value::String(self.task_state(session_id)?));
     object.insert("work_state".to_string(), Value::String(self.task_tree_activity(session_id)?.work_state));
-    object.insert("archived".to_string(), Value::Bool(archived_of(self, &index, session_id)?));
+    object.insert("archived".to_string(), Value::Bool(archived_of(self, &index, session_id, &mut HashMap::new())?));
 
     let mut ancestors = Vec::new();
     for ancestor_id in ancestor_ids(&index, session_id)? {
@@ -1074,7 +1077,7 @@ impl Store {
     }
     object.insert("ancestors".to_string(), Value::Array(ancestors));
 
-    let descendants = descendant_ids(&index, session_id)?.len();
+    let descendants = descendant_ids(self, &index, session_id)?.len();
     let prompt_rules = json!({
       "subtree": self.prompt_rule_summary(meta.subtree_prompt_ref.as_deref())?,
       "node": self.prompt_rule_summary(meta.node_prompt_ref.as_deref())?,
@@ -1292,7 +1295,9 @@ fn ancestor_ids(index: &TreeIndex, session_id: &str) -> StoreResult<Vec<String>>
   Ok(chain)
 }
 
-fn descendant_ids(index: &TreeIndex, session_id: &str) -> StoreResult<Vec<String>> {
+/// Every transitive descendant in depth-first order. Only non-archived nodes count toward the cap, so a closed
+/// subtree of any size stays walkable.
+fn descendant_ids(store: &Store, index: &TreeIndex, session_id: &str) -> StoreResult<Vec<String>> {
   if !index.metas.contains_key(session_id) {
     return Err(StoreError::not_found(format!("task {session_id} not found")));
   }
@@ -1300,38 +1305,58 @@ fn descendant_ids(index: &TreeIndex, session_id: &str) -> StoreResult<Vec<String
   let mut output = Vec::new();
   let mut stack = children_of(session_id);
   let mut seen = HashSet::from([session_id.to_string()]);
+  let mut archived = HashMap::new();
+  let mut open_count = 0;
   while let Some(next) = stack.pop() {
     if !seen.insert(next.clone()) {
       return Err(StoreError::conflict(vec![format!("task relation cycle through {next}")]));
     }
     output.push(next.clone());
     stack.extend(children_of(&next));
-    if output.len() > TASK_ANCESTOR_HOP_LIMIT {
-      return Err(StoreError::conflict(vec![format!(
-        "subtree of {session_id} exceeds {TASK_ANCESTOR_HOP_LIMIT} nodes"
-      )]));
+    let meta = index_meta(index, &next)?;
+    if meta.status != SessionStatus::Archived && !archived_of(store, index, &next, &mut archived)? {
+      open_count += 1;
+      if open_count > TASK_DESCENDANT_NODE_LIMIT {
+        return Err(StoreError::conflict(vec![format!(
+          "subtree of {session_id} exceeds {TASK_DESCENDANT_NODE_LIMIT} non-archived nodes"
+        )]));
+      }
     }
   }
   Ok(output)
 }
 
-fn archived_of(store: &Store, index: &TreeIndex, session_id: &str) -> StoreResult<bool> {
-  let mut current_id = session_id;
+/// Whether a node is archived, counting an archived ancestor: a node is archived when its own task state or
+/// any ancestor's is not open. The memo keeps each resolved node, so one pass over many nodes stays linear.
+fn archived_of(
+  store: &Store,
+  index: &TreeIndex,
+  session_id: &str,
+  memo: &mut HashMap<String, bool>,
+) -> StoreResult<bool> {
+  let mut chain = Vec::new();
   let mut seen = HashSet::new();
-  loop {
-    if !seen.insert(current_id.to_string()) || seen.len() > TASK_ANCESTOR_HOP_LIMIT + 1 {
+  let mut current_id = session_id;
+  let mut inherited = loop {
+    if let Some(&known) = memo.get(current_id) {
+      break known;
+    }
+    if !seen.insert(current_id) || chain.len() > TASK_ANCESTOR_HOP_LIMIT {
       return Err(StoreError::conflict(vec![format!("task relation cycle through {current_id}")]));
     }
-    let meta =
-      index.metas.get(current_id).ok_or_else(|| StoreError::not_found(format!("task {current_id} not found")))?;
-    if store.task_state(current_id)? != "open" {
-      return Ok(true);
+    chain.push(current_id);
+    match index_meta(index, current_id)?.task_parent_id.as_deref() {
+      Some(parent_id) => current_id = parent_id,
+      None => break false,
     }
-    if meta.task_parent_id.is_none() {
-      return Ok(false);
+  };
+  for node_id in chain.into_iter().rev() {
+    if !inherited {
+      inherited = store.task_state(node_id)? != "open";
     }
-    current_id = meta.task_parent_id.as_deref().expect("parent id was checked");
+    memo.insert(node_id.to_string(), inherited);
   }
+  Ok(inherited)
 }
 
 fn fold_task_facts(events: &[Value]) -> StoreResult<TaskFacts> {

@@ -17,8 +17,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use std::sync::{Arc, Mutex};
-
 use charliebot_tasks::git::{
   BaseBranchResolutionError, BaseResolution, git_create_worktree, git_current_branch,
   git_remote_default_branch_and_tip, git_verify_commit_landed, git_worktree_dir_name, git_worktree_remove,
@@ -26,42 +24,37 @@ use charliebot_tasks::git::{
 
 static GIT_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-/// Captures the tracing events of one test, so the remote-retry warnings can be asserted.
-#[derive(Clone, Default)]
-struct LogCapture(Arc<Mutex<Vec<u8>>>);
+#[path = "support/log_capture.rs"]
+mod log_capture;
 
-impl LogCapture {
-  fn install(&self) -> tracing::subscriber::DefaultGuard {
-    let subscriber = tracing_subscriber::fmt()
-      .with_writer(self.clone())
-      .with_ansi(false)
-      .with_max_level(tracing::Level::INFO)
-      .finish();
-    tracing::subscriber::set_default(subscriber)
-  }
+use log_capture::LogCapture;
 
-  fn text(&self) -> String {
-    String::from_utf8_lossy(&self.0.lock().expect("log capture is not poisoned")).into_owned()
-  }
+/// Emits one event at this call site; the capture test below reaches it from two threads.
+fn emit_probe() {
+  tracing::warn!("capture probe");
 }
 
-impl std::io::Write for LogCapture {
-  fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-    self.0.lock().expect("log capture is not poisoned").extend_from_slice(buf);
-    Ok(buf.len())
-  }
-
-  fn flush(&mut self) -> std::io::Result<()> {
-    Ok(())
-  }
-}
-
-impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for LogCapture {
-  type Writer = LogCapture;
-
-  fn make_writer(&'a self) -> Self::Writer {
-    self.clone()
-  }
+/// A capture keeps an event whose call site another thread reached first. The uncaptured thread registers the call site
+/// while the capture is installed, and the capturing thread emits it afterwards.
+#[test]
+fn a_capture_keeps_an_event_whose_call_site_another_thread_reached_first() {
+  let logs = LogCapture::default();
+  let (installed_tx, installed_rx) = std::sync::mpsc::channel();
+  let (reached_tx, reached_rx) = std::sync::mpsc::channel();
+  let capturing = {
+    let logs = logs.clone();
+    std::thread::spawn(move || {
+      let _guard = logs.install();
+      installed_tx.send(()).expect("the main thread waits for the install");
+      reached_rx.recv().expect("the main thread sends the reach signal");
+      emit_probe();
+    })
+  };
+  installed_rx.recv().expect("the capturing thread installs");
+  std::thread::spawn(emit_probe).join().expect("the uncaptured thread emits");
+  reached_tx.send(()).expect("the capturing thread waits for the reach signal");
+  capturing.join().expect("the capturing thread finishes");
+  assert!(logs.text().contains("capture probe"), "the capture lost the event: {}", logs.text());
 }
 
 /// The per-repository and per-test git fixture: a bare `origin`, a `seed` clone that authors

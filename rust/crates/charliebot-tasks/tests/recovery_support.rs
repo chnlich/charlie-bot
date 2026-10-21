@@ -2,8 +2,12 @@
 //! Fixtures of the startup-recovery tests (`tests/recovery.rs`): the task-execution stack over a temporary home, the
 //! scripted `/bin/sh` backend, a fault seam on the run-finish completion, and a capture of the node pass's log events.
 
+#[path = "support/log_capture.rs"]
+mod log_capture;
 #[path = "support/recovery_process_guard.rs"]
 mod process_guard;
+
+pub use log_capture::LogCapture;
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::io::{self, Write};
@@ -51,7 +55,6 @@ use serde_json::{Map, Value, json};
 use serde_yaml::{Mapping, Value as YamlValue};
 use tempfile::TempDir;
 use tower::ServiceExt;
-use tracing_subscriber::fmt::MakeWriter;
 
 /// The backend type every synthetic option of these tests uses.
 pub const BACKEND_TYPE: &str = "recovery_script";
@@ -898,45 +901,6 @@ pub fn implement_spec(repo: &Path) -> TaskSpec {
     base_branch: Some("main".to_string()),
     task_type: Some(charliebot_store::metadata::TaskType::Implement),
     ..TaskSpec::default()
-  }
-}
-
-/// Captures the tracing events of one test, so the node pass's `task_recovery_node_failed` log line can be asserted.
-#[derive(Clone, Default)]
-pub struct LogCapture(Arc<Mutex<Vec<u8>>>);
-
-impl LogCapture {
-  /// The subscriber guard for the current thread; the events of this test land in the capture until it drops.
-  pub fn install(&self) -> tracing::subscriber::DefaultGuard {
-    let subscriber = tracing_subscriber::fmt()
-      .with_writer(self.clone())
-      .with_ansi(false)
-      .with_max_level(tracing::Level::INFO)
-      .finish();
-    tracing::subscriber::set_default(subscriber)
-  }
-
-  pub fn text(&self) -> String {
-    String::from_utf8_lossy(&self.0.lock().expect("log capture is not poisoned")).into_owned()
-  }
-}
-
-impl Write for LogCapture {
-  fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-    self.0.lock().expect("log capture is not poisoned").extend_from_slice(buf);
-    Ok(buf.len())
-  }
-
-  fn flush(&mut self) -> io::Result<()> {
-    Ok(())
-  }
-}
-
-impl<'a> MakeWriter<'a> for LogCapture {
-  type Writer = LogCapture;
-
-  fn make_writer(&'a self) -> Self::Writer {
-    self.clone()
   }
 }
 

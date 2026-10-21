@@ -248,6 +248,9 @@ def world(tmp_path: pathlib.Path) -> Iterator[World]:
   built = _build_world(tmp_path)
   yield built
   subprocess.run(["tmux", "-L", built.socket, "kill-server"], env=built.env, capture_output=True, check=False)
+  # tmux leaves the socket file behind after kill-server; with the server gone it is an empty stale file.
+  socket_path = pathlib.Path(built.env.get("TMUX_TMPDIR", "/tmp")) / f"tmux-{os.getuid()}" / built.socket
+  socket_path.unlink(missing_ok=True)
   for proc in built.live:
     proc.kill()
     proc.wait()

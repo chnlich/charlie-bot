@@ -72,6 +72,8 @@ CharlieBot is a self-hosted multi-agent orchestration system: a master agent dri
 ./scripts/start-server.sh
 ```
 
+`scripts/switch-server.sh rust <full rust-backend sha>` moves the live server onto a verified Rust release and `scripts/switch-server.sh python` moves it back; the script header lists the preflight and the exit codes.
+
 `setup.sh` provisions `$CHARLIEBOT_HOME/` (home layout, `config.yaml` from `configs/config.example.yaml`, `credentials.yaml` from `configs/credentials.example.yaml`) and seeds repo-default cron tasks into `$CHARLIEBOT_HOME/config.d/cron.d/<name>.yaml` (one file per job). Server startup never writes cron config — only `setup.sh` does — so re-run `setup.sh` after pulling to pick up new repo-default cron tasks and skills.
 
 ## CLI at a glance

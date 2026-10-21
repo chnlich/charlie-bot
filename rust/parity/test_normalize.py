@@ -578,6 +578,14 @@ def test_task_branch_normalization_masks_only_the_wall_clock_second() -> None:
   assert earlier_path == later_path == "worktrees/charliebot-task-<task-branch-timestamp>-81e5922b"
 
 
+def test_opencode_normalization_masks_only_the_fake_debug_endpoint_port() -> None:
+  earlier = normalize.normalize_text("http://127.0.0.1:39881/api/debug/location", _context())
+  later = normalize.normalize_text("http://127.0.0.1:44973/api/debug/location", _context())
+  assert earlier == later == "http://127.0.0.1:<opencode-debug-port>/api/debug/location"
+  assert normalize.normalize_text("http://127.0.0.1:39881/api/session", _context()) != normalize.normalize_text(
+      "http://127.0.0.1:44973/api/session", _context())
+
+
 PROXY_ROUTE = "POST /api/anthropic-proxy/openai-compatible/cc-glm52/v1/messages"
 MINTED_ID = b'"id":"msg_0123456789abcdef0123456789abcdef"'
 

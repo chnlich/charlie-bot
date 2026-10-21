@@ -1,5 +1,5 @@
-# The first server records a stop request that its exit wait cannot finish: the agent ignores SIGTERM until its
-# first gate opens. The second server's recovery signals the run under the default disposition and records its exit.
+# The agent ignores SIGTERM at its first gate. The stop request escalates to SIGKILL and records an interrupted run;
+# handover preserves that terminal fact without launching the agent again.
 stage: agent-orchestration
 name: handover-stop-request
 fake_agent:
@@ -9,8 +9,6 @@ fake_agent:
         - emit: {type: system, subtype: init, session_id: synthetic-stop-request}
         - sigterm: ignore
         - gate: stop-first
-        - sigterm: default
-        - gate: stop-second
         - emit: {type: result, result: "", usage: {input_tokens: 1, output_tokens: 1}}
       exit_code: 0
 expect_starts: 1  # One dispatch: the stop request reaches the agent by signal, and the agent is never relaunched.
@@ -34,12 +32,10 @@ steps:
     expect_status: 200
     defer_files: true
   - kind: handover
-    name: hand over the run whose recorded stop is unfinished
-    agent_after_stop: alive
-    open_while_stopped: stop-first
-    timeout_seconds: 30
+    name: hand over the durable interrupted outcome
+    agent_after_stop: terminated
   - kind: wait
-    name: wait for the second server to finish the recorded stop
+    name: confirm the restarted server retains the interrupted outcome
     timeout_seconds: 30
     until:
       event:

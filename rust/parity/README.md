@@ -546,6 +546,8 @@ field one side omits still shows as a difference:
   the upstream's id still shows as a difference;
 - the voice archive stem rule masks `YYYY-MM-DDTHHMMSS.mmmZ_<8 hex>` in paths because the write clock and uuid4
   draw are independent on each side;
+- the OpenCode debug-port rule masks only the OS-assigned port in `/api/debug/location` URLs from the fake API,
+  which binds port `0` in each tree; the endpoint path and error text stay compared;
 - the named Discord heartbeat rule omits only op 1 messages the gateway client sends, because its first interval
   includes an unseeded random delay;
 - `WS_FRAME_RULES` selects any frame-specific normalization by WebSocket route template.

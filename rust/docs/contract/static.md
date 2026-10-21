@@ -24,6 +24,7 @@ The mounts register after every route (`server.py:565` and `server.py:570`). The
 | `/static/features/improve` | `src/features/improve/static` | absent |
 | `/static/features/memory` | `src/features/memory/static` | absent |
 | `/static/features/ncu` | `src/features/ncu/static` | absent |
+| `/static/features/router` | `src/features/router/static` | absent |
 | `/static/features/terminal` | `src/features/terminal/static` | present |
 | `/static/features/trace` | `src/features/trace/static` | absent |
 | `/static/features/usage` | `src/features/usage/static` | present |

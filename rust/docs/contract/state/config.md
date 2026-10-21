@@ -1,6 +1,6 @@
 # Configuration: `config.yaml`, `config.d/`, `credentials.yaml`
 
-Baseline: the Python tree at `d9fdcd7c9`. This document gives every key the baseline accepts, its type and
+Baseline: the Python tree at `e44c9ccef`. This document gives every key the baseline accepts, its type and
 default, the validation rule, and the error a bad value raises. Error texts are quoted from source; `<...>` marks
 an interpolated value. A Rust server reading the same files must accept exactly this set and refuse the rest with
 equivalent errors. **UNVERIFIED** marks a statement not confirmed from source, with the reason.
@@ -95,6 +95,7 @@ Every core section model sets `extra='forbid'`.
 | `paths.workspace_dirs` | list[str] | `["~/workspace"]` | directories scanned one level deep for git repositories (`discover_repos`); `~` is expanded at load |
 | `paths.worktree_dir` | str | `"~/worktrees"` | root for worker git worktrees; `~` is expanded at load |
 | `backends.pool` | list[str] | `[]` | rotation order of option ids for unpinned work; each must name an option (startup check) |
+| `backends.routing` | `RoutingConfig` or null | null | optional router command; routed unpinned work asks it to order candidates before pool rotation |
 | `backends.options` | list[option] | `[]` | backend catalog (section 4); an empty list fails server startup |
 | `ui.home_services` | list[`{name: str, description: str, url: str}`] | `[]` | cards on `/home`, probed by connecting to the URL's host and port; each item forbids extra keys |
 | `telegram.chat_id` | str or null | null | Telegram notification target; sending without it raises `RuntimeError` (`src/infra/notifications.py`) |
@@ -108,6 +109,8 @@ location), and `HOUSE_TIMEZONE = "America/Los_Angeles"`.
 
 `require_backend_option(cfg, id, subject=...)` raises `"<subject>backend '<id>' is not in backends.options"`
 wherever a stored id no longer resolves at run time.
+
+`RoutingConfig` (`src/infra/config.py`) has one required field, `command: list[str]`. Extra keys are refused. The first command item resolves on the server process's `PATH`; the command runs once per routed choice and exchanges one JSON object on stdin and stdout. `null` keeps pool rotation as the only selector.
 
 ## 4. `backends.options[]`
 
@@ -204,6 +207,7 @@ into discord.allowed_users as <user id>: <the person that account belongs to>"`.
 | `accounts.claude_pools` | dict[str, list[str]] | `{}` | named pools of account labels |
 | `accounts.claude_compaction.relay_tokens` | int > 0 | `100000` | compaction floor for relays |
 | `accounts.claude_compaction.expired_cache_tokens` | int > 0 | `50000` | compaction floor after cache expiry |
+| `accounts.claude_compaction.idle_tokens` | int > 0 | `100000` | context floor for compacting an idle manager session before its Claude prompt cache expires |
 
 Config check `check_claude_pools`:
 
@@ -295,6 +299,7 @@ Keys the server and its CLIs read:
 | --- | --- | --- |
 | `charliebot.access_key` | `configured_access_key()`: HTTP auth (`src/runtime/api/auth.py`, `deps.py`), run-token signing (`task_execution._child_env`), CLI auth (`cli/common.py`), `memory` CLI, page `auth_enabled` | Auth is disabled (`auth_enabled: false`). Agent child launches raise `"run-token signing requires credentials.yaml charliebot.access_key; agent child environments cannot be built without it"`. cc-openai-compatible launches raise the `require` error. |
 | `<option.credential>.api_key` | cc-kimi factory, charlie-code factory, cc-openai-compatible proxy upstream | `require` error at launch or request |
+| `<router.jev.credential>.api_key` | `src/features/router/routing.py::design_probability` | `charliebot router` exits 1 with the missing credential error |
 | `slack.bot_token`, `slack.app_token` | `src/features/slack/service.py`, `slack_listener.py` | the slack service does not start |
 | `discord.bot_token` | `src/features/discord/service.py`, `discord_listener.py`, `discord_commands.py` | the discord service does not start (it starts only when `discord.bot_token` and `discord.allowed_users` are both set) |
 | `telegram.bot_token` | `src/infra/notifications.py::send_telegram` | `require` error when a notification is sent |

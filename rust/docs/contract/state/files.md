@@ -1,6 +1,6 @@
 # Persisted state: every file the Python server reads or writes
 
-Baseline: the Python tree at `d9fdcd7c9` on `rust-backend`. A Rust server that shares a `CHARLIEBOT_HOME` with
+Baseline: the Python tree at `e44c9ccef` on `rust-backend`. A Rust server that shares a `CHARLIEBOT_HOME` with
 this baseline must read every file below as the baseline writes it and must write it so the baseline reads it
 back. Paths use `<home>` for the resolved `CHARLIEBOT_HOME`, `<sid>` for a session id, `<run>` for a run id and
 `/home/<user>` for the operator's home directory. Module paths are repo-relative. A statement marked
@@ -87,6 +87,7 @@ them; correctness does not depend on it.
 <home>/
   config.yaml                      config.md
   credentials.yaml                 config.md
+  router.yaml                      charliebot router
   config.d/cron.d/<name>.yaml      config.md, section 9
   MASTER_AGENT_PROMPT.md           read only
   host_auth.json
@@ -376,6 +377,14 @@ Modules: `src/features/memory/memory.py`, `memory_proposal.py`, `cli.py`, `store
     `GET /api/ext-usage` and broadcast on the sidebar channel;
   - the stat-signature memos of the NDJSON readers (line counts and tails, `src/infra/ndjson.py`).
 
+### 5.18 `router.yaml`
+
+- Writer: none in the server or CLI. The operator copies and edits this host-owned file.
+- Reader: `src/features/router/routing.py::load_config`, on every `charliebot router` invocation.
+- Shape: a YAML mapping with `jev: {url, model, credential}`, `instructions`, `routine`, `design` and `strong`.
+  `strong` is an ordered list of backend ids. `jev.credential` names the `credentials.yaml` section whose
+  `api_key` authenticates the request. Missing or invalid fields stop the router command with an error.
+
 ## 6. Session files
 
 ### 6.1 `sessions/<sid>/metadata.json` (session)
@@ -431,7 +440,8 @@ from `metadata_slot_registration.register_metadata_fields` and are placed after 
 | `group` | str or null | null | core | sidebar group |
 | `archive_offset` | int | 0 | core | count of chat event lines moved to archives |
 | `backend_from_pool` | bool | false | `src.features.backend_pool` | backend chosen by pool rotation |
-| `web_status` | `{goal, now, waiting: [{text, link}], updated_at}` or null | null | `src.features.web_reply` | |
+| `route` | `{backends: [str], reason: str}` or null | null | `src.features.backend_pool` | router stdout saved on a node that asked the router before selecting a backend |
+| `web_status` | `{goal, now, waiting: [{text, context, link}], updated_at}` or null | null | `src.features.web_reply` | Older items can lack `context` and serialize without it; new status writes require non-blank context |
 
 `TaskSpec` (`extra="forbid"`): `goal: str`, `acceptance: list[str]`, `context_refs: list[str]`,
 `repo_path: str|None`, `base_branch: str|None`, `task_type` (`implement`, `quick-edit`, `script-run`, `verify`,
@@ -462,6 +472,9 @@ back.
   agents themselves (a manager is told its history is at `data/chat_events.jsonl`).
 - **UNVERIFIED:** the full event-type vocabulary; `src/infra/event_types.py` lists the names, and the route and
   WebSocket contract task owns their payloads.
+- `web_ask_check` records one cold read of a Waiting on you item: `item_sha256`, `backend` and `answer` accompany
+  the content `Cold read of a Waiting on you item`. `POST /api/internal/web/ask-check` appends it; the status set
+  uses its digest to decide whether a waiting item has been read as it stands.
 
 ### 6.3 `sessions/<sid>/data/explain_results.json`
 
@@ -476,7 +489,7 @@ Module: `src/runtime/runs.py` (with `worker.py`, `task_execution.py`, `agent_pro
 
 | File | Writer and discipline | Content |
 | --- | --- | --- |
-| `task_spec.md` | `runs.register_run_locked`, ATOMIC, before `metadata.json` | the canonical task-spec text, or `review of work run <id>` for a review run; its sha256 is `task_spec_hash` |
+| `task_spec.md` | `runs.register_run_locked`, ATOMIC, before `metadata.json` | the canonical task-spec text; for a scheduled run, the configured cron prompt or that step's configured prompt before chaining; for a review run, `review of work run <id>`. Its sha256 is `task_spec_hash`. |
 | `metadata.json` | `runs`, ATOMIC-MODEL | `RunRecord` (below) |
 | `events.jsonl` | `worker.py` HELD-APPEND for streamed events; terminal events through NDJSON-APPEND | translated events of the run |
 | `agent.raw.ndjson` | CHILD-FD (stdout) | the agent CLI's raw stdout |

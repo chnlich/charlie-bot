@@ -20,6 +20,7 @@ script runs the real reconcile pass at the end and fails when that pass would wr
 import argparse
 import asyncio
 import datetime
+import hashlib
 import importlib
 import json
 import os
@@ -42,7 +43,7 @@ MISSING_SESSION_ID = "00000000-0000-4000-8000-00000000dead"
 MISSING_RUN_ID = "00000000-0000-4000-8000-00000000beef"
 FAR_FUTURE = datetime.datetime(2099, 1, 1, tzinfo=datetime.UTC)
 # Event types that exist only in the worker transcript projection, never in an events file.
-_PROJECTION_ONLY_TYPES = frozenset({"run_header", "run_delivery"})
+_PROJECTION_ONLY_TYPES = frozenset({"run_header", "run_end", "run_error", "run_delivery"})
 
 
 class _FixtureClock:
@@ -515,6 +516,19 @@ async def build_atlas(b: Builder) -> None:
               "status": "allowed_warning",
               "resetsAt": 1767700000
           }
+      },
+      {
+          "type": ET.QUOTA_FAILOVER,
+          "from": "claude-sonnet",
+          "to": "claude-haiku",
+          "recovers_at": "2026-01-05T10:00+00:00",
+      },
+      {
+          "type": ET.WEB_ASK_CHECK,
+          "content": "Cold read of a Waiting on you item",
+          "item_sha256": hashlib.sha256(b"synthetic waiting item").hexdigest(),
+          "backend": "claude-sonnet",
+          "answer": "The panel should use the compact layout.",
       },
   )
   await b.adapter._alert_overlay_inactive(atlas, b.option, None)

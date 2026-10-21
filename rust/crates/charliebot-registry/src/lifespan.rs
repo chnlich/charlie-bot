@@ -87,6 +87,13 @@ pub struct Shutdown {
   pub error: Option<anyhow::Error>,
 }
 
+/// The outcome of running the lifespan's let-go steps.
+pub struct LetGo {
+  pub step_closes: Vec<StepTiming>,
+  /// The first let-go failure.
+  pub error: Option<anyhow::Error>,
+}
+
 impl Lifespan {
   /// Runs the startup steps in the order of the module docs. A failure stops the services that started, runs the
   /// let-go steps, and returns the startup error.
@@ -142,7 +149,7 @@ impl Lifespan {
   }
 
   /// Stops what started after a failed startup and returns the startup error, with any shutdown error added to it.
-  async fn abort(self, error: anyhow::Error) -> anyhow::Error {
+  async fn abort(mut self, error: anyhow::Error) -> anyhow::Error {
     match self.shutdown().await.error {
       None => error,
       Some(stop_error) => error.context(format!("stopping after the failed startup also failed: {stop_error:#}")),
@@ -152,7 +159,7 @@ impl Lifespan {
   /// Stops the started services (ready ones in reverse order, then early ones in reverse), runs the let-go steps in
   /// registration order, then closes the shared HTTP client and the open WebSockets. Every step runs even when an
   /// earlier one fails; the first failure is returned with the close timings.
-  pub async fn shutdown(self) -> Shutdown {
+  pub async fn shutdown(&mut self) -> Shutdown {
     let mut first_error: Option<anyhow::Error> = None;
     // Python registers `usage_tally`; Rust has no matching service stop, so its field is zero.
     let mut step_closes = vec![StepTiming { name: "usage_tally", elapsed: Duration::ZERO }];
@@ -166,6 +173,17 @@ impl Lifespan {
         step_closes.push(StepTiming { name, elapsed: started.elapsed() });
       }
     }
+    let let_go = self.run_let_go_steps().await;
+    first_error = first_error.or(let_go.error);
+    step_closes.extend(let_go.step_closes);
+    let closes = self.close_clients(step_closes).await;
+    Shutdown { closes, error: first_error }
+  }
+
+  /// Runs every let-go step in registration order and returns the first failure with each step's timing.
+  pub async fn run_let_go_steps(&self) -> LetGo {
+    let mut first_error: Option<anyhow::Error> = None;
+    let mut step_closes = Vec::new();
     for (name, step) in self.features.registry.let_go_steps() {
       let started = Instant::now();
       if let Err(error) = step(Arc::clone(&self.features)).await.with_context(|| format!("let-go step {name:?} failed"))
@@ -174,13 +192,16 @@ impl Lifespan {
       }
       step_closes.push(StepTiming { name, elapsed: started.elapsed() });
     }
+    LetGo { step_closes, error: first_error }
+  }
+
+  async fn close_clients(&self, step_closes: Vec<StepTiming>) -> CloseTimings {
     let http_started = Instant::now();
     charliebot_compat::http_client::close_shared_client();
     let http_client = http_started.elapsed();
     let ws_started = Instant::now();
     self.features.store.close_subscribers().await;
-    let closes = CloseTimings { step_closes, http_client, ws_close: ws_started.elapsed() };
-    Shutdown { closes, error: first_error }
+    CloseTimings { step_closes, http_client, ws_close: ws_started.elapsed() }
   }
 }
 
@@ -214,8 +235,9 @@ mod tests {
   use super::*;
   use crate::context::features_over;
 
-  /// What the steps and services of this test logged, in order. Only one test in this binary uses it.
+  /// What the steps and services of these tests logged, in order.
   static TRACE: Mutex<Vec<String>> = Mutex::new(Vec::new());
+  static TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
   fn log(entry: &str) {
     TRACE.lock().expect("the trace lock is never poisoned").push(entry.to_string());
@@ -311,15 +333,21 @@ mod tests {
     registry.let_go_step("let_go", let_go)
   }
 
+  fn let_go_only(registry: &mut Registry) -> Result<(), RegistryError> {
+    registry.let_go_step("let_go", let_go)
+  }
+
   #[tokio::test]
   async fn lifespan_runs_its_steps_and_services_in_the_stated_order() {
+    let _guard = TEST_LOCK.lock().await;
+    TRACE.lock().unwrap().clear();
     let home = tempfile::tempdir().unwrap();
     let mut registry = Registry::new();
     registry.register_package("src.features.alpha", alpha).unwrap();
     registry.register_package("src.features.beta", beta).unwrap();
     let features = features_over(home.path(), Arc::new(registry));
 
-    let lifespan = Lifespan::start(features).await.unwrap();
+    let mut lifespan = Lifespan::start(features).await.unwrap();
     charliebot_compat::http_client::shared_client().unwrap();
     let started = TRACE.lock().unwrap().clone();
     let position = |entry: &str| {
@@ -339,5 +367,26 @@ mod tests {
     let all = TRACE.lock().unwrap().clone();
     let stopped: Vec<&str> = all[started.len()..].iter().map(String::as_str).collect();
     assert_eq!(stopped, ["ready_beta:stop", "ready_alpha:stop", "early_beta:stop", "early_alpha:stop", "let_go"]);
+  }
+
+  #[tokio::test]
+  async fn shutdown_leaves_let_go_steps_for_the_explicit_call() {
+    let _guard = TEST_LOCK.lock().await;
+    TRACE.lock().unwrap().clear();
+    let home = tempfile::tempdir().unwrap();
+    let mut registry = Registry::new();
+    registry.register_package("src.features.gamma", let_go_only).unwrap();
+    let features = features_over(home.path(), Arc::new(registry));
+    let mut lifespan = Lifespan::start(features).await.unwrap();
+    TRACE.lock().unwrap().clear();
+
+    let shutdown = lifespan.shutdown().await;
+    assert!(shutdown.error.is_none(), "{:?}", shutdown.error);
+    let stopped = TRACE.lock().unwrap().clone();
+    assert!(!stopped.iter().any(|entry| entry == "let_go"), "shutdown ran a let-go step: {stopped:?}");
+
+    let let_go = lifespan.run_let_go_steps().await;
+    assert!(let_go.error.is_none(), "{:?}", let_go.error);
+    assert_eq!(*TRACE.lock().unwrap(), ["let_go"]);
   }
 }

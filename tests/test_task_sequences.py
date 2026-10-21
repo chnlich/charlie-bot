@@ -451,7 +451,7 @@ async def test_pool_exhausted_iteration_ends_the_loop_failed_with_a_quota_reason
   # An empty build queue: a spawned process would pop from it and fail loudly.
   builds = conftest.install_scripted_backends(monkeypatch, [], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
   for label in ("main", "ext-1", "ext-2"):
-    claude_accounts.observe_rate_limit(label, conftest.rate_limit_event("rejected", 1.0)["rate_limit_info"])
+    conftest.reject_claude_login(label)
   assert claude_accounts.select(cfg, conftest.FABLE_MODEL) is None
 
   wakes = _count_manager_wakes(monkeypatch, tree, manager.id)

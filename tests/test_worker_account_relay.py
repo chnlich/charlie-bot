@@ -26,10 +26,6 @@ NOW = datetime.datetime(2026, 9, 6, 20, 0, tzinfo=datetime.UTC)
 _fresh_pool_state = conftest.fresh_state_fixture(claude_accounts.reset_for_tests)
 
 
-def _reject(label: str) -> None:
-  claude_accounts.observe_rate_limit(label, conftest.rate_limit_event("rejected", 1.0)["rate_limit_info"])
-
-
 def _result() -> dict:
   return {"type": ET.RESULT, "subtype": "success", "is_error": False, "result": "done"}
 
@@ -104,7 +100,7 @@ async def test_worker_raises_pool_exhausted_when_no_account_is_left(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = conftest.fable_pool_cfg(tmp_path, labels=("main", "ext-1"))
   conftest.make_transcript(tmp_path / "claude-main", CC_ID)
-  _reject("ext-1")
+  conftest.reject_claude_login("ext-1")
   _install_backends(
       monkeypatch, [conftest.ScriptedRelayBackend([conftest.rate_limit_event("rejected", 1.0)], exit_code=1)])
   task_worker = _worker(tmp_path, cfg)

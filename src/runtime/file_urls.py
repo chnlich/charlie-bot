@@ -110,7 +110,7 @@ def _candidates(text: str) -> list[_Candidate]:
   for match in _URL_RE.finditer(text):
     link = _trim_url_punctuation(match.group(0))
     if link:
-      candidate = _Candidate(match.start(), match.start() + len(link), link, False)
+      candidate = _Candidate(match.start(), match.start() + len(link), link, markdown_target=False)
       found[(candidate.start, candidate.end)] = candidate
 
   for pattern in (_MARKDOWN_INLINE_TARGET_RE, _MARKDOWN_REFERENCE_TARGET_RE):
@@ -123,7 +123,7 @@ def _candidates(text: str) -> list[_Candidate]:
       link = _trim_url_punctuation(raw_target) if _URL_SCHEME_RE.match(raw_target) else raw_target
       if not link:
         continue
-      candidate = _Candidate(target_start, target_start + len(link), link, True)
+      candidate = _Candidate(target_start, target_start + len(link), link, markdown_target=True)
       found[(candidate.start, candidate.end)] = candidate
 
   return sorted(found.values(), key=lambda candidate: (candidate.start, candidate.end))
@@ -220,11 +220,12 @@ def _scan_candidate(candidate: _Candidate, context: ScanContext | None) -> FileL
       correct_parts = urllib.parse.urlsplit(correct_path)
       correct_link = urllib.parse.urlunsplit(
           (parts.scheme, parts.netloc, correct_parts.path, parts.query, parts.fragment))
-    return FileLink(candidate.link, FileLinkForm.RETIRED_PREFIX, file_path, False, correct_link)
+    return FileLink(candidate.link, FileLinkForm.RETIRED_PREFIX, file_path, live=False, correct_link=correct_link)
 
   local_path = _local_path_target(parts, context) if candidate.markdown_target else None
   if local_path is not None:
-    return FileLink(candidate.link, FileLinkForm.LOCAL_PATH, local_path, False, _local_correct_link(local_path))
+    return FileLink(
+        candidate.link, FileLinkForm.LOCAL_PATH, local_path, live=False, correct_link=_local_correct_link(local_path))
   return None
 
 

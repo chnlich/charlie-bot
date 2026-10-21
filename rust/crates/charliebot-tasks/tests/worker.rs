@@ -1157,7 +1157,7 @@ async fn test_a_rejected_rate_limit_event_under_a_relay_watch_never_raises() -> 
 
 // Python: tests/test_spawner_backend_propagation.py:50.
 #[test]
-fn configured_anthropic_compatible_option_keeps_its_endpoint_and_window() -> anyhow::Result<()> {
+fn anthropic_compatible_option_requires_a_resolved_model_and_keeps_its_endpoint() -> anyhow::Result<()> {
   let root = Root::new()?;
   fs::create_dir_all(root.home())?;
   let option = option_yaml("anthro", "cc-anthropic-compatible", None, None);
@@ -1165,6 +1165,9 @@ fn configured_anthropic_compatible_option_keeps_its_endpoint_and_window() -> any
   let mut registry = Registry::new();
   registry.register_package("src.backends.anthropic_compatible", anthropic_compatible::register)?;
   let config = registry.load_config(&root.home())?;
+
+  let refused = charliebot_tasks::spawner_backends::resolve_backend_option(&config, "anthro", Some(""));
+  assert_eq!(refused.unwrap_err().to_string(), "resolved model is required");
 
   let option = charliebot_tasks::spawner_backends::resolve_backend_option(&config, "anthro", Some("resolved-model"))?;
 

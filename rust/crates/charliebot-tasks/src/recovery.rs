@@ -191,7 +191,7 @@ pub async fn reconcile_node(
   if store.load_meta(session_id).await?.is_none() {
     return Ok(());
   }
-  let events = store.load_all_facts(session_id)?;
+  let mut events = store.load_all_facts(session_id)?;
   let run_records = store.list_run_records_sync(session_id)?;
   // Warm the display-backend map: a fresh boot has seen no liveness notification.
   if let Some(newest) = store.newest_run_record_sync(session_id)?
@@ -220,17 +220,14 @@ pub async fn reconcile_node(
       store.reconcile_stop_request(session_id, &run.id).await?;
     }
   }
-  // A queued run on a non-open node never launches, and without a stop request it would sit queued forever and block
-  // the node's archive. The request id is the launch path's, so both paths settle a run with one fact.
+  // A run on a non-open node without a stop fact cannot continue dispatch or hold the node open.
   if store.task_state(session_id)? != "open" {
     for run in &run_records {
-      if run.pid.is_some()
-        || has_terminal_fact(&events, &run.id)?
-        || run_records::stop_requested_in_events(&events, &run.id, None)
-      {
+      if has_terminal_fact(&events, &run.id)? || run_records::stop_requested_in_events(&events, &run.id, None) {
         continue;
       }
       store.request_stop(session_id, &run.id, &closed_task_stop_request_id(&run.id)).await?;
+      events = store.load_all_facts(session_id)?;
     }
   }
 

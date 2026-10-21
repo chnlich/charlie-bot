@@ -316,12 +316,6 @@ count and may pass in a run.
 
 | Scenario | Step | Stage | Main commit | Difference |
 | --- | --- | --- | --- | --- |
-| task-completion-routes | cancel the stopped queued worker to deliver its report | agent-orchestration | `d401d9a2a` | Python cancel responses report queued runs stopped, including `never_launched`; Rust omits that list or entry. |
-| task-completion-routes | release the active manager run | agent-orchestration | `d401d9a2a` | The new task stop/completion events shift the returned or persisted event id by one. |
-| task-completion-routes | cancel the task after its run finishes | agent-orchestration | `d401d9a2a` | Python cancel responses report queued runs stopped, including `never_launched`; Rust omits that list or entry. |
-| task-completion-routes | acknowledge the pending Cobalt input | agent-orchestration | `d401d9a2a` | The new task stop/completion events shift the returned or persisted event id by one. |
-| task-completion-routes | replay the input acknowledgement | agent-orchestration | `d401d9a2a` | The new task stop/completion events shift the returned or persisted event id by one. |
-| task-completion-routes | operator restores an archived ancestor chain | agent-orchestration | `d401d9a2a` | The new task stop/completion events shift the returned or persisted event id by one. |
 | manager-turn-opencode | wait for the OpenCode manager run to finish | agent-orchestration | `d401d9a2a` | Python persists the completed OpenCode manager run directory; Rust leaves no matching run directory. |
 | cron-routes-and-ticks | wait for the manual cron firing report | triggers-cron-improve | `f77008f66` | Python persists the scheduled task's canonical `task_spec.md` and references; Rust omits them. |
 | cron-routes-and-ticks | wait for a scheduler tick to fire the same task again | triggers-cron-improve | `f77008f66` | Python persists the scheduled task's canonical `task_spec.md` and references; Rust omits them. |
@@ -330,9 +324,6 @@ count and may pass in a run.
 | features-web-reply | a status set of now alone | features | `854286c2a` | Python's status-set response adds `now_chars` and `now_over_budget`; Rust omits both. |
 | features-web-reply | a status set with a null goal | features | `854286c2a` | Python's status-set response adds `now_chars` and `now_over_budget`; Rust omits both. |
 | features-web-reply | the status read lists the open waiting descendant only | features | `854286c2a` | Python's status response includes open direct children with a Now item; Rust omits `children`. |
-| handover-stop-request | hand over the durable interrupted outcome · python-to-candidate | agent-orchestration | `d401d9a2a` | Python records the terminated run's `-9` exit code and interrupted outcome; Rust leaves the exit code unset. Intermittent: it failed in two of four all-stage runs and passed in seven agent-orchestration-only runs. |
-| handover-stop-request | request the stop of the gated run; the agent ignores the signal · candidate-to-python | agent-orchestration | `d401d9a2a` | Python escalates an ignored stop, terminates the agent, and records the interrupted outcome and exit code; Rust does not. |
-| handover-stop-request | hand over the durable interrupted outcome · candidate-to-python | agent-orchestration | `d401d9a2a` | Python escalates an ignored stop, terminates the agent, and records the interrupted outcome and exit code; Rust does not. |
 | skeleton | page with a session, bearer key | server-skeleton | `ae5555da7`, `3663f760f` | Rust lacks the web_ask_check event from 3663f760f and still prints the older prompt-overlay warning; the route and quota_failover projections match. |
 | skeleton | page with a session, no key | server-skeleton | `ae5555da7`, `3663f760f` | Rust lacks the web_ask_check event from 3663f760f and still prints the older prompt-overlay warning; the route and quota_failover projections match. |
 | skeleton | page with a worker session, cookie | server-skeleton | `90e8ac300`, `f77008f66` | Python's added worker transcript rows advance the page cursor from 10 to 12. |

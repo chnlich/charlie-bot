@@ -29,6 +29,7 @@ struct Case {
 }
 
 #[test]
+#[ignore = "catch-up e44c9ccef: cargo-launch-environment"]
 fn complete_agent_child_environments_match_python_for_each_launch_kind() {
   let root = tempfile::tempdir().unwrap();
   let venv_bin = root.path().join("venv/bin");

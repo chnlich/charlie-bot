@@ -74,7 +74,8 @@ def main() -> None:
     elif launch_kind == "compaction" and backend_type == "cc-claude":
       from src.backends.claude_code import claude_compaction
 
-      child_env = claude_compaction.compaction_env("/synthetic/home/accounts/claude-one")
+      # This synthetic session compacts during a manager turn, as master_cc_relay passes ctx.run_kind.
+      child_env = claude_compaction.compaction_env("/synthetic/home/accounts/claude-one", "manager_turn")
     else:
       raise ValueError(f"unsupported launch kind/backend pair: {launch_kind}/{backend_type}")
 

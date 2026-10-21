@@ -39,7 +39,6 @@ from src.backends.charlie_code import charlie_code
 from src.backends.claude_code import claude_code
 from src.backends.codex import codex
 from src.backends.gemini import gemini_cli
-from src.backends.kimi import kimi
 from src.backends.openai_compatible import openai_compatible_claude
 from src.backends.opencode import opencode
 from src.backends.opencode import server as opencode_server
@@ -60,10 +59,6 @@ _BASE_CTOR_KWARGS: dict[type[base.AgentBackend], dict] = {
             "auth_token": "contract-token",
             "model": "contract-model",
         },
-    kimi.KimiBackend: {
-        "api_key": "contract-key",
-        "model": "contract-model"
-    },
     charlie_code.CharlieCodeBackend: {
         "model": "contract-model",
         "api_base": "https://contract.invalid"

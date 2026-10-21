@@ -1054,7 +1054,12 @@ async def get_session_usage(
 ) -> infra_responses.FastJsonResponse:
   """Return lazy session status and usage data for the active header."""
   if meta.profile == "worker":
-    usage = await message_utils._worker_usage(task_mgr, session_id, session_usage.usage_run_kind(meta))
+    usage = await message_utils._worker_usage(
+        task_mgr,
+        session_id,
+        session_usage.usage_run_kind(meta),
+        cfg.get_backend_option(meta.backend),
+    )
   else:
     usage = await anchors.resolve_session_usage(session_id, meta)
   payload = {

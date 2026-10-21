@@ -28,6 +28,7 @@ def headless_claude_settings(run_kind: models.RunKind) -> dict[str, bool]:
 AUTO_COMPACT_WINDOW_ENV = "CLAUDE_CODE_AUTO_COMPACT_WINDOW"
 AUTOCOMPACT_PCT_OVERRIDE_ENV = "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"
 MAX_CONTEXT_TOKENS_ENV = "CLAUDE_CODE_MAX_CONTEXT_TOKENS"
+THINKING_DISPLAY_UPDATES_ENV = "CLAUDE_CODE_THINKING_DISPLAY_UPDATES"
 
 # The waiting rule in prompts/task_base.md sets a 15-minute foreground limit.
 # Claude Code's Bash tool defaults to 2 minutes and caps at 10 minutes without

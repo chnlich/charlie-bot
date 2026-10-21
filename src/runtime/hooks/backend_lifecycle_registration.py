@@ -1,9 +1,9 @@
 """The registries that backend packages fill from their ``register()`` for the backend lifecycle hook.
 
-There are three: the child-process environment edits, the context limits of a reading kind, and the usage
-resolver of a backend type. ``src/runtime/hooks/backend_lifecycle.py`` holds the lifecycle types that the launch
-loop runs. Every registered target is a "module:attr" string imported on first use, so registering costs no
-backend import. This module imports no backend module, no ``dataclasses`` and no heavy module.
+There are four: child-process environment edits, shared context limits by reading kind, context limits by backend
+type and reading kind, and usage resolvers by backend type. ``src/runtime/hooks/backend_lifecycle.py`` holds the
+lifecycle types that the launch loop runs. Every registered target is a "module:attr" string imported on first use,
+so registering costs no backend import. This module imports no backend module, no ``dataclasses`` and no heavy module.
 """
 
 from __future__ import annotations
@@ -45,6 +45,7 @@ def apply_child_env(env: dict[str, str]) -> None:
 # ---------------------------------------------------------------------------
 
 _reading_limits_fns: dict[str, str] = {}
+_backend_reading_limits_fns: dict[tuple[str, str], str] = {}
 
 
 def register_reading_limits(reading_kind: str, fn: str) -> None:
@@ -54,11 +55,31 @@ def register_reading_limits(reading_kind: str, fn: str) -> None:
   _reading_limits_fns[reading_kind] = fn
 
 
-def reading_limits(reading_kind: str, run_kind: models.RunKind) -> backend_lifecycle.ContextLimits | None:
+def register_backend_reading_limits(backend_type: str, reading_kind: str, fn: str) -> None:
+  """Register ``fn(option, run_kind) -> ContextLimits`` for one backend type and reading kind.
+
+  This provider takes precedence over ``register_reading_limits`` when a caller supplies an option of the type.
+  """
+  key = (backend_type, reading_kind)
+  if key in _backend_reading_limits_fns:
+    raise ValueError(f"backend reading limits for {key!r} are already registered")
+  _backend_reading_limits_fns[key] = fn
+
+
+def reading_limits(
+    reading_kind: str,
+    run_kind: models.RunKind,
+    option: models.BackendOption | None = None,
+) -> backend_lifecycle.ContextLimits | None:
   """The limits of ``reading_kind`` for a run of *run_kind*, computed per call.
 
-  None when no package registered the reading kind.
+  A type-specific provider takes precedence when *option* is supplied. None
+  when no package registered the reading kind.
   """
+  if option is not None:
+    backend_fn = _backend_reading_limits_fns.get((option.type, reading_kind))
+    if backend_fn is not None:
+      return deferred.import_attr(backend_fn)(option, run_kind)
   fn = _reading_limits_fns.get(reading_kind)
   if fn is None:
     return None

@@ -253,7 +253,12 @@ def usage_run_kind(meta: models.SessionMetadata) -> models.RunKind:
   return "manager_turn" if meta.profile == "manager" else "work"
 
 
-def _resolve_claude_tier(facts: _UsageFacts, run_kind: models.RunKind) -> dict | None:
+def _resolve_claude_tier(
+    facts: _UsageFacts,
+    run_kind: models.RunKind,
+    *,
+    backend_option: models.BackendOption | None = None,
+) -> dict | None:
   """Resolve usage from the last main-chain assistant event with positive prompt tokens.
 
   context_tokens is that assistant event's ``message.usage`` prompt-token sum, unless
@@ -265,13 +270,14 @@ def _resolve_claude_tier(facts: _UsageFacts, run_kind: models.RunKind) -> dict |
   ``modelUsage`` the declared window alone is used. context_compact_at is
   ``context_full`` minus the compaction reserve of the registered ``claude`` reading limits of a
   *run_kind* run, which read the same per-kind declared window the launch env sets; it is ``None``
-  when the declared window is degraded (a forwarded-but-unmodelled override is present).
+  when the declared window is degraded (a forwarded-but-unmodelled override is present). A
+  backend option can select type-specific limits.
   Returns ``None`` when no qualifying assistant event exists.
   """
   if facts.chosen_prompt_tokens <= 0:
     return None
   context_tokens = (facts.post_compact_tokens if facts.post_compact_tokens is not None else facts.chosen_prompt_tokens)
-  limits = backend_lifecycle_registration.reading_limits(_READING_CLAUDE, run_kind)
+  limits = backend_lifecycle_registration.reading_limits(_READING_CLAUDE, run_kind, backend_option)
   if limits is None:
     return _usage_dict(context_tokens, None, None, facts.chosen_model, facts.cost)
   if facts.chosen_model and facts.chosen_model in facts.model_windows:
@@ -362,7 +368,12 @@ def _resolve_reading_tier(facts: _UsageFacts) -> dict:
   )
 
 
-def resolve_events_usage(events: list[dict], run_kind: models.RunKind) -> dict | None:
+def resolve_events_usage(
+    events: list[dict],
+    run_kind: models.RunKind,
+    *,
+    backend_option: models.BackendOption | None = None,
+) -> dict | None:
   """One-shot tier resolution over an already-loaded event list (no memo).
 
   The worker transcript's usage path (src/runtime/worker_transcript.py): the
@@ -371,10 +382,11 @@ def resolve_events_usage(events: list[dict], run_kind: models.RunKind) -> dict |
   projection memo already holds the events list, and the 3 s header poll
   folds a few hundred events in well under a millisecond. *run_kind* is the
   node's kind (``usage_run_kind``), which its claude reading limits follow.
+  A backend option may select type-specific Claude limits.
   """
   fold = _UsageFold()
   fold.feed(events)
-  return _resolve_fold_tier(fold.facts(), events, run_kind)
+  return _resolve_fold_tier(fold.facts(), events, run_kind, backend_option=backend_option)
 
 
 def _resolve_no_source_tier(facts: _UsageFacts) -> dict:
@@ -386,7 +398,13 @@ def _resolve_no_source_tier(facts: _UsageFacts) -> dict:
   return _usage_dict(context_tokens=None, context_full=None, context_compact_at=None, model="", cost=facts.cost)
 
 
-def _resolve_fold_tier(facts: _UsageFacts, events: list[dict], run_kind: models.RunKind) -> dict | None:
+def _resolve_fold_tier(
+    facts: _UsageFacts,
+    events: list[dict],
+    run_kind: models.RunKind,
+    *,
+    backend_option: models.BackendOption | None = None,
+) -> dict | None:
   """The one tier dispatch over the fold's facts; both entry points land here.
 
   ``resolve_events_usage`` and ``resolve_session_usage`` (after its codex
@@ -395,7 +413,7 @@ def _resolve_fold_tier(facts: _UsageFacts, events: list[dict], run_kind: models.
   when the event list is empty.
   """
   if facts.reading_kind == _READING_CLAUDE:
-    return _resolve_claude_tier(facts, run_kind)
+    return _resolve_claude_tier(facts, run_kind, backend_option=backend_option)
   if facts.reading_kind == _READING_SNAPSHOT:
     return _resolve_snapshot_tier(facts, run_kind)
   if facts.reading_kind == _READING_RESOLVED:
@@ -488,7 +506,12 @@ class SessionUsageResolver:
       if merged is not None:
         return merged
 
-    return _resolve_fold_tier(facts, events, usage_run_kind(session_meta))
+    return _resolve_fold_tier(
+        facts,
+        events,
+        usage_run_kind(session_meta),
+        backend_option=self._cfg.get_backend_option(session_meta.backend),
+    )
 
   def _facts_hit(self, session_id: str) -> tuple[list[dict], _UsageFacts] | None:
     """Return ``(events, facts)`` from the facts memo without leaving the event loop, else ``None``.

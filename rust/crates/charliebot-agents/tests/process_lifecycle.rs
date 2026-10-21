@@ -4,11 +4,74 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
 
-use charliebot_agents::transport::identity::{is_run_alive, read_host_boot_time};
+use charliebot_agents::transport::identity::{is_run_alive, pin_process_identity, read_host_boot_time};
 use charliebot_agents::transport::kill::{detach, kill_process_group};
-use charliebot_agents::transport::spawn::{RawStdin, SpawnSpec, spawn_piped, spawn_raw_log};
+use charliebot_agents::transport::spawn::{RawStdin, SpawnSpec, spawn_one_shot, spawn_piped, spawn_raw_log};
 use nix::sys::signal::Signal;
 use time::OffsetDateTime;
+use tokio::process::Child;
+use tokio::runtime::{Builder, Runtime};
+
+struct ChildGroupGuard<'a> {
+  child: Child,
+  pid: u32,
+  runtime: &'a Runtime,
+}
+
+impl Drop for ChildGroupGuard<'_> {
+  fn drop(&mut self) {
+    kill_process_group(self.pid, Signal::SIGKILL);
+    if let Err(error) = self.runtime.block_on(self.child.wait()) {
+      eprintln!("could not reap test process {}: {error}", self.pid);
+    }
+  }
+}
+
+enum ParentDeathSpawn {
+  Piped,
+  OneShot,
+}
+
+fn assert_pdeath_child_survives_blocking_keep_alive(spawn_kind: ParentDeathSpawn) {
+  let root = tempfile::tempdir().unwrap();
+  let base = root.path().join("app.slice");
+  fs::create_dir(&base).unwrap();
+  let spec = SpawnSpec::new("/bin/sleep", vec!["30".into()], None, HashMap::new(), None, base, 0, 0, 0);
+  let runtime =
+    Builder::new_current_thread().enable_all().thread_keep_alive(Duration::from_millis(100)).build().unwrap();
+  let boot_time = read_host_boot_time().unwrap();
+  let started_at = OffsetDateTime::now_utc();
+  let spawned = runtime
+    .block_on(async {
+      match spawn_kind {
+        ParentDeathSpawn::Piped => spawn_piped(&spec).await,
+        ParentDeathSpawn::OneShot => spawn_one_shot(&spec, Some(Signal::SIGKILL)).await,
+      }
+    })
+    .unwrap();
+  let child = spawned.child;
+  let pid = child.id().unwrap();
+  let _guard = ChildGroupGuard { child, pid, runtime: &runtime };
+  let identity = pin_process_identity(pid);
+  let pid_start = identity.pid_start.as_deref().unwrap();
+
+  std::thread::sleep(Duration::from_secs(1));
+
+  assert!(
+    is_run_alive(Some(identity.pid), Some(pid_start), Some(started_at), boot_time),
+    "child {pid} did not survive the blocking thread keep-alive"
+  );
+}
+
+#[test]
+fn piped_child_survives_blocking_thread_keep_alive() {
+  assert_pdeath_child_survives_blocking_keep_alive(ParentDeathSpawn::Piped);
+}
+
+#[test]
+fn one_shot_pdeath_child_survives_blocking_thread_keep_alive() {
+  assert_pdeath_child_survives_blocking_keep_alive(ParentDeathSpawn::OneShot);
+}
 
 #[tokio::test]
 async fn child_survival_matches_parent_death_policy() {

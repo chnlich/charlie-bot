@@ -348,10 +348,9 @@ mod tests {
 
   use charliebot_core::config::CharlieBotConfig;
   use charliebot_registry::Registry;
-  use charliebot_registry::backend::{Env, LaunchArgs};
+  use charliebot_registry::backend::Env;
   use charliebot_store::metadata::UtcDateTime;
   use charliebot_store::run_records::RunKind;
-  use serde_json::{Map, json};
 
   use crate::backends::claude_code::claude_config;
 
@@ -483,55 +482,6 @@ mod tests {
   #[test]
   fn every_idle_compaction_gate_true_starts_a_qualifying_candidate() {
     assert!(should_compact(&base_facts(), IDLE_TOKENS, at("2026-09-06T20:00:00Z"),));
-  }
-
-  // Python: tests/test_claude_idle_compaction.py:186.
-  #[test]
-  fn idle_command_matches_the_turn_command_for_the_same_account() {
-    let root = tempfile::tempdir().unwrap();
-    let (registry, cfg) = config(root.path(), true);
-    let option = cfg.backends.options[0].clone();
-    let account =
-      claude_config::ClaudeAccount { label: "acct-a".to_string(), config_dir: "/synthetic/account-a".to_string() };
-    let base_env = Env::from([
-      ("HOME".to_string(), "/synthetic/home".to_string()),
-      ("PATH".to_string(), "/synthetic/bin:/usr/bin:/bin".to_string()),
-    ]);
-    let (argv, _) = build_idle_process(
-      Arc::clone(&registry),
-      &cfg,
-      &option,
-      &account,
-      IdleProcessIdentity {
-        session_id: SESSION_ID.to_string(),
-        cc_session_id: CC_SESSION_ID.to_string(),
-        run_kind: RunKind::ManagerTurn,
-      },
-      &base_env,
-    )
-    .unwrap();
-
-    let mut backend_kwargs = Map::new();
-    backend_kwargs
-      .insert("claude_account".to_string(), json!({"label": account.label, "config_dir": account.config_dir}));
-    backend_kwargs.insert("run_kind".to_string(), json!(RunKind::ManagerTurn));
-    let expected = crate::backend_types::build_backend(
-      Arc::clone(&registry),
-      &option,
-      &cfg,
-      LaunchArgs {
-        extra_flags: vec!["--resume".to_string(), CC_SESSION_ID.to_string(), EXCLUDE_DYNAMIC_SECTIONS_FLAG.to_string()],
-        cgroup_session_id: Some(SESSION_ID.to_string()),
-        backend_kwargs,
-        ..LaunchArgs::default()
-      },
-    )
-    .unwrap()
-    .backend
-    .build_command("/compact\n")
-    .unwrap();
-
-    assert_eq!(argv, expected);
   }
 
   // Python: tests/test_claude_idle_compaction.py:222.

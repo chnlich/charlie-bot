@@ -322,7 +322,6 @@ counts and may pass in a run.
 
 | Scenario | Step | Stage | Main commit | Difference |
 | --- | --- | --- | --- | --- |
-| features-web-reply-audit | server shutdown and fake-agent cleanup | features | `3cd98aa21`, `2fa0a4ce2` | Claude launch argv and env lag Python's per-run-kind tools, settings, and advisor disablement. Intermittent: it failed in the earlier all-stage run and passed in the latest one. |
 
 ## Catch-up e44c9ccef ignored Cargo tests
 

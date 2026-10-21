@@ -285,10 +285,7 @@ impl CronScheduler {
     let session = self.fireable_binding(&task).await?;
     let firing = match firing {
       Some(value) => value,
-      None => {
-        let task_timezone = task.timezone.parse::<chrono_tz::Tz>()?;
-        python_isoformat(&now.with_timezone(&task_timezone))?
-      }
+      None => UtcDateTime::now().to_python_isoformat(),
     };
     if task.mode.as_deref() == Some("master") {
       let dispatcher = charliebot_tasks::dispatch::dispatcher(&self.features)?;

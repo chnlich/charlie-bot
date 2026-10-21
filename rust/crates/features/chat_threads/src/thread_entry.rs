@@ -78,7 +78,7 @@ const TEXT_PREVIEW_CHARS: usize = 200;
 /// The reply budget the format contract states (`_REPLY_BUDGET_CHARS`): the depth goes to a page.
 const REPLY_BUDGET_CHARS: usize = 500;
 /// A thread-follow batch sleeps out this quiet delay from its newest message (`_FOLLOW_QUIET_SECONDS`).
-const FOLLOW_QUIET_SECONDS: i64 = 45;
+const FOLLOW_QUIET_SECONDS: i64 = 10;
 /// A follow chain never runs past this cap from its first message (`_FOLLOW_CHAIN_CAP_SECONDS`).
 const FOLLOW_CHAIN_CAP_SECONDS: i64 = 300;
 /// The house timezone of session display names (`config.HOUSE_TIMEZONE`).

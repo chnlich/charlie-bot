@@ -173,9 +173,9 @@ When `keep_language` is present, the server records it with the reply and skips 
 
 Side effects:
 
-1. Append and broadcast `{"type":"web_reply","content":<text>,"web_reply":{"answers","chars"}}`.
+1. Append and broadcast `{"type":"web_reply","content":<text>,"web_reply":{"answers","chars"}}`, with `"keep_language":<reason>` in `web_reply` when the reason is given.
 2. Mark the session unread (sidebar `unread_changed` frame when the flag changes).
-3. Log `web_reply_posted`.
+3. Log `web_reply_posted`. A held reply logs `web_reply_held` and records nothing.
 
 ### `GET /api/internal/web/dialog`
 

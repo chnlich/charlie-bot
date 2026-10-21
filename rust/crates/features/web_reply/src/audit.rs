@@ -143,7 +143,7 @@ mod tests {
     let nudge_id = id_of(&home.nudges(&sid)[0]).to_string();
 
     home.set_running(&[nudge_id.as_str()]);
-    reply::post_web_reply(&home.features, &sid, "the answer").await.expect("the reply posts");
+    reply::post_web_reply(&home.features, &sid, "the answer", None).await.expect("the reply posts");
     audit_turn(&home.features, &sid, &master_done(&[nudge_id.as_str()], 0)).await.expect("the audit runs");
 
     let events = home.events(&sid);

@@ -28,11 +28,11 @@ pub async fn post_reply(State(features): State<Arc<FeatureContext>>, request: Re
     Ok(body) => body,
     Err(response) => return *response,
   };
-  let model = match SessionText::validate(&body) {
+  let model = match ReplyRequest::validate(&body) {
     Ok(model) => model,
     Err(response) => return *response,
   };
-  answer(reply::post_web_reply(&features, &model.session_id, &model.text).await)
+  answer(reply::post_web_reply(&features, &model.session_id, &model.text, model.keep_language.as_deref()).await)
 }
 
 /// `GET /api/internal/web/dialog?session_id=`: the session's For-you layer, in log order.
@@ -126,7 +126,16 @@ fn session_id_param(query: &HashMap<String, String>) -> Result<String, Box<Field
   }
 }
 
-/// The fields of `WebReplyRequest` and `WebStatusRequest`: the calling session's id and a text, both required strings.
+/// The fields of `WebReplyRequest` in declaration order: the calling session's id, the reply text, and the optional
+/// reason for posting the text past the language check.
+const REPLY_FIELDS: &[Field] = &[
+  Field::required("session_id", FieldType::String),
+  Field::required("text", FieldType::String),
+  Field::optional("keep_language", FieldType::NullableString),
+];
+const REPLY_BODY: BodyModel = BodyModel::required(REPLY_FIELDS).forbid_extra();
+
+/// The fields of `WebStatusRequest`: the calling session's id and a text, both required strings.
 const SESSION_TEXT_FIELDS: &[Field] =
   &[Field::required("session_id", FieldType::String), Field::required("text", FieldType::String)];
 const SESSION_TEXT_BODY: BodyModel = BodyModel::required(SESSION_TEXT_FIELDS).forbid_extra();
@@ -140,7 +149,29 @@ const ASK_CHECK_FIELDS: &[Field] = &[
 ];
 const ASK_CHECK_BODY: BodyModel = BodyModel::required(ASK_CHECK_FIELDS).forbid_extra();
 
-/// The validated `WebReplyRequest` or `WebStatusRequest`.
+/// The validated `WebReplyRequest`.
+struct ReplyRequest {
+  session_id: String,
+  text: String,
+  keep_language: Option<String>,
+}
+
+impl ReplyRequest {
+  /// Validates the body against `REPLY_BODY`, which forbids the keys the model does not declare.
+  fn validate(body: &RequestBody) -> Result<Self, Box<Response>> {
+    let Some(Value::Object(mut fields)) = body.validate(&REPLY_BODY)? else {
+      unreachable!("a required model validates a body to its fields")
+    };
+    let keep_language = match fields.remove("keep_language") {
+      Some(Value::String(reason)) => Some(reason),
+      Some(Value::Null) | None => None,
+      Some(_) => unreachable!("a validated keep_language is a string or null"),
+    };
+    Ok(Self { session_id: text_field(&mut fields, "session_id"), text: text_field(&mut fields, "text"), keep_language })
+  }
+}
+
+/// The validated `WebStatusRequest`.
 struct SessionText {
   session_id: String,
   text: String,

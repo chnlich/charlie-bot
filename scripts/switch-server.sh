@@ -10,10 +10,15 @@
 # failed and the previous implementation serves again; 3 when the restore failed too, and the log ends with the state
 # the server is in.
 #
+# The probe turn runs last, in a session of its own. It passes once the run records its first assistant output (a
+# message or a tool call) or ends success. It then stops the run unless the run already ended, and archives the
+# session. It reads run states and message roles only, so the model's text cannot fail a healthy server.
+#
 # Environment: CHARLIEBOT_HOME (default ~/.charliebot), CHARLIEBOT_RELEASES_DIR (default ~/charliebot-releases),
 # CHARLIEBOT_LOG_DIR (default /tmp/charliebot-logs), CHARLIEBOT_TMUX_SOCKET (a tmux -L socket; unset means the default
 # server, where the production pane runs). CHARLIEBOT_SWITCH_STOP_WAIT_S and CHARLIEBOT_SWITCH_READY_WAIT_S replace the
-# 60 s and 15 min waits; the tests shorten them.
+# 60 s and 15 min waits. CHARLIEBOT_SWITCH_PROBE_WAIT_S and CHARLIEBOT_SWITCH_PROBE_CANCEL_WAIT_S replace the 300 s
+# and 60 s probe waits. The tests shorten all four.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -24,7 +29,8 @@ LOG_DIR="${CHARLIEBOT_LOG_DIR:-/tmp/charliebot-logs}"
 CURRENT="$RELEASES_DIR/current"
 STOP_WAIT_S="${CHARLIEBOT_SWITCH_STOP_WAIT_S:-60}"
 READY_WAIT_S="${CHARLIEBOT_SWITCH_READY_WAIT_S:-900}"
-PROBE_WAIT_S=300
+PROBE_WAIT_S="${CHARLIEBOT_SWITCH_PROBE_WAIT_S:-300}"
+PROBE_CANCEL_WAIT_S="${CHARLIEBOT_SWITCH_PROBE_CANCEL_WAIT_S:-60}"
 
 usage() {
   echo "usage: switch-server.sh rust <full rust-backend sha> [--pane PANE]" >&2
@@ -243,14 +249,15 @@ print(json.load(open(sys.argv[1]))[sys.argv[2]])
 PY
 }
 
-# last_run_state: the state of the newest Run in the runs response in $WORK/body; empty while there is none.
-last_run_state() {
-  python3 -I - "$WORK/body" <<'PY'
+# newest_run_field FIELD: a field of the newest Run in the runs response in $WORK/body (read with order=desc&limit=1);
+# empty while the session has no run.
+newest_run_field() {
+  python3 -I - "$WORK/body" "$1" <<'PY'
 import json
 import sys
 
 items = json.load(open(sys.argv[1])).get("items") or []
-print(items[-1]["state"] if items else "")
+print(items[0][sys.argv[2]] if items else "")
 PY
 }
 
@@ -356,39 +363,152 @@ serving() {
   }
 }
 
-# probe_turn: a manager turn on the host's default backend, in a session of its own, must end in success.
+# probe_clock: the wall clock in microseconds. The probe's waits use it, because SECONDS is too coarse for the
+# one-second waits the tests use.
+probe_clock() { echo "${EPOCHREALTIME/[.,]/}"; }
+
+# probe_log STAGE: one line for a probe stage, with the session, the run ("-" until one exists) and the elapsed
+# seconds.
+probe_log() {
+  log "probe: $1 session=$PROBE_SESSION run=${PROBE_RUN:--} elapsed=$((($(probe_clock) - PROBE_START) / 1000000))s"
+}
+
+# probe_read_run: the session's newest Run into PROBE_RUN and PROBE_STATE; both are empty while the session has no run.
+probe_read_run() {
+  api GET "/api/sessions/$PROBE_SESSION/runs?order=desc&limit=1"
+  [ "$API_STATUS" = 200 ] || {
+    log "probe: listing the runs answered $API_STATUS"
+    return 1
+  }
+  PROBE_RUN="$(newest_run_field id)" || return 1
+  PROBE_STATE="$(newest_run_field state)" || return 1
+}
+
+# probe_ended: the probe's run has ended. A stopped run never launched, so it never will.
+probe_ended() {
+  case "$PROBE_STATE" in
+    success | failed | interrupted | stopped) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# assistant_messages: how many assistant messages the bootstrap in $WORK/body holds, the open draft included. A tool
+# call is part of its turn's assistant message, so a tool call counts here too.
+assistant_messages() {
+  python3 -I - "$WORK/body" <<'PY'
+import json
+import sys
+
+body = json.load(open(sys.argv[1]))
+drafts = [body["pending_draft"]] if body["pending_draft"] else []
+print(sum(message["role"] == "assistant" for message in body["messages"] + drafts))
+PY
+}
+
+# probe_wait_output: succeeds once the run records its first assistant output or ends success. It fails when the run
+# ends without output, or when PROBE_WAIT_S passes first. The run is read before the messages, so output recorded
+# before a failure still counts.
+probe_wait_output() {
+  local end=$(($(probe_clock) + PROBE_WAIT_S * 1000000)) outputs
+  while :; do
+    probe_read_run || return 1
+    if [ "$PROBE_STATE" = success ]; then
+      probe_log "run ended success"
+      return 0
+    fi
+    api GET "/api/sessions/$PROBE_SESSION/bootstrap"
+    [ "$API_STATUS" = 200 ] || {
+      log "probe: the bootstrap answered $API_STATUS"
+      return 1
+    }
+    outputs="$(assistant_messages)" || return 1
+    if [ "$outputs" -gt 0 ]; then
+      probe_log "first output"
+      return 0
+    fi
+    if probe_ended; then
+      probe_log "run ended $PROBE_STATE before its first output"
+      return 1
+    fi
+    if [ "$(probe_clock)" -ge "$end" ]; then
+      probe_log "no output within ${PROBE_WAIT_S}s"
+      return 1
+    fi
+    sleep 0.2
+  done
+}
+
+# probe_wait_settled: succeeds once the run has ended; fails when PROBE_CANCEL_WAIT_S passes first.
+probe_wait_settled() {
+  local end=$(($(probe_clock) + PROBE_CANCEL_WAIT_S * 1000000))
+  while :; do
+    probe_read_run || return 1
+    if probe_ended; then
+      probe_log "run settled as $PROBE_STATE"
+      return 0
+    fi
+    if [ "$(probe_clock)" -ge "$end" ]; then
+      probe_log "run did not settle within ${PROBE_CANCEL_WAIT_S}s"
+      return 1
+    fi
+    sleep 0.2
+  done
+}
+
+# probe_stop: asks the probe's run to stop, then waits for it to end.
+probe_stop() {
+  api POST "/api/sessions/$PROBE_SESSION/runs/$PROBE_RUN/cancel" "{\"request_id\":\"switch-probe-$PROBE_RUN\"}"
+  [ "$API_STATUS" = 200 ] || {
+    log "probe: the cancel answered $API_STATUS"
+    return 1
+  }
+  probe_log "stop requested"
+  probe_wait_settled
+}
+
+# probe_run_stages: sends the message, waits for the run's first output, then stops the run unless it has ended.
+probe_run_stages() {
+  local verdict=0
+  api POST "/api/chat/$PROBE_SESSION/message" '{"content":"Reply with the single word HELLO."}'
+  [ "$API_STATUS" = 202 ] || {
+    log "probe: the message answered $API_STATUS"
+    return 1
+  }
+  probe_wait_output || verdict=1
+  if [ -n "$PROBE_RUN" ] && ! probe_ended; then
+    probe_stop || verdict=1
+  fi
+  return "$verdict"
+}
+
+# probe_archive: archives the probe session. The server refuses while the session has an unfinished run.
+probe_archive() {
+  api DELETE "/api/sessions/$PROBE_SESSION"
+  [ "$API_STATUS" = 200 ] || {
+    probe_log "archive answered $API_STATUS"
+    return 1
+  }
+  probe_log "archived"
+}
+
+# probe_turn: runs the stages in a session of its own and archives that session whatever the stages found, so the live
+# home keeps no open probe session.
 probe_turn() {
-  local session state end=$((SECONDS + PROBE_WAIT_S))
+  local verdict=0
+  PROBE_START="$(probe_clock)"
+  PROBE_SESSION=""
+  PROBE_RUN=""
+  PROBE_STATE=""
   api POST /api/sessions/ '{"name":"switch probe"}'
   [ "$API_STATUS" = 200 ] || {
     log "probe: creating a session answered $API_STATUS"
     return 1
   }
-  session="$(json_field id)"
-  api POST "/api/chat/$session/message" '{"content":"Reply with the single word HELLO."}'
-  [ "$API_STATUS" = 202 ] || {
-    log "probe: the message answered $API_STATUS"
-    return 1
-  }
-  while :; do
-    api GET "/api/sessions/$session/runs?order=asc&limit=100"
-    state="$(last_run_state)"
-    case "$state" in
-      success)
-        log "probe: the turn in session $session succeeded"
-        return 0
-        ;;
-      failed | interrupted)
-        log "probe: the turn in session $session ended $state"
-        return 1
-        ;;
-    esac
-    if [ "$SECONDS" -ge "$end" ]; then
-      log "probe: no terminal state within ${PROBE_WAIT_S}s"
-      return 1
-    fi
-    sleep 0.5
-  done
+  PROBE_SESSION="$(json_field id)" || return 1
+  probe_log "created"
+  probe_run_stages || verdict=1
+  probe_archive || verdict=1
+  return "$verdict"
 }
 
 # set_current RELEASE: point current at a release with one rename; with no release, remove it.
@@ -531,6 +651,11 @@ run_detached() {
   preflight
   switch_forward
 }
+
+# tests/test_switch_server.py sources this file for the probe functions. A sourced copy stops here and runs no switch.
+if [ "${BASH_SOURCE[0]}" != "$0" ]; then
+  return 0
+fi
 
 if [ -n "$DETACHED_LOG" ]; then
   run_detached

@@ -16,6 +16,10 @@ pub const RUNTIME: &[(&str, RegisterFn)] = &[
   ("runtime.triggers", charliebot_sched::register),
 ];
 
+fn register_python_only_package(_registry: &mut Registry) -> Result<(), RegistryError> {
+  Ok(())
+}
+
 /// The listed packages in registration order.
 pub const PACKAGES: &[(&str, RegisterFn)] = &[
   ("src.features.artifacts", charliebot_artifacts::register),
@@ -34,6 +38,7 @@ pub const PACKAGES: &[(&str, RegisterFn)] = &[
   ("src.features.improve", charliebot_sched::improve::register),
   ("src.features.memory", charliebot_memory::register),
   ("src.features.ncu", charliebot_ncu::register),
+  ("src.features.router", register_python_only_package),
   ("src.features.terminal", charliebot_terminal::register),
   ("src.features.trace", charliebot_trace::register),
   ("src.features.usage", charliebot_usage_page::register),

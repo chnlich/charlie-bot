@@ -290,7 +290,7 @@ the validated checkout root held in typed startup state. Python reads this path 
 | `prompts::resolve_launch_overlay` | `src/runtime/task_execution.py:279` |
 | `prompts::capture_prompt_chain` | `src/runtime/task_execution.py:294` |
 | `prompts::assemble_coherent_snapshot`, `prompts::CoherentSnapshot` | `src/runtime/task_execution.py:336` |
-| `prompts::read_run_context`, `prompts::ContextReadError` | `src/runtime/api/sessions.py:1620` (`get_run_context`), `:1604` (`_legacy_prompt_payload`) |
+| `prompts::read_run_context`, `prompts::ContextReadError` | `src/runtime/api/sessions.py` (`get_run_context`) |
 | `prompts::render_session_info` | `src/runtime/task_prompts.py:477` |
 | `prompts::binding_intro` | `src/runtime/task_prompts.py:483` |
 | `prompts::render_worktree_bindings` | `src/runtime/task_prompts.py:490` |

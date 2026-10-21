@@ -462,7 +462,7 @@ async fn run_context_returns_the_stored_snapshot() {
   assert_eq!(payload["mode"], "historical");
   assert_eq!(payload["snapshot"]["prompt_hash"], json!(snapshot.prompt_hash()));
   assert_eq!(payload["snapshot"]["char_count"], json!(snapshot.char_count()));
-  assert!(payload["legacy_prompt"].is_null());
+  assert!(payload.get("legacy_prompt").is_none());
   assert_eq!(payload["task_spec"], json!({"ref": run.task_spec_ref, "sha256": run.task_spec_hash}));
   let logs: Vec<&str> = payload["logs"].as_object().expect("logs").keys().map(String::as_str).collect();
   assert_eq!(logs, ["raw_log_ref", "events_ref", "result_ref"]);

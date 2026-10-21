@@ -136,7 +136,7 @@ The order of the web reply audit's events is undefined. In the requested 20 Pyth
 | GET, HEAD | `/static/features/improve` | foundation | ported |  |
 | GET, HEAD | `/static/features/memory` | foundation | ported |  |
 | GET, HEAD | `/static/features/ncu` | foundation | ported |  |
-| GET, HEAD | `/static/features/router` | foundation | todo |  |
+| GET, HEAD | `/static/features/router` | foundation | ported |  |
 | GET, HEAD | `/static/features/terminal` | foundation | ported |  |
 | GET, HEAD | `/static/features/trace` | foundation | ported |  |
 | GET, HEAD | `/static/features/usage` | foundation | ported |  |
@@ -373,15 +373,8 @@ count and may pass in a run.
 | session-detail | events, newest page, worker, queued run stopped | session-read-api | `90e8ac300`, `f77008f66` | Python's run summary includes the new tool-call count and lifecycle rows; Rust omits them. |
 | session-detail | bootstrap, fork of atlas | session-read-api | `ae5555da7` | Python records the router's quota failover message; Rust retains the old prompt-overlay warning. |
 | session-detail | events, newest page, fork of atlas | session-read-api | `ae5555da7` | Python records the router's quota failover message; Rust retains the old prompt-overlay warning. |
-| session-runs | run context, manager turn | session-read-api | `f08291064` | Python removed `legacy_prompt` from run-context responses; Rust still includes the field. |
-| session-runs | run context, failed manager turn | session-read-api | `f08291064` | Python removed `legacy_prompt` from run-context responses; Rust still includes the field. |
-| session-runs | run context, failed work run | session-read-api | `f08291064` | The extra Rust legacy-prompt payload changes the `Accept-Encoding` Vary header versus Python. |
-| session-runs | run context, successful work run | session-read-api | `f08291064` | Python removed `legacy_prompt` from run-context responses; Rust still includes the field. |
-| session-runs | run context, interrupted work run | session-read-api | `f08291064` | The extra Rust legacy-prompt payload changes the `Accept-Encoding` Vary header versus Python. |
-| session-runs | run context, stopped queued run | session-read-api | `f08291064` | Python removed `legacy_prompt` from run-context responses; Rust still includes the field. |
 | session-runs | transcript, closed worker | session-read-api | `90e8ac300`, `f77008f66` | Python's run summary includes the new tool-call count and lifecycle rows; Rust omits them. |
 | session-runs | transcript, archived worker | session-read-api | `90e8ac300`, `f77008f66` | Python's run summary includes the new tool-call count and lifecycle rows; Rust omits them. |
-| session-runs | transcript, stopped worker | session-read-api | `f08291064` | The extra Rust legacy-prompt payload changes the `Accept-Encoding` Vary header versus Python. |
 | session-runs | transcript, closed worker, revision capture | session-read-api | `90e8ac300`, `f77008f66` | Python's run summary includes the new tool-call count and lifecycle rows; Rust omits them. |
 | session-runs | transcript, closed worker, after the rendered rows | session-read-api | `90e8ac300`, `f77008f66` | Python's run summary includes the new tool-call count and lifecycle rows; Rust omits them. |
 | session-runs | transcript, closed worker, stale revision | session-read-api | `90e8ac300`, `f77008f66` | Python's run summary includes the new tool-call count and lifecycle rows; Rust omits them. |

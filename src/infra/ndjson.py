@@ -537,10 +537,12 @@ def type_line_filter(types: frozenset[str]) -> HeadProvableFilter:
       _, rest, provable = _string_after_key(raw_line[len(b'{"id"'):])
       if not provable:
         return True
-      rest = rest.lstrip(b" \t")
-      if not rest.startswith(b',"type"'):
+      if not rest.startswith(b","):
         return True
-      value, _, provable = _string_after_key(rest[len(b',"type"'):])
+      rest = rest[len(b","):].lstrip(b" \t")
+      if not rest.startswith(b'"type"'):
+        return True
+      value, _, provable = _string_after_key(rest[len(b'"type"'):])
       return value.decode("utf-8", errors="replace") in types if provable else True
     return True
 

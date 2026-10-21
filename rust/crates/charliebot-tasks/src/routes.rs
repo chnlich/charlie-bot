@@ -894,31 +894,10 @@ async fn cancel_run(
   {
     return responses::json(StatusCode::FORBIDDEN, &json!({ "detail": "an agent may only stop its own bound run" }));
   }
-  let mut settlement = match features.store.read_run_sync(&session_id, &run_id) {
-    Ok(Some(_)) => {
-      let adapter = match features.startup.require::<TaskExecutionAdapter>() {
-        Ok(adapter) => adapter,
-        Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
-      };
-      adapter.settlement_receiver(&session_id, &run_id)
-    }
-    Ok(None) => None,
-    Err(error) => return task_http_error(error),
-  };
   let result = match features.store.request_stop(&session_id, &run_id, &request.request_id).await {
     Ok(result) => result,
     Err(error) => return task_http_error(error),
   };
-  if let Some(receiver) = settlement.as_mut() {
-    while receiver.borrow().is_none() {
-      if let Err(error) = receiver.changed().await {
-        return responses::internal_error(
-          "RuntimeError",
-          format!("run {run_id} launch settlement closed before it completed: {error}"),
-        );
-      }
-    }
-  }
   let outcome = result.outcome.map(|outcome| match outcome {
     RunOutcomeKind::Success => "success",
     RunOutcomeKind::Failed => "failed",

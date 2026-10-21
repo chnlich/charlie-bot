@@ -2059,17 +2059,6 @@ impl TaskExecutionAdapter {
       || self.recovery.resume_follows.lock().expect("resume follow set is not poisoned").contains(&key)
   }
 
-  /// Subscribe to the active launch's settlement before a stop can finish and remove it from launch state.
-  pub(crate) fn settlement_receiver(
-    &self,
-    session_id: &str,
-    run_id: &str,
-  ) -> Option<watch::Receiver<Option<LaunchSettlement>>> {
-    let key = (session_id.to_string(), run_id.to_string());
-    let state = self.launches.lock().expect("task execution launch state is not poisoned");
-    state.settlements.get(&key).map(watch::Sender::subscribe)
-  }
-
   pub(crate) fn child_env(&self, session_id: &str, run_id: &str, agent: &str) -> StoreResult<Env> {
     let key = self
       .features

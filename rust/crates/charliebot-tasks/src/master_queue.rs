@@ -41,7 +41,7 @@ pub type ContextStateFn = Arc<
 >;
 pub type TaskTreeActivityFn = Arc<dyn Fn(&str) -> anyhow::Result<(bool, String)> + Send + Sync>;
 pub type AfterRoundFn =
-  Arc<dyn Fn(Arc<CharlieBotConfig>, String, Option<String>) -> BoxFuture<'static, anyhow::Result<()>> + Send + Sync>;
+  Arc<dyn Fn(Arc<CharlieBotConfig>, String) -> BoxFuture<'static, anyhow::Result<()>> + Send + Sync>;
 
 /// Session block callbacks used by a manager turn.
 #[derive(Clone)]
@@ -139,22 +139,11 @@ impl MasterQueue {
     });
     let after_features = Arc::clone(&features);
     let pool = Arc::clone(&self.backend_pool);
-    let idle_queue = Arc::downgrade(self);
-    let idle_emit = Arc::clone(&persist_and_broadcast);
-    let after_round = Arc::new(move |cfg: Arc<CharlieBotConfig>, session_id: String, backend_id: Option<String>| {
+    let after_round = Arc::new(move |cfg: Arc<CharlieBotConfig>, session_id: String| {
       let features = Arc::clone(&after_features);
       let pool = Arc::clone(&pool);
-      let idle_queue = idle_queue.clone();
-      let idle_emit = Arc::clone(&idle_emit);
-      Box::pin(async move {
-        autonamer::name_after_round(&features, &cfg, &session_id, pool).await?;
-        if let Some(backend_id) = backend_id {
-          arm_idle_compaction(features, idle_queue, cfg, session_id, backend_id, idle_emit).await?;
-        } else {
-          claude_idle_compaction::IdleCompaction::shared().disarm(&session_id);
-        }
-        Ok(())
-      }) as BoxFuture<'static, anyhow::Result<()>>
+      Box::pin(async move { autonamer::name_after_round(&features, &cfg, &session_id, pool).await })
+        as BoxFuture<'static, anyhow::Result<()>>
     });
     SessionCallbacks {
       features,
@@ -511,6 +500,8 @@ impl MasterQueue {
     } else {
       master_run::run_cc(Arc::clone(self), item).await?
     };
+    let ran_backend = result.finish_extras.get("native_backend").and_then(Value::as_str).map(str::to_string);
+    arm_idle_after_round(self, item, session_id, ran_backend.clone()).await;
     if result.let_go {
       return Err(master_run::TurnLetGo.into());
     }
@@ -534,7 +525,6 @@ impl MasterQueue {
     if item.task_run.fresh_native_context {
       *last_cc_session_id = None;
     }
-    let ran_backend = result.finish_extras.get("native_backend").and_then(Value::as_str).map(str::to_string);
     if let Some(cc_session_id) = result.cc_session_id.as_ref().filter(|id| !id.is_empty()) {
       {
         let mut metadata = item.session_meta.lock().expect("work item metadata mutex is not poisoned");
@@ -611,9 +601,8 @@ impl MasterQueue {
       let after_round = Arc::clone(after_round);
       let cfg = Arc::clone(&item.cfg);
       let session_id = session_id.to_string();
-      let backend_id = result.finish_extras.get("native_backend").and_then(Value::as_str).map(str::to_string);
       tokio::spawn(async move {
-        if let Err(error) = after_round(cfg, session_id.clone(), backend_id).await {
+        if let Err(error) = after_round(cfg, session_id.clone()).await {
           tracing::error!(target: "charliebot_tasks", task = %format!("after-round-{session_id}"), error = %error, "after-turn contribution failed");
         }
       });
@@ -629,6 +618,31 @@ pub fn session_callbacks(
   task_tree_activity: TaskTreeActivityFn,
 ) -> SessionCallbacks {
   queue.session_callbacks(features, task_tree_activity)
+}
+
+/// Arm the session's idle compaction when a round ends on any exit, as Python's after_round does in a finally.
+async fn arm_idle_after_round(
+  queue: &Arc<MasterQueue>,
+  item: &WorkItem,
+  session_id: &str,
+  ran_backend: Option<String>,
+) {
+  let Some(backend_id) = ran_backend else {
+    claude_idle_compaction::IdleCompaction::shared().disarm(session_id);
+    return;
+  };
+  let armed = arm_idle_compaction(
+    Arc::clone(&item.callbacks.features),
+    Arc::downgrade(queue),
+    Arc::clone(&item.cfg),
+    session_id.to_string(),
+    backend_id,
+    Arc::clone(&item.callbacks.persist_and_broadcast),
+  )
+  .await;
+  if let Err(error) = armed {
+    tracing::error!(target: "charliebot_tasks", session = %session_id, error = %error, "claude_idle_compaction_arm_failed");
+  }
 }
 
 async fn arm_idle_compaction(

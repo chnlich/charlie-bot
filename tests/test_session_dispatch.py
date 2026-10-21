@@ -44,7 +44,7 @@ class ScriptedExecutor:
     self.counter += 1
     batch_ids = [str(e["id"]) for e in pending]
     self.batches.append((session_id, batch_ids))
-    run = await self.tree.runs.register_run(
+    run = await self.tree.runs.register_run_locked(
         models.RunRecord(id=f"consumer-{self.counter}", session_id=session_id, kind="work"))
     async with self.tree.control_lock:
       bound = await self.tree.dispatch.claim_input_batch_locked(session_id, run.id)
@@ -78,7 +78,7 @@ async def test_two_reports_one_acknowledged_reload_leaves_only_the_other(tmp_pat
 
   # Child A closes and reports; the parent's first consumer claims exactly that
   # report and finishes successfully, acknowledging only it.
-  run_a = await tree.runs.register_run(models.RunRecord(id="run-a", session_id=child_a.id, kind="work"))
+  run_a = await tree.runs.register_run_locked(models.RunRecord(id="run-a", session_id=child_a.id, kind="work"))
   await tree.dispatch.finish_run(child_a.id, run_a.id, outcome="success")  # auto-close + report
   assert input_events(tree, parent.id) and {e["child_session_id"] for e in input_events(tree, parent.id)
                                            } == {child_a.id}
@@ -97,7 +97,7 @@ async def test_two_reports_one_acknowledged_reload_leaves_only_the_other(tmp_pat
   # With no executor installed the close-time report dispatch records the
   # report only (the execution adapter's own tests cover the live dispatch).
   tree.dispatch.executor = None
-  run_b = await tree.runs.register_run(models.RunRecord(id="run-b", session_id=child_b.id, kind="work"))
+  run_b = await tree.runs.register_run_locked(models.RunRecord(id="run-b", session_id=child_b.id, kind="work"))
   await tree.dispatch.finish_run(child_b.id, run_b.id, outcome="success")
   pending_now = {e["child_session_id"] for e in input_events(tree, parent.id)}
   assert pending_now == {child_b.id}
@@ -284,7 +284,7 @@ async def test_stopped_queued_run_is_never_launched_and_releases_its_batch(tmp_p
   _, _, tree = conftest.build_env(tmp_path)
   node = await conftest.create_task(tree, parent=None, request_id="node")
   await admit(tree, node.id, "work to do", input_id="job-1")
-  queued = await tree.runs.register_run(models.RunRecord(id="run-queued", session_id=node.id))
+  queued = await tree.runs.register_run_locked(models.RunRecord(id="run-queued", session_id=node.id))
   async with tree.control_lock:
     await tree.dispatch.claim_input_batch_locked(node.id, queued.id)
   stop = await tree.runs.request_stop(node.id, "run-queued", "stop-1")
@@ -320,7 +320,7 @@ async def test_deletion_rejects_each_reference_category_and_deletes_the_empty(tm
   with pytest.raises(task_errors.TaskConflictError, match="child task"):
     await tree.delete_permanently(root.id, caller=conftest.OPERATOR)
   # Runs.
-  await tree.runs.register_run(models.RunRecord(id="run-blk", session_id=child.id))
+  await tree.runs.register_run_locked(models.RunRecord(id="run-blk", session_id=child.id))
   with pytest.raises(task_errors.TaskConflictError, match="run record"):
     await tree.delete_permanently(child.id, caller=conftest.OPERATOR)
   # Preserved conversation beyond the creation fact.
@@ -418,7 +418,7 @@ async def test_message_routes_use_the_dispatcher_on_v2_nodes(tmp_path: pathlib.P
       # request-entry gate refuses it anyway — the worker is not its own
       # parent, so its self-addressed agent message is a 403 and nothing is
       # enqueued.
-      await tree.runs.register_run(models.RunRecord(id="run-agent", session_id=worker.id, kind="work"))
+      await tree.runs.register_run_locked(models.RunRecord(id="run-agent", session_id=worker.id, kind="work"))
       # The run credential is accepted only once the launch callback persisted
       # the process identity on the Run.
       await tree.runs.record_launch(worker.id, "run-agent", pid=424242, pid_start="ps-1")
@@ -523,7 +523,7 @@ async def test_complete_cancel_reopen_routes_and_scope(tmp_path: pathlib.Path) -
     assert any("open descendant" in b for b in blocked.json()["detail"]["blockers"])
 
     # The worker's successful run closes it; the route returns the Session detail.
-    await tree.runs.register_run(models.RunRecord(id="run-w", session_id=worker.id, kind="work"))
+    await tree.runs.register_run_locked(models.RunRecord(id="run-w", session_id=worker.id, kind="work"))
     await tree.dispatch.finish_run(worker.id, "run-w", outcome="success")
     ok = client.post(
         f"/api/sessions/{root.id}/complete",
@@ -534,7 +534,7 @@ async def test_complete_cancel_reopen_routes_and_scope(tmp_path: pathlib.Path) -
             "run_ids": ["run-w"]
         })
     assert ok.status_code == 409  # the worker's report is unprocessed input
-    await tree.runs.register_run(models.RunRecord(id="run-root-turn", session_id=root.id, kind="manager_turn"))
+    await tree.runs.register_run_locked(models.RunRecord(id="run-root-turn", session_id=root.id, kind="manager_turn"))
     async with tree.control_lock:
       await tree.dispatch.claim_input_batch_locked(root.id, "run-root-turn")
     await tree.dispatch.finish_run(root.id, "run-root-turn", outcome="success")
@@ -562,7 +562,7 @@ async def test_complete_cancel_reopen_routes_and_scope(tmp_path: pathlib.Path) -
     assert len(closes) == 1
 
     # Archive (DELETE) is the single end state; an agent token cannot mutate.
-    await tree.runs.register_run(models.RunRecord(id="run-root-agent", session_id=root.id, kind="work"))
+    await tree.runs.register_run_locked(models.RunRecord(id="run-root-agent", session_id=root.id, kind="work"))
     await tree.runs.record_launch(root.id, "run-root-agent", pid=424243, pid_start="ps-2")
     agent_token = run_token.sign_run_token(
         run_token.RunTokenClaims(run_id="run-root-agent", session_id=root.id, agent="a"), key)
@@ -597,11 +597,11 @@ async def test_batchless_finish_never_acknowledges_another_runs_claimed_batch(tm
   _cfg, _session_blocks, tree = conftest.build_env(tmp_path)
   task = await conftest.create_task(tree, parent=None, request_id="root")
   await admit(tree, task.id, "work", input_id="in-1")
-  await tree.runs.register_run(models.RunRecord(id="run-b", session_id=task.id, kind="work"))
+  await tree.runs.register_run_locked(models.RunRecord(id="run-b", session_id=task.id, kind="work"))
   async with tree.control_lock:
     claimed = await tree.dispatch.claim_input_batch_locked(task.id, "run-b")
   assert claimed == ["in-1"]
-  await tree.runs.register_run(models.RunRecord(id="run-a", session_id=task.id, kind="manager_turn"))
+  await tree.runs.register_run_locked(models.RunRecord(id="run-a", session_id=task.id, kind="manager_turn"))
   with pytest.raises(runs.RunInputMismatchError, match="claimed batch"):
     await tree.runs.record_finish(task.id, "run-a", "success", input_event_ids=["in-1"])
   # No terminal fact landed for run-a; the input stays claimed by its owner.

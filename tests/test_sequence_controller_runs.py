@@ -60,7 +60,7 @@ async def test_dispatcher_never_launches_a_queued_sequence_run(
   _cfg, _session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
   _manager, leaf = await _manager_and_leaf(tree)
   run = models.RunRecord(id="seq-run", session_id=leaf.id, kind="iteration", sequence_ref=ORPHAN_REF)
-  await tree.runs.register_run(run)
+  await tree.runs.register_run_locked(run)
 
   await tree.dispatch.dispatch_pending(leaf.id)
 
@@ -103,8 +103,8 @@ async def test_a_finished_sequence_run_asks_its_owning_controller_after_run(
       model="fake-model",
       sequence_ref=models.SequenceRef(
           kind="improve", owner_ref=improve_sequence.loop_owner_ref(leaf.id, 1, cfg), position=1))
-  await tree.runs.register_run(cron_step)
-  await tree.runs.register_run(iteration)
+  await tree.runs.register_run_locked(cron_step)
+  await tree.runs.register_run_locked(iteration)
   redrive = mock.AsyncMock()
   monkeypatch.setattr(cron_sequence, "redrive_firing", redrive)
 
@@ -154,7 +154,7 @@ async def test_recovery_asks_the_owning_controller_and_counts_one_follow_up(
   unlaunched = step("queued")
   launched = step("live", pid=999999, pid_start="1-424000", started_at="2026-10-08T00:00:00+00:00")
   for run in (finished, unlaunched, launched):
-    await tree.runs.register_run(run)
+    await tree.runs.register_run_locked(run)
   await tree.runs.record_finish(leaf.id, finished.id, "success", exit_code=0)
   redrive = mock.AsyncMock()
   monkeypatch.setattr(cron_sequence, "redrive_firing", redrive)
@@ -180,7 +180,7 @@ async def test_a_finish_without_a_controller_warns_and_does_nothing_else(
   meta = await tree.load_meta(leaf.id)
   run = models.RunRecord(
       id="orphan", session_id=leaf.id, kind="iteration", backend="fake", model="fake-model", sequence_ref=ORPHAN_REF)
-  await tree.runs.register_run(run)
+  await tree.runs.register_run_locked(run)
 
   with testing.capture_logs() as logs:
     await tree.dispatch.executor._after_worker_run(meta, run, "success")
@@ -206,7 +206,7 @@ async def test_recovery_without_a_controller_lands_interrupted_then_only_logs(
   _manager, leaf = await _manager_and_leaf(tree)
   run = models.RunRecord(
       id="orphan", session_id=leaf.id, kind="iteration", backend="fake", model="fake-model", sequence_ref=ORPHAN_REF)
-  await tree.runs.register_run(run)
+  await tree.runs.register_run_locked(run)
   counters = {"followups": 0}
 
   with testing.capture_logs() as logs:
@@ -250,7 +250,7 @@ async def test_recovery_follows_a_live_sequence_run_without_its_controller(
       pid_start="1-424000",
       started_at="2026-10-08T00:00:00+00:00",
       sequence_ref=ORPHAN_REF)
-  await tree.runs.register_run(run)
+  await tree.runs.register_run_locked(run)
   follows: list[tuple[str, str]] = []
   adapter = types.SimpleNamespace(
       follow_run_in_background=lambda session_id, run_id: follows.append((session_id, run_id)),
@@ -281,7 +281,7 @@ async def test_a_launch_without_a_controller_fails_loudly_naming_the_owner_ref(
   tree.dispatch.executor = test_task_execution._adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   run = models.RunRecord(
       id="orphan", session_id=leaf.id, kind="iteration", backend="fake", model="fake-model", sequence_ref=ORPHAN_REF)
-  await tree.runs.register_run(run)
+  await tree.runs.register_run_locked(run)
 
   observation = await tree.dispatch.executor.launch_and_settle(leaf.id, "orphan")
 

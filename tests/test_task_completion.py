@@ -35,7 +35,7 @@ async def register_isolated_sleep_run(
   proc = subprocess.Popen(["/bin/sleep", "60"], start_new_session=True)
   pair = runs.read_pid_stat(proc.pid)
   assert pair is not None
-  await tree.runs.register_run(
+  await tree.runs.register_run_locked(
       models.RunRecord(
           id=run_id,
           session_id=session_id,
@@ -76,7 +76,7 @@ async def test_three_level_delivery_closes_workers_and_keeps_project_open(tmp_pa
   worker_2 = await conftest.create_task(tree, parent=feature.id, request_id="w2", profile="worker")
 
   assert tree.work_state_of(worker_1.id) == "idle"  # no runs yet
-  await tree.runs.register_run(models.RunRecord(id="run-w1", session_id=worker_1.id, kind="work"))
+  await tree.runs.register_run_locked(models.RunRecord(id="run-w1", session_id=worker_1.id, kind="work"))
   await finish_worker_run(tree, worker_1.id, "run-w1")
   # Delivery evidence closed the worker and its report is on the parent.
   assert tree.task_state(worker_1.id) == "completed"
@@ -84,7 +84,7 @@ async def test_three_level_delivery_closes_workers_and_keeps_project_open(tmp_pa
   reports = [e for e in feature_events if e["type"] == ET.CHILD_REPORT]
   assert [r["child_session_id"] for r in reports] == [worker_1.id]
 
-  await tree.runs.register_run(models.RunRecord(id="run-w2", session_id=worker_2.id, kind="work"))
+  await tree.runs.register_run_locked(models.RunRecord(id="run-w2", session_id=worker_2.id, kind="work"))
   await finish_worker_run(tree, worker_2.id, "run-w2")
   # Auto-archived after receipt (presentation=auto), and receipt only.
   index = await tree._get_index()
@@ -97,7 +97,8 @@ async def test_three_level_delivery_closes_workers_and_keeps_project_open(tmp_pa
 
   # The feature's manager consumes its two child reports before closing: they
   # are unprocessed input, and closure blocks on them.
-  await tree.runs.register_run(models.RunRecord(id="run-feature-turn", session_id=feature.id, kind="manager_turn"))
+  await tree.runs.register_run_locked(
+      models.RunRecord(id="run-feature-turn", session_id=feature.id, kind="manager_turn"))
   async with tree.control_lock:
     await tree.dispatch.claim_input_batch_locked(feature.id, "run-feature-turn")
   await tree.dispatch.finish_run(feature.id, "run-feature-turn", outcome="success")
@@ -139,7 +140,7 @@ async def test_implement_completion_requires_review_and_landing_evidence(tmp_pat
       profile="worker",
       task=models.TaskSpec(task_type="implement", base_branch="main", keep_worktree=True))
 
-  await tree.runs.register_run(
+  await tree.runs.register_run_locked(
       models.RunRecord(id="run-work", session_id=worker.id, kind="work", task_spec_hash="a" * 64, base_branch="main"))
   # The successful work run does NOT close an implement worker: pending review
   # blocks the automatic close, and the task stays open with its evidence.
@@ -163,7 +164,7 @@ async def test_implement_completion_requires_review_and_landing_evidence(tmp_pat
 
   # A review run that chains to a different work Run is not this delivery's
   # evidence (the work/spec/review pin): it names work this claim does not.
-  await tree.runs.register_run(
+  await tree.runs.register_run_locked(
       models.RunRecord(id="run-misreview", session_id=worker.id, kind="review", review_of_run_id="run-earlier-attempt"))
   await tree.runs.record_finish(worker.id, "run-misreview", "success")
   mischained = task_completion.CompletionEvidence(
@@ -173,7 +174,7 @@ async def test_implement_completion_requires_review_and_landing_evidence(tmp_pat
 
   # A review run of ANOTHER task is not review evidence.
   stranger = await conftest.create_task(tree, parent=None, request_id="stranger")
-  await tree.runs.register_run(models.RunRecord(id="run-stranger-review", session_id=stranger.id, kind="review"))
+  await tree.runs.register_run_locked(models.RunRecord(id="run-stranger-review", session_id=stranger.id, kind="review"))
   await tree.runs.record_finish(stranger.id, "run-stranger-review", "success")
   wrong_owner = task_completion.CompletionEvidence(
       summary="s",
@@ -202,7 +203,7 @@ async def test_implement_completion_requires_review_and_landing_evidence(tmp_pat
   landed_commit = subprocess.run(
       ["git", "-C", str(repo), "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
 
-  await tree.runs.register_run(
+  await tree.runs.register_run_locked(
       models.RunRecord(
           id="run-review", session_id=worker.id, kind="review", base_branch="main", review_of_run_id="run-work"))
   await tree.dispatch.finish_run(worker.id, "run-review", outcome="success")
@@ -241,7 +242,7 @@ async def live_manager_caller(
     tree: task_sessions.TaskTreeManager, session_id: str, run_id: str) -> run_token.CallerIdentity:
   """Register one live manager_turn Run and return the agent caller its token binds."""
   pid, pid_start, started_at = live_identity()
-  await tree.runs.register_run(
+  await tree.runs.register_run_locked(
       models.RunRecord(
           id=run_id, session_id=session_id, kind="manager_turn", pid=pid, pid_start=pid_start, started_at=started_at))
   return run_token.CallerIdentity(
@@ -411,7 +412,7 @@ async def test_cancel_stops_a_queued_worker_run_without_launching_it(tmp_path: p
   _cfg, _session_blocks, tree = conftest.build_env(tmp_path)
   root = await conftest.create_task(tree, parent=None, request_id="root")
   child = await conftest.create_task(tree, parent=root.id, request_id="child", profile="worker")
-  await tree.runs.register_run(models.RunRecord(id="run-queued", session_id=child.id, kind="work"))
+  await tree.runs.register_run_locked(models.RunRecord(id="run-queued", session_id=child.id, kind="work"))
 
   result = await tree.completion.cancel_task(
       child.id, request_id="cancel-1", reason="stopped work is settled", caller=conftest.OPERATOR)
@@ -477,7 +478,7 @@ async def test_failure_report_reaching_lock_after_cancel_is_skipped(tmp_path: pa
   cfg, session_blocks, tree = conftest.build_env(tmp_path)
   parent = await conftest.create_task(tree, parent=None, request_id="failure-parent")
   worker = await conftest.create_task(tree, parent=parent.id, request_id="failure-worker", profile="worker")
-  await tree.runs.register_run(models.RunRecord(id="run-failed", session_id=worker.id, kind="work"))
+  await tree.runs.register_run_locked(models.RunRecord(id="run-failed", session_id=worker.id, kind="work"))
   await tree.runs.record_finish(worker.id, "run-failed", "failed")
   await tree.completion.cancel_task(
       worker.id, request_id="cancel-before-report", reason="stop", caller=conftest.OPERATOR)
@@ -509,7 +510,7 @@ async def test_successful_work_on_closed_worker_does_not_register_review(tmp_pat
       request_id="review-worker",
       profile="worker",
       task=models.TaskSpec(task_type=models.TaskType.IMPLEMENT))
-  await tree.runs.register_run(models.RunRecord(id="run-work", session_id=worker.id, kind="work"))
+  await tree.runs.register_run_locked(models.RunRecord(id="run-work", session_id=worker.id, kind="work"))
   await tree.runs.record_finish(worker.id, "run-work", "success")
   await tree.completion.cancel_task(
       worker.id, request_id="cancel-before-review", reason="stop", caller=conftest.OPERATOR)
@@ -578,7 +579,7 @@ async def test_close_sequence_child_completed_on_proven_run_evidence(tmp_path: p
   actor, and the one delivered report takes the sequence outcome."""
   _cfg, _session_blocks, tree = conftest.build_env(tmp_path)
   root, child = await _sequence_child(tree)
-  await tree.runs.register_run(models.RunRecord(id="run-iter-1", session_id=child.id, kind="iteration"))
+  await tree.runs.register_run_locked(models.RunRecord(id="run-iter-1", session_id=child.id, kind="iteration"))
   await tree.dispatch.finish_run(child.id, "run-iter-1", outcome="success")
 
   evidence = task_completion.CompletionEvidence(
@@ -628,7 +629,7 @@ async def test_close_sequence_child_non_completed_outcomes_record_evidence_as_co
   evidence, and the report outcome is the loop's own."""
   _cfg, _session_blocks, tree = conftest.build_env(tmp_path)
   root, child = await _sequence_child(tree)
-  await tree.runs.register_run(models.RunRecord(id="run-iter-1", session_id=child.id, kind="iteration"))
+  await tree.runs.register_run_locked(models.RunRecord(id="run-iter-1", session_id=child.id, kind="iteration"))
   await tree.dispatch.finish_run(child.id, "run-iter-1", outcome="failed")
 
   evidence = task_completion.CompletionEvidence(
@@ -652,7 +653,7 @@ async def test_close_sequence_child_blocks_on_execution_only(tmp_path: pathlib.P
   never does."""
   _cfg, _session_blocks, tree = conftest.build_env(tmp_path)
   _root, child = await _sequence_child(tree)
-  await tree.runs.register_run(models.RunRecord(id="run-queued", session_id=child.id, kind="iteration"))
+  await tree.runs.register_run_locked(models.RunRecord(id="run-queued", session_id=child.id, kind="iteration"))
   await tree.dispatch.admit_input(child.id, event_type=ET.USER, content="unconsumed note", actor="user")
   evidence = task_completion.CompletionEvidence(summary="[Improve loop 1] blocked", result_refs=["loop:1"])
 

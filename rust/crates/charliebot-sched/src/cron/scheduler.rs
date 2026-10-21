@@ -893,13 +893,17 @@ mod tests {
     let path = write_task(
       home.path(),
       "synthetic-handler",
-      &json!({"cron":"0 8 * * *","handler":"synthetic_handler","enabled":true}),
+      &json!({"cron":"0 8 * * *","handler":"synthetic_handler","enabled":false}),
     );
     let scheduler = CronScheduler::new(Arc::clone(&features));
 
+    // The binding tick leaves the task disabled. An enabled task with no last run fires the occurrence that falls in
+    // the tick's last minute, so the first tick would depend on the wall clock.
     scheduler.tick().await.unwrap();
-    let bound: serde_yaml::Value = serde_yaml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-    let session_id = bound["session_id"].as_str().unwrap();
+    let mut binding: Value = serde_yaml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    binding["enabled"] = json!(true);
+    std::fs::write(&path, charliebot_core::yaml::dump(&binding).unwrap()).unwrap();
+    let session_id = binding["session_id"].as_str().unwrap();
     let guard = features.store.control_lock().await;
     features
       .store

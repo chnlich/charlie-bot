@@ -1,4 +1,7 @@
-//! Child setup keeps each transport's session and parent-death policy explicit.
+//! Child setup keeps session, parent-death, and turn-tree policies explicit.
+//!
+//! Parent-side turn-tree setup sets nice to 10 after exec. Child-side turn-tree setup raises nice by 10 before exec.
+//! Child-side cgroup setup moves the child before exec without changing nice.
 
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -105,9 +108,9 @@ pub enum ChildStdin {
 /// Timing and scope of turn-tree setup for one child.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SpawnSetup {
-  /// Apply nice 10 and the session cgroup after exec.
+  /// Set nice to 10 and move into the session cgroup after exec.
   ParentSideTurnTree,
-  /// Apply nice 10 and the session cgroup before exec.
+  /// Raise nice by 10 and move into the session cgroup before exec.
   ChildSideTurnTree,
   /// Move into the session cgroup before exec without changing nice.
   ChildSideCgroup,
@@ -219,7 +222,8 @@ fn configure_child_setup(
       }
       match setup {
         SpawnSetup::ChildSideTurnTree => {
-          if libc::setpriority(libc::PRIO_PROCESS, 0, TURN_TREE_NICE) == -1 {
+          *libc::__errno_location() = 0;
+          if libc::nice(TURN_TREE_NICE) == -1 && *libc::__errno_location() != 0 {
             return Err(io::Error::last_os_error());
           }
           if let Some(cgroup) = &cgroup {

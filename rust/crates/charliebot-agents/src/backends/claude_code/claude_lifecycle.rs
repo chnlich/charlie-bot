@@ -12,22 +12,23 @@ use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
 
 use super::{
-  claude_accounts, claude_config, claude_metadata, claude_relay, login_dirs, master_cc_relay,
-  out_of_family_served_models,
+  EXCLUDE_DYNAMIC_SECTIONS_FLAG, claude_accounts, claude_config, claude_idle_compaction, claude_metadata, claude_relay,
+  login_dirs, master_cc_relay, out_of_family_served_models,
 };
-
-pub const EXCLUDE_DYNAMIC_SECTIONS_FLAG: &str = "--exclude-dynamic-system-prompt-sections";
 
 pub struct ClaudeCliLifecycle;
 
 impl ClaudeCliLifecycle {
   fn checked_resume_id(&self, ctx: &LaunchContext) -> anyhow::Result<Option<String>> {
+    self.checked_resume_id_for(ctx, &login_dirs::claude_config_dir()?)
+  }
+
+  fn checked_resume_id_for(&self, ctx: &LaunchContext, config_dir: &Path) -> anyhow::Result<Option<String>> {
     let session_id = ctx.held_native_id.as_deref().filter(|value| !value.is_empty());
     let Some(session_id) = session_id else {
       return Ok(None);
     };
-    let config_dir = login_dirs::claude_config_dir()?;
-    if !claude_accounts::transcript_matches(&config_dir, session_id)?.is_empty() {
+    if !claude_accounts::transcript_matches(config_dir, session_id)?.is_empty() {
       return Ok(Some(session_id.to_string()));
     }
     tracing::warn!(
@@ -263,6 +264,13 @@ impl BackendLifecycle for ClaudeCodeLifecycle {
 
   fn place<'a>(&'a self, ctx: &'a LaunchContext) -> BoxFuture<'a, Result<Launch, LaunchRefused>> {
     Box::pin(async move {
+      if ctx.kind == LaunchKind::Turn {
+        let session_id = ctx.session_meta.lock().expect("launch metadata mutex is not poisoned").id.clone();
+        claude_idle_compaction::IdleCompaction::shared()
+          .settle_for_turn(&session_id)
+          .await
+          .map_err(|error| refused(error, false, None))?;
+      }
       if !claude_accounts::is_pooled(&ctx.option, &ctx.cfg) {
         return self.no_pool.place(ctx).await;
       }
@@ -536,38 +544,45 @@ mod tests {
 
   // Python: tests/test_backend_hooks.py:104.
   // Python: tests/test_backend_hooks.py:145.
-  #[tokio::test]
-  async fn cli_variants_and_unpooled_claude_reuse_transcript_checked_flag_launches() {
+  #[test]
+  fn cli_variants_and_unpooled_cc_claude_reuse_transcript_checked_flag_launches() {
+    // The cc-kimi and cc-openai-compatible registrations share ClaudeCliLifecycle.
     let root = tempfile::tempdir().unwrap();
     let cfg = unpooled_config(&root.path().join("home"));
     let cc_session_id = "synthetic-cc-session";
     let ctx = context(cfg.clone(), LaunchKind::Turn, None, Some(cc_session_id), Some(Arc::new(Vec::new)));
     let config_dir = root.path().join("claude-default");
     let cli = ClaudeCliLifecycle;
+    let claude = ClaudeCodeLifecycle::new();
     let missing = cli.checked_resume_id_for(&ctx, &config_dir).unwrap();
-    assert_eq!(missing, None);
+    let missing_launch = cli.launch(&ctx, missing);
+    assert_eq!(missing_launch.resume_id, None);
+    let cc_missing = claude.no_pool.checked_resume_id_for(&ctx, &config_dir).unwrap();
+    let cc_missing_launch = claude.no_pool.launch(&ctx, cc_missing);
+    assert_eq!(cc_missing_launch.resume_id, None);
 
     let transcript = config_dir.join("projects/synthetic-project").join(format!("{cc_session_id}.jsonl"));
     fs::create_dir_all(transcript.parent().unwrap()).unwrap();
     fs::write(&transcript, "synthetic transcript\n").unwrap();
     let present = cli.checked_resume_id_for(&ctx, &config_dir).unwrap();
     assert_eq!(present.as_deref(), Some(cc_session_id));
-
     let cli_launch = cli.launch(&ctx, present.clone());
-    let claude = ClaudeCodeLifecycle::new();
-    let claude_launch = claude.no_pool.launch(&ctx, present);
-    let expected = json!([EXCLUDE_DYNAMIC_SECTIONS_FLAG]);
 
-    assert_eq!(cli_launch.backend_kwargs["extra_flags"], expected);
-    assert_eq!(claude_launch.backend_kwargs["extra_flags"], expected);
-    assert_eq!(cli_launch.resume_id.as_deref(), Some(cc_session_id));
-    assert_eq!(claude_launch.resume_id.as_deref(), Some(cc_session_id));
-    assert!(cli_launch.account_label.is_none());
-    assert!(claude_launch.account_label.is_none());
-    assert!(claude.watch(&ctx, &claude_launch).is_none());
+    let cc_resume = claude.no_pool.checked_resume_id_for(&ctx, &config_dir).unwrap();
+    assert_eq!(cc_resume.as_deref(), Some(cc_session_id));
+    let claude_launch = claude.no_pool.launch(&ctx, cc_resume);
+    let expected = json!({"extra_flags": [EXCLUDE_DYNAMIC_SECTIONS_FLAG], "run_kind": "manager_turn"});
 
     let fresh_ctx = context(cfg, LaunchKind::Turn, None, None, Some(Arc::new(Vec::new)));
-    assert_eq!(cli.checked_resume_id_for(&fresh_ctx, &config_dir).unwrap(), None);
+    let fresh = cli.checked_resume_id_for(&fresh_ctx, &config_dir).unwrap();
+    let fresh_launch = cli.launch(&fresh_ctx, fresh);
+    for launch in [&missing_launch, &cc_missing_launch, &cli_launch, &fresh_launch, &claude_launch] {
+      assert_eq!(json!(launch.backend_kwargs), expected);
+      assert_eq!(launch.account_label, None);
+    }
+    assert_eq!(cli_launch.resume_id.as_deref(), Some(cc_session_id));
+    assert_eq!(claude_launch.resume_id.as_deref(), Some(cc_session_id));
+    assert!(claude.watch(&ctx, &claude_launch).is_none());
   }
 
   #[tokio::test]

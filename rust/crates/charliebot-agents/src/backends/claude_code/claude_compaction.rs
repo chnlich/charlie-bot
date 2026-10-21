@@ -41,6 +41,27 @@ pub struct CompactionOutcome {
   pub ok: bool,
   pub error: Option<String>,
   pub models: Vec<String>,
+  pub post_tokens: Option<i64>,
+  pub cache_read_tokens: Option<i64>,
+}
+
+/// One Claude CLI compaction, with the caller-selected model family and chat event triggers.
+pub struct CompactionRun<'a> {
+  pub argv: Vec<String>,
+  pub env: Env,
+  pub cwd: &'a Path,
+  pub config_dir: &'a Path,
+  pub session_id: &'a str,
+  pub family: &'a str,
+  pub model: &'a str,
+  pub trigger: &'a str,
+  pub failure_trigger: Option<&'a str>,
+  pub pre_tokens: Option<i64>,
+  pub emit: &'a EmitFn,
+  pub cfg: &'a CharlieBotConfig,
+  pub session_cgroup_id: Option<&'a str>,
+  pub account_label: &'a str,
+  pub timeout_duration: StdDuration,
 }
 
 pub fn is_fable(model: Option<&str>) -> bool {
@@ -80,7 +101,7 @@ pub fn relay_compaction_wanted(cfg: &CharlieBotConfig, model: Option<&str>, cont
     })
 }
 
-fn model_family(model: Option<&str>) -> String {
+pub fn model_family(model: Option<&str>) -> String {
   let Some(model) = model.filter(|value| !value.is_empty()) else {
     return String::new();
   };
@@ -213,19 +234,43 @@ fn models_that_grew(result: &Value, baseline: &Map<String, Value>) -> Vec<String
     .collect()
 }
 
+fn result_object(stdout: &[u8]) -> Option<Value> {
+  String::from_utf8_lossy(stdout)
+    .lines()
+    .rev()
+    .find(|line| !line.trim().is_empty())
+    .and_then(|line| serde_json::from_str::<Value>(line).ok())
+    .filter(Value::is_object)
+}
+
+fn cache_read_growth(result: &Value, baseline: &Map<String, Value>, models: &[String]) -> i64 {
+  models
+    .iter()
+    .map(|name| {
+      let current =
+        result.pointer(&format!("/modelUsage/{name}/cacheReadInputTokens")).and_then(Value::as_i64).unwrap_or(0);
+      let previous =
+        baseline.get(name).and_then(|value| value.get("cacheReadInputTokens")).and_then(Value::as_i64).unwrap_or(0);
+      current - previous
+    })
+    .sum()
+}
+
 pub fn judge(
   returncode: i32,
   stdout: &[u8],
   baseline: &Map<String, Value>,
   before: usize,
   after: usize,
+  family: &str,
 ) -> CompactionOutcome {
-  let parsed = serde_json::from_slice::<Value>(stdout).ok();
-  let Some(result) = parsed.filter(Value::is_object) else {
+  let Some(result) = result_object(stdout) else {
     return CompactionOutcome {
       ok: false,
       error: Some(format!("exit {returncode}, no JSON result on stdout")),
       models: vec![],
+      post_tokens: None,
+      cache_read_tokens: None,
     };
   };
   let models = models_that_grew(&result, baseline);
@@ -241,16 +286,24 @@ pub fn judge(
       .chars()
       .take(200)
       .collect::<String>();
-    return CompactionOutcome { ok: false, error: Some(format!("exit {returncode}: {detail}")), models };
+    return CompactionOutcome {
+      ok: false,
+      error: Some(format!("exit {returncode}: {detail}")),
+      models,
+      post_tokens: None,
+      cache_read_tokens: None,
+    };
   }
   if after <= before {
     return CompactionOutcome {
       ok: false,
       error: Some("transcript gained no compact_boundary row".to_string()),
       models,
+      post_tokens: None,
+      cache_read_tokens: None,
     };
   }
-  if models.is_empty() || models.iter().any(|model| model_family(Some(model)) != COMPACTION_FAMILY) {
+  if models.is_empty() || models.iter().any(|model| model_family(Some(model)) != family) {
     return CompactionOutcome {
       ok: false,
       error: Some(format!(
@@ -258,9 +311,17 @@ pub fn judge(
         if models.is_empty() { "no model".to_string() } else { models.join(", ") }
       )),
       models,
+      post_tokens: None,
+      cache_read_tokens: None,
     };
   }
-  CompactionOutcome { ok: true, error: None, models }
+  CompactionOutcome {
+    ok: true,
+    error: None,
+    cache_read_tokens: Some(cache_read_growth(&result, baseline, &models)),
+    models,
+    post_tokens: None,
+  }
 }
 
 fn json_truthy(value: &Value) -> bool {
@@ -336,24 +397,65 @@ async fn compact_with_sonnet_inner(
     trigger,
     timeout_duration,
   } = input;
+  let env = make_env(config_dir)?;
+  let outcome = run_compaction_inner(CompactionRun {
+    argv: compaction_command(session_id),
+    env,
+    cwd,
+    config_dir,
+    session_id,
+    family: COMPACTION_FAMILY,
+    model: COMPACTION_MODEL,
+    trigger: "manual",
+    failure_trigger: None,
+    pre_tokens,
+    emit,
+    cfg,
+    session_cgroup_id,
+    account_label,
+    timeout_duration,
+  })
+  .await?;
+  if !outcome.ok {
+    tracing::warn!(target: "charliebot_agents", session = %session_id, account = account_label, trigger, "claude_compaction_failed");
+  }
+  Ok(outcome.ok)
+}
+
+/// Run the supplied Claude CLI line with `/compact`, judge its final JSON result, and emit the caller's event triggers.
+pub async fn run_compaction(run: CompactionRun<'_>) -> anyhow::Result<CompactionOutcome> {
+  run_compaction_inner(run).await
+}
+
+async fn run_compaction_inner(run: CompactionRun<'_>) -> anyhow::Result<CompactionOutcome> {
+  let CompactionRun {
+    argv,
+    env,
+    cwd,
+    config_dir,
+    session_id,
+    family,
+    model,
+    trigger,
+    failure_trigger,
+    pre_tokens,
+    emit,
+    cfg,
+    session_cgroup_id,
+    account_label,
+    timeout_duration,
+  } = run;
+  let program = argv.first().context("compaction argv is empty")?;
   let Some(transcript) = claude_accounts::transcript_path(config_dir, session_id)? else {
-    return fail(
-      emit,
-      &format!("no transcript for {session_id} under {}", config_dir.display()),
-      session_id,
-      account_label,
-      trigger,
-    )
-    .await;
+    let error = format!("no transcript for {session_id} under {}", config_dir.display());
+    return fail(emit, &error, session_id, account_label, model, failure_trigger).await;
   };
   let before = count_compact_boundaries(&transcript)?;
   let baseline = newest_cost_state_model_usage(&transcript)?;
-  let command = compaction_command(session_id);
   tracing::info!(target: "charliebot_agents", cc_session_id = session_id, pre_tokens, session = %session_id, account = account_label, trigger, "claude_compaction_starting");
-  let env = make_env(config_dir)?;
   let spec = SpawnSpec::new(
-    &command[0],
-    command[1..].iter().map(OsString::from).collect(),
+    program,
+    argv.iter().skip(1).map(OsString::from).collect(),
     Some(cwd.to_path_buf()),
     env.into_iter().map(|(name, value)| (OsString::from(name), OsString::from(value))).collect::<HashMap<_, _>>(),
     session_cgroup_id.map(str::to_string),
@@ -365,7 +467,8 @@ async fn compact_with_sonnet_inner(
   let mut child = match spawn_with_setup(&spec, None, ChildStdin::Piped, SpawnSetup::ChildSideCgroup).await {
     Ok(spawned) => spawned.child,
     Err(error) => {
-      return fail(emit, &format!("could not start {}: {error}", command[0]), session_id, account_label, trigger).await;
+      let error = format!("could not start {program}: {error}");
+      return fail(emit, &error, session_id, account_label, model, failure_trigger).await;
     }
   };
   let pid = child.id().expect("spawned compaction process has a pid");
@@ -389,22 +492,16 @@ async fn compact_with_sonnet_inner(
     Err(_) => {
       kill::kill_process_group(pid, nix::sys::signal::Signal::SIGKILL);
       child.wait().await?;
-      let _ = stdout_reader.await;
-      let _ = stderr_reader.await;
-      return fail(
-        emit,
-        &format!("timed out after {} s", timeout_duration.as_secs()),
-        session_id,
-        account_label,
-        trigger,
-      )
-      .await;
+      stdout_reader.await.context("joining timed-out compaction stdout reader")??;
+      stderr_reader.await.context("joining timed-out compaction stderr reader")??;
+      let error = format!("timed out after {} s", timeout_duration.as_secs());
+      return fail(emit, &error, session_id, account_label, model, failure_trigger).await;
     }
   };
   let stdout = stdout_reader.await.context("joining compaction stdout reader")??;
   let stderr = stderr_reader.await.context("joining compaction stderr reader")??;
   let after = count_compact_boundaries(&transcript)?;
-  let outcome = judge(kill::python_exit_code(status), &stdout, &baseline, before, after);
+  let mut outcome = judge(kill::python_exit_code(status), &stdout, &baseline, before, after, family);
   if !outcome.ok {
     let stderr = String::from_utf8_lossy(&stderr);
     let stderr = stderr.trim();
@@ -421,8 +518,8 @@ async fn compact_with_sonnet_inner(
       trigger,
       "claude_compaction_failed"
     );
-    emit(crate::event_builders::make_context_compact_failed_event(Some(error), Some(COMPACTION_MODEL))).await?;
-    return Ok(false);
+    emit(crate::event_builders::make_context_compact_failed_event(Some(error), Some(model), failure_trigger)).await?;
+    return Ok(outcome);
   }
   let mut metadata = newest_boundary_compact_metadata(&transcript)?;
   if let Some(pre_tokens) = pre_tokens {
@@ -430,19 +527,21 @@ async fn compact_with_sonnet_inner(
       metadata.get_or_insert_with(|| Value::Object(Map::new())).as_object_mut().expect("compact metadata is an object");
     object.insert("pre_tokens".to_string(), json!(pre_tokens));
   }
+  outcome.post_tokens = metadata.as_ref().and_then(|metadata| metadata.get("post_tokens")).and_then(Value::as_i64);
   tracing::info!(
     target: "charliebot_agents",
     cc_session_id = session_id,
     pre_tokens = ?metadata.as_ref().and_then(|value| value.get("pre_tokens")),
-    post_tokens = ?metadata.as_ref().and_then(|value| value.get("post_tokens")),
+    post_tokens = ?outcome.post_tokens,
+    cache_read_tokens = ?outcome.cache_read_tokens,
     models = ?outcome.models,
     session = %session_id,
     account = account_label,
     trigger,
     "claude_compaction_done"
   );
-  emit(crate::event_builders::make_context_compacted_event("manual", metadata, Some(COMPACTION_MODEL))).await?;
-  Ok(true)
+  emit(crate::event_builders::make_context_compacted_event(trigger, metadata, Some(model))).await?;
+  Ok(outcome)
 }
 
 async fn fail(
@@ -450,11 +549,18 @@ async fn fail(
   error: &str,
   session_id: &str,
   account_label: &str,
-  trigger: &str,
-) -> anyhow::Result<bool> {
+  model: &str,
+  trigger: Option<&str>,
+) -> anyhow::Result<CompactionOutcome> {
   tracing::warn!(target: "charliebot_agents", error, session = %session_id, account = account_label, trigger, "claude_compaction_failed");
-  emit(crate::event_builders::make_context_compact_failed_event(Some(error), Some(COMPACTION_MODEL))).await?;
-  Ok(false)
+  emit(crate::event_builders::make_context_compact_failed_event(Some(error), Some(model), trigger)).await?;
+  Ok(CompactionOutcome {
+    ok: false,
+    error: Some(error.to_string()),
+    models: Vec::new(),
+    post_tokens: None,
+    cache_read_tokens: None,
+  })
 }
 
 #[cfg(test)]

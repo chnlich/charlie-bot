@@ -101,13 +101,16 @@ pub fn make_context_compacted_event(trigger: &str, compact_metadata: Option<Valu
   Value::Object(event)
 }
 
-pub fn make_context_compact_failed_event(error: Option<&str>, model: Option<&str>) -> Value {
+pub fn make_context_compact_failed_event(error: Option<&str>, model: Option<&str>, trigger: Option<&str>) -> Value {
   let mut event = Map::from_iter([
     ("type".to_string(), json!(event_types::CONTEXT_COMPACT_FAILED)),
     ("error".to_string(), json!(error)),
   ]);
   if let Some(model) = model {
     event.insert("model".to_string(), json!(model));
+  }
+  if let Some(trigger) = trigger {
+    event.insert("trigger".to_string(), json!(trigger));
   }
   Value::Object(event)
 }

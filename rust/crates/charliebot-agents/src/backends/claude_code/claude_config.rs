@@ -21,11 +21,17 @@ pub struct ClaudeCompactionConfig {
   pub relay_tokens: u64,
   #[serde(default = "default_expired_cache_tokens", deserialize_with = "positive_tokens")]
   pub expired_cache_tokens: u64,
+  #[serde(default = "default_idle_tokens", deserialize_with = "positive_tokens")]
+  pub idle_tokens: u64,
 }
 
 impl Default for ClaudeCompactionConfig {
   fn default() -> Self {
-    Self { relay_tokens: default_relay_tokens(), expired_cache_tokens: default_expired_cache_tokens() }
+    Self {
+      relay_tokens: default_relay_tokens(),
+      expired_cache_tokens: default_expired_cache_tokens(),
+      idle_tokens: default_idle_tokens(),
+    }
   }
 }
 
@@ -35,6 +41,10 @@ fn default_relay_tokens() -> u64 {
 
 fn default_expired_cache_tokens() -> u64 {
   50_000
+}
+
+fn default_idle_tokens() -> u64 {
+  100_000
 }
 
 fn positive_tokens<'de, D>(deserializer: D) -> Result<u64, D::Error>
@@ -140,6 +150,7 @@ mod tests {
     let accounts = cfg.section::<AccountsConfig>("accounts");
     assert_eq!(accounts.claude_compaction.relay_tokens, 100_000);
     assert_eq!(accounts.claude_compaction.expired_cache_tokens, 50_000);
+    assert_eq!(accounts.claude_compaction.idle_tokens, 100_000);
   }
 
   #[test]

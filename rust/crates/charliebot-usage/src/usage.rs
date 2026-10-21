@@ -46,6 +46,9 @@ impl UsageFold {
       match event_type {
         Some(event_types::ASSISTANT) => self.feed_assistant(event)?,
         Some(event_types::SYSTEM) => self.feed_system(event)?,
+        Some(event_types::CONTEXT_COMPACTED) if self.reading_kind == READING_CLAUDE => {
+          self.feed_compaction_metadata(event)?;
+        }
         Some(event_types::RESULT) => self.feed_result(event)?,
         _ => {}
       }
@@ -80,10 +83,7 @@ impl UsageFold {
   fn feed_system(&mut self, event: &Value) -> StoreResult<()> {
     match event.get("subtype").and_then(Value::as_str) {
       Some(event_types::COMPACT_BOUNDARY) if self.reading_kind == READING_CLAUDE => {
-        let compact = truthy_object(event.get(event_types::COMPACT_METADATA), "system.compact_metadata")?;
-        if let Some(tokens) = compact.get(event_types::COMPACT_POST_TOKENS).and_then(python_integer) {
-          self.post_compact_tokens = Some(tokens);
-        }
+        self.feed_compaction_metadata(event)?;
       }
       Some(event_types::CONTEXT_READING) => {
         if let Some(reading) = event.get(event_types::CONTEXT_READING).and_then(Value::as_object) {
@@ -92,6 +92,14 @@ impl UsageFold {
         }
       }
       _ => {}
+    }
+    Ok(())
+  }
+
+  fn feed_compaction_metadata(&mut self, event: &Value) -> StoreResult<()> {
+    let compact = truthy_object(event.get(event_types::COMPACT_METADATA), "compact_metadata")?;
+    if let Some(tokens) = compact.get(event_types::COMPACT_POST_TOKENS).and_then(python_integer) {
+      self.post_compact_tokens = Some(tokens);
     }
     Ok(())
   }

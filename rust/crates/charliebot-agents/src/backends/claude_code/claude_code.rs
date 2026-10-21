@@ -29,6 +29,7 @@ pub const DISALLOWED_TOOLS_FLAG: &str = "--disallowed-tools";
 pub const SKIP_PERMISSIONS_FLAG: &str = "--dangerously-skip-permissions";
 pub const INSTRUCTIONS_FILE_NAME: &str = "CLAUDE.md";
 pub const INSTRUCTIONS_WRITTEN_EVENT: &str = "claude_code_wrote_claude_md";
+pub const EXCLUDE_DYNAMIC_SECTIONS_FLAG: &str = "--exclude-dynamic-system-prompt-sections";
 const SYNTHETIC_MODEL: &str = "<synthetic>";
 const ONE_SHOT_DISALLOWED_TOOLS: &str = "Bash,Read,Write,Edit,Glob,Grep,Agent";
 

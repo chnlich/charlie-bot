@@ -1,16 +1,23 @@
 //! Per-session queue for serialized manager turns.
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, anyhow};
+use charliebot_agents::agent_environment::AgentBaseEnvironment;
 use charliebot_agents::backend_pool::BackendPool;
+use charliebot_agents::backends::claude_code::{
+  claude_accounts, claude_compaction, claude_config, claude_idle_compaction, claude_metadata, login_dirs,
+};
 use charliebot_agents::runner::AgentRunner;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types;
 use charliebot_registry::backend::BackendLifecycle;
 use charliebot_registry::context::FeatureContext;
-use charliebot_store::metadata::{SessionMetadata, UtcDateTime};
+use charliebot_store::metadata::{SessionMetadata, SessionStatus, UtcDateTime};
+use charliebot_store::run_records::RunKind;
 use charliebot_usage::SessionUsage;
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
@@ -34,7 +41,7 @@ pub type ContextStateFn = Arc<
 >;
 pub type TaskTreeActivityFn = Arc<dyn Fn(&str) -> anyhow::Result<(bool, String)> + Send + Sync>;
 pub type AfterRoundFn =
-  Arc<dyn Fn(Arc<CharlieBotConfig>, String) -> BoxFuture<'static, anyhow::Result<()>> + Send + Sync>;
+  Arc<dyn Fn(Arc<CharlieBotConfig>, String, Option<String>) -> BoxFuture<'static, anyhow::Result<()>> + Send + Sync>;
 
 /// Session block callbacks used by a manager turn.
 #[derive(Clone)]
@@ -55,6 +62,7 @@ struct QueueState {
   session_consumers: HashMap<String, JoinHandle<()>>,
   consumer_cancel: HashMap<String, watch::Sender<bool>>,
   current_items: HashMap<String, Vec<String>>,
+  idle_reservations: HashMap<String, watch::Sender<bool>>,
   running_turns: HashMap<String, Arc<Mutex<SessionMetadata>>>,
   active_procs: HashMap<String, Arc<AgentRunner>>,
   shutdown: bool,
@@ -131,11 +139,22 @@ impl MasterQueue {
     });
     let after_features = Arc::clone(&features);
     let pool = Arc::clone(&self.backend_pool);
-    let after_round = Arc::new(move |cfg: Arc<CharlieBotConfig>, session_id: String| {
+    let idle_queue = Arc::downgrade(self);
+    let idle_emit = Arc::clone(&persist_and_broadcast);
+    let after_round = Arc::new(move |cfg: Arc<CharlieBotConfig>, session_id: String, backend_id: Option<String>| {
       let features = Arc::clone(&after_features);
       let pool = Arc::clone(&pool);
-      Box::pin(async move { autonamer::name_after_round(&features, &cfg, &session_id, pool).await })
-        as BoxFuture<'static, anyhow::Result<()>>
+      let idle_queue = idle_queue.clone();
+      let idle_emit = Arc::clone(&idle_emit);
+      Box::pin(async move {
+        autonamer::name_after_round(&features, &cfg, &session_id, pool).await?;
+        if let Some(backend_id) = backend_id {
+          arm_idle_compaction(features, idle_queue, cfg, session_id, backend_id, idle_emit).await?;
+        } else {
+          claude_idle_compaction::IdleCompaction::shared().disarm(&session_id);
+        }
+        Ok(())
+      }) as BoxFuture<'static, anyhow::Result<()>>
     });
     SessionCallbacks {
       features,
@@ -248,6 +267,46 @@ impl MasterQueue {
       }
     }
     ids
+  }
+
+  /// Reserve an idle-compaction start only while no session turn is running or queued.
+  fn reserve_idle_compaction(&self, session_id: &str) -> bool {
+    let mut state = self.state.lock().expect("master queue mutex is not poisoned");
+    let busy = state.current_items.contains_key(session_id)
+      || state.session_queues.get(session_id).is_some_and(|queue| !queue.is_empty())
+      || state.idle_reservations.contains_key(session_id);
+    if busy {
+      return false;
+    }
+    let (sender, _receiver) = watch::channel(true);
+    state.idle_reservations.insert(session_id.to_string(), sender);
+    true
+  }
+
+  fn release_idle_compaction_reservation(&self, session_id: &str) {
+    if let Some(sender) =
+      self.state.lock().expect("master queue mutex is not poisoned").idle_reservations.remove(session_id)
+    {
+      sender.send_replace(false);
+    }
+  }
+
+  async fn wait_for_idle_compaction_reservation(&self, session_id: &str) -> anyhow::Result<()> {
+    loop {
+      let receiver = self
+        .state
+        .lock()
+        .expect("master queue mutex is not poisoned")
+        .idle_reservations
+        .get(session_id)
+        .map(watch::Sender::subscribe);
+      let Some(mut receiver) = receiver else {
+        return Ok(());
+      };
+      while *receiver.borrow() {
+        receiver.changed().await.context("waiting for idle compaction start reservation")?;
+      }
+    }
   }
 
   pub fn running_user_event_ids(&self, session_id: &str) -> Vec<String> {
@@ -442,6 +501,10 @@ impl MasterQueue {
     last_cc_session_id: &mut Option<String>,
     last_account_label: &mut Option<String>,
   ) -> anyhow::Result<()> {
+    let idle = claude_idle_compaction::IdleCompaction::shared();
+    idle.settle_for_turn(session_id).await?;
+    self.wait_for_idle_compaction_reservation(session_id).await?;
+    idle.settle_for_turn(session_id).await?;
     refresh_anchors_from_disk(item, last_cc_session_id, last_account_label)?;
     let mut result = if item.resume_record.is_some() {
       master_run::resume_cc(item).await?
@@ -548,8 +611,9 @@ impl MasterQueue {
       let after_round = Arc::clone(after_round);
       let cfg = Arc::clone(&item.cfg);
       let session_id = session_id.to_string();
+      let backend_id = result.finish_extras.get("native_backend").and_then(Value::as_str).map(str::to_string);
       tokio::spawn(async move {
-        if let Err(error) = after_round(cfg, session_id.clone()).await {
+        if let Err(error) = after_round(cfg, session_id.clone(), backend_id).await {
           tracing::error!(target: "charliebot_tasks", task = %format!("after-round-{session_id}"), error = %error, "after-turn contribution failed");
         }
       });
@@ -565,6 +629,208 @@ pub fn session_callbacks(
   task_tree_activity: TaskTreeActivityFn,
 ) -> SessionCallbacks {
   queue.session_callbacks(features, task_tree_activity)
+}
+
+async fn arm_idle_compaction(
+  features: Arc<FeatureContext>,
+  queue: std::sync::Weak<MasterQueue>,
+  cfg: Arc<CharlieBotConfig>,
+  session_id: String,
+  backend_id: String,
+  persist_and_broadcast: PersistAndBroadcastFn,
+) -> anyhow::Result<()> {
+  let Some(option) = cfg.get_backend_option(&backend_id).cloned() else {
+    claude_idle_compaction::IdleCompaction::shared().disarm(&session_id);
+    return Ok(());
+  };
+  if option.backend_type != "cc-claude" {
+    claude_idle_compaction::IdleCompaction::shared().disarm(&session_id);
+    return Ok(());
+  }
+  let Some(metadata) = features.store.read_metadata_fresh(&session_id)? else {
+    anyhow::bail!("session {session_id} disappeared before idle compaction was armed");
+  };
+  let usage = features.startup.require::<SessionUsage>()?;
+  let (_, last_request_at) = usage.context_state(&session_id, &metadata)?;
+  let idle = claude_idle_compaction::IdleCompaction::shared();
+  idle.disarm(&session_id);
+  let Some(armed_at) = last_request_at else {
+    return Ok(());
+  };
+  let base_environment = features.startup.require::<AgentBaseEnvironment>()?;
+  let mut base_env = base_environment.values.clone();
+  base_env.insert("GIT_CEILING_DIRECTORIES".to_string(), cfg.charliebot_home.to_string_lossy().into_owned());
+  let cwd = cfg.sessions_dir().join(&session_id);
+  let emit_session_id = session_id.clone();
+  let emit: charliebot_registry::backend::EmitFn = Arc::new(move |event| {
+    let persist = Arc::clone(&persist_and_broadcast);
+    let session_id = emit_session_id.clone();
+    Box::pin(async move { persist(session_id, event).await })
+  });
+  let inspect_features = Arc::clone(&features);
+  let inspect_option = option.clone();
+  let inspect_registry = Arc::clone(&features.registry);
+  let inspect_session_id = session_id.clone();
+  let inspect_queue = queue.clone();
+  let inspect_env = base_env.clone();
+  let inspect_cwd = cwd.clone();
+  let inspect_emit = Arc::clone(&emit);
+  let inspect_armed_at = armed_at;
+  let reservation_slot = Arc::new(Mutex::new(None::<Arc<AtomicBool>>));
+  let inspect_reservation_slot = Arc::clone(&reservation_slot);
+  let inspect = Arc::new(move |_now| {
+    let Some(metadata) = inspect_features.store.read_metadata_fresh(&inspect_session_id)? else {
+      return Ok(None);
+    };
+    let current_cfg = inspect_features.config.get().context("loading config.yaml for idle Claude compaction")?;
+    let usage = inspect_features.startup.require::<SessionUsage>()?;
+    let (context_tokens, last_request_at) = usage.context_state(&inspect_session_id, &metadata)?;
+    let compacted_after_request = if let Some(last_request_at) = last_request_at {
+      let events = inspect_features.store.load_chat_events_sync(&inspect_session_id)?;
+      let newest_compaction = events
+        .iter()
+        .rev()
+        .find(|event| {
+          event.get("type").and_then(Value::as_str) == Some(event_types::CONTEXT_COMPACTED)
+            && event.get("timestamp").and_then(Value::as_str).is_some()
+        })
+        .and_then(|event| event.get("timestamp"))
+        .and_then(Value::as_str)
+        .map(UtcDateTime::parse)
+        .transpose()?;
+      newest_compaction.is_some_and(|timestamp| timestamp > last_request_at)
+    } else {
+      false
+    };
+    let account_label = claude_metadata::account_of(&metadata);
+    let default_dir = login_dirs::claude_config_dir()?;
+    let account = claude_idle_compaction::account_for_session(
+      &current_cfg,
+      &inspect_option,
+      account_label.as_deref(),
+      &default_dir,
+    )?;
+    let resume_id = metadata.cc_session_id.clone();
+    let transcript_present = match account.as_ref().zip(resume_id.as_deref()) {
+      Some((account, resume_id)) => {
+        !claude_accounts::transcript_matches(Path::new(&account.config_dir), resume_id)?.is_empty()
+      }
+      None => false,
+    };
+    let facts = claude_idle_compaction::IdleFacts {
+      archived: metadata.status == SessionStatus::Archived,
+      backend_unchanged: metadata.backend == inspect_option.id,
+      turn_busy: false,
+      armed_at: Some(inspect_armed_at),
+      last_request_at,
+      compacted_after_request,
+      context_tokens,
+      resume_id: resume_id.clone(),
+      transcript_present,
+    };
+    let reservation = Arc::new(AtomicBool::new(false));
+    *inspect_reservation_slot.lock().expect("idle reservation slot is not poisoned") = Some(Arc::clone(&reservation));
+    let run_reservation = Arc::clone(&reservation);
+    let run_queue = inspect_queue.clone();
+    let run_registry = Arc::clone(&inspect_registry);
+    let run_option = inspect_option.clone();
+    let run_cfg = Arc::clone(&current_cfg);
+    let run_account = account.clone();
+    let run_session_id = inspect_session_id.clone();
+    let run_cc_session_id = resume_id.clone();
+    let run_cwd = inspect_cwd.clone();
+    let run_env = inspect_env.clone();
+    let run_emit = Arc::clone(&inspect_emit);
+    let run_tokens = context_tokens;
+    let run: claude_idle_compaction::RunFn = Arc::new(move || {
+      let reserved = Arc::clone(&run_reservation);
+      let queue = run_queue.clone();
+      let registry = Arc::clone(&run_registry);
+      let option = run_option.clone();
+      let cfg = Arc::clone(&run_cfg);
+      let account = run_account.clone();
+      let session_id = run_session_id.clone();
+      let cc_session_id = run_cc_session_id.clone();
+      let cwd = run_cwd.clone();
+      let base_env = run_env.clone();
+      let emit = Arc::clone(&run_emit);
+      let pre_tokens = run_tokens;
+      Box::pin(async move {
+        if reserved.swap(false, Ordering::AcqRel) {
+          queue
+            .upgrade()
+            .context("master queue disappeared after idle compaction was reserved")?
+            .release_idle_compaction_reservation(&session_id);
+        }
+        let account = account.expect("a compaction candidate has an account");
+        let cc_session_id = cc_session_id.expect("a compaction candidate has a resume id");
+        let (argv, env) = claude_idle_compaction::build_idle_process(
+          registry,
+          &cfg,
+          &option,
+          &account,
+          claude_idle_compaction::IdleProcessIdentity {
+            session_id: session_id.clone(),
+            cc_session_id,
+            run_kind: RunKind::ManagerTurn,
+          },
+          &base_env,
+        )?;
+        let run = claude_idle_compaction::idle_run_options(&option, &account, &cwd, pre_tokens, argv, env);
+        let outcome = claude_compaction::run_compaction(claude_compaction::CompactionRun {
+          argv: run.argv,
+          env: run.env,
+          cwd: &run.cwd,
+          config_dir: Path::new(&run.config_dir),
+          session_id: &session_id,
+          family: &run.family,
+          model: &run.model,
+          trigger: &run.trigger,
+          failure_trigger: run.failure_trigger.as_deref(),
+          pre_tokens: run.pre_tokens,
+          emit: &emit,
+          cfg: &cfg,
+          session_cgroup_id: Some(&session_id),
+          account_label: &account.label,
+          timeout_duration: claude_compaction::CLAUDE_COMPACTION_TIMEOUT,
+        })
+        .await?;
+        if outcome.ok {
+          tracing::info!(
+            target: "charliebot_tasks",
+            session = %session_id,
+            pre_tokens,
+            post_tokens = ?outcome.post_tokens,
+            cache_read_tokens = ?outcome.cache_read_tokens,
+            account = account.label,
+            "claude_idle_compaction_done"
+          );
+        }
+        Ok(())
+      }) as BoxFuture<'static, anyhow::Result<()>>
+    });
+    Ok(Some(claude_idle_compaction::IdleCandidate {
+      facts,
+      idle_tokens: current_cfg.section::<claude_config::AccountsConfig>("accounts").claude_compaction.idle_tokens,
+      run,
+    }))
+  });
+  let busy_queue = queue.clone();
+  let is_busy: claude_idle_compaction::BusyFn = Arc::new(move |session_id| {
+    let reservation = reservation_slot
+      .lock()
+      .expect("idle reservation slot is not poisoned")
+      .clone()
+      .context("idle compaction candidate has no reservation state")?;
+    let queue = busy_queue.upgrade().ok_or_else(|| anyhow!("master queue disappeared before idle compaction"))?;
+    let reserved = queue.reserve_idle_compaction(session_id);
+    if reserved {
+      reservation.store(true, Ordering::Release);
+    }
+    Ok(!reserved)
+  });
+  idle.arm(claude_idle_compaction::IdleTimerInput { session_id, armed_at, inspect, is_busy });
+  Ok(())
 }
 
 /// Return the event ids queued or running for one session.

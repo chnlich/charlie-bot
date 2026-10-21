@@ -23,9 +23,8 @@ const BACKUP_PREFIX: &str = "charliebot-";
 const BACKUP_SUFFIX: &str = ".tar.gz";
 
 // Age thresholds in days.
-pub(crate) const DAILY_THRESHOLD: i64 = 7;
-pub(crate) const WEEKLY_THRESHOLD: i64 = 30;
-pub(crate) const MONTHLY_THRESHOLD: i64 = 90;
+pub(crate) const DAILY_THRESHOLD: i64 = 3;
+pub(crate) const WEEKLY_THRESHOLD: i64 = 15;
 
 /// The state directory being backed up: this profile's home (`config.charliebot_home_dir`).
 pub fn charliebot_dir() -> anyhow::Result<PathBuf> {
@@ -51,7 +50,7 @@ pub fn should_exclude(arcname: &[u8]) -> bool {
   }
   for part in &parts {
     // CREDENTIALS_FILENAME is the profile's secrets file; it must never ride a
-    // backup, which the retention policy keeps for up to 90 days.
+    // backup, which the retention policy keeps for up to 15 days.
     if *part == b".git" || *part == b".claude" || *part == CREDENTIALS_FILENAME.as_bytes() || *part == b"__pycache__" {
       return true;
     }
@@ -381,8 +380,6 @@ pub fn apply_retention_in_with_now(home: &Path, now: i64) {
       true
     } else if age < WEEKLY_THRESHOLD {
       weekday(days_from_civil(year, month, day)) == 6 // Sunday
-    } else if age < MONTHLY_THRESHOLD {
-      day == 1 // 1st of month
     } else {
       false
     };

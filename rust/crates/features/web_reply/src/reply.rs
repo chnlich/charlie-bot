@@ -207,6 +207,8 @@ pub fn for_you_entries(store: &Store, events: &[Value]) -> Result<Vec<Value>, We
 
 #[cfg(test)]
 mod tests {
+  use axum::http::Method;
+
   use super::*;
   use crate::test_support::{Home, id_of, user_event};
 
@@ -372,5 +374,155 @@ mod tests {
     assert_eq!(nudge_of(&nudge), Some("u1"));
     assert_eq!(nudge_of(&json!({"type": USER, "web_reply": {"nudge_of": "u1"}})), None);
     assert_eq!(nudge_of(&json!({"type": AGENT_MESSAGE})), None);
+  }
+
+  /// A user message as the chat API writes it: the actor is the user.
+  fn user_message(content: &str) -> Value {
+    let mut event = user_event(content);
+    event["actor"] = json!("user");
+    event
+  }
+
+  /// Posts `text` through the web reply route, with `keep_language` in the body only when the case names a reason.
+  async fn post_reply(home: &Home, session_id: &str, text: &str, keep_language: Option<&str>) -> (StatusCode, Value) {
+    let mut body = json!({"session_id": session_id, "text": text});
+    if let Some(reason) = keep_language {
+      body["keep_language"] = json!(reason);
+    }
+    home.send(Method::POST, "/api/internal/web/reply", Some(body)).await
+  }
+
+  const CHINESE_MESSAGE: &str = "这个改动先别合入，我想再看一下状态面板的折叠逻辑。";
+  const MANY_TERMS_MESSAGE: &str =
+    concat!("这个 PR 的 CI 挂了，pytest 的 log 里有 Kubernetes pod 的 timeout，", "你看一下 rebase 之后还在不在。");
+  const ARTIFACT_COMMENT_MESSAGE: &str = concat!(
+    "[Artifact comments · plan_32.html] (1)\n\n",
+    "1. ▸ \"Keep the phone status toggle sticky while scrolling\"\n",
+    "   ↳ 这一条为什么要改？先说明理由再动手。"
+  );
+  const ENGLISH_REPLY: &str = "I will hold the merge until the review is done.";
+
+  /// A Chinese reply whose fenced block holds twenty code names, which the language check does not count.
+  fn code_heavy_reply() -> String {
+    let names = vec!["ChatPanelStatusToggle"; 20].join(" ");
+    format!("改好了，入口在下面：\n\n```\n{names}\n```\n测试全部通过。")
+  }
+
+  #[tokio::test]
+  async fn an_english_reply_after_a_chinese_message_is_held_and_records_nothing() {
+    let home = Home::new();
+    let sid = home.manager("session", None).await;
+    home.append(&sid, user_message(CHINESE_MESSAGE)).await;
+    let events_before = home.events(&sid).len();
+
+    let (status, _) = post_reply(&home, &sid, ENGLISH_REPLY, None).await;
+
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(home.events(&sid).len(), events_before);
+    assert!(!home.meta(&sid).await.has_unread);
+  }
+
+  #[tokio::test]
+  async fn a_reply_with_a_keep_language_reason_posts_as_written_and_records_the_reason() {
+    let home = Home::new();
+    let sid = home.manager("session", None).await;
+    home.append(&sid, user_message(CHINESE_MESSAGE)).await;
+    let reason = "The reply quotes an English term.";
+
+    let (status, readback) = post_reply(&home, &sid, ENGLISH_REPLY, Some(reason)).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(readback["posted"], json!(true));
+    assert_eq!(
+      replies(&home, &sid),
+      vec![(
+        json!(ENGLISH_REPLY),
+        json!({"answers": null, "chars": ENGLISH_REPLY.chars().count(), "keep_language": reason}),
+      )]
+    );
+  }
+
+  #[tokio::test]
+  async fn an_empty_keep_language_reason_is_refused_and_records_nothing() {
+    for reason in ["", "  "] {
+      let home = Home::new();
+      let sid = home.manager("session", None).await;
+      home.append(&sid, user_message(CHINESE_MESSAGE)).await;
+      let events_before = home.events(&sid).len();
+
+      let (status, detail) = post_reply(&home, &sid, ENGLISH_REPLY, Some(reason)).await;
+
+      assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "reason {reason:?}");
+      assert!(detail["detail"].is_string(), "reason {reason:?}: {detail}");
+      assert_eq!(home.events(&sid).len(), events_before, "reason {reason:?}");
+    }
+  }
+
+  #[tokio::test]
+  async fn an_english_reply_after_a_chinese_message_with_english_inside_it_is_held() {
+    for message in [MANY_TERMS_MESSAGE, ARTIFACT_COMMENT_MESSAGE] {
+      let home = Home::new();
+      let sid = home.manager("session", None).await;
+      home.append(&sid, user_message(message)).await;
+
+      let (status, _) = post_reply(&home, &sid, ENGLISH_REPLY, None).await;
+
+      assert_eq!(status, StatusCode::CONFLICT, "message {message:?}");
+    }
+  }
+
+  #[tokio::test]
+  async fn an_english_reply_after_an_english_message_posts_even_after_a_chinese_one() {
+    let home = Home::new();
+    let sid = home.manager("session", None).await;
+    home.append(&sid, user_message(CHINESE_MESSAGE)).await;
+    home.append(&sid, user_message("Please rerun the suite and report the failures.")).await;
+
+    let (status, readback) = post_reply(&home, &sid, ENGLISH_REPLY, None).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(readback["posted"], json!(true));
+  }
+
+  #[tokio::test]
+  async fn a_chinese_reply_with_many_code_names_posts() {
+    let home = Home::new();
+    let sid = home.manager("session", None).await;
+    home.append(&sid, user_message(CHINESE_MESSAGE)).await;
+
+    let (status, readback) = post_reply(&home, &sid, &code_heavy_reply(), None).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(readback["posted"], json!(true));
+  }
+
+  #[tokio::test]
+  async fn a_reply_in_a_session_without_a_user_message_posts() {
+    let home = Home::new();
+    let sid = home.manager("session", None).await;
+
+    let (status, readback) = post_reply(&home, &sid, ENGLISH_REPLY, None).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(readback["posted"], json!(true));
+  }
+
+  /// Latin letters inside inline code, a URL and a path are not counted, so the Han share is 1 and the reply posts.
+  /// Each span holds over twenty Latin letters per Han character, so one span left in the count holds the reply.
+  #[tokio::test]
+  async fn a_reply_whose_latin_letters_sit_in_code_urls_and_paths_posts() {
+    let home = Home::new();
+    let sid = home.manager("session", None).await;
+    home.append(&sid, user_message(CHINESE_MESSAGE)).await;
+    let reply = concat!(
+      "好。`ChatPanelStatusToggleWithLongName` ",
+      "https://example.com/docs/PanelGuideAndMore ",
+      "/home/example/worktrees/panel-guide-review"
+    );
+
+    let (status, readback) = post_reply(&home, &sid, reply, None).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(readback["posted"], json!(true));
   }
 }

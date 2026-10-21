@@ -41,7 +41,7 @@ async def register_live_manager_run(tree: task_sessions.TaskTreeManager, session
   """Pin one live manager_turn Run: the node's own coordination Run whose
   identity backs its completion credential."""
   pid, pid_start = live_run_identity()
-  await tree.runs.register_run(
+  await tree.runs.register_run_locked(
       models.RunRecord(
           id=run_id,
           session_id=session_id,
@@ -80,7 +80,7 @@ async def test_manager_child_creation_needs_no_takeoff_and_replays_stably(
   task; the replayed request returns the original product; the node is durable
   on disk with the agent as the creation fact's actor."""
   cfg, session_blocks, tree, root = await manager_tree(tmp_path, monkeypatch)
-  await tree.runs.register_run(models.RunRecord(id="root-run", session_id=root.id, kind="manager_turn"))
+  await tree.runs.register_run_locked(models.RunRecord(id="root-run", session_id=root.id, kind="manager_turn"))
   await tree.runs.record_launch(root.id, "root-run", pid=424242, pid_start="ps-root")
 
   with test_task_execution.make_api_client(cfg, session_blocks, tree) as client:
@@ -163,7 +163,7 @@ async def three_manager_tree(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyP
   cfg, session_blocks, tree, root = await manager_tree(tmp_path, monkeypatch)
   ids = {"root": root.id}
   parent_id, parent_run = root.id, "root-run"
-  await tree.runs.register_run(models.RunRecord(id=parent_run, session_id=parent_id, kind="manager_turn"))
+  await tree.runs.register_run_locked(models.RunRecord(id=parent_run, session_id=parent_id, kind="manager_turn"))
   await tree.runs.record_launch(parent_id, parent_run, pid=424242, pid_start="ps-root")
   for level, (request_id, run_id) in {
       "child": ("child-mgr", "child-run"),
@@ -173,7 +173,7 @@ async def three_manager_tree(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyP
       resp = await create_child_via_api(client, parent_id, conftest.agent_headers(parent_id, parent_run), request_id)
       assert resp.status_code == 200, resp.text
       ids[level] = resp.json()["id"]
-    await tree.runs.register_run(models.RunRecord(id=run_id, session_id=ids[level], kind="manager_turn"))
+    await tree.runs.register_run_locked(models.RunRecord(id=run_id, session_id=ids[level], kind="manager_turn"))
     await tree.runs.record_launch(ids[level], run_id, pid=424242, pid_start=f"ps-{level}")
     parent_id, parent_run = ids[level], run_id
   return cfg, session_blocks, tree, ids
@@ -300,7 +300,7 @@ async def test_queued_retry_launches_without_reauthorizing_and_verify_exemption(
       name="Verify",
       backend=None,
       caller=conftest.OPERATOR)
-  verify_run = await tree.runs.register_run(
+  verify_run = await tree.runs.register_run_locked(
       models.RunRecord(id="verify-run", session_id=verify.id, kind="work", backend="fake", model="fake-model"))
   observation = await tree.dispatch.executor.launch_and_settle(verify.id, verify_run.id)
   assert observation.withheld is None
@@ -323,7 +323,7 @@ async def test_agent_cancels_only_its_own_direct_child_over_http(
   cfg, session_blocks, tree, root = await manager_tree(tmp_path, monkeypatch)
   # Each caller's credential rides one launched Run (the caller-identity
   # predicate pins the process identity).
-  await tree.runs.register_run(models.RunRecord(id="root-run", session_id=root.id, kind="manager_turn"))
+  await tree.runs.register_run_locked(models.RunRecord(id="root-run", session_id=root.id, kind="manager_turn"))
   await tree.runs.record_launch(root.id, "root-run", pid=424242, pid_start="ps-root")
   child = await tree.create_task(
       request_id="child",
@@ -341,7 +341,7 @@ async def test_agent_cancels_only_its_own_direct_child_over_http(
       name="Other",
       backend=None,
       caller=conftest.OPERATOR)
-  await tree.runs.register_run(models.RunRecord(id="other-run", session_id=other.id, kind="manager_turn"))
+  await tree.runs.register_run_locked(models.RunRecord(id="other-run", session_id=other.id, kind="manager_turn"))
   await tree.runs.record_launch(other.id, "other-run", pid=424243, pid_start="ps-other")
 
   with test_task_execution.make_api_client(cfg, session_blocks, tree) as client:
@@ -373,7 +373,7 @@ async def test_agent_run_token_cancels_live_worker_over_http(
   """The worker cancel route returns stopped run outcomes to its parent agent."""
   monkeypatch.setattr(runs, "STOP_EXIT_WAIT_SECONDS", 0.2)
   cfg, session_blocks, tree, root = await manager_tree(tmp_path, monkeypatch)
-  await tree.runs.register_run(models.RunRecord(id="root-run", session_id=root.id, kind="manager_turn"))
+  await tree.runs.register_run_locked(models.RunRecord(id="root-run", session_id=root.id, kind="manager_turn"))
   await tree.runs.record_launch(root.id, "root-run", pid=424242, pid_start="ps-root")
   worker = await tree.create_task(
       request_id="worker",
@@ -385,7 +385,7 @@ async def test_agent_run_token_cancels_live_worker_over_http(
       caller=conftest.OPERATOR)
   proc = subprocess.Popen(["/bin/sleep", "60"], start_new_session=True)
   pid, pid_start = conftest.identity_of(proc.pid)
-  await tree.runs.register_run(
+  await tree.runs.register_run_locked(
       models.RunRecord(
           id="worker-run",
           session_id=worker.id,
@@ -421,7 +421,7 @@ async def test_profile_changing_replay_never_bypasses_authorization(
   chain, and a manager create replayed as a worker request returns the
   original manager product without minting a worker."""
   cfg, session_blocks, tree, root = await manager_tree(tmp_path, monkeypatch)
-  await tree.runs.register_run(models.RunRecord(id="root-run", session_id=root.id, kind="manager_turn"))
+  await tree.runs.register_run_locked(models.RunRecord(id="root-run", session_id=root.id, kind="manager_turn"))
   await tree.runs.record_launch(root.id, "root-run", pid=424242, pid_start="ps-root")
   # The operator's create needs no gate; the agent's replays below bind to the
   # same (parent, request_id) node.
@@ -496,7 +496,7 @@ async def test_summon_authorizes_a_root_manager_but_a_relayed_agent_message_does
   no user request, so the same route refuses it."""
   # Refusal: the root's only user-facing input is a relay admitted by the ordinary relay route.
   cfg, session_blocks, tree, root = await manager_tree(tmp_path / "relay", monkeypatch)
-  await tree.runs.register_run(models.RunRecord(id="root-run", session_id=root.id, kind="manager_turn"))
+  await tree.runs.register_run_locked(models.RunRecord(id="root-run", session_id=root.id, kind="manager_turn"))
   await tree.runs.record_launch(root.id, "root-run", pid=424242, pid_start="ps-root")
   relay_caller = await tree.create_task(
       request_id="relay-caller",
@@ -524,7 +524,7 @@ async def test_summon_authorizes_a_root_manager_but_a_relayed_agent_message_does
 
   # Admission: a fresh root whose only user-facing input is the event a Slack thread summon writes.
   cfg, session_blocks, tree, root = await manager_tree(tmp_path / "summon", monkeypatch)
-  await tree.runs.register_run(models.RunRecord(id="root-run", session_id=root.id, kind="manager_turn"))
+  await tree.runs.register_run_locked(models.RunRecord(id="root-run", session_id=root.id, kind="manager_turn"))
   await tree.runs.record_launch(root.id, "root-run", pid=424242, pid_start="ps-root")
   conftest.install_scripted_backends(
       monkeypatch, [test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("leaf done")])],

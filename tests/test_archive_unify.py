@@ -45,7 +45,7 @@ class ScriptedExecutor:
     run_id = launch_run_id or f"run-{len(self.batches) + 1}"
     batch = [str(e["id"]) for e in pending]
     self.batches.append((session_id, batch))
-    await self.tree.runs.register_run(models.RunRecord(id=run_id, session_id=session_id, kind="work"))
+    await self.tree.runs.register_run_locked(models.RunRecord(id=run_id, session_id=session_id, kind="work"))
     async with self.tree.control_lock:
       await self.tree.dispatch.claim_input_batch_locked(session_id, run_id)
     if self.finish:
@@ -70,7 +70,7 @@ async def build_tree(tree: task_sessions.TaskTreeManager, *, with_old_input: boo
   mid = await conftest.create_task(tree, parent=root.id, request_id="mid", name="Mid")
   leaf = await conftest.create_task(tree, parent=mid.id, request_id="leaf", profile="worker", name="Leaf")
   completed = await conftest.create_task(tree, parent=root.id, request_id="done", profile="worker", name="Done")
-  await tree.runs.register_run(models.RunRecord(id="run-done", session_id=completed.id, kind="work"))
+  await tree.runs.register_run_locked(models.RunRecord(id="run-done", session_id=completed.id, kind="work"))
   await tree.dispatch.finish_run(completed.id, "run-done", outcome="success")
   assert tree.task_state(completed.id) == "completed"
   if with_old_input:
@@ -174,7 +174,7 @@ async def test_cascade_archive_refuses_an_unfinished_run_and_writes_nothing(tmp_
   proc = subprocess.Popen(["/bin/sleep", "30"])
   try:
     pid_start, _state = runs.read_pid_stat(proc.pid)
-    await tree.runs.register_run(
+    await tree.runs.register_run_locked(
         models.RunRecord(
             id="run-leaf",
             session_id=leaf.id,
@@ -360,7 +360,7 @@ async def build_failed_worker(
   """manager -> worker whose one work run ended with *outcome*; no report was delivered."""
   manager = await conftest.create_task(tree, parent=None, request_id="mgr", name="Mgr")
   worker = await conftest.create_task(tree, parent=manager.id, request_id="w", profile="worker", task=task, name="W")
-  await tree.runs.register_run(models.RunRecord(id=run_id, session_id=worker.id, kind="work"))
+  await tree.runs.register_run_locked(models.RunRecord(id=run_id, session_id=worker.id, kind="work"))
   await tree.dispatch.finish_run(worker.id, run_id, outcome=outcome)
   return manager, worker
 
@@ -394,7 +394,7 @@ async def test_archive_unsuccessful_worker_writes_the_system_archive_fact(tmp_pa
 async def test_archive_unsuccessful_worker_refuses_a_non_worker_node(tmp_path: pathlib.Path) -> None:
   _cfg, _session_blocks, tree = conftest.build_env(tmp_path)
   manager = await conftest.create_task(tree, parent=None, request_id="mgr", name="Mgr")
-  await tree.runs.register_run(models.RunRecord(id="run-m", session_id=manager.id, kind="manager_turn"))
+  await tree.runs.register_run_locked(models.RunRecord(id="run-m", session_id=manager.id, kind="manager_turn"))
   await tree.dispatch.finish_run(manager.id, "run-m", outcome="failed")
 
   assert await tree.archive_unsuccessful_worker(manager.id, run_id="run-m", outcome="failed") is False
@@ -420,7 +420,7 @@ async def test_archive_unsuccessful_worker_refuses_when_the_run_is_not_the_last_
   # open with a later-ended run.
   task = models.TaskSpec(goal="do the work", task_type=models.TaskType.IMPLEMENT)
   _manager, worker = await build_failed_worker(tree, task=task)
-  await tree.runs.register_run(models.RunRecord(id="run-2", session_id=worker.id, kind="work"))
+  await tree.runs.register_run_locked(models.RunRecord(id="run-2", session_id=worker.id, kind="work"))
   await tree.dispatch.finish_run(worker.id, "run-2", outcome="success")
   assert tree.task_state(worker.id) == "open"
 
@@ -433,7 +433,7 @@ async def test_archive_unsuccessful_worker_refuses_when_the_run_is_not_the_last_
 async def test_archive_unsuccessful_worker_refuses_a_node_with_a_queued_run(tmp_path: pathlib.Path) -> None:
   _cfg, _session_blocks, tree = conftest.build_env(tmp_path)
   _manager, worker = await build_failed_worker(tree)
-  await tree.runs.register_run(models.RunRecord(id="run-2", session_id=worker.id, kind="work"))
+  await tree.runs.register_run_locked(models.RunRecord(id="run-2", session_id=worker.id, kind="work"))
 
   assert await tree.archive_unsuccessful_worker(worker.id, run_id="run-1", outcome="failed") is False
   assert close_facts(tree, worker.id) == []

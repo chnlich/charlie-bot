@@ -64,7 +64,7 @@ async def test_worker_run_opens_the_busy_interval_and_every_finish_closes_it(
   master-queue interval is never borrowed."""
   _cfg, _session_blocks, tree, root, worker = await manager_with_worker(tmp_path, monkeypatch)
   started = datetime.datetime.now(datetime.UTC) - datetime.timedelta(seconds=3)
-  await tree.runs.register_run(
+  await tree.runs.register_run_locked(
       models.RunRecord(
           id="run-1", session_id=worker.id, kind="work", backend="fake", model="fake-model", started_at=started))
   await tree.runs.record_launch(worker.id, "run-1", pid=424242, pid_start="1-424000")
@@ -90,7 +90,7 @@ async def test_a_run_closes_only_the_interval_it_opened(
   _cfg, _session_blocks, tree, root, worker = await manager_with_worker(tmp_path, monkeypatch)
   queue_since = datetime.datetime.now(datetime.UTC) - datetime.timedelta(seconds=9)
   thinking_state.mark_busy(root.id, since=queue_since)
-  await tree.runs.register_run(
+  await tree.runs.register_run_locked(
       models.RunRecord(
           id="turn-1", session_id=root.id, kind="manager_turn", started_at=datetime.datetime.now(datetime.UTC)))
   await tree.runs.record_launch(root.id, "turn-1", pid=424250, pid_start="1-424010")
@@ -98,7 +98,7 @@ async def test_a_run_closes_only_the_interval_it_opened(
   assert thinking_state.busy_since(root.id) == queue_since
 
   child = worker
-  await tree.runs.register_run(
+  await tree.runs.register_run_locked(
       models.RunRecord(
           id="run-l",
           session_id=child.id,
@@ -113,12 +113,12 @@ async def test_a_run_closes_only_the_interval_it_opened(
   assert thinking_state.busy_since(root.id) == queue_since
 
   worker_since = datetime.datetime.now(datetime.UTC) - datetime.timedelta(seconds=2)
-  await tree.runs.register_run(
+  await tree.runs.register_run_locked(
       models.RunRecord(
           id="run-live", session_id=worker.id, kind="work", backend="fake", model="fake-model",
           started_at=worker_since))
   await tree.runs.record_launch(worker.id, "run-live", pid=424251, pid_start="1-424011")
-  await tree.runs.register_run(
+  await tree.runs.register_run_locked(
       models.RunRecord(id="run-queued", session_id=worker.id, kind="work", backend="fake", model="fake-model"))
   await tree.runs.record_finish(worker.id, "run-queued", "cancelled")
   assert thinking_state.busy_since(worker.id) == worker_since
@@ -147,7 +147,7 @@ async def test_failed_run_header_reads_failed_with_its_error(
   _cfg, _session_blocks, tree, _root, worker = await manager_with_worker(tmp_path, monkeypatch)
   error_text = "RuntimeError: worktree preparation failed: task/x differs from origin/main"
   # Registered without a task spec (the improve-iteration shape): no task_spec_ref.
-  await tree.runs.register_run(
+  await tree.runs.register_run_locked(
       models.RunRecord(id="run-f", session_id=worker.id, kind="work", backend="fake", model="fake-model"))
   _write_run_events(
       tree, worker.id, "run-f", [
@@ -190,7 +190,7 @@ async def test_started_run_that_fails_reads_failed_and_links_its_launch_prompt(
 
   _cfg, _session_blocks, tree, _root, worker = await manager_with_worker(tmp_path, monkeypatch)
   error_text = "RuntimeError: backend transport died mid-run"
-  await tree.runs.register_run(
+  await tree.runs.register_run_locked(
       models.RunRecord(id="run-s", session_id=worker.id, kind="work", backend="fake", model="fake-model"))
   # The real launch seam sets started_at (launched) and the adapter persists
   # the launch text under the run dir before spawn.
@@ -242,7 +242,7 @@ async def test_delivery_card_timestamp_is_the_task_close_time(
   not the projection build's clock: it reads the same across a fresh load and a
   cache clear, and a reopen/close moves it to the second close."""
   _cfg, _session_blocks, tree, _root, worker = await manager_with_worker(tmp_path, monkeypatch)
-  await tree.runs.register_run(
+  await tree.runs.register_run_locked(
       models.RunRecord(
           id="run-1",
           session_id=worker.id,
@@ -275,7 +275,7 @@ async def test_summary_and_delivery_read_only_the_current_close(
   """A reopen clears the close the summary and the delivery card read; a later
   close with no refs carries no landed commit from the earlier one."""
   _cfg, _session_blocks, tree, _root, worker = await manager_with_worker(tmp_path, monkeypatch)
-  await tree.runs.register_run(
+  await tree.runs.register_run_locked(
       models.RunRecord(
           id="run-1",
           session_id=worker.id,
@@ -330,7 +330,7 @@ async def test_transcript_poll_moves_a_failed_run_s_error_into_its_header(
 
   cfg, session_blocks, tree, _root, worker = await manager_with_worker(tmp_path, monkeypatch)
   error_text = "RuntimeError: backend transport died mid-run"
-  await tree.runs.register_run(
+  await tree.runs.register_run_locked(
       models.RunRecord(id="run-live", session_id=worker.id, kind="work", backend="fake", model="fake-model"))
   await tree.runs.record_launch(worker.id, "run-live", pid=424451, pid_start="1-424451")
   monkeypatch.setattr(runs_mod, "is_run_alive", lambda *a, **k: True)
@@ -399,7 +399,7 @@ async def test_summary_reports_a_delivered_task_with_delivery_links_and_closing_
   ended = started + datetime.timedelta(seconds=10, microseconds=900_000)
   review_started = ended + datetime.timedelta(seconds=1)
   review_ended = review_started + datetime.timedelta(seconds=2)
-  await tree.runs.register_run(
+  await tree.runs.register_run_locked(
       models.RunRecord(
           id="run-1", session_id=worker.id, kind="work", backend="fake", model="fake-model", started_at=started))
   await tree.runs.record_launch(worker.id, "run-1", pid=424452, pid_start="1-424452")
@@ -416,7 +416,7 @@ async def test_summary_reports_a_delivered_task_with_delivery_links_and_closing_
           _assistant_text_event("All checks pass."),
       ])
   await tree.runs.record_finish(worker.id, "run-1", "success", ended_at=ended)
-  await tree.runs.register_run(
+  await tree.runs.register_run_locked(
       models.RunRecord(
           id="run-2",
           session_id=worker.id,
@@ -501,7 +501,7 @@ async def test_summary_follows_a_running_run_and_its_streaming_appends(
   import src.runtime.runs as runs_mod
 
   _cfg, _session_blocks, tree, _root, worker = await manager_with_worker(tmp_path, monkeypatch)
-  await tree.runs.register_run(
+  await tree.runs.register_run_locked(
       models.RunRecord(
           id="run-live",
           session_id=worker.id,
@@ -574,7 +574,7 @@ async def test_summary_reports_a_failed_run_cause_and_a_stop_request(
   request fact names its run, request id and time — and the terminated run
   closes with its run_end separator."""
   _cfg, _session_blocks, tree, _root, worker = await manager_with_worker(tmp_path, monkeypatch)
-  await tree.runs.register_run(
+  await tree.runs.register_run_locked(
       models.RunRecord(
           id="run-dead",
           session_id=worker.id,

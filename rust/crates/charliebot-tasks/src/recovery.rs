@@ -120,9 +120,9 @@ pub fn recovery_step(features: Arc<FeatureContext>) -> BoxFuture<'static, anyhow
   })
 }
 
-/// The let-go step at shutdown: cancel every per-session manager consumer, so each running turn takes Python's shape
-/// (`master_cc_run.py:648-691`). A covered run detaches, and an uncovered run terminates
-/// (`master_run::run_cc`). Resumed turns are consumer items, so their follows are cancelled the same way.
+/// On SIGINT and bind failure, cancel each session consumer after `server.py:293-310`, as `asyncio.run` does
+/// (`asyncio/runners.py:66-75`). Each running turn follows `master_cc_run.py:648-664`; SIGTERM skips this step because
+/// Uvicorn re-raises it first (`uvicorn/server.py:322-339`).
 pub fn let_go_step(features: Arc<FeatureContext>) -> BoxFuture<'static, anyhow::Result<()>> {
   Box::pin(async move {
     let queue = features.startup.require::<MasterQueue>()?;

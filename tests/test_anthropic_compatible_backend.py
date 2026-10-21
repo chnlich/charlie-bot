@@ -1,4 +1,4 @@
-from types import SimpleNamespace
+import types
 
 import pydantic
 import pytest
@@ -71,8 +71,8 @@ def test_factory_routes_endpoint_model_window_and_no_auth(monkeypatch: pytest.Mo
 
 def test_factory_routes_named_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
 
-  def credentials() -> SimpleNamespace:
-    return SimpleNamespace(require=lambda section, key: "configured-value")
+  def credentials() -> types.SimpleNamespace:
+    return types.SimpleNamespace(require=lambda section, key: "configured-value")
 
   monkeypatch.setattr(config, "get_credentials", credentials)
   backend = factory.build(_option(credential="kimi"), config.CharlieBotConfig())

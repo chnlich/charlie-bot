@@ -1634,13 +1634,18 @@ impl TaskExecutionAdapter {
     let evidence = if work_run.repo_path.as_deref().is_some_and(|repo_path| !repo_path.is_empty()) {
       let (landing, reason) = self.landing_for_work(&work_run).await;
       let Some((branch, commit, repo_path)) = landing else {
+        // A review that stopped before its push states its verdict in its closing words; the report quotes them.
+        let events_log = self.features.store.run_dir(session_id, &run.id).join(run_records::RUN_EVENTS_NAME);
+        let verdict = review::worker_summary_from_events_log(&run_events(&events_log)?)
+          .unwrap_or_else(|| "The review run left no closing words, so its verdict is unknown.".to_string());
         self
           .report_failure_to_parent_with_decider(
             session_id,
             &work_run,
             "blocked",
             Some(&format!(
-              "work run {} passed review but its branch did not land on {}: {reason}",
+              "review run {} ended without landing work run {} on {}: {reason}\n\nReview verdict:\n{verdict}",
+              run.id,
               work_run.id,
               work_run.base_branch.as_deref().unwrap_or("the requested base")
             )),

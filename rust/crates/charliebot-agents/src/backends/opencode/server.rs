@@ -109,9 +109,7 @@ pub struct ServerTimeouts {
   pub stop: Duration,
   pub stream_exit_grace: Duration,
   pub idle_exit: Duration,
-  #[cfg(test)]
   pub heavy_check: Duration,
-  #[cfg(test)]
   pub heavy_rss_mb: f64,
   #[cfg(test)]
   pub heavy_rss_override: Option<f64>,
@@ -126,10 +124,8 @@ impl Default for ServerTimeouts {
       stop: opencode_limits::OPENCODE_SERVER_STOP_TIMEOUT,
       stream_exit_grace: opencode_limits::OPENCODE_STREAM_EXIT_GRACE,
       idle_exit: opencode_limits::OPENCODE_SERVER_IDLE_EXIT_SECONDS,
-      #[cfg(test)]
-      heavy_check: Duration::from_secs(60),
-      #[cfg(test)]
-      heavy_rss_mb: 400.0,
+      heavy_check: opencode_limits::OPENCODE_SERVER_HEAVY_CHECK_SECONDS,
+      heavy_rss_mb: opencode_limits::OPENCODE_SERVER_HEAVY_RSS_MB,
       #[cfg(test)]
       heavy_rss_override: None,
       interrupt_settle: opencode_limits::OPENCODE_INTERRUPT_SETTLE_TIMEOUT,
@@ -190,6 +186,7 @@ pub struct Turn {
   pub directory: String,
   process_id: u32,
   server: Weak<OpenCodeServer>,
+  claim_held: bool,
   events: Mutex<VecDeque<TurnEvent>>,
   ready: Notify,
   finished: AtomicBool,
@@ -236,12 +233,30 @@ impl Turn {
       return Ok(());
     };
     server.unregister(self);
-    if !server.process_alive() {
+    let turn_steps = if !server.process_alive() {
       tracing::info!(target: "charliebot_agents", session_id = %self.session_id, "opencode_turn_end_steps_skipped");
-      return Ok(());
+      Ok(())
+    } else {
+      async {
+        server.interrupt(&self.session_id).await?;
+        server.delete_shells(&self.session_id, &self.directory).await
+      }
+      .await
+    };
+    let release = if self.claim_held { server.release_claim(&self.directory).await } else { Ok(()) };
+    match (turn_steps, release) {
+      (Err(error), Err(release_error)) => {
+        tracing::error!(
+          target: "charliebot_agents",
+          directory = %self.directory,
+          error = %release_error,
+          "opencode_release_failed_during_turn_cleanup"
+        );
+        Err(error)
+      }
+      (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+      (Ok(()), Ok(())) => Ok(()),
     }
-    server.interrupt(&self.session_id).await?;
-    server.delete_shells(&self.session_id, &self.directory).await
   }
 }
 
@@ -279,12 +294,14 @@ pub struct OpenCodeServer {
   pool: Weak<OpenCodeServerPool>,
   proxy_url: Option<String>,
   start_lock: tokio::sync::Mutex<()>,
+  release_lock: tokio::sync::Mutex<()>,
   state: Mutex<ServerState>,
 }
 
 struct ServerState {
   process: Option<Arc<ServerProcess>>,
   turns: HashMap<String, Arc<Turn>>,
+  claims: HashMap<String, usize>,
   pending: HashMap<String, usize>,
   settled: HashMap<String, Arc<Notify>>,
   connected: Option<watch::Receiver<bool>>,
@@ -295,8 +312,6 @@ struct ServerState {
   stopping: bool,
   tasks: Vec<JoinHandle<()>>,
   idle: Option<JoinHandle<()>>,
-  #[cfg(test)]
-  test_claim_counts: HashMap<String, usize>,
   #[cfg(test)]
   test_start_observation: Option<(String, Arc<Mutex<Vec<usize>>>)>,
   #[cfg(test)]
@@ -311,9 +326,11 @@ impl OpenCodeServer {
       pool: Arc::downgrade(&pool),
       proxy_url,
       start_lock: tokio::sync::Mutex::new(()),
+      release_lock: tokio::sync::Mutex::new(()),
       state: Mutex::new(ServerState {
         process: None,
         turns: HashMap::new(),
+        claims: HashMap::new(),
         pending: HashMap::new(),
         settled: HashMap::new(),
         connected: None,
@@ -324,8 +341,6 @@ impl OpenCodeServer {
         stopping: false,
         tasks: Vec::new(),
         idle: None,
-        #[cfg(test)]
-        test_claim_counts: HashMap::new(),
         #[cfg(test)]
         test_start_observation: None,
         #[cfg(test)]
@@ -369,6 +384,7 @@ impl OpenCodeServer {
     env.insert("XDG_CACHE_HOME".to_string(), host.cache_dir().display().to_string());
     env.insert("OPENCODE_SERVER_PASSWORD".to_string(), password.to_string());
     env.insert("OPENCODE_CONFIG_CONTENT".to_string(), headless_config().to_string());
+    env.insert("OPENCODE_DISABLE_FFF".to_string(), "1".to_string());
     if let Some(proxy_url) = &self.proxy_url {
       apply_proxy_env(&mut env, proxy_url);
     }
@@ -400,30 +416,22 @@ impl OpenCodeServer {
 
   #[cfg(test)]
   pub(crate) fn claim_count_test(&self, directory: &str) -> usize {
-    self
-      .state
-      .lock()
-      .expect("opencode server state mutex is not poisoned")
-      .test_claim_counts
-      .get(directory)
-      .copied()
-      .unwrap_or(0)
+    self.state.lock().expect("opencode server state mutex is not poisoned").claims.get(directory).copied().unwrap_or(0)
   }
 
   #[cfg(test)]
   pub(crate) async fn claim_test(&self, directory: &str) {
-    self.record_claim_test(directory, true);
+    self.claim(directory).await;
   }
 
   #[cfg(test)]
   pub(crate) async fn release_claim_test(self: &Arc<Self>, directory: &str) -> anyhow::Result<()> {
-    self.record_claim_test(directory, false);
-    Ok(())
+    self.release_claim(directory).await
   }
 
   #[cfg(test)]
-  pub(crate) fn process_rss_mb_test(_pid: u32) -> anyhow::Result<f64> {
-    Ok(0.0)
+  pub(crate) fn process_rss_mb_test(pid: u32) -> anyhow::Result<f64> {
+    process_rss_mb(pid)
   }
 
   #[cfg(test)]
@@ -447,28 +455,8 @@ impl OpenCodeServer {
       observed
         .lock()
         .expect("opencode start observation is not poisoned")
-        .push(state.test_claim_counts.get(directory).copied().unwrap_or(0));
+        .push(state.claims.get(directory).copied().unwrap_or(0));
     }
-  }
-
-  #[cfg(test)]
-  fn record_claim_test(&self, directory: &str, claimed: bool) {
-    let mut state = self.state.lock().expect("opencode server state mutex is not poisoned");
-    if claimed {
-      *state.test_claim_counts.entry(directory.to_string()).or_default() += 1;
-    } else {
-      let count =
-        state.test_claim_counts.get_mut(directory).expect("a test claim is released only after it is claimed");
-      *count -= 1;
-      if *count == 0 {
-        state.test_claim_counts.remove(directory);
-      }
-    }
-  }
-
-  #[cfg(test)]
-  fn record_heavy_check_test(&self) {
-    self.state.lock().expect("opencode server state mutex is not poisoned").test_heavy_check_count += 1;
   }
 
   #[cfg(test)]
@@ -506,8 +494,82 @@ impl OpenCodeServer {
     self.shutdown_locked().await
   }
 
-  /// Claim a session for a turn.
+  /// Hold a directory until this turn finishes.
+  pub async fn claim(&self, directory: &str) {
+    let _guard = self.release_lock.lock().await;
+    let mut state = self.state.lock().expect("opencode server state mutex is not poisoned");
+    *state.claims.entry(directory.to_string()).or_default() += 1;
+  }
+
+  /// Drop a directory claim and unload every loaded directory no turn claims.
+  pub async fn release_claim(self: &Arc<Self>, directory: &str) -> anyhow::Result<()> {
+    let _guard = self.release_lock.lock().await;
+    let (should_arm_idle, release_ready) = {
+      let mut state = self.state.lock().expect("opencode server state mutex is not poisoned");
+      let count = state.claims.get_mut(directory).expect("only a claimed directory can be released");
+      *count -= 1;
+      if *count == 0 {
+        state.claims.remove(directory);
+      }
+      let no_claims_or_turns = state.claims.is_empty() && state.turns.is_empty();
+      let process_ready = !state.stopping
+        && state.process.as_ref().is_some_and(|process| process.alive())
+        && state.version.is_some()
+        && state.connected.as_ref().is_some_and(|connected| *connected.borrow());
+      let should_arm_idle =
+        no_claims_or_turns && process_ready && state.idle.as_ref().is_some_and(JoinHandle::is_finished);
+      (should_arm_idle, process_ready)
+    };
+    if should_arm_idle {
+      self.arm_idle();
+    }
+    if !release_ready {
+      return Ok(());
+    }
+    let response = self.client_request(Method::GET, "/api/debug/location")?.send().await?.error_for_status()?;
+    let locations = response.json::<Value>().await?;
+    let locations = locations.as_array().context("opencode location list is not an array")?;
+    for location in locations {
+      let loaded =
+        location.get("directory").and_then(Value::as_str).context("opencode location has no string directory")?;
+      let claimed = self.state.lock().expect("opencode server state mutex is not poisoned").claims.contains_key(loaded);
+      if claimed {
+        continue;
+      }
+      let response = self
+        .client_request(Method::DELETE, "/api/debug/location")?
+        .query(&[("location[directory]", loaded)])
+        .send()
+        .await?;
+      if !response.status().is_success() {
+        bail!("opencode release of directory {loaded} returned HTTP {}", response.status().as_u16());
+      }
+    }
+    Ok(())
+  }
+
+  /// Claim a session for a turn that already holds its directory claim.
+  pub(crate) fn register_claimed(
+    self: &Arc<Self>,
+    session_id: &str,
+    directory: &str,
+    process_id: u32,
+  ) -> anyhow::Result<Arc<Turn>> {
+    self.register_inner(session_id, directory, process_id, true)
+  }
+
+  /// Claim a session for a turn without a directory claim, for internal event routing.
   pub fn register(self: &Arc<Self>, session_id: &str, directory: &str, process_id: u32) -> anyhow::Result<Arc<Turn>> {
+    self.register_inner(session_id, directory, process_id, false)
+  }
+
+  fn register_inner(
+    self: &Arc<Self>,
+    session_id: &str,
+    directory: &str,
+    process_id: u32,
+    claim_held: bool,
+  ) -> anyhow::Result<Arc<Turn>> {
     let mut state = self.state.lock().expect("opencode server state mutex is not poisoned");
     if state.turns.contains_key(session_id) {
       bail!("opencode session {session_id} already has a running turn");
@@ -517,6 +579,7 @@ impl OpenCodeServer {
       directory: directory.to_string(),
       process_id,
       server: Arc::downgrade(self),
+      claim_held,
       events: Mutex::new(VecDeque::new()),
       ready: Notify::new(),
       finished: AtomicBool::new(false),
@@ -875,20 +938,61 @@ impl OpenCodeServer {
     }
     let weak = Arc::downgrade(self);
     state.idle = Some(tokio::spawn(async move {
-      tokio::time::sleep(timeouts.idle_exit).await;
-      if let Some(server) = weak.upgrade() {
-        server.stop_when_idle().await;
+      tokio::time::sleep(timeouts.heavy_check).await;
+      if let Some(server) = weak.upgrade()
+        && let Err(error) = server.stop_when_idle(timeouts).await
+      {
+        tracing::error!(target: "charliebot_agents", error = %error, "opencode_server_idle_check_failed");
       }
     }));
   }
 
-  async fn stop_when_idle(self: &Arc<Self>) {
+  async fn stop_when_idle(self: &Arc<Self>, timeouts: ServerTimeouts) -> anyhow::Result<()> {
+    let _guard = self.start_lock.lock().await;
+    let heavy_pid = {
+      let state = self.state.lock().expect("opencode server state mutex is not poisoned");
+      if state.turns.is_empty()
+        && state.claims.is_empty()
+        && state.process.as_ref().is_some_and(|process| process.alive())
+        && !state.stopping
+      {
+        state.process.as_ref().map(|process| process.pid)
+      } else {
+        None
+      }
+    };
+    #[cfg(test)]
+    if heavy_pid.is_some() {
+      self.state.lock().expect("opencode server state mutex is not poisoned").test_heavy_check_count += 1;
+    }
+    if let Some(pid) = heavy_pid {
+      #[cfg(test)]
+      let rss_mb = match timeouts.heavy_rss_override {
+        Some(rss_mb) => rss_mb,
+        None => process_rss_mb(pid)?,
+      };
+      #[cfg(not(test))]
+      let rss_mb = process_rss_mb(pid)?;
+      if rss_mb > timeouts.heavy_rss_mb {
+        tracing::info!(target: "charliebot_agents", pid, rss_mb = round_rss(rss_mb), "opencode_server_heavy_exit");
+        self.state.lock().expect("opencode server state mutex is not poisoned").stopping = true;
+        #[cfg(test)]
+        self.wait_heavy_shutdown_gate_test().await;
+        self.shutdown_locked().await?;
+        return Ok(());
+      }
+    }
+    drop(_guard);
+    tokio::time::sleep(timeouts.idle_exit.saturating_sub(timeouts.heavy_check)).await;
     let _guard = self.start_lock.lock().await;
     let idle = {
       let mut state = self.state.lock().expect("opencode server state mutex is not poisoned");
-      if !state.turns.is_empty() || state.process.as_ref().is_none_or(|process| !process.alive()) {
-        state.idle = None;
-        return;
+      if !state.turns.is_empty()
+        || !state.claims.is_empty()
+        || state.process.as_ref().is_none_or(|process| !process.alive())
+        || state.stopping
+      {
+        return Ok(());
       }
       state.stopping = true;
       state.process.as_ref().map(|process| process.pid)
@@ -899,6 +1003,7 @@ impl OpenCodeServer {
     if let Err(error) = self.shutdown_locked().await {
       tracing::error!(target: "charliebot_agents", error = %error, "opencode_server_idle_shutdown_failed");
     }
+    Ok(())
   }
 
   async fn shutdown_locked(&self) -> anyhow::Result<()> {
@@ -1106,4 +1211,23 @@ fn append_tail(tail: &Mutex<VecDeque<u8>>, data: &[u8]) {
   while tail.len() > OUTPUT_TAIL_BYTES {
     tail.pop_front();
   }
+}
+
+fn process_rss_mb(pid: u32) -> anyhow::Result<f64> {
+  let status = fs::read_to_string(format!("/proc/{pid}/status"))
+    .with_context(|| format!("reading resident memory for opencode process {pid}"))?;
+  let value_kb = status
+    .lines()
+    .find_map(|line| line.strip_prefix("VmRSS:").map(str::trim))
+    .context("opencode process status has no VmRSS field")?
+    .split_whitespace()
+    .next()
+    .context("opencode process VmRSS field has no value")?
+    .parse::<u64>()
+    .context("opencode process VmRSS field is not an integer")?;
+  Ok(value_kb as f64 / 1024.0)
+}
+
+fn round_rss(rss_mb: f64) -> f64 {
+  (rss_mb * 10.0).round() / 10.0
 }

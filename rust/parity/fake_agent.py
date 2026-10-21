@@ -207,6 +207,7 @@ class FakeOpenCodeServer:
     self.entry = entry
     self.sessions: dict[str, str] = {}
     self.shells: dict[str, dict] = {}
+    self.loaded: set[str] = set()
     self.active: dict[str, asyncio.Event] = {}
     self.subscribers: list[asyncio.Queue] = []
     self.next_id = 0
@@ -246,7 +247,13 @@ class FakeOpenCodeServer:
     parts = path.strip("/").split("/")
     if method == "GET" and path == "/api/info":
       return 200, {"version": "2.0.32"}
+    if method == "GET" and path == "/api/debug/location":
+      return 200, [{"directory": directory} for directory in sorted(self.loaded)]
+    if method == "DELETE" and path == "/api/debug/location":
+      self.loaded.discard(params.get("location[directory]", [""])[0])
+      return 204, None
     if method == "GET" and path == "/api/model":
+      self.loaded.add(params.get("location[directory]", [""])[0])
       return 200, {
           "data": [{
               "id": "fake-model",
@@ -260,6 +267,7 @@ class FakeOpenCodeServer:
     if method == "POST" and path == "/api/session":
       session_id = self.new_id("ses")
       self.sessions[session_id] = body["location"]["directory"]
+      self.loaded.add(body["location"]["directory"])
       return 200, {"data": {"id": session_id}}
     if len(parts) >= 3 and parts[:2] == ["api", "session"]:
       session_id = parts[2]
@@ -284,6 +292,7 @@ class FakeOpenCodeServer:
       return 204, None
     if method == "GET" and path == "/api/shell":
       directory = params.get("location[directory]", [""])[0]
+      self.loaded.add(directory)
       shells = [shell for shell in self.shells.values() if shell["directory"] == directory]
       return 200, {"location": {"directory": directory}, "data": shells}
     if method == "DELETE" and len(parts) == 3 and parts[:2] == ["api", "shell"]:

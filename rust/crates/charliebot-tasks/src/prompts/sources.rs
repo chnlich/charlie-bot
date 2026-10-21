@@ -20,6 +20,10 @@ use crate::{cold_read, review_text};
 /// The base sections every managed contract starts from (`prompts/task_base.md`).
 const COMMON_SECTIONS: [&str; 3] = ["coding_principles", "skills_discovery", "remote_scratch"];
 
+/// The base sections of a worker contract. Workers carry the text-writing rule here; managers carry it as a subsection
+/// of `prompts/master.md` instead.
+const WORKER_BASE_SECTIONS: [&str; 4] = ["coding_principles", "skills_discovery", "remote_scratch", "text_model_reads"];
+
 /// One chain link of the subtree scope: a node from the root down to this node, with its subtree rule ref.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChainLink {
@@ -176,7 +180,7 @@ fn worker_kind_rule_segments(
   task_type: TaskType,
 ) -> anyhow::Result<Vec<RuleSegment>> {
   let repo = env.checkout.path();
-  let base = sections_text(repo, "task_base.md", &COMMON_SECTIONS)?;
+  let base = sections_text(repo, "task_base.md", &WORKER_BASE_SECTIONS)?;
   let mut segments = vec![segment(base, vec![base_source("prompts/task_base.md")])];
   if kind == "review" {
     segments

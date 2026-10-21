@@ -458,6 +458,18 @@ mod tests {
     registry.load_config(home).unwrap()
   }
 
+  fn unpooled_config(home: &Path) -> CharlieBotConfig {
+    fs::create_dir_all(home).unwrap();
+    fs::write(
+      home.join("config.yaml"),
+      "backends:\n  options:\n    - id: fable\n      label: Fable\n      type: cc-claude\n      model: claude-fable-5-1\n",
+    )
+    .unwrap();
+    let mut registry = Registry::new();
+    registry.register_package("src.backends.claude_code", crate::backends::claude_code::register).unwrap();
+    registry.load_config(home).unwrap()
+  }
+
   fn account_credentials(path: &Path) {
     fs::create_dir_all(path).unwrap();
     fs::write(path.join(login_dirs::CREDENTIALS_FILE), r#"{"claudeAiOauth":{"accessToken":"synthetic"}}"#).unwrap();
@@ -520,6 +532,42 @@ mod tests {
     let launch = lifecycle.place(&ctx).await.unwrap();
     assert_eq!(launch.account_label.as_deref(), Some("b"));
     assert_eq!(claude_metadata::account_of(&ctx.session_meta.lock().unwrap()).as_deref(), Some("b"));
+  }
+
+  // Python: tests/test_backend_hooks.py:104.
+  // Python: tests/test_backend_hooks.py:145.
+  #[tokio::test]
+  async fn cli_variants_and_unpooled_claude_reuse_transcript_checked_flag_launches() {
+    let root = tempfile::tempdir().unwrap();
+    let cfg = unpooled_config(&root.path().join("home"));
+    let cc_session_id = "synthetic-cc-session";
+    let ctx = context(cfg.clone(), LaunchKind::Turn, None, Some(cc_session_id), Some(Arc::new(Vec::new)));
+    let config_dir = root.path().join("claude-default");
+    let cli = ClaudeCliLifecycle;
+    let missing = cli.checked_resume_id_for(&ctx, &config_dir).unwrap();
+    assert_eq!(missing, None);
+
+    let transcript = config_dir.join("projects/synthetic-project").join(format!("{cc_session_id}.jsonl"));
+    fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+    fs::write(&transcript, "synthetic transcript\n").unwrap();
+    let present = cli.checked_resume_id_for(&ctx, &config_dir).unwrap();
+    assert_eq!(present.as_deref(), Some(cc_session_id));
+
+    let cli_launch = cli.launch(&ctx, present.clone());
+    let claude = ClaudeCodeLifecycle::new();
+    let claude_launch = claude.no_pool.launch(&ctx, present);
+    let expected = json!([EXCLUDE_DYNAMIC_SECTIONS_FLAG]);
+
+    assert_eq!(cli_launch.backend_kwargs["extra_flags"], expected);
+    assert_eq!(claude_launch.backend_kwargs["extra_flags"], expected);
+    assert_eq!(cli_launch.resume_id.as_deref(), Some(cc_session_id));
+    assert_eq!(claude_launch.resume_id.as_deref(), Some(cc_session_id));
+    assert!(cli_launch.account_label.is_none());
+    assert!(claude_launch.account_label.is_none());
+    assert!(claude.watch(&ctx, &claude_launch).is_none());
+
+    let fresh_ctx = context(cfg, LaunchKind::Turn, None, None, Some(Arc::new(Vec::new)));
+    assert_eq!(cli.checked_resume_id_for(&fresh_ctx, &config_dir).unwrap(), None);
   }
 
   #[tokio::test]

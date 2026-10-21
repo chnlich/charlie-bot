@@ -619,4 +619,72 @@ mod tests {
     assert!(!timed_out);
     assert_eq!(events.lock().unwrap()[2]["type"], charliebot_core::event_types::CONTEXT_COMPACT_FAILED);
   }
+
+  // Python: tests/test_claude_idle_compaction.py:309.
+  #[tokio::test]
+  async fn generic_runner_judges_the_last_stream_json_result_and_returns_post_readings() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    let cfg = config(&home);
+    let account = root.path().join("account");
+    let bin = root.path().join("bin");
+    let cwd = root.path().join("work");
+    let transcript = account.join("projects/work/session-id.jsonl");
+    fs::create_dir_all(&bin).unwrap();
+    fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+    fs::create_dir_all(&cwd).unwrap();
+    fs::write(
+      &transcript,
+      "{\"type\":\"cost-state\",\"modelUsage\":{\"claude-fable-5-1\":{\"inputTokens\":50,\"cacheReadInputTokens\":10}}}\n",
+    )
+    .unwrap();
+    symlink(fake_program_bin(), bin.join("claude")).unwrap();
+    let (emit, events) = emit_sink();
+    let env = Env::from([
+      ("HOME".to_string(), home.to_string_lossy().into_owned()),
+      ("PATH".to_string(), format!("{}:/usr/bin:/bin", bin.display())),
+    ]);
+    stage_claude(
+      &bin,
+      root.path(),
+      vec![
+        json!({
+          "append": {
+            "path": transcript,
+            "text": "{\"type\":\"system\",\"subtype\":\"compact_boundary\",\"compactMetadata\":{\"postTokens\":9111}}\n"
+          }
+        }),
+        json!({
+          "stdout": "{\"type\":\"assistant\",\"message\":{}}\n{\"type\":\"result\",\"is_error\":false,\"modelUsage\":{\"claude-fable-5-1\":{\"inputTokens\":51,\"cacheReadInputTokens\":128}}}\n"
+        }),
+        json!({"exit": 0}),
+      ],
+    );
+
+    let outcome = run_compaction(CompactionRun {
+      argv: vec!["claude".to_string(), "-p".to_string(), "--output-format".to_string(), "stream-json".to_string()],
+      env,
+      cwd: &cwd,
+      config_dir: &account,
+      session_id: "session-id",
+      family: "fable",
+      model: "claude-fable-5-1",
+      trigger: "idle",
+      failure_trigger: Some("idle"),
+      pre_tokens: Some(120_000),
+      emit: &emit,
+      cfg: &cfg,
+      session_cgroup_id: Some("synthetic-session"),
+      account_label: "acct-a",
+      timeout_duration: StdDuration::from_secs(30),
+    })
+    .await
+    .unwrap();
+
+    assert!(outcome.ok);
+    assert_eq!(outcome.post_tokens, Some(9_111));
+    assert_eq!(outcome.cache_read_tokens, Some(118));
+    assert_eq!(events.lock().unwrap()[0]["trigger"], "idle");
+    assert_eq!(events.lock().unwrap()[0]["compact_metadata"]["pre_tokens"], 120_000);
+  }
 }

@@ -803,4 +803,35 @@ sys.stdout.write(json.dumps({"run_kind": run_kind, "usage": usage}, separators=(
     assert_eq!(replaced["context_tokens"], 5);
     assert_eq!(replaced["total_cost_usd"], 0.4);
   }
+
+  // Python: tests/test_session_usage.py:334.
+  #[test]
+  fn context_compacted_post_tokens_becomes_the_claude_reading() {
+    let now = UtcDateTime::parse("2026-09-06T20:00:00Z").unwrap();
+    let last_request = UtcDateTime::parse("2026-09-06T18:59:00Z").unwrap();
+    let events = [
+      json!({"type": "assistant", "message": {"model": "claude-fable-5-1", "usage": {"input_tokens": 281000}}}),
+      json!({
+        "type": "context_compacted",
+        "trigger": "idle",
+        "compact_metadata": {"post_tokens": 9111},
+        "model": "claude-fable-5-1"
+      }),
+    ];
+    let usage = fold_usage(&events, RunKind::ManagerTurn, &registry()).unwrap().unwrap();
+
+    assert_eq!(usage["context_tokens"], 9111);
+
+    let home = tempfile::tempdir().unwrap();
+    let mut registry = Registry::new();
+    registry.register_package("src.backends.claude_code", claude_code::register).unwrap();
+    let cfg = registry.load_config(home.path()).unwrap();
+    assert!(!claude_code::claude_compaction::expired_cache_compaction_wanted(
+      &cfg,
+      Some("claude-fable-5-1"),
+      usage["context_tokens"].as_i64(),
+      Some(last_request),
+      Some(now),
+    ));
+  }
 }

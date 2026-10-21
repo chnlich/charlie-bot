@@ -5,6 +5,8 @@ pub mod claude_compaction;
 pub mod claude_config;
 pub mod claude_launch;
 pub mod claude_lifecycle;
+#[cfg(test)]
+mod claude_idle_compaction;
 pub mod claude_metadata;
 pub mod claude_relay;
 pub mod event_types;

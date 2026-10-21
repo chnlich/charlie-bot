@@ -27,7 +27,7 @@ use listing::ListingError;
 use serde_json::json;
 
 /// `file_urls.FILE_SERVER_MOUNTS[0]`: the prefix the route is mounted under, without its trailing slash.
-pub const MOUNT: &str = "/absolute_filepath";
+pub const MOUNT: &str = charliebot_compat::file_urls::FILE_SERVER_MOUNT;
 
 /// The `mimetypes` table of this process, read once as Python reads its table at first use.
 static MIME_TYPES: LazyLock<MimeTypes> = LazyLock::new(MimeTypes::load);

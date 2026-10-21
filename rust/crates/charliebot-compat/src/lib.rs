@@ -5,6 +5,7 @@
 
 pub mod fastapi_body;
 pub mod fastapi_form;
+pub mod file_urls;
 pub mod headers;
 pub mod http_client;
 pub mod jinja;

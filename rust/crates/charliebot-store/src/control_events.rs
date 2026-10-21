@@ -66,7 +66,12 @@ pub fn stable_withheld_event_id(run_id: &str, reason: &str) -> String {
 
 /// The SHA-256 digest of UTF-8 text as lowercase hexadecimal.
 pub fn sha256_hex(text: &str) -> String {
-  format!("{:x}", Sha256::digest(text.as_bytes()))
+  sha256_bytes_hex(text.as_bytes())
+}
+
+/// The SHA-256 digest of bytes as lowercase hexadecimal.
+pub fn sha256_bytes_hex(bytes: &[u8]) -> String {
+  format!("{:x}", Sha256::digest(bytes))
 }
 
 /// The default request id for one delegation description.

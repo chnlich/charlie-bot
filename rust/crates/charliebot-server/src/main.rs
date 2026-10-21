@@ -36,7 +36,7 @@ use charliebot_core::fence::{self, FenceError};
 use charliebot_core::repo_root::{REPO_ROOT_ENV, RepoRoot};
 use charliebot_core::venv::VenvBin;
 use charliebot_core::{config, home, logging, paths, v1_sessions};
-use charliebot_registry::lifespan::{CloseTimings, Lifespan};
+use charliebot_registry::lifespan::{CloseTimings, Lifespan, StepTiming};
 use charliebot_registry::templating::Templating;
 use charliebot_registry::{FeatureContext, Registry, StartupState};
 use nix::sys::signal::{SigHandler, Signal};
@@ -211,10 +211,25 @@ async fn stop_lifespan(lifespan: Lifespan) -> CloseTimings {
 fn log_shutdown(shutdown_started: Instant, closes: CloseTimings) {
   tracing::info!(
     shutdown_ms = round_ms(shutdown_started.elapsed()),
+    discord_ms = round_ms(step_elapsed(&closes.step_closes, "discord")),
+    ext_usage_ms = round_ms(step_elapsed(&closes.step_closes, "ext_usage")),
+    host_auth_ms = round_ms(step_elapsed(&closes.step_closes, "host_auth")),
+    merge_pool_ms = round_ms(step_elapsed(&closes.step_closes, "merge_pool")),
+    scheduler_ms = round_ms(step_elapsed(&closes.step_closes, "scheduler")),
+    slack_ms = round_ms(step_elapsed(&closes.step_closes, "slack")),
+    speech_ms = round_ms(step_elapsed(&closes.step_closes, "speech")),
+    usage_tally_ms = round_ms(step_elapsed(&closes.step_closes, "usage_tally")),
+    cron_binding_context_ms = round_ms(step_elapsed(&closes.step_closes, "cron_binding_context")),
+    task_execution_ms = round_ms(step_elapsed(&closes.step_closes, "task_execution")),
+    headless_renderer_ms = round_ms(step_elapsed(&closes.step_closes, "headless_renderer")),
     http_client_ms = round_ms(closes.http_client),
     ws_close_ms = round_ms(closes.ws_close),
     "charliebot_shutdown"
   );
+}
+
+fn step_elapsed(step_closes: &[StepTiming], name: &'static str) -> Duration {
+  step_closes.iter().find(|step| step.name == name).expect("the shutdown step is registered").elapsed
 }
 
 /// uvicorn's `capture_signals` exit: restore the default disposition and raise the stop signal again.
@@ -349,7 +364,23 @@ mod tests {
     let events = Arc::new(Mutex::new(Vec::new()));
     let subscriber = Registry::default().with(Capture(Arc::clone(&events)));
     tracing::subscriber::with_default(subscriber, || {
-      let closes = CloseTimings { http_client: Duration::from_millis(3), ws_close: Duration::from_millis(5) };
+      let step_closes = [
+        "discord",
+        "ext_usage",
+        "host_auth",
+        "merge_pool",
+        "scheduler",
+        "slack",
+        "speech",
+        "usage_tally",
+        "cron_binding_context",
+        "task_execution",
+        "headless_renderer",
+      ]
+      .map(|name| StepTiming { name, elapsed: Duration::ZERO })
+      .into();
+      let closes =
+        CloseTimings { step_closes, http_client: Duration::from_millis(3), ws_close: Duration::from_millis(5) };
       log_shutdown(Instant::now(), closes);
     });
 
@@ -367,6 +398,9 @@ mod tests {
       "slack_ms",
       "speech_ms",
       "usage_tally_ms",
+      "cron_binding_context_ms",
+      "task_execution_ms",
+      "headless_renderer_ms",
       "http_client_ms",
       "ws_close_ms",
     ] {

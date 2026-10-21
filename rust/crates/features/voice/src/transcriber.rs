@@ -6,7 +6,7 @@
 use std::cmp::Reverse;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::thread;
 
 use anyhow::{Context, bail};
@@ -62,9 +62,6 @@ pub(crate) struct SpeechModelBundle {
   engine: VoiceEngine,
   /// The model behind the pool: the sherpa archive's directory, or `voice.model_id` for qwen3_hf.
   model_id: String,
-  /// The qwen3_hf helpers the server stops on shutdown. They sit outside the pool locks: a decode in flight holds its
-  /// lock until its reply arrives, and the stop must not wait for that reply.
-  helpers: Vec<Arc<LongLived>>,
 }
 
 /// One pool worker's recognizer: the sherpa recognizer on the CPU engine, or the qwen3_hf helper's on the GPU engine.
@@ -294,7 +291,6 @@ pub(crate) fn create_sherpa_bundle(paths: &VoiceModelPaths, hotwords: &str) -> a
     vad_config: create_vad_config(paths),
     engine: VoiceEngine::Sherpa,
     model_id: QWEN3_ASR_DIR_NAME.to_string(),
-    helpers: Vec::new(),
   })
 }
 
@@ -308,7 +304,6 @@ pub(crate) fn qwen3_hf_bundle(
 ) -> anyhow::Result<SpeechModelBundle> {
   let recognizer = Qwen3HfRecognizer::start(helper, script)?;
   Ok(SpeechModelBundle {
-    helpers: vec![recognizer.helper()],
     recognizers: vec![Mutex::new(Recognizer::Qwen3Hf(recognizer))],
     vad_config: create_vad_config(paths),
     engine: VoiceEngine::Qwen3Hf,
@@ -358,10 +353,36 @@ struct ResidentBundle {
   bundle: Arc<SpeechModelBundle>,
 }
 
+#[derive(Default)]
+struct HelperLifecycle {
+  stopping: bool,
+  helpers: Vec<Weak<LongLived>>,
+}
+
 // The resident bundle is built once per process. The build lock is held across the build, so concurrent first
 // requests share one bundle, and the bundle lock is held only for the swap.
 static BUNDLE: Mutex<Option<ResidentBundle>> = Mutex::new(None);
 static BUNDLE_BUILD_LOCK: Mutex<()> = Mutex::new(());
+static HELPER_LIFECYCLE: OnceLock<Mutex<HelperLifecycle>> = OnceLock::new();
+
+fn helper_lifecycle() -> &'static Mutex<HelperLifecycle> {
+  HELPER_LIFECYCLE.get_or_init(|| Mutex::new(HelperLifecycle::default()))
+}
+
+pub(crate) fn start_qwen3_hf_helper(
+  helper: PythonHelper,
+  script: &Path,
+  label: &'static str,
+) -> anyhow::Result<Arc<LongLived>> {
+  let mut lifecycle = helper_lifecycle().lock().expect("the helper lifecycle lock is never poisoned");
+  if lifecycle.stopping {
+    bail!("the speech service is stopping");
+  }
+  let helper = Arc::new(helper.start_long_lived(script, &[], label)?);
+  lifecycle.helpers.retain(|helper| helper.strong_count() > 0);
+  lifecycle.helpers.push(Arc::downgrade(&helper));
+  Ok(helper)
+}
 
 /// The resident bundle, when it was built for the engine `voice.engine` names now.
 fn resident_bundle(requested: VoiceEngine) -> Option<Arc<SpeechModelBundle>> {
@@ -391,26 +412,26 @@ pub(crate) fn get_transcription_bundle(
   Ok(bundle)
 }
 
-/// Stop the resident bundle's qwen3_hf helpers, so the server's shutdown leaves no helper process running. The bundle
-/// stays resident: a decode after the stop fails as a decode after the helper's exit does, and nothing restarts it.
+/// Refuse new qwen3_hf helpers and stop every helper this server already started.
 pub(crate) fn stop_resident_bundle() {
-  if let Some(resident) = BUNDLE.lock().expect("the bundle lock is never poisoned").as_ref() {
-    resident.bundle.stop();
+  let helpers = {
+    let mut lifecycle = helper_lifecycle().lock().expect("the helper lifecycle lock is never poisoned");
+    lifecycle.stopping = true;
+    lifecycle.helpers.retain(|helper| helper.strong_count() > 0);
+    lifecycle.helpers.iter().filter_map(Weak::upgrade).collect::<Vec<_>>()
+  };
+  for helper in helpers {
+    helper.stop();
   }
 }
 
 #[cfg(test)]
 pub(crate) fn reset_after_stop_test() {
+  let mut lifecycle = helper_lifecycle().lock().expect("the helper lifecycle lock is never poisoned");
+  lifecycle.stopping = false;
+  lifecycle.helpers.clear();
+  drop(lifecycle);
   let _ = BUNDLE.lock().expect("the bundle lock is never poisoned").take();
-}
-
-impl SpeechModelBundle {
-  /// Kill the helpers' process groups. A decode in flight fails, and so does every later one.
-  fn stop(&self) {
-    for helper in &self.helpers {
-      helper.stop();
-    }
-  }
 }
 
 /// Decode one deterministic 0.5 s 440 Hz sine through every pool recognizer. The decoded text is dropped: the point
@@ -567,7 +588,7 @@ mod tests {
 
   #[test]
   fn warm_up_decodes_one_half_second_sine_through_the_helper() {
-    let _guard = crate::HELPER_LIFECYCLE_TEST_LOCK.lock().expect("the helper lifecycle test lock is never poisoned");
+    let _guard = crate::HELPER_LIFECYCLE_TEST_LOCK.blocking_lock();
     let tree = StubTree::new();
     let bundle = qwen3_hf_bundle_of(&tree, "ready").expect("the helper is ready");
 
@@ -580,7 +601,7 @@ mod tests {
 
   #[test]
   fn concurrent_windows_share_the_helper_and_each_gets_its_own_text() {
-    let _guard = crate::HELPER_LIFECYCLE_TEST_LOCK.lock().expect("the helper lifecycle test lock is never poisoned");
+    let _guard = crate::HELPER_LIFECYCLE_TEST_LOCK.blocking_lock();
     let tree = StubTree::new();
     let bundle = qwen3_hf_bundle_of(&tree, "ready").expect("the helper is ready");
 
@@ -600,15 +621,16 @@ mod tests {
 
   #[test]
   fn stopping_the_bundle_kills_the_helpers_children_and_fails_later_decodes() {
-    let _guard = crate::HELPER_LIFECYCLE_TEST_LOCK.lock().expect("the helper lifecycle test lock is never poisoned");
+    let _guard = crate::HELPER_LIFECYCLE_TEST_LOCK.blocking_lock();
     let tree = StubTree::new();
     let bundle = qwen3_hf_bundle_of(&tree, "ready").expect("the helper is ready");
 
-    bundle.stop();
+    stop_resident_bundle();
 
     wait_until_gone(tree.child_pid());
     let error = decode_samples(&bundle.recognizers[0], &[0.5]).expect_err("the stopped helper cannot decode");
     assert_eq!(error.to_string(), "Python helper qwen3_hf stopped answering: the server stopped it");
+    reset_after_stop_test();
   }
 
   /// The log lines `run` writes, as the server's formatter renders them.
@@ -638,7 +660,7 @@ mod tests {
 
   #[test]
   fn init_error_falls_back_to_the_cpu_bundle_and_logs_the_gpu_failure() {
-    let _guard = crate::HELPER_LIFECYCLE_TEST_LOCK.lock().expect("the helper lifecycle test lock is never poisoned");
+    let _guard = crate::HELPER_LIFECYCLE_TEST_LOCK.blocking_lock();
     let tree = StubTree::new();
     let gpu = qwen3_hf_bundle_of(&tree, "init_error");
     let mut outcome = None;
@@ -655,7 +677,7 @@ mod tests {
 
   #[test]
   fn exit_before_ready_falls_back_to_the_cpu_bundle_and_logs_the_exit() {
-    let _guard = crate::HELPER_LIFECYCLE_TEST_LOCK.lock().expect("the helper lifecycle test lock is never poisoned");
+    let _guard = crate::HELPER_LIFECYCLE_TEST_LOCK.blocking_lock();
     let tree = StubTree::new();
     let gpu = qwen3_hf_bundle_of(&tree, "exit_before_ready");
     let mut outcome = None;
@@ -672,13 +694,13 @@ mod tests {
 
   #[tokio::test]
   async fn qwen3_hf_helper_spawn_after_service_stop_is_refused() {
-    let _guard = crate::HELPER_LIFECYCLE_TEST_LOCK.lock().expect("the helper lifecycle test lock is never poisoned");
+    let _guard = crate::HELPER_LIFECYCLE_TEST_LOCK.lock().await;
     crate::provisioning::SpeechService::default().stop().await.expect("the service stops");
     let tree = StubTree::new();
     let outcome = qwen3_hf_bundle_of(&tree, "ready");
     let error = match outcome {
-      Ok(bundle) => {
-        bundle.stop();
+      Ok(_bundle) => {
+        stop_resident_bundle();
         None
       }
       Err(error) => Some(error.to_string()),

@@ -14,7 +14,7 @@ mod transcription;
 mod wav;
 
 #[cfg(test)]
-pub(crate) static HELPER_LIFECYCLE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+pub(crate) static HELPER_LIFECYCLE_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 use std::sync::Arc;
 

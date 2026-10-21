@@ -372,12 +372,7 @@ impl Service for SpeechService {
     Box::pin(async move {
       let task = self.task.lock().expect("speech service task lock is never poisoned").take();
       if let Some(task) = task {
-        // The monitor owns a spawn_blocking worker, which abort cannot cancel. Join it before stopping the resident
-        // bundle so a helper that is still starting cannot appear after the process-group kill.
-        match task.await {
-          Ok(()) => {}
-          Err(error) => return Err(error.into()),
-        }
+        task.abort();
       }
       transcriber::stop_resident_bundle();
       Ok(())
@@ -399,7 +394,7 @@ mod tests {
 
   #[tokio::test]
   async fn service_stop_returns_while_the_worker_monitor_is_blocked() {
-    let _guard = crate::HELPER_LIFECYCLE_TEST_LOCK.lock().expect("the helper lifecycle test lock is never poisoned");
+    let _guard = crate::HELPER_LIFECYCLE_TEST_LOCK.lock().await;
     let service = SpeechService::default();
     let (started, blocked) = tokio::sync::oneshot::channel();
     *service.task.lock().expect("speech service task lock is never poisoned") = Some(tokio::spawn(async move {

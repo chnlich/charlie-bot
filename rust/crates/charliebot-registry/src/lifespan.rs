@@ -60,9 +60,20 @@ pub struct Lifespan {
   started: Vec<(Phase, Arc<dyn Service>)>,
 }
 
-/// How long each close of the shutdown took. The `charliebot_shutdown` line reports each field in milliseconds.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// One service or let-go step and its elapsed shutdown time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StepTiming {
+  /// The Python service name or the Rust-only step name.
+  pub name: &'static str,
+  /// The time spent stopping the service or running the let-go step.
+  pub elapsed: Duration,
+}
+
+/// How long each shutdown step took. The `charliebot_shutdown` line reports each value in milliseconds.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CloseTimings {
+  /// The service and let-go timings, in shutdown order.
+  pub step_closes: Vec<StepTiming>,
   /// Closing the shared HTTP client (`http_client_ms`).
   pub http_client: Duration,
   /// Closing every open session WebSocket (`ws_close_ms`).
@@ -143,26 +154,32 @@ impl Lifespan {
   /// earlier one fails; the first failure is returned with the close timings.
   pub async fn shutdown(self) -> Shutdown {
     let mut first_error: Option<anyhow::Error> = None;
+    // Python registers `usage_tally`; Rust has no matching service stop, so its field is zero.
+    let mut step_closes = vec![StepTiming { name: "usage_tally", elapsed: Duration::ZERO }];
     for phase in [Phase::Ready, Phase::Early] {
       for (_, service) in self.started.iter().rev().filter(|(started, _)| *started == phase) {
         let name = service.name();
+        let started = Instant::now();
         if let Err(error) = service.stop().await.with_context(|| format!("service {name:?} failed to stop")) {
           first_error.get_or_insert(error);
         }
+        step_closes.push(StepTiming { name, elapsed: started.elapsed() });
       }
     }
     for (name, step) in self.features.registry.let_go_steps() {
+      let started = Instant::now();
       if let Err(error) = step(Arc::clone(&self.features)).await.with_context(|| format!("let-go step {name:?} failed"))
       {
         first_error.get_or_insert(error);
       }
+      step_closes.push(StepTiming { name, elapsed: started.elapsed() });
     }
     let http_started = Instant::now();
     charliebot_compat::http_client::close_shared_client();
     let http_client = http_started.elapsed();
     let ws_started = Instant::now();
     self.features.store.close_subscribers().await;
-    let closes = CloseTimings { http_client, ws_close: ws_started.elapsed() };
+    let closes = CloseTimings { step_closes, http_client, ws_close: ws_started.elapsed() };
     Shutdown { closes, error: first_error }
   }
 }

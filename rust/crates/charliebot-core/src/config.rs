@@ -517,10 +517,8 @@ fn parse_backends(
       return Err(ConfigError(format!("{config_path}: invalid config key backends.{shown}: unknown field")));
     }
   }
-  let routing = match mapping.get("routing") {
-    None | Some(Value::Null) => None,
-    Some(value) => Some(typed_section(config_path, "backends.routing", Some(value.clone()), || unreachable!())?),
-  };
+  let routing: Option<RoutingConfig> =
+    typed_section(config_path, "backends.routing", mapping.get("routing").cloned(), || None)?;
   let pool: Vec<String> = typed_section(config_path, "backends.pool", mapping.get("pool").cloned(), Vec::new)?;
   let options = match mapping.get("options") {
     None => Vec::new(),

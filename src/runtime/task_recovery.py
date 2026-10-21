@@ -49,6 +49,7 @@ log = log_once.LazyStructlogLogger()
 
 MARKER_RELPATH = pathlib.Path("state") / "boot_recovery.json"
 
+
 def marker_path(cfg: config.CharlieBotConfig) -> pathlib.Path:
   """The boot-recovery marker's location under this instance's home."""
   return cfg.charliebot_home / MARKER_RELPATH

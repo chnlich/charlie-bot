@@ -126,7 +126,7 @@ async def test_index_build_never_folds_a_closed_nodes_full_history(tree, monkeyp
 async def test_automatic_completion_closes_when_a_write_lands_mid_build(tree, monkeypatch):
   manager = await conftest.create_task(tree, parent=None, request_id="mgr")
   worker = await conftest.create_task(tree, parent=manager.id, request_id="w", profile="worker")
-  await tree.runs.register_run(models.RunRecord(id="run-w", session_id=worker.id, kind="work"))
+  await tree.runs.register_run_locked(models.RunRecord(id="run-w", session_id=worker.id, kind="work"))
   _invalidate_during_builds(tree, monkeypatch)
   await tree.dispatch.finish_run(worker.id, "run-w", outcome="success")
   assert tree._index is None  # the builds never installed
@@ -146,10 +146,10 @@ async def test_cancellation_succeeds_when_a_write_lands_mid_build(tree, monkeypa
 async def test_manager_close_citing_a_child_run_passes_evidence_when_a_write_lands_mid_build(tree, monkeypatch):
   feature = await conftest.create_task(tree, parent=None, request_id="feature")
   worker = await conftest.create_task(tree, parent=feature.id, request_id="w", profile="worker")
-  await tree.runs.register_run(models.RunRecord(id="run-w", session_id=worker.id, kind="work"))
+  await tree.runs.register_run_locked(models.RunRecord(id="run-w", session_id=worker.id, kind="work"))
   await tree.dispatch.finish_run(worker.id, "run-w", outcome="success")
   # The worker's report is unprocessed input on the manager until a turn consumes it.
-  await tree.runs.register_run(models.RunRecord(id="run-turn", session_id=feature.id, kind="manager_turn"))
+  await tree.runs.register_run_locked(models.RunRecord(id="run-turn", session_id=feature.id, kind="manager_turn"))
   async with tree.control_lock:
     await tree.dispatch.claim_input_batch_locked(feature.id, "run-turn")
   await tree.dispatch.finish_run(feature.id, "run-turn", outcome="success")

@@ -192,7 +192,7 @@ async def test_archived_pages_carry_active_ancestors_as_context_only_rows(tmp_pa
       tree, parent=root.id, request_id="mid-1", profile="manager", name="Synthetic archived middle")
   delivered = await conftest.create_task(
       tree, parent=hidden.id, request_id="leaf-1", profile="worker", name="Synthetic delivered")
-  await tree.runs.register_run(models.RunRecord(id="run-1", session_id=delivered.id, kind="work"))
+  await tree.runs.register_run_locked(models.RunRecord(id="run-1", session_id=delivered.id, kind="work"))
   await tree.dispatch.finish_run(delivered.id, "run-1", outcome="success")
   assert tree.task_state(delivered.id) == "completed"  # an end state of its own
   await tree.archive_subtree(hidden.id, caller=conftest.OPERATOR)  # delivered is not open; it stays completed
@@ -254,7 +254,7 @@ async def test_archived_context_walk_keeps_the_cron_subtree_out(
   # the firing's chain reaches the cron session, so it never becomes a page row.
   delivered = await conftest.create_task(
       tree, parent=active_root.id, request_id="leaf-2", profile="worker", name="Synthetic delivered")
-  await tree.runs.register_run(models.RunRecord(id="run-2", session_id=delivered.id, kind="work"))
+  await tree.runs.register_run_locked(models.RunRecord(id="run-2", session_id=delivered.id, kind="work"))
   await tree.dispatch.finish_run(delivered.id, "run-2", outcome="success")
 
   client = conftest.make_sessions_listing_client(cfg, session_blocks, tree)

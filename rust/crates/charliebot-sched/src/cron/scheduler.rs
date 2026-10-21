@@ -46,6 +46,10 @@ impl CronScheduler {
   }
 
   async fn tick(&self) -> anyhow::Result<()> {
+    self.tick_at(chrono::Utc::now()).await
+  }
+
+  async fn tick_at(&self, now: chrono::DateTime<chrono::Utc>) -> anyhow::Result<()> {
     let cfg = self.features.config.get()?;
     let snapshot = loader::load_snapshot(&self.features, &cfg)?;
     if snapshot.tasks.is_empty() {
@@ -79,7 +83,7 @@ impl CronScheduler {
       if !task.enabled || task.session_id.is_none() {
         continue;
       }
-      if let Err(error) = self.maybe_run(task, &cfg).await {
+      if let Err(error) = self.maybe_run(task, &cfg, now).await {
         tracing::error!(task = %task.name, error = %error, "scheduler_task_error");
       }
     }
@@ -188,10 +192,15 @@ impl CronScheduler {
     Ok(())
   }
 
-  async fn maybe_run(&self, task: &ScheduledTaskConfig, cfg: &CharlieBotConfig) -> anyhow::Result<()> {
+  async fn maybe_run(
+    &self,
+    task: &ScheduledTaskConfig,
+    cfg: &CharlieBotConfig,
+    now: chrono::DateTime<chrono::Utc>,
+  ) -> anyhow::Result<()> {
     let session = self.fireable_binding(task).await?;
     let timezone = task.timezone.parse::<chrono_tz::Tz>()?;
-    let now = chrono::Utc::now().with_timezone(&timezone);
+    let now = now.with_timezone(&timezone);
     let last_cron = metadata_string(&session, "last_scheduled_cron");
     if last_cron.as_deref().is_some_and(|previous| previous != task.cron) {
       update_cron_slots(
@@ -249,7 +258,9 @@ impl CronScheduler {
         .await?;
       return Ok(());
     }
-    self.execute_task(task.clone(), Some(python_isoformat(&due)?), true, cfg.clone()).await?;
+    self
+      .execute_task(task.clone(), Some(python_isoformat(&due)?), true, cfg.clone(), now.with_timezone(&chrono::Utc))
+      .await?;
     Ok(())
   }
 
@@ -259,6 +270,7 @@ impl CronScheduler {
     firing: Option<String>,
     scheduled: bool,
     cfg: CharlieBotConfig,
+    now: chrono::DateTime<chrono::Utc>,
   ) -> anyhow::Result<TaskRunResult> {
     if task.session_id.is_none() {
       let sessions = self.features.store.list_sessions(Some(SessionStatus::Active), None, Some(true))?.rows;
@@ -271,7 +283,13 @@ impl CronScheduler {
       self.auto_bind(&mut task, &cfg, &old_by_task).await?;
     }
     let session = self.fireable_binding(&task).await?;
-    let firing = firing.unwrap_or_else(|| UtcDateTime::now().to_python_isoformat());
+    let firing = match firing {
+      Some(value) => value,
+      None => {
+        let task_timezone = task.timezone.parse::<chrono_tz::Tz>()?;
+        python_isoformat(&now.with_timezone(&task_timezone))?
+      }
+    };
     if task.mode.as_deref() == Some("master") {
       let dispatcher = charliebot_tasks::dispatch::dispatcher(&self.features)?;
       let input_id = firing_ref(&task, &firing);
@@ -285,11 +303,11 @@ impl CronScheduler {
         )
         .await?;
       dispatcher.dispatch_pending(&session.id).await?;
-      self.record_bound_fire(&session, &task).await?;
+      self.record_bound_fire(&session, &task, now).await?;
       return Ok(TaskRunResult { session_id: session.id, thread_id: None });
     }
     if let Some(handler) = task.handler.as_deref() {
-      self.record_bound_fire(&session, &task).await?;
+      self.record_bound_fire(&session, &task, now).await?;
       let handler = self
         .features
         .registry
@@ -322,7 +340,7 @@ impl CronScheduler {
     let model = (!option.model.is_empty()).then(|| option.model.clone());
     let (leaf, run, prompt, _steps) =
       self.register_fire_work(&task, &session, &firing, &backend, model.as_deref(), &cfg).await?;
-    self.record_bound_fire(&session, &task).await?;
+    self.record_bound_fire(&session, &task, now).await?;
     if scheduled {
       let executor = Arc::clone(&executor);
       let leaf_id = leaf.id.clone();
@@ -469,9 +487,14 @@ impl CronScheduler {
     Ok(meta)
   }
 
-  async fn record_bound_fire(&self, session: &SessionMetadata, task: &ScheduledTaskConfig) -> anyhow::Result<()> {
+  async fn record_bound_fire(
+    &self,
+    session: &SessionMetadata,
+    task: &ScheduledTaskConfig,
+    now: chrono::DateTime<chrono::Utc>,
+  ) -> anyhow::Result<()> {
     let timezone = task.timezone.parse::<chrono_tz::Tz>()?;
-    let now = python_isoformat(&chrono::Utc::now().with_timezone(&timezone))?;
+    let now = python_isoformat(&now.with_timezone(&timezone))?;
     update_cron_slots(
       &self.features,
       &session.id,
@@ -491,7 +514,7 @@ impl CronScheduler {
     let task =
       snapshot.tasks.into_iter().find(|task| task.name == name).ok_or_else(|| RunError::Missing(name.to_string()))?;
     self
-      .execute_task(task, None, false, cfg.as_ref().clone())
+      .execute_task(task, None, false, cfg.as_ref().clone(), chrono::Utc::now())
       .await
       .map_err(|error| RunError::Failed(format!("{error:#}")))
   }
@@ -897,9 +920,18 @@ mod tests {
     );
     let scheduler = CronScheduler::new(Arc::clone(&features));
 
-    // The binding tick leaves the task disabled. An enabled task with no last run fires the occurrence that falls in
-    // the tick's last minute, so the first tick would depend on the wall clock.
-    scheduler.tick().await.unwrap();
+    // Both ticks run at 08:00:30 of the task's default timezone on a fixed date, so no wall clock decides whether
+    // the first tick fires the 0 8 * * * occurrence.
+    let clock_timezone = crate::cron::config::DEFAULT_TIMEZONE.parse::<chrono_tz::Tz>().unwrap();
+    let clock = chrono::NaiveDate::from_ymd_opt(2026, 1, 5)
+      .unwrap()
+      .and_hms_opt(8, 0, 30)
+      .unwrap()
+      .and_local_timezone(clock_timezone)
+      .single()
+      .unwrap()
+      .with_timezone(&Utc);
+    scheduler.tick_at(clock).await.unwrap();
     let mut binding: Value = serde_yaml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     binding["enabled"] = json!(true);
     std::fs::write(&path, charliebot_core::yaml::dump(&binding).unwrap()).unwrap();
@@ -917,7 +949,7 @@ mod tests {
       .unwrap();
     drop(guard);
 
-    scheduler.tick().await.unwrap();
+    scheduler.tick_at(clock).await.unwrap();
 
     let meta = features.store.get_session(session_id).await.unwrap().unwrap();
     assert_eq!(meta.extra.get("last_run_status").and_then(Value::as_str), Some("success"));

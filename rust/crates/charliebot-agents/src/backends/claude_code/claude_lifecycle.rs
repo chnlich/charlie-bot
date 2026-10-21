@@ -546,7 +546,7 @@ mod tests {
   // Python: tests/test_backend_hooks.py:145.
   #[test]
   fn cli_variants_and_unpooled_cc_claude_reuse_transcript_checked_flag_launches() {
-    // The cc-kimi and cc-openai-compatible registrations share ClaudeCliLifecycle.
+    // The cc-anthropic-compatible and cc-openai-compatible registrations share ClaudeCliLifecycle.
     let root = tempfile::tempdir().unwrap();
     let cfg = unpooled_config(&root.path().join("home"));
     let cc_session_id = "synthetic-cc-session";

@@ -22,6 +22,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use charliebot_agents::agent_environment::AgentBaseEnvironment;
+use charliebot_agents::backends::anthropic_compatible;
 use charliebot_agents::backends::charlie_code;
 use charliebot_agents::backends::claude_code;
 use charliebot_agents::backends::claude_code::claude_accounts::{self, ClaudeAccountState};
@@ -352,9 +353,14 @@ fn make_transcript(config_dir: &Path, session_id: &str) -> anyhow::Result<PathBu
 
 /// One `backends.options` entry of a test's configuration. A scripted option names its harness by `token`.
 fn option_yaml(id: &str, backend_type: &str, token: Option<&str>, account_pool: Option<&str>) -> String {
-  let token = token.map(|token| format!("      {TOKEN_FIELD}: {token}\n")).unwrap_or_default();
-  let pool = account_pool.map(|pool| format!("      account_pool: {pool}\n")).unwrap_or_default();
-  format!("    - id: {id}\n      label: {id}\n      type: {backend_type}\n      model: test-model\n{token}{pool}")
+  let fields = if backend_type == "cc-anthropic-compatible" {
+    "      api_base: https://api.synthetic.example\n      context_window: 409600\n".to_string()
+  } else {
+    let token = token.map(|token| format!("      {TOKEN_FIELD}: {token}\n")).unwrap_or_default();
+    let pool = account_pool.map(|pool| format!("      account_pool: {pool}\n")).unwrap_or_default();
+    format!("{token}{pool}")
+  };
+  format!("    - id: {id}\n      label: {id}\n      type: {backend_type}\n      model: test-model\n{fields}")
 }
 
 /// The `config.yaml` of a test: the Claude accounts under the root with their credentials, the pools, and the options.
@@ -874,22 +880,26 @@ fn hidden_codex() -> CodexHost {
   }
 }
 
-/// The four types that resolve a CLI binary when they are built, with every binary hidden.
+/// The CLI types that resolve a binary when they are built, with every binary hidden.
 fn register_hidden_binary_types(registry: &mut Registry) -> Result<(), RegistryError> {
   registry
     .register_package("test.charlie_code", |registry| charlie_code::register_with_host(registry, hidden_cli()))?;
   registry.register_package("test.antigravity", |registry| antigravity::register_with_host(registry, hidden_cli()))?;
   registry.register_package("test.gemini", |registry| gemini::register_with_host(registry, hidden_cli()))?;
+  registry.register_package("test.anthropic_compatible", |registry| {
+    anthropic_compatible::register_with_host(registry, hidden_cli())
+  })?;
   registry.register_package("test.codex", |registry| codex::register_with_host(registry, &hidden_codex()))
 }
 
 // Python: tests/test_worker_backend_build.py::test_launcher_build_still_fails_without_binaries
+// Python: tests/test_task_run_backend_types.py:30.
 #[tokio::test]
 async fn test_launcher_build_still_fails_without_binaries() -> anyhow::Result<()> {
   let root = Root::new()?;
   let mut registry = Registry::new();
   register_hidden_binary_types(&mut registry)?;
-  let types = ["antigravity", "codex", "gemini", "charlie-code"];
+  let types = ["antigravity", "codex", "gemini", "charlie-code", "cc-anthropic-compatible"];
   let options: Vec<String> = types
     .iter()
     .map(|backend_type| {
@@ -898,6 +908,9 @@ async fn test_launcher_build_still_fails_without_binaries() -> anyhow::Result<()
       );
       if *backend_type == "charlie-code" {
         option.push_str("      api_base: http://test.invalid\n");
+      }
+      if *backend_type == "cc-anthropic-compatible" {
+        option.push_str("      api_base: http://test.invalid\n      context_window: 409600\n");
       }
       option
     })
@@ -1148,10 +1161,10 @@ async fn test_a_rejected_rate_limit_event_under_a_relay_watch_never_raises() -> 
 // The task build for a non-Claude backend (`tests/test_backend_hooks.py`)
 // ---------------------------------------------------------------------------
 
-// Python: tests/test_backend_hooks.py::test_non_claude_task_build_receives_no_claude_account
+// Python: tests/test_backend_hooks.py:174.
 #[tokio::test]
 async fn test_non_claude_task_build_receives_no_claude_account() -> anyhow::Result<()> {
-  for backend_type in ["codex", "cc-kimi"] {
+  for backend_type in ["codex", "cc-anthropic-compatible"] {
     let root = Root::new()?;
     let scripts = Scripts::new(vec![exits(&[assistant_text("done")], 0)]);
     let config = config_text(&root, &[], &[], &[option_yaml("variant", backend_type, Some(&scripts.token), None)])?;

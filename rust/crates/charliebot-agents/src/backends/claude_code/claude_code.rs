@@ -548,12 +548,14 @@ mod tests {
     assert_eq!(AgentBackend::stdin_prompt(&backend, "prompt").as_deref(), Some("prompt"));
   }
 
+  // Python: tests/test_anthropic_compatible_backend.py:37.
   #[test]
   fn anthropic_endpoint_sets_the_endpoint_and_pins_every_model_variable_without_a_flag() {
     let backend = AnthropicEndpointBackend::new(
       "http://localhost:8123/api/anthropic-proxy/openai-compatible/cc-synthetic".to_string(),
       "synthetic-token".to_string(),
       "synthetic/model-1".to_string(),
+      Some(409_600),
       None,
       LaunchArgs { extra_flags: vec!["--resume".to_string(), "resume-id".to_string()], ..LaunchArgs::default() },
       SessionCgroupLimits { memory_max_mb: 0, swap_max_mb: 0, tasks_max: 0 },
@@ -563,7 +565,17 @@ mod tests {
     assert!(!command.iter().any(|value| value == "--model"));
     assert!(command.windows(2).any(|pair| pair == ["--resume", "resume-id"]));
 
-    let env = backend.prepare_env(Env::from([("PATH".to_string(), "/synthetic/bin".to_string())])).unwrap();
+    let env = backend
+      .prepare_env(Env::from([
+        ("PATH".to_string(), "/synthetic/bin".to_string()),
+        (claude_launch::AUTO_COMPACT_WINDOW_ENV.to_string(), "345000".to_string()),
+        (claude_launch::AUTOCOMPACT_PCT_OVERRIDE_ENV.to_string(), "80".to_string()),
+        (claude_launch::MAX_CONTEXT_TOKENS_ENV.to_string(), "100000".to_string()),
+        ("CLAUDE_CODE_THINKING_DISPLAY_UPDATES".to_string(), "1".to_string()),
+        ("ANTHROPIC_API_KEY".to_string(), "inherited-value".to_string()),
+        ("CLAUDE_CODE_OAUTH_TOKEN".to_string(), "inherited-value".to_string()),
+      ]))
+      .unwrap();
     assert_eq!(env["ANTHROPIC_BASE_URL"], "http://localhost:8123/api/anthropic-proxy/openai-compatible/cc-synthetic");
     assert_eq!(env["ANTHROPIC_AUTH_TOKEN"], "synthetic-token");
     for name in ["ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL"] {
@@ -571,6 +583,12 @@ mod tests {
     }
     assert_eq!(env["ANTHROPIC_DEFAULT_HAIKU_MODEL"], "synthetic/model-1");
     assert_eq!(env["CLAUDE_CODE_SUBAGENT_MODEL"], "synthetic/model-1");
+    assert_eq!(env[claude_launch::AUTO_COMPACT_WINDOW_ENV], "409600");
+    assert_eq!(env[claude_launch::MAX_CONTEXT_TOKENS_ENV], "409600");
+    assert!(!env.contains_key(claude_launch::AUTOCOMPACT_PCT_OVERRIDE_ENV));
+    assert!(!env.contains_key("ANTHROPIC_API_KEY"));
+    assert!(!env.contains_key("CLAUDE_CODE_OAUTH_TOKEN"));
+    assert_eq!(env["CLAUDE_CODE_THINKING_DISPLAY_UPDATES"], "0");
     assert_eq!(env["PATH"], "/synthetic/bin");
   }
 

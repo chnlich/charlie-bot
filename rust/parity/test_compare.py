@@ -1,8 +1,9 @@
 """Malformed-input comparison tests: only the status and each error's type and loc count."""
 
 import json
+import pathlib
 
-from rust.parity import compare, normalize
+from rust.parity import compare, normalize, parity, scenario_file
 
 
 def _context() -> normalize.Context:
@@ -166,6 +167,100 @@ def test_adjacent_pair_rule_does_not_mask_event_ids_embedded_in_other_text() -> 
   baseline[1]["content"] = "reply to nudge-1"
   candidate[2]["content"] = "reply to nudge-2"
   assert _ordered_diff(baseline, candidate) != []
+
+
+HANDOVER_SCENARIO = "handover-stop-request.yaml"
+BASELINE_RUN = "10000000-0000-4000-8000-0000000000a1"
+CANDIDATE_RUN = "20000000-0000-4000-8000-0000000000b2"
+OTHER_RUN = "30000000-0000-4000-8000-0000000000c3"
+
+
+def _handover_side(label: str, run_id: str) -> parity.Side:
+  """A side whose stop target captured *run_id*, as the scenario's retry step records it."""
+  tree = parity.servers.Tree(label=label, root=pathlib.Path(f"/synthetic/{label}"))
+  side = parity.Side(label, tree, port=18600, strace=parity.servers.STRACE_BIN)
+  side.captures["run_id"] = run_id
+  return side
+
+
+def _handover_pair(run_id: str, finish_first: bool, outcome: str = "interrupted") -> list[dict]:
+  """The run_finished and master_done of one stopped run, written in the order its flag names."""
+  finished = {
+      "type": "run_finished",
+      "id": f"finished-{run_id}",
+      "actor": "system",
+      "run_id": run_id,
+      "outcome": outcome,
+      "input_event_ids": ["synthetic-input"],
+  }
+  done = {
+      "type": "master_done",
+      "id": f"done-{run_id}",
+      "exit_code": -9,
+      "still_thinking": False,
+      "input_event_ids": ["synthetic-input"],
+  }
+  return [finished, done] if finish_first else [done, finished]
+
+
+def _handover_log(*pairs: list[dict]) -> list[dict]:
+  """An assistant message, then each pair in turn, then a closing assistant message."""
+  events = [{"type": "assistant", "id": "before-id", "text": "same"}]
+  for pair in pairs:
+    events.extend(pair)
+  events.append({"type": "assistant", "id": "after-id", "text": "same"})
+  return events
+
+
+def _handover_diff(baseline: list[dict], candidate: list[dict], candidate_is_python: bool = False) -> list[str]:
+  """The differences between two chat logs of handover-stop-request, with the scenario's own comparison rules."""
+  scenario = scenario_file.load(scenario_file.SCENARIO_DIR / HANDOVER_SCENARIO)
+  sides = [_handover_side("baseline", BASELINE_RUN), _handover_side("candidate", CANDIDATE_RUN)]
+  deltas = [_chat_delta(baseline), _chat_delta(candidate)]
+  return parity._delta_diff_lines(scenario, sides, {}, deltas, candidate_is_python)
+
+
+def test_handover_pair_of_the_stopped_run_compares_equal_in_either_order() -> None:
+  for baseline_first in (True, False):
+    for candidate_first in (True, False):
+      baseline = _handover_log(_handover_pair(BASELINE_RUN, baseline_first))
+      candidate = _handover_log(_handover_pair(CANDIDATE_RUN, candidate_first))
+      assert _handover_diff(baseline, candidate) == []
+  baseline = _handover_log(_handover_pair(BASELINE_RUN, True))
+  candidate = _handover_log(_handover_pair(CANDIDATE_RUN, False))
+  assert _handover_diff(baseline, candidate, candidate_is_python=True) == []
+
+
+def test_handover_swapped_pair_of_another_run_stays_a_difference() -> None:
+  baseline = _handover_log(_handover_pair(BASELINE_RUN, True), _handover_pair(OTHER_RUN, True))
+  candidate = _handover_log(_handover_pair(CANDIDATE_RUN, False), _handover_pair(OTHER_RUN, False))
+  assert any("$[3].type" in line for line in _handover_diff(baseline, candidate))
+
+
+def test_handover_swapped_pair_with_another_outcome_stays_a_difference() -> None:
+  baseline = _handover_log(_handover_pair(BASELINE_RUN, True, outcome="failed"))
+  candidate = _handover_log(_handover_pair(CANDIDATE_RUN, False, outcome="failed"))
+  assert any("$[1].type" in line for line in _handover_diff(baseline, candidate))
+
+
+def test_handover_run_finished_swapped_with_another_event_type_stays_a_difference() -> None:
+  finished = _handover_pair(BASELINE_RUN, True)[0]
+  assistant = {"type": "assistant", "id": "between-id", "text": "same"}
+  baseline = [finished, assistant]
+  candidate = [assistant, {**finished, "run_id": CANDIDATE_RUN}]
+  assert any("$[0].type" in line for line in _handover_diff(baseline, candidate))
+
+
+def test_handover_pinned_run_id_resolves_from_each_sides_own_capture() -> None:
+  scenario = scenario_file.load(scenario_file.SCENARIO_DIR / HANDOVER_SCENARIO)
+  for label, run_id in (("baseline", BASELINE_RUN), ("candidate", CANDIDATE_RUN)):
+    rules = parity._adjacent_order_rules(scenario, _handover_side(label, run_id), {})
+    assert len(rules) == 1
+    first, second = rules[0]
+    assert first.event_type == "run_finished"
+    assert first.match_fields == {"run_id": run_id, "outcome": "interrupted"}
+    assert second.event_type == "master_done"
+    assert second.match_fields == {"exit_code": -9}
 
 
 def _event_stream_diff(baseline: list[dict], candidate: list[dict]) -> list[str]:

@@ -18,11 +18,12 @@ use crate::spawner_prompt::{self, TextReadError};
 use crate::{cold_read, review_text};
 
 /// The base sections every managed contract starts from (`prompts/task_base.md`).
-const COMMON_SECTIONS: [&str; 3] = ["coding_principles", "skills_discovery", "remote_scratch"];
+const COMMON_SECTIONS: [&str; 4] = ["coding_principles", "skills_discovery", "profile_home", "remote_scratch"];
 
 /// The base sections of a worker contract. Workers carry the text-writing rule here; managers carry it as a subsection
 /// of `prompts/master.md` instead.
-const WORKER_BASE_SECTIONS: [&str; 4] = ["coding_principles", "skills_discovery", "remote_scratch", "text_model_reads"];
+const WORKER_BASE_SECTIONS: [&str; 5] =
+  ["coding_principles", "skills_discovery", "profile_home", "remote_scratch", "text_model_reads"];
 
 /// One chain link of the subtree scope: a node from the root down to this node, with its subtree rule ref.
 #[derive(Clone, Debug, PartialEq, Eq)]

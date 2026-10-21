@@ -270,8 +270,16 @@ async def register_leaf_run(
     position: int | None,
     backend: str,
     model: str | None,
+    task_spec_text: str | None,
 ) -> models.RunRecord:
-  """Register the firing's work Run (or one step's scheduled_step Run)."""
+  """Register the firing's work Run (or one step's scheduled_step Run).
+
+  ``task_spec_text`` pins the configured prompt the Run was born from: the
+  firing's own prompt for a work Run, one step's configured prompt (before
+  any chaining) for a scheduled_step Run. register_run_locked writes it as
+  the Run's task_spec.md and stamps task_spec_ref/hash, so the run header's
+  "Task spec (not recorded)" placeholder becomes a link.
+  """
   if kind == "work":
     request_id = work_run_request_id(task_cfg, firing)
   else:
@@ -293,7 +301,7 @@ async def register_leaf_run(
           if position is not None else None),
   )
   async with tree.control_lock:
-    await tree.runs.register_run_locked(record, task_spec_text=None)
+    await tree.runs.register_run_locked(record, task_spec_text=task_spec_text)
   fresh = await tree.runs.get_run(leaf_id, run_id)
   assert fresh is not None
   return fresh
@@ -341,7 +349,15 @@ async def run_firing_steps(
   for position, step in enumerate(steps):
     backend, model = resolved_backend_model(task_cfg, tree, step.backend or task_cfg.backend)
     run = await register_leaf_run(
-        tree, leaf_id, task_cfg, firing, kind="scheduled_step", position=position, backend=backend, model=model)
+        tree,
+        leaf_id,
+        task_cfg,
+        firing,
+        kind="scheduled_step",
+        position=position,
+        backend=backend,
+        model=model,
+        task_spec_text=step.prompt)
     outcome = await tree.runs.terminal_outcome_of(leaf_id, run.id)
     if outcome is None:
       prompt = step.prompt or ""
@@ -647,7 +663,15 @@ async def reconcile_bound_firings(
       return
     backend, model = resolved_backend_model(task_cfg, tree, steps[pos].backend or task_cfg.backend)
     run = await register_leaf_run(
-        tree, leaf_id, task_cfg, firing, kind="scheduled_step", position=pos, backend=backend, model=model)
+        tree,
+        leaf_id,
+        task_cfg,
+        firing,
+        kind="scheduled_step",
+        position=pos,
+        backend=backend,
+        model=model,
+        task_spec_text=steps[pos].prompt)
     prompt = steps[pos].prompt or ""
     if pos > 0 and executed_positions:
       previous_pos = executed_positions[-1]
@@ -672,7 +696,15 @@ async def reconcile_bound_firings(
     # controller semantics (idempotent by stable run id).
     backend, model = resolved_backend_model(task_cfg, tree, steps[last_pos + 1].backend or task_cfg.backend)
     next_run = await register_leaf_run(
-        tree, leaf_id, task_cfg, firing, kind="scheduled_step", position=last_pos + 1, backend=backend, model=model)
+        tree,
+        leaf_id,
+        task_cfg,
+        firing,
+        kind="scheduled_step",
+        position=last_pos + 1,
+        backend=backend,
+        model=model,
+        task_spec_text=steps[last_pos + 1].prompt)
     if await tree.runs.terminal_outcome_of(leaf_id, next_run.id) is None and next_run.pid is None:
       prompt = steps[last_pos + 1].prompt or ""
       if last_pos + 1 > 0:

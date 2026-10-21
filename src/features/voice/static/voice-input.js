@@ -83,6 +83,10 @@ const VOICE_MENU_ITEM_CLASS = 'flex w-full items-center gap-2 px-3 py-1.5 text-l
 const VOICE_MENU_ITEM_ENABLED_CLASS = ' text-slate-200 hover:bg-slate-700';
 const VOICE_MENU_ITEM_DISABLED_CLASS = ' text-slate-500 cursor-not-allowed';
 const VOICE_MENU_CHECK_CLASS = 'w-4 shrink-0 text-green-400';
+// On phones the caret is hidden and the composer's ⋯ menu carries this entry
+// instead; it opens the same menu the caret does.
+const VOICE_OVERFLOW_MENU_ID = 'overflow-menu';
+const VOICE_OVERFLOW_ENTRY_ID = 'voice-backend-menu-entry';
 
 const VOICE_WORKLET_SOURCE = `
 class VoiceCaptureProcessor extends AudioWorkletProcessor {
@@ -241,9 +245,53 @@ function selectVoiceBackend(id) {
 function toggleVoiceBackendMenu() {
   const menu = ensureVoiceBackendMenu();
   if (!menu) return;
-  const opening = menu.classList.contains('hidden');
-  menu.classList.toggle('hidden');
-  if (opening) renderVoiceBackendMenu();
+  if (menu.classList.contains('hidden')) openVoiceBackendMenu();
+  else closeVoiceBackendMenu();
+}
+
+// The composer's ⋯ menu entry, created by this package so the core template
+// names nothing it defines. Opening from the entry closes the ⋯ menu first;
+// both entries drive the one backend menu.
+function ensureVoiceBackendEntry() {
+  const overflow = document.getElementById(VOICE_OVERFLOW_MENU_ID);
+  if (!overflow || document.getElementById(VOICE_OVERFLOW_ENTRY_ID)) return;
+  const entry = document.createElement('button');
+  entry.type = 'button';
+  entry.id = VOICE_OVERFLOW_ENTRY_ID;
+  entry.textContent = 'Voice backend';
+  entry.onclick = openVoiceBackendMenuFromOverflow;
+  overflow.appendChild(entry);
+}
+
+function openVoiceBackendMenuFromOverflow() {
+  const overflow = document.getElementById(VOICE_OVERFLOW_MENU_ID);
+  if (overflow) overflow.classList.remove('show');
+  openVoiceBackendMenu();
+}
+
+function openVoiceBackendMenu() {
+  const menu = ensureVoiceBackendMenu();
+  if (!menu) return;
+  menu.classList.remove('hidden');
+  renderVoiceBackendMenu();
+  positionVoiceBackendMenu();
+}
+
+function positionVoiceBackendMenu() {
+  // The menu is right-aligned to the mic group. Where the group's right edge
+  // leaves too little room for the menu, a negative right offset moves the
+  // menu's right edge past the group until its left edge sits at the margin.
+  const margin = 8;
+  voiceMenu.style.left = '';
+  voiceMenu.style.right = '';
+  const rect = voiceMenu.getBoundingClientRect();
+  if (rect.left < margin) {
+    voiceMenu.style.left = 'auto';
+    voiceMenu.style.right = (rect.left - margin) + 'px';
+  } else if (rect.right > window.innerWidth - margin) {
+    voiceMenu.style.left = 'auto';
+    voiceMenu.style.right = (rect.right - (window.innerWidth - margin)) + 'px';
+  }
 }
 
 function closeVoiceBackendMenu() {
@@ -1165,8 +1213,10 @@ function removeVoiceOverlay() {
   document.getElementById('voice-partial-overlay')?.remove();
 }
 
-// First paint: the mic's tooltip names the backend a recording would use.
+// First paint: the mic's tooltip names the backend a recording would use, and
+// the composer's ⋯ menu carries the backend entry phones use.
 updateVoiceMicTitle();
+ensureVoiceBackendEntry();
 
 // A dictated message's bubble carries the microphone badge, and the run ends
 // with the session view it belongs to.

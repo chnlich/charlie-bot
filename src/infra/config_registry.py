@@ -67,11 +67,6 @@ def option_model(backend_type: str) -> type:
   return option_class
 
 
-def registered_backend_types() -> tuple[str, ...]:
-  """Every backend type with a registered option model, in registration order."""
-  return tuple(_option_models)
-
-
 def register_legacy_keys(legacy_keys: Mapping[str, str]) -> None:
   """Add ``legacy_keys`` to the map of retired top-level keys; a key that is already present raises ValueError."""
   for key in legacy_keys:

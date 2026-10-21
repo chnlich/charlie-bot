@@ -5,7 +5,14 @@ resolver reads the reserve through ``register()`` in this package's ``__init__.p
 importing ``opencode.py``.
 """
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from src.runtime.hooks import backend_lifecycle
+
+if TYPE_CHECKING:
+  from src.infra import models
 
 # httpx client for the shared server's control API: version probe, session
 # create and get, environment, prompt, interrupt, shells, model list. The
@@ -28,6 +35,13 @@ OPENCODE_STREAM_EXIT_GRACE = 0.2  # seconds
 # The shared server stops after this long with no running turn. The next turn
 # starts it again.
 OPENCODE_SERVER_IDLE_EXIT_SECONDS = 3600.0  # seconds
+
+# The heavy checkpoint: this long after the last turn ends (and no directory is
+# claimed), the shared server reads its own RSS. Above the RSS limit below it
+# stops, so the memory each directory release leaves behind is returned at once.
+# The rest of the idle limit still applies when it does not stop.
+OPENCODE_SERVER_HEAVY_CHECK_SECONDS = 60.0  # seconds
+OPENCODE_SERVER_HEAVY_RSS_MB = 400.0  # MiB
 
 # A turn waits this long for the earlier interrupts of its session to report
 # session.execution.interrupted before it sends its prompt. Past it the session
@@ -52,6 +66,9 @@ OPENCODE_SSE_PROGRESS_TIMEOUT = 3600.0  # seconds
 OPENCODE_COMPACT_OUTPUT_RESERVE = 20_000
 
 
-def snapshot_reading_limits() -> backend_lifecycle.ContextLimits:
-  """The context limits of a ``snapshot`` reading: the model's limit comes with the snapshot, the reserve is opencode's."""
+def snapshot_reading_limits(run_kind: models.RunKind) -> backend_lifecycle.ContextLimits:
+  """The context limits of a ``snapshot`` reading: the model's limit comes with the snapshot, the reserve is opencode's.
+
+  The reserve is one value for every run kind, so *run_kind* changes nothing here.
+  """
   return backend_lifecycle.ContextLimits(declared_window=None, compact_reserve=OPENCODE_COMPACT_OUTPUT_RESERVE)

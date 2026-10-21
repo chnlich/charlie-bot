@@ -164,3 +164,26 @@ def test_file_change_translation(
       })
 
   assert translated == [{"type": codex.FILE_WRITE, "path": str(tmp_path / rel_path)} for rel_path in expected_paths]
+
+
+# ---------------------------------------------------------------------------
+# A work run's codex exec argv: the compaction point and the multi-agent feature
+# ---------------------------------------------------------------------------
+
+
+def test_an_unset_limit_leaves_compaction_to_codex_and_disables_multi_agent(monkeypatch: pytest.MonkeyPatch) -> None:
+  backend = _build_backend(monkeypatch, model="codex-test-model")
+
+  cmd = backend._build_command("do the thing")
+
+  assert not any(entry.startswith("model_auto_compact_token_limit=") for entry in cmd)
+  disable_index = cmd.index("--disable")
+  assert cmd[disable_index + 1] == "multi_agent"
+
+
+def test_a_configured_compaction_point_reaches_codex(monkeypatch: pytest.MonkeyPatch) -> None:
+  backend = _build_backend(monkeypatch, model="codex-test-model", model_auto_compact_token_limit=50_000)
+
+  cmd = backend._build_command("do the thing")
+
+  assert "model_auto_compact_token_limit=50000" in cmd

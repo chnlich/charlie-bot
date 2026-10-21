@@ -6,11 +6,9 @@ implementing; master includes them as constraints in task specs.
 ## Diagnosis and Planning
 
 - State the identified issue clearly before making any code change.
-- Propose design first when diagnosing a bug; present analysis and fix
-  approach, then wait for confirmation before implementing.
-- Research and understand the system first, propose one plan, get
-  confirmation, then implement. If an edit turns out wrong, stop and discuss
-  instead of silently reverting and trying a different approach in a loop.
+- When you diagnose a bug, state the analysis and the fix approach before the fix.
+- Research and understand the system first, write one plan, then implement it.
+  If an edit turns out wrong, stop and discuss instead of silently reverting and trying a different approach in a loop.
 - Search for existing prior-art frameworks before inventing a new structure
   for a refactor; learn how they organize their abstractions.
 

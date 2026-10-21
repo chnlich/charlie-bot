@@ -21,6 +21,10 @@ def _web_status_message(event: dict) -> dict:
   return {"role": ET.WEB_STATUS, "content": event.get("content", ""), "web_status": event.get(ET.WEB_STATUS)}
 
 
+def _web_ask_check_message(event: dict) -> dict:
+  return {"role": ET.WEB_ASK_CHECK, "content": event.get("content", "")}
+
+
 class WebReplyTurnContribution(turn_contributions.TurnContribution):
   """Carries the reply rules in a web session's manager turns, audits the turns that answer a user, renders replies."""
 
@@ -55,6 +59,7 @@ class WebReplyTurnContribution(turn_contributions.TurnContribution):
         ET.WEB_REPLY: _web_reply_message,
         ET.WEB_REPLY_NOTICE: _web_reply_notice_message,
         ET.WEB_STATUS: _web_status_message,
+        ET.WEB_ASK_CHECK: _web_ask_check_message,
     }
 
 

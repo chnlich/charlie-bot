@@ -156,7 +156,7 @@ async def _start_loop(
   tree.dispatch.executor = test_task_execution._adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   # The final report's wake dispatches the manager's report-consuming turn;
   # script it through the registry builder so no external process starts.
-  monkeypatch.setattr(test_task_execution.BUILD_BACKEND_PATCH_TARGET, test_task_execution.make_pm_build("report noted"))
+  monkeypatch.setattr(conftest.BUILD_BACKEND_PATCH_TARGET, test_task_execution.make_pm_build("report noted"))
   payload = {
       "session_id": manager.id,
       "goal": "## Goal\n\nimprove the thing\n",
@@ -276,7 +276,7 @@ async def test_live_goal_change_affects_next_iteration(
   tree.dispatch.executor = test_task_execution._adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   # The final report's wake dispatches the manager's report-consuming turn;
   # script it through the registry builder so no external process starts.
-  monkeypatch.setattr(test_task_execution.BUILD_BACKEND_PATCH_TARGET, test_task_execution.make_pm_build("report noted"))
+  monkeypatch.setattr(conftest.BUILD_BACKEND_PATCH_TARGET, test_task_execution.make_pm_build("report noted"))
 
   await _admit_takeoff(tree, manager)
   with test_task_execution.make_api_client(cfg, session_blocks, tree) as client:
@@ -732,7 +732,7 @@ async def test_iteration_report_header_carries_the_judgment(
   conftest.stub_credentials({"charliebot": {"access_key": "op-secret"}})
   monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
   tree.dispatch.executor = test_task_execution._adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
-  monkeypatch.setattr(test_task_execution.BUILD_BACKEND_PATCH_TARGET, test_task_execution.make_pm_build("report noted"))
+  monkeypatch.setattr(conftest.BUILD_BACKEND_PATCH_TARGET, test_task_execution.make_pm_build("report noted"))
 
   await _admit_takeoff(tree, manager)
   _body, _child_id = await _start_loop(
@@ -788,7 +788,7 @@ async def test_failed_iteration_still_delivers_its_report_and_continues(
   conftest.stub_credentials({"charliebot": {"access_key": "op-secret"}})
   monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
   tree.dispatch.executor = test_task_execution._adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
-  monkeypatch.setattr(test_task_execution.BUILD_BACKEND_PATCH_TARGET, test_task_execution.make_pm_build("report noted"))
+  monkeypatch.setattr(conftest.BUILD_BACKEND_PATCH_TARGET, test_task_execution.make_pm_build("report noted"))
 
   await _admit_takeoff(tree, manager)
   _body, child_id = await _start_loop(
@@ -985,7 +985,7 @@ async def test_merge_back_with_only_failed_iterations_closes_cancelled_with_comp
   conftest.stub_credentials({"charliebot": {"access_key": "op-secret"}})
   monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
   tree.dispatch.executor = test_task_execution._adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
-  monkeypatch.setattr(test_task_execution.BUILD_BACKEND_PATCH_TARGET, test_task_execution.make_pm_build("report noted"))
+  monkeypatch.setattr(conftest.BUILD_BACKEND_PATCH_TARGET, test_task_execution.make_pm_build("report noted"))
 
   await _admit_takeoff(tree, manager)
   body, child_id = await _start_loop(
@@ -1222,7 +1222,7 @@ async def test_improve_stop_mid_iteration_closes_after_the_controller_ends(
   second = test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("never reached")])
   conftest.install_scripted_backends(monkeypatch, [first, second], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
   tree.dispatch.executor = test_task_execution._adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
-  monkeypatch.setattr(test_task_execution.BUILD_BACKEND_PATCH_TARGET, test_task_execution.make_pm_build("report noted"))
+  monkeypatch.setattr(conftest.BUILD_BACKEND_PATCH_TARGET, test_task_execution.make_pm_build("report noted"))
   # Park the controller inside the judgment that follows the iteration's
   # finish, so the test observes the child between after_run and the
   # controller's own end path.
@@ -1333,7 +1333,7 @@ async def test_controller_exception_while_an_iteration_runs_closes_after_its_fin
   monkeypatch.setattr(conftest.WORKER_BUILD_BACKEND_PATCH_TARGET, one_backend)
   adapter = test_task_execution._adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   tree.dispatch.executor = adapter
-  monkeypatch.setattr(test_task_execution.BUILD_BACKEND_PATCH_TARGET, test_task_execution.make_pm_build("report noted"))
+  monkeypatch.setattr(conftest.BUILD_BACKEND_PATCH_TARGET, test_task_execution.make_pm_build("report noted"))
   real_settle = adapter.launch_and_settle
   settle: dict = {}
 
@@ -1479,7 +1479,7 @@ async def test_startup_recovers_a_stop_requested_launched_iteration_and_closes(
       tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
   child_id = await _ended_loop_shape(
       cfg, tree, manager, status="running", iterations=[(None, None)], server_pid=os.getpid() + 1)
-  proc = subprocess.Popen(["/bin/sleep", "30"])
+  proc = subprocess.Popen(["/bin/sleep", "30"], start_new_session=True)
   try:
     pid, pid_start = conftest.identity_of(proc.pid)
     run = await tree.runs.get_run(child_id, "iter-run-1")

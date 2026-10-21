@@ -278,7 +278,7 @@ def test_cli_in_a_manager_session_delegates_the_cold_read(
         "description": payload["description"],
     }
 
-  monkeypatch.setattr("src.runtime.cli.common.post_internal_api", post)
+  monkeypatch.setattr(conftest.CLI_COMMON_POST_INTERNAL_API_PATCH_TARGET, post)
   assert _run_cli([str(artifact), "--genre", "sitrep", "--trigger", "where are we?"]) == 0
   (call,) = calls
   assert call["endpoint"] == "/api/internal/delegate"
@@ -305,7 +305,7 @@ def test_cli_in_a_manager_session_exits_1_when_the_server_refuses(
     print(json.dumps({"error": "delegation blocked", "code": "server_error", "effect": "none"}), file=sys.stderr)
     raise SystemExit(1)
 
-  monkeypatch.setattr("src.runtime.cli.common.post_internal_api", refusing_post)
+  monkeypatch.setattr(conftest.CLI_COMMON_POST_INTERNAL_API_PATCH_TARGET, refusing_post)
   assert _run_cli([str(artifact), "--genre", "sitrep", "--trigger", "where are we?"]) == 1
   assert "delegation blocked" in capsys.readouterr().err
 
@@ -320,7 +320,7 @@ def test_cli_in_a_worker_session_runs_the_cold_read_in_the_foreground(
   backends = {"alpha": _FakeBackend(answer="(1) answered.")}
   _patch_backends(monkeypatch, backends)
   post = mock.MagicMock()
-  monkeypatch.setattr("src.runtime.cli.common.post_internal_api", post)
+  monkeypatch.setattr(conftest.CLI_COMMON_POST_INTERNAL_API_PATCH_TARGET, post)
 
   assert _run_cli([str(artifact), "--genre", "sitrep", "--trigger", "where are we?"]) == 0
   digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
@@ -343,7 +343,7 @@ def test_cli_with_no_session_identity_runs_the_cold_read_in_the_foreground(
   backends = {"alpha": _FakeBackend(answer="(1) answered.")}
   _patch_backends(monkeypatch, backends)
   post = mock.MagicMock()
-  monkeypatch.setattr("src.runtime.cli.common.post_internal_api", post)
+  monkeypatch.setattr(conftest.CLI_COMMON_POST_INTERNAL_API_PATCH_TARGET, post)
 
   assert _run_cli([str(artifact), "--genre", "sitrep", "--trigger", "where are we?"]) == 0
   digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
@@ -396,7 +396,7 @@ async def _cold_read_tree_env(tmp_path: pathlib.Path, monkeypatch: pytest.Monkey
   if not execute:
     monkeypatch.setattr(adapter, "_schedule_launch", lambda *args, **kwargs: None)
   tree.dispatch.executor = adapter
-  monkeypatch.setattr("src.infra.config.get_config", lambda: cfg)
+  monkeypatch.setattr(conftest.CONFIG_GET_CONFIG_PATCH_TARGET, lambda: cfg)
   manager = await conftest.create_task(tree, parent=None, request_id="root")
   return cfg, session_blocks, tree, manager
 

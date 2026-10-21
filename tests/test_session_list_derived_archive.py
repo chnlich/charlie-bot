@@ -15,7 +15,7 @@ import orjson
 import pytest
 
 from src.infra import models
-from src.runtime import task_sessions
+from src.runtime import task_errors, task_sessions
 
 
 async def create(tree: task_sessions.TaskTreeManager, *, parent: str | None, request_id: str, profile: str = "manager"):
@@ -114,3 +114,86 @@ async def test_archiving_a_parent_archives_its_open_subtree_and_restore_brings_i
     assert tree.task_state(sid) == "open"
     stored = orjson.loads((cfg.sessions_dir / sid / "metadata.json").read_bytes())
     assert stored["status"] == "active"
+
+
+def bind_in_memory_tree(
+    monkeypatch: pytest.MonkeyPatch,
+    tree: task_sessions.TaskTreeManager,
+    edges: list[tuple[str, str | None]],
+    closed: frozenset[str] = frozenset(),
+    stored_archived: frozenset[str] = frozenset()
+) -> None:
+  """Serve *tree* an index built from (id, task parent) pairs.
+
+  The *closed* ids' task folds to completed and the *stored_archived* ids carry the archived status. Creating
+  thousands of sessions on disk would blow the unit budget, and the walk reads only the index and the task
+  facts, so both are supplied in memory.
+  """
+  metas: dict[str, models.SessionMetadata] = {}
+  children: dict[str | None, list[str]] = {}
+  for sid, parent in edges:
+    status = models.SessionStatus.ARCHIVED if sid in stored_archived else models.SessionStatus.ACTIVE
+    metas[sid] = models.SessionMetadata(id=sid, name=sid, profile="worker", task_parent_id=parent, status=status)
+    children.setdefault(parent, []).append(sid)
+  index = task_sessions._TreeIndex(metas=metas, children=children, revision="", root_sig=(0, 0))
+
+  async def get_index(*, force: bool = False) -> task_sessions._TreeIndex:
+    return index
+
+  def facts_of(session_id: str) -> task_sessions._TaskFacts:
+    return task_sessions._TaskFacts(task_state="completed" if session_id in closed else "open")
+
+  monkeypatch.setattr(tree, "_get_index", get_index)
+  monkeypatch.setattr(tree, "_facts_of", facts_of)
+
+
+@pytest.mark.asyncio
+async def test_closed_descendants_are_returned_and_do_not_count_toward_the_cap(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  _cfg, _session_blocks, tree = conftest.build_env(tmp_path)
+  kids = [f"k{i}" for i in range(1100)]
+  bind_in_memory_tree(monkeypatch, tree, [("root", None), *[(k, "root") for k in kids]], closed=frozenset(kids[:1050]))
+
+  descendants = await tree.descendant_ids("root")
+
+  assert len(descendants) == 1100 and set(descendants) == set(kids)
+
+
+@pytest.mark.asyncio
+async def test_open_descendants_past_the_cap_raise(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  _cfg, _session_blocks, tree = conftest.build_env(tmp_path)
+  bind_in_memory_tree(monkeypatch, tree, [("root", None), *[(f"k{i}", "root") for i in range(1001)]])
+
+  with pytest.raises(task_errors.TaskConflictError) as raised:
+    await tree.descendant_ids("root")
+
+  assert raised.value.blockers == ["subtree of root exceeds 1000 non-archived nodes"]
+
+
+@pytest.mark.asyncio
+async def test_exactly_the_cap_of_open_descendants_is_allowed(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  _cfg, _session_blocks, tree = conftest.build_env(tmp_path)
+  # 50 stored-archived nodes are walked but not counted: only the 1000 open ones meet the cap.
+  stored_archived = [f"a{i}" for i in range(50)]
+  edges = [("root", None), *[(f"k{i}", "root") for i in range(1000)], *[(a, "root") for a in stored_archived]]
+  bind_in_memory_tree(monkeypatch, tree, edges, stored_archived=frozenset(stored_archived))
+
+  descendants = await tree.descendant_ids("root")
+
+  assert len(descendants) == 1050
+
+
+@pytest.mark.asyncio
+async def test_open_nodes_under_a_closed_ancestor_count_as_archived(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  _cfg, _session_blocks, tree = conftest.build_env(tmp_path)
+  under_closed = [f"o{i}" for i in range(1500)]
+  bind_in_memory_tree(
+      monkeypatch,
+      tree, [("root", None), ("closed", "root"), *[(o, "closed") for o in under_closed]],
+      closed=frozenset({"closed"}))
+
+  descendants = await tree.descendant_ids("root")
+
+  assert len(descendants) == 1501 and set(under_closed) <= set(descendants)

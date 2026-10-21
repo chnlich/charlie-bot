@@ -13,7 +13,7 @@ Ownership boundaries it never crosses:
   requests stay in :mod:`src.runtime.runs`; task metadata and tree relations stay
   in :mod:`src.runtime.task_sessions`; completion/evidence policy stays in
   :mod:`src.runtime.task_completion`. This module only binds a registered Run to
-  the existing process harnesses — the master queue (``src.runtime.master_cc``)
+  the existing process harnesses — the master queue (``src.runtime.master_cc_queue``)
   for manager turns, the Worker/backend adapters (``src.runtime.worker``) for
   work and review — and lands their outcomes through those owners.
 - The one short control write lock is held only across durable reservation
@@ -84,9 +84,9 @@ from src.runtime import (
     task_prompts,
     task_sessions,
     thinking_state,
+    worker,
 )
 from src.runtime.hooks import backend_lifecycle, backend_types, sequence_controllers, turn_contributions
-from src.runtime.worker import QuotaExhaustedError, Worker
 
 log = log_once.LazyStructlogLogger()
 
@@ -98,7 +98,7 @@ def run_worker_binding(
     pid: int | None = None,
     pid_start: str | None = None,
 ) -> models.ThreadMetadata:
-  """The Run-backed worker identity a v2 launch hands to :class:`Worker`.
+  """The Run-backed worker identity a v2 launch hands to :class:`~src.runtime.worker.Worker`.
 
     An in-memory thread record that is never written: the Worker reads its id,
     session id, process identity and the backend's preassigned conversation id.
@@ -1434,7 +1434,7 @@ class TaskExecutionAdapter:
 
     error = ""
     exit_code = -1
-    worker: Worker | None = None
+    worker_adapter: worker.Worker | None = None
     try:
       # A repository run starts in its worktree root: a review in its work Run's worktree, a work
       # Run in the worktree its context build recorded on the Run (read again here). A repo-less
@@ -1446,7 +1446,7 @@ class TaskExecutionAdapter:
       # The Worker places the launch through the backend's lifecycle and relays the run when
       # the lifecycle asks for it (src/runtime/launch_loop.py). A refused launch — before the
       # first process or at a relay — ends the run through the LaunchRefused branch below.
-      worker = Worker(
+      worker_adapter = worker.Worker(
           binding,
           working_dir,
           events_log,
@@ -1458,14 +1458,15 @@ class TaskExecutionAdapter:
           instructions_content=snapshot.instructions_text,
           session_meta=meta,
           held_native_id=continuation.native_id if continued else None,
+          run_kind=run.kind,
       )
       # Session-level notices (a pool login that needs re-login, a relay compaction) reach
       # the session chat through the successor chain.
-      worker.on_session_event = functools.partial(self._successor.deliver_to_successor, session_id)
-      exit_code = await worker.run()
+      worker_adapter.on_session_event = functools.partial(self._successor.deliver_to_successor, session_id)
+      exit_code = await worker_adapter.run()
     except backend_lifecycle.LaunchRefused as exc:
-      if worker is not None:
-        await worker.terminate()
+      if worker_adapter is not None:
+        await worker_adapter.terminate()
       error = str(exc)
       if exc.quota_exhausted:
         self._quota_failures[(session_id, run_id)] = exc.resets_at
@@ -1478,16 +1479,16 @@ class TaskExecutionAdapter:
       # The run's own events log carries the evidence: the failure-summary
       # reader and the sequence quota classification read this event.
       await self._record_launch_error_event(session_id, run_id, error, quota_exhausted=exc.quota_exhausted)
-    except QuotaExhaustedError as exc:
-      if worker is not None:
-        await worker.terminate()
+    except worker.QuotaExhaustedError as exc:
+      if worker_adapter is not None:
+        await worker_adapter.terminate()
       error = str(exc)
       self._quota_failures[(session_id, run_id)] = exc.resets_at
       log.warning("task_run_quota_exhausted", session_id=session_id, run_id=run_id, error=error)
     except Exception as exc:  # setup/transport failure: the run failed loudly
       log.error("task_run_failed", session_id=session_id, run_id=run_id, error=str(exc), exc_info=True)
-      if worker is not None:
-        await worker.terminate()
+      if worker_adapter is not None:
+        await worker_adapter.terminate()
       error = str(exc)
 
     durable_outcome = await self._finalize_worker_run(meta, run, option, exit_code=exit_code, error=error)
@@ -2066,17 +2067,18 @@ class TaskExecutionAdapter:
     binding = run_worker_binding(run_id, session_id, pid=run.pid, pid_start=run.pid_start)
     if backend_types.traits_for(option.type).preassigned_session_id:
       backend_types.lifecycle_for(option).assign_thread_native_id(binding, run.native_session_id)
-    worker = Worker(
+    worker_adapter = worker.Worker(
         binding,
         pathlib.Path(run.worktree_path) if run.worktree_path else run_dir,
         events_log,
         "",  # the follow builds nothing: the prompt text was the launch's
         self._cfg,
         backend_option=option,
+        run_kind=run.kind,
     )
     # Session-level notices reach the session chat exactly as a fresh run's do.
-    worker.on_session_event = functools.partial(self._successor.deliver_to_successor, session_id)
-    exit_code = await worker.resume(is_alive=is_alive, on_silence=None)
+    worker_adapter.on_session_event = functools.partial(self._successor.deliver_to_successor, session_id)
+    exit_code = await worker_adapter.resume(is_alive=is_alive, on_silence=None)
     durable_outcome = await self._finalize_worker_run(
         meta, run, option, exit_code=exit_code, error="", ended_at=ended_at)
     await self._after_worker_run(meta, run, durable_outcome)
@@ -2116,10 +2118,12 @@ class TaskExecutionAdapter:
     return True, self._quota_failures.pop((session_id, run_id))
 
   def _pool_chose_backend(self, meta: models.SessionMetadata, run: models.RunRecord) -> bool:
-    """True when the backends.pool picked the run's backend: a review run, or a node whose delegation named none."""
+    """True when the run's backend came from the shared rotation: a review run, a node whose
+    delegation named none, or a node whose router route the pool fallback answered."""
     if run.kind == "review":
       return True
-    return metadata_slots.fields_of(meta, backend_pool.METADATA_OWNER).backend_from_pool
+    fields = metadata_slots.fields_of(meta, backend_pool.METADATA_OWNER)
+    return fields.backend_from_pool or bool(fields.route is not None and fields.route.backends)
 
   async def _fail_over_quota(self, meta: models.SessionMetadata, run: models.RunRecord) -> bool:
     """Continue a quota-interrupted run on the next pool member, in the same worktree; False when none is available.
@@ -2129,7 +2133,13 @@ class TaskExecutionAdapter:
         a revision round's retry carries the same review feedback.
         """
     session_id = meta.id
-    member = backend_pool.select(self._cfg, caller="failover", exclude={run.backend or ""})
+    route = metadata_slots.fields_of(meta, backend_pool.METADATA_OWNER).route
+    member = None
+    if route is not None and route.backends:
+      member = backend_pool.pick_ordered(
+          self._cfg, caller="failover", backends=route.backends, exclude={run.backend or ""})
+    if member is None:
+      member = backend_pool.select(self._cfg, caller="failover", exclude={run.backend or ""})
     if member is None:
       return False
     await self._tree.set_node_backend(session_id, member.id)
@@ -2140,6 +2150,14 @@ class TaskExecutionAdapter:
         backend=member.id,
         input_event_ids=list(run.input_event_ids),
     )
+    until = backend_pool.cooling_until(run.backend or "")
+    await self._events.persist_and_broadcast(
+        session_id, {
+            "type": ET.QUOTA_FAILOVER,
+            "from": run.backend or "",
+            "to": member.id,
+            "recovers_at": until.isoformat(timespec="minutes") if until is not None else "",
+        })
     log.warning(
         "worker_quota_failover",
         session_id=session_id,
@@ -2295,12 +2313,16 @@ class TaskExecutionAdapter:
       # base; an unproven landing is a blocked report, not a close.
       landing, reason = await self._landing_for_work(work_run)
       if landing is None:
+        # A review that stopped before its push states its verdict in its closing words; the report quotes them.
+        events_log = self._tree.runs.run_dir(session_id, run.id) / runs.RUN_EVENTS_NAME
+        closing_words = await asyncio.to_thread(review._worker_summary_from_events_log, events_log)
+        verdict = closing_words or "The review run left no closing words, so its verdict is unknown."
         await self._report_failure_to_parent(
             session_id,
             work_run,
             "blocked",
-            summary=f"work run {work_run.id} passed review but its branch did not land on "
-            f"{work_run.base_branch or 'the requested base'}: {reason}",
+            summary=f"review run {run.id} ended without landing work run {work_run.id} on "
+            f"{work_run.base_branch or 'the requested base'}: {reason}\n\nReview verdict:\n{verdict}",
             deciding_run=run)
         return
       branch, commit, repo_path = landing
@@ -2354,6 +2376,8 @@ class TaskExecutionAdapter:
         """
     tree = self._tree
     async with tree.control_lock:
+      if tree.task_state(session_id) != "open":
+        return None
       events = tree.runs.load_events_sync(session_id)
       if tree.runs.terminal_outcome(events, work_run.id) != "success":
         return None
@@ -2377,14 +2401,21 @@ class TaskExecutionAdapter:
         return existing[0].id
       attempts = len(existing)
       used = {r.backend for r in tree.runs.list_run_records_sync(session_id) if r.backend}
-      selection = review.select_reviewer_backend(
-          self._cfg,
-          "reviewer",
-          work_run.backend or "",
-          work_run.model,
-          [r.backend for r in existing if r.backend],
-          used_backends=used,
-      )
+      tried = [r.backend for r in existing if r.backend]
+      # A routed node's reviewer reuses the worker's route list (no router call): the first
+      # available member that avoids the worker's and the node's used backends. An empty or fully
+      # avoided list, and every unrouted node, take today's pool selection.
+      meta = await tree.load_meta(session_id)
+      route = metadata_slots.fields_of(meta, backend_pool.METADATA_OWNER).route if meta else None
+      selection = None
+      if route is not None and route.backends:
+        option = backend_pool.pick_ordered(
+            self._cfg, caller="reviewer", backends=route.backends, exclude={work_run.backend or "", *used, *tried})
+        if option is not None:
+          selection = (option.id, models.option_default_model(option, subject="routed backend "), tried)
+      if selection is None:
+        selection = review.select_reviewer_backend(
+            self._cfg, "reviewer", work_run.backend or "", work_run.model, tried, used_backends=used)
       if selection is None:
         log.warning("reviewer_backends_exhausted", session_id=session_id, work_run=work_run.id)
         return None
@@ -2587,16 +2618,30 @@ class TaskExecutionAdapter:
       return
     if summary is None:
       summary = await self._worker_failure_summary(session_id, run)
-    # The delivery entry owns the wake: a freshly created report wakes the
-    # parent's next serialized turn; a replayed one wakes nobody.
-    await self._tree.dispatch.deliver_child_report(
-        session_id,
-        source_event=source,
-        outcome=outcome,
-        summary=summary,
-        result_refs=[f"{task_completion.RUN_REF_PREFIX}{run.id}"],
-        recipient=meta.task_parent_id,
-    )
+    parent_id = str(meta.task_parent_id)
+    parent_epoch = await self._tree.session_events.prime_aggregator(parent_id)
+    async with self._tree.control_lock:
+      if self._tree.task_state(session_id) != "open":
+        return
+      report, report_created = await self._tree.dispatch.deliver_child_report_locked(
+          session_id,
+          source_event=source,
+          outcome=outcome,
+          summary=summary,
+          result_refs=[f"{task_completion.RUN_REF_PREFIX}{run.id}"],
+          recipient=meta.task_parent_id,
+      )
+    if report_created:
+      await self._tree.session_events.announce_appended_event(parent_id, report, epoch=parent_epoch)
+      if self._tree.task_state(parent_id) != "open":
+        log.info(
+            "child_report_into_archived_parent_kept_as_history",
+            parent=parent_id,
+            child=session_id,
+            report=str(report.get("id")),
+        )
+      else:
+        await self._tree.dispatch.wake_parent(parent_id, report=report)
     archive_run = deciding_run if deciding_run is not None else run
     await self._tree.archive_unsuccessful_worker(session_id, run_id=archive_run.id, outcome=outcome)
 
@@ -2721,13 +2766,12 @@ async def _reconcile_node(
   # fact; the pass records it before the replay and dispatch below run.
   if tree.task_state(session_id) != "open":
     for run in run_records:
-      if run.pid is not None:
-        continue
       if tree.runs.run_has_terminal_fact(run, events):
         continue
       if tree.runs.stop_requested(events, run.id):
         continue
       await tree.runs.request_stop(session_id, run.id, closed_task_stop_request_id(run.id))
+      events = tree.runs.load_events_sync(session_id)
 
   # --- 2. launched, non-terminal Runs re-attach or drain -----------------
   for run in run_records:

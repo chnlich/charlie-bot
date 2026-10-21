@@ -473,8 +473,8 @@ async def test_audit_nudges_a_summon_of_the_current_contract(tmp_path, content: 
   tasks: list[asyncio.Task] = []
 
   with (
-      mock.patch(conftest.THREAD_ENTRY_TRIGGER_MASTER_PATCH_TARGET, new=mock.AsyncMock()) as mock_trigger,
-      mock.patch(conftest.THREAD_ENTRY_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=conftest.make_task_spawner(tasks)),
+      mock.patch(conftest.MASTER_TRIGGER_PATCH_TARGET, new=mock.AsyncMock()) as mock_trigger,
+      mock.patch(conftest.TASKS_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=conftest.make_task_spawner(tasks)),
   ):
     acted = await thread_entry.deliver_done(adapter, "s1", done, cfg, *conftest.thread_blocks(sessions))
     await asyncio.gather(*tasks)
@@ -608,8 +608,8 @@ async def _run_accept_summon(sessions: FakeSessions, adapter: FakeAdapter,
   stand-in. Drains the spawned round tasks and returns (session id, the awaited
   trigger mock) for the summon-side asserts."""
   with (
-      mock.patch(conftest.THREAD_ENTRY_TRIGGER_MASTER_PATCH_TARGET, new=mock.AsyncMock()) as mock_trigger,
-      mock.patch(conftest.THREAD_ENTRY_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=conftest.make_task_spawner(tasks)),
+      mock.patch(conftest.MASTER_TRIGGER_PATCH_TARGET, new=mock.AsyncMock()) as mock_trigger,
+      mock.patch(conftest.TASKS_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=conftest.make_task_spawner(tasks)),
       # The stand-in tree records the keyword arguments the shared core passes
       # and the assert reads the registered origin from slot_values.
       mock.patch("src.features.chat_threads.thread_entry.task_execution.task_manager", return_value=FakeTree(sessions)),

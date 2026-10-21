@@ -1,0 +1,24 @@
+# The router's own configuration — read by `charliebot router` on every backend choice, so an edit
+# takes effect at the next choice with no restart. Copy it to your charliebot home as router.yaml
+# (<charliebot home>/router.yaml) and fill in the address and the strong list for this host.
+#
+# The Jev key is not here: `jev.credential` names a section of credentials.yaml, and the router reads
+# that section's api_key. Never commit a filled-in router.yaml.
+#
+# Fields:
+#   jev.url         the choice endpoint, POSTed one JSON body per call
+#   jev.model       the model name the endpoint takes
+#   jev.credential  the credentials.yaml section holding this router's key
+#   instructions    the one question Jev answers
+#   routine, design the two criteria it chooses between, with the rule for each
+#   strong          the backends design work gets, in order; ids must be backends from config.yaml
+
+jev:
+  # Placeholder: your gateway's choice endpoint.
+  url: https://jev.example.com/v1/systemone
+  model: jev-latest
+  credential: jev
+instructions: Which kind of CharlieBot work is this? Use routine unless the work clearly meets the condition of design.
+routine: Default. Fixes a bug, adds tests, changes config, runs a script, reads or summarizes, follows a written plan, checks a change that follows known patterns, answers a question or an alert, or does a short action.
+design: Only when the work designs a new mechanism across several modules, plans or decides a strategy, checks a large or risky new design, or a fast model already failed it.
+strong: [claude-opus]

@@ -1,5 +1,6 @@
 """Focused tests for session usage resolution."""
 
+import datetime
 import json
 import pathlib
 from typing import Any
@@ -7,9 +8,10 @@ from typing import Any
 import conftest
 import pytest
 
-from src.backends.claude_code import claude_code, claude_launch
+from src.backends.claude_code import claude_code, claude_compaction, claude_launch
 from src.backends.codex import codex_usage
 from src.infra import config, models
+from src.runtime import session_usage
 from src.runtime.agent_process import base
 
 
@@ -119,7 +121,7 @@ def _cumulative_result_with_assistant_reading() -> list[dict]:
   the claude tier must prefer."""
   return [
       _result_event(0.5, {"claude-opus-4-6": {
-          "contextWindow": 200_000
+          "contextWindow": 500_000
       }}, input_tokens=1_500_000),
       _assistant_event("claude-opus-4-6", input_tokens=100_000, cache_creation=20_000, cache_read=30_000),
   ]
@@ -130,6 +132,7 @@ def _cumulative_result_with_assistant_reading() -> list[dict]:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.usefixtures("_clean_ceiling_env")
 @pytest.mark.asyncio
 async def test_claude_tier_uses_assistant_event_tokens_not_result_cumulative(tmp_path: pathlib.Path) -> None:
   session_blocks, meta = _session_rig(tmp_path, "session-assistant", "Assistant", conftest.OPUS_BACKEND_ID)
@@ -137,7 +140,9 @@ async def test_claude_tier_uses_assistant_event_tokens_not_result_cumulative(tmp
 
   usage = await _resolved_usage(session_blocks, meta)
   assert usage["context_tokens"] == 150_000  # assistant event sum, not 1.5M
-  assert usage["context_full"] == 200_000
+  # context_full is min(the model's 500k window, the manager turn's declared window).
+  assert usage["context_full"] == 433_000
+  assert usage["context_compact_at"] == 400_000
   assert usage["model"] == "claude-opus-4-6"
   assert usage["total_cost_usd"] == pytest.approx(0.5)
 
@@ -222,7 +227,30 @@ def _clean_ceiling_env(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_declared_window_subtracts_reserves_from_declared_window(monkeypatch: pytest.MonkeyPatch) -> None:
   monkeypatch.setenv(claude_launch.AUTO_COMPACT_WINDOW_ENV, "500000")
   expected_point = 500_000 - claude_launch.CLAUDE_COMPACT_OUTPUT_RESERVE - claude_launch.CLAUDE_COMPACT_CONTEXT_RESERVE
-  assert claude_code.headless_claude_declared_window() == (500_000, expected_point)
+  assert claude_code.headless_claude_declared_window("manager_turn") == (500_000, expected_point)
+
+
+@pytest.mark.usefixtures("_clean_ceiling_env")
+@pytest.mark.parametrize(
+    ("run_kind", "window"), [
+        pytest.param("manager_turn", 433_000, id="manager-turn"),
+        pytest.param("work", 433_000, id="work"),
+        pytest.param("review", 433_000, id="review"),
+        pytest.param("iteration", 433_000, id="iteration"),
+        pytest.param("scheduled_step", 433_000, id="scheduled-step"),
+    ])
+def test_declared_window_is_the_run_kinds_window(run_kind: models.RunKind, window: int) -> None:
+  """The usage page's compaction line follows the window the launch env declares for the kind."""
+  reserves = claude_launch.CLAUDE_COMPACT_OUTPUT_RESERVE + claude_launch.CLAUDE_COMPACT_CONTEXT_RESERVE
+  assert claude_code.headless_claude_declared_window(run_kind) == (window, window - reserves)
+
+
+def test_usage_resolution_reports_the_sessions_kind_compaction_line() -> None:
+  """The usage page reads the run kind from each session profile."""
+  manager = models.SessionMetadata(profile="manager", id="m", name="M")
+  worker = models.SessionMetadata(profile="worker", id="w", name="W")
+  assert session_usage.usage_run_kind(manager) == "manager_turn"
+  assert session_usage.usage_run_kind(worker) == "work"
 
 
 # ---------------------------------------------------------------------------
@@ -295,3 +323,31 @@ async def test_empty_slot_keeps_context_unknown(tmp_path: pathlib.Path) -> None:
       profile="manager", id="session-emptyslot-none", name="Empty Slot None", backend=conftest.OPUS_BACKEND_ID)
   _write_session(session_blocks, empty_meta, [])
   assert await session_blocks.anchors.resolve_session_usage(empty_meta.id, empty_meta) is None
+
+
+# ---------------------------------------------------------------------------
+# A context_compacted event's post_tokens is the claude reading after it
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_context_compacted_post_tokens_becomes_the_claude_reading(tmp_path: pathlib.Path) -> None:
+  """The reading after an idle compaction is the post-compaction size, and a Fable session at that
+  size stays under its expired-cache floor even when its cache has expired."""
+  session_blocks, meta = _session_rig(tmp_path, "session-idle-fold", "Idle fold", conftest.OPUS_BACKEND_ID)
+  _write_session(
+      session_blocks, meta, [
+          _assistant_event("claude-fable-5-1", input_tokens=281_000),
+          base.make_context_compacted_event("idle", {"post_tokens": 9_111}, model="claude-fable-5-1"),
+      ])
+
+  usage = await _resolved_usage(session_blocks, meta)
+
+  assert usage["context_tokens"] == 9_111
+  last_request = datetime.datetime(2026, 9, 6, 20, 0, tzinfo=datetime.UTC)
+  assert claude_compaction.expired_cache_compaction_wanted(
+      _build_cfg(tmp_path),
+      "claude-fable-5-1",
+      usage["context_tokens"],
+      last_request - datetime.timedelta(minutes=61),
+      now=last_request) is False

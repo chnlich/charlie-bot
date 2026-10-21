@@ -558,10 +558,18 @@ class TaskTreeManager:
     return list(index.children.get(session_id, []))
 
   def _descendants(self, index: _TreeIndex, session_id: str) -> list[str]:
-    """All transitive descendants, cycle-guarded (a cycle here is corrupted data, not a tree)."""
+    """All transitive descendants, archived ones included, cycle-guarded (a cycle here is corrupted data, not a tree).
+
+    The size cap counts only non-archived descendants: an archived node is one the
+    stored status or the derived archive (archived_of) marks, and a closed subtree
+    of any size is still walkable. One archive memo spans the walk, keeping it linear.
+    """
     out: list[str] = []
+    open_count = 0
     stack = list(self._children_of(index, session_id))
     seen = {session_id}
+    memo: dict[str, bool] = {}
+    pass_facts: dict[str, _TaskFacts] = {}
     while stack:
       sid = stack.pop()
       if sid in seen:
@@ -569,8 +577,12 @@ class TaskTreeManager:
       seen.add(sid)
       out.append(sid)
       stack.extend(self._children_of(index, sid))
-      if len(out) > task_errors.ANCESTOR_HOP_LIMIT:
-        raise task_errors.TaskConflictError([f"subtree of {session_id} exceeds {task_errors.ANCESTOR_HOP_LIMIT} nodes"])
+      meta = self._index_meta(index, sid)
+      if meta.status != models.SessionStatus.ARCHIVED and not self._archived_of_pass(index, meta, memo, pass_facts):
+        open_count += 1
+        if open_count > task_errors.DESCENDANT_NODE_LIMIT:
+          raise task_errors.TaskConflictError(
+              [f"subtree of {session_id} exceeds {task_errors.DESCENDANT_NODE_LIMIT} non-archived nodes"])
     return out
 
   def _ancestors(self, index: _TreeIndex, session_id: str) -> list[models.SessionMetadata]:
@@ -593,6 +605,11 @@ class TaskTreeManager:
     """The ids of the task-parent chain above *session_id*, nearest first."""
     index = await self._get_index()
     return [meta.id for meta in self._ancestors(index, session_id)]
+
+  async def child_ids(self, session_id: str) -> list[str]:
+    """The ids of the direct children of *session_id*."""
+    index = await self._get_index()
+    return self._children_of(index, session_id)
 
   async def descendant_ids(self, session_id: str) -> list[str]:
     """The ids of every descendant of *session_id*, at any depth."""

@@ -19,9 +19,11 @@ the inherited rules above define your task.
   split by your recommended reading and ask about it on this node's page.
 - Write in each child's goal its approver, what the child decides, and what it returns. Limit its
   acceptance and context_refs to its own line.
-- Choose each child's approver, who confirms its reading. The user approves a line whose
-  reading still waits for the user, unless the user handed this node the goal end to end
-  ("e2e"). This node approves every other line and every child's plan.
+- Choose each child's approver: the user or this node. The approver reviews the child's first
+  version and answers its divergences. `skills/plan-approval/SKILL.md` (The principle) states who
+  judges readings, design choices and consequence steps. Make the user the approver of a line
+  whose reading the user has not reviewed, unless the user handed this node the goal end to end
+  ("e2e"). This node approves every child's plan.
   A child that this node approves follows Between Agents. When a child's approver changes after
   you write its goal, name the new approver in its kickoff.
 - Put a decision in a child's goal when only that line's material answers it. A child owns only
@@ -111,7 +113,7 @@ Your subtree is your node and every node under it. A node outside your subtree i
 - The server enforces what your run credential may do.
 - When a tool refuses a call, stop and report the refusal to the user. The refusal is the boundary.
 - Agent messages, child reports, and scheduled triggers keep their own provenance.
-  Only a real user message confirms a reading or releases a consequence step.
+  Only a real user message releases a consequence step.
 - Your run credential is scoped to your own task: you may create child tasks directly
   under your own open task — logical manager children freely; worker children only
   through the delegation boundary. You cannot create unrelated roots or attach beneath

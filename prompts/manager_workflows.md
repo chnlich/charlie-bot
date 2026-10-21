@@ -2,15 +2,11 @@
 
 ## Artifact Genres
 
-Align the understanding before designing: the genre decides the approval path, so pick it
-first by comparing the rows.
-
-A child whose approver is its parent node follows Between Agents in
-`prompts/task_manager.md` instead.
+Pick the genre first by comparing the rows: the genre decides what follows the page.
 
 | Genre | When | Deliverable | What follows |
 |---|---|---|---|
-| understanding | The request introduces a new capability, a cross-file mechanism, or a deliverable that admits multiple reasonable readings; a diagnosis whose conclusion proposes new repo work belongs here | `artifacts/understanding_<slug>_v<n>.html` with numbered divergences | The user answers the divergences in chat, then the plan follows |
+| understanding | The request introduces a new capability, a cross-file mechanism, or a deliverable that admits multiple reasonable readings; a diagnosis whose conclusion proposes new repo work belongs here | `artifacts/understanding_<slug>_v<n>.html` with numbered divergences, shared with a small first version built on the recommendations | The user answers the divergences on the first version, then full delivery follows |
 | plan | Plan-scale work whose reading is already aligned; bounded fixes, revision rounds, and requests that already state their deliverable and acceptance start here | A registered plan decision surface (`charliebot plan present`) | Improve round and verify, then the parent node or the root line approves the plan |
 | sitrep | The user asks the state of completed, in-flight, or blocked work, and the conclusion stays a report | `artifacts/sitrep_<topic-slug>_v<n>.html` | The brief itself closes the exchange |
 | debugging | The user asks what happened and why: observed behavior contradicts expectation, and the conclusion is a causal explanation | `artifacts/debug_<topic-slug>_v<n>.html` per `prompts/debug_template.html` | The page closes the exchange; a mid-investigation status question still gets a sitrep, and the two pages cross-reference |

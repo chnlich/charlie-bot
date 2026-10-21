@@ -6,8 +6,12 @@ stream, or end the process. ``run`` prints the NDJSON lines of a one-shot run.
 
 Behaviour comes from the JSON file named by FAKE_OC_SCRIPT: ``prompts`` maps a prompt's text to a
 step with ``events`` (session events, sessionID filled in), ``shells`` (running shell commands the
-session starts) and ``hold`` (keep the execution running until an interrupt). Every request is
-appended to the FAKE_OC_LOG file as one JSON line, tagged with the serving process's pid.
+session starts) and ``hold`` (keep the execution running until an interrupt). ``release_status``
+makes DELETE /api/debug/location answer that status instead of 204. Every request is appended to
+the FAKE_OC_LOG file as one JSON line, tagged with the serving process's pid.
+
+The loaded locations are the directories a session create, a shell list or a model list named;
+GET /api/debug/location lists them and DELETE /api/debug/location unloads one.
 """
 
 import asyncio
@@ -34,6 +38,7 @@ class FakeServer:
     self.sessions: dict[str, dict] = {}
     self.shells: dict[str, dict] = {}
     self.active: set[str] = set()
+    self.loaded: set[str] = set()
     self.subscribers: list[asyncio.Queue] = []
     self.next_id = 0
 
@@ -99,7 +104,16 @@ class FakeServer:
     parts = path.strip("/").split("/")
     if method == "GET" and path == "/api/info":
       return 200, {"version": VERSION}
+    if method == "GET" and path == "/api/debug/location":
+      return 200, [{"directory": directory} for directory in sorted(self.loaded)]
+    if method == "DELETE" and path == "/api/debug/location":
+      directory = params.get("location[directory]", [""])[0]
+      status = SCRIPT.get("release_status", 204)
+      if 200 <= status < 300:
+        self.loaded.discard(directory)
+      return status, None
     if method == "GET" and path == "/api/model":
+      self.loaded.add(params.get("location[directory]", [""])[0])
       return 200, {
           "data": [{
               "id": "fake-model",
@@ -113,6 +127,7 @@ class FakeServer:
     if method == "POST" and path == "/api/session":
       session_id = self.new_id("ses")
       self.sessions[session_id] = {"directory": body["location"]["directory"], "environment": None}
+      self.loaded.add(body["location"]["directory"])
       return 200, {"data": {"id": session_id}}
     if len(parts) >= 3 and parts[:2] == ["api", "session"]:
       session_id = parts[2]
@@ -144,6 +159,7 @@ class FakeServer:
       return 204, None
     if method == "GET" and path == "/api/shell":
       directory = params.get("location[directory]", [""])[0]
+      self.loaded.add(directory)
       return 200, {
           "location": {
               "directory": directory

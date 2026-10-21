@@ -22,12 +22,9 @@ user-invocable: false
 
 ## The principle
 
-The user judges two things before they happen:
-
-- the reading of a line: what it delivers, and what done means;
-- each consequence step: a step that fails the reversibility test (Execution section).
-
-The agent tree judges the rest. The user reviews it in the completion report.
+The user judges each consequence step (Execution section) before it happens.
+The agent tree judges the rest, readings and design choices included.
+The user reviews these judgments on the delivered product.
 
 **approval object = sections 1 and 3 + 4.1 Schema + resolved Trade-offs + entries
 promoted from Other Details.** Plan approval covers these exact terms. The `BLOCK KIT` comment
@@ -36,7 +33,7 @@ not restate it here.
 
 ## Understanding
 
-An understanding page precedes the plan when the master must first align the reading
+An understanding page lists the divergences of a request that admits several readings
 (the trigger and its exemptions live in the master prompt).
 
 - The page is `artifacts/understanding_<slug>_v<n>.html`, reusing the head and style of
@@ -73,16 +70,22 @@ An understanding page precedes the plan when the master must first align the rea
 - Facts before design: when the fix follows from why something happened, settle the
   root cause before drafting and state the case for it in one block between goal and
   deliverable, each claim carrying its evidence anchor.
-- The plan registry, the plan verify round, and plan approval start with the plan that follows.
-  The user confirms by answering the numbered divergences in chat; unmentioned
-  items take their recommendation. Confirmation is ordinary feedback and introduces no new
-  approval token. External system writes follow the master prompt's External System Writes rule.
+- Build a small first version on the recommendation of each divergence.
+  The first version is the smallest delivery that shows each recommendation at work.
+- Share the page together with the first version.
+- When the first version holds a consequence step, such as a long job on a shared cluster,
+  share the page first. Ask for the take off of that step on the page.
+- The user answers the divergences on the first version. Each answer is ordinary feedback
+  and introduces no new approval token. An unmentioned divergence keeps its recommendation.
+- The plan registry, the plan verify round, and plan approval start with the plan
+  that builds the first version.
+- External system writes follow the master prompt's External System Writes rule.
 - Before sharing, the page passes the mechanical assertions with
   `--genre understanding`. Its cold read runs after sharing, with the originating request as the
   trigger, per the Cold-Read Gate of the file-server skill. When the page states a root cause,
   it passes the Source Check of the file-server skill before sharing.
-- The subsequent plan carries the confirmed understanding's file path as a header
-  meta chip; section 1 states the goal in its own words.
+- The plan carries the understanding page's file path as a header meta chip;
+  section 1 states the goal in its own words.
 - The page as it opens obeys the plan template's page budget (the BLOCK KIT comment in
   `prompts/plan_template.html`); the always-visible minimum here is the goal sentence and
   each divergence's question, recommendation, and trade lines.
@@ -126,12 +129,14 @@ An understanding page precedes the plan when the master must first align the rea
 
 ## Approval
 
-- When a line's reading is confirmed, carry its reversible work to delivery.
+- Carry a line's reversible work to delivery on the recommended reading.
+- When a choice between reversible options comes up, take the recommended option.
 - A user message in a running line is feedback.
 - A request to stop, in any wording or language, or a cancel stops the line.
 - The parent node approves a child line's plan. A root line approves its own plan.
 - Before each consequence step, ask the user for a take off that names the step.
 - A pre take off names lines and steps ahead of time. It holds until those lines deliver.
+- Before you ask a take off for a deletion, show its dry-run list: each path and its size.
 - After `charliebot plan approve` and before delegation, post one English comment on
   the plan's ticket carrying the design conclusion and the resolved choices. One comment
   per plan lineage. The plan stage never creates a ticket; a plan whose work has no ticket
@@ -156,7 +161,7 @@ An understanding page precedes the plan when the master must first align the rea
   assumed accurate and implemented, entails what section 1 claims. Adequacy reads
   section 1 as the goal statement only; scope boundaries, thresholds, and exemptions
   stated in Context, section 3, 4.1, or Trade-offs bind adequacy equally, so section 1 never
-  restates them. Quote the confirmed understanding's file path in the spec as the
+  restates them. Quote the understanding page's file path in the spec as the
   adequacy reference when one exists; otherwise quote the originating request. Without
   one of these, adequacy cannot judge section 1 against what was asked.
 - Every spec declares its scope, and a spec that declares neither is verified as full.
@@ -188,6 +193,13 @@ The gate judges the chain alone; its definitions live in src/runtime/takeoff_gat
 - Default to acting. This is the reversibility test: if you can undo an operation
   alone at similar cost and its effect stays within what you own (reaching neither
   other people nor systems they rely on), do it without asking.
+- These kinds of step always fail the test:
+  - deleting data that has no backup;
+  - a message in the user's name, or a publication outside CharlieBot;
+  - a merge into a main branch that colleagues share;
+  - a restart of a running service;
+  - a job on a shared cluster;
+  - spending money.
 - When reality forces a change that leaves the approval object intact, make it,
   log it as a deviation, and keep going.
 - Between plan approval and the report there is nothing to ask: return to the user
@@ -200,3 +212,5 @@ The gate judges the chain alone; its definitions live in src/runtime/takeoff_gat
 - At completion or at a blocking failure, account for every approval-object term:
   delivered or deviated. Each deviation is a retroactive Trade-off — approved term,
   what landed, one-line reason — accepted by default or reverted on request; the revert becomes a new delegation.
+- For each choice made on a recommendation, name the alternative and the reply that switches to it.
+- For each delivered step, state how to undo it.

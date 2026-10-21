@@ -30,9 +30,12 @@ function loadPageModules(context) {
   runStaticModules(context, chatModules());
 }
 
-function forYouRig(messages, {view = 'foryou', clientHeight = 900} = {}) {
+function forYouRig(
+    messages, {view = 'foryou', clientHeight = 900, profile = null, workerSummary = null, hasMore = false} = {}) {
   const root = new FakeElement('DIV', {id: 'messages', className: 'space-y-3'});
   root.clientHeight = clientHeight;
+  const sentinel = hasMore ? new FakeElement('DIV', {id: 'load-more-sentinel'}) : null;
+  if (sentinel) root.appendChild(sentinel);
   const stream = new FakeElement('DIV', {id: 'streaming-msg'});
   root.appendChild(stream);
   const timers = makeEngineTimers();
@@ -53,17 +56,41 @@ function forYouRig(messages, {view = 'foryou', clientHeight = 900} = {}) {
       getElementById(id) {
         if (id === 'messages') return root;
         if (id === 'streaming-msg') return stream;
+        if (id === 'load-more-sentinel') return sentinel && sentinel.parentElement ? sentinel : null;
         return null;
       },
     },
   };
   loadPageModules(context);
+  if (profile) context.Chat.ForYou.setSession({profile});
+  if (workerSummary) context.Chat.applyWorkerSummary(workerSummary);
   installEngineTimers(context, timers);
   context.Chat.buildTurnEngineMessageNode = fakeEngineNode;
   const engine = context.Chat.TurnEngine.mountIfAvailable(root, messages, 'sess-fy', {view});
   assert.ok(engine && engine.alive, 'the engine mounts the chat container');
-  return {context, root, stream, timers, engine};
+  // A worker page hands its sentinel to the engine after the mount, as
+  // session-view.js renderSessionView does.
+  if (sentinel && profile === 'worker') engine.holdWorkerSentinel(sentinel);
+  return {context, root, stream, sentinel, timers, engine};
 }
+
+test('worker For you holds one summary card and no transcript or empty-state rows', () => {
+  const rig = forYouRig(fixture(), {
+    profile: 'worker',
+    hasMore: true,
+    workerSummary: {task_state: 'open', runs: [], closing: {work: null, review: null}, links: {}},
+  });
+  const contentNodes = rig.root.children.filter((child) => child !== rig.engine.forYouHolderNode());
+
+  assert.equal(contentNodes.length, 1);
+  assert.match(contentNodes[0].className, /worker-summary/);
+  assert.equal(contentNodes[0].classList.contains('for-you-empty'), false);
+  assert.equal(contentNodes.some((child) => child.dataset.messageRole), false);
+  assert.equal(rig.root.children.includes(rig.sentinel), false);
+
+  rig.engine.setView('everything');
+  assert.equal(rig.root.children[0], rig.sentinel, 'Everything restores the older-message sentinel');
+});
 
 // One row per child of the list: the role of a message, `empty` for the empty-state
 // row, and `holder` and `sentinel` for the structural rows. A row no case expects

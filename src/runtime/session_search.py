@@ -31,7 +31,7 @@ _SEARCH_RESULT_LIMIT = 200  # newest rows a name/content search returns; keeps t
 # churn re-reads every candidate without a current root from byte 0 (the
 # appended tail alone otherwise), so a cap under the population turns every
 # metadata write or append between requests into a near-full corpus scan.
-# ~1090 active chat files at the 2026-10-04 re-pricing; the entry is one path
+# ~1090 active chat files; the entry is one path
 # string plus at most _SEARCH_MISS_ROOTS_PER_FILE needle->signature records,
 # so the cap bounds memo memory at a few MB.
 _SEARCH_MISS_MEMO_LIMIT = 4096

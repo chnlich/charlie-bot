@@ -26,12 +26,15 @@ Known-alive symbols:
   (e.g. `/rounds/{id}/rate` from `chat/ratings.js`). The Python function names have exactly zero whole-repo matches outside
   their definitions, so vulture flags each one as an unused function; they must never be deleted on
   that evidence alone. `openai_compatible_messages` above is the same class, kept as its own entry
-  because its URL is built inside the Python registry rather than `web/`.
+  because its URL is built inside the Python registry rather than `web/`. The class also extends
+  past the `api.py` file name: `src/app/pages.py` (`events_viewer`, `home_page`), the feature
+  `page.py` modules (`diff_viewer` in `src/features/diff_view/page.py`) and
+  `src/features/usage/ext_usage.py` (`get_ext_usage`) hold routers the same inclusion paths
+  serve, and vulture flags those handlers on the same evidence.
 - `_fresh_credential_read_warning_registry`, `_fresh_unknown_limit_shape_registry`, `_fresh_usage_cache`,
   `_fresh_user_agent_cache`, `_fresh_claude_accounts`, `_fresh_codex_account` (`tests/test_ext_usage.py`),
   `_fresh_pool_state` (`tests/test_claude_accounts.py`),
   `_reset_config_caches` (`tests/test_charliebot_home.py`),
-  `_fresh_unhandled_part_type_registry` (`tests/test_opencode_backend.py`),
   `_fresh_renderer_singleton` (`tests/core/test_headless_render.py`),
   `_stub_headless_renderer` (`tests/conftest.py`) — the renderer pair: the first resets the
   warm-renderer singleton around `tests/core/test_headless_render.py`, the second is the
@@ -76,21 +79,26 @@ Known-alive symbols:
   and `stop_service` (each module named in a `wiring.register_service` call), `ws_router` and
   `mounted_router` (the router attributes named in a `wiring.register_router` call), and
   `serve_artifact_path` (the view attribute named in a `wiring.register_file_view` call), and
-  `check_backend_refs` (the attribute named in a `wiring.register_startup_check` call), and
+  `check_backend_refs` (`src/features/cron/backend_refs.py`) and `check_backend_ids`
+  (`src/features/usage/backend_ids.py`) (the attributes named in `wiring.register_startup_check`
+  calls), and
   `setup_step` (the attribute named in a `wiring.register_setup_step` call) — reached by
   string: `register_all()`, `wiring.service_starts()`, `wiring.service_stops()`, `wiring.file_views()`,
   `wiring.startup_checks()`, `wiring.setup_steps()` and the router loop in `server.py` import the module from its
-  path string and read the attribute by name. The names have zero whole-repo matches outside their definitions, so vulture flags them as
+  path string and read the attribute by name. The names have zero whole-repo matches outside their definitions (`check_backend_ids`
+  also rides a descriptive mention in `src/infra/config.py`), so vulture flags them as
   unused.
 - `check_sources_and_mode` — pydantic `@model_validator` method on `ScheduledTaskConfig`
   in `src/features/cron/config.py`, registered with pydantic at class-definition time and invoked during
   model validation (it enforces the prompt-source and mode rules). The method name has
   exactly zero whole-repo matches outside its definition, so vulture flags it as an unused
   method.
-- `seed_default_cron_tasks` (`src/features/cron/seed.py`) — production-scope vulture (`src/ server.py`)
-  can flag it as an unused function. The only production caller is `setup_step` in the same file,
-  which `scripts/setup.sh` runs through `src.app.setup`. The server-start path never calls the function,
-  by design: only the setup command seeds cron config. `tests/test_cron_defaults.py` asserts that the name stays out of
+- `setup_step` (`src/features/cron/seed.py`) — production-scope vulture (`src/`, `server.py`) flags it
+  as an unused function; it is reached by string: `src/features/cron/__init__.py` registers it through
+  `wiring.register_setup_step("src.features.cron.seed", attr="setup_step")`, and `scripts/setup.sh`
+  runs the registered steps through `src.app.setup`. Its callee `seed_default_cron_tasks` rides along.
+  The server-start path never calls the pair, by design: only the setup command seeds cron config.
+  `tests/test_cron_defaults.py` asserts that `seed_default_cron_tasks` stays out of
   `init_charliebot_home.__code__.co_names`.
 - `threshold`, `min_silence_duration`, `min_speech_duration`, `max_speech_duration` (on
   `vad_config.silero_vad`) and `sample_rate` (on `vad_config`) — attribute writes on the
@@ -103,7 +111,7 @@ Known-alive symbols:
   `schedule_timezone`/`schedule_project`/`schedule_allow_failure` on `SessionMetadata`,
   `parent_session_id` likewise,
   `fired_at` on `PendingTrigger`) as unused variables/attributes, but every
-  one of those names is grep-findable in repo (`_TRANSIENT_METADATA_FIELDS`, tests, web JS,
+  one of those names is grep-findable in repo (`TRANSIENT_METADATA_FIELDS`, tests, web JS,
   Jinja templates), so the Step 3 grep already protects them and they get no entries.
 - `pytestmark` (module-level assignment, e.g. `tests/test_task_prompts.py`) — module-level
   `pytest.mark.asyncio` assignments that pytest's collection reads by attribute name; each name
@@ -119,13 +127,14 @@ Known-alive symbols:
   string (`'do_' + self.command` through `getattr`, `log_message` by name). Vulture flags each
   as an unused method; the only other whole-repo matches are the perf doc's embedded collector
   and the handler docstring's own `log_message` mention.
-- The `if False: yield {}` lines in `tests/test_master_cc_consumer.py`,
-  `tests/conftest.py` (`CapturingBackend`, the shared master-cc round double), and
-  `tests/test_worker_diagnostics.py` are flagged as
-  100%-confidence unsatisfiable `if` conditions; the unreachable branch is what keeps each fake
+- The `if False:` / `yield {}` marker in `tests/test_worker_diagnostics.py` is flagged as a
+  100%-confidence unsatisfiable `if` condition; the unreachable branch is what keeps the fake
   backend's `run()` an async generator (the consumer's `async for` would TypeError a plain
-  coroutine), as each site's inline comment states. The condition is the point; nothing to
-  delete.
+  coroutine), as the site's inline comment states. The condition is the point; nothing to
+  delete. The same marker takes a second form: an unreachable `yield` after a `raise` in
+  `tests/test_task_run_backend_types.py` and `tests/test_turn_contributions.py`, which vulture
+  reads as unreachable code after `raise` at 100% confidence; the yield is again what keeps each
+  fake backend's `run()` an async generator.
 - `model_config` (the pydantic v2 `ConfigDict` class attribute, assigned on the pydantic
   `BaseModel` classes of `src/infra/backend_models.py`, `src/infra/config.py`, `src/infra/models.py`,
   `src/backends/claude_code/claude_config.py`, `src/features/artifacts/config.py`,
@@ -312,21 +321,15 @@ Known-alive symbols:
   construction, never silently. Vulture flags each method as unused (60% confidence); the names
   match only the double and the real `SlackClient` in `src/features/slack/slack_listener.py`.
 - `raise_for_status`, `aclose`, `aiter_bytes` (the httpx response doubles: `FakeChunkedResponse`
-  in `tests/conftest.py`, `_FakeDelayedStreamResponse`/`_StubHttpResponse`/
-  `_StubEventStreamResponse` in `tests/test_opencode_backend.py`, `_FakeResponse` in
-  `tests/test_ext_usage.py`) — production reads each through the duck-typed
-  response surface: the SSE consumers iterate `response.aiter_bytes()` (`src/infra/sse.py`), the
-  fetch and Web-API paths call `response.raise_for_status()`, and the proxy paths await
-  `response.aclose()`. Each double name matches only its own definition, so vulture flags the
-  methods as unused.
+  in `tests/conftest.py` and `_FakeResponse` in `tests/test_ext_usage.py`) — production reads
+  each through the duck-typed response surface: the SSE consumers iterate
+  `response.aiter_bytes()` (`src/infra/sse.py`), the fetch and Web-API paths call
+  `response.raise_for_status()`, and the proxy paths await `response.aclose()`. Each double name
+  matches only its own definition, so vulture flags the methods as unused.
 - `_proc`, `_ws` (the fake `_launch` in `tests/core/test_headless_render.py`) —
   `_WarmRenderer._render_once`/`close` read `self._proc`/`self._ws`
   (`src/features/artifacts/headless_render.py`); the fake installs them by attribute write, which vulture
   flags as an unused attribute.
-- `_sleep` (`tests/test_opencode_backend.py`, installed as `backend._sleep = _record_sleep`) —
-  the opencode lock-retry loop awaits `self._sleep(_LOCK_RETRY_BACKOFF_SECONDS)`
-  (`src/backends/opencode/opencode.py`); the write replaces the instance's `asyncio.sleep` seam
-  with a recorder, and vulture flags the write as an unused attribute.
 - `cgroup_exit_report` (the backend doubles `ScriptedRelayBackend` and `TerminateFlagBackend`
   in `tests/conftest.py`) — the worker finalize path
   (`self._backend.cgroup_exit_report()`, `src/runtime/worker.py`) and the master round's error
@@ -373,7 +376,8 @@ Known-alive symbols:
   definition, so vulture flags it as an unused method. Same framework-registered class as the
   `check_sources_and_mode` entry above.
 - `check_default_backend` (`src/features/voice/config_check.py`), `check_claude_pools`
-  (`src/backends/claude_code/claude_config.py`), `AccountsConfig` (same file), each option model class in
+  (`src/backends/claude_code/claude_config.py`), `AccountsConfig` (same file),
+  each option model class in
   `src/backends/*/options.py`, `snapshot_reading_limits` (`src/backends/opencode/opencode_limits.py`), and
   `claude_reading_limits` (`src/backends/claude_code/claude_code.py`) —
   reached by string: the `register()` of each package passes a "module:attr" string to
@@ -429,9 +433,181 @@ Known-alive symbols:
   injection seam for the task-tree owner singleton: `tests/test_chat_cancel.py` imports it to
   swap in a controlled tree and passes None to restore lazy construction. A whole-repo grep
   finds only the definition and that test file, so vulture flags it as an unused function.
-- `PoolNodeMetadata` (`src/runtime/backend_pool.py`) — reached by string: the backend_pool
+- `PoolNodeMetadata` (`src/runtime/backend_pool.py`), `CronMetadata`
+  (`src/features/cron/metadata.py`), `SlackSessionFields` (`src/features/slack/metadata.py`) and
+  `WebReplyMetadata` (`src/features/web_reply/metadata.py`) — reached by string: each owning
   package's `register()` passes its "module:Class" string to
-  `metadata_slot_registration.register_metadata_fields("backend_pool",
-  "src.runtime.backend_pool:PoolNodeMetadata")` (`src/features/backend_pool/__init__.py`), and
+  `metadata_slot_registration.register_metadata_fields` (for example `("backend_pool",
+  "src.runtime.backend_pool:PoolNodeMetadata")` in `src/features/backend_pool/__init__.py`), and
   `metadata_slots` imports the model from that string on its first call. A whole-repo grep finds
-  only the definition and the registration, so vulture flags the class as unused.
+  only the definitions and the registrations, so vulture flags each class as unused.
+  `DiscordSessionFields` (`src/features/discord/metadata.py`) and the claude_code pair
+  (`ClaudeSessionFields`, `ClaudeThreadFields` in `src/backends/claude_code/claude_metadata.py`)
+  register through the same call; a direct reference (`cast` in `discord_commands.py`, the
+  module's own `isinstance` checks) keeps vulture silent on them today.
+- `last_run_status` (`CronMetadata` in `src/features/cron/metadata.py`) and `slack_watermark_ts`
+  (`SlackSessionFields` in `src/features/slack/metadata.py`) — fields of string-registered slot
+  models, set by keyword and read by string. The scheduler writes `last_run_status` through
+  `update_slot_fields(..., last_run_status=...)` (`src/features/cron/scheduler.py`), and
+  `src/features/cron/static/cron.js` renders `s.last_run_status` off the payload. The slack
+  listener names `slack_watermark_ts` by string as the shared mention path's `watermark_field`
+  (`src/features/slack/slack_listener.py`), and `thread_entry.py` reads and writes it through
+  `getattr(fields, platform.watermark_field)`. Vulture sees neither keyword nor string reach, so
+  it flags each declaration as an unused variable.
+- `__getattr__` (`src/features/explain/explain.py`, `src/infra/constants.py`,
+  `src/infra/models.py`) — the PEP 562 lazy-attribute hooks, same class as the
+  worker/autonamer entry above. The explain hook serves the deferred `base_one_shot_text` and
+  `build_backend` loaders; the constants hook builds `REPO_ROOT` on first read so the CLI
+  import floor pays no pathlib chain; the models hook binds the `_BACKEND_REEXPORTS` names
+  (`BackendOption`, `option_default_model`) from `src.infra.backend_models` on first read,
+  keeping the backend stack off the session-model import path. Vulture flags each hook as an
+  unused function at 60% confidence.
+- `CONTRIBUTION` (the module-level turn-contribution instance of
+  `src/backends/claude_code/turn_contribution.py` and of the `turn_contribution.py` in the
+  `src/features/` packages `chat_threads`, `cron`, `discord`, `memory`, `slack`, `voice` and
+  `web_reply`) — reached by string: each package's `register()` passes
+  "src.<package>.turn_contribution:CONTRIBUTION" to
+  `turn_contributions.register_turn_contribution`, and the hook imports the attribute from that
+  string when a turn is composed (`src/runtime/hooks/turn_contributions.py`). Vulture flags
+  each instance as an unused variable at 60% confidence.
+- `ClaudeCodeLifecycle` (`src/backends/claude_code/claude_lifecycle.py`) and
+  `CodexUsageResolver` (`src/backends/codex/codex_usage.py`) — reached by string: the claude_code
+  `register()` passes `lifecycle="src.backends.claude_code.claude_lifecycle:ClaudeCodeLifecycle"`
+  to `backend_type_registration.register_backend_type`, and the codex `register()` passes
+  `"src.backends.codex.codex_usage:CodexUsageResolver"` to
+  `backend_lifecycle_registration.register_usage_resolver`; each registry resolves the class from
+  its string, the lifecycle at backend launch and the resolver at a usage read. Vulture flags
+  each class as unused at 60% confidence.
+- `code_server_enabled` (`src/features/code_server/api.py`), `voice_backends` and
+  `voice_default_backend` (`src/features/voice/page_globals.py`) — reached by string: each
+  package's `register()` passes the module path plus `attr=` to
+  `page_render.register_template_global` (`src/features/code_server/__init__.py`,
+  `src/features/voice/__init__.py`), and the page render binds the template global as
+  `getattr(import_module(module), attr)`. Vulture flags each function as an unused function at
+  60% confidence.
+- `_one_lane` (`PublishConfig` in `src/features/artifacts/config.py`), `_run_package_checks`
+  (`CharlieBotConfig` in `src/infra/config.py`), `_cold_read_matches_task_type` (`TaskSpec` in
+  `src/infra/models.py`), `_registered_keys_only` (`CreateSessionRequest` in `src/infra/models.py`)
+  and `_serialize_with_slots` (`ThreadMetadata` and `SessionMetadata` in `src/infra/models.py`) —
+  pydantic `@model_validator(mode="after")` methods, plus `@model_serializer(mode="wrap")` for
+  `_serialize_with_slots`, registered with pydantic at class-definition time and invoked during
+  validation and serialization. Each name has exactly zero whole-repo matches outside its
+  definition, so vulture flags each as an unused method. Same framework-registered class as the
+  `check_sources_and_mode` entry above.
+- `content_type_is_excluded` (the `_IsalGZipResponder` write in `server.py`), `row_factory` (the
+  `UsageLedger` connection write in `src/features/usage/usage_ledger.py`), `should_exit` (the
+  uvicorn `Server` writes in `tools/chat_scroll_regression.py` and
+  `tools/live_smoke_task_tree.py`) and `longrepr` (the pytest `TestReport` writes in
+  `tests/conftest.py`) — attribute writes on library objects the library itself reads back:
+  starlette's `GZipResponder.send_with_compression` branches on the exclusion flag for body
+  messages, sqlite3 applies the connection's row factory to every cursor it creates, uvicorn's
+  serve loop polls `should_exit`, and pytest renders `longrepr` when a test fails. Nothing in the
+  repo reads the attributes back, so vulture flags each write as an unused attribute. Same
+  library-attribute class as the `_theme`/`_decolor` entry above.
+- `exc_type`, `tb` (the `UsageLedger.__exit__` signature in
+  `src/features/usage/usage_ledger.py`) and `exitstatus` (`pytest_terminal_summary` in
+  `tests/conftest.py`) — protocol-mandated parameters the body does not read: the `with`
+  statement passes the exception triple to `__exit__`, and pluggy passes the exit status to the
+  hook. Vulture flags each at 100% confidence as an unused variable; dropping one from the
+  signature breaks the protocol.
+- `pytest_addoption`, `pytest_runtest_protocol`, `pytest_terminal_summary`,
+  `pytest_collection_finish` and `pytest_plugins` (`tests/conftest.py`) — pytest hook bindings
+  pluggy resolves by module attribute name, same class as the `pytest_runtest_setup/call/teardown`
+  entry above; `pytest_plugins` is the module-level list pytest reads at collection. Vulture
+  flags each binding as an unused function or variable.
+- `empty_registry` (`tests/test_usage_sources.py` and `tests/test_sidebar_contributions.py`,
+  reached by string via `@pytest.mark.usefixtures("empty_registry")`; the
+  `tests/test_turn_contributions.py` copy, injected by parameter name for its registry-reset side
+  effect) and `usage_services_only` (`tests/test_ext_usage.py`, same usefixtures string form) —
+  pytest fixtures, same class as the `_clean_ceiling_env` entry above. `probe_slots`
+  (`tests/test_metadata_slots.py`) draws the same pair of flags: six tests request it through
+  `@pytest.mark.usefixtures("probe_slots")` and the `create_env` fixture takes it as an unread
+  injected parameter. Vulture flags each
+  definition as an unused function and, at the parameter-injection sites, each unread parameter
+  as an unused variable at 100% confidence; `stop_servers` (`tests/test_opencode_backend.py`)
+  draws the same pair of flags as a `pytest_asyncio` fixture the file's tests request by
+  parameter name for its teardown alone.
+- `_reset_backend_pool` (`tests/conftest.py`) and `fakechat_metadata_access`
+  (`tests/core/test_thread_entry.py`) — pytest `autouse=True` fixtures, reached by pytest's
+  fixture-name discovery only, same class as the `_fresh_*` entry above. Vulture flags each as an
+  unused function at 60% confidence.
+- `first_step`, `second_step` and `lone_step` (`tests/test_setup_runner.py`) — reached by string:
+  the tests pass `attr="first_step"` and `attr="second_step"` to `wiring.register_setup_step` and
+  `f"{__name__}:lone_step"` to `setup_runner.main --step`, and the runner resolves the function
+  from the string, same class as the `enable_step` entry above. Vulture flags each as an unused
+  function at 60% confidence.
+- `OPENS_A` and `OPENS_B` (`tests/test_turn_contributions.py`) — `_Opens` instances reached by
+  string: the tests register them through `register(opens_a="OPENS_A")`, which builds
+  `f"{__name__}:OPENS_A"` for `turn_contributions.register_turn_contribution`, and the hook
+  imports the attribute from that string when a turn is composed, same class as the
+  `CONTRIBUTION` entry above. Vulture flags each instance as an unused variable at 60%
+  confidence.
+- `FieldOfTheMetadataModel`, `FieldOfAnotherOwner` and `LateSessionFields`
+  (`tests/test_metadata_slots.py`) — reached by string: the tests pass each name to
+  `metadata_slot_registration.register_metadata_fields` through the `_probe(...)` prefix
+  (`f"{__name__}:{name}"`), and the registry imports the class from that string on the first
+  metadata_slots call, same class as the `PoolNodeMetadata` entry above. Vulture flags each class
+  as unused at 60% confidence. The probe classes' fields draw their own flags: `probe_tag`
+  (`ProbeThreadFields`) and `late_note` (`LateSessionFields`) are read through
+  `metadata_slots.set_fields` keyword arguments and `check_registered`'s dict, never as
+  attributes, so vulture flags each field as an unused variable at 60% confidence.
+- `CronSequenceController` (`src/features/cron/sequence_controller.py`) and
+  `ImproveSequenceController` (`src/features/improve/sequence_controller.py`) — reached by
+  string: each package's `register()` passes `"src.features.<package>.sequence_controller:<class>"`
+  to `sequence_controllers.register_sequence_controller`, and the registry imports and instantiates
+  the class from that string on first use. Tests import both classes directly, so only a reference
+  scan that excludes `tests/` flags them; vulture reads each as an unused class at 60% confidence.
+  Same string-registration class as the `AccountsConfig` entry above.
+- `SlackConfig` (`src/features/slack/config.py`), `VoiceConfig`
+  (`src/features/voice/config.py`), `CodeServerConfig` (`src/features/code_server/config.py`) and
+  `DiscordConfig` (`src/features/discord/config.py`) — reached by string: each package's
+  `register()` passes `"src.features.<package>.config:<class>"` to
+  `config_registry.register_config_section`, and the registry imports the class from that string on
+  the first `section_models()` call. The names have no whole-repo matches outside their definitions
+  and those registration strings, so vulture flags each as an unused class at 60% confidence. Same
+  string-registration class as the `AccountsConfig` entry above; `DiscordConfig` is the class the
+  `_reject_legacy_allow_list` entry's validator lives on.
+- `context_refs` (`TaskSpec` in `src/infra/models.py`), `reviewer_context_file`
+  (`DelegateInvocationMetadata` in `src/infra/models.py`), `next_before_id`
+  (`ArchivedSessionsPage` in `src/runtime/api/sessions.py`), `stopped_runs`
+  (`CancelSessionResponse` in `src/runtime/api/sessions.py`), `tree_revision`
+  (`TreePageResponse` in `src/runtime/api/sessions.py`), `child_count` and
+  `open_descendant_count` (`SessionRow` in `src/infra/models.py`), `to_session`,
+  `winner_generation` and `client_ts` (`SwitchEventRequest` in `src/features/diag/api.py`), and
+  `pending_trigger_count` (`SessionMetadata` in `src/infra/models.py`, written by the sidebar
+  probe in `src/runtime/session_sidebar.py`) — pydantic model fields nothing in Python
+  attribute-reads; every consumer reads the serialized key.
+  `web/static/js/sidebar/modals.js` renders `t.context_refs`,
+  `web/static/js/chat/rendering.js` reads `invocation.reviewer_context_file`,
+  `web/static/js/sidebar/archived.js` passes `page.next_before_id` into the next archive
+  request, the session CLI reads `result.get("stopped_runs")`
+  (`src/runtime/cli/session.py`), `web/static/js/sidebar/session-view.js` fills the
+  switch-event body the diag handler logs whole through `req.model_dump()`, and
+  `web/static/js/sidebar/status.js` with `web/static/js/chat/triggers-tray.js` read
+  `pending_trigger_count` off status payloads. `child_count`/`open_descendant_count` ride every
+  tree-page row and the tree-changed signal, `tree_revision` rides every tree page, and the
+  tree and archive tests read those keys off the decoded bodies. Vulture flags each field
+  declaration (plus the sidebar probe's attribute write) as an unused variable or attribute.
+- `has_pending_trigger` and `has_pending_plan_approval` (`SessionMetadata` in
+  `src/infra/models.py`, written by the sidebar probe in `src/runtime/session_sidebar.py`
+  through the `sidebar_state.HAS_PENDING_*` string constants) — the same wire-read class as the
+  `pending_trigger_count` entry above: the status scope reads `dump["has_pending_trigger"]`
+  (`src/runtime/api/sessions.py`), `web/static/js/sidebar/status.js` reads
+  `session.has_pending_trigger` and `session.has_pending_plan_approval` off status payloads, and
+  the status-scope tests assert `row.has_pending_plan_approval`. Vulture flags each declaration
+  (plus the probe's attribute writes) as an unused variable or attribute.
+- `subtree_prompt` and `node_prompt` (`PatchSessionTaskRequest` in `src/infra/models.py`) —
+  read by string: `task_sessions.patch_task` tests `req.model_fields_set` for the two field
+  names and reads each value through `getattr(req, f"{scope}_prompt")`, and the task-prompt
+  tests construct the request with each keyword. Vulture flags each field as an unused variable
+  at 60% confidence.
+- `prompt_rules` (`SessionDetailResponse` in `src/runtime/api/sessions.py`) — kept
+  deliberately: the detail builder writes `prompt_rule_summaries` into every session-detail
+  payload, and the field's comment names its reader, the later Task/Context UI. Nothing reads
+  the attribute today, so vulture flags the declaration as an unused variable at 60%
+  confidence.
+- `stray` (`tests/test_metadata_slots.py`) and `unregistered_key`
+  (`tests/test_sessions_status_scope.py`) — attribute writes of keys no owner registers on an
+  `extra="allow"` metadata model; the same tests read each key back through `model_dump_json()`
+  key order and `model_extra` when asserting the copy and ordering rules. Vulture flags each
+  write as an unused attribute at 60% confidence.

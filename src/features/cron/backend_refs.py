@@ -20,6 +20,4 @@ def check_backend_refs(cfg: config.CharlieBotConfig) -> None:
       if backend_id and backend_id not in ids:
         problems.append(f"{task_file}: {entry} names unknown backend '{backend_id}'")
   if problems:
-    raise ValueError(
-        "backend references must name a backends.options id (id rule: BackendsConfig in "
-        "src/infra/config.py):\n" + "\n".join(f"  {problem}" for problem in problems))
+    raise config.backend_reference_error(problems)

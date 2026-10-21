@@ -3,7 +3,7 @@
 The reviewer's push step (``git push origin HEAD:<base>``) updates the published
 branch only, so a shared clone's local <base> can lag it. The post-review
 landing judgment reads the fetched origin/<base> tip, and a failed judgment
-carries git's reason into the parent's blocked report. A delivered child_report
+carries git's reason and the review's verdict into the parent's blocked report. A delivered child_report
 reaches the manager's turn text with its summary after the typed header.
 """
 
@@ -23,13 +23,19 @@ from src.runtime import task_sessions
 from tests import test_task_execution
 
 
-async def _reviewed_delivery(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, *,
-                             reviewer_pushes: bool) -> tuple[task_sessions.TaskTreeManager, str, str, pathlib.Path]:
+async def _reviewed_delivery(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    reviewer_pushes: bool,
+    review_text: str = "review ok",
+) -> tuple[task_sessions.TaskTreeManager, str, str, pathlib.Path]:
   """One implement task based on the bare ``main``, through work and a successful review.
 
   The work backend commits a marker on the work branch. When *reviewer_pushes*,
   the review backend publishes the branch the way the reviewer's push step
   does, which moves origin's main and leaves the clone's local main behind.
+  The review backend's closing words are *review_text*.
   Returns once the review Run's delivery chain has reported to the manager.
   """
   cfg, session_blocks, tree = test_task_execution.build_env(
@@ -64,7 +70,7 @@ async def _reviewed_delivery(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyP
           test_task_execution.SpawningScriptedBackend(
               [test_task_execution.result_event("implemented")],
               pre_run=functools.partial(test_task_execution.implement_marker_commit, tree, worker.id)),
-          test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("review ok")], pre_run=publish),
+          test_task_execution.SpawningScriptedBackend([test_task_execution.result_event(review_text)], pre_run=publish),
       ], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
   await tree.dispatch.admit_input(worker.id, event_type=ET.USER, content="Start the work.", actor="user")
   decision = await tree.dispatch.dispatch_pending(worker.id)
@@ -121,11 +127,27 @@ async def test_commit_on_neither_base_ref_reports_blocked_with_the_git_reason(
   reports = _reports(tree, manager_id)
   assert [r["outcome"] for r in reports] == ["blocked"]
   summary = reports[0]["summary"]
-  assert "passed review but its branch did not land on main: " in summary
-  assert "ancestry check failed" in summary and "(origin/main)" in summary
+  review = next(r for r in tree.runs.list_run_records_sync(worker_id) if r.kind == "review")
+  work = next(r for r in tree.runs.list_run_records_sync(worker_id) if r.kind == "work")
+  head, verdict = summary.split("\n\nReview verdict:\n")
+  assert head.startswith(f"review run {review.id} ended without landing work run {work.id} on main: ")
+  assert "ancestry check failed" in head and "(origin/main)" in head
+  # The reviewer's closing words, whole, are the verdict the manager reads.
+  assert verdict == "review ok"
   # The blocked report's delivery archived the stopped worker.
   await test_task_execution.poll_until(
       lambda: tree.task_state(worker_id) == "archived", timeout=15.0, what="the blocked worker's archive")
+
+
+@pytest.mark.asyncio
+async def test_review_without_closing_words_reports_its_verdict_unknown(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  tree, manager_id, _worker_id, _repo = await _reviewed_delivery(
+      tmp_path, monkeypatch, reviewer_pushes=False, review_text="")
+
+  reports = _reports(tree, manager_id)
+  assert [r["outcome"] for r in reports] == ["blocked"]
+  assert reports[0]["summary"].splitlines()[-1] == "The review run left no closing words, so its verdict is unknown."
 
 
 @pytest.mark.asyncio
@@ -139,7 +161,7 @@ async def test_blocked_child_report_reaches_the_manager_turn_with_its_summary(
   builds = conftest.install_scripted_backends(
       monkeypatch, [test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("noted")])],
       conftest.BUILD_BACKEND_PATCH_TARGET)
-  summary = "work run run-w passed review but its branch did not land on main: ancestry check failed"
+  summary = "review run run-r ended without landing work run run-w on main: ancestry check failed"
   await tree.dispatch.deliver_child_report(
       child.id, source_event={"id": "finish-1"}, outcome="blocked", summary=summary, recipient=manager.id)
 

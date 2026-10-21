@@ -17,6 +17,11 @@ newest rate-limit reading per account (from ``rate_limit_event`` and from the
 usage panel poller) and the time of the account's last authentication failure,
 all re-learned by any later run.
 
+Selection observes one tier rule, stated here and in ``select``: accounts whose
+headroom strictly exceeds ``1 - WARNING_UTILIZATION`` form the under-line tier,
+and when that tier holds any account only it contends -- an account at or above
+the warning line contends only when no account below it can.
+
 A backend entry is *pooled* when it is a cc-claude entry and ``accounts.claude``
 is non-empty. A cc-claude entry has no login field of its own: with a non-empty
 ``accounts.claude`` every cc-claude entry is pooled, and with an empty one every
@@ -200,19 +205,6 @@ def continuation_domain(option: models.BackendOption, cfg: config.CharlieBotConf
       return POOL_DOMAIN
     return str(login_dirs.claude_config_dir())
   return option.id
-
-
-def same_continuation_domain(current_id: str, target_id: str, cfg: config.CharlieBotConfig) -> bool:
-  """True when the two configured backend ids share one continuation domain.
-
-  False when either id is not a configured option: an unknown id has no domain
-  to share.
-  """
-  current = cfg.get_backend_option(current_id)
-  target = cfg.get_backend_option(target_id)
-  if current is None or target is None:
-    return False
-  return continuation_domain(current, cfg) == continuation_domain(target, cfg)
 
 
 # ---------------------------------------------------------------------------
@@ -423,14 +415,19 @@ def select(
   after a restart. Only pool *account_pool*'s accounts contend; None considers
   every configured account.
 
-  *busy_accounts* names accounts another running session holds: an idle account
-  wins outright, and only when every healthy account is busy does the choice
-  fall back to all of them. *exclude* names accounts a relay is leaving. An
-  account whose headroom is not strictly above *min_headroom* (zero headroom at
-  the default: a rejection whose reset is still ahead) is unavailable rather
-  than a last resort: running there would only be rejected again. None when no
-  account qualifies, which the caller reports loudly together with
-  ``earliest_reset``.
+  *busy_accounts* names accounts another running session holds: inside the
+  contending tier an idle account wins outright, and only when every account
+  there is busy does the choice fall back to all of them. *exclude* names
+  accounts a relay is leaving. An account whose headroom is not strictly above
+  *min_headroom* (zero headroom at the default: a rejection whose reset is
+  still ahead) is unavailable rather than a last resort: running there would
+  only be rejected again. None when no account qualifies, which the caller
+  reports loudly together with ``earliest_reset``.
+
+  The tier rule (also in this module's docstring): accounts whose headroom
+  strictly exceeds ``1 - WARNING_UTILIZATION`` form the under-line tier; when it
+  holds any account, only that tier contends -- the idle-first and score rules
+  above apply inside it -- and when it is empty, every available account does.
   """
   moment = now_or(now)
   excluded = set(exclude)
@@ -442,8 +439,10 @@ def select(
       available.append((account, hr))
   if not available:
     return None
-  idle = [(account, hr) for account, hr in available if busy_accounts is None or account.label not in busy_accounts]
-  contenders = idle or available
+  under_line = [(account, hr) for account, hr in available if hr > 1.0 - WARNING_UTILIZATION]
+  tier = under_line or available
+  idle = [(account, hr) for account, hr in tier if busy_accounts is None or account.label not in busy_accounts]
+  contenders = idle or tier
   scored = [(hr + _reset_bonus(account.label, model, moment, hr), account) for account, hr in contenders]
   best = max(score for score, _account in scored)
   tied = [account for score, account in scored if best - score <= _SCORE_TIE]

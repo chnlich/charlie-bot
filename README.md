@@ -85,6 +85,7 @@ CharlieBot is a self-hosted multi-agent orchestration system: a master agent dri
 - `charliebot memory` — query and lint the store; `add` stages a capture
 - `charliebot plan` — present (register), amend, approve, close, diff, and list a session's plans
 - `charliebot publish` — publish an artifact to the URL readers beyond the operator's devices open
+- `charliebot router` — choose backends for one task by asking a decision model whether the work is routine or design work
 - `charliebot schedule-trigger` — schedule a delayed trigger (timed, watching PIDs/SLURM jobs, or starting a command with `--cmd`)
 - `charliebot session` — create a session; `send` relays a message to another session as an agent_message
 - `charliebot slack` — reply to or ack the Slack thread a session was summoned from
@@ -92,6 +93,7 @@ CharlieBot is a self-hosted multi-agent orchestration system: a master agent dri
 - `charliebot voice-replay-eval` — replay recorded dictations through the transcription backends and score latency and accuracy
 - `charliebot usage-ledger` — `capture` writes this host's per-call usage into the ledger
 - `charliebot gc-trash` — inspect and purge quarantined worktree trash
+- `charliebot web` — reply to a web session, print its For-you layer as plain text, or set and show its status
 
 ## Repository layout
 

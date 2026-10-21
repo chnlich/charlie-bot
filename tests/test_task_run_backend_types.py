@@ -17,8 +17,8 @@ import pathlib
 import conftest
 import pytest
 
-from src.infra import config_registry
 from src.infra import event_types as ET
+from src.runtime.hooks import backend_type_registration
 
 
 def build_env(tmp_path: pathlib.Path, backend_type: str):
@@ -51,7 +51,7 @@ def session_attached_event(native_id: str) -> dict:
   return {"type": "system", "subtype": "init", "session_id": native_id}
 
 
-BACKEND_TYPES = list(config_registry.registered_backend_types())
+BACKEND_TYPES = list(backend_type_registration.registrations())
 
 
 @pytest.mark.asyncio
@@ -122,7 +122,7 @@ async def test_zero_output_and_error_results_fail_across_types(
 
     async def run(self, prompt, cwd, env, uploaded_files=None):
       raise RuntimeError("transport died mid-turn")
-      yield  # pragma: no cover
+      yield  # keeps run an async generator
 
   errored = _TransportDeath([])
   conftest.install_scripted_backends(monkeypatch, [errored], conftest.BUILD_BACKEND_PATCH_TARGET)

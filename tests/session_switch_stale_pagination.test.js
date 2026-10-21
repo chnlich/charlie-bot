@@ -25,8 +25,9 @@ function aPage(hasMore) {
 }
 
 // B's own page: strictly decreasing cursor so the no-progress guard stays
-// quiet; has_more bottoms out below 100 so a never-awaited re-entry cannot
-// flood the harness with chained auto-fills.
+// quiet; has_more bottoms out below 100, which ends every fill chain of the
+// harness (its container never grows) and keeps a never-awaited re-entry from
+// flooding it.
 function bPage(before) {
   return {
     has_more: before - 50 > 100,
@@ -82,7 +83,7 @@ function buildHarness(eventsHandler) {
 const alwaysPending = () => PENDING;
 
 // B's first pagination request parks (the test controls when it lands); every
-// later B request answers immediately so bounded auto-continue chains settle.
+// later B request answers immediately so the fill chain runs on to the end of B's history.
 function bFirstPendingThenChain() {
   let bCalls = 0;
   return (sid, before) => {
@@ -211,12 +212,11 @@ test('interleaving (c): stale page landing while B own pagination is in flight i
   h.pendingEvents[1].resolve(bPage(500));
   await bFlight;
 
-  assert.deepEqual(beforeValues(eventsUrls(h, 'session-b')), [500, 450, 400, 350, 300, 250],
+  assert.deepEqual(beforeValues(eventsUrls(h, 'session-b')), [500, 450, 400, 350, 300, 250, 200, 150],
       'the whole fill chain derives from B own cursor; A next cursor (800) never enters it');
   assert.doesNotMatch(collectText(h.messages), /A-OLDER-PAGE/, 'no A message node in the container');
-  const sentinel = findSentinel(h);
-  assert.ok(sentinel);
-  assert.equal(sentinel.getAttribute('data-state'), 'idle', "B's has_more stays authoritative");
+  assert.ok(!findSentinel(h),
+      "B's own has_more:false ended the chain; the dropped A page's has_more:true never revived it");
 });
 
 // ---------------------------------------------------------------------------
@@ -276,18 +276,25 @@ test('ownership probe: gate holds while B is in flight, releases on B own comple
   h.context.Sidebar.loadOlderIfNeeded(h.messages);
   assert.deepEqual(eventsUrls(h, 'session-b'), [B_PAGE_500], 're-entry stays gated during B flight');
 
-  // B's own completion releases the hold (credential-equal finally).
+  // B's own completion releases the hold (credential-equal finally). Each
+  // landed page grows the container, so B's first page overflows it and moves
+  // the viewport out of the trigger zone: the fill chain stops there with
+  // has_more still true.
+  const renderPage = h.context.renderMessagesToDetachedContainer;
+  h.context.renderMessagesToDetachedContainer = (pageMessages, sessionId) => {
+    h.messages.scrollHeight += 1000;
+    return renderPage(pageMessages, sessionId);
+  };
   h.pendingEvents[1].resolve(bPage(500));
   await bFlight;
-  assert.equal(eventsUrls(h, 'session-b').length, 6, 'the bounded viewport-fill chain settled');
+  assert.equal(eventsUrls(h, 'session-b').length, 1, 'the overflow settled the fill chain after the first page');
 
   // Probe 2: a re-entry now issues a fresh request continuing B's cursor.
   h.messages.scrollTop = 0;
   h.context.Sidebar.loadOlderIfNeeded(h.messages);
   const urls = eventsUrls(h, 'session-b');
-  assert.equal(urls.length, 7, 'the post-release re-entry issues a fresh request');
-  assert.deepEqual(beforeValues(urls), [500, 450, 400, 350, 300, 250, 200],
-      'the fresh request continues from B own cursor chain');
+  assert.equal(urls.length, 2, 'the post-release re-entry issues a fresh request');
+  assert.deepEqual(beforeValues(urls), [500, 450], 'the fresh request continues from B own cursor chain');
 });
 
 // ---------------------------------------------------------------------------

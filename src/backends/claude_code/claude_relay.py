@@ -17,12 +17,11 @@ the next tool result recomputes. An exit that names an authentication failure
 marks the account unhealthy and relays too.
 
 Relay: the transcript is copied to the destination account and Claude Code
-resumes the same session id with one fixed continuation prompt. A warning
-relay lands on an account strictly below the warning line, falling back to the
-most headroom when that account vanishes between the gate and the move; a
-rejection lands on the account with the most headroom among the others. The
-user sees no account names; those stay in the server log, the metadata and the
-usage panel.
+resumes the same session id with one fixed continuation prompt. Both the
+warning and the rejection relay pick the destination through the account pool's
+tier rule (claude_accounts.select: accounts under the warning line contend
+first, idle before busy, then headroom plus reset bonus). The user sees no
+account names; those stay in the server log, the metadata and the usage panel.
 """
 
 from __future__ import annotations
@@ -233,16 +232,13 @@ def relay_move(
     cc_session_id: str | None,
     now: datetime.datetime | None = None,
     account_pool: str | None = None,
-    min_headroom: float = 0.0,
 ) -> RelayMove:
-  """Choose the account with the most headroom besides *current* and copy the transcript there.
+  """Choose the account to continue on besides *current* and copy the transcript there.
 
   The next account comes from pool *account_pool* alone; the relay never falls
-  back to another pool. A *min_headroom* above zero (the warning relay's
-  strictly-below-the-line bar) falls back to the regular select when nothing
-  qualifies: the gate's reading may have been a transient, and a fallback
-  landing may sit at or above the line and self-corrects at the next safe
-  point. The pool exhausted and the transcript-missing cases leave
+  back to another pool. The destination follows the account pool's tier rule
+  (claude_accounts.select): accounts under the warning line contend first. The
+  pool exhausted and the transcript-missing cases leave
   *refused_holder* None, and a copy the newer-transcript guard refused carries
   the destination account holding the newer transcript. This module never
   redirects a refused move -- adopting *refused_holder* and continuing the run
@@ -252,10 +248,7 @@ def relay_move(
   if not cc_session_id:
     return RelayMove(
         None, "Claude account relay impossible: the run produced no session id to resume.", None, pool_exhausted=False)
-  nxt = claude_accounts.select(
-      cfg, model, exclude={current.label}, now=now, account_pool=account_pool, min_headroom=min_headroom)
-  if nxt is None and min_headroom > 0.0:
-    nxt = claude_accounts.select(cfg, model, exclude={current.label}, now=now, account_pool=account_pool)
+  nxt = claude_accounts.select(cfg, model, exclude={current.label}, now=now, account_pool=account_pool)
   if nxt is None:
     return RelayMove(None, pool_exhausted_message(cfg, now, account_pool), None, pool_exhausted=True)
   try:

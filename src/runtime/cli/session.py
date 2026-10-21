@@ -23,7 +23,8 @@ original outcome, and an agent's own active Run may request its own manager's
 closure (202 pending_run_finish; a request already facing blockers is refused
 409 with the blocker list and not saved). ``cancel`` explicitly cancels an open
 task with a reason — an operator cancels any open task, an agent running inside
-a Run cancels only a direct child of its own task. Archiving is the single end
+a Run cancels only a direct child of its own task. A worker target has its
+running work stopped and its delegation ended. Archiving is the single end
 state (``DELETE /api/sessions/{id}`` on the server): the user's own message to
 an archived node restores it, and unarchiving is the sidebar's restore.
 
@@ -53,6 +54,7 @@ server's 401, never a silent operator-key fallback.
 
 import argparse
 import json
+import sys
 import uuid
 
 from src.infra import constants, help_formatter
@@ -127,7 +129,7 @@ def _build_parser() -> argparse.ArgumentParser:
       help="Request id binding the acknowledgement (defaults to a fresh UUID; replays return "
       "the original acknowledgement)")
 
-  cancel = sub.add_parser("cancel", help="Explicitly cancel one open task")
+  cancel = sub.add_parser("cancel", help="Cancel a task; stop runs and end delegation for workers")
   cancel.add_argument("session_id", help="Task id")
   cancel.add_argument("--reason", required=True, help="Cancellation reason")
   cancel.add_argument("--request-id", default=None, help="Request id binding the cancel (defaults to a fresh UUID)")
@@ -232,6 +234,23 @@ def _cmd_cancel(args: argparse.Namespace) -> None:
       payload,
       readback=lambda: common.find_local_task_close(args.session_id, request_id))
   print(json.dumps(result, indent=2))
+  unresolved = [item for item in result.get("stopped_runs", []) if item["outcome"] is None]
+  if unresolved:
+    run_ids = {item["run_id"] for item in unresolved}
+    run_rows: dict[str, dict] = {}
+    cursor = None
+    while run_ids - run_rows.keys():
+      params = {"limit": 500}
+      if cursor is not None:
+        params["cursor"] = cursor
+      page = common.get_api(f"/api/sessions/{args.session_id}/runs", params)
+      run_rows.update({row["id"]: row for row in page["items"] if row["id"] in run_ids})
+      cursor = page["next_cursor"]
+      if cursor is None:
+        break
+    for item in unresolved:
+      print(f"run {item['run_id']} pid {run_rows[item['run_id']]['pid']} did not exit", file=sys.stderr)
+    raise SystemExit(1)
 
 
 def _cmd_send(args: argparse.Namespace) -> None:

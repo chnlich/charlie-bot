@@ -33,7 +33,7 @@ async def test_input_admitted_during_a_review_pauses_the_merge_and_continues_the
     while it provably has not finished. Only the continuation's own finish
     runs the landing check — and there the empty commit left on the branch
     during the first review makes it honestly fail, so the chain reports
-    "passed review but its branch did not land".
+    "review run ... ended without landing work run".
     """
   cfg, session_blocks, tree = test_task_execution.build_env(
       tmp_path, monkeypatch, backend_ids=["fake", "fake2"], pool=["fake", "fake2"])
@@ -149,7 +149,7 @@ async def test_input_admitted_during_a_review_pauses_the_merge_and_continues_the
 
   # Released, the continuation finishes successfully — and only now does the
   # landing check run: the unlanded commit defeats it, so the chain reports
-  # "passed review but its branch did not land" and the report's delivery
+  # "review run ... ended without landing work run" and the report's delivery
   # archives the child.
   _tweak_record, tweak_outcome = await test_task_execution.wait_for_terminal_run(
       tree, child.id, next_runs[0].id, timeout=10.0)

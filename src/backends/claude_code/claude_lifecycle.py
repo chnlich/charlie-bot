@@ -25,6 +25,7 @@ from src.backends.claude_code import (
     claude_accounts,
     claude_code,
     claude_config,
+    claude_idle_compaction,
     claude_metadata,
     claude_relay,
     login_dirs,
@@ -35,11 +36,6 @@ from src.infra import event_types as ET
 from src.runtime.hooks import backend_lifecycle
 
 log = log_once.LazyStructlogLogger()
-
-# Moves per-machine sections (cwd, env info, memory paths, git status) out of the system prompt into
-# the first user message, so the system prompt stays stable across sessions and cross-run
-# prompt-cache reuse improves. Only the Claude Code CLI family supports this flag.
-EXCLUDE_DYNAMIC_SECTIONS_FLAG = "--exclude-dynamic-system-prompt-sections"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -60,15 +56,21 @@ def cc_transcript_exists(config_dir: pathlib.Path, cc_session_id: str) -> bool:
 
 
 def _launch_args(ctx: backend_lifecycle.LaunchContext, *, first_process: bool) -> dict[str, Any]:
-  """The factory arguments of one process: every process of a turn carries the dynamic-sections flag, and the
-  first process of a task opens the conversation id the runtime chose (a later one resumes it). A task run
-  that resumes a held conversation (a worker-node continuation) opens no new id — the resume flag names it."""
+  """The factory arguments of one process.
+
+  Every process carries the run kind. The backend uses it for the declared auto-compact window,
+  the tool set and the --settings object. Each turn process also carries the dynamic-sections flag.
+  The first task process opens the conversation id chosen by the runtime; later processes resume it.
+  A task run that resumes a held conversation (a worker-node continuation) opens no new id; the
+  resume flag names it.
+  """
+  args: dict[str, Any] = {"run_kind": ctx.run_kind}
   if ctx.kind == "turn":
-    return {"extra_flags": [EXCLUDE_DYNAMIC_SECTIONS_FLAG]}
+    return {**args, "extra_flags": [claude_code.EXCLUDE_DYNAMIC_SECTIONS_FLAG]}
   if ctx.kind == "task":
     if first_process and ctx.preassigned_native_id and ctx.held_native_id is None:
-      return {"claude_session_id": ctx.preassigned_native_id}
-    return {}
+      return {**args, "claude_session_id": ctx.preassigned_native_id}
+    return args
   raise ValueError(f"unknown launch kind {ctx.kind!r}")
 
 
@@ -154,6 +156,7 @@ class ClaudeCodeLifecycle(ClaudeCliLifecycle):
     raise ValueError(f"unknown launch kind {ctx.kind!r}")
 
   async def _place_turn(self, ctx: backend_lifecycle.LaunchContext) -> backend_lifecycle.Launch:
+    await claude_idle_compaction.settle_for_turn(ctx.session_meta.id)
     resume_id = self._pooled_resume_id(ctx)
     context_tokens, last_request_at = await ctx.context_state()
     account = await master_cc_relay.place_turn(ctx, resume_id, context_tokens, last_request_at)
@@ -263,9 +266,10 @@ class ClaudeCodeLifecycle(ClaudeCliLifecycle):
 
     A login failure first marks the login unhealthy and tells the operator. The relay limit
     raises ``LaunchRefused`` with ``quota_exhausted`` False -- except a warning relay, which
-    passes the cap when a strictly-below-the-line destination exists (the counter still
-    counts it). The transcript moves to the login with the most headroom (a warning relay
-    lands only strictly below the warning line), a large Fable context is compacted there,
+    passes the cap when the safe-point gate finds a destination under the warning line (the
+    counter still counts it). The transcript moves to the next login by the account pool's
+    tier rule (claude_accounts.select: accounts under the warning line contend first), a
+    large Fable context is compacted there,
     and the next process resumes the same session with the continuation prompt. A pool
     without a login raises ``LaunchRefused`` with ``quota_exhausted`` True; a run without a
     session id and a failed copy raise it with ``quota_exhausted`` False.
@@ -292,13 +296,7 @@ class ClaudeCodeLifecycle(ClaudeCliLifecycle):
         raise backend_lifecycle.LaunchRefused(
             claude_relay.relay_limit_message(ctx.cfg, account_pool), quota_exhausted=False)
     relays = launch.relays + 1
-    next_account = await master_cc_relay.prepare_relay(
-        ctx,
-        current,
-        native_id,
-        decision,
-        relays,
-        min_headroom=1.0 - claude_accounts.WARNING_UTILIZATION if decision == claude_relay.RELAY_WARNING else 0.0)
+    next_account = await master_cc_relay.prepare_relay(ctx, current, native_id, decision, relays)
     if ctx.kind == "turn":
       # The relay's label persist point: disk carries the new account from the moment the
       # continuation is built, not at round end (an unchanged account skips the write inside
@@ -309,12 +307,15 @@ class ClaudeCodeLifecycle(ClaudeCliLifecycle):
         ctx, next_account, resume_id=native_id, prompt=claude_relay.CONTINUATION_PROMPT, relays=relays)
 
   async def after_round(self, ctx: backend_lifecycle.LaunchContext, native_id: str | None, succeeded: bool) -> None:
-    """Collapse the pool's copies of the transcript to the newest two after a sound turn.
+    """Arm the session's idle compaction timer, and collapse the pool's copies of the transcript after a sound turn.
 
     Every relay leaves its source copy behind. A failed round keeps every copy as its fallback.
-    turn: runs after the round's account label is persisted.
+    turn: arms the idle timer (claude_idle_compaction.arm); the copies collapse after the round's account
+    label is persisted.
     task: does nothing.
     """
+    if ctx.kind == "turn":
+      await claude_idle_compaction.arm(ctx)
     if ctx.kind == "turn" and succeeded and native_id and claude_metadata.account_of(ctx.session_meta):
       await asyncio.to_thread(claude_accounts.retire_transcript_copies, ctx.cfg, native_id)
 

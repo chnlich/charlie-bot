@@ -3,30 +3,34 @@
 // ---------------------------------------------------------------------------
 // The panel under the view toggle, above the message list, shows a web session's
 // Goal, Now and Waiting on you, and in a parent session the Waiting on you items
-// of its open descendant sessions. A web session is one that Chat.ForYou.isWebSession
-// (for-you.js) accepts. A thread session and a worker session show no panel. On a
-// phone (platform.isMobile) the panel is one toggle row until a tap expands it.
+// of its open descendant sessions and a folded block of the Now of its open direct
+// children. A web session is one that Chat.ForYou.isWebSession (for-you.js) accepts.
+// A thread session and a worker session show no panel. Both platforms draw the
+// toggle row; the phone starts folded and desktop state persists in localStorage.
 //
 // The status is the session's web_status at open, then the web_status messages of
 // this session, live or in history: the newest updated_at wins, so an older page
-// of history never moves the panel back. The descendant rows come from
+// of history never moves the panel back. The descendant and child rows come from
 // GET /api/internal/web/status, fetched at open and on each web_status_subtree
 // notice (websocket-handlers.js).
 (function() {
   const Chat = globalThis.Chat;
 
   const PANEL_ID = 'chat-status-panel';
+  const PANEL_EXPANDED_STORAGE_KEY = 'chat-status-panel-expanded';
   // An item's link is text the agent wrote. Only web and host-absolute URLs become
   // anchors: any other scheme, javascript: above all, would run in this page.
   const SAFE_LINK = /^(https?:\/\/|\/)/;
 
   // The session the page shows the panel for, and what the panel draws from. A
-  // null panelSessionId means the page shows no panel. panelExpanded is the phone
-  // panel's tap state: it holds until the page reloads.
+  // null panelSessionId means the page shows no panel. panelExpanded holds the
+  // phone's tap state until reload; desktop reads its choice from localStorage.
   let panelSessionId = null;
   let panelStatus = null;
   let panelDescendants = [];
   let panelChildrenOpen = false;
+  let panelChildren = [];
+  let panelChildrenNowOpen = false;
   let panelExpanded = false;
   let panelFetchGen = 0;
 
@@ -52,6 +56,55 @@
     a.dataset.openLink = 'true';
     a.textContent = 'Open ›';
     return a;
+  }
+
+  // A link run inside an item's context: a web URL or a host path that starts a word (so
+  // "and/or" is prose) and does not end in punctuation. safeLink still decides whether it
+  // becomes an anchor, so the context cannot introduce a scheme the item's link could not.
+  const CONTEXT_LINK = /(?:https?:\/\/|(?<=^|[\s(])\/)[^\s<>"']*[^\s<>"'.,;:!?)\]]/g;
+
+  // The context text, with each link run rendered through safeLink.
+  function appendContextText(parent, text) {
+    let cursor = 0;
+    for (const match of text.matchAll(CONTEXT_LINK)) {
+      if (match.index > cursor) parent.appendChild(textSpan('', text.slice(cursor, match.index)));
+      const anchor = document.createElement('a');
+      anchor.className = 'break-all text-blue-400 hover:text-blue-300';
+      anchor.href = safeLink(match[0]);
+      anchor.target = '_blank';
+      anchor.rel = 'noopener noreferrer';
+      anchor.textContent = match[0];
+      parent.appendChild(anchor);
+      cursor = match.index + match[0].length;
+    }
+    if (cursor < text.length) parent.appendChild(textSpan('', text.slice(cursor)));
+  }
+
+  // An item's context: one fold under the item's line, closed until the operator clicks it.
+  function contextFold(context) {
+    const block = document.createElement('div');
+    block.className = 'mt-1';
+    block.dataset.context = 'true';
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'flex items-center gap-1 text-xs text-slate-400 hover:text-slate-200 transition-colors';
+    toggle.dataset.contextToggle = 'true';
+    toggle.setAttribute('aria-expanded', 'false');
+    toggle.appendChild(textSpan('w-3 text-center', '▸'));
+    toggle.appendChild(textSpan('', 'Context'));
+    const body = document.createElement('div');
+    body.className = 'hidden mt-1 whitespace-pre-wrap text-xs text-slate-300';
+    body.dataset.contextBody = 'true';
+    appendContextText(body, context);
+    toggle.onclick = () => {
+      const open = body.classList.contains('hidden');
+      body.classList.toggle('hidden', !open);
+      toggle.setAttribute('aria-expanded', String(open));
+      toggle.children[0].textContent = open ? '▾' : '▸';
+    };
+    block.appendChild(toggle);
+    block.appendChild(body);
+    return block;
   }
 
   // A phone stacks each label above its value at full width; the desktop keeps a label column.
@@ -88,11 +141,15 @@
 
   function waitingItem(item) {
     const el = document.createElement('div');
-    el.className = 'flex gap-2 break-words text-amber-200';
+    el.className = 'break-words text-amber-200';
     el.dataset.waitingItem = 'true';
-    el.appendChild(textSpan('min-w-0', item.text));
+    const line = document.createElement('div');
+    line.className = 'flex gap-2';
+    line.appendChild(textSpan('min-w-0', item.text));
     const href = safeLink(item.link);
-    if (href) el.appendChild(openLink(href));
+    if (href) line.appendChild(openLink(href));
+    el.appendChild(line);
+    if (item.context) el.appendChild(contextFold(item.context));
     return el;
   }
 
@@ -113,10 +170,14 @@
 
   function childItem(prefix, item, sessionId) {
     const el = document.createElement('div');
-    el.className = 'flex gap-2 pl-6 break-words text-amber-200';
+    el.className = 'pl-6 break-words text-amber-200';
     el.dataset.childItem = 'true';
-    el.appendChild(textSpan('min-w-0', prefix + item.text));
-    el.appendChild(openLink('/?session=' + encodeURIComponent(sessionId)));
+    const line = document.createElement('div');
+    line.className = 'flex gap-2';
+    line.appendChild(textSpan('min-w-0', prefix + item.text));
+    line.appendChild(openLink('/?session=' + encodeURIComponent(sessionId)));
+    el.appendChild(line);
+    if (item.context) el.appendChild(contextFold(item.context));
     return el;
   }
 
@@ -124,16 +185,20 @@
     return panelDescendants.reduce((total, row) => total + row.waiting.length, 0);
   }
 
-  // The phone panel's one row until a tap expands it: the Waiting on you count, then the
-  // descendants' item count when they hold items. Expanded, the same row stays at the top.
-  function toggleRow() {
+  // The shared toggle row counts Waiting on you items and any descendant items.
+  function toggleRow(expanded) {
     const row = document.createElement('button');
     row.type = 'button';
-    row.className = 'block w-full text-left text-slate-200 hover:text-slate-100 transition-colors';
+    row.className = 'sticky -top-2 z-10 bg-slate-900 block w-full text-left text-slate-200 hover:text-slate-100 transition-colors';
     row.dataset.statusRow = 'toggle';
-    row.setAttribute('aria-expanded', String(panelExpanded));
+    row.setAttribute('aria-expanded', String(expanded));
     row.onclick = () => {
-      panelExpanded = !panelExpanded;
+      const nextExpanded = !panelIsExpanded();
+      if (platform.isMobile) {
+        panelExpanded = nextExpanded;
+      } else {
+        localStorage.setItem(PANEL_EXPANDED_STORAGE_KEY, nextExpanded ? '1' : '0');
+      }
       renderPanel();
     };
     let summary = 'No status yet';
@@ -145,8 +210,16 @@
     const childCount = descendantItemCount();
     row.dataset.childCount = String(childCount);
     if (childCount) summary += ' · In child sessions · ' + childCount;
-    row.textContent = (panelExpanded ? '▾' : '▸') + ' ' + summary;
+    row.textContent = (expanded ? '▾' : '▸') + ' ' + summary;
     return row;
+  }
+
+  function panelIsExpanded() {
+    if (platform.isMobile) return panelExpanded;
+    const stored = localStorage.getItem(PANEL_EXPANDED_STORAGE_KEY);
+    if (stored === null || stored === '1') return true;
+    if (stored === '0') return false;
+    throw new Error('Invalid desktop status panel state: ' + stored);
   }
 
   // The row that counts the descendants' items and, opened, lists them. It starts folded.
@@ -176,6 +249,41 @@
     return block;
   }
 
+  function childNowItem(row) {
+    const el = document.createElement('div');
+    el.className = 'flex gap-2 pl-6 break-words text-slate-200';
+    el.dataset.childNowItem = 'true';
+    el.appendChild(textSpan('min-w-0', row.name + ' · ' + row.session_id.slice(0, 8) + ': ' + row.now));
+    const updated = textSpan('whitespace-nowrap text-slate-500', 'updated ' + relativeTime(row.updated_at));
+    updated.dataset.statusUpdated = row.updated_at;
+    el.appendChild(updated);
+    el.appendChild(openLink('/?session=' + encodeURIComponent(row.session_id)));
+    return el;
+  }
+
+  // The folded block of the open direct children's Now, one row each when opened. It starts folded.
+  function childrenNowBlock() {
+    const block = document.createElement('div');
+    block.className = 'space-y-1 pt-1';
+    block.dataset.statusRow = 'children-now';
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'flex items-center gap-2 w-full text-left text-slate-400 hover:text-slate-200 transition-colors';
+    toggle.dataset.childCount = String(panelChildren.length);
+    toggle.setAttribute('aria-expanded', String(panelChildrenNowOpen));
+    toggle.onclick = () => {
+      panelChildrenNowOpen = !panelChildrenNowOpen;
+      renderPanel();
+    };
+    toggle.appendChild(textSpan('w-3 text-center', panelChildrenNowOpen ? '▾' : '▸'));
+    toggle.appendChild(textSpan('', "Child sessions' Now · " + panelChildren.length));
+    block.appendChild(toggle);
+    if (panelChildrenNowOpen) {
+      for (const row of panelChildren) block.appendChild(childNowItem(row));
+    }
+    return block;
+  }
+
   function renderPanel() {
     const el = document.getElementById(PANEL_ID);
     if (!el) return;
@@ -185,11 +293,11 @@
       return;
     }
     el.classList.remove('hidden');
-    // The desktop panel scrolls past its height cap. A phone panel is the toggle row
-    // alone until it expands, and an expanded phone panel shows every row.
+    // Desktop scrolls within its height cap; an expanded phone panel uses its full height.
     el.classList.toggle('max-h-48', !platform.isMobile);
-    if (platform.isMobile) el.appendChild(toggleRow());
-    if (platform.isMobile && !panelExpanded) return;
+    const expanded = panelIsExpanded();
+    el.appendChild(toggleRow(expanded));
+    if (!expanded) return;
     if (panelStatus) {
       el.appendChild(goalRow(panelStatus.goal));
       el.appendChild(nowRow(panelStatus));
@@ -200,6 +308,7 @@
       el.appendChild(row);
     }
     if (panelDescendants.length) el.appendChild(childrenBlock());
+    if (panelChildren.length) el.appendChild(childrenNowBlock());
   }
 
   // A web_status message's status replaces the panel's, unless the panel already
@@ -228,6 +337,7 @@
     }
     if (gen !== panelFetchGen || sessionId !== panelSessionId) return;
     panelDescendants = body.descendants;
+    panelChildren = body.children;
     renderPanel();
   }
 
@@ -242,6 +352,8 @@
     panelStatus = session.web_status || null;
     panelDescendants = [];
     panelChildrenOpen = false;
+    panelChildren = [];
+    panelChildrenNowOpen = false;
     absorbWebStatusMessages(messages);
     renderPanel();
     fetchDescendants(session.id);
@@ -251,6 +363,7 @@
     panelSessionId = null;
     panelStatus = null;
     panelDescendants = [];
+    panelChildren = [];
     renderPanel();
   }
 
@@ -268,7 +381,7 @@
     if (panelSessionId) fetchDescendants(panelSessionId);
   }
 
-  // A fold-out or a rotation changes the phone layout: the panel redraws in the new one.
+  // A fold-out or rotation changes the platform layout, so redraw the panel.
   platform.onChange(renderPanel);
 
   Chat.wire({

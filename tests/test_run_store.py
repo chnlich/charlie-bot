@@ -149,6 +149,21 @@ async def test_record_finish_is_the_one_terminal_writer(tmp_path: pathlib.Path) 
   assert still is not None and still.exit_code == 0 and still.input_event_ids == ["e1"]
 
 
+@pytest.mark.asyncio
+async def test_stop_request_forces_a_successful_finish_to_interrupted(tmp_path: pathlib.Path) -> None:
+  env = build_env(tmp_path)
+  _, _, mgr, store = env
+  session_id = await make_task(env, "stop-finish")
+  await store.register_run(models.RunRecord(id="run-stopped", session_id=session_id))
+  async with mgr.control_lock:
+    await store.append_stop_request_locked(session_id, "run-stopped", "cancel:request-1")
+
+  await store.record_finish(session_id, "run-stopped", "success", exit_code=0)
+
+  events = store.load_events_sync(session_id)
+  assert store.terminal_outcome(events, "run-stopped") == "interrupted"
+
+
 # ---------------------------------------------------------------------------
 # Stop requests
 # ---------------------------------------------------------------------------
@@ -157,6 +172,7 @@ async def test_record_finish_is_the_one_terminal_writer(tmp_path: pathlib.Path) 
 @pytest.mark.asyncio
 async def test_stop_signals_owned_process_and_records_interrupted_after_actual_exit(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  monkeypatch.setattr(conftest.RUNS_STOP_EXIT_WAIT_SECONDS_PATCH_TARGET, 0.2)
   env = build_env(tmp_path)
   _, _, _, store = env
   session_id = await make_task(env, "t1")
@@ -181,6 +197,44 @@ async def test_stop_signals_owned_process_and_records_interrupted_after_actual_e
     assert len([e for e in events if e["type"] == ET.RUN_STOP_REQUESTED]) == 1
   finally:
     proc.kill()
+
+
+@pytest.mark.asyncio
+async def test_stop_escalates_to_sigkill_for_a_process_that_ignores_sigterm(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  monkeypatch.setattr(runs, "STOP_EXIT_WAIT_SECONDS", 0.05)
+  monkeypatch.setattr(runs, "STOP_KILL_EXIT_WAIT_SECONDS", 0.5)
+  env = build_env(tmp_path)
+  _, _, _, store = env
+  session_id = await make_task(env, "stop-escalation")
+  proc = subprocess.Popen(["bash", "-c", "trap '' TERM; sleep 60"], start_new_session=True)
+  try:
+    await register_live_run(store, session_id, proc)
+    result = await store.request_stop(session_id, "run-live", "stop-kill")
+    assert result.outcome == "interrupted"
+    assert proc.wait(timeout=1) is not None
+  finally:
+    if proc.poll() is None:
+      os.killpg(proc.pid, 9)
+      proc.wait(timeout=1)
+
+
+@pytest.mark.asyncio
+async def test_stop_refuses_a_process_group_that_does_not_match_the_run_pid(tmp_path: pathlib.Path) -> None:
+  env = build_env(tmp_path)
+  _, _, _, store = env
+  session_id = await make_task(env, "stop-pgid")
+  proc = subprocess.Popen(["/bin/sleep", "60"])
+  process_group_id = os.getpgid(proc.pid)
+  assert process_group_id != proc.pid
+  try:
+    await register_live_run(store, session_id, proc)
+    with pytest.raises(runs.RunIdentityConflictError, match=f"run pid {proc.pid}, process group id {process_group_id}"):
+      await store.request_stop(session_id, "run-live", "stop-wrong-group")
+    assert proc.poll() is None
+  finally:
+    proc.terminate()
+    proc.wait(timeout=1)
 
 
 @pytest.mark.asyncio

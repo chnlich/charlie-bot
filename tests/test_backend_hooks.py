@@ -16,7 +16,7 @@ import uuid
 import conftest
 import pytest
 
-from src.backends.claude_code import claude_accounts, claude_lifecycle, claude_relay
+from src.backends.claude_code import claude_accounts, claude_code, claude_relay
 from src.infra import config, models
 from src.infra import event_types as ET
 from src.runtime import master_cc_run, worker
@@ -118,7 +118,10 @@ async def test_cli_variant_turn_checks_the_transcript_and_adds_the_dynamic_secti
   assert present.resume_id == CC_ID
   assert fresh.resume_id is None
   for launch in (missing, present, fresh):
-    assert launch.backend_kwargs == {"extra_flags": [claude_lifecycle.EXCLUDE_DYNAMIC_SECTIONS_FLAG]}
+    assert launch.backend_kwargs == {
+        "extra_flags": [claude_code.EXCLUDE_DYNAMIC_SECTIONS_FLAG],
+        "run_kind": "manager_turn",
+    }
 
 
 @pytest.mark.parametrize("backend_type", CLI_VARIANT_TYPES)
@@ -159,7 +162,10 @@ async def test_non_pooled_cc_claude_turn_checks_the_transcript_and_selects_no_ac
   assert (missing.resume_id, present.resume_id) == (None, CC_ID)
   for launch in (missing, present):
     assert launch.account_label is None
-    assert launch.backend_kwargs == {"extra_flags": [claude_lifecycle.EXCLUDE_DYNAMIC_SECTIONS_FLAG]}
+    assert launch.backend_kwargs == {
+        "extra_flags": [claude_code.EXCLUDE_DYNAMIC_SECTIONS_FLAG],
+        "run_kind": "manager_turn",
+    }
   assert lifecycle.watch(_turn_context(cfg, option, CC_ID, tmp_path), present) is None
 
 
@@ -179,6 +185,7 @@ async def test_non_claude_task_build_receives_no_claude_account(
       config.CharlieBotConfig(charliebot_home=tmp_path / "home"),
       backend_option=option,
       session_meta=models.SessionMetadata(profile="manager", id="s1", name="S", backend=option.id),
+      run_kind="work",
   )
 
   assert await built_worker.run() == 0
@@ -187,8 +194,11 @@ async def test_non_claude_task_build_receives_no_claude_account(
 
 
 def _task_context(
-    cfg: config.CharlieBotConfig, option, held_native_id: str | None,
-    tmp_path: pathlib.Path) -> backend_lifecycle.LaunchContext:
+    cfg: config.CharlieBotConfig,
+    option,
+    held_native_id: str | None,
+    tmp_path: pathlib.Path,
+    run_kind: models.RunKind = "work") -> backend_lifecycle.LaunchContext:
 
   async def unused(*args: object) -> None:
     raise AssertionError("placement emits nothing")
@@ -199,6 +209,7 @@ def _task_context(
       option=option,
       session_meta=meta,
       kind="task",
+      run_kind=run_kind,
       cwd=str(tmp_path),
       held_native_id=held_native_id,
       preassigned_native_id="99999999-2222-3333-4444-555555555555",
@@ -383,7 +394,7 @@ async def test_task_refusal_writes_an_error_event_carrying_quota_exhausted(
   cfg, session_blocks, tree = tte.build_pooled_env(tmp_path, monkeypatch, labels=labels)
   for label in failed_login_labels:
     conftest.write_pool_credentials(tmp_path / f"claude-{label}", access_token="")
-  task_session = await tte.create_task(
+  task_session = await conftest.create_task(
       tree,
       parent=None,
       request_id="w",

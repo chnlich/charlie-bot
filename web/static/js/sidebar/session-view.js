@@ -10,7 +10,6 @@ let sessionHasMore = false;
 let sessionOlderBeforeCursor = Infinity;
 let sessionLoadingMore = false;
 let suppressScrollLoad = false;
-let viewportFillCount = 0;
 let triggerZoneFillCount = 0;
 let lazySessionDataTimer = null;
 function getDefaultBackendId() {
@@ -179,6 +178,10 @@ function setWorkerTranscriptMode(mode) {
   if (mode) startTranscriptPolling();
 }
 
+// usage.js (loaded first) paints the streaming node through this registration:
+// a worker transcript's draft paints tool rows instead of parsed text.
+Chat.setStreamDraftModeSupplier(transcriptTarget);
+
 function setInputAreaVisible(visible) {
   const area = document.getElementById('input-area');
   if (area) area.classList.toggle('hidden', !visible);
@@ -226,6 +229,7 @@ async function pollTranscript(opts) {
 }
 
 function applyTranscriptUpdate(data) {
+  Chat.applyWorkerSummary(data.summary);
   const container = document.getElementById('messages');
   if (container) {
     if (data.reset) {
@@ -247,8 +251,10 @@ function applyTranscriptUpdate(data) {
       sessionOlderBeforeCursor = Infinity;
       sessionLoadingMore = false;
       if (engine) {
-        // A reset invalidates the engine's whole projection; remount on the
-        // new messages instead of repainting under a live engine.
+        // No older page remains, so the sentinel leaves the page. A reset
+        // invalidates the engine's whole projection; remount on the new
+        // messages instead of repainting under a live engine.
+        engine.holdWorkerSentinel(null);
         Chat.TurnEngine.mountIfAvailable(
             container, data.messages || [], SESSION_ID,
             {pinned: wasPinned, readingAnchor: wasPinned ? null : reading, view: engine.view});
@@ -271,7 +277,8 @@ function applyTranscriptUpdate(data) {
     : transcriptMessageCount + (data.messages ? data.messages.length : 0);
   transcriptRevision = data.revision || transcriptRevision;
   transcriptActiveRunId = data.active_run_id || null;
-  if (data.pending_draft && (data.pending_draft.content || data.pending_draft.thinking)) {
+  if (data.pending_draft && (data.pending_draft.content || data.pending_draft.thinking
+      || (data.pending_draft.tools || []).length)) {
     showStreaming(data.pending_draft);
   } else {
     hideStreaming();
@@ -678,12 +685,18 @@ function renderSessionView(data) {
   const backendType = data.active_backend_type || (BACKEND_TYPES ? BACKEND_TYPES[data.active_backend] : '') || '';
   updateBackendHeaderControls(backendType);
 
+  // For-you rules and the summary card need this open's session before the
+  // engine mounts: the worker's default view and its card depend on it. Only
+  // a worker's bootstrap carries worker_summary.
+  Chat.ForYou.setSession(session);
+  Chat.mountWorkerSummary(data.worker_summary || null);
+  const isWorker = session.profile === 'worker';
+
   // Store the raw-event cursor from the tail-loaded response.
   sessionHasMore = !!data.has_more;
   sessionOlderBeforeCursor = data.oldest_message_ordinal;
   sessionLoadingMore = false;
   suppressScrollLoad = false;
-  viewportFillCount = 0;
 
   // Update header
   const headerName = document.getElementById('header-session-name');
@@ -715,11 +728,26 @@ function renderSessionView(data) {
   if (!turnEngine) renderMessagesIntoContainer(container, messages, session.id);
   Chat.ForYou.renderToggle(turnEngine ? turnEngine.view : Chat.ForYou.EVERYTHING);
 
-  if (sessionHasMore) ensureSentinel(container, 'idle');
+  if (sessionHasMore) {
+    // The mount's own projection may have started the first page already.
+    const sentinel = ensureSentinel(container, sessionLoadingMore ? 'loading' : 'idle');
+    // A worker page's engine keeps its sentinel off the For-you list.
+    if (turnEngine && isWorker) turnEngine.holdWorkerSentinel(sentinel);
+  }
+
+  // A worker node renders its Run transcript through the main chat column
+  // (this file's transcript poll keeps it live) and takes no message input.
+  // Set the transcript mode before the streaming paint: the draft's paint
+  // renders worker tool rows when the mode is on.
+  setWorkerTranscriptMode(isWorker ? {sessionId: session.id} : null);
+  setInputAreaVisible(!isWorker);
 
   // Initialize streaming preview from pending draft (in-progress assistant
-  // response carried over from a tail-loaded session).
-  if (data.pending_draft && (data.pending_draft.content || data.pending_draft.thinking)) {
+  // response carried over from a tail-loaded session). A worker transcript
+  // streams tool activity only, so a draft carrying buffered tools shows even
+  // without text — the paint renders those rows.
+  if (data.pending_draft && (data.pending_draft.content || data.pending_draft.thinking
+      || (isWorker && (data.pending_draft.tools || []).length))) {
     showStreaming(data.pending_draft);
   } else {
     hideStreaming();
@@ -728,12 +756,6 @@ function renderSessionView(data) {
   // Scroll to bottom — the engine positions itself at mount (bottom pin, or
   // reading anchor); only the legacy render still needs this write.
   if (!turnEngine) container.scrollTop = container.scrollHeight;
-
-  // A worker node renders its Run transcript through the main chat column
-  // (this file's transcript poll keeps it live) and takes no message input.
-  const isWorker = session.profile === 'worker';
-  setWorkerTranscriptMode(isWorker ? {sessionId: session.id} : null);
-  setInputAreaVisible(!isWorker);
 
   // The pending-triggers tray opens for this session (a worker session's
   // hidden input area does not hide it). The tray owns its endpoint fetch;
@@ -748,13 +770,10 @@ function renderSessionView(data) {
   switchTab(tabAfterSessionSwitch());
 
   // A tail page shorter than the viewport leaves the container unscrollable, so
-  // no scroll event ever fires and the idle sentinel would wait forever. This
-  // attempt returns immediately when the container is already scrollable —
-  // a freshly mounted engine has not written its bottom pin yet, so scrollTop
-  // is not a scrollability signal here.
-  if (sessionHasMore && container.scrollHeight <= container.clientHeight + 80) {
-    loadOlderIfNeeded(container);
-  }
+  // no scroll event ever fires and the idle sentinel would wait forever: run the
+  // fill check. The turn engine runs it after each of its projections too, which
+  // covers a container that is hidden now and shown later.
+  fillIfShort(container, false);
 }
 
 // ---------------------------------------------------------------------------
@@ -800,11 +819,30 @@ function initScrollPagination() {
   });
 }
 
-async function loadOlderIfNeeded(container, isViewportFill) {
-  if (!isViewportFill) {
-    viewportFillCount = 0;
-    triggerZoneFillCount = 0;
-  }
+// The fill rule. Load the next older page when all of these hold: older history
+// remains, no page is in flight, the list is visible (clientHeight > 0), and its
+// content is no taller than its viewport plus 80px. Such a list cannot scroll,
+// so no scroll event will ever ask for the page. The sizes tell it, not
+// scrollTop: a freshly mounted engine has not written its bottom pin yet.
+// The turn engine calls this after every projection, so the two flags are read
+// before any layout size. Returns the load's promise, or null when the rule
+// does not hold.
+function fillIfShort(container, isContinuation) {
+  if (!sessionHasMore || sessionLoadingMore) return null;
+  const viewport = container.clientHeight;
+  if (viewport === 0 || container.scrollHeight > viewport + 80) return null;
+  return loadOlderIfNeeded(container, isContinuation);
+}
+
+Chat.registerProjectionCheck((container) => { fillIfShort(container, false); });
+
+// `isContinuation` marks a call that continues a chain; any other call (a user
+// gesture, a click on the failed sentinel, a fresh fill) starts a burst and
+// resets the trigger-zone counter.
+async function loadOlderIfNeeded(container, isContinuation) {
+  if (!isContinuation) triggerZoneFillCount = 0;
+  const engine = Chat.activeTurnEngineFor(container);
+  if (engine && engine.view === 'foryou' && Chat.ForYou.isWorker()) return;
   if (!sessionHasMore || sessionLoadingMore) return;
   // Trigger when within 80px of the top
   if (container.scrollTop > 80) return;
@@ -848,8 +886,6 @@ async function loadOlderIfNeeded(container, isViewportFill) {
       sessionHasMore = false;
     }
 
-    const engine = Chat.activeTurnEngineFor(container);
-
     const sentinel = document.getElementById('load-more-sentinel');
 
     if (engine) {
@@ -861,6 +897,7 @@ async function loadOlderIfNeeded(container, isViewportFill) {
       if (!sessionHasMore && sentinel) {
         const heightBeforeSentinelRemoval = container.scrollHeight;
         sentinel.remove();
+        if (Chat.ForYou.isWorker()) engine.holdWorkerSentinel(null);
         const removedHeight = heightBeforeSentinelRemoval - container.scrollHeight;
         if (removedHeight) {
           engine.writeScrollTop(Math.max(0, container.scrollTop - removedHeight));
@@ -926,22 +963,22 @@ async function loadOlderIfNeeded(container, isViewportFill) {
     if (sessionLoadingMore === flight) sessionLoadingMore = false;
   }
 
-  // Bounded auto-continue: only after a page actually lands (not on failure —
-  // the failed sentinel must wait for a user click, not auto-retry). Both
-  // burst counters reset on a non-fill (user-gesture) call. Two cases:
-  // - viewport fill: the container is not scrollable, so no scroll event will
-  //   ever fire; fetch until it overflows (at most 5 consecutive).
-  // - trigger zone: the container is scrollable but the viewport is still
-  //   parked within 80px of the top — e.g. pages that merged into the leading
-  //   pending segment never moved the position; keep fetching until the
-  //   position leaves the zone (at most 30 consecutive).
+  // Auto-continue: only after a page actually lands. A failed page ends the
+  // chain: the failed sentinel offers a retry by click, and the engine's next
+  // projection of a short list asks the fill check again. Two cases:
+  // - fill: the list is visible but too short to scroll, so no scroll event will
+  //   ever fire; the fill check loads the next page. No count bounds this chain:
+  //   each page moves the cursor strictly back, so it ends when the server
+  //   reports has_more false or the cursor stops moving.
+  // - trigger zone: the list scrolls but the viewport is still parked within
+  //   80px of the top — e.g. pages that merged into the leading pending segment
+  //   never moved the position; keep fetching until the position leaves the zone
+  //   (at most 30 consecutive). A hidden list takes neither case.
   if (pageLanded && sessionHasMore) {
-    if (container.scrollHeight <= container.clientHeight + 80) {
-      if (viewportFillCount < 5) {
-        viewportFillCount++;
-        await loadOlderIfNeeded(container, true);
-      }
-    } else if (container.scrollTop <= 80) {
+    const fill = fillIfShort(container, true);
+    if (fill) {
+      await fill;
+    } else if (container.clientHeight > 0 && container.scrollTop <= 80) {
       if (triggerZoneFillCount < 30) {
         triggerZoneFillCount++;
         await loadOlderIfNeeded(container, true);

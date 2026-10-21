@@ -120,6 +120,7 @@
   function rowSpecOf(turn) {
     return {
       headRole: turn.head.msg.role,
+      headKind: turn.head.msg.kind || null,
       headText: String(turn.head.msg.content || ''),
       headTs: turn.head.msg.timestamp || null,
       conclusionText: turn.conclusion ? String(turn.conclusion.msg.content || '') : null,
@@ -163,6 +164,8 @@
       // streaming output off the list.
       this.forYouEmpty = null;
       this.forYouHolder = null;
+      // A worker page's pagination sentinel (holdWorkerSentinel), or null.
+      this.workerSentinel = null;
       // Every message entry in server (time) order: a prepended page lands at
       // the front, a live message at the back. attach derives the segments from
       // it, so every projection reads the same order.
@@ -723,6 +726,7 @@
       if (this.container.clientHeight === 0) return;
       if (this.view === VIEW_FOR_YOU) {
         this.reprojectForYou(reason);
+        if (reason !== 'scroll') this.runProjectionCheck();
         return;
       }
       this.ensureOffsets();
@@ -903,6 +907,16 @@
         const settled = this.captureReadingAnchor();
         if (settled) this.readingAnchor = settled;
       }
+      this.runProjectionCheck();
+    }
+
+    // Hands the container to the page's check (registerProjectionCheck) once a
+    // projection ran: the list can now be taller or shorter than before. The
+    // zero-height return, For-you's scroll-only anchor capture and a scroll
+    // frame the hysteresis band skips project nothing, so they never reach
+    // this call.
+    runProjectionCheck() {
+      if (projectionCheck) projectionCheck(this.container);
     }
 
     nextInWindow(fromIndex, endIndex) {
@@ -993,9 +1007,11 @@
     // Projects the store into the container under the current view. Mount and
     // a view switch both land here: the store, the registry and the reader's
     // place carry over, and every projection node is built again.
+    // `options.sentinel` is the page's pagination sentinel, which stays first.
     attach(options = {}) {
       const streamEl = document.getElementById('streaming-msg');
       while (this.container.firstChild) this.container.removeChild(this.container.firstChild);
+      if (options.sentinel) this.container.appendChild(options.sentinel);
       this.domBySeg.clear();
       this.window = null;
 
@@ -1030,6 +1046,7 @@
       this.container.appendChild(this.topSpacer);
       this.container.appendChild(this.bottomSpacer);
       if (streamEl) this.container.appendChild(streamEl);
+      if (this.workerSentinel) this.container.prepend(this.workerSentinel);
 
       this.ensureOffsets();
       // Seed the spacers so the browser exposes its full range, then pin
@@ -1139,11 +1156,26 @@
       }
       this.view = view;
       // The pagination sentinel is a page fixture the attach wipe drops; a
-      // same-session switch keeps it, and each projection places it again
-      // (the For-you list leads with it, Everything prepends it).
-      const sentinel = document.getElementById('load-more-sentinel');
-      this.attach(view === VIEW_FOR_YOU ? {pinned: true} : (this.everythingPlace || {}));
-      if (sentinel) this.container.prepend(sentinel);
+      // same-session switch hands it to attach, which puts it back first,
+      // before the projection that runs the page's check (that check looks the
+      // sentinel up by id and would create a second one). Each projection then
+      // keeps it first (the For-you list leads with it). A worker page's
+      // sentinel is the engine's own (holdWorkerSentinel), which attach places.
+      const sentinel = forYouRules.isWorker() ? null : document.getElementById('load-more-sentinel');
+      this.attach(Object.assign({sentinel}, view === VIEW_FOR_YOU ? {pinned: true} : this.everythingPlace));
+    }
+
+    // A worker's For you holds only its summary card, so a worker page's
+    // pagination sentinel shows at the head of Everything alone. The engine
+    // keeps it across view switches: session-view.js, which knows whether
+    // older messages remain, hands it over (a sentinel) and takes it back
+    // (null) once none do.
+    holdWorkerSentinel(sentinel) {
+      if (this.workerSentinel && this.workerSentinel !== sentinel) this.workerSentinel.remove();
+      this.workerSentinel = sentinel;
+      if (!sentinel) return;
+      if (this.view === VIEW_EVERYTHING) this.container.prepend(sentinel);
+      else sentinel.remove();
     }
 
     // reproject for the For-you view. A scroll only records the reader's
@@ -1171,13 +1203,17 @@
 
     // The list's children, in order: the pagination sentinel, the shown rows or
     // the empty-state row, and the stream holder (hidden: the streaming output
-    // sits in it, off the list).
+    // sits in it, off the list). A worker session's For you holds its one
+    // summary card instead of the empty-state row — item rows never show there.
     syncForYouChildren() {
       const children = [];
-      const sentinel = document.getElementById('load-more-sentinel');
+      const sentinel = forYouRules.isWorker() ? null : document.getElementById('load-more-sentinel');
       if (sentinel) children.push(sentinel);
       const shown = forYouRules.items(this.displayEntries());
-      if (!shown.length) children.push(this.forYouEmptyNode());
+      if (!shown.length) {
+        if (forYouRules.isWorker()) children.push(forYouRules.summaryCard());
+        else children.push(this.forYouEmptyNode());
+      }
       for (const entry of shown) children.push(this.forYouEntryNode(entry));
       children.push(this.forYouHolderNode());
       setChildren(this.container, children);
@@ -1589,6 +1625,18 @@
     forYouRules = rules;
   }
   Chat.registerForYouRules = registerForYouRules;
+
+  // The page's projection check (sidebar/session-view.js) registers once when
+  // that script loads. The engine calls it with the container at the end of
+  // every projection that ran, so the page learns each moment the list's height
+  // can have changed: a mount, a view switch, a resize, a landed page. A page
+  // that registers no check projects as before.
+  let projectionCheck = null;
+  function registerProjectionCheck(check) {
+    if (projectionCheck) throw new Error('A projection check is already registered');
+    projectionCheck = check;
+  }
+  Chat.registerProjectionCheck = registerProjectionCheck;
 
   // options.view picks the first projection (Everything when omitted, the page's
   // unchanged view); pinned and readingAnchor place the reader as mount does.

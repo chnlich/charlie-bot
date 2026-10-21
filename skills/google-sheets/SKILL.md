@@ -6,7 +6,7 @@ version: 1.0.0
 
 # Google Sheets
 
-Read, create, and edit Google Sheets using the Sheets API v4 with a user refresh token.
+Read, create, and edit Google Sheets using the Sheets API v4 with a selected Google account.
 
 **IMPORTANT: User approval required for all writes.** Before any create, update, append, or batch update action, show the planned content first and wait for explicit `take off` approval. Do not mutate anything before that approval.
 
@@ -23,13 +23,19 @@ All Google API requests use:
 -H "Content-Type: application/json"
 ```
 
-Read the configured values before making any calls.
+Use the selected account's access token before making any calls.
 
 ### Refresh an Access Token
 
-Mint the access token from the stored refresh token with the recipe in the **google-oauth** skill: `skills/google-oauth/SKILL.md`.
+Choose the account using the **Accounts** section in the **google-oauth** skill, then mint its access token:
 
-If the refresh token is invalid or revoked, re-run the bootstrap flow in the **google-oauth** skill: `skills/google-oauth/SKILL.md`.
+```bash
+ACCESS_TOKEN=$(python3 <skill-dir>/scripts/google_account.py token --account <name>)
+```
+
+For the default account, omit `--account`.
+
+If the refresh token is invalid or revoked, follow **Add or Re-Authorize an Account** in the **google-oauth** skill: `skills/google-oauth/SKILL.md`.
 
 ### Create a Spreadsheet
 
@@ -120,12 +126,12 @@ Common request types: `addSheet`, `deleteSheet`, `updateSheetProperties`, `merge
 
 ## Bootstrap / Re-Authorization
 
-All Google integrations share one OAuth client and refresh token (the `google` section of `~/.charliebot/credentials.yaml`). One-time setup and re-authorization after expiry follow the **google-oauth** skill: `skills/google-oauth/SKILL.md`.
+Choose an account in the **Accounts** section and follow **Add or Re-Authorize an Account** in the **google-oauth** skill: `skills/google-oauth/SKILL.md`.
 
 ## Workflow
 
-1. Read the token and client values from `~/.charliebot/credentials.yaml` (section `google`).
-2. Refresh an access token with the OAuth token endpoint.
+1. Choose the account that matches the request using the **Accounts** section in the **google-oauth** skill.
+2. Mint its access token with `python3 <skill-dir>/scripts/google_account.py token --account <name>`. Omit `--account` for the default account.
 3. For reads, call `spreadsheets.get` for metadata or `spreadsheets.values.get` for cell data.
 4. For writes, show the exact planned content first and wait for explicit `take off` approval.
 5. After approval, create, write, append, or batch update via Sheets API. After a successful create, return `https://docs.google.com/spreadsheets/d/{spreadsheetId}/edit`.

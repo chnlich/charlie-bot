@@ -27,7 +27,7 @@ class ClaudeAccount(pydantic.BaseModel):
 
 
 class ClaudeCompactionConfig(pydantic.BaseModel):
-  """Context floors, in tokens, for the Sonnet compaction the pool runs on Fable sessions.
+  """Context floors, in tokens, for the compactions the pool runs.
 
   ``relay_tokens`` applies before an account relay (the cache is cold in the new
   login anyway); ``expired_cache_tokens`` applies when a user message arrives after
@@ -38,6 +38,10 @@ class ClaudeCompactionConfig(pydantic.BaseModel):
 
   relay_tokens: int = pydantic.Field(default=100_000, gt=0)
   expired_cache_tokens: int = pydantic.Field(default=50_000, gt=0)
+  # Context floor for compacting an idle master session before its prompt cache expires.
+  # Below it the next message reads the context cold; at or above it the session compacts
+  # on its own model and the chat shows "Context compacted (idle, ...)".
+  idle_tokens: int = pydantic.Field(default=100_000, gt=0)
 
 
 class AccountsConfig(pydantic.BaseModel):

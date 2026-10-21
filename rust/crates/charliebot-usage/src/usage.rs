@@ -459,9 +459,11 @@ fn value_to_python_string(value: &Value) -> String {
 mod tests {
   use std::io::Write;
   use std::path::Path;
+  use std::path::PathBuf;
   use std::process::{Command, Stdio};
   use std::sync::OnceLock;
 
+  use charliebot_agents::backends::anthropic_compatible;
   use charliebot_agents::backends::claude_code;
   use charliebot_agents::backends::codex::{self, CodexHost};
   use charliebot_core::hot_reload::HotReload;
@@ -510,6 +512,16 @@ sys.stdout.write(json.dumps({"run_kind": run_kind, "usage": usage}, separators=(
     codex::register_with_host(
       registry,
       &CodexHost { path: "/synthetic/bin".to_string(), home: synthetic_codex_home().to_path_buf() },
+    )
+  }
+
+  fn register_anthropic_compatible(registry: &mut Registry) -> Result<(), RegistryError> {
+    anthropic_compatible::register_with_host(
+      registry,
+      charliebot_agents::cli_base::CliHost {
+        path: "/synthetic/bin".to_string(),
+        home: PathBuf::from("/synthetic/home"),
+      },
     )
   }
 
@@ -572,6 +584,34 @@ sys.stdout.write(json.dumps({"run_kind": run_kind, "usage": usage}, separators=(
     assert_eq!(usage["context_tokens"], 15);
     assert_eq!(usage["model"], "model-a");
     assert_eq!(usage["total_cost_usd"], 0.25);
+  }
+
+  // Python: tests/test_anthropic_compatible_backend.py:111.
+  #[test]
+  fn anthropic_compatible_usage_uses_the_option_context_window() {
+    use charliebot_core::config::BackendOption;
+
+    let mut registry = Registry::new();
+    registry.register_package("src.backends.anthropic_compatible", register_anthropic_compatible).unwrap();
+    let option = BackendOption {
+      id: "anthro".to_string(),
+      label: "Anthropic compatible".to_string(),
+      model: "synthetic-model".to_string(),
+      prompt_overlay: None,
+      backend_type: "cc-anthropic-compatible".to_string(),
+      type_fields: serde_yaml::from_str("api_base: https://api.synthetic.example\ncontext_window: 409600\n").unwrap(),
+    };
+    let events = vec![
+      json!({"type": "assistant", "message": {"model": "synthetic-model", "usage": {
+        "input_tokens": 1200, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0
+      }}}),
+      json!({"type": "result", "modelUsage": {"synthetic-model": {"contextWindow": 1_000_000}}}),
+    ];
+
+    let usage = fold_usage(&events, RunKind::ManagerTurn, &registry, Some(&option)).unwrap().unwrap();
+
+    assert_eq!(usage["context_full"], 409_600);
+    assert_eq!(usage["context_compact_at"], 376_600);
   }
 
   #[test]

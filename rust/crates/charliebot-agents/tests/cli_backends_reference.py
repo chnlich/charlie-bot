@@ -1,4 +1,4 @@
-"""Python oracle for the CLI backend types ported to ``charliebot-agents``: gemini, charlie-code, antigravity and cc-kimi.
+"""Python oracle for the CLI backend types ported to ``charliebot-agents``: gemini, charlie-code, antigravity and cc-anthropic-compatible.
 
 Reads one JSON request on stdin and writes one JSON document as the last line of stdout. The request names a synthetic
 home, a synthetic CHARLIEBOT_HOME, and a PATH that holds fake gemini, charlie-code and agy binaries. HOME,

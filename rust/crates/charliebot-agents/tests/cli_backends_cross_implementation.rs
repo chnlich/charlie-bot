@@ -1,4 +1,4 @@
-//! Cross-implementation checks of the gemini, charlie-code, antigravity and cc-kimi backend types.
+//! Cross-implementation checks of the gemini, charlie-code, antigravity and Anthropic-compatible backend types.
 //! `cli_backends_reference.py` runs every Python section in one `uv run python` process over the synthetic inputs built
 //! here. The Rust port runs the same inputs, and the test fails with every section that differs.
 //!
@@ -14,10 +14,10 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 
 use charliebot_agents::agent_environment::AgentBaseEnvironment;
+use charliebot_agents::backends::anthropic_compatible::{self, factory::AnthropicCompatibleFactory};
 use charliebot_agents::backends::antigravity::factory::AntigravityFactory;
 use charliebot_agents::backends::charlie_code::factory::CharlieCodeFactory;
 use charliebot_agents::backends::gemini::factory::GeminiFactory;
-use charliebot_agents::backends::kimi::factory::KimiFactory;
 use charliebot_agents::cli_base::CliHost;
 use charliebot_agents::launch_loop::ChildEnvPolicy;
 use charliebot_agents::runner::{AgentRunner, RunRequest};
@@ -26,6 +26,7 @@ use charliebot_core::config::{
 };
 use charliebot_registry::Registry;
 use charliebot_registry::backend::{AgentBackend, BackendFactory, Env, LaunchArgs};
+use charliebot_registry::usage::UsageSource;
 use serde_json::{Value, json};
 use serde_yaml::Mapping;
 
@@ -35,7 +36,9 @@ const WORKER_FILE: &str = "/synthetic/instructions/worker.md";
 const GEMINI_MODEL: &str = "gemini-synthetic-pro";
 const CLC_MODEL: &str = "clc-synthetic-model";
 const AGY_MODEL: &str = "agy-synthetic-model";
-const KIMI_MODEL: &str = "kimi-synthetic-model";
+const ANTHROPIC_MODEL: &str = "anthropic-compatible-synthetic-model";
+const ANTHROPIC_API_BASE: &str = "https://anthropic-compatible.synthetic.example";
+const ANTHROPIC_CONTEXT_WINDOW: u64 = 409_600;
 const CLC_API_BASE: &str = "https://synthetic.example/v1";
 
 /// The synthetic homes, binaries and files of one run, written under one temporary root.
@@ -71,6 +74,9 @@ impl Fixture {
       "CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT": "1",
       "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "345000",
       "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "0.8",
+      "CLAUDE_CODE_THINKING_DISPLAY_UPDATES": "1",
+      "ANTHROPIC_API_KEY": "inherited-value",
+      "CLAUDE_CODE_OAUTH_TOKEN": "inherited-value",
     })
   }
 
@@ -96,8 +102,9 @@ impl Fixture {
   }
 }
 
+// Python: tests/test_anthropic_compatible_backend.py:37.
+// Python: tests/test_anthropic_compatible_backend.py:72.
 #[test]
-#[ignore = "catch-up 78e0d10e2: cargo-1"]
 fn cli_backends_match_the_python_package_on_synthetic_inputs() {
   let root = tempfile::tempdir().unwrap();
   let fx = write_fixtures(root.path());
@@ -136,7 +143,7 @@ fn write_fixtures(root: &Path) -> Fixture {
   write_fakes(&fx.bin, json!({"gemini": [{"exit": 0}], "charlie-code": [{"exit": 0}], "agy": [{"exit": 0}]}));
   write_text(
     &fx.charliebot_home.join("credentials.yaml"),
-    "kimi-main:\n  api_key: synthetic-kimi-key\nclc-main:\n  api_key: synthetic-clc-key\n",
+    "anthropic-main:\n  api_key: synthetic-anthropic-key\nclc-main:\n  api_key: synthetic-clc-key\n",
   );
   for spec in finish_specs() {
     let dir = root.join("finish").join(spec.id);
@@ -157,6 +164,22 @@ fn request(fx: &Fixture) -> Value {
     "argv_cases": argv_cases(),
     "translate_streams": translate_streams(),
     "finish_cases": finish_cases(fx),
+  })
+}
+
+fn register_anthropic_compatible(registry: &mut Registry) -> Result<(), charliebot_registry::RegistryError> {
+  anthropic_compatible::register_with_host(
+    registry,
+    CliHost { path: "/synthetic/bin".to_string(), home: PathBuf::from("/synthetic/home") },
+  )
+}
+
+fn register_claude_usage_source(registry: &mut Registry) -> Result<(), charliebot_registry::RegistryError> {
+  registry.usage_source(UsageSource {
+    name: "Claude Code",
+    id_prefixes: &[],
+    run_logs_only: false,
+    implementation: None,
   })
 }
 
@@ -244,13 +267,37 @@ fn argv_cases() -> Vec<Value> {
       Some(WORKER_FILE),
       Some(INSTRUCTIONS),
     ),
-    argv_case("kimi_plain", "cc-kimi", json!({"credential": "kimi-main"}), &[], None, None, None),
-    argv_case("kimi_flags", "cc-kimi", json!({"credential": "kimi-main"}), &["--max-turns", "3"], None, None, None),
-    argv_case("kimi_resume", "cc-kimi", json!({"credential": "kimi-main"}), &[], Some("kimi-sess-1"), None, None),
     argv_case(
-      "kimi_file_and_content",
-      "cc-kimi",
-      json!({"credential": "kimi-main"}),
+      "anthropic_compatible_plain",
+      "cc-anthropic-compatible",
+      json!({"api_base": ANTHROPIC_API_BASE, "context_window": ANTHROPIC_CONTEXT_WINDOW}),
+      &[],
+      None,
+      None,
+      None,
+    ),
+    argv_case(
+      "anthropic_compatible_flags",
+      "cc-anthropic-compatible",
+      json!({"api_base": format!("{ANTHROPIC_API_BASE}/"), "context_window": ANTHROPIC_CONTEXT_WINDOW, "credential": "anthropic-main"}),
+      &["--max-turns", "3"],
+      None,
+      None,
+      None,
+    ),
+    argv_case(
+      "anthropic_compatible_resume",
+      "cc-anthropic-compatible",
+      json!({"api_base": ANTHROPIC_API_BASE, "context_window": ANTHROPIC_CONTEXT_WINDOW, "credential": "anthropic-main"}),
+      &[],
+      Some("anthropic-sess-1"),
+      None,
+      None,
+    ),
+    argv_case(
+      "anthropic_compatible_file_and_content",
+      "cc-anthropic-compatible",
+      json!({"api_base": ANTHROPIC_API_BASE, "context_window": ANTHROPIC_CONTEXT_WINDOW, "credential": "anthropic-main"}),
       &[],
       None,
       Some(WORKER_FILE),
@@ -272,7 +319,7 @@ fn argv_case(
     "gemini" => GEMINI_MODEL,
     "charlie-code" => CLC_MODEL,
     "antigravity" => AGY_MODEL,
-    "cc-kimi" => KIMI_MODEL,
+    "cc-anthropic-compatible" => ANTHROPIC_MODEL,
     other => panic!("no synthetic model for {other}"),
   };
   json!({
@@ -538,7 +585,7 @@ fn build_backend(fx: &Fixture, option: &BackendOption, launch: LaunchArgs) -> Bo
     "gemini" => GeminiFactory::new(fx.host()).build(Some(option), &cfg, launch),
     "charlie-code" => CharlieCodeFactory::new(fx.host()).build(Some(option), &cfg, launch),
     "antigravity" => AntigravityFactory::new(fx.host()).build(Some(option), &cfg, launch),
-    "cc-kimi" => KimiFactory.build(Some(option), &cfg, launch),
+    "cc-anthropic-compatible" => AnthropicCompatibleFactory::new(fx.host()).build(Some(option), &cfg, launch),
     other => panic!("no factory for backend type {other}"),
   };
   built.unwrap()
@@ -553,6 +600,71 @@ fn option_of(case: &Value) -> BackendOption {
     backend_type: text(&case["backend_type"]).to_string(),
     type_fields: serde_yaml::from_value::<Mapping>(serde_yaml::to_value(&case["type_fields"]).unwrap()).unwrap(),
   }
+}
+
+// Python: tests/test_anthropic_compatible_backend.py:83.
+#[test]
+fn anthropic_compatible_options_require_a_positive_window_and_endpoint_root() {
+  let root = tempfile::tempdir().unwrap();
+  let config = |api_base: &str, window: i64| {
+    format!(
+      "backends:\n  options:\n    - id: anthropic\n      label: Anthropic compatible\n      type: cc-anthropic-compatible\n      model: synthetic-model\n      api_base: {api_base}\n      context_window: {window}\n"
+    )
+  };
+  let mut registry = Registry::new();
+  registry.register_package("src.backends.anthropic_compatible", register_anthropic_compatible).unwrap();
+  let home = root.path().join("home");
+  fs::create_dir_all(&home).unwrap();
+
+  fs::write(home.join("config.yaml"), config(ANTHROPIC_API_BASE, ANTHROPIC_CONTEXT_WINDOW as i64)).unwrap();
+  let option = registry.load_config(&home).unwrap().backends.options.remove(0);
+  assert!(!option.type_fields.contains_key(&serde_yaml::Value::String("credential".to_string())));
+  assert_eq!(option.type_fields["context_window"].as_u64(), Some(ANTHROPIC_CONTEXT_WINDOW));
+
+  fs::write(home.join("config.yaml"), config(ANTHROPIC_API_BASE, 0)).unwrap();
+  assert!(registry.load_config(&home).unwrap_err().to_string().contains("context_window"));
+  fs::write(home.join("config.yaml"), config(&format!("{ANTHROPIC_API_BASE}/v1///"), 409_600)).unwrap();
+  assert!(registry.load_config(&home).unwrap_err().to_string().contains("api_base"));
+  fs::write(home.join("config.yaml"), config("''", 409_600)).unwrap();
+  assert!(registry.load_config(&home).unwrap_err().to_string().contains("api_base"));
+}
+
+// Python: tests/test_anthropic_compatible_backend.py:90.
+#[test]
+fn anthropic_compatible_registration_matches_python_traits_and_usage_attribution() {
+  use charliebot_registry::backend::{BackendTraits, ResumeStyle};
+  use charliebot_store::run_records::RunKind;
+
+  let mut registry = Registry::new();
+  registry.register_package("test.claude_usage_source", register_claude_usage_source).unwrap();
+  registry.register_package("src.backends.anthropic_compatible", register_anthropic_compatible).unwrap();
+
+  let registration = registry.backend_type_of("cc-anthropic-compatible").unwrap();
+  assert_eq!(
+    registration.traits,
+    BackendTraits {
+      resume: ResumeStyle::CliFlag,
+      restart_reattach: true,
+      preassigned_session_id: false,
+      family_prefix: None,
+      manual_compact: false,
+      compact_hint: None,
+    }
+  );
+  assert!(registration.lifecycle.is_some());
+  let option = option_of(&argv_case(
+    "anthropic",
+    "cc-anthropic-compatible",
+    json!({"api_base": ANTHROPIC_API_BASE, "context_window": ANTHROPIC_CONTEXT_WINDOW}),
+    &[],
+    None,
+    None,
+    None,
+  ));
+  let limits = registry.reading_limits_for("claude", RunKind::ManagerTurn, Some(&option)).unwrap();
+  assert_eq!(limits.declared_window, Some(ANTHROPIC_CONTEXT_WINDOW));
+  assert_eq!(limits.compact_reserve, Some(33_000));
+  assert_eq!(registry.usage_source_for("cc-anthropic-compatible").unwrap().unwrap().name, "Claude Code");
 }
 
 fn launch_of(case: &Value) -> LaunchArgs {

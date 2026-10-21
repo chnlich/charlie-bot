@@ -36,6 +36,20 @@ pub const NUDGE_SENDER_NAME: &str = "Web reply";
 /// (`reply.REPLY_BUDGET_CHARS`).
 pub const REPLY_BUDGET_CHARS: usize = 500;
 
+/// The language check holds a reply when the newest user message has at least this many Han characters.
+const LANGUAGE_CHECK_MIN_USER_HAN: usize = 5;
+/// The language check holds a reply whose Han share, Han / (Han + Latin letters), is below this.
+const LANGUAGE_CHECK_MAX_REPLY_HAN_SHARE: f64 = 0.05;
+/// The 409 detail of a held reply. The agent reads it: it rewrites the reply in Chinese, or adds `--keep-language`.
+const LANGUAGE_HOLD_DETAIL: &str = concat!(
+  "Language check: the user's last message is in Chinese.\n",
+  "This reply has almost no Chinese.\n",
+  "The command posted nothing.\n",
+  "Rewrite the reply in Chinese.\n",
+  "Then post the reply again.\n",
+  "To post the reply as written, add --keep-language \"<reason>\" to the command."
+);
+
 /// The roles the For-you layer shows: the user's messages, the replies and the notices (`reply._FOR_YOU_ROLES`).
 const FOR_YOU_ROLES: [&str; 3] = [USER, WEB_REPLY, WEB_REPLY_NOTICE];
 
@@ -162,19 +176,150 @@ pub fn noticed(events: &[Value], user_event_id: &str) -> bool {
   })
 }
 
+/// Whether `character` is in Python's `\w` class: a letter, a digit or `_`. Rust's `is_alphanumeric` also counts the
+/// Other_Alphabetic marks and symbols (such as U+0345 and U+24B6) that `\w` leaves out. Only the path pattern uses
+/// `\w`, so the difference changes the count only where such a character sits next to a path: before its `~` or `/`,
+/// or inside its run.
+fn is_word(character: char) -> bool {
+  character.is_alphanumeric() || character == '_'
+}
+
+/// A CJK ideograph: the ranges of `reply._HAN`, U+3400-U+4DBF and U+4E00-U+9FFF.
+fn is_han(character: char) -> bool {
+  matches!(character, '\u{3400}'..='\u{4dbf}' | '\u{4e00}'..='\u{9fff}')
+}
+
+/// Whether the characters from `at` spell `text`.
+fn starts_with_at(chars: &[char], at: usize, text: &str) -> bool {
+  text.chars().enumerate().all(|(offset, character)| chars.get(at + offset) == Some(&character))
+}
+
+/// The end of a fenced code block that opens at `at`: the first "```" after the opening (`_CODE_FENCE`).
+fn fenced_code_end(chars: &[char], at: usize) -> Option<usize> {
+  if !starts_with_at(chars, at, "```") {
+    return None;
+  }
+  (at + 3..chars.len()).find(|&close| starts_with_at(chars, close, "```")).map(|close| close + 3)
+}
+
+/// The end of an inline code span that opens at `at`: the next backtick (`_INLINE_CODE`).
+fn inline_code_end(chars: &[char], at: usize) -> Option<usize> {
+  if chars[at] != '`' {
+    return None;
+  }
+  chars[at + 1..].iter().position(|&character| character == '`').map(|offset| at + 1 + offset + 1)
+}
+
+/// The end of a URL that starts at `at`, with its opening parenthesis when it has one (`_URL`, `\(?https?://\S+\)?`).
+/// The closing parenthesis is part of the `\S+` run, so the match ends at the next whitespace.
+fn url_end(chars: &[char], at: usize) -> Option<usize> {
+  let start = if chars[at] == '(' { at + 1 } else { at };
+  let body = if starts_with_at(chars, start, "https://") {
+    start + 8
+  } else if starts_with_at(chars, start, "http://") {
+    start + 7
+  } else {
+    return None;
+  };
+  if body >= chars.len() || pystr::is_python_whitespace(chars[body]) {
+    return None;
+  }
+  let end = chars[body..].iter().position(|&character| pystr::is_python_whitespace(character));
+  Some(end.map_or(chars.len(), |offset| body + offset))
+}
+
+/// The end of a path that starts at `at` (`_PATH`, `(?<![\w])[~/][\w.\-/]+`).
+fn path_end(chars: &[char], at: usize) -> Option<usize> {
+  if !matches!(chars[at], '~' | '/') || (at > 0 && is_word(chars[at - 1])) {
+    return None;
+  }
+  let run = chars[at + 1..].iter().position(|&character| !(is_word(character) || matches!(character, '.' | '-' | '/')));
+  let end = run.map_or(chars.len(), |offset| at + 1 + offset);
+  (end > at + 1).then_some(end)
+}
+
+/// One stripping pattern: the end of its match that starts at the given index, or None when none starts there.
+type SpanEnd = fn(&[char], usize) -> Option<usize>;
+
+/// One `re.sub(pattern, " ", text)` over `chars`: each match that `span_at` finds from its start becomes one space,
+/// and the scan resumes after it. `span_at` reads the characters before the match, as a lookbehind does.
+fn blank_spans(chars: &[char], span_at: SpanEnd) -> Vec<char> {
+  let mut out = Vec::with_capacity(chars.len());
+  let mut at = 0;
+  while at < chars.len() {
+    match span_at(chars, at) {
+      Some(end) => {
+        out.push(' ');
+        at = end;
+      }
+      None => {
+        out.push(chars[at]);
+        at += 1;
+      }
+    }
+  }
+  out
+}
+
+/// The Han and Latin-letter counts of `text`, with fenced code, inline code, URLs and paths left out (`_han_and_latin`).
+fn han_and_latin(text: &str) -> (usize, usize) {
+  let passes: [SpanEnd; 4] = [fenced_code_end, inline_code_end, url_end, path_end];
+  let body = passes.into_iter().fold(text.chars().collect::<Vec<char>>(), |body, span_at| blank_spans(&body, span_at));
+  (body.iter().filter(|&&character| is_han(character)).count(), body.iter().filter(|c| c.is_ascii_alphabetic()).count())
+}
+
+/// Whether the language check holds `reply` after the user message `user_text`, where None means no user message
+/// (`language_check_holds`). A reply with no Han and no Latin letters is not held.
+fn language_check_holds(user_text: Option<&str>, reply: &str) -> bool {
+  if user_text.is_none_or(|text| han_and_latin(text).0 < LANGUAGE_CHECK_MIN_USER_HAN) {
+    return false;
+  }
+  let (reply_han, reply_latin) = han_and_latin(reply);
+  let letters = reply_han + reply_latin;
+  letters > 0 && (reply_han as f64) / (letters as f64) < LANGUAGE_CHECK_MAX_REPLY_HAN_SHARE
+}
+
+/// The text of the newest user message in `events`, which is in log order; None when the log holds none
+/// (`newest_user_text`).
+fn newest_user_text(events: &[Value]) -> Option<&str> {
+  events.iter().rev().find_map(|event| {
+    let from_user = event.get("type").and_then(Value::as_str) == Some(USER)
+      && event.get("actor").and_then(Value::as_str) == Some("user");
+    if from_user { event.get("content").and_then(Value::as_str) } else { None }
+  })
+}
+
 /// Record `text` as the session's web reply and return the readback the CLI prints (`reply.post_web_reply`).
 ///
 /// The text is recorded exactly as written. It answers the newest user message or nudge of the running turn, and
-/// nothing when the running turn has neither. A refusal records nothing and marks nothing.
-pub async fn post_web_reply(features: &FeatureContext, session_id: &str, text: &str) -> Result<Value, WebReplyError> {
+/// nothing when the running turn has neither. The language check holds the text unless `keep_language`, the agent's
+/// reason for posting it as written, is given; the reason is then recorded on the reply. A refusal records nothing and
+/// marks nothing.
+pub async fn post_web_reply(
+  features: &FeatureContext,
+  session_id: &str,
+  text: &str,
+  keep_language: Option<&str>,
+) -> Result<Value, WebReplyError> {
   require_web_session(features, session_id).await?;
   if pystr::strip(text).is_empty() {
     return Err(WebReplyError::refused(StatusCode::UNPROCESSABLE_ENTITY, "Reply text is empty"));
   }
+  if keep_language.is_some_and(|reason| pystr::strip(reason).is_empty()) {
+    return Err(WebReplyError::refused(StatusCode::UNPROCESSABLE_ENTITY, "Keep-language reason is empty"));
+  }
   let loaded = load_events(features, session_id).await?;
+  if keep_language.is_none() && language_check_holds(newest_user_text(&loaded), text) {
+    tracing::info!(session = %session_id, chars = text.chars().count(), "web_reply_held");
+    return Err(WebReplyError::refused(StatusCode::CONFLICT, LANGUAGE_HOLD_DETAIL));
+  }
   let running = features.startup.require::<RunningTurnInputs>()?.user_event_ids(session_id);
   let answers = answered_input(&loaded, &running).map(|(_, user_event_id)| user_event_id);
   let chars = text.chars().count();
+  let mut web_reply = json!({"answers": answers, "chars": chars});
+  if let Some(reason) = keep_language {
+    web_reply["keep_language"] = json!(reason);
+  }
   features
     .store
     .persist_and_broadcast(
@@ -182,7 +327,7 @@ pub async fn post_web_reply(features: &FeatureContext, session_id: &str, text: &
       json!({
         "type": WEB_REPLY,
         "content": text,
-        WEB_REPLY: {"answers": answers, "chars": chars},
+        WEB_REPLY: web_reply,
       }),
     )
     .await?;
@@ -227,7 +372,7 @@ mod tests {
     let home = Home::new();
     let sid = home.manager("session", None).await;
 
-    let readback = post_web_reply(&home.features, &sid, "the answer").await.expect("the reply posts");
+    let readback = post_web_reply(&home.features, &sid, "the answer", None).await.expect("the reply posts");
 
     assert_eq!(readback, json!({"posted": true, "chars": 10, "over_budget": false, "answers": null}));
     assert_eq!(replies(&home, &sid), vec![(json!("the answer"), json!({"answers": null, "chars": 10}))]);
@@ -246,7 +391,7 @@ mod tests {
       let text = if case == "blank" { " \n\t" } else { "the answer" };
       let events_before = home.events(&sid).len();
 
-      let error = post_web_reply(&home.features, target, text).await.expect_err("the reply is refused");
+      let error = post_web_reply(&home.features, target, text, None).await.expect_err("the reply is refused");
 
       match error {
         WebReplyError::Refused { status: code, .. } => assert_eq!(code.as_u16(), status, "case {case}"),
@@ -263,7 +408,7 @@ mod tests {
       let home = Home::new();
       let sid = home.manager("session", None).await;
 
-      let readback = post_web_reply(&home.features, &sid, &"x".repeat(chars)).await.expect("the reply posts");
+      let readback = post_web_reply(&home.features, &sid, &"x".repeat(chars), None).await.expect("the reply posts");
 
       assert_eq!(readback, json!({"posted": true, "chars": chars, "over_budget": over_budget, "answers": null}));
       assert_eq!(replies(&home, &sid).len(), 1);
@@ -277,7 +422,7 @@ mod tests {
     let user = home.append(&sid, user_event("the question")).await;
     home.set_running(&[id_of(&user)]);
 
-    let readback = post_web_reply(&home.features, &sid, "the answer").await.expect("the reply posts");
+    let readback = post_web_reply(&home.features, &sid, "the answer", None).await.expect("the reply posts");
 
     assert_eq!(readback["answers"], json!(id_of(&user)));
   }
@@ -292,7 +437,7 @@ mod tests {
       .await;
     home.set_running(&[id_of(&nudge)]);
 
-    let readback = post_web_reply(&home.features, &sid, "the answer").await.expect("the reply posts");
+    let readback = post_web_reply(&home.features, &sid, "the answer", None).await.expect("the reply posts");
 
     assert_eq!(readback["answers"], json!(id_of(&user)));
   }
@@ -304,7 +449,7 @@ mod tests {
     let wake = home.append(&sid, json!({"type": "scheduled_trigger", "content": "wake"})).await;
     home.set_running(&[id_of(&wake)]);
 
-    let readback = post_web_reply(&home.features, &sid, "the answer").await.expect("the reply posts");
+    let readback = post_web_reply(&home.features, &sid, "the answer", None).await.expect("the reply posts");
 
     assert_eq!(readback["answers"], Value::Null);
   }
@@ -317,7 +462,7 @@ mod tests {
     let second = home.append(&sid, user_event("second")).await;
     home.set_running(&[id_of(&second), id_of(&first)]);
 
-    let readback = post_web_reply(&home.features, &sid, "the answer").await.expect("the reply posts");
+    let readback = post_web_reply(&home.features, &sid, "the answer", None).await.expect("the reply posts");
 
     assert_eq!(readback["answers"], json!(id_of(&second)));
   }

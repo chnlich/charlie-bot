@@ -17,8 +17,9 @@ import conftest
 import pytest
 import pytest_asyncio
 
+from src.infra import event_types as ET
 from src.infra import models
-from src.runtime import task_completion, task_errors
+from src.runtime import control_events, task_completion, task_errors
 
 
 @pytest_asyncio.fixture
@@ -83,15 +84,14 @@ async def test_write_mid_build_never_installs_over_newer_generation(tree, monkey
 
 
 @pytest.mark.asyncio
-async def test_index_build_consults_facts_once_per_node_per_pass(tree, monkeypatch):
-  """One build pass pays one facts consult chain per task node.
+async def test_index_build_never_folds_a_closed_nodes_full_history(tree, monkeypatch):
+  """A closed node's state and archive value come from the history-tail read.
 
-  The structural read and the inheritance fold need the same node's facts;
-  without the pass cache the fold re-walks the events-cache consults the
-  structural read settled, and a two-node build pays four chains for two
-  nodes (2 structural + 2 fold).
+  The structural read and the inheritance fold both need a node's task state;
+  the tail read serves both (the second hit is the file-identity memo), so a
+  build never loads a closed node's full fold for index output.
   """
-  await tree.create_task(
+  child = await tree.create_task(
       request_id="child",
       task_parent_id=None,
       profile="worker",
@@ -99,6 +99,11 @@ async def test_index_build_consults_facts_once_per_node_per_pass(tree, monkeypat
       name="Child",
       backend=None,
       caller=conftest.OPERATOR)
+  async with tree.control_lock:
+    await tree.events.append(
+        child.id,
+        control_events.build_control_event(
+            ET.TASK_CLOSED, actor=control_events.ACTOR_USER, source_session_id=child.id, outcome="completed"))
   calls = {"n": 0}
   orig = type(tree)._facts_of
 
@@ -108,7 +113,7 @@ async def test_index_build_consults_facts_once_per_node_per_pass(tree, monkeypat
 
   monkeypatch.setattr(tree, "_facts_of", counting)
   tree._build_index_sync(tree.session_store.fresh_cached_metas())
-  assert calls["n"] == 2, f"2-node build made {calls['n']} facts consults"
+  assert calls["n"] == 0, f"closed-node build made {calls['n']} full-fold consults"
 
 
 def _invalidate_during_builds(tree, monkeypatch):

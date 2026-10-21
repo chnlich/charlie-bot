@@ -411,21 +411,18 @@ fn render_builtin(event_type: &str, event: &Value) -> StoreResult<Option<Value>>
         .unwrap_or_else(|| json!("Unknown error"));
       json!({"role": "system", "content": format!("Error: {}", python_string(&content))})
     }
-    event_types::TASK_DELEGATED => {
-      let message = json!({
-        "role": event_types::TASK_DELEGATED,
-        "content": "Task delegated",
-        "thread_id": event.get("thread_id").cloned().unwrap_or_else(|| json!("")),
-        "child_session_id": event.get("child_session_id").filter(|value| is_truthy(value)).cloned().unwrap_or_else(|| json!("")),
-        event_types::DELEGATE_INVOCATION: event.get(event_types::DELEGATE_INVOCATION).cloned().unwrap_or(Value::Null),
-        "backend": preferred_value(event, "backend", "resolved_backend"),
-        "model": preferred_value(event, "model", "resolved_model"),
-        "route": event.get("route").cloned().unwrap_or(Value::Null),
-        // Python's `or` yields the fallback's own value, so both fields absent give null.
-        "timestamp": event.get("timestamp").filter(|value| is_truthy(value)).or_else(|| event.get("created_at")).cloned().unwrap_or(Value::Null),
-      });
-      message
-    }
+    event_types::TASK_DELEGATED => json!({
+      "role": event_types::TASK_DELEGATED,
+      "content": "Task delegated",
+      "thread_id": event.get("thread_id").cloned().unwrap_or_else(|| json!("")),
+      "child_session_id": event.get("child_session_id").filter(|value| is_truthy(value)).cloned().unwrap_or_else(|| json!("")),
+      event_types::DELEGATE_INVOCATION: event.get(event_types::DELEGATE_INVOCATION).cloned().unwrap_or(Value::Null),
+      "backend": preferred_value(event, "backend", "resolved_backend"),
+      "model": preferred_value(event, "model", "resolved_model"),
+      "route": event.get("route").cloned().unwrap_or(Value::Null),
+      // Python's `or` yields the fallback's own value, so both fields absent give null.
+      "timestamp": event.get("timestamp").filter(|value| is_truthy(value)).or_else(|| event.get("created_at")).cloned().unwrap_or(Value::Null),
+    }),
     event_types::WORKER_SUMMARY => {
       let mut message = json!({
         "role": event_types::WORKER_SUMMARY,

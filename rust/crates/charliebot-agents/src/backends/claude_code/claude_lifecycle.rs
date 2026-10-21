@@ -42,6 +42,7 @@ impl ClaudeCliLifecycle {
 
   fn launch(&self, ctx: &LaunchContext, resume_id: Option<String>) -> Launch {
     let mut backend_kwargs = Map::new();
+    backend_kwargs.insert("run_kind".to_string(), json!(ctx.run_kind));
     if ctx.kind == LaunchKind::Turn {
       backend_kwargs.insert(
         "extra_flags".to_string(),
@@ -107,6 +108,7 @@ impl ClaudeCodeLifecycle {
 
   fn launch_args(ctx: &LaunchContext, first_process: bool) -> anyhow::Result<Map<String, Value>> {
     let mut kwargs = Map::new();
+    kwargs.insert("run_kind".to_string(), json!(ctx.run_kind));
     if ctx.kind == LaunchKind::Turn {
       kwargs.insert(
         "extra_flags".to_string(),
@@ -429,6 +431,7 @@ mod tests {
   use charliebot_registry::Registry;
   use charliebot_registry::backend::{ContextStateFn, EmitFn, RecordAccountFn, RunningTurnsFn};
   use charliebot_store::metadata::TaskProfile;
+  use charliebot_store::run_records::RunKind;
   use serde_json::json;
 
   use super::*;
@@ -479,6 +482,10 @@ mod tests {
       option,
       session_meta,
       kind,
+      run_kind: match kind {
+        LaunchKind::Turn => RunKind::ManagerTurn,
+        LaunchKind::Task => RunKind::Work,
+      },
       cwd: PathBuf::from("/synthetic/cwd"),
       base_env: Arc::new(charliebot_registry::backend::Env::new()),
       held_native_id: held_native_id.map(str::to_string),

@@ -42,6 +42,7 @@ async fn compact_session_transcript(
     &account.label,
     trigger,
     claude_compaction::CLAUDE_COMPACTION_TIMEOUT,
+    ctx.run_kind,
   )
   .await
 }
@@ -361,6 +362,7 @@ mod tests {
   use charliebot_registry::Registry;
   use charliebot_registry::backend::{ContextStateFn, EmitFn, RecordAccountFn, RunningTurnsFn};
   use charliebot_store::metadata::TaskProfile;
+  use charliebot_store::run_records::RunKind;
   use tokio::sync::Notify;
 
   use crate::backends::claude_code::login_dirs;
@@ -407,6 +409,7 @@ mod tests {
       option,
       session_meta,
       kind: LaunchKind::Turn,
+      run_kind: RunKind::ManagerTurn,
       cwd: std::path::PathBuf::from("/synthetic/cwd"),
       base_env: Arc::new(charliebot_registry::backend::Env::new()),
       held_native_id: held_native_id.map(str::to_string),

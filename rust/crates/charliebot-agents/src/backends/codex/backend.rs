@@ -35,6 +35,7 @@ const MAX_ONE_SHOT_STDERR_BYTES: usize = 4 * 1024;
 /// `json.dumps(text, ensure_ascii=False)` with Python's separators, which a string value does not use.
 const TOML_STRING_STYLE: JsonStyle =
   JsonStyle { ensure_ascii: false, sort_keys: false, item_separator: ", ", key_separator: ": ", indent: None };
+const DEFAULT_AUTO_COMPACT_TOKEN_LIMIT: i64 = 100_000;
 
 /// The `codex exec --json` backend of one launch.
 pub struct CodexBackend {
@@ -99,21 +100,28 @@ impl CodexBackend {
   }
 
   fn model_config_args(&self) -> Vec<String> {
-    let mut args = vec!["--config".to_string(), format!("model_reasoning_effort=\"{}\"", self.model_reasoning_effort)];
-    if let Some(limit) = self.model_auto_compact_token_limit {
-      args.push("--config".to_string());
-      args.push(format!("model_auto_compact_token_limit={limit}"));
-    }
-    args
+    let limit = self.model_auto_compact_token_limit.unwrap_or(DEFAULT_AUTO_COMPACT_TOKEN_LIMIT);
+    vec![
+      "--config".to_string(),
+      format!("model_reasoning_effort=\"{}\"", self.model_reasoning_effort),
+      "--config".to_string(),
+      format!("model_auto_compact_token_limit={limit}"),
+    ]
   }
 
   /// The argv shared by streaming, resume and one-shot `codex exec` runs.
   fn exec_args(&self) -> Vec<String> {
-    let mut args: Vec<String> =
-      ["--json", "--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox", "--model"]
-        .iter()
-        .map(|flag| flag.to_string())
-        .collect();
+    let mut args: Vec<String> = [
+      "--json",
+      "--skip-git-repo-check",
+      "--dangerously-bypass-approvals-and-sandbox",
+      "--disable",
+      "multi_agent",
+      "--model",
+    ]
+    .iter()
+    .map(|flag| flag.to_string())
+    .collect();
     args.push(self.model.clone());
     args.extend(self.model_config_args());
     args

@@ -399,7 +399,7 @@ fn option_default_model_requires_a_configured_model() {
 #[test]
 fn snapshot_reading_limits_keep_the_opencode_reserve() {
   assert_eq!(
-    opencode_limits::snapshot_reading_limits(),
+    opencode_limits::snapshot_reading_limits(charliebot_store::run_records::RunKind::Work),
     charliebot_registry::backend::ContextLimits { declared_window: None, compact_reserve: Some(20_000) }
   );
 }
@@ -979,7 +979,10 @@ fn registration_keeps_traits_attribution_and_snapshot_limits() {
   assert!(!backend_type.translate_fallback);
   let source = registry.usage_source_for("opencode").unwrap().unwrap();
   assert_eq!(source.id_prefixes, &["opencode-", "oc-"]);
-  assert_eq!(registry.reading_limits_for("snapshot").unwrap().compact_reserve, Some(20_000));
+  assert_eq!(
+    registry.reading_limits_for("snapshot", charliebot_store::run_records::RunKind::Work).unwrap().compact_reserve,
+    Some(20_000)
+  );
 }
 
 #[tokio::test]

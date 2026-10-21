@@ -18,7 +18,7 @@ use charliebot_registry::backend::{
 };
 use charliebot_registry::context::FeatureContext;
 use charliebot_store::metadata::{SessionMetadata, UtcDateTime};
-use charliebot_store::run_records::{CURSOR_NAME, RAW_LOG_NAME, STDERR_LOG_NAME};
+use charliebot_store::run_records::{CURSOR_NAME, RAW_LOG_NAME, RunKind, STDERR_LOG_NAME};
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
 
@@ -388,6 +388,7 @@ fn turn_launch_context(
     option,
     session_meta: shared_metadata,
     kind: LaunchKind::Turn,
+    run_kind: RunKind::ManagerTurn,
     cwd,
     base_env: Arc::new(base_env.values.clone()),
     held_native_id,

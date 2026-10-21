@@ -2,4 +2,4 @@
 
 mod usage;
 
-pub use usage::{SessionUsage, register};
+pub use usage::{SessionUsage, register, usage_run_kind};

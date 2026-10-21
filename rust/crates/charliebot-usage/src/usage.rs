@@ -8,7 +8,8 @@ use charliebot_core::event_types;
 use charliebot_core::hot_reload::HotReload;
 use charliebot_registry::backend::{ContextLimits, UsageResolver, UsageResolverHost};
 use charliebot_registry::{FeatureContext, Registry, RegistryError};
-use charliebot_store::metadata::{SessionMetadata, UtcDateTime};
+use charliebot_store::metadata::{SessionMetadata, TaskProfile, UtcDateTime};
+use charliebot_store::run_records::RunKind;
 use charliebot_store::{Store, StoreError, StoreResult};
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
@@ -159,8 +160,8 @@ impl SessionUsage {
   }
 
   /// Resolve the event-only tiers for an already-loaded transcript, without a backend resolver or cross-call memo.
-  pub fn resolve_events_usage(&self, events: &[Value]) -> StoreResult<Option<Value>> {
-    fold_usage(events, &self.registry)
+  pub fn resolve_events_usage(&self, events: &[Value], run_kind: RunKind) -> StoreResult<Option<Value>> {
+    fold_usage(events, run_kind, &self.registry)
   }
 
   /// Return the selected context reading and the latest assistant/result request time.
@@ -185,7 +186,7 @@ impl SessionUsage {
         return Ok((Some(Value::Object(usage)), fold));
       }
     }
-    Ok((resolve_fold_tier(&fold, &self.registry, event_count)?, fold))
+    Ok((resolve_fold_tier(&fold, &self.registry, event_count, usage_run_kind(meta))?, fold))
   }
 
   fn usage_resolver(&self, backend_id: &str) -> StoreResult<Option<Arc<dyn UsageResolver>>> {
@@ -265,20 +266,30 @@ fn initialize(features: Arc<FeatureContext>) -> BoxFuture<'static, anyhow::Resul
 }
 
 /// Fold session events through the source tiers, without invoking a registered backend usage resolver.
-pub fn fold_usage(events: &[Value], registry: &Registry) -> StoreResult<Option<Value>> {
+pub fn fold_usage(events: &[Value], run_kind: RunKind, registry: &Registry) -> StoreResult<Option<Value>> {
   let mut fold = UsageFold::default();
   fold.feed(events)?;
-  resolve_fold_tier(&fold, registry, events.len())
+  resolve_fold_tier(&fold, registry, events.len(), run_kind)
 }
 
-fn resolve_fold_tier(fold: &UsageFold, registry: &Registry, event_count: usize) -> StoreResult<Option<Value>> {
+/// The run kind the session usage view assigns to a node profile.
+pub fn usage_run_kind(meta: &SessionMetadata) -> RunKind {
+  if meta.profile == TaskProfile::Manager { RunKind::ManagerTurn } else { RunKind::Work }
+}
+
+fn resolve_fold_tier(
+  fold: &UsageFold,
+  registry: &Registry,
+  event_count: usize,
+  run_kind: RunKind,
+) -> StoreResult<Option<Value>> {
   if event_count == 0 {
     return Ok(None);
   }
   let cost = fold.cost();
   let usage = match fold.reading_kind.as_str() {
-    READING_CLAUDE => Some(resolve_claude(fold, registry, cost)?),
-    READING_SNAPSHOT => Some(resolve_snapshot(fold, registry, cost)?),
+    READING_CLAUDE => Some(resolve_claude(fold, registry, cost, run_kind)?),
+    READING_SNAPSHOT => Some(resolve_snapshot(fold, registry, cost, run_kind)?),
     READING_RESOLVED => Some(resolve_reading(fold, cost)),
     _ => Some(json!({
       "context_tokens": null,
@@ -291,9 +302,9 @@ fn resolve_fold_tier(fold: &UsageFold, registry: &Registry, event_count: usize) 
   Ok(usage)
 }
 
-fn resolve_claude(fold: &UsageFold, registry: &Registry, cost: Option<f64>) -> StoreResult<Value> {
+fn resolve_claude(fold: &UsageFold, registry: &Registry, cost: Option<f64>, run_kind: RunKind) -> StoreResult<Value> {
   let context_tokens = fold.post_compact_tokens.unwrap_or(fold.chosen_prompt_tokens);
-  let limits = registry.reading_limits_for(READING_CLAUDE);
+  let limits = registry.reading_limits_for(READING_CLAUDE, run_kind);
   let (context_full, compact_at) = match limits {
     Some(limits) => {
       let declared = limits.declared_window.map(|value| value as i64);
@@ -309,7 +320,7 @@ fn resolve_claude(fold: &UsageFold, registry: &Registry, cost: Option<f64>) -> S
   Ok(usage_value(Some(context_tokens), context_full, compact_at, &fold.chosen_model, cost))
 }
 
-fn resolve_snapshot(fold: &UsageFold, registry: &Registry, cost: Option<f64>) -> StoreResult<Value> {
+fn resolve_snapshot(fold: &UsageFold, registry: &Registry, cost: Option<f64>, run_kind: RunKind) -> StoreResult<Value> {
   let snapshot = fold.snapshot.as_ref().expect("snapshot reading kind carries a snapshot");
   let tokens = truthy_object(snapshot.get("tokens"), "context_snapshot.tokens")?;
   let token_sum = add_int_fields(tokens, &["input", "output", "reasoning", "cache_read", "cache_write"])?;
@@ -321,7 +332,8 @@ fn resolve_snapshot(fold: &UsageFold, registry: &Registry, cost: Option<f64>) ->
       let context = limit.get("context").and_then(python_integer);
       match (input, output, context) {
         (Some(input), Some(output), _) => {
-          let reserve = registry.reading_limits_for(READING_SNAPSHOT).and_then(|limits| limits.compact_reserve);
+          let reserve =
+            registry.reading_limits_for(READING_SNAPSHOT, run_kind).and_then(|limits| limits.compact_reserve);
           let compact_at =
             reserve.map(|reserve| input - i64::try_from(reserve).expect("compact reserve fits i64").min(output));
           (Some(input), compact_at)
@@ -437,16 +449,45 @@ fn value_to_python_string(value: &Value) -> String {
 
 #[cfg(test)]
 mod tests {
+  use std::io::Write;
   use std::path::Path;
+  use std::process::{Command, Stdio};
   use std::sync::OnceLock;
 
+  use charliebot_agents::backends::claude_code;
   use charliebot_agents::backends::codex::{self, CodexHost};
   use charliebot_core::hot_reload::HotReload;
+  use charliebot_registry::backend::Env;
   use charliebot_registry::store_hooks;
   use charliebot_store::Store;
   use charliebot_store::metadata::TaskProfile;
 
   use super::*;
+
+  const PYTHON_USAGE_REFERENCE: &str = r#"
+import json
+import os
+import sys
+
+request = json.load(sys.stdin)
+for name in (
+    "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE",
+    "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
+    "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
+    "CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT",
+):
+  os.environ.pop(name, None)
+
+from src.backends import claude_code
+from src.infra import models
+from src.runtime import session_usage
+
+claude_code.register()
+meta = models.SessionMetadata(profile=request["profile"], id="synthetic-usage", name="Synthetic usage")
+run_kind = session_usage.usage_run_kind(meta)
+usage = session_usage.resolve_events_usage(request["events"], run_kind)
+sys.stdout.write(json.dumps({"run_kind": run_kind, "usage": usage}, separators=(",", ":")) + "\n")
+"#;
 
   fn registry() -> Registry {
     Registry::default()
@@ -462,6 +503,34 @@ mod tests {
       registry,
       &CodexHost { path: "/synthetic/bin".to_string(), home: synthetic_codex_home().to_path_buf() },
     )
+  }
+
+  fn python_usage_reference(profile: &str, events: &[Value]) -> Value {
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(3).unwrap();
+    let mut child = Command::new("uv")
+      .args(["run", "python", "-c", PYTHON_USAGE_REFERENCE])
+      .current_dir(repo_root)
+      .stdin(Stdio::piped())
+      .stdout(Stdio::piped())
+      .stderr(Stdio::piped())
+      .spawn()
+      .unwrap();
+    let request = json!({"profile": profile, "events": events});
+    child.stdin.take().unwrap().write_all(request.to_string().as_bytes()).unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(
+      output.status.success(),
+      "Python session usage reference failed:\nstdout:\n{}\nstderr:\n{}",
+      String::from_utf8_lossy(&output.stdout),
+      String::from_utf8_lossy(&output.stderr),
+    );
+    serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+      panic!(
+        "Python session usage reference returned invalid JSON: {error}; stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+      )
+    })
   }
 
   fn owner_over(home: &Path, registry: Arc<Registry>) -> (SessionUsage, Arc<Store>) {
@@ -491,7 +560,7 @@ mod tests {
       json!({"type": "assistant", "message": {"model": "model-a", "usage": {"input_tokens": 10, "cache_creation_input_tokens": 2, "cache_read_input_tokens": 3}}}),
       json!({"type": "result", "modelUsage": {"model-a": {"contextWindow": 100}}, "total_cost_usd": 0.25}),
     ];
-    let usage = fold_usage(&events, &registry()).unwrap().unwrap();
+    let usage = fold_usage(&events, RunKind::Work, &registry()).unwrap().unwrap();
     assert_eq!(usage["context_tokens"], 15);
     assert_eq!(usage["model"], "model-a");
     assert_eq!(usage["total_cost_usd"], 0.25);
@@ -504,7 +573,7 @@ mod tests {
       json!({"type": "assistant", "message": {"model": "empty", "usage": {"input_tokens": 0}}}),
       json!({"type": "assistant", "message": {"model": "main", "usage": {"input_tokens": 7}}}),
     ];
-    let usage = fold_usage(&events, &registry()).unwrap().unwrap();
+    let usage = fold_usage(&events, RunKind::Work, &registry()).unwrap().unwrap();
     assert_eq!(usage["context_tokens"], 7);
     assert_eq!(usage["model"], "main");
   }
@@ -513,21 +582,53 @@ mod tests {
   fn total_cost_sums_results_and_rounds_to_four_places() {
     let events =
       vec![json!({"type": "result", "total_cost_usd": 0.12345}), json!({"type": "result", "total_cost_usd": 0.00005})];
-    assert_eq!(fold_usage(&events, &registry()).unwrap().unwrap()["total_cost_usd"], 0.1235);
+    assert_eq!(fold_usage(&events, RunKind::Work, &registry()).unwrap().unwrap()["total_cost_usd"], 0.1235);
+  }
+
+  #[test]
+  fn usage_run_kind_and_claude_resolution_match_python_for_session_profiles() {
+    let events = vec![
+      json!({
+        "type": "assistant",
+        "message": {
+          "model": "claude-synthetic-5",
+          "usage": {"input_tokens": 120_000, "cache_creation_input_tokens": 10_000, "cache_read_input_tokens": 20_000}
+        }
+      }),
+      json!({
+        "type": "result",
+        "modelUsage": {"claude-synthetic-5": {"contextWindow": 500_000}},
+        "total_cost_usd": 0.125
+      }),
+    ];
+    let mut registry = Registry::new();
+    registry
+      .register_package("src.backends.claude_code", |registry| {
+        registry.reading_limits("claude", |run_kind| claude_code::claude_reading_limits_from(run_kind, &Env::new()))
+      })
+      .unwrap();
+
+    for (profile_name, profile) in [("manager", TaskProfile::Manager), ("worker", TaskProfile::Worker)] {
+      let meta = SessionMetadata::new("synthetic-usage", "Synthetic usage", profile);
+      let run_kind = usage_run_kind(&meta);
+      let python = python_usage_reference(profile_name, &events);
+      assert_eq!(serde_json::to_value(run_kind).unwrap(), python["run_kind"]);
+      assert_eq!(fold_usage(&events, run_kind, &registry).unwrap().unwrap(), python["usage"]);
+    }
   }
 
   #[test]
   fn total_cost_is_unknown_when_all_result_reports_are_zero() {
     let events =
       vec![json!({"type": "result", "total_cost_usd": 0.0}), json!({"type": "result", "total_cost_usd": 0.0})];
-    assert!(fold_usage(&events, &registry()).unwrap().unwrap()["total_cost_usd"].is_null());
+    assert!(fold_usage(&events, RunKind::Work, &registry()).unwrap().unwrap()["total_cost_usd"].is_null());
   }
 
   #[test]
   fn total_cost_sums_positive_result_reports() {
     let events =
       vec![json!({"type": "result", "total_cost_usd": 0.1}), json!({"type": "result", "total_cost_usd": 0.2})];
-    assert_eq!(fold_usage(&events, &registry()).unwrap().unwrap()["total_cost_usd"], 0.3);
+    assert_eq!(fold_usage(&events, RunKind::Work, &registry()).unwrap().unwrap()["total_cost_usd"], 0.3);
   }
 
   #[test]
@@ -535,7 +636,7 @@ mod tests {
     // Python: round(0.12345, 4) == 0.1235 and round(2.67895, 4) == 2.6789; scaling by 10_000 gets the first wrong.
     for (cost, expected) in [(0.12345, 0.1235), (2.67895, 2.6789)] {
       let events = vec![json!({"type": "result", "total_cost_usd": cost})];
-      assert_eq!(fold_usage(&events, &registry()).unwrap().unwrap()["total_cost_usd"], expected);
+      assert_eq!(fold_usage(&events, RunKind::Work, &registry()).unwrap().unwrap()["total_cost_usd"], expected);
     }
   }
 
@@ -544,15 +645,17 @@ mod tests {
     let mut registry = Registry::new();
     registry
       .register_package("src.backends.claude_code", |registry| {
-        registry
-          .reading_limits("claude", || ContextLimits { declared_window: Some(500_000), compact_reserve: Some(20_000) })
+        registry.reading_limits("claude", |_run_kind| ContextLimits {
+          declared_window: Some(500_000),
+          compact_reserve: Some(20_000),
+        })
       })
       .unwrap();
     let events = vec![
       json!({"type": "assistant", "message": {"model": "model-a", "usage": {"input_tokens": 150_000}}}),
       json!({"type": "result", "modelUsage": {"model-a": {"contextWindow": 200_000}}, "total_cost_usd": 0.5}),
     ];
-    let usage = fold_usage(&events, &registry).unwrap().unwrap();
+    let usage = fold_usage(&events, RunKind::Work, &registry).unwrap().unwrap();
     assert_eq!(usage["context_tokens"], 150_000);
     assert_eq!(usage["context_full"], 200_000);
     assert_eq!(usage["context_compact_at"], 180_000);
@@ -560,7 +663,7 @@ mod tests {
 
     // A model absent from modelUsage falls back to the declared window alone.
     let unlisted = vec![json!({"type": "assistant", "message": {"model": "model-b", "usage": {"input_tokens": 1}}})];
-    let usage = fold_usage(&unlisted, &registry).unwrap().unwrap();
+    let usage = fold_usage(&unlisted, RunKind::Work, &registry).unwrap().unwrap();
     assert_eq!(usage["context_full"], 500_000);
     assert_eq!(usage["context_compact_at"], 480_000);
   }
@@ -572,7 +675,7 @@ mod tests {
       json!({"type": "system", "subtype": "context_reading", "context_reading": {"context_tokens": 31, "context_full": 80, "context_compact_at": 70, "model": "resolved"}}),
       json!({"type": "result", "modelUsage": {"model-a": {"contextWindow": 1000}}}),
     ];
-    let usage = fold_usage(&events, &registry()).unwrap().unwrap();
+    let usage = fold_usage(&events, RunKind::Work, &registry()).unwrap().unwrap();
     assert_eq!(usage["context_tokens"], 31);
     assert_eq!(usage["model"], "resolved");
   }
@@ -590,7 +693,7 @@ mod tests {
         }
       }),
     ];
-    let usage = fold_usage(&events, &registry()).unwrap().unwrap();
+    let usage = fold_usage(&events, RunKind::Work, &registry()).unwrap().unwrap();
     assert_eq!(usage["context_tokens"], 35);
     assert_eq!(usage["context_full"], 100);
     assert_eq!(usage["model"], "snapshot-model");
@@ -599,7 +702,7 @@ mod tests {
   #[test]
   fn empty_slot_keeps_context_unknown() {
     let events = vec![json!({"type": "user", "content": "hello"})];
-    let usage = fold_usage(&events, &registry()).unwrap().unwrap();
+    let usage = fold_usage(&events, RunKind::Work, &registry()).unwrap().unwrap();
     assert!(usage["context_tokens"].is_null());
     assert!(usage["context_full"].is_null());
     assert!(usage["context_compact_at"].is_null());
@@ -608,7 +711,7 @@ mod tests {
 
   #[test]
   fn empty_event_list_has_no_usage_value() {
-    assert!(fold_usage(&[], &registry()).unwrap().is_none());
+    assert!(fold_usage(&[], RunKind::Work, &registry()).unwrap().is_none());
   }
 
   #[test]

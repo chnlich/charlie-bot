@@ -32,7 +32,7 @@ use charliebot_core::timefmt;
 use charliebot_registry::backend::{BackendLifecycle, Env, Launch, LaunchArgs, LaunchContext, LaunchKind, LaunchWatch};
 use charliebot_store::Store;
 use charliebot_store::metadata::{SessionMetadata, ThreadMetadata};
-use charliebot_store::run_records::{CURSOR_NAME, RAW_LOG_NAME, STDERR_LOG_NAME};
+use charliebot_store::run_records::{CURSOR_NAME, RAW_LOG_NAME, RunKind, STDERR_LOG_NAME};
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
 use time::OffsetDateTime;
@@ -107,6 +107,7 @@ pub struct WorkerSpec {
   pub instructions_content: Option<String>,
   pub session_meta: Option<SessionMetadata>,
   pub held_native_id: Option<String>,
+  pub run_kind: RunKind,
 }
 
 /// The process manager of one task run. A run is one process, or a chain of processes when the backend lifecycle relays
@@ -127,6 +128,7 @@ pub struct Worker {
   instructions_content: Option<String>,
   session_meta: Option<Arc<Mutex<SessionMetadata>>>,
   held_native_id: Option<String>,
+  run_kind: RunKind,
   on_session_event: Option<SessionEventFn>,
   post_result_timeout: Duration,
   cleanup_timeout: Duration,
@@ -162,6 +164,7 @@ impl Worker {
       instructions_content: spec.instructions_content,
       session_meta: spec.session_meta.map(|meta| Arc::new(Mutex::new(meta))),
       held_native_id: spec.held_native_id,
+      run_kind: spec.run_kind,
       on_session_event: None,
       post_result_timeout: DEFAULT_POST_RESULT_TIMEOUT,
       cleanup_timeout: DEFAULT_CLEANUP_TIMEOUT,
@@ -376,6 +379,7 @@ impl Worker {
       option: option.clone(),
       session_meta,
       kind: LaunchKind::Task,
+      run_kind: self.run_kind,
       cwd: self.working_dir.clone(),
       base_env: Arc::new(base_env.values.clone()),
       held_native_id: self.held_native_id.clone(),

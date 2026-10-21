@@ -9,8 +9,9 @@ use std::time::Duration;
 
 use anyhow::{Context, bail};
 use charliebot_registry::backend::{AgentBackend, ContextLimits, Env, LaunchArgs, Translate, TransportKind};
+use charliebot_store::run_records::RunKind;
 use futures_util::future::BoxFuture;
-use serde_json::{Map, Value};
+use serde_json::Value;
 use tokio::io::AsyncWriteExt;
 
 use crate::transport::cgroup::{SessionCgroupLimits, system_cgroup_base_dir};
@@ -22,7 +23,7 @@ use super::login_dirs;
 
 pub const HEADLESS_DISALLOWED_TOOLS: &str = concat!(
   "Monitor,ScheduleWakeup,CronCreate,CronDelete,CronList,Agent,Workflow,TaskCreate,",
-  "TaskGet,TaskUpdate,TaskList,TaskStop,TaskOutput,SendMessage,ListAgents"
+  "TaskGet,TaskUpdate,TaskList,TaskStop,TaskOutput,SendMessage,ListAgents,ShareOnboardingGuide"
 );
 pub const DISALLOWED_TOOLS_FLAG: &str = "--disallowed-tools";
 pub const SKIP_PERMISSIONS_FLAG: &str = "--dangerously-skip-permissions";
@@ -30,6 +31,27 @@ pub const INSTRUCTIONS_FILE_NAME: &str = "CLAUDE.md";
 pub const INSTRUCTIONS_WRITTEN_EVENT: &str = "claude_code_wrote_claude_md";
 const SYNTHETIC_MODEL: &str = "<synthetic>";
 const ONE_SHOT_DISALLOWED_TOOLS: &str = "Bash,Read,Write,Edit,Glob,Grep,Agent";
+
+fn headless_disallowed_tools(run_kind: RunKind) -> String {
+  let kind_tools = match run_kind {
+    RunKind::Review => "Skill",
+    RunKind::ManagerTurn | RunKind::Work | RunKind::Iteration | RunKind::ScheduledStep => "ReportFindings",
+  };
+  format!("{HEADLESS_DISALLOWED_TOOLS},{kind_tools}")
+}
+
+fn headless_command(run_kind: RunKind) -> Vec<String> {
+  vec![
+    "claude".to_string(),
+    "-p".to_string(),
+    "--output-format".to_string(),
+    "stream-json".to_string(),
+    "--verbose".to_string(),
+    SKIP_PERMISSIONS_FLAG.to_string(),
+    DISALLOWED_TOOLS_FLAG.to_string(),
+    headless_disallowed_tools(run_kind),
+  ]
+}
 
 static DECLARED_WINDOW_WARNINGS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 
@@ -40,31 +62,31 @@ pub fn claude_child_env(env: &mut Env) {
 }
 
 /// Build the inherited environment variables for a headless Claude process.
-pub fn headless_claude_env(source: &Env) -> Env {
-  claude_launch::headless_claude_env(source)
+pub fn headless_claude_env(run_kind: RunKind, source: &Env) -> Env {
+  claude_launch::headless_claude_env(run_kind, source)
 }
 
 /// Return Claude's declared window and the reserve used to derive its compact point.
-pub fn claude_reading_limits() -> ContextLimits {
+pub fn claude_reading_limits(run_kind: RunKind) -> ContextLimits {
   let mut source = Env::new();
   for name in claude_launch::HEADLESS_FORWARDED_ENV {
     if let Ok(value) = env::var(name) {
       source.insert(name.to_string(), value);
     }
   }
-  claude_reading_limits_from(&source)
+  claude_reading_limits_from(run_kind, &source)
 }
 
 /// Return Claude's reading limits for a supplied host environment.
-pub fn claude_reading_limits_from(source: &Env) -> ContextLimits {
-  let env = headless_claude_env(source);
+pub fn claude_reading_limits_from(run_kind: RunKind, source: &Env) -> ContextLimits {
+  let env = headless_claude_env(run_kind, source);
   let raw_window =
     env.get(claude_launch::AUTO_COMPACT_WINDOW_ENV).expect("headless environment always carries the compact window");
   let window = match parse_python_positive_integer(raw_window) {
     Some(value) => value,
     None => {
       warn_unparseable_window(raw_window);
-      433_000
+      claude_launch::declared_window_by_run_kind(run_kind)
     }
   };
   for name in [claude_launch::AUTOCOMPACT_PCT_OVERRIDE_ENV, claude_launch::MAX_CONTEXT_TOKENS_ENV] {
@@ -145,6 +167,7 @@ pub struct ClaudeCodeBackend {
   effort: Option<String>,
   cli_binary: Option<String>,
   fast_mode: bool,
+  run_kind: RunKind,
   claude_session_id: Option<String>,
   claude_config_dir: Option<String>,
   cgroup_session_id: Option<String>,
@@ -163,6 +186,12 @@ impl ClaudeCodeBackend {
     launch: LaunchArgs,
     cgroup_limits: SessionCgroupLimits,
   ) -> anyhow::Result<Self> {
+    let run_kind = match launch.backend_kwargs.get("run_kind") {
+      None => RunKind::Work,
+      Some(Value::String(_)) => serde_json::from_value(launch.backend_kwargs["run_kind"].clone())
+        .context("backend_kwargs.run_kind must name a known run kind")?,
+      Some(_) => bail!("backend_kwargs.run_kind must be a string"),
+    };
     let claude_session_id = launch.backend_kwargs.get("claude_session_id");
     let claude_session_id = match claude_session_id {
       None | Some(Value::Null) => None,
@@ -175,6 +204,7 @@ impl ClaudeCodeBackend {
       effort: effort.filter(|value| !value.is_empty()),
       cli_binary: cli_binary.filter(|value| !value.is_empty()),
       fast_mode,
+      run_kind,
       claude_session_id,
       claude_config_dir: claude_config_dir.filter(|value| !value.is_empty()),
       cgroup_session_id: launch.cgroup_session_id,
@@ -186,16 +216,8 @@ impl ClaudeCodeBackend {
 
   /// Build the Claude command used by the raw-log runner.
   pub fn build_command(&self, _prompt: &str) -> anyhow::Result<Vec<String>> {
-    let mut command = vec![
-      self.cli_binary.clone().unwrap_or_else(|| "claude".to_string()),
-      "-p".to_string(),
-      "--output-format".to_string(),
-      "stream-json".to_string(),
-      "--verbose".to_string(),
-      SKIP_PERMISSIONS_FLAG.to_string(),
-      DISALLOWED_TOOLS_FLAG.to_string(),
-      HEADLESS_DISALLOWED_TOOLS.to_string(),
-    ];
+    let mut command = headless_command(self.run_kind);
+    command[0] = self.cli_binary.clone().unwrap_or_else(|| "claude".to_string());
     if let Some(session_id) = &self.claude_session_id {
       command.extend(["--session-id".to_string(), session_id.clone()]);
     }
@@ -205,8 +227,7 @@ impl ClaudeCodeBackend {
     if let Some(effort) = &self.effort {
       command.extend(["--effort".to_string(), effort.clone()]);
     }
-    let mut settings = Map::new();
-    settings.insert(claude_launch::DISABLE_CONNECTOR_SETTINGS_KEY.to_string(), Value::Bool(true));
+    let mut settings = claude_launch::headless_claude_settings(self.run_kind);
     if self.fast_mode {
       settings.insert(claude_launch::FAST_MODE_SETTINGS_KEY.to_string(), Value::Bool(true));
     }
@@ -219,7 +240,7 @@ impl ClaudeCodeBackend {
   }
 
   fn prepare_env(&self, mut env: Env) -> anyhow::Result<Env> {
-    let headless = headless_claude_env(&env);
+    let headless = headless_claude_env(self.run_kind, &env);
     env.extend(headless);
     if let Some(config_dir) = &self.claude_config_dir {
       let home = env.get("HOME").map(String::as_str);
@@ -519,7 +540,10 @@ mod tests {
     assert!(command.windows(2).any(|pair| pair == ["--model", "claude-fable-5-1"]));
     assert!(command.windows(2).any(|pair| pair == ["--effort", "high"]));
     assert!(command.windows(2).any(|pair| pair == ["--resume", "resume-id"]));
-    assert_eq!(settings, r#"{"disableClaudeAiConnectors":true,"fastMode":true}"#);
+    assert_eq!(
+      settings,
+      r#"{"disableClaudeAiConnectors":true,"syncClaudeAiSkills":false,"disableBundledSkills":true,"fastMode":true}"#
+    );
     assert_eq!(AgentBackend::stdin_prompt(&backend, "prompt").as_deref(), Some("prompt"));
   }
 
@@ -556,8 +580,11 @@ mod tests {
       (claude_launch::AUTO_COMPACT_WINDOW_ENV.to_string(), "300000".to_string()),
       ("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE".to_string(), "0.7".to_string()),
     ]);
-    let result = headless_claude_env(&source);
+    let result = headless_claude_env(RunKind::Work, &source);
     assert_eq!(result["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"], "1");
+    assert_eq!(result["BASH_DEFAULT_TIMEOUT_MS"], "900000");
+    assert_eq!(result["BASH_MAX_TIMEOUT_MS"], "900000");
+    assert_eq!(result["CLAUDE_CODE_DISABLE_ADVISOR_TOOL"], "1");
     assert_eq!(result[claude_launch::AUTO_COMPACT_WINDOW_ENV], "300000");
     assert_eq!(result["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"], "0.7");
     assert!(!result.contains_key(claude_launch::SIMPLE_SYSTEM_PROMPT_ENV));
@@ -570,7 +597,7 @@ mod tests {
       (claude_launch::MAX_CONTEXT_TOKENS_ENV.to_string(), "200000".to_string()),
     ]);
     assert_eq!(
-      claude_reading_limits_from(&source),
+      claude_reading_limits_from(RunKind::Work, &source),
       ContextLimits { declared_window: Some(300_000), compact_reserve: None }
     );
   }
@@ -579,7 +606,7 @@ mod tests {
   fn reading_limits_parse_python_integer_whitespace_sign_and_separators() {
     let source = Env::from([(claude_launch::AUTO_COMPACT_WINDOW_ENV.to_string(), " +300_000 ".to_string())]);
     assert_eq!(
-      claude_reading_limits_from(&source),
+      claude_reading_limits_from(RunKind::Work, &source),
       ContextLimits { declared_window: Some(300_000), compact_reserve: Some(33_000) }
     );
   }

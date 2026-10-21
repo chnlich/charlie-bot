@@ -482,6 +482,7 @@ impl Setup {
       instructions_content: None,
       session_meta,
       held_native_id: None,
+      run_kind: charliebot_store::run_records::RunKind::Work,
     })
   }
 

@@ -207,6 +207,7 @@ receiver is `Registry`, and every method returns `Result<(), RegistryError>` unl
   run.
 - Example: `registry.backend_type(BackendTypeRegistration { type_name: "codex", traits, option_model, factory, lifecycle: None, translate_fallback: false })?;`
 - `LaunchContext.base_env: Arc<Env>` carries the base agent environment into lifecycle launches and compaction.
+- `LaunchContext.run_kind: RunKind` carries `manager_turn` for a manager launch and the persisted run kind for a worker launch.
 - Three seams that a backend type uses beyond `AgentBackend`'s command, environment and translator:
   - **One-shot.** `AgentBackend::one_shot_text(base_env, prompt, system, timeout)` returns
     `Option<BoxFuture<..>>`: `Some` is the CLI-native, tool-less one-shot, and `None` means the type has none (the
@@ -244,7 +245,7 @@ receiver is `Registry`, and every method returns `Result<(), RegistryError>` unl
 ### Reading limits
 
 - Python: `backend_lifecycle_registration.py:49` `register_reading_limits`
-- Rust: `reading_limits(kind: &'static str, limits: ReadingLimitsFn)`, where `ReadingLimitsFn = fn() -> ContextLimits`.
+- Rust: `reading_limits(kind: &'static str, limits: ReadingLimitsFn)`, where `ReadingLimitsFn = fn(RunKind) -> ContextLimits`.
 - Example: `registry.reading_limits("claude", claude_limits)?;`
 
 ### Usage resolvers

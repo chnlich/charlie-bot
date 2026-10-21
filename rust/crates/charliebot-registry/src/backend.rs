@@ -17,6 +17,7 @@ use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::hot_reload::HotReload;
 use charliebot_store::Store;
 use charliebot_store::metadata::{SessionMetadata, ThreadMetadata, UtcDateTime};
+use charliebot_store::run_records::RunKind;
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value};
 
@@ -75,7 +76,7 @@ pub struct ContextLimits {
 }
 
 /// Computes the limits of one reading kind (`backend_lifecycle_registration.register_reading_limits`).
-pub type ReadingLimitsFn = fn() -> ContextLimits;
+pub type ReadingLimitsFn = fn(RunKind) -> ContextLimits;
 
 /// Reads one backend type's usage from its session events (`register_usage_resolver`). A resolver returns the usage
 /// object for the session, or `None`.
@@ -221,6 +222,7 @@ pub struct LaunchContext {
   /// Shared turn metadata, updated when the run records a new Claude account label.
   pub session_meta: Arc<Mutex<SessionMetadata>>,
   pub kind: LaunchKind,
+  pub run_kind: RunKind,
   pub cwd: PathBuf,
   /// The base agent environment owned by the startup state.
   pub base_env: Arc<Env>,
@@ -435,8 +437,8 @@ impl Registry {
   }
 
   /// The context limits of `kind`, or `None` when no package registered the kind.
-  pub fn reading_limits_for(&self, kind: &str) -> Option<ContextLimits> {
-    self.reading_limits.get(kind).map(|limits| limits())
+  pub fn reading_limits_for(&self, kind: &str, run_kind: RunKind) -> Option<ContextLimits> {
+    self.reading_limits.get(kind).map(|limits| limits(run_kind))
   }
 
   /// The usage-resolver constructor of `backend_type`, or `None` when the type has none.

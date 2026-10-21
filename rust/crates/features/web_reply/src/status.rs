@@ -5,6 +5,7 @@
 
 use std::collections::HashSet;
 use std::fs;
+use std::net::Ipv6Addr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -184,8 +185,10 @@ pub fn parse_item(raw: &Value) -> Result<WaitingItem, WebReplyError> {
 /// `file_urls.host_file`: the host file a link names, or None when it names no file on this host. A file-server path
 /// names the absolute path after the mount, whatever scheme or host precedes it. A bare absolute path names itself when
 /// it has no scheme, network location, query or fragment. The link is split as `urllib.parse.urlsplit` splits it.
-fn host_file(link: Option<&str>) -> Option<PathBuf> {
-  let link = link.filter(|link| !link.is_empty())?;
+fn host_file(link: Option<&str>) -> Result<Option<PathBuf>, WebReplyError> {
+  let Some(link) = link.filter(|link| !link.is_empty()) else {
+    return Ok(None);
+  };
   let cleaned: String =
     link.trim_start_matches(|c: char| c <= ' ').chars().filter(|c| !matches!(c, '\t' | '\r' | '\n')).collect();
   let (before_fragment, fragment) = cleaned.split_once('#').unwrap_or((cleaned.as_str(), ""));
@@ -196,14 +199,59 @@ fn host_file(link: Option<&str>) -> Option<PathBuf> {
     Some(authority) => authority.find('/').map_or((authority, ""), |index| authority.split_at(index)),
     None => ("", after_scheme),
   };
+  validate_bracketed_netloc(netloc)?;
   let path = percent_decode_str(encoded_path).decode_utf8_lossy();
   if path.starts_with(&format!("{MOUNT}/")) {
-    return Some(PathBuf::from(&path[MOUNT.len()..]));
+    return Ok(Some(PathBuf::from(&path[MOUNT.len()..])));
   }
   if scheme.is_none() && netloc.is_empty() && query.is_empty() && fragment.is_empty() && path.starts_with('/') {
-    return Some(PathBuf::from(path.as_ref()));
+    return Ok(Some(PathBuf::from(path.as_ref())));
   }
-  None
+  Ok(None)
+}
+
+/// Raise the same kind of URL split error Python raises for a malformed bracketed authority.
+fn validate_bracketed_netloc(netloc: &str) -> Result<(), WebReplyError> {
+  let has_open_bracket = netloc.contains('[');
+  let has_close_bracket = netloc.contains(']');
+  if !has_open_bracket && !has_close_bracket {
+    return Ok(());
+  }
+  if has_open_bracket != has_close_bracket {
+    return Err(invalid_bracketed_url());
+  }
+
+  let host_and_port = netloc.rsplit('@').next().unwrap_or(netloc);
+  if let Some(after_open) = host_and_port.strip_prefix('[') {
+    let Some((hostname, after_close)) = after_open.split_once(']') else {
+      return Err(invalid_bracketed_url());
+    };
+    if (!after_close.is_empty() && !after_close.starts_with(':')) || !valid_bracketed_host(hostname) {
+      return Err(invalid_bracketed_url());
+    }
+  } else {
+    let hostname = host_and_port.split_once(':').map_or(host_and_port, |(host, _)| host);
+    if !valid_bracketed_host(hostname) {
+      return Err(invalid_bracketed_url());
+    }
+  }
+  Ok(())
+}
+
+/// The IPv6 or IPvFuture host allowed between URL authority brackets by `urllib.parse.urlsplit`.
+fn valid_bracketed_host(hostname: &str) -> bool {
+  if let Some(version) = hostname.strip_prefix('v').or_else(|| hostname.strip_prefix('V')) {
+    return version.split_once('.').is_some_and(|(hex, address)| {
+      !hex.is_empty() && hex.bytes().all(|byte| byte.is_ascii_hexdigit()) && !address.is_empty()
+    });
+  }
+  let address = hostname.split_once('%').map_or(hostname, |(address, zone)| if zone.is_empty() { "" } else { address });
+  !address.is_empty() && address.parse::<Ipv6Addr>().is_ok()
+}
+
+/// The route surfaces Python's unhandled `ValueError` as an HTTP 500 for a malformed bracketed URL.
+fn invalid_bracketed_url() -> WebReplyError {
+  WebReplyError::Failed(anyhow::anyhow!("Invalid IPv6 URL"))
 }
 
 /// The text after the `:` when `link` begins with a valid URL scheme.
@@ -228,7 +276,7 @@ fn item_sha256(item: &WaitingItem) -> Result<String, WebReplyError> {
   let payload = json!({"text": &item.text, "context": &item.context, "link": &item.link});
   let mut digest = Sha256::new();
   digest.update(json_dumps(&payload, &ITEM_DIGEST_JSON).as_bytes());
-  if let Some(path) = host_file(item.link.as_deref()) {
+  if let Some(path) = host_file(item.link.as_deref())? {
     digest.update(fs::read(path).map_err(|error| WebReplyError::Failed(error.into()))?);
   }
   Ok(format!("{:x}", digest.finalize()))
@@ -929,7 +977,7 @@ mod tests {
 
   #[test]
   fn a_link_names_a_host_file_as_python_splits_it() {
-    let names = |link: &str| host_file(Some(link));
+    let names = |link: &str| host_file(Some(link)).expect("the link splits");
 
     assert_eq!(names("/tmp/page.html"), Some(PathBuf::from("/tmp/page.html")));
     assert_eq!(names(" /tmp/page.html"), Some(PathBuf::from("/tmp/page.html")));
@@ -939,9 +987,18 @@ mod tests {
     assert_eq!(names(&file_link(std::path::Path::new("/tmp/page.html"))), Some(PathBuf::from("/tmp/page.html")));
     assert_eq!(names("/?session=synthetic"), None);
     assert_eq!(names("https://github.com/org/repo/pull/1"), None);
+    assert_eq!(names("https://[::1]/page.html"), None);
+    assert_eq!(names("https://[v1.example]/page.html"), None);
     assert_eq!(names("relative/page.html"), None);
-    assert_eq!(host_file(None), None);
-    assert_eq!(host_file(Some("")), None);
+    assert_eq!(host_file(None).expect("an absent link splits"), None);
+    assert_eq!(host_file(Some("")).expect("an empty link splits"), None);
+  }
+
+  #[test]
+  fn a_malformed_bracketed_authority_fails_as_python_urlsplit_does() {
+    for link in ["https://[not-ipv6]/page.html", "https://[::1]suffix/page.html", "https://host]/page.html"] {
+      assert!(matches!(host_file(Some(link)), Err(WebReplyError::Failed(_))), "link {link}");
+    }
   }
 
   #[test]

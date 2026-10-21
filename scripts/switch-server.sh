@@ -11,8 +11,9 @@
 # the server is in.
 #
 # The probe turn runs last, in a session of its own. It passes once the run records its first assistant output (a
-# message or a tool call) or ends success. It then stops the run unless the run already ended, and archives the
-# session. It reads run states and message roles only, so the model's text cannot fail a healthy server.
+# message or a tool call) or ends success. The archive then stops every run of the session that has not ended, and
+# repeats the stop and the archive while the server answers 409: a follow-up run, such as the web reply nudge, can start
+# after the turn. It reads run states and message roles only, so the model's text cannot fail a healthy server.
 #
 # Environment: CHARLIEBOT_HOME (default ~/.charliebot), CHARLIEBOT_RELEASES_DIR (default ~/charliebot-releases),
 # CHARLIEBOT_LOG_DIR (default /tmp/charliebot-logs), CHARLIEBOT_TMUX_SOCKET (a tmux -L socket; unset means the default
@@ -384,9 +385,9 @@ probe_read_run() {
   PROBE_STATE="$(newest_run_field state)" || return 1
 }
 
-# probe_ended: the probe's run has ended. A stopped run never launched, so it never will.
-probe_ended() {
-  case "$PROBE_STATE" in
+# run_ended STATE: the run has ended. A stopped run never launched, so it never will.
+run_ended() {
+  case "$1" in
     success | failed | interrupted | stopped) return 0 ;;
     *) return 1 ;;
   esac
@@ -426,7 +427,7 @@ probe_wait_output() {
       probe_log "first output"
       return 0
     fi
-    if probe_ended; then
+    if run_ended "$PROBE_STATE"; then
       probe_log "run ended $PROBE_STATE before its first output"
       return 1
     fi
@@ -438,57 +439,95 @@ probe_wait_output() {
   done
 }
 
-# probe_wait_settled: succeeds once the run has ended; fails when PROBE_CANCEL_WAIT_S passes first.
-probe_wait_settled() {
-  local end=$(($(probe_clock) + PROBE_CANCEL_WAIT_S * 1000000))
-  while :; do
-    probe_read_run || return 1
-    if probe_ended; then
-      probe_log "run settled as $PROBE_STATE"
-      return 0
-    fi
-    if [ "$(probe_clock)" -ge "$end" ]; then
-      probe_log "run did not settle within ${PROBE_CANCEL_WAIT_S}s"
-      return 1
-    fi
-    sleep 0.2
-  done
+# probe_run_stages: sends the message and waits for the run's first output. probe_archive stops the run if it is open.
+probe_run_stages() {
+  api POST "/api/chat/$PROBE_SESSION/message" '{"content":"Reply with the single word HELLO."}'
+  [ "$API_STATUS" = 202 ] || {
+    log "probe: the message answered $API_STATUS"
+    return 1
+  }
+  probe_wait_output
 }
 
-# probe_stop: asks the probe's run to stop, then waits for it to end.
-probe_stop() {
+# run_states: one "RUN_ID STATE" line per run in the runs page in $WORK/body. The page asks for 500 runs, the largest
+# page both servers serve; a next cursor means runs the stop would miss, so it is an error.
+run_states() {
+  python3 -I - "$WORK/body" <<'PY'
+import json
+import sys
+
+page = json.load(open(sys.argv[1]))
+if page["next_cursor"] is not None:
+  raise SystemExit("probe: the session has more than 500 runs")
+for run in page["items"]:
+  print(run["id"], run["state"])
+PY
+}
+
+# probe_cancel RUN: asks RUN to stop. The request id names the run, so a repeated request is the same request.
+probe_cancel() {
+  PROBE_RUN=$1
   api POST "/api/sessions/$PROBE_SESSION/runs/$PROBE_RUN/cancel" "{\"request_id\":\"switch-probe-$PROBE_RUN\"}"
   [ "$API_STATUS" = 200 ] || {
     log "probe: the cancel answered $API_STATUS"
     return 1
   }
   probe_log "stop requested"
-  probe_wait_settled
 }
 
-# probe_run_stages: sends the message, waits for the run's first output, then stops the run unless it has ended.
-probe_run_stages() {
-  local verdict=0
-  api POST "/api/chat/$PROBE_SESSION/message" '{"content":"Reply with the single word HELLO."}'
-  [ "$API_STATUS" = 202 ] || {
-    log "probe: the message answered $API_STATUS"
-    return 1
-  }
-  probe_wait_output || verdict=1
-  if [ -n "$PROBE_RUN" ] && ! probe_ended; then
-    probe_stop || verdict=1
-  fi
-  return "$verdict"
+# probe_clear_runs END: stops each run of the probe session that has not ended, then waits until none is left or the
+# clock passes END. A run that starts meanwhile is stopped the same way.
+probe_clear_runs() {
+  local end=$1 requested=" " runs run_id state stuck issued
+  while :; do
+    api GET "/api/sessions/$PROBE_SESSION/runs?limit=500"
+    [ "$API_STATUS" = 200 ] || {
+      log "probe: listing the runs answered $API_STATUS"
+      return 1
+    }
+    runs="$(run_states)" || return 1
+    stuck=""
+    issued=0
+    while read -r run_id state; do
+      run_ended "$state" && continue
+      [ -n "$stuck" ] || stuck=$run_id
+      case "$requested" in
+        *" $run_id "*) ;;
+        *)
+          requested+="$run_id "
+          issued=1
+          probe_cancel "$run_id" || return 1
+          ;;
+      esac
+    done <<<"$runs"
+    [ -n "$stuck" ] || return 0
+    if [ "$(probe_clock)" -ge "$end" ]; then
+      PROBE_RUN=$stuck
+      probe_log "run did not settle within ${PROBE_CANCEL_WAIT_S}s"
+      return 1
+    fi
+    # A pass that just requested a stop reads the runs again at once; a pass that only waits sleeps one poll interval.
+    [ "$issued" = 1 ] || sleep 0.2
+  done
 }
 
-# probe_archive: archives the probe session. The server refuses while the session has an unfinished run.
+# probe_archive: archives the probe session. Each attempt first stops the session's open runs, because the server
+# refuses an archive while a run is unfinished. A 409 means a run started after that stop, so the stop and the archive
+# repeat until PROBE_CANCEL_WAIT_S passes.
 probe_archive() {
-  api DELETE "/api/sessions/$PROBE_SESSION"
-  [ "$API_STATUS" = 200 ] || {
+  local end=$(($(probe_clock) + PROBE_CANCEL_WAIT_S * 1000000))
+  while :; do
+    probe_clear_runs "$end" || return 1
+    api DELETE "/api/sessions/$PROBE_SESSION"
+    if [ "$API_STATUS" = 200 ]; then
+      probe_log "archived"
+      return 0
+    fi
     probe_log "archive answered $API_STATUS"
-    return 1
-  }
-  probe_log "archived"
+    [ "$API_STATUS" = 409 ] || return 1
+    [ "$(probe_clock)" -lt "$end" ] || return 1
+    sleep 0.2
+  done
 }
 
 # probe_turn: runs the stages in a session of its own and archives that session whatever the stages found, so the live

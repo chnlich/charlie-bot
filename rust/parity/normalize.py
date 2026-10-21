@@ -110,7 +110,9 @@ class FieldRule:
   *field* is a dotted path; ``[*]`` steps into every list element and ``*`` into every mapping value. With
   *when*, the field is masked only in an object whose own fields hold those values: the object that names the
   field, so ``result_refs[*]`` is filtered by the event that holds ``result_refs``. With *pattern*, only the group
-  ``value`` of a string that fully matches it is masked, and any other value compares as it is.
+  ``value`` of a string that fully matches it is masked, and any other value compares as it is. With *values*, only
+  a value of the same JSON type as one of them and equal to it is masked, null included. With *stop_request*, the
+  field is masked only in a run record that this stop request interrupted (see ``Context.stop_requests``).
   """
 
   name: str
@@ -120,12 +122,17 @@ class FieldRule:
   when: tuple[tuple[str, str], ...]
   pattern: re.Pattern[str] | None = None
   sibling_prefix: tuple[tuple[str, str], ...] = ()
+  values: tuple[Any, ...] | None = None
+  stop_request: str | None = None
 
   @property
   def placeholder(self) -> str:
     return f"<{self.name}>"
 
   def mask(self, value: Any) -> Any:
+    if self.values is not None:
+      matched = any(type(value) is type(allowed) and value == allowed for allowed in self.values)
+      return self.placeholder if matched else value
     if value is None:
       return None
     if self.pattern is None:
@@ -428,6 +435,19 @@ FILE_RULES: tuple[FieldRule, ...] = (
         reason="wall-clock time: each server records its agent completion on its own clock",
     ),
     FieldRule(
+        name="interrupted-run-exit-code",
+        target="home/sessions/*/data/runs/*/metadata.json",
+        field="exit_code",
+        when=(),
+        values=(None, -9),
+        stop_request="synthetic-stop-request",
+        reason=(
+            "race for the first write of a stopped run's terminal record: the stopper records the interrupted outcome "
+            "with no exit code (runs.py:1161) and the launcher records the signal exit -9, and record_finish_locked "
+            "keeps the first write (runs.py:1036-1047), so Python's exit code is null or -9 by timing; the stop "
+            "request id is handover-stop-request's own, so no other scenario's run is masked"),
+    ),
+    FieldRule(
         name="run-local-repo-task-spec-hash",
         target="home/sessions/*/data/runs/*/metadata.json",
         field="task_spec_hash",
@@ -720,12 +740,18 @@ def ignored_fake_message(record: dict) -> bool:
 
 @dataclasses.dataclass
 class Context:
-  """One server's per-run values the tree path rule rewrites."""
+  """One server's per-run values: the names the tree path rule rewrites and the run facts a FieldRule reads.
+
+  *interrupted_runs* holds the run ids whose run_finished outcome is interrupted, and *stop_requests* the
+  (request_id, run_id) pairs of the durable run_stop_requested facts. Both hold the raw ids of the chat events.
+  """
 
   tree_root: str
   fixture_uuids: frozenset[str] = frozenset()
   stable_uuids: dict[str, str] = dataclasses.field(default_factory=dict)
   minted_uuids: dict[str, str] = dataclasses.field(default_factory=dict)
+  interrupted_runs: set[str] = dataclasses.field(default_factory=set)
+  stop_requests: set[tuple[str, str]] = dataclasses.field(default_factory=set)
 
 
 def fixture_uuids(files: list[tuple[str, bytes]]) -> frozenset[str]:
@@ -777,6 +803,16 @@ def path_sort_key(path: str, ctx: Context) -> str:
   return _UUID.sub(replace, path)
 
 
+def _observe_run_facts(value: Any, ctx: Context) -> None:
+  """Record the stop requests and the interrupted finishes that a stop-request FieldRule reads."""
+  if not isinstance(value, dict):
+    return
+  if value.get("type") == "run_stop_requested":
+    ctx.stop_requests.add((value["request_id"], value["run_id"]))
+  elif value.get("type") == "run_finished" and value.get("outcome") == "interrupted":
+    ctx.interrupted_runs.add(value["run_id"])
+
+
 def prepare_snapshot(entries: list[tuple[str, str, bytes]], ctx: Context) -> None:
   """Assign minted UUID names by stable-name path order and each JSON document's stored order."""
   ordered = sorted(entries, key=lambda entry: (path_sort_key(entry[0], ctx), entry[0]))
@@ -794,6 +830,8 @@ def prepare_snapshot(entries: list[tuple[str, str, bytes]], ctx: Context) -> Non
           except json.JSONDecodeError:
             continue
           _observe(value, ctx)
+          if path.endswith("/data/chat_events.jsonl"):
+            _observe_run_facts(value, ctx)
     elif path.endswith((".yaml", ".yml")):
       _observe(yaml.safe_load(data), ctx)
     else:
@@ -899,14 +937,26 @@ def _split_field(field: str) -> list[str]:
   return segments
 
 
+def _stopped_by(record: Any, request_id: str, ctx: Context) -> bool:
+  """Whether *record* is a run that *request_id* stopped and that finished interrupted.
+
+  The run id is read before the tree path rule rewrites it, because the context holds the raw ids of the chat events.
+  """
+  run_id = record.get("id") if isinstance(record, dict) else None
+  return run_id in ctx.interrupted_runs and (request_id, run_id) in ctx.stop_requests
+
+
 def normalize_json(value: Any, rules: tuple[FieldRule, ...], ctx: Context) -> Any:
   """Apply the tree path rule to every string, then matching field rules in *rules*."""
+  record = value
   value = _normalize_strings(value, ctx)
   for rule in rules:
     if rule.sibling_prefix and (not isinstance(value, dict) or
                                 any(not any(isinstance(item, str) and item.startswith(prefix)
                                             for item in value.get(field) or [])
                                     for field, prefix in rule.sibling_prefix)):
+      continue
+    if rule.stop_request is not None and not _stopped_by(record, rule.stop_request, ctx):
       continue
     value = _mask(value, _split_field(rule.field), rule)
   return value

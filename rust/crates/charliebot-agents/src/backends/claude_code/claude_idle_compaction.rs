@@ -183,10 +183,6 @@ impl IdleCompaction {
     if (timer.input.is_busy)(session_id)? {
       return Ok(None);
     }
-    candidate.facts.turn_busy = false;
-    if !should_compact(&candidate.facts, candidate.idle_tokens, now) {
-      return Ok(None);
-    }
     let run = Arc::clone(&candidate.run);
     let (done_sender, done_receiver) = watch::channel(false);
     let run_id = {

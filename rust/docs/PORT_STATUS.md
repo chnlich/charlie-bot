@@ -323,9 +323,9 @@ run-record work is `S2`; task-tree runtime and feature-owned files remain with t
 
 ## Catch-up 78e0d10e2 open steps
 
-Each row is one failing Rust parity step of the all-stage run on this head. The `handover-stop-request` row is gone:
-its interrupted run's chat-event order is accepted by that scenario's `either_order_of_adjacent_events` rule (see
-`rust/parity/README.md`).
+Each row is one failing Rust parity step of the all-stage run on this head. That run, with the debug binary, matches
+1,160 of 1,160 steps, so no row is left. The `handover-stop-request` row is gone: its interrupted run's chat-event order
+is accepted by that scenario's `either_order_of_adjacent_events` rule (see `rust/parity/README.md`).
 
 | Scenario | Step | Stage | Commits | Difference |
 | --- | --- | --- | --- | --- |

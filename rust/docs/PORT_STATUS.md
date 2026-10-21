@@ -314,23 +314,123 @@ run-record work is `S2`; task-tree runtime and feature-owned files remain with t
 | tmux session `charliebot-<id>` | features/terminal | ported | Detached terminal shell. |
 | repo config examples and prompt inputs | foundation | reader-only | Not written by the server. |
 
-## Catch-up e44c9ccef open steps
+## Catch-up 78e0d10e2 open steps
 
-Each non-intermittent row is one failing Rust parity step from the all-stage run
-(1,111/1,123 steps matched). The intermittent rows record their observed failure
-counts and may pass in a run.
+Each row is one failing Rust parity step of the all-stage run on this head. The two Rust runs with the debug binary
+fail the same 68 steps (1,089 of 1,157 steps match). The Python-vs-Python run matches 1,097 of 1,097. Every row is a
+prompt difference from `8b85da74d`, except the Intermittent row, which also has a chat-event difference seen in one
+of four Rust runs.
 
-| Scenario | Step | Stage | Main commit | Difference |
+| Scenario | Step | Stage | Commits | Difference |
 | --- | --- | --- | --- | --- |
+| manager-turn-cancellation-routes | wait at the chat cancel gate | agent-orchestration-cancel | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| manager-turn-cancellation-routes | wait for the chat-cancelled run to finish | agent-orchestration-cancel | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| manager-turn-cancellation-routes | wait at the retried manager run cancel gate | agent-orchestration-cancel | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| manager-turn-cancellation-routes | wait for the run-cancelled manager retry to finish | agent-orchestration-cancel | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| agent-orchestration-cold-read | delegate a cold read of the synthetic page | agent-orchestration | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| agent-orchestration-cold-read | let the manager finish the cold-read report | agent-orchestration | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| agent-orchestration-cold-read | delegate a cold read whose first reader fails and second answers | agent-orchestration | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| agent-orchestration-cold-read | delegate a cold read whose two readers fail | agent-orchestration | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| task-completion-routes | cancel the stopped queued worker to deliver its report | agent-orchestration | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| task-completion-routes | cancel the task after its run finishes | agent-orchestration | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| agent-orchestration-delegate | delegate one repo-less script run | agent-orchestration | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| agent-orchestration-delegate | delegate a failing repo-less worker | agent-orchestration | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| agent-orchestration-delegate | delegate a failing implement worker on the local repository | agent-orchestration | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| manager-turn-execution-and-routes | wait for the manager turn to finish | agent-orchestration | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| manager-turn-execution-and-routes | wait at the first manager gate | agent-orchestration | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| manager-turn-execution-and-routes | release the first manager turn | agent-orchestration | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| manager-turn-execution-and-routes | wait for the retried manager run to finish | agent-orchestration | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| manager-turn-opencode | wait for the OpenCode manager run to finish | agent-orchestration | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| implement-review-chain | delegate a repo task whose unchanged branch already landed on origin main | agent-orchestration | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| implement-review-chain | delegate a repo-less implement task | agent-orchestration | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| implement-review-chain | delegate a task whose reviewer exhausts the configured pool | agent-orchestration | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| agent-orchestration-session-message | a relay to a live session is accepted | agent-orchestration | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| agent-orchestration-session-message | let the target manager answer the relay | agent-orchestration | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| cron-routes-and-ticks | wait for the manual cron firing report | triggers-cron-improve | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| cron-routes-and-ticks | wait for a scheduler tick to fire the same task again | triggers-cron-improve | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| features-artifacts-plan-fork | fork of the plan worker at a null index | features | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| features-discord-routes | Discord effective prompt carries the reply segment | features | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| features-harness-discord | allowed user mention starts a Discord thread session | features | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| features-harness-discord | release the silent summon result | features | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| features-harness-slack | allowed app mention starts its Slack thread session | features | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| features-harness-slack | release summon agent after its result | features | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| features-web-reply-audit | wait for the audit nudge | features | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| features-web-reply-language | wait for the audit nudge | features | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| handover-admitted-input | release the first manager turn · python-to-candidate | agent-orchestration | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). CLAUDE.md is also changed by the candidate only in this step. |
+| handover-admitted-input | wait for the first turn at the gate · candidate-to-python | agent-orchestration | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| handover-admitted-input | hand over the live manager run · candidate-to-python | agent-orchestration | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| handover-admitted-input | release the first manager turn · candidate-to-python | agent-orchestration | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). CLAUDE.md is also changed by the candidate only in this step. |
+| handover-drain | wait for the raw log cursor at the gate · candidate-to-python | agent-orchestration | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| handover-improve | release the iteration's second gate so its agent exits · python-to-candidate | triggers-cron-improve | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| handover-improve | wait for the iteration at its first gate · candidate-to-python | triggers-cron-improve | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| handover-manager-turn | wait for the raw log cursor at the gate · candidate-to-python | agent-orchestration | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| handover-opencode | wait until the OpenCode API fake reaches its turn gate · candidate-to-python | agent-orchestration | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| handover-opencode | hand over the terminated OpenCode turn to server B · candidate-to-python | agent-orchestration | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| handover-review-run | release the adopted reviewer · python-to-candidate | agent-orchestration | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| handover-review-run | delegate an implement task whose reviewer remains alive through handover · candidate-to-python | agent-orchestration | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| handover-stop-request | wait for the stop target at its first gate · candidate-to-python | agent-orchestration | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| handover-stop-request | hand over the durable interrupted outcome · candidate-to-python | agent-orchestration | 8b85da74d; f6ae0c844 (inferred) | Intermittent. Fails in 4 of 4 Rust runs on the prompt hash (8b85da74d). In 1 of 4 runs the interrupted outcome's chat events also differ: the candidate writes run_finished before master_done, the baseline the reverse. Attributed to f6ae0c844 by code reading; not bisected. |
+| handover-worker-run | wait for the worker agent at its live gate · candidate-to-python | agent-orchestration | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| improve-loop-reports | wait for the parent manager at its gate | triggers-cron-improve | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| improve-loop-reports | wait for both iteration reports to reach the busy parent | triggers-cron-improve | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| improve-loop-reports | release the parent manager after all three reports arrive | triggers-cron-improve | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| session-runs | effective prompt, manager root | session-read-api | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| session-runs | effective prompt, manager child | session-read-api | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| session-runs | effective prompt, worker | session-read-api | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| session-runs | effective prompt, chat-thread session | session-read-api | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| session-runs | effective prompt, work kind on a manager | session-read-api | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| session-stream | the trigger turns reach the live socket on the session channel | session-stream | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| session-stream | the trigger turns reach the live socket on the sidebar channel | session-stream | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| session-stream | wait for the last live trigger to fire before shutdown | session-stream | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| session-write-agent | wait at the agent caller gate | session-write | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| session-write-agent | release the agent caller turn | session-write | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| session-write-fork | fork of the source at a null index, the whole log | session-write | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| session-write-fork | fork of the source at its first line | session-write | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| session-write-fork | fork of the source at a middle line | session-write | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| session-write-fork | fork of the source at its last line | session-write | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| session-write-fork | elone of the source at a middle line takes over and archives the source | session-write | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| wait-trigger-delay | wait until the trigger file is fired | triggers-cron-improve | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
+| wait-trigger-local-pid | end the synthetic watched process | triggers-cron-improve | 8b85da74d | Prompt: `## Profile Home` section missing (274 chars). |
 
-## Catch-up e44c9ccef ignored Cargo tests
+## Catch-up 78e0d10e2 ignored Cargo tests
 
-Each test below fails because Rust has not ported the Python behavior changed on `main`. Port tasks
-remove its `catch-up e44c9ccef` ignore when they port that behavior.
+Each test below fails until Rust ports the behavior changed on `main`, or until its fixture matches `main`. A port task
+removes the `catch-up 78e0d10e2` ignore when the test passes.
 
-The launch-environment helper's synthetic compaction case uses `run_kind="manager_turn"`: it covers a
-manager turn, whose Python production caller `master_cc_relay` passes `ctx.run_kind` to
-`compaction_env`.
+The launch-environment helper's synthetic compaction case uses `run_kind="manager_turn"`: it covers a manager turn,
+whose Python production caller `master_cc_relay` passes `ctx.run_kind` to `compaction_env`.
 
 | Row | Test | Binary | Main commit | Difference |
 | --- | --- | --- | --- | --- |
+| cargo-1 | `cli_backends_match_the_python_package_on_synthetic_inputs` | `charliebot-agents` `cli_backends_cross_implementation` | eaa087a23 | The Python reference refuses the case matrix's `cc-kimi` type, which `main` no longer registers, so the test stops before comparing. The matrix needs `cc-anthropic-compatible` cases first. |
+| cargo-2 | `task_gate_matches_python_cases_and_the_parity_fixture_tree` | `charliebot-store` `cross_implementation` | 85054aeab | At the `machine-input-only` gate case the Python reason also names a thread platform summon; Rust's reason does not. The test stops at the first mismatch, so later cases are unchecked. |
+| cargo-3 | `snapshots_match_the_python_server_byte_for_byte` | `charliebot-tasks` `prompt_snapshot_golden` | 8b85da74d | Every prompt snapshot case lacks the `## Profile Home` section (274 chars). |
+
+## Catch-up 78e0d10e2 unported commits
+
+Each of the 19 `main` commits that change `src` or `server.py` between `e44c9ccef` and `78e0d10e2` (`git rev-list
+--no-merges e44c9ccef..78e0d10e2 -- src server.py`) has one class. `red list` commits appear in the two tables above.
+`unported` commits have no Rust counterpart and no parity row or Cargo test. `in Rust` commits already match `main`.
+`no behavior` commits change no output.
+
+| Main commit | Change | Class | Note |
+| --- | --- | --- | --- |
+| e6f440710 | Backup keeps at most five archives; the retention tiers shorten to 3 days and Sundays to 15 days | unported | `src/features/backup/backup.py`. Rust keeps the 7, 30 and 90-day tiers (sibling backup archives row). No parity row or Cargo test checks the new rule. |
+| 85054aeab | A recorded Slack or Discord summon counts as a user request | red list | cargo-2. The parity steps for summons fail on the prompt difference only, so parity does not check the rule. |
+| e4f43f962 | Dated provenance dropped from two cost comments | no behavior | Comments only. |
+| 0a844be82 | Web replies and status updates refuse dead links before recording | unported | `src/features/file_urls.py`. Rust does not refuse dead links; no scenario or Cargo test covers it. |
+| 23924d7dd | Ruff fixes for the file-link change | no behavior | Lint only. |
+| eaa087a23 | Anthropic-compatible Claude Code entries (`cc-anthropic-compatible`) | red list | cargo-1. Rust refuses the type at config load. The `other-backends-openai-proxy` scenario now uses `cc-claude`, so no parity row covers the type. |
+| eb606bcf1 | Claude Code window follows the entry window; `CLAUDE_CODE_MAX_CONTEXT_TOKENS` is set too | unported | Rust sets no per-entry window variable. cargo-1 stops at its case matrix, so no test reaches this change. |
+| f6ae0c844 | Run facts folded once; task state read from the history tail | red list | The interrupted-outcome row in the open-steps table. Attributed by reading the change, which touches the boot pass's terminal-outcome read; not bisected. |
+| 85e41c2c3 | Boot recovery records a pass marker and skips closed nodes | unported | No Rust marker or skip. The handover scenarios restart the server and pass, so parity does not see the missing marker. |
+| 23de57ca8 | One recovery-done line; the worktree check uses `os.path.lexists` | unported | No Rust counterpart found. No parity row or Cargo test covers it. |
+| 8b85da74d | Hardcoded paths replaced by `$CHARLIEBOT_HOME`; the `## Profile Home` section added to prompts | red list | The prompt rows in the open-steps table; cargo-3. |
+| 2d24e472a | Modules named, not symbols, in the task recovery imports | no behavior | Import style only. |
+| a47ad2003 | Type-less lines skipped in the history-tail task state read | in Rust | `charliebot-store/src/task_tree.rs:1362` (`fold_task_facts`). |
+| 50bc61cd7 | YAPF formatting of `src/runtime/task_prompts.py` | no behavior | Formatting only. |
+| 97d77338e | Unused `KEEP_REASONS` tuple dropped | no behavior | Nothing read the tuple. |
+| e3b2c7425 | Shared `_no_summary_fallback` for the improve summary line | no behavior | Both call sites keep the same text. |
+| 3be34accc | Startup cgroup sweep limited to this home's sessions | in Rust | `charliebot-agents/src/transport/cgroup.rs:200` (`sweep_stale_session_cgroups`). |
+| 6cb6bd9e8 | `register_run` call sites migrated to `register_run_locked` (slice 1) | no behavior | Call-site migration only. |
+| 8a7e08a3e | Test-only `register_run` wrapper dropped | no behavior | Python test helpers `python_store_ops.py` and `python_dispatch_golden.py` now call `register_run_locked`. |

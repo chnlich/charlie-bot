@@ -118,6 +118,7 @@ elif mode == "scan":
     print(f"live\t{run['session_id']}\t{run['id']}\t{run.get('backend')}\t{run['pid']}")
     if run.get("backend") in NO_REATTACH:
       print(f"block\t{run['backend']} run {run['id']} (pid {run['pid']}) cannot be re-attached after a restart")
+  # A loop's controller runs inside the server process; a restart never resumes it (src/runtime/task_recovery.py:8-10).
   for path in sorted((home / "sessions").glob("*/loops/*/state.json")):
     state = json.loads(path.read_text(encoding="utf-8"))
     controller = state.get("server_pid")

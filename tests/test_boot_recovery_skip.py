@@ -216,13 +216,18 @@ async def test_node_check_scan_count_does_not_grow_with_run_count(
           models.RunRecord(id=run_id, session_id=worker.id, kind="work", backend="fake", model="fake-model"))
       await tree.runs.record_finish(worker.id, run_id, "success")
 
-    folds: dict[int, int] = {}
+    # One count per event list, holding the list so its address stays its own:
+    # the memo folds a fresh ``events[covered:]`` slice whenever a list grew
+    # since its last fold, and a freed slice's address comes straight back for
+    # the next list, which without the hold reads as one list folded twice.
+    folds: dict[int, list] = {}
     orig_fold = runs_mod.fold_run_facts
     orig_terminal = runs_mod.terminal_outcome_in_events
     orig_stop = runs_mod.stop_requested_in_events
 
     def counting_fold(facts, events):
-      folds[id(events)] = folds.get(id(events), 0) + 1
+      entry = folds.setdefault(id(events), [events, 0])
+      entry[1] += 1
       return orig_fold(facts, events)
 
     questions = {"n": 0}
@@ -241,8 +246,8 @@ async def test_node_check_scan_count_does_not_grow_with_run_count(
     await task_recovery.reconcile_task_tree(cfg, tree)
     monkeypatch.undo()
     assert questions["n"] >= 2 * run_count
-    assert max(folds.values()) == 1
-    return max(folds.values()), questions["n"]
+    assert max(count for _events, count in folds.values()) == 1
+    return max(count for _events, count in folds.values()), questions["n"]
 
   max_folds_one, _ = await _pass_stats(1)
   max_folds_four, _ = await _pass_stats(4)

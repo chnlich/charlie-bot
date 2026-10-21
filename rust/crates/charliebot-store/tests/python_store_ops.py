@@ -335,8 +335,8 @@ async def _apply_python_run(home: pathlib.Path, operation: str) -> None:
   store = _python_run_store(home)
   if operation == "register":
     record = _run_record("run-register")
-    await store.register_run(record, task_spec_text="synthetic task spec")
-    await store.register_run(_run_record("run-register", kind="review"), task_spec_text="ignored replacement")
+    await store.register_run_locked(record, task_spec_text="synthetic task spec")
+    await store.register_run_locked(_run_record("run-register", kind="review"), task_spec_text="ignored replacement")
   elif operation in RUN_RETRY_OPS:
     previous = store.read_run_sync(RUN_SESSION_ID, "run-previous")
     assert previous is not None

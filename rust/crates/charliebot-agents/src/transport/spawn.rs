@@ -489,7 +489,6 @@ mod tests {
     let pid = spawned.child.id().unwrap();
     let mut guard = ProcessGroupGuard::new(pid);
     let own_nice = unsafe { libc::getpriority(libc::PRIO_PROCESS, 0) };
-    assert!(own_nice < 10, "test process nice must be below 10, got {own_nice}");
     let child_nice = unsafe { libc::getpriority(libc::PRIO_PROCESS, pid) };
     let child_session = unsafe { libc::getsid(pid as i32) };
     let cgroup_procs = fs::read_to_string(procs).unwrap();
@@ -557,6 +556,8 @@ mod tests {
   async fn claude_one_shot_applies_nice_and_session_cgroup_before_exec() {
     let root = tempfile::tempdir().unwrap();
     let (_base, procs) = temp_cgroup(root.path());
+    let own_nice = unsafe { libc::getpriority(libc::PRIO_PROCESS, 0) };
+    let expected_nice = (own_nice + TURN_TREE_NICE).min(19);
     let script = r#"printf '%s\n' "$(ps -o ni= -p $$ | tr -d ' ')" "$(cat "$CGROUP_PROCS")"; read -r line"#;
     let mut command = Command::new("/bin/sh");
     command
@@ -579,9 +580,9 @@ mod tests {
     let child_nice = unsafe { libc::getpriority(libc::PRIO_PROCESS, pid) };
     let child_session = unsafe { libc::getsid(pid as i32) };
     let cgroup_procs = fs::read_to_string(procs).unwrap();
-    assert_eq!(recorded_nice.trim(), "10");
+    assert_eq!(recorded_nice.trim().parse::<i32>().unwrap(), expected_nice);
     assert_eq!(recorded_cgroup.trim(), pid.to_string());
-    assert_eq!(child_nice, 10);
+    assert_eq!(child_nice, expected_nice);
     assert_eq!(child_session, pid as i32);
     assert_eq!(cgroup_procs, pid.to_string());
     stop_child(&mut child, &mut guard).await;
@@ -592,7 +593,7 @@ mod tests {
     let root = tempfile::tempdir().unwrap();
     let (base, procs) = temp_cgroup(root.path());
     let own_nice = unsafe { libc::getpriority(libc::PRIO_PROCESS, 0) };
-    assert!(own_nice < 10, "test process nice must be below 10, got {own_nice}");
+    assert!(own_nice < 19, "test process nice must be below 19, got {own_nice}");
     let group = cgroup::prepare_session_cgroup(&base, Some("test1234-session"), 64, 0, 16).unwrap();
     let script = r#"printf '%s\n' "$(ps -o ni= -p $$ | tr -d ' ')" "$(cat "$CGROUP_PROCS")"; read -r line"#;
     let mut command = Command::new("/bin/sh");

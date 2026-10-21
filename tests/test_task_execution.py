@@ -2715,7 +2715,7 @@ async def test_pool_exhausted_launch_fails_the_run_with_evidence_and_no_process(
   # An empty build queue: any process spawn would pop from it and fail loudly.
   builds = conftest.install_scripted_backends(monkeypatch, [], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
   for label in ("main", "ext-1", "ext-2"):
-    claude_accounts.observe_rate_limit(label, conftest.rate_limit_event("rejected", 1.0)["rate_limit_info"])
+    conftest.reject_claude_login(label)
   assert claude_accounts.select(cfg, conftest.FABLE_MODEL) is None
 
   await _register_work_run(tree, worker.id, "run-x", conftest.POOLED_FABLE_ID, conftest.FABLE_MODEL)

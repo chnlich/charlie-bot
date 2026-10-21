@@ -248,10 +248,6 @@ async def test_pooled_task_resume_starts_on_the_login_holding_the_transcript(tmp
 # ---------------------------------------------------------------------------
 
 
-def _reject(label: str) -> None:
-  claude_accounts.observe_rate_limit(label, conftest.rate_limit_event("rejected", 1.0)["rate_limit_info"])
-
-
 def _rejected_run() -> conftest.ScriptedRelayBackend:
   return conftest.ScriptedRelayBackend([conftest.rate_limit_event("rejected", 1.0)], exit_code=1)
 
@@ -261,7 +257,7 @@ def _all_logins_rejected(tmp_path: pathlib.Path,
                          monkeypatch: pytest.MonkeyPatch) -> tuple[config.CharlieBotConfig, list]:
   cfg = conftest.fable_pool_cfg(tmp_path)
   for label in ("main", "ext-1", "ext-2"):
-    _reject(label)
+    conftest.reject_claude_login(label)
   return cfg, []
 
 
@@ -351,7 +347,7 @@ async def test_turn_refusal_writes_an_error_event_carrying_quota_exhausted(
 def _task_pool_spent_before_spawn(monkeypatch: pytest.MonkeyPatch) -> tuple[tuple[str, ...], list, tuple[str, ...]]:
   labels = ("main", "ext-1", "ext-2")
   for label in labels:
-    _reject(label)
+    conftest.reject_claude_login(label)
   return labels, [], ()
 
 
@@ -361,7 +357,7 @@ def _task_every_login_failed(monkeypatch: pytest.MonkeyPatch) -> tuple[tuple[str
 
 
 def _task_pool_spent_at_relay(monkeypatch: pytest.MonkeyPatch) -> tuple[tuple[str, ...], list, tuple[str, ...]]:
-  _reject("ext-1")
+  conftest.reject_claude_login("ext-1")
   return ("main", "ext-1"), [_rejected_run()], ()
 
 

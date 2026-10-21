@@ -388,12 +388,14 @@ Modules: `src/features/memory/memory.py`, `memory_proposal.py`, `cli.py`, `store
 
 ### 5.19 `state/boot_recovery.json`
 
-- Writer: `src/runtime/task_recovery.py::write_boot_recovery_marker` (line 68), called at the end of each task-tree
-  recovery pass (line 187) when no node failed. The write is ATOMIC: `boot_recovery.json.tmp`, then `os.replace`.
-- Format: `json.dumps({"pass_started_at": <pass start, UTC isoformat>})`, one line with no indent and no trailing
-  newline.
-- Reader: `read_boot_recovery_marker` (line 58) at the start of each pass. A missing file reads as no marker. The
-  next pass skips a closed node that the marker proves unchanged (`services.md` section 3).
+- Writers: Python `src/runtime/task_recovery.py::write_boot_recovery_marker` (line 68) and Rust
+  `charliebot-tasks/src/recovery.rs::write_boot_recovery_marker`, each called after a task-tree recovery pass in
+  which no node failed. The write is atomic: `boot_recovery.json.tmp`, then a rename.
+- Format: `{"pass_started_at": <pass start, UTC isoformat>}`, one line with Python's JSON spacing and no trailing
+  newline. The timestamp is Python `datetime.isoformat()` text, including `+00:00`.
+- Readers: Python `read_boot_recovery_marker` (line 58) and Rust `read_boot_recovery_marker` at the start of each
+  pass. A missing file reads as no marker. The next pass skips a closed node that the marker proves unchanged
+  (`services.md` section 3).
 
 ## 6. Session files
 

@@ -2139,28 +2139,33 @@ fn write_python_boot_marker(stack: &Stack, pass_started_at: &str) -> anyhow::Res
   Ok(())
 }
 
-async fn add_recovery_worker(
-  stack: &Stack,
-  request_id: &str,
+#[derive(Default)]
+struct RecoveryWorkerOptions {
   task: Option<TaskSpec>,
-  run_id: &str,
   outcome: Option<RunOutcomeKind>,
   sequence_ref: Option<SequenceRef>,
   worktree_path: Option<String>,
   close: bool,
+}
+
+async fn add_recovery_worker(
+  stack: &Stack,
+  request_id: &str,
+  run_id: &str,
+  options: RecoveryWorkerOptions,
 ) -> anyhow::Result<SessionMetadata> {
   let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
-  let worker = stack.node(request_id, Some(&manager.id), TaskProfile::Worker, task).await?;
+  let worker = stack.node(request_id, Some(&manager.id), TaskProfile::Worker, options.task).await?;
   let mut run = synthetic_run(&worker.id, run_id, RunKind::Work);
   run.backend = Some(BACKEND_ID.to_string());
   run.model = Some(format!("{BACKEND_ID}-model"));
-  run.sequence_ref = sequence_ref;
-  run.worktree_path = worktree_path;
+  run.sequence_ref = options.sequence_ref;
+  run.worktree_path = options.worktree_path;
   stack.register(run).await?;
-  if let Some(outcome) = outcome {
+  if let Some(outcome) = options.outcome {
     stack.record_terminal(&worker.id, run_id, outcome).await?;
   }
-  if close {
+  if options.close {
     stack.close(&worker.id, "close-worker").await?;
   }
   Ok(worker)
@@ -2187,8 +2192,13 @@ fn python_marker_instant(path: &Path) -> anyhow::Result<String> {
 async fn clean_boot_writes_marker_and_the_next_boot_skips_a_closed_worker() -> anyhow::Result<()> {
   // Python: tests/test_boot_recovery_skip.py:95.
   let stack = Stack::start("exit 0").await?;
-  let worker =
-    add_recovery_worker(&stack, "worker", None, "run-success", Some(RunOutcomeKind::Success), None, None, true).await?;
+  let worker = add_recovery_worker(
+    &stack,
+    "worker",
+    "run-success",
+    RecoveryWorkerOptions { outcome: Some(RunOutcomeKind::Success), close: true, ..RecoveryWorkerOptions::default() },
+  )
+  .await?;
   let marker_path = boot_marker_path(&stack);
   assert!(!marker_path.exists(), "a new home has no boot-recovery marker");
 
@@ -2208,7 +2218,7 @@ async fn clean_boot_writes_marker_and_the_next_boot_skips_a_closed_worker() -> a
   assert_eq!(second.keep_reasons.get("state_open"), Some(&1));
   assert_eq!(stack.store().run_backend(&worker.id).as_deref(), Some(BACKEND_ID));
   let second_marker: Value = serde_json::from_slice(&std::fs::read(&marker_path)?)?;
-  assert!(second_marker["pass_started_at"].as_str().expect("marker stores its pass start time") > first_time);
+  assert!(second_marker["pass_started_at"].as_str().expect("marker stores its pass start time") > first_time.as_str());
   Ok(())
 }
 
@@ -2219,9 +2229,13 @@ async fn failed_boot_keeps_the_previous_marker_and_out_of_space_still_retries() 
   let _subscriber = log.install();
   let stack = Stack::start("exit 0").await?;
   stack.adapter.set_landing_retry_interval(Duration::from_millis(50));
-  let worker =
-    add_recovery_worker(&stack, "settled-worker", None, "run-settled", Some(RunOutcomeKind::Success), None, None, true)
-      .await?;
+  let _settled_worker = add_recovery_worker(
+    &stack,
+    "settled-worker",
+    "run-settled",
+    RecoveryWorkerOptions { outcome: Some(RunOutcomeKind::Success), close: true, ..RecoveryWorkerOptions::default() },
+  )
+  .await?;
   stack.boot().await?;
   let marker_path = boot_marker_path(&stack);
   let before = std::fs::read(&marker_path)?;
@@ -2274,16 +2288,18 @@ async fn breaking_each_skip_condition_alone_keeps_the_worker_in_full_recovery() 
     let worker = add_recovery_worker(
       &stack,
       "condition-worker",
-      task,
       "run-condition",
-      (condition != "run_unended").then_some(if condition == "cold_read_failed" {
-        RunOutcomeKind::Failed
-      } else {
-        RunOutcomeKind::Success
-      }),
-      sequence_ref,
-      worktree.map(|path| path.display().to_string()),
-      condition != "state_open",
+      RecoveryWorkerOptions {
+        task,
+        outcome: (condition != "run_unended").then_some(if condition == "cold_read_failed" {
+          RunOutcomeKind::Failed
+        } else {
+          RunOutcomeKind::Success
+        }),
+        sequence_ref,
+        worktree_path: worktree.map(|path| path.display().to_string()),
+        close: condition != "state_open",
+      },
     )
     .await?;
     write_python_boot_marker(&stack, "2099-01-01T00:00:00+00:00")?;
@@ -2295,7 +2311,8 @@ async fn breaking_each_skip_condition_alone_keeps_the_worker_in_full_recovery() 
     let counters = recovery::reconcile_task_tree(&stack.features, &stack.adapter).await?;
     assert_eq!(counters.skipped, 0, "{condition} must prevent this worker from being skipped");
     assert_eq!(counters.full, 2, "the open manager and the kept worker receive full checks: {condition}");
-    assert_eq!(counters.keep_reasons.get(condition), Some(&1), "first blocker for {condition}");
+    let expected_reason_count = if condition == "state_open" { 2 } else { 1 };
+    assert_eq!(counters.keep_reasons.get(condition), Some(&expected_reason_count), "first blocker for {condition}");
   }
   Ok(())
 }
@@ -2311,12 +2328,13 @@ async fn dangling_worktree_symlink_keeps_a_closed_worker_in_full_recovery() -> a
   let worker = add_recovery_worker(
     &stack,
     "symlink-worker",
-    None,
     "run-symlink",
-    Some(RunOutcomeKind::Success),
-    None,
-    Some(dangling.display().to_string()),
-    true,
+    RecoveryWorkerOptions {
+      outcome: Some(RunOutcomeKind::Success),
+      worktree_path: Some(dangling.display().to_string()),
+      close: true,
+      ..RecoveryWorkerOptions::default()
+    },
   )
   .await?;
   write_python_boot_marker(&stack, "2099-01-01T00:00:00+00:00")?;
@@ -2334,19 +2352,23 @@ async fn end_landing_retry_runs_the_full_node_pass_after_boot_skip() -> anyhow::
   // Python: tests/test_boot_recovery_skip.py:191.
   let stack = Stack::start("exit 0").await?;
   stack.adapter.set_landing_retry_interval(Duration::from_millis(20));
-  let worker =
-    add_recovery_worker(&stack, "retry-worker", None, "run-retry", Some(RunOutcomeKind::Success), None, None, true)
-      .await?;
+  let worker = add_recovery_worker(
+    &stack,
+    "retry-worker",
+    "run-retry",
+    RecoveryWorkerOptions { outcome: Some(RunOutcomeKind::Success), close: true, ..RecoveryWorkerOptions::default() },
+  )
+  .await?;
   write_python_boot_marker(&stack, "2099-01-01T00:00:00+00:00")?;
   let before = stack.adapter.reconcile_node_calls();
   let boot = recovery::reconcile_task_tree(&stack.features, &stack.adapter).await?;
   assert_eq!(boot.skipped, 1);
-  assert_eq!(stack.adapter.reconcile_node_calls(), before, "the boot pass skipped the closed worker");
+  assert_eq!(stack.adapter.reconcile_node_calls(), before + 1, "the boot pass checks only the open manager");
 
   stack.adapter.start_landing_retry_for_test(&worker.id);
-  settle_until(|| Ok(stack.adapter.reconcile_node_calls() == before + 1)).await?;
+  settle_until(|| Ok(stack.adapter.reconcile_node_calls() == before + 2)).await?;
   settle_until(|| Ok(stack.adapter.landing_retry_nodes().is_empty())).await?;
-  assert_eq!(stack.adapter.reconcile_node_calls(), before + 1);
+  assert_eq!(stack.adapter.reconcile_node_calls(), before + 2, "the retry runs one full worker check");
   Ok(())
 }
 
@@ -2383,8 +2405,13 @@ async fn recovery_done_logs_one_line_with_marker_and_skip_counters() -> anyhow::
   let log = LogCapture::default();
   let _subscriber = log.install();
   let stack = Stack::start("exit 0").await?;
-  add_recovery_worker(&stack, "logged-worker", None, "run-logged", Some(RunOutcomeKind::Success), None, None, true)
-    .await?;
+  add_recovery_worker(
+    &stack,
+    "logged-worker",
+    "run-logged",
+    RecoveryWorkerOptions { outcome: Some(RunOutcomeKind::Success), close: true, ..RecoveryWorkerOptions::default() },
+  )
+  .await?;
 
   recovery::recovery_step(Arc::clone(&stack.features)).await?;
   recovery::recovery_step(Arc::clone(&stack.features)).await?;
@@ -2403,15 +2430,19 @@ async fn recovery_done_logs_one_line_with_marker_and_skip_counters() -> anyhow::
 async fn skipped_worker_warms_the_display_backend_without_a_full_check() -> anyhow::Result<()> {
   // Python: tests/test_boot_recovery_skip.py:95.
   let stack = Stack::start("exit 0").await?;
-  let worker =
-    add_recovery_worker(&stack, "display-worker", None, "run-display", Some(RunOutcomeKind::Success), None, None, true)
-      .await?;
+  let worker = add_recovery_worker(
+    &stack,
+    "display-worker",
+    "run-display",
+    RecoveryWorkerOptions { outcome: Some(RunOutcomeKind::Success), close: true, ..RecoveryWorkerOptions::default() },
+  )
+  .await?;
   assert_eq!(stack.store().run_backend(&worker.id), None);
   write_python_boot_marker(&stack, "2099-01-01T00:00:00+00:00")?;
 
   let counters = recovery::reconcile_task_tree(&stack.features, &stack.adapter).await?;
   assert_eq!(counters.skipped, 1);
-  assert_eq!(counters.full, 0);
+  assert_eq!(counters.full, 1, "the open manager still receives a full check");
   assert_eq!(stack.store().run_backend(&worker.id).as_deref(), Some(BACKEND_ID));
   Ok(())
 }

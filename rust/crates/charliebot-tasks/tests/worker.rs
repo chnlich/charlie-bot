@@ -22,7 +22,6 @@ use std::time::Duration;
 
 use anyhow::Context;
 use charliebot_agents::agent_environment::AgentBaseEnvironment;
-use charliebot_agents::backends::anthropic_compatible;
 use charliebot_agents::backends::charlie_code;
 use charliebot_agents::backends::claude_code;
 use charliebot_agents::backends::claude_code::claude_accounts::{self, ClaudeAccountState};
@@ -209,7 +208,7 @@ thread_local! {
 
 fn register_scripted_types(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.backend_type(scripted_type("codex", None))?;
-  registry.backend_type(scripted_type("cc-kimi", None))?;
+  registry.backend_type(scripted_type("cc-anthropic-compatible", None))?;
   registry.backend_type(scripted_type("worker_script", None))
 }
 
@@ -353,13 +352,14 @@ fn make_transcript(config_dir: &Path, session_id: &str) -> anyhow::Result<PathBu
 
 /// One `backends.options` entry of a test's configuration. A scripted option names its harness by `token`.
 fn option_yaml(id: &str, backend_type: &str, token: Option<&str>, account_pool: Option<&str>) -> String {
-  let fields = if backend_type == "cc-anthropic-compatible" {
-    "      api_base: https://api.synthetic.example\n      context_window: 409600\n".to_string()
+  let token = token.map(|token| format!("      {TOKEN_FIELD}: {token}\n")).unwrap_or_default();
+  let pool = account_pool.map(|pool| format!("      account_pool: {pool}\n")).unwrap_or_default();
+  let endpoint = if backend_type == "cc-anthropic-compatible" {
+    "      api_base: https://api.synthetic.example\n      context_window: 409600\n"
   } else {
-    let token = token.map(|token| format!("      {TOKEN_FIELD}: {token}\n")).unwrap_or_default();
-    let pool = account_pool.map(|pool| format!("      account_pool: {pool}\n")).unwrap_or_default();
-    format!("{token}{pool}")
+    ""
   };
+  let fields = format!("{token}{pool}{endpoint}");
   format!("    - id: {id}\n      label: {id}\n      type: {backend_type}\n      model: test-model\n{fields}")
 }
 
@@ -886,20 +886,16 @@ fn register_hidden_binary_types(registry: &mut Registry) -> Result<(), RegistryE
     .register_package("test.charlie_code", |registry| charlie_code::register_with_host(registry, hidden_cli()))?;
   registry.register_package("test.antigravity", |registry| antigravity::register_with_host(registry, hidden_cli()))?;
   registry.register_package("test.gemini", |registry| gemini::register_with_host(registry, hidden_cli()))?;
-  registry.register_package("test.anthropic_compatible", |registry| {
-    anthropic_compatible::register_with_host(registry, hidden_cli())
-  })?;
   registry.register_package("test.codex", |registry| codex::register_with_host(registry, &hidden_codex()))
 }
 
 // Python: tests/test_worker_backend_build.py::test_launcher_build_still_fails_without_binaries
-// Python: tests/test_task_run_backend_types.py:30.
 #[tokio::test]
 async fn test_launcher_build_still_fails_without_binaries() -> anyhow::Result<()> {
   let root = Root::new()?;
   let mut registry = Registry::new();
   register_hidden_binary_types(&mut registry)?;
-  let types = ["antigravity", "codex", "gemini", "charlie-code", "cc-anthropic-compatible"];
+  let types = ["antigravity", "codex", "gemini", "charlie-code"];
   let options: Vec<String> = types
     .iter()
     .map(|backend_type| {
@@ -908,9 +904,6 @@ async fn test_launcher_build_still_fails_without_binaries() -> anyhow::Result<()
       );
       if *backend_type == "charlie-code" {
         option.push_str("      api_base: http://test.invalid\n");
-      }
-      if *backend_type == "cc-anthropic-compatible" {
-        option.push_str("      api_base: http://test.invalid\n      context_window: 409600\n");
       }
       option
     })

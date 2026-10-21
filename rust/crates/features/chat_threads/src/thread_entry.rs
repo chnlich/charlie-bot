@@ -35,6 +35,7 @@ use std::time::Duration;
 use anyhow::Context;
 use axum::http::StatusCode;
 use charliebot_agents::backend_pool;
+use charliebot_compat::file_urls;
 use charliebot_core::RepoRoot;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types;
@@ -636,7 +637,7 @@ pub async fn post_reply(
   if pystr::strip(text).is_empty() {
     return Err(ThreadReplyError::refused(StatusCode::UNPROCESSABLE_ENTITY, "Reply text is empty"));
   }
-  assert_no_file_server_links(text)?;
+  assert_no_file_server_links(text, None)?;
   let config = features.config.get().map_err(ThreadReplyError::failure)?;
   let operator_only_links = application_route_links(text, config.server.port);
 
@@ -1389,7 +1390,10 @@ fn decimal_port(text: &str) -> Option<u64> {
 
 /// Refuse the reply when `text` still links a CharlieBot file-server URL (`assert_no_file_server_links`). The first
 /// such link is refused with 422, and the detail names the `charliebot publish` command that replaces it.
-pub fn assert_no_file_server_links(text: &str) -> Result<(), ThreadReplyError> {
+pub fn assert_no_file_server_links(
+  text: &str,
+  _scan_context: Option<&file_urls::ScanContext>,
+) -> Result<(), ThreadReplyError> {
   for captures in URL_RE.captures_iter(text) {
     let link = &captures[0];
     let path = captures.name("path").map_or("", |path| path.as_str());

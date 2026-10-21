@@ -107,7 +107,7 @@ fn answer(helper: &str, case: &Value) -> anyhow::Result<Value> {
       let unread = unread_after(&messages, |m| m.human, |m| m.id.as_str(), watermark.as_deref(), platform.id_key);
       json!(unread.iter().map(|m| m.id.clone()).collect::<Vec<String>>())
     }
-    "assert_no_file_server_links" => match assert_no_file_server_links(str_of(case, "text")?) {
+    "assert_no_file_server_links" => match assert_no_file_server_links(str_of(case, "text")?, None) {
       Ok(()) => json!({"refused": false}),
       Err(error) => refusal(&error),
     },

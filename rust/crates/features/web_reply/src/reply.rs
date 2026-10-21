@@ -349,6 +349,8 @@ pub fn for_you_entries(store: &Store, events: &[Value]) -> Result<Vec<Value>, We
 
 #[cfg(test)]
 mod tests {
+  use std::fs;
+
   use axum::http::Method;
 
   use super::*;
@@ -397,6 +399,69 @@ mod tests {
       assert_eq!(home.events(&sid).len(), events_before, "case {case}");
       assert!(!home.meta(&sid).await.has_unread, "case {case}");
     }
+  }
+
+  #[tokio::test]
+  async fn a_dead_file_link_refuses_a_web_reply_with_a_correct_link_and_records_nothing() {
+    for form in ["retired", "local", "canonical"] {
+      let home = Home::new();
+      let sid = home.manager("session", None).await;
+      let port = home.features.config.get().expect("the config loads").server.port;
+      let session_dir = home.features.store.session_dir(&sid);
+      let (link, detail) = match form {
+        "retired" => {
+          let target = home.root().join("sessions/synthetic-session/plan.html");
+          fs::create_dir_all(target.parent().unwrap()).unwrap();
+          fs::write(&target, "page").unwrap();
+          let link = format!("https://charliebot.example:{port}/files/sessions/synthetic-session/plan.html");
+          let correct = format!("https://charliebot.example:{port}/absolute_filepath{}", target.display());
+          let detail = format!(
+            "Dead file links; nothing was recorded.\n- {link}: /files/ is a retired prefix. Correct link: {correct}"
+          );
+          (link, detail)
+        }
+        "local" => {
+          let correct = format!("/absolute_filepath{}", session_dir.join("artifacts/plan.html").display());
+          let detail = format!(
+            "Dead file links; nothing was recorded.\n- artifacts/plan.html: a local path opens nothing on the web page. \
+             Correct link: {correct}"
+          );
+          ("[plan](artifacts/plan.html)".to_string(), detail)
+        }
+        _ => {
+          let missing = home.root().join("missing.html");
+          let link = format!("http://localhost:{port}/absolute_filepath{}", missing.display());
+          let detail =
+            format!("Dead file links; nothing was recorded.\n- {link}: no file exists at {}.", missing.display());
+          (link, detail)
+        }
+      };
+      let events_before = home.events(&sid).len();
+
+      let (status, response) = post_reply(&home, &sid, &format!("See {link}"), None).await;
+
+      assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "form {form}");
+      assert_eq!(response["detail"], json!(detail), "form {form}");
+      assert_eq!(home.events(&sid).len(), events_before, "form {form}");
+      assert!(replies(&home, &sid).is_empty(), "form {form}");
+      assert!(!home.meta(&sid).await.has_unread, "form {form}");
+    }
+  }
+
+  #[tokio::test]
+  async fn a_live_file_link_posts_as_a_web_reply() {
+    let home = Home::new();
+    let sid = home.manager("session", None).await;
+    let port = home.features.config.get().expect("the config loads").server.port;
+    let page = home.root().join("live.html");
+    fs::write(&page, "page").unwrap();
+    let text = format!("See http://localhost:{port}/absolute_filepath{}", page.display());
+
+    let (status, _) = post_reply(&home, &sid, &text, None).await;
+
+    assert_eq!(status, StatusCode::OK);
+    let contents: Vec<Value> = replies(&home, &sid).into_iter().map(|(content, _)| content).collect();
+    assert_eq!(contents, vec![json!(text)]);
   }
 
   #[tokio::test]

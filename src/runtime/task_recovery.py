@@ -127,7 +127,7 @@ def _boot_skip_reason(
       return "run_unended"
     if run.sequence_ref is not None:
       return "sequence_ref"
-    if run.worktree_path and os.path.exists(run.worktree_path):
+    if run.worktree_path and os.path.lexists(run.worktree_path):
       return "worktree_exists"
   if meta.task is not None and meta.task.task_type == models.TaskType.COLD_READ:
     # Only a cold-read task's failed last work Run still owes a delivery;
@@ -196,9 +196,7 @@ async def reconcile_task_tree(
       failed_node = True
   if not failed_node:
     write_boot_recovery_marker(cfg, started_at)
-  log.info(
-      "task_tree_recovery_done",
-      marker=marker.isoformat() if marker else None,
-      skipped=counters["skipped"],
-      keep_reasons=dict(keep_counts))
+  # The caller's task_tree_recovery_done line carries these: one line per pass.
+  counters["marker"] = marker.isoformat() if marker else None
+  counters["keep_reasons"] = dict(keep_counts)
   return counters

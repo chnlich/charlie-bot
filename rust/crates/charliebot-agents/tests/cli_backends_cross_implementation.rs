@@ -687,9 +687,7 @@ fn anthropic_compatible_round_reports_a_reply_from_outside_the_pinned_family() {
     None,
     None,
   ));
-  let reply = |model: &str| {
-    json!({"type": "assistant", "message": {"model": model, "content": [{"type": "text", "text": "hi"}]}})
-  };
+  let reply = |model: &str| json!({"type": "assistant", "message": {"model": model, "content": [{"type": "text", "text": "hi"}]}});
 
   let notices = lifecycle.round_notices(&option, &[reply("claude-haiku-4-5")]);
 

@@ -3,10 +3,11 @@ from types import SimpleNamespace
 import pydantic
 import pytest
 
+from src.app import registrations
 from src.backends.anthropic_compatible import factory, options
 from src.backends.claude_code import claude_launch
-from src.app import registrations
-from src.infra import config, config_registry, event_types as ET
+from src.infra import config, config_registry
+from src.infra import event_types as ET
 from src.runtime import session_usage
 from src.runtime.hooks import (
     backend_lifecycle,
@@ -62,7 +63,7 @@ def test_factory_routes_endpoint_model_window_and_no_auth(monkeypatch: pytest.Mo
   assert prepared["CLAUDE_CODE_SUBAGENT_MODEL"] == MODEL
   assert prepared[claude_launch.AUTO_COMPACT_WINDOW_ENV] == str(CONTEXT_WINDOW)
   assert claude_launch.AUTOCOMPACT_PCT_OVERRIDE_ENV not in prepared
-  assert claude_launch.MAX_CONTEXT_TOKENS_ENV not in prepared
+  assert prepared[claude_launch.MAX_CONTEXT_TOKENS_ENV] == str(CONTEXT_WINDOW)
   assert "ANTHROPIC_API_KEY" not in prepared
   assert "CLAUDE_CODE_OAUTH_TOKEN" not in prepared
   assert prepared[claude_launch.THINKING_DISPLAY_UPDATES_ENV] == "0"

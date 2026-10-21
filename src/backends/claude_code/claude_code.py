@@ -380,9 +380,13 @@ class AnthropicEndpointBackend(ClaudeCodeBackend):
         **claude_model_env(self._env_model),
     }
     if self._context_window is not None:
-      out[claude_launch.AUTO_COMPACT_WINDOW_ENV] = str(self._context_window)
+      # Claude Code assumes 200000 tokens for a model name it does not know and caps the
+      # auto-compact window to that, so both the model window and the compaction point
+      # come from the entry.
+      window = str(self._context_window)
+      out[claude_launch.AUTO_COMPACT_WINDOW_ENV] = window
+      out[claude_launch.MAX_CONTEXT_TOKENS_ENV] = window
       out.pop(claude_launch.AUTOCOMPACT_PCT_OVERRIDE_ENV, None)
-      out.pop(claude_launch.MAX_CONTEXT_TOKENS_ENV, None)
       out.pop("ANTHROPIC_API_KEY", None)
       out.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
       out[claude_launch.THINKING_DISPLAY_UPDATES_ENV] = "0"

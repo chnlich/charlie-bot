@@ -27,9 +27,8 @@ config:
         api_base: https://openai-compatible.parity.test/v1
       - id: claude-other-type
         label: a backend of another type
-        type: cc-kimi
+        type: cc-claude
         model: synthetic-model
-        credential: upstream
 credentials:
   upstream:
     api_key: sk-parity-synthetic-upstream

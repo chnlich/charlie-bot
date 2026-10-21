@@ -55,6 +55,33 @@ const EXIT_CONFIG: u8 = 1;
 /// A lifespan startup failure (uvicorn's "Application startup failed").
 const EXIT_STARTUP: u8 = 3;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StopReason {
+  Signal(Signal),
+  BindFailure,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StopAction {
+  /// Stops services, runs let-go steps, and closes the shared clients in one lifespan call.
+  LegacyShutdown,
+  /// Stops services and closes the shared clients.
+  Shutdown,
+  ReleaseWriterFence,
+  LogShutdown,
+  RunLetGo,
+  RaiseSignal(Signal),
+  ReturnStatus(u8),
+}
+
+fn stop_sequence(reason: StopReason) -> Vec<StopAction> {
+  let ending = match reason {
+    StopReason::Signal(signal) => StopAction::RaiseSignal(signal),
+    StopReason::BindFailure => StopAction::ReturnStatus(EXIT_CONFIG),
+  };
+  vec![StopAction::LegacyShutdown, StopAction::ReleaseWriterFence, StopAction::LogShutdown, ending]
+}
+
 fn main() -> ExitCode {
   // Before the logger and the runtime start, so the environment changes while this is the only thread.
   let (venv_bin, repo_root, agent_base) = match replace_environment() {
@@ -142,7 +169,7 @@ async fn run(venv_bin: VenvBin, repo_root: RepoRoot, agent_base: AgentBaseEnviro
   // The lifespan's recovery can re-attach a round whose master_done starts the after-turn works, so the context is
   // bound before the lifespan starts.
   registry.bind_feature_context(&features).expect("the registry binds its feature context once, at startup");
-  let lifespan = match Lifespan::start(Arc::clone(&features)).await {
+  let mut lifespan = match Lifespan::start(Arc::clone(&features)).await {
     Ok(lifespan) => lifespan,
     Err(error) => {
       writer_fence.release();
@@ -163,10 +190,13 @@ async fn run(venv_bin: VenvBin, repo_root: RepoRoot, agent_base: AgentBaseEnviro
     Err(message) => {
       eprintln!("charliebot-server: {message}");
       let shutdown_started = Instant::now();
-      let closes = stop_lifespan(lifespan).await;
+      let closes = stop_lifespan(&mut lifespan).await;
       writer_fence.release();
       log_shutdown(shutdown_started, closes);
-      return ExitCode::from(EXIT_CONFIG);
+      return match stop_sequence(StopReason::BindFailure).last().copied().expect("the stop sequence has an ending") {
+        StopAction::ReturnStatus(status) => ExitCode::from(status),
+        _ => unreachable!("a failed bind ends with an exit status"),
+      };
     }
   };
 
@@ -192,14 +222,17 @@ async fn run(venv_bin: VenvBin, repo_root: RepoRoot, agent_base: AgentBaseEnviro
     Err(_) => tracing::warn!(timeout_s = GRACEFUL_SHUTDOWN_TIMEOUT.as_secs(), "graceful_shutdown_timeout_exceeded"),
   }
   let shutdown_started = Instant::now();
-  let closes = stop_lifespan(lifespan).await;
+  let closes = stop_lifespan(&mut lifespan).await;
   writer_fence.release();
   log_shutdown(shutdown_started, closes);
-  exit_by_signal(received)
+  match stop_sequence(StopReason::Signal(received)).last().copied().expect("the stop sequence has an ending") {
+    StopAction::RaiseSignal(signal) => exit_by_signal(signal),
+    _ => unreachable!("a signal stop ends by raising its signal"),
+  }
 }
 
 /// The lifespan's shutdown. A failed stop is logged, and the caller still releases the home fence.
-async fn stop_lifespan(lifespan: Lifespan) -> CloseTimings {
+async fn stop_lifespan(lifespan: &mut Lifespan) -> CloseTimings {
   let shutdown = lifespan.shutdown().await;
   if let Some(error) = shutdown.error {
     tracing::error!(error = format!("{error:#}"), "lifespan_shutdown_failed");
@@ -412,5 +445,46 @@ mod tests {
     }
     assert_eq!(events[0].iter().find(|(name, _)| name == "http_client_ms").unwrap().1, "3");
     assert_eq!(events[0].iter().find(|(name, _)| name == "ws_close_ms").unwrap().1, "5");
+  }
+
+  #[test]
+  fn sigterm_stop_skips_let_go_and_raises_sigterm_after_shutdown_logging() {
+    assert_eq!(
+      stop_sequence(StopReason::Signal(Signal::SIGTERM)),
+      vec![
+        StopAction::Shutdown,
+        StopAction::ReleaseWriterFence,
+        StopAction::LogShutdown,
+        StopAction::RaiseSignal(Signal::SIGTERM),
+      ]
+    );
+  }
+
+  #[test]
+  fn sigint_stop_runs_let_go_after_shutdown_logging_and_returns_zero() {
+    assert_eq!(
+      stop_sequence(StopReason::Signal(Signal::SIGINT)),
+      vec![
+        StopAction::Shutdown,
+        StopAction::ReleaseWriterFence,
+        StopAction::LogShutdown,
+        StopAction::RunLetGo,
+        StopAction::ReturnStatus(0),
+      ]
+    );
+  }
+
+  #[test]
+  fn failed_bind_runs_let_go_after_shutdown_logging_and_returns_one() {
+    assert_eq!(
+      stop_sequence(StopReason::BindFailure),
+      vec![
+        StopAction::Shutdown,
+        StopAction::ReleaseWriterFence,
+        StopAction::LogShutdown,
+        StopAction::RunLetGo,
+        StopAction::ReturnStatus(1),
+      ]
+    );
   }
 }

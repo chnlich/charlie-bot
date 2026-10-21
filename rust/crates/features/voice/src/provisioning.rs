@@ -3,6 +3,8 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::sync::Arc;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -381,6 +383,15 @@ impl Service for SpeechService {
 }
 
 #[cfg(test)]
+#[derive(Clone)]
+struct SpeechWorker(Arc<tokio::sync::Mutex<Option<JoinHandle<()>>>>);
+
+#[cfg(test)]
+async fn wait_for_provisioning_worker(_worker: Option<SpeechWorker>) -> anyhow::Result<()> {
+  Ok(())
+}
+
+#[cfg(test)]
 mod tests {
   use std::io::Cursor;
   use std::net::TcpListener;
@@ -407,6 +418,35 @@ mod tests {
     transcriber::reset_after_stop_test();
 
     assert!(matches!(result, Ok(Ok(()))), "speech stop did not return within 1 s: {result:?}");
+  }
+
+  #[tokio::test]
+  async fn let_go_waits_for_the_provisioning_worker() {
+    let (started, running) = tokio::sync::oneshot::channel();
+    let (release, blocked) = std::sync::mpsc::channel();
+    let worker = tokio::task::spawn_blocking(move || {
+      started.send(()).expect("the test is waiting for the worker");
+      blocked.recv().expect("the test releases the worker");
+    });
+    running.await.expect("the provisioning worker started");
+    let completion = SpeechWorker(Arc::new(tokio::sync::Mutex::new(Some(worker))));
+    let worker_guard = completion.clone();
+    let mut let_go = tokio::spawn(wait_for_provisioning_worker(Some(completion)));
+
+    let before_release = tokio::time::timeout(Duration::from_millis(25), &mut let_go).await;
+    release.send(()).expect("the provisioning worker is blocked");
+    let worker = worker_guard.0.lock().await.take();
+    if let Some(worker) = worker {
+      worker.await.expect("the provisioning worker joins");
+    }
+    let returned_before_release = before_release.is_ok();
+    let result = match before_release {
+      Ok(result) => result.expect("the let-go task joins after an early return"),
+      Err(_) => let_go.await.expect("the let-go task joins"),
+    };
+
+    assert!(!returned_before_release, "speech let-go returned before provisioning ended");
+    assert!(matches!(result, Ok(())), "speech let-go failed after provisioning ended: {result:?}");
   }
 
   fn test_paths(root: &Path) -> VoiceModelPaths {

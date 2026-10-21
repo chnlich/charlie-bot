@@ -6,6 +6,7 @@ import hashlib
 import json
 import pathlib
 import re
+from typing import Any
 
 import pytest
 
@@ -855,6 +856,53 @@ def test_the_run_metadata_task_spec_hash_is_masked_only_for_the_local_repository
   outside_other = _masked_run_metadata({"repo_path": ANOTHER_REPO, "task_spec_hash": "synthetic-other-hash"})
   assert outside["task_spec_hash"] == "synthetic-hash"
   assert outside != outside_other
+
+
+STOP_REQUEST = "synthetic-stop-request"
+STOPPED_RUN_METADATA = "home/sessions/synthetic-session/data/runs/synthetic-run/metadata.json"
+STOPPED_RUN_EVENTS = "home/sessions/synthetic-session/data/chat_events.jsonl"
+
+
+def _stopped_run_context(request_id: str, outcome: str) -> normalize.Context:
+  events = [
+      {
+          "type": "run_stop_requested",
+          "request_id": request_id,
+          "run_id": "synthetic-run"
+      },
+      {
+          "type": "run_finished",
+          "run_id": "synthetic-run",
+          "outcome": outcome
+      },
+  ]
+  data = "".join(json.dumps(event) + "\n" for event in events).encode()
+  ctx = _context()
+  normalize.prepare_snapshot([(STOPPED_RUN_EVENTS, "file", data)], ctx)
+  return ctx
+
+
+def _masked_stopped_run_exit_code(exit_code: Any, request_id: str = STOP_REQUEST, outcome: str = "interrupted") -> Any:
+  rules = normalize.file_rules(STOPPED_RUN_METADATA)
+  record = {"id": "synthetic-run", "exit_code": exit_code}
+  return normalize.normalize_json(record, rules, _stopped_run_context(request_id, outcome))["exit_code"]
+
+
+def test_stopped_run_exit_code_masks_null_and_sigkill_to_one_placeholder() -> None:
+  placeholder = "<interrupted-run-exit-code>"
+  assert _masked_stopped_run_exit_code(None) == placeholder
+  assert _masked_stopped_run_exit_code(-9) == placeholder
+  # Another code, and a float that equals -9, stay visible: the rule accepts null and the integer -9 only.
+  assert _masked_stopped_run_exit_code(-15) == -15
+  assert _masked_stopped_run_exit_code(0) == 0
+  assert _masked_stopped_run_exit_code(-9.0) == -9.0
+
+
+def test_stopped_run_exit_code_stays_visible_in_another_scenario_and_for_another_outcome() -> None:
+  assert _masked_stopped_run_exit_code(None, request_id="synthetic-other-stop") is None
+  assert _masked_stopped_run_exit_code(-9, request_id="synthetic-other-stop") == -9
+  assert _masked_stopped_run_exit_code(None, outcome="failed") is None
+  assert _masked_stopped_run_exit_code(-9, outcome="success") == -9
 
 
 def test_the_task_created_hash_is_masked_only_for_the_delegate_request() -> None:

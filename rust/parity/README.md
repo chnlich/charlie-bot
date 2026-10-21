@@ -529,6 +529,10 @@ field one side omits still shows as a difference:
 - `FieldRule` masks one JSON field of one route's body (`RESPONSE_RULES`) or of one home file (`FILE_RULES`).
   Its `field` is a dotted path where `[*]` steps into every list element; `when` restricts it to objects that
   hold given values;
+- the interrupted run exit code rule (`interrupted-run-exit-code`, a `FieldRule` with `values` and `stop_request`)
+  masks `exit_code` of a run record that the `handover-stop-request` stop interrupted, and only when the value is
+  `null` or `-9`. Python's stopper and its launcher race for the first write of that record (`runs.py:1161`,
+  `runs.py:1036-1047`). The rule names the scenario by its stop request id, so no other scenario's run is masked;
 - `TextRule` masks the `value` group of a pattern in one route's non-JSON body (`RESPONSE_TEXT_RULES`);
 - `IGNORED_HEADERS` names the headers left out, each with its reason.
 - `RESPONSE_HEADER_RULES` replaces only the named header value on one route. The merged-trace ETag and

@@ -86,3 +86,16 @@ pub fn is_real_user_message(event: &serde_json::Value) -> bool {
   event.get("type").and_then(serde_json::Value::as_str) == Some(USER)
     && event.get("content").is_some_and(serde_json::Value::is_string)
 }
+
+/// The thread platforms that can summon a session. Each platform listener writes its summon block under its
+/// `ThreadPlatform.name`; the Slack and Discord tests pin both names to this list.
+pub const THREAD_PLATFORM_KEYS: &[&str] = &["slack", "discord"];
+
+/// Return whether an event is a thread platform summon: an `agent_message` whose `slack` or `discord` block has no
+/// `nudge_of`. A nudge wakes a session on a thread it already joined and repeats no request.
+pub fn is_platform_summon(event: &serde_json::Value) -> bool {
+  event.get("type").and_then(serde_json::Value::as_str) == Some(AGENT_MESSAGE)
+    && THREAD_PLATFORM_KEYS.iter().any(|key| {
+      event.get(*key).and_then(serde_json::Value::as_object).is_some_and(|block| !block.contains_key("nudge_of"))
+    })
+}

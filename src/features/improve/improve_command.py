@@ -354,6 +354,11 @@ def _extract_iteration_summary(events_newest_first: Iterator[dict], iteration: i
     text = _summary_text(event)
     if text is not None:
       return text
+  return _no_summary_fallback(iteration, status)
+
+
+def _no_summary_fallback(iteration: int, status: str) -> str:
+  """The summary line both iteration scans emit when no event carries a text."""
   return f"Iteration {iteration} {status} (no summary available)."
 
 
@@ -558,7 +563,7 @@ def _failed_iteration_judgments(events_newest_first: Iterator[dict], iteration: 
     if blocker_reason is not None and summary is not None:
       break
   if summary is None:
-    summary = f"Iteration {iteration} {status} (no summary available)."
+    summary = _no_summary_fallback(iteration, status)
   return blocker_reason, summary
 
 

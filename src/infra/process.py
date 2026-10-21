@@ -304,12 +304,15 @@ def cleanup_session_cgroup(session_id: str) -> bool:
   return True
 
 
-def sweep_stale_session_cgroups() -> int:
-  """Remove leftover ``charliebot-sess-*`` cgroups from a previous server life at startup.
+def sweep_stale_session_cgroups(sessions_dir: pathlib.Path) -> int:
+  """Remove this home's leftover session cgroups from a previous server life at startup.
 
-  Only empty directories are removed; one still holding processes (a detached
-  run outliving the restart) is kept with a warning — its members must not be
-  re-homed by force. Returns the removed count.
+  A cgroup belongs to this home when its name is ``session_cgroup_name`` of a
+  session directory under *sessions_dir*. Any other entry under the app.slice
+  base stays: other homes' cgroups and unrelated scopes alike. Only empty directories
+  are removed; one still holding processes (a detached run outliving the
+  restart) is kept with a warning — its members must not be re-homed by force.
+  Returns the removed count.
   """
   base = pathlib.Path(CGROUP_V2_APP_SLICE)
   try:
@@ -317,18 +320,19 @@ def sweep_stale_session_cgroups() -> int:
   except OSError as e:
     log.info("session_cgroup_sweep_unavailable", base=CGROUP_V2_APP_SLICE, error=str(e))
     return 0
-  removed = 0
+  owned = {session_cgroup_name(session.name) for session in sessions_dir.iterdir() if session.is_dir()}
+  removed: list[str] = []
   for entry in entries:
-    if not entry.name.startswith(SESSION_CGROUP_PREFIX) or not entry.is_dir():
+    if entry.name not in owned or not entry.is_dir():
       continue
     try:
       entry.rmdir()
-      removed += 1
+      removed.append(entry.name)
     except OSError as e:
       log.warning("session_cgroup_sweep_retained", path=str(entry), error=str(e))
   if removed:
-    log.info("session_cgroup_sweep_removed", count=removed)
-  return removed
+    log.info("session_cgroup_sweep_removed", count=len(removed), names=sorted(removed))
+  return len(removed)
 
 
 def log_session_cgroup_startup(memory_max_mb: int, swap_max_mb: int, tasks_max: int) -> None:

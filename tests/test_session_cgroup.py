@@ -1,10 +1,11 @@
-"""Process helpers: session cgroups (config schema, naming, limit files, degradation, attribution) and
-wait_or_kill_group's no-limit path."""
+"""Process helpers: session cgroups (config schema, naming, limit files, degradation, attribution, the startup sweep)
+and wait_or_kill_group's no-limit path."""
 
 import asyncio
 import pathlib
 
 import pytest
+from structlog import testing
 
 from src.infra import config, process
 
@@ -56,6 +57,38 @@ def test_ensure_session_cgroup_degrades_when_base_missing(
     monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
   monkeypatch.setattr(process, "CGROUP_V2_APP_SLICE", str(tmp_path / "missing" / "app.slice"))
   assert process.ensure_session_cgroup(SESSION_ID, 64, 32, 4096) is None
+
+
+# ---------------------------------------------------------------------------
+# Startup sweep: only this home's session cgroups
+# ---------------------------------------------------------------------------
+
+
+def test_sweep_removes_only_empty_cgroups_of_this_home(fake_app_slice: pathlib.Path, tmp_path: pathlib.Path) -> None:
+  sessions = config.CharlieBotConfig(charliebot_home=tmp_path / "home").sessions_dir
+  sessions.mkdir(parents=True)
+  populated_id = "11112222-3333-4444-5555-666677778888"
+  (sessions / SESSION_ID).mkdir()
+  (sessions / populated_id).mkdir()
+  own_empty = fake_app_slice / process.session_cgroup_name(SESSION_ID)
+  own_empty.mkdir()
+  own_populated = fake_app_slice / process.session_cgroup_name(populated_id)
+  own_populated.mkdir()
+  (own_populated / "cgroup.procs").write_text("4242\n")
+  other_home_empty = fake_app_slice / process.session_cgroup_name("99998888-7777-6666-5555-444433332222")
+  other_home_empty.mkdir()
+  non_session = fake_app_slice / "app-chrome.scope"
+  non_session.mkdir()
+
+  with testing.capture_logs() as logs:
+    assert process.sweep_stale_session_cgroups(sessions) == 1
+
+  assert not own_empty.exists()
+  assert own_populated.is_dir()
+  assert other_home_empty.is_dir()
+  assert non_session.is_dir()
+  removed = [entry for entry in logs if entry["event"] == "session_cgroup_sweep_removed"]
+  assert [(entry["count"], entry["names"]) for entry in removed] == [(1, ["charliebot-sess-abcd1234"])]
 
 
 # ---------------------------------------------------------------------------

@@ -273,11 +273,40 @@ start_in_pane() {
 # new_output: this launch's output so far.
 new_output() { tail -c "+$((NEW_OFFSET + 1))" "$NEW_LOG"; }
 
+# launch_has EVENT [KEY=VALUE...]: this launch's output has an EVENT line whose fields include each KEY=VALUE. It reads
+# the Python console format and the Rust JSON-lines format; a line of another event never matches.
+launch_has() {
+  new_output > "$WORK/launch.log"
+  python3 -I - "$WORK/launch.log" "$@" <<'PY'
+import json
+import pathlib
+import re
+import sys
+
+CONSOLE = re.compile(r"\S+ \S+ \[\w+ *\] (\S+)(.*)")
+path, event, *pairs = sys.argv[1:]
+wanted = dict(pair.split("=", 1) for pair in pairs)
+# Only complete lines: a line the server is still writing has no newline yet.
+for line in pathlib.Path(path).read_text(encoding="utf-8", errors="replace").split("\n")[:-1]:
+  if line.startswith('{"'):
+    record = {key: str(value) for key, value in json.loads(line).items()}
+  else:
+    match = CONSOLE.match(line)
+    if match is None:
+      continue
+    record = dict(part.split("=", 1) for part in match[2].split() if "=" in part)
+    record["event"] = match[1]
+  if record.get("event") == event and all(record.get(key) == value for key, value in wanted.items()):
+    sys.exit(0)
+sys.exit(1)
+PY
+}
+
 new_launch_ready() {
   NEW_LOG="$(readlink "$LOG_DIR/server-latest.log" 2> /dev/null || true)"
   [ -n "$NEW_LOG" ] || return 1
   if [ "$NEW_LOG" = "$OLD_LOG" ]; then NEW_OFFSET=$OLD_SIZE; else NEW_OFFSET=0; fi
-  grep -q server_ready <<<"$(new_output)"
+  launch_has server_ready
 }
 
 # wait_ready: server_ready in this launch. A launcher that exits first (a failed --check-config, a crash) fails now.
@@ -308,7 +337,7 @@ wait_ready() {
 adopted() {
   local run_id
   while IFS=$'\t' read -r _ _ run_id _ _; do
-    if ! grep -q "task_recovery_resume.*run_id=$run_id" <<<"$(new_output)"; then
+    if ! launch_has task_recovery_resume "run_id=$run_id"; then
       log "readback: run $run_id was not adopted"
       return 1
     fi

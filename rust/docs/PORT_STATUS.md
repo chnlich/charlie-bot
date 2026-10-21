@@ -323,7 +323,7 @@ Rust runs stays for a later task.
 
 | Scenario | Step | Stage | Commits | Difference |
 | --- | --- | --- | --- | --- |
-| handover-stop-request | hand over the durable interrupted outcome · candidate-to-python | agent-orchestration | f6ae0c844 (inferred) | Intermittent. Fails in 4 of 4 Rust runs on the prompt hash. In 1 of 4 runs the interrupted outcome's chat events also differ: the candidate writes run_finished before master_done, the baseline the reverse. Attributed to f6ae0c844 by code reading; not bisected. |
+| handover-stop-request | hand over the durable interrupted outcome · candidate-to-python | agent-orchestration | f6ae0c844 (inferred) | Intermittent. In 1 of 4 runs the interrupted outcome's chat events also differ: the candidate writes run_finished before master_done, the baseline the reverse. Attributed to f6ae0c844 by code reading; not bisected. |
 
 ## Catch-up 78e0d10e2 ignored Cargo tests
 
@@ -336,7 +336,6 @@ whose Python production caller `master_cc_relay` passes `ctx.run_kind` to `compa
 | Row | Test | Binary | Main commit | Difference |
 | --- | --- | --- | --- | --- |
 | cargo-1 | `cli_backends_match_the_python_package_on_synthetic_inputs` | `charliebot-agents` `cli_backends_cross_implementation` | eaa087a23 | The Python reference refuses the case matrix's `cc-kimi` type, which `main` no longer registers, so the test stops before comparing. The matrix needs `cc-anthropic-compatible` cases first. |
-| cargo-3 | `snapshots_match_the_python_server_byte_for_byte` | `charliebot-tasks` `prompt_snapshot_golden` | 8b85da74d | Every prompt snapshot case lacks the `## Profile Home` section (274 chars). |
 
 ## Catch-up 78e0d10e2 unported commits
 

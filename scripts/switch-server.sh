@@ -222,15 +222,19 @@ listener_impl() {
 
 listener_is() { [ "$(listener_impl)" = "$1" ]; }
 
-# api METHOD PATH [JSON]: the body lands in $WORK/body, the HTTP status in API_STATUS. The key reaches curl through a
-# file descriptor, so it stays out of argv.
+# api METHOD PATH [JSON] [TIMEOUT_S]: the body lands in $WORK/body, the HTTP status in API_STATUS. The key reaches
+# curl through a file descriptor, so it stays out of argv.
 api() {
-  if [ $# -ge 3 ]; then
-    API_STATUS="$(curl -s -m 15 -X "$1" -H @<(printf 'Authorization: Bearer %s\n' "$KEY") \
+  local timeout_s=15 with_body=0
+  if [ "$#" -ge 3 ]; then with_body=1; fi
+  if [ "$#" -ge 4 ]; then timeout_s=$4; fi
+  if [ "$#" -ge 4 ] && [ -z "$3" ]; then with_body=0; fi
+  if [ "$with_body" = 1 ]; then
+    API_STATUS="$(curl -s -m "$timeout_s" -X "$1" -H @<(printf 'Authorization: Bearer %s\n' "$KEY") \
       -H 'Content-Type: application/json' --data-binary "$3" -o "$WORK/body" -w '%{http_code}' \
       "http://127.0.0.1:$PORT$2")"
   else
-    API_STATUS="$(curl -s -m 15 -X "$1" -H @<(printf 'Authorization: Bearer %s\n' "$KEY") \
+    API_STATUS="$(curl -s -m "$timeout_s" -X "$1" -H @<(printf 'Authorization: Bearer %s\n' "$KEY") \
       -o "$WORK/body" -w '%{http_code}' "http://127.0.0.1:$PORT$2")"
   fi
 }
@@ -368,6 +372,32 @@ serving() {
 # one-second waits the tests use.
 probe_clock() { echo "${EPOCHREALTIME/[.,]/}"; }
 
+# probe_api END METHOD PATH BODY: makes an archive-step request with the time left before END as its curl timeout.
+probe_api() {
+  local end=$1 method=$2 path=$3 body=$4 remaining_us timeout_s
+  remaining_us=$((end - $(probe_clock)))
+  if [ "$remaining_us" -le 0 ]; then
+    API_STATUS=000
+    return 0
+  fi
+  [ "$remaining_us" -le 15000000 ] || remaining_us=15000000
+  printf -v timeout_s '%d.%06d' "$((remaining_us / 1000000))" "$((remaining_us % 1000000))"
+  api "$method" "$path" "$body" "$timeout_s"
+}
+
+# probe_sleep END: sleeps for one poll interval, shortened to the time left before END.
+probe_sleep() {
+  local end=$1 remaining_us sleep_s
+  remaining_us=$((end - $(probe_clock)))
+  [ "$remaining_us" -gt 0 ] || return 0
+  if [ "$remaining_us" -gt 200000 ]; then
+    sleep 0.2
+  else
+    printf -v sleep_s '%d.%06d' "$((remaining_us / 1000000))" "$((remaining_us % 1000000))"
+    sleep "$sleep_s"
+  fi
+}
+
 # probe_log STAGE: one line for a probe stage, with the session, the run ("-" until one exists) and the elapsed
 # seconds.
 probe_log() {
@@ -464,10 +494,11 @@ for run in page["items"]:
 PY
 }
 
-# probe_cancel RUN: asks RUN to stop. The request id names the run, so a repeated request is the same request.
+# probe_cancel RUN END: asks RUN to stop. The request id names the run, so a repeated request is the same request.
 probe_cancel() {
   PROBE_RUN=$1
-  api POST "/api/sessions/$PROBE_SESSION/runs/$PROBE_RUN/cancel" "{\"request_id\":\"switch-probe-$PROBE_RUN\"}"
+  probe_api "$2" POST "/api/sessions/$PROBE_SESSION/runs/$PROBE_RUN/cancel" \
+    "{\"request_id\":\"switch-probe-$PROBE_RUN\"}"
   [ "$API_STATUS" = 200 ] || {
     log "probe: the cancel answered $API_STATUS"
     return 1
@@ -478,14 +509,30 @@ probe_cancel() {
 # probe_clear_runs END: stops each run of the probe session that has not ended, then waits until none is left or the
 # clock passes END. A run that starts meanwhile is stopped the same way.
 probe_clear_runs() {
-  local end=$1 requested=" " runs run_id state stuck issued
+  local end=$1 requested=" " runs run_id state stuck="" issued
   while :; do
-    api GET "/api/sessions/$PROBE_SESSION/runs?limit=500"
+    if [ "$(probe_clock)" -ge "$end" ]; then
+      if [ -n "$stuck" ]; then
+        PROBE_RUN=$stuck
+        probe_log "run did not settle within ${PROBE_CANCEL_WAIT_S}s"
+      else
+        probe_log "archive did not finish within ${PROBE_CANCEL_WAIT_S}s"
+      fi
+      return 1
+    fi
+    probe_api "$end" GET "/api/sessions/$PROBE_SESSION/runs?limit=500" ""
     [ "$API_STATUS" = 200 ] || {
       log "probe: listing the runs answered $API_STATUS"
       return 1
     }
     runs="$(run_states)" || return 1
+    if [ -z "$runs" ]; then
+      if [ "$(probe_clock)" -ge "$end" ]; then
+        probe_log "archive did not finish within ${PROBE_CANCEL_WAIT_S}s"
+        return 1
+      fi
+      return 0
+    fi
     stuck=""
     issued=0
     while read -r run_id state; do
@@ -496,7 +543,7 @@ probe_clear_runs() {
         *)
           requested+="$run_id "
           issued=1
-          probe_cancel "$run_id" || return 1
+          probe_cancel "$run_id" "$end" || return 1
           ;;
       esac
     done <<<"$runs"
@@ -507,7 +554,7 @@ probe_clear_runs() {
       return 1
     fi
     # A pass that just requested a stop reads the runs again at once; a pass that only waits sleeps one poll interval.
-    [ "$issued" = 1 ] || sleep 0.2
+    [ "$issued" = 1 ] || probe_sleep "$end"
   done
 }
 
@@ -518,7 +565,7 @@ probe_archive() {
   local end=$(($(probe_clock) + PROBE_CANCEL_WAIT_S * 1000000))
   while :; do
     probe_clear_runs "$end" || return 1
-    api DELETE "/api/sessions/$PROBE_SESSION"
+    probe_api "$end" DELETE "/api/sessions/$PROBE_SESSION" ""
     if [ "$API_STATUS" = 200 ]; then
       probe_log "archived"
       return 0
@@ -526,7 +573,7 @@ probe_archive() {
     probe_log "archive answered $API_STATUS"
     [ "$API_STATUS" = 409 ] || return 1
     [ "$(probe_clock)" -lt "$end" ] || return 1
-    sleep 0.2
+    probe_sleep "$end"
   done
 }
 

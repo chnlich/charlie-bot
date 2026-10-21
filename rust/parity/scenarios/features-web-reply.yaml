@@ -30,6 +30,27 @@ steps:
     path: /api/internal/web/reply
     json: {session_id: "${sessions.web_reply}", text: " \n\t"}
     expect_status: 422
+  - name: a reply with an empty keep_language reason is refused
+    method: POST
+    path: /api/internal/web/reply
+    json: {session_id: "${sessions.web_reply}", text: "The panel uses the two-column layout.", keep_language: ""}
+    expect_status: 422
+  - name: a reply with a blank keep_language reason is refused
+    method: POST
+    path: /api/internal/web/reply
+    json: {session_id: "${sessions.web_reply}", text: "The panel uses the two-column layout.", keep_language: " \n\t"}
+    expect_status: 422
+  - name: a reply with a null keep_language posts without a reason
+    method: POST
+    path: /api/internal/web/reply
+    json: {session_id: "${sessions.web_reply}", text: "The panel uses the two-column layout.", keep_language: null}
+    expect_status: 200
+  - name: a wrong field type for keep_language on the reply path is refused
+    method: POST
+    path: /api/internal/web/reply
+    json: {session_id: "${sessions.web_reply}", text: "The panel uses the two-column layout.", keep_language: 5}
+    expect_status: 422
+    compare: status_and_shape
   - name: malformed JSON on the reply path is refused
     method: POST
     path: /api/internal/web/reply

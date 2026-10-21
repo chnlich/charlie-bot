@@ -311,7 +311,7 @@ run-record work is `S2`; task-tree runtime and feature-owned files remain with t
 ## Catch-up e44c9ccef open steps
 
 Each non-intermittent row is one failing Rust parity step from the all-stage run
-(1,051/1,123 steps matched). The intermittent rows record their observed failure
+(1,111/1,123 steps matched). The intermittent rows record their observed failure
 counts and may pass in a run.
 
 | Scenario | Step | Stage | Main commit | Difference |
@@ -319,8 +319,6 @@ counts and may pass in a run.
 | manager-turn-opencode | wait for the OpenCode manager run to finish | agent-orchestration | `d401d9a2a` | Python persists the completed OpenCode manager run directory; Rust leaves no matching run directory. |
 | handover-stop-request | hand over the durable interrupted outcome · python-to-candidate | agent-orchestration | `d401d9a2a` | The handover snapshot races the active run's finish recorder, leaving Rust's exit code null while Python had `-9`. The run-cancel route now waits for an active launch settlement. Intermittent: it failed in one of the five all-stage runs recorded for this task and passed in the rebased run. |
 | handover-stop-request | hand over the durable interrupted outcome · candidate-to-python | agent-orchestration | `d401d9a2a` | The mirror image of the sibling row: Python records a null exit code when its interrupted finish lands before its launcher observes the signal exit, while Rust records the settled process status (`-9`). Intermittent: it failed in three of the five all-stage runs recorded for this task, including the rebased run, with Python `null` against Rust `-9`. |
-| cron-routes-and-ticks | wait for the manual cron firing report | triggers-cron-improve | `f77008f66` | Python persists the scheduled task's canonical `task_spec.md` and references; Rust omits them. |
-| cron-routes-and-ticks | wait for a scheduler tick to fire the same task again | triggers-cron-improve | `f77008f66` | Python persists the scheduled task's canonical `task_spec.md` and references; Rust omits them. |
 | features-web-reply-audit | wait for the audit nudge | features | `854286c2a` | Python's web reply nudge includes the reason and full-reply instruction; Rust still sends the short prompt. |
 | features-web-reply-audit | server shutdown and fake-agent cleanup | features | `3cd98aa21`, `2fa0a4ce2`, `854286c2a` | The fake-agent spawn capture differs because the audit nudge still uses the short Rust prompt; see the failing wait row. |
 | features-web-reply | a status set of now alone | features | `854286c2a` | Python's status-set response adds `now_chars` and `now_over_budget`; Rust omits both. |

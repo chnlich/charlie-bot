@@ -58,7 +58,7 @@ async def _launched_run(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
       backend=None,
       caller=conftest.OPERATOR)
   run_id = "query-run"
-  await tree.runs.register_run_locked(models.RunRecord(id=run_id, session_id=meta.id, kind="work"))
+  await tree.runs.register_run(models.RunRecord(id=run_id, session_id=meta.id, kind="work"))
   proc = subprocess.Popen(["/bin/sleep", "60"])
   from src.runtime import runs
   pair = runs.read_pid_stat(proc.pid)
@@ -112,7 +112,7 @@ async def test_unlaunched_run_token_refuses(tmp_path: pathlib.Path, monkeypatch:
     # A fresh Run whose launch identity is never pinned: registered but not
     # launched, the refusal names the missing pin, not an unknown run.
     run_id = run_id + "-unlaunched"
-    await tree.runs.register_run_locked(models.RunRecord(id=run_id, session_id=session_id, kind="work"))
+    await tree.runs.register_run(models.RunRecord(id=run_id, session_id=session_id, kind="work"))
     token = run_token.sign_run_token(
         run_token.RunTokenClaims(session_id=session_id, run_id=run_id, agent="worker"), "query-op-key")
     out, err, code = _run_cli(monkeypatch, ["query", "--topic", "beta"], token)

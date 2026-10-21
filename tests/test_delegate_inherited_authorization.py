@@ -170,7 +170,7 @@ async def test_foreign_run_token_cannot_delegate(
       name="AL",
       backend=None,
       caller="operator")
-  await tree.runs.register_run_locked(models.RunRecord(id="agent-run", session_id=agents_child.id, kind="work"))
+  await tree.runs.register_run(models.RunRecord(id="agent-run", session_id=agents_child.id, kind="work"))
   import subprocess
 
   from src.runtime import runs
@@ -228,7 +228,7 @@ async def test_verify_exemption_on_the_v2_route_and_launch(
 async def register_active_run(tree, session_id: str, run_id: str, kind: str = "manager_turn") -> None:
   """Pin one active, launched Run on *session_id*: the identity its run
     token stands for (registered, no terminal fact, launch identity pinned)."""
-  await tree.runs.register_run_locked(models.RunRecord(id=run_id, session_id=session_id, kind=kind))
+  await tree.runs.register_run(models.RunRecord(id=run_id, session_id=session_id, kind=kind))
   await tree.runs.record_launch(session_id, run_id, pid=424242, pid_start=f"ps-{run_id}")
 
 

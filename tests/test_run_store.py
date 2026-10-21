@@ -37,7 +37,7 @@ async def make_task(store_run_env: tuple, request_id: str) -> str:
 
 async def register_live_run(store: runs.RunStore, session_id: str, proc: subprocess.Popen) -> models.RunRecord:
   pid, pid_start = conftest.identity_of(proc.pid)
-  return await store.register_run_locked(
+  return await store.register_run(
       models.RunRecord(
           id="run-live",
           session_id=session_id,
@@ -57,8 +57,8 @@ async def test_register_is_idempotent(tmp_path: pathlib.Path) -> None:
   _, session_blocks, _, store = env
   session_id = await make_task(env, "t1")
 
-  run = await store.register_run_locked(models.RunRecord(id="r1", session_id=session_id, kind="work"))
-  again = await store.register_run_locked(models.RunRecord(id="r1", session_id=session_id, kind="review"))
+  run = await store.register_run(models.RunRecord(id="r1", session_id=session_id, kind="work"))
+  again = await store.register_run(models.RunRecord(id="r1", session_id=session_id, kind="review"))
   assert again.id == run.id and again.kind == "work"  # the original product wins
 
   assert (await store.get_run(session_id, "r1")) is not None
@@ -83,8 +83,7 @@ async def test_retry_binding_is_stable_across_requests_and_reload(tmp_path: path
   env = build_env(tmp_path)
   cfg, session_blocks, mgr, store = env
   session_id = await make_task(env, "t1")
-  original = await store.register_run_locked(
-      models.RunRecord(id="r-orig", session_id=session_id, kind="work", backend="opus"))
+  original = await store.register_run(models.RunRecord(id="r-orig", session_id=session_id, kind="work", backend="opus"))
 
   # The locked variant is the production entry (the retry route holds the tree
   # owner's control lock); the test holds that same lock to meet its contract.
@@ -123,7 +122,7 @@ async def test_record_finish_is_the_one_terminal_writer(tmp_path: pathlib.Path) 
   env = build_env(tmp_path)
   _, _, _, store = env
   session_id = await make_task(env, "t1")
-  await store.register_run_locked(models.RunRecord(id="r1", session_id=session_id))
+  await store.register_run(models.RunRecord(id="r1", session_id=session_id))
   # An unclaimed run's finisher names real input events of this session only:
   # the acknowledgement payload is identity-bound, never arbitrary strings.
   await store._events.append(
@@ -155,7 +154,7 @@ async def test_stop_request_forces_a_successful_finish_to_interrupted(tmp_path: 
   env = build_env(tmp_path)
   _, _, mgr, store = env
   session_id = await make_task(env, "stop-finish")
-  await store.register_run_locked(models.RunRecord(id="run-stopped", session_id=session_id))
+  await store.register_run(models.RunRecord(id="run-stopped", session_id=session_id))
   async with mgr.control_lock:
     await store.append_stop_request_locked(session_id, "run-stopped", "cancel:request-1")
 
@@ -267,7 +266,7 @@ async def test_identity_mismatch_returns_conflict_and_keeps_evidence(
   _, _, _, store = env
   session_id = await make_task(env, "t1")
   # A live pid with a forged pid_start (pid reuse cannot fake field 22).
-  await store.register_run_locked(
+  await store.register_run(
       models.RunRecord(
           id="run-forged",
           session_id=session_id,
@@ -294,7 +293,7 @@ async def test_second_record_launch_replaces_identity_and_skips_the_launched_not
   env = build_env(tmp_path)
   _, _, mgr, store = env
   session_id = await make_task(env, "t1")
-  await store.register_run_locked(models.RunRecord(id="r1", session_id=session_id, kind="work"))
+  await store.register_run(models.RunRecord(id="r1", session_id=session_id, kind="work"))
 
   # The first launch fires the launched notification once; the relay's
   # replacement process must not fire it again.
@@ -329,7 +328,7 @@ async def test_record_launch_refused_on_a_run_with_a_stop_request(tmp_path: path
   env = build_env(tmp_path)
   _, _, _, store = env
   session_id = await make_task(env, "t1")
-  await store.register_run_locked(models.RunRecord(id="r1", session_id=session_id, kind="work"))
+  await store.register_run(models.RunRecord(id="r1", session_id=session_id, kind="work"))
   await store.record_launch(session_id, "r1", pid=111111, pid_start="1-111111")
 
   # The stop lands in the gap between two processes (the old one exited, the
@@ -388,4 +387,4 @@ async def test_readonly_store_reads_without_a_control_lock(tmp_path: pathlib.Pat
 
   # The lockless store is read-only by contract: a write path fails loud.
   with pytest.raises(TypeError):
-    await store.record_launch(session_id, run_id, pid=1, pid_start="1-1")
+    await store.register_run(models.RunRecord(id="r2", session_id=session_id))

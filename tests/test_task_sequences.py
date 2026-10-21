@@ -134,7 +134,7 @@ async def _ended_loop_shape(
         model="fake-model",
         sequence_ref=models.SequenceRef(
             kind="improve", owner_ref=improve_sequence.loop_owner_ref(manager.id, loop_id, cfg), position=position))
-    await tree.runs.register_run_locked(run)
+    await tree.runs.register_run(run)
     if outcome is not None:
       await tree.runs.record_finish(child.id, run.id, outcome)
     if report_text is not None:
@@ -954,8 +954,7 @@ async def test_improve_controller_preserves_base_lookups_and_skips_recovery(
     redrive_mock = mock.AsyncMock()
     monkeypatch.setattr(controller, "redrive", redrive_mock)
     redrive_mocks.append(redrive_mock)
-  await tree.runs.register_run_locked(
-      models.RunRecord(id="it-run", session_id=manager.id, kind="iteration", sequence_ref=ref))
+  await tree.runs.register_run(models.RunRecord(id="it-run", session_id=manager.id, kind="iteration", sequence_ref=ref))
   counters = {"followups": 0}
   await task_execution._replay_followups(manager.id, tree, None, counters, cfg)
   assert counters["followups"] == 0

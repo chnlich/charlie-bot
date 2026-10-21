@@ -69,7 +69,7 @@ async def _task_node(tmp_path: pathlib.Path, profile: str = "manager"):
 @pytest.mark.asyncio
 async def test_chat_cancel_on_task_node_stops_the_launched_run(tmp_path: pathlib.Path) -> None:
   _cfg, session_blocks, tree, node = await _task_node(tmp_path)
-  run = await tree.runs.register_run_locked(models.RunRecord(id="run-live", session_id=node.id, kind="manager_turn"))
+  run = await tree.runs.register_run(models.RunRecord(id="run-live", session_id=node.id, kind="manager_turn"))
   # A launched run whose process is already gone: request_stop converges it to
   # the interrupted terminal fact the way a live process's exit would.
   await tree.runs.record_launch(node.id, run.id, pid=2**23, pid_start="1")
@@ -95,7 +95,7 @@ async def test_chat_cancel_identity_conflict_maps_to_409(tmp_path: pathlib.Path)
   import subprocess
 
   _cfg, session_blocks, tree, node = await _task_node(tmp_path)
-  run = await tree.runs.register_run_locked(models.RunRecord(id="run-reused", session_id=node.id, kind="manager_turn"))
+  run = await tree.runs.register_run(models.RunRecord(id="run-reused", session_id=node.id, kind="manager_turn"))
   live = subprocess.Popen(["/bin/sleep", "30"])
   try:
     pair = runs.read_pid_stat(live.pid)

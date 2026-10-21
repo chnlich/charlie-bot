@@ -31,7 +31,7 @@ async def create(tree: task_sessions.TaskTreeManager, *, parent: str | None, req
 
 async def deliver(tree: task_sessions.TaskTreeManager, worker_id: str, run_id: str) -> None:
   """One successful work run: the automatic completion and receipt path."""
-  await tree.runs.register_run_locked(models.RunRecord(id=run_id, session_id=worker_id, kind="work"))
+  await tree.runs.register_run(models.RunRecord(id=run_id, session_id=worker_id, kind="work"))
   await tree.dispatch.finish_run(worker_id, run_id, outcome="success")
 
 
@@ -72,7 +72,7 @@ async def test_failed_worker_stays_in_the_active_list(tmp_path: pathlib.Path) ->
   _cfg, session_blocks, tree = conftest.build_env(tmp_path)
   root = await create(tree, parent=None, request_id="root")
   worker = await create(tree, parent=root.id, request_id="w1", profile="worker")
-  await tree.runs.register_run_locked(models.RunRecord(id="run-f", session_id=worker.id, kind="work"))
+  await tree.runs.register_run(models.RunRecord(id="run-f", session_id=worker.id, kind="work"))
   await tree.dispatch.finish_run(worker.id, "run-f", outcome="failed")
   await tree.dispatch.deliver_child_report(
       worker.id,

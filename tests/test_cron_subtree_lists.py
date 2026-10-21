@@ -53,7 +53,7 @@ async def _build_fixture(tmp_path: pathlib.Path) -> Fixture:
   # The delivered leaf stays a cron-subtree row through its manager parent.
   delivered = await conftest.create_task(
       tree, parent=manager.id, request_id="leaf-44", profile="worker", name="nightly · firing-44")
-  await tree.runs.register_run_locked(models.RunRecord(id="run-44", session_id=delivered.id, kind="work"))
+  await tree.runs.register_run(models.RunRecord(id="run-44", session_id=delivered.id, kind="work"))
   await tree.dispatch.finish_run(delivered.id, "run-44", outcome="success")
   assert tree.task_state(delivered.id) == "completed"  # the derived archive hides it while active
 

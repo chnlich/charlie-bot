@@ -70,7 +70,7 @@ async def _tree(env: _TaskEnv) -> dict[str, str]:
 async def test_run_context_returns_the_stored_snapshot(env: _TaskEnv) -> None:
   ids = await _tree(env)
   run_id = "ctx-run"
-  await env.tree.runs.register_run_locked(
+  await env.tree.runs.register_run(
       models.RunRecord(id=run_id, session_id=ids["worker"], kind="work"), task_spec_text="pinned spec")
   # The launch seam commits the snapshot; simulate the commit the adapter does.
   from src.runtime import task_execution, task_prompts
@@ -119,7 +119,7 @@ async def test_context_reads_are_read_only(env: _TaskEnv) -> None:
 async def test_corrupt_new_snapshot_is_an_error(env: _TaskEnv) -> None:
   ids = await _tree(env)
   run_id = "corrupt-snapshot"
-  await env.tree.runs.register_run_locked(models.RunRecord(id=run_id, session_id=ids["worker"], kind="work"))
+  await env.tree.runs.register_run(models.RunRecord(id=run_id, session_id=ids["worker"], kind="work"))
   snapshot_path = env.tree.runs.run_dir(ids["worker"], run_id) / "prompt_snapshot.json"
   snapshot_path.parent.mkdir(parents=True, exist_ok=True)
   snapshot_path.write_text("not json at all", encoding="utf-8")

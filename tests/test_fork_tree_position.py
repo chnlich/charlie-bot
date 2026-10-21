@@ -132,7 +132,7 @@ async def test_elone_moves_subtree_and_archives_source(tmp_path: pathlib.Path) -
   proc = conftest.live_subprocess()
   try:
     pid, pid_start = conftest.identity_of(proc.pid)
-    run = await tree.runs.register_run_locked(
+    run = await tree.runs.register_run(
         models.RunRecord(
             id="run-live", session_id=running.id, pid=pid, pid_start=pid_start, started_at=models.utc_now()))
 
@@ -308,7 +308,7 @@ async def test_elone_with_unfinished_run_refuses_and_writes_nothing(
   monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
   root = await manager_child(tree, None, "root", name="Root")
   source = await manager_child(tree, root.id, "source", name="Feature")
-  await tree.runs.register_run_locked(models.RunRecord(id="run-queued", session_id=source.id))
+  await tree.runs.register_run(models.RunRecord(id="run-queued", session_id=source.id))
   sessions_before = {p.name for p in cfg.sessions_dir.iterdir()}
   events_before = event_ids(tree, source.id)
 

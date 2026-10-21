@@ -42,7 +42,7 @@ async def test_archive_route_returns_the_archived_ids_and_409_detail_reaches_the
     # An unfinished run refuses the archive with the node list, and the 409
     # detail carries the blockers the sidebar shows.
     leaf = await conftest.create_task(tree, parent=None, request_id="leaf")
-    await tree.runs.register_run_locked(
+    await tree.runs.register_run(
         models.RunRecord(id="run-live", session_id=leaf.id, kind="work", pid=424242, pid_start="ps-live"))
     refused = client.delete(f"/api/sessions/{leaf.id}")
     assert refused.status_code == 409
@@ -64,7 +64,7 @@ async def test_user_message_restores_through_the_chat_route_and_agent_is_409(tmp
   mid = await conftest.create_task(tree, parent=root.id, request_id="mid")
   leaf = await conftest.create_task(tree, parent=mid.id, request_id="leaf", profile="worker")
   await tree.archive_subtree(root.id, caller=conftest.OPERATOR)
-  await tree.runs.register_run_locked(models.RunRecord(id="run-agent", session_id=mid.id, kind="manager_turn"))
+  await tree.runs.register_run(models.RunRecord(id="run-agent", session_id=mid.id, kind="manager_turn"))
   await tree.runs.record_launch(mid.id, "run-agent", pid=424242, pid_start="ps-1")
 
   app = fastapi.FastAPI()

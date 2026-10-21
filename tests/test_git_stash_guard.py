@@ -237,7 +237,7 @@ async def test_worker_and_review_runs_put_the_guard_first_on_path(
       model="fake-model",
       repo_path=str(repo),
       base_branch="origin/main")
-  await tree.runs.register_run_locked(record, task_spec_text=task_spec["goal"])
+  await tree.runs.register_run(record, task_spec_text=task_spec["goal"])
   tree.dispatch.executor.launch(worker_node.id, "run-work")
 
   wt = await test_task_execution.wait_for_worktree(tree, worker_node.id, "run-work", timeout=10.0)

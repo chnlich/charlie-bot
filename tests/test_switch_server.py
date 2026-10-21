@@ -6,8 +6,9 @@ in for both implementations: as the clone's server.py it is the Python server, a
 the Rust binary, and the switch tells them apart by argv. Its behavior comes from a behavior.json beside it.
 
 The preflight refusals stop before any pane is looked up, so they need no tmux. The steps after the preflight drive a
-pane on a private tmux server (tmux -L). The repo caps integration tests at 50 and already uses 49, so those steps
-share one test.
+pane on a private tmux server (tmux -L). The repo caps integration tests at 50 and already uses all 50, so those steps
+share one test. The probe turn's cases run its functions in a shell against a fake server of their own, with one-second
+waits, so each stays under the unit budget.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ import shlex
 import shutil
 import socket
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -37,7 +39,18 @@ LAUNCHER = ROOT / "scripts" / "start-server.sh"
 RUST_SHA = hashlib.sha1(b"rust-backend release under test").hexdigest()
 ACCESS_KEY = "switch-test-key"
 SESSION = "11111111-2222-3333-4444-555555555555"
-BEHAVIOR_DEFAULTS = {"check_config": "ok", "adopt": True, "probe": "success", "ignore_sigterm": False}
+# The fake server's probe run: run_state is its state before a stop; output is none, message (a committed assistant
+# message) or tool (a tool call in the open draft); output_after_polls counts the bootstrap reads that see no output;
+# cancel is settles (a stop ends the run) or hangs (it does not).
+BEHAVIOR_DEFAULTS = {
+    "check_config": "ok",
+    "adopt": True,
+    "run_state": "running",
+    "output": "message",
+    "output_after_polls": 0,
+    "cancel": "settles",
+    "ignore_sigterm": False,
+}
 GIT_ENV = {
     **os.environ,
     "GIT_AUTHOR_NAME": "switch-test",
@@ -49,7 +62,8 @@ DIRECT_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 # One program for both implementations. Its routes answer the switch's readback and probe; at startup it logs a recovery
 # line for every live Run record (when it adopts) and server_ready, in the format of the implementation it stands in
-# for: console lines for server.py, JSON lines for the charliebot-server binary.
+# for: console lines for server.py, JSON lines for the charliebot-server binary. Each request past the version probe is
+# appended to calls.log beside the program, as "METHOD PATH".
 FAKE_SERVER = r'''#!/usr/bin/env python3
 """Stand-in CharlieBot server: the routes and log lines the switch reads, behavior from behavior.json."""
 import datetime
@@ -68,6 +82,10 @@ HOME = pathlib.Path(os.environ["CHARLIEBOT_HOME"])
 CONFIG = (HOME / "config.yaml").read_text(encoding="utf-8")
 PORT = int(re.search(r"^\s*port:\s*(\d+)", CONFIG, re.MULTILINE).group(1))
 KEY = re.search(r"access_key:\s*(\S+)", (HOME / "credentials.yaml").read_text(encoding="utf-8")).group(1)
+PROBE_SESSION = "probe-session"
+TERMINAL = {"success", "failed", "interrupted", "stopped"}
+# The probe's run: its message starts it, and it reads as the behavior's state until a stop settles it.
+RUN = {"started": False, "state": BEHAVIOR["run_state"], "reads": 0}
 
 
 def log(event, **fields):
@@ -98,19 +116,48 @@ class Handler(http.server.BaseHTTPRequestHandler):
   def do_POST(self):
     self._route("POST")
 
+  def do_DELETE(self):
+    self._route("DELETE")
+
   def _route(self, method):
     self.rfile.read(int(self.headers.get("Content-Length") or 0))
     if self.headers.get("Authorization") != f"Bearer {KEY}":
       return self._reply(401, {"detail": "unauthorized"})
     if method == "GET" and self.path == "/api/internal/version":
       return self._reply(200, {"ok": True})
+    with (HERE / "calls.log").open("a", encoding="utf-8") as calls:
+      calls.write(f"{method} {self.path}\n")
     if method == "POST" and self.path == "/api/sessions/":
-      return self._reply(200, {"id": "probe-session"})
+      return self._reply(200, {"id": PROBE_SESSION})
     if method == "POST" and re.fullmatch(r"/api/chat/[^/]+/message", self.path):
+      RUN["started"] = True
       return self._reply(202, {"input_event_id": "probe-input"})
     if method == "GET" and re.fullmatch(r"/api/sessions/[^/]+/runs\?.*", self.path):
-      return self._reply(200, {"items": [{"id": "probe-run", "state": BEHAVIOR["probe"]}]})
+      items = [{"id": "probe-run", "state": RUN["state"]}] if RUN["started"] else []
+      return self._reply(200, {"items": items, "next_cursor": None})
+    if method == "GET" and self.path == f"/api/sessions/{PROBE_SESSION}/bootstrap":
+      return self._reply(200, self._bootstrap())
+    if method == "POST" and self.path == f"/api/sessions/{PROBE_SESSION}/runs/probe-run/cancel":
+      if BEHAVIOR["cancel"] == "settles" and RUN["state"] not in TERMINAL:
+        RUN["state"] = "interrupted"
+      return self._reply(200, {"run_id": "probe-run", "stop_requested": True, "outcome": None})
+    if method == "DELETE" and self.path == f"/api/sessions/{PROBE_SESSION}":
+      if RUN["started"] and RUN["state"] not in TERMINAL:
+        return self._reply(409, {"detail": "run probe-run is unfinished"})
+      return self._reply(200, {"archived": [PROBE_SESSION]})
     return self._reply(404, {"detail": "not found"})
+
+  def _bootstrap(self):
+    RUN["reads"] += 1
+    messages = [{"role": "user", "content": "Reply with the single word HELLO.", "id": "probe-user"}]
+    draft = None
+    if RUN["reads"] > BEHAVIOR["output_after_polls"]:
+      if BEHAVIOR["output"] == "message":
+        messages.append({"role": "assistant", "content": "HELLO", "id": "probe-reply"})
+      elif BEHAVIOR["output"] == "tool":
+        draft = {"role": "assistant", "content": "", "tools": [{"name": "Bash"}]}
+    return {"messages": messages, "pending_draft": draft, "event_count": len(messages), "oldest_message_ordinal": 0,
+            "has_more": False}
 
   def _reply(self, status, body):
     data = json.dumps(body).encode("utf-8")
@@ -417,6 +464,115 @@ def test_preflight_refusal_exits_1_and_changes_nothing(world: World, case: str) 
   assert proc.returncode == 1, _report(world, proc)
   assert not (world.releases / "current").is_symlink()
   assert _git(world.clone, "rev-parse", "HEAD") == world.base_head
+
+
+ProbeRun = Callable[..., tuple[subprocess.CompletedProcess[str], list[str]]]
+PROBE_BOOTSTRAP = "GET /api/sessions/probe-session/bootstrap"
+PROBE_CANCEL = "POST /api/sessions/probe-session/runs/probe-run/cancel"
+PROBE_ARCHIVE = "DELETE /api/sessions/probe-session"
+
+
+def _answers_version(port: int) -> bool:
+  try:
+    return _version_status(port) == 200
+  except OSError:
+    return False
+
+
+@pytest.fixture
+def probe(tmp_path: pathlib.Path) -> Iterator[ProbeRun]:
+  """The switch's probe turn, run in a shell against a fake server that answers with the behavior the test gives.
+
+  Each call starts its own fake server, so a test calls the runner once. The runner returns the probe's result and the
+  requests the fake served, as "METHOD PATH" lines. Both probe waits are one second.
+  """
+  home = tmp_path / "home"
+  home.mkdir()
+  port = _free_port()
+  (home / "config.yaml").write_text(f"server:\n  host: 127.0.0.1\n  port: {port}\n", encoding="utf-8")
+  (home / "credentials.yaml").write_text(f"charliebot:\n  access_key: {ACCESS_KEY}\n", encoding="utf-8")
+  servers: list[subprocess.Popen[bytes]] = []
+
+  def run(**behavior: object) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+    server_dir = tmp_path / "server"
+    server_dir.mkdir()
+    (server_dir / "server.py").write_text(FAKE_SERVER, encoding="utf-8")
+    _write_behavior(server_dir, **behavior)
+    env = {
+        **os.environ,
+        "CHARLIEBOT_HOME": str(home),
+        "CHARLIEBOT_SWITCH_PROBE_WAIT_S": "1",
+        "CHARLIEBOT_SWITCH_PROBE_CANCEL_WAIT_S": "1",
+    }
+    servers.append(
+        subprocess.Popen(
+            [sys.executable, str(server_dir / "server.py")],
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL))
+    _wait_until(lambda: _answers_version(port), 10)
+    work = tmp_path / "work"
+    work.mkdir()
+    probe_env = {**env, "PORT": str(port), "KEY": ACCESS_KEY, "WORK": str(work)}
+    probe_cmd = ["bash", "-c", 'source "$1" python && probe_turn', "bash", str(SWITCH)]
+    proc = subprocess.run(probe_cmd, env=probe_env, capture_output=True, text=True, timeout=30, check=False)
+    calls_log = server_dir / "calls.log"
+    calls = calls_log.read_text(encoding="utf-8").splitlines() if calls_log.exists() else []
+    return proc, calls
+
+  yield run
+  for server in servers:
+    server.kill()
+    server.wait()
+
+
+def _assert_stage_lines(proc: subprocess.CompletedProcess[str]) -> None:
+  """Each probe stage logs one line that names its session and its run and gives the elapsed seconds."""
+  stage_lines = [line for line in proc.stdout.splitlines() if "switch: probe: " in line]
+  assert stage_lines, proc.stdout
+  for line in stage_lines:
+    assert re.search(r"probe: .* session=probe-session run=\S+ elapsed=\d+s$", line), line
+
+
+def test_probe_passes_on_first_output_then_stops_the_run_and_archives(probe: ProbeRun) -> None:
+  """Output on the second read: the probe stops the run, the stop settles it, and the session is archived."""
+  proc, calls = probe(run_state="running", output="message", output_after_polls=1, cancel="settles")
+  assert proc.returncode == 0, proc.stdout + proc.stderr
+  assert PROBE_CANCEL in calls
+  assert calls[-1] == PROBE_ARCHIVE
+  _assert_stage_lines(proc)
+
+
+def test_probe_passes_without_a_cancel_when_the_run_ends_success(probe: ProbeRun) -> None:
+  proc, calls = probe(run_state="success", output="none")
+  assert proc.returncode == 0, proc.stdout + proc.stderr
+  assert not any(line.endswith("/cancel") for line in calls)
+  assert calls[-1] == PROBE_ARCHIVE
+  _assert_stage_lines(proc)
+
+
+def test_probe_fails_at_once_when_the_run_fails_before_any_output(probe: ProbeRun) -> None:
+  proc, calls = probe(run_state="failed", output="none")
+  assert proc.returncode == 1, proc.stdout + proc.stderr
+  assert calls.count(PROBE_BOOTSTRAP) == 1  # the failed run ends the wait on its first read
+  assert not any(line.endswith("/cancel") for line in calls)
+  assert calls[-1] == PROBE_ARCHIVE
+  _assert_stage_lines(proc)
+
+
+def test_probe_fails_and_stops_the_run_when_no_output_comes_within_the_wait(probe: ProbeRun) -> None:
+  proc, calls = probe(run_state="running", output="none")
+  assert proc.returncode == 1, proc.stdout + proc.stderr
+  assert PROBE_CANCEL in calls
+  assert calls[-1] == PROBE_ARCHIVE
+  _assert_stage_lines(proc)
+
+
+def test_probe_fails_when_the_stop_does_not_settle_within_its_wait(probe: ProbeRun) -> None:
+  proc, calls = probe(run_state="running", output="tool", cancel="hangs")
+  assert proc.returncode == 1, proc.stdout + proc.stderr
+  assert PROBE_CANCEL in calls
+  _assert_stage_lines(proc)
 
 
 @pytest.mark.integration

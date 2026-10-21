@@ -252,8 +252,8 @@ impl Store {
     Ok(ancestors)
   }
 
-  /// Return the nearest node on the open manager chain that holds a real user message. A refusal is
-  /// `forbidden`: `takeoff_gate.DelegationBlockedError` is a 403 on every route.
+  /// Return the nearest node on the open manager chain that holds a user request: a real user message or a thread
+  /// platform summon. A refusal is `forbidden`: `takeoff_gate.DelegationBlockedError` is a 403 on every route.
   pub fn check_task_authorization(&self, session_id: &str) -> StoreResult<String> {
     let index = self.tree_index()?;
     let mut current = session_id.to_string();
@@ -273,11 +273,11 @@ impl Store {
         let kind = if is_start { "task" } else { "ancestor task" };
         return Err(StoreError::forbidden(format!("Delegation blocked: {kind} {current} is {state}; open it first")));
       }
-      if user_node.is_none() && holds_real_user_message(&self.load_all_facts(&current)?) {
+      if user_node.is_none() && holds_user_request(&self.load_all_facts(&current)?) {
         user_node = Some(current.clone());
       }
       let Some(parent_id) = parent_id else {
-        return user_node.ok_or_else(|| no_user_message_error(session_id));
+        return user_node.ok_or_else(|| no_user_request_error(session_id));
       };
       current = parent_id.to_string();
     }
@@ -1485,21 +1485,23 @@ fn admits_input(event: &Value) -> bool {
   }
 }
 
-fn holds_real_user_message(events: &[Value]) -> bool {
+/// Whether a node's events hold a user request after its newest `clone_start` marker: a real user message or a thread
+/// platform summon.
+fn holds_user_request(events: &[Value]) -> bool {
   let mut holds = false;
   for event in events {
     match event.get("type").and_then(Value::as_str) {
       Some("clone_start") => holds = false,
-      Some("user") if event.get("content").is_some_and(Value::is_string) => holds = true,
+      _ if event_types::is_real_user_message(event) || event_types::is_platform_summon(event) => holds = true,
       _ => {}
     }
   }
   holds
 }
 
-fn no_user_message_error(session_id: &str) -> StoreError {
+fn no_user_request_error(session_id: &str) -> StoreError {
   StoreError::forbidden(format!(
-    "Delegation blocked: no user request on the task chain from task {session_id} to its root. A delegation serves a line that a real user message started; agent messages, scheduled triggers and child reports do not count."
+    "Delegation blocked: no user request on the task chain from task {session_id} to its root. A delegation serves a line that a real user message or a thread platform summon started; other agent messages, scheduled triggers and child reports do not count."
   ))
 }
 

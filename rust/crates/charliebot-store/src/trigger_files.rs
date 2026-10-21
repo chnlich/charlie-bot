@@ -5,15 +5,16 @@ use std::path::{Path, PathBuf};
 
 use crate::metadata::UtcDateTime;
 
-/// Return every regular `*.json` trigger file with the stat from the directory walk.
+/// Return every regular `*.json` trigger file with the stat from the directory walk, sorted by file name.
 ///
-/// A trigger file that vanishes between the directory read and its stat is skipped. Errors opening or scanning the
-/// directory are returned to the caller.
+/// The sort gives an unchanged directory the same order on every poll. A trigger file that vanishes between the
+/// directory read and its stat is skipped. Errors opening or scanning the directory are returned to the caller.
 pub fn iter_trigger_file_stats(triggers_dir: impl AsRef<Path>) -> std::io::Result<Vec<(PathBuf, Metadata)>> {
   let triggers_dir = triggers_dir.as_ref();
+  let mut entries = fs::read_dir(triggers_dir)?.collect::<std::io::Result<Vec<_>>>()?;
+  entries.sort_by_key(fs::DirEntry::file_name);
   let mut files = Vec::new();
-  for entry in fs::read_dir(triggers_dir)? {
-    let entry = entry?;
+  for entry in entries {
     if !entry.file_name().to_string_lossy().ends_with(".json") {
       continue;
     }

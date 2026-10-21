@@ -2171,12 +2171,16 @@ async fn add_recovery_worker(
   Ok(worker)
 }
 
-fn python_marker_instant(path: &Path) -> anyhow::Result<String> {
-  let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+fn repo_root() -> PathBuf {
+  PathBuf::from(env!("CARGO_MANIFEST_DIR"))
     .ancestors()
     .nth(3)
     .expect("the tasks crate has a repository root ancestor")
-    .to_path_buf();
+    .to_path_buf()
+}
+
+fn python_marker_instant(path: &Path) -> anyhow::Result<String> {
+  let repo_root = repo_root();
   let helper = repo_root.join("rust/crates/charliebot-tasks/tests/boot_recovery_marker_reference.py");
   let output = Command::new("uv").args(["run", "python"]).arg(helper).arg(path).current_dir(repo_root).output()?;
   anyhow::ensure!(
@@ -2186,6 +2190,26 @@ fn python_marker_instant(path: &Path) -> anyhow::Result<String> {
     String::from_utf8_lossy(&output.stderr)
   );
   Ok(String::from_utf8(output.stdout)?.trim_end().to_string())
+}
+
+/// Python's `os.path.lexists` for `path`, run by `uv run python -I` from the repository root.
+fn python_lexists(path: &Path) -> anyhow::Result<bool> {
+  let output = Command::new("uv")
+    .args(["run", "python", "-I", "-c", "import os, sys; print(os.path.lexists(sys.argv[1]))"])
+    .arg(path)
+    .current_dir(repo_root())
+    .output()?;
+  anyhow::ensure!(
+    output.status.success(),
+    "uv run python failed:\nstdout: {}\nstderr: {}",
+    String::from_utf8_lossy(&output.stdout),
+    String::from_utf8_lossy(&output.stderr)
+  );
+  match String::from_utf8(output.stdout)?.trim_end() {
+    "True" => Ok(true),
+    "False" => Ok(false),
+    other => anyhow::bail!("os.path.lexists printed {other:?}"),
+  }
 }
 
 #[tokio::test]
@@ -2344,6 +2368,41 @@ async fn dangling_worktree_symlink_keeps_a_closed_worker_in_full_recovery() -> a
   assert_eq!(counters.skipped, 0);
   assert_eq!(counters.keep_reasons.get("worktree_exists"), Some(&1));
   assert_eq!(stack.store().task_state(&worker.id)?, "completed");
+  Ok(())
+}
+
+#[tokio::test]
+async fn worktree_path_under_a_regular_file_reads_as_absent_and_the_boot_pass_continues() -> anyhow::Result<()> {
+  // Python: src/runtime/task_recovery.py:119.
+  let stack = Stack::start("exit 0").await?;
+  let blocker = stack.home.path().join("regular-file");
+  std::fs::write(&blocker, "synthetic")?;
+  let under_file = blocker.join("worktree");
+  assert!(!python_lexists(&under_file)?, "Python's os.path.lexists reads a path under a regular file as absent");
+  let worker = add_recovery_worker(
+    &stack,
+    "enotdir-worker",
+    "run-enotdir",
+    RecoveryWorkerOptions {
+      outcome: Some(RunOutcomeKind::Success),
+      worktree_path: Some(under_file.display().to_string()),
+      close: true,
+      ..RecoveryWorkerOptions::default()
+    },
+  )
+  .await?;
+  write_python_boot_marker(&stack, "2099-01-01T00:00:00+00:00")?;
+  let log = LogCapture::default();
+  let _guard = log.install();
+
+  let counters = recovery::reconcile_task_tree(&stack.features, &stack.adapter).await?;
+  assert_eq!(counters.full, 1, "only the open manager gets a full check");
+  assert_eq!(counters.skipped, 1, "the closed worker is skipped, as Python skips it");
+  let logged = log.text();
+  let warnings: Vec<&str> = logged.lines().filter(|line| line.contains("task_recovery_worktree_stat_failed")).collect();
+  assert_eq!(warnings.len(), 1, "one warning for the unreadable path: {logged}");
+  assert!(warnings[0].contains(&worker.id), "the warning names the session: {}", warnings[0]);
+  assert!(warnings[0].contains(&under_file.display().to_string()), "the warning names the path: {}", warnings[0]);
   Ok(())
 }
 

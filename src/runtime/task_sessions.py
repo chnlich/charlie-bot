@@ -697,8 +697,12 @@ class TaskTreeManager:
                                                     log_fields={"session": session_id},
                                                     parse_filter=ndjson.type_line_filter(_LIFECYCLE_STATE_TYPES),
                                                     max_lines=LIFECYCLE_TAIL_LINES):
-      newest = event
-      break
+      # type_line_filter only skips lines whose head proves a foreign type; a
+      # line with no `type` key (or a foreign leading key) still yields, so
+      # keep walking until a line's parsed type names a lifecycle fact.
+      if event.get("type") in _LIFECYCLE_STATE_TYPES:
+        newest = event
+        break
     state = self._facts_of(session_id).task_state if newest is None else _task_state_of_lifecycle(newest)
     self._state_tail_memo[session_id] = (key, state)
     return state

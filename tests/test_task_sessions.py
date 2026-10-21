@@ -267,3 +267,49 @@ async def test_task_state_tail_without_lifecycle_fact_falls_back_to_full_fold(tm
 
   assert tree.task_state(node.id) == "completed"
   assert tree.task_state_fast(node.id) == "completed"
+
+
+async def _append_raw_lines(cfg: models.Config, node: models.SessionNode, lines: list[str]) -> None:
+  events_path = cfg.sessions_dir / node.id / "data" / "chat_events.jsonl"
+  events_path.parent.mkdir(parents=True, exist_ok=True)
+  with events_path.open("ab") as f:
+    for line in lines:
+      f.write(line.encode() + b"\n")
+
+
+def _closed_fact(node_id: str) -> str:
+  event = control_events.build_control_event(
+      ET.TASK_CLOSED, actor="operator", source_session_id=node_id, request_id="c", outcome="completed")
+  return json.dumps(event)
+
+
+@pytest.mark.asyncio
+async def test_task_state_fast_skips_tail_line_without_type_key(tmp_path: pathlib.Path) -> None:
+  """A newest line with no `type` key does not break or decide the tail read."""
+  cfg, _blocks, tree = conftest.build_env(tmp_path)
+  node = await conftest.create_task(tree, parent=None, request_id="root", name="Root")
+  await _append_raw_lines(cfg, node, [_closed_fact(node.id), json.dumps({"is_error": False})])
+
+  assert tree.task_state_fast(node.id) == tree.task_state(node.id) == "completed"
+
+
+@pytest.mark.asyncio
+async def test_task_state_fast_skips_tail_line_with_foreign_leading_key(tmp_path: pathlib.Path) -> None:
+  """A newest line that leads with a foreign key and carries a non-lifecycle type is skipped."""
+  cfg, _blocks, tree = conftest.build_env(tmp_path)
+  node = await conftest.create_task(tree, parent=None, request_id="root", name="Root")
+  foreign = json.dumps({"session_id": node.id, "type": ET.AGENT_MESSAGE})
+  await _append_raw_lines(cfg, node, [_closed_fact(node.id), foreign])
+
+  assert tree.task_state_fast(node.id) == tree.task_state(node.id) == "completed"
+
+
+@pytest.mark.asyncio
+async def test_task_state_fast_without_lifecycle_fact_and_headless_lines_matches_full_fold(
+    tmp_path: pathlib.Path) -> None:
+  """No lifecycle fact and a `type`-less line: the tail read matches the full fold."""
+  cfg, _blocks, tree = conftest.build_env(tmp_path)
+  node = await conftest.create_task(tree, parent=None, request_id="root", name="Root")
+  await _append_raw_lines(cfg, node, [json.dumps({"is_error": False})])
+
+  assert tree.task_state_fast(node.id) == tree.task_state(node.id)

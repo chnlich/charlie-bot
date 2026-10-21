@@ -223,45 +223,92 @@ fn noon(year: i64, month: i64, day: i64) -> i64 {
   days_from_civil(year, month, day) * 86_400 + 12 * 3_600
 }
 
-#[test]
-fn retention_keeps_every_archive_younger_than_seven_days() {
-  // Sunday 2026-10-18 at noon: the archives of 10-12 (age 6) and 10-18 (age 0).
-  let now = noon(2026, 10, 18);
-  let names = ["charliebot-20261012-000000.tar.gz", "charliebot-20261018-000000.tar.gz"];
-  assert_eq!(surviving_after_retention(now, &names), names);
+/// The civil date of a day count since 1970-01-01 (Howard Hinnant's `civil_from_days`).
+fn civil_from_days(days: i64) -> (i64, i64, i64) {
+  let shifted = days + 719_468;
+  let era = shifted.div_euclid(146_097);
+  let day_of_era = shifted - era * 146_097;
+  let year_of_era = (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+  let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+  let month_index = (5 * day_of_year + 2) / 153;
+  let day = day_of_year - (153 * month_index + 2) / 5 + 1;
+  let month = if month_index < 10 { month_index + 3 } else { month_index - 9 };
+  (year_of_era + era * 400 + i64::from(month <= 2), month, day)
 }
 
 #[test]
-fn retention_keeps_only_sundays_from_seven_to_thirty_days() {
-  // Sunday 2026-10-18 at noon. Ages: 7 (Sun 10-11), 8 (Sat 10-10), 14 (Sun 10-04), 28 (Sun 09-20), 29 (Sat 09-19).
+fn civil_from_days_inverts_days_from_civil() {
+  for (year, month, day) in [(2026, 10, 18), (2026, 11, 1), (2028, 2, 29), (1999, 12, 31)] {
+    assert_eq!(civil_from_days(days_from_civil(year, month, day)), (year, month, day));
+  }
+}
+
+#[test]
+fn retention_keeps_every_archive_younger_than_three_days() {
+  // Sunday 2026-10-18 at noon: the archives of 10-16 (age 2) and 10-18 (age 0) stay. The 10-15 archive (age 3, a
+  // Thursday) goes, and so does 10-14 (age 4).
   let now = noon(2026, 10, 18);
   let names = [
-    "charliebot-20260919-000000.tar.gz",
-    "charliebot-20260920-000000.tar.gz",
+    "charliebot-20261014-000000.tar.gz",
+    "charliebot-20261015-000000.tar.gz",
+    "charliebot-20261016-000000.tar.gz",
+    "charliebot-20261018-000000.tar.gz",
+  ];
+  let kept = ["charliebot-20261016-000000.tar.gz", "charliebot-20261018-000000.tar.gz"];
+  assert_eq!(surviving_after_retention(now, &names), kept);
+}
+
+#[test]
+fn retention_keeps_only_sundays_from_three_to_fifteen_days() {
+  // Sunday 2026-10-18 at noon. Ages: 1 (Sat 10-17, kept as younger than three days), 3 (Thu 10-15), 7 (Sun 10-11),
+  // 14 (Sun 10-04), 15 (Sat 10-03), 21 (Sun 09-27).
+  let now = noon(2026, 10, 18);
+  let names = [
+    "charliebot-20260927-000000.tar.gz",
+    "charliebot-20261003-000000.tar.gz",
     "charliebot-20261004-000000.tar.gz",
-    "charliebot-20261010-000000.tar.gz",
     "charliebot-20261011-000000.tar.gz",
+    "charliebot-20261015-000000.tar.gz",
+    "charliebot-20261017-000000.tar.gz",
   ];
   let kept =
-    ["charliebot-20260920-000000.tar.gz", "charliebot-20261004-000000.tar.gz", "charliebot-20261011-000000.tar.gz"];
+    ["charliebot-20261004-000000.tar.gz", "charliebot-20261011-000000.tar.gz", "charliebot-20261017-000000.tar.gz"];
   assert_eq!(surviving_after_retention(now, &names), kept);
 }
 
 #[test]
-fn retention_keeps_only_month_starts_from_thirty_to_ninety_days() {
-  // Tuesday 2026-10-20 at noon. Ages: 30 (Sun 09-20, not the 1st, so the Sunday rule does not apply),
-  // 49 (09-01), 80 (08-01), 89 (07-23), 90 (07-22), 111 (07-01).
-  let now = noon(2026, 10, 20);
-  let names = [
-    "charliebot-20260701-000000.tar.gz",
-    "charliebot-20260722-000000.tar.gz",
-    "charliebot-20260723-000000.tar.gz",
-    "charliebot-20260801-000000.tar.gz",
-    "charliebot-20260901-000000.tar.gz",
-    "charliebot-20260920-000000.tar.gz",
-  ];
-  let kept = ["charliebot-20260801-000000.tar.gz", "charliebot-20260901-000000.tar.gz"];
+fn retention_deletes_first_of_month_archives_older_than_fifteen_days() {
+  // Sunday 2026-10-18 at noon. The 1st of September (age 47) and of August (age 78) go, since no monthly tier
+  // keeps them. The 10-16 archive (age 2) stays.
+  let now = noon(2026, 10, 18);
+  let names =
+    ["charliebot-20260801-000000.tar.gz", "charliebot-20260901-000000.tar.gz", "charliebot-20261016-000000.tar.gz"];
+  let kept = ["charliebot-20261016-000000.tar.gz"];
   assert_eq!(surviving_after_retention(now, &names), kept);
+}
+
+#[test]
+fn retention_keeps_the_last_three_days_and_recent_sundays() {
+  // The scheduled run stamps each day's archive at 04:45 and applies retention at 04:50 on Wednesday 2026-11-04.
+  // Of forty daily archives, the three days before the run stay, and so do the Sundays 11-01 (age 3) and 10-25
+  // (age 10). The rest go.
+  let now = days_from_civil(2026, 11, 4) * 86_400 + 4 * 3_600 + 50 * 60;
+  let names: Vec<String> = (0..40).map(scheduled_archive).collect();
+  let names: Vec<&str> = names.iter().map(String::as_str).collect();
+  let kept = [
+    "charliebot-20261025-044500.tar.gz",
+    "charliebot-20261101-044500.tar.gz",
+    "charliebot-20261102-044500.tar.gz",
+    "charliebot-20261103-044500.tar.gz",
+    "charliebot-20261104-044500.tar.gz",
+  ];
+  assert_eq!(surviving_after_retention(now, &names), kept);
+}
+
+/// The archive the scheduled run writes at 04:45 on the civil day `days_ago` before 2026-11-04.
+fn scheduled_archive(days_ago: i64) -> String {
+  let (year, month, day) = civil_from_days(days_from_civil(2026, 11, 4) - days_ago);
+  format!("charliebot-{year:04}{month:02}{day:02}-044500.tar.gz")
 }
 
 #[test]

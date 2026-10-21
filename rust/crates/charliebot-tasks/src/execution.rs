@@ -1725,6 +1725,7 @@ impl TaskExecutionAdapter {
     if run.kind == RunKind::Review {
       return true;
     }
+    // The pool's slot field `backend_from_pool`, which the metadata holds at its top level (`fields_of(meta, owner)`).
     meta.extra("backend_from_pool").and_then(Value::as_bool).unwrap_or(false)
       || meta
         .extra("route")

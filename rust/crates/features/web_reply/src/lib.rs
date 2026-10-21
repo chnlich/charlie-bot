@@ -67,7 +67,7 @@ fn normalize_web_status(value: &mut Value) -> bool {
   let Some(items) = waiting.as_array_mut() else { return false };
   for item in items {
     let Some(item) = item.as_object_mut() else { return false };
-    if item.keys().any(|name| !["text", "link"].contains(&name.as_str())) {
+    if item.keys().any(|name| !["text", "context", "link"].contains(&name.as_str())) {
       return false;
     }
     if !item.get("text").and_then(Value::as_str).is_some_and(|text| !text.trim().is_empty()) {
@@ -75,6 +75,14 @@ fn normalize_web_status(value: &mut Value) -> bool {
     }
     if item.get("link").is_some_and(|link| !link.is_null() && !link.is_string()) {
       return false;
+    }
+    match item.get("context") {
+      None => {}
+      Some(Value::Null) => {
+        item.remove("context");
+      }
+      Some(Value::String(context)) if !context.trim().is_empty() => {}
+      Some(_) => return false,
     }
     item.entry("link".to_string()).or_insert(Value::Null);
   }
@@ -90,13 +98,22 @@ fn routes(features: &Arc<FeatureContext>) -> Router {
     .route("/api/internal/web/reply", post_only(api::post_reply))
     .route("/api/internal/web/dialog", get_only(api::get_dialog))
     .route("/api/internal/web/status", refuse_other_methods(post(api::post_status).get(api::get_status), "POST"))
+    .route("/api/internal/web/status/unread", post_only(api::post_status_unread))
+    .route("/api/internal/web/ask-check", post_only(api::post_ask_check))
     .with_state(Arc::clone(features))
 }
 
 /// Whether a path is one of the web reply routes, whatever the method. The server's trailing-slash redirect asks this
 /// of the slash-toggled path.
 fn matches(path: &str) -> bool {
-  matches!(path, "/api/internal/web/reply" | "/api/internal/web/dialog" | "/api/internal/web/status")
+  matches!(
+    path,
+    "/api/internal/web/reply"
+      | "/api/internal/web/dialog"
+      | "/api/internal/web/status"
+      | "/api/internal/web/status/unread"
+      | "/api/internal/web/ask-check"
+  )
 }
 
 #[cfg(test)]
@@ -116,6 +133,8 @@ mod tests {
     assert!((routers[0].matches)("/api/internal/web/reply"));
     assert!((routers[0].matches)("/api/internal/web/dialog"));
     assert!((routers[0].matches)("/api/internal/web/status"));
+    assert!((routers[0].matches)("/api/internal/web/status/unread"));
+    assert!((routers[0].matches)("/api/internal/web/ask-check"));
     assert!(!(routers[0].matches)("/api/internal/web"));
     assert!(!(routers[0].matches)("/api/internal/web/status/extra"));
   }
@@ -154,5 +173,57 @@ mod tests {
     let (status, body) = home.send(Method::GET, &format!("/api/internal/web/dialog?session_id={sid}"), None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body, json!({"session_id": sid, "entries": [{"role": "web_reply", "content": "the answer"}]}));
+  }
+
+  #[tokio::test]
+  async fn the_cold_read_routes_validate_record_and_gate_a_status_item() {
+    let home = test_support::Home::new();
+    let sid = home.manager("session", None).await;
+    let item = json!({
+      "text": "Approve the deploy",
+      "context": "The release is ready. Options are deploy or wait; deploy is recommended.",
+      "link": null,
+    });
+    let status_text = json!({"waiting": [item.clone()]}).to_string();
+    let unread_body = json!({"session_id": sid, "text": status_text});
+
+    let (status, body) = home.send(Method::POST, "/api/internal/web/status/unread", Some(unread_body.clone())).await;
+    assert_eq!((status, body), (StatusCode::OK, json!({"unread": [item.clone()]})));
+
+    let (status, body) = home
+      .send(
+        Method::POST,
+        "/api/internal/web/ask-check",
+        Some(json!({"session_id": sid, "item": item.clone(), "backend": "haiku", "answer": "Deploy."})),
+      )
+      .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["item_sha256"].as_str().unwrap().len(), 64);
+
+    let (status, body) = home.send(Method::POST, "/api/internal/web/status/unread", Some(unread_body)).await;
+    assert_eq!((status, body), (StatusCode::OK, json!({"unread": []})));
+
+    let (status, body) =
+      home.send(Method::POST, "/api/internal/web/status", Some(json!({"session_id": sid, "text": status_text}))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["waiting"], json!([item]));
+    assert_eq!(body["now_chars"], json!(0));
+    assert_eq!(body["now_over_budget"], json!(false));
+
+    let (status, body) = home
+      .send(
+        Method::POST,
+        "/api/internal/web/ask-check",
+        Some(json!({"session_id": sid, "item": 5, "backend": "haiku", "answer": "Deploy."})),
+      )
+      .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body["detail"][0]["type"], "dict_type");
+    assert_eq!(body["detail"][0]["loc"], json!(["body", "item"]));
+
+    let ask_checks = home.events(&sid).into_iter().filter(|event| event["type"] == "web_ask_check").collect::<Vec<_>>();
+    assert_eq!(ask_checks.len(), 1);
+    assert_eq!(ask_checks[0]["backend"], "haiku");
+    assert_eq!(ask_checks[0]["answer"], "Deploy.");
   }
 }

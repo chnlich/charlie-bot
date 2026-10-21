@@ -10,7 +10,7 @@ use std::sync::Arc;
 use anyhow::Context;
 use charliebot_core::RepoRoot;
 use charliebot_core::config::CharlieBotConfig;
-use charliebot_core::event_types::{WEB_REPLY, WEB_REPLY_NOTICE, WEB_STATUS};
+use charliebot_core::event_types::{WEB_ASK_CHECK, WEB_REPLY, WEB_REPLY_NOTICE, WEB_STATUS};
 use charliebot_core::pystr;
 use charliebot_registry::FeatureContext;
 use charliebot_registry::turn::{EventRenderer, PromptSource, RuleSegment, TurnContribution};
@@ -75,7 +75,12 @@ impl TurnContribution for WebReplyTurnContribution {
   }
 
   fn event_renderers(&self) -> Vec<(&'static str, EventRenderer)> {
-    vec![(WEB_REPLY, web_reply_message), (WEB_REPLY_NOTICE, web_reply_notice_message), (WEB_STATUS, web_status_message)]
+    vec![
+      (WEB_REPLY, web_reply_message),
+      (WEB_REPLY_NOTICE, web_reply_notice_message),
+      (WEB_STATUS, web_status_message),
+      (WEB_ASK_CHECK, web_ask_check_message),
+    ]
   }
 
   fn claims_turn_end_unread(&self, meta: &SessionMetadata) -> bool {
@@ -103,6 +108,11 @@ fn web_reply_notice_message(event: &Value) -> Value {
 /// `_web_status_message`: the chat line of a `web_status` event, with the event's status value, or `null`.
 fn web_status_message(event: &Value) -> Value {
   json!({"role": WEB_STATUS, "content": content(event), "web_status": event.get(WEB_STATUS)})
+}
+
+/// `_web_ask_check_message`: the chat line of a `web_ask_check` event.
+fn web_ask_check_message(event: &Value) -> Value {
+  json!({"role": WEB_ASK_CHECK, "content": content(event)})
 }
 
 /// The event's `content`, or `""` when the event has none (`event.get("content", "")`).

@@ -135,6 +135,8 @@ pub enum FieldType {
   Float,
   NullableFloat,
   Boolean,
+  /// A `dict` field whose keys and values are unconstrained.
+  Dictionary,
   Literal(&'static [&'static str]),
   NullableLiteral(&'static [&'static str]),
   /// A `StrEnum` field: pydantic's `enum` error names the choices.
@@ -427,6 +429,8 @@ fn validate_field(field: &Field, value: &Value, loc: &[validation::Loc]) -> Resu
       Ok(value) => Ok(value),
       Err(kind) => failure(kind),
     },
+    FieldType::Dictionary if value.is_object() => Ok(value.clone()),
+    FieldType::Dictionary => failure(validation::Kind::DictType),
     FieldType::Literal(choices) => match choice_value(value, choices) {
       Some(value) => Ok(value),
       None => failure(validation::Kind::Literal(choices)),

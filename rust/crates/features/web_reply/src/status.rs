@@ -1,18 +1,26 @@
 //! A web session's status (`src/features/web_reply/status.py`): the Goal, Now and Waiting on you items that
 //! `charliebot web status` sets and reads. A set stores the items its JSON object names, records one `web_status`
-//! event and tells every ancestor page. A read lists the open descendants whose status holds Waiting on you items.
+//! event and tells every ancestor page. A set refuses a Waiting on you item until a cold read of it is recorded. A read
+//! lists the open descendants whose status holds Waiting on you items and the open children that hold a Now.
 
+use std::collections::HashSet;
+use std::fs;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::http::StatusCode;
 use charliebot_compat::python_json::{self, LoadError};
-use charliebot_core::event_types::WEB_STATUS;
+use charliebot_core::event_types::{WEB_ASK_CHECK, WEB_STATUS};
+use charliebot_core::pyfmt::{JsonStyle, json_dumps};
 use charliebot_core::pystr;
+use charliebot_files::MOUNT;
 use charliebot_registry::FeatureContext;
 use charliebot_store::metadata::{SessionMetadata, SessionStatus, UtcDateTime};
 use charliebot_store::{Store, session_channel};
+use percent_encoding::percent_decode_str;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
+use sha2::{Digest, Sha256};
 
 use crate::json_input::replace_unrepresentable_numbers;
 use crate::reply::{self, WebReplyError};
@@ -45,12 +53,17 @@ const NOT_A_LIST: &str = "Input should be a valid list";
 const NOT_A_WAITING_ITEM: &str = "Input should be a valid dictionary or instance of WaitingItem";
 const FIELD_REQUIRED: &str = "Field required";
 const EXTRA_FORBIDDEN: &str = "Extra inputs are not permitted";
+const NOW_BUDGET_CHARS: usize = 200;
+const ASK_CHECK_CONTENT: &str = "Cold read of a Waiting on you item";
+const ITEM_SHA256: &str = "item_sha256";
 
-/// One Waiting on you item: a decision or an action, and the link to the place where the user answers it
-/// (`metadata.WaitingItem`). Its fields serialize in the model's order.
+/// One Waiting on you item: a decision or an action, its context, and the link to the place where the user answers it
+/// (`metadata.WaitingItem`). An absent context stays absent in stored legacy items.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WaitingItem {
   text: String,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  context: Option<String>,
   link: Option<String>,
 }
 
@@ -154,6 +167,147 @@ pub fn parse_patch(text: &str) -> Result<StatusPatch, WebReplyError> {
   Ok(patch)
 }
 
+/// One `WaitingItem` parsed with the `item` model's refusal (`status.parse_item`).
+pub fn parse_item(raw: &Value) -> Result<WaitingItem, WebReplyError> {
+  let mut problems = Vec::new();
+  let item = waiting_item(raw, "", &mut problems);
+  if !problems.is_empty() {
+    let summary = problems.iter().map(|problem| format!("{}: {}", problem.loc, problem.msg)).collect::<Vec<_>>();
+    return Err(WebReplyError::refused(
+      StatusCode::UNPROCESSABLE_ENTITY,
+      format!("Waiting item is invalid: {}", summary.join("; ")),
+    ));
+  }
+  Ok(item.expect("a valid waiting item has text"))
+}
+
+/// `file_urls.host_file`: the host file a link names, or None when it names no file on this host. A file-server path
+/// names the absolute path after the mount, whatever scheme or host precedes it. A bare absolute path names itself when
+/// it has no scheme, network location, query or fragment. The link is split as `urllib.parse.urlsplit` splits it.
+fn host_file(link: Option<&str>) -> Option<PathBuf> {
+  let link = link.filter(|link| !link.is_empty())?;
+  let cleaned: String =
+    link.trim_start_matches(|c: char| c <= ' ').chars().filter(|c| !matches!(c, '\t' | '\r' | '\n')).collect();
+  let (before_fragment, fragment) = cleaned.split_once('#').unwrap_or((cleaned.as_str(), ""));
+  let (head, query) = before_fragment.split_once('?').unwrap_or((before_fragment, ""));
+  let scheme = scheme_rest(head);
+  let after_scheme = scheme.unwrap_or(head);
+  let (netloc, encoded_path) = match after_scheme.strip_prefix("//") {
+    Some(authority) => authority.find('/').map_or((authority, ""), |index| authority.split_at(index)),
+    None => ("", after_scheme),
+  };
+  let path = percent_decode_str(encoded_path).decode_utf8_lossy();
+  if path.starts_with(&format!("{MOUNT}/")) {
+    return Some(PathBuf::from(&path[MOUNT.len()..]));
+  }
+  if scheme.is_none() && netloc.is_empty() && query.is_empty() && fragment.is_empty() && path.starts_with('/') {
+    return Some(PathBuf::from(path.as_ref()));
+  }
+  None
+}
+
+/// The text after the `:` when `link` begins with a valid URL scheme.
+fn scheme_rest(link: &str) -> Option<&str> {
+  let (scheme, rest) = link.split_once(':')?;
+  let mut chars = scheme.chars();
+  if !chars.next().is_some_and(|first| first.is_ascii_alphabetic())
+    || !chars.all(|character| character.is_ascii_alphanumeric() || matches!(character, '+' | '.' | '-'))
+  {
+    return None;
+  }
+  Some(rest)
+}
+
+/// `json.dumps({...}, sort_keys=True, ensure_ascii=False)`: the item payload that the digest covers.
+const ITEM_DIGEST_JSON: JsonStyle =
+  JsonStyle { ensure_ascii: false, sort_keys: true, item_separator: ", ", key_separator: ": ", indent: None };
+
+/// `status.item_sha256`: the SHA-256 that names an item as it stands, its three fields and then the bytes of the host
+/// file its link names. A link to a missing host file fails the read.
+fn item_sha256(item: &WaitingItem) -> Result<String, WebReplyError> {
+  let payload = json!({"text": &item.text, "context": &item.context, "link": &item.link});
+  let mut digest = Sha256::new();
+  digest.update(json_dumps(&payload, &ITEM_DIGEST_JSON).as_bytes());
+  if let Some(path) = host_file(item.link.as_deref()) {
+    digest.update(fs::read(path).map_err(|error| WebReplyError::Failed(error.into()))?);
+  }
+  Ok(format!("{:x}", digest.finalize()))
+}
+
+/// The digests of all `web_ask_check` events in the session.
+async fn read_item_digests(features: &FeatureContext, session_id: &str) -> Result<HashSet<String>, WebReplyError> {
+  let events = reply::load_events(features, session_id).await?;
+  Ok(
+    events
+      .iter()
+      .filter(|event| event.get("type").and_then(Value::as_str) == Some(WEB_ASK_CHECK))
+      .filter_map(|event| event.get(ITEM_SHA256).and_then(Value::as_str).map(str::to_string))
+      .collect(),
+  )
+}
+
+/// Refuse a waiting item with no non-blank context before its digest is checked.
+fn require_waiting_context(items: &[WaitingItem]) -> Result<(), WebReplyError> {
+  if let Some(item) = items.iter().find(|item| item.context.is_none()) {
+    return Err(WebReplyError::refused(
+      StatusCode::UNPROCESSABLE_ENTITY,
+      format!("Waiting item needs context: {}", item.text),
+    ));
+  }
+  Ok(())
+}
+
+/// The items whose current digest is absent from the read set.
+fn unread_items(items: &[WaitingItem], read_digests: &HashSet<String>) -> Result<Vec<WaitingItem>, WebReplyError> {
+  items
+    .iter()
+    .filter_map(|item| match item_sha256(item) {
+      Ok(digest) if read_digests.contains(&digest) => None,
+      Ok(_) => Some(Ok(item.clone())),
+      Err(error) => Some(Err(error)),
+    })
+    .collect()
+}
+
+/// Record one cold read of `raw_item` and return its digest (`status.record_ask_check`).
+pub async fn record_ask_check(
+  features: &FeatureContext,
+  session_id: &str,
+  raw_item: &Value,
+  backend: &str,
+  answer: &str,
+) -> Result<Value, WebReplyError> {
+  reply::require_web_session(features, session_id).await?;
+  let item = parse_item(raw_item)?;
+  let digest = item_sha256(&item)?;
+  features
+    .store
+    .persist_and_broadcast(
+      session_id,
+      json!({
+        "type": WEB_ASK_CHECK,
+        "content": ASK_CHECK_CONTENT,
+        ITEM_SHA256: &digest,
+        "backend": backend,
+        "answer": answer,
+      }),
+    )
+    .await?;
+  tracing::info!(session = %session_id, backend, "web_ask_check_recorded");
+  Ok(json!({ITEM_SHA256: digest}))
+}
+
+/// Return the waiting items in `text` whose current digest has no matching ask-check event.
+pub async fn unread_waiting(features: &FeatureContext, session_id: &str, text: &str) -> Result<Value, WebReplyError> {
+  reply::require_web_session(features, session_id).await?;
+  let patch = parse_patch(text)?;
+  let items = patch.waiting.as_deref().unwrap_or_default();
+  require_waiting_context(items)?;
+  let read_digests = read_item_digests(features, session_id).await?;
+  let unread = unread_items(items, &read_digests)?;
+  Ok(json!({"unread": unread}))
+}
+
 /// `Text` for a present value: the non-blank string it holds, or a problem for a blank string or any other type.
 fn text_value(value: &Value, loc: &str, problems: &mut Vec<Problem>) -> Option<String> {
   match value {
@@ -183,42 +337,67 @@ fn waiting_items(value: &Value, problems: &mut Vec<Problem>) -> Vec<WaitingItem>
     problems.push(Problem { loc: "waiting".to_string(), msg: NOT_A_LIST });
     return Vec::new();
   };
-  items.iter().enumerate().filter_map(|(index, item)| waiting_item(item, index, problems)).collect()
+  items
+    .iter()
+    .enumerate()
+    .filter_map(|(index, item)| waiting_item(item, &format!("waiting.{index}"), problems))
+    .collect()
 }
 
-/// One `WaitingItem`: its required non-blank `text`, its optional `link`, then its extra keys.
-fn waiting_item(item: &Value, index: usize, problems: &mut Vec<Problem>) -> Option<WaitingItem> {
-  let loc = format!("waiting.{index}");
+/// One `WaitingItem`: its required non-blank `text`, optional non-blank `context`, optional `link`, then extra keys.
+fn waiting_item(item: &Value, loc: &str, problems: &mut Vec<Problem>) -> Option<WaitingItem> {
   let Value::Object(fields) = item else {
-    problems.push(Problem { loc, msg: NOT_A_WAITING_ITEM });
+    problems.push(Problem { loc: loc.to_string(), msg: NOT_A_WAITING_ITEM });
     return None;
   };
   let text = match fields.get("text") {
     None => {
-      problems.push(Problem { loc: format!("{loc}.text"), msg: FIELD_REQUIRED });
+      problems.push(Problem { loc: nested_loc(loc, "text"), msg: FIELD_REQUIRED });
       None
     }
-    Some(value) => text_value(value, &format!("{loc}.text"), problems),
+    Some(value) => text_value(value, &nested_loc(loc, "text"), problems),
+  };
+  let context = match fields.get("context") {
+    None | Some(Value::Null) => None,
+    Some(value) => text_value(value, &nested_loc(loc, "context"), problems),
   };
   let link = match fields.get("link") {
     None | Some(Value::Null) => None,
     Some(Value::String(link)) => Some(link.clone()),
     Some(_) => {
-      problems.push(Problem { loc: format!("{loc}.link"), msg: NOT_A_STRING });
+      problems.push(Problem { loc: nested_loc(loc, "link"), msg: NOT_A_STRING });
       None
     }
   };
-  for key in fields.keys().filter(|key| !matches!(key.as_str(), "text" | "link")) {
-    problems.push(Problem { loc: format!("{loc}.{key}"), msg: EXTRA_FORBIDDEN });
+  for key in fields.keys().filter(|key| !matches!(key.as_str(), "text" | "context" | "link")) {
+    problems.push(Problem { loc: nested_loc(loc, key), msg: EXTRA_FORBIDDEN });
   }
-  text.map(|text| WaitingItem { text, link })
+  text.map(|text| WaitingItem { text, context, link })
+}
+
+/// A nested Pydantic location, including the root model's empty location.
+fn nested_loc(prefix: &str, field: &str) -> String {
+  if prefix.is_empty() { field.to_string() } else { format!("{prefix}.{field}") }
 }
 
 /// `status.set_status`: store the items the JSON `text` names, record one `web_status` event and notify the
-/// ancestors. Returns the stored status. A refusal stores and records nothing.
+/// ancestors. Waiting items need a non-blank context and a matching cold-read digest. The return adds the Now length;
+/// a refusal stores and records nothing.
 pub async fn set_status(features: &FeatureContext, session_id: &str, text: &str) -> Result<Value, WebReplyError> {
   let meta = reply::require_web_session(features, session_id).await?;
   let patch = parse_patch(text)?;
+  if let Some(items) = patch.waiting.as_deref() {
+    require_waiting_context(items)?;
+    let read_digests = read_item_digests(features, session_id).await?;
+    let unread = unread_items(items, &read_digests)?;
+    if !unread.is_empty() {
+      let names = unread.iter().map(|item| item.text.as_str()).collect::<Vec<_>>().join("; ");
+      return Err(WebReplyError::refused(
+        StatusCode::CONFLICT,
+        format!("Waiting on you items need a cold read: {names}"),
+      ));
+    }
+  }
   let now = UtcDateTime::now();
   let mut status =
     stored_status(&meta)?.unwrap_or(WebStatus { goal: None, now: None, waiting: Vec::new(), updated_at: now });
@@ -258,30 +437,49 @@ pub async fn set_status(features: &FeatureContext, session_id: &str, text: &str)
     features.store.broadcast(&session_channel(&ancestor_id), notice).await?;
   }
   tracing::info!(session = %session_id, changed = ?changed, "web_status_set");
-  Ok(payload)
+  let now_chars = status.now.as_ref().map_or(0, |value| value.chars().count());
+  let mut result = payload.as_object().expect("a web status serializes as an object").clone();
+  result.insert("now_chars".to_string(), json!(now_chars));
+  result.insert("now_over_budget".to_string(), json!(now_chars > NOW_BUDGET_CHARS));
+  Ok(Value::Object(result))
 }
 
-/// `status.read_status`: the session's stored status and the Waiting on you items of its open descendants, newest
-/// first. A descendant qualifies when its status holds a waiting item, its session is not archived and its task is open.
+/// The sessions among `session_ids` with a status, an open task and no archived marker.
+async fn open_statuses(
+  store: &Arc<Store>,
+  session_ids: Vec<String>,
+  archived: &HashSet<String>,
+) -> Result<Vec<(String, SessionMetadata, WebStatus)>, WebReplyError> {
+  let mut statuses = Vec::new();
+  for session_id in session_ids {
+    let Some(meta) = store.get_session(&session_id).await? else {
+      continue; // deleted between the task-tree index read and this metadata read
+    };
+    let Some(status) = stored_status(&meta)? else {
+      continue;
+    };
+    if meta.status == SessionStatus::Archived || archived.contains(&session_id) {
+      continue;
+    }
+    if task_state(store, &session_id).await? != "open" {
+      continue;
+    }
+    statuses.push((session_id, meta, status));
+  }
+  Ok(statuses)
+}
+
+/// `status.read_status`: the session's status, waiting items of open descendants and Now items of open children, newest
+/// first. A descendant needs waiting items; a child needs a Now value.
 pub async fn read_status(features: &FeatureContext, session_id: &str) -> Result<Value, WebReplyError> {
   let meta = reply::require_web_session(features, session_id).await?;
   let stored = stored_status(&meta)?;
-  let archived = derived_archived_ids(&features.store).await?;
+  let archived = derived_archived_ids(&features.store).await?.into_iter().collect::<HashSet<_>>();
   let mut rows: Vec<(UtcDateTime, Value)> = Vec::new();
-  for descendant_id in descendant_ids(&features.store, session_id).await? {
-    let Some(child) = features.store.get_session(&descendant_id).await? else {
-      continue; // deleted between the index read and this one
-    };
-    let Some(child_status) = stored_status(&child)? else {
-      continue;
-    };
+  for (descendant_id, child, child_status) in
+    open_statuses(&features.store, descendant_ids(&features.store, session_id).await?, &archived).await?
+  {
     if child_status.waiting.is_empty() {
-      continue;
-    }
-    if child.status == SessionStatus::Archived || archived.contains(&descendant_id) {
-      continue;
-    }
-    if task_state(&features.store, &descendant_id).await? != "open" {
       continue;
     }
     let row = json!({
@@ -293,10 +491,30 @@ pub async fn read_status(features: &FeatureContext, session_id: &str) -> Result<
     rows.push((child_status.updated_at, row));
   }
   rows.sort_by_key(|(updated_at, _)| std::cmp::Reverse(*updated_at));
+  let child_ids = tree_read(&features.store, {
+    let session_id = session_id.to_string();
+    move |store| store.child_ids(&session_id)
+  })
+  .await?;
+  let mut children: Vec<(UtcDateTime, Value)> = Vec::new();
+  for (child_id, child, child_status) in open_statuses(&features.store, child_ids, &archived).await? {
+    let Some(now) = child_status.now.as_ref() else {
+      continue;
+    };
+    let row = json!({
+      "session_id": child_id,
+      "name": child.name,
+      "now": now,
+      "updated_at": child_status.updated_at.to_python_string(),
+    });
+    children.push((child_status.updated_at, row));
+  }
+  children.sort_by_key(|(updated_at, _)| std::cmp::Reverse(*updated_at));
   Ok(json!({
     "session_id": session_id,
     "web_status": stored.as_ref().map(payload_of),
     "descendants": rows.into_iter().map(|(_, row)| row).collect::<Vec<_>>(),
+    "children": children.into_iter().map(|(_, row)| row).collect::<Vec<_>>(),
   }))
 }
 
@@ -368,7 +586,38 @@ mod tests {
 
   /// A waiting item whose text is `text`, as a status file names it.
   fn waiting_set(text: &str) -> String {
-    json!({"waiting": [{"text": text}]}).to_string()
+    json!({"waiting": [waiting_item(text)]}).to_string()
+  }
+
+  /// A waiting item whose current state can pass the status set's cold-read gate.
+  fn waiting_item(text: &str) -> Value {
+    json!({"text": text, "context": "The decision is active now. Options are continue or stop; continue is recommended."})
+  }
+
+  /// Records a cold read for the waiting item used by `waiting_set`.
+  async fn check_waiting_item(home: &Home, session_id: &str, text: &str) {
+    record_ask_check(
+      &home.features,
+      session_id,
+      &waiting_item(text),
+      "synthetic-haiku",
+      "The options are continue or stop.",
+    )
+    .await
+    .expect("the waiting item cold read records");
+  }
+
+  /// The status response without its transient Now budget fields.
+  fn without_budget(status: &Value) -> Value {
+    let mut result = status.as_object().expect("a status response is an object").clone();
+    result.remove("now_chars");
+    result.remove("now_over_budget");
+    Value::Object(result)
+  }
+
+  /// The link form the file server accepts for `path`.
+  fn file_link(path: &std::path::Path) -> String {
+    format!("https://synthetic.invalid{MOUNT}{}", path.display())
   }
 
   /// The frames a page has received, read until the page goes quiet.
@@ -384,11 +633,12 @@ mod tests {
   async fn a_status_set_of_now_alone_keeps_the_other_items_and_records_one_event() {
     let home = Home::new();
     let sid = home.manager("session", None).await;
+    check_waiting_item(&home, &sid, "Pick a layout").await;
 
     let first = set_status(
       &home.features,
       &sid,
-      r#"{"goal": "Ship the panel", "waiting": [{"text": "Pick a layout", "link": "/p"}]}"#,
+      &json!({"goal": "Ship the panel", "waiting": [waiting_item("Pick a layout")]}).to_string(),
     )
     .await
     .expect("the first set stores");
@@ -396,16 +646,26 @@ mod tests {
 
     assert_eq!(second["goal"], json!("Ship the panel"));
     assert_eq!(second["now"], json!("Running"));
-    assert_eq!(second["waiting"], json!([{"text": "Pick a layout", "link": "/p"}]));
+    assert_eq!(
+      second["waiting"],
+      json!([{
+        "text": "Pick a layout",
+        "context": "The decision is active now. Options are continue or stop; continue is recommended.",
+        "link": null
+      }])
+    );
+    assert_eq!(second["now_chars"], json!(7));
+    assert_eq!(second["now_over_budget"], json!(false));
     assert_ne!(second["updated_at"], first["updated_at"]);
-    assert_eq!(stored(&home, &sid).await, second);
+    assert_eq!(stored(&home, &sid).await, without_budget(&second));
     let events = status_events(&home, &sid);
     assert_eq!(
       events.iter().map(|event| event["web_status_changed"].clone()).collect::<Vec<_>>(),
       vec![json!(["goal", "waiting"]), json!(["now"]),]
     );
     assert_eq!(events[1]["content"], json!("Status updated: Now"));
-    assert_eq!(events[1][WEB_STATUS], second);
+    assert_eq!(events[1][WEB_STATUS], without_budget(&second));
+    assert!(events[1][WEB_STATUS].get("now_chars").is_none());
   }
 
   #[tokio::test]
@@ -417,7 +677,39 @@ mod tests {
     let stored_status = set_status(&home.features, &sid, r#"{"goal": null}"#).await.expect("the clear stores");
 
     assert_eq!((&stored_status["goal"], &stored_status["now"]), (&Value::Null, &json!("Running")));
+    assert_eq!(stored_status["now_chars"], json!(7));
+    assert_eq!(stored_status["now_over_budget"], json!(false));
     assert_eq!(status_events(&home, &sid).last().expect("two events")["web_status_changed"], json!(["goal"]));
+  }
+
+  #[tokio::test]
+  async fn a_status_set_reports_the_unicode_now_length_and_keeps_budget_fields_out_of_storage() {
+    for (chars, over_budget) in [(200, false), (201, true)] {
+      let home = Home::new();
+      let sid = home.manager("session", None).await;
+      let now = "界".repeat(chars);
+
+      let response = set_status(&home.features, &sid, &json!({"now": now}).to_string())
+        .await
+        .expect("the Now stores even when over budget");
+
+      assert_eq!(response["now_chars"], json!(chars));
+      assert_eq!(response["now_over_budget"], json!(over_budget));
+      assert_eq!(stored(&home, &sid).await, without_budget(&response));
+      assert!(status_events(&home, &sid)[0][WEB_STATUS].get("now_chars").is_none());
+      assert!(status_events(&home, &sid)[0][WEB_STATUS].get("now_over_budget").is_none());
+    }
+  }
+
+  #[tokio::test]
+  async fn a_status_set_without_now_reports_zero_chars() {
+    let home = Home::new();
+    let sid = home.manager("session", None).await;
+
+    let response = set_status(&home.features, &sid, r#"{"goal": "Ship"}"#).await.expect("the set stores");
+
+    assert_eq!(response["now_chars"], json!(0));
+    assert_eq!(response["now_over_budget"], json!(false));
   }
 
   #[tokio::test]
@@ -521,11 +813,14 @@ mod tests {
     let closed = home.child(&root, "closed").await;
     let archived = home.child(&root, "archived").await;
     for child in [&old, &new, &deep] {
+      check_waiting_item(&home, child, "decision").await;
       set_status(&home.features, child, &waiting_set("decision")).await.expect("the child sets");
       tokio::time::sleep(Duration::from_millis(2)).await;
     }
     set_status(&home.features, &empty, r#"{"waiting": []}"#).await.expect("the empty child sets");
+    check_waiting_item(&home, &closed, "closed decision").await;
     set_status(&home.features, &closed, &waiting_set("closed decision")).await.expect("the closed child sets");
+    check_waiting_item(&home, &archived, "archived decision").await;
     set_status(&home.features, &archived, &waiting_set("archived decision")).await.expect("the archived child sets");
     home
       .features
@@ -541,7 +836,337 @@ mod tests {
     let ids: Vec<&str> =
       body["descendants"].as_array().expect("a list").iter().map(|row| row["session_id"].as_str().unwrap()).collect();
     assert_eq!(ids, vec![deep.as_str(), new.as_str(), old.as_str()]);
-    assert_eq!(body["descendants"][0]["waiting"], json!([{"text": "decision", "link": null}]));
+    assert_eq!(
+      body["descendants"][0]["waiting"],
+      json!([{
+        "text": "decision",
+        "context": "The decision is active now. Options are continue or stop; continue is recommended.",
+        "link": null
+      }])
+    );
+  }
+
+  #[tokio::test]
+  async fn the_status_read_lists_open_direct_children_with_a_now_newest_first() {
+    let home = Home::new();
+    let root = home.manager("root", None).await;
+    let old = home.child(&root, "old").await;
+    let new = home.child(&root, "new").await;
+    let deep = home.child(&old, "deep").await;
+    let empty = home.child(&root, "empty").await;
+    let closed = home.child(&root, "closed").await;
+    let archived = home.child(&root, "archived").await;
+    set_status(&home.features, &old, r#"{"now": "Old step"}"#).await.expect("the old child sets");
+    tokio::time::sleep(Duration::from_millis(2)).await;
+    set_status(&home.features, &new, r#"{"now": "New step"}"#).await.expect("the new child sets");
+    set_status(&home.features, &deep, r#"{"now": "Deep step"}"#).await.expect("the deep child sets");
+    set_status(&home.features, &empty, r#"{"goal": "No Now"}"#).await.expect("the empty child sets");
+    set_status(&home.features, &closed, r#"{"now": "Closed step"}"#).await.expect("the closed child sets");
+    set_status(&home.features, &archived, r#"{"now": "Archived step"}"#).await.expect("the archived child sets");
+    home
+      .features
+      .store
+      .archive_subtree(&closed, charliebot_store::TaskCaller::Operator)
+      .await
+      .expect("the task closes");
+    home.features.store.archive_session(&archived).await.expect("the session archives");
+
+    let body = read_status(&home.features, &root).await.expect("the read answers");
+
+    assert_eq!(body["children"].as_array().unwrap().len(), 2);
+    assert_eq!(
+      body["children"].as_array().unwrap().iter().map(|row| row["session_id"].as_str().unwrap()).collect::<Vec<_>>(),
+      [new.as_str(), old.as_str()]
+    );
+    assert_eq!(
+      body["children"].as_array().unwrap().iter().map(|row| row["now"].as_str().unwrap()).collect::<Vec<_>>(),
+      ["New step", "Old step"]
+    );
+  }
+
+  #[test]
+  fn an_item_digest_names_its_fields_and_linked_file_bytes() {
+    let directory = tempfile::tempdir().expect("the digest directory exists");
+    let page = directory.path().join("page.html");
+    fs::write(&page, "first").expect("the linked page writes");
+    let item = parse_item(&json!({
+      "text": "Pick a layout",
+      "context": "Why now: the panel ships today.",
+      "link": file_link(&page),
+    }))
+    .expect("the waiting item validates");
+
+    let digest = item_sha256(&item).expect("the linked page reads");
+    let changed = [
+      parse_item(&json!({"text": "Pick a colour", "context": item.context, "link": item.link})).unwrap(),
+      parse_item(&json!({"text": item.text, "context": "Why now: the panel ships tomorrow.", "link": item.link}))
+        .unwrap(),
+      parse_item(&json!({"text": item.text, "context": item.context, "link": null})).unwrap(),
+    ];
+    let mut changed_digests = changed.iter().map(item_sha256).collect::<Result<HashSet<_>, _>>().unwrap();
+    fs::write(&page, "second").expect("the linked page changes");
+    changed_digests.insert(item_sha256(&item).expect("the changed linked page reads"));
+
+    assert_eq!(digest.len(), 64);
+    assert!(!changed_digests.contains(&digest));
+    assert_eq!(changed_digests.len(), 4);
+  }
+
+  #[test]
+  fn an_item_digest_matches_the_python_payload_for_an_item_without_a_link() {
+    let item = parse_item(&json!({
+      "text": "Pick a layout",
+      "context": "Options: grid or list. Grid fits the panel; ships today é界.",
+      "link": null,
+    }))
+    .expect("the waiting item validates");
+
+    assert_eq!(
+      item_sha256(&item).expect("an item without a link digests"),
+      "c534de57a0d3cc97bf8ef2de09dfe0365098f087ad13f381715ab9bb43c6e737"
+    );
+  }
+
+  #[test]
+  fn a_link_names_a_host_file_as_python_splits_it() {
+    let names = |link: &str| host_file(Some(link));
+
+    assert_eq!(names("/tmp/page.html"), Some(PathBuf::from("/tmp/page.html")));
+    assert_eq!(names(" /tmp/page.html"), Some(PathBuf::from("/tmp/page.html")));
+    assert_eq!(names("/tmp/page.html?"), Some(PathBuf::from("/tmp/page.html")));
+    assert_eq!(names("/tmp/page.html#"), Some(PathBuf::from("/tmp/page.html")));
+    assert_eq!(names("///tmp/page.html"), Some(PathBuf::from("/tmp/page.html")));
+    assert_eq!(names(&file_link(std::path::Path::new("/tmp/page.html"))), Some(PathBuf::from("/tmp/page.html")));
+    assert_eq!(names("/?session=synthetic"), None);
+    assert_eq!(names("https://github.com/org/repo/pull/1"), None);
+    assert_eq!(names("relative/page.html"), None);
+    assert_eq!(host_file(None), None);
+    assert_eq!(host_file(Some("")), None);
+  }
+
+  #[test]
+  fn an_item_digest_reads_bare_files_and_ignores_remote_links() {
+    let directory = tempfile::tempdir().expect("the digest directory exists");
+    let page = directory.path().join("page.html");
+    fs::write(&page, "page bytes").expect("the linked page writes");
+    let bare = parse_item(&json!({"text": "Pick a layout", "link": page.to_string_lossy()})).unwrap();
+    let served = parse_item(&json!({"text": "Pick a layout", "link": file_link(&page)})).unwrap();
+    let remote = parse_item(&json!({"text": "Pick a layout", "link": "https://github.com/org/repo/pull/1"})).unwrap();
+    let route = parse_item(&json!({"text": "Pick a layout", "link": "/?session=synthetic"})).unwrap();
+
+    assert_eq!(item_sha256(&bare).unwrap().len(), 64);
+    assert_ne!(item_sha256(&bare).unwrap(), item_sha256(&served).unwrap());
+    assert_eq!(item_sha256(&remote).unwrap().len(), 64);
+    assert_eq!(item_sha256(&route).unwrap().len(), 64);
+  }
+
+  #[test]
+  fn an_item_digest_fails_when_a_host_file_is_missing() {
+    let directory = tempfile::tempdir().expect("the digest directory exists");
+    let item = parse_item(&json!({
+      "text": "Pick a layout",
+      "link": file_link(&directory.path().join("missing.html")),
+    }))
+    .expect("the waiting item validates");
+
+    assert!(item_sha256(&item).is_err());
+  }
+
+  #[tokio::test]
+  async fn an_ask_check_records_the_item_digest_and_stays_out_of_the_for_you_layer() {
+    let home = Home::new();
+    let sid = home.manager("session", None).await;
+    let item = json!({"text": "Pick a layout", "context": "The panel folds context.", "link": null});
+    let answer = "(1) Pick a layout.\n(2) NOT STATED.";
+
+    let response = record_ask_check(&home.features, &sid, &item, "haiku", answer).await.expect("the ask check records");
+
+    let digest = item_sha256(&parse_item(&item).unwrap()).unwrap();
+    assert_eq!(response, json!({"item_sha256": digest}));
+    let checks = home.events(&sid).into_iter().filter(|event| event["type"] == WEB_ASK_CHECK).collect::<Vec<_>>();
+    assert_eq!(checks.len(), 1);
+    assert_eq!(
+      json!({
+        "type": checks[0]["type"],
+        "content": checks[0]["content"],
+        "item_sha256": checks[0]["item_sha256"],
+        "backend": checks[0]["backend"],
+        "answer": checks[0]["answer"],
+      }),
+      json!({
+        "type": WEB_ASK_CHECK,
+        "content": ASK_CHECK_CONTENT,
+        "item_sha256": digest,
+        "backend": "haiku",
+        "answer": answer,
+      })
+    );
+    let events = home.events(&sid);
+    assert!(reply::for_you_entries(&home.features.store, &events).unwrap().is_empty());
+    let messages = home.features.store.events_to_messages(&events).expect("the ask-check event renders");
+    assert!(messages.iter().any(|message| message["role"] == WEB_ASK_CHECK));
+  }
+
+  #[tokio::test]
+  async fn refused_ask_checks_record_nothing() {
+    for (case, item, expected) in [
+      ("blank", json!({"text": " "}), 422),
+      ("extra", json!({"text": "Decide", "due": "today"}), 422),
+      ("missing", json!({}), 422),
+    ] {
+      let home = Home::new();
+      let sid = home.manager("session", None).await;
+      let before = home.events(&sid);
+
+      let error =
+        record_ask_check(&home.features, &sid, &item, "haiku", "answer").await.expect_err("the item is refused");
+
+      assert!(matches!(error, WebReplyError::Refused { status, .. } if status.as_u16() == expected), "{case}");
+      assert_eq!(home.events(&sid), before, "{case}");
+    }
+    for case in ["unknown", "thread", "worker"] {
+      let home = Home::new();
+      let origin = (case == "thread")
+        .then(|| ("slack_origin", json!({"team_id": "T1", "channel_id": "C1", "thread_ts": "1700000000.000100"})));
+      let root = home.manager("session", origin).await;
+      let sid = if case == "worker" { home.worker(&root, "worker").await } else { root };
+      let target = if case == "unknown" { "no-such-session" } else { sid.as_str() };
+      let before = home.events(&sid);
+
+      let error = record_ask_check(&home.features, target, &json!({"text": "Decide"}), "haiku", "answer")
+        .await
+        .expect_err("the session is refused");
+
+      let expected = if case == "unknown" { 404 } else { 409 };
+      assert!(matches!(error, WebReplyError::Refused { status, .. } if status.as_u16() == expected), "{case}");
+      assert_eq!(home.events(&sid), before, "{case}");
+    }
+  }
+
+  #[tokio::test]
+  async fn the_unread_query_tracks_ask_check_and_linked_file_changes_without_storing_status() {
+    let home = Home::new();
+    let sid = home.manager("session", None).await;
+    let directory = tempfile::tempdir().expect("the status page directory exists");
+    let page = directory.path().join("page.html");
+    fs::write(&page, "first").expect("the status page writes");
+    let item = json!({
+      "text": "Decide the sample size",
+      "context": "The sweep costs $5 an hour. Options: 1k or 10k; 1k is recommended.",
+      "link": file_link(&page),
+    });
+    let text = json!({"waiting": [item]}).to_string();
+
+    let without_waiting = unread_waiting(&home.features, &sid, r#"{"now": "Checking"}"#)
+      .await
+      .expect("a status file without waiting items lists nothing");
+    assert_eq!(without_waiting, json!({"unread": []}));
+    let before = unread_waiting(&home.features, &sid, &text).await.expect("the unread query answers");
+    assert_eq!(before, json!({"unread": [item]}));
+    let digest = record_ask_check(&home.features, &sid, &item, "haiku", "1k is recommended.")
+      .await
+      .expect("the ask check records");
+    assert_eq!(digest["item_sha256"], item_sha256(&parse_item(&item).unwrap()).unwrap());
+    assert_eq!(
+      unread_waiting(&home.features, &sid, &text).await.expect("the read item is not unread"),
+      json!({"unread": []})
+    );
+    fs::write(&page, "second").expect("the status page changes");
+    assert_eq!(
+      unread_waiting(&home.features, &sid, &text).await.expect("the changed item is unread"),
+      json!({"unread": [item]})
+    );
+    assert_eq!(stored(&home, &sid).await, Value::Null);
+    assert!(status_events(&home, &sid).is_empty());
+    assert_eq!(home.events(&sid).iter().filter(|event| event["type"] == WEB_ASK_CHECK).count(), 1);
+  }
+
+  #[tokio::test]
+  async fn an_unread_query_refuses_an_item_without_context_and_records_nothing() {
+    let home = Home::new();
+    let sid = home.manager("session", None).await;
+    let before = home.events(&sid);
+
+    let error = unread_waiting(&home.features, &sid, r#"{"waiting": [{"text": "Decide"}]}"#)
+      .await
+      .expect_err("an item without context is refused");
+
+    assert!(matches!(error, WebReplyError::Refused { status: StatusCode::UNPROCESSABLE_ENTITY, .. }));
+    assert_eq!(home.events(&sid), before);
+  }
+
+  #[tokio::test]
+  async fn a_status_set_requires_nonblank_context_and_a_matching_current_digest() {
+    let without_context = [
+      json!({"text": "Approve the deploy"}),
+      json!({"text": "Approve the deploy", "context": null}),
+      json!({"text": "Approve the deploy", "context": " "}),
+    ];
+    for raw in without_context {
+      let home = Home::new();
+      let sid = home.manager("session", None).await;
+      let error = set_status(&home.features, &sid, &json!({"waiting": [raw]}).to_string())
+        .await
+        .expect_err("a waiting item without context is refused");
+      assert!(matches!(error, WebReplyError::Refused { status: StatusCode::UNPROCESSABLE_ENTITY, .. }));
+      assert_eq!(stored(&home, &sid).await, Value::Null);
+      assert!(status_events(&home, &sid).is_empty());
+      assert!(home.events(&sid).iter().all(|event| event["type"] != WEB_ASK_CHECK));
+    }
+
+    let home = Home::new();
+    let sid = home.manager("session", None).await;
+    let item = json!({
+      "text": "Approve the deploy",
+      "context": "The release is ready now. Options are deploy or wait; deploy is recommended.",
+      "link": null,
+    });
+    let text = json!({"waiting": [item]}).to_string();
+    let error = set_status(&home.features, &sid, &text).await.expect_err("an unread item is refused");
+    assert!(matches!(error, WebReplyError::Refused { status: StatusCode::CONFLICT, .. }));
+    assert!(status_events(&home, &sid).is_empty());
+
+    record_ask_check(&home.features, &sid, &item, "haiku", "deploy is recommended")
+      .await
+      .expect("the cold read records");
+    let response = set_status(&home.features, &sid, &text).await.expect("the read item stores");
+    assert_eq!(
+      response["waiting"],
+      json!([{
+        "text": "Approve the deploy",
+        "context": "The release is ready now. Options are deploy or wait; deploy is recommended.",
+        "link": null,
+      }])
+    );
+    assert_eq!(stored(&home, &sid).await, without_budget(&response));
+    assert_eq!(status_events(&home, &sid).len(), 1);
+  }
+
+  #[tokio::test]
+  async fn a_changed_linked_page_makes_a_status_item_unread_again() {
+    let home = Home::new();
+    let sid = home.manager("session", None).await;
+    let directory = tempfile::tempdir().expect("the status page directory exists");
+    let page = directory.path().join("page.html");
+    fs::write(&page, "first page").expect("the status page writes");
+    let item = json!({
+      "text": "Approve the deploy",
+      "context": "The release is ready now. Options are deploy or wait; deploy is recommended.",
+      "link": file_link(&page),
+    });
+    record_ask_check(&home.features, &sid, &item, "haiku", "deploy is recommended")
+      .await
+      .expect("the cold read records");
+    fs::write(&page, "changed page").expect("the status page changes");
+
+    let error = set_status(&home.features, &sid, &json!({"waiting": [item]}).to_string())
+      .await
+      .expect_err("the changed page invalidates the read");
+
+    assert!(matches!(error, WebReplyError::Refused { status: StatusCode::CONFLICT, .. }));
+    assert_eq!(stored(&home, &sid).await, Value::Null);
+    assert!(status_events(&home, &sid).is_empty());
+    assert_eq!(home.events(&sid).iter().filter(|event| event["type"] == WEB_ASK_CHECK).count(), 1);
   }
 
   #[tokio::test]

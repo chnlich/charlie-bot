@@ -20,7 +20,11 @@ use serde_json::{Value, json};
 pub const RULES_FILE: &str = "web_reply.md";
 
 /// The audit's nudge: the agent's input when a user message's turn ended without a reply (`reply.NUDGE_TEXT`).
-pub const NUDGE_TEXT: &str = "Post the web reply now.";
+pub const NUDGE_TEXT: &str = concat!(
+  "Web reply nudge: your last turn woke on a user message and ended without a web reply. The For-you view ",
+  "hides your turn output. Post your answer as the web reply now. For an answer over 500 characters, write ",
+  "the whole answer on a page first. Then post the conclusion and the page link as the web reply."
+);
 
 /// The notice the user reads when the nudge turn also ended without a reply (`reply.NOTICE_TEXT`).
 pub const NOTICE_TEXT: &str = "No reply was posted for this message. The Everything view shows this turn's output.";

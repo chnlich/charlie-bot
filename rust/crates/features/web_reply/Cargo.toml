@@ -9,6 +9,7 @@ publish.workspace = true
 anyhow.workspace = true
 axum.workspace = true
 charliebot-compat.workspace = true
+charliebot-files.workspace = true
 charliebot-core.workspace = true
 charliebot-registry.workspace = true
 charliebot-store.workspace = true
@@ -17,6 +18,8 @@ futures-util.workspace = true
 http.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+percent-encoding.workspace = true
+sha2.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 

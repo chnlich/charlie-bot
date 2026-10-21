@@ -25,6 +25,7 @@ pub const RAW_EVENTS_REPLACED_BY_DELTAS: &[&str] = &[
   "web_reply",
   "web_reply_notice",
   "web_status",
+  "web_ask_check",
 ];
 
 /// Per-session aggregator and message-projection state.

@@ -86,7 +86,6 @@ impl CodexSessionHost for FixedHost {
 }
 
 #[test]
-#[ignore = "catch-up e44c9ccef: cargo-codex-matrix"]
 fn codex_matches_the_python_package_on_synthetic_inputs() {
   let root = tempfile::tempdir().unwrap();
   let now = OffsetDateTime::from_unix_timestamp(OffsetDateTime::now_utc().unix_timestamp()).unwrap();

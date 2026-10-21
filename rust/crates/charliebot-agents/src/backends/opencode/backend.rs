@@ -259,10 +259,13 @@ pub(crate) async fn run_turn(
   let mut translator = OpenCodeTranslator::new(plan.model.clone());
   let mut model_limit = None;
   let mut turn: Option<Arc<Turn>> = None;
+  let mut unregistered_claim: Option<String> = None;
   let mut failed = false;
   let mut succeeded = false;
-  let body_result = run_turn_body(&plan, &server, &mut args, &mut translator, &mut model_limit, &mut turn).await;
-  let result = match body_result {
+  let body_result =
+    run_turn_body(&plan, &server, &mut args, &mut translator, &mut model_limit, &mut turn, &mut unregistered_claim)
+      .await;
+  let mut result = match body_result {
     Ok(()) => {
       succeeded = true;
       Ok(())
@@ -281,12 +284,20 @@ pub(crate) async fn run_turn(
       Ok(())
     }
   };
-  let finish = if let Some(turn) = turn { turn.finish().await } else { Ok(()) };
-  if let Err(error) = &finish {
+  let turn_end = if let Some(turn) = turn { turn.finish().await } else { Ok(()) };
+  let claim_release =
+    if let Some(directory) = unregistered_claim { server.release_claim(&directory).await } else { Ok(()) };
+  if let Err(error) = turn_end.and(claim_release) {
     tracing::error!(target: "charliebot_agents", error = %error, "opencode_turn_end_failed");
+    failed = true;
+    if let Err(event_error) =
+      emit(&args.on_event, event_builders::make_error_event(&format!("OpenCode backend failed: {error}"))).await
+      && result.is_ok()
+    {
+      result = Err(anyhow::anyhow!(event_error.to_string()));
+    }
   }
   result?;
-  finish?;
   let exit_code = if failed {
     Some(1)
   } else if succeeded {
@@ -304,12 +315,16 @@ async fn run_turn_body(
   translator: &mut OpenCodeTranslator,
   model_limit: &mut Option<Map<String, Value>>,
   turn: &mut Option<Arc<Turn>>,
+  unregistered_claim: &mut Option<String>,
 ) -> Result<(), RunError> {
+  let directory = args.cwd.to_string_lossy().to_string();
+  server.claim(&directory).await;
+  *unregistered_claim = Some(directory.clone());
   await_or_exit(server.ensure_running(), &mut args.exit).await?.map_err(RunError::Backend)?;
   let session_id =
     await_or_exit(open_session(plan, server, &args.cwd), &mut args.exit).await?.map_err(RunError::Backend)?;
-  let current =
-    server.register(&session_id, &args.cwd.to_string_lossy(), args.process_id).map_err(RunError::Backend)?;
+  let current = server.register_claimed(&session_id, &directory, args.process_id).map_err(RunError::Backend)?;
+  *unregistered_claim = None;
   *turn = Some(Arc::clone(&current));
   emit(&args.on_event, json!({"type": event_types::SESSION_ATTACHED, "session_id": session_id})).await?;
   *model_limit = match await_or_exit(fetch_model_limit(plan, server, &args.cwd), &mut args.exit).await? {

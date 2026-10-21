@@ -143,6 +143,9 @@ class OpenCodeBackend(base.AgentBackend):
     # in-place .clear() would hit missing attributes on a fresh instance.
     self._session_id: str | None = None
     self._turn: server.Turn | None = None
+    # The shared server and the directory this turn claims until its turn-end steps drop the claim.
+    self._claim: tuple[server.OpenCodeServer, str] | None = None
+    self._turn_end_steps_called = False
     self._exit_task: asyncio.Task | None = None
     self._streamed_parts: set[tuple[str, int]] = set()
     self._tool_names: dict[str, str] = {}
@@ -169,10 +172,13 @@ class OpenCodeBackend(base.AgentBackend):
     turn as cancelled. The turn-end steps run on every exit path.
     """
     self._reset_run_state()
+    turn_end_error: Exception | None = None
     try:
       await asyncio.to_thread(self._prepare_cwd, cwd)
       await self._spawn_turn_process(cwd, env)
       shared = server.server_for(self._proxy_url)
+      await shared.claim(cwd)
+      self._claim = (shared, cwd)
       await self._until_exit(shared.ensure_running())
       self._session_id = await self._until_exit(self._open_session(shared, cwd))
       self._turn = shared.register(self._session_id, cwd)
@@ -202,14 +208,49 @@ class OpenCodeBackend(base.AgentBackend):
       detail = str(e) or e.__class__.__name__
       yield base.make_error_event(f"OpenCode backend failed: {detail}")
     finally:
-      if self._turn is not None:
-        await self._turn.finish()
-      await self._end_turn_process()
+      try:
+        await self._turn_end_steps()
+      except Exception as e:
+        self._failed = True
+        log.exception("opencode_turn_end_failed", error=str(e))
+        turn_end_error = e
+      finally:
+        await self._end_turn_process()
+    if turn_end_error is not None:
+      detail = str(turn_end_error) or turn_end_error.__class__.__name__
+      yield base.make_error_event(f"OpenCode backend failed: {detail}")
 
   async def terminate(self) -> None:
-    if self._turn is not None:
-      await self._turn.finish()
-    await super().terminate()
+    try:
+      await self._turn_end_steps()
+    finally:
+      await super().terminate()
+
+  async def _turn_end_steps(self) -> None:
+    """The turn-end steps, once per turn: the turn's own steps, then drop the claim and release.
+
+    The claim is dropped even when the turn's own steps fail, so a finished turn never holds its
+    directory. A second call does nothing.
+    """
+    if self._turn_end_steps_called:
+      return
+    self._turn_end_steps_called = True
+    claim = self._claim
+    self._claim = None
+    try:
+      if self._turn is not None:
+        await self._turn.finish()
+    except BaseException:
+      if claim is not None:
+        shared, directory = claim
+        try:
+          await shared.release_claim(directory)
+        except BaseException:
+          log.exception("opencode_release_failed_during_turn_cleanup", directory=directory)
+      raise
+    if claim is not None:
+      shared, directory = claim
+      await shared.release_claim(directory)
 
   async def _spawn_turn_process(self, cwd: str, env: dict) -> None:
     """Start this turn's /usr/bin/sleep, pinned as the Run's process identity and placed in the session cgroup."""

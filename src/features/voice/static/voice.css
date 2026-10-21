@@ -5,3 +5,23 @@
 .voice-meta { display: flex; align-items: baseline; gap: 0.5rem; min-width: 0; }
 .voice-timer { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.75rem; color: #94a3b8; }
 .voice-hint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* The ⋯ menu's backend entry: on phones the caret beside the mic is hidden and
+   this entry, added by voice-input.js, opens the same backend menu. On wider
+   screens the caret stays and the entry takes no space. */
+#voice-backend-menu-entry {
+  display: none;
+  align-items: center;
+  padding: 0.625rem 0.75rem;
+  border: 1px solid #475569;
+  border-radius: 0.75rem;
+  background: #1e293b;
+  color: #e2e8f0;
+  font-size: 0.875rem;
+  white-space: nowrap;
+}
+#voice-backend-menu-entry:hover { border-color: #64748b; }
+@media (max-width: 768px) {
+  #voice-backend-btn { display: none; }
+  #voice-backend-menu-entry { display: inline-flex; }
+}

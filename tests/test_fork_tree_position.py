@@ -247,7 +247,7 @@ async def test_clone_bootstrap_is_the_only_pending_input(
   """(f) Copied unprocessed inputs stay off the new node; the clone's first
   round's only input is the route's bootstrap prompt."""
   cfg, blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
-  test_task_execution.stub_credentials({"charliebot": {"access_key": "op-secret"}})
+  conftest.stub_credentials({"charliebot": {"access_key": "op-secret"}})
   monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
   root = await manager_child(tree, None, "root", name="Root")
   source = await manager_child(tree, root.id, "source", name="Feature")
@@ -271,7 +271,7 @@ async def test_bootstrap_names_the_tree_sentences(tmp_path: pathlib.Path, monkey
   """(j) The first message of a clone and of an elone carries the two
   ``session tree`` sentences with the new node's id."""
   cfg, blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
-  test_task_execution.stub_credentials({"charliebot": {"access_key": "op-secret"}})
+  conftest.stub_credentials({"charliebot": {"access_key": "op-secret"}})
   monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
   root = await manager_child(tree, None, "root", name="Root")
   source = await manager_child(tree, root.id, "source", name="Feature")
@@ -304,7 +304,7 @@ async def test_elone_with_unfinished_run_refuses_and_writes_nothing(
   """(g) A queued run on the source refuses the elone with HTTP 409, and no
   node, fact or status change lands."""
   cfg, blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
-  test_task_execution.stub_credentials({"charliebot": {"access_key": "op-secret"}})
+  conftest.stub_credentials({"charliebot": {"access_key": "op-secret"}})
   monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
   root = await manager_child(tree, None, "root", name="Root")
   source = await manager_child(tree, root.id, "source", name="Feature")
@@ -458,7 +458,7 @@ async def test_closed_parent_refuses_clone_and_elone(tmp_path: pathlib.Path, mon
   """(l) A closed parent task returns 409 for clone and elone, and nothing is
   written."""
   cfg, blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
-  test_task_execution.stub_credentials({"charliebot": {"access_key": "op-secret"}})
+  conftest.stub_credentials({"charliebot": {"access_key": "op-secret"}})
   monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
   root = await manager_child(tree, None, "root", name="Root")
   source = await manager_child(tree, root.id, "source", name="Feature")
@@ -556,7 +556,7 @@ async def test_completed_source_successor_starts_open_and_recovers_to_nothing(
   bootstrap starts the elone successor's first round, and a recovery scan
   leaves the parent with no new line and no report from the new node."""
   cfg, blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
-  test_task_execution.stub_credentials({"charliebot": {"access_key": "op-secret"}})
+  conftest.stub_credentials({"charliebot": {"access_key": "op-secret"}})
   monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
   root = await manager_child(tree, None, "root", name="Root")
   source = await manager_child(tree, root.id, "source", name="Feature")

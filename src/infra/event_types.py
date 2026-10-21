@@ -90,6 +90,10 @@ WEB_REPLY_NOTICE = "web_reply_notice"
 # A set of the web session's status through ``charliebot web status set``. The payload keys ``web_status`` (the status
 # after the set) and ``web_status_changed`` (the items the set named) carry the record; the status itself is metadata.
 WEB_STATUS = "web_status"
+# One cold read of a Waiting on you item, recorded through ``POST /api/internal/web/ask-check``. The item's digest, the
+# answering backend and the answer are top-level wire keys; a later unread query matches the digest, and the For-you
+# view hides the event. The digest is the only thing that ties the record to the item: the server does not attest it.
+WEB_ASK_CHECK = "web_ask_check"
 
 # -- Context -----------------------------------------------------------------
 CONTEXT_COMPACTED = "context_compacted"
@@ -183,16 +187,14 @@ TASK_IMPORTED = "task_imported"
 # close after the last one. They exist only in the projected event list and on
 # the wire — never appended to any events file on disk.
 RUN_HEADER = "run_header"
+RUN_END = "run_end"
+RUN_ERROR = "run_error"
 RUN_DELIVERY = "run_delivery"
 # An operator's durable confirmation that specific task inputs were actually
 # handled out-of-band. The event names the exact input ids; the fold treats
 # them like a successful run's acknowledged batch, so they stop pending while
 # anything later stays pending.
 TASK_INPUT_ACKNOWLEDGED = "task_input_acknowledged"
-
-# -- Scheduled-task runs ------------------------------------------------------
-# TASK_TRIGGERED is the manual scheduled-task run endpoint's response type.
-TASK_TRIGGERED = "task_triggered"
 
 # -- Backend-specific --------------------------------------------------------
 THINKING = "thinking"
@@ -208,6 +210,7 @@ RATE_LIMIT_INFO = "rate_limit_info"
 
 # -- Session backend switching ----------------------------------------------
 BACKEND_SWITCHED = "backend_switched"
+QUOTA_FAILOVER = "quota_failover"
 
 # -- Turn-end model attribution ----------------------------------------------
 # Synthetic round-end notice from the master run detector — never a CLI stream

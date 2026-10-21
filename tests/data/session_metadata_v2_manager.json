@@ -51,5 +51,6 @@
   "group": "Work",
   "archive_offset": 0,
   "backend_from_pool": false,
+  "route": null,
   "web_status": null
 }

@@ -24,7 +24,7 @@ import pytest
 
 from src.infra import event_types as ET
 from src.infra import models
-from src.runtime import control_events, task_sessions
+from src.runtime import control_events, runs, task_sessions
 from tests import test_task_execution
 
 KEY = "op-secret"
@@ -60,7 +60,7 @@ async def manager_tree(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch):
   monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
   tree.dispatch.executor = test_task_execution._adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   # The spawn-style routes resolve backends through the config owner directly.
-  monkeypatch.setattr("src.infra.config.get_config", lambda: cfg)
+  monkeypatch.setattr(conftest.CONFIG_GET_CONFIG_PATCH_TARGET, lambda: cfg)
   root = await tree.create_task(
       request_id="root",
       task_parent_id=None,
@@ -370,6 +370,7 @@ async def test_agent_cancels_only_its_own_direct_child_over_http(
         headers=conftest.agent_headers(root.id, "root-run"))
     assert ok.status_code == 200, ok.text
     assert ok.json()["task_state"] == "cancelled"
+    assert ok.json()["stopped_runs"] == []
 
     forbidden = client.post(
         f"/api/sessions/{child.id}/cancel",
@@ -380,6 +381,52 @@ async def test_agent_cancels_only_its_own_direct_child_over_http(
         headers=conftest.agent_headers(other.id, "other-run"))
     assert forbidden.status_code == 403, forbidden.text
     assert "direct child" in str(forbidden.json()["detail"])
+
+
+@pytest.mark.asyncio
+async def test_agent_run_token_cancels_live_worker_over_http(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The worker cancel route returns stopped run outcomes to its parent agent."""
+  monkeypatch.setattr(runs, "STOP_EXIT_WAIT_SECONDS", 0.2)
+  cfg, session_blocks, tree, root = await manager_tree(tmp_path, monkeypatch)
+  await tree.runs.register_run(models.RunRecord(id="root-run", session_id=root.id, kind="manager_turn"))
+  await tree.runs.record_launch(root.id, "root-run", pid=424242, pid_start="ps-root")
+  worker = await tree.create_task(
+      request_id="worker",
+      task_parent_id=root.id,
+      profile="worker",
+      task=models.TaskSpec(goal="stop work"),
+      name="Worker",
+      backend=None,
+      caller=conftest.OPERATOR)
+  proc = subprocess.Popen(["/bin/sleep", "60"], start_new_session=True)
+  pid, pid_start = conftest.identity_of(proc.pid)
+  await tree.runs.register_run(
+      models.RunRecord(
+          id="worker-run",
+          session_id=worker.id,
+          kind="work",
+          pid=pid,
+          pid_start=pid_start,
+          started_at=datetime.datetime.now(datetime.UTC)))
+  try:
+    with test_task_execution.make_api_client(cfg, session_blocks, tree) as client:
+      response = client.post(
+          f"/api/sessions/{worker.id}/cancel",
+          json={
+              "request_id": "worker-cancel",
+              "reason": "stop"
+          },
+          headers=conftest.agent_headers(root.id, "root-run"))
+    assert response.status_code == 200, response.text
+    assert response.json()["task_state"] == "cancelled"
+    assert response.json()["stopped_runs"] == [{"run_id": "worker-run", "outcome": "interrupted"}]
+    assert proc.poll() is not None
+    assert tree.runs.terminal_outcome(tree.runs.load_events_sync(worker.id), "worker-run") == "interrupted"
+  finally:
+    if proc.poll() is None:
+      proc.kill()
+    proc.wait(timeout=1)
 
 
 @pytest.mark.asyncio

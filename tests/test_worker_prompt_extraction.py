@@ -11,7 +11,7 @@ import pathlib
 import conftest
 import pytest
 
-from src.runtime import spawner
+from src.runtime import spawner_prompt
 
 # --- Fail-loud loader semantics -----------------------------------------------
 
@@ -21,5 +21,5 @@ def test_missing_worker_prompt_file_raises_with_path_and_cause(tmp_path: pathlib
   missing_path = tmp_path / "prompts" / "worker.md"
 
   with pytest.raises(FileNotFoundError, match="predates the worker-prompt extraction commit") as exc_info:
-    spawner.spawner_prompt.load_worker_prompt_sections(cfg)
+    spawner_prompt.load_worker_prompt_sections(cfg)
   assert str(missing_path) in str(exc_info.value)

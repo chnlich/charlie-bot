@@ -1,13 +1,16 @@
 """Measure opencode turns on the shared 2.0 server: cold start, warm new directory, warm same directory.
 
 usage: python scripts/opencode_turn_bench.py --runs <n> [--model <provider/model>] [--gap-seconds <s>]
+                                              [--repo <git repo dir>]
 
 Runs against the profile named by CHARLIEBOT_HOME (it refuses to run unset or on the default profile).
 Each run is one cold turn (the server stopped first), one warm turn in a new directory, and one warm
 turn in that same directory again. Latency is the time from the turn's start to the model request
 (the session.step.started event's data.started), in milliseconds. Real-model turns are spaced by
---gap-seconds (default 60) because the free model refuses rapid requests. Prints a summary table to
-stderr and the JSON result to stdout.
+--gap-seconds (default 60) because the free model refuses rapid requests. server_rss_mb.started is
+read from a server started alone before any turn. With --repo, 16 new subdirectories of that git
+repo each run one turn after the measurement, and rss_after_new_dirs_mb holds the server RSS 5 s
+after each of those turns. Prints a summary table to stderr and the JSON result to stdout.
 """
 
 from __future__ import annotations
@@ -27,6 +30,9 @@ from src.infra import constants, home
 
 DEFAULT_MODEL = "opencode/deepseek-v4.1-flash-free"
 PROMPT = "Reply with the single word OK."
+NEW_DIR_COUNT = 16
+# Seconds between a turn's end and the RSS reading after it: the release has run by then.
+RSS_SETTLE_SECONDS = 5
 
 
 def _profile_guard() -> pathlib.Path:
@@ -84,7 +90,7 @@ async def _turn(model: str, directory: pathlib.Path) -> tuple[dict, str]:
   }, outcome
 
 
-async def _measure(runs: int, model: str, gap_seconds: float, work: pathlib.Path) -> dict:
+async def _measure(runs: int, model: str, gap_seconds: float, work: pathlib.Path, repo: pathlib.Path | None) -> dict:
   shared = server.server_for(None)
   result: dict = {
       "opencode_version": None,
@@ -97,6 +103,7 @@ async def _measure(runs: int, model: str, gap_seconds: float, work: pathlib.Path
           "after_first_turn": None,
           "after_all_turns": None
       },
+      "rss_after_new_dirs_mb": None,
       "turn_outcomes": []
   }
   outcomes: list[str] = []
@@ -117,15 +124,17 @@ async def _measure(runs: int, model: str, gap_seconds: float, work: pathlib.Path
       print(f"turn failed: {turn['error']}", file=sys.stderr)
     return turn
 
+  await shared.ensure_running()
+  result["server_rss_mb"]["started"] = _tree_rss_mb(shared.pid)
+  result["opencode_version"] = shared.version
+  await shared.stop()
+
   for run in range(runs):
     await shared.stop()
     cold_dir = work / f"cold{run}"
     cold_dir.mkdir(parents=True)
     cold = await paced_turn(cold_dir)
     result["cold_ms"].append(cold["latency_ms"])
-    if run == 0:
-      result["server_rss_mb"]["started"] = _tree_rss_mb(shared.pid)
-      result["opencode_version"] = shared.version
     new_dir = work / f"warm{run}"
     new_dir.mkdir(parents=True)
     warm_new = await paced_turn(new_dir)
@@ -134,6 +143,17 @@ async def _measure(runs: int, model: str, gap_seconds: float, work: pathlib.Path
     result["warm_same_dir_ms"].append(warm_same["latency_ms"])
   result["server_rss_mb"]["after_all_turns"] = _tree_rss_mb(shared.pid)
   result["turn_outcomes"] = outcomes
+  if repo is not None:
+    readings: list[float] = []
+    # The directories live inside the repo, so each is a new location of a real git repository.
+    with tempfile.TemporaryDirectory(prefix="opencode-turn-bench-dirs-", dir=repo) as new_root:
+      for index in range(NEW_DIR_COUNT):
+        directory = pathlib.Path(new_root) / f"d{index:02d}"
+        directory.mkdir()
+        await paced_turn(directory)
+        await asyncio.sleep(RSS_SETTLE_SECONDS)
+        readings.append(_tree_rss_mb(shared.pid))
+    result["rss_after_new_dirs_mb"] = readings
   await shared.stop()
   return result
 
@@ -149,6 +169,8 @@ def _summary(result: dict) -> str:
   lines.append(
       f"server RSS MiB: started {rss['started']}, after first turn {rss['after_first_turn']}, "
       f"after all turns {rss['after_all_turns']}")
+  if result["rss_after_new_dirs_mb"] is not None:
+    lines.append(f"server RSS MiB after each new dir: {result['rss_after_new_dirs_mb']}")
   lines.append(f"outcomes: {result['turn_outcomes']}")
   return "\n".join(lines)
 
@@ -158,12 +180,15 @@ def main() -> None:
   parser.add_argument("--runs", type=int, required=True, help="runs; each run is one cold and two warm turns")
   parser.add_argument("--model", default=DEFAULT_MODEL, help="provider/model used by every turn")
   parser.add_argument("--gap-seconds", type=float, default=60.0, help="pause between real-model turns")
+  parser.add_argument("--repo", type=pathlib.Path, help="git repo whose new subdirectories each run one more turn")
   args = parser.parse_args()
   if args.runs < 1:
     sys.exit("opencode_turn_bench: --runs must be at least 1")
+  if args.repo is not None and not (args.repo / ".git").exists():
+    sys.exit(f"opencode_turn_bench: --repo {args.repo} is not a git repository")
   _profile_guard()
   with tempfile.TemporaryDirectory(prefix="opencode-turn-bench-") as scratch:
-    result = asyncio.run(_measure(args.runs, args.model, args.gap_seconds, pathlib.Path(scratch)))
+    result = asyncio.run(_measure(args.runs, args.model, args.gap_seconds, pathlib.Path(scratch), args.repo))
   print(_summary(result), file=sys.stderr)
   print(json.dumps(result, indent=2))
 

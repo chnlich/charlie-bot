@@ -1,11 +1,14 @@
 """The opencode 2.0 server CharlieBot starts and shares across its turns: one per proxy_url.
 
-The server runs ``opencode serve --port 0`` with the profile's XDG store, the headless config
-and a random password. One global event stream feeds every turn: each event goes to the turn
-registered for its session, and an execution that no turn claims is interrupted. The server
-stops after OPENCODE_SERVER_IDLE_EXIT_SECONDS with no turn. When its event stream or its process
-fails, every running turn ends first (the turn-end steps), then the process stops, then each turn
-gets a ServerLostError.
+The server runs ``opencode serve --port 0`` with the profile's XDG store, the headless config,
+a random password and the file index off. One global event stream feeds every turn: each event goes
+to the turn registered for its session, and an execution that no turn claims is interrupted. Each
+turn claims its directory while it runs; when a turn ends, the server releases every loaded
+directory no turn claims. With no turn and no claim for OPENCODE_SERVER_HEAVY_CHECK_SECONDS, the server
+stops if its RSS is above OPENCODE_SERVER_HEAVY_RSS_MB; otherwise it stops after
+OPENCODE_SERVER_IDLE_EXIT_SECONDS with no turn and no claim.
+When its event stream or its process fails, every running turn ends first (the turn-end steps),
+then the process stops, then each turn gets a ServerLostError.
 """
 
 from __future__ import annotations
@@ -35,6 +38,7 @@ OPENCODE_BIN = str(pathlib.Path.home() / ".opencode" / "bin" / "opencode")
 JOIN_SCRIPT = pathlib.Path(__file__).with_name("cgroup_join.sh")
 
 _LISTEN_RE = re.compile(r"server listening on (http://\S+)")
+_VMRSS_RE = re.compile(r"^VmRSS:\s+(\d+) kB$", re.MULTILINE)
 # The newest bytes the server wrote to stdout or stderr, quoted in the error that ends a turn.
 _OUTPUT_TAIL_BYTES = 64 * 1024
 _READ_CHUNK_BYTES = 64 * 1024
@@ -42,6 +46,15 @@ _READ_CHUNK_BYTES = 64 * 1024
 
 class ServerLostError(RuntimeError):
   """The shared server ended while this turn was running; the message names why."""
+
+
+def process_rss_mb(pid: int) -> float:
+  """The resident memory of process *pid* alone, in MiB; its child processes are not counted."""
+  status = pathlib.Path(f"/proc/{pid}/status").read_text()
+  match = _VMRSS_RE.search(status)
+  if match is None:
+    raise RuntimeError(f"/proc/{pid}/status has no VmRSS line")
+  return int(match.group(1)) / 1024
 
 
 def headless_config() -> dict:
@@ -112,6 +125,10 @@ class OpenCodeServer:
   def __init__(self, proxy_url: str | None) -> None:
     self._proxy_url = proxy_url
     self._lock = asyncio.Lock()
+    # Guards the claim counts and the release: a claim taken during a release waits for it.
+    self._release_lock = asyncio.Lock()
+    # Turns running in each directory; a directory with a claim is never released.
+    self._claims: collections.Counter[str] = collections.Counter()
     self._proc: spawn.SpawnedProcess | None = None
     self._client: httpx.AsyncClient | None = None
     self._connected = asyncio.Event()
@@ -147,6 +164,8 @@ class OpenCodeServer:
             "XDG_CACHE_HOME": str(home.opencode_cache_dir()),
             "OPENCODE_SERVER_PASSWORD": password,
             "OPENCODE_CONFIG_CONTENT": json.dumps(headless_config()),
+            # Read only from the environment. The file index costs ~62 MiB per git directory; no turn uses it.
+            "OPENCODE_DISABLE_FFF": "1",
         })
     if self._proxy_url is not None:
       base.apply_proxy_env(env, self._proxy_url)
@@ -213,6 +232,33 @@ class OpenCodeServer:
         continue
       removed = await self.client.delete(f"/api/shell/{shell['id']}", params={"location[directory]": directory})
       removed.raise_for_status()
+
+  async def claim(self, directory: str) -> None:
+    """Hold *directory* for a turn: no release unloads it until the turn's claim is dropped."""
+    async with self._release_lock:
+      self._claims[directory] += 1
+
+  async def release_claim(self, directory: str) -> None:
+    """Drop a turn's claim on *directory*, then unload every loaded directory no turn claims."""
+    async with self._release_lock:
+      self._claims[directory] -= 1
+      if self._claims[directory] == 0:
+        del self._claims[directory]
+      if (not self._claims and not self._turns and not self._stopping and self._client is not None and
+          self.process_alive and self._idle is not None and self._idle.done()):
+        self._arm_idle()
+      # A stopping, exited or still starting server has no loaded directories to release.
+      if self._stopping or self._client is None or not self.process_alive:
+        return
+      response = await self.client.get("/api/debug/location")
+      response.raise_for_status()
+      for location in response.json():
+        loaded = location["directory"]
+        if loaded in self._claims:
+          continue
+        released = await self.client.delete("/api/debug/location", params={"location[directory]": loaded})
+        if not released.is_success:
+          raise RuntimeError(f"opencode release of directory {loaded} returned HTTP {released.status_code}")
 
   @property
   def client(self) -> httpx.AsyncClient:
@@ -366,9 +412,19 @@ class OpenCodeServer:
       log.error("opencode_server_lost", reason=reason, turns=len(turns))
 
   async def _stop_when_idle(self) -> None:
-    await asyncio.sleep(opencode_limits.OPENCODE_SERVER_IDLE_EXIT_SECONDS)
+    await asyncio.sleep(opencode_limits.OPENCODE_SERVER_HEAVY_CHECK_SECONDS)
     async with self._lock:
-      if self._turns or self._proc is None:
+      if not self._turns and not self._claims and self.process_alive:
+        rss_mb = process_rss_mb(self._proc.pid)
+        if rss_mb > opencode_limits.OPENCODE_SERVER_HEAVY_RSS_MB:
+          log.info("opencode_server_heavy_exit", pid=self._proc.pid, rss_mb=round(rss_mb, 1))
+          self._stopping = True
+          await self._shutdown()
+          return
+    rest = opencode_limits.OPENCODE_SERVER_IDLE_EXIT_SECONDS - opencode_limits.OPENCODE_SERVER_HEAVY_CHECK_SECONDS
+    await asyncio.sleep(rest)
+    async with self._lock:
+      if self._turns or self._claims or not self.process_alive:
         return
       log.info("opencode_server_idle_exit", pid=self._proc.pid)
       self._stopping = True

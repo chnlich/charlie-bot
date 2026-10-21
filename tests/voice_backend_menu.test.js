@@ -37,6 +37,7 @@ function makeEl() {
   });
   el.children = kids;
   el.appendChild = (child) => kids.push(child);
+  el.getBoundingClientRect = () => ({left: 0, right: 0, top: 0, bottom: 0, width: 0, height: 0});
   return el;
 }
 
@@ -50,6 +51,9 @@ function buildHarness({stored = null, defaultBackend = 'local', backends = BACKE
   caret.parentElement = micGroup;
   elements.set('voice-btn', voiceBtn);
   elements.set('voice-backend-btn', caret);
+  const overflow = makeEl(); // the composer's ⋯ menu; the entry joins it at load
+  overflow.id = 'overflow-menu';
+  elements.set('overflow-menu', overflow);
 
   const storage = {};
   if (stored !== null) storage['charliebot-voice-backend'] = stored;
@@ -75,6 +79,7 @@ function buildHarness({stored = null, defaultBackend = 'local', backends = BACKE
     VOICE_DEFAULT_BACKEND: defaultBackend,
     autoResize() {},
     saveDraft() {},
+    window: {innerWidth: 1024},
   };
   vm.createContext(sandbox);
   vm.runInContext(readPackageStatic('features', 'voice', 'voice-input.js'), sandbox, {filename: 'voice-input.js'});
@@ -83,7 +88,7 @@ function buildHarness({stored = null, defaultBackend = 'local', backends = BACKE
   sandbox.toggleVoiceBackendMenu();
   const menu = micGroup.children[0];
   const rows = menu.children.slice(1);
-  return {sandbox, storage, voiceBtn, menu, rows};
+  return {sandbox, storage, voiceBtn, overflow, menu, rows};
 }
 
 test('first paint names the effective backend on the mic tooltip', () => {
@@ -145,4 +150,38 @@ test('the caret toggles the menu open and closed', () => {
   assert.ok(menu.classList.contains('hidden'));
   sandbox.toggleVoiceBackendMenu();
   assert.ok(!menu.classList.contains('hidden'));
+});
+
+test('the ⋯ menu entry opens the same backend menu and a tap picks a backend', () => {
+  const {overflow, menu, rows, storage} = buildHarness();
+  const entry = overflow.children.find((child) => child.id === 'voice-backend-menu-entry');
+  assert.equal(entry.textContent, 'Voice backend');
+
+  menu.classList.add('hidden');
+  overflow.classList.add('show');
+  entry.onclick();
+
+  assert.ok(!menu.classList.contains('hidden'));
+  assert.ok(!overflow.classList.contains('show'));
+
+  rows[1].onclick();
+  assert.equal(storage['charliebot-voice-backend'], 'gemini');
+  assert.ok(menu.classList.contains('hidden'));
+});
+
+test('the backend menu moves right when right alignment would cross the left screen edge', () => {
+  const {sandbox, menu} = buildHarness();
+  // A 320 px screen whose mic group ends at 100 px: right-aligned, the 256 px menu starts at -156 px.
+  // The layout is modelled: a right offset moves the menu's right edge left of the group's edge.
+  sandbox.window.innerWidth = 320;
+  menu.getBoundingClientRect = () => {
+    const right = 100 - parseFloat(menu.style.right || '0');
+    return {left: right - 256, right, top: 0, bottom: 0, width: 256, height: 0};
+  };
+  // Close, then reopen so the menu is positioned for this screen.
+  sandbox.toggleVoiceBackendMenu();
+  sandbox.toggleVoiceBackendMenu();
+  const rect = menu.getBoundingClientRect();
+  assert.ok(rect.left >= 8, `the menu's left edge ${rect.left} crosses the left screen edge`);
+  assert.ok(rect.right <= 312, `the menu's right edge ${rect.right} crosses the right screen edge`);
 });

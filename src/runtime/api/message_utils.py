@@ -80,6 +80,9 @@ class SessionBootstrapData:
   total_event_count: int = 0
   oldest_message_ordinal: int = 0
   has_more: bool = False
+  # A worker node's summary card (worker_transcript.TranscriptEntry.summary);
+  # None on every other profile.
+  worker_summary: dict | None = None
 
 
 async def get_message_projection_fast(
@@ -140,28 +143,31 @@ async def _worker_messages_page(
     tree: task_sessions.TaskTreeManager,
     session_id: str,
     message_limit: int,
-) -> tuple[list[dict], dict | None, int, int, bool]:
-  """One tail page of a worker node's Run-transcript projection.
+) -> tuple[list[dict], dict | None, int, int, bool, worker_transcript.TranscriptEntry]:
+  """One tail page of a worker node's Run-transcript projection, with the
+  transcript entry the page came from.
 
-  Same return shape as :func:`_messages_page`: committed messages, pending
-  draft, total event count, oldest message ordinal, has_more. Ordinals live in
-  the transcript's own space (positions in the synthesized event list), so the
-  ``/events`` pagination and the transcript poll speak the same cursor.
+  Same return shape as :func:`_messages_page` plus the entry: committed
+  messages, pending draft, total event count, oldest message ordinal,
+  has_more, then the memoized entry whose ``summary`` rides the same read.
+  Ordinals live in the transcript's own space (positions in the synthesized
+  event list), so the ``/events`` pagination and the transcript poll speak
+  the same cursor.
   """
   entry = await asyncio.to_thread(worker_transcript.load_worker_transcript, tree, session_id)
   messages, oldest_ordinal, has_more = entry.projection.tail(message_limit)
-  return (messages, entry.projection.pending_draft, entry.projection.event_count, oldest_ordinal, has_more)
+  return (messages, entry.projection.pending_draft, entry.projection.event_count, oldest_ordinal, has_more, entry)
 
 
-async def _worker_usage(tree: task_sessions.TaskTreeManager, session_id: str) -> dict | None:
+async def _worker_usage(tree: task_sessions.TaskTreeManager, session_id: str, run_kind: models.RunKind) -> dict | None:
   """Display usage folded over a worker node's Run transcript events.
 
   The header's context reading is the newest Run's last context_reading event;
   the same tier resolution the chat usage applies picks it from the projected
-  event list.
+  event list, and *run_kind* is the node's kind (``session_usage.usage_run_kind``).
   """
   entry = await asyncio.to_thread(worker_transcript.load_worker_transcript, tree, session_id)
-  return await asyncio.to_thread(session_usage.resolve_events_usage, entry.events)
+  return await asyncio.to_thread(session_usage.resolve_events_usage, entry.events, run_kind)
 
 
 async def _messages_page(
@@ -207,11 +213,13 @@ async def build_session_bootstrap_data(
   if session_meta is None:
     raise ValueError(f"session '{session_id}' metadata missing during bootstrap build")
 
+  worker_summary: dict | None = None
   if session_meta.profile == "worker":
     if tree is None:
       raise ValueError(f"worker session '{session_id}' bootstrap requires the task tree")
-    messages, pending_draft, total_event_count, oldest_ordinal, has_more = await _worker_messages_page(
+    messages, pending_draft, total_event_count, oldest_ordinal, has_more, entry = await _worker_messages_page(
         tree, session_id, message_limit)
+    worker_summary = entry.summary
   else:
     messages, pending_draft, total_event_count, oldest_ordinal, has_more = await _messages_page(
         events, session_id, session_meta.archive_offset, message_limit)
@@ -223,6 +231,7 @@ async def build_session_bootstrap_data(
       total_event_count=total_event_count,
       oldest_message_ordinal=oldest_ordinal,
       has_more=has_more,
+      worker_summary=worker_summary,
   )
 
 

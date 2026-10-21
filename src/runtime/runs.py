@@ -223,7 +223,7 @@ def summarize_result(events: Iterable[dict]) -> dict | None:
 
 
 def result_success(result: dict) -> bool:
-  """Terminal-status judgment from a result event (matches spawner semantics)."""
+  """Terminal-status judgment from a result event."""
   return result.get("subtype") in (None, "success") and result.get("is_error") in (None, False)
 
 
@@ -383,6 +383,7 @@ RUN_TASK_SPEC_NAME = "task_spec.md"
 # Bounded wait after SIGTERM for the actual exit the interrupted fact requires.
 STOP_EXIT_POLL_SECONDS = 0.05
 STOP_EXIT_WAIT_SECONDS = 10.0
+STOP_KILL_EXIT_WAIT_SECONDS = 5.0
 
 # The caller-identity refusal pieces: defined in src.runtime.run_identity (the
 # run-scoped CLI path reads them without this module's model stack); re-exported
@@ -1046,6 +1047,8 @@ class RunStore:
         await self.write_record(session_id, run)
       return run
     payload = self._finish_payload(run, input_event_ids)
+    if self.stop_requested(events, run_id):
+      outcome = "interrupted"
     event = control_events.build_control_event(
         ET.RUN_FINISHED,
         actor=control_events.ACTOR_SYSTEM,
@@ -1082,18 +1085,7 @@ class RunStore:
       if existing is not None:
         # A naturally completed run retains its outcome; no stop request is added.
         return RunStopResult(run_id=run_id, stop_requested=False, outcome=existing)
-      if not self.stop_requested(events, run_id, request_id):
-        event = control_events.build_control_event(
-            ET.RUN_STOP_REQUESTED,
-            actor=control_events.ACTOR_SYSTEM,
-            source_session_id=session_id,
-            request_id=request_id,
-            run_id=run_id,
-        )
-        await self._events.append(session_id, event)
-        # The durable stop request is a fact transition (a queued run leaves the
-        # waiting verdict): the next poll must re-probe.
-        sidebar_state.mark_sidebar_dirty(session_id)
+      await self.append_stop_request_locked(session_id, run_id, request_id)
 
     # A queued (never-launched) run has no process to signal and no exit to
     # observe; the durable request is the fact, and the dispatch stage honors
@@ -1101,6 +1093,28 @@ class RunStore:
     if run.pid is None:
       return RunStopResult(run_id=run_id, stop_requested=True, outcome=None)
     return await self._follow_through_stop(session_id, run)
+
+  async def append_stop_request_locked(self, session_id: str, run_id: str, request_id: str) -> bool:
+    """Append one stop fact while the caller holds the shared control lock.
+
+    Returns True when this request id already exists or was appended. A
+    terminal Run cannot acquire a new stop request.
+    """
+    events = self.load_events_sync(session_id)
+    if self.terminal_outcome(events, run_id) is not None:
+      return False
+    if self.stop_requested(events, run_id, request_id):
+      return True
+    event = control_events.build_control_event(
+        ET.RUN_STOP_REQUESTED,
+        actor=control_events.ACTOR_SYSTEM,
+        source_session_id=session_id,
+        request_id=request_id,
+        run_id=run_id,
+    )
+    await self._events.append(session_id, event)
+    sidebar_state.mark_sidebar_dirty(session_id)
+    return True
 
   async def reconcile_stop_request(self, session_id: str, run_id: str) -> RunStopResult:
     """Fresh-reader recovery: finish a durably requested stop from current process facts."""
@@ -1124,27 +1138,25 @@ class RunStore:
     """
     pid = run.pid
     assert pid is not None
-    stat_pair = read_pid_stat(pid)
-    exited = stat_pair is None or stat_pair[1] == "Z"
+    exited = not self._validate_stop_identity(run)
     if not exited:
-      current_start = stat_pair[0]
-      if current_start != run.pid_start:
-        raise RunIdentityConflictError(
-            f"run {run.id} process identity mismatch: recorded pid_start {run.pid_start!r}, "
-            f"/proc/{pid} reports {current_start!r}")
-      if run.started_at is None or run.started_at.tzinfo is None:
-        raise RunIdentityConflictError(f"run {run.id} has no usable started_at for identity validation")
-      if run.started_at.astimezone(datetime.UTC) <= read_host_boot_time():
-        raise RunIdentityConflictError(
-            f"run {run.id} started_at predates the current host boot; recorded identity is stale")
       try:
-        os.kill(pid, signal.SIGTERM)
+        os.killpg(pid, signal.SIGTERM)
       except ProcessLookupError:
-        # The exit beat the signal (pid vanished after the identity read): the
-        # observed exit is the fact an interrupted terminal record rides on.
-        exited = True
+        # Re-read the identity because the process can leave its group after
+        # the group-id check without exiting.
+        exited = not self._validate_stop_identity(run)
       else:
-        exited = await self._wait_for_exit(pid)
+        exited = await self._wait_for_exit(pid, STOP_EXIT_WAIT_SECONDS)
+    if not exited:
+      exited = not self._validate_stop_identity(run)
+      if not exited:
+        try:
+          os.killpg(pid, signal.SIGKILL)
+        except ProcessLookupError:
+          exited = not self._validate_stop_identity(run)
+        else:
+          exited = await self._wait_for_exit(pid, STOP_KILL_EXIT_WAIT_SECONDS)
     if exited:
       await self.record_finish(session_id, run.id, "interrupted")
       outcome = self.terminal_outcome(self.load_events_sync(session_id), run.id)
@@ -1152,11 +1164,38 @@ class RunStore:
     return RunStopResult(run_id=run.id, stop_requested=True, outcome=None)
 
   @staticmethod
-  async def _wait_for_exit(pid: int) -> bool:
+  def _validate_stop_identity(run: models.RunRecord) -> bool:
+    """Return whether the recorded process is live and safe to signal."""
+    pid = run.pid
+    assert pid is not None
+    stat_pair = read_pid_stat(pid)
+    if stat_pair is None or stat_pair[1] == "Z":
+      return False
+    current_start = stat_pair[0]
+    if current_start != run.pid_start:
+      raise RunIdentityConflictError(
+          f"run {run.id} process identity mismatch: recorded pid_start {run.pid_start!r}, "
+          f"/proc/{pid} reports {current_start!r}")
+    if run.started_at is None or run.started_at.tzinfo is None:
+      raise RunIdentityConflictError(f"run {run.id} has no usable started_at for identity validation")
+    if run.started_at.astimezone(datetime.UTC) <= read_host_boot_time():
+      raise RunIdentityConflictError(
+          f"run {run.id} started_at predates the current host boot; recorded identity is stale")
+    try:
+      process_group_id = os.getpgid(pid)
+    except ProcessLookupError:
+      return False
+    if process_group_id != pid:
+      raise RunIdentityConflictError(
+          f"run {run.id} process group mismatch: run pid {pid}, process group id {process_group_id}")
+    return True
+
+  @staticmethod
+  async def _wait_for_exit(pid: int, timeout: float) -> bool:
     """Bounded poll for the process's actual exit after the signal."""
     import asyncio  # deferred
 
-    deadline = time.monotonic() + STOP_EXIT_WAIT_SECONDS
+    deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
       stat_pair = read_pid_stat(pid)
       if stat_pair is None or stat_pair[1] == "Z":

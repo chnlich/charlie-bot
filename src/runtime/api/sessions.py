@@ -5,7 +5,7 @@ import datetime
 import json
 import pathlib
 import uuid
-from typing import get_args
+from typing import Literal, get_args
 
 import fastapi
 import pydantic
@@ -16,19 +16,20 @@ from src.infra import event_types as ET
 from src.infra import responses as infra_responses
 from src.runtime import (
     chat_events,
-    control_events,
     message_aggregator,
     run_token,
     runs,
     scheduled_sessions,
     session_anchors,
     session_dispatch,
+    session_events,
     session_fork,
     session_lifecycle,
     session_listing,
     session_search,
     session_sidebar,
     session_store,
+    session_usage,
     sidebar_state,
     spawner_backends,
     takeoff_gate,
@@ -38,12 +39,11 @@ from src.runtime import (
     task_prompts,
     task_sessions,
     thinking_state,
+    triggers,
     worker_transcript,
 )
 from src.runtime.api import deps, message_utils
 from src.runtime.hooks import backend_types, sequence_controllers
-from src.runtime.session_events import SessionEvents
-from src.runtime.triggers import TriggerManager
 
 log = log_once.LazyStructlogLogger()
 router = fastapi.APIRouter()
@@ -61,11 +61,23 @@ def _default_backend_id(cfg: config.CharlieBotConfig) -> str:
   return cfg.backends.options[0].id if cfg.backends.options else "claude"
 
 
+def displayed_backend_id(meta: models.SessionMetadata) -> str:
+  """The backend id a session displays: the one rule every backend reader routes through.
+
+  A worker session displays its newest Run's backend from thinking_state's display map (the delegation's
+  target model, never the inherited creation value), or its configured backend when no Run is known. Every
+  other session displays its configured backend. The map keeps recording the newest Run's backend for every
+  session; only this function decides which one a session shows.
+  """
+  if meta.profile == "worker":
+    return thinking_state.run_backend(meta.id) or meta.backend
+  return meta.backend
+
+
 def _active_backend_payload(meta: models.SessionMetadata, cfg: config.CharlieBotConfig) -> dict:
-  # A worker node displays its newest Run's backend (the delegation's target
-  # model), never the inherited creation value the persisted field carries.
+  # The displayed-backend rule lives in displayed_backend_id.
   binding = sequence_controllers.binding_for(meta.id)
-  active_backend = (meta.run_backend or meta.backend) or _default_backend_id(cfg)
+  active_backend = displayed_backend_id(meta) or _default_backend_id(cfg)
   active_backend_opt = cfg.get_backend_option(active_backend)
   return {
       "active_backend":
@@ -113,6 +125,10 @@ def _bootstrap_payload(bootstrap: message_utils.SessionBootstrapData, cfg: confi
       "oldest_message_ordinal": bootstrap.oldest_message_ordinal,
       "has_more": bootstrap.has_more,
   }
+  # A worker node's summary card rides the first paint; the same object the
+  # transcript poll serves as ``summary``.
+  if bootstrap.worker_summary is not None:
+    payload["worker_summary"] = bootstrap.worker_summary
   payload.update(_active_backend_payload(bootstrap.session, cfg))
   return payload
 
@@ -316,11 +332,10 @@ async def _sessions_list_response(
     entry = derived[row.id]
     thinking = thinking_state.busy_since(row.id)
     next_trigger = entry[sidebar_state.NEXT_TRIGGER_AT]
-    # A worker row displays its newest Run's backend (the delegation's target
-    # model), never the inherited creation value; every other row keeps its
-    # own persisted backend. The in-memory read rides the overlay tuple so a
-    # backend change re-renders the memoized body.
-    display_backend = (thinking_state.run_backend(row.id) or row.backend) if row.profile == "worker" else row.backend
+    # The row's displayed backend follows the rule in displayed_backend_id. The
+    # in-memory read rides the overlay tuple so a backend change re-renders the
+    # memoized body.
+    display_backend = displayed_backend_id(row)
     # Both datetimes ride the model's JSON scheme (pydantic-core renders datetime.UTC as
     # Z); a hand-rolled isoformat() would emit +00:00 inside an all-Z row.
     rendered.append(
@@ -767,6 +782,19 @@ class SessionDetailResponse(models.SessionMetadata):
   prompt_rules: dict = {}
 
 
+class StoppedRunResponse(pydantic.BaseModel):
+  """One Run stopped by POST /api/sessions/{id}/cancel."""
+  model_config = pydantic.ConfigDict(extra="forbid")
+
+  run_id: str
+  outcome: Literal["interrupted", "never_launched"] | None
+
+
+class CancelSessionResponse(SessionDetailResponse):
+  """POST /api/sessions/{id}/cancel response."""
+  stopped_runs: list[StoppedRunResponse]
+
+
 class TreePageResponse(pydantic.BaseModel):
   """GET /api/sessions/tree response."""
   items: list[models.SessionRow]
@@ -965,7 +993,7 @@ async def _switch_payload_response(request: fastapi.Request, payload: dict | lis
 async def get_pending_triggers(
     session_id: str,
     _meta: models.SessionMetadata = fastapi.Depends(deps.require_session),
-    trigger_mgr: TriggerManager = fastapi.Depends(deps.get_trigger_manager),
+    trigger_mgr: triggers.TriggerManager = fastapi.Depends(deps.get_trigger_manager),
 ) -> list[dict]:
   """Return the session's pending delayed triggers, fire_at ascending.
 
@@ -975,9 +1003,9 @@ async def get_pending_triggers(
   cancelled records stay out — the transcript shows fired triggers, and the
   cancel endpoint (src/runtime/api/internal.py) owns removal.
   """
-  triggers = await trigger_mgr.list_triggers(session_id)
+  records = await trigger_mgr.list_triggers(session_id)
   pending = sorted(
-      (tr for tr in triggers if tr.status is models.TriggerStatus.PENDING),
+      (tr for tr in records if tr.status is models.TriggerStatus.PENDING),
       key=lambda tr: tr.fire_at,
   )
   return [tr.model_dump(mode="json") for tr in pending]
@@ -989,12 +1017,12 @@ async def get_session_bootstrap(
     request: fastapi.Request,
     _meta: models.SessionMetadata = fastapi.Depends(deps.require_session),
     store: session_store.SessionStore = fastapi.Depends(deps.get_session_store),
-    session_events: SessionEvents = fastapi.Depends(deps.get_session_events),
+    events: session_events.SessionEvents = fastapi.Depends(deps.get_session_events),
     cfg: config.CharlieBotConfig = fastapi.Depends(deps.get_config_on_loop),
     task_mgr: task_sessions.TaskTreeManager = fastapi.Depends(deps.get_task_manager),
 ) -> responses.Response:
   """Return the minimal data needed to make one chat session usable."""
-  bootstrap = await message_utils.build_session_bootstrap_data(session_id, store, session_events, tree=task_mgr)
+  bootstrap = await message_utils.build_session_bootstrap_data(session_id, store, events, tree=task_mgr)
   # The switch fetch's gzip form rides the body-keyed memo (_switch_payload_response).
   return await _switch_payload_response(request, _bootstrap_payload(bootstrap, cfg))
 
@@ -1026,7 +1054,7 @@ async def get_session_usage(
 ) -> infra_responses.FastJsonResponse:
   """Return lazy session status and usage data for the active header."""
   if meta.profile == "worker":
-    usage = await message_utils._worker_usage(task_mgr, session_id)
+    usage = await message_utils._worker_usage(task_mgr, session_id, session_usage.usage_run_kind(meta))
   else:
     usage = await anchors.resolve_session_usage(session_id, meta)
   payload = {
@@ -1047,7 +1075,7 @@ async def get_session_events_page(
     before: int,
     limit: int = 40,
     meta: models.SessionMetadata = fastapi.Depends(deps.require_session),
-    session_events: SessionEvents = fastapi.Depends(deps.get_session_events),
+    events: session_events.SessionEvents = fastapi.Depends(deps.get_session_events),
     task_mgr: task_sessions.TaskTreeManager = fastapi.Depends(deps.get_task_manager),
 ) -> responses.Response:
   """Paginate backwards through session messages by message ordinal.
@@ -1076,7 +1104,7 @@ async def get_session_events_page(
   # plain json.dumps, and every field is already a plain parsed-JSON type so
   # the dumped body is unchanged.
   if meta.archive_offset == 0:
-    projection = await message_utils.get_message_projection_fast(session_events, session_id)
+    projection = await message_utils.get_message_projection_fast(events, session_id)
     if projection is not None:
       # The chat UI re-fetches a page whenever it re-enters the viewport or the
       # session is revisited, and the published projection is immutable, so a
@@ -1097,8 +1125,8 @@ async def get_session_events_page(
         return infra_responses.PreencodedJSONResponse(gz, headers=infra_responses.GZIP_RESPONSE_HEADERS)
       return infra_responses.PreencodedJSONResponse(body)
   start = max(0, before - limit)
-  events, has_more = await asyncio.to_thread(session_events.load_chat_events_range, session_id, start, before)
-  messages = message_utils.events_to_messages(events, event_index_offset=start)
+  page_events, has_more = await asyncio.to_thread(events.load_chat_events_range, session_id, start, before)
+  messages = message_utils.events_to_messages(page_events, event_index_offset=start)
   return infra_responses.FastJsonResponse({"messages": messages, "has_more": has_more, "next_before": start})
 
 
@@ -1132,6 +1160,7 @@ async def get_session_transcript(
           "revision": entry.revision,
           "reset": reset,
           "active_run_id": entry.active_run_id,
+          "summary": entry.summary,
           "thinking_since": thinking_since.isoformat() if thinking_since else None,
       })
 
@@ -1262,7 +1291,7 @@ async def switch_session_backend(
     anchors: session_anchors.SessionAnchors = fastapi.Depends(deps.get_session_anchors),
     lifecycle: session_lifecycle.SessionLifecycle = fastapi.Depends(deps.get_session_lifecycle),
     store: session_store.SessionStore = fastapi.Depends(deps.get_session_store),
-    session_events: SessionEvents = fastapi.Depends(deps.get_session_events),
+    events: session_events.SessionEvents = fastapi.Depends(deps.get_session_events),
     cfg: config.CharlieBotConfig = fastapi.Depends(deps.get_config_on_loop),
 ) -> models.SessionMetadata:
   """Switch a session's backend in place, across model families.
@@ -1316,7 +1345,7 @@ async def switch_session_backend(
       "previous_native_backend": durable.native_backend if durable is not None and durable.cc_session_id else None,
       "previous_native_session_id": durable.cc_session_id if durable is not None else None,
   }
-  await session_events.persist_and_broadcast(session_id, audit_event)
+  await events.persist_and_broadcast(session_id, audit_event)
   return meta
 
 
@@ -1601,21 +1630,6 @@ async def _require_task_meta(task_mgr: task_sessions.TaskTreeManager, session_id
   return meta
 
 
-def _legacy_prompt_payload(path: pathlib.Path) -> dict:
-  """The legacy_prompt payload for one recorded raw launch-text file: ref, content hash, note."""
-  return {
-      "ref":
-          str(path),
-      "sha256":
-          control_events.sha256_hex(path.read_text(encoding="utf-8")),
-      "note":
-          (
-              "raw launch text recorded before the context stage: the managed "
-              "instructions are visible but per-source provenance was not "
-              "recorded, so this is limited evidence, not a full snapshot"),
-  }
-
-
 @router.get("/{session_id}/runs/{run_id}/context")
 async def get_run_context(
     session_id: str,
@@ -1627,53 +1641,32 @@ async def get_run_context(
 
   The snapshot is the committed object of record (blocks, provenance, hash,
   char_count) — the startup injection, never a recomposition from current
-  sources. Runs predating the context stage carry only a raw launch-text file:
-  reported as explicitly limited legacy evidence, never fabricated into full
-  provenance. Read-only and history-immutable.
+  sources. Read-only and history-immutable.
   """
   run = await task_mgr.runs.get_run(session_id, run_id)
   if run is None:
     raise fastapi.HTTPException(status_code=404, detail=runs.run_not_found_in_task_text(run_id, session_id))
   snapshot_payload: dict | None = None
-  legacy_prompt: dict | None = None
   if run.prompt_snapshot_ref:
-    # Classification rides the recorded artifact contract, not the file's
-    # current contents: the snapshot stage records ``prompt_snapshot.json``
-    # (validated, provenance-carrying); a pre-stage run recorded a raw
-    # launch-text path instead.
     ref_path = pathlib.Path(run.prompt_snapshot_ref)
-    if ref_path.name == task_prompts.SNAPSHOT_FILENAME:
-      if not ref_path.is_file():
-        raise fastapi.HTTPException(
-            status_code=500, detail=f"stored prompt snapshot missing at {run.prompt_snapshot_ref}")
-      try:
-        stored = json.loads(ref_path.read_text(encoding="utf-8"))
-      except (OSError, ValueError) as e:
-        raise fastapi.HTTPException(
-            status_code=500, detail=f"stored prompt snapshot unreadable at {run.prompt_snapshot_ref}: {e}") from e
-      try:
-        snapshot_payload = task_prompts.PromptSnapshot.from_json_dict(stored).to_json_dict()
-      except task_prompts.TaskPromptError as e:
-        raise fastapi.HTTPException(status_code=500, detail=str(e)) from e
-    else:
-      # A recorded raw launch-text ref: limited historical evidence — the
-      # managed instructions are visible but per-source provenance was never
-      # recorded. Never recomposed into snapshot-shaped provenance.
-      if not ref_path.is_file():
-        raise fastapi.HTTPException(
-            status_code=500, detail=f"recorded raw launch text missing at {run.prompt_snapshot_ref}")
-      legacy_prompt = _legacy_prompt_payload(ref_path)
-  else:
-    legacy_path = task_mgr.runs.run_dir(session_id, run_id) / task_prompts.LAUNCH_TEXT_FILENAME
-    if legacy_path.is_file():
-      legacy_prompt = _legacy_prompt_payload(legacy_path)
+    if not ref_path.is_file():
+      raise fastapi.HTTPException(
+          status_code=500, detail=f"stored prompt snapshot missing at {run.prompt_snapshot_ref}")
+    try:
+      stored = json.loads(ref_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+      raise fastapi.HTTPException(
+          status_code=500, detail=f"stored prompt snapshot unreadable at {run.prompt_snapshot_ref}: {e}") from e
+    try:
+      snapshot_payload = task_prompts.PromptSnapshot.from_json_dict(stored).to_json_dict()
+    except task_prompts.TaskPromptError as e:
+      raise fastapi.HTTPException(status_code=500, detail=str(e)) from e
   return {
       "session_id": session_id,
       "run_id": run_id,
       "kind": run.kind,
       "mode": "historical",
       "snapshot": snapshot_payload,
-      "legacy_prompt": legacy_prompt,
       "task_spec": ({
           "ref": run.task_spec_ref,
           "sha256": run.task_spec_hash
@@ -1803,27 +1796,28 @@ async def _completed_session_detail(task_mgr: task_sessions.TaskTreeManager, ses
     raise _task_http_error(e) from e
 
 
-@router.post("/{session_id}/cancel", response_model=SessionDetailResponse)
+@router.post("/{session_id}/cancel", response_model=CancelSessionResponse)
 async def cancel_session_task(
     session_id: str,
     req: models.CancelTaskRequest,
     _meta: models.SessionMetadata = fastapi.Depends(deps.require_session),
     task_mgr: task_sessions.TaskTreeManager = fastapi.Depends(deps.get_task_manager),
     caller: run_token.CallerIdentity = fastapi.Depends(deps.require_caller),
-) -> SessionDetailResponse:
+) -> CancelSessionResponse:
   """Explicit cancellation with reason, preserving evidence.
 
   An operator cancels any open task; a run-token agent cancels only a direct
-  child of its own task (403 otherwise). Active/unresolved execution or open
-  children return 409; the subtree is not recursively stopped (Run cancel
-  stays the separate operation).
+  child of its own task (403 otherwise). A worker target stops its non-terminal
+  Runs and ends the delegation. A manager target keeps its current blockers.
   """
   try:
-    await task_mgr.completion.cancel_task(session_id, request_id=req.request_id, reason=req.reason, caller=caller)
+    result = await task_mgr.completion.cancel_task(
+        session_id, request_id=req.request_id, reason=req.reason, caller=caller)
   except (task_errors.TaskInvalidError, task_errors.TaskNotFoundError, task_errors.TaskForbiddenError,
-          task_errors.TaskConflictError) as e:
+          task_errors.TaskConflictError, runs.RunIdentityConflictError) as e:
     raise _task_http_error(e) from e
-  return SessionDetailResponse.model_validate(await _completed_session_detail(task_mgr, session_id))
+  detail = await _completed_session_detail(task_mgr, session_id)
+  return CancelSessionResponse.model_validate({**detail, "stopped_runs": result.get("stopped_runs", [])})
 
 
 def _require_own_run_scope(caller: run_token.CallerIdentity, session_id: str, run_id: str) -> None:

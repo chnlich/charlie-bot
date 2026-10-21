@@ -59,6 +59,8 @@ async def _authorize_spawn_request(
   """Validate session, enforce the runtime gate, and resolve backend/model for a delegation.
 
   The third value is True when the backends.pool chose the backend (the delegation named none).
+  The fourth is the router's route object when the router ordered the backend (an unpinned
+  delegation of a routed role with ``backends.routing`` configured); None otherwise.
 
   A task-tree node takes the one central authorization owner —
   ``task_sessions.TaskTreeManager.check_task_authorization``, the runtime gate (judged where
@@ -74,6 +76,14 @@ async def _authorize_spawn_request(
       raise fastapi.HTTPException(status_code=403, detail=str(e)) from e
 
   cfg = config.get_config()
+  route = None
+  if req.backend is None and req.task_type in _ROUTED_ROLES and cfg.backends.routing is not None:
+    route = await _route_unpinned_task(cfg, req, store)
+    option = backend_pool.pick_ordered(cfg, caller=req.task_type.value, backends=route.backends)
+    if option is not None:
+      return option.id, models.option_default_model(option, subject="routed backend "), False, route
+    # Every routed member is cooling (or the router returned the empty list): the pool decides,
+    # with the route still recorded on the node.
   try:
     if req.task_type in (models.TaskType.VERIFY, models.TaskType.COLD_READ) and req.backend is None:
       resolved_backend, resolved_model, _ = await spawner_backends.select_verify_backend(
@@ -86,7 +96,39 @@ async def _authorize_spawn_request(
   except ValueError as e:
     raise deps.bad_request(e) from e
 
-  return resolved_backend, resolved_model, backend_from_pool
+  return resolved_backend, resolved_model, backend_from_pool, route
+
+
+# The delegation entry's unpinned roles that ask the router first (plan 4.2's scope: cold read,
+# naming, the page check, the improve loop and pinned work stay on today's paths).
+_ROUTED_ROLES = frozenset(
+    {models.TaskType.IMPLEMENT, models.TaskType.QUICK_EDIT, models.TaskType.SCRIPT_RUN, models.TaskType.VERIFY})
+
+
+async def _route_unpinned_task(
+    cfg: config.CharlieBotConfig,
+    req: models.DelegateRequest,
+    store: session_store.SessionStore,
+) -> backend_pool.BackendRoute:
+  """Ask the router to order the candidate backends for one unpinned delegation.
+
+  Verify checks the session's own work, so the session's backend leaves the candidates; the worker
+  roles avoid nothing. A router failure surfaces as a 502 whose body carries the router error — it
+  never falls back to the pool silently.
+  """
+  session_meta = await store.get_session(req.session_id)
+  avoided = set()
+  if req.task_type == models.TaskType.VERIFY:
+    avoided.add(spawner_backends.session_backend_id(cfg, session_meta))
+  candidates = [option.id for option in cfg.backends.options if option.id not in avoided]
+  try:
+    return await backend_pool.route(
+        cfg,
+        role=req.task_type.value,
+        text=f"Task type: {req.task_type.value}\n\n{req.description}",
+        candidates=candidates)
+  except backend_pool.RouterError as e:
+    raise fastapi.HTTPException(status_code=502, detail=f"backend router failed: {e}") from e
 
 
 def delegate_request_id(req: models.DelegateRequest) -> str:
@@ -110,6 +152,7 @@ async def _delegate_task_tree(
     resolved_backend: str,
     resolved_model: str | None,
     backend_from_pool: bool,
+    route: backend_pool.BackendRoute | None,
 ) -> dict:
   """The v2 delegation: one worker child task with its first work Run.
 
@@ -152,9 +195,12 @@ async def _delegate_task_tree(
         backend=resolved_backend,
         caller=caller,
     )
-    if backend_from_pool:
+    if backend_from_pool or route is not None:
       # Before the first launch: a quota failure on this node fails over only when the node says so.
-      await task_mgr.update_slot_fields(child.id, backend_pool.METADATA_OWNER, backend_from_pool=True)
+      slot_fields = {"backend_from_pool": backend_from_pool}
+      if route is not None:
+        slot_fields["route"] = route.model_dump(mode="json")
+      await task_mgr.update_slot_fields(child.id, backend_pool.METADATA_OWNER, **slot_fields)
     run_id = control_events.stable_run_id(child.id, f"{request_id}:work")
     existing = await task_mgr.runs.get_run(child.id, run_id)
     if existing is None:
@@ -198,6 +244,7 @@ async def _delegate_task_tree(
       "backend": resolved_backend or "",
       "model": resolved_model or "",
       "child_session_id": child.id,
+      "route": route.model_dump(mode="json") if route is not None else None,
       ET.DELEGATE_INVOCATION: _delegate_invocation_event_payload(req),
   }
   # The delegation card rides the delegating session's chat (persist + broadcast).
@@ -251,8 +298,9 @@ async def delegate_task(
           detail=f"{req.task_type.value} delegations take repo_path and base_branch together; "
           "give both for a repo task, neither for a repo-less one")
   deps.require_found(await store.get_session(req.session_id))
-  resolved_backend, resolved_model, backend_from_pool = await _authorize_spawn_request(req, store, task_mgr)
-  return await _delegate_task_tree(req, task_mgr, events, caller, resolved_backend, resolved_model, backend_from_pool)
+  resolved_backend, resolved_model, backend_from_pool, route = await _authorize_spawn_request(req, store, task_mgr)
+  return await _delegate_task_tree(
+      req, task_mgr, events, caller, resolved_backend, resolved_model, backend_from_pool, route)
 
 
 @router.post("/schedule-trigger")

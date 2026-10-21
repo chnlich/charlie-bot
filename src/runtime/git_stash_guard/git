@@ -15,8 +15,8 @@
 #     other form - bare `git stash` included - prints the notice below to
 #     stderr and exits 2 without touching git state.
 #   - Alias forms pass to real git unchanged, an alias expanding to stash
-#     included: the run logs from 2026-10-01 to 2026-10-14 hold no alias call
-#     of stash, so the guard does not emulate git's alias resolution.
+#     included: agent run logs hold no alias call of stash, so the guard does
+#     not emulate git's alias resolution.
 
 set -u
 

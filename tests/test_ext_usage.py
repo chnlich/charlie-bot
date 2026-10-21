@@ -203,7 +203,8 @@ def test_spend_aggregation_prices_recent_turns_by_model(tmp_path: pathlib.Path) 
 def _use_config(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path, *pool: claude_config.ClaudeAccount) -> None:
   """Serve a config whose Claude pool is *pool*, and a HOME under tmp_path so no real login is named."""
   monkeypatch.setenv("HOME", str(tmp_path))
-  monkeypatch.setattr("src.infra.config.get_config", lambda: config.CharlieBotConfig(accounts={"claude": list(pool)}))
+  monkeypatch.setattr(
+      conftest.CONFIG_GET_CONFIG_PATCH_TARGET, lambda: config.CharlieBotConfig(accounts={"claude": list(pool)}))
 
 
 def test_claude_accounts_label_collision_skip_fail_loud(

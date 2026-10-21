@@ -12,10 +12,6 @@ from src.infra import config, models
 from src.infra import event_types as ET
 
 
-def _read_events(path: pathlib.Path) -> list[dict]:
-  return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
-
-
 def _parent_side_files(cfg: config.CharlieBotConfig) -> list[pathlib.Path]:
   """Every parent_*.jsonl side file under the sessions dir; the child-log contract allows none."""
   return sorted(cfg.sessions_dir.glob("*/data/parent_*.jsonl"))
@@ -28,7 +24,7 @@ def _assert_child_log_is_parent_prefix_marker_and_creation(
   The parent side drops any in-memory event_index stamp (persist_and_broadcast
   injects one onto cache-served dicts; the persisted lines never carried it).
   """
-  child_events = _read_events(mgr.events.get_chat_events_path(child_id))
+  child_events = conftest.read_events(mgr.events.get_chat_events_path(child_id))
   parent_prefix = [
       {
           k: v for k, v in event.items() if k != "event_index"

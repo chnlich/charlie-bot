@@ -15,8 +15,9 @@ unlaunched one, so the node holds no Run that nothing can finish.
 from __future__ import annotations
 
 import datetime
-import importlib
 from typing import TYPE_CHECKING, Protocol
+
+from src.infra import deferred
 
 if TYPE_CHECKING:
   import asyncio
@@ -245,10 +246,7 @@ def _load_controller(name: str) -> SequenceController:
   if controller is not None:
     return controller
   path = _registered[name]
-  module_name, separator, attr = path.partition(":")
-  if not separator or not module_name or not attr:
-    raise ValueError(f"{path!r} is not a 'module:attr' string")
-  controller = getattr(importlib.import_module(module_name), attr)()
+  controller = deferred.import_attr(path)()
   _loaded[name] = controller
   return controller
 

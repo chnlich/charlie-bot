@@ -1239,10 +1239,18 @@ test('turn engine: hidden mount projects nothing, first resize projects the tail
       'bottom spacer never received the full-height seed');
   assert.equal(root.scrollTop, 0, 'hidden mount never wrote scrollTop');
 
+  // The page's projection check runs after a projection that ran, never after
+  // the zero-height return.
+  const checked = [];
+  context.Chat.registerProjectionCheck((container) => checked.push(container));
+  engine.handleResize();
+  assert.equal(checked.length, 0, 'a projection that stops at the zero-height return runs no check');
+
   // Size recovery: the first resize projects the trailing window, folded
   // history rows included, and lands bottom-pinned from the mount intent.
   root.clientHeight = 900;
   engine.handleResize();
+  assert.deepEqual(checked, [root], 'the projection at a real height runs the check once, on the container');
   settle(timers);
 
   const debug = engineDebug(context, root);
@@ -1253,6 +1261,11 @@ test('turn engine: hidden mount projects nothing, first resize projects the tail
   assert.equal(wraps[wraps.length - 1].dataset.turnOpen, 'true',
       'folded rows sit above the last open turn');
   assert.ok(distanceFromBottom(root) < 150, 'first projection is bottom-pinned');
+
+  engine.setView('foryou');
+  checked.length = 0;
+  engine.reproject('scroll');
+  assert.equal(checked.length, 0, 'For you scroll bookkeeping does not run a projection check');
 });
 
 test('turn engine: resize never pulls a reading user, keeps a pinned user', () => {
@@ -1314,6 +1327,20 @@ function cursorOf(url) {
   return parseInt(url.match(/before=(\d+)/)[1], 10);
 }
 
+function cursors(fetchCalls) {
+  return fetchCalls.map(cursorOf);
+}
+
+// The cursors of a chain that starts at cursor 100 and steps back one event per page.
+function stepsFrom100(count) {
+  return Array.from({length: count}, (_, i) => 100 - i);
+}
+
+// Every mock answers at once, so the microtask hops of a whole chain finish before the next macrotask.
+async function flush() {
+  await new Promise((resolve) => setImmediate(resolve));
+}
+
 // Each page: two fresh mid-turn messages, cursor stepping down one event.
 // has_more stays true within test ranges, so a chain stop can only be a cap.
 function mergePageFetch() {
@@ -1335,9 +1362,18 @@ function mergePageFetch() {
   };
 }
 
-function mountPagerCase(fetchPage, {clientHeight = 100, baseHeight = 2000} = {}) {
+// `session` overrides fields of the default session (profile and origin pick the
+// view the page opens in), `messages` is the tail page, and `clampScrollTop`
+// gives the container a real scroller's range: the position never leaves it.
+// `fetchCalls` holds the older-page requests only.
+function mountPagerCase(fetchPage, {
+  clientHeight = 100, baseHeight = 2000, session = {}, messages = PAGER_TAIL, clampScrollTop = false,
+} = {}) {
   const root = new FakeElement('DIV', {id: 'messages', className: 'space-y-3'});
   root.clientHeight = clientHeight;
+  // A hidden list (display: none) reports no scrollHeight either.
+  if (clientHeight === 0) root.scrollHeight = 0;
+  if (clampScrollTop) installScrollTopClamp(root);
   // Stand-in for the history around the engine's window: keeps the container's
   // scrollHeight far above the pin threshold even at the moment reproject has
   // stripped the window DOM (a real archive is thousands of px tall).
@@ -1361,14 +1397,17 @@ function mountPagerCase(fetchPage, {clientHeight = 100, baseHeight = 2000} = {})
   context.document.querySelectorAll = () => [];
   installEngineTimers(context, timers);
   context.fetch = async (url) => {
+    // The other requests an open makes (a web session's status panel) are not pages.
+    if (!url.includes('/events?')) return {ok: false, status: 404};
     fetchCalls.push(url);
     return fetchPage(url);
   };
   createChatSidebarContext(context);
   context.Chat.buildTurnEngineMessageNode = fakeEngineNode;
   context.renderSessionView({
-    session: {id: 'session-a', name: 'pager session', backend: 'claude-opus-4.6', round_ratings: {}},
-    messages: PAGER_TAIL,
+    session: Object.assign(
+        {id: 'session-a', name: 'pager session', backend: 'claude-opus-4.6', round_ratings: {}}, session),
+    messages,
     pending_draft: null,
     event_count: 104,
     oldest_message_ordinal: 100,
@@ -1380,7 +1419,7 @@ function mountPagerCase(fetchPage, {clientHeight = 100, baseHeight = 2000} = {})
   // auto-fill call sees scrollTop > 80 and stays out of the way; drop the
   // viewport to the top the way the user's scroll-up gesture would.
   root.scrollTop = 0;
-  return {context, root, fetchCalls};
+  return {context, root, fetchCalls, timers};
 }
 
 test('pager chains next-cursor fetches while parked in the trigger zone and stops at the 30-page cap', async () => {
@@ -1425,7 +1464,8 @@ test('a shift-0 landing with has_more lifts a viewport parked at scrollTop 0 to 
   assert.equal(root.scrollTop, 1, 'the parked viewport was lifted to 1px');
 });
 
-test('a user-gesture call resets both burst counters and re-arms the chains', async () => {
+test('a user-gesture call re-arms the trigger-zone chain, and the viewport fill runs to the end of history',
+    async () => {
   // Trigger-zone counter: the first gesture caps at 30 chained pages; the
   // second gesture (no second argument) must reset it, re-arming a full chain.
   const parked = mountPagerCase(mergePageFetch());
@@ -1435,17 +1475,150 @@ test('a user-gesture call resets both burst counters and re-arms the chains', as
   assert.equal(parked.fetchCalls.length, 62, 'second gesture reset the counter: another 1 + 30 fills');
   assert.deepEqual(parked.fetchCalls.map(cursorOf), Array.from({length: 62}, (_, i) => 100 - i));
 
-  // Viewport-fill counter: an unscrollable container with empty pages keeps
-  // every page in the unscrollable branch (empty pages never rebuild the
-  // window, so the scrollHeight stays put); the 5-cap must re-arm too.
+  // Viewport fill: an unscrollable container with empty pages stays
+  // unscrollable (empty pages never rebuild the window, so the scrollHeight
+  // stays put), so the engine's own projection at the open starts the chain.
+  // The clamp holds scrollTop at 0 the way a real scroller does for a list
+  // that does not scroll. No count bounds the chain: it runs to the history's
+  // first event, and a gesture then finds nothing left to load.
   const unscrollable = mountPagerCase(async (url) => ({
     ok: true,
     async json() {
-      return {has_more: true, next_before: cursorOf(url) - 1, messages: []};
+      const before = cursorOf(url);
+      return {has_more: before - 1 > 0, next_before: before - 1, messages: []};
     },
-  }), {clientHeight: 400, baseHeight: 0});
+  }), {clientHeight: 400, baseHeight: 0, clampScrollTop: true});
+  await flush();
+  assert.deepEqual(cursors(unscrollable.fetchCalls), stepsFrom100(100),
+      'every cursor step from 100 to 1 was fetched: no count cap on the chain');
   await unscrollable.context.Sidebar.loadOlderIfNeeded(unscrollable.root);
-  assert.equal(unscrollable.fetchCalls.length, 6, 'first gesture: 1 page + 5 viewport fills');
-  await unscrollable.context.Sidebar.loadOlderIfNeeded(unscrollable.root);
-  assert.equal(unscrollable.fetchCalls.length, 12, 'second gesture reset the counter: another 1 + 5 fills');
+  assert.equal(unscrollable.fetchCalls.length, 100, 'the history is read: a gesture loads nothing');
+});
+
+// ---------------------------------------------------------------------------
+// The viewport fill: a visible list shorter than its viewport plus 80px has no
+// scroll event to wait for, so older pages keep loading until the list can
+// scroll or the history ends. For you needs it most: a page seldom adds a row,
+// so the list stays short across many pages in a row.
+// ---------------------------------------------------------------------------
+
+// A web session opens in For you; a thread session opens in Everything.
+const WEB_SESSION = {profile: 'manager'};
+const THREAD_SESSION = {profile: 'manager', slack_origin: {team_id: 'T1', channel_id: 'C1', thread_ts: '1.5'}};
+
+// The tail the For you cases open on: two rows, so the reader's place has a row to hold on to.
+const FOR_YOU_TAIL = [eMsg('user', 'tail-u', 'the question'), eMsg('web_reply', 'tail-r', 'the answer')];
+
+// A page whose messages add no For you row (the assistant's work), and one that adds `count` rows.
+function quietPage(tag) {
+  return [eMsg('assistant', `${tag}-work`, `work ${tag}`)];
+}
+
+function rowsPage(tag, count) {
+  return Array.from({length: count}, (_, i) => eMsg('user', `${tag}-u${i}`, `question ${tag} ${i}`));
+}
+
+// A history paged like the server pages it: the cursor steps back one event per page, and has_more stays
+// true through page `lastPage`. After page `stuckAfter` the server answers with the cursor it was asked for.
+function pagedHistory(pageMessages, {lastPage = Infinity, stuckAfter = Infinity} = {}) {
+  let page = 0;
+  return async (url) => {
+    page += 1;
+    const before = cursorOf(url);
+    const body = {
+      has_more: page < lastPage,
+      next_before: page > stuckAfter ? before : before - 1,
+      messages: pageMessages(page),
+    };
+    return {ok: true, async json() { return body; }};
+  };
+}
+
+function sentinelsIn(root) {
+  return root.children.filter((el) => el.id === 'load-more-sentinel');
+}
+
+// A list the page shows again measures its content again.
+function showList(root, height) {
+  root.clientHeight = height;
+  root.scrollHeight = null;
+}
+
+test('a sparse For you list keeps loading older pages until it overflows', async () => {
+  // Pages 1 to 14 add no row; page 15 adds enough rows to overflow the list.
+  const {root, fetchCalls} = mountPagerCase(
+      pagedHistory((page) => (page < 15 ? quietPage(`p${page}`) : rowsPage('p15', 10))),
+      {session: WEB_SESSION, messages: FOR_YOU_TAIL, clientHeight: 300, baseHeight: 0, clampScrollTop: true});
+  assert.equal(sentinelsIn(root)[0].getAttribute('data-state'), 'loading', 'the open leaves page 1 in flight');
+
+  await flush();
+
+  assert.deepEqual(cursors(fetchCalls), stepsFrom100(15), 'a request for every page up to page 15');
+  assert.ok(root.scrollHeight > root.clientHeight + 80, 'the list overflows');
+  assert.equal(sentinelsIn(root)[0].getAttribute('data-state'), 'idle', 'older history remains');
+});
+
+test('switching to a short For you list resumes the paging an Everything list left stopped', async () => {
+  // Everything: a long tail the list scrolls, the reader parked at the top, nothing in flight.
+  const tail = [eMsg('user', 'tail-u', 'the question'),
+      ...Array.from({length: 20}, (_, i) => eMsg('assistant', `tail-a${i}`, `work ${i}`))];
+  const {context, root, fetchCalls, timers} = mountPagerCase(
+      pagedHistory((page) => (page < 8 ? quietPage(`p${page}`) : rowsPage('p8', 10))),
+      {session: THREAD_SESSION, messages: tail, clientHeight: 300, baseHeight: 0, clampScrollTop: true});
+  scrollTo(timers, root, 0);
+  await flush();
+  assert.ok(root.scrollHeight > root.clientHeight + 80, 'the Everything list scrolls');
+  assert.equal(fetchCalls.length, 0, 'a list that scrolls leaves its paging to the reader');
+
+  // For you shows the one user row of the tail: the list is short and no scroll event can come.
+  context.setChatView('foryou');
+  assert.deepEqual(cursors(fetchCalls), [100], 'the switch itself starts the paging');
+  assert.equal(sentinelsIn(root).length, 1, 'one sentinel row stays on the page while that page loads');
+  await flush();
+
+  assert.deepEqual(cursors(fetchCalls), stepsFrom100(8), 'a request for every page up to the one that overflows');
+  assert.ok(root.scrollHeight > root.clientHeight + 80, 'the For you list overflows');
+  assert.equal(sentinelsIn(root).length, 1, 'one sentinel row stays on the page');
+});
+
+test('a hidden list loads nothing until the engine projects it at a real height', async () => {
+  const {context, root, fetchCalls} = mountPagerCase(
+      pagedHistory((page) => (page < 6 ? quietPage(`p${page}`) : rowsPage('p6', 10))),
+      {session: WEB_SESSION, messages: FOR_YOU_TAIL, clientHeight: 0, baseHeight: 0, clampScrollTop: true});
+  const engine = context.Chat.activeTurnEngineFor(root);
+  await flush();
+  assert.equal(fetchCalls.length, 0, 'the open loads nothing into a hidden list');
+
+  engine.handleResize();
+  await flush();
+  assert.equal(fetchCalls.length, 0, 'a projection that stops at the zero-height return loads nothing');
+
+  showList(root, 300);
+  engine.handleResize();
+  await flush();
+  assert.deepEqual(cursors(fetchCalls), stepsFrom100(6), 'the projection at a real height starts the paging');
+  assert.ok(root.scrollHeight > root.clientHeight + 80, 'the list overflows');
+});
+
+test('the chain ends with the history: the last page reports no older page and the sentinel row goes', async () => {
+  const {root, fetchCalls} = mountPagerCase(
+      pagedHistory((page) => quietPage(`p${page}`), {lastPage: 9}),
+      {session: WEB_SESSION, messages: FOR_YOU_TAIL, clientHeight: 300, baseHeight: 0, clampScrollTop: true});
+
+  await flush();
+
+  assert.deepEqual(cursors(fetchCalls), stepsFrom100(9), 'the chain runs to the last page, and no further');
+  assert.equal(sentinelsIn(root).length, 0, 'no older page remains, so no sentinel row');
+});
+
+test('a server that repeats its cursor ends the chain: the no-progress check is the bound', async () => {
+  // Pages 1 to 8 advance the cursor; page 9 answers has_more with the cursor it was asked for.
+  const {root, fetchCalls} = mountPagerCase(
+      pagedHistory((page) => quietPage(`p${page}`), {stuckAfter: 8}),
+      {session: WEB_SESSION, messages: FOR_YOU_TAIL, clientHeight: 300, baseHeight: 0, clampScrollTop: true});
+
+  await flush();
+
+  assert.deepEqual(cursors(fetchCalls), stepsFrom100(9), 'the repeated cursor is the last request');
+  assert.equal(sentinelsIn(root).length, 0, 'the repeat counts as the end of history');
 });

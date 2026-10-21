@@ -151,6 +151,10 @@ const CHAT_MESSAGES = [
   { role: 'assistant', id: 'a2', timestamp: '2026-07-30T12:00:06Z', content: '<tool_call>raw protocol text</tool_call>' },
   { role: 'system', id: 's1', timestamp: '2026-07-30T12:00:07Z', content: 'Context compacted (auto)', kind: 'context_compacted' },
   {
+    role: 'system', id: 're1', timestamp: '2026-07-30T12:00:07Z', kind: 'run_error', line_count: 2,
+    content: 'Error: backend exited\nTraceback line',
+  },
+  {
     role: 'task_delegated', id: 't1', timestamp: '2026-07-30T12:00:08Z', thread_id: 'th-1',
     delegate_invocation: {
       task_type: 'implement', repo_path: '/repo', base_branch: 'main',

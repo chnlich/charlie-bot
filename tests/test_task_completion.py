@@ -12,7 +12,7 @@ import pytest
 
 from src.infra import event_types as ET
 from src.infra import models
-from src.runtime import run_token, task_completion, task_errors, task_sessions
+from src.runtime import run_token, runs, task_completion, task_errors, task_sessions
 
 
 def live_identity() -> tuple[int, str, datetime.datetime]:
@@ -22,6 +22,30 @@ def live_identity() -> tuple[int, str, datetime.datetime]:
   pair = runs.read_pid_stat(proc.pid)
   assert pair is not None
   return proc.pid, pair[0], datetime.datetime.now(datetime.UTC)
+
+
+async def register_isolated_sleep_run(
+    tree: task_sessions.TaskTreeManager,
+    session_id: str,
+    run_id: str,
+    *,
+    sequence_ref: models.SequenceRef | None = None,
+) -> subprocess.Popen:
+  """Register a real run process in its own process group."""
+  proc = subprocess.Popen(["/bin/sleep", "60"], start_new_session=True)
+  pair = runs.read_pid_stat(proc.pid)
+  assert pair is not None
+  await tree.runs.register_run(
+      models.RunRecord(
+          id=run_id,
+          session_id=session_id,
+          kind="work",
+          pid=proc.pid,
+          pid_start=pair[0],
+          started_at=datetime.datetime.now(datetime.UTC),
+          sequence_ref=sequence_ref,
+      ))
+  return proc
 
 
 async def finish_worker_run(tree: task_sessions.TaskTreeManager, session_id: str, run_id: str) -> None:
@@ -308,67 +332,97 @@ async def test_saved_request_blocked_after_its_run_wakes_the_requester_once(tmp_
 @pytest.mark.asyncio
 async def test_agent_cancels_only_its_own_direct_child(tmp_path: pathlib.Path) -> None:
   """An agent cancels a direct child of its own task (the close fact records
-  the agent as the actor); every other target — grandchild, sibling, parent,
-  self, unrelated root — is refused, and an active run still blocks."""
+  the agent as the actor); a sibling, grandchild, and unrelated root with
+  live Runs remain untouched by forbidden requests."""
   _cfg, _session_blocks, tree = conftest.build_env(tmp_path)
   root = await conftest.create_task(tree, parent=None, request_id="root")
   manager = await conftest.create_task(tree, parent=root.id, request_id="mgr")
-  sibling = await conftest.create_task(tree, parent=root.id, request_id="sib")
+  sibling = await conftest.create_task(tree, parent=root.id, request_id="sib", profile="worker")
   worker = await conftest.create_task(tree, parent=manager.id, request_id="worker", profile="worker")
   # The grandchild shape: a logical-manager child of the agent's own task with
   # a child of its own — two levels below the agent's task, never a direct one.
   sub = await conftest.create_task(tree, parent=manager.id, request_id="sub")
-  grandchild = await conftest.create_task(tree, parent=sub.id, request_id="grand")
-  unrelated = await conftest.create_task(tree, parent=None, request_id="unrelated")
+  grandchild = await conftest.create_task(tree, parent=sub.id, request_id="grand", profile="worker")
+  unrelated = await conftest.create_task(tree, parent=None, request_id="unrelated", profile="worker")
   agent = run_token.CallerIdentity(
       kind="agent", claims=run_token.RunTokenClaims(run_id="run-mgr", session_id=manager.id, agent="manager-agent"))
 
-  # Out of scope: grandchild, sibling, parent, self, and an unrelated root.
-  for target, request_id in ((grandchild, "cancel-g"), (sibling, "cancel-s"), (root, "cancel-p"),
-                             (manager, "cancel-self"), (unrelated, "cancel-u")):
-    with pytest.raises(task_errors.TaskForbiddenError, match="direct child"):
-      await tree.completion.cancel_task(target.id, request_id=request_id, reason="x", caller=agent)
+  processes = {
+      sibling.id: await register_isolated_sleep_run(tree, sibling.id, "run-sibling"),
+      grandchild.id: await register_isolated_sleep_run(tree, grandchild.id, "run-grandchild"),
+      unrelated.id: await register_isolated_sleep_run(tree, unrelated.id, "run-unrelated"),
+  }
+  try:
+    # Out of scope: grandchild, sibling, parent, self, and an unrelated root.
+    for target, request_id in ((grandchild, "cancel-g"), (sibling, "cancel-s"), (root, "cancel-p"),
+                               (manager, "cancel-self"), (unrelated, "cancel-u")):
+      with pytest.raises(task_errors.TaskForbiddenError, match="direct child"):
+        await tree.completion.cancel_task(target.id, request_id=request_id, reason="x", caller=agent)
+      if target.id in processes:
+        assert processes[target.id].poll() is None
 
-  # Its own direct child cancels; the close fact's actor is the agent, and the
-  # cancelled report reaches the caller's own task like any child report.
-  await tree.completion.cancel_task(worker.id, request_id="cancel-w", reason="obsolete delegation", caller=agent)
-  close = [e for e in tree.events.load_events(worker.id) if e["type"] == ET.TASK_CLOSED]
-  assert len(close) == 1 and close[0]["outcome"] == "cancelled" and close[0]["actor"] == "agent"
-  reports = [
-      e for e in tree.events.load_events(manager.id)
-      if e["type"] == ET.CHILD_REPORT and e["child_session_id"] == worker.id
-  ]
-  assert len(reports) == 1 and reports[0]["outcome"] == "cancelled"
+    # Its own direct child cancels; the close fact's actor is the agent, and the
+    # cancelled report reaches the caller's own task like any child report.
+    await tree.completion.cancel_task(worker.id, request_id="cancel-w", reason="obsolete delegation", caller=agent)
+    close = [e for e in tree.events.load_events(worker.id) if e["type"] == ET.TASK_CLOSED]
+    assert len(close) == 1 and close[0]["outcome"] == "cancelled" and close[0]["actor"] == "agent"
+    reports = [
+        e for e in tree.events.load_events(manager.id)
+        if e["type"] == ET.CHILD_REPORT and e["child_session_id"] == worker.id
+    ]
+    assert len(reports) == 1 and reports[0]["outcome"] == "cancelled"
 
-  # An active run on the direct child still refuses the agent (same 409 shape
-  # as the operator path: agents never stop a child's run).
-  worker2 = await conftest.create_task(tree, parent=manager.id, request_id="worker2", profile="worker")
-  pid, pid_start, started_at = live_identity()
-  await tree.runs.register_run(
-      models.RunRecord(
-          id="run-w2", session_id=worker2.id, kind="work", pid=pid, pid_start=pid_start, started_at=started_at))
-  with pytest.raises(task_errors.TaskConflictError):
-    await tree.completion.cancel_task(worker2.id, request_id="cancel-w2", reason="x", caller=agent)
+    # A queued agent message stays on the cancelled worker and cannot start a
+    # replacement Run after the live Run stops.
+    worker2 = await conftest.create_task(tree, parent=manager.id, request_id="worker2", profile="worker")
+    proc = await register_isolated_sleep_run(tree, worker2.id, "run-w2")
+    try:
+      await tree.dispatch.admit_input(root.id, event_type=ET.USER, content="user request", actor="user")
+      await tree.dispatch.admit_input(
+          worker2.id,
+          event_type=ET.AGENT_MESSAGE,
+          content="continue after this run",
+          actor="agent",
+          from_session=manager.id)
+      result = await tree.completion.cancel_task(worker2.id, request_id="cancel-w2", reason="x", caller=agent)
+      assert proc.poll() is not None
+      assert tree.task_state(worker2.id) == "cancelled"
+      assert result["stopped_runs"] == [{"run_id": "run-w2", "outcome": "interrupted"}]
+      assert len(tree.runs.list_run_records_sync(worker2.id)) == 1
+      reports = [
+          e for e in tree.events.load_events(manager.id)
+          if e["type"] == ET.CHILD_REPORT and e["child_session_id"] == worker2.id
+      ]
+      assert len(reports) == 1
+    finally:
+      if proc.poll() is None:
+        proc.kill()
+      proc.wait(timeout=1)
+  finally:
+    for proc in processes.values():
+      if proc.poll() is None:
+        proc.kill()
+      proc.wait(timeout=1)
 
 
 @pytest.mark.asyncio
-async def test_cancel_waits_for_a_queued_run_only_until_its_stop_request(tmp_path: pathlib.Path) -> None:
-  """A queued (pid-less) run blocks the cancel like any unresolved execution;
-  a durable stop request settles it and the cancel succeeds."""
+async def test_cancel_stops_a_queued_worker_run_without_launching_it(tmp_path: pathlib.Path) -> None:
+  """A queued worker Run is stopped by the cancellation and never launches."""
   _cfg, _session_blocks, tree = conftest.build_env(tmp_path)
   root = await conftest.create_task(tree, parent=None, request_id="root")
   child = await conftest.create_task(tree, parent=root.id, request_id="child", profile="worker")
   await tree.runs.register_run(models.RunRecord(id="run-queued", session_id=child.id, kind="work"))
 
-  with pytest.raises(task_errors.TaskConflictError, match="queued"):
-    await tree.completion.cancel_task(child.id, request_id="cancel-1", reason="not yet", caller=conftest.OPERATOR)
-
-  stop = await tree.runs.request_stop(child.id, "run-queued", "stop-1")
-  assert stop.stop_requested is True and stop.outcome is None
-  await tree.completion.cancel_task(
-      child.id, request_id="cancel-2", reason="stopped work is settled", caller=conftest.OPERATOR)
+  result = await tree.completion.cancel_task(
+      child.id, request_id="cancel-1", reason="stopped work is settled", caller=conftest.OPERATOR)
+  repeated = await tree.completion.cancel_task(
+      child.id, request_id="cancel-1", reason="stopped work is settled", caller=conftest.OPERATOR)
   close = [e for e in tree.events.load_events(child.id) if e["type"] == ET.TASK_CLOSED]
   assert len(close) == 1 and close[0]["outcome"] == "cancelled"
+  assert result == repeated
+  assert result["stopped_runs"] == [{"run_id": "run-queued", "outcome": "never_launched"}]
+  stops = [e for e in tree.events.load_events(child.id) if e["type"] == ET.RUN_STOP_REQUESTED]
+  assert len(stops) == 1 and stops[0]["request_id"] == "cancel:cancel-1"
   # The queued run keeps its no-terminal-fact shape: settled by request, not
   # by an outcome.
   runs = tree.runs.list_run_records_sync(child.id)
@@ -376,12 +430,106 @@ async def test_cancel_waits_for_a_queued_run_only_until_its_stop_request(tmp_pat
   assert tree.runs.terminal_outcome(tree.runs.load_events_sync(child.id), "run-queued") is None
 
 
+@pytest.mark.asyncio
+async def test_cancel_of_manager_with_a_live_run_keeps_the_run_alive(tmp_path: pathlib.Path) -> None:
+  _cfg, _session_blocks, tree = conftest.build_env(tmp_path)
+  parent = await conftest.create_task(tree, parent=None, request_id="manager-parent")
+  manager = await conftest.create_task(tree, parent=parent.id, request_id="manager-child", profile="manager")
+  proc = await register_isolated_sleep_run(tree, manager.id, "run-manager")
+  try:
+    with pytest.raises(task_errors.TaskConflictError, match="active"):
+      await tree.completion.cancel_task(
+          manager.id, request_id="cancel-manager", reason="stop", caller=conftest.OPERATOR)
+    assert proc.poll() is None
+    assert tree.task_state(manager.id) == "open"
+  finally:
+    if proc.poll() is None:
+      proc.kill()
+    proc.wait(timeout=1)
+
+
+@pytest.mark.asyncio
+async def test_cancel_refuses_a_live_sequence_run_without_writing_facts(tmp_path: pathlib.Path) -> None:
+  _cfg, _session_blocks, tree = conftest.build_env(tmp_path)
+  parent = await conftest.create_task(tree, parent=None, request_id="sequence-parent")
+  worker = await conftest.create_task(tree, parent=parent.id, request_id="sequence-worker", profile="worker")
+  proc = await register_isolated_sleep_run(
+      tree,
+      worker.id,
+      "run-sequence",
+      sequence_ref=models.SequenceRef(kind="improve", owner_ref="improve:one", position=0))
+  before = tree.events.load_events(worker.id)
+  try:
+    with pytest.raises(task_errors.TaskConflictError, match="sequence controller"):
+      await tree.completion.cancel_task(
+          worker.id, request_id="cancel-sequence", reason="stop", caller=conftest.OPERATOR)
+    assert proc.poll() is None
+    assert tree.events.load_events(worker.id) == before
+    assert tree.task_state(worker.id) == "open"
+  finally:
+    if proc.poll() is None:
+      proc.kill()
+    proc.wait(timeout=1)
+
+
+@pytest.mark.asyncio
+async def test_failure_report_reaching_lock_after_cancel_is_skipped(tmp_path: pathlib.Path) -> None:
+  cfg, session_blocks, tree = conftest.build_env(tmp_path)
+  parent = await conftest.create_task(tree, parent=None, request_id="failure-parent")
+  worker = await conftest.create_task(tree, parent=parent.id, request_id="failure-worker", profile="worker")
+  await tree.runs.register_run(models.RunRecord(id="run-failed", session_id=worker.id, kind="work"))
+  await tree.runs.record_finish(worker.id, "run-failed", "failed")
+  await tree.completion.cancel_task(
+      worker.id, request_id="cancel-before-report", reason="stop", caller=conftest.OPERATOR)
+  report_count = len([e for e in tree.events.load_events(parent.id) if e.get("type") == ET.CHILD_REPORT])
+  archive_calls: list[str] = []
+
+  async def record_archive(session_id: str, *, run_id: str, outcome: str) -> bool:
+    archive_calls.append(session_id)
+    return False
+
+  tree.archive_unsuccessful_worker = record_archive
+  adapter = conftest.build_execution_adapter(cfg, session_blocks, tree)
+  run = await tree.runs.get_run(worker.id, "run-failed")
+  assert run is not None
+  await adapter._report_failure_to_parent(worker.id, run, "failed", summary="late failure")
+
+  reports = [e for e in tree.events.load_events(parent.id) if e.get("type") == ET.CHILD_REPORT]
+  assert len(reports) == report_count == 1
+  assert archive_calls == []
+
+
+@pytest.mark.asyncio
+async def test_successful_work_on_closed_worker_does_not_register_review(tmp_path: pathlib.Path) -> None:
+  cfg, session_blocks, tree = conftest.build_env(tmp_path)
+  parent = await conftest.create_task(tree, parent=None, request_id="review-parent")
+  worker = await conftest.create_task(
+      tree,
+      parent=parent.id,
+      request_id="review-worker",
+      profile="worker",
+      task=models.TaskSpec(task_type=models.TaskType.IMPLEMENT))
+  await tree.runs.register_run(models.RunRecord(id="run-work", session_id=worker.id, kind="work"))
+  await tree.runs.record_finish(worker.id, "run-work", "success")
+  await tree.completion.cancel_task(
+      worker.id, request_id="cancel-before-review", reason="stop", caller=conftest.OPERATOR)
+  adapter = conftest.build_execution_adapter(cfg, session_blocks, tree)
+  tree.dispatch.executor = adapter
+  meta = await tree.load_task_meta(worker.id)
+  run = await tree.runs.get_run(worker.id, "run-work")
+  await adapter._after_worker_run(meta, run, "success")
+
+  run_records = tree.runs.list_run_records_sync(worker.id)
+  reports = [e for e in tree.events.load_events(parent.id) if e.get("type") == ET.CHILD_REPORT]
+  assert [record.id for record in run_records] == ["run-work"]
+  assert len(reports) == 1
+
+
 # ---------------------------------------------------------------------------
 # Who closed the gate: the parent's own turn skips the wake, others wake it
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.integration
 @pytest.mark.asyncio
 async def test_cancel_by_the_manager_parent_records_close_and_child_report(tmp_path: pathlib.Path) -> None:
   """Cancelling a worker preserves its close fact and reports the result to its manager node."""

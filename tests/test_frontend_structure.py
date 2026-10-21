@@ -39,6 +39,8 @@ package's script registers a handler with it at load time. The core registration
     Chat.registerInputMode      web/static/js/chat/attachments.js (an input mode and its user-bubble badge)
     Chat.registerMessagePostProcessor
                                 web/static/js/chat/rendering.js (a pass over each rendered message root)
+    Chat.registerProjectionCheck
+                                web/static/js/chat/turn-engine.js (the page's check, run after each projection that ran)
     Chat.registerSeparatorButton
                                 web/static/js/chat/rendering.js (a button on each separator line)
     Chat.registerSeparatorPanel web/static/js/chat/turn-engine.js (a panel under a separator line that the engine reopens)
@@ -52,6 +54,10 @@ package's script registers a handler with it at load time. The core registration
     registerWorkspaceBadge      web/static/js/sidebar/filters.js (a badge at the top of the Workspace list)
     registerWsConnectHandler    web/static/js/websocket.js (a handler of every socket (re)connect)
     registerWsMessageHandler    web/static/js/websocket.js (the handler of one WebSocket event type)
+
+A package that adds an item to a core menu needs no registration entry: it appends its own
+element to the menu's container (the voice package adds the composer ⋯ menu's Voice backend
+entry to #overflow-menu), so the core markup names nothing the package defines.
 
 Core announces a moment that needs no answer as a CustomEvent on document, and a package listens
 for it. The core page events today:

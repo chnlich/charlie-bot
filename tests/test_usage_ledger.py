@@ -58,7 +58,7 @@ def test_one_record_id_from_two_hosts_counts_once(tmp_path):
   with usage_ledger.UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
     assert ledger.record_file("host-a", "/logs/a.jsonl", "sig-a", [rec]) == 1
     assert ledger.record_file("host-b", "/logs/b.jsonl", "sig-b", [rec]) == 1
-    rows = ledger.model_rows()
+    rows = ledger.model_rows_with_native_starts()[0]
   assert len(rows) == 1
   assert rows[0].calls == 1
   assert rows[0].output == 5
@@ -70,12 +70,12 @@ def test_fallback_excluded_once_any_session_is_native(tmp_path):
   native = _record("rec-native", usage_sources.RecordKind.NATIVE, sessions=("sess-a",), model="model-native")
   with usage_ledger.UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
     ledger.record_file(HOST, "/logs/fb.jsonl", "sig-fb", [fb])
-    rows = ledger.model_rows()
+    rows = ledger.model_rows_with_native_starts()[0]
     assert {row.model for row in rows} == {"model-fb"}
     assert rows[0].fallback_calls == 1
     assert rows[0].fallback_output == 5
     ledger.record_file(HOST, "/logs/native.jsonl", "sig-native", [native])
-    models = {row.model for row in ledger.model_rows()}
+    models = {row.model for row in ledger.model_rows_with_native_starts()[0]}
   assert models == {"model-native"}
 
 
@@ -85,11 +85,11 @@ def test_rows_equal_for_either_write_order(tmp_path):
   with usage_ledger.UsageLedger(tmp_path / "native-first.sqlite3") as ledger:
     ledger.record_file(HOST, "/logs/native.jsonl", "sig-n", [native])
     ledger.record_file(HOST, "/logs/fb.jsonl", "sig-f", [fb])
-    native_first = ledger.model_rows()
+    native_first = ledger.model_rows_with_native_starts()[0]
   with usage_ledger.UsageLedger(tmp_path / "fallback-first.sqlite3") as ledger:
     ledger.record_file(HOST, "/logs/fb.jsonl", "sig-f", [fb])
     ledger.record_file(HOST, "/logs/native.jsonl", "sig-n", [native])
-    fallback_first = ledger.model_rows()
+    fallback_first = ledger.model_rows_with_native_starts()[0]
   assert native_first == fallback_first
   assert len(native_first) == 1
   row = native_first[0]
@@ -110,7 +110,7 @@ def test_empty_ts_never_becomes_first_or_last(tmp_path):
   blank = _record("rec-blank", usage_sources.RecordKind.NATIVE, sessions=("sess-c",), ts="", model="model-blank")
   with usage_ledger.UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
     ledger.record_file(HOST, "/logs/a.jsonl", "sig-a", [empty, early, late, blank])
-    rows = {row.model: row for row in ledger.model_rows()}
+    rows = {row.model: row for row in ledger.model_rows_with_native_starts()[0]}
   # The empty-ts record still counts, but never anchors the span: the dated ones do.
   assert rows["model-a"].calls == 3
   assert rows["model-a"].first == "2026-01-10"
@@ -127,7 +127,7 @@ def test_reupserted_native_keeps_first_session_registered(tmp_path):
     ledger.record_file(HOST, "/logs/one.jsonl", "sig-1", [first])
     ledger.record_file(HOST, "/logs/two.jsonl", "sig-2", [second])
     ledger.record_file(HOST, "/logs/fb.jsonl", "sig-fb", [fb])
-    models = {row.model for row in ledger.model_rows()}
+    models = {row.model for row in ledger.model_rows_with_native_starts()[0]}
   # The upsert replaced the native row but only added a session: sess-a stays
   # registered, so the fallback carrying it is still presumed restated.
   assert models == {"model-a"}
@@ -140,9 +140,9 @@ def test_rewrite_identical_records_leaves_rows_unchanged(tmp_path):
   ]
   with usage_ledger.UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
     ledger.record_file(HOST, "/logs/a.jsonl", "sig-a", recs)
-    before = ledger.model_rows()
+    before = ledger.model_rows_with_native_starts()[0]
     ledger.record_file(HOST, "/logs/a.jsonl", "sig-a", recs)
-    after = ledger.model_rows()
+    after = ledger.model_rows_with_native_starts()[0]
     sigs = ledger.captured_sigs(HOST)
   assert before == after
   assert sigs == {"/logs/a.jsonl": "sig-a"}
@@ -172,7 +172,7 @@ def test_unknown_stored_kind_raises_on_model_rows(tmp_path):
         ("rec-x", "replayed", SOURCE, "model-x", "acct-a", HOST, TS_A, 1, 0, 0, 2, "/logs/x.jsonl", TS_A))
     ledger._conn.commit()
     with pytest.raises(ValueError):
-      ledger.model_rows()
+      ledger.model_rows_with_native_starts()[0]
 
 
 def test_native_start_ignores_fallback_only_spans(tmp_path):
@@ -220,7 +220,7 @@ def test_agg_read_tracks_the_table_through_every_write_shape(tmp_path):
   a cross-day rewrite, a same-group-day insert, a counted fallback retired by a native
   session, a fallback born excluded, an excluded row rewritten, an empty-ts row, and a
   foreign row delete (the module never deletes, but a raw delete must not leave the
-  aggregate behind). Every step checks both served paths: model_rows -- memo, fold, or
+  aggregate behind). Every step checks both served paths: the page rows -- memo, fold, or
   aggregate -- and the trigger-maintained aggregate itself."""
   moved = _record("rec-moved", usage_sources.RecordKind.NATIVE, sessions=("sess-m",), ts=TS_A, output=5)
   fb = _record("rec-fb", usage_sources.RecordKind.FALLBACK, sessions=("sess-x",), model="model-fb", ts=TS_B, output=7)
@@ -229,11 +229,11 @@ def test_agg_read_tracks_the_table_through_every_write_shape(tmp_path):
   with usage_ledger.UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
 
     def assert_served_on_the_table() -> None:
-      assert ledger.model_rows() == _table_pass_rows(ledger)
+      assert ledger.model_rows_with_native_starts()[0] == _table_pass_rows(ledger)
       assert _agg_rows(ledger) == _table_pass_rows(ledger)
 
     ledger.record_file(HOST, "/logs/m.jsonl", "sig-m", [moved, fb, empty])
-    ledger.model_rows()  # the backfill; the aggregate serves from here
+    ledger.model_rows_with_native_starts()[0]  # the backfill; the aggregate serves from here
     assert_served_on_the_table()
     moved_grown = _record("rec-moved", usage_sources.RecordKind.NATIVE, sessions=("sess-m",), ts=TS_B, output=9)
     ledger.record_file(HOST, "/logs/m.jsonl", "sig-m2", [moved_grown])
@@ -265,7 +265,7 @@ def test_previous_release_write_order_never_counts_a_born_excluded_fallback(tmp_
   path = tmp_path / "ledger.sqlite3"
   with usage_ledger.UsageLedger(path) as ledger:
     ledger.record_file(HOST, "/logs/native.jsonl", "sig-native", [native])
-    expected = ledger.model_rows()  # the backfill runs, the aggregate serves from here
+    expected = ledger.model_rows_with_native_starts()[0]  # the backfill runs, the aggregate serves from here
     # The previous release's order, written through raw SQL exactly as its record_file did:
     conn = sqlite3.connect(path)
     try:
@@ -278,7 +278,7 @@ def test_previous_release_write_order_never_counts_a_born_excluded_fallback(tmp_
       conn.commit()
     finally:
       conn.close()
-    rows = ledger.model_rows()
+    rows = ledger.model_rows_with_native_starts()[0]
   assert [row.model for row in expected] == ["model-native"]
   assert [row.model for row in rows] == ["model-native"]
 
@@ -303,7 +303,7 @@ def test_backfill_prices_a_ledger_written_before_the_aggregate(tmp_path):
   finally:
     raw.close()
   with usage_ledger.UsageLedger(path) as ledger:
-    rows = ledger.model_rows()
+    rows = ledger.model_rows_with_native_starts()[0]
   assert [row.model for row in rows] == ["model-a", "model-b"]
   assert rows[0].calls == 1 and rows[1].calls == 1
 
@@ -314,12 +314,12 @@ def test_backfilled_read_serves_the_aggregate_not_the_table_pass(tmp_path):
   rec = _record("rec-1", usage_sources.RecordKind.NATIVE, sessions=("sess-a",))
   with usage_ledger.UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
     ledger.record_file(HOST, "/logs/a.jsonl", "sig-a", [rec])
-    ledger.model_rows()  # first read runs the backfill
+    ledger.model_rows_with_native_starts()[0]  # first read runs the backfill
     expected = _table_pass_rows(ledger)  # the ground truth, traced or not
     ran: list[str] = []
     ledger._conn.set_trace_callback(ran.append)
     try:
-      rows = ledger.model_rows()
+      rows = ledger.model_rows_with_native_starts()[0]
     finally:
       ledger._conn.set_trace_callback(None)
     assert rows == expected
@@ -334,11 +334,11 @@ def test_dropped_aggregate_table_reprices_on_the_next_read(tmp_path):
   path = tmp_path / "ledger.sqlite3"
   with usage_ledger.UsageLedger(path) as ledger:
     ledger.record_file(HOST, "/logs/a.jsonl", "sig-a", [rec])
-    expected = ledger.model_rows()
+    expected = ledger.model_rows_with_native_starts()[0]
     ledger._conn.execute("DROP TABLE usage_agg")
     ledger._conn.commit()
   with usage_ledger.UsageLedger(path) as ledger:  # the reopen's schema script rebuilds the table
-    rows = ledger.model_rows()
+    rows = ledger.model_rows_with_native_starts()[0]
   assert rows == expected
 
 
@@ -351,7 +351,7 @@ def test_backfilled_aggregate_counts_later_same_group_day_writes(tmp_path):
   third = _record("rec-3", usage_sources.RecordKind.NATIVE, sessions=("sess-c",), output=7)
   with usage_ledger.UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
     ledger.record_file(HOST, "/logs/a.jsonl", "sig-a", [first])
-    ledger.model_rows()  # the backfill; the aggregate serves from here
+    ledger.model_rows_with_native_starts()[0]  # the backfill; the aggregate serves from here
     ledger.record_file(HOST, "/logs/a.jsonl", "sig-a2", [second, third])
     served = _agg_rows(ledger)
     assert served == _table_pass_rows(ledger)
@@ -369,7 +369,7 @@ def test_rewrite_within_a_shared_group_day_keeps_the_aggregate_on_the_table(tmp_
   rewritten = _record("rec-2", usage_sources.RecordKind.NATIVE, sessions=("sess-b",), output=50)
   with usage_ledger.UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
     ledger.record_file(HOST, "/logs/a.jsonl", "sig-a", records)
-    ledger.model_rows()  # the backfill
+    ledger.model_rows_with_native_starts()[0]  # the backfill
     ledger.record_file(HOST, "/logs/a.jsonl", "sig-a2", [rewritten])
     served = _agg_rows(ledger)
     assert served == _table_pass_rows(ledger)
@@ -392,13 +392,13 @@ def test_ledger_without_index_gains_it_on_reopen(tmp_path):
   path = tmp_path / "ledger.sqlite3"
   with usage_ledger.UsageLedger(path) as ledger:
     ledger.record_file(HOST, "/logs/a.jsonl", "sig-a", [rec])
-    before = ledger.model_rows()
+    before = ledger.model_rows_with_native_starts()[0]
     ledger._conn.execute("DROP INDEX usage_group_cover")
     ledger._conn.commit()
   with usage_ledger.UsageLedger(path) as ledger:
     names = {row["name"] for row in ledger._conn.execute("SELECT name FROM sqlite_master WHERE type = 'index'")}
     assert "usage_group_cover" in names
-    assert ledger.model_rows() == before
+    assert ledger.model_rows_with_native_starts()[0] == before
 
 
 def test_model_rows_plan_scans_the_cover_index_without_analyze(tmp_path):
@@ -485,7 +485,7 @@ def test_ts_conflict_keeps_the_earlier_non_empty_value(tmp_path):
     ledger.record_file(HOST, "/logs/a.jsonl", "sig-a4", [blank])
     stored = ledger._conn.execute("SELECT ts FROM usage WHERE record_id = 'rec-1'").fetchone()[0]
     assert stored == "2026-01-09T07:00:00+00:00"
-    assert ledger.model_rows() == _table_pass_rows(ledger)
+    assert ledger.model_rows_with_native_starts()[0] == _table_pass_rows(ledger)
 
 
 def _snapshot(conn) -> tuple[list[tuple], list[tuple], list[tuple]]:
@@ -508,7 +508,7 @@ def test_in_unsplit_shows_on_every_read_path(tmp_path):
   with usage_ledger.UsageLedger(path) as ledger:
     ledger.record_file(HOST, "/logs/a.jsonl", "sig-a", [first])
     assert [(row.in_unsplit, row.total) for row in _table_pass_rows(ledger)] == [(7, 27)]
-    ledger.model_rows()  # the first read runs the backfill
+    ledger.model_rows_with_native_starts()[0]  # the first read runs the backfill
     ledger.record_file(HOST, "/logs/b.jsonl", "sig-b", [second])
     served, _ = ledger.model_rows_with_native_starts()
     assert [(row.in_unsplit, row.total) for row in served if row.model == "model-b"] == [(7, 27)]
@@ -529,9 +529,9 @@ def test_in_unsplit_only_rewrite_keeps_the_aggregate_on_the_table(tmp_path):
   path = tmp_path / "ledger.sqlite3"
   with usage_ledger.UsageLedger(path) as ledger:
     ledger.record_file(HOST, "/logs/a.jsonl", "sig-a", [first])
-    ledger.model_rows()  # the backfill; later reads serve the aggregate
+    ledger.model_rows_with_native_starts()[0]  # the backfill; later reads serve the aggregate
     ledger.record_file(HOST, "/logs/a.jsonl", "sig-a2", [rewritten])
-    rows = ledger.model_rows()
+    rows = ledger.model_rows_with_native_starts()[0]
     assert rows == _table_pass_rows(ledger)
   assert [(row.in_unsplit, row.total) for row in rows] == [(7, 27)]
 
@@ -688,7 +688,7 @@ def test_open_swaps_pre_fix_trigger_bodies_and_reprices_the_aggregate(tmp_path):
     assert served == _table_pass_rows(ledger)
   assert [(row.calls, row.output) for row in served] == [(3, 18)]
   with usage_ledger.UsageLedger(path) as ledger:
-    ledger.model_rows()
+    ledger.model_rows_with_native_starts()[0]
     before, triggers = _snapshot(ledger._conn), _trigger_sqls(ledger._conn)
   with usage_ledger.UsageLedger(path) as ledger:
     after, triggers_again = _snapshot(ledger._conn), _trigger_sqls(ledger._conn)
@@ -747,7 +747,7 @@ def test_batch_lands_every_recorded_file_in_one_commit(tmp_path):
     assert reader.last_capture_at(HOST) is not None
   with usage_ledger.UsageLedger(path) as reopened:
     # The three records share one (source, model, day) group, so the page rows aggregate them.
-    assert [row.calls for row in reopened.model_rows()] == [3]
+    assert [row.calls for row in reopened.model_rows_with_native_starts()[0]] == [3]
 
 
 def test_failed_file_inside_a_batch_keeps_earlier_files_and_drops_its_own(tmp_path):

@@ -5,8 +5,10 @@ import pathlib
 import signal
 import sys
 import time
+from collections.abc import AsyncIterator
 from unittest import mock
 
+import httpx
 import pytest
 import pytest_asyncio
 
@@ -62,6 +64,11 @@ def _requests(fake_oc: pathlib.Path, method: str, path_prefix: str) -> list[dict
   ]
 
 
+async def _loaded_directories(shared: server.OpenCodeServer) -> set[str]:
+  response = await shared.client.get("/api/debug/location")
+  return {entry["directory"] for entry in response.json()}
+
+
 async def _run_turn(backend: opencode.OpenCodeBackend,
                     prompt: str,
                     cwd: pathlib.Path,
@@ -115,6 +122,7 @@ def test_server_env_drops_the_run_identity_and_points_xdg_at_the_store(fake_oc, 
   assert "CHARLIEBOT_SESSION_ID" not in env
   assert env["XDG_DATA_HOME"] == str(fake_oc / "profile" / "opencode" / "data")
   assert env["OPENCODE_SERVER_PASSWORD"] == "pw"
+  assert env["OPENCODE_DISABLE_FFF"] == "1"
   assert "HTTP_PROXY" not in env
   proxied = server.OpenCodeServer("http://proxy.test:8080").server_env("pw")
   assert proxied["HTTPS_PROXY"] == "http://proxy.test:8080"
@@ -245,6 +253,291 @@ def test_image_attachments_become_data_urls_and_other_files_are_skipped(tmp_path
   ]
   attachments = opencode._image_file_attachments(refs)
   assert attachments == [{"uri": "data:image/png;base64,iVBORw==", "name": "a.png"}]
+
+
+class _Locations:
+  """A MockTransport handler for the debug-location routes: a loaded set, and the calls made against it."""
+
+  def __init__(self, loaded: list[str], status: int = 204) -> None:
+    self.loaded = loaded
+    self.status = status
+    self.calls: list[str] = []
+
+  def __call__(self, request: httpx.Request) -> httpx.Response:
+    if request.method == "GET" and request.url.path == "/api/debug/location":
+      self.calls.append("list")
+      return httpx.Response(200, json=[{"directory": directory} for directory in self.loaded])
+    if request.method == "DELETE" and request.url.path == "/api/debug/location":
+      directory = request.url.params["location[directory]"]
+      self.calls.append(f"release {directory}")
+      return httpx.Response(self.status)
+    raise AssertionError(f"unexpected request {request.method} {request.url}")
+
+
+def _release_server(locations: _Locations) -> server.OpenCodeServer:
+  """A shared server whose process reads as running and whose client answers from *locations*; no process starts."""
+  shared = server.OpenCodeServer(None)
+  shared._proc = mock.Mock(pid=1, returncode=None)
+  shared._client = httpx.AsyncClient(base_url="http://opencode.test", transport=httpx.MockTransport(locations))
+  return shared
+
+
+@pytest.mark.asyncio
+async def test_release_unloads_each_unclaimed_directory_and_keeps_the_claimed_ones():
+  locations = _Locations(["/w/a", "/w/b", "/w/c"])
+  shared = _release_server(locations)
+  await shared.claim("/w/a")
+  await shared.claim("/w/b")
+  await shared.release_claim("/w/b")
+  assert locations.calls == ["list", "release /w/b", "release /w/c"]
+  assert shared._claims == {"/w/a": 1}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["stopping", "exited", "starting"])
+async def test_release_is_skipped_unless_the_server_is_running(state):
+  locations = _Locations(["/w/a"])
+  shared = _release_server(locations)
+  await shared.claim("/w/a")
+  if state == "stopping":
+    shared._stopping = True
+  elif state == "exited":
+    shared._proc.returncode = 0
+  else:
+    shared._client = None
+  await shared.release_claim("/w/a")
+  assert locations.calls == []
+  assert not shared._claims
+
+
+@pytest.mark.asyncio
+async def test_failed_release_names_the_directory_and_the_status():
+  shared = _release_server(_Locations(["/w/a"], status=500))
+  await shared.claim("/w/b")
+  with pytest.raises(RuntimeError, match=r"release of directory /w/a returned HTTP 500"):
+    await shared.release_claim("/w/b")
+
+
+@pytest.mark.asyncio
+async def test_turn_end_steps_drop_the_claim_once_even_when_the_turn_steps_fail():
+  backend = opencode.OpenCodeBackend(model=MODEL)
+  backend._reset_run_state()
+  shared = mock.Mock(release_claim=mock.AsyncMock())
+  backend._claim = (shared, "/w/a")
+  # finish() fails once; its second call is the idempotent no-op it is on a real turn.
+  backend._turn = mock.Mock(finish=mock.AsyncMock(side_effect=[RuntimeError("interrupt failed"), None]))
+  with pytest.raises(RuntimeError, match="interrupt failed"):
+    await backend._turn_end_steps()
+  shared.release_claim.assert_awaited_once_with("/w/a")
+  await backend._turn_end_steps()
+  backend._turn.finish.assert_awaited_once()
+  shared.release_claim.assert_awaited_once_with("/w/a")
+
+
+def _idle_server() -> server.OpenCodeServer:
+  """A shared server whose process reads as running with no turn; its shutdown is recorded, not run."""
+  shared = server.OpenCodeServer(None)
+  shared._proc = mock.Mock(pid=4242, returncode=None)
+  shared._shutdown = mock.AsyncMock()
+  return shared
+
+
+def test_process_rss_reads_the_process_own_resident_memory() -> None:
+  assert server.process_rss_mb(os.getpid()) > 10
+
+
+@pytest.mark.asyncio
+async def test_heavy_server_stops_at_the_checkpoint_when_its_rss_is_above_the_limit(
+    monkeypatch: pytest.MonkeyPatch) -> None:
+  monkeypatch.setattr(opencode_limits, "OPENCODE_SERVER_HEAVY_CHECK_SECONDS", 0.01)
+  monkeypatch.setattr(opencode_limits, "OPENCODE_SERVER_IDLE_EXIT_SECONDS", 3600.0)
+  rss = mock.Mock(return_value=401.0)
+  monkeypatch.setattr(server, "process_rss_mb", rss)
+  shared = _idle_server()
+  # The idle limit is an hour away: a checkpoint that does not stop would time this out.
+  await asyncio.wait_for(shared._stop_when_idle(), timeout=2)
+  rss.assert_called_once_with(4242)
+  shared._shutdown.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_server_with_rss_at_the_limit_runs_on_to_the_idle_exit(monkeypatch: pytest.MonkeyPatch) -> None:
+  monkeypatch.setattr(opencode_limits, "OPENCODE_SERVER_HEAVY_CHECK_SECONDS", 0.01)
+  monkeypatch.setattr(opencode_limits, "OPENCODE_SERVER_IDLE_EXIT_SECONDS", 0.05)
+  rss = mock.Mock(return_value=400.0)
+  monkeypatch.setattr(server, "process_rss_mb", rss)
+  shared = _idle_server()
+  await asyncio.wait_for(shared._stop_when_idle(), timeout=2)
+  rss.assert_called_once_with(4242)
+  # The one shutdown is the idle exit after the rest of the idle limit, not the checkpoint.
+  shared._shutdown.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_a_claimed_directory_keeps_the_server_past_the_checkpoint_and_the_idle_exit(
+    monkeypatch: pytest.MonkeyPatch) -> None:
+  monkeypatch.setattr(opencode_limits, "OPENCODE_SERVER_HEAVY_CHECK_SECONDS", 0.01)
+  monkeypatch.setattr(opencode_limits, "OPENCODE_SERVER_IDLE_EXIT_SECONDS", 0.05)
+  rss = mock.Mock(return_value=900.0)
+  monkeypatch.setattr(server, "process_rss_mb", rss)
+  shared = _idle_server()
+  await shared.claim("/w/a")
+  await asyncio.wait_for(shared._stop_when_idle(), timeout=2)
+  rss.assert_not_called()
+  shared._shutdown.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_turn_claimed_during_heavy_shutdown_waits_for_the_new_server(monkeypatch: pytest.MonkeyPatch) -> None:
+  monkeypatch.setattr(opencode_limits, "OPENCODE_SERVER_HEAVY_CHECK_SECONDS", 0.01)
+  monkeypatch.setattr(opencode_limits, "OPENCODE_SERVER_IDLE_EXIT_SECONDS", 3600.0)
+  rss = mock.Mock(return_value=401.0)
+  monkeypatch.setattr(server, "process_rss_mb", rss)
+  shared = _idle_server()
+  previous_proc = shared._proc
+  shutdown_started = asyncio.Event()
+  finish_shutdown = asyncio.Event()
+  claimed = asyncio.Event()
+  completed = asyncio.Event()
+  started_pids: list[int] = []
+
+  async def shutdown() -> None:
+    shutdown_started.set()
+    await finish_shutdown.wait()
+    previous_proc.returncode = 0
+    shared._proc = None
+
+  async def start() -> None:
+    shared._stopping = False
+    shared._proc = mock.Mock(pid=4343, returncode=None)
+    started_pids.append(shared._proc.pid)
+
+  async def arriving_turn() -> None:
+    await shared.claim("/w/next")
+    claimed.set()
+    await shared.ensure_running()
+    completed.set()
+    await shared.release_claim("/w/next")
+
+  shared._shutdown = shutdown
+  shared._start = start
+  checkpoint = asyncio.create_task(shared._stop_when_idle())
+  await asyncio.wait_for(shutdown_started.wait(), timeout=1)
+  turn = asyncio.create_task(arriving_turn())
+  await asyncio.wait_for(claimed.wait(), timeout=1)
+  started_before_shutdown_finished = list(started_pids)
+  finish_shutdown.set()
+  await asyncio.wait_for(asyncio.gather(checkpoint, turn), timeout=1)
+
+  assert started_before_shutdown_finished == []
+  assert started_pids == [4343]
+  assert completed.is_set()
+  rss.assert_called_once_with(4242)
+
+
+@pytest.mark.asyncio
+async def test_idle_exit_does_not_stop_an_exited_process(monkeypatch: pytest.MonkeyPatch) -> None:
+  monkeypatch.setattr(opencode_limits, "OPENCODE_SERVER_HEAVY_CHECK_SECONDS", 0.01)
+  monkeypatch.setattr(opencode_limits, "OPENCODE_SERVER_IDLE_EXIT_SECONDS", 0.05)
+  rss = mock.Mock(return_value=401.0)
+  monkeypatch.setattr(server, "process_rss_mb", rss)
+  shared = _idle_server()
+  shared._proc.returncode = 0
+
+  await asyncio.wait_for(shared._stop_when_idle(), timeout=1)
+
+  rss.assert_not_called()
+  shared._shutdown.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "start_error",
+    [
+        "opencode 2.0 binary not found",
+        "opencode serve did not print its listening address",
+        "opencode reports 1.18.18",
+    ],
+)
+async def test_claim_is_held_before_the_server_starts_and_dropped_when_start_fails(
+    fake_oc: pathlib.Path, monkeypatch: pytest.MonkeyPatch, start_error: str) -> None:
+  backend = opencode.OpenCodeBackend(model=MODEL)
+  shared = server.OpenCodeServer(None)
+  directory = str(fake_oc / "dir")
+  claims_at_start: list[int] = []
+
+  async def failing_start() -> None:
+    claims_at_start.append(shared._claims[directory])
+    raise RuntimeError(start_error)
+
+  shared._start = failing_start
+  monkeypatch.setattr(server, "server_for", lambda _proxy_url: shared)
+  monkeypatch.setattr(backend, "_prepare_cwd", mock.Mock())
+  monkeypatch.setattr(backend, "_end_turn_process", mock.AsyncMock())
+
+  async def spawn_turn_process(_cwd: str, _env: dict) -> None:
+    backend._exit_task = asyncio.get_running_loop().create_future()
+
+  monkeypatch.setattr(backend, "_spawn_turn_process", spawn_turn_process)
+
+  events = await _run_turn(backend, "x", fake_oc / "dir")
+
+  assert claims_at_start == [1]
+  assert events[-1]["type"] == ET.ERROR and start_error in events[-1]["message"]
+  assert shared._claims[directory] == 0
+
+
+@pytest.mark.asyncio
+async def test_dropping_the_last_claim_rearms_the_idle_exit() -> None:
+  locations = _Locations(["/w/a"])
+  shared = _release_server(locations)
+  shared._idle = mock.Mock(done=mock.Mock(return_value=True))
+  await shared.claim("/w/a")
+
+  with mock.patch.object(shared, "_arm_idle") as arm_idle:
+    await shared.release_claim("/w/a")
+
+  arm_idle.assert_called_once_with()
+
+
+@pytest.mark.asyncio
+async def test_failed_release_is_reported_as_a_turn_error_event(monkeypatch) -> None:
+  backend = opencode.OpenCodeBackend(model=MODEL)
+  turn = mock.Mock()
+  turn.finish = mock.AsyncMock()
+  turn.drop_earlier_interrupts = mock.Mock()
+  shared = mock.Mock()
+  shared.ensure_running = mock.AsyncMock()
+  shared.claim = mock.AsyncMock()
+  shared.release_claim = mock.AsyncMock(
+      side_effect=RuntimeError("opencode release of directory /w/a returned HTTP 500"))
+  shared.register = mock.Mock(return_value=turn)
+  shared.wait_interrupts_settled = mock.AsyncMock()
+  monkeypatch.setattr(server, "server_for", lambda _proxy_url: shared)
+  monkeypatch.setattr(backend, "_prepare_cwd", mock.Mock())
+
+  async def spawn_turn_process(_cwd: str, _env: dict) -> None:
+    backend._exit_task = asyncio.get_running_loop().create_future()
+
+  async def consume_turn(_turn: server.Turn) -> AsyncIterator[dict]:
+    yield {"type": ET.RESULT}
+
+  async def end_turn_process() -> None:
+    backend._exit_task.cancel()
+
+  monkeypatch.setattr(backend, "_spawn_turn_process", spawn_turn_process)
+  monkeypatch.setattr(backend, "_open_session", mock.AsyncMock(return_value="ses"))
+  monkeypatch.setattr(backend, "_fetch_model_limit", mock.AsyncMock(return_value=None))
+  monkeypatch.setattr(backend, "_put_environment", mock.AsyncMock())
+  monkeypatch.setattr(backend, "_send_prompt", mock.AsyncMock())
+  monkeypatch.setattr(backend, "_consume_turn", consume_turn)
+  monkeypatch.setattr(backend, "_end_turn_process", end_turn_process)
+
+  events = [event async for event in backend.run("prompt", "/w/a", BASE_ENV)]
+
+  assert events[-1]["type"] == ET.ERROR
+  assert "directory /w/a" in events[-1]["message"]
+  assert "HTTP 500" in events[-1]["message"]
 
 
 @pytest.mark.asyncio
@@ -402,6 +695,11 @@ async def test_turn_end_steps_run_in_order_and_remove_the_session_shells(fake_oc
   shell_list = next(i for i, call in enumerate(calls) if call.startswith("GET /api/shell"))
   shell_delete = next(i for i, call in enumerate(calls) if call.startswith("DELETE /api/shell/"))
   assert interrupt < shell_list < shell_delete
+  # The directory's claim drops only after the shell delete, which would otherwise reload it.
+  release = next(i for i, call in enumerate(calls) if call.startswith("DELETE /api/debug/location"))
+  assert shell_delete < release
+  release_request = _requests(fake_oc, "DELETE", "/api/debug/location")
+  assert [r["query"]["location[directory]"] for r in release_request] == [[str(fake_oc / "dir")]]
   assert server.server_for(None).process_alive
 
 
@@ -460,6 +758,39 @@ async def test_cancel_signals_only_its_turn_and_the_other_turn_completes(fake_oc
   cancelled_interrupt = f"/api/session/{cancelled._session_id}/interrupt"
   assert any(
       r.get("path") == cancelled_interrupt and r.get("body") is None for r in _read_log(fake_oc / "requests.jsonl"))
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_release_keeps_claimed_directories_and_terminate_releases_before_returning(
+    fake_oc, monkeypatch, stop_servers):
+  _script(
+      fake_oc, monkeypatch,
+      {"prompts": {
+          "held": {
+              "events": [],
+              "hold": True
+          },
+          "quick": {
+              "events": _text_events("done")
+          },
+      }})
+  held = opencode.OpenCodeBackend(model=MODEL)
+  held_run = asyncio.create_task(_run_turn(held, "held", fake_oc / "a"))
+  while not any(r.get("prompt_text") == "held" for r in _read_log(fake_oc / "requests.jsonl")):
+    await asyncio.sleep(0.02)
+  shared = server.server_for(None)
+  # A directory loaded outside any turn holds no claim, so the next turn's end releases it.
+  await shared.client.get("/api/model", params={"location[directory]": str(fake_oc / "c")})
+  # A second turn in the same directory ends first: the held turn's claim keeps the directory loaded.
+  quick_events = await _run_turn(opencode.OpenCodeBackend(model=MODEL), "quick", fake_oc / "a")
+  assert quick_events[-1]["type"] == "result"
+  assert await _loaded_directories(shared) == {str(fake_oc / "a")}
+  await held.terminate()
+  assert await _loaded_directories(shared) == set()
+  await asyncio.wait_for(held_run, timeout=15)
+  releases = [r["query"]["location[directory]"] for r in _requests(fake_oc, "DELETE", "/api/debug/location")]
+  assert releases.count([str(fake_oc / "a")]) == 1
 
 
 @pytest.mark.integration
@@ -544,7 +875,11 @@ async def test_stream_loss_ends_running_turns_before_the_server_stops(fake_oc, m
   assert errors and "event stream" in errors[0]
   assert not shared.process_alive
   deletes = [r for r in _read_log(fake_oc / "requests.jsonl") if r.get("method") == "DELETE"]
-  assert len(deletes) == 1
+  # Only the shell delete of the turn-end steps: the loss sends no release, and the turn's claim
+  # drops after the server stopped, so that release is skipped too.
+  assert len(deletes) == 1 and deletes[0]["path"].startswith("/api/shell/")
+  assert not _requests(fake_oc, "GET", "/api/debug/location")
+  assert not shared._claims
 
 
 @pytest.mark.integration
@@ -584,7 +919,9 @@ async def test_server_crash_fails_the_turn_with_its_exit_code_and_the_next_turn_
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_idle_server_exits_after_the_idle_limit(fake_oc, monkeypatch, stop_servers):
+async def test_idle_server_exits_after_the_idle_limit(
+    fake_oc: pathlib.Path, monkeypatch: pytest.MonkeyPatch, stop_servers: None) -> None:
+  monkeypatch.setattr(opencode_limits, "OPENCODE_SERVER_HEAVY_CHECK_SECONDS", 0.05)
   monkeypatch.setattr(opencode_limits, "OPENCODE_SERVER_IDLE_EXIT_SECONDS", 0.2)
   _script(fake_oc, monkeypatch, {"prompts": {"idle": {"events": _text_events("ok")}}})
   await _run_turn(opencode.OpenCodeBackend(model=MODEL), "idle", fake_oc / "dir")
@@ -597,22 +934,31 @@ async def test_idle_server_exits_after_the_idle_limit(fake_oc, monkeypatch, stop
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_wrong_major_version_fails_the_turn_naming_the_binary(fake_oc, monkeypatch, stop_servers):
+async def test_wrong_major_version_fails_the_turn_naming_the_binary(
+    fake_oc: pathlib.Path, monkeypatch: pytest.MonkeyPatch, stop_servers: None) -> None:
   monkeypatch.setenv("FAKE_OC_VERSION", "1.18.18")
   _script(fake_oc, monkeypatch, {"prompts": {}})
   events = await _run_turn(opencode.OpenCodeBackend(model=MODEL), "x", fake_oc / "dir")
   assert events[-1]["type"] == ET.ERROR
   assert "1.18.18" in events[-1]["message"] and str(server.OPENCODE_BIN) in events[-1]["message"]
   assert not server.server_for(None).process_alive
+  assert not server.server_for(None)._claims
 
 
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_missing_resume_session_fails_the_turn_naming_the_id(fake_oc, monkeypatch, stop_servers):
   _script(fake_oc, monkeypatch, {"prompts": {}})
+  shared = server.server_for(None)
+  await shared.ensure_running()
+  # The directory is loaded by an earlier turn; the failed turn's claim must still release it.
+  await shared.client.get("/api/model", params={"location[directory]": str(fake_oc / "dir")})
   events = await _run_turn(opencode.OpenCodeBackend(model=MODEL, resume_session_id="ses_gone"), "x", fake_oc / "dir")
   assert events[-1]["type"] == ET.ERROR and "ses_gone" in events[-1]["message"]
   assert not _requests(fake_oc, "POST", "/api/session")
+  releases = _requests(fake_oc, "DELETE", "/api/debug/location")
+  assert [r["query"]["location[directory]"] for r in releases] == [[str(fake_oc / "dir")]]
+  assert not shared._claims
 
 
 @pytest.mark.integration

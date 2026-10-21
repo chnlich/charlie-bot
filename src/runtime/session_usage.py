@@ -77,8 +77,8 @@ class _UsageFacts:
 
   ``chosen_prompt_tokens`` > 0 selects the claude tier: the value is the chosen
   assistant event's usage prompt-token sum, and ``chosen_model`` is its
-  ``message.model``. ``post_compact_tokens`` is the latest ``compact_boundary``
-  int ``post_tokens`` seen while the slot kind was ``claude`` (each qualifying
+  ``message.model``. ``post_compact_tokens`` is the latest ``compact_boundary`` or
+  ``context_compacted`` int ``post_tokens`` seen while the slot kind was ``claude`` (each qualifying
   assistant event resets it), or None. ``model_windows`` merges
   ``modelUsage[model].contextWindow`` across result events (last wins).
   ``snapshot`` is the newest result event's dict ``context_snapshot``, or None.
@@ -109,8 +109,8 @@ class _UsageFold:
   Every field the scan reports is carried forward event by event, so feeding
   a suffix into the carried state lands on the same state as a fresh fold
   over the whole list: a qualifying ``assistant`` event overwrites the chosen
-  claude reading and resets its boundary, a later ``compact_boundary``
-  refines the boundary only while the latest-reading slot is still claude, a
+  claude reading and resets its boundary, a later ``compact_boundary`` or
+  ``context_compacted`` refines the boundary only while the latest-reading slot is still claude, a
   result event's dict ``context_snapshot`` and a ``system`` /
   ``context_reading`` payload each overwrite the slot with their own kind,
   ``model_windows`` merges last-wins, and the cost sum adds in event order
@@ -161,15 +161,14 @@ class _UsageFold:
       elif kind == ET.SYSTEM:
         subtype = ev.get("subtype")
         if subtype == ET.COMPACT_BOUNDARY:
-          if self.reading_kind == _READING_CLAUDE:
-            candidate = (ev.get(ET.COMPACT_METADATA) or {}).get(ET.COMPACT_POST_TOKENS)
-            if isinstance(candidate, int):
-              self.post_compact_tokens = candidate
+          self._fold_compaction_boundary(ev)
         elif subtype == ET.CONTEXT_READING:
           payload = ev.get(ET.CONTEXT_READING)
           if isinstance(payload, dict):
             self.reading_kind = _READING_RESOLVED
             self.reading = payload
+      elif kind == ET.CONTEXT_COMPACTED:
+        self._fold_compaction_boundary(ev)
       elif kind == ET.RESULT:
         for model_name, info in (ev.get("modelUsage") or {}).items():
           window = info.get("contextWindow")
@@ -184,6 +183,13 @@ class _UsageFold:
           self.unknown_cost = True
         else:
           self.total_cost += event_cost
+
+  def _fold_compaction_boundary(self, ev: dict) -> None:
+    """Take a compaction event's int ``post_tokens`` as the reading while the slot is claude."""
+    if self.reading_kind == _READING_CLAUDE:
+      candidate = (ev.get(ET.COMPACT_METADATA) or {}).get(ET.COMPACT_POST_TOKENS)
+      if isinstance(candidate, int):
+        self.post_compact_tokens = candidate
 
   def facts(self) -> _UsageFacts:
     """Snapshot the carried state as the frozen facts the tiers read."""
@@ -237,24 +243,35 @@ def _usage_dict(
   }
 
 
-def _resolve_claude_tier(facts: _UsageFacts) -> dict | None:
+def usage_run_kind(meta: models.SessionMetadata) -> models.RunKind:
+  """The run kind a session's usage view reports.
+
+  A manager node runs manager turns. A worker node runs work, review, iteration and
+  scheduled_step runs, all of which declare the same window, so ``work`` stands for
+  whichever of them the newest reading came from.
+  """
+  return "manager_turn" if meta.profile == "manager" else "work"
+
+
+def _resolve_claude_tier(facts: _UsageFacts, run_kind: models.RunKind) -> dict | None:
   """Resolve usage from the last main-chain assistant event with positive prompt tokens.
 
   context_tokens is that assistant event's ``message.usage`` prompt-token sum, unless
-  a ``compact_boundary`` event with an int ``compact_metadata.post_tokens`` occurs
-  after it -- in which case the latest such ``post_tokens`` wins. ``model`` comes from
-  the assistant event's ``message.model``. context_full is ``min(contextWindow of
+  a ``compact_boundary`` or ``context_compacted`` event with an int
+  ``compact_metadata.post_tokens`` occurs after it -- in which case the latest such
+  ``post_tokens`` wins. ``model`` comes from the assistant event's
+  ``message.model``. context_full is ``min(contextWindow of
   modelUsage[model], declared_window)``; when the assistant model is absent from
   ``modelUsage`` the declared window alone is used. context_compact_at is
-  ``context_full`` minus the compaction reserve of the registered ``claude`` reading limits; it is
-  ``None`` when the
-  declared window is degraded (a forwarded-but-unmodelled override is present).
+  ``context_full`` minus the compaction reserve of the registered ``claude`` reading limits of a
+  *run_kind* run, which read the same per-kind declared window the launch env sets; it is ``None``
+  when the declared window is degraded (a forwarded-but-unmodelled override is present).
   Returns ``None`` when no qualifying assistant event exists.
   """
   if facts.chosen_prompt_tokens <= 0:
     return None
   context_tokens = (facts.post_compact_tokens if facts.post_compact_tokens is not None else facts.chosen_prompt_tokens)
-  limits = backend_lifecycle_registration.reading_limits(_READING_CLAUDE)
+  limits = backend_lifecycle_registration.reading_limits(_READING_CLAUDE, run_kind)
   if limits is None:
     return _usage_dict(context_tokens, None, None, facts.chosen_model, facts.cost)
   if facts.chosen_model and facts.chosen_model in facts.model_windows:
@@ -275,7 +292,7 @@ def _snapshot_tokens_sum(tokens: dict) -> int:
       tokens.get("cache_write", 0))
 
 
-def _snapshot_full_and_compact(limit: dict) -> tuple[int | None, int | None]:
+def _snapshot_full_and_compact(limit: dict, run_kind: models.RunKind) -> tuple[int | None, int | None]:
   """Derive (context_full, context_compact_at) from a snapshot ``limit`` dict.
 
   context_full is ``limit.input`` when present, else ``limit.context - limit.output``.
@@ -291,7 +308,7 @@ def _snapshot_full_and_compact(limit: dict) -> tuple[int | None, int | None]:
   context_context = limit.get("context")
   if isinstance(context_input, int) and isinstance(context_output, int):
     context_full = context_input
-    limits = backend_lifecycle_registration.reading_limits(_READING_SNAPSHOT)
+    limits = backend_lifecycle_registration.reading_limits(_READING_SNAPSHOT, run_kind)
     if limits is None or limits.compact_reserve is None:
       context_compact_at = None
     else:
@@ -305,7 +322,7 @@ def _snapshot_full_and_compact(limit: dict) -> tuple[int | None, int | None]:
   return context_full, context_compact_at
 
 
-def _resolve_snapshot_tier(facts: _UsageFacts) -> dict | None:
+def _resolve_snapshot_tier(facts: _UsageFacts, run_kind: models.RunKind) -> dict | None:
   """Resolve usage from the newest result event carrying a ``context_snapshot``.
 
   context_tokens is the sum of the snapshot's five ``tokens`` fields. context_full /
@@ -320,7 +337,7 @@ def _resolve_snapshot_tier(facts: _UsageFacts) -> dict | None:
   context_tokens = _snapshot_tokens_sum(tokens)
   limit = snapshot.get("limit")
   if isinstance(limit, dict):
-    context_full, context_compact_at = _snapshot_full_and_compact(limit)
+    context_full, context_compact_at = _snapshot_full_and_compact(limit, run_kind)
   else:
     context_full, context_compact_at = None, None
   model = snapshot.get("model") or ""
@@ -345,18 +362,19 @@ def _resolve_reading_tier(facts: _UsageFacts) -> dict:
   )
 
 
-def resolve_events_usage(events: list[dict]) -> dict | None:
+def resolve_events_usage(events: list[dict], run_kind: models.RunKind) -> dict | None:
   """One-shot tier resolution over an already-loaded event list (no memo).
 
   The worker transcript's usage path (src/runtime/worker_transcript.py): the
   shared tier dispatch ``_resolve_fold_tier``, with neither the codex
   native-rollout tier nor the cross-resolution fold memo — the transcript
   projection memo already holds the events list, and the 3 s header poll
-  folds a few hundred events in well under a millisecond.
+  folds a few hundred events in well under a millisecond. *run_kind* is the
+  node's kind (``usage_run_kind``), which its claude reading limits follow.
   """
   fold = _UsageFold()
   fold.feed(events)
-  return _resolve_fold_tier(fold.facts(), events)
+  return _resolve_fold_tier(fold.facts(), events, run_kind)
 
 
 def _resolve_no_source_tier(facts: _UsageFacts) -> dict:
@@ -368,7 +386,7 @@ def _resolve_no_source_tier(facts: _UsageFacts) -> dict:
   return _usage_dict(context_tokens=None, context_full=None, context_compact_at=None, model="", cost=facts.cost)
 
 
-def _resolve_fold_tier(facts: _UsageFacts, events: list[dict]) -> dict | None:
+def _resolve_fold_tier(facts: _UsageFacts, events: list[dict], run_kind: models.RunKind) -> dict | None:
   """The one tier dispatch over the fold's facts; both entry points land here.
 
   ``resolve_events_usage`` and ``resolve_session_usage`` (after its codex
@@ -377,9 +395,9 @@ def _resolve_fold_tier(facts: _UsageFacts, events: list[dict]) -> dict | None:
   when the event list is empty.
   """
   if facts.reading_kind == _READING_CLAUDE:
-    return _resolve_claude_tier(facts)
+    return _resolve_claude_tier(facts, run_kind)
   if facts.reading_kind == _READING_SNAPSHOT:
-    return _resolve_snapshot_tier(facts)
+    return _resolve_snapshot_tier(facts, run_kind)
   if facts.reading_kind == _READING_RESOLVED:
     return _resolve_reading_tier(facts)
   if not events:
@@ -470,7 +488,7 @@ class SessionUsageResolver:
       if merged is not None:
         return merged
 
-    return _resolve_fold_tier(facts, events)
+    return _resolve_fold_tier(facts, events, usage_run_kind(session_meta))
 
   def _facts_hit(self, session_id: str) -> tuple[list[dict], _UsageFacts] | None:
     """Return ``(events, facts)`` from the facts memo without leaving the event loop, else ``None``.

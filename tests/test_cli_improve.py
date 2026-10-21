@@ -11,7 +11,6 @@ from src.features.improve import improve_command
 from src.features.improve import stop_cli as improve_stop
 from src.runtime.cli import common
 
-_GET_CONFIG_PATCH_TARGET = "src.infra.config.get_config"
 _RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET = "src.runtime.spawner_backends.resolve_requested_subagent_backend_model"
 _RESERVE_LOOP_STATE_PATCH_TARGET = "src.features.improve.improve_command.reserve_loop_state"
 
@@ -127,7 +126,7 @@ async def test_improve_endpoint_returns_400_for_invalid_backend() -> None:
   async def fake_resolve_requested_subagent_backend_model(*args: object, **kwargs: object) -> tuple[str, str]:
     raise ValueError("requested backend 'missing' is not in backends.options")
 
-  with mock.patch(_GET_CONFIG_PATCH_TARGET, return_value=mock.MagicMock()), \
+  with mock.patch(conftest.CONFIG_GET_CONFIG_PATCH_TARGET, return_value=mock.MagicMock()), \
        mock.patch(
            _RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET,
            side_effect=fake_resolve_requested_subagent_backend_model), \
@@ -157,7 +156,7 @@ async def test_improve_endpoint_returns_409_for_running_loop() -> None:
   task_mgr = mock.MagicMock()
   task_mgr.check_task_authorization = mock.AsyncMock()
 
-  with mock.patch(_GET_CONFIG_PATCH_TARGET, return_value=mock.MagicMock()), \
+  with mock.patch(conftest.CONFIG_GET_CONFIG_PATCH_TARGET, return_value=mock.MagicMock()), \
        mock.patch(_RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET, return_value=("codex-o3", "o3", False)), \
        mock.patch(
            _RESERVE_LOOP_STATE_PATCH_TARGET,

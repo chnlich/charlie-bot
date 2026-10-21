@@ -240,7 +240,6 @@ class ThreadMetadata(pydantic.BaseModel):
   status: ThreadStatus = ThreadStatus.IDLE
   created_at: UtcDatetime = pydantic.Field(default_factory=utc_now)
   started_at: UtcDatetime | None = None
-  completed_at: UtcDatetime | None = None
   pid: int | None = None
   # Field 22 of /proc/<pid>/stat (process start time in clock ticks since host
   # boot). Together with pid it pins a run to one process instance, so pid
@@ -375,7 +374,8 @@ class SessionMetadata(pydantic.BaseModel):
   # Transient display fact: a task-tree node's newest Run's backend, stamped
   # at read time from thinking_state's display-backend map. A worker node's
   # persisted metadata.backend holds the backend its creator resolved for the
-  # first work Run; readers prefer run_backend and fall back to backend. Never
+  # first work Run. The displayed-backend rule (which of the two a session
+  # shows) lives in src.runtime.api.sessions.displayed_backend_id. Never
   # persisted (excluded by session_store.TRANSIENT_METADATA_FIELDS).
   run_backend: str | None = None
   created_at: UtcDatetime = pydantic.Field(default_factory=utc_now)

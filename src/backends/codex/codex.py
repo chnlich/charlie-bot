@@ -70,6 +70,11 @@ class CodexBackend(base.AgentBackend):
     ]
 
   def _model_config_args(self) -> list[str]:
+    """The `--config` model overrides: the reasoning effort, and the compaction point when one is configured.
+
+    The effort defaults to xhigh. With no model_auto_compact_token_limit configured, the argv carries
+    no compaction entry, so codex applies its own default compaction point.
+    """
     args = ["--config", f'model_reasoning_effort="{self._model_reasoning_effort}"']
     if self._model_auto_compact_token_limit is not None:
       args.append("--config")
@@ -77,11 +82,18 @@ class CodexBackend(base.AgentBackend):
     return args
 
   def _exec_args(self) -> list[str]:
-    """argv shared by streaming, resume, and one-shot `codex exec` runs."""
+    """argv shared by streaming, resume, and one-shot `codex exec` runs.
+
+    ``--disable multi_agent`` drops codex's multi-agent instructions, which no
+    CharlieBot run uses (measured: the codex probe of 2026-10-19 saved 766 input
+    tokens per request with the feature off).
+    """
     return [
         "--json",
         "--skip-git-repo-check",
         "--dangerously-bypass-approvals-and-sandbox",
+        "--disable",
+        "multi_agent",
         "--model",
         self._model,
         *self._model_config_args(),

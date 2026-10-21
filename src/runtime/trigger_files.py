@@ -16,11 +16,12 @@ def iter_trigger_file_stats(triggers_dir: str | pathlib.Path) -> list[tuple[str,
   *triggers_dir* itself cannot be scanned — that verdict belongs to the caller.
   A file that vanishes between scandir and stat is skipped, the same "nothing
   to read" verdict every stat failure earns. Paths are scandir's plain strings,
-  and the stat rides ``DirEntry.stat`` — this scan runs per poll.
+  and the stat rides ``DirEntry.stat`` — this scan runs per poll. The pairs come
+  sorted by file name, so an unchanged directory yields the same order every poll.
   """
   pairs: list[tuple[str, os.stat_result]] = []
   with os.scandir(triggers_dir) as entries:
-    for entry in entries:
+    for entry in sorted(entries, key=lambda item: item.name):
       if not entry.name.endswith(".json") or not entry.is_file():
         continue
       try:

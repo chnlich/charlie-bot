@@ -391,8 +391,6 @@ async def smoke(backend_id: str, purge: bool) -> None:
       fail(f"run context endpoint failed: {status} {ctx}")
     if ctx["snapshot"] != stored:
       fail("run-context snapshot differs from the stored prompt_snapshot.json")
-    if ctx.get("legacy_prompt") is not None:
-      fail(f"a fresh v2 run must not carry legacy raw-prompt evidence: {ctx['legacy_prompt']}")
     # The launch prompt text is the separate task/input evidence.
     launch_text_path = tree_run_dir(manager_id, run_id) / "launch_prompt.md"
     if not launch_text_path.is_file() or \

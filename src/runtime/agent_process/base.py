@@ -333,14 +333,18 @@ def make_context_compacted_event(trigger: str, compact_metadata: dict | None, mo
   return event
 
 
-def make_context_compact_failed_event(error: str | None, model: str | None) -> dict:
+def make_context_compact_failed_event(error: str | None, model: str | None, trigger: str | None = None) -> dict:
   """Build the synthesized ``context_compact_failed`` event producers persist and broadcast.
 
-  ``model`` follows make_context_compacted_event: None omits the key.
+  ``model`` follows make_context_compacted_event: None omits the key. ``trigger`` names the
+  compaction that failed (``"idle"`` for an idle compaction); None omits the key, which keeps
+  the chat line of every other compaction failure as it was.
   """
   event: dict = {"type": ET.CONTEXT_COMPACT_FAILED, "error": error}
   if model is not None:
     event["model"] = model
+  if trigger is not None:
+    event["trigger"] = trigger
   return event
 
 
@@ -440,8 +444,8 @@ async def tail_follow_events(
       the follow continues unchanged afterwards.
   """
   while not raw_path.exists():
-    # The raw file is created by the spawner before the subprocess starts, so
-    # a missing file here means "never spawned"; once the producer is gone
+    # The raw file is created by run() before the subprocess starts, so a
+    # missing file here means "never spawned"; once the producer is gone
     # there is nothing to follow.
     if not is_alive():
       return

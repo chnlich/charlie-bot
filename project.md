@@ -86,7 +86,7 @@ charlie-bot/
 ### 4.1 Agent Roles
 | Role | Type | Responsibilities |
 |------|------|------------------|
-| **Master Agent** | Claude Code session (`src/runtime/master_cc.py`) | User interaction, high-level planning, delegating coding tasks to Workers, reviewing combined worker+reviewer results. Runs as a persistent Claude Code subprocess with `--resume` support across messages. Can use any configured backend. |
+| **Master Agent** | Claude Code session (`src/runtime/master_cc_run.py`) | User interaction, high-level planning, delegating coding tasks to Workers, reviewing combined worker+reviewer results. Runs as a persistent Claude Code subprocess with `--resume` support across messages. Can use any configured backend. |
 | **Worker Agent** | Claude Code CLI (`src/runtime/worker.py`) | Code analysis, implementation, file editing, git operations, testing. Runs in an isolated git worktree on a dedicated branch. Told NOT to rebase/merge/remove the worktree — a reviewer handles that. |
 | **Review Agent** | Claude Code CLI (same Worker class) | Automatically spawned after a Worker succeeds. Reviews the diff, fixes issues, rebases onto the remote base, and pushes the branch to the base (git rejects a non-fast-forward push). Intentionally uses a DIFFERENT backend than the Worker (cross-backend review via `backends.pool`). |
 
@@ -280,9 +280,9 @@ for the other backends) and passes no flag.
 **Backend**
 - FastAPI server (`server.py`)
 - All API routes: `/api/sessions`, `/api/chat`, `/api/internal/delegate` (full list: the `include_router` calls in `server.py` and the packages in `src/app/registrations.py`)
-- Master Agent as Claude Code session (`src/runtime/master_cc.py`) with `--resume` support for persistent conversations. Supports any configured backend via the pluggable `AgentBackend` interface
+- Master Agent as Claude Code session (`src/runtime/master_cc_run.py`) with `--resume` support for persistent conversations. Supports any configured backend via the pluggable `AgentBackend` interface
 - Delegation CLI (`src/runtime/cli/delegate.py`) — called by the master to spawn workers via `POST /api/internal/delegate`
-- Worker spawner (`src/runtime/spawner.py`) — creates isolated git worktrees, builds enriched prompts, spawns workers, and orchestrates the two-phase worker+reviewer pipeline
+- Worker spawner (`src/runtime/task_execution.py`, `src/runtime/spawner_prompt.py`, `src/runtime/spawner_backends.py`) — creates isolated git worktrees, builds enriched prompts, spawns workers, and orchestrates the two-phase worker+reviewer pipeline
 - Automatic cross-backend review: on worker success, a Review Agent is spawned using a different LLM backend (configurable via `backends.pool`). Failed reviewers retry with the next untried backend
 - Master trigger on completion: combined worker+reviewer summary is sent to the master agent via `trigger_master()` for user notification and follow-up decisions
 - Session blocks (`src/runtime/session_*.py`), `PlanRegistryManager`, `TriggerManager`, `StreamingManager`

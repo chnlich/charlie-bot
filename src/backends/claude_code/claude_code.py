@@ -8,7 +8,7 @@ import signal
 from collections.abc import Mapping
 
 from src.backends.claude_code import claude_launch
-from src.infra import constants, home, log_once, process
+from src.infra import constants, home, log_once, models, process
 from src.infra import event_types as ET
 from src.runtime.agent_process import base
 from src.runtime.hooks import backend_lifecycle
@@ -20,10 +20,20 @@ log = log_once.LazyStructlogLogger()
 # can create false recall expectations after external waits), this also blocks Claude
 # Code's subagent dispatch (Agent), workflow (Workflow), task system (Task*), and agent
 # comms (SendMessage/ListAgents) so the model routes async/background work through
-# CharlieBot's schedule-trigger / delegate mechanism instead.
+# CharlieBot's schedule-trigger / delegate mechanism instead. ShareOnboardingGuide
+# uploads the onboarding document to an external service, which no CharlieBot run
+# needs; its description only spends request tokens.
 HEADLESS_DISALLOWED_TOOLS = (
     "Monitor,ScheduleWakeup,CronCreate,CronDelete,CronList,Agent,Workflow,TaskCreate,"
-    "TaskGet,TaskUpdate,TaskList,TaskStop,TaskOutput,SendMessage,ListAgents")
+    "TaskGet,TaskUpdate,TaskList,TaskStop,TaskOutput,SendMessage,ListAgents,ShareOnboardingGuide")
+
+# Tools only a review run of a task keeps. ReportFindings reports review findings to
+# the user; every other kind reports through its reply, so the tool description would
+# only spend request tokens.
+REVIEW_ONLY_TOOLS: tuple[str, ...] = ("ReportFindings",)
+
+# Review runs call no skill. Without the Skill tool, Claude Code sends no skill listing.
+REVIEW_DISALLOWED_TOOLS: tuple[str, ...] = ("Skill",)
 
 BASE_COMMAND: list[str] = [
     "claude",
@@ -35,6 +45,23 @@ BASE_COMMAND: list[str] = [
     base.DISALLOWED_TOOLS_FLAG,
     HEADLESS_DISALLOWED_TOOLS,
 ]
+
+
+def headless_command(run_kind: models.RunKind) -> list[str]:
+  """The ``claude -p`` argv head of a headless run of *run_kind*: BASE_COMMAND with the kind's tool set."""
+  cmd = list(BASE_COMMAND)
+  index = cmd.index(base.DISALLOWED_TOOLS_FLAG)
+  if run_kind == "review":
+    cmd[index + 1] = f"{cmd[index + 1]},{','.join(REVIEW_DISALLOWED_TOOLS)}"
+  else:
+    cmd[index + 1] = f"{cmd[index + 1]},{','.join(REVIEW_ONLY_TOOLS)}"
+  return cmd
+
+
+# Moves per-machine sections (cwd, env info, memory paths, git status) out of the system prompt into
+# the first user message, so the system prompt stays stable across sessions and cross-run
+# prompt-cache reuse improves. Only the Claude Code CLI family supports this flag.
+EXCLUDE_DYNAMIC_SECTIONS_FLAG = "--exclude-dynamic-system-prompt-sections"
 
 # Usage resolution re-derives the declared window per call while the environment a
 # degradation warning reports is fixed for the process's life, so the first sighting
@@ -100,22 +127,22 @@ def claude_model_env(model: str) -> dict[str, str]:
   }
 
 
-def headless_claude_declared_window() -> tuple[int, int | None]:
-  """Return ``(declared_window, compact_point | None)`` for a headless Claude Code run.
+def headless_claude_declared_window(run_kind: models.RunKind) -> tuple[int, int | None]:
+  """Return ``(declared_window, compact_point | None)`` for a headless Claude Code run of *run_kind*.
 
-  Reads the same environment ``headless_claude_env()`` gives the CLI, so a host
-  export of ``CLAUDE_CODE_AUTO_COMPACT_WINDOW`` overrides CharlieBot's default and
-  the declared window follows it. Computed per call — never cached in a module
-  constant — because the host environment can change between calls.
+  Reads the same environment ``headless_claude_env(run_kind)`` gives the CLI, so a host
+  export of ``CLAUDE_CODE_AUTO_COMPACT_WINDOW`` overrides the kind's default and the
+  declared window follows it. Computed per call — never cached in a module constant —
+  because the host environment can change between calls.
 
   ``declared_window`` is the auto-compact window the CLI advertises. ``compact_point``
   is ``declared_window − CLAUDE_COMPACT_OUTPUT_RESERVE − CLAUDE_COMPACT_CONTEXT_RESERVE``
-  (with the 433000 default
-  this is 400000); the caller derives the real compaction point from the effective
-  ``context_full`` (``min(model contextWindow, declared_window)``) using the same
-  constants. Degrades loudly, never silently:
+  (400000 for every kind's 433000 window);
+  the caller derives the real compaction point from the effective ``context_full``
+  (``min(model contextWindow, declared_window)``) using the same constants. Degrades
+  loudly, never silently:
 
-  - unparseable / non-positive window: ``declared_window`` falls back to the 433000
+  - unparseable / non-positive window: ``declared_window`` falls back to the kind's
     default and ``compact_point`` is derived normally; one ``log.warning`` per
     process names the responsible variable.
   - a forwarded-but-unmodelled override (``CLAUDE_AUTOCOMPACT_PCT_OVERRIDE``,
@@ -123,12 +150,9 @@ def headless_claude_declared_window() -> tuple[int, int | None]:
     window and ``compact_point`` is ``None`` (the caller then reports no compaction
     line); one ``log.warning`` per process names the responsible variable.
   """
-  env = claude_launch.headless_claude_env()
-  raw_window = env.get(
-      claude_launch.AUTO_COMPACT_WINDOW_ENV,
-      claude_launch.HEADLESS_CLAUDE_DEFAULT_ENV[claude_launch.AUTO_COMPACT_WINDOW_ENV],
-  )
-  default_window = int(claude_launch.HEADLESS_CLAUDE_DEFAULT_ENV[claude_launch.AUTO_COMPACT_WINDOW_ENV])
+  env = claude_launch.headless_claude_env(run_kind)
+  raw_window = env[claude_launch.AUTO_COMPACT_WINDOW_ENV]
+  default_window = claude_launch.DECLARED_WINDOW_BY_RUN_KIND[run_kind]
 
   try:
     window = int(raw_window)
@@ -155,12 +179,12 @@ def headless_claude_declared_window() -> tuple[int, int | None]:
   return window, window - claude_launch.CLAUDE_COMPACT_OUTPUT_RESERVE - claude_launch.CLAUDE_COMPACT_CONTEXT_RESERVE
 
 
-def claude_reading_limits() -> backend_lifecycle.ContextLimits:
-  """The context limits of a ``claude`` reading: the declared window and the two compaction reserves.
+def claude_reading_limits(run_kind: models.RunKind) -> backend_lifecycle.ContextLimits:
+  """The context limits of a ``claude`` reading of *run_kind*: the declared window and the two compaction reserves.
 
   ``compact_reserve`` is None when ``headless_claude_declared_window`` reports no compaction point.
   """
-  declared_window, compact_point = headless_claude_declared_window()
+  declared_window, compact_point = headless_claude_declared_window(run_kind)
   compact_reserve = (
       None if compact_point is None else claude_launch.CLAUDE_COMPACT_OUTPUT_RESERVE +
       claude_launch.CLAUDE_COMPACT_CONTEXT_RESERVE)
@@ -238,7 +262,13 @@ def out_of_family_served_models(events: list[dict], configured_model: str | None
 
 
 class ClaudeCodeBackend(base.AgentBackend):
-  """Runs a Claude Code CLI subprocess and streams NDJSON events as dicts."""
+  """Runs a Claude Code CLI subprocess and streams NDJSON events as dicts.
+
+  ``run_kind`` is the kind of Run the process serves; the lifecycle's launch arguments
+  name it for every run process (``claude_lifecycle._launch_args``), and it decides the
+  declared auto-compact window, the tool set and the ``--settings`` object. A build that
+  spawns no run — a translate-only or one-shot backend — keeps the defaults.
+  """
 
   def __init__(
       self,
@@ -247,14 +277,16 @@ class ClaudeCodeBackend(base.AgentBackend):
       effort: str | None = None,
       cli_binary: str | None = None,
       fast_mode: bool = False,
+      run_kind: models.RunKind = "work",
       claude_session_id: str | None = None,
       claude_config_dir: str | None = None,
       **kwargs: object) -> None:
     super().__init__(model=model, **kwargs)
     self._effort = effort
     self._fast_mode = fast_mode
+    self._run_kind = run_kind
     self._claude_config_dir = str(pathlib.Path(claude_config_dir).expanduser()) if claude_config_dir else None
-    self._cmd: list[str] = list(BASE_COMMAND)
+    self._cmd: list[str] = headless_command(run_kind)
     if cli_binary:
       self._cmd[0] = cli_binary
     if claude_session_id:
@@ -263,10 +295,8 @@ class ClaudeCodeBackend(base.AgentBackend):
       self._cmd += ["--model", self._model]
     if self._effort:
       self._cmd += ["--effort", self._effort]
-    # One merged --settings object, the connector key always on it: the CLI's
-    # handling of repeated --settings flags is not a contract, so the argv
-    # never carries more than one.
-    settings = {**claude_launch.DISABLE_CONNECTOR_SETTINGS}
+    # The CLI's handling of repeated --settings flags is not a contract, so the argv carries one object.
+    settings = claude_launch.headless_claude_settings(run_kind)
     if self._fast_mode:
       settings["fastMode"] = True
     self._cmd += ["--settings", json.dumps(settings, separators=(",", ":"))]
@@ -277,7 +307,7 @@ class ClaudeCodeBackend(base.AgentBackend):
   _INSTRUCTIONS_TARGET: tuple[str, str] = ("CLAUDE.md", "claude_code_wrote_claude_md")
 
   def _prepare_env(self, env: dict) -> dict:
-    out = {**env, **claude_launch.headless_claude_env()}
+    out = {**env, **claude_launch.headless_claude_env(self._run_kind)}
     if self._claude_config_dir:
       out[home.CLAUDE_CONFIG_DIR_ENV_VAR] = self._claude_config_dir
     return out

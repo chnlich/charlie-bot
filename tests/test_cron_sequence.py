@@ -312,7 +312,15 @@ async def test_recovery_redrives_a_mid_chain_firing_from_durable_facts(
   leaf = await cron_sequence.ensure_firing_leaf(task_cfg, meta, tree, FIRING, "chained steps")
   leaf_id = leaf.id
   run0 = await cron_sequence.register_leaf_run(
-      tree, leaf_id, task_cfg, FIRING, kind="scheduled_step", position=0, backend="fake", model="fake-model")
+      tree,
+      leaf_id,
+      task_cfg,
+      FIRING,
+      kind="scheduled_step",
+      position=0,
+      backend="fake",
+      model="fake-model",
+      task_spec_text=task_cfg.steps[0].prompt)
   await tree.runs.record_finish(leaf_id, run0.id, outcome="success", exit_code=0)
 
   # Reassert the mid-chain facts and the absence of old callbacks before
@@ -417,7 +425,15 @@ async def test_withheld_step_launch_settles_the_chain_without_hanging(
   leaf = await cron_sequence.ensure_firing_leaf(task_cfg, meta, tree, FIRING, f"{task_cfg.name} steps")
   await cancel_task_node(tree, leaf.id, "withhold-leaf")
   await cron_sequence.register_leaf_run(
-      tree, leaf.id, task_cfg, FIRING, kind="scheduled_step", position=0, backend="fake", model="fake-model")
+      tree,
+      leaf.id,
+      task_cfg,
+      FIRING,
+      kind="scheduled_step",
+      position=0,
+      backend="fake",
+      model="fake-model",
+      task_spec_text=task_cfg.steps[0].prompt)
 
   handle = tasks.create_logged_task(
       cron_sequence.run_firing_steps(task_cfg, meta, tree, FIRING, leaf.id), name="withheld-steps-controller")
@@ -511,7 +527,15 @@ async def _successful_two_step_leaf(bound_env, monkeypatch: pytest.MonkeyPatch):
   leaf_meta = await tree.load_meta(leaf.id)
   for position, (_name, _outcome_text) in enumerate([("zero", "step zero done"), ("one", "step one done")]):
     run = await cron_sequence.register_leaf_run(
-        tree, leaf.id, task_cfg, FIRING, kind="scheduled_step", position=position, backend="fake", model="fake-model")
+        tree,
+        leaf.id,
+        task_cfg,
+        FIRING,
+        kind="scheduled_step",
+        position=position,
+        backend="fake",
+        model="fake-model",
+        task_spec_text=task_cfg.steps[position].prompt)
     await tree.runs.record_finish(leaf.id, run.id, outcome="success")
   return cfg, session_blocks, tree, manager, task_cfg, meta, leaf, leaf_meta
 
@@ -707,6 +731,15 @@ async def test_unbound_prompt_task_binds_and_fires_once_against_its_new_node(
   assert leaf is not None and leaf.task_parent_id == node_id
   await _wait_for_child_report(tree, node_id, "the leaf's report never reached the bound node", timeout=15.0)
   assert tree.task_state(leaf_id) == "completed"
+  # The work Run pins its configured prompt verbatim as task_spec.md: the link
+  # the header's "Task spec (not recorded)" placeholder resolves once a run
+  # carries it.
+  work_run = tree.runs.list_run_records_sync(leaf_id)[0]
+  assert work_run.task_spec_ref is not None
+  spec_path = pathlib.Path(work_run.task_spec_ref)
+  assert spec_path.name == "task_spec.md" and spec_path.is_file()
+  assert spec_path.read_text(encoding="utf-8") == "Do the sweep."
+  assert work_run.task_spec_hash == control_events.sha256_hex("Do the sweep.")
   # The node receives the leaf report through task-tree dispatch.
   # A replayed fire at the same firing identity creates nothing new.
   await scheduler._execute_task(task_cfg, record_handle=True, firing=firing)
@@ -821,6 +854,11 @@ async def test_unbound_steps_task_binds_then_advances_step_by_step(bound_env, mo
     pytest.fail(f"the chain never finished: {[(r.id, r.kind) for r in tree.runs.list_run_records_sync(leaf_id)]}")
   assert [r.kind for r in records] == ["scheduled_step", "scheduled_step"]
   assert [r.sequence_ref.position for r in records] == [0, 1]
+  # Each step's Run pins its own configured prompt verbatim (before chaining).
+  for run, prompt in zip(records, ["Select candidates.", "Review the diff."], strict=True):
+    spec_path = pathlib.Path(run.task_spec_ref or "")
+    assert spec_path.name == "task_spec.md" and spec_path.is_file()
+    assert spec_path.read_text(encoding="utf-8") == prompt
   # The second step's prompt carried the previous result under the legacy heading.
   assert "Result of the previous step (selector)" in builds[1]["backend"].prompt
   assert "selector says pick three" in builds[1]["backend"].prompt
@@ -935,7 +973,15 @@ async def test_recovery_launch_with_same_resolved_backend_stops_and_reports(
   leaf = await cron_sequence.ensure_firing_leaf(task_cfg, meta, tree, FIRING, "distinct steps")
   leaf_id = leaf.id
   run0 = await cron_sequence.register_leaf_run(
-      tree, leaf_id, task_cfg, FIRING, kind="scheduled_step", position=0, backend=None, model=None)
+      tree,
+      leaf_id,
+      task_cfg,
+      FIRING,
+      kind="scheduled_step",
+      position=0,
+      backend=None,
+      model=None,
+      task_spec_text=task_cfg.steps[0].prompt)
   await tree.runs.record_finish(leaf_id, run0.id, outcome="success", exit_code=0)
 
   await task_recovery.reconcile_task_tree(cfg, tree)

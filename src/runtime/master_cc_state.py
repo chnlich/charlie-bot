@@ -59,3 +59,9 @@ def running_user_event_ids(session_id: str) -> list[str]:
   """Input event ids answered by the session's currently running Run."""
   item = _current_items.get(session_id)
   return list(item.user_event_ids) if item is not None else []
+
+
+def session_busy(session_id: str) -> bool:
+  """True while a turn of the session runs or waits in its queue."""
+  queue = _session_queues.get(session_id)
+  return session_id in _current_items or (queue is not None and not queue.empty())

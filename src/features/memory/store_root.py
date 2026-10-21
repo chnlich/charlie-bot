@@ -10,7 +10,7 @@ if TYPE_CHECKING:
 
 
 def store_root(home: pathlib.Path) -> pathlib.Path:
-  """The store root under a profile home: ``<home>/memory`` (``~/.charliebot/memory/``)."""
+  """The store root under a profile home: ``<home>/memory`` (``$CHARLIEBOT_HOME/memory/``)."""
   return home / "memory"
 
 

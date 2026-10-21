@@ -117,8 +117,13 @@ if [[ ${#files[@]} -gt 0 ]]; then
   fi
 
   extra_patterns_file=${EXTRA_PATTERNS_FILE:-}
-  if [[ -z "$extra_patterns_file" && -f "$HOME/.charliebot/skills_leak_patterns.local.txt" ]]; then
-    extra_patterns_file="$HOME/.charliebot/skills_leak_patterns.local.txt"
+  if [[ -z "$extra_patterns_file" ]]; then
+    # Resolve the profile home from the one place that owns it. System python3,
+    # no venv: src/infra/home.py imports only the standard library.
+    home=$(python3 -I -c 'import sys; sys.path.insert(0, sys.argv[1]); from src.infra.home import charliebot_home_dir; print(charliebot_home_dir())' "$repo_root")
+    if [[ -f "$home/skills_leak_patterns.local.txt" ]]; then
+      extra_patterns_file="$home/skills_leak_patterns.local.txt"
+    fi
   fi
 
   if [[ -n "$extra_patterns_file" ]]; then

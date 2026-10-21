@@ -12,13 +12,13 @@ Read, create, and edit documents in the Feishu workspace using the Feishu Open A
 
 ## Configuration
 
-- Credentials location: `~/.charliebot/credentials.yaml`
+- Credentials location: `$CHARLIEBOT_HOME/credentials.yaml`
 - Keys (section `feishu`): `app_id`, `app_secret`, `user_access_token`, `refresh_token`
 - Auth method: OAuth2 user access token (acts as the user's own account)
 - Reading pattern (no YAML CLI is installed on hosts): one python line per value, e.g.
 
 ```bash
-python3 -c "import yaml,os;c=yaml.safe_load(open(os.path.expanduser('~/.charliebot/credentials.yaml')));print(c['feishu']['user_access_token'])"
+python3 -c "import yaml,os;c=yaml.safe_load(open(os.path.join(os.environ['CHARLIEBOT_HOME'], 'credentials.yaml')));print(c['feishu']['user_access_token'])"
 ```
 
 ## API Reference
@@ -27,7 +27,7 @@ All requests require: `-H "Authorization: Bearer TOKEN"`
 
 Read the token before making calls:
 ```bash
-FEISHU_TOKEN=$(python3 -c "import yaml,os;c=yaml.safe_load(open(os.path.expanduser('~/.charliebot/credentials.yaml')));print(c['feishu']['user_access_token'])")
+FEISHU_TOKEN=$(python3 -c "import yaml,os;c=yaml.safe_load(open(os.path.join(os.environ['CHARLIEBOT_HOME'], 'credentials.yaml')));print(c['feishu']['user_access_token'])")
 ```
 
 ### Read a Wiki Page
@@ -273,14 +273,14 @@ The user access token expires every **2 hours**. If you get a 401 or `99991663` 
 
 ```bash
 # Step 1: Get app access token
-APP_ID=$(python3 -c "import yaml,os;c=yaml.safe_load(open(os.path.expanduser('~/.charliebot/credentials.yaml')));print(c['feishu']['app_id'])")
-APP_SECRET=$(python3 -c "import yaml,os;c=yaml.safe_load(open(os.path.expanduser('~/.charliebot/credentials.yaml')));print(c['feishu']['app_secret'])")
+APP_ID=$(python3 -c "import yaml,os;c=yaml.safe_load(open(os.path.join(os.environ['CHARLIEBOT_HOME'], 'credentials.yaml')));print(c['feishu']['app_id'])")
+APP_SECRET=$(python3 -c "import yaml,os;c=yaml.safe_load(open(os.path.join(os.environ['CHARLIEBOT_HOME'], 'credentials.yaml')));print(c['feishu']['app_secret'])")
 APP_TOKEN=$(curl -s -X POST https://open.feishu.cn/open-apis/auth/v3/app_access_token/internal \
   -H 'Content-Type: application/json' \
   -d "{\"app_id\":\"$APP_ID\",\"app_secret\":\"$APP_SECRET\"}" | jq -r '.app_access_token')
 
 # Step 2: Refresh user token
-FEISHU_REFRESH=$(python3 -c "import yaml,os;c=yaml.safe_load(open(os.path.expanduser('~/.charliebot/credentials.yaml')));print(c['feishu']['refresh_token'])")
+FEISHU_REFRESH=$(python3 -c "import yaml,os;c=yaml.safe_load(open(os.path.join(os.environ['CHARLIEBOT_HOME'], 'credentials.yaml')));print(c['feishu']['refresh_token'])")
 RESULT=$(curl -s -X POST https://open.feishu.cn/open-apis/authen/v1/oidc/refresh_access_token \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $APP_TOKEN" \
@@ -291,7 +291,7 @@ NEW_ACCESS=$(echo $RESULT | jq -r '.data.access_token')
 NEW_REFRESH=$(echo $RESULT | jq -r '.data.refresh_token')
 NEW_ACCESS=$NEW_ACCESS NEW_REFRESH=$NEW_REFRESH python3 -c "
 import yaml, os
-path = os.path.expanduser('~/.charliebot/credentials.yaml')
+path = os.path.join(os.environ['CHARLIEBOT_HOME'], 'credentials.yaml')
 c = yaml.safe_load(open(path))
 c['feishu']['user_access_token'] = os.environ['NEW_ACCESS']
 c['feishu']['refresh_token'] = os.environ['NEW_REFRESH']
@@ -312,8 +312,8 @@ When the refresh token expires or new scopes are needed, the user must re-author
 2. User authorizes and gets redirected to `http://localhost:9999/callback?code=XXX`
 3. Exchange code for tokens:
 ```bash
-APP_ID=$(python3 -c "import yaml,os;c=yaml.safe_load(open(os.path.expanduser('~/.charliebot/credentials.yaml')));print(c['feishu']['app_id'])")
-APP_SECRET=$(python3 -c "import yaml,os;c=yaml.safe_load(open(os.path.expanduser('~/.charliebot/credentials.yaml')));print(c['feishu']['app_secret'])")
+APP_ID=$(python3 -c "import yaml,os;c=yaml.safe_load(open(os.path.join(os.environ['CHARLIEBOT_HOME'], 'credentials.yaml')));print(c['feishu']['app_id'])")
+APP_SECRET=$(python3 -c "import yaml,os;c=yaml.safe_load(open(os.path.join(os.environ['CHARLIEBOT_HOME'], 'credentials.yaml')));print(c['feishu']['app_secret'])")
 APP_TOKEN=$(curl -s -X POST https://open.feishu.cn/open-apis/auth/v3/app_access_token/internal \
   -H 'Content-Type: application/json' \
   -d "{\"app_id\":\"$APP_ID\",\"app_secret\":\"$APP_SECRET\"}" | jq -r '.app_access_token')

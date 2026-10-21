@@ -11,7 +11,7 @@ def seed_default_cron_tasks(cfg: config.CharlieBotConfig, *, dry_run: bool = Fal
   """Seed repo-owned default cron tasks into per-job host files by name.
 
   Reads ``configs/cron.default.yaml`` from the repo and the host
-  ``~/.charliebot/config.d/cron.d/`` directory. For each default entry: if no
+  ``$CHARLIEBOT_HOME/config.d/cron.d/`` directory. For each default entry: if no
   host file ``cron.d/<name>.yaml`` exists, create it with the entry body minus
   ``name``, keeping the entry's ``prompt_file`` pointer intact (the pointed
   file owns the prompt body and the host file carries only the path to it);

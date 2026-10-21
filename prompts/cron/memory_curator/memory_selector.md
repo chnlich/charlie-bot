@@ -25,7 +25,7 @@ record plus its provenance (each supporting session short id, date, and one quot
 curates these captures exactly like every other candidate.
 
 Step 3: curate staging candidates into the PR worktree, merge-first.
-Read every file in `~/.charliebot/memory/staging/`, and read the PR's coverage state with
+Read every file in `$CHARLIEBOT_HOME/memory/staging/`, and read the PR's coverage state with
 `charliebot memory query --index --dir <worktree>`. Candidates are free-form captures: for each
 candidate, first test it against the admission whitelist and home routing in the
 llm-context-guideline skill (retaining durable mechanisms and routing execution artifacts,
@@ -48,7 +48,7 @@ the default action is a merge:
 Every entry and `topics` edit is written inside the worktree and stays uncommitted; the
 reviewer performs the commits through `charliebot memory proposal commit`.
 Move every processed candidate (admitted, revised, or rejected) from
-`~/.charliebot/memory/staging/` into `~/.charliebot/memory-archive/staging-curation-<YYYYMMDD>/`,
+`$CHARLIEBOT_HOME/memory/staging/` into `$CHARLIEBOT_HOME/memory-archive/staging-curation-<YYYYMMDD>/`,
 in the format of the existing archive directories: one `README.md` row per file naming the
 file, its disposition, and the entry path or the rejection reason, plus an updated `SHA256SUMS`
 over the moved files.

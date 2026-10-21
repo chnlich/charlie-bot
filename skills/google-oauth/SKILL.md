@@ -45,7 +45,7 @@ For the default account, omit `--account`. The command prints the access token o
 
 A host holds one or more Google accounts. Each account has a short name, unique on the host.
 
-- The `google` section of `~/.charliebot/credentials.yaml` holds the OAuth client and the default account.
+- The `google` section of `$CHARLIEBOT_HOME/credentials.yaml` holds the OAuth client and the default account.
 - Each added account has its own section, `google_account_<name>`.
 - An added account section may carry its own `client_id` and `client_secret`.
 - `python3 <skill-dir>/scripts/google_account.py list` prints each account's name, mark, status, owner and description.

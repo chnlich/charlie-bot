@@ -34,7 +34,7 @@ Before deploying through the runtime checkout, pause scheduled jobs that import 
 
 **Before a subagent returns / reviewer merges**, the master should skim the subagent's context / transcript for recurring pain points (repeated errors, wrong-path attempts, env/venv pitfalls, protocol misuse). If such patterns appear, update the relevant SKILL.md so future workers don't rediscover the same lesson. This is standing user preference, not per-session.
 
-**Skill-doc update timing**: only promote a finding to a SKILL.md after the underlying debug is fully resolved. Tentative observations (e.g. "per-channel score looks ~1.34× baseline, pending 7-fold confirmation") belong in `~/.charliebot/LESSONS.md` or the session transcript, not in a skill. Skills are confirmed conventions readers can act on without re-deriving.
+**Skill-doc update timing**: only promote a finding to a SKILL.md after the underlying debug is fully resolved. Tentative observations (e.g. "per-channel score looks ~1.34× baseline, pending 7-fold confirmation") belong in `$CHARLIEBOT_HOME/LESSONS.md` or the session transcript, not in a skill. Skills are confirmed conventions readers can act on without re-deriving.
 
 **Repo-level skill rules must be rule-shaped, not incident-shaped.** When a confirmed lesson lands in a charliebot repo-level skill, strip the project-internal debug symptoms (specific commit names, error strings, "observed in <experiment-id> with <api-mismatch>"). Write only the underlying rule a future reader can apply ("always parity-check the N=1 wrapper before launching multi-channel runs"). Project-side incident detail belongs in the host skill (surpass / alpha-lab / etc.) or LESSONS.md, not in a repo-level skill that other people may read.
 
@@ -128,7 +128,7 @@ Some proxied backends (e.g. an opencode GLM endpoint) cap generation far below t
 
 - **Propagate `repo_path` explicitly to every derived/downstream task** (review workers, retries, continuations, chained tasks) — pass it from the originating task via `ThreadMetadata.repo_path`. `discover_repos()` returns repos in non-deterministic order, so it is only safe at the top-level entry point (user delegation, CLI); downstream tasks read the propagated value instead. This is a recurring bug — always propagate repo_path explicitly.
 - **Package-owned metadata keys**: A package registers its top-level `metadata.json` keys from its `register()` with `register_metadata_fields` (`src/infra/metadata_slot_registration.py`). Read and write them with `fields_of` and `set_fields` (`src/infra/metadata_slots.py`). `SessionMetadata` and `ThreadMetadata` keep a key that no package registers and write it back unchanged. The cc-claude package owns `claude_account` and `claude_session_id`.
-- Session instructions: `_build_instructions_content()` (`src/runtime/master_cc_run.py`) concatenates `prompts/master.md` + `~/.charliebot/MASTER_AGENT_PROMPT.md` + the assembled memory block on every `run_message()`. The block is built by `src/features/memory/memory.py::assemble_master` — full bodies of master-audience entries in resident topics plus a `# Memory index` header line and index lines for the rest. Each backend writes the result to its own instruction file under the session dir (Claude Code `CLAUDE.md`, Codex `AGENTS.md`).
+- Session instructions: `_build_instructions_content()` (`src/runtime/master_cc_run.py`) concatenates `prompts/master.md` + `$CHARLIEBOT_HOME/MASTER_AGENT_PROMPT.md` + the assembled memory block on every `run_message()`. The block is built by `src/features/memory/memory.py::assemble_master` — full bodies of master-audience entries in resident topics plus a `# Memory index` header line and index lines for the rest. Each backend writes the result to its own instruction file under the session dir (Claude Code `CLAUDE.md`, Codex `AGENTS.md`).
 - Worker log display: In main chat panel, only show "worker {id} started/ended" with general purpose description. Full logs belong in the worker panel only.
 - Draft preservation: User's unsubmitted message text is preserved per-session when switching sessions.
 - Process-session recovery:
@@ -165,7 +165,7 @@ The declared window is 433000 (compaction point 400000) for every run kind. The 
 
 One Claude login carries a five-hour and a weekly window, so a long master turn or a delegated worker that crosses the line stops mid-work. The account pool keeps that work running on another login of the same subscription tier (`src/backends/claude_code/claude_accounts.py` owns account state and selection; `src/backends/claude_code/claude_relay.py` owns the relay mechanics both the master turn and workers use).
 
-- **Config**: `accounts.claude:` in `~/.charliebot/config.yaml` lists `label` + `config_dir` pairs, each directory one `CLAUDE_CONFIG_DIR` login. `accounts.claude_pools:` maps each pool name to the account labels it holds. Each `cc-claude` entry names its pool in `account_pool` when pools are defined; selection and relay stay inside that pool. One entry per model and pool.
+- **Config**: `accounts.claude:` in `$CHARLIEBOT_HOME/config.yaml` lists `label` + `config_dir` pairs, each directory one `CLAUDE_CONFIG_DIR` login. `accounts.claude_pools:` maps each pool name to the account labels it holds. Each `cc-claude` entry names its pool in `account_pool` when pools are defined; selection and relay stay inside that pool. One entry per model and pool.
 - The server reloads changed account-pool config at the next usage poll.
 - **Selection**: the healthy account with the most headroom, headroom being one minus the higher of the five-hour and seven-day utilization read from `rate_limit_event` and the usage-panel poll; a rejection holds headroom at zero until its `resetsAt`. A master turn keeps its account while the prompt cache is warm (last request under 60 minutes ago) and the reading sits under 90 percent; a worker picks at launch.
 - Identify the account that served a request from its `rate_limit_event` `resetsAt` pair.
@@ -262,13 +262,13 @@ The web terminal keeps tmux mouse mode on: tmux-side selection preserves logical
 ## Skills System
 
 Shared skills live in `<charlie-bot-repo>/skills/`; host-specific skills live in
-`~/.charliebot/skills/`. Both sync into `~/.claude/skills/`.
+`$CHARLIEBOT_HOME/skills/`. Both sync into `~/.claude/skills/`.
 Skills with `user-invocable: false` are auto-loaded by CC when contextually relevant.
 
-`~/.charliebot/` holds host-specific state (skills, sessions, config, credentials).
+`$CHARLIEBOT_HOME/` holds host-specific state (skills, sessions, config, credentials).
 On some hosts it may happen to be a local git repo, but its contents are NOT meant to
 be committed or pushed — workers must edit files in place and must never `git add` them
-to a `~/.charliebot` repo if one exists. Cross-host shared skills go in
+to a `$CHARLIEBOT_HOME` repo if one exists. Cross-host shared skills go in
 `<charlie-bot-repo>/skills/` instead.
 
 ---
@@ -300,7 +300,7 @@ A self-hosted VS Code instance running as a web service for browsing code in the
    cert: <path-to-tls-cert>
    cert-key: <path-to-tls-key>
    ```
-   Port and TLS cert paths are host-specific — see the `host` topic in the memory store (`~/.charliebot/memory/entries/host/`) for the current host values.
+   Port and TLS cert paths are host-specific — see the `host` topic in the memory store (`$CHARLIEBOT_HOME/memory/entries/host/`) for the current host values.
 
 3. Start:
    ```bash
@@ -321,7 +321,7 @@ A self-hosted VS Code instance running as a web service for browsing code in the
 
 ## Backup
 
-Compressed archive backups (not git) stored at `~/.charliebot_backup`, tiered retention. Manual backup trigger must be independent and must not affect the auto-backup schedule.
+Compressed archive backups (not git) stored at `${CHARLIEBOT_HOME}_backup`, tiered retention. Manual backup trigger must be independent and must not affect the auto-backup schedule.
 
 ---
 
@@ -376,7 +376,7 @@ The fired message is prefixed with the reason; per-target detail is in the suffi
 ## Cron Task Behavior
 
 - A newly added cron task first fires on its next occurrence after one full tick: the scheduler looks back a single tick from load, so a new daily expression starts the following day.
-- Cron config lives one job per file under `~/.charliebot/config.d/cron.d/<name>.yaml`, and the loader hot-reloads on a file or `prompt_file` mtime change — no restart is needed. A broken file yields an error entry for that job alone (logged as `cron_task_load_failed`) while every other job keeps loading, scheduling, and rendering through `GET /api/cron/tasks`.
+- Cron config lives one job per file under `$CHARLIEBOT_HOME/config.d/cron.d/<name>.yaml`, and the loader hot-reloads on a file or `prompt_file` mtime change — no restart is needed. A broken file yields an error entry for that job alone (logged as `cron_task_load_failed`) while every other job keeps loading, scheduling, and rendering through `GET /api/cron/tasks`.
 - The cron timezone is fixed in the config model, API, and UI: pin `America/Los_Angeles` explicitly for local tasks. Reread `config.d/cron.d/` at implementation time — concurrent sessions may mutate it.
 - Run a scheduled task once now with `POST /api/cron/tasks/{name}/run`. The run takes the scheduled path and writes no chat event. An unknown task name answers 404.
 

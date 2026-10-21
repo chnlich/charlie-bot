@@ -4,17 +4,42 @@ set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
 
+# --- Resolve the profile home (src/infra/home.py; standard library only) ---
+home_pair=$(python3 -I -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+from src.infra.home import charliebot_home_dir, default_charliebot_home
+print(charliebot_home_dir())
+print(default_charliebot_home())
+' "$REPO_ROOT")
+CHARLIEBOT_HOME=$(head -n 1 <<<"$home_pair")
+DEFAULT_HOME=$(tail -n 1 <<<"$home_pair")
+
 # --- Canonical skill sources ---
 REPO_SKILLS="$REPO_ROOT/skills"
-HOST_SKILLS="$HOME/.charliebot/skills"
+HOST_SKILLS="$CHARLIEBOT_HOME/skills"
 
 # --- Sync targets ---
+# Shared targets touch global config of several CLIs; only the default home owns them.
+# On any other profile home, skills sync to that home's ancestor root alone.
 TARGETS=(
-  "$HOME/.claude/skills"
-  "$HOME/.agents/skills"
-  "$HOME/.gemini/antigravity-cli/skills"  # Antigravity CLI (agy) global skills root
-  "$HOME/.charliebot/.claude/skills"  # Claude Code ancestor root: collected from every master session cwd, whatever the account
+  "$CHARLIEBOT_HOME/.claude/skills"
 )
+SKIPPED_TARGETS=()
+if [[ "$CHARLIEBOT_HOME" == "$DEFAULT_HOME" ]]; then
+  TARGETS=(
+    "$HOME/.claude/skills"
+    "$HOME/.agents/skills"
+    "$HOME/.gemini/antigravity-cli/skills"  # Antigravity CLI (agy) global skills root
+    "$CHARLIEBOT_HOME/.claude/skills"  # Claude Code ancestor root: collected from every master session cwd, whatever the account
+  )
+else
+  SKIPPED_TARGETS=(
+    "$HOME/.claude/skills"
+    "$HOME/.agents/skills"
+    "$HOME/.gemini/antigravity-cli/skills"
+  )
+fi
 
 # --- Flags ---
 DRY_RUN=0
@@ -74,6 +99,10 @@ removed=0
 skipped=0
 
 # --- Sync to each target ---
+for target in "${SKIPPED_TARGETS[@]}"; do
+  echo "=== Skipping shared target on non-default home: $target ==="
+done
+
 for target in "${TARGETS[@]}"; do
   echo "=== Syncing to $target ==="
   run mkdir -p "$target"
@@ -152,16 +181,16 @@ trap 'rm -rf "$discovery_config" "$discovery_log"' EXIT
 
 # The probe cwd is the master session root; setup.sh runs this sync before
 # init_charliebot_home provisions the home layout, so create it when absent.
-mkdir -p "$HOME/.charliebot/sessions"
-cd "$HOME/.charliebot/sessions"
+mkdir -p "$CHARLIEBOT_HOME/sessions"
+cd "$CHARLIEBOT_HOME/sessions"
 CLAUDE_CONFIG_DIR="$discovery_config" timeout 60 claude -p --no-session-persistence --debug-file "$discovery_log" x >/dev/null 2>&1 || true
 
 # grep misses must not abort under set -euo pipefail before the check reports.
 loaded_line=$(grep -E 'Loaded [0-9]+ unique skills' "$discovery_log" | tail -n 1 || true)
 loaded=$(sed -nE 's/.*project: ([0-9]+).*/\1/p' <<<"$loaded_line")
-expected=$(find "$HOME/.charliebot/.claude/skills" -mindepth 1 -maxdepth 1 -type l | wc -l)
+expected=$(find "$CHARLIEBOT_HOME/.claude/skills" -mindepth 1 -maxdepth 1 -type l | wc -l)
 
-reproduce_cmd='cd $HOME/.charliebot/sessions && CLAUDE_CONFIG_DIR=$(mktemp -d) timeout 60 claude -p --no-session-persistence --debug-file <tmp-log> x'
+reproduce_cmd="cd '$CHARLIEBOT_HOME/sessions' && CLAUDE_CONFIG_DIR=\$(mktemp -d) timeout 60 claude -p --no-session-persistence --debug-file <tmp-log> x"
 
 if [[ -z "$loaded" ]]; then
   echo "Claude discovery: FAILED - no 'Loaded N unique skills (... project: K ...)' line in the debug log; reproduce with: $reproduce_cmd" >&2

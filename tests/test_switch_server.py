@@ -47,8 +47,9 @@ GIT_ENV = {
 }
 DIRECT_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
-# One program for both implementations. Its routes answer the switch's readback and probe; it logs the recovery line
-# for every Run record without ended_at and then server_ready, as the real server does on startup.
+# One program for both implementations. Its routes answer the switch's readback and probe; at startup it logs a recovery
+# line for every live Run record (when it adopts) and server_ready, in the format of the implementation it stands in
+# for: console lines for server.py, JSON lines for the charliebot-server binary.
 FAKE_SERVER = r'''#!/usr/bin/env python3
 """Stand-in CharlieBot server: the routes and log lines the switch reads, behavior from behavior.json."""
 import datetime
@@ -62,6 +63,7 @@ import sys
 
 HERE = pathlib.Path(__file__).resolve().parent
 BEHAVIOR = json.loads((HERE / "behavior.json").read_text(encoding="utf-8"))
+RUST_LOGS = pathlib.Path(__file__).name == "charliebot-server"
 HOME = pathlib.Path(os.environ["CHARLIEBOT_HOME"])
 CONFIG = (HOME / "config.yaml").read_text(encoding="utf-8")
 PORT = int(re.search(r"^\s*port:\s*(\d+)", CONFIG, re.MULTILINE).group(1))
@@ -69,9 +71,14 @@ KEY = re.search(r"access_key:\s*(\S+)", (HOME / "credentials.yaml").read_text(en
 
 
 def log(event, **fields):
-  stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-  detail = "".join(f" {key}={value}" for key, value in fields.items())
-  print(f"{stamp} [info     ] {event}{detail}", flush=True)
+  if RUST_LOGS:
+    stamp = datetime.datetime.now(datetime.UTC).isoformat()
+    record = {"event": event, **fields, "level": "info", "timestamp": stamp}
+    print(json.dumps(record, separators=(",", ":")), flush=True)
+  else:
+    stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    detail = "".join(f" {key}={value}" for key, value in fields.items())
+    print(f"{stamp} [info     ] {event}{detail}", flush=True)
 
 
 if "--check-config" in sys.argv:
@@ -119,8 +126,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 for meta_path in sorted(HOME.glob("sessions/*/data/runs/*/metadata.json")):
   meta = json.loads(meta_path.read_text(encoding="utf-8"))
-  if meta["ended_at"] is None and BEHAVIOR["adopt"]:
-    log("task_recovery_resume", session=meta["session_id"], run_id=meta["id"])
+  if meta["ended_at"] is None:
+    if BEHAVIOR["adopt"]:
+      log("task_recovery_resume", session_id=meta["session_id"], run_id=meta["id"])
+    # Another event that names the run: the server's master log does, and it must not count as adoption.
+    log("master_cc_resuming", session_id=meta["session_id"], run_id=meta["id"])
 server = http.server.ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
 log("server_ready", ready_in_ms=1)
 server.serve_forever()
@@ -438,7 +448,7 @@ def test_switch_on_a_real_pane_restores_then_round_trips_then_exits_3(world: Wor
   assert _git(world.clone, "rev-parse", "HEAD") == world.baseline
   assert _serves_release(world, RUST_SHA)
   assert _version_status(world.port) == 200
-  assert "run_id=run-live" in _latest_log(world)
+  assert '"run_id":"run-live"' in _latest_log(world)
 
   # The way back needs no fast-forward: the clone stays at the baseline and current is removed. The Python server it
   # starts ignores SIGTERM, so the next switch has to SIGKILL it.

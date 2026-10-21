@@ -311,7 +311,7 @@ run-record work is `S2`; task-tree runtime and feature-owned files remain with t
 ## Catch-up e44c9ccef open steps
 
 Each non-intermittent row is one failing Rust parity step from the all-stage run
-(1,016/1,122 steps matched). The intermittent row records its observed failure
+(1,044/1,122 steps matched). The intermittent row records its observed failure
 count and may pass in a run.
 
 | Scenario | Step | Stage | Main commit | Difference |

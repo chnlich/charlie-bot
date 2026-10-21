@@ -15,6 +15,12 @@ for such input set `compare: status_and_shape`. Integers outside the signed 64-b
 
 The order of the web reply audit's events is undefined. In the requested 20 Python-vs-Python runs, the nudge (`agent_message` from `Web reply`) came before its `run_finished` in all 40 logs. Across 53 kept Python logs from the follow-up runs, it came after once; the no-reply notice (`web_reply_notice`) came before its `run_finished` in all 53. One kept Rust run using the original write order put both events after their respective `run_finished` events. A parity step that compares these events can use the `either_order_of_adjacent_events` rule, which accepts both orders (see `rust/parity/README.md`).
 
+The exit code of an interrupted run is undefined for a related reason. Python's stopper and its launcher race for the
+first write of the run's terminal record: the stopper records the interrupted outcome with no exit code
+(`runs.py:1161`), the launcher records the signal exit `-9`, and `record_finish_locked` keeps the first write
+(`runs.py:1036-1047`). The `interrupted-run-exit-code` rule of `handover-stop-request` accepts `null` and `-9` in that
+run's record and compares every other code (see `rust/parity/README.md`).
+
 | Method | Path | Stage | Status | Note |
 | --- | --- | --- | --- | --- |
 | GET, HEAD | `/openapi.json` | api-docs | not ported | No client reads this route. The Rust server answers it as an unknown path. |
@@ -317,8 +323,6 @@ counts and may pass in a run.
 | Scenario | Step | Stage | Main commit | Difference |
 | --- | --- | --- | --- | --- |
 | manager-turn-opencode | wait for the OpenCode manager run to finish | agent-orchestration | `d401d9a2a` | Python persists the completed OpenCode manager run directory; Rust leaves no matching run directory. |
-| handover-stop-request | hand over the durable interrupted outcome · python-to-candidate | agent-orchestration | `d401d9a2a` | The handover snapshot races the active run's finish recorder, leaving Rust's exit code null while Python had `-9`. The run-cancel route now waits for an active launch settlement. Intermittent: it failed in one of the five all-stage runs recorded for this task and passed in the rebased run. |
-| handover-stop-request | hand over the durable interrupted outcome · candidate-to-python | agent-orchestration | `d401d9a2a` | The mirror image of the sibling row: Python records a null exit code when its interrupted finish lands before its launcher observes the signal exit, while Rust records the settled process status (`-9`). Intermittent: it failed in three of the five all-stage runs recorded for this task, including the rebased run, with Python `null` against Rust `-9`. |
 | features-web-reply-audit | server shutdown and fake-agent cleanup | features | `3cd98aa21`, `2fa0a4ce2` | Claude launch argv and env lag Python's per-run-kind tools, settings, and advisor disablement. Intermittent: it failed in the earlier all-stage run and passed in the latest one. |
 
 ## Catch-up e44c9ccef ignored Cargo tests

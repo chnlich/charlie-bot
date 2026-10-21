@@ -1,5 +1,9 @@
 //! Child setup keeps session, parent-death, and turn-tree policies explicit.
 //!
+//! Children with a parent-death signal spawn on one dedicated thread that lives for the process lifetime.
+//! `PR_SET_PDEATHSIG` follows the thread that created the child, so those spawns avoid Tokio's retiring blocking pool.
+//! Raw-log runs, codex and Claude one-shots, and Claude compaction use the blocking pool because they set no signal.
+//!
 //! Parent-side turn-tree setup sets nice to 10 after exec. Child-side turn-tree setup raises nice by 10 before exec.
 //! Child-side cgroup setup moves the child before exec without changing nice.
 
@@ -11,6 +15,8 @@ use std::io;
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
+use std::sync::{OnceLock, mpsc};
+use std::thread;
 
 use nix::sys::signal::Signal;
 use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
@@ -18,6 +24,8 @@ use nix::unistd::Pid;
 use serde_json::Value;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, Command};
+use tokio::runtime::Handle;
+use tokio::sync::oneshot;
 
 use super::cgroup::{self, SessionCgroup};
 use super::identity::{self, ProcessIdentity};
@@ -26,6 +34,19 @@ const TURN_TREE_NICE: i32 = 10;
 const PUMP_CHUNK_BYTES: usize = 8192;
 const LOG_FLUSH_BYTES: usize = 64 * 1024;
 pub const STDERR_TAIL_BYTES: usize = 64 * 1024;
+
+struct ParentDeathSpawnRequest {
+  command: Command,
+  runtime: Handle,
+  response: oneshot::Sender<io::Result<Child>>,
+}
+
+enum ParentDeathSpawner {
+  Ready(mpsc::Sender<ParentDeathSpawnRequest>),
+  Failed { kind: io::ErrorKind, message: String },
+}
+
+static PARENT_DEATH_SPAWNER: OnceLock<ParentDeathSpawner> = OnceLock::new();
 
 /// Required process inputs for each transport spawn.
 #[derive(Clone, Debug)]
@@ -151,7 +172,7 @@ pub async fn spawn_raw_log(
     .stdout(std::process::Stdio::from(raw))
     .stderr(std::process::Stdio::from(stderr));
   configure_child_setup(&mut command, None, SpawnSetup::ParentSideTurnTree, cgroup.clone());
-  let child = spawn_command(command).await?;
+  let child = spawn_command(command, None).await?;
   apply_turn_tree_limits(child.id().expect("spawned child has a process id"), cgroup.as_ref());
   Ok(SpawnedChild { child, cgroup })
 }
@@ -188,15 +209,67 @@ pub async fn spawn_with_setup(
     .stdout(std::process::Stdio::piped())
     .stderr(std::process::Stdio::piped());
   configure_child_setup(&mut command, pdeathsig, setup, cgroup.clone());
-  let child = spawn_command(command).await?;
+  let child = spawn_command(command, pdeathsig).await?;
   if setup == SpawnSetup::ParentSideTurnTree {
     apply_turn_tree_limits(child.id().expect("spawned child has a process id"), cgroup.as_ref());
   }
   Ok(SpawnedChild { child, cgroup })
 }
 
-async fn spawn_command(mut command: Command) -> io::Result<Child> {
+async fn spawn_command(mut command: Command, pdeathsig: Option<Signal>) -> io::Result<Child> {
+  if pdeathsig.is_some() {
+    let (response, result) = oneshot::channel();
+    let request = ParentDeathSpawnRequest { command, runtime: Handle::current(), response };
+    parent_death_spawn_sender()?
+      .send(request)
+      .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "parent-death spawn thread has stopped"))?;
+    return result.await.map_err(io::Error::other)?;
+  }
   tokio::task::spawn_blocking(move || command.spawn()).await.map_err(io::Error::other)?
+}
+
+fn parent_death_spawn_sender() -> io::Result<&'static mpsc::Sender<ParentDeathSpawnRequest>> {
+  let spawner = PARENT_DEATH_SPAWNER.get_or_init(|| {
+    let (sender, receiver) = mpsc::channel();
+    let result = thread::Builder::new()
+      .name("charliebot-parent-death-spawner".to_owned())
+      .spawn(move || parent_death_spawn_loop(receiver));
+    match result {
+      Ok(_) => ParentDeathSpawner::Ready(sender),
+      Err(error) => ParentDeathSpawner::Failed { kind: error.kind(), message: error.to_string() },
+    }
+  });
+  match spawner {
+    ParentDeathSpawner::Ready(sender) => Ok(sender),
+    ParentDeathSpawner::Failed { kind, message } => Err(io::Error::new(*kind, message.clone())),
+  }
+}
+
+fn parent_death_spawn_loop(receiver: mpsc::Receiver<ParentDeathSpawnRequest>) {
+  while let Ok(request) = receiver.recv() {
+    let ParentDeathSpawnRequest { mut command, runtime, response } = request;
+    let _runtime_guard = runtime.enter();
+    let result = command.spawn();
+    if let Err(result) = response.send(result) {
+      report_unclaimed_parent_death_spawn(result);
+    }
+  }
+}
+
+fn report_unclaimed_parent_death_spawn(result: io::Result<Child>) {
+  match result {
+    Ok(mut child) => {
+      let pid = child.id().expect("spawned child has a process id");
+      super::kill::kill_process_group(pid, Signal::SIGKILL);
+      if let Err(error) = child.start_kill() {
+        tracing::warn!(target: "charliebot_agents", pid, error = %error, "unclaimed_spawn_kill_failed");
+      }
+      tracing::warn!(target: "charliebot_agents", pid, "parent_death_spawn_owner_gone");
+    }
+    Err(error) => {
+      tracing::warn!(target: "charliebot_agents", error = %error, "parent_death_spawn_error_owner_gone");
+    }
+  }
 }
 
 fn configure_child_setup(

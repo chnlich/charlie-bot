@@ -87,36 +87,12 @@
   <div id="error-msg" class="hidden text-center py-16 text-red-400 text-sm"></div>
   <div id="empty-msg" class="hidden text-center py-16 text-slate-500 text-sm">No events found.</div>
 
+  <script src="/static/js/json-highlight.js?v={{ static_asset_version|urlencode }}"></script>
   <script>
     // -------------------------------------------------------------------------
     // Constants
     // -------------------------------------------------------------------------
     const EVENTS_URL = {{ events_url|tojson }};
-
-    // -------------------------------------------------------------------------
-    // Syntax highlighting
-    // -------------------------------------------------------------------------
-    function syntaxHighlight(obj) {
-      const json = JSON.stringify(obj, null, 2);
-      return json.replace(
-        /("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+-]?\d+)?)/g,
-        (match) => {
-          let cls = 'json-num';
-          if (/^"/.test(match)) {
-            cls = /:$/.test(match) ? 'json-key' : 'json-str';
-          } else if (/true|false/.test(match)) {
-            cls = 'json-bool';
-          } else if (/null/.test(match)) {
-            cls = 'json-null';
-          }
-          return `<span class="${cls}">${escapeHtml(match)}</span>`;
-        }
-      );
-    }
-
-    function escapeHtml(s) {
-      return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    }
 
     // -------------------------------------------------------------------------
     // Badge colour for event type

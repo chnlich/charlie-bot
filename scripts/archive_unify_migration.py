@@ -22,7 +22,7 @@ never writes a session file):
 Each subcommand preflights the same two facts: the configured server answers,
 and credentials.yaml carries charliebot.access_key. The snapshot parses
 metadata.json and data/chat_events.jsonl as raw JSON — it must never import the
-model module that drops the retired presentation field (asserted below).
+model module that drops the retired presentation field.
 """
 
 from __future__ import annotations

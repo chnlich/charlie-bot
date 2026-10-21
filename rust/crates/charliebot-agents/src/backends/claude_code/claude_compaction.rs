@@ -10,6 +10,7 @@ use anyhow::Context;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_registry::backend::{EmitFn, Env};
 use charliebot_store::metadata::UtcDateTime;
+use charliebot_store::run_records::RunKind;
 use serde_json::{Map, Value, json};
 use tokio::io::AsyncWriteExt;
 use tokio::time::timeout;
@@ -180,11 +181,11 @@ pub fn compaction_command(session_id: &str) -> Vec<String> {
 }
 
 /// Build the compaction environment from the launch environment and selected account directory.
-pub fn compaction_env_from(config_dir: &Path, inherited: &Env) -> anyhow::Result<Env> {
+pub fn compaction_env_from(config_dir: &Path, inherited: &Env, run_kind: RunKind) -> anyhow::Result<Env> {
   let mut env = inherited.clone();
   env.remove(crate::launch_loop::SESSION_ID_ENV);
   super::claude_child_env(&mut env);
-  let headless = claude_launch::headless_claude_env(&env);
+  let headless = claude_launch::headless_claude_env(run_kind, &env);
   env.extend(headless);
   env.remove(login_dirs::CLAUDE_CONFIG_DIR_ENV);
   let path = login_dirs::expanduser(&config_dir.to_string_lossy(), inherited.get("HOME").map(String::as_str))?;
@@ -286,6 +287,7 @@ pub async fn compact_with_sonnet(
   account_label: &str,
   trigger: &str,
   timeout_duration: StdDuration,
+  run_kind: RunKind,
 ) -> anyhow::Result<bool> {
   compact_with_sonnet_inner(
     CompactionInput {
@@ -300,7 +302,7 @@ pub async fn compact_with_sonnet(
       trigger,
       timeout_duration,
     },
-    |config_dir| compaction_env_from(config_dir, base_env),
+    |config_dir| compaction_env_from(config_dir, base_env, run_kind),
   )
   .await
 }
@@ -482,7 +484,7 @@ mod tests {
       ("CLAUDE_CONFIG_DIR".to_string(), "/synthetic/inherited".to_string()),
       (crate::launch_loop::SESSION_ID_ENV.to_string(), "parent-session".to_string()),
     ]);
-    let env = compaction_env_from(config_dir, &inherited).unwrap();
+    let env = compaction_env_from(config_dir, &inherited, RunKind::ManagerTurn).unwrap();
     assert!(!env.contains_key("CLAUDECODE"));
     assert!(!env.contains_key(crate::launch_loop::SESSION_ID_ENV));
     assert_eq!(env.get("CLAUDE_CONFIG_DIR").unwrap(), &config_dir.to_string_lossy());
@@ -577,7 +579,7 @@ mod tests {
     let success_env = inherited.clone();
     let succeeded = compact_with_sonnet_inner(
       call("session-id", &cwd, &account, &emit, &cfg, StdDuration::from_secs(30)),
-      move |path| compaction_env_from(path, &success_env),
+      move |path| compaction_env_from(path, &success_env, RunKind::ManagerTurn),
     )
     .await
     .unwrap();
@@ -598,7 +600,7 @@ mod tests {
     let failure_env = inherited.clone();
     let failed = compact_with_sonnet_inner(
       call("session-id", &cwd, &account, &emit, &cfg, StdDuration::from_secs(30)),
-      move |path| compaction_env_from(path, &failure_env),
+      move |path| compaction_env_from(path, &failure_env, RunKind::ManagerTurn),
     )
     .await
     .unwrap();
@@ -610,7 +612,7 @@ mod tests {
     let timeout_env = inherited;
     let timed_out = compact_with_sonnet_inner(
       call("session-id", &cwd, &account, &emit, &cfg, StdDuration::from_millis(100)),
-      move |path| compaction_env_from(path, &timeout_env),
+      move |path| compaction_env_from(path, &timeout_env, RunKind::ManagerTurn),
     )
     .await
     .unwrap();

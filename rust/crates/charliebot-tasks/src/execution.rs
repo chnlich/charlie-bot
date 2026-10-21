@@ -685,6 +685,7 @@ impl TaskExecutionAdapter {
         instructions_content: Some(snapshot.instructions_text()),
         session_meta: Some(meta.clone()),
         held_native_id,
+        run_kind: run.kind,
       },
     )?;
     let store = Arc::clone(&self.features.store);
@@ -1848,6 +1849,7 @@ impl TaskExecutionAdapter {
         instructions_content: None,
         session_meta: Some(meta.clone()),
         held_native_id: run.native_session_id.clone(),
+        run_kind: run.kind,
       },
     )?;
     let store = Arc::clone(&self.features.store);

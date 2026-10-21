@@ -17,6 +17,7 @@ use charliebot_core::config::{
 use charliebot_registry::Registry;
 use charliebot_registry::backend::{BackendFactory, Env, LaunchArgs};
 use charliebot_registry::context::StartupState;
+use charliebot_store::run_records::RunKind;
 use serde_json::{Value, json};
 use serde_yaml::Mapping;
 
@@ -91,6 +92,7 @@ fn complete_agent_child_environments_match_python_for_each_launch_kind() {
       "compaction" if case.backend_type == "cc-claude" => claude_code::claude_compaction::compaction_env_from(
         Path::new("/synthetic/home/accounts/claude-one"),
         &base.values,
+        RunKind::ManagerTurn,
       )
       .unwrap(),
       _ => panic!("unsupported launch kind/backend pair: {}/{}", case.launch_kind, case.backend_type),

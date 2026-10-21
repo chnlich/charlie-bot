@@ -1767,6 +1767,12 @@ CLI_COMMON_TRANSPORT_GET_PATCH_TARGET = "src.runtime.cli.common._request_get"
 # home.charliebot_home_dir() reads pick the stand-in up at call time.
 CLI_MEMORY_HOME_PATCH_TARGET = "src.infra.home.charliebot_home_dir"
 
+# Import-path patch target for the shared httpx client factory. Every production caller binds
+# the module (`from src.infra import http`) and reads http.get_http_client() at call time, so
+# monkeypatch.setattr lands the stand-in on the src.infra.http module attribute where each read
+# resolves.
+HTTP_GET_HTTP_CLIENT_PATCH_TARGET = "src.infra.http.get_http_client"
+
 # Import-path patch target shared by every test that swaps the backend factory a master session
 # runs under. src/runtime/master_cc_run.py reads `backend_types.build_backend` as a module
 # attribute at every build, so monkeypatch.setattr on the backend type table's module attribute

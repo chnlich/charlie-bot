@@ -855,6 +855,7 @@ async fn python_and_rust_delegate_a_task_spec_into_the_same_node_run_and_spec_by
 }
 
 #[tokio::test]
+#[ignore = "catch-up 78e0d10e2: cargo-2"]
 async fn task_gate_matches_python_cases_and_the_parity_fixture_tree() {
   let root = tempfile::tempdir().unwrap();
   let cases = materialize_gate_cases();

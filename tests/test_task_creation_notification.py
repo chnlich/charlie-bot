@@ -27,14 +27,7 @@ from src.runtime import task_errors
 @pytest_asyncio.fixture
 async def env(tmp_path: pathlib.Path):
   _, session_blocks, tree = conftest.build_env(tmp_path)
-  root = await tree.create_task(
-      request_id="root",
-      task_parent_id=None,
-      profile="manager",
-      task=None,
-      name="Root",
-      backend=None,
-      caller=conftest.OPERATOR)
+  root = await conftest.create_task(tree, parent=None, request_id="root", name="Root")
   return tree, session_blocks, root.id
 
 

@@ -16,6 +16,7 @@ use tokio::task::JoinHandle;
 
 use super::backend::{extract_model_limit, image_file_attachments};
 use super::opencode_limits;
+use super::server;
 use super::server::{OpenCodeHost, OpenCodeServer, OpenCodeServerPool, ServerTimeouts};
 use super::{OpenCodeBackend, OpenCodeOption, OpenCodeTranslator};
 use crate::agent_environment::AgentBaseEnvironment;
@@ -222,6 +223,24 @@ fn session_id_for_prompt(logs: &[Value], prompt: &str) -> String {
     .to_string()
 }
 
+async fn loaded_directories(harness: &Harness) -> Vec<String> {
+  harness
+    .server
+    .client_request(reqwest::Method::GET, "/api/debug/location")
+    .unwrap()
+    .send()
+    .await
+    .unwrap()
+    .error_for_status()
+    .unwrap()
+    .json::<Vec<Value>>()
+    .await
+    .unwrap()
+    .iter()
+    .map(|location| location["directory"].as_str().unwrap().to_string())
+    .collect()
+}
+
 fn text_event(text: &str) -> Value {
   json!({"type": "session.text.ended", "data": {"assistantMessageID": "m1", "ordinal": 0, "text": text}})
 }
@@ -254,9 +273,9 @@ fn headless_config_denies_the_three_tools_and_pins_bash() {
   assert_eq!(config["permission"]["opencode_session_move"], "deny");
 }
 
+// Python: tests/test_opencode_backend.py:114.
 #[test]
 fn server_env_drops_the_run_identity_and_points_xdg_at_the_store() {
-  // Python: tests/test_opencode_backend.py::test_server_env_drops_the_run_identity_and_points_xdg_at_the_store
   let harness = Harness::new(json!({}));
   let env = Env::from([
     ("CHARLIEBOT_RUN_TOKEN".to_string(), "turn-token".to_string()),
@@ -270,6 +289,7 @@ fn server_env_drops_the_run_identity_and_points_xdg_at_the_store() {
   assert_eq!(result["XDG_STATE_HOME"], harness.host.state_dir().display().to_string());
   assert_eq!(result["XDG_CACHE_HOME"], harness.host.cache_dir().display().to_string());
   assert_eq!(result["OPENCODE_SERVER_PASSWORD"], "pw");
+  assert_eq!(result.get("OPENCODE_DISABLE_FFF").map(String::as_str), Some("1"));
   assert_eq!(result["NO_PROXY"], "internal.test");
   let proxied_host = OpenCodeHost::with_program(
     harness.host.program.program.clone(),
@@ -285,6 +305,163 @@ fn server_env_drops_the_run_identity_and_points_xdg_at_the_store() {
   assert_eq!(env["HTTP_PROXY"], "http://proxy.test:8080");
   assert_eq!(env["HTTPS_PROXY"], "http://proxy.test:8080");
   assert!(env["NO_PROXY"].ends_with("::1"));
+}
+
+// Python: tests/test_opencode_backend.py:462.
+#[tokio::test]
+async fn claim_is_held_before_start_and_dropped_after_start_failure() {
+  let harness = Harness::with_settings(json!({"prompts": {}}), Some("1.18.18"), ServerTimeouts::default(), None);
+  let directory = harness.root.path().join("work").display().to_string();
+  let claims_at_start = harness.server.observe_claim_before_start_test(&directory);
+  let (_, output, task) = harness.start_run("x", LaunchArgs::default(), None, vec![], Env::new());
+  assert_eq!(task.await.unwrap().unwrap().exit_code, Some(1));
+  assert_eq!(collected_events(&output).last().unwrap()["type"], event_types::ERROR);
+  assert_eq!(*claims_at_start.lock().unwrap(), vec![1]);
+  assert_eq!(harness.server.claim_count_test(&directory), 0);
+  assert!(!harness.logs().iter().any(|entry| entry["path"] == "/api/debug/location"));
+  harness.clear_finished_turn_pids();
+}
+
+// Python: tests/test_opencode_backend.py:345.
+#[test]
+fn process_rss_reads_the_process_own_resident_memory() {
+  assert!(server::OpenCodeServer::process_rss_mb_test(std::process::id()).unwrap() > 10.0);
+}
+
+// Python: tests/test_opencode_backend.py:350.
+#[tokio::test]
+async fn heavy_server_stops_at_the_checkpoint_when_its_rss_is_above_the_limit() {
+  let timeouts = ServerTimeouts {
+    idle_exit: Duration::from_secs(3600),
+    heavy_check: Duration::from_millis(10),
+    heavy_rss_mb: 400.0,
+    heavy_rss_override: Some(401.0),
+    ..ServerTimeouts::default()
+  };
+  let harness =
+    Harness::with_settings(json!({"prompts": {"idle": {"events": [text_event("ok")]}}}), None, timeouts, None);
+  let (_, _, task) = harness.start_run("idle", LaunchArgs::default(), None, vec![], Env::new());
+  assert_eq!(task.await.unwrap().unwrap().exit_code, Some(0));
+  tokio::time::sleep(Duration::from_millis(30)).await;
+  assert_eq!(harness.server.heavy_check_count_test(), 1);
+  assert!(!harness.server.process_alive());
+  harness.clear_finished_turn_pids();
+}
+
+// Python: tests/test_opencode_backend.py:364.
+#[tokio::test]
+async fn server_at_the_rss_limit_runs_on_to_the_idle_exit() {
+  let timeouts = ServerTimeouts {
+    idle_exit: Duration::from_millis(80),
+    heavy_check: Duration::from_millis(10),
+    heavy_rss_mb: 400.0,
+    heavy_rss_override: Some(400.0),
+    ..ServerTimeouts::default()
+  };
+  let harness =
+    Harness::with_settings(json!({"prompts": {"idle": {"events": [text_event("ok")]}}}), None, timeouts, None);
+  let (_, _, task) = harness.start_run("idle", LaunchArgs::default(), None, vec![], Env::new());
+  assert_eq!(task.await.unwrap().unwrap().exit_code, Some(0));
+  tokio::time::sleep(Duration::from_millis(25)).await;
+  assert_eq!(harness.server.heavy_check_count_test(), 1);
+  assert!(harness.server.process_alive());
+  tokio::time::timeout(Duration::from_secs(2), async {
+    while harness.server.process_alive() {
+      tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+  })
+  .await
+  .expect("server did not reach the idle exit");
+  harness.clear_finished_turn_pids();
+}
+
+// Python: tests/test_opencode_backend.py:377.
+#[tokio::test]
+async fn a_claimed_directory_keeps_the_server_running() {
+  let timeouts = ServerTimeouts {
+    idle_exit: Duration::from_millis(50),
+    heavy_check: Duration::from_millis(10),
+    heavy_rss_mb: 0.0,
+    ..ServerTimeouts::default()
+  };
+  let harness = Harness::with_settings(held_script(&["held"]), None, timeouts, None);
+  let directory = harness.root.path().join("work").display().to_string();
+  let (runner, _, task) = harness.start_run("held", LaunchArgs::default(), None, vec![], Env::new());
+  harness
+    .wait_for_log(|logs| {
+      logs.iter().any(|entry| entry.get("path").and_then(Value::as_str).is_some_and(|path| path.ends_with("/prompt")))
+    })
+    .await;
+  assert_eq!(harness.server.claim_count_test(&directory), 1);
+  tokio::time::sleep(Duration::from_millis(80)).await;
+  assert_eq!(harness.server.heavy_check_count_test(), 0);
+  assert!(harness.server.process_alive());
+  runner.terminate().await.unwrap();
+  task.await.unwrap().unwrap();
+  harness.clear_finished_turn_pids();
+}
+
+// Python: tests/test_opencode_backend.py:491.
+#[tokio::test]
+async fn dropping_the_last_claim_rearms_the_idle_exit() {
+  let timeouts = ServerTimeouts {
+    idle_exit: Duration::from_millis(100),
+    heavy_check: Duration::from_millis(10),
+    heavy_rss_mb: 1_000_000.0,
+    ..ServerTimeouts::default()
+  };
+  let harness = Harness::with_settings(json!({}), None, timeouts, None);
+  let directory = harness.root.path().join("claimed").display().to_string();
+  harness.server.claim_test(&directory).await;
+  harness.server.ensure_running().await.unwrap();
+  tokio::time::sleep(Duration::from_millis(150)).await;
+  assert!(harness.server.process_alive());
+
+  harness.server.release_claim_test(&directory).await.unwrap();
+  tokio::time::timeout(Duration::from_secs(2), async {
+    while harness.server.process_alive() {
+      tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+  })
+  .await
+  .expect("server did not exit after the last claim was released");
+  harness.clear_finished_turn_pids();
+}
+
+// Python: tests/test_opencode_backend.py:391.
+#[tokio::test]
+async fn a_turn_claimed_during_heavy_shutdown_starts_after_the_old_server_stops() {
+  let timeouts = ServerTimeouts {
+    idle_exit: Duration::from_secs(3600),
+    heavy_check: Duration::from_millis(10),
+    heavy_rss_mb: 0.0,
+    ..ServerTimeouts::default()
+  };
+  let harness = Harness::with_settings(
+    json!({"prompts": {"first": {"events": [text_event("one")]}, "next": {"events": [text_event("two")]}}}),
+    None,
+    timeouts,
+    None,
+  );
+  let (entered, release_shutdown) = harness.server.pause_heavy_shutdown_test();
+  let (_, _, first_task) = harness.start_run("first", LaunchArgs::default(), None, vec![], Env::new());
+  assert_eq!(first_task.await.unwrap().unwrap().exit_code, Some(0));
+  tokio::time::sleep(Duration::from_millis(40)).await;
+  let reached_shutdown = entered.load(std::sync::atomic::Ordering::Acquire);
+  if reached_shutdown {
+    let first_pid = harness.server.pid().unwrap();
+    let (_, _, next_task) = harness.start_run("next", LaunchArgs::default(), None, vec![], Env::new());
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let session_count =
+      harness.logs().iter().filter(|entry| entry["method"] == "POST" && entry["path"] == "/api/session").count();
+    release_shutdown.notify_one();
+    assert_eq!(session_count, 1);
+    assert_eq!(next_task.await.unwrap().unwrap().exit_code, Some(0));
+    assert_ne!(harness.server.pid().unwrap(), first_pid);
+  }
+  assert!(reached_shutdown);
+  harness.stop().await.unwrap();
+  harness.clear_finished_turn_pids();
 }
 
 #[test]
@@ -454,9 +631,9 @@ async fn turn_translates_events_sets_the_environment_and_ends_with_result() {
   harness.clear_finished_turn_pids();
 }
 
+// Python: tests/test_opencode_backend.py:666.
 #[tokio::test]
 async fn turn_end_steps_run_in_order_and_remove_the_session_shells() {
-  // Python: tests/test_opencode_backend.py::test_turn_end_steps_run_in_order_and_remove_the_session_shells
   let harness = Harness::new(json!({"prompts": {"work": {"shells": [{}], "events": [
     {"type": "session.execution.failed", "data": {"error": {"message": "model refused"}}}
   ]}}}));
@@ -479,7 +656,89 @@ async fn turn_end_steps_run_in_order_and_remove_the_session_shells() {
   let shell_list = calls.iter().position(|call| call.starts_with("GET /api/shell")).unwrap();
   let shell_delete = calls.iter().position(|call| call.starts_with("DELETE /api/shell/")).unwrap();
   assert!(interrupt < shell_list && shell_list < shell_delete);
+  let release = calls.iter().position(|call| call == "DELETE /api/debug/location");
+  assert!(release.is_some(), "turn cleanup did not release a directory");
+  assert!(shell_delete < release.unwrap());
+  let released = harness
+    .logs()
+    .into_iter()
+    .filter(|entry| entry["method"] == "DELETE" && entry["path"] == "/api/debug/location")
+    .map(|entry| entry["query"]["location[directory]"][0].as_str().unwrap().to_string())
+    .collect::<Vec<_>>();
+  assert_eq!(released, vec![harness.root.path().join("work").display().to_string()]);
   assert!(harness.server.process_alive());
+  harness.stop().await.unwrap();
+  harness.clear_finished_turn_pids();
+}
+
+// Python: tests/test_opencode_backend.py:765.
+// Python: tests/test_opencode_backend.py:322.
+#[tokio::test]
+async fn terminate_releases_only_unclaimed_directories_once_before_returning() {
+  let harness = Harness::new(json!({
+    "prompts": {
+      "held": {"events": [], "hold": true},
+      "quick": {"events": [text_event("done")]}
+    }
+  }));
+  let directory = harness.root.path().join("work");
+  let (runner, _, held_task) = harness.start_run("held", LaunchArgs::default(), None, vec![], Env::new());
+  harness
+    .wait_for_log(|logs| logs.iter().any(|entry| entry.get("prompt_text").and_then(Value::as_str) == Some("held")))
+    .await;
+  harness
+    .server
+    .client_request(reqwest::Method::GET, "/api/model")
+    .unwrap()
+    .query(&[("location[directory]", harness.root.path().join("unused").display().to_string())])
+    .send()
+    .await
+    .unwrap()
+    .error_for_status()
+    .unwrap();
+  let (_, _, quick_task) = harness.start_run("quick", LaunchArgs::default(), None, vec![], Env::new());
+  assert_eq!(quick_task.await.unwrap().unwrap().exit_code, Some(0));
+  assert_eq!(loaded_directories(&harness).await, vec![directory.display().to_string()]);
+  tokio::time::timeout(Duration::from_secs(5), runner.terminate()).await.unwrap().unwrap();
+  assert_eq!(loaded_directories(&harness).await, Vec::<String>::new());
+  assert_eq!(
+    tokio::time::timeout(Duration::from_secs(5), held_task).await.unwrap().unwrap().unwrap().exit_code,
+    Some(-libc::SIGTERM)
+  );
+  let releases = harness
+    .logs()
+    .into_iter()
+    .filter(|entry| entry["method"] == "DELETE" && entry["path"] == "/api/debug/location")
+    .map(|entry| entry["query"]["location[directory]"][0].as_str().unwrap().to_string())
+    .collect::<Vec<_>>();
+  assert_eq!(releases.iter().filter(|released| released.as_str() == directory.display().to_string()).count(), 1);
+  assert_eq!(
+    releases
+      .iter()
+      .filter(|released| released.as_str() == harness.root.path().join("unused").display().to_string())
+      .count(),
+    1
+  );
+  harness.clear_finished_turn_pids();
+}
+
+// Python: tests/test_opencode_backend.py:504.
+#[tokio::test]
+async fn failed_release_is_reported_as_a_turn_error_event() {
+  let harness = Harness::with_settings(
+    json!({"release_status": 500, "prompts": {"work": {"events": [text_event("done")]}}}),
+    None,
+    ServerTimeouts::default(),
+    None,
+  );
+  let directory = harness.root.path().join("work").display().to_string();
+  let (_, output, task) = harness.start_run("work", LaunchArgs::default(), None, vec![], Env::new());
+  let outcome = task.await.unwrap().unwrap();
+  let error = collected_events(&output).last().unwrap().clone();
+  assert_eq!(error["type"], event_types::ERROR);
+  assert!(error["message"].as_str().unwrap().contains(&directory));
+  assert!(error["message"].as_str().unwrap().contains("HTTP 500"));
+  assert_eq!(outcome.exit_code, Some(1));
   harness.stop().await.unwrap();
   harness.clear_finished_turn_pids();
 }
@@ -601,9 +860,9 @@ async fn manager_turn_reloads_locations_before_the_prompt() {
   harness.clear_finished_turn_pids();
 }
 
+// Python: tests/test_opencode_backend.py:856.
 #[tokio::test]
 async fn stream_loss_ends_running_turns_before_the_server_stops() {
-  // Python: tests/test_opencode_backend.py::test_stream_loss_ends_running_turns_before_the_server_stops
   let harness = Harness::new(json!({
     "prompts": {"stuck": {"events": [], "shells": [{}], "hold": true}}
   }));
@@ -621,7 +880,11 @@ async fn stream_loss_ends_running_turns_before_the_server_stops() {
   assert!(!errors.is_empty());
   assert!(errors[0]["message"].as_str().unwrap().contains("event stream"));
   assert!(!harness.server.process_alive());
-  assert!(harness.logs().iter().any(|entry| entry["method"] == "DELETE"));
+  let deletes = harness.logs().into_iter().filter(|entry| entry["method"] == "DELETE").collect::<Vec<_>>();
+  assert_eq!(deletes.len(), 1);
+  assert!(deletes[0]["path"].as_str().unwrap().starts_with("/api/shell/"));
+  assert!(!harness.logs().iter().any(|entry| entry["method"] == "GET" && entry["path"] == "/api/debug/location"));
+  assert_eq!(harness.server.claim_count_test(&harness.root.path().join("work").display().to_string()), 0);
   harness.clear_finished_turn_pids();
 }
 
@@ -652,10 +915,15 @@ async fn server_crash_fails_the_turn_with_its_exit_code_and_the_next_turn_restar
   harness.clear_finished_turn_pids();
 }
 
+// Python: tests/test_opencode_backend.py:922.
 #[tokio::test]
 async fn idle_server_exits_after_the_idle_limit() {
-  // Python: tests/test_opencode_backend.py::test_idle_server_exits_after_the_idle_limit
-  let timeouts = ServerTimeouts { idle_exit: Duration::from_millis(80), ..ServerTimeouts::default() };
+  let timeouts = ServerTimeouts {
+    idle_exit: Duration::from_millis(80),
+    heavy_check: Duration::from_millis(50),
+    heavy_rss_mb: 1_000_000.0,
+    ..ServerTimeouts::default()
+  };
   let harness =
     Harness::with_settings(json!({"prompts": {"idle": {"events": [text_event("ok")]}}}), None, timeouts, None);
   let (_, output, task) = harness.start_run("idle", LaunchArgs::default(), None, vec![], Env::new());
@@ -671,9 +939,9 @@ async fn idle_server_exits_after_the_idle_limit() {
   harness.clear_finished_turn_pids();
 }
 
+// Python: tests/test_opencode_backend.py:937.
 #[tokio::test]
 async fn wrong_major_version_fails_the_turn_naming_the_binary() {
-  // Python: tests/test_opencode_backend.py::test_wrong_major_version_fails_the_turn_naming_the_binary
   let harness = Harness::with_settings(json!({"prompts": {}}), Some("1.18.18"), ServerTimeouts::default(), None);
   let (_, output, task) = harness.start_run("x", LaunchArgs::default(), None, vec![], Env::new());
   assert_eq!(task.await.unwrap().unwrap().exit_code, Some(1));
@@ -682,13 +950,26 @@ async fn wrong_major_version_fails_the_turn_naming_the_binary() {
   assert!(error["message"].as_str().unwrap().contains("1.18.18"));
   assert!(error["message"].as_str().unwrap().contains(&harness.host.program.display.display().to_string()));
   assert!(!harness.server.process_alive());
+  assert_eq!(harness.server.claim_count_test(&harness.root.path().join("work").display().to_string()), 0);
   harness.clear_finished_turn_pids();
 }
 
+// Python: tests/test_opencode_backend.py:950.
 #[tokio::test]
 async fn missing_resume_session_fails_the_turn_naming_the_id() {
-  // Python: tests/test_opencode_backend.py::test_missing_resume_session_fails_the_turn_naming_the_id
   let harness = Harness::new(json!({"prompts": {}}));
+  harness.server.ensure_running().await.unwrap();
+  let directory = harness.root.path().join("work").display().to_string();
+  harness
+    .server
+    .client_request(reqwest::Method::GET, "/api/model")
+    .unwrap()
+    .query(&[("location[directory]", directory.clone())])
+    .send()
+    .await
+    .unwrap()
+    .error_for_status()
+    .unwrap();
   let (_, output, task) =
     harness.start_run("x", launch_with_instructions(None, None, Some("ses_gone")), None, vec![], Env::new());
   assert_eq!(task.await.unwrap().unwrap().exit_code, Some(1));
@@ -697,6 +978,14 @@ async fn missing_resume_session_fails_the_turn_naming_the_id() {
   assert!(error["message"].as_str().unwrap().contains("ses_gone"));
   assert!(error["message"].as_str().unwrap().contains(&harness.host.data_dir().display().to_string()));
   assert!(!harness.logs().iter().any(|entry| entry["method"] == "POST" && entry["path"] == "/api/session"));
+  let releases = harness
+    .logs()
+    .into_iter()
+    .filter(|entry| entry["method"] == "DELETE" && entry["path"] == "/api/debug/location")
+    .map(|entry| entry["query"]["location[directory]"][0].as_str().unwrap().to_string())
+    .collect::<Vec<_>>();
+  assert_eq!(releases, vec![directory.clone()]);
+  assert_eq!(harness.server.claim_count_test(&directory), 0);
   harness.stop().await.unwrap();
   harness.clear_finished_turn_pids();
 }

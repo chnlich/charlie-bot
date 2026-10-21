@@ -8,6 +8,8 @@ import signal
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Callable, Iterator
 from typing import Any
@@ -177,6 +179,56 @@ def test_opencode_fake_serves_api_and_uses_script_gates_and_spawn_record(
   (agent_dir / "open-opencode-turn").write_text("open\n", encoding="utf-8")
   assert _read_sse_event(stream) == {"type": "session.execution.succeeded", "data": {"sessionID": session_id}}
   stream.close()
+
+
+def test_opencode_fake_lists_and_unloads_loaded_locations(
+    tmp_path: pathlib.Path, start_fake: Callable[..., subprocess.Popen]) -> None:
+  home = tmp_path / "home"
+  _write_script(home, [], name="opencode")
+  process = start_fake(home, "opencode", "serve", "--port", "0")
+  assert process.stdout is not None
+  listening = process.stdout.readline().strip()
+  base_url = listening.removeprefix("server listening on ")
+
+  def request(method: str, path: str, body: dict[str, Any] | None = None) -> tuple[int, bytes]:
+    data = json.dumps(body).encode("utf-8") if body is not None else None
+    request = urllib.request.Request(
+        f"{base_url}{path}",
+        data=data,
+        headers={"Content-Type": "application/json"} if data is not None else {},
+        method=method)
+    try:
+      with urllib.request.urlopen(request, timeout=2) as response:
+        return response.status, response.read()
+    except urllib.error.HTTPError as error:
+      return error.code, error.read()
+
+  status, _ = request("GET", "/api/model?" + urllib.parse.urlencode({"location[directory]": "/locations/z"}))
+  assert status == 200
+  status, _ = request("POST", "/api/session", {"location": {"directory": "/locations/a"}})
+  assert status == 200
+  status, _ = request("GET", "/api/shell?" + urllib.parse.urlencode({"location[directory]": "/locations/m"}))
+  assert status == 200
+
+  status, payload = request("GET", "/api/debug/location")
+  assert status == 200
+  assert json.loads(payload) == [
+      {
+          "directory": "/locations/a"
+      },
+      {
+          "directory": "/locations/m"
+      },
+      {
+          "directory": "/locations/z"
+      },
+  ]
+  status, _ = request(
+      "DELETE", "/api/debug/location?" + urllib.parse.urlencode({"location[directory]": "/locations/m"}))
+  assert status == 204
+  status, payload = request("GET", "/api/debug/location")
+  assert status == 200
+  assert json.loads(payload) == [{"directory": "/locations/a"}, {"directory": "/locations/z"}]
 
 
 def test_the_nice_record_follows_the_parents_limits_not_the_spawn(tmp_path: pathlib.Path) -> None:

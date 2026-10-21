@@ -182,10 +182,18 @@ pub struct BackendOption {
   pub type_fields: Mapping,
 }
 
-/// `backends:` section: the rotation pool and the model-switch options.
+/// `backends.routing:` section: the host command that orders unpinned backend candidates.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoutingConfig {
+  pub command: Vec<String>,
+}
+
+/// `backends:` section: the rotation pool, optional router command, and model-switch options.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BackendsConfig {
   pub pool: Vec<String>,
+  pub routing: Option<RoutingConfig>,
   pub options: Vec<BackendOption>,
 }
 
@@ -493,7 +501,7 @@ fn parse_backends(
 ) -> Result<BackendsConfig, ConfigError> {
   let mapping = match value {
     None => {
-      return Ok(BackendsConfig { pool: Vec::new(), options: Vec::new() });
+      return Ok(BackendsConfig { pool: Vec::new(), routing: None, options: Vec::new() });
     }
     Some(Value::Mapping(mapping)) => mapping,
     Some(other) => {
@@ -504,11 +512,15 @@ fn parse_backends(
     }
   };
   for key in mapping.keys() {
-    if !matches!(key.as_str(), Some("pool" | "options")) {
+    if !matches!(key.as_str(), Some("pool" | "options" | "routing")) {
       let shown = key.as_str().map_or_else(|| yaml_key_repr(key), str::to_string);
       return Err(ConfigError(format!("{config_path}: invalid config key backends.{shown}: unknown field")));
     }
   }
+  let routing = match mapping.get("routing") {
+    None | Some(Value::Null) => None,
+    Some(value) => Some(typed_section(config_path, "backends.routing", Some(value.clone()), || unreachable!())?),
+  };
   let pool: Vec<String> = typed_section(config_path, "backends.pool", mapping.get("pool").cloned(), Vec::new)?;
   let options = match mapping.get("options") {
     None => Vec::new(),
@@ -524,7 +536,7 @@ fn parse_backends(
       )));
     }
   };
-  Ok(BackendsConfig { pool, options })
+  Ok(BackendsConfig { pool, routing, options })
 }
 
 /// One backend entry, validated as the option model its `type` names would (`backend_models.parse_option`).
@@ -687,6 +699,20 @@ mod tests {
     let home = home_with("backends:\n  options:\n    - {id: x, label: X, type: codex}\n");
     let error = load(&home).unwrap_err().to_string();
     assert!(error.ends_with("backend 'x' (type 'codex') requires 'model'"), "{error}");
+  }
+
+  #[test]
+  fn routing_command_is_optional_and_rejects_extra_fields() {
+    let home = home_with("backends:\n  routing:\n    command: [synthetic-router, --rank]\n");
+    let cfg = load(&home).unwrap();
+    assert_eq!(cfg.backends.routing.as_ref().unwrap().command, ["synthetic-router", "--rank"]);
+
+    let absent = load(&home_with("backends: {}\n")).unwrap();
+    assert!(absent.backends.routing.is_none());
+
+    let home = home_with("backends:\n  routing:\n    command: [synthetic-router]\n    extra: refused\n");
+    let error = load(&home).unwrap_err().to_string();
+    assert!(error.contains("backends.routing.extra") && error.contains("unknown field"), "{error}");
   }
 
   #[test]

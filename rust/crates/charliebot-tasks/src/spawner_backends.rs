@@ -112,6 +112,11 @@ pub fn resolve_session_default_backend_model(
   Ok((option.id.clone(), Some(model)))
 }
 
+/// Resolve the backend id the session's own defaults use for verify's excluded candidate.
+pub fn session_backend_id(cfg: &CharlieBotConfig, session_meta: &SessionMetadata) -> anyhow::Result<String> {
+  resolve_session_default_backend_model(cfg, session_meta).map(|(backend_id, _)| backend_id)
+}
+
 /// Resolve a delegation's backend and whether `backends.pool` selected it (`spawner_backends.resolve_requested_subagent_backend_model`).
 pub async fn resolve_requested_subagent_backend_model(
   cfg: &CharlieBotConfig,
@@ -217,6 +222,7 @@ mod tests {
       paths: PathsConfig { workspace_dirs: Vec::new(), worktree_dir: "/synthetic/worktrees".to_string() },
       backends: BackendsConfig {
         pool: Vec::new(),
+        routing: None,
         options: vec![BackendOption {
           id: "synthetic".to_string(),
           label: "synthetic".to_string(),

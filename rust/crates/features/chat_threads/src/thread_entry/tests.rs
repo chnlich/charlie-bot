@@ -118,9 +118,20 @@ struct Home {
 
 impl Home {
   fn new() -> Self {
+    Self::build(None)
+  }
+
+  fn with_router(command: Vec<String>) -> Self {
+    Self::build(Some(command))
+  }
+
+  fn build(command: Option<Vec<String>>) -> Self {
     let dir = tempfile::tempdir().expect("temporary directory exists");
     let mut registry = Registry::new();
     registry.register_package("tests.fakechat", register_fakechat).expect("the fakechat slot registers");
+    registry
+      .register_package("src.runtime.backend_pool", backend_pool::register)
+      .expect("the backend pool metadata slot registers");
     let registry = Arc::new(registry);
     let mut loaded = registry.load_config(dir.path()).expect("an empty home loads with the defaults");
     // Task creation takes the first configured backend when a create names none.
@@ -132,6 +143,16 @@ impl Home {
       backend_type: "synthetic".to_string(),
       type_fields: Default::default(),
     });
+    loaded.backends.pool = vec!["synthetic-fakechat".to_string()];
+    loaded.backends.options.push(BackendOption {
+      id: "synthetic-strong".to_string(),
+      label: "Synthetic strong".to_string(),
+      model: "synthetic-model".to_string(),
+      prompt_overlay: None,
+      backend_type: "synthetic".to_string(),
+      type_fields: Default::default(),
+    });
+    loaded.backends.routing = command.map(|command| charliebot_core::config::RoutingConfig { command });
     let reload_config = loaded.clone();
     let config = Arc::new(HotReload::new(
       loaded.config_file(),
@@ -149,6 +170,7 @@ impl Home {
     ));
     let startup = StartupState::default();
     startup.insert(RunningTurnInputs::new(|_| Vec::new())).expect("the stub inserts once");
+    startup.insert(backend_pool::BackendPool::default()).expect("the backend pool inserts once");
     let features = Arc::new(FeatureContext { config, credentials, store, registry, startup: Arc::new(startup) });
 
     features.startup.insert(TaskCompletion::new(Arc::clone(&features))).expect("the completion inserts once");
@@ -212,6 +234,14 @@ impl Home {
     }
     frames
   }
+}
+
+fn router_command(directory: &TempDir, body: &str, arguments: &[&str]) -> Vec<String> {
+  let path = directory.path().join("fake-router.sh");
+  fs::write(&path, format!("set -eu\n{body}\n")).unwrap();
+  let mut command = vec!["/bin/sh".to_string(), path.to_string_lossy().into_owned()];
+  command.extend(arguments.iter().map(|argument| (*argument).to_string()));
+  command
 }
 
 /// The fakechat adapter over an in-memory thread: posts and acks record, and `read_eligible` returns `thread`.
@@ -748,4 +778,67 @@ async fn accept_summon_creates_the_session_and_spawns_the_round_and_ack() {
   // The round wakes on the summon's own id: the admitted input takes it as its event id.
   assert_eq!(pending[0]["id"], summon_event["id"]);
   assert_eq!(*adapter.acks.lock().unwrap(), [summon_block()]);
+}
+
+#[tokio::test]
+async fn accept_summon_routes_the_full_thread_before_creating_the_session() {
+  let router_dir = tempfile::tempdir().unwrap();
+  let capture = router_dir.path().join("router-input.json");
+  let capture_text = capture.to_string_lossy().into_owned();
+  let command = router_command(
+    &router_dir,
+    "cat > \"$1\"\nprintf '%s' '{\"backends\":[\"synthetic-strong\"],\"reason\":\"thread route\"}'",
+    &[&capture_text],
+  );
+  let home = Home::with_router(command);
+  let adapter = FakeAdapter::with_thread(&[("100", " first "), ("101", "second\nline")]);
+  let dyn_adapter: Arc<dyn ThreadAdapter> = adapter.clone();
+  let (origin_value, block) = (origin(), summon_block());
+
+  let sid = accept_summon(&dyn_adapter, &home.features, summon(&origin_value, &block)).await.unwrap();
+
+  let meta = home.meta(&sid).await;
+  assert_eq!(meta.backend, "synthetic-strong");
+  assert_eq!(meta.extra("route"), Some(&json!({"backends": ["synthetic-strong"], "reason": "thread route"})));
+  let input: Value = serde_json::from_slice(&fs::read(capture).unwrap()).unwrap();
+  assert_eq!(input["role"], "thread");
+  assert_eq!(input["text"], "u:  first \nu: second\nline");
+  assert_eq!(input["candidates"].as_array().unwrap().len(), 2);
+  settle(|| home.launches().len() == 1 && adapter.acks.lock().unwrap().len() == 1).await;
+}
+
+#[tokio::test]
+async fn accept_summon_posts_router_failure_without_creating_a_session() {
+  let router_dir = tempfile::tempdir().unwrap();
+  let command = router_command(&router_dir, "cat >/dev/null\nprintf '%s' 'router boom' >&2\nexit 3", &[]);
+  let home = Home::with_router(command);
+  let adapter = FakeAdapter::with_thread(&[]);
+  let dyn_adapter: Arc<dyn ThreadAdapter> = adapter.clone();
+  let (origin_value, block) = (origin(), summon_block());
+
+  let error = accept_summon(&dyn_adapter, &home.features, summon(&origin_value, &block)).await.unwrap_err();
+
+  assert_eq!(error.status, StatusCode::INTERNAL_SERVER_ERROR);
+  assert!(home.features.store.get_session("s1").await.unwrap().is_none());
+  assert_eq!(adapter.posts.lock().unwrap().len(), 1);
+  assert!(adapter.posts.lock().unwrap()[0].1.contains("router boom"));
+  assert!(home.launches().is_empty());
+}
+
+#[tokio::test]
+async fn accept_summon_uses_the_pool_for_an_empty_router_order() {
+  let router_dir = tempfile::tempdir().unwrap();
+  let command =
+    router_command(&router_dir, "cat >/dev/null\nprintf '%s' '{\"backends\":[],\"reason\":\"no preference\"}'", &[]);
+  let home = Home::with_router(command);
+  let adapter = FakeAdapter::with_thread(&[]);
+  let dyn_adapter: Arc<dyn ThreadAdapter> = adapter.clone();
+  let (origin_value, block) = (origin(), summon_block());
+
+  let sid = accept_summon(&dyn_adapter, &home.features, summon(&origin_value, &block)).await.unwrap();
+
+  let meta = home.meta(&sid).await;
+  assert_eq!(meta.backend, "synthetic-fakechat");
+  assert_eq!(meta.extra("route"), Some(&json!({"backends": [], "reason": "no preference"})));
+  settle(|| home.launches().len() == 1 && adapter.acks.lock().unwrap().len() == 1).await;
 }

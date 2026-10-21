@@ -280,11 +280,11 @@ async fn delegate_task(State(features): State<Arc<FeatureContext>>, request: axu
     Ok(caller) => caller,
     Err(response) => return response,
   };
-  match features.store.get_session(&request.session_id).await {
-    Ok(Some(_)) => {}
+  let session_meta = match features.store.get_session(&request.session_id).await {
+    Ok(Some(meta)) => meta,
     Ok(None) => return responses::json(StatusCode::NOT_FOUND, &json!({ "detail": "Session not found" })),
     Err(error) => return task_http_error(error),
-  }
+  };
 
   let task_spec = delegate_task_spec(&request);
   if !charliebot_store::is_read_only_exempt(Some(&task_spec))
@@ -300,7 +300,54 @@ async fn delegate_task(State(features): State<Arc<FeatureContext>>, request: axu
     Ok(pool) => pool,
     Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
   };
-  let resolved = if matches!(request.task_type, TaskType::Verify | TaskType::ColdRead) && request.backend.is_none() {
+  let mut route = None;
+  let routed = if request.backend.is_none()
+    && matches!(request.task_type, TaskType::Implement | TaskType::QuickEdit | TaskType::ScriptRun | TaskType::Verify)
+    && cfg.backends.routing.is_some()
+  {
+    let avoided = if request.task_type == TaskType::Verify {
+      match crate::spawner_backends::session_backend_id(&cfg, &session_meta) {
+        Ok(backend_id) => Some(backend_id),
+        Err(error) => return responses::json(StatusCode::BAD_REQUEST, &json!({ "detail": error.to_string() })),
+      }
+    } else {
+      None
+    };
+    let candidates = cfg
+      .backends
+      .options
+      .iter()
+      .filter(|option| avoided.as_deref() != Some(option.id.as_str()))
+      .map(|option| option.id.clone())
+      .collect::<Vec<_>>();
+    let role = task_type_name(request.task_type);
+    let text = format!("Task type: {role}\n\n{}", request.description);
+    let routed = match pool.route(&cfg, role, &text, &candidates).await {
+      Ok(route) => route,
+      Err(error) => {
+        return responses::json(
+          StatusCode::BAD_GATEWAY,
+          &json!({ "detail": format!("backend router failed: {error}") }),
+        );
+      }
+    };
+    route = Some(routed.clone());
+    match pool.pick_ordered(&cfg, role, &routed.backends, &[]) {
+      Ok(Some(option)) => {
+        match crate::spawner_backends::resolve_backend_option(&cfg, &option.id, Some(&option.model)) {
+          Ok(option) => Some((option.id, Some(option.model), false)),
+          Err(error) => return responses::json(StatusCode::BAD_REQUEST, &json!({ "detail": error.to_string() })),
+        }
+      }
+      Ok(None) => None,
+      Err(error) => return responses::json(StatusCode::BAD_REQUEST, &json!({ "detail": error.to_string() })),
+    }
+  } else {
+    None
+  };
+  let resolved = if let Some(routed) = routed {
+    Ok(Some(routed))
+  } else if matches!(request.task_type, TaskType::Verify | TaskType::ColdRead) && request.backend.is_none() {
     crate::spawner_backends::select_verify_backend(
       &cfg,
       &features.store,
@@ -333,17 +380,9 @@ async fn delegate_task(State(features): State<Arc<FeatureContext>>, request: axu
     Ok(None) => return responses::json(StatusCode::BAD_REQUEST, &json!({ "detail": "no backend is available" })),
     Err(error) => return responses::json(StatusCode::BAD_REQUEST, &json!({ "detail": error.to_string() })),
   };
-  match delegate_task_tree(
-    &features,
-    &request,
-    &caller_identity,
-    &task_spec,
-    &resolved_backend,
-    resolved_model.as_deref(),
-    backend_from_pool,
-  )
-  .await
-  {
+  let delegated_backend =
+    DelegateBackend { id: resolved_backend, model: resolved_model, from_pool: backend_from_pool, route };
+  match delegate_task_tree(&features, &request, &caller_identity, &task_spec, &delegated_backend).await {
     Ok(response) => responses::json(StatusCode::OK, &response),
     Err(DelegateError::Task(error)) => task_http_error(error),
     Err(DelegateError::Internal(error)) => responses::internal_error("RuntimeError", error),
@@ -359,6 +398,13 @@ enum DelegateError {
   AdapterMissing,
 }
 
+struct DelegateBackend {
+  id: String,
+  model: Option<String>,
+  from_pool: bool,
+  route: Option<charliebot_agents::backend_pool::BackendRoute>,
+}
+
 impl From<charliebot_store::StoreError> for DelegateError {
   fn from(error: charliebot_store::StoreError) -> Self {
     Self::Task(error)
@@ -370,9 +416,7 @@ async fn delegate_task_tree(
   request: &DelegateRequest,
   caller_identity: &CallerIdentity,
   task_spec: &TaskSpec,
-  resolved_backend: &str,
-  resolved_model: Option<&str>,
-  backend_from_pool: bool,
+  backend: &DelegateBackend,
 ) -> Result<Value, DelegateError> {
   let caller = match caller_identity {
     CallerIdentity::Operator { .. } => TaskCaller::Operator,
@@ -394,22 +438,21 @@ async fn delegate_task_tree(
     profile: TaskProfile::Worker,
     task: Some(task_spec.clone()),
     name,
-    backend: Some(resolved_backend.to_string()),
+    backend: Some(backend.id.clone()),
     group: None,
     session_id: None,
   };
   features.store.runtime_gate(&create_request, &caller)?;
   let child = features.store.create_task(create_request, caller, Default::default()).await?;
-  if backend_from_pool {
+  if backend.from_pool || backend.route.is_some() {
+    let mut slot_fields = serde_json::Map::from_iter([("backend_from_pool".to_string(), json!(backend.from_pool))]);
+    if let Some(route) = backend.route.as_ref() {
+      slot_fields.insert("route".to_string(), json!(route));
+    }
     let guard = features.store.control_lock().await;
     features
       .store
-      .update_task_slot_fields_locked(
-        &guard,
-        &child.id,
-        charliebot_agents::backend_pool::METADATA_OWNER,
-        serde_json::Map::from_iter([("backend_from_pool".to_string(), json!(true))]),
-      )
+      .update_task_slot_fields_locked(&guard, &child.id, charliebot_agents::backend_pool::METADATA_OWNER, slot_fields)
       .await?;
   }
   let run_id = control_events::stable_run_id(&child.id, &format!("{request_id}:work"));
@@ -435,8 +478,8 @@ async fn delegate_task_tree(
       prompt_snapshot_ref: None,
       retry_of_run_id: None,
       review_of_run_id: None,
-      backend: Some(resolved_backend.to_string()),
-      model: resolved_model.map(str::to_string),
+      backend: Some(backend.id.clone()),
+      model: backend.model.clone(),
       native_session_id: None,
       pid: None,
       pid_start: None,
@@ -463,9 +506,10 @@ async fn delegate_task_tree(
     "type": charliebot_core::event_types::TASK_DELEGATED,
     "thread_id": run_id,
     "description": request.description,
-    "backend": resolved_backend,
-    "model": resolved_model.unwrap_or_default(),
+    "backend": backend.id,
+    "model": backend.model.as_deref().unwrap_or_default(),
     "child_session_id": child.id,
+    "route": backend.route.as_ref(),
     charliebot_core::event_types::DELEGATE_INVOCATION: delegate_invocation_event_payload(request),
   });
   features.store.persist_and_broadcast(&request.session_id, task_event).await?;

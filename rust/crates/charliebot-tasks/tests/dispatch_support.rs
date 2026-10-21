@@ -475,6 +475,7 @@ pub fn config(home: &Path) -> CharlieBotConfig {
     paths: PathsConfig { workspace_dirs: Vec::new(), worktree_dir: "/synthetic/worktrees".to_string() },
     backends: BackendsConfig {
       pool: vec![BACKEND_ID.to_string()],
+      routing: None,
       options: vec![BackendOption {
         id: BACKEND_ID.to_string(),
         label: "Synthetic".to_string(),

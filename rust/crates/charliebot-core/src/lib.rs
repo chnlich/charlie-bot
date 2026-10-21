@@ -23,6 +23,7 @@ pub mod run_token;
 pub mod ssh;
 pub mod tempdir;
 pub mod timefmt;
+pub mod timeouts;
 pub mod v1_sessions;
 pub mod venv;
 pub mod yaml;

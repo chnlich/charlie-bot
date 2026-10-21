@@ -1331,7 +1331,10 @@ fn slots() -> Vec<MetadataSlot> {
       owner: "backend_pool",
       on: MetadataFile::Session,
       after: None,
-      fields: vec![SlotField { name: "backend_from_pool", default: json!(false) }],
+      fields: vec![
+        SlotField { name: "backend_from_pool", default: json!(false) },
+        SlotField { name: "route", default: Value::Null },
+      ],
     },
     MetadataSlot {
       owner: "cron",

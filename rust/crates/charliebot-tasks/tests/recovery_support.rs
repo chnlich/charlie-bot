@@ -360,7 +360,7 @@ fn config(home: &Path, options: Vec<BackendOption>, pool: Vec<String>, min_free_
       min_free_disk_gib,
     },
     paths: PathsConfig { workspace_dirs: Vec::new(), worktree_dir: home.join("worktrees").display().to_string() },
-    backends: BackendsConfig { pool, options },
+    backends: BackendsConfig { pool, routing: None, options },
     ui: UiConfig { home_services: Vec::new() },
     telegram: TelegramConfig { chat_id: None },
     sections: Sections::default(),

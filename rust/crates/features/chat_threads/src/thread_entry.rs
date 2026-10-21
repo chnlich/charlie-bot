@@ -34,6 +34,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use axum::http::StatusCode;
+use charliebot_agents::backend_pool;
 use charliebot_core::RepoRoot;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types;
@@ -1124,6 +1125,50 @@ pub struct Summon<'a> {
   pub user: Option<&'a str>,
 }
 
+async fn route_thread_session(
+  adapter: &Arc<dyn ThreadAdapter>,
+  features: &FeatureContext,
+  origin: &Value,
+) -> Result<(Option<String>, Option<backend_pool::BackendRoute>), ThreadReplyError> {
+  let cfg = features.config.get().map_err(ThreadReplyError::failure)?;
+  if cfg.backends.routing.is_none() {
+    return Ok((None, None));
+  }
+
+  let messages = adapter.read_eligible(origin, &cfg).await.map_err(ThreadReplyError::failure)?;
+  let text = messages
+    .iter()
+    .map(|message| match message.user.as_deref() {
+      Some(user) => format!("{user}: {}", message.text),
+      None => message.text.clone(),
+    })
+    .collect::<Vec<_>>()
+    .join("\n");
+  let candidates = cfg.backends.options.iter().map(|option| option.id.clone()).collect::<Vec<_>>();
+  let pool = backend_pool::backend_pool(features).map_err(ThreadReplyError::failure)?;
+  let route = match pool.route(&cfg, "thread", &text, &candidates).await {
+    Ok(route) => route,
+    Err(error) => {
+      let message = format!("backend router failed: {error}");
+      let address = adapter.address_of(origin);
+      adapter.post(&address, &message).await?;
+      return Err(ThreadReplyError::failure(message));
+    }
+  };
+  let selected = pool.pick_ordered(&cfg, "thread", &route.backends, &[]).map_err(ThreadReplyError::failure)?;
+  let selected = match selected {
+    Some(option) => Some(option),
+    None => pool.select(&cfg, "thread", &[]).map_err(ThreadReplyError::failure)?,
+  };
+  let Some(option) = selected else {
+    let message = format!("no backend is available for the thread session: {}", pool.recovery_report(&cfg));
+    let address = adapter.address_of(origin);
+    adapter.post(&address, &message).await?;
+    return Err(ThreadReplyError::failure(message));
+  };
+  Ok((Some(option.id), Some(route)))
+}
+
 /// Accept one summon: resolve the session, persist the summon, fire the round, and light the ack (`accept_summon`).
 /// The session is created as a manager root named `<label> <local time>` and born with the origin, or reused; a
 /// session archived by the operator is unarchived and its task-tree change broadcast. Returns the session id.
@@ -1144,6 +1189,7 @@ pub async fn accept_summon(
   match features.store.get_session(session_id).await? {
     None => {
       let name = format!("{} {}", summon.label, local_time());
+      let (backend, route) = route_thread_session(adapter, features, summon.origin).await?;
       features
         .store
         .create_task(
@@ -1153,7 +1199,7 @@ pub async fn accept_summon(
             profile: TaskProfile::Manager,
             task: None,
             name: Some(name),
-            backend: None,
+            backend,
             group: None,
             session_id: Some(session_id.to_string()),
           },
@@ -1161,6 +1207,16 @@ pub async fn accept_summon(
           Map::from_iter([(platform.origin_field.to_string(), summon.origin.clone())]),
         )
         .await?;
+      if let Some(route) = route {
+        features
+          .store
+          .update_slot_fields(
+            session_id,
+            backend_pool::METADATA_OWNER,
+            Map::from_iter([("route".to_string(), json!(route))]),
+          )
+          .await?;
+      }
       let event = format!("{}_mention_session_created", platform.name);
       tracing::info!(%event, thread = %thread, session = session_id);
     }

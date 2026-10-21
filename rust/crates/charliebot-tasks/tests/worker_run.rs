@@ -1260,6 +1260,152 @@ fn install_router(stack: &Stack, directory: &Path, body: &str, arguments: &[Stri
   stack.replace_config(cfg)
 }
 
+/// A router body that answers `backends` in that order. It drains its request first, as a router reads its stdin.
+fn router_order_body(backends: &[&str]) -> String {
+  format!("cat >/dev/null\nprintf '%s' '{}'", json!({"backends": backends, "reason": "design p=0.9"}))
+}
+
+/// A router body that fails: it writes `router boom` to stderr and exits 3.
+const FAILING_ROUTER: &str = "cat >/dev/null\nprintf '%s' 'router boom' >&2\nexit 3";
+
+/// A manager over the scripted options `fake` and `fake2` with the pool `pool`, holding a takeoff message. The
+/// dispatcher has no executor, so the admitted message stays pending and launches nothing.
+async fn delegating_manager(scripts: &Scripts, pool: &[&str]) -> anyhow::Result<(Stack, String)> {
+  let options = ["fake", "fake2"].map(|id| scripts.option(id, BACKEND_TYPE)).to_vec();
+  let stack = Stack::start_with(options, pool.iter().map(|id| id.to_string()).collect()).await?;
+  stack.write_access_key()?;
+  let manager = stack.node("router-parent", None, TaskProfile::Manager, None).await?;
+  stack.dispatch.set_executor(None);
+  stack.dispatch.admit_input(&manager.id, event_types::USER, "Take off and delegate this.", "user", json!({})).await?;
+  Ok((stack, manager.id))
+}
+
+/// The body of a repo-less quick-edit delegation under `manager_id`.
+fn quick_edit_body(manager_id: &str) -> Value {
+  json!({"session_id": manager_id, "description": "run the quick edit", "task_type": "quick-edit"})
+}
+
+/// `test_backend_router.py` empty route: the route list is empty, so the pool picks the backend and the node records
+/// the empty route with its pool flag.
+#[tokio::test]
+async fn an_empty_route_list_uses_the_pool() -> anyhow::Result<()> {
+  // Python: tests/test_backend_router.py:241.
+  let scripts = Scripts::new(vec![result_script("pool work done")]);
+  let (stack, manager) = delegating_manager(&scripts, &["fake", "fake2"]).await?;
+  let router_dir = tempfile::tempdir()?;
+  install_router(&stack, router_dir.path(), &router_order_body(&[]), &[])?;
+
+  let (status, delegated) = post_delegate(&routes::routes(&stack.features), quick_edit_body(&manager)).await?;
+  assert_eq!(status, StatusCode::OK, "{delegated}");
+  let child_id = text(&delegated, "session_id")?;
+  let meta = stack.store().load_task_meta(&child_id).await?;
+  assert_eq!(meta.backend, "fake", "the pool's first member");
+  assert_eq!(meta.extra("route").and_then(|route| route.get("backends")), Some(&json!([])));
+  assert_eq!(meta.extra("backend_from_pool"), Some(&json!(true)));
+  assert_eq!(stack.wait_terminal(&child_id, &text(&delegated, "run_id")?).await?, RunOutcomeKind::Success);
+  Ok(())
+}
+
+/// `test_backend_router.py` cooling route: the route's first member is cooling, so the next routed member runs the
+/// work and the delegation still answers 200.
+#[tokio::test]
+async fn a_cooling_routed_list_falls_back_to_the_pool() -> anyhow::Result<()> {
+  // Python: tests/test_backend_router.py:269.
+  let scripts = Scripts::new(vec![result_script("pool work done")]);
+  let (stack, manager) = delegating_manager(&scripts, &["fake", "fake2"]).await?;
+  let router_dir = tempfile::tempdir()?;
+  install_router(&stack, router_dir.path(), &router_order_body(&["fake2", "fake"]), &[])?;
+  backend_pool::backend_pool(&stack.features)?.cool("fake2", None);
+
+  let (status, delegated) = post_delegate(&routes::routes(&stack.features), quick_edit_body(&manager)).await?;
+  assert_eq!(status, StatusCode::OK, "{delegated}");
+  let child_id = text(&delegated, "session_id")?;
+  assert_eq!(stack.store().load_task_meta(&child_id).await?.backend, "fake");
+  assert_eq!(stack.wait_terminal(&child_id, &text(&delegated, "run_id")?).await?, RunOutcomeKind::Success);
+  Ok(())
+}
+
+/// `test_backend_router.py` no member available: every pool member is cooling, so the delegation answers 400 and the
+/// detail names each member's recovery time.
+#[tokio::test]
+async fn every_backend_unavailable_returns_400_with_recovery_times() -> anyhow::Result<()> {
+  // Python: tests/test_backend_router.py:281.
+  let scripts = Scripts::new(vec![result_script("unused")]);
+  let (stack, manager) = delegating_manager(&scripts, &["fake", "fake2"]).await?;
+  let router_dir = tempfile::tempdir()?;
+  install_router(&stack, router_dir.path(), &router_order_body(&[]), &[])?;
+  let pool = backend_pool::backend_pool(&stack.features)?;
+  pool.cool("fake", None);
+  pool.cool("fake2", None);
+
+  let (status, response) = post_delegate(&routes::routes(&stack.features), quick_edit_body(&manager)).await?;
+  assert_eq!(status, StatusCode::BAD_REQUEST, "{response}");
+  assert!(response["detail"].as_str().unwrap_or_default().contains("cooling until"), "{response}");
+  Ok(())
+}
+
+/// `test_backend_router.py` no routing section: with `backends.routing` unset, no router starts and the pool decides.
+#[tokio::test]
+async fn without_a_routing_section_no_router_starts_and_the_pool_decides() -> anyhow::Result<()> {
+  // Python: tests/test_backend_router.py:293.
+  let scripts = Scripts::new(vec![result_script("pool work done")]);
+  let (stack, manager) = delegating_manager(&scripts, &["fake", "fake2"]).await?;
+  let router_dir = tempfile::tempdir()?;
+  install_router(&stack, router_dir.path(), FAILING_ROUTER, &[])?;
+  let mut cfg = stack.cfg.as_ref().clone();
+  cfg.backends.routing = None; // the command would fail loudly if the code ever ran it
+  stack.replace_config(cfg)?;
+
+  let (status, delegated) = post_delegate(&routes::routes(&stack.features), quick_edit_body(&manager)).await?;
+  assert_eq!(status, StatusCode::OK, "{delegated}");
+  let child_id = text(&delegated, "session_id")?;
+  let meta = stack.store().load_task_meta(&child_id).await?;
+  assert!(meta.extra("route").is_none_or(Value::is_null), "the node carries no route: {:?}", meta.extra("route"));
+  assert_eq!(stack.wait_terminal(&child_id, &text(&delegated, "run_id")?).await?, RunOutcomeKind::Success);
+  Ok(())
+}
+
+/// `test_backend_router.py` pinned delegation: a delegation that names its backend never asks the router.
+#[tokio::test]
+async fn a_pinned_delegation_never_calls_the_router() -> anyhow::Result<()> {
+  // Python: tests/test_backend_router.py:305.
+  let scripts = Scripts::new(vec![result_script("pinned work done")]);
+  let (stack, manager) = delegating_manager(&scripts, &["fake", "fake2"]).await?;
+  let router_dir = tempfile::tempdir()?;
+  install_router(&stack, router_dir.path(), FAILING_ROUTER, &[])?;
+  let mut body = quick_edit_body(&manager);
+  body["backend"] = json!("fake2");
+
+  let (status, delegated) = post_delegate(&routes::routes(&stack.features), body).await?;
+  assert_eq!(status, StatusCode::OK, "{delegated}");
+  let child_id = text(&delegated, "session_id")?;
+  let meta = stack.store().load_task_meta(&child_id).await?;
+  assert_eq!(meta.backend, "fake2");
+  assert!(meta.extra("route").is_none_or(Value::is_null), "the node carries no route: {:?}", meta.extra("route"));
+  assert_eq!(stack.wait_terminal(&child_id, &text(&delegated, "run_id")?).await?, RunOutcomeKind::Success);
+  Ok(())
+}
+
+/// `test_backend_router.py` cold read: a cold-read delegation never asks the router, and its node carries no route.
+#[tokio::test]
+async fn a_cold_read_delegation_never_calls_the_router() -> anyhow::Result<()> {
+  // Python: tests/test_backend_router.py:318.
+  let dir = tempfile::tempdir()?;
+  let page = write_sitrep(dir.path())?;
+  let scripts = Scripts::new(vec![answer_script("(1) answered.")]);
+  let stack = cold_read_stack(&scripts, &["fake", "fake2"], &["fake", "fake2"]).await?;
+  let router_dir = tempfile::tempdir()?;
+  install_router(&stack, router_dir.path(), FAILING_ROUTER, &[])?;
+  let manager = stack.node("root", None, TaskProfile::Manager, None).await?;
+
+  let (child_id, run_id) = delegate_cold_read(&stack, &manager.id, &page).await?;
+  let meta = stack.store().load_task_meta(&child_id).await?;
+  assert!(meta.extra("route").is_none_or(Value::is_null), "the node carries no route: {:?}", meta.extra("route"));
+  assert_eq!(stack.wait_terminal(&child_id, &run_id).await?, RunOutcomeKind::Success);
+  settle_until(|| Ok(stack.child_reports(&manager.id)?.len() == 1)).await?;
+  Ok(())
+}
+
 /// `test_backend_router.py` delegation cases: one routed verify request carries the chosen backend and route through
 /// both the worker node metadata and its delegation card, and the router sees the manager's backend excluded.
 #[tokio::test]
@@ -1501,6 +1647,67 @@ async fn quota_failover_walks_the_route_before_the_pool_and_writes_one_system_ev
   assert_eq!(switches[0]["to"], "fake");
   assert_eq!(switches[0]["recovers_at"], "2030-01-02T03:04+00:00");
   assert_eq!(stack.wait_terminal(&worker, &retry.id).await?, RunOutcomeKind::Success);
+  Ok(())
+}
+
+/// `test_backend_router.py` spent route: the route names only the member that ran out, so the failover takes the pool's
+/// first free member, and the retry runs there.
+#[tokio::test]
+async fn quota_failover_uses_the_pool_once_the_route_is_spent() -> anyhow::Result<()> {
+  // Python: tests/test_backend_router.py:390.
+  let scripts = Scripts::new(vec![result_script("retry done"), result_script("report noted")]);
+  let stack = failover_stack(&scripts).await?;
+  let manager = stack.node("root", None, TaskProfile::Manager, None).await?;
+  let worker = stack
+    .store()
+    .create_task(
+      CreateTask {
+        request_id: "worker".to_string(),
+        task_parent_id: Some(manager.id.clone()),
+        profile: TaskProfile::Worker,
+        task: Some(spec("do the work", Some(TaskType::Implement))),
+        name: Some("Synthetic worker".to_string()),
+        backend: Some("fake3".to_string()),
+        group: None,
+        session_id: None,
+      },
+      TaskCaller::Operator,
+      Map::new(),
+    )
+    .await?;
+  let route = backend_pool::BackendRoute { backends: vec!["fake3".to_string()], reason: "design p=0.9".to_string() };
+  let guard = stack.store().control_lock().await;
+  stack
+    .store()
+    .update_task_slot_fields_locked(
+      &guard,
+      &worker.id,
+      backend_pool::METADATA_OWNER,
+      Map::from_iter([("route".to_string(), json!(route))]),
+    )
+    .await?;
+  drop(guard);
+  let run = RunRecord {
+    backend: Some("fake3".to_string()),
+    model: Some("fake-model".to_string()),
+    ..synthetic_run(&worker.id, "run-work", RunKind::Work)
+  };
+  register_run(&stack, run, "do the work").await?;
+  let failed = RunOutcome { exit_code: Some(1), ..RunOutcome::new(RunOutcomeKind::Failed) };
+  stack.dispatch.finish_run(&worker.id, "run-work", failed).await?;
+  stack.adapter.record_quota_failure_for_test(&worker.id, "run-work", None);
+  stack.adapter.after_worker_run_for_test(&worker.id, "run-work", "failed").await?;
+
+  let retry = stack
+    .run_records(&worker.id)?
+    .into_iter()
+    .find(|record| record.retry_of_run_id.as_deref() == Some("run-work"))
+    .expect("the quota failover registers a retry");
+  assert_eq!(retry.backend.as_deref(), Some("fake2"), "the pool takes over at its first free member");
+  assert_eq!(stack.store().load_task_meta(&worker.id).await?.backend, "fake2");
+  assert_eq!(stack.wait_terminal(&worker.id, &retry.id).await?, RunOutcomeKind::Success);
+  settle_until(|| Ok(stack.child_reports(&manager.id)?.len() == 1)).await?;
+  settle_node(&stack, &manager.id).await?;
   Ok(())
 }
 

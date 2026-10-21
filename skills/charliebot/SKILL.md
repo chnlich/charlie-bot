@@ -29,6 +29,9 @@ If the reviewer's push fails (base moved), the work branch and worktree are kept
 
 Reviewer merge-back is a prompt-level instruction with no server-side backstop. After every implement delivery, compare `git rev-parse <branch> origin/<branch>`. When origin lacks the delivered commit, push it from the kept worktree. Keep the runtime checkout (the clone the server runs from) on its current branch and commit. The running server imports code from it, so a moved checkout mixes new files with loaded modules. Only the user's deploy procedure moves it. Base each new delegation on `origin/<branch>`, because the local branch can lag origin. To read another revision, use `git show <rev>:<path>` or a worktree of your own.
 
+Before relying on local ancestry to verify a landed commit, check whether the clone is shallow.
+Before deploying through the runtime checkout, pause scheduled jobs that import code from it.
+
 **Before a subagent returns / reviewer merges**, the master should skim the subagent's context / transcript for recurring pain points (repeated errors, wrong-path attempts, env/venv pitfalls, protocol misuse). If such patterns appear, update the relevant SKILL.md so future workers don't rediscover the same lesson. This is standing user preference, not per-session.
 
 **Skill-doc update timing**: only promote a finding to a SKILL.md after the underlying debug is fully resolved. Tentative observations (e.g. "per-channel score looks ~1.34× baseline, pending 7-fold confirmation") belong in `~/.charliebot/LESSONS.md` or the session transcript, not in a skill. Skills are confirmed conventions readers can act on without re-deriving.
@@ -73,6 +76,24 @@ Never include revert/keep-only-report decision rules in delegate prompts — tho
 
 All six `##`-level headings are required (`## Goal / Source Files / Required Behavior / Acceptance Tests / Reviewer Checklist / Out of Scope`); `#`-level headings are rejected. `## Source Files` takes only existing absolute paths or `-` (new files created by a patch go in a side note instead). The verify task type requires `--keep-worktree` and does not accept `--repo`. Run `charliebot` subcommands inside the session dir, where a relative artifact path resolves and the session-dir check accepts it; session identity itself comes from the server-written environment.
 
+### Task-Spec Amendments
+
+- `charliebot delegate` stores each task spec as JSON in `<child-session>/data/runs/<run>/task_spec.md`.
+- The `goal` field contains the Markdown task text.
+- Workers receive that text in their launch prompt.
+- Edit a running worker's run copy with a JSON parser because the worker reads only that file.
+- Count reads with `grep -c task_spec <run-dir>/agent.raw.ndjson` after an edit.
+- Stop the worker and delegate again when the count is zero or does not increase.
+- Later work runs and review runs read the spec from the worker session task record in `metadata.json`.
+- Editing one run copy changes that run only.
+- Delegate again to amend a worker that resumes after a trigger.
+- A `charliebot session send` message stays pending until the current run ends.
+- A pending message can start one extra work run after review.
+- `delegate --backend` selects the first work run only.
+- A follow-up run started by pending input uses the worker session's default backend, inherited from its manager in
+  `_reserve_backend_model`.
+- Pass `--backend` to a new delegation after the run ends to keep the same backend for follow-up work.
+
 ### Validate spec-embedded tests and patches outside the repo first
 
 Validate both red and green states before writing a test or patch into a spec. `git archive HEAD | tar -x -C /tmp/<scratch>` yields a clean snapshot of tracked files only; edit and run tests there, then confirm the produced patch applies with `git apply --check` on a second clean snapshot.
@@ -88,6 +109,18 @@ Some proxied backends (e.g. an opencode GLM endpoint) cap generation far below t
 - Use git worktrees for branch operations by default.
 - For `charlie-bot`, land a verified worktree change by a push to origin. Keep the runtime checkout as the merge-back paragraph above states.
 - For other repos, keep the main checkout untouched unless the user explicitly approves otherwise.
+- Before a delegated write, read the repo manifest for test commands and run `git var GIT_AUTHOR_IDENT` for the active identity.
+
+### Worktree Retention and Recovery
+
+- Cancelled and failed delegation worktrees keep their environments.
+- At server start, failed worktrees move to `worktrees/.trash` after seven days.
+- Run `charliebot gc-trash --yes` to purge that directory.
+- `refs/stash` is shared by worktrees of one repository. Restore pre-fix code with `git show <base>:<path>` or a scratch worktree.
+- Recover displaced work with its stash hash. Do not use a bare `git stash pop`.
+- If `charliebot` fails with `ModuleNotFoundError: src`, run `uv run --project <repo-root> charliebot`.
+- uv repairs the editable install when `direct_url.json` points to another project path.
+- A hand-edited `.pth` file or stale shebang prevents that repair. Run `uv sync --reinstall-package charlie-bot` to repair the install.
 
 ---
 
@@ -98,6 +131,11 @@ Some proxied backends (e.g. an opencode GLM endpoint) cap generation far below t
 - Session instructions: `_build_instructions_content()` (`src/runtime/master_cc_run.py`) concatenates `prompts/master.md` + `~/.charliebot/MASTER_AGENT_PROMPT.md` + the assembled memory block on every `run_message()`. The block is built by `src/features/memory/memory.py::assemble_master` — full bodies of master-audience entries in resident topics plus a `# Memory index` header line and index lines for the rest. Each backend writes the result to its own instruction file under the session dir (Claude Code `CLAUDE.md`, Codex `AGENTS.md`).
 - Worker log display: In main chat panel, only show "worker {id} started/ended" with general purpose description. Full logs belong in the worker panel only.
 - Draft preservation: User's unsubmitted message text is preserved per-session when switching sessions.
+- Process-session recovery:
+  - Start each CLI run in its own process session so it survives a server restart.
+  - On the next boot, reattach live runs and drain dead runs.
+  - Set a drained run's `ended_at` to its raw log's last write.
+  - Exclude backends registered with `restart_reattach=False` and improve-loop controllers from restart reattachment.
 - **Long-running remote command**:
   1. `charliebot schedule-trigger --cmd '...' --host H --cwd P --max-wait N --message "..."` — starts the command on H and registers its wake in one step. Stdout prints one JSON object: `trigger_id`, `fire_at` and the launch record (`launch_id`, `host`, `pid`, `log`, `exit_file`), also written to `<session>/launches/<launch_id>/metadata.json`. Exit 3 means the ssh start failed and nothing was registered; exit 2 means the registration was rejected and the started process was killed.
   2. After the registration prints its result, end the turn.
@@ -128,8 +166,13 @@ The declared window is 433000 (compaction point 400000) for every run kind. The 
 One Claude login carries a five-hour and a weekly window, so a long master turn or a delegated worker that crosses the line stops mid-work. The account pool keeps that work running on another login of the same subscription tier (`src/backends/claude_code/claude_accounts.py` owns account state and selection; `src/backends/claude_code/claude_relay.py` owns the relay mechanics both the master turn and workers use).
 
 - **Config**: `accounts.claude:` in `~/.charliebot/config.yaml` lists `label` + `config_dir` pairs, each directory one `CLAUDE_CONFIG_DIR` login. `accounts.claude_pools:` maps each pool name to the account labels it holds. Each `cc-claude` entry names its pool in `account_pool` when pools are defined; selection and relay stay inside that pool. One entry per model and pool.
+- The server reloads changed account-pool config at the next usage poll.
 - **Selection**: the healthy account with the most headroom, headroom being one minus the higher of the five-hour and seven-day utilization read from `rate_limit_event` and the usage-panel poll; a rejection holds headroom at zero until its `resetsAt`. A master turn keeps its account while the prompt cache is warm (last request under 60 minutes ago) and the reading sits under 90 percent; a worker picks at launch.
+- Identify the account that served a request from its `rate_limit_event` `resetsAt` pair.
 - **Relay** (master loop in `src/runtime/master_cc_run.py`, worker loop in `src/runtime/worker.py`): a rejected `rate_limit_event` relays after the process exits; `allowed_warning` at 90 percent or above with the reset more than 45 minutes away terminates the process at the next `tool_result` and relays; an exit naming "Failed to authenticate" marks the account unhealthy for 15 minutes, emits `claude_account_login_required`, and relays. The transcript (`<config_dir>/projects/<slug>/<uuid>.jsonl` plus its sidecar directory) is copied to the new directory — the move refuses to overwrite a strictly newer destination copy (its consumer adopts the newer holder and continues; it never fails the turn), lands through a staged atomic replace, and the account label is persisted to session metadata the moment the move lands — and Claude Code resumes the same id with a fixed continuation prompt. Redundant pool copies retire to the newest two after a sound round (`retire_transcript_copies`; failed rounds delete nothing). Three relays per turn at most; an exhausted pool (the entry's pool) ends the turn with the earliest reset time (a worker reports it as quota exhaustion: an implement task's review and a cold-read child then retry on the next `backends.pool` member; a verify child reports the failure without a retry).
+- **Headless calls**: pass the expanded command body and its arguments to `claude -p`; a bare `/command` can reach the model literally.
+- `claude -p --resume <session-id> --output-format json` reports session-cumulative `modelUsage`.
+- Subtract the latest pre-run `cost-state` row to isolate that resumed run's models.
 - **Sonnet compaction** (`src/backends/claude_code/claude_compaction.py`) runs only when the cache is already cold: before a relay (Fable, 100K tokens or more) and at turn start after more than 60 minutes idle (Fable, 50K or more), never at turn end. It runs `claude -p --resume <uuid> --model claude-sonnet-5` with `/compact`; success means a new `compact_boundary` row in the transcript and a Sonnet-only `modelUsage`. Chat shows "Context compacted (manual, by Sonnet)".
 - **Login loss**: the usage panel row shows `re-login needed: <config_dir>` while the account is unhealthy or its credential file is empty; chat gets one account-free notice. Re-login on the host with `CLAUDE_CONFIG_DIR=<config_dir> claude login`.
 - **Where the account shows**: session metadata `claude_account` only (not in backend options, chat, or the panel badge); server log events `master_cc_account_chosen`, `master_cc_account_relay`, `worker_account_relay`, `claude_account_login_required`; `master_done.account_relays` counts a turn's relays.
@@ -142,6 +185,64 @@ One Claude login carries a five-hour and a weekly window, so a long master turn 
 - `modelUsage` may begin with a haiku submodel, and delegated thread cost is omitted.
 - The panel should divide usage by the enforced ~433K auto-compact ceiling rather than the raw context window.
 - `compact_metadata.pre_tokens` on a `context_compacted` event in a session's `chat_events.jsonl` is the observable ground truth for where auto-compact fires (trigger is approximate, ~0.7% above nominal); use it to validate any displayed ceiling instead of asserting a literal. Events persisted before the counts moved into the payload carry a top-level `pre_tokens` instead.
+
+### Usage Accounting
+
+- Update usage accounting in the same change that adds or renames a backend.
+- Resolve historical backend ids from session records and config.
+- Read Codex rollouts from the configured Codex homes.
+- OpenCode's local usage database can include counts that CharlieBot events omit.
+- When a record moves or cleanup deletes it, the tally cache removes its usage from the page.
+- A Claude `result` event's `usage` covers its own run.
+- A Claude `result` event's `total_cost_usd` accumulates across resumes.
+- Use `result.usage` for output tokens because per-message `usage.output_tokens` can be partial.
+- Codex `turn.completed.usage` is cumulative across a worker thread's runs.
+- Subtract the previous run's final `input_tokens` from the current run's final value to get its input.
+- Compare model cost over time with output tokens from the same model. Record serving throughput separately.
+- Count Claude API calls once by message id because copied transcripts repeat calls.
+- The `api-request` and `api-request-blob` entries record sent request content.
+- Claude Code carries earlier thinking blocks into later inputs. Transcripts store their text as empty.
+- Read thinking tokens from `usage.output_tokens_details.thinking_tokens` and take the maximum entry for each message id.
+
+### Run Timing
+
+- Run metadata at `<session>/data/runs/<run>/metadata.json` records each run's kind, backend, and times.
+- A relayed run keeps earlier process logs as numbered `agent.raw.ndjson` files; `.1` is oldest.
+- Read every rotated log.
+- Claude Code transcripts timestamp each message and may have copies in multiple account directories. Find a delegated run's native session id in its `init` event.
+- A gap ending at assistant content measures model time.
+- A gap ending at `tool_result` measures tool time.
+- `duration_api_ms` includes earlier resumes of the session.
+- A CLI-agent transcript marks each step with `## assistant · step N · <UTC time>`.
+- A command log's modification time marks that command's end.
+- A background command can keep writing its log; cap its tool time at the next step's arrival.
+- Chat event logs can repeat `tool_use` ids across turns.
+- Pair each id with its first same-id `tool_result` inside that turn's time range.
+- Per-run `events.jsonl` ids are unique.
+
+### Feature-Use Audits
+
+- Session metadata and chat events provide the complete audit record for backend, profile, origin, creation time, slash commands, and manager shell commands.
+- Worker shell commands appear only in their runs' `events.jsonl`.
+- Attribute manager shell commands to the `manager_turn` run whose time span contains them.
+- Claude nests `tool_use` in `assistant.message.content`.
+- CLI backends emit top-level `tool_use` events. Codex wraps each command as `/bin/bash -lc '<command>'`.
+
+### Server Logs and Reloads
+
+- Server stdout logs are the only source for HTTP route-use events.
+- The launcher `tee` keeps the server log open on fd 3 after cleanup unlinks its path.
+- Read an unlinked log through `/proc/<tee-pid>/fd/3`.
+- The server reloads prompt documents on each master run. Static assets under `web/static` load on the next page load. Python code reloads after a server restart.
+
+## Backend Choice
+
+- For a closed-set backend choice, request `response_format: json_schema` and put a short `why` field before the enum.
+- Give each candidate a one-line condition for when to choose it.
+- Match a request that names a model by deterministic model-name matching.
+- When Codex rejects a newly released model, run `codex update`; the CLI version determines model availability.
+- A verify run's latency varies by backend.
+- Name the backend when a plan cites a verification duration.
 
 ---
 
@@ -251,6 +352,11 @@ charliebot schedule-trigger --max-wait 86400 --watch neptune:slurm:"$JOBID" --me
 ```
 
 Caveats:
+- Give every `sbatch` command absolute output and error paths with the home prefix expanded.
+- Filter credentials from printed environments and keep job-log directories at mode `700`.
+- If a batch script calls `srun`, use `sbatch --wrap "bash script.sh"`. If it runs programs directly, use
+  `sbatch --wrap "srun bash script.sh"` so the outer `srun` binds the GPUs.
+- `sacct` timestamps are UTC.
 - The watcher handles whole non-array allocations only — watching an array job by its base id fails, because sacct `-X` reports the allocation and individual array tasks stay invisible to it.
 - On Okta-gated hosts a cold SSH key cache makes verify-on-create reject the trigger (the first ssh probe fails before the key is enrolled), so enroll the key first with a manual `ssh neptune true`.
 

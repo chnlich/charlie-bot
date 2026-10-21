@@ -77,6 +77,16 @@ Content-Type: application/json
 
 Requires the `search:docs:read` user scope. Results are returned in `data.docs_entities[]`, each with `docs_token`, `docs_type`, and `title`.
 
+When `docs_types` contains `"doc"`, search returns an empty result. Search has poor recall for every document type.
+
+- Treat an empty result as inconclusive.
+- Verify an absence claim with another search surface or a known document link.
+
+After a recorded meeting, Feishu stores AI notes and the transcript in the meeting owner's space.
+
+- Search returns only notes the user owns or the owner shared with the user.
+- When the notes of a meeting that another person owns are not visible, ask the user for the notes link.
+
 ### Public Permission
 
 Use this to inspect or update the public-sharing policy for a docx document:

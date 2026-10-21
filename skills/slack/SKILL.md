@@ -14,6 +14,12 @@ Read messages, search conversations, and look up users in the configured Slack w
 - Token type: User OAuth Token (`xoxp-`)
 - Available scopes: `channels:history`, `channels:read`, `groups:history`, `groups:read`, `im:history`, `im:read`, `mpim:history`, `search:read`, `users:read`
 
+- CharlieBot runtime calls use app credentials.
+- Use `slack.user_token` for one-off reads and treat it as read-only.
+- Use `slack.bot_token` for posting.
+- Grant missing runtime scopes to the app.
+- Follow the standing approval rules for outbound messages.
+
 ## API Reference
 
 All requests require the header: `-H "Authorization: Bearer TOKEN"`
@@ -79,6 +85,9 @@ Supports Slack search modifiers: `from:username`, `in:#channel`, `before:2026-01
 
 - Do NOT use `conversations.open` — it requires `im:write` scope which is not available. Instead, list DM conversations with `conversations.list?types=im` and find the channel by user ID.
 - Do NOT use `conversations.join` or any write endpoints — only read scopes are available.
+
+- Resolve a private channel by ID because channel listings can omit it while its history remains readable.
+- The bot-token listing shows exactly which private channels allow posting; public channels accept posts without bot membership.
 
 ## Workflow
 

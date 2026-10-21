@@ -69,6 +69,8 @@ on), generate the URL instead of dumping file contents into chat. This is especi
    http://localhost:<server_port>/<prefix>/<path>`, and read 200. The pasted link's public base
    URL names the same server, so the local 200 certifies the path the reader opens; probe and
    paste share the exact prefix and path, and nothing is reconstructed from memory.
+   Send `Authorization: Bearer <access-key>` when probing an artifact or file endpoint; unauthenticated
+   requests return 401.
 2. Present the link in markdown format: `[descriptive text](url)`
 3. **If the file is a Perfetto/Chrome trace** (`.json` trace from training/profiling, or a directory
    of rank traces), ALWAYS also include a Perfetto viewer link alongside the file link. Read the

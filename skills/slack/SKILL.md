@@ -10,7 +10,7 @@ Read messages, search conversations, and look up users in the configured Slack w
 
 ## Configuration
 
-- Token location: `~/.charliebot/credentials.yaml` under `slack.user_token`
+- Token location: `$CHARLIEBOT_HOME/credentials.yaml` under `slack.user_token`
 - Token type: User OAuth Token (`xoxp-`)
 - Available scopes: `channels:history`, `channels:read`, `groups:history`, `groups:read`, `im:history`, `im:read`, `mpim:history`, `search:read`, `users:read`
 
@@ -24,10 +24,10 @@ Read messages, search conversations, and look up users in the configured Slack w
 
 All requests require the header: `-H "Authorization: Bearer TOKEN"`
 
-Read the token from `~/.charliebot/credentials.yaml` (section `slack`, key `user_token`) before making any API calls:
+Read the token from `$CHARLIEBOT_HOME/credentials.yaml` (section `slack`, key `user_token`) before making any API calls:
 
 ```bash
-python3 -c "import yaml,os;c=yaml.safe_load(open(os.path.expanduser('~/.charliebot/credentials.yaml')));print(c['slack']['user_token'])"
+python3 -c "import yaml,os;c=yaml.safe_load(open(os.path.join(os.environ['CHARLIEBOT_HOME'], 'credentials.yaml')));print(c['slack']['user_token'])"
 ```
 
 ### Authentication
@@ -91,7 +91,7 @@ Supports Slack search modifiers: `from:username`, `in:#channel`, `before:2026-01
 
 ## Workflow
 
-1. Read the token from `~/.charliebot/credentials.yaml` (`slack.user_token`)
+1. Read the token from `$CHARLIEBOT_HOME/credentials.yaml` (`slack.user_token`)
 2. If looking up a user, call `users.list` first to resolve the user ID
 3. If reading DMs, call `conversations.list?types=im` to find the DM channel ID by matching the user ID
 4. Call `conversations.history` to fetch messages

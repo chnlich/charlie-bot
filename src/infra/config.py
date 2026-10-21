@@ -75,7 +75,7 @@ class ServerConfig(pydantic.BaseModel):
   session_tasks_max: int = 4096
 
   # Worker-class launch precheck: the filesystems holding the CharlieBot data
-  # dir (~/.charliebot) and the worktree root must hold at least this much
+  # dir ($CHARLIEBOT_HOME) and the worktree root must hold at least this much
   # free space, or the run stays queued with a blocked report to its parent
   # (an environment install is the write-heavy case). 0 disables the check.
   # Manager turns never check: they write little and are the path that tells
@@ -149,7 +149,7 @@ class BackendsConfig(pydantic.BaseModel):
 
   # Backend options available for model switching. Each entry parses as the option model that
   # its ``type`` names in the config registry (src/infra/config_registry.py). Additional
-  # backends must be configured via ~/.charliebot/config.yaml -> backends.options.
+  # backends must be configured via $CHARLIEBOT_HOME/config.yaml -> backends.options.
   options: list[Annotated[pydantic.SerializeAsAny[backend_models.BackendOption],
                           pydantic.BeforeValidator(backend_models.parse_option)]] = []
 
@@ -193,7 +193,7 @@ def _locate_in_section(key: str, err: Any) -> Any:
 
 
 class CharlieBotConfig(pydantic.BaseModel):
-  """CharlieBot configuration, loaded from ~/.charliebot/config.yaml.
+  """CharlieBot configuration, loaded from $CHARLIEBOT_HOME/config.yaml.
 
   The mapping is sectioned: each settings group lives under its top-level
   section key (``server:``, ``paths:``, ``backends:``, ...) and every section
@@ -303,7 +303,7 @@ class CharlieBotConfig(pydantic.BaseModel):
 
   @property
   def claude_md_file(self) -> pathlib.Path:
-    """The master agent prompt: ~/.charliebot/MASTER_AGENT_PROMPT.md."""
+    """The master agent prompt: $CHARLIEBOT_HOME/MASTER_AGENT_PROMPT.md."""
     return self.charliebot_home / "MASTER_AGENT_PROMPT.md"
 
   @property

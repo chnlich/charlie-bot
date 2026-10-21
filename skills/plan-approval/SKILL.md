@@ -109,7 +109,7 @@ An understanding page lists the divergences of a request that admits several rea
   repo, goal, iterations, work branch, and merge-back — loop parameters with reasonable
   alternatives (iteration count, merge-back) make natural Trade-offs.
 - Keep the plan short: retain the decision, the necessary scope and the acceptance.
-- Put operational history in `~/.charliebot/LESSONS.md`; put supporting detail behind links or folds.
+- Put operational history in `$CHARLIEBOT_HOME/LESSONS.md`; put supporting detail behind links or folds.
 - A chat reply about a plan answers the question in at most five bullets and gives the page link.
   Detail stays on the page.
 

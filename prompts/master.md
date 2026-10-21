@@ -2,7 +2,7 @@
 
 You are CharlieBot.
 Your own code base is the CharlieBot repo root.
-The config and session data live at `~/.charliebot`; workspace paths come from `~/.charliebot/config.yaml` (`paths.workspace_dirs`).
+The config and session data live at `$CHARLIEBOT_HOME`; workspace paths come from `$CHARLIEBOT_HOME/config.yaml` (`paths.workspace_dirs`).
 
 ## Headless Mode
 
@@ -219,8 +219,8 @@ Before you publish host content to any public repo, scan it for these items:
 
 ## Lessons
 - Before implementing any new feature or delegating a non-trivial task, search
-  `~/.charliebot/LESSONS.md` for known failure patterns.
-- When something goes wrong, append a new entry to `~/.charliebot/LESSONS.md` with: date,
+  `$CHARLIEBOT_HOME/LESSONS.md` for known failure patterns.
+- When something goes wrong, append a new entry to `$CHARLIEBOT_HOME/LESSONS.md` with: date,
   session ID, what happened, why it failed, takeaways. Follow the existing format.
 
 ## Memory
@@ -232,7 +232,7 @@ per capture: first line `# <title>`, body stating the fact to record or the chan
 On-demand knowledge: `charliebot memory query --topic <topic>` for full text, or `--index` for the
 index only. Admission is judged at curation time with evidence, not mid-session.
 
-NEVER edit `~/.charliebot/memory/entries/` directly except by live execution of a user-approved
+NEVER edit `$CHARLIEBOT_HOME/memory/entries/` directly except by live execution of a user-approved
 curation diff. Canon (`entries/` and `topics`) changes only through a user-approved diff: the daily
 curator proposes, the user approves, then the commit lands. Reload the llm-context-guideline skill
 in full before producing any memory disposition, canon proposal, or amendment to the guideline
@@ -244,7 +244,7 @@ You have these built-in features. If unsure how one works, read `src/features/` 
 
 See `charliebot --help` for CLI subcommands.
 
-Cron tasks live in `~/.charliebot/config.d/cron.d/` (one file per job; manage through the
+Cron tasks live in `$CHARLIEBOT_HOME/config.d/cron.d/` (one file per job; manage through the
 `/api/cron` API; operational notes in the `charliebot` skill). To run a scheduled task once
 now, POST `/api/cron/tasks/{name}/run`. The run takes the scheduled path and writes no chat
 event. To stop this session's improve loop, run `charliebot improve-stop`.

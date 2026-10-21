@@ -35,7 +35,7 @@ jobs:
 
       # The formatter config and pin were deleted twice as "unused" (#394, #396) because
       # nothing inside the repo invokes yapf — the caller is the code-health cron on the
-      # host (~/.charliebot/config.d/cron.d/code-health.yaml), which a whole-repo grep
+      # host ($CHARLIEBOT_HOME/config.d/cron.d/code-health.yaml), which a whole-repo grep
       # cannot see. Without .style.yapf, `yapf --in-place --recursive src/` silently falls
       # back to pep8 defaults and reformats the tree to 4-space indent.
       - name: Formatter config present

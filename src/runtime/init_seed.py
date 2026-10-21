@@ -1,4 +1,4 @@
-"""Seed and first-run initialization of the ~/.charliebot/ directory structure."""
+"""Seed and first-run initialization of the $CHARLIEBOT_HOME/ directory structure."""
 
 import os
 import shutil
@@ -17,7 +17,7 @@ def _default_config_yaml() -> dict:
 
 
 async def init_charliebot_home() -> None:
-  """Ensure ~/.charliebot/ directory structure exists and seed default files."""
+  """Ensure $CHARLIEBOT_HOME/ directory structure exists and seed default files."""
   cfg = config.get_config()
 
   # Create all required directories

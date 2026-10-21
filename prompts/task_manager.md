@@ -30,7 +30,7 @@ the inherited rules above define your task.
 - Put a decision in a child's goal when only that line's material answers it. A child owns only
   the decisions that its goal names. Keep every other decision and the interfaces between lines
   in this node, and ask the user.
-- Before you create a child, search `~/.charliebot/sessions/*/metadata.json` for an open session
+- Before you create a child, search `$CHARLIEBOT_HOME/sessions/*/metadata.json` for an open session
   that owns the same Linear issue or deliverable. When an owner exists, create no child: ask the
   user which session continues, and send the work after the user answers.
 - Send a child only the content its task needs, because context isolation is the purpose of the session tree:

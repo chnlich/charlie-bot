@@ -164,7 +164,7 @@ For complex tasks, the master plans before building; the plan registry keeps tha
 ## 6. Memory & Knowledge Management
 
 ### 6.1 Labeled-Entry Memory Store
-A local git repo at `~/.charliebot/memory/` holds one durable fact or rule set per file under
+A local git repo at `$CHARLIEBOT_HOME/memory/` holds one durable fact or rule set per file under
 `entries/<topic>/<slug>.md`, tagged by `scope`/`topic`/`audience` in a restricted front matter.
 
 | Path | Purpose | Access Pattern |
@@ -286,7 +286,7 @@ for the other backends) and passes no flag.
 - Automatic cross-backend review: on worker success, a Review Agent is spawned using a different LLM backend (configurable via `backends.pool`). Failed reviewers retry with the next untried backend
 - Master trigger on completion: combined worker+reviewer summary is sent to the master agent via `trigger_master()` for user notification and follow-up decisions
 - Session blocks (`src/runtime/session_*.py`), `PlanRegistryManager`, `TriggerManager`, `StreamingManager`
-- `init_charliebot_home()` — seeds `~/.charliebot/` on first run with default `config.yaml`
+- `init_charliebot_home()` — seeds `$CHARLIEBOT_HOME/` on first run with default `config.yaml`
 - Memory store: `ensure_store` (`src/features/memory/memory.py`) creates the scaffold (git repo + topics vocabulary) at first use, so a fresh home has no `memory/` directory until then
 - Memory updates: sessions stage candidates via `charliebot memory add` (writes `staging/`, never `entries/`); the daily memory curator builds a user-approved diff that admits, revises, or evicts entries
 
@@ -311,6 +311,6 @@ decodes the opening clip as a recognition probe.
 - Draft persistence: unsent message text is saved to localStorage per session (debounced 300ms) and restored on session switch-back or page reload
 
 **Configuration**
-- `~/.charliebot/config.yaml` holds structure in sections (`server`, `paths`, `backends`, `accounts`, `voice`, `code_server`, `ui`, `slack`, `publish`, `telegram`); `~/.charliebot/credentials.yaml` holds every secret as section → key and is the single source of truth for API keys — no environment variables
+- `$CHARLIEBOT_HOME/config.yaml` holds structure in sections (`server`, `paths`, `backends`, `accounts`, `voice`, `code_server`, `ui`, `slack`, `publish`, `telegram`); `$CHARLIEBOT_HOME/credentials.yaml` holds every secret as section → key and is the single source of truth for API keys — no environment variables
 - `backends.options`: configurable list of LLM backends (see that file for the current list); an option id names the model family, never a version, and starts with a prefix its type's usage source registers (the id rule: the `BackendsConfig` comment in `src/infra/config.py`; usage's startup check, `src/features/usage/backend_ids.py`, refuses an id outside them)
 - `backends.pool`: ordered list of backend IDs in rotation order (`src/runtime/backend_pool.py`); server startup refuses a pool entry (`require_backends`) or a cron task or step backend (cron's startup check, `src/features/cron/backend_refs.py`) that names no option id

@@ -54,6 +54,8 @@ use crate::state::AppState;
 const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 /// A config or environment error (Python's `main` raising).
 const EXIT_CONFIG: u8 = 1;
+/// An unsupported command-line argument.
+const EXIT_USAGE: u8 = 2;
 /// A lifespan startup failure (uvicorn's "Application startup failed").
 const EXIT_STARTUP: u8 = 3;
 
@@ -101,6 +103,45 @@ fn stop_sequence(reason: StopReason) -> Vec<StopAction> {
 }
 
 fn main() -> ExitCode {
+  let mut arguments = std::env::args_os().skip(1);
+  match (arguments.next(), arguments.next()) {
+    (None, None) => run_server(),
+    (Some(argument), None) if argument == std::ffi::OsStr::new("--check-config") => check_config(),
+    _ => {
+      eprintln!("Usage: charliebot-server [--check-config]");
+      ExitCode::from(EXIT_USAGE)
+    }
+  }
+}
+
+fn check_config() -> ExitCode {
+  let (_, repo_root, _) = match replace_environment() {
+    Ok(inputs) => inputs,
+    Err(message) => {
+      eprintln!("charliebot-server: {message}");
+      return ExitCode::from(EXIT_CONFIG);
+    }
+  };
+  let registry = match packages::registry() {
+    Ok(registry) => Arc::new(registry),
+    Err(error) => {
+      eprintln!("charliebot-server: {error}");
+      return ExitCode::from(EXIT_CONFIG);
+    }
+  };
+  match load_inputs(&registry, &repo_root) {
+    Ok(_) => {
+      println!("config ok");
+      ExitCode::SUCCESS
+    }
+    Err(message) => {
+      eprintln!("charliebot-server: {message}");
+      ExitCode::from(EXIT_CONFIG)
+    }
+  }
+}
+
+fn run_server() -> ExitCode {
   // Before the logger and the runtime start, so the environment changes while this is the only thread.
   let (venv_bin, repo_root, agent_base) = match replace_environment() {
     Ok(inputs) => inputs,

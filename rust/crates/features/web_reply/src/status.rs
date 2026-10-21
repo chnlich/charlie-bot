@@ -183,12 +183,14 @@ const ITEM_DIGEST_JSON: JsonStyle =
   JsonStyle { ensure_ascii: false, sort_keys: true, item_separator: ", ", key_separator: ": ", indent: None };
 
 /// `status.item_sha256`: the SHA-256 that names an item as it stands, its three fields and then the bytes of the host
-/// file its link names. A link to a missing host file fails the read.
+/// file its link names, when that path is a file. A link to a missing path or to a directory adds no bytes.
 fn item_sha256(item: &WaitingItem) -> Result<String, WebReplyError> {
   let payload = json!({"text": &item.text, "context": &item.context, "link": &item.link});
   let mut bytes = json_dumps(&payload, &ITEM_DIGEST_JSON).into_bytes();
   let host_path = file_urls::host_file(item.link.as_deref()).map_err(anyhow::Error::msg)?;
-  if let Some(path) = host_path {
+  if let Some(path) = host_path
+    && file_urls::is_file(&path).map_err(|error| WebReplyError::Failed(error.into()))?
+  {
     bytes.extend(fs::read(path).map_err(|error| WebReplyError::Failed(error.into()))?);
   }
   Ok(charliebot_store::control_events::sha256_bytes_hex(&bytes))
@@ -261,6 +263,7 @@ pub async fn record_ask_check(
 pub async fn unread_waiting(features: &FeatureContext, session_id: &str, text: &str) -> Result<Value, WebReplyError> {
   reply::require_web_session(features, session_id).await?;
   let patch = parse_patch(text)?;
+  reply::refuse_dead_links(scanned_texts(&patch), &reply::file_link_scan_context(features, session_id)?)?;
   let items = patch.waiting.as_deref().unwrap_or_default();
   require_waiting_context(items)?;
   let read_digests = read_item_digests(features, session_id).await?;
@@ -340,12 +343,24 @@ fn nested_loc(prefix: &str, field: &str) -> String {
   if prefix.is_empty() { field.to_string() } else { format!("{prefix}.{field}") }
 }
 
+/// The texts of a patch that the file-link scanner reads, in its order: goal, now, then each waiting item's text,
+/// context and link.
+fn scanned_texts(patch: &StatusPatch) -> Vec<&str> {
+  let mut texts: Vec<&str> = patch.goal.iter().chain(patch.now.iter()).flatten().map(String::as_str).collect();
+  for item in patch.waiting.iter().flatten() {
+    texts.push(item.text.as_str());
+    texts.extend([item.context.as_deref(), item.link.as_deref()].into_iter().flatten());
+  }
+  texts
+}
+
 /// `status.set_status`: store the items the JSON `text` names, record one `web_status` event and notify the
 /// ancestors. Waiting items need a non-blank context and a matching cold-read digest. The return adds the Now length;
 /// a refusal stores and records nothing.
 pub async fn set_status(features: &FeatureContext, session_id: &str, text: &str) -> Result<Value, WebReplyError> {
   let meta = reply::require_web_session(features, session_id).await?;
   let patch = parse_patch(text)?;
+  reply::refuse_dead_links(scanned_texts(&patch), &reply::file_link_scan_context(features, session_id)?)?;
   if let Some(items) = patch.waiting.as_deref() {
     require_waiting_context(items)?;
     let read_digests = read_item_digests(features, session_id).await?;

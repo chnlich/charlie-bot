@@ -961,7 +961,7 @@ async fn input_during_review_pauses_landing_and_continues_review() -> anyhow::Re
   let reports = child_reports(&stack, &manager.id)?;
   assert_eq!(reports.len(), 1);
   assert_eq!(reports[0]["outcome"], "blocked");
-  assert!(reports[0]["summary"].as_str().unwrap_or_default().contains("did not land"));
+  assert!(reports[0]["summary"].as_str().unwrap_or_default().contains("ended without landing work run"));
   assert_eq!(stack.store().task_state(&worker.id)?, "archived");
   Ok(())
 }
@@ -1450,14 +1450,66 @@ async fn commit_on_neither_base_ref_reports_blocked_with_the_git_reason() -> any
   };
   stack.register(review).await?;
   stack.record_terminal(&worker.id, "review-run", RunOutcomeKind::Success).await?;
+  write_events(&events_file(&stack, &worker.id, "review-run"), &[json!({"type":"result","result":"review ok"})])?;
 
   stack.node_pass(&worker.id).await?;
   let report = child_reports(&stack, &manager.id)?.into_iter().next().context("landing failure reports to parent")?;
   assert_eq!(report["outcome"], "blocked");
   let summary = report["summary"].as_str().context("blocked report has a summary")?;
-  assert!(summary.contains("passed review but its branch did not land on main"), "{summary}");
-  assert!(summary.contains("ancestry check failed") && summary.contains("(origin/main)"), "{summary}");
+  let (head, verdict) = summary.split_once("\n\nReview verdict:\n").context("blocked report quotes the verdict")?;
+  assert!(head.starts_with("review run review-run ended without landing work run run-work on main: "), "{head}");
+  assert!(head.contains("ancestry check failed") && head.contains("(origin/main)"), "{head}");
+  // The reviewer's closing words, whole, are the verdict the manager reads.
+  assert_eq!(verdict, "review ok");
   assert!(worktree.exists(), "an unproven landing keeps the worktree for recovery");
+  Ok(())
+}
+
+// Python: tests/test_review_landing_target.py:143
+#[tokio::test]
+async fn review_without_closing_words_reports_its_verdict_unknown() -> anyhow::Result<()> {
+  let repo = SyntheticRepo::create()?;
+  let stack = Stack::start("exit 0").await?;
+  let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
+  let worker = stack
+    .node("worker", Some(&manager.id), TaskProfile::Worker, Some(implement_task("add marker", Some(&repo.repo))))
+    .await?;
+  stack.dispatch.set_executor(None);
+  let branch = "task/review-unpublished";
+  let worktree = Path::new(&stack.cfg.paths.worktree_dir).join(&worker.id);
+  repo.add_worktree(&worktree, branch)?;
+  git(&worktree, &["commit", "--allow-empty", "-m", "synthetic unlanded commit"])?;
+  let work = RunRecord {
+    backend: Some("fake".to_string()),
+    model: Some("fake-model".to_string()),
+    repo_path: Some(repo.repo.to_string_lossy().into_owned()),
+    base_branch: Some("main".to_string()),
+    branch_name: Some(branch.to_string()),
+    worktree_path: Some(worktree.to_string_lossy().into_owned()),
+    ..synthetic_run(&worker.id, "run-work", RunKind::Work)
+  };
+  stack.register_with_task_spec(work, "add marker").await?;
+  stack.record_terminal(&worker.id, "run-work", RunOutcomeKind::Success).await?;
+  let review = RunRecord {
+    backend: Some("fake2".to_string()),
+    model: Some("fake2-model".to_string()),
+    review_of_run_id: Some("run-work".to_string()),
+    ..synthetic_run(&worker.id, "review-run", RunKind::Review)
+  };
+  stack.register(review).await?;
+  stack.record_terminal(&worker.id, "review-run", RunOutcomeKind::Success).await?;
+  write_events(&events_file(&stack, &worker.id, "review-run"), &[json!({"type":"result","result":""})])?;
+
+  stack.node_pass(&worker.id).await?;
+  let reports = child_reports(&stack, &manager.id)?;
+  assert_eq!(reports.len(), 1);
+  assert_eq!(reports[0]["outcome"], "blocked");
+  let summary = reports[0]["summary"].as_str().context("blocked report has a summary")?;
+  assert_eq!(
+    summary.lines().last(),
+    Some("The review run left no closing words, so its verdict is unknown."),
+    "{summary}"
+  );
   Ok(())
 }
 

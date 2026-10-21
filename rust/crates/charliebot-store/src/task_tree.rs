@@ -2678,6 +2678,78 @@ pub(crate) mod tests {
     assert_eq!(fs::read_to_string(&counter).unwrap(), "8");
   }
 
+  /// Write one task node's metadata file directly, since `create_node` rebuilds the index per call and the cap
+  /// tests need more nodes than that path makes quickly.
+  fn write_task_node(store: &Store, session_id: &str, parent: Option<&str>, status: SessionStatus) {
+    let mut meta = SessionMetadata::new(session_id, session_id, TaskProfile::Worker);
+    meta.task_parent_id = parent.map(str::to_string);
+    meta.status = status;
+    let path = store.metadata_path(session_id);
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, meta.to_json_string(&store.slots, true)).unwrap();
+  }
+
+  // Python: src/runtime/task_sessions.py:581
+  #[test]
+  fn subtree_walk_holds_more_than_a_thousand_stored_archived_descendants() {
+    let home = tempfile::tempdir().unwrap();
+    let store = make_store(home.path());
+    write_task_node(&store, "root", None, SessionStatus::Active);
+    for index in 0..1001 {
+      write_task_node(&store, &format!("archived-{index:04}"), Some("root"), SessionStatus::Archived);
+    }
+    write_task_node(&store, "open-a", Some("root"), SessionStatus::Active);
+    write_task_node(&store, "open-b", Some("root"), SessionStatus::Active);
+    store.invalidate_tree_index();
+    let walked = store.descendant_ids("root");
+    assert!(walked.as_ref().is_ok_and(|ids| ids.len() == 1003), "{walked:?}");
+  }
+
+  // Python: src/runtime/task_sessions.py:585
+  #[test]
+  fn subtree_walk_refuses_more_than_a_thousand_non_archived_descendants() {
+    let home = tempfile::tempdir().unwrap();
+    let store = make_store(home.path());
+    write_task_node(&store, "root", None, SessionStatus::Active);
+    for index in 0..1001 {
+      write_task_node(&store, &format!("open-{index:04}"), Some("root"), SessionStatus::Active);
+    }
+    store.invalidate_tree_index();
+    let refusal = store.descendant_ids("root").err();
+    assert!(
+      matches!(&refusal, Some(StoreError::Conflict(blockers))
+        if blockers == &["subtree of root exceeds 1000 non-archived nodes"]),
+      "{refusal:?}"
+    );
+  }
+
+  // Python: src/runtime/task_sessions.py:581
+  #[tokio::test]
+  async fn subtree_cap_does_not_count_a_node_only_the_derived_archive_marks() {
+    let home = tempfile::tempdir().unwrap();
+    let store = make_store(home.path());
+    write_task_node(&store, "root", None, SessionStatus::Active);
+    write_task_node(&store, "closed", Some("root"), SessionStatus::Active);
+    for index in 0..1001 {
+      write_task_node(&store, &format!("under-closed-{index:04}"), Some("closed"), SessionStatus::Active);
+    }
+    let close = control_events::build_control_event(
+      "task_closed",
+      ACTOR_SYSTEM,
+      "closed",
+      None,
+      None,
+      [("outcome".to_string(), json!("archived"))],
+    );
+    let guard = store.control_lock().await;
+    store.append_control_fact(&guard, "closed", close).await.unwrap();
+    drop(guard);
+    store.invalidate_tree_index();
+    assert!(store.archived_of("under-closed-0000").unwrap());
+    let walked = store.descendant_ids("root");
+    assert!(walked.as_ref().is_ok_and(|ids| ids.len() == 1002), "{walked:?}");
+  }
+
   #[test]
   fn fact_fold_tracks_boundaries_closes_reports_and_run_positions() {
     let events = vec![

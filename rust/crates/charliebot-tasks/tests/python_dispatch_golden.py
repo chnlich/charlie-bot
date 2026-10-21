@@ -30,7 +30,7 @@ class ScriptedExecutor:
     if launch_run_id is None:
       self.run_index += 1
       run_id = f"run-{self.run_index}"
-      await tree.runs.register_run(models.RunRecord(id=run_id, session_id=session_id, kind="work"))
+      await tree.runs.register_run_locked(models.RunRecord(id=run_id, session_id=session_id, kind="work"))
     else:
       run_id = launch_run_id
     batch_ids = [str(event["id"]) for event in pending]
@@ -137,10 +137,10 @@ async def run() -> dict:
 
     await tree.dispatch.admit_input(
         root.id, event_type="user", content="foreign batch", actor="user", input_id="foreign-input")
-    await tree.runs.register_run(models.RunRecord(id="run-owner", session_id=root.id, kind="work"))
+    await tree.runs.register_run_locked(models.RunRecord(id="run-owner", session_id=root.id, kind="work"))
     async with tree.control_lock:
       await tree.dispatch.claim_input_batch_locked(root.id, "run-owner")
-    await tree.runs.register_run(models.RunRecord(id="run-foreign", session_id=root.id, kind="work"))
+    await tree.runs.register_run_locked(models.RunRecord(id="run-foreign", session_id=root.id, kind="work"))
     try:
       await tree.dispatch.finish_run(root.id, "run-foreign", outcome="success", input_event_ids=["foreign-input"])
     except Exception as error:
@@ -152,7 +152,7 @@ async def run() -> dict:
 
     await tree.dispatch.admit_input(
         root.id, event_type="user", content="stopped queue", actor="user", input_id="stopped-input")
-    await tree.runs.register_run(models.RunRecord(id="run-stopped", session_id=root.id, kind="work"))
+    await tree.runs.register_run_locked(models.RunRecord(id="run-stopped", session_id=root.id, kind="work"))
     async with tree.control_lock:
       await tree.dispatch.claim_input_batch_locked(root.id, "run-stopped")
     await tree.runs.request_stop(root.id, "run-stopped", "stop-stopped")

@@ -31,6 +31,7 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.websocket("/ws/voice/*", relay::handler)?;
   registry.turn_contribution("voice", Arc::new(VoiceTurnContribution))?;
   registry.service(Arc::new(provisioning::SpeechService::default()))?;
+  registry.let_go_step("speech", provisioning::let_go_step)?;
   registry.template_global("voice_backends", config::voice_backends)?;
   registry.template_global("voice_default_backend", config::voice_default_backend)?;
   registry.config_section(config::section())?;

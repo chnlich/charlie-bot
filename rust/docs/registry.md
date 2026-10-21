@@ -308,8 +308,16 @@ lock. `restore_chain` takes the lock itself and returns the restored ids.
 - Rust: `pre_recovery_step(name, StepFn)`, `recovery_step(name, StepFn)` (at most one), `trigger_step(name, StepFn)` (at most
   one) and `let_go_step(name, StepFn)`, where `StepFn = fn(Arc<FeatureContext>) -> BoxFuture<'static, anyhow::Result<()>>`.
 - Order: the pre-recovery steps in registration order; the recovery step, started as a task before the early services
-  start and awaited after them; the early services; the trigger step; the ready services. Shutdown stops the ready
-  services in reverse, then the early ones in reverse, then runs the let-go steps in order.
+  start and awaited after them; the early services; the trigger step; the ready services. Shutdown stops ready services
+  in reverse order, stops early services in reverse order, closes shared clients, releases the fence, and logs
+  `charliebot_shutdown` (`server.py:293-310`). On SIGINT and failed bind, the server then runs let-go steps in
+  registration order and exits 0 or 1 (`uvicorn/server.py:179-182`). SIGTERM skips let-go and is re-raised under its
+  default action (`uvicorn/server.py:322-339`). The registered order is `task_execution`, `headless_renderer`, then
+  `speech`.
+- Python cancels turn consumers after the shutdown line (`asyncio/runners.py:66-75`; `src/runtime/master_cc_run.py:648-664`),
+  joins the speech worker through its executor (`src/features/voice/service.py:43-54`; `concurrent/futures/thread.py:23-31`),
+  then closes the browser through `atexit` (`src/features/artifacts/headless_render.py:184`). SIGTERM skips those
+  normal-exit steps.
 - Example: `registry.recovery_step("sweep_orphans", sweep_orphans)?;`
 
 ## Route helpers

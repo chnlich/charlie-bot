@@ -3,7 +3,6 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-#[cfg(test)]
 use std::sync::Arc;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -13,6 +12,7 @@ use bzip2::read::BzDecoder;
 use charliebot_compat::http_client::{self, Settings};
 use charliebot_core::RepoRoot;
 use charliebot_core::config::CharlieBotConfig;
+use charliebot_registry::context::FeatureContext;
 use charliebot_registry::wiring::{Phase, Service, ServiceContext};
 use sha2::{Digest, Sha256};
 use tar::Archive;
@@ -356,12 +356,23 @@ impl Service for SpeechService {
       let cfg = cfg.as_ref().clone();
       let repo_root = ctx.features.startup.require::<RepoRoot>().map_err(|error| anyhow::anyhow!(error.to_string()))?;
       let repo_root = repo_root.path().to_path_buf();
-      let worker = tokio::task::spawn_blocking(move || {
+      let worker = Arc::new(tokio::sync::Mutex::new(None));
+      ctx.features.startup.insert(SpeechWorker(Arc::clone(&worker)))?;
+      let blocking_worker = tokio::task::spawn_blocking(move || {
         provision_models(&cfg);
         warm_up(&cfg, &repo_root);
       });
+      *worker.lock().await = Some(blocking_worker);
+      let worker_to_monitor = SpeechWorker(Arc::clone(&worker));
       let monitor = tokio::spawn(async move {
-        if let Err(error) = worker.await {
+        let mut worker = worker_to_monitor.0.lock().await;
+        let result = match worker.as_mut() {
+          Some(worker) => Some(worker.await),
+          None => None,
+        };
+        worker.take();
+        drop(worker);
+        if let Some(Err(error)) = result {
           tracing::error!(exception = %error, "speech_model_provisioning_failed");
         }
       });
@@ -382,12 +393,22 @@ impl Service for SpeechService {
   }
 }
 
-#[cfg(test)]
 #[derive(Clone)]
 struct SpeechWorker(Arc<tokio::sync::Mutex<Option<JoinHandle<()>>>>);
 
-#[cfg(test)]
-async fn wait_for_provisioning_worker(_worker: Option<SpeechWorker>) -> anyhow::Result<()> {
+pub(crate) fn let_go_step(
+  features: Arc<FeatureContext>,
+) -> futures_util::future::BoxFuture<'static, anyhow::Result<()>> {
+  let worker = features.startup.get::<SpeechWorker>().map(|worker| (*worker).clone());
+  Box::pin(wait_for_provisioning_worker(worker))
+}
+
+async fn wait_for_provisioning_worker(worker: Option<SpeechWorker>) -> anyhow::Result<()> {
+  if let Some(worker) = worker
+    && let Some(worker) = worker.0.lock().await.take()
+  {
+    worker.await.context("speech provisioning worker failed")?;
+  }
   Ok(())
 }
 
@@ -422,6 +443,9 @@ mod tests {
 
   #[tokio::test]
   async fn let_go_waits_for_the_provisioning_worker() {
+    let no_worker = tokio::time::timeout(Duration::from_millis(50), wait_for_provisioning_worker(None)).await;
+    assert!(matches!(no_worker, Ok(Ok(()))), "let-go waited without a provisioning worker: {no_worker:?}");
+
     let (started, running) = tokio::sync::oneshot::channel();
     let (release, blocked) = std::sync::mpsc::channel();
     let worker = tokio::task::spawn_blocking(move || {

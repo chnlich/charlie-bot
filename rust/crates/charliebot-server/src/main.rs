@@ -4,10 +4,12 @@
 //! any thread starts, build the registry from the composition root, load and check the config, take the home writer
 //! fence (another holder exits 3 after logging `server_startup_refused_home_writer_fence`), capture the build identity,
 //! initialize the home, log `charliebot_home_ready`, run the lifespan's startup steps, log `server_ready`, then bind the
-//! configured host and port. SIGTERM or SIGINT stops accepting, lets in-flight requests finish for up to five seconds,
-//! stops the lifespan's services, runs its let-go steps, closes the shared HTTP client and the open WebSockets,
-//! releases the fence, logs `charliebot_shutdown`, then raises the signal again under its default disposition, so the
-//! process ends killed by that signal as uvicorn's does.
+//! configured host and port. A stop signal drains requests for up to five seconds, stops services, closes shared clients,
+//! releases the fence, and logs `charliebot_shutdown` (`server.py:293-310`). SIGTERM then restores its default
+//! disposition and raises SIGTERM without let-go steps. SIGINT runs let-go steps after the log and returns 0. A failed
+//! bind runs let-go steps after the log and returns 1 (`uvicorn/server.py:179-182`). Uvicorn re-raises SIGTERM; normal
+//! Python exits cancel tasks and Uvicorn catches KeyboardInterrupt (`uvicorn/server.py:322-339`,
+//! `uvicorn/main.py:607-608`, `asyncio/runners.py:66-75`).
 //!
 //! The repo root variable (`charliebot_core::repo_root::REPO_ROOT_ENV`) names the charlie-bot checkout whose `web/`,
 //! page packages and `configs/` the server serves; the Python server derives the same root from its own file location.
@@ -63,8 +65,6 @@ enum StopReason {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum StopAction {
-  /// Stops services, runs let-go steps, and closes the shared clients in one lifespan call.
-  LegacyShutdown,
   /// Stops services and closes the shared clients.
   Shutdown,
   ReleaseWriterFence,
@@ -75,11 +75,29 @@ enum StopAction {
 }
 
 fn stop_sequence(reason: StopReason) -> Vec<StopAction> {
-  let ending = match reason {
-    StopReason::Signal(signal) => StopAction::RaiseSignal(signal),
-    StopReason::BindFailure => StopAction::ReturnStatus(EXIT_CONFIG),
-  };
-  vec![StopAction::LegacyShutdown, StopAction::ReleaseWriterFence, StopAction::LogShutdown, ending]
+  match reason {
+    StopReason::Signal(Signal::SIGTERM) => vec![
+      StopAction::Shutdown,
+      StopAction::ReleaseWriterFence,
+      StopAction::LogShutdown,
+      StopAction::RaiseSignal(Signal::SIGTERM),
+    ],
+    StopReason::Signal(Signal::SIGINT) => vec![
+      StopAction::Shutdown,
+      StopAction::ReleaseWriterFence,
+      StopAction::LogShutdown,
+      StopAction::RunLetGo,
+      StopAction::ReturnStatus(0),
+    ],
+    StopReason::Signal(signal) => unreachable!("the stop handler only receives SIGTERM or SIGINT, got {signal}"),
+    StopReason::BindFailure => vec![
+      StopAction::Shutdown,
+      StopAction::ReleaseWriterFence,
+      StopAction::LogShutdown,
+      StopAction::RunLetGo,
+      StopAction::ReturnStatus(EXIT_CONFIG),
+    ],
+  }
 }
 
 fn main() -> ExitCode {
@@ -189,14 +207,7 @@ async fn run(venv_bin: VenvBin, repo_root: RepoRoot, agent_base: AgentBaseEnviro
     Ok(listener) => listener,
     Err(message) => {
       eprintln!("charliebot-server: {message}");
-      let shutdown_started = Instant::now();
-      let closes = stop_lifespan(&mut lifespan).await;
-      writer_fence.release();
-      log_shutdown(shutdown_started, closes);
-      return match stop_sequence(StopReason::BindFailure).last().copied().expect("the stop sequence has an ending") {
-        StopAction::ReturnStatus(status) => ExitCode::from(status),
-        _ => unreachable!("a failed bind ends with an exit status"),
-      };
+      return finish_stop(&mut lifespan, &mut writer_fence, Instant::now(), StopReason::BindFailure).await;
     }
   };
 
@@ -221,14 +232,33 @@ async fn run(venv_bin: VenvBin, repo_root: RepoRoot, agent_base: AgentBaseEnviro
     Ok(Err(join_error)) => tracing::error!(error = %join_error, "server_failed"),
     Err(_) => tracing::warn!(timeout_s = GRACEFUL_SHUTDOWN_TIMEOUT.as_secs(), "graceful_shutdown_timeout_exceeded"),
   }
-  let shutdown_started = Instant::now();
-  let closes = stop_lifespan(&mut lifespan).await;
-  writer_fence.release();
-  log_shutdown(shutdown_started, closes);
-  match stop_sequence(StopReason::Signal(received)).last().copied().expect("the stop sequence has an ending") {
-    StopAction::RaiseSignal(signal) => exit_by_signal(signal),
-    _ => unreachable!("a signal stop ends by raising its signal"),
+  finish_stop(&mut lifespan, &mut writer_fence, Instant::now(), StopReason::Signal(received)).await
+}
+
+async fn finish_stop(
+  lifespan: &mut Lifespan,
+  writer_fence: &mut fence::HomeWriterFence,
+  shutdown_started: Instant,
+  reason: StopReason,
+) -> ExitCode {
+  let mut closes = None;
+  for action in stop_sequence(reason) {
+    match action {
+      StopAction::Shutdown => closes = Some(stop_lifespan(lifespan).await),
+      StopAction::ReleaseWriterFence => writer_fence.release(),
+      StopAction::LogShutdown => {
+        log_shutdown(shutdown_started, closes.take().expect("shutdown runs before its log line"));
+      }
+      StopAction::RunLetGo => {
+        if let Err(error) = lifespan.run_let_go_steps().await {
+          tracing::error!(error = format!("{error:#}"), "lifespan_shutdown_failed");
+        }
+      }
+      StopAction::RaiseSignal(signal) => return exit_by_signal(signal),
+      StopAction::ReturnStatus(status) => return ExitCode::from(status),
+    }
   }
+  unreachable!("every stop sequence ends by raising a signal or returning an exit status")
 }
 
 /// The lifespan's shutdown. A failed stop is logged, and the caller still releases the home fence.
@@ -240,7 +270,7 @@ async fn stop_lifespan(lifespan: &mut Lifespan) -> CloseTimings {
   shutdown.closes
 }
 
-/// The `charliebot_shutdown` line: the shutdown's total time and the time of each close, as Python's lifespan logs them.
+/// The `charliebot_shutdown` line: the total shutdown time and Python's service and shared-client timings.
 fn log_shutdown(shutdown_started: Instant, closes: CloseTimings) {
   tracing::info!(
     shutdown_ms = round_ms(shutdown_started.elapsed()),
@@ -251,10 +281,8 @@ fn log_shutdown(shutdown_started: Instant, closes: CloseTimings) {
     scheduler_ms = round_ms(step_elapsed(&closes.step_closes, "scheduler")),
     slack_ms = round_ms(step_elapsed(&closes.step_closes, "slack")),
     speech_ms = round_ms(step_elapsed(&closes.step_closes, "speech")),
-    usage_tally_ms = round_ms(step_elapsed(&closes.step_closes, "usage_tally")),
-    cron_binding_context_ms = round_ms(step_elapsed(&closes.step_closes, "cron_binding_context")),
-    task_execution_ms = round_ms(step_elapsed(&closes.step_closes, "task_execution")),
-    headless_renderer_ms = round_ms(step_elapsed(&closes.step_closes, "headless_renderer")),
+    // Python stops `usage_tally`; Rust has no `usage_tally` service.
+    usage_tally_ms = 0,
     http_client_ms = round_ms(closes.http_client),
     ws_close_ms = round_ms(closes.ws_close),
     "charliebot_shutdown"
@@ -393,25 +421,14 @@ mod tests {
   }
 
   #[test]
-  fn shutdown_line_reports_the_shutdown_and_each_close() {
+  // Python: server.py:293-310.
+  fn shutdown_line_has_python_fields_and_each_close_is_numeric() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let subscriber = Registry::default().with(Capture(Arc::clone(&events)));
     tracing::subscriber::with_default(subscriber, || {
-      let step_closes = [
-        "discord",
-        "ext_usage",
-        "host_auth",
-        "merge_pool",
-        "scheduler",
-        "slack",
-        "speech",
-        "usage_tally",
-        "cron_binding_context",
-        "task_execution",
-        "headless_renderer",
-      ]
-      .map(|name| StepTiming { name, elapsed: Duration::ZERO })
-      .into();
+      let step_closes = ["discord", "ext_usage", "host_auth", "merge_pool", "scheduler", "slack", "speech"]
+        .map(|name| StepTiming { name, elapsed: Duration::ZERO })
+        .into();
       let closes =
         CloseTimings { step_closes, http_client: Duration::from_millis(3), ws_close: Duration::from_millis(5) };
       log_shutdown(Instant::now(), closes);
@@ -419,8 +436,26 @@ mod tests {
 
     let events = events.lock().unwrap();
     assert_eq!(events.len(), 1);
-    let names: Vec<&str> = events[0].iter().map(|(name, _)| name.as_str()).collect();
+    let mut names: Vec<&str> = events[0].iter().map(|(name, _)| name.as_str()).collect();
+    names.sort_unstable();
     assert_eq!(events[0][0].1, "charliebot_shutdown");
+    assert_eq!(
+      names,
+      [
+        "discord_ms",
+        "ext_usage_ms",
+        "host_auth_ms",
+        "http_client_ms",
+        "merge_pool_ms",
+        "message",
+        "scheduler_ms",
+        "shutdown_ms",
+        "slack_ms",
+        "speech_ms",
+        "usage_tally_ms",
+        "ws_close_ms",
+      ]
+    );
     for name in [
       "shutdown_ms",
       "discord_ms",
@@ -431,9 +466,6 @@ mod tests {
       "slack_ms",
       "speech_ms",
       "usage_tally_ms",
-      "cron_binding_context_ms",
-      "task_execution_ms",
-      "headless_renderer_ms",
       "http_client_ms",
       "ws_close_ms",
     ] {

@@ -9,8 +9,11 @@
 //! 4. the trigger step, at most one, after recovery;
 //! 5. the ready services, in registration order.
 //!
-//! Shutdown stops the ready services in reverse registration order, then the early ones in reverse, then runs the
-//! let-go steps in registration order and waits for them before the process exits.
+//! Shutdown stops the ready services in reverse registration order, then the early ones in reverse, then closes the
+//! shared HTTP client and WebSockets. The server releases the home fence and logs `charliebot_shutdown` next
+//! (`server.py:293-310`). On SIGINT and failed bind, it runs let-go steps after that line; on SIGTERM, it skips them and
+//! restores SIGTERM's default disposition and re-raises it (`uvicorn/server.py:322-339`). Normal Python exits cancel
+//! pending tasks after the shutdown line (`asyncio/runners.py:66-75`).
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -23,8 +26,8 @@ use crate::context::FeatureContext;
 use crate::registry::{Registry, RegistryError};
 use crate::wiring::{Phase, Service, ServiceContext};
 
-/// One lifespan step: it runs with the feature context and resolves when the step is done. A step that fails stops
-/// the startup, or is part of the shutdown's error report.
+/// One lifespan step: it runs with the feature context and resolves when the step is done. A failure stops startup or
+/// is returned by the step runner.
 pub type StepFn = fn(Arc<FeatureContext>) -> BoxFuture<'static, anyhow::Result<()>>;
 
 impl Registry {
@@ -46,33 +49,33 @@ impl Registry {
     self.trigger_step.insert_single(package, name, step)
   }
 
-  /// Register a let-go step, which runs at shutdown after the services stop. Steps run in registration order.
+  /// Register a let-go step. Normal stops run it after the shutdown log; failed startup runs it during cleanup.
   pub fn let_go_step(&mut self, name: &'static str, step: StepFn) -> Result<(), RegistryError> {
     let package = self.owner()?;
     self.let_go_steps.insert(package, name, step)
   }
 }
 
-/// The lifespan of one running server: the services it started and the let-go steps it runs at shutdown.
+/// The lifespan of one running server: its started services and registered let-go steps.
 pub struct Lifespan {
   features: Arc<FeatureContext>,
   /// The services that started, in start order.
   started: Vec<(Phase, Arc<dyn Service>)>,
 }
 
-/// One service or let-go step and its elapsed shutdown time.
+/// One service and its elapsed shutdown time.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StepTiming {
-  /// The Python service name or the Rust-only step name.
+  /// The service name.
   pub name: &'static str,
-  /// The time spent stopping the service or running the let-go step.
+  /// The time spent stopping the service.
   pub elapsed: Duration,
 }
 
 /// How long each shutdown step took. The `charliebot_shutdown` line reports each value in milliseconds.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CloseTimings {
-  /// The service and let-go timings, in shutdown order.
+  /// The service timings, in shutdown order.
   pub step_closes: Vec<StepTiming>,
   /// Closing the shared HTTP client (`http_client_ms`).
   pub http_client: Duration,
@@ -84,13 +87,6 @@ pub struct CloseTimings {
 pub struct Shutdown {
   pub closes: CloseTimings,
   /// The first stop failure, if any.
-  pub error: Option<anyhow::Error>,
-}
-
-/// The outcome of running the lifespan's let-go steps.
-pub struct LetGo {
-  pub step_closes: Vec<StepTiming>,
-  /// The first let-go failure.
   pub error: Option<anyhow::Error>,
 }
 
@@ -150,21 +146,30 @@ impl Lifespan {
 
   /// Stops what started after a failed startup and returns the startup error, with any shutdown error added to it.
   async fn abort(mut self, error: anyhow::Error) -> anyhow::Error {
-    match self.shutdown().await.error {
+    let (step_closes, mut first_error) = self.stop_services().await;
+    if let Err(error) = self.run_let_go_steps().await {
+      first_error.get_or_insert(error);
+    }
+    let _ = self.close_clients(step_closes).await;
+    match first_error {
       None => error,
       Some(stop_error) => error.context(format!("stopping after the failed startup also failed: {stop_error:#}")),
     }
   }
 
-  /// Stops the started services (ready ones in reverse order, then early ones in reverse), runs the let-go steps in
-  /// registration order, then closes the shared HTTP client and the open WebSockets. Every step runs even when an
-  /// earlier one fails; the first failure is returned with the close timings.
+  /// Stops started services in reverse phase order, closes the shared clients, and returns the first service failure.
   pub async fn shutdown(&mut self) -> Shutdown {
+    let (step_closes, error) = self.stop_services().await;
+    let closes = self.close_clients(step_closes).await;
+    Shutdown { closes, error }
+  }
+
+  async fn stop_services(&mut self) -> (Vec<StepTiming>, Option<anyhow::Error>) {
     let mut first_error: Option<anyhow::Error> = None;
-    // Python registers `usage_tally`; Rust has no matching service stop, so its field is zero.
-    let mut step_closes = vec![StepTiming { name: "usage_tally", elapsed: Duration::ZERO }];
+    let mut step_closes = Vec::new();
+    let started_services = std::mem::take(&mut self.started);
     for phase in [Phase::Ready, Phase::Early] {
-      for (_, service) in self.started.iter().rev().filter(|(started, _)| *started == phase) {
+      for (_, service) in started_services.iter().rev().filter(|(started, _)| *started == phase) {
         let name = service.name();
         let started = Instant::now();
         if let Err(error) = service.stop().await.with_context(|| format!("service {name:?} failed to stop")) {
@@ -173,26 +178,19 @@ impl Lifespan {
         step_closes.push(StepTiming { name, elapsed: started.elapsed() });
       }
     }
-    let let_go = self.run_let_go_steps().await;
-    first_error = first_error.or(let_go.error);
-    step_closes.extend(let_go.step_closes);
-    let closes = self.close_clients(step_closes).await;
-    Shutdown { closes, error: first_error }
+    (step_closes, first_error)
   }
 
-  /// Runs every let-go step in registration order and returns the first failure with each step's timing.
-  pub async fn run_let_go_steps(&self) -> LetGo {
+  /// Runs every let-go step in registration order and returns the first failure after all steps run.
+  pub async fn run_let_go_steps(&self) -> anyhow::Result<()> {
     let mut first_error: Option<anyhow::Error> = None;
-    let mut step_closes = Vec::new();
     for (name, step) in self.features.registry.let_go_steps() {
-      let started = Instant::now();
       if let Err(error) = step(Arc::clone(&self.features)).await.with_context(|| format!("let-go step {name:?} failed"))
       {
         first_error.get_or_insert(error);
       }
-      step_closes.push(StepTiming { name, elapsed: started.elapsed() });
     }
-    LetGo { step_closes, error: first_error }
+    first_error.map_or(Ok(()), Err)
   }
 
   async fn close_clients(&self, step_closes: Vec<StepTiming>) -> CloseTimings {
@@ -366,7 +364,10 @@ mod tests {
     assert!(!charliebot_compat::http_client::close_shared_client(), "the shutdown left the shared HTTP client open");
     let all = TRACE.lock().unwrap().clone();
     let stopped: Vec<&str> = all[started.len()..].iter().map(String::as_str).collect();
-    assert_eq!(stopped, ["ready_beta:stop", "ready_alpha:stop", "early_beta:stop", "early_alpha:stop", "let_go"]);
+    // Python: server.py:303-310 stops services and clients before logging, without a let-go phase.
+    assert_eq!(stopped, ["ready_beta:stop", "ready_alpha:stop", "early_beta:stop", "early_alpha:stop"]);
+    lifespan.run_let_go_steps().await.unwrap();
+    assert_eq!(TRACE.lock().unwrap().last().map(String::as_str), Some("let_go"));
   }
 
   #[tokio::test]
@@ -385,8 +386,7 @@ mod tests {
     let stopped = TRACE.lock().unwrap().clone();
     assert!(!stopped.iter().any(|entry| entry == "let_go"), "shutdown ran a let-go step: {stopped:?}");
 
-    let let_go = lifespan.run_let_go_steps().await;
-    assert!(let_go.error.is_none(), "{:?}", let_go.error);
+    lifespan.run_let_go_steps().await.unwrap();
     assert_eq!(*TRACE.lock().unwrap(), ["let_go"]);
   }
 }

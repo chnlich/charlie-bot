@@ -1477,6 +1477,9 @@ impl TaskExecutionAdapter {
   ) -> anyhow::Result<Option<String>> {
     let store = &self.features.store;
     let guard = store.control_lock().await;
+    if store.task_state(session_id)? != "open" {
+      return Ok(None);
+    }
     let events = store.load_all_facts(session_id)?;
     if run_records::terminal_outcome(&events, &work_run.id)? != Some(RunOutcomeKind::Success) {
       return Ok(None);
@@ -1832,10 +1835,39 @@ impl TaskExecutionAdapter {
       Some(summary) => summary.to_string(),
       None => self.worker_failure_summary(session_id, run)?,
     };
-    self
-      .dispatch
-      .deliver_child_report(session_id, source, outcome, &summary, Some(&[format!("run:{}", run.id)]), Some(parent_id))
-      .await?;
+    let parent_epoch = self.features.store.prime_aggregator(parent_id).await?;
+    let (report, report_created) = {
+      let guard = self.features.store.control_lock().await;
+      if self.features.store.task_state(session_id)? != "open" {
+        return Ok(());
+      }
+      self
+        .dispatch
+        .deliver_child_report_locked(
+          &guard,
+          session_id,
+          source,
+          outcome,
+          &summary,
+          Some(&[format!("run:{}", run.id)]),
+          Some(parent_id),
+        )
+        .await?
+    };
+    if report_created {
+      self.features.store.announce_appended_event(parent_id, &report, parent_epoch).await?;
+      if self.features.store.task_state(parent_id)? != "open" {
+        tracing::info!(
+          target: "charliebot_tasks",
+          parent = parent_id,
+          child = session_id,
+          report = ?report.get("id"),
+          "child_report_into_archived_parent_kept_as_history"
+        );
+      } else {
+        self.dispatch.wake_parent(parent_id, &report).await?;
+      }
+    }
     let guard = self.features.store.control_lock().await;
     let archive_run = deciding_run.unwrap_or(run);
     self.features.store.archive_unsuccessful_worker(&guard, session_id, &archive_run.id, outcome).await?;
@@ -2004,13 +2036,8 @@ impl TaskExecutionAdapter {
         let mut outcome = RunOutcome::new(kind);
         outcome.exit_code = Some(exit_code);
         outcome.ended_at = ended_at;
-        if stop_requested {
-          features.store.record_finish_locked(&guard, &session_id, &run_id, outcome.clone()).await?;
-          persist_done(session_id.clone(), done_event).await?;
-        } else {
-          persist_done(session_id.clone(), done_event).await?;
-          features.store.record_finish_locked(&guard, &session_id, &run_id, outcome.clone()).await?;
-        }
+        persist_done(session_id.clone(), done_event).await?;
+        features.store.record_finish_locked(&guard, &session_id, &run_id, outcome.clone()).await?;
         drop(guard);
 
         dispatch.finish_run(&session_id, &run_id, outcome).await?;
@@ -2025,6 +2052,17 @@ impl TaskExecutionAdapter {
     let key = (session_id.to_string(), run_id.to_string());
     self.launches.lock().expect("task execution launch state is not poisoned").inflight.contains(&key)
       || self.recovery.resume_follows.lock().expect("resume follow set is not poisoned").contains(&key)
+  }
+
+  /// Subscribe to the active launch's settlement before a stop can finish and remove it from launch state.
+  pub(crate) fn settlement_receiver(
+    &self,
+    session_id: &str,
+    run_id: &str,
+  ) -> Option<watch::Receiver<Option<LaunchSettlement>>> {
+    let key = (session_id.to_string(), run_id.to_string());
+    let state = self.launches.lock().expect("task execution launch state is not poisoned");
+    state.settlements.get(&key).map(watch::Sender::subscribe)
   }
 
   pub(crate) fn child_env(&self, session_id: &str, run_id: &str, agent: &str) -> StoreResult<Env> {

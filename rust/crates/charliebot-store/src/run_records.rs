@@ -11,8 +11,8 @@ use charliebot_core::proc_identity;
 use charliebot_core::pyfmt::{self, JsonStyle};
 use charliebot_core::run_token;
 use nix::errno::Errno;
-use nix::sys::signal::{Signal, kill};
-use nix::unistd::Pid;
+use nix::sys::signal::{Signal, killpg};
+use nix::unistd::{Pid, getpgid};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
@@ -36,6 +36,7 @@ pub const RUN_EVENTS_NAME: &str = "events.jsonl";
 pub const RUN_TASK_SPEC_NAME: &str = "task_spec.md";
 pub const STOP_EXIT_POLL: Duration = Duration::from_millis(50);
 pub const STOP_EXIT_WAIT: Duration = Duration::from_secs(10);
+pub const STOP_KILL_EXIT_WAIT: Duration = Duration::from_secs(5);
 
 const RUN_MODEL_JSON: JsonStyle =
   JsonStyle { ensure_ascii: false, sort_keys: false, item_separator: ",", key_separator: ": ", indent: Some(2) };
@@ -731,10 +732,10 @@ impl Store {
     self.require_control_guard(guard)?;
     let events = self.load_all_facts(session_id)?;
     let mut run = require_run(self, session_id, run_id)?;
-    if terminal_outcome(&events, run_id)?.is_some() {
+    if let Some(existing_outcome) = terminal_outcome(&events, run_id)? {
       // The outcome is the last fact's and the payload is the first fact's, as Python's `terminal_outcome` and
-      // `_fact_input_payload` read them. An empty `ended_at` is the half-written end record: the caller's `ended_at`
-      // and `exit_code` fill it, and values already written stay.
+      // `_fact_input_payload` read them. An empty `ended_at` is the half-written end record. A stop can also land
+      // before the process owner reports its exit code, so an interrupted record accepts that later value.
       let input_event_ids = finish_facts(&events, run_id).next().map(event_input_ids).unwrap_or_default();
       let mut changed = run.input_event_ids != input_event_ids;
       run.input_event_ids = input_event_ids;
@@ -745,6 +746,10 @@ impl Store {
         }
         changed = true;
       }
+      if existing_outcome == RunOutcomeKind::Interrupted && run.exit_code.is_none() && outcome.exit_code.is_some() {
+        run.exit_code = outcome.exit_code;
+        changed = true;
+      }
       if changed {
         self.write_run_record(session_id, &run)?;
       }
@@ -752,6 +757,10 @@ impl Store {
     }
 
     let input_event_ids = self.finish_payload(&run, &events, &outcome.input_event_ids)?;
+    let mut outcome = outcome;
+    if stop_requested_in_events(&events, run_id, None) {
+      outcome.outcome = RunOutcomeKind::Interrupted;
+    }
     let event_id = self.next_control_event_id()?;
     let event = control_events::build_control_event(
       "run_finished",
@@ -858,27 +867,45 @@ impl Store {
       if let Some(outcome) = terminal_outcome(&events, run_id)? {
         return Ok(StopResult { run_id: run_id.to_string(), stop_requested: false, outcome: Some(outcome) });
       }
-      if !stop_requested_in_events(&events, run_id, Some(reason)) {
-        let event_id = self.next_control_event_id()?;
-        let event = control_events::build_control_event(
-          "run_stop_requested",
-          ACTOR_SYSTEM,
-          session_id,
-          Some(&event_id),
-          None,
-          [
-            ("request_id".to_string(), Value::String(reason.to_string())),
-            ("run_id".to_string(), Value::String(run_id.to_string())),
-          ],
-        );
-        self.append_control_fact(&guard, session_id, event).await?;
-        self.mark_sidebar_dirty(session_id);
-      }
+      self.append_stop_request_locked(&guard, session_id, run_id, reason).await?;
     }
     if run.pid.is_none() {
       return Ok(StopResult { run_id: run_id.to_string(), stop_requested: true, outcome: None });
     }
     self.follow_through_stop(session_id, &run).await
+  }
+
+  /// Append one durable stop fact while the caller holds the shared control lock.
+  pub async fn append_stop_request_locked(
+    &self,
+    guard: &ControlGuard,
+    session_id: &str,
+    run_id: &str,
+    request_id: &str,
+  ) -> StoreResult<bool> {
+    self.require_control_guard(guard)?;
+    let events = self.load_all_facts(session_id)?;
+    if terminal_outcome(&events, run_id)?.is_some() {
+      return Ok(false);
+    }
+    if stop_requested_in_events(&events, run_id, Some(request_id)) {
+      return Ok(true);
+    }
+    let event_id = self.next_control_event_id()?;
+    let event = control_events::build_control_event(
+      "run_stop_requested",
+      ACTOR_SYSTEM,
+      session_id,
+      Some(&event_id),
+      None,
+      [
+        ("request_id".to_string(), Value::String(request_id.to_string())),
+        ("run_id".to_string(), Value::String(run_id.to_string())),
+      ],
+    );
+    self.append_control_fact(guard, session_id, event).await?;
+    self.mark_sidebar_dirty(session_id);
+    Ok(true)
   }
 
   /// Reconcile a durable stop request after a restart.
@@ -899,45 +926,27 @@ impl Store {
 
   async fn follow_through_stop(&self, session_id: &str, run: &RunRecord) -> StoreResult<StopResult> {
     let pid = run.pid.expect("a launched run has a pid");
-    let first_stat = proc_identity::read_pid_stat(pid);
-    let mut exited = first_stat.as_ref().is_none_or(|stat| stat.state == "Z");
+    let raw_pid = i32::try_from(pid).map_err(|error| StoreError::new(error.to_string()))?;
+    let process_group = Pid::from_raw(raw_pid);
+    let mut exited = !validate_stop_identity(run)?;
     if !exited {
-      let stat = first_stat.as_ref().expect("the process stat was read");
-      if run.pid_start.as_deref() != Some(stat.pid_start.as_str()) {
-        return Err(StoreError::conflict(vec![format!(
-          "run {} process identity mismatch: recorded pid_start {:?}, /proc/{pid} reports {:?}",
-          run.id, run.pid_start, stat.pid_start
-        )]));
-      }
-      let started_at = run.started_at.ok_or_else(|| {
-        StoreError::conflict(vec![format!("run {} has no usable started_at for identity validation", run.id)])
-      })?;
-      let boot = proc_identity::read_host_boot_time().map_err(|error| StoreError::new(error.to_string()))?;
-      if started_at.into_inner() <= boot {
-        return Err(StoreError::conflict(vec![format!(
-          "run {} started_at predates the current host boot; recorded identity is stale",
-          run.id
-        )]));
-      }
-      if !proc_identity::is_run_alive(Some(pid), run.pid_start.as_deref(), Some(started_at.into_inner()), boot) {
-        match proc_identity::read_pid_stat(pid) {
-          None => exited = true,
-          Some(current) if current.state == "Z" => exited = true,
-          Some(current) if run.pid_start.as_deref() != Some(current.pid_start.as_str()) => {
-            return Err(StoreError::conflict(vec![format!(
-              "run {} process identity mismatch: recorded pid_start {:?}, /proc/{pid} reports {:?}",
-              run.id, run.pid_start, current.pid_start
-            )]));
-          }
-          Some(_) => return Err(StoreError::conflict(vec![format!("run {} process identity is not live", run.id)])),
+      match killpg(process_group, Signal::SIGTERM) {
+        Ok(()) => exited = wait_for_exit(pid, STOP_EXIT_WAIT).await,
+        Err(Errno::ESRCH) => exited = !validate_stop_identity(run)?,
+        Err(error) => {
+          return Err(StoreError::new(format!("signalling run {} with SIGTERM failed: {error}", run.id)));
         }
       }
+    }
+    if !exited {
+      exited = !validate_stop_identity(run)?;
       if !exited {
-        let raw_pid = i32::try_from(pid).map_err(|error| StoreError::new(error.to_string()))?;
-        match kill(Pid::from_raw(raw_pid), Signal::SIGTERM) {
-          Ok(()) => exited = wait_for_exit(pid).await,
-          Err(Errno::ESRCH) => exited = true,
-          Err(error) => return Err(StoreError::new(format!("signalling run {} with SIGTERM failed: {error}", run.id))),
+        match killpg(process_group, Signal::SIGKILL) {
+          Ok(()) => exited = wait_for_exit(pid, STOP_KILL_EXIT_WAIT).await,
+          Err(Errno::ESRCH) => exited = !validate_stop_identity(run)?,
+          Err(error) => {
+            return Err(StoreError::new(format!("signalling run {} with SIGKILL failed: {error}", run.id)));
+          }
         }
       }
     }
@@ -1057,8 +1066,46 @@ fn withheld_reason<'a>(events: &'a [Value], run_id: &str) -> Option<&'a str> {
   })
 }
 
-async fn wait_for_exit(pid: u32) -> bool {
-  let deadline = Instant::now() + STOP_EXIT_WAIT;
+fn validate_stop_identity(run: &RunRecord) -> StoreResult<bool> {
+  let pid = run.pid.expect("a launched run has a pid");
+  let Some(stat) = proc_identity::read_pid_stat(pid) else { return Ok(false) };
+  if stat.state == "Z" {
+    return Ok(false);
+  }
+  if run.pid_start.as_deref() != Some(stat.pid_start.as_str()) {
+    return Err(StoreError::conflict(vec![format!(
+      "run {} process identity mismatch: recorded pid_start {:?}, /proc/{pid} reports {:?}",
+      run.id, run.pid_start, stat.pid_start
+    )]));
+  }
+  let started_at = run.started_at.ok_or_else(|| {
+    StoreError::conflict(vec![format!("run {} has no usable started_at for identity validation", run.id)])
+  })?;
+  let boot = proc_identity::read_host_boot_time().map_err(|error| StoreError::new(error.to_string()))?;
+  if started_at.into_inner() <= boot {
+    return Err(StoreError::conflict(vec![format!(
+      "run {} started_at predates the current host boot; recorded identity is stale",
+      run.id
+    )]));
+  }
+  let raw_pid = i32::try_from(pid).map_err(|error| StoreError::new(error.to_string()))?;
+  let process_group = match getpgid(Some(Pid::from_raw(raw_pid))) {
+    Ok(process_group) => process_group,
+    Err(Errno::ESRCH) => return Ok(false),
+    Err(error) => return Err(StoreError::new(format!("reading run {} process group failed: {error}", run.id))),
+  };
+  if process_group.as_raw() != raw_pid {
+    return Err(StoreError::conflict(vec![format!(
+      "run {} process group mismatch: run pid {pid}, process group id {}",
+      run.id,
+      process_group.as_raw()
+    )]));
+  }
+  Ok(true)
+}
+
+async fn wait_for_exit(pid: u32, timeout: Duration) -> bool {
+  let deadline = Instant::now() + timeout;
   while Instant::now() < deadline {
     if proc_identity::read_pid_stat(pid).is_none_or(|stat| stat.state == "Z") {
       return true;

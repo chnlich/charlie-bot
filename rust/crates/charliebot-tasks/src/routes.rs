@@ -894,10 +894,31 @@ async fn cancel_run(
   {
     return responses::json(StatusCode::FORBIDDEN, &json!({ "detail": "an agent may only stop its own bound run" }));
   }
+  let mut settlement = match features.store.read_run_sync(&session_id, &run_id) {
+    Ok(Some(_)) => {
+      let adapter = match features.startup.require::<TaskExecutionAdapter>() {
+        Ok(adapter) => adapter,
+        Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
+      };
+      adapter.settlement_receiver(&session_id, &run_id)
+    }
+    Ok(None) => None,
+    Err(error) => return task_http_error(error),
+  };
   let result = match features.store.request_stop(&session_id, &run_id, &request.request_id).await {
     Ok(result) => result,
     Err(error) => return task_http_error(error),
   };
+  if let Some(receiver) = settlement.as_mut() {
+    while receiver.borrow().is_none() {
+      if let Err(error) = receiver.changed().await {
+        return responses::internal_error(
+          "RuntimeError",
+          format!("run {run_id} launch settlement closed before it completed: {error}"),
+        );
+      }
+    }
+  }
   let outcome = result.outcome.map(|outcome| match outcome {
     RunOutcomeKind::Success => "success",
     RunOutcomeKind::Failed => "failed",
@@ -1021,16 +1042,21 @@ async fn cancel_task(State(features): State<Arc<FeatureContext>>, request: Reque
   let Some(completion) = features.startup.get::<completion::TaskCompletion>() else {
     return responses::internal_error("RuntimeError", "task completion owner is not installed".to_string());
   };
-  if let Err(error) = completion
+  let result = match completion
     .cancel_task(&meta.id, &validated_string(&fields, "request_id"), &validated_string(&fields, "reason"), &caller)
     .await
   {
-    return task_http_error(error);
-  }
-  match features.store.session_detail(&meta.id) {
-    Ok(detail) => responses::json(StatusCode::OK, &detail),
-    Err(error) => task_http_error(error),
-  }
+    Ok(result) => result,
+    Err(error) => return task_http_error(error),
+  };
+  let mut detail = match features.store.session_detail(&meta.id) {
+    Ok(detail) => detail,
+    Err(error) => return task_http_error(error),
+  };
+  let detail = detail.as_object_mut().expect("session detail is a JSON object");
+  let stopped_runs = result.get("stopped_runs").expect("cancel result has stopped_runs").clone();
+  detail.insert("stopped_runs".to_string(), stopped_runs);
+  responses::json(StatusCode::OK, &Value::Object(detail.clone()))
 }
 
 async fn acknowledge_task_inputs(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {

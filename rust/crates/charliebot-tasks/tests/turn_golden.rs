@@ -913,7 +913,7 @@ async fn cancel_gated_manager_runs_through_route(chat_cancel: bool) -> anyhow::R
             event["type"] == event_types::MASTER_DONE && event["input_event_ids"] == json!([input_event_id])
           });
           if let Some(done_index) = done {
-            assert!(finished_index < done_index, "iteration {iteration} persisted master_done first");
+            assert!(done_index < finished_index, "iteration {iteration} persisted run_finished first");
             break anyhow::Ok(());
           }
         }
@@ -971,12 +971,12 @@ fn has_process_for_home_and_session(home: &Path, session_id: &str) -> anyhow::Re
 }
 
 #[tokio::test]
-async fn chat_cancel_records_interrupted_before_master_done_for_50_gated_manager_runs() -> anyhow::Result<()> {
+async fn chat_cancel_records_master_done_before_interrupted_finish_for_50_gated_manager_runs() -> anyhow::Result<()> {
   cancel_gated_manager_runs_through_route(true).await
 }
 
 #[tokio::test]
-async fn run_cancel_records_interrupted_before_master_done_for_50_gated_manager_runs() -> anyhow::Result<()> {
+async fn run_cancel_records_master_done_before_interrupted_finish_for_50_gated_manager_runs() -> anyhow::Result<()> {
   cancel_gated_manager_runs_through_route(false).await
 }
 

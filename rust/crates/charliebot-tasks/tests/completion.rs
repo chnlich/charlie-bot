@@ -1423,8 +1423,8 @@ async fn completion_routes_cover_blockers_replay_ack_cancel_and_unarchive() {
   let cancel_blocked = h
     .post(&format!("/api/sessions/{}/cancel", cancellable.id), json!({"request_id":"cancel-queued","reason":"stop"}))
     .await;
-  assert_eq!(cancel_blocked.0, StatusCode::CONFLICT);
-  h.base.store.request_stop(&cancellable.id, "queued-run", "stop-queued").await.unwrap();
+  assert_eq!(cancel_blocked.0, StatusCode::OK);
+  assert_eq!(cancel_blocked.1["stopped_runs"], json!([{"run_id":"queued-run","outcome":"never_launched"}]));
   let cancelled = h
     .post(&format!("/api/sessions/{}/cancel", cancellable.id), json!({"request_id":"cancel-queued","reason":"stop"}))
     .await;

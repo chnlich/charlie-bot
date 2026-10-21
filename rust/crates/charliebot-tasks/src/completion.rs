@@ -10,7 +10,7 @@ use charliebot_registry::context::{FeatureContext, StateError};
 use charliebot_registry::sequence::{RestoreOutcome, SequenceCompletion};
 use charliebot_store::control_events::{self, ACTOR_AGENT, ACTOR_SYSTEM, ACTOR_USER};
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskType};
-use charliebot_store::run_records::{self, RunDisplayState, RunKind, RunRecord};
+use charliebot_store::run_records::{self, RunDisplayState, RunKind, RunOutcomeKind, RunRecord};
 use charliebot_store::{ControlGuard, StoreError, StoreResult};
 use futures_util::future::BoxFuture;
 use serde::{Deserialize, Serialize};
@@ -600,7 +600,7 @@ impl TaskCompletion {
     Ok((close_event, report, report_created))
   }
 
-  /// Cancel an open task without stopping its runs or descendants.
+  /// Cancel an open task, stopping non-terminal runs when the target is a worker.
   pub async fn cancel_task(
     &self,
     session_id: &str,
@@ -608,14 +608,14 @@ impl TaskCompletion {
     reason: &str,
     caller: &CallerIdentity,
   ) -> StoreResult<Value> {
-    let actor = match caller {
-      CallerIdentity::Operator { .. } => ACTOR_USER,
+    let (actor, target_meta) = match caller {
+      CallerIdentity::Operator { .. } => (ACTOR_USER, None),
       CallerIdentity::Agent { claims } => {
         let target = self.store().load_task_meta(session_id).await?;
         if target.task_parent_id.as_deref() != Some(claims.session_id.as_str()) {
           return Err(StoreError::forbidden("an agent may only cancel a direct child of its own task"));
         }
-        ACTOR_AGENT
+        (ACTOR_AGENT, Some(target))
       }
     };
     if request_id.is_empty() {
@@ -624,10 +624,16 @@ impl TaskCompletion {
     if reason.trim().is_empty() {
       return Err(StoreError::invalid("cancellation requires a reason"));
     }
-    if let Some(replay) = self.replay_close_request(session_id, request_id)? {
-      return Ok(replay.1);
+    let meta = match target_meta {
+      Some(meta) => meta,
+      None => self.store().load_task_meta(session_id).await?,
+    };
+    if meta.profile == TaskProfile::Worker {
+      return self.cancel_worker_task(session_id, request_id, reason, actor, &meta).await;
     }
-    let meta = self.store().load_task_meta(session_id).await?;
+    if let Some((_, replay)) = self.replay_close_request(session_id, request_id)? {
+      return with_stopped_runs(replay, Vec::new());
+    }
     let child_epoch = self.store().prime_aggregator(session_id).await?;
     let parent_epoch = match meta.task_parent_id.as_deref() {
       Some(parent_id) => Some(self.store().prime_aggregator(parent_id).await?),
@@ -641,8 +647,8 @@ impl TaskCompletion {
           "task {session_id} is {state}; only an open task can be cancelled"
         )]));
       }
-      if let Some(replay) = self.replay_close_request(session_id, request_id)? {
-        return Ok(replay.1);
+      if let Some((_, replay)) = self.replay_close_request(session_id, request_id)? {
+        return with_stopped_runs(replay, Vec::new());
       }
       let fresh_meta = self.store().load_task_meta(session_id).await?;
       let blockers = sorted_unique(self.cancellation_blockers(session_id)?);
@@ -664,7 +670,190 @@ impl TaskCompletion {
     {
       tracing::warn!(target: "charliebot_tasks", session_id, parent = parent_id, report = ?report.get("id"), error = %error, "cancel_parent_wake_failed");
     }
-    Ok(json!({"session_id": session_id, "closed_event_id": close_event.get("id")}))
+    Ok(json!({"session_id": session_id, "closed_event_id": close_event.get("id"), "stopped_runs": []}))
+  }
+
+  async fn cancel_worker_task(
+    &self,
+    session_id: &str,
+    request_id: &str,
+    reason: &str,
+    actor: &str,
+    target_meta: &SessionMetadata,
+  ) -> StoreResult<Value> {
+    let stop_request_id = format!("cancel:{request_id}");
+    let child_epoch = self.store().prime_aggregator(session_id).await?;
+    let parent_epoch = match target_meta.task_parent_id.as_deref() {
+      Some(parent_id) => Some(self.store().prime_aggregator(parent_id).await?),
+      None => None,
+    };
+    let (close_event, report, report_created, closed_event_id, stop_runs) = {
+      let guard = self.store().control_lock().await;
+      let fresh_meta = self.store().load_task_meta(session_id).await?;
+      if let Some((status, replay)) = self.replay_close_request(session_id, request_id)? {
+        if status == 202 {
+          return with_stopped_runs(replay, Vec::new());
+        }
+        let closed_event_id = replay
+          .get("closed_event_id")
+          .cloned()
+          .ok_or_else(|| StoreError::new("closed worker replay has no closed_event_id"))?;
+        let stop_runs = self.cancellation_stop_runs(session_id, &stop_request_id)?;
+        (None, Value::Null, false, closed_event_id, stop_runs)
+      } else {
+        let state = self.store().task_state(session_id)?;
+        if state != "open" {
+          return Err(StoreError::conflict(vec![format!(
+            "task {session_id} is {state}; only an open task can be cancelled"
+          )]));
+        }
+        let mut open_descendants = Vec::new();
+        for descendant in self.store().descendant_ids(session_id)? {
+          if self.store().task_state(&descendant)? == "open" {
+            open_descendants.push(format!("has open descendant task {descendant}"));
+          }
+        }
+        if !open_descendants.is_empty() {
+          return Err(StoreError::conflict(open_descendants));
+        }
+        let events = self.store().load_all_facts(session_id)?;
+        let run_records = self.store().list_run_records_sync(session_id)?;
+        let mut sequence_blockers = Vec::new();
+        let mut stoppable_runs = Vec::new();
+        for run in run_records {
+          if run_records::terminal_outcome(&events, &run.id)?.is_some() {
+            continue;
+          }
+          if run.sequence_ref.is_some() {
+            sequence_blockers.push(format!("run {} is owned by a sequence controller", run.id));
+          }
+          stoppable_runs.push(run);
+        }
+        if !sequence_blockers.is_empty() {
+          return Err(StoreError::conflict(sequence_blockers));
+        }
+        let (close_event, report, report_created) = self
+          .append_closed(&guard, session_id, &fresh_meta, request_id, "cancelled", reason, &[], &[], actor, None)
+          .await?;
+        for run in &stoppable_runs {
+          if !self.store().append_stop_request_locked(&guard, session_id, &run.id, &stop_request_id).await? {
+            return Err(StoreError::new(format!(
+              "run {} became terminal while the worker cancel lock was held",
+              run.id
+            )));
+          }
+        }
+        let stop_runs = self.cancellation_stop_runs(session_id, &stop_request_id)?;
+        let closed_event_id =
+          close_event.get("id").cloned().ok_or_else(|| StoreError::new("worker close event has no id"))?;
+        (Some(close_event), report, report_created, closed_event_id, stop_runs)
+      }
+    };
+
+    let mut identity_error = None;
+    for run in &stop_runs {
+      if run.pid.is_none() {
+        continue;
+      }
+      match self.store().reconcile_stop_request(session_id, &run.id).await {
+        Ok(_) => {}
+        Err(error @ StoreError::Conflict(_)) => {
+          if identity_error.is_none() {
+            identity_error = Some(error);
+          } else {
+            tracing::warn!(
+              target: "charliebot_tasks",
+              session_id,
+              run_id = %run.id,
+              error = %error,
+              "worker_cancel_stop_identity_conflict"
+            );
+          }
+        }
+        Err(error) => return Err(error),
+      }
+    }
+
+    if let Some(close_event) = close_event {
+      self.store().announce_appended_event(session_id, &close_event, child_epoch).await?;
+      if report_created && let (Some(parent_id), Some(epoch)) = (target_meta.task_parent_id.as_deref(), parent_epoch) {
+        self.store().announce_appended_event(parent_id, &report, epoch).await?;
+      }
+      if report_created
+        && let Some(parent_id) = target_meta.task_parent_id.as_deref()
+        && let Err(error) = self.dispatcher()?.wake_parent(parent_id, &report).await
+      {
+        tracing::warn!(
+          target: "charliebot_tasks",
+          session_id,
+          parent = parent_id,
+          report = ?report.get("id"),
+          error = %error,
+          "cancel_parent_wake_failed"
+        );
+      }
+    }
+    if let Some(error) = identity_error {
+      return Err(error);
+    }
+    let stopped_runs = self.cancellation_stop_results(session_id, &stop_request_id)?;
+    Ok(json!({"session_id": session_id, "closed_event_id": closed_event_id, "stopped_runs": stopped_runs}))
+  }
+
+  fn cancellation_stop_runs(&self, session_id: &str, request_id: &str) -> StoreResult<Vec<RunRecord>> {
+    let events = self.store().load_all_facts(session_id)?;
+    let mut records = self
+      .store()
+      .list_run_records_sync(session_id)?
+      .into_iter()
+      .map(|run| (run.id.clone(), run))
+      .collect::<HashMap<_, _>>();
+    let mut stopped_runs = Vec::new();
+    let mut seen = HashSet::new();
+    for event in events {
+      if event.get("type").and_then(Value::as_str) != Some(event_types::RUN_STOP_REQUESTED)
+        || event.get("request_id").and_then(Value::as_str) != Some(request_id)
+      {
+        continue;
+      }
+      let run_id = event
+        .get("run_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| StoreError::new("run_stop_requested fact has no string run_id"))?;
+      if !seen.insert(run_id.to_string()) {
+        continue;
+      }
+      let run = records
+        .remove(run_id)
+        .ok_or_else(|| StoreError::not_found(format!("run {run_id} named by cancellation stop was not found")))?;
+      stopped_runs.push(run);
+    }
+    Ok(stopped_runs)
+  }
+
+  fn cancellation_stop_results(&self, session_id: &str, request_id: &str) -> StoreResult<Vec<Value>> {
+    let events = self.store().load_all_facts(session_id)?;
+    self
+      .cancellation_stop_runs(session_id, request_id)?
+      .into_iter()
+      .map(|run| {
+        let outcome = if run.pid.is_none() {
+          json!("never_launched")
+        } else {
+          match run_records::terminal_outcome(&events, &run.id)? {
+            Some(RunOutcomeKind::Interrupted) => json!("interrupted"),
+            None => Value::Null,
+            Some(outcome) => {
+              return Err(StoreError::new(format!(
+                "cancelled run {} has unexpected terminal outcome {outcome:?}",
+                run.id
+              )));
+            }
+          }
+        };
+        Ok(json!({"run_id": run.id, "outcome": outcome}))
+      })
+      .collect()
   }
 
   /// Restore one archived task node and its archived ancestors.
@@ -1117,6 +1306,12 @@ impl TaskCompletion {
       .close_now(session_id, &effective_request_id, &effective_evidence, ACTOR_SYSTEM, &HashSet::new(), &HashSet::new())
       .await
   }
+}
+
+fn with_stopped_runs(mut response: Value, stopped_runs: Vec<Value>) -> StoreResult<Value> {
+  let object = response.as_object_mut().ok_or_else(|| StoreError::new("cancel response is not a JSON object"))?;
+  object.insert("stopped_runs".to_string(), json!(stopped_runs));
+  Ok(response)
 }
 
 impl RunFinishedCompletion for TaskCompletion {

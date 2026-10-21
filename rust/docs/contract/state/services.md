@@ -50,21 +50,22 @@ Agent processes are not stopped by the lifespan:
 - `restart_reattach=False` types (antigravity, opencode) use piped children spawned with `PR_SET_PDEATHSIG`; they
   are terminated with the turn.
 
-## 3. Crash recovery (`src/runtime/task_recovery.py::reconcile_task_tree`)
+## 3. Crash recovery (`src/runtime/task_recovery.py::reconcile_task_tree`, `charliebot-tasks/src/recovery.rs`)
 
 Scope: only directories under this home's `sessions/` that hold a `metadata.json`, and only this home's records.
 
 The pass reads the boot marker `state/boot_recovery.json` (`files.md` 5.19). A node is skipped, with no
 `_reconcile_node` call and counter `skipped`, when the marker proves it unchanged. That holds when all six conditions
-of `_boot_skip_reason` (`task_recovery.py`) hold: the lifecycle state is not `open`; `data/chat_events.jsonl` and
-`metadata.json` both exist and predate the marker; every Run ended; no Run has a sequence ref; no Run worktree exists
-on disk; and a cold-read task's last work Run did not fail. Each kept node counts its first failing condition in
-`keep_reasons`. A pass in which no node raised writes the marker with its start time.
+of Python `_boot_skip_reason` or Rust `boot_skip_reason` hold: the lifecycle state is not `open`; `data/chat_events.jsonl`
+and `metadata.json` both exist and predate the marker; every Run ended; no Run has a sequence ref; no Run worktree
+exists on disk (including a dangling symlink); and a cold-read task's last work Run did not fail. Each kept node
+counts its first failing condition in `keep_reasons`. A pass in which no node raised writes the marker with its start
+time. A skipped node still warms the display with its newest Run's backend.
 
 1. Each registered sequence controller's `reconcile_interrupted(cfg, tree)` runs first: cron step chains and
    improve loops. A controller whose process died is never resumed. Its state file, active lock and chat stream are
    marked interrupted.
-2. For every node, in sorted directory order, `task_execution._reconcile_node`:
+2. For every node, in sorted directory order, Python `task_execution._reconcile_node` or Rust `reconcile_node`:
    - Every non-terminal run converges. A durable stop request wins. A live `(pid, pid_start)` process is
      re-attached and followed from `agent.raw.cursor`. An ended process drains to its result. Queued work that
      never started re-enters through the normal launch checks.
@@ -73,9 +74,9 @@ on disk; and a cold-read task's last work Run did not fail. Each kept node count
    - Persisted but undelivered parent reports are delivered, and pending inputs dispatch with the deterministic
      `dispatch:` request id.
 3. A node whose pass raises logs `task_recovery_node_failed`. A node that hit out-of-space is handed to the
-   end-landing retry. Counters `{nodes, resumed, drained, followups, full, skipped}` are logged in
-   `task_tree_recovery_done` (`server.py:223`), with `elapsed_ms`, the previous marker's start time as `marker` (null
-   when absent), and `keep_reasons`.
+   end-landing retry and keeps the marker unchanged. Counters `{nodes, resumed, drained, followups, full, skipped}` are
+   logged once in `task_tree_recovery_done` (`server.py:223` for Python), with `elapsed_ms`, the previous marker's
+   start time as `marker` (null when absent), and `keep_reasons`.
 
 The liveness rule and stable ids that make this idempotent are in `files.md` sections 3 and 6.4.
 

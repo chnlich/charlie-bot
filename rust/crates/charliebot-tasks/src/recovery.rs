@@ -6,10 +6,12 @@
 //! are recovered; pending inputs dispatch. A replay step whose owning task has not landed fails the pass with an error
 //! that names the owner; the call sites are listed in `README.md`.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::future::Future;
 use std::io;
 use std::path::PathBuf;
+#[cfg(feature = "test-hooks")]
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -42,14 +44,114 @@ use crate::master_state::{MasterResumeRecord, MasterResumeRequest, ResumeLivenes
 /// (`task_execution.py`, `RUN_END_LANDING_RETRY_INTERVAL_SECONDS`).
 pub const RUN_END_LANDING_RETRY_INTERVAL: Duration = Duration::from_secs(30);
 const DRIVEN_RUN_RELEASE_POLL_INTERVAL: Duration = Duration::from_millis(10);
+const BOOT_RECOVERY_MARKER_PATH: &str = "state/boot_recovery.json";
+
+fn boot_recovery_marker_path(home: &std::path::Path) -> PathBuf {
+  home.join(BOOT_RECOVERY_MARKER_PATH)
+}
+
+fn read_boot_recovery_marker(home: &std::path::Path) -> anyhow::Result<Option<UtcDateTime>> {
+  let path = boot_recovery_marker_path(home);
+  let text = match std::fs::read_to_string(&path) {
+    Ok(text) => text,
+    Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+    Err(error) => return Err(error).with_context(|| format!("reading {}", path.display())),
+  };
+  let payload: Value = serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+  let pass_started_at = payload
+    .get("pass_started_at")
+    .and_then(Value::as_str)
+    .with_context(|| format!("{} has no string pass_started_at", path.display()))?;
+  UtcDateTime::parse(pass_started_at)
+    .with_context(|| format!("parsing pass_started_at in {}", path.display()))
+    .map(Some)
+}
+
+fn write_boot_recovery_marker(home: &std::path::Path, pass_started_at: UtcDateTime) -> anyhow::Result<()> {
+  let path = boot_recovery_marker_path(home);
+  let parent = path.parent().context("boot-recovery marker has no parent directory")?;
+  std::fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+  let temporary = path.with_extension("json.tmp");
+  let payload = serde_json::json!({"pass_started_at": pass_started_at.to_python_isoformat()});
+  let text = charliebot_core::pyfmt::json_dumps(&payload, &charliebot_core::pyfmt::PYTHON_JSON_DEFAULT);
+  std::fs::write(&temporary, text).with_context(|| format!("writing {}", temporary.display()))?;
+  std::fs::rename(&temporary, &path)
+    .with_context(|| format!("renaming {} to {}", temporary.display(), path.display()))?;
+  Ok(())
+}
+
+fn boot_skip_reason(
+  features: &FeatureContext,
+  session_id: &str,
+  session_dir: &std::path::Path,
+  meta: &SessionMetadata,
+  marker: UtcDateTime,
+) -> anyhow::Result<Option<&'static str>> {
+  if features.store.task_state(session_id)? == "open" {
+    return Ok(Some("state_open"));
+  }
+
+  let marker_instant = marker.into_inner();
+  let marker_seconds = charliebot_core::timefmt::python_float_seconds(
+    marker_instant.unix_timestamp(),
+    i64::from(marker_instant.nanosecond()),
+  );
+  for path in [
+    session_dir.join(run_records::DATA_DIR_NAME).join("chat_events.jsonl"),
+    session_dir.join(run_records::METADATA_NAME),
+  ] {
+    let modified = match std::fs::metadata(&path) {
+      Ok(metadata) => metadata.modified().with_context(|| format!("reading mtime of {}", path.display()))?,
+      Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Some("file_after_marker")),
+      Err(error) => return Err(error).with_context(|| format!("stating {}", path.display())),
+    };
+    let modified = OffsetDateTime::from(modified);
+    let modified_seconds =
+      charliebot_core::timefmt::python_float_seconds(modified.unix_timestamp(), i64::from(modified.nanosecond()));
+    if modified_seconds >= marker_seconds {
+      return Ok(Some("file_after_marker"));
+    }
+  }
+
+  let runs = features.store.list_run_records_sync(session_id)?;
+  for run in &runs {
+    if run.ended_at.is_none() {
+      return Ok(Some("run_unended"));
+    }
+    if run.sequence_ref.is_some() {
+      return Ok(Some("sequence_ref"));
+    }
+    if let Some(worktree_path) = run.worktree_path.as_deref().filter(|path| !path.is_empty()) {
+      match std::fs::symlink_metadata(worktree_path) {
+        Ok(_) => return Ok(Some("worktree_exists")),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error).with_context(|| format!("stating worktree {worktree_path}")),
+      }
+    }
+  }
+
+  if meta.task.as_ref().is_some_and(|task| task.task_type == Some(TaskType::ColdRead))
+    && let Some(last_work_run) = runs.iter().rfind(|run| run.kind == RunKind::Work)
+  {
+    let events = features.store.load_all_facts(session_id)?;
+    if run_records::terminal_outcome(&events, &last_work_run.id)? == Some(RunOutcomeKind::Failed) {
+      return Ok(Some("cold_read_failed"));
+    }
+  }
+  Ok(None)
+}
 
 /// The counters of one boot pass, logged with `task_tree_recovery_done`.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct PassCounters {
   pub nodes: u64,
   pub resumed: u64,
   pub drained: u64,
   pub followups: u64,
+  pub full: u64,
+  pub skipped: u64,
+  pub marker: Option<String>,
+  pub keep_reasons: BTreeMap<String, u64>,
 }
 
 /// The process-local state of the recovery: the resume follows this process drives, and the nodes that run an
@@ -58,6 +160,8 @@ pub struct PassCounters {
 pub(crate) struct RecoveryState {
   pub(crate) resume_follows: Mutex<HashSet<(String, String)>>,
   landing_retries: Mutex<HashSet<String>>,
+  #[cfg(feature = "test-hooks")]
+  reconcile_node_calls: AtomicUsize,
   #[cfg(feature = "test-hooks")]
   landing_retry_interval: Mutex<Option<Duration>>,
 }
@@ -80,6 +184,16 @@ impl RecoveryState {
 /// the nodes with a live retry task and to the resume follows this process holds.
 #[cfg(feature = "test-hooks")]
 impl TaskExecutionAdapter {
+  /// Count direct node-pass calls, including calls made by an end-landing retry.
+  pub fn reconcile_node_calls(&self) -> usize {
+    self.recovery.reconcile_node_calls.load(Ordering::SeqCst)
+  }
+
+  /// Start an end-landing retry for a node from an integration test.
+  pub fn start_landing_retry_for_test(&self, session_id: &str) {
+    self.start_run_end_landing_retry(session_id, None);
+  }
+
   /// Replace the end-landing retry interval for every retry this adapter starts from now on.
   pub fn set_landing_retry_interval(&self, interval: Duration) {
     *self.recovery.landing_retry_interval.lock().expect("landing retry interval is not poisoned") = Some(interval);
@@ -110,6 +224,10 @@ pub fn recovery_step(features: Arc<FeatureContext>) -> BoxFuture<'static, anyhow
         resumed = counters.resumed,
         drained = counters.drained,
         followups = counters.followups,
+        full = counters.full,
+        skipped = counters.skipped,
+        marker = ?counters.marker,
+        keep_reasons = ?counters.keep_reasons,
         "task_tree_recovery_done"
       ),
       Err(error) => {
@@ -142,6 +260,9 @@ pub async fn reconcile_task_tree(
   if !sessions_dir.is_dir() {
     return Ok(counters);
   }
+  let started_at = UtcDateTime::now();
+  let marker = read_boot_recovery_marker(&cfg.charliebot_home)?;
+  let mut failed_node = false;
 
   let tree = sequence_tree(features, adapter)?;
   for controller in features.registry.sequence_controllers() {
@@ -163,18 +284,37 @@ pub async fn reconcile_task_tree(
       .and_then(|name| name.to_str())
       .with_context(|| format!("session directory name is not UTF-8: {}", session_dir.display()))?
       .to_string();
-    if features.store.load_meta(&session_id).await?.is_none() {
+    let Some(meta) = features.store.load_meta(&session_id).await? else {
       continue;
-    }
+    };
     counters.nodes += 1;
+    if let Some(marker) = marker {
+      if let Some(reason) = boot_skip_reason(features, &session_id, &session_dir, &meta, marker)? {
+        *counters.keep_reasons.entry(reason.to_string()).or_default() += 1;
+      } else {
+        if let Some(newest) = features.store.newest_run_record_sync(&session_id)?
+          && let Some(backend) = newest.backend.as_deref()
+        {
+          features.store.note_run_backend(&session_id, backend);
+        }
+        counters.skipped += 1;
+        continue;
+      }
+    }
+    counters.full += 1;
     if let Err(error) = reconcile_node(features, adapter, &session_id, &mut counters, None).await {
       tracing::error!(target: "charliebot_tasks", session_id = %session_id, error = %format!("{error:#}"), "task_recovery_node_failed");
+      failed_node = true;
       // An out-of-space pass enters the end-landing retry: it re-runs the pass until a round survives.
       if is_out_of_space_error(error.as_ref()) {
         adapter.start_run_end_landing_retry(&session_id, None);
       }
     }
   }
+  if !failed_node {
+    write_boot_recovery_marker(&cfg.charliebot_home, started_at)?;
+  }
+  counters.marker = marker.map(UtcDateTime::to_python_isoformat);
   Ok(counters)
 }
 
@@ -187,6 +327,9 @@ pub async fn reconcile_node(
   counters: &mut PassCounters,
   is_driven: Option<&(dyn Fn(&RunRecord) -> bool + Sync)>,
 ) -> anyhow::Result<()> {
+  #[cfg(feature = "test-hooks")]
+  adapter.recovery.reconcile_node_calls.fetch_add(1, Ordering::SeqCst);
+
   let store = &features.store;
   if store.load_meta(session_id).await?.is_none() {
     return Ok(());

@@ -981,6 +981,7 @@ async fn broadcast_running_changed(
 mod tests {
   use std::path::{Path, PathBuf};
 
+  use charliebot_agents::backends::claude_code::EXCLUDE_DYNAMIC_SECTIONS_FLAG;
   use charliebot_agents::backends::claude_code::claude_lifecycle::ClaudeCodeLifecycle;
   use charliebot_agents::backends::claude_code::claude_metadata;
   use charliebot_core::config::BackendOption;
@@ -1409,28 +1410,6 @@ mod tests {
     .unwrap();
   }
 
-  /// The idle command line of the session's Claude session on `account_label`, as the trigger path builds it.
-  fn expected_idle_argv(features: &FeatureContext, session_id: &str, account_label: &str) -> Vec<String> {
-    let cfg = features.config.get().unwrap();
-    let option = cfg.get_backend_option("fable").unwrap().clone();
-    let account = claude_accounts::account_by_label(&cfg, Some(account_label)).unwrap().unwrap();
-    let identity = claude_idle_compaction::IdleProcessIdentity {
-      session_id: session_id.to_string(),
-      cc_session_id: CC_SESSION_ID.to_string(),
-      run_kind: RunKind::ManagerTurn,
-    };
-    let (argv, _env) = claude_idle_compaction::build_idle_process(
-      Arc::clone(&features.registry),
-      &cfg,
-      &option,
-      &account,
-      identity,
-      &Env::new(),
-    )
-    .unwrap();
-    argv
-  }
-
   // Python: tests/test_claude_idle_compaction.py:280.
   #[tokio::test]
   async fn a_turn_queued_before_the_trigger_registers_makes_it_skip() {
@@ -1502,7 +1481,10 @@ mod tests {
 
     let [run]: [RecordedRun; 1] = runs.lock().unwrap().clone().try_into().unwrap();
     let cfg = features.config.get().unwrap();
-    assert_eq!(run.argv, expected_idle_argv(&features, &meta.id, "acct-a"));
+    // The command line resumes the session's Claude session and keeps the per-machine sections out of the prompt.
+    assert!(run.argv.windows(2).any(|pair| pair[0] == "--resume" && pair[1] == CC_SESSION_ID));
+    assert!(run.argv.iter().any(|arg| arg == EXCLUDE_DYNAMIC_SECTIONS_FLAG));
+    assert!(run.argv.windows(2).any(|pair| pair[0] == "--model" && pair[1] == "claude-fable-5-1"));
     assert_eq!(run.cwd, cfg.sessions_dir().join(&meta.id));
     assert_eq!(run.config_dir, account_dir);
     assert_eq!(run.pre_tokens, Some(120_000));

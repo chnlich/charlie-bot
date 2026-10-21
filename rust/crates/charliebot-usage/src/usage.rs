@@ -320,7 +320,7 @@ fn resolve_fold_tier(
   let cost = fold.cost();
   let usage = match fold.reading_kind.as_str() {
     READING_CLAUDE => Some(resolve_claude(fold, registry, cost, run_kind, backend_option)?),
-    READING_SNAPSHOT => Some(resolve_snapshot(fold, registry, cost, run_kind, backend_option)?),
+    READING_SNAPSHOT => Some(resolve_snapshot(fold, registry, cost, run_kind)?),
     READING_RESOLVED => Some(resolve_reading(fold, cost)),
     _ => Some(json!({
       "context_tokens": null,
@@ -357,13 +357,7 @@ fn resolve_claude(
   Ok(usage_value(Some(context_tokens), context_full, compact_at, &fold.chosen_model, cost))
 }
 
-fn resolve_snapshot(
-  fold: &UsageFold,
-  registry: &Registry,
-  cost: Option<f64>,
-  run_kind: RunKind,
-  backend_option: Option<&BackendOption>,
-) -> StoreResult<Value> {
+fn resolve_snapshot(fold: &UsageFold, registry: &Registry, cost: Option<f64>, run_kind: RunKind) -> StoreResult<Value> {
   let snapshot = fold.snapshot.as_ref().expect("snapshot reading kind carries a snapshot");
   let tokens = truthy_object(snapshot.get("tokens"), "context_snapshot.tokens")?;
   let token_sum = add_int_fields(tokens, &["input", "output", "reasoning", "cache_read", "cache_write"])?;
@@ -375,9 +369,9 @@ fn resolve_snapshot(
       let context = limit.get("context").and_then(python_integer);
       match (input, output, context) {
         (Some(input), Some(output), _) => {
-          let reserve = registry
-            .reading_limits_for(READING_SNAPSHOT, run_kind, backend_option)
-            .and_then(|limits| limits.compact_reserve);
+          // The backend option selects only the claude limits, as in Python's `_snapshot_full_and_compact`.
+          let reserve =
+            registry.reading_limits_for(READING_SNAPSHOT, run_kind, None).and_then(|limits| limits.compact_reserve);
           let compact_at =
             reserve.map(|reserve| input - i64::try_from(reserve).expect("compact reserve fits i64").min(output));
           (Some(input), compact_at)

@@ -54,6 +54,13 @@ Agent processes are not stopped by the lifespan:
 
 Scope: only directories under this home's `sessions/` that hold a `metadata.json`, and only this home's records.
 
+The pass reads the boot marker `state/boot_recovery.json` (`files.md` 5.19). A node is skipped, with no
+`_reconcile_node` call and counter `skipped`, when the marker proves it unchanged. That holds when all six conditions
+of `_boot_skip_reason` (`task_recovery.py`) hold: the lifecycle state is not `open`; `data/chat_events.jsonl` and
+`metadata.json` both exist and predate the marker; every Run ended; no Run has a sequence ref; no Run worktree exists
+on disk; and a cold-read task's last work Run did not fail. Each kept node counts its first failing condition in
+`keep_reasons`. A pass in which no node raised writes the marker with its start time.
+
 1. Each registered sequence controller's `reconcile_interrupted(cfg, tree)` runs first: cron step chains and
    improve loops. A controller whose process died is never resumed. Its state file, active lock and chat stream are
    marked interrupted.
@@ -66,7 +73,9 @@ Scope: only directories under this home's `sessions/` that hold a `metadata.json
    - Persisted but undelivered parent reports are delivered, and pending inputs dispatch with the deterministic
      `dispatch:` request id.
 3. A node whose pass raises logs `task_recovery_node_failed`. A node that hit out-of-space is handed to the
-   end-landing retry. Counters `{nodes, resumed, drained, followups}` are logged in `task_tree_recovery_done`.
+   end-landing retry. Counters `{nodes, resumed, drained, followups, full, skipped}` are logged in
+   `task_tree_recovery_done` (`server.py:223`), with `elapsed_ms`, the previous marker's start time as `marker` (null
+   when absent), and `keep_reasons`.
 
 The liveness rule and stable ids that make this idempotent are in `files.md` sections 3 and 6.4.
 

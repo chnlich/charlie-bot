@@ -49,7 +49,7 @@ Resume styles (`backend_type_registration`, from each package's `register()`):
 | Type | `resume` | `restart_reattach` | Other traits |
 | --- | --- | --- | --- |
 | `cc-claude` | `cli_flag` (`--resume <id>` in argv) | true | `preassigned_session_id` (argv carries `--session-id <uuid>` chosen by CharlieBot), `manual_compact` |
-| `cc-kimi`, `cc-openai-compatible` | `cli_flag` | true | |
+| `cc-anthropic-compatible`, `cc-openai-compatible` | `cli_flag` | true | |
 | `codex` | `native_id` (factory argument `resume_session_id`) | true | `family_prefix="codex"` |
 | `gemini`, `charlie-code` | `native_id` | true | |
 | `antigravity`, `opencode` | `native_id` | false | |
@@ -91,11 +91,13 @@ Resume styles (`backend_type_registration`, from each package's `register()`):
     `claude_accounts.move_transcript` and resume there. **UNVERIFIED:** the relay argv; it is assumed to be the
     same `ClaudeCodeBackend` command with `--resume`, and the relay modules were not read.
 
-### `src/backends/kimi` (type `cc-kimi`)
+### `src/backends/anthropic_compatible` (type `cc-anthropic-compatible`)
 
-- `kimi.py::KimiBackend` is an `AnthropicEndpointBackend`: the same `claude` command, but without `--model` (the
-  model rides env). The env adds `ANTHROPIC_BASE_URL=https://api.moonshot.cn/anthropic`, the bearer token from
-  `credentials.<credential>.api_key`, and the five model variables. Output is as cc-claude.
+- `factory.py::build` makes a `claude_code.AnthropicEndpointBackend` with `base_url=api_base` (trailing `/` removed),
+  the bearer token from `credentials.<credential>.api_key` (`no-auth` when `credential` is null), and the option's
+  `context_window`. It is the same `claude` command, but without `--model` (the model rides env). Output is as
+  cc-claude. The context limits come from `usage.py::claude_reading_limits`: the declared window and the cc-claude
+  compaction reserves.
 
 ### `src/backends/openai_compatible` (type `cc-openai-compatible`)
 

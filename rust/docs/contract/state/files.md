@@ -94,6 +94,7 @@ them; correctness does not depend on it.
   state/home_writer.lock
   state/writer_identity.json
   state/cron_alert_fingerprint.json
+  state/boot_recovery.json         section 5.19
   cache/cli_base_url.json
   cache/perfetto_merge/<sha256>.json.gz
   usage/ledger.sqlite3             (+ SQLite -journal while a transaction is open)
@@ -385,6 +386,15 @@ Modules: `src/features/memory/memory.py`, `memory_proposal.py`, `cli.py`, `store
   `strong` is an ordered list of backend ids. `jev.credential` names the `credentials.yaml` section whose
   `api_key` authenticates the request. Missing or invalid fields stop the router command with an error.
 
+### 5.19 `state/boot_recovery.json`
+
+- Writer: `src/runtime/task_recovery.py::write_boot_recovery_marker` (line 68), called at the end of each task-tree
+  recovery pass (line 187) when no node failed. The write is ATOMIC: `boot_recovery.json.tmp`, then `os.replace`.
+- Format: `json.dumps({"pass_started_at": <pass start, UTC isoformat>})`, one line with no indent and no trailing
+  newline.
+- Reader: `read_boot_recovery_marker` (line 58) at the start of each pass. A missing file reads as no marker. The
+  next pass skips a closed node that the marker proves unchanged (`services.md` section 3).
+
 ## 6. Session files
 
 ### 6.1 `sessions/<sid>/metadata.json` (session)
@@ -602,7 +612,7 @@ re-attaches to a live process by reading `agent.raw.ndjson` from the offset in `
 ### 6.12 Instruction files in the session directory
 
 A manager turn writes its instructions into the session directory before each spawn
-(`base.AgentBackend._prepare_cwd`, PLAIN): `CLAUDE.md` for cc-claude, cc-kimi and cc-openai-compatible, and
+(`base.AgentBackend._prepare_cwd`, PLAIN): `CLAUDE.md` for cc-claude, cc-anthropic-compatible and cc-openai-compatible, and
 `AGENTS.md` for codex, charlie-code and opencode. gemini and antigravity frame the instructions into the prompt
 instead.
 
@@ -632,8 +642,9 @@ instead.
 - `create_backup` writes a tar stream through isal gzip level 1. It excludes, by path part: `.git`, `.claude`,
   `credentials.yaml`, `__pycache__`, and `*.pyc`. It also excludes the top-level `opencode/` and
   `sessions/*/threads`.
-- Retention (`apply_retention`): keep every archive younger than 7 days, Sundays from 7 to 30 days, the 1st of
-  the month from 30 to 90 days, and delete the rest.
+- Retention (`apply_retention`, `backup.py:122`): keep every archive younger than 3 days (`_DAILY_THRESHOLD`,
+  `backup.py:42`), Sundays from 3 to 15 days (`_WEEKLY_THRESHOLD`, `backup.py:43`), and delete the rest. No
+  monthly tier remains.
 - Archive names use local time (`datetime.now()`), not UTC.
 
 ## 8. Reader-only inputs from the repo

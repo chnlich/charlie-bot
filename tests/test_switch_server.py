@@ -408,11 +408,15 @@ def test_preflight_refusal_exits_1_and_changes_nothing(world: World, case: str) 
 
 @pytest.mark.integration
 def test_switch_on_a_real_pane_restores_then_round_trips_then_exits_3(world: World) -> None:
-  """Every pane-driven exit in one tmux server: exit 2 after a failed readback, exit 0 each way, exit 3 on sync failure.
+  """Every pane-driven exit in one tmux server: exit 2 after a failed readback, exit 0 each way, exit 3 on sync failure,
+  with a SIGKILL escalation on the last stop.
 
   The steps share one test because the integration cap leaves a single slot. Each step builds on the state the
   previous one leaves, so the order is the test.
   """
+  # Stops wait 1 s here: the final switch stops a Python server that ignores SIGTERM, which exercises the SIGKILL
+  # escalation within the budget.
+  world.env["CHARLIEBOT_SWITCH_STOP_WAIT_S"] = "1"
   pane = _start_pane(world)
   _start_server(world, pane)
   _seed_live_run(world, "run-live", "claude")
@@ -433,7 +437,9 @@ def test_switch_on_a_real_pane_restores_then_round_trips_then_exits_3(world: Wor
   assert _version_status(world.port) == 200
   assert "run_id=run-live" in _latest_log(world)
 
-  # The way back needs no fast-forward: the clone stays at the baseline and current is removed.
+  # The way back needs no fast-forward: the clone stays at the baseline and current is removed. The Python server it
+  # starts ignores SIGTERM, so the next switch has to SIGKILL it.
+  _write_behavior(world.clone, ignore_sigterm=True)
   proc = _switch(world, "python")
   assert proc.returncode == 0, _report(world, proc)
   assert not (world.releases / "current").is_symlink()

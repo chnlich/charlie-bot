@@ -2,7 +2,7 @@
 
 Two lifecycles serve the Claude CLI family:
 
-- ``ClaudeCliLifecycle`` serves a CLI variant without a login pool (cc-kimi, cc-openai-compatible,
+- ``ClaudeCliLifecycle`` serves a CLI variant without a login pool (cc-anthropic-compatible, cc-openai-compatible,
   and a cc-claude entry when ``accounts.claude`` is empty). It runs one process per run. For a turn
   it checks that the held conversation has a transcript on disk before it resumes, asks the CLI to
   keep per-machine sections out of the system prompt, and reports a reply that a model outside the

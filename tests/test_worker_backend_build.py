@@ -38,18 +38,17 @@ def _hide_all_binaries(monkeypatch: pytest.MonkeyPatch) -> None:
   monkeypatch.setattr(conftest.BASE_RESOLVE_BINARY_PATCH_TARGET, _missing)
 
 
-# Sections the registry reads secrets from: cc-kimi resolves its api_key under
-# its own credential section, cc-openai-compatible under charliebot.access_key.
-_CREDENTIAL_SECTIONS = {"test-kimi": {"api_key": "test-key"}, "charliebot": {"access_key": "test-key"}}
+# cc-openai-compatible resolves its proxy credential under charliebot.access_key.
+_CREDENTIAL_SECTIONS = {"charliebot": {"access_key": "test-key"}}
 
 
 def _worker(tmp_path: pathlib.Path, backend_type: str, instructions_content: str | None = None) -> worker.Worker:
   conftest.stub_credentials(_CREDENTIAL_SECTIONS)
   option_kwargs: dict[str, Any] = {"id": "opt", "label": "Opt", "type": backend_type, "model": "test-model"}
-  if backend_type in ("cc-openai-compatible", "charlie-code"):
+  if backend_type in ("cc-openai-compatible", "cc-anthropic-compatible", "charlie-code"):
     option_kwargs["api_base"] = "http://test.invalid"  # charlie-code requires it (validated before its binary)
-  if backend_type == "cc-kimi":
-    option_kwargs["credential"] = "test-kimi"
+  if backend_type == "cc-anthropic-compatible":
+    option_kwargs["context_window"] = 409600
   cfg = config.CharlieBotConfig(
       charliebot_home=tmp_path / "home",
       paths={"worktree_dir": str(tmp_path / "worktrees")},

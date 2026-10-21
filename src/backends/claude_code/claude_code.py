@@ -364,16 +364,26 @@ class AnthropicEndpointBackend(ClaudeCodeBackend):
   Subclasses own where the endpoint and credential come from.
   """
 
-  def __init__(self, *, base_url: str, auth_token: str, model: str, **kwargs: object) -> None:
+  def __init__(
+      self, *, base_url: str, auth_token: str, model: str, context_window: int | None = None, **kwargs: object) -> None:
     self._base_url = base_url
     self._auth_token = auth_token
     self._env_model = model
+    self._context_window = context_window
     super().__init__(model=None, **kwargs)
 
   def _prepare_env(self, env: dict) -> dict:
-    return {
+    out = {
         **super()._prepare_env(env),
         "ANTHROPIC_BASE_URL": self._base_url,
         "ANTHROPIC_AUTH_TOKEN": self._auth_token,
         **claude_model_env(self._env_model),
     }
+    if self._context_window is not None:
+      out[claude_launch.AUTO_COMPACT_WINDOW_ENV] = str(self._context_window)
+      out.pop(claude_launch.AUTOCOMPACT_PCT_OVERRIDE_ENV, None)
+      out.pop(claude_launch.MAX_CONTEXT_TOKENS_ENV, None)
+      out.pop("ANTHROPIC_API_KEY", None)
+      out.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
+      out[claude_launch.THINKING_DISPLAY_UPDATES_ENV] = "0"
+    return out

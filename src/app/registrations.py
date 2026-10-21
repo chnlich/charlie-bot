@@ -41,7 +41,7 @@ PACKAGES = (
     "src.backends.claude_code",
     "src.backends.codex",
     "src.backends.gemini",
-    "src.backends.kimi",
+    "src.backends.anthropic_compatible",
     "src.backends.opencode",
     "src.features.files",
 )

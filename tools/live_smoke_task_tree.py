@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Isolated live smoke for the v2 session task tree: one real manager turn and
-one real worker run on the configured charlie-code backend.
+one real worker run on a charlie-code or cc-anthropic-compatible backend.
 
 This is the execution stage's live validation entry. It is opt-in (never part
 of the default test run) and must be reviewed for isolation before it runs:
@@ -10,8 +10,10 @@ of the default test run) and must be reviewed for isolation before it runs:
   The production service is never started, stopped or contacted: the server
   binds one explicit unused local port, runs without the normal lifespan (no
   crash recovery, scheduler or trigger scans), and its uvicorn instance is
-  torn down at the end. Native CLC session state is isolated too: the
-  harness wraps the registry/worker ``build_backend`` entry points — this
+  torn down at the end. Native session state is isolated too: charlie-code
+  uses its session-dir flag, and Claude Code uses a temporary
+  ``CLAUDE_CONFIG_DIR``. The harness wraps the registry/worker
+  ``build_backend`` entry points — this
   process only — so every charlie-code build rides the existing adapter
   ``extra_flags`` kwarg seam with ``--session-dir <home>/clc-sessions`` (a
   supported ``charlie-code --help`` override), so both real runs persist
@@ -62,7 +64,7 @@ import urllib.error  # noqa: E402
 import urllib.request  # noqa: E402
 from typing import NoReturn  # noqa: E402
 
-from src.infra import constants  # noqa: E402
+from src.infra import constants, yaml_utils  # noqa: E402
 from tools import browser_harness_session_tree  # noqa: E402
 
 SMOKE_PHRASE = "SMOKE-TASK-TREE-OK-7Q4F"
@@ -147,9 +149,10 @@ def build_synthetic_home(home: pathlib.Path, backend_id: str, entry: dict) -> tu
   """Write the synthetic home's config and credentials; return (port, access_key)."""
   port = browser_harness_session_tree.pick_free_port()
   entry = dict(entry)
-  clc_sessions = home / "clc-sessions"
-  clc_sessions.mkdir(parents=True, exist_ok=True)
-  install_native_session_dir_isolation(clc_sessions)
+  if entry["type"] == "charlie-code":
+    clc_sessions = home / "clc-sessions"
+    clc_sessions.mkdir(parents=True, exist_ok=True)
+    install_native_session_dir_isolation(clc_sessions)
   config = {
       "server": {
           "port": port,
@@ -162,23 +165,38 @@ def build_synthetic_home(home: pathlib.Path, backend_id: str, entry: dict) -> tu
   }
   (home / "config.yaml").write_text(json.dumps(config, indent=2), encoding="utf-8")
   access_key = browser_harness_session_tree.mint_access_key("smoke-operator-key-")
-  browser_harness_session_tree.write_credentials_yaml(home, access_key)
-  register_secret(access_key, str(entry.get("api_base") or ""), str(entry.get("api_key") or ""))
+  credential_sections = {"charliebot": {"access_key": access_key}}
+  api_key = ""
+  credential_name = entry.get("credential")
+  if credential_name is not None:
+    from src.infra import config as config_module
+    api_key = str(config_module.get_credentials().require(credential_name, "api_key"))
+    credential_sections[credential_name] = {"api_key": api_key}
+  yaml_utils.save_yaml(home / "credentials.yaml", credential_sections)
+  register_secret(access_key, str(entry.get("api_base") or ""), api_key)
   return port, access_key
 
 
-def preflight(backend_id: str) -> None:
+def preflight(backend_id: str, entry: dict, *, production_config: bool) -> None:
   """Assert the mechanisms this smoke depends on before anything starts."""
-  binary = shutil.which("charlie-code")
-  if binary is None:
-    fail("charlie-code binary is not installed; the live smoke cannot run")
-  help_text = subprocess.run([binary, "--help"], capture_output=True, text=True, check=False)
-  if "--session-dir" not in help_text.stdout + help_text.stderr:
-    fail("installed charlie-code does not support --session-dir; native session "
-         "isolation cannot be guaranteed")
-  from src.infra import config
-  if config.load_config().get_backend_option(backend_id) is None:
-    fail(f"backend option {backend_id!r} missing from the production config")
+  backend_type = entry["type"]
+  if backend_type == "charlie-code":
+    binary = shutil.which("charlie-code")
+    if binary is None:
+      fail("charlie-code binary is not installed; the live smoke cannot run")
+    help_text = subprocess.run([binary, "--help"], capture_output=True, text=True, check=False)
+    if "--session-dir" not in help_text.stdout + help_text.stderr:
+      fail("installed charlie-code does not support --session-dir; native session "
+           "isolation cannot be guaranteed")
+  elif backend_type == "cc-anthropic-compatible":
+    if shutil.which("claude") is None:
+      fail("Claude Code binary is not installed; the live smoke cannot run")
+  else:
+    fail(f"backend type {backend_type!r} is not supported by this live smoke")
+  if production_config:
+    from src.infra import config
+    if config.load_config().get_backend_option(backend_id) is None:
+      fail(f"backend option {backend_id!r} missing from the production config")
 
 
 def deps_tree():
@@ -293,13 +311,18 @@ async def arequest(base: str, key: str, method: str, path: str, payload: dict | 
   return await asyncio.to_thread(request, base, key, method, path, payload)
 
 
-async def smoke(backend_id: str, purge: bool) -> None:
-  preflight(backend_id)
-  entry = load_production_backend_entry(backend_id)
+async def smoke(backend_id: str, purge: bool, entry_override: dict | None = None) -> None:
+  entry = load_production_backend_entry(backend_id) if entry_override is None else dict(entry_override)
+  preflight(backend_id, entry, production_config=entry_override is None)
 
   home = pathlib.Path(tempfile.mkdtemp(prefix="charliebot-live-smoke-"))
   port, access_key = build_synthetic_home(home, backend_id, entry)
   os.environ["CHARLIEBOT_HOME"] = str(home)
+  claude_config_dir = None
+  if entry["type"] == "cc-anthropic-compatible":
+    claude_config_dir = home / "claude-config"
+    claude_config_dir.mkdir(parents=True, exist_ok=True)
+    os.environ["CLAUDE_CONFIG_DIR"] = str(claude_config_dir)
   # Clear inherited production identity: the smoke's children route through
   # the synthetic home only.
   for var in (constants.SESSION_ID_ENV_VAR, constants.RUN_TOKEN_ENV):
@@ -542,6 +565,8 @@ async def smoke(backend_id: str, purge: bool) -> None:
     meta_after = await deps_tree().load_meta(manager_id)
     if meta_after.native_prompt_hash != stored["prompt_hash"]:
       fail("the native anchor's recorded instruction hash left the snapshot's hash")
+    if manager_runs[-1].native_session_id != manager_run.native_session_id:
+      fail("the manager's second turn did not resume its first Claude Code session")
     if meta_after.cc_session_id and manager_run.native_session_id and \
             meta_after.cc_session_id != manager_run.native_session_id:
       # The anchor may legitimately advance within the same native
@@ -554,11 +579,15 @@ async def smoke(backend_id: str, purge: bool) -> None:
     if status != 200 or worker_run_id not in [row["id"] for row in page["items"]]:
       fail(f"GET /api/sessions/{child_id}/runs did not list run {worker_run_id}: {status} {page}")
 
-    # -- native CLC session state stayed under the synthetic home --------
-    clc_sessions = home / "clc-sessions"
-    natives = [p.name for p in clc_sessions.iterdir()] if clc_sessions.is_dir() else []
-    if not natives:
-      fail(f"no native CLC session state under {clc_sessions}; --session-dir did not isolate")
+    # -- native session state stayed under the synthetic home -------------
+    if entry["type"] == "charlie-code":
+      native_store = home / "clc-sessions"
+      native_files = list(native_store.iterdir()) if native_store.is_dir() else []
+    else:
+      native_store = claude_config_dir / "projects"
+      native_files = list(native_store.rglob("*.jsonl")) if native_store.is_dir() else []
+    if not native_files:
+      fail(f"no native session state under {native_store}; session isolation did not hold")
 
     report = {
         "backend": backend_id,
@@ -571,6 +600,7 @@ async def smoke(backend_id: str, purge: bool) -> None:
         "worker_native_session_id": worker_run.native_session_id,
         "worker_model": worker_run.model,
         "smoke_home": str(home),
+        "native_session_store": str(native_store),
         "manager_raw_log": manager_run.raw_log_ref,
         "worker_raw_log": worker_run.raw_log_ref,
     }
@@ -592,13 +622,42 @@ def main() -> None:
       "--backend",
       default="charlie-code-glm-flash",
       help="The configured backend option id the smoke runs on (default: charlie-code-glm-flash)")
+  parser.add_argument("--backend-type", choices=("cc-anthropic-compatible",))
+  parser.add_argument("--model")
+  parser.add_argument("--api-base")
+  parser.add_argument("--context-window", type=int)
+  parser.add_argument("--credential")
+  parser.add_argument("--label")
+  parser.add_argument("--prompt-overlay")
   parser.add_argument("--purge", action="store_true", help="Remove the synthetic home after the run")
   args = parser.parse_args()
   # This harness runs the server stack in-process, outside server.py and the CLI entry, so it
   # registers the backend packages itself.
   from src.app import registrations
   registrations.register_all()
-  asyncio.run(smoke(args.backend, args.purge))
+  inline_values = (args.model, args.api_base, args.context_window, args.credential, args.label, args.prompt_overlay)
+  if args.backend_type is None:
+    if any(value is not None for value in inline_values):
+      parser.error(
+          "--model, --api-base, --context-window, --credential, --label and --prompt-overlay require "
+          "--backend-type")
+    entry = None
+  else:
+    if args.model is None or args.api_base is None or args.context_window is None:
+      parser.error("--backend-type cc-anthropic-compatible requires --model, --api-base and --context-window")
+    from src.backends.anthropic_compatible import options
+    entry = options.CcAnthropicCompatibleBackend.model_validate(
+        {
+            "id": args.backend,
+            "label": args.label or args.backend,
+            "type": args.backend_type,
+            "model": args.model,
+            "api_base": args.api_base,
+            "context_window": args.context_window,
+            "credential": args.credential,
+            "prompt_overlay": args.prompt_overlay,
+        }).model_dump(mode="json")
+  asyncio.run(smoke(args.backend, args.purge, entry))
 
 
 if __name__ == "__main__":

@@ -23,13 +23,15 @@ from src.runtime import master_cc_run, worker
 from src.runtime.hooks import backend_lifecycle, backend_type_registration, backend_types
 
 CC_ID = "11111111-2222-3333-4444-555555555555"
-CLI_VARIANT_TYPES = ["cc-kimi", "cc-openai-compatible"]
+CLI_VARIANT_TYPES = ["cc-anthropic-compatible", "cc-openai-compatible"]
 
 _fresh_pool_state = conftest.fresh_state_fixture(claude_accounts.reset_for_tests)
 
 
 def _variant_option(backend_type: str):
-  extra = {"credential": "test-kimi"} if backend_type == "cc-kimi" else {"api_base": "http://test.invalid"}
+  extra = {"api_base": "http://test.invalid"}
+  if backend_type == "cc-anthropic-compatible":
+    extra["context_window"] = 409600
   return conftest.backend_option(id="variant", label="Variant", type=backend_type, model="claude-sonnet-4-5", **extra)
 
 
@@ -169,11 +171,11 @@ async def test_non_pooled_cc_claude_turn_checks_the_transcript_and_selects_no_ac
   assert lifecycle.watch(_turn_context(cfg, option, CC_ID, tmp_path), present) is None
 
 
-@pytest.mark.parametrize("backend_type", ["codex", "cc-kimi"])
+@pytest.mark.parametrize("backend_type", ["codex", "cc-anthropic-compatible"])
 @pytest.mark.asyncio
 async def test_non_claude_task_build_receives_no_claude_account(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, backend_type: str) -> None:
-  option = _variant_option(backend_type) if backend_type == "cc-kimi" else conftest.backend_option(
+  option = _variant_option(backend_type) if backend_type == "cc-anthropic-compatible" else conftest.backend_option(
       id="variant", label="Variant", type="codex", model="m")
   backend = conftest.ScriptedRelayBackend([conftest.assistant_text_event("done")], exit_code=0)
   builds = conftest.install_scripted_backends(monkeypatch, [backend], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)

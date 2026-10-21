@@ -265,7 +265,7 @@ def test_backend_page_source_attributes_by_type_prefix_and_master_account() -> N
       "charlie-code-glm": _Option("charlie-code-glm", "charlie-code", "openai/zai-org/GLM-5.3-Flash"),
       "codex-gpt": _Option("codex-gpt", "codex", "openai/gpt-5"),
       "claude-opus": _Option("claude-opus", "cc-claude", "anthropic/claude-opus-5-5"),
-      "kimi-k3": _Option("kimi-k3", "cc-kimi", "moonshotai/Kimi-K3"),
+      "kimi-k3": _Option("kimi-k3", "cc-anthropic-compatible", "moonshotai/Kimi-K3"),
       "glm-air": _Option("glm-air", "cc-openai-compatible", "openai/GLM-Air"),
       "oc-qwen": _Option("oc-qwen", "opencode", "qwen/qwen3"),
       "agy-antigravity": _Option("agy-antigravity", "antigravity", "gemini-2.5-pro"),

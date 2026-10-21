@@ -209,7 +209,7 @@ holds the CLI's stream. The lines are `assistant` events carrying `message.conte
 (`text`, `thinking`, `tool_use`), `user` tool-result wrappers, and a final `result`.
 `AgentBackend.translate_event` (`src/runtime/agent_process/base.py`) turns each line into the events that
 land in `events.jsonl` and the WebSocket stream: the Anthropic-endpoint backends (cc-claude,
-cc-kimi, cc-openai-compatible) pass lines through unchanged; the other backends translate their
+cc-anthropic-compatible, cc-openai-compatible) pass lines through unchanged; the other backends translate their
 native streams into CC-compatible events with per-backend vocabularies (codex, for one, emits
 `thinking` and `file_write`).
 A raw log that stops growing while the process is still alive is what the server reports as stuck

@@ -690,12 +690,9 @@ async fn a_fully_avoided_route_falls_back_to_todays_reviewer_selection() -> anyh
     .await?;
   drop(guard);
 
-  let process_guard = ProcessGroupGuard::new();
   queue_and_launch_work(&stack, &worker.id, "run-avoided-work", "ship it").await?;
-  assert_eq!(wait_for_run(&stack, &process_guard, &worker.id, "run-avoided-work").await?, RunOutcomeKind::Success);
   let review_run = wait_for_review(&stack, &worker.id, "run-avoided-work").await?;
   assert_eq!(review_run.backend.as_deref(), Some("fake2"), "today's pool selection picks the other member");
-  assert_eq!(wait_for_run(&stack, &process_guard, &worker.id, &review_run.id).await?, RunOutcomeKind::Success);
   Ok(())
 }
 

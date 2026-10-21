@@ -97,7 +97,6 @@ impl Fixture {
 }
 
 #[test]
-#[ignore = "catch-up e44c9ccef: cargo-cli-backend-matrix"]
 fn cli_backends_match_the_python_package_on_synthetic_inputs() {
   let root = tempfile::tempdir().unwrap();
   let fx = write_fixtures(root.path());

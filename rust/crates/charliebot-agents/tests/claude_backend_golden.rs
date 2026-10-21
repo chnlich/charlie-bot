@@ -120,7 +120,6 @@ fn rust_result(case: &Value, cfg: &CharlieBotConfig, registry: &Arc<Registry>) -
 }
 
 #[test]
-#[ignore = "catch-up e44c9ccef: cargo-claude-factory-matrix"]
 fn registered_claude_factory_matches_the_python_argv_and_env_matrix() {
   let cases = cases();
   let cfg = main_module();

@@ -1548,6 +1548,46 @@ mod tests {
     assert_eq!(run.account_label, "default");
   }
 
+  fn panicking_run<'a>(
+    _run: claude_compaction::CompactionRun<'a>,
+  ) -> BoxFuture<'a, anyhow::Result<claude_compaction::CompactionOutcome>> {
+    panic!("synthetic compaction panic")
+  }
+
+  // Python: src/backends/claude_code/claude_idle_compaction.py:_compact, whose finally pops the running entry.
+  #[tokio::test]
+  async fn a_panicking_idle_run_leaves_no_running_entry_and_no_start_reservation() {
+    let root = tempfile::tempdir().unwrap();
+    let account_dir = root.path().join("account-a");
+    test_fixtures::write_transcript(&account_dir, CC_SESSION_ID);
+    let features = test_fixtures::claude_features(
+      &root.path().join("home"),
+      &test_fixtures::claude_config(Some(account_dir.as_path())),
+    );
+    let meta = test_fixtures::manager_session(
+      &features,
+      "a_panicking_idle_run_leaves_no_running_entry_and_no_start_reservation",
+      "fable",
+      Some("acct-a"),
+      CC_SESSION_ID,
+    )
+    .await;
+    let request = UtcDateTime::now().to_python_string();
+    test_fixtures::append_reading_and_request(&features, &meta.id, 120_000, &request).await;
+    let queue = Arc::new(MasterQueue::with_compaction_runner(Arc::new(BackendPool::default()), runner(panicking_run)));
+    arm_round(&queue, &features, &meta.id, "fable").await;
+
+    let started = claude_idle_compaction::IdleCompaction::shared()
+      .fire_at(&meta.id, UtcDateTime::now())
+      .unwrap()
+      .expect("every idle condition holds");
+    let finished = started.await;
+
+    assert!(finished.is_ok(), "the compaction task ends normally: {finished:?}");
+    assert!(!claude_idle_compaction::IdleCompaction::shared().is_running(&meta.id));
+    assert!(queue.reserve_idle_compaction(&meta.id), "the start reservation is released");
+  }
+
   /// Sets `CLAUDE_CONFIG_DIR` for one test: the trigger path reads the process login directory from it.
   struct ClaudeConfigDirGuard {
     _lock: std::sync::MutexGuard<'static, ()>,

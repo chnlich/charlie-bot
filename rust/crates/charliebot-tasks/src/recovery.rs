@@ -122,10 +122,18 @@ fn boot_skip_reason(
       return Ok(Some("sequence_ref"));
     }
     if let Some(worktree_path) = run.worktree_path.as_deref().filter(|path| !path.is_empty()) {
+      // Python's os.path.lexists (src/runtime/task_recovery.py:119) reads any OSError as absent, so the pass
+      // continues past a path that cannot be stat'ed. The warning keeps that error visible.
       match std::fs::symlink_metadata(worktree_path) {
         Ok(_) => return Ok(Some("worktree_exists")),
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error).with_context(|| format!("stating worktree {worktree_path}")),
+        Err(error) => tracing::warn!(
+          target: "charliebot_tasks",
+          session_id,
+          path = worktree_path,
+          error = %error,
+          "task_recovery_worktree_stat_failed"
+        ),
       }
     }
   }

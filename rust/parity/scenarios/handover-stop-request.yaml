@@ -13,6 +13,20 @@ fake_agent:
       exit_code: 0
 expect_starts: 1  # One dispatch: the stop request reaches the agent by signal, and the agent is never relaunched.
 directions: [python-to-candidate, candidate-to-python]
+comparison_rules:
+  # Python does not order the interrupted run's master_done against its run_finished. The stop request's SIGKILL path
+  # records the interrupted finish (src/runtime/runs.py:1225), which appends run_finished at runs.py:1114-1124, while the
+  # master queue writes master_done after the agent exits (src/runtime/master_cc_queue.py:298-309). A stop kill exits
+  # with -9 (src/runtime/agent_process/base.py:913), so the master_done carries that code. The rule accepts either order
+  # for this pair only: the run_finished of the run this scenario's stop request interrupted (its captured run id pins
+  # it) and the master_done beside it with that exit code.
+  - either_order_of_adjacent_events:
+      first:
+        type: run_finished
+        match_fields: {run_id: "${capture.run_id}", outcome: interrupted}
+      second:
+        type: master_done
+        match_fields: {exit_code: -9}
 steps:
   - name: retry a failed manager run to start the stop target
     method: POST

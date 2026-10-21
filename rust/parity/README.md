@@ -533,6 +533,13 @@ field one side omits still shows as a difference:
   masks `exit_code` of a run record that the `handover-stop-request` stop interrupted, and only when the value is
   `null` or `-9`. Python's stopper and its launcher race for the first write of that record (`runs.py:1161`,
   `runs.py:1036-1047`). The rule names the scenario by its stop request id, so no other scenario's run is masked;
+- the stopped run's pair order is a comparison rule, not a `FieldRule`: `handover-stop-request` declares an
+  `either_order_of_adjacent_events` rule whose `first` is the `run_finished` with its captured `run_id` and
+  `outcome: interrupted`, and whose `second` is the `master_done` with `exit_code: -9`. Python's stop path and master
+  queue write the two events in either order (`runs.py:1225`, `runs.py:1114-1124`, `master_cc_queue.py:298-309`), so
+  the pair compares in either order on each side. A `run_finished` swapped with another event type, a `run_finished`
+  with another outcome, and the pair of another run keep their order, because the rule matches no such pair. The
+  scenario's comparison rule comment names the write paths;
 - `TextRule` masks the `value` group of a pattern in one route's non-JSON body (`RESPONSE_TEXT_RULES`);
 - `IGNORED_HEADERS` names the headers left out, each with its reason.
 - `RESPONSE_HEADER_RULES` replaces only the named header value on one route. The merged-trace ETag and

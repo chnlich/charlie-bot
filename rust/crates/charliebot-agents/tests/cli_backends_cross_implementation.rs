@@ -46,6 +46,7 @@ struct Fixture {
   root: PathBuf,
   home: PathBuf,
   charliebot_home: PathBuf,
+  no_credentials_home: PathBuf,
   bin: PathBuf,
   transport: PathBuf,
 }
@@ -134,10 +135,11 @@ fn write_fixtures(root: &Path) -> Fixture {
     root: root.to_path_buf(),
     home: root.join("home"),
     charliebot_home: root.join("charliebot"),
+    no_credentials_home: root.join("no-credentials"),
     bin: root.join("bin"),
     transport: root.join("transport"),
   };
-  for dir in [&fx.home, &fx.charliebot_home, &fx.bin, &fx.transport] {
+  for dir in [&fx.home, &fx.charliebot_home, &fx.no_credentials_home, &fx.bin, &fx.transport] {
     fs::create_dir_all(dir).unwrap();
   }
   write_fakes(&fx.bin, json!({"gemini": [{"exit": 0}], "charlie-code": [{"exit": 0}], "agy": [{"exit": 0}]}));
@@ -145,6 +147,7 @@ fn write_fixtures(root: &Path) -> Fixture {
     &fx.charliebot_home.join("credentials.yaml"),
     "anthropic-main:\n  api_key: synthetic-anthropic-key\nclc-main:\n  api_key: synthetic-clc-key\n",
   );
+  write_text(&fx.no_credentials_home.join("credentials.yaml"), "not: a mapping of credential sections\n");
   for spec in finish_specs() {
     let dir = root.join("finish").join(spec.id);
     fs::create_dir_all(dir.join("cwd")).unwrap();
@@ -168,10 +171,7 @@ fn request(fx: &Fixture) -> Value {
 }
 
 fn register_anthropic_compatible(registry: &mut Registry) -> Result<(), charliebot_registry::RegistryError> {
-  anthropic_compatible::register_with_host(
-    registry,
-    CliHost { path: "/synthetic/bin".to_string(), home: PathBuf::from("/synthetic/home") },
-  )
+  anthropic_compatible::register(registry)
 }
 
 fn register_claude_usage_source(registry: &mut Registry) -> Result<(), charliebot_registry::RegistryError> {
@@ -580,12 +580,17 @@ async fn run_finish(fx: &Fixture, case: &Value) -> Value {
 }
 
 fn build_backend(fx: &Fixture, option: &BackendOption, launch: LaunchArgs) -> Box<dyn AgentBackend> {
-  let cfg = fx.config();
+  let mut cfg = fx.config();
+  if option.backend_type == "cc-anthropic-compatible"
+    && !option.type_fields.contains_key(serde_yaml::Value::String("credential".to_string()))
+  {
+    cfg.charliebot_home = fx.no_credentials_home.clone();
+  }
   let built = match option.backend_type.as_str() {
     "gemini" => GeminiFactory::new(fx.host()).build(Some(option), &cfg, launch),
     "charlie-code" => CharlieCodeFactory::new(fx.host()).build(Some(option), &cfg, launch),
     "antigravity" => AntigravityFactory::new(fx.host()).build(Some(option), &cfg, launch),
-    "cc-anthropic-compatible" => AnthropicCompatibleFactory::new(fx.host()).build(Some(option), &cfg, launch),
+    "cc-anthropic-compatible" => AnthropicCompatibleFactory.build(Some(option), &cfg, launch),
     other => panic!("no factory for backend type {other}"),
   };
   built.unwrap()
@@ -618,7 +623,7 @@ fn anthropic_compatible_options_require_a_positive_window_and_endpoint_root() {
 
   fs::write(home.join("config.yaml"), config(ANTHROPIC_API_BASE, ANTHROPIC_CONTEXT_WINDOW as i64)).unwrap();
   let option = registry.load_config(&home).unwrap().backends.options.remove(0);
-  assert!(!option.type_fields.contains_key(&serde_yaml::Value::String("credential".to_string())));
+  assert!(!option.type_fields.contains_key(serde_yaml::Value::String("credential".to_string())));
   assert_eq!(option.type_fields["context_window"].as_u64(), Some(ANTHROPIC_CONTEXT_WINDOW));
 
   fs::write(home.join("config.yaml"), config(ANTHROPIC_API_BASE, 0)).unwrap();

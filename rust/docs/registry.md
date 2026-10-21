@@ -454,8 +454,8 @@ implements them over the registered lifecycles and sequence controllers, and the
 Packages whose port has not landed still register their data, so the server's behavior does not change:
 
 - The backend packages are ported: `claude_code` (`cc-claude`), `codex` (no lifecycle, so each run uses one process),
-  `openai_compatible` (`cc-openai-compatible`, `ClaudeCliLifecycle`), `kimi` (`cc-kimi`), `gemini`, `antigravity` and
-  `charlie_code` (`charlie-code`). Each registers its type. The packages that log usage also register their usage
+  `openai_compatible` (`cc-openai-compatible`, `ClaudeCliLifecycle`), `anthropic_compatible`
+  (`cc-anthropic-compatible`, `ClaudeCliLifecycle`), `gemini`, `antigravity` and `charlie_code` (`charlie-code`). Each registers its type. The packages that log usage also register their usage
   sources. `claude_code` registers typed account configuration, its config check, metadata slots, pooled lifecycle and
   the login-notice renderer.
 - Data-carrying stubs: `artifacts` (`publish` section), `cron` (session slot), `slack` (`slack` section, session slot

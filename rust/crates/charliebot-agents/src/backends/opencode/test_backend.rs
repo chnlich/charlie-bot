@@ -1269,7 +1269,10 @@ fn registration_keeps_traits_attribution_and_snapshot_limits() {
   let source = registry.usage_source_for("opencode").unwrap().unwrap();
   assert_eq!(source.id_prefixes, &["opencode-", "oc-"]);
   assert_eq!(
-    registry.reading_limits_for("snapshot", charliebot_store::run_records::RunKind::Work).unwrap().compact_reserve,
+    registry
+      .reading_limits_for("snapshot", charliebot_store::run_records::RunKind::Work, None)
+      .unwrap()
+      .compact_reserve,
     Some(20_000)
   );
 }

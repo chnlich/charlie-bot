@@ -78,6 +78,17 @@ pub struct ContextLimits {
 /// Computes the limits of one reading kind (`backend_lifecycle_registration.register_reading_limits`).
 pub type ReadingLimitsFn = fn(RunKind) -> ContextLimits;
 
+/// Computes a reading kind's limits from one backend option (`register_backend_reading_limits`).
+pub type BackendReadingLimitsFn = fn(&BackendOption, RunKind) -> ContextLimits;
+
+/// One context-limits provider registered for a backend type and reading kind.
+pub(crate) struct BackendReadingLimitsRegistration {
+  pub backend_type: &'static str,
+  pub reading_kind: &'static str,
+  pub package: &'static str,
+  pub limits: BackendReadingLimitsFn,
+}
+
 /// Reads one backend type's usage from its session events (`register_usage_resolver`). A resolver returns the usage
 /// object for the session, or `None`.
 pub trait UsageResolver: Send + Sync {
@@ -363,6 +374,36 @@ impl Registry {
     self.reading_limits.insert(package, kind, limits)
   }
 
+  /// Register context limits selected by backend type and reading kind.
+  pub fn backend_reading_limits(
+    &mut self,
+    backend_type: &'static str,
+    kind: &'static str,
+    limits: BackendReadingLimitsFn,
+  ) -> Result<(), RegistryError> {
+    let package = self.owner()?;
+    if let Some(existing) = self
+      .backend_reading_limits
+      .iter()
+      .find(|registration| registration.backend_type == backend_type && registration.reading_kind == kind)
+    {
+      return Err(RegistryError {
+        package,
+        message: format!(
+          "backend reading limits for ({backend_type:?}, {kind:?}) are already registered by {}",
+          existing.package
+        ),
+      });
+    }
+    self.backend_reading_limits.push(BackendReadingLimitsRegistration {
+      backend_type,
+      reading_kind: kind,
+      package,
+      limits,
+    });
+    Ok(())
+  }
+
   /// Register the usage resolver of a backend type (`register_usage_resolver`).
   pub fn usage_resolver(
     &mut self,
@@ -437,7 +478,21 @@ impl Registry {
   }
 
   /// The context limits of `kind`, or `None` when no package registered the kind.
-  pub fn reading_limits_for(&self, kind: &str, run_kind: RunKind) -> Option<ContextLimits> {
+  /// A matching backend provider takes precedence when `option` names its type.
+  pub fn reading_limits_for(
+    &self,
+    kind: &str,
+    run_kind: RunKind,
+    option: Option<&BackendOption>,
+  ) -> Option<ContextLimits> {
+    if let Some(option) = option
+      && let Some(registration) = self
+        .backend_reading_limits
+        .iter()
+        .find(|registration| registration.backend_type == option.backend_type && registration.reading_kind == kind)
+    {
+      return Some((registration.limits)(option, run_kind));
+    }
     self.reading_limits.get(kind).map(|limits| limits(run_kind))
   }
 

@@ -49,17 +49,6 @@ log = log_once.LazyStructlogLogger()
 
 MARKER_RELPATH = pathlib.Path("state") / "boot_recovery.json"
 
-# Why a node stayed in the pass despite a usable marker. One entry per skip
-# condition; the recovery-done log counts each reason.
-KEEP_REASONS = (
-    "state_open",
-    "file_after_marker",
-    "run_unended",
-    "sequence_ref",
-    "worktree_exists",
-    "cold_read_failed",
-)
-
 
 def marker_path(cfg: config.CharlieBotConfig) -> pathlib.Path:
   """The boot-recovery marker's location under this instance's home."""

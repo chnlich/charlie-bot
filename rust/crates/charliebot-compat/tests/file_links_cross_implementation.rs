@@ -152,6 +152,7 @@ fn the_file_link_scanner_matches_python_on_the_case_matrix() {
   fs::write(&cases_path, serde_json::to_string_pretty(&cases_json).unwrap()).unwrap();
   run_python(&cases_path, &answers_path);
   let python: Vec<Value> = serde_json::from_slice(&fs::read(&answers_path).unwrap()).unwrap();
+  assert_eq!(python.len(), cases.len(), "file_links_python.py answered a different number of cases");
 
   let mut rust = Vec::new();
   let mut reached = Vec::new();

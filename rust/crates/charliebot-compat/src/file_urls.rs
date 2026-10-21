@@ -1,10 +1,84 @@
 //! The host-file links accepted by `src/runtime/file_urls.py`.
 
+use std::collections::BTreeMap;
+use std::fs;
+use std::io;
 use std::net::Ipv6Addr;
-use std::path::PathBuf;
+use std::os::unix::ffi::OsStrExt;
+use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
+
+use charliebot_core::paths;
+use regex::Regex;
 
 /// The first file-server mount, without its trailing slash.
 pub const FILE_SERVER_MOUNT: &str = "/absolute_filepath";
+
+/// The retired file-server prefixes, without their trailing slashes (`RETIRED_FILE_SERVER_PREFIXES`).
+const RETIRED_PREFIXES: [&str; 2] = ["/files", "/file"];
+
+/// Python's `str.isspace` characters, as the inside of a character class where its `re` matches `\s`.
+const PY_SPACE: &str =
+  concat!(r"\t\n\x0B\x0C\r\x1C-\x1F \x85\x{A0}\x{1680}\x{2000}-\x{200A}", r"\x{2028}\x{2029}\x{202F}\x{205F}\x{3000}",);
+
+/// Any URL reply text can carry: scheme, authority, optional port, path, query string and fragment (`_URL_RE`).
+pub static URL_RE: LazyLock<Regex> = LazyLock::new(|| {
+  Regex::new(&format!(
+    r"[a-zA-Z][a-zA-Z0-9+.\-]*://(?:\[[^\]{PY_SPACE}]+\]|[^/:(){PY_SPACE}]+)(?::(?P<port>\d+))?(?P<path>/[^?#(){PY_SPACE}]*)?(?:\?[^#{PY_SPACE}]*)?(?:#[^{PY_SPACE}]*)?"
+  ))
+  .expect("valid pattern")
+});
+
+/// A Markdown inline link's target, `<...>` or bare (`_MARKDOWN_INLINE_TARGET_RE`).
+static MARKDOWN_INLINE_TARGET_RE: LazyLock<Regex> = LazyLock::new(|| {
+  Regex::new(&format!(r"\[[^\]\n]*\]\([{PY_SPACE}]*(?P<target><[^>\n]*>|[^){PY_SPACE}]+)")).expect("valid pattern")
+});
+
+/// A Markdown reference definition's target, `<...>` or bare, at the start of a line (`_MARKDOWN_REFERENCE_TARGET_RE`).
+static MARKDOWN_REFERENCE_TARGET_RE: LazyLock<Regex> = LazyLock::new(|| {
+  Regex::new(&format!(r"(?m)^[ \t]{{0,3}}\[[^\]\n]+\]:[ \t]*(?P<target><[^>\n]*>|[^{PY_SPACE}]+)"))
+    .expect("valid pattern")
+});
+
+/// The decimal digit zero code points in CPython 3.14.7's Unicode 16.0.0 data.
+const DECIMAL_DIGIT_ZEROES: &[u32] = &[
+  0x30, 0x660, 0x6F0, 0x7C0, 0x966, 0x9E6, 0xA66, 0xAE6, 0xB66, 0xBE6, 0xC66, 0xCE6, 0xD66, 0xDE6, 0xE50, 0xED0, 0xF20,
+  0x1040, 0x1090, 0x17E0, 0x1810, 0x1946, 0x19D0, 0x1A80, 0x1A90, 0x1B50, 0x1BB0, 0x1C40, 0x1C50, 0xA620, 0xA8D0,
+  0xA900, 0xA9D0, 0xA9F0, 0xAA50, 0xABF0, 0xFF10, 0x104A0, 0x10D30, 0x10D40, 0x11066, 0x110F0, 0x11136, 0x111D0,
+  0x112F0, 0x11450, 0x114D0, 0x11650, 0x116C0, 0x116D0, 0x116DA, 0x11730, 0x118E0, 0x11950, 0x11BF0, 0x11C50, 0x11D50,
+  0x11DA0, 0x11F50, 0x16130, 0x16A60, 0x16AC0, 0x16B50, 0x16D70, 0x1CCF0, 0x1D7CE, 0x1D7D8, 0x1D7E2, 0x1D7EC, 0x1D7F6,
+  0x1E140, 0x1E2F0, 0x1E4F0, 0x1E5F1, 0x1E950, 0x1FBF0,
+];
+
+/// The schemes `urllib.parse` gives a network location (`uses_netloc`), without the empty scheme.
+const USES_NETLOC: [&str; 26] = [
+  "file",
+  "ftp",
+  "git",
+  "git+ssh",
+  "gopher",
+  "http",
+  "https",
+  "imap",
+  "itms-services",
+  "mms",
+  "nfs",
+  "nntp",
+  "prospero",
+  "rsync",
+  "rtsp",
+  "rtsps",
+  "rtspu",
+  "sftp",
+  "shttp",
+  "snews",
+  "svn",
+  "svn+ssh",
+  "telnet",
+  "wais",
+  "ws",
+  "wss",
+];
 
 /// The host file a link names, or `None` when it does not name a file on this host.
 ///
@@ -15,37 +89,73 @@ pub fn host_file(link: Option<&str>) -> Result<Option<PathBuf>, String> {
   let Some(link) = link.filter(|link| !link.is_empty()) else {
     return Ok(None);
   };
-  let cleaned: String =
-    link.trim_start_matches(|c: char| c <= ' ').chars().filter(|c| !matches!(c, '\t' | '\r' | '\n')).collect();
-  let (before_fragment, fragment) = cleaned.split_once('#').unwrap_or((cleaned.as_str(), ""));
-  let (head, query) = before_fragment.split_once('?').unwrap_or((before_fragment, ""));
-  let scheme = scheme_rest(head);
-  let after_scheme = scheme.unwrap_or(head);
-  let (netloc, encoded_path) = match after_scheme.strip_prefix("//") {
-    Some(authority) => authority.find('/').map_or((authority, ""), |index| authority.split_at(index)),
-    None => ("", after_scheme),
-  };
-  validate_bracketed_netloc(netloc)?;
-  let path = percent_decode_lossy(encoded_path);
+  let parts = split_url(link)?;
+  let path = percent_decode_lossy(&parts.path);
   if path.starts_with(&format!("{FILE_SERVER_MOUNT}/")) {
     return Ok(Some(PathBuf::from(&path[FILE_SERVER_MOUNT.len()..])));
   }
-  if scheme.is_none() && netloc.is_empty() && query.is_empty() && fragment.is_empty() && path.starts_with('/') {
+  if parts.scheme.is_empty()
+    && parts.netloc.is_empty()
+    && parts.query.is_empty()
+    && parts.fragment.is_empty()
+    && path.starts_with('/')
+  {
     return Ok(Some(PathBuf::from(path)));
   }
   Ok(None)
 }
 
-/// The text after `:` when the input begins with a valid URL scheme.
-fn scheme_rest(link: &str) -> Option<&str> {
+/// The parts `urllib.parse.urlsplit` returns for a link, with the scheme lowercased.
+#[derive(Debug)]
+struct SplitUrl {
+  scheme: String,
+  netloc: String,
+  path: String,
+  query: String,
+  fragment: String,
+}
+
+/// Splits a link as `urllib.parse.urlsplit` does. A bracketed network location that is malformed fails with
+/// `urlsplit`'s message.
+fn split_url(link: &str) -> Result<SplitUrl, String> {
+  let cleaned: String =
+    link.trim_start_matches(|c: char| c <= ' ').chars().filter(|c| !matches!(c, '\t' | '\r' | '\n')).collect();
+  let (before_fragment, fragment) = cleaned.split_once('#').unwrap_or((cleaned.as_str(), ""));
+  let (head, query) = before_fragment.split_once('?').unwrap_or((before_fragment, ""));
+  let (scheme, after_scheme) = match split_scheme(head) {
+    Some((scheme, rest)) => (scheme.to_ascii_lowercase(), rest),
+    None => (String::new(), head),
+  };
+  let (netloc, path) = match after_scheme.strip_prefix("//") {
+    Some(authority) => authority.find('/').map_or((authority, ""), |index| authority.split_at(index)),
+    None => ("", after_scheme),
+  };
+  validate_bracketed_netloc(netloc)?;
+  Ok(SplitUrl {
+    scheme,
+    netloc: netloc.to_string(),
+    path: path.to_string(),
+    query: query.to_string(),
+    fragment: fragment.to_string(),
+  })
+}
+
+/// The scheme and the text after its `:` when the input begins with a valid URL scheme.
+fn split_scheme(link: &str) -> Option<(&str, &str)> {
   let (scheme, rest) = link.split_once(':')?;
-  let mut chars = scheme.chars();
-  if !chars.next().is_some_and(|first| first.is_ascii_alphabetic())
-    || !chars.all(|character| character.is_ascii_alphanumeric() || matches!(character, '+' | '.' | '-'))
-  {
-    return None;
-  }
-  Some(rest)
+  is_url_scheme(scheme).then_some((scheme, rest))
+}
+
+/// Whether `text` is a URL scheme: an ASCII letter, then ASCII letters, digits, `+`, `.` or `-`.
+fn is_url_scheme(text: &str) -> bool {
+  let mut chars = text.chars();
+  chars.next().is_some_and(|first| first.is_ascii_alphabetic())
+    && chars.all(|character| character.is_ascii_alphanumeric() || matches!(character, '+' | '.' | '-'))
+}
+
+/// Whether `link` begins with a scheme and `://` (`_URL_SCHEME_RE`).
+fn has_url_scheme(link: &str) -> bool {
+  link.split_once("://").is_some_and(|(scheme, _)| is_url_scheme(scheme))
 }
 
 /// Python's URL splitter validates square-bracketed hosts while splitting the authority.
@@ -117,6 +227,22 @@ fn hex_value(byte: u8) -> Option<u8> {
   }
 }
 
+/// A Unicode decimal digit's numeric value, as Python's `int` reads it.
+fn decimal_digit(character: char) -> Option<u32> {
+  let codepoint = u32::from(character);
+  let zero = DECIMAL_DIGIT_ZEROES.iter().rev().find(|zero| codepoint >= **zero)?;
+  let digit = codepoint - *zero;
+  (digit < 10).then_some(digit)
+}
+
+/// The value of a URL port written in Unicode decimal digits, as Python's `int` reads it; `None` when it exceeds `u64`.
+pub fn decimal_port(text: &str) -> Option<u64> {
+  text.chars().try_fold(0_u64, |value, character| {
+    let digit = decimal_digit(character)?;
+    value.checked_mul(10)?.checked_add(u64::from(digit))
+  })
+}
+
 /// The form of a file link the scanner recognized (`FileLinkForm`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FileLinkForm {
@@ -155,14 +281,280 @@ impl FileLink {
   }
 }
 
-/// Finds the file links in `text` and classifies each one's form and liveness (`scan_file_links`).
-pub fn scan_file_links(_text: &str, _context: Option<&ScanContext>) -> std::io::Result<Vec<FileLink>> {
-  Ok(Vec::new())
+/// A link span of the text: the link after trailing punctuation is trimmed, and whether a Markdown target named it.
+struct Candidate {
+  link: String,
+  markdown_target: bool,
+}
+
+/// Trailing punctuation that a link in prose does not keep (`LINK_TRAILING_PUNCTUATION_RE`).
+fn trim_url_punctuation(link: &str) -> &str {
+  link.trim_end_matches(['.', ',', ';', ':', '!', '?', '*', '。', '！', '？', '；', '，', '、', '：', '．'])
+}
+
+/// The URL and Markdown target spans of `text`, in order (`_candidates`). A span that both forms name keeps the
+/// Markdown target status.
+fn candidates(text: &str) -> Vec<Candidate> {
+  let mut found: BTreeMap<(usize, usize), Candidate> = BTreeMap::new();
+  for url in URL_RE.find_iter(text) {
+    let link = trim_url_punctuation(url.as_str());
+    if !link.is_empty() {
+      let span = (url.start(), url.start() + link.len());
+      found.insert(span, Candidate { link: link.to_string(), markdown_target: false });
+    }
+  }
+  for pattern in [&*MARKDOWN_INLINE_TARGET_RE, &*MARKDOWN_REFERENCE_TARGET_RE] {
+    for captures in pattern.captures_iter(text) {
+      let target = captures.name("target").expect("the pattern has a target group");
+      let (raw, start) = match target.as_str().strip_prefix('<').and_then(|inner| inner.strip_suffix('>')) {
+        Some(inner) => (inner, target.start() + 1),
+        None => (target.as_str(), target.start()),
+      };
+      let link = if has_url_scheme(raw) { trim_url_punctuation(raw) } else { raw };
+      if !link.is_empty() {
+        found.insert((start, start + link.len()), Candidate { link: link.to_string(), markdown_target: true });
+      }
+    }
+  }
+  found.into_values().collect()
+}
+
+/// The retired `/files` or `/file` prefix that `path` opens, without its trailing slash (`_retired_prefix`).
+fn retired_prefix(path: &str) -> Option<&'static str> {
+  RETIRED_PREFIXES.into_iter().find(|prefix| path.strip_prefix(prefix).is_some_and(|rest| rest.starts_with('/')))
+}
+
+/// The absolute filesystem path that a file-server URL path names, percent-decoded (`_file_server_named_path`).
+fn file_server_named_path(url_path: &str) -> Option<String> {
+  let rest = url_path.strip_prefix(FILE_SERVER_MOUNT)?.strip_prefix('/')?;
+  Some(format!("/{}", percent_decode_lossy(rest)))
+}
+
+/// The path `pathlib` makes of an absolute string: repeated and `.` components drop, and exactly two leading slashes
+/// stay two (`PurePosixPath`).
+fn posix_path(absolute: &str) -> PathBuf {
+  let root = if absolute.starts_with("//") && !absolute.starts_with("///") { "//" } else { "/" };
+  let parts: Vec<&str> = absolute.split('/').filter(|part| !part.is_empty() && *part != ".").collect();
+  PathBuf::from(format!("{root}{}", parts.join("/")))
+}
+
+/// The hostname of a network location, lowercased and without brackets, port or userinfo (`SplitResult.hostname`).
+fn hostname(netloc: &str) -> String {
+  let hostinfo = netloc.rsplit_once('@').map_or(netloc, |(_, hostinfo)| hostinfo);
+  let host = match hostinfo.strip_prefix('[') {
+    Some(bracketed) => bracketed.split_once(']').map_or(bracketed, |(host, _)| host),
+    None => hostinfo.split_once(':').map_or(hostinfo, |(host, _)| host),
+  };
+  host.to_lowercase()
+}
+
+/// The port a link names, or else its scheme's default (`_effective_port`). `None` when the explicit port exceeds
+/// `u64` or the scheme has no default, and no server port equals that.
+fn link_port(parts: &SplitUrl, explicit: Option<&str>) -> Option<u64> {
+  match explicit {
+    Some(digits) => decimal_port(digits),
+    None => match parts.scheme.as_str() {
+      "http" => Some(80),
+      "https" => Some(443),
+      _ => None,
+    },
+  }
+}
+
+/// The explicit port digits that `_URL_RE` reads at the start of `link` (`_candidate_port`).
+fn candidate_port(link: &str) -> Option<&str> {
+  let captures = URL_RE.captures(link)?;
+  if captures.get(0)?.start() != 0 {
+    return None;
+  }
+  captures.name("port").map(|port| port.as_str())
+}
+
+/// Whether a link's port is this server's port, `port == context.server_port` (false without a context).
+fn names_server_port(port: Option<u64>, context: Option<&ScanContext>) -> bool {
+  context.is_some_and(|context| port == Some(u64::from(context.server_port)))
+}
+
+/// Whether a canonical file-server link names this host (`_canonical_is_local`).
+fn canonical_is_local(parts: &SplitUrl, port: Option<u64>, context: Option<&ScanContext>) -> bool {
+  if parts.netloc.is_empty() {
+    return true;
+  }
+  let host = hostname(&parts.netloc);
+  host == "localhost" || host == "127.0.0.1" || names_server_port(port, context)
+}
+
+/// The retired link's host file and its file-server URL path, when the file exists (`_retired_path`). Without a
+/// context neither is known.
+fn retired_path(
+  path: &str,
+  prefix: &str,
+  context: Option<&ScanContext>,
+) -> io::Result<(Option<PathBuf>, Option<String>)> {
+  let Some(context) = context else {
+    return Ok((None, None));
+  };
+  let tail = percent_decode_lossy(&path[prefix.len() + 1..]);
+  let absolute = paths::realpath(&Path::new("/").join(&tail));
+  let home = paths::realpath(&context.charliebot_home);
+  let home_path = paths::realpath(&home.join(&tail));
+  let mut candidates = vec![absolute.clone()];
+  if home_path.starts_with(&home) {
+    candidates.push(home_path);
+  }
+  for candidate in candidates {
+    if stat_path(&candidate)?.is_some() {
+      let url = mount_url(&candidate);
+      return Ok((Some(candidate), Some(url)));
+    }
+  }
+  Ok((Some(absolute), None))
+}
+
+/// The file-server URL path that names an absolute host path, quoted as `urllib.parse.quote(path, safe="/:@")` does
+/// (`_encoded_file_server_url_for_parts`).
+fn mount_url(path: &Path) -> String {
+  let bytes = path.as_os_str().as_bytes();
+  let relative = &bytes[bytes.iter().take_while(|byte| **byte == b'/').count()..];
+  let mut url = format!("{FILE_SERVER_MOUNT}/");
+  for &byte in relative {
+    if byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-' | b'~' | b'/' | b':' | b'@') {
+      url.push(char::from(byte));
+    } else {
+      url.push_str(&format!("%{byte:02X}"));
+    }
+  }
+  url
+}
+
+/// `urllib.parse.urlunsplit` of a link's scheme, network location, query and fragment around the absolute `path`.
+fn unsplit(parts: &SplitUrl, path: &str) -> String {
+  let mut url = path.to_string();
+  if !parts.netloc.is_empty() || (USES_NETLOC.contains(&parts.scheme.as_str()) && !url.starts_with("//")) {
+    url = format!("//{}{url}", parts.netloc);
+  }
+  if !parts.scheme.is_empty() {
+    url = format!("{}:{url}", parts.scheme);
+  }
+  if !parts.query.is_empty() {
+    url = format!("{url}?{}", parts.query);
+  }
+  if !parts.fragment.is_empty() {
+    url = format!("{url}#{}", parts.fragment);
+  }
+  url
+}
+
+/// The host path a Markdown target names: a `~/` path under the user's home, a path under the session directory, or an
+/// absolute path whose first segment is a directory on this host (`_local_path_target`).
+fn local_path_target(parts: &SplitUrl, context: Option<&ScanContext>) -> io::Result<Option<PathBuf>> {
+  let path = percent_decode_lossy(&parts.path);
+  if !parts.scheme.is_empty() || !parts.netloc.is_empty() || path.is_empty() {
+    return Ok(None);
+  }
+  let app_route = path.starts_with("/?")
+    || path == "/diff"
+    || path == "/api"
+    || path.starts_with("/diff/")
+    || path.starts_with("/api/");
+  if path.starts_with(['?', '#']) || app_route {
+    return Ok(None);
+  }
+  if path.starts_with("~/") || !path.starts_with('/') {
+    let Some(context) = context else {
+      return Ok(None);
+    };
+    let joined = match path.strip_prefix("~/") {
+      Some(rest) => context.user_home.join(rest),
+      None => context.session_dir.join(&path),
+    };
+    return Ok(Some(paths::realpath(&joined)));
+  }
+  let first_segment = path[1..].split_once('/').map_or(&path[1..], |(first, _)| first);
+  if !first_segment.is_empty() && stat_path(&Path::new("/").join(first_segment))?.is_some_and(|m| m.is_dir()) {
+    return Ok(Some(posix_path(&path)));
+  }
+  Ok(None)
+}
+
+/// The finding for one candidate link, or `None` when the link names no file (`_scan_candidate`).
+fn scan_candidate(candidate: &Candidate, context: Option<&ScanContext>) -> io::Result<Option<FileLink>> {
+  let parts = split_url(&candidate.link).map_err(io::Error::other)?;
+  let port = link_port(&parts, candidate_port(&candidate.link));
+  let link = candidate.link.clone();
+  if let Some(named) = file_server_named_path(&parts.path) {
+    let path = posix_path(&named);
+    let live = if canonical_is_local(&parts, port, context) {
+      Some(stat_path(&path)?.is_some_and(|metadata| metadata.is_file() || metadata.is_dir()))
+    } else {
+      None
+    };
+    return Ok(Some(FileLink { link, form: FileLinkForm::Canonical, path: Some(path), live, correct_link: None }));
+  }
+  if let Some(prefix) = retired_prefix(&parts.path)
+    && (candidate.markdown_target || names_server_port(port, context))
+  {
+    let (path, correct_path) = retired_path(&parts.path, prefix, context)?;
+    let correct_link = correct_path.map(|correct| unsplit(&parts, &correct));
+    return Ok(Some(FileLink { link, form: FileLinkForm::RetiredPrefix, path, live: Some(false), correct_link }));
+  }
+  if candidate.markdown_target
+    && let Some(path) = local_path_target(&parts, context)?
+  {
+    let correct_link = Some(mount_url(&path));
+    let finding = FileLink { link, form: FileLinkForm::LocalPath, path: Some(path), live: Some(false), correct_link };
+    return Ok(Some(finding));
+  }
+  Ok(None)
+}
+
+/// `stat` as `pathlib` uses it for `exists`, `is_file` and `is_dir`: a path with an embedded NUL byte, and the errors
+/// `pathlib` ignores (ENOENT, ENOTDIR, EBADF and ELOOP), name no file.
+fn stat_path(path: &Path) -> io::Result<Option<fs::Metadata>> {
+  if path.as_os_str().as_bytes().contains(&0) {
+    return Ok(None);
+  }
+  match fs::metadata(path) {
+    Ok(metadata) => Ok(Some(metadata)),
+    Err(error) if matches!(error.raw_os_error(), Some(libc::ENOENT | libc::ENOTDIR | libc::EBADF | libc::ELOOP)) => {
+      Ok(None)
+    }
+    Err(error) => Err(error),
+  }
+}
+
+/// Whether `path` is a regular file, as `pathlib.Path.is_file` answers: a path that names no file, and the errors
+/// `pathlib` ignores, read as no file.
+pub fn is_file(path: &Path) -> io::Result<bool> {
+  Ok(stat_path(path)?.is_some_and(|metadata| metadata.is_file()))
+}
+
+/// Finds the file links in `text` and classifies each one's form and liveness (`scan_file_links`). URLs with a scheme
+/// are found anywhere in the text; Markdown targets can also name a local path.
+pub fn scan_file_links(text: &str, context: Option<&ScanContext>) -> io::Result<Vec<FileLink>> {
+  let mut findings = Vec::new();
+  for candidate in candidates(text) {
+    findings.extend(scan_candidate(&candidate, context)?);
+  }
+  Ok(findings)
 }
 
 /// The HTTP 422 detail for the dead findings in `findings` (`dead_links_detail`).
-pub fn dead_links_detail(_findings: &[FileLink]) -> String {
-  String::new()
+pub fn dead_links_detail(findings: &[FileLink]) -> String {
+  let mut lines = vec!["Dead file links; nothing was recorded.".to_string()];
+  for finding in findings.iter().filter(|finding| finding.dead()) {
+    let reason = match finding.form {
+      FileLinkForm::RetiredPrefix => "/files/ is a retired prefix.".to_string(),
+      FileLinkForm::LocalPath => "a local path opens nothing on the web page.".to_string(),
+      FileLinkForm::Canonical => {
+        let path = finding.path.as_ref().expect("a canonical link names a path");
+        format!("no file exists at {}.", path.display())
+      }
+    };
+    let correction = finding.correct_link.as_ref().map_or(String::new(), |link| format!(" Correct link: {link}"));
+    lines.push(format!("- {}: {reason}{correction}", finding.link));
+  }
+  lines.join("\n")
 }
 
 #[cfg(test)]

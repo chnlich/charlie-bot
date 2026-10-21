@@ -815,4 +815,10 @@ mod tests {
     }
     assert_eq!(seconds, [1, 2, 4, 8, 16, 30, 30, 30]);
   }
+
+  #[test]
+  fn the_slack_platform_name_is_a_thread_platform_key() {
+    // Python: tests/test_run_token.py:243.
+    assert!(charliebot_core::event_types::THREAD_PLATFORM_KEYS.contains(&SLACK.name));
+  }
 }

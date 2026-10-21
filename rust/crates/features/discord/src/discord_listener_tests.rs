@@ -793,3 +793,9 @@ async fn test_deliver_done_skips_a_session_without_discord_origin() {
   assert!(!deliver_done(&home.features, &sid, &done).await.unwrap());
   assert_eq!(home.features.store.load_chat_events_sync(&sid).unwrap(), before);
 }
+
+#[test]
+fn the_discord_platform_name_is_a_thread_platform_key() {
+  // Python: tests/test_run_token.py:243.
+  assert!(event_types::THREAD_PLATFORM_KEYS.contains(&DISCORD.name));
+}

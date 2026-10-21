@@ -310,7 +310,7 @@ run-record work is `S2`; task-tree runtime and feature-owned files remain with t
 
 ## Catch-up e44c9ccef open steps
 
-Each row is one failing Rust parity step from the all-stage run (1,013/1,122 steps matched).
+Each row is one failing Rust parity step from the all-stage run (1,012/1,122 steps matched).
 
 | Scenario | Step | Stage | Main commit | Difference |
 | --- | --- | --- | --- | --- |
@@ -354,6 +354,8 @@ Each row is one failing Rust parity step from the all-stage run (1,013/1,122 ste
 | features-harness-slack | allowed app mention starts its Slack thread session | features | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
 | features-harness-slack | release summon agent after its result | features | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
 | features-harness-slack | server shutdown and fake-agent cleanup | features | `3cd98aa21`, `2fa0a4ce2` | Claude launch argv and env lag Python's per-run-kind tools, settings, and advisor disablement. |
+| features-usage-page | token-usage page over the seeded ledger | features | none: main left `token_usage.html` unchanged; this catch-up reverts rust-backend's `003981af7` | Python answers 200 with `%` formats in `token_usage.html:85`; Rust's template engine rejects `%` and answers 500 `TemplateError`. |
+| features-usage-page-uncaptured | token-usage page with an empty ledger and no capture | features | none: main left `token_usage.html` unchanged; this catch-up reverts rust-backend's `003981af7` | Python answers 200 with `%` formats in `token_usage.html:85`; Rust's template engine rejects `%` and answers 500 `TemplateError`. |
 | features-web-reply-audit | wait for the audit nudge | features | `854286c2a` | Python's web reply nudge includes the reason and full-reply instruction; Rust still sends the short prompt. |
 | features-web-reply-audit | server shutdown and fake-agent cleanup | features | `3cd98aa21`, `2fa0a4ce2` | Claude launch argv and env lag Python's per-run-kind tools, settings, and advisor disablement. |
 | features-web-reply | a status set of now alone | features | `854286c2a` | Python's status-set response adds `now_chars` and `now_over_budget`; Rust omits both. |
@@ -370,7 +372,6 @@ Each row is one failing Rust parity step from the all-stage run (1,013/1,122 ste
 | handover-review-run | delegate an implement task whose reviewer remains alive through handover · candidate-to-python | agent-orchestration | `253e0dcbe` | Python task prompts include the new “Text a model reads” block; Rust stores the older prompt and hash. |
 | handover-review-run | release the adopted reviewer · candidate-to-python | agent-orchestration | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
 | handover-review-run | server shutdown and fake-agent cleanup · candidate-to-python | agent-orchestration | `3cd98aa21`, `2fa0a4ce2` | Claude launch argv and env lag Python's per-run-kind tools, settings, and advisor disablement. |
-| handover-stop-request | hand over the durable interrupted outcome · python-to-candidate | agent-orchestration | `d401d9a2a` | Python escalates an ignored stop, terminates the agent, and records the interrupted outcome and exit code; Rust does not. |
 | handover-stop-request | request the stop of the gated run; the agent ignores the signal · candidate-to-python | agent-orchestration | `d401d9a2a` | Python escalates an ignored stop, terminates the agent, and records the interrupted outcome and exit code; Rust does not. |
 | handover-stop-request | hand over the durable interrupted outcome · candidate-to-python | agent-orchestration | `d401d9a2a` | Python escalates an ignored stop, terminates the agent, and records the interrupted outcome and exit code; Rust does not. |
 | handover-stop-request | server shutdown and fake-agent cleanup · candidate-to-python | agent-orchestration | `3cd98aa21`, `2fa0a4ce2` | Claude launch argv and env lag Python's per-run-kind tools, settings, and advisor disablement. |

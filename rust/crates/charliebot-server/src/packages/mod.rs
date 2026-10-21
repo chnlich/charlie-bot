@@ -49,7 +49,7 @@ pub const PACKAGES: &[(&str, RegisterFn)] = &[
   ("src.backends.claude_code", charliebot_agents::backends::claude_code::register),
   ("src.backends.codex", charliebot_agents::backends::codex::register),
   ("src.backends.gemini", charliebot_agents::backends::gemini::register),
-  ("src.backends.kimi", charliebot_agents::backends::kimi::register),
+  ("src.backends.anthropic_compatible", charliebot_agents::backends::anthropic_compatible::register),
   ("src.backends.opencode", charliebot_agents::backends::opencode::register),
   ("src.features.files", charliebot_files::register),
 ];

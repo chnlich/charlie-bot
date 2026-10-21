@@ -22,6 +22,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use charliebot_agents::agent_environment::AgentBaseEnvironment;
+use charliebot_agents::backends::anthropic_compatible;
 use charliebot_agents::backends::charlie_code;
 use charliebot_agents::backends::claude_code;
 use charliebot_agents::backends::claude_code::claude_accounts::{self, ClaudeAccountState};
@@ -1154,7 +1155,27 @@ async fn test_a_rejected_rate_limit_event_under_a_relay_watch_never_raises() -> 
 // The task build for a non-Claude backend (`tests/test_backend_hooks.py`)
 // ---------------------------------------------------------------------------
 
+// Python: tests/test_spawner_backend_propagation.py:50.
+#[test]
+fn configured_anthropic_compatible_option_keeps_its_endpoint_and_window() -> anyhow::Result<()> {
+  let root = Root::new()?;
+  fs::create_dir_all(root.home())?;
+  let option = option_yaml("anthro", "cc-anthropic-compatible", None, None);
+  fs::write(root.home().join("config.yaml"), config_text(&root, &[], &[], &[option])?)?;
+  let mut registry = Registry::new();
+  registry.register_package("src.backends.anthropic_compatible", anthropic_compatible::register)?;
+  let config = registry.load_config(&root.home())?;
+
+  let option = charliebot_tasks::spawner_backends::resolve_backend_option(&config, "anthro", Some("resolved-model"))?;
+
+  assert_eq!(option.model, "resolved-model");
+  assert_eq!(option.type_fields["api_base"].as_str(), Some("https://api.synthetic.example"));
+  assert_eq!(option.type_fields["context_window"].as_u64(), Some(409_600));
+  Ok(())
+}
+
 // Python: tests/test_backend_hooks.py:174.
+// Python: tests/test_task_run_backend_types.py:30.
 #[tokio::test]
 async fn test_non_claude_task_build_receives_no_claude_account() -> anyhow::Result<()> {
   for backend_type in ["codex", "cc-anthropic-compatible"] {

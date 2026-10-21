@@ -203,40 +203,6 @@ mod tests {
     assert_eq!(resolve_backend_option(&cfg, "synthetic", None).unwrap_err().to_string(), "resolved model is required");
   }
 
-  // Python: tests/test_spawner_backend_propagation.py:50.
-  #[test]
-  fn configured_anthropic_compatible_option_keeps_its_endpoint_and_window() {
-    use charliebot_agents::backends::anthropic_compatible;
-    use charliebot_agents::cli_base::CliHost;
-    use std::fs;
-    use std::path::PathBuf;
-
-    let root = tempfile::tempdir().unwrap();
-    let home = root.path().join("home");
-    fs::create_dir_all(&home).unwrap();
-    fs::write(
-      home.join("config.yaml"),
-      "backends:\n  options:\n    - id: anthro\n      label: Anthropic compatible\n      type: cc-anthropic-compatible\n      model: synthetic-model\n      api_base: https://api.synthetic.example\n      context_window: 409600\n",
-    )
-    .unwrap();
-    let mut registry = charliebot_registry::Registry::new();
-    registry
-      .register_package("src.backends.anthropic_compatible", |registry| {
-        anthropic_compatible::register_with_host(
-          registry,
-          CliHost { path: "/synthetic/bin".to_string(), home: PathBuf::from("/synthetic/home") },
-        )
-      })
-      .unwrap();
-    let config = registry.load_config(&home).unwrap();
-
-    let option = resolve_backend_option(&config, "anthro", Some("resolved-model")).unwrap();
-
-    assert_eq!(option.model, "resolved-model");
-    assert_eq!(option.type_fields["api_base"].as_str(), Some("https://api.synthetic.example"));
-    assert_eq!(option.type_fields["context_window"].as_u64(), Some(409_600));
-  }
-
   fn test_config() -> CharlieBotConfig {
     use charliebot_core::config::{BackendsConfig, PathsConfig, ServerConfig, TelegramConfig, UiConfig};
     use std::path::PathBuf;

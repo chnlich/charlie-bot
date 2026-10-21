@@ -162,6 +162,10 @@ async fn session_usage(
     Ok(meta) => meta,
     Err(error) => return store_error(error),
   };
+  let cfg = match features.config.get() {
+    Ok(cfg) => cfg,
+    Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
+  };
   let usage_owner = match features.startup.require::<charliebot_usage::SessionUsage>() {
     Ok(usage) => usage,
     Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
@@ -169,21 +173,18 @@ async fn session_usage(
   let run_kind = charliebot_usage::usage_run_kind(&meta);
   let (usage, active_run_id) = if meta.profile == TaskProfile::Worker {
     match worker_transcript::load_worker_transcript(&features.store, &session_id) {
-      Ok(transcript) => {
-        (usage_owner.resolve_events_usage(&transcript.events, run_kind), transcript.active_run_id.clone())
-      }
+      Ok(transcript) => (
+        usage_owner.resolve_events_usage(&transcript.events, run_kind, cfg.get_backend_option(&meta.backend)),
+        transcript.active_run_id.clone(),
+      ),
       Err(error) => return store_error(error),
     }
   } else {
-    (usage_owner.resolve_session_usage(&session_id, &meta), None)
+    (usage_owner.resolve_session_usage(&session_id, &meta, cfg.get_backend_option(&meta.backend)), None)
   };
   let usage = match usage {
     Ok(usage) => usage.unwrap_or(Value::Null),
     Err(error) => return store_error(error),
-  };
-  let cfg = match features.config.get() {
-    Ok(cfg) => cfg,
-    Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
   };
   let mut payload = Map::new();
   payload.insert(

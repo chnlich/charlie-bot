@@ -370,6 +370,7 @@ pub struct AnthropicEndpointBackend {
   base_url: String,
   auth_token: String,
   model: String,
+  context_window: Option<u64>,
 }
 
 impl AnthropicEndpointBackend {
@@ -379,12 +380,13 @@ impl AnthropicEndpointBackend {
     base_url: String,
     auth_token: String,
     model: String,
+    context_window: Option<u64>,
     claude_config_dir: Option<String>,
     launch: LaunchArgs,
     cgroup_limits: SessionCgroupLimits,
   ) -> anyhow::Result<Self> {
     let backend = ClaudeCodeBackend::from_launch(None, None, None, false, claude_config_dir, launch, cgroup_limits)?;
-    Ok(Self { backend, base_url, auth_token, model })
+    Ok(Self { backend, base_url, auth_token, model, context_window })
   }
 }
 
@@ -406,6 +408,15 @@ impl AgentBackend for AnthropicEndpointBackend {
     env.insert("ANTHROPIC_BASE_URL".to_string(), self.base_url.clone());
     env.insert("ANTHROPIC_AUTH_TOKEN".to_string(), self.auth_token.clone());
     env.extend(claude_model_env(&self.model));
+    if let Some(context_window) = self.context_window {
+      let window = context_window.to_string();
+      env.insert(claude_launch::AUTO_COMPACT_WINDOW_ENV.to_string(), window.clone());
+      env.insert(claude_launch::MAX_CONTEXT_TOKENS_ENV.to_string(), window);
+      env.remove(claude_launch::AUTOCOMPACT_PCT_OVERRIDE_ENV);
+      env.remove(claude_launch::ANTHROPIC_API_KEY_ENV);
+      env.remove(claude_launch::CLAUDE_CODE_OAUTH_TOKEN_ENV);
+      env.insert(claude_launch::THINKING_DISPLAY_UPDATES_ENV.to_string(), "0".to_string());
+    }
     Ok(env)
   }
 

@@ -3,7 +3,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
-use charliebot_core::config::CharlieBotConfig;
+use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::event_types;
 use charliebot_core::hot_reload::HotReload;
 use charliebot_registry::backend::{ContextLimits, UsageResolver, UsageResolverHost};
@@ -163,13 +163,23 @@ impl SessionUsage {
   }
 
   /// Resolve one session's reading through its backend resolver, then the shared event-fold tiers.
-  pub fn resolve_session_usage(&self, session_id: &str, meta: &SessionMetadata) -> StoreResult<Option<Value>> {
-    self.resolve_with_facts(session_id, meta).map(|(usage, _)| usage)
+  pub fn resolve_session_usage(
+    &self,
+    session_id: &str,
+    meta: &SessionMetadata,
+    backend_option: Option<&BackendOption>,
+  ) -> StoreResult<Option<Value>> {
+    self.resolve_with_facts(session_id, meta, backend_option).map(|(usage, _)| usage)
   }
 
   /// Resolve the event-only tiers for an already-loaded transcript, without a backend resolver or cross-call memo.
-  pub fn resolve_events_usage(&self, events: &[Value], run_kind: RunKind) -> StoreResult<Option<Value>> {
-    fold_usage(events, run_kind, &self.registry)
+  pub fn resolve_events_usage(
+    &self,
+    events: &[Value],
+    run_kind: RunKind,
+    backend_option: Option<&BackendOption>,
+  ) -> StoreResult<Option<Value>> {
+    fold_usage(events, run_kind, &self.registry, backend_option)
   }
 
   /// Return the selected context reading and the latest assistant/result request time.
@@ -178,12 +188,19 @@ impl SessionUsage {
     session_id: &str,
     meta: &SessionMetadata,
   ) -> StoreResult<(Option<i64>, Option<UtcDateTime>)> {
-    let (usage, fold) = self.resolve_with_facts(session_id, meta)?;
+    let config = self.config.get().map_err(|error| StoreError::new(error.to_string()))?;
+    let backend_option = config.get_backend_option(&meta.backend);
+    let (usage, fold) = self.resolve_with_facts(session_id, meta, backend_option)?;
     let context_tokens = usage.as_ref().and_then(|usage| usage.get("context_tokens")).and_then(python_integer);
     Ok((context_tokens, fold.last_request_at))
   }
 
-  fn resolve_with_facts(&self, session_id: &str, meta: &SessionMetadata) -> StoreResult<(Option<Value>, UsageFold)> {
+  fn resolve_with_facts(
+    &self,
+    session_id: &str,
+    meta: &SessionMetadata,
+    backend_option: Option<&BackendOption>,
+  ) -> StoreResult<(Option<Value>, UsageFold)> {
     let (fold, event_count) = self.fold_cached(session_id)?;
     if let Some(resolver) = self.usage_resolver(&meta.backend)? {
       let events = self.store.load_chat_events_shared_sync(session_id)?;
@@ -194,7 +211,7 @@ impl SessionUsage {
         return Ok((Some(Value::Object(usage)), fold));
       }
     }
-    Ok((resolve_fold_tier(&fold, &self.registry, event_count, usage_run_kind(meta))?, fold))
+    Ok((resolve_fold_tier(&fold, &self.registry, event_count, usage_run_kind(meta), backend_option)?, fold))
   }
 
   fn usage_resolver(&self, backend_id: &str) -> StoreResult<Option<Arc<dyn UsageResolver>>> {
@@ -274,10 +291,15 @@ fn initialize(features: Arc<FeatureContext>) -> BoxFuture<'static, anyhow::Resul
 }
 
 /// Fold session events through the source tiers, without invoking a registered backend usage resolver.
-pub fn fold_usage(events: &[Value], run_kind: RunKind, registry: &Registry) -> StoreResult<Option<Value>> {
+pub fn fold_usage(
+  events: &[Value],
+  run_kind: RunKind,
+  registry: &Registry,
+  backend_option: Option<&BackendOption>,
+) -> StoreResult<Option<Value>> {
   let mut fold = UsageFold::default();
   fold.feed(events)?;
-  resolve_fold_tier(&fold, registry, events.len(), run_kind)
+  resolve_fold_tier(&fold, registry, events.len(), run_kind, backend_option)
 }
 
 /// The run kind the session usage view assigns to a node profile.
@@ -290,14 +312,15 @@ fn resolve_fold_tier(
   registry: &Registry,
   event_count: usize,
   run_kind: RunKind,
+  backend_option: Option<&BackendOption>,
 ) -> StoreResult<Option<Value>> {
   if event_count == 0 {
     return Ok(None);
   }
   let cost = fold.cost();
   let usage = match fold.reading_kind.as_str() {
-    READING_CLAUDE => Some(resolve_claude(fold, registry, cost, run_kind)?),
-    READING_SNAPSHOT => Some(resolve_snapshot(fold, registry, cost, run_kind)?),
+    READING_CLAUDE => Some(resolve_claude(fold, registry, cost, run_kind, backend_option)?),
+    READING_SNAPSHOT => Some(resolve_snapshot(fold, registry, cost, run_kind, backend_option)?),
     READING_RESOLVED => Some(resolve_reading(fold, cost)),
     _ => Some(json!({
       "context_tokens": null,
@@ -310,9 +333,15 @@ fn resolve_fold_tier(
   Ok(usage)
 }
 
-fn resolve_claude(fold: &UsageFold, registry: &Registry, cost: Option<f64>, run_kind: RunKind) -> StoreResult<Value> {
+fn resolve_claude(
+  fold: &UsageFold,
+  registry: &Registry,
+  cost: Option<f64>,
+  run_kind: RunKind,
+  backend_option: Option<&BackendOption>,
+) -> StoreResult<Value> {
   let context_tokens = fold.post_compact_tokens.unwrap_or(fold.chosen_prompt_tokens);
-  let limits = registry.reading_limits_for(READING_CLAUDE, run_kind);
+  let limits = registry.reading_limits_for(READING_CLAUDE, run_kind, backend_option);
   let (context_full, compact_at) = match limits {
     Some(limits) => {
       let declared = limits.declared_window.map(|value| value as i64);
@@ -328,7 +357,13 @@ fn resolve_claude(fold: &UsageFold, registry: &Registry, cost: Option<f64>, run_
   Ok(usage_value(Some(context_tokens), context_full, compact_at, &fold.chosen_model, cost))
 }
 
-fn resolve_snapshot(fold: &UsageFold, registry: &Registry, cost: Option<f64>, run_kind: RunKind) -> StoreResult<Value> {
+fn resolve_snapshot(
+  fold: &UsageFold,
+  registry: &Registry,
+  cost: Option<f64>,
+  run_kind: RunKind,
+  backend_option: Option<&BackendOption>,
+) -> StoreResult<Value> {
   let snapshot = fold.snapshot.as_ref().expect("snapshot reading kind carries a snapshot");
   let tokens = truthy_object(snapshot.get("tokens"), "context_snapshot.tokens")?;
   let token_sum = add_int_fields(tokens, &["input", "output", "reasoning", "cache_read", "cache_write"])?;
@@ -340,8 +375,9 @@ fn resolve_snapshot(fold: &UsageFold, registry: &Registry, cost: Option<f64>, ru
       let context = limit.get("context").and_then(python_integer);
       match (input, output, context) {
         (Some(input), Some(output), _) => {
-          let reserve =
-            registry.reading_limits_for(READING_SNAPSHOT, run_kind).and_then(|limits| limits.compact_reserve);
+          let reserve = registry
+            .reading_limits_for(READING_SNAPSHOT, run_kind, backend_option)
+            .and_then(|limits| limits.compact_reserve);
           let compact_at =
             reserve.map(|reserve| input - i64::try_from(reserve).expect("compact reserve fits i64").min(output));
           (Some(input), compact_at)
@@ -459,7 +495,6 @@ fn value_to_python_string(value: &Value) -> String {
 mod tests {
   use std::io::Write;
   use std::path::Path;
-  use std::path::PathBuf;
   use std::process::{Command, Stdio};
   use std::sync::OnceLock;
 
@@ -488,14 +523,19 @@ for name in (
 ):
   os.environ.pop(name, None)
 
-from src.backends import claude_code
+from src.backends import anthropic_compatible, claude_code
 from src.infra import models
 from src.runtime import session_usage
 
 claude_code.register()
+backend_option = None
+if "backend_option" in request:
+  anthropic_compatible.register()
+  from src.backends.anthropic_compatible.options import CcAnthropicCompatibleBackend
+  backend_option = CcAnthropicCompatibleBackend.model_validate(request["backend_option"])
 meta = models.SessionMetadata(profile=request["profile"], id="synthetic-usage", name="Synthetic usage")
 run_kind = session_usage.usage_run_kind(meta)
-usage = session_usage.resolve_events_usage(request["events"], run_kind)
+usage = session_usage.resolve_events_usage(request["events"], run_kind, backend_option=backend_option)
 sys.stdout.write(json.dumps({"run_kind": run_kind, "usage": usage}, separators=(",", ":")) + "\n")
 "#;
 
@@ -516,16 +556,10 @@ sys.stdout.write(json.dumps({"run_kind": run_kind, "usage": usage}, separators=(
   }
 
   fn register_anthropic_compatible(registry: &mut Registry) -> Result<(), RegistryError> {
-    anthropic_compatible::register_with_host(
-      registry,
-      charliebot_agents::cli_base::CliHost {
-        path: "/synthetic/bin".to_string(),
-        home: PathBuf::from("/synthetic/home"),
-      },
-    )
+    anthropic_compatible::register(registry)
   }
 
-  fn python_usage_reference(profile: &str, events: &[Value]) -> Value {
+  fn python_usage_reference(profile: &str, events: &[Value], backend_option: Option<Value>) -> Value {
     let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(3).unwrap();
     let mut child = Command::new("uv")
       .args(["run", "python", "-c", PYTHON_USAGE_REFERENCE])
@@ -535,7 +569,10 @@ sys.stdout.write(json.dumps({"run_kind": run_kind, "usage": usage}, separators=(
       .stderr(Stdio::piped())
       .spawn()
       .unwrap();
-    let request = json!({"profile": profile, "events": events});
+    let mut request = json!({"profile": profile, "events": events});
+    if let Some(backend_option) = backend_option {
+      request["backend_option"] = backend_option;
+    }
     child.stdin.take().unwrap().write_all(request.to_string().as_bytes()).unwrap();
     let output = child.wait_with_output().unwrap();
     assert!(
@@ -580,7 +617,7 @@ sys.stdout.write(json.dumps({"run_kind": run_kind, "usage": usage}, separators=(
       json!({"type": "assistant", "message": {"model": "model-a", "usage": {"input_tokens": 10, "cache_creation_input_tokens": 2, "cache_read_input_tokens": 3}}}),
       json!({"type": "result", "modelUsage": {"model-a": {"contextWindow": 100}}, "total_cost_usd": 0.25}),
     ];
-    let usage = fold_usage(&events, RunKind::Work, &registry()).unwrap().unwrap();
+    let usage = fold_usage(&events, RunKind::Work, &registry(), None).unwrap().unwrap();
     assert_eq!(usage["context_tokens"], 15);
     assert_eq!(usage["model"], "model-a");
     assert_eq!(usage["total_cost_usd"], 0.25);
@@ -589,18 +626,16 @@ sys.stdout.write(json.dumps({"run_kind": run_kind, "usage": usage}, separators=(
   // Python: tests/test_anthropic_compatible_backend.py:111.
   #[test]
   fn anthropic_compatible_usage_uses_the_option_context_window() {
-    use charliebot_core::config::BackendOption;
-
     let mut registry = Registry::new();
     registry.register_package("src.backends.anthropic_compatible", register_anthropic_compatible).unwrap();
-    let option = BackendOption {
-      id: "anthro".to_string(),
-      label: "Anthropic compatible".to_string(),
-      model: "synthetic-model".to_string(),
-      prompt_overlay: None,
-      backend_type: "cc-anthropic-compatible".to_string(),
-      type_fields: serde_yaml::from_str("api_base: https://api.synthetic.example\ncontext_window: 409600\n").unwrap(),
-    };
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(
+      home.path().join("config.yaml"),
+      "backends:\n  options:\n    - id: anthro\n      label: Anthropic compatible\n      type: cc-anthropic-compatible\n      model: synthetic-model\n      api_base: https://api.synthetic.example\n      context_window: 409600\n",
+    )
+    .unwrap();
+    let config = registry.load_config(home.path()).unwrap();
+    let option = &config.backends.options[0];
     let events = vec![
       json!({"type": "assistant", "message": {"model": "synthetic-model", "usage": {
         "input_tokens": 1200, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0
@@ -608,8 +643,22 @@ sys.stdout.write(json.dumps({"run_kind": run_kind, "usage": usage}, separators=(
       json!({"type": "result", "modelUsage": {"synthetic-model": {"contextWindow": 1_000_000}}}),
     ];
 
-    let usage = fold_usage(&events, RunKind::ManagerTurn, &registry, Some(&option)).unwrap().unwrap();
+    let python = python_usage_reference(
+      "manager",
+      &events,
+      Some(json!({
+        "id": "anthro",
+        "label": "Anthropic compatible",
+        "type": "cc-anthropic-compatible",
+        "model": "synthetic-model",
+        "api_base": "https://api.synthetic.example",
+        "context_window": 409_600,
+      })),
+    );
+    let usage = fold_usage(&events, RunKind::ManagerTurn, &registry, Some(option)).unwrap().unwrap();
 
+    assert_eq!(serde_json::to_value(RunKind::ManagerTurn).unwrap(), python["run_kind"]);
+    assert_eq!(usage, python["usage"]);
     assert_eq!(usage["context_full"], 409_600);
     assert_eq!(usage["context_compact_at"], 376_600);
   }
@@ -621,7 +670,7 @@ sys.stdout.write(json.dumps({"run_kind": run_kind, "usage": usage}, separators=(
       json!({"type": "assistant", "message": {"model": "empty", "usage": {"input_tokens": 0}}}),
       json!({"type": "assistant", "message": {"model": "main", "usage": {"input_tokens": 7}}}),
     ];
-    let usage = fold_usage(&events, RunKind::Work, &registry()).unwrap().unwrap();
+    let usage = fold_usage(&events, RunKind::Work, &registry(), None).unwrap().unwrap();
     assert_eq!(usage["context_tokens"], 7);
     assert_eq!(usage["model"], "main");
   }
@@ -630,7 +679,7 @@ sys.stdout.write(json.dumps({"run_kind": run_kind, "usage": usage}, separators=(
   fn total_cost_sums_results_and_rounds_to_four_places() {
     let events =
       vec![json!({"type": "result", "total_cost_usd": 0.12345}), json!({"type": "result", "total_cost_usd": 0.00005})];
-    assert_eq!(fold_usage(&events, RunKind::Work, &registry()).unwrap().unwrap()["total_cost_usd"], 0.1235);
+    assert_eq!(fold_usage(&events, RunKind::Work, &registry(), None).unwrap().unwrap()["total_cost_usd"], 0.1235);
   }
 
   #[test]
@@ -659,9 +708,9 @@ sys.stdout.write(json.dumps({"run_kind": run_kind, "usage": usage}, separators=(
     for (profile_name, profile) in [("manager", TaskProfile::Manager), ("worker", TaskProfile::Worker)] {
       let meta = SessionMetadata::new("synthetic-usage", "Synthetic usage", profile);
       let run_kind = usage_run_kind(&meta);
-      let python = python_usage_reference(profile_name, &events);
+      let python = python_usage_reference(profile_name, &events, None);
       assert_eq!(serde_json::to_value(run_kind).unwrap(), python["run_kind"]);
-      assert_eq!(fold_usage(&events, run_kind, &registry).unwrap().unwrap(), python["usage"]);
+      assert_eq!(fold_usage(&events, run_kind, &registry, None).unwrap().unwrap(), python["usage"]);
     }
   }
 
@@ -669,14 +718,14 @@ sys.stdout.write(json.dumps({"run_kind": run_kind, "usage": usage}, separators=(
   fn total_cost_is_unknown_when_all_result_reports_are_zero() {
     let events =
       vec![json!({"type": "result", "total_cost_usd": 0.0}), json!({"type": "result", "total_cost_usd": 0.0})];
-    assert!(fold_usage(&events, RunKind::Work, &registry()).unwrap().unwrap()["total_cost_usd"].is_null());
+    assert!(fold_usage(&events, RunKind::Work, &registry(), None).unwrap().unwrap()["total_cost_usd"].is_null());
   }
 
   #[test]
   fn total_cost_sums_positive_result_reports() {
     let events =
       vec![json!({"type": "result", "total_cost_usd": 0.1}), json!({"type": "result", "total_cost_usd": 0.2})];
-    assert_eq!(fold_usage(&events, RunKind::Work, &registry()).unwrap().unwrap()["total_cost_usd"], 0.3);
+    assert_eq!(fold_usage(&events, RunKind::Work, &registry(), None).unwrap().unwrap()["total_cost_usd"], 0.3);
   }
 
   #[test]
@@ -684,7 +733,7 @@ sys.stdout.write(json.dumps({"run_kind": run_kind, "usage": usage}, separators=(
     // Python: round(0.12345, 4) == 0.1235 and round(2.67895, 4) == 2.6789; scaling by 10_000 gets the first wrong.
     for (cost, expected) in [(0.12345, 0.1235), (2.67895, 2.6789)] {
       let events = vec![json!({"type": "result", "total_cost_usd": cost})];
-      assert_eq!(fold_usage(&events, RunKind::Work, &registry()).unwrap().unwrap()["total_cost_usd"], expected);
+      assert_eq!(fold_usage(&events, RunKind::Work, &registry(), None).unwrap().unwrap()["total_cost_usd"], expected);
     }
   }
 
@@ -703,7 +752,7 @@ sys.stdout.write(json.dumps({"run_kind": run_kind, "usage": usage}, separators=(
       json!({"type": "assistant", "message": {"model": "model-a", "usage": {"input_tokens": 150_000}}}),
       json!({"type": "result", "modelUsage": {"model-a": {"contextWindow": 200_000}}, "total_cost_usd": 0.5}),
     ];
-    let usage = fold_usage(&events, RunKind::Work, &registry).unwrap().unwrap();
+    let usage = fold_usage(&events, RunKind::Work, &registry, None).unwrap().unwrap();
     assert_eq!(usage["context_tokens"], 150_000);
     assert_eq!(usage["context_full"], 200_000);
     assert_eq!(usage["context_compact_at"], 180_000);
@@ -711,7 +760,7 @@ sys.stdout.write(json.dumps({"run_kind": run_kind, "usage": usage}, separators=(
 
     // A model absent from modelUsage falls back to the declared window alone.
     let unlisted = vec![json!({"type": "assistant", "message": {"model": "model-b", "usage": {"input_tokens": 1}}})];
-    let usage = fold_usage(&unlisted, RunKind::Work, &registry).unwrap().unwrap();
+    let usage = fold_usage(&unlisted, RunKind::Work, &registry, None).unwrap().unwrap();
     assert_eq!(usage["context_full"], 500_000);
     assert_eq!(usage["context_compact_at"], 480_000);
   }
@@ -723,7 +772,7 @@ sys.stdout.write(json.dumps({"run_kind": run_kind, "usage": usage}, separators=(
       json!({"type": "system", "subtype": "context_reading", "context_reading": {"context_tokens": 31, "context_full": 80, "context_compact_at": 70, "model": "resolved"}}),
       json!({"type": "result", "modelUsage": {"model-a": {"contextWindow": 1000}}}),
     ];
-    let usage = fold_usage(&events, RunKind::Work, &registry()).unwrap().unwrap();
+    let usage = fold_usage(&events, RunKind::Work, &registry(), None).unwrap().unwrap();
     assert_eq!(usage["context_tokens"], 31);
     assert_eq!(usage["model"], "resolved");
   }
@@ -741,7 +790,7 @@ sys.stdout.write(json.dumps({"run_kind": run_kind, "usage": usage}, separators=(
         }
       }),
     ];
-    let usage = fold_usage(&events, RunKind::Work, &registry()).unwrap().unwrap();
+    let usage = fold_usage(&events, RunKind::Work, &registry(), None).unwrap().unwrap();
     assert_eq!(usage["context_tokens"], 35);
     assert_eq!(usage["context_full"], 100);
     assert_eq!(usage["model"], "snapshot-model");
@@ -750,7 +799,7 @@ sys.stdout.write(json.dumps({"run_kind": run_kind, "usage": usage}, separators=(
   #[test]
   fn empty_slot_keeps_context_unknown() {
     let events = vec![json!({"type": "user", "content": "hello"})];
-    let usage = fold_usage(&events, RunKind::Work, &registry()).unwrap().unwrap();
+    let usage = fold_usage(&events, RunKind::Work, &registry(), None).unwrap().unwrap();
     assert!(usage["context_tokens"].is_null());
     assert!(usage["context_full"].is_null());
     assert!(usage["context_compact_at"].is_null());
@@ -759,7 +808,7 @@ sys.stdout.write(json.dumps({"run_kind": run_kind, "usage": usage}, separators=(
 
   #[test]
   fn empty_event_list_has_no_usage_value() {
-    assert!(fold_usage(&[], RunKind::Work, &registry()).unwrap().is_none());
+    assert!(fold_usage(&[], RunKind::Work, &registry(), None).unwrap().is_none());
   }
 
   #[test]
@@ -795,13 +844,13 @@ sys.stdout.write(json.dumps({"run_kind": run_kind, "usage": usage}, separators=(
     meta.backend = "codex-retired-option".to_string();
     meta.cc_session_id = Some(thread_id.to_string());
 
-    let first = usage_owner.resolve_session_usage(&meta.id, &meta).unwrap().unwrap();
+    let first = usage_owner.resolve_session_usage(&meta.id, &meta, None).unwrap().unwrap();
     assert_eq!(first["context_tokens"], 321);
     assert_eq!(first["context_full"], 12345);
     assert_eq!(first["model"], "gpt-5.5");
     let first_resolver = usage_owner.usage_resolvers.lock().unwrap()["codex"].as_ref().unwrap().clone();
 
-    let second = usage_owner.resolve_session_usage(&meta.id, &meta).unwrap().unwrap();
+    let second = usage_owner.resolve_session_usage(&meta.id, &meta, None).unwrap().unwrap();
     assert_eq!(second, first);
     let second_resolver = usage_owner.usage_resolvers.lock().unwrap()["codex"].as_ref().unwrap().clone();
     assert!(Arc::ptr_eq(&first_resolver, &second_resolver));
@@ -828,12 +877,12 @@ sys.stdout.write(json.dumps({"run_kind": run_kind, "usage": usage}, separators=(
       ],
     );
 
-    let first = usage_owner.resolve_session_usage(session_id, &meta).unwrap().unwrap();
+    let first = usage_owner.resolve_session_usage(session_id, &meta, None).unwrap().unwrap();
     assert_eq!(first["context_tokens"], 20);
     assert_eq!(first["total_cost_usd"], 0.1);
 
     store.append_chat_event(session_id, json!({"type": "result", "total_cost_usd": 0.2})).await.unwrap();
-    let appended = usage_owner.resolve_session_usage(session_id, &meta).unwrap().unwrap();
+    let appended = usage_owner.resolve_session_usage(session_id, &meta, None).unwrap().unwrap();
     assert_eq!(appended["context_tokens"], 20);
     assert_eq!(appended["total_cost_usd"], 0.3);
     assert_eq!(usage_owner.context_state(session_id, &meta).unwrap().0, Some(20));
@@ -847,7 +896,7 @@ sys.stdout.write(json.dumps({"run_kind": run_kind, "usage": usage}, separators=(
       ],
     );
     store.clear_chat_events_cache(session_id);
-    let replaced = usage_owner.resolve_session_usage(session_id, &meta).unwrap().unwrap();
+    let replaced = usage_owner.resolve_session_usage(session_id, &meta, None).unwrap().unwrap();
     assert_eq!(replaced["context_tokens"], 5);
     assert_eq!(replaced["total_cost_usd"], 0.4);
   }
@@ -866,7 +915,7 @@ sys.stdout.write(json.dumps({"run_kind": run_kind, "usage": usage}, separators=(
         "model": "claude-fable-5-1"
       }),
     ];
-    let usage = fold_usage(&events, RunKind::ManagerTurn, &registry()).unwrap().unwrap();
+    let usage = fold_usage(&events, RunKind::ManagerTurn, &registry(), None).unwrap().unwrap();
 
     assert_eq!(usage["context_tokens"], 9111);
 

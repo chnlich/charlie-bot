@@ -30,6 +30,7 @@ pub fn backend(
     proxy_base_url.trim_end_matches('/').to_string(),
     auth_token.to_string(),
     model.to_string(),
+    None,
     claude_config_dir,
     launch,
     cgroup_limits,

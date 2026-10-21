@@ -375,6 +375,7 @@ count and may pass in a run.
 | session-detail | events, newest page, fork of atlas | session-read-api | `ae5555da7` | Python records the router's quota failover message; Rust retains the old prompt-overlay warning. |
 | session-runs | transcript, closed worker | session-read-api | `90e8ac300`, `f77008f66` | Python's run summary includes the new tool-call count and lifecycle rows; Rust omits them. |
 | session-runs | transcript, archived worker | session-read-api | `90e8ac300`, `f77008f66` | Python's run summary includes the new tool-call count and lifecycle rows; Rust omits them. |
+| session-runs | transcript, stopped worker | session-read-api | `90e8ac300`, `f77008f66` | Python's run summary includes the new tool-call count and lifecycle rows; Rust omits them, and the `Accept-Encoding` Vary header differs. |
 | session-runs | transcript, closed worker, revision capture | session-read-api | `90e8ac300`, `f77008f66` | Python's run summary includes the new tool-call count and lifecycle rows; Rust omits them. |
 | session-runs | transcript, closed worker, after the rendered rows | session-read-api | `90e8ac300`, `f77008f66` | Python's run summary includes the new tool-call count and lifecycle rows; Rust omits them. |
 | session-runs | transcript, closed worker, stale revision | session-read-api | `90e8ac300`, `f77008f66` | Python's run summary includes the new tool-call count and lifecycle rows; Rust omits them. |

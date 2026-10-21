@@ -23,6 +23,18 @@ CHARLIEBOT_HOME=/tmp/charliebot-demo/home \
   rust/target/release/charliebot-server
 ```
 
+Run the same configuration checks without starting the server or taking the home writer fence:
+
+```sh
+CHARLIEBOT_REPO_ROOT=/path/to/charlie-bot \
+CHARLIEBOT_VENV_BIN=/path/to/charlie-bot/.venv/bin \
+CHARLIEBOT_HOME=/tmp/charliebot-demo/home \
+  rust/target/release/charliebot-server --check-config
+```
+
+The command prints `config ok` and exits 0 when the configuration passes. It exits 1 with the startup error on the first
+failure. Any other argument prints the usage line and exits 2.
+
 - `CHARLIEBOT_REPO_ROOT` (required) names the charlie-bot checkout whose `web/`, page packages
   (`src/<kind>/<name>/static` and `templates`) and `configs/` the server serves. The Python server
   derives the same root from its own location. The binary exits 1 when the variable is unset or the

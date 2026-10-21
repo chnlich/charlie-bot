@@ -2587,6 +2587,15 @@ def _isolate_profile(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pyte
   reset_config_caches()
 
 
+@pytest.fixture(autouse=True)
+def _session_cgroup_base_off_host(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The session-cgroup base points at a path that does not exist, so no test creates a cgroup under the host's
+  delegated app.slice. A spawn then degrades to no cgroup, as on a host without delegation; a test that needs a
+  base builds one under its own temp dir."""
+  missing = tmp_path_factory.mktemp("session-cgroup-base") / "app.slice"
+  monkeypatch.setattr("src.infra.process.CGROUP_V2_APP_SLICE", str(missing))
+
+
 def _guarded_get_config(
     real: Callable[[], core_config.CharlieBotConfig], accessor: str, tmp_path: pathlib.Path,
     violations: list[str]) -> Callable[[], core_config.CharlieBotConfig]:

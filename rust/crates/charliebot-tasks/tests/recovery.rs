@@ -1792,6 +1792,51 @@ async fn manager_turn_master_done_enospc_retries_through_master_queue() -> anyho
   Ok(())
 }
 
+#[tokio::test]
+async fn recovery_stops_a_launched_run_on_a_closed_worker() -> anyhow::Result<()> {
+  // Python: tests/test_task_execution.py::test_startup_recovery_stops_a_launched_run_on_a_closed_worker.
+  let stack = Stack::start("exit 0").await?;
+  let worker = stack.node("worker", None, TaskProfile::Worker, None).await?;
+  let process_guard = ProcessGroupGuard::new();
+  let mut command = Command::new("/bin/sleep");
+  command.arg("60").process_group(0);
+  let mut process = command.spawn()?;
+  let pid = process.id();
+  process_guard.track(pid);
+  let pid_start = identity::read_pid_stat(pid).context("reading the synthetic worker pid")?.pid_start;
+  stack.queue_run(&worker.id, "run-live-closed", RunKind::Work).await?;
+  stack.launch(&worker.id, "run-live-closed", pid, &pid_start).await?;
+
+  let guard = stack.store().control_lock().await;
+  let request_id = "cancel-before-stop-fact";
+  let close_event = charliebot_store::control_events::build_control_event(
+    event_types::TASK_CLOSED,
+    "user",
+    &worker.id,
+    Some(&charliebot_store::control_events::stable_close_event_id(&worker.id, request_id)),
+    None,
+    [
+      ("request_id".to_string(), json!(request_id)),
+      ("outcome".to_string(), json!("cancelled")),
+      ("summary".to_string(), json!("stop")),
+      ("result_refs".to_string(), json!([])),
+      ("run_ids".to_string(), json!([])),
+      ("report_to".to_string(), Value::Null),
+    ],
+  );
+  stack.store().append_control_fact(&guard, &worker.id, close_event).await?;
+  drop(guard);
+
+  stack.node_pass(&worker.id).await?;
+
+  let events = stack.run_events(&worker.id)?;
+  let stop_ids = stop_request_ids(&events, "run-live-closed");
+  assert_eq!(stop_ids, [closed_task_stop("run-live-closed")]);
+  assert_eq!(run_records::terminal_outcome(&events, "run-live-closed")?, Some(RunOutcomeKind::Interrupted));
+  assert!(process.try_wait()?.is_some());
+  Ok(())
+}
+
 /// `test_task_recovery.py::test_retry_round_skips_runs_this_process_already_drives`:
 /// a node pass that a retry runs skips worker and manager runs this process already drives, so no second follower or
 /// review starts.

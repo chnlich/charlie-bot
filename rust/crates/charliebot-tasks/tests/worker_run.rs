@@ -26,6 +26,7 @@ use charliebot_agents::backends::claude_code::login_dirs;
 use charliebot_core::config::{BackendOption, ConfigSection, RoutingConfig};
 use charliebot_core::event_types;
 use charliebot_registry::backend::{BackendLifecycle, BackendTraits, ResumeStyle};
+use charliebot_registry::caller::CallerIdentity;
 use charliebot_registry::{RegisterFn, Registry, RegistryError};
 use charliebot_store::metadata::{TaskProfile, TaskSpec, TaskType, UtcDateTime};
 use charliebot_store::run_records::{self, RunKind, RunOutcome, RunOutcomeKind, RunRecord};
@@ -306,6 +307,51 @@ async fn an_interrupted_worker_run_reports_once_and_archives_the_worker() -> any
   assert_eq!(fact["summary"], "run run-work ended interrupted; archived by the server");
   settle_node(&stack, &manager.id).await?;
   assert_eq!(stack.run_ids_of_kind(&manager.id, RunKind::ManagerTurn)?.len(), 1, "the report woke the parent once");
+  Ok(())
+}
+
+#[tokio::test]
+async fn a_late_failure_report_is_skipped_after_worker_cancellation() -> anyhow::Result<()> {
+  // Python: tests/test_task_completion.py::test_failure_report_reaching_lock_after_cancel_is_skipped.
+  let scripts = Scripts::new(vec![result_script("manager noted the close")]);
+  let stack = scripted_stack(&scripts).await?;
+  let manager = stack.node("root", None, TaskProfile::Manager, None).await?;
+  let worker = stack.node("w", Some(&manager.id), TaskProfile::Worker, Some(spec("do the work", None))).await?;
+  register_run(&stack, work_run(&worker.id, "run-work", None), "do the work").await?;
+  stack.record_terminal(&worker.id, "run-work", RunOutcomeKind::Failed).await?;
+  stack
+    .completion
+    .cancel_task(&worker.id, "cancel-before-report", "stop", &CallerIdentity::Operator { session_id: None })
+    .await?;
+  let close_report_count = stack.child_reports(&manager.id)?.len();
+
+  stack.adapter.after_worker_run_for_test(&worker.id, "run-work", "failed").await?;
+
+  assert_eq!(close_report_count, 1);
+  assert_eq!(stack.child_reports(&manager.id)?.len(), close_report_count);
+  Ok(())
+}
+
+#[tokio::test]
+async fn successful_work_on_a_closed_worker_does_not_register_a_review() -> anyhow::Result<()> {
+  // Python: tests/test_task_completion.py::test_successful_work_on_closed_worker_does_not_register_review.
+  let scripts = Scripts::new(vec![result_script("manager noted the close"); 4]);
+  let stack = failover_stack(&scripts).await?;
+  let manager = stack.node("root", None, TaskProfile::Manager, None).await?;
+  let worker = stack
+    .node("w", Some(&manager.id), TaskProfile::Worker, Some(spec("do the work", Some(TaskType::Implement))))
+    .await?;
+  register_run(&stack, work_run(&worker.id, "run-work", None), "do the work").await?;
+  stack.record_terminal(&worker.id, "run-work", RunOutcomeKind::Success).await?;
+  stack
+    .completion
+    .cancel_task(&worker.id, "cancel-before-review", "stop", &CallerIdentity::Operator { session_id: None })
+    .await?;
+
+  stack.adapter.after_worker_run_for_test(&worker.id, "run-work", "success").await?;
+
+  assert_eq!(stack.run_records(&worker.id)?.iter().map(|run| run.id.as_str()).collect::<Vec<_>>(), ["run-work"]);
+  assert_eq!(stack.child_reports(&manager.id)?.len(), 1);
   Ok(())
 }
 

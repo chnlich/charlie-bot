@@ -1,7 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Child, Command};
 use std::sync::Arc;
 
 use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot, SlotField};
@@ -15,6 +16,8 @@ use charliebot_store::{
   RunBlocker, RunKind, RunOrder, RunOutcome, RunOutcomeKind, RunPage, RunRecord, SequenceArchiveHook,
   SequenceBindingMover, SequenceListingFields, StopResult, Store, StoreError, StoreHookFuture, StoreHooks, TaskCaller,
 };
+use nix::sys::signal::{Signal, killpg};
+use nix::unistd::{Pid, getpgid};
 use regex::Regex;
 use serde_json::{Map, Value, json};
 
@@ -951,16 +954,12 @@ async fn stop_checks_process_identity_and_reconciles_after_the_fact_is_durable()
   let root = tempfile::tempdir().unwrap();
   let store = make_store(root.path());
 
-  let mut mismatched = Command::new("sleep").arg("30").spawn().unwrap();
-  let pid = mismatched.id();
-  let actual_start = proc_identity::read_pid_stat(pid).unwrap().pid_start;
+  let mut mismatched = ordinary_sleep("30");
+  let pid = mismatched.pid;
+  let actual_start = mismatched.pid_start.clone();
   register_process_run(&store, "run-mismatch", pid, "forged-start").await;
   let stop_error = store.request_stop(RUN_SESSION_ID, "run-mismatch", "mismatch-stop").await.unwrap_err();
-  let remained_alive = mismatched.try_wait().unwrap().is_none();
-  if remained_alive {
-    mismatched.kill().unwrap();
-  }
-  mismatched.wait().unwrap();
+  let remained_alive = mismatched.try_wait().is_none();
   assert!(stop_error.to_string().contains("identity mismatch"));
   assert!(remained_alive);
   assert!(
@@ -972,9 +971,9 @@ async fn stop_checks_process_identity_and_reconciles_after_the_fact_is_durable()
   );
   assert_ne!(actual_start, "forged-start");
 
-  let mut reconciled = Command::new("sleep").arg("30").spawn().unwrap();
-  let pid = reconciled.id();
-  let pid_start = proc_identity::read_pid_stat(pid).unwrap().pid_start;
+  let mut reconciled = isolated_sleep("30");
+  let pid = reconciled.pid;
+  let pid_start = reconciled.pid_start.clone();
   register_process_run(&store, "run-reconcile", pid, &pid_start).await;
   let event = charliebot_store::control_events::build_control_event(
     "run_stop_requested",
@@ -989,17 +988,103 @@ async fn stop_checks_process_identity_and_reconciles_after_the_fact_is_durable()
   drop(guard);
 
   let result = store.reconcile_stop_request(RUN_SESSION_ID, "run-reconcile").await.unwrap();
-  let process_exited = reconciled.try_wait().unwrap().is_some();
-  if !process_exited {
-    reconciled.kill().unwrap();
-  }
-  reconciled.wait().unwrap();
+  let process_exited = reconciled.try_wait().is_some();
   assert!(process_exited);
   assert_eq!(result.outcome, Some(RunOutcomeKind::Interrupted));
   assert_eq!(
     store.run_display_state(RUN_SESSION_ID, "run-reconcile").unwrap(),
     charliebot_store::RunDisplayState::Interrupted
   );
+}
+
+#[tokio::test]
+async fn stop_request_overrides_a_later_successful_finish() {
+  let root = tempfile::tempdir().unwrap();
+  let store = make_store(root.path());
+  let guard = store.control_lock().await;
+  store.register_run_locked(&guard, RUN_SESSION_ID, empty_run("run-stop-finish", RunKind::Work), None).await.unwrap();
+  drop(guard);
+
+  store.request_stop(RUN_SESSION_ID, "run-stop-finish", "cancel:request").await.unwrap();
+  let guard = store.control_lock().await;
+  store
+    .record_finish_locked(&guard, RUN_SESSION_ID, "run-stop-finish", RunOutcome::new(RunOutcomeKind::Success))
+    .await
+    .unwrap();
+  drop(guard);
+
+  let events = store.load_all_facts(RUN_SESSION_ID).unwrap();
+  assert_eq!(terminal_outcome(&events, "run-stop-finish").unwrap(), Some(RunOutcomeKind::Interrupted));
+}
+
+#[tokio::test]
+async fn stopped_run_fills_its_exit_code_from_a_late_process_finish() {
+  let root = tempfile::tempdir().unwrap();
+  let store = make_store(root.path());
+  let guard = store.control_lock().await;
+  store.register_run_locked(&guard, RUN_SESSION_ID, empty_run("run-late-exit", RunKind::Work), None).await.unwrap();
+  let stop_event = charliebot_store::control_events::build_control_event(
+    "run_stop_requested",
+    charliebot_store::control_events::ACTOR_SYSTEM,
+    RUN_SESSION_ID,
+    Some("run-late-exit-stop-event"),
+    Some(UtcDateTime::now()),
+    [("request_id".to_string(), json!("cancel:late-exit")), ("run_id".to_string(), json!("run-late-exit"))],
+  );
+  store.append_control_fact(&guard, RUN_SESSION_ID, stop_event).await.unwrap();
+  store
+    .record_finish_locked(&guard, RUN_SESSION_ID, "run-late-exit", RunOutcome::new(RunOutcomeKind::Interrupted))
+    .await
+    .unwrap();
+  let mut process_finish = RunOutcome::new(RunOutcomeKind::Failed);
+  process_finish.exit_code = Some(-15);
+  store.record_finish_locked(&guard, RUN_SESSION_ID, "run-late-exit", process_finish).await.unwrap();
+  drop(guard);
+
+  let run = store.read_run_sync(RUN_SESSION_ID, "run-late-exit").unwrap().unwrap();
+  let events = store.load_all_facts(RUN_SESSION_ID).unwrap();
+  assert_eq!(run.exit_code, Some(-15));
+  assert_eq!(terminal_outcome(&events, "run-late-exit").unwrap(), Some(RunOutcomeKind::Interrupted));
+}
+
+#[tokio::test]
+async fn stop_escalates_to_sigkill_when_the_process_ignores_sigterm() {
+  let root = tempfile::tempdir().unwrap();
+  let store = make_store(root.path());
+  let mut process = isolated_shell("trap '' TERM; exec sleep 30");
+  let pid = process.pid;
+  let pid_start = process.pid_start.clone();
+  let guard = store.control_lock().await;
+  store
+    .register_run_locked(&guard, RUN_SESSION_ID, launched_process_run("run-ignore-term", pid, &pid_start), None)
+    .await
+    .unwrap();
+  drop(guard);
+
+  let result = store.request_stop(RUN_SESSION_ID, "run-ignore-term", "stop-escalate").await.unwrap();
+  assert_eq!(result.outcome, Some(RunOutcomeKind::Interrupted));
+  assert!(process.try_wait().is_some());
+}
+
+#[tokio::test]
+async fn stop_refuses_a_process_that_is_not_its_own_group_leader() {
+  let root = tempfile::tempdir().unwrap();
+  let store = make_store(root.path());
+  let mut process = ordinary_sleep("30");
+  let pid = process.pid;
+  let pid_start = process.pid_start.clone();
+  let process_group_id = process.process_group_id;
+  assert_ne!(process_group_id, pid as i32);
+  let guard = store.control_lock().await;
+  store
+    .register_run_locked(&guard, RUN_SESSION_ID, launched_process_run("run-wrong-group", pid, &pid_start), None)
+    .await
+    .unwrap();
+  drop(guard);
+
+  let result = store.request_stop(RUN_SESSION_ID, "run-wrong-group", "stop-wrong-group").await;
+  assert!(result.is_err(), "a process outside its own process group must not be signalled");
+  assert!(process.try_wait().is_none());
 }
 
 #[tokio::test]
@@ -1301,6 +1386,71 @@ async fn register_process_run(store: &Store, run_id: &str, pid: u32, pid_start: 
   run.started_at = Some(UtcDateTime::now());
   let guard = store.control_lock().await;
   store.register_run_locked(&guard, RUN_SESSION_ID, run, None).await.unwrap();
+}
+
+struct GuardedProcess {
+  child: Child,
+  pid: u32,
+  pid_start: String,
+  process_group_id: i32,
+}
+
+impl GuardedProcess {
+  fn isolated(command: &str, args: &[&str]) -> Self {
+    let mut command = Command::new(command);
+    command.args(args).process_group(0);
+    Self::spawn(command)
+  }
+
+  fn ordinary(command: &str, args: &[&str]) -> Self {
+    let mut command = Command::new(command);
+    command.args(args);
+    Self::spawn(command)
+  }
+
+  fn spawn(mut command: Command) -> Self {
+    let child = command.spawn().unwrap();
+    let pid = child.id();
+    let pid_start = proc_identity::read_pid_stat(pid).unwrap().pid_start;
+    let process_group_id = getpgid(Some(Pid::from_raw(pid as i32))).unwrap().as_raw();
+    GuardedProcess { child, pid, pid_start, process_group_id }
+  }
+
+  fn try_wait(&mut self) -> Option<std::process::ExitStatus> {
+    self.child.try_wait().unwrap()
+  }
+}
+
+impl Drop for GuardedProcess {
+  fn drop(&mut self) {
+    let identity_matches = proc_identity::read_pid_stat(self.pid).is_some_and(|stat| stat.pid_start == self.pid_start);
+    if identity_matches && self.process_group_id == self.pid as i32 {
+      let _ = killpg(Pid::from_raw(self.process_group_id), Signal::SIGKILL);
+    } else if identity_matches {
+      let _ = self.child.kill();
+    }
+    let _ = self.child.wait();
+  }
+}
+
+fn isolated_sleep(seconds: &str) -> GuardedProcess {
+  GuardedProcess::isolated("sleep", &[seconds])
+}
+
+fn isolated_shell(script: &str) -> GuardedProcess {
+  GuardedProcess::isolated("sh", &["-c", script])
+}
+
+fn ordinary_sleep(seconds: &str) -> GuardedProcess {
+  GuardedProcess::ordinary("sleep", &[seconds])
+}
+
+fn launched_process_run(run_id: &str, pid: u32, pid_start: &str) -> RunRecord {
+  let mut run = empty_run(run_id, RunKind::Work);
+  run.pid = Some(pid);
+  run.pid_start = Some(pid_start.to_string());
+  run.started_at = Some(UtcDateTime::now());
+  run
 }
 
 fn make_store(home: &Path) -> Store {

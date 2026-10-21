@@ -21,7 +21,7 @@ import src.runtime.task_execution as task_execution_module
 from src.infra import event_types as ET
 from src.infra import models
 from src.runtime import control_events, runs, task_recovery
-from tests.test_task_recovery import _takeoff_manager
+from tests import test_task_recovery
 
 
 def _marker_path(cfg) -> pathlib.Path:
@@ -34,7 +34,7 @@ def _read_marker(cfg) -> dict:
 
 async def _closed_worker(tmp_path, monkeypatch, *, outcome="success", cold_read=False):
   """Manager + one closed worker child whose only work Run already ended."""
-  cfg, _blocks, tree, manager = await _takeoff_manager(tmp_path, monkeypatch)
+  cfg, _blocks, tree, manager = await test_task_recovery._takeoff_manager(tmp_path, monkeypatch)
   if cold_read:
     page = tmp_path / "page.html"
     page.write_text("<html><body><p>body</p></body></html>", encoding="utf-8")
@@ -206,8 +206,6 @@ async def test_end_landing_retry_checks_a_node_the_boot_pass_skips(
 async def test_node_check_scan_count_does_not_grow_with_run_count(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """One event list folds once no matter how many Runs ask about it."""
-  import test_task_recovery
-
   import src.runtime.runs as runs_mod
 
   async def _pass_stats(run_count: int) -> tuple[int, int]:

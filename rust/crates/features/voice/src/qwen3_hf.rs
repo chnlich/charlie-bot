@@ -226,6 +226,7 @@ mod tests {
 
   #[test]
   fn ready_helper_decodes_each_window_to_its_normalized_text() {
+    let _guard = crate::HELPER_LIFECYCLE_TEST_LOCK.lock().expect("the helper lifecycle test lock is never poisoned");
     // The stub prints while it loads, on the stdout the helper must keep for its replies.
     let tree = StubTree::new();
     let mut recognizer = Qwen3HfRecognizer::start(tree.helper("ready"), &tree.script()).expect("the helper is ready");
@@ -238,6 +239,7 @@ mod tests {
 
   #[test]
   fn init_error_fails_the_start_with_the_helpers_error_text() {
+    let _guard = crate::HELPER_LIFECYCLE_TEST_LOCK.lock().expect("the helper lifecycle test lock is never poisoned");
     let tree = StubTree::new();
 
     let error = Qwen3HfRecognizer::start(tree.helper("init_error"), &tree.script()).err().expect("the start fails");
@@ -247,6 +249,7 @@ mod tests {
 
   #[test]
   fn exit_before_ready_fails_the_start_with_the_exit_status() {
+    let _guard = crate::HELPER_LIFECYCLE_TEST_LOCK.lock().expect("the helper lifecycle test lock is never poisoned");
     let tree = StubTree::new();
 
     let error = Qwen3HfRecognizer::start(tree.helper("exit_before_ready"), &tree.script()).err().expect("start fails");
@@ -256,6 +259,7 @@ mod tests {
 
   #[test]
   fn exit_after_ready_fails_the_request_and_every_later_one_and_kills_the_helpers_children() {
+    let _guard = crate::HELPER_LIFECYCLE_TEST_LOCK.lock().expect("the helper lifecycle test lock is never poisoned");
     let tree = StubTree::new();
     let mut recognizer =
       Qwen3HfRecognizer::start(tree.helper("exit_on_decode"), &tree.script()).expect("the helper is ready");

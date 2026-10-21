@@ -399,6 +399,11 @@ pub(crate) fn stop_resident_bundle() {
   }
 }
 
+#[cfg(test)]
+pub(crate) fn reset_after_stop_test() {
+  let _ = BUNDLE.lock().expect("the bundle lock is never poisoned").take();
+}
+
 impl SpeechModelBundle {
   /// Kill the helpers' process groups. A decode in flight fails, and so does every later one.
   fn stop(&self) {
@@ -430,6 +435,7 @@ mod tests {
   use std::time::Duration;
 
   use anyhow::anyhow;
+  use charliebot_registry::wiring::Service;
 
   use crate::provisioning::voice_model_paths;
   use crate::qwen3_hf::test_support::{StubTree, wait_until_gone};
@@ -561,6 +567,7 @@ mod tests {
 
   #[test]
   fn warm_up_decodes_one_half_second_sine_through_the_helper() {
+    let _guard = crate::HELPER_LIFECYCLE_TEST_LOCK.lock().expect("the helper lifecycle test lock is never poisoned");
     let tree = StubTree::new();
     let bundle = qwen3_hf_bundle_of(&tree, "ready").expect("the helper is ready");
 
@@ -573,6 +580,7 @@ mod tests {
 
   #[test]
   fn concurrent_windows_share_the_helper_and_each_gets_its_own_text() {
+    let _guard = crate::HELPER_LIFECYCLE_TEST_LOCK.lock().expect("the helper lifecycle test lock is never poisoned");
     let tree = StubTree::new();
     let bundle = qwen3_hf_bundle_of(&tree, "ready").expect("the helper is ready");
 
@@ -592,6 +600,7 @@ mod tests {
 
   #[test]
   fn stopping_the_bundle_kills_the_helpers_children_and_fails_later_decodes() {
+    let _guard = crate::HELPER_LIFECYCLE_TEST_LOCK.lock().expect("the helper lifecycle test lock is never poisoned");
     let tree = StubTree::new();
     let bundle = qwen3_hf_bundle_of(&tree, "ready").expect("the helper is ready");
 
@@ -629,6 +638,7 @@ mod tests {
 
   #[test]
   fn init_error_falls_back_to_the_cpu_bundle_and_logs_the_gpu_failure() {
+    let _guard = crate::HELPER_LIFECYCLE_TEST_LOCK.lock().expect("the helper lifecycle test lock is never poisoned");
     let tree = StubTree::new();
     let gpu = qwen3_hf_bundle_of(&tree, "init_error");
     let mut outcome = None;
@@ -645,6 +655,7 @@ mod tests {
 
   #[test]
   fn exit_before_ready_falls_back_to_the_cpu_bundle_and_logs_the_exit() {
+    let _guard = crate::HELPER_LIFECYCLE_TEST_LOCK.lock().expect("the helper lifecycle test lock is never poisoned");
     let tree = StubTree::new();
     let gpu = qwen3_hf_bundle_of(&tree, "exit_before_ready");
     let mut outcome = None;
@@ -657,5 +668,26 @@ mod tests {
     );
     assert!(logs.contains("voice_gpu_engine_init_failed"), "{logs}");
     assert!(logs.contains("exited with code 3"), "{logs}");
+  }
+
+  #[tokio::test]
+  async fn qwen3_hf_helper_spawn_after_service_stop_is_refused() {
+    let _guard = crate::HELPER_LIFECYCLE_TEST_LOCK.lock().expect("the helper lifecycle test lock is never poisoned");
+    crate::provisioning::SpeechService::default().stop().await.expect("the service stops");
+    let tree = StubTree::new();
+    let outcome = qwen3_hf_bundle_of(&tree, "ready");
+    let error = match outcome {
+      Ok(bundle) => {
+        bundle.stop();
+        None
+      }
+      Err(error) => Some(error.to_string()),
+    };
+    reset_after_stop_test();
+
+    assert!(
+      error.as_deref().is_some_and(|message| message.contains("stopping")),
+      "speech shutdown did not refuse the qwen3_hf helper spawn: {error:?}"
+    );
   }
 }

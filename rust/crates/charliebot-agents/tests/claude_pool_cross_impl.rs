@@ -127,7 +127,6 @@ fn selection_matrix() -> Value {
 }
 
 #[test]
-#[ignore = "catch-up e44c9ccef: cargo-account-selection-matrix"]
 fn account_selection_matrix_matches_python() {
   let temporary = tempfile::tempdir().unwrap();
   let (mut data, _directories) = account_data(temporary.path());

@@ -131,6 +131,16 @@ After inserting text, use `updateParagraphStyle` and `updateTextStyle` in the sa
 Use `google.docs_default_folder_id` only for the default account, and use Drive API placement only after the write plan is approved.
 For another account, create the document in that account's Drive root and state the location in the write draft.
 
+## Import a PPTX as Google Slides
+
+Upload a PPTX with conversion to Google Slides, then check these known effects:
+
+- Conversion replaces fonts that Google does not host (Microsoft YaHei and Courier New are common casualties): name Google Fonts families in the deck, for example Noto Sans SC for CJK text and Roboto Mono for code. Verify by exporting to PDF and listing the embedded fonts.
+- Full-width punctuation directly followed by a Latin word is treated as unbreakable and wraps to the next line's start. Insert a plain space after the punctuation.
+- Speaker notes survive the import.
+- The PDF export takes each paragraph-end mark's font from that paragraph's `a:endParaRPr`, which overrides the theme or table default. Give every paragraph an `a:endParaRPr` with its last run's typeface and size.
+- Assert at build time that every text box lies inside the slide. A box that crosses the slide edge keeps its unwrapped line, so the page clips text that a box-local line check passes.
+
 ## Bootstrap / Re-Authorization
 
 Choose an account in the **Accounts** section and follow **Add or Re-Authorize an Account** in the **google-oauth** skill: `skills/google-oauth/SKILL.md`.

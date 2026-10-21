@@ -267,6 +267,8 @@ mod tests {
   use charliebot_registry::Registry;
   use charliebot_store::metadata::UtcDateTime;
 
+  use crate::backends::claude_code::login_dirs;
+
   use super::*;
 
   fn config(home: &std::path::Path) -> Arc<CharlieBotConfig> {
@@ -302,5 +304,55 @@ mod tests {
     assert!(watch.wants_next(1, "Failed to authenticate"));
     assert_eq!(decision.lock().unwrap().as_deref(), Some(LOGIN_FAILED));
     let _ = UtcDateTime::now();
+  }
+
+  fn pooled_config(home: &std::path::Path, accounts: &[(&str, &std::path::Path)]) -> CharlieBotConfig {
+    let mut rows = String::new();
+    let mut labels = Vec::new();
+    for (label, directory) in accounts {
+      rows.push_str(&format!("    - label: {label}\n      config_dir: '{}'\n", directory.display()));
+      labels.push(*label);
+    }
+    std::fs::write(
+      home.join("config.yaml"),
+      format!(
+        "backends:\n  options:\n    - id: fable\n      label: Fable\n      type: cc-claude\n      model: claude-fable-5-1\n      account_pool: alpha\naccounts:\n  claude:\n{rows}  claude_pools:\n    alpha: [{}]\n",
+        labels.join(", ")
+      ),
+    )
+    .unwrap();
+    let mut registry = Registry::new();
+    registry.register_package("src.backends.claude_code", crate::backends::claude_code::register).unwrap();
+    registry.load_config(home).unwrap()
+  }
+
+  #[test]
+  fn relay_move_lands_under_the_line_before_the_tie_rule_applies() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let main = root.path().join("main");
+    let ext_1 = root.path().join("ext-1");
+    let ext_2 = root.path().join("ext-2");
+    for directory in [&main, &ext_1, &ext_2] {
+      std::fs::create_dir_all(directory).unwrap();
+      std::fs::write(directory.join(login_dirs::CREDENTIALS_FILE), r#"{"claudeAiOauth":{"accessToken":"synthetic"}}"#)
+        .unwrap();
+    }
+    std::fs::create_dir_all(main.join("projects/work")).unwrap();
+    std::fs::write(main.join("projects/work/uuid-1.jsonl"), "synthetic transcript\n").unwrap();
+    let cfg = pooled_config(&home, &[("main", &main), ("ext-1", &ext_1), ("ext-2", &ext_2)]);
+    let state = Arc::new(claude_accounts::ClaudeAccountState::new());
+    let now = UtcDateTime::parse("2025-01-01T12:00:00Z").unwrap();
+    let older = UtcDateTime::parse("2025-01-01T11:00:00Z").unwrap();
+    let window = |utilization: f64| json!({"unifiedWindows":{"five_hour":{"utilization":utilization}}});
+    claude_accounts::observe_rate_limit(&state, "ext-1", &window(0.89), Some(now));
+    claude_accounts::observe_rate_limit(&state, "ext-2", &window(0.905), Some(older));
+    let current = claude_accounts::account_by_label(&cfg, Some("main")).unwrap().unwrap();
+
+    let movement =
+      relay_move(&state, &cfg, Some("claude-fable-5-1"), &current, Some("uuid-1"), Some(now), None).unwrap();
+
+    assert_eq!(movement.account.map(|account| account.label), Some("ext-1".to_string()));
   }
 }

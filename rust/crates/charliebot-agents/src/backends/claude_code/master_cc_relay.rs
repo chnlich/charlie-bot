@@ -495,6 +495,55 @@ mod tests {
     assert_eq!(chosen.unwrap().label, "b");
   }
 
+  #[test]
+  fn choose_turn_account_replays_the_2026_10_19_line_bounce() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    let labels = ["main", "ext-1", "ext-2", "ext-3", "ext-4", "invite-1"];
+    let directories = labels.map(|label| root.path().join(label));
+    for directory in &directories {
+      account_credentials(directory);
+    }
+    let accounts =
+      labels.iter().zip(&directories).map(|(label, directory)| (*label, directory.as_path())).collect::<Vec<_>>();
+    let cfg = config(&home, &accounts);
+    let state = claude_accounts::ClaudeAccountState::new();
+    let now = UtcDateTime::parse("2026-10-19T23:23:37Z").unwrap();
+    let readings =
+      [("ext-3", 0.07), ("invite-1", 0.23), ("ext-4", 0.47), ("ext-1", 0.73), ("main", 0.96), ("ext-2", 0.90)];
+    for (label, utilization) in readings {
+      let info = serde_json::json!({"unifiedWindows":{"five_hour":{"utilization":utilization}}});
+      claude_accounts::observe_rate_limit(&state, label, &info, Some(now));
+    }
+    let running = ["ext-3", "invite-1", "ext-4", "ext-1", "main"]
+      .into_iter()
+      .enumerate()
+      .map(|(index, label)| {
+        let mut holder = SessionMetadata::new(format!("other-{index}"), "Other", TaskProfile::Manager);
+        claude_metadata::set_account(&mut holder, Some(label));
+        holder
+      })
+      .collect::<Vec<_>>();
+    let mut current = SessionMetadata::new("current", "Current", TaskProfile::Manager);
+    claude_metadata::set_account(&mut current, Some("ext-4"));
+    let last_request = UtcDateTime::parse("2026-10-19T23:13:37Z").unwrap();
+
+    let (chosen, cold) = choose_turn_account(
+      &state,
+      &cfg,
+      &current,
+      Some("claude-fable-5-1"),
+      Some(last_request),
+      Some(now),
+      Some("alpha"),
+      &running,
+    )
+    .unwrap();
+
+    assert_eq!(chosen.map(|account| account.label), Some("ext-3".to_string()));
+    assert!(!cold);
+  }
+
   #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
   async fn concurrent_placements_choose_distinct_accounts() {
     let root = tempfile::tempdir().unwrap();

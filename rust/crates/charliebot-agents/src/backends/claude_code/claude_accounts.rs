@@ -920,6 +920,48 @@ mod tests {
   }
 
   #[test]
+  fn busy_under_line_account_beats_an_idle_account_at_the_line() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    fs::create_dir_all(&home).unwrap();
+    let a = root.path().join("a");
+    let b = root.path().join("b");
+    add_credentials(&a);
+    add_credentials(&b);
+    let cfg = config(&home, &[("a", &a), ("b", &b)]);
+    let state = ClaudeAccountState::new();
+    let now = timestamp("2025-01-01T12:00:00Z");
+    observe_rate_limit(&state, "a", &window(0.89), Some(now));
+    observe_rate_limit(&state, "b", &window(0.90), Some(now));
+    let busy = BTreeSet::from(["a".to_string()]);
+    let chosen = select(&state, &cfg, Some("claude-fable-5-1"), &HashSet::new(), Some(&busy), Some(now), None, 0.0)
+      .unwrap()
+      .unwrap();
+    assert_eq!(chosen.label, "a");
+  }
+
+  #[test]
+  fn selection_without_an_under_line_account_contends_every_account() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    fs::create_dir_all(&home).unwrap();
+    let a = root.path().join("a");
+    let b = root.path().join("b");
+    add_credentials(&a);
+    add_credentials(&b);
+    let cfg = config(&home, &[("a", &a), ("b", &b)]);
+    let state = ClaudeAccountState::new();
+    let now = timestamp("2025-01-01T12:00:00Z");
+    observe_rate_limit(&state, "a", &window(0.95), Some(now));
+    observe_rate_limit(&state, "b", &window(0.92), Some(now));
+    let busy = BTreeSet::from(["b".to_string()]);
+    let chosen = select(&state, &cfg, Some("claude-fable-5-1"), &HashSet::new(), Some(&busy), Some(now), None, 0.0)
+      .unwrap()
+      .unwrap();
+    assert_eq!(chosen.label, "a");
+  }
+
+  #[test]
   fn scoped_panel_usage_is_not_hidden_by_a_newer_rate_event() {
     let root = tempfile::tempdir().unwrap();
     let home = root.path().join("home");

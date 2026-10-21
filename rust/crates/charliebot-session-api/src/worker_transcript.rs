@@ -115,7 +115,7 @@ fn build_worker_transcript(store: &Store, session_id: &str, signature: Signature
   }
 
   let task_state = store.task_state(session_id)?;
-  if let Some(delivery) = delivery_event(&task_state, facts_events.as_slice(), &run_records) {
+  if let Some(delivery) = delivery_event(&task_state, facts_events.as_slice(), &run_records)? {
     transcript.push(delivery);
   }
   let active_run_id = run_records.iter().rev().find_map(|run| {
@@ -265,12 +265,14 @@ fn withheld_reason(events: &[Value], run_id: &str) -> Option<String> {
   reason
 }
 
-fn delivery_event(task_state: &str, facts_events: &[Value], run_records: &[RunRecord]) -> Option<Value> {
+fn delivery_event(task_state: &str, facts_events: &[Value], run_records: &[RunRecord]) -> StoreResult<Option<Value>> {
   if task_state == "open" || run_records.is_empty() {
-    return None;
+    return Ok(None);
   }
   let mut summary = String::new();
   let mut close_refs = Vec::new();
+  // A non-open task state only comes from a task_closed fact, so the loop below sets this.
+  let mut close_at = String::new();
   let mut outcomes = BTreeMap::new();
   for event in facts_events {
     match event.get("type").and_then(Value::as_str) {
@@ -284,6 +286,10 @@ fn delivery_event(task_state: &str, facts_events: &[Value], run_records: &[RunRe
           .flatten()
           .map(value_to_python_string)
           .collect();
+        close_at = event
+          .get("timestamp")
+          .map(value_to_python_string)
+          .ok_or_else(|| StoreError::new("task_closed fact has no timestamp"))?;
       }
       Some(event_types::RUN_FINISHED) => {
         if let Some(run_id) = event.get("run_id") {
@@ -301,7 +307,7 @@ fn delivery_event(task_state: &str, facts_events: &[Value], run_records: &[RunRe
     .rev()
     .find(|run| outcomes.get(&run.id).is_some_and(|outcome| outcome == "success"))
     .unwrap_or_else(|| run_records.last().expect("run records are non-empty"));
-  Some(json!({
+  Ok(Some(json!({
     "type": event_types::RUN_DELIVERY,
     "task_state": task_state,
     "summary": summary,
@@ -313,8 +319,8 @@ fn delivery_event(task_state: &str, facts_events: &[Value], run_records: &[RunRe
     "base_branch": delivered.base_branch.as_deref().unwrap_or(""),
     "branch_name": delivered.branch_name.as_deref().unwrap_or(""),
     "run_id": delivered.id,
-    "timestamp": charliebot_core::timefmt::utc_now_iso(),
-  }))
+    "timestamp": close_at,
+  })))
 }
 
 struct SummaryInputs<'a> {

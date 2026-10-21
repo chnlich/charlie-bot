@@ -39,7 +39,7 @@ else
   "$SCRIPT_DIR/sync-skills.sh"
 fi
 
-# Run the setup steps: the ~/.charliebot home layout, then each step a package registers
+# Run the setup steps: the $CHARLIEBOT_HOME home layout, then each step a package registers
 # (register_setup_step in src/runtime/hooks/wiring.py), in registration order.
 if (( DRY_RUN )); then
   uv run python -m src.app.setup --dry-run

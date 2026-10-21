@@ -24,29 +24,15 @@ from src.infra import models
 @pytest_asyncio.fixture
 async def env(tmp_path: pathlib.Path):
   _, session_blocks, tree = conftest.build_env(tmp_path)
-  root = await tree.create_task(
-      request_id="root",
-      task_parent_id=None,
-      profile="manager",
-      task=None,
-      name="Root",
-      backend=None,
-      caller=conftest.OPERATOR)
-  worker = await tree.create_task(
-      request_id="w1",
-      task_parent_id=root.id,
-      profile="worker",
-      task=None,
-      name="Worker",
-      backend=None,
-      caller=conftest.OPERATOR)
+  root = await conftest.create_task(tree, parent=None, request_id="root", name="Root")
+  worker = await conftest.create_task(tree, parent=root.id, request_id="w1", profile="worker", name="Worker")
   return tree, session_blocks, root.id, worker.id
 
 
 @pytest.mark.asyncio
 async def test_record_launch_notifies_with_running_rows_readable_at_signal(env) -> None:
   tree, _session_blocks, root_id, worker_id = env
-  run = await tree.runs.register_run(models.RunRecord(id="run-1", session_id=worker_id, kind="work"))
+  run = await tree.runs.register_run_locked(models.RunRecord(id="run-1", session_id=worker_id, kind="work"))
   # Queued first: the row is waiting work and no ancestor shows delegated running.
   index = await tree._get_index()
   assert tree.session_row(index, worker_id).work_state == "waiting"
@@ -74,7 +60,7 @@ async def test_record_launch_notifies_with_running_rows_readable_at_signal(env) 
 @pytest.mark.asyncio
 async def test_terminal_outcomes_notify_and_clear_running_ancestor_counts(env) -> None:
   tree, _session_blocks, root_id, worker_id = env
-  run = await tree.runs.register_run(models.RunRecord(id="run-1", session_id=worker_id, kind="work"))
+  run = await tree.runs.register_run_locked(models.RunRecord(id="run-1", session_id=worker_id, kind="work"))
   proc = conftest.live_subprocess()
   try:
     pid, pid_start = conftest.identity_of(proc.pid)
@@ -94,7 +80,7 @@ async def test_terminal_outcomes_notify_and_clear_running_ancestor_counts(env) -
   assert root_row.running_descendant_count == 0, ("the collapsed-ancestor cue clears with the terminal fact")
 
   # A failed run reads idle, not running: a terminal Run is not activity.
-  run2 = await tree.runs.register_run(models.RunRecord(id="run-2", session_id=worker_id, kind="work"))
+  run2 = await tree.runs.register_run_locked(models.RunRecord(id="run-2", session_id=worker_id, kind="work"))
   await tree.dispatch.finish_run(worker_id, run2.id, outcome="failed", exit_code=1)
   failed_row = tree.session_row(await tree._get_index(), worker_id)
   assert failed_row.work_state == "idle"

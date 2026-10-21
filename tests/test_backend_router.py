@@ -368,7 +368,7 @@ async def test_quota_failover_walks_the_route_then_the_pool(tmp_path, monkeypatc
       backend_pool.METADATA_OWNER,
       route=backend_pool.BackendRoute(backends=["fake3", "fake2"], reason="design p=0.9"))
   run = models.RunRecord(id="run-work", session_id=worker.id, kind="work", backend="fake3", model="fake-model")
-  await tree.runs.register_run(run)
+  await tree.runs.register_run_locked(run)
   await tree.dispatch.finish_run(worker.id, run.id, outcome="failed", exit_code=1)
   adapter._quota_failures[(worker.id, run.id)] = None
   until = backend_pool.cool("fake3", models.utc_now() + datetime.timedelta(hours=2))
@@ -404,7 +404,7 @@ async def test_quota_failover_uses_the_pool_once_the_route_is_spent(tmp_path, mo
       backend_pool.METADATA_OWNER,
       route=backend_pool.BackendRoute(backends=["fake3"], reason="design p=0.9"))
   run = models.RunRecord(id="run-work", session_id=worker.id, kind="work", backend="fake3", model="fake-model")
-  await tree.runs.register_run(run)
+  await tree.runs.register_run_locked(run)
   adapter._quota_failures[(worker.id, run.id)] = None
 
   meta = await tree.load_meta(worker.id)
@@ -437,7 +437,7 @@ async def test_the_reviewer_reuses_the_route_and_avoids_the_worker_backend(tmp_p
       backend_pool.METADATA_OWNER,
       route=backend_pool.BackendRoute(backends=["fake", "fake2"], reason="design p=0.9"))
   run = models.RunRecord(id="run-work", session_id=worker.id, kind="work", backend="fake", model="fake-model")
-  await tree.runs.register_run(run)
+  await tree.runs.register_run_locked(run)
   await tree.dispatch.finish_run(worker.id, run.id, outcome="success", exit_code=0)
 
   review_run_id = await adapter._maybe_spawn_review(worker.id, run)
@@ -462,7 +462,7 @@ async def test_a_fully_avoided_route_falls_back_to_todays_reviewer_selection(tmp
   await tree.update_slot_fields(
       worker.id, backend_pool.METADATA_OWNER, route=backend_pool.BackendRoute(backends=["fake"], reason="design p=0.9"))
   run = models.RunRecord(id="run-work", session_id=worker.id, kind="work", backend="fake", model="fake-model")
-  await tree.runs.register_run(run)
+  await tree.runs.register_run_locked(run)
   await tree.dispatch.finish_run(worker.id, run.id, outcome="success", exit_code=0)
 
   review_run_id = await adapter._maybe_spawn_review(worker.id, run)

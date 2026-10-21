@@ -512,7 +512,7 @@ def test_list_marks_pending_and_does_not_print_tokens(
   assert exit_code == 0
   assert stderr == ""
   assert "default\tdefault\tready" in stdout
-  assert "personal\t\tpending\tpersonal mailbox" in stdout
+  assert "personal\t\tpending\t\tpersonal mailbox" in stdout
   assert "default-refresh" not in stdout
 
 
@@ -558,8 +558,9 @@ def test_list_check_keeps_pending_account_row_with_empty_address(
 
   assert exit_code == 0
   assert stderr == ""
-  assert stdout == ("default\tdefault\tready\t\twork@example.invalid\n"
-                    "personal\t\tpending\tpersonal mailbox\t\n")
+  assert stdout == (
+      "default\tdefault\tready\t\t\twork@example.invalid\n"
+      "personal\t\tpending\t\tpersonal mailbox\t\n")
 
 
 def test_relative_profile_home_is_rejected(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
@@ -570,3 +571,323 @@ def test_relative_profile_home_is_rejected(monkeypatch: pytest.MonkeyPatch, caps
   assert exit_code == 2
   assert stdout == ""
   assert "CHARLIEBOT_HOME" in stderr
+
+
+def test_table_without_owner_keys_selects_same_accounts(
+    credentials_file: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:
+  with credentials_file.open("a", encoding="utf-8") as output:
+    output.write("google_account_personal:\n  refresh_token: personal-refresh\n")
+
+  exit_code, stdout, stderr = run_cli(["list"], capsys)
+
+  assert exit_code == 0
+  assert stderr == ""
+  rows = {row.split("\t")[0]: row.split("\t") for row in stdout.splitlines()}
+  assert rows["default"][1] == "default"
+  assert rows["personal"][1] == ""
+  assert rows["personal"][3] == ""
+
+
+def test_section_without_owner_belongs_to_google_owner(
+    credentials_file: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:
+  credentials_file.write_text(
+      "google:\n"
+      "  client_id: default-client\n"
+      "  client_secret: default-secret\n"
+      "  refresh_token: default-refresh\n"
+      "  owner: avery\n"
+      "google_account_shared:\n"
+      "  refresh_token: shared-refresh\n"
+      "google_account_other:\n"
+      "  refresh_token: other-refresh\n"
+      "  owner: blake\n"
+      "  primary: true\n",
+      encoding="utf-8")
+
+  exit_code, stdout, stderr = run_cli(["list"], capsys)
+
+  assert exit_code == 0
+  assert stderr == ""
+  rows = {row.split("\t")[0]: row.split("\t") for row in stdout.splitlines()}
+  assert rows["shared"][1] == "" and rows["shared"][3] == ""
+  assert rows["other"][1] == "primary" and rows["other"][3] == "blake"
+
+
+def test_two_people_each_have_one_primary_account(
+    credentials_file: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+  credentials_file.write_text(
+      "google:\n"
+      "  client_id: default-client\n"
+      "  client_secret: default-secret\n"
+      "  refresh_token: default-refresh\n"
+      "  owner: avery\n"
+      "google_account_blake:\n"
+      "  owner: blake\n",
+      encoding="utf-8")
+  stub_urlopen(monkeypatch, [{"access_token": "a"}, {"emailAddress": "avery@example.invalid"}])
+
+  exit_code, stdout, _ = run_cli(["list", "--check"], capsys)
+
+  assert exit_code == 0
+  assert stdout.startswith("default\tdefault\tready\tavery\t\tavery@example.invalid\n")
+  assert "blake\tprimary\tready\tblake\t\tblake@example.invalid\n" not in stdout
+  assert stdout.endswith("blake\tprimary\tpending\tblake\t\t\n")
+
+
+def test_primary_true_selects_one_of_several_sections(
+    credentials_file: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:
+  credentials_file.write_text(
+      "google:\n"
+      "  client_id: default-client\n"
+      "  client_secret: default-secret\n"
+      "  refresh_token: default-refresh\n"
+      "  owner: avery\n"
+      "google_account_blake-a:\n"
+      "  refresh_token: blake-a-refresh\n"
+      "  owner: blake\n"
+      "  primary: true\n"
+      "google_account_blake-b:\n"
+      "  refresh_token: blake-b-refresh\n"
+      "  owner: blake\n",
+      encoding="utf-8")
+
+  exit_code, stdout, _ = run_cli(["list"], capsys)
+
+  assert exit_code == 0
+  rows = {row.split("\t")[0]: row.split("\t") for row in stdout.splitlines()}
+  assert rows["blake-a"][1] == "primary"
+  assert rows["blake-b"][1] == ""
+
+
+def test_owner_must_be_one_line(credentials_file: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:
+  with credentials_file.open("a", encoding="utf-8") as output:
+    output.write("google_account_personal:\n  owner: \"line one\\nline two\"\n")
+
+  exit_code, _, stderr = run_cli(["list"], capsys)
+
+  assert exit_code == 2
+  assert "credentials.google_account_personal.owner must be one line" in stderr
+
+
+def test_section_owner_without_google_owner_is_rejected(
+    credentials_file: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:
+  with credentials_file.open("a", encoding="utf-8") as output:
+    output.write("google_account_personal:\n  refresh_token: r\n  owner: blake\n")
+
+  exit_code, _, stderr = run_cli(["list"], capsys)
+
+  assert exit_code == 2
+  assert "credentials.google_account_personal sets owner but credentials.google does not" in stderr
+
+
+def test_primary_not_true_is_rejected(credentials_file: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:
+  credentials_file.write_text(
+      "google:\n"
+      "  client_id: c\n"
+      "  client_secret: s\n"
+      "  refresh_token: r\n"
+      "  owner: avery\n"
+      "google_account_personal:\n"
+      "  refresh_token: personal-refresh\n"
+      "  owner: blake\n"
+      "  primary: yes\n",
+      encoding="utf-8")
+
+  exit_code, _, stderr = run_cli(["list"], capsys)
+
+  assert exit_code == 2
+  assert "credentials.google_account_personal.primary must be true" in stderr
+
+
+def test_primary_on_host_owner_section_is_rejected(
+    credentials_file: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:
+  with credentials_file.open("a", encoding="utf-8") as output:
+    output.write("google_account_personal:\n  refresh_token: r\n  primary: true\n")
+
+  exit_code, _, stderr = run_cli(["list"], capsys)
+
+  assert exit_code == 2
+  assert "cannot set primary" in stderr
+
+
+def test_two_primary_accounts_for_one_person_are_rejected(
+    credentials_file: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:
+  credentials_file.write_text(
+      "google:\n"
+      "  client_id: c\n"
+      "  client_secret: s\n"
+      "  refresh_token: r\n"
+      "  owner: avery\n"
+      "google_account_blake-a:\n"
+      "  refresh_token: ra\n"
+      "  owner: blake\n"
+      "  primary: true\n"
+      "google_account_blake-b:\n"
+      "  refresh_token: rb\n"
+      "  owner: blake\n"
+      "  primary: true\n",
+      encoding="utf-8")
+
+  exit_code, _, stderr = run_cli(["list"], capsys)
+
+  assert exit_code == 2
+  assert "blake" in stderr
+  assert "two accounts with primary" in stderr
+
+
+def test_several_sections_without_primary_are_rejected(
+    credentials_file: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:
+  credentials_file.write_text(
+      "google:\n"
+      "  client_id: c\n"
+      "  client_secret: s\n"
+      "  refresh_token: r\n"
+      "  owner: avery\n"
+      "google_account_blake-a:\n"
+      "  refresh_token: ra\n"
+      "  owner: blake\n"
+      "google_account_blake-b:\n"
+      "  refresh_token: rb\n"
+      "  owner: blake\n",
+      encoding="utf-8")
+
+  exit_code, _, stderr = run_cli(["list"], capsys)
+
+  assert exit_code == 2
+  assert "blake" in stderr
+  assert "none sets primary" in stderr
+
+
+def test_add_owner_writes_into_new_and_existing_sections(
+    credentials_file: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+  credentials_file.write_text(
+      "google:\n"
+      "  client_id: default-client\n"
+      "  client_secret: default-secret\n"
+      "  refresh_token: default-refresh\n"
+      "  owner: avery\n"
+      "google_account_existing:\n"
+      "  description: existing\n",
+      encoding="utf-8")
+  stub_urlopen(
+      monkeypatch, [
+          {
+              "access_token": "new-access",
+              "refresh_token": "new-refresh"
+          },
+          {
+              "emailAddress": "new@example.invalid"
+          },
+          {
+              "access_token": "existing-access",
+              "refresh_token": "existing-refresh"
+          },
+          {
+              "emailAddress": "existing@example.invalid"
+          },
+      ])
+
+  exit_code, _, stderr = run_cli(
+      [
+          "add", "fresh", "--email", "new@example.invalid", "--redirect-url", "http://localhost?state=fresh&code=c",
+          "--owner", "blake"
+      ], capsys)
+  assert exit_code == 0, stderr
+  exit_code, _, stderr = run_cli(
+      [
+          "add", "existing", "--email", "existing@example.invalid", "--redirect-url",
+          "http://localhost?state=existing&code=c", "--owner", "carol"
+      ], capsys)
+  assert exit_code == 0, stderr
+
+  data = yaml.safe_load(credentials_file.read_text(encoding="utf-8"))
+  assert data["google_account_fresh"]["owner"] == "blake"
+  assert data["google_account_existing"]["owner"] == "carol"
+  assert data["google_account_existing"]["description"] == "existing"
+
+
+def test_add_without_owner_exits_when_google_sets_owner(
+    credentials_file: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+  requests: list[Any] = []
+  stub_urlopen(monkeypatch, [{"unexpected": "no call"}], requests)
+  credentials_file.write_text(
+      "google:\n"
+      "  client_id: c\n"
+      "  client_secret: s\n"
+      "  refresh_token: r\n"
+      "  owner: avery\n"
+      "google_account_personal:\n"
+      "  description: personal mailbox\n",
+      encoding="utf-8")
+  original = credentials_file.read_bytes()
+
+  exit_code, stdout, stderr = run_cli(
+      [
+          "add", "personal", "--email", "person@example.invalid", "--redirect-url",
+          "http://localhost?state=personal&code=c"
+      ], capsys)
+
+  assert exit_code == 2
+  assert "--owner" in stderr
+  assert stdout == ""
+  assert requests == []
+  assert credentials_file.read_bytes() == original
+  assert not list(credentials_file.parent.glob(".credentials.yaml.*.tmp"))
+
+
+def test_add_owner_without_google_owner_exits_before_network(
+    credentials_file: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+  requests: list[Any] = []
+  stub_urlopen(monkeypatch, [{"unexpected": "no call"}], requests)
+  original = credentials_file.read_bytes()
+
+  exit_code, stdout, stderr = run_cli(
+      [
+          "add", "personal", "--email", "person@example.invalid", "--redirect-url",
+          "http://localhost?state=personal&code=c", "--owner", "blake"
+      ], capsys)
+
+  assert exit_code == 2
+  assert "credentials.google_account_personal sets owner but credentials.google does not" in stderr
+  assert stdout == ""
+  assert requests == []
+  assert credentials_file.read_bytes() == original
+
+
+def test_add_leaving_person_without_primary_exits_before_network(
+    credentials_file: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+  requests: list[Any] = []
+  stub_urlopen(monkeypatch, [{"unexpected": "no call"}], requests)
+  credentials_file.write_text(
+      "google:\n"
+      "  client_id: c\n"
+      "  client_secret: s\n"
+      "  refresh_token: r\n"
+      "  owner: avery\n"
+      "google_account_blake-a:\n"
+      "  refresh_token: ra\n"
+      "  owner: blake\n",
+      encoding="utf-8")
+  original = credentials_file.read_bytes()
+
+  exit_code, stdout, stderr = run_cli(
+      [
+          "add", "blake-b", "--email", "person@example.invalid", "--redirect-url",
+          "http://localhost?state=blake-b&code=c", "--owner", "blake"
+      ], capsys)
+
+  assert exit_code == 2
+  assert "person blake has several accounts and none sets primary: true" in stderr
+  assert stdout == ""
+  assert requests == []
+  assert credentials_file.read_bytes() == original
+
+
+def test_empty_owner_is_rejected(credentials_file: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:
+  with credentials_file.open("a", encoding="utf-8") as output:
+    output.write("google_account_personal:\n  refresh_token: r\n  owner: ''\n")
+
+  exit_code, _, stderr = run_cli(["list"], capsys)
+
+  assert exit_code == 2
+  assert "credentials.google_account_personal.owner must be one line" in stderr

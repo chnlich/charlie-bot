@@ -26,20 +26,7 @@ from tests import test_task_execution
 async def make_tree(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch):
   """One synthetic instance: root manager + child manager under it, plus the
     API client and the scripted executor, with no user input anywhere yet."""
-  cfg, session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
-  conftest.stub_credentials({"charliebot": {"access_key": "op-secret"}})
-  monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
-  tree.dispatch.executor = test_task_execution._adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
-  # The spawn-style routes resolve backends through the config owner directly.
-  monkeypatch.setattr(conftest.CONFIG_GET_CONFIG_PATCH_TARGET, lambda: cfg)
-  root = await tree.create_task(
-      request_id="root",
-      task_parent_id=None,
-      profile="manager",
-      task=models.TaskSpec(goal="project"),
-      name="Project",
-      backend=None,
-      caller="operator")
+  cfg, session_blocks, tree, root = await test_task_execution.build_manager_root(tmp_path, monkeypatch)
   child = await tree.create_task(
       request_id="child",
       task_parent_id=root.id,
@@ -183,7 +170,7 @@ async def test_foreign_run_token_cannot_delegate(
       name="AL",
       backend=None,
       caller="operator")
-  await tree.runs.register_run(models.RunRecord(id="agent-run", session_id=agents_child.id, kind="work"))
+  await tree.runs.register_run_locked(models.RunRecord(id="agent-run", session_id=agents_child.id, kind="work"))
   import subprocess
 
   from src.runtime import runs
@@ -241,7 +228,7 @@ async def test_verify_exemption_on_the_v2_route_and_launch(
 async def register_active_run(tree, session_id: str, run_id: str, kind: str = "manager_turn") -> None:
   """Pin one active, launched Run on *session_id*: the identity its run
     token stands for (registered, no terminal fact, launch identity pinned)."""
-  await tree.runs.register_run(models.RunRecord(id=run_id, session_id=session_id, kind=kind))
+  await tree.runs.register_run_locked(models.RunRecord(id=run_id, session_id=session_id, kind=kind))
   await tree.runs.record_launch(session_id, run_id, pid=424242, pid_start=f"ps-{run_id}")
 
 

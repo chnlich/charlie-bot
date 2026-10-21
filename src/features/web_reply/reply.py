@@ -10,7 +10,7 @@ import re
 
 from src.infra import event_types as ET
 from src.infra import log_once, metadata_slots, models
-from src.runtime import master_cc_state, session_events, session_lifecycle, session_store
+from src.runtime import file_urls, master_cc_state, session_events, session_lifecycle, session_store
 from src.runtime.api import deps, message_utils
 
 logger = log_once.LazyStructlogLogger()
@@ -167,17 +167,22 @@ async def post_web_reply(
     store: session_store.SessionStore,
     events: session_events.SessionEvents,
     lifecycle: session_lifecycle.SessionLifecycle,
-    keep_language: str | None = None) -> dict:
+    keep_language: str | None = None,
+    *,
+    scan_context: file_urls.ScanContext) -> dict:
   """Record *text* as the session's web reply and return the readback the CLI prints.
 
   The text is recorded exactly as written. It answers the newest user message or nudge of the running turn, and
-  nothing when the running turn has neither. Refusals raise WebReplyError before anything is recorded. The language
-  check holds the text unless *keep_language*, the agent's reason for posting it as written, is given; the reason is
-  then recorded on the reply.
+  nothing when the running turn has neither. Blank text and dead file links raise WebReplyError before anything is
+  recorded. The language check holds the text unless *keep_language*, the agent's reason for posting it as written,
+  is given; the reason is then recorded on the reply.
   """
   await require_web_session(store, session_id)
   if not text.strip():
     raise WebReplyError(422, "Reply text is empty")
+  dead_links = [finding for finding in file_urls.scan_file_links(text, scan_context) if finding.dead]
+  if dead_links:
+    raise WebReplyError(422, file_urls.dead_links_detail(dead_links))
   if keep_language is not None and not keep_language.strip():
     raise WebReplyError(422, "Keep-language reason is empty")
   loaded = await asyncio.to_thread(events.load_chat_events_sync, session_id)

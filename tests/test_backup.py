@@ -1,13 +1,15 @@
 """Unit tests for the profile backup's exclusion contract.
 
 The backup walks the whole profile home and the retention policy keeps
-archives for up to 90 days, so the exclusion list is what keeps the secrets
+archives for up to 15 days, so the exclusion list is what keeps the secrets
 file (credentials.yaml) out of the archives it never deletes early. The
 profile home under test comes from the conftest autouse `_isolate_profile`
 fixture, which pins CHARLIEBOT_HOME at a fresh directory per test.
 """
+import datetime
 import pathlib
 import tarfile
+import types
 
 import pytest
 
@@ -65,3 +67,31 @@ def test_create_backup_leaves_out_only_the_top_level_opencode_store(
 
   assert not any(name == "opencode" or name.startswith("opencode/") for name in members)
   assert "sessions/s1/opencode/note.json" in members
+
+
+_FIXED_NOW = datetime.datetime(2026, 11, 4, 4, 50)
+
+
+class _FixedClockDatetime(datetime.datetime):
+  """The datetime class with now() pinned to _FIXED_NOW; parsing and arithmetic stay real."""
+
+  @classmethod
+  def now(cls, tz: datetime.tzinfo | None = None) -> datetime.datetime:
+    return _FIXED_NOW
+
+
+def test_retention_keeps_last_three_days_and_recent_sundays(monkeypatch: pytest.MonkeyPatch) -> None:
+  # The scheduled run stamps each day's archive at 04:45 and applies retention at 04:50 on the newest day.
+  monkeypatch.setattr(backup, "datetime", types.SimpleNamespace(datetime=_FixedClockDatetime))
+  target = backup.backup_dir()
+  target.mkdir()
+  scheduled_run = _FIXED_NOW.replace(hour=4, minute=45, second=0)
+  for days_ago in range(40):
+    stamp = scheduled_run - datetime.timedelta(days=days_ago)
+    (target / f"charliebot-{stamp:%Y%m%d-%H%M%S}.tar.gz").write_bytes(b"")
+
+  backup.apply_retention()
+
+  kept = {path.name for path in target.iterdir()}
+  kept_days = ("20261025", "20261101", "20261102", "20261103", "20261104")
+  assert kept == {f"charliebot-{day}-044500.tar.gz" for day in kept_days}

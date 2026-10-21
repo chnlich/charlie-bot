@@ -95,7 +95,7 @@ def main() -> None:
       "--backend",
       default=None,
       help=(
-          "Configured backend option id from ~/.charliebot/config.yaml; pass only when the user "
+          "Configured backend option id from $CHARLIEBOT_HOME/config.yaml; pass only when the user "
           "or the line's goal names a backend (see epilog)"))
   parser.add_argument(
       "--keep-worktree",

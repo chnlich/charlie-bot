@@ -22,10 +22,7 @@ How it works:
   scheduler, recovery or trigger scans) on a free local port, against a fresh
   temporary CHARLIEBOT_HOME with a synthetic access key; the tmux server that
   the Terminal tab starts keeps its socket in a directory of the side's own
-  (TMUX_TMPDIR) and is killed when the side stops. Neither side runs in
-  preview mode, so the preview-only differences (the preview marker, the hidden
-  Terminal tab and the hidden scheduled-task "+") stay out of the comparison
-  and are checked by eye on the trial instance.
+  (TMUX_TMPDIR) and is killed when the side stops.
 - Data. The same metadata.json files are written into both homes: three
   groups, one root with a child session and a worker, two archived workers and
   plain sessions. Every row carries the schema_version 2 profile today's

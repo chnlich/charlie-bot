@@ -108,6 +108,10 @@ An understanding page lists the divergences of a request that admits several rea
 - An improve-loop plan follows this same contract; its approval object covers
   repo, goal, iterations, work branch, and merge-back — loop parameters with reasonable
   alternatives (iteration count, merge-back) make natural Trade-offs.
+- Keep the plan short: retain the decision, the necessary scope and the acceptance.
+- Put operational history in `$CHARLIEBOT_HOME/LESSONS.md`; put supporting detail behind links or folds.
+- A chat reply about a plan answers the question in at most five bullets and gives the page link.
+  Detail stays on the page.
 
 ## Feedback
 
@@ -157,6 +161,7 @@ An understanding page lists the divergences of a request that admits several rea
   Verify is a read-only repo-less delegation and runs on
   a registered plan, so the goal it measures against has one home and the plan is listed
   while the rounds run.
+- An Improve round narrows the affected system and tests the mechanism.
 - Verify checks fidelity — claims against evidence — and adequacy: whether the design,
   assumed accurate and implemented, entails what section 1 claims. Adequacy reads
   section 1 as the goal statement only; scope boundaries, thresholds, and exemptions
@@ -185,7 +190,8 @@ An understanding page lists the divergences of a request that admits several rea
 ## Runtime delegation authorization
 
 The runtime gate admits a delegation when the calling manager and its ancestors are open
-and the chain holds a real user message. Verify and cold-read always pass.
+and the chain holds a real user message or a thread platform summon. Verify and cold-read
+always pass.
 The gate judges the chain alone; its definitions live in src/runtime/takeoff_gate.py.
 
 ## Execution

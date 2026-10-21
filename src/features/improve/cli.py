@@ -69,7 +69,7 @@ def main() -> None:
       default=None,
       help="Optional path to a file containing the improvement plan (read and sent as the plan payload)")
   parser.add_argument("--base-branch", required=True, help="Base branch for iteration worktrees")
-  parser.add_argument("--backend", default=None, help="Configured backend option id from ~/.charliebot/config.yaml")
+  parser.add_argument("--backend", default=None, help="Configured backend option id from $CHARLIEBOT_HOME/config.yaml")
   parser.add_argument(
       "--work-branch",
       "--branch-prefix",

@@ -31,9 +31,14 @@ This module walks the nodes and runs step 1. Steps 2 to 4 are the per-node pass
 
 from __future__ import annotations
 
+import collections
+import datetime
+import json
+import os
+import pathlib
 from typing import TYPE_CHECKING
 
-from src.infra import config, log_once
+from src.infra import config, log_once, models
 from src.runtime import runs, task_execution
 from src.runtime.hooks import sequence_controllers
 
@@ -41,6 +46,85 @@ if TYPE_CHECKING:
   from src.runtime import task_sessions
 
 log = log_once.LazyStructlogLogger()
+
+MARKER_RELPATH = pathlib.Path("state") / "boot_recovery.json"
+
+
+def marker_path(cfg: config.CharlieBotConfig) -> pathlib.Path:
+  """The boot-recovery marker's location under this instance's home."""
+  return cfg.charliebot_home / MARKER_RELPATH
+
+
+def read_boot_recovery_marker(cfg: config.CharlieBotConfig) -> datetime.datetime | None:
+  """The last clean pass's start time, or None when the marker is absent."""
+  path = marker_path(cfg)
+  try:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+  except FileNotFoundError:
+    return None
+  return datetime.datetime.fromisoformat(payload["pass_started_at"])
+
+
+def write_boot_recovery_marker(cfg: config.CharlieBotConfig, started_at: datetime.datetime) -> None:
+  """Record the pass start time atomically (tmp file + rename)."""
+  path = marker_path(cfg)
+  path.parent.mkdir(parents=True, exist_ok=True)
+  tmp = path.with_suffix(".json.tmp")
+  tmp.write_text(json.dumps({"pass_started_at": started_at.isoformat()}), encoding="utf-8")
+  os.replace(tmp, path)
+
+
+def _cold_read_owes_delivery(
+    meta: models.SessionMetadata, run_records: list[models.RunRecord], events: list[dict],
+    run_store: runs.RunStore) -> bool:
+  """Whether a cold-read task's last work Run failed with no retry Run following."""
+  if meta.task is None or meta.task.task_type != models.TaskType.COLD_READ:
+    return False
+  work_runs = [r for r in run_records if r.kind == "work"]
+  if not work_runs:
+    return False
+  return run_store.terminal_outcome(events, work_runs[-1].id) == "failed"
+
+
+def _boot_skip_reason(
+    tree: task_sessions.TaskTreeManager,
+    session_id: str,
+    session_dir: pathlib.Path,
+    meta: models.SessionMetadata,
+    marker: datetime.datetime,
+) -> str | None:
+  """The skip condition that failed, or None when the node is skippable.
+
+    All six conditions must hold: the lifecycle state is not ``open``, both
+    durable files predate the marker, every Run ended, no Run carries a
+    sequence ref, no Run's worktree survives on disk, and a cold-read task's
+    last work Run did not fail (its delivery chain would still owe a report).
+    """
+  if tree.task_state_fast(session_id) == "open":
+    return "state_open"
+  marker_ts = marker.timestamp()
+  for path in (session_dir / runs.DATA_DIR_NAME / "chat_events.jsonl", session_dir / runs.METADATA_NAME):
+    try:
+      mtime = path.stat().st_mtime
+    except FileNotFoundError:
+      return "file_after_marker"
+    if mtime >= marker_ts:
+      return "file_after_marker"
+  run_records = tree.runs.list_run_records_sync(session_id)
+  for run in run_records:
+    if run.ended_at is None:
+      return "run_unended"
+    if run.sequence_ref is not None:
+      return "sequence_ref"
+    if run.worktree_path and os.path.lexists(run.worktree_path):
+      return "worktree_exists"
+  if meta.task is not None and meta.task.task_type == models.TaskType.COLD_READ:
+    # Only a cold-read task's failed last work Run still owes a delivery;
+    # other task types skip without ever loading the event history.
+    events = tree.runs.load_events_sync(session_id)
+    if _cold_read_owes_delivery(meta, run_records, events, tree.runs):
+      return "cold_read_failed"
+  return None
 
 
 async def reconcile_task_tree(
@@ -50,9 +134,13 @@ async def reconcile_task_tree(
 ) -> dict:
   """Reconcile every v2 node this instance owns. Returns pass counters."""
   adapter = adapter if adapter is not None else tree.dispatch.executor
-  counters = {"nodes": 0, "resumed": 0, "drained": 0, "followups": 0}
+  counters = {"nodes": 0, "resumed": 0, "drained": 0, "followups": 0, "full": 0, "skipped": 0}
   if not cfg.sessions_dir.is_dir():
     return counters
+  started_at = datetime.datetime.now(datetime.UTC)
+  marker = read_boot_recovery_marker(cfg)
+  keep_counts: collections.Counter[str] = collections.Counter()
+  failed_node = False
 
   # The sequence controllers' honest verdicts come first: a recovered
   # "interrupted" sequence state must not race the Run reconciliation below.
@@ -70,7 +158,19 @@ async def reconcile_task_tree(
     if meta is None:
       continue
     counters["nodes"] += 1
+    if marker is not None:
+      reason = _boot_skip_reason(tree, session_id, session_dir, meta, marker)
+      if reason is None:
+        # The skip keeps the display warm-up: the sidebar row and header
+        # badge show this node's newest Run's backend without a check.
+        newest = tree.runs.newest_run_record_sync(session_id)
+        if newest is not None:
+          task_execution.thinking_state.note_run_backend(session_id, newest.backend)
+        counters["skipped"] += 1
+        continue
+      keep_counts[reason] += 1
     try:
+      counters["full"] += 1
       await task_execution._reconcile_node(session_id, tree, adapter, counters, cfg)
     except Exception as exc:
       log.exception("task_recovery_node_failed", session=session_id)
@@ -79,5 +179,13 @@ async def reconcile_task_tree(
       # converges once space returns (a restart would repair it the
       # same way — the retry just does it without waiting for one).
       if adapter is not None and task_execution.is_out_of_space_error(exc):
+        # The retry re-runs this pass until a round survives; the marker
+        # only advances once a whole pass converges.
         adapter.start_run_end_landing_retry(session_id)
+      failed_node = True
+  if not failed_node:
+    write_boot_recovery_marker(cfg, started_at)
+  # The caller's task_tree_recovery_done line carries these: one line per pass.
+  counters["marker"] = marker.isoformat() if marker else None
+  counters["keep_reasons"] = dict(keep_counts)
   return counters

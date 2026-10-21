@@ -190,7 +190,7 @@ def test_every_backend_type_attributes_to_the_cli_that_logs_it() -> None:
   expected = {
       "antigravity": "Antigravity",
       "cc-claude": "Claude Code",
-      "cc-kimi": "Claude Code",
+      "cc-anthropic-compatible": "Claude Code",
       "cc-openai-compatible": "Claude Code",
       "codex": "Codex",
       "opencode": "opencode",

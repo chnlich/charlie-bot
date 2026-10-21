@@ -39,9 +39,8 @@ _BACKUP_PREFIX = 'charliebot-'
 _BACKUP_SUFFIX = '.tar.gz'
 
 # Age thresholds in days
-_DAILY_THRESHOLD = 7
-_WEEKLY_THRESHOLD = 30
-_MONTHLY_THRESHOLD = 90
+_DAILY_THRESHOLD = 3
+_WEEKLY_THRESHOLD = 15
 
 
 def _should_exclude(arcname: str) -> bool:
@@ -52,7 +51,7 @@ def _should_exclude(arcname: str) -> bool:
     return True
   for part in parts:
     # CREDENTIALS_FILENAME is the profile's secrets file; it must never ride a
-    # backup, which the retention policy keeps for up to 90 days.
+    # backup, which the retention policy keeps for up to 15 days.
     if part in ('.git', '.claude', config.CREDENTIALS_FILENAME, '__pycache__') or part.endswith('.pyc'):
       return True
   # Exclude sessions/*/threads and everything under it
@@ -123,10 +122,9 @@ def create_backup() -> pathlib.Path:
 def apply_retention() -> None:
   """Apply tiered retention policy to this profile's backups.
 
-  - Keep all backups from the last 7 days.
-  - Keep Sunday-only backups from 7-30 days ago.
-  - Keep 1st-of-month backups from 30-90 days ago.
-  - Delete everything older than 90 days.
+  - Keep all backups from the last 3 days.
+  - Keep Sunday-only backups from 3-15 days ago.
+  - Delete every other backup.
   """
   target_dir = backup_dir()
   if not target_dir.exists():
@@ -142,8 +140,6 @@ def apply_retention() -> None:
       keep = True
     elif age < _WEEKLY_THRESHOLD:
       keep = backup_date.weekday() == 6  # Sunday
-    elif age < _MONTHLY_THRESHOLD:
-      keep = backup_date.day == 1  # 1st of month
     else:
       keep = False
     if not keep:

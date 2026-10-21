@@ -13,6 +13,47 @@
   import directly. New imports take this form; the code-health cron converts existing ones.
 - `uv run yapf -i <file>` formats each Python file a change touches.
 
+### Module Boundaries
+
+- Keep features behind clean module boundaries, including features used only by other installs.
+- Simplify shared modules by removing import cycles and backend-specific branches.
+- Estimate deletion cost from references outside a feature's module; source-file line counts understate that cost.
+
+## Test and Verification
+
+- Run the full suite with `uv run pytest -q` from any checkout.
+- Run `uv sync` in a fresh worktree before testing. In a worktree, `uv run <cmd>` builds its local `.venv`; include
+  `uv run` commands in task specs.
+- Reproduce a load-sensitive failure by forcing interleaving.
+- Remove a `noqa` directive only when `ruff check --extend-select RUF100` reports it unused. `--extend-select` keeps
+  the project's rule selection.
+- Gate YAPF on a single-file exit code or empty diff output.
+
+### HTTP Clients and Test Isolation
+
+- Build a per-call `httpx.AsyncClient` with a deferred import in each new low-rate HTTP consumer.
+- Patching a consumer module's `httpx.AsyncClient` name changes the shared module attribute.
+- Build one client per call so the fake stays scoped to that call.
+- Starlette `TestClient` serves each request on a fresh event loop.
+- Take shared tree locks before a test's first request. Use lock-free reads after that request.
+
+### Live Verification
+
+- Verify changes on a synthetic `CHARLIEBOT_HOME` with `tools/live_smoke_task_tree.py`.
+- The harness skips `server.py` lifespan startup. It does not run crash recovery, scheduler, or trigger scans.
+- Use a trial home with `server.py` to test real delayed triggers.
+- Copy a session directory with its CLI continuity files when staging it in another home.
+- Child agents inherit `CHARLIEBOT_HOME` through `task_execution._child_env`.
+- Assign a fresh path to a scratch home. Delete only that path.
+- Use `httpx.ASGITransport(app=server.app)` to measure routes against copied sessions.
+- This transport skips lifespan startup, which can start real agents in real worktrees.
+- Remove agent CLIs from `PATH` and assert that a probe launches zero child processes.
+
+### Model-Based Checks
+
+- Gate exit codes on mechanical answer shape. Print model judgments for a human to assess.
+- Judge glossary probes against the page's declared reader model. Expect repeated probe rounds on real pages.
+
 ## Git Conventions
 - Commit frequently with descriptive messages
 - Format: `type(scope): description` (feat, fix, refactor, test, docs)

@@ -18,7 +18,7 @@ query pulls its whole topic. An entry earns admission when the action it changes
 context it permanently occupies; a surface the reader already reads unconditionally (a prompt, a
 skill, the owning repo's docs) wins over the store.
 
-The memory store (`~/.charliebot/memory/`) is a local git repo of labeled entries: one durable
+The memory store (`$CHARLIEBOT_HOME/memory/`) is a local git repo of labeled entries: one durable
 fact or rule set per file under `entries/<topic>/<slug>.md`, with front matter restricted to
 `scope`, `topic`, `audience`, `title` and a pure-markdown body.
 Sessions only stage candidates (`charliebot memory add` writes to `staging/`): a staging
@@ -177,7 +177,7 @@ plus one `Staging: <file>` line per staging candidate the commit consumed.
 ## Proposal review and landing
 
 The day's curation reaches the user as one pull request: the `proposal` branch of the memory
-repo, drafted in the git worktree `~/.charliebot/memory-proposal/`, where the selector writes
+repo, drafted in the git worktree `$CHARLIEBOT_HOME/memory-proposal/`, where the selector writes
 the day's entry and `topics` edits uncommitted and the reviewer commits them entry by entry
 through `charliebot memory proposal commit <store-relative path> --message-file F`.
 The user reviews the PR at a pinned version through the diff page (`diff_path`) and the PR page,
@@ -188,7 +188,7 @@ When a reply links a PR version, give the diff page as an absolute markdown link
 `[diff](<base_url><diff_path>)`. Resolve `<base_url>` as the file-server skill states.
 On the user's approval of version `<sha>`, the session that received the approval runs
 `charliebot memory proposal land <sha>`, which fast-forwards the live store
-`~/.charliebot/memory/` to exactly that version.
+`$CHARLIEBOT_HOME/memory/` to exactly that version.
 On partial approval, remove the unwanted commits from the PR first, re-link the new version in
 the reply, and collect the user's approval of that version.
 `charliebot memory proposal open` rebases the PR onto the live base when the base moved, and a
@@ -204,3 +204,6 @@ revealed gap gets its one-line amendment in the same reply, and the amendment la
 normal repo change flow after approval.
 A change the user approves inside a session commits directly to the live store's base branch,
 and the next `open` rebases the PR onto it.
+
+Write memory snapshots to `/tmp/charliebot-memory-bak/`, flat with their original filenames. Overwriting an earlier
+snapshot is allowed. Keep backups outside `$CHARLIEBOT_HOME/`, including its session directories.

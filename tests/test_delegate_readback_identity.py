@@ -116,8 +116,9 @@ async def test_readback_run_id_is_the_operation_work_run(
       caller="operator")
   work_run_id = control_events.stable_run_id(child.id, "delegate-runcheck:work")
   review_run_id = control_events.stable_run_id(child.id, "delegate-runcheck:review")
-  await tree.runs.register_run(models.RunRecord(id=work_run_id, session_id=child.id, kind="work", repo_path="/repo"))
-  await tree.runs.register_run(
+  await tree.runs.register_run_locked(
+      models.RunRecord(id=work_run_id, session_id=child.id, kind="work", repo_path="/repo"))
+  await tree.runs.register_run_locked(
       models.RunRecord(id=review_run_id, session_id=child.id, kind="review", review_of_run_id=work_run_id))
   readback = common.find_local_task_child(
       manager.id, description=description, task_type="quick-edit", request_id="delegate-runcheck")

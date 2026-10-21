@@ -17,7 +17,7 @@ TOTAL_CAP = 120_000
 
 now = time.time()
 rows = []
-for path in glob.glob(os.path.expanduser('~/.charliebot/sessions/*/data/chat_events.jsonl')):
+for path in glob.glob(os.path.join(os.environ['CHARLIEBOT_HOME'], 'sessions/*/data/chat_events.jsonl')):
   sid = path.split('/sessions/')[1][:8]
   if now - os.path.getmtime(path) > WINDOW_S:
     continue

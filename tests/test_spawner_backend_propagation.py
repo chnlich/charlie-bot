@@ -47,8 +47,9 @@ def test_resolve_backend_option_requires_valid_backend_and_model() -> None:
     "backend_type, entry_kwargs",
     [
         ("cc-claude", {}),
-        ("cc-kimi", {
-            "credential": "test-kimi"
+        ("cc-anthropic-compatible", {
+            "api_base": "https://api.test",
+            "context_window": 409600,
         }),
         ("cc-openai-compatible", {
             "api_base": "https://api.test/v1"

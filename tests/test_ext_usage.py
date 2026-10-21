@@ -549,7 +549,7 @@ def _claude_provider(
     **creds: Any) -> claude_quota.ClaudeQuotaAccount:
   credentials_path = tmp_path / ".credentials.json"
   _write_credentials(credentials_path, **creds)
-  monkeypatch.setattr("src.infra.http.get_http_client", lambda: fake)
+  monkeypatch.setattr(conftest.HTTP_GET_HTTP_CLIENT_PATCH_TARGET, lambda: fake)
   return claude_quota.ClaudeQuotaAccount("ext-test", credentials_path)
 
 

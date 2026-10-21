@@ -1,6 +1,6 @@
 """The setup run behind ``scripts/setup.sh``: ``python -m src.app.setup [--dry-run]``.
 
-The run registers the packages, provisions the ``~/.charliebot`` home layout, then calls each setup step
+The run registers the packages, provisions the ``$CHARLIEBOT_HOME`` home layout, then calls each setup step
 that a package registered with ``wiring.register_setup_step``, in registration order. With ``--dry-run``
 nothing is written: the home block reports what exists and what it would create, and each step receives
 ``dry_run=True``.
@@ -22,17 +22,17 @@ from src.runtime.hooks import wiring
 
 
 def _provision_home(cfg, *, dry: bool) -> None:
-  print("==> Provisioning ~/.charliebot")
+  print("==> Provisioning $CHARLIEBOT_HOME")
   # Per-item created/exists for the home layout. init_charliebot_home() is the
   # single source of truth for this layout and is the same path the server runs at startup;
   # in dry-run we only report what already exists vs what would be created, and write nothing.
-  # The memory store creates its own scaffold at first use, so setup leaves ~/.charliebot/memory/ alone.
+  # The memory store creates its own scaffold at first use, so setup leaves $CHARLIEBOT_HOME/memory/ alone.
   home_items = [
-      ("dir", "~/.charliebot/", cfg.charliebot_home),
-      ("dir", "~/.charliebot/sessions/", cfg.sessions_dir),
-      ("dir", "~/.charliebot/config.d/", cfg.config_d_dir),
-      ("file", "~/.charliebot/config.yaml", cfg.config_file),
-      ("file", "~/.charliebot/credentials.yaml", cfg.credentials_file),
+      ("dir", "$CHARLIEBOT_HOME/", cfg.charliebot_home),
+      ("dir", "$CHARLIEBOT_HOME/sessions/", cfg.sessions_dir),
+      ("dir", "$CHARLIEBOT_HOME/config.d/", cfg.config_d_dir),
+      ("file", "$CHARLIEBOT_HOME/config.yaml", cfg.config_file),
+      ("file", "$CHARLIEBOT_HOME/credentials.yaml", cfg.credentials_file),
   ]
   existed_before = {str(p): p.exists() for _, _, p in home_items}
   if not dry:

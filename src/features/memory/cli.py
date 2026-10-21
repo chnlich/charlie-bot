@@ -1,7 +1,7 @@
 """CLI: labeled-entry memory store (query / add / lint).
 
 Pure-local; no server dependency. The store lives at
-``charliebot_home_dir() / "memory"`` (``~/.charliebot/memory/``); the home is
+``charliebot_home_dir() / "memory"`` (``$CHARLIEBOT_HOME/memory/``); the home is
 env-resolved (src.infra.home) and no config key can move it, so the verbs read
 no config file — a broken config.yaml must not block the store's own verbs.
 The run-token path is config-free too: the audience resolves from the home and
@@ -74,7 +74,7 @@ def main() -> None:
       "--dir",
       default=None,
       help=
-      "Store root to read (default: the live store at ~/.charliebot/memory); pass the PR worktree's path to read its drafted entries",
+      "Store root to read (default: the live store at $CHARLIEBOT_HOME/memory); pass the PR worktree's path to read its drafted entries",
   )
 
   p_add = sub.add_parser(

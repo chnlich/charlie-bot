@@ -27,10 +27,10 @@ def build_env(tmp_path: pathlib.Path, backend_type: str):
 
   home = tmp_path / "home"
   kwargs: dict = {"id": "type-under-test", "label": "Type", "type": backend_type, "model": "fake-model"}
-  if backend_type in ("cc-openai-compatible", "charlie-code"):
+  if backend_type in ("cc-openai-compatible", "cc-anthropic-compatible", "charlie-code"):
     kwargs["api_base"] = "http://127.0.0.1:9"
-  if backend_type == "cc-kimi":
-    kwargs["credential"] = "kimi"
+  if backend_type == "cc-anthropic-compatible":
+    kwargs["context_window"] = 409600
   option = conftest.backend_option(**kwargs)
   cfg = core_config.CharlieBotConfig(
       charliebot_home=home,

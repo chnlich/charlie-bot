@@ -83,7 +83,7 @@ async def test_v2_create_tree_detail_and_runs(task_env) -> None:
     assert detail.json()["ancestors"] == [{"id": ids["root"], "name": "Root"}]
 
     # Retry is stable per request id and visible in GET runs.
-    await task_mgr.runs.register_run(models.RunRecord(id="run-1", session_id=ids["worker"]))
+    await task_mgr.runs.register_run_locked(models.RunRecord(id="run-1", session_id=ids["worker"]))
     retry = client.post(f"/api/sessions/{ids['worker']}/retry", json={"request_id": "retry-1", "run_id": "run-1"})
     assert retry.status_code == 200
     retry_body = retry.json()
@@ -108,7 +108,7 @@ async def test_activity_tracks_a_finish_that_lands_after_a_warm_derivation(task_
   _cfg, _session_blocks, task_mgr = task_env
   ids = await seed_tree(task_mgr)
   worker = ids["worker"]
-  await task_mgr.runs.register_run(models.RunRecord(id="r-memo", session_id=worker))
+  await task_mgr.runs.register_run_locked(models.RunRecord(id="r-memo", session_id=worker))
   assert task_mgr.activity_of(worker).work_state == "waiting"
   await task_mgr.runs.record_finish(worker, "r-memo", "completed")
   assert task_mgr.activity_of(worker).work_state == "idle"
@@ -123,7 +123,7 @@ async def test_activity_tracks_a_launch_that_lands_after_a_warm_derivation(task_
   _cfg, _session_blocks, task_mgr = task_env
   ids = await seed_tree(task_mgr)
   worker = ids["worker"]
-  await task_mgr.runs.register_run(models.RunRecord(id="r-launch", session_id=worker))
+  await task_mgr.runs.register_run_locked(models.RunRecord(id="r-launch", session_id=worker))
   assert task_mgr.activity_of(worker).work_state == "waiting"
   proc = subprocess.Popen(["sleep", "30"])
   try:
@@ -146,7 +146,7 @@ async def test_activity_tracks_a_stop_request_that_lands_after_a_warm_derivation
   _cfg, _session_blocks, task_mgr = task_env
   ids = await seed_tree(task_mgr)
   worker = ids["worker"]
-  await task_mgr.runs.register_run(models.RunRecord(id="r-stop", session_id=worker))
+  await task_mgr.runs.register_run_locked(models.RunRecord(id="r-stop", session_id=worker))
   assert task_mgr.activity_of(worker).work_state == "waiting"
   await task_mgr.runs.request_stop(worker, "r-stop", "stop-1")
   assert task_mgr.activity_of(worker).work_state == "idle"
@@ -164,7 +164,7 @@ async def test_fold_agrees_with_a_cold_refold_across_a_recycle(task_env) -> None
   _cfg, session_blocks, task_mgr = task_env
   ids = await seed_tree(task_mgr)
   worker = ids["worker"]
-  await task_mgr.runs.register_run(models.RunRecord(id="r1", session_id=worker))
+  await task_mgr.runs.register_run_locked(models.RunRecord(id="r1", session_id=worker))
   await task_mgr.runs.record_finish(worker, "r1", "completed")
   assert task_mgr.activity_of(worker).work_state == "idle"
 
@@ -178,7 +178,7 @@ async def test_fold_agrees_with_a_cold_refold_across_a_recycle(task_env) -> None
   # and re-folded from the archived half: r1's fact survives the move.
   assert task_mgr.activity_of(worker).work_state == "idle"
 
-  await task_mgr.runs.register_run(models.RunRecord(id="r2", session_id=worker))
+  await task_mgr.runs.register_run_locked(models.RunRecord(id="r2", session_id=worker))
   await task_mgr.runs.record_finish(worker, "r2", "completed")
   warm = task_mgr._run_outcomes_of(worker, task_mgr.session_events.load_chat_events_sync(worker), meta.archive_offset)
   assert warm == {"r1": "completed", "r2": "completed"}
@@ -199,7 +199,7 @@ async def test_activity_derivation_rereads_after_a_proc_judgment(task_env) -> No
   _cfg, _session_blocks, task_mgr = task_env
   ids = await seed_tree(task_mgr)
   worker = ids["worker"]
-  await task_mgr.runs.register_run(models.RunRecord(id="r-proc", session_id=worker))
+  await task_mgr.runs.register_run_locked(models.RunRecord(id="r-proc", session_id=worker))
   proc = subprocess.Popen(["sleep", "30"])
   try:
     pid_start, _state = runs.read_pid_stat(proc.pid)
@@ -244,7 +244,7 @@ async def test_patch_metadata_and_permanent_delete_blockers(task_env) -> None:
     assert missing.status_code == 404
 
     # Permanent delete is blocked by the child run record.
-    await task_mgr.runs.register_run(models.RunRecord(id="run-blk", session_id=ids["worker"]))
+    await task_mgr.runs.register_run_locked(models.RunRecord(id="run-blk", session_id=ids["worker"]))
     blocked = client.delete(f"/api/sessions/{ids['worker']}/permanent")
     assert blocked.status_code == 409
     assert any("run record" in b for b in blocked.json()["detail"]["blockers"])
@@ -302,7 +302,7 @@ async def register_agent_run(
   (pid, pid_start) on the Run, so the fixture lands the identity like the
   real on_spawn callback does.
   """
-  record = await task_mgr.runs.register_run(
+  record = await task_mgr.runs.register_run_locked(
       models.RunRecord(id=claims.run_id, session_id=claims.session_id, kind="work"))
   await task_mgr.runs.record_launch(
       claims.session_id,
@@ -396,7 +396,7 @@ async def test_agent_run_token_creates_own_children_under_its_own_task(task_env)
 
 
 # ---------------------------------------------------------------------------
-# Authorization: a real user message on the chain, machine input never
+# Authorization: a user request on the chain (a real user message or a thread summon), machine input never
 # ---------------------------------------------------------------------------
 
 

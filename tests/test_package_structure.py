@@ -50,7 +50,7 @@ from typing import NamedTuple
 import conftest
 import pytest
 
-BACKEND_VARIANTS = frozenset({"kimi", "openai_compatible"})
+BACKEND_VARIANTS = frozenset({"anthropic_compatible", "openai_compatible"})
 CHAT_CHANNELS = frozenset({"slack", "discord"})
 CONTAINER_MARKERS = frozenset({"src/__init__.py", "src/backends/__init__.py", "src/features/__init__.py"})
 EXCEPTIONS_PATH = pathlib.Path(__file__).with_name("structure_exceptions.txt")

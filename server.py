@@ -261,11 +261,12 @@ async def lifespan(app: fastapi.FastAPI) -> AsyncIterator[None]:
 
     # Session cgroups (memory cap and task cap): the one boot line stating
     # whether the feature is on for this host (off when the memory cap is 0 or
-    # the delegated app.slice is missing/unwritable). Then sweep cgroup
-    # directories a previous server life left behind (empty ones only).
+    # the delegated app.slice is missing/unwritable). Then sweep this home's
+    # session cgroup directories a previous server life left behind (empty
+    # ones only); other homes' cgroups on the host are not touched.
     process.log_session_cgroup_startup(
         cfg.server.session_memory_max_mb, cfg.server.session_swap_max_mb, cfg.server.session_tasks_max)
-    process.sweep_stale_session_cgroups()
+    process.sweep_stale_session_cgroups(cfg.sessions_dir)
 
     app.state.recovery_task = asyncio.create_task(_run_task_recovery(cfg, task_execution.task_manager()))
     service_ctx = wiring.ServiceContext(app, cfg, app.state.recovery_task)

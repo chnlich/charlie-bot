@@ -60,8 +60,8 @@ def _error_summary(exc: pydantic.ValidationError) -> str:
   return "; ".join(f"{'.'.join(str(part) for part in err['loc'])}: {err['msg']}" for err in exc.errors())
 
 
-def parse_patch(text: str) -> StatusPatch:
-  """The patch that the JSON *text* holds; WebReplyError 422 when it is not an object of valid items or names none."""
+def parse_patch(text: str, scan_context: file_urls.ScanContext) -> StatusPatch:
+  """The valid status patch in *text*; WebReplyError 422 for invalid items, no named item or a dead file link."""
   try:
     raw = json.loads(text)
   except json.JSONDecodeError as exc:
@@ -74,12 +74,24 @@ def parse_patch(text: str) -> StatusPatch:
     raise reply.WebReplyError(422, f"Status file is invalid: {_error_summary(exc)}") from exc
   if not patch.model_fields_set:
     raise reply.WebReplyError(422, "Status file names no item: give goal, now or waiting")
+  findings: list[file_urls.FileLink] = []
+  if patch.goal is not None:
+    findings.extend(file_urls.scan_file_links(patch.goal, scan_context))
+  if patch.now is not None:
+    findings.extend(file_urls.scan_file_links(patch.now, scan_context))
+  for item in patch.waiting:
+    for value in (item.text, item.context, item.link):
+      if value is not None:
+        findings.extend(file_urls.scan_file_links(value, scan_context))
+  dead_links = [finding for finding in findings if finding.dead]
+  if dead_links:
+    raise reply.WebReplyError(422, file_urls.dead_links_detail(dead_links))
   return patch
 
 
 async def set_status(
     session_id: str, text: str, store: session_store.SessionStore, events: session_events.SessionEvents,
-    tree: task_sessions.TaskTreeManager) -> dict:
+    tree: task_sessions.TaskTreeManager, *, scan_context: file_urls.ScanContext) -> dict:
   """Store the items that *text* names as the session's status and return the stored status with the Now length.
 
   Refusals raise WebReplyError before anything is stored or recorded. A stored set records one web_status event and
@@ -87,7 +99,7 @@ async def set_status(
   stored status; the event and the stored metadata keep neither.
   """
   meta = await reply.require_web_session(store, session_id)
-  patch = parse_patch(text)
+  patch = parse_patch(text, scan_context)
   _require_waiting_context(patch)
   if "waiting" in patch.model_fields_set:
     unread = _unread_items(patch.waiting, await _read_item_digests(session_id, events))
@@ -122,7 +134,7 @@ async def set_status(
 def item_sha256(item: metadata.WaitingItem) -> str:
   """The digest that names *item* as it stands: its three fields and the bytes of the host file its link names.
 
-  A link to a missing host file raises: the digest would otherwise name a read of a page that is gone.
+  The linked path contributes bytes only when it names a file; directories and missing paths contribute no bytes.
   """
   payload = json.dumps(
       {
@@ -132,7 +144,7 @@ def item_sha256(item: metadata.WaitingItem) -> str:
       }, sort_keys=True, ensure_ascii=False)
   digest = hashlib.sha256(payload.encode("utf-8"))
   path = file_urls.host_file(item.link)
-  if path is not None:
+  if path is not None and path.is_file():
     digest.update(path.read_bytes())
   return digest.hexdigest()
 
@@ -176,14 +188,15 @@ async def record_ask_check(
 
 
 async def unread_waiting(
-    session_id: str, text: str, store: session_store.SessionStore, events: session_events.SessionEvents) -> dict:
+    session_id: str, text: str, store: session_store.SessionStore, events: session_events.SessionEvents, *,
+    scan_context: file_urls.ScanContext) -> dict:
   """The waiting items of the status file *text* that no web_ask_check event of the session names.
 
   The file is parsed and validated as a set parses it, including the waiting-item context check; refusals match the
   set's. Nothing is stored or recorded.
   """
   await reply.require_web_session(store, session_id)
-  patch = parse_patch(text)
+  patch = parse_patch(text, scan_context)
   _require_waiting_context(patch)
   unread = _unread_items(patch.waiting, await _read_item_digests(session_id, events))
   return {"unread": [item.model_dump(mode="json") for item in unread]}

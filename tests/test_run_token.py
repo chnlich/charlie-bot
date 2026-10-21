@@ -7,6 +7,8 @@ import json
 import conftest
 import pytest
 
+from src.features.discord import discord_listener
+from src.features.slack import slack_listener
 from src.infra import event_types as ET
 from src.runtime import run_token, takeoff_gate
 from src.runtime.api import auth
@@ -70,7 +72,7 @@ async def test_invalid_run_bearer_never_falls_back_to_operator_cookie() -> None:
 
 
 # ---------------------------------------------------------------------------
-# The v2 task gate: an open manager chain that a real user message started
+# The v2 task gate: an open manager chain that a real user message or a platform summon started
 # ---------------------------------------------------------------------------
 
 _PARENTS = {"root": None, "child": "root", "grandchild": "child"}
@@ -149,3 +151,96 @@ def test_task_gate_counts_user_messages_after_the_newest_clone_start_only() -> N
   child_log.append(_event(ET.CLONE_START, ""))
   with pytest.raises(takeoff_gate.DelegationBlockedError, match="no user request"):
     _gate("child", events)
+
+
+_SLACK_SUMMON = {
+    "type": ET.AGENT_MESSAGE,
+    "content": "Slack 线程召唤",
+    "slack": {
+        "channel_id": "C123",
+        "thread_ts": "1700000000.000100",
+        "mention_ts": "1700000000.000200",
+    },
+}
+_LEGACY_SLACK_SUMMON = {
+    "type": ET.AGENT_MESSAGE,
+    "content": "Slack 线程召唤：帮我看下这个 flaky 的测试",
+    "slack": {
+        "channel_id": "C123",
+        "thread_ts": "1700000000.000100",
+        "mention_ts": "1700000000.000200",
+    },
+}
+_DISCORD_SUMMON = {
+    "type": ET.AGENT_MESSAGE,
+    "content": "Discord thread summon",
+    "discord": {
+        "guild_id": "G123",
+        "channel_id": "C123",
+        "thread_id": "T123",
+        "mention_id": "M123",
+    },
+}
+
+
+@pytest.mark.parametrize(
+    "summon", [_SLACK_SUMMON, _LEGACY_SLACK_SUMMON, _DISCORD_SUMMON], ids=["slack-current", "slack-legacy", "discord"])
+def test_task_gate_admits_a_thread_summon_anywhere_on_the_chain(summon: dict) -> None:
+  """A recorded Slack or Discord summon is a user request, so a grandchild delegates on the root's summon."""
+  assert _gate("grandchild", {"root": [summon]}) == "root"
+
+
+@pytest.mark.parametrize(
+    ("node", "summon"), [("child", _LEGACY_SLACK_SUMMON), ("grandchild", _DISCORD_SUMMON)], ids=["child", "grandchild"])
+def test_task_gate_admits_a_summon_on_a_descendant_node(node: str, summon: dict) -> None:
+  """A grandchild can delegate from a summon recorded on its own node or its child ancestor."""
+  assert _gate("grandchild", {node: [summon]}) == node
+
+
+@pytest.mark.parametrize(
+    "event", [
+        pytest.param(
+            {
+                "type": ET.AGENT_MESSAGE,
+                "content": "Slack 线程召唤 nudge",
+                "slack": {
+                    "channel_id": "C123",
+                    "thread_ts": "1700000000.000100",
+                    "nudge_of": "1700000000.000200",
+                },
+            },
+            id="slack-nudge"),
+        pytest.param(_event(ET.AGENT_MESSAGE), id="plain-agent-message"),
+        pytest.param(
+            {
+                "type": ET.AGENT_MESSAGE,
+                "content": "web reply nudge",
+                "web_reply": {
+                    "nudge_of": "1700000000.000200"
+                },
+            },
+            id="web-reply-nudge"),
+        pytest.param(_event(ET.SCHEDULED_TRIGGER), id="scheduled-trigger"),
+        pytest.param(_event(ET.CHILD_REPORT), id="child-report"),
+    ])
+def test_task_gate_refuses_a_chain_whose_only_input_is_not_a_user_request(event: dict) -> None:
+  """A thread nudge, a plain agent message, a web-reply nudge, a scheduled trigger and a child report
+  carry no request: each leaves the chain without a user request."""
+  with pytest.raises(takeoff_gate.DelegationBlockedError, match="no user request"):
+    _gate("grandchild", {"root": [event]})
+
+
+def test_task_gate_counts_a_summon_after_the_newest_clone_start_only() -> None:
+  """A summon before the node's newest marker belongs to the source; a summon appended after it counts."""
+  child_log = [_SLACK_SUMMON, _event(ET.CLONE_START, "")]
+  events = {"root": [_event(ET.AGENT_MESSAGE)], "child": child_log}
+  with pytest.raises(takeoff_gate.DelegationBlockedError, match="no user request"):
+    _gate("child", events)
+  child_log.append(_SLACK_SUMMON)
+  assert _gate("child", events) == "child"
+
+
+def test_thread_platform_names_are_the_shared_platform_keys() -> None:
+  """Each listener writes its summon block under the key the gate's predicate reads, so the two names
+  and the shared tuple cannot drift apart."""
+  assert (slack_listener.SLACK.name, discord_listener.DISCORD.name) == ET.THREAD_PLATFORM_KEYS

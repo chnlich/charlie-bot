@@ -17,21 +17,15 @@ import conftest
 import pytest
 import pytest_asyncio
 
+from src.infra import event_types as ET
 from src.infra import models
-from src.runtime import task_completion, task_errors
+from src.runtime import control_events, task_completion, task_errors
 
 
 @pytest_asyncio.fixture
 async def tree(tmp_path: pathlib.Path):
   _cfg, _session_blocks, tree = conftest.build_env(tmp_path)
-  await tree.create_task(
-      request_id="root",
-      task_parent_id=None,
-      profile="manager",
-      task=None,
-      name="Root",
-      backend=None,
-      caller=conftest.OPERATOR)
+  await conftest.create_task(tree, parent=None, request_id="root", name="Root")
   return tree
 
 
@@ -45,6 +39,19 @@ async def _count_builds(tree, monkeypatch):
 
   monkeypatch.setattr(tree, "_build_index_sync", counting)
   return builds
+
+
+def _invalidate_during_builds(tree, monkeypatch):
+  """Every build from now on is overtaken by a write, so the cache slot stays empty."""
+  orig = tree._build_index_sync
+
+  def invalidating_build(cached_metas):
+    index = orig(cached_metas)
+    tree._invalidate_index()  # the write lands while the build runs
+    return index
+
+  monkeypatch.setattr(tree, "_build_index_sync", invalidating_build)
+  tree._invalidate_index()
 
 
 @pytest.mark.asyncio
@@ -65,15 +72,7 @@ async def test_write_mid_build_never_installs_over_newer_generation(tree, monkey
   """A structural write landing inside a running build refuses that build's install."""
   builds = await _count_builds(tree, monkeypatch)
   await tree._get_index()
-  orig = tree._build_index_sync
-
-  def invalidating_build(cached_metas):
-    index = orig(cached_metas)
-    tree._invalidate_index()  # the write lands while the build runs
-    return index
-
-  monkeypatch.setattr(tree, "_build_index_sync", invalidating_build)
-  tree._invalidate_index()
+  _invalidate_during_builds(tree, monkeypatch)
   index = await tree._get_index()
   assert index is not None  # the caller still reads its own snapshot
   assert tree._index is None  # never installed over the newer generation
@@ -83,15 +82,14 @@ async def test_write_mid_build_never_installs_over_newer_generation(tree, monkey
 
 
 @pytest.mark.asyncio
-async def test_index_build_consults_facts_once_per_node_per_pass(tree, monkeypatch):
-  """One build pass pays one facts consult chain per task node.
+async def test_index_build_never_folds_a_closed_nodes_full_history(tree, monkeypatch):
+  """A closed node's state and archive value come from the history-tail read.
 
-  The structural read and the inheritance fold need the same node's facts;
-  without the pass cache the fold re-walks the events-cache consults the
-  structural read settled, and a two-node build pays four chains for two
-  nodes (2 structural + 2 fold).
+  The structural read and the inheritance fold both need a node's task state;
+  the tail read serves both (the second hit is the file-identity memo), so a
+  build never loads a closed node's full fold for index output.
   """
-  await tree.create_task(
+  child = await tree.create_task(
       request_id="child",
       task_parent_id=None,
       profile="worker",
@@ -99,36 +97,29 @@ async def test_index_build_consults_facts_once_per_node_per_pass(tree, monkeypat
       name="Child",
       backend=None,
       caller=conftest.OPERATOR)
+  async with tree.control_lock:
+    await tree.events.append(
+        child.id,
+        control_events.build_control_event(
+            ET.TASK_CLOSED, actor=control_events.ACTOR_USER, source_session_id=child.id, outcome="completed"))
   calls = {"n": 0}
   orig = type(tree)._facts_of
 
   def counting(session_id):
-    calls["n"] += 1
+    if session_id == child.id:
+      calls["n"] += 1
     return orig(tree, session_id)
 
   monkeypatch.setattr(tree, "_facts_of", counting)
   tree._build_index_sync(tree.session_store.fresh_cached_metas())
-  assert calls["n"] == 2, f"2-node build made {calls['n']} facts consults"
-
-
-def _invalidate_during_builds(tree, monkeypatch):
-  """Every build from now on is overtaken by a write, so the cache slot stays empty."""
-  orig = tree._build_index_sync
-
-  def invalidating_build(cached_metas):
-    index = orig(cached_metas)
-    tree._invalidate_index()  # the write lands while the build runs
-    return index
-
-  monkeypatch.setattr(tree, "_build_index_sync", invalidating_build)
-  tree._invalidate_index()
+  assert calls["n"] == 0, f"closed-node build made {calls['n']} full-fold consults"
 
 
 @pytest.mark.asyncio
 async def test_automatic_completion_closes_when_a_write_lands_mid_build(tree, monkeypatch):
   manager = await conftest.create_task(tree, parent=None, request_id="mgr")
   worker = await conftest.create_task(tree, parent=manager.id, request_id="w", profile="worker")
-  await tree.runs.register_run(models.RunRecord(id="run-w", session_id=worker.id, kind="work"))
+  await tree.runs.register_run_locked(models.RunRecord(id="run-w", session_id=worker.id, kind="work"))
   _invalidate_during_builds(tree, monkeypatch)
   await tree.dispatch.finish_run(worker.id, "run-w", outcome="success")
   assert tree._index is None  # the builds never installed
@@ -148,10 +139,10 @@ async def test_cancellation_succeeds_when_a_write_lands_mid_build(tree, monkeypa
 async def test_manager_close_citing_a_child_run_passes_evidence_when_a_write_lands_mid_build(tree, monkeypatch):
   feature = await conftest.create_task(tree, parent=None, request_id="feature")
   worker = await conftest.create_task(tree, parent=feature.id, request_id="w", profile="worker")
-  await tree.runs.register_run(models.RunRecord(id="run-w", session_id=worker.id, kind="work"))
+  await tree.runs.register_run_locked(models.RunRecord(id="run-w", session_id=worker.id, kind="work"))
   await tree.dispatch.finish_run(worker.id, "run-w", outcome="success")
   # The worker's report is unprocessed input on the manager until a turn consumes it.
-  await tree.runs.register_run(models.RunRecord(id="run-turn", session_id=feature.id, kind="manager_turn"))
+  await tree.runs.register_run_locked(models.RunRecord(id="run-turn", session_id=feature.id, kind="manager_turn"))
   async with tree.control_lock:
     await tree.dispatch.claim_input_batch_locked(feature.id, "run-turn")
   await tree.dispatch.finish_run(feature.id, "run-turn", outcome="success")

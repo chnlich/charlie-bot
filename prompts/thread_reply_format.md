@@ -17,6 +17,8 @@ mention, a link, or a single number, follows the thread's most recent human mess
 carries the reply when neither settles it. A page this reply links to is part of the answer and
 follows the same language.
 
+This rule decides the reply language for every summoner, the operator included. The summon line of the round and the lines of this contract set no reply language.
+
 ## Delivery
 
 The reply reaches the thread through the reply command named on the platform line of this session's thread reply

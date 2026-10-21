@@ -406,8 +406,12 @@ def iter_ndjson_events_from_end(
     *,
     log_event: str,
     log_fields: dict[str, Any],
-    parse_filter: Callable[[bytes], bool] | None = None) -> Iterator[dict]:
+    parse_filter: Callable[[bytes], bool] | None = None,
+    max_lines: int | None = None) -> Iterator[dict]:
   """Yield the JSON objects parsed from *path*, newest line first.
+
+  With *max_lines*, the walk visits at most that many non-empty lines (kept
+  and filtered lines alike count toward the cap) and stops there.
 
   Same skip contract as :func:`iter_ndjson_events` (an empty or
   whitespace-only line is invisible, a line the parser rejects logs and
@@ -433,7 +437,10 @@ def iter_ndjson_events_from_end(
       return
     rfind = mm.rfind
     pos = size
+    visited = 0
     while pos > 0:
+      if max_lines is not None and visited >= max_lines:
+        return
       nl = rfind(b"\n", 0, pos)
       start = 0 if nl < 0 else nl + 1
       if start == pos:
@@ -441,6 +448,7 @@ def iter_ndjson_events_from_end(
         # under the skip contract, so no filter verdict can change it.
         pos = max(nl, 0)
         continue
+      visited += 1
       if parse_filter is None:
         event = _parse_mapped_line(mm, start, pos, log_event=log_event, log_fields=log_fields)
         if event is not None:
@@ -497,19 +505,46 @@ def type_line_filter(types: frozenset[str]) -> HeadProvableFilter:
   quote parses.
   """
 
-  def keep(raw_line: bytes) -> bool:
-    if not raw_line.startswith(b'{"type"'):
-      return True
-    rest = raw_line[7:].lstrip(b" \t")
-    if not rest.startswith(b":"):
-      return True
-    rest = rest[1:].lstrip(b" \t")
+  def _string_value(rest: bytes) -> tuple[bytes, bytes, bool]:
+    """One quoted string in a line head: ``(value, rest_after_value, provable)``.
+
+    ``rest`` starts just past a ``key:`` pair's colon; a not-provable verdict
+    is ``(b"", b"", False)``.
+    """
+    rest = rest.lstrip(b" \t")
     if not rest.startswith(b'"'):
-      return True
+      return b"", b"", False
     end = rest.find(b'"', 1)
     if end < 0:
-      return True
-    return rest[1:end].decode("utf-8", errors="replace") in types
+      return b"", b"", False
+    return rest[1:end], rest[end + 1:], True
+
+  def _string_after_key(rest: bytes) -> tuple[bytes, bytes, bool]:
+    """The string value of the next ``"key":`` pair, or a not-provable verdict."""
+    rest = rest.lstrip(b" \t")
+    if not rest.startswith(b":"):
+      return b"", b"", False
+    return _string_value(rest[1:])
+
+  def keep(raw_line: bytes) -> bool:
+    # Two provable head shapes: a line leading with its ``type`` key, and a
+    # line leading with its ``id`` key whose ``type`` key follows before the
+    # head probe ends. Anything else parses.
+    if raw_line.startswith(b'{"type"'):
+      value, _, provable = _string_after_key(raw_line[len(b'{"type"'):])
+      return value.decode("utf-8", errors="replace") in types if provable else True
+    if raw_line.startswith(b'{"id"'):
+      _, rest, provable = _string_after_key(raw_line[len(b'{"id"'):])
+      if not provable:
+        return True
+      if not rest.startswith(b","):
+        return True
+      rest = rest[len(b","):].lstrip(b" \t")
+      if not rest.startswith(b'"type"'):
+        return True
+      value, _, provable = _string_after_key(rest[len(b'"type"'):])
+      return value.decode("utf-8", errors="replace") in types if provable else True
+    return True
 
   return HeadProvableFilter(keep)
 

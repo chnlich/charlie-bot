@@ -1,9 +1,23 @@
 <!-- section: coding_principles -->
 ## Coding Principles
 The codebase has a single user. Apply these principles:
-- **Fail fast**: surface errors immediately. Do NOT add fallbacks, defaults, or silent recovery.
+- **Fail fast**: surface errors immediately. Do NOT add fallbacks, defaults, or silent recovery. When an explicit
+  user choice cannot be parsed or its delivery path fails, stop with the error. A default applies only when the user
+  made no explicit choice.
 - **No swallowed exceptions**: always log or re-raise. Never use bare `except: pass`.
 - **No defensive programming**: do not add guards for scenarios that cannot happen.
+- **Switch names**: name each on/off switch for the feature it turns on, as in `ENABLE_X` or `USE_X`. Give each
+  switch a default value. A caller turns the feature off with the value 0 or false.
+- **Optimizations stay local**: keep every optimization local to the component it targets, independent of the global
+  model structure. Put its switch inside that component. Put each optimization in its own module or class, apart from
+  the model logic. The model file keeps its pre-optimization form and reaches the optimization through one-line calls.
+  A component-local optimization keeps its speedup and the run working through model edits elsewhere.
+- **Superseded code**: delete it in the same change. A retry or a regenerated output overwrites its predecessor.
+  Numbered artifacts compare distinct experiment legs.
+- **One owner per responsibility**: give each responsibility one owning module. When a change meets scattered
+  ownership, consolidate it.
+- **Repo environment**: use the environment that the repo defines. When a toolchain is missing, escalate it and name
+  the defect in the manifest.
 - **Recipes are executable**: submit, deploy, and recovery flows go through the repo's entry
   point; a command sequence worth running twice becomes a script, and its preflight asserts
   the mechanisms the task depends on (launcher, credentials, environment).
@@ -32,10 +46,16 @@ The codebase has a single user. Apply these principles:
 <!-- section: skills_discovery -->
 ## Skills Discovery
 - **Before starting any task**, check for skills relevant to the target repo or task domain.
-  - Look in `~/.claude/skills/` or `~/.agents/skills/`: both symlink the two canonical sources, the charlie-bot checkout's `skills/` (general, writing-style included) and `~/.charliebot/skills/` (host-specific).
+  - Look in `~/.claude/skills/` or `~/.agents/skills/`: both symlink the two canonical sources, the charlie-bot checkout's `skills/` (general, writing-style included) and `$CHARLIEBOT_HOME/skills/` (host-specific).
 - **Read matching skills first** to avoid wasting time on environment setup, tooling issues, or reinventing existing workflows.
 - **Mandatory for tasks in any domain that has a matching skill**: you MUST read that skill BEFORE writing any code, running any command, or submitting any job. This includes profiling, metrics analysis, data processing — not just training. Starting work without reading the relevant skill is forbidden.
 - A local run killed by the session memory cap is a routing error: re-run that step through the host's declared remote-compute entry instead of retrying locally.
+
+<!-- section: profile_home -->
+## Profile Home
+`CHARLIEBOT_HOME` holds the path of this instance's profile home: its config, credentials, sessions, memory store and host skills.
+The server sets it in every manager turn and worker run.
+Write each path under the profile home as `$CHARLIEBOT_HOME/<path>`.
 
 <!-- section: remote_scratch -->
 ## Remote Scratch

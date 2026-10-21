@@ -34,7 +34,6 @@ import re
 import zoneinfo
 from collections.abc import Callable
 from typing import Any
-from urllib import parse
 
 from src.infra import config, log_once, metadata_slots, models, tasks
 from src.infra import event_types as ET
@@ -545,7 +544,13 @@ async def post_reply(
   if not text.strip():
     raise ThreadReplyError(422, "Reply text is empty")
 
-  assert_no_file_server_links(text)
+  scan_context = file_urls.ScanContext(
+      cfg.server.port,
+      cfg.charliebot_home,
+      store.session_dir(session_id),
+      pathlib.Path.home(),
+  )
+  assert_no_file_server_links(text, scan_context)
   operator_only_links = application_route_links(text, cfg)
 
   chat_events = await asyncio.to_thread(events.load_chat_events_sync, session_id)
@@ -1245,49 +1250,26 @@ async def backfill_followed_threads(
   return armed
 
 
-# Any URL reply text can carry: scheme, authority (host, optional port), path,
-# query string, fragment. The reply-path link check reads the path (the
-# file-server mount segment), the operator-only naming reads the port.
-# Parentheses stay outside the URL so a markdown link's closing paren does too.
-_URL_RE = re.compile(
-    r"[a-zA-Z][a-zA-Z0-9+.\-]*://"
-    r"(?:\[[^\]\s]+\]|[^/\s:()]+)"
-    r"(?::(?P<port>\d+))?"
-    r"(?P<path>/[^\s?#()]*)?"
-    r"(?:\?[^\s#]*)?(?:#[^\s]*)?")
-
-
-def _file_server_named_path(url_path: str) -> str | None:
-  """The filesystem path a file-server URL path names, percent-decoded; None when it names none.
-
-  The file server serves ``<mount>/<absolute path without its leading slash>``
-  (``file_urls.FILE_SERVER_MOUNTS``), whatever the scheme, host, or port in front, so the
-  tail after the mount segment is the path ``charliebot publish`` takes.
-  """
-  for mount in file_urls.FILE_SERVER_MOUNTS:
-    marker = mount + "/"
-    at = url_path.find(marker)
-    if at != -1:
-      return "/" + parse.unquote(url_path[at + len(marker):])
-  return None
-
-
-def assert_no_file_server_links(text: str) -> None:
+def assert_no_file_server_links(text: str, scan_context: file_urls.ScanContext | None = None) -> None:
   """Refuse the reply when *text* still links a CharlieBot file-server URL.
 
   The reply path posts the text as written, so a file-server link — the
-  password-protected file browser, on any host or port — would reach the
-  thread's readers as an unlock page. The first link in the text raises
+  password-protected file browser, or a retired or local path, would reach
+  thread readers as a link they cannot open. The first finding raises
   ``ThreadReplyError`` (422) naming the link and the ``charliebot publish``
   command whose printed URL replaces it; nothing posts.
   """
-  for m in _URL_RE.finditer(text):
-    named = _file_server_named_path(m.group("path") or "")
-    if named is None:
+  for finding in file_urls.scan_file_links(text, scan_context):
+    if finding.form != file_urls.FileLinkForm.CANONICAL and not finding.dead:
       continue
+    publish_path = str(finding.path) if finding.path is not None else finding.link
+    if finding.form == file_urls.FileLinkForm.CANONICAL:
+      detail = f"reply links a CharlieBot file-server URL, which opens only behind the access key: {finding.link}. "
+    else:
+      detail = f"reply links a retired or local file path that thread readers cannot open: {finding.link}. "
     raise ThreadReplyError(
-        422, f"reply links a CharlieBot file-server URL, which opens only behind the access key: {m.group(0)}. "
-        f"Publish the page with `charliebot publish {named}` and write the URL the command prints into the reply")
+        422, detail + f"Publish the page with `charliebot publish {publish_path}` and write the URL the command "
+        "prints into the reply")
 
 
 def application_route_links(text: str, cfg: config.CharlieBotConfig) -> list[str]:
@@ -1300,7 +1282,7 @@ def application_route_links(text: str, cfg: config.CharlieBotConfig) -> list[str
   """
   routes = [
       m.group(0)
-      for m in _URL_RE.finditer(text)
+      for m in file_urls._URL_RE.finditer(text)
       if m.group("port") is not None and int(m.group("port")) == cfg.server.port
   ]
   return list(dict.fromkeys(routes))

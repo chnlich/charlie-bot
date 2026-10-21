@@ -46,22 +46,14 @@ async def env(tmp_path: pathlib.Path):
 
 
 async def _tree(env: _TaskEnv) -> dict[str, str]:
-  root = await env.tree.create_task(
-      request_id="root",
-      task_parent_id=None,
-      profile="manager",
-      task=None,
-      name="Root",
-      backend=None,
-      caller=conftest.OPERATOR)
-  worker = await env.tree.create_task(
+  root = await conftest.create_task(env.tree, parent=None, request_id="root", name="Root")
+  worker = await conftest.create_task(
+      env.tree,
+      parent=root.id,
       request_id="w",
-      task_parent_id=root.id,
       profile="worker",
       task=models.TaskSpec(goal="worker goal", repo_path="/tmp/repo"),
-      name="W",
-      backend=None,
-      caller=conftest.OPERATOR)
+      name="W")
   await env.tree.patch_task(
       root.id, models.PatchSessionTaskRequest(subtree_prompt="the root subtree rule"), caller=conftest.OPERATOR)
   return {"root": root.id, "worker": worker.id}
@@ -70,7 +62,7 @@ async def _tree(env: _TaskEnv) -> dict[str, str]:
 async def test_run_context_returns_the_stored_snapshot(env: _TaskEnv) -> None:
   ids = await _tree(env)
   run_id = "ctx-run"
-  await env.tree.runs.register_run(
+  await env.tree.runs.register_run_locked(
       models.RunRecord(id=run_id, session_id=ids["worker"], kind="work"), task_spec_text="pinned spec")
   # The launch seam commits the snapshot; simulate the commit the adapter does.
   from src.runtime import task_execution, task_prompts
@@ -119,7 +111,7 @@ async def test_context_reads_are_read_only(env: _TaskEnv) -> None:
 async def test_corrupt_new_snapshot_is_an_error(env: _TaskEnv) -> None:
   ids = await _tree(env)
   run_id = "corrupt-snapshot"
-  await env.tree.runs.register_run(models.RunRecord(id=run_id, session_id=ids["worker"], kind="work"))
+  await env.tree.runs.register_run_locked(models.RunRecord(id=run_id, session_id=ids["worker"], kind="work"))
   snapshot_path = env.tree.runs.run_dir(ids["worker"], run_id) / "prompt_snapshot.json"
   snapshot_path.parent.mkdir(parents=True, exist_ok=True)
   snapshot_path.write_text("not json at all", encoding="utf-8")

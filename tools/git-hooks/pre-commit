@@ -38,6 +38,6 @@ if [[ ${#staged_files[@]} -eq 0 ]]; then
 fi
 
 if ! tools/check-skills-host-leak.sh "${staged_files[@]}"; then
-  printf '%s\n' 'PII/host-specific leak detected in staged skills/prompts files. Fix or amend ~/.charliebot/skills_leak_patterns.local.txt. To bypass: git commit --no-verify (NOT recommended).' >&2
+  printf '%s\n' 'PII/host-specific leak detected in staged skills/prompts files. Fix or amend $CHARLIEBOT_HOME/skills_leak_patterns.local.txt. To bypass: git commit --no-verify (NOT recommended).' >&2
   exit 1
 fi

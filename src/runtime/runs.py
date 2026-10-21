@@ -393,16 +393,84 @@ RUN_IDENTITY_UNKNOWN_DETAIL = run_identity.RUN_IDENTITY_UNKNOWN_DETAIL
 run_identity_refusal = run_identity.run_identity_refusal
 
 
+@dataclasses.dataclass
+class RunFacts:
+  """One event list's Run facts, folded once.
+
+  ``outcomes`` maps each run id to its last recorded run_finished outcome
+  (the same last-wins rule the per-Run scans applied), and ``stop_requests``
+  maps each run id to the request ids of its run_stop_requested facts.
+  """
+  outcomes: dict[str, str | None] = dataclasses.field(default_factory=dict)
+  stop_requests: dict[str, set[str | None]] = dataclasses.field(default_factory=dict)
+
+
+def fold_run_facts(facts: RunFacts, events: list[dict]) -> RunFacts:
+  """Fold *events* into *facts* in place, last fact wins, and return it."""
+  for event in events:
+    etype = event.get("type")
+    if etype not in (ET.RUN_FINISHED, ET.RUN_STOP_REQUESTED):
+      continue
+    run_id = event.get("run_id")
+    if not isinstance(run_id, str):
+      continue
+    if etype == ET.RUN_FINISHED:
+      facts.outcomes[run_id] = event.get("outcome")
+    else:
+      facts.stop_requests.setdefault(run_id, set()).add(event.get("request_id"))
+  return facts
+
+
+class _RunFactsMemo:
+  """A bounded identity-keyed memo of one fold per event list.
+
+  The key is the list object's identity, held under a strong reference, so a
+  key hit is the same list and the covered cursor folds only the appended
+  suffix; a dropped entry (or a replaced list) refolds whole. The bound keeps
+  a long-lived process's dead event lists collectable.
+  """
+
+  def __init__(self, limit: int = 64) -> None:
+    self._limit = limit
+    self._entries: dict[int, tuple[list[dict], RunFacts, int]] = {}
+
+  def fold(self, events: list[dict]) -> RunFacts:
+    key = id(events)
+    entry = self._entries.get(key)
+    if entry is not None and entry[0] is events:
+      facts, covered = entry[1], entry[2]
+    else:
+      facts, covered = RunFacts(), 0
+    if covered < len(events):
+      fold_run_facts(facts, events[covered:])
+      covered = len(events)
+    self._entries[key] = (events, facts, covered)
+    while len(self._entries) > self._limit:
+      self._entries.pop(next(iter(self._entries)))
+    return facts
+
+
+_RUN_FACTS_MEMO = _RunFactsMemo()
+
+
 def terminal_outcome_in_events(events: list[dict], run_id: str) -> str | None:
   """The last recorded run_finished outcome of one Run (None while none).
 
-  The pure fact scan behind ``RunStore.terminal_outcome``.
+  Answers from the shared one-fold-per-list memo behind every Run-fact
+  question, so a caller that re-asks across a node's Runs pays one fold for
+  the whole list.
   """
-  outcome: str | None = None
-  for event in events:
-    if event.get("type") == ET.RUN_FINISHED and event.get("run_id") == run_id:
-      outcome = event.get("outcome")
-  return outcome
+  return _RUN_FACTS_MEMO.fold(events).outcomes.get(run_id)
+
+
+def run_outcomes_in_events(events: list[dict]) -> dict[str, str | None]:
+  """The run-finished outcome map over one event list (last finish wins per run id).
+
+  Answers from the same shared one-fold-per-list memo as
+  :func:`terminal_outcome_in_events`, so a caller that folds for the map and
+  then asks per-Run questions pays one fold for the whole list.
+  """
+  return dict(_RUN_FACTS_MEMO.fold(events).outcomes)
 
 
 def withheld_reason_in_events(events: list[dict], run_id: str) -> str | None:
@@ -428,16 +496,16 @@ def stop_requested_in_events(
 ) -> bool:
   """Whether a durable run_stop_requested fact exists (optionally one request_id's).
 
-  The pure fact scan behind ``RunStore.stop_requested``: the work-state
-  derivation (src.runtime.task_sessions) reads the same durable events through
-  this function so both owners answer one identical question.
+  Answers from the same shared fold memo as
+  :func:`terminal_outcome_in_events`: one fold per event list serves every
+  Run-fact question.
   """
-  for event in events:
-    if event.get("type") != ET.RUN_STOP_REQUESTED or event.get("run_id") != run_id:
-      continue
-    if request_id is None or event.get("request_id") == request_id:
-      return True
-  return False
+  requests = _RUN_FACTS_MEMO.fold(events).stop_requests.get(run_id)
+  if not requests:
+    return False
+  if request_id is None:
+    return True
+  return request_id in requests
 
 
 class RunNotFoundError(LookupError):
@@ -731,7 +799,7 @@ class RunStore:
     if outcome is not None:
       return str(outcome)
     if run.pid is None:
-      if self.stop_requested(events, run.id):
+      if stop_requested_in_events(events, run.id):
         return "stopped"
       if self.withheld_reason(events, run.id) is not None:
         return "withheld"
@@ -777,7 +845,7 @@ class RunStore:
     return is_run_alive(run.pid, run.pid_start, run.started_at, host_boot_time)
 
   def run_has_terminal_fact(self, run: models.RunRecord, events: list[dict]) -> bool:
-    return self.terminal_outcome(events, run.id) is not None
+    return terminal_outcome_in_events(events, run.id) is not None
 
   def run_blocker(self, run: models.RunRecord, events: list[dict], host_boot_time: datetime.datetime) -> str | None:
     """The structural-mutation blocker one run poses, or None.
@@ -791,7 +859,7 @@ class RunStore:
     if self.run_has_terminal_fact(run, events):
       return None
     if run.pid is None:
-      if self.stop_requested(events, run.id):
+      if stop_requested_in_events(events, run.id):
         return None  # a stopped queued run is resolved-by-request, not pending work
       return f"run {run.id} is queued (pending dispatch)"
     if is_run_alive(run.pid, run.pid_start, run.started_at, host_boot_time):
@@ -800,18 +868,14 @@ class RunStore:
 
   # -- registration --------------------------------------------------------
 
-  async def register_run(self, record: models.RunRecord, *, task_spec_text: str | None = None) -> models.RunRecord:
-    """Publish one run record (idempotent by id).
+  async def register_run_locked(
+      self, record: models.RunRecord, *, task_spec_text: str | None = None) -> models.RunRecord:
+    """Publish one run record (idempotent by id); the caller holds the control lock (the lock is not reentrant).
 
     The pinned task-spec body lands before the metadata that references it, so
     a crash between the two leaves an unreferenced body, never a record whose
-    evidence pointer dangles. Registration runs under the control lock.
+    evidence pointer dangles.
     """
-    async with self._lock:
-      return await self.register_run_locked(record, task_spec_text=task_spec_text)
-
-  async def register_run_locked(self, record: models.RunRecord, *, task_spec_text: str | None) -> models.RunRecord:
-    """register_run for a caller already holding the control lock (the lock is not reentrant)."""
     existing = self.read_run_sync(record.session_id, record.id)
     if existing is not None:
       return existing

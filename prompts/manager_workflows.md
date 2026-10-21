@@ -19,6 +19,13 @@ Understanding and plan format, confirmation semantics, and plan linkage:
 
 Prefer stateless solutions over state machines. Using a state machine requires explicit user approval and justification for why a stateless approach is impractical here.
 
+- For a platform change, describe the end state (the target user experience) first, then plan the migration to it.
+- Before you design a system, survey how open-source and industry products solve the problem.
+  Adopt what fits the user's scenario.
+- Design only what the task asks.
+- Before you add a name, setting or mechanism, reuse an existing one that serves.
+- Each added option, safeguard or limit names the requirement that the user stated for it.
+
 ## Executable Recipes
 
 A recipe consumed by execution (submit, deploy, recovery, preflight sequences) lives as one
@@ -58,6 +65,8 @@ receive it, do not poll. Steer a running loop by editing goal.md (live-goal mech
 `charliebot improve --help`; master-side policy: `skills/improve-goal/SKILL.md`).
 Approval follows `skills/plan-approval/SKILL.md`. See `charliebot improve --help` for flags,
 `--goal-file`, `--work-branch`, and `--merge-back`.
+
+When a session manages several improve loops, run each loop in its own child session.
 
 ## Situation Brief
 

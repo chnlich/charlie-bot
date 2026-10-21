@@ -55,6 +55,9 @@ class Account:
   section: str
   is_default: bool
   values: dict[str, object]
+  owner: str | None = None
+  is_primary: bool = False
+  person_primary: bool = False
 
 
 @dataclasses.dataclass(frozen=True)
@@ -126,6 +129,62 @@ def _validate_client_pair(section_name: str, values: dict[str, object]) -> None:
     raise CliError(f"credentials.{section_name} must set client_id and client_secret together", 2)
 
 
+def _validate_owner(section_name: str, values: dict[str, object]) -> str | None:
+  owner = values.get("owner")
+  if owner is None:
+    return None
+  if not isinstance(owner, str) or not owner.strip() or "\n" in owner or "\r" in owner:
+    raise CliError(f"credentials.{section_name}.owner must be one line", 2)
+  return owner
+
+
+def _validate_primary(
+    section_name: str,
+    values: dict[str, object],
+    node: yaml.Node | None,
+    resolved_owner: str | None,
+    host_owner: str | None,
+) -> bool:
+  primary = values.get("primary")
+  if primary is None:
+    return False
+  if primary is not True or not _scalar_is_true(node, section_name, "primary"):
+    raise CliError(f"credentials.{section_name}.primary must be true", 2)
+  if resolved_owner == host_owner:
+    raise CliError(f"credentials.{section_name} belongs to the host owner and cannot set primary", 2)
+  return True
+
+
+def _section_node(node: yaml.Node | None, section_name: str) -> yaml.Node | None:
+  if not isinstance(node, yaml.MappingNode):
+    return None
+  for key_node, value_node in node.value:
+    if isinstance(key_node, yaml.ScalarNode) and key_node.value == section_name:
+      return value_node
+  return None
+
+
+def _scalar_is_true(node: yaml.Node | None, section_name: str, key: str) -> bool:
+  if not isinstance(node, yaml.MappingNode):
+    return False
+  for key_node, value_node in node.value:
+    if isinstance(key_node, yaml.ScalarNode) and key_node.value == key:
+      return isinstance(value_node, yaml.ScalarNode) and value_node.value == "true"
+  return False
+
+
+def _validate_ownership(accounts: list[Account], host_owner: str | None) -> None:
+  sections_by_owner: dict[str | None, list[Account]] = {}
+  for account in accounts:
+    sections_by_owner.setdefault(account.owner, []).append(account)
+  for owner, sections in sections_by_owner.items():
+    primaries = [account for account in sections if account.is_primary]
+    if len(primaries) > 1:
+      raise CliError(f"person {owner} has two accounts with primary: true", 2)
+    if owner is not None and owner != host_owner and len(sections) > 1 and not primaries:
+      raise CliError(f"person {owner} has several accounts and none sets primary: true", 2)
+
+
 def _validate_description(section_name: str, values: dict[str, object]) -> str:
   description = values.get("description", "")
   if description is None:
@@ -141,6 +200,10 @@ def _load_table() -> AccountTable:
     raw_bytes = path.read_bytes()
   except OSError as error:
     raise CliError(f"cannot read credentials file: {path}", 2) from error
+  return _table_from_bytes(path, raw_bytes)
+
+
+def _table_from_bytes(path: pathlib.Path, raw_bytes: bytes) -> AccountTable:
   try:
     raw_text = raw_bytes.decode("utf-8")
   except UnicodeDecodeError as error:
@@ -156,12 +219,13 @@ def _load_table() -> AccountTable:
   google = _google_values(data, _GOOGLE_SECTION)
   _validate_client_pair(_GOOGLE_SECTION, google)
   _validate_description(_GOOGLE_SECTION, google)
+  host_owner = _validate_owner(_GOOGLE_SECTION, google)
 
   default_name = google.get("name", "default")
   if not isinstance(default_name, str) or not _ACCOUNT_NAME.fullmatch(default_name):
     raise CliError("credentials.google.name must match [a-z][a-z0-9-]*", 2)
 
-  accounts = [Account(default_name, _GOOGLE_SECTION, is_default=True, values=google)]
+  accounts = [Account(default_name, _GOOGLE_SECTION, is_default=True, values=google, owner=host_owner)]
   for section_name in data:
     if not section_name.startswith(_ACCOUNT_PREFIX):
       continue
@@ -174,7 +238,28 @@ def _load_table() -> AccountTable:
     refresh_token = values.get("refresh_token")
     if refresh_token is not None and not isinstance(refresh_token, str):
       raise CliError(f"credentials.{section_name}.refresh_token must be a string", 2)
-    accounts.append(Account(name, section_name, is_default=False, values=values))
+    owner = _validate_owner(section_name, values)
+    if owner is not None and host_owner is None:
+      raise CliError(f"credentials.{section_name} sets owner but credentials.google does not", 2)
+    resolved_owner = owner if owner is not None else host_owner
+    is_primary = _validate_primary(section_name, values, _section_node(node, section_name), resolved_owner, host_owner)
+    accounts.append(Account(name, section_name, is_default=False, values=values, owner=owner, is_primary=is_primary))
+
+  _validate_ownership(accounts, host_owner)
+
+  sections_by_resolved_owner: dict[str, list[Account]] = {}
+  for account in accounts:
+    resolved = account.owner if account.owner is not None else host_owner or ""
+    sections_by_resolved_owner.setdefault(resolved, []).append(account)
+  accounts = [
+      dataclasses.replace(
+          account,
+          person_primary=not account.is_default and
+          (account.owner if account.owner is not None else host_owner or "") != host_owner and (
+              account.is_primary or
+              len(sections_by_resolved_owner[account.owner if account.owner is not None else host_owner or ""]) == 1))
+      for account in accounts
+  ]
 
   by_name: dict[str, Account] = {}
   for account in accounts:
@@ -345,10 +430,13 @@ def _updated_content(
     account: Account,
     refresh_token: str,
     description: str | None,
+    owner: str | None,
 ) -> tuple[bytes, dict[str, object]]:
   write_values: dict[str, str] = {"refresh_token": refresh_token}
   if description is not None:
     write_values["description"] = description
+  if owner is not None:
+    write_values["owner"] = owner
   assert all(value.strip() for value in write_values.values())
 
   expected = copy.deepcopy(table.data)
@@ -379,8 +467,14 @@ def _updated_content(
   return table.raw_bytes + separator + appended, expected
 
 
-def _write_refresh_token(table: AccountTable, account: Account, refresh_token: str, description: str | None) -> None:
-  new_bytes, expected = _updated_content(table, account, refresh_token, description)
+def _write_refresh_token(
+    table: AccountTable,
+    account: Account,
+    refresh_token: str,
+    description: str | None,
+    owner: str | None,
+) -> None:
+  new_bytes, expected = _updated_content(table, account, refresh_token, description, owner)
   try:
     original_mode = stat.S_IMODE(table.path.stat().st_mode)
   except OSError:
@@ -415,16 +509,31 @@ def _write_refresh_token(table: AccountTable, account: Account, refresh_token: s
           raise CliError("could not remove temporary credentials file", 1) from None
 
 
-def _add_account(table: AccountTable, name: str, email: str, redirect_url: str, description: str | None) -> str:
+def _add_account(
+    table: AccountTable,
+    name: str,
+    email: str,
+    redirect_url: str,
+    description: str | None,
+    owner: str | None,
+) -> str:
   if not _ACCOUNT_NAME.fullmatch(name):
     raise CliError("account name must match [a-z][a-z0-9-]*", 2)
   if not email.strip():
     raise CliError("email address must not be empty", 2)
   if description is not None and (not description.strip() or "\n" in description or "\r" in description):
     raise CliError("description must be one line", 2)
+  if owner is not None and (not owner.strip() or "\n" in owner or "\r" in owner):
+    raise CliError("owner must be one line", 2)
+  google_owner = _validate_owner(_GOOGLE_SECTION, table.google)
+  if google_owner is not None and owner is None:
+    raise CliError("credentials.google sets owner; pass --owner", 2)
   account = table.by_name.get(name)
   if account is None:
     account = Account(name, f"{_ACCOUNT_PREFIX}{name}", is_default=False, values={})
+  # Reject a table that the write would leave invalid before the consent code is spent.
+  validated_bytes, _ = _updated_content(table, account, "validation-only", description, owner)
+  _table_from_bytes(table.path, validated_bytes)
   code = _redirect_code(redirect_url, name)
   client_id, client_secret = _client_for(table, account)
   response = _post_form(
@@ -440,7 +549,7 @@ def _add_account(table: AccountTable, name: str, email: str, redirect_url: str, 
   actual_email = _profile_email(access_token)
   if actual_email.casefold() != email.strip().casefold():
     raise CliError(f"email mismatch: Google returned {actual_email}", 1)
-  _write_refresh_token(table, account, refresh_token, description)
+  _write_refresh_token(table, account, refresh_token, description, owner)
   return actual_email
 
 
@@ -459,6 +568,7 @@ def _parser() -> argparse.ArgumentParser:
   add_parser.add_argument("--email", required=True)
   add_parser.add_argument("--redirect-url", required=True)
   add_parser.add_argument("--description")
+  add_parser.add_argument("--owner")
   return parser
 
 
@@ -479,7 +589,9 @@ def _run_list(table: AccountTable, check: bool) -> int:
         raise CliError(f"account {account.name}: {error.message}", 1) from error
   for account in table.accounts:
     pending = _is_pending(account)
-    fields = [account.name, "default" if account.is_default else "", "pending" if pending else "ready"]
+    mark = "default" if account.is_default else "primary" if account.person_primary else ""
+    fields = [account.name, mark, "pending" if pending else "ready"]
+    fields.append(account.owner if account.owner is not None else "")
     fields.append(_validate_description(account.section, account.values))
     if check:
       fields.append("" if pending else checked_emails[account.name])
@@ -502,7 +614,7 @@ def main(argv: Sequence[str] | None = None) -> int:
       print(_consent_url(table, args.name, args.email))
       return 0
     if args.command == "add":
-      email = _add_account(table, args.name, args.email, args.redirect_url, args.description)
+      email = _add_account(table, args.name, args.email, args.redirect_url, args.description, args.owner)
       print(f"{args.name}: {email}")
       return 0
     raise AssertionError(f"unhandled command: {args.command}")

@@ -12,7 +12,7 @@ description: >
 | Location | Scope | Description |
 |----------|-------|-------------|
 | `<charlie-bot-repo>/skills/` | General (shared across hosts) | Integration skills, self-knowledge |
-| `~/.charliebot/skills/` | Host-specific (per-machine) | Domain skills tied to local repos/hardware |
+| `$CHARLIEBOT_HOME/skills/` | Host-specific (per-machine) | Domain skills tied to local repos/hardware |
 
 ## CLI Tool Skill Directories
 
@@ -32,11 +32,11 @@ Four sync targets cover all five CLIs:
 1. `~/.claude/skills/` — Claude Code
 2. `~/.agents/skills/` — Codex + Gemini (shared open standard)
 3. `~/.gemini/antigravity-cli/skills/` — Antigravity (`agy`)
-4. `~/.charliebot/.claude/skills/` — Claude Code cwd-ancestor root. Claude Code collects `.claude/skills/` from every ancestor of its cwd up to `$HOME`, independent of the logged-in account, and a master session's cwd sits under `~/.charliebot/`, so this one root reaches every Claude account's masters; the per-account config dirs get no target. The same file visible through two roots (this one and `~/.claude/skills/`) loads once.
+4. `$CHARLIEBOT_HOME/.claude/skills/` — Claude Code cwd-ancestor root. Claude Code collects `.claude/skills/` from every ancestor of its cwd up to `$HOME`, independent of the logged-in account, and a master session's cwd sits under `$CHARLIEBOT_HOME/`, so this one root reaches every Claude account's masters; the per-account config dirs get no target. The same file visible through two roots (this one and `~/.claude/skills/`) loads once.
 
 OpenCode and charlie-code need **no** target: both auto-scan `~/.claude/skills/` and `~/.agents/skills/`, already populated above.
 
-Every real sync ends with a Claude discovery check (skipped under `-n` and when `claude` is not on PATH): `sync-skills.sh` starts `claude` once with an empty `CLAUDE_CONFIG_DIR` from the `~/.charliebot/sessions` cwd — not logged in, zero API calls — and reads K, the project count on the last `Loaded N unique skills (... project: K ...)` line of its debug log, against N, the symlink count in target 4. It prints `Claude discovery: K/N` and exits 1 when the line is missing or K differs from N.
+Every real sync ends with a Claude discovery check (skipped under `-n` and when `claude` is not on PATH): `sync-skills.sh` starts `claude` once with an empty `CLAUDE_CONFIG_DIR` from the `$CHARLIEBOT_HOME/sessions` cwd — not logged in, zero API calls — and reads K, the project count on the last `Loaded N unique skills (... project: K ...)` line of its debug log, against N, the symlink count in target 4. It prints `Claude discovery: K/N` and exits 1 when the line is missing or K differs from N.
 
 ## Sync Rules
 
@@ -45,19 +45,19 @@ Every real sync ends with a Claude discovery check (skipped under `-n` and when 
 - Remove stale symlinks whose targets no longer exist
 - Sync script: `<charlie-bot-repo>/scripts/sync-skills.sh`
 - Workers see skills through the backend CLI's skill dir — not directly from
-  `~/.charliebot/skills/`.
+  `$CHARLIEBOT_HOME/skills/`.
 
 ## Host-Specific Content Boundary
 
-Repo-level shared files (`<charlie-bot-repo>/skills/**`, `<charlie-bot-repo>/prompts/**`) MUST NOT contain host-specific info — hostnames, local paths, GPU specs, per-host ports/IPs. Anything host-specific belongs in the memory store's `host` topic (`~/.charliebot/memory/entries/host/`) or `~/.charliebot/skills/<name>/`. Rules like "feature X is local-host only" must be flagged in the repo-level skill so that workers running anywhere see them.
+Repo-level shared files (`<charlie-bot-repo>/skills/**`, `<charlie-bot-repo>/prompts/**`) MUST NOT contain host-specific info — hostnames, local paths, GPU specs, per-host ports/IPs. Anything host-specific belongs in the memory store's `host` topic (`$CHARLIEBOT_HOME/memory/entries/host/`) or `$CHARLIEBOT_HOME/skills/<name>/`. Rules like "feature X is local-host only" must be flagged in the repo-level skill so that workers running anywhere see them.
 
-Repo-level skills must also stay free of session-specific debug artifacts: dated transcripts (`observed in D4`, `2026-05-04 run`), internal task IDs, specific bug strings (`bytes-vs-str + train_ranges API mismatches`), or any phrasing that reads like a LESSONS.md entry. Workers loading shared skills cannot see `~/.charliebot/LESSONS.md` and have no context for those references. Keep shared skills as static principles; only promote a finding into a shared skill once the debug is closed and the lesson rewrites cleanly as a generic rule.
+Repo-level skills must also stay free of session-specific debug artifacts: dated transcripts (`observed in D4`, `2026-05-04 run`), internal task IDs, specific bug strings (`bytes-vs-str + train_ranges API mismatches`), or any phrasing that reads like a LESSONS.md entry. Workers loading shared skills cannot see `$CHARLIEBOT_HOME/LESSONS.md` and have no context for those references. Keep shared skills as static principles; only promote a finding into a shared skill once the debug is closed and the lesson rewrites cleanly as a generic rule.
 
 A local pre-commit hook enforces this boundary. One-time setup per clone:
 
     git config --local core.hooksPath tools/git-hooks
 
-Additional host-specific blocklist patterns (real names, internal project names, tenant identifiers, etc.) live at `~/.charliebot/skills_leak_patterns.local.txt` — one regex per line, NEVER committed to this repo. Run `tools/check-skills-host-leak.sh` manually anytime to scan the whole tree.
+Additional host-specific blocklist patterns (real names, internal project names, tenant identifiers, etc.) live at `$CHARLIEBOT_HOME/skills_leak_patterns.local.txt` — one regex per line, NEVER committed to this repo. Run `tools/check-skills-host-leak.sh` manually anytime to scan the whole tree.
 
 ## Person-Identifying Session Content Boundary
 

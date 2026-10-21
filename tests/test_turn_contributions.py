@@ -148,6 +148,29 @@ def test_discord_contract_part_carries_the_summon_mark(tmp_path: pathlib.Path) -
   assert "已成文的私有内容不引用" not in joined
 
 
+@pytest.mark.parametrize("kind", ["slack", "discord"])
+def test_thread_session_prompt_carries_the_status_and_language_rules(kind: str, tmp_path: pathlib.Path) -> None:
+  """The status block lives in the session message (thread_session.md), and the reply
+  language rule covers every summoner (thread_reply_format.md): deleting any one
+  sentence from either file breaks the assembled instructions."""
+  _, origin = SESSION_KINDS[kind]
+  meta = models.SessionMetadata(id="root-1", name="root", profile="manager", **origin)
+
+  segments, _ = task_prompts.build_segments(
+      real_repo_cfg(tmp_path / "home"), meta, "manager_turn", overlay=None, chain=(), node_ref=None)
+  joined = "\n\n".join(segment.text for segment in segments)
+
+  for sentence in (
+      # thread_session.md, the status-block item and its carve-out.
+      "- In this thread session, open your last session message of each turn with the status block:",
+      "- The status block stays in the session message. The thread reply follows `prompts/thread_reply_format.md`.",
+      # thread_reply_format.md, the language section's summoner rule.
+      "This rule decides the reply language for every summoner, the operator included.",
+      "The summon line of the round and the lines of this contract set no reply language.",
+  ):
+    assert sentence in joined
+
+
 def test_main_session_instructions_carry_no_reply_contract(tmp_path: pathlib.Path) -> None:
   """A session without a thread origin gets none of the contract."""
   meta = models.SessionMetadata(id="root-1", name="root", profile="manager")

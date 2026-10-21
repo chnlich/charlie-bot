@@ -23,13 +23,15 @@ from src.runtime import master_cc_run, worker
 from src.runtime.hooks import backend_lifecycle, backend_type_registration, backend_types
 
 CC_ID = "11111111-2222-3333-4444-555555555555"
-CLI_VARIANT_TYPES = ["cc-kimi", "cc-openai-compatible"]
+CLI_VARIANT_TYPES = ["cc-anthropic-compatible", "cc-openai-compatible"]
 
 _fresh_pool_state = conftest.fresh_state_fixture(claude_accounts.reset_for_tests)
 
 
 def _variant_option(backend_type: str):
-  extra = {"credential": "test-kimi"} if backend_type == "cc-kimi" else {"api_base": "http://test.invalid"}
+  extra = {"api_base": "http://test.invalid"}
+  if backend_type == "cc-anthropic-compatible":
+    extra["context_window"] = 409600
   return conftest.backend_option(id="variant", label="Variant", type=backend_type, model="claude-sonnet-4-5", **extra)
 
 
@@ -169,11 +171,11 @@ async def test_non_pooled_cc_claude_turn_checks_the_transcript_and_selects_no_ac
   assert lifecycle.watch(_turn_context(cfg, option, CC_ID, tmp_path), present) is None
 
 
-@pytest.mark.parametrize("backend_type", ["codex", "cc-kimi"])
+@pytest.mark.parametrize("backend_type", ["codex", "cc-anthropic-compatible"])
 @pytest.mark.asyncio
 async def test_non_claude_task_build_receives_no_claude_account(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, backend_type: str) -> None:
-  option = _variant_option(backend_type) if backend_type == "cc-kimi" else conftest.backend_option(
+  option = _variant_option(backend_type) if backend_type == "cc-anthropic-compatible" else conftest.backend_option(
       id="variant", label="Variant", type="codex", model="m")
   backend = conftest.ScriptedRelayBackend([conftest.assistant_text_event("done")], exit_code=0)
   builds = conftest.install_scripted_backends(monkeypatch, [backend], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
@@ -246,10 +248,6 @@ async def test_pooled_task_resume_starts_on_the_login_holding_the_transcript(tmp
 # ---------------------------------------------------------------------------
 
 
-def _reject(label: str) -> None:
-  claude_accounts.observe_rate_limit(label, conftest.rate_limit_event("rejected", 1.0)["rate_limit_info"])
-
-
 def _rejected_run() -> conftest.ScriptedRelayBackend:
   return conftest.ScriptedRelayBackend([conftest.rate_limit_event("rejected", 1.0)], exit_code=1)
 
@@ -259,7 +257,7 @@ def _all_logins_rejected(tmp_path: pathlib.Path,
                          monkeypatch: pytest.MonkeyPatch) -> tuple[config.CharlieBotConfig, list]:
   cfg = conftest.fable_pool_cfg(tmp_path)
   for label in ("main", "ext-1", "ext-2"):
-    _reject(label)
+    conftest.reject_claude_login(label)
   return cfg, []
 
 
@@ -349,7 +347,7 @@ async def test_turn_refusal_writes_an_error_event_carrying_quota_exhausted(
 def _task_pool_spent_before_spawn(monkeypatch: pytest.MonkeyPatch) -> tuple[tuple[str, ...], list, tuple[str, ...]]:
   labels = ("main", "ext-1", "ext-2")
   for label in labels:
-    _reject(label)
+    conftest.reject_claude_login(label)
   return labels, [], ()
 
 
@@ -359,7 +357,7 @@ def _task_every_login_failed(monkeypatch: pytest.MonkeyPatch) -> tuple[tuple[str
 
 
 def _task_pool_spent_at_relay(monkeypatch: pytest.MonkeyPatch) -> tuple[tuple[str, ...], list, tuple[str, ...]]:
-  _reject("ext-1")
+  conftest.reject_claude_login("ext-1")
   return ("main", "ext-1"), [_rejected_run()], ()
 
 

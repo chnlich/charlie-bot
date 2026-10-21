@@ -64,12 +64,12 @@ option = cfg.get_backend_option(backend_id)
 if option is None:
   fail(
       "option-missing: add a backends.options entry with id "
-      f"{backend_id} and type charlie-code to ~/.charliebot/config.yaml"
+      f"{backend_id} and type charlie-code to $CHARLIEBOT_HOME/config.yaml"
   )
 if option.type != "charlie-code":
   fail(
       f"option-missing: backend option {backend_id} has type {option.type}, not charlie-code; "
-      f"add a backends.options entry with id {backend_id} and type charlie-code to ~/.charliebot/config.yaml"
+      f"add a backends.options entry with id {backend_id} and type charlie-code to $CHARLIEBOT_HOME/config.yaml"
   )
 
 # Mechanism 2: the backend builds, so its binary resolves.

@@ -67,12 +67,14 @@ CharlieBot is a self-hosted multi-agent orchestration system: a master agent dri
 ## Quick start
 
 ```bash
-./scripts/setup.sh   # sync skills, provision ~/.charliebot/, seed repo-default cron tasks
-# fill in the secret in ~/.charliebot/credentials.yaml: charliebot.access_key
+./scripts/setup.sh   # sync skills, provision $CHARLIEBOT_HOME (default ~/.charliebot), seed repo-default cron tasks
+# fill in the secret in $CHARLIEBOT_HOME/credentials.yaml: charliebot.access_key
 ./scripts/start-server.sh
 ```
 
-`setup.sh` provisions `~/.charliebot/` (home layout, `config.yaml` from `configs/config.example.yaml`, `credentials.yaml` from `configs/credentials.example.yaml`) and seeds repo-default cron tasks into `~/.charliebot/config.d/cron.d/<name>.yaml` (one file per job). Server startup never writes cron config — only `setup.sh` does — so re-run `setup.sh` after pulling to pick up new repo-default cron tasks and skills.
+`scripts/switch-server.sh rust <full rust-backend sha>` moves the live server onto a verified Rust release and `scripts/switch-server.sh python` moves it back. The switch ends with a probe turn in a session of its own: it passes once the new server records the run's first assistant output (or the run ends success), then archives the session after stopping every run the session still has open, including a follow-up run the server starts in it. The script header lists the preflight and the exit codes.
+
+`setup.sh` provisions `$CHARLIEBOT_HOME/` (home layout, `config.yaml` from `configs/config.example.yaml`, `credentials.yaml` from `configs/credentials.example.yaml`) and seeds repo-default cron tasks into `$CHARLIEBOT_HOME/config.d/cron.d/<name>.yaml` (one file per job). Server startup never writes cron config — only `setup.sh` does — so re-run `setup.sh` after pulling to pick up new repo-default cron tasks and skills.
 
 ## CLI at a glance
 

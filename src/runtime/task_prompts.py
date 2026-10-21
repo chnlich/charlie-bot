@@ -288,7 +288,8 @@ def _manager_rule_segments(cfg: config.CharlieBotConfig, meta: models.SessionMet
   in the Task record and inherited rules.
   No PM identity, no project body, no per-layer template exists on v2.
   """
-  base = _sections_text(cfg, "task_base.md", ("coding_principles", "skills_discovery", "remote_scratch"))
+  base = _sections_text(
+      cfg, "task_base.md", ("coding_principles", "skills_discovery", "profile_home", "remote_scratch"))
   shared = _read_source_file(
       cfg.charlie_bot_repo / "prompts" / "master.md", what="shared manager rules").replace("{{session_id}}", meta.id)
   workflows_file = turn_contributions.resolve_workflow_rules_file(meta)
@@ -330,7 +331,8 @@ def _worker_kind_rule_segments(
   """
   # Worker kinds carry the text-writing pointer; managers carry master.md's subsection instead.
   base = _sections_text(
-      cfg, "task_base.md", ("coding_principles", "skills_discovery", "remote_scratch", "text_model_reads"))
+      cfg, "task_base.md",
+      ("coding_principles", "skills_discovery", "profile_home", "remote_scratch", "text_model_reads"))
   segments = [RuleSegment(text=base, sources=(PromptSource(SCOPE_BASE, "prompts/task_base.md"),))]
 
   if kind == "review":

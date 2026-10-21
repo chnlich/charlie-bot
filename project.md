@@ -156,7 +156,7 @@ For complex tasks, the master plans before building; the plan registry keeps tha
 
 - **Draft & present**: The master drafts the plan as an HTML artifact (`artifacts/plan_NN.html`, grammar in `prompts/plan_template.html`) and registers it with `charliebot plan present --file <artifact> --title <title>` (`src/features/artifacts/plan_cli.py` → `PlanRegistryManager` in `src/features/artifacts/plans.py`). `charliebot plan amend --file <artifact> --note <why>` appends the next version (trigger: `auto_amend` or `feedback`).
 - **Review**: The plan renders in the web Plans panel with a version switcher, a diff toggle against the predecessor, and block-anchored comments (`src/features/artifacts/static/plan-panel.js`).
-- **Approve**: After the plan's Improve round and verify, the parent node or the root line approves it; `charliebot plan approve` records the approval against the latest version. The runtime gate (`src/runtime/takeoff_gate.py`) admits `/delegate` and `/improve` when the calling manager and its ancestors are open and the chain holds a real user message.
+- **Approve**: After the plan's Improve round and verify, the parent node or the root line approves it; `charliebot plan approve` records the approval against the latest version. The runtime gate (`src/runtime/takeoff_gate.py`) admits `/delegate` and `/improve` when the calling manager and its ancestors are open and the chain holds a real user message or a thread platform summon.
 - **Close**: `charliebot plan close --plan N --as superseded|abandoned|completed` terminates the lineage.
 
 ---
@@ -164,7 +164,7 @@ For complex tasks, the master plans before building; the plan registry keeps tha
 ## 6. Memory & Knowledge Management
 
 ### 6.1 Labeled-Entry Memory Store
-A local git repo at `~/.charliebot/memory/` holds one durable fact or rule set per file under
+A local git repo at `$CHARLIEBOT_HOME/memory/` holds one durable fact or rule set per file under
 `entries/<topic>/<slug>.md`, tagged by `scope`/`topic`/`audience` in a restricted front matter.
 
 | Path | Purpose | Access Pattern |
@@ -209,7 +209,7 @@ holds the CLI's stream. The lines are `assistant` events carrying `message.conte
 (`text`, `thinking`, `tool_use`), `user` tool-result wrappers, and a final `result`.
 `AgentBackend.translate_event` (`src/runtime/agent_process/base.py`) turns each line into the events that
 land in `events.jsonl` and the WebSocket stream: the Anthropic-endpoint backends (cc-claude,
-cc-kimi, cc-openai-compatible) pass lines through unchanged; the other backends translate their
+cc-anthropic-compatible, cc-openai-compatible) pass lines through unchanged; the other backends translate their
 native streams into CC-compatible events with per-backend vocabularies (codex, for one, emits
 `thinking` and `file_write`).
 A raw log that stops growing while the process is still alive is what the server reports as stuck
@@ -286,7 +286,7 @@ for the other backends) and passes no flag.
 - Automatic cross-backend review: on worker success, a Review Agent is spawned using a different LLM backend (configurable via `backends.pool`). Failed reviewers retry with the next untried backend
 - Master trigger on completion: combined worker+reviewer summary is sent to the master agent via `trigger_master()` for user notification and follow-up decisions
 - Session blocks (`src/runtime/session_*.py`), `PlanRegistryManager`, `TriggerManager`, `StreamingManager`
-- `init_charliebot_home()` — seeds `~/.charliebot/` on first run with default `config.yaml`
+- `init_charliebot_home()` — seeds `$CHARLIEBOT_HOME/` on first run with default `config.yaml`
 - Memory store: `ensure_store` (`src/features/memory/memory.py`) creates the scaffold (git repo + topics vocabulary) at first use, so a fresh home has no `memory/` directory until then
 - Memory updates: sessions stage candidates via `charliebot memory add` (writes `staging/`, never `entries/`); the daily memory curator builds a user-approved diff that admits, revises, or evicts entries
 
@@ -311,6 +311,6 @@ decodes the opening clip as a recognition probe.
 - Draft persistence: unsent message text is saved to localStorage per session (debounced 300ms) and restored on session switch-back or page reload
 
 **Configuration**
-- `~/.charliebot/config.yaml` holds structure in sections (`server`, `paths`, `backends`, `accounts`, `voice`, `code_server`, `ui`, `slack`, `publish`, `telegram`); `~/.charliebot/credentials.yaml` holds every secret as section → key and is the single source of truth for API keys — no environment variables
+- `$CHARLIEBOT_HOME/config.yaml` holds structure in sections (`server`, `paths`, `backends`, `accounts`, `voice`, `code_server`, `ui`, `slack`, `publish`, `telegram`); `$CHARLIEBOT_HOME/credentials.yaml` holds every secret as section → key and is the single source of truth for API keys — no environment variables
 - `backends.options`: configurable list of LLM backends (see that file for the current list); an option id names the model family, never a version, and starts with a prefix its type's usage source registers (the id rule: the `BackendsConfig` comment in `src/infra/config.py`; usage's startup check, `src/features/usage/backend_ids.py`, refuses an id outside them)
 - `backends.pool`: ordered list of backend IDs in rotation order (`src/runtime/backend_pool.py`); server startup refuses a pool entry (`require_backends`) or a cron task or step backend (cron's startup check, `src/features/cron/backend_refs.py`) that names no option id

@@ -795,6 +795,11 @@ def rate_limit_event(
   }
 
 
+def reject_claude_login(label: str) -> None:
+  """Record a rejected five_hour rate-limit reading for the pooled account *label*."""
+  claude_accounts.observe_rate_limit(label, rate_limit_event("rejected", 1.0)["rate_limit_info"])
+
+
 def patch_select_with_transient_reading(monkeypatch: pytest.MonkeyPatch, reading_now: datetime.datetime) -> None:
   """Patch ``claude_accounts.select`` so the move's select sees ext-1 cross the line.
 
@@ -1612,7 +1617,14 @@ AGY_BACKEND_OPTION = backend_option(id="agy", label="Antigravity", type="antigra
 THREE_BACKEND_OPTIONS = [
     OPUS_BACKEND_OPTION,
     CODEX_BACKEND_OPTION,
-    backend_option(id="kimi-k2.5", label="Kimi", type="cc-kimi", model="kimi-k2.5", credential="test-kimi"),
+    backend_option(
+        id="kimi-k2.5",
+        label="Kimi",
+        type="cc-anthropic-compatible",
+        model="kimi-k2.5",
+        api_base="https://test.invalid",
+        context_window=409600,
+    ),
 ]
 
 PLAN_TEST_BACKEND_OPTIONS = [OPUS_BACKEND_OPTION]
@@ -1767,6 +1779,12 @@ CLI_COMMON_TRANSPORT_GET_PATCH_TARGET = "src.runtime.cli.common._request_get"
 # home.charliebot_home_dir() reads pick the stand-in up at call time.
 CLI_MEMORY_HOME_PATCH_TARGET = "src.infra.home.charliebot_home_dir"
 
+# Import-path patch target for the shared httpx client factory. Every production caller binds
+# the module (`from src.infra import http`) and reads http.get_http_client() at call time, so
+# monkeypatch.setattr lands the stand-in on the src.infra.http module attribute where each read
+# resolves.
+HTTP_GET_HTTP_CLIENT_PATCH_TARGET = "src.infra.http.get_http_client"
+
 # Import-path patch target shared by every test that swaps the backend factory a master session
 # runs under. src/runtime/master_cc_run.py reads `backend_types.build_backend` as a module
 # attribute at every build, so monkeypatch.setattr on the backend type table's module attribute
@@ -1812,12 +1830,12 @@ RUNS_STOP_EXIT_WAIT_SECONDS_PATCH_TARGET = "src.runtime.runs.STOP_EXIT_WAIT_SECO
 # constant name records which backend's spawn a test drives.
 BASE_SPAWN_SUBPROCESS_PATCH_TARGET = "src.runtime.agent_process.spawn.spawn_subprocess"
 BASE_RESOLVE_BINARY_PATCH_TARGET = "src.runtime.agent_process.base.resolve_binary"
-OPENCODE_RESOLVE_BINARY_PATCH_TARGET = "src.runtime.agent_process.base.resolve_binary"
-OPENCODE_SPAWN_SUBPROCESS_PATCH_TARGET = "src.runtime.agent_process.spawn.spawn_subprocess"
-CODEX_RESOLVE_BINARY_PATCH_TARGET = "src.runtime.agent_process.base.resolve_binary"
-ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET = "src.runtime.agent_process.base.resolve_binary"
-CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET = "src.runtime.agent_process.base.resolve_binary"
-GEMINI_RESOLVE_BINARY_PATCH_TARGET = "src.runtime.agent_process.base.resolve_binary"
+OPENCODE_RESOLVE_BINARY_PATCH_TARGET = BASE_RESOLVE_BINARY_PATCH_TARGET
+OPENCODE_SPAWN_SUBPROCESS_PATCH_TARGET = BASE_SPAWN_SUBPROCESS_PATCH_TARGET
+CODEX_RESOLVE_BINARY_PATCH_TARGET = BASE_RESOLVE_BINARY_PATCH_TARGET
+ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET = BASE_RESOLVE_BINARY_PATCH_TARGET
+CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET = BASE_RESOLVE_BINARY_PATCH_TARGET
+GEMINI_RESOLVE_BINARY_PATCH_TARGET = BASE_RESOLVE_BINARY_PATCH_TARGET
 
 # Patch target for the atomic-write swap hook. src/infra/json_utils.py publishes each staged
 # payload with an ``os.replace`` attribute lookup on its module-scope ``import os`` binding, and
@@ -2567,6 +2585,15 @@ def _isolate_profile(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pyte
   yield
   _thinking_state.reset_run_state_for_tests()
   reset_config_caches()
+
+
+@pytest.fixture(autouse=True)
+def _session_cgroup_base_off_host(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The session-cgroup base points at a path that does not exist, so no test creates a cgroup under the host's
+  delegated app.slice. A spawn then degrades to no cgroup, as on a host without delegation; a test that needs a
+  base builds one under its own temp dir."""
+  missing = tmp_path_factory.mktemp("session-cgroup-base") / "app.slice"
+  monkeypatch.setattr("src.infra.process.CGROUP_V2_APP_SLICE", str(missing))
 
 
 def _guarded_get_config(

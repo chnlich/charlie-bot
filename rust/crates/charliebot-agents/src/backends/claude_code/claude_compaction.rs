@@ -278,14 +278,13 @@ pub fn judge(
     let detail = result
       .get("result")
       .filter(|value| json_truthy(value))
-      .map_or_else(
-        || "run reported an error".to_string(),
-        |value| value.as_str().map(str::to_string).unwrap_or_else(|| value.to_string()),
-      )
+      .map_or_else(String::new, |value| value.as_str().map(str::to_string).unwrap_or_else(|| value.to_string()))
       .trim()
       .chars()
       .take(200)
       .collect::<String>();
+    // The fallback applies to the stripped text, so a blank result reads as no result, as claude_compaction.py does.
+    let detail = if detail.is_empty() { "run reported an error".to_string() } else { detail };
     return CompactionOutcome {
       ok: false,
       error: Some(format!("exit {returncode}: {detail}")),

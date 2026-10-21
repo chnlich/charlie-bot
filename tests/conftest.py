@@ -795,6 +795,11 @@ def rate_limit_event(
   }
 
 
+def reject_claude_login(label: str) -> None:
+  """Record a rejected five_hour rate-limit reading for the pooled account *label*."""
+  claude_accounts.observe_rate_limit(label, rate_limit_event("rejected", 1.0)["rate_limit_info"])
+
+
 def patch_select_with_transient_reading(monkeypatch: pytest.MonkeyPatch, reading_now: datetime.datetime) -> None:
   """Patch ``claude_accounts.select`` so the move's select sees ext-1 cross the line.
 

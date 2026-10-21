@@ -48,6 +48,19 @@ async def _count_builds(tree, monkeypatch):
   return builds
 
 
+def _invalidate_during_builds(tree, monkeypatch):
+  """Every build from now on is overtaken by a write, so the cache slot stays empty."""
+  orig = tree._build_index_sync
+
+  def invalidating_build(cached_metas):
+    index = orig(cached_metas)
+    tree._invalidate_index()  # the write lands while the build runs
+    return index
+
+  monkeypatch.setattr(tree, "_build_index_sync", invalidating_build)
+  tree._invalidate_index()
+
+
 @pytest.mark.asyncio
 async def test_concurrent_invalidated_readers_share_one_build(tree, monkeypatch):
   """Every reader one invalidation touches joins one build and one answer."""
@@ -66,15 +79,7 @@ async def test_write_mid_build_never_installs_over_newer_generation(tree, monkey
   """A structural write landing inside a running build refuses that build's install."""
   builds = await _count_builds(tree, monkeypatch)
   await tree._get_index()
-  orig = tree._build_index_sync
-
-  def invalidating_build(cached_metas):
-    index = orig(cached_metas)
-    tree._invalidate_index()  # the write lands while the build runs
-    return index
-
-  monkeypatch.setattr(tree, "_build_index_sync", invalidating_build)
-  tree._invalidate_index()
+  _invalidate_during_builds(tree, monkeypatch)
   index = await tree._get_index()
   assert index is not None  # the caller still reads its own snapshot
   assert tree._index is None  # never installed over the newer generation
@@ -115,19 +120,6 @@ async def test_index_build_never_folds_a_closed_nodes_full_history(tree, monkeyp
   monkeypatch.setattr(tree, "_facts_of", counting)
   tree._build_index_sync(tree.session_store.fresh_cached_metas())
   assert calls["n"] == 0, f"closed-node build made {calls['n']} full-fold consults"
-
-
-def _invalidate_during_builds(tree, monkeypatch):
-  """Every build from now on is overtaken by a write, so the cache slot stays empty."""
-  orig = tree._build_index_sync
-
-  def invalidating_build(cached_metas):
-    index = orig(cached_metas)
-    tree._invalidate_index()  # the write lands while the build runs
-    return index
-
-  monkeypatch.setattr(tree, "_build_index_sync", invalidating_build)
-  tree._invalidate_index()
 
 
 @pytest.mark.asyncio

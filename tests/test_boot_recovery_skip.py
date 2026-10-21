@@ -52,7 +52,7 @@ async def _closed_worker(tmp_path, monkeypatch, *, outcome="success", cold_read=
       name="W",
       backend=None,
       caller=conftest.OPERATOR)
-  run = await tree.runs.register_run(
+  run = await tree.runs.register_run_locked(
       models.RunRecord(id="run-1", session_id=worker.id, kind="work", backend="fake", model="fake-model"))
   await tree.runs.record_finish(worker.id, run.id, outcome, ended_at=models.utc_now())
   await tree.events.append(
@@ -155,10 +155,10 @@ async def test_each_skip_condition_broken_alone_forces_full_check(
         control_events.build_control_event(
             ET.TASK_REOPENED, actor="operator", source_session_id=worker.id, request_id="reopen-1"))
   elif condition == "run_unended":
-    await tree.runs.register_run(
+    await tree.runs.register_run_locked(
         models.RunRecord(id="run-queued", session_id=worker.id, kind="work", backend="fake", model="fake-model"))
   elif condition == "sequence_ref":
-    await tree.runs.register_run(
+    await tree.runs.register_run_locked(
         models.RunRecord(
             id="run-seq",
             session_id=worker.id,
@@ -169,7 +169,7 @@ async def test_each_skip_condition_broken_alone_forces_full_check(
   elif condition == "worktree_exists":
     worktree = tmp_path / "wt-live"
     worktree.mkdir()
-    await tree.runs.register_run(
+    await tree.runs.register_run_locked(
         models.RunRecord(
             id="run-wt",
             session_id=worker.id,
@@ -212,7 +212,7 @@ async def test_node_check_scan_count_does_not_grow_with_run_count(
     cfg, _session_blocks, tree, _manager, worker = await test_task_recovery._manager_and_worker(tmp_path, monkeypatch)
     for i in range(run_count):
       run_id = f"run-{i}"
-      await tree.runs.register_run(
+      await tree.runs.register_run_locked(
           models.RunRecord(id=run_id, session_id=worker.id, kind="work", backend="fake", model="fake-model"))
       await tree.runs.record_finish(worker.id, run_id, "success")
 

@@ -162,7 +162,7 @@ async def test_bound_master_worker_spoof_cannot_forged_scheduled_input(
   _cfg, _session_blocks, tree = bound_env
   manager = await make_manager(tree)
   run_id = control_events.stable_run_id(manager.id, "spoof:work")
-  await tree.runs.register_run(models.RunRecord(id=run_id, session_id=manager.id, kind="work"))
+  await tree.runs.register_run_locked(models.RunRecord(id=run_id, session_id=manager.id, kind="work"))
   await tree.runs.record_launch(manager.id, run_id, pid=424000, pid_start="ps-1")
   import src.infra.config as core_config
   from src.runtime import run_token
@@ -251,7 +251,7 @@ async def test_closed_bound_node_generates_no_new_execution(bound_env, monkeypat
       conftest.BUILD_BACKEND_PATCH_TARGET)
   from src.runtime import task_completion
   close_run = control_events.stable_run_id(manager.id, "close:evidence")
-  await tree.runs.register_run(models.RunRecord(id=close_run, session_id=manager.id, kind="manager_turn"))
+  await tree.runs.register_run_locked(models.RunRecord(id=close_run, session_id=manager.id, kind="manager_turn"))
   await tree.runs.record_launch(manager.id, close_run, pid=424001, pid_start="ps-1")
   await tree.dispatch.finish_run(manager.id, close_run, outcome="success")
   await tree.completion.complete_task(

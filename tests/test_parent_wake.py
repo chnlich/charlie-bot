@@ -67,7 +67,7 @@ async def test_failure_report_dispatches_a_task_tree_parents_pending_inputs(
       tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="project"), name="Project")
   worker = await conftest.create_task(
       tree, parent=manager.id, request_id="w", profile="worker", task=models.TaskSpec(goal="fix the thing"), name="W")
-  await tree.runs.register_run(_failed_work_run(worker.id, "run-t"))
+  await tree.runs.register_run_locked(_failed_work_run(worker.id, "run-t"))
   await tree.runs.record_finish(worker.id, "run-t", "failed")
   run = await tree.runs.get_run(worker.id, "run-t")
   dispatch = mock.AsyncMock(return_value={"session_id": manager.id, "pending": 1, "launch": False})

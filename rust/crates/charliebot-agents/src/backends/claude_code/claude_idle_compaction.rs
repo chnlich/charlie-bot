@@ -67,9 +67,10 @@ struct Timer {
   input: IdleTimerInput,
 }
 
+/// A running compaction: its id, and its outcome once it ends (None while it runs).
 struct Running {
   id: u64,
-  done: watch::Receiver<bool>,
+  done: watch::Receiver<Option<Result<(), String>>>,
 }
 
 #[derive(Default)]
@@ -184,7 +185,7 @@ impl IdleCompaction {
       return Ok(None);
     }
     let run = Arc::clone(&candidate.run);
-    let (done_sender, done_receiver) = watch::channel(false);
+    let (done_sender, done_receiver) = watch::channel(None);
     let run_id = {
       let mut state = self.state.lock().expect("idle compaction state mutex is not poisoned");
       if state.running.contains_key(session_id) {
@@ -198,19 +199,28 @@ impl IdleCompaction {
     let manager = self.clone();
     let session_id = session_id.to_string();
     let task = tokio::spawn(async move {
-      if let Err(error) = run().await {
-        tracing::error!(target: "charliebot_agents", session = %session_id, error = %error, "claude_idle_compaction_run_failed");
+      // The run gets its own task, so a panic in it ends that task and reaches here as a join error.
+      let outcome = match tokio::spawn(async move { run().await }).await {
+        Ok(result) => result.map_err(|error| format!("{error:#}")),
+        Err(error) => Err(format!("idle compaction task failed: {error}")),
+      };
+      if let Err(message) = &outcome {
+        tracing::error!(target: "charliebot_agents", session = %session_id, error = %message, "claude_idle_compaction_run_failed");
       }
-      done_sender.send_replace(true);
-      let mut state = manager.state.lock().expect("idle compaction state mutex is not poisoned");
-      if state.running.get(&session_id).is_some_and(|running| running.id == run_id) {
-        state.running.remove(&session_id);
+      // The entry goes before the outcome is sent, so a turn that starts next finds no running compaction.
+      {
+        let mut state = manager.state.lock().expect("idle compaction state mutex is not poisoned");
+        if state.running.get(&session_id).is_some_and(|running| running.id == run_id) {
+          state.running.remove(&session_id);
+        }
       }
+      done_sender.send_replace(Some(outcome));
     });
     Ok(Some(task))
   }
 
-  /// Cancel a pending timer and wait for a running compaction without cancelling that compaction.
+  /// Cancel a pending timer and wait for a running compaction without cancelling that compaction. A compaction that
+  /// ended with an error fails this turn with that error, as the shielded await in Python re-raises it.
   pub async fn settle_for_turn(&self, session_id: &str) -> anyhow::Result<()> {
     self.disarm(session_id);
     let Some(mut done) = self
@@ -223,10 +233,9 @@ impl IdleCompaction {
     else {
       return Ok(());
     };
-    while !*done.borrow() {
-      done.changed().await.context("waiting for idle compaction to finish")?;
-    }
-    Ok(())
+    let finished = done.wait_for(Option::is_some).await.context("waiting for idle compaction to finish")?;
+    let outcome = finished.clone().expect("wait_for returns once the compaction has an outcome");
+    outcome.map_err(|message| anyhow::anyhow!(message))
   }
 
   pub fn timer_count(&self) -> usize {

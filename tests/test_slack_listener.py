@@ -262,7 +262,7 @@ async def _run_listener_against(
   monkeypatch.setattr(slack_listener, "_backfill_followed_threads", no_backfill)
   # The listener never issues an HTTP request once open_connection is the seam
   # under stub; keep it off the shared httpx client other tests may have faked.
-  monkeypatch.setattr("src.infra.http.get_http_client", lambda: object())
+  monkeypatch.setattr(conftest.HTTP_GET_HTTP_CLIENT_PATCH_TARGET, lambda: object())
   return asyncio.create_task(
       slack_listener.run_listener(cfg, session_blocks.listing, *conftest.thread_blocks(session_blocks)),
       name="slack-listener-under-test")

@@ -905,23 +905,25 @@ async fn cancel_gated_manager_runs_through_route(chat_cancel: bool) -> anyhow::R
     tokio::time::timeout(Duration::from_secs(30), async {
       loop {
         let facts = features.store.load_all_facts(SESSION_ID)?;
+        // Python does not order these two writes. The master queue persists MASTER_DONE when the CC
+        // round ends (src/runtime/master_cc_queue.py:298-309), while the stop path records the
+        // interrupted run_finished only after the child process exits (src/runtime/runs.py:1218-1224).
+        // The chat cancel takes the same stop path (src/runtime/api/chat.py:106). The two writers race,
+        // so accept either order and check both events once both exist.
+        let done = facts.iter().position(|event| {
+          event["type"] == event_types::MASTER_DONE && event["input_event_ids"] == json!([input_event_id])
+        });
         let finished =
           facts.iter().position(|event| event["type"] == event_types::RUN_FINISHED && event["run_id"] == run_id);
-        if let Some(finished_index) = finished {
+        if let (Some(_), Some(finished_index)) = (done, finished) {
           assert_eq!(facts[finished_index]["outcome"], "interrupted", "iteration {iteration}");
-          let done = facts.iter().position(|event| {
-            event["type"] == event_types::MASTER_DONE && event["input_event_ids"] == json!([input_event_id])
-          });
-          if let Some(done_index) = done {
-            assert!(done_index < finished_index, "iteration {iteration} persisted run_finished first");
-            break anyhow::Ok(());
-          }
+          break anyhow::Ok(());
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
       }
     })
     .await
-    .with_context(|| format!("manager run {run_id} did not finish with the required event order"))??;
+    .with_context(|| format!("manager run {run_id} did not finish with both required events"))??;
   }
 
   drop(guard);
@@ -971,12 +973,12 @@ fn has_process_for_home_and_session(home: &Path, session_id: &str) -> anyhow::Re
 }
 
 #[tokio::test]
-async fn chat_cancel_records_master_done_before_interrupted_finish_for_50_gated_manager_runs() -> anyhow::Result<()> {
+async fn chat_cancel_records_master_done_and_an_interrupted_finish_for_50_gated_manager_runs() -> anyhow::Result<()> {
   cancel_gated_manager_runs_through_route(true).await
 }
 
 #[tokio::test]
-async fn run_cancel_records_master_done_before_interrupted_finish_for_50_gated_manager_runs() -> anyhow::Result<()> {
+async fn run_cancel_records_master_done_and_an_interrupted_finish_for_50_gated_manager_runs() -> anyhow::Result<()> {
   cancel_gated_manager_runs_through_route(false).await
 }
 

@@ -560,9 +560,10 @@ mod tests {
     home.append(&sid, user_message(CHINESE_MESSAGE)).await;
     let events_before = home.events(&sid).len();
 
-    let (status, _) = post_reply(&home, &sid, ENGLISH_REPLY, None).await;
+    let (status, response) = post_reply(&home, &sid, ENGLISH_REPLY, None).await;
 
     assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(response["detail"], json!(LANGUAGE_HOLD_DETAIL));
     assert_eq!(home.events(&sid).len(), events_before);
     assert!(!home.meta(&sid).await.has_unread);
   }
@@ -598,7 +599,7 @@ mod tests {
       let (status, detail) = post_reply(&home, &sid, ENGLISH_REPLY, Some(reason)).await;
 
       assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "reason {reason:?}");
-      assert!(detail["detail"].is_string(), "reason {reason:?}: {detail}");
+      assert_eq!(detail["detail"], json!("Keep-language reason is empty"), "reason {reason:?}");
       assert_eq!(home.events(&sid).len(), events_before, "reason {reason:?}");
     }
   }
@@ -610,9 +611,10 @@ mod tests {
       let sid = home.manager("session", None).await;
       home.append(&sid, user_message(message)).await;
 
-      let (status, _) = post_reply(&home, &sid, ENGLISH_REPLY, None).await;
+      let (status, response) = post_reply(&home, &sid, ENGLISH_REPLY, None).await;
 
       assert_eq!(status, StatusCode::CONFLICT, "message {message:?}");
+      assert_eq!(response["detail"], json!(LANGUAGE_HOLD_DETAIL), "message {message:?}");
     }
   }
 
@@ -669,5 +671,33 @@ mod tests {
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(readback["posted"], json!(true));
+  }
+
+  #[tokio::test]
+  async fn a_path_after_python_nonword_alphanumerics_is_removed() {
+    for marker in ["ⓐ", "\u{0345}"] {
+      let home = Home::new();
+      let sid = home.manager("session", None).await;
+      home.append(&sid, user_message(CHINESE_MESSAGE)).await;
+      let reply = format!("好。{marker}/ChatPanelStatusToggleWithLongName");
+
+      let (status, _) = post_reply(&home, &sid, &reply, None).await;
+
+      assert_eq!(status, StatusCode::OK, "reply {reply:?}");
+    }
+  }
+
+  #[tokio::test]
+  async fn a_python_nonword_alphanumeric_stops_a_path_run() {
+    for marker in ["ⓐ", "\u{0345}"] {
+      let home = Home::new();
+      let sid = home.manager("session", None).await;
+      home.append(&sid, user_message(CHINESE_MESSAGE)).await;
+      let reply = format!("好。/{marker}ChatPanelStatusToggleWithLongName");
+
+      let (status, _) = post_reply(&home, &sid, &reply, None).await;
+
+      assert_eq!(status, StatusCode::CONFLICT, "reply {reply:?}");
+    }
   }
 }

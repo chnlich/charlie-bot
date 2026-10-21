@@ -328,24 +328,10 @@ counts and may pass in a run.
 | features-web-reply | the status read lists the open waiting descendant only | features | `854286c2a` | Python's status response includes open direct children with a Now item; Rust omits `children`. |
 | skeleton | page with a session, bearer key | server-skeleton | `ae5555da7`, `3663f760f` | Rust lacks the web_ask_check event from 3663f760f and still prints the older prompt-overlay warning; the route and quota_failover projections match. |
 | skeleton | page with a session, no key | server-skeleton | `ae5555da7`, `3663f760f` | Rust lacks the web_ask_check event from 3663f760f and still prints the older prompt-overlay warning; the route and quota_failover projections match. |
-| skeleton | page with a worker session, cookie | server-skeleton | `90e8ac300`, `f77008f66` | Python's added worker transcript rows advance the page cursor from 10 to 12. |
 | session-detail | bootstrap, manager root, starred, grouped | session-read-api | `ae5555da7`, `3663f760f` | Rust lacks the web_ask_check event from 3663f760f and still prints the older prompt-overlay warning; the route and quota_failover projections match. |
 | session-detail | events, newest page, manager root, starred, grouped | session-read-api | `ae5555da7`, `3663f760f` | Rust lacks the web_ask_check event from 3663f760f and still prints the older prompt-overlay warning; the route and quota_failover projections match. |
-| session-detail | bootstrap, worker, retried, closed | session-read-api | `90e8ac300`, `f77008f66` | Python's worker transcript projects the added run lifecycle rows, increasing the event count. |
-| session-detail | events, newest page, worker, retried, closed | session-read-api | `90e8ac300`, `f77008f66` | Python's run summary includes the new tool-call count and lifecycle rows; Rust omits them. |
-| session-detail | bootstrap, worker, interrupted, archived | session-read-api | `90e8ac300`, `f77008f66` | Python's worker transcript projects the added run lifecycle rows, increasing the event count. |
-| session-detail | events, newest page, worker, interrupted, archived | session-read-api | `90e8ac300`, `f77008f66` | Python's run summary includes the new tool-call count and lifecycle rows; Rust omits them. |
-| session-detail | bootstrap, worker, queued run stopped | session-read-api | `90e8ac300`, `f77008f66` | Python's worker transcript projects the added run lifecycle rows, increasing the event count. |
-| session-detail | events, newest page, worker, queued run stopped | session-read-api | `90e8ac300`, `f77008f66` | Python's run summary includes the new tool-call count and lifecycle rows; Rust omits them. |
 | session-detail | bootstrap, fork of atlas | session-read-api | `ae5555da7`, `3663f760f` | Rust lacks the web_ask_check event from 3663f760f and still prints the older prompt-overlay warning; the route and quota_failover projections match. |
 | session-detail | events, newest page, fork of atlas | session-read-api | `ae5555da7`, `3663f760f` | Rust lacks the web_ask_check event from 3663f760f and still prints the older prompt-overlay warning; the route and quota_failover projections match. |
-| session-runs | transcript, closed worker | session-read-api | `90e8ac300`, `f77008f66` | Python's run summary includes the new tool-call count and lifecycle rows; Rust omits them. |
-| session-runs | transcript, archived worker | session-read-api | `90e8ac300`, `f77008f66` | Python's run summary includes the new tool-call count and lifecycle rows; Rust omits them. |
-| session-runs | transcript, stopped worker | session-read-api | `90e8ac300`, `f77008f66` | Python's run summary includes the new tool-call count and lifecycle rows; Rust omits them, and the `Accept-Encoding` Vary header differs. |
-| session-runs | transcript, closed worker, revision capture | session-read-api | `90e8ac300`, `f77008f66` | Python's run summary includes the new tool-call count and lifecycle rows; Rust omits them. |
-| session-runs | transcript, closed worker, after the rendered rows | session-read-api | `90e8ac300`, `f77008f66` | Python's run summary includes the new tool-call count and lifecycle rows; Rust omits them. |
-| session-runs | transcript, closed worker, stale revision | session-read-api | `90e8ac300`, `f77008f66` | Python's run summary includes the new tool-call count and lifecycle rows; Rust omits them. |
-| session-stream | worker session catch-up replays the runs transcript | session-stream | `90e8ac300`, `f77008f66` | Python's run summary includes the new tool-call count and lifecycle rows; Rust omits them. |
 
 ## Catch-up e44c9ccef ignored Cargo tests
 

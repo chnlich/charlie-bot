@@ -365,6 +365,21 @@ impl CronScheduler {
       );
     }
     let steps = task.steps.as_ref().is_some_and(|steps| !steps.is_empty());
+    let task_spec_text = if steps {
+      Some(
+        task
+          .steps
+          .as_ref()
+          .expect("a scheduled-step run has step configuration")
+          .first()
+          .expect("a scheduled-step run has a first step")
+          .prompt
+          .as_deref()
+          .expect("validated scheduled steps have prompt text"),
+      )
+    } else {
+      task.prompt.as_deref()
+    };
     let goal = if steps { format!("{} steps", task.name) } else { task.prompt.clone().unwrap_or_default() };
     let request_id = format!("{}:leaf", firing_ref(task, firing));
     let leaf = self
@@ -420,10 +435,10 @@ impl CronScheduler {
       events_ref: None,
       result_ref: None,
     };
-    {
+    let record = {
       let guard = self.features.store.control_lock().await;
-      self.features.store.register_run_locked(&guard, &leaf.id, record.clone(), None).await?;
-    }
+      self.features.store.register_run_locked(&guard, &leaf.id, record, task_spec_text).await?
+    };
     let first_prompt = task
       .steps
       .as_ref()
@@ -788,13 +803,14 @@ mod tests {
   use std::sync::Arc;
 
   use charliebot_store::metadata::{SessionStatus, TaskProfile, UtcDateTime};
+  use charliebot_store::run_records::RunKind;
   use charliebot_store::{CreateTask, TaskCaller};
   use chrono::{TimeZone, Timelike, Utc};
   use serde_json::{Map, Value, json};
 
   use super::{CronExpression, CronScheduler, python_isoformat};
-  use crate::cron::config::ScheduledTaskConfig;
-  use crate::cron::test_support::feature_context;
+  use crate::cron::config::{ScheduledTaskConfig, StepConfig};
+  use crate::cron::test_support::{feature_context, manager};
 
   fn write_task(home: &Path, name: &str, body: &Value) -> std::path::PathBuf {
     let path = home.join("config.d/cron.d").join(format!("{name}.yaml"));
@@ -1037,6 +1053,11 @@ mod tests {
     assert_eq!(leaf.task.as_ref().unwrap().base_branch, None);
     assert_eq!(run.backend.as_deref(), Some("synthetic"));
     assert_eq!(run.model.as_deref(), Some("synthetic-model"));
+    let expected_hash = charliebot_store::control_events::sha256_hex("Synthetic migration work");
+    assert_eq!(run.task_spec_hash.as_deref(), Some(expected_hash.as_str()));
+    let task_spec_path = Path::new(run.task_spec_ref.as_deref().unwrap());
+    assert_eq!(task_spec_path.file_name().and_then(|name| name.to_str()), Some("task_spec.md"));
+    assert_eq!(std::fs::read_to_string(task_spec_path).unwrap(), "Synthetic migration work");
     assert_eq!(prompt, "Synthetic migration work");
     assert_eq!(features.store.get_session(&legacy.id).await.unwrap().unwrap().status, SessionStatus::Archived);
     assert!(features.store.child_ids(&legacy.id).unwrap().is_empty());
@@ -1076,6 +1097,54 @@ mod tests {
     assert!(finished_run.pid_start.is_some());
     assert_eq!(finished_run.backend.as_deref(), Some("synthetic"));
     assert_eq!(finished_run.model.as_deref(), Some("synthetic-model"));
+  }
+
+  #[tokio::test]
+  async fn scheduled_step_run_pins_its_configured_prompt() {
+    let (_home, features) = feature_context();
+    let parent = manager(&features, "synthetic-step-task-spec-parent").await.unwrap();
+    let task = ScheduledTaskConfig {
+      name: "synthetic-step-task".to_string(),
+      cron: "0 3 * * *".to_string(),
+      prompt_file: None,
+      repo: None,
+      backend: Some("synthetic".to_string()),
+      timezone: "America/Los_Angeles".to_string(),
+      enabled: true,
+      project: None,
+      allow_failure: false,
+      session_id: Some(parent.id.clone()),
+      mode: Some("worker".to_string()),
+      prompt: None,
+      handler: None,
+      steps: Some(vec![
+        StepConfig {
+          name: "select".to_string(),
+          prompt_file: None,
+          prompt: Some("Select candidates.".to_string()),
+          backend: None,
+          distinct_backend_from: None,
+        },
+        StepConfig {
+          name: "review".to_string(),
+          prompt_file: None,
+          prompt: Some("Review the diff.".to_string()),
+          backend: None,
+          distinct_backend_from: None,
+        },
+      ]),
+    };
+    let scheduler = CronScheduler::new(Arc::clone(&features));
+    let cfg = features.config.get().unwrap();
+    let (leaf, run, prompt, _) =
+      scheduler.register_fire_work(&task, &parent, "2026-10-21T03:00:00-07:00", "synthetic", None, &cfg).await.unwrap();
+
+    assert_eq!(run.kind, RunKind::ScheduledStep);
+    assert_eq!(prompt, "Select candidates.");
+    assert_eq!(std::fs::read_to_string(run.task_spec_ref.as_deref().unwrap()).unwrap(), "Select candidates.");
+    let expected_hash = charliebot_store::control_events::sha256_hex("Select candidates.");
+    assert_eq!(run.task_spec_hash.as_deref(), Some(expected_hash.as_str()));
+    assert_eq!(features.store.read_run_sync(&leaf.id, &run.id).unwrap().unwrap().task_spec_ref, run.task_spec_ref);
   }
 
   #[tokio::test]

@@ -109,6 +109,12 @@ pub struct ServerTimeouts {
   pub stop: Duration,
   pub stream_exit_grace: Duration,
   pub idle_exit: Duration,
+  #[cfg(test)]
+  pub heavy_check: Duration,
+  #[cfg(test)]
+  pub heavy_rss_mb: f64,
+  #[cfg(test)]
+  pub heavy_rss_override: Option<f64>,
   pub interrupt_settle: Duration,
   pub progress: Duration,
 }
@@ -120,6 +126,12 @@ impl Default for ServerTimeouts {
       stop: opencode_limits::OPENCODE_SERVER_STOP_TIMEOUT,
       stream_exit_grace: opencode_limits::OPENCODE_STREAM_EXIT_GRACE,
       idle_exit: opencode_limits::OPENCODE_SERVER_IDLE_EXIT_SECONDS,
+      #[cfg(test)]
+      heavy_check: Duration::from_secs(60),
+      #[cfg(test)]
+      heavy_rss_mb: 400.0,
+      #[cfg(test)]
+      heavy_rss_override: None,
       interrupt_settle: opencode_limits::OPENCODE_INTERRUPT_SETTLE_TIMEOUT,
       progress: opencode_limits::OPENCODE_SSE_PROGRESS_TIMEOUT,
     }
@@ -283,6 +295,14 @@ struct ServerState {
   stopping: bool,
   tasks: Vec<JoinHandle<()>>,
   idle: Option<JoinHandle<()>>,
+  #[cfg(test)]
+  test_claim_counts: HashMap<String, usize>,
+  #[cfg(test)]
+  test_start_observation: Option<(String, Arc<Mutex<Vec<usize>>>)>,
+  #[cfg(test)]
+  test_heavy_check_count: usize,
+  #[cfg(test)]
+  test_heavy_shutdown_gate: Option<(Arc<AtomicBool>, Arc<Notify>)>,
 }
 
 impl OpenCodeServer {
@@ -304,6 +324,14 @@ impl OpenCodeServer {
         stopping: false,
         tasks: Vec::new(),
         idle: None,
+        #[cfg(test)]
+        test_claim_counts: HashMap::new(),
+        #[cfg(test)]
+        test_start_observation: None,
+        #[cfg(test)]
+        test_heavy_check_count: 0,
+        #[cfg(test)]
+        test_heavy_shutdown_gate: None,
       }),
     }
   }
@@ -362,6 +390,96 @@ impl OpenCodeServer {
     self.state.lock().expect("opencode server state mutex is not poisoned").turns.len()
   }
 
+  #[cfg(test)]
+  pub(crate) fn observe_claim_before_start_test(&self, directory: &str) -> Arc<Mutex<Vec<usize>>> {
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    self.state.lock().expect("opencode server state mutex is not poisoned").test_start_observation =
+      Some((directory.to_string(), Arc::clone(&observed)));
+    observed
+  }
+
+  #[cfg(test)]
+  pub(crate) fn claim_count_test(&self, directory: &str) -> usize {
+    self
+      .state
+      .lock()
+      .expect("opencode server state mutex is not poisoned")
+      .test_claim_counts
+      .get(directory)
+      .copied()
+      .unwrap_or(0)
+  }
+
+  #[cfg(test)]
+  pub(crate) async fn claim_test(&self, directory: &str) {
+    self.record_claim_test(directory, true);
+  }
+
+  #[cfg(test)]
+  pub(crate) async fn release_claim_test(self: &Arc<Self>, directory: &str) -> anyhow::Result<()> {
+    self.record_claim_test(directory, false);
+    Ok(())
+  }
+
+  #[cfg(test)]
+  pub(crate) fn process_rss_mb_test(_pid: u32) -> anyhow::Result<f64> {
+    Ok(0.0)
+  }
+
+  #[cfg(test)]
+  pub(crate) fn heavy_check_count_test(&self) -> usize {
+    self.state.lock().expect("opencode server state mutex is not poisoned").test_heavy_check_count
+  }
+
+  #[cfg(test)]
+  pub(crate) fn pause_heavy_shutdown_test(&self) -> (Arc<AtomicBool>, Arc<Notify>) {
+    let entered = Arc::new(AtomicBool::new(false));
+    let release = Arc::new(Notify::new());
+    self.state.lock().expect("opencode server state mutex is not poisoned").test_heavy_shutdown_gate =
+      Some((Arc::clone(&entered), Arc::clone(&release)));
+    (entered, release)
+  }
+
+  #[cfg(test)]
+  fn observe_start_claims_test(&self) {
+    let state = self.state.lock().expect("opencode server state mutex is not poisoned");
+    if let Some((directory, observed)) = &state.test_start_observation {
+      observed
+        .lock()
+        .expect("opencode start observation is not poisoned")
+        .push(state.test_claim_counts.get(directory).copied().unwrap_or(0));
+    }
+  }
+
+  #[cfg(test)]
+  fn record_claim_test(&self, directory: &str, claimed: bool) {
+    let mut state = self.state.lock().expect("opencode server state mutex is not poisoned");
+    if claimed {
+      *state.test_claim_counts.entry(directory.to_string()).or_default() += 1;
+    } else {
+      let count =
+        state.test_claim_counts.get_mut(directory).expect("a test claim is released only after it is claimed");
+      *count -= 1;
+      if *count == 0 {
+        state.test_claim_counts.remove(directory);
+      }
+    }
+  }
+
+  #[cfg(test)]
+  fn record_heavy_check_test(&self) {
+    self.state.lock().expect("opencode server state mutex is not poisoned").test_heavy_check_count += 1;
+  }
+
+  #[cfg(test)]
+  async fn wait_heavy_shutdown_gate_test(&self) {
+    let gate = self.state.lock().expect("opencode server state mutex is not poisoned").test_heavy_shutdown_gate.clone();
+    if let Some((entered, release)) = gate {
+      entered.store(true, Ordering::Release);
+      release.notified().await;
+    }
+  }
+
   /// Start the server unless it is already running.
   pub async fn ensure_running(self: &Arc<Self>) -> anyhow::Result<()> {
     let _guard = self.start_lock.lock().await;
@@ -371,6 +489,8 @@ impl OpenCodeServer {
     if self.state.lock().expect("opencode server state mutex is not poisoned").process.is_some() {
       self.shutdown_locked().await?;
     }
+    #[cfg(test)]
+    self.observe_start_claims_test();
     if let Err(error) = self.start_locked().await {
       if let Err(cleanup_error) = self.shutdown_locked().await {
         tracing::error!(target: "charliebot_agents", error = %cleanup_error, "opencode_start_cleanup_failed");

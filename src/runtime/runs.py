@@ -808,15 +808,6 @@ class RunStore:
       return "running"
     return "attention"
 
-  def fold_memo(self) -> _RunFactsMemo:
-    """The shared fold memo behind every Run-fact question (one entry for every caller).
-
-    A caller answering one Run's question pays the whole-list fold once per
-    call; a caller in a per-Run loop holds the memo across the loop, so the
-    node's event list is folded once no matter how many Runs it carries.
-    """
-    return _RUN_FACTS_MEMO
-
   def terminal_outcome(self, events: list[dict], run_id: str) -> str | None:
     """The run's recorded run_finished outcome, or None while it has none."""
     return terminal_outcome_in_events(events, run_id)

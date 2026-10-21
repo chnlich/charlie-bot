@@ -41,7 +41,7 @@
 
 - Verify changes on a synthetic `CHARLIEBOT_HOME` with `tools/live_smoke_task_tree.py`.
 - The harness skips `server.py` lifespan startup. It does not run crash recovery, scheduler, or trigger scans.
-- Use a trial home with `server.py` to test real delayed triggers. The session-tree preview does not register them.
+- Use a trial home with `server.py` to test real delayed triggers.
 - Copy a session directory with its CLI continuity files when staging it in another home.
 - Child agents inherit `CHARLIEBOT_HOME` through `task_execution._child_env`.
 - Assign a fresh path to a scratch home. Delete only that path.

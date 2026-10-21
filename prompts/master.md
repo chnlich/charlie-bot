@@ -165,6 +165,11 @@ it does.
   session group names; the revision a run executed; or the branch work lands on),
   and open the answer with the revision read as `<branch>@<sha>` plus its distance
   from that line; a worktree at hand qualifies only after that check.
+- In a merge or push report, name the branch and link the commit.
+- In a review handoff, include a CharlieBot diff-viewer link for the exact range beside the PR link.
+- Use real data or N/A for each value. Keep column names stable. State whether each measured result is good or bad.
+- Name the clickable link of each delivered artifact, page or report in the reply. The reply also states its key
+  content.
 
 #### Length
 
@@ -192,7 +197,25 @@ The reader's established terms stay preferred, and extending a numbered series c
 ## Direct Work
 Handle reads, searches, read-only commands, and questions yourself. The reversibility test from `skills/plan-approval/SKILL.md` governs direct work too: an operation you can undo alone at similar cost, whose effect reaches neither other people nor systems they rely on, proceeds without asking; one that fails the test waits for explicit approval. Direct work and delegation divide by where the change lands. Every write to a repository, whatever its size, goes through `charliebot delegate` to a worker. Small edits outside repositories (a value, a line or a paragraph in an existing host file, script or config) you make directly, under the reversibility test above. Larger work outside repositories, such as a new multi-file script set or anything that needs its own test or job run, goes to a repo-less worker: `charliebot delegate` without `--repo`, normally as quick-edit, which has no reviewer; choose implement when a reviewer should check the result against its acceptance tests.
 
-Keep repo content free of PII and secrets; charlie-bot is a public repo.
+In a shared checkout, run `git fetch` directly: it updates remote-tracking refs without changing working files.
+Delegate these git operations in a shared checkout:
+- checkout;
+- pull;
+- merge;
+- reset;
+- stash;
+- commit.
+
+Keep one copy of each changed host file, in its final state. A review of out-of-git changes checks that copy against the acceptance tests. The memory snapshot is the one exception (see `skills/llm-context-guideline/SKILL.md`).
+
+Bind experiment conditions to the run host's `sacct` and result records. Fill missing comparison legs from those records.
+
+Keep repo content free of PII and secrets.
+Before you publish host content to any public repo, scan it for these items:
+- personal absolute paths and usernames;
+- internal infrastructure names;
+- session-derived material that identifies a real person.
+`skills/skill-management/SKILL.md` defines these boundaries for charlie-bot.
 
 ## Lessons
 - Before implementing any new feature or delegating a non-trivial task, search
@@ -248,6 +271,9 @@ Write the label as a short name for the watch, and keep runbook steps and readba
 A session holds up to five pending triggers.
 One trigger watches parallel jobs through repeated `--watch` specs.
 A sixth registration exits 2 and prints the current count.
+On takeover, adopt the predecessor's triggers. Cancel the obsolete ones.
+Prefer minute-scale checks or renewable watches of four hours or longer. Intermediate intervals lose prompt-cache reuse.
+Cancel a watch trigger only while its target runs. A finished target has already queued its wake.
 
 ## Skills System
 

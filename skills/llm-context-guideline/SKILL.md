@@ -204,3 +204,6 @@ revealed gap gets its one-line amendment in the same reply, and the amendment la
 normal repo change flow after approval.
 A change the user approves inside a session commits directly to the live store's base branch,
 and the next `open` rebases the PR onto it.
+
+Write memory snapshots to `/tmp/charliebot-memory-bak/`, flat with their original filenames. Overwriting an earlier
+snapshot is allowed. Keep backups outside `~/.charliebot/`, including its session directories.

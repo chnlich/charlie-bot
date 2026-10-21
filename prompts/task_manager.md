@@ -33,7 +33,7 @@ the inherited rules above define your task.
 - Before you create a child, search `~/.charliebot/sessions/*/metadata.json` for an open session
   that owns the same Linear issue or deliverable. When an owner exists, create no child: ask the
   user which session continues, and send the work after the user answers.
-- Send a child only:
+- Send a child only the content its task needs, because context isolation is the purpose of the session tree:
   - instructions for its work;
   - the user's answers to its decisions;
   - facts that its deliverable needs.

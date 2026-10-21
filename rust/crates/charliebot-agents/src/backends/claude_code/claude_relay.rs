@@ -216,7 +216,6 @@ pub struct RelayMove {
   pub pool_exhausted: bool,
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn relay_move(
   state: &ClaudeAccountStateRef,
   cfg: &CharlieBotConfig,
@@ -225,7 +224,6 @@ pub fn relay_move(
   session_id: Option<&str>,
   now: Option<UtcDateTime>,
   account_pool: Option<&str>,
-  min_headroom: f64,
 ) -> anyhow::Result<RelayMove> {
   let Some(session_id) = session_id.filter(|id| !id.is_empty()) else {
     return Ok(RelayMove {
@@ -236,10 +234,7 @@ pub fn relay_move(
     });
   };
   let exclude = HashSet::from([current.label.clone()]);
-  let mut next = claude_accounts::select(state, cfg, model, &exclude, None, now, account_pool, min_headroom)?;
-  if next.is_none() && min_headroom > 0.0 {
-    next = claude_accounts::select(state, cfg, model, &exclude, None, now, account_pool, 0.0)?;
-  }
+  let next = claude_accounts::select(state, cfg, model, &exclude, None, now, account_pool, 0.0)?;
   let Some(next) = next else {
     return Ok(RelayMove {
       account: None,

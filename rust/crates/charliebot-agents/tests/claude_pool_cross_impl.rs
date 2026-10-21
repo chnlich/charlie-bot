@@ -334,7 +334,6 @@ fn relay_watch_matrix_matches_python_decisions_and_moves() {
         session_id,
         Some(now),
         Some("alpha"),
-        0.0,
       )
       .unwrap();
       json!({

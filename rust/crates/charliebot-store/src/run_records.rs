@@ -732,10 +732,10 @@ impl Store {
     self.require_control_guard(guard)?;
     let events = self.load_all_facts(session_id)?;
     let mut run = require_run(self, session_id, run_id)?;
-    if let Some(existing_outcome) = terminal_outcome(&events, run_id)? {
+    if terminal_outcome(&events, run_id)?.is_some() {
       // The outcome is the last fact's and the payload is the first fact's, as Python's `terminal_outcome` and
-      // `_fact_input_payload` read them. An empty `ended_at` is the half-written end record. A stop can also land
-      // before the process owner reports its exit code, so an interrupted record accepts that later value.
+      // `_fact_input_payload` read them. An empty `ended_at` is the half-written end record: the caller's `ended_at`
+      // and `exit_code` fill it, and values already written stay.
       let input_event_ids = finish_facts(&events, run_id).next().map(event_input_ids).unwrap_or_default();
       let mut changed = run.input_event_ids != input_event_ids;
       run.input_event_ids = input_event_ids;
@@ -744,10 +744,6 @@ impl Store {
         if outcome.exit_code.is_some() {
           run.exit_code = outcome.exit_code;
         }
-        changed = true;
-      }
-      if existing_outcome == RunOutcomeKind::Interrupted && run.exit_code.is_none() && outcome.exit_code.is_some() {
-        run.exit_code = outcome.exit_code;
         changed = true;
       }
       if changed {

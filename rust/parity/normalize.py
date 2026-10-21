@@ -46,6 +46,7 @@ _CRON_LEAF_NAME_STAMP = re.compile(rf"[A-Za-z0-9][A-Za-z0-9._-]* · {_ISO_WALL_C
 _MERGED_TRACE_CACHE_PATH = re.compile(r"^home/cache/perfetto_merge/[0-9a-f]{64}\.json\.gz$")
 _TEMP_DIR_SUFFIX = re.compile(r"\bcharliebot-(?:explain|oneshot|run)-(?P<value>[a-z0-9_]{8})(?![a-z0-9_])")
 _TASK_BRANCH_TIMESTAMP = re.compile(r"\b(?P<prefix>charliebot(?:/|-)task-)(?P<value>\d{10})(?P<suffix>-[0-9a-f]{8})\b")
+_OPENCODE_DEBUG_PORT = re.compile(r"(?P<prefix>http://127\.0\.0\.1:)(?P<value>\d+)(?P<suffix>/api/debug/location)")
 _PIPE_INODE = re.compile(r"pipe:\[(?P<value>\d+)\]")
 
 
@@ -73,6 +74,12 @@ TASK_BRANCH_TIMESTAMP_RULE = TextPatternRule(
     "task-branch-timestamp",
     _TASK_BRANCH_TIMESTAMP,
     "worktree branch names use time.time() seconds; independent servers can straddle a second",
+)
+
+OPENCODE_DEBUG_PORT_RULE = TextPatternRule(
+    "opencode-debug-port",
+    _OPENCODE_DEBUG_PORT,
+    "the fake OpenCode API binds port 0, so each parity tree gets an OS-assigned loopback port",
 )
 
 
@@ -803,6 +810,11 @@ def _mask_task_branch_timestamp(match: re.Match[str]) -> str:
   return f"{match['prefix']}<{TASK_BRANCH_TIMESTAMP_RULE.name}>{match['suffix']}"
 
 
+def _mask_opencode_debug_port(match: re.Match[str]) -> str:
+  """Keep the fake OpenCode endpoint visible while replacing only its OS-assigned port."""
+  return f"{match['prefix']}<{OPENCODE_DEBUG_PORT_RULE.name}>{match['suffix']}"
+
+
 def normalize_text(text: str, ctx: Context) -> str:
   """The tree path, minted UUID, scratch directory and task-branch timestamp read as placeholders."""
   normalized = text.replace(ctx.tree_root, TREE_PLACEHOLDER)
@@ -818,6 +830,7 @@ def normalize_text(text: str, ctx: Context) -> str:
   normalized = VOICE_STEM_RULE.pattern.sub(f"<{VOICE_STEM_RULE.name}>", normalized)
   normalized = TEMP_DIR_SUFFIX_RULE.pattern.sub(_mask_temp_dir_suffix, normalized)
   normalized = TASK_BRANCH_TIMESTAMP_RULE.pattern.sub(_mask_task_branch_timestamp, normalized)
+  normalized = OPENCODE_DEBUG_PORT_RULE.pattern.sub(_mask_opencode_debug_port, normalized)
   normalized = _CRON_FIRING_STAMP.sub(
       lambda match: f"{match['cron_prefix']}{match['date']}<cron-firing-time>{match['offset']}{match['suffix'] or ''}",
       normalized)

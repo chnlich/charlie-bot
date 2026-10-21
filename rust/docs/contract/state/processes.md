@@ -1,6 +1,6 @@
 # Agent processes (summary depth)
 
-Baseline: the Python tree at `d9fdcd7c9`. For each backend package under `src/backends/`, this document gives the
+Baseline: the Python tree at `e44c9ccef`. For each backend package under `src/backends/`, this document gives the
 executable, the module and function that build argv, env, cwd and stdin, and the output format the server parses.
 Environment details are in `env.md` and transport files in `files.md` section 6.4. **UNVERIFIED** marks a
 statement not confirmed from source, with the reason.
@@ -63,11 +63,15 @@ Resume styles (`backend_type_registration`, from each package's `register()`):
   - fixed head (`BASE_COMMAND`): `claude -p --output-format stream-json --verbose --dangerously-skip-permissions
     --disallowed-tools <HEADLESS_DISALLOWED_TOOLS>`;
   - then `[--session-id <uuid>]`, `[--model <model>]`, `[--effort <effort>]`;
-  - then `--settings '{"disableClaudeAiConnectors":true[,"fastMode":true]}'` (one compact JSON object);
+  - then `--settings '{"disableClaudeAiConnectors":true,"syncClaudeAiSkills":false[,"disableBundledSkills":true][,"fastMode":true]}'`
+    (one compact JSON object; `disableBundledSkills` is present except for a manager turn, and `fastMode` follows the option);
   - then the lifecycle's extra flags, `--resume <id>` first when resuming;
   - for a worker or review run, `--append-system-prompt-file <run dir>/harness_instructions.md`.
   - `HEADLESS_DISALLOWED_TOOLS` is `Monitor,ScheduleWakeup,CronCreate,CronDelete,CronList,Agent,Workflow,TaskCreate,
-    TaskGet,TaskUpdate,TaskList,TaskStop,TaskOutput,SendMessage,ListAgents`.
+    TaskGet,TaskUpdate,TaskList,TaskStop,TaskOutput,SendMessage,ListAgents,ShareOnboardingGuide`. Review runs add
+    `Skill`; other run kinds add `ReportFindings`.
+  - A manager turn adds `--exclude-dynamic-system-prompt-sections`; it keeps machine-specific sections out of the
+    system prompt. The per-run-kind settings also disable connector sync and synced Claude.ai skills.
 - **stdin:** the prompt (`_stdin_prompt`), written and closed by `_write_stdin_prompt`.
 - **env:** `_prepare_env` (headless variables, `CLAUDE_CONFIG_DIR` of the pool account).
 - **cwd:** common rule. A manager turn gets `CLAUDE.md` in its session directory.
@@ -79,6 +83,10 @@ Resume styles (`backend_type_registration`, from each package's `register()`):
   - Compaction (`claude_compaction.py::compaction_command`): `claude -p --resume <id> --model claude-sonnet-5
     --output-format json --disallowed-tools <...> --settings '{"disableClaudeAiConnectors":true}'`, with
     `"/compact\n"` on stdin and a JSON result on stdout. Its env is `compaction_env` (`env.md` section 5).
+  - Idle compaction (`claude_idle_compaction.py::_compaction_process`): a qualifying `cc-claude` master session
+    runs its own configured model and account with the normal run-kind settings and environment, plus
+    `--resume <id> --exclude-dynamic-system-prompt-sections`; it sends `"/compact\n"` through the same compaction
+    runner. The trigger checks the idle context floor, transcript, backend, archive and turn state (`services.md` section 7).
   - Pool relays (`claude_relay.py`, `master_cc_relay.py`) move a transcript to another login with
     `claude_accounts.move_transcript` and resume there. **UNVERIFIED:** the relay argv; it is assumed to be the
     same `ClaudeCodeBackend` command with `--resume`, and the relay modules were not read.
@@ -168,9 +176,15 @@ Resume styles (`backend_type_registration`, from each package's `register()`):
     pdeathsig; env per `env.md` section 5.
   - The listening URL is parsed from `server listening on (http://\S+)` in its output. The version must be 2.x.
   - HTTP basic auth uses user `opencode` and the random password.
-  - It stops after an idle period with no turns (`OPENCODE_SERVER_IDLE_EXIT_SECONDS`).
+  - Each turn claims its working directory until turn-end cleanup. When a claim drops, the server releases every
+    loaded directory with no claim through `GET /api/debug/location` and `DELETE /api/debug/location`.
+  - With no turn or claim for `OPENCODE_SERVER_HEAVY_CHECK_SECONDS` (60 s), it reads its own `/proc/<pid>/status`
+    RSS; above `OPENCODE_SERVER_HEAVY_RSS_MB` (400 MiB) it stops. Otherwise it stops after
+    `OPENCODE_SERVER_IDLE_EXIT_SECONDS` (3600 s) with no turn or claim. Child-process RSS is not included.
+  - `OPENCODE_DISABLE_FFF=1` disables the file index.
 - **Turn** (`opencode.py::OpenCodeBackend.run`):
-  1. Spawn the turn's identity process `/usr/bin/sleep infinity` (piped, pdeathsig, joined to the session cgroup).
+  1. Spawn the turn's identity process `/usr/bin/sleep infinity` (piped, pdeathsig, joined to the session cgroup),
+     then claim its working directory on the shared server.
   2. `GET /api/session/<id>` to resume, or `POST /api/session {location: {directory: cwd}, model: {id,
      providerID}}`. The option's `model` is `<provider>/<model>`. A recorded id missing from the store fails the
      turn.
@@ -178,6 +192,7 @@ Resume styles (`backend_type_registration`, from each package's `register()`):
   4. `PUT /api/session/<id>/environment {variables}` (`env.md` section 4.5).
   5. A manager turn calls `POST /api/location/reload` after rewriting `AGENTS.md`.
   6. `POST /api/session/<id>/prompt {text, files?}`.
+  Turn-end cleanup finishes the turn, drops its directory claim and releases all loaded unclaimed directories.
   Cancelling the turn means signalling the sleep process.
 - **Output:** the global SSE stream `GET /api/event`, lines `data: <json>`. Types used: `server.connected`,
   `session.execution.started`, `session.execution.interrupted`, `session.step.started`, `session.step.ended`,

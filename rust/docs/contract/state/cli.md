@@ -1,6 +1,6 @@
 # The `charliebot` CLI
 
-Baseline: the Python tree at `d9fdcd7c9`. Entry point: `[project.scripts] charliebot = "src.app.main:main"`.
+Baseline: the Python tree at `e44c9ccef`. Entry point: `[project.scripts] charliebot = "src.app.main:main"`.
 Agents reach it through the shim `src/runtime/agent_entry_points/charliebot` (`env.md` section 3). Per
 subcommand, this document gives the HTTP routes it calls, the files it reads or writes itself, and its exit codes.
 Route payloads belong to the parallel HTTP contract and are not repeated here. **UNVERIFIED** marks a statement
@@ -14,6 +14,7 @@ not confirmed from source, with the reason.
   - `memory` → `src.features.memory`
   - `usage-ledger`, `storage` → `src.features.usage`
   - `slack`, `discord`, `web` → `src.features.slack`, `src.features.discord`, `src.features.web_reply`
+  - `router` → `src.features.router`
   - `improve`, `improve-stop` → `src.features.improve`
   - `voice-replay-eval` → `src.features.voice`
 - No argument, `-h` or `--help` prints `usage: <prog> <subcommand> [args...]` and the sorted list, then exits 0.
@@ -23,9 +24,9 @@ not confirmed from source, with the reason.
   module's `main()`.
 - Every argparse usage error exits 2.
 
-The 17 top-level subcommands that `uv run python -m src.app.main --help` lists at the baseline: `artifact`,
+The 18 top-level subcommands that `uv run python -m src.app.main --help` lists at the baseline: `artifact`,
 `config`, `delegate`, `discord`, `gc-trash`, `improve`, `improve-stop`, `memory`, `plan`, `publish`,
-`schedule-trigger`, `session`, `slack`, `storage`, `usage-ledger`, `voice-replay-eval`, `web`. Each has a section
+`router`, `schedule-trigger`, `session`, `slack`, `storage`, `usage-ledger`, `voice-replay-eval`, `web`. Each has a section
 below.
 
 ## 2. Shared client contract (`src/runtime/cli/common.py`)
@@ -76,13 +77,14 @@ below.
 | `plan present --file F [--session]`, `plan amend --file F --note N`, `plan approve [--plan]`, `plan close --plan P` | `GET /api/sessions/<sid>/plans`, then `POST /api/internal/plan/<verb>` | none (the server validates and writes `plans.json`) | 0; 1; 2 |
 | `plan diff [--plan] [--v]`, `plan list` | `GET /api/sessions/<sid>/plans` | `plan diff` takes the registry from the route and reads the two version files straight from the session directory (`_read_version_file`), then diffs them locally | 0; 1; 2 |
 | `publish <artifact> [-- lane options]` | none | With `publish.command`: runs it with the artifact's absolute path plus the lane options; success is exit 0 and exactly one `http(s)://` line on stdout. Otherwise: needs `<publish.dir>/index.html`, creates `<publish.dir>/<token_urlsafe(16)>/` (0755), copies the file in (0644), and prints `<public_base_url>/<token>/<basename>`. | 0 prints the URL; 1 any failure (JSON on stderr); 2 usage |
+| `router` | none | Reads one JSON request from stdin and writes one JSON answer to stdout. Reads `<home>/router.yaml` and the `api_key` in the credentials section named by `jev.credential`; posts the choice request to Jev. | 0; 1 config, credential or request failure; 2 usage |
 | `schedule-trigger --max-wait S --message M [--watch SPEC...] [--cmd CMD [--host H] [--cwd D]] [--session]` | `POST /api/internal/schedule-trigger` (422 maps to exit 2) | With `--cmd`, it starts `bash -lc "(<cmd>\n); echo $? > <exit file>"` detached, locally or over `ssh <host>` (remote files in `/tmp/charliebot_runs/<launch_id>/`), and writes `<home>/sessions/<sid>/launches/<launch_id>/metadata.json` (`files.md` 6.7). Watch specs: `<pid>`, `<host>:<pid>`, `slurm:<job>`, `<host>:slurm:<job>`. | 0 prints `{trigger_id, fire_at, ...launch fields}`; 2 usage, or a rejected or failed registration (a started process is killed first); 3 the ssh start failed or the remote pid did not parse (nothing registered); 1 client contract |
 | `session create [--name] [--backend] [--parent P --profile manager\|worker] [--task-file F] [--request-id] [--group G] ...` | `POST /api/sessions/`, then `POST /api/sessions/<id>/group` when `--group` is given | Reads `F` | 0 prints JSON; 1; 2 (for example `"v2 task create requires both --parent and --profile"`) |
 | `session tree [--root] [--include-archived] [--limit]` | `GET /api/sessions/tree` | none | 0; 1; 2 |
 | `session retry <sid> --run R [--request-id]` | `POST /api/sessions/<sid>/retry` | none | 0; 1; 2 |
 | `session complete <sid> --result-file F ...` | `POST /api/sessions/<sid>/complete` | Reads `F` | 0; 1; 2 |
 | `session acknowledge <sid> --input-ids IDS [--note]` | `POST /api/sessions/<sid>/task-inputs/acknowledge` | none | 0; 1; 2 |
-| `session cancel <sid> --reason R [--request-id]` | `POST /api/sessions/<sid>/cancel` | none | 0; 1; 2 |
+| `session cancel <sid> --reason R [--request-id]` | `POST /api/sessions/<sid>/cancel`; `GET /api/sessions/<sid>/runs` when a stopped run has no outcome | Reads run rows only for unresolved stops; prints each unresolved run id and pid to stderr. | 0; 1 when a stopped run is still running; 2 usage or refusal |
 | `session send (--message M \| --file F) ...` | `POST /api/internal/session-message` (422 maps to exit 2) | Reads `F` | 0; 2 refused (`EXIT_SEND_REFUSED`) or usage; 1 |
 | `session dialog [--session]` | `GET /api/sessions/<sid>/bootstrap`, then pages of `GET /api/sessions/<sid>/events?before=<cursor>&limit=200` | none | 0; 1; 2 |
 | `slack reply --file F [--session]` | `POST /api/internal/slack/reply` | Reads `F` | 0; 1; 2 |
@@ -90,9 +92,10 @@ below.
 | `storage cool [--dry-run] [--min-idle-days N] [--session ID] [--vacuum] [--force]` | none | Runs `storage_cool.run_cool_sweep` in-process (`files.md` sections 5.8, 5.14 and 7). A real run first captures usage into `<home>/usage/ledger.sqlite3` and aborts on failure. It deletes raw transport files of cold sessions under `data/master_runs/*/` and `threads/*/data/`, and backend transcripts under the Claude login and `/home/<user>/.codex/sessions`. `--vacuum` runs `VACUUM` on `opencode.db` and refuses while an `opencode serve` writer lives, unless `--force`. | 0 prints the sweep table; 1 `ValueError`; 2 |
 | `usage-ledger capture [--ledger PATH]` | none | Opens the ledger (default `<home>/usage/ledger.sqlite3`) and captures this host's usage logs: Claude login `projects/`, `/home/<user>/.codex/sessions`, `opencode.db`, and this home's run logs | 0 prints `<source>: <n> records written` lines; 1 on an uncaught error |
 | `voice-replay-eval [--engines] [--hotwords] [--terms] [--only] [--limit] [--out DIR] [--dry-run] ...` | none | Reads `<home>/sessions/*/voice/*.wav`, `.txt` and the chat events that hold the sent messages; runs the transcription backends in-process (cloud ones call their APIs). Writes `<out>/results.json` and `<out>/summary.md`, default `<home>/voice_eval/<UTC timestamp>/`. It refuses an `--out` inside the repo. | 0; 1 (`SystemExit` with a message); 2 usage |
-| `web reply --file F [--session]` | `POST /api/internal/web/reply` | Reads `F` | 0; 1; 2 |
+| `web reply --file F [--keep-language REASON] [--session]` | `POST /api/internal/web/reply` | Reads `F` | 0; 1; 2 |
 | `web dialog [--session]` | `GET /api/internal/web/dialog` | none | 0; 1; 2 |
-| `web status set ...` / `web status show` | `POST /api/internal/web/status` / `GET /api/internal/web/status` | none | 0; 1; 2 |
+| `web status set --file F [--session]` | `POST /api/internal/web/status/unread`, then `POST /api/internal/web/ask-check` for each unread item, then `POST /api/internal/web/status` after every item has a current read | Reads `F`; for a linked item, reads the host-served file and runs a light backend one-shot. | 0 stored; 3 after recording cold reads without storing; 1; 2 |
+| `web status show [--session]` | `GET /api/internal/web/status` | none | 0; 1; 2 |
 
 ## 4. Acceptance check
 

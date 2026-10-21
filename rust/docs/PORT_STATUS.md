@@ -93,6 +93,8 @@ The order of the web reply audit's events is undefined. In the requested 20 Pyth
 | POST | `/api/internal/web/reply` | features/web_reply | ported |  |
 | GET | `/api/internal/web/dialog` | features/web_reply | ported |  |
 | POST | `/api/internal/web/status` | features/web_reply | ported |  |
+| POST | `/api/internal/web/status/unread` | features/web_reply | todo |  |
+| POST | `/api/internal/web/ask-check` | features/web_reply | todo |  |
 | GET | `/api/internal/web/status` | features/web_reply | ported |  |
 | GET | `/host-auth` | features/host_auth | ported | renders through the shared `Templating` handle |
 | GET | `/api/host-auth/status` | features/host_auth | ported |  |
@@ -118,36 +120,37 @@ The order of the web reply audit's events is undefined. In the requested 20 Pyth
 | WS | `/ws/voice/{session_id}` | features/voice | ported | live preview relay and recording archive |
 | POST | `/api/anthropic-proxy/openai-compatible/{backend_id}/v1/messages` | backends/openai_compatible | ported | streaming and JSON answers; parity stage other-backends |
 | GET, HEAD | `/absolute_filepath/{path:path}` | features/files | ported |  |
-| GET, HEAD | `/static/features/artifacts/{path:path}` | foundation | ported |  |
-| GET, HEAD | `/static/features/backup/{path:path}` | foundation | ported |  |
-| GET, HEAD | `/static/features/backend_pool/{path:path}` | foundation | ported |  |
-| GET, HEAD | `/static/features/chat_threads/{path:path}` | foundation | ported |  |
-| GET, HEAD | `/static/features/code_server/{path:path}` | foundation | ported |  |
-| GET, HEAD | `/static/features/cron/{path:path}` | foundation | ported |  |
-| GET, HEAD | `/static/features/diag/{path:path}` | foundation | ported |  |
-| GET, HEAD | `/static/features/slack/{path:path}` | foundation | ported |  |
-| GET, HEAD | `/static/features/discord/{path:path}` | foundation | ported |  |
-| GET, HEAD | `/static/features/web_reply/{path:path}` | foundation | ported |  |
-| GET, HEAD | `/static/features/host_auth/{path:path}` | foundation | ported |  |
-| GET, HEAD | `/static/features/diff_view/{path:path}` | foundation | ported |  |
-| GET, HEAD | `/static/features/explain/{path:path}` | foundation | ported |  |
-| GET, HEAD | `/static/features/improve/{path:path}` | foundation | ported |  |
-| GET, HEAD | `/static/features/memory/{path:path}` | foundation | ported |  |
-| GET, HEAD | `/static/features/ncu/{path:path}` | foundation | ported |  |
-| GET, HEAD | `/static/features/terminal/{path:path}` | foundation | ported |  |
-| GET, HEAD | `/static/features/trace/{path:path}` | foundation | ported |  |
-| GET, HEAD | `/static/features/usage/{path:path}` | foundation | ported |  |
-| GET, HEAD | `/static/features/voice/{path:path}` | foundation | ported |  |
-| GET, HEAD | `/static/backends/openai_compatible/{path:path}` | foundation | ported |  |
-| GET, HEAD | `/static/backends/antigravity/{path:path}` | foundation | ported |  |
-| GET, HEAD | `/static/backends/charlie_code/{path:path}` | foundation | ported |  |
-| GET, HEAD | `/static/backends/claude_code/{path:path}` | foundation | ported |  |
-| GET, HEAD | `/static/backends/codex/{path:path}` | foundation | ported |  |
-| GET, HEAD | `/static/backends/gemini/{path:path}` | foundation | ported |  |
-| GET, HEAD | `/static/backends/kimi/{path:path}` | foundation | ported |  |
-| GET, HEAD | `/static/backends/opencode/{path:path}` | foundation | ported |  |
-| GET, HEAD | `/static/features/files/{path:path}` | foundation | ported |  |
-| GET, HEAD | `/static/{path:path}` | foundation | ported |  |
+| GET, HEAD | `/static/features/artifacts` | foundation | ported |  |
+| GET, HEAD | `/static/features/backup` | foundation | ported |  |
+| GET, HEAD | `/static/features/backend_pool` | foundation | ported |  |
+| GET, HEAD | `/static/features/chat_threads` | foundation | ported |  |
+| GET, HEAD | `/static/features/code_server` | foundation | ported |  |
+| GET, HEAD | `/static/features/cron` | foundation | ported |  |
+| GET, HEAD | `/static/features/diag` | foundation | ported |  |
+| GET, HEAD | `/static/features/slack` | foundation | ported |  |
+| GET, HEAD | `/static/features/discord` | foundation | ported |  |
+| GET, HEAD | `/static/features/web_reply` | foundation | ported |  |
+| GET, HEAD | `/static/features/host_auth` | foundation | ported |  |
+| GET, HEAD | `/static/features/diff_view` | foundation | ported |  |
+| GET, HEAD | `/static/features/explain` | foundation | ported |  |
+| GET, HEAD | `/static/features/improve` | foundation | ported |  |
+| GET, HEAD | `/static/features/memory` | foundation | ported |  |
+| GET, HEAD | `/static/features/ncu` | foundation | ported |  |
+| GET, HEAD | `/static/features/router` | foundation | todo |  |
+| GET, HEAD | `/static/features/terminal` | foundation | ported |  |
+| GET, HEAD | `/static/features/trace` | foundation | ported |  |
+| GET, HEAD | `/static/features/usage` | foundation | ported |  |
+| GET, HEAD | `/static/features/voice` | foundation | ported |  |
+| GET, HEAD | `/static/backends/openai_compatible` | foundation | ported |  |
+| GET, HEAD | `/static/backends/antigravity` | foundation | ported |  |
+| GET, HEAD | `/static/backends/charlie_code` | foundation | ported |  |
+| GET, HEAD | `/static/backends/claude_code` | foundation | ported |  |
+| GET, HEAD | `/static/backends/codex` | foundation | ported |  |
+| GET, HEAD | `/static/backends/gemini` | foundation | ported |  |
+| GET, HEAD | `/static/backends/kimi` | foundation | ported |  |
+| GET, HEAD | `/static/backends/opencode` | foundation | ported |  |
+| GET, HEAD | `/static/features/files` | foundation | ported |  |
+| GET, HEAD | `/static` | foundation | ported |  |
 
 ## Feature hooks
 
@@ -304,3 +307,119 @@ run-record work is `S2`; task-tree runtime and feature-owned files remain with t
 | tmux socket `charliebot` | features/terminal | ported | Outside the home. |
 | tmux session `charliebot-<id>` | features/terminal | ported | Detached terminal shell. |
 | repo config examples and prompt inputs | foundation | reader-only | Not written by the server. |
+
+## Catch-up e44c9ccef open steps
+
+Each row is one failing Rust parity step from the all-stage run (1,013/1,122 steps matched).
+
+| Scenario | Step | Stage | Main commit | Difference |
+| --- | --- | --- | --- | --- |
+| manager-turn-cancellation-routes | server shutdown and fake-agent cleanup | agent-orchestration-cancel | `3cd98aa21`, `2fa0a4ce2` | Claude launch argv and env lag Python's per-run-kind tools, settings, and advisor disablement. |
+| agent-orchestration-cold-read | delegate a cold read of the synthetic page | agent-orchestration | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
+| agent-orchestration-cold-read | let the manager finish the cold-read report | agent-orchestration | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
+| agent-orchestration-cold-read | delegate a cold read whose first reader fails and second answers | agent-orchestration | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
+| agent-orchestration-cold-read | let the manager finish the retry report | agent-orchestration | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
+| agent-orchestration-cold-read | delegate a cold read whose two readers fail | agent-orchestration | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
+| agent-orchestration-cold-read | let the manager finish the all-failed report | agent-orchestration | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
+| agent-orchestration-cold-read | server shutdown and fake-agent cleanup | agent-orchestration | `3cd98aa21`, `2fa0a4ce2` | Claude launch argv and env lag Python's per-run-kind tools, settings, and advisor disablement. |
+| task-completion-routes | cancel the stopped queued worker to deliver its report | agent-orchestration | `d401d9a2a` | Python cancel responses report queued runs stopped, including `never_launched`; Rust omits that list or entry. |
+| task-completion-routes | release the active manager run | agent-orchestration | `d401d9a2a` | The new task stop/completion events shift the returned or persisted event id by one. |
+| task-completion-routes | cancel the task after its run finishes | agent-orchestration | `d401d9a2a` | Python cancel responses report queued runs stopped, including `never_launched`; Rust omits that list or entry. |
+| task-completion-routes | acknowledge the pending Cobalt input | agent-orchestration | `d401d9a2a` | The new task stop/completion events shift the returned or persisted event id by one. |
+| task-completion-routes | replay the input acknowledgement | agent-orchestration | `d401d9a2a` | The new task stop/completion events shift the returned or persisted event id by one. |
+| task-completion-routes | operator restores an archived ancestor chain | agent-orchestration | `d401d9a2a` | The new task stop/completion events shift the returned or persisted event id by one. |
+| task-completion-routes | server shutdown and fake-agent cleanup | agent-orchestration | `3cd98aa21`, `2fa0a4ce2` | Claude launch argv and env lag Python's per-run-kind tools, settings, and advisor disablement. |
+| agent-orchestration-delegate | delegate one repo-less script run | agent-orchestration | `253e0dcbe` | Python task prompts include the new “Text a model reads” block; Rust stores the older prompt and hash. |
+| agent-orchestration-delegate | delegate a failing repo-less worker | agent-orchestration | `253e0dcbe` | Python task prompts include the new “Text a model reads” block; Rust stores the older prompt and hash. |
+| agent-orchestration-delegate | let the manager finish the failed-script report | agent-orchestration | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
+| agent-orchestration-delegate | delegate a failing implement worker on the local repository | agent-orchestration | `253e0dcbe` | Python task prompts include the new “Text a model reads” block; Rust stores the older prompt and hash. |
+| agent-orchestration-delegate | let the manager finish the failed-repository report | agent-orchestration | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
+| agent-orchestration-delegate | server shutdown and fake-agent cleanup | agent-orchestration | `3cd98aa21`, `2fa0a4ce2` | Claude launch argv and env lag Python's per-run-kind tools, settings, and advisor disablement. |
+| manager-turn-execution-and-routes | server shutdown and fake-agent cleanup | agent-orchestration | `3cd98aa21`, `2fa0a4ce2` | Claude launch argv and env lag Python's per-run-kind tools, settings, and advisor disablement. |
+| manager-turn-opencode | wait for the OpenCode manager run to finish | agent-orchestration | `d401d9a2a` | Python persists the completed OpenCode manager run directory; Rust leaves no matching run directory. |
+| implement-review-chain | delegate a repo task whose unchanged branch already landed on origin main | agent-orchestration | `253e0dcbe` | Python task prompts include the new “Text a model reads” block; Rust stores the older prompt and hash. |
+| implement-review-chain | delegate a repo-less implement task | agent-orchestration | `253e0dcbe` | Python task prompts include the new “Text a model reads” block; Rust stores the older prompt and hash. |
+| implement-review-chain | delegate a task whose reviewer exhausts the configured pool | agent-orchestration | `253e0dcbe` | Python task prompts include the new “Text a model reads” block; Rust stores the older prompt and hash. |
+| implement-review-chain | server shutdown and fake-agent cleanup | agent-orchestration | `3cd98aa21`, `2fa0a4ce2` | Claude launch argv and env lag Python's per-run-kind tools, settings, and advisor disablement. |
+| agent-orchestration-session-message | server shutdown and fake-agent cleanup | agent-orchestration | `3cd98aa21`, `2fa0a4ce2` | Claude launch argv and env lag Python's per-run-kind tools, settings, and advisor disablement. |
+| cron-routes-and-ticks | wait for the manual cron firing report | triggers-cron-improve | `f77008f66` | Python persists the scheduled task's canonical `task_spec.md` and references; Rust omits them. |
+| cron-routes-and-ticks | wait for a scheduler tick to fire the same task again | triggers-cron-improve | `f77008f66` | Python persists the scheduled task's canonical `task_spec.md` and references; Rust omits them. |
+| cron-routes-and-ticks | server shutdown and fake-agent cleanup | triggers-cron-improve | `3cd98aa21`, `2fa0a4ce2` | Claude launch argv and env lag Python's per-run-kind tools, settings, and advisor disablement. |
+| features-artifacts-plan-fork | fork of the plan worker at a null index | features | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
+| features-artifacts-plan-fork | server shutdown and fake-agent cleanup | features | `3cd98aa21`, `2fa0a4ce2` | Claude launch argv and env lag Python's per-run-kind tools, settings, and advisor disablement. |
+| features-explain | server shutdown and fake-agent cleanup | features | `3cd98aa21`, `2fa0a4ce2` | Claude launch argv and env lag Python's per-run-kind tools, settings, and advisor disablement. |
+| features-harness-discord | allowed user mention starts a Discord thread session | features | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
+| features-harness-discord | release the silent summon result | features | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
+| features-harness-discord | server shutdown and fake-agent cleanup | features | `3cd98aa21`, `2fa0a4ce2` | Claude launch argv and env lag Python's per-run-kind tools, settings, and advisor disablement. |
+| features-harness-slack | allowed app mention starts its Slack thread session | features | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
+| features-harness-slack | release summon agent after its result | features | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
+| features-harness-slack | server shutdown and fake-agent cleanup | features | `3cd98aa21`, `2fa0a4ce2` | Claude launch argv and env lag Python's per-run-kind tools, settings, and advisor disablement. |
+| features-web-reply-audit | wait for the audit nudge | features | `854286c2a` | Python's web reply nudge includes the reason and full-reply instruction; Rust still sends the short prompt. |
+| features-web-reply-audit | server shutdown and fake-agent cleanup | features | `3cd98aa21`, `2fa0a4ce2` | Claude launch argv and env lag Python's per-run-kind tools, settings, and advisor disablement. |
+| features-web-reply | a status set of now alone | features | `854286c2a` | Python's status-set response adds `now_chars` and `now_over_budget`; Rust omits both. |
+| features-web-reply | a status set with a null goal | features | `854286c2a` | Python's status-set response adds `now_chars` and `now_over_budget`; Rust omits both. |
+| features-web-reply | the status read lists the open waiting descendant only | features | `854286c2a` | Python's status response includes open direct children with a Now item; Rust omits `children`. |
+| handover-admitted-input | server shutdown and fake-agent cleanup · python-to-candidate | agent-orchestration | `3cd98aa21`, `2fa0a4ce2` | Claude launch argv and env lag Python's per-run-kind tools, settings, and advisor disablement. |
+| handover-admitted-input | server shutdown and fake-agent cleanup · candidate-to-python | agent-orchestration | `3cd98aa21`, `2fa0a4ce2` | Claude launch argv and env lag Python's per-run-kind tools, settings, and advisor disablement. |
+| handover-drain | server shutdown and fake-agent cleanup · candidate-to-python | agent-orchestration | `3cd98aa21`, `2fa0a4ce2` | Claude launch argv and env lag Python's per-run-kind tools, settings, and advisor disablement. |
+| handover-improve | server shutdown and fake-agent cleanup · python-to-candidate | triggers-cron-improve | `3cd98aa21`, `2fa0a4ce2` | Claude launch argv and env lag Python's per-run-kind tools, settings, and advisor disablement. |
+| handover-improve | wait for the iteration at its first gate · candidate-to-python | triggers-cron-improve | `253e0dcbe` | Python task prompts include the new “Text a model reads” block; Rust stores the older prompt and hash. |
+| handover-improve | server shutdown and fake-agent cleanup · candidate-to-python | triggers-cron-improve | `3cd98aa21`, `2fa0a4ce2` | Claude launch argv and env lag Python's per-run-kind tools, settings, and advisor disablement. |
+| handover-manager-turn | server shutdown and fake-agent cleanup · candidate-to-python | agent-orchestration | `3cd98aa21`, `2fa0a4ce2` | Claude launch argv and env lag Python's per-run-kind tools, settings, and advisor disablement. |
+| handover-review-run | server shutdown and fake-agent cleanup · python-to-candidate | agent-orchestration | `3cd98aa21`, `2fa0a4ce2` | Claude launch argv and env lag Python's per-run-kind tools, settings, and advisor disablement. |
+| handover-review-run | delegate an implement task whose reviewer remains alive through handover · candidate-to-python | agent-orchestration | `253e0dcbe` | Python task prompts include the new “Text a model reads” block; Rust stores the older prompt and hash. |
+| handover-review-run | release the adopted reviewer · candidate-to-python | agent-orchestration | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
+| handover-review-run | server shutdown and fake-agent cleanup · candidate-to-python | agent-orchestration | `3cd98aa21`, `2fa0a4ce2` | Claude launch argv and env lag Python's per-run-kind tools, settings, and advisor disablement. |
+| handover-stop-request | hand over the durable interrupted outcome · python-to-candidate | agent-orchestration | `d401d9a2a` | Python escalates an ignored stop, terminates the agent, and records the interrupted outcome and exit code; Rust does not. |
+| handover-stop-request | request the stop of the gated run; the agent ignores the signal · candidate-to-python | agent-orchestration | `d401d9a2a` | Python escalates an ignored stop, terminates the agent, and records the interrupted outcome and exit code; Rust does not. |
+| handover-stop-request | hand over the durable interrupted outcome · candidate-to-python | agent-orchestration | `d401d9a2a` | Python escalates an ignored stop, terminates the agent, and records the interrupted outcome and exit code; Rust does not. |
+| handover-stop-request | server shutdown and fake-agent cleanup · candidate-to-python | agent-orchestration | `3cd98aa21`, `2fa0a4ce2` | Claude launch argv and env lag Python's per-run-kind tools, settings, and advisor disablement. |
+| handover-worker-run | wait for the worker agent at its live gate · candidate-to-python | agent-orchestration | `253e0dcbe` | Python task prompts include the new “Text a model reads” block; Rust stores the older prompt and hash. |
+| handover-worker-run | release the adopted worker agent · candidate-to-python | agent-orchestration | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
+| handover-worker-run | server shutdown and fake-agent cleanup · candidate-to-python | agent-orchestration | `3cd98aa21`, `2fa0a4ce2` | Claude launch argv and env lag Python's per-run-kind tools, settings, and advisor disablement. |
+| improve-loop-reports | wait for both iteration reports to reach the busy parent | triggers-cron-improve | `253e0dcbe` | Python task prompts include the new “Text a model reads” block; Rust stores the older prompt and hash. |
+| improve-loop-reports | server shutdown and fake-agent cleanup | triggers-cron-improve | `3cd98aa21`, `2fa0a4ce2` | Claude launch argv and env lag Python's per-run-kind tools, settings, and advisor disablement. |
+| skeleton | page with a session, bearer key | server-skeleton | `ae5555da7` | Python records the router's quota failover message; Rust retains the old prompt-overlay warning. |
+| skeleton | page with a session, no key | server-skeleton | `ae5555da7` | Python records the router's quota failover message; Rust retains the old prompt-overlay warning. |
+| skeleton | page with a worker session, cookie | server-skeleton | `90e8ac300`, `f77008f66` | Python's added worker transcript rows advance the page cursor from 10 to 12. |
+| session-detail | bootstrap, manager root, starred, grouped | session-read-api | `ae5555da7` | Python records the router's quota failover message; Rust retains the old prompt-overlay warning. |
+| session-detail | events, newest page, manager root, starred, grouped | session-read-api | `ae5555da7` | Python records the router's quota failover message; Rust retains the old prompt-overlay warning. |
+| session-detail | bootstrap, manager child with child reports | session-read-api | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
+| session-detail | events, newest page, manager child with child reports | session-read-api | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
+| session-detail | bootstrap, worker, retried, closed | session-read-api | `90e8ac300`, `f77008f66` | Python's worker transcript projects the added run lifecycle rows, increasing the event count. |
+| session-detail | events, newest page, worker, retried, closed | session-read-api | `90e8ac300`, `f77008f66` | Python's run summary includes the new tool-call count and lifecycle rows; Rust omits them. |
+| session-detail | bootstrap, worker, interrupted, archived | session-read-api | `90e8ac300`, `f77008f66` | Python's worker transcript projects the added run lifecycle rows, increasing the event count. |
+| session-detail | events, newest page, worker, interrupted, archived | session-read-api | `90e8ac300`, `f77008f66` | Python's run summary includes the new tool-call count and lifecycle rows; Rust omits them. |
+| session-detail | bootstrap, worker, queued run stopped | session-read-api | `90e8ac300`, `f77008f66` | Python's worker transcript projects the added run lifecycle rows, increasing the event count. |
+| session-detail | events, newest page, worker, queued run stopped | session-read-api | `90e8ac300`, `f77008f66` | Python's run summary includes the new tool-call count and lifecycle rows; Rust omits them. |
+| session-detail | bootstrap, fork of atlas | session-read-api | `ae5555da7` | Python records the router's quota failover message; Rust retains the old prompt-overlay warning. |
+| session-detail | events, newest page, fork of atlas | session-read-api | `ae5555da7` | Python records the router's quota failover message; Rust retains the old prompt-overlay warning. |
+| session-runs | run context, manager turn | session-read-api | `f08291064` | Python removed `legacy_prompt` from run-context responses; Rust still includes the field. |
+| session-runs | run context, failed manager turn | session-read-api | `f08291064` | Python removed `legacy_prompt` from run-context responses; Rust still includes the field. |
+| session-runs | run context, failed work run | session-read-api | `f08291064` | The extra Rust legacy-prompt payload changes the `Accept-Encoding` Vary header versus Python. |
+| session-runs | run context, successful work run | session-read-api | `f08291064` | Python removed `legacy_prompt` from run-context responses; Rust still includes the field. |
+| session-runs | run context, interrupted work run | session-read-api | `f08291064` | The extra Rust legacy-prompt payload changes the `Accept-Encoding` Vary header versus Python. |
+| session-runs | run context, stopped queued run | session-read-api | `f08291064` | Python removed `legacy_prompt` from run-context responses; Rust still includes the field. |
+| session-runs | transcript, closed worker | session-read-api | `90e8ac300`, `f77008f66` | Python's run summary includes the new tool-call count and lifecycle rows; Rust omits them. |
+| session-runs | transcript, archived worker | session-read-api | `90e8ac300`, `f77008f66` | Python's run summary includes the new tool-call count and lifecycle rows; Rust omits them. |
+| session-runs | transcript, stopped worker | session-read-api | `f08291064` | The extra Rust legacy-prompt payload changes the `Accept-Encoding` Vary header versus Python. |
+| session-runs | transcript, closed worker, revision capture | session-read-api | `90e8ac300`, `f77008f66` | Python's run summary includes the new tool-call count and lifecycle rows; Rust omits them. |
+| session-runs | transcript, closed worker, after the rendered rows | session-read-api | `90e8ac300`, `f77008f66` | Python's run summary includes the new tool-call count and lifecycle rows; Rust omits them. |
+| session-runs | transcript, closed worker, stale revision | session-read-api | `90e8ac300`, `f77008f66` | Python's run summary includes the new tool-call count and lifecycle rows; Rust omits them. |
+| session-runs | effective prompt, worker | session-read-api | `253e0dcbe` | Python's effective-prompt body and hash reflect the merged prompt text; Rust serves the old prompt. |
+| session-runs | effective prompt, work kind on a manager | session-read-api | `253e0dcbe` | Python's effective-prompt body and hash reflect the merged prompt text; Rust serves the old prompt. |
+| session-stream | worker session catch-up replays the runs transcript | session-stream | `90e8ac300`, `f77008f66` | Python's run summary includes the new tool-call count and lifecycle rows; Rust omits them. |
+| session-stream | server shutdown and fake-agent cleanup | session-stream | `3cd98aa21`, `2fa0a4ce2` | Claude launch argv and env lag Python's per-run-kind tools, settings, and advisor disablement. |
+| session-write-agent | create under the run's own manager task | session-write | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
+| session-write-agent | release the agent caller turn | session-write | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
+| session-write-agent | server shutdown and fake-agent cleanup | session-write | `3cd98aa21`, `2fa0a4ce2` | Claude launch argv and env lag Python's per-run-kind tools, settings, and advisor disablement. |
+| session-write-fork | fork of the source at a null index, the whole log | session-write | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
+| session-write-fork | fork of the source at its first line | session-write | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
+| session-write-fork | fork of the source at a middle line | session-write | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
+| session-write-fork | fork of the source at its last line | session-write | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
+| session-write-fork | elone of the source at a middle line takes over and archives the source | session-write | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
+| session-write-fork | server shutdown and fake-agent cleanup | session-write | `3cd98aa21`, `2fa0a4ce2` | Claude launch argv and env lag Python's per-run-kind tools, settings, and advisor disablement. |
+| session-write-task | legacy create opens a manager root | session-write | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
+| session-write-task | v2 create under the manager root | session-write | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
+| wait-trigger-delay | server shutdown and fake-agent cleanup | triggers-cron-improve | `3cd98aa21`, `2fa0a4ce2` | Claude launch argv and env lag Python's per-run-kind tools, settings, and advisor disablement. |
+| wait-trigger-local-pid | server shutdown and fake-agent cleanup | triggers-cron-improve | `3cd98aa21`, `2fa0a4ce2` | Claude launch argv and env lag Python's per-run-kind tools, settings, and advisor disablement. |

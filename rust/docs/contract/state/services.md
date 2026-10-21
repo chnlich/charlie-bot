@@ -1,6 +1,6 @@
 # Server process: startup, lifespan, services, session cgroups
 
-Baseline: the Python tree at `d9fdcd7c9`. Entry point: `server.py`. Paths use `<home>` and `/home/<user>` as in
+Baseline: the Python tree at `e44c9ccef`. Entry point: `server.py`. Paths use `<home>` and `/home/<user>` as in
 `files.md`. **UNVERIFIED** marks a statement not confirmed from source, with the reason.
 
 ## 1. Before the event loop (`server.py::main`)
@@ -162,3 +162,17 @@ Packages that register config sections, checks, legacy keys or option types are 
   - `backup` → `src.features.backup.backup:run_scheduled_backup`;
   - `usage_ledger` → `src.features.usage.usage_ledger:run_scheduled_usage_ledger`;
   - `cool_storage` → `src.features.usage.storage_cool:run_scheduled_cool_storage`.
+
+## 7 Per-session Claude idle compaction
+
+`src/backends/claude_code/claude_idle_compaction.py` keeps pending timers and running compactions in memory; it is
+not a registered lifespan service and does not persist or re-arm timers at startup. `ClaudeCodeLifecycle.after_round`
+arms a timer after a master turn, due at 90% of Claude's 60-minute prompt-cache lifetime (about 54 minutes after
+the last request). A later master round replaces the pending timer.
+
+At the trigger, the module starts a compaction only when the session is unarchived, still uses the backend that
+armed the timer, has no running or queued turn, has no newer request or later compaction, has at least
+`accounts.claude_compaction.idle_tokens` context tokens, and its resumable transcript remains in the account
+directory. The compaction resumes the session's own Claude process and records the usual `context_compacted` or
+`context_compact_failed` event. A pooled turn disarms its timer and waits for an already-running compaction before
+launching. A server restart drops both pending timers and running-task tracking; startup does not recover them.

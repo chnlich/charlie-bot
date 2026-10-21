@@ -199,7 +199,7 @@ UNVERIFIED: the search ranking and the result cap live in `src/runtime/session_s
 ### `GET /api/sessions/{session_id}/bootstrap`
 
 - Auth: access key.
-- Handler: `src/runtime/api/sessions.py:986`.
+- Handler: `src/runtime/api/sessions.py:1014`.
 - Dependency: `require_session`.
 - 200 (pre-compressed):
 
@@ -213,7 +213,8 @@ UNVERIFIED: the search ranking and the result cap live in `src/runtime/session_s
   "has_more": false,
   "active_backend": "claude-opus",
   "active_backend_type": "cc-claude",
-  "switchable_backends": ["claude-opus"]
+  "switchable_backends": ["claude-opus"],
+  "worker_summary": {summary fields}
 }
 ```
 
@@ -224,6 +225,7 @@ UNVERIFIED: the search ranking and the result cap live in `src/runtime/session_s
 - `active_backend`: `run_backend` or `backend` of the session, else the first configured option id, else `claude`.
 - `active_backend_type`: the type of that option, or `""` when it is not configured.
 - `switchable_backends`: every configured option id in config order. A session bound to a dedicated-backend sequence lists only the ids in the same continuation domain. An unconfigured active backend gives `[]`.
+- `worker_summary` appears for a worker session and is the summary object also returned by the transcript route.
 
 Side effects: none. The route does not mark the session read.
 
@@ -269,7 +271,7 @@ Errors: 404 `Session not found`; 422 when `before` is missing or not an int.
 ### `GET /api/sessions/{session_id}/transcript`
 
 - Auth: access key.
-- Handler: `src/runtime/api/sessions.py:1105`.
+- Handler: `src/runtime/api/sessions.py:1133`.
 - Dependency: `require_session`.
 
 | Name | In | Type | Required | Default | Validation |
@@ -283,11 +285,12 @@ Errors: 404 `Session not found`; 422 when `before` is missing or not an int.
 | 200 | | see below |
 
 ```json
-{"messages":[…],"total":12,"pending_draft":null,"revision":"…","reset":false,"active_run_id":"…","thinking_since":null}
+{"messages":[…],"total":12,"pending_draft":null,"revision":"…","reset":false,"active_run_id":"…","summary":{…},"thinking_since":null}
 ```
 
 - `reset` is true when `revision` is empty or differs from the current revision.
 - With `reset`, `messages` is the whole committed list. Otherwise it is `committed[after:]`.
+- `summary` contains `task_state`, `closed_at`, `landed`, `delivery`, `runs`, `active`, `closing`, `cause`, `stop` and `links`. `runs` has one row per Run; `active` describes the newest running Run; `closing` has the newest work and review text; the remaining fields read the current close, newest failure, stop request and evidence refs.
 - `thinking_since` uses `isoformat()` (`+00:00`).
 
 ### `GET /api/sessions/{session_id}/pending-triggers`
@@ -370,7 +373,7 @@ The server memoizes the gzip form per file (mtime, size).
 ### `GET /api/sessions/{session_id}/runs/{run_id}/context`
 
 - Auth: access key.
-- Handler: `src/runtime/api/sessions.py:1619`.
+- Handler: `src/runtime/api/sessions.py:1633`.
 - Dependency: `require_session`.
 
 | Status | Case | `detail` |
@@ -379,7 +382,6 @@ The server memoizes the gzip form per file (mtime, size).
 | 500 | The stored snapshot file is missing | `stored prompt snapshot missing at <ref>` |
 | 500 | The snapshot file is unreadable | `stored prompt snapshot unreadable at <ref>: <error>` |
 | 500 | The snapshot is malformed | the error message |
-| 500 | The recorded raw launch text is missing | `recorded raw launch text missing at <ref>` |
 
 200:
 
@@ -390,14 +392,12 @@ The server memoizes the gzip form per file (mtime, size).
   "kind": "work",
   "mode": "historical",
   "snapshot": {"blocks": […], "prompt_hash": "…", "char_count": 0},
-  "legacy_prompt": null,
   "task_spec": {"ref": "…", "sha256": "…"},
   "logs": {"raw_log_ref": "…", "events_ref": "…", "result_ref": "…"}
 }
 ```
 
 - `snapshot` is set when `prompt_snapshot_ref` names the snapshot file.
-- `legacy_prompt` is `{"ref","sha256","note"}` when the run has only a raw launch text file. The `note` text is fixed in `_legacy_prompt_payload`.
 - `task_spec` is null when the run has no `task_spec_ref`.
 
 ### `GET /api/sessions/{session_id}/task-inputs/pending`
@@ -623,12 +623,12 @@ Side effects: a `task_closed` event (outcome `completed`) or a close request tha
 ### `POST /api/sessions/{session_id}/cancel`
 
 - Auth: access key + caller.
-- Handler: `src/runtime/api/sessions.py:1806`.
+- Handler: `src/runtime/api/sessions.py:1799`.
 - Dependency: `require_session`.
 - Body: `{"request_id": string, "reason": string}`, both required.
-- 200: the detail form.
-- Errors: an agent may cancel only a direct child of its own task (403). Active execution or open children give 409.
-- Side effects: a `task_closed` event with outcome `cancelled`. No process is stopped.
+- 200: the detail form plus `stopped_runs`, one row per stopped Run: `{"run_id": string, "outcome": "interrupted" | "never_launched" | null}`.
+- Errors: an agent may cancel only a direct child of its own task (403). A manager task keeps its active-run and open-child blockers (409).
+- Side effects: a worker target stops its non-terminal Runs and ends the delegation. A manager target keeps its existing blocker behavior.
 
 ## Agent orchestration routes
 

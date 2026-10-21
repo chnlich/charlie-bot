@@ -1,6 +1,6 @@
 # Environment variables
 
-Baseline: the Python tree at `d9fdcd7c9`. Section 1 covers what the server reads, section 2 what the
+Baseline: the Python tree at `e44c9ccef`. Section 1 covers what the server reads, section 2 what the
 `charliebot` CLI reads, and sections 3 to 5 what the server writes into the environment of every process it
 starts, with the module that sets each variable. Found by grepping `src/` and `server.py` for `os.environ`,
 `environ.get`, `getenv` and `env[...] =`. **UNVERIFIED** marks a statement not confirmed from source, with the
@@ -15,7 +15,7 @@ reason.
 | `PATH` | `agent_environment.agent_environment`; `shutil.which` for `claude`, `codex`, `gemini`, `agy`, `charlie-code`, `tmux`, `sacct`, `git`, `node` | Binary resolution; rewritten once at start (section 3) |
 | `VIRTUAL_ENV`, `UV_RUN_RECURSION_DEPTH` | `agent_environment` | Removed from the process environment at start |
 | `CLAUDE_CONFIG_DIR` | `src/backends/claude_code/login_dirs.py::claude_config_dir` | The default Claude login directory (else `/home/<user>/.claude`) for resume lookup, usage logs and the quota panel |
-| `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`, `CLAUDE_CODE_MAX_CONTEXT_TOKENS`, `CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT` | `src/backends/claude_code/claude_launch.py::headless_claude_env`, read per call | Forwarded to headless Claude children; the host value beats CharlieBot's default. The first three also drive the declared-window logic. |
+| `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`, `CLAUDE_CODE_MAX_CONTEXT_TOKENS`, `CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT` | `src/backends/claude_code/claude_launch.py::headless_claude_env`, read per call | Forwarded to headless Claude children; a host value beats the per-run-kind default. The first three also drive the declared-window logic. |
 | `NO_PROXY` | `src/runtime/agent_process/base.py::apply_proxy_env` | Merged with `localhost,127.0.0.1,::1` when a backend option sets `proxy_url` |
 | `GEMINI_API_KEY`, `GOOGLE_API_KEY` | `base.strip_google_api_keys` | Removed from gemini and antigravity children so they bill through OAuth |
 | `TMUX` | `src/runtime/agent_process/pty_common.py` | Removed from tmux client invocations |
@@ -109,7 +109,7 @@ The working directory is the run's worktree.
 
 | Backend type | Variables | Module |
 | --- | --- | --- |
-| `cc-claude` | `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`; `CLAUDE_CODE_AUTO_COMPACT_WINDOW=433000` unless the host set it; host values of the four forwarded variables (section 1); `CLAUDE_CONFIG_DIR=<account config_dir, ~ expanded>` when the run uses a pool account | `claude_code.ClaudeCodeBackend._prepare_env`, `claude_launch.headless_claude_env` |
+| `cc-claude` | `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`; `BASH_DEFAULT_TIMEOUT_MS=900000`; `BASH_MAX_TIMEOUT_MS=900000`; `CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1`; `CLAUDE_CODE_AUTO_COMPACT_WINDOW=433000` for each run kind unless the host set it; host values of the four forwarded variables (section 1); `CLAUDE_CONFIG_DIR=<account config_dir, ~ expanded>` when the run uses a pool account | `claude_code.ClaudeCodeBackend._prepare_env`, `claude_launch.headless_claude_env` |
 | `cc-kimi` | the cc-claude set (no pool account), plus `ANTHROPIC_BASE_URL=https://api.moonshot.cn/anthropic`, `ANTHROPIC_AUTH_TOKEN=<credentials.<credential>.api_key>`, and `ANTHROPIC_MODEL`, `ANTHROPIC_DEFAULT_OPUS_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL`, `ANTHROPIC_DEFAULT_HAIKU_MODEL`, `CLAUDE_CODE_SUBAGENT_MODEL` all `=<model>` | `claude_code.AnthropicEndpointBackend._prepare_env`, `src/backends/kimi/kimi.py` |
 | `cc-openai-compatible` | as cc-kimi, with `ANTHROPIC_BASE_URL=http://localhost:<server.port>/api/anthropic-proxy/openai-compatible/<option id>` and `ANTHROPIC_AUTH_TOKEN=<credentials.charliebot.access_key>` | `src/backends/openai_compatible/factory.py` |
 | `codex` | `/home/<user>/.local/bin` prepended to `PATH` unless present | `src/backends/codex/codex.py` |
@@ -122,12 +122,12 @@ The working directory is the run's worktree.
 
 | Process | Environment | Setter |
 | --- | --- | --- |
-| `opencode serve` (shared, one per `proxy_url`) | inherited, minus `CHARLIEBOT_RUN_TOKEN` and `CHARLIEBOT_SESSION_ID`, plus `XDG_DATA_HOME=<home>/opencode/data`, `XDG_STATE_HOME=<home>/opencode/state`, `XDG_CACHE_HOME=<home>/opencode/cache`, `OPENCODE_SERVER_PASSWORD=<random token_urlsafe(32)>`, `OPENCODE_CONFIG_CONTENT=<headless config JSON>`, and proxy variables | `src/backends/opencode/server.py::OpenCodeServer.server_env` |
+| `opencode serve` (shared, one per `proxy_url`) | inherited, minus `CHARLIEBOT_RUN_TOKEN` and `CHARLIEBOT_SESSION_ID`, plus `XDG_DATA_HOME=<home>/opencode/data`, `XDG_STATE_HOME=<home>/opencode/state`, `XDG_CACHE_HOME=<home>/opencode/cache`, `OPENCODE_SERVER_PASSWORD=<random token_urlsafe(32)>`, `OPENCODE_CONFIG_CONTENT=<headless config JSON>`, `OPENCODE_DISABLE_FFF=1` (the file index is unused), and proxy variables | `src/backends/opencode/server.py::OpenCodeServer.server_env` |
 | one-shot text calls (session namer, explain, page cold read) on the base backend (gemini, antigravity, charlie-code) | inherited `os.environ` with no `child_env` edit and no run identity, then the backend's own `_prepare_env` (the call goes through `run()`); working directory is a fresh `/tmp/charliebot-oneshot-*` | `base.AgentBackend.one_shot_text` |
 | `claude -p` one-shot (cc-claude, and cc-kimi and cc-openai-compatible, which inherit the method) | inherited `os.environ` unchanged: no `env=` argument, so no headless or endpoint variables | `ClaudeCodeBackend.one_shot_text` |
 | `codex exec` one-shot | inherited, then the codex `_prepare_env` | `CodexBackend.one_shot_text` |
 | `opencode run --standalone` one-shot | inherited, plus `XDG_*_HOME` under a fresh `/tmp/charliebot-opencode-oneshot-*`, `OPENCODE_CONFIG_CONTENT={"permission":{"*":"deny"}}`, and proxy variables | `OpenCodeBackend.one_shot_text` |
-| Claude compaction (`claude --resume ...`) | `claude_supervisor_env(os.environ)` (removes `CHARLIEBOT_SESSION_ID` and applies 4.1), plus `headless_claude_env()`, plus `CLAUDE_CONFIG_DIR=<account config_dir>` | `src/backends/claude_code/claude_compaction.py` |
+| Claude compaction (`claude --resume ...`) | The account compaction uses `claude_supervisor_env(os.environ)` (removes `CHARLIEBOT_SESSION_ID` and applies 4.1), `headless_claude_env(run_kind)` and `CLAUDE_CONFIG_DIR=<account config_dir>`. Idle compaction builds the session's backend environment for its run kind. | `src/backends/claude_code/claude_compaction.py`, `claude_idle_compaction.py` |
 | Perfetto merge helper | inherited plus `PYTHONPATH=<repo root>` | `src/features/trace/trace_merge.py` |
 | tmux (terminal and PTY attach) | inherited minus `CHARLIEBOT_SESSION_ID` (and minus `TMUX` for client commands); the attach client gets `TERM=xterm-256color`; a new terminal pane gets `-e CHARLIEBOT_HOME=<home>` when `CHARLIEBOT_HOME` is set | `pty_common.py`, `terminal.py` |
 | `code-server --config <path>` | inherited | `src/features/code_server/api.py` |

@@ -161,12 +161,15 @@ A web session is a manager session with no Slack or Discord origin. Every web ro
 
 ### `POST /api/internal/web/reply`
 
-- Handler: `src/features/web_reply/api.py:31`.
-- Body: `{"session_id": string, "text": string}`.
+- Handler: `src/features/web_reply/api.py:45`.
+- Body: `{"session_id": string, "text": string, "keep_language": string or null}`; `keep_language` is optional.
 - 422 `Reply text is empty` for blank text.
+- 422 `Keep-language reason is empty` for a blank `keep_language`.
+- 409 when the language check holds and `keep_language` is absent.
 - 200: `{"posted": true, "chars": <len>, "over_budget": <chars > 500>, "answers": "<user event id or null>"}`.
 
 `answers` is the newest user message (or audit nudge, which maps to its user message) among the running turn's inputs.
+When `keep_language` is present, the server records it with the reply and skips the language check.
 
 Side effects:
 
@@ -176,7 +179,7 @@ Side effects:
 
 ### `GET /api/internal/web/dialog`
 
-- Handler: `src/features/web_reply/api.py:49`.
+- Handler: `src/features/web_reply/api.py:64`.
 - Query: `session_id` (string, required).
 - 200: `{"session_id": "…", "entries": [{"role": "user" | "web_reply" | "web_reply_notice", "content": "…"}]}`.
 
@@ -184,10 +187,10 @@ Side effects:
 
 ### `POST /api/internal/web/status`
 
-- Handler: `src/features/web_reply/api.py:64`.
+- Handler: `src/features/web_reply/api.py:79`.
 - Body: `{"session_id": string, "text": string}`. `text` is the content of a JSON file.
 
-The server parses `text` as a status patch with the optional keys `goal` (non-blank string), `now` (non-blank string) and `waiting` (list of `{"text": non-blank string, "link": string or null}`). Unknown keys are refused.
+The server parses `text` as a status patch with the optional keys `goal` (non-blank string), `now` (non-blank string) and `waiting` (list of `{"text": non-blank string, "context": non-blank string, "link": string or null}`). Unknown keys are refused. Each waiting item needs context and a cold-read record for its current text, context, link and linked host-file bytes.
 
 | Status | Case | `detail` |
 |---|---|---|
@@ -195,8 +198,10 @@ The server parses `text` as a status patch with the optional keys `goal` (non-bl
 | 422 | Not an object | `Status file is not a JSON object` |
 | 422 | Invalid items | `Status file is invalid: <loc>: <msg>; …` |
 | 422 | No item named | `Status file names no item: give goal, now or waiting` |
+| 422 | Waiting item has no context | `Waiting item needs context: <text>` |
+| 409 | One or more waiting items have no current cold-read record | `Waiting on you items need a cold read: <names>` |
 
-200: the stored status `{"goal": string or null, "now": string or null, "waiting": [{"text","link"}], "updated_at": "<datetime Z>"}`.
+200: the stored status plus `now_chars` and `now_over_budget`. The stored `web_status` slot is `{"goal": string or null, "now": string or null, "waiting": [{"text","context","link"}], "updated_at": "<datetime Z>"}`.
 
 Side effects:
 
@@ -205,14 +210,34 @@ Side effects:
 3. Send `{"type":"web_status_subtree","source_session_id":<id>}` to each ancestor's session channel.
 4. Log `web_status_set`.
 
+### `POST /api/internal/web/status/unread`
+
+- Handler: `src/features/web_reply/api.py:98`.
+- Body: `{"session_id": string, "text": string}`. `text` is the same status file used by the set route.
+- 200: `{"unread": [waiting item, …]}` for items whose current digest has no `web_ask_check` event in the session.
+- Session, web-session, parsing and context-validation refusals match `POST /api/internal/web/status`; unlike the set
+  route, this one returns unread items instead of refusing when no cold-read event matches.
+- The route writes nothing.
+
+The digest covers the item's text, context, link and the bytes of a host-served file named by its link.
+
+### `POST /api/internal/web/ask-check`
+
+- Handler: `src/features/web_reply/api.py:115`.
+- Body: `{"session_id": string, "item": {"text": string, "context": string or null, "link": string or null}, "backend": string, "answer": string}`.
+- 200: `{"item_sha256": "<digest>"}`.
+- Errors: 404 unknown session; 409 a thread session or worker; 422 an invalid waiting item.
+
+The route appends and broadcasts `{"type":"web_ask_check","content":"Cold read of a Waiting on you item","item_sha256":"<digest>","backend":"<backend>","answer":"<answer>"}`. It writes nothing else.
+
 ### `GET /api/internal/web/status`
 
-- Handler: `src/features/web_reply/api.py:82`.
+- Handler: `src/features/web_reply/api.py:132`.
 - Query: `session_id` (string, required).
 - 200:
 
 ```json
-{"session_id": "…", "web_status": null, "descendants": [{"session_id": "…", "name": "…", "updated_at": "…", "waiting": [{"text": "…", "link": null}]}]}
+{"session_id": "…", "web_status": null, "descendants": [{"session_id": "…", "name": "…", "updated_at": "…", "waiting": [{"text": "…", "context": "…", "link": null}]}], "children": [{"session_id": "…", "name": "…", "now": "…", "updated_at": "…"}]}
 ```
 
-`descendants` lists the descendants whose status has at least one waiting item, whose session is not archived and whose task is open. They are sorted by status `updated_at`, newest first.
+`descendants` lists open, unarchived descendants with waiting items, newest first. `children` lists open, unarchived direct children with a Now item, newest first.

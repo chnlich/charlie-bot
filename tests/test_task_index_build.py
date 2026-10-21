@@ -25,14 +25,7 @@ from src.runtime import control_events, task_completion, task_errors
 @pytest_asyncio.fixture
 async def tree(tmp_path: pathlib.Path):
   _cfg, _session_blocks, tree = conftest.build_env(tmp_path)
-  await tree.create_task(
-      request_id="root",
-      task_parent_id=None,
-      profile="manager",
-      task=None,
-      name="Root",
-      backend=None,
-      caller=conftest.OPERATOR)
+  await conftest.create_task(tree, parent=None, request_id="root", name="Root")
   return tree
 
 

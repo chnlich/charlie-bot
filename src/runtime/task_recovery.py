@@ -31,11 +31,11 @@ This module walks the nodes and runs step 1. Steps 2 to 4 are the per-node pass
 
 from __future__ import annotations
 
+import collections
 import datetime
 import json
 import os
 import pathlib
-from collections import Counter
 from typing import TYPE_CHECKING
 
 from src.infra import config, log_once, models
@@ -150,7 +150,7 @@ async def reconcile_task_tree(
     return counters
   started_at = datetime.datetime.now(datetime.UTC)
   marker = read_boot_recovery_marker(cfg)
-  keep_counts: Counter[str] = Counter()
+  keep_counts: collections.Counter[str] = collections.Counter()
   failed_node = False
 
   # The sequence controllers' honest verdicts come first: a recovered

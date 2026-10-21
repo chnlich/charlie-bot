@@ -68,10 +68,26 @@ struct QueueState {
   shutdown: bool,
 }
 
+/// The idle compaction runner: `claude_compaction::run_compaction` in production.
+pub type CompactionRunFn = Arc<
+  dyn for<'a> Fn(
+      claude_compaction::CompactionRun<'a>,
+    ) -> BoxFuture<'a, anyhow::Result<claude_compaction::CompactionOutcome>>
+    + Send
+    + Sync,
+>;
+
 /// Owns per-session queues, consumers, current work items, and active backend runners.
 pub struct MasterQueue {
   state: Mutex<QueueState>,
   backend_pool: Arc<BackendPool>,
+  compaction: CompactionRunFn,
+}
+
+fn run_real_compaction<'a>(
+  run: claude_compaction::CompactionRun<'a>,
+) -> BoxFuture<'a, anyhow::Result<claude_compaction::CompactionOutcome>> {
+  Box::pin(claude_compaction::run_compaction(run))
 }
 
 struct PersistedAccountLabel {
@@ -81,7 +97,12 @@ struct PersistedAccountLabel {
 
 impl MasterQueue {
   pub fn new(backend_pool: Arc<BackendPool>) -> Self {
-    Self { state: Mutex::new(QueueState::default()), backend_pool }
+    Self::with_compaction_runner(backend_pool, Arc::new(run_real_compaction))
+  }
+
+  /// The queue with the idle compaction runner the trigger path starts. Tests replace only the runner.
+  pub fn with_compaction_runner(backend_pool: Arc<BackendPool>, compaction: CompactionRunFn) -> Self {
+    Self { state: Mutex::new(QueueState::default()), backend_pool, compaction }
   }
 
   pub fn session_callbacks(
@@ -671,6 +692,8 @@ async fn arm_idle_compaction(
   let Some(armed_at) = last_request_at else {
     return Ok(());
   };
+  let compaction =
+    queue.upgrade().context("master queue disappeared before idle compaction was armed")?.compaction.clone();
   let base_environment = features.startup.require::<AgentBaseEnvironment>()?;
   let mut base_env = base_environment.values.clone();
   base_env.insert("GIT_CEILING_DIRECTORIES".to_string(), cfg.charliebot_home.to_string_lossy().into_owned());
@@ -690,6 +713,7 @@ async fn arm_idle_compaction(
   let inspect_cwd = cwd.clone();
   let inspect_emit = Arc::clone(&emit);
   let inspect_armed_at = armed_at;
+  let inspect_compaction = Arc::clone(&compaction);
   let reservation_slot = Arc::new(Mutex::new(None::<Arc<AtomicBool>>));
   let inspect_reservation_slot = Arc::clone(&reservation_slot);
   let inspect = Arc::new(move |_now| {
@@ -756,6 +780,7 @@ async fn arm_idle_compaction(
     let run_env = inspect_env.clone();
     let run_emit = Arc::clone(&inspect_emit);
     let run_tokens = context_tokens;
+    let compaction = Arc::clone(&inspect_compaction);
     let run: claude_idle_compaction::RunFn = Arc::new(move || {
       let reserved = Arc::clone(&run_reservation);
       let queue = run_queue.clone();
@@ -769,6 +794,7 @@ async fn arm_idle_compaction(
       let base_env = run_env.clone();
       let emit = Arc::clone(&run_emit);
       let pre_tokens = run_tokens;
+      let compaction = Arc::clone(&compaction);
       Box::pin(async move {
         if reserved.swap(false, Ordering::AcqRel) {
           queue
@@ -791,7 +817,7 @@ async fn arm_idle_compaction(
           &base_env,
         )?;
         let run = claude_idle_compaction::idle_run_options(&option, &account, &cwd, pre_tokens, argv, env);
-        let outcome = claude_compaction::run_compaction(claude_compaction::CompactionRun {
+        let outcome = compaction(claude_compaction::CompactionRun {
           argv: run.argv,
           env: run.env,
           cwd: &run.cwd,

@@ -1,6 +1,9 @@
 mod dispatch_support;
+#[allow(dead_code)]
+mod process_guard;
 
 use std::fs;
+use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
@@ -17,7 +20,7 @@ use charliebot_registry::context::{FeatureContext, StartupState};
 use charliebot_registry::sequence::SequenceCompletion;
 use charliebot_store::control_events::{self, ACTOR_AGENT, ACTOR_SYSTEM, ACTOR_USER};
 use charliebot_store::metadata::{TaskProfile, TaskSpec, TaskType, UtcDateTime};
-use charliebot_store::run_records::{RunKind, RunOutcome, RunOutcomeKind, RunRecord};
+use charliebot_store::run_records::{RunKind, RunOutcome, RunOutcomeKind, RunRecord, terminal_outcome};
 use charliebot_store::{CreateTask, StoreError, StoreResult, TaskCaller};
 use charliebot_tasks::completion::{CompletionEvidence, LandingEvidence, SequenceCloseOutcome, TaskCompletion};
 use charliebot_tasks::dispatch::{DispatchExecutor, Dispatcher, RunFinishedCompletion};
@@ -27,6 +30,7 @@ use serde_json::{Map, Value, json};
 use tower::ServiceExt;
 
 use dispatch_support::{Harness, ScriptedExecutor, new_run, register_run};
+use process_guard::ProcessGroupGuard;
 
 const ACCESS_KEY: &str = "synthetic-access-key";
 
@@ -456,24 +460,38 @@ async fn agent_cancels_only_its_own_direct_child() {
 }
 
 #[tokio::test]
-async fn cancel_waits_for_a_queued_run_only_until_its_stop_request() {
-  // Python: tests/test_task_completion.py::test_cancel_waits_for_a_queued_run_only_until_its_stop_request.
+async fn worker_cancel_stops_queued_runs_and_keeps_manager_and_sequence_blockers() {
+  // Python: tests/test_task_completion.py::test_cancel_stops_a_queued_worker_run_without_launching_it.
   let h = CompletionHarness::new();
-  let task = h.base.create_task("cancel", None, TaskProfile::Worker, "Cancel").await;
-  register_run(&h.base, &task.id, "queued-run").await;
-  h.dispatcher
-    .admit_input(&task.id, event_types::USER, "preserved note", ACTOR_USER, json!({"input_id":"pending-note"}))
-    .await
-    .unwrap();
   let caller = CallerIdentity::Operator { session_id: None };
+  let manager = h.base.create_task("manager", None, TaskProfile::Manager, "Manager").await;
+  h.register_record(live_run(&manager.id, "manager-run", RunKind::ManagerTurn)).await;
+  let manager_result = h.completion.cancel_task(&manager.id, "cancel-manager", "stop", &caller).await;
+  assert!(matches!(manager_result, Err(StoreError::Conflict(_))));
+  assert_eq!(h.base.store.task_state(&manager.id).unwrap(), "open");
 
-  let blocked = h.completion.cancel_task(&task.id, "cancel-1", "not needed", &caller).await;
-  assert!(
-    matches!(blocked, Err(StoreError::Conflict(blockers)) if blockers == vec!["run queued-run is queued (pending dispatch)".to_string()])
-  );
-  h.base.store.request_stop(&task.id, "queued-run", "cancel-queued-run").await.unwrap();
-  h.completion.cancel_task(&task.id, "cancel-1", "not needed", &caller).await.unwrap();
-  assert_eq!(h.base.store.task_state(&task.id).unwrap(), "cancelled");
+  let sequence = h.base.create_task("sequence", Some(&manager.id), TaskProfile::Worker, "Sequence").await;
+  let mut sequence_run = new_run(&sequence.id, "sequence-run");
+  sequence_run.sequence_ref = Some(charliebot_store::run_records::SequenceRef {
+    kind: "improve".to_string(),
+    owner_ref: "improve:synthetic".to_string(),
+    position: 0,
+  });
+  h.register_record(sequence_run).await;
+  let sequence_events = h.base.store.load_all_facts(&sequence.id).unwrap();
+  let sequence_result = h.completion.cancel_task(&sequence.id, "cancel-sequence", "stop", &caller).await;
+  assert!(matches!(sequence_result, Err(StoreError::Conflict(_))));
+  assert_eq!(h.base.store.load_all_facts(&sequence.id).unwrap(), sequence_events);
+
+  let worker = h.base.create_task("worker", Some(&manager.id), TaskProfile::Worker, "Worker").await;
+  register_run(&h.base, &worker.id, "queued-run").await;
+  let result = h.completion.cancel_task(&worker.id, "cancel-worker", "stop", &caller).await;
+  assert!(result.is_ok(), "cancelling a worker should stop its queued run");
+  let result = result.unwrap();
+  assert_eq!(result["stopped_runs"], json!([{"run_id":"queued-run","outcome":"never_launched"}]));
+  assert_eq!(h.base.store.task_state(&worker.id).unwrap(), "cancelled");
+  let replay = h.completion.cancel_task(&worker.id, "cancel-worker", "changed", &caller).await.unwrap();
+  assert_eq!(replay, result);
 }
 
 #[tokio::test]
@@ -1434,6 +1452,7 @@ async fn agent_cancel_route_checks_direct_child_scope_and_unarchive_is_operator_
     .expect("synthetic credentials are written to test home");
   let parent = h.base.create_task("parent", None, TaskProfile::Manager, "Parent").await;
   let child = h.base.create_task("child", Some(&parent.id), TaskProfile::Worker, "Child").await;
+  register_run(&h.base, &child.id, "queued-run").await;
   let other = h.base.create_task("other", None, TaskProfile::Manager, "Other").await;
   let foreign_child = h.base.create_task("foreign-child", Some(&other.id), TaskProfile::Worker, "Foreign child").await;
   h.register_record(live_run(&parent.id, "parent-run", RunKind::ManagerTurn)).await;
@@ -1475,6 +1494,7 @@ async fn agent_cancel_route_checks_direct_child_scope_and_unarchive_is_operator_
   .await;
   assert_eq!(accepted.0, StatusCode::OK);
   assert_eq!(accepted.1["task_state"], "cancelled");
+  assert_eq!(accepted.1["stopped_runs"], json!([{"run_id":"queued-run","outcome":"never_launched"}]));
   let denied = call_agent(
     format!("/api/sessions/{}/cancel", foreign_child.id),
     token(&parent.id, "parent-run"),
@@ -1488,4 +1508,57 @@ async fn agent_cancel_route_checks_direct_child_scope_and_unarchive_is_operator_
       .await;
   assert_eq!(restore_denied.0, StatusCode::FORBIDDEN);
   assert_eq!(restore_denied.1["detail"], "unarchiving a task requires operator credentials");
+}
+
+#[tokio::test]
+async fn agent_cancel_route_stops_a_live_worker_and_returns_its_outcome() {
+  // Python: tests/test_task_manager_authorization.py::test_agent_run_token_cancels_live_worker_over_http.
+  let h = CompletionHarness::new();
+  fs::write(h.base._home.path().join(CREDENTIALS_FILENAME), format!("charliebot:\n  access_key: {ACCESS_KEY}\n"))
+    .expect("synthetic credentials are written to test home");
+  let parent = h.base.create_task("parent", None, TaskProfile::Manager, "Parent").await;
+  h.register_record(live_run(&parent.id, "parent-run", RunKind::ManagerTurn)).await;
+  let worker = h.base.create_task("worker", Some(&parent.id), TaskProfile::Worker, "Worker").await;
+  let process_guard = ProcessGroupGuard::new();
+  let mut command = Command::new("/bin/sleep");
+  command.arg("60").process_group(0);
+  let mut process = command.spawn().unwrap();
+  let pid = process.id();
+  process_guard.track(pid);
+  let pid_start = proc_identity::read_pid_stat(pid).unwrap().pid_start;
+  let mut run = new_run(&worker.id, "worker-run");
+  run.pid = Some(pid);
+  run.pid_start = Some(pid_start);
+  run.started_at = Some(UtcDateTime::now());
+  h.register_record(run).await;
+
+  let token = run_token::sign_run_token(
+    &RunTokenClaims { session_id: parent.id.clone(), run_id: "parent-run".into(), agent: "synthetic".into() },
+    ACCESS_KEY,
+  )
+  .unwrap();
+  let response = routes::routes(&Arc::clone(&h.features))
+    .oneshot(
+      Request::builder()
+        .method(Method::POST)
+        .uri(format!("/api/sessions/{}/cancel", worker.id))
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(json!({"request_id":"cancel-live-worker","reason":"stop"}).to_string()))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  let status = response.status();
+  let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+  let body: Value = serde_json::from_slice(&body).unwrap();
+
+  assert_eq!(status, StatusCode::OK, "{body}");
+  assert_eq!(body["task_state"], "cancelled");
+  assert_eq!(body["stopped_runs"], json!([{"run_id":"worker-run","outcome":"interrupted"}]));
+  assert!(process.try_wait().unwrap().is_some());
+  assert_eq!(
+    terminal_outcome(&h.base.store.load_all_facts(&worker.id).unwrap(), "worker-run").unwrap(),
+    Some(RunOutcomeKind::Interrupted)
+  );
 }

@@ -316,10 +316,10 @@ run-record work is `S2`; task-tree runtime and feature-owned files remain with t
 
 ## Catch-up 78e0d10e2 open steps
 
-Each row is one failing Rust parity step of the all-stage run on this head. The two Rust runs with the debug binary
-fail the same 1 step (1,156 of 1,157 steps match). The Python-vs-Python run matches 1,097 of 1,097. The single row is
-the Intermittent row: its prompt difference from `8b85da74d` is fixed, and the chat-event difference seen in 1 of 4
-Rust runs stays for a later task.
+Each row is one failing Rust parity step of the all-stage run on this head. The Rust run with the debug binary
+matches 1,160 of 1,160 steps; the single row left fails in 1 of 4 runs, so it leaves 1,159 of 1,160 on the runs where
+it fails. The Python-vs-Python run matches 1,097 of 1,097. The row is the Intermittent row: its prompt difference from
+`8b85da74d` is fixed, and its chat-event difference stays for a later task.
 
 | Scenario | Step | Stage | Commits | Difference |
 | --- | --- | --- | --- | --- |

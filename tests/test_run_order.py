@@ -49,11 +49,11 @@ async def store_env(tmp_path: pathlib.Path):
 async def seed_runs(tree: task_sessions.TaskTreeManager, session_id: str, launched: int, queued: int = 2) -> None:
   """``launched`` started runs in chronological order plus ``queued`` reservations."""
   for i in range(launched):
-    await tree.runs.register_run(
+    await tree.runs.register_run_locked(
         models.RunRecord(
             id=f"run-{i:04d}", session_id=session_id, kind="work", started_at=BASE + datetime.timedelta(minutes=i)))
   for q in range(queued):
-    await tree.runs.register_run(models.RunRecord(id=f"queued-{q}", session_id=session_id, kind="work"))
+    await tree.runs.register_run_locked(models.RunRecord(id=f"queued-{q}", session_id=session_id, kind="work"))
 
 
 # ---------------------------------------------------------------------------

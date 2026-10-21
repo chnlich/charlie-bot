@@ -84,7 +84,7 @@ async def test_permanent_delete_blockers(tmp_path: pathlib.Path) -> None:
   with pytest.raises(task_errors.TaskConflictError, match="child task"):
     await mgr.delete_permanently(ids["low"], caller=conftest.OPERATOR)
 
-  await mgr.runs.register_run(models.RunRecord(id="run-q", session_id=ids["worker1"]))
+  await mgr.runs.register_run_locked(models.RunRecord(id="run-q", session_id=ids["worker1"]))
   with pytest.raises(task_errors.TaskConflictError, match="run record"):
     await mgr.delete_permanently(ids["worker1"], caller=conftest.OPERATOR)
 

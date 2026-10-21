@@ -22,3 +22,8 @@ A message drafted for a person to send under their own name (Slack reply,
 channel announcement, email) matches that person's chat style. Sample their
 recent messages in the thread or channel before writing. Keep their short
 sentences and usual wording over generic professional polish.
+
+## Pages for readers outside the team
+
+A page for readers outside the agent team is a design doc. It opens with why the change exists. It then argues the
+options with their pros and cons.

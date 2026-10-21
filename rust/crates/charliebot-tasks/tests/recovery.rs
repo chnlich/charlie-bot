@@ -2127,3 +2127,291 @@ async fn boot_node_out_of_space_hands_node_to_retry() -> anyhow::Result<()> {
   assert_eq!(child_reports(&stack, &manager.id)?.len(), 1, "exactly one report");
   Ok(())
 }
+
+fn boot_marker_path(stack: &Stack) -> PathBuf {
+  stack.cfg.charliebot_home.join("state").join("boot_recovery.json")
+}
+
+fn write_python_boot_marker(stack: &Stack, pass_started_at: &str) -> anyhow::Result<()> {
+  let path = boot_marker_path(stack);
+  std::fs::create_dir_all(path.parent().expect("boot marker has a parent directory"))?;
+  std::fs::write(&path, format!("{{\"pass_started_at\": \"{pass_started_at}\"}}"))?;
+  Ok(())
+}
+
+async fn add_recovery_worker(
+  stack: &Stack,
+  request_id: &str,
+  task: Option<TaskSpec>,
+  run_id: &str,
+  outcome: Option<RunOutcomeKind>,
+  sequence_ref: Option<SequenceRef>,
+  worktree_path: Option<String>,
+  close: bool,
+) -> anyhow::Result<SessionMetadata> {
+  let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
+  let worker = stack.node(request_id, Some(&manager.id), TaskProfile::Worker, task).await?;
+  let mut run = synthetic_run(&worker.id, run_id, RunKind::Work);
+  run.backend = Some(BACKEND_ID.to_string());
+  run.model = Some(format!("{BACKEND_ID}-model"));
+  run.sequence_ref = sequence_ref;
+  run.worktree_path = worktree_path;
+  stack.register(run).await?;
+  if let Some(outcome) = outcome {
+    stack.record_terminal(&worker.id, run_id, outcome).await?;
+  }
+  if close {
+    stack.close(&worker.id, "close-worker").await?;
+  }
+  Ok(worker)
+}
+
+fn python_marker_instant(path: &Path) -> anyhow::Result<String> {
+  let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    .ancestors()
+    .nth(3)
+    .expect("the tasks crate has a repository root ancestor")
+    .to_path_buf();
+  let helper = repo_root.join("rust/crates/charliebot-tasks/tests/boot_recovery_marker_reference.py");
+  let output = Command::new("uv").args(["run", "python"]).arg(helper).arg(path).current_dir(repo_root).output()?;
+  anyhow::ensure!(
+    output.status.success(),
+    "uv run python failed:\nstdout: {}\nstderr: {}",
+    String::from_utf8_lossy(&output.stdout),
+    String::from_utf8_lossy(&output.stderr)
+  );
+  Ok(String::from_utf8(output.stdout)?.trim_end().to_string())
+}
+
+#[tokio::test]
+async fn clean_boot_writes_marker_and_the_next_boot_skips_a_closed_worker() -> anyhow::Result<()> {
+  // Python: tests/test_boot_recovery_skip.py:95.
+  let stack = Stack::start("exit 0").await?;
+  let worker =
+    add_recovery_worker(&stack, "worker", None, "run-success", Some(RunOutcomeKind::Success), None, None, true).await?;
+  let marker_path = boot_marker_path(&stack);
+  assert!(!marker_path.exists(), "a new home has no boot-recovery marker");
+
+  let first = recovery::reconcile_task_tree(&stack.features, &stack.adapter).await?;
+  assert_eq!(first.nodes, 2);
+  assert_eq!(first.full, 2);
+  assert_eq!(first.skipped, 0);
+  let first_marker: Value = serde_json::from_slice(&std::fs::read(&marker_path)?)?;
+  let first_time = first_marker["pass_started_at"].as_str().expect("marker stores its pass start time").to_string();
+  assert!(!marker_path.with_extension("json.tmp").exists(), "the atomic rename consumes the temp file");
+
+  let second = recovery::reconcile_task_tree(&stack.features, &stack.adapter).await?;
+  assert_eq!(second.nodes, 2);
+  assert_eq!(second.full, 1);
+  assert_eq!(second.skipped, 1);
+  assert_eq!(second.marker.as_deref(), Some(first_time.as_str()));
+  assert_eq!(second.keep_reasons.get("state_open"), Some(&1));
+  assert_eq!(stack.store().run_backend(&worker.id).as_deref(), Some(BACKEND_ID));
+  let second_marker: Value = serde_json::from_slice(&std::fs::read(&marker_path)?)?;
+  assert!(second_marker["pass_started_at"].as_str().expect("marker stores its pass start time") > first_time);
+  Ok(())
+}
+
+#[tokio::test]
+async fn failed_boot_keeps_the_previous_marker_and_out_of_space_still_retries() -> anyhow::Result<()> {
+  // Python: tests/test_boot_recovery_skip.py:114.
+  let log = LogCapture::default();
+  let _subscriber = log.install();
+  let stack = Stack::start("exit 0").await?;
+  stack.adapter.set_landing_retry_interval(Duration::from_millis(50));
+  let worker =
+    add_recovery_worker(&stack, "settled-worker", None, "run-settled", Some(RunOutcomeKind::Success), None, None, true)
+      .await?;
+  stack.boot().await?;
+  let marker_path = boot_marker_path(&stack);
+  let before = std::fs::read(&marker_path)?;
+
+  let root_manager = stack.node("report-manager", None, TaskProfile::Manager, None).await?;
+  let failed_worker = stack.node("report-worker", Some(&root_manager.id), TaskProfile::Worker, None).await?;
+  stack.queue_run(&failed_worker.id, "run-failed", RunKind::Work).await?;
+  stack.record_terminal(&failed_worker.id, "run-failed", RunOutcomeKind::Failed).await?;
+  let fault = write_faults::inject_chat_append_fault(
+    stack.store(),
+    event_types::CHILD_REPORT,
+    &[root_manager.id.as_str()],
+    1,
+    libc::ENOSPC,
+  );
+
+  stack.boot().await?;
+  assert!(fault.hits().contains(&Hit::Failed), "the out-of-space report failed during the boot pass");
+  assert_eq!(std::fs::read(&marker_path)?, before, "the failed pass leaves the previous marker unchanged");
+  settle_until(|| Ok(!stack.child_reports(&root_manager.id)?.is_empty())).await?;
+  settle_until(|| Ok(stack.adapter.landing_retry_nodes().is_empty())).await?;
+  assert_eq!(std::fs::read(&marker_path)?, before, "the end-landing retry does not advance the boot marker");
+  assert!(log.text().contains("task_recovery_node_failed"));
+  Ok(())
+}
+
+#[tokio::test]
+async fn breaking_each_skip_condition_alone_keeps_the_worker_in_full_recovery() -> anyhow::Result<()> {
+  // Python: tests/test_boot_recovery_skip.py:144.
+  for condition in
+    ["state_open", "file_after_marker", "run_unended", "sequence_ref", "worktree_exists", "cold_read_failed"]
+  {
+    let stack = Stack::start("exit 0").await?;
+    let task = if condition == "cold_read_failed" {
+      let page = stack.home.path().join("synthetic-page.html");
+      std::fs::write(&page, "<html><body>synthetic</body></html>")?;
+      Some(cold_read_spec(&page))
+    } else {
+      None
+    };
+    let worktree = (condition == "worktree_exists").then(|| stack.home.path().join("live-worktree"));
+    if let Some(path) = &worktree {
+      std::fs::create_dir(path)?;
+    }
+    let sequence_ref = (condition == "sequence_ref").then(|| SequenceRef {
+      kind: "retry".to_string(),
+      owner_ref: "synthetic-owner".to_string(),
+      position: 0,
+    });
+    let worker = add_recovery_worker(
+      &stack,
+      "condition-worker",
+      task,
+      "run-condition",
+      (condition != "run_unended").then_some(if condition == "cold_read_failed" {
+        RunOutcomeKind::Failed
+      } else {
+        RunOutcomeKind::Success
+      }),
+      sequence_ref,
+      worktree.map(|path| path.display().to_string()),
+      condition != "state_open",
+    )
+    .await?;
+    write_python_boot_marker(&stack, "2099-01-01T00:00:00+00:00")?;
+    if condition == "file_after_marker" {
+      let metadata = std::fs::File::open(stack.store().metadata_path(&worker.id))?;
+      metadata.set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(4_102_444_800))?;
+    }
+
+    let counters = recovery::reconcile_task_tree(&stack.features, &stack.adapter).await?;
+    assert_eq!(counters.skipped, 0, "{condition} must prevent this worker from being skipped");
+    assert_eq!(counters.full, 2, "the open manager and the kept worker receive full checks: {condition}");
+    assert_eq!(counters.keep_reasons.get(condition), Some(&1), "first blocker for {condition}");
+  }
+  Ok(())
+}
+
+#[tokio::test]
+async fn dangling_worktree_symlink_keeps_a_closed_worker_in_full_recovery() -> anyhow::Result<()> {
+  // Python: tests/test_boot_recovery_skip.py:144.
+  use std::os::unix::fs::symlink;
+
+  let stack = Stack::start("exit 0").await?;
+  let dangling = stack.home.path().join("missing-worktree");
+  symlink(stack.home.path().join("absent-target"), &dangling)?;
+  let worker = add_recovery_worker(
+    &stack,
+    "symlink-worker",
+    None,
+    "run-symlink",
+    Some(RunOutcomeKind::Success),
+    None,
+    Some(dangling.display().to_string()),
+    true,
+  )
+  .await?;
+  write_python_boot_marker(&stack, "2099-01-01T00:00:00+00:00")?;
+
+  let counters = recovery::reconcile_task_tree(&stack.features, &stack.adapter).await?;
+  assert_eq!(counters.full, 2);
+  assert_eq!(counters.skipped, 0);
+  assert_eq!(counters.keep_reasons.get("worktree_exists"), Some(&1));
+  assert_eq!(stack.store().task_state(&worker.id)?, "completed");
+  Ok(())
+}
+
+#[tokio::test]
+async fn end_landing_retry_runs_the_full_node_pass_after_boot_skip() -> anyhow::Result<()> {
+  // Python: tests/test_boot_recovery_skip.py:191.
+  let stack = Stack::start("exit 0").await?;
+  stack.adapter.set_landing_retry_interval(Duration::from_millis(20));
+  let worker =
+    add_recovery_worker(&stack, "retry-worker", None, "run-retry", Some(RunOutcomeKind::Success), None, None, true)
+      .await?;
+  write_python_boot_marker(&stack, "2099-01-01T00:00:00+00:00")?;
+  let before = stack.adapter.reconcile_node_calls();
+  let boot = recovery::reconcile_task_tree(&stack.features, &stack.adapter).await?;
+  assert_eq!(boot.skipped, 1);
+  assert_eq!(stack.adapter.reconcile_node_calls(), before, "the boot pass skipped the closed worker");
+
+  stack.adapter.start_landing_retry_for_test(&worker.id);
+  settle_until(|| Ok(stack.adapter.reconcile_node_calls() == before + 1)).await?;
+  settle_until(|| Ok(stack.adapter.landing_retry_nodes().is_empty())).await?;
+  assert_eq!(stack.adapter.reconcile_node_calls(), before + 1);
+  Ok(())
+}
+
+#[tokio::test]
+async fn rust_reads_python_isoformat_marker_with_and_without_microseconds() -> anyhow::Result<()> {
+  // Python: tests/test_boot_recovery_skip.py:95.
+  for timestamp in ["2026-01-02T03:04:05+00:00", "2026-01-02T03:04:05.123456+00:00"] {
+    let stack = Stack::start("exit 0").await?;
+    std::fs::create_dir_all(stack.cfg.sessions_dir())?;
+    write_python_boot_marker(&stack, timestamp)?;
+
+    let counters = recovery::reconcile_task_tree(&stack.features, &stack.adapter).await?;
+    assert_eq!(counters.marker.as_deref(), Some(timestamp));
+  }
+  Ok(())
+}
+
+#[tokio::test]
+async fn python_fromisoformat_reads_the_rust_written_marker_instant() -> anyhow::Result<()> {
+  // Python: tests/test_boot_recovery_skip.py:95.
+  let stack = Stack::start("exit 0").await?;
+  std::fs::create_dir_all(stack.cfg.sessions_dir())?;
+  recovery::reconcile_task_tree(&stack.features, &stack.adapter).await?;
+  let marker_path = boot_marker_path(&stack);
+  let marker: Value = serde_json::from_slice(&std::fs::read(&marker_path)?)?;
+  let rust_instant = UtcDateTime::parse(marker["pass_started_at"].as_str().expect("marker has a pass start"))?;
+  assert_eq!(python_marker_instant(&marker_path)?, rust_instant.to_python_isoformat());
+  Ok(())
+}
+
+#[tokio::test]
+async fn recovery_done_logs_one_line_with_marker_and_skip_counters() -> anyhow::Result<()> {
+  // Python: tests/test_boot_recovery_skip.py:95.
+  let log = LogCapture::default();
+  let _subscriber = log.install();
+  let stack = Stack::start("exit 0").await?;
+  add_recovery_worker(&stack, "logged-worker", None, "run-logged", Some(RunOutcomeKind::Success), None, None, true)
+    .await?;
+
+  recovery::recovery_step(Arc::clone(&stack.features)).await?;
+  recovery::recovery_step(Arc::clone(&stack.features)).await?;
+  let text = log.text();
+  assert_eq!(text.matches("task_tree_recovery_done").count(), 2, "one done line per pass: {text}");
+  assert!(text.contains("full=2"), "first pass counts the full checks: {text}");
+  assert!(text.contains("skipped=0"), "first pass has no skips: {text}");
+  assert!(text.contains("full=1"), "second pass checks the open manager: {text}");
+  assert!(text.contains("skipped=1"), "second pass skips the closed worker: {text}");
+  assert!(text.contains("marker="), "the log carries the marker used by the pass: {text}");
+  assert!(text.contains("keep_reasons="), "the log carries each first blocker: {text}");
+  Ok(())
+}
+
+#[tokio::test]
+async fn skipped_worker_warms_the_display_backend_without_a_full_check() -> anyhow::Result<()> {
+  // Python: tests/test_boot_recovery_skip.py:95.
+  let stack = Stack::start("exit 0").await?;
+  let worker =
+    add_recovery_worker(&stack, "display-worker", None, "run-display", Some(RunOutcomeKind::Success), None, None, true)
+      .await?;
+  assert_eq!(stack.store().run_backend(&worker.id), None);
+  write_python_boot_marker(&stack, "2099-01-01T00:00:00+00:00")?;
+
+  let counters = recovery::reconcile_task_tree(&stack.features, &stack.adapter).await?;
+  assert_eq!(counters.skipped, 1);
+  assert_eq!(counters.full, 0);
+  assert_eq!(stack.store().run_backend(&worker.id).as_deref(), Some(BACKEND_ID));
+  Ok(())
+}

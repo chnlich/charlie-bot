@@ -1505,16 +1505,40 @@ impl TaskExecutionAdapter {
     let used_backends = runs.iter().filter_map(|run| run.backend.clone()).collect::<HashSet<_>>();
     let cfg = self.features.config.get()?;
     let pool = backend_pool::backend_pool(&self.features)?;
-    let Some((backend, model, _tried)) = review::select_reviewer_backend(
-      &cfg,
-      &pool,
-      "reviewer",
-      work_run.backend.as_deref().unwrap_or_default(),
-      work_run.model.as_deref(),
-      &tried_backends,
-      &used_backends,
-    )?
-    else {
+    let meta = store.load_meta(session_id).await?;
+    let route = meta
+      .as_ref()
+      .and_then(|meta| meta.extra("route"))
+      .filter(|value| !value.is_null())
+      .map(|value| serde_json::from_value::<backend_pool::BackendRoute>(value.clone()))
+      .transpose()?;
+    let routed_selection = if let Some(route) = route.filter(|route| !route.backends.is_empty()) {
+      let mut excluded = vec![work_run.backend.clone().unwrap_or_default()];
+      excluded.extend(used_backends.iter().cloned());
+      excluded.extend(tried_backends.iter().cloned());
+      match pool.pick_ordered(&cfg, "reviewer", &route.backends, &excluded)? {
+        Some(option) => {
+          let option = spawner_backends::resolve_backend_option(&cfg, &option.id, Some(&option.model))?;
+          Some((option.id, Some(option.model), tried_backends.clone()))
+        }
+        None => None,
+      }
+    } else {
+      None
+    };
+    let selection = match routed_selection {
+      Some(selection) => Some(selection),
+      None => review::select_reviewer_backend(
+        &cfg,
+        &pool,
+        "reviewer",
+        work_run.backend.as_deref().unwrap_or_default(),
+        work_run.model.as_deref(),
+        &tried_backends,
+        &used_backends,
+      )?,
+    };
+    let Some((backend, model, _tried)) = selection else {
       tracing::warn!(target: "charliebot_tasks", session_id, work_run = %work_run.id, "reviewer_backends_exhausted");
       return Ok(None);
     };
@@ -1701,8 +1725,12 @@ impl TaskExecutionAdapter {
     if run.kind == RunKind::Review {
       return true;
     }
-    // The pool's slot field `backend_from_pool`, which the metadata holds at its top level (`fields_of(meta, owner)`).
     meta.extra("backend_from_pool").and_then(Value::as_bool).unwrap_or(false)
+      || meta
+        .extra("route")
+        .and_then(|route| route.get("backends"))
+        .and_then(Value::as_array)
+        .is_some_and(|backends| !backends.is_empty())
   }
 
   fn fails_over(&self, meta: &SessionMetadata, run: &RunRecord) -> bool {
@@ -1718,7 +1746,21 @@ impl TaskExecutionAdapter {
     let cfg = self.features.config.get()?;
     let pool = backend_pool::backend_pool(&self.features)?;
     let exclude = vec![run.backend.clone().unwrap_or_default()];
-    let Some(member) = pool.select(&cfg, "failover", &exclude)? else { return Ok(false) };
+    let route = meta
+      .extra("route")
+      .filter(|value| !value.is_null())
+      .map(|value| serde_json::from_value::<backend_pool::BackendRoute>(value.clone()))
+      .transpose()?;
+    let routed_member = route
+      .filter(|route| !route.backends.is_empty())
+      .map(|route| pool.pick_ordered(&cfg, "failover", &route.backends, &exclude))
+      .transpose()?
+      .flatten();
+    let member = match routed_member {
+      Some(member) => Some(member),
+      None => pool.select(&cfg, "failover", &exclude)?,
+    };
+    let Some(member) = member else { return Ok(false) };
     let guard = self.features.store.control_lock().await;
     self.features.store.set_node_backend_locked(&guard, &meta.id, &member.id).await?;
     drop(guard);
@@ -1732,6 +1774,21 @@ impl TaskExecutionAdapter {
       Some(run.input_event_ids.clone()),
     )
     .await?;
+    let from_backend = run.backend.as_deref().unwrap_or_default();
+    let recovers_at = pool.cooling_until_minutes(from_backend).unwrap_or_default();
+    self
+      .features
+      .store
+      .persist_and_broadcast(
+        &meta.id,
+        json!({
+          "type": event_types::QUOTA_FAILOVER,
+          "from": from_backend,
+          "to": member.id,
+          "recovers_at": recovers_at,
+        }),
+      )
+      .await?;
     tracing::warn!(
       target: "charliebot_tasks",
       session_id = %meta.id,

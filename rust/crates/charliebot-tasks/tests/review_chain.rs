@@ -11,7 +11,7 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
-use charliebot_agents::backend_pool::BackendPool;
+use charliebot_agents::backend_pool::{BackendPool, BackendRoute};
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types;
 use charliebot_store::metadata::{TaskProfile, TaskSpec, TaskType, UtcDateTime};
@@ -613,6 +613,51 @@ async fn review_launch_builds_its_task_context_and_managed_snapshot() -> anyhow:
     .join("\n\n");
   assert!(instruction_text.contains("## Code Review"), "{instruction_text}");
   assert!(instruction_text.contains("IMPORTANT: Make minimal changes"), "{instruction_text}");
+  Ok(())
+}
+
+/// The reviewer follows the worker's route and skips the backend that ran the work.
+#[tokio::test]
+async fn reviewer_reuses_the_worker_route_and_avoids_its_backend() -> anyhow::Result<()> {
+  // Python: tests/test_backend_router.py:422-447.
+  let repo = SyntheticRepo::create()?;
+  let stack = Stack::start_with(
+    vec![
+      script_option("fake", &result_script("worker done")),
+      script_option("fake2", &result_script("pool reviewer")),
+      script_option("fake3", &result_script("route reviewer")),
+    ],
+    vec!["fake2".to_string(), "fake3".to_string()],
+  )
+  .await?;
+  set_access_key(&stack)?;
+  stack.dispatch.set_executor(None);
+  let worker =
+    stack.node("routed-worker", None, TaskProfile::Worker, Some(implement_task("ship it", Some(&repo.repo)))).await?;
+  let guard = stack.store().control_lock().await;
+  stack
+    .store()
+    .update_task_slot_fields_locked(
+      &guard,
+      &worker.id,
+      charliebot_agents::backend_pool::METADATA_OWNER,
+      serde_json::Map::from_iter([(
+        "route".to_string(),
+        serde_json::to_value(BackendRoute {
+          backends: vec!["fake3".to_string(), "fake2".to_string()],
+          reason: "review route".to_string(),
+        })?,
+      )]),
+    )
+    .await?;
+  drop(guard);
+
+  let process_guard = ProcessGroupGuard::new();
+  queue_and_launch_work(&stack, &worker.id, "run-routed-work", "ship it").await?;
+  assert_eq!(wait_for_run(&stack, &process_guard, &worker.id, "run-routed-work").await?, RunOutcomeKind::Success);
+  let review_run = wait_for_review(&stack, &worker.id, "run-routed-work").await?;
+  assert_eq!(review_run.backend.as_deref(), Some("fake3"));
+  assert_eq!(wait_for_run(&stack, &process_guard, &worker.id, &review_run.id).await?, RunOutcomeKind::Success);
   Ok(())
 }
 

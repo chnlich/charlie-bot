@@ -316,12 +316,6 @@ count and may pass in a run.
 
 | Scenario | Step | Stage | Main commit | Difference |
 | --- | --- | --- | --- | --- |
-| agent-orchestration-cold-read | delegate a cold read of the synthetic page | agent-orchestration | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
-| agent-orchestration-cold-read | let the manager finish the cold-read report | agent-orchestration | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
-| agent-orchestration-cold-read | delegate a cold read whose first reader fails and second answers | agent-orchestration | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
-| agent-orchestration-cold-read | let the manager finish the retry report | agent-orchestration | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
-| agent-orchestration-cold-read | delegate a cold read whose two readers fail | agent-orchestration | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
-| agent-orchestration-cold-read | let the manager finish the all-failed report | agent-orchestration | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
 | task-completion-routes | cancel the stopped queued worker to deliver its report | agent-orchestration | `d401d9a2a` | Python cancel responses report queued runs stopped, including `never_launched`; Rust omits that list or entry. |
 | task-completion-routes | release the active manager run | agent-orchestration | `d401d9a2a` | The new task stop/completion events shift the returned or persisted event id by one. |
 | task-completion-routes | cancel the task after its run finishes | agent-orchestration | `d401d9a2a` | Python cancel responses report queued runs stopped, including `never_launched`; Rust omits that list or entry. |
@@ -330,20 +324,13 @@ count and may pass in a run.
 | task-completion-routes | operator restores an archived ancestor chain | agent-orchestration | `d401d9a2a` | The new task stop/completion events shift the returned or persisted event id by one. |
 | agent-orchestration-delegate | delegate one repo-less script run | agent-orchestration | `253e0dcbe`, `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
 | agent-orchestration-delegate | delegate a failing repo-less worker | agent-orchestration | `253e0dcbe`, `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
-| agent-orchestration-delegate | let the manager finish the failed-script report | agent-orchestration | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
 | agent-orchestration-delegate | delegate a failing implement worker on the local repository | agent-orchestration | `253e0dcbe`, `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
-| agent-orchestration-delegate | let the manager finish the failed-repository report | agent-orchestration | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
 | manager-turn-opencode | wait for the OpenCode manager run to finish | agent-orchestration | `d401d9a2a` | Python persists the completed OpenCode manager run directory; Rust leaves no matching run directory. |
 | implement-review-chain | delegate a repo task whose unchanged branch already landed on origin main | agent-orchestration | `253e0dcbe`, `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
 | implement-review-chain | delegate a repo-less implement task | agent-orchestration | `253e0dcbe`, `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
 | implement-review-chain | delegate a task whose reviewer exhausts the configured pool | agent-orchestration | `253e0dcbe`, `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
 | cron-routes-and-ticks | wait for the manual cron firing report | triggers-cron-improve | `f77008f66` | Python persists the scheduled task's canonical `task_spec.md` and references; Rust omits them. |
 | cron-routes-and-ticks | wait for a scheduler tick to fire the same task again | triggers-cron-improve | `f77008f66` | Python persists the scheduled task's canonical `task_spec.md` and references; Rust omits them. |
-| features-artifacts-plan-fork | fork of the plan worker at a null index | features | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
-| features-harness-discord | allowed user mention starts a Discord thread session | features | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
-| features-harness-discord | release the silent summon result | features | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
-| features-harness-slack | allowed app mention starts its Slack thread session | features | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
-| features-harness-slack | release summon agent after its result | features | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
 | features-web-reply-audit | wait for the audit nudge | features | `854286c2a` | Python's web reply nudge includes the reason and full-reply instruction; Rust still sends the short prompt. |
 | features-web-reply-audit | server shutdown and fake-agent cleanup | features | `3cd98aa21`, `2fa0a4ce2`, `854286c2a` | The fake-agent spawn capture differs because the audit nudge still uses the short Rust prompt; see the failing wait row. |
 | features-web-reply | a status set of now alone | features | `854286c2a` | Python's status-set response adds `now_chars` and `now_over_budget`; Rust omits both. |
@@ -351,20 +338,16 @@ count and may pass in a run.
 | features-web-reply | the status read lists the open waiting descendant only | features | `854286c2a` | Python's status response includes open direct children with a Now item; Rust omits `children`. |
 | handover-improve | wait for the iteration at its first gate · candidate-to-python | triggers-cron-improve | `253e0dcbe`, `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
 | handover-review-run | delegate an implement task whose reviewer remains alive through handover · candidate-to-python | agent-orchestration | `253e0dcbe`, `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
-| handover-review-run | release the adopted reviewer · candidate-to-python | agent-orchestration | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
 | handover-stop-request | hand over the durable interrupted outcome · python-to-candidate | agent-orchestration | `d401d9a2a` | Python records the terminated run's `-9` exit code and interrupted outcome; Rust leaves the exit code unset. Intermittent: it failed in two of four all-stage runs and passed in seven agent-orchestration-only runs. |
 | handover-stop-request | request the stop of the gated run; the agent ignores the signal · candidate-to-python | agent-orchestration | `d401d9a2a` | Python escalates an ignored stop, terminates the agent, and records the interrupted outcome and exit code; Rust does not. |
 | handover-stop-request | hand over the durable interrupted outcome · candidate-to-python | agent-orchestration | `d401d9a2a` | Python escalates an ignored stop, terminates the agent, and records the interrupted outcome and exit code; Rust does not. |
 | handover-worker-run | wait for the worker agent at its live gate · candidate-to-python | agent-orchestration | `253e0dcbe`, `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
-| handover-worker-run | release the adopted worker agent · candidate-to-python | agent-orchestration | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
 | improve-loop-reports | wait for both iteration reports to reach the busy parent | triggers-cron-improve | `253e0dcbe`, `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
 | skeleton | page with a session, bearer key | server-skeleton | `ae5555da7` | Python records the router's quota failover message; Rust retains the old prompt-overlay warning. |
 | skeleton | page with a session, no key | server-skeleton | `ae5555da7` | Python records the router's quota failover message; Rust retains the old prompt-overlay warning. |
 | skeleton | page with a worker session, cookie | server-skeleton | `90e8ac300`, `f77008f66` | Python's added worker transcript rows advance the page cursor from 10 to 12. |
 | session-detail | bootstrap, manager root, starred, grouped | session-read-api | `ae5555da7` | Python records the router's quota failover message; Rust retains the old prompt-overlay warning. |
 | session-detail | events, newest page, manager root, starred, grouped | session-read-api | `ae5555da7` | Python records the router's quota failover message; Rust retains the old prompt-overlay warning. |
-| session-detail | bootstrap, manager child with child reports | session-read-api | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
-| session-detail | events, newest page, manager child with child reports | session-read-api | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
 | session-detail | bootstrap, worker, retried, closed | session-read-api | `90e8ac300`, `f77008f66` | Python's worker transcript projects the added run lifecycle rows, increasing the event count. |
 | session-detail | events, newest page, worker, retried, closed | session-read-api | `90e8ac300`, `f77008f66` | Python's run summary includes the new tool-call count and lifecycle rows; Rust omits them. |
 | session-detail | bootstrap, worker, interrupted, archived | session-read-api | `90e8ac300`, `f77008f66` | Python's worker transcript projects the added run lifecycle rows, increasing the event count. |
@@ -380,15 +363,6 @@ count and may pass in a run.
 | session-runs | transcript, closed worker, after the rendered rows | session-read-api | `90e8ac300`, `f77008f66` | Python's run summary includes the new tool-call count and lifecycle rows; Rust omits them. |
 | session-runs | transcript, closed worker, stale revision | session-read-api | `90e8ac300`, `f77008f66` | Python's run summary includes the new tool-call count and lifecycle rows; Rust omits them. |
 | session-stream | worker session catch-up replays the runs transcript | session-stream | `90e8ac300`, `f77008f66` | Python's run summary includes the new tool-call count and lifecycle rows; Rust omits them. |
-| session-write-agent | create under the run's own manager task | session-write | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
-| session-write-agent | release the agent caller turn | session-write | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
-| session-write-fork | fork of the source at a null index, the whole log | session-write | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
-| session-write-fork | fork of the source at its first line | session-write | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
-| session-write-fork | fork of the source at a middle line | session-write | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
-| session-write-fork | fork of the source at its last line | session-write | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
-| session-write-fork | elone of the source at a middle line takes over and archives the source | session-write | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
-| session-write-task | legacy create opens a manager root | session-write | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
-| session-write-task | v2 create under the manager root | session-write | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
 
 ## Catch-up e44c9ccef ignored Cargo tests
 
@@ -401,8 +375,3 @@ manager turn, whose Python production caller `master_cc_relay` passes `ctx.run_k
 
 | Row | Test | Binary | Main commit | Difference |
 | --- | --- | --- | --- | --- |
-| `cargo-store-operations` | `python_and_rust_store_operations_write_identical_files_and_read_each_others_output` | `charliebot-store --test cross_implementation` | `ae5555da7` | Python serializes the new route metadata before `web_status`; Rust places the field after it. |
-| `cargo-store-task-tree` | `python_and_rust_task_trees_share_nodes_gates_and_mutation_bytes` | `charliebot-store --test cross_implementation` | `ae5555da7` | Python omits unset route metadata; Rust serializes it as `null`. |
-| `cargo-store-unnamed-node` | `python_and_rust_name_an_unnamed_node_from_a_corrupt_counter_the_same_way` | `charliebot-store --test cross_implementation` | `ae5555da7` | Python omits unset route metadata; Rust serializes it as `null`. |
-| `cargo-store-fork-elone` | `python_and_rust_fork_and_elone_write_the_same_session_files_at_every_index` | `charliebot-store --test cross_implementation` | `ae5555da7` | Python omits unset route metadata; Rust serializes it as `null`. |
-| `cargo-store-delegate-task` | `python_and_rust_delegate_a_task_spec_into_the_same_node_run_and_spec_bytes` | `charliebot-store --test cross_implementation` | `ae5555da7` | Python omits unset route metadata; Rust serializes it as `null`. |

@@ -363,7 +363,7 @@ mod tests {
         min_free_disk_gib: 0,
       },
       paths: PathsConfig { workspace_dirs: Vec::new(), worktree_dir: "/synthetic/worktrees".to_string() },
-      backends: BackendsConfig { pool: vec!["light-a".to_string(), "light-b".to_string()], options },
+      backends: BackendsConfig { pool: vec!["light-a".to_string(), "light-b".to_string()], routing: None, options },
       ui: UiConfig { home_services: Vec::new() },
       telegram: TelegramConfig { chat_id: None },
       sections: Sections::default(),

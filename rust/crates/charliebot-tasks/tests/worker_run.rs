@@ -23,7 +23,7 @@ use charliebot_agents::backends::claude_code::claude_config;
 use charliebot_agents::backends::claude_code::claude_lifecycle::ClaudeCodeLifecycle;
 use charliebot_agents::backends::claude_code::claude_relay;
 use charliebot_agents::backends::claude_code::login_dirs;
-use charliebot_core::config::{BackendOption, ConfigSection};
+use charliebot_core::config::{BackendOption, ConfigSection, RoutingConfig};
 use charliebot_core::event_types;
 use charliebot_registry::backend::{BackendLifecycle, BackendTraits, ResumeStyle};
 use charliebot_registry::{RegisterFn, Registry, RegistryError};
@@ -1249,6 +1249,99 @@ async fn failover_stack(scripts: &Scripts) -> anyhow::Result<Stack> {
   Ok(stack)
 }
 
+/// Install a synthetic shell router in the stack's hot-reloaded configuration.
+fn install_router(stack: &Stack, directory: &Path, body: &str, arguments: &[String]) -> anyhow::Result<()> {
+  let path = directory.join("fake-router.sh");
+  std::fs::write(&path, format!("set -eu\n{body}\n"))?;
+  let mut command = vec!["/bin/sh".to_string(), path.display().to_string()];
+  command.extend(arguments.iter().cloned());
+  let mut cfg = stack.cfg.as_ref().clone();
+  cfg.backends.routing = Some(RoutingConfig { command });
+  stack.replace_config(cfg)
+}
+
+/// `test_backend_router.py` delegation cases: one routed verify request carries the chosen backend and route through
+/// both the worker node metadata and its delegation card, and the router sees the manager's backend excluded.
+#[tokio::test]
+async fn routed_verify_delegation_persists_the_route_and_excludes_its_session_backend() -> anyhow::Result<()> {
+  // Python: tests/test_backend_router.py:221-237, 331-346.
+  let scripts = Scripts::new(vec![result_script("verified")]);
+  let options = ["fake", "fake2"].map(|id| scripts.option(id, BACKEND_TYPE)).to_vec();
+  let stack = Stack::start_with(options, vec!["fake".to_string()]).await?;
+  stack.write_access_key()?;
+  let router_dir = tempfile::tempdir()?;
+  let capture = router_dir.path().join("request.json");
+  let calls = router_dir.path().join("calls.txt");
+  install_router(
+    &stack,
+    router_dir.path(),
+    "cat > \"$1\"\nprintf '%s\\n' started >> \"$2\"\nprintf '%s' '{\"backends\":[\"fake2\"],\"reason\":\"verify route\"}'",
+    &[capture.display().to_string(), calls.display().to_string()],
+  )?;
+  let manager = stack.node("router-parent", None, TaskProfile::Manager, None).await?;
+  stack.dispatch.set_executor(None);
+  stack
+    .dispatch
+    .admit_input(&manager.id, event_types::USER, "Take off and verify this work.", "user", json!({}))
+    .await?;
+
+  let body = json!({
+    "session_id": manager.id,
+    "description": "confirm the change",
+    "task_type": "verify",
+  });
+  let (status, delegated) = post_delegate(&routes::routes(&stack.features), body).await?;
+  assert_eq!(status, StatusCode::OK, "{delegated}");
+  let child_id = delegated["session_id"].as_str().expect("the response names the worker");
+  let run_id = delegated["run_id"].as_str().expect("the response names the work run");
+  let meta = stack.store().load_task_meta(child_id).await?;
+  assert_eq!(meta.backend, "fake2");
+  assert_eq!(meta.extra("route"), Some(&json!({"backends": ["fake2"], "reason": "verify route"})));
+  let events = stack.store().load_chat_events_sync(&manager.id)?;
+  let card =
+    events.iter().find(|event| event["type"] == event_types::TASK_DELEGATED).expect("the delegation card exists");
+  assert_eq!(card["route"], json!({"backends": ["fake2"], "reason": "verify route"}));
+
+  let request: Value = serde_json::from_slice(&std::fs::read(capture)?)?;
+  assert_eq!(request["role"], "verify");
+  assert_eq!(request["text"], "Task type: verify\n\nconfirm the change");
+  assert_eq!(request["candidates"], json!([{"id": "fake2", "cooling_until": null}]));
+  assert_eq!(std::fs::read_to_string(calls)?, "started\n");
+  assert_eq!(stack.wait_terminal(child_id, run_id).await?, RunOutcomeKind::Success);
+  Ok(())
+}
+
+/// A router failure is returned before the delegation handler creates a worker child.
+#[tokio::test]
+async fn router_failure_returns_502_without_creating_a_worker() -> anyhow::Result<()> {
+  // Python: tests/test_backend_router.py:254-266.
+  let scripts = Scripts::new(vec![result_script("unused")]);
+  let options = ["fake", "fake2"].map(|id| scripts.option(id, BACKEND_TYPE)).to_vec();
+  let stack = Stack::start_with(options, vec!["fake".to_string(), "fake2".to_string()]).await?;
+  stack.write_access_key()?;
+  let router_dir = tempfile::tempdir()?;
+  install_router(&stack, router_dir.path(), "cat >/dev/null\nprintf '%s' 'router boom' >&2\nexit 3", &[])?;
+  let manager = stack.node("router-error-parent", None, TaskProfile::Manager, None).await?;
+  stack.dispatch.set_executor(None);
+  stack.dispatch.admit_input(&manager.id, event_types::USER, "Take off and delegate this.", "user", json!({})).await?;
+  let before = stack.store().child_ids(&manager.id)?;
+
+  let body = json!({
+    "session_id": manager.id,
+    "description": "run the script",
+    "task_type": "script-run",
+  });
+  let (status, response) = post_delegate(&routes::routes(&stack.features), body).await?;
+
+  assert_eq!(status, StatusCode::BAD_GATEWAY, "{response}");
+  assert!(response["detail"].as_str().unwrap_or_default().contains("router boom"), "{response}");
+  assert_eq!(stack.store().child_ids(&manager.id)?, before);
+  assert!(
+    stack.store().load_chat_events_sync(&manager.id)?.iter().all(|event| event["type"] != event_types::TASK_DELEGATED)
+  );
+  Ok(())
+}
+
 /// A worker on `fake2` whose run ended on quota exhaustion, with its revision batch bound (`_interrupted_worker_run`).
 /// A pool-chosen node carries the pool's backend-from-pool flag. Returns the worker's id and the run's id.
 async fn interrupted_worker_run(
@@ -1360,6 +1453,55 @@ async fn quota_failure_on_a_script_run_pool_node_fails_over_to_the_next_member()
 async fn quota_failure_on_a_verify_pool_node_fails_over_to_the_next_member() -> anyhow::Result<()> {
   // Python: tests/test_task_execution.py::test_quota_failure_on_a_pool_node_fails_over_to_the_next_member.
   quota_failure_fails_over_to_the_next_member(TaskType::Verify).await
+}
+
+/// A quota retry checks the remaining route order before asking the pool for a backend.
+#[tokio::test]
+async fn quota_failover_walks_the_route_before_the_pool_and_writes_one_system_event() -> anyhow::Result<()> {
+  // Python: tests/test_backend_router.py:354-386.
+  let scripts = Scripts::new(vec![result_script("route retry"), result_script("parent noted")]);
+  let stack = failover_stack(&scripts).await?;
+  let manager = stack.node("route-failover-parent", None, TaskProfile::Manager, None).await?;
+  let (worker, run) = interrupted_worker_run(&stack, &manager.id, TaskType::ScriptRun, true).await?;
+  let route = backend_pool::BackendRoute {
+    backends: vec!["fake".to_string(), "fake3".to_string()],
+    reason: "route before pool".to_string(),
+  };
+  let guard = stack.store().control_lock().await;
+  stack
+    .store()
+    .update_task_slot_fields_locked(
+      &guard,
+      &worker,
+      backend_pool::METADATA_OWNER,
+      Map::from_iter([("route".to_string(), json!(route))]),
+    )
+    .await?;
+  drop(guard);
+  stack.dispatch.set_executor(None);
+  let resets_at = UtcDateTime::parse("2030-01-02T03:04:00+00:00").expect("a fixed instant parses");
+  stack.adapter.record_quota_failure_for_test(&worker, &run, Some(resets_at));
+  stack.adapter.after_worker_run_for_test(&worker, &run, "failed").await?;
+
+  let retry = stack
+    .run_records(&worker)?
+    .into_iter()
+    .find(|record| record.retry_of_run_id.as_deref() == Some(run.as_str()))
+    .expect("the quota failover registered a retry");
+  assert_eq!(retry.backend.as_deref(), Some("fake"));
+  assert_eq!(stack.store().load_task_meta(&worker).await?.backend, "fake");
+  let switches = stack
+    .store()
+    .load_chat_events_sync(&worker)?
+    .into_iter()
+    .filter(|event| event["type"] == event_types::QUOTA_FAILOVER)
+    .collect::<Vec<_>>();
+  assert_eq!(switches.len(), 1, "one quota failover event is persisted: {switches:?}");
+  assert_eq!(switches[0]["from"], "fake2");
+  assert_eq!(switches[0]["to"], "fake");
+  assert_eq!(switches[0]["recovers_at"], "2030-01-02T03:04+00:00");
+  assert_eq!(stack.wait_terminal(&worker, &retry.id).await?, RunOutcomeKind::Success);
+  Ok(())
 }
 
 /// `test_task_execution.py::test_a_pinned_worker_is_not_failed_over_and_its_member_is_not_cooled`: a node whose

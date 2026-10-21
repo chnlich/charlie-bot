@@ -67,6 +67,7 @@ pub const THINKING: &str = "thinking";
 pub const RATE_LIMIT_EVENT: &str = "rate_limit_event";
 pub const RATE_LIMIT_INFO: &str = "rate_limit_info";
 pub const BACKEND_SWITCHED: &str = "backend_switched";
+pub const QUOTA_FAILOVER: &str = "quota_failover";
 pub const MODEL_FALLBACK_NOTICE: &str = "model_fallback_notice";
 pub const BACKEND_OVERLAY_INACTIVE: &str = "backend_overlay_inactive";
 pub const OVERLAY_REASON_UNREADABLE: &str = "unreadable";

@@ -27,6 +27,7 @@ const BUILTIN_EVENT_TYPES: &[&str] = &[
   event_types::SCHEDULED_TRIGGER,
   event_types::AGENT_MESSAGE,
   event_types::BACKEND_SWITCHED,
+  event_types::QUOTA_FAILOVER,
   event_types::BACKEND_OVERLAY_INACTIVE,
   event_types::BACKEND_OVERLAY_UNDECLARED,
   event_types::MODEL_FALLBACK_NOTICE,
@@ -410,17 +411,21 @@ fn render_builtin(event_type: &str, event: &Value) -> StoreResult<Option<Value>>
         .unwrap_or_else(|| json!("Unknown error"));
       json!({"role": "system", "content": format!("Error: {}", python_string(&content))})
     }
-    event_types::TASK_DELEGATED => json!({
-      "role": event_types::TASK_DELEGATED,
-      "content": "Task delegated",
-      "thread_id": event.get("thread_id").cloned().unwrap_or_else(|| json!("")),
-      "child_session_id": event.get("child_session_id").filter(|value| is_truthy(value)).cloned().unwrap_or_else(|| json!("")),
-      event_types::DELEGATE_INVOCATION: event.get(event_types::DELEGATE_INVOCATION).cloned().unwrap_or(Value::Null),
-      "backend": preferred_value(event, "backend", "resolved_backend"),
-      "model": preferred_value(event, "model", "resolved_model"),
-      // Python's `or` yields the fallback's own value, so both fields absent give null.
-      "timestamp": event.get("timestamp").filter(|value| is_truthy(value)).or_else(|| event.get("created_at")).cloned().unwrap_or(Value::Null),
-    }),
+    event_types::TASK_DELEGATED => {
+      let message = json!({
+        "role": event_types::TASK_DELEGATED,
+        "content": "Task delegated",
+        "thread_id": event.get("thread_id").cloned().unwrap_or_else(|| json!("")),
+        "child_session_id": event.get("child_session_id").filter(|value| is_truthy(value)).cloned().unwrap_or_else(|| json!("")),
+        event_types::DELEGATE_INVOCATION: event.get(event_types::DELEGATE_INVOCATION).cloned().unwrap_or(Value::Null),
+        "backend": preferred_value(event, "backend", "resolved_backend"),
+        "model": preferred_value(event, "model", "resolved_model"),
+        "route": event.get("route").cloned().unwrap_or(Value::Null),
+        // Python's `or` yields the fallback's own value, so both fields absent give null.
+        "timestamp": event.get("timestamp").filter(|value| is_truthy(value)).or_else(|| event.get("created_at")).cloned().unwrap_or(Value::Null),
+      });
+      message
+    }
     event_types::WORKER_SUMMARY => {
       let mut message = json!({
         "role": event_types::WORKER_SUMMARY,
@@ -478,6 +483,16 @@ fn render_builtin(event_type: &str, event: &Value) -> StoreResult<Option<Value>>
       "role": "system",
       "content": format!("Backend switched: {} → {}", py_string_default(event, "from", ""), py_string_default(event, "to", "")),
     }),
+    event_types::QUOTA_FAILOVER => {
+      let from_backend = py_string_default(event, "from", "");
+      let recovers_at = event.get("recovers_at").filter(|value| is_truthy(value));
+      let recovery =
+        recovers_at.map_or_else(String::new, |value| format!("; {from_backend} recovers at {}", python_string(value)));
+      json!({
+        "role": "system",
+        "content": format!("Quota exhausted on {from_backend}: switched to {}{recovery}", py_string_default(event, "to", "")),
+      })
+    }
     event_types::BACKEND_OVERLAY_INACTIVE | event_types::BACKEND_OVERLAY_UNDECLARED => {
       let backend = py_string_default(event, "backend", "");
       if event.get("reason").and_then(Value::as_str) == Some(event_types::OVERLAY_REASON_UNREADABLE) {
@@ -909,6 +924,7 @@ mod tests {
 
   #[test]
   fn parity_fixture_matches_python_frames_for_chat_logs_and_synthetic_sequences() {
+    // Python: src/runtime/message_aggregator.py:539-559 includes the nullable route on every delegation card.
     let fixture: Value = serde_json::from_str(include_str!("../tests/fixtures/message_aggregator.json")).unwrap();
     let renderers = parity_renderers();
 
@@ -1109,6 +1125,7 @@ mod tests {
 
   #[test]
   fn task_delegated_message_exposes_metadata_without_full_description_body() {
+    // Python: src/runtime/message_aggregator.py:539-559 carries the event route onto the delegation card.
     let mut aggregator = MessageAggregator::new(0, true);
     let long_description = "## Goal\nDo a long task spec that belongs in Workers.";
     let invocation = json!({
@@ -1128,6 +1145,7 @@ mod tests {
         "timestamp": "2026-07-01T12:00:00Z",
         "backend": "codex-o3",
         "model": "o3",
+        "route": {"backends": ["codex-o3"], "reason": "design"},
         "delegate_invocation": invocation,
       }))
       .unwrap();
@@ -1143,6 +1161,7 @@ mod tests {
           "delegate_invocation": invocation,
           "backend": "codex-o3",
           "model": "o3",
+          "route": {"backends": ["codex-o3"], "reason": "design"},
           "event_index": 0,
           "id": "legacy:0",
           "timestamp": "2026-07-01T12:00:00Z",
@@ -1151,6 +1170,30 @@ mod tests {
     );
     assert!(!deltas[0]["message"]["content"].as_str().unwrap().contains(long_description));
     assert!(deltas[0]["message"].get("description").is_none());
+  }
+
+  #[test]
+  fn quota_failover_renders_the_backend_and_recovery_time() {
+    // Python: src/runtime/message_aggregator.py:367-375 renders the same recovery line.
+    let mut aggregator = MessageAggregator::new(0, true);
+    let deltas = aggregator
+      .feed(&json!({
+        "type": "quota_failover",
+        "from": "fake",
+        "to": "strong",
+        "recovers_at": "2030-01-02T03:04+00:00",
+      }))
+      .unwrap();
+    assert_eq!(
+      deltas[0]["message"],
+      json!({
+        "role": "system",
+        "content": "Quota exhausted on fake: switched to strong; fake recovers at 2030-01-02T03:04+00:00",
+        "event_index": 0,
+        "id": "legacy:0",
+        "timestamp": null,
+      })
+    );
   }
 
   #[test]

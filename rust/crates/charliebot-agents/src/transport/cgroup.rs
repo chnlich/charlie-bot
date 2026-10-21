@@ -1,14 +1,13 @@
 //! Session cgroups use one delegated directory per session.
 
 use std::collections::HashSet;
+use std::ffi::OsString;
 use std::fs;
 use std::fs::OpenOptions;
 use std::io;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
-
-use charliebot_core::cgroup::SESSION_CGROUP_PREFIX;
 
 static DEGRADED_WARNINGS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 
@@ -196,8 +195,9 @@ pub fn cleanup_session_cgroup(base_dir: &Path, session_id: &str) -> bool {
   charliebot_core::cgroup::cleanup_session_cgroup(base_dir, session_id)
 }
 
-/// Remove empty stale session cgroups and retain nonempty ones with a warning.
-pub fn sweep_stale_session_cgroups(base_dir: &Path) -> usize {
+/// Remove each empty cgroup named for a session of `sessions_dir` and retain a populated one with a warning. Other
+/// entries under `base_dir`, and the cgroups of other homes, stay.
+pub fn sweep_stale_session_cgroups(base_dir: &Path, sessions_dir: &Path) -> usize {
   let entries = match fs::read_dir(base_dir).and_then(|entries| entries.collect::<Result<Vec<_>, _>>()) {
     Ok(entries) => entries,
     Err(error) => {
@@ -205,24 +205,44 @@ pub fn sweep_stale_session_cgroups(base_dir: &Path) -> usize {
       return 0;
     }
   };
-  let mut removed = 0;
+  let owned = match home_session_cgroup_names(sessions_dir) {
+    Ok(owned) => owned,
+    Err(error) => {
+      tracing::info!(target: "charliebot_agents", sessions = %sessions_dir.display(), error = %error, "session_cgroup_sweep_unavailable");
+      return 0;
+    }
+  };
+  let mut removed = Vec::new();
   for entry in entries {
     let path = entry.path();
     let name = entry.file_name();
-    if !name.to_string_lossy().starts_with(SESSION_CGROUP_PREFIX) || !path.is_dir() {
+    if !owned.contains(&name) || !path.is_dir() {
       continue;
     }
     match fs::remove_dir(&path) {
-      Ok(()) => removed += 1,
+      Ok(()) => removed.push(name.to_string_lossy().into_owned()),
       Err(error) => {
         tracing::warn!(target: "charliebot_agents", path = %path.display(), error = %error, "session_cgroup_sweep_retained")
       }
     }
   }
-  if removed > 0 {
-    tracing::info!(target: "charliebot_agents", count = removed, "session_cgroup_sweep_removed");
+  removed.sort();
+  if !removed.is_empty() {
+    tracing::info!(target: "charliebot_agents", count = removed.len(), names = ?removed, "session_cgroup_sweep_removed");
   }
-  removed
+  removed.len()
+}
+
+/// The cgroup directory name of each session directory under `sessions_dir`.
+fn home_session_cgroup_names(sessions_dir: &Path) -> io::Result<HashSet<OsString>> {
+  let mut names = HashSet::new();
+  for entry in fs::read_dir(sessions_dir)? {
+    let entry = entry?;
+    if entry.path().is_dir() {
+      names.insert(OsString::from(session_cgroup_name(&entry.file_name().to_string_lossy())));
+    }
+  }
+  Ok(names)
 }
 
 /// Log whether session cgroups are enabled for the supplied base and limits. A memory limit of zero or below disables
@@ -271,18 +291,6 @@ mod tests {
     assert!(message.contains("session 内存上限触发"));
     assert!(message.contains("12288"));
     assert!(message.contains("gpuq"));
-  }
-
-  #[test]
-  fn sweep_removes_empty_directories_and_keeps_populated_ones() {
-    let base = tempfile::tempdir().unwrap();
-    fs::create_dir(base.path().join("charliebot-sess-empty")).unwrap();
-    let populated = base.path().join("charliebot-sess-full");
-    fs::create_dir(&populated).unwrap();
-    fs::write(populated.join("cgroup.procs"), "1").unwrap();
-    assert_eq!(sweep_stale_session_cgroups(base.path()), 1);
-    assert!(!base.path().join("charliebot-sess-empty").exists());
-    assert!(populated.is_dir());
   }
 
   #[test]

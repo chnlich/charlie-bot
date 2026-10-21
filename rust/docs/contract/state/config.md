@@ -134,7 +134,7 @@ Per-type fields:
 | `type` | Package | Extra fields | Usage source and id prefixes |
 | --- | --- | --- | --- |
 | `cc-claude` | `src.backends.claude_code` | `effort: str\|null`; `fast_mode: bool = false` (adds `"fastMode": true` to `--settings`); `cli_binary: str\|null` (replaces `claude` as argv[0]); `account_pool: str\|null` | `Claude Code`: `claude-` |
-| `cc-kimi` | `src.backends.kimi` | `credential: str` (required; names a `credentials.yaml` section whose `api_key` is used) | attributed to `Claude Code`: `claude-` |
+| `cc-anthropic-compatible` | `src.backends.anthropic_compatible` | `api_base: str` (required, at least one character; the endpoint root, and a value ending in `/v1` is refused); `context_window: int` (required, > 0; sets the model window and the auto-compact window); `credential: str\|null` (section whose `api_key` is the bearer; null sends `no-auth`) | attributed to `Claude Code`: `claude-` |
 | `cc-openai-compatible` | `src.backends.openai_compatible` | `api_base: str` (required; upstream OpenAI-compatible base URL); `credential: str\|null` (section whose `api_key` becomes the upstream bearer) | attributed to `Claude Code`: `claude-` |
 | `codex` | `src.backends.codex` | `model_reasoning_effort: str\|null` (null means `xhigh`); `model_auto_compact_token_limit: int\|null`, > 0 | `Codex`: `codex-` |
 | `gemini` | `src.backends.gemini` | none | **none registered**, so a gemini option fails `check_backend_ids` at server start ("attributes to no usage source") |
@@ -243,7 +243,7 @@ done
 | `src.backends.antigravity` | option type `antigravity` |
 | `src.backends.charlie_code` | option type `charlie-code` |
 | `src.backends.codex` | option type `codex` |
-| `src.backends.kimi` | option type `cc-kimi` |
+| `src.backends.anthropic_compatible` | option type `cc-anthropic-compatible` |
 | `src.backends.opencode` | option type `opencode` |
 
 ## 7. Retired keys (load error, section 2 step 2)
@@ -298,7 +298,7 @@ Keys the server and its CLIs read:
 | Key | Reader | Effect when missing |
 | --- | --- | --- |
 | `charliebot.access_key` | `configured_access_key()`: HTTP auth (`src/runtime/api/auth.py`, `deps.py`), run-token signing (`task_execution._child_env`), CLI auth (`cli/common.py`), `memory` CLI, page `auth_enabled` | Auth is disabled (`auth_enabled: false`). Agent child launches raise `"run-token signing requires credentials.yaml charliebot.access_key; agent child environments cannot be built without it"`. cc-openai-compatible launches raise the `require` error. |
-| `<option.credential>.api_key` | cc-kimi factory, charlie-code factory, cc-openai-compatible proxy upstream | `require` error at launch or request |
+| `<option.credential>.api_key` | cc-anthropic-compatible factory (when `credential` is set), charlie-code factory, cc-openai-compatible proxy upstream | `require` error at launch or request |
 | `<router.jev.credential>.api_key` | `src/features/router/routing.py::design_probability` | `charliebot router` exits 1 with the missing credential error |
 | `slack.bot_token`, `slack.app_token` | `src/features/slack/service.py`, `slack_listener.py` | the slack service does not start |
 | `discord.bot_token` | `src/features/discord/service.py`, `discord_listener.py`, `discord_commands.py` | the discord service does not start (it starts only when `discord.bot_token` and `discord.allowed_users` are both set) |

@@ -629,7 +629,7 @@ fn anthropic_compatible_options_require_a_positive_window_and_endpoint_root() {
   fs::write(home.join("config.yaml"), config(ANTHROPIC_API_BASE, 0)).unwrap();
   assert!(registry.load_config(&home).unwrap_err().to_string().contains("context_window"));
   fs::write(home.join("config.yaml"), config(&format!("{ANTHROPIC_API_BASE}/v1///"), 409_600)).unwrap();
-  assert!(registry.load_config(&home).unwrap_err().to_string().contains("api_base"));
+  assert!(registry.load_config(&home).unwrap_err().to_string().contains("endpoint root without /v1"));
   fs::write(home.join("config.yaml"), config("''", 409_600)).unwrap();
   assert!(registry.load_config(&home).unwrap_err().to_string().contains("api_base"));
 }
@@ -670,6 +670,34 @@ fn anthropic_compatible_registration_matches_python_traits_and_usage_attribution
   assert_eq!(limits.declared_window, Some(ANTHROPIC_CONTEXT_WINDOW));
   assert_eq!(limits.compact_reserve, Some(33_000));
   assert_eq!(registry.usage_source_for("cc-anthropic-compatible").unwrap().unwrap().name, "Claude Code");
+}
+
+// Python: tests/test_backend_hooks.py:129.
+#[test]
+fn anthropic_compatible_round_reports_a_reply_from_outside_the_pinned_family() {
+  let mut registry = Registry::new();
+  registry.register_package("src.backends.anthropic_compatible", register_anthropic_compatible).unwrap();
+  let lifecycle = registry.backend_type_of("cc-anthropic-compatible").unwrap().lifecycle.clone().unwrap();
+  let option = option_of(&argv_case(
+    "variant",
+    "cc-anthropic-compatible",
+    json!({"api_base": ANTHROPIC_API_BASE, "context_window": ANTHROPIC_CONTEXT_WINDOW}),
+    &[],
+    None,
+    None,
+    None,
+  ));
+  let reply = |model: &str| {
+    json!({"type": "assistant", "message": {"model": model, "content": [{"type": "text", "text": "hi"}]}})
+  };
+
+  let notices = lifecycle.round_notices(&option, &[reply("claude-haiku-4-5")]);
+
+  assert_eq!(notices.len(), 1);
+  assert_eq!(notices[0]["type"], "model_fallback_notice");
+  assert_eq!(notices[0]["backend"], option.id);
+  assert_eq!(notices[0]["served_models"], json!(["claude-haiku-4-5"]));
+  assert!(lifecycle.round_notices(&option, &[reply(&option.model)]).is_empty());
 }
 
 fn launch_of(case: &Value) -> LaunchArgs {

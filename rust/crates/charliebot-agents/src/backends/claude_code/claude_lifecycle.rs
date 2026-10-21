@@ -438,7 +438,7 @@ mod tests {
 
   use charliebot_registry::Registry;
   use charliebot_registry::backend::{ContextStateFn, EmitFn, RecordAccountFn, RunningTurnsFn};
-  use charliebot_store::metadata::TaskProfile;
+  use charliebot_store::metadata::{TaskProfile, UtcDateTime};
   use charliebot_store::run_records::RunKind;
   use serde_json::json;
 
@@ -632,5 +632,78 @@ mod tests {
     let rendered = turn_contribution::render_login_required(&event);
     assert_eq!(rendered["kind"], event_types::CLAUDE_ACCOUNT_LOGIN_REQUIRED);
     assert!(rendered["content"].as_str().is_some_and(|content| !content.is_empty()));
+  }
+
+  // Python: tests/test_claude_idle_compaction.py:237.
+  #[tokio::test]
+  async fn a_turn_start_cancels_the_pending_idle_timer() {
+    let root = tempfile::tempdir().unwrap();
+    let account_dir = root.path().join("account-a");
+    account_credentials(&account_dir);
+    let cfg = config(&root.path().join("home"), &[("a", &account_dir)]);
+    let ctx = context(cfg, LaunchKind::Turn, None, None, Some(Arc::new(Vec::new)));
+    let session_id = "idle-turn-start";
+    ctx.session_meta.lock().unwrap().id = session_id.to_string();
+    let idle = claude_idle_compaction::IdleCompaction::shared();
+    idle.arm(claude_idle_compaction::test_support::timer_input(
+      session_id,
+      UtcDateTime::now(),
+      claude_idle_compaction::test_support::no_candidate(),
+    ));
+    let timer = idle.timer_abort_handle(session_id).expect("the round armed a timer");
+
+    ClaudeCodeLifecycle::new().place(&ctx).await.unwrap();
+
+    assert!(!idle.has_timer(session_id));
+    tokio::task::yield_now().await;
+    assert!(timer.is_finished(), "the pending timer is cancelled");
+  }
+
+  // Python: tests/test_claude_idle_compaction.py:256.
+  #[tokio::test]
+  async fn place_waits_for_a_running_idle_compaction_before_it_starts_the_turn() {
+    let root = tempfile::tempdir().unwrap();
+    let account_dir = root.path().join("account-a");
+    account_credentials(&account_dir);
+    let cfg = config(&root.path().join("home"), &[("a", &account_dir)]);
+    let ctx = context(cfg, LaunchKind::Turn, None, None, Some(Arc::new(Vec::new)));
+    let session_id = "idle-turn-wait";
+    ctx.session_meta.lock().unwrap().id = session_id.to_string();
+    let idle = claude_idle_compaction::IdleCompaction::shared();
+    let started = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let run: claude_idle_compaction::RunFn = {
+      let started = Arc::clone(&started);
+      let release = Arc::clone(&release);
+      Arc::new(move || {
+        let started = Arc::clone(&started);
+        let release = Arc::clone(&release);
+        Box::pin(async move {
+          started.notify_one();
+          release.notified().await;
+          Ok(())
+        }) as futures_util::future::BoxFuture<'static, anyhow::Result<()>>
+      })
+    };
+    let request = UtcDateTime::now();
+    idle.arm(claude_idle_compaction::test_support::candidate_input(
+      session_id,
+      claude_idle_compaction::test_support::armed_facts(request, "synthetic-claude-session"),
+      false,
+      run,
+    ));
+    let compaction = idle.fire_at(session_id, UtcDateTime::now()).unwrap().expect("every idle condition holds");
+    started.notified().await;
+
+    let placed = tokio::spawn(async move { ClaudeCodeLifecycle::new().place(&ctx).await });
+    for _ in 0..3 {
+      tokio::task::yield_now().await;
+    }
+    assert!(!placed.is_finished(), "the turn waits for the running compaction");
+
+    release.notify_one();
+    placed.await.unwrap().unwrap();
+    assert!(compaction.is_finished(), "the turn starts after the compaction ends");
+    compaction.await.unwrap();
   }
 }

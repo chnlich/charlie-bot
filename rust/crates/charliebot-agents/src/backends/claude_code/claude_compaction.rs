@@ -793,4 +793,12 @@ mod tests {
     assert_eq!(events.lock().unwrap()[0]["trigger"], "idle");
     assert_eq!(events.lock().unwrap()[0]["compact_metadata"]["pre_tokens"], 120_000);
   }
+
+  // Python: src/backends/claude_code/claude_compaction.py:273.
+  #[test]
+  fn a_failed_run_whose_result_is_blank_reports_the_fallback_text() {
+    let outcome = judge(1, br#"{"is_error":true,"result":"   "}"#, &Map::new(), 0, 0, "fable");
+
+    assert_eq!(outcome.error.as_deref(), Some("exit 1: run reported an error"));
+  }
 }

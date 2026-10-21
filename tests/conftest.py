@@ -1830,12 +1830,12 @@ RUNS_STOP_EXIT_WAIT_SECONDS_PATCH_TARGET = "src.runtime.runs.STOP_EXIT_WAIT_SECO
 # constant name records which backend's spawn a test drives.
 BASE_SPAWN_SUBPROCESS_PATCH_TARGET = "src.runtime.agent_process.spawn.spawn_subprocess"
 BASE_RESOLVE_BINARY_PATCH_TARGET = "src.runtime.agent_process.base.resolve_binary"
-OPENCODE_RESOLVE_BINARY_PATCH_TARGET = "src.runtime.agent_process.base.resolve_binary"
-OPENCODE_SPAWN_SUBPROCESS_PATCH_TARGET = "src.runtime.agent_process.spawn.spawn_subprocess"
-CODEX_RESOLVE_BINARY_PATCH_TARGET = "src.runtime.agent_process.base.resolve_binary"
-ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET = "src.runtime.agent_process.base.resolve_binary"
-CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET = "src.runtime.agent_process.base.resolve_binary"
-GEMINI_RESOLVE_BINARY_PATCH_TARGET = "src.runtime.agent_process.base.resolve_binary"
+OPENCODE_RESOLVE_BINARY_PATCH_TARGET = BASE_RESOLVE_BINARY_PATCH_TARGET
+OPENCODE_SPAWN_SUBPROCESS_PATCH_TARGET = BASE_SPAWN_SUBPROCESS_PATCH_TARGET
+CODEX_RESOLVE_BINARY_PATCH_TARGET = BASE_RESOLVE_BINARY_PATCH_TARGET
+ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET = BASE_RESOLVE_BINARY_PATCH_TARGET
+CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET = BASE_RESOLVE_BINARY_PATCH_TARGET
+GEMINI_RESOLVE_BINARY_PATCH_TARGET = BASE_RESOLVE_BINARY_PATCH_TARGET
 
 # Patch target for the atomic-write swap hook. src/infra/json_utils.py publishes each staged
 # payload with an ``os.replace`` attribute lookup on its module-scope ``import os`` binding, and

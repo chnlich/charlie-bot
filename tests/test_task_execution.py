@@ -354,6 +354,28 @@ async def _async_noop(*args, **kwargs) -> None:
   return None
 
 
+async def build_manager_root(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch):
+  """One synthetic instance with an operator-created root manager: build_env
+    plus the operator credentials, the silent-broadcast executor, and the
+    config-owner patch the spawn-style routes read. Returns
+    (cfg, session_blocks, tree, root)."""
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
+  conftest.stub_credentials({"charliebot": {"access_key": "op-secret"}})
+  monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
+  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
+  # The spawn-style routes resolve backends through the config owner directly.
+  monkeypatch.setattr(conftest.CONFIG_GET_CONFIG_PATCH_TARGET, lambda: cfg)
+  root = await tree.create_task(
+      request_id="root",
+      task_parent_id=None,
+      profile="manager",
+      task=models.TaskSpec(goal="project"),
+      name="Project",
+      backend=None,
+      caller=conftest.OPERATOR)
+  return cfg, session_blocks, tree, root
+
+
 async def _launch_manager_turn(cfg, session_blocks, tree, monkeypatch, manager, content) -> list:
   """The launch rig the implement and quick-edit tests share: silent-broadcast
     executor, the parent-manager build double, the instructions patch, the

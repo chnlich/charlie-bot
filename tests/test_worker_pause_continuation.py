@@ -171,6 +171,16 @@ async def _wait_for_review_of(tree, session_id: str, work_run_id: str, timeout: 
   pytest.fail(f"no review of {work_run_id} was registered within {timeout}s")
 
 
+def _reviewer_push(tree, worker, run_id: str) -> None:
+  """The reviewer's landing work: rebase the worker's branch onto main and push."""
+  record = tree.runs.read_run_sync(worker.id, run_id)
+  assert record is not None and record.worktree_path and record.branch_name
+  work_wt = pathlib.Path(record.worktree_path)
+  for args in (("fetch", "-q", "origin"), ("rebase", "-q", "origin/main"), ("push", "-q", "origin",
+                                                                            f"{record.branch_name}:main")):
+    conftest.run_git(work_wt, *args)
+
+
 def _launch_prompt(tree, session_id: str, run_id: str) -> str:
   return (tree.runs.run_dir(session_id, run_id) / "launch_prompt.md").read_text(encoding="utf-8")
 
@@ -338,22 +348,15 @@ async def test_review_with_pending_trigger_pauses_merge_and_continues_the_review
     review_started.set()
     await review_gate.wait()
 
-  def reviewer_push() -> None:
-    """The reviewer's landing work: rebase the branch onto the target and push."""
-    record = tree.runs.read_run_sync(worker.id, run1_id)
-    assert record is not None and record.worktree_path and record.branch_name
-    work_wt = pathlib.Path(record.worktree_path)
-    for args in (("fetch", "-q", "origin"), ("rebase", "-q", "origin/main"), ("push", "-q", "origin",
-                                                                              f"{record.branch_name}:main")):
-      conftest.run_git(work_wt, *args)
-
   builds = install_backends(
       monkeypatch, [
           NativeIdBackend([test_task_execution.result_event("did the work")], native_id="native-1", gate=work_wait),
           NativeIdBackend(
               [test_task_execution.result_event("review approved")], native_id="native-review-1", gate=review_wait),
           NativeIdBackend(
-              [test_task_execution.result_event("merge done")], native_id="native-review-1", pre_run=reviewer_push),
+              [test_task_execution.result_event("merge done")],
+              native_id="native-review-1",
+              pre_run=lambda: _reviewer_push(tree, worker, run1_id)),
       ])
   await tree.dispatch.admit_input(worker.id, event_type=ET.USER, content="Start the work.", actor="user")
   decision = await tree.dispatch.dispatch_pending(worker.id)
@@ -569,19 +572,11 @@ async def test_delivery_without_pending_wake_behaves_as_today(
     work_started.set()
     await work_gate.wait()
 
-  def reviewer_push() -> None:
-    record = tree.runs.read_run_sync(worker.id, run1_id)
-    assert record is not None and record.worktree_path and record.branch_name
-    work_wt = pathlib.Path(record.worktree_path)
-    for args in (("fetch", "-q", "origin"), ("rebase", "-q", "origin/main"), ("push", "-q", "origin",
-                                                                              f"{record.branch_name}:main")):
-      conftest.run_git(work_wt, *args)
-
   builds = install_backends(
       monkeypatch, [
           NativeIdBackend([test_task_execution.result_event("did the work")], native_id="native-1", gate=work_wait),
           test_task_execution.SpawningScriptedBackend(
-              [test_task_execution.result_event("review ok")], pre_run=reviewer_push),
+              [test_task_execution.result_event("review ok")], pre_run=lambda: _reviewer_push(tree, worker, run1_id)),
       ])
   await tree.dispatch.admit_input(worker.id, event_type=ET.USER, content="Start the work.", actor="user")
   decision = await tree.dispatch.dispatch_pending(worker.id)

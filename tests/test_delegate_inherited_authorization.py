@@ -26,20 +26,7 @@ from tests import test_task_execution
 async def make_tree(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch):
   """One synthetic instance: root manager + child manager under it, plus the
     API client and the scripted executor, with no user input anywhere yet."""
-  cfg, session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
-  conftest.stub_credentials({"charliebot": {"access_key": "op-secret"}})
-  monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
-  tree.dispatch.executor = test_task_execution._adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
-  # The spawn-style routes resolve backends through the config owner directly.
-  monkeypatch.setattr(conftest.CONFIG_GET_CONFIG_PATCH_TARGET, lambda: cfg)
-  root = await tree.create_task(
-      request_id="root",
-      task_parent_id=None,
-      profile="manager",
-      task=models.TaskSpec(goal="project"),
-      name="Project",
-      backend=None,
-      caller="operator")
+  cfg, session_blocks, tree, root = await test_task_execution.build_manager_root(tmp_path, monkeypatch)
   child = await tree.create_task(
       request_id="child",
       task_parent_id=root.id,

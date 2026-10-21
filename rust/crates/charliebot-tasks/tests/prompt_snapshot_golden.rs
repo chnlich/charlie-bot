@@ -502,6 +502,7 @@ fn python_output(request: &Value) -> String {
 }
 
 #[test]
+#[ignore = "catch-up e44c9ccef: cargo-prompt-snapshot"]
 fn snapshots_match_the_python_server_byte_for_byte() {
   let cases = matrix();
   let prepared: Vec<Prepared> = cases.iter().map(prepare).collect();

@@ -310,7 +310,7 @@ run-record work is `S2`; task-tree runtime and feature-owned files remain with t
 
 ## Catch-up e44c9ccef open steps
 
-Each row is one failing Rust parity step from the all-stage run (1,012/1,122 steps matched).
+Each row is one failing Rust parity step from the all-stage run (1,013/1,122 steps matched).
 
 | Scenario | Step | Stage | Main commit | Difference |
 | --- | --- | --- | --- | --- |
@@ -354,8 +354,6 @@ Each row is one failing Rust parity step from the all-stage run (1,012/1,122 ste
 | features-harness-slack | allowed app mention starts its Slack thread session | features | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
 | features-harness-slack | release summon agent after its result | features | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
 | features-harness-slack | server shutdown and fake-agent cleanup | features | `3cd98aa21`, `2fa0a4ce2` | Claude launch argv and env lag Python's per-run-kind tools, settings, and advisor disablement. |
-| features-usage-page | token-usage page over the seeded ledger | features | none: main left `token_usage.html` unchanged; this catch-up reverts rust-backend's `003981af7` | Python answers 200 with `%` formats in `token_usage.html:85`; Rust's template engine rejects `%` and answers 500 `TemplateError`. |
-| features-usage-page-uncaptured | token-usage page with an empty ledger and no capture | features | none: main left `token_usage.html` unchanged; this catch-up reverts rust-backend's `003981af7` | Python answers 200 with `%` formats in `token_usage.html:85`; Rust's template engine rejects `%` and answers 500 `TemplateError`. |
 | features-web-reply-audit | wait for the audit nudge | features | `854286c2a` | Python's web reply nudge includes the reason and full-reply instruction; Rust still sends the short prompt. |
 | features-web-reply-audit | server shutdown and fake-agent cleanup | features | `3cd98aa21`, `2fa0a4ce2` | Claude launch argv and env lag Python's per-run-kind tools, settings, and advisor disablement. |
 | features-web-reply | a status set of now alone | features | `854286c2a` | Python's status-set response adds `now_chars` and `now_over_budget`; Rust omits both. |
@@ -374,6 +372,7 @@ Each row is one failing Rust parity step from the all-stage run (1,012/1,122 ste
 | handover-review-run | server shutdown and fake-agent cleanup · candidate-to-python | agent-orchestration | `3cd98aa21`, `2fa0a4ce2` | Claude launch argv and env lag Python's per-run-kind tools, settings, and advisor disablement. |
 | handover-stop-request | request the stop of the gated run; the agent ignores the signal · candidate-to-python | agent-orchestration | `d401d9a2a` | Python escalates an ignored stop, terminates the agent, and records the interrupted outcome and exit code; Rust does not. |
 | handover-stop-request | hand over the durable interrupted outcome · candidate-to-python | agent-orchestration | `d401d9a2a` | Python escalates an ignored stop, terminates the agent, and records the interrupted outcome and exit code; Rust does not. |
+| handover-stop-request | hand over the durable interrupted outcome · python-to-candidate | agent-orchestration | `d401d9a2a` | Python records the terminated run's `-9` exit code and interrupted outcome; Rust leaves the exit code unset. |
 | handover-stop-request | server shutdown and fake-agent cleanup · candidate-to-python | agent-orchestration | `3cd98aa21`, `2fa0a4ce2` | Claude launch argv and env lag Python's per-run-kind tools, settings, and advisor disablement. |
 | handover-worker-run | wait for the worker agent at its live gate · candidate-to-python | agent-orchestration | `253e0dcbe` | Python task prompts include the new “Text a model reads” block; Rust stores the older prompt and hash. |
 | handover-worker-run | release the adopted worker agent · candidate-to-python | agent-orchestration | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
@@ -424,3 +423,26 @@ Each row is one failing Rust parity step from the all-stage run (1,012/1,122 ste
 | session-write-task | v2 create under the manager root | session-write | `ae5555da7` | Python persists and returns the router-selected backend order and reason; Rust omits `route`. |
 | wait-trigger-delay | server shutdown and fake-agent cleanup | triggers-cron-improve | `3cd98aa21`, `2fa0a4ce2` | Claude launch argv and env lag Python's per-run-kind tools, settings, and advisor disablement. |
 | wait-trigger-local-pid | server shutdown and fake-agent cleanup | triggers-cron-improve | `3cd98aa21`, `2fa0a4ce2` | Claude launch argv and env lag Python's per-run-kind tools, settings, and advisor disablement. |
+
+## Catch-up e44c9ccef ignored Cargo tests
+
+Each test below fails because Rust has not ported the Python behavior changed on `main`. Port tasks
+remove its `catch-up e44c9ccef` ignore when they port that behavior.
+
+The launch-environment helper's synthetic compaction case uses `run_kind="manager_turn"`: it covers a
+manager turn, whose Python production caller `master_cc_relay` passes `ctx.run_kind` to
+`compaction_env`.
+
+| Row | Test | Binary | Main commit | Difference |
+| --- | --- | --- | --- | --- |
+| `cargo-claude-factory-matrix` | `registered_claude_factory_matches_the_python_argv_and_env_matrix` | `charliebot-agents --test claude_backend_golden` | `3cd98aa21`, `2fa0a4ce2`, `e001d863e` | Python now varies Claude launch tools and settings by run kind, sets advisor disablement, and adds a 15-minute Bash limit; Rust's argv and env matrix is stale. |
+| `cargo-account-selection-matrix` | `account_selection_matrix_matches_python` | `charliebot-agents --test claude_pool_cross_impl` | `c9ade3029` | Python considers account contention below the 90% utilization line before idleness; Rust keeps the prior selection order. |
+| `cargo-cli-backend-matrix` | `cli_backends_match_the_python_package_on_synthetic_inputs` | `charliebot-agents --test cli_backends_cross_implementation` | `3cd98aa21`, `2fa0a4ce2`, `e001d863e`, `63004f809` | Python's Claude launch matrix changed and Codex now includes `--disable multi_agent`; Rust's CLI argv and env differ. |
+| `cargo-codex-matrix` | `codex_matches_the_python_package_on_synthetic_inputs` | `charliebot-agents --test codex_cross_implementation` | `63004f809` | Python's Codex argv includes `--disable multi_agent`; Rust omits the flag. |
+| `cargo-launch-environment` | `complete_agent_child_environments_match_python_for_each_launch_kind` | `charliebot-agents --test launch_environment_cross_implementation` | `3cd98aa21`, `e001d863e` | Python supplies the 15-minute Bash limit and advisor disablement for manager turns; Rust's child environment lacks them. |
+| `cargo-store-operations` | `python_and_rust_store_operations_write_identical_files_and_read_each_others_output` | `charliebot-store --test cross_implementation` | `ae5555da7` | Python serializes the new route metadata before `web_status`; Rust places the field after it. |
+| `cargo-store-task-tree` | `python_and_rust_task_trees_share_nodes_gates_and_mutation_bytes` | `charliebot-store --test cross_implementation` | `ae5555da7` | Python omits unset route metadata; Rust serializes it as `null`. |
+| `cargo-store-unnamed-node` | `python_and_rust_name_an_unnamed_node_from_a_corrupt_counter_the_same_way` | `charliebot-store --test cross_implementation` | `ae5555da7` | Python omits unset route metadata; Rust serializes it as `null`. |
+| `cargo-store-fork-elone` | `python_and_rust_fork_and_elone_write_the_same_session_files_at_every_index` | `charliebot-store --test cross_implementation` | `ae5555da7` | Python omits unset route metadata; Rust serializes it as `null`. |
+| `cargo-store-delegate-task` | `python_and_rust_delegate_a_task_spec_into_the_same_node_run_and_spec_bytes` | `charliebot-store --test cross_implementation` | `ae5555da7` | Python omits unset route metadata; Rust serializes it as `null`. |
+| `cargo-prompt-snapshot` | `snapshots_match_the_python_server_byte_for_byte` | `charliebot-tasks --test prompt_snapshot_golden` | `253e0dcbe` | Python task prompts now include the "Text a model reads" block; Rust's snapshot contains the old prompt and hash. |

@@ -51,6 +51,8 @@ BEHAVIOR_DEFAULTS = {
     "output_after_polls": 0,
     "cancel": "settles",
     "followup": "none",
+    "message_status": 202,
+    "archive_runs_delay": 0,
     "ignore_sigterm": False,
 }
 GIT_ENV = {
@@ -76,6 +78,7 @@ import pathlib
 import re
 import signal
 import sys
+import time
 
 HERE = pathlib.Path(__file__).resolve().parent
 BEHAVIOR = json.loads((HERE / "behavior.json").read_text(encoding="utf-8"))
@@ -134,9 +137,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
     if method == "POST" and self.path == "/api/sessions/":
       return self._reply(200, {"id": PROBE_SESSION})
     if method == "POST" and re.fullmatch(r"/api/chat/[^/]+/message", self.path):
+      if BEHAVIOR["message_status"] != 202:
+        return self._reply(BEHAVIOR["message_status"], {"detail": "message refused"})
       RUNS.append({"id": "probe-run", "state": BEHAVIOR["run_state"]})
       return self._reply(202, {"input_event_id": "probe-input"})
     if method == "GET" and re.fullmatch(r"/api/sessions/[^/]+/runs\?.*", self.path):
+      if "order=desc" not in self.path:
+        time.sleep(BEHAVIOR["archive_runs_delay"])
       items = list(reversed(RUNS)) if "order=desc" in self.path else list(RUNS)
       return self._reply(200, {"items": items, "next_cursor": None})
     if method == "GET" and self.path == f"/api/sessions/{PROBE_SESSION}/bootstrap":
@@ -538,7 +545,7 @@ def probe(tmp_path: pathlib.Path) -> Iterator[ProbeRun]:
 
 def _assert_stage_lines(proc: subprocess.CompletedProcess[str]) -> None:
   """Each probe stage logs one line that names its session and its run and gives the elapsed seconds."""
-  stage_lines = [line for line in proc.stdout.splitlines() if "switch: probe: " in line]
+  stage_lines = [line for line in proc.stdout.splitlines() if "switch: probe: " in line and " session=" in line]
   assert stage_lines, proc.stdout
   for line in stage_lines:
     assert re.search(r"probe: .* session=probe-session run=\S+ elapsed=\d+s$", line), line
@@ -606,6 +613,28 @@ def test_probe_archive_fails_naming_the_follow_up_run_that_does_not_settle(probe
   assert proc.returncode == 1, proc.stdout + proc.stderr
   assert calls.count(PROBE_ARCHIVE) == 1  # refused once; the stop timed out, so there is no second archive
   assert re.search(r"probe: run did not settle within 1s session=probe-session run=nudge-run elapsed=\d+s", proc.stdout)
+  _assert_stage_lines(proc)
+
+
+def test_probe_archive_does_not_cancel_an_empty_run_id(probe: ProbeRun) -> None:
+  """A refused message leaves no run to stop, but the probe still archives the empty session."""
+  proc, calls = probe(message_status=500)
+  assert proc.returncode == 1, proc.stdout + proc.stderr
+  assert calls[-1] == PROBE_ARCHIVE
+  assert not any(line.endswith("/cancel") for line in calls)
+  assert "probe: archived session=probe-session" in proc.stdout
+  _assert_stage_lines(proc)
+
+
+def test_probe_archive_bounds_a_slow_run_list_by_its_wait(probe: ProbeRun) -> None:
+  """A stalled archive request times out within PROBE_CANCEL_WAIT_S."""
+  start = time.monotonic()
+  proc, calls = probe(run_state="success", output="none", archive_runs_delay=2)
+  elapsed = time.monotonic() - start
+  assert proc.returncode == 1, proc.stdout + proc.stderr
+  assert elapsed < 1.8
+  assert any(line.startswith("GET /api/sessions/probe-session/runs?limit=500") for line in calls)
+  assert "probe: listing the runs answered 000" in proc.stdout
   _assert_stage_lines(proc)
 
 

@@ -821,4 +821,57 @@ mod tests {
     assert!(ends[0]["timestamp"].is_string());
     assert!(ends[0]["thinking_seconds"].as_i64().unwrap() >= 0);
   }
+
+  async fn append_task_closed(store: &Store, session_id: &str, timestamp: &str) {
+    store
+      .append_chat_event(
+        session_id,
+        json!({
+          "type": "task_closed",
+          "outcome": "completed",
+          "summary": "Delivered result",
+          "result_refs": [],
+          "timestamp": timestamp,
+        }),
+      )
+      .await
+      .unwrap();
+  }
+
+  fn delivery_timestamp(entry: &TranscriptEntry) -> String {
+    let messages = entry.projection.committed();
+    let deliveries = messages.iter().filter(|message| message["role"] == event_types::RUN_DELIVERY).collect::<Vec<_>>();
+    assert_eq!(deliveries.len(), 1);
+    deliveries[0]["timestamp"].as_str().unwrap().to_string()
+  }
+
+  #[tokio::test]
+  async fn delivery_card_timestamp_is_the_task_close_time() {
+    let (_home, features, session_id) = worker_context(&format!("close-time-{}", uuid::Uuid::new_v4())).await;
+    let store = features.store.as_ref();
+    register_run(store, run_record("run-work", &session_id, RunKind::Work, None)).await;
+    let work_ended = UtcDateTime::parse("2026-10-17T09:00:10Z").unwrap();
+    finish_run(store, &session_id, "run-work", RunOutcomeKind::Success, work_ended).await;
+    append_task_closed(store, &session_id, "2026-10-17T09:00:14Z").await;
+
+    let entry = load_worker_transcript(store, &session_id).unwrap();
+    assert_eq!(delivery_timestamp(&entry), "2026-10-17T09:00:14Z");
+
+    WORKER_MEMO.lock().expect("worker transcript memo mutex is not poisoned").clear();
+    let entry = load_worker_transcript(store, &session_id).unwrap();
+    assert_eq!(delivery_timestamp(&entry), "2026-10-17T09:00:14Z");
+
+    store
+      .append_chat_event(
+        &session_id,
+        json!({"type": "task_reopened", "reason": "test", "timestamp": "2026-10-17T09:01:00Z"}),
+      )
+      .await
+      .unwrap();
+    append_task_closed(store, &session_id, "2026-10-17T09:05:00Z").await;
+
+    WORKER_MEMO.lock().expect("worker transcript memo mutex is not poisoned").clear();
+    let entry = load_worker_transcript(store, &session_id).unwrap();
+    assert_eq!(delivery_timestamp(&entry), "2026-10-17T09:05:00Z");
+  }
 }

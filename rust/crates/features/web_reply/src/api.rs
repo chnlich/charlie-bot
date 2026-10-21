@@ -61,6 +61,34 @@ pub async fn post_status(State(features): State<Arc<FeatureContext>>, request: R
   answer(status::set_status(&features, &model.session_id, &model.text).await)
 }
 
+/// `POST /api/internal/web/status/unread`: returns the waiting items that have no matching cold-read event.
+pub async fn post_status_unread(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
+  let (parts, stream) = request.into_parts();
+  let body = match fastapi_body::read(&parts.headers, stream).await {
+    Ok(body) => body,
+    Err(response) => return *response,
+  };
+  let model = match SessionText::validate(&body) {
+    Ok(model) => model,
+    Err(response) => return *response,
+  };
+  answer(status::unread_waiting(&features, &model.session_id, &model.text).await)
+}
+
+/// `POST /api/internal/web/ask-check`: records a cold read of one Waiting on you item.
+pub async fn post_ask_check(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
+  let (parts, stream) = request.into_parts();
+  let body = match fastapi_body::read(&parts.headers, stream).await {
+    Ok(body) => body,
+    Err(response) => return *response,
+  };
+  let model = match AskCheck::validate(&body) {
+    Ok(model) => model,
+    Err(response) => return *response,
+  };
+  answer(status::record_ask_check(&features, &model.session_id, &model.item, &model.backend, &model.answer).await)
+}
+
 /// `GET /api/internal/web/status?session_id=`: the session's status and its waiting descendants.
 pub async fn get_status(
   State(features): State<Arc<FeatureContext>>,
@@ -103,6 +131,15 @@ const SESSION_TEXT_FIELDS: &[Field] =
   &[Field::required("session_id", FieldType::String), Field::required("text", FieldType::String)];
 const SESSION_TEXT_BODY: BodyModel = BodyModel::required(SESSION_TEXT_FIELDS).forbid_extra();
 
+/// The fields of `WebAskCheckRequest` in declaration order.
+const ASK_CHECK_FIELDS: &[Field] = &[
+  Field::required("session_id", FieldType::String),
+  Field::required("item", FieldType::Dictionary),
+  Field::required("backend", FieldType::String),
+  Field::required("answer", FieldType::String),
+];
+const ASK_CHECK_BODY: BodyModel = BodyModel::required(ASK_CHECK_FIELDS).forbid_extra();
+
 /// The validated `WebReplyRequest` or `WebStatusRequest`.
 struct SessionText {
   session_id: String,
@@ -116,6 +153,28 @@ impl SessionText {
       unreachable!("a required model validates a body to its fields")
     };
     Ok(Self { session_id: text_field(&mut fields, "session_id"), text: text_field(&mut fields, "text") })
+  }
+}
+
+/// The validated `WebAskCheckRequest`.
+struct AskCheck {
+  session_id: String,
+  item: Value,
+  backend: String,
+  answer: String,
+}
+
+impl AskCheck {
+  /// Validates the body against `ASK_CHECK_BODY`, which requires an object for `item` and forbids extra keys.
+  fn validate(body: &RequestBody) -> Result<Self, Box<Response>> {
+    let Some(Value::Object(mut fields)) = body.validate(&ASK_CHECK_BODY)? else {
+      unreachable!("a required model validates a body to its fields")
+    };
+    let session_id = text_field(&mut fields, "session_id");
+    let item = fields.remove("item").expect("a validated dictionary is present");
+    let backend = text_field(&mut fields, "backend");
+    let answer = text_field(&mut fields, "answer");
+    Ok(Self { session_id, item, backend, answer })
   }
 }
 

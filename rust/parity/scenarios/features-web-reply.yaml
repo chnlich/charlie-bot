@@ -1,6 +1,5 @@
-# The web reply routes: a web manager's reply is recorded and answers nothing when no turn is running; a reply to a worker,
-# an unknown session and blank text are refused; the dialog reads the For-you layer; the status is set, refused four ways,
-# and read with its waiting descendants: one open, one archived and one closed, of which only the open one is listed.
+# The web reply routes: replies and status changes are recorded; unread checks list items until an ask-check event names
+# them, then the status set accepts them; the status read lists waiting descendants and direct child Now values.
 # A body that fails validation answers 422 before the handler's session check, even for a missing session.
 stage: features
 name: features-web-reply
@@ -83,6 +82,133 @@ steps:
     path: /api/internal/web/status
     json: {session_id: "${sessions.web_reply}", text: "{\"goal\": null}"}
     expect_status: 200
+  - name: an unread query lists a waiting item before its cold read
+    method: POST
+    path: /api/internal/web/status/unread
+    json:
+      session_id: "${sessions.web_reply}"
+      text: '{"waiting": [{"text": "Pick the layout", "context": "The panel is ready. Options are grid or list; grid is recommended.", "link": null}]}'
+    expect_status: 200
+  - name: an unread query refuses an unknown session
+    method: POST
+    path: /api/internal/web/status/unread
+    json:
+      session_id: "${missing_session}"
+      text: '{"now": "Checking"}'
+    expect_status: 404
+  - name: an unread query refuses a thread session
+    method: POST
+    path: /api/internal/web/status/unread
+    json:
+      session_id: "${sessions.delta}"
+      text: '{"now": "Checking"}'
+    expect_status: 409
+  - name: an unread query refuses a worker session
+    method: POST
+    path: /api/internal/web/status/unread
+    json:
+      session_id: "${sessions.atlas_notes}"
+      text: '{"now": "Checking"}'
+    expect_status: 409
+  - name: an unread query refuses invalid status text
+    method: POST
+    path: /api/internal/web/status/unread
+    json:
+      session_id: "${sessions.web_reply}"
+      text: "not json"
+    expect_status: 422
+  - name: an unread query refuses a waiting item without context
+    method: POST
+    path: /api/internal/web/status/unread
+    json:
+      session_id: "${sessions.web_reply}"
+      text: '{"waiting": [{"text": "Pick the layout"}]}'
+    expect_status: 422
+  - name: an unread query refuses a wrong request field type
+    method: POST
+    path: /api/internal/web/status/unread
+    json: {session_id: "${sessions.web_reply}", text: 5}
+    expect_status: 422
+    compare: status_and_shape
+  - name: a status set refuses a waiting item without context
+    method: POST
+    path: /api/internal/web/status
+    json:
+      session_id: "${sessions.web_reply}"
+      text: '{"waiting": [{"text": "Pick the layout"}]}'
+    expect_status: 422
+  - name: a status set refuses a waiting item before its cold read
+    method: POST
+    path: /api/internal/web/status
+    json:
+      session_id: "${sessions.web_reply}"
+      text: '{"waiting": [{"text": "Pick the layout", "context": "The panel is ready. Options are grid or list; grid is recommended.", "link": null}]}'
+    expect_status: 409
+  - name: an ask-check records a cold read of one waiting item
+    method: POST
+    path: /api/internal/web/ask-check
+    json:
+      session_id: "${sessions.web_reply}"
+      item: {text: "Pick the layout", context: "The panel is ready. Options are grid or list; grid is recommended.", link: null}
+      backend: synthetic-haiku
+      answer: "(1) Grid fits the panel. (2) NOT STATED."
+    expect_status: 200
+  - name: an unread query omits the item after its cold read
+    method: POST
+    path: /api/internal/web/status/unread
+    json:
+      session_id: "${sessions.web_reply}"
+      text: '{"waiting": [{"text": "Pick the layout", "context": "The panel is ready. Options are grid or list; grid is recommended.", "link": null}]}'
+    expect_status: 200
+  - name: a status set stores a waiting item after its cold read
+    method: POST
+    path: /api/internal/web/status
+    json:
+      session_id: "${sessions.web_reply}"
+      text: '{"waiting": [{"text": "Pick the layout", "context": "The panel is ready. Options are grid or list; grid is recommended.", "link": null}]}'
+    expect_status: 200
+  - name: an ask-check refuses an unknown session
+    method: POST
+    path: /api/internal/web/ask-check
+    json:
+      session_id: "${missing_session}"
+      item: {text: "Decide"}
+      backend: synthetic-haiku
+      answer: "NOT STATED."
+    expect_status: 404
+  - name: an ask-check refuses a worker session
+    method: POST
+    path: /api/internal/web/ask-check
+    json:
+      session_id: "${sessions.atlas_notes}"
+      item: {text: "Decide"}
+      backend: synthetic-haiku
+      answer: "NOT STATED."
+    expect_status: 409
+  - name: an ask-check refuses a thread session
+    method: POST
+    path: /api/internal/web/ask-check
+    json:
+      session_id: "${sessions.delta}"
+      item: {text: "Decide"}
+      backend: synthetic-haiku
+      answer: "NOT STATED."
+    expect_status: 409
+  - name: an ask-check refuses an invalid waiting item
+    method: POST
+    path: /api/internal/web/ask-check
+    json:
+      session_id: "${sessions.web_reply}"
+      item: {text: " "}
+      backend: synthetic-haiku
+      answer: "NOT STATED."
+    expect_status: 422
+  - name: an ask-check refuses a wrong request field type
+    method: POST
+    path: /api/internal/web/ask-check
+    json: {session_id: "${sessions.web_reply}", item: 5, backend: synthetic-haiku, answer: "NOT STATED."}
+    expect_status: 422
+    compare: status_and_shape
   - name: a status file that is not JSON is refused with its detail
     method: POST
     path: /api/internal/web/status
@@ -173,4 +299,22 @@ steps:
     method: PUT
     path: /api/internal/web/status
     json: {session_id: "${sessions.web_reply}", text: "{\"now\": \"Wrong method.\"}"}
+    expect_status: 405
+  - name: HEAD on the status unread path
+    method: HEAD
+    path: /api/internal/web/status/unread
+    expect_status: 405
+  - name: PUT on the status unread path
+    method: PUT
+    path: /api/internal/web/status/unread
+    json: {session_id: "${sessions.web_reply}", text: '{"now":"Wrong method"}'}
+    expect_status: 405
+  - name: HEAD on the ask-check path
+    method: HEAD
+    path: /api/internal/web/ask-check
+    expect_status: 405
+  - name: PUT on the ask-check path
+    method: PUT
+    path: /api/internal/web/ask-check
+    json: {session_id: "${sessions.web_reply}", item: {text: Wrong method}, backend: synthetic-haiku, answer: "x"}
     expect_status: 405

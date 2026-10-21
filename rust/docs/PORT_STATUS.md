@@ -93,8 +93,8 @@ The order of the web reply audit's events is undefined. In the requested 20 Pyth
 | POST | `/api/internal/web/reply` | features/web_reply | ported |  |
 | GET | `/api/internal/web/dialog` | features/web_reply | ported |  |
 | POST | `/api/internal/web/status` | features/web_reply | ported |  |
-| POST | `/api/internal/web/status/unread` | features/web_reply | todo |  |
-| POST | `/api/internal/web/ask-check` | features/web_reply | todo |  |
+| POST | `/api/internal/web/status/unread` | features/web_reply | ported |  |
+| POST | `/api/internal/web/ask-check` | features/web_reply | ported |  |
 | GET | `/api/internal/web/status` | features/web_reply | ported |  |
 | GET | `/host-auth` | features/host_auth | ported | renders through the shared `Templating` handle |
 | GET | `/api/host-auth/status` | features/host_auth | ported |  |
@@ -319,17 +319,7 @@ counts and may pass in a run.
 | manager-turn-opencode | wait for the OpenCode manager run to finish | agent-orchestration | `d401d9a2a` | Python persists the completed OpenCode manager run directory; Rust leaves no matching run directory. |
 | handover-stop-request | hand over the durable interrupted outcome · python-to-candidate | agent-orchestration | `d401d9a2a` | The handover snapshot races the active run's finish recorder, leaving Rust's exit code null while Python had `-9`. The run-cancel route now waits for an active launch settlement. Intermittent: it failed in one of the five all-stage runs recorded for this task and passed in the rebased run. |
 | handover-stop-request | hand over the durable interrupted outcome · candidate-to-python | agent-orchestration | `d401d9a2a` | The mirror image of the sibling row: Python records a null exit code when its interrupted finish lands before its launcher observes the signal exit, while Rust records the settled process status (`-9`). Intermittent: it failed in three of the five all-stage runs recorded for this task, including the rebased run, with Python `null` against Rust `-9`. |
-| features-web-reply-audit | wait for the audit nudge | features | `854286c2a` | Python's web reply nudge includes the reason and full-reply instruction; Rust still sends the short prompt. |
-| features-web-reply-audit | server shutdown and fake-agent cleanup | features | `3cd98aa21`, `2fa0a4ce2`, `854286c2a` | The fake-agent spawn capture differs because the audit nudge still uses the short Rust prompt; see the failing wait row. |
-| features-web-reply | a status set of now alone | features | `854286c2a` | Python's status-set response adds `now_chars` and `now_over_budget`; Rust omits both. |
-| features-web-reply | a status set with a null goal | features | `854286c2a` | Python's status-set response adds `now_chars` and `now_over_budget`; Rust omits both. |
-| features-web-reply | the status read lists the open waiting descendant only | features | `854286c2a` | Python's status response includes open direct children with a Now item; Rust omits `children`. |
-| skeleton | page with a session, bearer key | server-skeleton | `ae5555da7`, `3663f760f` | Rust lacks the web_ask_check event from 3663f760f and still prints the older prompt-overlay warning; the route and quota_failover projections match. |
-| skeleton | page with a session, no key | server-skeleton | `ae5555da7`, `3663f760f` | Rust lacks the web_ask_check event from 3663f760f and still prints the older prompt-overlay warning; the route and quota_failover projections match. |
-| session-detail | bootstrap, manager root, starred, grouped | session-read-api | `ae5555da7`, `3663f760f` | Rust lacks the web_ask_check event from 3663f760f and still prints the older prompt-overlay warning; the route and quota_failover projections match. |
-| session-detail | events, newest page, manager root, starred, grouped | session-read-api | `ae5555da7`, `3663f760f` | Rust lacks the web_ask_check event from 3663f760f and still prints the older prompt-overlay warning; the route and quota_failover projections match. |
-| session-detail | bootstrap, fork of atlas | session-read-api | `ae5555da7`, `3663f760f` | Rust lacks the web_ask_check event from 3663f760f and still prints the older prompt-overlay warning; the route and quota_failover projections match. |
-| session-detail | events, newest page, fork of atlas | session-read-api | `ae5555da7`, `3663f760f` | Rust lacks the web_ask_check event from 3663f760f and still prints the older prompt-overlay warning; the route and quota_failover projections match. |
+| features-web-reply-audit | server shutdown and fake-agent cleanup | features | `3cd98aa21`, `2fa0a4ce2` | Claude launch argv and env lag Python's per-run-kind tools, settings, and advisor disablement. Intermittent: it failed in the earlier all-stage run and passed in the latest one. |
 
 ## Catch-up e44c9ccef ignored Cargo tests
 

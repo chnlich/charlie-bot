@@ -41,7 +41,8 @@ ACCESS_KEY = "switch-test-key"
 SESSION = "11111111-2222-3333-4444-555555555555"
 # The fake server's probe run: run_state is its state before a stop; output is none, message (a committed assistant
 # message) or tool (a tool call in the open draft); output_after_polls counts the bootstrap reads that see no output;
-# cancel is settles (a stop ends the run) or hangs (it does not).
+# cancel is settles (a stop ends the run) or hangs (it does not); followup is none or nudge, which starts a second run
+# in the probe session at the first archive, as the web reply audit does after a turn, and that archive answers 409.
 BEHAVIOR_DEFAULTS = {
     "check_config": "ok",
     "adopt": True,
@@ -49,6 +50,7 @@ BEHAVIOR_DEFAULTS = {
     "output": "message",
     "output_after_polls": 0,
     "cancel": "settles",
+    "followup": "none",
     "ignore_sigterm": False,
 }
 GIT_ENV = {
@@ -84,8 +86,10 @@ PORT = int(re.search(r"^\s*port:\s*(\d+)", CONFIG, re.MULTILINE).group(1))
 KEY = re.search(r"access_key:\s*(\S+)", (HOME / "credentials.yaml").read_text(encoding="utf-8")).group(1)
 PROBE_SESSION = "probe-session"
 TERMINAL = {"success", "failed", "interrupted", "stopped"}
-# The probe's run: its message starts it, and it reads as the behavior's state until a stop settles it.
-RUN = {"started": False, "state": BEHAVIOR["run_state"], "reads": 0}
+# The session's runs, oldest first. The probe's message starts the probe run in behavior.run_state; behavior.followup
+# "nudge" adds the follow-up run "nudge-run" at the first archive. READS counts the bootstrap reads.
+RUNS = []
+READS = {"bootstrap": 0}
 
 
 def log(event, **fields):
@@ -130,28 +134,34 @@ class Handler(http.server.BaseHTTPRequestHandler):
     if method == "POST" and self.path == "/api/sessions/":
       return self._reply(200, {"id": PROBE_SESSION})
     if method == "POST" and re.fullmatch(r"/api/chat/[^/]+/message", self.path):
-      RUN["started"] = True
+      RUNS.append({"id": "probe-run", "state": BEHAVIOR["run_state"]})
       return self._reply(202, {"input_event_id": "probe-input"})
     if method == "GET" and re.fullmatch(r"/api/sessions/[^/]+/runs\?.*", self.path):
-      items = [{"id": "probe-run", "state": RUN["state"]}] if RUN["started"] else []
+      items = list(reversed(RUNS)) if "order=desc" in self.path else list(RUNS)
       return self._reply(200, {"items": items, "next_cursor": None})
     if method == "GET" and self.path == f"/api/sessions/{PROBE_SESSION}/bootstrap":
       return self._reply(200, self._bootstrap())
-    if method == "POST" and self.path == f"/api/sessions/{PROBE_SESSION}/runs/probe-run/cancel":
-      if BEHAVIOR["cancel"] == "settles" and RUN["state"] not in TERMINAL:
-        RUN["state"] = "interrupted"
-      return self._reply(200, {"run_id": "probe-run", "stop_requested": True, "outcome": None})
+    stop = re.fullmatch(rf"/api/sessions/{PROBE_SESSION}/runs/([^/]+)/cancel", self.path)
+    if method == "POST" and stop:
+      run = next((run for run in RUNS if run["id"] == stop[1]), None)
+      if run is None:
+        return self._reply(404, {"detail": "run not found"})
+      if BEHAVIOR["cancel"] == "settles" and run["state"] not in TERMINAL:
+        run["state"] = "interrupted"
+      return self._reply(200, {"run_id": run["id"], "stop_requested": True, "outcome": None})
     if method == "DELETE" and self.path == f"/api/sessions/{PROBE_SESSION}":
-      if RUN["started"] and RUN["state"] not in TERMINAL:
-        return self._reply(409, {"detail": "run probe-run is unfinished"})
+      if BEHAVIOR["followup"] == "nudge" and not any(run["id"] == "nudge-run" for run in RUNS):
+        RUNS.append({"id": "nudge-run", "state": "running"})
+      if any(run["state"] not in TERMINAL for run in RUNS):
+        return self._reply(409, {"detail": "a run of the session is unfinished"})
       return self._reply(200, {"archived": [PROBE_SESSION]})
     return self._reply(404, {"detail": "not found"})
 
   def _bootstrap(self):
-    RUN["reads"] += 1
+    READS["bootstrap"] += 1
     messages = [{"role": "user", "content": "Reply with the single word HELLO.", "id": "probe-user"}]
     draft = None
-    if RUN["reads"] > BEHAVIOR["output_after_polls"]:
+    if READS["bootstrap"] > BEHAVIOR["output_after_polls"]:
       if BEHAVIOR["output"] == "message":
         messages.append({"role": "assistant", "content": "HELLO", "id": "probe-reply"})
       elif BEHAVIOR["output"] == "tool":
@@ -572,6 +582,30 @@ def test_probe_fails_when_the_stop_does_not_settle_within_its_wait(probe: ProbeR
   proc, calls = probe(run_state="running", output="tool", cancel="hangs")
   assert proc.returncode == 1, proc.stdout + proc.stderr
   assert PROBE_CANCEL in calls
+  _assert_stage_lines(proc)
+
+
+NUDGE_CANCEL = "POST /api/sessions/probe-session/runs/nudge-run/cancel"
+
+
+def test_probe_archive_stops_the_follow_up_run_that_refuses_the_archive(probe: ProbeRun) -> None:
+  """The probe run ends success, then the server starts a follow-up run; the archive's 409 sends the probe to stop it."""
+  proc, calls = probe(run_state="success", output="none", followup="nudge", cancel="settles")
+  assert proc.returncode == 0, proc.stdout + proc.stderr
+  assert calls.count(PROBE_ARCHIVE) == 2  # the first archive answers 409
+  assert calls.index(NUDGE_CANCEL) > calls.index(PROBE_ARCHIVE)
+  assert calls[-1] == PROBE_ARCHIVE
+  assert "probe: archive answered 409" in proc.stdout
+  assert re.search(r"probe: stop requested session=probe-session run=nudge-run elapsed=\d+s", proc.stdout)
+  _assert_stage_lines(proc)
+
+
+def test_probe_archive_fails_naming_the_follow_up_run_that_does_not_settle(probe: ProbeRun) -> None:
+  """A follow-up run that the stop cannot end holds the archive: the probe fails and logs the run it waited for."""
+  proc, calls = probe(run_state="success", output="none", followup="nudge", cancel="hangs")
+  assert proc.returncode == 1, proc.stdout + proc.stderr
+  assert calls.count(PROBE_ARCHIVE) == 1  # refused once; the stop timed out, so there is no second archive
+  assert re.search(r"probe: run did not settle within 1s session=probe-session run=nudge-run elapsed=\d+s", proc.stdout)
   _assert_stage_lines(proc)
 
 

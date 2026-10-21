@@ -1,6 +1,7 @@
 //! Fixtures for the web reply tests: a store-backed feature context over a temporary home, with this package's
 //! registrations and the origin slots a thread session carries, and the route calls the tests make.
 
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use axum::Router;
@@ -83,6 +84,11 @@ impl Home {
     startup.insert(inputs).expect("the stub inserts once");
     let features = Arc::new(FeatureContext { config, credentials, store, registry, startup: Arc::new(startup) });
     Self { _dir: dir, features, running }
+  }
+
+  /// The temporary home the store writes under: the CharlieBot home, which the config names.
+  pub fn root(&self) -> PathBuf {
+    self._dir.path().to_path_buf()
   }
 
   /// Names the input events the running turn answers, for every session.

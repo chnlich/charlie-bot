@@ -519,6 +519,7 @@ mod tests {
   use std::path::PathBuf;
   use std::time::Duration;
 
+  use axum::http::Method;
   use charliebot_store::Subscription;
   use serde_json::json;
 
@@ -922,15 +923,111 @@ mod tests {
   }
 
   #[test]
-  fn an_item_digest_fails_when_a_host_file_is_missing() {
+  fn an_item_digest_adds_no_bytes_for_a_missing_file_or_a_directory() {
     let directory = tempfile::tempdir().expect("the digest directory exists");
-    let item = parse_item(&json!({
+    let page_directory = directory.path().join("page-directory");
+    fs::create_dir(&page_directory).expect("the linked directory is created");
+    let missing = parse_item(&json!({
       "text": "Pick a layout",
       "link": file_link(&directory.path().join("missing.html")),
     }))
     .expect("the waiting item validates");
+    let linked_directory = parse_item(&json!({"text": "Pick a layout", "link": file_link(&page_directory)}))
+      .expect("the waiting item validates");
 
-    assert!(item_sha256(&item).is_err());
+    let digests = [item_sha256(&missing), item_sha256(&linked_directory)];
+
+    assert!(digests.iter().all(Result::is_ok), "a missing file and a directory add no bytes: {digests:?}");
+    for digest in digests {
+      assert_eq!(digest.expect("checked above").len(), 64);
+    }
+  }
+
+  #[tokio::test]
+  async fn a_waiting_link_to_a_directory_can_be_cold_read_and_stored() {
+    let home = Home::new();
+    let sid = home.manager("session", None).await;
+    let directory = home.root().join("linked-directory");
+    fs::create_dir(&directory).unwrap();
+    let item = json!({
+      "text": "Review the directory",
+      "context": "The directory lists the generated pages. Options are browse or wait; browse is recommended.",
+      "link": format!("{}{}", file_urls::FILE_SERVER_MOUNT, directory.display()),
+    });
+    let (status, _) = home
+      .send(
+        Method::POST,
+        "/api/internal/web/ask-check",
+        Some(json!({
+          "session_id": sid,
+          "item": item.clone(),
+          "backend": "synthetic-haiku",
+          "answer": "(1) Browse. (2) Wait.",
+        })),
+      )
+      .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let text = json!({"waiting": [item.clone()]}).to_string();
+    let (status, response) =
+      home.send(Method::POST, "/api/internal/web/status", Some(json!({"session_id": sid, "text": text}))).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(response["waiting"], json!([item.clone()]));
+    assert_eq!(stored(&home, &sid).await["waiting"], json!([item]));
+  }
+
+  #[tokio::test]
+  async fn dead_links_in_every_status_field_refuse_before_any_cold_read_or_write() {
+    for (endpoint, uri) in [("set", "/api/internal/web/status"), ("unread", "/api/internal/web/status/unread")] {
+      for field in ["goal", "now", "waiting_text", "waiting_context", "waiting_link"] {
+        let home = Home::new();
+        let sid = home.manager("session", None).await;
+        let port = home.features.config.get().expect("the config loads").server.port;
+        let session_dir = home.features.store.session_dir(&sid);
+        let missing = home.root().join("missing-status-page.html");
+        let canonical = format!("http://localhost:{port}{}{}", file_urls::FILE_SERVER_MOUNT, missing.display());
+        let local_target = "artifacts/missing-status-page.html";
+        let local_link = format!("[the page]({local_target})");
+        let local_correct = format!("{}{}", file_urls::FILE_SERVER_MOUNT, session_dir.join(local_target).display());
+        let local_detail = format!(
+          "Dead file links; nothing was recorded.\n- {local_target}: a local path opens nothing on the web page. \
+           Correct link: {local_correct}"
+        );
+        let canonical_detail =
+          format!("Dead file links; nothing was recorded.\n- {canonical}: no file exists at {}.", missing.display());
+        let mut item = json!({
+          "text": "Decide",
+          "context": "The choice is ready. Options are keep or change; keep is recommended.",
+          "link": null,
+        });
+        let (patch, detail) = match field {
+          "goal" => (json!({"goal": format!("Review {local_link}")}), local_detail),
+          "now" => (json!({"now": format!("Review {local_link}")}), local_detail),
+          "waiting_text" => {
+            item["text"] = json!(format!("Review {local_link}"));
+            (json!({"waiting": [item]}), local_detail)
+          }
+          "waiting_context" => {
+            item["context"] = json!(format!("Review {local_link}"));
+            (json!({"waiting": [item]}), local_detail)
+          }
+          _ => {
+            item["link"] = json!(canonical);
+            (json!({"waiting": [item]}), canonical_detail)
+          }
+        };
+        let events_before = home.events(&sid).len();
+
+        let (status, response) =
+          home.send(Method::POST, uri, Some(json!({"session_id": sid, "text": patch.to_string()}))).await;
+
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{endpoint} {field}");
+        assert_eq!(response["detail"], json!(detail), "{endpoint} {field}");
+        assert_eq!(stored(&home, &sid).await, Value::Null, "{endpoint} {field}");
+        assert_eq!(home.events(&sid).len(), events_before, "{endpoint} {field}");
+      }
+    }
   }
 
   #[tokio::test]

@@ -490,7 +490,7 @@ fn no_file_server_links_refuses_the_first_link_and_names_the_publish_command() {
   let link = "http://localhost:18498/absolute_filepath/home/u/caf%C3%A9/page.html";
   let later = "https://charliebot.example/absolute_filepath/home/u/other.html";
 
-  let error = assert_no_file_server_links(&format!("see {link} or {later}")).unwrap_err();
+  let error = assert_no_file_server_links(&format!("see {link} or {later}"), None).unwrap_err();
 
   assert_eq!(error.status, StatusCode::UNPROCESSABLE_ENTITY);
   // The first link is named with its query and fragment as written, and the command carries the path the link names,
@@ -504,12 +504,33 @@ fn no_file_server_links_refuses_the_first_link_and_names_the_publish_command() {
 fn no_file_server_links_refuses_a_portless_link_the_same_way() {
   let link = "https://charliebot.example/absolute_filepath/home/u/page.html";
 
-  let error = assert_no_file_server_links(&format!("see {link}")).unwrap_err();
+  let error = assert_no_file_server_links(&format!("see {link}"), None).unwrap_err();
 
   assert_eq!(error.status, StatusCode::UNPROCESSABLE_ENTITY);
   let detail = error.to_string();
   assert!(detail.contains(link), "{detail}");
   assert!(detail.contains("charliebot publish /home/u/page.html"), "{detail}");
+}
+
+#[test]
+fn no_file_server_links_refuses_retired_and_local_paths_with_publish_instruction() {
+  let root = tempfile::tempdir().unwrap();
+  let context = file_urls::ScanContext {
+    server_port: 18498,
+    charliebot_home: root.path().join("charliebot-home"),
+    session_dir: root.path().join("sessions").join("synthetic"),
+    user_home: root.path().join("user-home"),
+  };
+  let retired = "https://charliebot.example:18498/files/sessions/synthetic/page.html";
+  for (text, named) in [(retired, retired), ("[plan](artifacts/plan.html)", "artifacts/plan.html")] {
+    let error = assert_no_file_server_links(text, Some(&context)).expect_err("a dead file link is refused");
+
+    assert_eq!(error.status, StatusCode::UNPROCESSABLE_ENTITY, "{text}");
+    let detail = error.to_string();
+    assert!(detail.contains(named), "{detail}");
+    assert!(detail.contains("Publish the page with `charliebot publish "), "{detail}");
+    assert!(detail.contains("write the URL the command prints into the reply"), "{detail}");
+  }
 }
 
 #[test]
@@ -519,7 +540,7 @@ fn no_file_server_links_passes_a_published_url_and_names_route_links() {
   let route_url = format!("http://127.0.0.1:{port}/diff");
   let text = format!("open {published} and {route_url}");
 
-  assert!(assert_no_file_server_links(&text).is_ok());
+  assert!(assert_no_file_server_links(&text, None).is_ok());
 
   let routes = application_route_links(&text, port);
   assert_eq!(routes, std::slice::from_ref(&route_url));

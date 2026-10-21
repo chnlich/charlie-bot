@@ -3,7 +3,7 @@
 # A body that fails validation answers 422 before the handler's session check, even for a missing session.
 stage: features
 name: features-web-reply
-fixture_extras: [web_reply_cases]
+fixture_extras: [web_reply_cases, sample_files]
 steps:
   - name: a reply to a web session with no running turn
     method: POST
@@ -339,3 +339,18 @@ steps:
     path: /api/internal/web/ask-check
     json: {session_id: "${sessions.web_reply}", item: {text: Wrong method}, backend: synthetic-haiku, answer: "x"}
     expect_status: 405
+  - name: a reply that links a dead local file is refused and records nothing
+    method: POST
+    path: /api/internal/web/reply
+    json: {session_id: "${sessions.web_reply}", text: "See [the plan](artifacts/missing-plan.html)."}
+    expect_status: 422
+  - name: a status set that links a dead file is refused and stores nothing
+    method: POST
+    path: /api/internal/web/status
+    json: {session_id: "${sessions.web_reply}", text: "{\"now\": \"Review http://localhost/absolute_filepath/synthetic-missing/page.html\"}"}
+    expect_status: 422
+  - name: a reply that links a live file records
+    method: POST
+    path: /api/internal/web/reply
+    json: {session_id: "${sessions.web_reply}", text: "The page is at http://localhost/absolute_filepath${tree.root}/${extras.sample_files.file}."}
+    expect_status: 200

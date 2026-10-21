@@ -2319,7 +2319,7 @@ async fn breaking_each_skip_condition_alone_keeps_the_worker_in_full_recovery() 
 
 #[tokio::test]
 async fn dangling_worktree_symlink_keeps_a_closed_worker_in_full_recovery() -> anyhow::Result<()> {
-  // Python: tests/test_boot_recovery_skip.py:144.
+  // No Python test case: os.path.lexists in src/runtime/task_recovery.py:119 (23de57ca8).
   use std::os::unix::fs::symlink;
 
   let stack = Stack::start("exit 0").await?;
@@ -2374,7 +2374,7 @@ async fn end_landing_retry_runs_the_full_node_pass_after_boot_skip() -> anyhow::
 
 #[tokio::test]
 async fn rust_reads_python_isoformat_marker_with_and_without_microseconds() -> anyhow::Result<()> {
-  // Python: tests/test_boot_recovery_skip.py:95.
+  // No Python test case: the marker text that src/runtime/task_recovery.py:58-74 reads and writes.
   for timestamp in ["2026-01-02T03:04:05+00:00", "2026-01-02T03:04:05.123456+00:00"] {
     let stack = Stack::start("exit 0").await?;
     std::fs::create_dir_all(stack.cfg.sessions_dir())?;
@@ -2388,7 +2388,7 @@ async fn rust_reads_python_isoformat_marker_with_and_without_microseconds() -> a
 
 #[tokio::test]
 async fn python_fromisoformat_reads_the_rust_written_marker_instant() -> anyhow::Result<()> {
-  // Python: tests/test_boot_recovery_skip.py:95.
+  // No Python test case: the marker text that src/runtime/task_recovery.py:58-74 reads and writes.
   let stack = Stack::start("exit 0").await?;
   std::fs::create_dir_all(stack.cfg.sessions_dir())?;
   recovery::reconcile_task_tree(&stack.features, &stack.adapter).await?;
@@ -2401,7 +2401,7 @@ async fn python_fromisoformat_reads_the_rust_written_marker_instant() -> anyhow:
 
 #[tokio::test]
 async fn recovery_done_logs_one_line_with_marker_and_skip_counters() -> anyhow::Result<()> {
-  // Python: tests/test_boot_recovery_skip.py:95.
+  // No Python test case: one done line per pass (src/runtime/task_recovery.py:189-190, server.py:214-223).
   let log = LogCapture::default();
   let _subscriber = log.install();
   let stack = Stack::start("exit 0").await?;
@@ -2428,7 +2428,7 @@ async fn recovery_done_logs_one_line_with_marker_and_skip_counters() -> anyhow::
 
 #[tokio::test]
 async fn skipped_worker_warms_the_display_backend_without_a_full_check() -> anyhow::Result<()> {
-  // Python: tests/test_boot_recovery_skip.py:95.
+  // No Python test case: the display warm-up of src/runtime/task_recovery.py:166-168.
   let stack = Stack::start("exit 0").await?;
   let worker = add_recovery_worker(
     &stack,

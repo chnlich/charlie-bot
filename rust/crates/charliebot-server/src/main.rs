@@ -356,9 +356,27 @@ mod tests {
     let events = events.lock().unwrap();
     assert_eq!(events.len(), 1);
     let names: Vec<&str> = events[0].iter().map(|(name, _)| name.as_str()).collect();
-    assert_eq!(names, ["message", "shutdown_ms", "http_client_ms", "ws_close_ms"]);
     assert_eq!(events[0][0].1, "charliebot_shutdown");
-    assert_eq!(events[0][2].1, "3");
-    assert_eq!(events[0][3].1, "5");
+    for name in [
+      "shutdown_ms",
+      "discord_ms",
+      "ext_usage_ms",
+      "host_auth_ms",
+      "merge_pool_ms",
+      "scheduler_ms",
+      "slack_ms",
+      "speech_ms",
+      "usage_tally_ms",
+      "http_client_ms",
+      "ws_close_ms",
+    ] {
+      let value = events[0]
+        .iter()
+        .find_map(|(field, value)| (field == name).then_some(value))
+        .unwrap_or_else(|| panic!("the shutdown line has no {name} field; fields: {names:?}"));
+      assert!(value.parse::<u64>().is_ok(), "{name}={value} is not a non-negative integer");
+    }
+    assert_eq!(events[0].iter().find(|(name, _)| name == "http_client_ms").unwrap().1, "3");
+    assert_eq!(events[0].iter().find(|(name, _)| name == "ws_close_ms").unwrap().1, "5");
   }
 }

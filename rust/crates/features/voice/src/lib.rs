@@ -13,6 +13,9 @@ mod transcriber;
 mod transcription;
 mod wav;
 
+#[cfg(test)]
+pub(crate) static HELPER_LIFECYCLE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 use std::sync::Arc;
 
 use charliebot_registry::turn::TurnContribution;

@@ -389,8 +389,6 @@ impl Service for SpeechService {
 mod tests {
   use std::io::Cursor;
   use std::net::TcpListener;
-  use std::sync::Arc;
-  use std::sync::atomic::{AtomicBool, Ordering};
   use std::thread;
 
   use bzip2::write::BzEncoder;
@@ -400,18 +398,20 @@ mod tests {
   use super::*;
 
   #[tokio::test]
-  async fn service_stop_waits_for_the_worker_monitor_before_stopping_the_bundle() {
+  async fn service_stop_returns_while_the_worker_monitor_is_blocked() {
+    let _guard = crate::HELPER_LIFECYCLE_TEST_LOCK.lock().expect("the helper lifecycle test lock is never poisoned");
     let service = SpeechService::default();
-    let worker_finished = Arc::new(AtomicBool::new(false));
-    let signal = Arc::clone(&worker_finished);
+    let (started, blocked) = tokio::sync::oneshot::channel();
     *service.task.lock().expect("speech service task lock is never poisoned") = Some(tokio::spawn(async move {
-      tokio::time::sleep(Duration::from_millis(10)).await;
-      signal.store(true, Ordering::SeqCst);
+      started.send(()).expect("the test is waiting for the worker monitor");
+      std::future::pending::<()>().await;
     }));
+    blocked.await.expect("the worker monitor is blocked");
 
-    service.stop().await.expect("the service stops");
+    let result = tokio::time::timeout(Duration::from_secs(1), service.stop()).await;
+    transcriber::reset_after_stop_test();
 
-    assert!(worker_finished.load(Ordering::SeqCst));
+    assert!(matches!(result, Ok(Ok(()))), "speech stop did not return within 1 s: {result:?}");
   }
 
   fn test_paths(root: &Path) -> VoiceModelPaths {

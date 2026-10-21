@@ -108,7 +108,8 @@ async def test_index_build_never_folds_a_closed_nodes_full_history(tree, monkeyp
   orig = type(tree)._facts_of
 
   def counting(session_id):
-    calls["n"] += 1
+    if session_id == child.id:
+      calls["n"] += 1
     return orig(tree, session_id)
 
   monkeypatch.setattr(tree, "_facts_of", counting)

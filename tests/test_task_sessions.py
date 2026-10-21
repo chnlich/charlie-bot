@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import datetime
+import json
 import pathlib
 
 import conftest
 import pytest
 
 from src.features.slack import metadata
+from src.infra import event_types as ET
 from src.infra import metadata_slots, models
-from src.runtime import run_token, task_errors, task_sessions
+from src.runtime import control_events, run_token, task_errors, task_sessions
 
 
 async def build_three_levels(mgr: task_sessions.TaskTreeManager) -> dict[str, str]:
@@ -191,3 +193,77 @@ async def test_scheduled_fire_bookkeeping_keeps_the_sidebar_sort_key(tmp_path: p
         r for r in await session_blocks.listing.list_sessions(status=models.SessionStatus.ACTIVE) if r.id == node.id)
     for name, value in landed.items():
       assert getattr(row, name) == value
+
+
+# ---------------------------------------------------------------------------
+# History-tail task state
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "facts,archived", [
+        (["clone_start"], 0),
+        (["clone_start", "task_closed"], 0),
+        (["clone_start", "task_closed", "task_reopened"], 0),
+        (["clone_start", "task_reopened", "task_closed"], 0),
+        (["clone_start", "task_imported", "task_closed"], 0),
+        (["clone_start", "task_closed"], 1),
+        (["clone_start", "task_reopened"], 1),
+    ])
+async def test_task_state_fast_matches_the_full_fold(tmp_path: pathlib.Path, facts: list[str], archived: int) -> None:
+  """Every lifecycle combination gives the tail read the full fold's verdict."""
+  cfg, _blocks, tree = conftest.build_env(tmp_path)
+  node = await conftest.create_task(tree, parent=None, request_id="root", name="Root")
+
+  events = []
+  for i, fact in enumerate(facts):
+    kind = {
+        "clone_start": ET.CLONE_START,
+        "task_closed": ET.TASK_CLOSED,
+        "task_reopened": ET.TASK_REOPENED,
+        "task_imported": ET.TASK_IMPORTED,
+    }[fact]
+    extra = {"outcome": "completed"} if fact == "task_closed" else {}
+    events.append(
+        control_events.build_control_event(
+            kind, actor="operator", source_session_id=node.id, request_id=f"r{i}", **extra))
+  # The first `archived` facts move into an archived segment file.
+  live, older = events[archived:], events[:archived]
+  archives = cfg.sessions_dir / node.id / "data" / "archives"
+  archives.mkdir(parents=True, exist_ok=True)
+  with (archives / "chat_events.2026-W01.jsonl").open("wb") as f:
+    for event in older:
+      f.write(json.dumps(event).encode() + b"\n")
+  for event in live:
+    await tree.events.append(node.id, event)
+  if older:
+    meta = await tree.load_meta(node.id)
+    meta.archive_offset = len(older)
+    await tree.session_store.save_metadata(meta)
+    tree = conftest.build_task_tree(cfg, _blocks)  # a fresh block: cold caches read the archive
+
+  assert tree.task_state_fast(node.id) == tree.task_state(node.id)
+
+
+@pytest.mark.asyncio
+async def test_task_state_tail_without_lifecycle_fact_falls_back_to_full_fold(tmp_path: pathlib.Path) -> None:
+  """A tail of non-lifecycle events reads past the tail into the full fold."""
+  cfg, _blocks, tree = conftest.build_env(tmp_path)
+  node = await conftest.create_task(tree, parent=None, request_id="root", name="Root")
+  lines = [
+      control_events.build_control_event(
+          ET.TASK_CLOSED, actor="operator", source_session_id=node.id, request_id="c", outcome="completed")
+  ]
+  lines += [
+      control_events.build_control_event(ET.AGENT_MESSAGE, actor="operator", source_session_id=node.id, text="x")
+      for _ in range(1001)
+  ]
+  events_path = cfg.sessions_dir / node.id / "data" / "chat_events.jsonl"
+  events_path.parent.mkdir(parents=True, exist_ok=True)
+  with events_path.open("ab") as f:
+    for line in lines:
+      f.write(json.dumps(line).encode() + b"\n")
+
+  assert tree.task_state(node.id) == "completed"
+  assert tree.task_state_fast(node.id) == "completed"

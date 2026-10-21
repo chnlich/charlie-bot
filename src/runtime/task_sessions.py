@@ -299,7 +299,7 @@ def derive_task_tree_activity(
     if outcomes.get(run.id) is not None:
       continue  # a terminal fact of any outcome is a settled Run, not activity
     if run.pid is None:
-      if runs.stop_requested(events, run.id):
+      if runs.stop_requested_in_events(events, run.id):
         continue  # a stopped queued run is resolved-by-request, not waiting work
       if not task_open:
         continue  # a closed task's queued run never launches, so it is not waiting work
@@ -773,6 +773,10 @@ class TaskTreeManager:
   def task_state(self, session_id: str) -> str:
     """The task's derived lifecycle state."""
     return self._facts_of(session_id).task_state
+
+  def task_state_fast(self, session_id: str) -> str:
+    """The task's lifecycle state from the history tail (see _task_state_fast)."""
+    return self._task_state_fast(session_id)
 
   def work_state_of(self, session_id: str) -> models.WorkState:
     """idle | running | waiting, from CURRENT unresolved facts.

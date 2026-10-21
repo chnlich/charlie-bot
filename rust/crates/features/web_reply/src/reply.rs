@@ -5,11 +5,14 @@
 //! The web session test is chat_threads' `thread_sessions.is_thread_session`, restated over the same fields: this
 //! package does not depend on chat_threads.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Context;
 use axum::http::StatusCode;
+use charliebot_compat::file_urls;
 use charliebot_core::event_types::{AGENT_MESSAGE, INPUT_EVENT_ID, USER, WEB_REPLY, WEB_REPLY_NOTICE};
+use charliebot_core::paths;
 use charliebot_core::pystr;
 use charliebot_registry::{FeatureContext, RunningTurnInputs, StateError};
 use charliebot_store::metadata::{SessionMetadata, TaskProfile};
@@ -286,6 +289,39 @@ fn newest_user_text(events: &[Value]) -> Option<&str> {
   })
 }
 
+/// The paths that resolve the file links of a web message in `session_id`: this server's port, the CharlieBot home, the
+/// session directory and the user's home (`web_reply.api._file_link_scan_context`).
+pub fn file_link_scan_context(
+  features: &FeatureContext,
+  session_id: &str,
+) -> Result<file_urls::ScanContext, WebReplyError> {
+  let config = features.config.get().map_err(|error| WebReplyError::Failed(error.into()))?;
+  Ok(file_urls::ScanContext {
+    server_port: config.server.port,
+    charliebot_home: config.charliebot_home.clone(),
+    session_dir: features.store.session_dir(session_id),
+    user_home: PathBuf::from(paths::expanduser("~")),
+  })
+}
+
+/// Refuses with 422 when a text in `texts` links a dead file. The detail is `dead_links_detail` over the dead links in
+/// scan order, so nothing is recorded or stored when any text names one.
+pub fn refuse_dead_links<'a>(
+  texts: impl IntoIterator<Item = &'a str>,
+  scan_context: &file_urls::ScanContext,
+) -> Result<(), WebReplyError> {
+  let mut dead = Vec::new();
+  for text in texts {
+    let findings =
+      file_urls::scan_file_links(text, Some(scan_context)).map_err(|error| WebReplyError::Failed(error.into()))?;
+    dead.extend(findings.into_iter().filter(file_urls::FileLink::dead));
+  }
+  if dead.is_empty() {
+    return Ok(());
+  }
+  Err(WebReplyError::refused(StatusCode::UNPROCESSABLE_ENTITY, file_urls::dead_links_detail(&dead)))
+}
+
 /// Record `text` as the session's web reply and return the readback the CLI prints (`reply.post_web_reply`).
 ///
 /// The text is recorded exactly as written. It answers the newest user message or nudge of the running turn, and
@@ -302,6 +338,7 @@ pub async fn post_web_reply(
   if pystr::strip(text).is_empty() {
     return Err(WebReplyError::refused(StatusCode::UNPROCESSABLE_ENTITY, "Reply text is empty"));
   }
+  refuse_dead_links([text], &file_link_scan_context(features, session_id)?)?;
   if keep_language.is_some_and(|reason| pystr::strip(reason).is_empty()) {
     return Err(WebReplyError::refused(StatusCode::UNPROCESSABLE_ENTITY, "Keep-language reason is empty"));
   }

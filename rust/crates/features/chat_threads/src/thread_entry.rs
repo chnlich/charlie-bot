@@ -29,6 +29,7 @@
 use std::collections::HashSet;
 use std::fmt::Display;
 use std::future::Future;
+use std::path::PathBuf;
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
@@ -39,8 +40,8 @@ use charliebot_compat::file_urls;
 use charliebot_core::RepoRoot;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types;
+use charliebot_core::paths;
 use charliebot_core::pystr;
-use charliebot_files::MOUNT;
 use charliebot_registry::turn::{PromptSource, RuleSegment};
 use charliebot_registry::{FeatureContext, RunningTurnInputs, StateError};
 use charliebot_sched::triggers::{PendingTrigger, TriggerCreateError, TriggerManager, TriggerStatus};
@@ -53,7 +54,6 @@ use charliebot_tasks::master_queue;
 use charliebot_tasks::master_trigger::{self, TriggerMasterRequest};
 use chrono_tz::Tz;
 use futures_util::future::BoxFuture;
-use percent_encoding::percent_decode_str;
 use regex::Regex;
 use serde_json::{Map, Value, json};
 use tokio::task::JoinHandle;
@@ -91,13 +91,6 @@ const NO_REPLY_NOTICE: &str = "No reply was posted for this mention; the details
   Mention me again for a thread answer.";
 /// The follow-trigger floor the label carries (`_FOLLOW_FLOOR_RE`).
 static FOLLOW_FLOOR_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"floor=([0-9.]+)").expect("valid pattern"));
-/// Any URL reply text can carry: scheme, authority, optional port, path, query string, fragment (`_URL_RE`).
-static URL_RE: LazyLock<Regex> = LazyLock::new(|| {
-  Regex::new(
-    r"[a-zA-Z][a-zA-Z0-9+.\-]*://(?:\[[^\]\s]+\]|[^/\s:()]+)(?::(?P<port>\d+))?(?P<path>/[^\s?#()]*)?(?:\?[^\s#]*)?(?:#[^\s]*)?",
-  )
-  .expect("valid pattern")
-});
 
 /// One platform's facts the shared helpers and the entries agree on (`ThreadPlatform`). `name` is the summon
 /// event-block key and the prefix of every persisted marker. `id_key` orders the platform's message ids.
@@ -637,8 +630,14 @@ pub async fn post_reply(
   if pystr::strip(text).is_empty() {
     return Err(ThreadReplyError::refused(StatusCode::UNPROCESSABLE_ENTITY, "Reply text is empty"));
   }
-  assert_no_file_server_links(text, None)?;
   let config = features.config.get().map_err(ThreadReplyError::failure)?;
+  let scan_context = file_urls::ScanContext {
+    server_port: config.server.port,
+    charliebot_home: config.charliebot_home.clone(),
+    session_dir: features.store.session_dir(session_id),
+    user_home: PathBuf::from(paths::expanduser("~")),
+  };
+  assert_no_file_server_links(text, Some(&scan_context))?;
   let operator_only_links = application_route_links(text, config.server.port);
 
   let chat_events = load_chat_events(features, session_id).await?;
@@ -1353,58 +1352,29 @@ pub async fn backfill_followed_threads(
   Ok(armed)
 }
 
-/// The filesystem path a file-server URL path names, percent-decoded; None when it names none
-/// (`_file_server_named_path`).
-fn file_server_named_path(url_path: &str) -> Option<String> {
-  let marker = format!("{MOUNT}/");
-  let at = url_path.find(&marker)?;
-  let decoded = percent_decode_str(&url_path[at + marker.len()..]).decode_utf8_lossy();
-  Some(format!("/{decoded}"))
-}
-
-/// The decimal digit zero code points in CPython 3.14.7's Unicode 16.0.0 data.
-const DECIMAL_DIGIT_ZEROES: &[u32] = &[
-  0x30, 0x660, 0x6F0, 0x7C0, 0x966, 0x9E6, 0xA66, 0xAE6, 0xB66, 0xBE6, 0xC66, 0xCE6, 0xD66, 0xDE6, 0xE50, 0xED0, 0xF20,
-  0x1040, 0x1090, 0x17E0, 0x1810, 0x1946, 0x19D0, 0x1A80, 0x1A90, 0x1B50, 0x1BB0, 0x1C40, 0x1C50, 0xA620, 0xA8D0,
-  0xA900, 0xA9D0, 0xA9F0, 0xAA50, 0xABF0, 0xFF10, 0x104A0, 0x10D30, 0x10D40, 0x11066, 0x110F0, 0x11136, 0x111D0,
-  0x112F0, 0x11450, 0x114D0, 0x11650, 0x116C0, 0x116D0, 0x116DA, 0x11730, 0x118E0, 0x11950, 0x11BF0, 0x11C50, 0x11D50,
-  0x11DA0, 0x11F50, 0x16130, 0x16A60, 0x16AC0, 0x16B50, 0x16D70, 0x1CCF0, 0x1D7CE, 0x1D7D8, 0x1D7E2, 0x1D7EC, 0x1D7F6,
-  0x1E140, 0x1E2F0, 0x1E4F0, 0x1E5F1, 0x1E950, 0x1FBF0,
-];
-
-/// A Unicode decimal digit's numeric value, as Python's `int` reads it.
-fn decimal_digit(character: char) -> Option<u32> {
-  let codepoint = u32::from(character);
-  let zero = DECIMAL_DIGIT_ZEROES.iter().rev().find(|zero| codepoint >= **zero)?;
-  let digit = codepoint - *zero;
-  (digit < 10).then_some(digit)
-}
-
-/// Parse the Unicode decimal digits matched by Python's URL port group, returning None on overflow.
-fn decimal_port(text: &str) -> Option<u64> {
-  text.chars().try_fold(0_u64, |value, character| {
-    let digit = decimal_digit(character)?;
-    value.checked_mul(10)?.checked_add(u64::from(digit))
-  })
-}
-
-/// Refuse the reply when `text` still links a CharlieBot file-server URL (`assert_no_file_server_links`). The first
-/// such link is refused with 422, and the detail names the `charliebot publish` command that replaces it.
+/// Refuse the reply when `text` links a CharlieBot file-server URL, or a retired or local path that thread readers
+/// cannot open (`assert_no_file_server_links`). The first such finding is refused with 422, and the detail names the
+/// `charliebot publish` command whose printed URL replaces it.
 pub fn assert_no_file_server_links(
   text: &str,
-  _scan_context: Option<&file_urls::ScanContext>,
+  scan_context: Option<&file_urls::ScanContext>,
 ) -> Result<(), ThreadReplyError> {
-  for captures in URL_RE.captures_iter(text) {
-    let link = &captures[0];
-    let path = captures.name("path").map_or("", |path| path.as_str());
-    let Some(named) = file_server_named_path(path) else {
+  for finding in file_urls::scan_file_links(text, scan_context).map_err(ThreadReplyError::failure)? {
+    if finding.form != file_urls::FileLinkForm::Canonical && !finding.dead() {
       continue;
+    }
+    let publish_path = finding.path.as_ref().map_or_else(|| finding.link.clone(), |path| path.display().to_string());
+    let reason = if finding.form == file_urls::FileLinkForm::Canonical {
+      "reply links a CharlieBot file-server URL, which opens only behind the access key"
+    } else {
+      "reply links a retired or local file path that thread readers cannot open"
     };
+    let link = &finding.link;
     return Err(ThreadReplyError::refused(
       StatusCode::UNPROCESSABLE_ENTITY,
       format!(
-        "reply links a CharlieBot file-server URL, which opens only behind the access key: {link}. \
-         Publish the page with `charliebot publish {named}` and write the URL the command prints into the reply"
+        "{reason}: {link}. Publish the page with `charliebot publish {publish_path}` and write the URL the command \
+         prints into the reply"
       ),
     ));
   }
@@ -1415,11 +1385,13 @@ pub fn assert_no_file_server_links(
 /// (`application_route_links`).
 pub fn application_route_links(text: &str, port: u16) -> Vec<String> {
   let mut routes: Vec<String> = Vec::new();
-  for captures in URL_RE.captures_iter(text) {
+  for captures in file_urls::URL_RE.captures_iter(text) {
     let Some(named_port) = captures.name("port") else {
       continue;
     };
-    if decimal_port(named_port.as_str()) == Some(u64::from(port)) && !routes.iter().any(|r| r == &captures[0]) {
+    if file_urls::decimal_port(named_port.as_str()) == Some(u64::from(port))
+      && !routes.iter().any(|r| r == &captures[0])
+    {
       routes.push(captures[0].to_string());
     }
   }

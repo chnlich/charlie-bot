@@ -878,7 +878,8 @@ class RunStore:
     async with self._lock:
       return await self.register_run_locked(record, task_spec_text=task_spec_text)
 
-  async def register_run_locked(self, record: models.RunRecord, *, task_spec_text: str | None) -> models.RunRecord:
+  async def register_run_locked(
+      self, record: models.RunRecord, *, task_spec_text: str | None = None) -> models.RunRecord:
     """register_run for a caller already holding the control lock (the lock is not reentrant)."""
     existing = self.read_run_sync(record.session_id, record.id)
     if existing is not None:

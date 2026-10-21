@@ -176,12 +176,9 @@ pub fn noticed(events: &[Value], user_event_id: &str) -> bool {
   })
 }
 
-/// Whether `character` is in Python's `\w` class: a letter, a digit or `_`. Rust's `is_alphanumeric` also counts the
-/// Other_Alphabetic marks and symbols (such as U+0345 and U+24B6) that `\w` leaves out. Only the path pattern uses
-/// `\w`, so the difference changes the count only where such a character sits next to a path: before its `~` or `/`,
-/// or inside its run.
+/// Whether `character` is in Python's `\w` class: an alphanumeric character or `_`.
 fn is_word(character: char) -> bool {
-  character.is_alphanumeric() || character == '_'
+  pystr::is_python_alphanumeric(character) || character == '_'
 }
 
 /// A CJK ideograph: the ranges of `reply._HAN`, U+3400-U+4DBF and U+4E00-U+9FFF.

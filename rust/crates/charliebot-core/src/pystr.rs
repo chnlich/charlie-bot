@@ -1,5 +1,9 @@
-//! CPython's `str` methods on Unicode text, for the ports to match: `isdigit`, the decimal value of a decimal digit,
-//! `isspace`, and `split()` with its `" ".join` collapse.
+//! CPython's `str` methods on Unicode text, for the ports to match: `isalnum`, `isdigit`, the decimal value of a decimal
+//! digit, `isspace`, and `split()` with its `" ".join` collapse.
+
+use std::sync::LazyLock;
+
+use regex::Regex;
 
 const DIGIT_RANGES: &[(u32, u32)] = &[
   (0x0030, 0x0039),
@@ -102,6 +106,17 @@ const DECIMAL_ZEROES: &[u32] = &[
   0x11c50, 0x11d50, 0x11da0, 0x11f50, 0x16130, 0x16a60, 0x16ac0, 0x16b50, 0x16d70, 0x1ccf0, 0x1d7ce, 0x1d7d8, 0x1d7e2,
   0x1d7ec, 0x1d7f6, 0x1e140, 0x1e2f0, 0x1e4f0, 0x1e5f1, 0x1e950, 0x1fbf0,
 ];
+
+// Python's alphanumeric set uses Unicode Letter and Number categories. Rust's char predicate also accepts
+// Other_Alphabetic.
+static PYTHON_ALPHANUMERIC: LazyLock<Regex> =
+  LazyLock::new(|| Regex::new(r"^[\p{L}\p{N}]$").expect("the Python alphanumeric character pattern is valid"));
+
+/// Whether CPython's `str.isalnum()` accepts this character.
+pub fn is_python_alphanumeric(character: char) -> bool {
+  let mut buffer = [0; 4];
+  PYTHON_ALPHANUMERIC.is_match(character.encode_utf8(&mut buffer))
+}
 
 pub fn is_python_digit(character: char) -> bool {
   let code_point = character as u32;

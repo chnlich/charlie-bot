@@ -312,10 +312,45 @@ fn json_type_name(value: &Value) -> &'static str {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use charliebot_core::config::{BackendsConfig, PathsConfig, Sections, ServerConfig, TelegramConfig, UiConfig};
+  use charliebot_core::config::{
+    BackendsConfig, PathsConfig, RoutingConfig, Sections, ServerConfig, TelegramConfig, UiConfig,
+  };
   use serde_yaml::Mapping;
   use std::path::PathBuf;
   use std::sync::Mutex;
+
+  /// A configuration whose two options `ids` are also the pool, with the routing section `routing`.
+  fn light_cfg(ids: [&str; 2], routing: Option<RoutingConfig>) -> CharlieBotConfig {
+    let options = ids
+      .into_iter()
+      .map(|id| BackendOption {
+        id: id.to_string(),
+        label: id.to_string(),
+        model: "synthetic-model".to_string(),
+        prompt_overlay: None,
+        backend_type: "codex".to_string(),
+        type_fields: Mapping::new(),
+      })
+      .collect();
+    CharlieBotConfig {
+      charliebot_home: PathBuf::from("/synthetic/home"),
+      headless_chrome_bin: "/synthetic/chrome".to_string(),
+      server: ServerConfig {
+        host: "127.0.0.1".to_string(),
+        port: 18650,
+        subprocess_buffer_limit_mb: 1,
+        session_memory_max_mb: 0,
+        session_swap_max_mb: 0,
+        session_tasks_max: 0,
+        min_free_disk_gib: 0,
+      },
+      paths: PathsConfig { workspace_dirs: Vec::new(), worktree_dir: "/synthetic/worktrees".to_string() },
+      backends: BackendsConfig { pool: ids.map(str::to_string).to_vec(), routing, options },
+      ui: UiConfig { home_services: Vec::new() },
+      telegram: TelegramConfig { chat_id: None },
+      sections: Sections::default(),
+    }
+  }
 
   #[test]
   fn default_names_keep_the_session_number_and_clone_prefix() {
@@ -339,35 +374,7 @@ mod tests {
 
   #[tokio::test]
   async fn quota_from_a_light_backend_cools_the_shared_pool_before_the_next_attempt() {
-    let options = ["light-a", "light-b"]
-      .into_iter()
-      .map(|id| BackendOption {
-        id: id.to_string(),
-        label: id.to_string(),
-        model: "synthetic-model".to_string(),
-        prompt_overlay: None,
-        backend_type: "codex".to_string(),
-        type_fields: Mapping::new(),
-      })
-      .collect();
-    let cfg = CharlieBotConfig {
-      charliebot_home: PathBuf::from("/synthetic/home"),
-      headless_chrome_bin: "/synthetic/chrome".to_string(),
-      server: ServerConfig {
-        host: "127.0.0.1".to_string(),
-        port: 18650,
-        subprocess_buffer_limit_mb: 1,
-        session_memory_max_mb: 0,
-        session_swap_max_mb: 0,
-        session_tasks_max: 0,
-        min_free_disk_gib: 0,
-      },
-      paths: PathsConfig { workspace_dirs: Vec::new(), worktree_dir: "/synthetic/worktrees".to_string() },
-      backends: BackendsConfig { pool: vec!["light-a".to_string(), "light-b".to_string()], routing: None, options },
-      ui: UiConfig { home_services: Vec::new() },
-      telegram: TelegramConfig { chat_id: None },
-      sections: Sections::default(),
-    };
+    let cfg = light_cfg(["light-a", "light-b"], None);
     let pool = Arc::new(BackendPool::default());
     let calls = Arc::new(Mutex::new(Vec::new()));
     let generated = generate_from_light_backends(&cfg, "session-a", Arc::clone(&pool), |option| {
@@ -387,5 +394,27 @@ mod tests {
     assert_eq!(*calls.lock().unwrap(), ["light-a".to_string(), "light-b".to_string()]);
     assert_eq!(generated, Some(("Synthetic title".to_string(), Some("Research".to_string()))));
     assert_eq!(pool.select(&cfg, "light_oneshot", &[]).unwrap().unwrap().id, "light-b");
+  }
+
+  #[test]
+  fn session_naming_never_starts_the_router() {
+    // Python: tests/test_backend_router.py:474.
+    let dir = tempfile::tempdir().unwrap();
+    let marker = dir.path().join("router-started");
+    let command = vec![
+      "/bin/sh".to_string(),
+      "-c".to_string(),
+      "printf started > \"$1\"; exit 3".to_string(),
+      "router".to_string(),
+      marker.display().to_string(),
+    ];
+    let cfg = light_cfg(["fake", "fake2"], Some(RoutingConfig { command }));
+    let names = iter_light_backends(&cfg, Arc::new(BackendPool::default()))
+      .map(|option| option.map(|option| option.id))
+      .collect::<anyhow::Result<Vec<_>>>()
+      .unwrap();
+
+    assert_eq!(names, ["fake", "fake2"]);
+    assert!(!marker.exists(), "session naming started the router");
   }
 }

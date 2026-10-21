@@ -24,22 +24,8 @@ from src.infra import models
 @pytest_asyncio.fixture
 async def env(tmp_path: pathlib.Path):
   _, session_blocks, tree = conftest.build_env(tmp_path)
-  root = await tree.create_task(
-      request_id="root",
-      task_parent_id=None,
-      profile="manager",
-      task=None,
-      name="Root",
-      backend=None,
-      caller=conftest.OPERATOR)
-  worker = await tree.create_task(
-      request_id="w1",
-      task_parent_id=root.id,
-      profile="worker",
-      task=None,
-      name="Worker",
-      backend=None,
-      caller=conftest.OPERATOR)
+  root = await conftest.create_task(tree, parent=None, request_id="root", name="Root")
+  worker = await conftest.create_task(tree, parent=root.id, request_id="w1", profile="worker", name="Worker")
   return tree, session_blocks, root.id, worker.id
 
 

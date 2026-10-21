@@ -46,22 +46,14 @@ async def env(tmp_path: pathlib.Path):
 
 
 async def _tree(env: _TaskEnv) -> dict[str, str]:
-  root = await env.tree.create_task(
-      request_id="root",
-      task_parent_id=None,
-      profile="manager",
-      task=None,
-      name="Root",
-      backend=None,
-      caller=conftest.OPERATOR)
-  worker = await env.tree.create_task(
+  root = await conftest.create_task(env.tree, parent=None, request_id="root", name="Root")
+  worker = await conftest.create_task(
+      env.tree,
+      parent=root.id,
       request_id="w",
-      task_parent_id=root.id,
       profile="worker",
       task=models.TaskSpec(goal="worker goal", repo_path="/tmp/repo"),
-      name="W",
-      backend=None,
-      caller=conftest.OPERATOR)
+      name="W")
   await env.tree.patch_task(
       root.id, models.PatchSessionTaskRequest(subtree_prompt="the root subtree rule"), caller=conftest.OPERATOR)
   return {"root": root.id, "worker": worker.id}

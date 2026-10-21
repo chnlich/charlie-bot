@@ -337,18 +337,8 @@ impl BackendLifecycle for ClaudeCodeLifecycle {
         }
       }
       let relays = pooled.relays + 1;
-      let min_headroom =
-        if decision == claude_relay::RELAY_WARNING { 1.0 - claude_accounts::WARNING_UTILIZATION } else { 0.0 };
-      let account = master_cc_relay::prepare_relay(
-        &self.state,
-        ctx,
-        &pooled.account,
-        native_id,
-        Some(&decision),
-        relays,
-        min_headroom,
-      )
-      .await?;
+      let account =
+        master_cc_relay::prepare_relay(&self.state, ctx, &pooled.account, native_id, Some(&decision), relays).await?;
       if ctx.kind == LaunchKind::Turn {
         (ctx.record_account)(account.label.clone()).await.map_err(|error| refused(error, false, None))?;
       }

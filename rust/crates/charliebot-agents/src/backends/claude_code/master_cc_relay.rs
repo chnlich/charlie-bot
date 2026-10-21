@@ -278,7 +278,6 @@ pub async fn prepare_relay(
   session_id: Option<&str>,
   reason: Option<&str>,
   relays: usize,
-  min_headroom: f64,
 ) -> Result<claude_config::ClaudeAccount, LaunchRefused> {
   let account_pool = claude_accounts::option_pool(&ctx.option);
   let pool_choice = if ctx.kind == LaunchKind::Turn { Some(state.pool_choice.lock().await) } else { None };
@@ -290,7 +289,6 @@ pub async fn prepare_relay(
     session_id,
     None,
     account_pool.as_deref(),
-    min_headroom,
   )
   .map_err(|error| refusal(error, false, None))?;
   let Some(next) = movement.account else {

@@ -1,4 +1,8 @@
 //! Claude account membership, quota readings, selection, and transcript custody.
+//!
+//! Selection observes one tier rule: accounts whose headroom strictly exceeds `1 - WARNING_UTILIZATION` form the
+//! under-line tier, and when that tier holds any account only it contends. An account at or above the warning line
+//! is a last resort shared with no rule of its own.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
@@ -383,12 +387,15 @@ pub fn select(
   if available.is_empty() {
     return Ok(None);
   }
-  let idle = available
+  let under_line =
+    available.iter().filter(|(_, remaining)| *remaining > 1.0 - WARNING_UTILIZATION).cloned().collect::<Vec<_>>();
+  let tier = if under_line.is_empty() { available } else { under_line };
+  let idle = tier
     .iter()
     .filter(|(account, _)| busy_accounts.is_none_or(|busy| !busy.contains(&account.label)))
     .cloned()
     .collect::<Vec<_>>();
-  let contenders = if idle.is_empty() { available } else { idle };
+  let contenders = if idle.is_empty() { tier } else { idle };
   let scores = contenders
     .into_iter()
     .map(|(account, remaining)| {

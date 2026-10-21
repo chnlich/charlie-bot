@@ -237,6 +237,62 @@ async fn user_questions_admit_root_and_child_delegations() -> anyhow::Result<()>
   Ok(())
 }
 
+/// `test_task_manager_authorization.py::test_summon_authorizes_a_root_manager_but_a_relayed_agent_message_does_not`: a
+/// root manager whose log holds a recorded thread summon delegates, and a root whose only input is an agent message
+/// relayed through the session-message route is refused.
+#[tokio::test]
+async fn summon_authorizes_a_root_manager_but_a_relayed_agent_message_does_not() -> anyhow::Result<()> {
+  // Python: tests/test_task_manager_authorization.py:492.
+  let dir = tempfile::tempdir()?;
+  let (_origin, repo) = init_repo_with_origin(dir.path())?;
+
+  // Refusal: the root's only user-facing input is a relay admitted by the ordinary relay route.
+  let scripts = Scripts::new(vec![]);
+  let stack = stack_with(&scripts, &[BACKEND_ID], &[BACKEND_ID]).await?;
+  let root = node(&stack, "root", None, TaskProfile::Manager, BACKEND_ID).await?;
+  let relay_caller = node(&stack, "relay-caller", None, TaskProfile::Manager, BACKEND_ID).await?;
+  stack.queue_run(&root.id, "root-run", RunKind::ManagerTurn).await?;
+  stack.launch(&root.id, "root-run", 424_242, "ps-root").await?;
+  let (status, body) = relay(&stack, &relay_caller.id, &root.id, "Take off. Ship the feature.").await?;
+  assert_eq!(status, StatusCode::OK, "{body}");
+  let auth = run_token_header(&root.id, "root-run", "manager-agent")?;
+  let (status, body) =
+    post_delegate_as(&routes::routes(&stack.features), delegate_body(&root.id, &repo, "quick-edit"), &auth).await?;
+  assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+  assert!(text(&body, "detail")?.contains("no user request"), "{body}");
+  assert!(scripts.builds().is_empty());
+
+  // Admission: a fresh root whose only user-facing input is the event a Slack thread summon writes.
+  let scripts = Scripts::new(vec![result_script("leaf done")]);
+  let stack = stack_with(&scripts, &[BACKEND_ID], &[BACKEND_ID]).await?;
+  let root = node(&stack, "root", None, TaskProfile::Manager, BACKEND_ID).await?;
+  stack.queue_run(&root.id, "root-run", RunKind::ManagerTurn).await?;
+  stack.launch(&root.id, "root-run", 424_242, "ps-root").await?;
+  stack
+    .store()
+    .append_chat_event(
+      &root.id,
+      json!({
+        "type": event_types::AGENT_MESSAGE,
+        "actor": "agent",
+        "source_session_id": root.id,
+        "content": "Slack 线程召唤",
+        "slack": {"channel_id": "C123", "thread_ts": "1700000000.000100", "mention_ts": "1700000000.000200"},
+      }),
+    )
+    .await?;
+  let auth = run_token_header(&root.id, "root-run", "manager-agent")?;
+  let guard = ProcessGroupGuard::new();
+  let (status, body) =
+    post_delegate_as(&routes::routes(&stack.features), delegate_body(&root.id, &repo, "quick-edit"), &auth).await?;
+  assert_eq!(status, StatusCode::OK, "{body}");
+  let (leaf, run_id) = (text(&body, "session_id")?, text(&body, "run_id")?);
+  track_launch(&stack, &guard, &leaf, &run_id).await?;
+  assert_eq!(session_of(&stack, &leaf).await?.profile, TaskProfile::Worker);
+  stack.wait_terminal(&leaf, &run_id).await?;
+  Ok(())
+}
+
 /// `test_delegate_inherited_authorization.py::test_closed_ancestor_refuses_delegation`: the child holds its own user
 /// message, but the archived root closes the line. The route refuses and nothing is created.
 #[tokio::test]

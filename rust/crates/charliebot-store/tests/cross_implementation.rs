@@ -1858,6 +1858,87 @@ fn gate_cases() -> Vec<Value> {
     {"type": "child_report", "content": "take off"},
     {"type": "user", "content": [{"type": "tool_result", "content": "take off"}]}
   ]);
+  // Python: tests/test_run_token.py:188. A recorded thread summon on the root is a user request for the chain below it.
+  let slack_summon = json!({
+    "type": "agent_message",
+    "content": "Slack 线程召唤",
+    "slack": {"channel_id": "C123", "thread_ts": "1700000000.000100", "mention_ts": "1700000000.000200"}
+  });
+  let legacy_slack_summon = json!({
+    "type": "agent_message",
+    "content": "Slack 线程召唤：帮我看下这个 flaky 的测试",
+    "slack": {"channel_id": "C123", "thread_ts": "1700000000.000100", "mention_ts": "1700000000.000200"}
+  });
+  let discord_summon = json!({
+    "type": "agent_message",
+    "content": "Discord thread summon",
+    "discord": {"guild_id": "G123", "channel_id": "C123", "thread_id": "T123", "mention_id": "M123"}
+  });
+  for (name, summon) in [
+    ("summon-slack-at-root", slack_summon.clone()),
+    ("summon-legacy-slack-at-root", legacy_slack_summon),
+    ("summon-discord-at-root", discord_summon),
+  ] {
+    add(
+      name,
+      "grandchild",
+      json!({"root": [summon], "child": [], "grandchild": []}),
+      empty_states.clone(),
+      manager_profiles.clone(),
+    );
+  }
+  // Python: tests/test_run_token.py:226. A thread nudge, a plain agent message, a web-reply nudge, a scheduled trigger
+  // and a child report each leave the chain without a user request.
+  let refusals = [
+    (
+      "slack-nudge-only",
+      json!({
+        "type": "agent_message",
+        "content": "Slack 线程召唤 nudge",
+        "slack": {"channel_id": "C123", "thread_ts": "1700000000.000100", "nudge_of": "1700000000.000200"}
+      }),
+    ),
+    ("plain-agent-message-only", json!({"type": "agent_message", "content": "take off"})),
+    (
+      "web-reply-nudge-only",
+      json!({"type": "agent_message", "content": "web reply nudge", "web_reply": {"nudge_of": "1700000000.000200"}}),
+    ),
+    ("scheduled-trigger-only", json!({"type": "scheduled_trigger", "content": "take off"})),
+    ("child-report-only", json!({"type": "child_report", "content": "take off"})),
+  ];
+  for (name, event) in refusals {
+    add(
+      name,
+      "grandchild",
+      json!({"root": [event], "child": [], "grandchild": []}),
+      empty_states.clone(),
+      manager_profiles.clone(),
+    );
+  }
+  // Python: tests/test_run_token.py:233. A summon before the node's newest clone_start belongs to the source; one after
+  // it counts.
+  add(
+    "summon-before-clone-marker",
+    "child",
+    json!({
+      "root": [{"type": "agent_message", "content": "take off"}],
+      "child": [slack_summon.clone(), {"type": "clone_start", "content": ""}],
+      "grandchild": []
+    }),
+    empty_states.clone(),
+    manager_profiles.clone(),
+  );
+  add(
+    "summon-after-clone-marker",
+    "child",
+    json!({
+      "root": [{"type": "agent_message", "content": "take off"}],
+      "child": [{"type": "clone_start", "content": ""}, slack_summon],
+      "grandchild": []
+    }),
+    empty_states.clone(),
+    manager_profiles.clone(),
+  );
   add(
     "machine-input-only",
     "grandchild",

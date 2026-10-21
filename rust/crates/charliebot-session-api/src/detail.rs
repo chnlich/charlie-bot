@@ -61,10 +61,12 @@ pub fn build_bootstrap_payload(
   meta: &SessionMetadata,
 ) -> StoreResult<Value> {
   let response_meta = response_metadata(store, meta)?;
+  let mut worker_summary = None;
   let (messages, pending_draft, event_count, oldest_message_ordinal, has_more) = if meta.profile == TaskProfile::Worker
   {
     let transcript = worker_transcript::load_worker_transcript(store, &meta.id)?;
     let (messages, oldest, has_more) = transcript.projection.tail(BOOTSTRAP_MESSAGE_LIMIT);
+    worker_summary = Some(transcript.summary.clone());
     (messages, transcript.projection.pending_draft().cloned(), transcript.projection.event_count(), oldest, has_more)
   } else if let Some(projection) = store.get_message_projection(&meta.id)? {
     let (messages, oldest, has_more) = projection.tail(BOOTSTRAP_MESSAGE_LIMIT);
@@ -84,6 +86,9 @@ pub fn build_bootstrap_payload(
   payload.insert("event_count".to_string(), Value::from(event_count));
   payload.insert("oldest_message_ordinal".to_string(), Value::from(oldest_message_ordinal));
   payload.insert("has_more".to_string(), Value::Bool(has_more));
+  if let Some(summary) = worker_summary {
+    payload.insert("worker_summary".to_string(), summary);
+  }
   payload.extend(active_backend_payload(&response_meta, cfg, registry)?);
   Ok(Value::Object(payload))
 }
@@ -328,6 +333,7 @@ async fn session_transcript(
       "revision": transcript.revision,
       "reset": reset,
       "active_run_id": transcript.active_run_id,
+      "summary": transcript.summary,
       "thinking_since": thinking_since,
     }),
   )

@@ -508,6 +508,10 @@ async fn register_step_run(
   if let Some(run) = tree.get_run(leaf_id, &run_id).await? {
     return Ok(run);
   }
+  let task_spec_text = task.steps.as_ref().expect("a scheduled-step run has step configuration")[position]
+    .prompt
+    .as_deref()
+    .expect("validated scheduled steps have prompt text");
   let run = RunRecord {
     id: run_id,
     session_id: leaf_id.to_string(),
@@ -540,7 +544,7 @@ async fn register_step_run(
     result_ref: None,
   };
   let guard = tree.control_lock().await;
-  tree.register_run_locked(&guard, leaf_id, run, None).await
+  tree.register_run_locked(&guard, leaf_id, run, Some(task_spec_text)).await
 }
 
 fn resolved_backend(
@@ -706,11 +710,14 @@ mod tests {
 
   use charliebot_core::event_types;
   use charliebot_registry::sequence::SequenceBinding;
-  use charliebot_store::metadata::UtcDateTime;
+  use charliebot_store::metadata::{TaskProfile, TaskSpec, UtcDateTime};
+  use charliebot_store::{CreateTask, TaskCaller};
+  use serde_json::Map;
   use serde_json::{Value, json};
   use tokio::sync::watch;
 
-  use super::CronBinding;
+  use super::{CronBinding, register_step_run};
+  use crate::cron::config::{ScheduledTaskConfig, StepConfig};
   use crate::cron::test_support::{feature_context, manager};
 
   fn binding(features: &Arc<charliebot_registry::context::FeatureContext>, names: &[&str]) -> CronBinding {
@@ -799,6 +806,83 @@ mod tests {
       std::fs::read_to_string(events_path).unwrap(),
       format!("{}\n", serde_json::to_string(&old_event).unwrap())
     );
+  }
+
+  #[tokio::test]
+  async fn recovered_step_runs_pin_each_configured_prompt_before_chaining() {
+    let (_home, features) = feature_context();
+    let parent = manager(&features, "synthetic-step-spec-parent").await.unwrap();
+    let leaf = features
+      .store
+      .create_task(
+        CreateTask {
+          request_id: "synthetic-step-spec-leaf".to_string(),
+          task_parent_id: Some(parent.id.clone()),
+          profile: TaskProfile::Worker,
+          task: Some(TaskSpec { goal: "synthetic scheduled steps".to_string(), ..TaskSpec::default() }),
+          name: Some("Synthetic scheduled steps".to_string()),
+          backend: Some("synthetic".to_string()),
+          group: None,
+          session_id: None,
+        },
+        TaskCaller::System,
+        Map::new(),
+      )
+      .await
+      .unwrap();
+    let task = ScheduledTaskConfig {
+      name: "synthetic-step-task".to_string(),
+      cron: "0 3 * * *".to_string(),
+      prompt_file: None,
+      repo: None,
+      backend: Some("synthetic".to_string()),
+      timezone: "America/Los_Angeles".to_string(),
+      enabled: true,
+      project: None,
+      allow_failure: false,
+      session_id: Some(parent.id.clone()),
+      mode: Some("worker".to_string()),
+      prompt: None,
+      handler: None,
+      steps: Some(vec![
+        StepConfig {
+          name: "select".to_string(),
+          prompt_file: None,
+          prompt: Some("Select candidates.".to_string()),
+          backend: None,
+          distinct_backend_from: None,
+        },
+        StepConfig {
+          name: "review".to_string(),
+          prompt_file: None,
+          prompt: Some("Review the diff.".to_string()),
+          backend: None,
+          distinct_backend_from: None,
+        },
+      ]),
+    };
+    charliebot_tasks::execution::pre_recovery_step(Arc::clone(&features)).await.unwrap();
+    let adapter = features.startup.require::<charliebot_tasks::execution::TaskExecutionAdapter>().unwrap();
+    let tree = charliebot_tasks::recovery::sequence_tree(&features, &adapter).unwrap();
+
+    for (position, prompt) in ["Select candidates.", "Review the diff."].into_iter().enumerate() {
+      let run = register_step_run(
+        &tree,
+        &leaf.id,
+        &task,
+        "2026-10-21T03:00:00-07:00",
+        position,
+        "synthetic",
+        Some("synthetic-model"),
+      )
+      .await
+      .unwrap();
+      let task_spec_path = std::path::Path::new(run.task_spec_ref.as_deref().unwrap());
+      assert_eq!(task_spec_path.file_name().and_then(|name| name.to_str()), Some("task_spec.md"));
+      assert_eq!(std::fs::read_to_string(task_spec_path).unwrap(), prompt);
+      let expected_hash = charliebot_store::control_events::sha256_hex(prompt);
+      assert_eq!(run.task_spec_hash.as_deref(), Some(expected_hash.as_str()));
+    }
   }
 
   #[tokio::test]

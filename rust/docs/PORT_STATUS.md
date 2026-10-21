@@ -153,7 +153,7 @@ run's record and compares every other code (see `rust/parity/README.md`).
 | GET, HEAD | `/static/backends/claude_code` | foundation | ported |  |
 | GET, HEAD | `/static/backends/codex` | foundation | ported |  |
 | GET, HEAD | `/static/backends/gemini` | foundation | ported |  |
-| GET, HEAD | `/static/backends/kimi` | foundation | ported |  |
+| GET, HEAD | `/static/backends/anthropic_compatible` | foundation | todo | Python answers 500 under this mount: its `static/` directory is absent at the baseline. A `todo` route answers as an unknown path. |
 | GET, HEAD | `/static/backends/opencode` | foundation | ported |  |
 | GET, HEAD | `/static/features/files` | foundation | ported |  |
 | GET, HEAD | `/static` | foundation | ported |  |

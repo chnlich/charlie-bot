@@ -79,23 +79,23 @@ pub fn require_agent_base_environment(startup: &StartupState) -> anyhow::Result<
   Ok(startup.require::<AgentBaseEnvironment>()?)
 }
 
-/// Log the cgroup startup line and sweep stale session cgroups under an injectable base. Negative limits are logged as
-/// they are, as Python's startup does; each spawn applies them as well.
-pub fn run_session_cgroup_startup(base_dir: &Path, server: &ServerConfig) {
+/// Log the cgroup startup line and sweep the empty session cgroups of `sessions_dir` under an injectable base. Negative
+/// limits are logged as they are, as Python's startup does; each spawn applies them as well.
+pub fn run_session_cgroup_startup(base_dir: &Path, sessions_dir: &Path, server: &ServerConfig) {
   cgroup::log_session_cgroup_startup(
     base_dir,
     server.session_memory_max_mb,
     server.session_swap_max_mb,
     server.session_tasks_max,
   );
-  cgroup::sweep_stale_session_cgroups(base_dir);
+  cgroup::sweep_stale_session_cgroups(base_dir, sessions_dir);
 }
 
-/// Log cgroup availability and remove empty stale session cgroups before recovery.
+/// Log cgroup availability and remove this home's empty stale session cgroups before recovery.
 pub fn session_cgroup_step(features: Arc<FeatureContext>) -> BoxFuture<'static, anyhow::Result<()>> {
   Box::pin(async move {
     let cfg = features.config.get()?;
-    run_session_cgroup_startup(&cgroup::system_cgroup_base_dir(), &cfg.server);
+    run_session_cgroup_startup(&cgroup::system_cgroup_base_dir(), &cfg.sessions_dir(), &cfg.server);
     Ok(())
   })
 }
@@ -294,6 +294,10 @@ mod tests {
     // Python starts with each of these and sweeps the same way, so none of them refuses the start.
     for (memory, swap, tasks) in [(0, 0, 4096), (-1, 0, 4096), (12288, -1, 4096), (12288, 0, -1)] {
       let base = tempfile::tempdir().unwrap();
+      let home = tempfile::tempdir().unwrap();
+      let sessions = home.path().join("sessions");
+      fs::create_dir_all(sessions.join("stale")).unwrap();
+      fs::create_dir_all(sessions.join("retained")).unwrap();
       let stale = base.path().join("charliebot-sess-stale");
       fs::create_dir(&stale).unwrap();
       let retained = base.path().join("charliebot-sess-retained");
@@ -309,7 +313,7 @@ mod tests {
         min_free_disk_gib: 10,
       };
 
-      run_session_cgroup_startup(base.path(), &server);
+      run_session_cgroup_startup(base.path(), &sessions, &server);
 
       assert!(!stale.exists(), "limits {memory} {swap} {tasks}");
       assert!(retained.is_dir(), "limits {memory} {swap} {tasks}");

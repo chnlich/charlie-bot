@@ -1017,8 +1017,10 @@ async fn stop_request_overrides_a_later_successful_finish() {
   assert_eq!(terminal_outcome(&events, "run-stop-finish").unwrap(), Some(RunOutcomeKind::Interrupted));
 }
 
+// Python's record_finish_locked keeps the first write: a later finish fills only an empty ended_at, so the stopper's
+// interrupted record without an exit code stays (runs.py:1036-1047, the stopper's write at runs.py:1161).
 #[tokio::test]
-async fn stopped_run_fills_its_exit_code_from_a_late_process_finish() {
+async fn stopped_run_keeps_its_null_exit_code_after_a_late_process_finish() {
   let root = tempfile::tempdir().unwrap();
   let store = make_store(root.path());
   let guard = store.control_lock().await;
@@ -1043,7 +1045,7 @@ async fn stopped_run_fills_its_exit_code_from_a_late_process_finish() {
 
   let run = store.read_run_sync(RUN_SESSION_ID, "run-late-exit").unwrap().unwrap();
   let events = store.load_all_facts(RUN_SESSION_ID).unwrap();
-  assert_eq!(run.exit_code, Some(-15));
+  assert_eq!(run.exit_code, None);
   assert_eq!(terminal_outcome(&events, "run-late-exit").unwrap(), Some(RunOutcomeKind::Interrupted));
 }
 

@@ -81,21 +81,22 @@ pub fn require_agent_base_environment(startup: &StartupState) -> anyhow::Result<
 
 /// Log the cgroup startup line and sweep the empty session cgroups of `sessions_dir` under an injectable base. Negative
 /// limits are logged as they are, as Python's startup does; each spawn applies them as well.
-pub fn run_session_cgroup_startup(base_dir: &Path, sessions_dir: &Path, server: &ServerConfig) {
+pub fn run_session_cgroup_startup(base_dir: &Path, sessions_dir: &Path, server: &ServerConfig) -> anyhow::Result<()> {
   cgroup::log_session_cgroup_startup(
     base_dir,
     server.session_memory_max_mb,
     server.session_swap_max_mb,
     server.session_tasks_max,
   );
-  cgroup::sweep_stale_session_cgroups(base_dir, sessions_dir);
+  cgroup::sweep_stale_session_cgroups(base_dir, sessions_dir)?;
+  Ok(())
 }
 
 /// Log cgroup availability and remove this home's empty stale session cgroups before recovery.
 pub fn session_cgroup_step(features: Arc<FeatureContext>) -> BoxFuture<'static, anyhow::Result<()>> {
   Box::pin(async move {
     let cfg = features.config.get()?;
-    run_session_cgroup_startup(&cgroup::system_cgroup_base_dir(), &cfg.sessions_dir(), &cfg.server);
+    run_session_cgroup_startup(&cgroup::system_cgroup_base_dir(), &cfg.sessions_dir(), &cfg.server)?;
     Ok(())
   })
 }
@@ -313,7 +314,7 @@ mod tests {
         min_free_disk_gib: 10,
       };
 
-      run_session_cgroup_startup(base.path(), &sessions, &server);
+      run_session_cgroup_startup(base.path(), &sessions, &server).unwrap();
 
       assert!(!stale.exists(), "limits {memory} {swap} {tasks}");
       assert!(retained.is_dir(), "limits {memory} {swap} {tasks}");

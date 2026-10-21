@@ -32,7 +32,7 @@ Logs go to stdout and stderr only; the server writes no log file. `scripts/start
 | 2 | Home writer fence: `home_writer_fence.acquire_home_writer_fence(home, purpose="server startup")` | creates `<home>/state/home_writer.lock` (flock `LOCK_EX\|LOCK_NB`) and writes `<home>/state/writer_identity.json` | `HomeWriterActiveError` logs `server_startup_refused_home_writer_fence` and re-raises; startup fails |
 | 3 | `buildinfo.init_build_info()` | runs `git rev-parse --short HEAD` in the repo root (sha `"unknown"` on failure) and records the UTC start time; served by `GET /api/internal/version` | never raises |
 | 4 | `await init_seed.init_charliebot_home()` | mkdirs `<home>`, `sessions/`, `config.d/`; seeds `config.yaml` and `credentials.yaml` when missing (`files.md` 5.1); logs `charliebot_home_ready` | raises |
-| 5 | `process.log_session_cgroup_startup(memory, swap, tasks)` then `process.sweep_stale_session_cgroups()` | logs whether session cgroups are on; `rmdir`s every **empty** `charliebot-sess-*` directory under the user's `app.slice` that names a session of this home (section 4) | sweep errors are logged, never raised |
+| 5 | `process.log_session_cgroup_startup(memory, swap, tasks)` then `process.sweep_stale_session_cgroups(cfg.sessions_dir)` | logs whether session cgroups are on; `rmdir`s every **empty** `charliebot-sess-*` directory under the user's `app.slice` that names a session of this home (section 4) | an unavailable `app.slice` is logged; a failure to read this home's `sessions/` directory raises |
 | 6 | `app.state.recovery_task = create_task(_run_task_recovery(cfg, task_manager))` | crash recovery (section 3), concurrent with step 7 | logged as `task_tree_recovery_failed`; startup continues |
 | 7 | Start `early` services in registration order (`usage_tally`, `speech`) | section 5 | an exception from `start_service` fails startup |
 | 8 | `await app.state.recovery_task` | waits until recovery ends, so no scheduler fire or recovered trigger races a recorded run | |
@@ -96,8 +96,8 @@ The liveness rule and stable ids that make this idempotent are in `files.md` sec
   `session_cgroup_sweep_retained`. A sweep that removes any directory logs `session_cgroup_sweep_removed` with `count`
   and `names` (the sorted names). Permanent session deletion `rmdir`s that session's cgroup when it is empty.
 - Cross-instance effects:
-  - The sweep is scoped to this home: a live server's cgroups stay, because no session of this home names them. Every
-    other entry under `app.slice` stays too.
+  - The sweep is scoped to this home: a live server's cgroups stay unless a session of this home has the same first
+    eight id characters. Every other entry under `app.slice` stays too.
   - Two homes whose session ids share the first 8 characters share one cgroup and its limits. Either home's sweep can
     remove that cgroup while it is empty; the next spawn recreates it.
 

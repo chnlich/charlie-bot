@@ -8,9 +8,8 @@ use std::sync::{Arc, Mutex};
 
 use charliebot_agents::transport::cgroup::sweep_stale_session_cgroups;
 use tracing::field::{Field, Visit};
-use tracing::{Event, Subscriber};
-use tracing_subscriber::Layer;
-use tracing_subscriber::layer::{Context, SubscriberExt};
+use tracing::span::{Attributes, Id, Record};
+use tracing::{Event, Metadata, Subscriber};
 
 const SESSION_ID: &str = "abcd1234-ef56-7890-abcd-ef1234567890";
 const POPULATED_ID: &str = "9f8e7d6c-0000-4000-8000-000000000000";
@@ -19,12 +18,28 @@ const POPULATED_ID: &str = "9f8e7d6c-0000-4000-8000-000000000000";
 #[derive(Clone, Default)]
 struct RecordedEvents(Arc<Mutex<Vec<BTreeMap<String, String>>>>);
 
-impl<S: Subscriber> Layer<S> for RecordedEvents {
-  fn on_event(&self, event: &Event<'_>, _context: Context<'_, S>) {
+impl Subscriber for RecordedEvents {
+  fn enabled(&self, _metadata: &Metadata<'_>) -> bool {
+    true
+  }
+
+  fn new_span(&self, _attributes: &Attributes<'_>) -> Id {
+    Id::from_u64(1)
+  }
+
+  fn record(&self, _span: &Id, _values: &Record<'_>) {}
+
+  fn record_follows_from(&self, _span: &Id, _follows: &Id) {}
+
+  fn event(&self, event: &Event<'_>) {
     let mut fields = BTreeMap::new();
     event.record(&mut FieldText(&mut fields));
     self.0.lock().expect("the recorder lock").push(fields);
   }
+
+  fn enter(&self, _span: &Id) {}
+
+  fn exit(&self, _span: &Id) {}
 }
 
 struct FieldText<'a>(&'a mut BTreeMap<String, String>);
@@ -51,8 +66,9 @@ fn sweep_removes_only_empty_cgroups_named_for_this_homes_sessions() {
   fs::create_dir(base.path().join("app-other.scope")).unwrap();
 
   let recorded = RecordedEvents::default();
-  let subscriber = tracing_subscriber::Registry::default().with(recorded.clone());
-  let removed = tracing::subscriber::with_default(subscriber, || sweep_stale_session_cgroups(base.path(), &sessions));
+  let subscriber = recorded.clone();
+  let removed = tracing::subscriber::with_default(subscriber, || sweep_stale_session_cgroups(base.path(), &sessions))
+    .expect("the home sessions directory can be read");
 
   assert_eq!(removed, 1);
   assert!(!base.path().join("charliebot-sess-abcd1234").exists());
@@ -67,4 +83,17 @@ fn sweep_removes_only_empty_cgroups_named_for_this_homes_sessions() {
   assert_eq!(sweeps.len(), 1);
   assert_eq!(sweeps[0]["count"], "1");
   assert_eq!(sweeps[0]["names"], r#"["charliebot-sess-abcd1234"]"#);
+}
+
+#[test]
+fn sweep_propagates_a_missing_sessions_directory() {
+  let base = tempfile::tempdir().unwrap();
+  let cgroup = base.path().join("charliebot-sess-abcd1234");
+  fs::create_dir(&cgroup).unwrap();
+
+  let error = sweep_stale_session_cgroups(base.path(), &base.path().join("missing-sessions"))
+    .expect_err("a missing home sessions directory fails the sweep");
+
+  assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+  assert!(cgroup.is_dir());
 }

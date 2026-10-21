@@ -197,21 +197,15 @@ pub fn cleanup_session_cgroup(base_dir: &Path, session_id: &str) -> bool {
 
 /// Remove each empty cgroup named for a session of `sessions_dir` and retain a populated one with a warning. Other
 /// entries under `base_dir`, and the cgroups of other homes, stay.
-pub fn sweep_stale_session_cgroups(base_dir: &Path, sessions_dir: &Path) -> usize {
+pub fn sweep_stale_session_cgroups(base_dir: &Path, sessions_dir: &Path) -> io::Result<usize> {
   let entries = match fs::read_dir(base_dir).and_then(|entries| entries.collect::<Result<Vec<_>, _>>()) {
     Ok(entries) => entries,
     Err(error) => {
       tracing::info!(target: "charliebot_agents", base = %base_dir.display(), error = %error, "session_cgroup_sweep_unavailable");
-      return 0;
+      return Ok(0);
     }
   };
-  let owned = match home_session_cgroup_names(sessions_dir) {
-    Ok(owned) => owned,
-    Err(error) => {
-      tracing::info!(target: "charliebot_agents", sessions = %sessions_dir.display(), error = %error, "session_cgroup_sweep_unavailable");
-      return 0;
-    }
-  };
+  let owned = home_session_cgroup_names(sessions_dir)?;
   let mut removed = Vec::new();
   for entry in entries {
     let path = entry.path();
@@ -230,7 +224,7 @@ pub fn sweep_stale_session_cgroups(base_dir: &Path, sessions_dir: &Path) -> usiz
   if !removed.is_empty() {
     tracing::info!(target: "charliebot_agents", count = removed.len(), names = ?removed, "session_cgroup_sweep_removed");
   }
-  removed.len()
+  Ok(removed.len())
 }
 
 /// The cgroup directory name of each session directory under `sessions_dir`.

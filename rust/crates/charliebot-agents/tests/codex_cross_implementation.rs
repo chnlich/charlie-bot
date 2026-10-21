@@ -91,8 +91,7 @@ fn codex_matches_the_python_package_on_synthetic_inputs() {
   let now = OffsetDateTime::from_unix_timestamp(OffsetDateTime::now_utc().unix_timestamp()).unwrap();
   let fx = write_fixtures(root.path(), now);
   let request = request(&fx);
-  let mut python = run_reference(&request);
-  apply_63004f809_compaction_default(&request, &mut python);
+  let python = run_reference(&request);
 
   let argv = request["argv_cases"].as_array().unwrap();
   let env = request["env_cases"].as_array().unwrap();
@@ -115,25 +114,6 @@ fn codex_matches_the_python_package_on_synthetic_inputs() {
   check_quota(&fx, quota, &python, &mut failures);
   check_cost(cost, &python, &mut failures);
   assert!(failures.is_empty(), "codex sections differ from the Python package:\n{}", failures.join("\n"));
-}
-
-fn apply_63004f809_compaction_default(request: &Value, python: &mut Value) {
-  // The Python regression case added by 63004f809 asserts a 100000 token default when the option is absent.
-  let cases = request["argv_cases"].as_array().expect("argv cases are an array");
-  let expected = python["argv"].as_array_mut().expect("Python argv results are an array");
-  for (case, expected_case) in cases.iter().zip(expected) {
-    let configured = case["type_fields"].get("model_auto_compact_token_limit");
-    if configured.is_some_and(|value| !value.is_null()) {
-      continue;
-    }
-    let argv = expected_case["argv"].as_array_mut().expect("Python argv is an array");
-    let effort_index = argv
-      .iter()
-      .position(|value| value.as_str().is_some_and(|value| value.starts_with("model_reasoning_effort=")))
-      .expect("Python argv contains model reasoning effort");
-    argv
-      .splice(effort_index + 1..effort_index + 1, [json!("--config"), json!("model_auto_compact_token_limit=100000")]);
-  }
 }
 
 fn main_module() -> CharlieBotConfig {

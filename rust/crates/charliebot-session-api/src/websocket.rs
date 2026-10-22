@@ -14,6 +14,8 @@ use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use tokio::time;
 
+use crate::blocking_store;
+
 const CURSOR_TIMEOUT: Duration = Duration::from_secs(5);
 const KEEPALIVE_TIMEOUT: Duration = Duration::from_secs(30);
 const CATCHUP_SLICE_EVENTS: usize = 400;
@@ -228,14 +230,6 @@ async fn prepare_catchup(
   let total = event_count.unwrap_or(event_index_offset + events.len());
   let frames = replay_events(&store, events, cursor, event_index_offset).await?;
   Ok(Catchup { frames, total })
-}
-
-async fn blocking_store<T, F>(work: F) -> StoreResult<T>
-where
-  T: Send + 'static,
-  F: FnOnce() -> StoreResult<T> + Send + 'static,
-{
-  tokio::task::spawn_blocking(work).await.map_err(|error| StoreError::new(error.to_string()))?
 }
 
 async fn replay_events(

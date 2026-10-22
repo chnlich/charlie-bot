@@ -12,7 +12,7 @@ use charliebot_store::aggregator;
 use charliebot_store::control_events;
 use charliebot_store::metadata::UtcDateTime;
 use charliebot_store::projection::MessageProjection;
-use charliebot_store::run_records::{RunKind, RunRecord};
+use charliebot_store::run_records::{HostBoot, RunKind, RunRecord};
 use charliebot_store::{Store, StoreError, StoreResult};
 use serde_json::{Value, json};
 
@@ -64,9 +64,11 @@ pub fn load_worker_transcript(store: &Store, session_id: &str) -> StoreResult<Ar
 fn build_worker_transcript(store: &Store, session_id: &str, signature: Signature) -> StoreResult<TranscriptEntry> {
   let run_records = store.list_run_records_sync(session_id)?;
   let facts_events = store.load_all_facts_shared_sync(session_id)?;
+  let node = store.node_state(session_id)?;
+  let mut boot = HostBoot::default();
   let mut states = BTreeMap::new();
   for run in &run_records {
-    states.insert(run.id.clone(), store.run_display_state(session_id, &run.id)?.as_str().to_string());
+    states.insert(run.id.clone(), node.runs.display_state(run, &mut boot)?.as_str().to_string());
   }
 
   let cfg = store.config();

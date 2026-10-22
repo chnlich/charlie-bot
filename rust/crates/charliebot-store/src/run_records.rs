@@ -16,6 +16,7 @@ use nix::unistd::{Pid, getpgid};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
+use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::control_events::{self, ACTOR_SYSTEM};
@@ -180,16 +181,37 @@ pub enum RunDisplayState {
   Interrupted,
 }
 
-/// Run terminal outcomes and stop requests folded from one node history.
+/// Run terminal outcomes, stop requests and withheld launches folded from one node history.
 ///
-/// Recovery and dispatch query these facts once per run, so retaining the last outcome and stop identities makes each
-/// lookup independent of history length.
+/// Recovery, dispatch and the display-state readers query these facts once per run, so retaining the last outcome,
+/// the stop identities and the last withheld reason makes each lookup independent of history length.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct RunFacts {
   outcomes: HashMap<String, Option<String>>,
   unknown_outcome_runs: HashSet<String>,
   stopped_runs: HashSet<String>,
   stop_request_ids: HashSet<(String, String)>,
+  withheld_reasons: HashMap<String, String>,
+}
+
+/// The host boot time, read from `/proc/stat` on first use: only a launched run without a terminal fact needs it.
+#[derive(Debug, Default)]
+pub struct HostBoot(Option<OffsetDateTime>);
+
+impl HostBoot {
+  fn get(&mut self) -> StoreResult<OffsetDateTime> {
+    if let Some(boot) = self.0 {
+      return Ok(boot);
+    }
+    let boot = proc_identity::read_host_boot_time().map_err(|error| StoreError::new(error.to_string()))?;
+    self.0 = Some(boot);
+    Ok(boot)
+  }
+
+  /// Whether a liveness judgment read `/proc`.
+  pub fn was_read(&self) -> bool {
+    self.0.is_some()
+  }
 }
 
 /// Whether `terminal_outcome` maps a `run_finished` outcome to a run outcome.
@@ -219,7 +241,41 @@ impl RunFacts {
           }
         }
       }
+      Some("run_launch_withheld") => {
+        if let Some(run_id) = event.get("run_id").and_then(Value::as_str)
+          && let Some(reason) = event.get("reason").and_then(Value::as_str).filter(|reason| !reason.is_empty())
+        {
+          self.withheld_reasons.insert(run_id.to_string(), reason.to_string());
+        }
+      }
       _ => {}
+    }
+  }
+
+  /// One run's display state, as [`Store::run_display_state`] derives it from the history these facts fold.
+  pub fn display_state(&self, run: &RunRecord, boot: &mut HostBoot) -> StoreResult<RunDisplayState> {
+    if let Some(outcome) = self.terminal_outcome(&run.id)? {
+      return Ok(match outcome {
+        RunOutcomeKind::Success => RunDisplayState::Success,
+        RunOutcomeKind::Failed => RunDisplayState::Failed,
+        RunOutcomeKind::Interrupted => RunDisplayState::Interrupted,
+      });
+    }
+    if run.pid.is_none() {
+      if self.stop_requested(&run.id, None) {
+        return Ok(RunDisplayState::Stopped);
+      }
+      if self.withheld_reasons.contains_key(&run.id) {
+        return Ok(RunDisplayState::Withheld);
+      }
+      return Ok(RunDisplayState::Queued);
+    }
+    let boot = boot.get()?;
+    if proc_identity::is_run_alive(run.pid, run.pid_start.as_deref(), run.started_at.map(UtcDateTime::into_inner), boot)
+    {
+      Ok(RunDisplayState::Running)
+    } else {
+      Ok(RunDisplayState::Attention)
     }
   }
 
@@ -562,32 +618,12 @@ impl Store {
   }
 
   /// Derive one run's display state from its record, facts and current process identity.
+  ///
+  /// A caller that derives the states of several runs reads [`Store::node_state`] once and asks
+  /// [`RunFacts::display_state`] for each run, as Python passes one event list to `run_display_state`.
   pub fn run_display_state(&self, session_id: &str, run_id: &str) -> StoreResult<RunDisplayState> {
     let run = require_run(self, session_id, run_id)?;
-    let events = self.load_all_facts(session_id)?;
-    if let Some(outcome) = terminal_outcome(&events, run_id)? {
-      return Ok(match outcome {
-        RunOutcomeKind::Success => RunDisplayState::Success,
-        RunOutcomeKind::Failed => RunDisplayState::Failed,
-        RunOutcomeKind::Interrupted => RunDisplayState::Interrupted,
-      });
-    }
-    if run.pid.is_none() {
-      if stop_requested_in_events(&events, run_id, None) {
-        return Ok(RunDisplayState::Stopped);
-      }
-      if withheld_reason(&events, run_id).is_some() {
-        return Ok(RunDisplayState::Withheld);
-      }
-      return Ok(RunDisplayState::Queued);
-    }
-    let boot = proc_identity::read_host_boot_time().map_err(|error| StoreError::new(error.to_string()))?;
-    if proc_identity::is_run_alive(run.pid, run.pid_start.as_deref(), run.started_at.map(UtcDateTime::into_inner), boot)
-    {
-      Ok(RunDisplayState::Running)
-    } else {
-      Ok(RunDisplayState::Attention)
-    }
+    self.node_state(session_id)?.runs.display_state(&run, &mut HostBoot::default())
   }
 
   /// Return every structural-change blocker in chronological run order; an empty list means none.
@@ -1114,17 +1150,6 @@ pub fn stop_requested_in_events(events: &[Value], run_id: &str, request_id: Opti
     event.get("type").and_then(Value::as_str) == Some("run_stop_requested")
       && event.get("run_id").and_then(Value::as_str) == Some(run_id)
       && request_id.is_none_or(|request_id| event.get("request_id").and_then(Value::as_str) == Some(request_id))
-  })
-}
-
-fn withheld_reason<'a>(events: &'a [Value], run_id: &str) -> Option<&'a str> {
-  events.iter().rev().find_map(|event| {
-    if event.get("type").and_then(Value::as_str) != Some("run_launch_withheld")
-      || event.get("run_id").and_then(Value::as_str) != Some(run_id)
-    {
-      return None;
-    }
-    event.get("reason").and_then(Value::as_str).filter(|reason| !reason.is_empty())
   })
 }
 

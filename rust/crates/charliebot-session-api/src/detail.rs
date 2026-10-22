@@ -19,16 +19,15 @@ use charliebot_registry::task_errors::task_http_error;
 use charliebot_registry::{FeatureContext, Registry};
 use charliebot_sched::triggers::{PendingTrigger, TriggerManager, TriggerStatus};
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, UtcDateTime};
-use charliebot_store::run_records::{self, RunOrder, RunRecord};
+use charliebot_store::run_records::{self, HostBoot, RunOrder, RunRecord};
 use charliebot_store::{Store, StoreError, StoreResult, TaskFacts};
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use http::header::HeaderValue;
 use serde_json::{Map, Value, json};
 
-use crate::listing;
 use crate::routes::Query;
-use crate::worker_transcript;
+use crate::{blocking_store, listing, worker_transcript};
 
 const BOOTSTRAP_MESSAGE_LIMIT: usize = 40;
 const FILE_GZIP_MEMO_LIMIT: usize = 2;
@@ -101,7 +100,8 @@ pub(crate) async fn session_detail(
     Ok(meta) => meta,
     Err(error) => return store_error(error),
   };
-  match features.store.session_detail(&meta.id) {
+  let store = Arc::clone(&features.store);
+  match blocking_store(move || store.session_detail(&meta.id)).await {
     Ok(payload) => responses::fast_json(StatusCode::OK, &payload),
     Err(error) => task_http_error(error),
   }
@@ -397,13 +397,14 @@ async fn session_runs(
     }
     Err(error) => return store_error(error),
   };
-  let events = match features.store.load_all_facts_shared_sync(&meta.id) {
-    Ok(events) => events,
+  let node = match features.store.node_state(&meta.id) {
+    Ok(node) => node,
     Err(error) => return store_error(error),
   };
+  let mut boot = HostBoot::default();
   let mut items = Vec::with_capacity(page.items.len());
   for run in page.items {
-    let state = match features.store.run_display_state(&meta.id, &run.id) {
+    let state = match node.runs.display_state(&run, &mut boot) {
       Ok(state) => state.as_str(),
       Err(error) => return store_error(error),
     };
@@ -413,10 +414,7 @@ async fn session_runs(
     };
     let object = row.as_object_mut().expect("run record serializes to an object");
     object.insert("state".to_string(), Value::String(state.to_string()));
-    object.insert(
-      "stop_requested".to_string(),
-      Value::Bool(run_records::stop_requested_in_events(events.as_slice(), &run.id, None)),
-    );
+    object.insert("stop_requested".to_string(), Value::Bool(node.runs.stop_requested(&run.id, None)));
     items.push(row);
   }
   responses::fast_json(StatusCode::OK, &json!({"items": items, "next_cursor": page.next_cursor}))

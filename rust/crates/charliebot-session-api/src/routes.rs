@@ -18,7 +18,7 @@ use http::header::HeaderValue;
 use serde_json::{Map, Value, json};
 
 use crate::listing::{self, SessionsListMemos};
-use crate::{search, sidebar, tree, write_routes};
+use crate::{blocking_store, search, sidebar, tree, write_routes};
 
 static ACTIVE_MEMOS: LazyLock<SessionsListMemos> = LazyLock::new(SessionsListMemos::default);
 type StatusBodyCache = Mutex<Vec<(StatusKey, Vec<u8>)>>;
@@ -64,18 +64,15 @@ pub(crate) fn matches(path: &str) -> bool {
 }
 
 async fn list_active(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
-  let result = (|| {
+  let response = blocking_store(move || {
     let (mut rows, derived) = listing::active_listing_corpus(&features.store, &features.registry)?;
     let sequence = features.store.sequence_subtree_roots()?;
     let views = features.store.view_subtree_roots()?;
     rows.retain(|row| !sequence.contains_key(&row.id) && !views.values().any(|members| members.contains_key(&row.id)));
-    Ok::<_, charliebot_store::StoreError>((rows, derived))
-  })();
-  let (rows, derived) = match result {
-    Ok(result) => result,
-    Err(error) => return store_error(error),
-  };
-  listing::sessions_list_response(&request, &features.store, &features.registry, &rows, &derived, &ACTIVE_MEMOS)
+    Ok(listing::sessions_list_response(&request, &features.store, &features.registry, &rows, &derived, &ACTIVE_MEMOS))
+  })
+  .await;
+  response.unwrap_or_else(store_error)
 }
 
 async fn list_archived(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
@@ -88,24 +85,50 @@ async fn list_archived(State(features): State<Arc<FeatureContext>>, request: Req
     Ok(limit) => limit.clamp(1, 500) as usize,
     Err(response) => return *response,
   };
-  let before = query.get("before");
-  let before_id = query.get("before_id");
-  match archived_page(&features, group.as_deref(), limit, before, before_id).await {
+  let before = query.get("before").map(str::to_string);
+  let before_id = query.get("before_id").map(str::to_string);
+  match archived_page(features, group, limit, before, before_id).await {
     Ok(response) => response,
     Err(error) => store_error(error),
   }
 }
 
 async fn archived_page(
-  features: &FeatureContext,
-  group: Option<&str>,
+  features: Arc<FeatureContext>,
+  group: Option<String>,
   limit: usize,
-  before: Option<&str>,
-  before_id: Option<&str>,
+  before: Option<String>,
+  before_id: Option<String>,
 ) -> Result<Response, charliebot_store::StoreError> {
-  let page = features.store.list_archived_page(group, limit, before, before_id)?;
-  let mut rows = page.sessions;
+  let store = Arc::clone(&features.store);
+  let page =
+    blocking_store(move || store.list_archived_page(group.as_deref(), limit, before.as_deref(), before_id.as_deref()))
+      .await?;
+  let rows = page.sessions;
   let context = features.store.archived_context_rows(&rows).await?;
+  let tail = ArchivedPageTail {
+    has_more: page.has_more,
+    next_before: page.next_before,
+    next_before_id: page.next_before_id,
+    groups: page.groups,
+  };
+  blocking_store(move || archived_page_body(&features, rows, context, tail)).await
+}
+
+/// The cursor and group fields of an archived page, which its body copies unchanged.
+struct ArchivedPageTail {
+  has_more: bool,
+  next_before: Option<String>,
+  next_before_id: Option<String>,
+  groups: Vec<(Option<String>, usize)>,
+}
+
+fn archived_page_body(
+  features: &FeatureContext,
+  mut rows: Vec<SessionMetadata>,
+  context: Vec<SessionMetadata>,
+  tail: ArchivedPageTail,
+) -> Result<Response, charliebot_store::StoreError> {
   let page_ids: std::collections::HashSet<String> = rows.iter().map(|row| row.id.clone()).collect();
   let mut merged: Vec<(bool, SessionMetadata)> =
     rows.drain(..).map(|row| (false, row)).chain(context.into_iter().map(|row| (true, row))).collect();
@@ -144,18 +167,22 @@ async fn archived_page(
     session_values.push(value);
   }
   let groups =
-    page.groups.into_iter().map(|(group, total)| json!({"group": group, "total": total})).collect::<Vec<Value>>();
+    tail.groups.into_iter().map(|(group, total)| json!({"group": group, "total": total})).collect::<Vec<Value>>();
   let body = json!({
     "sessions": session_values,
-    "has_more": page.has_more,
-    "next_before": page.next_before,
-    "next_before_id": page.next_before_id,
+    "has_more": tail.has_more,
+    "next_before": tail.next_before,
+    "next_before_id": tail.next_before_id,
     "groups": groups,
   });
   Ok(responses::fast_json(StatusCode::OK, &body))
 }
 
 async fn list_starred(State(features): State<Arc<FeatureContext>>) -> Response {
+  blocking_store(move || Ok(starred_response(&features))).await.unwrap_or_else(store_error)
+}
+
+fn starred_response(features: &FeatureContext) -> Response {
   let listed = match features.store.list_sessions(None, Some(true), None) {
     Ok(listed) => listed,
     Err(error) => return store_error(error),
@@ -192,7 +219,11 @@ async fn list_groups(State(features): State<Arc<FeatureContext>>) -> Response {
 }
 
 async fn session_status(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
-  let query = match Query::new(&request) {
+  blocking_store(move || Ok(session_status_response(&features, &request))).await.unwrap_or_else(store_error)
+}
+
+fn session_status_response(features: &FeatureContext, request: &Request<Body>) -> Response {
+  let query = match Query::new(request) {
     Ok(query) => query,
     Err(response) => return *response,
   };
@@ -212,21 +243,21 @@ async fn session_status(State(features): State<Arc<FeatureContext>>, request: Re
   if !force && let Some(body) = get_status_body(&key) {
     let full_poll = sidebar_state::register_poll(false);
     let _sessions = if full_poll {
-      match fresh_sessions(&features, &ids) {
+      match fresh_sessions(features, &ids) {
         Ok(sessions) => sessions,
         Err(error) => return store_error(error),
       }
     } else {
       Vec::new()
     };
-    return gzip_response(&request, body, &STATUS_GZIP_MEMO, 16);
+    return gzip_response(request, body, &STATUS_GZIP_MEMO, 16);
   }
-  let sessions = match fresh_sessions(&features, &ids) {
+  let sessions = match fresh_sessions(features, &ids) {
     Ok(sessions) => sessions,
     Err(error) => return store_error(error),
   };
   if sessions.is_empty() {
-    return gzip_response(&request, b"{}".to_vec(), &STATUS_GZIP_MEMO, 16);
+    return gzip_response(request, b"{}".to_vec(), &STATUS_GZIP_MEMO, 16);
   }
   let derived =
     match sidebar::resolve_sidebar_state(&features.store, &features.registry, &sessions, true, true, true, force) {
@@ -272,7 +303,7 @@ async fn session_status(State(features): State<Arc<FeatureContext>>, request: Re
   }
   let body = charliebot_compat::json::fast_json_bytes(&Value::Object(result));
   store_status_body(key, body.clone());
-  gzip_response(&request, body, &STATUS_GZIP_MEMO, 16)
+  gzip_response(request, body, &STATUS_GZIP_MEMO, 16)
 }
 
 async fn session_tree(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
@@ -289,14 +320,24 @@ async fn session_tree(State(features): State<Arc<FeatureContext>>, request: Requ
     Ok(value) => value as usize,
     Err(response) => return *response,
   };
-  match tree::tree_page(&features.store, parent_id, include_archived, limit, query.get("cursor")) {
+  let parent_id = parent_id.map(str::to_string);
+  let cursor = query.get("cursor").map(str::to_string);
+  let page = blocking_store(move || {
+    tree::tree_page(&features.store, parent_id.as_deref(), include_archived, limit, cursor.as_deref())
+  })
+  .await;
+  match page {
     Ok(value) => responses::fast_json(StatusCode::OK, &value),
     Err(error) => task_http_error(error),
   }
 }
 
 async fn session_search(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
-  let query = match Query::new(&request) {
+  blocking_store(move || Ok(search_response(&features, &request))).await.unwrap_or_else(store_error)
+}
+
+fn search_response(features: &FeatureContext, request: &Request<Body>) -> Response {
+  let query = match Query::new(request) {
     Ok(query) => query,
     Err(response) => return *response,
   };
@@ -320,7 +361,7 @@ async fn session_search(State(features): State<Arc<FeatureContext>>, request: Re
     values.push(value);
   }
   let body = charliebot_compat::json::fast_json_bytes(&Value::Array(values));
-  gzip_response(&request, body, &SEARCH_GZIP_MEMO, 2)
+  gzip_response(request, body, &SEARCH_GZIP_MEMO, 2)
 }
 
 fn apply_derived_fields(

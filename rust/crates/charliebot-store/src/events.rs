@@ -328,6 +328,7 @@ impl Store {
   pub fn evict_recovery_history(&self, session_id: &str) {
     self.clear_chat_events_cache(session_id);
     self.node_facts_cache.lock().expect("node facts cache mutex is not poisoned").remove(session_id);
+    self.node_state_cache.lock().expect("node state cache mutex is not poisoned").remove(session_id);
   }
 
   fn load_chat_events_shared_locked(
@@ -335,6 +336,8 @@ impl Store {
     session_id: &str,
     cache: &mut Option<CachedChatEvents>,
   ) -> StoreResult<Arc<Vec<ChatEvent>>> {
+    #[cfg(test)]
+    self.history_reads.fetch_add(1, Ordering::Relaxed);
     if let Some(cached) = cache.as_ref() {
       return Ok(Arc::clone(&cached.events));
     }

@@ -12,7 +12,7 @@ use serde_json::{Map, Value, json};
 
 use crate::control_events::{self, ACTOR_AGENT, ACTOR_SYSTEM, ACTOR_USER};
 use crate::metadata::{EventRef, SessionMetadata, SessionStatus, TaskProfile, TaskSpec, TaskType, UtcDateTime};
-use crate::run_records::{RunDisplayState, RunFacts, stop_requested_in_events};
+use crate::run_records::{HostBoot, RunDisplayState, RunFacts, stop_requested_in_events};
 use crate::store::{CachedNodeFacts, NODE_FACTS_CACHE_LIMIT};
 use crate::{ControlGuard, Store, StoreError, StoreResult};
 
@@ -115,6 +115,76 @@ impl Default for NodeFacts {
   fn default() -> Self {
     Self { runs: RunFacts::default(), task: Ok(TaskFacts::default()) }
   }
+}
+
+/// A node's task state and Run facts: the read-path summary of its full history, kept for every node it was read for.
+///
+/// The task state is the lifecycle verdict of the [`Store::facts_of`] fold. That fold skips an event whose id repeats
+/// an earlier one, and a malformed `task_imported` fact makes its result an error; the state keeps both rules. The Run
+/// facts read every event, as [`NodeFacts::runs`] does. The summary holds no copy of an event, so it stays small next
+/// to the history it covers.
+#[derive(Clone, Debug)]
+pub struct NodeState {
+  pub runs: RunFacts,
+  task_state: Result<TaskState, String>,
+  event_ids: HashSet<String>,
+}
+
+impl NodeState {
+  /// The task state, or the error that [`Store::facts_of`] returns for the same history.
+  pub fn task_state(&self) -> StoreResult<&str> {
+    self.task_state.as_deref().map_err(|message| StoreError::new(message.clone()))
+  }
+
+  fn fold(&mut self, events: &[Value]) {
+    for event in events {
+      self.runs.observe(event);
+      if self.task_state.is_err() {
+        continue;
+      }
+      if let Some(event_id) = event.get("id").and_then(Value::as_str)
+        && !self.event_ids.insert(event_id.to_string())
+      {
+        continue;
+      }
+      match event.get("type").and_then(Value::as_str).unwrap_or_default() {
+        "clone_start" | "task_reopened" => self.task_state = Ok("open".to_string()),
+        "task_closed" => {
+          let outcome = event.get("outcome").and_then(Value::as_str).filter(|value| !value.is_empty());
+          self.task_state = Ok(outcome.unwrap_or("completed").to_string());
+        }
+        "task_imported" => {
+          if let Err(error) = imported_pending_input_ids(event) {
+            self.task_state = Err(error.to_string());
+          }
+        }
+        _ => {}
+      }
+    }
+  }
+}
+
+impl Default for NodeState {
+  fn default() -> Self {
+    Self { runs: RunFacts::default(), task_state: Ok("open".to_string()), event_ids: HashSet::new() }
+  }
+}
+
+/// A node's [`NodeState`] and the history it covers, keyed as [`CachedNodeFacts`] is.
+pub(crate) struct CachedNodeState {
+  generation: u64,
+  archived: usize,
+  covered: usize,
+  state: Arc<NodeState>,
+}
+
+/// A node's memoized [`TaskTreeActivity`] and the inputs it was derived from: the run-record generation and, for a
+/// node with runs, the live-event cache's generation and length.
+#[derive(Clone)]
+pub(crate) struct CachedActivity {
+  records_generation: u64,
+  events: Option<(u64, usize)>,
+  activity: TaskTreeActivity,
 }
 
 impl Default for TaskFacts {
@@ -252,9 +322,47 @@ impl Store {
     Ok(facts)
   }
 
+  /// The node's task state and Run facts, shared. A read after appends folds only the events appended since the last
+  /// read. The memo has [`Store::node_facts`]' key, so it answers what a fold of [`Store::load_all_facts`] answers.
+  pub fn node_state(&self, session_id: &str) -> StoreResult<Arc<NodeState>> {
+    let (generation, live) = self.live_events_with_generation(session_id)?;
+    self.node_state_of(session_id, generation, &live)
+  }
+
+  /// [`Store::node_state`] for a caller that already holds the live events and their cache generation.
+  fn node_state_of(&self, session_id: &str, generation: u64, live: &[Value]) -> StoreResult<Arc<NodeState>> {
+    let archived = self.read_archive_offset(session_id)?;
+    let cached = {
+      let mut cache = self.node_state_cache.lock().expect("node state cache mutex is not poisoned");
+      match cache.get(session_id) {
+        Some(entry) if entry.generation == generation && entry.archived == archived && entry.covered == live.len() => {
+          return Ok(Arc::clone(&entry.state));
+        }
+        _ => cache.remove(session_id),
+      }
+    };
+    let mut entry = match cached {
+      Some(entry) if entry.generation == generation && entry.archived == archived && entry.covered <= live.len() => {
+        entry
+      }
+      _ => {
+        let mut state = NodeState::default();
+        if archived > 0 {
+          state.fold(&self.load_archive_range(session_id, 0, archived)?);
+        }
+        CachedNodeState { generation, archived, covered: 0, state: Arc::new(state) }
+      }
+    };
+    Arc::make_mut(&mut entry.state).fold(&live[entry.covered..]);
+    entry.covered = live.len();
+    let state = Arc::clone(&entry.state);
+    self.node_state_cache.lock().expect("node state cache mutex is not poisoned").insert(session_id.to_string(), entry);
+    Ok(state)
+  }
+
   /// Read the node’s fact-derived lifecycle state.
   pub fn task_state(&self, session_id: &str) -> StoreResult<TaskState> {
-    Ok(self.facts_of(session_id)?.task_state)
+    Ok(self.node_state(session_id)?.task_state()?.to_string())
   }
 
   /// Rebuild the cached task index after a node metadata write.
@@ -1094,13 +1202,42 @@ impl Store {
     )))
   }
 
-  /// Derive live and waiting work for one task node.
+  /// Derive live and waiting work for one task node, as `TaskSessions.activity_of` does.
+  ///
+  /// A node without runs is idle, and its derivation reads no history. Otherwise one history read answers the task
+  /// state and the facts of every run. The verdict is memoized on the run-record generation and, for a node with runs,
+  /// on the live-event cache's generation and length. A verdict that judged a process through `/proc` is not stored:
+  /// a process exit writes no file that would move the key.
   pub fn task_tree_activity(&self, session_id: &str) -> StoreResult<TaskTreeActivity> {
-    let task_open = self.task_state(session_id)? == "open";
+    let records_generation = self.records_generation();
+    let cached = self.activity_cache.lock().expect("activity cache mutex is not poisoned").get(session_id).cloned();
+    let mut snapshot = None;
+    if let Some(cached) = cached.filter(|cached| cached.records_generation == records_generation) {
+      let Some((events_generation, covered)) = cached.events else { return Ok(cached.activity) };
+      let (generation, live) = self.live_events_with_generation(session_id)?;
+      if generation == events_generation && live.len() == covered {
+        return Ok(cached.activity);
+      }
+      snapshot = Some((generation, live));
+    }
+    let runs = self.list_run_records_sync(session_id)?;
+    if runs.is_empty() {
+      let activity = TaskTreeActivity { has_running_tasks: false, work_state: "idle".to_string() };
+      let entry = CachedActivity { records_generation, events: None, activity: activity.clone() };
+      self.activity_cache.lock().expect("activity cache mutex is not poisoned").insert(session_id.to_string(), entry);
+      return Ok(activity);
+    }
+    let (generation, live) = match snapshot {
+      Some(snapshot) => snapshot,
+      None => self.live_events_with_generation(session_id)?,
+    };
+    let node = self.node_state_of(session_id, generation, &live)?;
+    let task_open = node.task_state()? == "open";
+    let mut boot = HostBoot::default();
     let mut running = false;
     let mut waiting = false;
-    for run in self.list_run_records_sync(session_id)? {
-      match self.run_display_state(session_id, &run.id)? {
+    for run in &runs {
+      match node.runs.display_state(run, &mut boot)? {
         RunDisplayState::Running => running = true,
         RunDisplayState::Queued | RunDisplayState::Withheld if task_open => waiting = true,
         RunDisplayState::Queued
@@ -1112,7 +1249,7 @@ impl Store {
         | RunDisplayState::Interrupted => {}
       }
     }
-    Ok(TaskTreeActivity {
+    let activity = TaskTreeActivity {
       has_running_tasks: running,
       work_state: if running {
         "running"
@@ -1122,7 +1259,16 @@ impl Store {
         "idle"
       }
       .to_string(),
-    })
+    };
+    let mut cache = self.activity_cache.lock().expect("activity cache mutex is not poisoned");
+    if boot.was_read() {
+      cache.remove(session_id);
+    } else {
+      let entry =
+        CachedActivity { records_generation, events: Some((generation, live.len())), activity: activity.clone() };
+      cache.insert(session_id.to_string(), entry);
+    }
+    Ok(activity)
   }
 
   /// Build the session detail projection used by the session read and completion routes.
@@ -1466,18 +1612,7 @@ fn fold_task_facts_from(facts: &mut TaskFacts, events: &[Value], offset: usize) 
       "task_imported" => {
         facts.boundary_index = Some(position);
         facts.imported_pending_ids.clear();
-        let pending = match event.get("pending_inputs") {
-          None | Some(Value::Null) => Vec::new(),
-          Some(Value::Array(pending)) => pending.clone(),
-          Some(_) => return Err(StoreError::new("task_imported pending_inputs must be an array")),
-        };
-        for entry in pending {
-          let Some(input_id) = entry.get("input_id").and_then(Value::as_str).filter(|value| !value.is_empty()) else {
-            return Err(StoreError::new(format!(
-              "task_imported event {:?} lists a pending input without a stable input_id",
-              event.get("id")
-            )));
-          };
+        for input_id in imported_pending_input_ids(event)? {
           facts.imported_pending_ids.insert(input_id.to_string());
         }
         facts.input_candidates = facts
@@ -1549,6 +1684,27 @@ fn fold_task_facts_from(facts: &mut TaskFacts, events: &[Value], offset: usize) 
   }
   facts.covered = offset + events.len();
   Ok(())
+}
+
+/// The stable input ids that a `task_imported` fact lists as pending. A list that is not an array, or an entry without
+/// a non-empty `input_id`, is the task fold's error.
+fn imported_pending_input_ids(event: &Value) -> StoreResult<Vec<&str>> {
+  let pending = match event.get("pending_inputs") {
+    None | Some(Value::Null) => return Ok(Vec::new()),
+    Some(Value::Array(pending)) => pending,
+    Some(_) => return Err(StoreError::new("task_imported pending_inputs must be an array")),
+  };
+  pending
+    .iter()
+    .map(|entry| {
+      entry.get("input_id").and_then(Value::as_str).filter(|value| !value.is_empty()).ok_or_else(|| {
+        StoreError::new(format!(
+          "task_imported event {:?} lists a pending input without a stable input_id",
+          event.get("id")
+        ))
+      })
+    })
+    .collect()
 }
 
 /// Fold `events`, which start at absolute history position `offset`, into the node's facts. A task fold error stays:
@@ -2921,6 +3077,124 @@ pub(crate) mod tests {
     let work = store.history_work();
     assert_eq!(work.full_folds - before.full_folds, 1);
     assert_eq!(work.folded_events - before.folded_events, full.covered as u64);
+  }
+
+  fn history_reads(store: &Store) -> u64 {
+    store.history_reads.load(Ordering::Relaxed)
+  }
+
+  #[tokio::test]
+  async fn activity_of_a_node_with_fifty_runs_reads_its_history_once() {
+    let home = tempfile::tempdir().unwrap();
+    let store = make_store(home.path());
+    let node = create_node(&store, "fifty-runs", None, TaskProfile::Manager).await;
+    // The records and facts land as files: 30 finished runs, 10 stopped queued runs and 10 queued runs.
+    let mut facts = String::new();
+    for index in 0..50 {
+      let run_id = format!("run-{index:02}");
+      let run_dir = store.run_dir(&node.id, &run_id);
+      fs::create_dir_all(&run_dir).unwrap();
+      let record = serde_json::to_string(&queued_run(&node.id, &run_id)).unwrap();
+      fs::write(run_dir.join(crate::run_records::RUN_METADATA_NAME), record).unwrap();
+      let fact = match index {
+        0..30 => json!({"type": "run_finished", "run_id": run_id, "outcome": "success"}),
+        30..40 => json!({"type": "run_stop_requested", "run_id": run_id, "request_id": "stop"}),
+        _ => continue,
+      };
+      facts.push_str(&format!("{fact}\n"));
+    }
+    let mut log = fs::OpenOptions::new().append(true).open(store.chat_events_path(&node.id)).unwrap();
+    std::io::Write::write_all(&mut log, facts.as_bytes()).unwrap();
+    // A cold derivation parses the log, as the first sidebar probe after boot recovery does.
+    store.evict_recovery_history(&node.id);
+
+    let before = history_reads(&store);
+    let activity = store.task_tree_activity(&node.id).unwrap();
+    assert_eq!(history_reads(&store) - before, 1, "one derivation reads the node's history once, not once per run");
+    assert_eq!(activity, TaskTreeActivity { has_running_tasks: false, work_state: "waiting".to_string() });
+
+    // The memoized verdict: its key check is the one read.
+    let before = history_reads(&store);
+    assert_eq!(store.task_tree_activity(&node.id).unwrap(), activity);
+    assert_eq!(history_reads(&store) - before, 1);
+
+    // A new fact moves the key: the queued runs stop, and the node is idle.
+    for index in 40..50 {
+      append(&store, &node.id, json!({"type": "run_stop_requested", "run_id": format!("run-{index:02}")})).await;
+    }
+    let before = history_reads(&store);
+    assert_eq!(store.task_tree_activity(&node.id).unwrap().work_state, "idle");
+    assert_eq!(history_reads(&store) - before, 1);
+  }
+
+  #[tokio::test]
+  async fn a_runless_node_is_idle_without_a_history_read() {
+    let home = tempfile::tempdir().unwrap();
+    let store = make_store(home.path());
+    let node = create_node(&store, "runless", None, TaskProfile::Manager).await;
+    // `activity_of` answers a runless node before its task fold, so a fold error does not reach the verdict.
+    append(&store, &node.id, json!({"id": "import", "type": "task_imported", "pending_inputs": "malformed"})).await;
+    store.evict_recovery_history(&node.id);
+
+    let before = history_reads(&store);
+    let activity = store.task_tree_activity(&node.id).unwrap();
+    assert_eq!(activity, TaskTreeActivity { has_running_tasks: false, work_state: "idle".to_string() });
+    assert_eq!(store.task_tree_activity(&node.id).unwrap(), activity);
+    assert_eq!(history_reads(&store), before);
+  }
+
+  #[tokio::test]
+  async fn an_activity_verdict_that_read_proc_is_not_memoized() {
+    let home = tempfile::tempdir().unwrap();
+    let store = make_store(home.path());
+    let node = create_node(&store, "live-run", None, TaskProfile::Manager).await;
+    let guard = store.control_lock().await;
+    store.register_run_locked(&guard, &node.id, queued_run(&node.id, "live"), None).await.unwrap();
+    drop(guard);
+    let pid = std::process::id();
+    let pid_start = charliebot_core::proc_identity::read_pid_stat(pid).unwrap().pid_start;
+    store.record_launch(&node.id, "live", pid, &pid_start).await.unwrap();
+
+    let running = TaskTreeActivity { has_running_tasks: true, work_state: "running".to_string() };
+    assert_eq!(store.task_tree_activity(&node.id).unwrap(), running);
+    assert!(!store.activity_cache.lock().unwrap().contains_key(&node.id), "a /proc verdict is not stored");
+
+    append(&store, &node.id, json!({"type": "run_finished", "run_id": "live", "outcome": "success"})).await;
+    assert_eq!(store.task_tree_activity(&node.id).unwrap().work_state, "idle");
+    assert!(store.activity_cache.lock().unwrap().contains_key(&node.id), "a fact-only verdict is stored");
+  }
+
+  #[tokio::test]
+  async fn the_task_state_memo_answers_the_full_fold() {
+    let home = tempfile::tempdir().unwrap();
+    let store = make_store(home.path());
+    let node = create_node(&store, "state-memo", None, TaskProfile::Manager).await;
+    let guard = store.control_lock().await;
+    store.register_run_locked(&guard, &node.id, queued_run(&node.id, "queued"), None).await.unwrap();
+    drop(guard);
+    let created_id = store.load_chat_events_sync(&node.id).unwrap()[0]["id"].as_str().unwrap().to_string();
+    let steps = [
+      (json!({"id": "close-1", "type": "task_closed", "outcome": "cancelled"}), "cancelled"),
+      (json!({"id": "reopen-1", "type": "task_reopened"}), "open"),
+      // A fact whose id repeats an earlier event's id is skipped by the fold.
+      (json!({"id": created_id, "type": "task_closed", "outcome": "completed"}), "open"),
+      (json!({"id": "close-2", "type": "task_closed", "outcome": ""}), "completed"),
+      (json!({"id": "clone", "type": "clone_start"}), "open"),
+    ];
+    for (event, expected) in steps {
+      append(&store, &node.id, event).await;
+      assert_eq!(store.task_state(&node.id).unwrap(), expected);
+      assert_eq!(store.facts_of(&node.id).unwrap().task_state, expected);
+    }
+
+    let import = json!({"id": "import", "type": "task_imported", "pending_inputs": [{"input_id": ""}]});
+    append(&store, &node.id, import).await;
+    let fold_error = store.facts_of(&node.id).unwrap_err().to_string();
+    assert_eq!(store.task_state(&node.id).unwrap_err().to_string(), fold_error);
+    assert_eq!(store.task_tree_activity(&node.id).unwrap_err().to_string(), fold_error);
+    // The Run facts still fold past the rejected fact.
+    append(&store, &node.id, json!({"type": "run_finished", "run_id": "queued", "outcome": "failed"})).await;
+    assert_eq!(store.run_display_state(&node.id, "queued").unwrap(), RunDisplayState::Failed);
   }
 
   #[test]

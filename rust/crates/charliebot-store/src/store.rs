@@ -21,7 +21,7 @@ use crate::hooks::{EventRenderer, RuntimeEventHooks};
 use crate::metadata::{RoundRating, SessionMetadata, SessionStatus, UtcDateTime};
 use crate::session_events::SessionEventState;
 use crate::streaming::StreamingManager;
-use crate::task_tree::{CachedTreeIndex, NodeFacts};
+use crate::task_tree::{CachedActivity, CachedNodeState, CachedTreeIndex, NodeFacts};
 use crate::thinking::ThinkingState;
 use crate::{ControlGuard, StoreError, StoreResult};
 
@@ -151,7 +151,12 @@ pub struct Store {
   pub(crate) metadata_locks: StdMutex<HashMap<String, Arc<Mutex<()>>>>,
   pub(crate) events_cache: StdMutex<HashMap<String, Arc<StdMutex<Option<CachedChatEvents>>>>>,
   pub(crate) node_facts_cache: StdMutex<HashMap<String, CachedNodeFacts>>,
+  pub(crate) node_state_cache: StdMutex<HashMap<String, CachedNodeState>>,
+  pub(crate) activity_cache: StdMutex<HashMap<String, CachedActivity>>,
   pub(crate) history_work: HistoryWorkCounters,
+  /// Reads of a node's history, each a call that hands out the live event list, cached or not.
+  #[cfg(test)]
+  pub(crate) history_reads: AtomicU64,
   pub(crate) next_events_cache_generation: AtomicU64,
   #[cfg(test)]
   pub(crate) metadata_stat_hook: StdMutex<Option<MetadataStatHook>>,
@@ -210,7 +215,11 @@ impl Store {
       metadata_locks: StdMutex::new(HashMap::new()),
       events_cache: StdMutex::new(HashMap::new()),
       node_facts_cache: StdMutex::new(HashMap::new()),
+      node_state_cache: StdMutex::new(HashMap::new()),
+      activity_cache: StdMutex::new(HashMap::new()),
       history_work: HistoryWorkCounters::default(),
+      #[cfg(test)]
+      history_reads: AtomicU64::new(0),
       next_events_cache_generation: AtomicU64::new(1),
       #[cfg(test)]
       metadata_stat_hook: StdMutex::new(None),

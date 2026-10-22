@@ -197,7 +197,7 @@ fn sigint_stops_task_recovery_during_boot() {
 /// so the signal lands between nodes. Each node's events are inert (the fact fold ignores their type), which lengthens
 /// the walk without a directory per node.
 const WALK_SESSIONS: usize = 200;
-const WALK_EVENTS: usize = 800;
+const WALK_EVENTS: usize = 4_800;
 const WALK_MIN_MS: u64 = 2_000;
 
 /// Writes task-tree nodes: a profiled session whose chat events open with a creation boundary. A session without a

@@ -14,7 +14,7 @@ use axum::extract::{Query, State};
 use axum::response::Response;
 use charliebot_compat::routing::get_only;
 use charliebot_compat::{responses, validation};
-use charliebot_core::config::CharlieBotConfig;
+use charliebot_core::config::{CharlieBotConfig, PathsConfig};
 use charliebot_core::paths;
 use charliebot_core::repo_root::RepoRoot;
 use charliebot_registry::FeatureContext;
@@ -70,44 +70,68 @@ async fn open(State(features): State<Arc<FeatureContext>>, Query(query): Query<H
 
 /// The answer of `open` for `folder`, under the config `cfg` and the repository `repo_root`.
 pub(crate) async fn open_code_server(cfg: &CharlieBotConfig, repo_root: &Path, folder: &str) -> Response {
-  let section = cfg.section::<CodeServerConfig>("code_server");
-  let Some(binary) = executable(section) else {
-    return http_error(StatusCode::NOT_FOUND, NOT_AVAILABLE_DETAIL);
-  };
-  let folder_path = match resolve_folder(folder, cfg) {
-    Ok(folder_path) => folder_path,
-    Err(response) => return response,
-  };
-  let config_path = config::config_path(section, repo_root);
-  let port = match config::listen_port(&config_path) {
-    Ok(port) => port,
-    Err(detail) => {
-      tracing::error!(error = %detail, "code_server_config_invalid");
-      return http_error(StatusCode::INTERNAL_SERVER_ERROR, &detail);
-    }
-  };
-  // `_is_listening` takes a socket port: a value beyond 0-65535 fails inside the socket call, unhandled.
-  let Ok(port) = u16::try_from(port) else {
-    return responses::internal_error("OverflowError", "port must be 0-65535.".to_string());
+  let section = cfg.section::<CodeServerConfig>("code_server").clone();
+  let paths = cfg.paths.clone();
+  let repo_root = repo_root.to_path_buf();
+  let folder = folder.to_owned();
+  let setup = tokio::task::spawn_blocking(move || prepare_open(&section, &paths, &repo_root, &folder)).await;
+  let setup = match setup {
+    Ok(Ok(setup)) => setup,
+    Ok(Err(response)) => return response,
+    Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
   };
 
-  if !is_listening(port).await {
-    let mut child = match spawn(&binary, &config_path) {
+  if !is_listening(setup.port).await {
+    let mut child = match spawn(&setup.binary, &setup.config_path) {
       Ok(child) => child,
       Err(error) => {
         tracing::error!(error = %error, "code_server_start_failed");
         return http_error(StatusCode::SERVICE_UNAVAILABLE, START_FAILURE_DETAIL);
       }
     };
-    if let Err(response) = wait_for_listener(&mut child, port).await {
+    if let Err(response) = wait_for_listener(&mut child, setup.port).await {
       return response;
     }
-    if !is_listening(port).await {
+    if !is_listening(setup.port).await {
       return http_error(StatusCode::SERVICE_UNAVAILABLE, START_FAILURE_DETAIL);
     }
   }
 
-  responses::json(StatusCode::OK, &json!({"port": port, "folder": paths::display(&folder_path)}))
+  responses::json(StatusCode::OK, &json!({"port": setup.port, "folder": paths::display(&setup.folder_path)}))
+}
+
+struct OpenSetup {
+  binary: String,
+  folder_path: PathBuf,
+  config_path: PathBuf,
+  port: u16,
+}
+
+/// `_resolve_code_server_executable`, `_resolve_folder_under_allowed_root` and config-file reads all run in the
+/// FastAPI sync endpoint's thread pool (`src/features/code_server/api.py:76-90`).
+fn prepare_open(
+  section: &CodeServerConfig,
+  paths: &PathsConfig,
+  repo_root: &Path,
+  folder: &str,
+) -> Result<OpenSetup, Response> {
+  let Some(binary) = executable(section) else {
+    return Err(http_error(StatusCode::NOT_FOUND, NOT_AVAILABLE_DETAIL));
+  };
+  let folder_path = resolve_folder(folder, paths)?;
+  let config_path = config::config_path(section, repo_root);
+  let port = match config::listen_port(&config_path) {
+    Ok(port) => port,
+    Err(detail) => {
+      tracing::error!(error = %detail, "code_server_config_invalid");
+      return Err(http_error(StatusCode::INTERNAL_SERVER_ERROR, &detail));
+    }
+  };
+  // `_is_listening` takes a socket port: a value beyond 0-65535 fails inside the socket call, unhandled.
+  let Ok(port) = u16::try_from(port) else {
+    return Err(responses::internal_error("OverflowError", "port must be 0-65535.".to_string()));
+  };
+  Ok(OpenSetup { binary, folder_path, config_path, port })
 }
 
 /// The poll loop after a spawn: every 0.2 s for up to 5 s, stopping early when the process exits.
@@ -168,14 +192,14 @@ pub(crate) fn executable(section: &CodeServerConfig) -> Option<String> {
 
 /// `_resolve_folder_under_allowed_root`: the folder, resolved, when it is a directory under a workspace directory or
 /// the worktree directory.
-fn resolve_folder(folder: &str, cfg: &CharlieBotConfig) -> Result<PathBuf, Response> {
+fn resolve_folder(folder: &str, paths: &PathsConfig) -> Result<PathBuf, Response> {
   let folder_path = paths::realpath(&PathBuf::from(paths::expanduser(&config::pathlib_text(folder))));
   if !folder_path.is_dir() {
     return Err(http_error(StatusCode::BAD_REQUEST, &format!("Not a directory: {folder}")));
   }
   let mut roots: Vec<PathBuf> =
-    cfg.paths.workspace_dirs.iter().map(|dir| paths::realpath(&PathBuf::from(paths::expanduser(dir)))).collect();
-  roots.push(paths::realpath(&PathBuf::from(paths::expanduser(&cfg.paths.worktree_dir))));
+    paths.workspace_dirs.iter().map(|dir| paths::realpath(&PathBuf::from(paths::expanduser(dir)))).collect();
+  roots.push(paths::realpath(&PathBuf::from(paths::expanduser(&paths.worktree_dir))));
   if !roots.iter().any(|root| folder_path.starts_with(root)) {
     return Err(http_error(
       StatusCode::BAD_REQUEST,

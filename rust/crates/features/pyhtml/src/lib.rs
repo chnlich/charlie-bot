@@ -5,5 +5,5 @@ mod parser;
 mod sequence;
 
 pub use entities::{escape, unescape};
-pub use parser::{Event, EventKind, ParseError, Position, parse};
+pub use parser::{Event, EventKind, ParseError, Position, StreamEvent, parse, parse_with};
 pub use sequence::{MatchingBlock, Opcode, OpcodeTag, find_longest_match, matching_blocks, opcodes};

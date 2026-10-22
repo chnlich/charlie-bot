@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::LazyLock;
 
 use charliebot_core::pystr;
-use charliebot_pyhtml::{Event, EventKind, Opcode, OpcodeTag, escape, opcodes, parse, unescape};
+use charliebot_pyhtml::{EventKind, Opcode, OpcodeTag, StreamEvent, escape, opcodes, parse_with, unescape};
 use regex::Regex;
 
 const IGNORED_TAGS: &[&str] = &["head", "style", "script", "template", "noscript", "title"];
@@ -149,17 +149,16 @@ impl Parser {
       parts: Vec::new(),
       stack: vec![0],
     };
-    for event in parse(source, false).map_err(|error| format!("{}: {}", error.exception, error.message))? {
-      parser.handle(event);
-    }
+    parse_with(source, false, |event| parser.handle(event))
+      .map_err(|error| format!("{}: {}", error.exception, error.message))?;
     Ok(parser)
   }
 
-  fn handle(&mut self, event: Event) {
+  fn handle(&mut self, event: StreamEvent) {
     match event.kind {
       EventKind::StartTag | EventKind::StartEndTag => self.open_node(&event),
       EventKind::EndTag => self.close_node(&event),
-      EventKind::Data => self.append_data(&event),
+      EventKind::Data => self.append_data(event),
       EventKind::EntityReference => self.append_reference(&event, false),
       EventKind::CharacterReference => self.append_reference(&event, true),
       EventKind::Comment
@@ -169,7 +168,7 @@ impl Parser {
     }
   }
 
-  fn open_node(&mut self, event: &Event) {
+  fn open_node(&mut self, event: &StreamEvent) {
     let args = event.args.as_array().expect("start-tag events have an argument list");
     let tag = args[0].as_str().expect("start-tag events have a tag").to_owned();
     let attrs = args[1]
@@ -202,7 +201,7 @@ impl Parser {
     }
   }
 
-  fn close_node(&mut self, event: &Event) {
+  fn close_node(&mut self, event: &StreamEvent) {
     let tag = event.args[0].as_str().expect("end-tag events have a tag");
     let start = event.byte_offset;
     let end_end = start + self.source[start..].find('>').expect("an end-tag event includes >") + 1;
@@ -214,17 +213,20 @@ impl Parser {
     }
   }
 
-  fn append_data(&mut self, event: &Event) {
-    let text = event.args[0].as_str().expect("data events have text");
+  fn append_data(&mut self, mut event: StreamEvent) {
+    let text = match std::mem::take(&mut event.args[0]) {
+      serde_json::Value::String(text) => text,
+      other => unreachable!("data events have text, got {other:?}"),
+    };
     let start = event.byte_offset;
     let end = start + text.len();
     assert_eq!(&self.source[start..end], text, "HTMLParser data offsets address the source text");
     let raw_ranges =
       text.char_indices().map(|(offset, character)| (start + offset, start + offset + character.len_utf8())).collect();
-    self.append_part(start, text.to_owned(), raw_ranges);
+    self.append_part(start, text, raw_ranges);
   }
 
-  fn append_reference(&mut self, event: &Event, character_reference: bool) {
+  fn append_reference(&mut self, event: &StreamEvent, character_reference: bool) {
     let name = event.args[0].as_str().expect("reference events have a reference name");
     let start = event.byte_offset;
     let base_punctuation = if character_reference { 2 } else { 1 };

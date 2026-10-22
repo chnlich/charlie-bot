@@ -1,6 +1,7 @@
 //! The diag route (`src/features/diag/api.py`): `POST /api/diag/switch-events`, one validated telemetry point per
 //! call, logged as a single `diag_switch` line. No session or state is consulted; the route answers `{"ok": true}`.
 
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use axum::Router;
@@ -8,7 +9,7 @@ use axum::body::Body;
 use axum::extract::State;
 use axum::http::Request;
 use axum::response::Response;
-use charliebot_compat::fastapi_body::{self, BodyModel, Field, FieldType, RequestBody};
+use charliebot_compat::fastapi_body::{self, BodyModel, Field, FieldType};
 use charliebot_compat::responses;
 use charliebot_compat::routing::post_only;
 use charliebot_compat::validation::Bound;
@@ -53,42 +54,41 @@ async fn post_switch_event(State(_features): State<Arc<FeatureContext>>, request
     Ok(body) => body,
     Err(response) => return *response,
   };
-  let event = match SwitchEvent::validate(&body) {
-    Ok(event) => event,
+  let values = match body.validate(&SWITCH_EVENT_BODY) {
+    Ok(Some(Value::Object(values))) => values,
+    Ok(_) => unreachable!("a required model validates a body to its fields"),
     Err(response) => return *response,
   };
+  let event = SwitchEvent::from_values(&values);
   log_switch_event(&event);
   responses::json(StatusCode::OK, &json!({"ok": true}))
 }
 
 /// The validated `SwitchEventRequest`.
-pub struct SwitchEvent {
+pub struct SwitchEvent<'a> {
   pub phase: String,
   pub from_session: Option<String>,
   pub to_session: String,
   pub generation: i128,
   pub winner_generation: Option<i128>,
   pub elapsed_ms: Option<i128>,
-  pub error: Option<String>,
+  pub error: Option<&'a str>,
   pub client_ts: String,
 }
 
-impl SwitchEvent {
-  /// Validates the body against `SWITCH_EVENT_BODY` and reads its fields in the model's declaration order.
-  fn validate(body: &RequestBody) -> Result<Self, Box<Response>> {
-    let Some(Value::Object(values)) = body.validate(&SWITCH_EVENT_BODY)? else {
-      unreachable!("a required model validates a body to its fields")
-    };
-    Ok(Self {
-      phase: string(&values, "phase"),
-      from_session: optional_string(&values, "from_session"),
-      to_session: string(&values, "to_session"),
-      generation: integer(&values, "generation").expect("a required integer validates to a value"),
-      winner_generation: integer(&values, "winner_generation"),
-      elapsed_ms: integer(&values, "elapsed_ms"),
-      error: optional_string(&values, "error"),
-      client_ts: string(&values, "client_ts"),
-    })
+impl<'a> SwitchEvent<'a> {
+  /// Reads the validated fields in model declaration order and borrows `error` from the validated value.
+  fn from_values(values: &'a serde_json::Map<String, Value>) -> Self {
+    Self {
+      phase: string(values, "phase"),
+      from_session: optional_string(values, "from_session"),
+      to_session: string(values, "to_session"),
+      generation: integer(values, "generation").expect("a required integer validates to a value"),
+      winner_generation: integer(values, "winner_generation"),
+      elapsed_ms: integer(values, "elapsed_ms"),
+      error: optional_str(values, "error"),
+      client_ts: string(values, "client_ts"),
+    }
   }
 }
 
@@ -102,6 +102,14 @@ fn string(values: &serde_json::Map<String, Value>, name: &str) -> String {
 fn optional_string(values: &serde_json::Map<String, Value>, name: &str) -> Option<String> {
   match values.get(name) {
     Some(Value::String(text)) => Some(text.clone()),
+    Some(Value::Null) | None => None,
+    other => unreachable!("the validated body carries a string or null {name}, got {other:?}"),
+  }
+}
+
+fn optional_str<'a>(values: &'a serde_json::Map<String, Value>, name: &str) -> Option<&'a str> {
+  match values.get(name) {
+    Some(Value::String(text)) => Some(text),
     Some(Value::Null) | None => None,
     other => unreachable!("the validated body carries a string or null {name}, got {other:?}"),
   }
@@ -124,16 +132,18 @@ fn integer(values: &serde_json::Map<String, Value>, name: &str) -> Option<i128> 
 }
 
 /// `error` cut to its first `MAX_ERROR_CHARS` code points, as Python's `error[:MAX_ERROR_CHARS]` keeps.
-pub fn cut_error(error: Option<&str>) -> Option<String> {
-  match error {
-    Some(error) if error.chars().count() > MAX_ERROR_CHARS => Some(error.chars().take(MAX_ERROR_CHARS).collect()),
-    other => other.map(str::to_string),
-  }
+/// Like `src/features/diag/api.py:32-39`, borrow the validated string and inspect only the first character past the
+/// limit before allocating the retained prefix.
+pub fn cut_error<'a>(error: Option<&'a str>) -> Option<Cow<'a, str>> {
+  error.map(|error| match error.char_indices().nth(MAX_ERROR_CHARS) {
+    Some((end, _)) => Cow::Owned(error[..end].to_owned()),
+    None => Cow::Borrowed(error),
+  })
 }
 
 /// The `diag_switch` record: the validated fields in `model_dump()` order, with the cut error and an absent optional
 /// logged as null. `error` is the cut error, which must outlive the record.
-pub fn switch_record<'a>(event: &'a SwitchEvent, error: &'a str) -> Vec<(&'static str, LogValue<'a>)> {
+pub fn switch_record<'a>(event: &'a SwitchEvent<'_>, error: &'a str) -> Vec<(&'static str, LogValue<'a>)> {
   vec![
     ("phase", LogValue::Str(&event.phase)),
     ("from_session", LogValue::of(event.from_session.as_deref())),
@@ -188,8 +198,8 @@ impl std::fmt::Display for LogValue<'_> {
 }
 
 /// The one `diag_switch` line, its fields in `model_dump()` order.
-fn log_switch_event(event: &SwitchEvent) {
-  let error = cut_error(event.error.as_deref());
+fn log_switch_event(event: &SwitchEvent<'_>) {
+  let error = cut_error(event.error);
   let error = error.as_deref().unwrap_or("");
   let record = switch_record(event, error);
   let [phase, from_session, to_session, _, winner_generation, elapsed_ms, error, client_ts] = record[..] else {
@@ -210,6 +220,7 @@ fn log_switch_event(event: &SwitchEvent) {
 
 #[cfg(test)]
 mod tests {
+  use charliebot_compat::fastapi_body::RequestBody;
   use charliebot_compat::validation::{FieldError, Kind, Loc};
   use serde_json::json;
 
@@ -263,7 +274,12 @@ mod tests {
     body["generation"] = json!(i64::MAX as u64 + 1);
     body["winner_generation"] = json!(u64::MAX);
     body["elapsed_ms"] = json!(i64::MAX as u64 + 1);
-    let event = SwitchEvent::validate(&RequestBody::Json(body)).expect("the body reader's integer range is valid");
+    let values = RequestBody::Json(body)
+      .validate(&SWITCH_EVENT_BODY)
+      .expect("the body reader's integer range is valid")
+      .expect("the body is present");
+    let Value::Object(values) = values else { panic!("the body validates to its fields") };
+    let event = SwitchEvent::from_values(&values);
 
     assert_eq!(event.generation, i64::MAX as i128 + 1);
     assert_eq!(event.winner_generation, Some(u64::MAX as i128));
@@ -272,6 +288,21 @@ mod tests {
     assert_eq!(record[3].1, LogValue::Int(i64::MAX as i128 + 1));
     assert_eq!(record[4].1, LogValue::Int(u64::MAX as i128));
     assert_eq!(record[5].1, LogValue::Int(i64::MAX as i128 + 1));
+  }
+
+  #[test]
+  fn validated_error_is_borrowed_and_short_cuts_reuse_the_input() {
+    let mut body = valid_body();
+    body["error"] = json!("short diagnostic");
+    let values =
+      RequestBody::Json(body).validate(&SWITCH_EVENT_BODY).expect("the body is valid").expect("the body is present");
+    let Value::Object(values) = values else { panic!("the body validates to its fields") };
+    let event = SwitchEvent::from_values(&values);
+    let validated_error = values["error"].as_str().expect("the validated error is text");
+    assert_eq!(event.error.unwrap().as_ptr(), validated_error.as_ptr());
+
+    let short = cut_error(event.error).expect("the error is present");
+    assert!(matches!(short, Cow::Borrowed(_)));
   }
 
   #[test]
@@ -343,7 +374,7 @@ mod tests {
       generation: 1,
       winner_generation: None,
       elapsed_ms: None,
-      error: Some(long.clone()),
+      error: Some(&long),
       client_ts: "2026-02-13T10:00:00Z".to_string(),
     };
     let cut = cut_error(Some(&long)).expect("the error is over the limit");

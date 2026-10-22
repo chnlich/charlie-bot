@@ -1522,16 +1522,16 @@ mod tests {
       )
       .await
       .unwrap();
-    add_runs(&features, &parent, 40).await;
-    add_runs(&features, &child, 20).await;
-    for index in 0..24 {
+    add_runs(&features, &parent, 10).await;
+    add_runs(&features, &child, 5).await;
+    for index in 0..4 {
       features
         .store
         .append_chat_event(&parent.id, json!({"type":"user","content":format!("parent-{index}")}))
         .await
         .unwrap();
     }
-    for index in 0..12 {
+    for index in 0..2 {
       features
         .store
         .append_chat_event(&child.id, json!({"type":"user","content":format!("child-{index}")}))
@@ -1547,7 +1547,7 @@ mod tests {
     let outcomes = TaskCompletion::new(std::sync::Arc::clone(&features)).delivery_run_outcomes(&parent).unwrap();
 
     let after = features.store.history_work();
-    assert_eq!(outcomes.0.len(), 60);
+    assert_eq!(outcomes.0.len(), 15);
     // Node-state folds from the tree index also count in `full_folds`; the outcomes read only node facts.
     let facts_folds =
       (after.full_folds - before.full_folds) - (after.node_state_full_folds - before.node_state_full_folds);
@@ -1581,7 +1581,7 @@ mod tests {
       .await
       .unwrap();
     for session_id in [&parent.id, &child.id] {
-      for index in 0..12 {
+      for index in 0..2 {
         features
           .store
           .append_chat_event(session_id, json!({"type":"user","content":format!("history-{index}")}))

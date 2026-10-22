@@ -201,6 +201,16 @@ function messageIdentityAttrs(msg) {
   return attrs;
 }
 
+// An error row: a system message whose text starts with ERROR_PREFIX. The
+// aggregator's ASSISTANT_ERROR and ERROR handlers (message_aggregator.py,
+// _SIMPLE_HANDLERS) write that prefix, so keep it in step with them. The For you
+// filter and rendering.js both read this one test.
+const ERROR_PREFIX = 'Error: ';
+
+function isErrorRow(msg) {
+  return msg.role === 'system' && String(msg.content || '').startsWith(ERROR_PREFIX);
+}
+
 function isRenderedMessage(msg) {
   const id = messageRenderId(msg);
   if (!id) return false;
@@ -237,6 +247,7 @@ const CHAT_ONLY = {
   escapeJsSingleQuoted,
   messageIdentityAttrs,
   toolInputSummary,
+  isErrorRow,
   turnEngines,
   activeTurnEngineFor,
 };

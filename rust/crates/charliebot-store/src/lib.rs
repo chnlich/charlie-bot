@@ -32,18 +32,18 @@ pub use listing::{ArchivedPage, MetadataListing, RawMetadata};
 pub use message_utils::{MessageProvenance, SESSION_NOT_FOUND_DETAIL, build_scheduled_trigger_event};
 pub use projection::MessageProjection;
 pub use run_records::{
-  RetryRunFields, RunBlocker, RunDisplayState, RunKind, RunOrder, RunOutcome, RunOutcomeKind, RunPage, RunRecord,
-  SequenceRef, StopRequest, StopResult,
+  RetryRunFields, RunBlocker, RunDisplayState, RunFacts, RunKind, RunOrder, RunOutcome, RunOutcomeKind, RunPage,
+  RunRecord, SequenceRef, StopRequest, StopResult,
 };
 pub use session_events::RAW_EVENTS_REPLACED_BY_DELTAS;
 pub use store::{
-  AccountLabelKeeper, AnchorFieldReconciler, SequenceArchiveHook, SequenceBindingMover, SequenceListingFields, Store,
-  StoreHookFuture, StoreHooks,
+  AccountLabelKeeper, AnchorFieldReconciler, HistoryWork, SequenceArchiveHook, SequenceBindingMover,
+  SequenceListingFields, Store, StoreHookFuture, StoreHooks,
 };
 pub use streaming::{SIDEBAR_CHANNEL, STREAM_COALESCE_INTERVAL, StreamingManager, Subscription, session_channel};
 pub use task_tree::{
-  AGENT_CREATE_SCOPE_REFUSAL, CreateTask, PatchTask, PromptScope, StructuralBlockers, TASK_CREATE_REQUEST_ID_REQUIRED,
-  TaskCaller, TaskFacts, TaskState, TaskTreeActivity, is_read_only_exempt,
+  AGENT_CREATE_SCOPE_REFUSAL, CreateTask, NodeFacts, PatchTask, PromptScope, StructuralBlockers,
+  TASK_CREATE_REQUEST_ID_REQUIRED, TaskCaller, TaskFacts, TaskState, TaskTreeActivity, is_read_only_exempt,
 };
 
 use std::fmt;

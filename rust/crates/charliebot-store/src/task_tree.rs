@@ -3,6 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
@@ -11,7 +12,8 @@ use serde_json::{Map, Value, json};
 
 use crate::control_events::{self, ACTOR_AGENT, ACTOR_SYSTEM, ACTOR_USER};
 use crate::metadata::{EventRef, SessionMetadata, SessionStatus, TaskProfile, TaskSpec, TaskType, UtcDateTime};
-use crate::run_records::{RunDisplayState, stop_requested_in_events};
+use crate::run_records::{RunDisplayState, RunFacts, stop_requested_in_events};
+use crate::store::{CachedNodeFacts, NODE_FACTS_CACHE_LIMIT};
 use crate::{ControlGuard, Store, StoreError, StoreResult};
 
 const TREE_INDEX_TTL: Duration = Duration::from_secs(2);
@@ -90,6 +92,13 @@ pub struct TaskFacts {
   pub event_order: Vec<String>,
   pub events_by_id: HashMap<String, Value>,
   pub covered: usize,
+}
+
+/// A node's folded facts: the task fold and the Run facts of the same history.
+#[derive(Clone, Debug, Default)]
+pub struct NodeFacts {
+  pub task: TaskFacts,
+  pub runs: RunFacts,
 }
 
 impl Default for TaskFacts {
@@ -185,9 +194,80 @@ impl Store {
     fold_task_facts(&events)
   }
 
+  /// The node's folded facts, shared. A read after appends folds only the events appended since the last read.
+  pub fn node_facts(&self, session_id: &str) -> StoreResult<Arc<NodeFacts>> {
+    let (generation, live) = self.live_events_with_generation(session_id)?;
+    let archived = self.read_archive_offset(session_id)?;
+    let cached = self.node_facts_cache.lock().expect("node facts cache mutex is not poisoned").remove(session_id);
+    let mut entry = match cached {
+      Some(entry) if entry.generation == generation && entry.archived == archived && entry.covered <= live.len() => {
+        entry
+      }
+      _ => {
+        let mut facts = NodeFacts::default();
+        if archived > 0 {
+          let archive = self.load_archive_range(session_id, 0, archived)?;
+          fold_node_facts_from(&mut facts, &archive, 0)?;
+          self.history_work.folded_events.fetch_add(archive.len() as u64, Ordering::Relaxed);
+        }
+        self.history_work.full_folds.fetch_add(1, Ordering::Relaxed);
+        CachedNodeFacts { generation, archived, covered: 0, facts: Arc::new(facts) }
+      }
+    };
+    if entry.covered < live.len() {
+      let suffix = &live[entry.covered..];
+      fold_node_facts_from(Arc::make_mut(&mut entry.facts), suffix, archived + entry.covered)?;
+      self.history_work.folded_events.fetch_add(suffix.len() as u64, Ordering::Relaxed);
+      entry.covered = live.len();
+    }
+    let facts = Arc::clone(&entry.facts);
+    let mut cache = self.node_facts_cache.lock().expect("node facts cache mutex is not poisoned");
+    if !cache.contains_key(session_id)
+      && cache.len() >= NODE_FACTS_CACHE_LIMIT
+      && let Some(evicted) = cache.keys().next().cloned()
+    {
+      cache.remove(&evicted);
+    }
+    cache.insert(session_id.to_string(), entry);
+    Ok(facts)
+  }
+
   /// Read the node’s fact-derived lifecycle state.
   pub fn task_state(&self, session_id: &str) -> StoreResult<TaskState> {
     Ok(self.facts_of(session_id)?.task_state)
+  }
+
+  /// Read task state from the newest live lifecycle fact, falling back to the full fold when the tail cannot decide.
+  pub fn task_state_fast(&self, session_id: &str) -> StoreResult<TaskState> {
+    let file_identity = self.chat_events_identity(session_id)?;
+    let archive_offset = self.read_archive_offset(session_id)?;
+    let identity = file_identity
+      .map(|(device, inode, size, mtime, mtime_nsec)| (device, inode, size, mtime, mtime_nsec, archive_offset));
+    if let Some(cached) =
+      self.task_state_tail_cache.lock().expect("task state tail cache mutex is not poisoned").get(session_id)
+      && cached.identity == identity
+    {
+      return Ok(cached.state.clone());
+    }
+    let state = match self.latest_task_lifecycle_event(session_id)? {
+      Some(event) => match event.get("type").and_then(Value::as_str) {
+        Some("clone_start" | "task_reopened") => "open".to_string(),
+        Some("task_closed") => event
+          .get("outcome")
+          .and_then(Value::as_str)
+          .filter(|outcome| !outcome.is_empty())
+          .unwrap_or("completed")
+          .to_string(),
+        _ => unreachable!("tail reader returns only lifecycle events"),
+      },
+      None => self.node_facts(session_id)?.task.task_state.clone(),
+    };
+    self
+      .task_state_tail_cache
+      .lock()
+      .expect("task state tail cache mutex is not poisoned")
+      .insert(session_id.to_string(), crate::store::CachedTaskStateTail { identity, state: state.clone() });
+    Ok(state)
   }
 
   /// Rebuild the cached task index after a node metadata write.
@@ -557,7 +637,7 @@ impl Store {
     scope: PromptScope,
   ) -> StoreResult<()> {
     self.require_control_guard(guard)?;
-    let events = self.load_chat_events_sync(session_id)?;
+    let events = self.load_chat_events_shared_sync(session_id)?;
     let scope_name = scope.as_str();
     let last = events.iter().rev().find(|event| {
       event.get("type").and_then(Value::as_str) == Some("prompt_changed")
@@ -1361,7 +1441,14 @@ fn archived_of(
 
 fn fold_task_facts(events: &[Value]) -> StoreResult<TaskFacts> {
   let mut facts = TaskFacts::default();
-  for (position, event) in events.iter().enumerate() {
+  fold_task_facts_from(&mut facts, events, 0)?;
+  Ok(facts)
+}
+
+/// Fold `events`, which start at absolute history position `offset`, into `facts` holding the history before them.
+fn fold_task_facts_from(facts: &mut TaskFacts, events: &[Value], offset: usize) -> StoreResult<()> {
+  for (index, event) in events.iter().enumerate() {
+    let position = offset + index;
     if let Some(event_id) = event.get("id").and_then(Value::as_str)
       && !facts.event_ids.insert(event_id.to_string())
     {
@@ -1473,8 +1560,16 @@ fn fold_task_facts(events: &[Value]) -> StoreResult<TaskFacts> {
       facts.input_candidates.push(event.clone());
     }
   }
-  facts.covered = events.len();
-  Ok(facts)
+  facts.covered = offset + events.len();
+  Ok(())
+}
+
+/// Fold `events`, which start at absolute history position `offset`, into the node's facts.
+fn fold_node_facts_from(facts: &mut NodeFacts, events: &[Value], offset: usize) -> StoreResult<()> {
+  for event in events {
+    facts.runs.observe(event);
+  }
+  fold_task_facts_from(&mut facts.task, events, offset)
 }
 
 fn admits_input(event: &Value) -> bool {
@@ -2812,6 +2907,43 @@ pub(crate) mod tests {
     let error =
       fold_task_facts(&[json!({"id": "bad-import", "type": "task_imported", "pending_inputs": [{}]})]).unwrap_err();
     assert!(error.to_string().contains("without a stable input_id"));
+  }
+
+  #[tokio::test]
+  async fn node_facts_fold_each_appended_event_once() {
+    let home = tempfile::tempdir().unwrap();
+    let store = make_store(home.path());
+    let node = create_node(&store, "node-facts-suffix", None, TaskProfile::Manager).await;
+
+    let before = store.history_work();
+    assert_eq!(store.node_facts(&node.id).unwrap().task.task_state, "open");
+    append(&store, &node.id, json!({"id": "user-a", "type": "user", "content": "first"})).await;
+    append(&store, &node.id, json!({"type": "task_closed", "outcome": "completed"})).await;
+    append(&store, &node.id, json!({"id": "user-b", "type": "user", "content": "after close"})).await;
+    let folded = store.node_facts(&node.id).unwrap();
+    let full = store.facts_of(&node.id).unwrap();
+    assert_eq!(folded.task.task_state, full.task_state);
+    assert_eq!(folded.task.covered, full.covered);
+    assert_eq!(folded.task.boundary_index, full.boundary_index);
+    assert_eq!(folded.task.input_candidates, full.input_candidates);
+    let work = store.history_work();
+    assert_eq!(work.full_folds - before.full_folds, 1);
+    assert_eq!(work.folded_events - before.folded_events, full.covered as u64);
+  }
+
+  #[tokio::test]
+  async fn task_state_fast_tracks_lifecycle_facts_appended_after_a_cached_read() {
+    let home = tempfile::tempdir().unwrap();
+    let store = make_store(home.path());
+    let node = create_node(&store, "task-state-tail", None, TaskProfile::Manager).await;
+
+    assert_eq!(store.task_state_fast(&node.id).unwrap(), "open");
+    append(&store, &node.id, json!({"type": "task_closed", "outcome": "completed"})).await;
+    assert_eq!(store.task_state_fast(&node.id).unwrap(), store.task_state(&node.id).unwrap());
+    append(&store, &node.id, json!({"type": "task_reopened"})).await;
+    assert_eq!(store.task_state_fast(&node.id).unwrap(), "open");
+    append(&store, &node.id, json!({"type": "clone_start"})).await;
+    assert_eq!(store.task_state_fast(&node.id).unwrap(), store.task_state(&node.id).unwrap());
   }
 
   #[test]

@@ -195,23 +195,26 @@ impl Dispatcher {
 
   /// Return the task's currently pending input facts from the durable boundary and run records.
   pub fn pending_inputs(&self, session_id: &str) -> StoreResult<Vec<Value>> {
-    let facts = self.store.facts_of(session_id)?;
-    if facts.boundary_index.is_none() && facts.imported_pending_ids.is_empty() {
+    let facts = self.store.node_facts(session_id)?;
+    if facts.task.boundary_index.is_none() && facts.task.imported_pending_ids.is_empty() {
       return Err(StoreError::invalid(format!(
         "task {session_id} has no creation or import boundary; it is not a task-tree node"
       )));
     }
+    // Claimed inputs only remove candidates, so with none the run listing can matter only through an unknown outcome.
+    if facts.task.input_candidates.is_empty() && !facts.runs.has_unknown_outcome() {
+      return Ok(Vec::new());
+    }
     let run_records = self.store.list_run_records_sync(session_id)?;
-    let events = self.store.load_all_facts(session_id)?;
     let mut claimed = HashSet::new();
     for run in run_records {
-      let launched = run.pid.is_some() || run_records::terminal_outcome(&events, &run.id)?.is_some();
-      if !launched && run_records::stop_requested_in_events(&events, &run.id, None) {
+      let launched = run.pid.is_some() || facts.runs.terminal_outcome(&run.id)?.is_some();
+      if !launched && facts.runs.stop_requested(&run.id, None) {
         continue;
       }
       claimed.extend(run.input_event_ids);
     }
-    Ok(deduplicate_pending_inputs(facts.input_candidates, &facts.confirmed_input_ids, &claimed))
+    Ok(deduplicate_pending_inputs(facts.task.input_candidates.clone(), &facts.task.confirmed_input_ids, &claimed))
   }
 
   /// Return the structural blocker for this task's pending inputs.
@@ -269,33 +272,36 @@ impl Dispatcher {
       ("session_id".to_string(), Value::String(session_id.to_string())),
       ("pending".to_string(), json!(pending.len())),
     ]);
-    if self.store.task_state(session_id)? != "open" {
+    if self.store.task_state_fast(session_id)? != "open" {
       decision.insert("launch".to_string(), Value::Bool(false));
       decision.insert("reason".to_string(), json!("task is closed; input retained as history"));
       return Ok(Value::Object(decision));
     }
-    let events = self.store.load_all_facts(session_id)?;
-    let mut queued = Vec::new();
-    for run in self.store.list_run_records_sync(session_id)? {
-      if run_records::terminal_outcome(&events, &run.id)?.is_some() {
-        continue;
+    let queued = {
+      let facts = self.store.node_facts(session_id)?;
+      let mut queued = Vec::new();
+      for run in self.store.list_run_records_sync(session_id)? {
+        if facts.runs.terminal_outcome(&run.id)?.is_some() {
+          continue;
+        }
+        if run.pid.is_some() {
+          decision.insert("launch".to_string(), Value::Bool(false));
+          decision.insert("reason".to_string(), json!(format!("run {} already consumes this node's inputs", run.id)));
+          return Ok(Value::Object(decision));
+        }
+        if facts.runs.stop_requested(&run.id, None) {
+          continue;
+        }
+        if run.sequence_ref.is_some() {
+          continue;
+        }
+        if run.kind == RunKind::ManagerTurn && run.input_event_ids.is_empty() && pending.is_empty() {
+          continue;
+        }
+        queued.push(run);
       }
-      if run.pid.is_some() {
-        decision.insert("launch".to_string(), Value::Bool(false));
-        decision.insert("reason".to_string(), json!(format!("run {} already consumes this node's inputs", run.id)));
-        return Ok(Value::Object(decision));
-      }
-      if run_records::stop_requested_in_events(&events, &run.id, None) {
-        continue;
-      }
-      if run.sequence_ref.is_some() {
-        continue;
-      }
-      if run.kind == RunKind::ManagerTurn && run.input_event_ids.is_empty() && pending.is_empty() {
-        continue;
-      }
-      queued.push(run);
-    }
+      queued
+    };
     let executor = self.executor.read().expect("dispatcher executor lock is not poisoned").clone();
     if let Some(run) = queued.first() {
       let Some(executor) = executor else {
@@ -635,9 +641,9 @@ impl Dispatcher {
   }
 
   fn undelivered_close_recipients(&self, session_id: &str) -> StoreResult<Vec<(Value, String)>> {
-    let facts = self.store.facts_of(session_id)?;
+    let close_events = self.store.node_facts(session_id)?.task.close_events.clone();
     let mut undelivered = Vec::new();
-    for close in facts.close_events {
+    for close in close_events {
       let recipient = close.get("report_to");
       if !python_truthy(recipient) {
         continue;

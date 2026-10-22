@@ -21,7 +21,7 @@ use crate::hooks::{EventRenderer, RuntimeEventHooks};
 use crate::metadata::{RoundRating, SessionMetadata, SessionStatus, UtcDateTime};
 use crate::session_events::SessionEventState;
 use crate::streaming::StreamingManager;
-use crate::task_tree::CachedTreeIndex;
+use crate::task_tree::{CachedTreeIndex, NodeFacts};
 use crate::thinking::ThinkingState;
 use crate::{ControlGuard, StoreError, StoreResult};
 
@@ -106,6 +106,44 @@ pub(crate) struct CachedChatEvents {
   pub(crate) events: Arc<Vec<Value>>,
 }
 
+pub(crate) struct CachedTaskStateTail {
+  pub(crate) identity: Option<TaskStateTailIdentity>,
+  pub(crate) state: String,
+}
+
+/// A node's folded facts and the history they cover: the live-cache generation, the archived extent, and the number of
+/// live events folded.
+pub(crate) struct CachedNodeFacts {
+  pub(crate) generation: u64,
+  pub(crate) archived: usize,
+  pub(crate) covered: usize,
+  pub(crate) facts: Arc<NodeFacts>,
+}
+
+/// The most nodes whose folded facts stay cached at once.
+pub(crate) const NODE_FACTS_CACHE_LIMIT: usize = 64;
+
+/// Work done on node histories since the store opened, read through [`Store::history_work`].
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct HistoryWork {
+  /// Live-log reads from disk, each a cache miss.
+  pub file_reads: u64,
+  /// Folds that start from a node's first event.
+  pub full_folds: u64,
+  /// Events folded, counting each event once for every fold that covers it.
+  pub folded_events: u64,
+}
+
+#[derive(Default)]
+pub(crate) struct HistoryWorkCounters {
+  pub(crate) file_reads: AtomicU64,
+  pub(crate) full_folds: AtomicU64,
+  pub(crate) folded_events: AtomicU64,
+}
+
+pub(crate) type TaskStateTailIdentity = (u64, u64, u64, i64, i64, usize);
+pub(crate) type ChatEventsIdentity = (u64, u64, u64, i64, i64);
+
 /// Session metadata and event-log persistence for one configured CharlieBot home.
 pub struct Store {
   pub(crate) cfg: CharlieBotConfig,
@@ -120,6 +158,9 @@ pub struct Store {
   pub(crate) metadata_cache: StdMutex<HashMap<String, CachedMetadata>>,
   pub(crate) metadata_locks: StdMutex<HashMap<String, Arc<Mutex<()>>>>,
   pub(crate) events_cache: StdMutex<HashMap<String, Arc<StdMutex<Option<CachedChatEvents>>>>>,
+  pub(crate) task_state_tail_cache: StdMutex<HashMap<String, CachedTaskStateTail>>,
+  pub(crate) node_facts_cache: StdMutex<HashMap<String, CachedNodeFacts>>,
+  pub(crate) history_work: HistoryWorkCounters,
   pub(crate) next_events_cache_generation: AtomicU64,
   #[cfg(test)]
   pub(crate) metadata_stat_hook: StdMutex<Option<MetadataStatHook>>,
@@ -175,6 +216,9 @@ impl Store {
       metadata_cache: StdMutex::new(HashMap::new()),
       metadata_locks: StdMutex::new(HashMap::new()),
       events_cache: StdMutex::new(HashMap::new()),
+      task_state_tail_cache: StdMutex::new(HashMap::new()),
+      node_facts_cache: StdMutex::new(HashMap::new()),
+      history_work: HistoryWorkCounters::default(),
       next_events_cache_generation: AtomicU64::new(1),
       #[cfg(test)]
       metadata_stat_hook: StdMutex::new(None),

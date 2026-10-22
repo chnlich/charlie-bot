@@ -7,7 +7,7 @@ use anyhow::{Context as AnyhowContext, anyhow, bail};
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::pyfmt;
 use charliebot_core::pystr;
-use charliebot_pyhtml::{EventKind, parse, unescape};
+use charliebot_pyhtml::{EventKind, parse_with, unescape};
 use fancy_regex::Regex;
 use serde::Serialize;
 use url::Url;
@@ -189,51 +189,53 @@ fn parse_dom(source: &str) -> anyhow::Result<Vec<Element>> {
   let mut nodes =
     vec![Element { tag: "#root".to_owned(), classes: HashSet::new(), parent: None, children: Vec::new() }];
   let mut stack = vec![0];
-  for event in parse(source, true).map_err(|error| anyhow!("{}: {}", error.exception, error.message))? {
-    match event.kind {
-      EventKind::StartTag | EventKind::StartEndTag => {
-        let arguments = event.args.as_array().expect("a start-tag event has arguments");
-        let tag = arguments[0].as_str().expect("a start-tag event has a tag").to_owned();
-        let attributes = arguments[1]
-          .as_array()
-          .expect("a start-tag event has attributes")
-          .iter()
-          .map(|attribute| {
-            let pair = attribute.as_array().expect("an attribute has a pair");
-            let name = pair[0].as_str().expect("an attribute name is text").to_owned();
-            let value = pair[1].as_str().map(str::to_owned);
-            (name, value)
-          })
-          .collect::<HashMap<_, _>>();
-        let class_value = attributes.get("class").and_then(Option::as_deref).unwrap_or("");
-        let classes = pystr::split_whitespace(class_value).into_iter().map(str::to_owned).collect();
-        let parent = *stack.last().expect("the root remains on the parser stack");
-        let index = nodes.len();
-        nodes.push(Element { tag: tag.clone(), classes, parent: Some(parent), children: Vec::new() });
-        nodes[parent].children.push(Child::Element(index));
-        if event.kind == EventKind::StartTag && !crate::plan_diff::VOID_TAGS.contains(&tag.as_str()) {
-          stack.push(index);
-        }
+  parse_with(source, true, |mut event| match event.kind {
+    EventKind::StartTag | EventKind::StartEndTag => {
+      let arguments = event.args.as_array().expect("a start-tag event has arguments");
+      let tag = arguments[0].as_str().expect("a start-tag event has a tag").to_owned();
+      let attributes = arguments[1]
+        .as_array()
+        .expect("a start-tag event has attributes")
+        .iter()
+        .map(|attribute| {
+          let pair = attribute.as_array().expect("an attribute has a pair");
+          let name = pair[0].as_str().expect("an attribute name is text").to_owned();
+          let value = pair[1].as_str().map(str::to_owned);
+          (name, value)
+        })
+        .collect::<HashMap<_, _>>();
+      let class_value = attributes.get("class").and_then(Option::as_deref).unwrap_or("");
+      let classes = pystr::split_whitespace(class_value).into_iter().map(str::to_owned).collect();
+      let parent = *stack.last().expect("the root remains on the parser stack");
+      let index = nodes.len();
+      nodes.push(Element { tag: tag.clone(), classes, parent: Some(parent), children: Vec::new() });
+      nodes[parent].children.push(Child::Element(index));
+      if event.kind == EventKind::StartTag && !crate::plan_diff::VOID_TAGS.contains(&tag.as_str()) {
+        stack.push(index);
       }
-      EventKind::EndTag => {
-        let tag = event.args[0].as_str().expect("an end-tag event has a tag");
-        if let Some(position) = (1..stack.len()).rev().find(|&position| nodes[stack[position]].tag == tag) {
-          stack.truncate(position);
-        }
-      }
-      EventKind::Data => {
-        let text = event.args[0].as_str().expect("a data event has text").to_owned();
-        let parent = *stack.last().expect("the root remains on the parser stack");
-        nodes[parent].children.push(Child::Text(text));
-      }
-      EventKind::EntityReference
-      | EventKind::CharacterReference
-      | EventKind::Comment
-      | EventKind::Declaration
-      | EventKind::ProcessingInstruction
-      | EventKind::UnknownDeclaration => {}
     }
-  }
+    EventKind::EndTag => {
+      let tag = event.args[0].as_str().expect("an end-tag event has a tag");
+      if let Some(position) = (1..stack.len()).rev().find(|&position| nodes[stack[position]].tag == tag) {
+        stack.truncate(position);
+      }
+    }
+    EventKind::Data => {
+      let text = match std::mem::take(&mut event.args[0]) {
+        serde_json::Value::String(text) => text,
+        other => unreachable!("a data event has text, got {other:?}"),
+      };
+      let parent = *stack.last().expect("the root remains on the parser stack");
+      nodes[parent].children.push(Child::Text(text));
+    }
+    EventKind::EntityReference
+    | EventKind::CharacterReference
+    | EventKind::Comment
+    | EventKind::Declaration
+    | EventKind::ProcessingInstruction
+    | EventKind::UnknownDeclaration => {}
+  })
+  .map_err(|error| anyhow!("{}: {}", error.exception, error.message))?;
   Ok(nodes)
 }
 

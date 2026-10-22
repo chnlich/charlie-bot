@@ -70,6 +70,15 @@ pub struct Event {
   pub starttag_text: Option<String>,
 }
 
+/// One streaming callback's arguments and source byte offset, without line and column data.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StreamEvent {
+  pub kind: EventKind,
+  pub args: Value,
+  pub byte_offset: usize,
+  pub starttag_text: Option<String>,
+}
+
 /// A Python exception category and message produced while tokenizing a document.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParseError {
@@ -93,37 +102,49 @@ impl Error for ParseError {}
 
 /// Tokenize a document as `feed(source)` followed by `close()` on a fresh parser.
 pub fn parse(source: &str, convert_charrefs: bool) -> Result<Vec<Event>, ParseError> {
-  let mut parser = Parser::new(source, convert_charrefs);
-  let remaining = parser.goahead(false, 0)?;
-  parser.goahead(true, remaining)?;
-  Ok(parser.events)
+  let mut events = Vec::new();
+  let mut positions = SourcePositions::new(source);
+  parse_with(source, convert_charrefs, |event| {
+    events.push(Event {
+      kind: event.kind,
+      args: event.args,
+      position: positions.at(source, event.byte_offset),
+      byte_offset: event.byte_offset,
+      starttag_text: event.starttag_text,
+    });
+  })?;
+  Ok(events)
 }
 
-struct Parser<'a> {
+/// Tokenize a document as `feed(source)` followed by `close()` on a fresh parser, passing each callback to `handler`
+/// as soon as it is emitted. It mirrors `src/features/artifacts/plan_diff.py:744-746` and
+/// `src/features/artifacts/artifact_check.py:208-212`; streamed consumers do not need line and column positions.
+pub fn parse_with<F>(source: &str, convert_charrefs: bool, handler: F) -> Result<(), ParseError>
+where
+  F: FnMut(StreamEvent),
+{
+  let mut parser = Parser::new(source, convert_charrefs, handler);
+  let remaining = parser.goahead(false, 0)?;
+  parser.goahead(true, remaining)?;
+  Ok(())
+}
+
+struct Parser<'a, F> {
   source: &'a str,
-  positions: SourcePositions,
   convert_charrefs: bool,
   cdata_elem: Option<String>,
   escapable: bool,
   support_cdata: bool,
-  events: Vec<Event>,
+  handler: F,
 }
 
-impl<'a> Parser<'a> {
-  fn new(source: &'a str, convert_charrefs: bool) -> Self {
-    Self {
-      source,
-      positions: SourcePositions::new(source),
-      convert_charrefs,
-      cdata_elem: None,
-      escapable: true,
-      support_cdata: true,
-      events: Vec::new(),
-    }
+impl<'a, F: FnMut(StreamEvent)> Parser<'a, F> {
+  fn new(source: &'a str, convert_charrefs: bool, handler: F) -> Self {
+    Self { source, convert_charrefs, cdata_elem: None, escapable: true, support_cdata: true, handler }
   }
 
   fn emit(&mut self, kind: EventKind, args: Value, at: usize, starttag_text: Option<String>) {
-    self.events.push(Event { kind, args, position: self.positions.at(at), byte_offset: at, starttag_text });
+    (self.handler)(StreamEvent { kind, args, byte_offset: at, starttag_text });
   }
 
   fn emit_data(&mut self, data: &str, at: usize) {
@@ -474,32 +495,37 @@ impl<'a> Parser<'a> {
 }
 
 struct SourcePositions {
-  positions: Vec<Position>,
+  line_starts: Vec<usize>,
+  line_index: usize,
+  last_byte: usize,
+  position: Position,
 }
 
 impl SourcePositions {
   fn new(source: &str) -> Self {
-    let mut positions = vec![Position { line: 1, column: 0 }; source.len() + 1];
-    let (mut line, mut column) = (1, 0);
+    // CPython's `_OffsetParser` stores one start offset per line (`src/features/artifacts/plan_diff.py:81-90`).
+    let line_count = source.bytes().filter(|byte| *byte == b'\n').count() + 1;
+    let mut line_starts = Vec::with_capacity(line_count);
+    line_starts.push(0);
     for (byte, ch) in source.char_indices() {
-      let position = Position { line, column };
-      positions[byte] = position;
-      for inner_position in positions.iter_mut().skip(byte + 1).take(ch.len_utf8() - 1) {
-        *inner_position = position;
-      }
       if ch == '\n' {
-        line += 1;
-        column = 0;
-      } else {
-        column += 1;
+        line_starts.push(byte + 1);
       }
     }
-    positions[source.len()] = Position { line, column };
-    Self { positions }
+    Self { line_starts, line_index: 0, last_byte: 0, position: Position { line: 1, column: 0 } }
   }
 
-  fn at(&self, byte: usize) -> Position {
-    self.positions[byte]
+  fn at(&mut self, source: &str, byte: usize) -> Position {
+    let line_index = self.line_starts.partition_point(|start| *start <= byte) - 1;
+    if line_index == self.line_index {
+      self.position.column += source[self.last_byte..byte].chars().count();
+    } else {
+      self.position.line = line_index + 1;
+      self.position.column = source[self.line_starts[line_index]..byte].chars().count();
+      self.line_index = line_index;
+    }
+    self.last_byte = byte;
+    self.position
   }
 }
 
@@ -647,4 +673,47 @@ fn char_offset_from_end(source: &str, count: usize) -> usize {
 
 fn matching_quote(value: &str) -> bool {
   matches!((value.chars().next(), value.chars().last()), (Some('\''), Some('\'')) | (Some('"'), Some('"')))
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn source_positions_store_line_offsets_for_one_megabyte_html() {
+    let size = 1024 * 1024;
+    let line = format!("{}\n", "x".repeat(99));
+    let mut source = line.repeat(size / 100);
+    source.push_str(&"x".repeat(size % 100));
+    assert_eq!(source.len(), size);
+
+    let positions = SourcePositions::new(&source);
+    assert_eq!(positions.line_starts.len(), 10_486);
+    assert_eq!(positions.line_starts.capacity(), 10_486);
+  }
+
+  #[test]
+  fn source_positions_keep_codepoint_columns_and_newline_boundaries() {
+    let source = "aé\n𐍈x";
+    let mut positions = SourcePositions::new(source);
+    assert_eq!(positions.at(source, 1), Position { line: 1, column: 1 });
+    assert_eq!(positions.at(source, 3), Position { line: 1, column: 2 });
+    assert_eq!(positions.at(source, 4), Position { line: 2, column: 0 });
+    assert_eq!(positions.at(source, 8), Position { line: 2, column: 1 });
+  }
+
+  #[test]
+  fn streamed_events_match_collected_events() {
+    let source = "<p>é&amp;x</p>";
+    let expected = parse(source, true).expect("collected parsing succeeds");
+    let mut streamed = Vec::new();
+    parse_with(source, true, |event| streamed.push(event)).expect("streamed parsing succeeds");
+    assert_eq!(streamed.len(), expected.len());
+    for (streamed, collected) in streamed.iter().zip(expected) {
+      assert_eq!(streamed.kind, collected.kind);
+      assert_eq!(streamed.args, collected.args);
+      assert_eq!(streamed.byte_offset, collected.byte_offset);
+      assert_eq!(streamed.starttag_text, collected.starttag_text);
+    }
+  }
 }

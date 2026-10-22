@@ -1,6 +1,5 @@
 //! Perfetto page and merged-trace routes.
 
-use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -132,37 +131,14 @@ async fn perfetto_merged(
     return json_error(StatusCode::BAD_REQUEST, "Provide at least one trace path with 'trace' or 'dir'.");
   }
 
-  let mut paths = traces;
-  if let Some(directory) = &dir {
-    match discover_trace_paths(directory, &pattern) {
-      Ok(discovered) if discovered.is_empty() => {
-        return json_error(StatusCode::BAD_REQUEST, "Provide at least one trace path; 'dir' matched no files.");
-      }
-      Ok(discovered) => paths.extend(discovered),
-      Err(error) => return responses::internal_error("OSError", error.message().to_string()),
-    }
-  }
-
-  let mut resolved_paths = Vec::with_capacity(paths.len());
-  for path in paths {
-    match fs::metadata(&path) {
-      Ok(metadata) if metadata.is_file() => {}
-      _ => {
-        return json_error(StatusCode::NOT_FOUND, &format!("Trace path not found: {}", path.display()));
-      }
-    }
-    let resolved = match fs::canonicalize(&path) {
-      Ok(path) => path,
-      Err(error) => return responses::internal_error("OSError", format!("{}: {error}", path.display())),
-    };
-    match merge::is_json_trace(&resolved) {
-      Ok(true) => resolved_paths.push(resolved),
-      Ok(false) => {
-        return json_error(StatusCode::BAD_REQUEST, &format!("Trace is not JSON: {}", path.display()));
-      }
-      Err(error) => return responses::internal_error("OSError", error.message().to_string()),
-    }
-  }
+  // Python offloads discovery and each selected path check to `asyncio.to_thread` (`src/features/trace/api.py:354,
+  // 361-365`); keep the same filesystem work off Tokio's worker here.
+  let resolve_traces = tokio::task::spawn_blocking(move || resolve_trace_paths(traces, dir.as_deref(), &pattern)).await;
+  let resolved_paths = match resolve_traces {
+    Ok(Ok(paths)) => paths,
+    Ok(Err(response)) => return *response,
+    Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
+  };
 
   let mode = if resolved_paths.len() == 1 && !slim { BuildMode::DirectPass } else { BuildMode::Merge };
   match merge::cached_build(features, resolved_paths.clone(), slim, mode).await {
@@ -221,6 +197,7 @@ fn discover_trace_paths(directory: &str, pattern: &str) -> Result<Vec<PathBuf>, 
     tracing::warn!(dir = directory, "perfetto_dir_not_found");
     return Ok(Vec::new());
   }
+  let mut matcher = GlobMatcher::new(pattern);
   let mut paths = Vec::new();
   for entry in fs::read_dir(directory_path).map_err(|error| BuildFailure::Failed(error.to_string()))? {
     let entry = entry.map_err(|error| BuildFailure::Failed(error.to_string()))?;
@@ -229,12 +206,55 @@ fn discover_trace_paths(directory: &str, pattern: &str) -> Result<Vec<PathBuf>, 
     let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
       continue;
     };
-    if is_file && fnmatch(name, pattern) {
+    if is_file && matcher.is_match(name) {
       paths.push(path);
     }
   }
   paths.sort_by(|left, right| left.file_name().cmp(&right.file_name()));
   Ok(paths)
+}
+
+fn resolve_trace_paths(
+  mut paths: Vec<PathBuf>,
+  directory: Option<&str>,
+  pattern: &str,
+) -> Result<Vec<PathBuf>, Box<Response>> {
+  if let Some(directory) = directory {
+    match discover_trace_paths(directory, pattern) {
+      Ok(discovered) if discovered.is_empty() => {
+        return Err(Box::new(json_error(
+          StatusCode::BAD_REQUEST,
+          "Provide at least one trace path; 'dir' matched no files.",
+        )));
+      }
+      Ok(discovered) => paths.extend(discovered),
+      Err(error) => return Err(Box::new(responses::internal_error("OSError", error.message().to_string()))),
+    }
+  }
+
+  let mut resolved_paths = Vec::with_capacity(paths.len());
+  for path in paths {
+    match fs::metadata(&path) {
+      Ok(metadata) if metadata.is_file() => {}
+      _ => {
+        return Err(Box::new(json_error(StatusCode::NOT_FOUND, &format!("Trace path not found: {}", path.display()))));
+      }
+    }
+    let resolved = match fs::canonicalize(&path) {
+      Ok(path) => path,
+      Err(error) => {
+        return Err(Box::new(responses::internal_error("OSError", format!("{}: {error}", path.display()))));
+      }
+    };
+    match merge::is_json_trace(&resolved) {
+      Ok(true) => resolved_paths.push(resolved),
+      Ok(false) => {
+        return Err(Box::new(json_error(StatusCode::BAD_REQUEST, &format!("Trace is not JSON: {}", path.display()))));
+      }
+      Err(error) => return Err(Box::new(responses::internal_error("OSError", error.message().to_string()))),
+    }
+  }
+  Ok(resolved_paths)
 }
 
 fn all_local_json_traces(inputs: &[(String, Option<PathBuf>)]) -> Result<bool, BuildFailure> {
@@ -291,39 +311,96 @@ fn quote_plus(value: &str) -> String {
   out
 }
 
-fn fnmatch(name: &str, pattern: &str) -> bool {
-  let name: Vec<char> = name.chars().collect();
-  let pattern: Vec<char> = pattern.chars().collect();
-  let mut memo = HashMap::new();
-  fn matches(name: &[char], pattern: &[char], ni: usize, pi: usize, memo: &mut HashMap<(usize, usize), bool>) -> bool {
-    if let Some(result) = memo.get(&(ni, pi)) {
-      return *result;
-    }
-    let result = if pi == pattern.len() {
-      ni == name.len()
-    } else {
-      match pattern[pi] {
+enum GlobToken {
+  Star,
+  Any,
+  Literal(char),
+  Class(Vec<char>),
+}
+
+/// A reusable `fnmatch.fnmatch` pattern. Python compiles and caches each pattern, then runs the matcher per filename
+/// (`src/features/trace/api.py:130-138`); compile once here before the directory loop and reuse the name buffer.
+struct GlobMatcher {
+  tokens: Vec<GlobToken>,
+  name: Vec<char>,
+}
+
+impl GlobMatcher {
+  fn new(pattern: &str) -> Self {
+    let pattern: Vec<char> = pattern.chars().collect();
+    let mut tokens = Vec::with_capacity(pattern.len());
+    let mut index = 0;
+    while index < pattern.len() {
+      match pattern[index] {
         '*' => {
-          let mut next = pi + 1;
-          while next < pattern.len() && pattern[next] == '*' {
-            next += 1;
+          if !matches!(tokens.last(), Some(GlobToken::Star)) {
+            tokens.push(GlobToken::Star);
           }
-          (ni..=name.len()).any(|end| matches(name, pattern, end, next, memo))
+          index += 1;
         }
-        '?' => ni < name.len() && matches(name, pattern, ni + 1, pi + 1, memo),
-        '[' => match parse_class(pattern, pi) {
+        '?' => {
+          tokens.push(GlobToken::Any);
+          index += 1;
+        }
+        '[' => match parse_class(&pattern, index) {
           Some((class, next)) => {
-            ni < name.len() && class_matches(&class, name[ni]) && matches(name, pattern, ni + 1, next, memo)
+            tokens.push(GlobToken::Class(class));
+            index = next;
           }
-          None => ni < name.len() && name[ni] == '[' && matches(name, pattern, ni + 1, pi + 1, memo),
+          None => {
+            tokens.push(GlobToken::Literal('['));
+            index += 1;
+          }
         },
-        literal => ni < name.len() && name[ni] == literal && matches(name, pattern, ni + 1, pi + 1, memo),
+        literal => {
+          tokens.push(GlobToken::Literal(literal));
+          index += 1;
+        }
       }
-    };
-    memo.insert((ni, pi), result);
-    result
+    }
+    Self { tokens, name: Vec::new() }
   }
-  matches(&name, &pattern, 0, 0, &mut memo)
+
+  fn is_match(&mut self, name: &str) -> bool {
+    self.name.clear();
+    self.name.extend(name.chars());
+    let (mut name_index, mut token_index) = (0, 0);
+    let (mut star_index, mut star_end) = (None, 0);
+    while name_index < self.name.len() {
+      match self.tokens.get(token_index) {
+        Some(GlobToken::Star) => {
+          star_index = Some(token_index);
+          star_end = name_index;
+          token_index += 1;
+        }
+        Some(token) if glob_token_matches(token, self.name[name_index]) => {
+          name_index += 1;
+          token_index += 1;
+        }
+        _ => match star_index {
+          Some(star) => {
+            star_end += 1;
+            name_index = star_end;
+            token_index = star + 1;
+          }
+          None => return false,
+        },
+      }
+    }
+    while matches!(self.tokens.get(token_index), Some(GlobToken::Star)) {
+      token_index += 1;
+    }
+    token_index == self.tokens.len()
+  }
+}
+
+fn glob_token_matches(token: &GlobToken, value: char) -> bool {
+  match token {
+    GlobToken::Star => unreachable!("star tokens are consumed by the matcher"),
+    GlobToken::Any => true,
+    GlobToken::Literal(literal) => *literal == value,
+    GlobToken::Class(class) => class_matches(class, value),
+  }
 }
 
 fn parse_class(pattern: &[char], start: usize) -> Option<(Vec<char>, usize)> {
@@ -376,9 +453,9 @@ mod tests {
     );
     assert_eq!(last_value(&query, "slim"), Some("yes"));
     assert_eq!(quote_plus("a b/é~"), "a+b%2F%C3%A9~");
-    assert!(fnmatch("trace_rank2.json", "trace_rank[0-9].json"));
-    assert!(fnmatch("trace.json", "*.json"));
-    assert!(!fnmatch("trace.JSON", "*.json"));
+    assert!(GlobMatcher::new("trace_rank[0-9].json").is_match("trace_rank2.json"));
+    assert!(GlobMatcher::new("*.json").is_match("trace.json"));
+    assert!(!GlobMatcher::new("*.json").is_match("trace.JSON"));
   }
 
   #[test]

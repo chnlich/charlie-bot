@@ -297,7 +297,7 @@ impl TaskExecutionAdapter {
         return Err(error);
       }
     };
-    let snapshot = match self.prepare_launch_snapshot(&cfg, &meta, &run, &option).await {
+    let snapshot = match self.prepare_launch_snapshot(Arc::clone(&cfg), &meta, &run, &option).await {
       Ok(snapshot) => snapshot,
       Err(error) if error.downcast_ref::<TaskPromptError>().is_some() => {
         tracing::error!(target: "charliebot_tasks", session_id, run_id, kind = kind_name(run.kind), error = %error, "task_prompt_preparation_failed");
@@ -430,7 +430,7 @@ impl TaskExecutionAdapter {
 
   async fn prepare_launch_snapshot(
     &self,
-    cfg: &CharlieBotConfig,
+    cfg: Arc<CharlieBotConfig>,
     meta: &SessionMetadata,
     run: &RunRecord,
     option: &BackendOption,
@@ -438,7 +438,7 @@ impl TaskExecutionAdapter {
     let checkout = self.features.startup.require::<charliebot_core::RepoRoot>()?;
     let coherent = prompts::assemble_coherent_snapshot_for_launch(
       &self.features.store,
-      Arc::new(cfg.clone()),
+      cfg,
       Arc::clone(&self.features.registry),
       checkout,
       meta,

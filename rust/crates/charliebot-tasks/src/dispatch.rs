@@ -1043,7 +1043,13 @@ mod tests {
     let after = features.store.history_work();
     assert_eq!(claimed, ["input-a"]);
     assert_eq!(after.owned_event_clones - before.owned_event_clones, 0);
-    assert_eq!(after.full_folds - before.full_folds, 1, "pending inputs use one memoized fold for the node");
+    let node_state_folds = after.node_state_full_folds - before.node_state_full_folds;
+    assert_eq!(node_state_folds, 1, "the terminal and stop checks share one node-state fold");
+    assert_eq!(
+      after.full_folds - before.full_folds - node_state_folds,
+      1,
+      "pending inputs use one memoized node-facts fold"
+    );
   }
 
   #[tokio::test]

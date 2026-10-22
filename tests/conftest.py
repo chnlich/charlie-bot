@@ -1351,8 +1351,10 @@ def make_internal_router_client(cfg: Any, session_blocks: Any, task_mgr: Any | N
   (same instance the sync key serves), so the override keys in make_router_client cover them.
   cfg may be a MagicMock when the tested route never reads it."""
   client = make_router_client(cfg, session_blocks, internal.router, "/api/internal")
-  if task_mgr is not None:
-    client.app.dependency_overrides[deps.get_task_manager] = lambda: task_mgr
+  resolved_task_mgr = task_mgr or getattr(session_blocks, "tree", None)
+  if resolved_task_mgr is not None:
+    client.app.dependency_overrides[deps.get_task_manager] = lambda: resolved_task_mgr
+    client.app.dependency_overrides[deps.get_run_store] = lambda: resolved_task_mgr.runs
   include_registered_routers(client.app, "/api/internal")
   return client
 
@@ -2156,6 +2158,8 @@ class FakeSlackClient:
     self.reactions: dict[str, set[str]] = {}
     self.thread: list[dict] = []
     self.fail_posts = fail_posts
+    self.fail_post_keys: set[str] = set()
+    self.raise_after_accept_once = False
     self._fail_remove = fail_remove
 
   async def open_connection(self) -> str:
@@ -2164,15 +2168,53 @@ class FakeSlackClient:
 
   async def get_thread_replies(self, channel: str, thread_ts: str) -> list[dict]:
     """The thread-read seam the reply gate consumes; the seeded ``thread`` as a copy."""
-    self.calls.append(("get_thread_replies", {"channel": channel, "thread_ts": thread_ts}))
+    self.calls.append(
+        ("get_thread_replies", {
+            "channel": channel,
+            "thread_ts": thread_ts,
+            "include_all_metadata": True,
+        }))
     return list(self.thread)
 
-  async def post_message(self, channel: str, text: str, thread_ts: str) -> dict:
-    if self.fail_posts:
+  async def post_message(self, channel: str, text: str, thread_ts: str, *, post_key: str) -> dict:
+    if self.fail_posts or post_key in self.fail_post_keys:
       raise RuntimeError("chat.postMessage failed")
-    self.calls.append(("post_message", {"channel": channel, "text": text, "thread_ts": thread_ts}))
+    self.calls.append(
+        (
+            "post_message", {
+                "channel": channel,
+                "text": text,
+                "thread_ts": thread_ts,
+                "post_key": post_key,
+                "metadata": {
+                    "event_type": "charliebot_post",
+                    "event_payload": {
+                        "key": post_key
+                    },
+                },
+            }))
     self.posts.append({"channel": channel, "text": text, "thread_ts": thread_ts})
+    self.thread.append(
+        {
+            "ts": f"1700000000.{len(self.posts):06d}",
+            "user": "U_BOT",
+            "bot_id": "B_BOT",
+            "text": text,
+            "metadata": {
+                "event_type": "charliebot_post",
+                "event_payload": {
+                    "key": post_key
+                },
+            },
+        })
+    if self.raise_after_accept_once:
+      self.raise_after_accept_once = False
+      raise TimeoutError("read timed out after Slack accepted the post")
     return {"ok": True}
+
+  async def auth_test(self) -> dict:
+    self.calls.append(("auth_test", {}))
+    return {"user_id": "U_BOT", "bot_id": "B_BOT"}
 
   async def add_reaction(self, channel: str, name: str, ts: str) -> dict:
     self.calls.append(("add_reaction", {"channel": channel, "name": name, "ts": ts}))
@@ -2579,10 +2621,15 @@ def _isolate_profile(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pyte
   # next (a mark_busy setdefault keeps the earlier start; a finish closes only
   # the interval its own Run opened) and a recovered node can read as still
   # running.
+  from src.features.chat_threads import thread_entry as _thread_entry
   from src.runtime import thinking_state as _thinking_state
   _thinking_state.reset_run_state_for_tests()
+  if hasattr(_thread_entry, "_SESSION_LOCKS"):
+    _thread_entry._SESSION_LOCKS.clear()
   reset_config_caches()
   yield
+  if hasattr(_thread_entry, "_SESSION_LOCKS"):
+    _thread_entry._SESSION_LOCKS.clear()
   _thinking_state.reset_run_state_for_tests()
   reset_config_caches()
 

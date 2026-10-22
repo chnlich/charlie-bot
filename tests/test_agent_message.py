@@ -7,15 +7,20 @@ spawner gate code itself stays untouched (the exclusion is by type, like
 ``scheduled_trigger``).
 """
 
+import asyncio
+import hashlib
 import json
 import pathlib
 from unittest import mock
 
 import conftest
+import httpx
 import pytest
 
 from src.infra import constants, models, text_length
 from src.infra import event_types as ET
+from src.runtime import control_events, run_token
+from src.runtime.api import deps
 from src.runtime.cli import session
 
 # ---------------------------------------------------------------------------
@@ -81,6 +86,7 @@ def test_session_message_relay_admits_and_dispatches_a_task_input() -> None:
       event_type=ET.AGENT_MESSAGE,
       content="status please",
       actor="agent",
+      request_id=None,
       from_session="caller",
       from_session_name="Caller PM",
   )
@@ -97,6 +103,74 @@ def test_session_message_request_rejects_extra_fields() -> None:
         },
     )
   assert resp.status_code == 422
+
+
+def test_derived_agent_send_request_id_uses_run_verb_target_and_text() -> None:
+  digest = hashlib.sha256(b"run-1\x00session send\x00target\x00status please").hexdigest()[:24]
+  assert control_events.derived_agent_send_request_id("run-1", "session send", "target",
+                                                      "status please") == (f"agent-send-{digest}")
+
+
+@pytest.mark.asyncio
+async def test_session_message_replays_for_a_run_and_newly_admits_for_an_operator(tmp_path: pathlib.Path) -> None:
+  cfg, session_blocks, tree = conftest.build_env(tmp_path)
+  caller = await conftest.create_task(tree, parent=None, request_id="caller", name="Caller")
+  target = await conftest.create_task(tree, parent=None, request_id="target", name="Target")
+  route_client = conftest.make_internal_router_client(cfg, session_blocks, tree)
+  claims = run_token.RunTokenClaims(session_id=caller.id, run_id="run-1", agent="caller")
+  route_client.app.dependency_overrides[deps.require_caller] = lambda: run_token.CallerIdentity(
+      kind="agent", claims=claims)
+
+  async with httpx.AsyncClient(transport=httpx.ASGITransport(app=route_client.app), base_url="http://test") as client:
+    first = await client.post("/api/internal/session-message", json=_relay_payload(caller.id, target.id, "same send"))
+    second = await client.post("/api/internal/session-message", json=_relay_payload(caller.id, target.id, "same send"))
+
+    original_prime = session_blocks.events.prime_aggregator
+    arrivals = 0
+    ready = asyncio.Event()
+
+    async def synchronize(session_id: str) -> int:
+      nonlocal arrivals
+      epoch = await original_prime(session_id)
+      if session_id == target.id:
+        arrivals += 1
+        if arrivals == 2:
+          ready.set()
+        await ready.wait()
+      return epoch
+
+    session_blocks.events.prime_aggregator = synchronize
+    try:
+      concurrent = await asyncio.gather(
+          *[
+              client.post("/api/internal/session-message", json=_relay_payload(caller.id, target.id, "same send"))
+              for _ in range(2)
+          ])
+    finally:
+      session_blocks.events.prime_aggregator = original_prime
+
+    assert [response.status_code for response in (first, second, *concurrent)] == [200, 200, 200, 200]
+    assert [response.json() for response in (first, second, *concurrent)] == [{"status": "accepted"}] * 4
+
+  agent_messages = [ev for ev in tree.fact_history(target.id) if ev.get("type") == ET.AGENT_MESSAGE]
+  expected_id = control_events.derived_agent_send_request_id("run-1", "session send", target.id, "same send")
+  assert len(agent_messages) == 1
+  assert agent_messages[0]["request_id"] == expected_id
+  assert tree.runs.list_run_records_sync(target.id) == []
+
+  route_client.app.dependency_overrides[deps.require_caller] = lambda: run_token.CallerIdentity(kind="operator")
+  async with httpx.AsyncClient(transport=httpx.ASGITransport(app=route_client.app), base_url="http://test") as client:
+    for _ in range(2):
+      response = await client.post(
+          "/api/internal/session-message", json=_relay_payload(caller.id, target.id, "operator send"))
+      assert response.status_code == 200
+
+  operator_messages = [
+      ev for ev in tree.fact_history(target.id)
+      if ev.get("type") == ET.AGENT_MESSAGE and ev.get("content") == "operator send"
+  ]
+  assert len(operator_messages) == 2
+  assert all("request_id" not in event for event in operator_messages)
 
 
 # ---------------------------------------------------------------------------

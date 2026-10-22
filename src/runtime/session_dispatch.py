@@ -116,6 +116,8 @@ class DispatchTree(Protocol):
 # machine-typed events, is a user request.
 INPUT_EVENT_TYPES: frozenset[str] = frozenset({ET.USER, ET.AGENT_MESSAGE, ET.SCHEDULED_TRIGGER, ET.CHILD_REPORT})
 
+_ADMIT_INPUT_CORE_FIELDS = control_events.REQUEST_EVENT_CORE_FIELDS
+
 
 def child_report_text(report: dict, provenance: str | None = None) -> str:
   """A child_report event as the parent's turn input: the typed header, then its summary.
@@ -175,6 +177,7 @@ class TaskInputDispatcher:
       uploaded_files: list[dict] | None = None,
       input_id: str | None = None,
       request_id: str | None = None,
+      fields: dict | None = None,
       timestamp: str | None = None,
       from_session: str | None = None,
       from_session_name: str | None = None,
@@ -195,6 +198,9 @@ class TaskInputDispatcher:
         """
     if input_id is not None and request_id is not None:
       raise task_errors.TaskInvalidError("input_id and request_id are mutually exclusive")
+    collisions = _ADMIT_INPUT_CORE_FIELDS.intersection(fields or {})
+    if collisions:
+      raise task_errors.TaskInvalidError(f"fields may not replace core event fields: {', '.join(sorted(collisions))}")
     if event_type not in INPUT_EVENT_TYPES:
       raise task_errors.TaskInvalidError(f"{event_type} is not a task input type")
     if input_mode is not None and event_type != ET.USER:
@@ -221,11 +227,15 @@ class TaskInputDispatcher:
       event_id = input_id
       if request_id is not None:
         event_id = control_events.stable_request_event_id(session_id, request_id)
-        existing = next((e for e in events if e.get("id") == event_id), None)
+        existing = control_events.replay_request_event(
+            events,
+            event_id=event_id,
+            request_id=request_id,
+            event_type=event_type,
+            content=content,
+            fields=fields or {},
+        )
         if existing is not None:
-          if existing.get("type") != event_type or existing.get("content") != content:
-            raise task_errors.TaskConflictError(
-                [f"request_id {request_id} is already event {existing['id']} with a different type or content"])
           # A replayed request keeps its original event and causes no second
           # append, broadcast, or sidebar lift.
           return existing
@@ -254,6 +264,8 @@ class TaskInputDispatcher:
         event["from_session_name"] = from_session_name
       if input_mode is not None:
         event["input_mode"] = input_mode
+      if fields:
+        event.update(fields)
       if tree.task_state(session_id) != "open":
         # A real user message is the one input that restores an archived
         # chain: the target and every archived ancestor reopen (topmost

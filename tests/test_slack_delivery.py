@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses
+import datetime
 import pathlib
+import types
 from collections.abc import Iterator
 from unittest import mock
 
 import conftest
+import httpx
 import pytest
 from structlog import testing
 
@@ -16,8 +20,9 @@ from src.features.chat_threads import thread_entry
 from src.features.slack import event_types, metadata, slack_listener, turn_contribution
 from src.infra import config, models
 from src.infra import event_types as ET
-from src.runtime import master_cc_state, message_aggregator
+from src.runtime import control_events, master_cc_state, message_aggregator, run_token, triggers
 from src.runtime.agent_process import base
+from src.runtime.api import deps
 
 _CHANNEL = "C_TEST"
 _THREAD = "1700000000.000100"
@@ -169,7 +174,8 @@ async def test_reply_in_a_summon_round_posts_persists_and_clears_the_eye(tmp_pat
 
   ack_tasks: list[asyncio.Task] = []
   with _running_round(cfg, session_blocks, sid, summon["id"]), _listener_seam(client, tasks=ack_tasks):
-    result = await slack_listener.post_reply(sid, "the answer", cfg, session_blocks.store, session_blocks.events)
+    result = await slack_listener.post_reply(
+        sid, "the answer", cfg, session_blocks.store, session_blocks.events, tree=session_blocks.tree)
     await asyncio.gather(*ack_tasks)
 
   assert result == {
@@ -191,12 +197,247 @@ async def test_reply_in_a_summon_round_posts_persists_and_clears_the_eye(tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_duplicate_slack_app_mention_starts_one_summon_and_one_ack(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg, session_blocks, client = _rig(tmp_path)
+  tree = conftest.build_task_tree(cfg, session_blocks)
+  conftest.bind_deps_blocks(monkeypatch, tree, session_blocks)
+  trigger_mgr = triggers.TriggerManager(cfg, tree)
+  event = {
+      "type": "app_mention",
+      "team": _TEAM,
+      "channel": _CHANNEL,
+      "thread_ts": _THREAD,
+      "ts": "1700000000.000321",
+      "user": cfg.slack.allowed_user_ids[0],
+  }
+  name_entered = asyncio.Event()
+  both_named = asyncio.Event()
+  name_arrivals = 0
+  original_name = client.get_channel_name
+
+  async def synchronize_name(channel_id: str) -> str:
+    nonlocal name_arrivals
+    name_arrivals += 1
+    if name_arrivals == 2:
+      both_named.set()
+    await both_named.wait()
+    name_entered.set()
+    return await original_name(channel_id)
+
+  client.get_channel_name = synchronize_name
+  tasks: list[asyncio.Task] = []
+  trigger = mock.AsyncMock()
+  with _listener_seam(client, tasks=tasks, trigger=trigger):
+    first_pair = await asyncio.gather(
+        *[
+            slack_listener.handle_app_mention(event, cfg, *conftest.thread_blocks(session_blocks), client, trigger_mgr)
+            for _ in range(2)
+        ])
+    assert name_entered.is_set()
+    for _ in range(2):
+      assert await slack_listener.handle_app_mention(
+          event, cfg, *conftest.thread_blocks(session_blocks), client, trigger_mgr) == first_pair[0]
+    await asyncio.gather(*tasks)
+
+  assert first_pair[0] == first_pair[1]
+  sid = first_pair[0]
+  assert sid is not None
+  summons = [ev for ev in tree.fact_history(sid) if ev.get("type") == ET.AGENT_MESSAGE and "slack" in ev]
+  assert len(summons) == 1
+  assert summons[0]["request_id"] == f"slack-mention:{event['ts']}"
+  trigger.assert_awaited_once()
+  assert len([call for method, call in client.calls if method == "add_reaction"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_concurrent_slack_reply_route_reuses_the_post_and_stored_receipt(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg, session_blocks, client = _rig(tmp_path)
+  sid = await _slack_session(session_blocks)
+  tree = session_blocks.tree
+  assert tree is not None
+  started_at = datetime.datetime.now(datetime.UTC)
+  monkeypatch.setattr(tree.runs, "get_run", mock.AsyncMock(return_value=types.SimpleNamespace(started_at=started_at)))
+  route_client = conftest.make_internal_router_client(cfg, session_blocks, tree)
+  claims = run_token.RunTokenClaims(session_id=sid, run_id="slack-run", agent="slack manager")
+  route_client.app.dependency_overrides[deps.require_caller] = lambda: run_token.CallerIdentity(
+      kind="agent", claims=claims)
+  post_entered = asyncio.Event()
+  allow_post = asyncio.Event()
+  original_post = client.post_message
+
+  async def delayed_post(channel: str, text: str, thread_ts: str, *, post_key: str) -> dict:
+    post_entered.set()
+    await allow_post.wait()
+    return await original_post(channel, text, thread_ts, post_key=post_key)
+
+  monkeypatch.setattr(client, "post_message", delayed_post)
+  with _listener_seam(client):
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=route_client.app), base_url="http://test") as http:
+      first_task = asyncio.create_task(
+          http.post("/api/internal/slack/reply", json={
+              "session_id": sid,
+              "text": "one reply"
+          }))
+      await asyncio.wait_for(post_entered.wait(), timeout=1)
+      second_task = asyncio.create_task(
+          http.post("/api/internal/slack/reply", json={
+              "session_id": sid,
+              "text": "one reply"
+          }))
+      await asyncio.sleep(0)
+      allow_post.set()
+      first, second = await asyncio.gather(first_task, second_task)
+
+      # A replay also returns before the freshness read, even after a new human
+      # message arrives above the thread watermark.
+      client.thread.append(
+          {
+              "ts": "1700000000.999999",
+              "user": cfg.slack.allowed_user_ids[0],
+              "text": "new message after the reply",
+          })
+      third = await http.post("/api/internal/slack/reply", json={"session_id": sid, "text": "one reply"})
+
+  assert first.status_code == second.status_code == third.status_code == 200
+  assert first.json() == second.json() == third.json()
+  assert len(client.posts) == 1
+  reply_events = conftest.events_of_type(tree.fact_history(sid), event_types.SLACK_REPLY)
+  assert len(reply_events) == 1
+  request_id = control_events.derived_agent_send_request_id("slack-run", "slack reply", sid, "one reply")
+  assert reply_events[0]["request_id"] == request_id
+  post_calls = [kwargs for method, kwargs in client.calls if method == "post_message"]
+  assert len(post_calls) == 1
+  assert post_calls[0]["metadata"] == {
+      "event_type": "charliebot_post",
+      "event_payload": {
+          "key": f"{request_id}#1"
+      },
+  }
+
+
+@pytest.mark.asyncio
+async def test_slack_accepted_post_then_read_timeout_is_found_by_key(tmp_path: pathlib.Path) -> None:
+  cfg, session_blocks, client = _rig(tmp_path)
+  sid = await _slack_session(session_blocks)
+  client.raise_after_accept_once = True
+
+  with _listener_seam(client):
+    result = await slack_listener.post_reply(
+        sid,
+        "accepted then timed out",
+        cfg,
+        session_blocks.store,
+        session_blocks.events,
+        request_id="timeout-request",
+        run_started_at=datetime.datetime.now(datetime.UTC),
+        tree=session_blocks.tree,
+    )
+
+  assert result["posted"] is True
+  assert len(client.posts) == 1
+  replies = conftest.events_of_type(session_blocks.events.load_chat_events_sync(sid), event_types.SLACK_REPLY)
+  assert len(replies) == 1
+  assert replies[0]["request_id"] == "timeout-request"
+
+
+@pytest.mark.asyncio
+async def test_slack_retry_after_event_write_failure_finds_existing_post(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg, session_blocks, client = _rig(tmp_path)
+  sid = await _slack_session(session_blocks)
+  original_save = session_blocks.events.save_chat_event
+  failed = False
+
+  async def fail_reply_write(session_id: str, event: dict) -> None:
+    nonlocal failed
+    if not failed and event.get("type") == event_types.SLACK_REPLY:
+      failed = True
+      raise RuntimeError("injected event write failure")
+    await original_save(session_id, event)
+
+  monkeypatch.setattr(session_blocks.events, "save_chat_event", fail_reply_write)
+  with _listener_seam(client), pytest.raises(RuntimeError, match="injected event write failure"):
+    await slack_listener.post_reply(
+        sid,
+        "post before event",
+        cfg,
+        session_blocks.store,
+        session_blocks.events,
+        request_id="write-request",
+        run_started_at=datetime.datetime.now(datetime.UTC),
+        tree=session_blocks.tree)
+
+  monkeypatch.setattr(session_blocks.events, "save_chat_event", original_save)
+  with _listener_seam(client):
+    result = await slack_listener.post_reply(
+        sid,
+        "post before event",
+        cfg,
+        session_blocks.store,
+        session_blocks.events,
+        request_id="write-request",
+        run_started_at=datetime.datetime.now(datetime.UTC),
+        tree=session_blocks.tree)
+
+  assert result["posted"] is True
+  assert len(client.posts) == 1
+  replies = conftest.events_of_type(session_blocks.events.load_chat_events_sync(sid), event_types.SLACK_REPLY)
+  assert len(replies) == 1
+  assert replies[0]["request_id"] == "write-request"
+
+
+@pytest.mark.asyncio
+async def test_slack_partial_segment_retry_posts_only_the_missing_segment(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg, session_blocks, client = _rig(tmp_path)
+  sid = await _slack_session(session_blocks)
+  small_platform = dataclasses.replace(slack_listener.SLACK, max_post_chars=5)
+  monkeypatch.setattr(slack_listener.SlackThreadAdapter, "platform", small_platform)
+  text = "abcdefghij"
+  client.fail_post_keys.add("segment-request#2")
+
+  with _listener_seam(client), mock.patch(_RETRY_DELAYS_PATCH_TARGET,
+                                          (0.0, 0.0)), pytest.raises(slack_listener.SlackReplyError) as excinfo:
+    await slack_listener.post_reply(
+        sid,
+        text,
+        cfg,
+        session_blocks.store,
+        session_blocks.events,
+        request_id="segment-request",
+        run_started_at=datetime.datetime.now(datetime.UTC),
+        tree=session_blocks.tree)
+  assert excinfo.value.status == 502
+  assert len(client.posts) == 1
+  assert client.posts[0]["text"] == text[:5]
+
+  client.fail_post_keys.clear()
+  with _listener_seam(client):
+    result = await slack_listener.post_reply(
+        sid,
+        text,
+        cfg,
+        session_blocks.store,
+        session_blocks.events,
+        request_id="segment-request",
+        run_started_at=datetime.datetime.now(datetime.UTC),
+        tree=session_blocks.tree)
+
+  assert result["chunks"] == 2
+  assert [post["text"] for post in client.posts] == [text[:5], text[5:]]
+  assert len(conftest.events_of_type(session_blocks.events.load_chat_events_sync(sid), event_types.SLACK_REPLY)) == 1
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("text", ["", "   \n\t"])
 async def test_blank_reply_is_refused_422_before_any_post(tmp_path: pathlib.Path, text: str) -> None:
   cfg, session_blocks, client = _rig(tmp_path)
   sid = await _slack_session(session_blocks)
   with _listener_seam(client), pytest.raises(slack_listener.SlackReplyError) as excinfo:
-    await slack_listener.post_reply(sid, text, cfg, session_blocks.store, session_blocks.events)
+    await slack_listener.post_reply(
+        sid, text, cfg, session_blocks.store, session_blocks.events, tree=session_blocks.tree)
   assert excinfo.value.status == 422
   assert not client.posts
   assert not conftest.events_of_type(session_blocks.events.load_chat_events_sync(sid), event_types.SLACK_REPLY)
@@ -217,7 +458,8 @@ async def test_slack_rejecting_the_post_is_502_and_persists_nothing(tmp_path: pa
       testing.capture_logs() as logs,
       pytest.raises(slack_listener.SlackReplyError) as excinfo,
   ):
-    await slack_listener.post_reply(sid, "never arrives", cfg, session_blocks.store, session_blocks.events)
+    await slack_listener.post_reply(
+        sid, "never arrives", cfg, session_blocks.store, session_blocks.events, tree=session_blocks.tree)
 
   assert excinfo.value.status == 502
   assert "nothing was persisted" in excinfo.value.detail
@@ -236,7 +478,8 @@ async def test_reply_to_an_unknown_session_is_404_without_slack_credentials(tmp_
   conftest.stub_credentials({})  # no slack section: building the bot client raises
 
   with pytest.raises(slack_listener.SlackReplyError) as excinfo:
-    await slack_listener.post_reply("no-such-session", "hello", cfg, session_blocks.store, session_blocks.events)
+    await slack_listener.post_reply(
+        "no-such-session", "hello", cfg, session_blocks.store, session_blocks.events, tree=session_blocks.tree)
 
   assert excinfo.value.status == 404
 
@@ -254,7 +497,8 @@ async def test_reply_refuses_as_a_whole_when_it_still_links_the_file_server(tmp_
   link = "https://charliebot.example/absolute_filepath/home/u/artifacts/page.html"
 
   with _listener_seam(client), pytest.raises(slack_listener.SlackReplyError) as excinfo:
-    await slack_listener.post_reply(sid, f"details: {link}", cfg, session_blocks.store, session_blocks.events)
+    await slack_listener.post_reply(
+        sid, f"details: {link}", cfg, session_blocks.store, session_blocks.events, tree=session_blocks.tree)
 
   assert excinfo.value.status == 422
   assert link in excinfo.value.detail
@@ -270,7 +514,8 @@ async def test_reply_with_a_published_url_posts_the_text_as_written(tmp_path: pa
   text = f"see {conftest.PUBLISH_BASE_URL}/Ab3dEf6hIj8kLm1nOp2q/page.html for details"
 
   with _listener_seam(client):
-    result = await slack_listener.post_reply(sid, text, cfg, session_blocks.store, session_blocks.events)
+    result = await slack_listener.post_reply(
+        sid, text, cfg, session_blocks.store, session_blocks.events, tree=session_blocks.tree)
 
   assert result["text"] == text
   assert client.posts == [{"channel": _CHANNEL, "text": text, "thread_ts": _THREAD}]
@@ -319,7 +564,8 @@ async def test_summon_round_without_a_reply_wakes_the_master_once_with_a_nudge(t
   trigger = mock.AsyncMock()
 
   with _listener_seam(client, tasks=tasks, trigger=trigger), testing.capture_logs() as logs:
-    assert await slack_listener.deliver_done(sid, done, cfg, *conftest.thread_blocks(session_blocks)) is True
+    assert await slack_listener.deliver_done(
+        sid, done, cfg, *conftest.thread_blocks(session_blocks), tree=session_blocks.tree) is True
     await asyncio.gather(*tasks)
 
   nudges = _nudges(session_blocks.events.load_chat_events_sync(sid))
@@ -338,6 +584,52 @@ async def test_summon_round_without_a_reply_wakes_the_master_once_with_a_nudge(t
   assert not client.posts
   assert client.reactions[_THREAD] == {"eyes"}  # the question is still open
   assert next(ev for ev in logs if ev["event"] == "slack_reply_nudge")["summon_id"] == summon["id"]
+
+
+@pytest.mark.asyncio
+async def test_deliver_done_and_boot_audit_serialize_nudge_then_notice(tmp_path: pathlib.Path) -> None:
+  cfg, session_blocks, client = _rig(tmp_path)
+  tree = conftest.build_task_tree(cfg, session_blocks)
+  sid = await _slack_session(session_blocks)
+  client.reactions[_THREAD] = {"eyes"}
+  summon = await _append(session_blocks, sid, _summon())
+  summon_done = await _append(session_blocks, sid, _done(summon["id"]))
+  tasks: list[asyncio.Task] = []
+  trigger = mock.AsyncMock()
+
+  def running_nudges(session_id: str) -> set[str]:
+    return {event["id"] for event in _nudges(tree.fact_history(session_id))}
+
+  with (
+      _listener_seam(client, tasks=tasks, trigger=trigger),
+      mock.patch("src.runtime.master_cc_state.running_user_event_ids", side_effect=running_nudges),
+  ):
+    await asyncio.gather(
+        slack_listener.deliver_done(sid, summon_done, cfg, *conftest.thread_blocks(session_blocks), tree=tree),
+        slack_listener.backfill_lost_summons(
+            cfg, session_blocks.listing, *conftest.thread_blocks(session_blocks), tree=tree),
+    )
+    await asyncio.gather(*tasks)
+
+    nudge = _nudges(tree.fact_history(sid))[0]
+    nudge_done = await _append(session_blocks, sid, _done(nudge["id"]))
+    await asyncio.gather(
+        slack_listener.deliver_done(sid, nudge_done, cfg, *conftest.thread_blocks(session_blocks), tree=tree),
+        slack_listener.backfill_lost_summons(
+            cfg, session_blocks.listing, *conftest.thread_blocks(session_blocks), tree=tree),
+    )
+    await asyncio.gather(*tasks)
+
+  events = tree.fact_history(sid)
+  nudges = _nudges(events)
+  notices = _notices(events)
+  assert len(nudges) == len(notices) == 1
+  assert nudges[0]["request_id"] == f"slack-nudge:{summon['id']}"
+  assert notices[0]["request_id"] == f"slack-notice:{summon['id']}"
+  assert trigger.await_count == 1
+  assert len(client.posts) == 1
+  assert [call["metadata"]["event_payload"]["key"] for method, call in client.calls if method == "post_message"
+         ] == [f"slack-notice:{summon['id']}#1"]
 
 
 @pytest.mark.asyncio
@@ -374,7 +666,8 @@ async def test_notice_post_failure_leaves_no_marker_and_the_boot_audit_posts_it_
       mock.patch(_RETRY_DELAYS_PATCH_TARGET, (0.0, 0.0)),
       testing.capture_logs() as logs,
   ):
-    assert await slack_listener.deliver_done(sid, done, cfg, *conftest.thread_blocks(session_blocks)) is False
+    assert await slack_listener.deliver_done(
+        sid, done, cfg, *conftest.thread_blocks(session_blocks), tree=session_blocks.tree) is False
 
   assert not client.posts
   assert not _notices(session_blocks.events.load_chat_events_sync(sid))
@@ -384,7 +677,7 @@ async def test_notice_post_failure_leaves_no_marker_and_the_boot_audit_posts_it_
   client.fail_posts = False  # Slack is back at the next boot
   with _listener_seam(client, tasks=tasks, queued=set()):
     assert await slack_listener.backfill_lost_summons(
-        cfg, session_blocks.listing, *conftest.thread_blocks(session_blocks)) == 1
+        cfg, session_blocks.listing, *conftest.thread_blocks(session_blocks), tree=session_blocks.tree) == 1
     await asyncio.gather(*tasks)
 
   assert [p["text"] for p in client.posts] == [thread_entry._NO_REPLY_NOTICE]
@@ -401,7 +694,8 @@ async def test_round_end_without_a_slack_thread_answers_false_without_slack_cred
   conftest.stub_credentials({})  # no slack section: building the bot client raises
   meta = await conftest.create_root_session(session_blocks, models.CreateSessionRequest(name="plain session"))
 
-  assert await slack_listener.deliver_done(meta.id, _done(None), cfg, *conftest.thread_blocks(session_blocks)) is False
+  assert await slack_listener.deliver_done(
+      meta.id, _done(None), cfg, *conftest.thread_blocks(session_blocks), tree=session_blocks.tree) is False
 
 
 # ---------------------------------------------------------------------------
@@ -413,17 +707,21 @@ async def test_round_end_without_a_slack_thread_answers_false_without_slack_cred
 async def test_backfill_run_twice_posts_once(tmp_path: pathlib.Path) -> None:
   cfg, session_blocks, client = _rig(tmp_path)
   sid = await _slack_session(session_blocks)
-  await _append(session_blocks, sid, _summon())
+  summon = await _append(session_blocks, sid, _summon())
 
   with _listener_seam(client):
     assert await slack_listener.backfill_lost_summons(
-        cfg, session_blocks.listing, *conftest.thread_blocks(session_blocks)) == 1
+        cfg, session_blocks.listing, *conftest.thread_blocks(session_blocks), tree=session_blocks.tree) == 1
     assert await slack_listener.backfill_lost_summons(
-        cfg, session_blocks.listing, *conftest.thread_blocks(session_blocks)) == 0
+        cfg, session_blocks.listing, *conftest.thread_blocks(session_blocks), tree=session_blocks.tree) == 0
 
   assert len(client.posts) == 1
   events = session_blocks.events.load_chat_events_sync(sid)
-  assert len(conftest.events_of_type(events, ET.ASSISTANT_ERROR)) == 1
+  markers = conftest.events_of_type(events, ET.ASSISTANT_ERROR)
+  assert len(markers) == 1
+  assert markers[0]["request_id"] == f"slack-lost:{summon['id']}"
+  assert [call["metadata"]["event_payload"]["key"] for method, call in client.calls if method == "post_message"
+         ] == [f"slack-lost:{summon['id']}#1"]
   assert not conftest.events_of_type(events, ET.MASTER_DONE)
 
 
@@ -460,7 +758,7 @@ async def test_batch_holding_two_summons_binds_the_reply_to_the_newer_one(tmp_pa
     ack_tasks: list[asyncio.Task] = []
     with _listener_seam(client, tasks=ack_tasks):
       result = await slack_listener.post_reply(
-          sid, "one answer for both", cfg, session_blocks.store, session_blocks.events)
+          sid, "one answer for both", cfg, session_blocks.store, session_blocks.events, tree=session_blocks.tree)
       await asyncio.gather(*ack_tasks)
   finally:
     master_cc_state._current_items.pop(sid, None)

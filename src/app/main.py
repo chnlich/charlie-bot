@@ -22,6 +22,7 @@ _RUNTIME_COMMANDS = {
     "schedule-trigger": "src.runtime.cli.schedule_trigger",
     "gc-trash": "src.runtime.cli.gc_trash",
     "session": "src.runtime.cli.session",
+    "compaction-context": "src.runtime.cli.compaction_context",
 }
 
 

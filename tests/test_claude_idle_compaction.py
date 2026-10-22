@@ -4,6 +4,7 @@ master turn, the timer against the turn path, and the run the trigger path start
 import asyncio
 import dataclasses
 import datetime
+import json
 import pathlib
 from collections.abc import Iterator
 from typing import Any
@@ -211,6 +212,11 @@ async def test_idle_argv_equals_the_master_turn_argv_for_the_same_option_and_acc
   argv, _env = claude_idle_compaction._compaction_process(cfg, option, account, SESSION_ID, CC_ID, ctx.run_kind)
 
   assert argv == expected
+  settings = json.loads(argv[argv.index("--settings") + 1])
+  [session_start] = settings["hooks"]["SessionStart"]
+  assert session_start["matcher"] == "compact"
+  assert [hook["command"] for hook in session_start["hooks"]
+         ] == [f"charliebot compaction-context --session {SESSION_ID} --slot {slot}" for slot in range(1, 7)]
 
 
 # ---------------------------------------------------------------------------

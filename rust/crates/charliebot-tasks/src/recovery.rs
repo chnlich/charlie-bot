@@ -357,7 +357,11 @@ pub async fn reconcile_task_tree(
       return Ok(counters);
     }
     counters.full += 1;
-    if let Err(error) = reconcile_node(features, adapter, &session_id, &mut counters, None).await {
+    let result = reconcile_node(features, adapter, &session_id, &mut counters, None).await;
+    // The boot pass moves on from this node, so its parsed events and folded facts leave memory. The end-landing retry
+    // runs on a live server and keeps them.
+    features.store.evict_recovery_history(&session_id);
+    if let Err(error) = result {
       tracing::error!(target: "charliebot_tasks", session_id = %session_id, error = %format!("{error:#}"), "task_recovery_node_failed");
       failed_node = true;
       // An out-of-space pass enters the end-landing retry: it re-runs the pass until a round survives.
@@ -385,19 +389,6 @@ pub async fn reconcile_node(
   #[cfg(feature = "test-hooks")]
   adapter.recovery.reconcile_node_calls.fetch_add(1, Ordering::SeqCst);
 
-  let result = reconcile_node_inner(features, adapter, session_id, counters, is_driven).await;
-  // The pass moves on from this node: its history snapshots and folded facts leave memory with it.
-  features.store.evict_recovery_history(session_id);
-  result
-}
-
-async fn reconcile_node_inner(
-  features: &Arc<FeatureContext>,
-  adapter: &TaskExecutionAdapter,
-  session_id: &str,
-  counters: &mut PassCounters,
-  is_driven: Option<&(dyn Fn(&RunRecord) -> bool + Sync)>,
-) -> anyhow::Result<()> {
   let store = &features.store;
   if store.load_meta(session_id).await?.is_none() {
     return Ok(());

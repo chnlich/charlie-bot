@@ -166,6 +166,8 @@ pub struct Store {
   pub(crate) metadata_stat_hook: StdMutex<Option<MetadataStatHook>>,
   #[cfg(test)]
   pub(crate) event_read_hook: StdMutex<Option<Arc<dyn Fn() + Send + Sync>>>,
+  #[cfg(test)]
+  pub(crate) event_append_hook: StdMutex<Option<Arc<dyn Fn() + Send + Sync>>>,
   pub(crate) control: ControlLock,
   pub(crate) records_generation: AtomicU64,
   pub(crate) control_event_ids: StdMutex<Option<VecDeque<String>>>,
@@ -224,6 +226,8 @@ impl Store {
       metadata_stat_hook: StdMutex::new(None),
       #[cfg(test)]
       event_read_hook: StdMutex::new(None),
+      #[cfg(test)]
+      event_append_hook: StdMutex::new(None),
       control: ControlLock::new(store_id),
       records_generation: AtomicU64::new(0),
       control_event_ids: StdMutex::new(None),

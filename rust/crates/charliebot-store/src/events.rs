@@ -106,6 +106,10 @@ impl Store {
     let cache_entry = self.events_cache_entry(session_id);
     let mut cache = cache_entry.lock().expect("session event cache mutex is not poisoned");
     let path = self.chat_events_path(session_id);
+    #[cfg(test)]
+    if let Some(hook) = self.event_append_hook.lock().expect("event append hook mutex is not poisoned").clone() {
+      hook();
+    }
     #[cfg(any(test, feature = "write-faults"))]
     self.fail_chat_append(session_id, &event, &path)?;
     ndjson::append(&path, &event)?;
@@ -387,9 +391,12 @@ impl Store {
     *cache = None;
   }
 
-  /// Drop a node's history snapshots and folded facts after a node pass releases its local references.
+  /// Drop a node's parsed live events and folded facts after a node pass releases its local references.
+  ///
+  /// The per-session cache entry stays in the map: an append or cold read that holds its lock keeps its exclusion, so
+  /// the next read sees every event that the file holds.
   pub fn evict_recovery_history(&self, session_id: &str) {
-    self.events_cache.lock().expect("event cache mutex is not poisoned").remove(session_id);
+    self.clear_chat_events_cache(session_id);
     self.task_state_tail_cache.lock().expect("task state tail cache mutex is not poisoned").remove(session_id);
     self.node_facts_cache.lock().expect("node facts cache mutex is not poisoned").remove(session_id);
   }
@@ -743,6 +750,48 @@ mod tests {
       assert_eq!(file_ids, expected, "iteration {iteration}: file ids");
       assert_eq!(cached.as_slice(), file_events.as_slice(), "iteration {iteration}: cache and file order");
     }
+  }
+
+  #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+  async fn eviction_waits_for_an_append_that_holds_the_session_lock() {
+    let (_home, store) = make_test_store();
+    let store = Arc::new(store);
+    let session_id = "synthetic-evicted";
+    store.append_chat_event(session_id, json!({"id": "before", "type": "user"})).await.unwrap();
+    store.load_chat_events_shared_sync(session_id).unwrap();
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let release_rx = Arc::new(Mutex::new(release_rx));
+    *store.event_append_hook.lock().unwrap() = Some(Arc::new(move || {
+      entered_tx.send(()).unwrap();
+      release_rx.lock().unwrap().recv().unwrap();
+    }));
+
+    let append_store = Arc::clone(&store);
+    let append =
+      tokio::spawn(
+        async move { append_store.append_chat_event(session_id, json!({"id": "during", "type": "user"})).await },
+      );
+    entered_rx.recv_timeout(Duration::from_secs(1)).expect("the append reaches its hook while it holds the lock");
+    let evict_store = Arc::clone(&store);
+    let mut evict = tokio::task::spawn_blocking(move || {
+      evict_store.evict_recovery_history(session_id);
+      evict_store.load_chat_events_shared_sync(session_id)
+    });
+    let evict_result = tokio::time::timeout(Duration::from_millis(300), &mut evict).await;
+    let evicted_while_append_held = evict_result.is_ok();
+    release_tx.send(()).unwrap();
+    append.await.unwrap().unwrap();
+    match evict_result {
+      Ok(result) => drop(result.unwrap().unwrap()),
+      Err(_) => drop(evict.await.unwrap().unwrap()),
+    }
+    *store.event_append_hook.lock().unwrap() = None;
+
+    let cached = store.load_chat_events_shared_sync(session_id).unwrap();
+    let ids: Vec<&str> = cached.iter().map(|event| event["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["before", "during"], "the cache after the eviction lost the append that held the lock");
+    assert!(!evicted_while_append_held, "the eviction ran while an append held the session lock");
   }
 
   #[tokio::test]

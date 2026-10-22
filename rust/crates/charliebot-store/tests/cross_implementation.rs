@@ -1621,6 +1621,23 @@ fn run_python_helper(mode: &str, root: &Path, extra: &[&str]) {
   let _ = run_python_helper_args(&args);
 }
 
+fn run_python_message_aggregator(events: &Value) -> Value {
+  let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).ancestors().nth(3).unwrap().to_path_buf();
+  let dir = tempfile::tempdir().unwrap();
+  let events_path = dir.path().join("events.json");
+  fs::write(&events_path, serde_json::to_vec(events).unwrap()).unwrap();
+  let helper = "rust/crates/charliebot-store/tests/python_message_aggregator.py";
+  let output =
+    Command::new("uv").args(["run", "python", helper]).arg(&events_path).current_dir(repo_root).output().unwrap();
+  assert!(
+    output.status.success(),
+    "python message aggregator helper failed:\nstdout:\n{}\nstderr:\n{}",
+    String::from_utf8_lossy(&output.stdout),
+    String::from_utf8_lossy(&output.stderr),
+  );
+  serde_json::from_slice(&output.stdout).unwrap()
+}
+
 fn run_python_helper_args(args: &[&str]) -> String {
   let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).ancestors().nth(3).unwrap().to_path_buf();
   let helper = "rust/crates/charliebot-store/tests/python_store_ops.py";
@@ -2253,4 +2270,49 @@ fn legacy_master_run_and_thread_log_readers_walk_the_python_layouts() {
   let store = make_store(home.path());
   assert_eq!(store.master_run_log_paths_sync().unwrap(), vec![master_log]);
   assert_eq!(store.thread_event_log_paths_sync().unwrap(), vec![thread_log]);
+}
+
+/// Every content and metadata shape that Python's aggregator iterates must feed the Rust port too.
+///
+/// A native transcript event carries `message.content` as a plain string rather than a list of
+/// blocks; Python iterates the characters and ignores them, while the port used to reject the
+/// whole event. The other fields here follow the same `or []` and truthiness rules.
+#[test]
+fn message_aggregator_accepts_every_shape_python_accepts() {
+  let events = json!([
+    {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "draft"}]}},
+    {
+      "type": "user",
+      "message": {"role": "user", "content": "synthetic native prompt"},
+      "parentUuid": null,
+      "sessionId": "synthetic-session",
+      "uuid": "synthetic-native-event",
+      "timestamp": "2026-01-01T00:00:00Z",
+    },
+    {"type": "user", "message": {"role": "user", "content": {"nested": true}}},
+    {"type": "assistant", "message": {"role": "assistant", "content": "plain string content"}},
+    {"type": "assistant", "message": {"role": "assistant", "content": {"nested": "object"}}},
+    {"type": "assistant", "message": {"role": "assistant", "content": [
+      {"type": "tool_use", "name": "ExitPlanMode", "input": {"plan": {"steps": ["one"]}}}
+    ]}},
+    {"type": "model_fallback_notice", "served_models": "abc", "configured_model": "synthetic-model"},
+    {"type": "task_input_acknowledged", "input_ids": "xy", "note": "synthetic note"},
+    {
+      "type": "run_header",
+      "kind": "work",
+      "launched": 1,
+      "launch_failed": 0,
+      "tool_calls": "2",
+      "task_spec_ref": "synthetic-spec",
+      "launch_prompt_ref": "synthetic-prompt",
+      "state": "done",
+    },
+    {"type": "context_compacted", "trigger": "auto", "compact_metadata": {"pre_tokens": true, "post_tokens": 1000}},
+  ]);
+  let mut aggregator = charliebot_store::aggregator::MessageAggregator::new(0, true);
+  let mut rust_frames = Vec::new();
+  for event in events.as_array().unwrap() {
+    rust_frames.extend(aggregator.feed(event).unwrap());
+  }
+  assert_eq!(Value::Array(rust_frames), run_python_message_aggregator(&events));
 }

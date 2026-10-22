@@ -863,6 +863,45 @@ async fn recovery_replays_a_lost_cold_read_delivery() -> anyhow::Result<()> {
   Ok(())
 }
 
+/// A parent chat log holding a native transcript user event must not fail the child's recovery pass.
+///
+/// The native event carries `message.content` as a plain string. Delivering the child's report primes the
+/// parent's aggregator; a failed prime leaves the child unrecovered and the boot pass without its marker.
+#[tokio::test]
+async fn recovery_accepts_native_user_events_with_string_content() -> anyhow::Result<()> {
+  let log = LogCapture::default();
+  let _guard = log.install();
+  let stack = Stack::start("exit 0").await?;
+  let manager = stack.node("root", None, TaskProfile::Manager, None).await?;
+  stack
+    .store()
+    .append_chat_event(
+      &manager.id,
+      json!({
+        "type": "user",
+        "message": {"role": "user", "content": "synthetic native prompt"},
+        "parentUuid": null,
+        "sessionId": manager.id,
+        "uuid": "synthetic-native-event",
+        "timestamp": "2026-01-01T00:00:00Z",
+      }),
+    )
+    .await?;
+  let dir = tempfile::tempdir()?;
+  let (worker, _page, _digest) = cold_read_child(&stack, &manager, dir.path()).await?;
+  stack.queue_run(&worker.id, "run-cold", RunKind::Work).await?;
+  write_run_events(&stack, &worker.id, "run-cold", &[json!({"type": "result", "result": "(1) answered."})])?;
+  stack.finish(&worker.id, "run-cold", RunOutcomeKind::Success).await?;
+
+  stack.boot().await?;
+
+  assert!(!log.text().contains("task_recovery_node_failed"), "{}", log.text());
+  assert!(boot_marker_path(&stack).exists(), "a clean pass writes the boot marker");
+  assert_eq!(stack.child_reports(&manager.id)?.len(), 1);
+  assert_eq!(stack.store().task_state(&worker.id)?, "completed");
+  Ok(())
+}
+
 /// `test_task_recovery.py::test_recovery_replays_a_lost_cold_read_failure_chain`: a failed cold-read run whose chain a
 /// crash cut with one backend left. The replay records the attempt, starts the retry on the next pool backend, and the
 /// retry's answer delivers the report.

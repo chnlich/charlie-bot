@@ -174,13 +174,10 @@ impl MessageAggregator {
 
   fn feed_user(&mut self, event: &Value, index: usize, event_id: &str) -> StoreResult<Vec<Value>> {
     if event.get("message").is_some() && event.get("content").is_none() {
-      let blocks = event.get("message").and_then(|message| message.get("content"));
-      if let Some(blocks) = blocks {
-        let blocks = blocks.as_array().ok_or_else(|| StoreError::new("user message content must be an array"))?;
-        for block in blocks {
-          if block.get("type").and_then(Value::as_str) == Some("tool_result") && !self.tools_buf.is_empty() {
-            self.attach_tool_output(extract_tool_result_text(block)?, block.get("is_error").is_some_and(is_truthy));
-          }
+      let content = event.get("message").and_then(|message| message.get("content"));
+      for block in message_blocks(content, "user message content", false)? {
+        if block.get("type").and_then(Value::as_str) == Some("tool_result") && !self.tools_buf.is_empty() {
+          self.attach_tool_output(extract_tool_result_text(&block)?, block.get("is_error").is_some_and(is_truthy));
         }
       }
       return Ok(self.stream_delta());
@@ -213,11 +210,7 @@ impl MessageAggregator {
       return Err(StoreError::new("assistant event message must be an object"));
     }
     let message = message.and_then(Value::as_object).cloned().unwrap_or_default();
-    let blocks = message.get("content").filter(|value| is_truthy(value));
-    if blocks.is_some_and(|value| !value.is_array()) {
-      return Err(StoreError::new("assistant message content must be an array"));
-    }
-    let blocks = blocks.and_then(Value::as_array).cloned().unwrap_or_default();
+    let blocks = message_blocks(message.get("content"), "assistant message content", true)?;
     let mut deltas = Vec::new();
 
     for block in &blocks {
@@ -226,11 +219,10 @@ impl MessageAggregator {
       {
         let plan = block.get("input").and_then(|input| input.get("plan")).cloned().unwrap_or(Value::Null);
         if is_truthy(&plan) {
-          let plan_text = plan.as_str().ok_or_else(|| StoreError::new("ExitPlanMode plan must be a string"))?;
           deltas.extend(self.flush_to_message_delta());
           let mut plan_message = json!({
             "role": "plan",
-            "content": plan_text,
+            "content": plan,
             "event_index": index,
             "id": event_id,
             "timestamp": event.get("timestamp").cloned().unwrap_or(Value::Null),
@@ -519,16 +511,8 @@ fn render_builtin(event_type: &str, event: &Value) -> StoreResult<Option<Value>>
     event_types::MODEL_FALLBACK_NOTICE => {
       let configured =
         event.get("configured_model").filter(|value| is_truthy(value)).map(python_string).unwrap_or_default();
-      let models = event.get("served_models").filter(|value| is_truthy(value));
-      let mut served = Vec::new();
-      if let Some(models) = models {
-        let models = models.as_array().ok_or_else(|| StoreError::new("served_models must be an array"))?;
-        for model in models {
-          served
-            .push(model.as_str().ok_or_else(|| StoreError::new("served_models entries must be strings"))?.to_string());
-        }
-      }
-      json!({"role": "system", "content": format!("Served by {} (configured {configured})", served.join(", "))})
+      let served = python_join_strings(event.get("served_models"), "served_models")?;
+      json!({"role": "system", "content": format!("Served by {served} (configured {configured})")})
     }
     event_types::CHILD_REPORT => json!({
       "role": event_types::CHILD_REPORT,
@@ -635,7 +619,7 @@ fn render_run_header(event: &Value) -> StoreResult<Value> {
   let state = event.get("state").filter(|value| is_truthy(value)).map(python_string).unwrap_or_default();
   let state_word = if state == "withheld" && event.get("withheld").is_some_and(is_truthy) {
     format!("withheld · {}", python_string(event.get("withheld").expect("checked field")))
-  } else if required_bool(event, "launch_failed")? {
+  } else if is_truthy(required_field(event, "launch_failed")?) {
     "launch failed".to_string()
   } else {
     state.clone()
@@ -649,8 +633,7 @@ fn render_run_header(event: &Value) -> StoreResult<Value> {
   }
   let tool_calls = event.get("tool_calls").filter(|value| !value.is_null());
   if let Some(tool_calls) = tool_calls {
-    let count =
-      tool_calls.as_u64().ok_or_else(|| StoreError::new("run header tool_calls must be a non-negative integer"))?;
+    let count = python_int(tool_calls).ok_or_else(|| StoreError::new("run header tool_calls must be an integer"))?;
     parts.push(if count == 1 { "1 tool call".to_string() } else { format!("{count} tool calls") });
   }
   Ok(json!({
@@ -661,27 +644,41 @@ fn render_run_header(event: &Value) -> StoreResult<Value> {
     "state": state,
     "error": event.get("error").filter(|value| is_truthy(value)).cloned().unwrap_or_else(|| json!("")),
     "tool_calls": event.get("tool_calls").cloned().unwrap_or(Value::Null),
-    "launched": required_bool(event, "launched")?,
-    "launch_failed": required_bool(event, "launch_failed")?,
+    "launched": required_field(event, "launched")?.clone(),
+    "launch_failed": required_field(event, "launch_failed")?.clone(),
     "task_spec_ref": required_field(event, "task_spec_ref")?.clone(),
     "launch_prompt_ref": required_field(event, "launch_prompt_ref")?.clone(),
   }))
 }
 
 fn render_task_input_acknowledged(event: &Value) -> StoreResult<Value> {
-  let ids = event.get("input_ids").filter(|value| is_truthy(value));
-  let mut input_ids = Vec::new();
-  if let Some(ids) = ids {
-    for id in ids.as_array().ok_or_else(|| StoreError::new("input_ids must be an array"))? {
-      input_ids.push(id.as_str().ok_or_else(|| StoreError::new("input_ids entries must be strings"))?);
-    }
-  }
-  let mut content = format!("Task input(s) acknowledged as handled: {}", input_ids.join(", "));
+  let input_ids = python_join_strings(event.get("input_ids"), "input_ids")?;
+  let mut content = format!("Task input(s) acknowledged as handled: {input_ids}");
   if event.get("note").is_some_and(is_truthy) {
     content.push_str(" — ");
     content.push_str(&python_string(event.get("note").expect("checked field")));
   }
   Ok(json!({"role": "system", "content": content.trim_end()}))
+}
+
+/// The content blocks Python iterates for a message field.
+///
+/// Python iterates a string's characters or an object's keys when `content` is not a list, and
+/// none of those values is a block object, so those shapes contribute no blocks. A scalar that
+/// Python cannot iterate still fails, while an assistant field treats a falsy value as empty
+/// because Python's `content or []` replaces it.
+fn message_blocks(content: Option<&Value>, field: &str, falsy_is_empty: bool) -> StoreResult<Vec<Value>> {
+  let Some(content) = content else {
+    return Ok(Vec::new());
+  };
+  if falsy_is_empty && !is_truthy(content) {
+    return Ok(Vec::new());
+  }
+  match content {
+    Value::Array(items) => Ok(items.clone()),
+    Value::String(_) | Value::Object(_) => Ok(Vec::new()),
+    _ => Err(StoreError::new(format!("{field} must be an array"))),
+  }
 }
 
 fn extract_tool_result_text(block: &Value) -> StoreResult<Value> {
@@ -885,7 +882,10 @@ fn add_message_metadata(message: &mut Value, event: &Value, index: usize, event_
 }
 
 fn format_k_tokens(value: &Value) -> StoreResult<String> {
-  let count = value.as_f64().ok_or_else(|| StoreError::new("compaction token count must be numeric"))?;
+  let count = match value {
+    Value::Bool(flag) => f64::from(*flag),
+    _ => value.as_f64().ok_or_else(|| StoreError::new("compaction token count must be numeric"))?,
+  };
   if count < 100_000.0 {
     Ok(format!("{:.1}k", count / 1000.0))
   } else {
@@ -918,12 +918,39 @@ fn py_string_default(event: &Value, key: &str, default: &str) -> String {
   python_string(event.get(key).unwrap_or(&json!(default)))
 }
 
-fn required_bool(event: &Value, key: &str) -> StoreResult<bool> {
-  required_field(event, key)?.as_bool().ok_or_else(|| StoreError::new(format!("{key} must be a boolean")))
-}
-
 fn required_field<'a>(event: &'a Value, key: &str) -> StoreResult<&'a Value> {
   event.get(key).ok_or_else(|| StoreError::new(format!("event renderer requires field {key}")))
+}
+
+/// Python's `", ".join(value or [])`: an array joins its strings, while a string or object
+/// contributes its characters or keys, matching how Python iterates those values.
+fn python_join_strings(value: Option<&Value>, field: &str) -> StoreResult<String> {
+  let Some(value) = value.filter(|value| is_truthy(value)) else {
+    return Ok(String::new());
+  };
+  match value {
+    Value::String(text) => Ok(text.chars().map(String::from).collect::<Vec<_>>().join(", ")),
+    Value::Array(items) => {
+      let mut parts = Vec::with_capacity(items.len());
+      for item in items {
+        parts
+          .push(item.as_str().ok_or_else(|| StoreError::new(format!("{field} entries must be strings")))?.to_string());
+      }
+      Ok(parts.join(", "))
+    }
+    Value::Object(map) => Ok(map.keys().cloned().collect::<Vec<_>>().join(", ")),
+    _ => Err(StoreError::new(format!("{field} must be an array, string or object"))),
+  }
+}
+
+/// Python's `int(value)` for the JSON shapes a tool-call count can carry.
+fn python_int(value: &Value) -> Option<i64> {
+  match value {
+    Value::Bool(flag) => Some(i64::from(*flag)),
+    Value::Number(number) => number.as_i64().or_else(|| number.as_f64().map(|float| float.trunc() as i64)),
+    Value::String(text) => text.trim().parse::<i64>().ok(),
+    _ => None,
+  }
 }
 
 fn is_truthy(value: &Value) -> bool {

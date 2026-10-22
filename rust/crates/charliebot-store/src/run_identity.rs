@@ -69,8 +69,17 @@ impl Store {
   /// Return why a run token fails the Python `require_caller` identity check.
   pub fn run_identity_refusal(&self, session_id: &str, run_id: &str) -> StoreResult<Option<&'static str>> {
     let run = self.read_run_sync(session_id, run_id)?;
-    let events = self.load_all_facts(session_id)?;
-    Ok(run_identity_refusal(run.as_ref(), &events))
+    let Some(run) = run.as_ref() else {
+      return Ok(Some(RUN_IDENTITY_UNKNOWN_DETAIL));
+    };
+    let facts = self.node_state(session_id)?;
+    if facts.runs.has_terminal_fact(&run.id) {
+      return Ok(Some(RUN_IDENTITY_UNKNOWN_DETAIL));
+    }
+    if run.pid.is_none() || run.pid_start.is_none() {
+      return Ok(Some(RUN_IDENTITY_NOT_LAUNCHED_DETAIL));
+    }
+    Ok(None)
   }
 }
 

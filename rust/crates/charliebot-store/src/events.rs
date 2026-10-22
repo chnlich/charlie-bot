@@ -1,5 +1,6 @@
 use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -9,11 +10,95 @@ use serde_json::Value;
 
 use crate::metadata::{SessionMetadata, UtcDateTime};
 use crate::ndjson;
+use crate::read_memos::{BoundedMemo, FileSignature, StatSignatureMemo};
 use crate::store::{CachedChatEvents, HistoryWork};
 use crate::{ControlGuard, Store, StoreError, StoreResult};
 
 /// One parsed chat-log event.
 pub type ChatEvent = Value;
+
+// Match src/infra/ndjson.py:_COUNT_MEMO_LIMIT and its (mtime_ns, size) signatures.
+const EVENT_COUNT_MEMO_LIMIT: usize = 64;
+const EVENT_TAIL_MEMO_LIMIT: usize = 64;
+// Match src/runtime/chat_events.py:_ARCHIVE_MEMO_LIMIT for both archive memos.
+const ARCHIVE_MEMO_LIMIT: usize = 16;
+// Match src/runtime/chat_events.py:_LIVE_RANGE_MEMO_LIMIT and _WALK_BYTE_BUDGET.
+const LIVE_RANGE_MEMO_LIMIT: usize = 4;
+const TAIL_WINDOW_SIZE: usize = 512 * 1024;
+const LIVE_RANGE_WALK_BYTE_BUDGET: usize = 32 * 1024 * 1024;
+
+#[derive(Clone)]
+struct LiveRangeMemo {
+  mtime_ns: i128,
+  size: u64,
+  inode: u64,
+  // Python's BoundedMemo returns the cached list by reference. Arc keeps a live-range hit just as cheap.
+  lines: Arc<Vec<Option<Arc<ChatEvent>>>>,
+  covered_byte_end: usize,
+  ends_on_boundary: bool,
+  first_line_index: usize,
+  covered_byte_start: usize,
+}
+
+type ParsedLiveLine = Option<Arc<ChatEvent>>;
+type SharedLiveLines = Arc<Vec<ParsedLiveLine>>;
+type TailPage = (Arc<Vec<ChatEvent>>, usize, bool);
+
+struct TailLineWalk {
+  lines: Vec<Vec<u8>>,
+  byte_start: usize,
+  ends_on_boundary: bool,
+  bytes_read: usize,
+}
+
+/// Bounded file-signature memos for the Python-equivalent event readers.
+pub(crate) struct EventReadCaches {
+  count: StatSignatureMemo<PathBuf, usize>,
+  tail: StatSignatureMemo<(PathBuf, usize), TailPage>,
+  archive_paths: StatSignatureMemo<PathBuf, Arc<Vec<PathBuf>>>,
+  archive_events: StatSignatureMemo<PathBuf, Arc<Vec<ChatEvent>>>,
+  live_ranges: BoundedMemo<PathBuf, LiveRangeMemo>,
+  #[cfg(test)]
+  tail_bytes_read: usize,
+  #[cfg(test)]
+  tail_lines_parsed: usize,
+  #[cfg(test)]
+  live_range_bytes_read: usize,
+  #[cfg(test)]
+  live_range_lines_parsed: usize,
+  #[cfg(test)]
+  archive_file_reads: usize,
+  #[cfg(test)]
+  archive_dir_walks: usize,
+  #[cfg(test)]
+  count_bytes_read: usize,
+}
+
+impl Default for EventReadCaches {
+  fn default() -> Self {
+    Self {
+      count: StatSignatureMemo::new(EVENT_COUNT_MEMO_LIMIT),
+      tail: StatSignatureMemo::new(EVENT_TAIL_MEMO_LIMIT),
+      archive_paths: StatSignatureMemo::new(ARCHIVE_MEMO_LIMIT),
+      archive_events: StatSignatureMemo::new(ARCHIVE_MEMO_LIMIT),
+      live_ranges: BoundedMemo::new(LIVE_RANGE_MEMO_LIMIT),
+      #[cfg(test)]
+      tail_bytes_read: 0,
+      #[cfg(test)]
+      tail_lines_parsed: 0,
+      #[cfg(test)]
+      live_range_bytes_read: 0,
+      #[cfg(test)]
+      live_range_lines_parsed: 0,
+      #[cfg(test)]
+      archive_file_reads: 0,
+      #[cfg(test)]
+      archive_dir_walks: 0,
+      #[cfg(test)]
+      count_bytes_read: 0,
+    }
+  }
+}
 
 /// The identity of a live event log on disk: its inode, size and modification time, as Python's
 /// `_task_state_fast` keys its memo. An append moves the size, and a rewrite publishes a new inode.
@@ -177,31 +262,44 @@ impl Store {
     Ok(Arc::new(events))
   }
 
-  /// Read the latest live-log events without priming the event cache.
+  /// Read the latest live-log events without priming the event cache. It follows
+  /// `src/infra/ndjson.py:332-381`: key the page by `(path, limit)` and `(mtime_ns, size)`, then seek from EOF in the
+  /// same 512 KiB window.
   pub fn load_chat_events_tail(&self, session_id: &str, limit: usize) -> StoreResult<(Vec<ChatEvent>, usize, bool)> {
     let path = self.chat_events_path(session_id);
-    let raw = match fs::read(&path) {
-      Ok(raw) => raw,
-      Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok((Vec::new(), 0, false)),
-      Err(error) => return Err(StoreError::new(format!("{}: {error}", path.display()))),
-    };
-    let total = if raw.is_empty() {
-      0
-    } else {
-      raw.iter().filter(|byte| **byte == b'\n').count() + usize::from(!raw.ends_with(b"\n"))
-    };
+    let Some((metadata, signature)) = file_signature(&path)? else { return Ok((Vec::new(), 0, false)) };
+    let key = (path.clone(), limit);
+    if let Some((events, total, has_more)) =
+      self.event_read_caches.lock().expect("event read cache mutex is not poisoned").tail.fresh(&key, signature)
+    {
+      return Ok((events.as_ref().clone(), total, has_more));
+    }
+    let total = self.count_chat_event_lines(&path, signature)?;
     let has_more = total > limit;
     if limit == 0 || total == 0 {
+      self.event_read_caches.lock().expect("event read cache mutex is not poisoned").tail.record(
+        key,
+        signature,
+        (Arc::new(Vec::new()), total, has_more),
+      );
       return Ok((Vec::new(), total, has_more));
     }
-    let mut lines: Vec<&[u8]> = raw.split(|byte| *byte == b'\n').collect();
-    if raw.ends_with(b"\n") {
-      lines.pop();
+    let take = limit.min(total);
+    let (lines, bytes_read) = read_ndjson_tail_lines(&path, metadata.len(), take)?;
+    let events: Vec<ChatEvent> = lines.iter().filter_map(|line| ndjson::parse_line(line)).collect();
+    let events = Arc::new(events);
+    {
+      let mut caches = self.event_read_caches.lock().expect("event read cache mutex is not poisoned");
+      #[cfg(test)]
+      {
+        caches.tail_bytes_read += bytes_read;
+        caches.tail_lines_parsed += lines.len();
+      }
+      caches.tail.record(key, signature, (Arc::clone(&events), total, has_more));
     }
-    let nonblank: Vec<&[u8]> = lines.into_iter().filter(|line| !line.iter().all(u8::is_ascii_whitespace)).collect();
-    let start = nonblank.len().saturating_sub(limit);
-    let events = nonblank[start..].iter().filter_map(|line| ndjson::parse_line(line)).collect();
-    Ok((events, total, has_more))
+    #[cfg(not(test))]
+    let _ = bytes_read;
+    Ok((events.as_ref().clone(), total, has_more))
   }
 
   /// Read all durable facts, archived segments first and the live log last, composed the way
@@ -243,8 +341,8 @@ impl Store {
       let rel_start = start - archive_offset;
       let rel_end = end - archive_offset;
       let events = if archive_offset > 0 {
-        let lines = self.live_range_lines(session_id)?;
-        slice_live_lines(&lines, rel_start, rel_end)
+        let (lines, first_line) = self.live_range_lines(session_id, rel_start)?;
+        slice_live_lines(&lines, rel_start.saturating_sub(first_line), rel_end.saturating_sub(first_line))
       } else {
         match self.cached_chat_events(session_id) {
           Some(cached) => cached.iter().skip(rel_start).take(rel_end.saturating_sub(rel_start)).cloned().collect(),
@@ -258,19 +356,49 @@ impl Store {
     }
     let mut out = self.load_archive_range(session_id, start, archive_offset)?;
     let live_end = end - archive_offset;
-    let lines = self.live_range_lines(session_id)?;
-    out.extend(slice_live_lines(&lines, 0, live_end));
+    let (lines, first_line) = self.live_range_lines(session_id, 0)?;
+    out.extend(slice_live_lines(&lines, first_line, live_end.saturating_sub(first_line)));
     Ok((out, start > 0))
   }
 
-  /// Read one archive's parsed events. An unreadable file logs and contributes nothing, the
+  /// Read one archive's parsed events. This uses `src/runtime/chat_events.py:354-392`'s directory/file stat memos and
+  /// 16-file bound. An unreadable file logs and contributes nothing, the
   /// pre-memo reader's behavior on open failure in `_archive_file_events`.
-  fn read_archive_file(&self, path: &std::path::Path, session_id: &str) -> Vec<ChatEvent> {
-    match ndjson::read_file(path) {
-      Ok(events) => events,
+  fn read_archive_file(&self, path: &Path, session_id: &str) -> Arc<Vec<ChatEvent>> {
+    let metadata = match fs::metadata(path) {
+      Ok(metadata) => metadata,
       Err(error) => {
         tracing::debug!(session_id, path = %path.display(), error = %error, "archive_read_failed");
-        Vec::new()
+        return Arc::new(Vec::new());
+      }
+    };
+    let signature = FileSignature::from_metadata(&metadata);
+    if let Some(events) = self
+      .event_read_caches
+      .lock()
+      .expect("event read cache mutex is not poisoned")
+      .archive_events
+      .fresh(&path.to_path_buf(), signature)
+    {
+      return events;
+    }
+    #[cfg(test)]
+    {
+      self.event_read_caches.lock().expect("event read cache mutex is not poisoned").archive_file_reads += 1;
+    }
+    match ndjson::read_file(path) {
+      Ok(events) => {
+        let events = Arc::new(events);
+        self.event_read_caches.lock().expect("event read cache mutex is not poisoned").archive_events.record(
+          path.to_path_buf(),
+          signature,
+          Arc::clone(&events),
+        );
+        events
+      }
+      Err(error) => {
+        tracing::debug!(session_id, path = %path.display(), error = %error, "archive_read_failed");
+        Arc::new(Vec::new())
       }
     }
   }
@@ -280,8 +408,8 @@ impl Store {
   pub(crate) fn load_archive_range(&self, session_id: &str, start: usize, end: usize) -> StoreResult<Vec<ChatEvent>> {
     let mut events = Vec::new();
     let mut pos = 0usize;
-    for path in self.archive_paths(session_id)? {
-      let file_events = self.read_archive_file(&path, session_id);
+    for path in self.archive_paths(session_id)?.iter() {
+      let file_events = self.read_archive_file(path, session_id);
       let file_end = pos + file_events.len();
       if pos < end && file_end > start {
         events.extend(file_events[start.max(pos) - pos..end.min(file_end) - pos].iter().cloned());
@@ -294,53 +422,167 @@ impl Store {
     Ok(events)
   }
 
-  /// Read the live log as parsed events with one slot per physical line, split the way Python's
+  /// Read the live log as parsed events with one slot per physical line. This follows
+  /// `src/runtime/chat_events.py:395-451`: four path-keyed entries, same-inode append extension, backward 512 KiB
+  /// walks, and the same 32 MiB fallback bound. It splits the way Python's
   /// universal-newline reader splits (`\r\n` and a lone `\r` terminate a line too). A read
   /// failure logs and answers an empty page, the `_live_range_lines` behavior on an OSError.
-  fn live_range_lines(&self, session_id: &str) -> StoreResult<Vec<Option<ChatEvent>>> {
+  fn live_range_lines(&self, session_id: &str, rel_start: usize) -> StoreResult<(SharedLiveLines, usize)> {
     let path = self.chat_events_path(session_id);
-    let bytes = match fs::read(&path) {
-      Ok(bytes) => bytes,
-      Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+    let (metadata, signature) = match file_signature(&path) {
+      Ok(Some(stat)) => stat,
+      Ok(None) => return Ok((Arc::new(Vec::new()), rel_start)),
       Err(error) => {
         tracing::debug!(path = %path.display(), error = %error, "live_range_read_failed");
-        return Ok(Vec::new());
+        return Ok((Arc::new(Vec::new()), rel_start));
       }
     };
-    let text = String::from_utf8(bytes).map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
-    let mut lines = Vec::new();
-    let mut segment = String::new();
-    let mut chars = text.chars().peekable();
-    while let Some(character) = chars.next() {
-      match character {
-        '\n' => {
-          lines.push(ndjson::parse_line(segment.as_bytes()));
-          segment.clear();
-        }
-        '\r' => {
-          if chars.peek() == Some(&'\n') {
-            chars.next();
+    let size = metadata.len() as usize;
+    let inode = metadata.ino();
+    let cached = self.event_read_caches.lock().expect("event read cache mutex is not poisoned").live_ranges.get(&path);
+    if let Some(mut entry) = cached {
+      if (entry.mtime_ns != signature.mtime_ns || entry.size != signature.size)
+        && entry.inode == inode
+        && size >= entry.covered_byte_end
+        && entry.ends_on_boundary
+      {
+        match read_live_range_suffix(&path, entry.covered_byte_end, size) {
+          Ok(bytes) => {
+            let suffix = parse_universal_newline_lines(&path, &bytes)?;
+            #[cfg(test)]
+            {
+              let mut caches = self.event_read_caches.lock().expect("event read cache mutex is not poisoned");
+              caches.live_range_bytes_read += bytes.len();
+              caches.live_range_lines_parsed += suffix.len();
+            }
+            let mut lines = entry.lines.as_ref().clone();
+            lines.extend(suffix);
+            entry.lines = Arc::new(lines);
+            entry.mtime_ns = signature.mtime_ns;
+            entry.size = signature.size;
+            entry.covered_byte_end += bytes.len();
+            entry.ends_on_boundary = bytes.is_empty() || bytes.ends_with(b"\n") || bytes.ends_with(b"\r");
+            self
+              .event_read_caches
+              .lock()
+              .expect("event read cache mutex is not poisoned")
+              .live_ranges
+              .store(path.clone(), entry.clone());
           }
-          lines.push(ndjson::parse_line(segment.as_bytes()));
-          segment.clear();
+          Err(error) => {
+            tracing::debug!(path = %path.display(), error = %error, "live_range_read_failed");
+            return Ok((Arc::new(Vec::new()), rel_start));
+          }
         }
-        _ => segment.push(character),
+      }
+      if entry.mtime_ns == signature.mtime_ns && entry.size == signature.size {
+        if rel_start >= entry.first_line_index {
+          return Ok((Arc::clone(&entry.lines), entry.first_line_index));
+        }
+        if rel_start > 0 {
+          let count = entry.first_line_index - rel_start;
+          if let Some(walk) = walk_tail_line_texts(&path, entry.covered_byte_start, count)? {
+            let prefix = parse_text_lines(&path, walk.lines)?;
+            #[cfg(test)]
+            {
+              let mut caches = self.event_read_caches.lock().expect("event read cache mutex is not poisoned");
+              caches.live_range_bytes_read += walk.bytes_read;
+              caches.live_range_lines_parsed += prefix.len();
+            }
+            #[cfg(not(test))]
+            let _ = walk.bytes_read;
+            let mut lines = prefix;
+            lines.extend(entry.lines.iter().cloned());
+            let covered = LiveRangeMemo {
+              first_line_index: rel_start,
+              covered_byte_start: walk.byte_start,
+              lines: Arc::new(lines),
+              ..entry
+            };
+            let result = Arc::clone(&covered.lines);
+            self
+              .event_read_caches
+              .lock()
+              .expect("event read cache mutex is not poisoned")
+              .live_ranges
+              .store(path.clone(), covered);
+            return Ok((result, rel_start));
+          }
+        }
       }
     }
-    lines.push(ndjson::parse_line(segment.as_bytes()));
-    Ok(lines)
+
+    if rel_start > 0 {
+      let total = self.count_chat_event_lines(&path, signature)?;
+      let after = file_signature(&path)?;
+      if after.is_some_and(|(_, after_signature)| after_signature == signature) {
+        let count = total.saturating_sub(rel_start);
+        if let Some(walk) = walk_tail_line_texts(&path, size, count)? {
+          let lines = Arc::new(parse_text_lines(&path, walk.lines)?);
+          #[cfg(test)]
+          {
+            let mut caches = self.event_read_caches.lock().expect("event read cache mutex is not poisoned");
+            caches.live_range_bytes_read += walk.bytes_read;
+            caches.live_range_lines_parsed += lines.len();
+          }
+          #[cfg(not(test))]
+          let _ = walk.bytes_read;
+          let entry = LiveRangeMemo {
+            mtime_ns: signature.mtime_ns,
+            size: signature.size,
+            inode,
+            lines: lines.clone(),
+            covered_byte_end: size,
+            ends_on_boundary: walk.ends_on_boundary,
+            first_line_index: rel_start,
+            covered_byte_start: walk.byte_start,
+          };
+          self.event_read_caches.lock().expect("event read cache mutex is not poisoned").live_ranges.store(path, entry);
+          return Ok((lines, rel_start));
+        }
+      }
+    }
+
+    let bytes = match fs::read(&path) {
+      Ok(bytes) => bytes,
+      Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok((Arc::new(Vec::new()), rel_start)),
+      Err(error) => {
+        tracing::debug!(path = %path.display(), error = %error, "live_range_read_failed");
+        return Ok((Arc::new(Vec::new()), rel_start));
+      }
+    };
+    let lines = Arc::new(parse_universal_newline_lines(&path, &bytes)?);
+    #[cfg(test)]
+    {
+      let mut caches = self.event_read_caches.lock().expect("event read cache mutex is not poisoned");
+      caches.live_range_bytes_read += bytes.len();
+      caches.live_range_lines_parsed += lines.len();
+    }
+    let ends_on_boundary = bytes.is_empty() || bytes.ends_with(b"\n") || bytes.ends_with(b"\r");
+    let entry = LiveRangeMemo {
+      mtime_ns: signature.mtime_ns,
+      size: signature.size,
+      inode,
+      lines: Arc::clone(&lines),
+      covered_byte_end: bytes.len(),
+      ends_on_boundary,
+      first_line_index: 0,
+      covered_byte_start: 0,
+    };
+    self.event_read_caches.lock().expect("event read cache mutex is not poisoned").live_ranges.store(path, entry);
+    Ok((lines, 0))
   }
 
   /// Read the live log as parsed events with one slot per physical line, split on `\n` only —
   /// the domain `ndjson.parse_ndjson_range` numbers on the unarchived cold path.
-  fn live_lines_newline_split(&self, session_id: &str) -> StoreResult<Vec<Option<ChatEvent>>> {
+  fn live_lines_newline_split(&self, session_id: &str) -> StoreResult<Vec<Option<Arc<ChatEvent>>>> {
     let path = self.chat_events_path(session_id);
     let bytes = match fs::read(&path) {
       Ok(bytes) => bytes,
       Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
       Err(error) => return Err(StoreError::new(format!("{}: {error}", path.display()))),
     };
-    Ok(bytes.split(|byte| *byte == b'\n').map(ndjson::parse_line).collect())
+    Ok(bytes.split(|byte| *byte == b'\n').map(ndjson::parse_line).map(|event| event.map(Arc::new)).collect())
   }
 
   /// Find the first event with `id` in archived and live history.
@@ -359,7 +601,57 @@ impl Store {
     if let Some(events) = self.cached_chat_events(session_id) {
       return Ok(offset + events.len());
     }
-    Ok(offset + ndjson::count_lines(&self.chat_events_path(session_id))?)
+    let path = self.chat_events_path(session_id);
+    let Some((_, signature)) = file_signature(&path)? else { return Ok(offset) };
+    Ok(offset + self.count_chat_event_lines(&path, signature)?)
+  }
+
+  /// Count physical lines with `src/infra/ndjson.py:312-328`'s 64-file `(mtime_ns, size)` memo.
+  fn count_chat_event_lines(&self, path: &Path, signature: FileSignature) -> StoreResult<usize> {
+    if let Some(count) = self
+      .event_read_caches
+      .lock()
+      .expect("event read cache mutex is not poisoned")
+      .count
+      .fresh(&path.to_path_buf(), signature)
+    {
+      return Ok(count);
+    }
+    let mut file = match fs::File::open(path) {
+      Ok(file) => file,
+      Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+      Err(error) => return Err(StoreError::new(format!("{}: {error}", path.display()))),
+    };
+    let mut chunk = vec![0; 1024 * 1024];
+    let mut total = 0usize;
+    #[cfg(test)]
+    let mut bytes_read = 0usize;
+    let mut last_byte = None;
+    loop {
+      let read = file.read(&mut chunk).map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
+      if read == 0 {
+        break;
+      }
+      #[cfg(test)]
+      {
+        bytes_read += read;
+      }
+      let bytes = &chunk[..read];
+      total += bytes.iter().filter(|byte| **byte == b'\n').count();
+      last_byte = bytes.last().copied();
+    }
+    if last_byte.is_some_and(|byte| byte != b'\n') {
+      total += 1;
+    }
+    {
+      let mut caches = self.event_read_caches.lock().expect("event read cache mutex is not poisoned");
+      #[cfg(test)]
+      {
+        caches.count_bytes_read += bytes_read;
+      }
+      caches.count.record(path.to_path_buf(), signature, total);
+    }
+    Ok(total)
   }
 
   /// Discard the parsed live-log cache after a rewrite.
@@ -391,10 +683,13 @@ impl Store {
           }
         });
         self.seal_node_state(session_id, evicted);
+        self.seal_node_facts(session_id, evicted);
       }
-      None => self.seal_node_state(session_id, None),
+      None => {
+        self.seal_node_state(session_id, None);
+        self.seal_node_facts(session_id, None);
+      }
     }
-    self.node_facts_cache.lock().expect("node facts cache mutex is not poisoned").remove(session_id);
   }
 
   fn load_chat_events_shared_locked(
@@ -516,15 +811,34 @@ impl Store {
     Ok(meta.map_or(0, |meta| meta.archive_offset.max(0) as usize))
   }
 
-  /// The session's archive files in chronological (filename) order: `data/archives/chat_events.*.jsonl`.
-  pub(crate) fn archive_paths(&self, session_id: &str) -> StoreResult<Vec<PathBuf>> {
+  /// The session's archive files in chronological (filename) order, memoized on the archive directory's
+  /// `(mtime_ns, size)` like `src/runtime/chat_events.py:354-379`.
+  pub(crate) fn archive_paths(&self, session_id: &str) -> StoreResult<Arc<Vec<PathBuf>>> {
     let dir = self.session_dir(session_id).join("data").join("archives");
-    let entries = match fs::read_dir(&dir) {
-      Ok(entries) => entries,
-      Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+    let metadata = match fs::metadata(&dir) {
+      Ok(metadata) => metadata,
+      Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Arc::new(Vec::new())),
       Err(error) => {
         tracing::debug!(path = %dir.display(), error = %error, "archive_dir_stat_failed");
-        return Ok(Vec::new());
+        return Ok(Arc::new(Vec::new()));
+      }
+    };
+    let signature = FileSignature::from_metadata(&metadata);
+    if let Some(paths) = self
+      .event_read_caches
+      .lock()
+      .expect("event read cache mutex is not poisoned")
+      .archive_paths
+      .fresh(&dir, signature)
+    {
+      return Ok(paths);
+    }
+    let entries = match fs::read_dir(&dir) {
+      Ok(entries) => entries,
+      Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Arc::new(Vec::new())),
+      Err(error) => {
+        tracing::debug!(path = %dir.display(), error = %error, "archive_dir_stat_failed");
+        return Ok(Arc::new(Vec::new()));
       }
     };
     let mut paths = Vec::new();
@@ -538,13 +852,217 @@ impl Store {
       }
     }
     paths.sort();
+    #[cfg(test)]
+    {
+      self.event_read_caches.lock().expect("event read cache mutex is not poisoned").archive_dir_walks += 1;
+    }
+    let paths = Arc::new(paths);
+    self.event_read_caches.lock().expect("event read cache mutex is not poisoned").archive_paths.record(
+      dir,
+      signature,
+      Arc::clone(&paths),
+    );
     Ok(paths)
+  }
+
+  /// Read a live event file into the shared cache from Tokio's blocking pool.
+  pub(crate) async fn load_chat_events_shared_async(&self, session_id: &str) -> StoreResult<Arc<Vec<ChatEvent>>> {
+    let cache_entry = self.events_cache_entry(session_id);
+    let path = self.chat_events_path(session_id);
+    let generation = self.next_events_cache_generation.fetch_add(1, Ordering::Relaxed);
+    #[cfg(test)]
+    let read_hook = self.event_read_hook.lock().expect("event read hook mutex is not poisoned").clone();
+    let (events, did_read) = tokio::task::spawn_blocking(move || {
+      let mut cache = cache_entry.lock().expect("session event cache mutex is not poisoned");
+      if let Some(cached) = cache.as_ref() {
+        return Ok::<_, StoreError>((Arc::clone(&cached.events), false));
+      }
+      #[cfg(test)]
+      if let Some(hook) = read_hook {
+        hook();
+      }
+      let events = Arc::new(ndjson::read_file(&path)?);
+      *cache = Some(CachedChatEvents { generation, events: Arc::clone(&events) });
+      Ok((events, true))
+    })
+    .await
+    .map_err(|error| StoreError::new(error.to_string()))??;
+    if did_read {
+      self.history_work.file_reads.fetch_add(1, Ordering::Relaxed);
+    }
+    Ok(events)
   }
 }
 
 /// Take the physical-line slots in `[start, end)`, dropping the slots that parsed to nothing.
-fn slice_live_lines(lines: &[Option<ChatEvent>], start: usize, end: usize) -> Vec<ChatEvent> {
-  lines.iter().skip(start).take(end.saturating_sub(start)).flatten().cloned().collect()
+fn slice_live_lines(lines: &[Option<Arc<ChatEvent>>], start: usize, end: usize) -> Vec<ChatEvent> {
+  lines.iter().skip(start).take(end.saturating_sub(start)).flatten().map(|event| (**event).clone()).collect()
+}
+
+fn file_signature(path: &Path) -> StoreResult<Option<(fs::Metadata, FileSignature)>> {
+  match fs::metadata(path) {
+    Ok(metadata) => Ok(Some((metadata.clone(), FileSignature::from_metadata(&metadata)))),
+    Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+    Err(error) => Err(StoreError::new(format!("{}: {error}", path.display()))),
+  }
+}
+
+fn read_ndjson_tail_lines(path: &Path, file_size: u64, take: usize) -> StoreResult<(Vec<Vec<u8>>, usize)> {
+  let mut file = fs::File::open(path).map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
+  let mut tail_bytes_read = 0;
+  if file_size > TAIL_WINDOW_SIZE as u64 {
+    let start = file_size - TAIL_WINDOW_SIZE as u64;
+    file.seek(SeekFrom::Start(start)).map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
+    let mut window = Vec::with_capacity(TAIL_WINDOW_SIZE);
+    file.read_to_end(&mut window).map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
+    tail_bytes_read = window.len();
+    let mut lines: Vec<&[u8]> = window.split(|byte| *byte == b'\n').skip(1).collect();
+    if lines.last().is_some_and(|line| line.is_empty()) {
+      lines.pop();
+    }
+    let nonblank: Vec<&[u8]> = lines.into_iter().filter(|line| !line.iter().all(u8::is_ascii_whitespace)).collect();
+    if nonblank.len() >= take {
+      return Ok((nonblank[nonblank.len() - take..].iter().map(|line| line.to_vec()).collect(), window.len()));
+    }
+  }
+  file.seek(SeekFrom::Start(0)).map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
+  let mut bytes = Vec::new();
+  file.read_to_end(&mut bytes).map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
+  let mut lines: Vec<&[u8]> = bytes.split(|byte| *byte == b'\n').collect();
+  if bytes.ends_with(b"\n") {
+    lines.pop();
+  }
+  let nonblank: Vec<&[u8]> = lines.into_iter().filter(|line| !line.iter().all(u8::is_ascii_whitespace)).collect();
+  let start = nonblank.len().saturating_sub(take);
+  Ok((nonblank[start..].iter().map(|line| line.to_vec()).collect(), tail_bytes_read + bytes.len()))
+}
+
+fn read_live_range_suffix(path: &Path, start: usize, size: usize) -> std::io::Result<Vec<u8>> {
+  let mut file = fs::File::open(path)?;
+  file.seek(SeekFrom::Start(start as u64))?;
+  let mut bytes = Vec::with_capacity(size.saturating_sub(start));
+  file.read_to_end(&mut bytes)?;
+  Ok(bytes)
+}
+
+fn parse_universal_newline_lines(path: &Path, bytes: &[u8]) -> StoreResult<Vec<Option<Arc<ChatEvent>>>> {
+  let text =
+    String::from_utf8(bytes.to_vec()).map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
+  let mut lines = Vec::new();
+  let mut segment = String::new();
+  let mut chars = text.chars().peekable();
+  while let Some(character) = chars.next() {
+    match character {
+      '\n' => {
+        lines.push(ndjson::parse_line(segment.as_bytes()).map(Arc::new));
+        segment.clear();
+      }
+      '\r' => {
+        if chars.peek() == Some(&'\n') {
+          chars.next();
+        }
+        lines.push(ndjson::parse_line(segment.as_bytes()).map(Arc::new));
+        segment.clear();
+      }
+      _ => segment.push(character),
+    }
+  }
+  if !segment.is_empty() || (!text.is_empty() && !text.ends_with('\n') && !text.ends_with('\r')) {
+    lines.push(ndjson::parse_line(segment.as_bytes()).map(Arc::new));
+  }
+  Ok(lines)
+}
+
+fn parse_text_lines(path: &Path, lines: Vec<Vec<u8>>) -> StoreResult<Vec<ParsedLiveLine>> {
+  lines
+    .into_iter()
+    .map(|line| {
+      let text = String::from_utf8(line).map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
+      Ok(ndjson::parse_line(text.as_bytes()).map(Arc::new))
+    })
+    .collect()
+}
+
+fn walk_tail_line_texts(path: &Path, size: usize, count: usize) -> StoreResult<Option<TailLineWalk>> {
+  if count == 0 {
+    return Ok(Some(TailLineWalk { lines: Vec::new(), byte_start: size, ends_on_boundary: true, bytes_read: 0 }));
+  }
+  let mut file = match fs::File::open(path) {
+    Ok(file) => file,
+    Err(error) => {
+      tracing::debug!(path = %path.display(), error = %error, "live_range_read_failed");
+      return Ok(None);
+    }
+  };
+  let mut parts = Vec::new();
+  let mut accumulated = 0usize;
+  let mut bound = 0usize;
+  let mut pos = size;
+  let (spans, ends_on_boundary) = loop {
+    if bound >= count + 2 || pos == 0 {
+      let bytes = parts.iter().rev().flat_map(|part: &Vec<u8>| part.iter().copied()).collect::<Vec<_>>();
+      let (spans, ends_on_boundary) = raw_line_spans(&bytes);
+      let complete = spans.len().saturating_sub(usize::from(pos > 0));
+      if complete >= count {
+        break (spans, ends_on_boundary);
+      }
+      if pos == 0 {
+        return Ok(None);
+      }
+    }
+    if accumulated > LIVE_RANGE_WALK_BYTE_BUDGET {
+      return Ok(None);
+    }
+    let step = TAIL_WINDOW_SIZE.min(pos);
+    pos -= step;
+    file.seek(SeekFrom::Start(pos as u64)).map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
+    let mut chunk = vec![0; step];
+    file.read_exact(&mut chunk).map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
+    bound += chunk.iter().filter(|byte| **byte == b'\n' || **byte == b'\r').count();
+    accumulated += step;
+    parts.push(chunk);
+  };
+  let bytes = parts.iter().rev().flat_map(|part| part.iter().copied()).collect::<Vec<_>>();
+  if spans.len() < count {
+    return Ok(None);
+  }
+  let first = spans.len() - count;
+  let selected = spans[first..].iter().map(|(start, end)| bytes[*start..*end].to_vec()).collect::<Vec<_>>();
+  let byte_start = pos + spans[first].0;
+  Ok(Some(TailLineWalk { lines: selected, byte_start, ends_on_boundary, bytes_read: accumulated }))
+}
+
+fn raw_line_spans(bytes: &[u8]) -> (Vec<(usize, usize)>, bool) {
+  let mut spans = Vec::new();
+  let mut start = 0;
+  let mut pos = 0;
+  while pos < bytes.len() {
+    let newline = bytes[pos..].iter().position(|byte| *byte == b'\n').map(|offset| pos + offset);
+    let carriage = bytes[pos..].iter().position(|byte| *byte == b'\r').map(|offset| pos + offset);
+    match (newline, carriage) {
+      (None, None) => break,
+      (Some(index), Some(carriage)) if carriage < index => {
+        spans.push((start, carriage));
+        pos = if bytes.get(carriage + 1) == Some(&b'\n') { carriage + 2 } else { carriage + 1 };
+        start = pos;
+      }
+      (None, Some(carriage)) => {
+        spans.push((start, carriage));
+        pos = if bytes.get(carriage + 1) == Some(&b'\n') { carriage + 2 } else { carriage + 1 };
+        start = pos;
+      }
+      (Some(index), _) => {
+        spans.push((start, index));
+        pos = index + 1;
+        start = pos;
+      }
+    }
+  }
+  let ends_on_boundary = start == bytes.len();
+  if !ends_on_boundary {
+    spans.push((start, bytes.len()));
+  }
+  (spans, ends_on_boundary)
 }
 
 fn python_event_timestamp(value: UtcDateTime) -> String {
@@ -1086,6 +1604,162 @@ mod tests {
       let mut file = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
       std::io::Write::write_all(&mut file, b"{\"i\": 5}\n").unwrap();
       assert_eq!(store.get_chat_event_count_sync(session_id).unwrap(), 6);
+    }
+
+    #[test]
+    fn tail_reads_and_parses_only_its_bounded_window_then_hits_the_stat_memo() {
+      let home = tempfile::tempdir().unwrap();
+      let store = test_store(home.path());
+      let session_id = "synthetic-session";
+      let path = store.chat_events_path(session_id);
+      std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+      let mut body = String::new();
+      for index in 0..30_000 {
+        body.push_str(&format!("{{\"id\": \"event-{index}\", \"content\": \"{}\"}}\n", "x".repeat(48)));
+      }
+      std::fs::write(&path, body).unwrap();
+
+      let (tail, total, has_more) = store.load_chat_events_tail(session_id, 10).unwrap();
+      assert_eq!(total, 30_000);
+      assert!(has_more);
+      assert_eq!(tail.first().unwrap()["id"], "event-29990");
+      assert_eq!(tail.last().unwrap()["id"], "event-29999");
+      let (bytes, parsed) = {
+        let caches = store.event_read_caches.lock().unwrap();
+        (caches.tail_bytes_read, caches.tail_lines_parsed)
+      };
+      assert!(bytes <= TAIL_WINDOW_SIZE);
+      assert_eq!(parsed, 10);
+
+      assert_eq!(store.load_chat_events_tail(session_id, 10).unwrap().0, tail);
+      let caches = store.event_read_caches.lock().unwrap();
+      assert_eq!(caches.tail_bytes_read, bytes);
+      assert_eq!(caches.tail_lines_parsed, parsed);
+    }
+
+    #[test]
+    fn first_page_after_recovery_eviction_reuses_state_and_parses_only_the_tail() {
+      let home = tempfile::tempdir().unwrap();
+      let store = test_store(home.path());
+      let session_id = "synthetic-session";
+      let path = store.chat_events_path(session_id);
+      std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+      let mut body = String::new();
+      for index in 0..20_000 {
+        body.push_str(&format!("{{\"id\":\"event-{index}\",\"text\":\"{}\"}}\n", "x".repeat(40)));
+      }
+      std::fs::write(&path, body).unwrap();
+
+      store.node_facts(session_id).unwrap();
+      assert_eq!(store.get_chat_event_count_sync(session_id).unwrap(), 20_000);
+      store.evict_recovery_history(session_id);
+      let reads = store.history_work().file_reads;
+
+      let (tail, total, more) = store.load_chat_events_tail(session_id, 10).unwrap();
+      assert_eq!(total, 20_000);
+      assert!(more);
+      assert_eq!(tail.first().unwrap()["id"], "event-19990");
+      let (bytes, parsed) = {
+        let caches = store.event_read_caches.lock().unwrap();
+        (caches.tail_bytes_read, caches.tail_lines_parsed)
+      };
+      assert!(bytes <= TAIL_WINDOW_SIZE);
+      assert_eq!(parsed, 10);
+
+      store.node_state(session_id).unwrap();
+      assert_eq!(
+        store.history_work().file_reads,
+        reads,
+        "the sealed state answers after the first page without a full read"
+      );
+    }
+
+    #[test]
+    fn archive_range_reuses_file_parse_and_directory_walk_memos() {
+      let home = tempfile::tempdir().unwrap();
+      let store = test_store(home.path());
+      let session_id = "synthetic-session";
+      let archive_dir = store.session_dir(session_id).join("data").join("archives");
+      std::fs::create_dir_all(&archive_dir).unwrap();
+      std::fs::write(archive_dir.join("chat_events.2025-W05.jsonl"), "{\"id\": \"first\"}\n").unwrap();
+      std::fs::write(archive_dir.join("chat_events.2025-W06.jsonl"), "{\"id\": \"second\"}\n").unwrap();
+
+      assert_eq!(ids(&store.load_archive_range(session_id, 0, 1).unwrap()), ["first"]);
+      assert_eq!(ids(&store.load_archive_range(session_id, 0, 1).unwrap()), ["first"]);
+      let caches = store.event_read_caches.lock().unwrap();
+      assert_eq!(caches.archive_file_reads, 1);
+      assert_eq!(caches.archive_dir_walks, 1);
+    }
+
+    #[test]
+    fn archived_live_range_parses_only_requested_suffix_and_reuses_it() {
+      let home = tempfile::tempdir().unwrap();
+      let store = test_store(home.path());
+      let session_id = "synthetic-session";
+      let mut meta = SessionMetadata::new(session_id, "seed", crate::metadata::TaskProfile::Manager);
+      meta.archive_offset = 1;
+      let metadata_path = store.metadata_path(session_id);
+      std::fs::create_dir_all(metadata_path.parent().unwrap()).unwrap();
+      std::fs::write(&metadata_path, meta.to_json_string(&store.slots, true)).unwrap();
+      let path = store.chat_events_path(session_id);
+      std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+      let mut body = String::new();
+      for index in 0..30_000 {
+        body.push_str(&format!("{{\"id\": \"live-{index}\", \"content\": \"{}\"}}\n", "x".repeat(48)));
+      }
+      std::fs::write(&path, body).unwrap();
+
+      let (page, _) = store.load_chat_events_range(session_id, 1 + 29_990, 1 + 30_000).unwrap();
+      assert_eq!(ids(&page).first().unwrap(), "live-29990");
+      assert_eq!(page.len(), 10);
+      let (bytes, parsed) = {
+        let caches = store.event_read_caches.lock().unwrap();
+        (caches.live_range_bytes_read, caches.live_range_lines_parsed)
+      };
+      assert!(bytes <= TAIL_WINDOW_SIZE);
+      assert_eq!(parsed, 10);
+
+      assert_eq!(store.load_chat_events_range(session_id, 1 + 29_990, 1 + 30_000).unwrap().0, page);
+      let caches = store.event_read_caches.lock().unwrap();
+      assert_eq!(caches.live_range_bytes_read, bytes);
+      assert_eq!(caches.live_range_lines_parsed, parsed);
+    }
+
+    #[test]
+    fn live_range_memo_returns_the_shared_parsed_lines() {
+      let home = tempfile::tempdir().unwrap();
+      let store = test_store(home.path());
+      let session_id = "synthetic-session";
+      let path = store.chat_events_path(session_id);
+      std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+      std::fs::write(&path, b"{\"id\":\"first\"}\n{\"id\":\"second\"}\n").unwrap();
+
+      let first = store.live_range_lines(session_id, 1).unwrap().0;
+      let second = store.live_range_lines(session_id, 1).unwrap().0;
+
+      assert!(Arc::ptr_eq(&first, &second), "memo hits share the parsed suffix instead of cloning its events");
+    }
+
+    #[test]
+    fn physical_event_count_memo_reads_bytes_once_and_recounts_after_append() {
+      let home = tempfile::tempdir().unwrap();
+      let store = test_store(home.path());
+      let session_id = "synthetic-session";
+      seed_metadata(&store, session_id);
+      let path = store.chat_events_path(session_id);
+      std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+      std::fs::write(&path, "{\"i\": 0}\n".repeat(10_000)).unwrap();
+
+      assert_eq!(store.get_chat_event_count_sync(session_id).unwrap(), 10_000);
+      let bytes = store.event_read_caches.lock().unwrap().count_bytes_read;
+      assert!(bytes > 0);
+      assert_eq!(store.get_chat_event_count_sync(session_id).unwrap(), 10_000);
+      assert_eq!(store.event_read_caches.lock().unwrap().count_bytes_read, bytes);
+
+      let mut file = std::fs::OpenOptions::new().append(true).open(path).unwrap();
+      std::io::Write::write_all(&mut file, b"{\"i\": 10000}\n").unwrap();
+      assert_eq!(store.get_chat_event_count_sync(session_id).unwrap(), 10_001);
+      assert!(store.event_read_caches.lock().unwrap().count_bytes_read > bytes);
     }
   }
 }

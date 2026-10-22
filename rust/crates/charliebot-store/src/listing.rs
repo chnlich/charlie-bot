@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
@@ -89,18 +90,19 @@ impl Store {
       let session_id = entry.file_name().to_string_lossy().into_owned();
       let metadata_path = entry.path().join("metadata.json");
       let meta = match cached.get(&session_id) {
-        Some(meta) => Some(meta.clone()),
+        Some(meta) => Some(Arc::clone(meta)),
         None => {
           let signature = stat_signature(&metadata_path);
           match self.read_metadata_path(&metadata_path) {
             Ok(Some(meta)) => {
+              let meta = Arc::new(meta);
               self
                 .metadata_cache
                 .lock()
                 .expect("metadata cache mutex is not poisoned")
                 .entry(session_id.clone())
                 .or_insert_with(|| super::store::CachedMetadata {
-                  value: meta.clone(),
+                  value: Arc::clone(&meta),
                   at: std::time::Instant::now(),
                   signature,
                   identity: std::sync::Arc::new(()),
@@ -124,7 +126,7 @@ impl Store {
       };
       let Some(meta) = meta else { continue };
       if status.is_none_or(|status| meta.status == status) {
-        rows.push(meta);
+        rows.push(meta.as_ref().clone());
       }
     }
     if let Some(root) = root_signature {

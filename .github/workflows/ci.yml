@@ -27,10 +27,7 @@ jobs:
             echo "$LABELS" | grep -q 'split-series' || { echo "diff exceeds 300 lines and missing 'split-series' label"; exit 1; }
           fi
   lint-and-test:
-    # Interim pin: on the ubuntu-26.04 image (ubuntu-latest since 2026-10-22), 28 run-launching
-    # tests fail at about 20 s each and the job hits its 10-minute limit; the same commits pass
-    # on ubuntu-24.04. Return to ubuntu-latest together with the fix for that failure.
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - name: Checkout

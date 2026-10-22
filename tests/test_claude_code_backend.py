@@ -150,7 +150,8 @@ def _settings_of(cmd: list[str]) -> dict:
         pytest.param("scheduled_step", "433000", id="scheduled-step"),
     ])
 def test_a_claude_run_declares_its_kinds_window_and_disables_the_advisor(run_kind: models.RunKind, window: str) -> None:
-  backend = claude_code.ClaudeCodeBackend(run_kind=run_kind)
+  kwargs = {"cgroup_session_id": "manager-session"} if run_kind == "manager_turn" else {}
+  backend = claude_code.ClaudeCodeBackend(run_kind=run_kind, **kwargs)
 
   env = backend._prepare_env({})
 
@@ -162,22 +163,13 @@ def test_a_host_exported_window_beats_the_kinds_value(monkeypatch: pytest.Monkey
   monkeypatch.setenv(claude_launch.AUTO_COMPACT_WINDOW_ENV, "500000")
 
   for run_kind in ("manager_turn", "work", "review"):
-    backend = claude_code.ClaudeCodeBackend(run_kind=run_kind)
+    kwargs = {"cgroup_session_id": "manager-session"} if run_kind == "manager_turn" else {}
+    backend = claude_code.ClaudeCodeBackend(run_kind=run_kind, **kwargs)
     assert backend._prepare_env({})[claude_launch.AUTO_COMPACT_WINDOW_ENV] == "500000"
 
 
 @pytest.mark.parametrize(
     ("run_kind", "expected_settings", "skill_disallowed", "report_findings_disallowed"), [
-        pytest.param(
-            "manager_turn",
-            {
-                "disableClaudeAiConnectors": True,
-                "syncClaudeAiSkills": False
-            },
-            False,
-            True,
-            id="manager-turn",
-        ),
         pytest.param(
             "work",
             {
@@ -225,7 +217,7 @@ def test_a_host_exported_window_beats_the_kinds_value(monkeypatch: pytest.Monkey
     ])
 def test_each_run_kind_gets_its_settings_and_disallowed_tools(
     run_kind: models.RunKind,
-    expected_settings: dict[str, bool],
+    expected_settings: dict[str, object],
     skill_disallowed: bool,
     report_findings_disallowed: bool,
 ) -> None:
@@ -237,6 +229,25 @@ def test_each_run_kind_gets_its_settings_and_disallowed_tools(
   assert ("Skill" in disallowed_tools) is skill_disallowed
   assert ("ReportFindings" in disallowed_tools) is report_findings_disallowed
   assert "ShareOnboardingGuide" in disallowed_tools
+
+
+def test_manager_turn_settings_install_six_compaction_context_slots() -> None:
+  session_id = "manager-session"
+  command = claude_code.ClaudeCodeBackend(run_kind="manager_turn", cgroup_session_id=session_id)._build_command("hi")
+  settings = _settings_of(command)
+  [session_start] = settings.pop("hooks")["SessionStart"]
+
+  assert command.count("--settings") == 1
+  assert settings == {"disableClaudeAiConnectors": True, "syncClaudeAiSkills": False}
+  assert session_start["matcher"] == "compact"
+  assert [hook["type"] for hook in session_start["hooks"]] == ["command"] * 6
+  assert [hook["command"] for hook in session_start["hooks"]
+         ] == [f"charliebot compaction-context --session {session_id} --slot {slot}" for slot in range(1, 7)]
+
+
+def test_manager_turn_settings_require_the_charliebot_session_id() -> None:
+  with pytest.raises(ValueError, match="require a CharlieBot session id"):
+    claude_code.ClaudeCodeBackend(run_kind="manager_turn")
 
 
 def test_fast_mode_merges_into_the_single_settings_object() -> None:

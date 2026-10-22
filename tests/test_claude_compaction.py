@@ -150,13 +150,19 @@ def _install_fake_exec(monkeypatch: pytest.MonkeyPatch, proc: _FakeProc) -> dict
 
 
 def test_compaction_command_disables_skill_and_keeps_connector_settings() -> None:
-  command = claude_compaction.compaction_command("session-id")
+  session_id = "charlie-session"
+  command = claude_compaction.compaction_command("claude-session", session_id)
   disallowed_index = command.index("--disallowed-tools")
+  settings = json.loads(command[command.index("--settings") + 1])
 
   assert command[disallowed_index + 1] == claude_compaction.COMPACTION_DISALLOWED_TOOLS
   assert "Skill" in command[disallowed_index + 1].split(",")
   assert command.count("--settings") == 1
-  assert json.loads(command[command.index("--settings") + 1]) == {"disableClaudeAiConnectors": True}
+  assert settings["disableClaudeAiConnectors"] is True
+  [session_start] = settings["hooks"]["SessionStart"]
+  assert session_start["matcher"] == "compact"
+  assert [hook["command"] for hook in session_start["hooks"]
+         ] == [f"charliebot compaction-context --session {session_id} --slot {slot}" for slot in range(1, 7)]
 
 
 def _append_boundary(transcript: pathlib.Path, *, with_metadata: bool = True) -> None:
@@ -193,6 +199,7 @@ async def _run(
       log_context={"session": "s1"},
       run_kind="manager_turn",
       timeout=timeout,
+      cgroup_session_id="s1",
   )
   return ok, events, captured
 

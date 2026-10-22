@@ -155,6 +155,10 @@ const CHAT_MESSAGES = [
     content: 'Error: backend exited\nTraceback line',
   },
   {
+    role: 'system', id: 'se1', timestamp: '2026-07-30T12:00:07Z',
+    content: 'Error: Agent error: Usage: charlie-code [OPTIONS]\nError: Invalid value: --image',
+  },
+  {
     role: 'task_delegated', id: 't1', timestamp: '2026-07-30T12:00:08Z', thread_id: 'th-1',
     delegate_invocation: {
       task_type: 'implement', repo_path: '/repo', base_branch: 'main',

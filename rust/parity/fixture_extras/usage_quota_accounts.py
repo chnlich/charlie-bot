@@ -33,4 +33,38 @@ async def build(b: Builder) -> dict:
   claude_dir = b.cfg.charliebot_home.parent / ".claude"
   claude_dir.mkdir(parents=True)
   (claude_dir / ".credentials.json").write_text(json.dumps(CLAUDE_CREDENTIALS, indent=2), encoding="utf-8")
+
+  # The legacy metadata used by the session API parity scenario predates the
+  # registered slot defaults. Leave one Slack origin intact so chat-threads
+  # still has a row to serialize, while the other absent slots exercise the
+  # shared response serializer.
+  session_fields = (
+      "route",
+      "backend_from_pool",
+      "web_status",
+      "discord_origin",
+      "discord_watermark_id",
+      "claude_account",
+      "slack_watermark_ts",
+      "slack_origin",
+  )
+  delta_id = b.sid("delta")
+  for metadata_path in b.cfg.sessions_dir.glob("*/metadata.json"):
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    for field in session_fields:
+      if metadata_path.parent.name == delta_id and field == "slack_origin":
+        continue
+      metadata.pop(field, None)
+    metadata_path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
+
+  # One manager proves that a retired Run backend does not replace its
+  # configured session backend. One worker proves the same Run backend is
+  # displayed after startup recovery warms the in-memory map.
+  for run_key in ("atlas_t3", "notes_r2"):
+    run = b.manifest["runs"][run_key]
+    run_path = b.cfg.sessions_dir / run["session"] / "data" / "runs" / run["run"] / "metadata.json"
+    run_metadata = json.loads(run_path.read_text(encoding="utf-8"))
+    run_metadata["backend"] = "synthetic-retired-run-backend"
+    run_path.write_text(json.dumps(run_metadata, indent=2) + "\n", encoding="utf-8")
+
   return {"claude_credentials": ".claude/.credentials.json"}

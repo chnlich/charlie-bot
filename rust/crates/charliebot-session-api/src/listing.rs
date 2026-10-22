@@ -8,7 +8,7 @@ use axum::http::{Request, StatusCode, header};
 use axum::response::Response;
 use charliebot_registry::Registry;
 use charliebot_store::metadata::{SessionMetadata, SessionStatus, TaskProfile, UtcDateTime};
-use charliebot_store::{Store, StoreError, StoreResult};
+use charliebot_store::{Store, StoreResult};
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use http::HeaderValue;
@@ -106,7 +106,7 @@ pub fn active_page_values(store: &Store, registry: &Registry, page: &PageRows) -
   row_inputs(store, registry, &page.rows, &page.derived, projection)?
     .into_iter()
     .map(|row| {
-      let mut value = serde_json::to_value(&row.meta).map_err(|error| StoreError::new(error.to_string()))?;
+      let mut value = store.session_metadata_value(&row.meta);
       apply_sidebar_fields(&mut value, &row, projection);
       apply_listing_fields(&mut value, row.listing.expect("every sidebar row has sequence listing fields"));
       Ok(value)
@@ -145,7 +145,8 @@ pub fn sessions_list_response(
         {
           state.render_calls += inputs.len();
         }
-        let values = match inputs.iter().map(|row| render_row(row, projection)).collect::<StoreResult<Vec<_>>>() {
+        let values = match inputs.iter().map(|row| render_row(store, row, projection)).collect::<StoreResult<Vec<_>>>()
+        {
           Ok(values) => values,
           Err(error) => return charliebot_compat::responses::internal_error("RuntimeError", error.to_string()),
         };
@@ -182,8 +183,8 @@ pub fn sessions_list_response(
 }
 
 /// Render metadata as the Python response model does, excluding `task.goal`.
-pub(crate) fn metadata_value(meta: &SessionMetadata) -> StoreResult<Value> {
-  let mut value = serde_json::to_value(meta).map_err(|error| StoreError::new(error.to_string()))?;
+pub(crate) fn metadata_value(store: &Store, meta: &SessionMetadata) -> StoreResult<Value> {
+  let mut value = store.session_metadata_value(meta);
   if let Some(task) = value.get_mut("task").and_then(Value::as_object_mut) {
     task.remove("goal");
   }
@@ -220,7 +221,7 @@ pub(crate) fn listed_values(
   derived: &DerivedSidebarMap,
   projection: SidebarProjection,
 ) -> StoreResult<Vec<Value>> {
-  row_inputs(store, registry, rows, derived, projection)?.iter().map(|row| render_row(row, projection)).collect()
+  row_inputs(store, registry, rows, derived, projection)?.iter().map(|row| render_row(store, row, projection)).collect()
 }
 
 /// Read every input that the rows of one listing render from.
@@ -249,8 +250,8 @@ fn row_inputs(
 }
 
 /// Render one listing row from its inputs.
-fn render_row(row: &RowInputs, projection: SidebarProjection) -> StoreResult<Value> {
-  let mut value = metadata_value(&row.meta)?;
+fn render_row(store: &Store, row: &RowInputs, projection: SidebarProjection) -> StoreResult<Value> {
+  let mut value = metadata_value(store, &row.meta)?;
   apply_sidebar_fields(&mut value, row, projection);
   apply_listing_fields(&mut value, row.listing.clone().unwrap_or_default());
   Ok(value)
@@ -390,13 +391,14 @@ mod tests {
 
   #[test]
   fn response_projection_removes_only_task_goal() {
+    let (_home, features) = crate::test_support::feature_context();
     let mut meta = SessionMetadata::new("synthetic", "Synthetic", TaskProfile::Manager);
     meta.task = Some(charliebot_store::metadata::TaskSpec {
       task_type: Some(charliebot_store::metadata::TaskType::Implement),
       goal: "private goal".to_string(),
       ..Default::default()
     });
-    let value = metadata_value(&meta).unwrap();
+    let value = metadata_value(&features.store, &meta).unwrap();
     assert!(value["task"].get("goal").is_none());
     assert_eq!(value["task"]["task_type"], "implement");
   }

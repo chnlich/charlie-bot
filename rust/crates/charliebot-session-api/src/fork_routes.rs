@@ -14,7 +14,6 @@ use charliebot_compat::responses;
 use charliebot_compat::routing::post_only;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types;
-use charliebot_core::metadata_slot::MetadataFile;
 use charliebot_registry::FeatureContext;
 use charliebot_registry::caller::{self, CallerIdentity};
 use charliebot_registry::task_errors::task_http_error;
@@ -171,16 +170,7 @@ async fn elone_session(
 /// The successor as its spawn returned it. Python answers with the in-memory model, which holds every session slot
 /// field at its default and has no live-run fields, so the response is the spawn's metadata with those defaults.
 fn spawn_response(features: &FeatureContext, meta: &SessionMetadata) -> Response {
-  let mut value = match serde_json::to_value(meta) {
-    Ok(value) => value,
-    Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
-  };
-  let object = value.as_object_mut().expect("session metadata serializes to an object");
-  for slot in features.registry.metadata_slots().iter().filter(|slot| slot.on == MetadataFile::Session) {
-    for field in &slot.fields {
-      object.entry(field.name).or_insert_with(|| field.default.clone());
-    }
-  }
+  let value = features.store.session_metadata_value(meta);
   responses::json(StatusCode::OK, &value)
 }
 

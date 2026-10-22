@@ -1177,14 +1177,16 @@ mod tests {
   #[tokio::test]
   async fn parent_death_spawn_uses_one_shared_vm_vfork_clone() {
     let root = tempfile::tempdir().unwrap();
-    let mut command = spec("true", &[], root.path());
+    let mut command = spec("/bin/sh", &["-c", "while [ ! -e release ]; do /bin/sleep 0.01; done"], root.path());
     command.env.insert("PATH".into(), "/bin:/usr/bin".into());
+    command.cwd = Some(root.path().to_path_buf());
     let mut spawned = spawn_piped(&command).await.unwrap();
     let pid = spawned.child.id().unwrap();
 
     assert_eq!(spawned.child.clone_calls, 1);
     assert_eq!(spawned.child.clone_flags & (libc::CLONE_VM | libc::CLONE_VFORK), libc::CLONE_VM | libc::CLONE_VFORK);
     assert_eq!(unsafe { libc::getsid(pid as libc::pid_t) }, pid as libc::pid_t);
+    fs::write(root.path().join("release"), "").unwrap();
     assert_eq!(spawned.child.wait().await.unwrap().code(), Some(0));
   }
 

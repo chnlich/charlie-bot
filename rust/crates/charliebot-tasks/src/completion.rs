@@ -1548,8 +1548,13 @@ mod tests {
 
     let after = features.store.history_work();
     assert_eq!(outcomes.0.len(), 60);
-    assert_eq!(after.full_folds - before.full_folds, 2, "one memoized fold for the parent and one for its child");
-    assert_eq!(after.folded_events - before.folded_events, parent_events + child_events);
+    // Node-state folds from the tree index also count in `full_folds`; the outcomes read only node facts.
+    let facts_folds =
+      (after.full_folds - before.full_folds) - (after.node_state_full_folds - before.node_state_full_folds);
+    let facts_events =
+      (after.folded_events - before.folded_events) - (after.node_state_folded_events - before.node_state_folded_events);
+    assert_eq!(facts_folds, 2, "one memoized fold for the parent and one for its child");
+    assert_eq!(facts_events, parent_events + child_events);
   }
 
   #[tokio::test]
@@ -1606,5 +1611,6 @@ mod tests {
     assert_eq!(restored, [parent.id.clone(), child.id.clone()]);
     assert_eq!(after.file_reads - before.file_reads, 2, "one history read for each node in the closed chain");
     assert_eq!(after.event_history_views - before.event_history_views, 2);
+    assert_eq!(after.owned_event_clones - before.owned_event_clones, 0, "the restore scan borrows the shared history");
   }
 }

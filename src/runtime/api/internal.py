@@ -9,6 +9,7 @@ from src.infra import event_types as ET
 from src.runtime import (
     backend_pool,
     control_events,
+    run_token,
     session_events,
     session_store,
     spawner_backends,
@@ -371,6 +372,7 @@ async def session_message(
     req: models.SessionMessageRequest,
     store: session_store.SessionStore = fastapi.Depends(deps.get_session_store),
     task_mgr: task_sessions.TaskTreeManager = fastapi.Depends(deps.get_task_manager),
+    caller: run_token.CallerIdentity = fastapi.Depends(deps.require_caller),
 ) -> dict:
   """Relay an agent message into another session's event log and wake its master.
 
@@ -400,10 +402,15 @@ async def session_message(
             "CJK characters, CJK punctuation, and fullwidth characters count 2.\n"
             "Write the long content to a file. Send a short message with the conclusion,\n"
             "the request, and the file path."))
-  caller = deps.require_found(await store.get_session(req.session_id))
+  caller_meta = deps.require_found(await store.get_session(req.session_id))
   target = await store.get_session(req.target_session_id)
   if target is None:
     raise fastapi.HTTPException(status_code=404, detail="Target session not found")
+
+  request_id = None
+  if caller.claims is not None:
+    request_id = control_events.derived_agent_send_request_id(
+        caller.claims.run_id, "session send", req.target_session_id, req.content)
 
   try:
     await task_mgr.dispatch.admit_input(
@@ -411,8 +418,9 @@ async def session_message(
         event_type=ET.AGENT_MESSAGE,
         content=req.content,
         actor="agent",
-        from_session=caller.id,
-        from_session_name=caller.name,
+        request_id=request_id,
+        from_session=caller_meta.id,
+        from_session_name=caller_meta.name,
     )
     await task_mgr.dispatch.dispatch_pending(req.target_session_id)
   except (task_errors.TaskNotFoundError, task_errors.TaskForbiddenError, task_errors.TaskConflictError,

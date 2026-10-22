@@ -8,7 +8,15 @@ import pydantic
 
 from src.features.web_reply import reply, status
 from src.infra import config
-from src.runtime import file_urls, session_events, session_lifecycle, session_store, task_sessions
+from src.runtime import (
+    control_events,
+    file_urls,
+    run_token,
+    session_events,
+    session_lifecycle,
+    session_store,
+    task_sessions,
+)
 from src.runtime.api import deps
 
 router = fastapi.APIRouter()
@@ -61,6 +69,8 @@ async def web_reply(
     store: session_store.SessionStore = fastapi.Depends(deps.get_session_store),
     events: session_events.SessionEvents = fastapi.Depends(deps.get_session_events),
     lifecycle: session_lifecycle.SessionLifecycle = fastapi.Depends(deps.get_session_lifecycle),
+    task_mgr: task_sessions.TaskTreeManager = fastapi.Depends(deps.get_task_manager),
+    caller: run_token.CallerIdentity = fastapi.Depends(deps.require_caller),
 ) -> dict:
   """Record the calling session's web reply and return the readback the CLI prints.
 
@@ -68,6 +78,10 @@ async def web_reply(
   blank text, an empty keep_language reason or a dead file link. Nothing is recorded on a refusal.
   """
   try:
+    request_id = None
+    if caller.claims is not None:
+      request_id = control_events.derived_agent_send_request_id(
+          caller.claims.run_id, "web reply", req.session_id, req.text)
     return await reply.post_web_reply(
         req.session_id,
         req.text,
@@ -75,6 +89,8 @@ async def web_reply(
         events,
         lifecycle,
         keep_language=req.keep_language,
+        request_id=request_id,
+        tree=task_mgr,
         scan_context=_file_link_scan_context(cfg, store, req.session_id))
   except reply.WebReplyError as exc:
     raise fastapi.HTTPException(status_code=exc.status, detail=exc.detail) from exc

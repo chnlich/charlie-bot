@@ -276,6 +276,70 @@ def implement_marker_commit(tree: task_sessions.TaskTreeManager, worker_id: str)
 
 
 @pytest.mark.asyncio
+async def test_admit_input_replay_compares_extra_fields_and_rejects_core_collisions(tmp_path: pathlib.Path) -> None:
+  _cfg, _blocks, tree = conftest.build_env(tmp_path)
+  manager = await conftest.create_task(tree, parent=None, request_id="fields", name="Fields")
+
+  with pytest.raises(task_errors.TaskInvalidError):
+    await tree.dispatch.admit_input(
+        manager.id,
+        event_type=ET.USER,
+        content="message",
+        actor="user",
+        request_id="collision",
+        fields={"content": "replacement"},
+    )
+
+  event = await tree.dispatch.admit_input(
+      manager.id,
+      event_type=ET.USER,
+      content="message",
+      actor="user",
+      request_id="fields-request",
+      fields={"summon": {
+          "mention_id": "m1"
+      }},
+  )
+  replay = await tree.dispatch.admit_input(
+      manager.id,
+      event_type=ET.USER,
+      content="message",
+      actor="user",
+      request_id="fields-request",
+      fields={"summon": {
+          "mention_id": "m1"
+      }},
+  )
+  assert replay == event
+  assert event["request_id"] == "fields-request"
+  assert event["summon"] == {"mention_id": "m1"}
+
+  with pytest.raises(task_errors.TaskConflictError):
+    await tree.dispatch.admit_input(
+        manager.id,
+        event_type=ET.USER,
+        content="message",
+        actor="user",
+        request_id="fields-request",
+    )
+
+  with pytest.raises(task_errors.TaskConflictError):
+    await tree.dispatch.admit_input(
+        manager.id,
+        event_type=ET.USER,
+        content="message",
+        actor="user",
+        request_id="fields-request",
+        fields={"summon": {
+            "mention_id": "m2"
+        }},
+    )
+
+  inputs = [event for event in tree.events.load_events(manager.id) if event.get("request_id") == "fields-request"]
+  assert inputs == [event]
+
+
+@pytest.mark.asyncio
 async def test_manager_turn_persists_run_identity_and_acknowledges_batch(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, _session_blocks, tree, manager = await _wired_root_manager(tmp_path, monkeypatch)

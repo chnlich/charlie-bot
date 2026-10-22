@@ -17,6 +17,7 @@ import uuid
 from typing import Protocol
 
 from src.infra import event_types as ET
+from src.runtime import task_errors
 
 # Deterministic namespace for the tree's stable ids: uuid5 keeps (parent,
 # request_id) -> one node id and (session, request_id) -> one run id across
@@ -30,6 +31,12 @@ TASK_ID_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "charliebot/session-task-tree
 ACTOR_USER = "user"
 ACTOR_AGENT = "agent"
 ACTOR_SYSTEM = "system"
+
+REQUEST_EVENT_CORE_FIELDS = frozenset(
+    {
+        "id", "type", "timestamp", "actor", "source_session_id", "content", "request_id", "uploaded_files",
+        "from_session", "from_session_name", "input_mode", "event_index"
+    })
 
 
 def stable_task_id(task_parent_id: str | None, request_id: str) -> str:
@@ -76,6 +83,36 @@ def stable_input_ack_event_id(session_id: str, request_id: str) -> str:
 def stable_request_event_id(session_id: str, request_id: str) -> str:
   """The input event id one (session, request_id) binds to across retries."""
   return str(uuid.uuid5(TASK_ID_NAMESPACE, f"request:{session_id}:{request_id}"))
+
+
+def derived_agent_send_request_id(run_id: str, verb: str, target: str, text: str) -> str:
+  """The request id one (Run, agent-send verb, target, text) binds to across retries."""
+  return "agent-send-" + sha256_hex("\x00".join([run_id, verb, target, text]))[:24]
+
+
+def replay_request_event(
+    events: list[dict],
+    *,
+    event_id: str,
+    request_id: str,
+    event_type: str,
+    content: str,
+    fields: dict | None = None,
+) -> dict | None:
+  """Return the matching event for a replay, raising when its stored payload differs."""
+  existing = next((event for event in events if event.get("id") == event_id), None)
+  if existing is None:
+    return None
+  extra_fields_match = fields is None or {
+      key: value for key, value in existing.items() if key not in REQUEST_EVENT_CORE_FIELDS
+  } == fields
+  matches = (
+      existing.get("request_id") == request_id and existing.get("type") == event_type and
+      existing.get("content") == content and extra_fields_match)
+  if not matches:
+    raise task_errors.TaskConflictError(
+        [f"request_id {request_id} is already event {existing['id']} with a different type or content"])
+  return existing
 
 
 def stable_child_report_id(child_session_id: str, source_event_id: str, recipient_session_id: str) -> str:

@@ -15,6 +15,8 @@ so the listener can reason about ids and permissions without an HTTP client.
 from __future__ import annotations
 
 import asyncio
+import datetime
+import hashlib
 import re
 import urllib.parse
 from typing import TYPE_CHECKING, Any
@@ -60,6 +62,12 @@ def snowflake_key(snowflake: str) -> int:
   """A Discord id as an integer: ids are compared and sorted as numbers, never
   as strings (string order flips whenever the digit counts differ)."""
   return int(snowflake)
+
+
+def snowflake_datetime(snowflake: str) -> datetime.datetime:
+  """The UTC creation time encoded in a Discord snowflake."""
+  timestamp_ms = (snowflake_key(snowflake) >> 22) + 1420070400000
+  return datetime.datetime.fromtimestamp(timestamp_ms / 1000, tz=datetime.UTC)
 
 
 def parse_message_link(url: str) -> tuple[str, str, str | None]:
@@ -205,15 +213,19 @@ class DiscordClient:
         },
     )
 
-  async def create_message(self, channel_id: str, content: str) -> dict:
+  async def create_message(self, channel_id: str, content: str, *, post_key: str) -> dict:
     """POST /channels/{channel_id}/messages with a JSON body.
 
     ``allowed_mentions`` is always ``{"parse": []}`` so a reply never pings
-    anyone.
+    anyone. The key's nonce makes an accepted request safe to retry.
     """
     return await self._request(
-        "POST", f"/channels/{channel_id}/messages", json_body={
+        "POST",
+        f"/channels/{channel_id}/messages",
+        json_body={
             "content": content,
+            "nonce": hashlib.sha256(post_key.encode("utf-8")).hexdigest()[:25],
+            "enforce_nonce": True,
             "allowed_mentions": {
                 "parse": []
             }

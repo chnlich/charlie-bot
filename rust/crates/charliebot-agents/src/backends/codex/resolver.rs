@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 use std::fs;
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -207,14 +208,24 @@ fn translated_session_id(event: &Value) -> Option<String> {
   event.get("session_id").and_then(Value::as_str).filter(|id| !id.is_empty()).map(str::to_string)
 }
 
-/// The first non-empty string session id in the chat-events file, or `None` when the file is absent or has none.
+/// The first non-empty string session id in the chat-events file, or `None` when the file is absent or has none. The
+/// buffered line walk follows `src/backends/codex/codex_usage.py:198-210` and stops as soon as it finds the id.
 fn read_translated_session_id(path: &Path) -> anyhow::Result<Option<String>> {
   if !path.exists() {
     return Ok(None);
   }
-  let bytes = fs::read(path).with_context(|| format!("reading chat events {}", path.display()))?;
-  for line in bytes.split(|byte| *byte == b'\n') {
-    let Some(event) = rollout::parse_event_line(line, path, "translated_session_id_parse_skip")? else {
+  let file = fs::File::open(path).with_context(|| format!("opening chat events {}", path.display()))?;
+  read_translated_session_id_from(BufReader::new(file), path)
+}
+
+fn read_translated_session_id_from<R: BufRead>(mut reader: R, path: &Path) -> anyhow::Result<Option<String>> {
+  let mut line = Vec::new();
+  loop {
+    line.clear();
+    if reader.read_until(b'\n', &mut line).with_context(|| format!("reading chat events {}", path.display()))? == 0 {
+      break;
+    }
+    let Some(event) = rollout::parse_event_line(&line, path, "translated_session_id_parse_skip")? else {
       continue;
     };
     if let Some(id) = translated_session_id(&Value::Object(event)) {
@@ -222,4 +233,47 @@ fn read_translated_session_id(path: &Path) -> anyhow::Result<Option<String>> {
     }
   }
   Ok(None)
+}
+
+#[cfg(test)]
+mod tests {
+  use std::io::{self, Cursor, Read};
+
+  use super::*;
+
+  struct CountingBufRead<R> {
+    inner: R,
+    consumed: usize,
+  }
+
+  impl<R: Read> Read for CountingBufRead<R> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+      let count = self.inner.read(buffer)?;
+      self.consumed += count;
+      Ok(count)
+    }
+  }
+
+  impl<R: BufRead> BufRead for CountingBufRead<R> {
+    fn fill_buf(&mut self) -> io::Result<&[u8]> {
+      self.inner.fill_buf()
+    }
+
+    fn consume(&mut self, amount: usize) {
+      self.consumed += amount;
+      self.inner.consume(amount);
+    }
+  }
+
+  #[test]
+  fn translated_session_id_stops_after_the_first_matching_line() {
+    let mut contents = b"{\"session_id\":\"thread-a\"}\n".to_vec();
+    contents.extend_from_slice(&b"{}\n".repeat(1024 * 1024));
+    let mut reader = CountingBufRead { inner: Cursor::new(contents), consumed: 0 };
+
+    let id = read_translated_session_id_from(&mut reader, Path::new("chat_events.jsonl")).unwrap();
+
+    assert_eq!(id.as_deref(), Some("thread-a"));
+    assert_eq!(reader.consumed, b"{\"session_id\":\"thread-a\"}\n".len());
+  }
 }

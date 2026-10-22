@@ -25,7 +25,7 @@ use crate::event_builders;
 use crate::runner::EventFn;
 use crate::transport::cgroup::{SessionCgroupLimits, system_cgroup_base_dir};
 use crate::transport::kill::{kill_process_group, python_exit_code};
-use crate::transport::spawn::{SpawnSpec, spawn_one_shot};
+use crate::transport::spawn::{AgentPipeReader, SpawnSpec, spawn_one_shot};
 
 /// The turn's own process carries the run identity; OpenCode serves its events over HTTP.
 pub const TURN_PROCESS_CMD: [&str; 2] = ["/usr/bin/sleep", "infinity"];
@@ -924,7 +924,7 @@ async fn run_one_shot(request: OpenCodeOneShotRequest) -> anyhow::Result<String>
   Ok(text)
 }
 
-async fn collect_one_shot(stdout: tokio::process::ChildStdout) -> anyhow::Result<String> {
+async fn collect_one_shot(stdout: AgentPipeReader) -> anyhow::Result<String> {
   let mut reader = BufReader::new(stdout);
   let mut line = Vec::new();
   let mut parts = Vec::new();

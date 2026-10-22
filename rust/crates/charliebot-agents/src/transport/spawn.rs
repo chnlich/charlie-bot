@@ -1,4 +1,6 @@
-//! Child setup keeps session, parent-death, and turn-tree policies explicit.
+//! Child setup follows the launch sequence in `src/runtime/agent_process/_vfkspawn.c:54-76` and
+//! `src/runtime/agent_process/base.py:996-1013`: session and parent-death setup precede exec, and raw-log nice/cgroup
+//! limits are applied parent-side after the exec handshake.
 //!
 //! Children with a parent-death signal spawn on one dedicated thread that lives for the process lifetime.
 //! `PR_SET_PDEATHSIG` follows the thread that created the child, so those spawns avoid Tokio's retiring blocking pool.
@@ -8,24 +10,25 @@
 //! Child-side cgroup setup moves the child before exec without changing nice.
 
 use std::collections::HashMap;
-use std::ffi::OsString;
+use std::ffi::{CString, OsStr, OsString};
 use std::fs::{self, OpenOptions};
 use std::future::Future;
 use std::io;
+use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd, RawFd};
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::OpenOptionsExt;
-use std::os::unix::process::CommandExt;
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
-use std::sync::{OnceLock, mpsc};
+use std::process::{ExitStatus, Output};
 use std::thread;
 
 use nix::sys::signal::Signal;
 use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
 use nix::unistd::Pid;
 use serde_json::Value;
-use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt};
-use tokio::process::{Child, Command};
-use tokio::runtime::Handle;
-use tokio::sync::oneshot;
+use tokio::io::unix::AsyncFd;
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, Interest, ReadBuf};
+use tokio::sync::{oneshot, watch};
 
 use super::cgroup::{self, SessionCgroup};
 use super::identity::{self, ProcessIdentity};
@@ -34,19 +37,6 @@ const TURN_TREE_NICE: i32 = 10;
 const PUMP_CHUNK_BYTES: usize = 8192;
 const LOG_FLUSH_BYTES: usize = 64 * 1024;
 pub const STDERR_TAIL_BYTES: usize = 64 * 1024;
-
-struct ParentDeathSpawnRequest {
-  command: Command,
-  runtime: Handle,
-  response: oneshot::Sender<io::Result<Child>>,
-}
-
-enum ParentDeathSpawner {
-  Ready(mpsc::Sender<ParentDeathSpawnRequest>),
-  Failed { kind: io::ErrorKind, message: String },
-}
-
-static PARENT_DEATH_SPAWNER: OnceLock<ParentDeathSpawner> = OnceLock::new();
 
 /// Required process inputs for each transport spawn.
 #[derive(Clone, Debug)]
@@ -97,15 +87,6 @@ impl SpawnSpec {
       self.tasks_max,
     )
   }
-
-  fn command(&self) -> Command {
-    let mut command = Command::new(&self.program);
-    command.args(&self.args).env_clear().envs(&self.env).kill_on_drop(false);
-    if let Some(cwd) = &self.cwd {
-      command.current_dir(cwd);
-    }
-    command
-  }
 }
 
 /// Stdin shape for a raw-log child.
@@ -142,7 +123,7 @@ pub enum SpawnSetup {
 /// Child handle and cgroup counters for exit attribution.
 pub struct SpawnedChild {
   /// Spawned process handle.
-  pub child: Child,
+  pub child: AgentChild,
   /// Cgroup state captured before spawn, when enabled.
   pub cgroup: Option<SessionCgroup>,
 }
@@ -162,7 +143,7 @@ pub async fn spawn_raw_log<C: Send + 'static>(
   raw_path: &Path,
   stderr_path: &Path,
   stdin: RawStdin,
-  claim: impl FnOnce(&Child) -> C + Send + 'static,
+  claim: impl FnOnce(&AgentChild) -> C + Send + 'static,
 ) -> io::Result<(SpawnedChild, C)> {
   if let Some(parent) = raw_path.parent() {
     fs::create_dir_all(parent)?;
@@ -173,19 +154,22 @@ pub async fn spawn_raw_log<C: Send + 'static>(
   let raw = OpenOptions::new().create(true).append(true).mode(0o644).open(raw_path)?;
   let stderr = OpenOptions::new().create(true).append(true).mode(0o644).open(stderr_path)?;
   let cgroup = spec.prepare_cgroup();
-  let mut command = spec.command();
-  command
-    .stdin(match stdin {
-      RawStdin::Piped => std::process::Stdio::piped(),
-      RawStdin::Null => std::process::Stdio::null(),
-    })
-    .stdout(std::process::Stdio::from(raw))
-    .stderr(std::process::Stdio::from(stderr));
-  configure_child_setup(&mut command, None, SpawnSetup::ParentSideTurnTree, cgroup.clone());
+  let (child_stdin, parent_stdin) = match stdin {
+    RawStdin::Piped => piped_stdin()?,
+    RawStdin::Null => (devnull_fd()?, None),
+  };
+  let child_fds = ChildFds {
+    stdin: child_stdin,
+    stdout: ensure_fd_above_stdio(unsafe { OwnedFd::from_raw_fd(raw.into_raw_fd()) })?,
+    stderr: ensure_fd_above_stdio(unsafe { OwnedFd::from_raw_fd(stderr.into_raw_fd()) })?,
+  };
+  let parent_io = ParentIo { stdin: parent_stdin, stdout: None, stderr: None };
+  let prepared = PreparedSpawn::new(spec, None, SpawnSetup::ParentSideTurnTree, cgroup.clone(), child_fds)?;
   #[cfg(test)]
   let test_raw_path = raw_path.to_path_buf();
   let (child, claimed) = tokio::task::spawn_blocking(move || {
-    let child = command.spawn()?;
+    let outcome = clone_vfork_exec(prepared)?;
+    let child = AgentChild::new(outcome, parent_io, None)?;
     #[cfg(test)]
     TEST_RAW_LOG_CHILDREN
       .lock()
@@ -223,70 +207,55 @@ pub async fn spawn_with_setup(
       spec.prepare_cgroup()
     }
   };
-  let mut command = spec.command();
-  command
-    .stdin(match stdin {
-      ChildStdin::Null => std::process::Stdio::null(),
-      ChildStdin::Piped => std::process::Stdio::piped(),
-    })
-    .stdout(std::process::Stdio::piped())
-    .stderr(std::process::Stdio::piped());
-  configure_child_setup(&mut command, pdeathsig, setup, cgroup.clone());
-  let child = spawn_command(command, pdeathsig).await?;
+  let (child_fds, parent_io) = captured_io(stdin)?;
+  let prepared = PreparedSpawn::new(spec, pdeathsig, setup, cgroup.clone(), child_fds)?;
+  let (outcome, status) = spawn_prepared(prepared).await?;
+  let child = AgentChild::new(outcome, parent_io, status)?;
   if setup == SpawnSetup::ParentSideTurnTree {
     apply_turn_tree_limits(child.id().expect("spawned child has a process id"), cgroup.as_ref());
   }
   Ok(SpawnedChild { child, cgroup })
 }
 
-async fn spawn_command(mut command: Command, pdeathsig: Option<Signal>) -> io::Result<Child> {
-  if pdeathsig.is_some() {
+async fn spawn_prepared(
+  prepared: PreparedSpawn,
+) -> io::Result<(VforkOutcome, Option<watch::Receiver<Option<Result<libc::c_int, libc::c_int>>>>)> {
+  if prepared.pdeath_signal.is_some() {
     let (response, result) = oneshot::channel();
-    let request = ParentDeathSpawnRequest { command, runtime: Handle::current(), response };
-    parent_death_spawn_sender()?
-      .send(request)
-      .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "parent-death spawn thread has stopped"))?;
-    return result.await.map_err(io::Error::other)?;
+    thread::Builder::new().name("charliebot-parent-death-spawn".to_string()).spawn(move || {
+      match clone_vfork_exec(prepared) {
+        Ok(outcome) => {
+          let pid = outcome.pid;
+          let (status_sender, status_receiver) = watch::channel(None);
+          if let Err(Ok((outcome, _))) = response.send(Ok((outcome, status_receiver))) {
+            report_unclaimed_parent_death_spawn(Ok(outcome));
+            return;
+          }
+          reap_process(pid, status_sender);
+        }
+        Err(error) => {
+          if let Err(Err(error)) = response.send(Err(error)) {
+            tracing::warn!(target: "charliebot_agents", error = %error, "parent_death_spawn_error_owner_gone");
+          }
+        }
+      }
+    })?;
+    return result.await.map_err(io::Error::other)?.map(|(outcome, status)| (outcome, Some(status)));
   }
-  tokio::task::spawn_blocking(move || command.spawn()).await.map_err(io::Error::other)?
+  let outcome = tokio::task::spawn_blocking(move || clone_vfork_exec(prepared)).await.map_err(io::Error::other)??;
+  Ok((outcome, None))
 }
 
-fn parent_death_spawn_sender() -> io::Result<&'static mpsc::Sender<ParentDeathSpawnRequest>> {
-  let spawner = PARENT_DEATH_SPAWNER.get_or_init(|| {
-    let (sender, receiver) = mpsc::channel();
-    let result = thread::Builder::new()
-      .name("charliebot-parent-death-spawner".to_owned())
-      .spawn(move || parent_death_spawn_loop(receiver));
-    match result {
-      Ok(_) => ParentDeathSpawner::Ready(sender),
-      Err(error) => ParentDeathSpawner::Failed { kind: error.kind(), message: error.to_string() },
-    }
-  });
-  match spawner {
-    ParentDeathSpawner::Ready(sender) => Ok(sender),
-    ParentDeathSpawner::Failed { kind, message } => Err(io::Error::new(*kind, message.clone())),
-  }
-}
-
-fn parent_death_spawn_loop(receiver: mpsc::Receiver<ParentDeathSpawnRequest>) {
-  while let Ok(request) = receiver.recv() {
-    let ParentDeathSpawnRequest { mut command, runtime, response } = request;
-    let _runtime_guard = runtime.enter();
-    let result = command.spawn();
-    if let Err(result) = response.send(result) {
-      report_unclaimed_parent_death_spawn(result);
-    }
-  }
-}
-
-fn report_unclaimed_parent_death_spawn(result: io::Result<Child>) {
+fn report_unclaimed_parent_death_spawn(result: io::Result<VforkOutcome>) {
   match result {
-    Ok(mut child) => {
-      let pid = child.id().expect("spawned child has a process id");
+    Ok(outcome) => {
+      let pid = outcome.pid;
       super::kill::kill_process_group(pid, Signal::SIGKILL);
-      if let Err(error) = child.start_kill() {
+      if unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) } == -1 {
+        let error = io::Error::last_os_error();
         tracing::warn!(target: "charliebot_agents", pid, error = %error, "unclaimed_spawn_kill_failed");
       }
+      reap_pid(pid);
       tracing::warn!(target: "charliebot_agents", pid, "parent_death_spawn_owner_gone");
     }
     Err(error) => {
@@ -295,46 +264,646 @@ fn report_unclaimed_parent_death_spawn(result: io::Result<Child>) {
   }
 }
 
-fn configure_child_setup(
-  command: &mut Command,
-  pdeathsig: Option<Signal>,
-  setup: SpawnSetup,
-  cgroup: Option<SessionCgroup>,
-) {
-  let parent_pid = unsafe { libc::getpid() };
+struct ChildFds {
+  stdin: OwnedFd,
+  stdout: OwnedFd,
+  stderr: OwnedFd,
+}
+
+struct ParentIo {
+  stdin: Option<AgentPipeWriter>,
+  stdout: Option<AgentPipeReader>,
+  stderr: Option<AgentPipeReader>,
+}
+
+struct PreparedSpawn {
+  argv: Vec<CString>,
+  envp: Vec<CString>,
+  exec_paths: Vec<CString>,
+  cwd: Option<CString>,
+  cgroup_path: Option<CString>,
+  pdeath_signal: Option<libc::c_int>,
+  child_nice: bool,
+  fds: ChildFds,
+}
+
+impl PreparedSpawn {
+  fn new(
+    spec: &SpawnSpec,
+    pdeathsig: Option<Signal>,
+    setup: SpawnSetup,
+    cgroup: Option<SessionCgroup>,
+    fds: ChildFds,
+  ) -> io::Result<Self> {
+    let mut argv = Vec::with_capacity(spec.args.len() + 1);
+    argv.push(c_string(spec.program.as_os_str().as_bytes())?);
+    argv.extend(spec.args.iter().map(|arg| c_string(arg.as_os_str().as_bytes())).collect::<io::Result<Vec<_>>>()?);
+    let envp = spec
+      .env
+      .iter()
+      .map(|(key, value)| {
+        let mut item = Vec::with_capacity(key.as_os_str().as_bytes().len() + value.as_os_str().as_bytes().len() + 1);
+        item.extend_from_slice(key.as_os_str().as_bytes());
+        item.push(b'=');
+        item.extend_from_slice(value.as_os_str().as_bytes());
+        c_string(&item)
+      })
+      .collect::<io::Result<Vec<_>>>()?;
+    let program = spec.program.as_os_str().as_bytes();
+    // The non-vfork Python path delegates command lookup to Popen's PATH search. Prepare those candidates here so
+    // the CLONE_VM child can stay syscall-only instead of calling execvpe (`src/runtime/agent_process/spawn.py:177-190`).
+    let exec_paths = if program.contains(&b'/') {
+      vec![c_string(program)?]
+    } else {
+      let path = spec.env.get(OsStr::new("PATH")).map(|value| value.as_os_str().as_bytes()).unwrap_or(b"/bin:/usr/bin");
+      path
+        .split(|byte| *byte == b':')
+        .map(|directory| {
+          let mut candidate = Vec::with_capacity(directory.len() + program.len() + 1);
+          candidate.extend_from_slice(directory);
+          if !directory.is_empty() {
+            candidate.push(b'/');
+          }
+          candidate.extend_from_slice(program);
+          c_string(&candidate)
+        })
+        .collect::<io::Result<Vec<_>>>()?
+    };
+    let cwd = spec.cwd.as_ref().map(|path| c_string(path.as_os_str().as_bytes())).transpose()?;
+    let child_cgroup = match setup {
+      SpawnSetup::ChildSideTurnTree | SpawnSetup::ChildSideCgroup => {
+        cgroup.as_ref().map(|state| c_string(state.path.join("cgroup.procs").as_os_str().as_bytes())).transpose()?
+      }
+      SpawnSetup::ParentSideTurnTree | SpawnSetup::None => None,
+    };
+    Ok(Self {
+      argv,
+      envp,
+      exec_paths,
+      cwd,
+      cgroup_path: child_cgroup,
+      pdeath_signal: pdeathsig.map(|signal| signal as libc::c_int),
+      child_nice: setup == SpawnSetup::ChildSideTurnTree,
+      fds,
+    })
+  }
+}
+
+struct VforkOutcome {
+  pid: u32,
+  #[cfg(test)]
+  clone_calls: usize,
+  #[cfg(test)]
+  clone_flags: libc::c_int,
+}
+
+struct ChildSetupArgs {
+  argv: *const *const libc::c_char,
+  envp: *const *const libc::c_char,
+  exec_paths: *const *const libc::c_char,
+  exec_path_count: usize,
+  cwd: *const libc::c_char,
+  cgroup_path: *const libc::c_char,
+  stdin_fd: RawFd,
+  stdout_fd: RawFd,
+  stderr_fd: RawFd,
+  report_fd: RawFd,
+  parent_pid: libc::pid_t,
+  pdeath_signal: libc::c_int,
+  child_nice: bool,
+  oldmask: libc::sigset_t,
+}
+
+/// A child handle backed by a CLONE_VM | CLONE_VFORK exec handshake. The persistent reaper keeps waitpid off Tokio.
+pub struct AgentChild {
+  pid: u32,
+  status: watch::Receiver<Option<Result<libc::c_int, libc::c_int>>>,
+  status_observed: bool,
+  pub stdin: Option<AgentPipeWriter>,
+  pub stdout: Option<AgentPipeReader>,
+  pub stderr: Option<AgentPipeReader>,
+  #[cfg(test)]
+  clone_calls: usize,
+  #[cfg(test)]
+  clone_flags: libc::c_int,
+}
+
+impl AgentChild {
+  fn new(
+    outcome: VforkOutcome,
+    io: ParentIo,
+    status: Option<watch::Receiver<Option<Result<libc::c_int, libc::c_int>>>>,
+  ) -> io::Result<Self> {
+    let pid = outcome.pid;
+    let status = match status {
+      Some(status) => status,
+      None => {
+        let (sender, status) = watch::channel(None);
+        if let Err(error) =
+          thread::Builder::new().name(format!("agent-reap-{pid}")).spawn(move || reap_process(pid, sender))
+        {
+          super::kill::kill_process_group(pid, Signal::SIGKILL);
+          reap_pid(pid);
+          return Err(error);
+        }
+        status
+      }
+    };
+    Ok(Self {
+      pid,
+      status,
+      status_observed: false,
+      stdin: io.stdin,
+      stdout: io.stdout,
+      stderr: io.stderr,
+      #[cfg(test)]
+      clone_calls: outcome.clone_calls,
+      #[cfg(test)]
+      clone_flags: outcome.clone_flags,
+    })
+  }
+
+  pub fn id(&self) -> Option<u32> {
+    (!self.status_observed).then_some(self.pid)
+  }
+
+  pub fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
+    match *self.status.borrow() {
+      Some(Ok(status)) => {
+        self.status_observed = true;
+        Ok(Some(ExitStatus::from_raw(status)))
+      }
+      Some(Err(errno)) => {
+        self.status_observed = true;
+        Err(io::Error::from_raw_os_error(errno))
+      }
+      None => Ok(None),
+    }
+  }
+
+  pub async fn wait(&mut self) -> io::Result<ExitStatus> {
+    self.stdin.take();
+    loop {
+      if let Some(result) = *self.status.borrow() {
+        self.status_observed = true;
+        return result.map(ExitStatus::from_raw).map_err(io::Error::from_raw_os_error);
+      }
+      self
+        .status
+        .changed()
+        .await
+        .map_err(|_| io::Error::other("agent child reaper stopped before publishing status"))?;
+    }
+  }
+
+  pub fn start_kill(&mut self) -> io::Result<()> {
+    if self.try_wait()?.is_some() {
+      return Ok(());
+    }
+    if unsafe { libc::kill(self.pid as libc::pid_t, libc::SIGKILL) } == -1 {
+      return Err(io::Error::last_os_error());
+    }
+    Ok(())
+  }
+
+  pub async fn kill(&mut self) -> io::Result<()> {
+    self.start_kill()?;
+    self.wait().await.map(|_| ())
+  }
+
+  pub async fn wait_with_output(mut self) -> io::Result<Output> {
+    self.stdin.take();
+    let stdout = self.stdout.take();
+    let stderr = self.stderr.take();
+    let (stdout, stderr, status) = tokio::join!(read_pipe_to_end(stdout), read_pipe_to_end(stderr), self.wait());
+    Ok(Output { status: status?, stdout: stdout?, stderr: stderr? })
+  }
+}
+
+/// A nonblocking pipe reader registered with Tokio's IO driver.
+pub struct AgentPipeReader {
+  fd: AsyncFd<OwnedFd>,
+}
+
+impl AgentPipeReader {
+  fn new(fd: OwnedFd) -> io::Result<Self> {
+    // SAFETY: `fd` owns a stable open descriptor for the entire AsyncFd lifetime.
+    Ok(Self { fd: unsafe { AsyncFd::register_with_interest(fd, Interest::READABLE)? } })
+  }
+}
+
+impl AsyncRead for AgentPipeReader {
+  fn poll_read(
+    self: std::pin::Pin<&mut Self>,
+    context: &mut std::task::Context<'_>,
+    buffer: &mut ReadBuf<'_>,
+  ) -> std::task::Poll<io::Result<()>> {
+    let this = self.get_mut();
+    if buffer.remaining() == 0 {
+      return std::task::Poll::Ready(Ok(()));
+    }
+    loop {
+      let mut ready = std::task::ready!(this.fd.poll_read_ready(context))?;
+      let available = buffer.initialize_unfilled();
+      match ready.try_io(|fd| {
+        let count = unsafe { libc::read(fd.get_ref().as_raw_fd(), available.as_mut_ptr().cast(), available.len()) };
+        if count < 0 { Err(io::Error::last_os_error()) } else { Ok(count as usize) }
+      }) {
+        Ok(Ok(count)) => {
+          buffer.advance(count);
+          return std::task::Poll::Ready(Ok(()));
+        }
+        Ok(Err(error)) if error.kind() == io::ErrorKind::Interrupted => continue,
+        Ok(Err(error)) => return std::task::Poll::Ready(Err(error)),
+        Err(_) => continue,
+      }
+    }
+  }
+}
+
+/// A nonblocking pipe writer registered with Tokio's IO driver.
+pub struct AgentPipeWriter {
+  fd: Option<AsyncFd<OwnedFd>>,
+}
+
+impl AgentPipeWriter {
+  fn new(fd: OwnedFd) -> io::Result<Self> {
+    // SAFETY: `fd` owns a stable open descriptor for the entire AsyncFd lifetime.
+    Ok(Self { fd: Some(unsafe { AsyncFd::register_with_interest(fd, Interest::WRITABLE)? }) })
+  }
+}
+
+impl AsyncWrite for AgentPipeWriter {
+  fn poll_write(
+    self: std::pin::Pin<&mut Self>,
+    context: &mut std::task::Context<'_>,
+    buffer: &[u8],
+  ) -> std::task::Poll<io::Result<usize>> {
+    let this = self.get_mut();
+    if buffer.is_empty() {
+      return std::task::Poll::Ready(Ok(0));
+    }
+    loop {
+      let Some(fd) = this.fd.as_ref() else {
+        return std::task::Poll::Ready(Err(io::Error::new(io::ErrorKind::BrokenPipe, "agent stdin is closed")));
+      };
+      let mut ready = std::task::ready!(fd.poll_write_ready(context))?;
+      match ready.try_io(|fd| {
+        let count = unsafe { libc::write(fd.get_ref().as_raw_fd(), buffer.as_ptr().cast(), buffer.len()) };
+        if count < 0 { Err(io::Error::last_os_error()) } else { Ok(count as usize) }
+      }) {
+        Ok(Ok(count)) => return std::task::Poll::Ready(Ok(count)),
+        Ok(Err(error)) if error.kind() == io::ErrorKind::Interrupted => continue,
+        Ok(Err(error)) => return std::task::Poll::Ready(Err(error)),
+        Err(_) => continue,
+      }
+    }
+  }
+
+  fn poll_flush(
+    self: std::pin::Pin<&mut Self>,
+    _context: &mut std::task::Context<'_>,
+  ) -> std::task::Poll<io::Result<()>> {
+    std::task::Poll::Ready(Ok(()))
+  }
+
+  fn poll_shutdown(
+    self: std::pin::Pin<&mut Self>,
+    _context: &mut std::task::Context<'_>,
+  ) -> std::task::Poll<io::Result<()>> {
+    self.get_mut().fd.take();
+    std::task::Poll::Ready(Ok(()))
+  }
+}
+
+async fn read_pipe_to_end(mut pipe: Option<AgentPipeReader>) -> io::Result<Vec<u8>> {
+  let mut bytes = Vec::new();
+  if let Some(pipe) = pipe.as_mut() {
+    pipe.read_to_end(&mut bytes).await?;
+  }
+  Ok(bytes)
+}
+
+fn captured_io(stdin: ChildStdin) -> io::Result<(ChildFds, ParentIo)> {
+  let (child_stdin, parent_stdin) = match stdin {
+    ChildStdin::Null => (devnull_fd()?, None),
+    ChildStdin::Piped => piped_stdin()?,
+  };
+  let (child_stdout, parent_stdout) = piped_reader()?;
+  let (child_stderr, parent_stderr) = piped_reader()?;
+  Ok((
+    ChildFds { stdin: child_stdin, stdout: child_stdout, stderr: child_stderr },
+    ParentIo { stdin: parent_stdin, stdout: Some(parent_stdout), stderr: Some(parent_stderr) },
+  ))
+}
+
+fn piped_stdin() -> io::Result<(OwnedFd, Option<AgentPipeWriter>)> {
+  let (child_read, parent_write) = pipe_pair()?;
+  set_nonblocking(parent_write.as_raw_fd())?;
+  Ok((child_read, Some(AgentPipeWriter::new(parent_write)?)))
+}
+
+fn piped_reader() -> io::Result<(OwnedFd, AgentPipeReader)> {
+  let (parent_read, child_write) = pipe_pair()?;
+  set_nonblocking(parent_read.as_raw_fd())?;
+  Ok((child_write, AgentPipeReader::new(parent_read)?))
+}
+
+fn pipe_pair() -> io::Result<(OwnedFd, OwnedFd)> {
+  let mut fds = [-1; 2];
+  if unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) } == -1 {
+    return Err(io::Error::last_os_error());
+  }
+  let read = unsafe { OwnedFd::from_raw_fd(fds[0]) };
+  let write = unsafe { OwnedFd::from_raw_fd(fds[1]) };
+  Ok((ensure_fd_above_stdio(read)?, ensure_fd_above_stdio(write)?))
+}
+
+fn devnull_fd() -> io::Result<OwnedFd> {
+  OpenOptions::new()
+    .read(true)
+    .open("/dev/null")
+    .and_then(|file| ensure_fd_above_stdio(unsafe { OwnedFd::from_raw_fd(file.into_raw_fd()) }))
+}
+
+fn set_nonblocking(fd: RawFd) -> io::Result<()> {
+  let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+  if flags == -1 {
+    return Err(io::Error::last_os_error());
+  }
+  if unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1 {
+    return Err(io::Error::last_os_error());
+  }
+  Ok(())
+}
+
+fn c_string(bytes: &[u8]) -> io::Result<CString> {
+  CString::new(bytes).map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))
+}
+
+fn ensure_fd_above_stdio(fd: OwnedFd) -> io::Result<OwnedFd> {
+  if fd.as_raw_fd() > libc::STDERR_FILENO {
+    return Ok(fd);
+  }
+  duplicate_cloexec(fd.as_raw_fd(), libc::STDERR_FILENO + 1)
+}
+
+fn clone_vfork_exec(prepared: PreparedSpawn) -> io::Result<VforkOutcome> {
+  let mut argv = prepared.argv.iter().map(|value| value.as_ptr()).collect::<Vec<_>>();
+  let mut envp = prepared.envp.iter().map(|value| value.as_ptr()).collect::<Vec<_>>();
+  let exec_paths = prepared.exec_paths.iter().map(|value| value.as_ptr()).collect::<Vec<_>>();
+  argv.push(std::ptr::null());
+  envp.push(std::ptr::null());
+  let (report_read, report_base_write) = pipe_pair()?;
+  let report_write = duplicate_cloexec(report_base_write.as_raw_fd(), 10)?;
+  drop(report_base_write);
+  let stack_size = 256 * 1024;
+  let stack = unsafe {
+    libc::mmap(
+      std::ptr::null_mut(),
+      stack_size,
+      libc::PROT_READ | libc::PROT_WRITE,
+      libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_STACK,
+      -1,
+      0,
+    )
+  };
+  if stack == libc::MAP_FAILED {
+    return Err(io::Error::last_os_error());
+  }
+  let mut oldmask: libc::sigset_t = unsafe { std::mem::zeroed() };
+  let mut all_signals: libc::sigset_t = unsafe { std::mem::zeroed() };
+  if unsafe { libc::sigfillset(&mut all_signals) } == -1 {
+    unsafe { libc::munmap(stack, stack_size) };
+    return Err(io::Error::last_os_error());
+  }
+  let mask_result = unsafe { libc::pthread_sigmask(libc::SIG_BLOCK, &all_signals, &mut oldmask) };
+  if mask_result != 0 {
+    unsafe { libc::munmap(stack, stack_size) };
+    return Err(io::Error::from_raw_os_error(mask_result));
+  }
+  let mut args = ChildSetupArgs {
+    argv: argv.as_ptr(),
+    envp: envp.as_ptr(),
+    exec_paths: exec_paths.as_ptr(),
+    exec_path_count: exec_paths.len(),
+    cwd: prepared.cwd.as_ref().map_or(std::ptr::null(), |path| path.as_ptr()),
+    cgroup_path: prepared.cgroup_path.as_ref().map_or(std::ptr::null(), |path| path.as_ptr()),
+    stdin_fd: prepared.fds.stdin.as_raw_fd(),
+    stdout_fd: prepared.fds.stdout.as_raw_fd(),
+    stderr_fd: prepared.fds.stderr.as_raw_fd(),
+    report_fd: report_write.as_raw_fd(),
+    parent_pid: unsafe { libc::getpid() },
+    pdeath_signal: prepared.pdeath_signal.unwrap_or(0),
+    child_nice: prepared.child_nice,
+    oldmask,
+  };
+  let flags = libc::CLONE_VM | libc::CLONE_VFORK | libc::SIGCHLD;
+  #[cfg(test)]
+  let clone_calls = 1;
+  let pid = unsafe {
+    libc::clone(child_main, (stack as *mut u8).add(stack_size).cast(), flags, (&mut args as *mut ChildSetupArgs).cast())
+  };
+  let clone_error = io::Error::last_os_error();
+  let restore_result = unsafe { libc::pthread_sigmask(libc::SIG_SETMASK, &oldmask, std::ptr::null_mut()) };
+  unsafe { libc::munmap(stack, stack_size) };
+  drop(report_write);
+  if restore_result != 0 {
+    if pid > 0 {
+      unsafe { libc::kill(pid, libc::SIGKILL) };
+      reap_pid(pid as u32);
+    }
+    return Err(io::Error::from_raw_os_error(restore_result));
+  }
+  if pid == -1 {
+    return Err(clone_error);
+  }
+  let error_number = match read_spawn_error(report_read.as_raw_fd()) {
+    Ok(error_number) => error_number,
+    Err(error) => {
+      unsafe { libc::kill(pid, libc::SIGKILL) };
+      reap_pid(pid as u32);
+      return Err(error);
+    }
+  };
+  if let Some(error_number) = error_number {
+    reap_pid(pid as u32);
+    return Err(io::Error::from_raw_os_error(error_number));
+  }
+  Ok(VforkOutcome {
+    pid: pid as u32,
+    #[cfg(test)]
+    clone_calls,
+    #[cfg(test)]
+    clone_flags: flags,
+  })
+}
+
+fn duplicate_cloexec(fd: RawFd, minimum: RawFd) -> io::Result<OwnedFd> {
+  let duplicate = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, minimum) };
+  if duplicate == -1 {
+    return Err(io::Error::last_os_error());
+  }
+  Ok(unsafe { OwnedFd::from_raw_fd(duplicate) })
+}
+
+fn read_spawn_error(fd: RawFd) -> io::Result<Option<libc::c_int>> {
+  let mut errno_bytes = [0u8; std::mem::size_of::<libc::c_int>()];
+  let mut read = 0;
+  while read < errno_bytes.len() {
+    let count = unsafe { libc::read(fd, errno_bytes[read..].as_mut_ptr().cast(), errno_bytes.len() - read) };
+    if count == 0 {
+      return if read == 0 {
+        Ok(None)
+      } else {
+        Err(io::Error::new(io::ErrorKind::UnexpectedEof, "agent spawn error pipe ended mid-errno"))
+      };
+    }
+    if count == -1 {
+      let error = io::Error::last_os_error();
+      if error.kind() == io::ErrorKind::Interrupted {
+        continue;
+      }
+      return Err(error);
+    }
+    read += count as usize;
+  }
+  Ok(Some(libc::c_int::from_ne_bytes(errno_bytes)))
+}
+
+extern "C" fn child_main(argument: *mut libc::c_void) -> libc::c_int {
+  let args = unsafe { &*(argument.cast::<ChildSetupArgs>()) };
   unsafe {
-    command.as_std_mut().pre_exec(move || {
-      if libc::setsid() == -1 {
-        return Err(io::Error::last_os_error());
+    if args.pdeath_signal != 0 {
+      if libc::prctl(libc::PR_SET_PDEATHSIG, args.pdeath_signal as libc::c_ulong, 0, 0, 0) == -1 {
+        report_spawn_error(args, current_errno());
       }
-      if let Some(signal) = pdeathsig {
-        if libc::prctl(libc::PR_SET_PDEATHSIG, signal as libc::c_ulong, 0, 0, 0) == -1 {
-          return Err(io::Error::last_os_error());
-        }
-        if libc::getppid() != parent_pid {
-          libc::kill(libc::getpid(), libc::SIGKILL);
-          return Err(io::Error::other("parent exited during child setup"));
-        }
+      if libc::getppid() != args.parent_pid {
+        report_spawn_error(args, libc::EPERM);
       }
-      match setup {
-        SpawnSetup::ChildSideTurnTree => {
-          *libc::__errno_location() = 0;
-          if libc::nice(TURN_TREE_NICE) == -1 && *libc::__errno_location() != 0 {
-            return Err(io::Error::last_os_error());
-          }
-          if let Some(cgroup) = &cgroup {
-            cgroup::move_current_process_to_cgroup(cgroup)?;
-          }
-        }
-        SpawnSetup::ChildSideCgroup => {
-          if let Some(cgroup) = &cgroup {
-            cgroup::move_current_process_to_cgroup(cgroup)?;
-          }
-        }
-        SpawnSetup::ParentSideTurnTree | SpawnSetup::None => {}
+    }
+    if libc::setsid() == -1 {
+      report_spawn_error(args, current_errno());
+    }
+    if args.child_nice {
+      *libc::__errno_location() = 0;
+      if libc::nice(TURN_TREE_NICE) == -1 && current_errno() != 0 {
+        report_spawn_error(args, current_errno());
       }
-      Ok(())
-    });
+    }
+    if !args.cgroup_path.is_null() {
+      move_child_to_cgroup(args, args.cgroup_path);
+    }
+    if libc::dup2(args.stdin_fd, libc::STDIN_FILENO) == -1
+      || libc::dup2(args.stdout_fd, libc::STDOUT_FILENO) == -1
+      || libc::dup2(args.stderr_fd, libc::STDERR_FILENO) == -1
+    {
+      report_spawn_error(args, current_errno());
+    }
+    libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    libc::signal(libc::SIGXFSZ, libc::SIG_DFL);
+    if libc::syscall(libc::SYS_close_range, 3u32, (args.report_fd - 1) as u32, 0u32) == -1
+      || libc::syscall(libc::SYS_close_range, (args.report_fd + 1) as u32, u32::MAX, 0u32) == -1
+    {
+      report_spawn_error(args, current_errno());
+    }
+    if !args.cwd.is_null() && libc::chdir(args.cwd) == -1 {
+      report_spawn_error(args, current_errno());
+    }
+    if libc::sigprocmask(libc::SIG_SETMASK, &args.oldmask, std::ptr::null_mut()) == -1 {
+      report_spawn_error(args, current_errno());
+    }
+    let mut denied = false;
+    let mut index = 0;
+    while index < args.exec_path_count {
+      libc::execve(*args.exec_paths.add(index), args.argv, args.envp);
+      let error = current_errno();
+      if error == libc::EACCES {
+        denied = true;
+      } else if error != libc::ENOENT && error != libc::ENOTDIR {
+        report_spawn_error(args, error);
+      }
+      index += 1;
+    }
+    report_spawn_error(args, if denied { libc::EACCES } else { libc::ENOENT });
+  }
+}
+
+unsafe fn report_spawn_error(args: &ChildSetupArgs, errno: libc::c_int) -> ! {
+  unsafe {
+    libc::write(args.report_fd, (&errno as *const libc::c_int).cast(), std::mem::size_of_val(&errno));
+    libc::_exit(127);
+  }
+}
+
+unsafe fn move_child_to_cgroup(args: &ChildSetupArgs, path: *const libc::c_char) {
+  unsafe {
+    let fd = libc::open(path, libc::O_WRONLY | libc::O_CLOEXEC);
+    if fd == -1 {
+      report_spawn_error(args, current_errno());
+    }
+    let mut pid = libc::getpid() as u32;
+    let mut digits = [0u8; 10];
+    let mut start = digits.len();
+    loop {
+      start -= 1;
+      digits[start] = b'0' + (pid % 10) as u8;
+      pid /= 10;
+      if pid == 0 {
+        break;
+      }
+    }
+    let count = libc::write(fd, digits[start..].as_ptr().cast(), digits.len() - start);
+    let write_error = if count < 0 {
+      Some(current_errno())
+    } else if count as usize != digits.len() - start {
+      Some(libc::EIO)
+    } else {
+      None
+    };
+    libc::close(fd);
+    if let Some(errno) = write_error {
+      report_spawn_error(args, errno);
+    }
+  }
+}
+
+unsafe fn current_errno() -> libc::c_int {
+  unsafe { *libc::__errno_location() }
+}
+
+fn reap_process(pid: u32, sender: watch::Sender<Option<Result<libc::c_int, libc::c_int>>>) {
+  let mut status = 0;
+  loop {
+    let result = unsafe { libc::waitpid(pid as libc::pid_t, &mut status, 0) };
+    if result == pid as libc::pid_t {
+      sender.send_replace(Some(Ok(status)));
+      return;
+    }
+    let error = io::Error::last_os_error();
+    if error.kind() == io::ErrorKind::Interrupted {
+      continue;
+    }
+    let errno = error.raw_os_error().expect("waitpid errors have an OS errno");
+    tracing::error!(target: "charliebot_agents", pid, error = %error, "agent_child_wait_failed");
+    sender.send_replace(Some(Err(errno)));
+    return;
+  }
+}
+
+fn reap_pid(pid: u32) {
+  let mut status = 0;
+  loop {
+    let result = unsafe { libc::waitpid(pid as libc::pid_t, &mut status, 0) };
+    if result == pid as libc::pid_t {
+      return;
+    }
+    let error = io::Error::last_os_error();
+    if error.kind() == io::ErrorKind::Interrupted {
+      continue;
+    }
+    tracing::warn!(target: "charliebot_agents", pid, error = %error, "agent_child_reap_failed");
+    return;
   }
 }
 
@@ -369,7 +938,7 @@ where
   Ok((spawned, identity))
 }
 
-pub(crate) async fn wait_until_stopped(child: &mut Child) -> io::Result<()> {
+pub(crate) async fn wait_until_stopped(child: &mut AgentChild) -> io::Result<()> {
   let pid = child.id().expect("spawned child has a process id");
   let process = Pid::from_raw(i32::try_from(pid).expect("process id fits pid_t"));
   let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
@@ -538,7 +1107,7 @@ mod tests {
     (base, procs)
   }
 
-  async fn stop_child(child: &mut Child, guard: &mut ProcessGroupGuard) {
+  async fn stop_child(child: &mut AgentChild, guard: &mut ProcessGroupGuard) {
     assert_ne!(unsafe { libc::kill(-guard.process_group, libc::SIGKILL) }, -1);
     child.wait().await.unwrap();
     guard.disarm();
@@ -603,6 +1172,20 @@ mod tests {
     assert_eq!(spawned.child.wait().await.unwrap().code(), Some(0));
     assert_eq!(out_bytes, b"out\n");
     assert_eq!(err_bytes, b"err\n");
+  }
+
+  #[tokio::test]
+  async fn parent_death_spawn_uses_one_shared_vm_vfork_clone() {
+    let root = tempfile::tempdir().unwrap();
+    let mut command = spec("true", &[], root.path());
+    command.env.insert("PATH".into(), "/bin:/usr/bin".into());
+    let mut spawned = spawn_piped(&command).await.unwrap();
+    let pid = spawned.child.id().unwrap();
+
+    assert_eq!(spawned.child.clone_calls, 1);
+    assert_eq!(spawned.child.clone_flags & (libc::CLONE_VM | libc::CLONE_VFORK), libc::CLONE_VM | libc::CLONE_VFORK);
+    assert_eq!(unsafe { libc::getsid(pid as libc::pid_t) }, pid as libc::pid_t);
+    assert_eq!(spawned.child.wait().await.unwrap().code(), Some(0));
   }
 
   #[tokio::test]

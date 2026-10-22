@@ -83,12 +83,15 @@ pub fn read(path: &Path, _account: &str, previous: Option<&str>) -> anyhow::Resu
   let floor = stored.map_or(0, |(_, floor)| floor);
   let mut statement = connection
     .prepare("select id, session_id, data from session_message where type = 'assistant' and time_updated >= ?")?;
-  let rows = statement
-    .query_map([floor], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)))?
-    .collect::<rusqlite::Result<Vec<_>>>()?;
   let mut records = Vec::new();
-  for (message_id, session_id, data) in &rows {
-    records.extend(record(message_id, session_id, data)?);
+  // Match `src/backends/opencode/usage_logs.py:131-140`: consume each SQLite row while building its records.
+  let rows = statement
+    .query_map([floor], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)))?;
+  for row in rows {
+    let (message_id, session_id, data) = row?;
+    if let Some(record) = record(&message_id, &session_id, &data)? {
+      records.push(record);
+    }
   }
   Ok((format!("{state}:{max_updated}"), records))
 }

@@ -14,7 +14,6 @@ use futures_util::future::BoxFuture;
 use nix::sys::signal::Signal;
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
-use tokio::process::{Child, ChildStderr, ChildStdout};
 
 use super::options::CodexOptions;
 use super::text::truthy;
@@ -23,7 +22,7 @@ use crate::cli_base::prepend_path_dir;
 use crate::one_shot::{assistant_text, frame_system_prompt};
 use crate::transport::cgroup::{SessionCgroupLimits, system_cgroup_base_dir};
 use crate::transport::kill::{kill_process_group, python_exit_code};
-use crate::transport::spawn::{SpawnSpec, SpawnedChild, spawn_one_shot};
+use crate::transport::spawn::{AgentChild, AgentPipeReader, SpawnSpec, SpawnedChild, spawn_one_shot};
 
 /// The instructions file a manager turn writes into its session cwd, which Codex auto-detects.
 pub const INSTRUCTIONS_FILE_NAME: &str = "AGENTS.md";
@@ -270,8 +269,8 @@ pub fn toml_basic_string(text: &str) -> String {
 
 /// Reads the one-shot's stdout to its end. Returns the assistant text, the first structured error and the exit code.
 async fn collect(
-  child: &mut Child,
-  stdout: ChildStdout,
+  child: &mut AgentChild,
+  stdout: AgentPipeReader,
   translator: &mut CodexTranslator,
 ) -> anyhow::Result<(String, Option<String>, i32)> {
   let mut parts = Vec::new();
@@ -319,7 +318,7 @@ fn parse_line(line: &str) -> Option<Value> {
 }
 
 /// Reads the whole stderr so the child never blocks on a full pipe, and keeps its first bytes.
-async fn read_bounded_stderr(mut stderr: ChildStderr) -> anyhow::Result<Vec<u8>> {
+async fn read_bounded_stderr(mut stderr: AgentPipeReader) -> anyhow::Result<Vec<u8>> {
   let mut captured = Vec::new();
   let mut chunk = [0u8; 8192];
   loop {

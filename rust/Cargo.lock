@@ -242,6 +242,7 @@ dependencies = [
  "charliebot-store",
  "futures-util",
  "libc",
+ "memchr",
  "nix",
  "regex",
  "reqwest",

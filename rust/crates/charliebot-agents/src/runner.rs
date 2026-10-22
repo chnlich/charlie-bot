@@ -17,7 +17,6 @@ use charliebot_store::run_records::{RAW_LOG_NAME, STDERR_LOG_NAME};
 use futures_util::future::BoxFuture;
 use serde_json::Value;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::process::Child;
 use tokio::sync::watch;
 
 use crate::agent_environment::AgentBaseEnvironment;
@@ -27,7 +26,7 @@ use crate::transport::follow::{self, FollowSummary};
 use crate::transport::identity::{self, ProcessIdentity};
 use crate::transport::kill::{self, python_exit_code};
 use crate::transport::rotation::rotate_stale_transport;
-use crate::transport::spawn::{self, RawStdin, SpawnSpec};
+use crate::transport::spawn::{self, AgentChild, RawStdin, SpawnSpec};
 
 pub const DEFAULT_POST_RESULT_TIMEOUT: Duration = Duration::from_secs(90);
 pub const DEFAULT_CLEANUP_TIMEOUT: Duration = Duration::from_secs(30);
@@ -600,7 +599,7 @@ struct SpawnGate {
 }
 
 impl SpawnGate {
-  fn arm(child: &Child) -> Self {
+  fn arm(child: &AgentChild) -> Self {
     Self { child: identity::pin_process_identity(child.id().expect("spawned child has a process id")), opened: false }
   }
 
@@ -627,7 +626,7 @@ impl Drop for SpawnGate {
   }
 }
 
-async fn wait_until_stopped_or_terminate(child: &mut Child) -> anyhow::Result<()> {
+async fn wait_until_stopped_or_terminate(child: &mut AgentChild) -> anyhow::Result<()> {
   if let Err(wait_error) = spawn::wait_until_stopped(child).await {
     kill::terminate_child(child)
       .await
@@ -637,7 +636,7 @@ async fn wait_until_stopped_or_terminate(child: &mut Child) -> anyhow::Result<()
   Ok(())
 }
 
-async fn reap_child(mut child: Child, sender: watch::Sender<Option<Result<i32, String>>>) {
+async fn reap_child(mut child: AgentChild, sender: watch::Sender<Option<Result<i32, String>>>) {
   let result = child.wait().await.map(python_exit_code).map_err(|error| error.to_string());
   sender.send_replace(Some(result));
 }

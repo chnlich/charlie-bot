@@ -8,7 +8,8 @@
 # setsid, because stopping the old server ends the master turn that started this command. The command prints the log
 # path, waits for the verdict and exits with it: 0 when the readback and the probe turn passed; 2 when the switch
 # failed and the previous implementation serves again; 3 when the restore failed too, and the log ends with the state
-# the server is in.
+# the server is in. When the pane stays busy after Ctrl-C, the restore sends SIGTERM, then SIGKILL, to the server
+# processes under the pane.
 #
 # The probe turn runs last, in a session of its own. It passes once the run records its first assistant output (a
 # message or a tool call) or ends success. The archive then stops every run of the session that has not ended, and
@@ -17,9 +18,10 @@
 #
 # Environment: CHARLIEBOT_HOME (default ~/.charliebot), CHARLIEBOT_RELEASES_DIR (default ~/charliebot-releases),
 # CHARLIEBOT_LOG_DIR (default /tmp/charliebot-logs), CHARLIEBOT_TMUX_SOCKET (a tmux -L socket; unset means the default
-# server, where the production pane runs). CHARLIEBOT_SWITCH_STOP_WAIT_S and CHARLIEBOT_SWITCH_READY_WAIT_S replace the
-# 60 s and 15 min waits. CHARLIEBOT_SWITCH_PROBE_WAIT_S and CHARLIEBOT_SWITCH_PROBE_CANCEL_WAIT_S replace the 300 s
-# and 60 s probe waits. The tests shorten all four.
+# server, where the production pane runs). CHARLIEBOT_SWITCH_CTRL_C_WAIT_S, CHARLIEBOT_SWITCH_STOP_WAIT_S and
+# CHARLIEBOT_SWITCH_READY_WAIT_S replace the 60 s, 60 s and 15 min waits. CHARLIEBOT_SWITCH_PROBE_WAIT_S and
+# CHARLIEBOT_SWITCH_PROBE_CANCEL_WAIT_S replace the 300 s and 60 s probe waits. The tests shorten the stop, ready and
+# probe waits.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -28,6 +30,7 @@ HOME_DIR="${CHARLIEBOT_HOME:-$HOME/.charliebot}"
 RELEASES_DIR="${CHARLIEBOT_RELEASES_DIR:-$HOME/charliebot-releases}"
 LOG_DIR="${CHARLIEBOT_LOG_DIR:-/tmp/charliebot-logs}"
 CURRENT="$RELEASES_DIR/current"
+CTRL_C_WAIT_S="${CHARLIEBOT_SWITCH_CTRL_C_WAIT_S:-60}"
 STOP_WAIT_S="${CHARLIEBOT_SWITCH_STOP_WAIT_S:-60}"
 READY_WAIT_S="${CHARLIEBOT_SWITCH_READY_WAIT_S:-900}"
 PROBE_WAIT_S="${CHARLIEBOT_SWITCH_PROBE_WAIT_S:-300}"
@@ -662,6 +665,66 @@ preflight() {
   log "preflight passed: $OLD_IMPL -> $WANT; clone at $OLD_SHA; pane $PANE; port $PORT"
 }
 
+# server_running PID: PID runs a server, as impl_of_pid names it. A zombie has no argv, so it counts as stopped.
+server_running() {
+  local impl
+  impl="$(impl_of_pid "$1")"
+  [ "$impl" = python ] || [[ "$impl" == rust* ]]
+}
+
+# servers_gone PID...: succeeds once no PID runs a server.
+servers_gone() {
+  local pid
+  for pid in "$@"; do
+    server_running "$pid" && return 1
+  done
+  return 0
+}
+
+# alive_servers PID...: prints the PIDs that still run a server.
+alive_servers() {
+  local pid
+  for pid in "$@"; do
+    if server_running "$pid"; then echo "$pid"; fi
+  done
+}
+
+# signal_servers SIGNAL PID...: sends SIGNAL to each PID that still runs a server, so a recycled PID is never signaled.
+signal_servers() {
+  local sig=$1 pid
+  shift
+  for pid in "$@"; do
+    if server_running "$pid"; then kill "-$sig" "$pid" 2> /dev/null; fi
+  done
+}
+
+# server_pids_under PID: the server processes under PID, one per line, parents before children.
+server_pids_under() {
+  local child
+  for child in $(pgrep -P "$1"); do
+    if server_running "$child"; then echo "$child"; fi
+    server_pids_under "$child"
+  done
+}
+
+# escalate_pane: the pane is busy after Ctrl-C. Each server process under the pane gets SIGTERM and STOP_WAIT_S to exit;
+# each survivor gets SIGKILL and 10 s; the pane must then go idle within 10 s.
+escalate_pane() {
+  local -a pids survivors
+  mapfile -t pids < <(server_pids_under "$PANE_PID")
+  log "pane $PANE is busy after Ctrl-C; server pid(s) under it: ${pids[*]:-none}"
+  log "SIGTERM to pid(s) ${pids[*]:-none}; ${STOP_WAIT_S}s budget"
+  signal_servers TERM "${pids[@]}"
+  if ! poll "$STOP_WAIT_S" servers_gone "${pids[@]}"; then
+    mapfile -t survivors < <(alive_servers "${pids[@]}")
+    log "pid(s) ${survivors[*]} survived SIGTERM; SIGKILL, 10s budget"
+    signal_servers KILL "${survivors[@]}"
+    poll 10 servers_gone "${survivors[@]}"
+  fi
+  wait_pane_idle 10 || return 1
+  log "pane $PANE is idle"
+}
+
 # restore_failed: the state the server is in, then exit 3.
 restore_failed() {
   local head
@@ -679,7 +742,9 @@ restore() {
   log "restoring $OLD_IMPL at $OLD_SHA"
   if { [ "$OLD_STOPPED" = 1 ] || [ "$NEW_STARTED" = 1 ]; } && pane_busy; then
     tm send-keys -t "$PANE" C-c
-    wait_pane_idle 60 || restore_failed "the pane's launcher did not exit after Ctrl-C"
+    if ! wait_pane_idle "$CTRL_C_WAIT_S"; then
+      escalate_pane || restore_failed "the pane's launcher did not exit after Ctrl-C, SIGTERM or SIGKILL"
+    fi
   fi
   git -C "$REPO_ROOT" reset --keep -q "$OLD_SHA" || restore_failed "git reset --keep $OLD_SHA failed"
   (cd "$REPO_ROOT" && uv sync --frozen) || restore_failed "uv sync failed at $OLD_SHA"

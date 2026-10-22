@@ -6,6 +6,9 @@ import importlib
 import inspect
 import io
 import json
+import logging
+import os
+import sys
 import time
 from collections.abc import AsyncIterator, Callable
 from typing import Any
@@ -601,6 +604,16 @@ def main() -> None:
       log_level="warning",
       timeout_graceful_shutdown=timeouts.SERVER_GRACEFUL_SHUTDOWN_TIMEOUT,
   )
+  # A stop has already finished by the time uvicorn.run returns, so the lines below end the
+  # process before interpreter finalization. Finalizing this heap takes ~20 s: _Py_Finalize's
+  # gc_collect_main walks the server's ~6.7 M tracked objects for nothing the process keeps
+  # (measured on a copy of a production index; 1.0 s with this exit). The failures a skipped
+  # finalization would cause are the buffered writers left here: the standard streams and the
+  # stdlib logging handlers, flushed in that order below.
+  sys.stdout.flush()
+  sys.stderr.flush()
+  logging.shutdown()
+  os._exit(0)
 
 
 if __name__ == "__main__":

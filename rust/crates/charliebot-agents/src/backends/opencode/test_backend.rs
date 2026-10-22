@@ -366,7 +366,13 @@ async fn heavy_server_stops_at_the_checkpoint_when_its_rss_is_above_the_limit() 
     Harness::with_settings(json!({"prompts": {"idle": {"events": [text_event("ok")]}}}), None, timeouts, None);
   let (_, _, task) = harness.start_run("idle", LaunchArgs::default(), None, vec![], Env::new());
   assert_eq!(task.await.unwrap().unwrap().exit_code, Some(0));
-  tokio::time::sleep(Duration::from_millis(30)).await;
+  tokio::time::timeout(Duration::from_secs(5), async {
+    while harness.server.heavy_check_count_test() == 0 || harness.server.process_alive() {
+      tokio::task::yield_now().await;
+    }
+  })
+  .await
+  .expect("heavy checkpoint did not stop the server before the test deadline");
   assert_eq!(harness.server.heavy_check_count_test(), 1);
   assert!(!harness.server.process_alive());
   harness.clear_finished_turn_pids();
@@ -386,7 +392,13 @@ async fn server_at_the_rss_limit_runs_on_to_the_idle_exit() {
     Harness::with_settings(json!({"prompts": {"idle": {"events": [text_event("ok")]}}}), None, timeouts, None);
   let (_, _, task) = harness.start_run("idle", LaunchArgs::default(), None, vec![], Env::new());
   assert_eq!(task.await.unwrap().unwrap().exit_code, Some(0));
-  tokio::time::sleep(Duration::from_millis(25)).await;
+  tokio::time::timeout(Duration::from_secs(5), async {
+    while harness.server.heavy_check_count_test() == 0 || !harness.server.process_alive() {
+      tokio::task::yield_now().await;
+    }
+  })
+  .await
+  .expect("heavy checkpoint did not leave the server alive before the test deadline");
   assert_eq!(harness.server.heavy_check_count_test(), 1);
   assert!(harness.server.process_alive());
   tokio::time::timeout(Duration::from_secs(2), async {

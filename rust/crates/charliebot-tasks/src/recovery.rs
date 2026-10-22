@@ -320,6 +320,7 @@ pub async fn reconcile_task_tree(
     .collect::<io::Result<Vec<PathBuf>>>()
     .with_context(|| format!("listing {}", sessions_dir.display()))?;
   session_dirs.sort();
+  tracing::info!(target: "charliebot_tasks", sessions = session_dirs.len(), "task_tree_recovery_walk_started");
   for session_dir in session_dirs {
     if stop.is_cancelled() {
       return Ok(counters);

@@ -1,5 +1,6 @@
 (function() {
   const Chat = globalThis.Chat;
+  const isErrorRow = Chat.isErrorRow;
 
 // ---------------------------------------------------------------------------
 // The For-you view: the session page's reading layer for web and worker sessions.
@@ -20,9 +21,6 @@
 const FOR_YOU = 'foryou';
 const EVERYTHING = 'everything';
 const SHOWN_ROLES = ['user', 'web_reply', 'web_reply_notice'];
-// The aggregator writes a failed turn's event as a system row whose text starts
-// with this prefix (message_aggregator.py: ASSISTANT_ERROR and ERROR).
-const ERROR_PREFIX = 'Error: ';
 // The manual view choice of each session on this page: a reload empties it, as
 // the sidebar's expanded nodes reset.
 const manualViews = new Map();
@@ -55,12 +53,8 @@ function summaryCard() {
   return summaryCardRenderer();
 }
 
-function isErrorMessage(msg) {
-  return msg.role === 'system' && String(msg.content || '').startsWith(ERROR_PREFIX);
-}
-
 function showsInForYou(msg) {
-  return SHOWN_ROLES.includes(msg.role) || isErrorMessage(msg);
+  return SHOWN_ROLES.includes(msg.role) || isErrorRow(msg);
 }
 
 // The store's entries that For you shows, in order.

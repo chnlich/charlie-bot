@@ -499,7 +499,8 @@ fn round_ms(duration: Duration) -> u64 {
   (duration.as_secs_f64() * 1000.0).round_ties_even() as u64
 }
 
-/// SIGTERM and SIGINT, installed before startup so a signal during startup stops the server once it is up.
+/// SIGTERM and SIGINT, installed before startup. A signal during startup stops startup at the next safe point, before
+/// `server_ready` is logged.
 struct StopSignal {
   terminate: tokio::signal::unix::Signal,
   interrupt: tokio::signal::unix::Signal,

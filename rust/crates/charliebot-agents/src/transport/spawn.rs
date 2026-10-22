@@ -147,13 +147,23 @@ pub struct SpawnedChild {
   pub cgroup: Option<SessionCgroup>,
 }
 
+/// The raw log path and identity of each child that `spawn_raw_log` spawned in this crate's tests. A test whose launch
+/// is dropped before the spawn returns finds its child here.
+#[cfg(test)]
+pub(crate) static TEST_RAW_LOG_CHILDREN: std::sync::Mutex<Vec<(PathBuf, ProcessIdentity)>> =
+  std::sync::Mutex::new(Vec::new());
+
 /// Spawn a detached raw-log child with inherited append-only stdout and stderr files.
-pub async fn spawn_raw_log(
+///
+/// `claim` runs on the spawning thread right after the spawn, and its value travels with the child. A caller dropped
+/// while the spawn is in flight never receives the child, and dropping that value is then the child's only cleanup.
+pub async fn spawn_raw_log<C: Send + 'static>(
   spec: &SpawnSpec,
   raw_path: &Path,
   stderr_path: &Path,
   stdin: RawStdin,
-) -> io::Result<SpawnedChild> {
+  claim: impl FnOnce(&Child) -> C + Send + 'static,
+) -> io::Result<(SpawnedChild, C)> {
   if let Some(parent) = raw_path.parent() {
     fs::create_dir_all(parent)?;
   }
@@ -172,9 +182,22 @@ pub async fn spawn_raw_log(
     .stdout(std::process::Stdio::from(raw))
     .stderr(std::process::Stdio::from(stderr));
   configure_child_setup(&mut command, None, SpawnSetup::ParentSideTurnTree, cgroup.clone());
-  let child = spawn_command(command, None).await?;
+  #[cfg(test)]
+  let test_raw_path = raw_path.to_path_buf();
+  let (child, claimed) = tokio::task::spawn_blocking(move || {
+    let child = command.spawn()?;
+    #[cfg(test)]
+    TEST_RAW_LOG_CHILDREN
+      .lock()
+      .expect("test raw-log child list is not poisoned")
+      .push((test_raw_path, identity::pin_process_identity(child.id().expect("spawned child has a process id"))));
+    let claimed = claim(&child);
+    io::Result::Ok((child, claimed))
+  })
+  .await
+  .map_err(io::Error::other)??;
   apply_turn_tree_limits(child.id().expect("spawned child has a process id"), cgroup.as_ref());
-  Ok(SpawnedChild { child, cgroup })
+  Ok((SpawnedChild { child, cgroup }, claimed))
 }
 
 /// Spawn a piped child with a new session and parent-death SIGKILL.
@@ -546,9 +569,11 @@ mod tests {
       &raw,
       &stderr,
       RawStdin::Null,
+      |_| (),
     )
     .await
-    .unwrap();
+    .unwrap()
+    .0;
     let pid = spawned.child.id().unwrap();
     assert_eq!(spawned.child.wait().await.unwrap().code(), Some(0));
     let raw_text = fs::read_to_string(&raw).unwrap();

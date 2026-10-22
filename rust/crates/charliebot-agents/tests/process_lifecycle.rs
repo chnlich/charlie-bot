@@ -140,7 +140,7 @@ async fn spawn_and_exit_helper() {
   };
   let spec = SpawnSpec::new(program, args, None, HashMap::new(), None, base, 0, 0, 0);
   let pid = if mode == "raw" {
-    let child = spawn_raw_log(&spec, &raw_path, &stderr_path, RawStdin::Null).await.unwrap().child;
+    let child = spawn_raw_log(&spec, &raw_path, &stderr_path, RawStdin::Null, |_| ()).await.unwrap().0.child;
     let pid = child.id().unwrap();
     detach(child);
     pid

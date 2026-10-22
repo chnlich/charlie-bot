@@ -345,6 +345,7 @@ async fn finish_boot_stop(
   signal_receiver: tokio::sync::oneshot::Receiver<Signal>,
 ) -> ExitCode {
   let received = signal_receiver.await.expect("the signal monitor sends the first stop signal");
+  let shutdown_started = Instant::now();
   let mut lifespan = lifespan;
   let mut writer_fence = writer_fence;
   let mut closes = None;
@@ -362,7 +363,7 @@ async fn finish_boot_stop(
         }
       }
       StopAction::LogShutdown => {
-        log_shutdown(Instant::now(), closes.take().expect("shutdown runs before its log line"), true);
+        log_shutdown(shutdown_started, closes.take().expect("shutdown runs before its log line"), true);
       }
       StopAction::RunLetGo => {
         if let Some(lifespan) = lifespan.as_deref_mut()
@@ -521,8 +522,11 @@ impl StopSignal {
 #[cfg(test)]
 mod tests {
   use std::fmt;
+  use std::path::Path;
   use std::sync::{Arc, Mutex};
 
+  use charliebot_registry::wiring::{Phase, Service, ServiceContext};
+  use futures_util::future::BoxFuture;
   use tracing::field::{Field, Visit};
   use tracing::{Event, Subscriber};
   use tracing_subscriber::layer::{Context, SubscriberExt};
@@ -654,5 +658,79 @@ mod tests {
         StopAction::ReturnStatus(1),
       ]
     );
+  }
+
+  /// How long the test service's stop takes, in milliseconds.
+  const SLOW_STOP_MS: u64 = 200;
+
+  /// A service whose stop takes `SLOW_STOP_MS`, so the shutdown line has a known delay to cover.
+  struct SlowStop;
+
+  impl Service for SlowStop {
+    fn name(&self) -> &'static str {
+      "slow_stop"
+    }
+
+    fn phase(&self) -> Phase {
+      Phase::Early
+    }
+
+    fn start<'a>(&'a self, _ctx: ServiceContext) -> BoxFuture<'a, anyhow::Result<()>> {
+      Box::pin(async { Ok(()) })
+    }
+
+    fn stop<'a>(&'a self) -> BoxFuture<'a, anyhow::Result<()>> {
+      Box::pin(async {
+        tokio::time::sleep(Duration::from_millis(SLOW_STOP_MS)).await;
+        Ok(())
+      })
+    }
+  }
+
+  fn slow_stop_package(registry: &mut charliebot_registry::Registry) -> Result<(), charliebot_registry::RegistryError> {
+    registry.service(Arc::new(SlowStop))
+  }
+
+  /// The feature context over the synthetic home `home`, assembled as `run` assembles it.
+  fn features_over(home: &Path, registry: Arc<charliebot_registry::Registry>) -> Arc<FeatureContext> {
+    let cfg = registry.load_config(home).expect("the synthetic config loads");
+    Arc::new(FeatureContext {
+      config: state::config_cache(home, Arc::clone(&registry)),
+      credentials: state::credentials_cache(home),
+      store: Arc::new(store_setup::create(cfg, Arc::clone(&registry)).expect("the store opens")),
+      registry,
+      startup: Arc::new(StartupState::with_stop(StartupStop::default())),
+    })
+  }
+
+  #[tokio::test]
+  async fn boot_stop_shutdown_line_covers_a_slow_service_stop() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let _subscriber = tracing::subscriber::set_default(Registry::default().with(Capture(Arc::clone(&events))));
+    let home = tempfile::tempdir().expect("the synthetic home is created");
+    std::fs::write(home.path().join("config.yaml"), "").expect("the synthetic config is written");
+    let mut registry = charliebot_registry::Registry::new();
+    registry.register_package("src.features.slow_stop", slow_stop_package).expect("the test service registers");
+    let features = features_over(home.path(), Arc::new(registry));
+    let mut lifespan = match Lifespan::start(features).await.expect("the lifespan starts") {
+      StartupOutcome::Ready(lifespan) => lifespan,
+      StartupOutcome::Stopped(_) => panic!("startup stopped without a stop signal"),
+    };
+
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    sender.send(Signal::SIGINT).expect("the boot stop receives the signal");
+    finish_boot_stop(Some(&mut lifespan), None, receiver).await;
+
+    let events = events.lock().unwrap();
+    let shutdown = events
+      .iter()
+      .find(|event| event.iter().any(|(name, value)| name == "message" && value == "charliebot_shutdown"))
+      .expect("the boot stop logs its shutdown line");
+    let shutdown_ms = shutdown
+      .iter()
+      .find_map(|(name, value)| (name == "shutdown_ms").then_some(value))
+      .expect("the shutdown line has a shutdown_ms field");
+    let shutdown_ms: u64 = shutdown_ms.parse().expect("shutdown_ms is a whole number of milliseconds");
+    assert!(shutdown_ms >= SLOW_STOP_MS, "shutdown_ms {shutdown_ms} does not cover the {SLOW_STOP_MS} ms stop");
   }
 }

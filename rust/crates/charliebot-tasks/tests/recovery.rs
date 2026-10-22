@@ -520,7 +520,7 @@ fn release_at_teardown(hold: &'static Hold, runtime: tokio::runtime::Handle, lim
 }
 
 /// A worker under a manager whose input the stack dispatched, as a trigger that the boot recovers dispatches it. The
-/// run's launch is in flight.
+/// run's launch is in flight, or refused when the dispatch came after the let-go.
 struct DispatchedWorker {
   stack: Stack,
   manager_id: String,
@@ -528,8 +528,9 @@ struct DispatchedWorker {
   run_id: String,
 }
 
-/// Dispatch a worker's first input on a stack whose one option is `backend_type` running `script`.
-async fn dispatched_worker(backend_type: &str, script: &str) -> anyhow::Result<DispatchedWorker> {
+/// Dispatch a worker's first input on a stack whose one option is `backend_type` running `script`. With `after_let_go`
+/// the stack's let-go step runs first, as a dispatch that comes once the server's stop has begun.
+async fn dispatched_worker(backend_type: &str, script: &str, after_let_go: bool) -> anyhow::Result<DispatchedWorker> {
   let option = BackendOption { backend_type: backend_type.to_string(), ..script_option(BACKEND_ID, script) };
   let stack =
     Stack::start_with_package(vec![option], vec![BACKEND_ID.to_string()], ("test.held_backends", register_held_types))
@@ -538,6 +539,9 @@ async fn dispatched_worker(backend_type: &str, script: &str) -> anyhow::Result<D
   let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
   let worker = stack.node("worker", Some(&manager.id), TaskProfile::Worker, Some(script_run_spec())).await?;
   stack.dispatch.admit_input(&worker.id, event_types::USER, "Start the task.", "user", json!({})).await?;
+  if after_let_go {
+    recovery::let_go_step(Arc::clone(&stack.features)).await?;
+  }
   let decision = stack.dispatch.dispatch_pending(&worker.id).await?;
   let run_id = decision["run_id"].as_str().with_context(|| format!("the dispatch names no run: {decision}"))?;
   Ok(DispatchedWorker { stack, manager_id: manager.id, worker_id: worker.id, run_id: run_id.to_string() })
@@ -606,7 +610,7 @@ async fn boot_after_cut(
 fn a_launch_the_stop_cuts_before_its_agent_starts_runs_at_the_next_boot() -> anyhow::Result<()> {
   let runtime = server_runtime()?;
   let cut = runtime.block_on(async {
-    let cut = dispatched_worker(HELD_BUILD_TYPE, &result_script("never runs")).await?;
+    let cut = dispatched_worker(HELD_BUILD_TYPE, &result_script("never runs"), false).await?;
     settle_until(|| Ok(BUILD_HOLD.entered())).await?;
     anyhow::Ok(cut)
   })?;
@@ -626,6 +630,34 @@ fn a_launch_the_stop_cuts_before_its_agent_starts_runs_at_the_next_boot() -> any
   })
 }
 
+/// A launch requested after the let-go began starts no task. Its run keeps the state that Python's launch task leaves
+/// when `asyncio.run` cancels it before its first step (`task_execution.py:522`, `:731`; `asyncio/runners.py:72`): the
+/// run registered with its input claimed, no process, no terminal fact, and an open task. The next boot's dispatch
+/// launches it once.
+#[test]
+fn a_launch_requested_after_the_let_go_runs_once_at_the_next_boot() -> anyhow::Result<()> {
+  let log = LogCapture::default();
+  let _capture = log.install();
+  let runtime = server_runtime()?;
+  let refused = runtime.block_on(dispatched_worker(BACKEND_TYPE, &result_script("never runs"), true))?;
+  drop(runtime);
+  let logged = log.text();
+  assert!(logged.contains("run_launch_after_let_go"), "the launch after the let-go was not refused: {logged}");
+
+  let run =
+    refused.stack.store().read_run_sync(&refused.worker_id, &refused.run_id)?.context("the refused run is recorded")?;
+  assert_eq!((run.pid, run.started_at, run.ended_at, run.exit_code), (None, None, None, None), "{run:?}");
+  assert!(!run.input_event_ids.is_empty(), "the refused run keeps its claimed input: {run:?}");
+  assert_cut_launch_facts(&refused)?;
+
+  server_runtime()?.block_on(async {
+    let guard = ProcessGroupGuard::new();
+    let scripts = Scripts::new(vec![result_script("launched at the next boot"), result_script("report noted")]);
+    boot_after_cut(&refused, &scripts, &guard, |_| Ok(())).await?;
+    anyhow::Ok(())
+  })
+}
+
 /// A launch whose agent runs when the server stops. Python's cancel leaves the agent running, with its process
 /// identity recorded and no terminal fact (`agent_process/base.py:994-1012`). The next boot re-attaches the run, and
 /// the agent's own result ends it (`_reconcile_node` step 2).
@@ -641,7 +673,7 @@ fn a_launch_the_stop_cuts_while_its_agent_runs_is_reattached_at_the_next_boot() 
   );
   let runtime = server_runtime()?;
   let cut = runtime.block_on(async {
-    let cut = dispatched_worker(HELD_TRANSLATE_TYPE, &script).await?;
+    let cut = dispatched_worker(HELD_TRANSLATE_TYPE, &script, false).await?;
     settle_until(|| Ok(TRANSLATE_HOLD.entered())).await?;
     anyhow::Ok(cut)
   })?;

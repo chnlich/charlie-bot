@@ -2,6 +2,7 @@
 (function() {
   const Chat = globalThis.Chat;
   const formatBubbleTime = Chat.formatBubbleTime;
+  const escapeHtmlAttr = Chat.escapeHtmlAttr;
 
 function getUploadedFileDisplayName(file) {
   if (file && file.filename) return file.filename;
@@ -78,9 +79,13 @@ function registerInputMode(mode, badgeHtml) {
   inputModeBadges.set(mode, badgeHtml);
 }
 
-function renderUserMessageBubble(content, inputMode, timestamp, uploadedFiles) {
+function renderUserMessageBubble(content, inputMode, timestamp, uploadedFiles, requestId, deliveryStatus) {
   const normalized = normalizeUserMessage(content, uploadedFiles);
   const timeHtml = timestamp ? '<div class="text-[10px] text-slate-400/60 mt-1">' + formatBubbleTime(timestamp) + '</div>' : '';
+  const deliveryHtml = requestId && deliveryStatus
+    ? '<div class="text-[10px] mt-1"><span id="message-delivery-' + escapeHtmlAttr(requestId)
+      + '" class="text-slate-400/60">' + escapeHtml(deliveryStatus) + '</span></div>'
+    : '';
   const textHtml = normalized.content
     ? `<div class="whitespace-pre-wrap">${escapeHtml(normalized.content)}</div>`
     : '';
@@ -92,6 +97,7 @@ function renderUserMessageBubble(content, inputMode, timestamp, uploadedFiles) {
     + textHtml
     + attachmentsHtml
     + timeHtml
+    + deliveryHtml
     + '</div>';
 }
 

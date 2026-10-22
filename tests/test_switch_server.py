@@ -127,7 +127,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
     self._route("DELETE")
 
   def _route(self, method):
-    self.rfile.read(int(self.headers.get("Content-Length") or 0))
+    request_body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+    request_json = json.loads(request_body) if request_body else {}
     if self.headers.get("Authorization") != f"Bearer {KEY}":
       return self._reply(401, {"detail": "unauthorized"})
     if method == "GET" and self.path == "/api/internal/version":
@@ -137,6 +138,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
     if method == "POST" and self.path == "/api/sessions/":
       return self._reply(200, {"id": PROBE_SESSION})
     if method == "POST" and re.fullmatch(r"/api/chat/[^/]+/message", self.path):
+      if not request_json.get("request_id"):
+        return self._reply(422, {"detail": "request_id is required"})
       if BEHAVIOR["message_status"] != 202:
         return self._reply(BEHAVIOR["message_status"], {"detail": "message refused"})
       RUNS.append({"id": "probe-run", "state": BEHAVIOR["run_state"]})

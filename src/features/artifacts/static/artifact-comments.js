@@ -1426,9 +1426,10 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       sendBtn.disabled = true;
       sendBtn.textContent = 'Sending';
       try {
-        await postCommentMessage(resolveTargetSessionId(), buildBatchMessage(ordered));
+        var result = await postCommentMessage(resolveTargetSessionId(), buildBatchMessage(ordered));
         resetPending();
-        showToast(count + ' comments sent to chat', false);
+        if (result.dispatch_error) showToast(result.dispatch_error, true);
+        else showToast(count + ' comments sent to chat', false);
       } catch (err) {
         console.error('Batch comment send failed:', err);
         showToast(err.message, true);

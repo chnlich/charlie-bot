@@ -15,6 +15,7 @@ const COMMENT_POST_JS = readStatic('comment_post.js');
 
 function loadArtifactCommentsContext(opts = {}) {
   const listeners = [];
+  let requestSequence = 0;
   const window = {
     location: {pathname: opts.pathname, hash: opts.hash || ''},
     innerWidth: opts.innerWidth !== undefined ? opts.innerWidth : 1024,
@@ -76,6 +77,8 @@ function loadArtifactCommentsContext(opts = {}) {
     fetch: opts.fetch || function () {
       throw new Error('fetch should not run while loading artifact-comments.js');
     },
+    crypto: {randomUUID: () => `artifact-comment-request-${++requestSequence}`},
+    setTimeout: (callback) => { callback(); return 1; },
   };
   if (opts.sessionStorage !== undefined) {
     context.sessionStorage = opts.sessionStorage;

@@ -4,7 +4,7 @@
 // input-work window voice opens for each transcription. Thinking state never
 // writes the button, so a
 // master run leaves it sendable; each optimistic send's server echo is skipped
-// exactly once via the pendingUserEchoes count. Driven through the real chat,
+// by request id. Driven through the real chat,
 // sidebar, websocket, file-upload and voice-input modules on the
 // session_context_stub harness, in the style of chat_attachments_render.test.js
 // (send button as an attribute-map fake) and voice_input_run.test.js (fake XHR).
@@ -93,6 +93,8 @@ function buildLockHarness() {
   context.eventCursor = 0;
   context.window = Object.assign(context.window, {removeEventListener() {}});
   context.XMLHttpRequest = FakeVoiceXhr;
+  let requestSequence = 0;
+  context.crypto = {randomUUID: () => `request-${++requestSequence}`};
   context.FormData = class {
     append() {}
     get() { return null; }
@@ -125,7 +127,7 @@ function buildLockHarness() {
   // lexical bindings shadow any context property, so tests claim and read them
   // from inside the context.
   context.__claimVoiceRun = vm.runInContext('(run) => { activeVoiceRun = run; }', context);
-  context.__echoCount = vm.runInContext('() => pendingUserEchoes', context);
+  context.__pendingRequestIds = vm.runInContext('() => [...pendingUserRequestIds]', context);
   return h;
 }
 
@@ -157,9 +159,9 @@ test('sending a message starts a thinking round but never locks the send button'
   assert.equal(h.context.masterThinking, true, 'the thinking indicator is up');
   assert.equal(sendLocked(h), false, 'a master round does not lock the button');
   assert.equal(sendGreyed(h), false);
-  assert.equal(h.context.__echoCount(), 1);
+  assert.equal(h.context.__pendingRequestIds().length, 1);
 
-  resolveSend({ok: true});
+  resolveSend({ok: true, status: 202, json: async () => ({})});
   await flush();
   assert.equal(sendLocked(h), false);
 });
@@ -258,7 +260,7 @@ test('master_done inside an in-flight window does not unlock the button', async 
 // ---------------------------------------------------------------------------
 // 4. Consecutive sends: each echo is skipped exactly once.
 // ---------------------------------------------------------------------------
-test('two sends fired back to back each skip exactly their own echo', async () => {
+test('two sends fired back to back skip their matching echoes and draw every other echo', async () => {
   const h = buildLockHarness();
   const resolvers = [];
   h.fetchImpl = () => new Promise((resolve) => resolvers.push(resolve));
@@ -270,21 +272,157 @@ test('two sends fired back to back each skip exactly their own echo', async () =
   input.value = 'second message';
   h.context.sendMessage();
   await flush();
-  assert.equal(h.context.__echoCount(), 2, 'two sends, two pending echoes');
+  const requestIds = h.fetchCalls.map((call) => JSON.parse(call.opts.body).request_id);
+  assert.equal(new Set(requestIds).size, 2, 'each send has a separate request id');
+  assert.deepEqual([...h.context.__pendingRequestIds()], requestIds, 'both request ids await their echoes');
   assert.equal(messages.children.length, 2, 'two local bubbles, one per send');
+  assert.equal(messages.children.filter((el) => el.innerHTML.includes('data-message-role="user"')
+    && el.innerHTML.includes('first message')).length, 1);
+  assert.equal(messages.children.filter((el) => el.innerHTML.includes('data-message-role="user"')
+    && el.innerHTML.includes('second message')).length, 1);
 
-  h.context.handleWSEvent({type: 'message', message: {role: 'user', content: 'first message', id: 'srv-1'}}, 'session-a', 0);
-  h.context.handleWSEvent({type: 'message', message: {role: 'user', content: 'second message', id: 'srv-2'}}, 'session-a', 0);
-  assert.equal(h.context.__echoCount(), 0, 'each echo consumed one pending count');
+  h.context.handleWSEvent({
+    type: 'message',
+    message: {role: 'user', content: 'first message', request_id: requestIds[0], id: 'srv-1'},
+  }, 'session-a', 0);
+  h.context.handleWSEvent({
+    type: 'message',
+    message: {role: 'user', content: 'second message', request_id: requestIds[1], id: 'srv-2'},
+  }, 'session-a', 0);
+  assert.deepEqual([...h.context.__pendingRequestIds()], [], 'each matching echo removes its own request id');
   assert.equal(messages.children.length, 2, 'neither echo painted a second bubble');
 
-  // An echo with no pending send — another tab's message — still renders.
-  h.context.handleWSEvent({type: 'message', message: {role: 'user', content: 'from another tab', id: 'srv-3'}}, 'session-a', 0);
-  assert.equal(messages.children.length, 3, 'the skip is per-send consumption, not a latch');
+  h.context.handleWSEvent({
+    type: 'message',
+    message: {role: 'user', content: 'from another tab', request_id: 'other-request', id: 'srv-3'},
+  }, 'session-a', 0);
+  h.context.handleWSEvent({
+    type: 'message', message: {role: 'user', content: 'legacy echo', id: 'srv-4'},
+  }, 'session-a', 0);
+  assert.equal(messages.children.length, 4, 'unmatched and missing request ids render');
   assert.match(messages.children[2].innerHTML, /from another tab/);
+  assert.match(messages.children[3].innerHTML, /legacy echo/);
 
-  resolvers.forEach((resolve) => resolve({ok: true}));
+  resolvers.forEach((resolve) => resolve({ok: true, status: 202, json: async () => ({})}));
   await flush();
+});
+
+function captureSendMessages(h) {
+  const messages = [];
+  const statusUpdates = [];
+  h.context.appendMessage = (role, content, _inputMode, _timestamp, _files, requestId) => {
+    const message = {role, content, request_id: requestId, delivery_status: requestId ? 'Sending…' : null};
+    messages.push(message);
+    return message;
+  };
+  h.context.setMessageDeliveryStatus = (message, status) => {
+    message.delivery_status = status;
+    statusUpdates.push(status);
+  };
+  return {messages, statusUpdates};
+}
+
+test('a network error retries with the same request id and keeps one optimistic bubble', async () => {
+  const h = buildLockHarness();
+  const {messages, statusUpdates} = captureSendMessages(h);
+  const retryDelays = [];
+  let releaseRetry;
+  h.context.setTimeout = (callback, delay) => {
+    retryDelays.push(delay);
+    releaseRetry = callback;
+    return 1;
+  };
+  let attempt = 0;
+  h.fetchImpl = async () => {
+    attempt += 1;
+    if (attempt === 1) throw new TypeError('offline');
+    return {ok: true, status: 202, json: async () => ({})};
+  };
+  h.elements.get('msg-input').value = 'network retry';
+
+  const sendPromise = h.context.sendMessage();
+  await flush();
+  assert.equal(messages[0].delivery_status, 'Sending…', 'the bubble stays marked while the retry waits');
+  assert.equal(h.fetchCalls.length, 1);
+  releaseRetry();
+  await sendPromise;
+
+  const requestIds = h.fetchCalls.map((call) => JSON.parse(call.opts.body).request_id);
+  assert.equal(requestIds.length, 2);
+  assert.equal(requestIds[0], requestIds[1]);
+  assert.deepEqual(retryDelays, [1000]);
+  assert.equal(messages.filter((message) => message.role === 'user').length, 1);
+  assert.deepEqual(statusUpdates, ['Sent']);
+  assert.equal(messages.some((message) => message.content === 'Failed to send message'), false);
+});
+
+test('a 5xx retries with the same request id', async () => {
+  const h = buildLockHarness();
+  const {messages} = captureSendMessages(h);
+  const retryDelays = [];
+  h.context.setTimeout = (callback, delay) => {
+    retryDelays.push(delay);
+    callback();
+    return 1;
+  };
+  h.fetchImpl = async (url) => {
+    if (!String(url).includes('/message')) return {ok: true, status: 200, json: async () => ({})};
+    if (h.fetchCalls.filter((call) => String(call.url).includes('/message')).length === 1) {
+      return {ok: false, status: 503};
+    }
+    return {ok: true, status: 202, json: async () => ({})};
+  };
+  h.elements.get('msg-input').value = 'server retry';
+
+  await h.context.sendMessage();
+
+  const requestIds = h.fetchCalls
+    .filter((call) => String(call.url).includes('/message'))
+    .map((call) => JSON.parse(call.opts.body).request_id);
+  assert.equal(requestIds.length, 2);
+  assert.equal(requestIds[0], requestIds[1]);
+  assert.deepEqual(retryDelays, [1000]);
+  assert.equal(messages.filter((message) => message.role === 'user').length, 1);
+});
+
+test('a 4xx stops retries, marks the bubble failed, and shows the existing failure line', async () => {
+  const h = buildLockHarness();
+  const {messages, statusUpdates} = captureSendMessages(h);
+  let messageAttempts = 0;
+  h.fetchImpl = async (url) => {
+    if (String(url).includes('/message')) {
+      messageAttempts += 1;
+      return {ok: false, status: 409, json: async () => ({})};
+    }
+    return {ok: true, status: 200, json: async () => ({})};
+  };
+  h.elements.get('msg-input').value = 'rejected message';
+
+  await h.context.sendMessage();
+
+  assert.equal(messageAttempts, 1);
+  assert.deepEqual(statusUpdates, ['Failed']);
+  assert.equal(messages.filter((message) => message.role === 'user')[0].delivery_status, 'Failed');
+  assert.equal(messages.filter((message) => message.content === 'Failed to send message').length, 1);
+  assert.deepEqual([...h.context.__pendingRequestIds()], []);
+});
+
+test('a 202 dispatch_error keeps the bubble sent and adds one system line without retry', async () => {
+  const h = buildLockHarness();
+  const {messages, statusUpdates} = captureSendMessages(h);
+  let attempts = 0;
+  h.fetchImpl = async () => {
+    attempts += 1;
+    return {ok: true, status: 202, json: async () => ({dispatch_error: 'run already active'})};
+  };
+  h.elements.get('msg-input').value = 'accepted message';
+
+  await h.context.sendMessage();
+
+  assert.equal(attempts, 1);
+  assert.deepEqual(statusUpdates, ['Sent']);
+  assert.equal(messages.filter((message) => message.role === 'user')[0].delivery_status, 'Sent');
+  assert.equal(messages.filter((message) => message.role === 'system' && message.content === 'run already active').length, 1);
 });
 
 // ---------------------------------------------------------------------------
@@ -317,7 +455,7 @@ test('the send gate names the in-flight category and /compact passes the same ga
   await h.context.compactContext();
   assert.equal(confirms, 0, 'the gate answered before the confirm dialog');
   assert.deepEqual(h.fetchCalls.filter((call) => String(call.url).includes('/message')), [], 'no compact request left the page');
-  assert.equal(h.context.__echoCount(), 0);
+  assert.deepEqual([...h.context.__pendingRequestIds()], []);
 
   run.xhr.respond(200, {text: 'done'});
   await flush();
@@ -328,6 +466,6 @@ test('the send gate names the in-flight category and /compact passes the same ga
   await h.context.compactContext();
   assert.equal(confirms, 1, 'with nothing in flight the dialog runs');
   assert.equal(h.fetchCalls.filter((call) => String(call.url).includes('/message')).length, 1);
-  assert.equal(h.context.__echoCount(), 1);
+  assert.equal(h.context.__pendingRequestIds().length, 1);
   assert.deepEqual(h.toasts, []);
 });

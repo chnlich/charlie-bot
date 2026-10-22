@@ -359,7 +359,10 @@ async def smoke(backend_id: str, purge: bool, entry_override: dict | None = None
     if status != 200 or preview.get("kind") != "manager_turn":
       fail(f"effective-prompt preview failed: {status} {preview}")
     status, posted = await arequest(
-        base, access_key, "POST", f"/api/chat/{manager_id}/message", {"content": phrase_instruction})
+        base, access_key, "POST", f"/api/chat/{manager_id}/message", {
+            "content": phrase_instruction,
+            "request_id": f"smoke-manager-input:{manager_id}",
+        })
     if status != 202:
       fail(f"manager input admission failed: {status} {posted}")
     input_event_id = posted.get("input_event_id")

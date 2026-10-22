@@ -844,6 +844,9 @@ class MessageAggregator:
                   "event_index": idx,
                   "id": ev_id,
                   "timestamp": ev.get("timestamp"),
+                  **({
+                      "request_id": ev["request_id"]
+                  } if "request_id" in ev else {}),
               },
       }
       return

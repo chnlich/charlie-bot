@@ -19,7 +19,7 @@ use charliebot_registry::task_errors::task_http_error;
 use charliebot_registry::{FeatureContext, Registry};
 use charliebot_sched::triggers::{PendingTrigger, TriggerManager, TriggerStatus};
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, UtcDateTime};
-use charliebot_store::run_records::{self, HostBoot, RunOrder, RunRecord};
+use charliebot_store::run_records::{HostBoot, RunFacts, RunOrder, RunRecord};
 use charliebot_store::{Store, StoreError, StoreResult, TaskFacts};
 use flate2::Compression;
 use flate2::write::GzEncoder;
@@ -148,9 +148,13 @@ async fn session_bootstrap(
     Ok(cfg) => cfg,
     Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
   };
-  match build_bootstrap_payload(&features.store, &features.registry, &cfg, &meta) {
-    Ok(payload) => gzip_json_body(&request, charliebot_compat::json::fast_json_bytes(&payload)),
-    Err(error) => store_error(error),
+  let store = Arc::clone(&features.store);
+  let registry = Arc::clone(&features.registry);
+  let result = tokio::task::spawn_blocking(move || build_bootstrap_payload(&store, &registry, &cfg, &meta)).await;
+  match result {
+    Ok(Ok(payload)) => gzip_json_body(&request, charliebot_compat::json::fast_json_bytes(&payload)),
+    Ok(Err(error)) => store_error(error),
+    Err(error) => store_error(StoreError::new(error.to_string())),
   }
 }
 
@@ -199,7 +203,7 @@ async fn session_usage(
     payload.insert("active_run_id".to_string(), active_run_id.map_or(Value::Null, Value::String));
   }
   let mut response_meta = meta;
-  response_meta.run_backend = match listing::run_backend(&features.store, &session_id) {
+  response_meta.run_backend = match listing::run_backend(&features.store, &response_meta) {
     Ok(backend) => backend,
     Err(error) => return store_error(error),
   };
@@ -323,21 +327,71 @@ async fn session_transcript(
   };
   let reset = revision.is_empty() || revision != transcript.revision;
   let committed = transcript.projection.committed();
-  let messages = if reset { committed.to_vec() } else { committed.get(to_index(after)..).unwrap_or(&[]).to_vec() };
+  let messages = if reset { committed } else { committed.get(to_index(after)..).unwrap_or(&[]) };
   let thinking_since = features.store.busy_since(&session_id).map_or(Value::Null, |at| json!(at.to_python_isoformat()));
-  responses::fast_json(
-    StatusCode::OK,
-    &json!({
-      "messages": messages,
-      "total": committed.len(),
-      "pending_draft": transcript.projection.pending_draft(),
-      "revision": transcript.revision,
-      "reset": reset,
-      "active_run_id": transcript.active_run_id,
-      "summary": transcript.summary,
-      "thinking_since": thinking_since,
-    }),
-  )
+  let body = transcript_json_body(TranscriptJson {
+    messages,
+    total: committed.len(),
+    pending_draft: transcript.projection.pending_draft(),
+    revision: &transcript.revision,
+    reset,
+    active_run_id: transcript.active_run_id.as_deref(),
+    summary: &transcript.summary,
+    thinking_since: &thinking_since,
+  });
+  Response::builder()
+    .status(StatusCode::OK)
+    .header(header::CONTENT_TYPE, "application/json")
+    .header(header::CONTENT_LENGTH, body.len())
+    .body(Body::from(body))
+    .expect("worker transcript response builds")
+}
+
+// Borrow the cached projection through serialization as Python does at src/runtime/api/sessions.py:1158-1170.
+struct TranscriptJson<'a> {
+  messages: &'a [Value],
+  total: usize,
+  pending_draft: Option<&'a Value>,
+  revision: &'a str,
+  reset: bool,
+  active_run_id: Option<&'a str>,
+  summary: &'a Value,
+  thinking_since: &'a Value,
+}
+
+fn transcript_json_body(transcript: TranscriptJson<'_>) -> Vec<u8> {
+  let mut body = Vec::new();
+  body.extend_from_slice(b"{\"messages\":[");
+  for (index, message) in transcript.messages.iter().enumerate() {
+    if index > 0 {
+      body.push(b',');
+    }
+    body.extend_from_slice(&charliebot_compat::json::fast_json_bytes(message));
+  }
+  body.extend_from_slice(b"],\"total\":");
+  append_fast_json(&mut body, &json!(transcript.total));
+  body.extend_from_slice(b",\"pending_draft\":");
+  if let Some(pending_draft) = transcript.pending_draft {
+    append_fast_json(&mut body, pending_draft);
+  } else {
+    body.extend_from_slice(b"null");
+  }
+  body.extend_from_slice(b",\"revision\":");
+  append_fast_json(&mut body, &json!(transcript.revision));
+  body.extend_from_slice(b",\"reset\":");
+  append_fast_json(&mut body, &json!(transcript.reset));
+  body.extend_from_slice(b",\"active_run_id\":");
+  append_fast_json(&mut body, &json!(transcript.active_run_id));
+  body.extend_from_slice(b",\"summary\":");
+  append_fast_json(&mut body, transcript.summary);
+  body.extend_from_slice(b",\"thinking_since\":");
+  append_fast_json(&mut body, transcript.thinking_since);
+  body.push(b'}');
+  body
+}
+
+fn append_fast_json(body: &mut Vec<u8>, value: &Value) {
+  body.extend_from_slice(&charliebot_compat::json::fast_json_bytes(value));
 }
 
 async fn events_jsonl(
@@ -355,9 +409,11 @@ async fn events_jsonl(
   if !request_wants_gzip(&request) {
     return static_files::serve_file(&path, "application/x-ndjson", request.method(), request.headers());
   }
-  match gzip_file(&path, metadata) {
-    Ok(body) => events_gzip_response(body),
-    Err(error) => store_error(error),
+  let result = tokio::task::spawn_blocking(move || gzip_file(&path, metadata)).await;
+  match result {
+    Ok(Ok(body)) => events_gzip_response(body),
+    Ok(Err(error)) => store_error(error),
+    Err(error) => store_error(StoreError::new(error.to_string())),
   }
 }
 
@@ -428,7 +484,11 @@ async fn pending_task_inputs(
     Ok(meta) => meta,
     Err(error) => return store_error(error),
   };
-  let facts = match features.store.facts_of(&meta.id) {
+  let node_facts = match features.store.node_facts(&meta.id) {
+    Ok(facts) => facts,
+    Err(error) => return task_http_error(error),
+  };
+  let facts = match node_facts.task() {
     Ok(facts) => facts,
     Err(error) => return task_http_error(error),
   };
@@ -436,11 +496,7 @@ async fn pending_task_inputs(
     Ok(runs) => runs,
     Err(error) => return task_http_error(error),
   };
-  let all_events = match features.store.load_all_facts_shared_sync(&meta.id) {
-    Ok(events) => events,
-    Err(error) => return task_http_error(error),
-  };
-  let pending = match pending_input_events(&facts, &run_records, all_events.as_slice(), &meta.id) {
+  let pending = match pending_input_events(facts, &run_records, &node_facts.runs, &meta.id) {
     Ok(pending) => pending,
     Err(error) => return task_http_error(error),
   };
@@ -454,7 +510,7 @@ async fn pending_task_inputs(
 fn pending_input_events<'a>(
   facts: &'a TaskFacts,
   runs: &[RunRecord],
-  events: &[Value],
+  run_facts: &RunFacts,
   session_id: &str,
 ) -> StoreResult<Vec<&'a Value>> {
   if facts.boundary_index.is_none() && facts.imported_pending_ids.is_empty() {
@@ -464,8 +520,8 @@ fn pending_input_events<'a>(
   }
   let mut claimed = HashSet::new();
   for run in runs {
-    let launched = run.pid.is_some() || run_records::terminal_outcome(events, &run.id)?.is_some();
-    if !launched && run_records::stop_requested_in_events(events, &run.id, None) {
+    let launched = run.pid.is_some() || run_facts.terminal_outcome(&run.id)?.is_some();
+    if !launched && run_facts.stop_requested(&run.id, None) {
       continue;
     }
     claimed.extend(run.input_event_ids.iter().cloned());
@@ -562,7 +618,7 @@ fn session_metadata_value(store: &Store, meta: &SessionMetadata) -> StoreResult<
 
 pub(crate) fn response_metadata(store: &Store, meta: &SessionMetadata) -> StoreResult<SessionMetadata> {
   let mut response_meta = meta.clone();
-  response_meta.run_backend = listing::run_backend(store, &meta.id)?;
+  response_meta.run_backend = listing::run_backend(store, meta)?;
   response_meta.thinking_since = store.busy_since(&meta.id);
   Ok(response_meta)
 }
@@ -734,15 +790,21 @@ mod tests {
     }
   }
 
-  #[test]
-  fn pending_inputs_release_a_stopped_unlaunched_run_batch() {
+  #[tokio::test]
+  async fn pending_inputs_read_run_stop_facts_from_the_shared_fold() {
+    let (_home, features) = feature_context();
+    features
+      .store
+      .append_chat_event("worker", json!({"type": "run_stop_requested", "run_id": "stopped"}))
+      .await
+      .unwrap();
+    let node_facts = features.store.node_facts("worker").unwrap();
     let facts = TaskFacts {
       boundary_index: Some(0),
       input_candidates: vec![json!({"id": "held"}), json!({"id": "free"})],
       ..TaskFacts::default()
     };
-    let events = vec![json!({"type": "run_stop_requested", "run_id": "stopped"})];
-    let pending = pending_input_events(&facts, &[run("stopped", &["held"], None)], &events, "worker").unwrap();
+    let pending = pending_input_events(&facts, &[run("stopped", &["held"], None)], &node_facts.runs, "worker").unwrap();
     assert_eq!(pending.len(), 2);
     assert_eq!(pending[0]["id"], "held");
     assert_eq!(pending[1]["id"], "free");
@@ -756,9 +818,38 @@ mod tests {
       ..TaskFacts::default()
     };
     facts.confirmed_input_ids.insert("confirmed".to_string());
-    let pending = pending_input_events(&facts, &[run("live", &["claimed"], Some(12))], &[], "worker").unwrap();
+    let pending =
+      pending_input_events(&facts, &[run("live", &["claimed"], Some(12))], &RunFacts::default(), "worker").unwrap();
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0]["id"], "pending");
+  }
+
+  #[tokio::test]
+  async fn pending_inputs_fold_the_history_once_per_cache_generation() {
+    let (_home, features) = feature_context();
+    let meta = crate::test_support::create_node(
+      &features.store,
+      "pending-inputs-count",
+      None,
+      charliebot_store::metadata::TaskProfile::Manager,
+    )
+    .await;
+    features.store.append_chat_event(&meta.id, json!({"type": "user", "content": "a pending question"})).await.unwrap();
+    let before = features.store.history_work();
+
+    let (status, body) =
+      crate::test_support::answer(pending_task_inputs(State(Arc::clone(&features)), AxumPath(meta.id.clone())).await)
+        .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["items"].as_array().unwrap().len(), 1);
+    let after_first = features.store.history_work();
+    assert_eq!(after_first.file_reads - before.file_reads, 1);
+    assert_eq!(after_first.full_folds - before.full_folds, 1);
+    let (second_status, _) =
+      crate::test_support::answer(pending_task_inputs(State(Arc::clone(&features)), AxumPath(meta.id)).await).await;
+    assert_eq!(second_status, StatusCode::OK);
+    assert_eq!(features.store.history_work(), after_first);
   }
 
   const TRIGGER_SESSION_ID: &str = "synthetic-trigger-session";

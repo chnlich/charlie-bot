@@ -1274,4 +1274,22 @@ mod tests {
     set_status(&home.features, &sid, r#"{"now": "Done"}"#).await.expect("the set stores");
     assert!(home.meta(&sid).await.has_unread);
   }
+
+  #[tokio::test]
+  async fn repeated_status_reads_reuse_the_archive_verdict_and_task_state_folds() {
+    let home = Home::new();
+    let root = home.manager("status-root", None).await;
+    let child = home.child(&root, "status-child").await;
+    home.append(&child, json!({"type": "user", "content": "a pending question"})).await;
+    let index_before = home.features.store.task_tree_index_build_count();
+
+    read_status(&home.features, &root).await.expect("the status reads");
+
+    let index_after_first = home.features.store.task_tree_index_build_count();
+    let state_after_first = home.features.store.history_work().full_folds;
+    assert_eq!(index_after_first - index_before, 1);
+    read_status(&home.features, &root).await.expect("the status reads again");
+    assert_eq!(home.features.store.task_tree_index_build_count(), index_after_first);
+    assert_eq!(home.features.store.history_work().full_folds, state_after_first);
+  }
 }

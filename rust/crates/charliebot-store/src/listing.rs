@@ -59,9 +59,10 @@ const LISTINGS_SWEEP_INTERVAL: Duration = Duration::from_secs(10);
 /// signature.
 pub(crate) struct CachedListing {
   revision: u64,
+  generation: u64,
   at: Instant,
   root: (i64, i64),
-  rows: Vec<SessionMetadata>,
+  rows: Arc<Vec<SessionMetadata>>,
 }
 
 impl Store {
@@ -72,6 +73,26 @@ impl Store {
   /// created or removed session directory moves the root's signature, so both walk again on the next call. The sweep
   /// bounds an out-of-band edit to the cache entry's expiry plus one interval.
   pub fn load_session_metas(&self, status: Option<SessionStatus>) -> StoreResult<Vec<SessionMetadata>> {
+    Ok(self.load_session_metas_versioned(status)?.0)
+  }
+
+  /// Read metadata rows with the identity of the memoized corpus that supplied them.
+  pub fn load_session_metas_versioned(
+    &self,
+    status: Option<SessionStatus>,
+  ) -> StoreResult<(Vec<SessionMetadata>, u64)> {
+    let (rows, generation) = self.load_session_metas_snapshot_versioned(status)?;
+    Ok(((*rows).clone(), generation))
+  }
+
+  /// Read the immutable metadata corpus and its generation without cloning its rows.
+  ///
+  /// Search holds the same listing snapshot across its query memo and borrows only the matching rows, as Python's
+  /// `load_session_metas` does while its list identity remains current (`src/runtime/session_search.py:266-295`).
+  pub fn load_session_metas_snapshot_versioned(
+    &self,
+    status: Option<SessionStatus>,
+  ) -> StoreResult<(Arc<Vec<SessionMetadata>>, u64)> {
     let root = self.cfg.sessions_dir();
     // The signature is read before the walk, so a directory created during the walk moves it past the memo's.
     let root_signature = stat_signature(&root);
@@ -81,12 +102,12 @@ impl Store {
       && hit.at.elapsed() < LISTINGS_SWEEP_INTERVAL
       && hit.root == signature
     {
-      return Ok(hit.rows.clone());
+      return Ok((Arc::clone(&hit.rows), hit.generation));
     }
     let revision = self.listings_revision.load(Ordering::Acquire);
     let entries = match fs::read_dir(&root) {
       Ok(entries) => entries,
-      Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+      Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok((Arc::new(Vec::new()), 0)),
       Err(error) => return Err(StoreError::new(format!("{}: {error}", root.display()))),
     };
     let cached = self.fresh_cached_metas()?;
@@ -138,11 +159,13 @@ impl Store {
         rows.push(meta.as_ref().clone());
       }
     }
+    let generation = self.next_listing_generation.fetch_add(1, Ordering::AcqRel);
+    let rows = Arc::new(rows);
     if let Some(root) = root_signature {
-      let listing = CachedListing { revision, at: Instant::now(), root, rows: rows.clone() };
+      let listing = CachedListing { revision, generation, at: Instant::now(), root, rows: Arc::clone(&rows) };
       self.listings_memo.lock().expect("listings memo mutex is not poisoned").insert(status, listing);
     }
-    Ok(rows)
+    Ok((rows, generation))
   }
 
   /// List sessions with optional stored-status, star, and sequence ownership filters.

@@ -5,6 +5,7 @@
 //! The web session test is chat_threads' `thread_sessions.is_thread_session`, restated over the same fields: this
 //! package does not depend on chat_threads.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -118,10 +119,10 @@ pub async fn require_web_session(
 }
 
 /// The session's chat events in log order, read off the runtime's worker threads as `asyncio.to_thread` does.
-pub async fn load_events(features: &FeatureContext, session_id: &str) -> anyhow::Result<Vec<Value>> {
+pub async fn load_events(features: &FeatureContext, session_id: &str) -> anyhow::Result<Arc<Vec<Value>>> {
   let store = Arc::clone(&features.store);
   let session_id = session_id.to_string();
-  let loaded = tokio::task::spawn_blocking(move || store.load_chat_events_sync(&session_id))
+  let loaded = tokio::task::spawn_blocking(move || store.load_chat_events_shared_sync(&session_id))
     .await
     .context("the chat-event read stopped")?;
   Ok(loaded?)
@@ -140,21 +141,34 @@ pub fn nudge_of(event: &Value) -> Option<&str> {
 /// (`reply.answered_input`). `events` is in log order, so the last match is the newest. A user message answers itself;
 /// a nudge answers the user message it was posted for.
 pub fn answered_input<'a>(events: &'a [Value], input_event_ids: &[String]) -> Option<(&'a Value, String)> {
-  let mut bound = None;
+  answered_input_from(events.iter().rev(), input_event_ids)
+}
+
+fn answered_input_from<'a>(
+  events: impl Iterator<Item = &'a Value>,
+  input_event_ids: &[String],
+) -> Option<(&'a Value, String)> {
+  // Python builds `wanted = set(input_event_ids)` before this event pass (`src/features/web_reply/reply.py:97-108`).
+  if input_event_ids.is_empty() {
+    return None;
+  }
+  let input_event_ids: HashSet<&str> = input_event_ids.iter().map(String::as_str).collect();
+  // The forward Python pass overwrites `bound`, so a reverse pass can stop at the same last match.
   for event in events {
     let Some(id) = event.get("id").and_then(Value::as_str) else {
       continue;
     };
-    if !input_event_ids.iter().any(|wanted| wanted == id) {
+    if !input_event_ids.contains(id) {
       continue;
     }
     if event.get("type").and_then(Value::as_str) == Some(USER) {
-      bound = Some((event, id.to_string()));
-    } else if let Some(nudged) = nudge_of(event) {
-      bound = Some((event, nudged.to_string()));
+      return Some((event, id.to_string()));
+    }
+    if let Some(nudged) = nudge_of(event) {
+      return Some((event, nudged.to_string()));
     }
   }
-  bound
+  None
 }
 
 /// Whether the log holds a web reply that answers `user_event_id` (`reply.replied`).
@@ -342,13 +356,22 @@ pub async fn post_web_reply(
   if keep_language.is_some_and(|reason| pystr::strip(reason).is_empty()) {
     return Err(WebReplyError::refused(StatusCode::UNPROCESSABLE_ENTITY, "Keep-language reason is empty"));
   }
-  let loaded = load_events(features, session_id).await?;
-  if keep_language.is_none() && language_check_holds(newest_user_text(&loaded), text) {
+  let running = features.startup.require::<RunningTurnInputs>()?.user_event_ids(session_id);
+  // With the language guard skipped and no running inputs, Python's `answered_input` must return `None`
+  // (`src/features/web_reply/reply.py:97-108`), so a cold event log need not be parsed for this reply.
+  let loaded =
+    if keep_language.is_none() || !running.is_empty() { Some(load_events(features, session_id).await?) } else { None };
+  if keep_language.is_none()
+    && language_check_holds(newest_user_text(loaded.as_deref().expect("the language check loads chat events")), text)
+  {
     tracing::info!(session = %session_id, chars = text.chars().count(), "web_reply_held");
     return Err(WebReplyError::refused(StatusCode::CONFLICT, LANGUAGE_HOLD_DETAIL));
   }
-  let running = features.startup.require::<RunningTurnInputs>()?.user_event_ids(session_id);
-  let answers = answered_input(&loaded, &running).map(|(_, user_event_id)| user_event_id);
+  let answers =
+    loaded.as_deref().and_then(|events| answered_input(events, &running)).map(|(_, user_event_id)| user_event_id);
+  // Release the shared snapshot before append; Python appends into the cached list (`chat_events.py:221-224`).
+  // Keeping this Arc alive would make Store::append_chat_event deep-clone the entire event vector through Arc::make_mut.
+  drop(loaded);
   let chars = text.chars().count();
   let mut web_reply = json!({"answers": answers, "chars": chars});
   if let Some(reason) = keep_language {
@@ -392,6 +415,18 @@ mod tests {
 
   use super::*;
   use crate::test_support::{Home, id_of, user_event};
+
+  #[tokio::test]
+  async fn event_readers_share_the_store_snapshot() {
+    let home = Home::new();
+    let session_id = home.manager("shared-events", None).await;
+    home.append(&session_id, user_event("first event")).await;
+
+    let first = load_events(&home.features, &session_id).await.expect("the event snapshot reads");
+    let second = load_events(&home.features, &session_id).await.expect("the event snapshot reads again");
+
+    assert!(Arc::ptr_eq(&first, &second), "both calls hold the same event allocation");
+  }
 
   /// The web reply events of the session's log, as `(content, web_reply)` pairs.
   fn replies(home: &Home, session_id: &str) -> Vec<(Value, Value)> {
@@ -618,6 +653,16 @@ mod tests {
     assert_eq!(nudge_of(&nudge), Some("u1"));
     assert_eq!(nudge_of(&json!({"type": USER, "web_reply": {"nudge_of": "u1"}})), None);
     assert_eq!(nudge_of(&json!({"type": AGENT_MESSAGE})), None);
+  }
+
+  #[test]
+  fn empty_input_binding_visits_no_event_rows() {
+    let event = user_event("the question");
+    let mut visited = 0;
+    let events = std::iter::once(&event).inspect(|_| visited += 1);
+
+    assert!(answered_input_from(events, &[]).is_none());
+    assert_eq!(visited, 0);
   }
 
   /// A user message as the chat API writes it: the actor is the user.

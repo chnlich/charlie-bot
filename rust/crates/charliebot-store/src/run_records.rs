@@ -455,7 +455,13 @@ impl Store {
 
   /// Read one run record from disk, or return `None` when its metadata file is absent.
   pub fn read_run_sync(&self, session_id: &str, run_id: &str) -> StoreResult<Option<RunRecord>> {
+    self.run_record_reads.fetch_add(1, Ordering::Relaxed);
     read_run_path(&self.run_metadata_path(session_id, run_id))
+  }
+
+  /// Count run-record metadata reads since the store opened.
+  pub fn run_record_read_count(&self) -> u64 {
+    self.run_record_reads.load(Ordering::Relaxed)
   }
 
   /// Read all run records for one session in chronological `(started_at, id)` order.

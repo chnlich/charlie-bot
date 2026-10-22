@@ -149,8 +149,9 @@ async fn reap(
 fn extract_round_text(store: &Store, session_id: &str, upto: i64) -> anyhow::Result<Option<String>> {
   // A divider below zero leaves an empty range, as Python's `range(0, upto + 1)` does.
   let end = usize::try_from(upto.saturating_add(1)).unwrap_or(0);
-  let (events, _) = store.load_chat_events_range(session_id, 0, end)?;
-  for message in store.events_to_messages(&events)?.iter().rev() {
+  let range = store.load_chat_events_shared_range_sync(session_id, 0, end)?;
+  let events = &range.events[range.range];
+  for message in store.events_to_messages(events)?.iter().rev() {
     if message.get("role").and_then(Value::as_str) != Some("assistant") {
       continue;
     }

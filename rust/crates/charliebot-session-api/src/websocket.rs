@@ -202,7 +202,7 @@ async fn prepare_catchup(
     let worker_store = Arc::clone(&store);
     let worker_session_id = session_id.clone();
     let events = blocking_store(move || {
-      Ok(crate::worker_transcript::load_worker_transcript(&worker_store, &worker_session_id)?.events.clone())
+      Ok(Arc::clone(&crate::worker_transcript::load_worker_transcript(&worker_store, &worker_session_id)?.events))
     })
     .await?;
     let total = events.len();
@@ -226,7 +226,7 @@ async fn prepare_catchup(
 
   let events_store = Arc::clone(&store);
   let events_session_id = session_id.clone();
-  let events = blocking_store(move || events_store.load_chat_events_sync(&events_session_id)).await?;
+  let events = blocking_store(move || events_store.load_chat_events_shared_sync(&events_session_id)).await?;
   let total = event_count.unwrap_or(event_index_offset + events.len());
   let frames = replay_events(&store, events, cursor, event_index_offset).await?;
   Ok(Catchup { frames, total })
@@ -234,14 +234,14 @@ async fn prepare_catchup(
 
 async fn replay_events(
   store: &Store,
-  events: Vec<Value>,
+  events: Arc<Vec<Value>>,
   cursor: i128,
   event_index_offset: usize,
 ) -> StoreResult<Vec<Value>> {
   let mut walk = CatchupWalk::new(store.new_message_aggregator(event_index_offset, true), cursor, event_index_offset);
   for start in (0..events.len()).step_by(CATCHUP_SLICE_EVENTS) {
     let end = (start + CATCHUP_SLICE_EVENTS).min(events.len());
-    walk.feed_slice(&events, start, end)?;
+    walk.feed_slice(events.as_slice(), start, end)?;
     tokio::task::yield_now().await;
   }
   Ok(walk.finish())
@@ -573,7 +573,7 @@ mod tests {
       "type": "assistant",
       "message": {"content": [{"type": "text", "text": "draft"}]},
     })];
-    let frames = replay_events(&features.store, events, 0, 0).await.unwrap();
+    let frames = replay_events(&features.store, Arc::new(events), 0, 0).await.unwrap();
     assert_eq!(frames.len(), 1);
     assert_eq!(frames[0]["type"], "stream");
     assert_eq!(frames[0]["message"]["content"], "draft");

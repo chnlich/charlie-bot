@@ -29,7 +29,7 @@ static WORKER_MEMO: LazyLock<TranscriptMemo> = LazyLock::new(|| Mutex::new(VecDe
 pub struct TranscriptEntry {
   pub revision: String,
   rebuild_key: String,
-  pub events: Vec<Value>,
+  pub events: Arc<Vec<Value>>,
   pub projection: Arc<MessageProjection>,
   pub summary: Value,
   pub active_run_id: Option<String>,
@@ -142,7 +142,7 @@ fn build_worker_transcript(store: &Store, session_id: &str, signature: Signature
   Ok(TranscriptEntry {
     revision: client_revision,
     rebuild_key: revision,
-    events: transcript,
+    events: Arc::new(transcript),
     projection: Arc::new(projection),
     summary,
     active_run_id,
@@ -720,6 +720,29 @@ mod tests {
     )
     .unwrap();
     assert_eq!(bootstrap["worker_summary"], summary.clone());
+  }
+
+  #[tokio::test]
+  async fn worker_transcript_cache_hit_uses_the_sealed_state_without_reading_history() {
+    let (_home, features, session_id) = worker_context(&format!("cache-hit-{}", uuid::Uuid::new_v4())).await;
+    let store = features.store.as_ref();
+    let started_at = UtcDateTime::parse("2026-10-17T09:00:00Z").unwrap();
+    register_run(store, run_record("run-cache", &session_id, RunKind::Work, Some(started_at))).await;
+    write_run_events(
+      store,
+      &session_id,
+      "run-cache",
+      &[json!({"type": "assistant", "message": {"content": [{"type": "text", "text": "cached"}]}})],
+    );
+
+    let first = load_worker_transcript(store, &session_id).unwrap();
+    store.evict_recovery_history(&session_id);
+    let file_reads = store.history_work().file_reads;
+
+    let cached = load_worker_transcript(store, &session_id).unwrap();
+
+    assert!(Arc::ptr_eq(&first, &cached), "unchanged run files keep the transcript memo entry");
+    assert_eq!(store.history_work().file_reads, file_reads, "a cache hit reads no chat history file");
   }
 
   #[tokio::test]

@@ -88,7 +88,16 @@ async fn index(State(state): State<Arc<AppState>>, request: Parts) -> Response {
     match state.features.store.get_session(session_id).await {
       Ok(Some(meta)) => {
         active_session = serde_json::to_value(&meta).expect("session metadata serializes to JSON");
-        match detail::build_bootstrap_payload(&state.features.store, &state.features.registry, &cfg, &meta) {
+        let store = Arc::clone(&state.features.store);
+        let registry = Arc::clone(&state.features.registry);
+        let bootstrap_cfg = Arc::clone(&cfg);
+        let bootstrap = tokio::task::spawn_blocking(move || {
+          detail::build_bootstrap_payload(&store, &registry, &bootstrap_cfg, &meta)
+        })
+        .await
+        .map_err(|error| charliebot_store::StoreError::new(error.to_string()))
+        .and_then(|result| result);
+        match bootstrap {
           Ok(bootstrap) => {
             let bootstrap_session = bootstrap.get("session").expect("a bootstrap payload has a session");
             let bootstrap_session = bootstrap_session.as_object().expect("a bootstrap session is an object");

@@ -1,7 +1,7 @@
 //! Session listing projections shared by sidebar routes.
 
 use std::collections::VecDeque;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode, header};
@@ -40,16 +40,19 @@ pub(crate) struct SidebarProjection {
 struct SessionsListMemoState {
   whole_body: Option<(Vec<RowInputs>, Vec<u8>)>,
   gzip: VecDeque<(Vec<u8>, Vec<u8>)>,
+  #[cfg(test)]
+  render_calls: usize,
 }
 
-/// What one sidebar row renders from: its metadata, its derived overlay, its busy mark, its run backend and the
-/// controller's listing fields. Rows with equal inputs render equal values.
+/// What one sidebar row renders from: its metadata, its derived overlay, its busy mark, its run and display backends,
+/// and the controller's listing fields. Rows with equal inputs render equal values.
 #[derive(PartialEq)]
 pub(crate) struct RowInputs {
   meta: SessionMetadata,
   derived: Option<Map<String, Value>>,
   thinking_since: Value,
   run_backend: Option<String>,
+  display_backend: Option<String>,
   listing: Option<Map<String, Value>>,
 }
 
@@ -61,8 +64,8 @@ pub struct SessionsListMemos {
 
 /// Fetch active, non-scheduled sessions and their sidebar overlays.
 pub fn active_listing_corpus(
-  store: &Store,
-  registry: &Registry,
+  store: &Arc<Store>,
+  registry: &Arc<Registry>,
 ) -> StoreResult<(Vec<SessionMetadata>, DerivedSidebarMap)> {
   let listed = store.list_sessions(Some(SessionStatus::Active), None, Some(false))?;
   let derived = sidebar::resolve_sidebar_state(store, registry, &listed.rows, true, true, true, false)?;
@@ -83,7 +86,7 @@ impl PageRows {
 }
 
 /// Read the chat page's sidebar corpus without rendering a row.
-pub fn active_page_rows(store: &Store, registry: &Registry) -> StoreResult<PageRows> {
+pub fn active_page_rows(store: &Arc<Store>, registry: &Arc<Registry>) -> StoreResult<PageRows> {
   let (mut rows, derived) = active_listing_corpus(store, registry)?;
   let sequence = store.sequence_subtree_roots()?;
   let views = store.view_subtree_roots()?;
@@ -138,6 +141,10 @@ pub fn sessions_list_response(
     let body = match &state.whole_body {
       Some((cached, body)) if *cached == inputs => body.clone(),
       _ => {
+        #[cfg(test)]
+        {
+          state.render_calls += inputs.len();
+        }
         let values = match inputs.iter().map(|row| render_row(row, projection)).collect::<StoreResult<Vec<_>>>() {
           Ok(values) => values,
           Err(error) => return charliebot_compat::responses::internal_error("RuntimeError", error.to_string()),
@@ -193,11 +200,17 @@ pub fn apply_listing_fields(dump: &mut Value, fields: Map<String, Value>) {
   object.extend(fields);
 }
 
-pub(crate) fn run_backend(store: &Store, session_id: &str) -> StoreResult<Option<String>> {
-  if let Some(backend) = store.run_backend(session_id) {
-    return Ok(Some(backend));
+pub(crate) fn run_backend(store: &Store, meta: &SessionMetadata) -> StoreResult<Option<String>> {
+  Ok(store.run_backend(&meta.id))
+}
+
+fn display_backend(store: &Store, meta: &SessionMetadata) -> StoreResult<Option<String>> {
+  // Matches displayed_backend_id at src/runtime/api/sessions.py:71-74. The serialized run_backend field remains the
+  // thinking_state-only value that session_listing.py:93 uses.
+  if meta.profile == TaskProfile::Worker {
+    return Ok(Some(store.run_backend(&meta.id).unwrap_or_else(|| meta.backend.clone())));
   }
-  Ok(store.newest_run_record_sync(session_id)?.and_then(|record| record.backend))
+  Ok(Some(meta.backend.clone()))
 }
 
 pub(crate) fn listed_values(
@@ -227,11 +240,8 @@ fn row_inputs(
         meta: row.clone(),
         derived: derived.get(&row.id).cloned(),
         thinking_since: store.busy_since(&row.id).map_or(Value::Null, |value| json!(value.to_python_string())),
-        run_backend: if projection.include_run_backend || projection.display_backend {
-          run_backend(store, &row.id)?
-        } else {
-          None
-        },
+        run_backend: if projection.include_run_backend { run_backend(store, row)? } else { None },
+        display_backend: if projection.display_backend { display_backend(store, row)? } else { None },
         listing: listing_fields.get(&row.id).cloned(),
       })
     })
@@ -284,7 +294,7 @@ fn apply_sidebar_fields(value: &mut Value, row: &RowInputs, projection: SidebarP
   }
   if projection.display_backend
     && row.meta.profile == TaskProfile::Worker
-    && let Some(backend) = &row.run_backend
+    && let Some(backend) = &row.display_backend
   {
     object.insert("backend".to_string(), Value::String(backend.clone()));
   }
@@ -331,14 +341,33 @@ mod tests {
       .insert(node.id.clone(), json!({"has_running_tasks": false, "work_state": "idle"}).as_object().unwrap().clone());
 
     let first = list_body(&features, &rows, &derived, &memos).await;
+    assert_eq!(memos.state.lock().unwrap().render_calls, 1);
     assert_eq!(list_body(&features, &rows, &derived, &memos).await, first);
+    assert_eq!(memos.state.lock().unwrap().render_calls, 1);
     assert_eq!(first[0]["work_state"], "idle");
 
     derived.get_mut(&node.id).unwrap().insert("work_state".to_string(), json!("waiting"));
     assert_eq!(list_body(&features, &rows, &derived, &memos).await[0]["work_state"], "waiting");
+    assert_eq!(memos.state.lock().unwrap().render_calls, 2);
 
     rows[0].name = "renamed".to_string();
     assert_eq!(list_body(&features, &rows, &derived, &memos).await[0]["name"], "renamed");
+    assert_eq!(memos.state.lock().unwrap().render_calls, 3);
+  }
+
+  #[tokio::test]
+  async fn backend_display_falls_back_to_metadata_without_reading_run_records() {
+    let (_home, features) = crate::test_support::feature_context();
+    let meta =
+      crate::test_support::create_node(&features.store, "backend-read-count", None, TaskProfile::Manager).await;
+    let record = features.store.run_metadata_path(&meta.id, "synthetic-run");
+    std::fs::create_dir_all(record.parent().unwrap()).unwrap();
+    std::fs::write(&record, b"this metadata must not be read").unwrap();
+
+    let before = features.store.run_record_read_count();
+    assert_eq!(run_backend(&features.store, &meta).unwrap(), None);
+    assert_eq!(display_backend(&features.store, &meta).unwrap(), Some(meta.backend.clone()));
+    assert_eq!(features.store.run_record_read_count() - before, 0);
   }
 
   #[test]

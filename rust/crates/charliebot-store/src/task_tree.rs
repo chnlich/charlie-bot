@@ -1,7 +1,8 @@
 //! Durable task nodes, fact-derived tree state, and delegation authorization.
 
 use std::collections::{HashMap, HashSet};
-use std::fs;
+use std::fs::{self, File};
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -18,6 +19,9 @@ use crate::store::{CachedNodeFacts, NodeFactsKey};
 use crate::{ControlGuard, Store, StoreError, StoreResult};
 
 const TREE_INDEX_TTL: Duration = Duration::from_secs(2);
+const LIFECYCLE_TAIL_LINES: usize = 1000;
+const LIFECYCLE_TAIL_CHUNK_BYTES: usize = 1 << 16;
+const LIFECYCLE_HEAD_PROOF_BYTES: usize = 256;
 const TASK_ANCESTOR_HOP_LIMIT: usize = 1000;
 // Bound on the non-archived descendants one subtree walk may hold; archived ones do not count.
 const TASK_DESCENDANT_NODE_LIMIT: usize = 1000;
@@ -298,12 +302,70 @@ impl PromptScope {
 struct TreeIndex {
   metas: HashMap<String, Arc<SessionMetadata>>,
   children: HashMap<Option<String>, Vec<String>>,
+  task_state_by_id: HashMap<String, String>,
+  revision: String,
+  derived_archived_ids: Vec<String>,
+  archive_by_id: HashMap<String, bool>,
 }
 
 pub(crate) struct CachedTreeIndex {
   generation: u64,
   built_at: Instant,
   index: Arc<TreeIndex>,
+}
+
+pub(crate) struct CachedTaskStateTail {
+  pub(crate) identity: Option<FileIdentity>,
+  pub(crate) state: String,
+}
+
+/// A shared task-tree index snapshot for read-only projections.
+#[derive(Clone)]
+pub struct TaskTreeSnapshot {
+  index: Arc<TreeIndex>,
+}
+
+impl TaskTreeSnapshot {
+  /// The revision that binds task-tree page cursors to this snapshot.
+  pub fn revision(&self) -> &str {
+    &self.index.revision
+  }
+
+  /// Return one task's metadata from the snapshot.
+  pub fn meta(&self, session_id: &str) -> StoreResult<&SessionMetadata> {
+    index_meta(&self.index, session_id)
+  }
+
+  /// Return direct children in the snapshot's creation order.
+  pub fn child_ids(&self, parent_id: Option<&str>) -> &[String] {
+    let key = parent_id.map(str::to_string);
+    self.index.children.get(&key).map_or(&[], Vec::as_slice)
+  }
+
+  /// Return every descendant in the snapshot's depth-first order.
+  pub fn descendant_ids(&self, store: &Store, session_id: &str) -> StoreResult<Vec<String>> {
+    descendant_ids(store, &self.index, session_id)
+  }
+
+  /// Return the task lifecycle state recorded in the snapshot.
+  pub fn task_state(&self, session_id: &str) -> StoreResult<&str> {
+    self
+      .index
+      .task_state_by_id
+      .get(session_id)
+      .map(String::as_str)
+      .ok_or_else(|| StoreError::not_found(format!("task {session_id} not found")))
+  }
+
+  /// Return the effective archive state recorded in the snapshot.
+  pub fn archived(&self, session_id: &str) -> StoreResult<bool> {
+    self
+      .index
+      .archive_by_id
+      .get(session_id)
+      .copied()
+      .ok_or_else(|| StoreError::not_found(format!("task {session_id} not found")))
+  }
 }
 
 impl Store {
@@ -405,6 +467,7 @@ impl Store {
     Ok(self.node_state_versioned(session_id)?.1)
   }
 
+  /// Count full task-state folds and event visits since the store opened.
   /// [`Store::node_state`] and the version of the memo entry that answered it.
   ///
   /// While the event cache is cold, a state sealed by [`Store::evict_recovery_history`] answers when the log file and
@@ -519,6 +582,70 @@ impl Store {
     Ok(self.node_state(session_id)?.task_state()?.to_string())
   }
 
+  /// Read task lifecycle state from the last 1000 history lines before falling back to the full fold.
+  ///
+  /// This uses Python's `_task_state_fast` key `(inode, size, mtime)` and its 1000-line tail bound.
+  pub fn task_state_fast(&self, session_id: &str) -> StoreResult<TaskState> {
+    self.task_state_from_file_tail(session_id, false)
+  }
+
+  /// State for a task-tree index, using the sealed recovery fold before opening the bounded history tail.
+  ///
+  /// This avoids re-reading a node's tail when task recovery just folded the same `(inode, size, mtime)` file.
+  pub fn task_state_for_tree_index(&self, session_id: &str) -> StoreResult<TaskState> {
+    self.task_state_from_file_tail(session_id, true)
+  }
+
+  fn task_state_from_file_tail(&self, session_id: &str, use_sealed_recovery_state: bool) -> StoreResult<TaskState> {
+    let path = self.chat_events_path(session_id);
+    let identity = FileIdentity::read(&path)?;
+    if let Some(cached) =
+      self.task_state_tail_cache.lock().expect("task-state tail cache mutex is not poisoned").get(session_id)
+      && cached.identity == identity
+    {
+      return Ok(cached.state.clone());
+    }
+
+    if use_sealed_recovery_state {
+      let archived = self.read_archive_offset(session_id)?;
+      let sealed = {
+        let states = self.node_state_cache.lock().expect("node-state cache mutex is not poisoned");
+        identity.and_then(|identity| match states.get(session_id) {
+          Some(entry) if entry.key == NodeStateKey::File(identity) && entry.archived == archived => {
+            Some(entry.state.task_state().map(str::to_string))
+          }
+          _ => None,
+        })
+      };
+      if let Some(state) = sealed.transpose()? {
+        // Recovery already folded this file; use the same (inode, size, mtime) verdict before opening its tail again.
+        self
+          .task_state_tail_cache
+          .lock()
+          .expect("task-state tail cache mutex is not poisoned")
+          .insert(session_id.to_string(), CachedTaskStateTail { identity, state: state.clone() });
+        return Ok(state);
+      }
+    }
+
+    self.task_state_tail_reads.fetch_add(1, Ordering::Relaxed);
+    let state = match lifecycle_state_from_file(&path)? {
+      Some(state) => state,
+      None => self.task_state(session_id)?,
+    };
+    self
+      .task_state_tail_cache
+      .lock()
+      .expect("task-state tail cache mutex is not poisoned")
+      .insert(session_id.to_string(), CachedTaskStateTail { identity, state: state.clone() });
+    Ok(state)
+  }
+
+  /// Count actual lifecycle-tail file scans since the store opened.
+  pub fn task_state_tail_read_count(&self) -> u64 {
+    self.task_state_tail_reads.load(Ordering::Relaxed)
+  }
+
   /// Rebuild the cached task index after a node metadata write.
   pub fn invalidate_tree_index(&self) {
     self.task_tree_generation.fetch_add(1, Ordering::AcqRel);
@@ -548,16 +675,22 @@ impl Store {
 
   /// Return every task node whose effective archive state is inherited or fact-derived.
   pub fn derived_archived_ids(&self) -> StoreResult<Vec<String>> {
-    let index = self.tree_index()?;
-    let mut memo = HashMap::new();
-    let mut ids = Vec::new();
-    for meta in index.metas.values() {
-      if meta.status != SessionStatus::Archived && archived_of(self, &index, &meta.id, &mut memo)? {
-        ids.push(meta.id.clone());
-      }
-    }
-    ids.sort();
-    Ok(ids)
+    Ok(self.tree_index()?.derived_archived_ids.clone())
+  }
+
+  /// Return the revision used by task-tree pagination from its cached two-second index.
+  pub fn task_tree_revision(&self) -> StoreResult<String> {
+    Ok(self.tree_index()?.revision.clone())
+  }
+
+  /// Return a shared snapshot for a task-tree read page.
+  pub fn task_tree_snapshot(&self) -> StoreResult<TaskTreeSnapshot> {
+    Ok(TaskTreeSnapshot { index: self.tree_index()? })
+  }
+
+  /// Count full task-tree index builds since the store opened.
+  pub fn task_tree_index_build_count(&self) -> u64 {
+    self.task_tree_index_builds.load(Ordering::Relaxed)
   }
 
   /// Return a task’s effective archive state, including archived ancestors.
@@ -1364,6 +1497,7 @@ impl Store {
   /// with runs, on the version of that state. A verdict that judged a process through `/proc` is not stored: a process
   /// exit writes no file that would move the key.
   pub fn task_tree_activity(&self, session_id: &str) -> StoreResult<TaskTreeActivity> {
+    self.task_tree_activity_calls.fetch_add(1, Ordering::Relaxed);
     let records_generation = self.records_generation();
     let cached = self.activity_cache.lock().expect("activity cache mutex is not poisoned").get(session_id).cloned();
     let mut state = None;
@@ -1424,6 +1558,11 @@ impl Store {
     Ok(activity)
   }
 
+  /// Count task-tree activity lookups since the store opened.
+  pub fn task_tree_activity_call_count(&self) -> u64 {
+    self.task_tree_activity_calls.load(Ordering::Relaxed)
+  }
+
   /// Build the session detail projection used by the session read and completion routes.
   pub fn session_detail(&self, session_id: &str) -> StoreResult<Value> {
     let index = self.tree_index()?;
@@ -1477,6 +1616,7 @@ impl Store {
       return Ok(Arc::clone(&cached.index));
     }
     let index = Arc::new(build_tree_index(self)?);
+    self.task_tree_index_builds.fetch_add(1, Ordering::Relaxed);
     if self.task_tree_generation.load(Ordering::Acquire) == generation {
       *self.task_tree_index.lock().expect("task tree index mutex is not poisoned") =
         Some(CachedTreeIndex { generation, built_at: Instant::now(), index: Arc::clone(&index) });
@@ -1638,7 +1778,178 @@ fn build_tree_index(store: &Store) -> StoreResult<TreeIndex> {
       left_meta.created_at.cmp(&right_meta.created_at).then_with(|| left.cmp(right))
     });
   }
-  Ok(TreeIndex { metas, children })
+  let mut index = TreeIndex {
+    metas,
+    children,
+    task_state_by_id: HashMap::new(),
+    revision: String::new(),
+    derived_archived_ids: Vec::new(),
+    archive_by_id: HashMap::new(),
+  };
+  let mut memo = HashMap::new();
+  let mut structural = Vec::with_capacity(index.metas.len());
+  let mut derived_archived_ids = Vec::new();
+  for meta in index.metas.values() {
+    let task_state = store.task_state_for_tree_index(&meta.id)?;
+    let archived = archived_of(store, &index, &meta.id, &mut memo)?;
+    index.task_state_by_id.insert(meta.id.clone(), task_state.clone());
+    index.archive_by_id.insert(meta.id.clone(), archived);
+    if meta.status != SessionStatus::Archived && archived {
+      derived_archived_ids.push(meta.id.clone());
+    }
+    let profile = serde_json::to_value(meta.profile).expect("task profile serializes to JSON");
+    structural.push(format!(
+      "{}|{}|{}|{}|{}|{}",
+      meta.id,
+      meta.task_parent_id.as_deref().unwrap_or_default(),
+      profile.as_str().expect("task profile serializes as a string"),
+      match meta.status {
+        SessionStatus::Active => "active",
+        SessionStatus::Archived => "archived",
+      },
+      task_state,
+      if archived { "True" } else { "False" },
+    ));
+  }
+  structural.sort();
+  derived_archived_ids.sort();
+  index.revision = control_events::sha256_hex(&structural.join("\n"));
+  index.derived_archived_ids = derived_archived_ids;
+  Ok(index)
+}
+
+/// Read the task lifecycle fact in the last 1000 non-empty lines, matching `_task_state_fast`.
+fn lifecycle_state_from_file(path: &Path) -> StoreResult<Option<String>> {
+  let mut file = match File::open(path) {
+    Ok(file) => file,
+    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+    Err(error) => return Err(path_error(path, error)),
+  };
+  let size = file.metadata().map_err(|error| path_error(path, error))?.len();
+  let ranges = lifecycle_tail_ranges(&mut file, size, path)?;
+  for range in ranges {
+    let length = usize::try_from(range.end - range.start).expect("one event line fits in memory");
+    let mut head = vec![0; length.min(LIFECYCLE_HEAD_PROOF_BYTES)];
+    file.seek(SeekFrom::Start(range.start)).map_err(|error| path_error(path, error))?;
+    file.read_exact(&mut head).map_err(|error| path_error(path, error))?;
+    if lifecycle_head_verdict(&head) == Some(false) {
+      continue;
+    }
+    let raw = if head.len() == length {
+      head
+    } else {
+      let mut line = vec![0; length];
+      file.seek(SeekFrom::Start(range.start)).map_err(|error| path_error(path, error))?;
+      file.read_exact(&mut line).map_err(|error| path_error(path, error))?;
+      line
+    };
+    let Some(event) = crate::ndjson::parse_line(&raw) else { continue };
+    let Some(event_type) = event.get("type").and_then(Value::as_str) else { continue };
+    match event_type {
+      "clone_start" | "task_reopened" => return Ok(Some("open".to_string())),
+      "task_closed" => {
+        let state = event
+          .get("outcome")
+          .and_then(Value::as_str)
+          .filter(|value| !value.is_empty())
+          .unwrap_or("completed")
+          .to_string();
+        return Ok(Some(state));
+      }
+      _ => {}
+    }
+  }
+  Ok(None)
+}
+
+/// Find the last 1000 non-empty physical lines without retaining their contents.
+fn lifecycle_tail_ranges(file: &mut File, size: u64, path: &Path) -> StoreResult<Vec<std::ops::Range<u64>>> {
+  let mut ranges = Vec::new();
+  if size == 0 {
+    return Ok(ranges);
+  }
+  let mut cursor = size;
+  let mut line_end = size;
+  let mut last = [0_u8; 1];
+  file.seek(SeekFrom::Start(size - 1)).map_err(|error| path_error(path, error))?;
+  file.read_exact(&mut last).map_err(|error| path_error(path, error))?;
+  if last[0] == b'\n' {
+    cursor -= 1;
+    line_end -= 1;
+  }
+
+  let mut block = vec![0_u8; LIFECYCLE_TAIL_CHUNK_BYTES];
+  while cursor > 0 && ranges.len() < LIFECYCLE_TAIL_LINES {
+    let block_start = cursor.saturating_sub(LIFECYCLE_TAIL_CHUNK_BYTES as u64);
+    let block_length = usize::try_from(cursor - block_start).expect("a tail block fits in memory");
+    file.seek(SeekFrom::Start(block_start)).map_err(|error| path_error(path, error))?;
+    file.read_exact(&mut block[..block_length]).map_err(|error| path_error(path, error))?;
+    for (index, byte) in block[..block_length].iter().enumerate().rev() {
+      if *byte == b'\n' {
+        let newline = block_start + index as u64;
+        let line_start = newline + 1;
+        if line_start < line_end {
+          ranges.push(line_start..line_end);
+          if ranges.len() == LIFECYCLE_TAIL_LINES {
+            break;
+          }
+        }
+        line_end = newline;
+      }
+    }
+    cursor = block_start;
+  }
+  if ranges.len() < LIFECYCLE_TAIL_LINES && line_end > 0 {
+    ranges.push(0..line_end);
+  }
+  Ok(ranges)
+}
+
+/// Return a proven lifecycle verdict for the two serialized event headers used by the Python reader.
+fn lifecycle_head_verdict(head: &[u8]) -> Option<bool> {
+  let (event_type, _) = if head.starts_with(b"{\"type\"") {
+    string_value_after_key(head, b"{\"type\"".len())?
+  } else if head.starts_with(b"{\"id\"") {
+    let (_, after_id) = string_value_after_key(head, b"{\"id\"".len())?;
+    if head.get(after_id) != Some(&b',') {
+      return None;
+    }
+    let mut type_key = after_id + 1;
+    while head.get(type_key).is_some_and(u8::is_ascii_whitespace) {
+      type_key += 1;
+    }
+    if !head[type_key..].starts_with(b"\"type\"") {
+      return None;
+    }
+    string_value_after_key(head, type_key + b"\"type\"".len())?
+  } else {
+    return None;
+  };
+  Some(event_type == b"clone_start" || event_type == b"task_closed" || event_type == b"task_reopened")
+}
+
+fn string_value_after_key(head: &[u8], mut cursor: usize) -> Option<(&[u8], usize)> {
+  while head.get(cursor).is_some_and(|byte| matches!(byte, b' ' | b'\t')) {
+    cursor += 1;
+  }
+  if head.get(cursor) != Some(&b':') {
+    return None;
+  }
+  cursor += 1;
+  while head.get(cursor).is_some_and(|byte| matches!(byte, b' ' | b'\t')) {
+    cursor += 1;
+  }
+  if head.get(cursor) != Some(&b'"') {
+    return None;
+  }
+  let start = cursor + 1;
+  let tail = head.get(start..)?;
+  let end = tail.iter().position(|byte| *byte == b'"')?;
+  let value = &tail[..end];
+  if value.contains(&b'\\') {
+    return None;
+  }
+  Some((value, start + end + 1))
 }
 
 fn index_meta<'a>(index: &'a TreeIndex, session_id: &str) -> StoreResult<&'a SessionMetadata> {
@@ -1713,6 +2024,9 @@ fn archived_of(
   session_id: &str,
   memo: &mut HashMap<String, bool>,
 ) -> StoreResult<bool> {
+  if let Some(archived) = index.archive_by_id.get(session_id) {
+    return Ok(*archived);
+  }
   let mut chain = Vec::new();
   let mut seen = HashSet::new();
   let mut current_id = session_id;
@@ -1731,7 +2045,7 @@ fn archived_of(
   };
   for node_id in chain.into_iter().rev() {
     if !inherited {
-      inherited = store.task_state(node_id)? != "open";
+      inherited = store.task_state_fast(node_id)? != "open";
     }
     memo.insert(node_id.to_string(), inherited);
   }
@@ -3387,6 +3701,44 @@ pub(crate) mod tests {
       store.node_facts(session_id).unwrap();
     }
     assert_eq!(store.history_work().full_folds, full_folds);
+  }
+
+  #[tokio::test]
+  async fn task_state_tail_reads_reuse_file_identity_and_move_after_append() {
+    let home = tempfile::tempdir().unwrap();
+    let store = make_store(home.path());
+    let node = create_node(&store, "task-state-tail", None, TaskProfile::Manager).await;
+    let reads_before = store.task_state_tail_read_count();
+    let folds_before = store.history_work().full_folds;
+    append(&store, &node.id, json!({"type": "task_closed", "outcome": "completed"})).await;
+
+    assert_eq!(store.task_state_fast(&node.id).unwrap(), "completed");
+    let reads_after_close = store.task_state_tail_read_count();
+    assert_eq!(reads_after_close - reads_before, 1);
+    assert_eq!(store.history_work().full_folds, folds_before, "a tail lifecycle fact does not load the full history");
+    assert_eq!(store.task_state_fast(&node.id).unwrap(), "completed");
+    assert_eq!(store.task_state_tail_read_count(), reads_after_close);
+
+    append(&store, &node.id, json!({"type": "task_reopened"})).await;
+    assert_eq!(store.task_state_fast(&node.id).unwrap(), "open");
+    assert_eq!(store.task_state_tail_read_count(), reads_after_close + 1);
+  }
+
+  #[tokio::test]
+  async fn task_state_for_tree_index_reuses_the_sealed_recovery_fold() {
+    let home = tempfile::tempdir().unwrap();
+    let store = make_store(home.path());
+    let node = create_node(&store, "sealed-task-state", None, TaskProfile::Manager).await;
+    append(&store, &node.id, json!({"type": "task_closed", "outcome": "completed"})).await;
+    store.node_facts(&node.id).unwrap();
+    store.evict_recovery_history(&node.id);
+    let tails_before = store.task_state_tail_read_count();
+    let files_before = store.history_work().file_reads;
+
+    assert_eq!(store.task_state_for_tree_index(&node.id).unwrap(), "completed");
+
+    assert_eq!(store.task_state_tail_read_count(), tails_before, "a sealed recovery fold avoids a tail-file read");
+    assert_eq!(store.history_work().file_reads, files_before, "the sealed state avoids loading the chat history");
   }
 
   fn history_reads(store: &Store) -> u64 {

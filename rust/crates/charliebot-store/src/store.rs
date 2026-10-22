@@ -23,7 +23,7 @@ use crate::listing::CachedListing;
 use crate::metadata::{RoundRating, SessionMetadata, SessionStatus, UtcDateTime};
 use crate::session_events::SessionEventState;
 use crate::streaming::StreamingManager;
-use crate::task_tree::{CachedActivity, CachedNodeState, CachedTreeIndex, NodeFacts};
+use crate::task_tree::{CachedActivity, CachedNodeState, CachedTaskStateTail, CachedTreeIndex, NodeFacts};
 use crate::thinking::ThinkingState;
 use crate::{ControlGuard, StoreError, StoreResult};
 
@@ -161,6 +161,8 @@ pub struct Store {
   pub(crate) metadata_cache: StdMutex<HashMap<String, CachedMetadata>>,
   /// Moves on every metadata write and every eviction of a cache entry, as `_listings_revision` does.
   pub(crate) listings_revision: AtomicU64,
+  /// Identifies each status-filtered metadata corpus refresh for search memo invalidation.
+  pub(crate) next_listing_generation: AtomicU64,
   /// The last listing walked for each status filter (see [`Store::load_session_metas`]).
   pub(crate) listings_memo: StdMutex<HashMap<Option<SessionStatus>, CachedListing>>,
   pub(crate) subtree_roots_cache: StdMutex<Option<CachedSubtreeRoots>>,
@@ -169,7 +171,11 @@ pub struct Store {
   pub(crate) node_facts_cache: StdMutex<HashMap<String, CachedNodeFacts>>,
   pub(crate) event_read_caches: StdMutex<EventReadCaches>,
   pub(crate) node_state_cache: StdMutex<HashMap<String, CachedNodeState>>,
+  pub(crate) task_state_tail_cache: StdMutex<HashMap<String, CachedTaskStateTail>>,
+  pub(crate) task_state_tail_reads: AtomicU64,
   pub(crate) activity_cache: StdMutex<HashMap<String, CachedActivity>>,
+  pub(crate) run_record_reads: AtomicU64,
+  pub(crate) task_tree_activity_calls: AtomicU64,
   pub(crate) history_work: HistoryWorkCounters,
   /// Reads of a node's history, each a call that hands out the live event list, cached or not.
   #[cfg(test)]
@@ -192,6 +198,7 @@ pub struct Store {
   pub(crate) streaming_manager: StreamingManager,
   pub(crate) thinking_state: ThinkingState,
   pub(crate) task_tree_index: StdMutex<Option<CachedTreeIndex>>,
+  pub(crate) task_tree_index_builds: AtomicU64,
   pub(crate) task_tree_generation: AtomicU64,
   #[cfg(any(test, feature = "write-faults"))]
   pub(crate) write_faults: Arc<crate::write_faults::WriteFaults>,
@@ -234,6 +241,7 @@ impl Store {
       sequence_binding_mover,
       metadata_cache: StdMutex::new(HashMap::new()),
       listings_revision: AtomicU64::new(0),
+      next_listing_generation: AtomicU64::new(1),
       listings_memo: StdMutex::new(HashMap::new()),
       subtree_roots_cache: StdMutex::new(None),
       metadata_locks: StdMutex::new(HashMap::new()),
@@ -241,7 +249,11 @@ impl Store {
       node_facts_cache: StdMutex::new(HashMap::new()),
       event_read_caches: StdMutex::new(EventReadCaches::default()),
       node_state_cache: StdMutex::new(HashMap::new()),
+      task_state_tail_cache: StdMutex::new(HashMap::new()),
+      task_state_tail_reads: AtomicU64::new(0),
       activity_cache: StdMutex::new(HashMap::new()),
+      run_record_reads: AtomicU64::new(0),
+      task_tree_activity_calls: AtomicU64::new(0),
       history_work: HistoryWorkCounters::default(),
       #[cfg(test)]
       history_reads: AtomicU64::new(0),
@@ -262,6 +274,7 @@ impl Store {
       streaming_manager: StreamingManager::new(),
       thinking_state: ThinkingState::default(),
       task_tree_index: StdMutex::new(None),
+      task_tree_index_builds: AtomicU64::new(0),
       task_tree_generation: AtomicU64::new(0),
       #[cfg(any(test, feature = "write-faults"))]
       write_faults: Arc::default(),
@@ -316,6 +329,32 @@ impl Store {
   /// Read `metadata.json` from disk without consulting or populating the cache.
   pub fn read_metadata_fresh(&self, session_id: &str) -> StoreResult<Option<SessionMetadata>> {
     self.read_metadata_path(&self.metadata_path(session_id))
+  }
+
+  /// Return cached metadata when fresh, reading and populating the cache only on a miss.
+  pub fn get_session_cached_or_read_sync(&self, session_id: &str) -> StoreResult<Option<SessionMetadata>> {
+    if let Some(meta) = self.fresh_cached_meta(session_id)? {
+      return Ok(Some(meta.as_ref().clone()));
+    }
+    let path = self.metadata_path(session_id);
+    let signature = stat_signature(&path);
+    let meta = self.read_metadata_path(&path)?;
+    let mut cache = self.metadata_cache.lock().expect("metadata cache mutex is not poisoned");
+    if let Some(entry) = cache.get(session_id) {
+      return Ok(Some(entry.value.as_ref().clone()));
+    }
+    let Some(meta) = meta else { return Ok(None) };
+    let meta = Arc::new(meta);
+    cache.insert(
+      session_id.to_string(),
+      CachedMetadata { value: Arc::clone(&meta), at: Instant::now(), signature, identity: Arc::new(()) },
+    );
+    Ok(Some(meta.as_ref().clone()))
+  }
+
+  /// The generation that changes when the session listing's metadata corpus changes.
+  pub fn listings_revision(&self) -> u64 {
+    self.listings_revision.load(Ordering::Acquire)
   }
 
   /// Return the directory where the live event log is stored.

@@ -12,7 +12,7 @@ use bzip2::read::BzDecoder;
 use charliebot_compat::http_client::{self, Settings};
 use charliebot_core::RepoRoot;
 use charliebot_core::config::CharlieBotConfig;
-use charliebot_registry::context::FeatureContext;
+use charliebot_registry::context::{FeatureContext, StartupStop};
 use charliebot_registry::wiring::{Phase, Service, ServiceContext};
 use sha2::{Digest, Sha256};
 use tar::Archive;
@@ -100,8 +100,8 @@ fn get_ready_model_paths_from(state: &Mutex<ProvisioningState>) -> Result<VoiceM
   }
 }
 
-fn provision_models(cfg: &CharlieBotConfig) {
-  provision_models_with(provisioning_state(), || ensure_models_cached(cfg));
+fn provision_models(cfg: &CharlieBotConfig, stop: &StartupStop) {
+  provision_models_inner(provisioning_state(), Some(stop), || ensure_models_cached_until_stopped(cfg, stop));
 }
 
 /// `service.py`'s warm-up, run after provisioning on the same thread: the resident bundle, then one synthetic decode
@@ -117,7 +117,16 @@ fn warm_up(cfg: &CharlieBotConfig, repo_root: &Path) {
   }
 }
 
+#[cfg(test)]
 fn provision_models_with(state: &Mutex<ProvisioningState>, ensure: impl FnOnce() -> anyhow::Result<VoiceModelPaths>) {
+  provision_models_inner(state, None, ensure);
+}
+
+fn provision_models_inner(
+  state: &Mutex<ProvisioningState>,
+  stop: Option<&StartupStop>,
+  ensure: impl FnOnce() -> anyhow::Result<VoiceModelPaths>,
+) {
   {
     let mut state = state.lock().expect("speech provisioning state lock is never poisoned");
     if state.started {
@@ -128,6 +137,11 @@ fn provision_models_with(state: &Mutex<ProvisioningState>, ensure: impl FnOnce()
   }
 
   match ensure() {
+    Ok(_) | Err(_) if stop.is_some_and(StartupStop::is_cancelled) => {
+      let mut state = state.lock().expect("speech provisioning state lock is never poisoned");
+      state.started = false;
+      state.error = None;
+    }
     Ok(paths) => {
       let cache_dir = paths.cache_dir.display().to_string();
       state.lock().expect("speech provisioning state lock is never poisoned").ready_paths = Some(paths);
@@ -149,8 +163,13 @@ fn model_paths(cfg: &CharlieBotConfig) -> VoiceModelPaths {
   voice_model_paths(&cfg.charliebot_home.join("models"))
 }
 
-fn ensure_models_cached(cfg: &CharlieBotConfig) -> anyhow::Result<VoiceModelPaths> {
-  ensure_engine_cached(&model_paths(cfg), cfg.section::<VoiceSettings>("voice").engine, &Settings::from_env())
+fn ensure_models_cached_until_stopped(cfg: &CharlieBotConfig, stop: &StartupStop) -> anyhow::Result<VoiceModelPaths> {
+  ensure_engine_cached_until_stopped(
+    &model_paths(cfg),
+    cfg.section::<VoiceSettings>("voice").engine,
+    &Settings::from_env(),
+    Some(stop),
+  )
 }
 
 /// The CPU engine's archive, extracted and verified: the sherpa bundle's paths. The qwen3_hf fallback fetches it when
@@ -161,25 +180,47 @@ pub(crate) fn ensure_sherpa_paths(cfg: &CharlieBotConfig) -> anyhow::Result<Voic
 
 /// Provision the models of `engine`. For qwen3_hf the VAD model is the only file this server fetches: the transformers
 /// snapshot is fetched by the helper, when its bundle is created.
-fn ensure_engine_cached(
+fn ensure_engine_cached_until_stopped(
   paths: &VoiceModelPaths,
   engine: VoiceEngine,
   settings: &Settings,
+  stop: Option<&StartupStop>,
 ) -> anyhow::Result<VoiceModelPaths> {
   match engine {
-    VoiceEngine::Sherpa => ensure_sherpa_paths_cached(paths, settings),
-    VoiceEngine::Qwen3Hf => ensure_qwen3_hf_cached_with(paths, settings, SILERO_VAD_URL, SILERO_VAD_SHA256),
+    VoiceEngine::Sherpa => ensure_sherpa_paths_cached_until_stopped(
+      paths,
+      settings,
+      QWEN3_ASR_URL,
+      QWEN3_ASR_SHA256,
+      SILERO_VAD_URL,
+      SILERO_VAD_SHA256,
+      stop,
+    ),
+    VoiceEngine::Qwen3Hf => {
+      ensure_qwen3_hf_cached_until_stopped(paths, settings, SILERO_VAD_URL, SILERO_VAD_SHA256, stop)
+    }
   }
 }
 
+#[cfg(test)]
 fn ensure_qwen3_hf_cached_with(
   paths: &VoiceModelPaths,
   settings: &Settings,
   vad_url: &str,
   vad_sha256: &str,
 ) -> anyhow::Result<VoiceModelPaths> {
+  ensure_qwen3_hf_cached_until_stopped(paths, settings, vad_url, vad_sha256, None)
+}
+
+fn ensure_qwen3_hf_cached_until_stopped(
+  paths: &VoiceModelPaths,
+  settings: &Settings,
+  vad_url: &str,
+  vad_sha256: &str,
+  stop: Option<&StartupStop>,
+) -> anyhow::Result<VoiceModelPaths> {
   fs::create_dir_all(&paths.cache_dir).with_context(|| format!("create {}", paths.cache_dir.display()))?;
-  ensure_artifact(&paths.silero_vad, vad_url, vad_sha256, settings)?;
+  ensure_artifact_until_stopped(&paths.silero_vad, vad_url, vad_sha256, settings, stop)?;
   Ok(paths.clone())
 }
 
@@ -195,15 +236,44 @@ fn ensure_sherpa_paths_cached_with(
   vad_url: &str,
   vad_sha256: &str,
 ) -> anyhow::Result<VoiceModelPaths> {
+  ensure_sherpa_paths_cached_until_stopped(paths, settings, archive_url, archive_sha256, vad_url, vad_sha256, None)
+}
+
+fn ensure_sherpa_paths_cached_until_stopped(
+  paths: &VoiceModelPaths,
+  settings: &Settings,
+  archive_url: &str,
+  archive_sha256: &str,
+  vad_url: &str,
+  vad_sha256: &str,
+  stop: Option<&StartupStop>,
+) -> anyhow::Result<VoiceModelPaths> {
   fs::create_dir_all(&paths.cache_dir).with_context(|| format!("create {}", paths.cache_dir.display()))?;
-  ensure_artifact(&paths.qwen3_archive, archive_url, archive_sha256, settings)?;
-  ensure_artifact(&paths.silero_vad, vad_url, vad_sha256, settings)?;
+  ensure_artifact_until_stopped(&paths.qwen3_archive, archive_url, archive_sha256, settings, stop)?;
+  ensure_artifact_until_stopped(&paths.silero_vad, vad_url, vad_sha256, settings, stop)?;
+  if stop.is_some_and(StartupStop::is_cancelled) {
+    bail!("speech model provisioning stopped during server startup");
+  }
   ensure_qwen3_extracted(paths)?;
   verify_model_files(paths)?;
   Ok(paths.clone())
 }
 
+#[cfg(test)]
 fn ensure_artifact(path: &Path, url: &str, expected_sha256: &str, settings: &Settings) -> anyhow::Result<()> {
+  ensure_artifact_until_stopped(path, url, expected_sha256, settings, None)
+}
+
+fn ensure_artifact_until_stopped(
+  path: &Path,
+  url: &str,
+  expected_sha256: &str,
+  settings: &Settings,
+  stop: Option<&StartupStop>,
+) -> anyhow::Result<()> {
+  if stop.is_some_and(StartupStop::is_cancelled) {
+    bail!("speech model provisioning stopped during server startup");
+  }
   if path.exists() {
     let actual = sha256_file(path)?;
     if actual != expected_sha256 {
@@ -221,21 +291,26 @@ fn ensure_artifact(path: &Path, url: &str, expected_sha256: &str, settings: &Set
       // src/infra/timeouts.py::HTTP_MODEL_DOWNLOAD_TIMEOUT to urlopen here, which bounds each socket wait.
       // reqwest's request timeout would bound the whole body instead, so each wait is bounded here.
       let timeout = Duration::from_secs(HTTP_MODEL_DOWNLOAD_TIMEOUT_SECS);
-      let mut response = tokio::time::timeout(timeout, client.get(url).send())
-        .await
-        .with_context(|| format!("model download timed out for {url}"))?
-        .with_context(|| format!("model download failed for {url}"))?;
+      let mut response = tokio::select! {
+        response = tokio::time::timeout(timeout, client.get(url).send()) => response
+          .with_context(|| format!("model download timed out for {url}"))?
+          .with_context(|| format!("model download failed for {url}"))?,
+        _ = wait_for_startup_stop(stop) => bail!("speech model download stopped during server startup"),
+      };
       let status = response.status().as_u16();
       if status != 200 {
         bail!("model download failed for {url}: HTTP {status}");
       }
 
       let mut digest = Sha256::new();
-      while let Some(chunk) = tokio::time::timeout(timeout, response.chunk())
-        .await
-        .with_context(|| format!("model download timed out for {url}"))?
-        .context("read model download response")?
-      {
+      loop {
+        let chunk = tokio::select! {
+          chunk = tokio::time::timeout(timeout, response.chunk()) => chunk
+            .with_context(|| format!("model download timed out for {url}"))?
+            .context("read model download response")?,
+          _ = wait_for_startup_stop(stop) => bail!("speech model download stopped during server startup"),
+        };
+        let Some(chunk) = chunk else { break };
         digest.update(&chunk);
         stream.write_all(&chunk).context("write model download chunk")?;
       }
@@ -246,6 +321,13 @@ fn ensure_artifact(path: &Path, url: &str, expected_sha256: &str, settings: &Set
       Ok(())
     })
   })
+}
+
+async fn wait_for_startup_stop(stop: Option<&StartupStop>) {
+  match stop {
+    Some(stop) => stop.cancelled().await,
+    None => std::future::pending::<()>().await,
+  }
 }
 
 fn atomic_write_stream(path: &Path, write: impl FnOnce(&mut File) -> anyhow::Result<()>) -> anyhow::Result<()> {
@@ -356,11 +438,14 @@ impl Service for SpeechService {
       let cfg = cfg.as_ref().clone();
       let repo_root = ctx.features.startup.require::<RepoRoot>().map_err(|error| anyhow::anyhow!(error.to_string()))?;
       let repo_root = repo_root.path().to_path_buf();
+      let stop = ctx.features.startup.stop();
       let worker = Arc::new(tokio::sync::Mutex::new(None));
       ctx.features.startup.insert(SpeechWorker(Arc::clone(&worker)))?;
       let blocking_worker = tokio::task::spawn_blocking(move || {
-        provision_models(&cfg);
-        warm_up(&cfg, &repo_root);
+        provision_models(&cfg, &stop);
+        if !stop.is_cancelled() {
+          warm_up(&cfg, &repo_root);
+        }
       });
       *worker.lock().await = Some(blocking_worker);
       let worker_to_monitor = SpeechWorker(Arc::clone(&worker));

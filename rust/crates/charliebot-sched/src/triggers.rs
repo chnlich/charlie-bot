@@ -517,6 +517,7 @@ impl TriggerManager {
 
   /// Restart every pending trigger found under the configured sessions directory.
   pub async fn recover_pending(self: &Arc<Self>) -> anyhow::Result<()> {
+    let stop = self.features.startup.stop();
     let sessions_dir = self.features.store.config().sessions_dir();
     let mut sessions = match tokio::fs::read_dir(&sessions_dir).await {
       Ok(entries) => entries,
@@ -524,6 +525,9 @@ impl TriggerManager {
       Err(error) => return Err(error).with_context(|| format!("read {}", sessions_dir.display())),
     };
     while let Some(entry) = sessions.next_entry().await? {
+      if stop.is_cancelled() {
+        return Ok(());
+      }
       if !entry.file_type().await?.is_dir() {
         continue;
       }
@@ -538,6 +542,9 @@ impl TriggerManager {
         Err(error) => return Err(error).with_context(|| format!("scan {}", directory.display())),
       };
       for (path, _stat) in files {
+        if stop.is_cancelled() {
+          return Ok(());
+        }
         let trigger = match self.load_trigger_path(&path).await {
           Ok(trigger) => trigger,
           Err(error) => {
@@ -550,6 +557,9 @@ impl TriggerManager {
             continue;
           }
         };
+        if stop.is_cancelled() {
+          return Ok(());
+        }
         if trigger.status == TriggerStatus::Pending {
           self.start_task(trigger.clone());
           tracing::info!(

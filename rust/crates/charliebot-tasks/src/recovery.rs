@@ -223,9 +223,11 @@ impl TaskExecutionAdapter {
 pub fn recovery_step(features: Arc<FeatureContext>) -> BoxFuture<'static, anyhow::Result<()>> {
   Box::pin(async move {
     let adapter = features.startup.require::<TaskExecutionAdapter>()?;
+    #[cfg(debug_assertions)]
+    wait_test_recovery_gate(&features).await?;
     let started = Instant::now();
     match reconcile_task_tree(&features, &adapter).await {
-      Ok(counters) => tracing::info!(
+      Ok(counters) if !features.startup.stop().is_cancelled() => tracing::info!(
         target: "charliebot_tasks",
         elapsed_ms = started.elapsed().as_millis() as u64,
         nodes = counters.nodes,
@@ -238,12 +240,30 @@ pub fn recovery_step(features: Arc<FeatureContext>) -> BoxFuture<'static, anyhow
         keep_reasons = ?counters.keep_reasons,
         "task_tree_recovery_done"
       ),
+      Ok(_) => {}
       Err(error) => {
         tracing::error!(target: "charliebot_tasks", error = %format!("{error:#}"), "task_tree_recovery_failed")
       }
     }
     Ok(())
   })
+}
+
+#[cfg(debug_assertions)]
+async fn wait_test_recovery_gate(features: &FeatureContext) -> anyhow::Result<()> {
+  const DELAY_ENV: &str = "CHARLIEBOT_TEST_TASK_RECOVERY_DELAY_MS";
+  let Some(value) = std::env::var_os(DELAY_ENV) else {
+    return Ok(());
+  };
+  let value = value.into_string().map_err(|_| anyhow!("{DELAY_ENV} is not Unicode"))?;
+  let delay_ms = value.parse::<u64>().with_context(|| format!("parsing {DELAY_ENV}"))?;
+  tracing::info!(target: "charliebot_tasks", delay_ms, "task_tree_recovery_test_gate");
+  let stop = features.startup.stop();
+  tokio::select! {
+    _ = tokio::time::sleep(Duration::from_millis(delay_ms)) => {}
+    _ = stop.cancelled() => {}
+  }
+  Ok(())
 }
 
 /// On SIGINT and bind failure, cancel each session consumer after `server.py:293-310`, as `asyncio.run` does
@@ -262,8 +282,12 @@ pub async fn reconcile_task_tree(
   features: &Arc<FeatureContext>,
   adapter: &TaskExecutionAdapter,
 ) -> anyhow::Result<PassCounters> {
+  let stop = features.startup.stop();
   let cfg = features.config.get().context("reading the configuration for task recovery")?;
   let mut counters = PassCounters::default();
+  if stop.is_cancelled() {
+    return Ok(counters);
+  }
   let sessions_dir = cfg.sessions_dir();
   if !sessions_dir.is_dir() {
     return Ok(counters);
@@ -274,6 +298,9 @@ pub async fn reconcile_task_tree(
 
   let tree = sequence_tree(features, adapter)?;
   for controller in features.registry.sequence_controllers() {
+    if stop.is_cancelled() {
+      return Ok(counters);
+    }
     controller.reconcile_interrupted(&tree).await?;
   }
 
@@ -284,6 +311,9 @@ pub async fn reconcile_task_tree(
     .with_context(|| format!("listing {}", sessions_dir.display()))?;
   session_dirs.sort();
   for session_dir in session_dirs {
+    if stop.is_cancelled() {
+      return Ok(counters);
+    }
     if !session_dir.is_dir() || !session_dir.join(run_records::METADATA_NAME).is_file() {
       continue;
     }
@@ -295,6 +325,9 @@ pub async fn reconcile_task_tree(
     let Some(meta) = features.store.load_meta(&session_id).await? else {
       continue;
     };
+    if stop.is_cancelled() {
+      return Ok(counters);
+    }
     counters.nodes += 1;
     if let Some(marker) = marker {
       if let Some(reason) = boot_skip_reason(features, &session_id, &session_dir, &meta, marker)? {
@@ -309,6 +342,9 @@ pub async fn reconcile_task_tree(
         continue;
       }
     }
+    if stop.is_cancelled() {
+      return Ok(counters);
+    }
     counters.full += 1;
     if let Err(error) = reconcile_node(features, adapter, &session_id, &mut counters, None).await {
       tracing::error!(target: "charliebot_tasks", session_id = %session_id, error = %format!("{error:#}"), "task_recovery_node_failed");
@@ -319,7 +355,7 @@ pub async fn reconcile_task_tree(
       }
     }
   }
-  if !failed_node {
+  if !failed_node && !stop.is_cancelled() {
     write_boot_recovery_marker(&cfg.charliebot_home, started_at)?;
   }
   counters.marker = marker.map(UtcDateTime::to_python_isoformat);
@@ -868,7 +904,13 @@ pub fn sequence_tree(
   let executor: Arc<dyn SequenceExecutor> = Arc::new(adapter.clone());
   Ok(StoreSequenceTree::new(
     Arc::clone(&features.store),
-    SequenceTreeRuntime { dispatch, completion, session_events, executor: Some(executor) },
+    SequenceTreeRuntime {
+      dispatch,
+      completion,
+      session_events,
+      executor: Some(executor),
+      startup_stop: features.startup.stop(),
+    },
   ))
 }
 

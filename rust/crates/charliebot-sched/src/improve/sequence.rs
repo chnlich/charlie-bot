@@ -975,28 +975,48 @@ pub async fn reconcile_interrupted_sequences(
   tree: &dyn SequenceTree,
   boot_pid: Option<i64>,
 ) -> anyhow::Result<usize> {
+  let stop = tree.startup_stop();
   let pid = boot_pid.unwrap_or_else(|| i64::from(std::process::id()));
   let sessions_dir = cfg.sessions_dir();
   if !sessions_dir.is_dir() {
     return Ok(0);
   }
-  let mut session_dirs: Vec<PathBuf> =
-    std::fs::read_dir(&sessions_dir)?.map(|entry| entry.map(|e| e.path())).collect::<Result<_, _>>()?;
-  session_dirs.sort();
   let mut repaired = 0;
+  let mut session_dirs = Vec::new();
+  for entry in std::fs::read_dir(&sessions_dir)? {
+    if stop.is_cancelled() {
+      return Ok(repaired);
+    }
+    session_dirs.push(entry?.path());
+  }
+  session_dirs.sort();
   for session_dir in session_dirs {
+    if stop.is_cancelled() {
+      return Ok(repaired);
+    }
     if !session_dir.is_dir() || !session_dir.join("loops").is_dir() {
       continue;
     }
     let session_id = session_dir.file_name().and_then(|name| name.to_str()).unwrap_or_default().to_string();
     let loops_dir = session_dir.join("loops");
-    let mut loop_ids: Vec<i64> = std::fs::read_dir(&loops_dir)?
-      .filter_map(|entry| entry.ok())
-      .filter(|entry| entry.path().join(command::STATE_FILE).exists())
-      .filter_map(|entry| entry.file_name().to_str().and_then(|name| name.parse::<i64>().ok()))
-      .collect();
+    let mut loop_ids = Vec::new();
+    for entry in std::fs::read_dir(&loops_dir)? {
+      if stop.is_cancelled() {
+        return Ok(repaired);
+      }
+      let Ok(entry) = entry else { continue };
+      if !entry.path().join(command::STATE_FILE).exists() {
+        continue;
+      }
+      if let Some(loop_id) = entry.file_name().to_str().and_then(|name| name.parse::<i64>().ok()) {
+        loop_ids.push(loop_id);
+      }
+    }
     loop_ids.sort_unstable();
     for loop_id in loop_ids {
+      if stop.is_cancelled() {
+        return Ok(repaired);
+      }
       if let Some(mut state) = command::load_loop_state(cfg, &session_id, loop_id)?
         && state.status == "running"
         && state.server_pid != Some(pid)

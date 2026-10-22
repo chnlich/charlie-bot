@@ -514,6 +514,18 @@ impl SessionMetadata {
     }
   }
 
+  /// Serialize the public Python model shape, including defaults for registered session metadata slots.
+  pub fn to_response_value(&self, slots: &[MetadataSlot]) -> Value {
+    let mut value = serde_json::to_value(self).expect("session metadata serializes to JSON");
+    let object = value.as_object_mut().expect("session metadata serializes to an object");
+    for slot in slots.iter().filter(|slot| slot.on == MetadataFile::Session) {
+      for field in &slot.fields {
+        object.entry(field.name.to_string()).or_insert_with(|| field.default.clone());
+      }
+    }
+    value
+  }
+
   /// Parse metadata and enforce the v2 session schema.
   pub fn from_json(raw: &str, path: Option<&str>) -> StoreResult<Self> {
     let value: Value = serde_json::from_str(raw).map_err(|error| {
@@ -691,6 +703,139 @@ mod tests {
     assert_eq!(&keys[group + 1..group + 3], &["probe_note", "probe_count"]);
     assert_eq!(keys.last(), Some(&"left_by_deleted_package"));
     assert_eq!(value["probe_count"], 0);
+  }
+
+  #[test]
+  fn response_value_supplies_python_session_model_and_slot_defaults_for_legacy_metadata() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("metadata.json");
+    std::fs::write(&path, r#"{"name":"Synthetic","profile":"manager"}"#).unwrap();
+    let metadata = SessionMetadata::from_json(&std::fs::read_to_string(path).unwrap(), None).unwrap();
+    let slots = vec![MetadataSlot {
+      owner: "synthetic",
+      on: MetadataFile::Session,
+      after: None,
+      fields: vec![
+        SlotField { name: "route", default: Value::Null },
+        SlotField { name: "backend_from_pool", default: json!(false) },
+        SlotField { name: "web_status", default: Value::Null },
+        SlotField { name: "discord_origin", default: Value::Null },
+        SlotField { name: "discord_watermark_id", default: Value::Null },
+        SlotField { name: "claude_account", default: Value::Null },
+        SlotField { name: "slack_watermark_ts", default: Value::Null },
+        SlotField { name: "slack_origin", default: Value::Null },
+      ],
+    }];
+
+    let value = metadata.to_response_value(&slots);
+    let object = value.as_object().unwrap();
+    let expected_fields = [
+      "id",
+      "name",
+      "status",
+      "has_unread",
+      "has_running_tasks",
+      "work_state",
+      "has_pending_trigger",
+      "pending_trigger_count",
+      "next_trigger_at",
+      "has_pending_plan_approval",
+      "starred",
+      "thinking_since",
+      "run_backend",
+      "created_at",
+      "updated_at",
+      "cc_session_id",
+      "cc_session_started_at",
+      "backend",
+      "schedule_cron",
+      "schedule_enabled",
+      "schedule_next_run",
+      "schedule_timezone",
+      "schedule_project",
+      "schedule_allow_failure",
+      "parent_session_id",
+      "successor_session_id",
+      "schema_version",
+      "task_parent_id",
+      "profile",
+      "task",
+      "created_by_event",
+      "origin_ref",
+      "subtree_prompt_ref",
+      "node_prompt_ref",
+      "native_prompt_hash",
+      "native_backend",
+      "native_model",
+      "round_ratings",
+      "group",
+      "archive_offset",
+      "route",
+      "backend_from_pool",
+      "web_status",
+      "discord_origin",
+      "discord_watermark_id",
+      "claude_account",
+      "slack_watermark_ts",
+      "slack_origin",
+    ];
+    let actual_fields: std::collections::BTreeSet<&str> = object.keys().map(String::as_str).collect();
+    let expected_fields: std::collections::BTreeSet<&str> = expected_fields.into_iter().collect();
+    assert_eq!(actual_fields, expected_fields);
+
+    let expected_defaults = [
+      ("name", json!("Synthetic")),
+      ("status", json!("active")),
+      ("has_unread", json!(false)),
+      ("has_running_tasks", json!(false)),
+      ("work_state", Value::Null),
+      ("has_pending_trigger", json!(false)),
+      ("pending_trigger_count", json!(0)),
+      ("next_trigger_at", Value::Null),
+      ("has_pending_plan_approval", json!(false)),
+      ("starred", json!(false)),
+      ("thinking_since", Value::Null),
+      ("run_backend", Value::Null),
+      ("cc_session_id", Value::Null),
+      ("cc_session_started_at", Value::Null),
+      ("backend", json!("")),
+      ("schedule_cron", Value::Null),
+      ("schedule_enabled", Value::Null),
+      ("schedule_next_run", Value::Null),
+      ("schedule_timezone", Value::Null),
+      ("schedule_project", Value::Null),
+      ("schedule_allow_failure", Value::Null),
+      ("parent_session_id", Value::Null),
+      ("successor_session_id", Value::Null),
+      ("schema_version", json!(2)),
+      ("task_parent_id", Value::Null),
+      ("profile", json!("manager")),
+      ("task", Value::Null),
+      ("created_by_event", Value::Null),
+      ("origin_ref", Value::Null),
+      ("subtree_prompt_ref", Value::Null),
+      ("node_prompt_ref", Value::Null),
+      ("native_prompt_hash", Value::Null),
+      ("native_backend", Value::Null),
+      ("native_model", Value::Null),
+      ("round_ratings", json!({})),
+      ("group", Value::Null),
+      ("archive_offset", json!(0)),
+      ("route", Value::Null),
+      ("backend_from_pool", json!(false)),
+      ("web_status", Value::Null),
+      ("discord_origin", Value::Null),
+      ("discord_watermark_id", Value::Null),
+      ("claude_account", Value::Null),
+      ("slack_watermark_ts", Value::Null),
+      ("slack_origin", Value::Null),
+    ];
+    for (field, expected) in &expected_defaults {
+      assert_eq!(&value[*field], expected, "Python SessionMetadata default for {field}");
+    }
+    assert!(uuid::Uuid::parse_str(value["id"].as_str().unwrap()).is_ok());
+    UtcDateTime::parse(value["created_at"].as_str().unwrap()).unwrap();
+    UtcDateTime::parse(value["updated_at"].as_str().unwrap()).unwrap();
   }
 
   #[test]

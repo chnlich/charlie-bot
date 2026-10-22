@@ -1568,7 +1568,7 @@ impl Store {
     let index = self.tree_index()?;
     let meta =
       index.metas.get(session_id).ok_or_else(|| StoreError::not_found(format!("task {session_id} not found")))?;
-    let mut detail = serde_json::to_value(meta.as_ref())?;
+    let mut detail = self.session_metadata_value(meta.as_ref());
     let object = detail.as_object_mut().expect("session metadata serializes to an object");
     object.insert("task_state".to_string(), Value::String(self.task_state(session_id)?));
     object.insert("work_state".to_string(), Value::String(self.task_tree_activity(session_id)?.work_state));

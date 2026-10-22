@@ -145,7 +145,7 @@ fn archived_page_body(
     sidebar::resolve_sidebar_state(&features.store, &features.registry, &page_rows, true, true, false, false)?;
   let mut session_values = Vec::with_capacity(merged.len());
   for (context_only, row) in merged {
-    let mut value = listing::metadata_value(&row)?;
+    let mut value = listing::metadata_value(&features.store, &row)?;
     let object = value.as_object_mut().expect("session metadata serializes to an object");
     object.insert(
       "thinking_since".to_string(),
@@ -353,7 +353,7 @@ async fn session_search(State(features): State<Arc<FeatureContext>>, request: Re
   };
   let mut values = Vec::with_capacity(rows.len());
   for row in &rows {
-    let mut value = match listing::metadata_value(row) {
+    let mut value = match listing::metadata_value(&features.store, row) {
       Ok(value) => value,
       Err(error) => return store_error(error),
     };

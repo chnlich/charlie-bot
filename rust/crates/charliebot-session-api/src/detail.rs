@@ -79,7 +79,7 @@ pub fn build_bootstrap_payload(
   };
 
   let mut payload = Map::new();
-  payload.insert("session".to_string(), listing::metadata_value(&response_meta)?);
+  payload.insert("session".to_string(), listing::metadata_value(store, &response_meta)?);
   payload.insert("messages".to_string(), Value::Array(messages));
   payload.insert("pending_draft".to_string(), pending_draft.unwrap_or(Value::Null));
   payload.insert("event_count".to_string(), Value::from(event_count));
@@ -88,7 +88,7 @@ pub fn build_bootstrap_payload(
   if let Some(summary) = worker_summary {
     payload.insert("worker_summary".to_string(), summary);
   }
-  payload.extend(active_backend_payload(&response_meta, cfg, registry)?);
+  payload.extend(active_backend_payload(store, &response_meta, cfg, registry)?);
   Ok(Value::Object(payload))
 }
 
@@ -208,7 +208,7 @@ async fn session_usage(
     Err(error) => return store_error(error),
   };
   response_meta.thinking_since = features.store.busy_since(&session_id);
-  match active_backend_payload(&response_meta, &cfg, &features.registry) {
+  match active_backend_payload(&features.store, &response_meta, &cfg, &features.registry) {
     Ok(fields) => payload.extend(fields),
     Err(error) => return store_error(error),
   }
@@ -566,17 +566,17 @@ fn pending_input_value(event: &Value) -> StoreResult<Value> {
 }
 
 fn active_backend_payload(
+  store: &Store,
   meta: &SessionMetadata,
   cfg: &CharlieBotConfig,
   registry: &Registry,
 ) -> StoreResult<Map<String, Value>> {
-  let active_backend = meta
-    .run_backend
-    .as_deref()
-    .filter(|backend| !backend.is_empty())
-    .or_else(|| (!meta.backend.is_empty()).then_some(meta.backend.as_str()))
-    .unwrap_or_else(|| cfg.backends.options.first().map_or("claude", |option| option.id.as_str()))
-    .to_string();
+  let live_run_backend = (meta.profile == TaskProfile::Worker).then(|| store.run_backend(&meta.id)).flatten();
+  let active_backend = displayed_backend_id(
+    meta,
+    live_run_backend.as_deref(),
+    cfg.backends.options.first().map_or("claude", |option| option.id.as_str()),
+  );
   let active_option = cfg.get_backend_option(&active_backend);
   let dedicated = registry
     .binding_for(&meta.id)
@@ -612,8 +612,20 @@ fn active_backend_payload(
   Ok(payload)
 }
 
+/// Python's `displayed_backend_id`: only a worker's in-memory run backend overrides its metadata backend.
+fn displayed_backend_id(meta: &SessionMetadata, run_backend: Option<&str>, default_backend: &str) -> String {
+  let active_backend = if meta.profile == TaskProfile::Worker {
+    run_backend
+      .filter(|backend| !backend.is_empty())
+      .or_else(|| (!meta.backend.is_empty()).then_some(meta.backend.as_str()))
+  } else {
+    (!meta.backend.is_empty()).then_some(meta.backend.as_str())
+  };
+  active_backend.unwrap_or(default_backend).to_string()
+}
+
 fn session_metadata_value(store: &Store, meta: &SessionMetadata) -> StoreResult<Value> {
-  listing::metadata_value(&response_metadata(store, meta)?)
+  listing::metadata_value(store, &response_metadata(store, meta)?)
 }
 
 pub(crate) fn response_metadata(store: &Store, meta: &SessionMetadata) -> StoreResult<SessionMetadata> {
@@ -850,6 +862,31 @@ mod tests {
       crate::test_support::answer(pending_task_inputs(State(Arc::clone(&features)), AxumPath(meta.id)).await).await;
     assert_eq!(second_status, StatusCode::OK);
     assert_eq!(features.store.history_work(), after_first);
+  }
+
+  #[test]
+  fn displayed_backend_uses_python_worker_map_and_metadata_fallback() {
+    let mut manager = SessionMetadata::new("synthetic-manager", "Synthetic manager", TaskProfile::Manager);
+    manager.backend = "synthetic-configured-backend".to_string();
+    manager.run_backend = Some("synthetic-retired-backend".to_string());
+    assert_eq!(
+      displayed_backend_id(&manager, Some("synthetic-retired-backend"), "claude"),
+      "synthetic-configured-backend"
+    );
+
+    let mut worker = SessionMetadata::new("synthetic-worker", "Synthetic worker", TaskProfile::Worker);
+    worker.backend = "synthetic-configured-backend".to_string();
+    worker.run_backend = Some("synthetic-retired-backend".to_string());
+    assert_eq!(displayed_backend_id(&worker, None, "claude"), "synthetic-configured-backend");
+    assert_eq!(displayed_backend_id(&worker, Some("synthetic-retired-backend"), "claude"), "synthetic-retired-backend");
+
+    let (_home, features) = feature_context();
+    features.store.note_run_backend(&worker.id, "synthetic-retired-backend");
+    let cfg = features.config.get().expect("the test config loads");
+    let payload = active_backend_payload(&features.store, &worker, &cfg, &features.registry).unwrap();
+    assert_eq!(payload["active_backend"], "synthetic-retired-backend");
+    assert_eq!(payload["active_backend_type"], "");
+    assert_eq!(payload["switchable_backends"], json!([]));
   }
 
   const TRIGGER_SESSION_ID: &str = "synthetic-trigger-session";

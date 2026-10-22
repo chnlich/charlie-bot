@@ -441,12 +441,11 @@ async fn rename(features: &FeatureContext, session_id: &str, name: Option<String
   features.store.invalidate_tree_index();
   features.store.notify_task_tree_changed(session_id, Some("task_updated")).await;
   let meta = response_metadata(&features.store, &meta).map_err(store_error)?;
-  rename_response(&meta)
+  rename_response(&features.store, &meta)
 }
 
-fn rename_response(meta: &SessionMetadata) -> Result<Value, Response> {
-  let mut detail =
-    serde_json::to_value(meta).map_err(|error| responses::internal_error("RuntimeError", error.to_string()))?;
+fn rename_response(store: &Store, meta: &SessionMetadata) -> Result<Value, Response> {
+  let mut detail = store.session_metadata_value(meta);
   let object = detail.as_object_mut().expect("session metadata serializes to an object");
   object.insert("task_state".to_string(), json!("open"));
   if object.get("work_state").is_none_or(Value::is_null) {
@@ -567,7 +566,7 @@ fn list_repr(items: &[&str]) -> String {
 /// The `SessionMetadata` response form, which `response_model=models.SessionMetadata` serializes. Like every API return
 /// path it carries the live run backend and busy-since (`session_store.stamp_thinking_since`).
 pub(crate) fn model_response(store: &Store, meta: &SessionMetadata) -> Response {
-  let value = response_metadata(store, meta).and_then(|meta| Ok(serde_json::to_value(meta)?));
+  let value = response_metadata(store, meta).map(|meta| store.session_metadata_value(&meta));
   match value {
     Ok(value) => responses::json(StatusCode::OK, &value),
     Err(error) => store_error(error),

@@ -305,6 +305,11 @@ impl Store {
     self.session_dir(session_id).join("metadata.json")
   }
 
+  /// Serialize one session with every registered field's Python model default.
+  pub fn session_metadata_value(&self, metadata: &SessionMetadata) -> Value {
+    metadata.to_response_value(&self.slots)
+  }
+
   /// Return cached session metadata, revalidating expired active entries by `(mtime_ns, size)`.
   pub async fn get_session(&self, session_id: &str) -> StoreResult<Option<SessionMetadata>> {
     if let Some(meta) = self.fresh_cached_meta(session_id)? {

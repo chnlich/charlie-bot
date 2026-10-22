@@ -14,8 +14,8 @@ use charliebot_compat::routing::{post_only, refuse_other_methods};
 use charliebot_registry::FeatureContext;
 use charliebot_registry::caller::{self, CallerIdentity};
 use charliebot_registry::task_errors::task_http_error;
-use charliebot_store::TaskCaller;
 use charliebot_store::metadata::RoundRating;
+use charliebot_store::{Store, TaskCaller};
 use serde_json::{Map, Value, json};
 
 const RENAME_GROUP_FIELDS: &[Field] =
@@ -93,7 +93,7 @@ async fn mark_session_read(
 
 async fn star_session(State(features): State<Arc<FeatureContext>>, AxumPath(session_id): AxumPath<String>) -> Response {
   match features.store.star_session(&session_id).await {
-    Ok(Some(meta)) => metadata_response(meta),
+    Ok(Some(meta)) => metadata_response(&features.store, meta),
     Ok(None) => session_not_found(),
     Err(error) => task_http_error(error),
   }
@@ -104,7 +104,7 @@ async fn unstar_session(
   AxumPath(session_id): AxumPath<String>,
 ) -> Response {
   match features.store.unstar_session(&session_id).await {
-    Ok(Some(meta)) => metadata_response(meta),
+    Ok(Some(meta)) => metadata_response(&features.store, meta),
     Ok(None) => session_not_found(),
     Err(error) => task_http_error(error),
   }
@@ -141,7 +141,7 @@ async fn set_session_group(
   {
     return task_http_error(error);
   }
-  metadata_response(meta)
+  metadata_response(&features.store, meta)
 }
 
 async fn rate_round(
@@ -168,7 +168,7 @@ async fn rate_round(
     _ => unreachable!("validated nullable literal field"),
   };
   match features.store.rate_round(&session_id, &round_id, rating).await {
-    Ok(Some(meta)) => metadata_response(meta),
+    Ok(Some(meta)) => metadata_response(&features.store, meta),
     Ok(None) => session_not_found(),
     Err(error) => task_http_error(error),
   }
@@ -231,8 +231,8 @@ fn task_caller(caller: CallerIdentity) -> TaskCaller {
   }
 }
 
-fn metadata_response(meta: charliebot_store::metadata::SessionMetadata) -> Response {
-  let value = serde_json::to_value(meta).expect("session metadata serializes to JSON");
+fn metadata_response(store: &Store, meta: charliebot_store::metadata::SessionMetadata) -> Response {
+  let value = store.session_metadata_value(&meta);
   responses::fast_json(StatusCode::OK, &value)
 }
 

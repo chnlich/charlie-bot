@@ -87,7 +87,7 @@ async fn index(State(state): State<Arc<AppState>>, request: Parts) -> Response {
   if let Some(session_id) = session.as_deref().filter(|session_id| !session_id.is_empty()) {
     match state.features.store.get_session(session_id).await {
       Ok(Some(meta)) => {
-        active_session = serde_json::to_value(&meta).expect("session metadata serializes to JSON");
+        active_session = state.features.store.session_metadata_value(&meta);
         let store = Arc::clone(&state.features.store);
         let registry = Arc::clone(&state.features.registry);
         let bootstrap_cfg = Arc::clone(&cfg);
@@ -219,7 +219,7 @@ async fn events_viewer(
       return responses::json(StatusCode::INTERNAL_SERVER_ERROR, &json!({"detail": "Failed to load session"}));
     }
   };
-  let session = serde_json::to_value(session).expect("session metadata serializes to JSON");
+  let session = state.features.store.session_metadata_value(&session);
   let context = json!({
     "session": session,
     "session_id": session_id,

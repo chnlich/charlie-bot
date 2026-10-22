@@ -86,6 +86,12 @@ def _cold_read_owes_delivery(
   return run_store.terminal_outcome(events, work_runs[-1].id) == "failed"
 
 
+# A file's mtime comes from the kernel's coarse clock, while the marker holds a
+# fine-clock reading: a write made just after the marker, or during the pass,
+# can read up to about two clock ticks earlier than the pass start.
+MARKER_MTIME_SLACK_SECONDS = 1.0
+
+
 def _boot_skip_reason(
     tree: task_sessions.TaskTreeManager,
     session_id: str,
@@ -96,9 +102,10 @@ def _boot_skip_reason(
   """The skip condition that failed, or None when the node is skippable.
 
     All six conditions must hold: the lifecycle state is not ``open``, both
-    durable files predate the marker, every Run ended, no Run carries a
-    sequence ref, no Run's worktree survives on disk, and a cold-read task's
-    last work Run did not fail (its delivery chain would still owe a report).
+    durable files predate the marker by more than the clock slack, every Run
+    ended, no Run carries a sequence ref, no Run's worktree survives on disk,
+    and a cold-read task's last work Run did not fail (its delivery chain would
+    still owe a report).
     """
   if tree.task_state_fast(session_id) == "open":
     return "state_open"
@@ -108,7 +115,7 @@ def _boot_skip_reason(
       mtime = path.stat().st_mtime
     except FileNotFoundError:
       return "file_after_marker"
-    if mtime >= marker_ts:
+    if mtime >= marker_ts - MARKER_MTIME_SLACK_SECONDS:
       return "file_after_marker"
   run_records = tree.runs.list_run_records_sync(session_id)
   for run in run_records:

@@ -9,6 +9,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
+use charliebot_registry::StartupStop;
+
 static DEGRADED_WARNINGS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 
 /// Session cgroup caps copied from the server configuration for one backend launch.
@@ -198,16 +200,44 @@ pub fn cleanup_session_cgroup(base_dir: &Path, session_id: &str) -> bool {
 /// Remove each empty cgroup named for a session of `sessions_dir` and retain a populated one with a warning. Other
 /// entries under `base_dir`, and the cgroups of other homes, stay.
 pub fn sweep_stale_session_cgroups(base_dir: &Path, sessions_dir: &Path) -> io::Result<usize> {
-  let entries = match fs::read_dir(base_dir).and_then(|entries| entries.collect::<Result<Vec<_>, _>>()) {
-    Ok(entries) => entries,
+  sweep_stale_session_cgroups_until_stopped(base_dir, sessions_dir, &StartupStop::default())
+}
+
+/// Remove stale cgroups until the startup stop request reaches a safe boundary.
+pub fn sweep_stale_session_cgroups_until_stopped(
+  base_dir: &Path,
+  sessions_dir: &Path,
+  stop: &StartupStop,
+) -> io::Result<usize> {
+  let is_stopped = || stop.is_cancelled();
+  let directory = match fs::read_dir(base_dir) {
+    Ok(directory) => directory,
     Err(error) => {
       tracing::info!(target: "charliebot_agents", base = %base_dir.display(), error = %error, "session_cgroup_sweep_unavailable");
       return Ok(0);
     }
   };
-  let owned = home_session_cgroup_names(sessions_dir)?;
+  let mut entries = Vec::new();
+  for entry in directory {
+    if is_stopped() {
+      return Ok(0);
+    }
+    match entry {
+      Ok(entry) => entries.push(entry),
+      Err(error) => {
+        tracing::info!(target: "charliebot_agents", base = %base_dir.display(), error = %error, "session_cgroup_sweep_unavailable");
+        return Ok(0);
+      }
+    }
+  }
+  let Some(owned) = home_session_cgroup_names(sessions_dir, &is_stopped)? else {
+    return Ok(0);
+  };
   let mut removed = Vec::new();
   for entry in entries {
+    if is_stopped() {
+      break;
+    }
     let path = entry.path();
     let name = entry.file_name();
     if !owned.contains(&name) || !path.is_dir() {
@@ -228,15 +258,21 @@ pub fn sweep_stale_session_cgroups(base_dir: &Path, sessions_dir: &Path) -> io::
 }
 
 /// The cgroup directory name of each session directory under `sessions_dir`.
-fn home_session_cgroup_names(sessions_dir: &Path) -> io::Result<HashSet<OsString>> {
+fn home_session_cgroup_names(
+  sessions_dir: &Path,
+  is_stopped: &impl Fn() -> bool,
+) -> io::Result<Option<HashSet<OsString>>> {
   let mut names = HashSet::new();
   for entry in fs::read_dir(sessions_dir)? {
+    if is_stopped() {
+      return Ok(None);
+    }
     let entry = entry?;
     if entry.path().is_dir() {
       names.insert(OsString::from(session_cgroup_name(&entry.file_name().to_string_lossy())));
     }
   }
-  Ok(names)
+  Ok(Some(names))
 }
 
 /// Log whether session cgroups are enabled for the supplied base and limits. A memory limit of zero or below disables

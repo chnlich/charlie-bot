@@ -14,6 +14,7 @@ use charliebot_store::{ControlGuard, RunRecord, StopRequest, Store, StoreResult}
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value};
 
+use crate::context::StartupStop;
 use crate::registry::{Registry, RegistryError};
 
 /// A node's binding to a sequence (`sequence_controllers.SequenceBinding`). A scheduled task's binding is the loaded
@@ -263,10 +264,13 @@ pub struct SequenceTreeRuntime {
   pub completion: Arc<dyn SequenceCompletion>,
   pub session_events: Arc<dyn SequenceSessionEvents>,
   pub executor: Option<Arc<dyn SequenceExecutor>>,
+  pub startup_stop: StartupStop,
 }
 
 /// Store-owned task-tree and run operations available to a sequence controller.
 pub trait SequenceTree: Send + Sync {
+  fn startup_stop(&self) -> StartupStop;
+
   fn load_meta<'a>(&'a self, session_id: &'a str) -> BoxFuture<'a, StoreResult<Option<SessionMetadata>>>;
 
   fn task_state(&self, session_id: &str) -> StoreResult<String>;
@@ -349,6 +353,10 @@ impl StoreSequenceTree {
 }
 
 impl SequenceTree for StoreSequenceTree {
+  fn startup_stop(&self) -> StartupStop {
+    self.runtime.startup_stop.clone()
+  }
+
   fn load_meta<'a>(&'a self, session_id: &'a str) -> BoxFuture<'a, StoreResult<Option<SessionMetadata>>> {
     Box::pin(async move { self.store.load_meta(session_id).await })
   }
@@ -826,6 +834,7 @@ mod tests {
         completion: runtime.clone(),
         session_events: runtime,
         executor: None,
+        startup_stop: StartupStop::default(),
       },
     );
     controller.redrive(session_id, &tree).await.unwrap();

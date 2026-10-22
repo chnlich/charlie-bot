@@ -4,11 +4,13 @@
 //! any thread starts, build the registry from the composition root, load and check the config, take the home writer
 //! fence (another holder exits 3 after logging `server_startup_refused_home_writer_fence`), capture the build identity,
 //! initialize the home, log `charliebot_home_ready`, run the lifespan's startup steps, log `server_ready`, then bind the
-//! configured host and port. A stop signal drains requests for up to five seconds, stops services, closes shared clients,
-//! releases the fence, and logs `charliebot_shutdown` (`server.py:293-310`). SIGTERM then restores its default
-//! disposition and raises SIGTERM without let-go steps. SIGINT runs let-go steps after the log and returns 0. A failed
-//! bind runs let-go steps after the log and returns 1 (`uvicorn/server.py:179-182`). Uvicorn re-raises SIGTERM; normal
-//! Python exits cancel tasks and Uvicorn catches KeyboardInterrupt (`uvicorn/server.py:322-339`,
+//! configured host and port. SIGINT and SIGTERM are installed before startup. A boot stop waits for the current safe
+//! point, stops started services, closes shared clients, releases the fence and logs `charliebot_shutdown` with
+//! `boot=true`. After `server_ready`, a stop signal drains requests for up to five seconds, stops services, closes
+//! shared clients, releases the fence and logs `charliebot_shutdown` (`server.py:293-310`). SIGTERM then restores its
+//! default disposition and raises SIGTERM without let-go steps. SIGINT runs let-go steps after the log and returns 0.
+//! A failed bind runs let-go steps after the log and returns 1 (`uvicorn/server.py:179-182`). Uvicorn re-raises SIGTERM;
+//! normal Python exits cancel tasks and Uvicorn catches KeyboardInterrupt (`uvicorn/server.py:322-339`,
 //! `uvicorn/main.py:607-608`, `asyncio/runners.py:66-75`).
 //!
 //! The repo root variable (`charliebot_core::repo_root::REPO_ROOT_ENV`) names the charlie-bot checkout whose `web/`,
@@ -38,9 +40,9 @@ use charliebot_core::fence::{self, FenceError};
 use charliebot_core::repo_root::{REPO_ROOT_ENV, RepoRoot};
 use charliebot_core::venv::VenvBin;
 use charliebot_core::{config, home, logging, paths, v1_sessions};
-use charliebot_registry::lifespan::{CloseTimings, Lifespan, StepTiming};
+use charliebot_registry::lifespan::{CloseTimings, Lifespan, StartupOutcome, StepTiming};
 use charliebot_registry::templating::Templating;
-use charliebot_registry::{FeatureContext, Registry, StartupState};
+use charliebot_registry::{FeatureContext, Registry, StartupState, StartupStop};
 use nix::sys::signal::{SigHandler, Signal};
 use tokio::net::TcpListener;
 use tokio::signal::unix::{SignalKind, signal};
@@ -163,6 +165,14 @@ async fn run(venv_bin: VenvBin, repo_root: RepoRoot, agent_base: AgentBaseEnviro
       return ExitCode::from(EXIT_STARTUP);
     }
   };
+  let startup_stop = StartupStop::default();
+  let monitor_stop = startup_stop.clone();
+  let (signal_sender, signal_receiver) = tokio::sync::oneshot::channel();
+  tokio::spawn(async move {
+    let received = stop.wait().await;
+    monitor_stop.cancel();
+    let _ = signal_sender.send(received);
+  });
   let boot = Instant::now();
   let registry = match packages::registry() {
     Ok(registry) => Arc::new(registry),
@@ -171,6 +181,9 @@ async fn run(venv_bin: VenvBin, repo_root: RepoRoot, agent_base: AgentBaseEnviro
       return ExitCode::from(EXIT_CONFIG);
     }
   };
+  if startup_stop.is_cancelled() {
+    return finish_boot_stop(None, None, signal_receiver).await;
+  }
   let state_parts = match load_inputs(&registry, &repo_root) {
     Ok(parts) => parts,
     Err(message) => {
@@ -178,8 +191,14 @@ async fn run(venv_bin: VenvBin, repo_root: RepoRoot, agent_base: AgentBaseEnviro
       return ExitCode::from(EXIT_CONFIG);
     }
   };
+  if startup_stop.is_cancelled() {
+    return finish_boot_stop(None, None, signal_receiver).await;
+  }
   let cfg = state_parts.config.get().expect("load_inputs loaded the config");
 
+  if startup_stop.is_cancelled() {
+    return finish_boot_stop(None, None, signal_receiver).await;
+  }
   let mut writer_fence = match fence::acquire_home_writer_fence(&cfg.charliebot_home, "server startup") {
     Ok(writer_fence) => writer_fence,
     Err(error @ FenceError::Active { .. }) => {
@@ -195,12 +214,18 @@ async fn run(venv_bin: VenvBin, repo_root: RepoRoot, agent_base: AgentBaseEnviro
       return ExitCode::from(EXIT_STARTUP);
     }
   };
+  if startup_stop.is_cancelled() {
+    return finish_boot_stop(None, Some(&mut writer_fence), signal_receiver).await;
+  }
 
   let build_info = BuildInfo::capture(repo_root.path());
   if let Err(error) = home_init::init_charliebot_home(&cfg, repo_root.path()) {
     writer_fence.release();
     eprintln!("charliebot-server: initializing {} failed: {error}", paths::display(&cfg.charliebot_home));
     return ExitCode::from(EXIT_STARTUP);
+  }
+  if startup_stop.is_cancelled() {
+    return finish_boot_stop(None, Some(&mut writer_fence), signal_receiver).await;
   }
   let store = match store_setup::create((*cfg).clone(), Arc::clone(&registry)) {
     Ok(store) => store,
@@ -210,8 +235,11 @@ async fn run(venv_bin: VenvBin, repo_root: RepoRoot, agent_base: AgentBaseEnviro
       return ExitCode::from(EXIT_STARTUP);
     }
   };
+  if startup_stop.is_cancelled() {
+    return finish_boot_stop(None, Some(&mut writer_fence), signal_receiver).await;
+  }
   tracing::info!(path = %paths::display(&cfg.charliebot_home), "charliebot_home_ready");
-  let startup = StartupState::default();
+  let startup = StartupState::with_stop(startup_stop.clone());
   startup.insert(venv_bin).expect("the startup state is empty before the lifespan begins");
   startup.insert(repo_root.clone()).expect("the startup state is empty before the lifespan begins");
   startup.insert(agent_base).expect("the startup state is empty before the lifespan begins");
@@ -229,19 +257,28 @@ async fn run(venv_bin: VenvBin, repo_root: RepoRoot, agent_base: AgentBaseEnviro
   // bound before the lifespan starts.
   registry.bind_feature_context(&features).expect("the registry binds its feature context once, at startup");
   let mut lifespan = match Lifespan::start(Arc::clone(&features)).await {
-    Ok(lifespan) => lifespan,
+    Ok(StartupOutcome::Ready(lifespan)) => lifespan,
+    Ok(StartupOutcome::Stopped(mut lifespan)) => {
+      return finish_boot_stop(Some(&mut lifespan), Some(&mut writer_fence), signal_receiver).await;
+    }
     Err(error) => {
       writer_fence.release();
       eprintln!("charliebot-server: lifespan startup failed: {error:#}");
       return ExitCode::from(EXIT_STARTUP);
     }
   };
+  if startup_stop.is_cancelled() {
+    return finish_boot_stop(Some(&mut lifespan), Some(&mut writer_fence), signal_receiver).await;
+  }
   let state = Arc::new(AppState {
     features,
     build_info,
     static_mounts: StaticMount::python_app_mounts(repo_root.path(), registry.page_packages()),
     mime_types: MimeTypes::load(),
   });
+  if !startup_stop.mark_ready() {
+    return finish_boot_stop(Some(&mut lifespan), Some(&mut writer_fence), signal_receiver).await;
+  }
   tracing::info!(ready_in_ms = round_ms(boot.elapsed()), "server_ready");
 
   let listener = match bind(&cfg.server.host, cfg.server.port).await {
@@ -264,7 +301,7 @@ async fn run(venv_bin: VenvBin, repo_root: RepoRoot, agent_base: AgentBaseEnviro
       })
       .await
   });
-  let received = stop.wait().await;
+  let received = signal_receiver.await.expect("the signal monitor sends the first stop signal");
   // The receiver lives until the server task ends; a send to an ended server has nothing to stop.
   let _ = stop_sender.send(());
   match tokio::time::timeout(GRACEFUL_SHUTDOWN_TIMEOUT, server).await {
@@ -288,7 +325,7 @@ async fn finish_stop(
       StopAction::Shutdown => closes = Some(stop_lifespan(lifespan).await),
       StopAction::ReleaseWriterFence => writer_fence.release(),
       StopAction::LogShutdown => {
-        log_shutdown(shutdown_started, closes.take().expect("shutdown runs before its log line"));
+        log_shutdown(shutdown_started, closes.take().expect("shutdown runs before its log line"), false);
       }
       StopAction::RunLetGo => {
         if let Err(error) = lifespan.run_let_go_steps().await {
@@ -302,6 +339,45 @@ async fn finish_stop(
   unreachable!("every stop sequence ends by raising a signal or returning an exit status")
 }
 
+async fn finish_boot_stop(
+  lifespan: Option<&mut Lifespan>,
+  writer_fence: Option<&mut fence::HomeWriterFence>,
+  signal_receiver: tokio::sync::oneshot::Receiver<Signal>,
+) -> ExitCode {
+  let received = signal_receiver.await.expect("the signal monitor sends the first stop signal");
+  let mut lifespan = lifespan;
+  let mut writer_fence = writer_fence;
+  let mut closes = None;
+  for action in stop_sequence(StopReason::Signal(received)) {
+    match action {
+      StopAction::Shutdown => {
+        closes = Some(match lifespan.as_deref_mut() {
+          Some(lifespan) => stop_lifespan(lifespan).await,
+          None => CloseTimings::default(),
+        });
+      }
+      StopAction::ReleaseWriterFence => {
+        if let Some(writer_fence) = writer_fence.as_deref_mut() {
+          writer_fence.release();
+        }
+      }
+      StopAction::LogShutdown => {
+        log_shutdown(Instant::now(), closes.take().expect("shutdown runs before its log line"), true);
+      }
+      StopAction::RunLetGo => {
+        if let Some(lifespan) = lifespan.as_deref_mut()
+          && let Err(error) = lifespan.run_let_go_steps().await
+        {
+          tracing::error!(error = format!("{error:#}"), "lifespan_shutdown_failed");
+        }
+      }
+      StopAction::RaiseSignal(signal) => return exit_by_signal(signal),
+      StopAction::ReturnStatus(status) => return ExitCode::from(status),
+    }
+  }
+  unreachable!("every boot stop sequence ends by raising a signal or returning an exit status")
+}
+
 /// The lifespan's shutdown. A failed stop is logged, and the caller still releases the home fence.
 async fn stop_lifespan(lifespan: &mut Lifespan) -> CloseTimings {
   let shutdown = lifespan.shutdown().await;
@@ -312,26 +388,45 @@ async fn stop_lifespan(lifespan: &mut Lifespan) -> CloseTimings {
 }
 
 /// The `charliebot_shutdown` line: the total shutdown time and Python's service and shared-client timings.
-fn log_shutdown(shutdown_started: Instant, closes: CloseTimings) {
-  tracing::info!(
-    shutdown_ms = round_ms(shutdown_started.elapsed()),
-    discord_ms = round_ms(step_elapsed(&closes.step_closes, "discord")),
-    ext_usage_ms = round_ms(step_elapsed(&closes.step_closes, "ext_usage")),
-    host_auth_ms = round_ms(step_elapsed(&closes.step_closes, "host_auth")),
-    merge_pool_ms = round_ms(step_elapsed(&closes.step_closes, "merge_pool")),
-    scheduler_ms = round_ms(step_elapsed(&closes.step_closes, "scheduler")),
-    slack_ms = round_ms(step_elapsed(&closes.step_closes, "slack")),
-    speech_ms = round_ms(step_elapsed(&closes.step_closes, "speech")),
-    // Python stops `usage_tally`; Rust has no `usage_tally` service.
-    usage_tally_ms = 0,
-    http_client_ms = round_ms(closes.http_client),
-    ws_close_ms = round_ms(closes.ws_close),
-    "charliebot_shutdown"
-  );
+fn log_shutdown(shutdown_started: Instant, closes: CloseTimings, during_boot: bool) {
+  if during_boot {
+    tracing::info!(
+      boot = true,
+      shutdown_ms = round_ms(shutdown_started.elapsed()),
+      discord_ms = round_ms(step_elapsed(&closes.step_closes, "discord")),
+      ext_usage_ms = round_ms(step_elapsed(&closes.step_closes, "ext_usage")),
+      host_auth_ms = round_ms(step_elapsed(&closes.step_closes, "host_auth")),
+      merge_pool_ms = round_ms(step_elapsed(&closes.step_closes, "merge_pool")),
+      scheduler_ms = round_ms(step_elapsed(&closes.step_closes, "scheduler")),
+      slack_ms = round_ms(step_elapsed(&closes.step_closes, "slack")),
+      speech_ms = round_ms(step_elapsed(&closes.step_closes, "speech")),
+      // Python stops `usage_tally`; Rust has no `usage_tally` service.
+      usage_tally_ms = 0,
+      http_client_ms = round_ms(closes.http_client),
+      ws_close_ms = round_ms(closes.ws_close),
+      "charliebot_shutdown"
+    );
+  } else {
+    tracing::info!(
+      shutdown_ms = round_ms(shutdown_started.elapsed()),
+      discord_ms = round_ms(step_elapsed(&closes.step_closes, "discord")),
+      ext_usage_ms = round_ms(step_elapsed(&closes.step_closes, "ext_usage")),
+      host_auth_ms = round_ms(step_elapsed(&closes.step_closes, "host_auth")),
+      merge_pool_ms = round_ms(step_elapsed(&closes.step_closes, "merge_pool")),
+      scheduler_ms = round_ms(step_elapsed(&closes.step_closes, "scheduler")),
+      slack_ms = round_ms(step_elapsed(&closes.step_closes, "slack")),
+      speech_ms = round_ms(step_elapsed(&closes.step_closes, "speech")),
+      // Python stops `usage_tally`; Rust has no `usage_tally` service.
+      usage_tally_ms = 0,
+      http_client_ms = round_ms(closes.http_client),
+      ws_close_ms = round_ms(closes.ws_close),
+      "charliebot_shutdown"
+    );
+  }
 }
 
 fn step_elapsed(step_closes: &[StepTiming], name: &'static str) -> Duration {
-  step_closes.iter().find(|step| step.name == name).expect("the shutdown step is registered").elapsed
+  step_closes.iter().find(|step| step.name == name).map_or(Duration::ZERO, |step| step.elapsed)
 }
 
 /// uvicorn's `capture_signals` exit: restore the default disposition and raise the stop signal again.
@@ -472,7 +567,7 @@ mod tests {
         .into();
       let closes =
         CloseTimings { step_closes, http_client: Duration::from_millis(3), ws_close: Duration::from_millis(5) };
-      log_shutdown(Instant::now(), closes);
+      log_shutdown(Instant::now(), closes, false);
     });
 
     let events = events.lock().unwrap();

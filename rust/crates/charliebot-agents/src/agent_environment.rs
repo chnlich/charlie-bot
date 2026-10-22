@@ -11,7 +11,7 @@ use charliebot_core::config::ServerConfig;
 use charliebot_core::repo_root::RepoRoot;
 use charliebot_core::venv::VenvBin;
 use charliebot_registry::backend::Env;
-use charliebot_registry::context::{FeatureContext, StartupState};
+use charliebot_registry::context::{FeatureContext, StartupState, StartupStop};
 use futures_util::future::BoxFuture;
 
 use crate::transport::cgroup;
@@ -82,13 +82,26 @@ pub fn require_agent_base_environment(startup: &StartupState) -> anyhow::Result<
 /// Log the cgroup startup line and sweep the empty session cgroups of `sessions_dir` under an injectable base. Negative
 /// limits are logged as they are, as Python's startup does; each spawn applies them as well.
 pub fn run_session_cgroup_startup(base_dir: &Path, sessions_dir: &Path, server: &ServerConfig) -> anyhow::Result<()> {
+  run_session_cgroup_startup_inner(base_dir, sessions_dir, server, None)
+}
+
+fn run_session_cgroup_startup_inner(
+  base_dir: &Path,
+  sessions_dir: &Path,
+  server: &ServerConfig,
+  stop: Option<&StartupStop>,
+) -> anyhow::Result<()> {
   cgroup::log_session_cgroup_startup(
     base_dir,
     server.session_memory_max_mb,
     server.session_swap_max_mb,
     server.session_tasks_max,
   );
-  cgroup::sweep_stale_session_cgroups(base_dir, sessions_dir)?;
+  if let Some(stop) = stop {
+    cgroup::sweep_stale_session_cgroups_until_stopped(base_dir, sessions_dir, stop)?;
+  } else {
+    cgroup::sweep_stale_session_cgroups(base_dir, sessions_dir)?;
+  }
   Ok(())
 }
 
@@ -96,7 +109,8 @@ pub fn run_session_cgroup_startup(base_dir: &Path, sessions_dir: &Path, server: 
 pub fn session_cgroup_step(features: Arc<FeatureContext>) -> BoxFuture<'static, anyhow::Result<()>> {
   Box::pin(async move {
     let cfg = features.config.get()?;
-    run_session_cgroup_startup(&cgroup::system_cgroup_base_dir(), &cfg.sessions_dir(), &cfg.server)?;
+    let stop = features.startup.stop();
+    run_session_cgroup_startup_inner(&cgroup::system_cgroup_base_dir(), &cfg.sessions_dir(), &cfg.server, Some(&stop))?;
     Ok(())
   })
 }

@@ -9,6 +9,7 @@ use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::credentials::Credentials;
 use charliebot_core::hot_reload::HotReload;
 use charliebot_store::Store;
+use tokio::sync::watch;
 
 use crate::registry::Registry;
 
@@ -28,9 +29,81 @@ pub struct FeatureContext {
 
 /// The typed startup state: one value per Rust type. Lifespan steps and services insert the values they own, and
 /// route handlers read them. A second value of one type is an error.
-#[derive(Default)]
 pub struct StartupState {
   values: RwLock<HashMap<TypeId, Arc<dyn Any + Send + Sync>>>,
+  stop: StartupStop,
+}
+
+/// A process-local startup stop request shared by startup steps.
+#[derive(Clone)]
+pub struct StartupStop {
+  sender: watch::Sender<StartupPhase>,
+  receiver: watch::Receiver<StartupPhase>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StartupPhase {
+  Starting,
+  Stopped,
+  Ready,
+}
+
+impl Default for StartupStop {
+  fn default() -> Self {
+    let (sender, receiver) = watch::channel(StartupPhase::Starting);
+    Self { sender, receiver }
+  }
+}
+
+impl StartupStop {
+  /// Mark startup as stopped and wake any startup step waiting for the request.
+  pub fn cancel(&self) {
+    self.sender.send_if_modified(|phase| {
+      if *phase == StartupPhase::Starting {
+        *phase = StartupPhase::Stopped;
+        true
+      } else {
+        false
+      }
+    });
+  }
+
+  /// Return whether startup has received a stop request.
+  pub fn is_cancelled(&self) -> bool {
+    *self.receiver.borrow() == StartupPhase::Stopped
+  }
+
+  /// Mark startup ready unless a stop request arrived first.
+  pub fn mark_ready(&self) -> bool {
+    let mut ready = false;
+    self.sender.send_if_modified(|phase| match phase {
+      StartupPhase::Starting => {
+        *phase = StartupPhase::Ready;
+        ready = true;
+        true
+      }
+      StartupPhase::Ready => {
+        ready = true;
+        false
+      }
+      StartupPhase::Stopped => false,
+    });
+    ready
+  }
+
+  /// Wait until startup receives a stop request.
+  pub async fn cancelled(&self) {
+    let mut receiver = self.receiver.clone();
+    while *receiver.borrow() != StartupPhase::Stopped {
+      receiver.changed().await.expect("the startup stop sender stays alive with its receiver");
+    }
+  }
+}
+
+impl Default for StartupState {
+  fn default() -> Self {
+    Self { values: RwLock::new(HashMap::new()), stop: StartupStop::default() }
+  }
 }
 
 /// A state value inserted twice, or required before any step inserted it.
@@ -46,6 +119,16 @@ impl fmt::Display for StateError {
 impl std::error::Error for StateError {}
 
 impl StartupState {
+  /// Create startup state that shares the process's stop request.
+  pub fn with_stop(stop: StartupStop) -> Self {
+    Self { values: RwLock::new(HashMap::new()), stop }
+  }
+
+  /// Return the stop request shared by startup steps.
+  pub fn stop(&self) -> StartupStop {
+    self.stop.clone()
+  }
+
   /// Store `value` as the one value of its type.
   pub fn insert<T: Any + Send + Sync>(&self, value: T) -> Result<(), StateError> {
     let mut values = self.values.write().expect("the startup state lock is never poisoned");

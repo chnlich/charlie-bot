@@ -22,7 +22,7 @@ use anyhow::Context;
 use futures_util::FutureExt;
 use futures_util::future::{BoxFuture, Shared};
 
-use crate::context::FeatureContext;
+use crate::context::{FeatureContext, StartupStop};
 use crate::registry::{Registry, RegistryError};
 use crate::wiring::{Phase, Service, ServiceContext};
 
@@ -59,8 +59,15 @@ impl Registry {
 /// The lifespan of one running server: its started services and registered let-go steps.
 pub struct Lifespan {
   features: Arc<FeatureContext>,
+  stop: StartupStop,
   /// The services that started, in start order.
   started: Vec<(Phase, Arc<dyn Service>)>,
+}
+
+/// The outcome of startup: the server is ready, or a stop signal ended startup at a safe point.
+pub enum StartupOutcome {
+  Ready(Lifespan),
+  Stopped(Lifespan),
 }
 
 /// One service and its elapsed shutdown time.
@@ -93,18 +100,32 @@ pub struct Shutdown {
 impl Lifespan {
   /// Runs the startup steps in the order of the module docs. A failure stops the services that started, runs the
   /// let-go steps, and returns the startup error.
-  pub async fn start(features: Arc<FeatureContext>) -> anyhow::Result<Lifespan> {
-    let mut lifespan = Lifespan { features, started: Vec::new() };
+  pub async fn start(features: Arc<FeatureContext>) -> anyhow::Result<StartupOutcome> {
+    let mut lifespan = Lifespan { stop: features.startup.stop(), features, started: Vec::new() };
     match lifespan.startup().await {
-      Ok(()) => Ok(lifespan),
+      Ok(true) => Ok(StartupOutcome::Ready(lifespan)),
+      Ok(false) => Ok(StartupOutcome::Stopped(lifespan)),
+      Err(error) if lifespan.stop.is_cancelled() => {
+        tracing::error!(error = format!("{error:#}"), "lifespan_startup_interrupted_failed");
+        Ok(StartupOutcome::Stopped(lifespan))
+      }
       Err(error) => Err(lifespan.abort(error).await),
     }
   }
 
-  async fn startup(&mut self) -> anyhow::Result<()> {
+  async fn startup(&mut self) -> anyhow::Result<bool> {
     let registry = Arc::clone(&self.features.registry);
     for (name, step) in registry.pre_recovery_steps() {
+      if self.stop.is_cancelled() {
+        return Ok(false);
+      }
       step(Arc::clone(&self.features)).await.with_context(|| format!("pre-recovery step {name:?} failed"))?;
+      if self.stop.is_cancelled() {
+        return Ok(false);
+      }
+    }
+    if self.stop.is_cancelled() {
+      return Ok(false);
     }
 
     let recovery = registry.recovery_entry().map(|(name, step)| {
@@ -119,13 +140,27 @@ impl Lifespan {
       None => futures_util::future::ready(()).boxed().shared(),
     };
 
-    self.start_services(Phase::Early, &recovery_done).await?;
+    if !self.start_services(Phase::Early, &recovery_done).await? {
+      if let Some(outcome) = recovery {
+        outcome.await.map_err(|message| anyhow::anyhow!("crash recovery failed: {message}"))?;
+      }
+      return Ok(false);
+    }
     if let Some(outcome) = recovery {
       outcome.await.map_err(|message| anyhow::anyhow!("crash recovery failed: {message}"))?;
     }
+    if self.stop.is_cancelled() {
+      return Ok(false);
+    }
 
     if let Some((name, step)) = registry.trigger_entry() {
+      if self.stop.is_cancelled() {
+        return Ok(false);
+      }
       step(Arc::clone(&self.features)).await.with_context(|| format!("trigger step {name:?} failed"))?;
+      if self.stop.is_cancelled() {
+        return Ok(false);
+      }
     }
     self.start_services(Phase::Ready, &recovery_done).await
   }
@@ -134,14 +169,20 @@ impl Lifespan {
     &mut self,
     phase: Phase,
     recovery_done: &Shared<BoxFuture<'static, ()>>,
-  ) -> anyhow::Result<()> {
+  ) -> anyhow::Result<bool> {
     for service in self.features.registry.services_in(phase) {
+      if self.stop.is_cancelled() {
+        return Ok(false);
+      }
       let name = service.name();
       let ctx = ServiceContext { features: Arc::clone(&self.features), recovery_done: recovery_done.clone() };
       service.start(ctx).await.with_context(|| format!("service {name:?} failed to start"))?;
       self.started.push((phase, service));
+      if self.stop.is_cancelled() {
+        return Ok(false);
+      }
     }
-    Ok(())
+    Ok(true)
   }
 
   /// Stops what started after a failed startup and returns the startup error, with any shutdown error added to it.
@@ -345,7 +386,10 @@ mod tests {
     registry.register_package("src.features.beta", beta).unwrap();
     let features = features_over(home.path(), Arc::new(registry));
 
-    let mut lifespan = Lifespan::start(features).await.unwrap();
+    let mut lifespan = match Lifespan::start(features).await.unwrap() {
+      StartupOutcome::Ready(lifespan) => lifespan,
+      StartupOutcome::Stopped(_) => panic!("startup stopped without a stop request"),
+    };
     charliebot_compat::http_client::shared_client().unwrap();
     let started = TRACE.lock().unwrap().clone();
     let position = |entry: &str| {
@@ -378,7 +422,10 @@ mod tests {
     let mut registry = Registry::new();
     registry.register_package("src.features.gamma", let_go_only).unwrap();
     let features = features_over(home.path(), Arc::new(registry));
-    let mut lifespan = Lifespan::start(features).await.unwrap();
+    let mut lifespan = match Lifespan::start(features).await.unwrap() {
+      StartupOutcome::Ready(lifespan) => lifespan,
+      StartupOutcome::Stopped(_) => panic!("startup stopped without a stop request"),
+    };
     TRACE.lock().unwrap().clear();
 
     let shutdown = lifespan.shutdown().await;

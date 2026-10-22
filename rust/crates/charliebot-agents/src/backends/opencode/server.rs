@@ -318,6 +318,10 @@ struct ServerState {
   test_heavy_check_count: usize,
   #[cfg(test)]
   test_heavy_shutdown_gate: Option<(Arc<AtomicBool>, Arc<Notify>)>,
+  #[cfg(test)]
+  test_release_claim_gate: Option<(Arc<Notify>, Arc<Notify>)>,
+  #[cfg(test)]
+  test_idle_release_lock_waiting: Option<Arc<Notify>>,
 }
 
 impl OpenCodeServer {
@@ -347,6 +351,10 @@ impl OpenCodeServer {
         test_heavy_check_count: 0,
         #[cfg(test)]
         test_heavy_shutdown_gate: None,
+        #[cfg(test)]
+        test_release_claim_gate: None,
+        #[cfg(test)]
+        test_idle_release_lock_waiting: None,
       }),
     }
   }
@@ -449,6 +457,23 @@ impl OpenCodeServer {
   }
 
   #[cfg(test)]
+  pub(crate) fn pause_release_claim_test(&self) -> (Arc<Notify>, Arc<Notify>) {
+    let entered = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    self.state.lock().expect("opencode server state mutex is not poisoned").test_release_claim_gate =
+      Some((Arc::clone(&entered), Arc::clone(&release)));
+    (entered, release)
+  }
+
+  #[cfg(test)]
+  pub(crate) fn observe_idle_release_lock_test(&self) -> Arc<Notify> {
+    let waiting = Arc::new(Notify::new());
+    self.state.lock().expect("opencode server state mutex is not poisoned").test_idle_release_lock_waiting =
+      Some(Arc::clone(&waiting));
+    waiting
+  }
+
+  #[cfg(test)]
   fn observe_start_claims_test(&self) {
     let state = self.state.lock().expect("opencode server state mutex is not poisoned");
     if let Some((directory, observed)) = &state.test_start_observation {
@@ -465,6 +490,24 @@ impl OpenCodeServer {
     if let Some((entered, release)) = gate {
       entered.store(true, Ordering::Release);
       release.notified().await;
+    }
+  }
+
+  #[cfg(test)]
+  async fn wait_release_claim_gate_test(&self) {
+    let gate = self.state.lock().expect("opencode server state mutex is not poisoned").test_release_claim_gate.clone();
+    if let Some((entered, release)) = gate {
+      entered.notify_one();
+      release.notified().await;
+    }
+  }
+
+  #[cfg(test)]
+  fn signal_idle_release_lock_waiting_test(&self) {
+    if let Some(waiting) =
+      self.state.lock().expect("opencode server state mutex is not poisoned").test_idle_release_lock_waiting.clone()
+    {
+      waiting.notify_one();
     }
   }
 
@@ -516,8 +559,7 @@ impl OpenCodeServer {
         && state.process.as_ref().is_some_and(|process| process.alive())
         && state.version.is_some()
         && state.connected.as_ref().is_some_and(|connected| *connected.borrow());
-      let should_arm_idle =
-        no_claims_or_turns && process_ready && state.idle.as_ref().is_some_and(JoinHandle::is_finished);
+      let should_arm_idle = no_claims_or_turns && process_ready;
       (should_arm_idle, process_ready)
     };
     if should_arm_idle {
@@ -526,6 +568,8 @@ impl OpenCodeServer {
     if !release_ready {
       return Ok(());
     }
+    #[cfg(test)]
+    self.wait_release_claim_gate_test().await;
     let response = self.client_request(Method::GET, "/api/debug/location")?.send().await?.error_for_status()?;
     let locations = response.json::<Value>().await?;
     let locations = locations.as_array().context("opencode location list is not an array")?;
@@ -602,7 +646,10 @@ impl OpenCodeServer {
       if state.turns.get(&turn.session_id).is_some_and(|found| std::ptr::eq(found.as_ref(), turn)) {
         state.turns.remove(&turn.session_id);
       }
-      state.turns.is_empty() && !state.stopping && state.process.as_ref().is_some_and(|process| process.alive())
+      state.turns.is_empty()
+        && state.claims.is_empty()
+        && !state.stopping
+        && state.process.as_ref().is_some_and(|process| process.alive())
     };
     if should_idle {
       self.arm_idle();
@@ -933,6 +980,13 @@ impl OpenCodeServer {
       return;
     };
     let mut state = self.state.lock().expect("opencode server state mutex is not poisoned");
+    if !state.turns.is_empty()
+      || !state.claims.is_empty()
+      || state.stopping
+      || state.process.as_ref().is_none_or(|process| !process.alive())
+    {
+      return;
+    }
     if let Some(idle) = state.idle.take() {
       idle.abort();
     }
@@ -949,43 +1003,52 @@ impl OpenCodeServer {
 
   async fn stop_when_idle(self: &Arc<Self>, timeouts: ServerTimeouts) -> anyhow::Result<()> {
     let _guard = self.start_lock.lock().await;
-    let heavy_pid = {
-      let state = self.state.lock().expect("opencode server state mutex is not poisoned");
+    #[cfg(test)]
+    self.signal_idle_release_lock_waiting_test();
+    let heavy_shutdown = {
+      let _release_guard = self.release_lock.lock().await;
+      let mut state = self.state.lock().expect("opencode server state mutex is not poisoned");
       if state.turns.is_empty()
         && state.claims.is_empty()
         && state.process.as_ref().is_some_and(|process| process.alive())
         && !state.stopping
       {
-        state.process.as_ref().map(|process| process.pid)
+        let pid = state.process.as_ref().expect("a live opencode server has a process").pid;
+        #[cfg(test)]
+        {
+          state.test_heavy_check_count += 1;
+        }
+        #[cfg(test)]
+        let rss_mb = match timeouts.heavy_rss_override {
+          Some(rss_mb) => rss_mb,
+          None => process_rss_mb(pid)?,
+        };
+        #[cfg(not(test))]
+        let rss_mb = process_rss_mb(pid)?;
+        if rss_mb > timeouts.heavy_rss_mb {
+          state.stopping = true;
+          Some((pid, rss_mb))
+        } else {
+          None
+        }
       } else {
         None
       }
     };
-    #[cfg(test)]
-    if heavy_pid.is_some() {
-      self.state.lock().expect("opencode server state mutex is not poisoned").test_heavy_check_count += 1;
-    }
-    if let Some(pid) = heavy_pid {
+    if let Some((pid, rss_mb)) = heavy_shutdown {
+      tracing::info!(target: "charliebot_agents", pid, rss_mb = round_rss(rss_mb), "opencode_server_heavy_exit");
       #[cfg(test)]
-      let rss_mb = match timeouts.heavy_rss_override {
-        Some(rss_mb) => rss_mb,
-        None => process_rss_mb(pid)?,
-      };
-      #[cfg(not(test))]
-      let rss_mb = process_rss_mb(pid)?;
-      if rss_mb > timeouts.heavy_rss_mb {
-        tracing::info!(target: "charliebot_agents", pid, rss_mb = round_rss(rss_mb), "opencode_server_heavy_exit");
-        self.state.lock().expect("opencode server state mutex is not poisoned").stopping = true;
-        #[cfg(test)]
-        self.wait_heavy_shutdown_gate_test().await;
-        self.shutdown_locked().await?;
-        return Ok(());
-      }
+      self.wait_heavy_shutdown_gate_test().await;
+      self.shutdown_locked().await?;
+      return Ok(());
     }
     drop(_guard);
     tokio::time::sleep(timeouts.idle_exit.saturating_sub(timeouts.heavy_check)).await;
     let _guard = self.start_lock.lock().await;
     let idle = {
+      #[cfg(test)]
+      self.signal_idle_release_lock_waiting_test();
+      let _release_guard = self.release_lock.lock().await;
       let mut state = self.state.lock().expect("opencode server state mutex is not poisoned");
       if !state.turns.is_empty()
         || !state.claims.is_empty()

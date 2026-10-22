@@ -429,10 +429,22 @@ async fn a_claimed_directory_keeps_the_server_running() {
     })
     .await;
   assert_eq!(harness.server.claim_count_test(&directory), 1);
-  tokio::time::sleep(Duration::from_millis(80)).await;
   assert_eq!(harness.server.heavy_check_count_test(), 0);
   assert!(harness.server.process_alive());
-  runner.terminate().await.unwrap();
+  let (release_entered, release_cleanup) = harness.server.pause_release_claim_test();
+  let idle_release_lock_waiting = harness.server.observe_idle_release_lock_test();
+  let mut release_guard = TestNotifyGuard::new(release_cleanup);
+  let terminate_runner = Arc::clone(&runner);
+  let terminate_task = tokio::spawn(async move { terminate_runner.terminate().await });
+  tokio::time::timeout(Duration::from_secs(2), release_entered.notified())
+    .await
+    .expect("claim cleanup did not reach the held location request");
+  tokio::time::timeout(Duration::from_secs(2), idle_release_lock_waiting.notified())
+    .await
+    .expect("idle shutdown did not wait for claim cleanup");
+  assert!(harness.server.process_alive(), "idle shutdown stopped the server during claim cleanup");
+  release_guard.release();
+  terminate_task.await.unwrap().unwrap();
   task.await.unwrap().unwrap();
   harness.clear_finished_turn_pids();
 }

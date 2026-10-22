@@ -3,10 +3,13 @@
 use std::collections::HashSet;
 use std::future::Future;
 use std::io;
+use std::mem::ManuallyDrop;
+use std::os::fd::{AsRawFd, FromRawFd};
 use std::path::Path;
 use std::pin::Pin;
 use std::time::{Duration, SystemTime};
 
+use memchr::memchr_iter;
 use serde_json::Value;
 use time::OffsetDateTime;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
@@ -18,6 +21,12 @@ use super::spawn;
 pub const DEFAULT_BUFFER_LIMIT: usize = 1024 * 1024 * 1024;
 pub const TAIL_POLL_INTERVAL: Duration = Duration::from_millis(20);
 const READ_CHUNK_BYTES: usize = 64 * 1024;
+
+#[cfg(test)]
+thread_local! {
+  static FOLLOW_METADATA_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+  static FOLLOW_EVENT_METADATA_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 
 /// Async callback invoked once when the raw log exceeds its silence threshold.
 pub type SilenceCallback = Box<dyn FnMut() -> Pin<Box<dyn Future<Output = io::Result<()>> + Send>> + Send>;
@@ -69,7 +78,7 @@ where
   let mut oversized_line = false;
   let mut saw_result = false;
   let mut last_growth = Instant::now();
-  let initial_mtime = file.metadata().await?.modified().ok();
+  let initial_mtime = file_metadata(&file).await?.modified().ok();
   let mut last_output_at = subtract_age(Instant::now(), initial_mtime);
   let mut silence_reported = false;
   let mut pending_tool_calls = HashSet::new();
@@ -77,11 +86,12 @@ where
   let mut bytes = vec![0; READ_CHUNK_BYTES];
 
   loop {
-    let size = file.metadata().await?.len();
+    let size = file_metadata(&file).await?.len();
     if size > read_to {
       let now = Instant::now();
       last_growth = now;
-      last_output_at = subtract_age(now, file.metadata().await?.modified().ok());
+      let mtime = file_metadata(&file).await?.modified().ok();
+      last_output_at = subtract_age(now, mtime);
       while read_to < size {
         let limit = usize::try_from((size - read_to).min(READ_CHUNK_BYTES as u64)).expect("bounded read length");
         let count = file.read(&mut bytes[..limit]).await?;
@@ -91,13 +101,11 @@ where
         let chunk_offset = read_to;
         read_to += count as u64;
         let mut start = 0;
-        for (index, byte) in bytes[..count].iter().enumerate() {
-          if *byte != b'\n' {
-            continue;
-          }
+        // `base.py:470-502` scans a mapped line view; borrow complete chunk lines here and buffer only cross-chunk lines.
+        for index in memchr_iter(b'\n', &bytes[..count]) {
           let segment = &bytes[start..index];
           line_length = line_length.saturating_add(segment.len() as u64);
-          if !oversized_line {
+          if !oversized_line && !partial_line.is_empty() {
             partial_line.extend_from_slice(segment);
           }
           let line_end = chunk_offset + index as u64;
@@ -109,12 +117,16 @@ where
               "backend_line_over_limit"
             );
           } else if !oversized_line {
-            let parsed = spawn::parse_backend_line(&partial_line);
+            let parsed = if partial_line.is_empty() {
+              spawn::parse_backend_line(segment)
+            } else {
+              spawn::parse_backend_line(&partial_line)
+            };
             if let Some(event) = parsed {
-              let mtime = file.metadata().await?.modified().ok();
+              let event_mtime = event_file_metadata(&file)?.modified().ok();
               for mut translated in translate(event)? {
                 track_pending_tool_calls(&translated, &mut pending_tool_calls);
-                clamp_event_timestamp(&mut translated, mtime);
+                clamp_event_timestamp(&mut translated, event_mtime);
                 let is_result = translated.get("type").and_then(Value::as_str) == Some("result");
                 handle_event(translated).await?;
                 if !saw_result && is_result {
@@ -163,7 +175,7 @@ where
     if !is_alive() {
       // The child can no longer write, so one final metadata check drains the
       // lines it wrote just before exiting instead of breaking with them unread.
-      let final_size = file.metadata().await?.len();
+      let final_size = file_metadata(&file).await?.len();
       if final_size == read_to {
         break;
       }
@@ -186,6 +198,21 @@ where
     writer.close()?;
   }
   Ok(FollowSummary { final_offset: offset, saw_result })
+}
+
+async fn file_metadata(file: &tokio::fs::File) -> io::Result<std::fs::Metadata> {
+  #[cfg(test)]
+  FOLLOW_METADATA_CALLS.with(|count| count.set(count.get() + 1));
+  file.metadata().await
+}
+
+fn event_file_metadata(file: &tokio::fs::File) -> io::Result<std::fs::Metadata> {
+  #[cfg(test)]
+  FOLLOW_EVENT_METADATA_CALLS.with(|count| count.set(count.get() + 1));
+  // `base.py:518` fstats each valid event; keep that timestamp point without Tokio's blocking-pool metadata hop.
+  // SAFETY: the Tokio file owns this stable descriptor for the borrow; ManuallyDrop prevents a second close.
+  let borrowed = ManuallyDrop::new(unsafe { std::fs::File::from_raw_fd(file.as_raw_fd()) });
+  borrowed.metadata()
 }
 
 fn subtract_age(now: Instant, mtime: Option<SystemTime>) -> Instant {
@@ -615,5 +642,39 @@ mod tests {
     .unwrap_err();
     assert_eq!(error.to_string(), "synthetic translator failure");
     assert!(!cursor.exists());
+  }
+
+  #[tokio::test(flavor = "current_thread")]
+  async fn one_growth_round_reads_metadata_once_for_five_thousand_events() {
+    let root = tempfile::tempdir().unwrap();
+    let raw = root.path().join("agent.raw.ndjson");
+    let line = b"{\"type\":\"assistant\",\"timestamp\":\"2026-10-22T00:00:00+00:00\"}\n";
+    fs::write(&raw, line.repeat(5000)).unwrap();
+    FOLLOW_METADATA_CALLS.with(|count| count.set(0));
+    FOLLOW_EVENT_METADATA_CALLS.with(|count| count.set(0));
+    let handled = AtomicUsize::new(0);
+
+    tail_follow_events(
+      &raw,
+      |event| Ok(vec![event]),
+      |_| {
+        handled.fetch_add(1, Ordering::Relaxed);
+        async { Ok(()) }
+      },
+      || false,
+      None,
+      0,
+      Duration::from_secs(1),
+      DEFAULT_BUFFER_LIMIT,
+      Duration::from_millis(1),
+      None,
+      Duration::from_secs(1),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(handled.load(Ordering::Relaxed), 5000);
+    FOLLOW_METADATA_CALLS.with(|count| assert_eq!(count.get(), 5));
+    FOLLOW_EVENT_METADATA_CALLS.with(|count| assert_eq!(count.get(), 5000));
   }
 }

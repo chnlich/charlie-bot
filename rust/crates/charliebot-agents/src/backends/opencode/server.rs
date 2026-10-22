@@ -12,12 +12,12 @@ use anyhow::{Context, bail};
 use charliebot_core::home;
 use charliebot_registry::backend::Env;
 use futures_util::StreamExt;
+use memchr::memchr;
 use nix::sys::signal::Signal;
 use regex::Regex;
 use reqwest::{Client, Method, RequestBuilder};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, BufReader};
-use tokio::process::ChildStdout;
 use tokio::sync::{Notify, watch};
 use tokio::task::{Id, JoinHandle};
 use uuid::Uuid;
@@ -25,7 +25,7 @@ use uuid::Uuid;
 use super::opencode_limits;
 use crate::cli_base::apply_proxy_env;
 use crate::transport::kill::{kill_process_group, python_exit_code};
-use crate::transport::spawn::{ChildStdin, SpawnSetup, SpawnSpec, SpawnedChild, spawn_with_setup};
+use crate::transport::spawn::{AgentPipeReader, ChildStdin, SpawnSetup, SpawnSpec, SpawnedChild, spawn_with_setup};
 
 const OUTPUT_TAIL_BYTES: usize = 64 * 1024;
 const READ_CHUNK_BYTES: usize = 64 * 1024;
@@ -823,7 +823,7 @@ impl OpenCodeServer {
 
   async fn read_listening_url(
     &self,
-    stdout: &mut BufReader<ChildStdout>,
+    stdout: &mut BufReader<AgentPipeReader>,
     process: &ServerProcess,
   ) -> anyhow::Result<String> {
     let deadline = tokio::time::Instant::now() + self.timeouts()?.start;
@@ -1122,19 +1122,14 @@ async fn read_events(
       .error_for_status()?;
     let mut stream = response.bytes_stream();
     let mut pending = Vec::new();
+    let mut search_from = 0;
     while let Some(chunk) = stream.next().await {
       let chunk = chunk?;
       pending.extend_from_slice(&chunk);
-      while let Some(index) = pending.iter().position(|byte| *byte == b'\n') {
-        let mut line = pending.drain(..=index).collect::<Vec<_>>();
-        if line.last() == Some(&b'\n') {
-          line.pop();
-        }
-        if line.last() == Some(&b'\r') {
-          line.pop();
-        }
-        if line.starts_with(b"data:") {
-          let event = serde_json::from_slice::<Value>(&line[5..])?;
+      visit_complete_lines(&mut pending, &mut search_from, |line| {
+        let line = line.strip_suffix(b"\r").unwrap_or(line);
+        if let Some(data) = line.strip_prefix(b"data:") {
+          let event = serde_json::from_slice::<Value>(data)?;
           if event.get("type").and_then(Value::as_str) == Some("server.connected") {
             let _ = connected.send(true);
           }
@@ -1142,7 +1137,8 @@ async fn read_events(
             server.dispatch(event);
           }
         }
-      }
+        Ok(())
+      })?;
     }
     Ok::<String, anyhow::Error>("opencode event stream closed".to_string())
   }
@@ -1162,6 +1158,27 @@ async fn read_events(
     reason = format!("opencode serve exited with code {code}: {}", process.tail_text());
   }
   reason
+}
+
+/// Visit each complete line once, then remove their shared prefix once per response chunk. This follows
+/// `src/backends/opencode/server.py:352-360` without rescanning or shifting the unread suffix for every line.
+fn visit_complete_lines(
+  pending: &mut Vec<u8>,
+  search_from: &mut usize,
+  mut visit: impl FnMut(&[u8]) -> anyhow::Result<()>,
+) -> anyhow::Result<()> {
+  let mut line_start = 0;
+  while let Some(relative) = memchr(b'\n', &pending[*search_from..]) {
+    let index = *search_from + relative;
+    visit(&pending[line_start..index])?;
+    line_start = index + 1;
+    *search_from = line_start;
+  }
+  if line_start > 0 {
+    pending.drain(..line_start);
+  }
+  *search_from = pending.len();
+  Ok(())
 }
 
 async fn drain_stream<R>(mut stream: R, tail: Arc<Mutex<VecDeque<u8>>>)
@@ -1230,4 +1247,34 @@ fn process_rss_mb(pid: u32) -> anyhow::Result<f64> {
 
 fn round_rss(rss_mb: f64) -> f64 {
   (rss_mb * 10.0).round() / 10.0
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn complete_lines_are_visited_once_across_chunk_boundaries() {
+    let mut pending = Vec::new();
+    let mut search_from = 0;
+    let mut lines = Vec::new();
+    pending.extend_from_slice(b"data: one\npart");
+    visit_complete_lines(&mut pending, &mut search_from, |line| {
+      lines.push(line.to_vec());
+      Ok(())
+    })
+    .unwrap();
+    assert_eq!(pending, b"part");
+
+    pending.extend_from_slice(b" two\ndata: three\n");
+    visit_complete_lines(&mut pending, &mut search_from, |line| {
+      lines.push(line.to_vec());
+      Ok(())
+    })
+    .unwrap();
+
+    assert_eq!(lines, [b"data: one".to_vec(), b"part two".to_vec(), b"data: three".to_vec()]);
+    assert!(pending.is_empty());
+    assert_eq!(search_from, 0);
+  }
 }

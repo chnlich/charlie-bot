@@ -6,14 +6,15 @@ use std::time::Duration;
 
 use charliebot_agents::transport::identity::{is_run_alive, pin_process_identity, read_host_boot_time};
 use charliebot_agents::transport::kill::{detach, kill_process_group};
-use charliebot_agents::transport::spawn::{RawStdin, SpawnSpec, spawn_one_shot, spawn_piped, spawn_raw_log};
+use charliebot_agents::transport::spawn::{
+  AgentChild, RawStdin, SpawnSpec, spawn_one_shot, spawn_piped, spawn_raw_log,
+};
 use nix::sys::signal::Signal;
 use time::OffsetDateTime;
-use tokio::process::Child;
 use tokio::runtime::{Builder, Runtime};
 
 struct ChildGroupGuard<'a> {
-  child: Child,
+  child: AgentChild,
   pid: u32,
   runtime: &'a Runtime,
 }

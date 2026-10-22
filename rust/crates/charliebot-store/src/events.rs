@@ -15,6 +15,38 @@ use crate::{ControlGuard, Store, StoreError, StoreResult};
 /// One parsed chat-log event.
 pub type ChatEvent = Value;
 
+/// The identity of a live event log on disk: its inode, size and modification time, as Python's
+/// `_task_state_fast` keys its memo. An append moves the size, and a rewrite publishes a new inode.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct FileIdentity {
+  inode: u64,
+  size: u64,
+  mtime_ns: i128,
+}
+
+impl FileIdentity {
+  /// The identity of the file at `path`, or None when no file is there.
+  pub(crate) fn read(path: &Path) -> StoreResult<Option<Self>> {
+    use std::os::unix::fs::MetadataExt;
+    match fs::metadata(path) {
+      Ok(metadata) => Ok(Some(Self {
+        inode: metadata.ino(),
+        size: metadata.size(),
+        mtime_ns: i128::from(metadata.mtime()) * 1_000_000_000 + i128::from(metadata.mtime_nsec()),
+      })),
+      Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+      Err(error) => Err(StoreError::new(format!("{}: {error}", path.display()))),
+    }
+  }
+}
+
+/// A node's live history as the event cache holds it: the cached list and its generation, or, while the cache is cold,
+/// the identity of the log file.
+pub(crate) enum LiveHistory {
+  Cached { generation: u64, events: Arc<Vec<ChatEvent>> },
+  Cold(Option<FileIdentity>),
+}
+
 /// A stable cache identity plus either the full event list or its newly appended suffix.
 pub struct ChatEventsDelta {
   pub generation: u64,
@@ -82,6 +114,23 @@ impl Store {
     let events = self.load_chat_events_shared_locked(session_id, &mut cache)?;
     let generation = cache.as_ref().expect("event cache entry was loaded above").generation;
     Ok((generation, events))
+  }
+
+  /// The cached live events, or the log file's identity while the cache is cold; a cold cache stays cold.
+  ///
+  /// The identity is read under the session lock that every append holds, so it names a file that holds every event
+  /// appended before the read.
+  pub(crate) fn live_history(&self, session_id: &str) -> StoreResult<LiveHistory> {
+    let cache_entry = self.events_cache_entry(session_id);
+    let cache = cache_entry.lock().expect("session event cache mutex is not poisoned");
+    match cache.as_ref() {
+      Some(cached) => {
+        #[cfg(test)]
+        self.history_reads.fetch_add(1, Ordering::Relaxed);
+        Ok(LiveHistory::Cached { generation: cached.generation, events: Arc::clone(&cached.events) })
+      }
+      None => Ok(LiveHistory::Cold(FileIdentity::read(&self.chat_events_path(session_id))?)),
+    }
   }
 
   /// Work done on node histories since the store opened.
@@ -324,11 +373,28 @@ impl Store {
   /// Drop a node's parsed live events and folded facts after a node pass releases its local references.
   ///
   /// The per-session cache entry stays in the map: an append or cold read that holds its lock keeps its exclusion, so
-  /// the next read sees every event that the file holds.
+  /// the next read sees every event that the file holds. The node's task state and Run facts stay, keyed by the log
+  /// file's identity, when a fold covers the whole cached list (see [`Store::seal_node_state`]): a sidebar read after
+  /// the boot pass then answers from them without parsing the history again.
   pub fn evict_recovery_history(&self, session_id: &str) {
-    self.clear_chat_events_cache(session_id);
+    let cache_entry = self.events_cache.lock().expect("event cache mutex is not poisoned").get(session_id).cloned();
+    match cache_entry {
+      Some(cache_entry) => {
+        // The seal runs under the session lock, so no reload or append moves the file between the take and the seal.
+        let mut cache = cache_entry.lock().expect("session event cache mutex is not poisoned");
+        let evicted = cache.take().and_then(|cached| match FileIdentity::read(&self.chat_events_path(session_id)) {
+          Ok(identity) => identity.map(|identity| (cached.generation, cached.events.len(), identity)),
+          Err(error) => {
+            // The next read of this node reads the file again and returns the error.
+            tracing::warn!(session_id = %session_id, error = %error, "node_state_seal_skipped");
+            None
+          }
+        });
+        self.seal_node_state(session_id, evicted);
+      }
+      None => self.seal_node_state(session_id, None),
+    }
     self.node_facts_cache.lock().expect("node facts cache mutex is not poisoned").remove(session_id);
-    self.node_state_cache.lock().expect("node state cache mutex is not poisoned").remove(session_id);
   }
 
   fn load_chat_events_shared_locked(

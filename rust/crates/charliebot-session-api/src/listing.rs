@@ -38,8 +38,19 @@ pub(crate) struct SidebarProjection {
 
 #[derive(Default)]
 struct SessionsListMemoState {
-  whole_body: Option<(Vec<Value>, Vec<u8>)>,
+  whole_body: Option<(Vec<RowInputs>, Vec<u8>)>,
   gzip: VecDeque<(Vec<u8>, Vec<u8>)>,
+}
+
+/// What one sidebar row renders from: its metadata, its derived overlay, its busy mark, its run backend and the
+/// controller's listing fields. Rows with equal inputs render equal values.
+#[derive(PartialEq)]
+pub(crate) struct RowInputs {
+  meta: SessionMetadata,
+  derived: Option<Map<String, Value>>,
+  thinking_since: Value,
+  run_backend: Option<String>,
+  listing: Option<Map<String, Value>>,
 }
 
 /// The render and gzip memos owned by one sidebar listing route.
@@ -58,35 +69,43 @@ pub fn active_listing_corpus(
   Ok((listed.rows, derived))
 }
 
-/// Build the chat page sidebar rows from active, unscheduled sessions outside every owned subtree.
-pub fn active_page_values(store: &Store, registry: &Registry) -> StoreResult<Vec<Value>> {
+/// The chat page's sidebar corpus: active, unscheduled sessions outside every owned subtree, with their overlays.
+pub struct PageRows {
+  rows: Vec<SessionMetadata>,
+  derived: DerivedSidebarMap,
+}
+
+impl PageRows {
+  /// The first row's id: the session that a page opened without one redirects to.
+  pub fn first_id(&self) -> Option<&str> {
+    self.rows.first().map(|row| row.id.as_str())
+  }
+}
+
+/// Read the chat page's sidebar corpus without rendering a row.
+pub fn active_page_rows(store: &Store, registry: &Registry) -> StoreResult<PageRows> {
   let (mut rows, derived) = active_listing_corpus(store, registry)?;
   let sequence = store.sequence_subtree_roots()?;
   let views = store.view_subtree_roots()?;
   rows.retain(|row| !sequence.contains_key(&row.id) && !views.values().any(|members| members.contains_key(&row.id)));
-  let ids: Vec<String> = rows.iter().map(|row| row.id.clone()).collect();
-  let listing_fields = registry.sequence_listing_fields(&ids, UtcDateTime::now());
-  rows
-    .iter()
+  Ok(PageRows { rows, derived })
+}
+
+/// Render the chat page's sidebar rows.
+pub fn active_page_values(store: &Store, registry: &Registry, page: &PageRows) -> StoreResult<Vec<Value>> {
+  let projection = SidebarProjection {
+    include_running: true,
+    include_trigger: true,
+    include_plan: false,
+    display_backend: true,
+    include_run_backend: true,
+  };
+  row_inputs(store, registry, &page.rows, &page.derived, projection)?
+    .into_iter()
     .map(|row| {
-      let mut value = serde_json::to_value(row).map_err(|error| StoreError::new(error.to_string()))?;
-      apply_sidebar_fields(
-        &mut value,
-        row,
-        derived.get(&row.id),
-        store,
-        SidebarProjection {
-          include_running: true,
-          include_trigger: true,
-          include_plan: false,
-          display_backend: true,
-          include_run_backend: true,
-        },
-      )?;
-      apply_listing_fields(
-        &mut value,
-        listing_fields.get(&row.id).cloned().expect("every sidebar row has sequence listing fields"),
-      );
+      let mut value = serde_json::to_value(&row.meta).map_err(|error| StoreError::new(error.to_string()))?;
+      apply_sidebar_fields(&mut value, &row, projection);
+      apply_listing_fields(&mut value, row.listing.expect("every sidebar row has sequence listing fields"));
       Ok(value)
     })
     .collect()
@@ -101,29 +120,30 @@ pub fn sessions_list_response(
   derived: &DerivedSidebarMap,
   memos: &SessionsListMemos,
 ) -> Response {
-  let values = match listed_values(
-    store,
-    registry,
-    rows,
-    derived,
-    SidebarProjection {
-      include_running: true,
-      include_trigger: true,
-      include_plan: true,
-      display_backend: true,
-      include_run_backend: false,
-    },
-  ) {
-    Ok(values) => values,
+  let projection = SidebarProjection {
+    include_running: true,
+    include_trigger: true,
+    include_plan: true,
+    display_backend: true,
+    include_run_backend: false,
+  };
+  let inputs = match row_inputs(store, registry, rows, derived, projection) {
+    Ok(inputs) => inputs,
     Err(error) => return charliebot_compat::responses::internal_error("RuntimeError", error.to_string()),
   };
   let body = {
     let mut state = memos.state.lock().expect("sessions list memo mutex is not poisoned");
+    // As `_sessions_list_response`: an unchanged corpus with unchanged overlays serves the rendered body again and
+    // renders no row.
     let body = match &state.whole_body {
-      Some((cached, body)) if *cached == values => body.clone(),
+      Some((cached, body)) if *cached == inputs => body.clone(),
       _ => {
-        let body = charliebot_compat::json::fast_json_bytes(&Value::Array(values.clone()));
-        state.whole_body = Some((values, body.clone()));
+        let values = match inputs.iter().map(|row| render_row(row, projection)).collect::<StoreResult<Vec<_>>>() {
+          Ok(values) => values,
+          Err(error) => return charliebot_compat::responses::internal_error("RuntimeError", error.to_string()),
+        };
+        let body = charliebot_compat::json::fast_json_bytes(&Value::Array(values));
+        state.whole_body = Some((inputs, body.clone()));
         body
       }
     };
@@ -187,27 +207,48 @@ pub(crate) fn listed_values(
   derived: &DerivedSidebarMap,
   projection: SidebarProjection,
 ) -> StoreResult<Vec<Value>> {
+  row_inputs(store, registry, rows, derived, projection)?.iter().map(|row| render_row(row, projection)).collect()
+}
+
+/// Read every input that the rows of one listing render from.
+fn row_inputs(
+  store: &Store,
+  registry: &Registry,
+  rows: &[SessionMetadata],
+  derived: &DerivedSidebarMap,
+  projection: SidebarProjection,
+) -> StoreResult<Vec<RowInputs>> {
   let ids: Vec<String> = rows.iter().map(|row| row.id.clone()).collect();
   let listing_fields = registry.sequence_listing_fields(&ids, UtcDateTime::now());
   rows
     .iter()
     .map(|row| {
-      let mut value = metadata_value(row)?;
-      apply_sidebar_fields(&mut value, row, derived.get(&row.id), store, projection)?;
-      apply_listing_fields(&mut value, listing_fields.get(&row.id).cloned().unwrap_or_default());
-      Ok(value)
+      Ok(RowInputs {
+        meta: row.clone(),
+        derived: derived.get(&row.id).cloned(),
+        thinking_since: store.busy_since(&row.id).map_or(Value::Null, |value| json!(value.to_python_string())),
+        run_backend: if projection.include_run_backend || projection.display_backend {
+          run_backend(store, &row.id)?
+        } else {
+          None
+        },
+        listing: listing_fields.get(&row.id).cloned(),
+      })
     })
     .collect()
 }
 
-fn apply_sidebar_fields(
-  value: &mut Value,
-  meta: &SessionMetadata,
-  derived: Option<&Map<String, Value>>,
-  store: &Store,
-  projection: SidebarProjection,
-) -> StoreResult<()> {
+/// Render one listing row from its inputs.
+fn render_row(row: &RowInputs, projection: SidebarProjection) -> StoreResult<Value> {
+  let mut value = metadata_value(&row.meta)?;
+  apply_sidebar_fields(&mut value, row, projection);
+  apply_listing_fields(&mut value, row.listing.clone().unwrap_or_default());
+  Ok(value)
+}
+
+fn apply_sidebar_fields(value: &mut Value, row: &RowInputs, projection: SidebarProjection) {
   let object = value.as_object_mut().expect("session metadata serializes to an object");
+  let derived = row.derived.as_ref();
   if projection.include_running {
     object.insert(
       "has_running_tasks".to_string(),
@@ -237,22 +278,16 @@ fn apply_sidebar_fields(
       derived.and_then(|entry| entry.get("has_pending_plan_approval")).cloned().unwrap_or(Value::Bool(false)),
     );
   }
-  object.insert(
-    "thinking_since".to_string(),
-    store.busy_since(&meta.id).map_or(Value::Null, |value| json!(value.to_python_string())),
-  );
-  let run_backend =
-    if projection.include_run_backend || projection.display_backend { run_backend(store, &meta.id)? } else { None };
+  object.insert("thinking_since".to_string(), row.thinking_since.clone());
   if projection.include_run_backend {
-    object.insert("run_backend".to_string(), run_backend.clone().map_or(Value::Null, Value::String));
+    object.insert("run_backend".to_string(), row.run_backend.clone().map_or(Value::Null, Value::String));
   }
   if projection.display_backend
-    && meta.profile == TaskProfile::Worker
-    && let Some(backend) = run_backend
+    && row.meta.profile == TaskProfile::Worker
+    && let Some(backend) = &row.run_backend
   {
-    object.insert("backend".to_string(), Value::String(backend));
+    object.insert("backend".to_string(), Value::String(backend.clone()));
   }
-  Ok(())
 }
 
 fn json_bytes_response(body: Vec<u8>, gzip: bool) -> Response {
@@ -273,6 +308,38 @@ mod tests {
   use super::*;
   use charliebot_store::metadata::{SessionMetadata, TaskProfile};
   use serde_json::json;
+
+  async fn list_body(
+    features: &charliebot_registry::FeatureContext,
+    rows: &[SessionMetadata],
+    derived: &DerivedSidebarMap,
+    memos: &SessionsListMemos,
+  ) -> Value {
+    let request = Request::builder().uri("/api/sessions/").body(Body::empty()).unwrap();
+    let response = sessions_list_response(&request, &features.store, &features.registry, rows, derived, memos);
+    serde_json::from_slice(&axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap()
+  }
+
+  #[tokio::test]
+  async fn the_list_body_renders_again_when_a_row_input_moves() {
+    let (_home, features) = crate::test_support::feature_context();
+    let node = crate::test_support::create_node(&features.store, "memo-row", None, TaskProfile::Manager).await;
+    let mut rows = vec![features.store.get_session(&node.id).await.unwrap().unwrap()];
+    let memos = SessionsListMemos::default();
+    let mut derived = DerivedSidebarMap::new();
+    derived
+      .insert(node.id.clone(), json!({"has_running_tasks": false, "work_state": "idle"}).as_object().unwrap().clone());
+
+    let first = list_body(&features, &rows, &derived, &memos).await;
+    assert_eq!(list_body(&features, &rows, &derived, &memos).await, first);
+    assert_eq!(first[0]["work_state"], "idle");
+
+    derived.get_mut(&node.id).unwrap().insert("work_state".to_string(), json!("waiting"));
+    assert_eq!(list_body(&features, &rows, &derived, &memos).await[0]["work_state"], "waiting");
+
+    rows[0].name = "renamed".to_string();
+    assert_eq!(list_body(&features, &rows, &derived, &memos).await[0]["name"], "renamed");
+  }
 
   #[test]
   fn listing_fields_remove_schedule_values_and_append_controller_fields() {

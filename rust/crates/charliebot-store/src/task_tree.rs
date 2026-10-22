@@ -11,6 +11,7 @@ use charliebot_core::{event_types, fsutil};
 use serde_json::{Map, Value, json};
 
 use crate::control_events::{self, ACTOR_AGENT, ACTOR_SYSTEM, ACTOR_USER};
+use crate::events::{FileIdentity, LiveHistory};
 use crate::metadata::{EventRef, SessionMetadata, SessionStatus, TaskProfile, TaskSpec, TaskType, UtcDateTime};
 use crate::run_records::{HostBoot, RunDisplayState, RunFacts, stop_requested_in_events};
 use crate::store::{CachedNodeFacts, NODE_FACTS_CACHE_LIMIT};
@@ -136,6 +137,18 @@ impl NodeState {
     self.task_state.as_deref().map_err(|message| StoreError::new(message.clone()))
   }
 
+  /// The state without the event ids that only a fold extension reads: what a memo keyed by the log file keeps.
+  fn sealed(&self) -> Self {
+    Self { runs: self.runs.clone(), task_state: self.task_state.clone(), event_ids: HashSet::new() }
+  }
+
+  /// The sealed state of the same history from its [`NodeFacts`]: both folds take the lifecycle verdict from the same
+  /// facts and fail on the same `task_imported` error.
+  fn sealed_from(facts: &NodeFacts) -> Self {
+    let task_state = facts.task.as_ref().map(|task| task.task_state.clone()).map_err(Clone::clone);
+    Self { runs: facts.runs.clone(), task_state, event_ids: HashSet::new() }
+  }
+
   fn fold(&mut self, events: &[Value]) {
     for event in events {
       self.runs.observe(event);
@@ -170,20 +183,31 @@ impl Default for NodeState {
   }
 }
 
-/// A node's [`NodeState`] and the history it covers, keyed as [`CachedNodeFacts`] is.
+/// A node's [`NodeState`], the history it covers and its version. A new version marks every change of the state.
 pub(crate) struct CachedNodeState {
-  generation: u64,
+  key: NodeStateKey,
   archived: usize,
-  covered: usize,
+  version: u64,
   state: Arc<NodeState>,
 }
 
+/// The live history a [`CachedNodeState`] covers.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NodeStateKey {
+  /// The first `covered` events of the live cache at `generation`, keyed as [`CachedNodeFacts`] is. A read after
+  /// appends extends the fold by the appended suffix.
+  Cached { generation: u64, covered: usize },
+  /// The log file with this identity, after an eviction dropped the cached list. The state is sealed: a read that finds
+  /// another file, or a warm cache, folds the history again.
+  File(FileIdentity),
+}
+
 /// A node's memoized [`TaskTreeActivity`] and the inputs it was derived from: the run-record generation and, for a
-/// node with runs, the live-event cache's generation and length.
+/// node with runs, the version of the [`NodeState`] it read.
 #[derive(Clone)]
 pub(crate) struct CachedActivity {
   records_generation: u64,
-  events: Option<(u64, usize)>,
+  state_version: Option<u64>,
   activity: TaskTreeActivity,
 }
 
@@ -246,7 +270,6 @@ impl PromptScope {
   }
 }
 
-#[derive(Clone)]
 struct TreeIndex {
   metas: HashMap<String, SessionMetadata>,
   children: HashMap<Option<String>, Vec<String>>,
@@ -255,7 +278,7 @@ struct TreeIndex {
 pub(crate) struct CachedTreeIndex {
   generation: u64,
   built_at: Instant,
-  index: TreeIndex,
+  index: Arc<TreeIndex>,
 }
 
 impl Store {
@@ -325,39 +348,104 @@ impl Store {
   /// The node's task state and Run facts, shared. A read after appends folds only the events appended since the last
   /// read. The memo has [`Store::node_facts`]' key, so it answers what a fold of [`Store::load_all_facts`] answers.
   pub fn node_state(&self, session_id: &str) -> StoreResult<Arc<NodeState>> {
-    let (generation, live) = self.live_events_with_generation(session_id)?;
+    Ok(self.node_state_versioned(session_id)?.1)
+  }
+
+  /// [`Store::node_state`] and the version of the memo entry that answered it.
+  ///
+  /// While the event cache is cold, a state sealed by [`Store::evict_recovery_history`] answers when the log file and
+  /// the archived extent are the ones it covers; the read parses no history. Any other cold read loads the history.
+  fn node_state_versioned(&self, session_id: &str) -> StoreResult<(u64, Arc<NodeState>)> {
+    let (generation, live) = match self.live_history(session_id)? {
+      LiveHistory::Cached { generation, events } => (generation, events),
+      LiveHistory::Cold(identity) => {
+        let archived = self.read_archive_offset(session_id)?;
+        let cache = self.node_state_cache.lock().expect("node state cache mutex is not poisoned");
+        if let (Some(identity), Some(entry)) = (identity, cache.get(session_id))
+          && entry.key == NodeStateKey::File(identity)
+          && entry.archived == archived
+        {
+          return Ok((entry.version, Arc::clone(&entry.state)));
+        }
+        drop(cache);
+        self.live_events_with_generation(session_id)?
+      }
+    };
     self.node_state_of(session_id, generation, &live)
   }
 
-  /// [`Store::node_state`] for a caller that already holds the live events and their cache generation.
-  fn node_state_of(&self, session_id: &str, generation: u64, live: &[Value]) -> StoreResult<Arc<NodeState>> {
+  /// [`Store::node_state_versioned`] for a caller that holds the live events and their cache generation.
+  fn node_state_of(&self, session_id: &str, generation: u64, live: &[Value]) -> StoreResult<(u64, Arc<NodeState>)> {
     let archived = self.read_archive_offset(session_id)?;
+    let current = NodeStateKey::Cached { generation, covered: live.len() };
     let cached = {
       let mut cache = self.node_state_cache.lock().expect("node state cache mutex is not poisoned");
       match cache.get(session_id) {
-        Some(entry) if entry.generation == generation && entry.archived == archived && entry.covered == live.len() => {
-          return Ok(Arc::clone(&entry.state));
+        Some(entry) if entry.key == current && entry.archived == archived => {
+          return Ok((entry.version, Arc::clone(&entry.state)));
         }
         _ => cache.remove(session_id),
       }
     };
-    let mut entry = match cached {
-      Some(entry) if entry.generation == generation && entry.archived == archived && entry.covered <= live.len() => {
-        entry
-      }
+    let (covered, mut state) = match cached {
+      Some(CachedNodeState {
+        key: NodeStateKey::Cached { generation: cached_generation, covered },
+        archived: cached_archived,
+        state,
+        ..
+      }) if cached_generation == generation && cached_archived == archived && covered <= live.len() => (covered, state),
       _ => {
         let mut state = NodeState::default();
         if archived > 0 {
           state.fold(&self.load_archive_range(session_id, 0, archived)?);
         }
-        CachedNodeState { generation, archived, covered: 0, state: Arc::new(state) }
+        (0, Arc::new(state))
       }
     };
-    Arc::make_mut(&mut entry.state).fold(&live[entry.covered..]);
-    entry.covered = live.len();
-    let state = Arc::clone(&entry.state);
+    Arc::make_mut(&mut state).fold(&live[covered..]);
+    let version = self.next_node_state_version.fetch_add(1, Ordering::Relaxed);
+    let entry = CachedNodeState { key: current, archived, version, state: Arc::clone(&state) };
     self.node_state_cache.lock().expect("node state cache mutex is not poisoned").insert(session_id.to_string(), entry);
-    Ok(state)
+    Ok((version, state))
+  }
+
+  /// Keep a node's state past the eviction of its cached events, keyed by the log file's identity.
+  ///
+  /// `evicted` holds the dropped list's generation and length and the identity of the file read under the same session
+  /// lock, so the file holds exactly the dropped list. A state memo that covers that whole list keeps its version; one
+  /// that does not gives way to the node's [`NodeFacts`] memo when that one covers the whole list. A state keyed by a
+  /// file outlives an eviction that finds the cache already cold. Anything else leaves the memo.
+  pub(crate) fn seal_node_state(&self, session_id: &str, evicted: Option<(u64, usize, FileIdentity)>) {
+    let mut states = self.node_state_cache.lock().expect("node state cache mutex is not poisoned");
+    let entry = states.remove(session_id);
+    let sealed = match (evicted, entry) {
+      (Some((generation, len, identity)), Some(entry))
+        if entry.key == (NodeStateKey::Cached { generation, covered: len }) =>
+      {
+        Some(CachedNodeState {
+          key: NodeStateKey::File(identity),
+          archived: entry.archived,
+          version: entry.version,
+          state: Arc::new(entry.state.sealed()),
+        })
+      }
+      (Some((generation, len, identity)), _) => {
+        let node_facts = self.node_facts_cache.lock().expect("node facts cache mutex is not poisoned");
+        node_facts.get(session_id).filter(|entry| entry.generation == generation && entry.covered == len).map(|entry| {
+          CachedNodeState {
+            key: NodeStateKey::File(identity),
+            archived: entry.archived,
+            version: self.next_node_state_version.fetch_add(1, Ordering::Relaxed),
+            state: Arc::new(NodeState::sealed_from(&entry.facts)),
+          }
+        })
+      }
+      (None, Some(entry)) if matches!(entry.key, NodeStateKey::File(_)) => Some(entry),
+      (None, _) => None,
+    };
+    if let Some(sealed) = sealed {
+      states.insert(session_id.to_string(), sealed);
+    }
   }
 
   /// Read the node’s fact-derived lifecycle state.
@@ -408,7 +496,7 @@ impl Store {
 
   /// Return a task’s effective archive state, including archived ancestors.
   pub fn archived_of(&self, session_id: &str) -> StoreResult<bool> {
-    archived_of(self, &self.tree_index()?, session_id, &mut HashMap::new())
+    archived_of(self, &*self.tree_index()?, session_id, &mut HashMap::new())
   }
 
   /// Require every ancestor of a node to remain open.
@@ -1204,34 +1292,33 @@ impl Store {
 
   /// Derive live and waiting work for one task node, as `TaskSessions.activity_of` does.
   ///
-  /// A node without runs is idle, and its derivation reads no history. Otherwise one history read answers the task
-  /// state and the facts of every run. The verdict is memoized on the run-record generation and, for a node with runs,
-  /// on the live-event cache's generation and length. A verdict that judged a process through `/proc` is not stored:
-  /// a process exit writes no file that would move the key.
+  /// A node without runs is idle, and its derivation reads no history. Otherwise one [`Store::node_state`] read answers
+  /// the task state and the facts of every run. The verdict is memoized on the run-record generation and, for a node
+  /// with runs, on the version of that state. A verdict that judged a process through `/proc` is not stored: a process
+  /// exit writes no file that would move the key.
   pub fn task_tree_activity(&self, session_id: &str) -> StoreResult<TaskTreeActivity> {
     let records_generation = self.records_generation();
     let cached = self.activity_cache.lock().expect("activity cache mutex is not poisoned").get(session_id).cloned();
-    let mut snapshot = None;
+    let mut state = None;
     if let Some(cached) = cached.filter(|cached| cached.records_generation == records_generation) {
-      let Some((events_generation, covered)) = cached.events else { return Ok(cached.activity) };
-      let (generation, live) = self.live_events_with_generation(session_id)?;
-      if generation == events_generation && live.len() == covered {
+      let Some(version) = cached.state_version else { return Ok(cached.activity) };
+      let current = self.node_state_versioned(session_id)?;
+      if current.0 == version {
         return Ok(cached.activity);
       }
-      snapshot = Some((generation, live));
+      state = Some(current);
     }
     let runs = self.list_run_records_sync(session_id)?;
     if runs.is_empty() {
       let activity = TaskTreeActivity { has_running_tasks: false, work_state: "idle".to_string() };
-      let entry = CachedActivity { records_generation, events: None, activity: activity.clone() };
+      let entry = CachedActivity { records_generation, state_version: None, activity: activity.clone() };
       self.activity_cache.lock().expect("activity cache mutex is not poisoned").insert(session_id.to_string(), entry);
       return Ok(activity);
     }
-    let (generation, live) = match snapshot {
-      Some(snapshot) => snapshot,
-      None => self.live_events_with_generation(session_id)?,
+    let (version, node) = match state {
+      Some(state) => state,
+      None => self.node_state_versioned(session_id)?,
     };
-    let node = self.node_state_of(session_id, generation, &live)?;
     let task_open = node.task_state()? == "open";
     let mut boot = HostBoot::default();
     let mut running = false;
@@ -1264,8 +1351,7 @@ impl Store {
     if boot.was_read() {
       cache.remove(session_id);
     } else {
-      let entry =
-        CachedActivity { records_generation, events: Some((generation, live.len())), activity: activity.clone() };
+      let entry = CachedActivity { records_generation, state_version: Some(version), activity: activity.clone() };
       cache.insert(session_id.to_string(), entry);
     }
     Ok(activity)
@@ -1314,18 +1400,19 @@ impl Store {
     }))
   }
 
-  fn tree_index(&self) -> StoreResult<TreeIndex> {
+  /// The task index, shared: every reader within one build's lifetime reads the same index, as `_get_index` hands out.
+  fn tree_index(&self) -> StoreResult<Arc<TreeIndex>> {
     let generation = self.task_tree_generation.load(Ordering::Acquire);
     if let Some(cached) = self.task_tree_index.lock().expect("task tree index mutex is not poisoned").as_ref()
       && cached.generation == generation
       && cached.built_at.elapsed() < TREE_INDEX_TTL
     {
-      return Ok(cached.index.clone());
+      return Ok(Arc::clone(&cached.index));
     }
-    let index = build_tree_index(self)?;
+    let index = Arc::new(build_tree_index(self)?);
     if self.task_tree_generation.load(Ordering::Acquire) == generation {
       *self.task_tree_index.lock().expect("task tree index mutex is not poisoned") =
-        Some(CachedTreeIndex { generation, built_at: Instant::now(), index: index.clone() });
+        Some(CachedTreeIndex { generation, built_at: Instant::now(), index: Arc::clone(&index) });
     }
     Ok(index)
   }
@@ -1459,9 +1546,14 @@ fn build_tree_index(store: &Store) -> StoreResult<TreeIndex> {
     names.push(name);
   }
   names.sort();
+  // As `_build_index_sync`: a fresh metadata-cache entry stands for its file, so the build reads a file only for a
+  // session that no fresh entry covers (a cold cache or an out-of-band create).
+  let mut cached = store.fresh_cached_metas()?;
   let mut metas = HashMap::new();
   for name in names {
-    if let Some(meta) = store.read_metadata_fresh(&name)? {
+    if let Some(meta) = cached.remove(&name) {
+      metas.insert(name, meta);
+    } else if let Some(meta) = store.read_metadata_fresh(&name)? {
       metas.insert(name, meta);
     }
   }
@@ -3105,8 +3197,8 @@ pub(crate) mod tests {
     }
     let mut log = fs::OpenOptions::new().append(true).open(store.chat_events_path(&node.id)).unwrap();
     std::io::Write::write_all(&mut log, facts.as_bytes()).unwrap();
-    // A cold derivation parses the log, as the first sidebar probe after boot recovery does.
-    store.evict_recovery_history(&node.id);
+    // The facts landed behind the cache, so the derivation starts cold and parses the log.
+    store.clear_chat_events_cache(&node.id);
 
     let before = history_reads(&store);
     let activity = store.task_tree_activity(&node.id).unwrap();
@@ -3125,6 +3217,44 @@ pub(crate) mod tests {
     let before = history_reads(&store);
     assert_eq!(store.task_tree_activity(&node.id).unwrap().work_state, "idle");
     assert_eq!(history_reads(&store) - before, 1);
+  }
+
+  #[tokio::test]
+  async fn a_boot_pass_eviction_keeps_the_node_state_for_the_first_sidebar_read() {
+    let home = tempfile::tempdir().unwrap();
+    let store = make_store(home.path());
+    let node = create_node(&store, "sealed", None, TaskProfile::Manager).await;
+    for run_id in ["done", "queued-a", "queued-b"] {
+      let run_dir = store.run_dir(&node.id, run_id);
+      fs::create_dir_all(&run_dir).unwrap();
+      let record = serde_json::to_string(&queued_run(&node.id, run_id)).unwrap();
+      fs::write(run_dir.join(crate::run_records::RUN_METADATA_NAME), record).unwrap();
+    }
+    append(&store, &node.id, json!({"type": "run_finished", "run_id": "done", "outcome": "success"})).await;
+    // The boot pass reads the node's facts, then drops its events.
+    store.node_facts(&node.id).unwrap();
+    store.evict_recovery_history(&node.id);
+
+    let reads = store.history_work().file_reads;
+    let waiting = TaskTreeActivity { has_running_tasks: false, work_state: "waiting".to_string() };
+    assert_eq!(store.task_tree_activity(&node.id).unwrap(), waiting);
+    assert_eq!(store.task_state(&node.id).unwrap(), "open");
+    assert_eq!(store.history_work().file_reads, reads, "the sealed state answers without parsing the log");
+
+    // An append to the cold log moves the file's identity, so the next derivation parses the log.
+    for run_id in ["queued-a", "queued-b"] {
+      append(&store, &node.id, json!({"type": "run_stop_requested", "run_id": run_id})).await;
+    }
+    assert_eq!(store.task_tree_activity(&node.id).unwrap().work_state, "idle");
+    assert_eq!(store.history_work().file_reads, reads + 1);
+
+    // A fold that misses the last append is not sealed: the read after the eviction parses the log.
+    store.node_facts(&node.id).unwrap();
+    append(&store, &node.id, json!({"type": "task_closed", "outcome": "cancelled"})).await;
+    store.evict_recovery_history(&node.id);
+    let reads = store.history_work().file_reads;
+    assert_eq!(store.task_state(&node.id).unwrap(), "cancelled");
+    assert_eq!(store.history_work().file_reads, reads + 1);
   }
 
   #[tokio::test]

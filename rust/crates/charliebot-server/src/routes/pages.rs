@@ -15,7 +15,7 @@ use charliebot_core::paths;
 use charliebot_registry::Registry;
 use charliebot_registry::templating::Templating;
 use charliebot_session_api::{detail, listing};
-use charliebot_store::StoreError;
+use charliebot_store::{StoreError, StoreResult};
 use futures_util::future::join_all;
 use percent_encoding::percent_decode_str;
 use serde_json::{Map, Value, json};
@@ -41,6 +41,12 @@ fn is_page_path(path: &str) -> bool {
   !session_id.is_empty() && page == "events"
 }
 
+/// The chat page's sidebar outcome: the redirect of a page opened without a session, or the rendered rows.
+enum PageListing {
+  Redirect(String),
+  Rows(Vec<Value>),
+}
+
 async fn index(State(state): State<Arc<AppState>>, request: Parts) -> Response {
   let cfg = match state.config() {
     Ok(cfg) => cfg,
@@ -52,26 +58,27 @@ async fn index(State(state): State<Arc<AppState>>, request: Parts) -> Response {
   };
   let session = session_query(&request);
   let features = Arc::clone(&state.features);
-  let listing_result =
-    tokio::task::spawn_blocking(move || listing::active_page_values(&features.store, &features.registry))
-      .await
-      .expect("the chat page listing task does not panic");
+  let redirect_to_first = session.is_none();
+  let listing_result = tokio::task::spawn_blocking(move || -> StoreResult<PageListing> {
+    let page = listing::active_page_rows(&features.store, &features.registry)?;
+    // As Python's index: a page opened without a session redirects to the first row before any row renders.
+    if redirect_to_first && let Some(first) = page.first_id() {
+      return Ok(PageListing::Redirect(first.to_string()));
+    }
+    listing::active_page_values(&features.store, &features.registry, &page).map(PageListing::Rows)
+  })
+  .await
+  .expect("the chat page listing task does not panic");
   let mut load_errors = Vec::new();
   let mut initial_sessions = match listing_result {
-    Ok(rows) => rows,
+    Ok(PageListing::Redirect(session_id)) => return responses::redirect(&format!("/?session={session_id}")),
+    Ok(PageListing::Rows(rows)) => rows,
     Err(error) => {
       tracing::error!(error = %error, "list_sessions_failed");
       load_errors.push("Failed to load sessions. Check server logs for details.".to_string());
       Vec::new()
     }
   };
-
-  if session.is_none()
-    && let Some(first) = initial_sessions.first()
-  {
-    let session_id = first.get("id").and_then(Value::as_str).expect("a sidebar row has an id");
-    return responses::redirect(&format!("/?session={session_id}"));
-  }
 
   let mut active_session = Value::Null;
   let mut pending_draft = Value::Null;

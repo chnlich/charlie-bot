@@ -508,6 +508,8 @@ async fn a_turn_claimed_during_heavy_shutdown_starts_after_the_old_server_stops(
   assert_eq!(next_outcome.exit_code, Some(0));
   assert_ne!(harness.server.pid().expect("replacement server has a process id"), first_pid);
 
+  // The replacement server can run another heavy check when its turn claim is released.
+  release_guard.release();
   tokio::time::timeout(Duration::from_secs(5), harness.stop())
     .await
     .expect("OpenCode server did not stop before the test deadline")

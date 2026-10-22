@@ -246,14 +246,15 @@ impl AgentRunner {
       drop(backend);
       return self.run_final_stdout(request, &spec, &log_dir).await;
     }
-    let mut spawned = spawn::spawn_raw_log(
+    let gated = request.child_waits_for_spawn_callback;
+    let (mut spawned, gate) = spawn::spawn_raw_log(
       &spec,
       &raw_path,
       &stderr_path,
       if stdin_prompt.is_some() { RawStdin::Piped } else { RawStdin::Null },
+      move |child| gated.then(|| SpawnGate::arm(child)),
     )
     .await?;
-    let gate = request.child_waits_for_spawn_callback.then(|| SpawnGate::arm(&spawned.child));
     if gate.is_some() {
       wait_until_stopped_or_terminate(&mut spawned.child).await?;
     }
@@ -591,7 +592,8 @@ impl AgentRunner {
 /// The gated child of a launch until its gate opens. A launch dropped before then, such as one the server's let-go
 /// cancels in its spawn callback, leaves the gate shell stopped before `exec` with no recorded owner, so the guard's drop
 /// kills it: the agent never starts, and the next boot launches the run. The start tick pinned at spawn keeps a reaped
-/// child's reused pid from being signalled.
+/// child's reused pid from being signalled. A raw-log launch arms its guard on the spawning thread, so a launch dropped
+/// while the spawn is still in flight drops an armed guard too.
 struct SpawnGate {
   child: ProcessIdentity,
   opened: bool,
@@ -957,8 +959,65 @@ mod tests {
 
     let child =
       pinned.lock().expect("pinned child state is not poisoned").clone().expect("the callback pinned the child");
-    let pid_start = child.pid_start.expect("the gated child has a stat line");
-    // The killed child stays a zombie until the runtime reaps it; a stopped one keeps state `T`.
+    assert_gated_child_killed(&child, &marker).await;
+  }
+
+  /// A launch dropped while the spawn of its gated child is still in flight, as a let-go cancel can drop it, never
+  /// receives the child. The guard armed on the spawning thread kills it.
+  #[test]
+  fn a_launch_dropped_while_its_child_spawns_kills_the_gated_child() {
+    use tokio::sync::oneshot;
+
+    // One blocking thread, which the backend fills, so the launch's spawn waits in the pool's queue.
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().max_blocking_threads(1).build().unwrap();
+    runtime.block_on(async {
+      let root = tempfile::tempdir().unwrap();
+      let marker = root.path().join("backend-started");
+      let log_dir = root.path().join("logs");
+      let (pool_filled, pool_filled_rx) = oneshot::channel();
+      let (release_pool, pool_released) = std::sync::mpsc::channel();
+      let runner = AgentRunner::new(
+        Box::new(ShellBackend::filling_the_blocking_pool("touch \"$MARKER\"", pool_filled, pool_released)),
+        LaunchArgs { log_dir: Some(log_dir.clone()), ..LaunchArgs::default() },
+      );
+      let mut request = test_request(
+        "prompt".to_string(),
+        root.path().to_path_buf(),
+        Env::from([
+          ("PATH".to_string(), "/bin".to_string()),
+          ("MARKER".to_string(), marker.to_string_lossy().into_owned()),
+        ]),
+        root.path().join("cgroups"),
+      );
+      request.gate_child_until_on_spawn();
+      let pinned = Arc::new(Mutex::new(None));
+      let _cleanup = PinnedChildCleanup(Arc::clone(&pinned));
+
+      let run = tokio::spawn(async move { runner.run(request).await });
+      pool_filled_rx.await.expect("the launch fills the blocking pool");
+      // On this one-thread runtime the launch ran on from `prepare_env` to its spawn, which waits in the pool's queue.
+      run.abort();
+      assert!(run.await.expect_err("the launch was cancelled").is_cancelled());
+      release_pool.send(()).expect("the pool filler waits for its release");
+      // The pool runs its queue in order, so this closure runs after the dropped launch's spawn has returned.
+      tokio::task::spawn_blocking(|| ()).await.unwrap();
+
+      let raw_path = log_dir.join(RAW_LOG_NAME);
+      let child = spawn::TEST_RAW_LOG_CHILDREN
+        .lock()
+        .expect("test raw-log child list is not poisoned")
+        .iter()
+        .find_map(|(path, child)| (path == &raw_path).then(|| child.clone()))
+        .expect("the dropped launch spawned its gated child");
+      *pinned.lock().expect("pinned child state is not poisoned") = Some(child.clone());
+      assert_gated_child_killed(&child, &marker).await;
+    });
+  }
+
+  /// Wait up to a second for a gated child to die. The killed child stays a zombie until the runtime reaps it; a stopped
+  /// one keeps state `T`.
+  async fn assert_gated_child_killed(child: &ProcessIdentity, marker: &Path) {
+    let pid_start = child.pid_start.as_deref().expect("the gated child has a stat line");
     let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
     while let Some(stat) =
       identity::read_pid_stat(child.pid).filter(|stat| stat.pid_start == pid_start && stat.state != "Z")
@@ -1408,18 +1467,31 @@ mod tests {
     RunRequest::new(prompt, cwd, AgentBaseEnvironment { values }, cgroup_base, Arc::new(Registry::new()))
   }
 
+  /// The signal that the blocking pool is full, and the release that empties it.
+  type PoolFill = (tokio::sync::oneshot::Sender<()>, std::sync::mpsc::Receiver<()>);
+
   struct ShellBackend {
     script: String,
     refusal: Option<String>,
+    /// Taken by `prepare_env`, the launch's last step before its spawn, to hold one blocking-pool thread until release.
+    pool_fill: Mutex<Option<PoolFill>>,
   }
 
   impl ShellBackend {
     fn new(script: impl Into<String>) -> Self {
-      Self { script: script.into(), refusal: None }
+      Self { script: script.into(), refusal: None, pool_fill: Mutex::new(None) }
     }
 
     fn refusing_uploads(script: impl Into<String>, refusal: &str) -> Self {
-      Self { script: script.into(), refusal: Some(refusal.to_string()) }
+      Self { script: script.into(), refusal: Some(refusal.to_string()), pool_fill: Mutex::new(None) }
+    }
+
+    fn filling_the_blocking_pool(
+      script: impl Into<String>,
+      filled: tokio::sync::oneshot::Sender<()>,
+      release: std::sync::mpsc::Receiver<()>,
+    ) -> Self {
+      Self { script: script.into(), refusal: None, pool_fill: Mutex::new(Some((filled, release))) }
     }
   }
 
@@ -1485,6 +1557,10 @@ mod tests {
       Ok(vec!["/bin/sh".to_string(), "-c".to_string(), self.script.clone()])
     }
     fn prepare_env(&self, env: Env) -> anyhow::Result<Env> {
+      if let Some((filled, release)) = self.pool_fill.lock().expect("pool fill state is not poisoned").take() {
+        drop(tokio::task::spawn_blocking(move || release.recv()));
+        filled.send(()).expect("the test waits for the filled pool");
+      }
       Ok(env)
     }
     fn stdin_prompt(&self, _: &str) -> Option<String> {

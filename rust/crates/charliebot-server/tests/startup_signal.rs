@@ -142,6 +142,7 @@ fn drain_logs(receiver: &Receiver<io::Result<String>>, lines: &mut Vec<String>) 
   }
 }
 
+#[cfg(debug_assertions)]
 fn assert_boot_signal(signal_to_send: Signal) {
   let temporary = tempfile::tempdir().expect("the synthetic home tempdir is created");
   let home = prepare_home(temporary.path());
@@ -183,11 +184,15 @@ fn assert_boot_signal(signal_to_send: Signal) {
   assert!(elapsed < BOOT_STOP_TIMEOUT, "the restarted server took {elapsed:?} to stop");
 }
 
+// The delay gate `wait_test_recovery_gate` exists only in debug builds, so a release build has no gate to stop in.
+#[cfg(debug_assertions)]
 #[test]
 fn sigterm_stops_task_recovery_during_boot() {
   assert_boot_signal(Signal::SIGTERM);
 }
 
+// The delay gate `wait_test_recovery_gate` exists only in debug builds, so a release build has no gate to stop in.
+#[cfg(debug_assertions)]
 #[test]
 fn sigint_stops_task_recovery_during_boot() {
   assert_boot_signal(Signal::SIGINT);
@@ -195,9 +200,10 @@ fn sigint_stops_task_recovery_during_boot() {
 
 /// Task-tree nodes the boot pass walks, and the chat events each node carries. The walk takes at least `WALK_MIN_MS`,
 /// so the signal lands between nodes. Each node's events are inert (the fact fold ignores their type), which lengthens
-/// the walk without a directory per node.
+/// the walk without a directory per node. A release build walks an event about six times faster than a debug build, so
+/// its nodes carry five times the events.
 const WALK_SESSIONS: usize = 200;
-const WALK_EVENTS: usize = 4_800;
+const WALK_EVENTS: usize = if cfg!(debug_assertions) { 4_800 } else { 24_000 };
 const WALK_MIN_MS: u64 = 2_000;
 
 /// Writes task-tree nodes: a profiled session whose chat events open with a creation boundary. A session without a

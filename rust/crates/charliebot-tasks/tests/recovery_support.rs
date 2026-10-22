@@ -393,7 +393,8 @@ impl RunFinishedCompletion for FollowUpFault {
 /// The task-execution stack a startup pass runs on: the store, the registry, the dispatcher with its adapter, and the
 /// completion owner. The wiring matches `execution::pre_recovery_step`, with the run-finish completion wrapped.
 pub struct Stack {
-  pub home: TempDir,
+  /// Shared with a stack that boots on the same home (`Stack::start_on_home`).
+  pub home: Arc<TempDir>,
   pub cfg: Arc<CharlieBotConfig>,
   /// The configuration the reload serves: the file holds no values, so a test changes the served copy through
   /// `set_min_free_disk_gib`.
@@ -507,7 +508,7 @@ impl Stack {
   ) -> anyhow::Result<Stack> {
     let home = tempfile::tempdir()?;
     let cfg = config(home.path(), options, pool, 0);
-    Stack::assemble(home, cfg, registry(Some(extra))?).await
+    Stack::assemble(Arc::new(home), cfg, registry(Some(extra))?).await
   }
 
   pub async fn start_with_min_free_disk_gib(
@@ -517,7 +518,7 @@ impl Stack {
   ) -> anyhow::Result<Stack> {
     let home = tempfile::tempdir()?;
     let cfg = config(home.path(), options, pool, min_free_disk_gib);
-    Stack::assemble(home, cfg, registry(None)?).await
+    Stack::assemble(Arc::new(home), cfg, registry(None)?).await
   }
 
   /// A recovery stack with a registered cron controller, used to exercise the recovery dispatch hook.
@@ -527,7 +528,7 @@ impl Stack {
     let pool = vec![BACKEND_ID.to_string()];
     let cfg = config(home.path(), options, pool, 0);
     let registry = registry(Some(("test.cron_recovery", register_cron_recovery)))?;
-    Stack::assemble(home, cfg, registry).await
+    Stack::assemble(Arc::new(home), cfg, registry).await
   }
 
   /// A stack over the `config.yaml` the test writes, loaded through a registry that also holds `extra`: the test's own
@@ -537,10 +538,21 @@ impl Stack {
     std::fs::write(home.path().join("config.yaml"), config_text)?;
     let registry = registry(Some(extra))?;
     let cfg = registry.load_config(home.path())?;
-    Stack::assemble(home, cfg, registry).await
+    Stack::assemble(Arc::new(home), cfg, registry).await
   }
 
-  async fn assemble(home: TempDir, cfg: CharlieBotConfig, registry: Registry) -> anyhow::Result<Stack> {
+  /// A stack on the home of an earlier stack, as the next server boot finds it: the earlier stack's records and facts
+  /// stay, and this stack's backend options replace the earlier ones.
+  pub async fn start_on_home(
+    home: Arc<TempDir>,
+    options: Vec<BackendOption>,
+    pool: Vec<String>,
+  ) -> anyhow::Result<Stack> {
+    let cfg = config(home.path(), options, pool, 0);
+    Stack::assemble(home, cfg, registry(None)?).await
+  }
+
+  async fn assemble(home: Arc<TempDir>, cfg: CharlieBotConfig, registry: Registry) -> anyhow::Result<Stack> {
     let cfg = Arc::new(cfg);
     let registry = Arc::new(registry);
     let hooks = Arc::new(TestHooks);

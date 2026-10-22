@@ -156,8 +156,10 @@ post-finish completion traits are supplied by the execution and completion stage
 
 `recovery::recovery_step`, registered as `task_recovery`, runs after the pre-recovery step. It re-attaches manager
 turns that are still alive, drains runs that exited while the server was down, and replays the follow-ups their crash
-window lost. `recovery::let_go_step`, registered as `task_execution`, runs after services stop, so the queue's consumers
-are cancelled last: a turn whose record is durable detaches, and an uncovered turn terminates.
+window lost. `recovery::let_go_step`, registered as `task_execution`, runs after services stop. It first cancels each
+run launch and waits for it to end: the run keeps no terminal fact, a started agent keeps running, and the next boot
+launches or re-attaches the run. A launch requested after this point starts no task. It then cancels the queue's
+consumers: a turn whose record is durable detaches, and an uncovered turn terminates.
 
 | Rust item | Python source |
 | --- | --- |
@@ -170,6 +172,7 @@ are cancelled last: a turn whose record is durable detaches, and an uncovered tu
 | `recovery::resume_run` (private `resume_run_checked`, `enqueue_manager_resume`) | `src/runtime/task_execution.py:1919-2034` |
 | `recovery::repair_end_metadata` | `src/runtime/task_execution.py:2084` |
 | `recovery::let_go_step` | `src/runtime/master_cc_run.py:648-691`; `server.py:228-300` |
+| `TaskExecutionAdapter::let_go_launches` | `asyncio/runners.py:66-75`; `src/runtime/task_execution.py:714-731` |
 | `recovery::start_end_landing_retry`, `retry_while_out_of_space`, `RUN_END_LANDING_RETRY_INTERVAL` | `src/runtime/task_execution.py:611-660` |
 
 A manager turn that is alive enqueues a master resume through `MasterQueue::enqueue_master_resume`, and the follow is

@@ -32,6 +32,7 @@ use charliebot_store::{StoreError, StoreResult};
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
 use tokio::sync::watch;
+use tokio::task::JoinHandle;
 use uuid::Uuid;
 
 use crate::cold_read::{self, ColdReadOutcome};
@@ -76,6 +77,10 @@ type LaunchKey = (String, String);
 pub(crate) struct LaunchState {
   inflight: HashSet<LaunchKey>,
   settlements: HashMap<LaunchKey, watch::Sender<Option<LaunchSettlement>>>,
+  /// The task of each scheduled launch until it ends; the let-go step cancels the ones left.
+  tasks: HashMap<LaunchKey, JoinHandle<()>>,
+  /// Set when the let-go step begins: a launch scheduled after it starts no task.
+  let_go: bool,
 }
 
 /// The manager execution adapter for durable task runs.
@@ -328,8 +333,18 @@ impl TaskExecutionAdapter {
   }
 
   fn schedule_launch(&self, session_id: String, run_id: String, prompt: Option<String>) {
+    let key = (session_id.clone(), run_id.clone());
+    let mut state = self.launches.lock().expect("task execution launch state is not poisoned");
+    if state.let_go {
+      // A task started now would outlive the let-go and run into the runtime's teardown. The run stays queued, and the
+      // next boot's dispatch launches it.
+      state.inflight.remove(&key);
+      tracing::info!(target: "charliebot_tasks", session_id, run_id, "run_launch_after_let_go");
+      return;
+    }
     let adapter = self.clone();
-    tokio::spawn(async move {
+    // The task's own removal of its entry takes this lock, so it cannot run before the insert below.
+    let task = tokio::spawn(async move {
       let result = adapter.execute_run_with_prompt(&session_id, &run_id, prompt.as_deref()).await;
       let settlement = match result {
         Ok(settlement) => settlement,
@@ -362,10 +377,43 @@ impl TaskExecutionAdapter {
       let key = (session_id, run_id);
       let mut state = adapter.launches.lock().expect("task execution launch state is not poisoned");
       state.inflight.remove(&key);
+      state.tasks.remove(&key);
       if let Some(sender) = state.settlements.remove(&key) {
         let _ = sender.send(Some(settlement));
       }
     });
+    state.tasks.insert(key, task);
+  }
+
+  /// Cancel every launch task at the server's let-go, as `asyncio.run` cancels the tasks left at exit
+  /// (`asyncio/runners.py:66-75`), and wait for each to end. The cancel passes every `except Exception` of the launch
+  /// (`task_execution.py:719`, `:861`, `:1488`), so it lands no terminal fact, and a started agent keeps running
+  /// (`agent_process/base.py:994-1012`). The next boot then launches a run that has no process and re-attaches one that
+  /// has (`task_execution._reconcile_node`). A launch that finished before the cancel keeps its own result. The first
+  /// panicked launch task is returned after every task has ended.
+  pub(crate) async fn let_go_launches(&self) -> anyhow::Result<()> {
+    let tasks = {
+      let mut state = self.launches.lock().expect("task execution launch state is not poisoned");
+      state.let_go = true;
+      std::mem::take(&mut state.tasks)
+    };
+    for task in tasks.values() {
+      task.abort();
+    }
+    let mut failure = None;
+    for (key, task) in tasks {
+      match task.await {
+        Ok(()) => {}
+        Err(error) if error.is_cancelled() => {
+          tracing::info!(target: "charliebot_tasks", session_id = %key.0, run_id = %key.1, "run_launch_let_go");
+          self.launches.lock().expect("task execution launch state is not poisoned").inflight.remove(&key);
+        }
+        Err(error) => {
+          failure.get_or_insert(anyhow::Error::new(error).context(format!("joining the launch task of run {}", key.1)));
+        }
+      }
+    }
+    failure.map_or(Ok(()), Err)
   }
 
   pub(crate) fn resolve_run_backend(&self, cfg: &CharlieBotConfig, run: &RunRecord) -> anyhow::Result<BackendOption> {

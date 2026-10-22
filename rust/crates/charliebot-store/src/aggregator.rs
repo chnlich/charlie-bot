@@ -634,7 +634,7 @@ fn render_run_header(event: &Value) -> StoreResult<Value> {
   let tool_calls = event.get("tool_calls").filter(|value| !value.is_null());
   if let Some(tool_calls) = tool_calls {
     let count = python_int(tool_calls).ok_or_else(|| StoreError::new("run header tool_calls must be an integer"))?;
-    parts.push(if count == 1 { "1 tool call".to_string() } else { format!("{count} tool calls") });
+    parts.push(if count == "1" { "1 tool call".to_string() } else { format!("{count} tool calls") });
   }
   Ok(json!({
     "role": "system",
@@ -944,13 +944,53 @@ fn python_join_strings(value: Option<&Value>, field: &str) -> StoreResult<String
 }
 
 /// Python's `int(value)` for the JSON shapes a tool-call count can carry.
-fn python_int(value: &Value) -> Option<i64> {
+fn python_int(value: &Value) -> Option<String> {
   match value {
-    Value::Bool(flag) => Some(i64::from(*flag)),
-    Value::Number(number) => number.as_i64().or_else(|| number.as_f64().map(|float| float.trunc() as i64)),
-    Value::String(text) => text.trim().parse::<i64>().ok(),
+    Value::Bool(flag) => Some(if *flag { "1" } else { "0" }.to_string()),
+    Value::Number(number) => number
+      .as_i64()
+      .map(|integer| integer.to_string())
+      .or_else(|| number.as_u64().map(|integer| integer.to_string()))
+      .or_else(|| {
+        number.as_f64().filter(|float| float.is_finite()).map(|float| {
+          let integer = float.trunc();
+          if integer == 0.0 { "0".to_string() } else { format!("{integer:.0}") }
+        })
+      }),
+    Value::String(text) => parse_python_int_string(text),
     _ => None,
   }
+}
+
+fn parse_python_int_string(value: &str) -> Option<String> {
+  let value = value.trim();
+  let (negative, digits) = if let Some(digits) = value.strip_prefix('-') {
+    (true, digits)
+  } else if let Some(digits) = value.strip_prefix('+') {
+    (false, digits)
+  } else {
+    (false, value)
+  };
+  let mut parsed_digits = String::with_capacity(digits.len());
+  let mut previous_was_digit = false;
+  for character in digits.chars() {
+    if character.is_ascii_digit() {
+      parsed_digits.push(character);
+      previous_was_digit = true;
+    } else if character == '_' && previous_was_digit {
+      previous_was_digit = false;
+    } else {
+      return None;
+    }
+  }
+  if !previous_was_digit {
+    return None;
+  }
+  let digits = parsed_digits.trim_start_matches('0');
+  if digits.is_empty() {
+    return Some("0".to_string());
+  }
+  Some(if negative { format!("-{digits}") } else { digits.to_string() })
 }
 
 fn is_truthy(value: &Value) -> bool {

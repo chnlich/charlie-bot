@@ -29,6 +29,30 @@ type TestRun = (Arc<AgentRunner>, Arc<Mutex<Vec<Value>>>, JoinHandle<anyhow::Res
 
 const MODEL: &str = "fakeprov/fake-model";
 
+struct TestNotifyGuard {
+  notify: Arc<tokio::sync::Notify>,
+  released: bool,
+}
+
+impl TestNotifyGuard {
+  fn new(notify: Arc<tokio::sync::Notify>) -> Self {
+    Self { notify, released: false }
+  }
+
+  fn release(&mut self) {
+    self.notify.notify_one();
+    self.released = true;
+  }
+}
+
+impl Drop for TestNotifyGuard {
+  fn drop(&mut self) {
+    if !self.released {
+      self.notify.notify_one();
+    }
+  }
+}
+
 struct Harness {
   root: tempfile::TempDir,
   host: OpenCodeHost,
@@ -444,23 +468,50 @@ async fn a_turn_claimed_during_heavy_shutdown_starts_after_the_old_server_stops(
     None,
   );
   let (entered, release_shutdown) = harness.server.pause_heavy_shutdown_test();
+  let mut release_guard = TestNotifyGuard::new(release_shutdown);
   let (_, _, first_task) = harness.start_run("first", LaunchArgs::default(), None, vec![], Env::new());
-  assert_eq!(first_task.await.unwrap().unwrap().exit_code, Some(0));
-  tokio::time::sleep(Duration::from_millis(40)).await;
-  let reached_shutdown = entered.load(std::sync::atomic::Ordering::Acquire);
-  if reached_shutdown {
-    let first_pid = harness.server.pid().unwrap();
-    let (_, _, next_task) = harness.start_run("next", LaunchArgs::default(), None, vec![], Env::new());
-    tokio::time::sleep(Duration::from_millis(20)).await;
-    let session_count =
-      harness.logs().iter().filter(|entry| entry["method"] == "POST" && entry["path"] == "/api/session").count();
-    release_shutdown.notify_one();
-    assert_eq!(session_count, 1);
-    assert_eq!(next_task.await.unwrap().unwrap().exit_code, Some(0));
-    assert_ne!(harness.server.pid().unwrap(), first_pid);
-  }
-  assert!(reached_shutdown);
-  harness.stop().await.unwrap();
+  let first_outcome = tokio::time::timeout(Duration::from_secs(5), first_task)
+    .await
+    .expect("first turn did not finish before the test deadline")
+    .unwrap()
+    .unwrap();
+  assert_eq!(first_outcome.exit_code, Some(0));
+
+  tokio::time::timeout(Duration::from_secs(5), async {
+    while !entered.load(std::sync::atomic::Ordering::Acquire) {
+      tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+  })
+  .await
+  .expect("heavy shutdown did not enter its pause before the test deadline");
+
+  let first_pid = harness.server.pid().expect("first server has a process id");
+  let directory = harness.root.path().join("work").display().to_string();
+  let (_, _, next_task) = harness.start_run("next", LaunchArgs::default(), None, vec![], Env::new());
+  tokio::time::timeout(Duration::from_secs(5), async {
+    while harness.server.claim_count_test(&directory) == 0 {
+      tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+  })
+  .await
+  .expect("next turn did not claim its directory while heavy shutdown was paused");
+
+  let session_count =
+    harness.logs().iter().filter(|entry| entry["method"] == "POST" && entry["path"] == "/api/session").count();
+  release_guard.release();
+  assert_eq!(session_count, 1);
+  let next_outcome = tokio::time::timeout(Duration::from_secs(5), next_task)
+    .await
+    .expect("next turn did not start after the old server stopped")
+    .unwrap()
+    .unwrap();
+  assert_eq!(next_outcome.exit_code, Some(0));
+  assert_ne!(harness.server.pid().expect("replacement server has a process id"), first_pid);
+
+  tokio::time::timeout(Duration::from_secs(5), harness.stop())
+    .await
+    .expect("OpenCode server did not stop before the test deadline")
+    .unwrap();
   harness.clear_finished_turn_pids();
 }
 

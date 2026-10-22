@@ -180,6 +180,72 @@ pub enum RunDisplayState {
   Interrupted,
 }
 
+/// Run terminal outcomes and stop requests folded from one node history.
+///
+/// Recovery and dispatch query these facts once per run, so retaining the last outcome and stop identities makes each
+/// lookup independent of history length.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct RunFacts {
+  outcomes: HashMap<String, Option<String>>,
+  unknown_outcome_runs: HashSet<String>,
+  stopped_runs: HashSet<String>,
+  stop_request_ids: HashSet<(String, String)>,
+}
+
+/// Whether `terminal_outcome` maps a `run_finished` outcome to a run outcome.
+fn is_known_outcome(value: &str) -> bool {
+  matches!(value, "success" | "failed" | "interrupted")
+}
+
+impl RunFacts {
+  pub(crate) fn observe(&mut self, event: &Value) {
+    match event.get("type").and_then(Value::as_str) {
+      Some("run_finished") => {
+        if let Some(run_id) = event.get("run_id").and_then(Value::as_str) {
+          let outcome = event.get("outcome").and_then(Value::as_str).map(str::to_string);
+          if outcome.as_deref().is_some_and(|value| !is_known_outcome(value)) {
+            self.unknown_outcome_runs.insert(run_id.to_string());
+          } else {
+            self.unknown_outcome_runs.remove(run_id);
+          }
+          self.outcomes.insert(run_id.to_string(), outcome);
+        }
+      }
+      Some("run_stop_requested") => {
+        if let Some(run_id) = event.get("run_id").and_then(Value::as_str) {
+          self.stopped_runs.insert(run_id.to_string());
+          if let Some(request_id) = event.get("request_id").and_then(Value::as_str) {
+            self.stop_request_ids.insert((run_id.to_string(), request_id.to_string()));
+          }
+        }
+      }
+      _ => {}
+    }
+  }
+
+  /// Whether some run's last `run_finished` fact carries an outcome that [`RunFacts::terminal_outcome`] rejects.
+  pub fn has_unknown_outcome(&self) -> bool {
+    !self.unknown_outcome_runs.is_empty()
+  }
+
+  /// The outcome of the last `run_finished` fact for `run_id`.
+  pub fn terminal_outcome(&self, run_id: &str) -> StoreResult<Option<RunOutcomeKind>> {
+    match self.outcomes.get(run_id).and_then(Option::as_deref) {
+      None => Ok(None),
+      Some("success") => Ok(Some(RunOutcomeKind::Success)),
+      Some("failed") => Ok(Some(RunOutcomeKind::Failed)),
+      Some("interrupted") => Ok(Some(RunOutcomeKind::Interrupted)),
+      Some(value) => Err(StoreError::new(format!("run {run_id} has unknown terminal outcome {value:?}"))),
+    }
+  }
+
+  /// Whether a stop fact exists for this run and optional request id.
+  pub fn stop_requested(&self, run_id: &str, request_id: Option<&str>) -> bool {
+    request_id.is_none_or(|request_id| self.stop_request_ids.contains(&(run_id.to_string(), request_id.to_string())))
+      && (request_id.is_some() || self.stopped_runs.contains(run_id))
+  }
+}
+
 impl RunDisplayState {
   /// The persisted UI spelling for this state.
   pub fn as_str(self) -> &'static str {

@@ -1,18 +1,35 @@
 use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use charliebot_core::{fsutil, pystr};
 use serde_json::Value;
 
 use crate::metadata::{SessionMetadata, UtcDateTime};
 use crate::ndjson;
-use crate::store::CachedChatEvents;
+use crate::store::{CachedChatEvents, HistoryWork};
 use crate::{ControlGuard, Store, StoreError, StoreResult};
 
 /// One parsed chat-log event.
 pub type ChatEvent = Value;
+
+fn lifecycle_event_from_reverse_line(line: &mut Vec<u8>, lines_seen: &mut usize, limit: usize) -> Option<ChatEvent> {
+  line.reverse();
+  if line.iter().all(u8::is_ascii_whitespace) {
+    line.clear();
+    return None;
+  }
+  *lines_seen += 1;
+  let event = ndjson::parse_line(line);
+  line.clear();
+  event
+    .filter(|event| {
+      matches!(event.get("type").and_then(Value::as_str), Some("clone_start" | "task_closed" | "task_reopened"))
+    })
+    .filter(|_| *lines_seen <= limit)
+}
 
 /// A stable cache identity plus either the full event list or its newly appended suffix.
 pub struct ChatEventsDelta {
@@ -23,6 +40,60 @@ pub struct ChatEventsDelta {
 }
 
 impl Store {
+  /// Read the newest task lifecycle fact from at most 1,000 nonblank live-log lines.
+  pub fn latest_task_lifecycle_event(&self, session_id: &str) -> StoreResult<Option<ChatEvent>> {
+    const TAIL_LINES: usize = 1_000;
+    const CHUNK_BYTES: usize = 8 * 1024;
+
+    let path = self.chat_events_path(session_id);
+    let mut file = match fs::File::open(&path) {
+      Ok(file) => file,
+      Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+      Err(error) => return Err(StoreError::new(format!("{}: {error}", path.display()))),
+    };
+    let mut cursor = file.metadata().map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?.len();
+    let mut line = Vec::new();
+    let mut lines_seen = 0;
+    while cursor > 0 && lines_seen < TAIL_LINES {
+      let start = cursor.saturating_sub(CHUNK_BYTES as u64);
+      let mut chunk = vec![0; (cursor - start) as usize];
+      file.seek(SeekFrom::Start(start)).map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
+      file.read_exact(&mut chunk).map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
+      for byte in chunk.into_iter().rev() {
+        if byte == b'\n' {
+          if !line.is_empty()
+            && let Some(event) = lifecycle_event_from_reverse_line(&mut line, &mut lines_seen, TAIL_LINES)
+          {
+            return Ok(Some(event));
+          }
+        } else {
+          line.push(byte);
+        }
+      }
+      cursor = start;
+    }
+    if cursor == 0
+      && !line.is_empty()
+      && lines_seen < TAIL_LINES
+      && let Some(event) = lifecycle_event_from_reverse_line(&mut line, &mut lines_seen, TAIL_LINES)
+    {
+      return Ok(Some(event));
+    }
+    Ok(None)
+  }
+
+  pub(crate) fn chat_events_identity(&self, session_id: &str) -> StoreResult<Option<crate::store::ChatEventsIdentity>> {
+    use std::os::unix::fs::MetadataExt;
+
+    let path = self.chat_events_path(session_id);
+    let metadata = match fs::metadata(&path) {
+      Ok(metadata) => metadata,
+      Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+      Err(error) => return Err(StoreError::new(format!("{}: {error}", path.display()))),
+    };
+    Ok(Some((metadata.dev(), metadata.ino(), metadata.size(), metadata.mtime(), metadata.mtime_nsec())))
+  }
+
   /// Append one event, injecting its id and Python `datetime.isoformat()` timestamp when absent.
   pub async fn append_chat_event(&self, session_id: &str, mut event: Value) -> StoreResult<ChatEvent> {
     let object = event.as_object_mut().ok_or_else(|| StoreError::new("chat event must be a JSON object"))?;
@@ -68,6 +139,24 @@ impl Store {
     let cache_entry = self.events_cache_entry(session_id);
     let mut cache = cache_entry.lock().expect("session event cache mutex is not poisoned");
     self.load_chat_events_shared_locked(session_id, &mut cache)
+  }
+
+  /// The cached live events and their cache generation, read under one lock so the pair is consistent.
+  pub(crate) fn live_events_with_generation(&self, session_id: &str) -> StoreResult<(u64, Arc<Vec<ChatEvent>>)> {
+    let cache_entry = self.events_cache_entry(session_id);
+    let mut cache = cache_entry.lock().expect("session event cache mutex is not poisoned");
+    let events = self.load_chat_events_shared_locked(session_id, &mut cache)?;
+    let generation = cache.as_ref().expect("event cache entry was loaded above").generation;
+    Ok((generation, events))
+  }
+
+  /// Work done on node histories since the store opened.
+  pub fn history_work(&self) -> HistoryWork {
+    HistoryWork {
+      file_reads: self.history_work.file_reads.load(Ordering::Relaxed),
+      full_folds: self.history_work.full_folds.load(Ordering::Relaxed),
+      folded_events: self.history_work.folded_events.load(Ordering::Relaxed),
+    }
   }
 
   /// Read the live event cache from `covered` when its identity still matches, otherwise from the beginning.
@@ -205,7 +294,7 @@ impl Store {
 
   /// Read the parsed events at global indices `[start, end)` from the archive files in
   /// chronological order, stopping once the covered extent passes `end`.
-  fn load_archive_range(&self, session_id: &str, start: usize, end: usize) -> StoreResult<Vec<ChatEvent>> {
+  pub(crate) fn load_archive_range(&self, session_id: &str, start: usize, end: usize) -> StoreResult<Vec<ChatEvent>> {
     let mut events = Vec::new();
     let mut pos = 0usize;
     for path in self.archive_paths(session_id)? {
@@ -298,6 +387,13 @@ impl Store {
     *cache = None;
   }
 
+  /// Drop a node's history snapshots and folded facts after a node pass releases its local references.
+  pub fn evict_recovery_history(&self, session_id: &str) {
+    self.events_cache.lock().expect("event cache mutex is not poisoned").remove(session_id);
+    self.task_state_tail_cache.lock().expect("task state tail cache mutex is not poisoned").remove(session_id);
+    self.node_facts_cache.lock().expect("node facts cache mutex is not poisoned").remove(session_id);
+  }
+
   fn load_chat_events_shared_locked(
     &self,
     session_id: &str,
@@ -312,6 +408,7 @@ impl Store {
   }
 
   fn read_chat_events_file(&self, path: &Path) -> StoreResult<Vec<ChatEvent>> {
+    self.history_work.file_reads.fetch_add(1, Ordering::Relaxed);
     #[cfg(test)]
     if let Some(hook) = self.event_read_hook.lock().expect("event read hook mutex is not poisoned").clone() {
       hook();

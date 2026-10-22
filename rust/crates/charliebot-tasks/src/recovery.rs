@@ -385,11 +385,23 @@ pub async fn reconcile_node(
   #[cfg(feature = "test-hooks")]
   adapter.recovery.reconcile_node_calls.fetch_add(1, Ordering::SeqCst);
 
+  let result = reconcile_node_inner(features, adapter, session_id, counters, is_driven).await;
+  // The pass moves on from this node: its history snapshots and folded facts leave memory with it.
+  features.store.evict_recovery_history(session_id);
+  result
+}
+
+async fn reconcile_node_inner(
+  features: &Arc<FeatureContext>,
+  adapter: &TaskExecutionAdapter,
+  session_id: &str,
+  counters: &mut PassCounters,
+  is_driven: Option<&(dyn Fn(&RunRecord) -> bool + Sync)>,
+) -> anyhow::Result<()> {
   let store = &features.store;
   if store.load_meta(session_id).await?.is_none() {
     return Ok(());
   }
-  let mut events = store.load_all_facts(session_id)?;
   let run_records = store.list_run_records_sync(session_id)?;
   // Warm the display-backend map: a fresh boot has seen no liveness notification.
   if let Some(newest) = store.newest_run_record_sync(session_id)?
@@ -411,21 +423,25 @@ pub async fn reconcile_node(
 
   // --- 1. stop requests take precedence over any launch or follow ---------
   for run in &run_records {
-    if driven(run) || has_terminal_fact(&events, &run.id)? {
+    if driven(run) {
       continue;
     }
-    if run_records::stop_requested_in_events(&events, &run.id, None) {
+    let (terminal, stop_requested) = run_settlement(store, session_id, &run.id)?;
+    if terminal {
+      continue;
+    }
+    if stop_requested {
       store.reconcile_stop_request(session_id, &run.id).await?;
     }
   }
   // A run on a non-open node without a stop fact cannot continue dispatch or hold the node open.
-  if store.task_state(session_id)? != "open" {
+  if store.task_state_fast(session_id)? != "open" {
     for run in &run_records {
-      if has_terminal_fact(&events, &run.id)? || run_records::stop_requested_in_events(&events, &run.id, None) {
+      let (terminal, stop_requested) = run_settlement(store, session_id, &run.id)?;
+      if terminal || stop_requested {
         continue;
       }
       store.request_stop(session_id, &run.id, &closed_task_stop_request_id(&run.id)).await?;
-      events = store.load_all_facts(session_id)?;
     }
   }
 
@@ -434,7 +450,8 @@ pub async fn reconcile_node(
     if driven(run) || run.pid.is_none() {
       continue;
     }
-    if has_terminal_fact(&events, &run.id)? || run_records::stop_requested_in_events(&events, &run.id, None) {
+    let (terminal, stop_requested) = run_settlement(store, session_id, &run.id)?;
+    if terminal || stop_requested {
       continue;
     }
     let boot = identity::read_host_boot_time().context("reading the host boot time for task recovery")?;
@@ -474,11 +491,10 @@ pub async fn replay_followups(
   let Some(meta) = store.load_meta(session_id).await? else {
     return Ok(());
   };
-  let events = store.load_all_facts(session_id)?;
   let run_records = store.list_run_records_sync(session_id)?;
   let completion = features.startup.require::<TaskCompletion>()?;
   for (run_index, run) in run_records.iter().enumerate() {
-    let outcome = run_records::terminal_outcome(&events, &run.id)?;
+    let outcome = store.node_facts(session_id)?.runs.terminal_outcome(&run.id)?;
     // A terminal run whose end metadata write failed gets its ended_at and exit_code re-derived from the raw log.
     if let Some(outcome) = outcome
       && run.ended_at.is_none()
@@ -561,7 +577,7 @@ pub async fn replay_followups(
         if meta.task.is_some() && task_type == Some(TaskType::Implement) && run.repo_path.is_some() {
           if let Some(reason) = completion.pause_reason(session_id)? {
             tracing::info!(target: "charliebot_tasks", session_id, run_id = %run.id, reason, "worker_delivery_paused");
-          } else if replay_owes_review(store.task_state(session_id)? == "open", &run_records, run)
+          } else if replay_owes_review(store.task_state_fast(session_id)? == "open", &run_records, run)
             && adapter.maybe_spawn_review(session_id, run).await?.is_none()
           {
             let cfg = features.config.get()?;
@@ -644,7 +660,7 @@ async fn resume_run_checked(
   let (Some(pid), Some(pid_start)) = (run.pid, run.pid_start.clone()) else {
     bail!("run {run_id} records no launched process identity; nothing to re-attach");
   };
-  if has_terminal_fact(&store.load_all_facts(session_id)?, run_id)? {
+  if store.node_facts(session_id)?.runs.terminal_outcome(run_id)?.is_some() {
     return Ok(false);
   }
   let is_alive = match is_alive {
@@ -879,8 +895,10 @@ where
   }
 }
 
-fn has_terminal_fact(events: &[Value], run_id: &str) -> StoreResult<bool> {
-  Ok(run_records::terminal_outcome(events, run_id)?.is_some())
+/// The Run's terminal fact and stop request in the node's shared folded facts: `(terminal, stop_requested)`.
+fn run_settlement(store: &Store, session_id: &str, run_id: &str) -> StoreResult<(bool, bool)> {
+  let facts = store.node_facts(session_id)?;
+  Ok((facts.runs.terminal_outcome(run_id)?.is_some(), facts.runs.stop_requested(run_id, None)))
 }
 
 fn controller_for_sequence(features: &FeatureContext, kind: &str) -> Option<Arc<dyn SequenceController>> {
@@ -994,9 +1012,10 @@ mod tests {
   use charliebot_core::hot_reload::HotReload;
   use charliebot_registry::store_hooks::store_hooks;
   use charliebot_registry::{Registry, StartupState};
+  use charliebot_store::metadata::TaskSpec;
   use charliebot_store::run_records::SequenceRef;
-  use charliebot_store::{CreateTask, TaskCaller};
-  use serde_json::Map;
+  use charliebot_store::{CreateTask, HistoryWork, TaskCaller};
+  use serde_json::{Map, json};
 
   const QUEUED_RUN_ID: &str = "synthetic-queued-run";
 
@@ -1174,7 +1193,7 @@ mod tests {
       "the error names the owner: {message}"
     );
     let events = features.store.load_all_facts(&session_id).expect("the session facts load");
-    assert!(!has_terminal_fact(&events, QUEUED_RUN_ID).expect("the terminal fact reads"));
+    assert!(run_records::terminal_outcome(&events, QUEUED_RUN_ID).expect("the terminal fact reads").is_none());
   }
 
   #[tokio::test]
@@ -1187,5 +1206,89 @@ mod tests {
     let events = features.store.load_all_facts(&session_id).expect("the session facts load");
     let outcome = run_records::terminal_outcome(&events, QUEUED_RUN_ID).expect("the terminal fact reads");
     assert_eq!(outcome, Some(RunOutcomeKind::Interrupted));
+  }
+
+  /// Creates a closed implement worker node with `run_count` successful work runs. Each run carries the repository path,
+  /// so the replay of its follow-up reads the node's shared facts.
+  async fn closed_worker_node(features: &Arc<FeatureContext>, request_id: &str, run_count: usize) -> String {
+    let task = features
+      .store
+      .create_task(
+        CreateTask {
+          request_id: request_id.to_string(),
+          task_parent_id: None,
+          profile: TaskProfile::Worker,
+          task: Some(TaskSpec {
+            goal: "synthetic implementation".to_string(),
+            repo_path: Some("/synthetic/repo".to_string()),
+            task_type: Some(TaskType::Implement),
+            ..TaskSpec::default()
+          }),
+          name: Some(request_id.to_string()),
+          backend: Some("synthetic".to_string()),
+          group: None,
+          session_id: None,
+        },
+        TaskCaller::Operator,
+        Map::new(),
+      )
+      .await
+      .expect("the synthetic worker node is created");
+    let guard = features.store.control_lock().await;
+    for index in 0..run_count {
+      let run_id = format!("synthetic-run-{index:04}");
+      let run = RunRecord {
+        session_id: task.id.clone(),
+        repo_path: Some("/synthetic/repo".to_string()),
+        ..run(&run_id, RunKind::Work, None)
+      };
+      features.store.register_run_locked(&guard, &task.id, run, None).await.expect("the synthetic run registers");
+      features
+        .store
+        .record_finish_locked(&guard, &task.id, &run_id, RunOutcome::new(RunOutcomeKind::Success))
+        .await
+        .expect("the synthetic run finishes");
+    }
+    features
+      .store
+      .append_control_fact(&guard, &task.id, json!({"type": "task_closed", "outcome": "completed"}))
+      .await
+      .expect("the synthetic node closes");
+    task.id
+  }
+
+  /// The store's history work for one node's recovery pass, measured from a cold snapshot of that node.
+  async fn node_pass_history_work(
+    features: &Arc<FeatureContext>,
+    adapter: &TaskExecutionAdapter,
+    session_id: &str,
+  ) -> HistoryWork {
+    features.store.evict_recovery_history(session_id);
+    let before = features.store.history_work();
+    reconcile_node(features, adapter, session_id, &mut PassCounters::default(), None)
+      .await
+      .expect("the node's pass finishes");
+    let after = features.store.history_work();
+    HistoryWork {
+      file_reads: after.file_reads - before.file_reads,
+      full_folds: after.full_folds - before.full_folds,
+      folded_events: after.folded_events - before.folded_events,
+    }
+  }
+
+  #[tokio::test]
+  async fn recovery_history_reads_and_folds_do_not_grow_with_run_count() {
+    let (_home, features) = startup_features().await;
+    let small_id = closed_worker_node(&features, "synthetic-one-run-node", 1).await;
+    let large_id = closed_worker_node(&features, "synthetic-many-run-node", 32).await;
+    let adapter = features.startup.require::<TaskExecutionAdapter>().expect("the startup step inserts the adapter");
+    let small = node_pass_history_work(&features, &adapter, &small_id).await;
+    let large = node_pass_history_work(&features, &adapter, &large_id).await;
+    assert_eq!(small.file_reads, large.file_reads, "history reads grew with run count: one={small:?}, many={large:?}");
+    assert_eq!(small.full_folds, large.full_folds, "full folds grew with run count: one={small:?}, many={large:?}");
+    let small_events = features.store.load_all_facts(&small_id).expect("the one-run history loads").len();
+    let large_events = features.store.load_all_facts(&large_id).expect("the many-run history loads").len();
+    assert_eq!(small.folded_events, small_events as u64, "each event folds once: one={small:?}");
+    assert_eq!(large.folded_events, large_events as u64, "each event folds once: many={large:?}");
   }
 }

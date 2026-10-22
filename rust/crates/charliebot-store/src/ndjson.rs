@@ -1,5 +1,5 @@
 use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 
 use charliebot_core::pyfmt::{self, JsonStyle};
@@ -23,12 +23,17 @@ pub(crate) fn parse_line(raw: &[u8]) -> Option<Value> {
 
 /// Parse every physical line in an NDJSON file, including a final line without `\n`.
 pub(crate) fn read_file(path: &Path) -> StoreResult<Vec<Value>> {
-  let bytes = match fs::read(path) {
-    Ok(bytes) => bytes,
+  let file = match fs::File::open(path) {
+    Ok(file) => file,
     Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
     Err(error) => return Err(StoreError::new(format!("{}: {error}", path.display()))),
   };
-  Ok(bytes.split(|byte| *byte == b'\n').filter_map(parse_line).collect())
+  let mut values = Vec::new();
+  for line in BufReader::new(file).split(b'\n') {
+    let raw = line.map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
+    values.extend(parse_line(&raw));
+  }
+  Ok(values)
 }
 
 /// One event as an NDJSON line: Python `json.dumps(..., ensure_ascii=False)` and the newline.

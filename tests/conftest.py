@@ -2635,6 +2635,13 @@ def _isolate_profile(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pyte
 
 
 @pytest.fixture(autouse=True)
+def _disk_headroom_off_host(monkeypatch: pytest.MonkeyPatch) -> None:
+  """The worker launch precheck reads a fixed 1024 GiB of free space, so no test's verdict depends on the host's
+  free disk."""
+  monkeypatch.setattr("src.runtime.task_execution.free_disk_gib", lambda path: 1024.0)
+
+
+@pytest.fixture(autouse=True)
 def _session_cgroup_base_off_host(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> None:
   """The session-cgroup base points at a path that does not exist, so no test creates a cgroup under the host's
   delegated app.slice. A spawn then degrades to no cgroup, as on a host without delegation; a test that needs a

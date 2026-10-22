@@ -24,7 +24,7 @@ use crate::agent_environment::AgentBaseEnvironment;
 use crate::launch_loop::{self, ChildEnvPolicy};
 use crate::transport::cgroup::SessionCgroup;
 use crate::transport::follow::{self, FollowSummary};
-use crate::transport::identity::ProcessIdentity;
+use crate::transport::identity::{self, ProcessIdentity};
 use crate::transport::kill::{self, python_exit_code};
 use crate::transport::rotation::rotate_stale_transport;
 use crate::transport::spawn::{self, RawStdin, SpawnSpec};
@@ -253,7 +253,8 @@ impl AgentRunner {
       if stdin_prompt.is_some() { RawStdin::Piped } else { RawStdin::Null },
     )
     .await?;
-    if request.child_waits_for_spawn_callback {
+    let gate = request.child_waits_for_spawn_callback.then(|| SpawnGate::arm(&spawned.child));
+    if gate.is_some() {
       wait_until_stopped_or_terminate(&mut spawned.child).await?;
     }
     let stdin = spawned.child.stdin.take();
@@ -275,8 +276,8 @@ impl AgentRunner {
       }
     })
     .await?;
-    if request.child_waits_for_spawn_callback {
-      spawn::continue_stopped_child(identity.pid)?;
+    if let Some(gate) = gate {
+      gate.open()?;
     }
 
     let cgroup = spawned.cgroup.take();
@@ -383,7 +384,8 @@ impl AgentRunner {
       request.tasks_max,
     );
     let mut spawned = spawn::spawn_piped(&spec).await?;
-    if request.child_waits_for_spawn_callback {
+    let gate = request.child_waits_for_spawn_callback.then(|| SpawnGate::arm(&spawned.child));
+    if gate.is_some() {
       wait_until_stopped_or_terminate(&mut spawned.child).await?;
     }
     let on_spawn = request.on_spawn.clone();
@@ -394,8 +396,8 @@ impl AgentRunner {
       }
     })
     .await?;
-    if request.child_waits_for_spawn_callback {
-      spawn::continue_stopped_child(identity.pid)?;
+    if let Some(gate) = gate {
+      gate.open()?;
     }
 
     let cgroup = spawned.cgroup.take();
@@ -454,7 +456,8 @@ impl AgentRunner {
     log_dir: &Path,
   ) -> anyhow::Result<RunOutcome> {
     let mut spawned = spawn::spawn_piped(spec).await?;
-    if request.child_waits_for_spawn_callback {
+    let gate = request.child_waits_for_spawn_callback.then(|| SpawnGate::arm(&spawned.child));
+    if gate.is_some() {
       wait_until_stopped_or_terminate(&mut spawned.child).await?;
     }
     let mut stdout = spawned.child.stdout.take().context("agent stdout was not piped")?;
@@ -469,8 +472,8 @@ impl AgentRunner {
     })
     .await?;
     let pid = identity.pid;
-    if request.child_waits_for_spawn_callback {
-      spawn::continue_stopped_child(pid)?;
+    if let Some(gate) = gate {
+      gate.open()?;
     }
     let (sender, receiver) = watch::channel(None);
     tokio::spawn(reap_child(spawned.child, sender));
@@ -581,6 +584,43 @@ impl AgentRunner {
     let mut slot = self.active.lock().expect("active process lock poisoned");
     if slot.as_ref().is_some_and(|current| Arc::ptr_eq(current, active)) {
       slot.take();
+    }
+  }
+}
+
+/// The gated child of a launch until its gate opens. A launch dropped before then, such as one the server's let-go
+/// cancels in its spawn callback, leaves the gate shell stopped before `exec` with no recorded owner, so the guard's drop
+/// kills it: the agent never starts, and the next boot launches the run. The start tick pinned at spawn keeps a reaped
+/// child's reused pid from being signalled.
+struct SpawnGate {
+  child: ProcessIdentity,
+  opened: bool,
+}
+
+impl SpawnGate {
+  fn arm(child: &Child) -> Self {
+    Self { child: identity::pin_process_identity(child.id().expect("spawned child has a process id")), opened: false }
+  }
+
+  /// Continue the stopped child and disarm the guard.
+  fn open(mut self) -> std::io::Result<()> {
+    spawn::continue_stopped_child(self.child.pid)?;
+    self.opened = true;
+    Ok(())
+  }
+}
+
+impl Drop for SpawnGate {
+  fn drop(&mut self) {
+    let ProcessIdentity { pid, pid_start } = &self.child;
+    if self.opened || pid_start.is_none() {
+      return;
+    }
+    if identity::read_pid_stat(*pid).is_some_and(|stat| Some(&stat.pid_start) == pid_start.as_ref()) {
+      let process = nix::unistd::Pid::from_raw(i32::try_from(*pid).expect("process id fits pid_t"));
+      if let Err(error) = nix::sys::signal::kill(process, nix::sys::signal::Signal::SIGKILL) {
+        tracing::warn!(target: "charliebot_agents", pid, error = %error, "spawn_gate_kill_failed");
+      }
     }
   }
 }
@@ -853,6 +893,80 @@ mod tests {
     assert_eq!(outcome.exit_code, Some(0));
     assert_eq!(*callback_saw_stopped_child.lock().expect("spawn callback state is not poisoned"), Some(true));
     assert!(marker.exists());
+  }
+
+  /// Kills the child a test pinned when the test ends, so a failed assertion leaves no stopped process behind.
+  struct PinnedChildCleanup(Arc<Mutex<Option<ProcessIdentity>>>);
+
+  impl Drop for PinnedChildCleanup {
+    fn drop(&mut self) {
+      let pinned = self.0.lock().expect("pinned child state is not poisoned").take();
+      if let Some(ProcessIdentity { pid, pid_start: Some(pid_start) }) = pinned
+        && identity::read_pid_stat(pid).is_some_and(|stat| stat.pid_start == pid_start)
+      {
+        unsafe { libc::kill(i32::try_from(pid).expect("process id fits pid_t"), libc::SIGKILL) };
+      }
+    }
+  }
+
+  #[tokio::test]
+  async fn a_launch_dropped_in_its_spawn_callback_kills_the_gated_child() {
+    use tokio::sync::oneshot;
+
+    let root = tempfile::tempdir().unwrap();
+    let marker = root.path().join("backend-started");
+    let runner = AgentRunner::new(
+      Box::new(ShellBackend::new("touch \"$MARKER\"; printf '%s\\n' '{\"type\":\"result\"}'")),
+      LaunchArgs { log_dir: Some(root.path().join("logs")), ..LaunchArgs::default() },
+    );
+    let mut request = test_request(
+      "prompt".to_string(),
+      root.path().to_path_buf(),
+      Env::from([
+        ("PATH".to_string(), "/bin".to_string()),
+        ("MARKER".to_string(), marker.to_string_lossy().into_owned()),
+      ]),
+      root.path().join("cgroups"),
+    );
+    request.gate_child_until_on_spawn();
+    let pinned = Arc::new(Mutex::new(None));
+    let _cleanup = PinnedChildCleanup(Arc::clone(&pinned));
+    let (callback_entered, callback_entered_rx) = oneshot::channel();
+    let callback_entered = Mutex::new(Some(callback_entered));
+    request.on_spawn = Some(Arc::new({
+      let pinned = Arc::clone(&pinned);
+      move |identity| {
+        *pinned.lock().expect("pinned child state is not poisoned") = Some(identity);
+        let entered = callback_entered
+          .lock()
+          .expect("spawn callback channel state is not poisoned")
+          .take()
+          .expect("spawn callback runs once");
+        Box::pin(async move {
+          entered.send(()).expect("test waits for spawn callback");
+          std::future::pending::<anyhow::Result<()>>().await
+        })
+      }
+    }));
+
+    // The owner's callback never returns, as a launch the let-go cancels while it waits for the control lock.
+    let run = tokio::spawn(async move { runner.run(request).await });
+    callback_entered_rx.await.expect("spawn callback starts");
+    run.abort();
+    assert!(run.await.expect_err("the launch was cancelled").is_cancelled());
+
+    let child =
+      pinned.lock().expect("pinned child state is not poisoned").clone().expect("the callback pinned the child");
+    let pid_start = child.pid_start.expect("the gated child has a stat line");
+    // The killed child stays a zombie until the runtime reaps it; a stopped one keeps state `T`.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+    while let Some(stat) =
+      identity::read_pid_stat(child.pid).filter(|stat| stat.pid_start == pid_start && stat.state != "Z")
+    {
+      assert!(tokio::time::Instant::now() < deadline, "the gated child is still in state {}", stat.state);
+      tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(!marker.exists(), "the agent command never ran");
   }
 
   #[tokio::test]

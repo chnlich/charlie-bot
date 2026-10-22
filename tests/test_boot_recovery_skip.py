@@ -126,8 +126,8 @@ def _marker_ts(cfg) -> float:
 def _stamp_durable_files(cfg, session_id: str, offset_s: float) -> None:
   """Set both durable files' mtimes ``offset_s`` from the recorded marker.
 
-  A skip needs the files more than the slack ahead of the marker: a fast test
-  writes its files within the slack window of the next pass start.
+  A skip needs the files more than the slack before the marker: a fast test
+  writes its files within the slack of the next pass start.
   """
   stamp = _marker_ts(cfg) + offset_s
   node = cfg.sessions_dir / session_id
@@ -258,6 +258,7 @@ async def test_end_landing_retry_checks_a_node_the_boot_pass_skips(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, tree, _manager, worker = await _closed_worker(tmp_path, monkeypatch)
   await _pass_checked(cfg, tree)
+  _stamp_durable_files(cfg, worker.id, offset_s=-2.0)
 
   spy = _NodeSpy()
   executor = tree.dispatch.executor

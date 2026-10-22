@@ -31,9 +31,11 @@ impl LogCapture {
         .with_max_level(tracing::Level::INFO)
         .finish();
       tracing::subscriber::set_global_default(subscriber).expect("the capture subscriber is the only global default");
-      // A thread that reached a call site while the global was still being stored cached `never` there.
-      tracing::callsite::rebuild_interest_cache();
     });
+    // A thread that reached a call site before the global default existed cached `never` there, and that store can
+    // land after the rebuild `set_global_default` runs. Rebuilding on every install, before the test emits,
+    // recovers such a call site.
+    tracing::callsite::rebuild_interest_cache();
     CaptureGuard(CAPTURE.with(|slot| slot.replace(Some(self.clone()))))
   }
 

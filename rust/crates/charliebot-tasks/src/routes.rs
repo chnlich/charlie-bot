@@ -17,7 +17,7 @@ use charliebot_registry::caller::{self, CallerIdentity};
 use charliebot_registry::task_errors::task_http_error;
 use charliebot_store::control_events;
 use charliebot_store::metadata::{ColdReadSpec, SessionMetadata, TaskProfile, TaskSpec, TaskType};
-use charliebot_store::run_records::{self, RunOutcomeKind};
+use charliebot_store::run_records::RunOutcomeKind;
 use charliebot_store::{CreateTask, TaskCaller};
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -765,8 +765,8 @@ async fn cancel_chat(
   if let Err(error) = features.store.load_task_meta(&session_id).await {
     return task_http_error(error);
   }
-  let events = match features.store.load_all_facts(&session_id) {
-    Ok(events) => events,
+  let facts = match features.store.node_state(&session_id) {
+    Ok(facts) => facts,
     Err(error) => return task_http_error(error),
   };
   let runs = match features.store.list_run_records_sync(&session_id) {
@@ -775,7 +775,7 @@ async fn cancel_chat(
   };
   let mut requested = 0;
   for run in runs {
-    let terminal = match run_records::terminal_outcome(&events, &run.id) {
+    let terminal = match facts.runs.terminal_outcome(&run.id) {
       Ok(outcome) => outcome.is_some(),
       Err(error) => return task_http_error(error),
     };

@@ -804,7 +804,7 @@ pub(crate) async fn run_cc(
   } else {
     exit_code = process.last_exit_code.unwrap_or(1);
     if exit_code != 0 {
-      let stderr = read_stderr_tail(&log_dir.join(STDERR_LOG_NAME))?;
+      let stderr = read_stderr_tail(&log_dir.join(STDERR_LOG_NAME)).await?;
       error_msg = charliebot_agents::runs::select_error_hint(&process.error_event_messages, &stderr);
     }
   }
@@ -981,7 +981,7 @@ pub(crate) async fn resume_cc(item: &mut WorkItem) -> anyhow::Result<MasterRunOu
       }
       Err(error) => error_msg = Some(error.to_string()),
     }
-    let stderr = read_stderr_tail(&stderr_path)?;
+    let stderr = read_stderr_tail(&stderr_path).await?;
     if !stderr.is_empty() {
       tracing::warn!(target: "charliebot_tasks", session = %metadata.id, stderr, "master_cc_stderr");
     }

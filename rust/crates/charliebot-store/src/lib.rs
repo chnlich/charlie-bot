@@ -27,7 +27,7 @@ pub mod write_faults;
 
 pub use aggregator::{MessageAggregator, TOOL_PREVIEW_CHARS};
 pub use control::ControlGuard;
-pub use events::{ChatEvent, ChatEventsDelta, SharedChatEventRange};
+pub use events::{ChatEvent, ChatEventHistory, ChatEventsDelta, SharedChatEventRange};
 pub use hooks::{AfterTurnWork, EmptyRuntimeEventHooks, EventRenderer, RuntimeEventHooks};
 pub use listing::{ArchivedPage, MetadataListing, RawMetadata, SharedSubtreeRoots};
 pub use message_utils::{MessageProvenance, SESSION_NOT_FOUND_DETAIL, build_scheduled_trigger_event};

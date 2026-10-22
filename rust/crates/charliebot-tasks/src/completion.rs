@@ -136,12 +136,15 @@ impl TaskCompletion {
   fn delivery_run_outcomes(&self, meta: &SessionMetadata) -> StoreResult<DeliveryRunOutcomes> {
     let mut records = HashMap::new();
     let mut outcomes = HashMap::new();
+    let facts = self.store().node_facts(&meta.id)?;
+    let task_facts = facts.task()?;
     for run in self.store().list_run_records_sync(&meta.id)? {
-      outcomes.insert(run.id.clone(), self.store().facts_of(&meta.id)?.run_outcomes.get(&run.id).cloned());
+      outcomes.insert(run.id.clone(), task_facts.run_outcomes.get(&run.id).cloned());
       records.insert(run.id.clone(), run);
     }
     for child_id in self.store().child_ids(&meta.id)? {
-      let facts = self.store().facts_of(&child_id)?;
+      let facts = self.store().node_facts(&child_id)?;
+      let facts = facts.task()?;
       for run in self.store().list_run_records_sync(&child_id)? {
         outcomes.insert(run.id.clone(), facts.run_outcomes.get(&run.id).cloned());
         records.insert(run.id.clone(), run);
@@ -171,7 +174,8 @@ impl TaskCompletion {
     for run_id in succeeding_run_ids {
       outcomes.insert(run_id.clone(), Some("success".to_string()));
     }
-    let facts = self.store().facts_of(&meta.id)?;
+    let facts = self.store().node_facts(&meta.id)?;
+    let facts = facts.task()?;
     let mut claimed = HashSet::new();
     for run_id in &evidence.run_ids {
       let Some(run) = records.get(run_id) else {
@@ -197,7 +201,7 @@ impl TaskCompletion {
       }
     }
     for result_ref in &evidence.result_refs {
-      blockers.extend(self.structured_ref_blockers(meta, result_ref, &records, &facts, evidence));
+      blockers.extend(self.structured_ref_blockers(meta, result_ref, &records, facts, evidence));
     }
 
     let claimed_work_ids = evidence.run_ids.iter().map(String::as_str).collect::<HashSet<_>>();
@@ -406,8 +410,10 @@ impl TaskCompletion {
   }
 
   fn replay_close_request(&self, session_id: &str, request_id: &str) -> StoreResult<Option<(usize, Value)>> {
-    let events = self.store().load_all_facts(session_id)?;
-    for event in &events {
+    // Python's `_replay_close_request` scans `fact_history` (`task_completion.py:544-563`), which returns its shared
+    // cached event dictionaries. Keep the same full-history scan without cloning every event for each replayed run.
+    let events = self.store().load_all_facts_view_sync(session_id)?;
+    for event in events.iter() {
       if event.get("type").and_then(Value::as_str) == Some(event_types::TASK_CLOSE_REQUESTED)
         && event.get("request_id").and_then(Value::as_str) == Some(request_id)
       {
@@ -417,7 +423,7 @@ impl TaskCompletion {
         )));
       }
     }
-    for event in &events {
+    for event in events.iter() {
       if event.get("type").and_then(Value::as_str) == Some(event_types::TASK_CLOSED)
         && event.get("request_id").and_then(Value::as_str) == Some(request_id)
       {
@@ -920,25 +926,30 @@ impl TaskCompletion {
     let mut restored = Vec::new();
     let mut announcements = Vec::new();
     for node_id in chain.into_iter().rev() {
-      let history = self.store().load_all_facts(&node_id)?;
-      let lifecycle = history
-        .iter()
-        .filter(|event| {
-          matches!(
-            event.get("type").and_then(Value::as_str),
-            Some(event_types::TASK_CLOSED | event_types::TASK_REOPENED)
-          )
-        })
-        .collect::<Vec<_>>();
-      if lifecycle.last().is_some_and(|event| {
+      let history = self.store().load_all_facts_view_sync(&node_id)?;
+      let mut latest_lifecycle = None;
+      let mut last_close = None;
+      for event in history.iter().rev() {
+        let event_type = event.get("type").and_then(Value::as_str);
+        if latest_lifecycle.is_none()
+          && matches!(event_type, Some(event_types::TASK_CLOSED | event_types::TASK_REOPENED))
+        {
+          latest_lifecycle = Some(event);
+        }
+        if last_close.is_none() && event_type == Some(event_types::TASK_CLOSED) {
+          last_close = Some(event);
+        }
+        if latest_lifecycle.is_some() && last_close.is_some() {
+          break;
+        }
+      }
+      if latest_lifecycle.is_some_and(|event| {
         event.get("type").and_then(Value::as_str) == Some(event_types::TASK_REOPENED)
           && event.get("request_id").and_then(Value::as_str) == Some(request_id)
       }) {
         restored.push(node_id);
         continue;
       }
-      let last_close =
-        history.iter().rev().find(|event| event.get("type").and_then(Value::as_str) == Some(event_types::TASK_CLOSED));
       let close_id = last_close.and_then(|event| event.get("id")).and_then(Value::as_str);
       let event_scope = close_id.map_or_else(|| request_id.to_string(), |close_id| format!("{request_id}:{close_id}"));
       let event = control_events::build_control_event(
@@ -1273,7 +1284,8 @@ impl TaskCompletion {
     if meta.profile != TaskProfile::Worker {
       return Err(StoreError::forbidden("automatic completion applies to worker tasks"));
     }
-    let facts = self.store().facts_of(session_id)?;
+    let facts = self.store().node_facts(session_id)?;
+    let facts = facts.task()?;
     if facts.run_outcomes.get(run_id).map(String::as_str) != Some("success") {
       return Err(StoreError::conflict(vec![format!(
         "run {run_id} has no successful run_finished fact; failed or interrupted evidence keeps the task open"
@@ -1437,4 +1449,162 @@ fn sorted_unique(mut values: Vec<String>) -> Vec<String> {
   values.sort();
   values.dedup();
   values
+}
+
+#[cfg(test)]
+mod tests {
+  use super::TaskCompletion;
+  use charliebot_store::metadata::{SessionMetadata, TaskProfile};
+  use charliebot_store::run_records::{RunKind, RunRecord};
+  use charliebot_store::{CreateTask, HistoryWork, TaskCaller};
+  use serde_json::{Map, json};
+
+  use crate::test_fixtures;
+
+  fn run_record(session_id: &str, run_id: String) -> RunRecord {
+    RunRecord {
+      id: run_id,
+      session_id: session_id.to_string(),
+      kind: RunKind::Work,
+      input_event_ids: Vec::new(),
+      task_spec_hash: None,
+      task_spec_ref: None,
+      prompt_snapshot_ref: None,
+      retry_of_run_id: None,
+      review_of_run_id: None,
+      backend: Some("synthetic".to_string()),
+      model: None,
+      native_session_id: None,
+      pid: None,
+      pid_start: None,
+      started_at: None,
+      ended_at: None,
+      exit_code: None,
+      repo_path: None,
+      base_branch: None,
+      branch_name: None,
+      worktree_path: None,
+      sequence_ref: None,
+      raw_log_ref: None,
+      events_ref: None,
+      result_ref: None,
+    }
+  }
+
+  async fn add_runs(features: &charliebot_registry::context::FeatureContext, meta: &SessionMetadata, count: usize) {
+    let guard = features.store.control_lock().await;
+    for index in 0..count {
+      let run = run_record(&meta.id, format!("{}-synthetic-run-{index:03}", meta.id));
+      features.store.register_run_locked(&guard, &meta.id, run, None).await.unwrap();
+    }
+  }
+
+  #[tokio::test]
+  async fn delivery_outcomes_fold_once_per_node_with_many_runs() {
+    let home = tempfile::tempdir().unwrap();
+    let features = test_fixtures::claude_features(&home.path().join("home"), &test_fixtures::claude_config(None));
+    let parent = test_fixtures::manager_session(&features, "delivery-parent", "fable", None, "claude-parent").await;
+    let child = features
+      .store
+      .create_task(
+        CreateTask {
+          request_id: "delivery-child".to_string(),
+          task_parent_id: Some(parent.id.clone()),
+          profile: TaskProfile::Manager,
+          task: None,
+          name: Some("Synthetic child".to_string()),
+          backend: Some("fable".to_string()),
+          group: None,
+          session_id: None,
+        },
+        TaskCaller::System,
+        Map::new(),
+      )
+      .await
+      .unwrap();
+    add_runs(&features, &parent, 40).await;
+    add_runs(&features, &child, 20).await;
+    for index in 0..24 {
+      features
+        .store
+        .append_chat_event(&parent.id, json!({"type":"user","content":format!("parent-{index}")}))
+        .await
+        .unwrap();
+    }
+    for index in 0..12 {
+      features
+        .store
+        .append_chat_event(&child.id, json!({"type":"user","content":format!("child-{index}")}))
+        .await
+        .unwrap();
+    }
+    let parent_events = features.store.load_chat_events_shared_sync(&parent.id).unwrap().len() as u64;
+    let child_events = features.store.load_chat_events_shared_sync(&child.id).unwrap().len() as u64;
+    features.store.evict_recovery_history(&parent.id);
+    features.store.evict_recovery_history(&child.id);
+    let before: HistoryWork = features.store.history_work();
+
+    let outcomes = TaskCompletion::new(std::sync::Arc::clone(&features)).delivery_run_outcomes(&parent).unwrap();
+
+    let after = features.store.history_work();
+    assert_eq!(outcomes.0.len(), 60);
+    assert_eq!(after.full_folds - before.full_folds, 2, "one memoized fold for the parent and one for its child");
+    assert_eq!(after.folded_events - before.folded_events, parent_events + child_events);
+  }
+
+  #[tokio::test]
+  async fn restore_chain_loads_each_closed_node_history_once_without_owned_copies() {
+    let home = tempfile::tempdir().unwrap();
+    let features = test_fixtures::claude_features(&home.path().join("home"), &test_fixtures::claude_config(None));
+    let parent = test_fixtures::manager_session(&features, "restore-parent", "fable", None, "claude-parent").await;
+    let child = features
+      .store
+      .create_task(
+        CreateTask {
+          request_id: "restore-child".to_string(),
+          task_parent_id: Some(parent.id.clone()),
+          profile: TaskProfile::Manager,
+          task: None,
+          name: Some("Synthetic restore child".to_string()),
+          backend: Some("fable".to_string()),
+          group: None,
+          session_id: None,
+        },
+        TaskCaller::System,
+        Map::new(),
+      )
+      .await
+      .unwrap();
+    for session_id in [&parent.id, &child.id] {
+      for index in 0..12 {
+        features
+          .store
+          .append_chat_event(session_id, json!({"type":"user","content":format!("history-{index}")}))
+          .await
+          .unwrap();
+      }
+      features
+        .store
+        .append_chat_event(
+          session_id,
+          json!({"id":format!("{session_id}-close"),"type":"task_closed","outcome":"completed"}),
+        )
+        .await
+        .unwrap();
+      features.store.node_state(session_id).unwrap();
+      features.store.evict_recovery_history(session_id);
+    }
+    let before: HistoryWork = features.store.history_work();
+
+    let completion = TaskCompletion::new(std::sync::Arc::clone(&features));
+    let guard = features.store.control_lock().await;
+    let (restored, _announcements) =
+      completion.restore_chain_locked(&guard, &child.id, "restore-count", "synthetic restore").await.unwrap();
+    drop(guard);
+
+    let after = features.store.history_work();
+    assert_eq!(restored, [parent.id.clone(), child.id.clone()]);
+    assert_eq!(after.file_reads - before.file_reads, 2, "one history read for each node in the closed chain");
+    assert_eq!(after.event_history_views - before.event_history_views, 2);
+  }
 }

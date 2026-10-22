@@ -425,8 +425,19 @@ impl MasterQueue {
           }
           // The consumer pops its first item before it can retire: the enqueue that spawned it pushed that item.
           None => {
-            let turn = last_turn.as_ref().expect("a consumer pops an item before it retires");
-            break Self::retire_locked(&mut state, &session_id, turn);
+            let turn = last_turn.as_ref().expect("a consumer pops an item before it retires").clone();
+            drop(state);
+            let active = (turn.0.task_tree_activity)(&session_id).map(|(active, _)| active);
+            let mut state = self.state.lock().expect("master queue mutex is not poisoned");
+            match state.session_queues.get_mut(&session_id).and_then(VecDeque::pop_front) {
+              Some(item) => {
+                state.current_items.insert(session_id.clone(), item.user_event_ids.clone());
+                state.running_turns.insert(session_id.clone(), Arc::clone(&item.session_meta));
+                last_turn = Some((item.callbacks.clone(), item.auto_trigger));
+                item
+              }
+              None => break Self::retire_locked(&mut state, &session_id, &turn, active),
+            }
           }
         }
       };
@@ -476,6 +487,7 @@ impl MasterQueue {
     state: &mut QueueState,
     session_id: &str,
     turn: &(SessionCallbacks, bool),
+    active: anyhow::Result<bool>,
   ) -> (SessionCallbacks, bool, anyhow::Result<bool>) {
     state.session_consumers.remove(session_id);
     state.consumer_cancel.remove(session_id);
@@ -490,7 +502,6 @@ impl MasterQueue {
     }
     let (callbacks, auto_trigger) = turn;
     callbacks.features.store.clear_busy(session_id);
-    let active = (callbacks.task_tree_activity)(session_id).map(|(active, _)| active);
     (callbacks.clone(), *auto_trigger, active)
   }
 
@@ -500,8 +511,9 @@ impl MasterQueue {
     session_id: &str,
     turn: &(SessionCallbacks, bool),
   ) -> (SessionCallbacks, bool, anyhow::Result<bool>) {
+    let active = (turn.0.task_tree_activity)(session_id).map(|(active, _)| active);
     let mut state = self.state.lock().expect("master queue mutex is not poisoned");
-    Self::retire_locked(&mut state, session_id, turn)
+    Self::retire_locked(&mut state, session_id, turn, active)
   }
 
   async fn process_item(
@@ -724,19 +736,24 @@ async fn arm_idle_compaction(
     let usage = inspect_features.startup.require::<SessionUsage>()?;
     let (context_tokens, last_request_at) = usage.context_state(&inspect_session_id, &metadata)?;
     let compacted_after_request = if let Some(last_request_at) = last_request_at {
-      let events = inspect_features.store.load_chat_events_sync(&inspect_session_id)?;
-      let newest_compaction = events
-        .iter()
-        .rev()
-        .find(|event| {
-          event.get("type").and_then(Value::as_str) == Some(event_types::CONTEXT_COMPACTED)
-            && event.get("timestamp").and_then(Value::as_str).is_some()
-        })
-        .and_then(|event| event.get("timestamp"))
-        .and_then(Value::as_str)
-        .map(UtcDateTime::parse)
-        .transpose()?;
-      newest_compaction.is_some_and(|timestamp| timestamp > last_request_at)
+      // Python scans its cached history in asyncio.to_thread (claude_idle_compaction.py:176-195).
+      let store = Arc::clone(&inspect_features.store);
+      let session_id = inspect_session_id.clone();
+      tokio::task::block_in_place(move || {
+        let events = store.load_chat_events_shared_sync(&session_id)?;
+        let newest_compaction = events
+          .iter()
+          .rev()
+          .find(|event| {
+            event.get("type").and_then(Value::as_str) == Some(event_types::CONTEXT_COMPACTED)
+              && event.get("timestamp").and_then(Value::as_str).is_some()
+          })
+          .and_then(|event| event.get("timestamp"))
+          .and_then(Value::as_str)
+          .map(UtcDateTime::parse)
+          .transpose()?;
+        Ok::<_, anyhow::Error>(newest_compaction.is_some_and(|timestamp| timestamp > last_request_at))
+      })?
     } else {
       false
     };
@@ -1286,6 +1303,30 @@ mod tests {
   }
 
   #[tokio::test]
+  async fn retirement_runs_task_tree_activity_without_the_queue_mutex() {
+    let home = tempfile::tempdir().unwrap();
+    let features = context_features(home.path());
+    let queue = Arc::new(MasterQueue::new(Arc::new(BackendPool::default())));
+    let queue_ref = Arc::downgrade(&queue);
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let activity_calls = Arc::clone(&calls);
+    let activity: TaskTreeActivityFn = Arc::new(move |_session_id| {
+      let queue = queue_ref.upgrade().unwrap();
+      let _state = queue.state.try_lock().expect("activity callback runs outside the queue mutex");
+      activity_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+      Ok((false, String::new()))
+    });
+    let turn = (queue.session_callbacks(features, activity), false);
+
+    let (callbacks, auto_trigger, active) = queue.retire("synthetic-retire", &turn);
+
+    assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 1);
+    assert!(!active.unwrap());
+    assert!(!auto_trigger);
+    assert_eq!(callbacks.features.store.busy_since("synthetic-retire"), None);
+  }
+
+  #[tokio::test]
   async fn a_drained_manager_turn_clears_the_busy_state_it_opened() {
     let home = tempfile::tempdir().unwrap();
     let features = context_features(home.path());
@@ -1411,7 +1452,7 @@ mod tests {
   }
 
   // Python: tests/test_claude_idle_compaction.py:280.
-  #[tokio::test]
+  #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
   async fn a_turn_queued_before_the_trigger_registers_makes_it_skip() {
     let root = tempfile::tempdir().unwrap();
     let account_dir = root.path().join("account-a");
@@ -1447,7 +1488,7 @@ mod tests {
   }
 
   // Python: tests/test_claude_idle_compaction.py:309.
-  #[tokio::test]
+  #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
   async fn the_trigger_path_starts_one_idle_run_on_the_sessions_own_command_line() {
     let root = tempfile::tempdir().unwrap();
     let account_dir = root.path().join("account-a");
@@ -1494,7 +1535,7 @@ mod tests {
   }
 
   // Python: tests/test_claude_idle_compaction.py:341.
-  #[tokio::test]
+  #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
   async fn an_unpooled_session_uses_its_default_login_directory() {
     let root = tempfile::tempdir().unwrap();
     let default_dir = root.path().join("default-claude");
@@ -1537,7 +1578,7 @@ mod tests {
   }
 
   // Python: src/backends/claude_code/claude_idle_compaction.py:_compact, whose finally pops the running entry.
-  #[tokio::test]
+  #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
   async fn a_panicking_idle_run_leaves_no_running_entry_and_no_start_reservation() {
     let root = tempfile::tempdir().unwrap();
     let account_dir = root.path().join("account-a");

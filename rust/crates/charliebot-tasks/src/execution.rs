@@ -5,7 +5,7 @@ use std::error::Error;
 use std::ffi::CString;
 use std::fs;
 use std::fs::OpenOptions;
-use std::io::Write;
+use std::io::{BufRead, Write};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -28,7 +28,7 @@ use charliebot_store::metadata::{
   ColdReadSpec, SessionMetadata, TaskProfile, TaskType, ThreadMetadata, ThreadStatus, UtcDateTime,
 };
 use charliebot_store::run_records::{self, RunKind, RunOutcome, RunOutcomeKind, RunRecord};
-use charliebot_store::{StoreError, StoreResult};
+use charliebot_store::{ChatEventHistory, NodeFacts, StoreError, StoreResult};
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
 use tokio::sync::watch;
@@ -41,10 +41,11 @@ use crate::git;
 use crate::master_queue::{MasterQueue, PersistAndBroadcastFn, SessionCallbacks, TaskTreeActivityFn};
 use crate::master_run;
 use crate::master_state::{MasterTurnRequest, TaskFinishCallback, TaskRunBinding, TaskSpawnCallback};
-use crate::prompts::{self, PromptEnv, PromptSnapshot, TaskPromptError};
+use crate::prompts::{self, PromptSnapshot, TaskPromptError};
 use crate::recovery::{self, RecoveryState};
 use crate::review;
 use crate::review_text;
+use crate::run_support::visit_events_from_end;
 use crate::session_anchors;
 use crate::spawner_backends;
 use crate::worker::{self, Worker, WorkerSpec};
@@ -124,7 +125,8 @@ impl TaskExecutionAdapter {
     {
       let guard = self.features.store.control_lock().await;
       let meta = self.features.store.load_task_meta(session_id).await?;
-      if self.features.store.task_state(session_id)? != "open" {
+      let state = self.features.store.node_state(session_id)?;
+      if state.task_state()? != "open" {
         return Ok(None);
       }
       if let Some(launch_run_id) = launch_run_id {
@@ -133,10 +135,9 @@ impl TaskExecutionAdapter {
           .store
           .read_run_sync(session_id, launch_run_id)?
           .ok_or_else(|| StoreError::not_found(format!("run {launch_run_id} not found in session {session_id}")))?;
-        let facts = self.features.store.load_all_facts(session_id)?;
-        if run_records::terminal_outcome(&facts, &run.id)?.is_some()
+        if state.runs.terminal_outcome(&run.id)?.is_some()
           || run.pid.is_some()
-          || run_records::stop_requested_in_events(&facts, &run.id, None)
+          || state.runs.stop_requested(&run.id, None)
         {
           return Ok(None);
         }
@@ -250,22 +251,22 @@ impl TaskExecutionAdapter {
           .into(),
         );
       }
-      let state = self.features.store.task_state(session_id)?;
+      let facts = self.features.store.node_state(session_id)?;
+      let state = facts.task_state()?;
       if state != "open" {
         let reason = format!("task {session_id} is {state}");
         tracing::info!(target: "charliebot_tasks", session_id, run_id, reason, "run_launch_withheld");
         withheld = Some((reason, true));
       } else {
         self.features.store.require_open_ancestry(session_id)?;
-        let facts = self.features.store.load_all_facts(session_id)?;
-        if run_records::terminal_outcome(&facts, run_id)?.is_some() {
+        if facts.runs.terminal_outcome(run_id)?.is_some() {
           tracing::info!(target: "charliebot_tasks", session_id, run_id, "run_launch_refused_by_facts");
           return Ok(LaunchSettlement {
-            outcome: Some(outcome_text(run_records::terminal_outcome(&facts, run_id)?.unwrap())),
+            outcome: Some(outcome_text(facts.runs.terminal_outcome(run_id)?.expect("the terminal fact was checked"))),
             withheld: None,
           });
         }
-        if run_records::stop_requested_in_events(&facts, run_id, None) {
+        if facts.runs.stop_requested(run_id, None) {
           let reason = format!("run {run_id} has a durable stop request");
           tracing::info!(target: "charliebot_tasks", session_id, run_id, reason, "run_launch_withheld");
           withheld = Some((reason, false));
@@ -319,14 +320,16 @@ impl TaskExecutionAdapter {
         self.land_launch_failure(&meta, &run, &error, "RuntimeError").await;
         return Err(error);
       }
-    } else if let Err(error) = self.execute_worker_run(&cfg, &meta, &run, &option, &snapshot, launch_prompt).await {
-      if error.downcast_ref::<master_run::TurnLetGo>().is_some()
-        || error.downcast_ref::<master_run::TurnCancelled>().is_some()
-      {
+    } else {
+      if let Err(error) = self.execute_worker_run(&cfg, &meta, &run, &option, &snapshot, launch_prompt).await {
+        if error.downcast_ref::<master_run::TurnLetGo>().is_some()
+          || error.downcast_ref::<master_run::TurnCancelled>().is_some()
+        {
+          return Err(error);
+        }
+        self.land_launch_failure(&meta, &run, &error, launch_error_class(&error, "RuntimeError")).await;
         return Err(error);
       }
-      self.land_launch_failure(&meta, &run, &error, launch_error_class(&error, "RuntimeError")).await;
-      return Err(error);
     }
     let outcome = self.await_terminal(session_id, run_id).await?;
     Ok(LaunchSettlement { outcome: Some(outcome), withheld: None })
@@ -433,9 +436,16 @@ impl TaskExecutionAdapter {
     option: &BackendOption,
   ) -> anyhow::Result<PromptSnapshot> {
     let checkout = self.features.startup.require::<charliebot_core::RepoRoot>()?;
-    let env = PromptEnv { cfg, registry: &self.features.registry, checkout: &checkout };
-    let coherent =
-      prompts::assemble_coherent_snapshot(&self.features.store, &env, meta, kind_name(run.kind), option).await?;
+    let coherent = prompts::assemble_coherent_snapshot_for_launch(
+      &self.features.store,
+      Arc::new(cfg.clone()),
+      Arc::clone(&self.features.registry),
+      checkout,
+      meta,
+      kind_name(run.kind),
+      option,
+    )
+    .await?;
     let run_dir = self.features.store.run_dir(&meta.id, &run.id);
     let snapshot_path = run_dir.join(prompts::SNAPSHOT_FILENAME);
     let snapshot_text = serde_json::to_string_pretty(&coherent.snapshot.to_json_dict())?;
@@ -488,13 +498,13 @@ impl TaskExecutionAdapter {
     let run_id = run.id.as_str();
     let run_dir = self.features.store.run_dir(session_id, run_id);
     let batch_ids = run.input_event_ids.iter().cloned().collect::<HashSet<_>>();
-    let events = self
-      .features
-      .store
-      .load_all_facts(session_id)?
-      .into_iter()
+    let history = self.features.store.load_all_facts_view_sync(session_id)?;
+    let events = history
+      .iter()
       .filter(|event| event.get("id").and_then(Value::as_str).is_some_and(|id| batch_ids.contains(id)))
+      .cloned()
       .collect::<Vec<_>>();
+    drop(history);
     let provenances = self.dispatch.child_report_provenances(&events).await?;
     let (mut content, uploaded_files) = compose_input_prompt(&self.features, meta, &events, &provenances)?;
     if content.is_empty() {
@@ -620,7 +630,9 @@ impl TaskExecutionAdapter {
     let session_id = meta.id.as_str();
     let run_id = run.id.as_str();
     let task_type = prompts::prompt_task_type(meta.task.as_ref());
-    let continuation = self.run_continuation(meta, run, option, snapshot)?;
+    let history = self.features.store.load_all_facts_view_sync(session_id)?;
+    let facts = self.features.store.node_facts(session_id)?;
+    let continuation = self.run_continuation(meta, run, option, snapshot, &facts)?;
     let continued = continuation.as_ref().is_some_and(|continuation| continuation.native_id.is_some());
     let context = if run.kind == RunKind::Review {
       let work_run = self
@@ -629,9 +641,9 @@ impl TaskExecutionAdapter {
         .read_run_sync(session_id, run.review_of_run_id.as_deref().unwrap_or_default())?
         .ok_or_else(|| anyhow!("review run {run_id} names no recorded work Run"))?;
       if continued {
-        self.batch_only_context(meta, run).await?
+        self.batch_only_context(meta, run, &history).await?
       } else {
-        self.build_review_context(session_id, &work_run).await?
+        self.build_review_context(session_id, &work_run, &history).await?
       }
     } else if let Some(sequence_ref) = &run.sequence_ref {
       let step = format!("the launch context of run {run_id}");
@@ -655,9 +667,9 @@ impl TaskExecutionAdapter {
     } else if let Some(step_prompt) = launch_prompt {
       self.build_step_context(meta, run, step_prompt, task_type)?
     } else if continued {
-      self.batch_only_context(meta, run).await?
+      self.batch_only_context(meta, run, &history).await?
     } else {
-      self.build_work_context(cfg, meta, run, task_type).await?
+      self.build_work_context(cfg, meta, run, task_type, &history).await?
     };
     let mut prompt = context;
     if let Some(continuation) = continuation.as_ref().filter(|continuation| continuation.native_id.is_none()) {
@@ -673,6 +685,8 @@ impl TaskExecutionAdapter {
       let previous_log = self.features.store.run_dir(session_id, &previous.id).join(run_records::RUN_EVENTS_NAME);
       prompt = format!("{}\n\n{prompt}", worker_continuation_reset_note(&reason, &previous_log));
     }
+    drop(history);
+    drop(facts);
     self.persist_launch_text(session_id, run_id, &prompt)?;
 
     let mut binding = worker_binding(run_id, session_id, run);
@@ -794,8 +808,8 @@ impl TaskExecutionAdapter {
     let Some(latest) = self.features.store.list_run_records_sync(&meta.id)?.last().cloned() else {
       return Ok(());
     };
-    let events = self.features.store.load_all_facts(&meta.id)?;
-    if !self.features.store.facts_of(&meta.id)?.close_events.is_empty() {
+    let facts = self.features.store.node_facts(&meta.id)?;
+    if !facts.task()?.close_events.is_empty() {
       return Ok(());
     }
     run.repo_path = latest.repo_path.clone();
@@ -803,7 +817,7 @@ impl TaskExecutionAdapter {
     run.branch_name = latest.branch_name.clone();
     run.worktree_path = latest.worktree_path.clone();
     if latest.kind == RunKind::Review
-      && run_records::terminal_outcome(&events, &latest.id)? == Some(RunOutcomeKind::Success)
+      && facts.runs.terminal_outcome(&latest.id)? == Some(RunOutcomeKind::Success)
       && !self.blocked_report_sent(meta)?
     {
       run.kind = RunKind::Review;
@@ -816,7 +830,7 @@ impl TaskExecutionAdapter {
 
   fn blocked_report_sent(&self, meta: &SessionMetadata) -> StoreResult<bool> {
     let Some(parent_id) = meta.task_parent_id.as_deref() else { return Ok(false) };
-    Ok(self.features.store.load_all_facts(parent_id)?.iter().any(|event| {
+    Ok(self.features.store.load_all_facts_view_sync(parent_id)?.iter().any(|event| {
       event.get("type").and_then(Value::as_str) == Some(event_types::CHILD_REPORT)
         && event.get("child_session_id").and_then(Value::as_str) == Some(meta.id.as_str())
         && event.get("outcome").and_then(Value::as_str) == Some("blocked")
@@ -829,6 +843,7 @@ impl TaskExecutionAdapter {
     run: &RunRecord,
     option: &BackendOption,
     snapshot: &PromptSnapshot,
+    facts: &NodeFacts,
   ) -> anyhow::Result<Option<RunContinuation>> {
     if run.sequence_ref.is_some() || run.retry_of_run_id.is_some() {
       return Ok(None);
@@ -846,15 +861,14 @@ impl TaskExecutionAdapter {
       return Ok(None);
     };
     if run.kind == RunKind::Review {
-      let facts = self.features.store.load_all_facts(&meta.id)?;
       if previous.kind != RunKind::Review
         || previous.review_of_run_id != run.review_of_run_id
-        || run_records::terminal_outcome(&facts, &previous.id)? != Some(RunOutcomeKind::Success)
+        || facts.runs.terminal_outcome(&previous.id)? != Some(RunOutcomeKind::Success)
       {
         return Ok(None);
       }
     } else if run.kind == RunKind::Work {
-      if !self.features.store.facts_of(&meta.id)?.close_events.is_empty() {
+      if !facts.task()?.close_events.is_empty() {
         return Ok(None);
       }
     } else {
@@ -888,14 +902,17 @@ impl TaskExecutionAdapter {
     Ok(Some(RunContinuation { previous, native_id }))
   }
 
-  async fn batch_only_context(&self, meta: &SessionMetadata, run: &RunRecord) -> anyhow::Result<String> {
+  async fn batch_only_context(
+    &self,
+    meta: &SessionMetadata,
+    run: &RunRecord,
+    history: &ChatEventHistory,
+  ) -> anyhow::Result<String> {
     let ids = run.input_event_ids.iter().cloned().collect::<HashSet<_>>();
-    let batch = self
-      .features
-      .store
-      .load_all_facts(&meta.id)?
-      .into_iter()
+    let batch = history
+      .iter()
       .filter(|event| event.get("id").and_then(Value::as_str).is_some_and(|id| ids.contains(id)))
+      .cloned()
       .collect::<Vec<_>>();
     let provenance = if batch.is_empty() { Map::new() } else { self.dispatch.child_report_provenances(&batch).await? };
     let (content, _) = compose_input_prompt(&self.features, meta, &batch, &provenance)?;
@@ -905,7 +922,12 @@ impl TaskExecutionAdapter {
     Ok(content)
   }
 
-  async fn later_messages_section(&self, meta: &SessionMetadata, work_run: &RunRecord) -> anyhow::Result<String> {
+  async fn later_messages_section(
+    &self,
+    meta: &SessionMetadata,
+    work_run: &RunRecord,
+    history: &ChatEventHistory,
+  ) -> anyhow::Result<String> {
     let mut claimed_ids = Vec::new();
     let mut found_work_run = false;
     for run in self.features.store.list_run_records_sync(&meta.id)? {
@@ -923,17 +945,17 @@ impl TaskExecutionAdapter {
       return Ok(String::new());
     }
     let mut events_by_id = HashMap::new();
-    for event in self.features.store.load_all_facts(&meta.id)? {
+    for event in history.iter() {
       if let Some(id) = event.get("id").and_then(Value::as_str) {
-        events_by_id.insert(id.to_string(), event);
+        events_by_id.insert(id, event);
       }
     }
     let events = claimed_ids
       .iter()
       .map(|event_id| {
         events_by_id
-          .get(event_id)
-          .cloned()
+          .get(event_id.as_str())
+          .map(|event| (*event).clone())
           .ok_or_else(|| anyhow!("review input event {event_id} is missing from node {} history", meta.id))
       })
       .collect::<anyhow::Result<Vec<_>>>()?;
@@ -945,9 +967,14 @@ impl TaskExecutionAdapter {
     Ok(format!("**Later Messages:**\n{content}"))
   }
 
-  async fn build_review_context(&self, session_id: &str, work_run: &RunRecord) -> anyhow::Result<String> {
+  async fn build_review_context(
+    &self,
+    session_id: &str,
+    work_run: &RunRecord,
+    history: &ChatEventHistory,
+  ) -> anyhow::Result<String> {
     if work_run.repo_path.as_deref().is_none_or(str::is_empty) {
-      return self.build_repo_less_review_context(session_id, work_run).await;
+      return self.build_repo_less_review_context(session_id, work_run, history).await;
     }
     anyhow::ensure!(
       work_run.branch_name.as_deref().is_some_and(|value| !value.is_empty())
@@ -969,7 +996,7 @@ impl TaskExecutionAdapter {
     let worker_summary = review::extract_review_context(session_id, &work_run.id, &worker_log_path).await;
     let context_lines = review_text::review_context_lines(
       &spec,
-      &self.later_messages_section(&meta, work_run).await?,
+      &self.later_messages_section(&meta, work_run, history).await?,
       worker_summary.as_deref(),
       &format!("(work run {})", work_run.id),
     );
@@ -983,7 +1010,12 @@ impl TaskExecutionAdapter {
     ))
   }
 
-  async fn build_repo_less_review_context(&self, session_id: &str, work_run: &RunRecord) -> anyhow::Result<String> {
+  async fn build_repo_less_review_context(
+    &self,
+    session_id: &str,
+    work_run: &RunRecord,
+    history: &ChatEventHistory,
+  ) -> anyhow::Result<String> {
     let meta = self.features.store.load_meta(session_id).await?;
     anyhow::ensure!(
       meta.as_ref().is_some_and(|meta| meta.task.is_some()),
@@ -998,21 +1030,24 @@ impl TaskExecutionAdapter {
       &self.features.store.chat_events_path(session_id),
       &worker_log_path,
       &spec,
-      &self.later_messages_section(&meta, work_run).await?,
+      &self.later_messages_section(&meta, work_run, history).await?,
       worker_summary.as_deref(),
     ))
   }
 
-  async fn work_description(&self, meta: &SessionMetadata, run: &RunRecord) -> anyhow::Result<String> {
+  async fn work_description(
+    &self,
+    meta: &SessionMetadata,
+    run: &RunRecord,
+    history: &ChatEventHistory,
+  ) -> anyhow::Result<String> {
     let spec_text =
       meta.task.as_ref().map(|task| task.goal.as_str()).filter(|goal| !goal.trim().is_empty()).unwrap_or_default();
     let ids = run.input_event_ids.iter().cloned().collect::<HashSet<_>>();
-    let batch = self
-      .features
-      .store
-      .load_all_facts(&meta.id)?
-      .into_iter()
+    let batch = history
+      .iter()
       .filter(|event| event.get("id").and_then(Value::as_str).is_some_and(|id| ids.contains(id)))
+      .cloned()
       .collect::<Vec<_>>();
     let provenance = if batch.is_empty() { Map::new() } else { self.dispatch.child_report_provenances(&batch).await? };
     let (content, _) = compose_input_prompt(&self.features, meta, &batch, &provenance)?;
@@ -1030,11 +1065,12 @@ impl TaskExecutionAdapter {
     meta: &SessionMetadata,
     run: &RunRecord,
     task_type: TaskType,
+    history: &ChatEventHistory,
   ) -> anyhow::Result<String> {
     if task_type == TaskType::ColdRead {
       return self.build_cold_read_context(meta, run);
     }
-    let description = self.work_description(meta, run).await?;
+    let description = self.work_description(meta, run, history).await?;
     if task_type == TaskType::Verify {
       let checkout = self.features.startup.require::<charliebot_core::RepoRoot>()?;
       return prompts::render_task_body(&checkout, &description);
@@ -1176,8 +1212,8 @@ impl TaskExecutionAdapter {
     let run_id = run.id.as_str();
     let run_dir = self.features.store.run_dir(session_id, run_id);
     let raw_path = run_dir.join(run_records::RAW_LOG_NAME);
-    let native_session_id = self.native_session_id(&raw_path, option)?;
-    let outcome = self.worker_outcome(&run_dir, option)?;
+    let native_session_id = self.native_session_id(&raw_path, option).await?;
+    let outcome = self.worker_outcome(&run_dir, option).await?;
     self
       .features
       .store
@@ -1204,7 +1240,7 @@ impl TaskExecutionAdapter {
     Ok(durable)
   }
 
-  fn worker_outcome(&self, run_dir: &Path, option: &BackendOption) -> anyhow::Result<String> {
+  async fn worker_outcome(&self, run_dir: &Path, option: &BackendOption) -> anyhow::Result<String> {
     let raw_path = run_dir.join(run_records::RAW_LOG_NAME);
     if raw_path.is_file() {
       let translate = self.fresh_translate(option);
@@ -1214,33 +1250,48 @@ impl TaskExecutionAdapter {
       }
     }
     let events_path = run_dir.join(run_records::RUN_EVENTS_NAME);
-    if events_path.is_file() && events_log_result_success(&events_path)? {
-      return Ok("success".to_string());
+    if events_path.is_file() {
+      let events_path = events_path.clone();
+      if tokio::task::spawn_blocking(move || events_log_result_success(&events_path))
+        .await
+        .context("joining run result reader")??
+      {
+        return Ok("success".to_string());
+      }
     }
     Ok("failed".to_string())
   }
 
-  fn native_session_id(&self, raw_path: &Path, option: &BackendOption) -> anyhow::Result<Option<String>> {
+  async fn native_session_id(&self, raw_path: &Path, option: &BackendOption) -> anyhow::Result<Option<String>> {
     if !raw_path.is_file() {
       return Ok(None);
     }
     let mut translate = self.fresh_translate(option);
-    for event in charliebot_agents::transport::recovery::parse_raw_lines(&fs::read(raw_path)?) {
-      if event.get("type").and_then(Value::as_str) == Some("system")
-        && event.get("subtype").and_then(Value::as_str) == Some("init")
-        && let Some(session_id) = event.get("session_id")
-      {
-        return Ok(Some(pyfmt::python_str(session_id)));
-      }
-      for translated in translate(event)? {
-        if translated.get("type").and_then(Value::as_str) == Some(event_types::SESSION_ATTACHED)
-          && let Some(session_id) = translated.get("session_id")
-        {
-          return Ok(Some(pyfmt::python_str(session_id)));
+    let raw_path = raw_path.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+      let raw = fs::File::open(&raw_path).with_context(|| format!("reading raw run log {}", raw_path.display()))?;
+      for line in std::io::BufReader::new(raw).split(b'\n') {
+        let line = line.with_context(|| format!("reading raw run log {}", raw_path.display()))?;
+        for event in charliebot_agents::transport::recovery::parse_raw_lines(&line) {
+          if event.get("type").and_then(Value::as_str) == Some("system")
+            && event.get("subtype").and_then(Value::as_str) == Some("init")
+            && let Some(session_id) = event.get("session_id")
+          {
+            return Ok(Some(pyfmt::python_str(session_id)));
+          }
+          for translated in translate(event)? {
+            if translated.get("type").and_then(Value::as_str) == Some(event_types::SESSION_ATTACHED)
+              && let Some(session_id) = translated.get("session_id")
+            {
+              return Ok(Some(pyfmt::python_str(session_id)));
+            }
+          }
         }
       }
-    }
-    Ok(None)
+      Ok(None)
+    })
+    .await
+    .context("joining native session id reader")?
   }
 
   fn fresh_translate(&self, option: &BackendOption) -> Box<dyn FnMut(Value) -> anyhow::Result<Vec<Value>> + Send> {
@@ -1375,7 +1426,7 @@ impl TaskExecutionAdapter {
         let cfg = self.features.config.get()?;
         summary = Some(format!(
           "{}\n\nNo backends.pool member is available: {}",
-          self.worker_failure_summary(session_id, run)?,
+          self.worker_failure_summary(session_id, run).await?,
           recovery.recovery_report(cfg.as_ref())
         ));
       }
@@ -1396,14 +1447,14 @@ impl TaskExecutionAdapter {
     let store = &self.features.store;
     if durable_outcome == "success" {
       let events_log = store.run_dir(session_id, &run.id).join(run_records::RUN_EVENTS_NAME);
-      if let Some(answer) = review::worker_summary_from_events_log(&run_events(&events_log)?) {
+      if let Some(answer) = read_worker_summary_file(&events_log).await? {
         return self.complete_cold_read(meta, run, &answer).await;
       }
     }
     let error = if durable_outcome == "success" {
       "empty final answer".to_string()
     } else {
-      self.cold_read_attempt_error(session_id, run)?
+      self.cold_read_attempt_error(session_id, run).await?
     };
     self.record_cold_read_attempt(meta, run, &error)?;
     let work_runs = store
@@ -1453,14 +1504,13 @@ impl TaskExecutionAdapter {
   }
 
   /// The failed run's error for its attempt line: the error event, else its closing text, else a fallback.
-  fn cold_read_attempt_error(&self, session_id: &str, run: &RunRecord) -> anyhow::Result<String> {
+  async fn cold_read_attempt_error(&self, session_id: &str, run: &RunRecord) -> anyhow::Result<String> {
     let events_log = self.features.store.run_dir(session_id, &run.id).join(run_records::RUN_EVENTS_NAME);
     if events_log.is_file() {
-      let events = run_events(&events_log)?;
-      if let Some(error) = review::worker_error_from_events_log(&events) {
+      if let Some(error) = read_worker_error_file(&events_log).await? {
         return Ok(error);
       }
-      if let Some(text) = review::worker_summary_from_events_log(&events) {
+      if let Some(text) = read_worker_summary_file(&events_log).await? {
         return Ok(text);
       }
     }
@@ -1684,7 +1734,8 @@ impl TaskExecutionAdapter {
       let Some((branch, commit, repo_path)) = landing else {
         // A review that stopped before its push states its verdict in its closing words; the report quotes them.
         let events_log = self.features.store.run_dir(session_id, &run.id).join(run_records::RUN_EVENTS_NAME);
-        let verdict = review::worker_summary_from_events_log(&run_events(&events_log)?)
+        let verdict = read_worker_summary_file(&events_log)
+          .await?
           .unwrap_or_else(|| "The review run left no closing words, so its verdict is unknown.".to_string());
         self
           .report_failure_to_parent_with_decider(
@@ -1886,7 +1937,7 @@ impl TaskExecutionAdapter {
     let Some(source) = source else { return Ok(()) };
     let summary = match summary {
       Some(summary) => summary.to_string(),
-      None => self.worker_failure_summary(session_id, run)?,
+      None => self.worker_failure_summary(session_id, run).await?,
     };
     let parent_epoch = self.features.store.prime_aggregator(parent_id).await?;
     let (report, report_created) = {
@@ -1927,14 +1978,13 @@ impl TaskExecutionAdapter {
     Ok(())
   }
 
-  fn worker_failure_summary(&self, session_id: &str, run: &RunRecord) -> anyhow::Result<String> {
+  async fn worker_failure_summary(&self, session_id: &str, run: &RunRecord) -> anyhow::Result<String> {
     let events_path = self.features.store.run_dir(session_id, &run.id).join(run_records::RUN_EVENTS_NAME);
     if events_path.is_file() {
-      let events = charliebot_agents::transport::recovery::parse_raw_lines(&fs::read(&events_path)?);
-      if let Some(summary) = review::worker_summary_from_events_log(&events) {
+      if let Some(summary) = read_worker_summary_file(&events_path).await? {
         return Ok(summary);
       }
-      if let Some(error) = review::worker_error_from_events_log(&events) {
+      if let Some(error) = read_worker_error_file(&events_path).await? {
         return Ok(error);
       }
     }
@@ -2345,7 +2395,7 @@ impl TaskExecutionAdapter {
   }
 
   fn terminal_outcome(&self, session_id: &str, run_id: &str) -> StoreResult<Option<String>> {
-    Ok(run_records::terminal_outcome(&self.features.store.load_all_facts(session_id)?, run_id)?.map(outcome_text))
+    Ok(self.features.store.node_state(session_id)?.runs.terminal_outcome(run_id)?.map(outcome_text))
   }
 
   fn note_launch_out_of_space(&self, session_id: &str, run_id: &str) {
@@ -2681,26 +2731,26 @@ fn result_success(event: &Value) -> bool {
 }
 
 fn events_log_result_success(path: &Path) -> anyhow::Result<bool> {
-  let events = charliebot_agents::transport::recovery::parse_raw_lines(&fs::read(path)?);
-  Ok(
-    events
-      .iter()
-      .rev()
-      .find(|event| event.get("type").and_then(Value::as_str) == Some(event_types::RESULT))
-      .is_some_and(result_success),
-  )
+  let (success, _) = visit_events_from_end(path, &[event_types::RESULT], None, |event| Some(result_success(&event)))?;
+  Ok(success.unwrap_or(false))
 }
 
 fn worker_run_record(session_id: &str, run_id: &str, backend: &str, model: Option<&str>) -> RunRecord {
   RunRecord { kind: RunKind::Work, ..manager_run_record(session_id, run_id, backend, model) }
 }
 
-/// The parsed events of one run's events log. A run that wrote no log has none.
-fn run_events(events_log: &Path) -> anyhow::Result<Vec<Value>> {
-  if !events_log.is_file() {
-    return Ok(Vec::new());
-  }
-  Ok(charliebot_agents::transport::recovery::parse_raw_lines(&fs::read(events_log)?))
+async fn read_worker_summary_file(path: &Path) -> anyhow::Result<Option<String>> {
+  let path = path.to_path_buf();
+  tokio::task::spawn_blocking(move || review::read_worker_summary_file(&path))
+    .await
+    .context("joining worker summary reader")?
+}
+
+async fn read_worker_error_file(path: &Path) -> anyhow::Result<Option<String>> {
+  let path = path.to_path_buf();
+  tokio::task::spawn_blocking(move || review::read_worker_error_file(&path))
+    .await
+    .context("joining worker error reader")?
 }
 
 /// The cold-read spec of a task. Only a cold-read node carries one, and its runs read the page it names.
@@ -3017,5 +3067,96 @@ mod tests {
     release.notify_one();
     queue_task.await.expect("the queue task joins").expect("the turn settles");
     queue.shutdown().await.expect("the queue shuts down");
+  }
+
+  #[tokio::test]
+  async fn await_terminal_reuses_one_node_state_fold_across_polls() {
+    use std::sync::Arc;
+
+    use crate::test_fixtures;
+    use charliebot_agents::backend_pool::BackendPool;
+    use serde_json::json;
+
+    let home = tempfile::tempdir().unwrap();
+    let features = test_fixtures::claude_features(&home.path().join("home"), &test_fixtures::claude_config(None));
+    features.startup.insert(BackendPool::default()).unwrap();
+    pre_recovery_step(Arc::clone(&features)).await.unwrap();
+    let meta = test_fixtures::manager_session(&features, "await-terminal-count", "fable", None, "claude-await").await;
+    features.store.append_chat_event(&meta.id, json!({"type":"user","content":"synthetic input"})).await.unwrap();
+    features
+      .store
+      .append_chat_event(&meta.id, json!({"type":"run_finished","run_id":"terminal-count","outcome":"success"}))
+      .await
+      .unwrap();
+    let adapter = features.startup.require::<super::TaskExecutionAdapter>().unwrap();
+    let event_count = features.store.load_chat_events_shared_sync(&meta.id).unwrap().len() as u64;
+    let before = features.store.history_work();
+
+    assert_eq!(adapter.await_terminal(&meta.id, "terminal-count").await.unwrap(), "success");
+    assert_eq!(adapter.await_terminal(&meta.id, "terminal-count").await.unwrap(), "success");
+
+    let after = features.store.history_work();
+    assert_eq!(after.node_state_full_folds - before.node_state_full_folds, 1);
+    assert_eq!(after.node_state_folded_events - before.node_state_folded_events, event_count);
+  }
+
+  #[tokio::test]
+  async fn launch_history_helpers_reuse_one_facts_fold_and_shared_event_list() {
+    use std::sync::Arc;
+
+    use charliebot_agents::backend_pool::BackendPool;
+    use charliebot_core::config::BackendOption;
+    use charliebot_store::HistoryWork;
+    use charliebot_store::run_records::RunKind;
+    use serde_json::json;
+
+    use crate::prompts::PromptSnapshot;
+    use crate::test_fixtures;
+
+    let home = tempfile::tempdir().unwrap();
+    let features = test_fixtures::claude_features(&home.path().join("home"), &test_fixtures::claude_config(None));
+    features.startup.insert(BackendPool::default()).unwrap();
+    pre_recovery_step(Arc::clone(&features)).await.unwrap();
+    let meta = test_fixtures::manager_session(&features, "launch-history-count", "fable", None, "claude-launch").await;
+    for (id, content) in [("input-a", "first input"), ("input-b", "second input")] {
+      features.store.append_chat_event(&meta.id, json!({"id":id,"type":"user","content":content})).await.unwrap();
+    }
+    let guard = features.store.control_lock().await;
+    let mut previous = super::worker_run_record(&meta.id, "run-a", "fable", None);
+    previous.input_event_ids = vec!["input-a".to_string()];
+    let mut current = super::worker_run_record(&meta.id, "run-b", "fable", None);
+    current.input_event_ids = vec!["input-b".to_string()];
+    features.store.register_run_locked(&guard, &meta.id, previous, None).await.unwrap();
+    features.store.register_run_locked(&guard, &meta.id, current.clone(), None).await.unwrap();
+    drop(guard);
+    let event_count = features.store.load_chat_events_shared_sync(&meta.id).unwrap().len() as u64;
+    features.store.evict_recovery_history(&meta.id);
+    let adapter = features.startup.require::<super::TaskExecutionAdapter>().unwrap();
+    let option = BackendOption {
+      id: "fable".to_string(),
+      label: "Fable".to_string(),
+      model: "claude-fable-5-1".to_string(),
+      prompt_overlay: None,
+      backend_type: "cc-claude".to_string(),
+      type_fields: Default::default(),
+    };
+    let snapshot = PromptSnapshot::default();
+    let before: HistoryWork = features.store.history_work();
+    let history = features.store.load_all_facts_view_sync(&meta.id).unwrap();
+    let facts = features.store.node_facts(&meta.id).unwrap();
+
+    let mut inherited = current.clone();
+    adapter.inherit_worker_continuation(&meta, &mut inherited).unwrap();
+    assert!(adapter.run_continuation(&meta, &current, &option, &snapshot, &facts).unwrap().is_some());
+    assert_eq!(adapter.batch_only_context(&meta, &current, &history).await.unwrap(), "second input");
+    assert_eq!(adapter.work_description(&meta, &current, &history).await.unwrap(), "second input");
+    assert!(adapter.later_messages_section(&meta, &current, &history).await.unwrap().contains("second input"));
+
+    let after = features.store.history_work();
+    assert_eq!(after.full_folds - before.full_folds, 1, "the launch's repeated fact queries share one node fold");
+    assert_eq!(after.event_history_views - before.event_history_views, 1, "all builders reuse one history view");
+    assert_eq!(after.folded_events - before.folded_events, event_count);
+    assert_eq!(after.owned_event_clones - before.owned_event_clones, 0, "builders select from the shared event list");
+    assert_eq!(current.kind, RunKind::Work);
   }
 }

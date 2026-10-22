@@ -138,6 +138,14 @@ pub struct HistoryWork {
   pub full_folds: u64,
   /// Events folded, counting each event once for every fold that covers it.
   pub folded_events: u64,
+  /// Parsed events deep-cloned into owned history vectors.
+  pub owned_event_clones: u64,
+  /// Calls that load an archived-plus-live history view.
+  pub event_history_views: u64,
+  /// Full node-state folds, distinct from the suffix extensions and memo hits.
+  pub node_state_full_folds: u64,
+  /// Events visited by node-state folds and suffix extensions.
+  pub node_state_folded_events: u64,
 }
 
 #[derive(Default)]
@@ -145,6 +153,10 @@ pub(crate) struct HistoryWorkCounters {
   pub(crate) file_reads: AtomicU64,
   pub(crate) full_folds: AtomicU64,
   pub(crate) folded_events: AtomicU64,
+  pub(crate) owned_event_clones: AtomicU64,
+  pub(crate) event_history_views: AtomicU64,
+  pub(crate) node_state_full_folds: AtomicU64,
+  pub(crate) node_state_folded_events: AtomicU64,
 }
 
 /// Session metadata and event-log persistence for one configured CharlieBot home.

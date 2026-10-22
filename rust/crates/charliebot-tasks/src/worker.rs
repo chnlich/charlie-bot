@@ -302,7 +302,7 @@ impl Worker {
       None
     };
     let completion = recovery::raw_completion_time(&raw_path);
-    let stderr_text = read_stderr_tail(&stderr_path)?;
+    let stderr_text = read_stderr_tail(&stderr_path).await?;
     self.emit_terminal_events(&sink, exit_code, &stderr_text, hang_diagnostics.as_ref(), None, completion).await?;
     tracing::info!(target: "charliebot_tasks", thread = %self.thread_id, exit_code, "worker_resume_finished");
     Ok(exit_code)

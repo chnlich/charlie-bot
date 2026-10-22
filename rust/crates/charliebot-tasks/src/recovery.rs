@@ -87,7 +87,7 @@ fn boot_skip_reason(
   meta: &SessionMetadata,
   marker: UtcDateTime,
 ) -> anyhow::Result<Option<&'static str>> {
-  if features.store.task_state(session_id)? == "open" {
+  if features.store.task_state_fast(session_id)? == "open" {
     return Ok(Some("state_open"));
   }
 
@@ -140,11 +140,9 @@ fn boot_skip_reason(
 
   if meta.task.as_ref().is_some_and(|task| task.task_type == Some(TaskType::ColdRead))
     && let Some(last_work_run) = runs.iter().rfind(|run| run.kind == RunKind::Work)
+    && features.store.node_state(session_id)?.runs.terminal_outcome(&last_work_run.id)? == Some(RunOutcomeKind::Failed)
   {
-    let events = features.store.load_all_facts(session_id)?;
-    if run_records::terminal_outcome(&events, &last_work_run.id)? == Some(RunOutcomeKind::Failed) {
-      return Ok(Some("cold_read_failed"));
-    }
+    return Ok(Some("cold_read_failed"));
   }
   Ok(None)
 }
@@ -398,12 +396,13 @@ pub async fn reconcile_node(
   let mut runs = store.node_facts(session_id)?.runs.clone();
   let run_records = store.list_run_records_sync(session_id)?;
   // Warm the display-backend map: a fresh boot has seen no liveness notification.
-  if let Some(newest) = store.newest_run_record_sync(session_id)?
+  if let Some(newest) = run_records.last()
     && let Some(backend) = newest.backend.as_deref()
   {
     store.note_run_backend(session_id, backend);
   }
   let driven = |run: &RunRecord| is_driven.is_some_and(|driven| driven(run));
+  let mut run_records_changed = false;
 
   // --- 0. an interrupted prompt edit lands its missing fact ---------------
   {
@@ -422,6 +421,7 @@ pub async fn reconcile_node(
     }
     if runs.stop_requested(&run.id, None) {
       store.reconcile_stop_request(session_id, &run.id).await?;
+      run_records_changed = true;
     }
   }
   // A run on a non-open node without a stop fact cannot continue dispatch or hold the node open.
@@ -432,6 +432,7 @@ pub async fn reconcile_node(
       }
       store.request_stop(session_id, &run.id, &closed_task_stop_request_id(&run.id)).await?;
       runs = store.node_facts(session_id)?.runs.clone();
+      run_records_changed = true;
     }
   }
 
@@ -456,11 +457,19 @@ pub async fn reconcile_node(
       tracing::warn!(target: "charliebot_tasks", session_id, run_id = %run.id, "task_recovery_drain");
       let ended = Arc::new(|| false) as ResumeLiveness;
       resume_run(adapter, session_id, &run.id, Some(ended)).await?;
+      run_records_changed = true;
     }
   }
 
   // --- 3. terminal runs replay their missing follow-up once ----------------
-  replay_followups(features, adapter, session_id, counters).await?;
+  if run_records_changed {
+    let refreshed_run_records = store.list_run_records_sync(session_id)?;
+    replay_followups_with_records(features, adapter, session_id, counters, &refreshed_run_records).await?;
+  } else {
+    // Python refreshes the records in `_replay_followups` (`task_execution.py:2846-2864`). Reusing this sorted
+    // snapshot is equivalent when steps 1 and 2 made no record changes, avoiding another run-directory scan per node.
+    replay_followups_with_records(features, adapter, session_id, counters, &run_records).await?;
+  }
 
   // --- 4. pending reports and pending inputs --------------------------------
   adapter.dispatch.recover_pending_reports(session_id).await?;
@@ -476,6 +485,20 @@ pub async fn replay_followups(
   session_id: &str,
   counters: &mut PassCounters,
 ) -> anyhow::Result<()> {
+  let run_records = features.store.list_run_records_sync(session_id)?;
+  replay_followups_with_records(features, adapter, session_id, counters, &run_records).await?;
+  Ok(())
+}
+
+/// Replay from the current run-record snapshot, shared with the preceding reconcile steps when they changed no
+/// records. Python loads this list separately in `_replay_followups` (`task_execution.py:2846-2864`).
+async fn replay_followups_with_records(
+  features: &Arc<FeatureContext>,
+  adapter: &TaskExecutionAdapter,
+  session_id: &str,
+  counters: &mut PassCounters,
+  run_records: &[RunRecord],
+) -> anyhow::Result<()> {
   let store = &features.store;
   let Some(meta) = store.load_meta(session_id).await? else {
     return Ok(());
@@ -483,7 +506,6 @@ pub async fn replay_followups(
   // Every run's outcome comes from this snapshot, taken where `_replay_followups` loads its event list. A follow-up
   // that lands a later run's fact does not change that run's replay.
   let runs = store.node_facts(session_id)?.runs.clone();
-  let run_records = store.list_run_records_sync(session_id)?;
   let completion = features.startup.require::<TaskCompletion>()?;
   for (run_index, run) in run_records.iter().enumerate() {
     let outcome = runs.terminal_outcome(&run.id)?;
@@ -569,7 +591,7 @@ pub async fn replay_followups(
         if meta.task.is_some() && task_type == Some(TaskType::Implement) && run.repo_path.is_some() {
           if let Some(reason) = completion.pause_reason(session_id)? {
             tracing::info!(target: "charliebot_tasks", session_id, run_id = %run.id, reason, "worker_delivery_paused");
-          } else if replay_owes_review(store.node_facts(session_id)?.task()?.task_state == "open", &run_records, run)
+          } else if replay_owes_review(store.node_facts(session_id)?.task()?.task_state == "open", run_records, run)
             && adapter.maybe_spawn_review(session_id, run).await?.is_none()
           {
             let cfg = features.config.get()?;
@@ -1319,6 +1341,10 @@ mod tests {
       file_reads: after.file_reads - before.file_reads,
       full_folds: after.full_folds - before.full_folds,
       folded_events: after.folded_events - before.folded_events,
+      owned_event_clones: after.owned_event_clones - before.owned_event_clones,
+      event_history_views: after.event_history_views - before.event_history_views,
+      node_state_full_folds: after.node_state_full_folds - before.node_state_full_folds,
+      node_state_folded_events: after.node_state_folded_events - before.node_state_folded_events,
     }
   }
 
@@ -1332,6 +1358,8 @@ mod tests {
     let large = node_pass_history_work(&features, &adapter, &large_id).await;
     assert_eq!(small.file_reads, large.file_reads, "history reads grew with run count: one={small:?}, many={large:?}");
     assert_eq!(small.full_folds, large.full_folds, "full folds grew with run count: one={small:?}, many={large:?}");
+    assert_eq!(small.owned_event_clones, 0, "one-run recovery copied event payloads: {small:?}");
+    assert_eq!(large.owned_event_clones, 0, "many-run recovery copied event payloads: {large:?}");
     let small_events = features.store.load_all_facts(&small_id).expect("the one-run history loads").len();
     let large_events = features.store.load_all_facts(&large_id).expect("the many-run history loads").len();
     assert_eq!(small.folded_events, small_events as u64, "each event folds once: one={small:?}");

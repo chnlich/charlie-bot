@@ -4,10 +4,13 @@
 //! the memory are read outside it. Before a pass settles, the chain is captured again and the sources are assembled
 //! again; any change starts another pass, and a source that keeps moving fails the launch.
 
-use anyhow::anyhow;
-use charliebot_core::config::BackendOption;
+use anyhow::{Context, anyhow};
+use charliebot_core::RepoRoot;
+use charliebot_core::config::{BackendOption, CharlieBotConfig};
+use charliebot_registry::Registry;
 use charliebot_store::metadata::SessionMetadata;
 use charliebot_store::{ControlGuard, Store};
+use std::sync::Arc;
 
 use super::{
   COHERENCE_PASSES, ChainLink, OverlayError, PromptEnv, PromptSnapshot, RuleInputs, TaskPromptError, assemble_snapshot,
@@ -20,6 +23,12 @@ pub struct CoherentSnapshot {
   pub snapshot: PromptSnapshot,
   pub overlay_error: Option<OverlayError>,
   pub declared: bool,
+}
+
+struct LaunchPromptEnv {
+  cfg: Arc<CharlieBotConfig>,
+  registry: Arc<Registry>,
+  checkout: Arc<RepoRoot>,
 }
 
 /// The three-state overlay judgment of a launch: `(overlay name or None, declared)`. An undeclared overlay is
@@ -103,4 +112,69 @@ pub async fn assemble_coherent_snapshot(
     ))
     .into(),
   )
+}
+
+/// The launch path's coherent snapshot, offloading each blocking source read as Python does with `asyncio.to_thread`
+/// (`src/runtime/task_execution.py:355-365`). The API preview keeps its borrowed environment and existing path.
+pub async fn assemble_coherent_snapshot_for_launch(
+  store: &Store,
+  cfg: Arc<CharlieBotConfig>,
+  registry: Arc<Registry>,
+  checkout: Arc<RepoRoot>,
+  meta: &SessionMetadata,
+  kind: &str,
+  option: &BackendOption,
+) -> anyhow::Result<CoherentSnapshot> {
+  let (overlay, declared) = resolve_launch_overlay(option);
+  let env = LaunchPromptEnv { cfg, registry, checkout };
+  for _ in 0..COHERENCE_PASSES {
+    let (chain, node_ref, fresh) = capture_under_control_lock(store, &meta.id).await?;
+    let (built, overlay_error) =
+      build_segments_off_thread(&env, fresh.clone(), kind, overlay.as_deref(), chain.clone(), node_ref.clone()).await?;
+    let candidate = assemble_snapshot(&built);
+    let (rebuilt, overlay_error_again) =
+      build_segments_off_thread(&env, fresh, kind, overlay.as_deref(), chain.clone(), node_ref.clone()).await?;
+    if candidate != assemble_snapshot(&rebuilt) {
+      continue;
+    }
+    let (chain_again, node_ref_again, _) = capture_under_control_lock(store, &meta.id).await?;
+    if (&chain_again, &node_ref_again) != (&chain, &node_ref) {
+      continue;
+    }
+    return Ok(CoherentSnapshot {
+      snapshot: candidate,
+      overlay_error: overlay_error.or(overlay_error_again),
+      declared,
+    });
+  }
+  Err(
+    TaskPromptError::new(format!(
+      "prompt sources for task {} did not settle across {COHERENCE_PASSES} coherent-view attempts",
+      meta.id
+    ))
+    .into(),
+  )
+}
+
+async fn build_segments_off_thread(
+  env: &LaunchPromptEnv,
+  meta: SessionMetadata,
+  kind: &str,
+  overlay: Option<&str>,
+  chain: Vec<ChainLink>,
+  node_ref: Option<String>,
+) -> anyhow::Result<(Vec<super::RuleSegment>, Option<OverlayError>)> {
+  let cfg = Arc::clone(&env.cfg);
+  let registry = Arc::clone(&env.registry);
+  let checkout = Arc::clone(&env.checkout);
+  let kind = kind.to_string();
+  let overlay = overlay.map(str::to_string);
+  tokio::task::spawn_blocking(move || {
+    let env = PromptEnv { cfg: &cfg, registry: &registry, checkout: &checkout };
+    let inputs = RuleInputs { overlay: overlay.as_deref(), chain: &chain, node_ref: node_ref.as_deref() };
+    build_segments(&env, &meta, &kind, &inputs)
+  })
+  .await
+  .map_err(anyhow::Error::new)
+  .context("joining blocking prompt source builder")?
 }

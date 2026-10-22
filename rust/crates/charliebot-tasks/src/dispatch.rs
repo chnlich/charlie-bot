@@ -8,7 +8,7 @@ use charliebot_registry::caller::CallerIdentity;
 use charliebot_registry::context::{FeatureContext, StateError};
 use charliebot_registry::sequence::{SequenceCompletion, SequenceDispatch};
 use charliebot_store::metadata::{SessionStatus, TaskProfile, UtcDateTime};
-use charliebot_store::run_records::{self, RunKind, RunOutcome, RunOutcomeKind, RunRecord};
+use charliebot_store::run_records::{RunKind, RunOutcome, RunOutcomeKind, RunRecord};
 use charliebot_store::session_fork::CloseReportRedelivery;
 use charliebot_store::{ControlGuard, Store, StoreError, StoreHookFuture, StoreResult, StructuralBlockers};
 use futures_util::future::BoxFuture;
@@ -86,13 +86,14 @@ impl Dispatcher {
     let event = {
       let guard = self.store.control_lock().await;
       let meta = self.store.load_task_meta(session_id).await?;
-      let task_state = self.store.task_state(session_id)?;
+      let state = self.store.node_state(session_id)?;
+      let task_state = state.task_state()?;
       if task_state != "open" && event_type != event_types::USER {
         return Err(StoreError::archived(session_id));
       }
       self.authorize_agent_message(&meta, event_type, fields.from_session.as_deref())?;
       if let Some(input_id) = fields.input_id.as_deref() {
-        let events = self.store.load_all_facts(session_id)?;
+        let events = self.store.load_all_facts_view_sync(session_id)?;
         if let Some(existing) = events.iter().find(|event| event.get("id").and_then(Value::as_str) == Some(input_id)) {
           return Ok(existing.clone());
         }
@@ -239,14 +240,14 @@ impl Dispatcher {
       .store
       .read_run_sync(session_id, run_id)?
       .ok_or_else(|| StoreError::not_found(format!("run {run_id} not found in session {session_id}")))?;
-    let events = self.store.load_all_facts(session_id)?;
-    if run_records::terminal_outcome(&events, run_id)?.is_some() {
+    let state = self.store.node_state(session_id)?;
+    if state.runs.terminal_outcome(run_id)?.is_some() {
       return Err(StoreError::conflict(vec![format!("run {run_id} already finished; it claims no new inputs")]));
     }
     if run.pid.is_some() {
       return Err(StoreError::conflict(vec![format!("run {run_id} already launched; it owns its bound batch")]));
     }
-    if run_records::stop_requested_in_events(&events, run_id, None) {
+    if state.runs.stop_requested(run_id, None) {
       return Err(StoreError::conflict(vec![format!("run {run_id} has a durable stop request; it never launches")]));
     }
     let pending_ids =
@@ -373,7 +374,7 @@ impl Dispatcher {
       self.store.record_finish_locked(&guard, session_id, run_id, outcome).await?
     };
     note_run_liveness(&self.store, session_id, &run, false).await;
-    let terminal = run_records::terminal_outcome(&self.store.load_all_facts(session_id)?, run_id)?;
+    let terminal = self.store.node_state(session_id)?.runs.terminal_outcome(run_id)?;
     if terminal == Some(RunOutcomeKind::Success) {
       match self.run_completion.after_run_finished(session_id, run_id).await {
         Err(StoreError::Conflict(blockers)) => {
@@ -388,7 +389,7 @@ impl Dispatcher {
 
   /// Return the newest durable finish or creation fact that can source a child report.
   pub fn report_source_event(&self, child_session_id: &str, child_kind: &str) -> StoreResult<Value> {
-    let events = self.store.load_all_facts(child_session_id)?;
+    let events = self.store.load_all_facts_view_sync(child_session_id)?;
     events
       .iter()
       .rev()
@@ -545,13 +546,11 @@ impl Dispatcher {
     let source_event_id = python_string(source_event.get("id"));
     let report_id =
       charliebot_store::control_events::stable_child_report_id(child_session_id, &source_event_id, recipient);
-    if let Some(existing) = self
-      .store
-      .load_all_facts(recipient)?
-      .into_iter()
-      .find(|event| event.get("id").and_then(Value::as_str) == Some(report_id.as_str()))
+    let recipient_events = self.store.load_all_facts_view_sync(recipient)?;
+    if let Some(existing) =
+      recipient_events.iter().find(|event| event.get("id").and_then(Value::as_str) == Some(report_id.as_str()))
     {
-      return Ok((existing, false));
+      return Ok((existing.clone(), false));
     }
     let report = charliebot_store::control_events::build_control_event(
       event_types::CHILD_REPORT,
@@ -644,6 +643,7 @@ impl Dispatcher {
   fn undelivered_close_recipients(&self, session_id: &str) -> StoreResult<Vec<(Value, String)>> {
     let close_events = self.store.node_facts(session_id)?.task()?.close_events.clone();
     let mut undelivered = Vec::new();
+    let mut recipient_events = HashMap::new();
     for close in close_events {
       let recipient = close.get("report_to");
       if !python_truthy(recipient) {
@@ -653,11 +653,12 @@ impl Dispatcher {
       let source_event_id = python_string(close.get("id"));
       let report_id =
         charliebot_store::control_events::stable_child_report_id(session_id, &source_event_id, &recipient);
-      let already_delivered = self
-        .store
-        .load_all_facts(&recipient)?
-        .iter()
-        .any(|event| event.get("id").and_then(Value::as_str) == Some(report_id.as_str()));
+      if !recipient_events.contains_key(&recipient) {
+        recipient_events.insert(recipient.clone(), self.store.load_all_facts_view_sync(&recipient)?);
+      }
+      let events = recipient_events.get(&recipient).expect("recipient history is inserted before it is read");
+      let already_delivered =
+        events.iter().any(|event| event.get("id").and_then(Value::as_str) == Some(report_id.as_str()));
       if !already_delivered {
         undelivered.push((close, recipient));
       }
@@ -936,12 +937,65 @@ fn python_string(value: Option<&Value>) -> String {
 
 #[cfg(test)]
 mod tests {
-  use super::{agent_provenance, deduplicate_pending_inputs, input_event_type_for_caller};
+  use super::{
+    Dispatcher, RunFinishedCompletion, agent_provenance, deduplicate_pending_inputs, input_event_type_for_caller,
+  };
+  use crate::completion::TaskCompletion;
+  use crate::test_fixtures;
   use charliebot_core::event_types;
   use charliebot_core::run_token::RunTokenClaims;
   use charliebot_registry::caller::CallerIdentity;
-  use serde_json::json;
+  use charliebot_registry::context::FeatureContext;
+  use charliebot_registry::sequence::SequenceCompletion;
+  use charliebot_store::metadata::TaskProfile;
+  use charliebot_store::run_records::{RunKind, RunRecord};
+  use charliebot_store::{CreateTask, TaskCaller};
+  use serde_json::{Map, json};
   use std::collections::HashSet;
+  use std::sync::Arc;
+
+  async fn features() -> (tempfile::TempDir, Arc<FeatureContext>) {
+    let home = tempfile::tempdir().unwrap();
+    let features = test_fixtures::claude_features(&home.path().join("home"), &test_fixtures::claude_config(None));
+    (home, features)
+  }
+
+  fn dispatcher(features: &Arc<FeatureContext>) -> Dispatcher {
+    let completion = Arc::new(TaskCompletion::new(Arc::clone(features)));
+    let sequence_completion: Arc<dyn SequenceCompletion> = completion.clone();
+    let run_completion: Arc<dyn RunFinishedCompletion> = completion;
+    Dispatcher::new(Arc::clone(&features.store), sequence_completion, run_completion)
+  }
+
+  fn run_record(session_id: &str, run_id: &str) -> RunRecord {
+    RunRecord {
+      id: run_id.to_string(),
+      session_id: session_id.to_string(),
+      kind: RunKind::ManagerTurn,
+      input_event_ids: Vec::new(),
+      task_spec_hash: None,
+      task_spec_ref: None,
+      prompt_snapshot_ref: None,
+      retry_of_run_id: None,
+      review_of_run_id: None,
+      backend: Some("fable".to_string()),
+      model: None,
+      native_session_id: None,
+      pid: None,
+      pid_start: None,
+      started_at: None,
+      ended_at: None,
+      exit_code: None,
+      repo_path: None,
+      base_branch: None,
+      branch_name: None,
+      worktree_path: None,
+      sequence_ref: None,
+      raw_log_ref: None,
+      events_ref: None,
+      result_ref: None,
+    }
+  }
 
   #[test]
   fn pending_input_ids_keep_the_first_position_and_last_event() {
@@ -972,5 +1026,93 @@ mod tests {
     };
     assert_eq!(input_event_type_for_caller(&agent), event_types::AGENT_MESSAGE);
     assert_eq!(agent_provenance(&agent), (Some("synthetic-agent".to_string()), None));
+  }
+
+  #[tokio::test]
+  async fn reservation_claim_uses_memoized_facts_without_owned_history_copy() {
+    let (_home, features) = features().await;
+    let meta =
+      test_fixtures::manager_session(&features, "reservation-count", "fable", None, "claude-reservation").await;
+    features.store.append_chat_event(&meta.id, json!({"id":"input-a","type":"user","content":"input"})).await.unwrap();
+    let guard = features.store.control_lock().await;
+    features.store.register_run_locked(&guard, &meta.id, run_record(&meta.id, "queued-a"), None).await.unwrap();
+    let before = features.store.history_work();
+
+    let claimed = dispatcher(&features).claim_input_batch_locked(&guard, &meta.id, "queued-a", None).unwrap();
+
+    let after = features.store.history_work();
+    assert_eq!(claimed, ["input-a"]);
+    assert_eq!(after.owned_event_clones - before.owned_event_clones, 0);
+    assert_eq!(after.full_folds - before.full_folds, 1, "pending inputs use one memoized fold for the node");
+  }
+
+  #[tokio::test]
+  async fn input_replay_search_uses_shared_history_without_owned_copy() {
+    let (_home, features) = features().await;
+    let meta =
+      test_fixtures::manager_session(&features, "input-replay-count", "fable", None, "claude-input-replay").await;
+    let existing = features
+      .store
+      .append_chat_event(&meta.id, json!({"id":"input-replay","type":"user","content":"same"}))
+      .await
+      .unwrap();
+    features.store.node_state(&meta.id).unwrap();
+    features.store.prime_aggregator(&meta.id).await.unwrap();
+    let before = features.store.history_work();
+
+    let replay = dispatcher(&features)
+      .admit_input(&meta.id, event_types::USER, "ignored", "user", json!({"input_id":"input-replay"}))
+      .await
+      .unwrap();
+
+    let after = features.store.history_work();
+    assert_eq!(replay, existing);
+    assert_eq!(after.owned_event_clones - before.owned_event_clones, 0);
+    assert_eq!(after.event_history_views - before.event_history_views, 1);
+  }
+
+  #[tokio::test]
+  async fn close_report_scan_reuses_one_shared_recipient_history() {
+    let (_home, features) = features().await;
+    let parent =
+      test_fixtures::manager_session(&features, "report-parent-count", "fable", None, "claude-report-parent").await;
+    let child = features
+      .store
+      .create_task(
+        CreateTask {
+          request_id: "report-child-count".to_string(),
+          task_parent_id: Some(parent.id.clone()),
+          profile: TaskProfile::Manager,
+          task: None,
+          name: Some("Synthetic report child".to_string()),
+          backend: Some("fable".to_string()),
+          group: None,
+          session_id: None,
+        },
+        TaskCaller::System,
+        Map::new(),
+      )
+      .await
+      .unwrap();
+    for index in 0..8 {
+      features
+        .store
+        .append_chat_event(
+          &child.id,
+          json!({"id":format!("close-{index}"),"type":"task_closed","outcome":"completed","report_to":parent.id}),
+        )
+        .await
+        .unwrap();
+    }
+    let dispatcher = dispatcher(&features);
+    let before = features.store.history_work();
+
+    let blockers = dispatcher.undelivered_report_blockers(&child.id).unwrap();
+
+    let after = features.store.history_work();
+    assert_eq!(blockers.len(), 8);
+    assert_eq!(after.owned_event_clones - before.owned_event_clones, 0);
+    assert_eq!(after.file_reads - before.file_reads, 1, "one parent history load serves all eight close events");
+    assert_eq!(after.event_history_views - before.event_history_views, 1);
   }
 }

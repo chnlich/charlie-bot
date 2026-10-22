@@ -514,12 +514,14 @@ impl Store {
         (covered, state, 0, false)
       }
       _ => {
+        self.history_work.node_state_full_folds.fetch_add(1, Ordering::Relaxed);
         let mut state = NodeState::default();
         let mut folded = 0;
         if archived > 0 {
           let archive = self.load_archive_range(session_id, 0, archived)?;
           state.fold(&archive);
           folded += archive.len() as u64;
+          self.history_work.node_state_folded_events.fetch_add(archive.len() as u64, Ordering::Relaxed);
         }
         (0, Arc::new(state), folded, true)
       }
@@ -531,6 +533,7 @@ impl Store {
       self.history_work.full_folds.fetch_add(1, Ordering::Relaxed);
     }
     self.history_work.folded_events.fetch_add(folded_events, Ordering::Relaxed);
+    self.history_work.node_state_folded_events.fetch_add(suffix.len() as u64, Ordering::Relaxed);
     let version = self.next_node_state_version.fetch_add(1, Ordering::Relaxed);
     let entry = CachedNodeState { key: current, archived, version, state: Arc::clone(&state) };
     self.node_state_cache.lock().expect("node state cache mutex is not poisoned").insert(session_id.to_string(), entry);
@@ -3895,6 +3898,41 @@ pub(crate) mod tests {
     // The Run facts still fold past the rejected fact.
     append(&store, &node.id, json!({"type": "run_finished", "run_id": "queued", "outcome": "failed"})).await;
     assert_eq!(store.run_display_state(&node.id, "queued").unwrap(), RunDisplayState::Failed);
+  }
+
+  #[tokio::test]
+  async fn repeated_task_state_reads_fold_a_node_once() {
+    let home = tempfile::tempdir().unwrap();
+    let store = make_store(home.path());
+    let node = create_node(&store, "state-repeat", None, TaskProfile::Manager).await;
+    let event_count = store.load_chat_events_shared_sync(&node.id).unwrap().len() as u64;
+    let before = store.history_work();
+    for _ in 0..100 {
+      assert_eq!(store.task_state(&node.id).unwrap(), "open");
+    }
+    let after = store.history_work();
+    assert_eq!(after.node_state_full_folds - before.node_state_full_folds, 1);
+    assert_eq!(after.node_state_folded_events - before.node_state_folded_events, event_count);
+  }
+
+  #[tokio::test]
+  async fn task_state_fast_falls_back_after_one_thousand_lines_without_a_lifecycle_fact() {
+    let home = tempfile::tempdir().unwrap();
+    let store = make_store(home.path());
+    let node = create_node(&store, "state-fast-bound", None, TaskProfile::Manager).await;
+    let path = store.chat_events_path(&node.id);
+    let mut raw = String::from("{\"id\":\"close-a\",\"type\":\"task_closed\",\"outcome\":\"cancelled\"}\n");
+    for index in 0..1000 {
+      raw.push_str(&format!("{{\"id\":\"message-{index}\",\"type\":\"user\"}}\n"));
+    }
+    fs::write(&path, raw).unwrap();
+    store.clear_chat_events_cache(&node.id);
+
+    let before = store.history_work();
+    assert_eq!(store.task_state_fast(&node.id).unwrap(), "cancelled");
+    let after = store.history_work();
+    assert_eq!(after.full_folds - before.full_folds, 1, "the full memoized fold is the tail-miss fallback");
+    assert_eq!(after.folded_events - before.folded_events, 1001);
   }
 
   #[test]

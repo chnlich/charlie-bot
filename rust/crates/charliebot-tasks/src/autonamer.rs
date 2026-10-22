@@ -4,6 +4,7 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
+use anyhow::Context;
 use charliebot_agents::agent_environment::AgentBaseEnvironment;
 use charliebot_agents::backend_pool::{self, BackendPool};
 use charliebot_agents::backend_types;
@@ -52,19 +53,27 @@ pub async fn name_after_round(
   if !is_default_session_name(&meta.name) {
     return Ok(());
   }
-  let events = features.store.load_chat_events_sync(session_id)?;
-  let user_message = events
-    .iter()
-    .find(|event| event.get("type").and_then(Value::as_str) == Some(event_types::USER))
-    .and_then(|event| event.get("content"))
-    .and_then(Value::as_str)
-    .unwrap_or_default()
-    .to_string();
-  let assistant_response = events
-    .iter()
-    .filter(|event| event.get("type").and_then(Value::as_str) == Some(event_types::ASSISTANT))
-    .map(extract_text_from_message)
-    .collect::<String>();
+  // Python reads the cached event list in `asyncio.to_thread` (autonamer.py:215).
+  let store = Arc::clone(&features.store);
+  let history_session_id = session_id.to_string();
+  let (user_message, assistant_response) = tokio::task::spawn_blocking(move || {
+    let events = store.load_chat_events_shared_sync(&history_session_id)?;
+    let user_message = events
+      .iter()
+      .find(|event| event.get("type").and_then(Value::as_str) == Some(event_types::USER))
+      .and_then(|event| event.get("content"))
+      .and_then(Value::as_str)
+      .unwrap_or_default()
+      .to_string();
+    let assistant_response = events
+      .iter()
+      .filter(|event| event.get("type").and_then(Value::as_str) == Some(event_types::ASSISTANT))
+      .map(extract_text_from_message)
+      .collect::<String>();
+    Ok::<_, charliebot_store::StoreError>((user_message, assistant_response))
+  })
+  .await
+  .context("joining autonamer history reader")??;
   if assistant_response.is_empty() {
     return Ok(());
   }

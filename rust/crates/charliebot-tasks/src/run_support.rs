@@ -1,7 +1,8 @@
 //! Helpers that the manager turn (`master_run`) and the task run (`worker`) share: the stderr tail, the subprocess
 //! buffer limit, the resume routing of a backend type, the extra flags of a launch, and the event channel of a runner.
 
-use std::fs;
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -14,6 +15,15 @@ use serde_json::{Map, Value};
 use tokio::sync::{mpsc, oneshot};
 
 const STDERR_TAIL_BYTES: u64 = 64 * 1024;
+const REVERSE_SCAN_CHUNK_BYTES: usize = 64 * 1024;
+const TYPE_FILTER_HEAD_BYTES: usize = 256;
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct EventScanStats {
+  pub bytes_read: u64,
+  pub lines_visited: u64,
+  pub events_parsed: u64,
+}
 
 /// One event handed from a runner to its consumer, with the channel the consumer acknowledges it on.
 pub(crate) struct StreamEvent {
@@ -41,14 +51,148 @@ pub(crate) fn stream_event_channel(
 }
 
 /// The last `STDERR_TAIL_BYTES` of a process's stderr log, trimmed; empty when the log does not exist.
-pub(crate) fn read_stderr_tail(path: &Path) -> anyhow::Result<String> {
-  let contents = match fs::read(path) {
-    Ok(contents) => contents,
-    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(String::new()),
+pub(crate) async fn read_stderr_tail(path: &Path) -> anyhow::Result<String> {
+  let path = path.to_path_buf();
+  tokio::task::spawn_blocking(move || read_stderr_tail_file(&path).map(|(text, _)| text))
+    .await
+    .context("joining stderr tail reader")?
+}
+
+fn read_stderr_tail_file(path: &Path) -> anyhow::Result<(String, usize)> {
+  let mut file = match File::open(path) {
+    Ok(file) => file,
+    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok((String::new(), 0)),
     Err(error) => return Err(error).with_context(|| format!("reading stderr log {}", path.display())),
   };
-  let start = contents.len().saturating_sub(STDERR_TAIL_BYTES as usize);
-  Ok(String::from_utf8_lossy(&contents[start..]).trim().to_string())
+  let len = file.metadata().with_context(|| format!("stating stderr log {}", path.display()))?.len();
+  let start = len.saturating_sub(STDERR_TAIL_BYTES);
+  file.seek(SeekFrom::Start(start)).with_context(|| format!("seeking stderr log {}", path.display()))?;
+  let mut contents = Vec::with_capacity(usize::try_from(len - start).context("stderr tail size does not fit usize")?);
+  file.read_to_end(&mut contents).with_context(|| format!("reading stderr tail {}", path.display()))?;
+  let bytes_read = contents.len();
+  Ok((String::from_utf8_lossy(&contents).trim().to_string(), bytes_read))
+}
+
+/// Visit matching NDJSON events newest first, stopping when `visit` returns a value. Only a provable mismatch in the
+/// first 256 bytes is skipped without reading its full line, matching Python's `iter_ndjson_events_from_end` and
+/// `type_line_filter` (`src/infra/ndjson.py:404-547`).
+pub(crate) fn visit_events_from_end<T>(
+  path: &Path,
+  keep_types: &[&str],
+  max_lines: Option<usize>,
+  mut visit: impl FnMut(Value) -> Option<T>,
+) -> anyhow::Result<(Option<T>, EventScanStats)> {
+  let mut file = match File::open(path) {
+    Ok(file) => file,
+    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok((None, EventScanStats::default())),
+    Err(error) => return Err(error).with_context(|| format!("opening event log {}", path.display())),
+  };
+  let mut pos = file.metadata().with_context(|| format!("stating event log {}", path.display()))?.len();
+  let mut line_end = pos;
+  let mut stats = EventScanStats::default();
+  let mut chunk = vec![0; REVERSE_SCAN_CHUNK_BYTES];
+  while pos > 0 {
+    let start = pos.saturating_sub(REVERSE_SCAN_CHUNK_BYTES as u64);
+    let size = usize::try_from(pos - start).context("event-log scan chunk does not fit usize")?;
+    file.seek(SeekFrom::Start(start)).with_context(|| format!("seeking event log {}", path.display()))?;
+    file.read_exact(&mut chunk[..size]).with_context(|| format!("reading event log {}", path.display()))?;
+    stats.bytes_read += size as u64;
+    for index in (0..size).rev() {
+      if chunk[index] != b'\n' {
+        continue;
+      }
+      let line_start = start + index as u64 + 1;
+      let newline = start + index as u64;
+      if line_start < line_end {
+        if max_lines.is_some_and(|limit| stats.lines_visited as usize >= limit) {
+          return Ok((None, stats));
+        }
+        stats.lines_visited += 1;
+        if let Some(value) =
+          visit_event_line(&mut file, path, line_start, line_end, keep_types, &mut stats, &mut visit)?
+        {
+          return Ok((Some(value), stats));
+        }
+      }
+      line_end = newline;
+    }
+    pos = start;
+  }
+  if line_end > 0 {
+    if max_lines.is_some_and(|limit| stats.lines_visited as usize >= limit) {
+      return Ok((None, stats));
+    }
+    stats.lines_visited += 1;
+    if let Some(value) = visit_event_line(&mut file, path, 0, line_end, keep_types, &mut stats, &mut visit)? {
+      return Ok((Some(value), stats));
+    }
+  }
+  Ok((None, stats))
+}
+
+fn visit_event_line<T>(
+  file: &mut File,
+  path: &Path,
+  start: u64,
+  end: u64,
+  keep_types: &[&str],
+  stats: &mut EventScanStats,
+  visit: &mut impl FnMut(Value) -> Option<T>,
+) -> anyhow::Result<Option<T>> {
+  let len = usize::try_from(end - start).context("one NDJSON line does not fit usize")?;
+  let mut head = vec![0; len.min(TYPE_FILTER_HEAD_BYTES)];
+  file.seek(SeekFrom::Start(start)).with_context(|| format!("seeking event log {}", path.display()))?;
+  file.read_exact(&mut head).with_context(|| format!("reading event log head {}", path.display()))?;
+  stats.bytes_read += head.len() as u64;
+  if type_line_proves_rejection(&head, keep_types) {
+    return Ok(None);
+  }
+  let mut raw = vec![0; len];
+  file.seek(SeekFrom::Start(start)).with_context(|| format!("seeking event log {}", path.display()))?;
+  file.read_exact(&mut raw).with_context(|| format!("reading event log line {}", path.display()))?;
+  stats.bytes_read += len as u64;
+  let events = charliebot_agents::transport::recovery::parse_raw_lines(&raw);
+  stats.events_parsed += events.len() as u64;
+  for event in events {
+    if let Some(value) = visit(event) {
+      return Ok(Some(value));
+    }
+  }
+  Ok(None)
+}
+
+fn type_line_proves_rejection(head: &[u8], keep_types: &[&str]) -> bool {
+  let rest = if let Some(rest) = head.strip_prefix(br#"{"type""#) {
+    rest
+  } else if let Some(rest) = head.strip_prefix(br#"{"id""#) {
+    let Some((_, rest)) = first_header_string(rest) else { return false };
+    let rest = trim_horizontal_space(rest);
+    let Some(rest) = rest.strip_prefix(b",") else { return false };
+    let rest = trim_horizontal_space(rest);
+    let Some(rest) = rest.strip_prefix(br#""type""#) else { return false };
+    rest
+  } else {
+    return false;
+  };
+  let Some((event_type, _)) = first_header_string(rest) else { return false };
+  let event_type = String::from_utf8_lossy(event_type);
+  !keep_types.contains(&event_type.as_ref())
+}
+
+fn first_header_string(mut rest: &[u8]) -> Option<(&[u8], &[u8])> {
+  rest = trim_horizontal_space(rest);
+  rest = rest.strip_prefix(b":")?;
+  rest = trim_horizontal_space(rest);
+  let quoted = rest.strip_prefix(b"\"")?;
+  let end = quoted.iter().position(|byte| *byte == b'\"')?;
+  Some((&quoted[..end], &quoted[end + 1..]))
+}
+
+fn trim_horizontal_space(mut bytes: &[u8]) -> &[u8] {
+  while matches!(bytes.first(), Some(b' ' | b'\t')) {
+    bytes = &bytes[1..];
+  }
+  bytes
 }
 
 /// The subprocess buffer limit of the configuration, in bytes.
@@ -89,4 +233,43 @@ pub(crate) fn extra_flags_of(backend_kwargs: &Map<String, Value>) -> anyhow::Res
     .iter()
     .map(|flag| Ok(flag.as_str().context("lifecycle extra_flags entries must be strings")?.to_string()))
     .collect()
+}
+
+#[cfg(test)]
+mod tests {
+  use super::{read_stderr_tail_file, type_line_proves_rejection, visit_events_from_end};
+  use std::fs;
+
+  #[test]
+  fn reverse_event_reader_parses_only_matching_summary_events() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("events.jsonl");
+    let mut raw = String::from("{\"type\":\"result\",\"result\":\"done\"}\n");
+    for index in 0..256 {
+      raw.push_str(&format!("{{\"type\":\"user\",\"id\":\"tool-{index}\",\"blob\":\"{}\"}}\n", "x".repeat(1024)));
+    }
+    assert!(type_line_proves_rejection(br#"{"type":"user","id":"tool"}"#, &["result", "assistant"]));
+    fs::write(&path, raw).unwrap();
+
+    let (summary, stats) = visit_events_from_end(&path, &["result", "assistant"], None, |event| {
+      event.get("result").and_then(serde_json::Value::as_str).map(str::to_string)
+    })
+    .unwrap();
+    assert_eq!(summary.as_deref(), Some("done"));
+    assert_eq!(stats.events_parsed, 1, "filtered lines are not parsed into Value objects");
+    assert_eq!(stats.lines_visited, 257);
+  }
+
+  #[test]
+  fn stderr_tail_reads_at_most_sixty_four_kibibytes() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("stderr.log");
+    let mut raw = vec![b'x'; 1024 * 1024];
+    raw.extend_from_slice(b" keep this tail \n");
+    fs::write(&path, raw).unwrap();
+
+    let (tail, bytes_read) = read_stderr_tail_file(&path).unwrap();
+    assert_eq!(bytes_read, 64 * 1024);
+    assert!(tail.ends_with("keep this tail"));
+  }
 }

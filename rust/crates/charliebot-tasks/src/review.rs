@@ -1,12 +1,13 @@
 //! Review-chain reads: worker log summaries and reviewer backend selection (`src/runtime/review.py`).
 
 use std::collections::HashSet;
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use charliebot_agents::backend_pool::BackendPool;
 use charliebot_core::config::CharlieBotConfig;
 use serde_json::Value;
+
+use crate::run_support::visit_events_from_end;
 
 /// A selected backend, its resolved model, and the updated reviewer-attempt list.
 pub type ReviewerBackendSelection = (String, Option<String>, Vec<String>);
@@ -16,7 +17,7 @@ pub async fn extract_review_context(session_id: &str, run_id: &str, worker_log_p
   let session_id = session_id.to_string();
   let run_id = run_id.to_string();
   let worker_log_path = worker_log_path.to_path_buf();
-  let result = tokio::task::spawn_blocking(move || read_worker_summary(&worker_log_path)).await;
+  let result = tokio::task::spawn_blocking(move || read_worker_summary_file(&worker_log_path)).await;
   let worker_summary = match result {
     Ok(Ok(summary)) => summary,
     Ok(Err(error)) => {
@@ -128,10 +129,18 @@ pub fn select_reviewer_backend(
   Ok(Some((worker_backend.to_string(), worker_model.map(str::to_string), tried)))
 }
 
-fn read_worker_summary(worker_log_path: &PathBuf) -> anyhow::Result<Option<String>> {
-  let bytes = fs::read(worker_log_path)?;
-  let events = charliebot_agents::transport::recovery::parse_raw_lines(&bytes);
-  Ok(worker_summary_from_events_log(&events))
+pub(crate) fn read_worker_summary_file(worker_log_path: &Path) -> anyhow::Result<Option<String>> {
+  let (summary, _) = visit_events_from_end(worker_log_path, &["result", "assistant"], None, |event| {
+    worker_summary_from_events_log(std::slice::from_ref(&event))
+  })?;
+  Ok(summary)
+}
+
+pub(crate) fn read_worker_error_file(worker_log_path: &Path) -> anyhow::Result<Option<String>> {
+  let (error, _) = visit_events_from_end(worker_log_path, &["error"], None, |event| {
+    worker_error_from_events_log(std::slice::from_ref(&event))
+  })?;
+  Ok(error)
 }
 
 fn assistant_event_text(event: &Value) -> Option<String> {

@@ -26,7 +26,10 @@ use charliebot_core::config::CharlieBotConfig;
 use charliebot_registry::Registry;
 
 pub use charliebot_registry::turn::{PromptSource, RuleSegment};
-pub use coherent::{CoherentSnapshot, assemble_coherent_snapshot, capture_prompt_chain, resolve_launch_overlay};
+pub use coherent::{
+  CoherentSnapshot, assemble_coherent_snapshot, assemble_coherent_snapshot_for_launch, capture_prompt_chain,
+  resolve_launch_overlay,
+};
 pub use render::{
   binding_intro, render_session_info, render_task_body, render_worktree_bindings, render_worktree_persistence,
   repo_less_review_task_context, review_task_context,

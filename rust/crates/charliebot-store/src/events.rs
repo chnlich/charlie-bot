@@ -100,6 +100,29 @@ impl Default for EventReadCaches {
   }
 }
 
+/// Archived event values plus the live history's shared cache, traversed without cloning live events.
+pub struct ChatEventHistory {
+  archived: Vec<ChatEvent>,
+  live: Arc<Vec<ChatEvent>>,
+}
+
+impl ChatEventHistory {
+  /// Visit archived facts first and the live log second, as `fact_history` does.
+  pub fn iter(&self) -> impl DoubleEndedIterator<Item = &ChatEvent> {
+    self.archived.iter().chain(self.live.iter())
+  }
+
+  /// Number of archived and live events in this view.
+  pub fn len(&self) -> usize {
+    self.archived.len() + self.live.len()
+  }
+
+  /// Whether the archive and live history are both empty.
+  pub fn is_empty(&self) -> bool {
+    self.archived.is_empty() && self.live.is_empty()
+  }
+}
+
 /// The identity of a live event log on disk: its inode, size and modification time, as Python's
 /// `_task_state_fast` keys its memo. An append moves the size, and a rewrite publishes a new inode.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -188,7 +211,9 @@ impl Store {
 
   /// Read the live event log, using the in-memory parsed-event cache after the first read.
   pub fn load_chat_events_sync(&self, session_id: &str) -> StoreResult<Vec<ChatEvent>> {
-    Ok(self.load_chat_events_shared_sync(session_id)?.as_ref().clone())
+    let events = self.load_chat_events_shared_sync(session_id)?;
+    self.history_work.owned_event_clones.fetch_add(events.len() as u64, Ordering::Relaxed);
+    Ok(events.as_ref().clone())
   }
 
   /// Read the cached event list as an immutable shared snapshot.
@@ -230,6 +255,10 @@ impl Store {
       file_reads: self.history_work.file_reads.load(Ordering::Relaxed),
       full_folds: self.history_work.full_folds.load(Ordering::Relaxed),
       folded_events: self.history_work.folded_events.load(Ordering::Relaxed),
+      owned_event_clones: self.history_work.owned_event_clones.load(Ordering::Relaxed),
+      event_history_views: self.history_work.event_history_views.load(Ordering::Relaxed),
+      node_state_full_folds: self.history_work.node_state_full_folds.load(Ordering::Relaxed),
+      node_state_folded_events: self.history_work.node_state_folded_events.load(Ordering::Relaxed),
     }
   }
 
@@ -263,9 +292,25 @@ impl Store {
     if archive_offset == 0 {
       return Ok(live);
     }
+    self.history_work.owned_event_clones.fetch_add(live.len() as u64, Ordering::Relaxed);
     let mut events = self.load_archive_range(session_id, 0, archive_offset)?;
     events.extend(live.iter().cloned());
     Ok(Arc::new(events))
+  }
+
+  /// Read archived facts and retain the live event cache as a shared segment.
+  ///
+  /// Task paths that only scan history use this view so an archived prefix does not force a deep clone of every live
+  /// JSON value. Python's `fact_history` returns shared event dictionaries in both its cached and concatenated cases.
+  pub fn load_all_facts_view_sync(&self, session_id: &str) -> StoreResult<ChatEventHistory> {
+    self.history_work.event_history_views.fetch_add(1, Ordering::Relaxed);
+    let cache_entry = self.events_cache_entry(session_id);
+    let mut cache = cache_entry.lock().expect("session event cache mutex is not poisoned");
+    let live = self.load_chat_events_shared_locked(session_id, &mut cache)?;
+    let archive_offset = self.read_archive_offset(session_id)?;
+    let archived =
+      if archive_offset == 0 { Vec::new() } else { self.load_archive_range(session_id, 0, archive_offset)? };
+    Ok(ChatEventHistory { archived, live })
   }
 
   /// Read the latest live-log events without priming the event cache. It follows
@@ -1621,6 +1666,35 @@ mod tests {
 
       let facts = store.load_all_facts(session_id).unwrap();
       assert_eq!(ids(&facts), ["archived-0", "archived-1", "live-0", "live-1", "live-2"]);
+    }
+
+    #[tokio::test]
+    async fn history_view_chains_archived_and_live_events_without_cloning_live_values() {
+      let home = tempfile::tempdir().unwrap();
+      let store = test_store(home.path());
+      let session_id = "synthetic-session";
+      seed_metadata(&store, session_id);
+      let path = store.chat_events_path(session_id);
+      let archive_dir = path.parent().unwrap().join("archives");
+      std::fs::create_dir_all(&archive_dir).unwrap();
+      std::fs::write(
+        archive_dir.join("chat_events.2025-W06.jsonl"),
+        b"{\"id\":\"archived-0\"}\n{\"id\":\"archived-1\"}\n",
+      )
+      .unwrap();
+      std::fs::write(&path, b"{\"id\":\"live-0\"}\n{\"id\":\"live-1\"}\n{\"id\":\"live-2\"}\n").unwrap();
+      let mut meta = store.read_metadata_fresh(session_id).unwrap().unwrap();
+      meta.archive_offset = 2;
+      let metadata_path = store.metadata_path(session_id);
+      std::fs::write(&metadata_path, meta.to_json_string(&store.slots, true)).unwrap();
+      let before = store.history_work();
+
+      let history = store.load_all_facts_view_sync(session_id).unwrap();
+
+      assert_eq!(history.len(), 5);
+      let event_ids = history.iter().map(|event| event["id"].as_str().unwrap()).collect::<Vec<_>>();
+      assert_eq!(event_ids, ["archived-0", "archived-1", "live-0", "live-1", "live-2"]);
+      assert_eq!(store.history_work().owned_event_clones - before.owned_event_clones, 0);
     }
 
     /// `core/test_ndjson.py`'s count contract through the store: the total is the archive offset

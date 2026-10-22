@@ -3,11 +3,13 @@
 A fresh ``chrome --dump-dom`` process pays ~0.55 s of browser startup per measurement against
 ~25 ms of render; one Chrome process stays warm per OS process for the process lifetime and
 serves every measurement over the DevTools websocket (``websockets.sync``, already a
-dependency) — the trade is one idle browser's resident set. Lazy launch, one lock, atexit
-close (a CLI invocation must never orphan the browser), relaunch after a crash; a failure
-raises ``ValueError`` loudly with the browser's stderr tail, and closes the renderer.
+dependency) — the trade is one idle browser's resident set. Lazy launch, one lock, a close at
+interpreter exit for CLI processes and a service stop hook for the server, relaunch after a
+crash; a failure raises ``ValueError`` loudly with the browser's stderr tail, and closes the
+renderer.
 """
 
+import asyncio
 import atexit
 import json
 import pathlib
@@ -21,6 +23,7 @@ from typing import NoReturn
 from websockets.sync import client as _ws_client
 
 from src.infra import timeouts
+from src.runtime.hooks import wiring
 
 
 class _WarmRenderer:
@@ -151,7 +154,7 @@ class _WarmRenderer:
     return json.loads(self._ws.recv(timeout=remaining))
 
   def close(self) -> None:
-    """Idempotent teardown; render-path callers hold the module lock, the atexit close runs at exit."""
+    """Idempotent teardown; render-path callers hold the module lock, the closing hooks do not."""
     if self._ws is not None:
       self._ws.close()
       self._ws = None
@@ -181,4 +184,21 @@ def render_height(chrome_bin: pathlib.Path, probe_uri: str) -> int:
     return _renderer.render_height(probe_uri)
 
 
-atexit.register(lambda: _renderer.close() if _renderer is not None else None)
+def close() -> None:
+  """Close this process's warm renderer, if one launched."""
+  if _renderer is not None:
+    _renderer.close()
+
+
+async def start_service(ctx: wiring.ServiceContext) -> None:
+  """Start nothing: the first page-height measurement launches the browser."""
+
+
+async def stop_service() -> None:
+  """Close the warm renderer for the server, whose ``os._exit`` skips the registration below."""
+  await asyncio.to_thread(close)
+
+
+# Only CLI processes reach this: the server ends through server.main's os._exit, so its stop
+# is the artifacts package's stop_service above.
+atexit.register(close)

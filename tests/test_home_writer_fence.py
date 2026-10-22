@@ -193,6 +193,7 @@ _SHUTDOWN_TIMING_FIELDS = (
     "http_client_ms",
     "ws_close_ms",
     "merge_pool_ms",
+    "artifacts_headless_render_ms",
 )
 
 

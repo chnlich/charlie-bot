@@ -59,6 +59,7 @@ pub(crate) fn append(path: &Path, value: &Value) -> StoreResult<()> {
 }
 
 /// Return the number of physical lines, charging one for a non-newline-terminated final line.
+#[cfg(test)]
 pub(crate) fn count_lines(path: &Path) -> StoreResult<usize> {
   let bytes = match fs::read(path) {
     Ok(bytes) => bytes,

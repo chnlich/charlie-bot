@@ -14,7 +14,7 @@ use crate::control_events::{self, ACTOR_AGENT, ACTOR_SYSTEM, ACTOR_USER};
 use crate::events::{FileIdentity, LiveHistory};
 use crate::metadata::{EventRef, SessionMetadata, SessionStatus, TaskProfile, TaskSpec, TaskType, UtcDateTime};
 use crate::run_records::{HostBoot, RunDisplayState, RunFacts, stop_requested_in_events};
-use crate::store::{CachedNodeFacts, NODE_FACTS_CACHE_LIMIT};
+use crate::store::{CachedNodeFacts, NodeFactsKey};
 use crate::{ControlGuard, Store, StoreError, StoreResult};
 
 const TREE_INDEX_TTL: Duration = Duration::from_secs(2);
@@ -79,6 +79,7 @@ pub type TaskState = String;
 #[derive(Clone, Debug)]
 pub struct TaskFacts {
   pub task_state: TaskState,
+  pub has_user_request: bool,
   pub run_outcomes: HashMap<String, String>,
   pub run_finish_positions: HashMap<String, usize>,
   pub confirmed_input_ids: HashSet<String>,
@@ -128,6 +129,7 @@ impl Default for NodeFacts {
 pub struct NodeState {
   pub runs: RunFacts,
   task_state: Result<TaskState, String>,
+  user_request: bool,
   event_ids: HashSet<String>,
 }
 
@@ -137,21 +139,38 @@ impl NodeState {
     self.task_state.as_deref().map_err(|message| StoreError::new(message.clone()))
   }
 
+  fn has_user_request(&self) -> bool {
+    self.user_request
+  }
+
   /// The state without the event ids that only a fold extension reads: what a memo keyed by the log file keeps.
   fn sealed(&self) -> Self {
-    Self { runs: self.runs.clone(), task_state: self.task_state.clone(), event_ids: HashSet::new() }
+    Self {
+      runs: self.runs.clone(),
+      task_state: self.task_state.clone(),
+      user_request: self.user_request,
+      event_ids: HashSet::new(),
+    }
   }
 
   /// The sealed state of the same history from its [`NodeFacts`]: both folds take the lifecycle verdict from the same
   /// facts and fail on the same `task_imported` error.
   fn sealed_from(facts: &NodeFacts) -> Self {
     let task_state = facts.task.as_ref().map(|task| task.task_state.clone()).map_err(Clone::clone);
-    Self { runs: facts.runs.clone(), task_state, event_ids: HashSet::new() }
+    let user_request = facts.task.as_ref().is_ok_and(|task| task.has_user_request);
+    Self { runs: facts.runs.clone(), task_state, user_request, event_ids: HashSet::new() }
   }
 
   fn fold(&mut self, events: &[Value]) {
     for event in events {
       self.runs.observe(event);
+      match event.get("type").and_then(Value::as_str) {
+        Some("clone_start") => self.user_request = false,
+        _ if event_types::is_real_user_message(event) || event_types::is_platform_summon(event) => {
+          self.user_request = true;
+        }
+        _ => {}
+      }
       if self.task_state.is_err() {
         continue;
       }
@@ -179,7 +198,12 @@ impl NodeState {
 
 impl Default for NodeState {
   fn default() -> Self {
-    Self { runs: RunFacts::default(), task_state: Ok("open".to_string()), event_ids: HashSet::new() }
+    Self {
+      runs: RunFacts::default(),
+      task_state: Ok("open".to_string()),
+      user_request: false,
+      event_ids: HashSet::new(),
+    }
   }
 }
 
@@ -215,6 +239,7 @@ impl Default for TaskFacts {
   fn default() -> Self {
     Self {
       task_state: "open".to_string(),
+      has_user_request: false,
       run_outcomes: HashMap::new(),
       run_finish_positions: HashMap::new(),
       confirmed_input_ids: HashSet::new(),
@@ -271,7 +296,7 @@ impl PromptScope {
 }
 
 struct TreeIndex {
-  metas: HashMap<String, SessionMetadata>,
+  metas: HashMap<String, Arc<SessionMetadata>>,
   children: HashMap<Option<String>, Vec<String>>,
 }
 
@@ -299,21 +324,40 @@ impl Store {
 
   /// Read all durable facts and fold the task lifecycle and input boundary.
   pub fn facts_of(&self, session_id: &str) -> StoreResult<TaskFacts> {
-    let events = self.load_all_facts(session_id)?;
-    fold_task_facts(&events)
+    Ok(self.node_facts(session_id)?.task()?.clone())
   }
 
   /// The node's folded facts, shared. A read after appends folds only the events appended since the last read.
   ///
   /// The memo answers what a fold of [`Store::load_all_facts`] answers because its key covers every input of that
-  /// read: the live-cache generation and the archived extent. A load from disk takes a new generation. Within one
+  /// read: the live-cache generation and the archived extent. This follows `src/runtime/task_sessions.py:650,710-746`'s
+  /// list-identity key and suffix cursor; `node_facts_cache` stays resident across recovery eviction. A load from disk
+  /// takes a new generation. Within one
   /// generation the cached list changes only by `append_chat_event` pushes, which the suffix fold extends.
   pub fn node_facts(&self, session_id: &str) -> StoreResult<Arc<NodeFacts>> {
-    let (generation, live) = self.live_events_with_generation(session_id)?;
+    let (generation, live) = match self.live_history(session_id)? {
+      LiveHistory::Cached { generation, events } => (generation, events),
+      LiveHistory::Cold(identity) => {
+        let archived = self.read_archive_offset(session_id)?;
+        if let Some(identity) = identity
+          && let Some(entry) =
+            self.node_facts_cache.lock().expect("node facts cache mutex is not poisoned").get(session_id)
+          && entry.key == NodeFactsKey::File(identity)
+          && entry.archived == archived
+        {
+          return Ok(Arc::clone(&entry.facts));
+        }
+        self.live_events_with_generation(session_id)?
+      }
+    };
     let archived = self.read_archive_offset(session_id)?;
     let cached = self.node_facts_cache.lock().expect("node facts cache mutex is not poisoned").remove(session_id);
     let mut entry = match cached {
-      Some(entry) if entry.generation == generation && entry.archived == archived && entry.covered <= live.len() => {
+      Some(entry)
+        if entry.key == (NodeFactsKey::Cached { generation, covered: entry.covered })
+          && entry.archived == archived
+          && entry.covered <= live.len() =>
+      {
         entry
       }
       _ => {
@@ -324,7 +368,12 @@ impl Store {
           self.history_work.folded_events.fetch_add(archive.len() as u64, Ordering::Relaxed);
         }
         self.history_work.full_folds.fetch_add(1, Ordering::Relaxed);
-        CachedNodeFacts { generation, archived, covered: 0, facts: Arc::new(facts) }
+        CachedNodeFacts {
+          key: NodeFactsKey::Cached { generation, covered: 0 },
+          archived,
+          covered: 0,
+          facts: Arc::new(facts),
+        }
       }
     };
     if entry.covered < live.len() {
@@ -334,15 +383,20 @@ impl Store {
       entry.covered = live.len();
     }
     let facts = Arc::clone(&entry.facts);
-    let mut cache = self.node_facts_cache.lock().expect("node facts cache mutex is not poisoned");
-    if !cache.contains_key(session_id)
-      && cache.len() >= NODE_FACTS_CACHE_LIMIT
-      && let Some(evicted) = cache.keys().next().cloned()
-    {
-      cache.remove(&evicted);
-    }
-    cache.insert(session_id.to_string(), entry);
+    entry.key = NodeFactsKey::Cached { generation, covered: entry.covered };
+    self.node_facts_cache.lock().expect("node facts cache mutex is not poisoned").insert(session_id.to_string(), entry);
     Ok(facts)
+  }
+
+  /// Keep a node's folded task facts past recovery eviction, keyed by the file identity they cover.
+  pub(crate) fn seal_node_facts(&self, session_id: &str, evicted: Option<(u64, usize, FileIdentity)>) {
+    let Some((generation, covered, identity)) = evicted else { return };
+    let mut cache = self.node_facts_cache.lock().expect("node facts cache mutex is not poisoned");
+    if let Some(entry) = cache.get_mut(session_id)
+      && entry.key == (NodeFactsKey::Cached { generation, covered })
+    {
+      entry.key = NodeFactsKey::File(identity);
+    }
   }
 
   /// The node's task state and Run facts, shared. A read after appends folds only the events appended since the last
@@ -387,22 +441,33 @@ impl Store {
         _ => cache.remove(session_id),
       }
     };
-    let (covered, mut state) = match cached {
+    let (covered, mut state, mut folded_events, is_full_fold) = match cached {
       Some(CachedNodeState {
         key: NodeStateKey::Cached { generation: cached_generation, covered },
         archived: cached_archived,
         state,
         ..
-      }) if cached_generation == generation && cached_archived == archived && covered <= live.len() => (covered, state),
+      }) if cached_generation == generation && cached_archived == archived && covered <= live.len() => {
+        (covered, state, 0, false)
+      }
       _ => {
         let mut state = NodeState::default();
+        let mut folded = 0;
         if archived > 0 {
-          state.fold(&self.load_archive_range(session_id, 0, archived)?);
+          let archive = self.load_archive_range(session_id, 0, archived)?;
+          state.fold(&archive);
+          folded += archive.len() as u64;
         }
-        (0, Arc::new(state))
+        (0, Arc::new(state), folded, true)
       }
     };
-    Arc::make_mut(&mut state).fold(&live[covered..]);
+    let suffix = &live[covered..];
+    Arc::make_mut(&mut state).fold(suffix);
+    folded_events += suffix.len() as u64;
+    if is_full_fold {
+      self.history_work.full_folds.fetch_add(1, Ordering::Relaxed);
+    }
+    self.history_work.folded_events.fetch_add(folded_events, Ordering::Relaxed);
     let version = self.next_node_state_version.fetch_add(1, Ordering::Relaxed);
     let entry = CachedNodeState { key: current, archived, version, state: Arc::clone(&state) };
     self.node_state_cache.lock().expect("node state cache mutex is not poisoned").insert(session_id.to_string(), entry);
@@ -431,14 +496,15 @@ impl Store {
       }
       (Some((generation, len, identity)), _) => {
         let node_facts = self.node_facts_cache.lock().expect("node facts cache mutex is not poisoned");
-        node_facts.get(session_id).filter(|entry| entry.generation == generation && entry.covered == len).map(|entry| {
-          CachedNodeState {
+        node_facts
+          .get(session_id)
+          .filter(|entry| entry.key == (NodeFactsKey::Cached { generation, covered: len }) && entry.covered == len)
+          .map(|entry| CachedNodeState {
             key: NodeStateKey::File(identity),
             archived: entry.archived,
             version: self.next_node_state_version.fetch_add(1, Ordering::Relaxed),
             state: Arc::new(NodeState::sealed_from(&entry.facts)),
-          }
-        })
+          })
       }
       (None, Some(entry)) if matches!(entry.key, NodeStateKey::File(_)) => Some(entry),
       (None, _) => None,
@@ -536,7 +602,7 @@ impl Store {
         let kind = if is_start { "task" } else { "ancestor task" };
         return Err(StoreError::forbidden(format!("Delegation blocked: {kind} {current} is {state}; open it first")));
       }
-      if user_node.is_none() && holds_user_request(&self.load_all_facts(&current)?) {
+      if user_node.is_none() && self.node_state(&current)?.has_user_request() {
         user_node = Some(current.clone());
       }
       let Some(parent_id) = parent_id else {
@@ -982,7 +1048,8 @@ impl Store {
       }
     }
 
-    let facts = self.facts_of(session_id)?;
+    let facts = self.node_facts(session_id)?;
+    let facts = facts.task()?;
     let mut substance = facts
       .events_by_id
       .values()
@@ -1016,8 +1083,8 @@ impl Store {
         blockers.push(format!("referenced by task {other_id} ({})", refs.join(", ")));
         continue;
       }
-      let other_facts = self.facts_of(other_id)?;
-      if other_facts.delivered_reports.iter().any(|(child_id, _)| child_id == session_id) {
+      let other_facts = self.node_facts(other_id)?;
+      if other_facts.task()?.delivered_reports.iter().any(|(child_id, _)| child_id == session_id) {
         blockers.push(format!("referenced by a child report in task {other_id}"));
       }
     }
@@ -1362,7 +1429,7 @@ impl Store {
     let index = self.tree_index()?;
     let meta =
       index.metas.get(session_id).ok_or_else(|| StoreError::not_found(format!("task {session_id} not found")))?;
-    let mut detail = serde_json::to_value(meta)?;
+    let mut detail = serde_json::to_value(meta.as_ref())?;
     let object = detail.as_object_mut().expect("session metadata serializes to an object");
     object.insert("task_state".to_string(), Value::String(self.task_state(session_id)?));
     object.insert("work_state".to_string(), Value::String(self.task_tree_activity(session_id)?.work_state));
@@ -1546,15 +1613,18 @@ fn build_tree_index(store: &Store) -> StoreResult<TreeIndex> {
     names.push(name);
   }
   names.sort();
-  // As `_build_index_sync`: a fresh metadata-cache entry stands for its file, so the build reads a file only for a
-  // session that no fresh entry covers (a cold cache or an out-of-band create).
+  // As `_build_index_sync` (`src/runtime/task_sessions.py:495`): `fresh_cached_metas` uses the same per-entry stat
+  // check as `src/runtime/session_store.py:241` and returns shared metadata. The index owns Arcs, so cached metadata
+  // incurs no deep clone while building or serving the index.
   let mut cached = store.fresh_cached_metas()?;
   let mut metas = HashMap::new();
   for name in names {
     if let Some(meta) = cached.remove(&name) {
       metas.insert(name, meta);
     } else if let Some(meta) = store.read_metadata_fresh(&name)? {
-      metas.insert(name, meta);
+      #[cfg(test)]
+      store.tree_index_metadata_reads.fetch_add(1, Ordering::Relaxed);
+      metas.insert(name, Arc::new(meta));
     }
   }
   let mut children: HashMap<Option<String>, Vec<String>> = HashMap::new();
@@ -1572,7 +1642,11 @@ fn build_tree_index(store: &Store) -> StoreResult<TreeIndex> {
 }
 
 fn index_meta<'a>(index: &'a TreeIndex, session_id: &str) -> StoreResult<&'a SessionMetadata> {
-  index.metas.get(session_id).ok_or_else(|| StoreError::not_found(format!("task {session_id} not found")))
+  index
+    .metas
+    .get(session_id)
+    .map(Arc::as_ref)
+    .ok_or_else(|| StoreError::not_found(format!("task {session_id} not found")))
 }
 
 /// The 409 blocker sentence naming a node's closed ancestor tasks.
@@ -1664,16 +1738,24 @@ fn archived_of(
   Ok(inherited)
 }
 
+/// Fold `events`, which start at absolute history position `offset`, into `facts` holding the history before them.
+#[cfg(test)]
 fn fold_task_facts(events: &[Value]) -> StoreResult<TaskFacts> {
   let mut facts = TaskFacts::default();
   fold_task_facts_from(&mut facts, events, 0)?;
   Ok(facts)
 }
 
-/// Fold `events`, which start at absolute history position `offset`, into `facts` holding the history before them.
 fn fold_task_facts_from(facts: &mut TaskFacts, events: &[Value], offset: usize) -> StoreResult<()> {
   for (index, event) in events.iter().enumerate() {
     let position = offset + index;
+    match event.get("type").and_then(Value::as_str) {
+      Some("clone_start") => facts.has_user_request = false,
+      _ if event_types::is_real_user_message(event) || event_types::is_platform_summon(event) => {
+        facts.has_user_request = true;
+      }
+      _ => {}
+    }
     if let Some(event_id) = event.get("id").and_then(Value::as_str)
       && !facts.event_ids.insert(event_id.to_string())
     {
@@ -1817,20 +1899,6 @@ fn admits_input(event: &Value) -> bool {
     Some("agent_message" | "scheduled_trigger" | "child_report") => true,
     _ => false,
   }
-}
-
-/// Whether a node's events hold a user request after its newest `clone_start` marker: a real user message or a thread
-/// platform summon.
-fn holds_user_request(events: &[Value]) -> bool {
-  let mut holds = false;
-  for event in events {
-    match event.get("type").and_then(Value::as_str) {
-      Some("clone_start") => holds = false,
-      _ if event_types::is_real_user_message(event) || event_types::is_platform_summon(event) => holds = true,
-      _ => {}
-    }
-  }
-  holds
 }
 
 fn no_user_request_error(session_id: &str) -> StoreError {
@@ -2421,6 +2489,29 @@ pub(crate) mod tests {
   }
 
   #[tokio::test]
+  async fn tree_index_reuses_cached_metadata_and_shares_its_snapshot() {
+    let home = tempfile::tempdir().unwrap();
+    let store = make_store(home.path());
+    let root = create_node(&store, "index-root", None, TaskProfile::Manager).await;
+    let child = create_node(&store, "index-child", Some(&root.id), TaskProfile::Manager).await;
+    let leaf = create_node(&store, "index-leaf", Some(&child.id), TaskProfile::Worker).await;
+    for id in [&root.id, &child.id, &leaf.id] {
+      store.get_session(id).await.unwrap().unwrap();
+    }
+
+    store.invalidate_tree_index();
+    store.tree_index_metadata_reads.store(0, Ordering::Relaxed);
+    let first = store.tree_index().unwrap();
+    let cached = store.fresh_cached_meta(&root.id).unwrap().unwrap();
+    let second = store.tree_index().unwrap();
+
+    assert_eq!(store.tree_index_metadata_reads.load(Ordering::Relaxed), 0);
+    assert!(Arc::ptr_eq(&cached, first.metas.get(&root.id).unwrap()));
+    assert!(Arc::ptr_eq(&first, &second));
+    assert_eq!(store.child_ids(&root.id).unwrap(), [child.id]);
+  }
+
+  #[tokio::test]
   async fn prompt_facts_are_idempotent_and_elone_rebind_copies_cron_fields() {
     let home = tempfile::tempdir().unwrap();
     let store = make_store(home.path());
@@ -2567,7 +2658,13 @@ pub(crate) mod tests {
     store.append_control_fact(&guard, &completed.id, close).await.unwrap();
     drop(guard);
 
+    for node in [&root.id, &mid.id, &leaf.id, &completed.id] {
+      store.clear_chat_events_cache(node);
+    }
+    let before = store.history_work();
     let archived = store.archive_subtree(&root.id, TaskCaller::Operator).await.unwrap();
+    let after = store.history_work();
+    assert_eq!(after.full_folds - before.full_folds, 4, "run and lifecycle checks fold each subtree node once");
 
     assert_eq!(archived, [root.id.clone(), mid.id.clone(), leaf.id.clone()]);
     assert_eq!(archive.calls.lock().unwrap().clone(), archived);
@@ -2853,6 +2950,8 @@ pub(crate) mod tests {
     let home = tempfile::tempdir().unwrap();
     let store = make_store(home.path());
     let root = create_node(&store, "delete-empty", None, TaskProfile::Manager).await;
+    let other_a = create_node(&store, "delete-other-a", None, TaskProfile::Manager).await;
+    let other_b = create_node(&store, "delete-other-b", None, TaskProfile::Manager).await;
 
     let error =
       store.delete_permanently(&root.id, TaskCaller::Agent { session_id: root.id.clone() }).await.unwrap_err();
@@ -2862,7 +2961,13 @@ pub(crate) mod tests {
     assert_eq!(error.to_string(), "task missing-task not found");
     assert_eq!(error.status_code(), Some(404));
 
+    for id in [&root.id, &other_a.id, &other_b.id] {
+      store.clear_chat_events_cache(id);
+    }
+    let before = store.history_work();
     assert!(store.delete_permanently(&root.id, TaskCaller::Operator).await.unwrap());
+    let after = store.history_work();
+    assert_eq!(after.full_folds - before.full_folds, 3, "each node history is folded once for deletion checks");
     assert!(!store.session_dir(&root.id).exists());
     assert!(store.read_metadata_fresh(&root.id).unwrap().is_none());
   }
@@ -3169,6 +3274,119 @@ pub(crate) mod tests {
     let work = store.history_work();
     assert_eq!(work.full_folds - before.full_folds, 1);
     assert_eq!(work.folded_events - before.folded_events, full.covered as u64);
+  }
+
+  #[tokio::test]
+  async fn task_facts_and_authorization_reuse_the_node_memo_after_recovery_eviction() {
+    let home = tempfile::tempdir().unwrap();
+    let store = make_store(home.path());
+    let node = create_node(&store, "facts-memo", None, TaskProfile::Manager).await;
+    append(&store, &node.id, json!({"id": "user-request", "type": "user", "content": "work"})).await;
+
+    let before = store.history_work();
+    let facts = store.facts_of(&node.id).unwrap();
+    assert!(facts.has_user_request);
+    let after_fold = store.history_work();
+    assert_eq!(after_fold.full_folds - before.full_folds, 1);
+    assert_eq!(after_fold.folded_events - before.folded_events, facts.covered as u64);
+    store.evict_recovery_history(&node.id);
+
+    let before_read = store.history_work();
+    assert!(store.facts_of(&node.id).unwrap().has_user_request);
+    assert_eq!(store.check_task_authorization(&node.id).unwrap(), node.id);
+    let after_read = store.history_work();
+    assert_eq!(after_read.file_reads, before_read.file_reads);
+    assert_eq!(after_read.full_folds, before_read.full_folds);
+    assert_eq!(after_read.folded_events, before_read.folded_events);
+  }
+
+  #[tokio::test]
+  async fn many_run_blockers_fold_one_node_history_once() {
+    let home = tempfile::tempdir().unwrap();
+    let store = make_store(home.path());
+    let node = create_node(&store, "run-facts-memo", None, TaskProfile::Manager).await;
+    let mut event_count = 1;
+    for index in 0..50 {
+      let run_id = format!("run-{index:02}");
+      let run_dir = store.run_dir(&node.id, &run_id);
+      fs::create_dir_all(&run_dir).unwrap();
+      fs::write(
+        run_dir.join(crate::run_records::RUN_METADATA_NAME),
+        serde_json::to_string(&queued_run(&node.id, &run_id)).unwrap(),
+      )
+      .unwrap();
+      let fact = match index {
+        0..30 => Some(json!({"type": "run_finished", "run_id": run_id, "outcome": "success"})),
+        30..40 => Some(json!({"type": "run_stop_requested", "run_id": run_id, "request_id": "stop"})),
+        _ => None,
+      };
+      if let Some(fact) = fact {
+        append(&store, &node.id, fact).await;
+        event_count += 1;
+      }
+    }
+
+    let before = store.history_work();
+    let blockers = store.run_blockers(&node.id).unwrap();
+    assert_eq!(blockers.len(), 10);
+    let folded = store.history_work();
+    assert_eq!(folded.full_folds - before.full_folds, 1);
+    assert_eq!(folded.folded_events - before.folded_events, event_count);
+    assert_eq!(store.run_blockers(&node.id).unwrap().len(), 10);
+    assert_eq!(store.history_work().folded_events, folded.folded_events);
+  }
+
+  #[tokio::test]
+  async fn request_stop_folds_once_and_extends_the_run_facts_suffix() {
+    let home = tempfile::tempdir().unwrap();
+    let store = make_store(home.path());
+    let node = create_node(&store, "stop-facts-memo", None, TaskProfile::Manager).await;
+    let run = queued_run(&node.id, "queued-stop");
+    let run_dir = store.run_dir(&node.id, &run.id);
+    fs::create_dir_all(&run_dir).unwrap();
+    fs::write(run_dir.join(crate::run_records::RUN_METADATA_NAME), serde_json::to_string(&run).unwrap()).unwrap();
+    for index in 0..20 {
+      append(&store, &node.id, json!({"type": "ordinary_event", "index": index})).await;
+    }
+    store.clear_chat_events_cache(&node.id);
+
+    let before = store.history_work();
+    let result = store.request_stop(&node.id, &run.id, "stop-once").await.unwrap();
+    assert!(result.stop_requested);
+    let folded = store.history_work();
+    assert_eq!(folded.full_folds - before.full_folds, 1);
+    assert_eq!(folded.folded_events - before.folded_events, 21);
+
+    store.request_stop(&node.id, &run.id, "stop-once").await.unwrap();
+    let extended = store.history_work();
+    assert_eq!(extended.full_folds, folded.full_folds);
+    assert_eq!(extended.folded_events - folded.folded_events, 1, "the existing stop fact is only the appended suffix");
+  }
+
+  #[test]
+  fn node_facts_memo_keeps_more_than_sixty_four_sessions() {
+    let home = tempfile::tempdir().unwrap();
+    let store = make_store(home.path());
+    let ids: Vec<String> = (0..65).map(|index| format!("memo-node-{index:02}")).collect();
+    for session_id in &ids {
+      let metadata_path = store.metadata_path(session_id);
+      let events_path = store.chat_events_path(session_id);
+      fs::create_dir_all(metadata_path.parent().unwrap()).unwrap();
+      fs::create_dir_all(events_path.parent().unwrap()).unwrap();
+      let meta = SessionMetadata::new(session_id, session_id, TaskProfile::Manager);
+      fs::write(&metadata_path, meta.to_json_string(&store.slots, true)).unwrap();
+      fs::write(&events_path, format!("{{\"id\": \"{session_id}-event\", \"type\": \"task_created\"}}\n")).unwrap();
+    }
+
+    for session_id in &ids {
+      store.node_facts(session_id).unwrap();
+    }
+    assert_eq!(store.node_facts_cache.lock().unwrap().len(), ids.len());
+    let full_folds = store.history_work().full_folds;
+    for session_id in &ids {
+      store.node_facts(session_id).unwrap();
+    }
+    assert_eq!(store.history_work().full_folds, full_folds);
   }
 
   fn history_reads(store: &Store) -> u64 {

@@ -318,11 +318,11 @@ impl Store {
       let mut raw_left = archive_take;
       let mut archived = 0;
       if raw_left > 0 {
-        for source in self.archive_paths(parent_id)? {
+        for source in self.archive_paths(parent_id)?.iter() {
           if raw_left == 0 {
             break;
           }
-          let (raw, appended) = copy_reference_file(out, &source, raw_left)?;
+          let (raw, appended) = copy_reference_file(out, source, raw_left)?;
           raw_left -= raw;
           archived += appended;
         }

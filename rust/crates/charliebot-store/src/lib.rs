@@ -11,6 +11,7 @@ pub mod message_utils;
 pub mod metadata;
 mod ndjson;
 pub mod projection;
+mod read_memos;
 pub mod run_identity;
 pub mod run_records;
 mod session_events;

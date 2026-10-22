@@ -17,6 +17,7 @@ use uuid::Uuid;
 
 use crate::aggregator::builtin_event_types;
 use crate::control::ControlLock;
+use crate::events::EventReadCaches;
 use crate::hooks::{EventRenderer, RuntimeEventHooks};
 use crate::listing::CachedListing;
 use crate::metadata::{RoundRating, SessionMetadata, SessionStatus, UtcDateTime};
@@ -92,7 +93,7 @@ pub struct StoreHooks {
 
 #[derive(Clone)]
 pub(crate) struct CachedMetadata {
-  pub(crate) value: SessionMetadata,
+  pub(crate) value: Arc<SessionMetadata>,
   pub(crate) at: Instant,
   pub(crate) signature: Option<(i64, i64)>,
   /// Changes only when a cache entry is replaced.
@@ -107,17 +108,20 @@ pub(crate) struct CachedChatEvents {
   pub(crate) events: Arc<Vec<Value>>,
 }
 
-/// A node's folded facts and the history they cover: the live-cache generation, the archived extent, and the number of
-/// live events folded.
+/// The live history identity covered by a node-facts memo.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum NodeFactsKey {
+  Cached { generation: u64, covered: usize },
+  File(crate::events::FileIdentity),
+}
+
+/// A node's folded facts and the history they cover.
 pub(crate) struct CachedNodeFacts {
-  pub(crate) generation: u64,
+  pub(crate) key: NodeFactsKey,
   pub(crate) archived: usize,
   pub(crate) covered: usize,
   pub(crate) facts: Arc<NodeFacts>,
 }
-
-/// The most nodes whose folded facts stay cached at once.
-pub(crate) const NODE_FACTS_CACHE_LIMIT: usize = 64;
 
 /// Work done on node histories since the store opened, read through [`Store::history_work`].
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -156,6 +160,7 @@ pub struct Store {
   pub(crate) metadata_locks: StdMutex<HashMap<String, Arc<Mutex<()>>>>,
   pub(crate) events_cache: StdMutex<HashMap<String, Arc<StdMutex<Option<CachedChatEvents>>>>>,
   pub(crate) node_facts_cache: StdMutex<HashMap<String, CachedNodeFacts>>,
+  pub(crate) event_read_caches: StdMutex<EventReadCaches>,
   pub(crate) node_state_cache: StdMutex<HashMap<String, CachedNodeState>>,
   pub(crate) activity_cache: StdMutex<HashMap<String, CachedActivity>>,
   pub(crate) history_work: HistoryWorkCounters,
@@ -171,6 +176,8 @@ pub struct Store {
   pub(crate) event_read_hook: StdMutex<Option<Arc<dyn Fn() + Send + Sync>>>,
   #[cfg(test)]
   pub(crate) event_append_hook: StdMutex<Option<Arc<dyn Fn() + Send + Sync>>>,
+  #[cfg(test)]
+  pub(crate) tree_index_metadata_reads: AtomicU64,
   pub(crate) control: ControlLock,
   pub(crate) records_generation: AtomicU64,
   pub(crate) control_event_ids: StdMutex<Option<VecDeque<String>>>,
@@ -224,6 +231,7 @@ impl Store {
       metadata_locks: StdMutex::new(HashMap::new()),
       events_cache: StdMutex::new(HashMap::new()),
       node_facts_cache: StdMutex::new(HashMap::new()),
+      event_read_caches: StdMutex::new(EventReadCaches::default()),
       node_state_cache: StdMutex::new(HashMap::new()),
       activity_cache: StdMutex::new(HashMap::new()),
       history_work: HistoryWorkCounters::default(),
@@ -237,6 +245,8 @@ impl Store {
       event_read_hook: StdMutex::new(None),
       #[cfg(test)]
       event_append_hook: StdMutex::new(None),
+      #[cfg(test)]
+      tree_index_metadata_reads: AtomicU64::new(0),
       control: ControlLock::new(store_id),
       records_generation: AtomicU64::new(0),
       control_event_ids: StdMutex::new(None),
@@ -277,21 +287,22 @@ impl Store {
   /// Return cached session metadata, revalidating expired active entries by `(mtime_ns, size)`.
   pub async fn get_session(&self, session_id: &str) -> StoreResult<Option<SessionMetadata>> {
     if let Some(meta) = self.fresh_cached_meta(session_id)? {
-      return Ok(Some(meta));
+      return Ok(Some(meta.as_ref().clone()));
     }
     let path = self.metadata_path(session_id);
     let signature = stat_signature(&path);
     let meta = self.read_metadata_path(&path)?;
     let mut cache = self.metadata_cache.lock().expect("metadata cache mutex is not poisoned");
     if let Some(entry) = cache.get(session_id) {
-      return Ok(Some(entry.value.clone()));
+      return Ok(Some(entry.value.as_ref().clone()));
     }
     let Some(meta) = meta else { return Ok(None) };
+    let meta = Arc::new(meta);
     cache.insert(
       session_id.to_string(),
-      CachedMetadata { value: meta.clone(), at: Instant::now(), signature, identity: Arc::new(()) },
+      CachedMetadata { value: Arc::clone(&meta), at: Instant::now(), signature, identity: Arc::new(()) },
     );
-    Ok(Some(meta))
+    Ok(Some(meta.as_ref().clone()))
   }
 
   /// Read `metadata.json` from disk without consulting or populating the cache.
@@ -346,12 +357,12 @@ impl Store {
     lock.lock_owned().await
   }
 
-  pub(crate) fn fresh_cached_meta(&self, session_id: &str) -> StoreResult<Option<SessionMetadata>> {
+  pub(crate) fn fresh_cached_meta(&self, session_id: &str) -> StoreResult<Option<Arc<SessionMetadata>>> {
     let (identity, signature) = {
       let cache = self.metadata_cache.lock().expect("metadata cache mutex is not poisoned");
       let Some(entry) = cache.get(session_id) else { return Ok(None) };
       if entry.value.status == SessionStatus::Archived || entry.at.elapsed() < METADATA_CACHE_TTL {
-        return Ok(Some(entry.value.clone()));
+        return Ok(Some(Arc::clone(&entry.value)));
       }
       (Arc::clone(&entry.identity), entry.signature)
     };
@@ -367,11 +378,11 @@ impl Store {
     let mut cache = self.metadata_cache.lock().expect("metadata cache mutex is not poisoned");
     let Some(current) = cache.get_mut(session_id) else { return Ok(None) };
     if !Arc::ptr_eq(&current.identity, &identity) {
-      return Ok(Some(current.value.clone()));
+      return Ok(Some(Arc::clone(&current.value)));
     }
     if signature.is_some() && current_signature == signature {
       current.at = Instant::now();
-      return Ok(Some(current.value.clone()));
+      return Ok(Some(Arc::clone(&current.value)));
     }
     cache.remove(session_id);
     // The file moved without a write through this store: the next listing walks again instead of serving the rows
@@ -380,7 +391,7 @@ impl Store {
     Ok(None)
   }
 
-  pub(crate) fn fresh_cached_metas(&self) -> StoreResult<HashMap<String, SessionMetadata>> {
+  pub(crate) fn fresh_cached_metas(&self) -> StoreResult<HashMap<String, Arc<SessionMetadata>>> {
     let ids: Vec<String> =
       self.metadata_cache.lock().expect("metadata cache mutex is not poisoned").keys().cloned().collect();
     let mut fresh = HashMap::new();
@@ -433,7 +444,7 @@ impl Store {
     let serialized = meta.to_json_string(&self.slots, true);
     fsutil::atomic_write_text(&path, &serialized)
       .map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
-    let parsed = SessionMetadata::from_json(&serialized, Some(&path.display().to_string()))?;
+    let parsed = Arc::new(SessionMetadata::from_json(&serialized, Some(&path.display().to_string()))?);
     let signature = stat_signature(&path);
     self
       .metadata_cache
@@ -1320,7 +1331,7 @@ mod tests {
     store.metadata_cache.lock().unwrap().insert(
       meta.id.clone(),
       CachedMetadata {
-        value: meta.clone(),
+        value: Arc::new(meta.clone()),
         at: Instant::now() - METADATA_CACHE_TTL - Duration::from_secs(1),
         signature: Some(signature),
         identity: Arc::new(()),

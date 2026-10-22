@@ -310,7 +310,8 @@ impl Store {
       {
         return Ok(aggregator);
       }
-      let events = self.load_chat_events_sync(session_id)?;
+      // Python's `_load_aggregator_init_inputs` runs the full history read in `asyncio.to_thread`.
+      let events = self.load_chat_events_shared_async(session_id).await?;
       let archive_offset = self.read_archive_offset(session_id)?;
       let mut aggregator = self.new_message_aggregator(archive_offset, false);
       let mut dropped = false;
@@ -374,7 +375,7 @@ fn async_lock_for(locks: &StdMutex<HashMap<String, Arc<Mutex<()>>>>, session_id:
 #[cfg(test)]
 mod tests {
   use std::sync::atomic::{AtomicUsize, Ordering};
-  use std::sync::{Arc, Mutex as StdMutex};
+  use std::sync::{Arc, Mutex as StdMutex, mpsc};
 
   use charliebot_core::config::CharlieBotConfig;
 
@@ -385,6 +386,26 @@ mod tests {
     assistant_event, assistant_text_event, make_test_store, make_test_store_with_runtime, open_test_store,
   };
   use crate::streaming::Subscription;
+
+  #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+  async fn aggregator_seed_history_load_runs_on_the_blocking_pool() {
+    let (_home, store) = make_test_store();
+    let store = Arc::new(store);
+    store.append_chat_event("synthetic", json!({"type": "user", "content": "seed"})).await.unwrap();
+    let runtime_thread = std::thread::current().id();
+    let (thread_tx, thread_rx) = mpsc::channel();
+    *store.event_read_hook.lock().unwrap() = Some(Arc::new(move || {
+      thread_tx.send(std::thread::current().id()).unwrap();
+    }));
+
+    let reads = store.history_work().file_reads;
+    store.prime_aggregator("synthetic").await.unwrap();
+    let read_thread = thread_rx.recv().unwrap();
+    assert_ne!(read_thread, runtime_thread);
+    assert_eq!(store.history_work().file_reads, reads + 1, "aggregator seeding reads the live history once");
+    store.prime_aggregator("synthetic").await.unwrap();
+    assert_eq!(store.history_work().file_reads, reads + 1, "a cached aggregator does not read history again");
+  }
 
   /// Renderers under the given event types, each rendering nothing; the other hooks stay empty.
   struct RendererHook(Vec<&'static str>);

@@ -184,7 +184,8 @@ pub enum RunDisplayState {
 /// Run terminal outcomes, stop requests and withheld launches folded from one node history.
 ///
 /// Recovery, dispatch and the display-state readers query these facts once per run, so retaining the last outcome,
-/// the stop identities and the last withheld reason makes each lookup independent of history length.
+/// the stop identities and the last withheld reason makes each lookup independent of history length, matching
+/// `src/runtime/runs.py:453-503`'s `_RUN_FACTS_MEMO`.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct RunFacts {
   outcomes: HashMap<String, Option<String>>,
@@ -192,6 +193,9 @@ pub struct RunFacts {
   stopped_runs: HashSet<String>,
   stop_request_ids: HashSet<(String, String)>,
   withheld_reasons: HashMap<String, String>,
+  first_finish_input_ids: HashMap<String, Vec<String>>,
+  finished_input_ids: HashMap<String, HashSet<String>>,
+  unattributed_finished_input_ids: HashSet<String>,
 }
 
 /// The host boot time, read from `/proc/stat` on first use: only a launched run without a terminal fact needs it.
@@ -223,7 +227,10 @@ impl RunFacts {
   pub(crate) fn observe(&mut self, event: &Value) {
     match event.get("type").and_then(Value::as_str) {
       Some("run_finished") => {
+        let input_ids = event_input_ids(event);
         if let Some(run_id) = event.get("run_id").and_then(Value::as_str) {
+          self.first_finish_input_ids.entry(run_id.to_string()).or_insert_with(|| input_ids.clone());
+          self.finished_input_ids.entry(run_id.to_string()).or_default().extend(input_ids);
           let outcome = event.get("outcome").and_then(Value::as_str).map(str::to_string);
           if outcome.as_deref().is_some_and(|value| !is_known_outcome(value)) {
             self.unknown_outcome_runs.insert(run_id.to_string());
@@ -231,6 +238,8 @@ impl RunFacts {
             self.unknown_outcome_runs.remove(run_id);
           }
           self.outcomes.insert(run_id.to_string(), outcome);
+        } else {
+          self.unattributed_finished_input_ids.extend(input_ids);
         }
       }
       Some("run_stop_requested") => {
@@ -282,6 +291,16 @@ impl RunFacts {
   /// Whether some run's last `run_finished` fact carries an outcome that [`RunFacts::terminal_outcome`] rejects.
   pub fn has_unknown_outcome(&self) -> bool {
     !self.unknown_outcome_runs.is_empty()
+  }
+
+  /// Whether any `run_finished` fact exists for this run, even when it has no outcome value.
+  pub fn has_terminal_fact(&self, run_id: &str) -> bool {
+    self.outcomes.contains_key(run_id)
+  }
+
+  /// The first durable finish payload for one run, as `finish_facts(...).next()` returns it.
+  fn first_finish_input_ids(&self, run_id: &str) -> Option<&[String]> {
+    self.first_finish_input_ids.get(run_id).map(Vec::as_slice)
   }
 
   /// The outcome of the last `run_finished` fact for `run_id`.
@@ -629,25 +648,31 @@ impl Store {
   /// Return every structural-change blocker in chronological run order; an empty list means none.
   /// Callers collect all of them, as Python's `_structural_blockers` does.
   pub fn run_blockers(&self, session_id: &str) -> StoreResult<Vec<RunBlocker>> {
-    let events = self.load_all_facts(session_id)?;
-    let boot = proc_identity::read_host_boot_time().map_err(|error| StoreError::new(error.to_string()))?;
     let mut blockers = Vec::new();
-    for run in self.list_run_records_sync(session_id)? {
-      if terminal_outcome(&events, &run.id)?.is_some() {
+    let runs = self.list_run_records_sync(session_id)?;
+    if runs.is_empty() {
+      return Ok(blockers);
+    }
+    let node_state = self.node_state(session_id)?;
+    let facts = &node_state.runs;
+    let mut boot = HostBoot::default();
+    for run in runs {
+      if facts.terminal_outcome(&run.id)?.is_some() {
         continue;
       }
       if run.pid.is_none() {
-        if stop_requested_in_events(&events, &run.id, None) {
+        if facts.stop_requested(&run.id, None) {
           continue;
         }
         blockers.push(RunBlocker { reason: format!("run {} is queued (pending dispatch)", run.id), run_id: run.id });
         continue;
       }
+      let boot_time = boot.get()?;
       let reason = if proc_identity::is_run_alive(
         run.pid,
         run.pid_start.as_deref(),
         run.started_at.map(UtcDateTime::into_inner),
-        boot,
+        boot_time,
       ) {
         format!("run {} is active", run.id)
       } else {
@@ -758,8 +783,8 @@ impl Store {
   ) -> StoreResult<RunRecord> {
     let guard = self.control_lock().await;
     let mut run = require_run(self, session_id, run_id)?;
-    let events = self.load_all_facts(session_id)?;
-    if stop_requested_in_events(&events, run_id, None) {
+    let facts = self.node_state(session_id)?;
+    if facts.runs.stop_requested(run_id, None) {
       return Err(StoreError::new(format!("run {run_id} has a stop request; refusing new process")));
     }
     if run.started_at.is_none() {
@@ -832,13 +857,14 @@ impl Store {
     outcome: RunOutcome,
   ) -> StoreResult<RunRecord> {
     self.require_control_guard(guard)?;
-    let events = self.load_all_facts(session_id)?;
+    let node_state = self.node_state(session_id)?;
+    let run_facts = &node_state.runs;
     let mut run = require_run(self, session_id, run_id)?;
-    if terminal_outcome(&events, run_id)?.is_some() {
+    if run_facts.terminal_outcome(run_id)?.is_some() {
       // The outcome is the last fact's and the payload is the first fact's, as Python's `terminal_outcome` and
       // `_fact_input_payload` read them. An empty `ended_at` is the half-written end record: the caller's `ended_at`
       // and `exit_code` fill it, and values already written stay.
-      let input_event_ids = finish_facts(&events, run_id).next().map(event_input_ids).unwrap_or_default();
+      let input_event_ids = run_facts.first_finish_input_ids(run_id).unwrap_or_default().to_vec();
       let mut changed = run.input_event_ids != input_event_ids;
       run.input_event_ids = input_event_ids;
       if run.ended_at.is_none() {
@@ -854,9 +880,10 @@ impl Store {
       return Ok(run);
     }
 
-    let input_event_ids = self.finish_payload(&run, &events, &outcome.input_event_ids)?;
+    let events = self.load_all_facts_shared_sync(session_id)?;
+    let input_event_ids = self.finish_payload(&run, &events, &outcome.input_event_ids, run_facts)?;
     let mut outcome = outcome;
-    if stop_requested_in_events(&events, run_id, None) {
+    if run_facts.stop_requested(run_id, None) {
       outcome.outcome = RunOutcomeKind::Interrupted;
     }
     let event_id = self.next_control_event_id()?;
@@ -881,7 +908,13 @@ impl Store {
     Ok(run)
   }
 
-  fn finish_payload(&self, run: &RunRecord, events: &[Value], supplied: &[String]) -> StoreResult<Vec<String>> {
+  fn finish_payload(
+    &self,
+    run: &RunRecord,
+    events: &[Value],
+    supplied: &[String],
+    run_facts: &RunFacts,
+  ) -> StoreResult<Vec<String>> {
     if !run.input_event_ids.is_empty() {
       if !supplied.is_empty() && supplied != run.input_event_ids {
         return Err(StoreError::new(format!(
@@ -900,19 +933,17 @@ impl Store {
       )));
     }
     let mut foreign = HashSet::new();
-    for event in events {
-      if event.get("type").and_then(Value::as_str) != Some("run_finished")
-        || event.get("run_id").and_then(Value::as_str) == Some(run.id.as_str())
-      {
-        continue;
+    foreign.extend(run_facts.unattributed_finished_input_ids.iter().cloned());
+    for (other_run_id, input_ids) in &run_facts.finished_input_ids {
+      if other_run_id != &run.id {
+        foreign.extend(input_ids.iter().cloned());
       }
-      foreign.extend(event_input_ids(event));
     }
     for other in self.list_run_records_sync(&run.session_id)? {
-      if other.id == run.id || terminal_outcome(events, &other.id)?.is_some() {
+      if other.id == run.id || run_facts.terminal_outcome(&other.id)?.is_some() {
         continue;
       }
-      if other.pid.is_none() && stop_requested_in_events(events, &other.id, None) {
+      if other.pid.is_none() && run_facts.stop_requested(&other.id, None) {
         continue;
       }
       foreign.extend(other.input_event_ids);
@@ -961,11 +992,11 @@ impl Store {
     {
       let guard = self.control_lock().await;
       run = require_run(self, session_id, run_id)?;
-      let events = self.load_all_facts(session_id)?;
-      if let Some(outcome) = terminal_outcome(&events, run_id)? {
+      let facts = self.node_state(session_id)?;
+      if let Some(outcome) = facts.runs.terminal_outcome(run_id)? {
         return Ok(StopResult { run_id: run_id.to_string(), stop_requested: false, outcome: Some(outcome) });
       }
-      self.append_stop_request_locked(&guard, session_id, run_id, reason).await?;
+      self.append_stop_request_with_facts_locked(&guard, session_id, run_id, reason, &facts.runs).await?;
     }
     if run.pid.is_none() {
       return Ok(StopResult { run_id: run_id.to_string(), stop_requested: true, outcome: None });
@@ -982,11 +1013,23 @@ impl Store {
     request_id: &str,
   ) -> StoreResult<bool> {
     self.require_control_guard(guard)?;
-    let events = self.load_all_facts(session_id)?;
-    if terminal_outcome(&events, run_id)?.is_some() {
+    let facts = self.node_state(session_id)?;
+    self.append_stop_request_with_facts_locked(guard, session_id, run_id, request_id, &facts.runs).await
+  }
+
+  async fn append_stop_request_with_facts_locked(
+    &self,
+    guard: &ControlGuard,
+    session_id: &str,
+    run_id: &str,
+    request_id: &str,
+    facts: &RunFacts,
+  ) -> StoreResult<bool> {
+    self.require_control_guard(guard)?;
+    if facts.terminal_outcome(run_id)?.is_some() {
       return Ok(false);
     }
-    if stop_requested_in_events(&events, run_id, Some(request_id)) {
+    if facts.stop_requested(run_id, Some(request_id)) {
       return Ok(true);
     }
     let event_id = self.next_control_event_id()?;
@@ -1009,11 +1052,11 @@ impl Store {
   /// Reconcile a durable stop request after a restart.
   pub async fn reconcile_stop_request(&self, session_id: &str, run_id: &str) -> StoreResult<StopResult> {
     let run = require_run(self, session_id, run_id)?;
-    let events = self.load_all_facts(session_id)?;
-    if let Some(outcome) = terminal_outcome(&events, run_id)? {
+    let facts = self.node_state(session_id)?;
+    if let Some(outcome) = facts.runs.terminal_outcome(run_id)? {
       return Ok(StopResult { run_id: run_id.to_string(), stop_requested: false, outcome: Some(outcome) });
     }
-    if !stop_requested_in_events(&events, run_id, None) {
+    if !facts.runs.stop_requested(run_id, None) {
       return Ok(StopResult { run_id: run_id.to_string(), stop_requested: false, outcome: None });
     }
     if run.pid.is_none() {
@@ -1051,8 +1094,8 @@ impl Store {
     if exited {
       let guard = self.control_lock().await;
       self.record_finish_locked(&guard, session_id, &run.id, RunOutcome::new(RunOutcomeKind::Interrupted)).await?;
-      let events = self.load_all_facts(session_id)?;
-      let outcome = terminal_outcome(&events, &run.id)?;
+      let facts = self.node_state(session_id)?;
+      let outcome = facts.runs.terminal_outcome(&run.id)?;
       return Ok(StopResult { run_id: run.id.clone(), stop_requested: true, outcome });
     }
     Ok(StopResult { run_id: run.id.clone(), stop_requested: true, outcome: None })

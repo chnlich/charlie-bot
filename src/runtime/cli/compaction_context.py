@@ -21,13 +21,13 @@ _MAX_PARTS = 6
 _SKILL_LOCATION = re.compile(
     r"(?<![A-Za-z0-9_-])(?P<directory>[^ \t\n'\"`;&|()]*?skills[/\\]"
     r"(?P<name>[^/\\ \t\n'\"`;&|()]+))(?=$|[/\\ \t\n'\"`;&|(),])")
+_SKILL_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 
 
 class _SkillRead(NamedTuple):
   name: str
   named_path: str | None
   command_cwd: pathlib.Path | None
-  from_skill_tool: bool
   read_at: datetime.datetime
   order: int
 
@@ -49,9 +49,13 @@ def _timestamp(event: dict) -> datetime.datetime:
 
 
 def _skill_locations(value: str) -> list[tuple[str, str]]:
-  return [
-      (match.group("name"), match.group("directory").replace("\\", "/")) for match in _SKILL_LOCATION.finditer(value)
-  ]
+  locations = []
+  for match in _SKILL_LOCATION.finditer(value):
+    name = match.group("name")
+    if _SKILL_NAME.fullmatch(name) is None:
+      continue
+    locations.append((name, match.group("directory").replace("\\", "/")))
+  return locations
 
 
 def _command_cwd(command: str) -> pathlib.Path | None:
@@ -65,25 +69,25 @@ def _command_cwd(command: str) -> pathlib.Path | None:
   return None
 
 
-def _reads_from_tool(block: dict) -> list[tuple[str, str | None, pathlib.Path | None, bool]]:
+def _reads_from_tool(block: dict) -> list[tuple[str, str | None, pathlib.Path | None]]:
   name = block.get("name")
   tool_input = block.get("input")
   if not isinstance(tool_input, dict):
     return []
   if name == "Skill":
     skill_name = tool_input.get("skill") or tool_input.get("skill_name")
-    return [(skill_name, None, None, True)] if isinstance(skill_name, str) and skill_name else []
+    return [(skill_name, None, None)] if isinstance(skill_name, str) and skill_name else []
   if name == "Read":
     file_path = tool_input.get("file_path")
     if not isinstance(file_path, str) or pathlib.PurePosixPath(file_path.replace("\\", "/")).name != "SKILL.md":
       return []
-    return [(skill_name, f"{directory}/SKILL.md", None, False) for skill_name, directory in _skill_locations(file_path)]
+    return [(skill_name, f"{directory}/SKILL.md", None) for skill_name, directory in _skill_locations(file_path)]
   if name == "Bash":
     command = tool_input.get("command")
     if not isinstance(command, str) or "SKILL.md" not in command:
       return []
     cwd = _command_cwd(command)
-    return [(skill_name, f"{directory}/SKILL.md", cwd, False) for skill_name, directory in _skill_locations(command)]
+    return [(skill_name, f"{directory}/SKILL.md", cwd) for skill_name, directory in _skill_locations(command)]
   return []
 
 
@@ -100,14 +104,13 @@ def _latest_skill_reads(chat_events_path: pathlib.Path) -> list[_SkillRead]:
       for block in message.get("content", []):
         if not isinstance(block, dict) or block.get("type") != "tool_use":
           continue
-        for name, named_path, command_cwd, from_skill_tool in _reads_from_tool(block):
+        for name, named_path, command_cwd in _reads_from_tool(block):
           if not name:
             continue
           read = _SkillRead(
               name=name,
               named_path=named_path,
               command_cwd=command_cwd,
-              from_skill_tool=from_skill_tool,
               read_at=_timestamp(event),
               order=order,
           )
@@ -121,17 +124,14 @@ def _resolved_skill_path(read: _SkillRead, cfg: config.CharlieBotConfig) -> path
   if read.named_path is not None:
     named = pathlib.Path(os.path.expandvars(read.named_path)).expanduser()
     if not named.is_absolute():
-      base = read.command_cwd or cfg.charlie_bot_repo
-      named = base / named
+      named = (read.command_cwd or cfg.charlie_bot_repo) / named
     if named.is_file():
       return named
   for root in (cfg.charliebot_home / "skills", cfg.charlie_bot_repo / "skills"):
     candidate = root / read.name / "SKILL.md"
     if candidate.is_file():
       return candidate
-  if read.from_skill_tool:
-    return None
-  raise FileNotFoundError(f"no SKILL.md found for skill {read.name}")
+  return None
 
 
 def _load_skill_texts(

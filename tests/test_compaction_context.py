@@ -185,3 +185,83 @@ def test_missing_session_log_exits_nonzero_with_stderr_reason(
   assert captured.err.count("\n") == 1
   assert "session=missing-session slot=1 characters=0" in captured.err
   assert "chat_events.jsonl" in captured.err
+
+
+_PATTERN_LOCATIONS = [
+    "skills/*/SKILL.md",
+    "skills/{a,b}/SKILL.md",
+    "skills/$s/SKILL.md",
+    "skills/google-*/SKILL.md",
+    "skills/plan-approval, SKILL.md",
+]
+
+
+@pytest.mark.parametrize("location", _PATTERN_LOCATIONS)
+def test_pattern_location_is_no_skill_read(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, location: str) -> None:
+  cfg = _set_config(monkeypatch, tmp_path)
+  events_path = cfg.sessions_dir / "session-pattern" / "data" / "chat_events.jsonl"
+  _write_events(
+      events_path,
+      [
+          _tool_event("2026-01-01T00:00:00Z", "Bash", {
+              "command": f"cat {location}",
+          }),
+          _tool_event("2026-01-01T00:01:00Z", "Read", {
+              "file_path": f"/repo/{location}",
+          }),
+      ],
+  )
+
+  skills, unresolved = compaction_context._load_skill_texts(events_path, cfg)
+
+  assert skills == []
+  assert unresolved == []
+
+
+@pytest.mark.parametrize("name", ["skill.v2", "skill_v2", "skill2"])
+def test_plain_skill_name_with_dot_underscore_or_digit_is_read(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, name: str) -> None:
+  cfg = _set_config(monkeypatch, tmp_path)
+  skill = cfg.charlie_bot_repo / "skills" / name / "SKILL.md"
+  skill.parent.mkdir(parents=True)
+  skill.write_text("Plain name text\n", encoding="utf-8")
+  events_path = cfg.sessions_dir / "session-plain" / "data" / "chat_events.jsonl"
+  _write_events(
+      events_path,
+      [_tool_event("2026-01-01T00:00:00Z", "Read", {
+          "file_path": str(skill),
+      })],
+  )
+
+  skills, unresolved = compaction_context._load_skill_texts(events_path, cfg)
+
+  assert unresolved == []
+  assert [(item.name, item.text) for item in skills] == [(name, "Plain name text\n")]
+
+
+def test_deleted_skill_read_is_unresolved_while_other_skills_print(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+  cfg = _set_config(monkeypatch, tmp_path)
+  present = cfg.charlie_bot_repo / "skills" / "present" / "SKILL.md"
+  present.parent.mkdir(parents=True)
+  present.write_text("Present skill text\n", encoding="utf-8")
+  deleted = tmp_path / "gone" / "skills" / "deleted" / "SKILL.md"
+  _write_events(
+      cfg.sessions_dir / "session-deleted" / "data" / "chat_events.jsonl",
+      [
+          _tool_event("2026-01-01T00:00:00Z", "Read", {
+              "file_path": str(deleted),
+          }),
+          _tool_event("2026-01-01T00:01:00Z", "Skill", {
+              "skill": "present",
+          }),
+      ],
+  )
+
+  _run_cli(monkeypatch, "session-deleted", 1)
+
+  captured = capsys.readouterr()
+  assert "skills=present" in captured.err
+  assert "unresolved=deleted" in captured.err
+  assert "Present skill text" in json.loads(captured.out)["hookSpecificOutput"]["additionalContext"]

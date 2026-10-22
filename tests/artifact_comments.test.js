@@ -58,7 +58,7 @@ function sessionFetchStub(calls, sessionId, sessionName) {
       return {ok: true, status: 200, async json() { return {name: sessionName}; }};
     }
     if (url === '/api/chat/' + sessionId + '/message') {
-      return {ok: true, status: 200};
+      return {ok: true, status: 202, async json() { return {}; }};
     }
     throw new Error('Unexpected fetch: ' + url);
   };
@@ -175,7 +175,7 @@ test('hash session name 404 falls back to the injected server session id', async
         return {ok: true, status: 200, async json() { return {name: 'Server Session'}; }};
       }
       if (url === '/api/chat/server-session/message') {
-        return {ok: true, status: 200};
+        return {ok: true, status: 202, async json() { return {}; }};
       }
       throw new Error('Unexpected fetch: ' + url);
     },

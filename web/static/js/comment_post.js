@@ -4,14 +4,31 @@
 // and surfaces `err.message` in its own toast.
 // ---------------------------------------------------------------------------
 async function postCommentMessage(sessionId, content) {
-  const response = await fetch(`/api/chat/${encodeURIComponent(sessionId)}/message`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    credentials: 'same-origin',
-    body: JSON.stringify({ content, uploaded_files: [] }),
-  });
-  if (response.status === 401) throw new Error('log in to comment');
-  if (!response.ok) throw new Error(`Comment post failed: HTTP ${response.status}`);
+  const requestId = crypto.randomUUID();
+  let retryDelay = 1000;
+  while (true) {
+    let response;
+    try {
+      response = await fetch(`/api/chat/${encodeURIComponent(sessionId)}/message`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        credentials: 'same-origin',
+        body: JSON.stringify({content, uploaded_files: [], request_id: requestId}),
+      });
+    } catch (_error) {
+      await new Promise((resolve) => setTimeout(resolve, retryDelay));
+      retryDelay = Math.min(retryDelay * 2, 30000);
+      continue;
+    }
+    if (response.status >= 500) {
+      await new Promise((resolve) => setTimeout(resolve, retryDelay));
+      retryDelay = Math.min(retryDelay * 2, 30000);
+      continue;
+    }
+    if (response.status === 401) throw new Error('log in to comment');
+    if (!response.ok) throw new Error(`Comment post failed: HTTP ${response.status}`);
+    return response.json();
+  }
 }
 
 // One tray toast at a time: showing a new one removes the previous. Each tray

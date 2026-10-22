@@ -73,6 +73,11 @@ def stable_input_ack_event_id(session_id: str, request_id: str) -> str:
   return str(uuid.uuid5(TASK_ID_NAMESPACE, f"input-ack:{session_id}:{request_id}"))
 
 
+def stable_request_event_id(session_id: str, request_id: str) -> str:
+  """The input event id one (session, request_id) binds to across retries."""
+  return str(uuid.uuid5(TASK_ID_NAMESPACE, f"request:{session_id}:{request_id}"))
+
+
 def stable_child_report_id(child_session_id: str, source_event_id: str, recipient_session_id: str) -> str:
   """The child_report id one (child event, fixed recipient) pair derives to.
 

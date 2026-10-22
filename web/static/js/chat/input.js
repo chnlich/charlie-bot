@@ -65,12 +65,56 @@ function bumpCurrentSessionToTop() {
   }
 }
 
-function postChatMessage(content, extra) {
+function postChatMessage(content, extra, requestId) {
   return fetch(`/api/chat/${SESSION_ID}/message`, {
     method: 'POST',
     headers: JSON_HEADERS,
-    body: JSON.stringify(Object.assign({ content }, extra || {})),
+    body: JSON.stringify(Object.assign({content}, extra || {}, {request_id: requestId || crypto.randomUUID()})),
   });
+}
+
+async function postChatMessageWithRetry(content, extra, requestId) {
+  let retryDelay = 1000;
+  while (true) {
+    let response;
+    try {
+      response = await postChatMessage(content, extra, requestId);
+    } catch (_error) {
+      await waitForSendRetry(retryDelay);
+      retryDelay = Math.min(retryDelay * 2, 30000);
+      continue;
+    }
+    if (response.status >= 500) {
+      await waitForSendRetry(retryDelay);
+      retryDelay = Math.min(retryDelay * 2, 30000);
+      continue;
+    }
+    if (response.status >= 400 && response.status < 500) {
+      const error = new Error(String(response.status));
+      error.status = response.status;
+      throw error;
+    }
+    if (!response.ok) throw new Error(String(response.status));
+    return response.json();
+  }
+}
+
+function waitForSendRetry(delay) {
+  return new Promise((resolve) => setTimeout(resolve, delay));
+}
+
+async function submitUserMessage(content, extra, requestId, optimisticMessage) {
+  try {
+    const response = await postChatMessageWithRetry(content, extra, requestId);
+    setMessageDeliveryStatus(optimisticMessage, 'Sent');
+    if (response.dispatch_error) appendMessage('system', response.dispatch_error);
+  } catch (error) {
+    if (!(error.status >= 400 && error.status < 500)) throw error;
+    pendingUserRequestIds.delete(requestId);
+    setMessageDeliveryStatus(optimisticMessage, 'Failed');
+    appendMessage('system', 'Failed to send message');
+    stopThinking();
+  }
 }
 
 async function sendMessage() {
@@ -83,10 +127,11 @@ async function sendMessage() {
   clearSentUploadedFiles(uploadedFilesForPayload.map((file) => file.id));
 
   const inputMode = composerInputMode;
+  const requestId = crypto.randomUUID();
 
   // Optimistic UI: append user message and bump session to top
-  pendingUserEchoes++;
-  appendMessage('user', content, inputMode, new Date().toISOString(), payloadFiles);
+  pendingUserRequestIds.add(requestId);
+  const optimisticMessage = appendMessage('user', content, inputMode, new Date().toISOString(), payloadFiles, requestId);
   bumpCurrentSessionToTop();
   input.value = '';
   input.style.height = 'auto';
@@ -97,15 +142,8 @@ async function sendMessage() {
   // in-flight lock, so a master run never locks typing.
   startThinking({keepSendEnabled: true});
 
-  try {
-    const res = await postChatMessage(content, { uploaded_files: payloadFiles, input_mode: inputMode });
-    if (!res.ok) throw new Error(String(res.status));
-  } catch (err) {
-    console.error('Send failed:', err);
-    pendingUserEchoes--;
-    appendMessage('system', 'Failed to send message');
-    stopThinking();
-  }
+  await submitUserMessage(
+      content, {uploaded_files: payloadFiles, input_mode: inputMode}, requestId, optimisticMessage);
 }
 
 // ---------------------------------------------------------------------------
@@ -121,17 +159,10 @@ async function compactContext() {
   );
   if (!confirmed) return;
 
-  pendingUserEchoes++;
-  appendMessage('user', '/compact', null, new Date().toISOString(), null);
-
-  try {
-    const res = await postChatMessage('/compact');
-    if (!res.ok) throw new Error(String(res.status));
-  } catch (err) {
-    console.error('Compact failed:', err);
-    pendingUserEchoes--;
-    appendMessage('system', 'Failed to send message');
-  }
+  const requestId = crypto.randomUUID();
+  pendingUserRequestIds.add(requestId);
+  const optimisticMessage = appendMessage('user', '/compact', null, new Date().toISOString(), null, requestId);
+  await submitUserMessage('/compact', {}, requestId, optimisticMessage);
 }
 
 const GLOBALS = {

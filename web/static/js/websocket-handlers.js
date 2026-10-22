@@ -12,11 +12,9 @@ function _commitMessage(msg) {
   // reports is the snapshot the first paint was built from, so every frame the
   // server replays is one the client does not already have. There is no
   // connection-phase state to gate rendering on.
-  if (msg.role === 'user' && pendingUserEchoes > 0) {
-    // The local tab already rendered this user message optimistically; each
-    // pending send consumes exactly one server-side echo so the bubble doesn't
-    // double up.
-    pendingUserEchoes--;
+  if (msg.role === 'user' && pendingUserRequestIds.has(msg.request_id)) {
+    // The matching local send already rendered this message optimistically.
+    pendingUserRequestIds.delete(msg.request_id);
     return;
   }
   // A committed bubble supersedes the streaming preview: the draft it carries is

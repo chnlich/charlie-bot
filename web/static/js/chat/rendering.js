@@ -725,7 +725,8 @@ function renderMessage(msg, sessionId) {
 
   if (msg.role === "user") {
     return openMessageWrapper("flex justify-end", msg)
-      + renderUserMessageBubble(msg.content, msg.input_mode, msg.timestamp, msg.uploaded_files) + "</div>";
+      + renderUserMessageBubble(
+          msg.content, msg.input_mode, msg.timestamp, msg.uploaded_files, msg.request_id, msg.delivery_status) + "</div>";
   }
   if (msg.role === "assistant") {
     var content = msg.content || "";
@@ -941,7 +942,7 @@ function appendMessageObject(msg, sessionId, forceScroll) {
   _appendRenderedMessage(globalThis.renderMessage(msg, sessionId || SESSION_ID), follow);
 }
 
-function appendMessage(role, content, inputMode, timestamp, uploadedFiles) {
+function appendMessage(role, content, inputMode, timestamp, uploadedFiles, requestId) {
   var msg = {
     role: role,
     content: content || "",
@@ -949,10 +950,22 @@ function appendMessage(role, content, inputMode, timestamp, uploadedFiles) {
     timestamp: timestamp || null,
     uploaded_files: uploadedFiles || null,
   };
+  if (requestId !== undefined) {
+    msg.id = requestId;
+    msg.request_id = requestId;
+    msg.delivery_status = 'Sending…';
+  }
   if (!ingestLiveMessage(msg, SESSION_ID, role === "user")) {
     _appendRenderedMessage(globalThis.renderMessage(msg, SESSION_ID), role === "user");
   }
   return msg;
+}
+
+function setMessageDeliveryStatus(msg, status) {
+  msg.delivery_status = status;
+  const marker = document.getElementById('message-delivery-' + msg.request_id);
+  if (!marker) return;
+  marker.textContent = status;
 }
 
 const GLOBALS = {
@@ -963,6 +976,7 @@ const GLOBALS = {
   renderMessagesToDetachedContainer,
   appendMessageObject,
   appendMessage,
+  setMessageDeliveryStatus,
   applyTurnOutline,
 };
 // Turn primitives the window engine builds wraps from and drives through Chat;

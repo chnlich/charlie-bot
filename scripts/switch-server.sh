@@ -471,7 +471,7 @@ probe_wait_output() {
 
 # probe_run_stages: sends the message and waits for the run's first output. probe_archive stops the run if it is open.
 probe_run_stages() {
-  api POST "/api/chat/$PROBE_SESSION/message" '{"content":"Reply with the single word HELLO."}'
+  api POST "/api/chat/$PROBE_SESSION/message" "{\"content\":\"Reply with the single word HELLO.\",\"request_id\":\"switch-server-probe:$PROBE_SESSION\"}"
   [ "$API_STATUS" = 202 ] || {
     log "probe: the message answered $API_STATUS"
     return 1

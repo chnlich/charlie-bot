@@ -10,11 +10,8 @@
 let ws = null;
 let reconnectDelay = 1000;
 let reconnectTimer = null;
-// User echoes still awaiting their skip: one ++ per local optimistic send, one
-// -- per server echo consumed in _commitMessage (websocket-handlers.js). A
-// count, not a boolean, so two sends fired before the first echo arrives each
-// skip exactly their own.
-let pendingUserEchoes = 0;
+// Request ids identify the local optimistic sends whose server echoes are due.
+const pendingUserRequestIds = new Set();
 let wsGeneration = 0;
 
 // Event type -> {handler, advancesCursor}. A package registers the handlers of

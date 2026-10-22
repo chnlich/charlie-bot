@@ -274,7 +274,12 @@ async def test_node_check_scan_count_does_not_grow_with_run_count(
   import src.runtime.runs as runs_mod
 
   async def _pass_stats(run_count: int) -> tuple[int, int]:
-    cfg, _session_blocks, tree, _manager, worker = await test_task_recovery._manager_and_worker(tmp_path, monkeypatch)
+    # Each measurement gets its own home: a shared one hands the second
+    # take-off the first environment's unacknowledged input and its Run, and
+    # the take-off then finds the node already consumed.
+    home = tmp_path / f"runs-{run_count}"
+    home.mkdir()
+    cfg, _session_blocks, tree, _manager, worker = await test_task_recovery._manager_and_worker(home, monkeypatch)
     for i in range(run_count):
       run_id = f"run-{i}"
       await tree.runs.register_run_locked(

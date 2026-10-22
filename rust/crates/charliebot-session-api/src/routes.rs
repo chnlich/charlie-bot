@@ -153,7 +153,7 @@ fn archived_page_body(
     );
     object.insert(
       "run_backend".to_string(),
-      listing::run_backend(&features.store, &row.id)?.map_or(Value::Null, Value::String),
+      listing::run_backend(&features.store, &row)?.map_or(Value::Null, Value::String),
     );
     if !context_only {
       apply_derived_fields(&mut value, &row, status.get(&row.id), &features.store, true, true, false);
@@ -334,24 +334,23 @@ async fn session_tree(State(features): State<Arc<FeatureContext>>, request: Requ
 }
 
 async fn session_search(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
-  blocking_store(move || Ok(search_response(&features, &request))).await.unwrap_or_else(store_error)
-}
-
-fn search_response(features: &FeatureContext, request: &Request<Body>) -> Response {
-  let query = match Query::new(request) {
+  let query = match Query::new(&request) {
     Ok(query) => query,
     Err(response) => return *response,
   };
   let q = query.get("q").unwrap_or_default().trim().to_string();
-  let rows = match search::search_sessions(&features.store, &q) {
-    Ok(rows) => rows,
+  let store = Arc::clone(&features.store);
+  let registry = Arc::clone(&features.registry);
+  let (rows, derived) = match blocking_store(move || {
+    let rows = search::search_sessions(&store, &q)?;
+    let derived = sidebar::resolve_sidebar_state(&store, &registry, &rows, true, true, false, false)?;
+    Ok((rows, derived))
+  })
+  .await
+  {
+    Ok(result) => result,
     Err(error) => return store_error(error),
   };
-  let derived =
-    match sidebar::resolve_sidebar_state(&features.store, &features.registry, &rows, true, true, false, false) {
-      Ok(derived) => derived,
-      Err(error) => return store_error(error),
-    };
   let mut values = Vec::with_capacity(rows.len());
   for row in &rows {
     let mut value = match listing::metadata_value(row) {
@@ -362,7 +361,7 @@ fn search_response(features: &FeatureContext, request: &Request<Body>) -> Respon
     values.push(value);
   }
   let body = charliebot_compat::json::fast_json_bytes(&Value::Array(values));
-  gzip_response(request, body, &SEARCH_GZIP_MEMO, 2)
+  gzip_response(&request, body, &SEARCH_GZIP_MEMO, 2)
 }
 
 fn apply_derived_fields(
@@ -416,7 +415,7 @@ fn fresh_sessions(
 ) -> Result<Vec<SessionMetadata>, charliebot_store::StoreError> {
   let mut rows = Vec::new();
   for id in ids {
-    if let Some(meta) = features.store.read_metadata_fresh(id)? {
+    if let Some(meta) = features.store.get_session_cached_or_read_sync(id)? {
       rows.push(meta);
     }
   }
@@ -576,7 +575,7 @@ mod tests {
   use base64::engine::general_purpose::URL_SAFE_NO_PAD;
   use charliebot_registry::{Registry, store_hooks};
   use charliebot_store::Store;
-  use charliebot_store::metadata::{SessionMetadata, TaskProfile};
+  use charliebot_store::metadata::{SessionMetadata, SessionStatus, TaskProfile};
 
   use super::*;
 
@@ -588,6 +587,23 @@ mod tests {
   #[test]
   fn query_components_decode_plus_and_percent_escapes() {
     assert_eq!(decode_query_component("Atlas+%C3%A9").unwrap(), "Atlas é");
+  }
+
+  #[tokio::test]
+  async fn active_list_rebuilds_one_metadata_corpus_per_call() {
+    let (_home, features) = crate::test_support::feature_context();
+    crate::test_support::create_node(&features.store, "listing-first", None, TaskProfile::Manager).await;
+    let (_, before_generation) =
+      features.store.load_session_metas_snapshot_versioned(Some(SessionStatus::Active)).unwrap();
+    crate::test_support::create_node(&features.store, "listing-added", None, TaskProfile::Manager).await;
+
+    let request = Request::builder().uri("/api/sessions/").body(Body::empty()).unwrap();
+    let response = list_active(State(Arc::clone(&features)), request).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let (_, after_generation) =
+      features.store.load_session_metas_snapshot_versioned(Some(SessionStatus::Active)).unwrap();
+
+    assert_eq!(after_generation, before_generation + 1);
   }
 
   #[tokio::test]

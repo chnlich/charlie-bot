@@ -4,18 +4,30 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use charliebot_registry::Registry;
 use charliebot_store::metadata::{SessionMetadata, SessionStatus};
-use charliebot_store::{Store, StoreResult};
+use charliebot_store::{Store, StoreError, StoreResult};
 use serde_json::{Map, Value, json};
 
 pub type DerivedSidebarMap = HashMap<String, Map<String, Value>>;
 
+static SIDEBAR_SWEEP_RUNNING: AtomicBool = AtomicBool::new(false);
+
+struct SidebarSweepFlight;
+
+impl Drop for SidebarSweepFlight {
+  fn drop(&mut self) {
+    SIDEBAR_SWEEP_RUNNING.store(false, Ordering::Release);
+  }
+}
+
 /// Resolve only the sidebar fields selected by one listing or status route.
 pub(crate) fn resolve_sidebar_state(
-  store: &Store,
-  registry: &Registry,
+  store: &Arc<Store>,
+  registry: &Arc<Registry>,
   sessions: &[SessionMetadata],
   include_running: bool,
   include_trigger: bool,
@@ -31,6 +43,9 @@ pub(crate) fn resolve_sidebar_state(
   let key = charliebot_store::sidebar_state::DerivedMapKey { session_ids: ids.clone(), flags, generation };
   let force_full = charliebot_store::sidebar_state::register_poll(force);
   if !force && let Some(derived) = charliebot_store::sidebar_state::peek_derived_map(&key) {
+    if force_full {
+      schedule_sidebar_sweep(Arc::clone(store), Arc::clone(registry), sessions.to_vec())?;
+    }
     return Ok(derived);
   }
 
@@ -58,11 +73,20 @@ pub(crate) fn resolve_sidebar_state(
 
   let mut selected = Vec::new();
   let mut signatures = HashMap::new();
+  if force_full && !force {
+    schedule_sidebar_sweep(
+      Arc::clone(store),
+      Arc::clone(registry),
+      active.iter().map(|meta| (*meta).clone()).collect(),
+    )?;
+  }
   for meta in &active {
-    let should_check = force_full
-      || force
-      || charliebot_store::sidebar_state::is_dirty(&meta.id)
-      || charliebot_store::sidebar_state::snapshot_entry(&meta.id).is_none();
+    let should_check = should_probe_synchronously(
+      force_full,
+      force,
+      charliebot_store::sidebar_state::is_dirty(&meta.id),
+      charliebot_store::sidebar_state::snapshot_entry(&meta.id).is_some(),
+    );
     if !should_check {
       continue;
     }
@@ -121,6 +145,59 @@ pub(crate) fn resolve_sidebar_state(
   }
   charliebot_store::sidebar_state::store_derived_map(key, derived.clone());
   Ok(derived)
+}
+
+fn should_probe_synchronously(force_full: bool, force: bool, dirty: bool, has_snapshot: bool) -> bool {
+  if force_full && !force { dirty || !has_snapshot } else { force || dirty || !has_snapshot }
+}
+
+/// Recheck every clean active session off the request path on the periodic poll, as Python's
+/// `schedule_sidebar_sweep` does. Dirty rows stay with the synchronous poll that consumes their mark.
+fn schedule_sidebar_sweep(
+  store: Arc<Store>,
+  registry: Arc<Registry>,
+  sessions: Vec<SessionMetadata>,
+) -> StoreResult<()> {
+  if SIDEBAR_SWEEP_RUNNING.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() {
+    return Ok(());
+  }
+  let spawned = std::thread::Builder::new().name("sidebar-self-heal-sweep".to_string()).spawn(move || {
+    let _flight = SidebarSweepFlight;
+    let mut selected = Vec::new();
+    for meta in sessions {
+      if charliebot_store::sidebar_state::is_dirty(&meta.id) {
+        continue;
+      }
+      let signature = probe_signature(&store, &registry, &meta.id);
+      let changed = charliebot_store::sidebar_state::probe_signature(&meta.id).as_ref() != Some(&signature);
+      let recheck_liveness =
+        charliebot_store::sidebar_state::snapshot_task_activity(&meta.id).is_some_and(|(_, work)| work == "running");
+      if changed || recheck_liveness {
+        selected.push((meta.id, signature));
+      }
+    }
+    let selected_ids: Vec<String> = selected.iter().map(|(session_id, _)| session_id.clone()).collect();
+    for (session_id, signature) in selected {
+      match probe_session(&store, &registry, &session_id) {
+        Ok(snapshot) => {
+          charliebot_store::sidebar_state::store_snapshot_entry(&session_id, snapshot);
+          charliebot_store::sidebar_state::store_probe_signature(&session_id, signature);
+        }
+        Err(error) => {
+          for selected_id in selected_ids {
+            charliebot_store::sidebar_state::mark_sidebar_dirty(&selected_id);
+          }
+          tracing::error!(error = %error, "sidebar_self_heal_sweep_failed");
+          return;
+        }
+      }
+    }
+  });
+  if let Err(error) = spawned {
+    SIDEBAR_SWEEP_RUNNING.store(false, Ordering::Release);
+    return Err(StoreError::new(error.to_string()));
+  }
+  Ok(())
 }
 
 fn probe_session(store: &Store, registry: &Registry, session_id: &str) -> StoreResult<Map<String, Value>> {
@@ -206,6 +283,17 @@ fn stat_signature(path: &Path) -> Option<Value> {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn periodic_self_heal_leaves_clean_probes_off_the_request_path() {
+    let clean_active_sessions = 4317;
+    let synchronous_probes =
+      (0..clean_active_sessions).filter(|_| should_probe_synchronously(true, false, false, true)).count();
+    assert_eq!(synchronous_probes, 0);
+    assert!(should_probe_synchronously(true, true, false, true), "an explicit force still probes synchronously");
+    assert!(should_probe_synchronously(false, false, true, true), "a dirty row is consumed synchronously");
+    assert!(should_probe_synchronously(false, false, false, false), "a missing snapshot is built synchronously");
+  }
 
   #[test]
   fn archived_sidebar_rows_have_false_flags_and_no_task_activity() {

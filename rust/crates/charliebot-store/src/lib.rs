@@ -27,7 +27,7 @@ pub mod write_faults;
 
 pub use aggregator::{MessageAggregator, TOOL_PREVIEW_CHARS};
 pub use control::ControlGuard;
-pub use events::{ChatEvent, ChatEventsDelta};
+pub use events::{ChatEvent, ChatEventsDelta, SharedChatEventRange};
 pub use hooks::{AfterTurnWork, EmptyRuntimeEventHooks, EventRenderer, RuntimeEventHooks};
 pub use listing::{ArchivedPage, MetadataListing, RawMetadata, SharedSubtreeRoots};
 pub use message_utils::{MessageProvenance, SESSION_NOT_FOUND_DETAIL, build_scheduled_trigger_event};
@@ -44,7 +44,8 @@ pub use store::{
 pub use streaming::{SIDEBAR_CHANNEL, STREAM_COALESCE_INTERVAL, StreamingManager, Subscription, session_channel};
 pub use task_tree::{
   AGENT_CREATE_SCOPE_REFUSAL, CreateTask, NodeFacts, PatchTask, PromptScope, StructuralBlockers,
-  TASK_CREATE_REQUEST_ID_REQUIRED, TaskCaller, TaskFacts, TaskState, TaskTreeActivity, is_read_only_exempt,
+  TASK_CREATE_REQUEST_ID_REQUIRED, TaskCaller, TaskFacts, TaskState, TaskTreeActivity, TaskTreeSnapshot,
+  is_read_only_exempt,
 };
 
 use std::fmt;

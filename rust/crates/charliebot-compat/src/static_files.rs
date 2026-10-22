@@ -6,6 +6,7 @@
 //! per request until the check first passes, so a directory that appears later serves without a restart,
 //! and a missing one answers 500 as the Python mount's `RuntimeError` does.
 
+use std::io::{Read, Seek, SeekFrom};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -368,10 +369,6 @@ fn multipart_response(path: &Path, file_headers: &FileHeaders, ranges: &[(u64, u
     Ok(boundary) => boundary,
     Err(error) => return responses::internal_error("OSError", format!("/dev/urandom: {error}")),
   };
-  let content = match std::fs::read(path) {
-    Ok(content) => content,
-    Err(error) => return responses::internal_error("OSError", format!("{}: {error}", path.display())),
-  };
   let mut messages: Vec<Bytes> = Vec::new();
   for (start, end) in ranges {
     messages.push(Bytes::from(format!(
@@ -380,8 +377,11 @@ fn multipart_response(path: &Path, file_headers: &FileHeaders, ranges: &[(u64, u
       end - 1,
       file_headers.size
     )));
-    let (start, end) = (*start as usize, (*end as usize).min(content.len()));
-    for chunk in content[start..end].chunks(CHUNK_SIZE) {
+    let content = match read_file_range(path, *start, *end) {
+      Ok(content) => content,
+      Err(error) => return responses::internal_error("OSError", format!("{}: {error}", path.display())),
+    };
+    for chunk in content.chunks(CHUNK_SIZE) {
       messages.push(Bytes::copy_from_slice(chunk));
     }
     messages.push(Bytes::from_static(b"\r\n"));
@@ -415,9 +415,7 @@ fn random_hex(count: usize) -> std::io::Result<String> {
 /// the body, a stream of `CHUNK_SIZE` messages otherwise. `whole_file` selects `_handle_simple`'s rule
 /// (a full first chunk always announces more) over the range rule (more only while bytes remain).
 fn read_body(path: &Path, start: u64, end: u64, whole_file: bool) -> std::io::Result<Body> {
-  let content = std::fs::read(path)?;
-  let end = (end as usize).min(content.len());
-  let slice = Bytes::from(content).slice(start as usize..end);
+  let slice = if whole_file { Bytes::from(std::fs::read(path)?) } else { read_file_range(path, start, end)? };
   let single_message = if whole_file { slice.len() < CHUNK_SIZE } else { slice.len() <= CHUNK_SIZE };
   if single_message {
     return Ok(Body::from(slice));
@@ -432,9 +430,49 @@ fn read_body(path: &Path, start: u64, end: u64, whole_file: bool) -> std::io::Re
   Ok(Body::from_stream(stream::iter(messages.into_iter().map(Ok::<_, std::io::Error>))))
 }
 
+/// Seek to `[start, end)` and read only that range, as Starlette's `FileResponse` does for range requests.
+fn read_file_range(path: &Path, start: u64, end: u64) -> std::io::Result<Bytes> {
+  let mut file = std::fs::File::open(path)?;
+  read_range(&mut file, start, end)
+}
+
+fn read_range(reader: &mut (impl Read + Seek), start: u64, end: u64) -> std::io::Result<Bytes> {
+  reader.seek(SeekFrom::Start(start))?;
+  let mut bytes = Vec::with_capacity(end.saturating_sub(start) as usize);
+  reader.take(end.saturating_sub(start)).read_to_end(&mut bytes)?;
+  Ok(Bytes::from(bytes))
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  struct CountingReader {
+    inner: std::io::Cursor<Vec<u8>>,
+    bytes_read: usize,
+  }
+
+  impl Read for CountingReader {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+      let count = self.inner.read(buffer)?;
+      self.bytes_read += count;
+      Ok(count)
+    }
+  }
+
+  impl Seek for CountingReader {
+    fn seek(&mut self, position: SeekFrom) -> std::io::Result<u64> {
+      self.inner.seek(position)
+    }
+  }
+
+  #[test]
+  fn a_range_reads_only_the_requested_bytes() {
+    let mut reader = CountingReader { inner: std::io::Cursor::new(vec![b'x'; 2 * 1024 * 1024]), bytes_read: 0 };
+    let bytes = read_range(&mut reader, 1024 * 1024, 1024 * 1024 + 64 * 1024).unwrap();
+    assert_eq!(bytes.len(), 64 * 1024);
+    assert_eq!(reader.bytes_read, 64 * 1024);
+  }
 
   #[test]
   fn normpath_matches_posixpath() {

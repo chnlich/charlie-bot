@@ -645,6 +645,7 @@ pub async fn post_reply(
   let running = features.startup.require::<RunningTurnInputs>()?.user_event_ids(session_id);
   let bound = newest_thread_input(platform, &chat_events, &running);
   let answers = bound.as_ref().map(|(input_id, block)| summon_of(block, input_id));
+  let ack_block = bound.as_ref().map(|(_, block)| (*block).clone());
   let address = adapter.address_of(&session.origin);
   let bodies = chunk_text(text, platform.max_post_chars);
   for (index, body) in bodies.iter().enumerate() {
@@ -663,6 +664,9 @@ pub async fn post_reply(
   }
 
   let chars = text.chars().count();
+  drop(bound);
+  // Python appends to its cached list in place (`chat_events.py:221-224`); release the Arc before the same write.
+  drop(chat_events);
   features
     .store
     .persist_and_broadcast(
@@ -674,7 +678,7 @@ pub async fn post_reply(
       }),
     )
     .await?;
-  if let Some((_, block)) = &bound {
+  if let Some(block) = &ack_block {
     ack_clear(adapter, block, session_id);
   }
   let over_budget = chars > REPLY_BUDGET_CHARS;
@@ -791,27 +795,27 @@ pub async fn audit_round(
   adapter: &Arc<dyn ThreadAdapter>,
   features: &Arc<FeatureContext>,
   session_id: &str,
-  chat_events: &[Value],
-  target: &Value,
+  chat_events: Arc<Vec<Value>>,
+  target: Value,
   input_event_id: &str,
-) -> Result<bool, ThreadReplyError> {
+) -> Result<Option<Arc<Vec<Value>>>, ThreadReplyError> {
   let platform = adapter.platform();
-  let summon_id = summon_of(target, input_event_id);
-  let content = event_by_id(chat_events, &summon_id)
+  let summon_id = summon_of(&target, input_event_id);
+  let content = event_by_id(&chat_events, &summon_id)
     .and_then(|summon| summon.get("content"))
     .and_then(Value::as_str)
     .unwrap_or_default();
   // A summon from the earlier marker contract names neither the one-line input nor the reply command.
   if content != platform.summon_line && !content.contains(platform.reply_command) {
-    return Ok(false);
+    return Ok(Some(chat_events));
   }
-  if replied(platform, chat_events, &summon_id) {
-    return Ok(false);
+  if replied(platform, &chat_events, &summon_id) {
+    return Ok(Some(chat_events));
   }
 
   if target.get("nudge_of").is_none() {
-    if nudged(platform, chat_events, &summon_id) {
-      return Ok(false);
+    if nudged(platform, &chat_events, &summon_id) {
+      return Ok(Some(chat_events));
     }
     let text = nudge_text(platform);
     let mut nudge = build_agent_message_event(
@@ -826,6 +830,8 @@ pub async fn audit_round(
     }
     block.insert("nudge_of".to_string(), json!(summon_id));
     nudge[platform.name] = Value::Object(block);
+    // Python appends to its cached list in place (`chat_events.py:221-224`); release our Arc before writing.
+    drop(chat_events);
     let stored = features.store.persist_and_broadcast(session_id, nudge).await?;
     let nudge_id = stored.get("id").and_then(Value::as_str).expect("a persisted event carries its id");
     spawn_master_wake(
@@ -837,17 +843,18 @@ pub async fn audit_round(
       platform.display_name,
     );
     let event = format!("{}_reply_nudge", platform.name);
-    let thread = adapter.log_fields(target);
+    let thread = adapter.log_fields(&target);
     tracing::info!(%event, session = session_id, thread = %thread, summon_id = %summon_id, nudge_id);
-    return Ok(true);
+    return Ok(None);
   }
 
-  if noticed(platform, chat_events, &summon_id) {
-    return Ok(false);
+  if noticed(platform, &chat_events, &summon_id) {
+    return Ok(Some(chat_events));
   }
-  if !post_with_retry(adapter.as_ref(), target, NO_REPLY_NOTICE, session_id).await {
-    return Ok(false);
+  if !post_with_retry(adapter.as_ref(), &target, NO_REPLY_NOTICE, session_id).await {
+    return Ok(Some(chat_events));
   }
+  drop(chat_events);
   features
     .store
     .persist_and_broadcast(
@@ -862,11 +869,11 @@ pub async fn audit_round(
       }),
     )
     .await?;
-  ack_clear(adapter, target, session_id);
+  ack_clear(adapter, &target, session_id);
   let event = format!("{}_reply_notice", platform.name);
-  let thread = adapter.log_fields(target);
+  let thread = adapter.log_fields(&target);
   tracing::info!(%event, session = session_id, thread = %thread, summon_id = %summon_id);
-  Ok(true)
+  Ok(None)
 }
 
 /// The round-end audit for one finished round (`deliver_done`). It returns false without acting unless the round
@@ -892,7 +899,9 @@ pub async fn deliver_done(
   let Some((input_event_id, target)) = newest_thread_input(platform, &chat_events, &input_event_ids) else {
     return Ok(false);
   };
-  audit_round(adapter, features, session_id, &chat_events, target, &input_event_id).await
+  let target = target.clone();
+  let input_event_id = input_event_id.to_string();
+  Ok(audit_round(adapter, features, session_id, chat_events, target, &input_event_id).await?.is_none())
 }
 
 /// Boot pass over every thread-bound session; returns how many notices and nudges it produced
@@ -915,52 +924,58 @@ pub async fn backfill_lost_summons(
     let running: HashSet<String> =
       features.startup.require::<RunningTurnInputs>()?.user_event_ids(&meta.id).into_iter().collect();
     let lost = lost_summons(platform, &chat_events, &owned, &running);
-    for event in &lost {
-      // The marker lands before the post: a crash between them costs one notice, not one notice per boot.
-      let summon_id = event_id(event).to_string();
-      features
-        .store
-        .persist_and_broadcast(
-          &meta.id,
-          json!({
-            "type": event_types::ASSISTANT_ERROR,
-            "content": format!(
-              "这条 {} 召唤在服务重启时还排在队列里，没有任何轮次回答它；已在对应线程里说明。",
-              platform.display_name
-            ),
-            (platform.backfill_key()): {event_types::INPUT_EVENT_ID: summon_id},
-          }),
-        )
-        .await?;
-      let block = event.get(platform.name).expect("lost summons carry their block");
-      post_with_retry(adapter.as_ref(), block, LOST_SUMMON_NOTICE, &meta.id).await;
-      ack_clear(adapter, block, &meta.id);
-      reported += 1;
-      let log_event = format!("{}_backfill_lost_summon", platform.name);
-      let thread = adapter.log_fields(block);
-      tracing::info!(event = %log_event, session = %meta.id, thread = %thread, input_event_id = %summon_id);
-    }
     if !lost.is_empty() {
+      drop(chat_events);
+      for event in &lost {
+        // The marker lands before the post: a crash between them costs one notice, not one notice per boot.
+        let summon_id = event_id(event).to_string();
+        features
+          .store
+          .persist_and_broadcast(
+            &meta.id,
+            json!({
+              "type": event_types::ASSISTANT_ERROR,
+              "content": format!(
+                "这条 {} 召唤在服务重启时还排在队列里，没有任何轮次回答它；已在对应线程里说明。",
+                platform.display_name
+              ),
+              (platform.backfill_key()): {event_types::INPUT_EVENT_ID: summon_id},
+            }),
+          )
+          .await?;
+        let block = event.get(platform.name).expect("lost summons carry their block");
+        post_with_retry(adapter.as_ref(), block, LOST_SUMMON_NOTICE, &meta.id).await;
+        ack_clear(adapter, block, &meta.id);
+        reported += 1;
+        let log_event = format!("{}_backfill_lost_summon", platform.name);
+        let thread = adapter.log_fields(block);
+        tracing::info!(event = %log_event, session = %meta.id, thread = %thread, input_event_id = %summon_id);
+      }
       chat_events = load_chat_events(features, &meta.id).await?;
     }
 
-    let dones: Vec<Value> = chat_events
+    let dones: Vec<usize> = chat_events
       .iter()
-      .filter(|event| event_type(event) == Some(event_types::MASTER_DONE))
-      .filter(|event| !master_done_input_event_ids(event).is_empty())
-      .cloned()
+      .enumerate()
+      .filter(|(_, event)| event_type(event) == Some(event_types::MASTER_DONE))
+      .filter(|(_, event)| !master_done_input_event_ids(event).is_empty())
+      .map(|(index, _)| index)
       .collect();
-    for done in &dones {
-      let done_ids = master_done_input_event_ids(done);
+    for done_index in dones {
+      let done_ids = master_done_input_event_ids(&chat_events[done_index]);
       let Some((input_event_id, target)) = newest_thread_input(platform, &chat_events, &done_ids) else {
         continue;
       };
       let input_event_id = input_event_id.to_string();
       let target = target.clone();
-      if audit_round(adapter, features, &meta.id, &chat_events, &target, &input_event_id).await? {
-        reported += 1;
-        // The action appended an event the next done's predicates must see.
-        chat_events = load_chat_events(features, &meta.id).await?;
+      let current_events = chat_events;
+      match audit_round(adapter, features, &meta.id, current_events, target, &input_event_id).await? {
+        Some(snapshot) => chat_events = snapshot,
+        None => {
+          reported += 1;
+          // The action appended an event the next done's predicates must see.
+          chat_events = load_chat_events(features, &meta.id).await?;
+        }
       }
     }
   }
@@ -1407,9 +1422,9 @@ pub fn operator_only_note(links: &[String]) -> Option<String> {
 }
 
 /// The sessions' chat events in log order, read on a worker thread as `asyncio.to_thread` does.
-async fn load_chat_events(features: &FeatureContext, session_id: &str) -> Result<Vec<Value>, ThreadReplyError> {
+async fn load_chat_events(features: &FeatureContext, session_id: &str) -> Result<Arc<Vec<Value>>, ThreadReplyError> {
   let session_id = session_id.to_string();
-  blocking(features, move |store| store.load_chat_events_sync(&session_id)).await
+  blocking(features, move |store| store.load_chat_events_shared_sync(&session_id)).await
 }
 
 /// Run one blocking store read on a worker thread.

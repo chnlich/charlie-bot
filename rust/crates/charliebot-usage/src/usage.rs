@@ -255,7 +255,7 @@ impl SessionUsage {
       Some((generation, covered, fold)) if generation == delta.generation && covered == delta.start_index => fold,
       _ => UsageFold::default(),
     };
-    fold.feed(&delta.events)?;
+    fold.feed(&delta.events[delta.start_index..])?;
     let memo_entry = FactsMemoEntry {
       session_id: session_id.to_string(),
       generation: delta.generation,

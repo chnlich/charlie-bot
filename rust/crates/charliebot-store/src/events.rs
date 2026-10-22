@@ -137,7 +137,13 @@ pub struct ChatEventsDelta {
   pub generation: u64,
   pub start_index: usize,
   pub event_count: usize,
-  pub events: Vec<ChatEvent>,
+  pub events: Arc<Vec<ChatEvent>>,
+}
+
+/// A selected event range that borrows the cached list when no archive is present.
+pub struct SharedChatEventRange {
+  pub events: Arc<Vec<ChatEvent>>,
+  pub range: std::ops::Range<usize>,
 }
 
 impl Store {
@@ -244,7 +250,7 @@ impl Store {
       generation: cached.generation,
       start_index,
       event_count: cached.events.len(),
-      events: cached.events[start_index..].to_vec(),
+      events: Arc::clone(&cached.events),
     })
   }
 
@@ -361,9 +367,35 @@ impl Store {
     Ok((out, start > 0))
   }
 
+  /// Read `[start, end)` without copying cached live events; archived histories retain the existing range reader.
+  pub fn load_chat_events_shared_range_sync(
+    &self,
+    session_id: &str,
+    start: usize,
+    end: usize,
+  ) -> StoreResult<SharedChatEventRange> {
+    if self.read_archive_offset(session_id)? > 0 {
+      let (events, _) = self.load_chat_events_range(session_id, start, end)?;
+      let end = events.len();
+      return Ok(SharedChatEventRange { events: Arc::new(events), range: 0..end });
+    }
+    match self.live_history(session_id)? {
+      LiveHistory::Cached { events, .. } => {
+        let range_start = start.min(events.len());
+        let range_end = end.min(events.len()).max(range_start);
+        Ok(SharedChatEventRange { events, range: range_start..range_end })
+      }
+      LiveHistory::Cold(_) => {
+        let (events, _) = self.load_chat_events_range(session_id, start, end)?;
+        let end = events.len();
+        Ok(SharedChatEventRange { events: Arc::new(events), range: 0..end })
+      }
+    }
+  }
+
   /// Read one archive's parsed events. This uses `src/runtime/chat_events.py:354-392`'s directory/file stat memos and
-  /// 16-file bound. An unreadable file logs and contributes nothing, the
-  /// pre-memo reader's behavior on open failure in `_archive_file_events`.
+  /// 16-file bound. An unreadable file logs and contributes nothing, the pre-memo reader's behavior on open failure in
+  /// `_archive_file_events`.
   fn read_archive_file(&self, path: &Path, session_id: &str) -> Arc<Vec<ChatEvent>> {
     let metadata = match fs::metadata(path) {
       Ok(metadata) => metadata,
@@ -1324,6 +1356,22 @@ mod tests {
     assert!(!Arc::ptr_eq(&first, &appended));
     assert_eq!(first.len(), 1);
     assert_eq!(appended.last().unwrap()["id"], "second");
+  }
+
+  #[tokio::test]
+  async fn event_deltas_share_the_cached_vector_and_expose_the_suffix_index() {
+    let (_home, store) = make_test_store();
+    store.append_chat_event("synthetic-delta", json!({"id": "first", "type": "user"})).await.unwrap();
+    store.append_chat_event("synthetic-delta", json!({"id": "second", "type": "user"})).await.unwrap();
+    let events = store.load_chat_events_shared_sync("synthetic-delta").unwrap();
+
+    let first = store.load_chat_events_delta_sync("synthetic-delta", None, 0).unwrap();
+    assert!(Arc::ptr_eq(&events, &first.events));
+    assert_eq!(first.start_index, 0);
+    let suffix = store.load_chat_events_delta_sync("synthetic-delta", Some(first.generation), 1).unwrap();
+    assert!(Arc::ptr_eq(&events, &suffix.events));
+    assert_eq!(suffix.start_index, 1);
+    assert_eq!(suffix.events[suffix.start_index]["id"], "second");
   }
 
   mod parity {

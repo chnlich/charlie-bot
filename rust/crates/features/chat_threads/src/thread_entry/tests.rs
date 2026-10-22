@@ -68,6 +68,18 @@ fn origin() -> Value {
   json!({"channel_id": "c1", "thread_ts": "t1"})
 }
 
+#[tokio::test]
+async fn thread_event_reads_share_the_store_snapshot() {
+  let home = Home::new();
+  home.thread_session("shared-thread-events", origin()).await;
+  home.append("shared-thread-events", json!({"type": "user", "content": "question"})).await;
+
+  let first = load_chat_events(&home.features, "shared-thread-events").await.expect("the events read");
+  let second = load_chat_events(&home.features, "shared-thread-events").await.expect("the events read again");
+
+  assert!(Arc::ptr_eq(&first, &second), "both calls hold the same event allocation");
+}
+
 /// The chat-event type of a fakechat reply event, as the platform writes it.
 fn reply_type() -> &'static str {
   FAKECHAT.reply_event_type

@@ -3,7 +3,6 @@
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use charliebot_core::pyfmt;
-use charliebot_store::control_events;
 use charliebot_store::metadata::{SessionMetadata, UtcDateTime};
 use charliebot_store::{Store, StoreError, StoreResult};
 use serde::{Deserialize, Serialize};
@@ -39,23 +38,16 @@ pub(crate) fn tree_page(
   limit: usize,
   cursor: Option<&str>,
 ) -> StoreResult<Value> {
-  let metas = store.load_session_metas(None)?;
-  if let Some(parent_id) = parent_id
-    && !metas.iter().any(|meta| meta.id == parent_id)
-  {
-    return Err(StoreError::not_found(format!("task {parent_id} not found")));
+  let index = store.task_tree_snapshot()?;
+  if let Some(parent_id) = parent_id {
+    index.meta(parent_id)?;
   }
-  let revision = tree_revision(store, &metas)?;
-  let mut children: Vec<&SessionMetadata> =
-    metas.iter().filter(|meta| meta.task_parent_id.as_deref() == parent_id).collect();
-  children.sort_by(|left, right| left.created_at.cmp(&right.created_at).then_with(|| left.id.cmp(&right.id)));
-  let mut rows = Vec::with_capacity(children.len());
-  for meta in children {
-    let row = session_row(store, meta)?;
-    let mut has_running_descendant = false;
-    for descendant in store.descendant_ids(&meta.id)? {
-      has_running_descendant |= store.task_tree_activity(&descendant)?.work_state == "running";
-    }
+  let revision = index.revision().to_string();
+  let mut rows = Vec::with_capacity(index.child_ids(parent_id).len());
+  for session_id in index.child_ids(parent_id) {
+    let meta = index.meta(session_id)?;
+    let row = session_row(store, &index, meta)?;
+    let has_running_descendant = row.running_descendant_count > 0;
     if !include_archived && row.archived && row.work_state != "running" && !has_running_descendant {
       continue;
     }
@@ -81,12 +73,16 @@ pub(crate) fn tree_page(
   }))
 }
 
-fn session_row(store: &Store, meta: &SessionMetadata) -> StoreResult<SessionRow> {
-  let descendants = store.descendant_ids(&meta.id)?;
+fn session_row(
+  store: &Store,
+  index: &charliebot_store::TaskTreeSnapshot,
+  meta: &SessionMetadata,
+) -> StoreResult<SessionRow> {
+  let descendants = index.descendant_ids(store, &meta.id)?;
   let mut open_descendant_count = 0;
   let mut running_descendant_count = 0;
   for descendant in descendants {
-    if store.task_state(&descendant)? == "open" {
+    if index.task_state(&descendant)? == "open" {
       open_descendant_count += 1;
     }
     if store.task_tree_activity(&descendant)?.work_state == "running" {
@@ -99,35 +95,14 @@ fn session_row(store: &Store, meta: &SessionMetadata) -> StoreResult<SessionRow>
     name: meta.name.clone(),
     profile: meta.profile,
     task_parent_id: meta.task_parent_id.clone(),
-    task_state: store.task_state(&meta.id)?,
+    task_state: index.task_state(&meta.id)?.to_string(),
     work_state: activity.work_state,
-    archived: store.archived_of(&meta.id)?,
-    child_count: store.child_ids(&meta.id)?.len(),
+    archived: index.archived(&meta.id)?,
+    child_count: index.child_ids(Some(&meta.id)).len(),
     open_descendant_count,
     running_descendant_count,
     has_unread: meta.has_unread,
   })
-}
-
-fn tree_revision(store: &Store, metas: &[SessionMetadata]) -> StoreResult<String> {
-  let mut structural = Vec::with_capacity(metas.len());
-  for meta in metas {
-    let profile = serde_json::to_value(meta.profile).expect("task profile serializes to JSON");
-    structural.push(format!(
-      "{}|{}|{}|{}|{}|{}",
-      meta.id,
-      meta.task_parent_id.as_deref().unwrap_or_default(),
-      profile.as_str().expect("task profile serializes as a string"),
-      match meta.status {
-        charliebot_store::metadata::SessionStatus::Active => "active",
-        charliebot_store::metadata::SessionStatus::Archived => "archived",
-      },
-      store.task_state(&meta.id)?,
-      if store.archived_of(&meta.id)? { "True" } else { "False" },
-    ));
-  }
-  structural.sort();
-  Ok(control_events::sha256_hex(&structural.join("\n")))
 }
 
 fn encode_cursor(revision: &str, created_at: UtcDateTime, session_id: &str) -> String {
@@ -149,6 +124,32 @@ fn malformed_cursor(cursor: &str) -> StoreError {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::test_support::{create_node, feature_context};
+  use charliebot_store::metadata::TaskProfile;
+
+  #[tokio::test]
+  async fn a_tree_page_builds_one_revision_index_and_visits_each_row_descendant_once() {
+    let (_home, features) = feature_context();
+    let root = create_node(&features.store, "tree-root", None, TaskProfile::Manager).await;
+    let first = create_node(&features.store, "tree-first", Some(&root.id), TaskProfile::Manager).await;
+    create_node(&features.store, "tree-second", Some(&root.id), TaskProfile::Manager).await;
+    create_node(&features.store, "tree-grandchild", Some(&first.id), TaskProfile::Manager).await;
+    features.store.invalidate_tree_index();
+
+    let index_builds_before = features.store.task_tree_index_build_count();
+    let tail_reads_before = features.store.task_state_tail_read_count();
+    let activity_calls_before = features.store.task_tree_activity_call_count();
+    tree_page(&features.store, Some(&root.id), true, 20, None).unwrap();
+
+    assert_eq!(features.store.task_tree_index_build_count() - index_builds_before, 1);
+    assert!(features.store.task_state_tail_read_count() - tail_reads_before <= 4);
+    assert_eq!(features.store.task_tree_activity_call_count() - activity_calls_before, 3);
+    let after_first_page = features.store.task_tree_index_build_count();
+    let after_first_tail_reads = features.store.task_state_tail_read_count();
+    tree_page(&features.store, Some(&root.id), true, 20, None).unwrap();
+    assert_eq!(features.store.task_tree_index_build_count(), after_first_page);
+    assert_eq!(features.store.task_state_tail_read_count(), after_first_tail_reads);
+  }
 
   #[test]
   fn tree_cursor_round_trips_and_keeps_python_datetime_text() {

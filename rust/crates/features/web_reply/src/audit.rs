@@ -32,12 +32,18 @@ pub async fn audit_turn(features: &Arc<FeatureContext>, session_id: &str, done: 
   if reply::replied(&loaded, &user_event_id) {
     return Ok(());
   }
-  if reply::nudge_of(input_event).is_none() {
-    if !reply::nudged(&loaded, &user_event_id) {
-      nudge(features, session_id, &user_event_id).await?;
-    }
-  } else if !reply::noticed(&loaded, &user_event_id) {
-    notice(features, session_id, &user_event_id).await?;
+  let is_nudge = reply::nudge_of(input_event).is_some();
+  let action = if is_nudge {
+    (!reply::noticed(&loaded, &user_event_id)).then_some(false)
+  } else {
+    (!reply::nudged(&loaded, &user_event_id)).then_some(true)
+  };
+  // The Python cached list is appended in place (`chat_events.py:221-224`); release the shared Arc before recording.
+  drop(loaded);
+  match action {
+    Some(true) => nudge(features, session_id, &user_event_id).await?,
+    Some(false) => notice(features, session_id, &user_event_id).await?,
+    None => {}
   }
   Ok(())
 }

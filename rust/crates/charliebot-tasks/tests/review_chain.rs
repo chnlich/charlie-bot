@@ -787,7 +787,7 @@ async fn repo_less_implement_review_failure_takes_the_failure_report() -> anyhow
   assert_eq!(wait_for_run(&stack, &guard, &worker.id, "run-work").await?, RunOutcomeKind::Success);
   let review_run = wait_for_review(&stack, &worker.id, "run-work").await?;
   assert_eq!(wait_for_run(&stack, &guard, &worker.id, &review_run.id).await?, RunOutcomeKind::Failed);
-  let reports = child_reports(&stack, &manager.id)?;
+  let reports = wait_for_child_reports(&stack, &manager.id, 1).await?;
   assert_eq!(reports.len(), 1);
   assert_eq!(reports[0]["outcome"], "blocked");
   assert!(reports[0]["summary"].as_str().unwrap_or_default().contains("failed on every configured reviewer backend"));
@@ -807,7 +807,7 @@ async fn successful_worker_with_no_available_reviewer_reports_blocked() -> anyho
   let guard = ProcessGroupGuard::new();
   queue_and_launch_work(&stack, &worker.id, "run-work", "write a report").await?;
   assert_eq!(wait_for_run(&stack, &guard, &worker.id, "run-work").await?, RunOutcomeKind::Success);
-  let reports = child_reports(&stack, &manager.id)?;
+  let reports = wait_for_child_reports(&stack, &manager.id, 1).await?;
   assert_eq!(reports.len(), 1);
   assert_eq!(reports[0]["outcome"], "blocked");
   assert!(reports[0]["summary"].as_str().unwrap_or_default().contains("found no available reviewer backend"));
@@ -1254,7 +1254,7 @@ async fn failed_work_with_pending_trigger_still_reports_and_keeps_the_task_open(
   let guard = ProcessGroupGuard::new();
   queue_and_launch_work(&stack, &worker.id, "run-work", "add marker").await?;
   assert_eq!(wait_for_run(&stack, &guard, &worker.id, "run-work").await?, RunOutcomeKind::Failed);
-  let reports = child_reports(&stack, &manager.id)?;
+  let reports = wait_for_child_reports(&stack, &manager.id, 1).await?;
   assert_eq!(reports.len(), 1);
   assert_eq!(reports[0]["outcome"], "failed");
   assert_eq!(stack.store().task_state(&worker.id)?, "open");

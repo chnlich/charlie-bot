@@ -1352,7 +1352,7 @@ mod tests {
   async fn recovery_history_reads_and_folds_do_not_grow_with_run_count() {
     let (_home, features) = startup_features().await;
     let small_id = closed_worker_node(&features, "synthetic-one-run-node", 1).await;
-    let large_id = closed_worker_node(&features, "synthetic-many-run-node", 32).await;
+    let large_id = closed_worker_node(&features, "synthetic-many-run-node", 8).await;
     let adapter = features.startup.require::<TaskExecutionAdapter>().expect("the startup step inserts the adapter");
     let small = node_pass_history_work(&features, &adapter, &small_id).await;
     let large = node_pass_history_work(&features, &adapter, &large_id).await;

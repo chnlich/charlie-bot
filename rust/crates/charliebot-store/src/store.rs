@@ -106,11 +106,6 @@ pub(crate) struct CachedChatEvents {
   pub(crate) events: Arc<Vec<Value>>,
 }
 
-pub(crate) struct CachedTaskStateTail {
-  pub(crate) identity: Option<TaskStateTailIdentity>,
-  pub(crate) state: String,
-}
-
 /// A node's folded facts and the history they cover: the live-cache generation, the archived extent, and the number of
 /// live events folded.
 pub(crate) struct CachedNodeFacts {
@@ -141,9 +136,6 @@ pub(crate) struct HistoryWorkCounters {
   pub(crate) folded_events: AtomicU64,
 }
 
-pub(crate) type TaskStateTailIdentity = (u64, u64, u64, i64, i64, usize);
-pub(crate) type ChatEventsIdentity = (u64, u64, u64, i64, i64);
-
 /// Session metadata and event-log persistence for one configured CharlieBot home.
 pub struct Store {
   pub(crate) cfg: CharlieBotConfig,
@@ -158,7 +150,6 @@ pub struct Store {
   pub(crate) metadata_cache: StdMutex<HashMap<String, CachedMetadata>>,
   pub(crate) metadata_locks: StdMutex<HashMap<String, Arc<Mutex<()>>>>,
   pub(crate) events_cache: StdMutex<HashMap<String, Arc<StdMutex<Option<CachedChatEvents>>>>>,
-  pub(crate) task_state_tail_cache: StdMutex<HashMap<String, CachedTaskStateTail>>,
   pub(crate) node_facts_cache: StdMutex<HashMap<String, CachedNodeFacts>>,
   pub(crate) history_work: HistoryWorkCounters,
   pub(crate) next_events_cache_generation: AtomicU64,
@@ -218,7 +209,6 @@ impl Store {
       metadata_cache: StdMutex::new(HashMap::new()),
       metadata_locks: StdMutex::new(HashMap::new()),
       events_cache: StdMutex::new(HashMap::new()),
-      task_state_tail_cache: StdMutex::new(HashMap::new()),
       node_facts_cache: StdMutex::new(HashMap::new()),
       history_work: HistoryWorkCounters::default(),
       next_events_cache_generation: AtomicU64::new(1),

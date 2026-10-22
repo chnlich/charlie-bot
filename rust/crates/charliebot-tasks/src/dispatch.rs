@@ -196,13 +196,14 @@ impl Dispatcher {
   /// Return the task's currently pending input facts from the durable boundary and run records.
   pub fn pending_inputs(&self, session_id: &str) -> StoreResult<Vec<Value>> {
     let facts = self.store.node_facts(session_id)?;
-    if facts.task.boundary_index.is_none() && facts.task.imported_pending_ids.is_empty() {
+    let task = facts.task()?;
+    if task.boundary_index.is_none() && task.imported_pending_ids.is_empty() {
       return Err(StoreError::invalid(format!(
         "task {session_id} has no creation or import boundary; it is not a task-tree node"
       )));
     }
     // Claimed inputs only remove candidates, so with none the run listing can matter only through an unknown outcome.
-    if facts.task.input_candidates.is_empty() && !facts.runs.has_unknown_outcome() {
+    if task.input_candidates.is_empty() && !facts.runs.has_unknown_outcome() {
       return Ok(Vec::new());
     }
     let run_records = self.store.list_run_records_sync(session_id)?;
@@ -214,7 +215,7 @@ impl Dispatcher {
       }
       claimed.extend(run.input_event_ids);
     }
-    Ok(deduplicate_pending_inputs(facts.task.input_candidates.clone(), &facts.task.confirmed_input_ids, &claimed))
+    Ok(deduplicate_pending_inputs(task.input_candidates.clone(), &task.confirmed_input_ids, &claimed))
   }
 
   /// Return the structural blocker for this task's pending inputs.
@@ -272,7 +273,7 @@ impl Dispatcher {
       ("session_id".to_string(), Value::String(session_id.to_string())),
       ("pending".to_string(), json!(pending.len())),
     ]);
-    if self.store.task_state_fast(session_id)? != "open" {
+    if self.store.node_facts(session_id)?.task()?.task_state != "open" {
       decision.insert("launch".to_string(), Value::Bool(false));
       decision.insert("reason".to_string(), json!("task is closed; input retained as history"));
       return Ok(Value::Object(decision));
@@ -641,7 +642,7 @@ impl Dispatcher {
   }
 
   fn undelivered_close_recipients(&self, session_id: &str) -> StoreResult<Vec<(Value, String)>> {
-    let close_events = self.store.node_facts(session_id)?.task.close_events.clone();
+    let close_events = self.store.node_facts(session_id)?.task()?.close_events.clone();
     let mut undelivered = Vec::new();
     for close in close_events {
       let recipient = close.get("report_to");

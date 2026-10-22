@@ -1,3 +1,4 @@
+use std::fmt::Write;
 use std::io::{self, BufRead, BufReader};
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
@@ -190,4 +191,84 @@ fn sigterm_stops_task_recovery_during_boot() {
 #[test]
 fn sigint_stops_task_recovery_during_boot() {
   assert_boot_signal(Signal::SIGINT);
+}
+
+/// Task-tree nodes the boot pass walks, and the chat events each node carries. The walk takes at least `WALK_MIN_MS`,
+/// so the signal lands between nodes. Each node's events are inert (the fact fold ignores their type), which lengthens
+/// the walk without a directory per node.
+const WALK_SESSIONS: usize = 200;
+const WALK_EVENTS: usize = 800;
+const WALK_MIN_MS: u64 = 2_000;
+
+/// Writes task-tree nodes: a profiled session whose chat events open with a creation boundary. A session without a
+/// profile is a v1 session, and the startup check refuses a home that holds one.
+fn write_sessions(home: &Path, count: usize) {
+  let sessions = home.join("sessions");
+  for index in 0..count {
+    let id = format!("synthetic-session-{index:05}");
+    let data = sessions.join(&id).join("data");
+    std::fs::create_dir_all(&data).expect("the synthetic session data directory is created");
+    let metadata = serde_json::json!({"id": id, "name": id, "profile": "manager"});
+    std::fs::write(sessions.join(&id).join("metadata.json"), metadata.to_string())
+      .expect("the synthetic session metadata is written");
+    let mut events = format!("{}\n", serde_json::json!({"id": format!("{id}-created"), "type": "task_created"}));
+    for event in 0..WALK_EVENTS {
+      writeln!(events, "{}", serde_json::json!({"id": format!("{id}-note-{event:05}"), "type": "note"}))
+        .expect("the synthetic chat events are formatted");
+    }
+    std::fs::write(data.join("chat_events.jsonl"), events).expect("the synthetic chat events are written");
+  }
+}
+
+fn recovery_elapsed_ms(lines: &[String]) -> u64 {
+  let line = lines
+    .iter()
+    .find(|line| line.contains("\"event\":\"task_tree_recovery_done\""))
+    .expect("the boot pass logs task_tree_recovery_done");
+  let value: serde_json::Value = serde_json::from_str(line).expect("the done line is JSON");
+  value["elapsed_ms"].as_u64().expect("the done line has elapsed_ms")
+}
+
+/// SIGTERM during a real node walk. Neither boot sets the delay gate, so the walk's own stop checks end it.
+#[test]
+fn sigterm_stops_the_node_walk_without_the_delay_gate() {
+  let temporary = tempfile::tempdir().expect("the synthetic home tempdir is created");
+  let home = prepare_home(temporary.path());
+  write_sessions(&home, WALK_SESSIONS);
+
+  let (mut server, receiver) = start_server(temporary.path(), &home, false);
+  let mut lines = wait_for_event(&mut server, &receiver, "task_tree_recovery_walk_started", Duration::from_secs(20));
+  send_signal(&server, Signal::SIGTERM);
+  let (status, elapsed) = wait_for_exit(&mut server, &receiver, &mut lines, BOOT_STOP_TIMEOUT);
+  drain_logs(&receiver, &mut lines);
+  println!("SIGTERM during the node walk exited in {:.3}s", elapsed.as_secs_f64());
+  assert!(elapsed < BOOT_STOP_TIMEOUT, "the process took {elapsed:?} to stop");
+  // A full walk takes at least WALK_MIN_MS, so an exit sooner than that means the stop ended the walk.
+  assert!(elapsed < Duration::from_millis(WALK_MIN_MS), "the stop took {elapsed:?}; the walk ran to its end");
+  assert_eq!(status.signal(), Some(Signal::SIGTERM as i32), "{status:?}");
+  assert!(
+    !lines.iter().any(|line| line.contains("\"event\":\"task_tree_recovery_done\"")),
+    "the walk finished before the stop reached it: {lines:?}"
+  );
+  assert!(!lines.iter().any(|line| line.contains("\"event\":\"server_ready\"")), "{lines:?}");
+  let shutdowns: Vec<&String> =
+    lines.iter().filter(|line| line.contains("\"event\":\"charliebot_shutdown\"")).collect();
+  assert_eq!(shutdowns.len(), 1, "the boot stop logs one shutdown line: {lines:?}");
+  assert!(shutdowns[0].contains("\"boot\":true"), "the shutdown line marks a boot stop: {shutdowns:?}");
+
+  let (mut restarted, restarted_receiver) = start_server(temporary.path(), &home, false);
+  let mut restarted_lines =
+    wait_for_event(&mut restarted, &restarted_receiver, "server_ready", Duration::from_secs(60));
+  let walk_ms = recovery_elapsed_ms(&restarted_lines);
+  println!("the node walk over {WALK_SESSIONS} sessions took {walk_ms} ms");
+  assert!(walk_ms >= WALK_MIN_MS, "the node walk took {walk_ms} ms, under the {WALK_MIN_MS} ms the test needs");
+  assert!(
+    !restarted_lines.iter().any(|line| line.contains("\"event\":\"task_recovery_node_failed\"")),
+    "the restarted home walks every node without a failure: {restarted_lines:?}"
+  );
+  send_signal(&restarted, Signal::SIGTERM);
+  let (status, elapsed) = wait_for_exit(&mut restarted, &restarted_receiver, &mut restarted_lines, BOOT_STOP_TIMEOUT);
+  drain_logs(&restarted_receiver, &mut restarted_lines);
+  assert_eq!(status.signal(), Some(Signal::SIGTERM as i32), "{status:?}");
+  assert!(elapsed < BOOT_STOP_TIMEOUT, "the restarted server took {elapsed:?} to stop");
 }

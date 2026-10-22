@@ -18,6 +18,7 @@ use uuid::Uuid;
 use crate::aggregator::builtin_event_types;
 use crate::control::ControlLock;
 use crate::hooks::{EventRenderer, RuntimeEventHooks};
+use crate::listing::CachedListing;
 use crate::metadata::{RoundRating, SessionMetadata, SessionStatus, UtcDateTime};
 use crate::session_events::SessionEventState;
 use crate::streaming::StreamingManager;
@@ -25,7 +26,7 @@ use crate::task_tree::{CachedActivity, CachedNodeState, CachedTreeIndex, NodeFac
 use crate::thinking::ThinkingState;
 use crate::{ControlGuard, StoreError, StoreResult};
 
-const METADATA_CACHE_TTL: Duration = Duration::from_secs(30);
+pub(crate) const METADATA_CACHE_TTL: Duration = Duration::from_secs(30);
 
 /// Backend lifecycle owner for the account label held by a session.
 pub trait AccountLabelKeeper: Send + Sync {
@@ -148,6 +149,10 @@ pub struct Store {
   pub(crate) sequence_archive: Arc<dyn SequenceArchiveHook>,
   pub(crate) sequence_binding_mover: Arc<dyn SequenceBindingMover>,
   pub(crate) metadata_cache: StdMutex<HashMap<String, CachedMetadata>>,
+  /// Moves on every metadata write and every eviction of a cache entry, as `_listings_revision` does.
+  pub(crate) listings_revision: AtomicU64,
+  /// The last listing walked for each status filter (see [`Store::load_session_metas`]).
+  pub(crate) listings_memo: StdMutex<HashMap<Option<SessionStatus>, CachedListing>>,
   pub(crate) metadata_locks: StdMutex<HashMap<String, Arc<Mutex<()>>>>,
   pub(crate) events_cache: StdMutex<HashMap<String, Arc<StdMutex<Option<CachedChatEvents>>>>>,
   pub(crate) node_facts_cache: StdMutex<HashMap<String, CachedNodeFacts>>,
@@ -158,6 +163,8 @@ pub struct Store {
   #[cfg(test)]
   pub(crate) history_reads: AtomicU64,
   pub(crate) next_events_cache_generation: AtomicU64,
+  /// The next version a node-state memo entry takes when its state changes.
+  pub(crate) next_node_state_version: AtomicU64,
   #[cfg(test)]
   pub(crate) metadata_stat_hook: StdMutex<Option<MetadataStatHook>>,
   #[cfg(test)]
@@ -212,6 +219,8 @@ impl Store {
       sequence_archive,
       sequence_binding_mover,
       metadata_cache: StdMutex::new(HashMap::new()),
+      listings_revision: AtomicU64::new(0),
+      listings_memo: StdMutex::new(HashMap::new()),
       metadata_locks: StdMutex::new(HashMap::new()),
       events_cache: StdMutex::new(HashMap::new()),
       node_facts_cache: StdMutex::new(HashMap::new()),
@@ -221,6 +230,7 @@ impl Store {
       #[cfg(test)]
       history_reads: AtomicU64::new(0),
       next_events_cache_generation: AtomicU64::new(1),
+      next_node_state_version: AtomicU64::new(1),
       #[cfg(test)]
       metadata_stat_hook: StdMutex::new(None),
       #[cfg(test)]
@@ -325,6 +335,7 @@ impl Store {
   /// Invalidate cached metadata and listing snapshots after an external write or deletion.
   pub fn invalidate_cache(&self, session_id: &str) {
     self.metadata_cache.lock().expect("metadata cache mutex is not poisoned").remove(session_id);
+    self.listings_revision.fetch_add(1, Ordering::AcqRel);
   }
 
   pub(crate) async fn lock_for(&self, session_id: &str) -> tokio::sync::OwnedMutexGuard<()> {
@@ -363,6 +374,9 @@ impl Store {
       return Ok(Some(current.value.clone()));
     }
     cache.remove(session_id);
+    // The file moved without a write through this store: the next listing walks again instead of serving the rows
+    // this eviction proved stale.
+    self.listings_revision.fetch_add(1, Ordering::AcqRel);
     Ok(None)
   }
 
@@ -427,6 +441,7 @@ impl Store {
       .expect("metadata cache mutex is not poisoned")
       .insert(meta.id.clone(), CachedMetadata { value: parsed, at: Instant::now(), signature, identity: Arc::new(()) });
     crate::sidebar_state::mark_sidebar_dirty(&meta.id);
+    self.listings_revision.fetch_add(1, Ordering::AcqRel);
     Ok(())
   }
 

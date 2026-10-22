@@ -90,7 +90,7 @@ impl fmt::Display for UtcDateTime {
 }
 
 /// Session lifecycle state (`src/infra/models.py::SessionStatus`).
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionStatus {
   #[default]

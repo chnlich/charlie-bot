@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::Ordering;
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
@@ -40,10 +42,38 @@ pub struct ArchivedPage {
   pub groups: Vec<(Option<String>, usize)>,
 }
 
+/// How long a memoized listing answers before the next call walks the sessions again (`_LISTINGS_SWEEP_INTERVAL`).
+const LISTINGS_SWEEP_INTERVAL: Duration = Duration::from_secs(10);
+
+/// One status filter's listing and what it was walked at: the listings revision, the time, and the sessions root's
+/// signature.
+pub(crate) struct CachedListing {
+  revision: u64,
+  at: Instant,
+  root: (i64, i64),
+  rows: Vec<SessionMetadata>,
+}
+
 impl Store {
   /// Read all metadata rows, optionally restricted to one stored status.
+  ///
+  /// As Python's `load_session_metas`, each filter's result is memoized on the listings revision, the sessions root's
+  /// signature and a [`LISTINGS_SWEEP_INTERVAL`] clock. A metadata write through this store moves the revision, and a
+  /// created or removed session directory moves the root's signature, so both walk again on the next call. The sweep
+  /// bounds an out-of-band edit to the cache entry's expiry plus one interval.
   pub fn load_session_metas(&self, status: Option<SessionStatus>) -> StoreResult<Vec<SessionMetadata>> {
     let root = self.cfg.sessions_dir();
+    // The signature is read before the walk, so a directory created during the walk moves it past the memo's.
+    let root_signature = stat_signature(&root);
+    if let Some(signature) = root_signature
+      && let Some(hit) = self.listings_memo.lock().expect("listings memo mutex is not poisoned").get(&status)
+      && hit.revision == self.listings_revision.load(Ordering::Acquire)
+      && hit.at.elapsed() < LISTINGS_SWEEP_INTERVAL
+      && hit.root == signature
+    {
+      return Ok(hit.rows.clone());
+    }
+    let revision = self.listings_revision.load(Ordering::Acquire);
     let entries = match fs::read_dir(&root) {
       Ok(entries) => entries,
       Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -96,6 +126,10 @@ impl Store {
       if status.is_none_or(|status| meta.status == status) {
         rows.push(meta);
       }
+    }
+    if let Some(root) = root_signature {
+      let listing = CachedListing { revision, at: Instant::now(), root, rows: rows.clone() };
+      self.listings_memo.lock().expect("listings memo mutex is not poisoned").insert(status, listing);
     }
     Ok(rows)
   }
@@ -402,6 +436,40 @@ mod tests {
     let path = store.metadata_path(id);
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(&path, meta.to_json_string(&store.slots, true)).unwrap();
+  }
+
+  /// `load_session_metas`' memo: within the sweep interval a listing answers again until a write through the store or
+  /// a new session directory moves its key.
+  #[tokio::test]
+  async fn a_listing_answers_again_until_a_store_write_or_a_new_session_directory() {
+    let home = tempfile::tempdir().unwrap();
+    let store = test_store(home.path());
+    write_metadata(&store, "alpha", SessionStatus::Active, "2025-02-01T00:00:00Z", None);
+    write_metadata(&store, "beta", SessionStatus::Active, "2025-02-02T00:00:00Z", None);
+    let names = |store: &Store| {
+      let mut rows: Vec<(String, String)> =
+        store.load_session_metas(None).unwrap().into_iter().map(|meta| (meta.id, meta.name)).collect();
+      rows.sort();
+      rows
+    };
+    assert_eq!(names(&store), [("alpha".to_string(), "alpha".to_string()), ("beta".to_string(), "beta".to_string())]);
+
+    // An out-of-band edit moves no key, so the memoized rows answer even after the entry's cache window.
+    let edited = SessionMetadata::new("alpha", "alpha renamed", TaskProfile::Manager);
+    std::fs::write(store.metadata_path("alpha"), edited.to_json_string(&store.slots, true)).unwrap();
+    store.metadata_cache.lock().unwrap().get_mut("alpha").unwrap().at =
+      Instant::now() - crate::store::METADATA_CACHE_TTL - Duration::from_secs(1);
+    assert_eq!(names(&store)[0].1, "alpha");
+
+    // A write through the store moves the revision: the walk revalidates the expired entry and reads the edit.
+    let mut beta = store.get_session("beta").await.unwrap().unwrap();
+    beta.group = Some("grouped".to_string());
+    store.save_metadata_locked(&mut beta, false).unwrap();
+    assert_eq!(names(&store)[0].1, "alpha renamed");
+
+    // A new session directory moves the sessions root's signature.
+    write_metadata(&store, "gamma", SessionStatus::Active, "2025-02-03T00:00:00Z", None);
+    assert_eq!(names(&store).len(), 3);
   }
 
   /// `test_sessions_batch_metadata_read.py::test_batch_output_matches_sequential_get_session_for_mixed_fixture`:

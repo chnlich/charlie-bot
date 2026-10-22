@@ -1147,10 +1147,11 @@ impl TaskCompletion {
   /// Recheck saved own-run close requests after the matching run succeeds.
   pub async fn recheck_close_requests(&self, session_id: &str, run_id: &str) -> StoreResult<Vec<String>> {
     let facts = self.store().node_facts(session_id)?;
-    if facts.task.run_outcomes.get(run_id).map(String::as_str) != Some("success") {
+    let task = facts.task()?;
+    if task.run_outcomes.get(run_id).map(String::as_str) != Some("success") {
       return Ok(Vec::new());
     }
-    let close_requests = facts.task.close_requests.clone();
+    let close_requests = task.close_requests.clone();
     drop(facts);
     let mut remaining = Vec::new();
     for request in close_requests {
@@ -1174,7 +1175,7 @@ impl TaskCompletion {
         Err(StoreError::Conflict(blockers)) => {
           remaining.extend(blockers.iter().cloned());
           tracing::info!(target: "charliebot_tasks", session_id, request_id, blockers = ?blockers, "task_close_request_still_blocked");
-          if self.store().task_state_fast(session_id)? == "open" {
+          if self.store().node_facts(session_id)?.task()?.task_state == "open" {
             self.notify_close_request_blocked(session_id, request_id, &blockers).await?;
           }
         }
@@ -1227,7 +1228,7 @@ impl TaskCompletion {
   pub async fn after_run_finished(&self, session_id: &str, run_id: &str) -> StoreResult<()> {
     let meta = self.store().load_task_meta(session_id).await?;
     self.recheck_close_requests(session_id, run_id).await?;
-    if self.store().node_facts(session_id)?.task.run_outcomes.get(run_id).map(String::as_str) != Some("success") {
+    if self.store().node_facts(session_id)?.task()?.run_outcomes.get(run_id).map(String::as_str) != Some("success") {
       return Ok(());
     }
     let Some(run) = self.store().read_run_sync(session_id, run_id)? else {

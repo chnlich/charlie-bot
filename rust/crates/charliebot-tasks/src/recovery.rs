@@ -393,6 +393,9 @@ pub async fn reconcile_node(
   if store.load_meta(session_id).await?.is_none() {
     return Ok(());
   }
+  // Steps 1 and 2 read Run facts from this snapshot. Only the closed-task stop refreshes it, where `_reconcile_node`
+  // reloads its event list.
+  let mut runs = store.node_facts(session_id)?.runs.clone();
   let run_records = store.list_run_records_sync(session_id)?;
   // Warm the display-backend map: a fresh boot has seen no liveness notification.
   if let Some(newest) = store.newest_run_record_sync(session_id)?
@@ -414,25 +417,21 @@ pub async fn reconcile_node(
 
   // --- 1. stop requests take precedence over any launch or follow ---------
   for run in &run_records {
-    if driven(run) {
+    if driven(run) || runs.terminal_outcome(&run.id)?.is_some() {
       continue;
     }
-    let (terminal, stop_requested) = run_settlement(store, session_id, &run.id)?;
-    if terminal {
-      continue;
-    }
-    if stop_requested {
+    if runs.stop_requested(&run.id, None) {
       store.reconcile_stop_request(session_id, &run.id).await?;
     }
   }
   // A run on a non-open node without a stop fact cannot continue dispatch or hold the node open.
-  if store.task_state_fast(session_id)? != "open" {
+  if store.node_facts(session_id)?.task()?.task_state != "open" {
     for run in &run_records {
-      let (terminal, stop_requested) = run_settlement(store, session_id, &run.id)?;
-      if terminal || stop_requested {
+      if runs.terminal_outcome(&run.id)?.is_some() || runs.stop_requested(&run.id, None) {
         continue;
       }
       store.request_stop(session_id, &run.id, &closed_task_stop_request_id(&run.id)).await?;
+      runs = store.node_facts(session_id)?.runs.clone();
     }
   }
 
@@ -441,8 +440,7 @@ pub async fn reconcile_node(
     if driven(run) || run.pid.is_none() {
       continue;
     }
-    let (terminal, stop_requested) = run_settlement(store, session_id, &run.id)?;
-    if terminal || stop_requested {
+    if runs.terminal_outcome(&run.id)?.is_some() || runs.stop_requested(&run.id, None) {
       continue;
     }
     let boot = identity::read_host_boot_time().context("reading the host boot time for task recovery")?;
@@ -482,10 +480,13 @@ pub async fn replay_followups(
   let Some(meta) = store.load_meta(session_id).await? else {
     return Ok(());
   };
+  // Every run's outcome comes from this snapshot, taken where `_replay_followups` loads its event list. A follow-up
+  // that lands a later run's fact does not change that run's replay.
+  let runs = store.node_facts(session_id)?.runs.clone();
   let run_records = store.list_run_records_sync(session_id)?;
   let completion = features.startup.require::<TaskCompletion>()?;
   for (run_index, run) in run_records.iter().enumerate() {
-    let outcome = store.node_facts(session_id)?.runs.terminal_outcome(&run.id)?;
+    let outcome = runs.terminal_outcome(&run.id)?;
     // A terminal run whose end metadata write failed gets its ended_at and exit_code re-derived from the raw log.
     if let Some(outcome) = outcome
       && run.ended_at.is_none()
@@ -568,7 +569,7 @@ pub async fn replay_followups(
         if meta.task.is_some() && task_type == Some(TaskType::Implement) && run.repo_path.is_some() {
           if let Some(reason) = completion.pause_reason(session_id)? {
             tracing::info!(target: "charliebot_tasks", session_id, run_id = %run.id, reason, "worker_delivery_paused");
-          } else if replay_owes_review(store.task_state_fast(session_id)? == "open", &run_records, run)
+          } else if replay_owes_review(store.node_facts(session_id)?.task()?.task_state == "open", &run_records, run)
             && adapter.maybe_spawn_review(session_id, run).await?.is_none()
           {
             let cfg = features.config.get()?;
@@ -886,12 +887,6 @@ where
   }
 }
 
-/// The Run's terminal fact and stop request in the node's shared folded facts: `(terminal, stop_requested)`.
-fn run_settlement(store: &Store, session_id: &str, run_id: &str) -> StoreResult<(bool, bool)> {
-  let facts = store.node_facts(session_id)?;
-  Ok((facts.runs.terminal_outcome(run_id)?.is_some(), facts.runs.stop_requested(run_id, None)))
-}
-
 fn controller_for_sequence(features: &FeatureContext, kind: &str) -> Option<Arc<dyn SequenceController>> {
   features.registry.sequence_controllers().find(|controller| controller.sequence_kind() == kind).cloned()
 }
@@ -1197,6 +1192,66 @@ mod tests {
     let events = features.store.load_all_facts(&session_id).expect("the session facts load");
     let outcome = run_records::terminal_outcome(&events, QUEUED_RUN_ID).expect("the terminal fact reads");
     assert_eq!(outcome, Some(RunOutcomeKind::Interrupted));
+  }
+
+  /// A queued run on a node whose newest `task_closed` fact repeats an earlier event id. The fold skips a repeated id,
+  /// so the node stays open, and the pass keeps the run unsettled. A read of the newest lifecycle line alone would call
+  /// the node closed and settle the run with a closed-task stop.
+  #[tokio::test]
+  async fn the_closed_node_check_reads_the_task_state_of_the_full_fold() {
+    let (_home, features) = startup_features().await;
+    let session_id = queue_sequence_run(&features, "synthetic-kind", RunKind::Work).await;
+    for event in [
+      json!({"id": "synthetic-repeated-id", "type": "synthetic_note"}),
+      json!({"id": "synthetic-repeated-id", "type": "task_closed", "outcome": "completed"}),
+    ] {
+      features.store.append_chat_event(&session_id, event).await.expect("the synthetic fact appends");
+    }
+    assert_eq!(features.store.task_state(&session_id).expect("the task state folds"), "open");
+
+    node_pass(&features, &session_id).await.expect("the node pass finishes");
+
+    let events = features.store.load_all_facts(&session_id).expect("the session facts load");
+    assert!(
+      !run_records::stop_requested_in_events(&events, QUEUED_RUN_ID, None),
+      "the pass settled a queued run of an open node with a closed-task stop"
+    );
+  }
+
+  /// A pid above Linux's `PID_MAX_LIMIT` (2^22 on 64-bit), so no process holds it and no stop signal is ever sent.
+  const UNUSED_PID: u32 = (1 << 22) + 95;
+
+  /// A malformed `task_imported` fact fails the task fold. The Run facts still answer, so the pass lands the durable
+  /// stop of a dead launched run before the closed-node check returns the fold's error.
+  #[tokio::test]
+  async fn a_rejected_task_fold_fails_the_pass_after_the_stop_requests_land() {
+    let (_home, features) = startup_features().await;
+    let store = &features.store;
+    let session_id = queue_sequence_run(&features, "synthetic-kind", RunKind::Work).await;
+    let launched_id = "synthetic-launched-run";
+    let launched = RunRecord {
+      session_id: session_id.clone(),
+      pid: Some(UNUSED_PID),
+      pid_start: Some("1".to_string()),
+      ..run(launched_id, RunKind::Work, Some("2026-10-18T10:00:00Z"))
+    };
+    {
+      let guard = store.control_lock().await;
+      store.register_run_locked(&guard, &session_id, launched, None).await.expect("the launched run registers");
+      store
+        .append_stop_request_locked(&guard, &session_id, launched_id, "synthetic-stop")
+        .await
+        .expect("the stop lands");
+    }
+    let import = json!({"id": "synthetic-import", "type": "task_imported", "pending_inputs": [{}]});
+    store.append_chat_event(&session_id, import).await.expect("the malformed import fact appends");
+
+    let error = node_pass(&features, &session_id).await.expect_err("the task fold rejects the import fact");
+
+    assert!(format!("{error:#}").contains("without a stable input_id"), "the fold's error fails the pass: {error:#}");
+    let events = store.load_all_facts(&session_id).expect("the session facts load");
+    let outcome = run_records::terminal_outcome(&events, launched_id).expect("the terminal fact reads");
+    assert_eq!(outcome, Some(RunOutcomeKind::Interrupted), "the stop request landed before the pass failed");
   }
 
   /// Creates a closed implement worker node with `run_count` successful work runs. Each run carries the repository path,

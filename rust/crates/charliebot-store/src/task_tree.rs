@@ -94,11 +94,27 @@ pub struct TaskFacts {
   pub covered: usize,
 }
 
-/// A node's folded facts: the task fold and the Run facts of the same history.
-#[derive(Clone, Debug, Default)]
+/// A node's folded facts: the Run facts and the task fold of the same history.
+///
+/// The Run facts fold every history. The task fold rejects a history that holds a malformed `task_imported` fact; that
+/// history keeps its Run facts and answers [`NodeFacts::task`] with the fold's error, as [`Store::facts_of`] does.
+#[derive(Clone, Debug)]
 pub struct NodeFacts {
-  pub task: TaskFacts,
   pub runs: RunFacts,
+  task: Result<TaskFacts, String>,
+}
+
+impl NodeFacts {
+  /// The task fold, or the error that [`Store::facts_of`] returns for the same history.
+  pub fn task(&self) -> StoreResult<&TaskFacts> {
+    self.task.as_ref().map_err(|message| StoreError::new(message.clone()))
+  }
+}
+
+impl Default for NodeFacts {
+  fn default() -> Self {
+    Self { runs: RunFacts::default(), task: Ok(TaskFacts::default()) }
+  }
 }
 
 impl Default for TaskFacts {
@@ -195,6 +211,10 @@ impl Store {
   }
 
   /// The node's folded facts, shared. A read after appends folds only the events appended since the last read.
+  ///
+  /// The memo answers what a fold of [`Store::load_all_facts`] answers because its key covers every input of that
+  /// read: the live-cache generation and the archived extent. A load from disk takes a new generation. Within one
+  /// generation the cached list changes only by `append_chat_event` pushes, which the suffix fold extends.
   pub fn node_facts(&self, session_id: &str) -> StoreResult<Arc<NodeFacts>> {
     let (generation, live) = self.live_events_with_generation(session_id)?;
     let archived = self.read_archive_offset(session_id)?;
@@ -207,7 +227,7 @@ impl Store {
         let mut facts = NodeFacts::default();
         if archived > 0 {
           let archive = self.load_archive_range(session_id, 0, archived)?;
-          fold_node_facts_from(&mut facts, &archive, 0)?;
+          fold_node_facts_from(&mut facts, &archive, 0);
           self.history_work.folded_events.fetch_add(archive.len() as u64, Ordering::Relaxed);
         }
         self.history_work.full_folds.fetch_add(1, Ordering::Relaxed);
@@ -216,7 +236,7 @@ impl Store {
     };
     if entry.covered < live.len() {
       let suffix = &live[entry.covered..];
-      fold_node_facts_from(Arc::make_mut(&mut entry.facts), suffix, archived + entry.covered)?;
+      fold_node_facts_from(Arc::make_mut(&mut entry.facts), suffix, archived + entry.covered);
       self.history_work.folded_events.fetch_add(suffix.len() as u64, Ordering::Relaxed);
       entry.covered = live.len();
     }
@@ -235,39 +255,6 @@ impl Store {
   /// Read the node’s fact-derived lifecycle state.
   pub fn task_state(&self, session_id: &str) -> StoreResult<TaskState> {
     Ok(self.facts_of(session_id)?.task_state)
-  }
-
-  /// Read task state from the newest live lifecycle fact, falling back to the full fold when the tail cannot decide.
-  pub fn task_state_fast(&self, session_id: &str) -> StoreResult<TaskState> {
-    let file_identity = self.chat_events_identity(session_id)?;
-    let archive_offset = self.read_archive_offset(session_id)?;
-    let identity = file_identity
-      .map(|(device, inode, size, mtime, mtime_nsec)| (device, inode, size, mtime, mtime_nsec, archive_offset));
-    if let Some(cached) =
-      self.task_state_tail_cache.lock().expect("task state tail cache mutex is not poisoned").get(session_id)
-      && cached.identity == identity
-    {
-      return Ok(cached.state.clone());
-    }
-    let state = match self.latest_task_lifecycle_event(session_id)? {
-      Some(event) => match event.get("type").and_then(Value::as_str) {
-        Some("clone_start" | "task_reopened") => "open".to_string(),
-        Some("task_closed") => event
-          .get("outcome")
-          .and_then(Value::as_str)
-          .filter(|outcome| !outcome.is_empty())
-          .unwrap_or("completed")
-          .to_string(),
-        _ => unreachable!("tail reader returns only lifecycle events"),
-      },
-      None => self.node_facts(session_id)?.task.task_state.clone(),
-    };
-    self
-      .task_state_tail_cache
-      .lock()
-      .expect("task state tail cache mutex is not poisoned")
-      .insert(session_id.to_string(), crate::store::CachedTaskStateTail { identity, state: state.clone() });
-    Ok(state)
   }
 
   /// Rebuild the cached task index after a node metadata write.
@@ -1564,12 +1551,16 @@ fn fold_task_facts_from(facts: &mut TaskFacts, events: &[Value], offset: usize) 
   Ok(())
 }
 
-/// Fold `events`, which start at absolute history position `offset`, into the node's facts.
-fn fold_node_facts_from(facts: &mut NodeFacts, events: &[Value], offset: usize) -> StoreResult<()> {
+/// Fold `events`, which start at absolute history position `offset`, into the node's facts. A task fold error stays:
+/// the rejected fact remains in the history for as long as the memo covers it.
+fn fold_node_facts_from(facts: &mut NodeFacts, events: &[Value], offset: usize) {
   for event in events {
     facts.runs.observe(event);
   }
-  fold_task_facts_from(&mut facts.task, events, offset)
+  let Ok(task) = &mut facts.task else { return };
+  if let Err(error) = fold_task_facts_from(task, events, offset) {
+    facts.task = Err(error.to_string());
+  }
 }
 
 fn admits_input(event: &Value) -> bool {
@@ -2916,34 +2907,20 @@ pub(crate) mod tests {
     let node = create_node(&store, "node-facts-suffix", None, TaskProfile::Manager).await;
 
     let before = store.history_work();
-    assert_eq!(store.node_facts(&node.id).unwrap().task.task_state, "open");
+    assert_eq!(store.node_facts(&node.id).unwrap().task().unwrap().task_state, "open");
     append(&store, &node.id, json!({"id": "user-a", "type": "user", "content": "first"})).await;
     append(&store, &node.id, json!({"type": "task_closed", "outcome": "completed"})).await;
     append(&store, &node.id, json!({"id": "user-b", "type": "user", "content": "after close"})).await;
     let folded = store.node_facts(&node.id).unwrap();
+    let folded = folded.task().unwrap();
     let full = store.facts_of(&node.id).unwrap();
-    assert_eq!(folded.task.task_state, full.task_state);
-    assert_eq!(folded.task.covered, full.covered);
-    assert_eq!(folded.task.boundary_index, full.boundary_index);
-    assert_eq!(folded.task.input_candidates, full.input_candidates);
+    assert_eq!(folded.task_state, full.task_state);
+    assert_eq!(folded.covered, full.covered);
+    assert_eq!(folded.boundary_index, full.boundary_index);
+    assert_eq!(folded.input_candidates, full.input_candidates);
     let work = store.history_work();
     assert_eq!(work.full_folds - before.full_folds, 1);
     assert_eq!(work.folded_events - before.folded_events, full.covered as u64);
-  }
-
-  #[tokio::test]
-  async fn task_state_fast_tracks_lifecycle_facts_appended_after_a_cached_read() {
-    let home = tempfile::tempdir().unwrap();
-    let store = make_store(home.path());
-    let node = create_node(&store, "task-state-tail", None, TaskProfile::Manager).await;
-
-    assert_eq!(store.task_state_fast(&node.id).unwrap(), "open");
-    append(&store, &node.id, json!({"type": "task_closed", "outcome": "completed"})).await;
-    assert_eq!(store.task_state_fast(&node.id).unwrap(), store.task_state(&node.id).unwrap());
-    append(&store, &node.id, json!({"type": "task_reopened"})).await;
-    assert_eq!(store.task_state_fast(&node.id).unwrap(), "open");
-    append(&store, &node.id, json!({"type": "clone_start"})).await;
-    assert_eq!(store.task_state_fast(&node.id).unwrap(), store.task_state(&node.id).unwrap());
   }
 
   #[test]

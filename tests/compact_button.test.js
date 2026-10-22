@@ -151,7 +151,7 @@ test('compactContext posts the exact same request shape as the shared message-se
   await context.compactContext();
   assert.equal(calls.length, 1);
 
-  await context.Chat.postChatMessage('/compact');
+  await context.Chat.postChatMessage('session-a', '/compact');
   assert.equal(calls.length, 2);
 
   assert.equal(calls[0].url, calls[1].url);
@@ -162,6 +162,34 @@ test('compactContext posts the exact same request shape as the shared message-se
   assert.equal(secondBody.content, '/compact');
   assert.equal(firstBody.request_id, 'request-1');
   assert.equal(secondBody.request_id, 'request-2');
+});
+
+test('a /compact the server refuses fails its bubble without ending a thinking round it never started', async () => {
+  const context = loadChatContext(new Map([
+    ['messages', new FakeElement('DIV')],
+    ['usage-text', Object.assign(new FakeElement('SPAN'), { textContent: '50k / 200k' })],
+  ]));
+  const systemLines = [];
+  let stopped = 0;
+  let attempts = 0;
+  context.appendMessage = (role, content) => {
+    if (role === 'system') systemLines.push(content);
+    return {};
+  };
+  context.setMessageDeliveryStatus = () => {};
+  context.stopThinking = () => {
+    stopped += 1;
+  };
+  context.fetch = async () => {
+    attempts += 1;
+    return {ok: false, status: 409, json: async () => ({})};
+  };
+
+  await context.compactContext();
+
+  assert.equal(attempts, 1, 'a 4xx is never retried');
+  assert.equal(stopped, 0);
+  assert.deepEqual(systemLines, ['Failed to send message']);
 });
 
 // ---------------------------------------------------------------------------

@@ -356,6 +356,31 @@ test('a network error retries with the same request id and keeps one optimistic 
   assert.equal(messages.some((message) => message.content === 'Failed to send message'), false);
 });
 
+test('a retry lands in the session the message was typed in after the view switches away', async () => {
+  const h = buildLockHarness();
+  captureSendMessages(h);
+  let releaseRetry;
+  h.context.setTimeout = (callback) => {
+    releaseRetry = callback;
+    return 1;
+  };
+  let attempt = 0;
+  h.fetchImpl = async () => {
+    attempt += 1;
+    if (attempt === 1) throw new TypeError('offline');
+    return {ok: true, status: 202, json: async () => ({})};
+  };
+  h.elements.get('msg-input').value = 'typed in session a';
+
+  const sendPromise = h.context.sendMessage();
+  await flush();
+  h.context.SESSION_ID = 'session-b';
+  releaseRetry();
+  await sendPromise;
+
+  assert.deepEqual(h.fetchCalls.map((call) => call.url), ['/api/chat/session-a/message', '/api/chat/session-a/message']);
+});
+
 test('a 5xx retries with the same request id', async () => {
   const h = buildLockHarness();
   const {messages} = captureSendMessages(h);
@@ -396,11 +421,16 @@ test('a 4xx stops retries, marks the bubble failed, and shows the existing failu
     }
     return {ok: true, status: 200, json: async () => ({})};
   };
+  let stopped = 0;
+  h.context.stopThinking = () => {
+    stopped += 1;
+  };
   h.elements.get('msg-input').value = 'rejected message';
 
   await h.context.sendMessage();
 
   assert.equal(messageAttempts, 1);
+  assert.equal(stopped, 1, 'the send that started the thinking round ends it on refusal');
   assert.deepEqual(statusUpdates, ['Failed']);
   assert.equal(messages.filter((message) => message.role === 'user')[0].delivery_status, 'Failed');
   assert.equal(messages.filter((message) => message.content === 'Failed to send message').length, 1);

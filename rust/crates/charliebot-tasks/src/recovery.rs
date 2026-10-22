@@ -266,13 +266,23 @@ async fn wait_test_recovery_gate(features: &FeatureContext) -> anyhow::Result<()
   Ok(())
 }
 
-/// On SIGINT and bind failure, cancel each session consumer after `server.py:293-310`, as `asyncio.run` does
-/// (`asyncio/runners.py:66-75`). Each running turn follows `master_cc_run.py:648-664`; SIGTERM skips this step because
-/// Uvicorn re-raises it first (`uvicorn/server.py:322-339`).
+/// On SIGINT and bind failure, cancel each run launch and then each session consumer after `server.py:293-310`, as
+/// `asyncio.run` does (`asyncio/runners.py:66-75`). A cancelled launch leaves its run for the next boot
+/// (`TaskExecutionAdapter::let_go_launches`); each running turn follows `master_cc_run.py:648-664`. The launches go
+/// first so that a manager launch never reaches the stopped queue. SIGTERM skips this step because Uvicorn re-raises it
+/// first (`uvicorn/server.py:322-339`). A failure of the first half still runs the second.
 pub fn let_go_step(features: Arc<FeatureContext>) -> BoxFuture<'static, anyhow::Result<()>> {
   Box::pin(async move {
+    let adapter = features.startup.require::<TaskExecutionAdapter>()?;
     let queue = features.startup.require::<MasterQueue>()?;
-    queue.shutdown().await
+    let launches = adapter.let_go_launches().await;
+    let consumers = queue.shutdown().await;
+    match (launches, consumers) {
+      (Ok(()), result) | (result, Ok(())) => result,
+      (Err(launch_error), Err(consumer_error)) => {
+        Err(consumer_error.context(format!("cancelling the run launches also failed: {launch_error:#}")))
+      }
+    }
   })
 }
 

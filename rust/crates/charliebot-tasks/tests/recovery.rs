@@ -12,14 +12,20 @@ use std::collections::HashSet;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::sync::{Arc, Condvar, Mutex, mpsc};
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::Context;
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode, header};
 use charliebot_agents::transport::identity;
+use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::event_types;
+use charliebot_registry::backend::{
+  AgentBackend, BackendFactory, BackendTraits, BackendTypeRegistration, Env, LaunchArgs, ResumeStyle, Translate,
+  TransportKind,
+};
 use charliebot_registry::caller::CallerIdentity;
 use charliebot_registry::sequence::{SequenceCompletion, SequenceExecutor};
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskSpec, TaskType, UtcDateTime};
@@ -30,7 +36,7 @@ use charliebot_tasks::execution::is_out_of_space_error;
 use charliebot_tasks::recovery::{self, PassCounters};
 use process_guard::ProcessGroupGuard;
 use recovery_support::{
-  BACKEND_ID, LOOP_KIND, LogCapture, LoopClose, LoopMarker, PROBE_KIND, Stack, SyntheticRepo,
+  BACKEND_ID, BACKEND_TYPE, LOOP_KIND, LogCapture, LoopClose, LoopMarker, PROBE_KIND, Scripts, Stack, SyntheticRepo,
   assert_logged_node_failure, cold_read_spec, implement_spec, last_child_report, script_option, synthetic_run,
 };
 use serde_json::{Map, Value, json};
@@ -335,6 +341,336 @@ async fn restart_after_launch_reattaches_live_process() -> anyhow::Result<()> {
   assert_eq!(run.pid, Some(live.id()));
   assert_eq!(run_records::terminal_outcome(&stack.run_events(&worker.id)?, "run-live")?, Some(RunOutcomeKind::Success));
   Ok(())
+}
+
+/// A one-time stop of the thread that polls a launch, at a point inside one poll of the launch task. It stands in for
+/// the synchronous work a launch can be doing when the server stops.
+struct Hold {
+  state: Mutex<HoldState>,
+  changed: Condvar,
+}
+
+struct HoldState {
+  entered: bool,
+  released: bool,
+}
+
+impl Hold {
+  const fn new() -> Self {
+    Hold { state: Mutex::new(HoldState { entered: false, released: false }), changed: Condvar::new() }
+  }
+
+  /// Block the first caller until `release` and return true; every later call returns false at once.
+  fn hold(&self) -> bool {
+    let mut state = self.state.lock().expect("hold state is not poisoned");
+    if state.entered {
+      return false;
+    }
+    state.entered = true;
+    while !state.released {
+      state = self.changed.wait(state).expect("hold state is not poisoned");
+    }
+    true
+  }
+
+  fn entered(&self) -> bool {
+    self.state.lock().expect("hold state is not poisoned").entered
+  }
+
+  fn release(&self) {
+    self.state.lock().expect("hold state is not poisoned").released = true;
+    self.changed.notify_all();
+  }
+}
+
+/// The launch's backend build, which runs just before `worker_starting`.
+static BUILD_HOLD: Hold = Hold::new();
+/// The translation of the agent's first raw line, while the agent runs.
+static TRANSLATE_HOLD: Hold = Hold::new();
+const HELD_BUILD_TYPE: &str = "held_build";
+const HELD_TRANSLATE_TYPE: &str = "held_translate";
+
+/// Where a held backend stops at its hold.
+#[derive(Clone, Copy)]
+enum HoldPoint {
+  Build,
+  Translate,
+}
+
+/// A `/bin/sh` backend over its option's script, whose factory or translator stops at `hold`.
+struct HeldFactory {
+  hold: &'static Hold,
+  point: HoldPoint,
+}
+
+impl BackendFactory for HeldFactory {
+  fn build(
+    &self,
+    option: Option<&BackendOption>,
+    _cfg: &CharlieBotConfig,
+    _launch: LaunchArgs,
+  ) -> anyhow::Result<Box<dyn AgentBackend>> {
+    let option = option.context("a held backend requires an option")?;
+    let script = option.type_fields.get("script").and_then(serde_yaml::Value::as_str).context("no script")?;
+    let translate_hold = match self.point {
+      HoldPoint::Build => {
+        self.hold.hold();
+        None
+      }
+      HoldPoint::Translate => Some(self.hold),
+    };
+    Ok(Box::new(HeldBackend { script: script.to_string(), translate_hold }))
+  }
+}
+
+struct HeldBackend {
+  script: String,
+  translate_hold: Option<&'static Hold>,
+}
+
+impl AgentBackend for HeldBackend {
+  fn instructions_target(&self) -> Option<(&'static str, &'static str)> {
+    None
+  }
+
+  fn prepare_transport(&mut self, _log_dir: &Path) -> anyhow::Result<()> {
+    Ok(())
+  }
+
+  fn build_command(&self, _prompt: &str) -> anyhow::Result<Vec<String>> {
+    Ok(vec!["/bin/sh".to_string(), "-c".to_string(), self.script.clone()])
+  }
+
+  fn prepare_env(&self, env: Env) -> anyhow::Result<Env> {
+    Ok(env)
+  }
+
+  fn stdin_prompt(&self, _prompt: &str) -> Option<String> {
+    None
+  }
+
+  fn translator(&self) -> Box<dyn Translate> {
+    Box::new(HeldTranslate(self.translate_hold))
+  }
+
+  fn transport(&self) -> TransportKind {
+    TransportKind::RawLog
+  }
+}
+
+/// Translates each raw line to itself, except the line that waited at the hold: that one yields no event, so the
+/// follow's next await after it is the raw log's metadata read, a blocking-pool call.
+struct HeldTranslate(Option<&'static Hold>);
+
+impl Translate for HeldTranslate {
+  fn translate(&mut self, raw: Value) -> anyhow::Result<Vec<Value>> {
+    if self.0.is_some_and(Hold::hold) {
+      return Ok(Vec::new());
+    }
+    Ok(vec![raw])
+  }
+}
+
+fn held_type(type_name: &'static str, factory: HeldFactory) -> BackendTypeRegistration {
+  BackendTypeRegistration {
+    type_name,
+    traits: BackendTraits {
+      resume: ResumeStyle::CliFlag,
+      restart_reattach: false,
+      preassigned_session_id: false,
+      family_prefix: None,
+      manual_compact: false,
+      compact_hint: None,
+    },
+    option_model: |_| Ok(()),
+    factory: Arc::new(factory),
+    lifecycle: None,
+    translate_fallback: false,
+  }
+}
+
+fn register_held_types(registry: &mut charliebot_registry::Registry) -> Result<(), charliebot_registry::RegistryError> {
+  registry.backend_type(held_type(HELD_BUILD_TYPE, HeldFactory { hold: &BUILD_HOLD, point: HoldPoint::Build }))?;
+  registry
+    .backend_type(held_type(HELD_TRANSLATE_TYPE, HeldFactory { hold: &TRANSLATE_HOLD, point: HoldPoint::Translate }))
+}
+
+/// The server's runtime (`charliebot-server` `run_server`).
+fn server_runtime() -> anyhow::Result<tokio::runtime::Runtime> {
+  Ok(tokio::runtime::Builder::new_multi_thread().enable_all().build()?)
+}
+
+/// Release `hold` once the runtime's blocking pool refuses work, which `Runtime::drop` starts after the let-go returns,
+/// or after `limit`, whichever comes first. A launch that is still in its poll at the refusal sees each blocking-pool
+/// call fail with `background task failed`.
+fn release_at_teardown(hold: &'static Hold, runtime: tokio::runtime::Handle, limit: Duration) -> JoinHandle<()> {
+  std::thread::spawn(move || {
+    let deadline = Instant::now() + limit;
+    while Instant::now() < deadline {
+      let (sender, receiver) = mpsc::channel();
+      drop(runtime.spawn_blocking(move || sender.send(())));
+      // A refused closure is dropped unrun, which closes the channel.
+      if receiver.recv().is_err() {
+        break;
+      }
+      std::thread::sleep(Duration::from_millis(5));
+    }
+    hold.release();
+  })
+}
+
+/// A worker under a manager whose input the stack dispatched, as a trigger that the boot recovers dispatches it. The
+/// run's launch is in flight.
+struct DispatchedWorker {
+  stack: Stack,
+  manager_id: String,
+  worker_id: String,
+  run_id: String,
+}
+
+/// Dispatch a worker's first input on a stack whose one option is `backend_type` running `script`.
+async fn dispatched_worker(backend_type: &str, script: &str) -> anyhow::Result<DispatchedWorker> {
+  let option = BackendOption { backend_type: backend_type.to_string(), ..script_option(BACKEND_ID, script) };
+  let stack =
+    Stack::start_with_package(vec![option], vec![BACKEND_ID.to_string()], ("test.held_backends", register_held_types))
+      .await?;
+  test_access_key(&stack)?;
+  let manager = stack.node("manager", None, TaskProfile::Manager, None).await?;
+  let worker = stack.node("worker", Some(&manager.id), TaskProfile::Worker, Some(script_run_spec())).await?;
+  stack.dispatch.admit_input(&worker.id, event_types::USER, "Start the task.", "user", json!({})).await?;
+  let decision = stack.dispatch.dispatch_pending(&worker.id).await?;
+  let run_id = decision["run_id"].as_str().with_context(|| format!("the dispatch names no run: {decision}"))?;
+  Ok(DispatchedWorker { stack, manager_id: manager.id, worker_id: worker.id, run_id: run_id.to_string() })
+}
+
+/// Stop the server the way SIGINT does after its services stop: the let-go step, then the runtime's drop. The hold is
+/// released at the drop, or after a bound when the let-go waits on the held launch.
+fn stop_server(runtime: tokio::runtime::Runtime, stack: &Stack, hold: &'static Hold) -> anyhow::Result<()> {
+  let releaser = release_at_teardown(hold, runtime.handle().clone(), Duration::from_millis(300));
+  runtime.block_on(recovery::let_go_step(Arc::clone(&stack.features)))?;
+  drop(runtime);
+  releaser.join().expect("the hold releaser does not panic");
+  Ok(())
+}
+
+/// The durable facts a cut launch leaves, which Python's next boot reads: no terminal fact, no error event in the run's
+/// events log, no report to the parent, no close, and an open task.
+fn assert_cut_launch_facts(cut: &DispatchedWorker) -> anyhow::Result<()> {
+  let DispatchedWorker { stack, manager_id, worker_id, run_id } = cut;
+  let facts = stack.run_events(worker_id)?;
+  assert_eq!(run_records::terminal_outcome(&facts, run_id)?, None, "the cut run has no terminal fact");
+  assert_eq!(child_reports(stack, manager_id)?.len(), 0, "the cut run reports nothing");
+  assert_eq!(closes_of(stack, worker_id)?, 0, "the cut run closes nothing");
+  assert_eq!(stack.store().task_state(worker_id)?, "open");
+  let events_log = stack.store().run_dir(worker_id, run_id).join(run_records::RUN_EVENTS_NAME);
+  let error_events = std::fs::read_to_string(&events_log)
+    .unwrap_or_default()
+    .lines()
+    .filter(|line| serde_json::from_str::<Value>(line).is_ok_and(|event| event["type"] == "error"))
+    .count();
+  assert_eq!(error_events, 0, "the cut run's events log records no failure");
+  Ok(())
+}
+
+/// The next server boot on the cut stack's home, with `scripts` behind its one option: the boot pass, then the cut run's
+/// end and the parent's turn on the run's report.
+async fn boot_after_cut(
+  cut: &DispatchedWorker,
+  scripts: &Scripts,
+  guard: &ProcessGroupGuard,
+  before_end: impl FnOnce(&PassCounters) -> anyhow::Result<()>,
+) -> anyhow::Result<Stack> {
+  let next = Stack::start_on_home(
+    Arc::clone(&cut.stack.home),
+    vec![scripts.option(BACKEND_ID, BACKEND_TYPE)],
+    vec![BACKEND_ID.to_string()],
+  )
+  .await?;
+  let counters = next.boot().await?;
+  before_end(&counters)?;
+  assert_eq!(wait_for_run(&next, guard, &cut.worker_id, &cut.run_id).await?, RunOutcomeKind::Success);
+  settle_until(|| Ok(!run_ids_of_kind(&next, &cut.manager_id, RunKind::ManagerTurn)?.is_empty())).await?;
+  settle_manager(&next, &cut.manager_id).await?;
+  let reports = child_reports(&next, &cut.manager_id)?;
+  assert_eq!(reports.len(), 1, "{reports:?}");
+  assert_eq!(reports[0]["outcome"], "completed");
+  assert_eq!(next.run_records(&cut.worker_id)?.len(), 1, "the next boot registers no second run");
+  Ok(next)
+}
+
+/// A launch that the server's stop cuts before its agent starts, while the launch is still inside one poll. Python's
+/// cancel passes the launch's `except Exception` handlers, so the run keeps no process, no end and no terminal fact, and
+/// its task stays open (`task_execution.py:719`, `:861`, `:1488`). The next boot's dispatch launches the same run
+/// (`_reconcile_node` step 4, `session_dispatch.py:455-497`).
+#[test]
+fn a_launch_the_stop_cuts_before_its_agent_starts_runs_at_the_next_boot() -> anyhow::Result<()> {
+  let runtime = server_runtime()?;
+  let cut = runtime.block_on(async {
+    let cut = dispatched_worker(HELD_BUILD_TYPE, &result_script("never runs")).await?;
+    settle_until(|| Ok(BUILD_HOLD.entered())).await?;
+    anyhow::Ok(cut)
+  })?;
+  stop_server(runtime, &cut.stack, &BUILD_HOLD)?;
+
+  let run = cut.stack.store().read_run_sync(&cut.worker_id, &cut.run_id)?.context("the cut run is recorded")?;
+  assert_eq!((run.pid, run.started_at, run.ended_at, run.exit_code), (None, None, None, None), "{run:?}");
+  assert_cut_launch_facts(&cut)?;
+
+  server_runtime()?.block_on(async {
+    let guard = ProcessGroupGuard::new();
+    let scripts = Scripts::new(vec![result_script("relaunched"), result_script("report noted")]);
+    let next = boot_after_cut(&cut, &scripts, &guard, |_| Ok(())).await?;
+    let run = next.store().read_run_sync(&cut.worker_id, &cut.run_id)?.context("the run is recorded")?;
+    assert!(run.pid.is_some(), "the next boot launched the cut run: {run:?}");
+    anyhow::Ok(())
+  })
+}
+
+/// A launch whose agent runs when the server stops. Python's cancel leaves the agent running, with its process
+/// identity recorded and no terminal fact (`agent_process/base.py:994-1012`). The next boot re-attaches the run, and
+/// the agent's own result ends it (`_reconcile_node` step 2).
+#[test]
+fn a_launch_the_stop_cuts_while_its_agent_runs_is_reattached_at_the_next_boot() -> anyhow::Result<()> {
+  let release = tempfile::tempdir()?;
+  let release_file = release.path().join("release");
+  let script = format!(
+    "printf '%s\\n' '{}'; while [ ! -e '{}' ]; do sleep 0.05; done; {}",
+    json!({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "working"}]}}),
+    release_file.display(),
+    result_script("finished after the restart"),
+  );
+  let runtime = server_runtime()?;
+  let cut = runtime.block_on(async {
+    let cut = dispatched_worker(HELD_TRANSLATE_TYPE, &script).await?;
+    settle_until(|| Ok(TRANSLATE_HOLD.entered())).await?;
+    anyhow::Ok(cut)
+  })?;
+  let guard = ProcessGroupGuard::new();
+  let run = cut.stack.store().read_run_sync(&cut.worker_id, &cut.run_id)?.context("the cut run is recorded")?;
+  let pid = run.pid.context("the agent's identity is recorded before its first line")?;
+  guard.track(pid);
+  stop_server(runtime, &cut.stack, &TRANSLATE_HOLD)?;
+
+  let run = cut.stack.store().read_run_sync(&cut.worker_id, &cut.run_id)?.context("the cut run is recorded")?;
+  assert_eq!(run.pid, Some(pid));
+  assert!(run.started_at.is_some() && run.ended_at.is_none() && run.exit_code.is_none(), "{run:?}");
+  let pid_start = run.pid_start.clone().context("the cut run records its start tick")?;
+  let stat = identity::read_pid_stat(pid).filter(|stat| stat.pid_start == pid_start);
+  assert!(stat.is_some_and(|stat| stat.state != "Z"), "the agent keeps running after the stop");
+  assert_cut_launch_facts(&cut)?;
+
+  server_runtime()?.block_on(async {
+    let scripts = Scripts::new(vec![result_script("report noted")]);
+    let next = boot_after_cut(&cut, &scripts, &guard, |counters| {
+      assert_eq!(counters.resumed, 1, "the live run is re-attached: {counters:?}");
+      std::fs::write(&release_file, "")?;
+      Ok(())
+    })
+    .await?;
+    let run = next.store().read_run_sync(&cut.worker_id, &cut.run_id)?.context("the run is recorded")?;
+    assert_eq!(run.pid, Some(pid), "the re-attached run keeps its agent");
+    anyhow::Ok(())
+  })
 }
 
 /// `test_task_recovery.py::test_retry_and_boot_reconcile_repair_half_written_end_metadata` (the boot half): a terminal

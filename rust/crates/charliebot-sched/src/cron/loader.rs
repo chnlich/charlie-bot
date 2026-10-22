@@ -1,7 +1,10 @@
 //! `cron.d` file loading, prompt pointers, broken-file alerts and backend startup validation.
 
+use std::collections::HashMap;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::repo_root::RepoRoot;
@@ -18,7 +21,35 @@ pub struct CronSnapshot {
   pub tasks: Vec<ScheduledTaskConfig>,
   /// Broken file records sorted by filename.
   pub errors: Vec<ScheduledTaskError>,
+  /// Unique generation of the YAML and prompt-file fingerprint that produced this snapshot.
+  pub fingerprint: u64,
 }
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct SnapshotKey {
+  directory: PathBuf,
+  repo: PathBuf,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct SnapshotFingerprint {
+  cron_files: Vec<(String, f64)>,
+  prompt_files: Option<Vec<(PathBuf, f64)>>,
+}
+
+#[derive(Clone)]
+struct CachedSnapshot {
+  snapshot: CronSnapshot,
+  fingerprint: SnapshotFingerprint,
+  prompt_paths: Vec<PathBuf>,
+}
+
+static SNAPSHOTS: OnceLock<Mutex<HashMap<SnapshotKey, CachedSnapshot>>> = OnceLock::new();
+static NEXT_SNAPSHOT_GENERATION: AtomicU64 = AtomicU64::new(1);
+#[cfg(test)]
+static CRON_FILE_READS: OnceLock<Mutex<HashMap<PathBuf, usize>>> = OnceLock::new();
+#[cfg(test)]
+static PROMPT_FILE_READS: OnceLock<Mutex<HashMap<PathBuf, usize>>> = OnceLock::new();
 
 /// Return the file directory owned by this profile.
 pub fn cron_dir(cfg: &CharlieBotConfig) -> PathBuf {
@@ -37,22 +68,47 @@ pub fn valid_name(name: &str) -> bool {
     && chars.all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-'))
 }
 
-/// Reload every visible YAML config, retaining an error per broken file.
+/// Return the unchanged YAML and prompt snapshot until one of its file mtimes moves.
 pub fn load_snapshot(features: &Arc<FeatureContext>, cfg: &CharlieBotConfig) -> anyhow::Result<CronSnapshot> {
   let repo = repo_root(features);
   let directory = cron_dir(cfg);
-  let entries = match std::fs::read_dir(&directory) {
+  let (snapshot, reloaded) = load_snapshot_for_paths(&directory, repo.path())?;
+  if reloaded {
+    fire_error_alert(features, cfg, &snapshot.errors);
+  }
+  Ok(snapshot)
+}
+
+/// Load one shared cron snapshot by the same YAML and prompt mtimes Python uses in `src/features/cron/loader.py:436-476`.
+pub(crate) fn load_snapshot_for_paths(directory: &Path, repo: &Path) -> anyhow::Result<(CronSnapshot, bool)> {
+  let key = SnapshotKey { directory: directory.to_path_buf(), repo: repo.to_path_buf() };
+  let snapshots = SNAPSHOTS.get_or_init(|| Mutex::new(HashMap::new()));
+  let mut snapshots = snapshots.lock().expect("cron snapshot mutex is not poisoned");
+  if let Some(cached) = snapshots.get(&key) {
+    let fingerprint = snapshot_fingerprint(directory, &cached.prompt_paths)?;
+    if fingerprint.prompt_files.is_some() && fingerprint == cached.fingerprint {
+      return Ok((cached.snapshot.clone(), false));
+    }
+  }
+  let (mut snapshot, prompt_paths) = reload_snapshot(directory, repo)?;
+  let fingerprint = snapshot_fingerprint(directory, &prompt_paths)?;
+  snapshot.fingerprint = NEXT_SNAPSHOT_GENERATION.fetch_add(1, Ordering::Relaxed);
+  snapshots.insert(key, CachedSnapshot { snapshot: snapshot.clone(), fingerprint, prompt_paths });
+  Ok((snapshot, true))
+}
+
+fn reload_snapshot(directory: &Path, repo: &Path) -> anyhow::Result<(CronSnapshot, Vec<PathBuf>)> {
+  let entries = match std::fs::read_dir(directory) {
     Ok(entries) => entries,
     Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-      let snapshot = CronSnapshot::default();
-      fire_error_alert(features, cfg, &snapshot.errors);
-      return Ok(snapshot);
+      return Ok((CronSnapshot::default(), Vec::new()));
     }
     Err(error) => return Err(error.into()),
   };
   let mut paths = entries.map(|entry| entry.map(|entry| entry.path())).collect::<Result<Vec<_>, _>>()?;
   paths.sort();
   let mut snapshot = CronSnapshot::default();
+  let mut prompt_paths = Vec::new();
   for path in paths {
     let file_name = path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
     if !path.is_file() || !file_name.ends_with(".yaml") || file_name.starts_with('.') {
@@ -68,9 +124,13 @@ pub fn load_snapshot(features: &Arc<FeatureContext>, cfg: &CharlieBotConfig) -> 
       });
       continue;
     }
-    match load_file(&path, &name, repo.path()) {
-      Ok(task) => snapshot.tasks.push(task),
-      Err(error) => {
+    match load_file_with_prompts(&path, &name, repo) {
+      Ok((task, paths)) => {
+        prompt_paths.extend(paths);
+        snapshot.tasks.push(task);
+      }
+      Err((error, paths)) => {
+        prompt_paths.extend(paths);
         tracing::error!(name, path = %path.display(), error = %error, "cron_task_load_failed");
         snapshot.errors.push(ScheduledTaskError {
           name,
@@ -83,16 +143,102 @@ pub fn load_snapshot(features: &Arc<FeatureContext>, cfg: &CharlieBotConfig) -> 
   }
   snapshot.tasks.sort_by(|left, right| left.name.cmp(&right.name));
   snapshot.errors.sort_by(|left, right| left.name.cmp(&right.name));
-  fire_error_alert(features, cfg, &snapshot.errors);
-  Ok(snapshot)
+  prompt_paths.sort();
+  prompt_paths.dedup();
+  Ok((snapshot, prompt_paths))
 }
 
 /// Load and validate one cron file while preserving prompt pointer strings.
 pub fn load_file(path: &Path, name: &str, repo: &Path) -> Result<ScheduledTaskConfig, String> {
-  let raw = std::fs::read_to_string(path).map_err(|error| format!("{}: {error}", path.display()))?;
-  let yaml = serde_yaml::from_str::<serde_yaml::Value>(&raw).map_err(|error| error.to_string())?;
-  let body = serde_json::to_value(yaml).map_err(|error| error.to_string())?;
-  validate_body(name, body, repo)
+  load_file_with_prompts(path, name, repo).map(|(task, _)| task).map_err(|(error, _)| error)
+}
+
+fn load_file_with_prompts(
+  path: &Path,
+  name: &str,
+  repo: &Path,
+) -> Result<(ScheduledTaskConfig, Vec<PathBuf>), (String, Vec<PathBuf>)> {
+  #[cfg(test)]
+  if let Some(directory) = path.parent() {
+    *CRON_FILE_READS
+      .get_or_init(|| Mutex::new(HashMap::new()))
+      .lock()
+      .expect("cron file read counter mutex is not poisoned")
+      .entry(directory.to_path_buf())
+      .or_default() += 1;
+  }
+  let raw = std::fs::read_to_string(path).map_err(|error| (format!("{}: {error}", path.display()), Vec::new()))?;
+  let yaml = serde_yaml::from_str::<serde_yaml::Value>(&raw).map_err(|error| (error.to_string(), Vec::new()))?;
+  let prompts = prompt_paths(&yaml, repo);
+  let body = serde_json::to_value(yaml).map_err(|error| (error.to_string(), prompts.clone()))?;
+  validate_body(name, body, repo).map(|task| (task, prompts.clone())).map_err(|error| (error, prompts))
+}
+
+fn prompt_paths(body: &serde_yaml::Value, repo: &Path) -> Vec<PathBuf> {
+  let entries =
+    std::iter::once(body).chain(body.get("steps").and_then(serde_yaml::Value::as_sequence).into_iter().flatten());
+  entries
+    .filter_map(|entry| entry.get("prompt_file").and_then(serde_yaml::Value::as_str))
+    .filter(|pointer| !pointer.is_empty())
+    .filter_map(|pointer| resolve_path(pointer, repo).ok())
+    .collect()
+}
+
+fn snapshot_fingerprint(directory: &Path, prompt_paths: &[PathBuf]) -> anyhow::Result<SnapshotFingerprint> {
+  let mut cron_files = Vec::new();
+  match std::fs::read_dir(directory) {
+    Ok(entries) => {
+      for entry in entries {
+        let path = entry?.path();
+        let name = path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
+        if !path.is_file() || !name.ends_with(".yaml") || name.starts_with('.') {
+          continue;
+        }
+        let modified =
+          path.metadata().map(|metadata| modified_seconds(metadata.mtime(), metadata.mtime_nsec())).unwrap_or(0.0);
+        cron_files.push((name.to_string(), modified));
+      }
+    }
+    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+    Err(error) => return Err(error.into()),
+  }
+  cron_files.sort_by(|left, right| left.0.cmp(&right.0));
+  let mut prompt_files = Vec::new();
+  for path in prompt_paths {
+    let metadata = match path.metadata() {
+      Ok(metadata) => metadata,
+      Err(_) => return Ok(SnapshotFingerprint { cron_files, prompt_files: None }),
+    };
+    prompt_files.push((path.clone(), modified_seconds(metadata.mtime(), metadata.mtime_nsec())));
+  }
+  prompt_files.sort_by(|left, right| left.0.cmp(&right.0));
+  Ok(SnapshotFingerprint { cron_files, prompt_files: Some(prompt_files) })
+}
+
+fn modified_seconds(seconds: i64, nanoseconds: i64) -> f64 {
+  seconds as f64 + nanoseconds as f64 / 1_000_000_000.0
+}
+
+#[cfg(test)]
+fn cron_file_read_count(directory: &Path) -> usize {
+  CRON_FILE_READS
+    .get_or_init(|| Mutex::new(HashMap::new()))
+    .lock()
+    .expect("cron file read counter mutex is not poisoned")
+    .get(directory)
+    .copied()
+    .unwrap_or_default()
+}
+
+#[cfg(test)]
+fn prompt_file_read_count(path: &Path) -> usize {
+  PROMPT_FILE_READS
+    .get_or_init(|| Mutex::new(HashMap::new()))
+    .lock()
+    .expect("prompt file read counter mutex is not poisoned")
+    .get(path)
+    .copied()
+    .unwrap_or_default()
 }
 
 /// Resolve one in-memory create or update body before persisting it.
@@ -137,6 +283,15 @@ fn resolve_pointer(
     return Ok(());
   }
   let path = resolve_path(pointer, repo)?;
+  #[cfg(test)]
+  {
+    *PROMPT_FILE_READS
+      .get_or_init(|| Mutex::new(HashMap::new()))
+      .lock()
+      .expect("prompt file read counter mutex is not poisoned")
+      .entry(path.clone())
+      .or_default() += 1;
+  }
   let prompt = std::fs::read_to_string(&path)
     .map_err(|error| format!("cron entry {name:?} prompt_file unreadable: {} ({error})", path.display()))?;
   entry.insert("prompt".to_string(), Value::String(prompt));
@@ -359,6 +514,30 @@ mod tests {
     assert_eq!(snapshot.errors.iter().map(|error| error.name.as_str()).collect::<Vec<_>>(), ["inline", "missing"]);
     assert!(snapshot.errors[0].error.contains("inline 'prompt'"));
     assert!(snapshot.errors[1].error.contains("prompt_file"));
+  }
+
+  #[test]
+  fn unchanged_cron_snapshot_reuses_yaml_and_prompt_reads_until_a_fingerprint_moves() {
+    let (home, features) = feature_context();
+    let cfg = features.config.get().unwrap();
+    let directory = cfg.config_d_dir().join("cron.d");
+    let prompt = write_prompt(home.path(), "synthetic-prompt.md", "Synthetic prompt\n");
+    write_task(&cfg, "synthetic-task", &json!({"cron":"0 8 * * *", "prompt_file":prompt}));
+
+    let first = load_snapshot(&features, &cfg).unwrap();
+    let reads_after_first = super::cron_file_read_count(&directory);
+    let prompt_reads_after_first = super::prompt_file_read_count(&prompt);
+    let second = load_snapshot(&features, &cfg).unwrap();
+    assert_eq!(second.fingerprint, first.fingerprint);
+    assert_eq!(super::cron_file_read_count(&directory), reads_after_first);
+    assert_eq!(super::prompt_file_read_count(&prompt), prompt_reads_after_first);
+
+    write_task(&cfg, "synthetic-task", &json!({"cron":"0 8 * * *", "prompt_file":prompt, "enabled":false}));
+    let changed = load_snapshot(&features, &cfg).unwrap();
+    assert_ne!(changed.fingerprint, first.fingerprint);
+    assert_eq!(super::cron_file_read_count(&directory), reads_after_first + 1);
+    assert_eq!(super::prompt_file_read_count(&prompt), prompt_reads_after_first + 1);
+    drop(home);
   }
 
   #[test]

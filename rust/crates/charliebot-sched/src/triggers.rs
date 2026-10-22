@@ -1,12 +1,15 @@
 //! Delayed and watched task triggers (`src/runtime/triggers.py`).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::ffi::OsStr;
 use std::io;
 use std::os::fd::{FromRawFd, OwnedFd};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::{Arc, Mutex as StdMutex};
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::time::Duration;
 
 use anyhow::{Context, anyhow};
@@ -43,6 +46,9 @@ const REMOTE_SACCT_UNREACHABLE_GRACE_SECONDS: u64 = 900;
 const DORMANCY_CHECK_SECONDS: u64 = 60;
 const SSH_OVERALL_TIMEOUT_SECONDS: u64 = 60;
 const MAX_TRIGGER_MESSAGE_CHARS: usize = 200;
+static PROGRAM_AVAILABILITY: OnceLock<StdMutex<HashMap<String, bool>>> = OnceLock::new();
+#[cfg(test)]
+static PROGRAM_SEARCHES: AtomicUsize = AtomicUsize::new(0);
 const LOCAL_PID_FIELDS: &[Field] = &[
   Field::required("kind", FieldType::Literal(&["local_pid"])),
   Field::required("pid", FieldType::Integer),
@@ -1060,19 +1066,23 @@ impl TriggerManager {
     trigger: &PendingTrigger,
     targets: &[SlurmJob],
   ) -> anyhow::Result<(Vec<String>, Vec<String>)> {
-    let mut groups: Vec<(Option<String>, Vec<i64>)> = Vec::new();
+    // Match Python's host-to-set grouping while retaining first-seen order (`src/runtime/triggers.py:1016-1030`).
+    let mut groups: Vec<(Option<String>, Vec<i64>, HashSet<i64>)> = Vec::new();
+    let mut group_indexes: HashMap<Option<String>, usize> = HashMap::new();
     for target in targets {
-      let group = groups.iter_mut().find(|(host, _)| *host == target.host);
-      if let Some((_, ids)) = group {
-        if !ids.contains(&target.job_id) {
+      if let Some(index) = group_indexes.get(&target.host).copied() {
+        let (_, ids, seen) = &mut groups[index];
+        if seen.insert(target.job_id) {
           ids.push(target.job_id);
         }
       } else {
-        groups.push((target.host.clone(), vec![target.job_id]));
+        let index = groups.len();
+        group_indexes.insert(target.host.clone(), index);
+        groups.push((target.host.clone(), vec![target.job_id], HashSet::from([target.job_id])));
       }
     }
     let results =
-      join_all(groups.iter().map(|(host, ids)| self.wait_sacct_group(trigger, host.as_deref(), ids.clone()))).await;
+      join_all(groups.iter().map(|(host, ids, _)| self.wait_sacct_group(trigger, host.as_deref(), ids.clone()))).await;
     let mut finished = Vec::new();
     let mut still_alive = Vec::new();
     for result in results {
@@ -1254,8 +1264,27 @@ fn program_available(program: &str) -> bool {
   if path.components().count() > 1 {
     return executable(path);
   }
-  std::env::var_os("PATH")
-    .is_some_and(|paths| std::env::split_paths(&paths).any(|directory| executable(&directory.join(program))))
+  program_available_on_path(program, std::env::var_os("PATH").as_deref())
+}
+
+fn program_available_on_path(program: &str, paths: Option<&OsStr>) -> bool {
+  // Python's `_SACCT_AVAILABLE` is a process-wide first-lookup memo (`src/runtime/triggers.py:186,504,1053-1058`).
+  let key = program.to_string();
+  let cache = PROGRAM_AVAILABILITY.get_or_init(|| StdMutex::new(HashMap::new()));
+  let mut cached = cache.lock().expect("program availability cache mutex is not poisoned");
+  if let Some(available) = cached.get(&key) {
+    return *available;
+  }
+  #[cfg(test)]
+  PROGRAM_SEARCHES.fetch_add(1, Ordering::Relaxed);
+  let available = paths.is_some_and(|paths| {
+    std::env::split_paths(paths).any(|directory| {
+      let executable = directory.join(program);
+      executable.metadata().is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+    })
+  });
+  cached.insert(key, available);
+  available
 }
 
 fn pidfd_available() -> bool {
@@ -1561,6 +1590,25 @@ mod tests {
   use super::*;
 
   const SESSION_ID: &str = "synthetic-trigger-session";
+
+  #[test]
+  fn sacct_availability_searches_once_per_program_for_the_process() {
+    let home = tempfile::tempdir().unwrap();
+    let path_value = home.path().as_os_str();
+    let before = PROGRAM_SEARCHES.load(Ordering::Relaxed);
+    assert!(!program_available_on_path("synthetic-sacct-missing", Some(path_value)));
+    let executable = home.path().join("synthetic-sacct");
+    std::fs::write(&executable, "").unwrap();
+    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(!program_available_on_path("synthetic-sacct-missing", Some(path_value)));
+    assert_eq!(PROGRAM_SEARCHES.load(Ordering::Relaxed), before + 1);
+    let other = tempfile::tempdir().unwrap();
+    let other_executable = other.path().join("synthetic-sacct");
+    std::fs::write(&other_executable, "").unwrap();
+    std::fs::set_permissions(&other_executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(program_available_on_path("synthetic-sacct", Some(other.path().as_os_str())));
+    assert_eq!(PROGRAM_SEARCHES.load(Ordering::Relaxed), before + 2);
+  }
 
   fn feature_context() -> (tempfile::TempDir, Arc<FeatureContext>) {
     let home = tempfile::tempdir().expect("temporary home");

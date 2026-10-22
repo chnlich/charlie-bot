@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types;
@@ -108,9 +108,15 @@ impl SequenceBinding for CronBinding {
     Box::pin(async move {
       let features = self.feature_context().await?;
       let cfg = features.config.get()?;
-      for name in &self.names {
-        write_task_key(&cfg.charliebot_home, name, "enabled", Value::Bool(false))?;
-      }
+      let home = cfg.charliebot_home.clone();
+      let names = self.names.clone();
+      tokio::task::spawn_blocking(move || {
+        for name in &names {
+          write_task_key(&home, name, "enabled", Value::Bool(false))?;
+        }
+        Ok::<(), anyhow::Error>(())
+      })
+      .await??;
       Ok(())
     })
   }
@@ -119,12 +125,170 @@ impl SequenceBinding for CronBinding {
 /// The durable `cron_steps` sequence controller.
 pub struct CronSequenceController {
   registry: watch::Receiver<Option<Weak<Registry>>>,
+  row_schedule_memo: Mutex<Option<RowScheduleMemo>>,
+}
+
+#[derive(Clone)]
+struct RowScheduleMemo {
+  fingerprint: u64,
+  session_ids: Vec<String>,
+  fields: HashMap<String, Map<String, Value>>,
+  earliest_next_fire: Option<UtcDateTime>,
+  #[cfg(test)]
+  builds: usize,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct BoundaryNotice {
+  pub generation: u64,
+  pub done: bool,
+  pub failed: bool,
+}
+
+type BoundaryKey = (String, String);
+static BOUNDARY_WAITERS: OnceLock<Mutex<HashMap<BoundaryKey, watch::Sender<BoundaryNotice>>>> = OnceLock::new();
+
+pub(super) fn subscribe_boundary(leaf_id: &str, owner_ref: &str) -> watch::Receiver<BoundaryNotice> {
+  let waiters = BOUNDARY_WAITERS.get_or_init(|| Mutex::new(HashMap::new()));
+  let mut waiters = waiters.lock().expect("cron boundary waiter mutex is not poisoned");
+  waiters
+    .entry((leaf_id.to_string(), owner_ref.to_string()))
+    .or_insert_with(|| watch::channel(BoundaryNotice::default()).0)
+    .subscribe()
+}
+
+pub(super) fn notify_boundary(leaf_id: &str, owner_ref: &str, done: bool, failed: bool) {
+  let Some(waiters) = BOUNDARY_WAITERS.get() else { return };
+  let waiters = waiters.lock().expect("cron boundary waiter mutex is not poisoned");
+  let Some(sender) = waiters.get(&(leaf_id.to_string(), owner_ref.to_string())) else { return };
+  let previous = *sender.borrow();
+  sender.send_replace(BoundaryNotice {
+    generation: previous.generation + 1,
+    done: previous.done || done,
+    failed: previous.failed || failed,
+  });
+}
+
+pub(super) fn remove_boundary(leaf_id: &str, owner_ref: &str) {
+  if let Some(waiters) = BOUNDARY_WAITERS.get() {
+    waiters
+      .lock()
+      .expect("cron boundary waiter mutex is not poisoned")
+      .remove(&(leaf_id.to_string(), owner_ref.to_string()));
+  }
 }
 
 impl CronSequenceController {
   pub fn new(registry: watch::Receiver<Option<Weak<Registry>>>) -> Self {
-    Self { registry }
+    Self { registry, row_schedule_memo: Mutex::new(None) }
   }
+
+  fn snapshot_for_listing(&self) -> loader::CronSnapshot {
+    if let Some(registry) = self.registry.borrow().as_ref().and_then(Weak::upgrade)
+      && let Some(features) = registry.feature_context()
+    {
+      return match features.config.get() {
+        Ok(cfg) => match loader::load_snapshot(&features, &cfg) {
+          Ok(snapshot) => snapshot,
+          Err(error) => {
+            tracing::error!(error = %error, "cron_listing_snapshot_failed");
+            loader::CronSnapshot::default()
+          }
+        },
+        Err(error) => {
+          tracing::error!(error = %error, "cron_listing_config_failed");
+          loader::CronSnapshot::default()
+        }
+      };
+    }
+
+    // The server binds FeatureContext before requests. The path loader keeps isolated registry tests on the same
+    // fingerprinted snapshot when they invoke listing hooks without starting that service.
+    let home = cron_home();
+    let directory = home.join("config.d/cron.d");
+    match std::env::var_os(REPO_ROOT_ENV).map(PathBuf::from) {
+      Some(repo) => match loader::load_snapshot_for_paths(&directory, &repo) {
+        Ok((snapshot, _)) => snapshot,
+        Err(error) => {
+          tracing::error!(error = %error, "cron_listing_snapshot_failed");
+          loader::CronSnapshot::default()
+        }
+      },
+      None => {
+        tracing::error!(variable = REPO_ROOT_ENV, "cron_listing_repo_root_missing");
+        loader::CronSnapshot { tasks: bound_configs_for_listing(&home), ..loader::CronSnapshot::default() }
+      }
+    }
+  }
+}
+
+fn row_schedule_fields(
+  memo: &mut Option<RowScheduleMemo>,
+  tasks: &[ScheduledTaskConfig],
+  fingerprint: u64,
+  session_ids: &[String],
+  now: UtcDateTime,
+) -> HashMap<String, Map<String, Value>> {
+  // Match Python's sorted ID set, snapshot fingerprint and earliest-fire expiry (`src/features/cron/sequence_controller.py:181-209`).
+  let mut ids = session_ids.to_vec();
+  ids.sort();
+  ids.dedup();
+  if let Some(cached) = memo.as_ref()
+    && cached.fingerprint == fingerprint
+    && cached.session_ids == ids
+    && cached.earliest_next_fire.is_none_or(|expiry| now < expiry)
+  {
+    return cached.fields.clone();
+  }
+
+  #[cfg(test)]
+  let builds = memo.as_ref().map_or(1, |cached| cached.builds + 1);
+
+  let mut bound_tasks = HashMap::new();
+  for task in tasks {
+    if let Some(session_id) = task.session_id.as_deref() {
+      bound_tasks.entry(session_id).or_insert(task);
+    }
+  }
+  let mut fields_by_session = HashMap::new();
+  let mut earliest_next_fire = None;
+  for session_id in &ids {
+    let mut fields = Map::new();
+    match bound_tasks.get(session_id.as_str()).copied() {
+      None => {
+        fields.insert("schedule_task".to_string(), Value::Null);
+      }
+      Some(task) => {
+        fields.insert("schedule_task".to_string(), Value::String(task.name.clone()));
+        fields.insert("schedule_cron".to_string(), Value::String(task.cron.clone()));
+        fields.insert("schedule_timezone".to_string(), Value::String(task.timezone.clone()));
+        fields.insert("schedule_enabled".to_string(), Value::Bool(task.enabled));
+        fields.insert("schedule_allow_failure".to_string(), Value::Bool(task.allow_failure));
+        match scheduler::next_fire_iso(&task.cron, &task.timezone, now) {
+          Ok(next) => {
+            earliest_next_fire = Some(earliest_next_fire.map_or_else(
+              || UtcDateTime::parse(&next).expect("the cron next-fire value is an ISO datetime"),
+              |earliest: UtcDateTime| {
+                earliest.min(UtcDateTime::parse(&next).expect("the cron next-fire value is an ISO datetime"))
+              },
+            ));
+            fields.insert("schedule_next_run".to_string(), Value::String(next));
+          }
+          Err(error) => tracing::error!(task = %task.name, error = %error, "cron_listing_next_run_failed"),
+        }
+      }
+    }
+    fields_by_session.insert(session_id.clone(), fields);
+  }
+  *memo = Some(RowScheduleMemo {
+    fingerprint,
+    session_ids: ids,
+    fields: fields_by_session.clone(),
+    earliest_next_fire,
+    #[cfg(test)]
+    builds,
+  });
+  fields_by_session
 }
 
 /// Makes the registry available to cron bindings before crash recovery can wake a session.
@@ -165,7 +329,7 @@ impl SequenceController for CronSequenceController {
   }
 
   fn redrive<'a>(&'a self, session_id: &'a str, tree: &'a dyn SequenceTree) -> BoxFuture<'a, anyhow::Result<()>> {
-    Box::pin(async move { redrive_firing(session_id, tree).await })
+    Box::pin(async move { redrive_firing(session_id, tree).await.map(|_| ()) })
   }
 
   fn launch_context<'a>(
@@ -180,10 +344,24 @@ impl SequenceController for CronSequenceController {
   fn after_run<'a>(
     &'a self,
     session_id: &'a str,
-    _run: &'a RunRecord,
+    run: &'a RunRecord,
     tree: &'a dyn SequenceTree,
   ) -> BoxFuture<'a, anyhow::Result<()>> {
-    Box::pin(async move { redrive_firing(session_id, tree).await })
+    Box::pin(async move {
+      let owner_ref = run
+        .sequence_ref
+        .as_ref()
+        .filter(|sequence| sequence.kind == "cron_steps")
+        .map(|sequence| sequence.owner_ref.clone());
+      let result = redrive_firing(session_id, tree).await;
+      if let Some(owner_ref) = owner_ref {
+        match &result {
+          Ok(done) => notify_boundary(session_id, &owner_ref, *done, false),
+          Err(_) => notify_boundary(session_id, &owner_ref, false, true),
+        }
+      }
+      result.map(|_| ())
+    })
   }
 
   fn recover_run<'a>(
@@ -207,7 +385,9 @@ impl SequenceController for CronSequenceController {
   }
 
   fn binding(&self, session_id: &str) -> Option<Arc<dyn SequenceBinding>> {
-    let names = names_for_binding(session_id);
+    // Binding lookups use the same loader snapshot as Python's cached task list (`src/features/cron/cron_sequence.py:94-106`).
+    let snapshot = self.snapshot_for_listing();
+    let names = names_for_binding(&snapshot.tasks, session_id);
     let name = names.first()?.clone();
     Some(Arc::new(CronBinding { name, names, registry: self.registry.clone() }))
   }
@@ -217,43 +397,27 @@ impl SequenceController for CronSequenceController {
   }
 
   fn listing_fields(&self, session_ids: &[String], now: UtcDateTime) -> HashMap<String, Map<String, Value>> {
-    let home = cron_home();
-    let tasks = bound_configs_for_listing(&home);
-    let mut output = HashMap::new();
-    for session_id in session_ids {
-      let task = tasks.iter().find(|task| task.session_id.as_deref() == Some(session_id.as_str()));
-      let mut fields = Map::new();
-      match task {
-        None => {
-          fields.insert("schedule_task".to_string(), Value::Null);
-        }
-        Some(task) => {
-          fields.insert("schedule_task".to_string(), Value::String(task.name.clone()));
-          fields.insert("schedule_cron".to_string(), Value::String(task.cron.clone()));
-          fields.insert("schedule_timezone".to_string(), Value::String(task.timezone.clone()));
-          fields.insert("schedule_enabled".to_string(), Value::Bool(task.enabled));
-          fields.insert("schedule_allow_failure".to_string(), Value::Bool(task.allow_failure));
-          match scheduler::next_fire_iso(&task.cron, &task.timezone, now) {
-            Ok(next) => {
-              fields.insert("schedule_next_run".to_string(), Value::String(next));
-            }
-            Err(error) => tracing::error!(task = %task.name, error = %error, "cron_listing_next_run_failed"),
-          }
-        }
-      }
-      output.insert(session_id.clone(), fields);
-    }
-    output
+    let tasks = self.snapshot_for_listing();
+    let mut memo = self.row_schedule_memo.lock().expect("cron row schedule memo is not poisoned");
+    row_schedule_fields(&mut memo, &tasks.tasks, tasks.fingerprint, session_ids, now)
   }
 
   fn move_bindings<'a>(&'a self, source: &'a str, new: &'a str) -> BoxFuture<'a, anyhow::Result<bool>> {
     Box::pin(async move {
       let home = cron_home();
-      let names = names_for_binding(source);
-      for name in &names {
-        write_task_key(&home, name, "session_id", Value::String(new.to_string()))?;
-        tracing::info!(task = %name, source, session = new, "scheduled_task_moved");
-      }
+      let snapshot = self.snapshot_for_listing();
+      let names = names_for_binding(&snapshot.tasks, source);
+      let moved_to = new.to_string();
+      let source = source.to_string();
+      let writes = names.clone();
+      tokio::task::spawn_blocking(move || {
+        for name in &writes {
+          write_task_key(&home, name, "session_id", Value::String(moved_to.clone()))?;
+          tracing::info!(task = %name, source, session = %moved_to, "scheduled_task_moved");
+        }
+        Ok::<(), anyhow::Error>(())
+      })
+      .await??;
       Ok(!names.is_empty())
     })
   }
@@ -275,24 +439,24 @@ fn last_saturday_1am_utc(now: chrono::DateTime<Utc>) -> anyhow::Result<UtcDateTi
   UtcDateTime::parse(&saturday_1am.with_timezone(&Utc).to_rfc3339()).map_err(Into::into)
 }
 
-async fn redrive_firing(leaf_id: &str, tree: &dyn SequenceTree) -> anyhow::Result<()> {
+async fn redrive_firing(leaf_id: &str, tree: &dyn SequenceTree) -> anyhow::Result<bool> {
   let records = tree.list_run_records_sync(leaf_id)?;
   let Some(sequence) =
     records.iter().filter_map(|run| run.sequence_ref.as_ref()).find(|sequence| sequence.kind == "cron_steps")
   else {
-    return Ok(());
+    return Ok(true);
   };
   let Some((task_name, firing)) = parse_firing_ref(&sequence.owner_ref) else {
     tracing::warn!(leaf = leaf_id, owner_ref = %sequence.owner_ref, "cron_firing_ref_unparsable");
-    return Ok(());
+    return Ok(true);
   };
   let Some(task) = load_bound_task(&task_name, tree.config())? else {
     tracing::warn!(leaf = leaf_id, task = task_name, "cron_firing_task_missing");
-    return Ok(());
+    return Ok(true);
   };
-  let Some(leaf_meta) = tree.load_meta(leaf_id).await? else { return Ok(()) };
-  let Some(parent_id) = leaf_meta.task_parent_id.as_deref() else { return Ok(()) };
-  let Some(parent) = tree.load_meta(parent_id).await? else { return Ok(()) };
+  let Some(leaf_meta) = tree.load_meta(leaf_id).await? else { return Ok(true) };
+  let Some(parent_id) = leaf_meta.task_parent_id.as_deref() else { return Ok(true) };
+  let Some(parent) = tree.load_meta(parent_id).await? else { return Ok(true) };
   reconcile_bound_firing(&task, &parent, tree, &firing, leaf_id).await
 }
 
@@ -302,12 +466,12 @@ async fn reconcile_bound_firing(
   tree: &dyn SequenceTree,
   firing: &str,
   leaf_id: &str,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<bool> {
   if tree.task_state(leaf_id)? != "open" {
-    return Ok(());
+    return Ok(true);
   }
   let Some(steps) = task.steps.as_ref().filter(|steps| !steps.is_empty()) else {
-    return Ok(());
+    return Ok(true);
   };
   let records = tree.list_run_records_sync(leaf_id)?;
   let events = tree.load_events_sync(leaf_id)?;
@@ -334,22 +498,24 @@ async fn reconcile_bound_firing(
   if let Some(position) = pending.first().copied() {
     let run = &by_position[&position];
     if run.pid.is_some() {
-      return Ok(());
+      return Ok(false);
     }
     if let Some(conflict) = distinct_backend_conflict(task, tree.config())? {
       let summary = format!(
         "Scheduled task '{}' stopped before relaunching step '{}': {conflict}.",
         task.name, steps[position].name
       );
-      return deliver_boundary_report(tree, leaf_id, parent.id.as_str(), task, firing, "failed", &summary).await;
+      return deliver_boundary_report(tree, leaf_id, parent.id.as_str(), task, firing, "failed", &summary)
+        .await
+        .map(|()| true);
     }
     let prompt = step_prompt(steps, position, &by_position, tree)?;
     let (backend, model) = resolved_backend(task, tree.config(), steps[position].backend.as_deref())?;
     let run = register_step_run(tree, leaf_id, task, firing, position, &backend, model.as_deref()).await?;
     schedule_settle(tree.executor(), leaf_id.to_string(), run.id, prompt);
-    return Ok(());
+    return Ok(false);
   }
-  let Some(last_position) = executed.last().copied() else { return Ok(()) };
+  let Some(last_position) = executed.last().copied() else { return Ok(true) };
   let last_run = &by_position[&last_position];
   let last_outcome = tree.terminal_outcome(&events, &last_run.id);
   if last_position + 1 < steps.len() && last_outcome.as_deref() == Some("success") && last_run.exit_code == Some(0) {
@@ -359,17 +525,21 @@ async fn reconcile_bound_firing(
         task.name,
         steps[last_position + 1].name
       );
-      return deliver_boundary_report(tree, leaf_id, parent.id.as_str(), task, firing, "failed", &summary).await;
+      return deliver_boundary_report(tree, leaf_id, parent.id.as_str(), task, firing, "failed", &summary)
+        .await
+        .map(|()| true);
     }
     let position = last_position + 1;
     let (backend, model) = resolved_backend(task, tree.config(), steps[position].backend.as_deref())?;
     let next = register_step_run(tree, leaf_id, task, firing, position, &backend, model.as_deref()).await?;
     let prompt = step_prompt(steps, position, &by_position, tree)?;
     schedule_settle(tree.executor(), leaf_id.to_string(), next.id, prompt);
-    return Ok(());
+    return Ok(false);
   }
   if last_outcome.as_deref() == Some("success") && last_position + 1 == steps.len() {
-    return finish_successful_chain(tree, leaf_id, parent.id.as_str(), task, firing, steps, &by_position).await;
+    return finish_successful_chain(tree, leaf_id, parent.id.as_str(), task, firing, steps, &by_position)
+      .await
+      .map(|()| true);
   }
   let mut blocks = Vec::new();
   for position in &executed {
@@ -387,7 +557,7 @@ async fn reconcile_bound_firing(
     last_outcome.as_deref().unwrap_or("None"),
     blocks.join("\n\n")
   );
-  deliver_boundary_report(tree, leaf_id, parent.id.as_str(), task, firing, "failed", &summary).await
+  deliver_boundary_report(tree, leaf_id, parent.id.as_str(), task, firing, "failed", &summary).await.map(|()| true)
 }
 
 async fn finish_successful_chain(
@@ -565,11 +735,13 @@ fn resolved_backend(
 
 fn distinct_backend_conflict(task: &ScheduledTaskConfig, cfg: &CharlieBotConfig) -> anyhow::Result<Option<String>> {
   let Some(steps) = task.steps.as_ref() else { return Ok(None) };
+  // Match Python's one-pass name index (`src/features/cron/cron_sequence.py:532-559`).
+  let positions = steps.iter().enumerate().map(|(index, step)| (step.name.as_str(), index)).collect::<HashMap<_, _>>();
   for (position, step) in steps.iter().enumerate() {
     let Some(prior_name) = step.distinct_backend_from.as_deref() else { continue };
-    let prior_position = steps
-      .iter()
-      .position(|candidate| candidate.name == prior_name)
+    let prior_position = positions
+      .get(prior_name)
+      .copied()
       .ok_or_else(|| anyhow::anyhow!("step '{}' names missing distinct backend source '{prior_name}'", step.name))?;
     let prior = &steps[prior_position];
     let (backend, model) = resolved_backend(task, cfg, step.backend.as_deref())?;
@@ -612,14 +784,7 @@ fn step_prompt(
 
 fn run_result_text(tree: &dyn SequenceTree, session_id: &str, run_id: &str) -> anyhow::Result<String> {
   let path = tree.run_dir(session_id, run_id).join(run_records::RUN_EVENTS_NAME);
-  let raw = match std::fs::read_to_string(path) {
-    Ok(raw) => raw,
-    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(String::new()),
-    Err(error) => return Err(error.into()),
-  };
-  let events =
-    raw.lines().filter(|line| !line.is_empty()).map(serde_json::from_str::<Value>).collect::<Result<Vec<_>, _>>()?;
-  Ok(charliebot_tasks::review::worker_summary_from_events_log(&events).unwrap_or_default())
+  Ok(crate::improve::judgment::worker_summary_from_events_log(&path)?.unwrap_or_default())
 }
 
 fn parse_firing_ref(owner_ref: &str) -> Option<(String, String)> {
@@ -649,27 +814,8 @@ fn cron_home() -> PathBuf {
   home::charliebot_home_dir().expect("the server validated the profile home before registering cron")
 }
 
-fn names_for_binding(session_id: &str) -> Vec<String> {
-  let directory = cron_home().join("config.d/cron.d");
-  let mut entries = match std::fs::read_dir(&directory) {
-    Ok(entries) => entries.filter_map(Result::ok).map(|entry| entry.path()).collect::<Vec<_>>(),
-    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
-    Err(error) => {
-      tracing::error!(path = %directory.display(), error = %error, "cron_binding_directory_unreadable");
-      return Vec::new();
-    }
-  };
-  entries.sort();
-  entries
-    .into_iter()
-    .filter(|path| path.extension().and_then(|extension| extension.to_str()) == Some("yaml"))
-    .filter_map(|path| {
-      let name = path.file_stem()?.to_str()?.to_string();
-      let raw = std::fs::read_to_string(&path).ok()?;
-      let yaml = serde_yaml::from_str::<serde_yaml::Value>(&raw).ok()?;
-      (yaml.get("session_id").and_then(serde_yaml::Value::as_str) == Some(session_id)).then_some(name)
-    })
-    .collect()
+fn names_for_binding(tasks: &[ScheduledTaskConfig], session_id: &str) -> Vec<String> {
+  tasks.iter().filter(|task| task.session_id.as_deref() == Some(session_id)).map(|task| task.name.clone()).collect()
 }
 
 fn bound_configs_for_listing(home: &Path) -> Vec<ScheduledTaskConfig> {
@@ -716,9 +862,56 @@ mod tests {
   use serde_json::{Value, json};
   use tokio::sync::watch;
 
-  use super::{CronBinding, register_step_run};
+  use super::{CronBinding, register_step_run, row_schedule_fields};
   use crate::cron::config::{ScheduledTaskConfig, StepConfig};
   use crate::cron::test_support::{feature_context, manager};
+
+  #[tokio::test]
+  async fn boundary_receiver_wakes_for_progress_and_terminal_notice() {
+    let leaf_id = "synthetic-boundary-leaf";
+    let owner_ref = "cron:synthetic-task:synthetic-firing";
+    let mut receiver = super::subscribe_boundary(leaf_id, owner_ref);
+
+    super::notify_boundary(leaf_id, owner_ref, false, false);
+    receiver.changed().await.unwrap();
+    assert_eq!(receiver.borrow_and_update().generation, 1);
+    assert!(!receiver.borrow().done);
+
+    super::notify_boundary(leaf_id, owner_ref, true, false);
+    receiver.changed().await.unwrap();
+    assert_eq!(receiver.borrow_and_update().generation, 2);
+    assert!(receiver.borrow().done);
+    super::remove_boundary(leaf_id, owner_ref);
+  }
+
+  #[test]
+  fn sidebar_schedule_rows_reuse_the_id_and_fingerprint_memo_until_next_fire() {
+    let session_ids = (0..4_317).map(|index| format!("synthetic-session-{index:04}")).collect::<Vec<_>>();
+    let tasks = (0..13)
+      .map(|index| {
+        serde_json::from_value::<ScheduledTaskConfig>(json!({
+          "name": format!("synthetic-task-{index:02}"),
+          "cron": "0 8 * * *",
+          "timezone": "UTC",
+          "session_id": session_ids[index],
+        }))
+        .unwrap()
+      })
+      .collect::<Vec<_>>();
+    let now = UtcDateTime::parse("2026-01-01T00:00:00Z").unwrap();
+    let mut memo = None;
+
+    let first = row_schedule_fields(&mut memo, &tasks, 17, &session_ids, now);
+    let warm = row_schedule_fields(&mut memo, &tasks, 17, &session_ids, now);
+    assert_eq!(warm, first);
+    assert_eq!(memo.as_ref().unwrap().builds, 1);
+
+    let at_fire = UtcDateTime::parse("2026-01-01T08:00:00Z").unwrap();
+    row_schedule_fields(&mut memo, &tasks, 17, &session_ids, at_fire);
+    assert_eq!(memo.as_ref().unwrap().builds, 2);
+    row_schedule_fields(&mut memo, &tasks, 18, &session_ids, at_fire);
+    assert_eq!(memo.as_ref().unwrap().builds, 3);
+  }
 
   fn binding(features: &Arc<charliebot_registry::context::FeatureContext>, names: &[&str]) -> CronBinding {
     features.registry.bind_feature_context(features).unwrap();

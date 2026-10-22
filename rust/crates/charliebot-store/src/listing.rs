@@ -19,6 +19,15 @@ pub struct MetadataListing {
   pub sequence_fields: std::collections::HashMap<String, serde_json::Map<String, Value>>,
 }
 
+/// Shared sequence and view membership maps for one cached metadata-list identity.
+#[derive(Clone)]
+pub struct SharedSubtreeRoots {
+  /// Sessions that belong to sequence subtrees, mapped to the owning session.
+  pub sequence: Arc<HashMap<String, String>>,
+  /// View subtree membership, mapped by view name and session id to the view root.
+  pub views: Arc<HashMap<String, HashMap<String, String>>>,
+}
+
 /// One unvalidated metadata file from the raw read-only corpus scan.
 #[derive(Clone, Debug)]
 pub struct RawMetadata {
@@ -175,14 +184,59 @@ impl Store {
 
   /// Return the sequence subtree root map over all stored metadata.
   pub fn sequence_subtree_roots(&self) -> StoreResult<std::collections::HashMap<String, String>> {
-    self.sequence_listing.sequence_subtree_roots(&self.load_session_metas(None)?)
+    let roots = self.subtree_roots_shared()?;
+    Ok((*roots.sequence).clone())
   }
 
   /// Return the view subtree roots over all stored metadata.
   pub fn view_subtree_roots(
     &self,
   ) -> StoreResult<std::collections::HashMap<String, std::collections::HashMap<String, String>>> {
-    self.sequence_listing.view_subtree_roots(&self.load_session_metas(None)?)
+    let roots = self.subtree_roots_shared()?;
+    Ok((*roots.views).clone())
+  }
+
+  /// Return both cached subtree maps for the cached metadata-list identity.
+  ///
+  /// This follows Python's `session_listing.py:139-164` memo key: reuse both maps while the cached metadata list
+  /// remains the same, and rebuild after a metadata cache identity or directory membership changes.
+  pub fn subtree_roots_shared(&self) -> StoreResult<SharedSubtreeRoots> {
+    let rows = self.load_session_metas(None)?;
+    // A concurrent read prunes an entry that outlived the cache TTL and a write invalidates one, so a row of `rows`
+    // can leave the metadata cache before this lookup. A missing entry proves nothing about the cached maps: the
+    // call then rebuilds them and leaves the cache alone, which the next call replaces with a matching identity.
+    let metadata_identity = {
+      let metadata_cache = self.metadata_cache.lock().expect("metadata cache mutex is not poisoned");
+      let mut metadata_identity = rows
+        .iter()
+        .map(|row| metadata_cache.get(&row.id).map(|entry| (row.id.clone(), Arc::clone(&entry.identity))))
+        .collect::<Option<Vec<_>>>();
+      if let Some(metadata_identity) = metadata_identity.as_mut() {
+        metadata_identity.sort_by(|left, right| left.0.cmp(&right.0));
+      }
+      metadata_identity
+    };
+    let mut cached = self.subtree_roots_cache.lock().expect("subtree roots cache mutex is not poisoned");
+    if let (Some(metadata_identity), Some(snapshot)) = (metadata_identity.as_ref(), cached.as_ref())
+      && snapshot.metadata_identity.len() == metadata_identity.len()
+      && snapshot
+        .metadata_identity
+        .iter()
+        .zip(metadata_identity)
+        .all(|((left_id, left), (right_id, right))| left_id == right_id && Arc::ptr_eq(left, right))
+    {
+      return Ok(SharedSubtreeRoots { sequence: Arc::clone(&snapshot.sequence), views: Arc::clone(&snapshot.views) });
+    }
+    let sequence = Arc::new(self.sequence_listing.sequence_subtree_roots(&rows)?);
+    let views = Arc::new(self.sequence_listing.view_subtree_roots(&rows)?);
+    if let Some(metadata_identity) = metadata_identity {
+      *cached = Some(super::store::CachedSubtreeRoots {
+        metadata_identity,
+        sequence: Arc::clone(&sequence),
+        views: Arc::clone(&views),
+      });
+    }
+    Ok(SharedSubtreeRoots { sequence, views })
   }
 
   /// Scan every `sessions/*/metadata.json` file as raw JSON, including archived sessions.
@@ -355,6 +409,9 @@ mod tests {
   use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot, SlotField};
   use serde_json::json;
   use std::sync::Arc;
+  use std::sync::atomic::{AtomicUsize, Ordering};
+
+  static SUBTREE_MAP_BUILDS: AtomicUsize = AtomicUsize::new(0);
 
   struct Labels;
   impl crate::AccountLabelKeeper for Labels {
@@ -401,6 +458,28 @@ mod tests {
     }
   }
 
+  struct CountingSequence;
+  impl crate::SequenceListingFields for CountingSequence {
+    fn owns_session(&self, _meta: &SessionMetadata) -> bool {
+      false
+    }
+    fn listing_fields(
+      &self,
+      _: &[String],
+      _: UtcDateTime,
+    ) -> StoreResult<HashMap<String, serde_json::Map<String, Value>>> {
+      Ok(HashMap::new())
+    }
+    fn sequence_subtree_roots(&self, _: &[SessionMetadata]) -> StoreResult<HashMap<String, String>> {
+      SUBTREE_MAP_BUILDS.fetch_add(1, Ordering::Relaxed);
+      Ok(HashMap::new())
+    }
+    fn view_subtree_roots(&self, _: &[SessionMetadata]) -> StoreResult<HashMap<String, HashMap<String, String>>> {
+      SUBTREE_MAP_BUILDS.fetch_add(1, Ordering::Relaxed);
+      Ok(HashMap::new())
+    }
+  }
+
   fn slots() -> Vec<MetadataSlot> {
     vec![MetadataSlot {
       owner: "probe",
@@ -422,6 +501,23 @@ mod tests {
         account_labels: Some(Arc::new(Labels)),
         anchor_reconciler: Some(Arc::new(Anchors)),
         sequence_listing: Some(Arc::new(Sequence)),
+        runtime_events: Some(Arc::new(crate::hooks::EmptyRuntimeEventHooks)),
+        sequence_archive: Some(Arc::new(crate::store::test_support::SequenceArchive)),
+        sequence_binding_mover: Some(Arc::new(crate::store::test_support::BindingMover)),
+      },
+    )
+    .unwrap()
+  }
+
+  fn counting_store(home: &std::path::Path) -> Store {
+    let cfg = charliebot_core::config::load_config(home, &charliebot_core::config::ConfigSchema::default()).unwrap();
+    Store::new(
+      cfg,
+      slots(),
+      StoreHooks {
+        account_labels: Some(Arc::new(Labels)),
+        anchor_reconciler: Some(Arc::new(Anchors)),
+        sequence_listing: Some(Arc::new(CountingSequence)),
         runtime_events: Some(Arc::new(crate::hooks::EmptyRuntimeEventHooks)),
         sequence_archive: Some(Arc::new(crate::store::test_support::SequenceArchive)),
         sequence_binding_mover: Some(Arc::new(crate::store::test_support::BindingMover)),
@@ -472,6 +568,26 @@ mod tests {
     // A new session directory moves the sessions root's signature.
     write_metadata(&store, "gamma", SessionStatus::Active, "2025-02-03T00:00:00Z", None);
     assert_eq!(names(&store).len(), 3);
+  }
+
+  #[test]
+  fn subtree_maps_build_once_per_metadata_identity_and_rebuild_after_invalidation() {
+    let home = tempfile::tempdir().unwrap();
+    let store = counting_store(home.path());
+    write_metadata(&store, "node-a", SessionStatus::Active, "2026-08-01T12:00:00Z", None);
+    write_metadata(&store, "node-b", SessionStatus::Active, "2026-08-01T12:01:00Z", None);
+    SUBTREE_MAP_BUILDS.store(0, Ordering::Relaxed);
+
+    let first = store.subtree_roots_shared().unwrap();
+    let warm = store.subtree_roots_shared().unwrap();
+    assert!(Arc::ptr_eq(&first.sequence, &warm.sequence));
+    assert!(Arc::ptr_eq(&first.views, &warm.views));
+    assert_eq!(SUBTREE_MAP_BUILDS.load(Ordering::Relaxed), 2);
+
+    write_metadata(&store, "node-a", SessionStatus::Active, "2026-08-01T12:02:00Z", None);
+    store.invalidate_cache("node-a");
+    store.subtree_roots_shared().unwrap();
+    assert_eq!(SUBTREE_MAP_BUILDS.load(Ordering::Relaxed), 4);
   }
 
   /// `test_sessions_batch_metadata_read.py::test_batch_output_matches_sequential_get_session_for_mixed_fixture`:

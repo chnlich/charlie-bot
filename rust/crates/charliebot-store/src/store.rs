@@ -100,6 +100,12 @@ pub(crate) struct CachedMetadata {
   pub(crate) identity: Arc<()>,
 }
 
+pub(crate) struct CachedSubtreeRoots {
+  pub(crate) metadata_identity: Vec<(String, Arc<()>)>,
+  pub(crate) sequence: Arc<HashMap<String, String>>,
+  pub(crate) views: Arc<HashMap<String, HashMap<String, String>>>,
+}
+
 #[cfg(test)]
 pub(crate) type MetadataStatHook = Arc<dyn Fn(&Path) + Send + Sync>;
 
@@ -157,6 +163,7 @@ pub struct Store {
   pub(crate) listings_revision: AtomicU64,
   /// The last listing walked for each status filter (see [`Store::load_session_metas`]).
   pub(crate) listings_memo: StdMutex<HashMap<Option<SessionStatus>, CachedListing>>,
+  pub(crate) subtree_roots_cache: StdMutex<Option<CachedSubtreeRoots>>,
   pub(crate) metadata_locks: StdMutex<HashMap<String, Arc<Mutex<()>>>>,
   pub(crate) events_cache: StdMutex<HashMap<String, Arc<StdMutex<Option<CachedChatEvents>>>>>,
   pub(crate) node_facts_cache: StdMutex<HashMap<String, CachedNodeFacts>>,
@@ -228,6 +235,7 @@ impl Store {
       metadata_cache: StdMutex::new(HashMap::new()),
       listings_revision: AtomicU64::new(0),
       listings_memo: StdMutex::new(HashMap::new()),
+      subtree_roots_cache: StdMutex::new(None),
       metadata_locks: StdMutex::new(HashMap::new()),
       events_cache: StdMutex::new(HashMap::new()),
       node_facts_cache: StdMutex::new(HashMap::new()),

@@ -258,7 +258,11 @@ fn iteration_blocker(
   if !events_path.is_file() {
     return Ok((None, format!("Iteration {iteration} {outcome} (no events log).")));
   }
-  super::judgment::failed_iteration_judgments(&super::judgment::newest_first_events(&events_path)?, iteration, outcome)
+  super::judgment::failed_iteration_judgments_from_events(
+    super::judgment::newest_first_event_iter(&events_path)?,
+    iteration,
+    outcome,
+  )
 }
 
 /// The one iteration's mechanical judgment and the evidence its report carries.
@@ -637,11 +641,11 @@ async fn judge_iteration(
     let mut fallback = format!("Iteration {iteration} finished without a report file.");
     let events_path = tree.run_dir(spec.child_id, run_id).join(RUN_EVENTS_NAME);
     if events_path.is_file() {
-      fallback = super::judgment::extract_iteration_summary(
-        &super::judgment::newest_first_events(&events_path)?,
+      fallback = super::judgment::extract_iteration_summary_from_events(
+        super::judgment::newest_first_event_iter(&events_path)?,
         iteration,
         "finished",
-      );
+      )?;
     }
     std::fs::write(&report_path, format!("{RUNNER_FALLBACK_REPORT_MARKER}{fallback}"))
       .with_context(|| format!("write {}", report_path.display()))?;

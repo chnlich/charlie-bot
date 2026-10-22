@@ -13,7 +13,7 @@ use charliebot_store::control_events::ACTOR_SYSTEM;
 use charliebot_store::metadata::{SessionMetadata, SessionStatus, TaskProfile, TaskSpec, UtcDateTime};
 use charliebot_store::run_records::{RunKind, RunRecord, SequenceRef};
 use charliebot_store::{CreateTask, TaskCaller};
-use chrono::{Datelike, Offset, Timelike};
+use chrono::{Datelike, LocalResult, Offset};
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
 use tokio::task::JoinHandle;
@@ -345,15 +345,20 @@ impl CronScheduler {
       let task_name = task.name.clone();
       let owner_ref = firing_ref(&task, &firing);
       let step_count = task.steps.as_ref().map_or(0, Vec::len);
-      let features = Arc::clone(&self.features);
+      let boundary = super::sequence_controller::subscribe_boundary(&leaf_id, &owner_ref);
       let prompt = prompt.clone();
       let handle = tokio::spawn(async move {
         match executor.launch_and_settle(&leaf_id, &run_id, Some(&prompt)).await {
           Ok(settlement) if settlement.withheld.is_none() && step_count > 0 => {
-            wait_for_steps_boundary(&features, &leaf_id, &owner_ref, step_count).await;
+            // Python keeps the firing task alive through the sequence chain (`src/features/cron/scheduler.py:413-434`).
+            wait_for_steps_boundary(boundary).await;
+            super::sequence_controller::remove_boundary(&leaf_id, &owner_ref);
           }
-          Ok(_) => {}
-          Err(error) => tracing::error!(task = %task_name, error = %error, "scheduled_round_failed"),
+          Ok(_) => super::sequence_controller::remove_boundary(&leaf_id, &owner_ref),
+          Err(error) => {
+            super::sequence_controller::remove_boundary(&leaf_id, &owner_ref);
+            tracing::error!(task = %task_name, error = %error, "scheduled_round_failed");
+          }
         }
       });
       self.handles.lock().expect("cron handle mutex is not poisoned").insert(task.name.clone(), handle);
@@ -619,57 +624,18 @@ fn firing_ref(task: &ScheduledTaskConfig, firing: &str) -> String {
   format!("cron:{}:{firing}", task.name)
 }
 
-async fn wait_for_steps_boundary(features: &FeatureContext, leaf_id: &str, owner_ref: &str, step_count: usize) {
+async fn wait_for_steps_boundary(
+  mut boundary: tokio::sync::watch::Receiver<super::sequence_controller::BoundaryNotice>,
+) {
   loop {
-    let state = match steps_boundary_state(features, leaf_id, owner_ref, step_count) {
-      Ok(state) => state,
-      Err(error) => {
-        tracing::error!(leaf = leaf_id, owner_ref, error = %error, "cron_sequence_overlap_watch_failed");
-        return;
-      }
-    };
-    if state {
+    let notice = *boundary.borrow_and_update();
+    if notice.done || notice.failed {
       return;
     }
-    tokio::time::sleep(Duration::from_millis(25)).await;
-  }
-}
-
-fn steps_boundary_state(
-  features: &FeatureContext,
-  leaf_id: &str,
-  owner_ref: &str,
-  step_count: usize,
-) -> anyhow::Result<bool> {
-  let records = features.store.list_run_records_sync(leaf_id)?;
-  let events = features.store.load_all_facts(leaf_id)?;
-  let mut positions = HashMap::new();
-  for run in records {
-    if let Some(sequence) =
-      run.sequence_ref.as_ref().filter(|sequence| sequence.kind == "cron_steps" && sequence.owner_ref == owner_ref)
-    {
-      positions.insert(sequence.position as usize, run);
+    if boundary.changed().await.is_err() {
+      return;
     }
   }
-  let Some((&position, run)) = positions.iter().max_by_key(|(position, _)| *position) else {
-    return Ok(true);
-  };
-  if events.iter().any(|event| {
-    event.get("type").and_then(Value::as_str) == Some(event_types::RUN_LAUNCH_WITHHELD)
-      && event.get("run_id").and_then(Value::as_str) == Some(run.id.as_str())
-  }) {
-    return Ok(true);
-  }
-  let Some(outcome) = charliebot_store::run_records::terminal_outcome(&events, &run.id)? else {
-    return Ok(false);
-  };
-  if outcome != charliebot_store::run_records::RunOutcomeKind::Success || run.exit_code != Some(0) {
-    return Ok(true);
-  }
-  if position + 1 >= step_count {
-    return Ok(true);
-  }
-  Ok(!positions.contains_key(&(position + 1)))
 }
 
 /// Return the next cron occurrence in the configured time zone.
@@ -706,7 +672,14 @@ fn write_cron_key(cfg: &CharlieBotConfig, name: &str, key: &str, value: Value) -
 #[derive(Clone)]
 struct CronField {
   values: HashSet<u32>,
+  ordered: Vec<u32>,
   wildcard: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct CronSearchWork {
+  calendar_days: usize,
+  local_candidates: usize,
 }
 
 struct CronExpression {
@@ -736,31 +709,93 @@ impl CronExpression {
     &self,
     base: chrono::DateTime<Tz>,
   ) -> anyhow::Result<chrono::DateTime<Tz>> {
+    // Match Python's `croniter` field jumps (`src/features/cron/scheduler.py:323-326`) while preserving the Rust port's UTC minute grid.
+    self.next_after_with_work(base).map(|(next, _)| next)
+  }
+
+  fn next_after_with_work<Tz: chrono::TimeZone + Clone>(
+    &self,
+    base: chrono::DateTime<Tz>,
+  ) -> anyhow::Result<(chrono::DateTime<Tz>, CronSearchWork)> {
     let base_utc = base.with_timezone(&chrono::Utc);
     let timezone = base.timezone().clone();
     let start = base_utc.timestamp().div_euclid(60) * 60 + 60;
+    // Preserve the existing timestamp horizon: the old `8 * 366 * 24 * 60` value was seconds, not minutes.
     let end = start + 8 * 366 * 24 * 60;
-    for timestamp in (start..end).step_by(60) {
-      let instant = chrono::DateTime::from_timestamp(timestamp, 0).expect("a bounded Unix minute is representable");
-      let local = instant.with_timezone(&timezone);
-      let day_match = self.day.values.contains(&local.day());
-      let weekday = local.weekday().num_days_from_sunday();
-      let weekday_match = self.weekday.values.contains(&weekday) || (weekday == 0 && self.weekday.values.contains(&7));
-      let date_matches = match (self.day.wildcard, self.weekday.wildcard) {
-        (true, true) => true,
-        (true, false) => weekday_match,
-        (false, true) => day_match,
-        (false, false) => day_match || weekday_match,
-      };
-      if self.minute.values.contains(&local.minute())
-        && self.hour.values.contains(&local.hour())
-        && self.month.values.contains(&local.month())
-        && date_matches
+    let first_date = chrono::DateTime::from_timestamp(start, 0)
+      .expect("a bounded Unix minute is representable")
+      .with_timezone(&timezone)
+      .date_naive();
+    let start_local = chrono::DateTime::from_timestamp(start, 0)
+      .expect("a bounded Unix minute is representable")
+      .with_timezone(&timezone);
+    let mut work = CronSearchWork::default();
+    let mut best: Option<chrono::DateTime<Tz>> = None;
+
+    for day_offset in 0..=(8 * 366 + 3) {
+      let date = first_date + chrono::Duration::days(day_offset);
+      work.calendar_days += 1;
+      // IANA offsets stay within 24 hours, giving a conservative UTC floor for local candidates on this date.
+      let date_floor =
+        date.and_hms_opt(0, 0, 0).expect("midnight is a valid naive datetime").and_utc().timestamp() - 24 * 60 * 60;
+      if date_floor >= end {
+        break;
+      }
+      if let Some(next) = best.as_ref()
+        && date_floor > next.with_timezone(&chrono::Utc).timestamp()
       {
-        return Ok(instant.with_timezone(&timezone));
+        return Ok((next.clone(), work));
+      }
+      if !self.date_matches(date) {
+        continue;
+      }
+      if date == start_local.date_naive() && self.minute.values.len() == 60 && self.hour.values.len() == 24 {
+        return Ok((
+          chrono::DateTime::from_timestamp(start, 0)
+            .expect("a bounded Unix minute is representable")
+            .with_timezone(&timezone),
+          work,
+        ));
+      }
+      for hour in &self.hour.ordered {
+        for minute in &self.minute.ordered {
+          work.local_candidates += 1;
+          let Some(local_time) = date.and_hms_opt(*hour, *minute, 0) else { continue };
+          let mut consider = |candidate: chrono::DateTime<Tz>| {
+            let timestamp = candidate.with_timezone(&chrono::Utc).timestamp();
+            if timestamp >= start
+              && timestamp < end
+              && timestamp.rem_euclid(60) == 0
+              && best.as_ref().is_none_or(|current| timestamp < current.with_timezone(&chrono::Utc).timestamp())
+            {
+              best = Some(candidate);
+            }
+          };
+          match timezone.from_local_datetime(&local_time) {
+            LocalResult::Single(candidate) => consider(candidate),
+            LocalResult::Ambiguous(first, second) => {
+              consider(first);
+              consider(second);
+            }
+            LocalResult::None => {}
+          }
+        }
       }
     }
-    anyhow::bail!("cron expression has no fire within eight years")
+    best.map(|next| (next, work)).ok_or_else(|| anyhow::anyhow!("cron expression has no fire within eight years"))
+  }
+
+  fn date_matches(&self, date: chrono::NaiveDate) -> bool {
+    let day_match = self.day.values.contains(&date.day());
+    let weekday = date.weekday().num_days_from_sunday();
+    let weekday_match = self.weekday.values.contains(&weekday) || (weekday == 0 && self.weekday.values.contains(&7));
+    let date_matches = match (self.day.wildcard, self.weekday.wildcard) {
+      (true, true) => true,
+      (true, false) => weekday_match,
+      (false, true) => day_match,
+      (false, false) => day_match || weekday_match,
+    };
+    self.month.values.contains(&date.month()) && date_matches
   }
 }
 
@@ -806,7 +841,9 @@ fn parse_field(field: &str, min: u32, max: u32, names: &[(&str, u32)]) -> anyhow
   if values.is_empty() {
     anyhow::bail!("cron field {field:?} has no values");
   }
-  Ok(CronField { values, wildcard })
+  let mut ordered = values.iter().copied().collect::<Vec<_>>();
+  ordered.sort_unstable();
+  Ok(CronField { values, ordered, wildcard })
 }
 
 fn parse_cron_value(value: &str, names: &[(&str, u32)]) -> anyhow::Result<u32> {
@@ -818,15 +855,14 @@ fn parse_cron_value(value: &str, names: &[(&str, u32)]) -> anyhow::Result<u32> {
 
 #[cfg(test)]
 mod tests {
-  use std::collections::HashMap;
-  use std::path::Path;
-  use std::sync::Arc;
-
   use charliebot_store::metadata::{SessionStatus, TaskProfile, UtcDateTime};
   use charliebot_store::run_records::RunKind;
   use charliebot_store::{CreateTask, TaskCaller};
   use chrono::{TimeZone, Timelike, Utc};
   use serde_json::{Map, Value, json};
+  use std::collections::HashMap;
+  use std::path::Path;
+  use std::sync::Arc;
 
   use super::{CronExpression, CronScheduler, python_isoformat};
   use crate::cron::config::{ScheduledTaskConfig, StepConfig};
@@ -844,6 +880,21 @@ mod tests {
     let expression = CronExpression::parse("0 8 1 * mon").unwrap();
     let base = Utc.with_ymd_and_hms(2026, 6, 2, 8, 0, 0).unwrap();
     assert_eq!(expression.next_after(base).unwrap().to_rfc3339(), "2026-06-08T08:00:00+00:00");
+  }
+
+  #[test]
+  fn sparse_cron_checks_calendar_dates_within_the_existing_horizon() {
+    let expression = CronExpression::parse("0 0 1 * *").unwrap();
+    let base = Utc.with_ymd_and_hms(2026, 1, 2, 0, 0, 0).unwrap();
+
+    let (next, work) = expression.next_after_with_work(base).unwrap();
+
+    assert_eq!(next.to_rfc3339(), "2026-02-01T00:00:00+00:00");
+    assert!(work.calendar_days <= 33, "{work:?}");
+    assert_eq!(work.local_candidates, 1);
+
+    let yearly = CronExpression::parse("0 0 1 1 *").unwrap();
+    assert!(yearly.next_after(base).is_err());
   }
 
   #[test]

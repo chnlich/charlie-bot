@@ -289,7 +289,7 @@ pub trait SequenceTree: Send + Sync {
 
   fn last_ended_run_id(&self, session_id: &str) -> StoreResult<Option<String>>;
 
-  fn load_events_sync(&self, session_id: &str) -> StoreResult<Vec<Value>>;
+  fn load_events_sync(&self, session_id: &str) -> StoreResult<Arc<Vec<Value>>>;
 
   fn terminal_outcome(&self, events: &[Value], run_id: &str) -> Option<String>;
 
@@ -393,8 +393,9 @@ impl SequenceTree for StoreSequenceTree {
     self.store.last_ended_run_id(session_id)
   }
 
-  fn load_events_sync(&self, session_id: &str) -> StoreResult<Vec<Value>> {
-    self.store.load_all_facts(session_id)
+  fn load_events_sync(&self, session_id: &str) -> StoreResult<Arc<Vec<Value>>> {
+    // Python hands readers its cached live-facts list by reference (`src/runtime/task_sessions.py:650-662`).
+    self.store.load_all_facts_shared_sync(session_id)
   }
 
   fn terminal_outcome(&self, events: &[Value], run_id: &str) -> Option<String> {
@@ -414,7 +415,7 @@ impl SequenceTree for StoreSequenceTree {
     run_id: &'a str,
   ) -> BoxFuture<'a, StoreResult<Option<String>>> {
     Box::pin(async move {
-      let events = self.store.load_all_facts(session_id)?;
+      let events = self.store.load_all_facts_shared_sync(session_id)?;
       Ok(self.terminal_outcome(&events, run_id))
     })
   }
@@ -827,6 +828,7 @@ mod tests {
       store.register_run_locked(&guard, session_id, run, Some("synthetic task")).await.unwrap()
     };
     let runtime = Arc::new(TestSequenceRuntime);
+    let tree_store = Arc::clone(&store);
     let tree = StoreSequenceTree::new(
       store,
       SequenceTreeRuntime {
@@ -837,6 +839,14 @@ mod tests {
         startup_stop: StartupStop::default(),
       },
     );
+    tree_store.clear_chat_events_cache(session_id);
+    let reads_before_facts = tree_store.history_work().file_reads;
+    let first_facts = tree.load_events_sync(session_id).unwrap();
+    let reads_after_first_facts = tree_store.history_work().file_reads;
+    let second_facts = tree.load_events_sync(session_id).unwrap();
+    assert!(Arc::ptr_eq(&first_facts, &second_facts));
+    assert_eq!(reads_after_first_facts, reads_before_facts + 1);
+    assert_eq!(tree_store.history_work().file_reads, reads_after_first_facts);
     controller.redrive(session_id, &tree).await.unwrap();
     assert_eq!(controller.launch_context(&meta, &run, "launch").await.unwrap().as_deref(), Some("sequence-run:launch"));
     controller.after_run(session_id, &run, &tree).await.unwrap();

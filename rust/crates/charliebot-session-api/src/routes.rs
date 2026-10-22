@@ -66,8 +66,9 @@ pub(crate) fn matches(path: &str) -> bool {
 async fn list_active(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
   let response = blocking_store(move || {
     let (mut rows, derived) = listing::active_listing_corpus(&features.store, &features.registry)?;
-    let sequence = features.store.sequence_subtree_roots()?;
-    let views = features.store.view_subtree_roots()?;
+    let roots = features.store.subtree_roots_shared()?;
+    let sequence = roots.sequence;
+    let views = roots.views;
     rows.retain(|row| !sequence.contains_key(&row.id) && !views.values().any(|members| members.contains_key(&row.id)));
     Ok(listing::sessions_list_response(&request, &features.store, &features.registry, &rows, &derived, &ACTIVE_MEMOS))
   })

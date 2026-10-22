@@ -29,7 +29,7 @@ pub use aggregator::{MessageAggregator, TOOL_PREVIEW_CHARS};
 pub use control::ControlGuard;
 pub use events::{ChatEvent, ChatEventsDelta};
 pub use hooks::{AfterTurnWork, EmptyRuntimeEventHooks, EventRenderer, RuntimeEventHooks};
-pub use listing::{ArchivedPage, MetadataListing, RawMetadata};
+pub use listing::{ArchivedPage, MetadataListing, RawMetadata, SharedSubtreeRoots};
 pub use message_utils::{MessageProvenance, SESSION_NOT_FOUND_DETAIL, build_scheduled_trigger_event};
 pub use projection::MessageProjection;
 pub use run_records::{

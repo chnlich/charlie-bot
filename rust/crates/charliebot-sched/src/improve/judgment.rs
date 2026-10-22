@@ -1,7 +1,11 @@
 //! The mechanical judgments over an iteration: report validity, the summary text, and the quota blocker
 //! (`src/features/improve/improve_command.py:250-287`, `:333-357`, `:494-583`).
 
-use std::path::Path;
+use std::fs::File;
+use std::os::fd::AsRawFd;
+use std::path::{Path, PathBuf};
+use std::ptr::NonNull;
+use std::slice;
 
 use anyhow::Context;
 use charliebot_agents::backend_pool::QUOTA_ERROR_PATTERNS;
@@ -21,6 +25,9 @@ pub const LOOP_FAILURE_ERROR_PREFIX: &str = "Improve loop failed: ";
 
 /// The event types the newest-first judgments read: every other type is skipped unparsed.
 const CANDIDATE_TYPES: [&str; 5] = [RESULT, ASSISTANT, ASSISTANT_ERROR, ERROR, RATE_LIMIT_EVENT];
+const SUMMARY_TYPES: [&str; 2] = [RESULT, ASSISTANT];
+const HEAD_PROOF_BYTES: usize = 256;
+const REVERSE_SCAN_BYTES: usize = 64 * 1024;
 
 /// Whether the report's `### Commits` section lists `none` as its first entry.
 pub fn commits_section_first_none(text: &str) -> bool {
@@ -119,6 +126,20 @@ pub fn extract_iteration_summary(events_newest_first: &[Value], iteration: i64, 
     .unwrap_or_else(|| format!("Iteration {iteration} {status} (no summary available)."))
 }
 
+/// Stream the newest summary from a reverse event walk.
+pub fn extract_iteration_summary_from_events(
+  events_newest_first: impl IntoIterator<Item = anyhow::Result<Value>>,
+  iteration: i64,
+  status: &str,
+) -> anyhow::Result<String> {
+  for event in events_newest_first {
+    if let Some(summary) = summary_text(&event?) {
+      return Ok(summary);
+    }
+  }
+  Ok(format!("Iteration {iteration} {status} (no summary available)."))
+}
+
 /// The one pass over the newest-first events that settles both the quota blocker and the summary. The walk stops once
 /// both are known.
 pub fn failed_iteration_judgments(
@@ -126,14 +147,24 @@ pub fn failed_iteration_judgments(
   iteration: i64,
   status: &str,
 ) -> anyhow::Result<(Option<String>, String)> {
+  failed_iteration_judgments_from_events(events_newest_first.iter().cloned().map(Ok), iteration, status)
+}
+
+/// The one pass over a streamed newest-first event walk that settles both the quota blocker and the summary.
+pub fn failed_iteration_judgments_from_events(
+  events_newest_first: impl IntoIterator<Item = anyhow::Result<Value>>,
+  iteration: i64,
+  status: &str,
+) -> anyhow::Result<(Option<String>, String)> {
   let mut blocker_reason = None;
   let mut summary = None;
   for event in events_newest_first {
+    let event = event?;
     if blocker_reason.is_none() {
-      blocker_reason = quota_blocker_match(event)?;
+      blocker_reason = quota_blocker_match(&event)?;
     }
     if summary.is_none() {
-      summary = summary_text(event);
+      summary = summary_text(&event);
     }
     if blocker_reason.is_some() && summary.is_some() {
       break;
@@ -222,28 +253,235 @@ fn event_text(event: &Value) -> String {
   parts.join("\n")
 }
 
-/// The events of an iteration's log, newest first. Only the candidate types and the lines with no type are kept, as the
-/// two judgments read them. A line that does not parse is logged and skipped.
+/// The iteration log's candidate events, newest first, as a compatibility collection.
 pub fn newest_first_events(events_path: &Path) -> anyhow::Result<Vec<Value>> {
-  let text = std::fs::read_to_string(events_path).with_context(|| format!("read {}", events_path.display()))?;
-  let mut events = Vec::new();
-  for line in text.lines().rev() {
-    if line.trim().is_empty() {
-      continue;
-    }
-    let event: Value = match serde_json::from_str(line) {
-      Ok(event) => event,
-      Err(error) => {
-        tracing::warn!(target: "charliebot_sched", path = %events_path.display(), error = %error, "ndjson_parse_skip");
-        continue;
-      }
-    };
-    let Some(object) = event.as_object() else { continue };
-    match object.get("type") {
-      None | Some(Value::Null) => events.push(event),
-      Some(Value::String(kind)) if CANDIDATE_TYPES.contains(&kind.as_str()) => events.push(event),
-      Some(_) => {}
+  newest_first_event_iter(events_path)?.collect()
+}
+
+/// The iteration log's candidate events, newest first. Python uses the same bounded head proof before parsing a line
+/// (`src/infra/ndjson.py:404-468` and `src/features/improve/improve_command.py:575-587`).
+pub fn newest_first_event_iter(events_path: &Path) -> anyhow::Result<NewestFirstEvents> {
+  NewestFirstEvents::open(events_path, &CANDIDATE_TYPES)
+}
+
+/// Return the newest worker summary directly from the log, parsing only result and assistant events.
+pub fn worker_summary_from_events_log(events_path: &Path) -> anyhow::Result<Option<String>> {
+  for event in NewestFirstEvents::open(events_path, &SUMMARY_TYPES)? {
+    let event = event?;
+    if let Some(summary) = charliebot_tasks::review::worker_summary_from_events_log(std::slice::from_ref(&event)) {
+      return Ok(Some(summary));
     }
   }
-  Ok(events)
+  Ok(None)
+}
+
+/// One reverse walk over an append-only NDJSON file. Irrelevant lines with a provable leading type cost one bounded
+/// head read, while the iterator keeps no parsed event vector alive.
+pub struct NewestFirstEvents {
+  _file: Option<File>,
+  mapping: Option<ReadOnlyMapping>,
+  path: PathBuf,
+  end: u64,
+  keep_types: &'static [&'static str],
+  bytes_probed: usize,
+  bytes_parsed: usize,
+  failed: bool,
+}
+
+struct ReadOnlyMapping {
+  pointer: NonNull<u8>,
+  length: usize,
+}
+
+impl ReadOnlyMapping {
+  fn open(file: &File, path: &Path, length: usize) -> anyhow::Result<Option<Self>> {
+    if length == 0 {
+      return Ok(None);
+    }
+    // The event log is append-only while mapped, matching `src/infra/ndjson.py:_mapped_lines`.
+    let mapping =
+      unsafe { libc::mmap(std::ptr::null_mut(), length, libc::PROT_READ, libc::MAP_PRIVATE, file.as_raw_fd(), 0) };
+    if mapping == libc::MAP_FAILED {
+      return Err(std::io::Error::last_os_error()).with_context(|| format!("map {}", path.display()));
+    }
+    let pointer = NonNull::new(mapping.cast()).expect("a successful mmap returns a non-null pointer");
+    Ok(Some(Self { pointer, length }))
+  }
+
+  fn bytes(&self) -> &[u8] {
+    // SAFETY: the mapping covers `length` readable bytes and is unmapped only in `Drop`.
+    unsafe { slice::from_raw_parts(self.pointer.as_ptr(), self.length) }
+  }
+}
+
+impl Drop for ReadOnlyMapping {
+  fn drop(&mut self) {
+    let result = unsafe { libc::munmap(self.pointer.as_ptr().cast(), self.length) };
+    if result != 0 {
+      tracing::error!(error = %std::io::Error::last_os_error(), "ndjson_mmap_close_failed");
+    }
+  }
+}
+
+impl NewestFirstEvents {
+  fn open(path: &Path, keep_types: &'static [&'static str]) -> anyhow::Result<Self> {
+    let file = match File::open(path) {
+      Ok(file) => Some(file),
+      Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+      Err(error) => return Err(error).with_context(|| format!("open {}", path.display())),
+    };
+    let (mapping, end) = match &file {
+      Some(file) => {
+        let end = file.metadata().with_context(|| format!("read {} metadata", path.display()))?.len();
+        let length = usize::try_from(end).with_context(|| format!("{} is too large to map", path.display()))?;
+        (ReadOnlyMapping::open(file, path, length)?, end)
+      }
+      None => (None, 0),
+    };
+    Ok(Self {
+      _file: file,
+      mapping,
+      path: path.to_path_buf(),
+      end,
+      keep_types,
+      bytes_probed: 0,
+      bytes_parsed: 0,
+      failed: false,
+    })
+  }
+
+  fn previous_line_range(&mut self) -> anyhow::Result<Option<(u64, u64)>> {
+    let Some(mapping) = self.mapping.as_ref() else { return Ok(None) };
+    let bytes = mapping.bytes();
+    loop {
+      if self.end == 0 {
+        return Ok(None);
+      }
+      let line_end = self.end;
+      let mut cursor = line_end;
+      let mut newline = None;
+      while cursor > 0 {
+        let chunk_start = cursor.saturating_sub(REVERSE_SCAN_BYTES as u64);
+        let chunk_start_usize = usize::try_from(chunk_start).expect("mapped file offset fits usize");
+        let cursor_usize = usize::try_from(cursor).expect("mapped file offset fits usize");
+        if let Some(offset) = bytes[chunk_start_usize..cursor_usize].iter().rposition(|byte| *byte == b'\n') {
+          newline = Some(chunk_start + offset as u64);
+          break;
+        }
+        cursor = chunk_start;
+      }
+      let line_start = newline.map_or(0, |position| position + 1);
+      self.end = newline.unwrap_or(0);
+      if line_start != line_end {
+        return Ok(Some((line_start, line_end)));
+      }
+    }
+  }
+
+  fn next_event(&mut self) -> anyhow::Result<Option<Value>> {
+    loop {
+      let Some((start, end)) = self.previous_line_range()? else { return Ok(None) };
+      let line_len = usize::try_from(end - start).expect("one NDJSON line fits usize");
+      let Some(mapping) = self.mapping.as_ref() else { return Ok(None) };
+      let bytes = mapping.bytes();
+      let start = usize::try_from(start).expect("mapped file offset fits usize");
+      let end = usize::try_from(end).expect("mapped file offset fits usize");
+      let line = &bytes[start..end];
+      let head_len = line_len.min(HEAD_PROOF_BYTES);
+      let head = &line[..head_len];
+      self.bytes_probed += head_len;
+      if head.iter().all(u8::is_ascii_whitespace) && line_len <= HEAD_PROOF_BYTES {
+        continue;
+      }
+      if head_proves_irrelevant_type(head, self.keep_types) {
+        continue;
+      }
+      self.bytes_parsed += line_len;
+      if line.iter().all(u8::is_ascii_whitespace) {
+        continue;
+      }
+      let event: Value = match serde_json::from_slice(line) {
+        Ok(event) => event,
+        Err(error) => {
+          tracing::warn!(target: "charliebot_sched", path = %self.path.display(), error = %error, "ndjson_parse_skip");
+          continue;
+        }
+      };
+      let Some(object) = event.as_object() else { continue };
+      match object.get("type") {
+        None | Some(Value::Null) => return Ok(Some(event)),
+        Some(Value::String(kind)) if self.keep_types.contains(&kind.as_str()) => return Ok(Some(event)),
+        Some(_) => {}
+      }
+    }
+  }
+}
+
+impl Iterator for NewestFirstEvents {
+  type Item = anyhow::Result<Value>;
+
+  fn next(&mut self) -> Option<Self::Item> {
+    if self.failed {
+      return None;
+    }
+    match self.next_event() {
+      Ok(Some(event)) => Some(Ok(event)),
+      Ok(None) => None,
+      Err(error) => {
+        self.failed = true;
+        Some(Err(error).context(format!("read {}", self.path.display())))
+      }
+    }
+  }
+}
+
+fn head_proves_irrelevant_type(head: &[u8], keep_types: &[&str]) -> bool {
+  let value = if let Some(rest) = head.strip_prefix(br#"{"type""#) {
+    head_string_after_key(rest).map(|(value, _)| value)
+  } else if let Some(rest) = head.strip_prefix(br#"{"id""#) {
+    let Some((_, rest)) = head_string_after_key(rest) else { return false };
+    let rest = rest.strip_prefix(b",").map(trim_head_whitespace).unwrap_or_default();
+    let Some(rest) = rest.strip_prefix(br#""type""#) else { return false };
+    head_string_after_key(rest).map(|(value, _)| value)
+  } else {
+    return false;
+  };
+  value.is_some_and(|value| !keep_types.iter().any(|kind| value == kind.as_bytes()))
+}
+
+fn head_string_after_key(mut rest: &[u8]) -> Option<(&[u8], &[u8])> {
+  rest = trim_head_whitespace(rest);
+  rest = rest.strip_prefix(b":")?;
+  rest = trim_head_whitespace(rest);
+  let rest = rest.strip_prefix(b"\"")?;
+  let end = rest.iter().position(|byte| *byte == b'"')?;
+  Some((&rest[..end], &rest[end + 1..]))
+}
+
+fn trim_head_whitespace(mut bytes: &[u8]) -> &[u8] {
+  while matches!(bytes.first(), Some(b' ' | b'\t')) {
+    bytes = &bytes[1..];
+  }
+  bytes
+}
+
+#[cfg(test)]
+mod tests {
+  use super::newest_first_event_iter;
+
+  #[test]
+  fn reverse_judgment_walk_parses_only_a_bounded_head_of_irrelevant_lines() {
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().join("events.jsonl");
+    let summary = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"summary"}]}}"#;
+    let irrelevant = format!(r#"{{"type":"tool_result","content":"{}"}}"#, "x".repeat(64 * 1024));
+    std::fs::write(&path, format!("{summary}\n{irrelevant}\n")).unwrap();
+
+    let mut events = newest_first_event_iter(&path).unwrap();
+    let event = events.next().unwrap().unwrap();
+    assert_eq!(event["type"], "assistant");
+    assert_eq!(events.bytes_parsed, summary.len());
+    assert_eq!(events.bytes_probed, 256 + summary.len());
+    assert!(events.next().is_none());
+  }
 }

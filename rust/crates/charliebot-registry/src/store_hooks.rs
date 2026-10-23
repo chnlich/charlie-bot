@@ -283,14 +283,13 @@ mod tests {
   use std::sync::Mutex;
   use std::time::Duration;
 
+  use charliebot_core::test_support::EventSink;
   use charliebot_store::Store;
   use charliebot_store::metadata::TaskProfile;
   use futures_util::future::BoxFuture;
   use serde_json::json;
   use tracing::field::{Field, Visit};
-  use tracing::{Event, Level, Subscriber};
-  use tracing_subscriber::Layer;
-  use tracing_subscriber::layer::{Context, SubscriberExt};
+  use tracing::{Event, Level};
 
   use super::*;
   use crate::context::{FeatureContext, features_over};
@@ -382,8 +381,8 @@ mod tests {
   /// Keeps each error event that the store's after-turn tasks log.
   struct ErrorCapture(Arc<Mutex<Vec<ErrorEvent>>>);
 
-  impl<S: Subscriber> Layer<S> for ErrorCapture {
-    fn on_event(&self, event: &Event<'_>, _context: Context<'_, S>) {
+  impl EventSink for ErrorCapture {
+    fn event(&self, event: &Event<'_>) {
       if *event.metadata().level() == Level::ERROR {
         let mut captured = ErrorEvent::default();
         event.record(&mut captured);
@@ -392,11 +391,11 @@ mod tests {
     }
   }
 
-  /// Captures the error events logged on this test's thread. The returned guard keeps the capture installed.
-  fn capture_errors() -> (Arc<Mutex<Vec<ErrorEvent>>>, tracing::subscriber::DefaultGuard) {
+  /// Captures the error events logged on this test's thread through the shared test capture. The returned guard keeps
+  /// the capture installed.
+  fn capture_errors() -> (Arc<Mutex<Vec<ErrorEvent>>>, charliebot_core::test_support::CaptureGuard) {
     let errors = Arc::new(Mutex::new(Vec::new()));
-    let guard =
-      tracing::subscriber::set_default(tracing_subscriber::registry().with(ErrorCapture(Arc::clone(&errors))));
+    let guard = charliebot_core::test_support::install_events(Arc::new(ErrorCapture(Arc::clone(&errors))));
     (errors, guard)
   }
 

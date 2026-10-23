@@ -102,18 +102,19 @@ mod tests {
   use std::net::SocketAddr;
   use std::path::{Path, PathBuf};
   use std::sync::atomic::{AtomicU64, Ordering};
-  use std::sync::{Arc, Mutex, OnceLock};
+  use std::sync::{Arc, Mutex};
 
   use axum::extract::ws::Message;
   use charliebot_core::hot_reload::HotReload;
+  use charliebot_core::test_support::EventSink;
   use charliebot_registry::{FeatureContext, Registry, WebSocketRequest};
   use charliebot_store::Store;
   use futures_util::StreamExt;
   use futures_util::future::BoxFuture;
   use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
   use tokio::net::{TcpListener, TcpStream};
+  use tracing::Event;
   use tracing::field::{Field, Visit};
-  use tracing::{Event, Subscriber};
 
   use super::*;
   use crate::app::ConnectionInfo;
@@ -279,19 +280,7 @@ mod tests {
     }
   }
 
-  impl Subscriber for LogMessages {
-    fn enabled(&self, _metadata: &tracing::Metadata<'_>) -> bool {
-      true
-    }
-
-    fn new_span(&self, _attributes: &tracing::span::Attributes<'_>) -> tracing::span::Id {
-      tracing::span::Id::from_u64(1)
-    }
-
-    fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
-
-    fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
-
+  impl EventSink for LogMessages {
     fn event(&self, event: &Event<'_>) {
       let mut visitor = MessageVisitor(None);
       event.record(&mut visitor);
@@ -299,19 +288,13 @@ mod tests {
         self.0.lock().expect("lock captured log messages").push(message);
       }
     }
-
-    fn enter(&self, _span: &tracing::span::Id) {}
-
-    fn exit(&self, _span: &tracing::span::Id) {}
   }
 
-  static CAPTURED_LOGS: OnceLock<Arc<Mutex<Vec<String>>>> = OnceLock::new();
-
-  fn captured_logs() -> Arc<Mutex<Vec<String>>> {
-    let logs = Arc::clone(CAPTURED_LOGS.get_or_init(|| Arc::new(Mutex::new(Vec::new()))));
-    tracing::subscriber::set_global_default(LogMessages(Arc::clone(&logs)))
-      .expect("install the websocket test subscriber once");
-    logs
+  /// Captures this test's log messages through the shared test capture, so each test reads its own messages.
+  fn captured_logs() -> (Arc<Mutex<Vec<String>>>, charliebot_core::test_support::CaptureGuard) {
+    let logs = Arc::new(Mutex::new(Vec::new()));
+    let guard = charliebot_core::test_support::install_events(Arc::new(LogMessages(Arc::clone(&logs))));
+    (logs, guard)
   }
 
   #[test]
@@ -338,7 +321,7 @@ mod tests {
 
   #[tokio::test]
   async fn registered_routes_authorize_dispatch_and_keep_unowned_routes_closed() {
-    let logs = captured_logs();
+    let (logs, _capture) = captured_logs();
     let mut registry = Registry::new();
     registry.register_package("src.features.test", register_exchange).expect("register the test route");
     let (state, _home) = app_state(registry);

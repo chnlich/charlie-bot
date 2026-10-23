@@ -2,12 +2,10 @@
 //! Fixtures of the startup-recovery tests (`tests/recovery.rs`): the task-execution stack over a temporary home, the
 //! scripted `/bin/sh` backend, a fault seam on the run-finish completion, and a capture of the node pass's log events.
 
-#[path = "support/log_capture.rs"]
-mod log_capture;
 #[path = "support/recovery_process_guard.rs"]
 mod process_guard;
 
-pub use log_capture::LogCapture;
+pub use charliebot_core::test_support::LogCapture;
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::io::{self, Write};

@@ -22,6 +22,8 @@ pub mod repo_root;
 pub mod run_token;
 pub mod ssh;
 pub mod tempdir;
+#[cfg(feature = "test-support")]
+pub mod test_support;
 pub mod timefmt;
 pub mod timeouts;
 pub mod v1_sessions;

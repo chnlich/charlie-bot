@@ -23,5 +23,10 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
 
+[features]
+# The shared test log capture in `test_support`. Only test dev-dependencies turn it on, so server and library builds
+# never compile the capture subscriber.
+test-support = []
+
 [dev-dependencies]
 tempfile.workspace = true

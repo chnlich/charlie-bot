@@ -28,6 +28,7 @@ uuid.workspace = true
 
 [dev-dependencies]
 anyhow.workspace = true
+charliebot-core = { workspace = true, features = ["test-support"] }
 futures-util.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }

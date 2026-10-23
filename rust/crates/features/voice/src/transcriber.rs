@@ -452,7 +452,6 @@ pub(crate) fn warm_up_bundle(bundle: &SpeechModelBundle) -> anyhow::Result<()> {
 mod tests {
   use super::*;
   use std::fs;
-  use std::io;
   use std::time::Duration;
 
   use anyhow::anyhow;
@@ -633,29 +632,12 @@ mod tests {
     reset_after_stop_test();
   }
 
-  /// The log lines `run` writes, as the server's formatter renders them.
+  /// The log lines `run` writes, as the server's formatter renders them, through the shared test capture.
   fn logged_by(run: impl FnOnce()) -> String {
-    let buffer = Arc::new(Mutex::new(Vec::new()));
-    let sink = Arc::clone(&buffer);
-    let subscriber =
-      tracing_subscriber::fmt().with_ansi(false).with_writer(move || LogSink(Arc::clone(&sink))).finish();
-    tracing::subscriber::with_default(subscriber, run);
-    let bytes = buffer.lock().expect("the log buffer is never poisoned").clone();
-    String::from_utf8(bytes).expect("the log is UTF-8")
-  }
-
-  /// A log writer that appends to a buffer the test reads back.
-  struct LogSink(Arc<Mutex<Vec<u8>>>);
-
-  impl io::Write for LogSink {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-      self.0.lock().expect("the log buffer is never poisoned").extend_from_slice(bytes);
-      Ok(bytes.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-      Ok(())
-    }
+    let capture = charliebot_core::test_support::LogCapture::default();
+    let _guard = capture.install();
+    run();
+    capture.text()
   }
 
   #[test]

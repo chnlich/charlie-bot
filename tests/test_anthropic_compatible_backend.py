@@ -1,3 +1,4 @@
+import json
 import os
 import types
 
@@ -112,6 +113,23 @@ def test_factory_omits_custom_headers_when_option_has_none_and_parent_sets_them(
   prepared = backend._prepare_env({claude_code.GATEWAY_CUSTOM_HEADERS_ENV: "inherited-value"})
 
   assert claude_code.GATEWAY_CUSTOM_HEADERS_ENV not in prepared
+
+
+def test_factory_routes_extra_body() -> None:
+  extra_body = {"cache": {"no-store": True, "no-cache": True}}
+  backend = factory.build(_option(extra_body=extra_body), config.CharlieBotConfig())
+
+  prepared = backend._prepare_env({})
+
+  assert json.loads(prepared[claude_code.GATEWAY_EXTRA_BODY_ENV]) == extra_body
+
+
+def test_factory_omits_extra_body_when_option_has_none_and_parent_sets_it() -> None:
+  backend = factory.build(_option(), config.CharlieBotConfig())
+
+  prepared = backend._prepare_env({claude_code.GATEWAY_EXTRA_BODY_ENV: "inherited-value"})
+
+  assert claude_code.GATEWAY_EXTRA_BODY_ENV not in prepared
 
 
 def test_claude_model_env_sets_exactly_five_model_variables() -> None:

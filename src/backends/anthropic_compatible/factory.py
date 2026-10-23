@@ -21,5 +21,6 @@ def build(option: models.BackendOption, cfg: config.CharlieBotConfig, **kwargs: 
       context_window=option.context_window,
       effort=option.effort,
       headers=option.headers,
+      extra_body=option.extra_body,
       **kwargs,
   )

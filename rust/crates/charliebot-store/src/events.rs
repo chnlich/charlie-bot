@@ -154,9 +154,11 @@ impl FileIdentity {
 /// A node's live history as the event cache holds it: the cached list and its generation, or, while the cache is cold,
 /// the identity of the log file.
 pub(crate) enum LiveHistory {
-  Cached { generation: u64, events: Arc<Vec<SharedChatEvent>> },
+  Cached { generation: u64, identity: Arc<()>, events: Arc<Vec<SharedChatEvent>> },
   Cold(Option<FileIdentity>),
 }
+
+pub(crate) type LiveEventSnapshot = (u64, Arc<()>, Arc<Vec<SharedChatEvent>>);
 
 /// A stable cache identity plus either the full event list or its newly appended suffix.
 pub struct ChatEventsDelta {
@@ -194,6 +196,11 @@ impl Store {
     ndjson::append(&path, &event)?;
     if let Some(cached) = cache.as_mut() {
       Arc::make_mut(&mut cached.events).push(Arc::new(event.clone()));
+      self
+        .run_facts_memo
+        .lock()
+        .expect("run facts memo mutex is not poisoned")
+        .refresh_events(&cached.identity, Arc::clone(&cached.events));
     }
     Ok(event)
   }
@@ -227,12 +234,12 @@ impl Store {
   }
 
   /// The cached live events and their cache generation, read under one lock so the pair is consistent.
-  pub(crate) fn live_events_with_generation(&self, session_id: &str) -> StoreResult<(u64, Arc<Vec<SharedChatEvent>>)> {
+  pub(crate) fn live_events_with_generation(&self, session_id: &str) -> StoreResult<LiveEventSnapshot> {
     let cache_entry = self.events_cache_entry(session_id);
     let mut cache = cache_entry.lock().expect("session event cache mutex is not poisoned");
     let events = self.load_chat_events_shared_locked(session_id, &mut cache)?;
-    let generation = cache.as_ref().expect("event cache entry was loaded above").generation;
-    Ok((generation, events))
+    let cached = cache.as_ref().expect("event cache entry was loaded above");
+    Ok((cached.generation, Arc::clone(&cached.identity), events))
   }
 
   /// Load the live events for a recovery fold, checking cancellation between physical NDJSON lines.
@@ -240,14 +247,14 @@ impl Store {
     &self,
     session_id: &str,
     should_stop: &mut impl FnMut() -> bool,
-  ) -> StoreResult<Option<(u64, Arc<Vec<SharedChatEvent>>)>> {
+  ) -> StoreResult<Option<LiveEventSnapshot>> {
     let cache_entry = self.events_cache_entry(session_id);
     let mut cache = cache_entry.lock().expect("session event cache mutex is not poisoned");
     let Some(events) = self.load_chat_events_shared_locked_until(session_id, &mut cache, should_stop)? else {
       return Ok(None);
     };
-    let generation = cache.as_ref().expect("event cache entry was loaded above").generation;
-    Ok(Some((generation, events)))
+    let cached = cache.as_ref().expect("event cache entry was loaded above");
+    Ok(Some((cached.generation, Arc::clone(&cached.identity), events)))
   }
 
   /// The cached live events, or the log file's identity while the cache is cold; a cold cache stays cold.
@@ -261,7 +268,11 @@ impl Store {
       Some(cached) => {
         #[cfg(test)]
         self.history_reads.fetch_add(1, Ordering::Relaxed);
-        Ok(LiveHistory::Cached { generation: cached.generation, events: Arc::clone(&cached.events) })
+        Ok(LiveHistory::Cached {
+          generation: cached.generation,
+          identity: Arc::clone(&cached.identity),
+          events: Arc::clone(&cached.events),
+        })
       }
       None => Ok(LiveHistory::Cold(FileIdentity::read(&self.chat_events_path(session_id))?)),
     }
@@ -854,9 +865,9 @@ impl Store {
   /// Drop a node's parsed live events and folded facts after a node pass releases its local references.
   ///
   /// The per-session cache entry stays in the map: an append or cold read that holds its lock keeps its exclusion, so
-  /// the next read sees every event that the file holds. The node's task state and Run facts stay, keyed by the log
-  /// file's identity, when a fold covers the whole cached list (see [`Store::seal_node_state`]): a sidebar read after
-  /// the boot pass then answers from them without parsing the history again.
+  /// the next read sees every event that the file holds. The node's task state stays keyed by the log file's identity
+  /// when a fold covers the whole cached list (see [`Store::seal_node_state`]). The run-facts memo keeps the current
+  /// event list under its bounded identity key, like Python, so a later reload has a new key.
   pub fn evict_recovery_history(&self, session_id: &str) {
     let cache_entry = self.events_cache.lock().expect("event cache mutex is not poisoned").get(session_id).cloned();
     match cache_entry {
@@ -864,15 +875,20 @@ impl Store {
         // The seal runs under the session lock, so no reload or append moves the file between the take and the seal.
         let mut cache = cache_entry.lock().expect("session event cache mutex is not poisoned");
         let evicted = cache.take().and_then(|cached| match FileIdentity::read(&self.chat_events_path(session_id)) {
-          Ok(identity) => identity.map(|identity| (cached.generation, cached.events.len(), identity)),
+          Ok(identity) => {
+            identity.map(|identity| (cached.generation, cached.events.len(), identity, Arc::clone(&cached.identity)))
+          }
           Err(error) => {
             // The next read of this node reads the file again and returns the error.
             tracing::warn!(session_id = %session_id, error = %error, "node_state_seal_skipped");
             None
           }
         });
-        self.seal_node_state(session_id, evicted);
-        self.seal_node_facts(session_id, evicted);
+        self.seal_node_state(session_id, evicted.clone());
+        self.seal_node_facts(
+          session_id,
+          evicted.map(|(generation, covered, identity, _)| (generation, covered, identity)),
+        );
       }
       None => {
         self.seal_node_state(session_id, None);
@@ -893,7 +909,11 @@ impl Store {
     }
     let events =
       Arc::new(self.read_chat_events_file(&self.chat_events_path(session_id))?.into_iter().map(Arc::new).collect());
-    *cache = Some(CachedChatEvents { generation: self.next_events_cache_generation(), events: Arc::clone(&events) });
+    *cache = Some(CachedChatEvents {
+      generation: self.next_events_cache_generation(),
+      identity: Arc::new(()),
+      events: Arc::clone(&events),
+    });
     Ok(events)
   }
 
@@ -912,7 +932,11 @@ impl Store {
       return Ok(None);
     };
     let events = Arc::new(events.into_iter().map(Arc::new).collect());
-    *cache = Some(CachedChatEvents { generation: self.next_events_cache_generation(), events: Arc::clone(&events) });
+    *cache = Some(CachedChatEvents {
+      generation: self.next_events_cache_generation(),
+      identity: Arc::new(()),
+      events: Arc::clone(&events),
+    });
     Ok(Some(events))
   }
 
@@ -1104,7 +1128,7 @@ impl Store {
         hook();
       }
       let events = Arc::new(ndjson::read_file(&path)?.into_iter().map(Arc::new).collect());
-      *cache = Some(CachedChatEvents { generation, events: Arc::clone(&events) });
+      *cache = Some(CachedChatEvents { generation, identity: Arc::new(()), events: Arc::clone(&events) });
       Ok((events, true))
     })
     .await
@@ -1387,6 +1411,28 @@ mod tests {
     let (full, has_earlier) = store.load_chat_events_range("synthetic", 0, 5).unwrap();
     assert_eq!(full, expected);
     assert!(!has_earlier);
+  }
+
+  #[tokio::test]
+  async fn event_cache_generation_keeps_identity_on_append_and_changes_after_clear() {
+    let (_home, store) = make_test_store();
+    store.append_chat_event("synthetic", json!({"id": "event-a", "type": "user"})).await.unwrap();
+    let (initial_generation, initial_identity, initial_events) =
+      store.live_events_with_generation("synthetic").unwrap();
+    assert_eq!(initial_events.len(), 1);
+
+    store.append_chat_event("synthetic", json!({"id": "event-b", "type": "user"})).await.unwrap();
+    let (append_generation, append_identity, appended_events) = store.live_events_with_generation("synthetic").unwrap();
+    assert_eq!(append_generation, initial_generation, "append preserves the Python event-list identity");
+    assert!(Arc::ptr_eq(&append_identity, &initial_identity), "append preserves the event-list memo key");
+    assert_eq!(appended_events.len(), 2);
+
+    store.clear_chat_events_cache("synthetic");
+    let (replacement_generation, replacement_identity, replacement_events) =
+      store.live_events_with_generation("synthetic").unwrap();
+    assert_ne!(replacement_generation, append_generation, "cache replacement gives the Python-style new list identity");
+    assert!(!Arc::ptr_eq(&replacement_identity, &append_identity), "replacement changes the event-list memo key");
+    assert_eq!(replacement_events.len(), 2);
   }
 
   #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

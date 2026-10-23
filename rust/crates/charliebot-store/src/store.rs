@@ -112,6 +112,7 @@ pub(crate) type MetadataStatHook = Arc<dyn Fn(&Path) + Send + Sync>;
 
 pub(crate) struct CachedChatEvents {
   pub(crate) generation: u64,
+  pub(crate) identity: Arc<()>,
   pub(crate) events: Arc<Vec<SharedChatEvent>>,
 }
 
@@ -126,6 +127,7 @@ pub(crate) enum NodeFactsKey {
 #[derive(Clone)]
 pub(crate) struct CachedNodeFacts {
   pub(crate) key: NodeFactsKey,
+  pub(crate) list_identity: Arc<()>,
   pub(crate) archived: usize,
   pub(crate) covered: usize,
   pub(crate) facts: Arc<NodeFacts>,

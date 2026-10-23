@@ -246,7 +246,7 @@ async def test_spawn_fails_with_the_slice_name_when_the_selected_slice_is_missin
   monkeypatch.setattr(process, "CGROUP_V2_AGENTS_SLICE", str(missing))
 
   backend = SpawnBackend(cgroup_session_id=PARENT_ID)
-  with pytest.raises(process.SessionCgroupUnavailableError, match="charliebot-agents.slice"):
+  with pytest.raises(process.SessionCgroupUnavailableError, match=r"charliebot-agents\.slice"):
     await backend._spawn_one_shot_subprocess(["true"], {}, pdeathsig=False)
 
 

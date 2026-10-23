@@ -324,8 +324,7 @@ run-record work is `S2`; task-tree runtime and feature-owned files remain with t
 ## Catch-up f58a345a6 open steps
 
 Both all-stage Rust debug runs at the f58a345a6 baseline failed the same 77 of 1176 steps. The 26 rows of
-`0419cd23a` are gone at this head, where the Rust run fails the PENDING_STEPS of 1176 steps; no row is
-intermittent. Each row names the scenario step, parity stage and `main` commit that accounts for its observed
+`0419cd23a` are gone at this head, where the Rust run fails 51 of 1176 steps; no row is intermittent. Each row names the scenario step, parity stage and `main` commit that accounts for its observed
 difference.
 
 | Scenario | Step | Stage | Main commit | Difference |

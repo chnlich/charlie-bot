@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use charliebot_core::event_types;
+use charliebot_core::event_types::{self, EventFields};
 use serde_json::{Value, json};
 
 use crate::{StoreError, StoreResult};
@@ -18,30 +18,37 @@ pub struct NormalizedUserMessage {
 }
 
 /// Normalize a persisted user event for the chat renderer.
-pub fn normalize_user_message_event(event: &Value) -> StoreResult<NormalizedUserMessage> {
-  let content = event.get("content").cloned().unwrap_or_else(|| json!(""));
-  let files = serialize_uploaded_files(event.get("uploaded_files"))?;
+pub fn normalize_user_message_event<E: EventFields>(event: &E) -> StoreResult<NormalizedUserMessage> {
+  let files = serialize_uploaded_files(event.field("uploaded_files"))?;
   if !files.is_empty() {
+    let content = event.field("content").map_or_else(|| json!(""), E::to_owned_value);
     return Ok(NormalizedUserMessage { content, uploaded_files: files });
   }
-  let content_text = content.as_str().ok_or_else(|| StoreError::new("user event content must be a string"))?;
+  let content_text = match event.field("content") {
+    Some(content) => content.as_str_field().ok_or_else(|| StoreError::new("user event content must be a string"))?,
+    None => "",
+  };
   let (content, uploaded_files) = strip_attached_files_block(content_text);
   Ok(NormalizedUserMessage { content: json!(content), uploaded_files })
 }
 
 /// Convert supported upload payloads into JSON objects.
-pub fn serialize_uploaded_files(files: Option<&Value>) -> StoreResult<Vec<Value>> {
+pub fn serialize_uploaded_files<E: EventFields>(files: Option<&E>) -> StoreResult<Vec<Value>> {
   let Some(files) = files else { return Ok(Vec::new()) };
-  if !is_truthy(files) {
+  if !event_types::is_truthy(files) {
     return Ok(Vec::new());
   }
-  let files = files.as_array().ok_or_else(|| StoreError::new("uploaded_files must be an array"))?;
+  let files = files.array_items().ok_or_else(|| StoreError::new("uploaded_files must be an array"))?;
   files
     .iter()
-    .map(|file| match file {
-      Value::Object(_) => Ok(file.clone()),
-      Value::String(path) => Ok(json!({"filename": filename_from_path(path), "path": path})),
-      _ => Err(StoreError::new(format!("unsupported uploaded file payload: {file}"))),
+    .map(|file| {
+      if let Some(path) = file.as_str_field() {
+        return Ok(json!({"filename": filename_from_path(path), "path": path}));
+      }
+      if file.is_object() {
+        return Ok(file.to_owned_value());
+      }
+      Err(StoreError::new(format!("unsupported uploaded file payload: {}", file.to_owned_value())))
     })
     .collect()
 }
@@ -86,23 +93,19 @@ pub fn build_agent_input_content(content: &str, uploaded_files: &[Value]) -> Str
   }
 }
 
-/// Move ordinary user inputs to the end of each completed attached-run interval.
-pub fn stable_history_projection(events: &[Value]) -> StoreResult<Vec<(usize, Value)>> {
-  let references = events.iter().collect::<Vec<_>>();
-  Ok(stable_history_projection_refs(&references)?.into_iter().map(|(index, event)| (index, event.clone())).collect())
-}
-
-fn stable_history_projection_refs<'a>(events: &[&'a Value]) -> StoreResult<Vec<(usize, &'a Value)>> {
+/// Move ordinary user inputs to the end of each completed attached-run interval. Each event is returned by
+/// reference with its source index, so the projection reads the cached events in place.
+pub fn stable_history_projection<'a, E: EventFields>(events: &[&'a E]) -> StoreResult<Vec<(usize, &'a E)>> {
   let (complete_intervals, _) = interval_scan(events.iter().copied());
   let mut deferred_indices = HashSet::new();
-  let mut deferred_by_end: HashMap<usize, Vec<(usize, &'a Value)>> = HashMap::new();
+  let mut deferred_by_end: HashMap<usize, Vec<(usize, &'a E)>> = HashMap::new();
   for (start, end) in complete_intervals {
     let mut deferred = Vec::new();
     for (index, event) in events.iter().copied().enumerate().take(end).skip(start + 1) {
-      if event.get("type").and_then(Value::as_str) != Some(event_types::USER) {
+      if event.field("type").and_then(EventFields::as_str_field) != Some(event_types::USER) {
         continue;
       }
-      if event.get("message").is_some() && event.get("content").is_none() {
+      if event.field("message").is_some() && event.field("content").is_none() {
         continue;
       }
       let normalized = normalize_user_message_event(event)?;
@@ -131,19 +134,19 @@ fn stable_history_projection_refs<'a>(events: &[&'a Value]) -> StoreResult<Vec<(
 }
 
 /// Return the length of the event prefix whose projected order cannot change after an append.
-pub fn stable_closed_prefix_len(events: &[Value]) -> usize {
-  interval_scan(events.iter()).1
+pub fn stable_closed_prefix_len<'a, E: EventFields + 'a>(events: impl IntoIterator<Item = &'a E>) -> usize {
+  interval_scan(events).1
 }
 
-fn interval_scan<'a>(events: impl IntoIterator<Item = &'a Value>) -> (Vec<(usize, usize)>, usize) {
+fn interval_scan<'a, E: EventFields + 'a>(events: impl IntoIterator<Item = &'a E>) -> (Vec<(usize, usize)>, usize) {
   let mut complete = Vec::new();
   let mut interval_start = None;
   let mut closed = 0;
   for (index, event) in events.into_iter().enumerate() {
-    let type_value = event.get("type");
-    let event_type = type_value.and_then(Value::as_str);
-    let has_session_id = event.get("session_id").is_some_and(is_truthy);
-    let no_type = type_value.is_none_or(Value::is_null);
+    let type_value = event.field("type");
+    let event_type = type_value.and_then(EventFields::as_str_field);
+    let has_session_id = event.field("session_id").is_some_and(event_types::is_truthy);
+    let no_type = type_value.is_none_or(E::is_null);
     if (no_type || event_type == Some(event_types::SESSION_ATTACHED)) && has_session_id {
       interval_start = Some(index);
     } else if event_type == Some(event_types::MASTER_DONE)
@@ -156,17 +159,6 @@ fn interval_scan<'a>(events: impl IntoIterator<Item = &'a Value>) -> (Vec<(usize
     }
   }
   (complete, closed)
-}
-
-fn is_truthy(value: &Value) -> bool {
-  match value {
-    Value::Null => false,
-    Value::Bool(value) => *value,
-    Value::Number(value) => value.as_f64().is_some_and(|number| number != 0.0),
-    Value::String(value) => !value.is_empty(),
-    Value::Array(value) => !value.is_empty(),
-    Value::Object(value) => !value.is_empty(),
-  }
 }
 
 fn filename_from_path(path: &str) -> String {

@@ -1566,7 +1566,8 @@ pub async fn accept_summon(
       }),
     )
     .await?;
-  let round_event_id = stored.get("id").and_then(ChatEvent::as_str).expect("a persisted event carries its id").to_string();
+  let round_event_id =
+    stored.get("id").and_then(ChatEvent::as_str).expect("a persisted event carries its id").to_string();
   let event = format!("{}_mention_round_started", platform.name);
   tracing::info!(%event, thread = %thread, session = session_id, user_event_id = %round_event_id);
 

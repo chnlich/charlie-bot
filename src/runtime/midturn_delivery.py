@@ -252,10 +252,13 @@ async def claim_finish_inputs(
     successful: bool,
 ) -> list[str]:
   """Claim only pending user events whose uuids the successful Run echoed."""
-  if not is_gated_turn(meta, turn=True, run_kind="manager_turn"):
+  if not is_gated_turn(meta, turn=True, run_kind="manager_turn") or not successful:
     return []
-  echoed_ids = _echoed_input_ids(transport_dir, run_id)
-  if not successful or not echoed_ids:
+  # The scan parses every raw line of the Run, so it rides a thread like the
+  # round-notice projection of the same files: on the loop it would freeze
+  # every concurrent request and WebSocket at turn end.
+  echoed_ids = await asyncio.to_thread(_echoed_input_ids, transport_dir, run_id)
+  if not echoed_ids:
     return []
   return await dispatcher.claim_echoed_user_inputs(meta.id, run_id, echoed_ids)
 

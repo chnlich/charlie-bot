@@ -201,7 +201,7 @@ def preflight(backend_id: str, entry: dict, *, production_config: bool, midturn:
     if "--session-dir" not in help_text.stdout + help_text.stderr:
       fail("installed charlie-code does not support --session-dir; native session "
            "isolation cannot be guaranteed")
-  elif backend_type in ("cc-anthropic-compatible", "cc-claude"):
+  elif backend_type == "cc-anthropic-compatible" or (midturn and backend_type == "cc-claude"):
     binary = shutil.which("claude")
     if binary is None:
       fail("Claude Code binary is not installed; the live smoke cannot run")

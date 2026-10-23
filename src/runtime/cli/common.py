@@ -311,6 +311,17 @@ def _request_get(
   return _send_request("GET", url, payload=None, params=params, headers=headers, timeout=timeout)
 
 
+def _request_put(
+    url: str,
+    *,
+    json: dict[str, Any] | None,
+    headers: dict[str, str],
+    timeout: float,
+) -> _CliResponse:
+  """The PUT transport seam; same contract as _request_post."""
+  return _send_request("PUT", url, payload=json, params=None, headers=headers, timeout=timeout)
+
+
 def get_config() -> config.CharlieBotConfig:
   """Resolve the process config, importing its module on first call.
 
@@ -638,11 +649,14 @@ def _request_with_contract(
       elif method == "PATCH":
         resp = _request_patch(
             url, json=payload, headers=internal_api_auth_headers(), timeout=timeouts.HTTP_INTERNAL_API_TIMEOUT)
+      elif method == "PUT":
+        resp = _request_put(
+            url, json=payload, headers=internal_api_auth_headers(), timeout=timeouts.HTTP_INTERNAL_API_TIMEOUT)
       elif method == "GET":
         resp = _request_get(
             url, params=params, headers=internal_api_auth_headers(), timeout=timeouts.HTTP_INTERNAL_API_TIMEOUT)
       else:
-        raise RuntimeError(f"internal-API method is POST, PATCH or GET, got {method!r}")
+        raise RuntimeError(f"internal-API method is POST, PATCH, PUT or GET, got {method!r}")
     except _ConnectPhaseError as e:
       remaining = deadline - time.monotonic()
       if remaining <= 0:
@@ -688,6 +702,16 @@ def post_internal_api(
       rejection_exit_codes=rejection_exit_codes,
       unknown_effect="unknown",
   )
+
+
+def put_internal_api(endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
+  """PUT to a CharlieBot API endpoint and return the parsed JSON response.
+
+  Same error contract as ``post_internal_api``. The verbs that PUT use it for
+  (the repair mark) set one value, so a sent-but-lost call reports effect
+  ``none`` and needs no readback.
+  """
+  return _request_with_contract("PUT", endpoint, payload=payload, unknown_effect="none")
 
 
 def get_api(endpoint: str, params: dict[str, Any] | None = None) -> dict[str, Any]:

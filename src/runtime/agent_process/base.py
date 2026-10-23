@@ -24,7 +24,7 @@ from typing import BinaryIO
 
 from src.infra import config, log_once, models, ndjson, process, timeouts
 from src.infra import event_types as ET
-from src.runtime import message_aggregator, runs
+from src.runtime import message_aggregator, resource_class, runs
 from src.runtime.agent_process import spawn
 
 log = log_once.LazyStructlogLogger()
@@ -805,7 +805,7 @@ class AgentBackend(abc.ABC):
     survive parent death. The nice raise and the session cgroup move apply
     parent-side after the handshake, the raw-log shape's ordering.
     """
-    self._active_session_cgroup = self._prepare_session_cgroup()
+    self._active_session_cgroup = await self._prepare_session_cgroup()
     self._proc = await spawn.spawn_subprocess(
         *cmd,
         cwd=cwd,
@@ -831,7 +831,7 @@ class AgentBackend(abc.ABC):
     vfork fast path and applies the turn-tree limits parent-side, the run()'s
     raw-log shape. Both apply the nice raise and the cgroup move parent-side.
     """
-    self._active_session_cgroup = self._prepare_session_cgroup()
+    self._active_session_cgroup = await self._prepare_session_cgroup()
     proc = await spawn.spawn_subprocess(
         *cmd,
         stdin=asyncio.subprocess.DEVNULL,
@@ -846,29 +846,36 @@ class AgentBackend(abc.ABC):
     self._apply_turn_tree_limits(proc.pid)
     return proc
 
-  def _prepare_session_cgroup(self) -> process.SessionCgroup | None:
+  async def _prepare_session_cgroup(self) -> process.SessionCgroup | None:
     """Ensure this backend's session cgroup exists and snapshot its counters; None when off.
 
     Every spawn point calls this once, parent-side, before its spawn. The
-    move itself rides the child-side preexec composition for spawns that
-    keep one (:meth:`_spawn_preexec`), and :meth:`_apply_turn_tree_limits`
-    for the rest. The cgroup is keyed by the session id the caller
-    pinned at construction (master turn, worker task, session-scoped
-    one-shot); a backend constructed with cgroup_session_id=None (a spawn
-    with no session home) never enters one.
+    repair decision is taken here, from the task tree at spawn time (see
+    :mod:`src.runtime.resource_class`), so a mark cleared on a parent reaches
+    the next spawn of each descendant without anything written on them. The
+    move itself rides the child-side preexec composition for spawns that keep
+    one (:meth:`_spawn_preexec`), and :meth:`_apply_turn_tree_limits` for the
+    rest. The cgroup is keyed by the session id the caller pinned at
+    construction (master turn, worker task, session-scoped one-shot); a backend
+    constructed with cgroup_session_id=None (a spawn with no session home)
+    never enters one.
     """
     if self._cgroup_session_id is None:
       return None
     cfg = config.get_config()
+    if cfg.server.session_memory_max_mb <= 0:
+      return None
+    spawn_class = await resource_class.resolve(self._cgroup_session_id)
     return process.prepare_session_cgroup(
         self._cgroup_session_id,
+        spawn_class,
         memory_max_mb=cfg.server.session_memory_max_mb,
         swap_max_mb=cfg.server.session_swap_max_mb,
         tasks_max=cfg.server.session_tasks_max,
     )
 
-  def _spawn_preexec(self) -> Callable[[], None] | None:
-    """Preexec for spawns that keep child-side setup: nice and the session cgroup move.
+  async def _spawn_preexec(self) -> Callable[[], None] | None:
+    """Preexec for spawns that keep child-side setup: nice, the session cgroup move and its OOM priority.
 
     Spawns without a pdeathsig requirement spawn preexec-free for the vfork
     fast path and apply the same limits parent-side through
@@ -882,18 +889,18 @@ class AgentBackend(abc.ABC):
     request handlers the user waits on; nice is contention-only arbitration,
     so an uncontended box schedules identically.
     """
-    self._active_session_cgroup = self._prepare_session_cgroup()
-    cgroup_preexec = process.make_session_cgroup_preexec(
-        self._active_session_cgroup.path if self._active_session_cgroup else None)
+    self._active_session_cgroup = await self._prepare_session_cgroup()
+    cgroup_preexec = process.make_session_cgroup_preexec(self._active_session_cgroup)
     return process.compose_preexec(process.make_nice_preexec(TURN_TREE_NICE), cgroup_preexec)
 
   def _apply_turn_tree_limits(self, pid: int) -> None:
     """Apply the turn-tree limits parent-side for spawns that carry no preexec.
 
     A spawn without ``preexec_fn`` keeps the kernel's vfork fast path — the
-    fork's page-table copy never touches the event loop — so the nice raise
-    and the session cgroup move apply to the already-exec'd child here, the
-    parent-observable effects of the preexec composition. A failure logs loud
+    fork's page-table copy never touches the event loop — so the nice raise,
+    the session cgroup move and the slice's OOM priority apply to the
+    already-exec'd child here, the parent-observable effects of the preexec
+    composition. A failure logs loud
     and continues: the child is already running, and killing a healthy turn
     over a renice failure trades a real stall for a self-inflicted one. The
     move targets a directory the parent just created and verified writable,
@@ -909,6 +916,12 @@ class AgentBackend(abc.ABC):
           os.close(fd)
       except OSError as e:
         log.warning("session_cgroup_move_failed", pid=pid, path=str(procs_path), error=str(e))
+      oom_path = f"/proc/{pid}/oom_score_adj"
+      try:
+        with open(oom_path, "w", encoding="ascii") as oom_file:
+          oom_file.write(str(self._active_session_cgroup.oom_score_adj))
+      except OSError as e:
+        log.warning("session_cgroup_oom_adjust_failed", pid=pid, path=oom_path, error=str(e))
     try:
       os.setpriority(os.PRIO_PROCESS, pid, TURN_TREE_NICE)
     except OSError as e:
@@ -1007,7 +1020,7 @@ class AgentBackend(abc.ABC):
         # where the preexec-free form keeps the vfork fast path. The turn-tree
         # limits (nice raise, session cgroup move) apply parent-side right
         # after the exec handshake, via _apply_turn_tree_limits.
-        self._active_session_cgroup = self._prepare_session_cgroup()
+        self._active_session_cgroup = await self._prepare_session_cgroup()
         self._proc = await spawn.spawn_subprocess(
             *cmd,
             cwd=cwd,

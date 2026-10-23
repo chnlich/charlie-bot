@@ -35,6 +35,7 @@ import uuid
 from collections.abc import Callable, Iterator
 
 import pytest
+import systemd_stubs
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SWITCH = ROOT / "scripts" / "switch-server.sh"
@@ -281,6 +282,8 @@ def _build_world(root: pathlib.Path) -> World:
     path.mkdir(parents=True)
   shutil.copy2(LAUNCHER, clone / "scripts" / "start-server.sh")
   shutil.copy2(SWITCH, clone / "scripts" / "switch-server.sh")
+  # The launcher's preflight reads its expected limits from this directory.
+  shutil.copytree(ROOT / "scripts" / "systemd", clone / "scripts" / "systemd")
   (clone / "server.py").write_text(FAKE_SERVER, encoding="utf-8")
   _git(clone, "init", "-q", "-b", "main")
   _git(clone, "add", "scripts", "server.py")
@@ -295,6 +298,8 @@ def _build_world(root: pathlib.Path) -> World:
 
   (bin_dir / "uv").write_text(FAKE_UV, encoding="utf-8")
   (bin_dir / "uv").chmod(0o755)
+  # The launcher's slice preflight and its systemd-run scope, without the host's user manager.
+  systemd_stubs.install(bin_dir)
   port = _free_port()
   (home / "config.yaml").write_text(f"server:\n  host: 127.0.0.1\n  port: {port}\n", encoding="utf-8")
   (home / "credentials.yaml").write_text(f"charliebot:\n  access_key: {ACCESS_KEY}\n", encoding="utf-8")

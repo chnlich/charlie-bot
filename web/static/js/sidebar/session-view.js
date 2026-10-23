@@ -702,6 +702,9 @@ function renderSessionView(data) {
     headerName.textContent = session.name;
   }
 
+  // The repair toggle reads the opened session's mark, not the page that first rendered it.
+  setRepairShareState(session.resource_class || 'agent');
+
   // Update backend badge
   updateActiveBackendBadges();
 

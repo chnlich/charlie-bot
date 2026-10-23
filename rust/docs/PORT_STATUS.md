@@ -321,50 +321,111 @@ run-record work is `S2`; task-tree runtime and feature-owned files remain with t
 | tmux session `charliebot-<id>` | features/terminal | ported | Detached terminal shell. |
 | repo config examples and prompt inputs | foundation | reader-only | Not written by the server. |
 
-## Catch-up 78e0d10e2 open steps
+## Catch-up f58a345a6 open steps
 
-Each row is one failing Rust parity step of the all-stage run on this head. That run, with the debug binary, matches
-1,160 of 1,160 steps, so no row is left. The `handover-stop-request` row is gone: its interrupted run's chat-event order
-is accepted by that scenario's `either_order_of_adjacent_events` rule (see `rust/parity/README.md`).
+Both all-stage Rust debug runs failed the same 77 of 1176 steps; no row is intermittent. Each row names the
+scenario step, parity stage and `main` commit that accounts for its observed difference.
 
-| Scenario | Step | Stage | Commits | Difference |
+| Scenario | Step | Stage | Main commit | Difference |
 | --- | --- | --- | --- | --- |
+| manager-turn-cancellation-routes | wait at the chat cancel gate | agent-orchestration-cancel | 52eb05c1c | R01: Rust chat input events omit Python's stable request_id for retry deduplication. |
+| manager-turn-cancellation-routes | wait for the chat-cancelled run to finish | agent-orchestration-cancel | 52eb05c1c | R02: Rust chat input events omit Python's stable request_id for retry deduplication. |
+| manager-turn-cancellation-routes | server shutdown and fake-agent cleanup | agent-orchestration-cancel | 0419cd23a | R03: Rust Claude settings omit Python's compact-matcher SessionStart hook. |
+| agent-orchestration-cold-read | server shutdown and fake-agent cleanup | agent-orchestration | 0419cd23a | R04: Rust Claude settings omit Python's compact-matcher SessionStart hook. |
+| task-completion-routes | server shutdown and fake-agent cleanup | agent-orchestration | 0419cd23a | R05: Rust Claude settings omit Python's compact-matcher SessionStart hook. |
+| agent-orchestration-delegate | server shutdown and fake-agent cleanup | agent-orchestration | 0419cd23a | R06: Rust Claude settings omit Python's compact-matcher SessionStart hook. |
+| manager-turn-execution-and-routes | wait for the manager turn to finish | agent-orchestration | 52eb05c1c | R07: Rust chat input events omit Python's stable request_id for retry deduplication. |
+| manager-turn-execution-and-routes | wait at the first manager gate | agent-orchestration | 52eb05c1c | R08: Rust chat input events omit Python's stable request_id for retry deduplication. |
+| manager-turn-execution-and-routes | release the first manager turn | agent-orchestration | 52eb05c1c | R09: Rust chat input events omit Python's stable request_id for retry deduplication. |
+| manager-turn-execution-and-routes | server shutdown and fake-agent cleanup | agent-orchestration | 0419cd23a | R10: Rust Claude settings omit Python's compact-matcher SessionStart hook. |
+| manager-turn-opencode | wait for the OpenCode manager run to finish | agent-orchestration | 52eb05c1c | R11: Rust chat input events omit Python's stable request_id for retry deduplication. |
+| implement-review-chain | server shutdown and fake-agent cleanup | agent-orchestration | 0419cd23a | R12: Rust Claude settings omit Python's compact-matcher SessionStart hook. |
+| agent-orchestration-session-message | server shutdown and fake-agent cleanup | agent-orchestration | 0419cd23a | R13: Rust Claude settings omit Python's compact-matcher SessionStart hook. |
+| cron-routes-and-ticks | server shutdown and fake-agent cleanup | triggers-cron-improve | 0419cd23a | R14: Rust Claude settings omit Python's compact-matcher SessionStart hook. |
+| features-artifacts-plan-fork | server shutdown and fake-agent cleanup | features | 0419cd23a | R15: Rust Claude settings omit Python's compact-matcher SessionStart hook. |
+| features-discord-routes | reply with blank text answers 422 | features | d59e81e8c | R16: Rust reads Discord before blank-text validation; Python returns 422 without an API call. |
+| features-discord-routes | reply with a file-server link answers 422 | features | d59e81e8c | R17: Rust reads Discord before link validation; Python returns 422 without an API call. |
+| features-discord-routes | reply posts once the thread is read | features | d59e81e8c | R18: Rust omits Python Discord bot-identity and nonce-enforced post checks. |
+| features-harness-discord | server startup | features | d59e81e8c | R19: Rust lost-summon handling omits Python's request ID, thread reads and nonce-keyed notice post. |
+| features-harness-discord | allowed user mention starts a Discord thread session | features | d59e81e8c | R20: Rust platform delivery events omit Python agent attribution or stable request IDs. |
+| features-harness-discord | release the summon agent to run | features | d59e81e8c | R21: Rust platform delivery events omit Python agent attribution or stable request IDs. |
+| features-harness-discord | direct message mention gets a notice | features | d59e81e8c | R22: Rust posts the Discord notice without Python's nonce-enforced replay key. |
+| features-harness-discord | release the silent summon result | features | d59e81e8c | R23: Rust omits Python's Discord thread and bot reads and nonce-keyed notice post. |
+| features-harness-discord | reply to the fixture Discord thread | features | d59e81e8c | R24: Rust omits Python Discord bot-identity and nonce-enforced post checks. |
+| features-harness-discord | server shutdown and fake-agent cleanup | features | 0419cd23a | R25: Rust Claude settings omit Python's compact-matcher SessionStart hook. |
+| features-harness-slack | server startup | features | d59e81e8c | R26: Rust omits Python Slack thread-read options include_all_metadata=true and limit=100. |
+| features-harness-slack | allowed app mention starts its Slack thread session | features | d59e81e8c | R27: Rust platform delivery events omit Python agent attribution or stable request IDs. |
+| features-harness-slack | release summon agent to finish its round | features | d59e81e8c | R28: Rust platform delivery events omit Python agent attribution or stable request IDs. |
+| features-harness-slack | release summon agent after its result | features | d59e81e8c | R29: Rust notice lacks Python's stable event ID and metadata-keyed Slack post checks. |
+| features-harness-slack | server shutdown and fake-agent cleanup | features | 0419cd23a | R30: Rust Claude settings omit Python's compact-matcher SessionStart hook. |
+| features-slack-ack | server startup | features | d59e81e8c | R31: Rust omits Python Slack thread-read options include_all_metadata=true and limit=100. |
+| features-slack-ack | refuse an ack that skips an eligible Slack message | features | d59e81e8c | R32: Rust omits Python Slack thread-read options include_all_metadata=true and limit=100. |
+| features-slack-ack | acknowledge every eligible follow message | features | d59e81e8c | R33: Rust omits Python Slack thread-read options include_all_metadata=true and limit=100. |
+| features-slack-ack | repeat the same ack idempotently | features | d59e81e8c | R34: Rust omits Python Slack thread-read options include_all_metadata=true and limit=100. |
+| features-slack-backfill | server startup | features | d59e81e8c | R35: Rust lost-summon handling omits its stable request ID and Python's metadata-aware Slack reads. |
+| features-slack-reply-failure | server startup | features | d59e81e8c | R36: Rust omits Python Slack thread-read options include_all_metadata=true and limit=100. |
+| features-slack-reply-failure | map a Slack chat.postMessage failure to 502 | features | d59e81e8c | R37: Rust retries unkeyed Slack posts; Python checks auth and uses metadata-keyed post attempts. |
+| features-slack-reply-refusals | server startup | features | d59e81e8c | R38: Rust omits Python Slack thread-read options include_all_metadata=true and limit=100. |
+| features-slack-reply-refusals | refuse blank reply text | features | d59e81e8c | R39: Rust reads Slack before blank-text validation; Python returns 422 without an API call. |
+| features-slack-reply-refusals | refuse a CharlieBot file-server link in a reply | features | d59e81e8c | R40: Rust reads Slack before link validation; Python returns 422 without an API call. |
+| features-slack-reply-stale | server startup | features | d59e81e8c | R41: Rust omits Python Slack thread-read options include_all_metadata=true and limit=100. |
+| features-slack-reply-stale | refuse a reply while the Slack thread is stale | features | d59e81e8c | R42: Rust omits Python Slack thread-read options include_all_metadata=true and limit=100. |
+| features-slack-reply-success | server startup | features | d59e81e8c | R43: Rust omits Python Slack thread-read options include_all_metadata=true and limit=100. |
+| features-slack-reply-success | reply to the fixture Slack thread | features | d59e81e8c | R44: Rust posts without Python's auth check and metadata key used for reply deduplication. |
+| features-slack-validation | server startup | features | d59e81e8c | R45: Rust omits Python Slack thread-read options include_all_metadata=true and limit=100. |
+| features-web-reply-audit | wait for the audit nudge | features | 52eb05c1c | R46: Rust chat input events omit Python's stable request_id for retry deduplication. |
+| features-web-reply-audit | server shutdown and fake-agent cleanup | features | 0419cd23a | R47: Rust Claude settings omit Python's compact-matcher SessionStart hook. |
+| features-web-reply-language | wait for the audit nudge | features | 52eb05c1c | R48: Rust chat input events omit Python's stable request_id for retry deduplication. |
+| features-web-reply-language | the held reply posts with a keep_language reason | features | 52eb05c1c | R49: Rust chat input events omit Python's stable request_id for retry deduplication. |
+| features-web-reply-language | server shutdown and fake-agent cleanup | features | 0419cd23a | R50: Rust Claude settings omit Python's compact-matcher SessionStart hook. |
+| handover-admitted-input | server shutdown and fake-agent cleanup · python-to-candidate | agent-orchestration | 0419cd23a | R51: Rust Claude settings omit Python's compact-matcher SessionStart hook. |
+| handover-admitted-input | wait for the first turn at the gate · candidate-to-python | agent-orchestration | 52eb05c1c | R52: Rust chat input events omit Python's stable request_id for retry deduplication. |
+| handover-admitted-input | hand over the live manager run · candidate-to-python | agent-orchestration | 52eb05c1c | R53: Rust chat input events omit Python's stable request_id for retry deduplication. |
+| handover-admitted-input | release the first manager turn · candidate-to-python | agent-orchestration | 52eb05c1c | R54: Rust chat input events omit Python's stable request_id for retry deduplication. |
+| handover-admitted-input | server shutdown and fake-agent cleanup · candidate-to-python | agent-orchestration | 0419cd23a | R55: Rust Claude settings omit Python's compact-matcher SessionStart hook. |
+| handover-drain | wait for the raw log cursor at the gate · candidate-to-python | agent-orchestration | 52eb05c1c | R56: Rust chat input events omit Python's stable request_id for retry deduplication. |
+| handover-drain | stop both servers and let the agent exit while none runs · candidate-to-python | agent-orchestration | 52eb05c1c | R57: Rust chat input events omit Python's stable request_id for retry deduplication. |
+| handover-drain | server shutdown and fake-agent cleanup · candidate-to-python | agent-orchestration | 0419cd23a | R58: Rust Claude settings omit Python's compact-matcher SessionStart hook. |
+| handover-improve | server shutdown and fake-agent cleanup · python-to-candidate | triggers-cron-improve | 0419cd23a | R59: Rust Claude settings omit Python's compact-matcher SessionStart hook. |
+| handover-manager-turn | wait for the raw log cursor at the gate · candidate-to-python | agent-orchestration | 52eb05c1c | R60: Rust chat input events omit Python's stable request_id for retry deduplication. |
+| handover-manager-turn | release the manager agent · candidate-to-python | agent-orchestration | 52eb05c1c | R61: Rust chat input events omit Python's stable request_id for retry deduplication. |
+| handover-manager-turn | server shutdown and fake-agent cleanup · candidate-to-python | agent-orchestration | 0419cd23a | R62: Rust Claude settings omit Python's compact-matcher SessionStart hook. |
+| handover-opencode | wait until the OpenCode API fake reaches its turn gate · candidate-to-python | agent-orchestration | 52eb05c1c | R63: Rust chat input events omit Python's stable request_id for retry deduplication. |
+| handover-opencode | hand over the terminated OpenCode turn to server B · candidate-to-python | agent-orchestration | 52eb05c1c | R64: Rust chat input events omit Python's stable request_id for retry deduplication. |
+| handover-review-run | server shutdown and fake-agent cleanup · python-to-candidate | agent-orchestration | 0419cd23a | R65: Rust Claude settings omit Python's compact-matcher SessionStart hook. |
+| handover-stop-request | server shutdown and fake-agent cleanup · candidate-to-python | agent-orchestration | 0419cd23a | R66: Rust Claude settings omit Python's compact-matcher SessionStart hook. |
+| improve-loop-reports | wait for the parent manager at its gate | triggers-cron-improve | 52eb05c1c | R67: Rust chat input events omit Python's stable request_id for retry deduplication. |
+| improve-loop-reports | wait for both iteration reports to reach the busy parent | triggers-cron-improve | 52eb05c1c | R68: Rust chat input events omit Python's stable request_id for retry deduplication. |
+| improve-loop-reports | release the parent manager after all three reports arrive | triggers-cron-improve | 52eb05c1c | R69: Rust chat input events omit Python's stable request_id for retry deduplication. |
+| improve-loop-reports | server shutdown and fake-agent cleanup | triggers-cron-improve | 0419cd23a | R70: Rust Claude settings omit Python's compact-matcher SessionStart hook. |
+| session-stream | server shutdown and fake-agent cleanup | session-stream | 0419cd23a | R71: Rust Claude settings omit Python's compact-matcher SessionStart hook. |
+| session-write-agent | wait at the agent caller gate | session-write | 52eb05c1c | R72: Rust chat input events omit Python's stable request_id for retry deduplication. |
+| session-write-agent | release the agent caller turn | session-write | 52eb05c1c | R73: Rust chat input events omit Python's stable request_id for retry deduplication. |
+| session-write-agent | server shutdown and fake-agent cleanup | session-write | 0419cd23a | R74: Rust Claude settings omit Python's compact-matcher SessionStart hook. |
+| session-write-fork | server shutdown and fake-agent cleanup | session-write | 0419cd23a | R75: Rust Claude settings omit Python's compact-matcher SessionStart hook. |
+| wait-trigger-delay | server shutdown and fake-agent cleanup | triggers-cron-improve | 0419cd23a | R76: Rust Claude settings omit Python's compact-matcher SessionStart hook. |
+| wait-trigger-local-pid | server shutdown and fake-agent cleanup | triggers-cron-improve | 0419cd23a | R77: Rust Claude settings omit Python's compact-matcher SessionStart hook. |
 
-## Catch-up 78e0d10e2 ignored Cargo tests
+## Catch-up f58a345a6 ignored Cargo tests
 
-Each test below fails until Rust ports the behavior changed on `main`, or until its fixture matches `main`. A port task
-removes the `catch-up 78e0d10e2` ignore when the test passes.
-
-The launch-environment helper's synthetic compaction case uses `run_kind="manager_turn"`: it covers a manager turn,
-whose Python production caller `master_cc_relay` passes `ctx.run_kind` to `compaction_env`.
+No Cargo test is ignored for a behavior introduced by this catch-up.
 
 | Row | Test | Binary | Main commit | Difference |
 | --- | --- | --- | --- | --- |
-## Catch-up 78e0d10e2 unported commits
+## Catch-up f58a345a6 unported commits
 
-Each of the 19 `main` commits that change `src` or `server.py` between `e44c9ccef` and `78e0d10e2` (`git rev-list
---no-merges e44c9ccef..78e0d10e2 -- src server.py`) has one class. `red list` commits appear in the two tables above.
-`unported` commits have no Rust counterpart and no parity row or Cargo test. `in Rust` commits already match `main`.
-`no behavior` commits change no output.
+Each of the 10 commits in `git rev-list --no-merges 78e0d10e2..f58a345a6 -- src server.py web` has one class.
+`red-list` rows are named by their IDs in the Difference cells above.
 
 | Main commit | Change | Class | Note |
 | --- | --- | --- | --- |
-| e6f440710 | Backup keeps at most five archives; the retention tiers shorten to 3 days and Sundays to 15 days | in Rust | `src/features/backup/backup.py:42-43` and `:122-150`: tiers of 3 and 15 days, no monthly tier. Rust `rust/crates/features/backup/src/backup.rs:26-27` (`DAILY_THRESHOLD`, `WEEKLY_THRESHOLD`), applied by `apply_retention_in_with_now` (line 339). Covered by `retention_keeps_the_last_three_days_and_recent_sundays` in `rust/crates/features/backup/src/lib_tests.rs`, the counterpart of `tests/test_backup.py`. |
-| 85054aeab | A recorded Slack or Discord summon counts as a user request | in Rust | `charliebot-core/src/event_types.rs:96` (`is_platform_summon`; the key list at :92) and the gate fold `charliebot-store/src/task_tree.rs:1490` (`holds_user_request`; refusal at :1502). Tests: `charliebot-store/tests/cross_implementation.rs` (`task_gate_matches_python_cases_and_the_parity_fixture_tree`, its summon cases), `charliebot-tasks/tests/delegate.rs` (`summon_authorizes_a_root_manager_but_a_relayed_agent_message_does_not`), and the platform-name pins `the_slack_platform_name_is_a_thread_platform_key` (`charliebot-slack`) and `the_discord_platform_name_is_a_thread_platform_key` (`charliebot-discord`). |
-| e4f43f962 | Dated provenance dropped from two cost comments | no behavior | Comments only. |
-| 0a844be82 | Web replies and status updates refuse dead links before recording | in Rust | `src/runtime/file_urls.py:63` (`FileLink.dead`), `:237-260` (`scan_file_links`, `dead_links_detail`), refused at `src/features/web_reply/reply.py:183-185` and `src/features/web_reply/status.py:88`. Rust `rust/crates/charliebot-compat/src/file_urls.rs` ports the scanner and `dead_links_detail`; `rust/crates/features/web_reply/src/reply.rs` (`refuse_dead_links`) and `status.rs` (`set_status`, `unread_waiting`) refuse before recording; `rust/crates/features/chat_threads/src/thread_entry.rs` (`assert_no_file_server_links`) refuses file-server and dead links. Covered by `the_file_link_scanner_matches_python_on_the_case_matrix` in `rust/crates/charliebot-compat/tests/file_links_cross_implementation.rs`, the `file_urls` unit tests, `a_dead_file_link_refuses_a_web_reply_with_a_correct_link_and_records_nothing` in `reply.rs`, `dead_links_in_every_status_field_refuse_before_any_cold_read_or_write` in `status.rs`, and `no_file_server_links_refuses_retired_and_local_paths_with_publish_instruction` in `rust/crates/features/chat_threads/src/thread_entry/tests.rs`; the counterparts are `tests/test_web_reply.py` and `tests/core/test_thread_entry.py`. Not ported: the NFKC check of the network location (`_checknetloc`). |
-| 23924d7dd | Ruff fixes for the file-link change | no behavior | Lint only. |
-| eaa087a23 | Anthropic-compatible Claude Code entries (`cc-anthropic-compatible`) | in Rust | `rust/crates/charliebot-agents/src/backends/anthropic_compatible/` registers options, factory, lifecycle, limits and attribution; `rust/crates/charliebot-registry/src/backend.rs`, `rust/crates/charliebot-usage/src/usage.rs` and `rust/crates/charliebot-session-api/src/detail.rs` pass type-specific limits. Covered by `cli_backends_match_the_python_package_on_synthetic_inputs`, `anthropic_compatible_registration_matches_python_traits_and_usage_attribution`, `anthropic_compatible_usage_uses_the_option_context_window`, `anthropic_compatible_option_requires_a_resolved_model_and_keeps_its_endpoint`, `anthropic_compatible_round_reports_a_reply_from_outside_the_pinned_family`, `test_non_claude_task_build_receives_no_claude_account`, and `session-usage-anthropic-compatible`. |
-| eb606bcf1 | Claude Code window follows the entry window; `CLAUDE_CODE_MAX_CONTEXT_TOKENS` is set too | in Rust | `rust/crates/charliebot-agents/src/backends/claude_code/claude_code.rs` sets both window variables and clears incompatible overrides and credentials. Covered by `anthropic_endpoint_sets_the_endpoint_and_pins_every_model_variable_without_a_flag`, `cli_backends_match_the_python_package_on_synthetic_inputs`, and `session-usage-anthropic-compatible`. |
-| f6ae0c844 | Run facts folded once; task state read from the history tail | no behavior | Changes no output: one fold of Run facts per event list gives the same outcomes, and a history-tail read of the task state with a full-fold fallback gives the same lifecycle states while the history's event ids are unique. Rust port: `charliebot-store::RunFacts` and `Store::node_facts` (one fold per node, extended by the appended suffix), and the pending-input check in `charliebot-tasks/src/dispatch.rs`; covered by `charliebot-tasks::recovery_history_reads_and_folds_do_not_grow_with_run_count` and `charliebot-store::node_facts_fold_each_appended_event_once`. Rust reads the task state from the memo's full fold: Python reads the tail only in its index build and boot skip check, and the fold skips a lifecycle fact that repeats an earlier event id (`charliebot-tasks::the_closed_node_check_reads_the_task_state_of_the_full_fold`). The handover-stop-request order race predates it (`master_cc_queue.py:298-309`, `runs.py:1114-1124`) and reproduces Python against Python at `e44c9ccef`. |
-| 85e41c2c3 | Boot recovery records a pass marker and skips closed nodes | in Rust | `charliebot-tasks/src/recovery.rs::reconcile_task_tree`; `charliebot-tasks/tests/recovery.rs::clean_boot_writes_marker_and_the_next_boot_skips_a_closed_worker`, `::failed_boot_keeps_the_previous_marker_and_out_of_space_still_retries`, `::breaking_each_skip_condition_alone_keeps_the_worker_in_full_recovery`, and the marker format tests. |
-| 23de57ca8 | One recovery-done line; the worktree check uses `os.path.lexists` | in Rust | `charliebot-tasks/src/recovery.rs::boot_skip_reason` and `::recovery_step`; `charliebot-tasks/tests/recovery.rs::dangling_worktree_symlink_keeps_a_closed_worker_in_full_recovery` and `::recovery_done_logs_one_line_with_marker_and_skip_counters`. |
-| 8b85da74d | Hardcoded paths replaced by `$CHARLIEBOT_HOME`; the `## Profile Home` section added to prompts | in Rust | `rust/crates/charliebot-tasks/src/prompts/sources.rs` adds `profile_home` to `COMMON_SECTIONS` and `WORKER_BASE_SECTIONS`; `snapshots_match_the_python_server_byte_for_byte` (`prompt_snapshot_golden`) covers it. |
-| 2d24e472a | Modules named, not symbols, in the task recovery imports | no behavior | Import style only. |
-| a47ad2003 | Type-less lines skipped in the history-tail task state read | in Rust | `charliebot-store/src/task_tree.rs:1362` (`fold_task_facts`). |
-| 50bc61cd7 | YAPF formatting of `src/runtime/task_prompts.py` | no behavior | Formatting only. |
-| 97d77338e | Unused `KEEP_REASONS` tuple dropped | no behavior | Nothing read the tuple. |
-| e3b2c7425 | Shared `_no_summary_fallback` for the improve summary line | no behavior | Both call sites keep the same text. |
-| 3be34accc | Startup cgroup sweep limited to this home's sessions | in Rust | `charliebot-agents/src/transport/cgroup.rs:200` (`sweep_stale_session_cgroups`). |
-| 6cb6bd9e8 | `register_run` call sites migrated to `register_run_locked` (slice 1) | no behavior | Call-site migration only. |
-| 8a7e08a3e | Test-only `register_run` wrapper dropped | no behavior | Python test helpers `python_store_ops.py` and `python_dispatch_golden.py` now call `register_run_locked`. |
+| 0419cd23a | Restore skill reads after manager compaction | red-list | Rows R03, R04, R05, R06, R10, R12, R13, R14, R15, R25, R30, R47, R50, R51, R55, R58, R59, R62, R65, R66, R70, R71, R74, R75, R76, R77. |
+| 300890241 | Ignore non-plain skill reads and unresolved paths | unported | Python `src/runtime/cli/compaction_context.py:51-58,123-134` filters non-plain paths and skips unresolved skill files. Preserve those checks when the Rust Claude launch in `rust/crates/charliebot-agents/src/backends/claude_code/claude_code.rs:231-235` gains the compaction hook; parity does not exercise these inputs. |
+| 9127ef401 | Close the warm headless renderer in a stop hook | no behavior | Python `src/features/artifacts/headless_render.py:187-199` closes Chrome and removes its temporary profile at stop. This resource cleanup changes no client response, event or home data. |
+| f2620375f | Exit after server stop without finalizing the heap | no behavior | Python `server.py:607-616` flushes logs and exits after uvicorn has stopped. This changes teardown only; request answers and persisted state do not change. |
+| 52eb05c1c | Deduplicate retried user messages | red-list | Rows R01, R02, R07, R08, R09, R11, R46, R48, R49, R52, R53, R54, R56, R57, R60, R61, R63, R64, R67, R68, R69, R72, R73. |
+| 2e0daa253 | Bind retried sends to their session and stop thinking only on refusal | unported | Python `web/static/js/chat/input.js:68-119,123-153,168-173` keeps the original session and request ID across retries and ends thinking on a refused send. Rust serves this file, but its chat body model and parser in `rust/crates/charliebot-tasks/src/routes.rs:81-85,93-98,534-544` omit `request_id`; parity does not switch views while a retry is pending. |
+| 170eb4dea | Keep nodes whose files were written at pass start | unported | Python `src/runtime/task_recovery.py:89-119` applies one second of mtime slack before boot skips a node. Rust `rust/crates/charliebot-tasks/src/recovery.rs:83-114` has no slack; no parity step forces a coarse-clock write race. |
+| d59e81e8c | Deduplicate agent sends and thread replies | red-list | Rows R16, R17, R18, R19, R20, R21, R22, R23, R24, R26, R27, R28, R29, R31, R32, R33, R34, R35, R36, R37, R38, R39, R40, R41, R42, R43, R44, R45. |
+| 0b5351c00 | Read the error-row rule from one shared predicate | no behavior | Python `web/static/js/chat/shared.js:204-212` centralizes the existing `Error: ` predicate used by both views. The For You filter keeps the same rows and output. |
+| 26d40d04e | Show a failed turn’s full error text in chat | in Rust | Rust serves the changed `web/static` tree through `rust/crates/charliebot-server/src/routes/static_mounts.rs:28-42,55-68`; its already-ported `/ws/sessions/{session_id}` stream supplies the message. No new API behavior is needed. |

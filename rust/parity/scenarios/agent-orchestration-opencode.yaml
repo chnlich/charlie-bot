@@ -21,7 +21,7 @@ steps:
   - name: send a manager message to OpenCode
     method: POST
     path: /api/chat/${sessions.delta}/message
-    json: {content: Start the synthetic OpenCode manager turn.}
+    json: {content: Start the synthetic OpenCode manager turn., request_id: synthetic-chat-manager-opencode}
     capture: {input_id: input_event_id}
     expect_status: 202
     defer_files: true

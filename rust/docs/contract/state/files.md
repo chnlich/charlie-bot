@@ -1,6 +1,6 @@
 # Persisted state: every file the Python server reads or writes
 
-Baseline: the Python tree at `78e0d10e2` on `rust-backend`. A Rust server that shares a `CHARLIEBOT_HOME` with
+Baseline: the Python tree at `f58a345a6` on `rust-backend`. A Rust server that shares a `CHARLIEBOT_HOME` with
 this baseline must read every file below as the baseline writes it and must write it so the baseline reads it
 back. Paths use `<home>` for the resolved `CHARLIEBOT_HOME`, `<sid>` for a session id, `<run>` for a run id and
 `/home/<user>` for the operator's home directory. Module paths are repo-relative. A statement marked
@@ -59,6 +59,7 @@ them; correctness does not depend on it.
   | task-closed event | `task-closed:{session_id}:{request_id}` |
   | task-reopened event | `task-reopened:{session_id}:{request_id}` |
   | input-ack event | `input-ack:{session_id}:{request_id}` |
+  | request-keyed input or delivery event | `request:{session_id}:{request_id}` |
   | child report | `child-report:{child_session_id}:{source_event_id}:{recipient_session_id}` |
   | launch-withheld event | `run-launch-withheld:{run_id}:{reason}` |
   | turn-launch event | `turn-launch:{run_id}:{reason}` (`src/runtime/task_execution.py`) |
@@ -395,7 +396,8 @@ Modules: `src/features/memory/memory.py`, `memory_proposal.py`, `cli.py`, `store
   newline. The timestamp is Python `datetime.isoformat()` text, including `+00:00`.
 - Readers: Python `read_boot_recovery_marker` (line 58) and Rust `read_boot_recovery_marker` at the start of each
   pass. A missing file reads as no marker. The next pass skips a closed node that the marker proves unchanged
-  (`services.md` section 3).
+  (`services.md` section 3). Python keeps a node when either durable file has an mtime within one second before the
+  marker; this slack covers coarse filesystem timestamps.
 
 ## 6. Session files
 
@@ -474,6 +476,11 @@ back.
   event dict with a `type`. Control events (`src/runtime/control_events.py::build_control_event`) start with the
   header keys `id`, `type`, `timestamp`, `actor` (`user`, `agent` or `system`) and `source_session_id`, followed
   by the payload. For example `task_created` carries `request_id`, `task_parent_id` and `task_spec_hash`.
+- A chat input request carries its `request_id` into the event. Its `id` is
+  `uuid5(NS, "request:<sid>:<request_id>")`; a replay with the same id and payload returns the existing event, while
+  reuse with a different event type, content or extra payload conflicts. Agent sends and recorded Slack, Discord and
+  web replies can also carry a request id, so a retry does not append another event. `/api/chat/<sid>/message`
+  requires a non-empty request id.
 - Archive: lines that move out go to `data/archives/chat_events.<isoyear>-W<isoweek:02d>.jsonl` (opened `"a"`).
   The live file is then rewritten ATOMIC with the kept lines, and `metadata.json.archive_offset` grows by the
   moved count. An event's global index is `archive_offset + line index in the live file`.

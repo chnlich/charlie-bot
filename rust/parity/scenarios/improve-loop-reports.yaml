@@ -53,7 +53,7 @@ steps:
   - name: start the parent manager before the improve loop
     method: POST
     path: /api/chat/${sessions.delta}/message
-    json: {content: Start the parent manager before the improve loop.}
+    json: {content: Start the parent manager before the improve loop., request_id: synthetic-chat-improve-parent}
     capture: {pre_loop_input: input_event_id}
     expect_status: 202
     defer_files: true

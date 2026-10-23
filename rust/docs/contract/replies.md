@@ -10,9 +10,13 @@ All routes sit under `/api/internal/`. The CLI calls them (`charliebot slack …
 
 Shared rules:
 
-- Auth: access key. No route calls `require_caller`. The session is the body or query `session_id`.
+- Auth: access key + caller. The reply routes call `require_caller`; a run-token caller must refer to an active run.
+  The session is the body or query `session_id`.
 - Bodies are JSON. Unknown keys give 422 `extra_forbidden`.
 - A refusal persists nothing.
+- For an agent caller, the server derives a request id from the active run, verb, target session and text. The event id
+  is stable for that request. A matching retry returns the stored result without a second event or post; reusing the
+  request with different content conflicts. Operator replies without run claims get no retry key.
 
 ## Thread sessions (Slack and Discord)
 
@@ -35,7 +39,8 @@ The Slack and Discord routes share the logic in `src/features/chat_threads/threa
 
 ### Freshness check (reply routes only)
 
-The reply route reads the thread's eligible messages above the session's watermark. When any exist, it refuses with 412:
+After session and blank-text checks, and after returning a matching stored retry when one exists, the reply route reads
+the thread's eligible messages above the session's watermark. When any exist, it refuses with 412:
 
 ```json
 {"detail": {"error": "stale_thread", "new_messages": [{"<id>": "…", "user": "…", "text_preview": "<first 200 chars>"}], "watermark_<id>": "<watermark or null>"}}
@@ -48,12 +53,17 @@ The thread read calls the platform API (Slack Web API or Discord REST API).
 - Handlers: `src/features/slack/api.py:30`, `src/features/discord/api.py:37`.
 - Body: `{"session_id": string, "text": string}`, both required.
 
-Checks after the freshness check:
+Checks before the freshness check:
 
 | Status | Case | `detail` |
 |---|---|---|
 | 422 | `text` is blank | `Reply text is empty` |
 | 422 | `text` links a CharlieBot file-server URL | see the text below the table |
+
+After the freshness check, a chunk that exhausts retries gives 502:
+
+| Status | Case | `detail` |
+|---|---|---|
 | 502 | A chunk failed after its retries | `<Display name> did not accept chunk <i> of <n> after <attempts> attempts; nothing was persisted` |
 
 The file-server link refusal text (one line; the backticks are part of the text):
@@ -73,16 +83,20 @@ reply links a CharlieBot file-server URL, which opens only behind the access key
 - `answers`: the summon that the running turn's newest thread input answers, or null.
 - `operator_only_note`: null, or `Application-route links stay as written; the operator alone can open them: <links>` when the text links routes of this server.
 
+Agent reply chunks use a request-derived key plus the chunk number. Slack stores that key in the post metadata and
+reads thread metadata when checking for a prior post. Discord sends the key as a nonce with `enforce_nonce: true` and
+also checks the bot's recent thread messages before posting.
+
 Side effects:
 
 1. Post each chunk to the thread through the platform API, with retries.
-2. Append and broadcast `{"type":"<reply event type>","content":<text>,"<reply event type>":{"answers","chars","chunks"}}`.
+2. Append and broadcast `{"type":"<reply event type>","content":<text>,"<reply event type>":{"answers","chars","chunks"}}`; an agent reply also stores `id` and `request_id`.
 3. Clear the answered summon's pending ack marker.
 4. Log `<platform>_reply_posted`.
 
 ### `POST /api/internal/slack/ack`
 
-- Handler: `src/features/slack/api.py:55`.
+- Handler: `src/features/slack/api.py:74`.
 - Body: `{"session_id": string, "message_ids": [string]}`, both required.
 
 | Status | Case | `detail` |
@@ -103,7 +117,7 @@ Ids at or below the watermark are acked again with no change.
 
 ### `POST /api/internal/discord/read`
 
-- Handler: `src/features/discord/api.py:62`.
+- Handler: `src/features/discord/api.py:80`.
 - Body: `{"session_id": string, "url": string or null, "limit": int}`. `limit` defaults to 50 and must be 1..100 (422 otherwise).
 
 Without `url` (the session's own thread):
@@ -137,7 +151,7 @@ Any other Discord API failure gives 502 with the error text.
 
 ### `POST /api/internal/discord/check`
 
-- Handler: `src/features/discord/api.py:88`.
+- Handler: `src/features/discord/api.py:106`.
 - Body: `{}`. Any key gives 422.
 
 | Status | Case | Body |
@@ -161,7 +175,7 @@ A web session is a manager session with no Slack or Discord origin. Every web ro
 
 ### `POST /api/internal/web/reply`
 
-- Handler: `src/features/web_reply/api.py:45`.
+- Handler: `src/features/web_reply/api.py:65`.
 - Body: `{"session_id": string, "text": string, "keep_language": string or null}`; `keep_language` is optional.
 - 422 `Reply text is empty` for blank text.
 - 422 `Keep-language reason is empty` for a blank `keep_language`.
@@ -173,13 +187,13 @@ When `keep_language` is present, the server records it with the reply and skips 
 
 Side effects:
 
-1. Append and broadcast `{"type":"web_reply","content":<text>,"web_reply":{"answers","chars"}}`, with `"keep_language":<reason>` in `web_reply` when the reason is given.
+1. Append and broadcast `{"type":"web_reply","content":<text>,"web_reply":{"answers","chars"}}`, with `"keep_language":<reason>` in `web_reply` when the reason is given. An agent reply also stores the request-derived `id` and `request_id`.
 2. Mark the session unread (sidebar `unread_changed` frame when the flag changes).
 3. Log `web_reply_posted`. A held reply logs `web_reply_held` and records nothing.
 
 ### `GET /api/internal/web/dialog`
 
-- Handler: `src/features/web_reply/api.py:64`.
+- Handler: `src/features/web_reply/api.py:99`.
 - Query: `session_id` (string, required).
 - 200: `{"session_id": "…", "entries": [{"role": "user" | "web_reply" | "web_reply_notice", "content": "…"}]}`.
 
@@ -187,7 +201,7 @@ Side effects:
 
 ### `POST /api/internal/web/status`
 
-- Handler: `src/features/web_reply/api.py:79`.
+- Handler: `src/features/web_reply/api.py:114`.
 - Body: `{"session_id": string, "text": string}`. `text` is the content of a JSON file.
 
 The server parses `text` as a status patch with the optional keys `goal` (non-blank string), `now` (non-blank string) and `waiting` (list of `{"text": non-blank string, "context": non-blank string, "link": string or null}`). Unknown keys are refused. Each waiting item needs context and a cold-read record for its current text, context, link and linked host-file bytes.
@@ -212,7 +226,7 @@ Side effects:
 
 ### `POST /api/internal/web/status/unread`
 
-- Handler: `src/features/web_reply/api.py:98`.
+- Handler: `src/features/web_reply/api.py:135`.
 - Body: `{"session_id": string, "text": string}`. `text` is the same status file used by the set route.
 - 200: `{"unread": [waiting item, …]}` for items whose current digest has no `web_ask_check` event in the session.
 - Session, web-session, parsing and context-validation refusals match `POST /api/internal/web/status`; unlike the set
@@ -223,7 +237,7 @@ The digest covers the item's text, context, link and the bytes of a host-served 
 
 ### `POST /api/internal/web/ask-check`
 
-- Handler: `src/features/web_reply/api.py:115`.
+- Handler: `src/features/web_reply/api.py:154`.
 - Body: `{"session_id": string, "item": {"text": string, "context": string or null, "link": string or null}, "backend": string, "answer": string}`.
 - 200: `{"item_sha256": "<digest>"}`.
 - Errors: 404 unknown session; 409 a thread session or worker; 422 an invalid waiting item.
@@ -232,7 +246,7 @@ The route appends and broadcasts `{"type":"web_ask_check","content":"Cold read o
 
 ### `GET /api/internal/web/status`
 
-- Handler: `src/features/web_reply/api.py:132`.
+- Handler: `src/features/web_reply/api.py:171`.
 - Query: `session_id` (string, required).
 - 200:
 

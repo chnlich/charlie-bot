@@ -25,7 +25,7 @@ steps:
   - name: send a manager message
     method: POST
     path: /api/chat/${sessions.atlas}/message
-    json: {content: Continue the synthetic Atlas plan.}
+    json: {content: Continue the synthetic Atlas plan., request_id: synthetic-chat-handover-manager}
     capture: {input_id: input_event_id}
     expect_status: 202
     defer_files: true

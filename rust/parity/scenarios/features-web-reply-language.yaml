@@ -60,7 +60,7 @@ steps:
   - name: a Chinese user message that no reply answers
     method: POST
     path: /api/chat/${sessions.web_reply}/message
-    json: {content: "这个改动先别合入，我想再看一下状态面板的折叠逻辑。"}
+    json: {content: "这个改动先别合入，我想再看一下状态面板的折叠逻辑。", request_id: synthetic-chat-web-reply-language}
     expect_status: 202
     defer_files: true
   - kind: wait

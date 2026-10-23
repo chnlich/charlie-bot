@@ -5,7 +5,7 @@ The internal router (`src/runtime/api/internal.py`) is mounted at `/api/internal
 ## `GET /api/internal/version`
 
 - Auth: access key.
-- Handler: `src/runtime/api/internal.py:28`.
+- Handler: `src/runtime/api/internal.py:29`.
 - Parameters: none.
 - 200: `{"sha": "<short git sha>", "started_at": "<ISO time>"}`.
 
@@ -20,7 +20,7 @@ Side effects: none. The CLI uses the route to detect a server that runs older co
 ## `POST /api/internal/delegate`
 
 - Auth: access key + caller.
-- Handler: `src/runtime/api/internal.py:216`.
+- Handler: `src/runtime/api/internal.py:265`.
 - Dependency: `require_caller`.
 
 Body (`DelegateRequest`, JSON, required):
@@ -86,7 +86,7 @@ When the request has no `delegate_invocation`, the event carries one built from 
 ## `POST /api/internal/schedule-trigger`
 
 - Auth: access key.
-- Handler: `src/runtime/api/internal.py:258`.
+- Handler: `src/runtime/api/internal.py:308`.
 
 Body (`ScheduleTriggerRequest`, unknown keys give 422 `extra_forbidden`):
 
@@ -129,7 +129,7 @@ UNVERIFIED: the fire path (watch polling, the timeout rule, the event content) l
 ## `POST /api/internal/triggers/{session_id}/{trigger_id}/cancel`
 
 - Auth: access key.
-- Handler: `src/runtime/api/internal.py:306`.
+- Handler: `src/runtime/api/internal.py:356`.
 - Body: none.
 
 | Status | Case | Body |
@@ -141,8 +141,9 @@ Side effects: for a pending trigger, the server sets `status` to `cancelled` in 
 
 ## `POST /api/internal/session-message`
 
-- Auth: access key. The route does not call `require_caller`. The sender is the body `session_id`, whatever the credential.
-- Handler: `src/runtime/api/internal.py:320`.
+- Auth: access key + caller. The body `session_id` names the sender; an agent run token supplies the caller identity
+  used to make retries idempotent.
+- Handler: `src/runtime/api/internal.py:370`.
 
 Body (`SessionMessageRequest`, unknown keys give 422):
 
@@ -165,8 +166,12 @@ Checks, in order:
 
 200: `{"status": "accepted"}`.
 
+For an agent caller, the server derives `request_id` from the active run id, verb `session send`, target id and
+content. Repeating the same send from that run returns the accepted result without adding another target event;
+reusing the derived id with a different event payload conflicts. An operator call has no run-derived request id.
+
 Side effects:
 
-1. Append an `agent_message` event to the target: `{"type":"agent_message","actor":"agent","content","from_session":<sender id>,"from_session_name":<sender name>,…}`. Broadcast it on the target's session channel.
+1. Append an `agent_message` event to the target: `{"type":"agent_message","actor":"agent","content","from_session":<sender id>,"from_session_name":<sender name>,…}`. Agent sends also store the derived `request_id` and a stable event id. Broadcast it on the target's session channel.
 2. Dispatch the target's pending inputs. An idle target starts an agent run.
 3. Log `session_message_dispatched`. A refusal for length logs `session_message_refused`.

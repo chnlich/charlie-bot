@@ -1,6 +1,6 @@
 # Agent processes (summary depth)
 
-Baseline: the Python tree at `78e0d10e2`. For each backend package under `src/backends/`, this document gives the
+Baseline: the Python tree at `f58a345a6`. For each backend package under `src/backends/`, this document gives the
 executable, the module and function that build argv, env, cwd and stdin, and the output format the server parses.
 Environment details are in `env.md` and transport files in `files.md` section 6.4. **UNVERIFIED** marks a
 statement not confirmed from source, with the reason.
@@ -63,15 +63,18 @@ Resume styles (`backend_type_registration`, from each package's `register()`):
   - fixed head (`BASE_COMMAND`): `claude -p --output-format stream-json --verbose --dangerously-skip-permissions
     --disallowed-tools <HEADLESS_DISALLOWED_TOOLS>`;
   - then `[--session-id <uuid>]`, `[--model <model>]`, `[--effort <effort>]`;
-  - then `--settings '{"disableClaudeAiConnectors":true,"syncClaudeAiSkills":false[,"disableBundledSkills":true][,"fastMode":true]}'`
-    (one compact JSON object; `disableBundledSkills` is present except for a manager turn, and `fastMode` follows the option);
+  - then `--settings <compact JSON>` with `disableClaudeAiConnectors: true` and `syncClaudeAiSkills: false`; it also
+    has `disableBundledSkills: true` except for manager turns, a manager-turn `SessionStart` hook for matcher
+    `compact`, and `fastMode: true` when the option enables it;
   - then the lifecycle's extra flags, `--resume <id>` first when resuming;
   - for a worker or review run, `--append-system-prompt-file <run dir>/harness_instructions.md`.
   - `HEADLESS_DISALLOWED_TOOLS` is `Monitor,ScheduleWakeup,CronCreate,CronDelete,CronList,Agent,Workflow,TaskCreate,
     TaskGet,TaskUpdate,TaskList,TaskStop,TaskOutput,SendMessage,ListAgents,ShareOnboardingGuide`. Review runs add
     `Skill`; other run kinds add `ReportFindings`.
   - A manager turn adds `--exclude-dynamic-system-prompt-sections`; it keeps machine-specific sections out of the
-    system prompt. The per-run-kind settings also disable connector sync and synced Claude.ai skills.
+    system prompt. Its six `SessionStart` commands run `charliebot compaction-context --session <sid> --slot <1-6>`
+    after compaction to restore the session's current read skills. The per-run-kind settings also disable connector
+    sync and synced Claude.ai skills.
 - **stdin:** the prompt (`_stdin_prompt`), written and closed by `_write_stdin_prompt`.
 - **env:** `_prepare_env` (headless variables, `CLAUDE_CONFIG_DIR` of the pool account).
 - **cwd:** common rule. A manager turn gets `CLAUDE.md` in its session directory.
@@ -81,8 +84,9 @@ Resume styles (`backend_type_registration`, from each package's `register()`):
   - `one_shot_text`: `claude -p --output-format text --no-session-persistence --model <m> --system-prompt <s>
     --disallowed-tools Bash,Read,Write,Edit,Glob,Grep,Agent`, prompt on stdin, plain-text stdout.
   - Compaction (`claude_compaction.py::compaction_command`): `claude -p --resume <id> --model claude-sonnet-5
-    --output-format json --disallowed-tools <...> --settings '{"disableClaudeAiConnectors":true}'`, with
-    `"/compact\n"` on stdin and a JSON result on stdout. Its env is `compaction_env` (`env.md` section 5).
+    --output-format json --disallowed-tools <...> --settings <compact JSON>`, with
+    `"/compact\n"` on stdin and a JSON result on stdout. Its settings include the same six compact-matcher hooks
+    for the CharlieBot session. Its env is `compaction_env` (`env.md` section 5).
   - Idle compaction (`claude_idle_compaction.py::_compaction_process`): a qualifying `cc-claude` master session
     runs its own configured model and account with the normal run-kind settings and environment, plus
     `--resume <id> --exclude-dynamic-system-prompt-sections`; it sends `"/compact\n"` through the same compaction

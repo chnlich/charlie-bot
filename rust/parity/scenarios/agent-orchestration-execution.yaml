@@ -100,7 +100,7 @@ steps:
   - name: send a manager message
     method: POST
     path: /api/chat/${sessions.delta}/message
-    json: {content: Continue the synthetic Ember plan.}
+    json: {content: Continue the synthetic Ember plan., request_id: synthetic-chat-manager-message}
     capture: {message_input: input_event_id}
     expect_status: 202
     defer_files: true
@@ -115,7 +115,7 @@ steps:
   - name: send the first manager message for the gated turn
     method: POST
     path: /api/chat/${sessions.delta}/message
-    json: {content: Start the gated synthetic task.}
+    json: {content: Start the gated synthetic task., request_id: synthetic-chat-first-manager}
     capture: {first_input: input_event_id}
     expect_status: 202
     defer_files: true
@@ -126,7 +126,7 @@ steps:
   - name: send another manager message during the turn
     method: POST
     path: /api/chat/${sessions.delta}/message
-    json: {content: Queue this while the first turn runs.}
+    json: {content: Queue this while the first turn runs., request_id: synthetic-chat-second-manager}
     capture: {second_input: input_event_id}
     expect_status: 202
     defer_files: true
@@ -171,19 +171,19 @@ steps:
   - name: chat-message content uses the Python string field
     method: POST
     path: /api/chat/${sessions.delta}/message
-    json: {content: 42}
+    json: {content: 42, request_id: synthetic-chat-invalid-content}
     expect_status: 422
     compare: status_and_shape
   - name: chat-message content is required by the Python model
     method: POST
     path: /api/chat/${sessions.delta}/message
-    json: {}
+    json: {request_id: synthetic-chat-missing-content}
     expect_status: 422
     compare: status_and_shape
   - name: chat-message content and uploaded_files both fail validation
     method: POST
     path: /api/chat/${sessions.delta}/message
-    json: {content: 42, uploaded_files: [{filename: 42, path: synthetic-path}]}
+    json: {content: 42, uploaded_files: [{filename: 42, path: synthetic-path}], request_id: synthetic-chat-invalid-files}
     expect_status: 422
     compare: status_and_shape
   - name: malformed chat-message JSON wins over a missing session

@@ -61,7 +61,7 @@ steps:
   - name: start a gated manager turn for chat cancel
     method: POST
     path: /api/chat/${sessions.delta}/message
-    json: {content: Hold this manager turn for cancellation.}
+    json: {content: Hold this manager turn for cancellation., request_id: synthetic-chat-cancel}
     capture: {chat_cancel_input: input_event_id}
     expect_status: 202
     defer_files: true

@@ -1,6 +1,6 @@
 # Server process: startup, lifespan, services, session cgroups
 
-Baseline: the Python tree at `78e0d10e2`. Entry point: `server.py`. Paths use `<home>` and `/home/<user>` as in
+Baseline: the Python tree at `f58a345a6`. Entry point: `server.py`. Paths use `<home>` and `/home/<user>` as in
 `files.md`. **UNVERIFIED** marks a statement not confirmed from source, with the reason.
 
 ## 1. Before the event loop (`server.py::main`)
@@ -37,9 +37,9 @@ Logs go to stdout and stderr only; the server writes no log file. `scripts/start
 | 7 | Start `early` services in registration order (`usage_tally`, `speech`) | section 5 | an exception from `start_service` fails startup |
 | 8 | `await app.state.recovery_task` | waits until recovery ends, so no scheduler fire or recovered trigger races a recorded run | |
 | 9 | `TriggerManager(cfg, task_manager)`, `triggers.set_trigger_manager`, `await trigger_mgr.recover_pending()` | reads every `sessions/*/triggers/*.json`; restarts a wait task for each `status: pending` file. Unparsable files log `trigger_recovery_load_failed` and are skipped. | per-file errors are logged |
-| 10 | Start `ready` services in registration order (`scheduler`, `slack`, `discord`, `host_auth`, `merge_pool`, `ext_usage`) | section 5 | an exception fails startup |
+| 10 | Start `ready` services in registration order (`artifacts_headless_render`, `scheduler`, `slack`, `discord`, `host_auth`, `merge_pool`, `ext_usage`) | section 5 | an exception fails startup |
 | 11 | Log `server_ready` with `ready_in_ms`, then serve | | |
-| 12 | Shutdown: every `stop_service` (ready services in reverse order, then early in reverse: `ext_usage`, `merge_pool`, `host_auth`, `discord`, `slack`, `scheduler`, `speech`, `usage_tally`), then `http.close_http_client`, then `streaming.streaming_manager.close_all` (closes WebSockets) | each step timed into `charliebot_shutdown` | an exception propagates and skips the `charliebot_shutdown` line |
+| 12 | Shutdown: every `stop_service` (ready services in reverse order, then early in reverse: `ext_usage`, `merge_pool`, `host_auth`, `discord`, `slack`, `scheduler`, `artifacts_headless_render`, `speech`, `usage_tally`), then `http.close_http_client`, then `streaming.streaming_manager.close_all` (closes WebSockets) | each step timed into `charliebot_shutdown` | an exception propagates and skips the `charliebot_shutdown` line |
 | 13 | `finally`: `writer_fence.release()` | unlinks `writer_identity.json`, then unlocks | |
 
 Agent processes are not stopped by the lifespan:
@@ -55,12 +55,12 @@ Agent processes are not stopped by the lifespan:
 Scope: only directories under this home's `sessions/` that hold a `metadata.json`, and only this home's records.
 
 The pass reads the boot marker `state/boot_recovery.json` (`files.md` 5.19). A node is skipped, with no
-`_reconcile_node` call and counter `skipped`, when the marker proves it unchanged. That holds when all six conditions
-of Python `_boot_skip_reason` or Rust `boot_skip_reason` hold: the lifecycle state is not `open`; `data/chat_events.jsonl`
-and `metadata.json` both exist and predate the marker; every Run ended; no Run has a sequence ref; no Run worktree
-exists on disk (including a dangling symlink); and a cold-read task's last work Run did not fail. Each kept node
-counts its first failing condition in `keep_reasons`. A pass in which no node raised writes the marker with its start
-time. A skipped node still warms the display with its newest Run's backend.
+`_reconcile_node` call and counter `skipped`, when the marker proves it unchanged. Python `_boot_skip_reason` skips
+when all six conditions hold: the lifecycle state is not `open`; `data/chat_events.jsonl` and `metadata.json` both
+exist and have mtimes more than one second before the marker; every Run ended; no Run has a sequence ref; no Run
+worktree exists on disk (including a dangling symlink); and a cold-read task's last work Run did not fail. Each kept
+node counts its first failing condition in `keep_reasons`. A pass in which no node raised writes the marker with its
+start time. A skipped node still warms the display with its newest Run's backend.
 
 1. Each registered sequence controller's `reconcile_interrupted(cfg, tree)` runs first: cron step chains and
    improve loops. A controller whose process died is never resumed. Its state file, active lock and chat stream are
@@ -119,6 +119,7 @@ every baseline package registered, in registration order.
 
 | Name | Module | Phase | Purpose | Cadence | Files and side effects | Writes outside the home |
 | --- | --- | --- | --- | --- | --- | --- |
+| `artifacts_headless_render` | `src.features.artifacts.headless_render` | ready | Starts no process until a page-height check; keeps one warm headless Chrome renderer for measurements | on first page-height check | Stop closes Chrome and removes its temporary profile | `<system temp>/headless-render-*`, removed on close |
 | `scheduler` | `src.features.cron.service` | ready | Runs `config.d/cron.d` tasks (`Scheduler`); published on `app.state.scheduler` for the run-now route | first tick 60 s after start, then every 60 s (`_TICK_INTERVAL`) | Reads cron files and prompt files. Auto-binds each valid task, enabled or not, to a manager node created with request id `scheduled-node:<name>`, then writes `session_id` back into the cron file (`cron_files.write_cron_key`). Updates the node's `last_scheduled_run`, `last_scheduled_cron` and `last_run_status`. Fires runs, appends `scheduled_run_*` chat events, and runs handlers (`backup`, `usage_ledger`, `cool_storage`). | the `backup` handler writes `<home name>_backup/`; `cool_storage` deletes backend transcripts (`files.md` section 7) |
 | `slack` | `src.features.slack.service` | ready | Slack Socket Mode listener and backfill | long-lived connection | Starts only when `credentials.slack.bot_token`, `slack.app_token` and `slack.allowed_user_ids` are all set. Creates and updates chat-thread sessions (uuid5 ids, `files.md` section 3) and their `slack_origin` and `slack_watermark_ts`. Calls `https://slack.com/api/apps.connections.open`, `conversations.replies`, `conversations.info`, `chat.postMessage`, `reactions.add` and `reactions.remove`. | none |
 | `discord` | `src.features.discord.service` | ready | Discord gateway listener and backfill | long-lived connection | Starts only when `credentials.discord.bot_token` and `discord.allowed_users` are set. Creates and updates chat-thread sessions with `discord_origin` and `discord_watermark_id`. REST base `https://discord.com/api/v10`. | none |
@@ -145,8 +146,8 @@ for pkg in $(sed -n '/^PACKAGES = (/,/^)/p' src/app/registrations.py | grep -o '
 done
 ```
 
-Packages with `register_service`: `src.features.cron`, `src.features.slack`, `src.features.discord`,
-`src.features.host_auth`, `src.features.trace`, `src.features.usage` (two), and `src.features.voice`. All eight
+Packages with `register_service`: `src.features.artifacts`, `src.features.cron`, `src.features.slack`, `src.features.discord`,
+`src.features.host_auth`, `src.features.trace`, `src.features.usage` (two), and `src.features.voice`. All nine
 services are in the table above.
 
 Packages with `register_metadata_fields`: `src.features.backend_pool`, `src.features.cron`, `src.features.slack`,

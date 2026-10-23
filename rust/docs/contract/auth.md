@@ -130,6 +130,10 @@ Point 1 means: on a `require_caller` route, a cookie-authenticated browser reque
 | `POST /api/sessions/{session_id}/runs/{run_id}/cancel` | `src/runtime/api/sessions.py:1848` |
 | `POST /api/chat/{session_id}/message` | `src/runtime/api/chat.py:54` |
 | `POST /api/internal/delegate` | `src/runtime/api/internal.py:222` |
+| `POST /api/internal/session-message` | `src/runtime/api/internal.py:375` |
+| `POST /api/internal/slack/reply` | `src/features/slack/api.py:37` |
+| `POST /api/internal/discord/reply` | `src/features/discord/api.py:44` |
+| `POST /api/internal/web/reply` | `src/features/web_reply/api.py:73` |
 
 The per-route rules after identity resolution are in [sessions.md](sessions.md), [chat.md](chat.md) and [internal.md](internal.md).
 

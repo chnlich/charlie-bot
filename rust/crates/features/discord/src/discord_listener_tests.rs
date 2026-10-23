@@ -549,7 +549,7 @@ async fn test_thread_summon_binds_the_thread_and_labels_from_the_parent() {
 }
 
 #[tokio::test]
-async fn test_second_summon_reuses_and_unarchives() {
+async fn test_duplicate_summon_reuses_and_keeps_an_archived_session_archived() {
   let home = Home::new(true).await;
   home.fake().channel_objects.insert(PARENT.to_string(), json!({"id": PARENT, "type": 0, "name": "general"}));
   let client = discord_client(&home);
@@ -560,8 +560,60 @@ async fn test_second_summon_reuses_and_unarchives() {
   let third = handle_message_create(&summon, &home.features, client, BOT_USER).await.unwrap().unwrap();
   assert_eq!(first, second);
   assert_eq!(second, third);
-  assert_eq!(home.features.store.get_session(&first).await.unwrap().unwrap().status, SessionStatus::Active);
+  assert_eq!(home.features.store.get_session(&first).await.unwrap().unwrap().status, SessionStatus::Archived);
   assert_eq!(home.features.store.load_session_metas(None).unwrap().len(), 1);
+  assert_eq!(
+    home
+      .features
+      .store
+      .load_chat_events_sync(&first)
+      .unwrap()
+      .iter()
+      .filter(|event| event["type"] == event_types::AGENT_MESSAGE)
+      .count(),
+    1
+  );
+}
+
+#[tokio::test]
+async fn test_discord_accepted_post_timeout_retries_with_one_nonce_keyed_post() {
+  let home = Home::new(true).await;
+  let sid = discord_session(&home).await;
+  home.fake().accepted_post_failures_remaining = 1;
+  let bot = Bot::new(Arc::clone(&home.features), home.api.clone());
+
+  let result = post_reply(&bot, &sid, "accepted before the response failed").await.unwrap();
+
+  assert_eq!(result["posted"], true);
+  let fake = home.fake();
+  assert_eq!(fake.posts, [(THREAD.to_string(), "accepted before the response failed".to_string())]);
+  assert_eq!(fake.post_bodies.len(), 2);
+  assert_eq!(fake.post_bodies[0]["nonce"], fake.post_bodies[1]["nonce"]);
+  assert_eq!(fake.post_bodies[0]["enforce_nonce"], true);
+  assert_eq!(fake.post_bodies[1]["enforce_nonce"], true);
+}
+
+#[tokio::test]
+async fn test_existing_bot_content_blocks_a_post_without_nonce_deduplication() {
+  let home = Home::new(true).await;
+  let sid = discord_session(&home).await;
+  let text = "the reply already present in the thread";
+  home.fake().channels.insert(
+    THREAD.to_string(),
+    vec![json!({
+      "id": "900000000000000101",
+      "channel_id": THREAD,
+      "content": text,
+      "author": {"id": BOT_USER, "username": "synthetic-bot", "bot": true},
+      "timestamp": "2099-01-01T00:00:00Z",
+    })],
+  );
+  let bot = Bot::new(Arc::clone(&home.features), home.api.clone());
+
+  let result = post_reply(&bot, &sid, text).await.unwrap();
+
+  assert_eq!(result["posted"], true);
+  assert!(home.fake().posts.is_empty());
 }
 
 #[tokio::test]

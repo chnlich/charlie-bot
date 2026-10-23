@@ -546,17 +546,13 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn same_thread_twice_reuses_the_session() {
+  async fn duplicate_mention_reuses_one_summon_and_ack() {
     let home = Home::new();
     let api = FakeApi::start(&[]).await;
     let event = mention();
     let first = handle_app_mention(&event, &home.features, Arc::clone(&api.client)).await.unwrap().unwrap();
     wait_until(|| home.launches().len() == 1).await;
     let second = handle_app_mention(&event, &home.features, Arc::clone(&api.client)).await.unwrap().unwrap();
-    wait_until(|| {
-      home.launches().len() == 2 && api.calls().iter().filter(|call| call.1 == "/api/reactions.add").count() == 2
-    })
-    .await;
 
     assert_eq!(first, second);
     assert_eq!(home.features.store.list_sessions_readonly(SessionStatus::Active).unwrap().len(), 1,);
@@ -569,9 +565,115 @@ mod tests {
         .iter()
         .filter(|event| event["type"] == "agent_message")
         .count(),
-      2,
+      1,
     );
+    assert_eq!(home.launches().len(), 1);
+    assert_eq!(api.calls().iter().filter(|call| call.1 == "/api/reactions.add").count(), 1);
     assert_eq!(api.calls().iter().filter(|call| call.1 == "/api/conversations.info").count(), 1);
+  }
+
+  #[tokio::test]
+  async fn accepted_slack_post_timeout_is_recovered_by_its_metadata_key() {
+    let home = Home::new();
+    let api = FakeApi::start(&[]).await;
+    let session = home.thread_session("slack-timeout", TS).await;
+    api.set_accepted_post_failure_once();
+    let adapter: Arc<dyn ThreadAdapter> =
+      Arc::new(SlackThreadAdapter::with_client(Arc::clone(&home.features), Arc::clone(&api.client)));
+
+    let reply = charliebot_chat_threads::thread_entry::post_reply_with_request_id(
+      &adapter,
+      &home.features,
+      &session.id,
+      "accepted before the response failed",
+      Some("timeout-request"),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(reply["posted"], true);
+    assert_eq!(api.posts().len(), 1);
+    assert_eq!(
+      api.posts()[0]["metadata"],
+      json!({"event_type": "charliebot_post", "event_payload": {"key": "timeout-request#1"}})
+    );
+    let replies = home.features.store.load_chat_events_sync(&session.id).unwrap();
+    assert_eq!(replies.iter().filter(|event| event["type"] == SLACK.reply_event_type).count(), 1);
+  }
+
+  #[tokio::test]
+  async fn retry_after_reply_event_write_failure_finds_the_accepted_post() {
+    let home = Home::new();
+    let api = FakeApi::start(&[]).await;
+    let session = home.thread_session("slack-event-write", TS).await;
+    let adapter: Arc<dyn ThreadAdapter> =
+      Arc::new(SlackThreadAdapter::with_client(Arc::clone(&home.features), Arc::clone(&api.client)));
+    let fault = charliebot_store::write_faults::inject_chat_append_fault(
+      &home.features.store,
+      SLACK.reply_event_type,
+      &[&session.id],
+      1,
+      5,
+    );
+
+    let first = charliebot_chat_threads::thread_entry::post_reply_with_request_id(
+      &adapter,
+      &home.features,
+      &session.id,
+      "post before event write",
+      Some("write-request"),
+    )
+    .await;
+    assert!(first.is_err());
+    assert_eq!(fault.hits(), [charliebot_store::write_faults::Hit::Failed]);
+    drop(fault);
+
+    let second = charliebot_chat_threads::thread_entry::post_reply_with_request_id(
+      &adapter,
+      &home.features,
+      &session.id,
+      "post before event write",
+      Some("write-request"),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(second["posted"], true);
+    assert_eq!(api.posts().len(), 1);
+    let replies = home.features.store.load_chat_events_sync(&session.id).unwrap();
+    assert_eq!(replies.iter().filter(|event| event["type"] == SLACK.reply_event_type).count(), 1);
+  }
+
+  #[tokio::test]
+  async fn retry_of_a_partial_slack_reply_posts_only_the_missing_segment() {
+    let home = Home::new();
+    let api = FakeApi::start(&[]).await;
+    let session = home.thread_session("slack-partial", TS).await;
+    let adapter: Arc<dyn ThreadAdapter> =
+      Arc::new(SlackThreadAdapter::with_client(Arc::clone(&home.features), Arc::clone(&api.client)));
+    let segment = "x".repeat(SLACK.max_post_chars);
+    let text = format!("{segment}y");
+    api.set_thread_messages(vec![json!({
+      "ts": "1700000000.000001",
+      "user": "U_BOT",
+      "bot_id": "B_BOT",
+      "text": segment,
+      "metadata": {"event_type": "charliebot_post", "event_payload": {"key": "partial-request#1"}},
+    })]);
+
+    let reply = charliebot_chat_threads::thread_entry::post_reply_with_request_id(
+      &adapter,
+      &home.features,
+      &session.id,
+      &text,
+      Some("partial-request"),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(reply["chunks"], 2);
+    assert_eq!(api.posts().len(), 1);
+    assert_eq!(api.posts()[0]["text"], "y");
   }
 
   #[tokio::test]

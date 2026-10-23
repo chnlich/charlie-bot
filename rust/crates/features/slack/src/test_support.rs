@@ -1,6 +1,6 @@
 //! Store-backed Slack test fixtures and a local Slack Web API and Socket Mode fake.
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -160,6 +160,8 @@ pub(crate) struct FakeState {
   open_failures: AtomicUsize,
   open_calls: AtomicUsize,
   no_reaction: AtomicBool,
+  accepted_post_failure_once: AtomicBool,
+  fail_post_keys: Mutex<HashSet<String>>,
   socket_connections: AtomicUsize,
   socket_times: Mutex<Vec<Instant>>,
   connected: Notify,
@@ -183,6 +185,7 @@ impl FakeApi {
     let socket_url = format!("ws://{address}/socket");
     let app = Router::new()
       .route("/api/apps.connections.open", post(open_connection))
+      .route("/api/auth.test", post(auth_test))
       .route("/api/chat.postMessage", post(post_message))
       .route("/api/reactions.add", post(reaction))
       .route("/api/reactions.remove", post(reaction))
@@ -211,6 +214,10 @@ impl FakeApi {
 
   pub(crate) fn set_no_reaction(&self) {
     self.state.no_reaction.store(true, Ordering::SeqCst);
+  }
+
+  pub(crate) fn set_accepted_post_failure_once(&self) {
+    self.state.accepted_post_failure_once.store(true, Ordering::SeqCst);
   }
 
   pub(crate) fn set_thread_messages(&self, messages: Vec<Value>) {
@@ -273,10 +280,32 @@ async fn open_connection(State(state): State<Arc<FakeState>>) -> Response {
   Json(json!({"ok": true, "url": url})).into_response()
 }
 
-async fn post_message(State(state): State<Arc<FakeState>>, Json(body): Json<Value>) -> Json<Value> {
+async fn auth_test(State(state): State<Arc<FakeState>>) -> Json<Value> {
+  state.record("POST", "/api/auth.test", Value::Null);
+  Json(json!({"ok": true, "user_id": "U_BOT", "bot_id": "B_BOT"}))
+}
+
+async fn post_message(State(state): State<Arc<FakeState>>, Json(body): Json<Value>) -> Response {
   state.record("POST", "/api/chat.postMessage", body.clone());
   state.posts.lock().expect("the fake post log is never poisoned").push(body.clone());
-  Json(json!({"ok": true, "message": body}))
+  let key = body.pointer("/metadata/event_payload/key").and_then(Value::as_str).unwrap_or_default();
+  let ts = format!("1700000000.{:06}", state.posts.lock().expect("the fake post log is never poisoned").len());
+  let mut message = json!({
+    "ts": ts,
+    "user": "U_BOT",
+    "bot_id": "B_BOT",
+    "text": body["text"],
+    "metadata": body["metadata"],
+  });
+  state.thread_messages.lock().expect("the fake thread is never poisoned").push(message.clone());
+  let should_fail = state.fail_post_keys.lock().expect("the keyed post failures are never poisoned").contains(key)
+    || state.accepted_post_failure_once.swap(false, Ordering::SeqCst);
+  if should_fail {
+    return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"ok": false, "error": "synthetic response timeout"})))
+      .into_response();
+  }
+  message["ok"] = json!(true);
+  Json(json!({"ok": true, "message": message})).into_response()
 }
 
 async fn reaction(State(state): State<Arc<FakeState>>, request: Request<Body>) -> Response {
@@ -297,7 +326,7 @@ async fn thread_replies(
 ) -> Json<Value> {
   state.record("GET", "/api/conversations.replies", json!(query));
   let messages = state.thread_messages.lock().expect("the fake thread is never poisoned").clone();
-  Json(json!({"ok": true, "messages": messages}))
+  Json(json!({"ok": true, "messages": messages, "has_more": false}))
 }
 
 async fn channel_info(

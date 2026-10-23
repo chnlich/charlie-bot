@@ -116,6 +116,12 @@ pub struct FakeDiscord {
   pub gateway_url: Option<String>,
   /// Posted messages as (channel id, content).
   pub posts: Vec<(String, String)>,
+  /// Bodies sent to POST /channels/{channel_id}/messages.
+  pub post_bodies: Vec<Value>,
+  /// Messages accepted by nonce, so the fake server can model Discord's enforce_nonce behavior.
+  pub nonce_messages: HashMap<String, Value>,
+  /// Accepted posts whose HTTP response is failed, for retry cases.
+  pub accepted_post_failures_remaining: usize,
   /// Started threads as (parent channel, source message, thread name).
   pub started_threads: Vec<(String, String, String)>,
   /// Each request as the server saw it: method, path and query.
@@ -156,9 +162,35 @@ impl FakeDiscord {
       }
       ("GET", ["", "api", "v10", "channels", channel, "messages"]) => self.read_messages(channel, &request.query),
       ("POST", ["", "api", "v10", "channels", channel, "messages"]) => {
-        let content = request.json()["content"].as_str().unwrap_or_default().to_string();
+        let body = request.json();
+        self.post_bodies.push(body.clone());
+        let content = body["content"].as_str().unwrap_or_default().to_string();
+        if let Some(nonce) = body.get("nonce").and_then(Value::as_str)
+          && let Some(existing) = self.nonce_messages.get(nonce)
+        {
+          return Reply::json(200, existing.clone());
+        }
+        let message = json!({
+          "id": format!("900000000000000{:03}", self.posts.len() + 100),
+          "channel_id": channel,
+          "content": content,
+          "author": {
+            "id": self.user["id"],
+            "username": self.user["username"],
+            "bot": true,
+          },
+          "timestamp": "2099-01-01T00:00:00Z",
+        });
         self.posts.push((channel.to_string(), content.clone()));
-        Reply::json(200, json!({"id": "900000000000000099", "content": content}))
+        self.channels.entry(channel.to_string()).or_default().push(message.clone());
+        if let Some(nonce) = body.get("nonce").and_then(Value::as_str) {
+          self.nonce_messages.insert(nonce.to_string(), message.clone());
+        }
+        if self.accepted_post_failures_remaining > 0 {
+          self.accepted_post_failures_remaining -= 1;
+          return Reply::json(500, json!({"code": 0, "message": "synthetic response timeout"}));
+        }
+        Reply::json(200, message)
       }
       ("POST", ["", "api", "v10", "channels", _, "messages", _, "threads"]) => {
         let body = request.json();
@@ -264,7 +296,9 @@ impl Home {
       .startup
       .insert(Arc::new(charliebot_sched::triggers::TriggerManager::new(Arc::clone(&features))))
       .expect("the trigger manager inserts once");
-    let discord = Arc::new(Mutex::new(FakeDiscord::default()));
+    let mut fake_discord = FakeDiscord::default();
+    fake_discord.user = json!({"id": "600000000000000001", "username": "synthetic-bot"});
+    let discord = Arc::new(Mutex::new(fake_discord));
     let fake = Arc::clone(&discord);
     let api = serve(move |request| fake.lock().expect("the fake lock is never poisoned").answer(request)).await;
     Self { _dir: dir, features, api, discord }

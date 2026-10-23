@@ -1021,8 +1021,6 @@ pub async fn audit_round(
   adapter: &Arc<dyn ThreadAdapter>,
   features: &Arc<FeatureContext>,
   session_id: &str,
-  _chat_events: Arc<Vec<SharedChatEvent>>,
-  _target: Value,
   input_event_id: &str,
 ) -> Result<Option<Arc<Vec<SharedChatEvent>>>, ThreadReplyError> {
   let _session_guard = session_lock_for(session_id).lock_owned().await;
@@ -1145,12 +1143,11 @@ pub async fn deliver_done(
     return Ok(false);
   }
   let chat_events = load_chat_events(features, session_id).await?;
-  let Some((input_event_id, target)) = newest_thread_input(platform, &chat_events, &input_event_ids) else {
+  let Some((input_event_id, _)) = newest_thread_input(platform, &chat_events, &input_event_ids) else {
     return Ok(false);
   };
-  let target = target.clone();
   let input_event_id = input_event_id.to_string();
-  Ok(audit_round(adapter, features, session_id, chat_events, target, &input_event_id).await?.is_none())
+  Ok(audit_round(adapter, features, session_id, &input_event_id).await?.is_none())
 }
 
 /// Boot pass over every thread-bound session; returns how many notices and nudges it produced
@@ -1219,13 +1216,11 @@ pub async fn backfill_lost_summons(
       .collect();
     for done_index in dones {
       let done_ids = master_done_input_event_ids(&chat_events[done_index]);
-      let Some((input_event_id, target)) = newest_thread_input(platform, &chat_events, &done_ids) else {
+      let Some((input_event_id, _)) = newest_thread_input(platform, &chat_events, &done_ids) else {
         continue;
       };
       let input_event_id = input_event_id.to_string();
-      let target = target.clone();
-      let current_events = chat_events;
-      match audit_round(adapter, features, &meta.id, current_events, target, &input_event_id).await? {
+      match audit_round(adapter, features, &meta.id, &input_event_id).await? {
         Some(snapshot) => chat_events = snapshot,
         None => {
           reported += 1;

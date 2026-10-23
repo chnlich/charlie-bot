@@ -592,12 +592,11 @@ async def _discord_session(session_blocks: conftest.SessionBlocks) -> models.Ses
           discord_origin=metadata.DiscordOrigin(guild_id=_GUILD, parent_channel_id=_PARENT, thread_id=_THREAD)))
 
 
-@pytest.mark.asyncio
-async def test_post_reply_posts_a_published_url_byte_identical(tmp_path: pathlib.Path) -> None:
-  """A reply whose page link is the published URL goes out exactly as written."""
-  cfg, session_blocks, _trigger_mgr, _client = _rig(tmp_path)
-  sid = (await _discord_session(session_blocks)).id
-  text = f"see {conftest.PUBLISH_BASE_URL}/Ab3dEf6hIj8kLm1nOp2q/page.html for details"
+def _wire_client(text: str) -> tuple[discord_client.DiscordClient, list[httpx.Request]]:
+  """The real REST client over an in-memory transport, plus the wire requests it records.
+
+  The recorded request shows whether a post went out as JSON or as a multipart upload.
+  """
   requests: list[httpx.Request] = []
 
   def handler(request: httpx.Request) -> httpx.Response:
@@ -609,10 +608,18 @@ async def test_post_reply_posts_a_published_url_byte_identical(tmp_path: pathlib
     message_id = str((int(time.time() * 1000) - 1420070400000 + 1000) << 22)
     return httpx.Response(200, json={"id": message_id, "channel_id": _THREAD, "content": text})
 
-  # The real REST client over an in-memory transport: the wire request shows
-  # whether the post went out as JSON or as a multipart upload.
   client = discord_client.DiscordClient(
       httpx.AsyncClient(transport=httpx.MockTransport(handler)), bot_token="test-bot-token")
+  return client, requests
+
+
+@pytest.mark.asyncio
+async def test_post_reply_posts_a_published_url_byte_identical(tmp_path: pathlib.Path) -> None:
+  """A reply whose page link is the published URL goes out exactly as written."""
+  cfg, session_blocks, _trigger_mgr, _client = _rig(tmp_path)
+  sid = (await _discord_session(session_blocks)).id
+  text = f"see {conftest.PUBLISH_BASE_URL}/Ab3dEf6hIj8kLm1nOp2q/page.html for details"
+  client, requests = _wire_client(text)
   with mock.patch(conftest.DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
     readback = await discord_listener.post_reply(
         sid, text, cfg, session_blocks.store, session_blocks.events, tree=session_blocks.tree)
@@ -770,19 +777,7 @@ async def test_post_reply_names_an_application_route_link_for_the_operator(tmp_p
   sid = (await _discord_session(session_blocks)).id
   route_url = f"http://127.0.0.1:{cfg.server.port}/diff"
   text = f"open {conftest.PUBLISH_BASE_URL}/Ab3dEf6hIj8kLm1nOp2q/page.html and {route_url}"
-  requests: list[httpx.Request] = []
-
-  def handler(request: httpx.Request) -> httpx.Response:
-    requests.append(request)
-    if request.url.path == "/api/v10/users/@me":
-      return httpx.Response(200, json={"id": "bot-user"})
-    if request.method == "GET":
-      return httpx.Response(200, json=[])
-    message_id = str((int(time.time() * 1000) - 1420070400000 + 1000) << 22)
-    return httpx.Response(200, json={"id": message_id, "channel_id": _THREAD, "content": text})
-
-  client = discord_client.DiscordClient(
-      httpx.AsyncClient(transport=httpx.MockTransport(handler)), bot_token="test-bot-token")
+  client, requests = _wire_client(text)
   with mock.patch(conftest.DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
     readback = await discord_listener.post_reply(
         sid, text, cfg, session_blocks.store, session_blocks.events, tree=session_blocks.tree)

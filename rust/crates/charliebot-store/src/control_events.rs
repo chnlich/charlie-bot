@@ -76,6 +76,12 @@ pub fn stable_request_event_id(session_id: &str, request_id: &str) -> String {
   stable_id(&format!("request:{session_id}:{request_id}"))
 }
 
+/// The request id one `(run_id, agent-send verb, target, text)` binds to across retries.
+pub fn derived_agent_send_request_id(run_id: &str, verb: &str, target: &str, text: &str) -> String {
+  let material = [run_id, verb, target, text].join("\0");
+  format!("agent-send-{}", &sha256_hex(&material)[..24])
+}
+
 /// Return the stored event for a replay, or a conflict when its request payload differs.
 pub fn replay_request_event<'a>(
   mut events: impl Iterator<Item = &'a Value>,

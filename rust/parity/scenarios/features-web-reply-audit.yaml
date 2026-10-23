@@ -65,7 +65,7 @@ steps:
   - name: a user message that no reply answers
     method: POST
     path: /api/chat/${sessions.web_reply}/message
-    json: {content: "Which layout should the dashboard use?"}
+    json: {content: "Which layout should the dashboard use?", request_id: synthetic-chat-web-reply-audit}
     expect_status: 202
     defer_files: true
   - kind: wait

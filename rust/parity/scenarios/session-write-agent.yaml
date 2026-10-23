@@ -26,7 +26,7 @@ steps:
   - name: send the gated manager message
     method: POST
     path: /api/chat/${sessions.delta}/message
-    json: {content: Hold the synthetic turn for the agent caller.}
+    json: {content: Hold the synthetic turn for the agent caller., request_id: synthetic-chat-session-write-agent}
     capture: {message_input: input_event_id}
     expect_status: 202
     defer_files: true

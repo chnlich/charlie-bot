@@ -41,6 +41,7 @@ Body (`SendMessageRequest`, JSON, required):
 | `content` | string | yes | |
 | `uploaded_files` | list of `{"filename": string, "path": string, "size": int or null}` | no | `[]` |
 | `input_mode` | string or null | no | null |
+| `request_id` | non-empty string | yes | |
 
 The server stores each uploaded-file object with `exclude_none`, so a null `size` is dropped.
 
@@ -75,13 +76,18 @@ The server stores each uploaded-file object with `exclude_none`, so a null `size
   - `queued run <run id> was not launched by this call`
   - `no pending inputs`
   - `another dispatch reserved this batch`
+- `dispatch_error` is present when admission succeeded but dispatch failed; the input is still accepted and stored.
+- `input_event_id` is stable for `(session_id, request_id)`. Replaying the same request and payload returns the
+  original event without another append, broadcast or sidebar lift. Reusing the id with a different type, content or
+  extra payload returns a conflict.
+- The browser generates a request id for each send and reuses it across connection failures and 5xx retries.
 
 ### Side effects
 
 1. When the task is not open and the input is a `user` message, the server first reopens the task and each archived ancestor (one `task_reopened` event each, reason `user message`).
-2. It appends the input event to `sessions/<id>/data/chat_events.jsonl`. The event has `id`, `type`, `timestamp`, `actor`, `source_session_id`, `content`, plus `uploaded_files`, `from_session` and `input_mode` when set.
+2. It appends the input event to `sessions/<id>/data/chat_events.jsonl`. The event has `id`, `request_id`, `type`, `timestamp`, `actor`, `source_session_id`, `content`, plus `uploaded_files`, `from_session` and `input_mode` when set. The id is `uuid5(TASK_ID_NAMESPACE, "request:<session id>:<request id>")`.
 3. For a `user` message, it moves `updated_at` of the node and its unarchived ancestors forward to the event time.
-4. It broadcasts the event on the session channel: a `message` delta (the raw `user` event is in `RAW_EVENTS_REPLACED_BY_DELTAS`; a raw `agent_message` event is also sent).
+4. It broadcasts the event on the session channel: a `message` delta (the raw `user` event is in `RAW_EVENTS_REPLACED_BY_DELTAS`; a raw `agent_message` event is also sent). The rendered user message carries `request_id` for the browser to match its optimistic bubble.
 5. It dispatches the pending inputs. When the node is idle, this starts an agent run (a `manager_turn` run for a manager, a `work` run for a worker). The agent's output then streams over the session WebSocket.
 6. It logs `send_message` with `content_chars` and `uploaded_files_count`.
 
@@ -92,7 +98,7 @@ UNVERIFIED: the run launch itself (process spawn, run record, `running_changed` 
 ## `POST /api/chat/{session_id}/cancel`
 
 - Auth: access key.
-- Handler: `src/runtime/api/chat.py:112`.
+- Handler: `src/runtime/api/chat.py:138`.
 - Dependency: `require_session`.
 - Body: none.
 

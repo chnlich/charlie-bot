@@ -1,6 +1,6 @@
 # The `charliebot` CLI
 
-Baseline: the Python tree at `78e0d10e2`. Entry point: `[project.scripts] charliebot = "src.app.main:main"`.
+Baseline: the Python tree at `f58a345a6`. Entry point: `[project.scripts] charliebot = "src.app.main:main"`.
 Agents reach it through the shim `src/runtime/agent_entry_points/charliebot` (`env.md` section 3). Per
 subcommand, this document gives the HTTP routes it calls, the files it reads or writes itself, and its exit codes.
 Route payloads belong to the parallel HTTP contract and are not repeated here. **UNVERIFIED** marks a statement
@@ -24,8 +24,8 @@ not confirmed from source, with the reason.
   module's `main()`.
 - Every argparse usage error exits 2.
 
-The 18 top-level subcommands that `uv run python -m src.app.main --help` lists at the baseline: `artifact`,
-`config`, `delegate`, `discord`, `gc-trash`, `improve`, `improve-stop`, `memory`, `plan`, `publish`,
+The 19 top-level subcommands that `uv run python -m src.app.main --help` lists at the baseline: `artifact`,
+`compaction-context`, `config`, `delegate`, `discord`, `gc-trash`, `improve`, `improve-stop`, `memory`, `plan`, `publish`,
 `router`, `schedule-trigger`, `session`, `slack`, `storage`, `usage-ledger`, `voice-replay-eval`, `web`. Each has a section
 below.
 
@@ -62,6 +62,7 @@ below.
 | --- | --- | --- | --- |
 | `artifact check <file> --genre G [--trigger T] [--assertions-only]` | Manager session: `POST /api/internal/delegate` (cold-read child). Worker session or none: no route. | Reads the artifact and `<home>/sessions/<sid>/metadata.json` (its `profile`). Writes and deletes `.page-height-probe-<hex>.html` beside the artifact. Runs `headless_chrome_bin`. A worker or session-less run calls a backend one-shot in the foreground, which starts an agent CLI. | 0 ok; 1 an assertion failed, the probe could not run, or the delegation was refused; 2 usage (for example a missing `--trigger`) |
 | `artifact wrap <fragment> --genre G --output OUT [--math\|--no-math]` | none | Reads the fragment and the genre template; writes `OUT`; with math on, may fetch `<home>/vendor/katex/katex.min.js` (`files.md` 5.12) and runs `node` | 0; 1 a failed assembly or byte self-check; 2 usage (missing fragment) |
+| `compaction-context --session SID --slot N` | none | Reads `sessions/<sid>/data/chat_events.jsonl` and current skill files from `<home>/skills/` or the repository's `skills/` directory. A named path in a Read or Bash event is tried first. Non-plain path patterns and unresolved skills are skipped and reported. Writes nothing. | 0 prints the SessionStart hook JSON for a non-empty slot; 1 on an unreadable log, invalid event JSON or unreadable skill; 2 usage |
 | `config get <key>` | none | Reads `config.yaml` | 0 prints the value; 1 the value is null; 2 unknown key |
 | `delegate --task-spec-file F --keep-worktree {0,1} [--session] [--repo] [--base-branch] [--backend] [--request-id] [--task-type]` | `POST /api/internal/delegate`, with a readback | Reads `F`. Without `--request-id`, the server derives `delegate-<sha256[:24]>` (`files.md` section 3), and the readback uses the same derivation. | 0 prints the result JSON; 1 client contract; 2 usage |
 | `discord reply --file F [--session]` | `POST /api/internal/discord/reply` | Reads `F` | 0; 1; 2 |

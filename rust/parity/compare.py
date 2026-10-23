@@ -572,6 +572,12 @@ def _normalized_record(record: dict, route: str, ctx: normalize.Context) -> dict
   if "headers" in clean:
     clean["headers"] = normalize.request_headers(
         clean["fake"], clean["headers"], ctx, websocket=clean["kind"] == "ws_handshake")
+  if clean.get("fake") == "discord" and clean.get("kind") == "http" and clean.get("method") == "POST" and \
+      clean.get("path", "").endswith("/messages"):
+    body = clean.get("body")
+    if isinstance(body, dict) and "nonce" in body:
+      # Each paired home has its own run id, which Discord's nonce hashes.
+      clean["body"] = {**body, "nonce": "<discord-post-nonce>"}
   if "message" in clean and isinstance(clean["message"], dict):
     clean["message"] = normalize.normalize_json(clean["message"], normalize.ws_frame_rules(route), ctx)
   return _record_value(clean, ctx)

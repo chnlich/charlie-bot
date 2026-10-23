@@ -292,8 +292,11 @@ An `ExitPlanMode` tool use with a `plan` input commits the draft and emits `{"ro
 ### User message
 
 ```json
-{"role":"user","content":"…","uploaded_files":[{"filename":"…","path":"…","size":123}],"input_mode":null,"event_index":3,"id":"…","timestamp":"…"}
+{"role":"user","content":"…","uploaded_files":[{"filename":"…","path":"…","size":123}],"input_mode":null,"event_index":3,"id":"…","timestamp":"…","request_id":"…"}
 ```
+
+`request_id` is present when the stored user event came from a request-keyed input. The browser uses it to match a
+server echo to the optimistic message with the same request id.
 
 A `user` event with a `message` key and no `content` key is a tool-result carrier. It attaches outputs to the newest tool rows and commits nothing.
 

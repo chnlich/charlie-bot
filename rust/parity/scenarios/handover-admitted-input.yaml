@@ -42,7 +42,7 @@ steps:
   - name: send the first manager message
     method: POST
     path: /api/chat/${sessions.delta}/message
-    json: {content: Start the gated synthetic task.}
+    json: {content: Start the gated synthetic task., request_id: synthetic-chat-admitted-first}
     capture: {first_input: input_event_id}
     expect_status: 202
     defer_files: true
@@ -53,7 +53,7 @@ steps:
   - name: admit a second manager message during the turn
     method: POST
     path: /api/chat/${sessions.delta}/message
-    json: {content: Queue this while the first turn runs.}
+    json: {content: Queue this while the first turn runs., request_id: synthetic-chat-admitted-second}
     capture: {second_input: input_event_id}
     expect_status: 202
     defer_files: true

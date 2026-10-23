@@ -27,7 +27,7 @@ Ordering contract (the one this stage exists to pin):
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterator
+from collections.abc import Awaitable, Callable, Iterator
 from typing import TYPE_CHECKING, Any, Protocol
 
 from src.infra import event_types as ET
@@ -802,22 +802,7 @@ class TaskInputDispatcher:
         on the same single report event. Late reports to a closed parent stay
         history (the parent is not reopened by them).
         """
-    tree = self._tree
-    await tree.load_task_meta(session_id)
-    delivered: list[dict] = []
-    for close, recipient in self._undelivered_close_recipients(session_id):
-      report, created = await self.deliver_child_report(
-          session_id,
-          source_event=close,
-          outcome=self._close_report_outcome(close),
-          summary=str(close.get("summary") or ""),
-          result_refs=list(close.get("result_refs") or []),
-          recipient=recipient,
-          actor=control_events.ACTOR_SYSTEM,
-      )
-      if created:
-        delivered.append(report)
-    return delivered
+    return await self._deliver_pending_reports(session_id, self.deliver_child_report)
 
   async def recover_pending_reports_locked(self, session_id: str) -> list[dict]:
     """recover_pending_reports for a caller already holding the control lock.
@@ -826,11 +811,20 @@ class TaskInputDispatcher:
         lock and wakes nobody — the locked entry's callers own their wakes, and
         the elone flow closes the redelivery's recipient right after.
         """
+    return await self._deliver_pending_reports(session_id, self.deliver_child_report_locked)
+
+  async def _deliver_pending_reports(self, session_id: str,
+                                     deliver: Callable[..., Awaitable[tuple[dict, bool]]]) -> list[dict]:
+    """Walk *session_id*'s close reports the recipient's log still owes through ``deliver``.
+
+        ``deliver`` is the waking or the caller-locked delivery entry. Both recovery
+        entries run this one scan, so they cannot disagree about which reports are owed.
+        """
     tree = self._tree
     await tree.load_task_meta(session_id)
     delivered: list[dict] = []
     for close, recipient in self._undelivered_close_recipients(session_id):
-      report, created = await self.deliver_child_report_locked(
+      report, created = await deliver(
           session_id,
           source_event=close,
           outcome=self._close_report_outcome(close),

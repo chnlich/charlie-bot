@@ -45,6 +45,10 @@ use crate::master_state::{MasterResumeRecord, MasterResumeRequest, ResumeLivenes
 pub const RUN_END_LANDING_RETRY_INTERVAL: Duration = Duration::from_secs(30);
 const DRIVEN_RUN_RELEASE_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const BOOT_RECOVERY_MARKER_PATH: &str = "state/boot_recovery.json";
+/// A durable file whose mtime is no earlier than the marker minus this slack keeps its node
+/// (`src/runtime/task_recovery.py`, `MARKER_MTIME_SLACK_SECONDS`). The kernel stamps `st_mtime` from its coarse clock,
+/// which can lag the fine-clock pass start by about two ticks (~2 ms at 500 Hz), so the slack must exceed that lag.
+const MARKER_MTIME_SLACK_SECONDS: f64 = 1.0;
 
 fn boot_recovery_marker_path(home: &std::path::Path) -> PathBuf {
   home.join(BOOT_RECOVERY_MARKER_PATH)
@@ -114,7 +118,7 @@ fn boot_skip_reason(
     let modified = OffsetDateTime::from(modified);
     let modified_seconds =
       charliebot_core::timefmt::python_float_seconds(modified.unix_timestamp(), i64::from(modified.nanosecond()));
-    if modified_seconds >= marker_seconds {
+    if modified_seconds >= marker_seconds - MARKER_MTIME_SLACK_SECONDS {
       return Ok(Some("file_after_marker"));
     }
   }

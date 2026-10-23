@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import os
 import pathlib
 import subprocess
 import sys
@@ -169,3 +170,27 @@ def test_port_cache_hit_serves_the_cached_port_in_a_fresh_process(tmp_path: path
       ])
   proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)
   assert proc.returncode == 0, proc.stderr
+
+
+def test_print_json_keeps_non_ascii_characters(capsys: pytest.CaptureFixture[str]) -> None:
+  common.print_json({"now": "中文"}, indent=None, file=sys.stdout)
+
+  assert capsys.readouterr().out == '{"now": "中文"}\n'
+
+
+def test_print_json_writes_utf8_under_c_locale() -> None:
+  """Python writes stdout as UTF-8 under LANG=C LC_ALL=C too, so the characters reach the caller unescaped."""
+  repo_root = str(pathlib.Path(__file__).resolve().parents[1])
+  code = "\n".join(
+      [
+          "import sys",
+          f"sys.path.insert(0, {repo_root!r})",
+          "from src.runtime.cli import common",
+          "common.print_json({'now': '\\u4e2d\\u6587'}, indent=None, file=sys.stdout)",
+      ])
+  env = {**os.environ, "LANG": "C", "LC_ALL": "C"}
+
+  proc = subprocess.run([sys.executable, "-c", code], capture_output=True, env=env, check=False)
+
+  assert proc.returncode == 0, proc.stderr.decode("utf-8", "replace")
+  assert proc.stdout == '{"now": "中文"}\n'.encode()

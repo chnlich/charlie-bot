@@ -18,7 +18,7 @@ completes.
 """
 
 import argparse
-import json
+import sys
 
 from src.infra import help_formatter
 from src.runtime.cli import common
@@ -150,7 +150,7 @@ def main() -> None:
     return response
 
   result = common.post_internal_api("/api/internal/improve", payload, readback=_readback)
-  print(json.dumps(result, indent=2))
+  common.print_json(result, indent=2, file=sys.stdout)
 
 
 if __name__ == "__main__":

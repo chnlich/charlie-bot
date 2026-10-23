@@ -13,7 +13,6 @@ all diagnostics go to stderr.
 """
 
 import argparse
-import json
 import sys
 
 from src.infra import help_formatter
@@ -39,6 +38,7 @@ def _cmd_get(key: str) -> None:
   import pydantic
 
   from src.infra import config, config_registry  # deferred: charliebot config --help
+  from src.runtime.cli import common  # deferred: charliebot config --help
 
   if key not in config.CharlieBotConfig.model_fields and key not in config_registry.section_models():
     print(f"error: unknown config key: {key} (not a CharlieBotConfig field or registered section)", file=sys.stderr)
@@ -50,7 +50,7 @@ def _cmd_get(key: str) -> None:
     print(f"error: config key {key} is unset", file=sys.stderr)
     sys.exit(1)
   if isinstance(value, (pydantic.BaseModel, list, dict)):
-    print(json.dumps(value, default=lambda o: o.model_dump()))
+    common.print_json(value, indent=None, default=lambda o: o.model_dump(), file=sys.stdout)
   else:
     print(value)
 

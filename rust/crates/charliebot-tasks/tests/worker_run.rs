@@ -197,7 +197,13 @@ async fn bare_branch_base_with_unpushed_local_commit_launch_fails() -> anyhow::R
   assert_eq!(stack.wait_terminal(&worker.id, "run-work").await?, RunOutcomeKind::Failed);
   let run = stack.store().read_run_sync(&worker.id, "run-work")?.expect("the run is recorded");
   assert!(run.started_at.is_none(), "the Run never spawned");
-  assert!(scripts.builds().is_empty(), "the backend was never invoked");
+  // The failed launch's report wakes the parent's manager turn, which may take a build from the same script queue.
+  // Only a build in the worker's own run directory shows that the worker's backend started.
+  let worker_run_dir = stack.store().run_dir(&worker.id, "run-work");
+  assert!(
+    !scripts.builds().iter().any(|build| build.launch.log_dir.as_deref() == Some(worker_run_dir.as_path())),
+    "the worker's backend was never invoked"
+  );
   let error = error_text(&stack, &worker.id, "run-work")?;
   assert!(error.contains("BaseBranchResolutionError"), "{error}");
   assert!(error.contains("differs from origin/main"), "{error}");

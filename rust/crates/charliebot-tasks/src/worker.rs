@@ -11,7 +11,7 @@ use std::time::{Duration, SystemTime};
 
 use anyhow::Context;
 use charliebot_agents::agent_environment::AgentBaseEnvironment;
-use charliebot_agents::backend_pool::QUOTA_ERROR_PATTERNS;
+use charliebot_agents::backend_pool::{self, QUOTA_ERROR_PATTERNS};
 use charliebot_agents::backend_types::{self, BuiltBackend};
 use charliebot_agents::event_builders;
 use charliebot_agents::launch_loop::{self, ProcessResult, RunProcess};
@@ -56,6 +56,8 @@ const NO_OUTPUT_REPORT_THRESHOLD: Duration = Duration::from_secs(2 * 60 * 60);
 const STDERR_LOG_CHARS: usize = 500;
 /// The quota message of an error event that carries none (`worker.py` `_process_event`).
 const QUOTA_MESSAGE_FALLBACK: &str = "Quota exhausted";
+/// The failover message of an error event that carries none (`worker.py` `_process_event`).
+const TEMPORARY_MESSAGE_FALLBACK: &str = "Backend temporarily unavailable";
 
 /// Receives the session-level notices of a run, such as the login-required event (`Worker.on_session_event`).
 pub type SessionEventFn = Arc<dyn Fn(Value) -> BoxFuture<'static, anyhow::Result<()>> + Send + Sync>;
@@ -796,6 +798,22 @@ async fn handle_event<W: LaunchWatch + ?Sized>(
   {
     sink.append(&event)?;
     let text = event.get("message").and_then(Value::as_str).unwrap_or(QUOTA_MESSAGE_FALLBACK);
+    return Err(QuotaExhaustedError::new(text, None).into());
+  }
+
+  if event_type == ET::ERROR && backend_pool::is_temporary_unavailable_error(&message) {
+    sink.append(&event)?;
+    let text = event.get("message").and_then(Value::as_str).unwrap_or(TEMPORARY_MESSAGE_FALLBACK);
+    return Err(QuotaExhaustedError::new(text, None).into());
+  }
+
+  // Only an errored Claude Code result is classified here, by its status and then by its text.
+  if event_type == ET::RESULT
+    && event.get("is_error") == Some(&Value::Bool(true))
+    && backend_pool::is_temporary_unavailable_result(&event)
+  {
+    let text = pyfmt::python_str(event.get("result").context("a temporary result error carries its result text")?);
+    sink.append(&event)?;
     return Err(QuotaExhaustedError::new(text, None).into());
   }
 

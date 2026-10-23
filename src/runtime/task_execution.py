@@ -2596,16 +2596,8 @@ class TaskExecutionAdapter:
           recipient=meta.task_parent_id,
       )
     if report_created:
-      await self._tree.session_events.announce_appended_event(parent_id, report, epoch=parent_epoch)
-      if self._tree.task_state(parent_id) != "open":
-        log.info(
-            "child_report_into_archived_parent_kept_as_history",
-            parent=parent_id,
-            child=session_id,
-            report=str(report.get("id")),
-        )
-      else:
-        await self._tree.dispatch.wake_parent(parent_id, report=report)
+      await self._tree.dispatch.finish_report_delivery(
+          parent_id, report, epoch=parent_epoch, child_session_id=session_id)
     archive_run = deciding_run if deciding_run is not None else run
     await self._tree.archive_unsuccessful_worker(session_id, run_id=archive_run.id, outcome=outcome)
 

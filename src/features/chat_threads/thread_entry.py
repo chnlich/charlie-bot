@@ -12,10 +12,12 @@ consumption (``consume_mention``), the group assignment (``ensure_group``),
 the follow triggers (``arm_follow_trigger``), the thread-message follow
 (``follow_message``), the unread readback (``unread_messages``), and the
 reconnect backfill (``backfill_followed_threads``) — and the round side: the
-reply path (``post_reply``) with its file-server-link gate
-(``assert_no_file_server_links``), the freshness gate (``assert_thread_fresh``), the
-ack (``ack_messages``), the round-end audit (``deliver_done`` over
-``audit_round``), and the lost-summon backfill (``backfill_lost_summons``).
+caller-claims derivation (``caller_reply_identity``) that feeds the reply's
+request id and Run start time, the reply path (``post_reply``) with its
+file-server-link gate (``assert_no_file_server_links``), the freshness gate
+(``assert_thread_fresh``), the ack (``ack_messages``), the round-end audit
+(``deliver_done`` over ``audit_round``), and the lost-summon backfill
+(``backfill_lost_summons``).
 The follow side wakes its session whatever the session's stored status: an
 archived thread session is revived first (unarchived, logged, its task-tree
 change broadcast), so any eligible thread message brings the session back to
@@ -45,6 +47,7 @@ from src.runtime import (
     master_cc_queue,
     master_cc_state,
     master_trigger,
+    run_token,
     session_events,
     session_lifecycle,
     session_listing,
@@ -52,6 +55,7 @@ from src.runtime import (
     session_successor,
     task_execution,
     task_prompts,
+    task_sessions,
     triggers,
 )
 from src.runtime.api import deps, message_utils
@@ -632,6 +636,25 @@ def _reply_receipt(event: dict, operator_only_links: list[str], *, platform: Thr
       "over_budget": payload["chars"] > _REPLY_BUDGET_CHARS,
       "answers": payload["answers"],
   }
+
+
+async def caller_reply_identity(
+    caller: run_token.CallerIdentity, task_mgr: task_sessions.TaskTreeManager, *, verb: str, session_id: str,
+    text: str) -> tuple[str | None, datetime.datetime | None]:
+  """The request id and Run start time one reply derives from the caller's Run claims.
+
+  *verb* names the reply kind inside the derived id, so a retried reply of the
+  same text under the same Run binds to one id. A caller without claims posts on
+  operator credentials and gets ``(None, None)``: the reply records no request
+  identity. The Run start time floors the own-post lookup, so a post from an
+  earlier Run never answers this reply.
+  """
+  if caller.claims is None:
+    return None, None
+  request_id = control_events.derived_agent_send_request_id(caller.claims.run_id, verb, session_id, text)
+  run = await task_mgr.runs.get_run(caller.claims.session_id, caller.claims.run_id)
+  assert run is not None and run.started_at is not None
+  return request_id, run.started_at
 
 
 async def post_reply(

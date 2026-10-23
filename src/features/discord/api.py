@@ -6,7 +6,7 @@ import pydantic
 from src.features.chat_threads import thread_entry
 from src.features.discord import discord_commands, discord_listener
 from src.infra import config
-from src.runtime import control_events, run_token, session_events, session_store, task_sessions
+from src.runtime import run_token, session_events, session_store, task_sessions
 from src.runtime.api import deps
 
 router = fastapi.APIRouter()
@@ -56,14 +56,8 @@ async def discord_reply(
   refuse with a 412 ``stale_thread`` payload naming each unseen message.
   """
   try:
-    request_id = None
-    run_started_at = None
-    if caller.claims is not None:
-      request_id = control_events.derived_agent_send_request_id(
-          caller.claims.run_id, "discord reply", req.session_id, req.text)
-      run = await task_mgr.runs.get_run(caller.claims.session_id, caller.claims.run_id)
-      assert run is not None and run.started_at is not None
-      run_started_at = run.started_at
+    request_id, run_started_at = await thread_entry.caller_reply_identity(
+        caller, task_mgr, verb="discord reply", session_id=req.session_id, text=req.text)
     return await discord_listener.post_reply(
         req.session_id,
         req.text,

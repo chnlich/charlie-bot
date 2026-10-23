@@ -67,6 +67,12 @@ fn read_boot_recovery_marker(home: &std::path::Path) -> anyhow::Result<Option<Ut
     .map(Some)
 }
 
+/// The steps of this thread's marker writes, in order: `sync` for the temporary file's fsync, `rename` for the swap.
+#[cfg(feature = "test-hooks")]
+thread_local! {
+  static MARKER_WRITE_STEPS: std::cell::RefCell<Vec<&'static str>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
 fn write_boot_recovery_marker(home: &std::path::Path, pass_started_at: UtcDateTime) -> anyhow::Result<()> {
   let path = boot_recovery_marker_path(home);
   let parent = path.parent().context("boot-recovery marker has no parent directory")?;
@@ -1179,6 +1185,7 @@ mod tests {
   use charliebot_store::{CreateTask, HistoryWork, TaskCaller};
   use serde_json::{Map, json};
   use std::sync::atomic::Ordering;
+  use std::time::SystemTime;
 
   const QUEUED_RUN_ID: &str = "synthetic-queued-run";
 
@@ -1643,5 +1650,47 @@ mod tests {
     let large_events = features.store.load_all_facts(&large_id).expect("the many-run history loads").len();
     assert_eq!(small.folded_events, small_events as u64, "each event folds once: one={small:?}");
     assert_eq!(large.folded_events, large_events as u64, "each event folds once: many={large:?}");
+  }
+
+  /// Python: `test_marker_write_fsyncs_the_temp_file_before_the_rename`.
+  #[cfg(feature = "test-hooks")]
+  #[test]
+  fn the_marker_write_syncs_the_temporary_file_once_before_the_rename() {
+    let home = tempfile::tempdir().expect("temporary directory exists");
+    let pass_started_at = UtcDateTime::parse("2026-10-21T03:00:00.123456+00:00").expect("the synthetic time parses");
+    MARKER_WRITE_STEPS.with(|steps| steps.borrow_mut().clear());
+
+    write_boot_recovery_marker(home.path(), pass_started_at).expect("the marker writes");
+
+    let steps = MARKER_WRITE_STEPS.with(|steps| steps.borrow().clone());
+    assert_eq!(steps, ["sync", "rename"], "the temporary file syncs once, then the rename replaces the marker");
+    let marker_path = home.path().join("state").join("boot_recovery.json");
+    let marker: Value =
+      serde_json::from_slice(&std::fs::read(&marker_path).expect("the marker exists")).expect("the marker is JSON");
+    assert_eq!(marker, json!({"pass_started_at": pass_started_at.to_python_isoformat()}));
+    assert!(!marker_path.with_extension("json.tmp").exists(), "the rename consumes the temporary file");
+  }
+
+  /// Python: `test_mtime_slack_bounds_the_marker_comparison`.
+  #[tokio::test]
+  async fn a_file_up_to_the_mtime_slack_before_the_marker_keeps_its_node() {
+    let (_home, features) = startup_features().await;
+    let session_id = closed_worker_node(&features, "synthetic-slack-node", 0).await;
+    let meta = features.store.load_meta(&session_id).await.expect("the meta loads").expect("the node exists");
+    let session_dir = features.store.session_dir(&session_id);
+    let marker = UtcDateTime::parse("2026-10-18T10:00:00Z").expect("the synthetic marker parses");
+    let marker_time = SystemTime::from(marker.into_inner());
+    for (before, expected) in
+      [(Duration::from_millis(500), Some("file_after_marker")), (Duration::from_millis(1500), None)]
+    {
+      let stamp = marker_time - before;
+      for path in [features.store.chat_events_path(&session_id), features.store.metadata_path(&session_id)] {
+        std::fs::File::open(&path).expect("the durable file exists").set_modified(stamp).expect("the mtime is set");
+      }
+
+      let reason = boot_skip_reason(&features, &session_id, &session_dir, &meta, marker).expect("the skip check reads");
+
+      assert_eq!(reason, expected, "a durable file {before:?} before the marker");
+    }
   }
 }

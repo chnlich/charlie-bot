@@ -8,8 +8,18 @@ The For-you view shows your web replies and hides the rest of your turn output.
 
 ## When to reply
 
-- When a user message woke this turn, post exactly one web reply.
-- When the web reply nudge woke this turn, post the web reply that the last turn missed.
+- An opening reply is a web reply that states the reading of the message and the steps of this turn.
+- An answer reply is the web reply that carries the answer of this turn.
+- When a user message woke this turn, post one opening reply before you start the work:
+  - State your reading of the message in one sentence.
+  - List the steps that you will take.
+  - Name each step that changes something outside this session, a reversible step included.
+- Before the opening reply, make only the tool calls that write and post it.
+- When you can post the answer reply without other tool calls, post no opening reply.
+- After the opening reply, continue the work. The user stops the turn with the Stop button.
+- When your steps change later in the turn, continue without a new opening reply.
+- When a user message woke this turn, post exactly one answer reply.
+- When the web reply nudge woke this turn, post the answer reply that the last turn missed.
 - When another input woke this turn, post one web reply for the results of this turn:
   - a page for the user;
   - the approval of your plan;
@@ -31,10 +41,10 @@ The For-you view shows your web replies and hides the rest of your turn output.
 
 ## Form
 
-- Write the web reply as the answer itself: the conclusion first, in a few sentences.
-- Keep the web reply under 500 characters.
+- Write the answer reply as the answer itself: the conclusion first, in a few sentences.
+- Keep each web reply under 500 characters.
 - When the answer needs more than 500 characters, write the whole answer on a page.
-- Then post the conclusion and the link to that page as the web reply.
+- Then post the conclusion and the link to that page as the answer reply.
 - Write the web reply and the session status in the language of your chat replies.
 - Write **Now** in one or two sentences.
 - Keep **Now** under 200 characters.

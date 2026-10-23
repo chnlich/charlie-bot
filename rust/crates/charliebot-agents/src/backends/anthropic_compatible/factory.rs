@@ -44,7 +44,8 @@ impl BackendFactory for AnthropicCompatibleFactory {
       config_dir,
       launch,
       SessionCgroupLimits::from_server(&cfg.server),
-    )?;
+    )?
+    .with_headers(fields.headers);
     Ok(Box::new(backend))
   }
 }

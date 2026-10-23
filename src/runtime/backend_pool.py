@@ -77,6 +77,19 @@ BACKEND_TEMPORARY_UNAVAILABLE_PATTERNS: tuple[str, ...] = (
     "no session progress for",
 )
 
+
+# Classify Claude Code result errors for pool failover; status comes first so other 4xx result text is never inspected.
+def is_temporary_unavailable_result(event: dict) -> bool:
+  """True when a Claude Code result event reports a temporary backend failure."""
+  status = event.get("api_error_status")
+  if status is not None:
+    if isinstance(status, int) and not isinstance(status, bool):
+      return status == 429 or status >= 500
+    return False
+  result_text = str(event.get("result", "")).lower()
+  return any(pattern in result_text for pattern in BACKEND_TEMPORARY_UNAVAILABLE_PATTERNS)
+
+
 # A quota error that names no reset keeps its member out this long.
 DEFAULT_COOLDOWN = datetime.timedelta(minutes=30)
 

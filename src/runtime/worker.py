@@ -469,9 +469,8 @@ class Worker:
         event_data["timestamp"] = models.utc_now_iso()
       await _append_event_line(fd, _event_line(event_data))
       return
-    # Detect quota exhaustion errors. The payload copies ride only the type the
-    # pattern check reads: str() reprs the whole message dict and lower() copies
-    # it per streamed event, while backend_pool.QUOTA_ERROR_PATTERNS can only match on ERROR.
+    # Detect quota exhaustion errors. Payload copies ride only event types the
+    # checks read: ERROR message/content and errored RESULT text, never every streamed event.
     event_type = event_data.get("type", "")
     event_message = event_content = ""
     if event_type == ET.ERROR:
@@ -520,6 +519,12 @@ class Worker:
     if event_type == ET.ERROR and any(p in event_message for p in backend_pool.BACKEND_TEMPORARY_UNAVAILABLE_PATTERNS):
       await _append_event_line(fd, _event_line(event_data))
       raise QuotaExhaustedError(event_data.get("message", "Backend temporarily unavailable"))
+
+    if (event_type == ET.RESULT and event_data.get("is_error") is True and
+        backend_pool.is_temporary_unavailable_result(event_data)):
+      result_text = event_data["result"]
+      await _append_event_line(fd, _event_line(event_data))
+      raise QuotaExhaustedError(result_text)
 
     # Write to disk
     await _append_event_line(fd, _event_line(event_data))

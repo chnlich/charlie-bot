@@ -46,6 +46,10 @@ the inherited rules above define your task.
   first split reply.
 - When your children's results leave questions open, read their reports, re-delegate what is
   missing, and keep open items visible.
+- At each wake, dispatch every planned task whose dependencies have landed.
+  A ready task that waits while a slot is free delays the line by the whole wait.
+- When planned tasks depend on other lines, register one trigger whose command exits when any such dependency lands.
+  The landing then wakes you, as the report of your own child does.
 - Summarize the state of all lines only when the user asks for it.
   Then read each child's session status, and answer with a sitrep.
 - When your own completion conditions hold, request completion through the completion entry

@@ -184,13 +184,16 @@ def break_failures(breaks: dict[tuple[str, str], set[str]], message: Callable[[s
 
 
 @pytest.mark.integration
-def test_every_frontend_file_is_in_a_group(page_graphs: dict[str, dict]) -> None:
+def test_frontend_files_have_groups_and_unique_global_names(page_graphs: dict[str, dict]) -> None:
   failures = [
       f"{node}: outside the groups web/ (core) and src/<kind>/<name> (package); move it into one."
       for page_name in PAGE_NAMES
       for node in page_graphs[page_name]["nodes"]
       if group_of(node) is None
   ]
+  failures.extend(
+      f"{name}: defined by {', '.join(nodes)}; one global name is defined in one file only." for page_name in PAGE_NAMES
+      for name, nodes in sorted(page_graphs[page_name]["multiDefs"].items()))
   assert not failures, "\n".join(failures)
 
 
@@ -222,15 +225,6 @@ def test_a_core_file_uses_only_core_names_defined_before_it_loads(page_graphs: d
       direction_breaks(page_graphs)["core-loads-late"], lambda user, definer, names:
       f"{user} uses {names}, defined by {definer}, which loads later; a core file uses only names "
       f"that core files loaded before it define. {FIX_THE_UPWARD_USE}")
-  assert not failures, "\n".join(failures)
-
-
-@pytest.mark.integration
-def test_one_global_name_is_defined_in_one_file_only(page_graphs: dict[str, dict]) -> None:
-  failures = [
-      f"{name}: defined by {', '.join(nodes)}; one global name is defined in one file only." for page_name in PAGE_NAMES
-      for name, nodes in sorted(page_graphs[page_name]["multiDefs"].items())
-  ]
   assert not failures, "\n".join(failures)
 
 

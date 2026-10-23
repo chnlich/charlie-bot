@@ -33,6 +33,7 @@ from src.backends.claude_code import (
 )
 from src.infra import config, log_once, models
 from src.infra import event_types as ET
+from src.runtime import midturn_delivery
 from src.runtime.hooks import backend_lifecycle
 
 log = log_once.LazyStructlogLogger()
@@ -66,7 +67,11 @@ def _launch_args(ctx: backend_lifecycle.LaunchContext, *, first_process: bool) -
   """
   args: dict[str, Any] = {"run_kind": ctx.run_kind}
   if ctx.kind == "turn":
-    return {**args, "extra_flags": [claude_code.EXCLUDE_DYNAMIC_SECTIONS_FLAG]}
+    return {
+        **args,
+        "extra_flags": [claude_code.EXCLUDE_DYNAMIC_SECTIONS_FLAG],
+        **midturn_delivery.launch_kwargs(ctx.session_meta, turn=True, run_kind=ctx.run_kind, run_id=ctx.run_id),
+    }
   if ctx.kind == "task":
     if first_process and ctx.preassigned_native_id and ctx.held_native_id is None:
       return {**args, "claude_session_id": ctx.preassigned_native_id}

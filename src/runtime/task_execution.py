@@ -65,12 +65,11 @@ from src.runtime import (
     control_events,
     master_cc_queue,
     master_cc_state,
-    message_events,
+    midturn_delivery,
     review,
     run_token,
     runs,
     session_anchors,
-    session_dispatch,
     session_events,
     session_fork,
     session_lifecycle,
@@ -81,12 +80,13 @@ from src.runtime import (
     spawner_backends,
     task_completion,
     task_errors,
+    task_input_prompt,
     task_prompts,
     task_sessions,
     thinking_state,
     worker,
 )
-from src.runtime.hooks import backend_lifecycle, backend_types, sequence_controllers, turn_contributions
+from src.runtime.hooks import backend_lifecycle, backend_types, sequence_controllers
 
 log = log_once.LazyStructlogLogger()
 
@@ -232,48 +232,6 @@ def free_disk_gib(path: pathlib.Path) -> float:
       raise FileNotFoundError(f"no existing ancestor to probe for {path}")
     probe = parent
   return shutil.disk_usage(probe).free / (1024**3)
-
-
-def compose_input_prompt(
-    meta: models.SessionMetadata,
-    events: list[dict],
-    report_provenance: dict[str, str] | None = None,
-) -> tuple[str, list[dict]]:
-  """The manager-turn prompt body from its exact durable input batch.
-
-    Real user input rides verbatim (its event is the durable fact the Run
-    acknowledges — no second synthetic USER copy is persisted), opened by the
-    preamble a turn contribution gives it, if any; relays, child reports and
-    scheduled triggers keep their own typed framing so the manager sees the
-    provenance the event carries. A fork/elone child's report header also names
-    its origin, resolved per child by the dispatcher
-    (``child_report_provenances``). Attachments reach the turn in two places:
-    each event's attachment block joins its text, and the upload list is
-    returned for the native image channels.
-    """
-  parts: list[str] = []
-  uploads: list[dict] = []
-  for event in events:
-    event_type = event.get("type")
-    content = str(event.get("content") or "")
-    if event_type == ET.USER:
-      preamble = turn_contributions.resolve_input_preamble(meta, event)
-      text = content if preamble is None else f"{preamble}\n{content}"
-    elif event_type == ET.AGENT_MESSAGE:
-      text = (
-          f"[Message from session {event.get('from_session_name') or event.get('from_session') or 'unknown'}] "
-          f"{content}")
-    elif event_type == ET.CHILD_REPORT:
-      provenance = (report_provenance or {}).get(str(event.get("child_session_id")))
-      text = session_dispatch.child_report_text(event, provenance)
-    elif event_type == ET.SCHEDULED_TRIGGER:
-      text = f"[Scheduled trigger] {content}"
-    else:
-      text = content
-    event_uploads = event.get("uploaded_files") or []
-    parts.append(message_events.build_agent_input_content(text, event_uploads))
-    uploads.extend(event_uploads)
-  return "\n\n".join(part for part in parts if part), uploads
 
 
 def resolve_launch_overlay(option: models.BackendOption) -> tuple[str | None, bool]:
@@ -1201,7 +1159,7 @@ class TaskExecutionAdapter:
     return snapshot
 
   def _manager_finish_recorder(
-      self, session_id: str, run_id: str, option: models.BackendOption, transport_dir: pathlib.Path, *,
+      self, meta: models.SessionMetadata, run_id: str, option: models.BackendOption, transport_dir: pathlib.Path, *,
       ended_at: datetime.datetime | None) -> Callable[[str | None, int, dict], Awaitable[None]]:
     """The finish recorder both manager-turn launch paths hand the master queue.
 
@@ -1211,26 +1169,32 @@ class TaskExecutionAdapter:
     observed-write-time default; the resume follow passes the drain rule's end
     time.
     """
+    session_id = meta.id
+    dispatcher = self._tree.dispatch
 
     async def on_task_finish(cc_session_id: str | None, exit_code: int, finish_extras: dict) -> None:
-      await self._tree.runs.record_observation(
-          session_id,
-          run_id,
-          native_session_id=cc_session_id,
-          model=finish_extras.get("model") or option.model,
-          raw_log_ref=str(transport_dir / runs.RAW_LOG_NAME),
-          result_ref=str(transport_dir / runs.RAW_LOG_NAME),
-      )
-      await self._tree.dispatch.finish_run(
-          session_id,
-          run_id,
-          outcome="success" if exit_code == 0 else "failed",
-          exit_code=exit_code,
-          ended_at=ended_at,
-      )
+      try:
+        await midturn_delivery.claim_finish_inputs(meta, dispatcher, run_id, transport_dir, successful=exit_code == 0)
+        await self._tree.runs.record_observation(
+            session_id,
+            run_id,
+            native_session_id=cc_session_id,
+            model=finish_extras.get("model") or option.model,
+            raw_log_ref=str(transport_dir / runs.RAW_LOG_NAME),
+            result_ref=str(transport_dir / runs.RAW_LOG_NAME),
+        )
+        await dispatcher.finish_run(
+            session_id,
+            run_id,
+            outcome="success" if exit_code == 0 else "failed",
+            exit_code=exit_code,
+            ended_at=ended_at,
+        )
+      finally:
+        midturn_delivery.release_run(run_id)
       # Inputs admitted during this turn waited for the serialized
       # consumer; the turn's finish is what dispatches their next run.
-      await self._tree.dispatch.dispatch_pending(session_id)
+      await dispatcher.dispatch_pending(session_id)
 
     return on_task_finish
 
@@ -1263,7 +1227,7 @@ class TaskExecutionAdapter:
     transport_dir = self._tree.runs.run_dir(session_id, run_id)
     batch_ids = set(run.input_event_ids)
     batch_events = [e for e in self._tree.fact_history(session_id) if str(e.get("id")) in batch_ids]
-    content, uploaded_files = compose_input_prompt(
+    content, uploaded_files = task_input_prompt.compose_input_prompt(
         meta, batch_events, await self._tree.dispatch.child_report_provenances(batch_events))
     if not content:
       raise task_errors.TaskInvalidError(f"run {run_id} claimed no consumable input; nothing to execute")
@@ -1313,7 +1277,7 @@ class TaskExecutionAdapter:
           model=option.model,
           reset_anchor=fresh_native)
 
-    on_task_finish = self._manager_finish_recorder(session_id, run_id, option, transport_dir, ended_at=None)
+    on_task_finish = self._manager_finish_recorder(meta, run_id, option, transport_dir, ended_at=None)
 
     await self._persist_launch_text(session_id, run_id, prompt)
     log.info(
@@ -1566,7 +1530,7 @@ class TaskExecutionAdapter:
     batch_ids = set(run.input_event_ids)
     batch = [e for e in self._tree.fact_history(meta.id) if str(e.get("id")) in batch_ids]
     provenance = await self._tree.dispatch.child_report_provenances(batch) if batch else {}
-    content, _uploads = compose_input_prompt(meta, batch, provenance) if batch else ("", [])
+    content, _uploads = task_input_prompt.compose_input_prompt(meta, batch, provenance) if batch else ("", [])
     if not content.strip():
       raise task_errors.TaskInvalidError(f"run {run.id} continues a conversation but claims no consumable input")
     return content
@@ -1684,7 +1648,7 @@ class TaskExecutionAdapter:
     batch_ids = set(run.input_event_ids)
     batch = [e for e in self._tree.fact_history(meta.id) if str(e.get("id")) in batch_ids]
     provenance = await self._tree.dispatch.child_report_provenances(batch) if batch else {}
-    content, _uploads = compose_input_prompt(meta, batch, provenance) if batch else ("", [])
+    content, _uploads = task_input_prompt.compose_input_prompt(meta, batch, provenance) if batch else ("", [])
     description = "\n\n".join(part for part in (spec_text, content) if part)
     if not description.strip():
       raise task_errors.TaskInvalidError(f"run {run.id} has no task spec and no input; nothing to execute")
@@ -1803,7 +1767,7 @@ class TaskExecutionAdapter:
     events_by_id = {str(event.get("id")): event for event in self._tree.fact_history(meta.id)}
     events = [events_by_id[event_id] for event_id in claimed_ids]
     provenance = await self._tree.dispatch.child_report_provenances(events)
-    content, _uploads = compose_input_prompt(meta, events, provenance)
+    content, _uploads = task_input_prompt.compose_input_prompt(meta, events, provenance)
     if not content.strip():
       return ""
     return f"**Later Messages:**\n{content}"
@@ -2032,7 +1996,7 @@ class TaskExecutionAdapter:
     async def on_task_spawn(pid: int, pid_start: str | None) -> None:
       raise RuntimeError(f"resume follow of run {run.id} must not spawn a process")
 
-    on_task_finish = self._manager_finish_recorder(meta.id, run.id, option, transport_dir, ended_at=ended_at)
+    on_task_finish = self._manager_finish_recorder(meta, run.id, option, transport_dir, ended_at=ended_at)
 
     return await master_cc_queue.enqueue_master_resume(
         self._cfg,

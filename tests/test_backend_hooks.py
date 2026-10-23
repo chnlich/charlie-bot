@@ -17,6 +17,8 @@ import conftest
 import pytest
 
 from src.backends.claude_code import claude_accounts, claude_code, claude_relay
+from src.features.discord import metadata as discord_metadata
+from src.features.slack import metadata as slack_metadata
 from src.infra import config, models
 from src.infra import event_types as ET
 from src.runtime import master_cc_run, worker
@@ -36,9 +38,14 @@ def _variant_option(backend_type: str):
 
 
 def _turn_context(
-    cfg: config.CharlieBotConfig, option, held_native_id: str | None,
-    tmp_path: pathlib.Path) -> backend_lifecycle.LaunchContext:
-  meta = models.SessionMetadata(profile="manager", id="s1", name="t", backend=option.id, cc_session_id=held_native_id)
+    cfg: config.CharlieBotConfig,
+    option,
+    held_native_id: str | None,
+    tmp_path: pathlib.Path,
+    *,
+    meta: models.SessionMetadata | None = None) -> backend_lifecycle.LaunchContext:
+  meta = meta or models.SessionMetadata(
+      profile="manager", id="s1", name="t", backend=option.id, cc_session_id=held_native_id)
   return master_cc_run._turn_launch_context(
       conftest.make_work_item(cfg, meta, option), option, str(tmp_path), held_native_id)
 
@@ -111,18 +118,23 @@ async def test_cli_variant_turn_checks_the_transcript_and_adds_the_dynamic_secti
   cfg = config.CharlieBotConfig(charliebot_home=tmp_path / "home", backends={"options": [option]})
   lifecycle = backend_types.lifecycle_for(option)
 
-  missing = await lifecycle.place(_turn_context(cfg, option, CC_ID, tmp_path))
+  missing_ctx = _turn_context(cfg, option, CC_ID, tmp_path)
+  missing = await lifecycle.place(missing_ctx)
   conftest.make_transcript(config_dir, CC_ID)
-  present = await lifecycle.place(_turn_context(cfg, option, CC_ID, tmp_path))
-  fresh = await lifecycle.place(_turn_context(cfg, option, None, tmp_path))
+  present_ctx = _turn_context(cfg, option, CC_ID, tmp_path)
+  present = await lifecycle.place(present_ctx)
+  fresh_ctx = _turn_context(cfg, option, None, tmp_path)
+  fresh = await lifecycle.place(fresh_ctx)
 
   assert missing.resume_id is None
   assert present.resume_id == CC_ID
   assert fresh.resume_id is None
-  for launch in (missing, present, fresh):
+  for ctx, launch in ((missing_ctx, missing), (present_ctx, present), (fresh_ctx, fresh)):
     assert launch.backend_kwargs == {
         "extra_flags": [claude_code.EXCLUDE_DYNAMIC_SECTIONS_FLAG],
         "run_kind": "manager_turn",
+        "midturn_delivery": True,
+        "midturn_run_id": ctx.run_id,
     }
 
 
@@ -157,18 +169,62 @@ async def test_non_pooled_cc_claude_turn_checks_the_transcript_and_selects_no_ac
   cfg = config.CharlieBotConfig(charliebot_home=tmp_path / "home", backends={"options": [option]})
   lifecycle = backend_types.lifecycle_for(option)
 
-  missing = await lifecycle.place(_turn_context(cfg, option, CC_ID, tmp_path))
+  missing_ctx = _turn_context(cfg, option, CC_ID, tmp_path)
+  missing = await lifecycle.place(missing_ctx)
   conftest.make_transcript(config_dir, CC_ID)
-  present = await lifecycle.place(_turn_context(cfg, option, CC_ID, tmp_path))
+  present_ctx = _turn_context(cfg, option, CC_ID, tmp_path)
+  present = await lifecycle.place(present_ctx)
 
   assert (missing.resume_id, present.resume_id) == (None, CC_ID)
-  for launch in (missing, present):
+  for ctx, launch in ((missing_ctx, missing), (present_ctx, present)):
     assert launch.account_label is None
     assert launch.backend_kwargs == {
         "extra_flags": [claude_code.EXCLUDE_DYNAMIC_SECTIONS_FLAG],
         "run_kind": "manager_turn",
+        "midturn_delivery": True,
+        "midturn_run_id": ctx.run_id,
     }
   assert lifecycle.watch(_turn_context(cfg, option, CC_ID, tmp_path), present) is None
+
+
+@pytest.mark.asyncio
+async def test_pooled_relay_turn_uses_the_same_midturn_launch_arguments(tmp_path: pathlib.Path) -> None:
+  cfg = conftest.fable_pool_cfg(tmp_path)
+  option = cfg.get_backend_option(conftest.POOLED_FABLE_ID)
+  assert option is not None
+  ctx = _turn_context(cfg, option, None, tmp_path)
+  [account, *_] = cfg.accounts.claude
+  lifecycle = backend_types.lifecycle_for(option)
+
+  first = lifecycle._pooled_launch(ctx, account, resume_id=None, prompt=None, relays=0)
+  relay = lifecycle._pooled_launch(ctx, account, resume_id=None, prompt="continue", relays=1)
+
+  assert first.backend_kwargs["midturn_delivery"] is True
+  assert relay.backend_kwargs["midturn_delivery"] is True
+  assert first.backend_kwargs["midturn_run_id"] == ctx.run_id
+  assert relay.backend_kwargs["midturn_run_id"] == ctx.run_id
+
+
+@pytest.mark.parametrize("thread_kind", ["slack", "discord"])
+@pytest.mark.asyncio
+async def test_thread_turn_keeps_plain_text_stdin_and_queues_later_messages(
+    tmp_path: pathlib.Path, thread_kind: str) -> None:
+  option = conftest.backend_option(id="cc", label="CC", type="cc-claude", model="claude-haiku-4-5")
+  cfg = config.CharlieBotConfig(charliebot_home=tmp_path / "home", backends={"options": [option]})
+  thread_fields = (
+      {
+          "slack_origin": slack_metadata.SlackOrigin(team_id="T", channel_id="C", thread_ts="1.0")
+      } if thread_kind == "slack" else {
+          "discord_origin": discord_metadata.DiscordOrigin(guild_id="G", parent_channel_id="C", thread_id="1")
+      })
+  meta = models.SessionMetadata(profile="manager", id="s1", name="thread", backend=option.id, **thread_fields)
+  ctx = _turn_context(cfg, option, None, tmp_path, meta=meta)
+  launch = await backend_types.lifecycle_for(option).place(ctx)
+  backend = backend_types.build_backend(option, cfg, **launch.backend_kwargs, cgroup_session_id=meta.id)
+
+  assert launch.backend_kwargs["midturn_delivery"] is False
+  assert "--input-format" not in backend._build_command("prompt")
+  assert "--replay-user-messages" not in backend._build_command("prompt")
 
 
 @pytest.mark.parametrize("backend_type", ["codex", "cc-anthropic-compatible"])
@@ -321,7 +377,8 @@ async def test_turn_refusal_writes_an_error_event_carrying_quota_exhausted(
       name="t",
       backend=conftest.POOLED_FABLE_ID,
       cc_session_id=CC_ID if held_id else None,
-      claude_account="main")
+      claude_account="main",
+      slack_origin=slack_metadata.SlackOrigin(team_id="T", channel_id="C", thread_ts="1.0"))
   conftest.install_scripted_backends(monkeypatch, backends, conftest.BUILD_BACKEND_PATCH_TARGET)
   item = conftest.make_work_item(cfg, meta, cfg.get_backend_option(conftest.POOLED_FABLE_ID))
 

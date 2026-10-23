@@ -25,6 +25,7 @@ tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+charliebot-store = { workspace = true, features = ["write-faults"] }
 charliebot-tasks.workspace = true
 tempfile.workspace = true
 tokio-tungstenite.workspace = true

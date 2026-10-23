@@ -219,7 +219,14 @@ fn text_field(fields: &mut Map<String, Value>, name: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+  use axum::body::{Body, to_bytes};
   use axum::http::Method;
+  use axum::http::Request;
+  use charliebot_core::run_token::{self, RunTokenClaims};
+  use charliebot_store::metadata::UtcDateTime;
+  use charliebot_store::{RunKind, RunRecord};
+  use serde_json::Value;
+  use tower::ServiceExt;
 
   use super::*;
   use crate::test_support::Home;
@@ -270,5 +277,78 @@ mod tests {
         "{path}"
       );
     }
+  }
+
+  #[tokio::test]
+  async fn concurrent_web_reply_replay_returns_one_stored_receipt() {
+    let home = Home::new();
+    let session_id = home.manager("web reply", None).await;
+    let run_id = "synthetic-web-run";
+    let claims = RunTokenClaims { session_id: session_id.clone(), run_id: run_id.to_string(), agent: "manager".into() };
+    let run = RunRecord {
+      id: run_id.to_string(),
+      session_id: session_id.clone(),
+      kind: RunKind::ManagerTurn,
+      input_event_ids: Vec::new(),
+      task_spec_hash: None,
+      task_spec_ref: None,
+      prompt_snapshot_ref: None,
+      retry_of_run_id: None,
+      review_of_run_id: None,
+      backend: None,
+      model: None,
+      native_session_id: None,
+      pid: None,
+      pid_start: None,
+      started_at: Some(UtcDateTime::now()),
+      ended_at: None,
+      exit_code: None,
+      repo_path: None,
+      base_branch: None,
+      branch_name: None,
+      worktree_path: None,
+      sequence_ref: None,
+      raw_log_ref: None,
+      events_ref: None,
+      result_ref: None,
+    };
+    let guard = home.features.store.control_lock().await;
+    home.features.store.register_run_locked(&guard, &session_id, run, Some("synthetic web reply run")).await.unwrap();
+    drop(guard);
+    home.features.store.record_launch(&session_id, run_id, 424242, "12345").await.unwrap();
+    let token = run_token::sign_run_token(&claims, "synthetic-access-key").unwrap();
+    let request = || {
+      Request::builder()
+        .method(Method::POST)
+        .uri("/api/internal/web/reply")
+        .header(http::header::CONTENT_TYPE, "application/json")
+        .header(http::header::AUTHORIZATION, format!("Bearer {token}"))
+        .body(Body::from(json!({"session_id": session_id, "text": "same response"}).to_string()))
+        .unwrap()
+    };
+    let router = crate::routes(&home.features);
+    let (first, second) = tokio::join!(router.clone().oneshot(request()), router.oneshot(request()));
+    let first = first.unwrap();
+    let second = second.unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+    assert_eq!(second.status(), StatusCode::OK);
+    let first = serde_json::from_slice::<Value>(&to_bytes(first.into_body(), usize::MAX).await.unwrap()).unwrap();
+    let second = serde_json::from_slice::<Value>(&to_bytes(second.into_body(), usize::MAX).await.unwrap()).unwrap();
+    assert_eq!(first, second);
+    let replies: Vec<Value> = home
+      .events(&session_id)
+      .into_iter()
+      .filter(|event| event["type"] == charliebot_core::event_types::WEB_REPLY)
+      .collect();
+    assert_eq!(replies.len(), 1);
+    assert_eq!(
+      replies[0]["request_id"],
+      charliebot_store::control_events::derived_agent_send_request_id(
+        run_id,
+        "web reply",
+        &session_id,
+        "same response"
+      )
+    );
   }
 }

@@ -10,7 +10,7 @@ use charliebot_core::event_types;
 use charliebot_registry::context::{FeatureContext, StartupState};
 use charliebot_store::metadata::{ColdReadSpec, SessionMetadata, TaskProfile, TaskSpec, TaskType};
 use charliebot_store::run_records::{self, RunKind, RunOutcome, RunOutcomeKind, RunRecord, SequenceRef};
-use charliebot_store::{CreateTask, StoreError, StoreResult, TaskCaller};
+use charliebot_store::{ChatEvent, CreateTask, StoreError, StoreResult, TaskCaller};
 use charliebot_tasks::dispatch::{
   DispatchExecutor, child_report_text, dispatcher, inputs_not_pending_conflict, note_run_liveness,
   unprocessed_input_blocker,
@@ -43,7 +43,7 @@ impl DispatchExecutor for DecliningExecutor {
   fn launch<'a>(
     &'a self,
     _session_id: &'a str,
-    _pending_inputs: &'a [Value],
+    _pending_inputs: &'a [ChatEvent],
     _launch_run_id: Option<&'a str>,
   ) -> BoxFuture<'a, StoreResult<Option<String>>> {
     Box::pin(async { Ok(None) })
@@ -56,7 +56,7 @@ impl DispatchExecutor for CountingDecliningExecutor {
   fn launch<'a>(
     &'a self,
     _session_id: &'a str,
-    _pending_inputs: &'a [Value],
+    _pending_inputs: &'a [ChatEvent],
     _launch_run_id: Option<&'a str>,
   ) -> BoxFuture<'a, StoreResult<Option<String>>> {
     Box::pin(async move {
@@ -356,7 +356,7 @@ async fn reports_are_stable_recovered_and_wake_the_parent_dispatcher() {
 
   let report = &reports[0];
   assert_eq!(
-    child_report_text(report, Some("clone of source")),
+    child_report_text(&report.to_value(), Some("clone of source")),
     format!("[Report from task {} (clone of source) | outcome completed] synthetic close", child.id)
   );
   assert_eq!(
@@ -409,7 +409,7 @@ async fn acknowledging_one_child_report_leaves_the_later_report_pending_after_re
     .into_iter()
     .find(|event| event["type"] == event_types::RUN_FINISHED && event["outcome"] == "success")
     .unwrap();
-  assert_eq!(acknowledged["input_event_ids"], json!([first_report["id"]]));
+  assert_eq!(acknowledged["input_event_ids"].to_value(), json!([first_report["id"].to_value()]));
 
   harness.dispatcher.set_executor(None);
   harness.close_task(&child_b.id, "close-b", Some(&parent.id)).await;
@@ -438,15 +438,15 @@ async fn child_report_provenance_and_source_fallback_follow_the_history_parent()
   );
   let created = harness.dispatcher.report_source_event(&child.id, "worker").unwrap();
   assert_eq!(created["type"], event_types::TASK_CREATED);
-  let reports = vec![
-    json!({"type":event_types::CHILD_REPORT,"child_session_id":child.id}),
-    json!({"type":event_types::CHILD_REPORT,"child_session_id":child.id}),
+  let reports: Vec<ChatEvent> = vec![
+    json!({"type":event_types::CHILD_REPORT,"child_session_id":child.id}).into(),
+    json!({"type":event_types::CHILD_REPORT,"child_session_id":child.id}).into(),
   ];
   assert_eq!(harness.dispatcher.child_report_provenances(&reports).await.unwrap().len(), 1);
 
   let (report, created) =
     harness.dispatcher.deliver_child_report(&child.id, created, "completed", "", None, None).await.unwrap();
-  assert_eq!(report, Value::Null);
+  assert!(report.is_null());
   assert!(!created);
 
   harness.set_successor(&source.id, &child.id).await;
@@ -501,7 +501,7 @@ async fn trigger_master_dispatches_an_existing_stable_input_once() {
   let events = harness.store.load_all_facts(&task.id).unwrap();
   assert_eq!(events.iter().filter(|event| event["id"] == "existing-wake").count(), 1);
   let finished = events.iter().rfind(|event| event["type"] == event_types::RUN_FINISHED).unwrap();
-  assert_eq!(finished["input_event_ids"], json!(["existing-wake"]));
+  assert_eq!(finished["input_event_ids"].to_value(), json!(["existing-wake"]));
 }
 
 #[tokio::test]
@@ -746,7 +746,7 @@ async fn a_finished_manager_turn_persists_its_observation_before_master_done_and
 
 #[test]
 fn input_blocker_truncates_after_eight_ids() {
-  let values = (0..10).map(|index| json!({"id":format!("in-{index}")})).collect::<Vec<Value>>();
+  let values = (0..10).map(|index| json!({"id":format!("in-{index}")}).into()).collect::<Vec<ChatEvent>>();
   assert_eq!(
     unprocessed_input_blocker(&values),
     "has unprocessed input: in-0, in-1, in-2, in-3, in-4, in-5, in-6, in-7 (+2 more)"

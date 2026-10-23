@@ -3,7 +3,6 @@ use std::collections::{HashMap, HashSet};
 use charliebot_core::event_types;
 use serde_json::{Value, json};
 
-use crate::events::SharedChatEvent;
 use crate::{StoreError, StoreResult};
 
 const ATTACHED_FILES_MARKER: &str = "\n\n[Attached files]\n";
@@ -93,12 +92,6 @@ pub fn stable_history_projection(events: &[Value]) -> StoreResult<Vec<(usize, Va
   Ok(stable_history_projection_refs(&references)?.into_iter().map(|(index, event)| (index, event.clone())).collect())
 }
 
-/// Return the stable projected order as borrowed events, preserving event payload ownership.
-pub(crate) fn stable_history_projection_shared(events: &[SharedChatEvent]) -> StoreResult<Vec<(usize, &Value)>> {
-  let references = events.iter().map(SharedChatEvent::as_ref).collect::<Vec<_>>();
-  stable_history_projection_refs(&references)
-}
-
 fn stable_history_projection_refs<'a>(events: &[&'a Value]) -> StoreResult<Vec<(usize, &'a Value)>> {
   let (complete_intervals, _) = interval_scan(events.iter().copied());
   let mut deferred_indices = HashSet::new();
@@ -140,10 +133,6 @@ fn stable_history_projection_refs<'a>(events: &[&'a Value]) -> StoreResult<Vec<(
 /// Return the length of the event prefix whose projected order cannot change after an append.
 pub fn stable_closed_prefix_len(events: &[Value]) -> usize {
   interval_scan(events.iter()).1
-}
-
-pub(crate) fn stable_closed_prefix_len_shared(events: &[SharedChatEvent]) -> usize {
-  interval_scan(events.iter().map(SharedChatEvent::as_ref)).1
 }
 
 fn interval_scan<'a>(events: impl IntoIterator<Item = &'a Value>) -> (Vec<(usize, usize)>, usize) {

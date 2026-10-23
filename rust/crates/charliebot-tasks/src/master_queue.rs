@@ -16,6 +16,7 @@ use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types;
 use charliebot_registry::backend::BackendLifecycle;
 use charliebot_registry::context::FeatureContext;
+use charliebot_store::compact::CompactValue;
 use charliebot_store::metadata::{SessionMetadata, SessionStatus, UtcDateTime};
 use charliebot_store::run_records::RunKind;
 use charliebot_usage::SessionUsage;
@@ -759,11 +760,11 @@ async fn arm_idle_compaction(
           .iter()
           .rev()
           .find(|event| {
-            event.get("type").and_then(Value::as_str) == Some(event_types::CONTEXT_COMPACTED)
-              && event.get("timestamp").and_then(Value::as_str).is_some()
+            event.get("type").and_then(CompactValue::as_str) == Some(event_types::CONTEXT_COMPACTED)
+              && event.get("timestamp").and_then(CompactValue::as_str).is_some()
           })
           .and_then(|event| event.get("timestamp"))
-          .and_then(Value::as_str)
+          .and_then(CompactValue::as_str)
           .map(UtcDateTime::parse)
           .transpose()?;
         Ok::<_, anyhow::Error>(newest_compaction.is_some_and(|timestamp| timestamp > last_request_at))

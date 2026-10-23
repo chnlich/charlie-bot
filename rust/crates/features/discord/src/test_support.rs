@@ -350,12 +350,19 @@ impl Home {
 
   /// Appends one chat event and returns it with its stamped id.
   pub async fn append(&self, session_id: &str, event: Value) -> Value {
-    self.features.store.persist_and_broadcast(session_id, event).await.expect("the chat event appends")
+    self.features.store.persist_and_broadcast(session_id, event).await.expect("the chat event appends").to_value()
   }
 
   /// The session's chat events in log order.
   pub fn events(&self, session_id: &str) -> Vec<Value> {
-    self.features.store.load_chat_events_sync(session_id).expect("the chat log reads")
+    self
+      .features
+      .store
+      .load_chat_events_sync(session_id)
+      .expect("the chat log reads")
+      .iter()
+      .map(charliebot_store::ChatEvent::to_value)
+      .collect()
   }
 
   /// The session's metadata as the store reads it.

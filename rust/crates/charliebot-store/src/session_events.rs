@@ -7,6 +7,7 @@ use tokio::sync::{Mutex, OwnedMutexGuard};
 use charliebot_core::event_types;
 
 use crate::aggregator::MessageAggregator;
+use crate::compact::CompactValue;
 use crate::projection::MessageProjection;
 use crate::streaming::{self, SocketHandle, Subscription};
 use crate::{ChatEvent, Store, StoreError, StoreResult};
@@ -90,10 +91,10 @@ impl Store {
     self.stamp_event_index(session_id, &mut event)?;
     self.feed_and_broadcast(session_id, &event, &aggregator).await?;
 
-    if event.get("type").and_then(Value::as_str) == Some(event_types::MASTER_DONE)
+    if event.get("type").and_then(CompactValue::as_str) == Some(event_types::MASTER_DONE)
       && let Some(meta) = meta
     {
-      for work in self.runtime_hooks.after_turn(meta, event.clone(), self.cfg.clone()) {
+      for work in self.runtime_hooks.after_turn(meta, event.to_value(), self.cfg.clone()) {
         let session_id = session_id.to_string();
         let name = format!("after-turn-{}-{session_id}", work.name);
         tokio::spawn(async move {
@@ -211,8 +212,8 @@ impl Store {
     }
     let cached = cache.get(session_id);
     let projection = match cached {
-      Some(cached) if live.len() >= cached.event_count() => cached.advanced_shared(&live[cached.event_count()..])?,
-      _ => MessageProjection::new_shared(live.as_slice(), 0, self.event_renderers.clone())?,
+      Some(cached) if live.len() >= cached.event_count() => cached.advanced(&live[cached.event_count()..])?,
+      _ => MessageProjection::new(live.as_slice(), 0, self.event_renderers.clone())?,
     };
     let projection = Arc::new(projection);
     cache.store(session_id, Arc::clone(&projection));
@@ -283,14 +284,14 @@ impl Store {
     event: &ChatEvent,
     aggregator: &Arc<Mutex<MessageAggregator>>,
   ) -> StoreResult<()> {
-    let deltas = aggregator.lock().await.feed(event)?;
+    let deltas = aggregator.lock().await.feed(&event.to_value())?;
     let channel = streaming::session_channel(session_id);
     for delta in deltas {
       self.broadcast(&channel, delta).await?;
     }
-    let event_type = event.get("type").and_then(Value::as_str);
+    let event_type = event.get("type").and_then(CompactValue::as_str);
     if !event_type.is_some_and(|event_type| RAW_EVENTS_REPLACED_BY_DELTAS.contains(&event_type)) {
-      self.broadcast(&channel, event.clone()).await?;
+      self.broadcast(&channel, event.to_value()).await?;
     }
     Ok(())
   }
@@ -319,7 +320,7 @@ impl Store {
       while start < events.len() {
         let end = (start + AGGREGATOR_INIT_SLICE_EVENTS).min(events.len());
         for event in &events[start..end] {
-          aggregator.feed(event)?;
+          aggregator.feed(&event.to_value())?;
         }
         start = end;
         tokio::task::yield_now().await;
@@ -344,11 +345,13 @@ impl Store {
     }
   }
 
-  fn stamp_event_index(&self, session_id: &str, event: &mut Value) -> StoreResult<()> {
+  fn stamp_event_index(&self, session_id: &str, event: &mut ChatEvent) -> StoreResult<()> {
     let count = self.get_chat_event_count_sync(session_id)?;
     let index = count.checked_sub(1).ok_or_else(|| StoreError::new("cannot index an empty chat event log"))?;
-    let object = event.as_object_mut().ok_or_else(|| StoreError::new("chat event must be a JSON object"))?;
-    object.insert("event_index".to_string(), json!(index));
+    if !event.is_object() {
+      return Err(StoreError::new("chat event must be a JSON object"));
+    }
+    event.insert("event_index", json!(index));
     Ok(())
   }
 
@@ -448,7 +451,8 @@ mod tests {
   }
 
   /// The stored event without the fields the append and the feed add.
-  fn strip_stamps(mut event: Value) -> Value {
+  fn strip_stamps(event: ChatEvent) -> Value {
+    let mut event = event.to_value();
     let object = event.as_object_mut().unwrap();
     for key in ["id", "timestamp", "event_index"] {
       object.remove(key);
@@ -557,7 +561,7 @@ mod tests {
       )
       .await
       .unwrap();
-    assert_eq!(event["event_index"], 0);
+    assert_eq!(event["event_index"].as_i64(), Some(0));
     let frame: Value = serde_json::from_str(&subscription.recv().await.unwrap()).unwrap();
     assert_eq!(frame["type"], "stream");
     assert_eq!(frame["message"]["content"], "hello");
@@ -587,7 +591,7 @@ mod tests {
     write_test_session(&store, "synthetic");
 
     let event = store.persist_and_broadcast("synthetic", json!({"type": "master_done"})).await.unwrap();
-    assert_eq!(event["event_index"], 0);
+    assert_eq!(event["event_index"].as_i64(), Some(0));
     let contribution_event = tokio::time::timeout(std::time::Duration::from_secs(1), receiver).await.unwrap().unwrap();
     assert_eq!(contribution_event["type"], "master_done");
     assert_eq!(contribution_event["event_index"], 0);
@@ -639,7 +643,8 @@ mod tests {
   #[test]
   fn construction_supplies_feature_renderers_to_message_helpers() {
     let (_home, store) = make_test_store_with_runtime(Arc::new(FeatureEventHook));
-    let messages = store.events_to_messages(&[json!({"type": "feature_event", "content": "feature text"})]).unwrap();
+    let messages =
+      store.events_to_messages(&[json!({"type": "feature_event", "content": "feature text"}).into()]).unwrap();
     assert_eq!(
       messages,
       vec![json!({
@@ -710,9 +715,9 @@ mod tests {
       .await
       .unwrap()
       .unwrap();
-    assert_eq!(boundary["type"], "context_compacted");
+    assert_eq!(boundary["type"].as_str(), Some("context_compacted"));
     assert!(boundary["trigger"].is_null());
-    assert_eq!(boundary["compact_metadata"], json!({"trigger": null}));
+    assert_eq!(boundary["compact_metadata"].to_value(), json!({"trigger": null}));
     let rendered: Value = serde_json::from_str(&subscription.recv().await.unwrap()).unwrap();
     assert_eq!(rendered["type"], "message");
     assert_eq!(rendered["message"]["content"], "Context compacted");
@@ -724,9 +729,9 @@ mod tests {
       .await
       .unwrap()
       .unwrap();
-    assert_eq!(failed["type"], "context_compact_failed");
+    assert_eq!(failed["type"].as_str(), Some("context_compact_failed"));
     assert!(failed["error"].is_null());
-    assert_eq!(failed["event_index"], 1);
+    assert_eq!(failed["event_index"].as_i64(), Some(1));
     assert!(failed["id"].as_str().is_some());
     assert!(failed["timestamp"].as_str().is_some());
   }

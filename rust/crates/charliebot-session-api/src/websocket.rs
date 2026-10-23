@@ -233,18 +233,19 @@ async fn prepare_catchup(
 }
 
 trait CatchupEvent {
-  fn event(&self) -> &Value;
+  /// The event as the `Value` form the catch-up aggregator and frames read.
+  fn event(&self) -> Value;
 }
 
 impl CatchupEvent for Value {
-  fn event(&self) -> &Value {
-    self
+  fn event(&self) -> Value {
+    self.clone()
   }
 }
 
 impl CatchupEvent for SharedChatEvent {
-  fn event(&self) -> &Value {
-    self.as_ref()
+  fn event(&self) -> Value {
+    self.as_ref().to_value()
   }
 }
 
@@ -280,7 +281,7 @@ impl CatchupWalk {
     for (index, event) in events.iter().enumerate().take(end).skip(start) {
       let global_index = self.event_index_offset + index;
       let event = event.event();
-      let deltas = self.aggregator.feed(event)?;
+      let deltas = self.aggregator.feed(&event)?;
       if (global_index as i128) < self.cursor {
         continue;
       }
@@ -586,11 +587,13 @@ mod tests {
   #[tokio::test]
   async fn the_latest_stream_delta_is_buffered_at_the_end_of_catchup() {
     let (_home, features) = test_context();
-    let events = vec![json!({
+    let events: Vec<SharedChatEvent> = vec![json!({
       "type": "assistant",
       "message": {"content": [{"type": "text", "text": "draft"}]},
-    })];
-    let events = events.into_iter().map(Arc::new).collect();
+    })]
+    .into_iter()
+    .map(|event| SharedChatEvent::new(charliebot_store::ChatEvent::from_value(&event)))
+    .collect();
     let frames = replay_events(&features.store, Arc::new(events), 0, 0).await.unwrap();
     assert_eq!(frames.len(), 1);
     assert_eq!(frames[0]["type"], "stream");

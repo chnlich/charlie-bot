@@ -589,7 +589,14 @@ mod tests {
     );
     assert_eq!(metadata.group.as_deref(), Some("Slack #synthetic-room"));
 
-    let events = home.features.store.load_chat_events_sync(&expected_id).unwrap();
+    let events = home
+      .features
+      .store
+      .load_chat_events_sync(&expected_id)
+      .unwrap()
+      .iter()
+      .map(charliebot_store::ChatEvent::to_value)
+      .collect::<Vec<_>>();
     let summon = events.iter().find(|event| event.get("slack").is_some()).expect("the Slack mention is persisted");
     assert_eq!(summon["content"], SLACK.summon_line);
     assert_eq!(summon["slack"], json!({"channel_id": "C_TEST", "thread_ts": TS, "mention_ts": TS}));
@@ -629,7 +636,9 @@ mod tests {
         .load_chat_events_sync(&first)
         .unwrap()
         .iter()
-        .filter(|event| event["type"] == "agent_message")
+        .filter(
+          |event| event.get("type").and_then(charliebot_store::compact::CompactValue::as_str) == Some("agent_message")
+        )
         .count(),
       1,
     );
@@ -768,8 +777,9 @@ mod tests {
       .store
       .load_chat_events_sync(&session_id)
       .unwrap()
-      .into_iter()
+      .iter()
       .find(|event| event.get("slack").is_some())
+      .map(|event| event.to_value())
       .expect("the summon is persisted before the task wake");
     assert_eq!(home.launches()[0].1[0]["id"], summon["id"]);
   }

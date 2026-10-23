@@ -13,6 +13,7 @@ use charliebot_core::hot_reload::HotReload;
 use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot, SlotField};
 use charliebot_registry::store_hooks::store_hooks;
 use charliebot_registry::{FeatureContext, Registry, RegistryError, RunningTurnInputs, StartupState};
+use charliebot_store::ChatEvent;
 use charliebot_store::metadata::{SessionMetadata, TaskProfile};
 use charliebot_store::{CreateTask, Store, Subscription, TaskCaller, session_channel};
 use http::{Method, Request};
@@ -157,12 +158,19 @@ impl Home {
 
   /// The session's chat events in log order.
   pub fn events(&self, session_id: &str) -> Vec<Value> {
-    self.features.store.load_chat_events_sync(session_id).expect("the chat log reads")
+    self
+      .features
+      .store
+      .load_chat_events_sync(session_id)
+      .expect("the chat log reads")
+      .iter()
+      .map(ChatEvent::to_value)
+      .collect()
   }
 
   /// Appends one chat event and returns it with its stamped id.
   pub async fn append(&self, session_id: &str, event: Value) -> Value {
-    self.features.store.append_chat_event(session_id, event).await.expect("the chat event appends")
+    self.features.store.append_chat_event(session_id, event).await.expect("the chat event appends").to_value()
   }
 
   /// The nudges the audit posted to the session, in log order.

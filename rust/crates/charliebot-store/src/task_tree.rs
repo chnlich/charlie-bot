@@ -14,6 +14,9 @@ use std::time::{Duration, Instant};
 use charliebot_core::{event_types, fsutil};
 use serde_json::{Map, Value, json};
 
+use crate::ChatEvent;
+use crate::compact::CompactValue;
+
 use crate::control_events::{self, ACTOR_AGENT, ACTOR_SYSTEM, ACTOR_USER};
 use crate::events::{FileIdentity, LiveHistory, SharedChatEvent};
 use crate::metadata::{EventRef, SessionMetadata, SessionStatus, TaskProfile, TaskSpec, TaskType, UtcDateTime};
@@ -187,15 +190,15 @@ impl EventIdIndex {
 }
 
 impl Index<&str> for EventIdIndex {
-  type Output = Value;
+  type Output = ChatEvent;
 
   fn index(&self, id: &str) -> &Self::Output {
     self.get(id).expect("indexed event id is present").as_ref()
   }
 }
 
-fn event_id(event: &Value) -> &str {
-  event.get("id").and_then(Value::as_str).expect("event id index only stores events with string ids")
+fn event_id(event: &ChatEvent) -> &str {
+  event.get("id").and_then(CompactValue::as_str).expect("event id index only stores events with string ids")
 }
 
 fn event_id_hash(id: &str) -> u64 {
@@ -259,13 +262,13 @@ impl NodeState {
   }
 }
 
-fn has_withheld_reason<'a>(events: impl Iterator<Item = &'a Value>, run_id: &str) -> bool {
+fn has_withheld_reason<'a>(events: impl Iterator<Item = &'a ChatEvent>, run_id: &str) -> bool {
   let mut withheld = None;
   for event in events {
-    if event.get("type").and_then(Value::as_str) == Some("run_launch_withheld")
-      && event.get("run_id").and_then(Value::as_str) == Some(run_id)
+    if event.get("type").and_then(CompactValue::as_str) == Some("run_launch_withheld")
+      && event.get("run_id").and_then(CompactValue::as_str) == Some(run_id)
     {
-      withheld = event.get("reason").and_then(Value::as_str).filter(|reason| !reason.is_empty());
+      withheld = event.get("reason").and_then(CompactValue::as_str).filter(|reason| !reason.is_empty());
     }
   }
   withheld.is_some()
@@ -1309,17 +1312,17 @@ impl Store {
     let events = self.load_chat_events_shared_sync(session_id)?;
     let scope_name = scope.as_str();
     let last = events.iter().rev().find(|event| {
-      event.get("type").and_then(Value::as_str) == Some("prompt_changed")
-        && event.get("scope").and_then(Value::as_str) == Some(scope_name)
+      event.get("type").and_then(CompactValue::as_str) == Some("prompt_changed")
+        && event.get("scope").and_then(CompactValue::as_str) == Some(scope_name)
     });
     let current_ref = scope.metadata_ref(meta);
-    if last.is_some_and(|event| event.get("new_ref").and_then(Value::as_str) == current_ref) {
+    if last.is_some_and(|event| event.get("new_ref").and_then(CompactValue::as_str) == current_ref) {
       return Ok(());
     }
     if last.is_none() && current_ref.is_none() {
       return Ok(());
     }
-    let previous_ref = last.and_then(|event| event.get("new_ref")).cloned().unwrap_or(Value::Null);
+    let previous_ref = last.and_then(|event| event.get("new_ref")).map(CompactValue::to_value).unwrap_or(Value::Null);
     let event = control_events::build_control_event(
       "prompt_changed",
       ACTOR_USER,
@@ -1368,8 +1371,8 @@ impl Store {
     let request_id = format!("unsuccessful:{run_id}");
     let facts = self.load_all_facts(session_id)?;
     if facts.iter().any(|event| {
-      event.get("type").and_then(Value::as_str) == Some("task_closed")
-        && event.get("request_id").and_then(Value::as_str) == Some(request_id.as_str())
+      event.get("type").and_then(CompactValue::as_str) == Some("task_closed")
+        && event.get("request_id").and_then(CompactValue::as_str) == Some(request_id.as_str())
     }) {
       return Ok(false);
     }
@@ -1473,8 +1476,8 @@ impl Store {
     let mut substance = facts
       .events_by_id
       .values()
-      .filter(|event| event.get("type").and_then(Value::as_str) != Some(event_types::TASK_CREATED))
-      .map(|event| event.get("type").and_then(Value::as_str).unwrap_or("None").to_string())
+      .filter(|event| event.get("type").and_then(CompactValue::as_str) != Some(event_types::TASK_CREATED))
+      .map(|event| event.get("type").and_then(CompactValue::as_str).unwrap_or("None").to_string())
       .collect::<Vec<_>>();
     substance.sort();
     substance.dedup();
@@ -2026,7 +2029,7 @@ impl Store {
       claimed.extend(run.input_event_ids);
     }
     for candidate in facts.input_candidates {
-      let input_id = candidate.get("id").and_then(Value::as_str).unwrap_or_default();
+      let input_id = candidate.get("id").and_then(CompactValue::as_str).unwrap_or_default();
       if !confirmed.contains(input_id) && !claimed.contains(input_id) {
         return Ok(true);
       }
@@ -2170,14 +2173,14 @@ fn lifecycle_state_from_file(path: &Path) -> StoreResult<Option<String>> {
       file.read_exact(&mut line).map_err(|error| path_error(path, error))?;
       line
     };
-    let Some(event) = crate::ndjson::parse_line(&raw) else { continue };
-    let Some(event_type) = event.get("type").and_then(Value::as_str) else { continue };
+    let Some(event) = crate::ndjson::parse_line_compact(&raw) else { continue };
+    let Some(event_type) = event.get("type").and_then(CompactValue::as_str) else { continue };
     match event_type {
       "clone_start" | "task_reopened" => return Ok(Some("open".to_string())),
       "task_closed" => {
         let state = event
           .get("outcome")
-          .and_then(Value::as_str)
+          .and_then(CompactValue::as_str)
           .filter(|value| !value.is_empty())
           .unwrap_or("completed")
           .to_string();
@@ -2401,7 +2404,7 @@ fn archived_of(
 /// Fold `events`, which start at absolute history position `offset`, into `facts` holding the history before them.
 #[cfg(test)]
 fn fold_task_facts(events: &[Value]) -> StoreResult<TaskFacts> {
-  let events = events.iter().cloned().map(Arc::new).collect::<Vec<_>>();
+  let events = events.iter().map(|event| Arc::new(ChatEvent::from_value(event))).collect::<Vec<_>>();
   let mut facts = TaskFacts::default();
   let mut never_stop = || false;
   assert!(fold_task_facts_from(&mut facts, &events, 0, &mut never_stop, None)?);
@@ -2425,17 +2428,19 @@ fn fold_task_facts_from(
       run_facts.observe(event);
     }
     let position = offset + index;
-    match event.get("type").and_then(Value::as_str) {
+    match event.get("type").and_then(CompactValue::as_str) {
       Some("clone_start") => facts.has_user_request = false,
       _ if event_types::is_real_user_message(event) || event_types::is_platform_summon(event) => {
         facts.has_user_request = true;
       }
       _ => {}
     }
-    if event.get("id").and_then(Value::as_str).is_some() && !facts.events_by_id.insert(Arc::clone(&events[index])) {
+    if event.get("id").and_then(CompactValue::as_str).is_some()
+      && !facts.events_by_id.insert(Arc::clone(&events[index]))
+    {
       continue;
     }
-    let event_type = event.get("type").and_then(Value::as_str).unwrap_or_default();
+    let event_type = event.get("type").and_then(CompactValue::as_str).unwrap_or_default();
     match event_type {
       "clone_start" => {
         facts.task_state = "open".to_string();
@@ -2465,7 +2470,7 @@ fn fold_task_facts_from(
             return Ok(false);
           }
           if admits_input(prior)
-            && prior.get("id").and_then(Value::as_str).is_some_and(|id| facts.imported_pending_ids.contains(id))
+            && prior.get("id").and_then(CompactValue::as_str).is_some_and(|id| facts.imported_pending_ids.contains(id))
           {
             facts.input_candidates.push(Arc::clone(prior));
           }
@@ -2474,7 +2479,7 @@ fn fold_task_facts_from(
       "task_closed" => {
         facts.task_state = event
           .get("outcome")
-          .and_then(Value::as_str)
+          .and_then(CompactValue::as_str)
           .filter(|value| !value.is_empty())
           .unwrap_or("completed")
           .to_string();
@@ -2493,9 +2498,9 @@ fn fold_task_facts_from(
         facts.close_requests.push(Arc::clone(&events[index]));
       }
       "run_finished" => {
-        if let Some(run_id) = event.get("run_id").and_then(Value::as_str) {
-          let outcome = event.get("outcome").and_then(Value::as_str).unwrap_or("None").to_string();
-          if event.get("outcome").and_then(Value::as_str) == Some("None") {
+        if let Some(run_id) = event.get("run_id").and_then(CompactValue::as_str) {
+          let outcome = event.get("outcome").and_then(CompactValue::as_str).unwrap_or("None").to_string();
+          if event.get("outcome").and_then(CompactValue::as_str) == Some("None") {
             facts.run_outcome_string_none_ids.insert(run_id.to_string());
           } else {
             facts.run_outcome_string_none_ids.remove(run_id);
@@ -2503,28 +2508,31 @@ fn fold_task_facts_from(
           facts.run_outcomes.insert(run_id.to_string(), outcome.clone());
           facts.run_finish_positions.entry(run_id.to_string()).or_insert(position);
           if outcome == "success"
-            && let Some(input_ids) = event.get("input_event_ids").and_then(Value::as_array)
+            && let Some(input_ids) = event.get("input_event_ids").and_then(CompactValue::as_array)
           {
-            facts.confirmed_input_ids.extend(input_ids.iter().filter_map(Value::as_str).map(str::to_string));
+            facts.confirmed_input_ids.extend(input_ids.iter().filter_map(CompactValue::as_str).map(str::to_string));
           }
         }
       }
       "task_input_acknowledged" => {
-        if let Some(input_ids) = event.get("input_ids").and_then(Value::as_array) {
-          facts.confirmed_input_ids.extend(input_ids.iter().filter_map(Value::as_str).map(str::to_string));
+        if let Some(input_ids) = event.get("input_ids").and_then(CompactValue::as_array) {
+          facts.confirmed_input_ids.extend(input_ids.iter().filter_map(CompactValue::as_str).map(str::to_string));
         }
       }
       "child_report" => {
-        if let (Some(child_id), Some(child_event_id)) =
-          (event.get("child_session_id").and_then(Value::as_str), event.get("child_event_id").and_then(Value::as_str))
-        {
+        if let (Some(child_id), Some(child_event_id)) = (
+          event.get("child_session_id").and_then(CompactValue::as_str),
+          event.get("child_event_id").and_then(CompactValue::as_str),
+        ) {
           facts.delivered_reports.insert((child_id.to_string(), child_event_id.to_string()));
         }
       }
       _ => {}
     }
-    let imported =
-      event.get("id").and_then(Value::as_str).is_some_and(|event_id| facts.imported_pending_ids.contains(event_id));
+    let imported = event
+      .get("id")
+      .and_then(CompactValue::as_str)
+      .is_some_and(|event_id| facts.imported_pending_ids.contains(event_id));
     if admits_input(event)
       && facts.boundary_open
       && (facts.boundary_index.is_none_or(|boundary| position > boundary) || imported)
@@ -2538,16 +2546,16 @@ fn fold_task_facts_from(
 
 /// The stable input ids that a `task_imported` fact lists as pending. A list that is not an array, or an entry without
 /// a non-empty `input_id`, is the task fold's error.
-fn imported_pending_input_ids(event: &Value) -> StoreResult<Vec<&str>> {
+fn imported_pending_input_ids(event: &ChatEvent) -> StoreResult<Vec<&str>> {
   let pending = match event.get("pending_inputs") {
-    None | Some(Value::Null) => return Ok(Vec::new()),
-    Some(Value::Array(pending)) => pending,
+    None | Some(CompactValue::Null) => return Ok(Vec::new()),
+    Some(CompactValue::Array(pending)) => pending,
     Some(_) => return Err(StoreError::new("task_imported pending_inputs must be an array")),
   };
   pending
     .iter()
     .map(|entry| {
-      entry.get("input_id").and_then(Value::as_str).filter(|value| !value.is_empty()).ok_or_else(|| {
+      entry.get("input_id").and_then(CompactValue::as_str).filter(|value| !value.is_empty()).ok_or_else(|| {
         StoreError::new(format!(
           "task_imported event {:?} lists a pending input without a stable input_id",
           event.get("id")
@@ -2608,9 +2616,9 @@ fn observe_run_facts(
   Ok(!should_stop())
 }
 
-fn admits_input(event: &Value) -> bool {
-  match event.get("type").and_then(Value::as_str) {
-    Some("user") => event.get("content").is_some_and(Value::is_string),
+fn admits_input(event: &ChatEvent) -> bool {
+  match event.get("type").and_then(CompactValue::as_str) {
+    Some("user") => event.get("content").is_some_and(CompactValue::is_string),
     Some("agent_message" | "scheduled_trigger" | "child_report") => true,
     _ => false,
   }
@@ -2758,6 +2766,9 @@ pub(crate) mod tests {
 
   use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot, SlotField};
   use serde_json::{Map, Value, json};
+
+  use crate::ChatEvent;
+  use crate::compact::CompactValue;
 
   use super::*;
   use crate::metadata::{TaskProfile, TaskSpec};
@@ -3200,7 +3211,7 @@ pub(crate) mod tests {
       Some(successor.id.clone())
     );
     let event = store.load_chat_events_sync(&successor.id).unwrap().pop().unwrap();
-    assert_eq!(event["origin_session_id"], root.id);
+    assert_eq!(event["origin_session_id"].as_str(), Some(root.id.as_str()));
   }
 
   #[tokio::test]
@@ -3295,10 +3306,10 @@ pub(crate) mod tests {
       .load_chat_events_sync(&source.id)
       .unwrap()
       .into_iter()
-      .filter(|event| event["type"] == "prompt_changed")
+      .filter(|event| event["type"].as_str() == Some("prompt_changed"))
       .collect();
-    assert_eq!(prompts[1]["previous_ref"], ref_a);
-    assert_eq!(prompts[1]["new_ref"], ref_b);
+    assert_eq!(prompts[1]["previous_ref"].to_value(), ref_a);
+    assert_eq!(prompts[1]["new_ref"].to_value(), ref_b);
 
     let mut source_slots = Map::new();
     source_slots.insert("last_scheduled_run".to_string(), json!("2025-02-03T04:05:06+00:00"));
@@ -3432,12 +3443,12 @@ pub(crate) mod tests {
 
     assert_eq!(archived, [root.id.clone(), mid.id.clone(), leaf.id.clone()]);
     assert_eq!(archive.calls.lock().unwrap().clone(), archived);
-    let closes = |session_id: &str| -> Vec<Value> {
+    let closes = |session_id: &str| -> Vec<ChatEvent> {
       store
         .load_chat_events_sync(session_id)
         .unwrap()
         .into_iter()
-        .filter(|event| event["type"] == "task_closed")
+        .filter(|event| event["type"].as_str() == Some("task_closed"))
         .collect()
     };
     for node in [&root.id, &mid.id, &leaf.id] {
@@ -3445,21 +3456,21 @@ pub(crate) mod tests {
     }
     let root_closes = closes(&root.id);
     assert_eq!(root_closes.len(), 1);
-    assert_eq!(root_closes[0]["outcome"], "archived");
-    assert_eq!(root_closes[0]["actor"], "user");
-    assert_eq!(root_closes[0]["summary"], "archived by the user");
-    assert_eq!(root_closes[0]["run_ids"], json!([]));
-    assert_eq!(root_closes[0]["report_to"], Value::Null);
+    assert_eq!(root_closes[0]["outcome"].as_str(), Some("archived"));
+    assert_eq!(root_closes[0]["actor"].as_str(), Some("user"));
+    assert_eq!(root_closes[0]["summary"].as_str(), Some("archived by the user"));
+    assert_eq!(root_closes[0]["run_ids"].to_value(), json!([]));
+    assert_eq!(root_closes[0]["report_to"].to_value(), Value::Null);
     assert!(root_closes[0].get("archived_with").is_none());
     for descendant in [&mid.id, &leaf.id] {
       let descendant_closes = closes(descendant);
       assert_eq!(descendant_closes.len(), 1);
-      assert_eq!(descendant_closes[0]["outcome"], "archived");
-      assert_eq!(descendant_closes[0]["summary"], "");
-      assert_eq!(descendant_closes[0]["archived_with"], root.id);
+      assert_eq!(descendant_closes[0]["outcome"].as_str(), Some("archived"));
+      assert_eq!(descendant_closes[0]["summary"].as_str(), Some(""));
+      assert_eq!(descendant_closes[0]["archived_with"].as_str(), Some(root.id.as_str()));
     }
     assert_eq!(store.task_state(&completed.id).unwrap(), "completed");
-    assert!(closes(&completed.id).iter().all(|fact| fact["outcome"] != "archived"));
+    assert!(closes(&completed.id).iter().all(|fact| fact["outcome"].as_str() != Some("archived")));
 
     assert!(store.archive_subtree(&root.id, TaskCaller::Operator).await.unwrap().is_empty());
     assert_eq!(closes(&root.id).len(), 1);
@@ -3488,7 +3499,9 @@ pub(crate) mod tests {
     assert_eq!(error.blockers(), Some(std::slice::from_ref(&blocker)));
     for node in [&root.id, &mid.id, &leaf.id] {
       assert_eq!(store.task_state(node).unwrap(), "open");
-      assert!(store.load_chat_events_sync(node).unwrap().iter().all(|event| event["type"] != "task_closed"));
+      assert!(
+        store.load_chat_events_sync(node).unwrap().iter().all(|event| event["type"].as_str() != Some("task_closed"))
+      );
     }
     assert!(archive.calls.lock().unwrap().is_empty());
   }
@@ -3505,7 +3518,9 @@ pub(crate) mod tests {
       assert_eq!(error.status_code(), Some(403));
     }
     assert_eq!(store.task_state(&root.id).unwrap(), "open");
-    assert!(store.load_chat_events_sync(&root.id).unwrap().iter().all(|event| event["type"] != "task_closed"));
+    assert!(
+      store.load_chat_events_sync(&root.id).unwrap().iter().all(|event| event["type"].as_str() != Some("task_closed"))
+    );
   }
 
   /// Structural guards keyed by node: the dispatcher answers these in production.
@@ -3524,12 +3539,12 @@ pub(crate) mod tests {
     }
   }
 
-  fn prompt_facts(store: &Store, session_id: &str) -> Vec<Value> {
+  fn prompt_facts(store: &Store, session_id: &str) -> Vec<ChatEvent> {
     store
       .load_chat_events_sync(session_id)
       .unwrap()
       .into_iter()
-      .filter(|event| event["type"] == event_types::PROMPT_CHANGED)
+      .filter(|event| event["type"].as_str() == Some(event_types::PROMPT_CHANGED))
       .collect()
   }
 
@@ -3603,9 +3618,9 @@ pub(crate) mod tests {
     assert_eq!(patched.node_prompt_ref, None);
     let facts = prompt_facts(&store, &root.id);
     assert_eq!(facts.len(), 3);
-    assert_eq!(facts[2]["scope"], "node");
-    assert_eq!(facts[2]["previous_ref"], node_ref);
-    assert_eq!(facts[2]["new_ref"], Value::Null);
+    assert_eq!(facts[2]["scope"].as_str(), Some("node"));
+    assert_eq!(facts[2]["previous_ref"].to_value(), node_ref);
+    assert_eq!(facts[2]["new_ref"].to_value(), Value::Null);
   }
 
   #[tokio::test]
@@ -3629,9 +3644,9 @@ pub(crate) mod tests {
 
     let facts = prompt_facts(&store, &root.id);
     assert_eq!(facts.len(), 2);
-    assert_eq!(facts[0]["previous_ref"], Value::Null);
-    assert_eq!(facts[0]["new_ref"], interrupted_ref);
-    assert_eq!(facts[1]["previous_ref"], interrupted_ref);
+    assert_eq!(facts[0]["previous_ref"].to_value(), Value::Null);
+    assert_eq!(facts[0]["new_ref"].to_value(), interrupted_ref);
+    assert_eq!(facts[1]["previous_ref"].to_value(), interrupted_ref);
   }
 
   #[tokio::test]
@@ -4081,9 +4096,9 @@ pub(crate) mod tests {
 
   #[test]
   fn task_fact_event_index_checks_hash_collisions_by_event_id() {
-    let first = Arc::new(json!({"id": "event-a", "type": "user"}));
-    let second = Arc::new(json!({"id": "event-b", "type": "agent_message"}));
-    let duplicate = Arc::new(json!({"id": "event-b", "type": "duplicate"}));
+    let first = Arc::new(json!({"id": "event-a", "type": "user"}).into());
+    let second = Arc::new(json!({"id": "event-b", "type": "agent_message"}).into());
+    let duplicate = Arc::new(json!({"id": "event-b", "type": "duplicate"}).into());
     let mut index = EventIdIndex::default();
 
     assert!(index.insert_hashed(first, |_| 7));
@@ -4092,8 +4107,8 @@ pub(crate) mod tests {
 
     assert_eq!(index.by_hash.len(), 1, "colliding ids share one fixed-width hash key");
     assert_eq!(index.len(), 2, "the collision bucket retains only distinct event references");
-    assert_eq!(index.get_hashed("event-a", |_| 7).unwrap()["type"], "user");
-    assert_eq!(index.get_hashed("event-b", |_| 7).unwrap()["type"], "agent_message");
+    assert_eq!(index.get_hashed("event-a", |_| 7).unwrap()["type"].as_str(), Some("user"));
+    assert_eq!(index.get_hashed("event-b", |_| 7).unwrap()["type"].as_str(), Some("agent_message"));
   }
 
   #[test]
@@ -4114,7 +4129,8 @@ pub(crate) mod tests {
       json!({"type": "run_launch_withheld", "run_id": "run-a", "reason": ""}),
     ];
     let mut visited = 0;
-    let withheld = has_withheld_reason(events.iter().inspect(|_| visited += 1), "run-a");
+    let compact: Vec<ChatEvent> = events.iter().map(ChatEvent::from_value).collect();
+    let withheld = has_withheld_reason(compact.iter().inspect(|_| visited += 1), "run-a");
 
     assert_eq!(visited, 3, "the scan visits each event once");
     assert!(!withheld, "the latest empty reason clears the earlier withheld state");
@@ -4488,7 +4504,8 @@ pub(crate) mod tests {
       LiveHistory::Cached { identity, .. } => identity,
       LiveHistory::Cold(_) => panic!("the task event list remains cached"),
     };
-    let cached = history.iter().find(|candidate| candidate.get("id").and_then(Value::as_str) == Some(id)).unwrap();
+    let cached =
+      history.iter().find(|candidate| candidate.get("id").and_then(CompactValue::as_str) == Some(id)).unwrap();
     let fact = facts.task().unwrap().events_by_id.get(id).unwrap();
     assert!(Arc::ptr_eq(cached, fact), "task facts point at the one cached parsed payload");
     assert!(Arc::ptr_eq(cached, &facts.task().unwrap().input_candidates[0]));
@@ -4513,7 +4530,7 @@ pub(crate) mod tests {
       "append refreshes the retained list without adding a memo entry"
     );
     let still_cached =
-      appended.iter().find(|candidate| candidate.get("id").and_then(Value::as_str) == Some(id)).unwrap();
+      appended.iter().find(|candidate| candidate.get("id").and_then(CompactValue::as_str) == Some(id)).unwrap();
     assert!(Arc::ptr_eq(cached, still_cached), "an append shares every existing parsed payload");
 
     store.clear_chat_events_cache(&node.id);
@@ -4523,7 +4540,8 @@ pub(crate) mod tests {
       LiveHistory::Cold(_) => panic!("the reloaded event list remains cached"),
     };
     assert!(!Arc::ptr_eq(&identity, &replacement_identity), "clear and reload replaces the Python list identity");
-    let replaced = reloaded.iter().find(|candidate| candidate.get("id").and_then(Value::as_str) == Some(id)).unwrap();
+    let replaced =
+      reloaded.iter().find(|candidate| candidate.get("id").and_then(CompactValue::as_str) == Some(id)).unwrap();
     assert!(!Arc::ptr_eq(cached, replaced), "cache invalidation reparses the event and replaces its identity");
     let refreshed_facts = store.node_facts(&node.id).unwrap();
     assert!(Arc::ptr_eq(replaced, refreshed_facts.task().unwrap().events_by_id.get(id).unwrap()));
@@ -4537,12 +4555,15 @@ pub(crate) mod tests {
   fn node_fact_fold_checks_stop_at_each_256_event_boundary() {
     let events = (0..1024)
       .map(|index| {
-        Arc::new(json!({
-          "id": format!("finish-{index}"),
-          "type": "run_finished",
-          "run_id": format!("run-{index}"),
-          "outcome": "success"
-        }))
+        Arc::new(
+          json!({
+            "id": format!("finish-{index}"),
+            "type": "run_finished",
+            "run_id": format!("run-{index}"),
+            "outcome": "success"
+          })
+          .into(),
+        )
       })
       .collect::<Vec<_>>();
     let mut facts = NodeFacts::default();
@@ -4569,9 +4590,9 @@ pub(crate) mod tests {
   #[test]
   fn node_fact_fold_visits_each_event_once_for_task_and_run_facts() {
     let events = [
-      Arc::new(json!({"id": "finish-a", "type": "run_finished", "run_id": "run-a", "outcome": "success"})),
-      Arc::new(json!({"id": "stop-b", "type": "run_stop_requested", "run_id": "run-b"})),
-      Arc::new(json!({"id": "user-c", "type": "user", "content": "synthetic"})),
+      Arc::new(json!({"id": "finish-a", "type": "run_finished", "run_id": "run-a", "outcome": "success"}).into()),
+      Arc::new(json!({"id": "stop-b", "type": "run_stop_requested", "run_id": "run-b"}).into()),
+      Arc::new(json!({"id": "user-c", "type": "user", "content": "synthetic"}).into()),
     ];
     let mut facts = NodeFacts::default();
     let mut runs = RunFacts::default();

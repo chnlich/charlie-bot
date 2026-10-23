@@ -8,6 +8,8 @@ use charliebot_core::event_types;
 use charliebot_registry::caller::CallerIdentity;
 use charliebot_registry::context::{FeatureContext, StartupStop, StateError};
 use charliebot_registry::sequence::{RestoreOutcome, SequenceCompletion};
+use charliebot_store::ChatEvent;
+use charliebot_store::compact::CompactValue;
 use charliebot_store::control_events::{self, ACTOR_AGENT, ACTOR_SYSTEM, ACTOR_USER};
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskType};
 use charliebot_store::run_records::{self, RunDisplayState, RunKind, RunOutcomeKind, RunRecord};
@@ -130,7 +132,7 @@ impl TaskCompletion {
       .dispatcher()?
       .pending_inputs(session_id)?
       .into_iter()
-      .filter(|event| event.get("id").and_then(Value::as_str).is_none_or(|id| !exclude_input_ids.contains(id)))
+      .filter(|event| event.get("id").and_then(CompactValue::as_str).is_none_or(|id| !exclude_input_ids.contains(id)))
       .collect::<Vec<_>>();
     if !pending.is_empty() {
       blockers.insert(0, dispatch::unprocessed_input_blocker(&pending));
@@ -178,7 +180,7 @@ impl TaskCompletion {
     }
     let pending = pending
       .into_iter()
-      .filter(|event| event.get("id").and_then(Value::as_str).is_none_or(|id| !exclude_input_ids.contains(id)))
+      .filter(|event| event.get("id").and_then(CompactValue::as_str).is_none_or(|id| !exclude_input_ids.contains(id)))
       .collect::<Vec<_>>();
     if !pending.is_empty() {
       blockers.insert(0, dispatch::unprocessed_input_blocker(&pending));
@@ -471,8 +473,8 @@ impl TaskCompletion {
     // cached event dictionaries. Keep the same full-history scan without cloning every event for each replayed run.
     let events = self.store().load_all_facts_view_sync(session_id)?;
     for event in events.iter() {
-      if event.get("type").and_then(Value::as_str) == Some(event_types::TASK_CLOSE_REQUESTED)
-        && event.get("request_id").and_then(Value::as_str) == Some(request_id)
+      if event.get("type").and_then(CompactValue::as_str) == Some(event_types::TASK_CLOSE_REQUESTED)
+        && event.get("request_id").and_then(CompactValue::as_str) == Some(request_id)
       {
         return Ok(Some((
           202,
@@ -481,10 +483,13 @@ impl TaskCompletion {
       }
     }
     for event in events.iter() {
-      if event.get("type").and_then(Value::as_str) == Some(event_types::TASK_CLOSED)
-        && event.get("request_id").and_then(Value::as_str) == Some(request_id)
+      if event.get("type").and_then(CompactValue::as_str) == Some(event_types::TASK_CLOSED)
+        && event.get("request_id").and_then(CompactValue::as_str) == Some(request_id)
       {
-        return Ok(Some((200, json!({"session_id": session_id, "closed_event_id": event.get("id")}))));
+        return Ok(Some((
+          200,
+          json!({"session_id": session_id, "closed_event_id": event.get("id").map(CompactValue::to_value)}),
+        )));
       }
     }
     Ok(None)
@@ -666,7 +671,10 @@ impl TaskCompletion {
     {
       tracing::warn!(target: "charliebot_tasks", session_id, parent = parent_id, report = ?report.get("id"), error = %error, "close_parent_wake_failed");
     }
-    Ok(Some((200, json!({"session_id": session_id, "closed_event_id": close_event.get("id")}))))
+    Ok(Some((
+      200,
+      json!({"session_id": session_id, "closed_event_id": close_event.get("id").map(CompactValue::to_value)}),
+    )))
   }
 
   #[allow(clippy::too_many_arguments)]
@@ -682,7 +690,7 @@ impl TaskCompletion {
     run_ids: &[String],
     actor: &str,
     sequence_outcome: Option<&str>,
-  ) -> StoreResult<(Value, Value, bool)> {
+  ) -> StoreResult<(ChatEvent, ChatEvent, bool)> {
     let mut payload = vec![
       ("request_id".to_string(), json!(request_id)),
       ("outcome".to_string(), json!(outcome)),
@@ -791,7 +799,9 @@ impl TaskCompletion {
     {
       tracing::warn!(target: "charliebot_tasks", session_id, parent = parent_id, report = ?report.get("id"), error = %error, "cancel_parent_wake_failed");
     }
-    Ok(json!({"session_id": session_id, "closed_event_id": close_event.get("id"), "stopped_runs": []}))
+    Ok(
+      json!({"session_id": session_id, "closed_event_id": close_event.get("id").map(CompactValue::to_value), "stopped_runs": []}),
+    )
   }
 
   async fn cancel_worker_task(
@@ -820,7 +830,7 @@ impl TaskCompletion {
           .cloned()
           .ok_or_else(|| StoreError::new("closed worker replay has no closed_event_id"))?;
         let stop_runs = self.cancellation_stop_runs(session_id, &stop_request_id)?;
-        (None, Value::Null, false, closed_event_id, stop_runs)
+        (None, ChatEvent::Null, false, closed_event_id, stop_runs)
       } else {
         let state = self.store().task_state(session_id)?;
         if state != "open" {
@@ -865,8 +875,10 @@ impl TaskCompletion {
           }
         }
         let stop_runs = self.cancellation_stop_runs(session_id, &stop_request_id)?;
-        let closed_event_id =
-          close_event.get("id").cloned().ok_or_else(|| StoreError::new("worker close event has no id"))?;
+        let closed_event_id = close_event
+          .get("id")
+          .map(CompactValue::to_value)
+          .ok_or_else(|| StoreError::new("worker close event has no id"))?;
         (Some(close_event), report, report_created, closed_event_id, stop_runs)
       }
     };
@@ -932,14 +944,14 @@ impl TaskCompletion {
     let mut stopped_runs = Vec::new();
     let mut seen = HashSet::new();
     for event in events {
-      if event.get("type").and_then(Value::as_str) != Some(event_types::RUN_STOP_REQUESTED)
-        || event.get("request_id").and_then(Value::as_str) != Some(request_id)
+      if event.get("type").and_then(CompactValue::as_str) != Some(event_types::RUN_STOP_REQUESTED)
+        || event.get("request_id").and_then(CompactValue::as_str) != Some(request_id)
       {
         continue;
       }
       let run_id = event
         .get("run_id")
-        .and_then(Value::as_str)
+        .and_then(CompactValue::as_str)
         .ok_or_else(|| StoreError::new("run_stop_requested fact has no string run_id"))?;
       if !seen.insert(run_id.to_string()) {
         continue;
@@ -1045,7 +1057,7 @@ impl TaskCompletion {
       let mut latest_lifecycle = None;
       let mut last_close = None;
       for event in history.iter().rev() {
-        let event_type = event.get("type").and_then(Value::as_str);
+        let event_type = event.get("type").and_then(CompactValue::as_str);
         if latest_lifecycle.is_none()
           && matches!(event_type, Some(event_types::TASK_CLOSED | event_types::TASK_REOPENED))
         {
@@ -1059,13 +1071,13 @@ impl TaskCompletion {
         }
       }
       if latest_lifecycle.is_some_and(|event| {
-        event.get("type").and_then(Value::as_str) == Some(event_types::TASK_REOPENED)
-          && event.get("request_id").and_then(Value::as_str) == Some(request_id)
+        event.get("type").and_then(CompactValue::as_str) == Some(event_types::TASK_REOPENED)
+          && event.get("request_id").and_then(CompactValue::as_str) == Some(request_id)
       }) {
         restored.push(node_id);
         continue;
       }
-      let close_id = last_close.and_then(|event| event.get("id")).and_then(Value::as_str);
+      let close_id = last_close.and_then(|event| event.get("id")).and_then(CompactValue::as_str);
       let event_scope = close_id.map_or_else(|| request_id.to_string(), |close_id| format!("{request_id}:{close_id}"));
       let event = control_events::build_control_event(
         event_types::TASK_REOPENED,
@@ -1122,7 +1134,7 @@ impl TaskCompletion {
       let pending = self.dispatcher()?.pending_inputs(session_id)?;
       let acknowledged = self.store().facts_of(session_id)?.confirmed_input_ids;
       let pending_ids =
-        pending.iter().filter_map(|event| event.get("id").and_then(Value::as_str)).collect::<HashSet<_>>();
+        pending.iter().filter_map(|event| event.get("id").and_then(CompactValue::as_str)).collect::<HashSet<_>>();
       let unknown = input_ids
         .iter()
         .filter(|input_id| !pending_ids.contains(input_id.as_str()) && !acknowledged.contains(input_id.as_str()))
@@ -1158,7 +1170,7 @@ impl TaskCompletion {
       let already_acknowledged = input_ids.iter().filter(|id| !acked_now.contains(id)).cloned().collect::<Vec<_>>();
       let response = json!({
         "session_id": session_id,
-        "acknowledged_event_id": event.get("id"),
+        "acknowledged_event_id": event.get("id").map(CompactValue::to_value),
         "input_ids": acked_now,
         "already_acknowledged": already_acknowledged,
       });
@@ -1171,13 +1183,13 @@ impl TaskCompletion {
   fn replay_input_ack(&self, session_id: &str, request_id: &str) -> StoreResult<Option<Value>> {
     let event_id = control_events::stable_input_ack_event_id(session_id, request_id);
     for event in self.store().load_all_facts(session_id)? {
-      if event.get("type").and_then(Value::as_str) == Some(event_types::TASK_INPUT_ACKNOWLEDGED)
-        && event.get("id").and_then(Value::as_str) == Some(event_id.as_str())
+      if event.get("type").and_then(CompactValue::as_str) == Some(event_types::TASK_INPUT_ACKNOWLEDGED)
+        && event.get("id").and_then(CompactValue::as_str) == Some(event_id.as_str())
       {
         return Ok(Some(json!({
           "session_id": session_id,
           "acknowledged_event_id": event_id,
-          "input_ids": event.get("input_ids").and_then(Value::as_array).cloned().unwrap_or_default(),
+          "input_ids": event.get("input_ids").map(CompactValue::to_value).unwrap_or(Value::Null),
           "already_acknowledged": [],
         })));
       }
@@ -1267,7 +1279,7 @@ impl TaskCompletion {
     {
       tracing::warn!(target: "charliebot_tasks", session_id, parent = parent_id, report = ?report.get("id"), error = %error, "sequence_close_parent_wake_failed");
     }
-    Ok((200, json!({"session_id": session_id, "closed_event_id": close_event.get("id")})))
+    Ok((200, json!({"session_id": session_id, "closed_event_id": close_event.get("id").map(CompactValue::to_value)})))
   }
 
   /// Recheck saved own-run close requests after the matching run succeeds.
@@ -1311,16 +1323,18 @@ impl TaskCompletion {
       if stop.is_some_and(StartupStop::is_cancelled) {
         return Ok(None);
       }
-      if request.get("owner_run_id").and_then(Value::as_str) != Some(run_id) {
+      if request.get("owner_run_id").and_then(CompactValue::as_str) != Some(run_id) {
         continue;
       }
-      let Some(request_id) = request.get("request_id").and_then(Value::as_str).filter(|value| !value.is_empty()) else {
+      let Some(request_id) = request.get("request_id").and_then(CompactValue::as_str).filter(|value| !value.is_empty())
+      else {
         continue;
       };
       if self.replay_close_request(session_id, request_id)?.is_some_and(|(status, _)| status == 200) {
         continue;
       }
-      let evidence = evidence_from_close_request(&request)?;
+      let request_value = request.to_value();
+      let evidence = evidence_from_close_request(&request_value)?;
       let run = self.store().read_run_sync(session_id, run_id)?;
       let claimed = run.map(|run| run.input_event_ids.into_iter().collect()).unwrap_or_default();
       let exclude_run_ids = HashSet::from([run_id.to_string()]);

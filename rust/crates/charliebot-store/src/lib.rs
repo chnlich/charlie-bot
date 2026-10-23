@@ -2,6 +2,7 @@
 
 pub mod aggregator;
 pub mod chat_events;
+pub mod compact;
 mod control;
 pub mod control_events;
 mod events;

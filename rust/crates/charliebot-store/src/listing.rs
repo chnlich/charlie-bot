@@ -776,6 +776,6 @@ mod tests {
     assert_eq!(listed, ["pinned"]);
     let events = store.load_chat_events_sync("pinned").unwrap();
     assert_eq!(events.len(), 1);
-    assert_eq!(events[0]["content"], "hello");
+    assert_eq!(events[0]["content"].as_str(), Some("hello"));
   }
 }

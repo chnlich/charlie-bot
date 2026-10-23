@@ -35,6 +35,7 @@ use charliebot_registry::backend::{
 };
 use charliebot_registry::context::{FeatureContext, StartupState};
 use charliebot_registry::sequence::{SequenceBinding, SequenceCompletion, SequenceController, SequenceTree};
+use charliebot_store::ChatEvent;
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskSpec, UtcDateTime};
 use charliebot_store::run_records;
 use charliebot_store::run_records::{RunKind, RunOutcome, RunOutcomeKind, RunRecord};
@@ -779,8 +780,12 @@ impl Stack {
     Ok(counters)
   }
 
-  pub fn run_events(&self, session_id: &str) -> anyhow::Result<Vec<Value>> {
+  pub fn run_events(&self, session_id: &str) -> anyhow::Result<Vec<ChatEvent>> {
     Ok(self.store().load_all_facts(session_id)?)
+  }
+
+  pub fn run_event_values(&self, session_id: &str) -> anyhow::Result<Vec<Value>> {
+    Ok(self.run_events(session_id)?.iter().map(|event| event.to_value()).collect())
   }
 
   pub fn run_records(&self, session_id: &str) -> anyhow::Result<Vec<RunRecord>> {
@@ -982,7 +987,9 @@ impl SyntheticLoop {
       return Ok(false);
     }
     let events = tree.load_events_sync(child_id)?;
-    if events.iter().any(|event| event["type"] == event_types::TASK_CLOSED) {
+    if events.iter().any(|event| {
+      event.get("type").and_then(charliebot_store::compact::CompactValue::as_str) == Some(event_types::TASK_CLOSED)
+    }) {
       return Ok(false);
     }
     let runs = tree.list_run_records_sync(child_id)?;
@@ -991,10 +998,7 @@ impl SyntheticLoop {
       return Ok(false);
     }
     for run in &runs {
-      if run.pid.is_none()
-        && !terminal(&run.id)
-        && !run_records::stop_requested_in_shared_events(&events, &run.id, None)
-      {
+      if run.pid.is_none() && !terminal(&run.id) && !run_records::stop_requested_in_events(&events, &run.id, None) {
         tree.request_stop(child_id, &run.id, &format!("loop-close:{}", run.id)).await?;
       }
     }
@@ -1294,12 +1298,25 @@ impl Stack {
 
   /// The `child_report` facts a manager node holds, in order.
   pub fn child_reports(&self, manager_id: &str) -> anyhow::Result<Vec<Value>> {
-    Ok(self.run_events(manager_id)?.into_iter().filter(|event| event["type"] == event_types::CHILD_REPORT).collect())
+    Ok(
+      self
+        .run_event_values(manager_id)?
+        .into_iter()
+        .filter(|event| event["type"] == event_types::CHILD_REPORT)
+        .collect(),
+    )
   }
 
   /// The `task_closed` facts of one node, in order.
   pub fn closes(&self, session_id: &str) -> anyhow::Result<Vec<Value>> {
-    Ok(self.run_events(session_id)?.into_iter().filter(|event| event["type"] == event_types::TASK_CLOSED).collect())
+    Ok(
+      self
+        .run_events(session_id)?
+        .iter()
+        .map(|event| event.to_value())
+        .filter(|event| event["type"] == event_types::TASK_CLOSED)
+        .collect(),
+    )
   }
 
   /// The ids of the node's runs of one kind, in record order.

@@ -40,7 +40,7 @@ impl DispatchExecutor for WakeCountingExecutor {
   fn launch<'a>(
     &'a self,
     _session_id: &'a str,
-    _pending_inputs: &'a [Value],
+    _pending_inputs: &'a [charliebot_store::ChatEvent],
     _launch_run_id: Option<&'a str>,
   ) -> BoxFuture<'a, StoreResult<Option<String>>> {
     Box::pin(async move {
@@ -858,7 +858,7 @@ async fn acknowledgement_replays_and_refuses_unknown_inputs() {
     .await
     .unwrap();
   assert_eq!(already["input_ids"], json!([]));
-  assert_eq!(already["already_acknowledged"], json!([input["id"]]));
+  assert_eq!(already["already_acknowledged"], json!([input["id"].to_value()]));
   let unknown = h.completion.acknowledge_inputs(&task.id, "ack-3", &["missing-input".into()], "handled", &caller).await;
   assert!(
     matches!(unknown, Err(StoreError::Conflict(blockers)) if blockers == vec![format!("input(s) not pending for {}: missing-input", task.id)])
@@ -898,7 +898,7 @@ async fn sequence_completion_requires_proven_run_and_empty_delivery_is_cancelled
   assert_eq!(close["actor"], ACTOR_SYSTEM);
   assert_eq!(close["outcome"], "completed");
   assert_eq!(close["sequence_outcome"], "completed");
-  assert_eq!(close["run_ids"], json!(["run-iter-1"]));
+  assert_eq!(close["run_ids"].to_value(), json!(["run-iter-1"]));
 
   let empty = h.base.create_task("empty", Some(&root.id), TaskProfile::Worker, "Empty").await;
   h.completion
@@ -973,7 +973,7 @@ async fn sequence_noncompleted_outcomes_record_evidence_as_content() {
       .unwrap();
     assert_eq!(close["outcome"], "cancelled");
     assert_eq!(close["sequence_outcome"], outcome);
-    assert_eq!(close["run_ids"], json!([run_id]));
+    assert_eq!(close["run_ids"].to_value(), json!([run_id]));
   }
 }
 
@@ -1033,9 +1033,9 @@ async fn synthetic_sequence_controller_closes_after_its_live_iteration_finishes(
     .into_iter()
     .find(|event| event["type"] == event_types::TASK_CLOSED)
     .unwrap();
-  assert_eq!(closed["closed_event_id"], close["id"]);
+  assert_eq!(closed["closed_event_id"], close["id"].to_value());
   assert_eq!(close["sequence_outcome"], "failed");
-  assert_eq!(close["run_ids"], json!(["iteration-run"]));
+  assert_eq!(close["run_ids"].to_value(), json!(["iteration-run"]));
 }
 
 #[tokio::test]
@@ -1264,7 +1264,7 @@ async fn user_message_restores_archived_chain_and_becomes_its_only_pending_input
       .expect("session stream stays open");
     let frame: Value = serde_json::from_str(&frame).unwrap();
     assert_eq!(frame["type"], "message");
-    assert_eq!(frame["message"]["id"], reopens[0]["id"]);
+    assert_eq!(frame["message"]["id"], reopens[0]["id"].to_value());
   }
   let pending = h.dispatcher.pending_inputs(&leaf.id).unwrap();
   assert_eq!(pending.iter().map(|event| event["id"].as_str().unwrap()).collect::<Vec<_>>(), ["new-input"]);
@@ -1330,7 +1330,7 @@ async fn user_message_route_restores_the_chain_and_refuses_archived_agent_input(
   }
   let pending = h.dispatcher.pending_inputs(&leaf.id).unwrap();
   assert_eq!(pending.len(), 1);
-  assert_eq!(pending[0]["id"], body["input_event_id"]);
+  assert_eq!(pending[0]["id"].to_value(), body["input_event_id"]);
 }
 
 #[tokio::test]
@@ -1375,14 +1375,14 @@ async fn completion_routes_cover_blockers_replay_ack_cancel_and_unarchive() {
   let ack = h
     .post(
       &format!("/api/sessions/{}/task-inputs/acknowledge", root.id),
-      json!({"request_id":"ack-root-report","input_ids":[pending[0]["id"]],"note":"read report"}),
+      json!({"request_id":"ack-root-report","input_ids":[pending[0]["id"].to_value()],"note":"read report"}),
     )
     .await;
   assert_eq!(ack.0, StatusCode::OK);
   let ack_replay = h
     .post(
       &format!("/api/sessions/{}/task-inputs/acknowledge", root.id),
-      json!({"request_id":"ack-root-report","input_ids":[pending[0]["id"]],"note":"changed"}),
+      json!({"request_id":"ack-root-report","input_ids":[pending[0]["id"].to_value()],"note":"changed"}),
     )
     .await;
   assert_eq!(ack_replay.1, ack.1);

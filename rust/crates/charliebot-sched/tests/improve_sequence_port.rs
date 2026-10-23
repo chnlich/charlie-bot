@@ -43,7 +43,7 @@ impl DispatchExecutor for ParentWakes {
   fn launch<'a>(
     &'a self,
     session_id: &'a str,
-    _pending_inputs: &'a [Value],
+    _pending_inputs: &'a [charliebot_store::ChatEvent],
     _launch_run_id: Option<&'a str>,
   ) -> BoxFuture<'a, StoreResult<Option<String>>> {
     let session_id = session_id.to_string();
@@ -235,7 +235,7 @@ impl LoopHarness {
     }
   }
 
-  fn events(&self, session_id: &str) -> Vec<Value> {
+  fn events(&self, session_id: &str) -> Vec<charliebot_store::ChatEvent> {
     self.stack.run_events(session_id).expect("session facts read")
   }
 
@@ -243,7 +243,11 @@ impl LoopHarness {
     self
       .events(&self.manager.id)
       .into_iter()
-      .filter(|event| event["type"] == event_types::CHILD_REPORT && event["child_session_id"] == self.child.id)
+      .filter(|event| {
+        event["type"].as_str() == Some(event_types::CHILD_REPORT)
+          && event["child_session_id"].as_str() == Some(self.child.id.as_str())
+      })
+      .map(|event| event.to_value())
       .collect()
   }
 
@@ -274,8 +278,12 @@ fn event_script(event: &Value, exit_code: i32) -> String {
   format!("printf '%s\\n' '{}'; exit {exit_code}", event)
 }
 
-fn child_close_facts(events: &[Value]) -> Vec<&Value> {
-  events.iter().filter(|event| event["type"] == event_types::TASK_CLOSED).collect()
+fn child_close_facts(events: &[charliebot_store::ChatEvent]) -> Vec<Value> {
+  events
+    .iter()
+    .filter(|event| event["type"].as_str() == Some(event_types::TASK_CLOSED))
+    .map(|event| event.to_value())
+    .collect()
 }
 
 fn run_events_of(harness: &LoopHarness, run_id: &str) -> anyhow::Result<Vec<Value>> {
@@ -578,7 +586,7 @@ async fn replaying_an_iteration_report_is_idempotent() -> anyhow::Result<()> {
     .dispatch
     .deliver_child_report(
       &harness.child.id,
-      json!({"id": original["child_event_id"]}),
+      json!({"id": original["child_event_id"]}).into(),
       original["outcome"].as_str().expect("outcome is text"),
       original["summary"].as_str().expect("summary is text"),
       Some(&refs),
@@ -587,7 +595,7 @@ async fn replaying_an_iteration_report_is_idempotent() -> anyhow::Result<()> {
     .await?;
 
   assert!(!created);
-  assert_eq!(replayed["id"], original["id"]);
+  assert_eq!(replayed["id"], charliebot_store::compact::CompactValue::from(original["id"].clone()));
   assert_eq!(harness.events(&harness.manager.id).len(), event_count);
   assert_eq!(harness.wake_count(), wake_count);
   Ok(())

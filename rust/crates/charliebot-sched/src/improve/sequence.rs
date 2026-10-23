@@ -20,6 +20,7 @@ use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types::{RUN_FINISHED, TASK_CLOSED};
 use charliebot_core::repo_root::RepoRoot;
 use charliebot_registry::sequence::SequenceTree;
+use charliebot_store::compact::CompactValue;
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskSpec, TaskType};
 use charliebot_store::run_records::{RUN_EVENTS_NAME, RunKind, RunRecord, SequenceRef};
 use charliebot_store::{CreateTask, SharedChatEvent, Store, StoreError, StoreResult, TaskCaller, control_events};
@@ -725,8 +726,8 @@ async fn deliver_iteration_report(
     .iter()
     .rev()
     .find(|event| {
-      event.get("type").and_then(Value::as_str) == Some(RUN_FINISHED)
-        && event.get("run_id").and_then(Value::as_str) == Some(run.id.as_str())
+      event.get("type").and_then(CompactValue::as_str) == Some(RUN_FINISHED)
+        && event.get("run_id").and_then(CompactValue::as_str) == Some(run.id.as_str())
     })
     .with_context(|| {
       format!(
@@ -734,7 +735,7 @@ async fn deliver_iteration_report(
         spec.loop_id, run.id
       )
     })?;
-  let finished_id = finished.get("id").and_then(Value::as_str).unwrap_or_default();
+  let finished_id = finished.get("id").and_then(CompactValue::as_str).unwrap_or_default();
   let mut header = format!(
     "[Improve loop {} · iteration {iteration}/{}] report_valid={}",
     spec.loop_id,
@@ -755,7 +756,7 @@ async fn deliver_iteration_report(
     .dispatch()
     .deliver_child_report(
       spec.child_id,
-      json!({"id": format!("improve-iteration:{finished_id}")}),
+      json!({"id": format!("improve-iteration:{finished_id}")}).into(),
       outcome,
       &format!("{header}\n\n{}", judgment.summary),
       Some(result_refs.as_slice()),
@@ -857,8 +858,8 @@ async fn close_ended_loop_child_inner(
 
 fn has_close_fact(events: &[SharedChatEvent], request_id: &str) -> bool {
   events.iter().any(|event| {
-    event.get("type").and_then(Value::as_str) == Some(TASK_CLOSED)
-      && event.get("request_id").and_then(Value::as_str) == Some(request_id)
+    event.get("type").and_then(CompactValue::as_str) == Some(TASK_CLOSED)
+      && event.get("request_id").and_then(CompactValue::as_str) == Some(request_id)
   })
 }
 

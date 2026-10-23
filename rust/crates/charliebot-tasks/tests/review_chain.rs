@@ -223,7 +223,14 @@ fn write_events(path: &Path, events: &[Value]) -> anyhow::Result<()> {
 }
 
 fn child_reports(stack: &Stack, parent_id: &str) -> anyhow::Result<Vec<Value>> {
-  Ok(stack.run_events(parent_id)?.into_iter().filter(|event| event["type"] == event_types::CHILD_REPORT).collect())
+  Ok(
+    stack
+      .run_events(parent_id)?
+      .into_iter()
+      .filter(|event| event["type"].as_str() == Some(event_types::CHILD_REPORT))
+      .map(|event| event.to_value())
+      .collect(),
+  )
 }
 
 /// The parent's child reports, polled until *count* arrive: the report dispatches after the run's
@@ -721,12 +728,12 @@ async fn implement_delivery_requires_review_and_real_landing() -> anyhow::Result
   let close = stack
     .run_events(&worker.id)?
     .into_iter()
-    .find(|event| event["type"] == event_types::TASK_CLOSED)
+    .find(|event| event["type"].as_str() == Some(event_types::TASK_CLOSED))
     .context("automatic completion writes task_closed")?;
   let refs = close["result_refs"].as_array().context("completion carries result refs")?;
-  assert!(refs.iter().any(|value| value == "run:run-work"));
+  assert!(refs.iter().any(|value| value.as_str() == Some("run:run-work")));
   assert!(refs.iter().any(|value| value.as_str().is_some_and(|value| value.starts_with("spec:"))));
-  assert!(refs.iter().any(|value| value == &format!("review:{}", review_run.id)));
+  assert!(refs.iter().any(|value| value.as_str() == Some(format!("review:{}", review_run.id).as_str())));
   assert!(refs.iter().any(|value| value.as_str().is_some_and(|value| value.starts_with("landed:origin/main@"))));
   let work = stack.store().read_run_sync(&worker.id, "run-work")?.expect("work run remains recorded");
   wait_for_worktree_removed(Path::new(work.worktree_path.as_deref().context("work run has a worktree")?)).await?;
@@ -755,9 +762,18 @@ async fn repo_less_implement_delivers_after_review_passes() -> anyhow::Result<()
   let review_run = wait_for_review(&stack, &worker.id, "run-work").await?;
   assert_eq!(wait_for_run(&stack, &guard, &worker.id, &review_run.id).await?, RunOutcomeKind::Success);
   wait_for_task_state(&stack, &worker.id, "completed").await?;
-  let close =
-    stack.run_events(&worker.id)?.into_iter().find(|event| event["type"] == event_types::TASK_CLOSED).unwrap();
-  assert!(close["result_refs"].as_array().unwrap().iter().any(|value| value == &format!("review:{}", review_run.id)));
+  let close = stack
+    .run_events(&worker.id)?
+    .into_iter()
+    .find(|event| event["type"].as_str() == Some(event_types::TASK_CLOSED))
+    .unwrap();
+  assert!(
+    close["result_refs"]
+      .as_array()
+      .unwrap()
+      .iter()
+      .any(|value| value.as_str() == Some(format!("review:{}", review_run.id).as_str()))
+  );
   assert!(
     !close["result_refs"]
       .as_array()
@@ -1409,10 +1425,14 @@ async fn commit_published_only_on_origin_base_closes_the_reviewed_task() -> anyh
   let close = stack
     .run_events(&worker.id)?
     .into_iter()
-    .find(|event| event["type"] == event_types::TASK_CLOSED)
+    .find(|event| event["type"].as_str() == Some(event_types::TASK_CLOSED))
     .context("review delivery closes the task")?;
   assert!(
-    close["result_refs"].as_array().unwrap().iter().any(|value| value == &format!("landed:origin/main@{commit}"))
+    close["result_refs"]
+      .as_array()
+      .unwrap()
+      .iter()
+      .any(|value| value.as_str() == Some(format!("landed:origin/main@{commit}").as_str()))
   );
   Ok(())
 }

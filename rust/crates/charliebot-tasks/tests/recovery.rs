@@ -28,6 +28,7 @@ use charliebot_registry::backend::{
 };
 use charliebot_registry::caller::CallerIdentity;
 use charliebot_registry::sequence::{SequenceCompletion, SequenceExecutor};
+use charliebot_store::ChatEvent;
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskSpec, TaskType, UtcDateTime};
 use charliebot_store::run_records::{self, RAW_LOG_NAME, RunKind, RunOutcome, RunOutcomeKind, RunRecord, SequenceRef};
 use charliebot_store::write_faults::{self, Hit};
@@ -70,10 +71,10 @@ async fn post_delegate(router: &axum::Router, body: Value) -> anyhow::Result<(St
 }
 
 /// The `run_stop_requested` facts of one run, as their request ids.
-fn stop_request_ids(events: &[Value], run_id: &str) -> Vec<String> {
+fn stop_request_ids(events: &[ChatEvent], run_id: &str) -> Vec<String> {
   events
     .iter()
-    .filter(|event| event["type"] == "run_stop_requested" && event["run_id"] == run_id)
+    .filter(|event| event["type"].as_str() == Some("run_stop_requested") && event["run_id"].as_str() == Some(run_id))
     .map(|event| event["request_id"].as_str().unwrap_or_default().to_string())
     .collect()
 }
@@ -106,7 +107,8 @@ fn prompt_facts(stack: &Stack, session_id: &str) -> anyhow::Result<Vec<Value>> {
       .store()
       .load_chat_events_sync(session_id)?
       .into_iter()
-      .filter(|event| event["type"] == event_types::PROMPT_CHANGED)
+      .filter(|event| event["type"].as_str() == Some(event_types::PROMPT_CHANGED))
+      .map(|event| event.to_value())
       .collect(),
   )
 }
@@ -201,9 +203,12 @@ async fn delegate_creates_one_worker_and_replays_the_same_run() -> anyhow::Resul
     .store()
     .load_chat_events_sync(&parent.id)?
     .into_iter()
-    .find(|event| event["type"] == event_types::TASK_DELEGATED && event["child_session_id"] == child_id)
+    .find(|event| {
+      event["type"].as_str() == Some(event_types::TASK_DELEGATED)
+        && event["child_session_id"].as_str() == Some(child_id.as_str())
+    })
     .expect("the parent's chat holds the delegated-task card");
-  assert_eq!(card["thread_id"], run_id);
+  assert_eq!(card["thread_id"].as_str(), Some(run_id.as_str()));
 
   // The completed child report schedules manager turns in the background. Wait for the report to be consumed and
   // track each turn's process so a test exit cannot leave one stopped at its launch gate.
@@ -867,7 +872,14 @@ fn worktree(repo: &SyntheticRepo, stack: &Stack, _session_id: &str, run_id: &str
 }
 
 fn child_reports(stack: &Stack, manager_id: &str) -> anyhow::Result<Vec<Value>> {
-  Ok(stack.run_events(manager_id)?.into_iter().filter(|event| event["type"] == event_types::CHILD_REPORT).collect())
+  Ok(
+    stack
+      .run_events(manager_id)?
+      .into_iter()
+      .filter(|event| event["type"].as_str() == Some(event_types::CHILD_REPORT))
+      .map(|event| event.to_value())
+      .collect(),
+  )
 }
 
 fn repo_commit(repo: &SyntheticRepo, branch: &str) -> anyhow::Result<String> {
@@ -915,7 +927,7 @@ fn run_ids_of_kind(stack: &Stack, session_id: &str, kind: RunKind) -> anyhow::Re
 }
 
 fn closes_of(stack: &Stack, session_id: &str) -> anyhow::Result<usize> {
-  Ok(stack.run_events(session_id)?.iter().filter(|event| event["type"] == "task_closed").count())
+  Ok(stack.run_events(session_id)?.iter().filter(|event| event["type"].as_str() == Some("task_closed")).count())
 }
 
 /// A result event the scripted test backend translates as a successful terminal event.
@@ -1058,12 +1070,10 @@ async fn recovery_spawns_no_review_behind_a_registered_unstarted_work_run() -> a
 
   stack.boot().await?;
   settle_until(|| {
-    Ok(
-      stack
-        .run_events(&worker.id)?
-        .iter()
-        .any(|event| event["type"] == event_types::RUN_LAUNCH_WITHHELD && event["run_id"] == "run-work-queued"),
-    )
+    Ok(stack.run_events(&worker.id)?.iter().any(|event| {
+      event["type"].as_str() == Some(event_types::RUN_LAUNCH_WITHHELD)
+        && event["run_id"].as_str() == Some("run-work-queued")
+    }))
   })
   .await?;
   assert!(run_ids_of_kind(&stack, &worker.id, RunKind::Review)?.is_empty());
@@ -1071,7 +1081,7 @@ async fn recovery_spawns_no_review_behind_a_registered_unstarted_work_run() -> a
   assert_eq!(queued.pid, None);
   let events = stack.run_events(&worker.id)?;
   assert_eq!(run_records::terminal_outcome(&events, "run-work-queued")?, None);
-  assert!(!events.iter().any(|event| event["type"] == "run_stop_requested"));
+  assert!(!events.iter().any(|event| event["type"].as_str() == Some("run_stop_requested")));
   Ok(())
 }
 
@@ -1460,7 +1470,9 @@ async fn recovery_archives_worker_after_deduplicating_its_existing_failure_repor
     .run_events(&worker.id)?
     .into_iter()
     .rev()
-    .find(|event| event["type"] == event_types::RUN_FINISHED && event["run_id"] == "run-failed")
+    .find(|event| {
+      event["type"].as_str() == Some(event_types::RUN_FINISHED) && event["run_id"].as_str() == Some("run-failed")
+    })
     .context("the failed worker run has its terminal event")?;
   stack.dispatch.set_executor(None);
   let result_refs = vec!["run:run-failed".to_string()];
@@ -1520,7 +1532,14 @@ async fn reconcile_replays_an_already_delivered_blocked_report_without_duplicati
 
 /// The loop child's close fact and report counts, read from the store.
 fn closes(stack: &Stack, session_id: &str) -> anyhow::Result<Vec<Value>> {
-  Ok(stack.run_events(session_id)?.into_iter().filter(|event| event["type"] == event_types::TASK_CLOSED).collect())
+  Ok(
+    stack
+      .run_events(session_id)?
+      .into_iter()
+      .filter(|event| event["type"].as_str() == Some(event_types::TASK_CLOSED))
+      .map(|event| event.to_value())
+      .collect(),
+  )
 }
 
 fn stop_requests(stack: &Stack, session_id: &str, run_id: &str) -> anyhow::Result<usize> {
@@ -1528,7 +1547,9 @@ fn stop_requests(stack: &Stack, session_id: &str, run_id: &str) -> anyhow::Resul
     stack
       .run_events(session_id)?
       .iter()
-      .filter(|event| event["type"] == event_types::RUN_STOP_REQUESTED && event["run_id"] == run_id)
+      .filter(|event| {
+        event["type"].as_str() == Some(event_types::RUN_STOP_REQUESTED) && event["run_id"].as_str() == Some(run_id)
+      })
       .count(),
   )
 }
@@ -1710,7 +1731,9 @@ fn run_finished_count(stack: &Stack, session_id: &str, run_id: &str) -> anyhow::
     stack
       .run_events(session_id)?
       .iter()
-      .filter(|event| event["type"] == event_types::RUN_FINISHED && event["run_id"] == run_id)
+      .filter(|event| {
+        event["type"].as_str() == Some(event_types::RUN_FINISHED) && event["run_id"].as_str() == Some(run_id)
+      })
       .count(),
   )
 }
@@ -2495,7 +2518,9 @@ async fn retry_repairs_a_half_written_end_record_from_the_raw_log() -> anyhow::R
   let finished = stack
     .run_events(&worker.id)?
     .iter()
-    .filter(|event| event["type"] == event_types::RUN_FINISHED && event["run_id"] == run_id.as_str())
+    .filter(|event| {
+      event["type"].as_str() == Some(event_types::RUN_FINISHED) && event["run_id"].as_str() == Some(run_id.as_str())
+    })
     .count();
   assert_eq!(finished, 1, "the retry never wrote a second end record");
   settle_until(|| Ok(stack.adapter.landing_retry_nodes().is_empty())).await?;

@@ -1581,6 +1581,7 @@ mod tests {
   use charliebot_registry::sequence::{RestoreOutcome, SequenceCompletion};
   use charliebot_registry::store_hooks;
   use charliebot_registry::{FeatureContext, Registry};
+  use charliebot_store::compact::CompactValue;
   use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskSpec};
   use charliebot_store::{ControlGuard, CreateTask, Store, StoreError, StoreResult, TaskCaller};
   use futures_util::future::BoxFuture;
@@ -2280,12 +2281,15 @@ mod tests {
     let events = features.store.load_all_facts(SESSION_ID).expect("read task events");
     let scheduled = events
       .iter()
-      .filter(|event| event.get("type").and_then(Value::as_str) == Some(event_types::SCHEDULED_TRIGGER))
+      .filter(|event| event.get("type").and_then(CompactValue::as_str) == Some(event_types::SCHEDULED_TRIGGER))
       .collect::<Vec<_>>();
     assert_eq!(scheduled.len(), 1);
-    assert_eq!(scheduled[0].get("id").and_then(Value::as_str), Some(trigger.id.as_str()));
+    assert_eq!(scheduled[0].get("id").and_then(CompactValue::as_str), Some(trigger.id.as_str()));
     assert!(
-      scheduled[0].get("content").and_then(Value::as_str).is_some_and(|content| content.contains("synthetic wake"))
+      scheduled[0]
+        .get("content")
+        .and_then(CompactValue::as_str)
+        .is_some_and(|content| content.contains("synthetic wake"))
     );
   }
 
@@ -2312,7 +2316,10 @@ mod tests {
     charliebot_tasks::master_trigger::trigger_master(&features, request).await.expect("dispatch existing wake");
     let events = features.store.load_all_facts(SESSION_ID).expect("read task events");
     assert_eq!(
-      events.iter().filter(|event| event.get("id").and_then(Value::as_str) == Some("synthetic-existing-wake")).count(),
+      events
+        .iter()
+        .filter(|event| event.get("id").and_then(CompactValue::as_str) == Some("synthetic-existing-wake"))
+        .count(),
       1
     );
   }
@@ -2370,7 +2377,9 @@ mod tests {
     assert_eq!(fresh.fire_reason.as_deref(), Some("target task is archived"));
     let events = features.store.load_all_facts(SESSION_ID).expect("read task events");
     assert!(
-      !events.iter().any(|event| event.get("type").and_then(Value::as_str) == Some(event_types::SCHEDULED_TRIGGER))
+      !events
+        .iter()
+        .any(|event| event.get("type").and_then(CompactValue::as_str) == Some(event_types::SCHEDULED_TRIGGER))
     );
   }
 

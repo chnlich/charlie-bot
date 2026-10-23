@@ -460,7 +460,7 @@ mod tests {
       charliebot_store::metadata::SessionStatus::Active
     );
     let events = features.store.load_chat_events_sync(&node.id).unwrap();
-    assert!(events.iter().any(|event| event["type"] == "synthetic_history"));
+    assert!(events.iter().any(|event| event["type"].as_str() == Some("synthetic_history")));
     assert!(!path.exists());
   }
 
@@ -518,7 +518,7 @@ mod tests {
     assert!(meta.extra.get("last_scheduled_run").and_then(Value::as_str).is_some());
     assert_eq!(meta.extra.get("last_run_status").and_then(Value::as_str), Some("success"));
     let events = features.store.load_chat_events_sync(session_id).unwrap();
-    assert!(events.iter().any(|event| event["type"] == charliebot_core::event_types::HANDLER_RESULT));
+    assert!(events.iter().any(|event| event["type"].as_str() == Some(charliebot_core::event_types::HANDLER_RESULT)));
     let projection = features.store.get_message_projection(session_id).unwrap();
     assert!(projection.is_some());
   }
@@ -627,7 +627,7 @@ mod tests {
     let reopened = features.store.load_all_facts(&node.id).unwrap();
     let reasons = reopened
       .iter()
-      .filter(|event| event["type"] == event_types::TASK_REOPENED)
+      .filter(|event| event["type"].as_str() == Some(event_types::TASK_REOPENED))
       .map(|event| event["reason"].as_str().unwrap())
       .collect::<Vec<_>>();
     assert_eq!(reasons, ["cron enable"]);

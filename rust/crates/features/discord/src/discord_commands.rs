@@ -10,6 +10,8 @@ use axum::http::StatusCode;
 use charliebot_chat_threads::thread_entry::{self, IdOrdering, ThreadAdapter, ThreadReplyError};
 use charliebot_core::event_types;
 use charliebot_core::pyfmt;
+use charliebot_store::ChatEvent;
+use charliebot_store::compact::CompactValue;
 use charliebot_store::message_utils::master_done_input_event_ids;
 use serde_json::{Value, json};
 
@@ -39,15 +41,15 @@ fn message_view(message: &Message, unread: bool, summon: bool, allowed_users: &B
 /// The mention message ids of the session's pending summons (`_pending_summon_mention_ids`). A summon is pending while
 /// its event carries the discord block without `nudge_of`, no master_done names its id, no lost-summon backfill marker
 /// names it, and it has a mention id.
-fn pending_summon_mention_ids(events: &[Value]) -> HashSet<String> {
+fn pending_summon_mention_ids(events: &[ChatEvent]) -> HashSet<String> {
   let backfill_key = DISCORD.backfill_key();
   let mut answered: HashSet<String> = HashSet::new();
   let mut marked: HashSet<String> = HashSet::new();
   for event in events {
-    if event.get("type").and_then(Value::as_str) == Some(event_types::MASTER_DONE) {
+    if event.get("type").and_then(CompactValue::as_str) == Some(event_types::MASTER_DONE) {
       answered.extend(master_done_input_event_ids(event));
     } else if let Some(marker) = event.get(&backfill_key) {
-      marked.extend(marker.get(event_types::INPUT_EVENT_ID).and_then(Value::as_str).map(str::to_string));
+      marked.extend(marker.get(event_types::INPUT_EVENT_ID).and_then(CompactValue::as_str).map(str::to_string));
     }
   }
   let mut pending = HashSet::new();
@@ -55,7 +57,7 @@ fn pending_summon_mention_ids(events: &[Value]) -> HashSet<String> {
     let Some(block) = event.get(DISCORD.name).filter(|block| block.is_object()) else {
       continue;
     };
-    if event.get("type").and_then(Value::as_str) != Some(event_types::AGENT_MESSAGE) {
+    if event.get("type").and_then(CompactValue::as_str) != Some(event_types::AGENT_MESSAGE) {
       continue;
     }
     let id = event["id"].as_str().expect("a chat event carries a string id");
@@ -63,7 +65,7 @@ fn pending_summon_mention_ids(events: &[Value]) -> HashSet<String> {
       continue;
     }
     if let Some(mention) = block.get(DISCORD.mention_key).filter(|mention| !mention.is_null()) {
-      pending.insert(pyfmt::python_str(mention));
+      pending.insert(pyfmt::python_str(&mention.to_value()));
     }
   }
   pending
@@ -84,7 +86,7 @@ fn discord_failure(error: anyhow::Error) -> ThreadReplyError {
 }
 
 /// The session's chat events in log order, read on a worker thread as `asyncio.to_thread` does.
-async fn load_chat_events(bot: &Bot, session_id: &str) -> Result<Vec<Value>, ThreadReplyError> {
+async fn load_chat_events(bot: &Bot, session_id: &str) -> Result<Vec<ChatEvent>, ThreadReplyError> {
   let store = Arc::clone(&bot.features.store);
   let session_id = session_id.to_string();
   let events = tokio::task::spawn_blocking(move || store.load_chat_events_sync(&session_id))

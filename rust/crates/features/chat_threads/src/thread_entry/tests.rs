@@ -129,7 +129,7 @@ impl DispatchExecutor for RecordingExecutor {
   fn launch<'a>(
     &'a self,
     session_id: &'a str,
-    pending_inputs: &'a [Value],
+    pending_inputs: &'a [charliebot_store::ChatEvent],
     _launch_run_id: Option<&'a str>,
   ) -> BoxFuture<'a, StoreResult<Option<String>>> {
     Box::pin(async move {
@@ -137,7 +137,7 @@ impl DispatchExecutor for RecordingExecutor {
         .launches
         .lock()
         .expect("the launch log is never poisoned")
-        .push((session_id.to_string(), pending_inputs.to_vec()));
+        .push((session_id.to_string(), pending_inputs.iter().map(|event| event.to_value()).collect()));
       Ok(None)
     })
   }
@@ -244,11 +244,18 @@ impl Home {
   }
 
   fn events(&self, session_id: &str) -> Vec<Value> {
-    self.features.store.load_chat_events_sync(session_id).expect("the chat log reads")
+    self
+      .features
+      .store
+      .load_chat_events_sync(session_id)
+      .expect("the chat log reads")
+      .iter()
+      .map(charliebot_store::ChatEvent::to_value)
+      .collect()
   }
 
   async fn append(&self, session_id: &str, event: Value) -> Value {
-    self.features.store.append_chat_event(session_id, event).await.expect("the chat event appends")
+    self.features.store.append_chat_event(session_id, event).await.expect("the chat event appends").to_value()
   }
 
   async fn triggers(&self, session_id: &str) -> Vec<PendingTrigger> {
@@ -465,7 +472,7 @@ fn newest_thread_input_picks_the_newest_fakechat_block() {
   ];
   let ids = |list: &[&str]| list.iter().map(|id| id.to_string()).collect::<Vec<String>>();
   let bound = newest_thread_input(&FAKECHAT, &events, &ids(&["b1", "s1", "s2", "s3"]));
-  assert_eq!(bound, Some(("s2".to_string(), &json!({"thread": "t1", "nudge_of": "s1"}))));
+  assert_eq!(bound, Some(("s2".to_string(), json!({"thread": "t1", "nudge_of": "s1"}))));
   assert_eq!(newest_thread_input(&FAKECHAT, &events, &ids(&["b1"])), None);
   assert_eq!(newest_thread_input(&FAKECHAT, &events, &ids(&["s3"])), None);
 }

@@ -211,7 +211,7 @@ async fn bare_branch_base_with_unpushed_local_commit_launch_fails() -> anyhow::R
   assert!(!error.contains("fast-forward"), "{error}");
   // The error text is the run's evidence, never an ordinary chat row.
   let rows = stack.store().load_chat_events_sync(&worker.id)?;
-  assert!(rows.iter().all(|row| !row.to_string().contains(&error)), "the error text is in no chat row");
+  assert!(rows.iter().all(|row| !row.to_value().to_string().contains(&error)), "the error text is in no chat row");
   assert!(!stack.store().run_dir(&worker.id, "run-work").join("launch_prompt.md").exists(), "no launch prompt");
 
   // The failed launch reports to the parent through the after-run path, which runs after the terminal fact.
@@ -677,7 +677,8 @@ async fn a_worker_launch_failure_writes_no_turn_launch_error() -> anyhow::Result
     .load_chat_events_sync(&worker.id)?
     .into_iter()
     .chain(stack.run_events(&worker.id)?)
-    .filter(|event| event["source"] == "turn_launch")
+    .filter(|event| event["source"].as_str() == Some("turn_launch"))
+    .map(|event| event.to_value())
     .collect();
   assert!(notices.is_empty(), "a worker launch writes no turn launch notice: {notices:?}");
   Ok(())
@@ -1496,7 +1497,7 @@ async fn routed_verify_delegation_persists_the_route_and_excludes_its_session_ba
   let events = stack.store().load_chat_events_sync(&manager.id)?;
   let card =
     events.iter().find(|event| event["type"] == event_types::TASK_DELEGATED).expect("the delegation card exists");
-  assert_eq!(card["route"], json!({"backends": ["fake2"], "reason": "verify route"}));
+  assert_eq!(card["route"].to_value(), json!({"backends": ["fake2"], "reason": "verify route"}));
 
   let request: Value = serde_json::from_slice(&std::fs::read(capture)?)?;
   assert_eq!(request["role"], "verify");

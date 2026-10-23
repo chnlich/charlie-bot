@@ -452,7 +452,9 @@ async fn delegate_task_returns_403_when_takeoff_gate_blocks() -> anyhow::Result<
     post_delegate(&routes::routes(&stack.features), delegate_body(&manager.id, &repo, "implement")).await?;
   assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
   assert!(stack.store().child_ids(&manager.id)?.is_empty());
-  let delegated = stack.run_events(&manager.id)?.iter().any(|event| event["type"] == event_types::TASK_DELEGATED);
+  let delegated = stack.run_events(&manager.id)?.iter().any(|event| {
+    event.get("type").and_then(charliebot_store::compact::CompactValue::as_str) == Some(event_types::TASK_DELEGATED)
+  });
   assert!(!delegated, "no delegation fact was written");
   assert!(scripts.builds().is_empty());
   Ok(())
@@ -847,7 +849,14 @@ async fn relay(stack: &Stack, from: &str, to: &str, content: &str) -> anyhow::Re
 
 /// The `agent_message` events admitted into `session_id`, in order.
 fn admitted_messages(stack: &Stack, session_id: &str) -> anyhow::Result<Vec<Value>> {
-  Ok(stack.run_events(session_id)?.into_iter().filter(|event| event["type"] == event_types::AGENT_MESSAGE).collect())
+  Ok(
+    stack
+      .run_events(session_id)?
+      .iter()
+      .map(|event| event.to_value())
+      .filter(|event| event["type"] == event_types::AGENT_MESSAGE)
+      .collect(),
+  )
 }
 
 /// `test_agent_message.py::test_session_message_refuses_an_archived_task_node`: a relay to an archived task node is

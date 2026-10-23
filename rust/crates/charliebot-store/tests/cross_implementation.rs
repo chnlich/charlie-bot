@@ -80,7 +80,7 @@ async fn python_and_rust_store_operations_write_identical_files_and_read_each_ot
     if *operation == "event_append" {
       let python_events = python_store.load_chat_events_sync(SESSION_ID).unwrap();
       assert_eq!(python_events.len(), 1);
-      assert_eq!(python_events[0]["id"], "synthetic-event-id");
+      assert_eq!(python_events[0]["id"].as_str(), Some("synthetic-event-id"));
       rust_store.load_chat_events_sync(SESSION_ID).unwrap();
       rust_store
         .append_chat_event(
@@ -233,14 +233,16 @@ async fn archive_updates_global_indexes_and_control_appends_require_the_store_gu
   assert_eq!(store.read_metadata_fresh(SESSION_ID).unwrap().unwrap().archive_offset, 1);
   let all = store.load_all_facts(SESSION_ID).unwrap();
   assert_eq!(all.iter().map(|event| event["id"].as_str().unwrap()).collect::<Vec<_>>(), ["old", "new"]);
+  let range: Vec<Value> =
+    store.load_chat_events_range(SESSION_ID, 0, 1).unwrap().0.iter().map(|event| event.to_value()).collect();
   assert_eq!(
-    store.load_chat_events_range(SESSION_ID, 0, 1).unwrap().0,
+    range,
     [json!({
       "type": "user", "id": "old", "timestamp": "2025-02-01T00:00:00Z"
     })]
   );
-  assert_eq!(store.load_chat_events_range(SESSION_ID, 1, 2).unwrap().0[0]["id"], "new");
-  assert_eq!(store.find_event_by_id(SESSION_ID, "old").unwrap().unwrap()["id"], "old");
+  assert_eq!(store.load_chat_events_range(SESSION_ID, 1, 2).unwrap().0[0]["id"].as_str(), Some("new"));
+  assert_eq!(store.find_event_by_id(SESSION_ID, "old").unwrap().unwrap()["id"].as_str(), Some("old"));
 
   let guard = store.control_lock().await;
   let event = store.append_control_fact(&guard, SESSION_ID, json!({"type": "task_closed"})).await.unwrap();
@@ -848,8 +850,12 @@ async fn python_and_rust_delegate_a_task_spec_into_the_same_node_run_and_spec_by
 
   let run_dir = shared_home.join("sessions").join(&child.id).join("data/runs/synthetic-delegate-run");
   assert_eq!(fs::read_to_string(run_dir.join("task_spec.md")).unwrap(), serde_json::to_string(&spec).unwrap());
-  let created =
-    store.load_chat_events_sync(&child.id).unwrap().into_iter().find(|event| event["type"] == "task_created").unwrap();
+  let created = store
+    .load_chat_events_sync(&child.id)
+    .unwrap()
+    .into_iter()
+    .find(|event| event["type"].as_str() == Some("task_created"))
+    .unwrap();
   assert!(created["task_spec_hash"].is_string());
   assert_eq!(normalized_files(&python_home), normalized_files(&shared_home));
 }
@@ -962,13 +968,9 @@ async fn stop_checks_process_identity_and_reconciles_after_the_fact_is_durable()
   let remained_alive = mismatched.try_wait().is_none();
   assert!(stop_error.to_string().contains("identity mismatch"));
   assert!(remained_alive);
-  assert!(
-    store
-      .load_all_facts(RUN_SESSION_ID)
-      .unwrap()
-      .iter()
-      .any(|event| event["type"] == "run_stop_requested" && event["run_id"] == "run-mismatch")
-  );
+  assert!(store.load_all_facts(RUN_SESSION_ID).unwrap().iter().any(|event| event["type"].as_str()
+    == Some("run_stop_requested")
+    && event["run_id"].as_str() == Some("run-mismatch")));
   assert_ne!(actual_start, "forged-start");
 
   let mut reconciled = isolated_sleep("30");
@@ -1129,7 +1131,13 @@ async fn a_late_stop_keeps_a_finished_runs_outcome_and_a_repeat_finish_keeps_its
     stop,
     StopResult { run_id: "run-done".to_string(), stop_requested: false, outcome: Some(RunOutcomeKind::Success) }
   );
-  assert!(!store.load_all_facts(RUN_SESSION_ID).unwrap().iter().any(|event| event["type"] == "run_stop_requested"));
+  assert!(
+    !store
+      .load_all_facts(RUN_SESSION_ID)
+      .unwrap()
+      .iter()
+      .any(|event| event["type"].as_str() == Some("run_stop_requested"))
+  );
 
   let guard = store.control_lock().await;
   let mut repeat = RunOutcome::new(RunOutcomeKind::Failed);
@@ -2162,7 +2170,8 @@ async fn range_read_matches_python_when_archive_offset_is_positive_and_lines_are
       )
       .unwrap();
     assert_eq!(has_more, window["has_more"].as_bool().unwrap(), "window {window}");
-    assert_eq!(serde_json::to_value(&events).unwrap(), window["events"], "window {window}");
+    let event_values = Value::Array(events.iter().map(|event| event.to_value()).collect());
+    assert_eq!(event_values, window["events"], "window {window}");
   }
 }
 
@@ -2243,7 +2252,7 @@ async fn load_all_facts_matches_python_fact_history_over_a_stale_archive_file() 
 
   let store = make_store(&case_dir.join("rust-home"));
   let facts = store.load_all_facts(SESSION_ID).unwrap();
-  assert_eq!(serde_json::to_value(&facts).unwrap(), Value::Array(expected));
+  assert_eq!(Value::Array(facts.iter().map(|event| event.to_value()).collect()), Value::Array(expected));
 }
 
 // The legacy layouts Python's readers still walk: a master run's raw log under

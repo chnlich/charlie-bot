@@ -54,8 +54,8 @@ async fn nudge(features: &Arc<FeatureContext>, session_id: &str, user_event_id: 
   let provenance =
     MessageProvenance { from_session: session_id.to_string(), from_session_name: reply::NUDGE_SENDER_NAME.to_string() };
   let mut event = features.store.build_agent_message_event(session_id, reply::NUDGE_TEXT, provenance);
-  event[WEB_REPLY] = json!({"nudge_of": user_event_id});
-  let persisted = features.store.persist_and_broadcast(session_id, event).await?;
+  event[WEB_REPLY] = json!({"nudge_of": user_event_id}).into();
+  let persisted = features.store.persist_and_broadcast(session_id, event.to_value()).await?;
   let nudge_id = persisted["id"].as_str().context("the persisted nudge carries its id")?.to_string();
 
   let task = format!("web-reply-nudge-{session_id}");

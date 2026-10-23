@@ -15,6 +15,7 @@ use charliebot_compat::routing::post_only;
 use charliebot_registry::FeatureContext;
 use charliebot_registry::caller::{self, CallerIdentity};
 use charliebot_registry::task_errors::task_http_error;
+use charliebot_store::compact::CompactValue;
 use charliebot_store::control_events;
 use charliebot_store::metadata::{ColdReadSpec, SessionMetadata, TaskProfile, TaskSpec, TaskType};
 use charliebot_store::run_records::RunOutcomeKind;
@@ -665,7 +666,7 @@ async fn send_message(
   let Some(launch) = decision.get("launch").and_then(Value::as_bool) else {
     return responses::internal_error("RuntimeError", "dispatch decision has no boolean launch field".to_string());
   };
-  let Some(input_event_id) = admitted.get("id").and_then(Value::as_str) else {
+  let Some(input_event_id) = admitted.get("id").and_then(CompactValue::as_str) else {
     return responses::internal_error("RuntimeError", "admitted input event has no id".to_string());
   };
   let mut response = json!({

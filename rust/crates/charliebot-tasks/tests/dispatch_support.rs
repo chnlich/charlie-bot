@@ -17,8 +17,9 @@ use charliebot_registry::sequence::{RestoreOutcome, SequenceCompletion};
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, UtcDateTime};
 use charliebot_store::run_records::{RunKind, RunOutcome, RunOutcomeKind, RunRecord};
 use charliebot_store::{
-  AccountLabelKeeper, AnchorFieldReconciler, ControlGuard, CreateTask, EmptyRuntimeEventHooks, SequenceArchiveHook,
-  SequenceBindingMover, SequenceListingFields, Store, StoreError, StoreHookFuture, StoreHooks, StoreResult, TaskCaller,
+  AccountLabelKeeper, AnchorFieldReconciler, ChatEvent, ControlGuard, CreateTask, EmptyRuntimeEventHooks,
+  SequenceArchiveHook, SequenceBindingMover, SequenceListingFields, Store, StoreError, StoreHookFuture, StoreHooks,
+  StoreResult, TaskCaller,
 };
 use charliebot_tasks::dispatch::{DispatchExecutor, Dispatcher, RunFinishedCompletion};
 use futures_util::future::BoxFuture;
@@ -116,18 +117,25 @@ impl ScriptedCompletion {
         let history = self.store.load_all_facts(&node_id)?;
         let lifecycle = history
           .iter()
-          .filter(|event| matches!(event.get("type").and_then(Value::as_str), Some("task_closed" | "task_reopened")))
+          .filter(|event| {
+            matches!(
+              event.get("type").and_then(charliebot_store::compact::CompactValue::as_str),
+              Some("task_closed" | "task_reopened")
+            )
+          })
           .collect::<Vec<_>>();
         if lifecycle.last().is_some_and(|event| {
-          event.get("type").and_then(Value::as_str) == Some("task_reopened")
-            && event.get("request_id").and_then(Value::as_str) == Some(request_id)
+          event.get("type").and_then(charliebot_store::compact::CompactValue::as_str) == Some("task_reopened")
+            && event.get("request_id").and_then(charliebot_store::compact::CompactValue::as_str) == Some(request_id)
         }) {
           restored.push(node_id);
           continue;
         }
-        let last_close =
-          history.iter().rev().find(|event| event.get("type").and_then(Value::as_str) == Some("task_closed"));
-        let close_id = last_close.and_then(|event| event.get("id")).and_then(Value::as_str);
+        let last_close = history.iter().rev().find(|event| {
+          event.get("type").and_then(charliebot_store::compact::CompactValue::as_str) == Some("task_closed")
+        });
+        let close_id =
+          last_close.and_then(|event| event.get("id")).and_then(charliebot_store::compact::CompactValue::as_str);
         let event_scope =
           close_id.map_or_else(|| request_id.to_string(), |close_id| format!("{request_id}:{close_id}"));
         let payload = vec![
@@ -242,7 +250,7 @@ impl DispatchExecutor for ScriptedExecutor {
   fn launch<'a>(
     &'a self,
     session_id: &'a str,
-    _pending_inputs: &'a [Value],
+    _pending_inputs: &'a [ChatEvent],
     launch_run_id: Option<&'a str>,
   ) -> BoxFuture<'a, StoreResult<Option<String>>> {
     Box::pin(async move {

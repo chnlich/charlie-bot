@@ -82,10 +82,54 @@ pub const USAGE_CACHE_READ_INPUT_TOKENS: &str = "cache_read_input_tokens";
 pub const USAGE_CACHE_CREATION_INPUT_TOKENS: &str = "cache_creation_input_tokens";
 pub const RESULT_TOTAL_COST_USD: &str = "total_cost_usd";
 
+/// Field reads shared by `serde_json::Value` and the store's compact parsed events, so the
+/// event-type helpers read either form.
+pub trait EventFields {
+  /// The value of an object field, or `None` when this is not an object with that key.
+  fn field(&self, key: &str) -> Option<&Self>;
+
+  /// The string content of the value, or `None` for other forms.
+  fn as_str_field(&self) -> Option<&str>;
+
+  /// Whether the value is a string.
+  fn is_str(&self) -> bool {
+    self.as_str_field().is_some()
+  }
+
+  /// Whether the value is an object.
+  fn is_object(&self) -> bool;
+
+  /// Whether this is an object holding `key`.
+  fn has_field(&self, key: &str) -> bool {
+    self.is_object() && self.field(key).is_some()
+  }
+
+  /// The string items of an array value; other forms have none.
+  fn string_items(&self) -> Vec<&str>;
+}
+
+impl EventFields for serde_json::Value {
+  fn field(&self, key: &str) -> Option<&Self> {
+    self.get(key)
+  }
+
+  fn as_str_field(&self) -> Option<&str> {
+    self.as_str()
+  }
+
+  fn is_object(&self) -> bool {
+    self.is_object()
+  }
+
+  fn string_items(&self) -> Vec<&str> {
+    self.as_array().map(|items| items.iter().filter_map(serde_json::Value::as_str).collect()).unwrap_or_default()
+  }
+}
+
 /// Return whether an event is a real user message rather than a tool-result echo.
-pub fn is_real_user_message(event: &serde_json::Value) -> bool {
-  event.get("type").and_then(serde_json::Value::as_str) == Some(USER)
-    && event.get("content").is_some_and(serde_json::Value::is_string)
+pub fn is_real_user_message(event: &impl EventFields) -> bool {
+  event.field("type").and_then(EventFields::as_str_field) == Some(USER)
+    && event.field("content").is_some_and(EventFields::is_str)
 }
 
 /// The thread platforms that can summon a session. Each platform listener writes its summon block under its
@@ -94,9 +138,9 @@ pub const THREAD_PLATFORM_KEYS: &[&str] = &["slack", "discord"];
 
 /// Return whether an event is a thread platform summon: an `agent_message` whose `slack` or `discord` block has no
 /// `nudge_of`. A nudge wakes a session on a thread it already joined and repeats no request.
-pub fn is_platform_summon(event: &serde_json::Value) -> bool {
-  event.get("type").and_then(serde_json::Value::as_str) == Some(AGENT_MESSAGE)
-    && THREAD_PLATFORM_KEYS.iter().any(|key| {
-      event.get(*key).and_then(serde_json::Value::as_object).is_some_and(|block| !block.contains_key("nudge_of"))
-    })
+pub fn is_platform_summon(event: &impl EventFields) -> bool {
+  event.field("type").and_then(EventFields::as_str_field) == Some(AGENT_MESSAGE)
+    && THREAD_PLATFORM_KEYS
+      .iter()
+      .any(|key| event.field(key).is_some_and(|block| block.is_object() && !block.has_field("nudge_of")))
 }

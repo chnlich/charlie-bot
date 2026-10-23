@@ -43,7 +43,7 @@ During the web-UI read phase the event cache regrows to every session: 5,869 ses
 
 The retained data matches Python. Python's `_events_cache` is an unbounded read-through map (`chat_events.py:166-168`) and so is the Rust event cache; Python's message-projection memo is an LRU of 64 (`session_events.py:44`) and so is Rust's (`PROJECTION_LRU_LIMIT`); the run-facts memo is 64 on both sides (`runs.py:449`). Neither side evicts during the read phase, so both hold every session's parsed live events at their peak.
 
-What differs is the per-event cost of the parsed representation. A tracemalloc sample of 20 production `chat_events.jsonl` files parses to 3,107 heap bytes per event on Python (raw text 2,040 bytes per event), which puts Python's whole parsed corpus near 7 GB of its 15.0 GB peak. The Rust census reports 5,480 capacity bytes per event as `serde_json::Value`, and the measured RSS gap says the real number is higher: every JSON object is a `BTreeMap<String, Value>` whose keys are fresh `String`s even though event keys repeat millions of times, and every string is a separate allocation. At 2.2 million events that representation gap is the whole 5.6 GB by which Rust exceeds Python.
+What differs is the per-event cost of the parsed representation. A tracemalloc sample of 20 production `chat_events.jsonl` files parses to 3,107 heap bytes per event on Python (raw text 2,040 bytes per event), which puts Python's whole parsed corpus near 7 GB of its 15.0 GB peak. The Rust census reports 5,480 capacity bytes per event as `serde_json::Value`, and the measured RSS gap says the real number is higher: with `preserve_order`, every JSON object is an `IndexMap<String, Value>` whose keys are fresh `String`s even though event keys repeat millions of times, and every string is a separate allocation. At 2.2 million events that representation gap is the whole 5.6 GB by which Rust exceeds Python.
 
 Swapping the global allocator to jemalloc moved the peak only from 20.6 GB to 20.0 GB (`20261023T181456093331Z-api-parity-73ee4bc8`): allocator retention is not the cause. The same run, on the eviction page-cache policy, measured `rust_ready_in_ms=81175` against `python_ready_in_ms=57542`, so the cold-cache ready-time gate is also unproven for the candidate.
 
@@ -53,14 +53,16 @@ Closing the memory acceptance therefore needs a cheaper parsed-event representat
 
 A census compared the three candidate in-memory forms for the cached chat events. The census binary parsed 20 production `chat_events.jsonl` files (5,018 events, the seed-7 sample of the same production home the acceptance runs use) in a release build on host3 and reported each form's retained bytes and per-event times:
 
-| form | retained bytes/event | parse µs/event | notes |
-| --- | --- | --- | --- |
-| 1. `serde_json::Value` (the pre-change form) | 4,153 | 3.89 | 22.68 µs in a debug build |
-| 2. raw JSON line, parsed when a reader asks | 1,676 | deferred | the 3.89 µs parse moves to every read; the whole-corpus average is 2,040 bytes/event |
-| 3. interned compact events (chosen) | 1,779 | 3.55 | 25.40 µs in a debug build; `to_value` at a response boundary costs 0.96 µs/event (6.02 µs debug) |
+| form | retained bytes/event | parse µs/event | measurement source |
+| --- | ---: | ---: | --- |
+| 1. `serde_json::Value` (the pre-change form) | 4,153 | 3.89 | `event_forms.rs`: `value_event_capacity_bytes`; warm `parse_values` pass |
+| 2. raw JSON line, parsed when a reader asks | 1,676 | 3.89 on demand | `event_forms.rs`: raw bytes plus `Arc` headers and vector slots; warm `parse_values` pass is the deferred parse |
+| 3. interned compact events (chosen) | 1,779 | 3.55 | `event_forms.rs`: `compact_event_capacity_bytes`; warm `parse_compact` pass |
+
+The census also measured debug-build parse times of 22.68 µs/event for `Value` and 25.40 µs/event for compact events. Converting a compact event to `Value` at a response boundary cost 0.96 µs/event in release and 6.02 µs/event in debug. The raw-line retained count is from the sample; the independent whole-corpus raw-text average is 2,040 bytes/event.
 
 Form 3 keeps each event as an enum whose object keys are interned process-wide (the sample's 5,018 events share 550 distinct keys, a 52,775-byte table), whose objects, arrays and strings are exact-fit allocations with no growth slack, and whose numbers keep serde_json's three forms so round trips stay byte-identical.
 
 The choice is form 3. It retains only ~6% more bytes than the raw-line floor while keeping Python's parse-once read semantics; form 2 re-parses on every facts fold and display-state query, and Python's facts structures hold shared event references, so form 2 would either re-parse per query or keep unbounded parsed copies outside the cache. Parse time is lower than the Value form's (3.55 vs 3.89 µs/event) and the convert-back runs only at response and aggregator boundaries, so the request-time gate is paid for by the cheaper parse. Retention, keys, invalidation and bounds are unchanged; only the representation is new. The count tests are `object_keys_are_shared_across_values` (one interned id per distinct key) and `a_chat_event_is_exact_fit_with_no_growth_slack` (capacity equals entry slots plus exact string bytes).
 
-Census source: the measurement-only binary `event_forms.rs` over `fixtures/event_census_sample/`, both never landed; the binary is archived at `/home/chaoli/scripts/20261024_event_form_census/event_forms.rs` and the sample is regenerable from the production home with the archived `make_sample.py` alongside it.
+Census source: the measurement-only binary `event_forms.rs` over `fixtures/event_census_sample/`, both never landed; the source is archived at `/home/<user>/scripts/20261024_event_form_census/event_forms.rs` and the sample is regenerable from the production home with the archived `make_sample.py` alongside it.

@@ -1,6 +1,6 @@
 # Server process: startup, lifespan, services, session cgroups
 
-Baseline: the Python tree at `f58a345a6`. Entry point: `server.py`. Paths use `<home>` and `/home/<user>` as in
+Baseline: the Python tree at `24642edf5`. Entry point: `server.py`. Paths use `<home>` and `/home/<user>` as in
 `files.md`. **UNVERIFIED** marks a statement not confirmed from source, with the reason.
 
 ## 1. Before the event loop (`server.py::main`)

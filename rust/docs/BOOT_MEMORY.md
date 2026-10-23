@@ -28,3 +28,23 @@ The corrected structure run for this key change did not reach boot. Its report i
 The recovery pass now checks cancellation while reading each run-directory entry and during event folds. Review facts are built in one cancellable pass over run records instead of rescanning the history for each followup. Count tests assert the stop-check count and the number of records read; `run_record_recovery_walk_checks_each_entry_before_reading_it` stops on the third entry and proves only two records were read. `replay_review_scan_checks_each_run_and_stops_at_the_requested_count` and `replay_review_index_checks_stop_during_the_unique_run_pass` assert checks at each visited record.
 
 The most recent successful standalone boot before the memo-key correction was commit `91762411f135ac99d4c20384f9259954c02afc9c`: 5,811 nodes, 82,546 ms ready, and 10,976,144 kB peak RSS. It does not measure the final memo key or prove the Python comparison. The acceptance measurements must be repeated on the final commit with a home whose config validates against the pinned Python baseline.
+
+## Read-phase census of the candidate `957fe3890`
+
+A measurement-only census commit (`ff0c28e694d457db80181418e311780e89e42c2d`, never landed; jemalloc experiment on top: `73ee4bc812c13e5a78e703da6a7129b8e2186c2b`) logs every structure group's capacity and `VmHWM`/`VmRSS` every 15 seconds, so one api-parity run's server log shows the whole peak.
+
+The api-parity run `20261023T161259708501Z-api-parity-957fe389` (warm page cache) measured `rust_peak_rss_kb=20616620` against `python_peak_rss_kb=15003468`: the memory acceptance fails. The census in the follow-up runs pins the composition.
+
+At the end of boot (recovery done), the process holds 9.0 GB RSS while the census accounts for about 4.4 GB: 812 sessions and 808,950 events in the event cache (4.27 GB payload capacity), 794 node-facts entries (49 MB), 64 run-facts memo entries. Recovery evicts each passed node's parsed events, so most sessions' parsed events are freed.
+
+During the web-UI read phase the event cache regrows to every session: 5,869 sessions, 2,216,548 events, 12.15 GB payload capacity, while RSS tracks it from 9.0 GB to the 20.6-20.9 GB peak. Everything else stays small at peak: node facts 156 MB, run-facts memo at most 64 lists (0.1-2.0 GB as its window slides), node states, metadata and activity entries in the tens of megabytes.
+
+## Retention parity and the representation gap
+
+The retained data matches Python. Python's `_events_cache` is an unbounded read-through map (`chat_events.py:166-168`) and so is the Rust event cache; Python's message-projection memo is an LRU of 64 (`session_events.py:44`) and so is Rust's (`PROJECTION_LRU_LIMIT`); the run-facts memo is 64 on both sides (`runs.py:449`). Neither side evicts during the read phase, so both hold every session's parsed live events at their peak.
+
+What differs is the per-event cost of the parsed representation. A tracemalloc sample of 20 production `chat_events.jsonl` files parses to 3,107 heap bytes per event on Python (raw text 2,040 bytes per event), which puts Python's whole parsed corpus near 7 GB of its 15.0 GB peak. The Rust census reports 5,480 capacity bytes per event as `serde_json::Value`, and the measured RSS gap says the real number is higher: every JSON object is a `BTreeMap<String, Value>` whose keys are fresh `String`s even though event keys repeat millions of times, and every string is a separate allocation. At 2.2 million events that representation gap is the whole 5.6 GB by which Rust exceeds Python.
+
+Swapping the global allocator to jemalloc moved the peak only from 20.6 GB to 20.0 GB (`20261023T181456093331Z-api-parity-73ee4bc8`): allocator retention is not the cause. The same run, on the eviction page-cache policy, measured `rust_ready_in_ms=81175` against `python_ready_in_ms=57542`, so the cold-cache ready-time gate is also unproven for the candidate.
+
+Closing the memory acceptance therefore needs a cheaper parsed-event representation — for example interned object keys, or retaining each event's raw line and parsing on demand — not a retention change: both servers already keep exactly the same data.

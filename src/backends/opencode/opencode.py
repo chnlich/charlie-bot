@@ -349,6 +349,7 @@ class OpenCodeBackend(base.AgentBackend):
     if cgroup is not None:
       variables["BASH_ENV"] = str(server.JOIN_SCRIPT)
       variables["CHARLIEBOT_SESSION_CGROUP"] = str(cgroup.path)
+      variables["CHARLIEBOT_SESSION_OOM_SCORE_ADJ"] = str(cgroup.oom_score_adj)
     response = await shared.client.put(f"/api/session/{self._session_id}/environment", json={"variables": variables})
     response.raise_for_status()
 

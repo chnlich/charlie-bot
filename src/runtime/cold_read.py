@@ -86,9 +86,7 @@ def run_light_probe(cfg: config.CharlieBotConfig, prompt: str, system_prompt: st
   if not cfg.backends.pool:
     raise ValueError("no light backends resolvable: backends.pool is empty")
   attempts: list[tuple[str, str]] = []
-  tried: list[str] = []
-  while (option := backend_pool.select(cfg, caller="light_oneshot", exclude=tried)) is not None:
-    tried.append(option.id)
+  for option in backend_pool.iter_members(cfg, caller="light_oneshot"):
     try:
       answer = asyncio.run(backend_types.build_backend(option, cfg).one_shot_text(prompt, system_prompt, timeout=None))
       return LightProbeResult(attempts=attempts, backend_id=option.id, answer=answer)

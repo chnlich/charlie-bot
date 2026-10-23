@@ -101,8 +101,8 @@ function buildLockHarness() {
   };
   context.Blob = require('node:buffer').Blob;
   context.accessTokenAuthorization = () => null;
-  context.VOICE_BACKENDS = [{id: 'local', label: 'Local (sherpa)', livePartials: false, unavailableReason: null}];
-  context.VOICE_DEFAULT_BACKEND = 'local';
+  context.VOICE_BACKENDS = [{id: 'batch', label: 'Batch backend', livePartials: false, unavailableReason: null}];
+  context.VOICE_DEFAULT_BACKEND = 'batch';
 
   const toasts = [];
   context.showToast = (message, isError) => toasts.push({message, isError: !!isError});

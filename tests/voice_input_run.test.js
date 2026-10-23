@@ -13,7 +13,7 @@ const {readStatic, readPackageStatic} = require('./read_static');
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 
 const RATE = 16000;
-const CONFIRM_SAMPLES = 5 * RATE;
+const FIVE_SECONDS = 5 * RATE;
 const MAX_SAMPLES = 5 * 60 * RATE;
 const UPLOAD_TIMEOUT_MS = 60 * 1000;
 
@@ -244,11 +244,11 @@ function buildHarness({sessionId = 'session-a', micError = null} = {}) {
     },
     wsUrlWithToken: (path) => `ws://test-host${path}${path.includes('?') ? '&' : '?'}token=test-token`,
     VOICE_BACKENDS: [
-      {id: 'local', label: 'Local (sherpa)', livePartials: false, unavailableReason: null},
+      {id: 'batch', label: 'Batch backend', livePartials: false, unavailableReason: null},
       {id: 'gemini', label: 'Gemini 3.5 Transcribe Live', livePartials: true, unavailableReason: null},
       {id: 'muse', label: 'Muse Voice Transcribe', livePartials: true, unavailableReason: 'needs meta.model_api_key'},
     ],
-    VOICE_DEFAULT_BACKEND: 'local',
+    VOICE_DEFAULT_BACKEND: 'batch',
     navigator: {
       mediaDevices: {
         getUserMedia: () => {
@@ -381,7 +381,7 @@ function buildHarness({sessionId = 'session-a', micError = null} = {}) {
   return {context, state};
 }
 
-// The upload's WAV rides the multipart form's audio part; the probe's stays raw.
+// The upload's WAV rides the multipart form's audio part.
 async function sentWavBytes(xhr) {
   const body = xhr.sentBody;
   return body instanceof FormData ? body.get('audio').arrayBuffer() : body;
@@ -519,58 +519,23 @@ test('chunks update the level bar and the elapsed timer client-side', async () =
   assert.equal(ui.timer.textContent, '0:02');
 });
 
-test('the confirm probe fires exactly once at 5 s and inserts its words', async () => {
-  const {context, state} = buildHarness();
+test('no request goes out while a recording runs past 5 s', async () => {
+  const {state} = buildHarness();
   const worklet = await state.arm();
 
-  worklet.emitPcmCount(CONFIRM_SAMPLES - 2);
-  assert.equal(state.xhrs.length, 0); // 4.999 s: no probe yet
-
-  worklet.emitPcmCount(2);
-  await tick();
-  await tick();
-  assert.equal(state.xhrs.length, 1);
-  const confirm = state.xhrs[0];
-  assert.equal(confirm.url, '/api/voice/session-a/confirm');
-  const header = parseWavHeader(await sentWavBytes(confirm));
-  assert.equal(header.dataBytes, CONFIRM_SAMPLES * 2); // the opening clip only
-
-  worklet.emitPcmCount(CONFIRM_SAMPLES);
-  await tick();
-  assert.equal(state.xhrs.length, 1); // never a second probe
-
-  confirm.respond(200, {text: '你好今天'});
-  await tick();
-  await tick();
-  assert.equal(state.input.value, '你好今天');
-  assert.deepEqual(state.chatFlags, ['voice']);
-  assert.equal(state.voiceUi().hint.textContent, '你好今天');
-});
-
-test('a failed confirm probe only hints and never blocks recording', async () => {
-  const {context, state} = buildHarness();
-  const worklet = await state.arm();
-
-  worklet.emitPcmCount(CONFIRM_SAMPLES);
-  await tick();
-  state.xhrs[0].failNetwork();
+  worklet.emitPcmCount(FIVE_SECONDS + RATE);
   await tick();
   await tick();
 
-  assert.equal(state.voiceUi().hint.textContent, 'Recognition check failed');
+  assert.equal(state.xhrs.length, 0); // the recording waits for its release
   assert.equal(state.input.value, '');
-  assert.equal(state.beforeunloadCount, 1); // still recording
-  assert.equal(state.micCalls, 1);
-
-  const upload = await state.stopWithFlush();
-  assert.equal(upload.url, '/api/voice/session-a'); // recording and upload unaffected
 });
 
 test('release assembles one 16 kHz PCM16 mono WAV and walks Uploading -> Decoding -> text', async () => {
   const {context, state} = buildHarness();
   const worklet = await state.arm();
   worklet.emitPcmCount(3 * RATE);
-  worklet.emitPcmCount(CONFIRM_SAMPLES, 0);
+  worklet.emitPcmCount(FIVE_SECONDS, 0);
 
   const upload = await state.stopWithFlush();
 
@@ -584,7 +549,7 @@ test('release assembles one 16 kHz PCM16 mono WAV and walks Uploading -> Decodin
   assert.equal(header.channels, 1);
   assert.equal(header.sampleRate, RATE);
   assert.equal(header.bits, 16);
-  assert.equal(header.dataBytes, (3 * RATE + CONFIRM_SAMPLES) * 2);
+  assert.equal(header.dataBytes, (3 * RATE + FIVE_SECONDS) * 2);
   assert.equal(header.totalBytes, 44 + header.dataBytes);
 
   upload.completeUpload();
@@ -594,7 +559,7 @@ test('release assembles one 16 kHz PCM16 mono WAV and walks Uploading -> Decodin
   await tick();
   await tick();
   assert.equal(state.input.value, '你好今天天气不错');
-  assert.deepEqual(state.chatFlags, ['voice']); // the unanswered confirm inserted nothing
+  assert.deepEqual(state.chatFlags, ['voice']); // the upload's words are marked as voice input
   assert.equal(state.beforeunloadCount, 0); // idle again
   assert.deepEqual([...state.buttonClasses].sort(), ['bg-slate-800', 'border-slate-600']);
 
@@ -603,50 +568,10 @@ test('release assembles one 16 kHz PCM16 mono WAV and walks Uploading -> Decodin
   assert.equal(state.micCalls, 2); // success discarded the buffer: the next click re-arms
 });
 
-test('the final text replaces an intact confirm span in place', async () => {
-  const {context, state} = buildHarness();
-  const worklet = await state.arm();
-  worklet.emitPcmCount(CONFIRM_SAMPLES);
-
-  await tick();
-  state.xhrs[0].respond(200, {text: '你好今天'});
-  await tick();
-  await tick();
-  state.input.value = '你好今天 手动补充'; // the user typed after the confirm words
-
-  const upload = await state.stopWithFlush();
-  upload.respond(200, {text: '你好今天天气不错'});
-  await tick();
-  await tick();
-
-  // The confirm words are still where the probe put them: the full text takes
-  // their place and the manual tail stays after it.
-  assert.equal(state.input.value, '你好今天天气不错 手动补充');
-});
-
-test('the final text appends when the confirm span was disturbed', async () => {
-  const {context, state} = buildHarness();
-  const worklet = await state.arm();
-  worklet.emitPcmCount(CONFIRM_SAMPLES);
-
-  await tick();
-  state.xhrs[0].respond(200, {text: '你好今天'});
-  await tick();
-  await tick();
-  state.input.value = '你好吗'; // the user edited the confirm words away
-
-  const upload = await state.stopWithFlush();
-  upload.respond(200, {text: '你好今天天气不错'});
-  await tick();
-  await tick();
-
-  assert.equal(state.input.value, '你好吗 你好今天天气不错');
-});
-
 test('an HTTP error keeps the buffer and the next click retries the same audio', async () => {
   const {context, state} = buildHarness();
   const worklet = await state.arm();
-  worklet.emitPcmCount(CONFIRM_SAMPLES);
+  worklet.emitPcmCount(FIVE_SECONDS);
 
   const upload = await state.stopWithFlush();
   upload.respond(500, {error: 'speech inference failed: boom'});
@@ -674,7 +599,7 @@ test('an HTTP error keeps the buffer and the next click retries the same audio',
 test('a network error and a 60 s upload timeout both land in the retry state', async () => {
   const {context, state} = buildHarness();
   let worklet = await state.arm();
-  worklet.emitPcmCount(CONFIRM_SAMPLES);
+  worklet.emitPcmCount(FIVE_SECONDS);
 
   let upload = await state.stopWithFlush();
   upload.failNetwork();
@@ -700,7 +625,7 @@ test('a network error and a 60 s upload timeout both land in the retry state', a
 test('a server 400 or 503 on the upload lands in the retry state with the server text', async () => {
   const {context, state} = buildHarness();
   const worklet = await state.arm();
-  worklet.emitPcmCount(CONFIRM_SAMPLES);
+  worklet.emitPcmCount(FIVE_SECONDS);
 
   const first = await state.stopWithFlush();
   first.respond(400, {error: 'voice recording exceeds the 300s limit'});
@@ -725,7 +650,7 @@ test('a server 400 or 503 on the upload lands in the retry state with the server
 test('a click while the upload is in flight cancels it and drops the buffer', async () => {
   const {context, state} = buildHarness();
   const worklet = await state.arm();
-  worklet.emitPcmCount(CONFIRM_SAMPLES);
+  worklet.emitPcmCount(FIVE_SECONDS);
 
   const upload = await state.stopWithFlush();
   assert.equal(state.beforeunloadCount, 1); // request in flight
@@ -777,7 +702,7 @@ test('recording auto-stops at the 5-minute cap and the upload trims to it', asyn
 test('teardown aborts an in-flight upload and frees the slot', async () => {
   const {context, state} = buildHarness();
   const worklet = await state.arm();
-  worklet.emitPcmCount(CONFIRM_SAMPLES);
+  worklet.emitPcmCount(FIVE_SECONDS);
 
   const upload = await state.stopWithFlush();
   context.resetVoiceState();
@@ -1038,7 +963,7 @@ test('a 201.6 s live recording finalizes through the relay inside its scaled bud
   assert.equal(state.sendLockOpens, 0);
 });
 
-test('an error frame mid-recording stops visibly and one click transcribes locally', async () => {
+test('an error frame mid-recording stops visibly and one click uploads the recording', async () => {
   const {context, state} = buildHarness();
   const {worklet, socket} = await armLive(state);
   socket.openSocket();
@@ -1073,11 +998,11 @@ test('an error frame mid-recording stops visibly and one click transcribes local
   await tick();
   await tick();
   assert.equal(state.input.value, 'after error');
-  assert.deepEqual(state.chatNotes, ['Transcribed by the local engine (lower quality)']); // the local decode's note is set
+  assert.deepEqual(state.chatNotes, []); // the upload sets no note
   assert.equal(state.beforeunloadCount, 0);
 });
 
-test('a lost socket mid-recording stops visibly and one click transcribes locally', async () => {
+test('a lost socket mid-recording stops visibly and one click uploads the recording', async () => {
   const {context, state} = buildHarness();
   const {worklet, socket} = await armLive(state);
   socket.openSocket();
@@ -1106,11 +1031,11 @@ test('a lost socket mid-recording stops visibly and one click transcribes locall
   await tick();
   await tick();
   assert.equal(state.input.value, 'after close');
-  assert.deepEqual(state.chatNotes, ['Transcribed by the local engine (lower quality)']); // the local decode's note is set
+  assert.deepEqual(state.chatNotes, []); // the upload sets no note
   assert.equal(state.beforeunloadCount, 0);
 });
 
-test('a spent budget stops visibly and one click transcribes locally', async () => {
+test('a spent budget stops visibly and one click uploads the recording', async () => {
   const {context, state} = buildHarness();
   const {worklet, socket} = await armLive(state);
   socket.openSocket();
@@ -1136,11 +1061,11 @@ test('a spent budget stops visibly and one click transcribes locally', async () 
   const upload = state.xhrs[0];
   assert.equal(upload.sentBody.get('backend'), 'gemini');
 
-  upload.respond(200, {text: 'local words'});
+  upload.respond(200, {text: 'upload words'});
   await tick();
   await tick();
-  assert.equal(state.input.value, 'local words');
-  assert.deepEqual(state.chatNotes, ['Transcribed by the local engine (lower quality)']); // the local decode's note is set
+  assert.equal(state.input.value, 'upload words');
+  assert.deepEqual(state.chatNotes, []); // the upload sets no note
   assert.equal(state.beforeunloadCount, 0);
 });
 
@@ -1191,10 +1116,10 @@ test('a spent budget then a click uploads once and discards the late final', asy
   await tick();
   assert.equal(state.input.value, ''); // the late final is not inserted
 
-  upload.respond(200, {text: 'local words'});
+  upload.respond(200, {text: 'upload words'});
   await tick();
   await tick();
-  assert.equal(state.input.value, 'local words'); // the decode result owns the input
+  assert.equal(state.input.value, 'upload words'); // the upload result owns the input
   assert.equal(state.beforeunloadCount, 0);
 });
 
@@ -1204,7 +1129,7 @@ test('the upload form carries the devices object beside the backend', async () =
   worklet.emitPcmCount(RATE);
 
   const upload = await state.stopWithFlush();
-  assert.equal(upload.sentBody.get('backend'), 'local');
+  assert.equal(upload.sentBody.get('backend'), 'batch');
   assert.deepEqual(JSON.parse(upload.sentBody.get('devices')), FAKE_DEVICES);
 
   upload.respond(200, {text: 'words'});
@@ -1213,32 +1138,29 @@ test('the upload form carries the devices object beside the backend', async () =
   assert.equal(state.input.value, 'words');
 });
 
-test('the local backend opens no relay, fires the probe, and uploads right after stop', async () => {
+test('the batch backend opens no relay and uploads right after stop', async () => {
   const {context, state} = buildHarness();
   const worklet = await state.arm();
 
   assert.equal(state.sockets.length, 0); // no relay for a non-live backend
-  worklet.emitPcmCount(CONFIRM_SAMPLES);
+  worklet.emitPcmCount(FIVE_SECONDS);
   assert.equal(state.voiceUi().hint.textContent, 'Listening...'); // the ready chunk lit it
   await tick();
   await tick();
-  assert.equal(state.xhrs.length, 1); // the probe still fires at 5 s
-  assert.equal(state.xhrs[0].url, '/api/voice/session-a/confirm');
-  // The probe keeps its raw transport: one WAV body, no multipart form.
-  assert.equal(state.xhrs[0].sentBody.byteLength, 44 + CONFIRM_SAMPLES * 2);
+  assert.equal(state.xhrs.length, 0); // nothing is sent before the stop
 
   const upload = await state.stopWithFlush();
   assert.equal(upload.sentBody.has('transcript'), false);
-  assert.equal(upload.sentBody.get('backend'), 'local');
+  assert.equal(upload.sentBody.get('backend'), 'batch');
 
   upload.respond(200, {text: 'recognized words'});
   await tick();
   await tick();
   assert.equal(state.input.value, 'recognized words');
-  assert.deepEqual(state.chatNotes, []); // a chosen local backend sets no note
+  assert.deepEqual(state.chatNotes, []); // an upload sets no note
 });
 
-test('an empty local decode after the stop-state click sets no note', async () => {
+test('an empty upload result after the stop-state click sets no note', async () => {
   const {context, state} = buildHarness();
   const {worklet, socket} = await armLive(state);
   socket.openSocket();
@@ -1257,7 +1179,7 @@ test('an empty local decode after the stop-state click sets no note', async () =
   state.xhrs[0].respond(200, {text: ''});
   await tick();
   await tick();
-  assert.equal(state.input.value, ''); // the empty decode inserted nothing
+  assert.equal(state.input.value, ''); // the empty result inserted nothing
   assert.deepEqual(state.toasts, [{msg: 'No speech detected', isError: false}]);
   assert.deepEqual(state.chatNotes, []); // no insertion, no note
 });

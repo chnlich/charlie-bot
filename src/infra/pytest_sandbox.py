@@ -46,7 +46,7 @@ class _RulesetAttr(ctypes.Structure):
 
 _libc = ctypes.CDLL(None, use_errno=True)
 _libc.syscall.restype = ctypes.c_long
-# Set once the sandbox applies; pytest_report_header reads it for the run log.
+# Set once the sandbox applies; pytest_terminal_summary reads it for the run log.
 abi: int | None = None
 
 
@@ -127,8 +127,7 @@ def pytest_load_initial_conftests(early_config: pytest.Config, parser: pytest.Pa
     raise SystemExit(2) from e
 
 
-def pytest_report_header(config: pytest.Config) -> str | None:
+def pytest_terminal_summary(terminalreporter: pytest.TerminalReporter) -> None:
   """Show the Landlock ABI the run restricted itself under."""
-  if abi is None:
-    return None
-  return f"landlock abi: {abi}"
+  if abi is not None:
+    terminalreporter.write_line(f"landlock abi: {abi}")

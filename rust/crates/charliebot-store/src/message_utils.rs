@@ -94,7 +94,7 @@ impl Store {
   /// Build a message projection over derived events with this store's feature renderers.
   pub fn build_message_projection(
     &self,
-    events: &[ChatEvent],
+    events: &[SharedChatEvent],
     event_index_offset: usize,
   ) -> StoreResult<MessageProjection> {
     MessageProjection::new(events, event_index_offset, self.event_renderers.clone())

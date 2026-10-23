@@ -6,7 +6,7 @@ use serde_json::Value;
 use crate::aggregator::MessageAggregator;
 use crate::hooks::EventRenderer;
 use crate::message_events;
-use crate::{ChatEvent, StoreError, StoreResult};
+use crate::{ChatEvent, SharedChatEvent, StoreError, StoreResult};
 
 const PAGE_BODY_CACHE_LIMIT: usize = 4;
 
@@ -41,7 +41,7 @@ pub struct MessageProjection {
   aggregator: MessageAggregator,
   committed_final: Vec<Value>,
   separators_final: Vec<usize>,
-  region_events: Vec<Value>,
+  region_events: Vec<SharedChatEvent>,
   committed: Vec<Value>,
   separator_ordinals: Vec<usize>,
   pending_draft: Option<Value>,
@@ -52,19 +52,9 @@ pub struct MessageProjection {
 }
 
 impl MessageProjection {
-  /// Build a projection from a session's live events.
-  pub fn new<T: AsRef<ChatEvent>>(
-    events: &[T],
-    event_index_offset: usize,
-    event_renderers: HashMap<String, Arc<dyn EventRenderer>>,
-  ) -> StoreResult<Self> {
-    let owned = events.iter().map(|event| event.as_ref().to_value()).collect::<Vec<_>>();
-    Self::from_values(owned, event_index_offset, event_renderers)
-  }
-
-  /// Build a projection from already-converted live events.
-  fn from_values(
-    owned: Vec<Value>,
+  /// Build a projection from a session's live events, which it reads in place.
+  pub fn new(
+    events: &[SharedChatEvent],
     event_index_offset: usize,
     event_renderers: HashMap<String, Arc<dyn EventRenderer>>,
   ) -> StoreResult<Self> {
@@ -82,12 +72,12 @@ impl MessageProjection {
       page_bodies: Mutex::new(PageBodyCache::default()),
       page_body_gzips: Mutex::new(PageBodyCache::default()),
     };
-    projection.ingest(owned)?;
+    projection.ingest(events)?;
     Ok(projection)
   }
 
   /// Return a copy advanced by newly appended events.
-  pub fn advanced<T: AsRef<ChatEvent>>(&self, events: &[T]) -> StoreResult<Self> {
+  pub fn advanced(&self, events: &[SharedChatEvent]) -> StoreResult<Self> {
     let mut copied = Self {
       offset: self.offset,
       aggregator: self.aggregator.clone_state(),
@@ -102,7 +92,7 @@ impl MessageProjection {
       page_bodies: Mutex::new(PageBodyCache::default()),
       page_body_gzips: Mutex::new(PageBodyCache::default()),
     };
-    copied.ingest(events.iter().map(|event| event.as_ref().to_value()).collect())?;
+    copied.ingest(events)?;
     Ok(copied)
   }
 
@@ -165,10 +155,10 @@ impl MessageProjection {
     (self.committed[start..before].to_vec(), start, start > 0)
   }
 
-  fn ingest(&mut self, owned: Vec<Value>) -> StoreResult<()> {
-    self.event_count += owned.len();
-    self.region_events.extend(owned);
-    let closed = message_events::stable_closed_prefix_len(&self.region_events);
+  fn ingest(&mut self, events: &[SharedChatEvent]) -> StoreResult<()> {
+    self.event_count += events.len();
+    self.region_events.extend_from_slice(events);
+    let closed = message_events::stable_closed_prefix_len(self.region_events.iter().map(|event| event.as_ref()));
     if closed > 0 {
       let prefix = self.region_events[..closed].to_vec();
       self.region_events.drain(..closed);
@@ -207,8 +197,8 @@ pub fn events_to_messages<T: AsRef<ChatEvent>>(
   event_renderers: HashMap<String, Arc<dyn EventRenderer>>,
 ) -> StoreResult<Vec<Value>> {
   let mut aggregator = MessageAggregator::with_renderers(event_index_offset, false, event_renderers);
-  let owned = events.iter().map(|event| event.as_ref().to_value()).collect::<Vec<_>>();
-  let indexed = message_events::stable_history_projection(&owned)?;
+  let refs = events.iter().map(|event| event.as_ref()).collect::<Vec<&ChatEvent>>();
+  let indexed = message_events::stable_history_projection(&refs)?;
   let mut messages: Vec<Value> = aggregator
     .feed_indexed(&indexed)?
     .into_iter()
@@ -227,8 +217,8 @@ pub fn events_to_view<T: AsRef<ChatEvent>>(
   event_renderers: HashMap<String, Arc<dyn EventRenderer>>,
 ) -> StoreResult<(Vec<Value>, Option<Value>)> {
   let mut aggregator = MessageAggregator::with_renderers(event_index_offset, false, event_renderers);
-  let owned = events.iter().map(|event| event.as_ref().to_value()).collect::<Vec<_>>();
-  let indexed = message_events::stable_history_projection(&owned)?;
+  let refs = events.iter().map(|event| event.as_ref()).collect::<Vec<&ChatEvent>>();
+  let indexed = message_events::stable_history_projection(&refs)?;
   let messages = aggregator
     .feed_indexed(&indexed)?
     .into_iter()
@@ -241,10 +231,11 @@ pub fn events_to_view<T: AsRef<ChatEvent>>(
 
 fn fold_messages(
   aggregator: &mut MessageAggregator,
-  events: &[Value],
+  events: &[SharedChatEvent],
   base: usize,
 ) -> StoreResult<(Vec<Value>, Vec<usize>)> {
-  let indexed = message_events::stable_history_projection(events)?
+  let refs = events.iter().map(|event| event.as_ref()).collect::<Vec<&ChatEvent>>();
+  let indexed = message_events::stable_history_projection(&refs)?
     .into_iter()
     .map(|(index, event)| (base + index, event))
     .collect::<Vec<_>>();
@@ -266,9 +257,29 @@ fn fold_messages(
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::compact::object_copy_count;
   use crate::store::test_support::compact_events;
   use crate::store::test_support::{assistant_event, queued_user_reorder_events};
   use serde_json::json;
+
+  /// The cached form of each event, as the session cache holds it.
+  fn shared_events(events: &[Value]) -> Vec<SharedChatEvent> {
+    compact_events(events).into_iter().map(Arc::new).collect()
+  }
+
+  #[test]
+  fn projection_builds_read_the_cached_events_in_place() {
+    let events = shared_events(&many_messages_events(30));
+    let before = object_copy_count();
+    let projection = MessageProjection::new(&events[..20], 0, HashMap::new()).unwrap();
+    let advanced = projection.advanced(&events[20..]).unwrap();
+    assert_eq!(object_copy_count() - before, 0, "a build and an advance copy no event into an owned Value");
+    assert_eq!(advanced.event_count(), 30);
+
+    let before = object_copy_count();
+    let _ = events[0].to_value();
+    assert_eq!(object_copy_count() - before, 1, "an owned event copy is counted, so the zero above is measured");
+  }
 
   #[test]
   fn projection_history_matches_events_to_messages_and_keeps_draft_separate() {
@@ -279,8 +290,7 @@ mod tests {
       json!({"id": "u2", "type": "user", "content": "next"}),
       json!({"id": "a2", "type": "assistant", "message": {"content": [{"type": "text", "text": "draft"}]}}),
     ];
-    let projection =
-      MessageProjection::new(&crate::store::test_support::compact_events(&events), 0, HashMap::new()).unwrap();
+    let projection = MessageProjection::new(&shared_events(&events), 0, HashMap::new()).unwrap();
     assert_eq!(projection.history(), events_to_messages(&compact_events(&events), 0, HashMap::new()).unwrap());
     let (tail, _, _) = projection.tail(40);
     assert!(!tail.iter().any(|message| message["content"] == "draft"));
@@ -334,8 +344,7 @@ mod tests {
       ("empty", Vec::new()),
     ];
     for (name, events) in fixtures {
-      let projection =
-        MessageProjection::new(&crate::store::test_support::compact_events(&events), 0, HashMap::new()).unwrap();
+      let projection = MessageProjection::new(&shared_events(&events), 0, HashMap::new()).unwrap();
       assert_eq!(
         projection.history(),
         events_to_messages(&compact_events(&events), 0, HashMap::new()).unwrap(),
@@ -347,7 +356,7 @@ mod tests {
   #[test]
   fn lossless_backwards_walk_returns_full_id_set_for_each_limit() {
     let projection =
-      MessageProjection::new(&compact_events(&turned_messages_events(&[3, 1, 6, 2].repeat(60))), 0, HashMap::new())
+      MessageProjection::new(&shared_events(&turned_messages_events(&[3, 1, 6, 2].repeat(60))), 0, HashMap::new())
         .unwrap();
     let committed = projection.committed();
     let full_ids: Vec<&str> = committed.iter().map(|message| message["id"].as_str().unwrap()).collect();
@@ -386,8 +395,7 @@ mod tests {
       events.push(json!({"id": format!("u{turn}"), "type": "user", "content": "q"}));
       events.push(json!({"id": format!("d{turn}"), "type": "master_done"}));
     }
-    let projection =
-      MessageProjection::new(&crate::store::test_support::compact_events(&events), 0, HashMap::new()).unwrap();
+    let projection = MessageProjection::new(&shared_events(&events), 0, HashMap::new()).unwrap();
     let mut before = projection.committed().len();
     let mut ids = Vec::new();
     while before > 0 {
@@ -418,7 +426,7 @@ mod tests {
 
   #[test]
   fn incremental_projection_matches_the_reference_for_each_append() {
-    let mut projection = MessageProjection::new(&[] as &[ChatEvent], 0, HashMap::new()).unwrap();
+    let mut projection = MessageProjection::new(&[], 0, HashMap::new()).unwrap();
     let mut events = Vec::new();
     for event in [
       json!({"id": "before", "type": "user", "content": "before"}),
@@ -428,9 +436,7 @@ mod tests {
       json!({"id": "done", "type": "master_done", "thinking_seconds": 2}),
       json!({"id": "draft", "type": "assistant", "message": {"content": [{"type": "text", "text": "draft"}]}}),
     ] {
-      projection = projection
-        .advanced(std::slice::from_ref(compact_events(std::slice::from_ref(&event)).first().expect("one event")))
-        .unwrap();
+      projection = projection.advanced(&shared_events(std::slice::from_ref(&event))).unwrap();
       events.push(event);
       let (committed, pending) = events_to_view(&compact_events(&events), 0, HashMap::new()).unwrap();
       assert_eq!(projection.committed(), committed);
@@ -441,7 +447,7 @@ mod tests {
 
   #[test]
   fn page_body_caches_are_lru_capped_and_reset_on_advance() {
-    let projection = MessageProjection::new(&[] as &[ChatEvent], 0, HashMap::new()).unwrap();
+    let projection = MessageProjection::new(&[], 0, HashMap::new()).unwrap();
     for before in 0..4 {
       projection.store_page_body(before, 10, vec![before as u8]);
       projection.store_page_body_gzip(before, 10, vec![before as u8 + 10]);
@@ -452,7 +458,7 @@ mod tests {
     assert_eq!(projection.cached_page_body(1, 10), None);
     assert_eq!(projection.cached_page_body_gzip(1, 10), Some(vec![11]));
 
-    let advanced = projection.advanced(&[] as &[ChatEvent]).unwrap();
+    let advanced = projection.advanced(&[]).unwrap();
     assert_eq!(advanced.cached_page_body(0, 10), None);
     assert_eq!(advanced.cached_page_body_gzip(1, 10), None);
   }

@@ -83,8 +83,8 @@ pub const USAGE_CACHE_CREATION_INPUT_TOKENS: &str = "cache_creation_input_tokens
 pub const RESULT_TOTAL_COST_USD: &str = "total_cost_usd";
 
 /// Field reads shared by `serde_json::Value` and the store's compact parsed events, so the
-/// event-type helpers read either form.
-pub trait EventFields {
+/// event-type helpers and the message aggregator read either form in place.
+pub trait EventFields: Sized {
   /// The value of an object field, or `None` when this is not an object with that key.
   fn field(&self, key: &str) -> Option<&Self>;
 
@@ -106,6 +106,30 @@ pub trait EventFields {
 
   /// The string items of an array value; other forms have none.
   fn string_items(&self) -> Vec<&str>;
+
+  /// Whether the value is JSON `null`.
+  fn is_null(&self) -> bool;
+
+  /// The boolean, or `None` for other forms.
+  fn as_bool_field(&self) -> Option<bool>;
+
+  /// The number as an `i64`, or `None` for other forms.
+  fn as_i64_field(&self) -> Option<i64>;
+
+  /// The number as a `u64`, or `None` for other forms.
+  fn as_u64_field(&self) -> Option<u64>;
+
+  /// The number as an `f64`, or `None` for other forms.
+  fn as_f64_field(&self) -> Option<f64>;
+
+  /// The items of an array value, or `None` for other forms.
+  fn array_items(&self) -> Option<&[Self]>;
+
+  /// The field count of an object value, or `None` for other forms.
+  fn object_len(&self) -> Option<usize>;
+
+  /// An owned `serde_json::Value` copy of this value, for output that must own its JSON.
+  fn to_owned_value(&self) -> serde_json::Value;
 }
 
 impl EventFields for serde_json::Value {
@@ -124,6 +148,58 @@ impl EventFields for serde_json::Value {
   fn string_items(&self) -> Vec<&str> {
     self.as_array().map(|items| items.iter().filter_map(serde_json::Value::as_str).collect()).unwrap_or_default()
   }
+
+  fn is_null(&self) -> bool {
+    self.is_null()
+  }
+
+  fn as_bool_field(&self) -> Option<bool> {
+    self.as_bool()
+  }
+
+  fn as_i64_field(&self) -> Option<i64> {
+    self.as_i64()
+  }
+
+  fn as_u64_field(&self) -> Option<u64> {
+    self.as_u64()
+  }
+
+  fn as_f64_field(&self) -> Option<f64> {
+    self.as_f64()
+  }
+
+  fn array_items(&self) -> Option<&[Self]> {
+    self.as_array().map(Vec::as_slice)
+  }
+
+  fn object_len(&self) -> Option<usize> {
+    self.as_object().map(serde_json::Map::len)
+  }
+
+  fn to_owned_value(&self) -> serde_json::Value {
+    self.clone()
+  }
+}
+
+/// Python's truth value of a JSON value: `None`, `False`, zero, and empty strings, arrays and objects are false.
+pub fn is_truthy(value: &impl EventFields) -> bool {
+  if value.is_null() {
+    return false;
+  }
+  if let Some(flag) = value.as_bool_field() {
+    return flag;
+  }
+  if let Some(number) = value.as_f64_field() {
+    return number != 0.0;
+  }
+  if let Some(text) = value.as_str_field() {
+    return !text.is_empty();
+  }
+  if let Some(items) = value.array_items() {
+    return !items.is_empty();
+  }
+  value.object_len().is_some_and(|len| len > 0)
 }
 
 /// Return whether an event is a real user message rather than a tool-result echo.

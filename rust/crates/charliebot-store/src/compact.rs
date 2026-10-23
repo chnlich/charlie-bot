@@ -7,13 +7,28 @@
 //! the three `serde_json::Number` forms, and Python-compatible access — while sharing each
 //! distinct key once and storing each object as one exact-fit `Box<[ObjectEntry]>`.
 
+#[cfg(test)]
+use std::cell::Cell;
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, Weak};
 
 use serde_json::Value;
 
-/// One interned object key: an index into the process-wide key table.
-pub type Key = u32;
+/// One interned object key's name. Every object entry that uses the key holds an `Arc` to it, so the key
+/// lives exactly as long as some cached event uses it.
+#[derive(Debug, PartialEq)]
+pub struct KeyName(Box<str>);
+
+impl KeyName {
+  /// The key's name.
+  #[must_use]
+  pub fn as_str(&self) -> &str {
+    &self.0
+  }
+}
+
+/// An interned object key, shared by every object entry that uses it.
+pub type Key = Arc<KeyName>;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum CompactValue {
@@ -40,36 +55,47 @@ pub struct ObjectEntry {
 /// The static Null that `Index` returns for a missing key, as serde_json's `Index` does.
 const NULL: CompactValue = CompactValue::Null;
 
-/// The process-wide object-key table. Keys are interned once and never removed, so a key's name
-/// outlives every event that references it.
-struct KeyTable {
-  ids: HashMap<&'static str, Key>,
-  names: Vec<&'static str>,
+/// The process-wide object-key table: each live key's name, with a weak reference to the key. A key leaves
+/// the table when its last object entry drops, so the table holds only keys that some cached event uses.
+type KeyTable = HashMap<Box<str>, Weak<KeyName>>;
+
+#[cfg(test)]
+thread_local! {
+  static TABLE_LOCKS: Cell<usize> = const { Cell::new(0) };
+  static OBJECT_COPIES: Cell<usize> = const { Cell::new(0) };
 }
 
 fn key_table() -> &'static Mutex<KeyTable> {
   static TABLE: OnceLock<Mutex<KeyTable>> = OnceLock::new();
-  TABLE.get_or_init(|| Mutex::new(KeyTable { ids: HashMap::new(), names: Vec::new() }))
+  TABLE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Return the id of `name`, interning it when this is the first use.
+fn lock_key_table() -> MutexGuard<'static, KeyTable> {
+  #[cfg(test)]
+  TABLE_LOCKS.with(|count| count.set(count.get() + 1));
+  key_table().lock().expect("object key table mutex is not poisoned")
+}
+
+/// Return the interned key for `name`, interning it when no live object entry uses it yet.
 pub fn intern_key(name: &str) -> Key {
-  let mut table = key_table().lock().expect("object key table mutex is not poisoned");
-  if let Some(key) = table.ids.get(name) {
-    return *key;
+  let mut table = lock_key_table();
+  if let Some(key) = table.get(name).and_then(Weak::upgrade) {
+    return key;
   }
-  let leaked: &'static str = Box::leak(name.to_string().into_boxed_str());
-  let key = table.names.len() as Key;
-  table.names.push(leaked);
-  table.ids.insert(leaked, key);
+  let key = Arc::new(KeyName(name.into()));
+  table.insert(name.into(), Arc::downgrade(&key));
   key
 }
 
-/// The name of an interned key.
-#[must_use]
-pub fn key_name(key: Key) -> &'static str {
-  // Every id comes from `intern_key`, whose entries live for the process lifetime.
-  key_table().lock().expect("object key table mutex is not poisoned").names[key as usize]
+impl Drop for KeyName {
+  fn drop(&mut self) {
+    // The last entry that used this key is gone. A concurrent intern may already have replaced the table entry with a
+    // live key of the same name, and that key stays.
+    let mut table = lock_key_table();
+    if table.get(self.0.as_ref()).is_some_and(|weak| std::ptr::eq(weak.as_ptr(), self)) {
+      table.remove(self.0.as_ref());
+    }
+  }
 }
 
 impl AsRef<CompactValue> for CompactValue {
@@ -145,21 +171,23 @@ impl CompactValue {
       Self::Str(text) => Value::String(text.to_string()),
       Self::Array(items) => Value::Array(items.iter().map(Self::to_value).collect()),
       Self::Object(entries) => {
+        #[cfg(test)]
+        OBJECT_COPIES.with(|count| count.set(count.get() + 1));
         let mut fields = serde_json::Map::with_capacity(entries.len());
         for entry in entries.iter() {
-          fields.insert(key_name(entry.key).to_string(), entry.value.to_value());
+          fields.insert(entry.key.as_str().to_string(), entry.value.to_value());
         }
         Value::Object(fields)
       }
     }
   }
 
-  /// The value of an object field, or `None` when this is not an object with that key.
+  /// The value of an object field, or `None` when this is not an object with that key. Reads take no lock:
+  /// the name is compared with each entry's key, which owns its name.
   #[must_use]
   pub fn get(&self, name: &str) -> Option<&Self> {
-    let key = key_table().lock().expect("object key table mutex is not poisoned").ids.get(name).copied()?;
     let Self::Object(entries) = self else { return None };
-    entries.iter().find(|entry| entry.key == key).map(|entry| &entry.value)
+    entries.iter().find(|entry| entry.key.as_str() == name).map(|entry| &entry.value)
   }
 
   #[must_use]
@@ -236,13 +264,13 @@ impl CompactValue {
   /// # Panics
   /// Panics when this is not an object; call [`CompactValue::is_object`] first.
   pub fn insert(&mut self, name: &str, value: Value) {
-    let key = intern_key(name);
     let value = Self::from_value(&value);
     let Self::Object(entries) = self else { panic!("insert targets an object") };
-    if let Some(slot) = entries.iter_mut().find(|entry| entry.key == key) {
+    if let Some(slot) = entries.iter_mut().find(|entry| entry.key.as_str() == name) {
       slot.value = value;
       return;
     }
+    let key = intern_key(name);
     let mut grown = std::mem::take(entries).into_vec();
     grown.push(ObjectEntry { key, value });
     *entries = grown.into_boxed_slice();
@@ -277,15 +305,15 @@ impl std::ops::IndexMut<&str> for CompactValue {
     if !matches!(self, CompactValue::Object(_)) {
       panic!("cannot index a non-object event with a string key");
     }
-    let key = intern_key(name);
     let CompactValue::Object(entries) = self else { unreachable!("checked above") };
-    let position = entries.iter().position(|entry| entry.key == key);
+    let position = entries.iter().position(|entry| entry.key.as_str() == name);
     match position {
       Some(position) => {
         let CompactValue::Object(entries) = self else { unreachable!("still an object") };
         &mut entries[position].value
       }
       None => {
+        let key = intern_key(name);
         let mut grown = std::mem::take(entries).into_vec();
         grown.push(ObjectEntry { key, value: CompactValue::Null });
         *entries = grown.into_boxed_slice();
@@ -311,6 +339,41 @@ impl charliebot_core::event_types::EventFields for CompactValue {
 
   fn string_items(&self) -> Vec<&str> {
     self.as_array().map(|items| items.iter().filter_map(Self::as_str).collect()).unwrap_or_default()
+  }
+
+  fn is_null(&self) -> bool {
+    matches!(self, Self::Null)
+  }
+
+  fn as_bool_field(&self) -> Option<bool> {
+    self.as_bool()
+  }
+
+  fn as_i64_field(&self) -> Option<i64> {
+    self.as_i64()
+  }
+
+  fn as_u64_field(&self) -> Option<u64> {
+    self.as_u64()
+  }
+
+  fn as_f64_field(&self) -> Option<f64> {
+    self.as_f64()
+  }
+
+  fn array_items(&self) -> Option<&[Self]> {
+    self.as_array()
+  }
+
+  fn object_len(&self) -> Option<usize> {
+    match self {
+      Self::Object(entries) => Some(entries.len()),
+      _ => None,
+    }
+  }
+
+  fn to_owned_value(&self) -> Value {
+    self.to_value()
   }
 }
 
@@ -354,14 +417,22 @@ pub fn compact_capacity_bytes(value: &CompactValue) -> usize {
   }
 }
 
-/// The number of distinct interned keys and the table's own retained bytes.
-#[must_use]
-pub fn key_table_census() -> (usize, usize) {
-  let table = key_table().lock().expect("object key table mutex is not poisoned");
-  let bytes = table.ids.capacity() * (std::mem::size_of::<&str>() + std::mem::size_of::<Key>() + 8)
-    + table.names.capacity() * std::mem::size_of::<&str>()
-    + table.names.iter().map(|name| name.len()).sum::<usize>();
-  (table.names.len(), bytes)
+/// Whether the key table holds an entry for `name`.
+#[cfg(test)]
+fn key_table_contains(name: &str) -> bool {
+  lock_key_table().contains_key(name)
+}
+
+/// The key-table lock acquisitions made on this thread.
+#[cfg(test)]
+fn table_lock_count() -> usize {
+  TABLE_LOCKS.with(Cell::get)
+}
+
+/// The owned object copies made on this thread by [`CompactValue::to_value`].
+#[cfg(test)]
+pub(crate) fn object_copy_count() -> usize {
+  OBJECT_COPIES.with(Cell::get)
 }
 
 #[cfg(test)]
@@ -374,7 +445,7 @@ mod tests {
     let value = json!({"b": 1, "a": -2, "pi": 0.5, "s": "x", "n": null, "flag": true, "list": [1, "y"]});
     let compact = CompactValue::from_value(&value);
     let CompactValue::Object(entries) = &compact else { panic!("object expected") };
-    let names: Vec<&str> = entries.iter().map(|entry| key_name(entry.key)).collect();
+    let names: Vec<&str> = entries.iter().map(|entry| entry.key.as_str()).collect();
     assert_eq!(names, ["b", "a", "pi", "s", "n", "flag", "list"]);
     assert_eq!(compact["a"], CompactValue::NegInt(-2));
     assert_eq!(compact["pi"], CompactValue::Float(0.5));
@@ -389,7 +460,10 @@ mod tests {
     let second = CompactValue::from_value(&json!({"type": "user", "content": "two"}));
     let CompactValue::Object(first_entries) = &first else { panic!("object expected") };
     let CompactValue::Object(second_entries) = &second else { panic!("object expected") };
-    assert_eq!(first_entries[0].key, second_entries[0].key, "the same key interns to one id");
+    assert!(
+      Arc::ptr_eq(&first_entries[0].key, &second_entries[0].key),
+      "the same key interns to one shared allocation"
+    );
     assert_eq!(
       compact_capacity_bytes(&first),
       2 * std::mem::size_of::<ObjectEntry>() + "user".len() + "one".len(),
@@ -430,5 +504,36 @@ mod tests {
     assert_eq!(value, CompactValue::PosInt(18446744073709551615));
     let value = CompactValue::from_value(&json!(-18446744073709551615f64));
     assert!(matches!(value, CompactValue::Float(_)));
+  }
+
+  #[test]
+  fn a_field_read_by_name_takes_no_key_table_lock() {
+    let event = CompactValue::from_value(&json!({"type": "user", "content": "hi", "id": "e1"}));
+    let before = table_lock_count();
+    for _ in 0..100 {
+      assert!(event.get("content").is_some());
+      assert!(event.get("missing").is_none());
+      assert_eq!(event["type"], "user");
+    }
+    assert_eq!(table_lock_count() - before, 0, "a field read by name takes no key-table lock");
+
+    let before = table_lock_count();
+    let key = intern_key("a key that no event has read yet");
+    assert_eq!(table_lock_count() - before, 1, "interning takes the key-table lock once");
+    drop(key);
+  }
+
+  #[test]
+  fn a_key_leaves_the_table_with_the_last_event_that_uses_it() {
+    let name = "a key freed with its last event";
+    let mut fields = serde_json::Map::new();
+    fields.insert(name.to_string(), json!(1));
+    let first = CompactValue::from_value(&Value::Object(fields));
+    let second = first.clone();
+    assert!(key_table_contains(name));
+    drop(first);
+    assert!(key_table_contains(name), "a clone of the event still uses the key");
+    drop(second);
+    assert!(!key_table_contains(name), "the key's storage is freed with its last event");
   }
 }

@@ -140,7 +140,7 @@ fn build_worker_transcript(store: &Store, session_id: &str, signature: Signature
     },
   )?;
   // The synthesized transcript is the projection's input; the projection reads the compact form.
-  let compact: Vec<ChatEvent> = transcript.iter().map(ChatEvent::from_value).collect();
+  let compact: Vec<SharedChatEvent> = transcript.iter().map(|event| Arc::new(ChatEvent::from_value(event))).collect();
   let projection = store.build_message_projection(&compact, 0)?;
   Ok(TranscriptEntry {
     revision: client_revision,

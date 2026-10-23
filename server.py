@@ -235,7 +235,7 @@ async def lifespan(app: fastapi.FastAPI) -> AsyncIterator[None]:
   boot_time = models.utc_now()
 
   # The home writer fence: this server is THE writer of its selected home, and
-  # a session-tree migration apply takes the same exclusive exclusion. Startup
+  # a migration apply takes the same exclusive exclusion. Startup
   # refuses (and exits) while an apply or another server holds the fence;
   # holding it makes a concurrent apply refuse with this server's identity.
   # See src/runtime/home_writer_fence.py — the flock is the exclusion, the

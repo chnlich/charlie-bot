@@ -228,7 +228,7 @@ impl ClaudeCodeBackend {
     if let Some(effort) = &self.effort {
       command.extend(["--effort".to_string(), effort.clone()]);
     }
-    let mut settings = claude_launch::headless_claude_settings(self.run_kind);
+    let mut settings = claude_launch::headless_claude_settings(self.run_kind, self.cgroup_session_id.as_deref())?;
     if self.fast_mode {
       settings.insert(claude_launch::FAST_MODE_SETTINGS_KEY.to_string(), Value::Bool(true));
     }
@@ -589,7 +589,7 @@ mod tests {
         r#"{"type":"command","command":"charliebot compaction-context --session manager-session --slot 3"},"#,
         r#"{"type":"command","command":"charliebot compaction-context --session manager-session --slot 4"},"#,
         r#"{"type":"command","command":"charliebot compaction-context --session manager-session --slot 5"},"#,
-        r#"{"type":"command","command":"charliebot compaction-context --session manager-session --slot 6"}]}]}"#,
+        r#"{"type":"command","command":"charliebot compaction-context --session manager-session --slot 6"}]}]}}"#,
       )
     );
     let settings: Value = serde_json::from_str(&settings).unwrap();
@@ -597,10 +597,7 @@ mod tests {
     without_hooks.remove("hooks");
     assert_eq!(
       without_hooks,
-      serde_json::json!({"disableClaudeAiConnectors": true, "syncClaudeAiSkills": false})
-        .as_object()
-        .unwrap()
-        .clone()
+      serde_json::json!({"disableClaudeAiConnectors": true, "syncClaudeAiSkills": false}).as_object().unwrap().clone()
     );
     let [session_start] = settings["hooks"]["SessionStart"].as_array().unwrap().as_slice() else {
       panic!("one SessionStart entry");
@@ -609,9 +606,8 @@ mod tests {
     let hooks = session_start["hooks"].as_array().unwrap();
     assert!(hooks.iter().all(|hook| hook["type"] == "command"));
     let commands: Vec<&str> = hooks.iter().map(|hook| hook["command"].as_str().unwrap()).collect();
-    let expected: Vec<String> = (1..=6)
-      .map(|slot| format!("charliebot compaction-context --session manager-session --slot {slot}"))
-      .collect();
+    let expected: Vec<String> =
+      (1..=6).map(|slot| format!("charliebot compaction-context --session manager-session --slot {slot}")).collect();
     assert_eq!(commands, expected);
   }
 

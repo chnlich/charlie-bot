@@ -184,7 +184,10 @@ fn newest_boundary_compact_metadata(path: &Path) -> anyhow::Result<Option<Value>
   Ok(row.get("compactMetadata").and_then(Value::as_object).map(|meta| Value::Object(snake_case_keys(meta))))
 }
 
-pub fn compaction_command(session_id: &str) -> Vec<String> {
+pub fn compaction_command(session_id: &str, charliebot_session_id: &str) -> Vec<String> {
+  let mut settings = Map::new();
+  settings.insert(claude_launch::DISABLE_CONNECTOR_SETTINGS_KEY.to_string(), Value::Bool(true));
+  settings.extend(claude_launch::compaction_context_hook_settings(charliebot_session_id));
   vec![
     "claude".to_string(),
     "-p".to_string(),
@@ -197,7 +200,7 @@ pub fn compaction_command(session_id: &str) -> Vec<String> {
     DISALLOWED_TOOLS_FLAG.to_string(),
     format!("{},{}", HEADLESS_DISALLOWED_TOOLS, EXTRA_COMPACTION_TOOLS),
     "--settings".to_string(),
-    json!({claude_launch::DISABLE_CONNECTOR_SETTINGS_KEY: true}).to_string(),
+    Value::Object(settings).to_string(),
   ]
 }
 
@@ -343,7 +346,7 @@ pub async fn compact_with_sonnet(
   pre_tokens: Option<i64>,
   emit: &EmitFn,
   cfg: &CharlieBotConfig,
-  session_cgroup_id: Option<&str>,
+  session_cgroup_id: &str,
   account_label: &str,
   trigger: &str,
   timeout_duration: StdDuration,
@@ -374,7 +377,7 @@ struct CompactionInput<'a> {
   pre_tokens: Option<i64>,
   emit: &'a EmitFn,
   cfg: &'a CharlieBotConfig,
-  session_cgroup_id: Option<&'a str>,
+  session_cgroup_id: &'a str,
   account_label: &'a str,
   trigger: &'a str,
   timeout_duration: StdDuration,
@@ -398,7 +401,7 @@ async fn compact_with_sonnet_inner(
   } = input;
   let env = make_env(config_dir)?;
   let outcome = run_compaction_inner(CompactionRun {
-    argv: compaction_command(session_id),
+    argv: compaction_command(session_id, session_cgroup_id),
     env,
     cwd,
     config_dir,
@@ -410,7 +413,7 @@ async fn compact_with_sonnet_inner(
     pre_tokens,
     emit,
     cfg,
-    session_cgroup_id,
+    session_cgroup_id: Some(session_cgroup_id),
     account_label,
     timeout_duration,
   })
@@ -576,8 +579,7 @@ mod tests {
   // Python: tests/test_claude_compaction.py:152.
   #[test]
   fn compaction_command_disables_skills_and_installs_the_compaction_context_hook() {
-    // The fix commit renames this call to compaction_command("claude-session", "charlie-session").
-    let command = compaction_command("claude-session");
+    let command = compaction_command("claude-session", "charlie-session");
     let disallowed_index = command.iter().position(|value| *value == DISALLOWED_TOOLS_FLAG).unwrap();
     assert_eq!(command[disallowed_index + 1], format!("{HEADLESS_DISALLOWED_TOOLS},{EXTRA_COMPACTION_TOOLS}"));
     assert!(command[disallowed_index + 1].split(',').any(|tool| tool == "Skill"));
@@ -592,7 +594,7 @@ mod tests {
         r#"{"type":"command","command":"charliebot compaction-context --session charlie-session --slot 3"},"#,
         r#"{"type":"command","command":"charliebot compaction-context --session charlie-session --slot 4"},"#,
         r#"{"type":"command","command":"charliebot compaction-context --session charlie-session --slot 5"},"#,
-        r#"{"type":"command","command":"charliebot compaction-context --session charlie-session --slot 6"}]}]}"#,
+        r#"{"type":"command","command":"charliebot compaction-context --session charlie-session --slot 6"}]}]}}"#,
       )
     );
     let settings: Value = serde_json::from_str(&settings).unwrap();
@@ -603,9 +605,8 @@ mod tests {
     assert_eq!(session_start["matcher"], "compact");
     let commands: Vec<&str> =
       session_start["hooks"].as_array().unwrap().iter().map(|hook| hook["command"].as_str().unwrap()).collect();
-    let expected: Vec<String> = (1..=6)
-      .map(|slot| format!("charliebot compaction-context --session charlie-session --slot {slot}"))
-      .collect();
+    let expected: Vec<String> =
+      (1..=6).map(|slot| format!("charliebot compaction-context --session charlie-session --slot {slot}")).collect();
     assert_eq!(commands, expected);
   }
 
@@ -684,7 +685,7 @@ mod tests {
       pre_tokens: Some(125_000),
       emit,
       cfg,
-      session_cgroup_id: Some("synthetic-session"),
+      session_cgroup_id: "synthetic-session",
       account_label: "synthetic-account",
       trigger: "expired_cache",
       timeout_duration,
@@ -728,7 +729,16 @@ mod tests {
     assert_eq!(fs::read_to_string(root.path().join("prompt.txt")).unwrap(), "/compact\n");
     let args = fs::read_to_string(root.path().join("arguments.txt")).unwrap();
     assert!(args.contains("--resume\nsession-id\n--model\nclaude-sonnet-5"));
-    assert!(args.contains("--settings\n{\"disableClaudeAiConnectors\":true}"));
+    assert!(args
+      .contains(concat!(
+        "--settings\n{\"disableClaudeAiConnectors\":true,\"hooks\":{\"SessionStart\":[{\"matcher\":\"compact\",\"hooks\":[",
+        "{\"type\":\"command\",\"command\":\"charliebot compaction-context --session synthetic-session --slot 1\"},",
+        "{\"type\":\"command\",\"command\":\"charliebot compaction-context --session synthetic-session --slot 2\"},",
+        "{\"type\":\"command\",\"command\":\"charliebot compaction-context --session synthetic-session --slot 3\"},",
+        "{\"type\":\"command\",\"command\":\"charliebot compaction-context --session synthetic-session --slot 4\"},",
+        "{\"type\":\"command\",\"command\":\"charliebot compaction-context --session synthetic-session --slot 5\"},",
+        "{\"type\":\"command\",\"command\":\"charliebot compaction-context --session synthetic-session --slot 6\"}]}]}}"
+      )));
     assert_eq!(events.lock().unwrap()[0]["type"], charliebot_core::event_types::CONTEXT_COMPACTED);
     assert_eq!(events.lock().unwrap()[0]["compact_metadata"]["pre_tokens"], 125_000);
 

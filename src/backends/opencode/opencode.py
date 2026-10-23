@@ -541,7 +541,7 @@ class OpenCodeBackend(base.AgentBackend):
           "permission": {
               "*": "deny"
           },
-          **options.model_context_config([self._backend_option] if self._backend_option is not None else []),
+          **options.model_overrides_config([self._backend_option] if self._backend_option is not None else []),
       }
       env = {
           **os.environ,

@@ -30,7 +30,7 @@ def main() -> None:
       label="Free context check",
       model="opencode/deepseek-v4.1-flash-free",
       context_limit=120000)
-  content = options.model_context_config([option])
+  content = options.model_overrides_config([option])
   print(f"OPENCODE_CONFIG_CONTENT={json.dumps(content)}")
   repo = pathlib.Path(__file__).resolve().parents[1]
   with tempfile.TemporaryDirectory(prefix=".opencode-context-check-", dir=repo) as directory:

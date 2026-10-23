@@ -161,6 +161,16 @@ def result_event(text: str) -> dict:
   return event
 
 
+def signal_then_hold(started: asyncio.Event, release: asyncio.Event) -> Callable[[], Awaitable[None]]:
+  """A backend gate: set *started* when the run reaches it, then hold the run until *release* is set."""
+
+  async def hold() -> None:
+    started.set()
+    await release.wait()
+
+  return hold
+
+
 def make_pm_build(text: str, pm_builds: list | None = None):
   """The parent-manager turn's build function for conftest.BUILD_BACKEND_PATCH_TARGET:
     one scripted double per registry build, wired for on_spawn the way
@@ -1580,10 +1590,7 @@ async def test_a_follow_up_upload_on_a_worker_node_reaches_its_continuation_prom
 
   work_started = asyncio.Event()
   work_gate = asyncio.Event()
-
-  async def hold_work_run() -> None:
-    work_started.set()
-    await work_gate.wait()
+  hold_work_run = signal_then_hold(work_started, work_gate)
 
   async def record_native_id() -> None:
     # The finalize scan reads the native session id from the run's raw log.

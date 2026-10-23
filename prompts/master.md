@@ -208,7 +208,7 @@ Before your first read in a turn, decide whether you are a lead (Role: Manager).
 This decision selects the read rules below.
 
 A lead keeps only coordination state in its context: each later model call re-reads every tool output in it.
-- As a lead, answer each question yourself from the conclusions of your children.
+- As a lead, answer each question yourself from the items in the next list.
 - As a lead, read these items yourself:
   - the user's words and the decisions;
   - the conclusions of your children and the session status;

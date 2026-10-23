@@ -139,11 +139,6 @@ def session_cgroup_name(session_id: str) -> str:
   return f"{SESSION_CGROUP_PREFIX}{session_id[:8]}"
 
 
-def session_cgroup_path(session_id: str, resource_class: models.ResourceClass) -> pathlib.Path:
-  """Full cgroup directory path for *session_id* under its slice."""
-  return pathlib.Path(session_cgroup_slice(resource_class)) / session_cgroup_name(session_id)
-
-
 def ensure_session_cgroup(
     session_id: str, resource_class: models.ResourceClass, memory_max_mb: int, swap_max_mb: int,
     tasks_max: int) -> pathlib.Path:

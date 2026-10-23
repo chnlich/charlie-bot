@@ -54,11 +54,6 @@ def _build_token_count_event(
       })
 
 
-def _build_turn_context_event(model: str) -> dict:
-  """The turn_context event whose payload.model prices the token_count events after it."""
-  return {"type": "turn_context", "payload": {"model": model}}
-
-
 def _build_spend_token_count_event(
     *,
     timestamp: Any,
@@ -170,7 +165,7 @@ def test_spend_aggregation_prices_recent_turns_by_model(tmp_path: pathlib.Path) 
   rollout_path = tmp_path / "rollout-recent.jsonl"
 
   events = [
-      _build_turn_context_event(model="gpt-5.5"),
+      conftest.codex_turn_context_event(model="gpt-5.5"),
       _build_spend_token_count_event(
           timestamp=(now - datetime.timedelta(hours=2)).isoformat().replace("+00:00", "Z"),
           input_tokens=1_000_000,

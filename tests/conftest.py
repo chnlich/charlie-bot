@@ -861,6 +861,11 @@ def codex_token_count_event(timestamp: Any, **payload_inner: Any) -> dict:
   return {"timestamp": timestamp, "type": "event_msg", "payload": {"type": "token_count", **payload_inner}}
 
 
+def codex_turn_context_event(model: str) -> dict:
+  """The codex turn_context event whose payload.model prices the token_count events after it."""
+  return {"type": "turn_context", "payload": {"model": model}}
+
+
 def compact_boundary_event(
     trigger: str | None = "manual", pre_tokens: int | None = None, post_tokens: int | None = None) -> dict:
   """A translated compact_boundary system event in the shape the stream carries and

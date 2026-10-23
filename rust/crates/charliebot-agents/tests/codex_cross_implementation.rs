@@ -569,7 +569,8 @@ fn check_resolve(fx: &Fixture, cases: &[Value], python: &Value, failures: &mut V
     let mut meta = SessionMetadata::new("synthetic-session", "synthetic", TaskProfile::Manager);
     meta.backend = text(&case["backend"]).to_string();
     meta.cc_session_id = opt_text(&case["cc_session_id"]);
-    let events = case["events"].as_array().unwrap().iter().cloned().map(Arc::new).collect::<Vec<_>>();
+    let events =
+      case["events"].as_array().unwrap().iter().cloned().map(|event| Arc::new(event.into())).collect::<Vec<_>>();
     let usage = CodexUsageResolver::new(fx.codex_home(), Arc::clone(&host))
       .resolve(text(&case["session_id"]), &meta, &events)
       .unwrap();

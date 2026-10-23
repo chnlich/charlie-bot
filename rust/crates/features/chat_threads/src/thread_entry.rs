@@ -45,6 +45,7 @@ use charliebot_core::pystr;
 use charliebot_registry::turn::{PromptSource, RuleSegment};
 use charliebot_registry::{FeatureContext, RunningTurnInputs, StateError};
 use charliebot_sched::triggers::{PendingTrigger, TriggerCreateError, TriggerManager, TriggerStatus};
+use charliebot_store::ChatEvent;
 use charliebot_store::message_utils::{SESSION_NOT_FOUND_DETAIL, master_done_input_event_ids};
 use charliebot_store::metadata::{SessionMetadata, SessionStatus, TaskProfile, UtcDateTime};
 use charliebot_store::{CreateTask, SharedChatEvent, Store, StoreError, StoreResult, TaskCaller};
@@ -197,20 +198,27 @@ pub struct ThreadMessage {
   pub eligible: bool,
 }
 
-/// Borrow a JSON event from either an owned value or the shared event cache.
+/// Read one event as the `Value` form these helpers check, from either an owned value or the
+/// shared event cache.
 pub trait ThreadEventData {
-  fn event_data(&self) -> &Value;
+  fn event_value(&self) -> Value;
 }
 
 impl ThreadEventData for Value {
-  fn event_data(&self) -> &Value {
-    self
+  fn event_value(&self) -> Value {
+    self.clone()
+  }
+}
+
+impl ThreadEventData for ChatEvent {
+  fn event_value(&self) -> Value {
+    self.to_value()
   }
 }
 
 impl ThreadEventData for SharedChatEvent {
-  fn event_data(&self) -> &Value {
-    self.as_ref()
+  fn event_value(&self) -> Value {
+    self.as_ref().to_value()
   }
 }
 
@@ -447,8 +455,11 @@ fn paragraph_units(text: &str) -> Vec<&str> {
 }
 
 /// The event with this id, or None (`event_by_id`).
-pub fn event_by_id<'a, E: ThreadEventData>(events: &'a [E], event_id: &str) -> Option<&'a Value> {
-  events.iter().map(ThreadEventData::event_data).find(|event| event.get("id").and_then(Value::as_str) == Some(event_id))
+pub fn event_by_id<E: ThreadEventData>(events: &[E], event_id: &str) -> Option<Value> {
+  events
+    .iter()
+    .map(ThreadEventData::event_value)
+    .find(|event| event.get("id").and_then(Value::as_str) == Some(event_id))
 }
 
 /// The summon a round with this summon block answers: the block's `nudge_of` for a nudge, else the event itself
@@ -459,16 +470,16 @@ pub fn summon_of(block: &Value, event_id: &str) -> String {
 
 /// `(event id, summon block)` of the newest summon-bearing input among `event_ids`, or None (`newest_thread_input`).
 /// An input binds only when it carries a block under the platform's key; the newest in log order wins.
-pub fn newest_thread_input<'a, E: ThreadEventData>(
+pub fn newest_thread_input<E: ThreadEventData>(
   platform: &ThreadPlatform,
-  events: &'a [E],
+  events: &[E],
   event_ids: &[String],
-) -> Option<(String, &'a Value)> {
+) -> Option<(String, Value)> {
   let mut bound = None;
   for shared_event in events {
-    let event = shared_event.event_data();
+    let event = shared_event.event_value();
     let id = event.get("id").and_then(Value::as_str);
-    let block = event.get(platform.name).filter(|block| block.is_object());
+    let block = event.get(platform.name).filter(|block| block.is_object()).cloned();
     if let (Some(id), Some(block)) = (id, block)
       && event_ids.iter().any(|wanted| wanted.as_str() == id)
     {
@@ -481,8 +492,8 @@ pub fn newest_thread_input<'a, E: ThreadEventData>(
 /// Whether the log holds a reply event answering `summon_id` (`replied`).
 pub fn replied<E: ThreadEventData>(platform: &ThreadPlatform, events: &[E], summon_id: &str) -> bool {
   events.iter().any(|event| {
-    let event = event.event_data();
-    event_type(event) == Some(platform.reply_event_type)
+    let event = event.event_value();
+    event_type(&event) == Some(platform.reply_event_type)
       && event.get(platform.reply_event_type).and_then(|payload| payload.get("answers")).and_then(Value::as_str)
         == Some(summon_id)
   })
@@ -491,8 +502,8 @@ pub fn replied<E: ThreadEventData>(platform: &ThreadPlatform, events: &[E], summ
 /// Whether the log holds the nudge for `summon_id`: a summon-block message carrying `nudge_of` (`nudged`).
 pub fn nudged<E: ThreadEventData>(platform: &ThreadPlatform, events: &[E], summon_id: &str) -> bool {
   events.iter().any(|event| {
-    let event = event.event_data();
-    event_type(event) == Some(event_types::AGENT_MESSAGE)
+    let event = event.event_value();
+    event_type(&event) == Some(event_types::AGENT_MESSAGE)
       && event.get(platform.name).and_then(|block| block.get("nudge_of")).and_then(Value::as_str) == Some(summon_id)
   })
 }
@@ -501,7 +512,7 @@ pub fn nudged<E: ThreadEventData>(platform: &ThreadPlatform, events: &[E], summo
 pub fn noticed<E: ThreadEventData>(platform: &ThreadPlatform, events: &[E], summon_id: &str) -> bool {
   let notice_key = platform.notice_key();
   events.iter().any(|event| {
-    let event = event.event_data();
+    let event = event.event_value();
     event.get(&notice_key).and_then(|notice| notice.get(event_types::INPUT_EVENT_ID)).and_then(Value::as_str)
       == Some(summon_id)
   })
@@ -519,27 +530,28 @@ pub fn lost_summons<E: ThreadEventData>(
   let backfill_key = platform.backfill_key();
   let mut answered: HashSet<String> = HashSet::new();
   for event in
-    events.iter().map(ThreadEventData::event_data).filter(|event| event_type(event) == Some(event_types::MASTER_DONE))
+    events.iter().map(ThreadEventData::event_value).filter(|event| event_type(event) == Some(event_types::MASTER_DONE))
   {
-    answered.extend(master_done_input_event_ids(event));
+    answered.extend(master_done_input_event_ids(&event));
   }
   let marked: HashSet<String> = events
     .iter()
     .filter_map(|event| {
-      event.event_data().get(&backfill_key)?.get(event_types::INPUT_EVENT_ID)?.as_str().map(str::to_string)
+      event.event_value().get(&backfill_key)?.get(event_types::INPUT_EVENT_ID)?.as_str().map(str::to_string)
     })
     .collect();
   events
     .iter()
     .filter(|event| {
-      event.event_data().get("type").and_then(Value::as_str) == Some(event_types::AGENT_MESSAGE)
-        && event.event_data().get(platform.name).is_some()
+      event.event_value().get("type").and_then(Value::as_str) == Some(event_types::AGENT_MESSAGE)
+        && event.event_value().get(platform.name).is_some()
     })
     .filter(|event| {
-      let id = event_id(event.event_data());
+      let value = event.event_value();
+      let id = event_id(&value);
       !answered.contains(id) && !marked.contains(id) && !owned.contains(id) && !running.contains(id)
     })
-    .map(|event| event.event_data().clone())
+    .map(|event| event.event_value().clone())
     .collect()
 }
 
@@ -1034,8 +1046,7 @@ pub async fn audit_round(
   };
   let summon_id = summon_of(&target, input_event_id);
   let content = event_by_id(&chat_events, &summon_id)
-    .and_then(|summon| summon.get("content"))
-    .and_then(Value::as_str)
+    .and_then(|summon| summon.get("content").and_then(Value::as_str).map(str::to_string))
     .unwrap_or_default();
   // A summon from the earlier marker contract names neither the one-line input nor the reply command.
   if content != platform.summon_line && !content.contains(platform.reply_command) {
@@ -1074,7 +1085,7 @@ pub async fn audit_round(
         }),
       )
       .await?;
-    let nudge_id = stored.get("id").and_then(Value::as_str).expect("a persisted event carries its id");
+    let nudge_id = stored.get("id").and_then(ChatEvent::as_str).expect("a persisted event carries its id");
     spawn_master_wake(
       features,
       format!("{}-nudge-{session_id}", platform.name),
@@ -1210,12 +1221,12 @@ pub async fn backfill_lost_summons(
     let dones: Vec<usize> = chat_events
       .iter()
       .enumerate()
-      .filter(|(_, event)| event_type(event) == Some(event_types::MASTER_DONE))
-      .filter(|(_, event)| !master_done_input_event_ids(event).is_empty())
+      .filter(|(_, event)| event_type(&event.to_value()) == Some(event_types::MASTER_DONE))
+      .filter(|(_, event)| !master_done_input_event_ids(event.as_ref()).is_empty())
       .map(|(index, _)| index)
       .collect();
     for done_index in dones {
-      let done_ids = master_done_input_event_ids(&chat_events[done_index]);
+      let done_ids = master_done_input_event_ids(chat_events[done_index].as_ref());
       let Some((input_event_id, _)) = newest_thread_input(platform, &chat_events, &done_ids) else {
         continue;
       };
@@ -1555,7 +1566,7 @@ pub async fn accept_summon(
       }),
     )
     .await?;
-  let round_event_id = stored.get("id").and_then(Value::as_str).expect("a persisted event carries its id").to_string();
+  let round_event_id = stored.get("id").and_then(ChatEvent::as_str).expect("a persisted event carries its id").to_string();
   let event = format!("{}_mention_round_started", platform.name);
   tracing::info!(%event, thread = %thread, session = session_id, user_event_id = %round_event_id);
 

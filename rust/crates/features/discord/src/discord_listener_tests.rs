@@ -488,7 +488,14 @@ async fn test_text_channel_summon_starts_thread_and_session() {
   assert_eq!(sid, summon_session_id(GUILD, "900000000000000003"));
   assert_eq!(meta.extra["discord_origin"], origin("900000000000000003"));
   assert_eq!(meta.group.as_deref(), Some("Discord #general"));
-  let events = home.features.store.load_chat_events_sync(&sid).unwrap();
+  let events = home
+    .features
+    .store
+    .load_chat_events_sync(&sid)
+    .unwrap()
+    .iter()
+    .map(charliebot_store::ChatEvent::to_value)
+    .collect::<Vec<_>>();
   let summon = events.iter().find(|event| event["type"] == event_types::AGENT_MESSAGE).unwrap();
   assert_eq!(summon["content"], DISCORD.summon_line);
   assert_eq!(
@@ -540,7 +547,8 @@ async fn test_thread_summon_binds_the_thread_and_labels_from_the_parent() {
     .store
     .load_chat_events_sync(&sid)
     .unwrap()
-    .into_iter()
+    .iter()
+    .map(charliebot_store::ChatEvent::to_value)
     .find(|event| event["type"] == event_types::AGENT_MESSAGE)
     .unwrap();
   assert_eq!(summon["discord"]["channel_id"], THREAD);
@@ -787,7 +795,8 @@ async fn test_post_reply_refuses_422_and_posts_nothing_on_a_file_server_link() {
       .load_chat_events_sync(&sid)
       .unwrap()
       .iter()
-      .all(|event| event["type"] != crate::event_types::DISCORD_REPLY)
+      .all(|event| event.get("type").and_then(charliebot_store::compact::CompactValue::as_str)
+        != Some(crate::event_types::DISCORD_REPLY))
   );
 }
 
@@ -804,7 +813,8 @@ async fn test_after_turn_audits_the_round_on_the_bound_blocks_and_persists_the_n
       json!({"type": event_types::AGENT_MESSAGE, "content": DISCORD.summon_line, "discord": block}),
     )
     .await
-    .unwrap();
+    .unwrap()
+    .to_value();
   let done = json!({"type": event_types::MASTER_DONE, "exit_code": 0, "input_event_id": summon["id"]});
   home.features.store.append_chat_event(&sid, done.clone()).await.unwrap();
   let meta = home.features.store.get_session(&sid).await.unwrap().unwrap();
@@ -815,7 +825,8 @@ async fn test_after_turn_audits_the_round_on_the_bound_blocks_and_persists_the_n
     .store
     .load_chat_events_sync(&sid)
     .unwrap()
-    .into_iter()
+    .iter()
+    .map(charliebot_store::ChatEvent::to_value)
     .find(|event| event["type"] == event_types::AGENT_MESSAGE && event["discord"].get("nudge_of").is_some())
     .unwrap();
   assert_eq!(
@@ -841,16 +852,20 @@ async fn test_persisted_master_done_fires_both_deliver_tasks() {
   let done = json!({"type": event_types::MASTER_DONE, "exit_code": 0, "input_event_ids": [summon["id"]]});
   home.features.store.persist_and_broadcast(&sid, done).await.unwrap();
   wait_for(|| {
-    home
-      .features
-      .store
-      .load_chat_events_sync(&sid)
-      .unwrap()
-      .iter()
-      .any(|event| event["type"] == event_types::AGENT_MESSAGE && event["discord"].get("nudge_of").is_some())
+    home.features.store.load_chat_events_sync(&sid).unwrap().iter().any(|event| {
+      event.get("type").and_then(charliebot_store::compact::CompactValue::as_str) == Some(event_types::AGENT_MESSAGE)
+        && event.get("discord").and_then(|block| block.get("nudge_of")).is_some()
+    })
   })
   .await;
-  let events = home.features.store.load_chat_events_sync(&sid).unwrap();
+  let events = home
+    .features
+    .store
+    .load_chat_events_sync(&sid)
+    .unwrap()
+    .iter()
+    .map(charliebot_store::ChatEvent::to_value)
+    .collect::<Vec<_>>();
   let nudge = events
     .iter()
     .find(|event| event["type"] == event_types::AGENT_MESSAGE && event["discord"].get("nudge_of").is_some())

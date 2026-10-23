@@ -7,11 +7,12 @@ use charliebot_core::event_types;
 use charliebot_registry::caller::CallerIdentity;
 use charliebot_registry::context::{FeatureContext, StateError};
 use charliebot_registry::sequence::{SequenceCompletion, SequenceDispatch};
+use charliebot_store::compact::CompactValue;
 use charliebot_store::metadata::{SessionStatus, TaskProfile, UtcDateTime};
 use charliebot_store::run_records::{RunKind, RunOutcome, RunOutcomeKind, RunRecord};
 use charliebot_store::session_fork::CloseReportRedelivery;
 use charliebot_store::{
-  ControlGuard, SharedChatEvent, Store, StoreError, StoreHookFuture, StoreResult, StructuralBlockers,
+  ChatEvent, ControlGuard, SharedChatEvent, Store, StoreError, StoreHookFuture, StoreResult, StructuralBlockers,
 };
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
@@ -34,7 +35,7 @@ pub trait DispatchExecutor: Send + Sync {
   fn launch<'a>(
     &'a self,
     session_id: &'a str,
-    pending_inputs: &'a [Value],
+    pending_inputs: &'a [ChatEvent],
     launch_run_id: Option<&'a str>,
   ) -> BoxFuture<'a, StoreResult<Option<String>>>;
 }
@@ -77,7 +78,7 @@ impl Dispatcher {
     content: &str,
     actor: &str,
     fields: Value,
-  ) -> StoreResult<Value> {
+  ) -> StoreResult<ChatEvent> {
     if !INPUT_EVENT_TYPES.contains(&event_type) {
       return Err(StoreError::invalid(format!("{event_type} is not a task input type")));
     }
@@ -134,7 +135,9 @@ impl Dispatcher {
         event_id = Some(stable_id);
       } else if let Some(input_id) = fields.input_id.as_deref() {
         let events = self.store.load_all_facts_view_sync(session_id)?;
-        if let Some(existing) = events.iter().find(|event| event.get("id").and_then(Value::as_str) == Some(input_id)) {
+        if let Some(existing) =
+          events.iter().find(|event| event.get("id").and_then(CompactValue::as_str) == Some(input_id))
+        {
           return Ok(existing.clone());
         }
       }
@@ -210,10 +213,10 @@ impl Dispatcher {
     Ok(())
   }
 
-  async fn lift_user_message_branch(&self, session_id: &str, event: &Value) -> StoreResult<()> {
+  async fn lift_user_message_branch(&self, session_id: &str, event: &ChatEvent) -> StoreResult<()> {
     let timestamp = event
       .get("timestamp")
-      .and_then(Value::as_str)
+      .and_then(CompactValue::as_str)
       .ok_or_else(|| StoreError::new("user input event has no timestamp"))?;
     let when = UtcDateTime::parse(timestamp).map_err(|error| StoreError::new(error.to_string()))?;
     let mut chain = vec![session_id.to_string()];
@@ -239,7 +242,7 @@ impl Dispatcher {
   }
 
   /// Return the task's currently pending input facts from the durable boundary and run records.
-  pub fn pending_inputs(&self, session_id: &str) -> StoreResult<Vec<Value>> {
+  pub fn pending_inputs(&self, session_id: &str) -> StoreResult<Vec<ChatEvent>> {
     let facts = self.store.node_state(session_id)?;
     let task = facts.task()?;
     if task.boundary_index.is_none() && task.imported_pending_ids.is_empty() {
@@ -294,8 +297,11 @@ impl Dispatcher {
     if state.runs.stop_requested(run_id, None) {
       return Err(StoreError::conflict(vec![format!("run {run_id} has a durable stop request; it never launches")]));
     }
-    let pending_ids =
-      self.pending_inputs(session_id)?.iter().map(|event| python_string(event.get("id"))).collect::<Vec<_>>();
+    let pending_ids = self
+      .pending_inputs(session_id)?
+      .iter()
+      .map(|event| event.get("id").and_then(CompactValue::as_str).map_or("None".to_string(), str::to_string))
+      .collect::<Vec<_>>();
     let batch = match input_ids {
       None => pending_ids,
       Some(input_ids) => {
@@ -436,7 +442,7 @@ impl Dispatcher {
   }
 
   /// Dispatch the parent's newly delivered report through its durable input queue.
-  pub async fn wake_parent(&self, parent_id: &str, _report: &Value) -> StoreResult<bool> {
+  pub async fn wake_parent(&self, parent_id: &str, _report: &ChatEvent) -> StoreResult<bool> {
     self.dispatch_pending(parent_id).await?;
     Ok(false)
   }
@@ -447,8 +453,11 @@ impl Dispatcher {
       && let Some(run) = self.store.read_run_sync(session_id, run_id)?
       && run.input_event_ids.is_empty()
     {
-      let pending =
-        self.pending_inputs(session_id)?.iter().map(|event| python_string(event.get("id"))).collect::<HashSet<_>>();
+      let pending = self
+        .pending_inputs(session_id)?
+        .iter()
+        .map(|event| event.get("id").and_then(CompactValue::as_str).map_or("None".to_string(), str::to_string))
+        .collect::<HashSet<_>>();
       let foreign = outcome
         .input_event_ids
         .iter()
@@ -478,13 +487,16 @@ impl Dispatcher {
   }
 
   /// Return the newest durable finish or creation fact that can source a child report.
-  pub fn report_source_event(&self, child_session_id: &str, child_kind: &str) -> StoreResult<Value> {
+  pub fn report_source_event(&self, child_session_id: &str, child_kind: &str) -> StoreResult<ChatEvent> {
     let events = self.store.load_all_facts_view_sync(child_session_id)?;
     events
       .iter()
       .rev()
       .find(|event| {
-        matches!(event.get("type").and_then(Value::as_str), Some(event_types::RUN_FINISHED | event_types::TASK_CREATED))
+        matches!(
+          event.get("type").and_then(CompactValue::as_str),
+          Some(event_types::RUN_FINISHED | event_types::TASK_CREATED)
+        )
       })
       .cloned()
       .ok_or_else(|| {
@@ -505,9 +517,10 @@ impl Dispatcher {
   }
 
   /// Return report provenance once per distinct child in the input batch.
-  pub async fn child_report_provenances(&self, events: &[Value]) -> StoreResult<Map<String, Value>> {
+  pub async fn child_report_provenances(&self, events: &[ChatEvent]) -> StoreResult<Map<String, Value>> {
     let mut provenance = Map::new();
     for event in events {
+      let event = event.to_value();
       if event.get("type").and_then(Value::as_str) != Some(event_types::CHILD_REPORT) {
         continue;
       }
@@ -526,12 +539,12 @@ impl Dispatcher {
   pub async fn deliver_child_report(
     &self,
     child_session_id: &str,
-    source_event: Value,
+    source_event: ChatEvent,
     outcome: &str,
     summary: &str,
     result_refs: Option<&[String]>,
     recipient: Option<&str>,
-  ) -> StoreResult<(Value, bool)> {
+  ) -> StoreResult<(ChatEvent, bool)> {
     self
       .deliver_child_report_as(ChildReportInput {
         child_session_id,
@@ -551,12 +564,12 @@ impl Dispatcher {
     &self,
     guard: &ControlGuard,
     child_session_id: &str,
-    source_event: Value,
+    source_event: ChatEvent,
     outcome: &str,
     summary: &str,
     result_refs: Option<&[String]>,
     recipient: Option<&str>,
-  ) -> StoreResult<(Value, bool)> {
+  ) -> StoreResult<(ChatEvent, bool)> {
     self
       .deliver_child_report_locked_as_actor(
         guard,
@@ -577,15 +590,15 @@ impl Dispatcher {
     &self,
     guard: &ControlGuard,
     child_session_id: &str,
-    source_event: Value,
+    source_event: ChatEvent,
     outcome: &str,
     summary: &str,
     result_refs: Option<&[String]>,
     recipient: Option<&str>,
     actor: &str,
-  ) -> StoreResult<(Value, bool)> {
+  ) -> StoreResult<(ChatEvent, bool)> {
     if recipient.is_none() {
-      return Ok((Value::Object(Map::new()), false));
+      return Ok((ChatEvent::Object(Box::new([])), false));
     }
     self
       .deliver_child_report_locked_as(
@@ -595,8 +608,8 @@ impl Dispatcher {
       .await
   }
 
-  async fn deliver_child_report_as(&self, report_input: ChildReportInput<'_>) -> StoreResult<(Value, bool)> {
-    let Some(recipient) = report_input.recipient else { return Ok((Value::Null, false)) };
+  async fn deliver_child_report_as(&self, report_input: ChildReportInput<'_>) -> StoreResult<(ChatEvent, bool)> {
+    let Some(recipient) = report_input.recipient else { return Ok((ChatEvent::Null, false)) };
     let child_session_id = report_input.child_session_id;
     let epoch = self.store.prime_aggregator(recipient).await?;
     let (report, created) = {
@@ -612,7 +625,7 @@ impl Dispatcher {
           target: "charliebot_tasks",
           parent = recipient,
           child = child_session_id,
-          report = %python_string(report.get("id")),
+          report = %python_string(report.to_value().get("id")),
           "child_report_into_archived_parent_kept_as_history"
         );
         return Ok((report, true));
@@ -626,19 +639,20 @@ impl Dispatcher {
     &self,
     guard: &ControlGuard,
     report_input: ChildReportInput<'_>,
-  ) -> StoreResult<(Value, bool)> {
+  ) -> StoreResult<(ChatEvent, bool)> {
     let ChildReportInput { child_session_id, source_event, outcome, summary, result_refs, recipient, actor } =
       report_input;
-    let Some(recipient) = recipient else { return Ok((Value::Null, false)) };
+    let Some(recipient) = recipient else { return Ok((ChatEvent::Null, false)) };
     if self.store.load_meta(recipient).await?.is_none() {
       return Err(StoreError::not_found(format!("report recipient task {recipient} not found")));
     }
-    let source_event_id = python_string(source_event.get("id"));
+    let source_event_id =
+      source_event.get("id").and_then(CompactValue::as_str).map_or("None".to_string(), str::to_string);
     let report_id =
       charliebot_store::control_events::stable_child_report_id(child_session_id, &source_event_id, recipient);
     let recipient_events = self.store.load_all_facts_view_sync(recipient)?;
     if let Some(existing) =
-      recipient_events.iter().find(|event| event.get("id").and_then(Value::as_str) == Some(report_id.as_str()))
+      recipient_events.iter().find(|event| event.get("id").and_then(CompactValue::as_str) == Some(report_id.as_str()))
     {
       return Ok((existing.clone(), false));
     }
@@ -661,17 +675,18 @@ impl Dispatcher {
   }
 
   /// Redeliver every close report absent from its recipient's durable history.
-  pub async fn recover_pending_reports(&self, session_id: &str) -> StoreResult<Vec<Value>> {
+  pub async fn recover_pending_reports(&self, session_id: &str) -> StoreResult<Vec<ChatEvent>> {
     self.store.load_task_meta(session_id).await?;
     let mut delivered = Vec::new();
     for (close, recipient) in self.undelivered_close_recipients(session_id)? {
-      let result_refs = close_result_refs(&close);
-      let summary = truthy_string(close.get("summary"));
+      let close_value = close.to_value();
+      let result_refs = close_result_refs(&close_value);
+      let summary = truthy_string(close_value.get("summary"));
       let (report, created) = self
         .deliver_child_report_as(ChildReportInput {
           child_session_id: session_id,
           source_event: close.as_ref().clone(),
-          outcome: close_report_outcome(&close),
+          outcome: close_report_outcome(&close_value),
           summary: &summary,
           result_refs: Some(&result_refs),
           recipient: Some(&recipient),
@@ -690,19 +705,20 @@ impl Dispatcher {
     &self,
     guard: &ControlGuard,
     session_id: &str,
-  ) -> StoreResult<Vec<Value>> {
+  ) -> StoreResult<Vec<ChatEvent>> {
     self.store.load_task_meta(session_id).await?;
     let mut delivered = Vec::new();
     for (close, recipient) in self.undelivered_close_recipients(session_id)? {
-      let result_refs = close_result_refs(&close);
-      let summary = truthy_string(close.get("summary"));
+      let close_value = close.to_value();
+      let result_refs = close_result_refs(&close_value);
+      let summary = truthy_string(close_value.get("summary"));
       let (report, created) = self
         .deliver_child_report_locked_as(
           guard,
           ChildReportInput {
             child_session_id: session_id,
             source_event: close.as_ref().clone(),
-            outcome: close_report_outcome(&close),
+            outcome: close_report_outcome(&close_value),
             summary: &summary,
             result_refs: Some(&result_refs),
             recipient: Some(&recipient),
@@ -724,7 +740,7 @@ impl Dispatcher {
         .undelivered_close_recipients(session_id)?
         .iter()
         .map(|(close, _)| {
-          format!("has an undelivered parent report for close event {}", python_string(close.get("id")))
+          format!("has an undelivered parent report for close event {}", python_string(close.to_value().get("id")))
         })
         .collect(),
     )
@@ -735,12 +751,13 @@ impl Dispatcher {
     let mut undelivered = Vec::new();
     let mut recipient_events = HashMap::new();
     for close in close_events {
-      let recipient = close.get("report_to");
+      let close_value = close.to_value();
+      let recipient = close_value.get("report_to");
       if !python_truthy(recipient) {
         continue;
       }
       let recipient = python_string(recipient);
-      let source_event_id = python_string(close.get("id"));
+      let source_event_id = python_string(close_value.get("id"));
       let report_id =
         charliebot_store::control_events::stable_child_report_id(session_id, &source_event_id, &recipient);
       if !recipient_events.contains_key(&recipient) {
@@ -748,7 +765,7 @@ impl Dispatcher {
       }
       let events = recipient_events.get(&recipient).expect("recipient history is inserted before it is read");
       let already_delivered =
-        events.iter().any(|event| event.get("id").and_then(Value::as_str) == Some(report_id.as_str()));
+        events.iter().any(|event| event.get("id").and_then(CompactValue::as_str) == Some(report_id.as_str()));
       if !already_delivered {
         undelivered.push((close, recipient));
       }
@@ -785,7 +802,7 @@ impl SequenceDispatch for Dispatcher {
     content: &'a str,
     actor: &'a str,
     fields: Value,
-  ) -> BoxFuture<'a, StoreResult<Value>> {
+  ) -> BoxFuture<'a, StoreResult<ChatEvent>> {
     Box::pin(async move { Dispatcher::admit_input(self, session_id, event_type, content, actor, fields).await })
   }
 
@@ -793,7 +810,7 @@ impl SequenceDispatch for Dispatcher {
     Box::pin(async move { Dispatcher::dispatch_pending(self, session_id).await.map(|_| ()) })
   }
 
-  fn report_source_event(&self, child_session_id: &str, child_kind: &str) -> StoreResult<Value> {
+  fn report_source_event(&self, child_session_id: &str, child_kind: &str) -> StoreResult<ChatEvent> {
     Dispatcher::report_source_event(self, child_session_id, child_kind)
   }
 
@@ -801,12 +818,12 @@ impl SequenceDispatch for Dispatcher {
     &'a self,
     guard: &'a ControlGuard,
     child_session_id: &'a str,
-    source_event: Value,
+    source_event: ChatEvent,
     outcome: &'a str,
     summary: &'a str,
     result_refs: Option<&'a [String]>,
     recipient: Option<&'a str>,
-  ) -> BoxFuture<'a, StoreResult<(Value, bool)>> {
+  ) -> BoxFuture<'a, StoreResult<(ChatEvent, bool)>> {
     Box::pin(async move {
       Dispatcher::deliver_child_report_locked(
         self,
@@ -825,19 +842,19 @@ impl SequenceDispatch for Dispatcher {
   fn deliver_child_report<'a>(
     &'a self,
     child_session_id: &'a str,
-    source_event: Value,
+    source_event: ChatEvent,
     outcome: &'a str,
     summary: &'a str,
     result_refs: Option<&'a [String]>,
     recipient: Option<&'a str>,
-  ) -> BoxFuture<'a, StoreResult<(Value, bool)>> {
+  ) -> BoxFuture<'a, StoreResult<(ChatEvent, bool)>> {
     Box::pin(async move {
       Dispatcher::deliver_child_report(self, child_session_id, source_event, outcome, summary, result_refs, recipient)
         .await
     })
   }
 
-  fn wake_parent<'a>(&'a self, parent_id: &'a str, report: Value) -> BoxFuture<'a, StoreResult<bool>> {
+  fn wake_parent<'a>(&'a self, parent_id: &'a str, report: ChatEvent) -> BoxFuture<'a, StoreResult<bool>> {
     Box::pin(async move { Dispatcher::wake_parent(self, parent_id, &report).await })
   }
 }
@@ -874,8 +891,13 @@ async fn note_run_liveness_inner(store: &Store, session_id: &str, run: &RunRecor
 }
 
 /// The task-tree blocker sentence for a non-empty pending batch.
-pub fn unprocessed_input_blocker(pending: &[Value]) -> String {
-  let ids = pending.iter().take(8).map(|event| python_string(event.get("id"))).collect::<Vec<_>>().join(", ");
+pub fn unprocessed_input_blocker(pending: &[ChatEvent]) -> String {
+  let ids = pending
+    .iter()
+    .take(8)
+    .map(|event| event.get("id").and_then(CompactValue::as_str).map_or("None".to_string(), str::to_string))
+    .collect::<Vec<_>>()
+    .join(", ");
   let more = if pending.len() <= 8 { String::new() } else { format!(" (+{} more)", pending.len() - 8) };
   format!("has unprocessed input: {ids}{more}")
 }
@@ -909,16 +931,16 @@ pub fn agent_provenance(caller: &CallerIdentity) -> (Option<String>, Option<Stri
   }
 }
 
-fn deduplicate_pending_inputs<E: AsRef<Value>>(
+fn deduplicate_pending_inputs<E: AsRef<CompactValue>>(
   candidates: Vec<E>,
   confirmed: &HashSet<String>,
   claimed: &HashSet<String>,
-) -> Vec<Value> {
+) -> Vec<CompactValue> {
   let mut positions = HashMap::new();
   let mut pending = Vec::new();
   for candidate in candidates {
     let event = candidate.as_ref();
-    let input_id = python_string(event.get("id"));
+    let input_id = event.get("id").and_then(CompactValue::as_str).map_or("None".to_string(), str::to_string);
     if confirmed.contains(&input_id) || claimed.contains(&input_id) {
       continue;
     }
@@ -945,7 +967,7 @@ struct AdmitFields {
 
 struct ChildReportInput<'a> {
   child_session_id: &'a str,
-  source_event: Value,
+  source_event: ChatEvent,
   outcome: &'a str,
   summary: &'a str,
   result_refs: Option<&'a [String]>,
@@ -1095,14 +1117,15 @@ mod tests {
   fn pending_input_ids_keep_the_first_position_and_last_event() {
     let pending = deduplicate_pending_inputs(
       vec![
-        Arc::new(json!({"id":"same","content":"first"})),
-        Arc::new(json!({"id":"other","content":"other"})),
-        Arc::new(json!({"id":"same","content":"last"})),
+        Arc::new(json!({"id":"same","content":"first"}).into()),
+        Arc::new(json!({"id":"other","content":"other"}).into()),
+        Arc::new(json!({"id":"same","content":"last"}).into()),
       ],
       &HashSet::new(),
       &HashSet::new(),
     );
-    assert_eq!(pending, [json!({"id":"same","content":"last"}), json!({"id":"other","content":"other"})]);
+    let expected = [json!({"id":"same","content":"last"}), json!({"id":"other","content":"other"})];
+    assert_eq!(pending.iter().map(|event| event.to_value()).collect::<Vec<_>>(), expected);
   }
 
   #[test]

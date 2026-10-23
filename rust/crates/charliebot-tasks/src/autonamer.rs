@@ -12,6 +12,7 @@ use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::event_types;
 use charliebot_registry::backend::LaunchArgs;
 use charliebot_registry::context::FeatureContext;
+use charliebot_store::compact::CompactValue;
 use charliebot_store::metadata::SessionMetadata;
 use serde_json::Value;
 
@@ -60,15 +61,15 @@ pub async fn name_after_round(
     let events = store.load_chat_events_shared_sync(&history_session_id)?;
     let user_message = events
       .iter()
-      .find(|event| event.get("type").and_then(Value::as_str) == Some(event_types::USER))
+      .find(|event| event.get("type").and_then(CompactValue::as_str) == Some(event_types::USER))
       .and_then(|event| event.get("content"))
-      .and_then(Value::as_str)
+      .and_then(CompactValue::as_str)
       .unwrap_or_default()
       .to_string();
     let assistant_response = events
       .iter()
-      .filter(|event| event.get("type").and_then(Value::as_str) == Some(event_types::ASSISTANT))
-      .map(|event| extract_text_from_message(event.as_ref()))
+      .filter(|event| event.get("type").and_then(CompactValue::as_str) == Some(event_types::ASSISTANT))
+      .map(|event| extract_text_from_message(event))
       .collect::<String>();
     Ok::<_, charliebot_store::StoreError>((user_message, assistant_response))
   })
@@ -287,14 +288,15 @@ fn strip_markdown_fences(text: &str) -> &str {
   captures.get(1).map_or(text, |body| body.as_str())
 }
 
-fn extract_text_from_message(event: &Value) -> String {
-  let Some(blocks) = event.get("message").and_then(|message| message.get("content")).and_then(Value::as_array) else {
+fn extract_text_from_message(event: &CompactValue) -> String {
+  let Some(blocks) = event.get("message").and_then(|message| message.get("content")).and_then(CompactValue::as_array)
+  else {
     return String::new();
   };
   blocks
     .iter()
-    .filter(|block| block.get("type").and_then(Value::as_str) == Some("text"))
-    .filter_map(|block| block.get("text").and_then(Value::as_str))
+    .filter(|block| block.get("type").and_then(CompactValue::as_str) == Some("text"))
+    .filter_map(|block| block.get("text").and_then(CompactValue::as_str))
     .collect()
 }
 

@@ -461,7 +461,7 @@ async fn run_fresh_case(
   temp: &TempDir,
   index: usize,
   registry: Arc<Registry>,
-) -> anyhow::Result<(Vec<Value>, Vec<String>)> {
+) -> anyhow::Result<(Vec<charliebot_store::ChatEvent>, Vec<String>)> {
   let configured_option = if case.mode == "unknown_pin" {
     Some(backend_option(String::new()))
   } else if case.mode == "refused" {
@@ -514,7 +514,7 @@ async fn run_resume_case(
   temp: &TempDir,
   index: usize,
   registry: Arc<Registry>,
-) -> anyhow::Result<(Vec<Value>, Vec<String>)> {
+) -> anyhow::Result<(Vec<charliebot_store::ChatEvent>, Vec<String>)> {
   let option = backend_option(String::new());
   let home = temp.path().join(format!("home-{index}"));
   let slots = registry.metadata_slots();
@@ -671,7 +671,7 @@ async fn manager_turn_matches_python_event_stream_matrix() -> anyhow::Result<()>
     } else {
       run_fresh_case(case, &temp, index, Arc::clone(&registry)).await?
     };
-    let actual = actual.iter().map(normalize_event).collect::<Vec<_>>();
+    let actual = actual.iter().map(|event| normalize_event(&event.to_value())).collect::<Vec<_>>();
     let expected = case.persisted.iter().map(normalize_event).collect::<Vec<_>>();
     assert_eq!(actual, expected, "persisted events differ for {}", case.name);
     assert_eq!(unread, case.mark_unread, "unread calls differ for {}", case.name);
@@ -915,7 +915,7 @@ async fn cancel_gated_manager_runs_through_route(chat_cancel: bool) -> anyhow::R
         // The chat cancel takes the same stop path (src/runtime/api/chat.py:106). The two writers race,
         // so accept either order and check both events once both exist.
         let done = facts.iter().position(|event| {
-          event["type"] == event_types::MASTER_DONE && event["input_event_ids"] == json!([input_event_id])
+          event["type"] == event_types::MASTER_DONE && event["input_event_ids"].to_value() == json!([input_event_id])
         });
         let finished =
           facts.iter().position(|event| event["type"] == event_types::RUN_FINISHED && event["run_id"] == run_id);
@@ -1385,16 +1385,19 @@ async fn translation_failure_reports_the_turn_and_keeps_the_session_consumer_ali
   let events = features.store.load_chat_events_sync(&meta.id)?;
   let error_events = events
     .iter()
-    .filter(|event| event.get("type").and_then(Value::as_str) == Some(event_types::ASSISTANT_ERROR))
+    .filter(|event| {
+      event.get("type").and_then(charliebot_store::compact::CompactValue::as_str) == Some(event_types::ASSISTANT_ERROR)
+    })
     .collect::<Vec<_>>();
   assert_eq!(error_events.len(), 1);
   assert!(error_events[0]["content"].as_str().unwrap().contains("synthetic translator failure"));
   assert_eq!(events.iter().filter(|event| event["type"] == "master_done").count(), 2);
   assert!(events.iter().any(|event| event["type"] == "thinking"));
   assert!(events.iter().any(|event| event["type"] == "result"));
-  let assistant_text = events
+  let event_values = events.iter().map(|event| event.to_value()).collect::<Vec<_>>();
+  let assistant_text = event_values
     .iter()
-    .filter_map(|event| event.pointer("/message/content/0/text").and_then(Value::as_str))
+    .filter_map(|event| event.pointer("/message/content/0/text").and_then(serde_json::Value::as_str))
     .collect::<Vec<_>>();
   assert_eq!(assistant_text, ["next turn answer"]);
   assert_eq!(unread.lock().expect("golden unread mutex is not poisoned").as_slice(), [meta.id.as_str()]);
@@ -1462,13 +1465,21 @@ cat <<'CB_RESULT'
   let events = features.store.load_chat_events_sync(&meta.id)?;
   let environment = events
     .iter()
-    .find(|event| event.get("subtype").and_then(Value::as_str) == Some("environment_probe"))
+    .find(|event| {
+      event.get("subtype").and_then(charliebot_store::compact::CompactValue::as_str) == Some("environment_probe")
+    })
     .context("scripted backend did not report its child environment")?;
-  assert_eq!(environment.get("session").and_then(Value::as_str), Some("environment-session"));
-  assert_eq!(environment.get("path").and_then(Value::as_str), Some("/usr/bin"));
-  assert_eq!(environment.get("ceiling").and_then(Value::as_str), Some(home.to_string_lossy().as_ref()));
-  assert_eq!(environment.get("claudecode").and_then(Value::as_str), Some("unset"));
-  assert_eq!(environment.get("auto_memory").and_then(Value::as_str), Some("1"));
+  assert_eq!(
+    environment.get("session").and_then(charliebot_store::compact::CompactValue::as_str),
+    Some("environment-session")
+  );
+  assert_eq!(environment.get("path").and_then(charliebot_store::compact::CompactValue::as_str), Some("/usr/bin"));
+  assert_eq!(
+    environment.get("ceiling").and_then(charliebot_store::compact::CompactValue::as_str),
+    Some(home.to_string_lossy().as_ref())
+  );
+  assert_eq!(environment.get("claudecode").and_then(charliebot_store::compact::CompactValue::as_str), Some("unset"));
+  assert_eq!(environment.get("auto_memory").and_then(charliebot_store::compact::CompactValue::as_str), Some("1"));
   Ok(())
 }
 
@@ -1611,7 +1622,7 @@ async fn shutdown_detaches_covered_turns_and_terminates_uncovered_turns() -> any
     queue.shutdown().await?;
     assert!(turn.await?.is_err(), "shutdown should cancel the waiting turn");
     let events = features.store.load_chat_events_sync(&meta.id)?;
-    assert!(events.iter().all(|event| event.get("type").and_then(Value::as_str) != Some("master_done")));
+    assert!(events.iter().all(|event| event.get("type").and_then(charliebot_store::compact::CompactValue::as_str) != Some("master_done")));
     assert_eq!(!unread.lock().expect("golden unread mutex is not poisoned").is_empty(), expected_unread);
     if !expected_unread {
       tokio::time::sleep(std::time::Duration::from_millis(1_050)).await;
@@ -1741,12 +1752,9 @@ async fn assert_task_run_shutdown_shape(backend_type: &str, expected_unread: boo
   }
   tokio::time::timeout(Duration::from_secs(5), async {
     loop {
-      if features
-        .store
-        .load_chat_events_sync(&meta.id)?
-        .iter()
-        .any(|event| event.get("type").and_then(Value::as_str) == Some(event_types::ASSISTANT))
-      {
+      if features.store.load_chat_events_sync(&meta.id)?.iter().any(|event| {
+        event.get("type").and_then(charliebot_store::compact::CompactValue::as_str) == Some(event_types::ASSISTANT)
+      }) {
         break anyhow::Ok(());
       }
       tokio::time::sleep(Duration::from_millis(10)).await;
@@ -1786,7 +1794,7 @@ async fn assert_task_run_shutdown_shape(backend_type: &str, expected_unread: boo
   assert!(run_records::terminal_outcome(&facts, run_id)?.is_none(), "shutdown must not write a terminal run fact");
   assert!(events.iter().all(|event| {
     !matches!(
-      event.get("type").and_then(Value::as_str),
+      event.get("type").and_then(charliebot_store::compact::CompactValue::as_str),
       Some(event_types::MASTER_DONE | event_types::ASSISTANT_ERROR | event_types::RUN_FINISHED)
     )
   }));

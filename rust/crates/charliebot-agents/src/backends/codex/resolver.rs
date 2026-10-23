@@ -14,6 +14,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::Context;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types;
+use charliebot_core::event_types::EventFields;
 use charliebot_core::hot_reload::HotReload;
 use charliebot_registry::backend::{UsageResolver, UsageResolverHost};
 use charliebot_store::SharedChatEvent;
@@ -205,8 +206,8 @@ impl UsageResolver for CodexUsageResolver {
 }
 
 /// The first event's non-empty string session id.
-fn translated_session_id(event: &Value) -> Option<String> {
-  event.get("session_id").and_then(Value::as_str).filter(|id| !id.is_empty()).map(str::to_string)
+fn translated_session_id(event: &impl EventFields) -> Option<String> {
+  event.field("session_id").and_then(EventFields::as_str_field).filter(|id| !id.is_empty()).map(str::to_string)
 }
 
 /// The first non-empty string session id in the chat-events file, or `None` when the file is absent or has none. The

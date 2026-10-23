@@ -523,12 +523,12 @@ mod tests {
     // The parent holds its creation fact, then e0, e1 and e2; the cut at index 2 keeps the first three.
     assert_eq!(child_events.len(), 5);
     assert_eq!(child_events[..3], parent_events[..3]);
-    assert_eq!(child_events[1]["content"], "e0");
-    assert_eq!(child_events[2]["content"], "e1");
-    assert_eq!(child_events[3]["type"], event_types::CLONE_START);
-    assert_eq!(child_events[3]["parent_session_id"], parent.id);
-    assert_eq!(child_events[4]["type"], event_types::TASK_CREATED);
-    assert_eq!(child_events[4]["source_session_id"], child.id);
+    assert_eq!(child_events[1]["content"].as_str(), Some("e0"));
+    assert_eq!(child_events[2]["content"].as_str(), Some("e1"));
+    assert_eq!(child_events[3]["type"].as_str(), Some(event_types::CLONE_START));
+    assert_eq!(child_events[3]["parent_session_id"].as_str(), Some(parent.id.as_str()));
+    assert_eq!(child_events[4]["type"].as_str(), Some(event_types::TASK_CREATED));
+    assert_eq!(child_events[4]["source_session_id"].as_str(), Some(child.id.as_str()));
   }
 
   #[tokio::test]
@@ -700,15 +700,15 @@ mod tests {
     let mut expected = vec![still_child.id.clone(), running.id.clone()];
     expected.sort();
     assert_eq!(children, expected);
-    let closes: Vec<Value> = store
+    let closes = store
       .load_all_facts(&source.id)
       .unwrap()
       .into_iter()
-      .filter(|event| event["type"] == event_types::TASK_CLOSED)
-      .collect();
+      .filter(|event| event["type"].as_str() == Some(event_types::TASK_CLOSED))
+      .collect::<Vec<_>>();
     assert_eq!(closes.len(), 1);
-    assert_eq!(closes[0]["outcome"], "archived");
-    assert_eq!(closes[0]["report_to"], Value::Null);
+    assert_eq!(closes[0]["outcome"].as_str(), Some("archived"));
+    assert_eq!(closes[0]["report_to"].to_value(), Value::Null);
     let fresh_source = store.read_metadata_fresh(&source.id).unwrap().unwrap();
     assert_eq!(fresh_source.status, SessionStatus::Archived);
     assert_eq!(fresh_source.successor_session_id.as_deref(), Some(new.id.as_str()));

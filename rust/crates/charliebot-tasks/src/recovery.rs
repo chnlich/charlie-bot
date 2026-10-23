@@ -24,6 +24,7 @@ use charliebot_registry::sequence::{
   SequenceCompletion, SequenceController, SequenceDispatch, SequenceExecutor, SequenceSessionEvents,
   SequenceTreeRuntime, StoreSequenceTree,
 };
+use charliebot_store::ChatEvent;
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskType, UtcDateTime};
 use charliebot_store::run_records::{self, RAW_LOG_NAME, RunKind, RunOutcome, RunOutcomeKind, RunRecord};
 use charliebot_store::{PromptScope, Store, StoreError, StoreResult};
@@ -1157,7 +1158,7 @@ impl SequenceSessionEvents for StoreSessionEvents {
   fn announce_appended_event<'a>(
     &'a self,
     session_id: &'a str,
-    event: &'a Value,
+    event: &'a ChatEvent,
     epoch: u64,
   ) -> BoxFuture<'a, StoreResult<()>> {
     Box::pin(async move { self.0.announce_appended_event(session_id, event, epoch).await })

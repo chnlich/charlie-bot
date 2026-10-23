@@ -240,7 +240,7 @@ mod tests {
 
   use axum::http::StatusCode;
   use charliebot_store::metadata::TaskProfile;
-  use charliebot_store::{CreateTask, Store, TaskCaller};
+  use charliebot_store::{ChatEvent, CreateTask, Store, TaskCaller};
   use charliebot_tasks::dispatch::DispatchExecutor;
   use futures_util::future::BoxFuture;
   use serde_json::Map;
@@ -258,7 +258,7 @@ mod tests {
     fn launch<'a>(
       &'a self,
       session_id: &'a str,
-      pending_inputs: &'a [Value],
+      pending_inputs: &'a [ChatEvent],
       _launch_run_id: Option<&'a str>,
     ) -> BoxFuture<'a, StoreResult<Option<String>>> {
       let contents = pending_inputs

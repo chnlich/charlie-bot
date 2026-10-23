@@ -16,13 +16,15 @@ use nix::sys::signal::{Signal, killpg};
 use nix::unistd::{Pid, getpgid};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
+
+use crate::compact::CompactValue;
 use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::control_events::{self, ACTOR_SYSTEM};
 use crate::metadata::UtcDateTime;
-use crate::{ControlGuard, SharedChatEvent, Store, StoreError, StoreResult};
+use crate::{ChatEvent, ControlGuard, SharedChatEvent, Store, StoreError, StoreResult};
 
 pub const DATA_DIR_NAME: &str = "data";
 pub const MASTER_RUNS_DIR_NAME: &str = "master_runs";
@@ -262,21 +264,21 @@ fn is_known_outcome(value: &str) -> bool {
 }
 
 impl RunFacts {
-  pub(crate) fn observe(&mut self, event: &Value) {
+  pub(crate) fn observe(&mut self, event: &ChatEvent) {
     #[cfg(test)]
     {
       self.observed_events += 1;
     }
-    match event.get("type").and_then(Value::as_str) {
+    match event.get("type").and_then(CompactValue::as_str) {
       Some("run_finished") => {
-        if let Some(run_id) = event.get("run_id").and_then(Value::as_str) {
-          let outcome = event.get("outcome").and_then(Value::as_str).map(str::to_string);
+        if let Some(run_id) = event.get("run_id").and_then(CompactValue::as_str) {
+          let outcome = event.get("outcome").and_then(CompactValue::as_str).map(str::to_string);
           self.outcomes.insert(run_id.to_string(), outcome);
         }
       }
       Some("run_stop_requested") => {
-        if let Some(run_id) = event.get("run_id").and_then(Value::as_str) {
-          let request_id = event.get("request_id").and_then(Value::as_str).map(str::to_string);
+        if let Some(run_id) = event.get("run_id").and_then(CompactValue::as_str) {
+          let request_id = event.get("request_id").and_then(CompactValue::as_str).map(str::to_string);
           self.stop_requests.entry(run_id.to_string()).or_default().insert(request_id);
         }
       }
@@ -631,15 +633,15 @@ impl Store {
     let events = self.load_all_facts(session_id)?;
     let mut fact_times = HashMap::<String, UtcDateTime>::new();
     for event in &events {
-      if event.get("type").and_then(Value::as_str) != Some("run_finished") {
+      if event.get("type").and_then(CompactValue::as_str) != Some("run_finished") {
         continue;
       }
-      let Some(run_id) = event.get("run_id").and_then(Value::as_str) else {
+      let Some(run_id) = event.get("run_id").and_then(CompactValue::as_str) else {
         continue;
       };
       let timestamp = event
         .get("timestamp")
-        .and_then(Value::as_str)
+        .and_then(CompactValue::as_str)
         .ok_or_else(|| StoreError::new("run_finished fact has no string timestamp"))?;
       let parsed = UtcDateTime::parse(timestamp)
         .map_err(|error| StoreError::new(format!("run_finished fact timestamp is invalid: {error}")))?;
@@ -926,8 +928,8 @@ impl Store {
       let input_event_ids = events
         .iter()
         .find(|event| {
-          event.get("type").and_then(Value::as_str) == Some("run_finished")
-            && event.get("run_id").and_then(Value::as_str) == Some(run_id)
+          event.get("type").and_then(CompactValue::as_str) == Some("run_finished")
+            && event.get("run_id").and_then(CompactValue::as_str) == Some(run_id)
         })
         .map(|event| event_input_ids(event))
         .unwrap_or_default();
@@ -990,7 +992,8 @@ impl Store {
       }
       return Ok(run.input_event_ids.clone());
     }
-    let known = events.iter().filter_map(|event| event.get("id").and_then(Value::as_str)).collect::<HashSet<_>>();
+    let known =
+      events.iter().filter_map(|event| event.get("id").and_then(CompactValue::as_str)).collect::<HashSet<_>>();
     let unknown = supplied.iter().filter(|event_id| !known.contains(event_id.as_str())).cloned().collect::<Vec<_>>();
     if !unknown.is_empty() {
       return Err(StoreError::new(format!(
@@ -1000,10 +1003,11 @@ impl Store {
     }
     let mut foreign = HashSet::new();
     for event in events {
-      if event.get("type").and_then(Value::as_str) != Some("run_finished") {
+      let event = event.as_ref();
+      if event.get("type").and_then(CompactValue::as_str) != Some("run_finished") {
         continue;
       }
-      if event.get("run_id").and_then(Value::as_str).is_none_or(|other_run_id| other_run_id != run.id) {
+      if event.get("run_id").and_then(CompactValue::as_str).is_none_or(|other_run_id| other_run_id != run.id) {
         foreign.extend(event_input_ids(event));
       }
     }
@@ -1225,26 +1229,31 @@ fn require_run(store: &Store, session_id: &str, run_id: &str) -> StoreResult<Run
 }
 
 /// The run's run_finished facts in log order.
-fn finish_facts<'a>(events: &'a [Value], run_id: &'a str) -> impl DoubleEndedIterator<Item = &'a Value> {
-  events.iter().filter(move |event| {
-    event.get("type").and_then(Value::as_str) == Some("run_finished")
-      && event.get("run_id").and_then(Value::as_str) == Some(run_id)
+fn finish_facts<'a, T: AsRef<ChatEvent>>(
+  events: &'a [T],
+  run_id: &'a str,
+) -> impl DoubleEndedIterator<Item = &'a ChatEvent> {
+  events.iter().filter_map(move |event| {
+    let event = event.as_ref();
+    (event.get("type").and_then(CompactValue::as_str) == Some("run_finished")
+      && event.get("run_id").and_then(CompactValue::as_str) == Some(run_id))
+    .then_some(event)
   })
 }
 
-fn event_input_ids(event: &Value) -> Vec<String> {
+fn event_input_ids(event: &ChatEvent) -> Vec<String> {
   event
     .get("input_event_ids")
-    .and_then(Value::as_array)
-    .map(|values| values.iter().filter_map(Value::as_str).map(str::to_string).collect())
+    .and_then(CompactValue::as_array)
+    .map(|values| values.iter().filter_map(CompactValue::as_str).map(str::to_string).collect())
     .unwrap_or_default()
 }
 
 /// The outcome of the run's last run_finished fact. None when the run has no finish fact or its last one carries no
 /// outcome; an outcome string outside the known set is an error.
-pub fn terminal_outcome(events: &[Value], run_id: &str) -> StoreResult<Option<RunOutcomeKind>> {
+pub fn terminal_outcome<T: AsRef<ChatEvent>>(events: &[T], run_id: &str) -> StoreResult<Option<RunOutcomeKind>> {
   let event = finish_facts(events, run_id).next_back();
-  match event.and_then(|event| event.get("outcome")).and_then(Value::as_str) {
+  match event.and_then(|event| event.get("outcome")).and_then(CompactValue::as_str) {
     None => Ok(None),
     Some("success") => Ok(Some(RunOutcomeKind::Success)),
     Some("failed") => Ok(Some(RunOutcomeKind::Failed)),
@@ -1256,21 +1265,12 @@ pub fn terminal_outcome(events: &[Value], run_id: &str) -> StoreResult<Option<Ru
 /// Whether a durable `run_stop_requested` fact exists for the run, and for one request id when one is given. The pure
 /// fact scan behind the stop checks of `RunStore.stop_requested` (`runs.py::stop_requested_in_events`); the task tree
 /// reads the same facts through it.
-pub fn stop_requested_in_events(events: &[Value], run_id: &str, request_id: Option<&str>) -> bool {
-  events.iter().any(|event| {
-    event.get("type").and_then(Value::as_str) == Some("run_stop_requested")
-      && event.get("run_id").and_then(Value::as_str) == Some(run_id)
-      && request_id.is_none_or(|request_id| event.get("request_id").and_then(Value::as_str) == Some(request_id))
-  })
-}
-
-/// Whether a shared event-cache slice holds a durable stop request for the run.
-pub fn stop_requested_in_shared_events(events: &[SharedChatEvent], run_id: &str, request_id: Option<&str>) -> bool {
+pub fn stop_requested_in_events<T: AsRef<ChatEvent>>(events: &[T], run_id: &str, request_id: Option<&str>) -> bool {
   events.iter().any(|event| {
     let event = event.as_ref();
-    event.get("type").and_then(Value::as_str) == Some("run_stop_requested")
-      && event.get("run_id").and_then(Value::as_str) == Some(run_id)
-      && request_id.is_none_or(|request_id| event.get("request_id").and_then(Value::as_str) == Some(request_id))
+    event.get("type").and_then(CompactValue::as_str) == Some("run_stop_requested")
+      && event.get("run_id").and_then(CompactValue::as_str) == Some(run_id)
+      && request_id.is_none_or(|request_id| event.get("request_id").and_then(CompactValue::as_str) == Some(request_id))
   })
 }
 
@@ -1338,7 +1338,7 @@ mod tests {
     ];
     let mut facts = RunFacts::default();
     for event in &events {
-      facts.observe(event);
+      facts.observe(&ChatEvent::from_value(event));
     }
 
     assert_eq!(facts.outcomes.len(), 2, "one last outcome is retained per run");
@@ -1358,7 +1358,7 @@ mod tests {
     let mut newest_identity = None;
     for generation in 1..=65 {
       let identity = Arc::new(());
-      let events = Arc::new(vec![Arc::new(json!({"generation": generation}))]);
+      let events = Arc::new(vec![Arc::new(json!({"generation": generation}).into())]);
       if generation == 1 {
         first_identity = Some(Arc::clone(&identity));
         first_events = Some(Arc::clone(&events));
@@ -1381,7 +1381,7 @@ mod tests {
   fn run_facts_memo_keys_the_list_identity_and_retains_the_current_list() {
     let mut memo = RunFactsMemo::default();
     let identity = Arc::new(());
-    let events = Arc::new(vec![Arc::new(json!({"type": "user", "content": "first"}))]);
+    let events = Arc::new(vec![Arc::new(json!({"type": "user", "content": "first"}).into())]);
     memo.insert(CachedRunFacts {
       identity: Arc::clone(&identity),
       events: Arc::clone(&events),
@@ -1390,7 +1390,8 @@ mod tests {
     });
     assert_eq!(Arc::strong_count(&events), 2, "the entry retains the event list like Python's memo");
 
-    let appended = Arc::new(vec![events[0].clone(), Arc::new(json!({"type": "agent_message", "content": "second"}))]);
+    let appended =
+      Arc::new(vec![events[0].clone(), Arc::new(json!({"type": "agent_message", "content": "second"}).into())]);
     memo.refresh_events(&identity, Arc::clone(&appended));
     let hit = memo.get(&identity).expect("an append preserves the list identity");
     assert_eq!(hit.covered, 4, "the memo keeps its suffix cursor across an append");

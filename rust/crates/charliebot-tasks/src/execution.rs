@@ -23,6 +23,8 @@ use charliebot_core::run_token::{RunTokenClaims, sign_run_token};
 use charliebot_registry::backend::{Env, LaunchArgs, LaunchRefused};
 use charliebot_registry::context::FeatureContext;
 use charliebot_registry::sequence::{SequenceCompletion, SequenceExecutor, SequenceLaunchSettlement};
+use charliebot_store::ChatEvent;
+use charliebot_store::compact::CompactValue;
 use charliebot_store::control_events::{self, ACTOR_SYSTEM};
 use charliebot_store::metadata::{
   ColdReadSpec, SessionMetadata, TaskProfile, TaskType, ThreadMetadata, ThreadStatus, UtcDateTime,
@@ -118,7 +120,7 @@ impl TaskExecutionAdapter {
   pub async fn call(
     &self,
     session_id: &str,
-    pending_inputs: &[Value],
+    pending_inputs: &[ChatEvent],
     launch_run_id: Option<&str>,
   ) -> StoreResult<Option<String>> {
     let mut scheduled = None;
@@ -158,7 +160,10 @@ impl TaskExecutionAdapter {
         let cfg = self.features.config.get().map_err(|error| StoreError::new(error.to_string()))?;
         let (backend, model) = spawner_backends::resolve_session_default_backend_model(&cfg, &meta)
           .map_err(|error| StoreError::invalid(error.to_string()))?;
-        let mut input_ids = pending_now.iter().map(|event| python_string(event.get("id"))).collect::<Vec<_>>();
+        let mut input_ids = pending_now
+          .iter()
+          .map(|event| event.get("id").and_then(CompactValue::as_str).map_or("None".to_string(), str::to_string))
+          .collect::<Vec<_>>();
         input_ids.sort();
         let request_id = format!("dispatch:{}", control_events::sha256_hex(&input_ids.join("\0")));
         run_id = control_events::stable_run_id(session_id, &request_id);
@@ -502,7 +507,7 @@ impl TaskExecutionAdapter {
     let history = self.features.store.load_all_facts_view_sync(session_id)?;
     let events = history
       .iter()
-      .filter(|event| event.get("id").and_then(Value::as_str).is_some_and(|id| batch_ids.contains(id)))
+      .filter(|event| event.get("id").and_then(CompactValue::as_str).is_some_and(|id| batch_ids.contains(id)))
       .cloned()
       .collect::<Vec<_>>();
     drop(history);
@@ -609,7 +614,7 @@ impl TaskExecutionAdapter {
         on_task_finish,
         auto_trigger: events
           .iter()
-          .any(|event| event.get("type").and_then(Value::as_str) == Some(event_types::SCHEDULED_TRIGGER)),
+          .any(|event| event.get("type").and_then(CompactValue::as_str) == Some(event_types::SCHEDULED_TRIGGER)),
         backend_option: Some(option.clone()),
         extra_claude_flags: None,
         uploaded_files: (!uploaded_files.is_empty()).then_some(uploaded_files),
@@ -832,9 +837,9 @@ impl TaskExecutionAdapter {
   fn blocked_report_sent(&self, meta: &SessionMetadata) -> StoreResult<bool> {
     let Some(parent_id) = meta.task_parent_id.as_deref() else { return Ok(false) };
     Ok(self.features.store.load_all_facts_view_sync(parent_id)?.iter().any(|event| {
-      event.get("type").and_then(Value::as_str) == Some(event_types::CHILD_REPORT)
-        && event.get("child_session_id").and_then(Value::as_str) == Some(meta.id.as_str())
-        && event.get("outcome").and_then(Value::as_str) == Some("blocked")
+      event.get("type").and_then(CompactValue::as_str) == Some(event_types::CHILD_REPORT)
+        && event.get("child_session_id").and_then(CompactValue::as_str) == Some(meta.id.as_str())
+        && event.get("outcome").and_then(CompactValue::as_str) == Some("blocked")
     }))
   }
 
@@ -913,7 +918,7 @@ impl TaskExecutionAdapter {
     let ids = run.input_event_ids.iter().cloned().collect::<HashSet<_>>();
     let batch = history
       .iter()
-      .filter(|event| event.get("id").and_then(Value::as_str).is_some_and(|id| ids.contains(id)))
+      .filter(|event| event.get("id").and_then(CompactValue::as_str).is_some_and(|id| ids.contains(id)))
       .cloned()
       .collect::<Vec<_>>();
     let provenance = if batch.is_empty() { Map::new() } else { self.dispatch.child_report_provenances(&batch).await? };
@@ -948,7 +953,7 @@ impl TaskExecutionAdapter {
     }
     let mut events_by_id = HashMap::new();
     for event in history.iter() {
-      if let Some(id) = event.get("id").and_then(Value::as_str) {
+      if let Some(id) = event.get("id").and_then(CompactValue::as_str) {
         events_by_id.insert(id, event);
       }
     }
@@ -1048,7 +1053,7 @@ impl TaskExecutionAdapter {
     let ids = run.input_event_ids.iter().cloned().collect::<HashSet<_>>();
     let batch = history
       .iter()
-      .filter(|event| event.get("id").and_then(Value::as_str).is_some_and(|id| ids.contains(id)))
+      .filter(|event| event.get("id").and_then(CompactValue::as_str).is_some_and(|id| ids.contains(id)))
       .cloned()
       .collect::<Vec<_>>();
     let provenance = if batch.is_empty() { Map::new() } else { self.dispatch.child_report_provenances(&batch).await? };
@@ -1933,8 +1938,8 @@ impl TaskExecutionAdapter {
     let Some(meta) = self.features.store.load_meta(session_id).await? else { return Ok(()) };
     let Some(parent_id) = meta.task_parent_id.as_deref() else { return Ok(()) };
     let source = self.features.store.load_all_facts(session_id)?.into_iter().rev().find(|event| {
-      event.get("type").and_then(Value::as_str) == Some(event_types::RUN_FINISHED)
-        && event.get("run_id").and_then(Value::as_str) == Some(run.id.as_str())
+      event.get("type").and_then(CompactValue::as_str) == Some(event_types::RUN_FINISHED)
+        && event.get("run_id").and_then(CompactValue::as_str) == Some(run.id.as_str())
     });
     let Some(source) = source else { return Ok(()) };
     let summary = match summary {
@@ -2237,7 +2242,7 @@ impl TaskExecutionAdapter {
         .store
         .load_all_facts(session_id)?
         .into_iter()
-        .find(|fact| fact.get("id").and_then(Value::as_str) == Some(event_id.as_str()));
+        .find(|fact| fact.get("id").and_then(CompactValue::as_str) == Some(event_id.as_str()));
       let event = match existing {
         Some(event) => event,
         None => {
@@ -2266,7 +2271,7 @@ impl TaskExecutionAdapter {
           )
           .await?
       } else {
-        (Value::Null, false)
+        (ChatEvent::Null, false)
       };
       (event, result.0, result.1)
     };
@@ -2383,7 +2388,7 @@ impl TaskExecutionAdapter {
         .store
         .load_all_facts(session_id)?
         .iter()
-        .any(|event| event.get("id").and_then(Value::as_str) == Some(event_id.as_str()))
+        .any(|event| event.get("id").and_then(CompactValue::as_str) == Some(event_id.as_str()))
       {
         return Ok(());
       }
@@ -2451,7 +2456,7 @@ impl DispatchExecutor for TaskExecutionAdapter {
   fn launch<'a>(
     &'a self,
     session_id: &'a str,
-    pending_inputs: &'a [Value],
+    pending_inputs: &'a [ChatEvent],
     launch_run_id: Option<&'a str>,
   ) -> BoxFuture<'a, StoreResult<Option<String>>> {
     Box::pin(async move { self.call(session_id, pending_inputs, launch_run_id).await })
@@ -2525,10 +2530,11 @@ impl SequenceExecutor for TaskExecutionAdapter {
 pub async fn apply_sequence_wake_duties(
   features: &FeatureContext,
   meta: &SessionMetadata,
-  input_events: &[Value],
+  input_events: &[ChatEvent],
 ) -> anyhow::Result<Option<String>> {
+  let owned = input_events.iter().map(ChatEvent::to_value).collect::<Vec<_>>();
   match features.registry.binding_for(&meta.id)? {
-    Some(binding) => binding.on_wake(meta, input_events).await,
+    Some(binding) => binding.on_wake(meta, &owned).await,
     None => Ok(None),
   }
 }

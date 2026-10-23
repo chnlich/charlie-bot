@@ -8,6 +8,7 @@ use std::sync::{Arc, LazyLock, Mutex};
 
 use charliebot_core::event_types;
 use charliebot_core::pyfmt;
+use charliebot_store::ChatEvent;
 use charliebot_store::aggregator;
 use charliebot_store::control_events;
 use charliebot_store::metadata::UtcDateTime;
@@ -138,7 +139,9 @@ fn build_worker_transcript(store: &Store, session_id: &str, signature: Signature
       run_causes: &run_causes,
     },
   )?;
-  let projection = store.build_message_projection(&transcript, 0)?;
+  // The synthesized transcript is the projection's input; the projection reads the compact form.
+  let compact: Vec<ChatEvent> = transcript.iter().map(ChatEvent::from_value).collect();
+  let projection = store.build_message_projection(&compact, 0)?;
   Ok(TranscriptEntry {
     revision: client_revision,
     rebuild_key: revision,
@@ -256,7 +259,8 @@ fn run_end_event(run: &RunRecord) -> Value {
 
 fn withheld_reason(events: &[SharedChatEvent], run_id: &str) -> Option<String> {
   let mut reason = None;
-  for event in events {
+  for held in events {
+    let event = held.to_value();
     if event.get("type").and_then(Value::as_str) != Some(event_types::RUN_LAUNCH_WITHHELD)
       || event.get("run_id").and_then(Value::as_str) != Some(run_id)
     {
@@ -280,7 +284,8 @@ fn delivery_event(
   // A non-open task state only comes from a task_closed fact, so the loop below sets this.
   let mut close_at = String::new();
   let mut outcomes = BTreeMap::new();
-  for event in facts_events {
+  for held in facts_events {
+    let event = held.to_value();
     match event.get("type").and_then(Value::as_str) {
       Some(event_types::TASK_CLOSED) => {
         summary =
@@ -344,7 +349,8 @@ fn build_summary(store: &Store, session_id: &str, inputs: SummaryInputs<'_>) -> 
   let mut closed_at = String::new();
   let mut landed = String::new();
   let mut outcomes = BTreeMap::new();
-  for event in facts_events {
+  for held in facts_events {
+    let event = held.to_value();
     match event.get("type").and_then(Value::as_str) {
       Some(event_types::TASK_CLOSED) => {
         closed_at = truthy_python_string(event.get("timestamp"));
@@ -423,8 +429,12 @@ fn build_summary(store: &Store, session_id: &str, inputs: SummaryInputs<'_>) -> 
   let stop = facts_events
     .iter()
     .rev()
-    .find(|event| event.get("type").and_then(Value::as_str) == Some(event_types::RUN_STOP_REQUESTED))
-    .map(|event| {
+    .find(|held| {
+      held.get("type").and_then(charliebot_store::compact::CompactValue::as_str)
+        == Some(event_types::RUN_STOP_REQUESTED)
+    })
+    .map(|held| {
+      let event = held.to_value();
       json!({
         "run_id": truthy_python_string(event.get("run_id")),
         "request_id": truthy_python_string(event.get("request_id")),

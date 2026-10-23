@@ -5,6 +5,7 @@ use std::path::Path;
 use charliebot_core::pyfmt::{self, JsonStyle};
 use serde_json::Value;
 
+use crate::compact::CompactValue;
 use crate::{StoreError, StoreResult};
 
 const APPEND_JSON: JsonStyle =
@@ -19,6 +20,11 @@ pub(crate) fn parse_line(raw: &[u8]) -> Option<Value> {
   }
   let text = String::from_utf8_lossy(raw);
   serde_json::from_str(&text).ok()
+}
+
+/// Parse one NDJSON line into the compact event form, with the same skip contract as `parse_line`.
+pub(crate) fn parse_line_compact(raw: &[u8]) -> Option<CompactValue> {
+  parse_line(raw).map(|value| CompactValue::from_value(&value))
 }
 
 /// Parse every physical line in an NDJSON file, including a final line without `\n`.
@@ -60,6 +66,20 @@ pub(crate) fn read_file_until(path: &Path, should_stop: &mut impl FnMut() -> boo
     return Ok(None);
   }
   Ok(Some(values))
+}
+
+/// Parse every physical line into the compact event form, including a final line without `\n`.
+pub(crate) fn read_file_compact(path: &Path) -> StoreResult<Vec<CompactValue>> {
+  Ok(read_file(path)?.iter().map(CompactValue::from_value).collect())
+}
+
+/// Parse every physical line into the compact event form unless `should_stop` requests
+/// cancellation between lines. A cancelled read returns no events.
+pub(crate) fn read_file_compact_until(
+  path: &Path,
+  should_stop: &mut impl FnMut() -> bool,
+) -> StoreResult<Option<Vec<CompactValue>>> {
+  Ok(read_file_until(path, should_stop)?.map(|values| values.iter().map(CompactValue::from_value).collect()))
 }
 
 /// One event as an NDJSON line: Python `json.dumps(..., ensure_ascii=False)` and the newline.

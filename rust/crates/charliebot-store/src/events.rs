@@ -9,14 +9,15 @@ use charliebot_core::{fsutil, pystr};
 use serde_json::Value;
 
 use crate::chat_events::is_chat_events_archive;
+use crate::compact::CompactValue;
 use crate::metadata::{SessionMetadata, UtcDateTime};
 use crate::ndjson;
 use crate::read_memos::{BoundedMemo, FileSignature, StatSignatureMemo};
 use crate::store::{CachedChatEvents, HistoryWork};
 use crate::{ControlGuard, Store, StoreError, StoreResult};
 
-/// One parsed chat-log event.
-pub type ChatEvent = Value;
+/// One parsed chat-log event: the compact interned-key form of its JSON.
+pub type ChatEvent = CompactValue;
 
 /// A reference counted parsed event shared by the live cache and task facts.
 pub type SharedChatEvent = Arc<ChatEvent>;
@@ -195,15 +196,16 @@ impl Store {
     #[cfg(any(test, feature = "write-faults"))]
     self.fail_chat_append(session_id, &event, &path)?;
     ndjson::append(&path, &event)?;
+    let compact = ChatEvent::from_value(&event);
     if let Some(cached) = cache.as_mut() {
-      Arc::make_mut(&mut cached.events).push(Arc::new(event.clone()));
+      Arc::make_mut(&mut cached.events).push(Arc::new(compact.clone()));
       self
         .run_facts_memo
         .lock()
         .expect("run facts memo mutex is not poisoned")
         .refresh_events(&cached.identity, Arc::clone(&cached.events));
     }
-    Ok(event)
+    Ok(compact)
   }
 
   /// Append one control fact while the caller holds the tree-wide control lock, then notify the sidebar of its type.
@@ -215,7 +217,7 @@ impl Store {
   ) -> StoreResult<ChatEvent> {
     self.require_control_guard(guard)?;
     let event = self.append_chat_event(session_id, event).await?;
-    let fact_type = event.get("type").and_then(Value::as_str);
+    let fact_type = event.get("type").and_then(CompactValue::as_str);
     self.notify_task_tree_changed(session_id, fact_type).await;
     Ok(event)
   }
@@ -366,7 +368,7 @@ impl Store {
     }
     let take = limit.min(total);
     let (lines, bytes_read) = read_ndjson_tail_lines(&path, metadata.len(), take)?;
-    let events: Vec<ChatEvent> = lines.iter().filter_map(|line| ndjson::parse_line(line)).collect();
+    let events: Vec<ChatEvent> = lines.iter().filter_map(|line| ndjson::parse_line_compact(line)).collect();
     let events = Arc::new(events);
     {
       let mut caches = self.event_read_caches.lock().expect("event read cache mutex is not poisoned");
@@ -504,7 +506,7 @@ impl Store {
     {
       self.event_read_caches.lock().expect("event read cache mutex is not poisoned").archive_file_reads += 1;
     }
-    match ndjson::read_file(path) {
+    match ndjson::read_file_compact(path) {
       Ok(events) => {
         let events = Arc::new(events.into_iter().map(Arc::new).collect());
         self.event_read_caches.lock().expect("event read cache mutex is not poisoned").archive_events.record(
@@ -552,7 +554,7 @@ impl Store {
     {
       self.event_read_caches.lock().expect("event read cache mutex is not poisoned").archive_file_reads += 1;
     }
-    match ndjson::read_file_until(path, should_stop) {
+    match ndjson::read_file_compact_until(path, should_stop) {
       Ok(Some(events)) => {
         let events = Arc::new(events.into_iter().map(Arc::new).collect());
         self.event_read_caches.lock().expect("event read cache mutex is not poisoned").archive_events.record(
@@ -783,7 +785,7 @@ impl Store {
       Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
       Err(error) => return Err(StoreError::new(format!("{}: {error}", path.display()))),
     };
-    Ok(bytes.split(|byte| *byte == b'\n').map(ndjson::parse_line).map(|event| event.map(Arc::new)).collect())
+    Ok(bytes.split(|byte| *byte == b'\n').map(ndjson::parse_line_compact).map(|event| event.map(Arc::new)).collect())
   }
 
   /// Find the first event with `id` in archived and live history.
@@ -792,7 +794,7 @@ impl Store {
       self
         .load_all_facts(session_id)?
         .into_iter()
-        .find(|event| event.get("id").and_then(Value::as_str) == Some(event_id)),
+        .find(|event| event.get("id").and_then(CompactValue::as_str) == Some(event_id)),
     )
   }
 
@@ -951,7 +953,7 @@ impl Store {
     if let Some(hook) = self.event_read_hook.lock().expect("event read hook mutex is not poisoned").clone() {
       hook();
     }
-    ndjson::read_file_until(path, should_stop)
+    ndjson::read_file_compact_until(path, should_stop)
   }
 
   fn read_chat_events_file(&self, path: &Path) -> StoreResult<Vec<ChatEvent>> {
@@ -960,7 +962,7 @@ impl Store {
     if let Some(hook) = self.event_read_hook.lock().expect("event read hook mutex is not poisoned").clone() {
       hook();
     }
-    ndjson::read_file(path)
+    ndjson::read_file_compact(path)
   }
 
   pub(crate) fn cached_chat_events(&self, session_id: &str) -> Option<Arc<Vec<SharedChatEvent>>> {
@@ -1125,7 +1127,7 @@ impl Store {
       if let Some(hook) = read_hook {
         hook();
       }
-      let events = Arc::new(ndjson::read_file(&path)?.into_iter().map(Arc::new).collect());
+      let events = Arc::new(ndjson::read_file_compact(&path)?.into_iter().map(Arc::new).collect());
       *cache = Some(CachedChatEvents { generation, identity: Arc::new(()), events: Arc::clone(&events) });
       Ok((events, true))
     })
@@ -1198,21 +1200,21 @@ fn parse_universal_newline_lines(path: &Path, bytes: &[u8]) -> StoreResult<Vec<O
   while let Some(character) = chars.next() {
     match character {
       '\n' => {
-        lines.push(ndjson::parse_line(segment.as_bytes()).map(Arc::new));
+        lines.push(ndjson::parse_line_compact(segment.as_bytes()).map(Arc::new));
         segment.clear();
       }
       '\r' => {
         if chars.peek() == Some(&'\n') {
           chars.next();
         }
-        lines.push(ndjson::parse_line(segment.as_bytes()).map(Arc::new));
+        lines.push(ndjson::parse_line_compact(segment.as_bytes()).map(Arc::new));
         segment.clear();
       }
       _ => segment.push(character),
     }
   }
   if !segment.is_empty() || (!text.is_empty() && !text.ends_with('\n') && !text.ends_with('\r')) {
-    lines.push(ndjson::parse_line(segment.as_bytes()).map(Arc::new));
+    lines.push(ndjson::parse_line_compact(segment.as_bytes()).map(Arc::new));
   }
   Ok(lines)
 }
@@ -1222,7 +1224,7 @@ fn parse_text_lines(path: &Path, lines: Vec<Vec<u8>>) -> StoreResult<Vec<ParsedL
     .into_iter()
     .map(|line| {
       let text = String::from_utf8(line).map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
-      Ok(ndjson::parse_line(text.as_bytes()).map(Arc::new))
+      Ok(ndjson::parse_line_compact(text.as_bytes()).map(Arc::new))
     })
     .collect()
 }
@@ -1468,7 +1470,7 @@ mod tests {
     };
 
     assert!(appended_while_read_held, "session B append waited for session A file read");
-    assert_eq!(appended["id"], "event-b");
+    assert_eq!(appended["id"].as_str(), Some("event-b"));
   }
 
   #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1530,8 +1532,9 @@ mod tests {
       assert_eq!(file_events.len(), expected.len(), "iteration {iteration}: file event count");
       assert_eq!(cache_ids, expected, "iteration {iteration}: cache ids");
       assert_eq!(file_ids, expected, "iteration {iteration}: file ids");
-      assert!(
-        cached.iter().map(SharedChatEvent::as_ref).eq(file_events.iter()),
+      assert_eq!(
+        cached.iter().map(|event| event["id"].to_value()).collect::<Vec<_>>(),
+        file_events.iter().map(|event| event["id"].clone()).collect::<Vec<_>>(),
         "iteration {iteration}: cache and file order"
       );
     }
@@ -1592,7 +1595,7 @@ mod tests {
     let appended = store.load_chat_events_shared_sync("synthetic-shared").unwrap();
     assert!(!Arc::ptr_eq(&first, &appended));
     assert_eq!(first.len(), 1);
-    assert_eq!(appended.last().unwrap()["id"], "second");
+    assert_eq!(appended.last().unwrap()["id"].as_str(), Some("second"));
   }
 
   #[tokio::test]
@@ -1640,7 +1643,7 @@ mod tests {
     let suffix = store.load_chat_events_delta_sync("synthetic-delta", Some(first.generation), 1).unwrap();
     assert!(Arc::ptr_eq(&events, &suffix.events));
     assert_eq!(suffix.start_index, 1);
-    assert_eq!(suffix.events[suffix.start_index]["id"], "second");
+    assert_eq!(suffix.events[suffix.start_index]["id"].as_str(), Some("second"));
   }
 
   mod parity {
@@ -1784,7 +1787,7 @@ mod tests {
         .unwrap();
       let _ = appended;
       // Global index 9 is the first appended event after six archived rows and three retained rows.
-      assert_eq!(store.load_chat_events_range(session_id, 9, 10).unwrap().0[0]["id"], "after-1");
+      assert_eq!(store.load_chat_events_range(session_id, 9, 10).unwrap().0[0]["id"].as_str(), Some("after-1"));
     }
 
     /// `test_recycle.py::test_recycle_noop_when_nothing_old` at store level: nothing archived, no
@@ -1972,8 +1975,8 @@ mod tests {
       let (tail, total, has_more) = store.load_chat_events_tail(session_id, 10).unwrap();
       assert_eq!(total, 30_000);
       assert!(has_more);
-      assert_eq!(tail.first().unwrap()["id"], "event-29990");
-      assert_eq!(tail.last().unwrap()["id"], "event-29999");
+      assert_eq!(tail.first().unwrap()["id"].as_str(), Some("event-29990"));
+      assert_eq!(tail.last().unwrap()["id"].as_str(), Some("event-29999"));
       let (bytes, parsed) = {
         let caches = store.event_read_caches.lock().unwrap();
         (caches.tail_bytes_read, caches.tail_lines_parsed)
@@ -2008,7 +2011,7 @@ mod tests {
       let (tail, total, more) = store.load_chat_events_tail(session_id, 10).unwrap();
       assert_eq!(total, 20_000);
       assert!(more);
-      assert_eq!(tail.first().unwrap()["id"], "event-19990");
+      assert_eq!(tail.first().unwrap()["id"].as_str(), Some("event-19990"));
       let (bytes, parsed) = {
         let caches = store.event_read_caches.lock().unwrap();
         (caches.tail_bytes_read, caches.tail_lines_parsed)

@@ -650,8 +650,8 @@ mod tests {
     assert_eq!(frame, json!({"type": "task_tree_changed", "session_id": session_id, "fact_type": "task_created"}));
     let events = features.store.load_chat_events_sync(session_id).expect("created chat events");
     assert_eq!(events.len(), 1);
-    assert_eq!(events[0]["type"], "task_created");
-    assert_eq!(events[0]["actor"], "user");
+    assert_eq!(events[0]["type"].as_str(), Some("task_created"));
+    assert_eq!(events[0]["actor"].as_str(), Some("user"));
     assert!(logs.lock().expect("captured logs mutex").iter().any(|line| line.contains("creating_session")));
   }
 
@@ -674,8 +674,8 @@ mod tests {
     assert_eq!(frame["session_id"], session_id);
     assert_eq!(frame["fact_type"], "task_created");
     let events = features.store.load_chat_events_sync(session_id).expect("created chat events");
-    assert_eq!(events[0]["type"], "task_created");
-    assert_eq!(events[0]["request_id"], "api-v2-root");
+    assert_eq!(events[0]["type"].as_str(), Some("task_created"));
+    assert_eq!(events[0]["request_id"].as_str(), Some("api-v2-root"));
     assert!(logs.lock().expect("captured logs mutex").iter().any(|line| line.contains("task_created")));
   }
 
@@ -793,10 +793,11 @@ mod tests {
     assert_eq!(audit_frame["from"], "synthetic-a");
     assert_eq!(audit_frame["to"], "synthetic-b");
     let events = features.store.load_chat_events_sync(&node.id).expect("backend audit event");
-    let audit = events.iter().find(|event| event["type"] == "backend_switched").expect("audit event written");
-    assert_eq!(audit["from"], "synthetic-a");
-    assert_eq!(audit["to"], "synthetic-b");
-    assert_eq!(audit["previous_native_backend"], Value::Null);
+    let audit =
+      events.iter().find(|event| event["type"].as_str() == Some("backend_switched")).expect("audit event written");
+    assert_eq!(audit["from"].as_str(), Some("synthetic-a"));
+    assert_eq!(audit["to"].as_str(), Some("synthetic-b"));
+    assert!(audit["previous_native_backend"].is_null());
     assert!(logs.lock().expect("captured logs mutex").iter().any(|line| line.contains("session_backend_switched")));
   }
 
@@ -950,7 +951,7 @@ mod tests {
     let frame: Value = serde_json::from_str(&sidebar.recv().await.expect("prompt change tree notification")).unwrap();
     assert_eq!(frame, json!({"type": "task_tree_changed", "session_id": node.id, "fact_type": "prompt_changed"}));
     let events = features.store.load_chat_events_sync(&node.id).expect("prompt change events");
-    assert!(events.iter().any(|event| event["type"] == event_types::PROMPT_CHANGED));
+    assert!(events.iter().any(|event| event["type"].as_str() == Some(event_types::PROMPT_CHANGED)));
   }
 
   #[tokio::test]

@@ -14,6 +14,7 @@ use charliebot_core::event_types::{WEB_ASK_CHECK, WEB_STATUS};
 use charliebot_core::pyfmt::{JsonStyle, json_dumps};
 use charliebot_core::pystr;
 use charliebot_registry::FeatureContext;
+use charliebot_store::compact::CompactValue;
 use charliebot_store::metadata::{SessionMetadata, SessionStatus, UtcDateTime};
 use charliebot_store::{Store, session_channel};
 use serde::{Deserialize, Serialize};
@@ -202,8 +203,8 @@ async fn read_item_digests(features: &FeatureContext, session_id: &str) -> Resul
   Ok(
     events
       .iter()
-      .filter(|event| event.get("type").and_then(Value::as_str) == Some(WEB_ASK_CHECK))
-      .filter_map(|event| event.get(ITEM_SHA256).and_then(Value::as_str).map(str::to_string))
+      .filter(|event| event.get("type").and_then(CompactValue::as_str) == Some(WEB_ASK_CHECK))
+      .filter_map(|event| event.get(ITEM_SHA256).and_then(CompactValue::as_str).map(str::to_string))
       .collect(),
   )
 }
@@ -1076,7 +1077,8 @@ mod tests {
     );
     let events = home.events(&sid);
     assert!(reply::for_you_entries(&home.features.store, &events).unwrap().is_empty());
-    let messages = home.features.store.events_to_messages(&events).expect("the ask-check event renders");
+    let compact = events.iter().map(charliebot_store::ChatEvent::from_value).collect::<Vec<_>>();
+    let messages = home.features.store.events_to_messages(&compact).expect("the ask-check event renders");
     assert!(messages.iter().any(|message| message["role"] == WEB_ASK_CHECK));
   }
 

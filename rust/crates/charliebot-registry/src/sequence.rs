@@ -10,9 +10,11 @@ use std::sync::Arc;
 
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_store::metadata::{SessionMetadata, UtcDateTime};
-use charliebot_store::{ControlGuard, RunRecord, SharedChatEvent, StopRequest, Store, StoreResult};
+use charliebot_store::{ChatEvent, ControlGuard, RunRecord, SharedChatEvent, StopRequest, Store, StoreResult};
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value};
+
+use charliebot_store::compact::CompactValue;
 
 use crate::context::StartupStop;
 use crate::registry::{Registry, RegistryError};
@@ -174,41 +176,41 @@ pub trait SequenceDispatch: Send + Sync {
     content: &'a str,
     actor: &'a str,
     fields: Value,
-  ) -> BoxFuture<'a, StoreResult<Value>>;
+  ) -> BoxFuture<'a, StoreResult<ChatEvent>>;
 
   fn dispatch_pending<'a>(&'a self, session_id: &'a str) -> BoxFuture<'a, StoreResult<()>>;
 
-  fn report_source_event(&self, child_session_id: &str, child_kind: &str) -> StoreResult<Value>;
+  fn report_source_event(&self, child_session_id: &str, child_kind: &str) -> StoreResult<ChatEvent>;
 
   #[allow(clippy::too_many_arguments)]
   fn deliver_child_report_locked<'a>(
     &'a self,
     guard: &'a ControlGuard,
     child_session_id: &'a str,
-    source_event: Value,
+    source_event: ChatEvent,
     outcome: &'a str,
     summary: &'a str,
     result_refs: Option<&'a [String]>,
     recipient: Option<&'a str>,
-  ) -> BoxFuture<'a, StoreResult<(Value, bool)>>;
+  ) -> BoxFuture<'a, StoreResult<(ChatEvent, bool)>>;
 
   fn deliver_child_report<'a>(
     &'a self,
     child_session_id: &'a str,
-    source_event: Value,
+    source_event: ChatEvent,
     outcome: &'a str,
     summary: &'a str,
     result_refs: Option<&'a [String]>,
     recipient: Option<&'a str>,
-  ) -> BoxFuture<'a, StoreResult<(Value, bool)>>;
+  ) -> BoxFuture<'a, StoreResult<(ChatEvent, bool)>>;
 
-  fn wake_parent<'a>(&'a self, parent_id: &'a str, report: Value) -> BoxFuture<'a, StoreResult<bool>>;
+  fn wake_parent<'a>(&'a self, parent_id: &'a str, report: ChatEvent) -> BoxFuture<'a, StoreResult<bool>>;
 }
 
 /// A restore's result (`task_completion.py::restore_chain_locked`): the restored ids, topmost first, and one
 /// `(node, event, epoch)` announcement per `task_reopened` fact the call wrote. The caller sends each announcement
 /// with its epoch after it releases the control lock.
-pub type RestoreOutcome = (Vec<String>, Vec<(String, Value, u64)>);
+pub type RestoreOutcome = (Vec<String>, Vec<(String, ChatEvent, u64)>);
 
 /// Completion calls exposed to sequence controllers.
 pub trait SequenceCompletion: Send + Sync {
@@ -253,7 +255,7 @@ pub trait SequenceSessionEvents: Send + Sync {
   fn announce_appended_event<'a>(
     &'a self,
     session_id: &'a str,
-    event: &'a Value,
+    event: &'a ChatEvent,
     epoch: u64,
   ) -> BoxFuture<'a, StoreResult<()>>;
 }
@@ -402,10 +404,10 @@ impl SequenceTree for StoreSequenceTree {
     events
       .iter()
       .rfind(|event| {
-        event.get("type").and_then(Value::as_str) == Some("run_finished")
-          && event.get("run_id").and_then(Value::as_str) == Some(run_id)
+        event.get("type").and_then(CompactValue::as_str) == Some("run_finished")
+          && event.get("run_id").and_then(CompactValue::as_str) == Some(run_id)
       })
-      .and_then(|event| event.get("outcome").and_then(Value::as_str))
+      .and_then(|event| event.get("outcome").and_then(CompactValue::as_str))
       .map(str::to_string)
   }
 
@@ -559,7 +561,7 @@ mod tests {
       _content: &'a str,
       _actor: &'a str,
       _fields: Value,
-    ) -> BoxFuture<'a, StoreResult<Value>> {
+    ) -> BoxFuture<'a, StoreResult<ChatEvent>> {
       Box::pin(async { Err(StoreError::new("dispatch test seam was called")) })
     }
 
@@ -567,7 +569,7 @@ mod tests {
       Box::pin(async { Err(StoreError::new("dispatch test seam was called")) })
     }
 
-    fn report_source_event(&self, _child_session_id: &str, _child_kind: &str) -> StoreResult<Value> {
+    fn report_source_event(&self, _child_session_id: &str, _child_kind: &str) -> StoreResult<ChatEvent> {
       Err(StoreError::new("dispatch test seam was called"))
     }
 
@@ -575,28 +577,28 @@ mod tests {
       &'a self,
       _guard: &'a ControlGuard,
       _child_session_id: &'a str,
-      _source_event: Value,
+      _source_event: ChatEvent,
       _outcome: &'a str,
       _summary: &'a str,
       _result_refs: Option<&'a [String]>,
       _recipient: Option<&'a str>,
-    ) -> BoxFuture<'a, StoreResult<(Value, bool)>> {
+    ) -> BoxFuture<'a, StoreResult<(ChatEvent, bool)>> {
       Box::pin(async { Err(StoreError::new("dispatch test seam was called")) })
     }
 
     fn deliver_child_report<'a>(
       &'a self,
       _child_session_id: &'a str,
-      _source_event: Value,
+      _source_event: ChatEvent,
       _outcome: &'a str,
       _summary: &'a str,
       _result_refs: Option<&'a [String]>,
       _recipient: Option<&'a str>,
-    ) -> BoxFuture<'a, StoreResult<(Value, bool)>> {
+    ) -> BoxFuture<'a, StoreResult<(ChatEvent, bool)>> {
       Box::pin(async { Err(StoreError::new("dispatch test seam was called")) })
     }
 
-    fn wake_parent<'a>(&'a self, _parent_id: &'a str, _report: Value) -> BoxFuture<'a, StoreResult<bool>> {
+    fn wake_parent<'a>(&'a self, _parent_id: &'a str, _report: ChatEvent) -> BoxFuture<'a, StoreResult<bool>> {
       Box::pin(async { Err(StoreError::new("dispatch test seam was called")) })
     }
   }
@@ -651,7 +653,7 @@ mod tests {
     fn announce_appended_event<'a>(
       &'a self,
       _session_id: &'a str,
-      _event: &'a Value,
+      _event: &'a ChatEvent,
       _epoch: u64,
     ) -> BoxFuture<'a, StoreResult<()>> {
       Box::pin(async { Err(StoreError::new("session-event test seam was called")) })

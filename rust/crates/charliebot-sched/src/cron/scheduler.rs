@@ -1003,7 +1003,7 @@ mod tests {
     assert_eq!(meta.extra.get("last_run_status").and_then(Value::as_str), Some("success"));
     assert!(meta.extra.get("last_scheduled_run").and_then(Value::as_str).is_some());
     let events = features.store.load_chat_events_sync(session_id).unwrap();
-    assert!(events.iter().any(|event| event["type"] == charliebot_core::event_types::HANDLER_RESULT));
+    assert!(events.iter().any(|event| event["type"].as_str() == Some(charliebot_core::event_types::HANDLER_RESULT)));
     let projection = features.store.get_message_projection(session_id).unwrap().unwrap();
     assert_eq!(projection.history().len(), 1);
     assert!(features.store.child_ids(session_id).unwrap().is_empty());
@@ -1429,7 +1429,7 @@ mod tests {
         .load_chat_events_sync(&node.id)
         .unwrap()
         .iter()
-        .any(|event| event["type"] == charliebot_core::event_types::HANDLER_RESULT)
+        .any(|event| event["type"].as_str() == Some(charliebot_core::event_types::HANDLER_RESULT))
     );
   }
 
@@ -1461,7 +1461,7 @@ mod tests {
         .load_all_facts(&node_id)
         .unwrap()
         .iter()
-        .any(|event| event["type"] == charliebot_core::event_types::TASK_REOPENED)
+        .any(|event| event["type"].as_str() == Some(charliebot_core::event_types::TASK_REOPENED))
     );
     let rebound: serde_yaml::Value = serde_yaml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
     assert_eq!(rebound["session_id"].as_str(), Some(node_id.as_str()));

@@ -23,6 +23,7 @@ pub fn build_scheduled_trigger_event(content: &str) -> ChatEvent {
     "content": content,
     "timestamp": charliebot_core::timefmt::utc_now_iso(),
   })
+  .into()
 }
 
 /// Build a persisted event for a message relayed from another session.
@@ -34,29 +35,20 @@ pub fn build_agent_message_event(text: &str, provenance: MessageProvenance) -> C
     "from_session_name": provenance.from_session_name,
     "timestamp": charliebot_core::timefmt::utc_now_iso(),
   })
+  .into()
 }
 
 /// Return the chat-event ids answered by one master_done event.
-pub fn master_done_input_event_ids(event: &Value) -> Vec<String> {
-  if let Some(ids) = event.get("input_event_ids").and_then(Value::as_array) {
-    return ids.iter().filter_map(Value::as_str).map(str::to_string).collect();
+pub fn master_done_input_event_ids<T: charliebot_core::event_types::EventFields>(event: &T) -> Vec<String> {
+  if let Some(ids) = event.field("input_event_ids") {
+    return ids.string_items().into_iter().map(str::to_string).collect();
   }
   event
-    .get("input_event_id")
-    .and_then(Value::as_str)
+    .field("input_event_id")
+    .and_then(charliebot_core::event_types::EventFields::as_str_field)
     .filter(|id| !id.is_empty())
     .map(|id| vec![id.to_string()])
     .unwrap_or_default()
-}
-
-/// Convert raw chat events to committed render messages.
-pub fn events_to_messages(events: &[Value]) -> StoreResult<Vec<Value>> {
-  projection::events_to_messages(events, 0, Default::default())
-}
-
-/// Convert raw chat events to committed messages and the pending assistant draft.
-pub fn events_to_view(events: &[Value]) -> StoreResult<(Vec<Value>, Option<Value>)> {
-  projection::events_to_view(events, 0, Default::default())
 }
 
 impl Store {
@@ -66,7 +58,7 @@ impl Store {
   }
 
   /// Return the global input-event ids answered by a master_done event.
-  pub fn master_done_input_event_ids(&self, event: &ChatEvent) -> Vec<String> {
+  pub fn master_done_input_event_ids<T: charliebot_core::event_types::EventFields>(&self, event: &T) -> Vec<String> {
     master_done_input_event_ids(event)
   }
 
@@ -77,7 +69,7 @@ impl Store {
 
   /// Convert a shared event-cache slice without copying event payloads.
   pub fn events_to_messages_shared(&self, events: &[SharedChatEvent]) -> StoreResult<Vec<Value>> {
-    projection::events_to_messages_shared(events, 0, self.event_renderers.clone())
+    projection::events_to_messages(events, 0, self.event_renderers.clone())
   }
 
   /// Convert events with this store's feature renderers in the global event-index space.
@@ -117,6 +109,7 @@ impl Store {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::store::test_support::compact_events;
   use crate::store::test_support::{assistant_text_event, make_test_store, queued_user_reorder_events};
 
   #[test]
@@ -125,10 +118,10 @@ mod tests {
       "Hello from the survey.",
       MessageProvenance { from_session: "source".to_string(), from_session_name: "Survey".to_string() },
     );
-    assert_eq!(event["type"], "agent_message");
-    assert_eq!(event["content"], "Hello from the survey.");
-    assert_eq!(event["from_session"], "source");
-    assert_eq!(event["from_session_name"], "Survey");
+    assert_eq!(event["type"].as_str(), Some("agent_message"));
+    assert_eq!(event["content"].as_str(), Some("Hello from the survey."));
+    assert_eq!(event["from_session"].as_str(), Some("source"));
+    assert_eq!(event["from_session_name"].as_str(), Some("Survey"));
     assert!(event["timestamp"].as_str().is_some());
     assert_eq!(event.as_object().unwrap().len(), 5);
   }
@@ -136,8 +129,8 @@ mod tests {
   #[test]
   fn scheduled_trigger_event_has_no_user_attachment_fields() {
     let event = build_scheduled_trigger_event("wake for the due digest");
-    assert_eq!(event["type"], "scheduled_trigger");
-    assert_eq!(event["content"], "wake for the due digest");
+    assert_eq!(event["type"].as_str(), Some("scheduled_trigger"));
+    assert_eq!(event["content"].as_str(), Some("wake for the due digest"));
     assert!(event["timestamp"].as_str().is_some());
     assert_eq!(event.as_object().unwrap().len(), 3);
   }
@@ -184,8 +177,8 @@ mod tests {
       json!({"type": "master_done", "thinking_seconds": 7, "timestamp": "t7"}),
     ];
 
-    let messages = events_to_messages(&events).unwrap();
-    let (view_messages, pending) = events_to_view(&events).unwrap();
+    let messages = projection::events_to_messages(&compact_events(&events), 0, Default::default()).unwrap();
+    let (view_messages, pending) = projection::events_to_view(&compact_events(&events), 0, Default::default()).unwrap();
 
     let roles: Vec<&str> = messages.iter().map(|message| message["role"].as_str().unwrap()).collect();
     assert_eq!(roles, ["user", "assistant", "user", "assistant", "separator", "assistant", "separator"]);
@@ -201,8 +194,8 @@ mod tests {
   fn stable_history_orders_queued_user_between_completed_runs() {
     let events = queued_user_reorder_events();
 
-    let messages = events_to_messages(&events).unwrap();
-    let (view_messages, pending) = events_to_view(&events).unwrap();
+    let messages = projection::events_to_messages(&compact_events(&events), 0, Default::default()).unwrap();
+    let (view_messages, pending) = projection::events_to_view(&compact_events(&events), 0, Default::default()).unwrap();
 
     assert_eq!(view_messages, messages);
     assert!(pending.is_none());

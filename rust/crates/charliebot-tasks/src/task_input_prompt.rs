@@ -5,6 +5,8 @@
 
 use charliebot_core::event_types;
 use charliebot_registry::context::FeatureContext;
+use charliebot_store::ChatEvent;
+use charliebot_store::compact::CompactValue;
 use charliebot_store::metadata::SessionMetadata;
 use serde_json::{Map, Value};
 
@@ -23,37 +25,42 @@ pub fn child_report_text(report: &Value, provenance: Option<&str>) -> String {
 pub fn compose_input_prompt(
   features: &FeatureContext,
   meta: &SessionMetadata,
-  events: &[Value],
+  events: &[ChatEvent],
   report_provenance: &Map<String, Value>,
 ) -> anyhow::Result<(String, Vec<Value>)> {
   let mut parts = Vec::new();
   let mut uploads = Vec::new();
   for event in events {
-    let event_type = event.get("type").and_then(Value::as_str).unwrap_or_default();
-    let content = event.get("content").and_then(Value::as_str).unwrap_or_default();
+    let event_type = event.get("type").and_then(CompactValue::as_str).unwrap_or_default();
+    let content = event.get("content").and_then(CompactValue::as_str).unwrap_or_default();
     let text = match event_type {
-      event_types::USER => match features.registry.input_preamble(meta, event)? {
+      event_types::USER => match features.registry.input_preamble(meta, &event.to_value())? {
         Some(preamble) => format!("{preamble}\n{content}"),
         None => content.to_string(),
       },
       event_types::AGENT_MESSAGE => {
         let source = event
           .get("from_session_name")
-          .and_then(Value::as_str)
+          .and_then(CompactValue::as_str)
           .filter(|name| !name.is_empty())
-          .or_else(|| event.get("from_session").and_then(Value::as_str).filter(|id| !id.is_empty()))
+          .or_else(|| event.get("from_session").and_then(CompactValue::as_str).filter(|id| !id.is_empty()))
           .unwrap_or("unknown");
         format!("[Message from session {source}] {content}")
       }
       event_types::CHILD_REPORT => {
-        let child_id = python_string(event.get("child_session_id"));
+        let report = event.to_value();
+        let child_id = python_string(report.get("child_session_id"));
         let provenance = report_provenance.get(&child_id).and_then(Value::as_str);
-        child_report_text(event, provenance)
+        child_report_text(&report, provenance)
       }
       event_types::SCHEDULED_TRIGGER => format!("[Scheduled trigger] {content}"),
       _ => content.to_string(),
     };
-    let event_uploads = event.get("uploaded_files").and_then(Value::as_array).cloned().unwrap_or_default();
+    let event_uploads = event
+      .get("uploaded_files")
+      .and_then(CompactValue::as_array)
+      .map(|files| files.iter().map(CompactValue::to_value).collect::<Vec<_>>())
+      .unwrap_or_default();
     parts.push(charliebot_store::message_events::build_agent_input_content(&text, &event_uploads));
     uploads.extend(event_uploads);
   }

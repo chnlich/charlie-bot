@@ -1151,6 +1151,11 @@ pub(crate) mod test_support {
 
   use crate::hooks::EmptyRuntimeEventHooks;
 
+  /// Convert built JSON events to the compact parsed form the event readers take.
+  pub(crate) fn compact_events(values: &[Value]) -> Vec<crate::events::ChatEvent> {
+    values.iter().map(crate::events::ChatEvent::from_value).collect()
+  }
+
   /// An assistant text event with an explicit id (`conftest.assistant_event`).
   pub(crate) fn assistant_event(text: &str, event_id: &str) -> Value {
     json!({"id": event_id, "type": "assistant", "message": {"content": [{"type": "text", "text": text}]}})

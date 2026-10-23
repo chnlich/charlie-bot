@@ -12,10 +12,13 @@ use std::sync::Arc;
 use anyhow::Context;
 use axum::http::StatusCode;
 use charliebot_compat::file_urls;
+use charliebot_core::event_types::EventFields;
 use charliebot_core::event_types::{AGENT_MESSAGE, INPUT_EVENT_ID, USER, WEB_REPLY, WEB_REPLY_NOTICE};
 use charliebot_core::paths;
 use charliebot_core::pystr;
 use charliebot_registry::{FeatureContext, RunningTurnInputs, StateError};
+use charliebot_store::ChatEvent;
+use charliebot_store::compact::CompactValue;
 use charliebot_store::metadata::SessionMetadata;
 use charliebot_store::{SESSION_NOT_FOUND_DETAIL, SharedChatEvent, Store, StoreError};
 use serde_json::{Value, json};
@@ -128,24 +131,31 @@ pub async fn load_events(features: &FeatureContext, session_id: &str) -> anyhow:
 
 /// The nudge's `nudge_of`: the user message an audit nudge was posted for, or `None` for any other event
 /// (`reply.nudge_of`).
-pub fn nudge_of(event: &Value) -> Option<&str> {
-  if event.get("type").and_then(Value::as_str) != Some(AGENT_MESSAGE) {
+pub fn nudge_of(event: &impl EventFields) -> Option<String> {
+  if event.field("type").and_then(EventFields::as_str_field) != Some(AGENT_MESSAGE) {
     return None;
   }
-  event.get(WEB_REPLY)?.get("nudge_of")?.as_str()
+  event
+    .field(WEB_REPLY)
+    .and_then(|record| record.field("nudge_of"))
+    .and_then(EventFields::as_str_field)
+    .map(str::to_string)
 }
 
 /// The newest user message or nudge among `input_event_ids`, with the user message it answers; `None` when neither
 /// (`reply.answered_input`). `events` is in log order, so the last match is the newest. A user message answers itself;
 /// a nudge answers the user message it was posted for.
-pub fn answered_input<'a>(events: &'a [SharedChatEvent], input_event_ids: &[String]) -> Option<(&'a Value, String)> {
+pub fn answered_input<'a>(
+  events: &'a [SharedChatEvent],
+  input_event_ids: &[String],
+) -> Option<(&'a ChatEvent, String)> {
   answered_input_from(events.iter().rev().map(SharedChatEvent::as_ref), input_event_ids)
 }
 
 fn answered_input_from<'a>(
-  events: impl Iterator<Item = &'a Value>,
+  events: impl Iterator<Item = &'a ChatEvent>,
   input_event_ids: &[String],
-) -> Option<(&'a Value, String)> {
+) -> Option<(&'a ChatEvent, String)> {
   // Python builds `wanted = set(input_event_ids)` before this event pass (`src/features/web_reply/reply.py:97-108`).
   if input_event_ids.is_empty() {
     return None;
@@ -153,13 +163,13 @@ fn answered_input_from<'a>(
   let input_event_ids: HashSet<&str> = input_event_ids.iter().map(String::as_str).collect();
   // The forward Python pass overwrites `bound`, so a reverse pass can stop at the same last match.
   for event in events {
-    let Some(id) = event.get("id").and_then(Value::as_str) else {
+    let Some(id) = event.get("id").and_then(CompactValue::as_str) else {
       continue;
     };
     if !input_event_ids.contains(id) {
       continue;
     }
-    if event.get("type").and_then(Value::as_str) == Some(USER) {
+    if event.get("type").and_then(CompactValue::as_str) == Some(USER) {
       return Some((event, id.to_string()));
     }
     if let Some(nudged) = nudge_of(event) {
@@ -172,21 +182,22 @@ fn answered_input_from<'a>(
 /// Whether the log holds a web reply that answers `user_event_id` (`reply.replied`).
 pub fn replied(events: &[SharedChatEvent], user_event_id: &str) -> bool {
   events.iter().any(|event| {
-    event.get("type").and_then(Value::as_str) == Some(WEB_REPLY)
-      && event.get(WEB_REPLY).and_then(|record| record.get("answers")).and_then(Value::as_str) == Some(user_event_id)
+    event.get("type").and_then(CompactValue::as_str) == Some(WEB_REPLY)
+      && event.get(WEB_REPLY).and_then(|record| record.get("answers")).and_then(CompactValue::as_str)
+        == Some(user_event_id)
   })
 }
 
 /// Whether the log holds the nudge posted for `user_event_id` (`reply.nudged`).
 pub fn nudged(events: &[SharedChatEvent], user_event_id: &str) -> bool {
-  events.iter().any(|event| nudge_of(event) == Some(user_event_id))
+  events.iter().any(|event| nudge_of(event.as_ref()).as_deref() == Some(user_event_id))
 }
 
 /// Whether the log holds the no-reply notice for `user_event_id` (`reply.noticed`).
 pub fn noticed(events: &[SharedChatEvent], user_event_id: &str) -> bool {
   events.iter().any(|event| {
-    event.get("type").and_then(Value::as_str) == Some(WEB_REPLY_NOTICE)
-      && event.get(WEB_REPLY_NOTICE).and_then(|record| record.get(INPUT_EVENT_ID)).and_then(Value::as_str)
+    event.get("type").and_then(CompactValue::as_str) == Some(WEB_REPLY_NOTICE)
+      && event.get(WEB_REPLY_NOTICE).and_then(|record| record.get(INPUT_EVENT_ID)).and_then(CompactValue::as_str)
         == Some(user_event_id)
   })
 }
@@ -294,9 +305,9 @@ fn language_check_holds(user_text: Option<&str>, reply: &str) -> bool {
 fn newest_user_text_shared(events: &[SharedChatEvent]) -> Option<&str> {
   events.iter().rev().find_map(|event| {
     let event = event.as_ref();
-    let from_user = event.get("type").and_then(Value::as_str) == Some(USER)
-      && event.get("actor").and_then(Value::as_str) == Some("user");
-    if from_user { event.get("content").and_then(Value::as_str) } else { None }
+    let from_user = event.get("type").and_then(CompactValue::as_str) == Some(USER)
+      && event.get("actor").and_then(CompactValue::as_str) == Some("user");
+    if from_user { event.get("content").and_then(CompactValue::as_str) } else { None }
   })
 }
 
@@ -460,7 +471,8 @@ fn web_reply_receipt(event: &Value) -> Value {
 /// (`reply.for_you_entries`).
 #[cfg(test)]
 pub fn for_you_entries(store: &Store, events: &[Value]) -> Result<Vec<Value>, WebReplyError> {
-  let messages = store.events_to_messages(events)?;
+  let compact = events.iter().map(ChatEvent::from_value).collect::<Vec<_>>();
+  let messages = store.events_to_messages(&compact)?;
   Ok(
     messages
       .into_iter()
@@ -771,14 +783,14 @@ mod tests {
   #[test]
   fn the_nudge_of_reads_only_an_agent_message() {
     let nudge = json!({"type": AGENT_MESSAGE, "web_reply": {"nudge_of": "u1"}});
-    assert_eq!(nudge_of(&nudge), Some("u1"));
+    assert_eq!(nudge_of(&nudge).as_deref(), Some("u1"));
     assert_eq!(nudge_of(&json!({"type": USER, "web_reply": {"nudge_of": "u1"}})), None);
     assert_eq!(nudge_of(&json!({"type": AGENT_MESSAGE})), None);
   }
 
   #[test]
   fn empty_input_binding_visits_no_event_rows() {
-    let event = user_event("the question");
+    let event = ChatEvent::from_value(&user_event("the question"));
     let mut visited = 0;
     let events = std::iter::once(&event).inspect(|_| visited += 1);
 

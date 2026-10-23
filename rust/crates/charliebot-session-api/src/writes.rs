@@ -623,7 +623,10 @@ mod tests {
     fs::create_dir_all(conflict_path.parent().unwrap()).unwrap();
     fs::write(&conflict_path, "{\"id\":\"preserved-user\",\"type\":\"user\",\"content\":\"synthetic\"}\n").unwrap();
     features.store.clear_chat_events_cache("permanent-conflict");
-    assert_eq!(features.store.facts_of("permanent-conflict").unwrap().events_by_id["preserved-user"]["type"], "user");
+    assert_eq!(
+      features.store.facts_of("permanent-conflict").unwrap().events_by_id["preserved-user"]["type"].as_str(),
+      Some("user")
+    );
     let (status, body) = send(&router, Method::DELETE, "/api/sessions/permanent-conflict/permanent", None, None).await;
     assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(body["detail"]["blockers"], json!(["has preserved conversation/evidence: user"]));

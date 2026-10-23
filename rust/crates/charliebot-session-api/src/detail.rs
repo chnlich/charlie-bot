@@ -504,19 +504,19 @@ async fn pending_task_inputs(
     Ok(pending) => pending,
     Err(error) => return task_http_error(error),
   };
-  let items = match pending.iter().map(|event| pending_input_value(event)).collect::<StoreResult<Vec<Value>>>() {
+  let items = match pending.iter().map(pending_input_value).collect::<StoreResult<Vec<Value>>>() {
     Ok(items) => items,
     Err(error) => return store_error(error),
   };
   responses::fast_json(StatusCode::OK, &json!({"items": items}))
 }
 
-fn pending_input_events<'a>(
-  facts: &'a TaskFacts,
+fn pending_input_events(
+  facts: &TaskFacts,
   runs: &[RunRecord],
   run_facts: &RunFacts,
   session_id: &str,
-) -> StoreResult<Vec<&'a Value>> {
+) -> StoreResult<Vec<Value>> {
   if facts.boundary_index.is_none() && facts.imported_pending_ids.is_empty() {
     return Err(StoreError::invalid(format!(
       "task {session_id} has no creation or import boundary; it is not a task-tree node"
@@ -535,7 +535,7 @@ fn pending_input_events<'a>(
     facts
       .input_candidates
       .iter()
-      .map(Arc::as_ref)
+      .map(|event| event.to_value())
       .filter(|event| {
         let input_id = event.get("id").map_or_else(|| "None".to_string(), python_string);
         !facts.confirmed_input_ids.contains(&input_id) && !claimed.contains(&input_id) && seen.insert(input_id)
@@ -817,7 +817,7 @@ mod tests {
       .unwrap();
     let facts = TaskFacts {
       boundary_index: Some(0),
-      input_candidates: vec![Arc::new(json!({"id": "held"})), Arc::new(json!({"id": "free"}))],
+      input_candidates: vec![Arc::new(json!({"id": "held"}).into()), Arc::new(json!({"id": "free"}).into())],
       ..TaskFacts::default()
     };
     let run_facts = features.store.run_facts("worker").unwrap();
@@ -832,9 +832,9 @@ mod tests {
     let mut facts = TaskFacts {
       boundary_index: Some(0),
       input_candidates: vec![
-        Arc::new(json!({"id": "confirmed"})),
-        Arc::new(json!({"id": "claimed"})),
-        Arc::new(json!({"id": "pending"})),
+        Arc::new(json!({"id": "confirmed"}).into()),
+        Arc::new(json!({"id": "claimed"}).into()),
+        Arc::new(json!({"id": "pending"}).into()),
       ],
       ..TaskFacts::default()
     };

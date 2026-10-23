@@ -41,7 +41,7 @@ impl DispatchExecutor for RecordingExecutor {
   fn launch<'a>(
     &'a self,
     session_id: &'a str,
-    pending_inputs: &'a [Value],
+    pending_inputs: &'a [charliebot_store::ChatEvent],
     _launch_run_id: Option<&'a str>,
   ) -> BoxFuture<'a, charliebot_store::StoreResult<Option<String>>> {
     Box::pin(async move {
@@ -49,7 +49,7 @@ impl DispatchExecutor for RecordingExecutor {
         .launches
         .lock()
         .expect("the test launch log is never poisoned")
-        .push((session_id.to_string(), pending_inputs.to_vec()));
+        .push((session_id.to_string(), pending_inputs.iter().map(|event| event.to_value()).collect()));
       Ok(None)
     })
   }

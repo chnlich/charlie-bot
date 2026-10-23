@@ -20,18 +20,19 @@ const READING_RESOLVED: &str = "resolved";
 const FACTS_MEMO_CAP: usize = 8;
 
 trait EventData {
-  fn value(&self) -> &Value;
+  /// The event as the `Value` form the usage fold reads.
+  fn value(&self) -> Value;
 }
 
 impl EventData for Value {
-  fn value(&self) -> &Value {
-    self
+  fn value(&self) -> Value {
+    self.clone()
   }
 }
 
 impl EventData for SharedChatEvent {
-  fn value(&self) -> &Value {
-    self.as_ref()
+  fn value(&self) -> Value {
+    self.as_ref().to_value()
   }
 }
 
@@ -61,12 +62,12 @@ impl UsageFold {
         self.last_request_at = Some(parsed);
       }
       match event_type {
-        Some(event_types::ASSISTANT) => self.feed_assistant(event)?,
-        Some(event_types::SYSTEM) => self.feed_system(event)?,
+        Some(event_types::ASSISTANT) => self.feed_assistant(&event)?,
+        Some(event_types::SYSTEM) => self.feed_system(&event)?,
         Some(event_types::CONTEXT_COMPACTED) if self.reading_kind == READING_CLAUDE => {
-          self.feed_compaction_metadata(event)?;
+          self.feed_compaction_metadata(&event)?;
         }
-        Some(event_types::RESULT) => self.feed_result(event)?,
+        Some(event_types::RESULT) => self.feed_result(&event)?,
         _ => {}
       }
     }

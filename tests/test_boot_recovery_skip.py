@@ -18,8 +18,8 @@ import conftest
 import pytest
 
 import src.runtime.task_execution as task_execution_module
+from src.infra import config, models
 from src.infra import event_types as ET
-from src.infra import models
 from src.runtime import control_events, runs, task_recovery
 from tests import test_task_recovery
 
@@ -323,3 +323,38 @@ async def test_node_check_scan_count_does_not_grow_with_run_count(
   max_folds_one, _ = await _pass_stats(1)
   max_folds_four, _ = await _pass_stats(4)
   assert max_folds_four == max_folds_one == 1
+
+
+def test_marker_write_fsyncs_the_temp_file_before_the_rename(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The temp file holds the whole payload, is fsynced, and only then replaces the marker."""
+  cfg = config.CharlieBotConfig(charliebot_home=tmp_path / "home")
+  started_at = datetime.datetime(2026, 10, 21, 3, 0, 0, 123456, tzinfo=datetime.UTC)
+  tmp = _marker_path(cfg).with_suffix(".json.tmp")
+  payload = json.dumps({"pass_started_at": started_at.isoformat()})
+  steps: list[str] = []
+
+  class _OsStandIn:
+    """Stands in for the os module inside task_recovery and records the marker write's steps."""
+
+    def __getattr__(self, name):
+      return getattr(os, name)
+
+    def fsync(self, fd):
+      steps.append("fsync")
+      # The payload is already in the temp file, so the write ran first, and fd is that file.
+      assert os.fstat(fd).st_ino == tmp.stat().st_ino
+      assert tmp.read_text(encoding="utf-8") == payload
+      os.fsync(fd)
+
+    def replace(self, src, dst):
+      steps.append("replace")
+      assert tmp.read_text(encoding="utf-8") == payload
+      os.replace(src, dst)
+
+  monkeypatch.setattr(task_recovery, "os", _OsStandIn())
+  task_recovery.write_boot_recovery_marker(cfg, started_at)
+
+  assert steps == ["fsync", "replace"]
+  assert _read_marker(cfg) == {"pass_started_at": started_at.isoformat()}
+  assert not tmp.exists()

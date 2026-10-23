@@ -66,11 +66,16 @@ def read_boot_recovery_marker(cfg: config.CharlieBotConfig) -> datetime.datetime
 
 
 def write_boot_recovery_marker(cfg: config.CharlieBotConfig, started_at: datetime.datetime) -> None:
-  """Record the pass start time atomically (tmp file + rename)."""
+  """Record the pass start time: fsync the tmp file, then rename it over the marker."""
   path = marker_path(cfg)
   path.parent.mkdir(parents=True, exist_ok=True)
   tmp = path.with_suffix(".json.tmp")
-  tmp.write_text(json.dumps({"pass_started_at": started_at.isoformat()}), encoding="utf-8")
+  with tmp.open("w", encoding="utf-8") as stream:
+    stream.write(json.dumps({"pass_started_at": started_at.isoformat()}))
+    stream.flush()
+    # ext4 forces a file's data to disk before a rename only when the rename replaces an
+    # existing file (auto_da_alloc), so a fresh marker can read back empty after a power loss.
+    os.fsync(stream.fileno())
   os.replace(tmp, path)
 
 

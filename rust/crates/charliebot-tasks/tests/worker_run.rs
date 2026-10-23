@@ -1805,6 +1805,369 @@ async fn failover_with_every_member_cooling_reports_each_recovery_time() -> anyh
   Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Temporary backend failures over the backend pool (the worker-path cases of `tests/test_backend_router.py`)
+// ---------------------------------------------------------------------------
+
+/// The capacity message that a backend's `error` event carries, and the message of the named-backend cases.
+const CAPACITY_MESSAGE: &str = "Selected model is at capacity. Please try a different model.";
+
+/// A worker whose first run ended on scripted events, as `_launch_worker_error_event` leaves it. `_root` holds the
+/// run's repository and worktree directories, which the retry starts in.
+struct ErrorEventRun {
+  stack: Stack,
+  manager_id: String,
+  worker_id: String,
+  first_backend: String,
+  failed: RunRecord,
+  outcome: RunOutcomeKind,
+  _root: tempfile::TempDir,
+}
+
+/// A script that prints each event as one JSON line, then exits with `code`, as a worker process does.
+fn events_script(events: &[Value], code: i32) -> String {
+  let mut lines: Vec<String> =
+    events.iter().map(|event| format!("printf '%s\\n' '{}'", event.to_string().replace('\'', r"'\''"))).collect();
+  lines.push(format!("exit {code}"));
+  lines.join("\n")
+}
+
+/// An `error` event as a backend writes it: a message and its content.
+fn error_event(message: &str, content: &str) -> Value {
+  json!({"type": event_types::ERROR, "message": message, "content": content})
+}
+
+/// A Claude Code `result` event that ends in an error, with its `api_error_status` (a number, or null when absent).
+fn claude_error_result(api_error_status: Value, result: &str) -> Value {
+  json!({"type": event_types::RESULT, "is_error": true, "api_error_status": api_error_status, "result": result})
+}
+
+/// Launch an implement worker's first run, which prints `first_events` and exits 1, and wait for it to end. A
+/// pool-chosen worker takes the pool's first member; a named worker takes `fake`. The retry on the next member prints
+/// one assistant line and exits 1, and the manager's turn after the failure report prints one result.
+async fn launch_error_event_worker(first_events: &[Value], pool_chosen: bool) -> anyhow::Result<ErrorEventRun> {
+  let retry_events =
+    [json!({"type": event_types::ASSISTANT, "message": {"content": [{"type": "text", "text": "retry stopped"}]}})];
+  let scripts =
+    Scripts::new(vec![events_script(first_events, 1), events_script(&retry_events, 1), result_script("manager noted")]);
+  let options = ["fake", "fake2"]
+    .map(|id| BackendOption { model: "fake-model".to_string(), ..scripts.option(id, BACKEND_TYPE) })
+    .to_vec();
+  let stack = Stack::start_with(options, vec!["fake".to_string(), "fake2".to_string()]).await?;
+  stack.write_access_key()?;
+  let manager = stack.node("root", None, TaskProfile::Manager, None).await?;
+  let first_backend = if pool_chosen {
+    let pool = backend_pool::backend_pool(&stack.features)?;
+    pool.select(&stack.cfg, "test", &[])?.expect("the pool selects a first member").id
+  } else {
+    "fake".to_string()
+  };
+
+  let root = tempfile::tempdir()?;
+  let (repo, worktree) = (root.path().join("repo"), root.path().join("worktree"));
+  std::fs::create_dir(&repo)?;
+  std::fs::create_dir(&worktree)?;
+  let task = TaskSpec {
+    goal: "implement the requested change".to_string(),
+    repo_path: Some(repo.display().to_string()),
+    base_branch: Some("main".to_string()),
+    task_type: Some(TaskType::Implement),
+    keep_worktree: true,
+    ..TaskSpec::default()
+  };
+  let worker = stack
+    .store()
+    .create_task(
+      CreateTask {
+        request_id: "worker".to_string(),
+        task_parent_id: Some(manager.id.clone()),
+        profile: TaskProfile::Worker,
+        task: Some(task),
+        name: None,
+        backend: Some(first_backend.clone()),
+        group: None,
+        session_id: None,
+      },
+      TaskCaller::Operator,
+      Map::new(),
+    )
+    .await?;
+  if pool_chosen {
+    let guard = stack.store().control_lock().await;
+    let flag = Map::from_iter([("backend_from_pool".to_string(), json!(true))]);
+    stack.store().update_task_slot_fields_locked(&guard, &worker.id, backend_pool::METADATA_OWNER, flag).await?;
+  }
+  let admitted =
+    stack.dispatch.admit_input(&worker.id, event_types::USER, "implement this input batch", "user", json!({})).await?;
+  let record = RunRecord {
+    backend: Some(first_backend.clone()),
+    model: Some("fake-model".to_string()),
+    repo_path: Some(repo.display().to_string()),
+    base_branch: Some("main".to_string()),
+    branch_name: Some("charliebot/task-test".to_string()),
+    worktree_path: Some(worktree.display().to_string()),
+    input_event_ids: vec![admitted["id"].as_str().expect("an admitted input has an id").to_string()],
+    ..synthetic_run(&worker.id, "run-initial", RunKind::Work)
+  };
+  register_run(&stack, record, "implement the requested change").await?;
+  stack.adapter.launch(&worker.id, "run-initial")?;
+  let outcome = stack.wait_terminal(&worker.id, "run-initial").await?;
+  let failed =
+    stack.run_records(&worker.id)?.into_iter().find(|run| run.id == "run-initial").expect("the first run is recorded");
+  Ok(ErrorEventRun { stack, manager_id: manager.id, worker_id: worker.id, first_backend, failed, outcome, _root: root })
+}
+
+/// The retry that a failover registers for `run_id`, or `None` when none starts within ten seconds.
+async fn wait_for_retry(stack: &Stack, session_id: &str, run_id: &str) -> anyhow::Result<Option<RunRecord>> {
+  let deadline = std::time::Instant::now() + Duration::from_secs(10);
+  loop {
+    let retry = stack.run_records(session_id)?.into_iter().find(|run| run.retry_of_run_id.as_deref() == Some(run_id));
+    if retry.is_some() || std::time::Instant::now() >= deadline {
+      return Ok(retry);
+    }
+    tokio::time::sleep(Duration::from_millis(20)).await;
+  }
+}
+
+fn quota_failover_events(stack: &Stack, session_id: &str) -> anyhow::Result<Vec<Value>> {
+  Ok(stack.run_events(session_id)?.into_iter().filter(|event| event["type"] == event_types::QUOTA_FAILOVER).collect())
+}
+
+/// The failover of a pool-chosen worker whose first run ended on a temporary error: the member cools, the node moves
+/// to `fake2`, the retry binds the failed run's inputs and worktree, and the parent hears only the retry's failure.
+async fn assert_temporary_failover(error: &ErrorEventRun) -> anyhow::Result<()> {
+  let stack = &error.stack;
+  let pool = backend_pool::backend_pool(&stack.features)?;
+  assert_eq!(error.outcome, RunOutcomeKind::Failed);
+  let retry = wait_for_retry(stack, &error.worker_id, &error.failed.id).await?;
+  assert!(retry.is_some(), "the temporary error fails the run over to the next member");
+  let retry = retry.expect("checked above");
+  assert_eq!(stack.wait_terminal(&error.worker_id, &retry.id).await?, RunOutcomeKind::Failed);
+  settle_until(|| Ok(stack.child_reports(&error.manager_id)?.len() == 1)).await?;
+
+  let first = error.first_backend.as_str();
+  assert!(pool.cooling_until(first).is_some(), "the failed member cools");
+  assert!(pool.cooling_until("fake2").is_none(), "the next member stays selectable");
+  let remaining = pool.cooling_until(first).expect("checked above") - OffsetDateTime::now_utc();
+  assert!(remaining > TimeDuration::minutes(29) && remaining <= backend_pool::DEFAULT_COOLDOWN, "{remaining:?}");
+  assert_eq!(retry.backend.as_deref(), Some("fake2"));
+  assert_eq!(retry.input_event_ids, error.failed.input_event_ids);
+  assert_eq!(retry.worktree_path, error.failed.worktree_path);
+  let switches = quota_failover_events(stack, &error.worker_id)?;
+  assert_eq!(switches.len(), 1, "{switches:?}");
+  assert_eq!(switches[0]["from"].as_str(), Some(first));
+  assert_eq!(switches[0]["to"], "fake2");
+  assert_eq!(switches[0]["recovers_at"].as_str(), pool.cooling_until_minutes(first).as_deref());
+  let reports = stack.child_reports(&error.manager_id)?;
+  assert_eq!(reports.len(), 1, "{reports:?}");
+  assert_eq!(reports[0]["outcome"], "failed");
+  assert_eq!(reports[0]["result_refs"], json!([format!("run:{}", retry.id)]));
+  assert_eq!(stack.cfg.backends.pool, ["fake", "fake2"]);
+  settle_node(stack, &error.worker_id).await?;
+  settle_node(stack, &error.manager_id).await
+}
+
+/// The no-failover case: no member cools, no retry starts, and the parent hears the first run's failure once.
+async fn assert_no_failover(error: &ErrorEventRun) -> anyhow::Result<()> {
+  let stack = &error.stack;
+  assert_eq!(error.outcome, RunOutcomeKind::Failed);
+  settle_until(|| Ok(stack.child_reports(&error.manager_id)?.len() == 1)).await?;
+  let pool = backend_pool::backend_pool(&stack.features)?;
+  assert!(stack.cfg.backends.pool.iter().all(|member| pool.cooling_until(member).is_none()), "no member cools");
+  assert_eq!(stack.run_records(&error.worker_id)?.len(), 1, "no retry run starts");
+  assert!(quota_failover_events(stack, &error.worker_id)?.is_empty(), "no failover event is written");
+  let reports = stack.child_reports(&error.manager_id)?;
+  assert_eq!(reports[0]["outcome"], "failed");
+  assert_eq!(reports[0]["result_refs"], json!([format!("run:{}", error.failed.id)]));
+  settle_node(stack, &error.manager_id).await
+}
+
+/// The named-backend worker: its delegation named the backend, so it is not pool-chosen and has no route.
+async fn assert_named_worker(error: &ErrorEventRun) -> anyhow::Result<()> {
+  let meta = error.stack.store().load_task_meta(&error.worker_id).await?;
+  assert_ne!(meta.extra("backend_from_pool"), Some(&Value::Bool(true)), "a named worker is not pool-chosen");
+  assert!(meta.extra("route").is_none_or(Value::is_null), "a named worker has no route");
+  assert_eq!(error.first_backend, "fake");
+  Ok(())
+}
+
+/// The run's events log holds the `result` event that the test scripted.
+fn assert_result_logged(error: &ErrorEventRun, result: &str) -> anyhow::Result<()> {
+  let path = error.stack.store().run_dir(&error.worker_id, &error.failed.id).join(run_records::RUN_EVENTS_NAME);
+  let logged =
+    std::fs::read_to_string(path)?.lines().map(serde_json::from_str::<Value>).collect::<Result<Vec<_>, _>>()?;
+  assert!(logged.iter().any(|event| event["type"] == event_types::RESULT && event["result"] == result), "{logged:?}");
+  Ok(())
+}
+
+// Python: tests/test_backend_router.py::test_temporary_backend_errors_fail_over_on_the_worker_path (capacity).
+#[tokio::test]
+async fn at_capacity_error_fails_over_on_the_worker_path() -> anyhow::Result<()> {
+  let error = launch_error_event_worker(&[error_event(CAPACITY_MESSAGE, "")], true).await?;
+  assert_temporary_failover(&error).await
+}
+
+// Python: tests/test_backend_router.py::test_temporary_backend_errors_fail_over_on_the_worker_path (no output).
+#[tokio::test]
+async fn no_output_stall_error_fails_over_on_the_worker_path() -> anyhow::Result<()> {
+  let error = launch_error_event_worker(&[error_event("model produced no output for 1200s", "")], true).await?;
+  assert_temporary_failover(&error).await
+}
+
+// Python: tests/test_backend_router.py::test_temporary_backend_errors_fail_over_on_the_worker_path (bad gateway).
+#[tokio::test]
+async fn bad_gateway_error_fails_over_on_the_worker_path() -> anyhow::Result<()> {
+  let message = "litellm.BadGatewayError: BadGatewayError: OpenAIException - Bad Gateway";
+  let error = launch_error_event_worker(&[error_event(message, "")], true).await?;
+  assert_temporary_failover(&error).await
+}
+
+// Python: tests/test_backend_router.py::test_temporary_backend_errors_fail_over_on_the_worker_path (connection).
+#[tokio::test]
+async fn internal_server_error_with_connection_error_fails_over_on_the_worker_path() -> anyhow::Result<()> {
+  let message = "litellm.InternalServerError: InternalServerError: OpenAIException - Connection error.";
+  let error = launch_error_event_worker(&[error_event(message, "")], true).await?;
+  assert_temporary_failover(&error).await
+}
+
+// Python: tests/test_backend_router.py::test_temporary_backend_errors_fail_over_on_the_worker_path (500).
+#[tokio::test]
+async fn internal_server_error_fails_over_on_the_worker_path() -> anyhow::Result<()> {
+  let error = launch_error_event_worker(&[error_event("Internal Server Error", "")], true).await?;
+  assert_temporary_failover(&error).await
+}
+
+// Python: tests/test_backend_router.py::test_temporary_backend_errors_fail_over_on_the_worker_path (SSE stall).
+#[tokio::test]
+async fn opencode_session_stall_error_fails_over_on_the_worker_path() -> anyhow::Result<()> {
+  let message = "OpenCode backend failed: OpenCode SSE stream carried no session progress for 3600.0 s \
+    (heartbeats during silence: 359)";
+  let error = launch_error_event_worker(&[error_event(message, "")], true).await?;
+  assert_temporary_failover(&error).await
+}
+
+// Python: tests/test_backend_router.py::test_temporary_backend_errors_fail_over_on_the_worker_path (closed peer).
+#[tokio::test]
+async fn opencode_closed_peer_error_fails_over_on_the_worker_path() -> anyhow::Result<()> {
+  let message = "OpenCode backend failed: peer closed connection without sending complete message body \
+    (incomplete chunked read)";
+  let error = launch_error_event_worker(&[error_event(message, "")], true).await?;
+  assert_temporary_failover(&error).await
+}
+
+// Python: tests/test_backend_router.py::test_stderr_tail_and_request_id_do_not_trigger_backend_failover, the step case.
+#[tokio::test]
+async fn step_limit_error_with_bad_gateway_content_does_not_fail_over() -> anyhow::Result<()> {
+  let error = launch_error_event_worker(
+    &[error_event("Step limit (1000) exceeded without task completion.", "Bad Gateway")],
+    true,
+  )
+  .await?;
+  assert_no_failover(&error).await
+}
+
+// Python: tests/test_backend_router.py::test_stderr_tail_and_request_id_do_not_trigger_backend_failover, the 400 case.
+#[tokio::test]
+async fn request_id_with_status_digits_does_not_fail_over() -> anyhow::Result<()> {
+  let error =
+    launch_error_event_worker(&[error_event("Error code: 400 - invalid request (request id req_502ab1)", "")], true)
+      .await?;
+  assert_no_failover(&error).await
+}
+
+// Python: tests/test_backend_router.py::test_non_error_event_with_temporary_backend_message_does_not_fail_over
+#[tokio::test]
+async fn system_event_with_temporary_message_does_not_fail_over() -> anyhow::Result<()> {
+  let event = json!({"type": event_types::SYSTEM, "message": CAPACITY_MESSAGE, "content": ""});
+  let error = launch_error_event_worker(&[event], true).await?;
+  assert_no_failover(&error).await
+}
+
+// Python: tests/test_backend_router.py::test_a_named_backend_capacity_error_reports_failure_without_failover
+#[tokio::test]
+async fn a_named_backend_capacity_error_reports_failure_without_failover() -> anyhow::Result<()> {
+  let error = launch_error_event_worker(&[error_event(CAPACITY_MESSAGE, "")], false).await?;
+  assert_named_worker(&error).await?;
+  assert_no_failover(&error).await
+}
+
+// Python: tests/test_backend_router.py::test_temporary_claude_result_errors_fail_over_on_the_worker_path, status 502.
+#[tokio::test]
+async fn claude_result_502_fails_over_on_the_worker_path() -> anyhow::Result<()> {
+  let result = "API Error: 502 litellm.BadGatewayError: BadGatewayError: OpenAIException - Bad Gateway";
+  let error = launch_error_event_worker(&[claude_error_result(json!(502), result)], true).await?;
+  assert_result_logged(&error, result)?;
+  assert_temporary_failover(&error).await
+}
+
+// Python: tests/test_backend_router.py::test_temporary_claude_result_errors_fail_over_on_the_worker_path, status 529.
+#[tokio::test]
+async fn claude_result_529_fails_over_on_the_worker_path() -> anyhow::Result<()> {
+  let result = r#"API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#;
+  let error = launch_error_event_worker(&[claude_error_result(json!(529), result)], true).await?;
+  assert_result_logged(&error, result)?;
+  assert_temporary_failover(&error).await
+}
+
+// Python: tests/test_backend_router.py::test_temporary_claude_result_errors_fail_over_on_the_worker_path, status 429.
+#[tokio::test]
+async fn claude_result_429_fails_over_on_the_worker_path() -> anyhow::Result<()> {
+  let result = "API Error: 429 litellm.RateLimitError: RateLimitError: OpenAIException - rate limit exceeded";
+  let error = launch_error_event_worker(&[claude_error_result(json!(429), result)], true).await?;
+  assert_result_logged(&error, result)?;
+  assert_temporary_failover(&error).await
+}
+
+// Python: tests/test_backend_router.py::test_temporary_claude_result_errors_fail_over_on_the_worker_path, no status.
+#[tokio::test]
+async fn claude_result_without_status_connection_error_fails_over_on_the_worker_path() -> anyhow::Result<()> {
+  let result = "API Error: Connection error.";
+  let error = launch_error_event_worker(&[claude_error_result(Value::Null, result)], true).await?;
+  assert_result_logged(&error, result)?;
+  assert_temporary_failover(&error).await
+}
+
+// Python: tests/test_backend_router.py::test_bad_request_claude_result_errors_do_not_fail_over, the reasoning case.
+#[tokio::test]
+async fn claude_result_400_reasoning_error_does_not_fail_over() -> anyhow::Result<()> {
+  let result = "API Error: 400 litellm.BadRequestError: OpenAIException - The `reasoning_content` in the thinking mode \
+    must be passed back to the API. (request_id: f69ad0ec-cd32-4570-917d-7689ec630120)";
+  let error = launch_error_event_worker(&[claude_error_result(json!(400), result)], true).await?;
+  assert_no_failover(&error).await
+}
+
+// Python: tests/test_backend_router.py::test_bad_request_claude_result_errors_do_not_fail_over, the bad gateway case.
+#[tokio::test]
+async fn claude_result_400_mentioning_bad_gateway_does_not_fail_over() -> anyhow::Result<()> {
+  let result = "API Error: 400 litellm.BadRequestError: upstream reported Bad Gateway";
+  let error = launch_error_event_worker(&[claude_error_result(json!(400), result)], true).await?;
+  assert_no_failover(&error).await
+}
+
+// Python: tests/test_backend_router.py::test_non_error_claude_result_with_temporary_message_does_not_fail_over
+#[tokio::test]
+async fn non_error_claude_result_with_temporary_message_does_not_fail_over() -> anyhow::Result<()> {
+  let event = json!({
+    "type": event_types::RESULT,
+    "is_error": false,
+    "subtype": "error",
+    "api_error_status": null,
+    "result": "Fixed the Bad Gateway handler.",
+  });
+  let error = launch_error_event_worker(&[event], true).await?;
+  assert_no_failover(&error).await
+}
+
+// Python: tests/test_backend_router.py::test_a_named_backend_claude_result_error_reports_failure_without_failover
+#[tokio::test]
+async fn a_named_backend_claude_result_error_reports_failure_without_failover() -> anyhow::Result<()> {
+  let result = "API Error: 502 litellm.BadGatewayError: BadGatewayError: OpenAIException - Bad Gateway";
+  let event = claude_error_result(json!(502), result);
+  let error = launch_error_event_worker(&[event], false).await?;
+  assert_named_worker(&error).await?;
+  assert_no_failover(&error).await
+}
+
 /// A stack over the option ids `ids`, each taking the scripts in launch order, with `pool` as the rotation. The
 /// operator's access key is on disk, so the delegation route authorizes the call.
 async fn cold_read_stack(scripts: &Scripts, ids: &[&str], pool: &[&str]) -> anyhow::Result<Stack> {

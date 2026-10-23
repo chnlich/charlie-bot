@@ -2,7 +2,7 @@
 
 use charliebot_registry::backend::Env;
 use charliebot_store::run_records::RunKind;
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 
 pub const AUTO_COMPACT_WINDOW_ENV: &str = "CLAUDE_CODE_AUTO_COMPACT_WINDOW";
 pub const AUTOCOMPACT_PCT_OVERRIDE_ENV: &str = "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE";
@@ -31,18 +31,50 @@ pub fn declared_window_by_run_kind(run_kind: RunKind) -> u64 {
   }
 }
 
+/// Quote *value* the way Python's `shlex.quote` does, for the hook command line.
+fn shlex_quote(value: &str) -> String {
+  if value.is_empty() {
+    return "''".to_string();
+  }
+  let safe = |character: char| character.is_ascii_alphanumeric() || character == '_' || "@%+=:,./-".contains(character);
+  if value.chars().all(safe) {
+    return value.to_string();
+  }
+  format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+/// The SessionStart hook that restores a manager session's read skills after compaction.
+pub fn compaction_context_hook_settings(session_id: &str) -> Map<String, Value> {
+  let hooks: Vec<Value> = (1..=6)
+    .map(|slot| {
+      json!({
+        "type": "command",
+        "command": format!("charliebot compaction-context --session {} --slot {slot}", shlex_quote(session_id)),
+      })
+    })
+    .collect();
+  let mut settings = Map::new();
+  settings.insert("hooks".to_string(), json!({"SessionStart": [{"matcher": "compact", "hooks": hooks}]}));
+  settings
+}
+
 /// The one settings object every headless Claude process receives for its run kind.
-pub fn headless_claude_settings(run_kind: RunKind) -> Map<String, Value> {
+pub fn headless_claude_settings(run_kind: RunKind, session_id: Option<&str>) -> anyhow::Result<Map<String, Value>> {
   let mut settings = Map::new();
   settings.insert(DISABLE_CONNECTOR_SETTINGS_KEY.to_string(), Value::Bool(true));
   settings.insert(SYNC_CLAUDE_AI_SKILLS_SETTINGS_KEY.to_string(), Value::Bool(false));
   match run_kind {
-    RunKind::ManagerTurn => {}
+    RunKind::ManagerTurn => {
+      let Some(session_id) = session_id else {
+        anyhow::bail!("manager_turn Claude settings require a CharlieBot session id");
+      };
+      settings.extend(compaction_context_hook_settings(session_id));
+    }
     RunKind::Work | RunKind::Review | RunKind::Iteration | RunKind::ScheduledStep => {
       settings.insert(DISABLE_BUNDLED_SKILLS_SETTINGS_KEY.to_string(), Value::Bool(true));
     }
   }
-  settings
+  Ok(settings)
 }
 
 /// Build the Claude headless environment from the server snapshot and run kind.

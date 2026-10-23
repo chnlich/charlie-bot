@@ -728,7 +728,8 @@ mod tests {
     let root = tempfile::tempdir().unwrap();
     let (registry, cfg) = config(root.path(), true);
     let option = cfg.backends.options[0].clone();
-    let account = claude_config::ClaudeAccount { label: "acct-a".to_string(), config_dir: "/synthetic/account-a".to_string() };
+    let account =
+      claude_config::ClaudeAccount { label: "acct-a".to_string(), config_dir: "/synthetic/account-a".to_string() };
     let base_env = Env::from([
       ("HOME".to_string(), root.path().to_string_lossy().into_owned()),
       ("PATH".to_string(), "/synthetic/bin:/usr/bin:/bin".to_string()),
@@ -757,7 +758,7 @@ mod tests {
         r#"{"type":"command","command":"charliebot compaction-context --session synthetic-idle-session --slot 3"},"#,
         r#"{"type":"command","command":"charliebot compaction-context --session synthetic-idle-session --slot 4"},"#,
         r#"{"type":"command","command":"charliebot compaction-context --session synthetic-idle-session --slot 5"},"#,
-        r#"{"type":"command","command":"charliebot compaction-context --session synthetic-idle-session --slot 6"}]}]}"#,
+        r#"{"type":"command","command":"charliebot compaction-context --session synthetic-idle-session --slot 6"}]}]}}"#,
       )
     );
     let settings: Value = serde_json::from_str(&settings).unwrap();
@@ -767,9 +768,8 @@ mod tests {
     assert_eq!(session_start["matcher"], "compact");
     let commands: Vec<&str> =
       session_start["hooks"].as_array().unwrap().iter().map(|hook| hook["command"].as_str().unwrap()).collect();
-    let expected: Vec<String> = (1..=6)
-      .map(|slot| format!("charliebot compaction-context --session {SESSION_ID} --slot {slot}"))
-      .collect();
+    let expected: Vec<String> =
+      (1..=6).map(|slot| format!("charliebot compaction-context --session {SESSION_ID} --slot {slot}")).collect();
     assert_eq!(commands, expected);
   }
 }

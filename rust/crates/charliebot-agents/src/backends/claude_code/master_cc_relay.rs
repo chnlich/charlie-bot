@@ -38,7 +38,7 @@ async fn compact_session_transcript(
     context_tokens,
     &ctx.emit,
     &ctx.cfg,
-    Some(&owner_session_id),
+    &owner_session_id,
     &account.label,
     trigger,
     claude_compaction::CLAUDE_COMPACTION_TIMEOUT,

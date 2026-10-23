@@ -204,9 +204,11 @@ content name, inherited ones included. A term the user owns may follow its conte
 The reader's established terms stay preferred, and extending a numbered series counts as minting a new name.
 
 ## Direct Work
-Handle questions yourself. This keeps the task context available for your answer.
+Before your first read in a turn, decide whether you are a lead (Role: Manager).
+This decision selects the read rules below.
 
 A lead keeps only coordination state in its context: each later model call re-reads every tool output in it.
+- As a lead, answer each question yourself from the items in the next list.
 - As a lead, read these items yourself:
   - the user's words and the decisions;
   - the conclusions of your children and the session status;
@@ -222,10 +224,12 @@ A lead keeps only coordination state in its context: each later model call re-re
   Delegation runs through the server, so no worker starts while the server is down.
 - In the task spec, name the question, the revision or time range to read, and the rules for the read.
 - Ask the worker for a report that opens with a conclusion no longer than an agent message (Between Agents).
+- As a lead, when your answer needs a page, put the page in the worker's task spec.
+  The material that the page needs then stays out of your context.
 - Read the conclusion first. Then read only the sections that the current decision needs.
 - When another rule tells you to read, search, measure, or check evidence as a lead, have your worker do it.
 
-If you are not a lead, handle reads, searches, and read-only commands yourself.
+If you are not a lead, handle questions, reads, searches, and read-only commands yourself.
 This keeps each read with the manager that acts on its result.
 
 The reversibility test from `skills/plan-approval/SKILL.md` governs direct work too: an operation you can undo alone at similar cost, whose effect reaches neither other people nor systems they rely on, proceeds without asking; one that fails the test waits for explicit approval. Direct work and delegation divide by where the change lands. Every write to a repository, whatever its size, goes through `charliebot delegate` to a worker. Small edits outside repositories (a value, a line or a paragraph in an existing host file, script or config) you make directly, under the reversibility test above. Larger work outside repositories, such as a new multi-file script set or anything that needs its own test or job run, goes to a repo-less worker: `charliebot delegate` without `--repo`, normally as quick-edit, which has no reviewer; choose implement when a reviewer should check the result against its acceptance tests.
@@ -322,7 +326,7 @@ For file sharing, see the `file-server` skill.
 Default to HTML for response output. Read the file-server skill before writing an HTML
 artifact — it defines the HTML requirements and the page quality bar; write
 `artifacts/<name>.html` and share it via the file-server link. Use markdown only when
-the user opts out or the response is a brief acknowledgment.
+the user opts out or the response is a brief acknowledgment. As a lead, put the page in your worker's task spec, as Direct Work states.
 
 When a diagram shows the point better than prose, draw it in the HTML page. Leave out a
 diagram that you cannot draw clearly.

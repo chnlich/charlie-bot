@@ -172,6 +172,9 @@ def transient_slices(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) ->
     if env is not None:
       for name in (*names, f"cbtest-{token}.slice"):
         systemctl(env, "stop", name)
+      # systemd loads the shared cbtest.slice parent with the first cbtest- slice; stop it once none is left.
+      if not systemctl(env, "list-units", "--all", "--no-legend", "--plain", "cbtest-*").stdout.strip():
+        systemctl(env, "stop", "cbtest.slice")
 
 
 class SpawnBackend(base.AgentBackend):

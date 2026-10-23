@@ -151,11 +151,11 @@ def test_model_overrides_config_rejects_conflicts_naming_both_options(
   assert second.id in str(error.value)
 
 
-def test_model_overrides_config_carries_extra_body_at_the_model_options_key() -> None:
+def test_model_overrides_config_carries_extra_body_at_the_model_body_key() -> None:
   extra_body = {"cache": {"no-store": True, "no-cache": True}}
   option = options.OpencodeBackend(id="oc", label="OC", model=MODEL, extra_body=extra_body)
   config = options.model_overrides_config([option])
-  assert config["providers"]["fakeprov"]["models"]["fake-model"]["options"] == extra_body
+  assert config["providers"]["fakeprov"]["models"]["fake-model"]["body"] == extra_body
 
 
 def test_model_overrides_config_keeps_context_and_extra_body_of_two_options_on_one_model() -> None:
@@ -167,7 +167,7 @@ def test_model_overrides_config_keeps_context_and_extra_body_of_two_options_on_o
       "limit": {
           "context": 420000
       },
-      "options": extra_body,
+      "body": extra_body,
   }
 
 

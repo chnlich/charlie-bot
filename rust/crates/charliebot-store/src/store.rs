@@ -17,7 +17,7 @@ use uuid::Uuid;
 
 use crate::aggregator::builtin_event_types;
 use crate::control::ControlLock;
-use crate::events::EventReadCaches;
+use crate::events::{EventReadCaches, SharedChatEvent};
 use crate::hooks::{EventRenderer, RuntimeEventHooks};
 use crate::listing::CachedListing;
 use crate::metadata::{RoundRating, SessionMetadata, SessionStatus, UtcDateTime};
@@ -111,7 +111,7 @@ pub(crate) type MetadataStatHook = Arc<dyn Fn(&Path) + Send + Sync>;
 
 pub(crate) struct CachedChatEvents {
   pub(crate) generation: u64,
-  pub(crate) events: Arc<Vec<Value>>,
+  pub(crate) events: Arc<Vec<SharedChatEvent>>,
 }
 
 /// The live history identity covered by a node-facts memo.
@@ -122,6 +122,7 @@ pub(crate) enum NodeFactsKey {
 }
 
 /// A node's folded facts and the history they cover.
+#[derive(Clone)]
 pub(crate) struct CachedNodeFacts {
   pub(crate) key: NodeFactsKey,
   pub(crate) archived: usize,

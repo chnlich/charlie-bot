@@ -105,7 +105,7 @@ pub async fn get_status(
 async fn dialog(features: &FeatureContext, session_id: &str) -> Result<Value, WebReplyError> {
   reply::require_web_session(features, session_id).await?;
   let events = reply::load_events(features, session_id).await?;
-  let entries = reply::for_you_entries(&features.store, &events)?;
+  let entries = reply::for_you_entries_shared(&features.store, &events)?;
   Ok(json!({"session_id": session_id, "entries": entries}))
 }
 

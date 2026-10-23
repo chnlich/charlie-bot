@@ -1009,8 +1009,8 @@ mod tests {
   use charliebot_registry::context::StartupState;
   use charliebot_registry::store_hooks;
   use charliebot_registry::{Registry, RegistryError};
-  use charliebot_store::Store;
   use charliebot_store::metadata::TaskProfile;
+  use charliebot_store::{SharedChatEvent, Store};
   use serde_json::Map;
 
   use super::*;
@@ -1024,7 +1024,7 @@ mod tests {
       &self,
       _session_id: &str,
       _meta: &SessionMetadata,
-      _events: &[Value],
+      _events: &[SharedChatEvent],
     ) -> anyhow::Result<Option<Map<String, Value>>> {
       Ok(Some(Map::from_iter([("context_tokens".to_string(), json!(321))])))
     }

@@ -22,7 +22,7 @@ use charliebot_core::repo_root::RepoRoot;
 use charliebot_registry::sequence::SequenceTree;
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskSpec, TaskType};
 use charliebot_store::run_records::{RUN_EVENTS_NAME, RunKind, RunRecord, SequenceRef};
-use charliebot_store::{CreateTask, Store, StoreError, StoreResult, TaskCaller, control_events};
+use charliebot_store::{CreateTask, SharedChatEvent, Store, StoreError, StoreResult, TaskCaller, control_events};
 use charliebot_tasks::completion::RUN_REF_PREFIX;
 use charliebot_tasks::execution::TaskExecutionAdapter;
 use charliebot_tasks::{git, prompts, spawner_prompt};
@@ -855,7 +855,7 @@ async fn close_ended_loop_child_inner(
   Ok(())
 }
 
-fn has_close_fact(events: &[Value], request_id: &str) -> bool {
+fn has_close_fact(events: &[SharedChatEvent], request_id: &str) -> bool {
   events.iter().any(|event| {
     event.get("type").and_then(Value::as_str) == Some(TASK_CLOSED)
       && event.get("request_id").and_then(Value::as_str) == Some(request_id)
@@ -870,7 +870,7 @@ async fn loop_close_verdict(
   state: &ImproveState,
   child_id: &str,
   run_records: &[RunRecord],
-  events: &[Value],
+  events: &[SharedChatEvent],
 ) -> anyhow::Result<(&'static str, Value)> {
   let loop_id = state.loop_id;
   let mut terminal = Vec::new();

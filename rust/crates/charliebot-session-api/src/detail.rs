@@ -531,6 +531,7 @@ fn pending_input_events<'a>(
     facts
       .input_candidates
       .iter()
+      .map(Arc::as_ref)
       .filter(|event| {
         let input_id = event.get("id").map_or_else(|| "None".to_string(), python_string);
         !facts.confirmed_input_ids.contains(&input_id) && !claimed.contains(&input_id) && seen.insert(input_id)
@@ -813,7 +814,7 @@ mod tests {
     let node_facts = features.store.node_facts("worker").unwrap();
     let facts = TaskFacts {
       boundary_index: Some(0),
-      input_candidates: vec![json!({"id": "held"}), json!({"id": "free"})],
+      input_candidates: vec![Arc::new(json!({"id": "held"})), Arc::new(json!({"id": "free"}))],
       ..TaskFacts::default()
     };
     let pending = pending_input_events(&facts, &[run("stopped", &["held"], None)], &node_facts.runs, "worker").unwrap();
@@ -826,7 +827,11 @@ mod tests {
   fn pending_inputs_remove_confirmed_and_claimed_ids() {
     let mut facts = TaskFacts {
       boundary_index: Some(0),
-      input_candidates: vec![json!({"id": "confirmed"}), json!({"id": "claimed"}), json!({"id": "pending"})],
+      input_candidates: vec![
+        Arc::new(json!({"id": "confirmed"})),
+        Arc::new(json!({"id": "claimed"})),
+        Arc::new(json!({"id": "pending"})),
+      ],
       ..TaskFacts::default()
     };
     facts.confirmed_input_ids.insert("confirmed".to_string());

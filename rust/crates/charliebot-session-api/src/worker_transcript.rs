@@ -13,7 +13,7 @@ use charliebot_store::control_events;
 use charliebot_store::metadata::UtcDateTime;
 use charliebot_store::projection::MessageProjection;
 use charliebot_store::run_records::{HostBoot, RunKind, RunRecord};
-use charliebot_store::{Store, StoreError, StoreResult};
+use charliebot_store::{SharedChatEvent, Store, StoreError, StoreResult};
 use serde_json::{Value, json};
 
 const WORKER_PROJECTION_MEMO_LIMIT: usize = 32;
@@ -254,7 +254,7 @@ fn run_end_event(run: &RunRecord) -> Value {
   })
 }
 
-fn withheld_reason(events: &[Value], run_id: &str) -> Option<String> {
+fn withheld_reason(events: &[SharedChatEvent], run_id: &str) -> Option<String> {
   let mut reason = None;
   for event in events {
     if event.get("type").and_then(Value::as_str) != Some(event_types::RUN_LAUNCH_WITHHELD)
@@ -267,7 +267,11 @@ fn withheld_reason(events: &[Value], run_id: &str) -> Option<String> {
   reason
 }
 
-fn delivery_event(task_state: &str, facts_events: &[Value], run_records: &[RunRecord]) -> StoreResult<Option<Value>> {
+fn delivery_event(
+  task_state: &str,
+  facts_events: &[SharedChatEvent],
+  run_records: &[RunRecord],
+) -> StoreResult<Option<Value>> {
   if task_state == "open" || run_records.is_empty() {
     return Ok(None);
   }
@@ -327,7 +331,7 @@ fn delivery_event(task_state: &str, facts_events: &[Value], run_records: &[RunRe
 
 struct SummaryInputs<'a> {
   task_state: &'a str,
-  facts_events: &'a [Value],
+  facts_events: &'a [SharedChatEvent],
   run_records: &'a [RunRecord],
   states: &'a BTreeMap<String, String>,
   run_events: &'a HashMap<String, Vec<Value>>,

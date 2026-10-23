@@ -15,9 +15,9 @@ use std::time::Duration;
 use anyhow::bail;
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::hot_reload::HotReload;
-use charliebot_store::Store;
 use charliebot_store::metadata::{SessionMetadata, ThreadMetadata, UtcDateTime};
 use charliebot_store::run_records::RunKind;
+use charliebot_store::{SharedChatEvent, Store};
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value};
 
@@ -96,7 +96,7 @@ pub trait UsageResolver: Send + Sync {
     &self,
     session_id: &str,
     meta: &SessionMetadata,
-    events: &[Value],
+    events: &[SharedChatEvent],
   ) -> anyhow::Result<Option<Map<String, Value>>>;
 }
 

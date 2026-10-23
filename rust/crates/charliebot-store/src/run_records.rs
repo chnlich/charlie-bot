@@ -21,7 +21,7 @@ use uuid::Uuid;
 
 use crate::control_events::{self, ACTOR_SYSTEM};
 use crate::metadata::UtcDateTime;
-use crate::{ControlGuard, Store, StoreError, StoreResult};
+use crate::{ControlGuard, SharedChatEvent, Store, StoreError, StoreResult};
 
 pub const DATA_DIR_NAME: &str = "data";
 pub const MASTER_RUNS_DIR_NAME: &str = "master_runs";
@@ -917,7 +917,7 @@ impl Store {
   fn finish_payload(
     &self,
     run: &RunRecord,
-    events: &[Value],
+    events: &[SharedChatEvent],
     supplied: &[String],
     run_facts: &RunFacts,
   ) -> StoreResult<Vec<String>> {
@@ -1196,6 +1196,16 @@ pub fn terminal_outcome(events: &[Value], run_id: &str) -> StoreResult<Option<Ru
 /// reads the same facts through it.
 pub fn stop_requested_in_events(events: &[Value], run_id: &str, request_id: Option<&str>) -> bool {
   events.iter().any(|event| {
+    event.get("type").and_then(Value::as_str) == Some("run_stop_requested")
+      && event.get("run_id").and_then(Value::as_str) == Some(run_id)
+      && request_id.is_none_or(|request_id| event.get("request_id").and_then(Value::as_str) == Some(request_id))
+  })
+}
+
+/// Whether a shared event-cache slice holds a durable stop request for the run.
+pub fn stop_requested_in_shared_events(events: &[SharedChatEvent], run_id: &str, request_id: Option<&str>) -> bool {
+  events.iter().any(|event| {
+    let event = event.as_ref();
     event.get("type").and_then(Value::as_str) == Some("run_stop_requested")
       && event.get("run_id").and_then(Value::as_str) == Some(run_id)
       && request_id.is_none_or(|request_id| event.get("request_id").and_then(Value::as_str) == Some(request_id))

@@ -16,6 +16,7 @@ use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types;
 use charliebot_core::hot_reload::HotReload;
 use charliebot_registry::backend::{UsageResolver, UsageResolverHost};
+use charliebot_store::SharedChatEvent;
 use charliebot_store::Store;
 use charliebot_store::metadata::SessionMetadata;
 use serde_json::{Map, Value, json};
@@ -93,7 +94,7 @@ impl CodexUsageResolver {
     &self,
     session_id: &str,
     meta: &SessionMetadata,
-    events: &[Value],
+    events: &[SharedChatEvent],
   ) -> anyhow::Result<Option<Map<String, Value>>> {
     let host = self.host.as_ref();
     let Some(thread_id) = self.thread_id(host, session_id, meta.cc_session_id.as_deref(), events)? else {
@@ -125,12 +126,12 @@ impl CodexUsageResolver {
     host: &dyn CodexSessionHost,
     session_id: &str,
     persisted: Option<&str>,
-    events: &[Value],
+    events: &[SharedChatEvent],
   ) -> anyhow::Result<Option<String>> {
     if let Some(id) = persisted.filter(|id| !id.is_empty()) {
       return Ok(Some(id.to_string()));
     }
-    if let Some(id) = events.iter().find_map(translated_session_id) {
+    if let Some(id) = events.iter().find_map(|event| translated_session_id(event.as_ref())) {
       return Ok(Some(id));
     }
     read_translated_session_id(&host.chat_events_path(session_id))
@@ -197,7 +198,7 @@ impl UsageResolver for CodexUsageResolver {
     &self,
     session_id: &str,
     meta: &SessionMetadata,
-    events: &[Value],
+    events: &[SharedChatEvent],
   ) -> anyhow::Result<Option<Map<String, Value>>> {
     self.resolve_with_host(session_id, meta, events)
   }

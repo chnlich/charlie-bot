@@ -8,7 +8,7 @@ use charliebot_registry::{FeatureContext, WebSocketRequest};
 use charliebot_store::aggregator::MessageAggregator;
 use charliebot_store::metadata::{SessionMetadata, TaskProfile};
 use charliebot_store::streaming::{self, SocketHandle, Subscription};
-use charliebot_store::{RAW_EVENTS_REPLACED_BY_DELTAS, Store, StoreError, StoreResult};
+use charliebot_store::{RAW_EVENTS_REPLACED_BY_DELTAS, SharedChatEvent, Store, StoreError, StoreResult};
 use futures_util::future::BoxFuture;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
@@ -232,9 +232,25 @@ async fn prepare_catchup(
   Ok(Catchup { frames, total })
 }
 
-async fn replay_events(
+trait CatchupEvent {
+  fn event(&self) -> &Value;
+}
+
+impl CatchupEvent for Value {
+  fn event(&self) -> &Value {
+    self
+  }
+}
+
+impl CatchupEvent for SharedChatEvent {
+  fn event(&self) -> &Value {
+    self.as_ref()
+  }
+}
+
+async fn replay_events<E: CatchupEvent + Send + Sync>(
   store: &Store,
-  events: Arc<Vec<Value>>,
+  events: Arc<Vec<E>>,
   cursor: i128,
   event_index_offset: usize,
 ) -> StoreResult<Vec<Value>> {
@@ -260,9 +276,10 @@ impl CatchupWalk {
     Self { aggregator, cursor, event_index_offset, frames: Vec::new(), latest_stream: None }
   }
 
-  fn feed_slice(&mut self, events: &[Value], start: usize, end: usize) -> StoreResult<()> {
+  fn feed_slice<E: CatchupEvent>(&mut self, events: &[E], start: usize, end: usize) -> StoreResult<()> {
     for (index, event) in events.iter().enumerate().take(end).skip(start) {
       let global_index = self.event_index_offset + index;
+      let event = event.event();
       let deltas = self.aggregator.feed(event)?;
       if (global_index as i128) < self.cursor {
         continue;
@@ -573,6 +590,7 @@ mod tests {
       "type": "assistant",
       "message": {"content": [{"type": "text", "text": "draft"}]},
     })];
+    let events = events.into_iter().map(Arc::new).collect();
     let frames = replay_events(&features.store, Arc::new(events), 0, 0).await.unwrap();
     assert_eq!(frames.len(), 1);
     assert_eq!(frames[0]["type"], "stream");

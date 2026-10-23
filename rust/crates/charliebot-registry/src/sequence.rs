@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_store::metadata::{SessionMetadata, UtcDateTime};
-use charliebot_store::{ControlGuard, RunRecord, StopRequest, Store, StoreResult};
+use charliebot_store::{ControlGuard, RunRecord, SharedChatEvent, StopRequest, Store, StoreResult};
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value};
 
@@ -289,9 +289,9 @@ pub trait SequenceTree: Send + Sync {
 
   fn last_ended_run_id(&self, session_id: &str) -> StoreResult<Option<String>>;
 
-  fn load_events_sync(&self, session_id: &str) -> StoreResult<Arc<Vec<Value>>>;
+  fn load_events_sync(&self, session_id: &str) -> StoreResult<Arc<Vec<SharedChatEvent>>>;
 
-  fn terminal_outcome(&self, events: &[Value], run_id: &str) -> Option<String>;
+  fn terminal_outcome(&self, events: &[SharedChatEvent], run_id: &str) -> Option<String>;
 
   fn terminal_outcome_of<'a>(
     &'a self,
@@ -299,7 +299,7 @@ pub trait SequenceTree: Send + Sync {
     run_id: &'a str,
   ) -> BoxFuture<'a, StoreResult<Option<String>>>;
 
-  fn run_has_terminal_fact(&self, run: &RunRecord, events: &[Value]) -> bool;
+  fn run_has_terminal_fact(&self, run: &RunRecord, events: &[SharedChatEvent]) -> bool;
 
   fn register_run_locked<'a>(
     &'a self,
@@ -393,12 +393,12 @@ impl SequenceTree for StoreSequenceTree {
     self.store.last_ended_run_id(session_id)
   }
 
-  fn load_events_sync(&self, session_id: &str) -> StoreResult<Arc<Vec<Value>>> {
+  fn load_events_sync(&self, session_id: &str) -> StoreResult<Arc<Vec<SharedChatEvent>>> {
     // Python hands readers its cached live-facts list by reference (`src/runtime/task_sessions.py:650-662`).
     self.store.load_all_facts_shared_sync(session_id)
   }
 
-  fn terminal_outcome(&self, events: &[Value], run_id: &str) -> Option<String> {
+  fn terminal_outcome(&self, events: &[SharedChatEvent], run_id: &str) -> Option<String> {
     events
       .iter()
       .rfind(|event| {
@@ -420,7 +420,7 @@ impl SequenceTree for StoreSequenceTree {
     })
   }
 
-  fn run_has_terminal_fact(&self, run: &RunRecord, events: &[Value]) -> bool {
+  fn run_has_terminal_fact(&self, run: &RunRecord, events: &[SharedChatEvent]) -> bool {
     self.terminal_outcome(events, &run.id).is_some()
   }
 

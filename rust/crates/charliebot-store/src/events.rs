@@ -17,6 +17,9 @@ use crate::{ControlGuard, Store, StoreError, StoreResult};
 /// One parsed chat-log event.
 pub type ChatEvent = Value;
 
+/// A reference counted parsed event shared by the live cache and task facts.
+pub type SharedChatEvent = Arc<ChatEvent>;
+
 // Match src/infra/ndjson.py:_COUNT_MEMO_LIMIT and its (mtime_ns, size) signatures.
 const EVENT_COUNT_MEMO_LIMIT: usize = 64;
 const EVENT_TAIL_MEMO_LIMIT: usize = 64;
@@ -56,7 +59,7 @@ pub(crate) struct EventReadCaches {
   count: StatSignatureMemo<PathBuf, usize>,
   tail: StatSignatureMemo<(PathBuf, usize), TailPage>,
   archive_paths: StatSignatureMemo<PathBuf, Arc<Vec<PathBuf>>>,
-  archive_events: StatSignatureMemo<PathBuf, Arc<Vec<ChatEvent>>>,
+  archive_events: StatSignatureMemo<PathBuf, Arc<Vec<SharedChatEvent>>>,
   live_ranges: BoundedMemo<PathBuf, LiveRangeMemo>,
   #[cfg(test)]
   tail_bytes_read: usize,
@@ -102,14 +105,14 @@ impl Default for EventReadCaches {
 
 /// Archived event values plus the live history's shared cache, traversed without cloning live events.
 pub struct ChatEventHistory {
-  archived: Vec<ChatEvent>,
-  live: Arc<Vec<ChatEvent>>,
+  archived: Vec<SharedChatEvent>,
+  live: Arc<Vec<SharedChatEvent>>,
 }
 
 impl ChatEventHistory {
   /// Visit archived facts first and the live log second, as `fact_history` does.
   pub fn iter(&self) -> impl DoubleEndedIterator<Item = &ChatEvent> {
-    self.archived.iter().chain(self.live.iter())
+    self.archived.iter().map(Arc::as_ref).chain(self.live.iter().map(Arc::as_ref))
   }
 
   /// Number of archived and live events in this view.
@@ -151,7 +154,7 @@ impl FileIdentity {
 /// A node's live history as the event cache holds it: the cached list and its generation, or, while the cache is cold,
 /// the identity of the log file.
 pub(crate) enum LiveHistory {
-  Cached { generation: u64, events: Arc<Vec<ChatEvent>> },
+  Cached { generation: u64, events: Arc<Vec<SharedChatEvent>> },
   Cold(Option<FileIdentity>),
 }
 
@@ -160,12 +163,12 @@ pub struct ChatEventsDelta {
   pub generation: u64,
   pub start_index: usize,
   pub event_count: usize,
-  pub events: Arc<Vec<ChatEvent>>,
+  pub events: Arc<Vec<SharedChatEvent>>,
 }
 
 /// A selected event range that borrows the cached list when no archive is present.
 pub struct SharedChatEventRange {
-  pub events: Arc<Vec<ChatEvent>>,
+  pub events: Arc<Vec<SharedChatEvent>>,
   pub range: std::ops::Range<usize>,
 }
 
@@ -190,7 +193,7 @@ impl Store {
     self.fail_chat_append(session_id, &event, &path)?;
     ndjson::append(&path, &event)?;
     if let Some(cached) = cache.as_mut() {
-      Arc::make_mut(&mut cached.events).push(event.clone());
+      Arc::make_mut(&mut cached.events).push(Arc::new(event.clone()));
     }
     Ok(event)
   }
@@ -213,18 +216,18 @@ impl Store {
   pub fn load_chat_events_sync(&self, session_id: &str) -> StoreResult<Vec<ChatEvent>> {
     let events = self.load_chat_events_shared_sync(session_id)?;
     self.history_work.owned_event_clones.fetch_add(events.len() as u64, Ordering::Relaxed);
-    Ok(events.as_ref().clone())
+    Ok(events.iter().map(|event| event.as_ref().clone()).collect())
   }
 
   /// Read the cached event list as an immutable shared snapshot.
-  pub fn load_chat_events_shared_sync(&self, session_id: &str) -> StoreResult<Arc<Vec<ChatEvent>>> {
+  pub fn load_chat_events_shared_sync(&self, session_id: &str) -> StoreResult<Arc<Vec<SharedChatEvent>>> {
     let cache_entry = self.events_cache_entry(session_id);
     let mut cache = cache_entry.lock().expect("session event cache mutex is not poisoned");
     self.load_chat_events_shared_locked(session_id, &mut cache)
   }
 
   /// The cached live events and their cache generation, read under one lock so the pair is consistent.
-  pub(crate) fn live_events_with_generation(&self, session_id: &str) -> StoreResult<(u64, Arc<Vec<ChatEvent>>)> {
+  pub(crate) fn live_events_with_generation(&self, session_id: &str) -> StoreResult<(u64, Arc<Vec<SharedChatEvent>>)> {
     let cache_entry = self.events_cache_entry(session_id);
     let mut cache = cache_entry.lock().expect("session event cache mutex is not poisoned");
     let events = self.load_chat_events_shared_locked(session_id, &mut cache)?;
@@ -284,7 +287,7 @@ impl Store {
   }
 
   /// Read archived facts and the live events, sharing the live cache when no archive is present.
-  pub fn load_all_facts_shared_sync(&self, session_id: &str) -> StoreResult<Arc<Vec<ChatEvent>>> {
+  pub fn load_all_facts_shared_sync(&self, session_id: &str) -> StoreResult<Arc<Vec<SharedChatEvent>>> {
     let cache_entry = self.events_cache_entry(session_id);
     let mut cache = cache_entry.lock().expect("session event cache mutex is not poisoned");
     let live = self.load_chat_events_shared_locked(session_id, &mut cache)?;
@@ -292,7 +295,6 @@ impl Store {
     if archive_offset == 0 {
       return Ok(live);
     }
-    self.history_work.owned_event_clones.fetch_add(live.len() as u64, Ordering::Relaxed);
     let mut events = self.load_archive_range(session_id, 0, archive_offset)?;
     events.extend(live.iter().cloned());
     Ok(Arc::new(events))
@@ -364,7 +366,7 @@ impl Store {
     if archived_count == 0 {
       return Ok(live);
     }
-    let mut events = self.load_chat_events_range(session_id, 0, archived_count)?.0;
+    let mut events = self.load_chat_events_range(session_id, 0, archived_count)?.0.into_iter().collect::<Vec<_>>();
     events.extend(live);
     Ok(events)
   }
@@ -386,7 +388,10 @@ impl Store {
     }
     let archive_offset = self.read_archive_offset(session_id)?;
     if end <= archive_offset {
-      return Ok((self.load_archive_range(session_id, start, end)?, start > 0));
+      return Ok((
+        self.load_archive_range(session_id, start, end)?.into_iter().map(|event| event.as_ref().clone()).collect(),
+        start > 0,
+      ));
     }
     if start >= archive_offset {
       let rel_start = start - archive_offset;
@@ -396,7 +401,12 @@ impl Store {
         slice_live_lines(&lines, rel_start.saturating_sub(first_line), rel_end.saturating_sub(first_line))
       } else {
         match self.cached_chat_events(session_id) {
-          Some(cached) => cached.iter().skip(rel_start).take(rel_end.saturating_sub(rel_start)).cloned().collect(),
+          Some(cached) => cached
+            .iter()
+            .skip(rel_start)
+            .take(rel_end.saturating_sub(rel_start))
+            .map(|event| event.as_ref().clone())
+            .collect(),
           None => {
             let lines = self.live_lines_newline_split(session_id)?;
             slice_live_lines(&lines, rel_start, rel_end)
@@ -405,7 +415,11 @@ impl Store {
       };
       return Ok((events, start > 0));
     }
-    let mut out = self.load_archive_range(session_id, start, archive_offset)?;
+    let mut out = self
+      .load_archive_range(session_id, start, archive_offset)?
+      .into_iter()
+      .map(|event| event.as_ref().clone())
+      .collect::<Vec<_>>();
     let live_end = end - archive_offset;
     let (lines, first_line) = self.live_range_lines(session_id, 0)?;
     out.extend(slice_live_lines(&lines, first_line, live_end.saturating_sub(first_line)));
@@ -422,7 +436,7 @@ impl Store {
     if self.read_archive_offset(session_id)? > 0 {
       let (events, _) = self.load_chat_events_range(session_id, start, end)?;
       let end = events.len();
-      return Ok(SharedChatEventRange { events: Arc::new(events), range: 0..end });
+      return Ok(SharedChatEventRange { events: Arc::new(events.into_iter().map(Arc::new).collect()), range: 0..end });
     }
     match self.live_history(session_id)? {
       LiveHistory::Cached { events, .. } => {
@@ -433,7 +447,7 @@ impl Store {
       LiveHistory::Cold(_) => {
         let (events, _) = self.load_chat_events_range(session_id, start, end)?;
         let end = events.len();
-        Ok(SharedChatEventRange { events: Arc::new(events), range: 0..end })
+        Ok(SharedChatEventRange { events: Arc::new(events.into_iter().map(Arc::new).collect()), range: 0..end })
       }
     }
   }
@@ -441,7 +455,7 @@ impl Store {
   /// Read one archive's parsed events. This uses `src/runtime/chat_events.py:354-392`'s directory/file stat memos and
   /// 16-file bound. An unreadable file logs and contributes nothing, the pre-memo reader's behavior on open failure in
   /// `_archive_file_events`.
-  fn read_archive_file(&self, path: &Path, session_id: &str) -> Arc<Vec<ChatEvent>> {
+  fn read_archive_file(&self, path: &Path, session_id: &str) -> Arc<Vec<SharedChatEvent>> {
     let metadata = match fs::metadata(path) {
       Ok(metadata) => metadata,
       Err(error) => {
@@ -465,7 +479,7 @@ impl Store {
     }
     match ndjson::read_file(path) {
       Ok(events) => {
-        let events = Arc::new(events);
+        let events = Arc::new(events.into_iter().map(Arc::new).collect());
         self.event_read_caches.lock().expect("event read cache mutex is not poisoned").archive_events.record(
           path.to_path_buf(),
           signature,
@@ -482,7 +496,12 @@ impl Store {
 
   /// Read the parsed events at global indices `[start, end)` from the archive files in
   /// chronological order, stopping once the covered extent passes `end`.
-  pub(crate) fn load_archive_range(&self, session_id: &str, start: usize, end: usize) -> StoreResult<Vec<ChatEvent>> {
+  pub(crate) fn load_archive_range(
+    &self,
+    session_id: &str,
+    start: usize,
+    end: usize,
+  ) -> StoreResult<Vec<SharedChatEvent>> {
     let mut events = Vec::new();
     let mut pos = 0usize;
     for path in self.archive_paths(session_id)?.iter() {
@@ -773,13 +792,14 @@ impl Store {
     &self,
     session_id: &str,
     cache: &mut Option<CachedChatEvents>,
-  ) -> StoreResult<Arc<Vec<ChatEvent>>> {
+  ) -> StoreResult<Arc<Vec<SharedChatEvent>>> {
     #[cfg(test)]
     self.history_reads.fetch_add(1, Ordering::Relaxed);
     if let Some(cached) = cache.as_ref() {
       return Ok(Arc::clone(&cached.events));
     }
-    let events = Arc::new(self.read_chat_events_file(&self.chat_events_path(session_id))?);
+    let events =
+      Arc::new(self.read_chat_events_file(&self.chat_events_path(session_id))?.into_iter().map(Arc::new).collect());
     *cache = Some(CachedChatEvents { generation: self.next_events_cache_generation(), events: Arc::clone(&events) });
     Ok(events)
   }
@@ -793,7 +813,7 @@ impl Store {
     ndjson::read_file(path)
   }
 
-  pub(crate) fn cached_chat_events(&self, session_id: &str) -> Option<Arc<Vec<ChatEvent>>> {
+  pub(crate) fn cached_chat_events(&self, session_id: &str) -> Option<Arc<Vec<SharedChatEvent>>> {
     let cache_entry = self.events_cache.lock().expect("event cache mutex is not poisoned").get(session_id).cloned()?;
     let cache = cache_entry.lock().expect("session event cache mutex is not poisoned");
     cache.as_ref().map(|cached| Arc::clone(&cached.events))
@@ -943,7 +963,7 @@ impl Store {
   }
 
   /// Read a live event file into the shared cache from Tokio's blocking pool.
-  pub(crate) async fn load_chat_events_shared_async(&self, session_id: &str) -> StoreResult<Arc<Vec<ChatEvent>>> {
+  pub(crate) async fn load_chat_events_shared_async(&self, session_id: &str) -> StoreResult<Arc<Vec<SharedChatEvent>>> {
     let cache_entry = self.events_cache_entry(session_id);
     let path = self.chat_events_path(session_id);
     let generation = self.next_events_cache_generation.fetch_add(1, Ordering::Relaxed);
@@ -958,7 +978,7 @@ impl Store {
       if let Some(hook) = read_hook {
         hook();
       }
-      let events = Arc::new(ndjson::read_file(&path)?);
+      let events = Arc::new(ndjson::read_file(&path)?.into_iter().map(Arc::new).collect());
       *cache = Some(CachedChatEvents { generation, events: Arc::clone(&events) });
       Ok((events, true))
     })
@@ -1341,7 +1361,10 @@ mod tests {
       assert_eq!(file_events.len(), expected.len(), "iteration {iteration}: file event count");
       assert_eq!(cache_ids, expected, "iteration {iteration}: cache ids");
       assert_eq!(file_ids, expected, "iteration {iteration}: file ids");
-      assert_eq!(cached.as_slice(), file_events.as_slice(), "iteration {iteration}: cache and file order");
+      assert!(
+        cached.iter().map(SharedChatEvent::as_ref).eq(file_events.iter()),
+        "iteration {iteration}: cache and file order"
+      );
     }
   }
 
@@ -1502,6 +1525,10 @@ mod tests {
     }
 
     fn ids(events: &[ChatEvent]) -> Vec<String> {
+      events.iter().map(|event| event["id"].as_str().unwrap().to_string()).collect()
+    }
+
+    fn shared_ids(events: &[SharedChatEvent]) -> Vec<String> {
       events.iter().map(|event| event["id"].as_str().unwrap().to_string()).collect()
     }
 
@@ -1806,8 +1833,8 @@ mod tests {
       std::fs::write(archive_dir.join("chat_events.2025-W05.jsonl"), "{\"id\": \"first\"}\n").unwrap();
       std::fs::write(archive_dir.join("chat_events.2025-W06.jsonl"), "{\"id\": \"second\"}\n").unwrap();
 
-      assert_eq!(ids(&store.load_archive_range(session_id, 0, 1).unwrap()), ["first"]);
-      assert_eq!(ids(&store.load_archive_range(session_id, 0, 1).unwrap()), ["first"]);
+      assert_eq!(shared_ids(&store.load_archive_range(session_id, 0, 1).unwrap()), ["first"]);
+      assert_eq!(shared_ids(&store.load_archive_range(session_id, 0, 1).unwrap()), ["first"]);
       let caches = store.event_read_caches.lock().unwrap();
       assert_eq!(caches.archive_file_reads, 1);
       assert_eq!(caches.archive_dir_walks, 1);

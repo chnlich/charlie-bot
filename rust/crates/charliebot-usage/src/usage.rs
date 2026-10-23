@@ -10,7 +10,7 @@ use charliebot_registry::backend::{ContextLimits, UsageResolver, UsageResolverHo
 use charliebot_registry::{FeatureContext, Registry, RegistryError};
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, UtcDateTime};
 use charliebot_store::run_records::RunKind;
-use charliebot_store::{Store, StoreError, StoreResult};
+use charliebot_store::{SharedChatEvent, Store, StoreError, StoreResult};
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
 
@@ -18,6 +18,22 @@ const READING_CLAUDE: &str = "claude";
 const READING_SNAPSHOT: &str = "snapshot";
 const READING_RESOLVED: &str = "resolved";
 const FACTS_MEMO_CAP: usize = 8;
+
+trait EventData {
+  fn value(&self) -> &Value;
+}
+
+impl EventData for Value {
+  fn value(&self) -> &Value {
+    self
+  }
+}
+
+impl EventData for SharedChatEvent {
+  fn value(&self) -> &Value {
+    self.as_ref()
+  }
+}
 
 #[derive(Clone, Default)]
 struct UsageFold {
@@ -34,8 +50,9 @@ struct UsageFold {
 }
 
 impl UsageFold {
-  fn feed(&mut self, events: &[Value]) -> StoreResult<()> {
+  fn feed<E: EventData>(&mut self, events: &[E]) -> StoreResult<()> {
     for event in events {
+      let event = event.value();
       let event_type = event.get("type").and_then(Value::as_str);
       if matches!(event_type, Some(event_types::ASSISTANT | event_types::RESULT))
         && let Some(timestamp) = event.get("timestamp").and_then(Value::as_str)

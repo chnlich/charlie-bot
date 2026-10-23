@@ -2,7 +2,7 @@ use serde_json::{Value, json};
 
 use crate::metadata::SessionMetadata;
 use crate::projection::{self, MessageProjection};
-use crate::{ChatEvent, Store, StoreResult};
+use crate::{ChatEvent, SharedChatEvent, Store, StoreResult};
 
 /// Public detail for a missing session lookup.
 pub const SESSION_NOT_FOUND_DETAIL: &str = "Session not found";
@@ -73,6 +73,11 @@ impl Store {
   /// Convert events with this store's feature renderers.
   pub fn events_to_messages(&self, events: &[ChatEvent]) -> StoreResult<Vec<Value>> {
     projection::events_to_messages(events, 0, self.event_renderers.clone())
+  }
+
+  /// Convert a shared event-cache slice without copying event payloads.
+  pub fn events_to_messages_shared(&self, events: &[SharedChatEvent]) -> StoreResult<Vec<Value>> {
+    projection::events_to_messages_shared(events, 0, self.event_renderers.clone())
   }
 
   /// Convert events with this store's feature renderers in the global event-index space.

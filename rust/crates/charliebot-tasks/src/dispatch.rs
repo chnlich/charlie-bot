@@ -10,7 +10,9 @@ use charliebot_registry::sequence::{SequenceCompletion, SequenceDispatch};
 use charliebot_store::metadata::{SessionStatus, TaskProfile, UtcDateTime};
 use charliebot_store::run_records::{RunKind, RunOutcome, RunOutcomeKind, RunRecord};
 use charliebot_store::session_fork::CloseReportRedelivery;
-use charliebot_store::{ControlGuard, Store, StoreError, StoreHookFuture, StoreResult, StructuralBlockers};
+use charliebot_store::{
+  ControlGuard, SharedChatEvent, Store, StoreError, StoreHookFuture, StoreResult, StructuralBlockers,
+};
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
 
@@ -580,7 +582,7 @@ impl Dispatcher {
       let (report, created) = self
         .deliver_child_report_as(ChildReportInput {
           child_session_id: session_id,
-          source_event: close.clone(),
+          source_event: close.as_ref().clone(),
           outcome: close_report_outcome(&close),
           summary: &summary,
           result_refs: Some(&result_refs),
@@ -611,7 +613,7 @@ impl Dispatcher {
           guard,
           ChildReportInput {
             child_session_id: session_id,
-            source_event: close.clone(),
+            source_event: close.as_ref().clone(),
             outcome: close_report_outcome(&close),
             summary: &summary,
             result_refs: Some(&result_refs),
@@ -640,7 +642,7 @@ impl Dispatcher {
     )
   }
 
-  fn undelivered_close_recipients(&self, session_id: &str) -> StoreResult<Vec<(Value, String)>> {
+  fn undelivered_close_recipients(&self, session_id: &str) -> StoreResult<Vec<(SharedChatEvent, String)>> {
     let close_events = self.store.node_facts(session_id)?.task()?.close_events.clone();
     let mut undelivered = Vec::new();
     let mut recipient_events = HashMap::new();
@@ -825,23 +827,24 @@ pub fn agent_provenance(caller: &CallerIdentity) -> (Option<String>, Option<Stri
   }
 }
 
-fn deduplicate_pending_inputs(
-  candidates: Vec<Value>,
+fn deduplicate_pending_inputs<E: AsRef<Value>>(
+  candidates: Vec<E>,
   confirmed: &HashSet<String>,
   claimed: &HashSet<String>,
 ) -> Vec<Value> {
   let mut positions = HashMap::new();
   let mut pending = Vec::new();
-  for event in candidates {
+  for candidate in candidates {
+    let event = candidate.as_ref();
     let input_id = python_string(event.get("id"));
     if confirmed.contains(&input_id) || claimed.contains(&input_id) {
       continue;
     }
     if let Some(position) = positions.get(&input_id).copied() {
-      pending[position] = event;
+      pending[position] = event.clone();
     } else {
       positions.insert(input_id, pending.len());
-      pending.push(event);
+      pending.push(event.clone());
     }
   }
   pending
@@ -1001,9 +1004,9 @@ mod tests {
   fn pending_input_ids_keep_the_first_position_and_last_event() {
     let pending = deduplicate_pending_inputs(
       vec![
-        json!({"id":"same","content":"first"}),
-        json!({"id":"other","content":"other"}),
-        json!({"id":"same","content":"last"}),
+        Arc::new(json!({"id":"same","content":"first"})),
+        Arc::new(json!({"id":"other","content":"other"})),
+        Arc::new(json!({"id":"same","content":"last"})),
       ],
       &HashSet::new(),
       &HashSet::new(),

@@ -76,20 +76,34 @@ def test_outer_sentinel_is_unreachable(tmp_path: pathlib.Path) -> None:
 
 def test_own_processes_are_signalable() -> None:
   """A run kills the child and grandchild it started with SIGTERM and SIGKILL."""
-  child = subprocess.Popen(["bash", "-c", f"exec -a sbx-child-{uuid.uuid4().hex} sleep 300"])
-  grandchild = subprocess.Popen(["sleep", "300"])
+  child_marker = f"sbx-child-{uuid.uuid4().hex}"
+  grandchild_marker = f"sbx-grandchild-{uuid.uuid4().hex}"
+  child_script = (
+      "import subprocess\n"
+      f"grandchild = subprocess.Popen(['bash', '-c', 'exec -a {grandchild_marker} sleep 300'])\n"
+      "print(grandchild.pid, flush=True)\n"
+      "print(grandchild.wait(), flush=True)\n")
+  child = subprocess.Popen([sys.executable, "-c", child_script, child_marker], stdout=subprocess.PIPE, text=True)
+  grandchild_pid: int | None = None
+  grandchild_signal_sent = False
   try:
+    assert child.stdout is not None
+    grandchild_pid = int(child.stdout.readline())
+    os.kill(grandchild_pid, signal.SIGKILL)
+    grandchild_signal_sent = True
+    grandchild_returncode = int(child.stdout.readline())
+    assert grandchild_returncode == -signal.SIGKILL
     os.kill(child.pid, signal.SIGTERM)
     child.wait(timeout=10)
     assert child.returncode == -signal.SIGTERM
-    os.kill(grandchild.pid, signal.SIGKILL)
-    grandchild.wait(timeout=10)
-    assert grandchild.returncode == -signal.SIGKILL
   finally:
-    for proc in (child, grandchild):
-      if proc.poll() is None:
-        proc.kill()
-        proc.wait()
+    if child.poll() is None:
+      child.kill()
+      child.wait()
+    if grandchild_pid is not None and not grandchild_signal_sent:
+      os.kill(grandchild_pid, signal.SIGKILL)
+    if child.stdout is not None:
+      child.stdout.close()
 
 
 def test_tmux_servers_are_isolated(tmp_path: pathlib.Path) -> None:

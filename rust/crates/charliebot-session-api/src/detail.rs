@@ -496,7 +496,11 @@ async fn pending_task_inputs(
     Ok(runs) => runs,
     Err(error) => return task_http_error(error),
   };
-  let pending = match pending_input_events(facts, &run_records, &node_facts.runs, &meta.id) {
+  let run_facts = match features.store.run_facts(&meta.id) {
+    Ok(facts) => facts,
+    Err(error) => return task_http_error(error),
+  };
+  let pending = match pending_input_events(facts, &run_records, &run_facts, &meta.id) {
     Ok(pending) => pending,
     Err(error) => return task_http_error(error),
   };
@@ -811,13 +815,13 @@ mod tests {
       .append_chat_event("worker", json!({"type": "run_stop_requested", "run_id": "stopped"}))
       .await
       .unwrap();
-    let node_facts = features.store.node_facts("worker").unwrap();
     let facts = TaskFacts {
       boundary_index: Some(0),
       input_candidates: vec![Arc::new(json!({"id": "held"})), Arc::new(json!({"id": "free"}))],
       ..TaskFacts::default()
     };
-    let pending = pending_input_events(&facts, &[run("stopped", &["held"], None)], &node_facts.runs, "worker").unwrap();
+    let run_facts = features.store.run_facts("worker").unwrap();
+    let pending = pending_input_events(&facts, &[run("stopped", &["held"], None)], &run_facts, "worker").unwrap();
     assert_eq!(pending.len(), 2);
     assert_eq!(pending[0]["id"], "held");
     assert_eq!(pending[1]["id"], "free");

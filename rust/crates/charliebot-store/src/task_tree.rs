@@ -17,7 +17,9 @@ use serde_json::{Map, Value, json};
 use crate::control_events::{self, ACTOR_AGENT, ACTOR_SYSTEM, ACTOR_USER};
 use crate::events::{FileIdentity, LiveHistory, SharedChatEvent};
 use crate::metadata::{EventRef, SessionMetadata, SessionStatus, TaskProfile, TaskSpec, TaskType, UtcDateTime};
-use crate::run_records::{HostBoot, RunDisplayState, RunFacts, stop_requested_in_events};
+use crate::run_records::{
+  CachedRunFacts, HostBoot, RunDisplayState, RunFacts, RunFactsHistoryKey, RunOutcomeKind, stop_requested_in_events,
+};
 use crate::store::{CachedNodeFacts, NodeFactsKey};
 use crate::{ControlGuard, Store, StoreError, StoreResult};
 
@@ -89,6 +91,8 @@ pub struct TaskFacts {
   pub task_state: TaskState,
   pub has_user_request: bool,
   pub run_outcomes: HashMap<String, String>,
+  #[doc(hidden)]
+  pub run_outcome_string_none_ids: HashSet<String>,
   pub run_finish_positions: HashMap<String, usize>,
   pub confirmed_input_ids: HashSet<String>,
   pub input_candidates: Vec<SharedChatEvent>,
@@ -200,13 +204,9 @@ fn event_id_hash(id: &str) -> u64 {
   hash.finish()
 }
 
-/// A node's folded facts: the Run facts and the task fold of the same history.
-///
-/// The Run facts fold every history. The task fold rejects a history that holds a malformed `task_imported` fact; that
-/// history keeps its Run facts and answers [`NodeFacts::task`] with the fold's error, as [`Store::facts_of`] does.
+/// A node's task facts, folded from the history covered by the store memo.
 #[derive(Clone, Debug)]
 pub struct NodeFacts {
-  pub runs: RunFacts,
   task: Result<TaskFacts, String>,
 }
 
@@ -219,7 +219,7 @@ impl NodeFacts {
 
 impl Default for NodeFacts {
   fn default() -> Self {
-    Self { runs: RunFacts::default(), task: Ok(TaskFacts::default()) }
+    Self { task: Ok(TaskFacts::default()) }
   }
 }
 
@@ -230,6 +230,7 @@ impl Default for NodeFacts {
 #[derive(Clone, Debug)]
 pub struct NodeState {
   facts: Arc<NodeFacts>,
+  pub runs: Arc<RunFacts>,
   malformed_task_events: Option<Arc<Vec<SharedChatEvent>>>,
 }
 
@@ -254,7 +255,7 @@ impl NodeState {
       (Err(_), None) => unreachable!("an invalid task fold retains the source events for Run display-state reads"),
       (Ok(_), Some(_)) => unreachable!("valid task facts do not retain a fallback event view"),
     };
-    self.facts.runs.display_state(run, boot, withheld)
+    self.runs.display_state(run, boot, withheld)
   }
 }
 
@@ -312,6 +313,7 @@ impl Default for TaskFacts {
       task_state: "open".to_string(),
       has_user_request: false,
       run_outcomes: HashMap::new(),
+      run_outcome_string_none_ids: HashSet::new(),
       run_finish_positions: HashMap::new(),
       confirmed_input_ids: HashSet::new(),
       input_candidates: Vec::new(),
@@ -323,6 +325,24 @@ impl Default for TaskFacts {
       delivered_reports: HashSet::new(),
       events_by_id: EventIdIndex::default(),
       covered: 0,
+    }
+  }
+}
+
+impl TaskFacts {
+  /// The terminal outcome represented by this task-facts snapshot.
+  pub fn terminal_run_outcome(&self, run_id: &str) -> StoreResult<Option<RunOutcomeKind>> {
+    let Some(outcome) = self.run_outcomes.get(run_id) else {
+      return Ok(None);
+    };
+    if outcome == "None" && !self.run_outcome_string_none_ids.contains(run_id) {
+      return Ok(None);
+    }
+    match outcome.as_str() {
+      "success" => Ok(Some(RunOutcomeKind::Success)),
+      "failed" => Ok(Some(RunOutcomeKind::Failed)),
+      "interrupted" => Ok(Some(RunOutcomeKind::Interrupted)),
+      value => Err(StoreError::new(format!("run {run_id} has unknown terminal outcome {value:?}"))),
     }
   }
 }
@@ -466,6 +486,97 @@ impl Store {
     Ok(self.node_facts_until(session_id, &mut never_stop)?.expect("the no-stop fold completes"))
   }
 
+  /// The current run facts from the 64-history memo.
+  pub fn run_facts(&self, session_id: &str) -> StoreResult<Arc<RunFacts>> {
+    let mut never_stop = || false;
+    Ok(self.run_facts_until(session_id, &mut never_stop)?.expect("the no-stop run-facts read completes"))
+  }
+
+  /// Read run facts with the Python memo bound and check the stop flag between event blocks.
+  pub fn run_facts_until(
+    &self,
+    session_id: &str,
+    should_stop: &mut impl FnMut() -> bool,
+  ) -> StoreResult<Option<Arc<RunFacts>>> {
+    if self.node_facts_until(session_id, should_stop)?.is_none() {
+      return Ok(None);
+    }
+    let node_entry = self
+      .node_facts_cache
+      .lock()
+      .expect("node facts cache mutex is not poisoned")
+      .get(session_id)
+      .cloned()
+      .expect("a node facts read stores its covered history");
+    let archived = node_entry.archived;
+    let sealed_source = match node_entry.key {
+      NodeFactsKey::Cached { generation, .. } => RunFactsHistoryKey::Cached(generation),
+      NodeFactsKey::File(identity) => RunFactsHistoryKey::File(identity),
+    };
+    let sealed = self.run_facts_memo.lock().expect("run facts memo mutex is not poisoned").get(
+      session_id,
+      sealed_source,
+      archived,
+    );
+    if let Some(cached) = sealed.filter(|cached| cached.covered == node_entry.covered) {
+      return Ok(Some(Arc::clone(&cached.facts)));
+    }
+    let (source, live) = match self.live_history(session_id)? {
+      LiveHistory::Cached { generation, events } => {
+        let source = match node_entry.key {
+          NodeFactsKey::File(identity) => RunFactsHistoryKey::File(identity),
+          NodeFactsKey::Cached { .. } => RunFactsHistoryKey::Cached(generation),
+        };
+        (source, events)
+      }
+      LiveHistory::Cold(_) => {
+        let Some((generation, live)) = self.live_events_with_generation_until(session_id, should_stop)? else {
+          return Ok(None);
+        };
+        let source = match node_entry.key {
+          NodeFactsKey::File(identity) => RunFactsHistoryKey::File(identity),
+          NodeFactsKey::Cached { .. } => RunFactsHistoryKey::Cached(generation),
+        };
+        (source, live)
+      }
+    };
+    let cached =
+      self.run_facts_memo.lock().expect("run facts memo mutex is not poisoned").get(session_id, source, archived);
+    if let Some(cached) = cached.as_ref().filter(|cached| cached.covered == live.len()) {
+      return Ok(Some(Arc::clone(&cached.facts)));
+    }
+    let mut facts = if let Some(cached) = &cached {
+      if cached.covered > live.len() {
+        return Err(StoreError::new("run facts memo covers more events than the current history"));
+      }
+      cached.facts.as_ref().clone()
+    } else {
+      let mut facts = RunFacts::default();
+      if archived > 0 {
+        let Some(archive) = self.load_archive_range_until(session_id, 0, archived, should_stop)? else {
+          return Ok(None);
+        };
+        if !observe_run_facts(&mut facts, &archive, should_stop)? {
+          return Ok(None);
+        }
+      }
+      facts
+    };
+    let covered = cached.as_ref().map_or(0, |cached| cached.covered);
+    if !observe_run_facts(&mut facts, &live[covered..], should_stop)? {
+      return Ok(None);
+    }
+    let facts = Arc::new(facts);
+    self.run_facts_memo.lock().expect("run facts memo mutex is not poisoned").insert(CachedRunFacts {
+      session_id: session_id.to_string(),
+      key: source,
+      archived,
+      covered: live.len(),
+      facts: Arc::clone(&facts),
+    });
+    Ok(Some(facts))
+  }
+
   /// Fold a node's task and run facts, checking `should_stop` every bounded block of history events.
   ///
   /// A stopped fold returns `None` and leaves the previous memo intact.
@@ -509,7 +620,14 @@ impl Store {
       return Ok(None);
     }
     let archived = self.read_archive_offset(session_id)?;
+    let run_facts_key = RunFactsHistoryKey::Cached(generation);
+    let cached_runs = self.run_facts_memo.lock().expect("run facts memo mutex is not poisoned").get(
+      session_id,
+      run_facts_key,
+      archived,
+    );
     let cached = self.node_facts_cache.lock().expect("node facts cache mutex is not poisoned").get(session_id).cloned();
+    let mut folded_runs = None;
     let mut entry = match cached {
       Some(entry)
         if entry.key == (NodeFactsKey::Cached { generation, covered: entry.covered })
@@ -520,15 +638,17 @@ impl Store {
       }
       _ => {
         let mut facts = NodeFacts::default();
+        let mut runs = RunFacts::default();
         if archived > 0 {
           let Some(archive) = self.load_archive_range_until(session_id, 0, archived, should_stop)? else {
             return Ok(None);
           };
-          if !fold_node_facts_from(&mut facts, &archive, 0, should_stop)? {
+          if !fold_node_facts_from(&mut facts, &archive, 0, should_stop, Some(&mut runs))? {
             return Ok(None);
           }
           self.history_work.folded_events.fetch_add(archive.len() as u64, Ordering::Relaxed);
         }
+        folded_runs = Some(runs);
         self.history_work.full_folds.fetch_add(1, Ordering::Relaxed);
         CachedNodeFacts {
           key: NodeFactsKey::Cached { generation, covered: 0 },
@@ -540,11 +660,65 @@ impl Store {
     };
     if entry.covered < live.len() {
       let suffix = &live[entry.covered..];
-      if !fold_node_facts_from(Arc::make_mut(&mut entry.facts), suffix, archived + entry.covered, should_stop)? {
+      let mut runs = if let Some(runs) = folded_runs.take() {
+        Some(runs)
+      } else {
+        cached_runs
+          .as_ref()
+          .filter(|cached| cached.covered == entry.covered)
+          .map(|cached| cached.facts.as_ref().clone())
+      };
+      if !fold_node_facts_from(
+        Arc::make_mut(&mut entry.facts),
+        suffix,
+        archived + entry.covered,
+        should_stop,
+        runs.as_mut(),
+      )? {
         return Ok(None);
       }
       self.history_work.folded_events.fetch_add(suffix.len() as u64, Ordering::Relaxed);
       entry.covered = live.len();
+      folded_runs = runs;
+    }
+    if let Some(runs) = folded_runs {
+      self.run_facts_memo.lock().expect("run facts memo mutex is not poisoned").insert(CachedRunFacts {
+        session_id: session_id.to_string(),
+        key: run_facts_key,
+        archived,
+        covered: live.len(),
+        facts: Arc::new(runs),
+      });
+    } else if !cached_runs.as_ref().is_some_and(|cached| cached.covered == live.len()) {
+      let mut runs = cached_runs.map(|cached| (cached.covered, cached.facts.as_ref().clone()));
+      if let Some((covered, facts)) = &mut runs {
+        if *covered < live.len() && !observe_run_facts(facts, &live[*covered..], should_stop)? {
+          return Ok(None);
+        }
+      } else {
+        let mut facts = RunFacts::default();
+        if archived > 0 {
+          let Some(archive) = self.load_archive_range_until(session_id, 0, archived, should_stop)? else {
+            return Ok(None);
+          };
+          if !observe_run_facts(&mut facts, &archive, should_stop)? {
+            return Ok(None);
+          }
+        }
+        if !observe_run_facts(&mut facts, live, should_stop)? {
+          return Ok(None);
+        }
+        runs = Some((live.len(), facts));
+      }
+      if let Some((covered, facts)) = runs {
+        self.run_facts_memo.lock().expect("run facts memo mutex is not poisoned").insert(CachedRunFacts {
+          session_id: session_id.to_string(),
+          key: run_facts_key,
+          archived,
+          covered: live.len().max(covered),
+          facts: Arc::new(facts),
+        });
+      }
     }
     let facts = Arc::clone(&entry.facts);
     entry.key = NodeFactsKey::Cached { generation, covered: entry.covered };
@@ -555,11 +729,23 @@ impl Store {
   /// Keep a node's folded task facts past recovery eviction, keyed by the file identity they cover.
   pub(crate) fn seal_node_facts(&self, session_id: &str, evicted: Option<(u64, usize, FileIdentity)>) {
     let Some((generation, covered, identity)) = evicted else { return };
-    let mut cache = self.node_facts_cache.lock().expect("node facts cache mutex is not poisoned");
-    if let Some(entry) = cache.get_mut(session_id)
-      && entry.key == (NodeFactsKey::Cached { generation, covered })
-    {
-      entry.key = NodeFactsKey::File(identity);
+    let archived = {
+      let mut cache = self.node_facts_cache.lock().expect("node facts cache mutex is not poisoned");
+      if let Some(entry) = cache.get_mut(session_id)
+        && entry.key == (NodeFactsKey::Cached { generation, covered })
+      {
+        entry.key = NodeFactsKey::File(identity);
+        Some(entry.archived)
+      } else {
+        None
+      }
+    };
+    if let Some(archived) = archived {
+      self
+        .run_facts_memo
+        .lock()
+        .expect("run facts memo mutex is not poisoned")
+        .seal(session_id, generation, archived, identity);
     }
   }
 
@@ -645,9 +831,29 @@ impl Store {
   }
 
   fn node_state_view(&self, session_id: &str, facts: Arc<NodeFacts>) -> StoreResult<Arc<NodeState>> {
+    let runs = match self.cached_run_facts(session_id) {
+      Some(runs) => runs,
+      None => self.run_facts(session_id)?,
+    };
     let malformed_task_events =
       if facts.task.is_err() { Some(self.load_all_facts_shared_sync(session_id)?) } else { None };
-    Ok(Arc::new(NodeState { facts, malformed_task_events }))
+    Ok(Arc::new(NodeState { facts, runs, malformed_task_events }))
+  }
+
+  fn cached_run_facts(&self, session_id: &str) -> Option<Arc<RunFacts>> {
+    let node_entry =
+      self.node_facts_cache.lock().expect("node facts cache mutex is not poisoned").get(session_id).cloned()?;
+    let key = match node_entry.key {
+      NodeFactsKey::Cached { generation, .. } => RunFactsHistoryKey::Cached(generation),
+      NodeFactsKey::File(identity) => RunFactsHistoryKey::File(identity),
+    };
+    self
+      .run_facts_memo
+      .lock()
+      .expect("run facts memo mutex is not poisoned")
+      .get(session_id, key, node_entry.archived)
+      .filter(|cached| cached.covered == node_entry.covered)
+      .map(|cached| Arc::clone(&cached.facts))
   }
 
   /// Keep a node's state past the eviction of its cached events, keyed by the log file's identity.
@@ -2327,6 +2533,11 @@ fn fold_task_facts_from(
       "run_finished" => {
         if let Some(run_id) = event.get("run_id").and_then(Value::as_str) {
           let outcome = event.get("outcome").and_then(Value::as_str).unwrap_or("None").to_string();
+          if event.get("outcome").and_then(Value::as_str) == Some("None") {
+            facts.run_outcome_string_none_ids.insert(run_id.to_string());
+          } else {
+            facts.run_outcome_string_none_ids.remove(run_id);
+          }
           facts.run_outcomes.insert(run_id.to_string(), outcome.clone());
           facts.run_finish_positions.entry(run_id.to_string()).or_insert(position);
           if outcome == "success"
@@ -2391,13 +2602,15 @@ fn fold_node_facts_from(
   events: &[SharedChatEvent],
   offset: usize,
   should_stop: &mut impl FnMut() -> bool,
+  run_facts: Option<&mut RunFacts>,
 ) -> StoreResult<bool> {
   if should_stop() {
     return Ok(false);
   }
+  let mut run_facts = run_facts;
   let mut task_error = None;
   if let Ok(task) = &mut facts.task {
-    match fold_task_facts_from(task, events, offset, should_stop, Some(&mut facts.runs)) {
+    match fold_task_facts_from(task, events, offset, should_stop, run_facts.as_deref_mut()) {
       Ok(true) => return Ok(true),
       Ok(false) => return Ok(false),
       Err(error) => task_error = Some(error.to_string()),
@@ -2412,7 +2625,23 @@ fn fold_node_facts_from(
     if index % TASK_FACTS_STOP_CHECK_INTERVAL == 0 && should_stop() {
       return Ok(false);
     }
-    facts.runs.observe(event.as_ref());
+    if let Some(run_facts) = run_facts.as_deref_mut() {
+      run_facts.observe(event.as_ref());
+    }
+  }
+  Ok(!should_stop())
+}
+
+fn observe_run_facts(
+  facts: &mut RunFacts,
+  events: &[SharedChatEvent],
+  should_stop: &mut impl FnMut() -> bool,
+) -> StoreResult<bool> {
+  for (index, event) in events.iter().enumerate() {
+    if index % TASK_FACTS_STOP_CHECK_INTERVAL == 0 && should_stop() {
+      return Ok(false);
+    }
+    facts.observe(event.as_ref());
   }
   Ok(!should_stop())
 }
@@ -3812,11 +4041,34 @@ pub(crate) mod tests {
     );
     assert_eq!(facts.confirmed_input_ids, HashSet::from(["input-c".to_string()]));
     assert_eq!(facts.run_outcomes["run-a"], "success");
+    assert_eq!(facts.terminal_run_outcome("run-a").unwrap(), Some(RunOutcomeKind::Success));
     assert_eq!(facts.run_finish_positions["run-a"], 7);
     assert_eq!(facts.close_events.len(), 1);
     assert_eq!(facts.close_requests.len(), 1);
     assert_eq!(facts.delivered_reports, HashSet::from([("child-a".to_string(), "event-a".to_string())]));
     assert_eq!(facts.covered, events.len());
+  }
+
+  #[test]
+  fn task_fact_outcomes_preserve_run_facts_null_and_unknown_rules() {
+    let events = vec![
+      json!({"type": "run_finished", "run_id": "null", "outcome": null}),
+      json!({"type": "run_finished", "run_id": "number", "outcome": 7}),
+      json!({"type": "run_finished", "run_id": "literal-none", "outcome": "None"}),
+      json!({"type": "run_finished", "run_id": "unknown", "outcome": "unexpected"}),
+    ];
+    let facts = fold_task_facts(&events).unwrap();
+
+    assert_eq!(facts.terminal_run_outcome("null").unwrap(), None);
+    assert_eq!(facts.terminal_run_outcome("number").unwrap(), None);
+    assert_eq!(
+      facts.terminal_run_outcome("literal-none").unwrap_err().to_string(),
+      "run literal-none has unknown terminal outcome \"None\""
+    );
+    assert_eq!(
+      facts.terminal_run_outcome("unknown").unwrap_err().to_string(),
+      "run unknown has unknown terminal outcome \"unexpected\""
+    );
   }
 
   #[test]
@@ -3859,7 +4111,8 @@ pub(crate) mod tests {
   #[test]
   fn node_state_view_retains_one_shared_node_facts_owner() {
     let facts = Arc::new(NodeFacts::default());
-    let state = NodeState { facts: Arc::clone(&facts), malformed_task_events: None };
+    let state =
+      NodeState { facts: Arc::clone(&facts), runs: Arc::new(RunFacts::default()), malformed_task_events: None };
 
     assert!(Arc::ptr_eq(&facts, &state.facts));
     assert_eq!(Arc::strong_count(&facts), 2, "the view adds one Arc owner and no RunFacts copy");
@@ -4277,17 +4530,24 @@ pub(crate) mod tests {
       })
       .collect::<Vec<_>>();
     let mut facts = NodeFacts::default();
+    let mut runs = RunFacts::default();
     let mut checks = 0;
-    let folded = fold_node_facts_from(&mut facts, &events, 0, &mut || {
-      checks += 1;
-      checks == 3
-    })
+    let folded = fold_node_facts_from(
+      &mut facts,
+      &events,
+      0,
+      &mut || {
+        checks += 1;
+        checks == 3
+      },
+      Some(&mut runs),
+    )
     .unwrap();
 
     assert!(!folded);
     assert_eq!(checks, 3, "the fold checks once initially and then at the 256 event boundary");
-    assert_eq!(facts.runs.terminal_outcome("run-255").unwrap(), Some(RunOutcomeKind::Success));
-    assert_eq!(facts.runs.terminal_outcome("run-256").unwrap(), None);
+    assert_eq!(runs.terminal_outcome("run-255").unwrap(), Some(RunOutcomeKind::Success));
+    assert_eq!(runs.terminal_outcome("run-256").unwrap(), None);
   }
 
   #[test]
@@ -4298,15 +4558,22 @@ pub(crate) mod tests {
       Arc::new(json!({"id": "user-c", "type": "user", "content": "synthetic"})),
     ];
     let mut facts = NodeFacts::default();
+    let mut runs = RunFacts::default();
     let mut stop_checks = 0;
-    let completed = fold_node_facts_from(&mut facts, &events, 0, &mut || {
-      stop_checks += 1;
-      false
-    })
+    let completed = fold_node_facts_from(
+      &mut facts,
+      &events,
+      0,
+      &mut || {
+        stop_checks += 1;
+        false
+      },
+      Some(&mut runs),
+    )
     .unwrap();
 
     assert!(completed);
-    assert_eq!(facts.runs.observed_events, events.len(), "Run facts observe one event visit per history entry");
+    assert_eq!(runs.observed_events, events.len(), "Run facts observe one event visit per history entry");
     assert_eq!(facts.task().unwrap().covered, events.len(), "task facts cover the same events in that pass");
     assert_eq!(stop_checks, 3, "one block needs an initial, block-boundary, and completion stop check");
   }

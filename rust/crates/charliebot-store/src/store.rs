@@ -21,6 +21,7 @@ use crate::events::{EventReadCaches, SharedChatEvent};
 use crate::hooks::{EventRenderer, RuntimeEventHooks};
 use crate::listing::CachedListing;
 use crate::metadata::{RoundRating, SessionMetadata, SessionStatus, UtcDateTime};
+use crate::run_records::RunFactsMemo;
 use crate::session_events::SessionEventState;
 use crate::streaming::StreamingManager;
 use crate::task_tree::{CachedActivity, CachedNodeState, CachedTaskStateTail, CachedTreeIndex, NodeFacts};
@@ -182,6 +183,7 @@ pub struct Store {
   pub(crate) metadata_locks: StdMutex<HashMap<String, Arc<Mutex<()>>>>,
   pub(crate) events_cache: StdMutex<HashMap<String, Arc<StdMutex<Option<CachedChatEvents>>>>>,
   pub(crate) node_facts_cache: StdMutex<HashMap<String, CachedNodeFacts>>,
+  pub(crate) run_facts_memo: StdMutex<RunFactsMemo>,
   pub(crate) event_read_caches: StdMutex<EventReadCaches>,
   pub(crate) node_state_cache: StdMutex<HashMap<String, CachedNodeState>>,
   pub(crate) task_state_tail_cache: StdMutex<HashMap<String, CachedTaskStateTail>>,
@@ -260,6 +262,7 @@ impl Store {
       metadata_locks: StdMutex::new(HashMap::new()),
       events_cache: StdMutex::new(HashMap::new()),
       node_facts_cache: StdMutex::new(HashMap::new()),
+      run_facts_memo: StdMutex::new(RunFactsMemo::default()),
       event_read_caches: StdMutex::new(EventReadCaches::default()),
       node_state_cache: StdMutex::new(HashMap::new()),
       task_state_tail_cache: StdMutex::new(HashMap::new()),

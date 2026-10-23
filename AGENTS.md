@@ -22,7 +22,6 @@
 ## Test and Verification
 
 - Run the full suite with `uv run pytest -q` from any checkout.
-- Every pytest run through the project venv loads a sandbox plugin (switch `CHARLIEBOT_USE_TEST_SANDBOX`, default 1) that restricts it to processes it started, its own tmux server and no systemd bus; signals, tmux and systemd stay out of reach of the live host.
 - Run `uv sync` in a fresh worktree before testing. In a worktree, `uv run <cmd>` builds its local `.venv`; include
   `uv run` commands in task specs.
 - Reproduce a load-sensitive failure by forcing interleaving.

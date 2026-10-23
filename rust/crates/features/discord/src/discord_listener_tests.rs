@@ -576,6 +576,38 @@ async fn test_duplicate_summon_reuses_and_keeps_an_archived_session_archived() {
 }
 
 #[tokio::test]
+async fn test_concurrent_duplicate_discord_message_create_accepts_one_thread_summon() {
+  let home = Home::new(true).await;
+  home
+    .fake()
+    .channel_objects
+    .insert(THREAD.to_string(), json!({"id": THREAD, "type": 11, "name": "release-thread", "parent_id": PARENT}));
+  home.fake().channel_objects.insert(PARENT.to_string(), json!({"id": PARENT, "type": 0, "name": "general"}));
+  let client = discord_client(&home);
+  let summon = message(MENTION, THREAD);
+  let (first, second) = tokio::join!(
+    handle_message_create(&summon, &home.features, Arc::clone(&client), BOT_USER),
+    handle_message_create(&summon, &home.features, Arc::clone(&client), BOT_USER),
+  );
+  let first = first.unwrap().unwrap();
+  let second = second.unwrap().unwrap();
+
+  assert_eq!(first, second);
+  let events = home.features.store.load_chat_events_sync(&first).unwrap();
+  let summons: Vec<_> = events
+    .iter()
+    .filter(|event| event["type"] == event_types::AGENT_MESSAGE && event.get("discord").is_some())
+    .collect();
+  assert_eq!(summons.len(), 1);
+  assert_eq!(summons[0]["request_id"], format!("discord-mention:{MENTION}"));
+
+  wait_for(|| home.fake().calls.iter().any(|call| call.contains("/reactions/"))).await;
+  let fake = home.fake();
+  assert_eq!(fake.calls.iter().filter(|call| call.contains("/reactions/")).count(), 1);
+  assert!(fake.started_threads.is_empty());
+}
+
+#[tokio::test]
 async fn test_discord_accepted_post_timeout_retries_with_one_nonce_keyed_post() {
   let home = Home::new(true).await;
   let sid = discord_session(&home).await;

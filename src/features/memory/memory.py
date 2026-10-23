@@ -281,7 +281,7 @@ def ensure_store(memory_dir: pathlib.Path) -> None:
   Creates the directory, runs ``git init`` when it is not already a repo, seeds
   the topics vocabulary and .gitignore (never overwriting existing files), and
   creates the ``entries/`` and ``staging/`` directories. The canon (entries/
-  and topics) is populated only by user-approved curation diffs, never here.
+  and topics) is populated only by reviewed curation diffs, never here.
   Concurrent calls in one process run one after the other; a call that returns
   leaves the whole scaffold in place.
   """

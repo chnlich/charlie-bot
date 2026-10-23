@@ -4,7 +4,7 @@ The daily memory curation drafts into a dedicated git worktree instead of the
 live checkout: the store at ``<home>/memory`` stays on its base branch (the
 branch HEAD names, read live — never hardcoded), while the sibling worktree
 ``<home>/memory-proposal`` checks out the ``proposal`` branch whose diff
-against base is exactly the content awaiting approval. Only an approved
+against base is exactly the content awaiting review. Only a reviewed
 version — one commit SHA — fast-forwards into the live checkout
 (:func:`land`), so what sessions read changes only through that gate.
 
@@ -46,6 +46,11 @@ class ProposalRefusalError(Exception):
 def proposal_worktree(memory_dir: pathlib.Path) -> pathlib.Path:
   """The proposal worktree path: the live store root's sibling."""
   return memory_dir.parent / f"{memory_dir.name}{_WORKTREE_SUFFIX}"
+
+
+def _diff_path(memory_dir: pathlib.Path, base: str, head: str) -> str:
+  """The diff-page link for ``base..head`` in the live store at *memory_dir*."""
+  return f"/diff?repo={memory_dir}&base={base}&head={head}"
 
 
 def _run(cwd: pathlib.Path, *args: str) -> subprocess.CompletedProcess:
@@ -166,7 +171,7 @@ def status(memory_dir: pathlib.Path) -> dict[str, str]:
       "ahead": str(ahead),
       "opened": opened,
       "dirty": dirty,
-      "diff_path": f"/diff?repo={memory_dir}&base={base}&head={head}",
+      "diff_path": _diff_path(memory_dir, base, head),
   }
 
 
@@ -366,7 +371,7 @@ def commit(
 
   The guard: every non-blank line the PR already added to this file (the
   multiset ``proposal:<path> - <base>:<path>``) must still be present in the
-  worktree's file, so an approved line never silently moves under the
+  worktree's file, so a reviewed line never silently moves under the
   reviewer's feet. Additions, edits and deletions of the named path commit
   alike; anything else in the worktree stays uncommitted. With
   *replace_pr_lines* the guard passes and every replaced PR line is appended
@@ -464,12 +469,14 @@ def width_warnings(memory_dir: pathlib.Path) -> list[str]:
 
 
 def land(memory_dir: pathlib.Path, sha: str) -> dict[str, str]:
-  """Fast-forward the live checkout to one approved proposal commit.
+  """Fast-forward the live checkout to one reviewed proposal commit.
 
   Every precondition is a refusal: the live checkout must be clean and on a
   branch, *sha* must sit on ``proposal`` with base behind it, and the tree of
   *sha* must pass the store lint (extracted with ``git archive``). The merge
-  is ``--ff-only``, so the live checkout lands exactly on the approved tree.
+  is ``--ff-only``, so the live checkout lands exactly on the reviewed tree.
+  The result names the landed range and its ``diff_path`` link, built from the
+  base SHA before the land and the landed commit SHA.
   """
   memory_dir = memory_dir.resolve()
   base = _base_branch(memory_dir)
@@ -498,6 +505,7 @@ def land(memory_dir: pathlib.Path, sha: str) -> dict[str, str]:
       "landed": f"{_short(old_base)}..{_short(commit_sha)}",
       "commits": commits,
       "remaining": remaining,
+      "diff_path": _diff_path(memory_dir, old_base, commit_sha),
   }
 
 

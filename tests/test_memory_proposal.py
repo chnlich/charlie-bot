@@ -333,7 +333,7 @@ def _long_sentence() -> str:
   """One 30-word sentence: over the 25-word cap the prose check enforces."""
   return (
       "The curator drafts each entry inside the proposal worktree so the diff against the base branch "
-      "shows exactly the lines awaiting the user's approval before anything reaches the live store.")
+      "shows exactly the lines still awaiting review before any change reaches the live store.")
 
 
 def test_commit_refuses_a_new_sentence_over_25_words(store: pathlib.Path, monkeypatch, capsys) -> None:
@@ -801,12 +801,15 @@ def test_land_middle_commit_moves_live_head_and_keeps_the_rest(store: pathlib.Pa
   code, out, err = _run_cli(monkeypatch, capsys, "proposal", "land", middle)
   assert code == 0, err
   fields = _fields(out)
+  assert list(fields) == ["landed", "commits", "remaining", "diff_path"]
   assert fields["commits"] == "2"
   assert fields["remaining"] == "1"
   assert fields["landed"] == (
       f"{conftest.run_git(store, 'rev-parse', '--short', old_base).strip()}.."
       f"{conftest.run_git(store, 'rev-parse', '--short', middle).strip()}")
-  # The live head is exactly the approved SHA, on the base branch.
+  # The diff link names the full SHAs: master before the land, and the landed commit.
+  assert fields["diff_path"] == f"/diff?repo={store}&base={old_base}&head={middle}"
+  # The live head is exactly the reviewed SHA, on the base branch.
   assert conftest.run_git(store, "rev-parse", "HEAD").strip() == middle
   assert conftest.run_git(store, "symbolic-ref", "--short", "HEAD").strip() == "main"
   # The last commit stays on the proposal branch for the next PR.
@@ -874,6 +877,29 @@ def test_status_prints_every_field(store: pathlib.Path, monkeypatch, capsys) -> 
   assert fields["opened"] == expected_date
   assert fields["dirty"] == "no"
   assert fields["diff_path"] == f"/diff?repo={store}&base=main&head={head}"
+
+
+def test_status_and_land_build_diff_path_through_one_function(store: pathlib.Path, monkeypatch, capsys) -> None:
+  _run_cli(monkeypatch, capsys, "proposal", "open")
+  _first, middle, last = _three_pr_commits(store)
+  old_base = conftest.run_git(store, "rev-parse", "main").strip()
+  build_link = memory_proposal._diff_path
+  built: list[tuple[str, str]] = []
+
+  def record(memory_dir: pathlib.Path, base: str, head: str) -> str:
+    built.append((base, head))
+    return build_link(memory_dir, base, head)
+
+  monkeypatch.setattr(memory_proposal, "_diff_path", record)
+  code, out, err = _run_cli(monkeypatch, capsys, "proposal", "status")
+  assert code == 0, err
+  # status keeps the branch name as its base.
+  assert built == [("main", last)]
+  assert _fields(out)["diff_path"] == build_link(store, "main", last)
+  code, out, err = _run_cli(monkeypatch, capsys, "proposal", "land", middle)
+  assert code == 0, err
+  assert built == [("main", last), (old_base, middle)]
+  assert _fields(out)["diff_path"] == build_link(store, old_base, middle)
 
 
 def test_status_tracks_worktree_dirty_state(store: pathlib.Path, monkeypatch, capsys) -> None:

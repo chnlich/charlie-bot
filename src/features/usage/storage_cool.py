@@ -185,10 +185,9 @@ def _managed_transport_dirs(session_dir: pathlib.Path) -> list[pathlib.Path]:
 def _run_referenced_transport(session_dir: pathlib.Path) -> set[pathlib.Path]:
   """Transport files a v2 Run record of this session references.
 
-  Migrated task-tree runs point at their original evidence
-  (``raw_log_ref``/``events_ref``/``result_ref``), so those files stay readable
-  through the ordinary run read APIs after migration; the cold-session sweep
-  must not reclaim them. Unreferenced transport files keep the existing
+  The ``raw_log_ref``, ``events_ref`` and ``result_ref`` of a run record name
+  evidence the ordinary run read APIs keep readable. The cold-session sweep
+  must not reclaim those files. Unreferenced transport files keep the existing
   contract.
   """
   runs_dir = session_dir / runs.DATA_DIR_NAME / runs.RUNS_DIR_NAME
@@ -212,8 +211,7 @@ def _sweep_raw_transport(session_dir: pathlib.Path, counter: usage_sources.Sweep
   """Delete the reserved transport names inside the session's managed run directories.
 
   Files a v2 Run record references are retention-protected: they are the
-  imported run's own evidence and must stay resolvable (session-tree
-  migration, plan 1 v4 section 4.2).
+  run's own evidence and must stay resolvable.
   """
   referenced = _run_referenced_transport(session_dir)
   for entry in usage_sources.sweep_root_entries(_managed_transport_dirs(session_dir), lambda root: root.iterdir()):

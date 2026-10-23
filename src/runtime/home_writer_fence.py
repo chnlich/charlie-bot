@@ -1,6 +1,6 @@
 """The one home-level writer/migration exclusion fence.
 
-A session-tree migration apply mutates a whole CharlieBot home while every
+A migration apply mutates a whole CharlieBot home while every
 normal writer must be stopped. The boundary has to be enforced by a mechanism
 the normal writers actually take — never by a caller-supplied boolean, a free
 port, or a private lock the writers ignore:

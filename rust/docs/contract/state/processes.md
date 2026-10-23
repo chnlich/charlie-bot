@@ -1,6 +1,6 @@
 # Agent processes (summary depth)
 
-Baseline: the Python tree at `24642edf5`. For each backend package under `src/backends/`, this document gives the
+Baseline: the Python tree at `3c4591bad`. For each backend package under `src/backends/`, this document gives the
 executable, the module and function that build argv, env, cwd and stdin, and the output format the server parses.
 Environment details are in `env.md` and transport files in `files.md` section 6.4. **UNVERIFIED** marks a
 statement not confirmed from source, with the reason.
@@ -28,6 +28,10 @@ The template method runs these steps in order:
    file line by line. Each line is parsed as JSON and passed to `translate_event`, which returns Claude-Code-shaped
    event dicts, and the cursor checkpoints the consumed offset. After a `result` event it waits up to 90 s
    (`_POST_RESULT_TIMEOUT`) for exit, then cleans up within 30 s.
+   - For a `result` event with `is_error: true`, `worker.py` raises `QuotaExhaustedError` for integer status 429 or
+     at least 500, or when no status is present and the result matches a temporary failure pattern.
+     That error cools the selected member and starts pool failover. A non-null status outside 429 and 5xx skips
+     result-text matching.
 7. `exit_code` and the stderr tail are recorded; a cgroup memory kill is attributed from `memory.events`.
 
 Piped variant (`_spawn_piped_and_pin_identity`, used by antigravity and the opencode turn process): stdin
@@ -98,9 +102,10 @@ Resume styles (`backend_type_registration`, from each package's `register()`):
 ### `src/backends/anthropic_compatible` (type `cc-anthropic-compatible`)
 
 - `factory.py::build` makes a `claude_code.AnthropicEndpointBackend` with `base_url=api_base` (trailing `/` removed),
-  the bearer token from `credentials.<credential>.api_key` (`no-auth` when `credential` is null), and the option's
-  `context_window`. It is the same `claude` command, but without `--model` (the model rides env). Output is as
-  cc-claude. The context limits come from `usage.py::claude_reading_limits`: the declared window and the cc-claude
+  the bearer token from `credentials.<credential>.api_key` (`no-auth` when `credential` is null), the option's
+  `context_window`, and optional `headers`. Non-empty headers become newline-joined `name: value` entries in
+  `ANTHROPIC_CUSTOM_HEADERS`. It is the same `claude` command, but without `--model` (the model rides env). Output is
+  as cc-claude. The context limits come from `usage.py::claude_reading_limits`: the declared window and the cc-claude
   compaction reserves.
 
 ### `src/backends/openai_compatible` (type `cc-openai-compatible`)

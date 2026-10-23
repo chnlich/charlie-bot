@@ -1,6 +1,6 @@
 # Persisted state: every file the Python server reads or writes
 
-Baseline: the Python tree at `24642edf5` on `rust-backend`. A Rust server that shares a `CHARLIEBOT_HOME` with
+Baseline: the Python tree at `3c4591bad` on `rust-backend`. A Rust server that shares a `CHARLIEBOT_HOME` with
 this baseline must read every file below as the baseline writes it and must write it so the baseline reads it
 back. Paths use `<home>` for the resolved `CHARLIEBOT_HOME`, `<sid>` for a session id, `<run>` for a run id and
 `/home/<user>` for the operator's home directory. Module paths are repo-relative. A statement marked

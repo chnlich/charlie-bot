@@ -7,6 +7,7 @@ cannot signal the outer test's processes (tests/test_pytest_sandbox.py invariant
 
 import os
 import pathlib
+import re
 import signal
 import subprocess
 import sys
@@ -68,6 +69,7 @@ def test_outer_sentinel_is_unreachable(tmp_path: pathlib.Path) -> None:
       os.close(pidfd)
     """)
     assert result.returncode == 0, result.stdout + result.stderr
+    assert "landlock abi: " in result.stdout + result.stderr
     os.kill(sentinel.pid, 0)  # the sentinel is still alive after the run
   finally:
     sentinel.kill()
@@ -162,10 +164,11 @@ def test_tmux_without_tmpdir_uses_overflow_uid(tmp_path: pathlib.Path) -> None:
 
 def test_systemctl_user_has_no_bus() -> None:
   """systemctl --user cannot reach a bus from inside a restricted run."""
+  assert "XDG_RUNTIME_DIR" not in os.environ
+  assert "DBUS_SESSION_BUS_ADDRESS" not in os.environ
   r = subprocess.run(["systemctl", "--user", "is-system-running"], capture_output=True, text=True)
   assert r.returncode != 0
-  assert "Failed to connect to" in r.stdout + r.stderr
-  assert "bus" in r.stdout + r.stderr
+  assert re.search(r"Failed to connect to .*bus", r.stdout + r.stderr)
 
 
 def test_abi_below_minimum_refuses(tmp_path: pathlib.Path) -> None:

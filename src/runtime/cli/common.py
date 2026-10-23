@@ -22,7 +22,7 @@ import re
 import sys
 import time
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, NoReturn
+from typing import TYPE_CHECKING, Any, NoReturn, TextIO
 
 if TYPE_CHECKING:
   import io
@@ -430,9 +430,19 @@ def _with_caller_session(headers: dict[str, str]) -> dict[str, str]:
   return headers
 
 
+def print_json(value: Any, *, indent: int | None, file: TextIO, default: Callable[[Any], Any] | None = None) -> None:
+  """Print *value* as JSON on *file*, with non-ASCII characters kept as written.
+
+  ``indent`` and ``default`` pass through to ``json.dumps``. Every CLI JSON print goes through
+  here so the encoding is decided once: a default ``json.dumps`` writes each Chinese character
+  as a six-character ``\\uXXXX`` escape, and a caller reads every escape into its own context.
+  """
+  print(json.dumps(value, indent=indent, default=default, ensure_ascii=False), file=file)
+
+
 def exit_usage_error(message: str) -> None:
   """Emit a CLI usage error as JSON and exit with argparse-compatible code 2."""
-  print(json.dumps({"error": message}), file=sys.stderr)
+  print_json({"error": message}, indent=None, file=sys.stderr)
   sys.exit(2)
 
 
@@ -578,7 +588,7 @@ _CONNECT_RETRY_MAX_DELAY = 5.0  # seconds
 
 
 def _exit_with_error(error_obj: dict[str, Any], exit_code: int = 1) -> NoReturn:
-  print(json.dumps(error_obj), file=sys.stderr)
+  print_json(error_obj, indent=None, file=sys.stderr)
   sys.exit(exit_code)
 
 
@@ -830,9 +840,9 @@ def resolve_session_id(arg_session: str | None) -> str:
     if arg_session is not None and arg_session != env_session:
       _exit_ambiguous_session(f"--session={arg_session} {constants.SESSION_ID_ENV_VAR}={env_session}")
     if cwd_session is not None and cwd_session != env_session:
-      print(
-          json.dumps(
-              {"note": f"cwd is session dir of {cwd_session}; using {constants.SESSION_ID_ENV_VAR}={env_session}"}),
+      print_json(
+          {"note": f"cwd is session dir of {cwd_session}; using {constants.SESSION_ID_ENV_VAR}={env_session}"},
+          indent=None,
           file=sys.stderr,
       )
     return env_session

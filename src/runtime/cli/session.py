@@ -179,7 +179,7 @@ def _cmd_create(args: argparse.Namespace) -> None:
   result = common.post_internal_api("/api/sessions/", payload)
   if args.group is not None:
     result = common.post_internal_api(f"/api/sessions/{result['id']}/group", {"group": args.group})
-  print(json.dumps(result, indent=2))
+  common.print_json(result, indent=2, file=sys.stdout)
 
 
 def _cmd_tree(args: argparse.Namespace) -> None:
@@ -188,12 +188,13 @@ def _cmd_tree(args: argparse.Namespace) -> None:
     params["parent_id"] = args.root
   if args.cursor is not None:
     params["cursor"] = args.cursor
-  print(json.dumps(common.get_api("/api/sessions/tree", params), indent=2))
+  common.print_json(common.get_api("/api/sessions/tree", params), indent=2, file=sys.stdout)
 
 
 def _cmd_retry(args: argparse.Namespace) -> None:
   payload = {"request_id": args.request_id or str(uuid.uuid4()), "run_id": args.run}
-  print(json.dumps(common.post_internal_api(f"/api/sessions/{args.session_id}/retry", payload), indent=2))
+  common.print_json(
+      common.post_internal_api(f"/api/sessions/{args.session_id}/retry", payload), indent=2, file=sys.stdout)
 
 
 def _cmd_complete(args: argparse.Namespace) -> None:
@@ -207,7 +208,7 @@ def _cmd_complete(args: argparse.Namespace) -> None:
       f"/api/sessions/{args.session_id}/complete",
       body,
       readback=lambda: common.find_local_task_close(args.session_id, request_id))
-  print(json.dumps(result, indent=2))
+  common.print_json(result, indent=2, file=sys.stdout)
 
 
 def _cmd_acknowledge(args: argparse.Namespace) -> None:
@@ -219,8 +220,10 @@ def _cmd_acknowledge(args: argparse.Namespace) -> None:
       "input_ids": input_ids,
       "note": args.note,
   }
-  print(
-      json.dumps(common.post_internal_api(f"/api/sessions/{args.session_id}/task-inputs/acknowledge", body), indent=2))
+  common.print_json(
+      common.post_internal_api(f"/api/sessions/{args.session_id}/task-inputs/acknowledge", body),
+      indent=2,
+      file=sys.stdout)
 
 
 def _cmd_cancel(args: argparse.Namespace) -> None:
@@ -233,7 +236,7 @@ def _cmd_cancel(args: argparse.Namespace) -> None:
       f"/api/sessions/{args.session_id}/cancel",
       payload,
       readback=lambda: common.find_local_task_close(args.session_id, request_id))
-  print(json.dumps(result, indent=2))
+  common.print_json(result, indent=2, file=sys.stdout)
   unresolved = [item for item in result.get("stopped_runs", []) if item["outcome"] is None]
   if unresolved:
     run_ids = {item["run_id"] for item in unresolved}
@@ -268,7 +271,7 @@ def _cmd_send(args: argparse.Namespace) -> None:
           "content": content,
       },
       rejection_exit_codes={422: EXIT_SEND_REFUSED})
-  print(json.dumps(result, indent=2))
+  common.print_json(result, indent=2, file=sys.stdout)
 
 
 _DIALOG_PAGE_LIMIT = 200  # the events endpoint's clamp; the fewest requests a full history admits

@@ -21,7 +21,9 @@ _fresh_unknown_limit_shape_registry = conftest.fresh_state_fixture(usage_sources
 _fresh_credential_read_warning_registry = conftest.fresh_state_fixture(
     claude_quota._CREDENTIAL_READ_WARNINGS_SEEN.clear)
 _fresh_usage_cache = conftest.fresh_state_fixture(ext_usage_mod._cached_usage.clear)
-_fresh_user_agent_cache = conftest.fresh_state_fixture(claude_quota._reset_user_agent_for_tests)
+# Seed the cache with the fallback so no test probes the real binary.
+_fresh_user_agent_cache = conftest.fresh_state_fixture(
+    lambda: setattr(claude_quota, "_user_agent_cache", claude_quota.USER_AGENT_FALLBACK))
 _fresh_claude_accounts = conftest.fresh_state_fixture(claude_quota._accounts.clear)
 _fresh_codex_account = conftest.fresh_state_fixture(lambda: setattr(codex_quota, "_account", None))
 

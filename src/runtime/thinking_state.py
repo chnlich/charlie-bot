@@ -101,11 +101,3 @@ def note_run_backend(session_id: str, backend: str | None) -> None:
 def run_backend(session_id: str) -> str | None:
   """The newest Run's backend id for *session_id*, or None when no Run is known."""
   return _run_backends.get(session_id)
-
-
-def reset_run_state_for_tests() -> None:
-  """Every in-memory running-state fact gone (tests only): a restart's empty
-  registries — worker Run busy intervals, busy intervals, display backends."""
-  _busy_since.clear()
-  _run_busy.clear()
-  _run_backends.clear()

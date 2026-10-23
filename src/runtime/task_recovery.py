@@ -56,21 +56,35 @@ def marker_path(cfg: config.CharlieBotConfig) -> pathlib.Path:
 
 
 def read_boot_recovery_marker(cfg: config.CharlieBotConfig) -> datetime.datetime | None:
-  """The last clean pass's start time, or None when the marker is absent."""
-  path = marker_path(cfg)
+  """The last clean pass's start time, or None when the marker is absent or unreadable.
+
+  None makes the pass check every node in full.
+  """
   try:
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    raw = marker_path(cfg).read_bytes()
   except FileNotFoundError:
     return None
-  return datetime.datetime.fromisoformat(payload["pass_started_at"])
+  try:
+    payload = json.loads(raw.decode("utf-8"))
+    return datetime.datetime.fromisoformat(payload["pass_started_at"])
+  # ValueError covers bad JSON text and bad timestamps; TypeError covers a JSON value that is
+  # not an object, and a timestamp that is not a string.
+  except (KeyError, TypeError, ValueError) as exc:
+    log.error("boot_recovery_marker_unreadable", size=len(raw), error_type=type(exc).__name__)
+    return None
 
 
 def write_boot_recovery_marker(cfg: config.CharlieBotConfig, started_at: datetime.datetime) -> None:
-  """Record the pass start time atomically (tmp file + rename)."""
+  """Record the pass start time: fsync the tmp file, then rename it over the marker."""
   path = marker_path(cfg)
   path.parent.mkdir(parents=True, exist_ok=True)
   tmp = path.with_suffix(".json.tmp")
-  tmp.write_text(json.dumps({"pass_started_at": started_at.isoformat()}), encoding="utf-8")
+  with tmp.open("w", encoding="utf-8") as stream:
+    stream.write(json.dumps({"pass_started_at": started_at.isoformat()}))
+    stream.flush()
+    # ext4 forces a file's data to disk before a rename only when the rename replaces an
+    # existing file (auto_da_alloc), so a fresh marker can read back empty after a power loss.
+    os.fsync(stream.fileno())
   os.replace(tmp, path)
 
 

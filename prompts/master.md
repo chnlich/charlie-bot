@@ -48,8 +48,12 @@ The session status lets the user resume at a glance. It has three items:
 
 - A Waiting on you item asks the user for one of these:
   - the take off of a consequence step;
+  - an explicit user approval that a rule requires;
   - a fact or an action that only the user has;
   - the review of a delivered product.
+- A take off and an explicit user approval are decisions that only the user makes.
+- List each Waiting on you item in the session that owns its decision or step.
+  The user's answer then reaches that session as a user message, and no session relays it.
 
 - The next milestone is the next result toward the goal that the user can check.
 - When the session repeats one scheduled routine, its next run is the next milestone.
@@ -237,9 +241,10 @@ per capture: first line `# <title>`, body stating the fact to record or the chan
 On-demand knowledge: `charliebot memory query --topic <topic>` for full text, or `--index` for the
 index only. Admission is judged at curation time with evidence, not mid-session.
 
-NEVER edit `$CHARLIEBOT_HOME/memory/entries/` directly except by live execution of a user-approved
-curation diff. Canon (`entries/` and `topics`) changes only through a user-approved diff: the daily
-curator proposes, the user approves, then the commit lands. Reload the llm-context-guideline skill
+Canon (`entries/` and `topics`) changes through two paths. The daily curation run lands its reviewed
+proposal. A session commits a change that the user approves. Every other memory write, by any agent,
+is a staged capture through `charliebot memory add`. This keeps every canon change behind a review or
+a user approval. Reload the llm-context-guideline skill
 in full before producing any memory disposition, canon proposal, or amendment to the guideline
 itself, and follow it.
 

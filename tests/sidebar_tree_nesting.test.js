@@ -301,6 +301,134 @@ test('four roots with many children stay under the preview cap', () => {
   assert.doesNotMatch(nav.innerHTML, /session-group-limit-extra/);
 });
 
+test('cron roots do not use preview ranks and Show all reveals them with every extra root', () => {
+  const {context, nav} = buildSidebarIndicatorContext([]);
+  const rows = [
+    boundNode('cron-1', 20, {group: 'Work'}),
+    manager('work-2', null, 19),
+    boundNode('cron-3', 18, {group: 'Work'}),
+    manager('cron-child', 'cron-3', 17),
+    manager('work-4', null, 16),
+    manager('work-5', null, 15),
+    manager('work-6', null, 14),
+    manager('work-7', null, 13),
+    manager('work-8', null, 12),
+  ];
+
+  context.renderSessionList(rows, 'all');
+
+  let html = nav.innerHTML;
+  assert.match(html, />Show all<\/button>/);
+  for (const id of ['cron-1', 'cron-3', 'work-8']) {
+    assert.match(anchorOpenTag(html, id), /session-group-limit-extra hidden/);
+  }
+  for (const id of ['work-2', 'work-4', 'work-5', 'work-6', 'work-7']) {
+    assert.doesNotMatch(anchorOpenTag(html, id), /session-group-limit-extra/);
+  }
+  assert.match(html, /<div class="tree-subtree session-group-limit-extra hidden[^"]*" data-session-group-limit-extra="Work">/);
+
+  context.toggleSessionGroupLimit('Work');
+  context.renderSessionList(rows, 'all');
+
+  html = nav.innerHTML;
+  for (const id of ['cron-1', 'cron-3', 'work-8']) {
+    assert.match(anchorOpenTag(html, id), /session-group-limit-extra(?! hidden)/);
+  }
+  assert.match(html, />Show less<\/button>/);
+  assert.match(html, /id="session-cron-child"/);
+});
+
+test('three roots with one cron root draw Show all', () => {
+  const {context, nav} = buildSidebarIndicatorContext([]);
+  const rows = [
+    boundNode('cron-1', 10, {group: 'Work'}),
+    manager('work-2', null, 9),
+    manager('work-3', null, 8),
+  ];
+
+  context.renderSessionList(rows, 'all');
+
+  assert.match(nav.innerHTML, />Show all<\/button>/);
+  assert.match(anchorOpenTag(nav.innerHTML, 'cron-1'), /session-group-limit-extra hidden/);
+  assert.doesNotMatch(anchorOpenTag(nav.innerHTML, 'work-2'), /session-group-limit-extra/);
+  assert.doesNotMatch(anchorOpenTag(nav.innerHTML, 'work-3'), /session-group-limit-extra/);
+});
+
+test('a group of only cron roots has an empty preview and Show all', () => {
+  const {context, nav} = buildSidebarIndicatorContext([]);
+  const rows = [
+    boundNode('cron-1', 10, {group: 'Cron only'}),
+    boundNode('cron-2', 9, {group: 'Cron only'}),
+  ];
+
+  context.renderSessionList(rows, 'all');
+
+  assert.match(nav.innerHTML, />Show all<\/button>/);
+  assert.match(anchorOpenTag(nav.innerHTML, 'cron-1'), /session-group-limit-extra hidden/);
+  assert.match(anchorOpenTag(nav.innerHTML, 'cron-2'), /session-group-limit-extra hidden/);
+});
+
+test('an open cron root stays visible without using a preview rank', () => {
+  const {context, nav} = buildSidebarIndicatorContext([]);
+  context.SESSION_ID = 'cron-1';
+  const rows = [
+    boundNode('cron-1', 20, {group: 'Work'}),
+    manager('work-2', null, 19),
+    manager('work-3', null, 18),
+    manager('work-4', null, 17),
+    manager('work-5', null, 16),
+    manager('work-6', null, 15),
+    manager('work-7', null, 14),
+  ];
+
+  context.renderSessionList(rows, 'all');
+
+  assert.doesNotMatch(anchorOpenTag(nav.innerHTML, 'cron-1'), /session-group-limit-extra/);
+  for (const id of ['work-2', 'work-3', 'work-4', 'work-5', 'work-6']) {
+    assert.doesNotMatch(anchorOpenTag(nav.innerHTML, id), /session-group-limit-extra/);
+  }
+  assert.match(anchorOpenTag(nav.innerHTML, 'work-7'), /session-group-limit-extra hidden/);
+});
+
+test('an open child keeps its cron root visible and opens the path to that child', () => {
+  const {context, nav} = buildSidebarIndicatorContext([]);
+  context.SESSION_ID = 'cron-child';
+  const rows = [
+    boundNode('cron-root', 10, {group: 'Work'}),
+    manager('cron-child', 'cron-root', 9),
+    manager('work-1', null, 8),
+  ];
+
+  context.renderSessionList(rows, 'all');
+
+  const html = nav.innerHTML;
+  assert.doesNotMatch(anchorOpenTag(html, 'cron-root'), /session-group-limit-extra/);
+  assert.doesNotMatch(html.match(/<div class="tree-children[^"]*"[^>]*data-tree-children="cron-root">/)[0], /hidden/);
+  assert.match(anchorOpenTag(html, 'cron-child'), /bg-blue-600\/20 text-blue-300/);
+});
+
+test('the cron registration excludes schedule_task rows and keeps unbound rows ranked', () => {
+  const {context, nav} = buildSidebarIndicatorContext([]);
+  const rows = [
+    boundNode('cron-root', 10, {group: 'Work'}),
+    manager('unbound-root', null, 9, {schedule_task: null, schedule_cron: '0 9 * * *'}),
+  ];
+
+  context.renderSessionList(rows, 'all');
+
+  assert.match(anchorOpenTag(nav.innerHTML, 'cron-root'), /session-group-limit-extra hidden/);
+  assert.doesNotMatch(anchorOpenTag(nav.innerHTML, 'unbound-root'), /session-group-limit-extra/);
+});
+
+test('group preview exclusion registrations validate and reject duplicate predicates', () => {
+  const {context} = buildSidebarIndicatorContext([]);
+  const excludesNothing = () => false;
+
+  assert.throws(() => context.registerGroupPreviewExclusion(null));
+  context.registerGroupPreviewExclusion(excludesNothing);
+  assert.throws(() => context.registerGroupPreviewExclusion(excludesNothing));
+});
+
 test('toggleTreeNode flips the in-memory state, the rendered subtree and the chevron', () => {
   const {context, nav} = buildSidebarIndicatorContext([]);
   const container = createElement({className: 'tree-children hidden'});

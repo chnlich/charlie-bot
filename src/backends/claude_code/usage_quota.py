@@ -332,17 +332,6 @@ async def _user_agent() -> str:
   return _user_agent_cache
 
 
-def _reset_user_agent_for_tests() -> None:
-  """Seed the cache with the fallback so no test probes the real binary.
-
-  A test exercising the probe path clears ``_user_agent_cache`` first and
-  monkeypatches ``subprocess.run``; the module-level cache would otherwise
-  leak a resolved value between tests.
-  """
-  global _user_agent_cache
-  _user_agent_cache = USER_AGENT_FALLBACK
-
-
 async def _oauth_headers(access_token: str) -> dict[str, str]:
   """Headers every OAuth-authenticated call to this API carries."""
   return {

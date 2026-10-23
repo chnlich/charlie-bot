@@ -289,8 +289,9 @@ def _register_and_record(
     sys.exit(EXIT_VERIFY_REJECTED)
   if _readback_trigger(session_id, args.message, watch_targets) is None:
     launcher.kill_launch(launch)
-    print(
-        json.dumps({"error": "registration rejected: no pending trigger watching the started pid on readback"}),
+    cli_common.print_json(
+        {"error": "registration rejected: no pending trigger watching the started pid on readback"},
+        indent=None,
         file=sys.stderr)
     sys.exit(EXIT_VERIFY_REJECTED)
 
@@ -309,7 +310,8 @@ def _register_and_record(
   launch_dir = cli_common.get_config().sessions_dir / session_id / "launches" / launch_id
   launch_dir.mkdir(parents=True, exist_ok=True)
   (launch_dir / "metadata.json").write_text(json.dumps(record, separators=(",", ":")) + "\n", encoding="utf-8")
-  print(json.dumps({"trigger_id": result["trigger_id"], "fire_at": result["fire_at"], **record}, indent=2))
+  output = {"trigger_id": result["trigger_id"], "fire_at": result["fire_at"], **record}
+  cli_common.print_json(output, indent=2, file=sys.stdout)
 
 
 def _main_cmd(args: argparse.Namespace, session_id: str) -> None:
@@ -331,7 +333,7 @@ def _main_cmd(args: argparse.Namespace, session_id: str) -> None:
     try:
       launch = launcher.launch_remote(args.host, args.cmd, cwd=args.cwd, launch_id=launch_id)
     except launcher.RemoteLaunchError as e:
-      print(json.dumps({"error": str(e)}), file=sys.stderr)
+      cli_common.print_json({"error": str(e)}, indent=None, file=sys.stderr)
       sys.exit(EXIT_SSH_FAILED)
   _register_and_record(args, session_id, launch, launch_id, started_at, cwd)
 
@@ -367,7 +369,7 @@ def main() -> None:
       readback=lambda: _readback_trigger(session_id, args.message, watch_targets),
       rejection_exit_codes={422: EXIT_VERIFY_REJECTED},
   )
-  print(json.dumps(result, indent=2))
+  cli_common.print_json(result, indent=2, file=sys.stdout)
 
 
 if __name__ == "__main__":

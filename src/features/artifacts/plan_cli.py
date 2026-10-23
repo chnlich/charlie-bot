@@ -14,8 +14,8 @@ error with a non-zero exit code.
 """
 
 import argparse
-import json
 import os.path
+import sys
 from collections.abc import Sequence
 
 from src.features.artifacts import constants, plan_diff
@@ -287,7 +287,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     )
     if args.verb in _PLAN_REMINDERS:
       result.setdefault("reminder", _PLAN_REMINDERS[args.verb])
-  print(json.dumps(result, indent=2))
+  cli_common.print_json(result, indent=2, file=sys.stdout)
 
 
 if __name__ == "__main__":

@@ -9,11 +9,11 @@ writes its message on stderr and exits 1; the command never prints a fallback an
 """
 
 import argparse
-import json
 import sys
 
 from src.features.router import routing
 from src.infra import help_formatter
+from src.runtime.cli import common
 
 
 def main() -> None:
@@ -26,7 +26,7 @@ def main() -> None:
   except routing.RouterError as error:
     print(f"router: {error}", file=sys.stderr)
     sys.exit(1)
-  print(json.dumps(answer))
+  common.print_json(answer, indent=None, file=sys.stdout)
 
 
 if __name__ == "__main__":

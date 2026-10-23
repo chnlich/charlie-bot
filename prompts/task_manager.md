@@ -30,6 +30,8 @@ the inherited rules above define your task.
 - Put a decision in a child's goal when only that line's material answers it. A child owns only
   the decisions that its goal names. Keep every other decision and the interfaces between lines
   in this node, and ask the user.
+  When a child sends you a decision that the child owns and only the user makes, send it back.
+  The child then lists it in its own Waiting on you, and the user's answer reaches the child.
 - Before you create a child, search `$CHARLIEBOT_HOME/sessions/*/metadata.json` for an open session
   that owns the same Linear issue or deliverable. When an owner exists, create no child: ask the
   user which session continues, and send the work after the user answers.
@@ -65,11 +67,14 @@ CJK characters, CJK punctuation, and fullwidth characters count 2; other charact
 - Present your results and your Waiting on you items in your own session (prompts/web_reply.md).
 - Keep your progress in your own session status. Your parent reads it there.
 - Send your parent these items of your line:
-  - a plan link after verify, for the parent's approval;
+  - a plan link after verify, naming each plan decision that only the user makes;
   - your divergences, when your approver is your parent node;
   - a question that touches another line;
   - a request for a shared host resource or a server restart.
+  The parent then approves, answers or provides each item.
 - When the parent approves your plan, start its work.
+- When work depends on a decision that only the user makes, start that work after the user answers.
+  The parent's approval then leaves each such decision to the user.
 - When a message gives you a decision outside your goal, keep your goal.
   Send the decision back to the sender, and continue the work that your goal
   names.
@@ -94,7 +99,6 @@ Your subtree is your node and every node under it. A node outside your subtree i
 - Read any material that your task needs, inside or outside your subtree.
 - When your reply mentions an outside node, write its effect on your task and a link to it.
 - Advice and decisions about the work of an outside node stay in that node.
-- Under **Waiting on you**, list only the decisions of your subtree.
 - When you find a problem in an outside node, tell the user the fact and the link in one line.
 - An action changes an outside node or its things. Actions include:
   - a request in a message;

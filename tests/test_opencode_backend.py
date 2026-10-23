@@ -9,10 +9,12 @@ from collections.abc import AsyncIterator
 from unittest import mock
 
 import httpx
+import pydantic
 import pytest
 import pytest_asyncio
 
-from src.backends.opencode import opencode, opencode_limits, server
+from src.backends.opencode import factory, opencode, opencode_limits, options, server
+from src.infra import backend_models, config
 from src.infra import event_types as ET
 
 # A stand-in for the opencode 2.0 binary: serve (the shared server's HTTP surface) and run (one-shot).
@@ -103,12 +105,140 @@ def _usage_step(input_tokens: int, output_tokens: int) -> dict:
 # ---- Unit tests: configuration, translation, and model reading, with no process.
 
 
-def test_headless_config_denies_the_three_tools_and_pins_bash():
-  config = server.headless_config()
-  assert config["shell"] == "bash"
-  assert config["permission"]["question"] == "deny"
-  assert config["permission"]["subagent"] == "deny"
-  assert config["permission"]["opencode_session_move"] == "deny"
+@pytest.mark.parametrize("context_limit", [None, 420000])
+def test_model_context_config_overrides_only_context(context_limit: int | None) -> None:
+  option = options.OpencodeBackend(id="oc", label="OC", model="provider/org/model", context_limit=context_limit)
+  expected = {} if context_limit is None else {
+      "providers": {
+          "provider": {
+              "models": {
+                  "org/model": {
+                      "limit": {
+                          "context": 420000
+                      }
+                  }
+              }
+          }
+      }
+  }
+  other = backend_models.BackendOption(id="other", label="Other", type="codex", model=MODEL)
+  assert options.model_context_config([other, option]) == expected
+  assert options.model_context_config([]) == {}
+
+
+@pytest.mark.parametrize("fields", [{"context_limit": 0}, {"context_limit": -1}, {"unknown": 1}])
+def test_opencode_option_rejects_invalid_fields(fields: dict) -> None:
+  with pytest.raises(pydantic.ValidationError):
+    options.OpencodeBackend(id="oc", label="OC", model=MODEL, **fields)
+
+
+def test_model_context_config_rejects_conflicts_naming_both_options() -> None:
+  first = options.OpencodeBackend(id="oc-first", label="First", model=MODEL, context_limit=420000)
+  second = options.OpencodeBackend(id="oc-second", label="Second", model=MODEL, context_limit=120000)
+  with pytest.raises(ValueError) as error:
+    options.model_context_config([first, second])
+  assert first.id in str(error.value)
+  assert second.id in str(error.value)
+
+
+def test_model_context_config_merges_equal_limits_and_distinct_models() -> None:
+  entries = [
+      options.OpencodeBackend(id=option_id, label=option_id, model=model, context_limit=limit)
+      for option_id, model, limit in [
+          ("first", "provider/model", 420000),
+          ("equal", "provider/model", 420000),
+          ("uncapped", "provider/model", None),
+          ("sibling", "provider/other", 120000),
+          ("other", "other/model", 200000),
+      ]
+  ]
+  assert options.model_context_config(entries) == {
+      "providers":
+          {
+              "provider":
+                  {
+                      "models": {
+                          "model": {
+                              "limit": {
+                                  "context": 420000
+                              }
+                          },
+                          "other": {
+                              "limit": {
+                                  "context": 120000
+                              }
+                          },
+                      }
+                  },
+              "other": {
+                  "models": {
+                      "model": {
+                          "limit": {
+                              "context": 200000
+                          }
+                      }
+                  }
+              },
+          }
+  }
+
+
+def test_headless_config_keeps_existing_keys_and_reads_live_options(monkeypatch: pytest.MonkeyPatch) -> None:
+  option = options.OpencodeBackend(id="oc", label="OC", model=MODEL)
+  cfg = config.CharlieBotConfig(backends={"options": [option]})
+  monkeypatch.setattr(config, "get_config", lambda: cfg)
+  expected = {
+      "permission": {
+          "*": "allow",
+          "question": "deny",
+          "subagent": "deny",
+          "opencode_session_move": "deny"
+      },
+      "shell": "bash",
+      "default_agent": "charliebot",
+      "agent": {
+          "charliebot": {
+              "mode": "primary"
+          }
+      },
+  }
+  assert server.headless_config() == expected
+  option.context_limit = 420000
+  expected["providers"] = {"fakeprov": {"models": {"fake-model": {"limit": {"context": 420000}}}}}
+  assert server.headless_config() == expected
+  option.context_limit = None
+  del expected["providers"]
+  assert server.headless_config() == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("context_limit", [None, 420000])
+async def test_one_shot_config_uses_its_option_and_denies_tools(
+    fake_oc: pathlib.Path, monkeypatch: pytest.MonkeyPatch, context_limit: int | None) -> None:
+  option = options.OpencodeBackend(id="oc", label="OC", model=MODEL, context_limit=context_limit)
+  unrelated = options.OpencodeBackend(id="other", label="Other", model="other/model", context_limit=200000)
+  cfg = config.CharlieBotConfig(backends={"options": [option, unrelated]})
+  monkeypatch.setattr(config, "get_config", lambda: cfg)
+  backend = factory.build(option, cfg)
+  stdout = asyncio.StreamReader()
+  stdout.feed_eof()
+  proc = mock.Mock(
+      stdout=stdout,
+      stderr=mock.Mock(read=mock.AsyncMock(return_value=b"")),
+      wait=mock.AsyncMock(return_value=0),
+      pid=12345)
+  spawn = mock.AsyncMock(return_value=proc)
+  monkeypatch.setattr(backend, "_spawn_one_shot_subprocess", spawn)
+
+  assert await backend.one_shot_text("prompt", "system", timeout=1) == ""
+
+  cmd, env = spawn.call_args.args
+  assert cmd[1:5] == ["run", "--standalone", "--format", "json"]
+  expected = {"permission": {"*": "deny"}}
+  if context_limit is not None:
+    expected["providers"] = {"fakeprov": {"models": {"fake-model": {"limit": {"context": 420000}}}}}
+  assert json.loads(env["OPENCODE_CONFIG_CONTENT"]) == expected
+  assert not pathlib.Path(env["XDG_DATA_HOME"]).exists()
 
 
 def test_server_env_drops_the_run_identity_and_points_xdg_at_the_store(fake_oc, monkeypatch):

@@ -13,6 +13,7 @@ class CcAnthropicCompatibleBackend(backend_models.BackendOption):
   api_base: str = pydantic.Field(min_length=1)
   context_window: int = pydantic.Field(gt=0)
   credential: str | None = None
+  effort: str | None = None
 
   @pydantic.field_validator("api_base")
   @classmethod

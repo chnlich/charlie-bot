@@ -18,7 +18,7 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::sync::watch;
 use uuid::Uuid;
 
-use super::options::OpenCodeOption;
+use super::options::{OpenCodeOption, model_context_config};
 use super::server::{OpenCodeHost, OpenCodeServer, OpenCodeServerPool, Turn, TurnEvent};
 use crate::cli_base::{IMAGE_MIME_BY_EXT, apply_proxy_env};
 use crate::event_builders;
@@ -75,6 +75,8 @@ static UNHANDLED_TYPES: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 pub struct OpenCodeBackend {
   model: String,
   proxy_url: Option<String>,
+  /// The `providers` keys of this option's context limit, which the one-shot config carries.
+  one_shot_context: Map<String, Value>,
   host: OpenCodeHost,
   pool: Arc<OpenCodeServerPool>,
   launch: LaunchArgs,
@@ -85,12 +87,13 @@ impl OpenCodeBackend {
   pub fn new(
     model: String,
     option: OpenCodeOption,
+    one_shot_context: Map<String, Value>,
     host: OpenCodeHost,
     pool: Arc<OpenCodeServerPool>,
     launch: LaunchArgs,
     cgroup_limits: SessionCgroupLimits,
   ) -> Self {
-    Self { model, proxy_url: option.proxy_url, host, pool, launch, cgroup_limits }
+    Self { model, proxy_url: option.proxy_url, one_shot_context, host, pool, launch, cgroup_limits }
   }
 
   fn run_plan(&self) -> Arc<OpenCodeRunPlan> {
@@ -116,6 +119,7 @@ impl OpenCodeBackend {
       host: self.host.clone(),
       model: self.model.clone(),
       proxy_url: self.proxy_url.clone(),
+      one_shot_context: self.one_shot_context.clone(),
       cgroup_session_id: self.launch.cgroup_session_id.clone(),
       cgroup_limits: self.cgroup_limits,
       base_env: base_env.clone(),
@@ -195,9 +199,12 @@ impl BackendFactory for OpenCodeFactory {
     let option = option.context("the opencode backend type needs its backends.options entry")?;
     let model = option_default_model(option, "backend ")?;
     let fields = OpenCodeOption::from_fields(&option.type_fields).map_err(anyhow::Error::msg)?;
+    let one_shot_context = model_context_config(std::slice::from_ref(option))?;
+    self.pool.record_options(&cfg.backends.options);
     Ok(Box::new(OpenCodeBackend::new(
       model,
       fields,
+      one_shot_context,
       self.host.clone(),
       Arc::clone(&self.pool),
       launch,
@@ -826,6 +833,7 @@ struct OpenCodeOneShotRequest {
   host: OpenCodeHost,
   model: String,
   proxy_url: Option<String>,
+  one_shot_context: Map<String, Value>,
   cgroup_session_id: Option<String>,
   cgroup_limits: SessionCgroupLimits,
   base_env: Env,
@@ -845,6 +853,7 @@ async fn run_one_shot(request: OpenCodeOneShotRequest) -> anyhow::Result<String>
     host,
     model,
     proxy_url,
+    one_shot_context,
     cgroup_session_id,
     cgroup_limits,
     base_env,
@@ -862,7 +871,9 @@ async fn run_one_shot(request: OpenCodeOneShotRequest) -> anyhow::Result<String>
   env.insert("XDG_DATA_HOME".to_string(), root.path().join("data").display().to_string());
   env.insert("XDG_STATE_HOME".to_string(), root.path().join("state").display().to_string());
   env.insert("XDG_CACHE_HOME".to_string(), root.path().join("cache").display().to_string());
-  env.insert("OPENCODE_CONFIG_CONTENT".to_string(), json!({"permission": {"*": "deny"}}).to_string());
+  let mut config = json!({"permission": {"*": "deny"}});
+  config.as_object_mut().expect("the one-shot config is a JSON object").extend(one_shot_context);
+  env.insert("OPENCODE_CONFIG_CONTENT".to_string(), config.to_string());
   if let Some(proxy_url) = &proxy_url {
     apply_proxy_env(&mut env, proxy_url);
   }

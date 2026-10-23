@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
 
 use anyhow::{Context, bail};
+use charliebot_core::config::BackendOption;
 use charliebot_core::home;
 use charliebot_registry::backend::Env;
 use futures_util::StreamExt;
@@ -23,6 +24,7 @@ use tokio::task::{Id, JoinHandle};
 use uuid::Uuid;
 
 use super::opencode_limits;
+use super::options::model_context_config;
 use crate::cli_base::apply_proxy_env;
 use crate::transport::kill::{kill_process_group, python_exit_code};
 use crate::transport::spawn::{AgentPipeReader, ChildStdin, SpawnSetup, SpawnSpec, SpawnedChild, spawn_with_setup};
@@ -139,11 +141,22 @@ pub struct OpenCodeServerPool {
   host: OpenCodeHost,
   timeouts: ServerTimeouts,
   servers: Mutex<HashMap<Option<String>, Arc<OpenCodeServer>>>,
+  /// The backend options of the config the latest launch was built from. A shared server reads them when it starts.
+  options: Mutex<Vec<BackendOption>>,
 }
 
 impl OpenCodeServerPool {
   pub fn new(host: OpenCodeHost, timeouts: ServerTimeouts) -> Arc<Self> {
-    Arc::new(Self { host, timeouts, servers: Mutex::new(HashMap::new()) })
+    Arc::new(Self { host, timeouts, servers: Mutex::new(HashMap::new()), options: Mutex::new(Vec::new()) })
+  }
+
+  /// Record the backend options of the config that a launch was built from, for the next start of a shared server.
+  pub fn record_options(&self, options: &[BackendOption]) {
+    *self.options.lock().expect("opencode options mutex is not poisoned") = options.to_vec();
+  }
+
+  fn recorded_options(&self) -> Vec<BackendOption> {
+    self.options.lock().expect("opencode options mutex is not poisoned").clone()
   }
 
   /// Return the server shared by every turn with this proxy URL.
@@ -165,9 +178,10 @@ impl OpenCodeServerPool {
   }
 }
 
-/// The server's headless policy. CharlieBot has no path to approve interactive requests.
-pub fn headless_config() -> Value {
-  json!({
+/// The server's headless policy, with the `providers` block of the options' context limits. CharlieBot has no path to
+/// approve interactive requests.
+pub fn headless_config(options: &[BackendOption]) -> anyhow::Result<Value> {
+  let mut config = json!({
     "permission": {
       "*": "allow",
       "question": "deny",
@@ -177,7 +191,9 @@ pub fn headless_config() -> Value {
     "shell": "bash",
     "default_agent": "charliebot",
     "agent": {"charliebot": {"mode": "primary"}}
-  })
+  });
+  config.as_object_mut().expect("the headless config is a JSON object").extend(model_context_config(options)?);
+  Ok(config)
 }
 
 /// One turn's claim on an opencode session.
@@ -391,7 +407,7 @@ impl OpenCodeServer {
     env.insert("XDG_STATE_HOME".to_string(), host.state_dir().display().to_string());
     env.insert("XDG_CACHE_HOME".to_string(), host.cache_dir().display().to_string());
     env.insert("OPENCODE_SERVER_PASSWORD".to_string(), password.to_string());
-    env.insert("OPENCODE_CONFIG_CONTENT".to_string(), headless_config().to_string());
+    env.insert("OPENCODE_CONFIG_CONTENT".to_string(), headless_config(&self.pool()?.recorded_options())?.to_string());
     env.insert("OPENCODE_DISABLE_FFF".to_string(), "1".to_string());
     if let Some(proxy_url) = &self.proxy_url {
       apply_proxy_env(&mut env, proxy_url);

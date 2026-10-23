@@ -11,7 +11,7 @@ use charliebot_registry::Registry;
 use charliebot_registry::backend::{AgentBackend, BackendFactory, Env, LaunchArgs};
 use futures_util::future::BoxFuture;
 use nix::sys::signal::Signal;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use tokio::task::JoinHandle;
 
 use super::backend::{OpenCodeFactory, extract_model_limit, image_file_attachments};
@@ -118,7 +118,8 @@ impl Harness {
   ) -> TestRun {
     let backend = OpenCodeBackend::new(
       MODEL.to_string(),
-      OpenCodeOption { proxy_url: proxy_url.clone() },
+      OpenCodeOption { proxy_url: proxy_url.clone(), context_limit: None },
+      Map::new(),
       self.host.clone(),
       Arc::clone(&self.pool),
       launch.clone(),
@@ -290,7 +291,7 @@ fn held_script(prompts: &[&str]) -> Value {
 #[test]
 fn headless_config_denies_the_three_tools_and_pins_bash() {
   // Python: tests/test_opencode_backend.py::test_headless_config_denies_the_three_tools_and_pins_bash
-  let config = super::headless_config();
+  let config = super::headless_config(&[]).unwrap();
   assert_eq!(config["shell"], "bash");
   assert_eq!(config["permission"]["question"], "deny");
   assert_eq!(config["permission"]["subagent"], "deny");
@@ -1145,6 +1146,7 @@ async fn one_shot_runs_standalone_in_a_private_root_and_fails_on_an_error_line()
   let mut backend = OpenCodeBackend::new(
     MODEL.to_string(),
     OpenCodeOption::default(),
+    Map::new(),
     harness.host.clone(),
     Arc::clone(&harness.pool),
     LaunchArgs::default(),

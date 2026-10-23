@@ -198,7 +198,7 @@ impl Dispatcher {
 
   /// Return the task's currently pending input facts from the durable boundary and run records.
   pub fn pending_inputs(&self, session_id: &str) -> StoreResult<Vec<Value>> {
-    let facts = self.store.node_facts(session_id)?;
+    let facts = self.store.node_state(session_id)?;
     let task = facts.task()?;
     if task.boundary_index.is_none() && task.imported_pending_ids.is_empty() {
       return Err(StoreError::invalid(format!(
@@ -282,7 +282,7 @@ impl Dispatcher {
       return Ok(Value::Object(decision));
     }
     let queued = {
-      let facts = self.store.node_facts(session_id)?;
+      let facts = self.store.node_state(session_id)?;
       let mut queued = Vec::new();
       for run in self.store.list_run_records_sync(session_id)? {
         if facts.runs.terminal_outcome(&run.id)?.is_some() {

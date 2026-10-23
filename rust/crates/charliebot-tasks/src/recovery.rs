@@ -415,13 +415,9 @@ async fn reconcile_node_inner(
   }
   // Steps 1 and 2 read Run facts from this snapshot. Only the closed-task stop refreshes it, where `_reconcile_node`
   // reloads its event list.
-  let Some(node_facts) = (match stop {
-    Some(stop) => store.node_facts_until(session_id, &mut || stop.is_cancelled())?,
-    None => Some(store.node_facts(session_id)?),
-  }) else {
+  let Some(mut runs) = store.run_facts_until(session_id, &mut || stop.is_some_and(StartupStop::is_cancelled))? else {
     return Ok(());
   };
-  let mut runs = node_facts.runs.clone();
   let run_records = store.list_run_records_sync(session_id)?;
   // Warm the display-backend map: a fresh boot has seen no liveness notification.
   if let Some(newest) = run_records.last()
@@ -459,7 +455,12 @@ async fn reconcile_node_inner(
         continue;
       }
       store.request_stop(session_id, &run.id, &closed_task_stop_request_id(&run.id)).await?;
-      runs = store.node_facts(session_id)?.runs.clone();
+      let Some(updated_runs) =
+        store.run_facts_until(session_id, &mut || stop.is_some_and(StartupStop::is_cancelled))?
+      else {
+        return Ok(());
+      };
+      runs = updated_runs;
       run_records_changed = true;
     }
   }
@@ -536,10 +537,16 @@ async fn replay_followups_with_records(
   };
   // Every run's outcome comes from this snapshot, taken where `_replay_followups` loads its event list. A follow-up
   // that lands a later run's fact does not change that run's replay.
-  let runs = store.node_facts(session_id)?.runs.clone();
+  let Some(node_facts) = (match stop {
+    Some(stop) => store.node_facts_until(session_id, &mut || stop.is_cancelled())?,
+    None => Some(store.node_facts(session_id)?),
+  }) else {
+    return Ok(());
+  };
+  let task_facts = node_facts.task()?;
   let completion = features.startup.require::<TaskCompletion>()?;
   for (run_index, run) in run_records.iter().enumerate() {
-    let outcome = runs.terminal_outcome(&run.id)?;
+    let outcome = task_facts.terminal_run_outcome(&run.id)?;
     // A terminal run whose end metadata write failed gets its ended_at and exit_code re-derived from the raw log.
     if let Some(outcome) = outcome
       && run.ended_at.is_none()
@@ -714,7 +721,7 @@ async fn resume_run_checked(
   let (Some(pid), Some(pid_start)) = (run.pid, run.pid_start.clone()) else {
     bail!("run {run_id} records no launched process identity; nothing to re-attach");
   };
-  if store.node_facts(session_id)?.runs.terminal_outcome(run_id)?.is_some() {
+  if store.run_facts(session_id)?.terminal_outcome(run_id)?.is_some() {
     return Ok(false);
   }
   let is_alive = match is_alive {

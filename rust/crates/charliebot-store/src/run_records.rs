@@ -1,8 +1,9 @@
 //! Persisted run records and their chat-log facts.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
@@ -20,6 +21,7 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::control_events::{self, ACTOR_SYSTEM};
+use crate::events::FileIdentity;
 use crate::metadata::UtcDateTime;
 use crate::{ControlGuard, SharedChatEvent, Store, StoreError, StoreResult};
 
@@ -190,6 +192,66 @@ pub struct RunFacts {
   stop_requests: HashMap<String, HashSet<Option<String>>>,
   #[cfg(test)]
   pub(crate) observed_events: usize,
+}
+
+const RUN_FACTS_MEMO_LIMIT: usize = 64;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RunFactsHistoryKey {
+  Cached(u64),
+  File(FileIdentity),
+}
+
+#[derive(Clone)]
+pub(crate) struct CachedRunFacts {
+  pub(crate) session_id: String,
+  pub(crate) key: RunFactsHistoryKey,
+  pub(crate) archived: usize,
+  pub(crate) covered: usize,
+  pub(crate) facts: Arc<RunFacts>,
+}
+
+#[derive(Default)]
+pub(crate) struct RunFactsMemo {
+  entries: VecDeque<CachedRunFacts>,
+}
+
+impl RunFactsMemo {
+  pub(crate) fn get(&self, session_id: &str, key: RunFactsHistoryKey, archived: usize) -> Option<CachedRunFacts> {
+    self
+      .entries
+      .iter()
+      .rfind(|entry| entry.session_id == session_id && entry.key == key && entry.archived == archived)
+      .cloned()
+  }
+
+  pub(crate) fn insert(&mut self, entry: CachedRunFacts) {
+    if let Some(existing) = self.entries.iter_mut().find(|existing| {
+      existing.session_id == entry.session_id && existing.key == entry.key && existing.archived == entry.archived
+    }) {
+      *existing = entry;
+      return;
+    }
+    self.entries.push_back(entry);
+    while self.entries.len() > RUN_FACTS_MEMO_LIMIT {
+      self.entries.pop_front();
+    }
+  }
+
+  pub(crate) fn seal(&mut self, session_id: &str, generation: u64, archived: usize, identity: FileIdentity) {
+    if let Some(entry) = self.entries.iter_mut().find(|entry| {
+      entry.session_id == session_id
+        && entry.key == RunFactsHistoryKey::Cached(generation)
+        && entry.archived == archived
+    }) {
+      entry.key = RunFactsHistoryKey::File(identity);
+    }
+  }
+
+  #[cfg(test)]
+  pub(crate) fn len(&self) -> usize {
+    self.entries.len()
+  }
 }
 
 /// The host boot time, read from `/proc/stat` on first use: only a launched run without a terminal fact needs it.
@@ -1272,6 +1334,24 @@ mod tests {
     assert!(facts.stop_requested("run-a", None));
     assert!(facts.stop_requested("run-a", Some("request-a")));
     assert!(!facts.stop_requested("run-a", Some("other-request")));
+  }
+
+  #[test]
+  fn run_facts_memo_keeps_the_python_sixty_four_list_bound() {
+    let mut memo = RunFactsMemo::default();
+    for generation in 1..=65 {
+      memo.insert(CachedRunFacts {
+        session_id: format!("session-{generation}"),
+        key: RunFactsHistoryKey::Cached(generation),
+        archived: 0,
+        covered: 1,
+        facts: Arc::new(RunFacts::default()),
+      });
+    }
+
+    assert_eq!(memo.len(), 64, "the memo retains no more than Python's run-facts bound");
+    assert!(memo.get("session-1", RunFactsHistoryKey::Cached(1), 0).is_none());
+    assert!(memo.get("session-65", RunFactsHistoryKey::Cached(65), 0).is_some());
   }
 
   #[test]

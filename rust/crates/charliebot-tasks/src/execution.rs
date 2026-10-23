@@ -28,7 +28,7 @@ use charliebot_store::metadata::{
   ColdReadSpec, SessionMetadata, TaskProfile, TaskType, ThreadMetadata, ThreadStatus, UtcDateTime,
 };
 use charliebot_store::run_records::{self, RunKind, RunOutcome, RunOutcomeKind, RunRecord};
-use charliebot_store::{ChatEventHistory, NodeFacts, StoreError, StoreResult};
+use charliebot_store::{ChatEventHistory, NodeFacts, RunFacts, StoreError, StoreResult};
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
 use tokio::sync::watch;
@@ -631,8 +631,8 @@ impl TaskExecutionAdapter {
     let run_id = run.id.as_str();
     let task_type = prompts::prompt_task_type(meta.task.as_ref());
     let history = self.features.store.load_all_facts_view_sync(session_id)?;
-    let facts = self.features.store.node_facts(session_id)?;
-    let continuation = self.run_continuation(meta, run, option, snapshot, &facts)?;
+    let facts = self.features.store.node_state(session_id)?;
+    let continuation = self.run_continuation(meta, run, option, snapshot, &facts, &facts.runs)?;
     let continued = continuation.as_ref().is_some_and(|continuation| continuation.native_id.is_some());
     let context = if run.kind == RunKind::Review {
       let work_run = self
@@ -808,7 +808,7 @@ impl TaskExecutionAdapter {
     let Some(latest) = self.features.store.list_run_records_sync(&meta.id)?.last().cloned() else {
       return Ok(());
     };
-    let facts = self.features.store.node_facts(&meta.id)?;
+    let facts = self.features.store.node_state(&meta.id)?;
     if !facts.task()?.close_events.is_empty() {
       return Ok(());
     }
@@ -844,6 +844,7 @@ impl TaskExecutionAdapter {
     option: &BackendOption,
     snapshot: &PromptSnapshot,
     facts: &NodeFacts,
+    runs: &RunFacts,
   ) -> anyhow::Result<Option<RunContinuation>> {
     if run.sequence_ref.is_some() || run.retry_of_run_id.is_some() {
       return Ok(None);
@@ -863,7 +864,7 @@ impl TaskExecutionAdapter {
     if run.kind == RunKind::Review {
       if previous.kind != RunKind::Review
         || previous.review_of_run_id != run.review_of_run_id
-        || facts.runs.terminal_outcome(&previous.id)? != Some(RunOutcomeKind::Success)
+        || runs.terminal_outcome(&previous.id)? != Some(RunOutcomeKind::Success)
       {
         return Ok(None);
       }
@@ -3143,11 +3144,11 @@ mod tests {
     let snapshot = PromptSnapshot::default();
     let before: HistoryWork = features.store.history_work();
     let history = features.store.load_all_facts_view_sync(&meta.id).unwrap();
-    let facts = features.store.node_facts(&meta.id).unwrap();
+    let facts = features.store.node_state(&meta.id).unwrap();
 
     let mut inherited = current.clone();
     adapter.inherit_worker_continuation(&meta, &mut inherited).unwrap();
-    assert!(adapter.run_continuation(&meta, &current, &option, &snapshot, &facts).unwrap().is_some());
+    assert!(adapter.run_continuation(&meta, &current, &option, &snapshot, &facts, &facts.runs).unwrap().is_some());
     assert_eq!(adapter.batch_only_context(&meta, &current, &history).await.unwrap(), "second input");
     assert_eq!(adapter.work_description(&meta, &current, &history).await.unwrap(), "second input");
     assert!(adapter.later_messages_section(&meta, &current, &history).await.unwrap().contains("second input"));

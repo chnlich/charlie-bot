@@ -77,7 +77,7 @@ async def test_fork_copies_plans_json_and_referenced_artifacts(tmp_path: pathlib
 @pytest.mark.asyncio
 async def test_sidebar_plan_flag_refreshes_after_registry_write_and_skips_an_unchanged_read(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  sidebar_state.reset_for_tests()
+  conftest.reset_sidebar_state()
   cfg, mgr, session = await conftest.make_home_session(tmp_path, name="Plan flag", backend=conftest.OPUS_BACKEND_ID)
   plans_path = cfg.sessions_dir / session.id / "plans.json"
   read_text = pathlib.Path.read_text

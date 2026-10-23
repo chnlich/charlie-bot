@@ -118,14 +118,6 @@ _auth_failures: dict[str, datetime.datetime] = {}
 _login_notified: set[str] = set()
 
 
-def reset_for_tests() -> None:
-  """Drop every process-local reading (test isolation)."""
-  _event_readings.clear()
-  _panel_readings.clear()
-  _auth_failures.clear()
-  _login_notified.clear()
-
-
 def now_or(now: datetime.datetime | None) -> datetime.datetime:
   """The injected clock, or the wall clock when the caller passed none."""
   return now if now is not None else datetime.datetime.now(datetime.UTC)

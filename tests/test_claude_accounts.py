@@ -15,7 +15,7 @@ from src.runtime import master_cc_state
 NOW = datetime.datetime(2026, 9, 6, 20, 0, tzinfo=datetime.UTC)
 SONNET = "claude-sonnet-5"
 
-_fresh_pool_state = conftest.fresh_state_fixture(claude_accounts.reset_for_tests)
+_fresh_pool_state = conftest.fresh_state_fixture(conftest.reset_claude_account_readings)
 
 
 def _options(pool_name: str | None = None) -> list:

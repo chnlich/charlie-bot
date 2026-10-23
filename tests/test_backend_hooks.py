@@ -25,7 +25,7 @@ from src.runtime.hooks import backend_lifecycle, backend_type_registration, back
 CC_ID = "11111111-2222-3333-4444-555555555555"
 CLI_VARIANT_TYPES = ["cc-anthropic-compatible", "cc-openai-compatible"]
 
-_fresh_pool_state = conftest.fresh_state_fixture(claude_accounts.reset_for_tests)
+_fresh_pool_state = conftest.fresh_state_fixture(conftest.reset_claude_account_readings)
 
 
 def _variant_option(backend_type: str):

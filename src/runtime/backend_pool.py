@@ -131,14 +131,6 @@ class RouterError(RuntimeError):
   stdout outside the contract, or named an id outside the candidates."""
 
 
-def reset_for_tests() -> None:
-  """Clear the rotation position and every cooldown; the suite calls it around each test."""
-  global _position
-  with _lock:
-    _position = 0
-    _cooling_until.clear()
-
-
 def is_quota_error(text: str) -> bool:
   """True when *text* names a spent quota: one of :data:`QUOTA_ERROR_PATTERNS` appears in it."""
   lowered = text.lower()

@@ -2570,7 +2570,7 @@ async def test_pooled_fresh_worker_launches_build_on_the_selected_account(
     and the relay loop is armed from the first process (the backend build receives
     that account). The iteration and scheduled-step kinds launch through their
     controllers and are pinned in the sequence suites."""
-  claude_accounts.reset_for_tests()
+  conftest.reset_claude_account_readings()
   cfg, session_blocks, tree = build_pooled_env(tmp_path, monkeypatch)
   # An implement task: the work Run's success spawns its review, the second
   # fresh launch this test pins.
@@ -2610,7 +2610,7 @@ async def test_pooled_worker_launch_selects_inside_the_option_pool(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """With pools defined, the launch picks an account of the option's pool: beta's
     untouched accounts, holding more headroom than every alpha member, stay unused."""
-  claude_accounts.reset_for_tests()
+  conftest.reset_claude_account_readings()
   cfg, session_blocks, tree = build_pooled_env(
       tmp_path, monkeypatch, claude_pools={
           "alpha": ["main"],
@@ -2667,7 +2667,7 @@ async def test_pool_exhausted_launch_fails_the_run_with_evidence_and_no_process(
   """select returns None: the Run fails before any process starts, its events
     log carries the pool-exhausted error with the earliest reset time, and the
     improve quota classification reads that text as a quota blocker."""
-  claude_accounts.reset_for_tests()
+  conftest.reset_claude_account_readings()
   cfg, session_blocks, tree = build_pooled_env(tmp_path, monkeypatch)
   worker = await conftest.create_task(
       tree, parent=None, request_id="w", profile="worker", task=models.TaskSpec(goal="ship it"))
@@ -2705,7 +2705,7 @@ async def test_rejected_first_process_relays_to_another_pool_account_and_succeed
     the first process's rejected conftest.rate_limit_event moves the run to the account
     with the most headroom (same session id, scripted relay backend) and the Run
     ends success."""
-  claude_accounts.reset_for_tests()
+  conftest.reset_claude_account_readings()
   cfg, session_blocks, tree = build_pooled_env(tmp_path, monkeypatch)
   worker = await conftest.create_task(
       tree, parent=None, request_id="w", profile="worker", task=models.TaskSpec(goal="ship it", task_type="quick-edit"))
@@ -2749,7 +2749,7 @@ async def test_manager_turn_relay_registers_the_second_process_through_the_launc
     turn: the second process registers through the real launch callback, the
     Run's identity follows it, started_at stays the first process's, and chat
     holds the second process's reply."""
-  claude_accounts.reset_for_tests()
+  conftest.reset_claude_account_readings()
   cfg, session_blocks, tree = build_pooled_env(tmp_path, monkeypatch)
   manager = await conftest.create_task(tree, parent=None, request_id="root")
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
@@ -2817,7 +2817,7 @@ async def test_stop_in_the_relay_gap_refuses_the_second_process_and_interrupts_t
     through the real launch callback is refused because of the stop, the turn
     ends with that one error line, and the Run keeps the first process's
     identity under an interrupted outcome."""
-  claude_accounts.reset_for_tests()
+  conftest.reset_claude_account_readings()
   cfg, session_blocks, tree = build_pooled_env(tmp_path, monkeypatch)
   manager = await conftest.create_task(tree, parent=None, request_id="root")
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)

@@ -517,6 +517,10 @@ class Worker:
       await _append_event_line(fd, _event_line(event_data))
       raise QuotaExhaustedError(event_data.get("message", "Quota exhausted"))
 
+    if event_type == ET.ERROR and any(p in event_message for p in backend_pool.BACKEND_TEMPORARY_UNAVAILABLE_PATTERNS):
+      await _append_event_line(fd, _event_line(event_data))
+      raise QuotaExhaustedError(event_data.get("message", "Backend temporarily unavailable"))
+
     # Write to disk
     await _append_event_line(fd, _event_line(event_data))
 

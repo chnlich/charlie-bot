@@ -58,6 +58,25 @@ QUOTA_ERROR_PATTERNS: tuple[str, ...] = (
     "budget has been exceeded",  # LiteLLM: "Budget has been exceeded!"
 )
 
+# These substrings identify temporary provider and gateway errors or no-output stalls for pool failover.
+# They exclude bare HTTP status digits (also found in request ids) and BadRequest, HTTP 400, or launch failures
+# (request or configuration errors that must fail fast).
+BACKEND_TEMPORARY_UNAVAILABLE_PATTERNS: tuple[str, ...] = (
+    "at capacity",
+    "bad gateway",
+    "badgateway",
+    "internal server error",
+    "internalservererror",
+    "service unavailable",
+    "serviceunavailable",
+    "gateway timeout",
+    "apiconnectionerror",
+    "connection error",
+    "peer closed connection",
+    "no output for",
+    "no session progress for",
+)
+
 # A quota error that names no reset keeps its member out this long.
 DEFAULT_COOLDOWN = datetime.timedelta(minutes=30)
 

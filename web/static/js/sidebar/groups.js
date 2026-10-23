@@ -48,28 +48,18 @@ function groupSessionsBySortedKeys(sessions, keyFn) {
   return {groups, sortedKeys};
 }
 
-function shouldLimitHideSession(session, index, expanded) {
-  if (expanded) return false;
-  if (index < GROUP_SESSION_PREVIEW_LIMIT) return false;
-  return session.id !== SESSION_ID;
-}
-
-function isOverGroupLimitExtra(session, index) {
-  return index >= GROUP_SESSION_PREVIEW_LIMIT && session.id !== SESSION_ID;
-}
-
-function groupLimitItemOptions(key, session, index, expanded) {
-  if (!isOverGroupLimitExtra(session, index)) return {};
+function groupLimitItemOptions(key, isExtra, isActiveRoot, expanded) {
+  if (!isExtra) return {};
   const safeKey = escapeHtmlAttr(key);
-  const hiddenClass = shouldLimitHideSession(session, index, expanded) ? ' hidden' : '';
+  const hiddenClass = expanded || isActiveRoot ? '' : ' hidden';
   return {
     extraClass: `session-group-limit-extra${hiddenClass}`,
-    extraAttrs: `data-session-group-limit-extra="${safeKey}"`,
+    extraAttrs: `data-session-group-limit-extra="${safeKey}"${isActiveRoot ? ' data-session-group-limit-active="true"' : ''}`,
   };
 }
 
-function renderGroupLimitToggle(key, totalCount, expanded) {
-  if (totalCount <= GROUP_SESSION_PREVIEW_LIMIT) return '';
+function renderGroupLimitToggle(key, hasExtraRows, expanded) {
+  if (!hasExtraRows) return '';
   const safeKey = escapeHtmlAttr(key);
   const label = expanded ? 'Show less' : 'Show all';
   return `<button type="button"
@@ -82,7 +72,7 @@ function renderGroupLimitToggle(key, totalCount, expanded) {
 function updateGroupLimitDom(key, expanded) {
   document.querySelectorAll('.session-group-limit-extra').forEach(el => {
     if (el.dataset.sessionGroupLimitExtra === key) {
-      el.classList.toggle('hidden', !expanded);
+      el.classList.toggle('hidden', !expanded && el.dataset.sessionGroupLimitActive !== 'true');
     }
   });
   document.querySelectorAll('.session-group-limit-toggle').forEach(btn => {
@@ -109,6 +99,15 @@ const sessionRowBadges = [];
 const sessionRowLines = [];
 const sessionMenuItemSources = [];
 const groupMenuItems = [];
+const groupPreviewExclusions = [];
+
+// A preview exclusion returns true for a root that does not use a preview
+// rank, so feature packages can own row facts without adding them to the core.
+function registerGroupPreviewExclusion(predicate) {
+  if (typeof predicate !== 'function') throw new Error('Invalid group preview exclusion registration');
+  if (groupPreviewExclusions.includes(predicate)) throw new Error('Duplicate group preview exclusion');
+  groupPreviewExclusions.push(predicate);
+}
 
 // A row badge: render(s) returns the badge HTML for the row, or ''. The
 // badges follow the row's own indicators, in registration order.
@@ -326,6 +325,9 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
   const {roots, childrenOf, parentOf} = buildSessionTree(sessions);
   recordTreeShape(childrenOf, parentOf);
   revealActiveSessionOnce(parentOf);
+  // The active session's root controls visibility for its whole subtree.
+  let activeRootId = SESSION_ID;
+  while (activeRootId && parentOf.has(activeRootId)) activeRootId = parentOf.get(activeRootId);
   const {groups, sortedKeys} = groupSessionsBySortedKeys(roots, s => s.group);
   const collapsedState = loadGroupCollapsedState(SESSION_GROUP_COLLAPSED_STORAGE_KEY);
   const limitState = loadGroupLimitState(SESSION_GROUP_LIMIT_STORAGE_KEY);
@@ -338,8 +340,19 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
     const isLimitExpanded = limitState[key] === true;
     const chevronClass = isCollapsed ? '' : 'rotate-90';
     const safeKey = escapeHtmlAttr(key);
-    const taskRowOptions = (s, index) =>
-      groupLimitItemOptions(key, s, index, isLimitExpanded);
+    let previewRank = 0;
+    let hasExtraRows = false;
+    const groupRows = groupSessions.map((s) => {
+      const excluded = groupPreviewExclusions.some((predicate) => predicate(s));
+      const inPreview = !excluded && previewRank < GROUP_SESSION_PREVIEW_LIMIT;
+      if (!excluded) previewRank += 1;
+      const isExtra = !inPreview;
+      if (isExtra) hasExtraRows = true;
+      return {
+        session: s,
+        options: groupLimitItemOptions(key, isExtra, s.id === activeRootId, isLimitExpanded),
+      };
+    });
 
     // The Threads view hides the New-session-in-group button: a session
     // created there has no platform origin and would fall back to Workspace.
@@ -371,13 +384,13 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
         <span class="text-xs text-slate-500 ml-auto">${countTreeRows(groupSessions, childrenOf)}</span>
       </div>
       <div class="session-group-items ${isCollapsed ? 'hidden' : ''}" data-sgroup-items="${safeKey}">
-        ${groupSessions.map((s, index) => renderSessionTree(
-          s,
+        ${groupRows.map(({session, options: rowOptions}) => renderSessionTree(
+          session,
           filter,
-          {...taskRowOptions(s, index), staticTime: !!options.staticTime},
+          {...rowOptions, staticTime: !!options.staticTime},
           childrenOf
         )).join('')}
-        ${renderGroupLimitToggle(key, groupSessions.length, isLimitExpanded)}
+        ${renderGroupLimitToggle(key, hasExtraRows, isLimitExpanded)}
       </div>
     </div>`;
   }
@@ -744,6 +757,7 @@ function removeSessionFromRenderedList(sessionId) {
 
 
 const GLOBALS = {
+  registerGroupPreviewExclusion,
   registerSessionRowBadge,
   registerSessionRowLine,
   registerSessionMenuItems,

@@ -3,7 +3,7 @@
 import json
 import pathlib
 import sys
-from types import SimpleNamespace
+import types
 
 import pytest
 
@@ -30,10 +30,10 @@ def _write_events(path: pathlib.Path, events: list[dict]) -> None:
   path.write_text("".join(f"{json.dumps(event)}\n" for event in events), encoding="utf-8")
 
 
-def _set_config(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> SimpleNamespace:
+def _set_config(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> types.SimpleNamespace:
   home = tmp_path / "home"
   repo = tmp_path / "repo"
-  cfg = SimpleNamespace(charliebot_home=home, charlie_bot_repo=repo, sessions_dir=home / "sessions")
+  cfg = types.SimpleNamespace(charliebot_home=home, charlie_bot_repo=repo, sessions_dir=home / "sessions")
   monkeypatch.setattr(config, "get_config", lambda: cfg)
   return cfg
 

@@ -45,6 +45,10 @@ gpu-voice = [
 [project.scripts]
 charliebot = "src.app.main:main"
 
+# Loads with every pytest run through this venv and restricts it before collection — see src/infra/pytest_sandbox.py.
+[project.entry-points.pytest11]
+charliebot_test_sandbox = "src.infra.pytest_sandbox"
+
 [build-system]
 requires = ["setuptools>=80"]
 build-backend = "setuptools.build_meta"

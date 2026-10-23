@@ -90,6 +90,15 @@ _TRIP_ELAPSED_ATTR = "_charliebot_budget_trip_seconds"
 _RERUN_EVENTS = pytest.StashKey[list]()
 
 
+def pytest_configure(config: pytest.Config) -> None:
+  """Refuse a run whose venv does not auto-load the sandbox plugin (tests/conftest.py invariants)."""
+  if os.environ.get("CHARLIEBOT_USE_TEST_SANDBOX",
+                    "1") == "1" and not config.pluginmanager.has_plugin("charliebot_test_sandbox"):
+    raise pytest.UsageError(
+        "the test sandbox plugin is not registered but CHARLIEBOT_USE_TEST_SANDBOX=1; "
+        "run `uv sync` in this checkout so the pytest11 entry point installs")
+
+
 def pytest_addoption(parser: pytest.Parser) -> None:
   parser.addini(
       _UNIT_BUDGET_INI, "Per-test wall-time budget in seconds (setup + call + teardown) for tests that carry no "

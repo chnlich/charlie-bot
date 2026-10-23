@@ -21,7 +21,6 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::control_events::{self, ACTOR_SYSTEM};
-use crate::events::FileIdentity;
 use crate::metadata::UtcDateTime;
 use crate::{ControlGuard, SharedChatEvent, Store, StoreError, StoreResult};
 
@@ -196,17 +195,10 @@ pub struct RunFacts {
 
 const RUN_FACTS_MEMO_LIMIT: usize = 64;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum RunFactsHistoryKey {
-  Cached(u64),
-  File(FileIdentity),
-}
-
 #[derive(Clone)]
 pub(crate) struct CachedRunFacts {
-  pub(crate) session_id: String,
-  pub(crate) key: RunFactsHistoryKey,
-  pub(crate) archived: usize,
+  pub(crate) identity: Arc<()>,
+  pub(crate) events: Arc<Vec<SharedChatEvent>>,
   pub(crate) covered: usize,
   pub(crate) facts: Arc<RunFacts>,
 }
@@ -217,18 +209,12 @@ pub(crate) struct RunFactsMemo {
 }
 
 impl RunFactsMemo {
-  pub(crate) fn get(&self, session_id: &str, key: RunFactsHistoryKey, archived: usize) -> Option<CachedRunFacts> {
-    self
-      .entries
-      .iter()
-      .rfind(|entry| entry.session_id == session_id && entry.key == key && entry.archived == archived)
-      .cloned()
+  pub(crate) fn get(&self, identity: &Arc<()>) -> Option<CachedRunFacts> {
+    self.entries.iter().rfind(|entry| Arc::ptr_eq(&entry.identity, identity)).cloned()
   }
 
   pub(crate) fn insert(&mut self, entry: CachedRunFacts) {
-    if let Some(existing) = self.entries.iter_mut().find(|existing| {
-      existing.session_id == entry.session_id && existing.key == entry.key && existing.archived == entry.archived
-    }) {
+    if let Some(existing) = self.entries.iter_mut().find(|existing| Arc::ptr_eq(&existing.identity, &entry.identity)) {
       *existing = entry;
       return;
     }
@@ -238,13 +224,9 @@ impl RunFactsMemo {
     }
   }
 
-  pub(crate) fn seal(&mut self, session_id: &str, generation: u64, archived: usize, identity: FileIdentity) {
-    if let Some(entry) = self.entries.iter_mut().find(|entry| {
-      entry.session_id == session_id
-        && entry.key == RunFactsHistoryKey::Cached(generation)
-        && entry.archived == archived
-    }) {
-      entry.key = RunFactsHistoryKey::File(identity);
+  pub(crate) fn refresh_events(&mut self, identity: &Arc<()>, events: Arc<Vec<SharedChatEvent>>) {
+    if let Some(entry) = self.entries.iter_mut().find(|entry| Arc::ptr_eq(&entry.identity, identity)) {
+      entry.events = events;
     }
   }
 
@@ -516,6 +498,38 @@ impl Store {
     }
     records.sort_by_key(run_sort_key);
     Ok(records)
+  }
+
+  /// Read one node's run records while checking cancellation between directory entries and before sorting.
+  pub fn list_run_records_until(
+    &self,
+    session_id: &str,
+    should_stop: &mut impl FnMut() -> bool,
+  ) -> StoreResult<Option<Vec<RunRecord>>> {
+    let root = self.runs_root(session_id);
+    let entries = match fs::read_dir(&root) {
+      Ok(entries) => entries,
+      Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Some(Vec::new())),
+      Err(error) => return Err(path_error(&root, error)),
+    };
+    let mut records = Vec::new();
+    for entry in entries {
+      if should_stop() {
+        return Ok(None);
+      }
+      let entry = entry.map_err(|error| path_error(&root, error))?;
+      if !entry.file_type().map_err(|error| path_error(&entry.path(), error))?.is_dir() {
+        continue;
+      }
+      if let Some(record) = self.read_run_sync(session_id, &entry.file_name().to_string_lossy())? {
+        records.push(record);
+      }
+    }
+    if should_stop() {
+      return Ok(None);
+    }
+    records.sort_by_key(run_sort_key);
+    Ok(Some(records))
   }
 
   /// Read every run record under the sessions directory, paired with its owner session id.
@@ -1339,19 +1353,50 @@ mod tests {
   #[test]
   fn run_facts_memo_keeps_the_python_sixty_four_list_bound() {
     let mut memo = RunFactsMemo::default();
+    let mut first_identity = None;
+    let mut first_events = None;
+    let mut newest_identity = None;
     for generation in 1..=65 {
-      memo.insert(CachedRunFacts {
-        session_id: format!("session-{generation}"),
-        key: RunFactsHistoryKey::Cached(generation),
-        archived: 0,
-        covered: 1,
-        facts: Arc::new(RunFacts::default()),
-      });
+      let identity = Arc::new(());
+      let events = Arc::new(vec![Arc::new(json!({"generation": generation}))]);
+      if generation == 1 {
+        first_identity = Some(Arc::clone(&identity));
+        first_events = Some(Arc::clone(&events));
+      }
+      newest_identity = Some(Arc::clone(&identity));
+      memo.insert(CachedRunFacts { identity, events, covered: 1, facts: Arc::new(RunFacts::default()) });
     }
 
     assert_eq!(memo.len(), 64, "the memo retains no more than Python's run-facts bound");
-    assert!(memo.get("session-1", RunFactsHistoryKey::Cached(1), 0).is_none());
-    assert!(memo.get("session-65", RunFactsHistoryKey::Cached(65), 0).is_some());
+    assert!(memo.get(&first_identity.expect("first list identity was recorded")).is_none());
+    assert_eq!(
+      Arc::strong_count(&first_events.expect("first event list was recorded")),
+      1,
+      "evicting a list releases the memo's strong reference"
+    );
+    assert!(memo.get(&newest_identity.expect("newest list identity was recorded")).is_some());
+  }
+
+  #[test]
+  fn run_facts_memo_keys_the_list_identity_and_retains_the_current_list() {
+    let mut memo = RunFactsMemo::default();
+    let identity = Arc::new(());
+    let events = Arc::new(vec![Arc::new(json!({"type": "user", "content": "first"}))]);
+    memo.insert(CachedRunFacts {
+      identity: Arc::clone(&identity),
+      events: Arc::clone(&events),
+      covered: 4,
+      facts: Arc::new(RunFacts::default()),
+    });
+    assert_eq!(Arc::strong_count(&events), 2, "the entry retains the event list like Python's memo");
+
+    let appended = Arc::new(vec![events[0].clone(), Arc::new(json!({"type": "agent_message", "content": "second"}))]);
+    memo.refresh_events(&identity, Arc::clone(&appended));
+    let hit = memo.get(&identity).expect("an append preserves the list identity");
+    assert_eq!(hit.covered, 4, "the memo keeps its suffix cursor across an append");
+    assert!(Arc::ptr_eq(&hit.events, &appended), "the memo retains the appended list contents");
+
+    assert!(memo.get(&Arc::new(())).is_none(), "a replacement list has a different identity");
   }
 
   #[test]

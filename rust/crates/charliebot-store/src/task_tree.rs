@@ -18,7 +18,7 @@ use crate::control_events::{self, ACTOR_AGENT, ACTOR_SYSTEM, ACTOR_USER};
 use crate::events::{FileIdentity, LiveHistory, SharedChatEvent};
 use crate::metadata::{EventRef, SessionMetadata, SessionStatus, TaskProfile, TaskSpec, TaskType, UtcDateTime};
 use crate::run_records::{
-  CachedRunFacts, HostBoot, RunDisplayState, RunFacts, RunFactsHistoryKey, RunOutcomeKind, stop_requested_in_events,
+  CachedRunFacts, HostBoot, RunDisplayState, RunFacts, RunOutcomeKind, stop_requested_in_events,
 };
 use crate::store::{CachedNodeFacts, NodeFactsKey};
 use crate::{ControlGuard, Store, StoreError, StoreResult};
@@ -509,39 +509,17 @@ impl Store {
       .cloned()
       .expect("a node facts read stores its covered history");
     let archived = node_entry.archived;
-    let sealed_source = match node_entry.key {
-      NodeFactsKey::Cached { generation, .. } => RunFactsHistoryKey::Cached(generation),
-      NodeFactsKey::File(identity) => RunFactsHistoryKey::File(identity),
-    };
-    let sealed = self.run_facts_memo.lock().expect("run facts memo mutex is not poisoned").get(
-      session_id,
-      sealed_source,
-      archived,
-    );
-    if let Some(cached) = sealed.filter(|cached| cached.covered == node_entry.covered) {
-      return Ok(Some(Arc::clone(&cached.facts)));
-    }
-    let (source, live) = match self.live_history(session_id)? {
-      LiveHistory::Cached { generation, events } => {
-        let source = match node_entry.key {
-          NodeFactsKey::File(identity) => RunFactsHistoryKey::File(identity),
-          NodeFactsKey::Cached { .. } => RunFactsHistoryKey::Cached(generation),
-        };
-        (source, events)
-      }
+    let (identity, live) = match self.live_history(session_id)? {
+      LiveHistory::Cached { identity, events, .. } => (identity, events),
       LiveHistory::Cold(_) => {
-        let Some((generation, live)) = self.live_events_with_generation_until(session_id, should_stop)? else {
+        let Some((_generation, identity, events)) = self.live_events_with_generation_until(session_id, should_stop)?
+        else {
           return Ok(None);
         };
-        let source = match node_entry.key {
-          NodeFactsKey::File(identity) => RunFactsHistoryKey::File(identity),
-          NodeFactsKey::Cached { .. } => RunFactsHistoryKey::Cached(generation),
-        };
-        (source, live)
+        (identity, events)
       }
     };
-    let cached =
-      self.run_facts_memo.lock().expect("run facts memo mutex is not poisoned").get(session_id, source, archived);
+    let cached = self.run_facts_memo.lock().expect("run facts memo mutex is not poisoned").get(&identity);
     if let Some(cached) = cached.as_ref().filter(|cached| cached.covered == live.len()) {
       return Ok(Some(Arc::clone(&cached.facts)));
     }
@@ -568,9 +546,8 @@ impl Store {
     }
     let facts = Arc::new(facts);
     self.run_facts_memo.lock().expect("run facts memo mutex is not poisoned").insert(CachedRunFacts {
-      session_id: session_id.to_string(),
-      key: source,
-      archived,
+      identity,
+      events: Arc::clone(&live),
       covered: live.len(),
       facts: Arc::clone(&facts),
     });
@@ -588,8 +565,8 @@ impl Store {
     if should_stop() {
       return Ok(None);
     }
-    let (generation, live) = match self.live_history(session_id)? {
-      LiveHistory::Cached { generation, events } => (generation, events),
+    let (generation, list_identity, live) = match self.live_history(session_id)? {
+      LiveHistory::Cached { generation, identity, events } => (generation, identity, events),
       LiveHistory::Cold(identity) => {
         let archived = self.read_archive_offset(session_id)?;
         if let Some(identity) = identity
@@ -606,26 +583,24 @@ impl Store {
         events
       }
     };
-    self.node_facts_of(session_id, generation, &live, should_stop)
+    self.node_facts_of(session_id, generation, list_identity, &live, should_stop)
   }
 
   fn node_facts_of(
     &self,
     session_id: &str,
     generation: u64,
-    live: &[SharedChatEvent],
+    list_identity: Arc<()>,
+    live: &Arc<Vec<SharedChatEvent>>,
     should_stop: &mut impl FnMut() -> bool,
   ) -> StoreResult<Option<Arc<NodeFacts>>> {
     if should_stop() {
       return Ok(None);
     }
     let archived = self.read_archive_offset(session_id)?;
-    let run_facts_key = RunFactsHistoryKey::Cached(generation);
-    let cached_runs = self.run_facts_memo.lock().expect("run facts memo mutex is not poisoned").get(
-      session_id,
-      run_facts_key,
-      archived,
-    );
+    let run_facts_identity = Arc::clone(&list_identity);
+    let cached_runs =
+      self.run_facts_memo.lock().expect("run facts memo mutex is not poisoned").get(&run_facts_identity);
     let cached = self.node_facts_cache.lock().expect("node facts cache mutex is not poisoned").get(session_id).cloned();
     let mut folded_runs = None;
     let mut entry = match cached {
@@ -652,6 +627,7 @@ impl Store {
         self.history_work.full_folds.fetch_add(1, Ordering::Relaxed);
         CachedNodeFacts {
           key: NodeFactsKey::Cached { generation, covered: 0 },
+          list_identity: Arc::clone(&list_identity),
           archived,
           covered: 0,
           facts: Arc::new(facts),
@@ -683,9 +659,8 @@ impl Store {
     }
     if let Some(runs) = folded_runs {
       self.run_facts_memo.lock().expect("run facts memo mutex is not poisoned").insert(CachedRunFacts {
-        session_id: session_id.to_string(),
-        key: run_facts_key,
-        archived,
+        identity: Arc::clone(&run_facts_identity),
+        events: Arc::clone(live),
         covered: live.len(),
         facts: Arc::new(runs),
       });
@@ -705,22 +680,22 @@ impl Store {
             return Ok(None);
           }
         }
-        if !observe_run_facts(&mut facts, live, should_stop)? {
+        if !observe_run_facts(&mut facts, live.as_slice(), should_stop)? {
           return Ok(None);
         }
         runs = Some((live.len(), facts));
       }
       if let Some((covered, facts)) = runs {
         self.run_facts_memo.lock().expect("run facts memo mutex is not poisoned").insert(CachedRunFacts {
-          session_id: session_id.to_string(),
-          key: run_facts_key,
-          archived,
+          identity: Arc::clone(&run_facts_identity),
+          events: Arc::clone(live),
           covered: live.len().max(covered),
           facts: Arc::new(facts),
         });
       }
     }
     let facts = Arc::clone(&entry.facts);
+    entry.list_identity = list_identity;
     entry.key = NodeFactsKey::Cached { generation, covered: entry.covered };
     self.node_facts_cache.lock().expect("node facts cache mutex is not poisoned").insert(session_id.to_string(), entry);
     Ok(Some(facts))
@@ -729,23 +704,11 @@ impl Store {
   /// Keep a node's folded task facts past recovery eviction, keyed by the file identity they cover.
   pub(crate) fn seal_node_facts(&self, session_id: &str, evicted: Option<(u64, usize, FileIdentity)>) {
     let Some((generation, covered, identity)) = evicted else { return };
-    let archived = {
-      let mut cache = self.node_facts_cache.lock().expect("node facts cache mutex is not poisoned");
-      if let Some(entry) = cache.get_mut(session_id)
-        && entry.key == (NodeFactsKey::Cached { generation, covered })
-      {
-        entry.key = NodeFactsKey::File(identity);
-        Some(entry.archived)
-      } else {
-        None
-      }
-    };
-    if let Some(archived) = archived {
-      self
-        .run_facts_memo
-        .lock()
-        .expect("run facts memo mutex is not poisoned")
-        .seal(session_id, generation, archived, identity);
+    let mut cache = self.node_facts_cache.lock().expect("node facts mutex is not poisoned");
+    if let Some(entry) = cache.get_mut(session_id)
+      && entry.key == (NodeFactsKey::Cached { generation, covered })
+    {
+      entry.key = NodeFactsKey::File(identity);
     }
   }
 
@@ -759,8 +722,8 @@ impl Store {
   /// While the event cache is cold, a state sealed by [`Store::evict_recovery_history`] answers when the log file and
   /// the archived extent are the ones it covers; the read parses no history. Any other cold read loads the history.
   fn node_state_versioned(&self, session_id: &str) -> StoreResult<(u64, Arc<NodeState>)> {
-    let (generation, live) = match self.live_history(session_id)? {
-      LiveHistory::Cached { generation, events } => (generation, events),
+    let (generation, list_identity, live) = match self.live_history(session_id)? {
+      LiveHistory::Cached { generation, identity, events } => (generation, identity, events),
       LiveHistory::Cold(identity) => {
         let archived = self.read_archive_offset(session_id)?;
         let version = {
@@ -782,7 +745,7 @@ impl Store {
         self.live_events_with_generation(session_id)?
       }
     };
-    self.node_state_of(session_id, generation, &live)
+    self.node_state_of(session_id, generation, list_identity, &live)
   }
 
   /// [`Store::node_state_versioned`] for a caller that holds the live events and their cache generation.
@@ -790,7 +753,8 @@ impl Store {
     &self,
     session_id: &str,
     generation: u64,
-    live: &[SharedChatEvent],
+    list_identity: Arc<()>,
+    live: &Arc<Vec<SharedChatEvent>>,
   ) -> StoreResult<(u64, Arc<NodeState>)> {
     let archived = self.read_archive_offset(session_id)?;
     let current = NodeStateKey::Cached { generation, covered: live.len() };
@@ -799,7 +763,9 @@ impl Store {
     let (version, state_fold_count) = match previous {
       Some(entry) if entry.key == current && entry.archived == archived => {
         let mut never_stop = || false;
-        let Some(facts) = self.node_facts_of(session_id, generation, live, &mut never_stop)? else {
+        let Some(facts) =
+          self.node_facts_of(session_id, generation, Arc::clone(&list_identity), live, &mut never_stop)?
+        else {
           unreachable!("the no-stop facts lookup completes")
         };
         return Ok((entry.version, self.node_state_view(session_id, facts)?));
@@ -814,7 +780,7 @@ impl Store {
       _ => (self.next_node_state_version.fetch_add(1, Ordering::Relaxed), None),
     };
     let mut never_stop = || false;
-    let Some(facts) = self.node_facts_of(session_id, generation, live, &mut never_stop)? else {
+    let Some(facts) = self.node_facts_of(session_id, generation, list_identity, live, &mut never_stop)? else {
       unreachable!("the no-stop facts lookup completes")
     };
     if let Some(folded_events) = state_fold_count {
@@ -843,15 +809,11 @@ impl Store {
   fn cached_run_facts(&self, session_id: &str) -> Option<Arc<RunFacts>> {
     let node_entry =
       self.node_facts_cache.lock().expect("node facts cache mutex is not poisoned").get(session_id).cloned()?;
-    let key = match node_entry.key {
-      NodeFactsKey::Cached { generation, .. } => RunFactsHistoryKey::Cached(generation),
-      NodeFactsKey::File(identity) => RunFactsHistoryKey::File(identity),
-    };
     self
       .run_facts_memo
       .lock()
       .expect("run facts memo mutex is not poisoned")
-      .get(session_id, key, node_entry.archived)
+      .get(&node_entry.list_identity)
       .filter(|cached| cached.covered == node_entry.covered)
       .map(|cached| Arc::clone(&cached.facts))
   }
@@ -862,16 +824,16 @@ impl Store {
   /// lock, so the file holds exactly the dropped list. A state memo that covers that whole list keeps its version; one
   /// that does not gives way to the node's [`NodeFacts`] memo when that one covers the whole list. A state keyed by a
   /// file outlives an eviction that finds the cache already cold. Anything else leaves the memo.
-  pub(crate) fn seal_node_state(&self, session_id: &str, evicted: Option<(u64, usize, FileIdentity)>) {
+  pub(crate) fn seal_node_state(&self, session_id: &str, evicted: Option<(u64, usize, FileIdentity, Arc<()>)>) {
     let mut states = self.node_state_cache.lock().expect("node state cache mutex is not poisoned");
     let entry = states.remove(session_id);
     let sealed = match (evicted, entry) {
-      (Some((generation, len, identity)), Some(entry))
+      (Some((generation, len, identity, _)), Some(entry))
         if entry.key == (NodeStateKey::Cached { generation, covered: len }) =>
       {
         Some(CachedNodeState { key: NodeStateKey::File(identity), archived: entry.archived, version: entry.version })
       }
-      (Some((generation, len, identity)), _) => {
+      (Some((generation, len, identity, _)), _) => {
         let node_facts = self.node_facts_cache.lock().expect("node facts cache mutex is not poisoned");
         node_facts
           .get(session_id)
@@ -4071,6 +4033,32 @@ pub(crate) mod tests {
     );
   }
 
+  #[tokio::test]
+  async fn run_record_recovery_walk_checks_each_entry_before_reading_it() {
+    let home = tempfile::tempdir().unwrap();
+    let store = make_store(home.path());
+    let node = create_node(&store, "run-record-stop-walk", None, TaskProfile::Manager).await;
+    for index in 0..3 {
+      let run_id = format!("run-{index}");
+      let path = store.run_metadata_path(&node.id, &run_id);
+      fs::create_dir_all(path.parent().unwrap()).unwrap();
+      fs::write(&path, serde_json::to_string(&queued_run(&node.id, &run_id)).unwrap()).unwrap();
+    }
+
+    let reads_before = store.run_record_read_count();
+    let mut checks = 0;
+    let records = store
+      .list_run_records_until(&node.id, &mut || {
+        checks += 1;
+        checks == 3
+      })
+      .unwrap();
+
+    assert!(records.is_none(), "a stopped run-directory walk returns no partial record list");
+    assert_eq!(checks, 3, "the recovery checks before each run directory entry");
+    assert_eq!(store.run_record_read_count() - reads_before, 2, "the third record is not read after stop");
+  }
+
   #[test]
   fn task_fact_event_index_keeps_unique_order_without_copying_id_keys() {
     let facts = fold_task_facts(&[
@@ -4496,25 +4484,53 @@ pub(crate) mod tests {
     let before = store.history_work();
     let history = store.load_chat_events_shared_sync(&node.id).unwrap();
     let facts = store.node_facts(&node.id).unwrap();
+    let identity = match store.live_history(&node.id).unwrap() {
+      LiveHistory::Cached { identity, .. } => identity,
+      LiveHistory::Cold(_) => panic!("the task event list remains cached"),
+    };
     let cached = history.iter().find(|candidate| candidate.get("id").and_then(Value::as_str) == Some(id)).unwrap();
     let fact = facts.task().unwrap().events_by_id.get(id).unwrap();
     assert!(Arc::ptr_eq(cached, fact), "task facts point at the one cached parsed payload");
     assert!(Arc::ptr_eq(cached, &facts.task().unwrap().input_candidates[0]));
     assert_eq!(Arc::strong_count(cached), 3, "the history, ordered id map, and candidate list share one payload");
     assert_eq!(store.history_work().owned_event_clones, before.owned_event_clones);
+    assert_eq!(
+      store.run_facts_memo.lock().unwrap().get(&identity).unwrap().events.len(),
+      history.len(),
+      "the run-facts memo retains the list whose identity it keys"
+    );
 
     store.append_chat_event(&node.id, json!({"type": "agent_message", "content": "append"})).await.unwrap();
     let appended = store.load_chat_events_shared_sync(&node.id).unwrap();
+    let appended_identity = match store.live_history(&node.id).unwrap() {
+      LiveHistory::Cached { identity, .. } => identity,
+      LiveHistory::Cold(_) => panic!("the appended event list remains cached"),
+    };
+    assert!(Arc::ptr_eq(&identity, &appended_identity), "append keeps the Python list identity");
+    assert_eq!(
+      store.run_facts_memo.lock().unwrap().get(&identity).unwrap().events.len(),
+      appended.len(),
+      "append refreshes the retained list without adding a memo entry"
+    );
     let still_cached =
       appended.iter().find(|candidate| candidate.get("id").and_then(Value::as_str) == Some(id)).unwrap();
     assert!(Arc::ptr_eq(cached, still_cached), "an append shares every existing parsed payload");
 
     store.clear_chat_events_cache(&node.id);
     let reloaded = store.load_chat_events_shared_sync(&node.id).unwrap();
+    let replacement_identity = match store.live_history(&node.id).unwrap() {
+      LiveHistory::Cached { identity, .. } => identity,
+      LiveHistory::Cold(_) => panic!("the reloaded event list remains cached"),
+    };
+    assert!(!Arc::ptr_eq(&identity, &replacement_identity), "clear and reload replaces the Python list identity");
     let replaced = reloaded.iter().find(|candidate| candidate.get("id").and_then(Value::as_str) == Some(id)).unwrap();
     assert!(!Arc::ptr_eq(cached, replaced), "cache invalidation reparses the event and replaces its identity");
     let refreshed_facts = store.node_facts(&node.id).unwrap();
     assert!(Arc::ptr_eq(replaced, refreshed_facts.task().unwrap().events_by_id.get(id).unwrap()));
+    let memo = store.run_facts_memo.lock().unwrap();
+    assert_eq!(memo.len(), 2, "replacement creates a miss while the bounded memo retains the prior list");
+    assert!(memo.get(&identity).is_some(), "the old list remains strongly retained until eviction");
+    assert!(memo.get(&replacement_identity).is_some(), "the replacement list gets its own entry");
   }
 
   #[test]

@@ -225,19 +225,21 @@ pub fn recovery_step(features: Arc<FeatureContext>) -> BoxFuture<'static, anyhow
     wait_test_recovery_gate(&features).await?;
     let started = Instant::now();
     match reconcile_task_tree(&features, &adapter).await {
-      Ok(counters) if !features.startup.stop().is_cancelled() => tracing::info!(
-        target: "charliebot_tasks",
-        elapsed_ms = started.elapsed().as_millis() as u64,
-        nodes = counters.nodes,
-        resumed = counters.resumed,
-        drained = counters.drained,
-        followups = counters.followups,
-        full = counters.full,
-        skipped = counters.skipped,
-        marker = ?counters.marker,
-        keep_reasons = ?counters.keep_reasons,
-        "task_tree_recovery_done"
-      ),
+      Ok(counters) if !features.startup.stop().is_cancelled() => {
+        tracing::info!(
+          target: "charliebot_tasks",
+          elapsed_ms = started.elapsed().as_millis() as u64,
+          nodes = counters.nodes,
+          resumed = counters.resumed,
+          drained = counters.drained,
+          followups = counters.followups,
+          full = counters.full,
+          skipped = counters.skipped,
+          marker = ?counters.marker,
+          keep_reasons = ?counters.keep_reasons,
+          "task_tree_recovery_done"
+        );
+      }
       Ok(_) => {}
       Err(error) => {
         tracing::error!(target: "charliebot_tasks", error = %format!("{error:#}"), "task_tree_recovery_failed")
@@ -418,7 +420,11 @@ async fn reconcile_node_inner(
   let Some(mut runs) = store.run_facts_until(session_id, &mut || stop.is_some_and(StartupStop::is_cancelled))? else {
     return Ok(());
   };
-  let run_records = store.list_run_records_sync(session_id)?;
+  let Some(run_records) =
+    store.list_run_records_until(session_id, &mut || stop.is_some_and(StartupStop::is_cancelled))?
+  else {
+    return Ok(());
+  };
   // Warm the display-backend map: a fresh boot has seen no liveness notification.
   if let Some(newest) = run_records.last()
     && let Some(backend) = newest.backend.as_deref()
@@ -492,7 +498,11 @@ async fn reconcile_node_inner(
 
   // --- 3. terminal runs replay their missing follow-up once ----------------
   if run_records_changed {
-    let refreshed_run_records = store.list_run_records_sync(session_id)?;
+    let Some(refreshed_run_records) =
+      store.list_run_records_until(session_id, &mut || stop.is_some_and(StartupStop::is_cancelled))?
+    else {
+      return Ok(());
+    };
     replay_followups_with_records(features, adapter, session_id, counters, &refreshed_run_records, stop).await?;
   } else {
     // Python refreshes the records in `_replay_followups` (`task_execution.py:2846-2864`). Reusing this sorted
@@ -545,7 +555,14 @@ async fn replay_followups_with_records(
   };
   let task_facts = node_facts.task()?;
   let completion = features.startup.require::<TaskCompletion>()?;
+  let Some(review_facts) = replay_review_facts_until(run_records, &mut || stop.is_some_and(StartupStop::is_cancelled))
+  else {
+    return Ok(());
+  };
   for (run_index, run) in run_records.iter().enumerate() {
+    if stop.is_some_and(StartupStop::is_cancelled) {
+      return Ok(());
+    }
     let outcome = task_facts.terminal_run_outcome(&run.id)?;
     // A terminal run whose end metadata write failed gets its ended_at and exit_code re-derived from the raw log.
     if let Some(outcome) = outcome
@@ -638,7 +655,7 @@ async fn replay_followups_with_records(
         if meta.task.is_some() && task_type == Some(TaskType::Implement) && run.repo_path.is_some() {
           if let Some(reason) = completion.pause_reason(session_id)? {
             tracing::info!(target: "charliebot_tasks", session_id, run_id = %run.id, reason, "worker_delivery_paused");
-          } else if replay_owes_review(store.node_facts(session_id)?.task()?.task_state == "open", run_records, run)
+          } else if review_facts.owes_review(task_facts.task_state == "open", run)
             && adapter.maybe_spawn_review(session_id, run).await?.is_none()
           {
             let cfg = features.config.get()?;
@@ -681,6 +698,96 @@ pub fn replay_owes_review(task_open: bool, run_records: &[RunRecord], run: &RunR
     }
   }
   true
+}
+
+#[derive(Default)]
+struct ReplayWorkFacts {
+  count: usize,
+  unstarted_count: usize,
+  latest_started_at: Option<UtcDateTime>,
+}
+
+#[derive(Default)]
+struct ReplayReviewFacts<'a> {
+  work_count: usize,
+  unstarted_work_count: usize,
+  work_by_id: std::collections::HashMap<&'a str, ReplayWorkFacts>,
+  latest_started_work: Option<(UtcDateTime, &'a str)>,
+  second_latest_started_work: Option<(UtcDateTime, &'a str)>,
+}
+
+impl ReplayReviewFacts<'_> {
+  fn owes_review(&self, task_open: bool, run: &RunRecord) -> bool {
+    if !task_open {
+      return false;
+    }
+    let own = self.work_by_id.get(run.id.as_str());
+    let own_work_count = own.map_or(0, |facts| facts.count);
+    let Some(started_at) = run.started_at else {
+      return self.work_count == own_work_count;
+    };
+    let own_unstarted_count = own.map_or(0, |facts| facts.unstarted_count);
+    if self.unstarted_work_count > own_unstarted_count {
+      return false;
+    }
+    let latest_other = if self.latest_started_work.is_some_and(|latest| latest.1 == run.id) {
+      self.second_latest_started_work
+    } else {
+      self.latest_started_work
+    };
+    if latest_other.is_some_and(|latest| latest > (started_at, run.id.as_str())) {
+      return false;
+    }
+    true
+  }
+}
+
+fn replay_review_facts_until<'a>(
+  run_records: &'a [RunRecord],
+  should_stop: &mut impl FnMut() -> bool,
+) -> Option<ReplayReviewFacts<'a>> {
+  let mut facts = ReplayReviewFacts::default();
+  for run in run_records {
+    if should_stop() {
+      return None;
+    }
+    if run.kind != RunKind::Work {
+      continue;
+    }
+    facts.work_count += 1;
+    let by_id = facts.work_by_id.entry(run.id.as_str()).or_default();
+    by_id.count += 1;
+    if let Some(started_at) = run.started_at {
+      if by_id.latest_started_at.is_none_or(|latest| latest < started_at) {
+        by_id.latest_started_at = Some(started_at);
+      }
+    } else {
+      facts.unstarted_work_count += 1;
+      by_id.unstarted_count += 1;
+    }
+  }
+  if should_stop() {
+    return None;
+  }
+  for (run_id, by_id) in &facts.work_by_id {
+    if should_stop() {
+      return None;
+    }
+    let Some(started_at) = by_id.latest_started_at else {
+      continue;
+    };
+    let latest = (started_at, *run_id);
+    if facts.latest_started_work.is_none_or(|current| current < latest) {
+      facts.second_latest_started_work = facts.latest_started_work;
+      facts.latest_started_work = Some(latest);
+    } else if facts.second_latest_started_work.is_none_or(|current| current < latest) {
+      facts.second_latest_started_work = Some(latest);
+    }
+  }
+  if should_stop() {
+    return None;
+  }
+  Some(facts)
 }
 
 /// The stop-request id settling a never-launched run on a closed node (`closed_task_stop_request_id`). The launch path
@@ -1121,6 +1228,73 @@ mod tests {
     let finished = run("finished", RunKind::Work, Some("2026-10-18T10:00:00Z"));
     assert!(!replay_owes_review(true, &[reserved.clone(), finished.clone()], &finished));
     assert!(!replay_owes_review(true, &[reserved.clone(), finished], &reserved));
+  }
+
+  #[test]
+  fn replay_review_scan_checks_each_run_and_stops_at_the_requested_count() {
+    let runs = [
+      run("older", RunKind::Work, Some("2026-10-18T10:00:00Z")),
+      run("newest", RunKind::Work, Some("2026-10-18T11:00:00Z")),
+      run("review", RunKind::Review, Some("2026-10-18T12:00:00Z")),
+    ];
+    let mut checks = 0;
+    let facts = replay_review_facts_until(&runs, &mut || {
+      checks += 1;
+      checks == 2
+    });
+
+    assert!(facts.is_none(), "the stopped scan publishes no partial review index");
+    assert_eq!(checks, 2, "the review walk checks before each run record");
+  }
+
+  #[test]
+  fn replay_review_index_checks_stop_during_the_unique_run_pass() {
+    let runs = [
+      run("older", RunKind::Work, Some("2026-10-18T10:00:00Z")),
+      run("newest", RunKind::Work, Some("2026-10-18T11:00:00Z")),
+      run("review", RunKind::Review, Some("2026-10-18T12:00:00Z")),
+    ];
+    let mut checks = 0;
+    let facts = replay_review_facts_until(&runs, &mut || {
+      checks += 1;
+      checks == 5
+    });
+
+    assert!(facts.is_none(), "the stop also interrupts the pass over unique work runs");
+    assert_eq!(checks, 5, "the unique-run pass checks before each summary entry");
+  }
+
+  #[test]
+  fn replay_review_index_answers_all_runs_after_one_scan() {
+    let runs = [
+      run("older", RunKind::Work, Some("2026-10-18T10:00:00Z")),
+      run("newest", RunKind::Work, Some("2026-10-18T11:00:00Z")),
+      run("review", RunKind::Review, Some("2026-10-18T12:00:00Z")),
+    ];
+    let mut checks = 0;
+    let facts = replay_review_facts_until(&runs, &mut || {
+      checks += 1;
+      false
+    })
+    .unwrap();
+
+    assert_eq!(checks, 7, "both review scans check each run and the end of each scan");
+    for run in &runs {
+      assert_eq!(facts.owes_review(true, run), replay_owes_review(true, &runs, run));
+      assert_eq!(facts.owes_review(false, run), replay_owes_review(false, &runs, run));
+    }
+    let outside = run("outside", RunKind::Work, Some("2026-10-18T11:30:00Z"));
+    assert_eq!(facts.owes_review(true, &outside), replay_owes_review(true, &runs, &outside));
+
+    let duplicate_ids = [
+      run("same", RunKind::Work, Some("2026-10-18T10:00:00Z")),
+      run("same", RunKind::Work, None),
+      run("other", RunKind::Work, Some("2026-10-18T11:00:00Z")),
+    ];
+    let facts = replay_review_facts_until(&duplicate_ids, &mut || false).unwrap();
+    for run in &duplicate_ids {
+      assert_eq!(facts.owes_review(true, run), replay_owes_review(true, &duplicate_ids, run));
+    }
   }
 
   #[test]

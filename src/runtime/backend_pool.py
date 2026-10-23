@@ -154,6 +154,19 @@ def cool(backend_id: str, resets_at: datetime.datetime | None) -> datetime.datet
   return until
 
 
+def _skip_reason(member: str, exclude: Collection[str], now: datetime.datetime) -> str | None:
+  """Why a selector must skip *member* at *now*, or None when it may take it.
+
+  The caller holds :data:`_lock`, so the cooldown read agrees with the position that same lock guards.
+  """
+  if member in exclude:
+    return "excluded by caller"
+  until = _cooling_until.get(member)
+  if until is not None and until > now:
+    return f"cooling until {until.isoformat(timespec='minutes')}"
+  return None
+
+
 def select(
     cfg: config.CharlieBotConfig,
     *,
@@ -171,16 +184,9 @@ def select(
     for offset in range(len(members)):
       index = (_position + offset) % len(members)
       member = members[index]
-      if member in exclude:
-        log.info("backend_pool_skipped", caller=caller, member=member, reason="excluded by caller")
-        continue
-      until = _cooling_until.get(member)
-      if until is not None and until > now:
-        log.info(
-            "backend_pool_skipped",
-            caller=caller,
-            member=member,
-            reason=f"cooling until {until.isoformat(timespec='minutes')}")
+      reason = _skip_reason(member, exclude, now)
+      if reason is not None:
+        log.info("backend_pool_skipped", caller=caller, member=member, reason=reason)
         continue
       _position = (index + 1) % len(members)
       log.info("backend_pool_selected", caller=caller, member=member, position=index)
@@ -211,16 +217,9 @@ def pick_ordered(
   now = models.utc_now()
   with _lock:
     for member in backends:
-      if member in exclude:
-        log.info("backend_pool_skipped", caller=caller, member=member, reason="excluded by caller")
-        continue
-      until = _cooling_until.get(member)
-      if until is not None and until > now:
-        log.info(
-            "backend_pool_skipped",
-            caller=caller,
-            member=member,
-            reason=f"cooling until {until.isoformat(timespec='minutes')}")
+      reason = _skip_reason(member, exclude, now)
+      if reason is not None:
+        log.info("backend_pool_skipped", caller=caller, member=member, reason=reason)
         continue
       log.info("backend_pool_selected", caller=caller, member=member, source="route")
       return config.require_backend_option(cfg, member, subject="routed backend ")

@@ -86,6 +86,44 @@ def test_endpoint_env_overrides_every_inherited_gateway_variable(monkeypatch: py
     assert prepared[name] == MODEL
 
 
+def test_factory_routes_custom_headers() -> None:
+  backend = factory.build(_option(headers={"x-litellm-tags": "deepseek"}), config.CharlieBotConfig())
+
+  prepared = backend._prepare_env({})
+
+  assert prepared[claude_code.GATEWAY_CUSTOM_HEADERS_ENV] == "x-litellm-tags: deepseek"
+
+
+def test_factory_routes_multiple_custom_headers() -> None:
+  backend = factory.build(
+      _option(headers={
+          "x-litellm-tags": "deepseek",
+          "x-client-name": "charliebot"
+      }), config.CharlieBotConfig())
+
+  prepared = backend._prepare_env({})
+
+  assert prepared[claude_code.GATEWAY_CUSTOM_HEADERS_ENV] == "x-litellm-tags: deepseek\nx-client-name: charliebot"
+
+
+def test_factory_omits_custom_headers_when_option_has_none_and_parent_sets_them() -> None:
+  backend = factory.build(_option(), config.CharlieBotConfig())
+
+  prepared = backend._prepare_env({claude_code.GATEWAY_CUSTOM_HEADERS_ENV: "inherited-value"})
+
+  assert claude_code.GATEWAY_CUSTOM_HEADERS_ENV not in prepared
+
+
+def test_claude_model_env_sets_exactly_five_model_variables() -> None:
+  assert claude_code.claude_model_env(MODEL) == {
+      "ANTHROPIC_MODEL": MODEL,
+      "ANTHROPIC_DEFAULT_OPUS_MODEL": MODEL,
+      "ANTHROPIC_DEFAULT_SONNET_MODEL": MODEL,
+      "ANTHROPIC_DEFAULT_HAIKU_MODEL": MODEL,
+      "CLAUDE_CODE_SUBAGENT_MODEL": MODEL,
+  }
+
+
 def test_factory_routes_named_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
 
   def credentials() -> types.SimpleNamespace:

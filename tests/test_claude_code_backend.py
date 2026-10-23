@@ -77,8 +77,10 @@ def test_prepare_env_strips_an_inherited_cc_anthropic_compatible_worker_env(monk
   account, not the gateway."""
   for name in claude_code.GATEWAY_ENDPOINT_ENV_NAMES:
     monkeypatch.setenv(name, "inherited-gateway-value")
+  inherited_env = {name: os.environ[name] for name in claude_code.GATEWAY_ENDPOINT_ENV_NAMES}
+  inherited_env.update({"PATH": "/usr/bin", "UNRELATED": "kept"})
 
-  env = claude_code.ClaudeCodeBackend(model="claude-opus-4-8")._prepare_env({"PATH": "/usr/bin", "UNRELATED": "kept"})
+  env = claude_code.ClaudeCodeBackend(model="claude-opus-4-8")._prepare_env(inherited_env)
 
   for name in claude_code.GATEWAY_ENDPOINT_ENV_NAMES:
     assert name not in env

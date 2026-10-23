@@ -1,3 +1,4 @@
+import os
 import types
 
 import pydantic
@@ -76,11 +77,8 @@ def test_endpoint_env_overrides_every_inherited_gateway_variable(monkeypatch: py
     monkeypatch.setenv(name, "inherited-gateway-value")
   backend = factory.build(_option(), config.CharlieBotConfig())
 
-  prepared = backend._prepare_env(
-      {
-          claude_code.GATEWAY_BASE_URL_ENV: "https://inherited-gateway",
-          claude_code.GATEWAY_AUTH_TOKEN_ENV: "inherited-token",
-      })
+  inherited_env = {name: os.environ[name] for name in claude_code.GATEWAY_ENDPOINT_ENV_NAMES}
+  prepared = backend._prepare_env(inherited_env)
 
   assert prepared[claude_code.GATEWAY_BASE_URL_ENV] == API_BASE
   assert prepared[claude_code.GATEWAY_AUTH_TOKEN_ENV] == "no-auth"

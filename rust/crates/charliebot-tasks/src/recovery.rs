@@ -492,13 +492,15 @@ async fn reconcile_node_inner(
   // --- 3. terminal runs replay their missing follow-up once ----------------
   if run_records_changed {
     let refreshed_run_records = store.list_run_records_sync(session_id)?;
-    replay_followups_with_records(features, adapter, session_id, counters, &refreshed_run_records).await?;
+    replay_followups_with_records(features, adapter, session_id, counters, &refreshed_run_records, stop).await?;
   } else {
     // Python refreshes the records in `_replay_followups` (`task_execution.py:2846-2864`). Reusing this sorted
     // snapshot is equivalent when steps 1 and 2 made no record changes, avoiding another run-directory scan per node.
-    replay_followups_with_records(features, adapter, session_id, counters, &run_records).await?;
+    replay_followups_with_records(features, adapter, session_id, counters, &run_records, stop).await?;
   }
-
+  if stop.is_some_and(StartupStop::is_cancelled) {
+    return Ok(());
+  }
   // --- 4. pending reports and pending inputs --------------------------------
   adapter.dispatch.recover_pending_reports(session_id).await?;
   adapter.dispatch.dispatch_pending(session_id).await?;
@@ -514,7 +516,7 @@ pub async fn replay_followups(
   counters: &mut PassCounters,
 ) -> anyhow::Result<()> {
   let run_records = features.store.list_run_records_sync(session_id)?;
-  replay_followups_with_records(features, adapter, session_id, counters, &run_records).await?;
+  replay_followups_with_records(features, adapter, session_id, counters, &run_records, None).await?;
   Ok(())
 }
 
@@ -526,6 +528,7 @@ async fn replay_followups_with_records(
   session_id: &str,
   counters: &mut PassCounters,
   run_records: &[RunRecord],
+  stop: Option<&StartupStop>,
 ) -> anyhow::Result<()> {
   let store = &features.store;
   let Some(meta) = store.load_meta(session_id).await? else {
@@ -587,7 +590,16 @@ async fn replay_followups_with_records(
     if meta.profile == TaskProfile::Manager && run.kind == RunKind::ManagerTurn {
       // The durable write landed and the crash came before after_run_finished: the owner-close recheck replays once.
       counters.followups += 1;
-      completion.recheck_close_requests(session_id, &run.id).await?;
+      match stop {
+        Some(stop) => {
+          if completion.recheck_close_requests_until(session_id, &run.id, stop).await?.is_none() {
+            return Ok(());
+          }
+        }
+        None => {
+          completion.recheck_close_requests(session_id, &run.id).await?;
+        }
+      }
       continue;
     }
     let task_type = meta.task.as_ref().and_then(|task| task.task_type);

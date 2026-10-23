@@ -702,8 +702,20 @@ impl Store {
 
   /// Return every descendant in the task index’s depth-first order.
   pub fn descendant_ids(&self, session_id: &str) -> StoreResult<Vec<String>> {
-    let index = self.tree_index()?;
-    descendant_ids(self, &index, session_id)
+    let mut never_stop = || false;
+    Ok(self.descendant_ids_until(session_id, &mut never_stop)?.expect("the no-stop descendant walk completes"))
+  }
+
+  /// Return every descendant in depth-first order, or `None` if startup recovery asks the walk to stop.
+  pub fn descendant_ids_until(
+    &self,
+    session_id: &str,
+    should_stop: &mut impl FnMut() -> bool,
+  ) -> StoreResult<Option<Vec<String>>> {
+    let Some(index) = self.tree_index_until(should_stop)? else {
+      return Ok(None);
+    };
+    descendant_ids_until(self, &index, session_id, should_stop)
   }
 
   /// Return every task node whose effective archive state is inherited or fact-derived.
@@ -1641,20 +1653,34 @@ impl Store {
 
   /// The task index, shared: every reader within one build's lifetime reads the same index, as `_get_index` hands out.
   fn tree_index(&self) -> StoreResult<Arc<TreeIndex>> {
+    let mut never_stop = || false;
+    Ok(self.tree_index_until(&mut never_stop)?.expect("the no-stop task index build completes"))
+  }
+
+  fn tree_index_until(&self, should_stop: &mut impl FnMut() -> bool) -> StoreResult<Option<Arc<TreeIndex>>> {
+    if should_stop() {
+      return Ok(None);
+    }
     let generation = self.task_tree_generation.load(Ordering::Acquire);
     if let Some(cached) = self.task_tree_index.lock().expect("task tree index mutex is not poisoned").as_ref()
       && cached.generation == generation
       && cached.built_at.elapsed() < TREE_INDEX_TTL
     {
-      return Ok(Arc::clone(&cached.index));
+      return Ok(Some(Arc::clone(&cached.index)));
     }
-    let index = Arc::new(build_tree_index(self)?);
+    let Some(index) = build_tree_index_until(self, should_stop)? else {
+      return Ok(None);
+    };
+    if should_stop() {
+      return Ok(None);
+    }
+    let index = Arc::new(index);
     self.task_tree_index_builds.fetch_add(1, Ordering::Relaxed);
     if self.task_tree_generation.load(Ordering::Acquire) == generation {
       *self.task_tree_index.lock().expect("task tree index mutex is not poisoned") =
         Some(CachedTreeIndex { generation, built_at: Instant::now(), index: Arc::clone(&index) });
     }
-    Ok(index)
+    Ok(Some(index))
   }
 
   fn publish_task_node(&self, meta: &SessionMetadata, event: &Value) -> StoreResult<()> {
@@ -1767,7 +1793,10 @@ impl Store {
   }
 }
 
-fn build_tree_index(store: &Store) -> StoreResult<TreeIndex> {
+fn build_tree_index_until(store: &Store, should_stop: &mut impl FnMut() -> bool) -> StoreResult<Option<TreeIndex>> {
+  if should_stop() {
+    return Ok(None);
+  }
   let sessions_dir = store.cfg.sessions_dir();
   let entries = match fs::read_dir(&sessions_dir) {
     Ok(entries) => entries,
@@ -1775,6 +1804,9 @@ fn build_tree_index(store: &Store) -> StoreResult<TreeIndex> {
   };
   let mut names = Vec::new();
   for entry in entries {
+    if should_stop() {
+      return Ok(None);
+    }
     let entry = entry.map_err(|error| path_error(&sessions_dir, error))?;
     if !entry.file_type().map_err(|error| path_error(&entry.path(), error))?.is_dir() {
       continue;
@@ -1789,9 +1821,14 @@ fn build_tree_index(store: &Store) -> StoreResult<TreeIndex> {
   // As `_build_index_sync` (`src/runtime/task_sessions.py:495`): `fresh_cached_metas` uses the same per-entry stat
   // check as `src/runtime/session_store.py:241` and returns shared metadata. The index owns Arcs, so cached metadata
   // incurs no deep clone while building or serving the index.
-  let mut cached = store.fresh_cached_metas()?;
+  let Some(mut cached) = store.fresh_cached_metas_until(should_stop)? else {
+    return Ok(None);
+  };
   let mut metas = HashMap::new();
   for name in names {
+    if should_stop() {
+      return Ok(None);
+    }
     if let Some(meta) = cached.remove(&name) {
       metas.insert(name, meta);
     } else if let Some(meta) = store.read_metadata_fresh(&name)? {
@@ -1802,9 +1839,15 @@ fn build_tree_index(store: &Store) -> StoreResult<TreeIndex> {
   }
   let mut children: HashMap<Option<String>, Vec<String>> = HashMap::new();
   for (session_id, meta) in &metas {
+    if should_stop() {
+      return Ok(None);
+    }
     children.entry(meta.task_parent_id.clone()).or_default().push(session_id.clone());
   }
   for child_ids in children.values_mut() {
+    if should_stop() {
+      return Ok(None);
+    }
     child_ids.sort_by(|left, right| {
       let left_meta = &metas[left];
       let right_meta = &metas[right];
@@ -1823,6 +1866,9 @@ fn build_tree_index(store: &Store) -> StoreResult<TreeIndex> {
   let mut structural = Vec::with_capacity(index.metas.len());
   let mut derived_archived_ids = Vec::new();
   for meta in index.metas.values() {
+    if should_stop() {
+      return Ok(None);
+    }
     let task_state = store.task_state_for_tree_index(&meta.id)?;
     let archived = archived_of(store, &index, &meta.id, &mut memo)?;
     index.task_state_by_id.insert(meta.id.clone(), task_state.clone());
@@ -1844,11 +1890,17 @@ fn build_tree_index(store: &Store) -> StoreResult<TreeIndex> {
       if archived { "True" } else { "False" },
     ));
   }
+  if should_stop() {
+    return Ok(None);
+  }
   structural.sort();
   derived_archived_ids.sort();
+  if should_stop() {
+    return Ok(None);
+  }
   index.revision = control_events::sha256_hex(&structural.join("\n"));
   index.derived_archived_ids = derived_archived_ids;
-  Ok(index)
+  Ok(Some(index))
 }
 
 /// Read the task lifecycle fact in the last 1000 non-empty lines, matching `_task_state_fast`.
@@ -2021,6 +2073,19 @@ fn ancestor_ids(index: &TreeIndex, session_id: &str) -> StoreResult<Vec<String>>
 /// Every transitive descendant in depth-first order. Only non-archived nodes count toward the cap, so a closed
 /// subtree of any size stays walkable.
 fn descendant_ids(store: &Store, index: &TreeIndex, session_id: &str) -> StoreResult<Vec<String>> {
+  let mut never_stop = || false;
+  Ok(descendant_ids_until(store, index, session_id, &mut never_stop)?.expect("the no-stop descendant walk completes"))
+}
+
+fn descendant_ids_until(
+  store: &Store,
+  index: &TreeIndex,
+  session_id: &str,
+  should_stop: &mut impl FnMut() -> bool,
+) -> StoreResult<Option<Vec<String>>> {
+  if should_stop() {
+    return Ok(None);
+  }
   if !index.metas.contains_key(session_id) {
     return Err(StoreError::not_found(format!("task {session_id} not found")));
   }
@@ -2031,6 +2096,9 @@ fn descendant_ids(store: &Store, index: &TreeIndex, session_id: &str) -> StoreRe
   let mut archived = HashMap::new();
   let mut open_count = 0;
   while let Some(next) = stack.pop() {
+    if should_stop() {
+      return Ok(None);
+    }
     if !seen.insert(next.clone()) {
       return Err(StoreError::conflict(vec![format!("task relation cycle through {next}")]));
     }
@@ -2046,7 +2114,10 @@ fn descendant_ids(store: &Store, index: &TreeIndex, session_id: &str) -> StoreRe
       }
     }
   }
-  Ok(output)
+  if should_stop() {
+    return Ok(None);
+  }
+  Ok(Some(output))
 }
 
 /// Whether a node is archived, counting an archived ancestor: a node is archived when its own task state or
@@ -2890,6 +2961,55 @@ pub(crate) mod tests {
     assert!(Arc::ptr_eq(&cached, first.metas.get(&root.id).unwrap()));
     assert!(Arc::ptr_eq(&first, &second));
     assert_eq!(store.child_ids(&root.id).unwrap(), [child.id]);
+  }
+
+  #[tokio::test]
+  async fn tree_index_build_stops_between_nodes_without_publishing_a_partial_index() {
+    let home = tempfile::tempdir().unwrap();
+    let store = make_store(home.path());
+    let root = create_node(&store, "stop-root", None, TaskProfile::Manager).await;
+    let child = create_node(&store, "stop-child", Some(&root.id), TaskProfile::Manager).await;
+    let leaf = create_node(&store, "stop-leaf", Some(&child.id), TaskProfile::Worker).await;
+    for id in [&root.id, &child.id, &leaf.id] {
+      store.get_session(id).await.unwrap().unwrap();
+    }
+
+    store.invalidate_tree_index();
+    let builds_before = store.task_tree_index_build_count();
+    let mut checks = 0;
+    let stopped = store
+      .descendant_ids_until(&root.id, &mut || {
+        checks += 1;
+        checks == 10
+      })
+      .unwrap();
+
+    assert!(stopped.is_none(), "a stopped index build returns no partial descendant list");
+    assert_eq!(checks, 10, "the metadata index checks the stop between node reads");
+    assert_eq!(store.task_tree_index_build_count(), builds_before, "a stopped build is not published");
+    assert_eq!(store.descendant_ids(&root.id).unwrap(), [child.id, leaf.id]);
+    assert_eq!(store.task_tree_index_build_count(), builds_before + 1, "the retry publishes one complete index");
+  }
+
+  #[tokio::test]
+  async fn descendant_walk_checks_the_stop_for_each_node() {
+    let home = tempfile::tempdir().unwrap();
+    let store = make_store(home.path());
+    let root = create_node(&store, "walk-root", None, TaskProfile::Manager).await;
+    let child = create_node(&store, "walk-child", Some(&root.id), TaskProfile::Manager).await;
+    let leaf = create_node(&store, "walk-leaf", Some(&child.id), TaskProfile::Worker).await;
+    assert_eq!(store.descendant_ids(&root.id).unwrap(), [child.id.clone(), leaf.id]);
+
+    let mut checks = 0;
+    let stopped = store
+      .descendant_ids_until(&root.id, &mut || {
+        checks += 1;
+        checks == 4
+      })
+      .unwrap();
+
+    assert!(stopped.is_none(), "a stopped walk discards its partial descendant list");
+    assert_eq!(checks, 4, "the cached index lookup and each visited descendant check the stop");
   }
 
   #[tokio::test]

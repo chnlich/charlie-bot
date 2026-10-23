@@ -457,15 +457,32 @@ impl Store {
   }
 
   pub(crate) fn fresh_cached_metas(&self) -> StoreResult<HashMap<String, Arc<SessionMetadata>>> {
+    let mut never_stop = || false;
+    Ok(self.fresh_cached_metas_until(&mut never_stop)?.expect("the no-stop metadata freshness check completes"))
+  }
+
+  pub(crate) fn fresh_cached_metas_until(
+    &self,
+    should_stop: &mut impl FnMut() -> bool,
+  ) -> StoreResult<Option<HashMap<String, Arc<SessionMetadata>>>> {
+    if should_stop() {
+      return Ok(None);
+    }
     let ids: Vec<String> =
       self.metadata_cache.lock().expect("metadata cache mutex is not poisoned").keys().cloned().collect();
     let mut fresh = HashMap::new();
     for id in ids {
+      if should_stop() {
+        return Ok(None);
+      }
       if let Some(meta) = self.fresh_cached_meta(&id)? {
         fresh.insert(id, meta);
       }
     }
-    Ok(fresh)
+    if should_stop() {
+      return Ok(None);
+    }
+    Ok(Some(fresh))
   }
 
   pub(crate) fn read_metadata_path(&self, path: &Path) -> StoreResult<Option<SessionMetadata>> {

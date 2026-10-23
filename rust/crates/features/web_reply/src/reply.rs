@@ -549,6 +549,25 @@ mod tests {
     }
   }
 
+  // Python: tests/test_web_reply.py::test_markdown_link_labels_set_the_reply_count_and_replay_readback
+  // Python: tests/test_web_reply.py::test_a_bare_url_counts_in_full_in_a_web_reply
+  #[tokio::test]
+  async fn a_markdown_link_counts_as_its_label_and_a_bare_url_counts_in_full() {
+    let home = Home::new();
+    let sid = home.manager("session", None).await;
+    let diff = format!("https://example.com/{}", "d".repeat(150 - "https://example.com/".len()));
+    let pr = format!("https://example.com/{}", "p".repeat(183 - "https://example.com/".len()));
+    let bare = format!(" See https://example.com/{}", "u".repeat(120));
+    let text = format!("{}[diff]({diff})[PR 页]({pr}){bare}", "x".repeat(200));
+    // The 200 body characters, the labels `diff` and `PR 页` (4 characters each), then the bare URL in full.
+    let chars = 208 + bare.chars().count();
+
+    let readback = post_web_reply(&home.features, &sid, &text, None).await.expect("the reply posts");
+
+    assert_eq!(readback, json!({"posted": true, "chars": chars, "over_budget": false, "answers": null}));
+    assert_eq!(replies(&home, &sid), vec![(json!(text), json!({"answers": null, "chars": chars}))]);
+  }
+
   #[tokio::test]
   async fn a_reply_answers_the_user_message_that_woke_its_turn() {
     let home = Home::new();

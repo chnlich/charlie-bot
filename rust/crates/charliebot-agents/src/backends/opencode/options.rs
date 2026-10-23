@@ -52,4 +52,12 @@ mod tests {
     assert!(OpenCodeOption::from_fields(&fields("other: value\n")).unwrap_err().contains("other"));
     assert!(OpenCodeOption::from_fields(&fields("proxy_url: 4\n")).unwrap_err().contains("proxy_url"));
   }
+
+  // Python: tests/test_opencode_backend.py::test_opencode_option_rejects_invalid_fields
+  #[test]
+  fn option_model_accepts_a_positive_context_limit_and_rejects_zero_and_negative() {
+    assert!(OpenCodeOption::from_fields(&fields("context_limit: 420000\n")).is_ok());
+    assert!(OpenCodeOption::from_fields(&fields("context_limit: 0\n")).is_err());
+    assert!(OpenCodeOption::from_fields(&fields("context_limit: -1\n")).is_err());
+  }
 }

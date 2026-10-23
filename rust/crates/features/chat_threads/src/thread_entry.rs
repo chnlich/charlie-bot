@@ -26,11 +26,12 @@
 //! wake is `charliebot_tasks::master_trigger::trigger_master`. Background work (the round wake, the ack, the nudge)
 //! runs as `spawn_logged` tasks, which log a failure as `background_task_failed`.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
 use std::future::Future;
 use std::path::PathBuf;
-use std::sync::{Arc, LazyLock};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, LazyLock, Mutex as StdMutex, Weak};
 use std::time::Duration;
 
 use anyhow::Context;
@@ -45,11 +46,9 @@ use charliebot_core::pystr;
 use charliebot_registry::turn::{PromptSource, RuleSegment};
 use charliebot_registry::{FeatureContext, RunningTurnInputs, StateError};
 use charliebot_sched::triggers::{PendingTrigger, TriggerCreateError, TriggerManager, TriggerStatus};
-use charliebot_store::message_utils::{
-  SESSION_NOT_FOUND_DETAIL, build_agent_message_event, master_done_input_event_ids,
-};
+use charliebot_store::message_utils::{SESSION_NOT_FOUND_DETAIL, master_done_input_event_ids};
 use charliebot_store::metadata::{SessionMetadata, SessionStatus, TaskProfile, UtcDateTime};
-use charliebot_store::{CreateTask, MessageProvenance, SharedChatEvent, Store, StoreError, StoreResult, TaskCaller};
+use charliebot_store::{CreateTask, SharedChatEvent, Store, StoreError, StoreResult, TaskCaller};
 use charliebot_tasks::master_queue;
 use charliebot_tasks::master_trigger::{self, TriggerMasterRequest};
 use chrono_tz::Tz;
@@ -91,6 +90,25 @@ const NO_REPLY_NOTICE: &str = "No reply was posted for this mention; the details
   Mention me again for a thread answer.";
 /// The follow-trigger floor the label carries (`_FOLLOW_FLOOR_RE`).
 static FOLLOW_FLOOR_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"floor=([0-9.]+)").expect("valid pattern"));
+static SESSION_LOCKS: LazyLock<StdMutex<HashMap<String, Weak<tokio::sync::Mutex<()>>>>> =
+  LazyLock::new(|| StdMutex::new(HashMap::new()));
+static NEXT_EPHEMERAL_POST_ID: AtomicU64 = AtomicU64::new(1);
+
+fn ephemeral_post_id() -> u64 {
+  NEXT_EPHEMERAL_POST_ID.fetch_add(1, Ordering::Relaxed)
+}
+
+/// Return the process-local lock shared by reply, summon, and audit work for one session.
+pub fn session_lock_for(session_id: &str) -> Arc<tokio::sync::Mutex<()>> {
+  let mut locks = SESSION_LOCKS.lock().expect("thread session lock map is not poisoned");
+  locks.retain(|_, lock| lock.strong_count() > 0);
+  if let Some(lock) = locks.get(session_id).and_then(Weak::upgrade) {
+    return lock;
+  }
+  let lock = Arc::new(tokio::sync::Mutex::new(()));
+  locks.insert(session_id.to_string(), Arc::downgrade(&lock));
+  lock
+}
 
 /// One platform's facts the shared helpers and the entries agree on (`ThreadPlatform`). `name` is the summon
 /// event-block key and the prefix of every persisted marker. `id_key` orders the platform's message ids.
@@ -171,13 +189,18 @@ impl IdOrdering {
   }
 }
 
-/// One eligible thread message as the round side reads it (`ThreadMessage`). `user` is None when the platform names
-/// none, and `text` is empty when it names none.
+/// One thread message as the round side reads it (`ThreadMessage`). `user` is None when the platform names none, and
+/// `text` is empty when it names none. The remaining fields support keyed-post lookup and the reply freshness gate.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ThreadMessage {
   pub id: String,
   pub user: Option<String>,
   pub text: String,
+  pub created_at: Option<String>,
+  pub metadata: Option<Value>,
+  pub bot_id: Option<String>,
+  pub is_bot: bool,
+  pub eligible: bool,
 }
 
 /// Borrow a JSON event from either an owned value or the shared event cache.
@@ -203,8 +226,18 @@ pub trait ThreadAdapter: Send + Sync {
   /// The platform this adapter speaks for (the ABC's `platform` attribute).
   fn platform(&self) -> &ThreadPlatform;
 
-  /// Post one text message into the thread `address` names; an error here is retried by `post_with_retry`.
-  fn post<'a>(&'a self, address: &'a Value, text: &'a str) -> BoxFuture<'a, anyhow::Result<()>>;
+  /// Post one keyed text message into the thread `address` names.
+  fn post<'a>(&'a self, address: &'a Value, text: &'a str, post_key: &'a str) -> BoxFuture<'a, anyhow::Result<()>>;
+
+  /// Find this bot's message for `post_key`, using its content and lower timestamp bound when the platform needs them.
+  fn find_own_post_by_key<'a>(
+    &'a self,
+    address: &'a Value,
+    post_key: &'a str,
+    text: &'a str,
+    created_after: &'a str,
+    messages: Option<&'a [ThreadMessage]>,
+  ) -> BoxFuture<'a, anyhow::Result<bool>>;
 
   /// Light the summon ack the summon block carries.
   fn add_ack<'a>(&'a self, block: &'a Value) -> BoxFuture<'a, anyhow::Result<()>>;
@@ -212,12 +245,23 @@ pub trait ThreadAdapter: Send + Sync {
   /// Clear the summon ack the summon block carries.
   fn remove_ack<'a>(&'a self, block: &'a Value) -> BoxFuture<'a, anyhow::Result<()>>;
 
-  /// The thread `origin` names: its eligible messages, in platform order.
-  fn read_eligible<'a>(
+  /// The thread `origin` names: every message, in platform order.
+  fn read_thread<'a>(
     &'a self,
     origin: &'a Value,
     config: &'a CharlieBotConfig,
   ) -> BoxFuture<'a, anyhow::Result<Vec<ThreadMessage>>>;
+
+  /// The thread's eligible messages, in platform order.
+  fn read_eligible<'a>(
+    &'a self,
+    origin: &'a Value,
+    config: &'a CharlieBotConfig,
+  ) -> BoxFuture<'a, anyhow::Result<Vec<ThreadMessage>>> {
+    Box::pin(async move {
+      Ok(self.read_thread(origin, config).await?.into_iter().filter(|message| message.eligible).collect())
+    })
+  }
 
   /// The address object `post` accepts for the thread `origin` names.
   fn address_of(&self, origin: &Value) -> Value;
@@ -521,21 +565,38 @@ pub fn unread_after<'a, T>(
     .collect()
 }
 
-/// Post one thread reply, retrying on failure; true when the platform accepted it (`post_with_retry`). Exhausting the
-/// retries logs `<name>_post_gave_up` and returns false: the caller decides what a failed post means.
-pub async fn post_with_retry(adapter: &dyn ThreadAdapter, address: &Value, text: &str, session_id: &str) -> bool {
+/// Post one keyed thread reply, retrying on failure; true when the platform accepted it (`post_with_retry`). Exhausting
+/// the retries logs `<name>_post_gave_up` and returns false: the caller decides what a failed post means.
+/// Find one keyed post before sending; Slack checks again after a failed write to recover accepted posts.
+pub async fn post_with_retry(
+  adapter: &dyn ThreadAdapter,
+  address: &Value,
+  text: &str,
+  session_id: &str,
+  post_key: &str,
+  created_after: &str,
+  messages: Option<&[ThreadMessage]>,
+) -> anyhow::Result<bool> {
   let platform = adapter.platform();
+  if adapter.find_own_post_by_key(address, post_key, text, created_after, messages).await? {
+    return Ok(true);
+  }
   let attempts = RETRY_DELAYS.len() + 1;
   for attempt in 1..=attempts {
-    match adapter.post(address, text).await {
-      Ok(()) => return true,
-      Err(error) if attempt == attempts => {
-        let event = format!("{}_post_gave_up", platform.name);
-        let thread = adapter.log_fields(address);
-        tracing::error!(%event, session = session_id, thread = %thread, attempts, error = %error);
-        return false;
-      }
+    match adapter.post(address, text, post_key).await {
+      Ok(()) => return Ok(true),
       Err(error) => {
+        if platform.name == "slack"
+          && adapter.find_own_post_by_key(address, post_key, text, created_after, None).await?
+        {
+          return Ok(true);
+        }
+        if attempt == attempts {
+          let event = format!("{}_post_gave_up", platform.name);
+          let thread = adapter.log_fields(address);
+          tracing::error!(%event, session = session_id, thread = %thread, attempts, error = %error);
+          return Ok(false);
+        }
         let event = format!("{}_post_retry", platform.name);
         let thread = adapter.log_fields(address);
         tracing::warn!(%event, session = session_id, thread = %thread, attempt, error = %error);
@@ -543,7 +604,7 @@ pub async fn post_with_retry(adapter: &dyn ThreadAdapter, address: &Value, text:
       }
     }
   }
-  unreachable!("the last attempt returns")
+  unreachable!("the final keyed-post attempt returns")
 }
 
 /// Clear the summon ack once its question is closed (`ack_clear`). The remove runs as its own logged task, and a block
@@ -620,7 +681,17 @@ pub async fn assert_thread_fresh(
   let session = require_thread_session(platform, features, session_id).await?;
   let config = features.config.get().map_err(ThreadReplyError::failure)?;
   let watermark = watermark_of(&session.meta, platform);
-  let unread = unread_messages(adapter.as_ref(), &session.origin, &config, watermark.as_deref()).await?;
+  let messages = adapter.read_thread(&session.origin, &config).await.map_err(ThreadReplyError::failure)?;
+  assert_thread_fresh_messages(platform, watermark.as_deref(), &messages)
+}
+
+fn assert_thread_fresh_messages(
+  platform: &ThreadPlatform,
+  watermark: Option<&str>,
+  messages: &[ThreadMessage],
+) -> Result<(), ThreadReplyError> {
+  let unread =
+    unread_after(messages, |message| message.eligible, |message| message.id.as_str(), watermark, platform.id_key);
   if unread.is_empty() {
     return Ok(());
   }
@@ -653,6 +724,19 @@ pub async fn post_reply(
   session_id: &str,
   text: &str,
 ) -> Result<Value, ThreadReplyError> {
+  post_reply_with_caller_context(adapter, features, session_id, text, None, None).await
+}
+
+/// Post a keyed reply with the caller's run start time for Discord's content lookup.
+pub async fn post_reply_with_caller_context(
+  adapter: &Arc<dyn ThreadAdapter>,
+  features: &Arc<FeatureContext>,
+  session_id: &str,
+  text: &str,
+  request_id: Option<&str>,
+  run_started_at: Option<&str>,
+) -> Result<Value, ThreadReplyError> {
+  let _session_guard = session_lock_for(session_id).lock_owned().await;
   let platform = adapter.platform();
   let session = require_thread_session(platform, features, session_id).await?;
   if pystr::strip(text).is_empty() {
@@ -676,8 +760,40 @@ pub async fn post_reply(
   let ack_block = bound.as_ref().map(|(_, block)| (*block).clone());
   let address = adapter.address_of(&session.origin);
   let bodies = chunk_text(text, platform.max_post_chars);
+  let event_id =
+    request_id.map(|request_id| charliebot_store::control_events::stable_request_event_id(session_id, request_id));
+  if let Some(request_id) = request_id {
+    let events = features.store.load_all_facts_view_sync(session_id)?;
+    if let Some(existing) = charliebot_store::control_events::replay_request_event(
+      events.iter(),
+      event_id.as_deref().expect("a request id derives an event id"),
+      request_id,
+      platform.reply_event_type,
+      text,
+      None,
+    )? {
+      return Ok(reply_receipt(&existing, &operator_only_links, platform));
+    }
+  }
+
+  let thread_messages = adapter.read_thread(&session.origin, &config).await.map_err(ThreadReplyError::failure)?;
+  assert_thread_fresh_messages(platform, watermark_of(&session.meta, platform).as_deref(), &thread_messages)?;
+  let post_request_id = request_id
+    .map(str::to_string)
+    .unwrap_or_else(|| format!("operator-reply:{}", charliebot_store::control_events::new_request_id()));
+  let created_after = run_started_at.map(str::to_string).unwrap_or_else(|| UtcDateTime::now().to_python_isoformat());
   for (index, body) in bodies.iter().enumerate() {
-    if !post_with_retry(adapter.as_ref(), &address, body, session_id).await {
+    if !post_with_retry(
+      adapter.as_ref(),
+      &address,
+      body,
+      session_id,
+      &format!("{post_request_id}#{}", index + 1),
+      &created_after,
+      Some(&thread_messages),
+    )
+    .await?
+    {
       let attempts = RETRY_DELAYS.len() + 1;
       return Err(ThreadReplyError::refused(
         StatusCode::BAD_GATEWAY,
@@ -695,17 +811,46 @@ pub async fn post_reply(
   drop(bound);
   // Python appends to its cached list in place (`chat_events.py:221-224`); release the Arc before the same write.
   drop(chat_events);
-  features
-    .store
-    .persist_and_broadcast(
-      session_id,
-      json!({
-        "type": platform.reply_event_type,
-        "content": text,
-        (platform.reply_event_type): {"answers": answers, "chars": chars, "chunks": bodies.len()},
-      }),
-    )
-    .await?;
+  let payload = json!({"answers": answers, "chars": chars, "chunks": bodies.len()});
+  let _event = if let (Some(request_id), Some(event_id)) = (request_id, event_id.as_deref()) {
+    let mut event = json!({
+      "id": event_id,
+      "request_id": request_id,
+      "type": platform.reply_event_type,
+      "content": text,
+      (platform.reply_event_type): payload,
+    });
+    let epoch = features.store.prime_aggregator(session_id).await?;
+    {
+      let guard = features.store.control_lock().await;
+      let events = features.store.load_all_facts_view_sync(session_id)?;
+      if let Some(existing) = charliebot_store::control_events::replay_request_event(
+        events.iter(),
+        event_id,
+        request_id,
+        platform.reply_event_type,
+        text,
+        None,
+      )? {
+        return Ok(reply_receipt(&existing, &operator_only_links, platform));
+      }
+      event = features.store.append_control_fact(&guard, session_id, event).await?;
+    }
+    features.store.announce_appended_event(session_id, &event, epoch).await?;
+    event
+  } else {
+    features
+      .store
+      .persist_and_broadcast(
+        session_id,
+        json!({
+          "type": platform.reply_event_type,
+          "content": text,
+          (platform.reply_event_type): payload,
+        }),
+      )
+      .await?
+  };
   if let Some(block) = &ack_block {
     ack_clear(adapter, block, session_id);
   }
@@ -740,9 +885,57 @@ pub async fn post_reply_with_request_id(
   features: &Arc<FeatureContext>,
   session_id: &str,
   text: &str,
-  _request_id: Option<&str>,
+  request_id: Option<&str>,
 ) -> Result<Value, ThreadReplyError> {
-  post_reply(adapter, features, session_id, text).await
+  post_reply_with_caller_context(adapter, features, session_id, text, request_id, None).await
+}
+
+fn reply_receipt(event: &Value, operator_only_links: &[String], platform: &ThreadPlatform) -> Value {
+  let payload = event.get(platform.reply_event_type).expect("a stored thread reply contains its platform payload");
+  let chars = payload.get("chars").and_then(Value::as_u64).expect("a stored reply contains its character count");
+  json!({
+    "posted": true,
+    "text": event["content"],
+    "operator_only_note": operator_only_note(operator_only_links),
+    "chars": chars,
+    "chunks": payload["chunks"],
+    "over_budget": chars as usize > REPLY_BUDGET_CHARS,
+    "answers": payload["answers"],
+  })
+}
+
+async fn persist_request_event(
+  features: &FeatureContext,
+  session_id: &str,
+  request_id: &str,
+  event_type: &str,
+  content: &str,
+  fields: Map<String, Value>,
+) -> Result<Value, ThreadReplyError> {
+  let event_id = charliebot_store::control_events::stable_request_event_id(session_id, request_id);
+  let epoch = features.store.prime_aggregator(session_id).await?;
+  let event = {
+    let guard = features.store.control_lock().await;
+    let events = features.store.load_all_facts_view_sync(session_id)?;
+    let request_fields = Value::Object(fields.clone());
+    if let Some(existing) = charliebot_store::control_events::replay_request_event(
+      events.iter(),
+      &event_id,
+      request_id,
+      event_type,
+      content,
+      Some(&request_fields),
+    )? {
+      return Ok(existing);
+    }
+    let mut event = json!({"id": event_id, "request_id": request_id, "type": event_type, "content": content});
+    for (key, value) in fields {
+      event[key] = value;
+    }
+    features.store.append_control_fact(&guard, session_id, event).await?
+  };
+  features.store.announce_appended_event(session_id, &event, epoch).await?;
+  Ok(event)
 }
 
 /// Advance the session's read watermark over `message_ids` and return the readback (`ack_messages`). Refusals: 404
@@ -834,11 +1027,19 @@ pub async fn audit_round(
   adapter: &Arc<dyn ThreadAdapter>,
   features: &Arc<FeatureContext>,
   session_id: &str,
-  chat_events: Arc<Vec<SharedChatEvent>>,
-  target: Value,
+  _chat_events: Arc<Vec<SharedChatEvent>>,
+  _target: Value,
   input_event_id: &str,
 ) -> Result<Option<Arc<Vec<SharedChatEvent>>>, ThreadReplyError> {
+  let _session_guard = session_lock_for(session_id).lock_owned().await;
   let platform = adapter.platform();
+  let chat_events = load_chat_events(features, session_id).await?;
+  let Some(input_event) = event_by_id(&chat_events, input_event_id) else {
+    return Ok(Some(chat_events));
+  };
+  let Some(target) = input_event.get(platform.name).filter(|block| block.is_object()).cloned() else {
+    return Ok(Some(chat_events));
+  };
   let summon_id = summon_of(&target, input_event_id);
   let content = event_by_id(&chat_events, &summon_id)
     .and_then(|summon| summon.get("content"))
@@ -857,10 +1058,6 @@ pub async fn audit_round(
       return Ok(Some(chat_events));
     }
     let text = nudge_text(platform);
-    let mut nudge = build_agent_message_event(
-      &text,
-      MessageProvenance { from_session: session_id.to_string(), from_session_name: platform.display_name.to_string() },
-    );
     let mut block = Map::new();
     for key in platform.block_keys {
       if let Some(value) = target.get(*key) {
@@ -868,10 +1065,23 @@ pub async fn audit_round(
       }
     }
     block.insert("nudge_of".to_string(), json!(summon_id));
-    nudge[platform.name] = Value::Object(block);
-    // Python appends to its cached list in place (`chat_events.py:221-224`); release our Arc before writing.
     drop(chat_events);
-    let stored = features.store.persist_and_broadcast(session_id, nudge).await?;
+    let dispatcher =
+      features.startup.require::<charliebot_tasks::dispatch::Dispatcher>().map_err(ThreadReplyError::failure)?;
+    let stored = dispatcher
+      .admit_input(
+        session_id,
+        event_types::AGENT_MESSAGE,
+        &text,
+        "agent",
+        json!({
+          "request_id": format!("{}-nudge:{summon_id}", platform.name),
+          "from_session": session_id,
+          "from_session_name": platform.display_name,
+          "fields": {(platform.name): Value::Object(block)},
+        }),
+      )
+      .await?;
     let nudge_id = stored.get("id").and_then(Value::as_str).expect("a persisted event carries its id");
     spawn_master_wake(
       features,
@@ -890,24 +1100,30 @@ pub async fn audit_round(
   if noticed(platform, &chat_events, &summon_id) {
     return Ok(Some(chat_events));
   }
-  if !post_with_retry(adapter.as_ref(), &target, NO_REPLY_NOTICE, session_id).await {
+  let summon_event = event_by_id(&chat_events, &summon_id).expect("a nudge references its original summon event");
+  let created_after = summon_event.get("timestamp").and_then(Value::as_str).expect("a summon event has a timestamp");
+  let request_id = format!("{}-notice:{summon_id}", platform.name);
+  if !post_with_retry(
+    adapter.as_ref(),
+    &target,
+    NO_REPLY_NOTICE,
+    session_id,
+    &format!("{request_id}#1"),
+    created_after,
+    None,
+  )
+  .await?
+  {
     return Ok(Some(chat_events));
   }
+  let content = format!(
+    "This {} mention got no reply from its round or the nudge round; the thread was told so.",
+    platform.display_name
+  );
+  let mut fields = Map::new();
+  fields.insert(platform.notice_key(), json!({event_types::INPUT_EVENT_ID: summon_id}));
   drop(chat_events);
-  features
-    .store
-    .persist_and_broadcast(
-      session_id,
-      json!({
-        "type": event_types::ASSISTANT_ERROR,
-        "content": format!(
-          "This {} mention got no reply from its round or the nudge round; the thread was told so.",
-          platform.display_name
-        ),
-        (platform.notice_key()): {event_types::INPUT_EVENT_ID: summon_id},
-      }),
-    )
-    .await?;
+  persist_request_event(features, session_id, &request_id, event_types::ASSISTANT_ERROR, &content, fields).await?;
   ack_clear(adapter, &target, session_id);
   let event = format!("{}_reply_notice", platform.name);
   let thread = adapter.log_fields(&target);
@@ -958,40 +1174,47 @@ pub async fn backfill_lost_summons(
     if origin_of(&meta, platform).is_none() {
       continue;
     }
-    let mut chat_events = load_chat_events(features, &meta.id).await?;
-    let owned = master_queue::queued_user_event_ids(features, &meta.id)?;
-    let running: HashSet<String> =
-      features.startup.require::<RunningTurnInputs>()?.user_event_ids(&meta.id).into_iter().collect();
-    let lost = lost_summons(platform, &chat_events, &owned, &running);
-    if !lost.is_empty() {
-      drop(chat_events);
+    let mut chat_events = {
+      let _session_guard = session_lock_for(&meta.id).lock_owned().await;
+      let chat_events = load_chat_events(features, &meta.id).await?;
+      let owned = master_queue::queued_user_event_ids(features, &meta.id)?;
+      let running: HashSet<String> =
+        features.startup.require::<RunningTurnInputs>()?.user_event_ids(&meta.id).into_iter().collect();
+      let lost = lost_summons(platform, &chat_events, &owned, &running);
       for event in &lost {
-        // The marker lands before the post: a crash between them costs one notice, not one notice per boot.
         let summon_id = event_id(event).to_string();
-        features
-          .store
-          .persist_and_broadcast(
-            &meta.id,
-            json!({
-              "type": event_types::ASSISTANT_ERROR,
-              "content": format!(
-                "这条 {} 召唤在服务重启时还排在队列里，没有任何轮次回答它；已在对应线程里说明。",
-                platform.display_name
-              ),
-              (platform.backfill_key()): {event_types::INPUT_EVENT_ID: summon_id},
-            }),
-          )
-          .await?;
         let block = event.get(platform.name).expect("lost summons carry their block");
-        post_with_retry(adapter.as_ref(), block, LOST_SUMMON_NOTICE, &meta.id).await;
+        let request_id = format!("{}-lost:{summon_id}", platform.name);
+        let created_after =
+          event.get("timestamp").and_then(Value::as_str).expect("a lost summon event has a timestamp");
+        if !post_with_retry(
+          adapter.as_ref(),
+          block,
+          LOST_SUMMON_NOTICE,
+          &meta.id,
+          &format!("{request_id}#1"),
+          created_after,
+          None,
+        )
+        .await?
+        {
+          continue;
+        }
+        let mut fields = Map::new();
+        fields.insert(platform.backfill_key(), json!({event_types::INPUT_EVENT_ID: summon_id}));
+        let content = format!(
+          "这条 {} 召唤在服务重启时还排在队列里，没有任何轮次回答它；已在对应线程里说明。",
+          platform.display_name
+        );
+        persist_request_event(features, &meta.id, &request_id, event_types::ASSISTANT_ERROR, &content, fields).await?;
         ack_clear(adapter, block, &meta.id);
         reported += 1;
         let log_event = format!("{}_backfill_lost_summon", platform.name);
         let thread = adapter.log_fields(block);
         tracing::info!(event = %log_event, session = %meta.id, thread = %thread, input_event_id = %summon_id);
       }
-      chat_events = load_chat_events(features, &meta.id).await?;
-    }
+      load_chat_events(features, &meta.id).await?
+    };
 
     let dones: Vec<usize> = chat_events
       .iter()
@@ -1205,7 +1428,9 @@ async fn route_thread_session(
     Err(error) => {
       let message = format!("backend router failed: {error}");
       let address = adapter.address_of(origin);
-      adapter.post(&address, &message).await?;
+      adapter
+        .post(&address, &message, &format!("{}-routerror:{}#1", adapter.platform().name, ephemeral_post_id()))
+        .await?;
       return Err(ThreadReplyError::failure(message));
     }
   };
@@ -1217,7 +1442,9 @@ async fn route_thread_session(
   let Some(option) = selected else {
     let message = format!("no backend is available for the thread session: {}", pool.recovery_report(&cfg));
     let address = adapter.address_of(origin);
-    adapter.post(&address, &message).await?;
+    adapter
+      .post(&address, &message, &format!("{}-routerror:{}#1", adapter.platform().name, ephemeral_post_id()))
+      .await?;
     return Err(ThreadReplyError::failure(message));
   };
   Ok((Some(option.id), Some(route)))
@@ -1239,8 +1466,34 @@ pub async fn accept_summon(
   fields.insert(format!("{}_user", platform.name), json!(summon.user));
   let thread = Value::Object(fields);
   let session_id = summon.session_id;
+  let mention_id = summon
+    .block
+    .get(platform.mention_key)
+    .and_then(Value::as_str)
+    .ok_or_else(|| ThreadReplyError::failure(format!("the summon block carries no {}", platform.mention_key)))?;
+  let request_id = format!("{}-mention:{mention_id}", platform.name);
+  let _session_guard = session_lock_for(session_id).lock_owned().await;
+  let existing_session = features.store.get_session(session_id).await?;
+  if existing_session.is_some() {
+    let events = features.store.load_all_facts_view_sync(session_id)?;
+    let mut fields = Map::new();
+    fields.insert(platform.name.to_string(), summon.block.clone());
+    let extra_fields = Value::Object(fields);
+    if charliebot_store::control_events::replay_request_event(
+      events.iter(),
+      &charliebot_store::control_events::stable_request_event_id(session_id, &request_id),
+      &request_id,
+      event_types::AGENT_MESSAGE,
+      summon.content,
+      Some(&extra_fields),
+    )?
+    .is_some()
+    {
+      return Ok(session_id.to_string());
+    }
+  }
 
-  match features.store.get_session(session_id).await? {
+  match existing_session {
     None => {
       let name = format!("{} {}", summon.label, local_time());
       let (backend, route) = route_thread_session(adapter, features, summon.origin).await?;
@@ -1287,20 +1540,24 @@ pub async fn accept_summon(
     }
   }
 
-  let mention_id = summon
-    .block
-    .get(platform.mention_key)
-    .and_then(Value::as_str)
-    .ok_or_else(|| ThreadReplyError::failure(format!("the summon block carries no {}", platform.mention_key)))?;
   consume_mention(platform, features, session_id, mention_id).await?;
   ensure_group(platform, features, session_id, summon.label).await;
-
-  let mut event = build_agent_message_event(
-    summon.content,
-    MessageProvenance { from_session: session_id.to_string(), from_session_name: platform.display_name.to_string() },
-  );
-  event[platform.name] = summon.block.clone();
-  let stored = features.store.persist_and_broadcast(session_id, event).await?;
+  let dispatcher =
+    features.startup.require::<charliebot_tasks::dispatch::Dispatcher>().map_err(ThreadReplyError::failure)?;
+  let stored = dispatcher
+    .admit_input(
+      session_id,
+      event_types::AGENT_MESSAGE,
+      summon.content,
+      "agent",
+      json!({
+        "request_id": request_id,
+        "from_session": session_id,
+        "from_session_name": platform.display_name,
+        "fields": {(platform.name): summon.block},
+      }),
+    )
+    .await?;
   let round_event_id = stored.get("id").and_then(Value::as_str).expect("a persisted event carries its id").to_string();
   let event = format!("{}_mention_round_started", platform.name);
   tracing::info!(%event, thread = %thread, session = session_id, user_event_id = %round_event_id);

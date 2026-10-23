@@ -14,6 +14,7 @@ use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::pystr;
 use charliebot_registry::FeatureContext;
 use charliebot_sched::triggers::TriggerManager;
+use charliebot_store::metadata::UtcDateTime;
 use futures_util::future::BoxFuture;
 use regex::Regex;
 use serde_json::{Value, json};
@@ -93,17 +94,18 @@ impl Bot {
 pub struct DiscordThreadAdapter {
   bot: Bot,
   client: OnceCell<DiscordClient>,
+  bot_user_id: OnceCell<String>,
 }
 
 impl DiscordThreadAdapter {
   pub fn new(bot: Bot) -> Self {
-    Self { bot, client: OnceCell::new() }
+    Self { bot, client: OnceCell::new(), bot_user_id: OnceCell::new() }
   }
 
   fn with_client(bot: Bot, client: DiscordClient) -> Self {
     let cell = OnceCell::new();
     assert!(cell.set(client).is_ok(), "the Discord REST client is inserted into an empty slot");
-    Self { bot, client: cell }
+    Self { bot, client: cell, bot_user_id: OnceCell::new() }
   }
 
   /// The client every platform call posts through, built once.
@@ -117,10 +119,55 @@ impl ThreadAdapter for DiscordThreadAdapter {
     &DISCORD
   }
 
-  fn post<'a>(&'a self, address: &'a Value, text: &'a str) -> BoxFuture<'a, anyhow::Result<()>> {
+  fn post<'a>(&'a self, address: &'a Value, text: &'a str, post_key: &'a str) -> BoxFuture<'a, anyhow::Result<()>> {
     Box::pin(async move {
-      self.client().await?.create_message_with_post_key(str_field(address, "thread_id")?, text, "unkeyed").await?;
+      self.client().await?.create_message_with_post_key(str_field(address, "thread_id")?, text, post_key).await?;
       Ok(())
+    })
+  }
+
+  fn find_own_post_by_key<'a>(
+    &'a self,
+    address: &'a Value,
+    _post_key: &'a str,
+    text: &'a str,
+    created_after: &'a str,
+    messages: Option<&'a [ThreadMessage]>,
+  ) -> BoxFuture<'a, anyhow::Result<bool>> {
+    Box::pin(async move {
+      let client = self.client().await?;
+      let bot_user_id = self
+        .bot_user_id
+        .get_or_try_init(|| async { Ok::<_, anyhow::Error>(client.get_current_user().await?.id) })
+        .await?;
+      let created_after = UtcDateTime::parse(created_after)?;
+      let thread = match messages {
+        Some(messages) => messages.to_vec(),
+        None => client
+          .all_messages(str_field(address, "thread_id")?)
+          .await?
+          .into_iter()
+          .map(|message| ThreadMessage {
+            id: message.id,
+            user: Some(message.author.id),
+            text: message.content.unwrap_or_default(),
+            created_at: Some(message.timestamp),
+            metadata: None,
+            bot_id: None,
+            is_bot: message.author.bot,
+            eligible: false,
+          })
+          .collect(),
+      };
+      for message in thread {
+        if message.user.as_deref() == Some(bot_user_id.as_str()) && message.text == text {
+          let timestamp = message.created_at.as_deref().context("Discord thread message has no timestamp")?;
+          if UtcDateTime::parse(timestamp)? >= created_after {
+            return Ok(true);
+          }
+        }
+      }
+      Ok(false)
     })
   }
 
@@ -140,7 +187,7 @@ impl ThreadAdapter for DiscordThreadAdapter {
     })
   }
 
-  fn read_eligible<'a>(
+  fn read_thread<'a>(
     &'a self,
     origin: &'a Value,
     config: &'a CharlieBotConfig,
@@ -152,11 +199,15 @@ impl ThreadAdapter for DiscordThreadAdapter {
       Ok(
         messages
           .iter()
-          .filter(|message| eligible_message(message, allowed_users))
           .map(|message| ThreadMessage {
             id: message.id.clone(),
             user: Some(message.author.id.clone()),
             text: message.content.clone().unwrap_or_default(),
+            created_at: Some(message.timestamp.clone()),
+            metadata: None,
+            bot_id: None,
+            is_bot: message.author.bot,
+            eligible: eligible_message(message, allowed_users),
           })
           .collect(),
       )
@@ -204,7 +255,26 @@ pub async fn ack_messages(
 
 /// Post `text` to the session's Discord thread and return the readback the CLI prints (`post_reply`).
 pub async fn post_reply(bot: &Bot, session_id: &str, text: &str) -> Result<Value, thread_entry::ThreadReplyError> {
-  thread_entry::post_reply(&adapter(bot), &bot.features, session_id, text).await
+  post_reply_with_caller_context(bot, session_id, text, None, None).await
+}
+
+/// Post a reply bound to the verified caller's run request.
+pub async fn post_reply_with_caller_context(
+  bot: &Bot,
+  session_id: &str,
+  text: &str,
+  request_id: Option<&str>,
+  run_started_at: Option<&str>,
+) -> Result<Value, thread_entry::ThreadReplyError> {
+  thread_entry::post_reply_with_caller_context(
+    &adapter(bot),
+    &bot.features,
+    session_id,
+    text,
+    request_id,
+    run_started_at,
+  )
+  .await
 }
 
 /// The listener implementation passed to the shared `ChannelService` (`run_listener`).
@@ -241,7 +311,7 @@ pub async fn handle_message_create(
 
   let Some(guild_id) = guild_id else {
     if mentioned {
-      client.create_message(channel_id, DM_NOTICE).await?;
+      client.create_message_with_post_key(channel_id, DM_NOTICE, &format!("discord-dm:{message_id}#1")).await?;
       // The eligibility check admits only an author listed in `allowed_users`, so the id is present. The log
       // consumer matches the bare id, not the `Option` debug form.
       let author = author_id.context("an eligible gateway message carries its author id")?;

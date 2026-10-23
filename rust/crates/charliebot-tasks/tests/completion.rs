@@ -1294,7 +1294,7 @@ async fn user_message_route_restores_the_chain_and_refuses_archived_agent_input(
     .uri(format!("/api/chat/{}/message", leaf.id))
     .header(header::AUTHORIZATION, format!("Bearer {token}"))
     .header(header::CONTENT_TYPE, "application/json")
-    .body(Body::from(json!({"content":"keep going"}).to_string()))
+    .body(Body::from(json!({"content":"keep going","request_id":"archived-agent-send"}).to_string()))
     .unwrap();
   let response = app.clone().oneshot(agent_request).await.unwrap();
   let status = response.status();
@@ -1307,7 +1307,7 @@ async fn user_message_route_restores_the_chain_and_refuses_archived_agent_input(
     .method(Method::POST)
     .uri(format!("/api/chat/{}/message", leaf.id))
     .header(header::CONTENT_TYPE, "application/json")
-    .body(Body::from(json!({"content":"continue from here"}).to_string()))
+    .body(Body::from(json!({"content":"continue from here","request_id":"archived-user-send"}).to_string()))
     .unwrap();
   let response = app.oneshot(user_request).await.unwrap();
   let status = response.status();

@@ -351,15 +351,16 @@ fn python_truthy(value: &Value) -> bool {
 pub(crate) struct SlackThreadAdapter {
   features: Arc<FeatureContext>,
   client: Mutex<Option<Arc<SlackClient>>>,
+  identity: Mutex<Option<Value>>,
 }
 
 impl SlackThreadAdapter {
   pub(crate) fn lazy(features: Arc<FeatureContext>) -> Self {
-    Self { features, client: Mutex::new(None) }
+    Self { features, client: Mutex::new(None), identity: Mutex::new(None) }
   }
 
   pub(crate) fn with_client(features: Arc<FeatureContext>, client: Arc<SlackClient>) -> Self {
-    Self { features, client: Mutex::new(Some(client)) }
+    Self { features, client: Mutex::new(Some(client)), identity: Mutex::new(None) }
   }
 
   fn client(&self) -> Result<Arc<SlackClient>> {
@@ -376,13 +377,70 @@ impl ThreadAdapter for SlackThreadAdapter {
     &SLACK
   }
 
-  fn post<'a>(&'a self, address: &'a Value, text: &'a str) -> BoxFuture<'a, Result<()>> {
+  fn post<'a>(&'a self, address: &'a Value, text: &'a str, post_key: &'a str) -> BoxFuture<'a, Result<()>> {
     Box::pin(async move {
       self
         .client()?
-        .post_message(object_text(address, "channel_id"), text, object_text(address, "thread_ts"), "unkeyed")
+        .post_message(object_text(address, "channel_id"), text, object_text(address, "thread_ts"), post_key)
         .await?;
       Ok(())
+    })
+  }
+
+  fn find_own_post_by_key<'a>(
+    &'a self,
+    address: &'a Value,
+    post_key: &'a str,
+    _text: &'a str,
+    _created_after: &'a str,
+    messages: Option<&'a [ThreadMessage]>,
+  ) -> BoxFuture<'a, Result<bool>> {
+    Box::pin(async move {
+      let client = self.client()?;
+      let cached_identity = self.identity.lock().expect("the Slack identity slot is never poisoned").clone();
+      let identity = match cached_identity {
+        Some(identity) => identity,
+        None => {
+          let identity = client.auth_test().await?;
+          *self.identity.lock().expect("the Slack identity slot is never poisoned") = Some(identity.clone());
+          identity
+        }
+      };
+      let thread = match messages {
+        Some(messages) => messages.to_vec(),
+        None => client
+          .get_thread_replies(object_text(address, "channel_id"), object_text(address, "thread_ts"))
+          .await?
+          .into_iter()
+          .map(|message| -> Result<ThreadMessage> {
+            Ok(ThreadMessage {
+              id: message.get("ts").and_then(Value::as_str).context("Slack thread message has no ts")?.to_string(),
+              user: message.get("user").and_then(Value::as_str).map(str::to_string),
+              text: message.get("text").and_then(Value::as_str).unwrap_or_default().to_string(),
+              created_at: None,
+              metadata: message.get("metadata").cloned(),
+              bot_id: message.get("bot_id").and_then(Value::as_str).map(str::to_string),
+              is_bot: message.get("bot_id").is_some(),
+              eligible: false,
+            })
+          })
+          .collect::<Result<Vec<_>>>()?,
+      };
+      Ok(thread.iter().any(|message| {
+        let is_own = identity
+          .get("user_id")
+          .and_then(Value::as_str)
+          .is_some_and(|user_id| message.user.as_deref() == Some(user_id))
+          || identity
+            .get("bot_id")
+            .and_then(Value::as_str)
+            .is_some_and(|bot_id| message.bot_id.as_deref() == Some(bot_id));
+        let metadata = message.metadata.as_ref();
+        let payload = metadata.and_then(|metadata| metadata.get("event_payload"));
+        is_own
+          && metadata.and_then(|metadata| metadata.get("event_type")).and_then(Value::as_str) == Some("charliebot_post")
+          && payload.and_then(|payload| payload.get("key")).and_then(Value::as_str) == Some(post_key)
+      }))
     })
   }
 
@@ -406,7 +464,7 @@ impl ThreadAdapter for SlackThreadAdapter {
     })
   }
 
-  fn read_eligible<'a>(
+  fn read_thread<'a>(
     &'a self,
     origin: &'a Value,
     config: &'a CharlieBotConfig,
@@ -417,7 +475,6 @@ impl ThreadAdapter for SlackThreadAdapter {
       let allowed_user_ids = &config.section::<SlackConfig>("slack").allowed_user_ids;
       messages
         .iter()
-        .filter(|message| eligible_thread_message(message, allowed_user_ids))
         .map(|message| -> Result<ThreadMessage> {
           let id = message.get("ts").and_then(Value::as_str).context("Slack thread message has no ts")?.to_string();
           let user = message.get("user").and_then(Value::as_str).map(str::to_string);
@@ -426,7 +483,16 @@ impl ThreadAdapter for SlackThreadAdapter {
             .filter(|value| python_truthy(value))
             .map(charliebot_core::pyfmt::python_str)
             .unwrap_or_default();
-          Ok(ThreadMessage { id, user, text })
+          Ok(ThreadMessage {
+            id,
+            user,
+            text,
+            created_at: None,
+            metadata: message.get("metadata").cloned(),
+            bot_id: message.get("bot_id").and_then(Value::as_str).map(str::to_string),
+            is_bot: message.get("bot_id").is_some(),
+            eligible: eligible_thread_message(message, allowed_user_ids),
+          })
         })
         .collect()
     })
@@ -776,12 +842,17 @@ mod tests {
       [ThreadMessage {
         id: "1700000000.000200".to_string(),
         user: Some("U_ALLOWED".to_string()),
-        text: "hi".to_string()
+        text: "hi".to_string(),
+        created_at: None,
+        metadata: None,
+        bot_id: None,
+        is_bot: false,
+        eligible: true,
       }]
     );
     let call = api.calls().into_iter().find(|call| call.1 == "/api/conversations.replies").unwrap();
     assert_eq!(call.0, "GET");
-    assert_eq!(call.2, json!({"channel": "C_TEST", "ts": TS}));
+    assert_eq!(call.2, json!({"channel": "C_TEST", "ts": TS, "include_all_metadata": "true", "limit": "100"}));
   }
 
   #[tokio::test]

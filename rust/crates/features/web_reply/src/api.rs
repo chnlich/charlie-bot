@@ -15,6 +15,7 @@ use charliebot_compat::fastapi_body::{self, BodyModel, Field, FieldType, Request
 use charliebot_compat::responses;
 use charliebot_compat::validation::{self, FieldError, Source};
 use charliebot_registry::FeatureContext;
+use charliebot_registry::caller;
 use http::StatusCode;
 use serde_json::{Map, Value, json};
 
@@ -32,7 +33,28 @@ pub async fn post_reply(State(features): State<Arc<FeatureContext>>, request: Re
     Ok(model) => model,
     Err(response) => return *response,
   };
-  answer(reply::post_web_reply(&features, &model.session_id, &model.text, model.keep_language.as_deref()).await)
+  let identity = match caller::resolve_caller(&parts.headers, &features) {
+    Ok(identity) => identity,
+    Err(response) => return response,
+  };
+  let request_id = identity.claims().map(|claims| {
+    charliebot_store::control_events::derived_agent_send_request_id(
+      &claims.run_id,
+      "web reply",
+      &model.session_id,
+      &model.text,
+    )
+  });
+  answer(
+    reply::post_web_reply_with_request_id(
+      &features,
+      &model.session_id,
+      &model.text,
+      model.keep_language.as_deref(),
+      request_id.as_deref(),
+    )
+    .await,
+  )
 }
 
 /// `GET /api/internal/web/dialog?session_id=`: the session's For-you layer, in log order.

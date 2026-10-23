@@ -323,40 +323,11 @@ run-record work is `S2`; task-tree runtime and feature-owned files remain with t
 
 ## Catch-up f58a345a6 open steps
 
-Both all-stage Rust debug runs at the f58a345a6 baseline failed the same 77 of 1176 steps. The 26 rows of
-`0419cd23a` are gone at this head, where the Rust run fails 51 of 1176 steps; no row is intermittent. Each row
-names the scenario step, parity stage and `main` commit that accounts for its observed difference.
+The rows below name the remaining all-stage Rust parity differences, their scenario steps and the `main` commits that
+account for them. No row is intermittent.
 
 | Scenario | Step | Stage | Main commit | Difference |
 | --- | --- | --- | --- | --- |
-| features-discord-routes | reply with blank text answers 422 | features | d59e81e8c | R16: Rust reads Discord before blank-text validation; Python returns 422 without an API call. |
-| features-discord-routes | reply with a file-server link answers 422 | features | d59e81e8c | R17: Rust reads Discord before link validation; Python returns 422 without an API call. |
-| features-discord-routes | reply posts once the thread is read | features | d59e81e8c | R18: Rust omits Python Discord bot-identity and nonce-enforced post checks. |
-| features-harness-discord | server startup | features | d59e81e8c | R19: Rust lost-summon handling omits Python's request ID, thread reads and nonce-keyed notice post. |
-| features-harness-discord | allowed user mention starts a Discord thread session | features | d59e81e8c | R20: Rust platform delivery events omit Python agent attribution or stable request IDs. |
-| features-harness-discord | release the summon agent to run | features | d59e81e8c | R21: Rust platform delivery events omit Python agent attribution or stable request IDs. |
-| features-harness-discord | direct message mention gets a notice | features | d59e81e8c | R22: Rust posts the Discord notice without Python's nonce-enforced replay key. |
-| features-harness-discord | release the silent summon result | features | d59e81e8c | R23: Rust omits Python's Discord thread and bot reads and nonce-keyed notice post. |
-| features-harness-discord | reply to the fixture Discord thread | features | d59e81e8c | R24: Rust omits Python Discord bot-identity and nonce-enforced post checks. |
-| features-harness-slack | server startup | features | d59e81e8c | R26: Rust omits Python Slack thread-read options include_all_metadata=true and limit=100. |
-| features-harness-slack | allowed app mention starts its Slack thread session | features | d59e81e8c | R27: Rust platform delivery events omit Python agent attribution or stable request IDs. |
-| features-harness-slack | release summon agent to finish its round | features | d59e81e8c | R28: Rust platform delivery events omit Python agent attribution or stable request IDs. |
-| features-harness-slack | release summon agent after its result | features | d59e81e8c | R29: Rust notice lacks Python's stable event ID and metadata-keyed Slack post checks. |
-| features-slack-ack | server startup | features | d59e81e8c | R31: Rust omits Python Slack thread-read options include_all_metadata=true and limit=100. |
-| features-slack-ack | refuse an ack that skips an eligible Slack message | features | d59e81e8c | R32: Rust omits Python Slack thread-read options include_all_metadata=true and limit=100. |
-| features-slack-ack | acknowledge every eligible follow message | features | d59e81e8c | R33: Rust omits Python Slack thread-read options include_all_metadata=true and limit=100. |
-| features-slack-ack | repeat the same ack idempotently | features | d59e81e8c | R34: Rust omits Python Slack thread-read options include_all_metadata=true and limit=100. |
-| features-slack-backfill | server startup | features | d59e81e8c | R35: Rust lost-summon handling omits its stable request ID and Python's metadata-aware Slack reads. |
-| features-slack-reply-failure | server startup | features | d59e81e8c | R36: Rust omits Python Slack thread-read options include_all_metadata=true and limit=100. |
-| features-slack-reply-failure | map a Slack chat.postMessage failure to 502 | features | d59e81e8c | R37: Rust retries unkeyed Slack posts; Python checks auth and uses metadata-keyed post attempts. |
-| features-slack-reply-refusals | server startup | features | d59e81e8c | R38: Rust omits Python Slack thread-read options include_all_metadata=true and limit=100. |
-| features-slack-reply-refusals | refuse blank reply text | features | d59e81e8c | R39: Rust reads Slack before blank-text validation; Python returns 422 without an API call. |
-| features-slack-reply-refusals | refuse a CharlieBot file-server link in a reply | features | d59e81e8c | R40: Rust reads Slack before link validation; Python returns 422 without an API call. |
-| features-slack-reply-stale | server startup | features | d59e81e8c | R41: Rust omits Python Slack thread-read options include_all_metadata=true and limit=100. |
-| features-slack-reply-stale | refuse a reply while the Slack thread is stale | features | d59e81e8c | R42: Rust omits Python Slack thread-read options include_all_metadata=true and limit=100. |
-| features-slack-reply-success | server startup | features | d59e81e8c | R43: Rust omits Python Slack thread-read options include_all_metadata=true and limit=100. |
-| features-slack-reply-success | reply to the fixture Slack thread | features | d59e81e8c | R44: Rust posts without Python's auth check and metadata key used for reply deduplication. |
-| features-slack-validation | server startup | features | d59e81e8c | R45: Rust omits Python Slack thread-read options include_all_metadata=true and limit=100. |
 
 ## Catch-up f58a345a6 ignored Cargo tests
 
@@ -378,7 +349,7 @@ Each of the 10 commits in `git rev-list --no-merges 78e0d10e2..f58a345a6 -- src 
 | 52eb05c1c | Deduplicate retried user messages | in Rust | Chat sends require a non-empty `request_id`; a stable session-bound event id replays matching input under the control lock, user frames retain the id, and post-admission dispatch errors return 202 with `dispatch_error`. |
 | 2e0daa253 | Bind retried sends to their session and stop thinking only on refusal | in Rust | Rust serves the updated `web/static` unchanged; its chat endpoint requires the `request_id` that the browser keeps bound to the original session across retries. |
 | 170eb4dea | Keep nodes whose files were written at pass start | unported | Python `src/runtime/task_recovery.py:89-119` applies one second of mtime slack before boot skips a node. Rust `rust/crates/charliebot-tasks/src/recovery.rs:83-114` has no slack; no parity step forces a coarse-clock write race. |
-| d59e81e8c | Deduplicate agent sends and thread replies | red-list | Rows R16, R17, R18, R19, R20, R21, R22, R23, R24, R26, R27, R28, R29, R31, R32, R33, R34, R35, R36, R37, R38, R39, R40, R41, R42, R43, R44, R45. |
+| d59e81e8c | Deduplicate agent sends and thread replies | in Rust | Run-scoped request ids, stable event payloads checked under the control lock, per-session reply/summon/audit serialization, Slack metadata-keyed posts and Discord nonce-keyed posts with content lookup. |
 | 0b5351c00 | Read the error-row rule from one shared predicate | no behavior | Python `web/static/js/chat/shared.js:204-212` centralizes the existing `Error: ` predicate used by both views. The For You filter keeps the same rows and output. |
 | 26d40d04e | Show a failed turn’s full error text in chat | in Rust | Rust serves the changed `web/static` tree through `rust/crates/charliebot-server/src/routes/static_mounts.rs:28-42,55-68`; its already-ported `/ws/sessions/{session_id}` stream supplies the message. No new API behavior is needed. |
 

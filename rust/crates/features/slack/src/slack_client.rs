@@ -56,16 +56,21 @@ impl SlackClient {
   }
 
   /// POST one thread reply and return Slack's response payload.
-  pub(crate) async fn post_message(
-    &self,
-    channel: &str,
-    text: &str,
-    thread_ts: &str,
-    _post_key: &str,
-  ) -> Result<Value> {
-    let body = json!({"channel": channel, "text": text, "thread_ts": thread_ts});
+  pub(crate) async fn post_message(&self, channel: &str, text: &str, thread_ts: &str, post_key: &str) -> Result<Value> {
+    let body = json!({
+      "channel": channel,
+      "text": text,
+      "thread_ts": thread_ts,
+      "metadata": {"event_type": "charliebot_post", "event_payload": {"key": post_key}},
+    });
     let response = self.json_request("chat.postMessage", &self.bot_token, body)?.send().await?;
     checked_payload(response, "chat.postMessage").await
+  }
+
+  /// Read the authenticated bot identity used to recognize its metadata-keyed posts.
+  pub(crate) async fn auth_test(&self) -> Result<Value> {
+    let response = self.request(Method::POST, "auth.test", &self.bot_token).send().await?;
+    checked_payload(response, "auth.test").await
   }
 
   /// Add the summon's `eyes` reaction.
@@ -90,15 +95,40 @@ impl SlackClient {
 
   /// Read one thread's messages in Slack order.
   pub(crate) async fn get_thread_replies(&self, channel: &str, thread_ts: &str) -> Result<Vec<Value>> {
-    let mut url = reqwest::Url::parse(&format!("{}conversations.replies", self.api_base))?;
-    url.query_pairs_mut().append_pair("channel", channel).append_pair("ts", thread_ts);
-    let response = self.request_url(Method::GET, url.as_str(), &self.bot_token).send().await?;
-    let payload = checked_payload(response, "conversations.replies").await?;
-    payload
-      .get("messages")
-      .and_then(Value::as_array)
-      .cloned()
-      .context("conversations.replies response has no messages list")
+    let mut messages = Vec::new();
+    let mut cursor = None;
+    loop {
+      let mut url = reqwest::Url::parse(&format!("{}conversations.replies", self.api_base))?;
+      {
+        let mut query = url.query_pairs_mut();
+        query
+          .append_pair("channel", channel)
+          .append_pair("ts", thread_ts)
+          .append_pair("include_all_metadata", "true")
+          .append_pair("limit", "100");
+        if let Some(cursor) = cursor.as_deref() {
+          query.append_pair("cursor", cursor);
+        }
+      }
+      let response = self.request_url(Method::GET, url.as_str(), &self.bot_token).send().await?;
+      let payload = checked_payload(response, "conversations.replies").await?;
+      messages.extend(
+        payload
+          .get("messages")
+          .and_then(Value::as_array)
+          .context("conversations.replies response has no messages list")?
+          .iter()
+          .cloned(),
+      );
+      cursor = payload
+        .pointer("/response_metadata/next_cursor")
+        .and_then(Value::as_str)
+        .filter(|cursor| !cursor.is_empty())
+        .map(str::to_string);
+      if cursor.is_none() {
+        return Ok(messages);
+      }
+    }
   }
 
   /// Resolve and cache a channel name, logging the same two failure classes as the Python client.

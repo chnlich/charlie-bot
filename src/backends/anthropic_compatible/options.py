@@ -1,6 +1,6 @@
 """The cc-anthropic-compatible option model."""
 
-from typing import Literal
+from typing import Any, Literal
 
 import pydantic
 
@@ -15,6 +15,7 @@ class CcAnthropicCompatibleBackend(backend_models.BackendOption):
   credential: str | None = None
   effort: str | None = None
   headers: dict[str, str] = pydantic.Field(default_factory=dict)
+  extra_body: dict[str, Any] = pydantic.Field(default_factory=dict)
 
   @pydantic.field_validator("api_base")
   @classmethod

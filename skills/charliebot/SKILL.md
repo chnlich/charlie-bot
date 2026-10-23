@@ -1,6 +1,6 @@
 ---
 name: charliebot
-description: CharlieBot repo structure, architecture, and development conventions. Use when modifying charlie-bot code.
+description: CharlieBot repo structure, architecture, and development conventions. Use when modifying charlie-bot code. Also use when operating CharlieBot, for delegation and running-worker amendments, run records and usage audits, the Claude account pool, and CLC (charlie-code) runs.
 version: 1.0.0
 ---
 
@@ -89,10 +89,7 @@ All six `##`-level headings are required (`## Goal / Source Files / Required Beh
 - Delegate again to amend a worker that resumes after a trigger.
 - A `charliebot session send` message stays pending until the current run ends.
 - A pending message can start one extra work run after review.
-- `delegate --backend` selects the first work run only.
-- A follow-up run started by pending input uses the worker session's default backend, inherited from its manager in
-  `_reserve_backend_model`.
-- Pass `--backend` to a new delegation after the run ends to keep the same backend for follow-up work.
+- The backend that `delegate` resolves runs every work run of the worker session, including follow-up runs that pending input starts. The worker session task record keeps that backend. See `charliebot delegate --help`, Backend selection.
 
 ### Validate spec-embedded tests and patches outside the repo first
 
@@ -136,6 +133,7 @@ Some proxied backends (e.g. an opencode GLM endpoint) cap generation far below t
   - On the next boot, reattach live runs and drain dead runs.
   - Set a drained run's `ended_at` to its raw log's last write.
   - Exclude backends registered with `restart_reattach=False` and improve-loop controllers from restart reattachment.
+- For CLC run end conditions, resuming an errored session, context reset, landing a CLC change, or running its reviewer, read the charlie-code `README.md`.
 - **Long-running remote command**:
   1. `charliebot schedule-trigger --cmd '...' --host H --cwd P --max-wait N --message "..."` — starts the command on H and registers its wake in one step. Stdout prints one JSON object: `trigger_id`, `fire_at` and the launch record (`launch_id`, `host`, `pid`, `log`, `exit_file`), also written to `<session>/launches/<launch_id>/metadata.json`. Exit 3 means the ssh start failed and nothing was registered; exit 2 means the registration was rejected and the started process was killed.
   2. After the registration prints its result, end the turn.
@@ -357,7 +355,7 @@ Caveats:
 - Filter credentials from printed environments and keep job-log directories at mode `700`.
 - If a batch script calls `srun`, use `sbatch --wrap "bash script.sh"`. If it runs programs directly, use
   `sbatch --wrap "srun bash script.sh"` so the outer `srun` binds the GPUs.
-- `sacct` timestamps are UTC.
+- `sacct` formats times in the local time zone of the process that runs it. Before you align `sacct` times with other logs, check that zone.
 - The watcher handles whole non-array allocations only — watching an array job by its base id fails, because sacct `-X` reports the allocation and individual array tasks stay invisible to it.
 - On Okta-gated hosts a cold SSH key cache makes verify-on-create reject the trigger (the first ssh probe fails before the key is enrolled), so enroll the key first with a manual `ssh neptune true`.
 

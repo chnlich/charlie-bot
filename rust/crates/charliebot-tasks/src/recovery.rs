@@ -54,21 +54,37 @@ fn boot_recovery_marker_path(home: &std::path::Path) -> PathBuf {
   home.join(BOOT_RECOVERY_MARKER_PATH)
 }
 
+/// The last clean pass's start time, or None when the marker is absent or unreadable. None makes the pass check every
+/// node in full (`src/runtime/task_recovery.py:58-74`). Other read errors, such as a permission error, propagate.
 fn read_boot_recovery_marker(home: &std::path::Path) -> anyhow::Result<Option<UtcDateTime>> {
   let path = boot_recovery_marker_path(home);
-  let text = match std::fs::read_to_string(&path) {
-    Ok(text) => text,
+  let raw = match std::fs::read(&path) {
+    Ok(raw) => raw,
     Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
     Err(error) => return Err(error).with_context(|| format!("reading {}", path.display())),
   };
-  let payload: Value = serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
-  let pass_started_at = payload
-    .get("pass_started_at")
-    .and_then(Value::as_str)
-    .with_context(|| format!("{} has no string pass_started_at", path.display()))?;
-  UtcDateTime::parse(pass_started_at)
-    .with_context(|| format!("parsing pass_started_at in {}", path.display()))
-    .map(Some)
+  match parse_boot_recovery_marker(&raw) {
+    Ok(pass_started_at) => Ok(Some(pass_started_at)),
+    Err(error_type) => {
+      tracing::error!(target: "charliebot_tasks", size = raw.len(), error_type, "boot_recovery_marker_unreadable");
+      Ok(None)
+    }
+  }
+}
+
+/// The pass start that a marker's bytes hold. On failure, the Python exception name that the boot logs as `error_type`.
+/// Python logs only that name, so the parser's own message is not kept.
+fn parse_boot_recovery_marker(raw: &[u8]) -> Result<UtcDateTime, &'static str> {
+  let text = std::str::from_utf8(raw).map_err(|_| "UnicodeDecodeError")?;
+  let payload: Value = serde_json::from_str(text).map_err(|_| "JSONDecodeError")?;
+  let Value::Object(fields) = payload else {
+    return Err("TypeError");
+  };
+  match fields.get("pass_started_at") {
+    None => Err("KeyError"),
+    Some(Value::String(pass_started_at)) => UtcDateTime::parse(pass_started_at).map_err(|_| "ValueError"),
+    Some(_) => Err("TypeError"),
+  }
 }
 
 #[cfg(feature = "test-hooks")]

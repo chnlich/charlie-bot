@@ -16,6 +16,7 @@ import pathlib
 
 import conftest
 import pytest
+from structlog import testing
 
 import src.runtime.task_execution as task_execution_module
 from src.infra import config, models
@@ -358,3 +359,39 @@ def test_marker_write_fsyncs_the_temp_file_before_the_rename(
   assert steps == ["fsync", "replace"]
   assert _read_marker(cfg) == {"pass_started_at": started_at.isoformat()}
   assert not tmp.exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "content, error_type", [
+        ("", "JSONDecodeError"),
+        ("not json", "JSONDecodeError"),
+        ("[]", "TypeError"),
+        ("{}", "KeyError"),
+        ('{"pass_started_at": "x"}', "ValueError"),
+    ])
+async def test_unreadable_marker_checks_every_node_then_is_rewritten(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, content: str, error_type: str) -> None:
+  cfg, tree, manager, worker = await _closed_worker(tmp_path, monkeypatch)
+  _marker_path(cfg).parent.mkdir(parents=True, exist_ok=True)
+  _marker_path(cfg).write_text(content, encoding="utf-8")
+  written: list[datetime.datetime] = []
+  real_write = task_recovery.write_boot_recovery_marker
+
+  def recording_write(cfg_, started_at):
+    written.append(started_at)
+    real_write(cfg_, started_at)
+
+  monkeypatch.setattr(task_recovery, "write_boot_recovery_marker", recording_write)
+  spy = _NodeSpy()
+  with testing.capture_logs() as logs, spy:
+    await task_recovery.reconcile_task_tree(cfg, tree)
+
+  # The unreadable marker reads as absent, so the pass skips no node.
+  assert sorted(spy.checked) == sorted([manager.id, worker.id])
+  [unreadable] = [entry for entry in logs if entry["event"] == "boot_recovery_marker_unreadable"]
+  assert unreadable["size"] == len(content.encode("utf-8"))
+  assert unreadable["error_type"] == error_type
+  # The clean pass rewrites the marker with the start time it ran under.
+  assert len(written) == 1
+  assert datetime.datetime.fromisoformat(_read_marker(cfg)["pass_started_at"]) == written[0]

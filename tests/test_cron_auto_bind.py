@@ -236,6 +236,9 @@ async def test_due_fire_after_migration_creates_its_leaf_under_the_node(
   conftest.install_scripted_backends(
       monkeypatch, [test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("sweep done")])],
       conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
+  # The work run's report wakes the bound node: its report-consuming turn rides
+  # the registry builder (scripted), so no external process starts from this test.
+  test_task_execution.script_manager_turn(monkeypatch, ["report noted"])
 
   await scheduler._tick()
 
@@ -265,6 +268,7 @@ async def test_due_fire_after_migration_creates_its_leaf_under_the_node(
   assert stored is not None and stored.status == models.SessionStatus.ARCHIVED
   index = await tree._get_index()
   assert not [m for m in index.metas.values() if m.task_parent_id == cron_session.id]
+  await test_task_execution.drain_manager_turns(tree, node_id)
 
 
 # ---------------------------------------------------------------------------

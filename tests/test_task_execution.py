@@ -170,6 +170,28 @@ def result_event(text: str) -> dict:
   return event
 
 
+def script_manager_turn(monkeypatch: pytest.MonkeyPatch, notes: list[str]) -> None:
+  """Script the parent node's report-consuming turn through the registry
+  builder (the manager dispatch path), so no external process starts
+  from these tests. One scripted backend per expected manager-turn build."""
+  conftest.install_scripted_backends(
+      monkeypatch, [SpawningScriptedBackend([result_event(note)]) for note in notes],
+      conftest.BUILD_BACKEND_PATCH_TARGET)
+
+
+async def drain_manager_turns(tree: task_sessions.TaskTreeManager, manager_id: str) -> None:
+  """Wait until every manager_turn Run of the node reached a terminal fact,
+  so no launch task outlives the test as background residue."""
+  deadline = asyncio.get_event_loop().time() + 15
+  while asyncio.get_event_loop().time() < deadline:
+    records = [r for r in tree.runs.list_run_records_sync(manager_id) if r.kind == "manager_turn"]
+    events = tree.runs.load_events_sync(manager_id)
+    if records and all(tree.runs.terminal_outcome(events, r.id) is not None for r in records):
+      return
+    await asyncio.sleep(0.05)
+  pytest.fail(f"the manager turn never settled: {tree.runs.list_run_records_sync(manager_id)}")
+
+
 def signal_then_hold(started: asyncio.Event, release: asyncio.Event) -> Callable[[], Awaitable[None]]:
   """A backend gate: set *started* when the run reaches it, then hold the run until *release* is set."""
 

@@ -220,6 +220,8 @@ A lead keeps only coordination state in its context: each later model call re-re
 - An approval judges the plan itself, so a worker summary cannot replace that read.
 - When you need material as a lead, hand the read to a repo-less worker with `--task-type script-run`.
   Material is file content, a log, a diff, search results, another session's record, or a host probe.
+  One bounded value from the host, such as the `df` line of one mount, counts as a value.
+  A lead then answers a host status question without a worker.
 - When the CharlieBot server does not answer, probe the host yourself.
   Delegation runs through the server, so no worker starts while the server is down.
 - In the task spec, name the question, the revision or time range to read, and the rules for the read.

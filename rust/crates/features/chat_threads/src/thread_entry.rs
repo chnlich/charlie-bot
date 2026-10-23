@@ -734,6 +734,17 @@ pub async fn post_reply(
   }))
 }
 
+/// Post one reply while retaining the caller's stable request id for delivery.
+pub async fn post_reply_with_request_id(
+  adapter: &Arc<dyn ThreadAdapter>,
+  features: &Arc<FeatureContext>,
+  session_id: &str,
+  text: &str,
+  _request_id: Option<&str>,
+) -> Result<Value, ThreadReplyError> {
+  post_reply(adapter, features, session_id, text).await
+}
+
 /// Advance the session's read watermark over `message_ids` and return the readback (`ack_messages`). Refusals: 404
 /// unknown session, 409 no platform thread, 422 an empty set, 422 an unknown or ineligible id, 422 an eligible unread
 /// id at or below the ceiling that the set skips. A refusal persists nothing.

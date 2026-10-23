@@ -80,6 +80,28 @@ async fn thread_event_reads_share_the_store_snapshot() {
   assert!(Arc::ptr_eq(&first, &second), "both calls hold the same event allocation");
 }
 
+#[tokio::test]
+async fn concurrent_thread_reply_reuses_one_keyed_delivery_and_receipt() {
+  let home = Home::new();
+  home.thread_session("retry-thread-reply", origin()).await;
+  let adapter = FakeAdapter::with_thread(&[]);
+  let dyn_adapter: Arc<dyn ThreadAdapter> = adapter.clone();
+  let (first, second) = tokio::join!(
+    post_reply_with_request_id(&dyn_adapter, &home.features, "retry-thread-reply", "the answer", Some("reply-run")),
+    post_reply_with_request_id(&dyn_adapter, &home.features, "retry-thread-reply", "the answer", Some("reply-run")),
+  );
+
+  assert_eq!(first, second);
+  assert_eq!(adapter.posts.lock().unwrap().len(), 1);
+  let replies: Vec<_> = home
+    .events("retry-thread-reply")
+    .into_iter()
+    .filter(|event| event.get("type").and_then(Value::as_str) == Some(FAKECHAT.reply_event_type))
+    .collect();
+  assert_eq!(replies.len(), 1);
+  assert_eq!(replies[0]["request_id"], "reply-run");
+}
+
 /// The chat-event type of a fakechat reply event, as the platform writes it.
 fn reply_type() -> &'static str {
   FAKECHAT.reply_event_type

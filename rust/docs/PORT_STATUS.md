@@ -329,12 +329,6 @@ names the scenario step, parity stage and `main` commit that accounts for its ob
 
 | Scenario | Step | Stage | Main commit | Difference |
 | --- | --- | --- | --- | --- |
-| manager-turn-cancellation-routes | wait at the chat cancel gate | agent-orchestration-cancel | 52eb05c1c | R01: Rust chat input events omit Python's stable request_id for retry deduplication. |
-| manager-turn-cancellation-routes | wait for the chat-cancelled run to finish | agent-orchestration-cancel | 52eb05c1c | R02: Rust chat input events omit Python's stable request_id for retry deduplication. |
-| manager-turn-execution-and-routes | wait for the manager turn to finish | agent-orchestration | 52eb05c1c | R07: Rust chat input events omit Python's stable request_id for retry deduplication. |
-| manager-turn-execution-and-routes | wait at the first manager gate | agent-orchestration | 52eb05c1c | R08: Rust chat input events omit Python's stable request_id for retry deduplication. |
-| manager-turn-execution-and-routes | release the first manager turn | agent-orchestration | 52eb05c1c | R09: Rust chat input events omit Python's stable request_id for retry deduplication. |
-| manager-turn-opencode | wait for the OpenCode manager run to finish | agent-orchestration | 52eb05c1c | R11: Rust chat input events omit Python's stable request_id for retry deduplication. |
 | features-discord-routes | reply with blank text answers 422 | features | d59e81e8c | R16: Rust reads Discord before blank-text validation; Python returns 422 without an API call. |
 | features-discord-routes | reply with a file-server link answers 422 | features | d59e81e8c | R17: Rust reads Discord before link validation; Python returns 422 without an API call. |
 | features-discord-routes | reply posts once the thread is read | features | d59e81e8c | R18: Rust omits Python Discord bot-identity and nonce-enforced post checks. |
@@ -363,23 +357,6 @@ names the scenario step, parity stage and `main` commit that accounts for its ob
 | features-slack-reply-success | server startup | features | d59e81e8c | R43: Rust omits Python Slack thread-read options include_all_metadata=true and limit=100. |
 | features-slack-reply-success | reply to the fixture Slack thread | features | d59e81e8c | R44: Rust posts without Python's auth check and metadata key used for reply deduplication. |
 | features-slack-validation | server startup | features | d59e81e8c | R45: Rust omits Python Slack thread-read options include_all_metadata=true and limit=100. |
-| features-web-reply-audit | wait for the audit nudge | features | 52eb05c1c | R46: Rust chat input events omit Python's stable request_id for retry deduplication. |
-| features-web-reply-language | wait for the audit nudge | features | 52eb05c1c | R48: Rust chat input events omit Python's stable request_id for retry deduplication. |
-| features-web-reply-language | the held reply posts with a keep_language reason | features | 52eb05c1c | R49: Rust chat input events omit Python's stable request_id for retry deduplication. |
-| handover-admitted-input | wait for the first turn at the gate · candidate-to-python | agent-orchestration | 52eb05c1c | R52: Rust chat input events omit Python's stable request_id for retry deduplication. |
-| handover-admitted-input | hand over the live manager run · candidate-to-python | agent-orchestration | 52eb05c1c | R53: Rust chat input events omit Python's stable request_id for retry deduplication. |
-| handover-admitted-input | release the first manager turn · candidate-to-python | agent-orchestration | 52eb05c1c | R54: Rust chat input events omit Python's stable request_id for retry deduplication. |
-| handover-drain | wait for the raw log cursor at the gate · candidate-to-python | agent-orchestration | 52eb05c1c | R56: Rust chat input events omit Python's stable request_id for retry deduplication. |
-| handover-drain | stop both servers and let the agent exit while none runs · candidate-to-python | agent-orchestration | 52eb05c1c | R57: Rust chat input events omit Python's stable request_id for retry deduplication. |
-| handover-manager-turn | wait for the raw log cursor at the gate · candidate-to-python | agent-orchestration | 52eb05c1c | R60: Rust chat input events omit Python's stable request_id for retry deduplication. |
-| handover-manager-turn | release the manager agent · candidate-to-python | agent-orchestration | 52eb05c1c | R61: Rust chat input events omit Python's stable request_id for retry deduplication. |
-| handover-opencode | wait until the OpenCode API fake reaches its turn gate · candidate-to-python | agent-orchestration | 52eb05c1c | R63: Rust chat input events omit Python's stable request_id for retry deduplication. |
-| handover-opencode | hand over the terminated OpenCode turn to server B · candidate-to-python | agent-orchestration | 52eb05c1c | R64: Rust chat input events omit Python's stable request_id for retry deduplication. |
-| improve-loop-reports | wait for the parent manager at its gate | triggers-cron-improve | 52eb05c1c | R67: Rust chat input events omit Python's stable request_id for retry deduplication. |
-| improve-loop-reports | wait for both iteration reports to reach the busy parent | triggers-cron-improve | 52eb05c1c | R68: Rust chat input events omit Python's stable request_id for retry deduplication. |
-| improve-loop-reports | release the parent manager after all three reports arrive | triggers-cron-improve | 52eb05c1c | R69: Rust chat input events omit Python's stable request_id for retry deduplication. |
-| session-write-agent | wait at the agent caller gate | session-write | 52eb05c1c | R72: Rust chat input events omit Python's stable request_id for retry deduplication. |
-| session-write-agent | release the agent caller turn | session-write | 52eb05c1c | R73: Rust chat input events omit Python's stable request_id for retry deduplication. |
 
 ## Catch-up f58a345a6 ignored Cargo tests
 
@@ -398,8 +375,8 @@ Each of the 10 commits in `git rev-list --no-merges 78e0d10e2..f58a345a6 -- src 
 | 300890241 | Ignore non-plain skill reads and unresolved paths | no behavior | The hook command runs the Python `charliebot` CLI, which stays (Trade-off 2), so the change lives entirely in `src/runtime/cli/compaction_context.py:51-58,123-134` — the non-plain-path filter and the unresolved-skill skip — and no Rust server code carries a counterpart. |
 | 9127ef401 | Close the warm headless renderer in a stop hook | no behavior | Python `src/features/artifacts/headless_render.py:187-199` closes Chrome and removes its temporary profile at stop. This resource cleanup changes no client response, event or home data. |
 | f2620375f | Exit after server stop without finalizing the heap | no behavior | Python `server.py:607-616` flushes logs and exits after uvicorn has stopped. This changes teardown only; request answers and persisted state do not change. |
-| 52eb05c1c | Deduplicate retried user messages | red-list | Rows R01, R02, R07, R08, R09, R11, R46, R48, R49, R52, R53, R54, R56, R57, R60, R61, R63, R64, R67, R68, R69, R72, R73. No step exercises these, since the harness now sends `request_id` on every send: a send to an existing session without a non-empty `request_id` answers 422 in Python (`src/infra/models.py:641`, `src/runtime/api/chat.py`) and 202 in Rust (`SEND_MESSAGE_BODY_FIELDS` at `rust/crates/charliebot-tasks/src/routes.rs:93-98` has no `request_id`); a dispatch failure after admission answers 202 with `dispatch_error` in Python (`src/runtime/api/chat.py:79-111`, `rust/docs/contract/chat.md:79`), and Rust has no such field. |
-| 2e0daa253 | Bind retried sends to their session and stop thinking only on refusal | unported | Python `web/static/js/chat/input.js:68-119,123-153,168-173` keeps the original session and request ID across retries and ends thinking on a refused send. Rust serves this file, but its chat body model and parser in `rust/crates/charliebot-tasks/src/routes.rs:81-85,93-98,534-544` omit `request_id`; parity does not switch views while a retry is pending. |
+| 52eb05c1c | Deduplicate retried user messages | in Rust | Chat sends require a non-empty `request_id`; a stable session-bound event id replays matching input under the control lock, user frames retain the id, and post-admission dispatch errors return 202 with `dispatch_error`. |
+| 2e0daa253 | Bind retried sends to their session and stop thinking only on refusal | in Rust | Rust serves the updated `web/static` unchanged; its chat endpoint requires the `request_id` that the browser keeps bound to the original session across retries. |
 | 170eb4dea | Keep nodes whose files were written at pass start | unported | Python `src/runtime/task_recovery.py:89-119` applies one second of mtime slack before boot skips a node. Rust `rust/crates/charliebot-tasks/src/recovery.rs:83-114` has no slack; no parity step forces a coarse-clock write race. |
 | d59e81e8c | Deduplicate agent sends and thread replies | red-list | Rows R16, R17, R18, R19, R20, R21, R22, R23, R24, R26, R27, R28, R29, R31, R32, R33, R34, R35, R36, R37, R38, R39, R40, R41, R42, R43, R44, R45. |
 | 0b5351c00 | Read the error-row rule from one shared predicate | no behavior | Python `web/static/js/chat/shared.js:204-212` centralizes the existing `Error: ` predicate used by both views. The For You filter keeps the same rows and output. |

@@ -191,18 +191,19 @@ impl MessageAggregator {
 
     let mut deltas = self.flush_to_message_delta();
     let normalized = message_events::normalize_user_message_event(event)?;
-    deltas.push(json!({
-      "type": "message",
-      "message": {
-        "role": "user",
-        "content": normalized.content,
-        "uploaded_files": normalized.uploaded_files,
-        "input_mode": event.get("input_mode").cloned().unwrap_or(Value::Null),
-        "event_index": index,
-        "id": event_id,
-        "timestamp": event.get("timestamp").cloned().unwrap_or(Value::Null),
-      }
-    }));
+    let mut message = json!({
+      "role": "user",
+      "content": normalized.content,
+      "uploaded_files": normalized.uploaded_files,
+      "input_mode": event.get("input_mode").cloned().unwrap_or(Value::Null),
+      "event_index": index,
+      "id": event_id,
+      "timestamp": event.get("timestamp").cloned().unwrap_or(Value::Null),
+    });
+    if let Some(request_id) = event.get("request_id") {
+      message["request_id"] = request_id.clone();
+    }
+    deltas.push(json!({"type": "message", "message": message}));
     Ok(deltas)
   }
 

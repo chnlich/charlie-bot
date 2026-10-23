@@ -5,11 +5,28 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::metadata::UtcDateTime;
+use crate::{StoreError, StoreResult};
 
 const TASK_ID_NAMESPACE_NAME: &str = "charliebot/session-task-tree";
 pub const ACTOR_USER: &str = "user";
 pub const ACTOR_AGENT: &str = "agent";
 pub const ACTOR_SYSTEM: &str = "system";
+
+/// Fields that belong to the request-event header or its shared task-input payload.
+pub const REQUEST_EVENT_CORE_FIELDS: &[&str] = &[
+  "id",
+  "type",
+  "timestamp",
+  "actor",
+  "source_session_id",
+  "content",
+  "request_id",
+  "uploaded_files",
+  "from_session",
+  "from_session_name",
+  "input_mode",
+  "event_index",
+];
 
 fn task_id_namespace() -> Uuid {
   Uuid::new_v5(&Uuid::NAMESPACE_URL, TASK_ID_NAMESPACE_NAME.as_bytes())
@@ -52,6 +69,48 @@ pub fn stable_reopen_event_id(session_id: &str, request_id: &str) -> String {
 /// The stable input-acknowledgement fact id for one `(session_id, request_id)` pair.
 pub fn stable_input_ack_event_id(session_id: &str, request_id: &str) -> String {
   stable_id(&format!("input-ack:{session_id}:{request_id}"))
+}
+
+/// The input event id bound to one `(session_id, request_id)` pair.
+pub fn stable_request_event_id(session_id: &str, request_id: &str) -> String {
+  stable_id(&format!("request:{session_id}:{request_id}"))
+}
+
+/// Return the stored event for a replay, or a conflict when its request payload differs.
+pub fn replay_request_event<'a>(
+  mut events: impl Iterator<Item = &'a Value>,
+  event_id: &str,
+  request_id: &str,
+  event_type: &str,
+  content: &str,
+  fields: Option<&Value>,
+) -> StoreResult<Option<Value>> {
+  let Some(existing) = events.find(|event| event.get("id").and_then(Value::as_str) == Some(event_id)) else {
+    return Ok(None);
+  };
+  let extra_fields_match = match fields {
+    None => true,
+    Some(fields) => {
+      let fields = fields.as_object().ok_or_else(|| StoreError::invalid("request event fields must be an object"))?;
+      let existing_fields = existing.as_object().expect("stored request events are objects");
+      let existing_extra_fields = existing_fields
+        .iter()
+        .filter(|(key, _)| !REQUEST_EVENT_CORE_FIELDS.contains(&key.as_str()))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect::<Map<String, Value>>();
+      &existing_extra_fields == fields
+    }
+  };
+  let matches = existing.get("request_id").and_then(Value::as_str) == Some(request_id)
+    && existing.get("type").and_then(Value::as_str) == Some(event_type)
+    && existing.get("content").and_then(Value::as_str) == Some(content)
+    && extra_fields_match;
+  if !matches {
+    return Err(StoreError::conflict(vec![format!(
+      "request_id {request_id} is already event {event_id} with a different type or content"
+    )]));
+  }
+  Ok(Some(existing.clone()))
 }
 
 /// The stable report id for one source event delivered to one recipient.

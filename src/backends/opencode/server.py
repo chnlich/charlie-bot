@@ -27,7 +27,7 @@ from collections.abc import Coroutine
 
 import httpx
 
-from src.backends.opencode import opencode_limits
+from src.backends.opencode import opencode_limits, options
 from src.infra import constants, home, log_once, process
 from src.runtime.agent_process import base, spawn
 
@@ -64,6 +64,8 @@ def headless_config() -> dict:
   carry the turn's environment; ``opencode_session_move`` would move the session out of the
   turn's directory. ``shell`` is pinned to bash so the BASH_ENV join script runs for every command.
   """
+  from src.infra import config
+
   return {
       "permission": {
           "*": "allow",
@@ -78,6 +80,7 @@ def headless_config() -> dict:
               "mode": "primary"
           },
       },
+      **options.model_context_config(config.get_config().backends.options),
   }
 
 

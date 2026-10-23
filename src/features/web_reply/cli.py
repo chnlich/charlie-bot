@@ -26,7 +26,6 @@ then one line of Now per open child session that holds a Now, newest first.
 """
 
 import argparse
-import json
 import sys
 
 from src.infra import help_formatter
@@ -81,7 +80,7 @@ def _cmd_reply(args: argparse.Namespace) -> None:
   if args.keep_language is not None:
     payload["keep_language"] = args.keep_language
   result = common.post_internal_api("/api/internal/web/reply", payload)
-  print(json.dumps(result))
+  common.print_json(result, indent=None, file=sys.stdout)
 
 
 def _cmd_dialog(args: argparse.Namespace) -> None:
@@ -99,7 +98,7 @@ def _cmd_status_set(args: argparse.Namespace) -> None:
   unread = common.post_internal_api("/api/internal/web/status/unread", request)["unread"]
   if not unread:
     result = common.post_internal_api("/api/internal/web/status", request)
-    print(json.dumps(result))
+    common.print_json(result, indent=None, file=sys.stdout)
     return
 
   cfg = common.get_config()

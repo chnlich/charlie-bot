@@ -18,7 +18,7 @@ store contract.
 
 The ``proposal`` verbs drive the store's PR flow (``src/features/memory/memory_proposal.py``):
 the ``proposal`` branch, worked in the sibling ``memory-proposal`` worktree,
-holds the drafted curation as commits, and only ``land`` — one approved
+holds the drafted curation as commits, and only ``land`` — one reviewed
 version — fast-forwards the live checkout the sessions read. ``commit`` prints each
 negation-word hit as a ``warning:`` line on stderr and still exits 0; the same lines
 land in the commit message's ``Negation warnings:`` section.
@@ -109,9 +109,9 @@ def main() -> None:
       "message lists each replaced line under 'Replaced PR lines:'")
   p_pland = proposal_sub.add_parser(
       "land",
-      help="Fast-forward the live checkout to one approved proposal commit",
+      help="Fast-forward the live checkout to one reviewed proposal commit",
       formatter_class=help_formatter.CliHelpFormatter)
-  p_pland.add_argument("sha", help="The approved proposal commit SHA")
+  p_pland.add_argument("sha", help="The reviewed proposal commit SHA")
 
   args = parser.parse_args()
   if args.command == "query":

@@ -80,6 +80,19 @@ def test_factory_routes_named_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
   assert backend._prepare_env({})["ANTHROPIC_AUTH_TOKEN"] == "configured-value"
 
 
+def test_factory_routes_effort_to_cli_command() -> None:
+  backend = factory.build(_option(effort="high"), config.CharlieBotConfig())
+
+  effort_index = backend._cmd.index("--effort")
+  assert backend._cmd[effort_index + 1] == "high"
+
+
+def test_factory_omits_effort_from_cli_command_by_default() -> None:
+  backend = factory.build(_option(), config.CharlieBotConfig())
+
+  assert "--effort" not in backend._cmd
+
+
 def test_option_requires_a_positive_window_and_endpoint_root() -> None:
   with pytest.raises(pydantic.ValidationError):
     _option(context_window=0)

@@ -8,8 +8,18 @@ The For-you view shows your web replies and hides the rest of your turn output.
 
 ## When to reply
 
-- When a user message woke this turn, post exactly one web reply.
-- When the web reply nudge woke this turn, post the web reply that the last turn missed.
+- An opening reply is a web reply that states the reading of the message and the steps of this turn.
+- An answer reply is the web reply that carries the answer of this turn.
+- When a user message woke this turn, post one opening reply before you start the work:
+  - State your reading of the message in one sentence.
+  - List the steps that you will take.
+  - Name each step that changes something outside this session, a reversible step included.
+- Before the opening reply, make only the tool calls that write and post it.
+- When you can post the answer reply without other tool calls, post no opening reply.
+- After the opening reply, continue the work. The user stops the turn with the Stop button.
+- When your steps change later in the turn, continue without a new opening reply.
+- When a user message woke this turn, post exactly one answer reply.
+- When the web reply nudge woke this turn, post the answer reply that the last turn missed.
 - When another input woke this turn, post one web reply for the results of this turn:
   - a page for the user;
   - the approval of your plan;
@@ -31,10 +41,10 @@ The For-you view shows your web replies and hides the rest of your turn output.
 
 ## Form
 
-- Write the web reply as the answer itself: the conclusion first, in a few sentences.
-- Keep the web reply under 500 characters.
+- Write the answer reply as the answer itself: the conclusion first, in a few sentences.
+- Keep each web reply under 500 characters. A markdown link counts as its label.
 - When the answer needs more than 500 characters, write the whole answer on a page.
-- Then post the conclusion and the link to that page as the web reply.
+- Then post the conclusion and the link to that page as the answer reply.
 - Write the web reply and the session status in the language of your chat replies.
 - Write **Now** in one or two sentences.
 - Keep **Now** under 200 characters.
@@ -47,9 +57,7 @@ The For-you view shows your web replies and hides the rest of your turn output.
   - the options, the consequence of each, and your recommendation;
   - the links to the evidence: pages, diffs, PRs or logs.
 - Give each Waiting on you item the link to the place where the user answers it, when that place has a link.
-- List each Waiting on you item in the session where the user answers it.
 - The user answers your Waiting on you items in your own session.
-- When your approver is your parent node, send your divergences to your parent instead.
 - The status panel shows the Waiting on you items of your open descendant sessions below your items.
 - The status panel shows the **Now** of each open child session in a folded block below your items.
 
@@ -69,13 +77,15 @@ The For-you view shows your web replies and hides the rest of your turn output.
 - When the command prints these restatements, it stored nothing.
 - Compare each restatement with your intent:
   - When a part reads NOT STATED or differs from your intent, revise the item.
-  - When the reader names a step that you can undo, check that the step is no consequence step.
+  - When the reader names an undoable step, check that the item holds no decision that only the user makes.
     Then remove the item, and carry out the step on your recommendation.
+    The list then holds only what the next milestone needs from the user.
 - Then run the command again.
 - The command stores the status when the reader has read every item as it stands.
 - The command replaces the items that the file names and keeps the other items. It prints the stored session status.
 - The printout also holds `now_chars` and `now_over_budget`.
 - When `now_over_budget` is true, shorten **Now** and set it again.
 - After a context reset, read the session status with `charliebot web status show`.
+- The command also prints the Waiting on you items of each open descendant session.
 - The command also prints the **Now** of each open child session.
 - Then read the For-you view with `charliebot web dialog`.

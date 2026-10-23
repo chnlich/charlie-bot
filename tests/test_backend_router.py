@@ -18,7 +18,7 @@ import test_task_execution as tte
 
 from src.infra import config, metadata_slots, models
 from src.infra import event_types as ET
-from src.runtime import backend_pool
+from src.runtime import backend_pool, task_sessions
 
 OP_HEADERS = tte.OP_HEADERS
 
@@ -412,6 +412,220 @@ async def test_quota_failover_uses_the_pool_once_the_route_is_spent(tmp_path, mo
   new_meta = await tree.load_meta(worker.id)
   # The route held only the spent member: the pool takes over at its first free member.
   assert new_meta.backend == "fake2"
+
+
+async def _launch_worker_error_event(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    message: str,
+    *,
+    content: str = "",
+    pool_chosen: bool = True,
+    event_type: str = ET.ERROR,
+) -> tuple[
+    config.CharlieBotConfig,
+    task_sessions.TaskTreeManager,
+    str,
+    models.RunRecord,
+    str,
+    str,
+    list[dict],
+    list[tuple[str, str, str | None]],
+]:
+  """Run one scripted implement worker error through completion and failover delivery."""
+  backend_pool.reset_for_tests()
+  cfg, session_blocks, tree = tte.build_spawning_env(
+      tmp_path,
+      monkeypatch,
+      options=[conftest.backend_option(id=i, label=i, type="codex", model="fake-model") for i in ("fake", "fake2")],
+      pool=["fake", "fake2"])
+  conftest.stub_credentials({"charliebot": {"access_key": "op-secret"}})
+  monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
+  monkeypatch.setattr(conftest.CONFIG_GET_CONFIG_PATCH_TARGET, lambda: cfg)
+  adapter = tte._adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
+  tree.dispatch.executor = adapter
+  manager = await conftest.create_task(tree, parent=None, request_id="root")
+
+  if pool_chosen:
+    first_backend = backend_pool.select(cfg, caller="test")
+    assert first_backend is not None
+    first_backend_id = first_backend.id
+  else:
+    first_backend_id = "fake"
+  repo_path = tmp_path / "repo"
+  repo_path.mkdir()
+  worktree_path = tmp_path / "worktree"
+  worktree_path.mkdir()
+  task_spec = models.TaskSpec(
+      goal="implement the requested change",
+      repo_path=str(repo_path),
+      base_branch="main",
+      task_type=models.TaskType.IMPLEMENT,
+      keep_worktree=True,
+  )
+  worker_node = await tree.create_task(
+      request_id="worker",
+      task_parent_id=manager.id,
+      profile="worker",
+      task=task_spec,
+      name=None,
+      backend=first_backend_id,
+      caller=conftest.OPERATOR,
+  )
+  if pool_chosen:
+    await tree.update_slot_fields(worker_node.id, backend_pool.METADATA_OWNER, backend_from_pool=True)
+  else:
+    fields = metadata_slots.fields_of(await tree.load_meta(worker_node.id), backend_pool.METADATA_OWNER)
+    assert fields.backend_from_pool is False and fields.route is None
+
+  admitted = await tree.dispatch.admit_input(
+      worker_node.id, event_type=ET.USER, content="implement this input batch", actor="user")
+  run = models.RunRecord(
+      id="run-initial",
+      session_id=worker_node.id,
+      kind="work",
+      backend=first_backend_id,
+      model="fake-model",
+      repo_path=str(repo_path),
+      base_branch="main",
+      branch_name="charliebot/task-test",
+      worktree_path=str(worktree_path),
+      input_event_ids=[str(admitted["id"])],
+  )
+  await tree.runs.register_run_locked(run, task_spec_text=task_spec.goal)
+  reports: list[tuple[str, str, str | None]] = []
+
+  async def record_failure(
+      session_id: str,
+      failed_run: models.RunRecord,
+      outcome: str,
+      *,
+      summary: str | None = None,
+      deciding_run: models.RunRecord | None = None,
+  ) -> None:
+    reports.append((failed_run.id, outcome, summary))
+
+  monkeypatch.setattr(adapter, "_report_failure_to_parent", record_failure)
+  builds = conftest.install_scripted_backends(
+      monkeypatch,
+      [
+          tte.SpawningScriptedBackend([{
+              "type": event_type,
+              "message": message,
+              "content": content,
+          }], exit_code=1),
+          tte.SpawningScriptedBackend([conftest.assistant_text_event("retry stopped")], exit_code=1),
+      ],
+      conftest.WORKER_BUILD_BACKEND_PATCH_TARGET,
+  )
+  adapter.launch(worker_node.id, run.id)
+  ended_run, outcome = await tte.wait_for_terminal_run(tree, worker_node.id, run.id)
+  return cfg, tree, worker_node.id, ended_run, outcome, first_backend_id, builds, reports
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Selected model is at capacity. Please try a different model.",
+        "model produced no output for 1200s",
+        "litellm.BadGatewayError: BadGatewayError: OpenAIException - Bad Gateway",
+        "litellm.InternalServerError: InternalServerError: OpenAIException - Connection error.",
+        "Internal Server Error",
+        (
+            "OpenCode backend failed: OpenCode SSE stream carried no session progress for 3600.0 s "
+            "(heartbeats during silence: 359)"),
+        (
+            "OpenCode backend failed: peer closed connection without sending complete message body "
+            "(incomplete chunked read)"),
+    ],
+)
+async def test_temporary_backend_errors_fail_over_on_the_worker_path(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, message: str) -> None:
+  cfg, tree, worker_id, failed_run, outcome, first_backend, builds, reports = await _launch_worker_error_event(
+      tmp_path, monkeypatch, message)
+  assert outcome == "failed"
+  retry = await tte._claimed_work_run_after(tree, worker_id, {failed_run.id}, timeout=15.0)
+  retry, retry_outcome = await tte.wait_for_terminal_run(tree, worker_id, retry.id)
+
+  assert retry_outcome == "failed"
+  assert backend_pool.cooling_until(first_backend) is not None
+  assert backend_pool.cooling_until("fake2") is None
+  remaining = backend_pool.cooling_until(first_backend) - models.utc_now()
+  assert datetime.timedelta(minutes=29) < remaining <= backend_pool.DEFAULT_COOLDOWN
+  assert retry.backend == "fake2"
+  assert builds[1]["option"].id == "fake2"
+  assert retry.input_event_ids == failed_run.input_event_ids
+  assert retry.worktree_path == failed_run.worktree_path
+  switches = [event for event in tree.events.load_events(worker_id) if event.get("type") == ET.QUOTA_FAILOVER]
+  assert len(switches) == 1
+  assert switches[0]["from"] == first_backend
+  assert switches[0]["to"] == "fake2"
+  assert switches[0]["recovers_at"] == backend_pool.cooling_until(first_backend).isoformat(timespec="minutes")
+  assert reports == [(retry.id, "failed", None)]
+  assert cfg.backends.pool == ["fake", "fake2"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("message", "content"),
+    [
+        ("Step limit (1000) exceeded without task completion.", "Bad Gateway"),
+        ("Error code: 400 - invalid request (request id req_502ab1)", ""),
+    ],
+)
+async def test_stderr_tail_and_request_id_do_not_trigger_backend_failover(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, message: str, content: str) -> None:
+  cfg, tree, worker_id, failed_run, outcome, _first_backend, builds, reports = await _launch_worker_error_event(
+      tmp_path, monkeypatch, message, content=content)
+
+  assert outcome == "failed"
+  assert all(backend_pool.cooling_until(member) is None for member in cfg.backends.pool)
+  assert [r for r in tree.runs.list_run_records_sync(worker_id) if r.retry_of_run_id == failed_run.id] == []
+  assert not [event for event in tree.events.load_events(worker_id) if event.get("type") == ET.QUOTA_FAILOVER]
+  assert len(builds) == 1
+  assert reports == [(failed_run.id, "failed", None)]
+
+
+@pytest.mark.asyncio
+async def test_non_error_event_with_temporary_backend_message_does_not_fail_over(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg, tree, worker_id, failed_run, outcome, _first_backend, builds, reports = await _launch_worker_error_event(
+      tmp_path,
+      monkeypatch,
+      "Selected model is at capacity. Please try a different model.",
+      event_type=ET.SYSTEM,
+  )
+
+  assert outcome == "failed"
+  assert all(backend_pool.cooling_until(member) is None for member in cfg.backends.pool)
+  assert [r for r in tree.runs.list_run_records_sync(worker_id) if r.retry_of_run_id == failed_run.id] == []
+  assert not [event for event in tree.events.load_events(worker_id) if event.get("type") == ET.QUOTA_FAILOVER]
+  assert len(builds) == 1
+  assert reports == [(failed_run.id, "failed", None)]
+
+
+@pytest.mark.asyncio
+async def test_a_named_backend_capacity_error_reports_failure_without_failover(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg, tree, worker_id, failed_run, outcome, first_backend, builds, reports = await _launch_worker_error_event(
+      tmp_path,
+      monkeypatch,
+      "Selected model is at capacity. Please try a different model.",
+      pool_chosen=False,
+  )
+  meta = await tree.load_meta(worker_id)
+  fields = metadata_slots.fields_of(meta, backend_pool.METADATA_OWNER)
+
+  assert outcome == "failed"
+  # This metadata shape records a delegation that named its backend.
+  assert fields.backend_from_pool is False and fields.route is None
+  assert all(backend_pool.cooling_until(member) is None for member in cfg.backends.pool)
+  assert first_backend == "fake"
+  assert [r for r in tree.runs.list_run_records_sync(worker_id) if r.retry_of_run_id == failed_run.id] == []
+  assert not [event for event in tree.events.load_events(worker_id) if event.get("type") == ET.QUOTA_FAILOVER]
+  assert len(builds) == 1
+  assert reports == [(failed_run.id, "failed", None)]
 
 
 # ---------------------------------------------------------------------------

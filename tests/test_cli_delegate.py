@@ -8,7 +8,7 @@ import conftest
 import pytest
 
 from src.infra import constants
-from src.runtime.cli import delegate
+from src.runtime.cli import common, delegate
 
 
 def _repo_argv(repo: str, task_spec_file: pathlib.Path, *extra: str, session: str | None = None) -> list[str]:
@@ -92,7 +92,7 @@ def test_main_routes_by_session_env_from_another_session_dir(
   task_spec_file = _write_task_spec(tmp_path)
 
   with conftest.patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file)) as post_mock:
-    post_mock.return_value.json.return_value = {"thread_id": "t1", "description": "do work"}
+    post_mock.return_value.json.return_value = {"session_id": "w1", "run_id": "r1"}
     delegate.main()
 
   assert post_mock.call_args.kwargs["json"]["session_id"] == "live-session"
@@ -125,6 +125,47 @@ def test_main_rejects_explicit_session_against_session_env(
   assert f"{constants.SESSION_ID_ENV_VAR}=live-session" in error
 
 
+def test_main_prints_only_session_and_run_id_from_server_result(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+  """stdout carries the server result's session_id and run_id; the spec, parent and thread keys stay off it."""
+  cfg, task_spec_file = _delegate_rig(tmp_path, monkeypatch)
+  server_result = {
+      "session_id": "worker-1",
+      "parent_session_id": "s1",
+      "run_id": "run-1",
+      "thread_id": "run-1",
+      "description": _task_spec(),
+  }
+
+  with conftest.patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file, session="s1")) as post_mock:
+    post_mock.return_value.json.return_value = server_result
+    delegate.main()
+
+  assert json.loads(capsys.readouterr().out) == {"session_id": "worker-1", "run_id": "run-1"}
+
+
+def test_main_prints_readback_ids_when_the_response_is_lost(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+  """A sent-but-lost delegation prints the readback's ids; run_id stays null until the work Run is on disk."""
+  cfg, task_spec_file = _delegate_rig(tmp_path, monkeypatch)
+  readback = {"session_id": "worker-2", "parent_session_id": "s1", "run_id": None, "thread_id": None}
+
+  with (
+      conftest.patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file, session="s1"),
+                                side_effect=common._SentButLostError("reset")),
+      mock.patch.object(common, "find_local_task_child", return_value=readback),
+  ):
+    delegate.main()
+
+  assert json.loads(capsys.readouterr().out) == {"session_id": "worker-2", "run_id": None}
+
+
 def test_main_posts_task_spec_file_to_delegate_endpoint(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, task_spec_file = _delegate_rig(tmp_path, monkeypatch)
@@ -132,7 +173,7 @@ def test_main_posts_task_spec_file_to_delegate_endpoint(
 
   with conftest.patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file, "--backend", "codex-o3",
                                                  session="s1")) as post_mock:
-    post_mock.return_value.json.return_value = {"thread_id": "t1", "description": "do work"}
+    post_mock.return_value.json.return_value = {"session_id": "w1", "run_id": "r1"}
     delegate.main()
 
   payload = post_mock.call_args.kwargs["json"]
@@ -151,7 +192,7 @@ def test_main_verify_posts_repoless_payload(tmp_path: pathlib.Path, monkeypatch:
   cfg, task_spec_file = _delegate_rig(tmp_path, monkeypatch)
 
   with conftest.patched_cli_post(cfg, _verify_argv(task_spec_file, task_type="verify")) as post_mock:
-    post_mock.return_value.json.return_value = {"thread_id": "t2", "description": "task"}
+    post_mock.return_value.json.return_value = {"session_id": "w2", "run_id": "r2"}
     delegate.main()
 
   payload = post_mock.call_args.kwargs["json"]
@@ -196,7 +237,7 @@ def test_main_repo_less_delegation_posts_no_repo_fields(
   cfg, task_spec_file = _delegate_rig(tmp_path, monkeypatch)
 
   with conftest.patched_cli_post(cfg, _verify_argv(task_spec_file, task_type=task_type)) as post_mock:
-    post_mock.return_value.json.return_value = {"thread_id": "t3", "description": "task"}
+    post_mock.return_value.json.return_value = {"session_id": "w3", "run_id": "r3"}
     delegate.main()
 
   payload = post_mock.call_args.kwargs["json"]
@@ -404,7 +445,7 @@ def test_main_allows_source_files_none(tmp_path: pathlib.Path, monkeypatch: pyte
   task_spec_file = _write_task_spec(tmp_path, _task_spec("- (none)"))
 
   with conftest.patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file)) as post_mock:
-    post_mock.return_value.json.return_value = {"thread_id": "t1"}
+    post_mock.return_value.json.return_value = {"session_id": "w1", "run_id": "r1"}
     delegate.main()
 
   post_mock.assert_called_once()
@@ -417,7 +458,7 @@ def test_main_accepts_existing_absolute_source_file(tmp_path: pathlib.Path, monk
   task_spec_file = _write_task_spec(tmp_path, _task_spec(f"- {source_file}"))
 
   with conftest.patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file)) as post_mock:
-    post_mock.return_value.json.return_value = {"thread_id": "t1"}
+    post_mock.return_value.json.return_value = {"session_id": "w1", "run_id": "r1"}
     delegate.main()
 
   post_mock.assert_called_once()
@@ -442,7 +483,7 @@ def test_session_id_reaches_payload_from_cwd_or_flag(
   task_spec_file = _write_task_spec(tmp_path)
 
   with conftest.patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file, session=session_arg)) as post_mock:
-    post_mock.return_value.json.return_value = {"thread_id": "t1"}
+    post_mock.return_value.json.return_value = {"session_id": "w1", "run_id": "r1"}
     delegate.main()
 
   payload = post_mock.call_args.kwargs["json"]

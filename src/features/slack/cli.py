@@ -23,7 +23,7 @@ the reply-format contract is prompts/thread_reply_format.md.
 """
 
 import argparse
-import json
+import sys
 
 from src.infra import help_formatter
 from src.runtime.cli import common
@@ -57,7 +57,7 @@ def _cmd_reply(args: argparse.Namespace) -> None:
   session_id = common.resolve_session_id(args.session)
   text = common.read_reply_text(args.file)
   result = common.post_internal_api("/api/internal/slack/reply", {"session_id": session_id, "text": text})
-  print(json.dumps(result))
+  common.print_json(result, indent=None, file=sys.stdout)
 
 
 def _cmd_ack(args: argparse.Namespace) -> None:
@@ -67,7 +67,7 @@ def _cmd_ack(args: argparse.Namespace) -> None:
           "session_id": session_id,
           "message_ids": args.message_id
       })
-  print(json.dumps(result))
+  common.print_json(result, indent=None, file=sys.stdout)
 
 
 def main() -> None:

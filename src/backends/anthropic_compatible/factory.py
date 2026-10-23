@@ -19,5 +19,6 @@ def build(option: models.BackendOption, cfg: config.CharlieBotConfig, **kwargs: 
       auth_token=auth_token,
       model=models.option_default_model(option, subject="backend "),
       context_window=option.context_window,
+      effort=option.effort,
       **kwargs,
   )

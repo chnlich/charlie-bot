@@ -274,6 +274,7 @@ from src.runtime import (  # noqa: E402
     triggers,
 )
 from src.runtime import backend_pool  # noqa: E402
+from src.runtime import sidebar_state  # noqa: E402
 from src.runtime import worker as worker_module  # noqa: E402
 from src.runtime.agent_process import base as backend_base  # noqa: E402
 from src.backends.antigravity import antigravity_cli  # noqa: E402
@@ -2589,6 +2590,31 @@ def reset_config_caches() -> None:
   cron_loader._cron_snapshot = cron_loader._CronSnapshot()
 
 
+def reset_backend_pool_state() -> None:
+  """Clear the pool's rotation position and every cooldown; both live in process memory."""
+  with backend_pool._lock:
+    backend_pool._position = 0
+    backend_pool._cooling_until.clear()
+
+
+def reset_sidebar_state() -> None:
+  """Clear the sidebar's dirty set, snapshot, probe signatures, poll counter and derived maps."""
+  sidebar_state._dirty.clear()
+  sidebar_state._snapshot.clear()
+  sidebar_state._probe_signatures.clear()
+  sidebar_state._poll_count = 0
+  sidebar_state._derived_generation = 0
+  sidebar_state._derived_maps.clear()
+
+
+def reset_claude_account_readings() -> None:
+  """Drop the process-local Claude account readings: rate-limit, panel, auth-failure and login-notified state."""
+  claude_accounts._event_readings.clear()
+  claude_accounts._panel_readings.clear()
+  claude_accounts._auth_failures.clear()
+  claude_accounts._login_notified.clear()
+
+
 def stub_credentials(sections: dict[str, dict[str, str | int]]) -> None:
   """Plant in-memory credentials for get_credentials(): the given sections become the cached
   Credentials, stamped with the current credentials.yaml fingerprint, so the answer comes from
@@ -2612,9 +2638,9 @@ def agent_headers(session_id: str, run_id: str) -> dict[str, str]:
 @pytest.fixture(autouse=True)
 def _reset_backend_pool() -> Iterator[None]:
   """The pool's rotation and cooldowns are process memory; each test starts from a fresh rotation."""
-  backend_pool.reset_for_tests()
+  reset_backend_pool_state()
   yield
-  backend_pool.reset_for_tests()
+  reset_backend_pool_state()
 
 
 def _reset_thinking_state() -> None:

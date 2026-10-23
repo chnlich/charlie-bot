@@ -435,7 +435,7 @@ async def _launch_worker_error_event(
     list[tuple[str, str, str | None]],
 ]:
   """Run one scripted implement worker event through completion and failover delivery."""
-  backend_pool.reset_for_tests()
+  conftest.reset_backend_pool_state()
   cfg, session_blocks, tree = tte.build_spawning_env(
       tmp_path,
       monkeypatch,

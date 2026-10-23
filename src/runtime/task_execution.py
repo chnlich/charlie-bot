@@ -1519,6 +1519,14 @@ class TaskExecutionAdapter:
       native_id = previous.native_session_id
     return RunContinuation(previous=previous, native_id=native_id)
 
+  async def _claimed_batch_content(self, meta: models.SessionMetadata, run: models.RunRecord) -> str:
+    """The input-prompt content of the events this run claims as its batch."""
+    batch_ids = set(run.input_event_ids)
+    batch = [e for e in self._tree.fact_history(meta.id) if str(e.get("id")) in batch_ids]
+    provenance = await self._tree.dispatch.child_report_provenances(batch) if batch else {}
+    content, _uploads = task_input_prompt.compose_input_prompt(meta, batch, provenance) if batch else ("", [])
+    return content
+
   async def _batch_only_context(self, meta: models.SessionMetadata, run: models.RunRecord) -> str:
     """The continued conversation's whole task/input context: this run's claimed batch.
 
@@ -1527,10 +1535,7 @@ class TaskExecutionAdapter:
         what is new. An empty batch is impossible — the dispatcher claims one
         before this launch exists — and surfaces loudly.
         """
-    batch_ids = set(run.input_event_ids)
-    batch = [e for e in self._tree.fact_history(meta.id) if str(e.get("id")) in batch_ids]
-    provenance = await self._tree.dispatch.child_report_provenances(batch) if batch else {}
-    content, _uploads = task_input_prompt.compose_input_prompt(meta, batch, provenance) if batch else ("", [])
+    content = await self._claimed_batch_content(meta, run)
     if not content.strip():
       raise task_errors.TaskInvalidError(f"run {run.id} continues a conversation but claims no consumable input")
     return content
@@ -1645,10 +1650,7 @@ class TaskExecutionAdapter:
     """The task/input body: the pinned spec's goal plus this run's claimed batch."""
     task = meta.task
     spec_text = task.goal if (task is not None and task.goal.strip()) else ""
-    batch_ids = set(run.input_event_ids)
-    batch = [e for e in self._tree.fact_history(meta.id) if str(e.get("id")) in batch_ids]
-    provenance = await self._tree.dispatch.child_report_provenances(batch) if batch else {}
-    content, _uploads = task_input_prompt.compose_input_prompt(meta, batch, provenance) if batch else ("", [])
+    content = await self._claimed_batch_content(meta, run)
     description = "\n\n".join(part for part in (spec_text, content) if part)
     if not description.strip():
       raise task_errors.TaskInvalidError(f"run {run.id} has no task spec and no input; nothing to execute")

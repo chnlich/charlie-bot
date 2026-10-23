@@ -191,7 +191,7 @@ def _resolve_run_scoped_audience(token: str) -> str:
   # one shared active-Run predicate via run_scoped_refusal), no server process
   # needed; nothing here writes. The read stays off the pydantic model stack:
   # this runs per fresh CLI process, and the stack prices ~120 ms of the wall
-  # (src.infra.models' 58 model classes) for three record fields and one fact type.
+  # for three record fields and one fact type.
   refusal = run_identity.run_scoped_refusal(root, claims.session_id, claims.run_id)
   if refusal is not None:
     print(f"error: {refusal}", file=sys.stderr)

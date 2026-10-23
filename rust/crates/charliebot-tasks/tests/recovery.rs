@@ -2668,11 +2668,11 @@ async fn clean_boot_writes_marker_and_the_next_boot_skips_a_closed_worker() -> a
   Ok(())
 }
 
-#[tokio::test]
-async fn an_unreadable_boot_marker_reads_as_absent_and_every_node_gets_a_full_check() -> anyhow::Result<()> {
-  // Python: tests/test_boot_recovery_skip.py::test_unreadable_marker_checks_every_node_then_is_rewritten. Its five
-  // contents are the first five cases; the invalid UTF-8 and the non-string timestamp are the other unreadable inputs
-  // that src/runtime/task_recovery.py:58-74 names.
+/// Writes `content` as the boot marker, then runs one boot pass over a closed worker and its open manager. The unreadable
+/// marker reads as absent: both nodes get a full check, one `boot_recovery_marker_unreadable` line names the byte size
+/// and `error_type`, and the clean pass rewrites the marker with the start time it ran under.
+async fn assert_unreadable_boot_marker_reads_as_absent(content: &[u8], error_type: &str) -> anyhow::Result<()> {
+  // Python: tests/test_boot_recovery_skip.py::test_unreadable_marker_checks_every_node_then_is_rewritten.
   let stack = Stack::start("exit 0").await?;
   add_recovery_worker(
     &stack,
@@ -2683,45 +2683,69 @@ async fn an_unreadable_boot_marker_reads_as_absent_and_every_node_gets_a_full_ch
   .await?;
   let marker_path = boot_marker_path(&stack);
   std::fs::create_dir_all(marker_path.parent().expect("boot marker has a parent directory"))?;
-  let cases: [(&[u8], &str); 7] = [
-    (b"", "JSONDecodeError"),
-    (b"not json", "JSONDecodeError"),
-    (b"[]", "TypeError"),
-    (b"{}", "KeyError"),
-    (br#"{"pass_started_at": "x"}"#, "ValueError"),
-    (br#"{"pass_started_at": 5}"#, "TypeError"),
-    (b"\xff\xfe{}", "UnicodeDecodeError"),
-  ];
-  for (content, error_type) in cases {
-    std::fs::write(&marker_path, content)?;
-    let log = LogCapture::default();
-    let _subscriber = log.install();
-    let before = UtcDateTime::now();
-    let outcome = recovery::reconcile_task_tree(&stack.features, &stack.adapter).await;
-    let after = UtcDateTime::now();
-    assert!(outcome.is_ok(), "{error_type}: the unreadable marker must not stop the pass: {outcome:?}");
-    let counters = outcome?;
-    assert_eq!((counters.full, counters.skipped), (2, 0), "{error_type}: every node gets a full check");
+  std::fs::write(&marker_path, content)?;
+  let log = LogCapture::default();
+  let _subscriber = log.install();
+  let before = UtcDateTime::now();
+  let outcome = recovery::reconcile_task_tree(&stack.features, &stack.adapter).await;
+  let after = UtcDateTime::now();
+  assert!(outcome.is_ok(), "{error_type}: the unreadable marker must not stop the pass: {outcome:?}");
+  let counters = outcome?;
+  assert_eq!((counters.full, counters.skipped), (2, 0), "{error_type}: every node gets a full check");
 
-    let logged = log.text();
-    let unreadable: Vec<&str> =
-      logged.lines().filter(|line| line.contains("boot_recovery_marker_unreadable")).collect();
-    assert_eq!(unreadable.len(), 1, "{error_type}: one unreadable-marker line: {logged}");
-    let fields: Vec<&str> = unreadable[0].split_whitespace().collect();
-    let size = format!("size={}", content.len());
-    assert!(fields.contains(&size.as_str()), "{error_type}: the line carries the byte size: {}", unreadable[0]);
-    let error = format!("error_type={error_type}");
-    assert!(fields.contains(&error.as_str()), "{error_type}: the line names the exception: {}", unreadable[0]);
+  let logged = log.text();
+  let unreadable: Vec<&str> = logged.lines().filter(|line| line.contains("boot_recovery_marker_unreadable")).collect();
+  assert_eq!(unreadable.len(), 1, "{error_type}: one unreadable-marker line: {logged}");
+  let fields: Vec<&str> = unreadable[0].split_whitespace().collect();
+  let size = format!("size={}", content.len());
+  assert!(fields.contains(&size.as_str()), "{error_type}: the line carries the byte size: {}", unreadable[0]);
+  let error = format!("error_type=\"{error_type}\"");
+  assert!(fields.contains(&error.as_str()), "{error_type}: the line names the exception: {}", unreadable[0]);
 
-    let rewritten: Value = serde_json::from_slice(&std::fs::read(&marker_path)?)?;
-    let instant =
-      UtcDateTime::parse(rewritten["pass_started_at"].as_str().expect("the clean pass rewrites the marker"))?;
-    assert!(
-      before <= instant && instant <= after,
-      "{error_type}: the rewritten marker holds the pass start: {rewritten}"
-    );
-  }
+  let rewritten: Value = serde_json::from_slice(&std::fs::read(&marker_path)?)?;
+  let instant = UtcDateTime::parse(rewritten["pass_started_at"].as_str().expect("the clean pass rewrites the marker"))?;
+  assert!(
+    before <= instant && instant <= after,
+    "{error_type}: the rewritten marker holds the pass start: {rewritten}"
+  );
   Ok(())
+}
+
+#[tokio::test]
+async fn an_empty_boot_marker_reads_as_absent() -> anyhow::Result<()> {
+  assert_unreadable_boot_marker_reads_as_absent(b"", "JSONDecodeError").await
+}
+
+#[tokio::test]
+async fn a_boot_marker_that_is_not_json_reads_as_absent() -> anyhow::Result<()> {
+  assert_unreadable_boot_marker_reads_as_absent(b"not json", "JSONDecodeError").await
+}
+
+#[tokio::test]
+async fn a_boot_marker_that_is_not_an_object_reads_as_absent() -> anyhow::Result<()> {
+  assert_unreadable_boot_marker_reads_as_absent(b"[]", "TypeError").await
+}
+
+#[tokio::test]
+async fn a_boot_marker_without_pass_started_at_reads_as_absent() -> anyhow::Result<()> {
+  assert_unreadable_boot_marker_reads_as_absent(b"{}", "KeyError").await
+}
+
+#[tokio::test]
+async fn a_boot_marker_with_a_bad_timestamp_reads_as_absent() -> anyhow::Result<()> {
+  assert_unreadable_boot_marker_reads_as_absent(br#"{"pass_started_at": "x"}"#, "ValueError").await
+}
+
+#[tokio::test]
+async fn a_boot_marker_with_a_non_string_timestamp_reads_as_absent() -> anyhow::Result<()> {
+  // No Python test case: the TypeError that src/runtime/task_recovery.py:58-74 raises for a non-string timestamp.
+  assert_unreadable_boot_marker_reads_as_absent(br#"{"pass_started_at": 5}"#, "TypeError").await
+}
+
+#[tokio::test]
+async fn a_boot_marker_that_is_not_utf8_reads_as_absent() -> anyhow::Result<()> {
+  // No Python test case: the UnicodeDecodeError that src/runtime/task_recovery.py:58-74 raises before parsing.
+  assert_unreadable_boot_marker_reads_as_absent(b"\xff\xfe{}", "UnicodeDecodeError").await
 }
 
 #[tokio::test]

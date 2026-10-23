@@ -180,8 +180,10 @@ A web session is a manager session with no Slack or Discord origin. Every web ro
 - 422 `Reply text is empty` for blank text.
 - 422 `Keep-language reason is empty` for a blank `keep_language`.
 - 409 when the language check holds and `keep_language` is absent.
-- 200: `{"posted": true, "chars": <len>, "over_budget": <chars > 500>, "answers": "<user event id or null>"}`.
+- 200: `{"posted": true, "chars": <visible chars>, "over_budget": <chars > 500>, "answers": "<user event id or null>"}`.
 
+`chars` counts the text after each inline markdown link `[label](url)` is replaced by its label, so the URL is not
+counted (`src/features/web_reply/reply.py:47`, `:78-80`, `:205`). The stored `web_reply` event holds the same count.
 `answers` is the newest user message (or audit nudge, which maps to its user message) among the running turn's inputs.
 When `keep_language` is present, the server records it with the reply and skips the language check.
 

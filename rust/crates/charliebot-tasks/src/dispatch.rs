@@ -18,8 +18,16 @@ use serde_json::{Map, Value, json};
 
 const INPUT_EVENT_TYPES: [&str; 4] =
   [event_types::USER, event_types::AGENT_MESSAGE, event_types::SCHEDULED_TRIGGER, event_types::CHILD_REPORT];
-const ADMIT_FIELDS: [&str; 7] =
-  ["input_id", "request_id", "uploaded_files", "timestamp", "from_session", "from_session_name", "input_mode"];
+const ADMIT_FIELDS: [&str; 8] = [
+  "input_id",
+  "request_id",
+  "uploaded_files",
+  "timestamp",
+  "from_session",
+  "from_session_name",
+  "input_mode",
+  "fields",
+];
 
 /// The executor that reserves a run and launches the claimed input batch.
 pub trait DispatchExecutor: Send + Sync {
@@ -82,6 +90,15 @@ impl Dispatcher {
       return Err(StoreError::forbidden("only the server's own scheduler mints scheduled triggers"));
     }
     let fields = admit_fields(&fields)?;
+    let collisions: Vec<_> = fields
+      .extra_fields
+      .keys()
+      .filter(|key| charliebot_store::control_events::REQUEST_EVENT_CORE_FIELDS.contains(&key.as_str()))
+      .cloned()
+      .collect();
+    if !collisions.is_empty() {
+      return Err(StoreError::invalid(format!("fields may not replace core event fields: {}", collisions.join(", "))));
+    }
     if fields.input_id.is_some() && fields.request_id.is_some() {
       return Err(StoreError::invalid("input_id and request_id are mutually exclusive"));
     }
@@ -101,13 +118,14 @@ impl Dispatcher {
       if let Some(request_id) = fields.request_id.as_deref() {
         let stable_id = charliebot_store::control_events::stable_request_event_id(session_id, request_id);
         let events = self.store.load_all_facts_view_sync(session_id)?;
+        let extra_fields = Value::Object(fields.extra_fields.clone());
         if let Some(existing) = charliebot_store::control_events::replay_request_event(
           events.iter(),
           &stable_id,
           request_id,
           event_type,
           content,
-          None,
+          Some(&extra_fields),
         )? {
           return Ok(existing);
         }
@@ -134,6 +152,7 @@ impl Dispatcher {
       if let Some(input_mode) = fields.input_mode.as_deref() {
         payload.push(("input_mode".to_string(), Value::String(input_mode.to_string())));
       }
+      payload.extend(fields.extra_fields.clone());
       let mut event = charliebot_store::control_events::build_control_event(
         event_type,
         actor,
@@ -879,6 +898,7 @@ struct AdmitFields {
   from_session: Option<String>,
   from_session_name: Option<String>,
   input_mode: Option<String>,
+  extra_fields: Map<String, Value>,
 }
 
 struct ChildReportInput<'a> {
@@ -908,6 +928,11 @@ fn admit_fields(fields: &Value) -> StoreResult<AdmitFields> {
     Some(Value::Array(files)) => Some(files.clone()),
     Some(_) => return Err(StoreError::invalid("task input field uploaded_files must be a list or null")),
   };
+  let extra_fields = match object.get("fields") {
+    None | Some(Value::Null) => Map::new(),
+    Some(Value::Object(fields)) => fields.clone(),
+    Some(_) => return Err(StoreError::invalid("task input field fields must be an object or null")),
+  };
   Ok(AdmitFields {
     input_id: optional_string("input_id")?,
     request_id: optional_string("request_id")?,
@@ -916,6 +941,7 @@ fn admit_fields(fields: &Value) -> StoreResult<AdmitFields> {
     from_session: optional_string("from_session")?,
     from_session_name: optional_string("from_session_name")?,
     input_mode: optional_string("input_mode")?,
+    extra_fields,
   })
 }
 

@@ -737,6 +737,10 @@ async fn session_message(State(features): State<Arc<FeatureContext>>, request: a
     );
     return responses::json(StatusCode::UNPROCESSABLE_ENTITY, &json!({ "detail": detail }));
   }
+  let identity = match caller::resolve_caller(&parts.headers, &features) {
+    Ok(caller) => caller,
+    Err(response) => return response,
+  };
   let caller = match features.store.get_session(&request.session_id).await {
     Ok(Some(caller)) => caller,
     Ok(None) => return responses::json(StatusCode::NOT_FOUND, &json!({ "detail": "Session not found" })),
@@ -751,7 +755,19 @@ async fn session_message(State(features): State<Arc<FeatureContext>>, request: a
     Ok(dispatch) => dispatch,
     Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
   };
-  let fields = json!({ "from_session": caller.id, "from_session_name": caller.name });
+  let request_id = identity.claims().map(|claims| {
+    control_events::derived_agent_send_request_id(
+      &claims.run_id,
+      "session send",
+      &request.target_session_id,
+      &request.content,
+    )
+  });
+  let fields = json!({
+    "request_id": request_id,
+    "from_session": caller.id,
+    "from_session_name": caller.name,
+  });
   if let Err(error) = dispatch
     .admit_input(
       &request.target_session_id,

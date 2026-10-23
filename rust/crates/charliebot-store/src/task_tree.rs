@@ -2,15 +2,16 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::{Read, Seek, SeekFrom};
 use std::ops::Deref;
+use std::ops::Index;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use charliebot_core::{event_types, fsutil};
-use indexmap::IndexMap;
 use serde_json::{Map, Value, json};
 
 use crate::control_events::{self, ACTOR_AGENT, ACTOR_SYSTEM, ACTOR_USER};
@@ -97,8 +98,106 @@ pub struct TaskFacts {
   pub close_events: Vec<SharedChatEvent>,
   pub close_requests: Vec<SharedChatEvent>,
   pub delivered_reports: HashSet<(String, String)>,
-  pub events_by_id: IndexMap<String, SharedChatEvent>,
+  pub events_by_id: EventIdIndex,
   pub covered: usize,
+}
+
+/// Insertion-ordered references to events, indexed by a content hash so the index does not duplicate each event id.
+#[derive(Clone, Debug, Default)]
+pub struct EventIdIndex {
+  by_hash: HashMap<u64, EventIdBucket>,
+  ordered: Vec<SharedChatEvent>,
+}
+
+#[derive(Clone, Debug)]
+struct EventIdBucket {
+  first: usize,
+  collisions: Option<Vec<usize>>,
+}
+
+impl EventIdIndex {
+  pub fn len(&self) -> usize {
+    self.ordered.len()
+  }
+
+  pub fn is_empty(&self) -> bool {
+    self.ordered.is_empty()
+  }
+
+  pub fn get(&self, id: &str) -> Option<&SharedChatEvent> {
+    self.get_hashed(id, event_id_hash)
+  }
+
+  fn get_hashed(&self, id: &str, hash_id: impl FnOnce(&str) -> u64) -> Option<&SharedChatEvent> {
+    let bucket = self.by_hash.get(&hash_id(id))?;
+    let first = &self.ordered[bucket.first];
+    if event_id(first) == id {
+      return Some(first);
+    }
+    bucket.collisions.as_ref()?.iter().map(|index| &self.ordered[*index]).find(|event| event_id(event) == id)
+  }
+
+  pub fn contains_key(&self, id: &str) -> bool {
+    self.get(id).is_some()
+  }
+
+  pub fn iter(&self) -> impl Iterator<Item = (&str, &SharedChatEvent)> {
+    self.ordered.iter().map(|event| (event_id(event), event))
+  }
+
+  pub fn values(&self) -> impl Iterator<Item = &SharedChatEvent> {
+    self.ordered.iter()
+  }
+
+  fn insert(&mut self, event: SharedChatEvent) -> bool {
+    self.insert_hashed(event, event_id_hash)
+  }
+
+  fn insert_hashed(&mut self, event: SharedChatEvent, hash_id: impl FnOnce(&str) -> u64) -> bool {
+    let id = event_id(&event);
+    let hash = hash_id(id);
+    let index = self.ordered.len();
+    match self.by_hash.get_mut(&hash) {
+      Some(bucket) => {
+        if event_id(&self.ordered[bucket.first]) == id {
+          return false;
+        }
+        if let Some(collisions) = bucket.collisions.as_ref()
+          && collisions.iter().any(|index| event_id(&self.ordered[*index]) == id)
+        {
+          return false;
+        }
+        self.ordered.push(event);
+        match &mut bucket.collisions {
+          Some(collisions) => collisions.push(index),
+          None => bucket.collisions = Some(vec![index]),
+        }
+      }
+      None => {
+        self.ordered.push(event);
+        self.by_hash.insert(hash, EventIdBucket { first: index, collisions: None });
+      }
+    }
+    true
+  }
+}
+
+impl Index<&str> for EventIdIndex {
+  type Output = Value;
+
+  fn index(&self, id: &str) -> &Self::Output {
+    self.get(id).expect("indexed event id is present").as_ref()
+  }
+}
+
+fn event_id(event: &Value) -> &str {
+  event.get("id").and_then(Value::as_str).expect("event id index only stores events with string ids")
+}
+
+fn event_id_hash(id: &str) -> u64 {
+  let mut hash = DefaultHasher::new();
+  id.hash(&mut hash);
+  hash.finish()
 }
 
 /// A node's folded facts: the Run facts and the task fold of the same history.
@@ -222,7 +321,7 @@ impl Default for TaskFacts {
       close_events: Vec::new(),
       close_requests: Vec::new(),
       delivered_reports: HashSet::new(),
-      events_by_id: IndexMap::new(),
+      events_by_id: EventIdIndex::default(),
       covered: 0,
     }
   }
@@ -2137,7 +2236,7 @@ fn fold_task_facts(events: &[Value]) -> StoreResult<TaskFacts> {
   let events = events.iter().cloned().map(Arc::new).collect::<Vec<_>>();
   let mut facts = TaskFacts::default();
   let mut never_stop = || false;
-  assert!(fold_task_facts_from(&mut facts, &events, 0, &mut never_stop)?);
+  assert!(fold_task_facts_from(&mut facts, &events, 0, &mut never_stop, None)?);
   Ok(facts)
 }
 
@@ -2146,15 +2245,17 @@ fn fold_task_facts_from(
   events: &[SharedChatEvent],
   offset: usize,
   should_stop: &mut impl FnMut() -> bool,
+  run_facts: Option<&mut RunFacts>,
 ) -> StoreResult<bool> {
-  if should_stop() {
-    return Ok(false);
-  }
+  let mut run_facts = run_facts;
   for (index, event) in events.iter().enumerate() {
     if index % TASK_FACTS_STOP_CHECK_INTERVAL == 0 && should_stop() {
       return Ok(false);
     }
     let event = event.as_ref();
+    if let Some(run_facts) = run_facts.as_deref_mut() {
+      run_facts.observe(event);
+    }
     let position = offset + index;
     match event.get("type").and_then(Value::as_str) {
       Some("clone_start") => facts.has_user_request = false,
@@ -2163,11 +2264,8 @@ fn fold_task_facts_from(
       }
       _ => {}
     }
-    if let Some(event_id) = event.get("id").and_then(Value::as_str) {
-      if facts.events_by_id.contains_key(event_id) {
-        continue;
-      }
-      facts.events_by_id.insert(event_id.to_string(), Arc::clone(&events[index]));
+    if event.get("id").and_then(Value::as_str).is_some() && !facts.events_by_id.insert(Arc::clone(&events[index])) {
+      continue;
     }
     let event_type = event.get("type").and_then(Value::as_str).unwrap_or_default();
     match event_type {
@@ -2297,21 +2395,24 @@ fn fold_node_facts_from(
   if should_stop() {
     return Ok(false);
   }
+  let mut task_error = None;
+  if let Ok(task) = &mut facts.task {
+    match fold_task_facts_from(task, events, offset, should_stop, Some(&mut facts.runs)) {
+      Ok(true) => return Ok(true),
+      Ok(false) => return Ok(false),
+      Err(error) => task_error = Some(error.to_string()),
+    }
+  }
+  if let Some(error) = task_error {
+    facts.task = Err(error);
+  }
+  // A malformed task fold still has complete Run facts, like Python's independent Run-facts memo.
+  // Valid histories collect both sets during the task fold above.
   for (index, event) in events.iter().enumerate() {
     if index % TASK_FACTS_STOP_CHECK_INTERVAL == 0 && should_stop() {
       return Ok(false);
     }
     facts.runs.observe(event.as_ref());
-  }
-  if should_stop() {
-    return Ok(false);
-  }
-  if let Ok(task) = &mut facts.task {
-    match fold_task_facts_from(task, events, offset, should_stop) {
-      Ok(true) => {}
-      Ok(false) => return Ok(false),
-      Err(error) => facts.task = Err(error.to_string()),
-    }
   }
   Ok(!should_stop())
 }
@@ -3719,7 +3820,7 @@ pub(crate) mod tests {
   }
 
   #[test]
-  fn task_fact_event_index_keeps_one_id_key_and_two_shared_references_per_event() {
+  fn task_fact_event_index_keeps_unique_order_without_copying_id_keys() {
     let facts = fold_task_facts(&[
       json!({"id": "event-a", "type": "user", "content": "first"}),
       json!({"id": "event-a", "type": "user", "content": "duplicate"}),
@@ -3727,13 +3828,32 @@ pub(crate) mod tests {
     ])
     .unwrap();
 
-    assert_eq!(facts.events_by_id.len(), 2, "each unique event id owns one ordered map entry");
-    for (id, event) in &facts.events_by_id {
+    assert_eq!(facts.events_by_id.len(), 2, "the ordered references include each unique event id once");
+    assert_eq!(facts.events_by_id.by_hash.len(), 2, "the index keeps one fixed-width hash key per unique id");
+    assert!(facts.events_by_id.by_hash.keys().all(|key| std::mem::size_of_val(key) == std::mem::size_of::<u64>()));
+    for (id, event) in facts.events_by_id.iter() {
       assert_eq!(event["id"].as_str().unwrap(), id);
       assert!(Arc::ptr_eq(event, facts.events_by_id.get(id).unwrap()));
     }
-    assert_eq!(facts.events_by_id.get_index(0).unwrap().0, "event-a");
-    assert_eq!(facts.events_by_id.get_index(1).unwrap().0, "event-b");
+    assert_eq!(facts.events_by_id.iter().next().unwrap().0, "event-a");
+    assert_eq!(facts.events_by_id.iter().nth(1).unwrap().0, "event-b");
+  }
+
+  #[test]
+  fn task_fact_event_index_checks_hash_collisions_by_event_id() {
+    let first = Arc::new(json!({"id": "event-a", "type": "user"}));
+    let second = Arc::new(json!({"id": "event-b", "type": "agent_message"}));
+    let duplicate = Arc::new(json!({"id": "event-b", "type": "duplicate"}));
+    let mut index = EventIdIndex::default();
+
+    assert!(index.insert_hashed(first, |_| 7));
+    assert!(index.insert_hashed(second, |_| 7));
+    assert!(!index.insert_hashed(duplicate, |_| 7));
+
+    assert_eq!(index.by_hash.len(), 1, "colliding ids share one fixed-width hash key");
+    assert_eq!(index.len(), 2, "the collision bucket retains only distinct event references");
+    assert_eq!(index.get_hashed("event-a", |_| 7).unwrap()["type"], "user");
+    assert_eq!(index.get_hashed("event-b", |_| 7).unwrap()["type"], "agent_message");
   }
 
   #[test]
@@ -4168,6 +4288,27 @@ pub(crate) mod tests {
     assert_eq!(checks, 3, "the fold checks once initially and then at the 256 event boundary");
     assert_eq!(facts.runs.terminal_outcome("run-255").unwrap(), Some(RunOutcomeKind::Success));
     assert_eq!(facts.runs.terminal_outcome("run-256").unwrap(), None);
+  }
+
+  #[test]
+  fn node_fact_fold_visits_each_event_once_for_task_and_run_facts() {
+    let events = [
+      Arc::new(json!({"id": "finish-a", "type": "run_finished", "run_id": "run-a", "outcome": "success"})),
+      Arc::new(json!({"id": "stop-b", "type": "run_stop_requested", "run_id": "run-b"})),
+      Arc::new(json!({"id": "user-c", "type": "user", "content": "synthetic"})),
+    ];
+    let mut facts = NodeFacts::default();
+    let mut stop_checks = 0;
+    let completed = fold_node_facts_from(&mut facts, &events, 0, &mut || {
+      stop_checks += 1;
+      false
+    })
+    .unwrap();
+
+    assert!(completed);
+    assert_eq!(facts.runs.observed_events, events.len(), "Run facts observe one event visit per history entry");
+    assert_eq!(facts.task().unwrap().covered, events.len(), "task facts cover the same events in that pass");
+    assert_eq!(stop_checks, 3, "one block needs an initial, block-boundary, and completion stop check");
   }
 
   #[tokio::test]

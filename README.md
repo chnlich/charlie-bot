@@ -33,7 +33,7 @@ CharlieBot is a self-hosted multi-agent orchestration system: a master agent dri
 - GitHub-style diff viewer with diff comments
 - Perfetto and NCU trace viewers
 - Built-in web terminal (tmux)
-- Voice input with local speech transcription (sherpa-onnx Qwen3-ASR)
+- Voice input with online speech transcription (Gemini and Muse backends)
 - Usage panels: external provider quotas and per-session context usage
 - File browser (`/absolute_filepath/`) and file uploads
 - Access-key auth

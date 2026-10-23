@@ -31,6 +31,7 @@ pub fn backend(
     auth_token.to_string(),
     model.to_string(),
     None,
+    None,
     claude_config_dir,
     launch,
     cgroup_limits,

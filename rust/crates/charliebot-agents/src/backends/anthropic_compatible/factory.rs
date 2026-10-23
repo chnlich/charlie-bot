@@ -40,6 +40,7 @@ impl BackendFactory for AnthropicCompatibleFactory {
       auth_token,
       option.model.clone(),
       Some(fields.context_window),
+      fields.effort,
       config_dir,
       launch,
       SessionCgroupLimits::from_server(&cfg.server),

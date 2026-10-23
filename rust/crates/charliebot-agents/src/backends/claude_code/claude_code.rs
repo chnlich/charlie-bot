@@ -374,18 +374,21 @@ pub struct AnthropicEndpointBackend {
 }
 
 impl AnthropicEndpointBackend {
-  /// The backend for `model` at `base_url`, authenticated with `auth_token`. `launch` carries the per-launch
-  /// arguments of [`ClaudeCodeBackend`], such as the session id and the instructions file.
+  /// The backend for `model` at `base_url`, authenticated with `auth_token`. `effort` is the `--effort` level the
+  /// command carries when it is set. `launch` carries the per-launch arguments of [`ClaudeCodeBackend`], such as the
+  /// session id and the instructions file.
+  #[allow(clippy::too_many_arguments)]
   pub fn new(
     base_url: String,
     auth_token: String,
     model: String,
     context_window: Option<u64>,
+    effort: Option<String>,
     claude_config_dir: Option<String>,
     launch: LaunchArgs,
     cgroup_limits: SessionCgroupLimits,
   ) -> anyhow::Result<Self> {
-    let backend = ClaudeCodeBackend::from_launch(None, None, None, false, claude_config_dir, launch, cgroup_limits)?;
+    let backend = ClaudeCodeBackend::from_launch(None, effort, None, false, claude_config_dir, launch, cgroup_limits)?;
     Ok(Self { backend, base_url, auth_token, model, context_window })
   }
 }
@@ -639,6 +642,7 @@ mod tests {
       "synthetic-token".to_string(),
       "synthetic/model-1".to_string(),
       Some(409_600),
+      None,
       None,
       LaunchArgs { extra_flags: vec!["--resume".to_string(), "resume-id".to_string()], ..LaunchArgs::default() },
       SessionCgroupLimits { memory_max_mb: 0, swap_max_mb: 0, tasks_max: 0 },

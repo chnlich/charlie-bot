@@ -1,11 +1,12 @@
-//! The endpoint, declared context window and optional credential of a `cc-anthropic-compatible` entry.
+//! The endpoint, declared context window, optional credential and optional effort of a `cc-anthropic-compatible` entry.
 
 use serde_yaml::{Mapping, Value};
 
 const API_BASE: &str = "api_base";
 const CONTEXT_WINDOW: &str = "context_window";
 const CREDENTIAL: &str = "credential";
-const FIELDS: [&str; 3] = [API_BASE, CONTEXT_WINDOW, CREDENTIAL];
+const EFFORT: &str = "effort";
+const FIELDS: [&str; 4] = [API_BASE, CONTEXT_WINDOW, CREDENTIAL, EFFORT];
 
 /// The type-specific fields of one Anthropic-compatible backend option.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -16,6 +17,8 @@ pub struct CcAnthropicCompatibleOption {
   pub context_window: u64,
   /// The credentials section whose `api_key` authenticates the endpoint, when present.
   pub credential: Option<String>,
+  /// The Claude Code `--effort` level, passed on only when set.
+  pub effort: Option<String>,
 }
 
 impl CcAnthropicCompatibleOption {
@@ -51,7 +54,12 @@ impl CcAnthropicCompatibleOption {
       Some(Value::String(credential)) => Some(credential.clone()),
       Some(_) => return Err("cc-anthropic-compatible option credential must be a string or null".to_string()),
     };
-    Ok(Self { api_base, context_window, credential })
+    let effort = match fields.get(EFFORT) {
+      None | Some(Value::Null) => None,
+      Some(Value::String(effort)) => Some(effort.clone()),
+      Some(_) => return Err("cc-anthropic-compatible option effort must be a string or null".to_string()),
+    };
+    Ok(Self { api_base, context_window, credential, effort })
   }
 }
 

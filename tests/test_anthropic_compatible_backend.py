@@ -5,7 +5,7 @@ import pytest
 
 from src.app import registrations
 from src.backends.anthropic_compatible import factory, options
-from src.backends.claude_code import claude_launch
+from src.backends.claude_code import claude_code, claude_launch
 from src.infra import config, config_registry
 from src.infra import event_types as ET
 from src.runtime import session_usage
@@ -67,6 +67,25 @@ def test_factory_routes_endpoint_model_window_and_no_auth(monkeypatch: pytest.Mo
   assert "ANTHROPIC_API_KEY" not in prepared
   assert "CLAUDE_CODE_OAUTH_TOKEN" not in prepared
   assert prepared[claude_launch.THINKING_DISPLAY_UPDATES_ENV] == "0"
+
+
+def test_endpoint_env_overrides_every_inherited_gateway_variable(monkeypatch: pytest.MonkeyPatch) -> None:
+  """A cc-anthropic-compatible run keeps its own endpoint, token and model even when it
+  starts inside another cc-anthropic-compatible worker whose variables it inherits."""
+  for name in claude_code.GATEWAY_ENDPOINT_ENV_NAMES:
+    monkeypatch.setenv(name, "inherited-gateway-value")
+  backend = factory.build(_option(), config.CharlieBotConfig())
+
+  prepared = backend._prepare_env(
+      {
+          claude_code.GATEWAY_BASE_URL_ENV: "https://inherited-gateway",
+          claude_code.GATEWAY_AUTH_TOKEN_ENV: "inherited-token",
+      })
+
+  assert prepared[claude_code.GATEWAY_BASE_URL_ENV] == API_BASE
+  assert prepared[claude_code.GATEWAY_AUTH_TOKEN_ENV] == "no-auth"
+  for name in claude_code.CLAUDE_MODEL_ENV_NAMES:
+    assert prepared[name] == MODEL
 
 
 def test_factory_routes_named_api_key(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 import pathlib
 import re
 import signal
@@ -111,20 +112,40 @@ def claude_supervisor_env(env: Mapping[str, str]) -> dict[str, str]:
   return out
 
 
+# The model-selection variables Claude Code reads separately: the main model,
+# the opus/sonnet/haiku slot defaults, and the subagent model.
+CLAUDE_MODEL_ENV_NAMES: tuple[str, ...] = (
+    "ANTHROPIC_MODEL",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+    "CLAUDE_CODE_SUBAGENT_MODEL",
+)
+
+# The endpoint variables a cc-anthropic-compatible entry writes into its worker
+# process: the gateway URL, its bearer token, and claude_model_env's model pins.
+# Every process the worker starts inherits them, and a child that then launches
+# a cc-claude backend would send Claude model names to the gateway, whose key
+# has no Claude access. A cc-claude launch strips this set from what it
+# inherits; an endpoint backend overwrites the same names with its own values.
+GATEWAY_BASE_URL_ENV = "ANTHROPIC_BASE_URL"
+GATEWAY_AUTH_TOKEN_ENV = "ANTHROPIC_AUTH_TOKEN"
+GATEWAY_ENDPOINT_ENV_NAMES: frozenset[str] = frozenset(
+    (GATEWAY_BASE_URL_ENV, GATEWAY_AUTH_TOKEN_ENV, *CLAUDE_MODEL_ENV_NAMES))
+
+
 def claude_model_env(model: str) -> dict[str, str]:
   """Every Claude Code model-selection variable pinned to one model.
 
-  Claude Code reads the main model, the opus/sonnet/haiku slot defaults, and the
-  subagent model from separate variables. A backend that selects the model by env
-  (no --model flag) sets them all, or an unset slot falls back to a CLI default.
+  A backend that selects the model by env (no --model flag) sets them all, or
+  an unset slot falls back to a CLI default.
   """
-  return {
-      "ANTHROPIC_MODEL": model,
-      "ANTHROPIC_DEFAULT_OPUS_MODEL": model,
-      "ANTHROPIC_DEFAULT_SONNET_MODEL": model,
-      "ANTHROPIC_DEFAULT_HAIKU_MODEL": model,
-      "CLAUDE_CODE_SUBAGENT_MODEL": model,
-  }
+  return dict.fromkeys(CLAUDE_MODEL_ENV_NAMES, model)
+
+
+def without_gateway_env(env: Mapping[str, str]) -> dict[str, str]:
+  """A copy of *env* without the cc-anthropic-compatible gateway variables."""
+  return {name: value for name, value in env.items() if name not in GATEWAY_ENDPOINT_ENV_NAMES}
 
 
 def headless_claude_declared_window(run_kind: models.RunKind) -> tuple[int, int | None]:
@@ -307,7 +328,7 @@ class ClaudeCodeBackend(base.AgentBackend):
   _INSTRUCTIONS_TARGET: tuple[str, str] = ("CLAUDE.md", "claude_code_wrote_claude_md")
 
   def _prepare_env(self, env: dict) -> dict:
-    out = {**env, **claude_launch.headless_claude_env(self._run_kind)}
+    out = {**without_gateway_env(env), **claude_launch.headless_claude_env(self._run_kind)}
     if self._claude_config_dir:
       out[home.CLAUDE_CONFIG_DIR_ENV_VAR] = self._claude_config_dir
     return out
@@ -326,6 +347,9 @@ class ClaudeCodeBackend(base.AgentBackend):
 
     Print mode with tools disabled: no session persistence, prompt on stdin,
     plain-text stdout. The process group is killed on timeout; ``None`` waits without a limit.
+    The gateway variables an inherited cc-anthropic-compatible worker environment
+    carries are stripped: with them, `claude` sends this backend's Claude model
+    name to the gateway instead of the Anthropic account.
     """
     proc = await asyncio.create_subprocess_exec(
         "claude",
@@ -339,6 +363,7 @@ class ClaudeCodeBackend(base.AgentBackend):
         system_prompt,
         base.DISALLOWED_TOOLS_FLAG,
         "Bash,Read,Write,Edit,Glob,Grep,Agent",
+        env=without_gateway_env(os.environ),
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
@@ -375,8 +400,8 @@ class AnthropicEndpointBackend(ClaudeCodeBackend):
   def _prepare_env(self, env: dict) -> dict:
     out = {
         **super()._prepare_env(env),
-        "ANTHROPIC_BASE_URL": self._base_url,
-        "ANTHROPIC_AUTH_TOKEN": self._auth_token,
+        GATEWAY_BASE_URL_ENV: self._base_url,
+        GATEWAY_AUTH_TOKEN_ENV: self._auth_token,
         **claude_model_env(self._env_model),
     }
     if self._context_window is not None:

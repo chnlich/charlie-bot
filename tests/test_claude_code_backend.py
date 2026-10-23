@@ -71,6 +71,49 @@ def test_claude_supervisor_env_does_not_mutate_input() -> None:
   assert source == {"CLAUDECODE": "1"}
 
 
+def test_prepare_env_strips_an_inherited_cc_anthropic_compatible_worker_env(monkeypatch: pytest.MonkeyPatch) -> None:
+  """A cc-claude run inside a cc-anthropic-compatible worker inherits the worker's gateway
+  variables; the prepared run environment must drop them so `claude` talks to the Claude
+  account, not the gateway."""
+  for name in claude_code.GATEWAY_ENDPOINT_ENV_NAMES:
+    monkeypatch.setenv(name, "inherited-gateway-value")
+
+  env = claude_code.ClaudeCodeBackend(model="claude-opus-4-8")._prepare_env({"PATH": "/usr/bin", "UNRELATED": "kept"})
+
+  for name in claude_code.GATEWAY_ENDPOINT_ENV_NAMES:
+    assert name not in env
+  assert env["PATH"] == "/usr/bin"
+  assert env["UNRELATED"] == "kept"
+
+
+@pytest.mark.asyncio
+async def test_one_shot_text_spawns_claude_without_the_gateway_variables(monkeypatch: pytest.MonkeyPatch) -> None:
+  for name in claude_code.GATEWAY_ENDPOINT_ENV_NAMES:
+    monkeypatch.setenv(name, "inherited-gateway-value")
+  monkeypatch.setenv("UNRELATED_INHERITED_VAR", "kept")
+
+  spawned_env: dict[str, str] = {}
+
+  class _FakeProc:
+
+    returncode = 0
+
+    async def communicate(self, input: bytes | None = None) -> tuple[bytes, bytes]:  # noqa: A002
+      return b"ok", b""
+
+  async def _fake_exec(*args: object, **kwargs: object) -> _FakeProc:
+    spawned_env.update(kwargs["env"])
+    return _FakeProc()
+
+  monkeypatch.setattr(claude_code.asyncio, "create_subprocess_exec", _fake_exec)
+  backend = claude_code.ClaudeCodeBackend(model="claude-haiku-5-5")
+
+  assert await backend.one_shot_text("prompt", "system", timeout=None) == "ok"
+  for name in claude_code.GATEWAY_ENDPOINT_ENV_NAMES:
+    assert name not in spawned_env
+  assert spawned_env["UNRELATED_INHERITED_VAR"] == "kept"
+
+
 def test_pool_account_config_dir_expands_user_and_injects_env(monkeypatch: pytest.MonkeyPatch) -> None:
   """A cc-claude entry's login dir rides the pool account (claude_config.ClaudeAccount.config_dir);
   the backend expands ``~`` against HOME before injecting CLAUDE_CONFIG_DIR."""

@@ -571,6 +571,24 @@ class TaskInputDispatcher:
     await self.dispatch_pending(parent_id)
     return None
 
+  async def finish_report_delivery(self, recipient: str, report: dict, *, epoch: int, child_session_id: str) -> None:
+    """Deliver a newly created report live, outside the control lock: announce it, then wake the parent.
+
+        Only a report this process created reaches here, with the aggregator
+        epoch primed before its append. An archived parent keeps the report as
+        history: it counts as delivered and never wakes the node, which the log
+        line records.
+        """
+    await self._tree.session_events.announce_appended_event(recipient, report, epoch=epoch)
+    if self._tree.task_state(recipient) != "open":
+      log.info(
+          "child_report_into_archived_parent_kept_as_history",
+          parent=recipient,
+          child=child_session_id,
+          report=str(report.get("id")))
+      return
+    await self.wake_parent(recipient, report=report)
+
   async def finish_run(
       self,
       session_id: str,
@@ -682,10 +700,11 @@ class TaskInputDispatcher:
         the report's presence.
 
         This entry owns the wake: after the lock is released, a created=True
-        delivery wakes the recipient exactly once (wake_parent), so callers
-        never add their own. A replayed delivery (created False) wakes nobody.
-        The locked entry stays wake-free: its callers write further events
-        under the lock and wake themselves after releasing it.
+        delivery finishes the live delivery exactly once
+        (``finish_report_delivery``), so callers never add their own. A
+        replayed delivery (created False) wakes nobody. The locked entry stays
+        wake-free: its callers write further events under the lock and wake
+        themselves after releasing it.
         """
 
     if recipient is None:
@@ -702,18 +721,7 @@ class TaskInputDispatcher:
           recipient=recipient,
           actor=actor)
     if created:
-      await tree.session_events.announce_appended_event(recipient, report, epoch=epoch)
-      if tree.task_state(recipient) != "open":
-        # The archived parent keeps the report as history: it counts as
-        # delivered and never wakes the node.
-        log.info(
-            "child_report_into_archived_parent_kept_as_history",
-            parent=recipient,
-            child=child_session_id,
-            report=str(report.get("id")),
-        )
-        return report, created
-      await self.wake_parent(recipient, report=report)
+      await self.finish_report_delivery(recipient, report, epoch=epoch, child_session_id=child_session_id)
     return report, created
 
   async def deliver_child_report_locked(

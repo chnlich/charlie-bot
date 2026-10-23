@@ -30,7 +30,7 @@ Use the selected account's access token before making any calls.
 Choose the account using the **Accounts** section in the **google-oauth** skill, then mint its access token:
 
 ```bash
-ACCESS_TOKEN=$(python3 <skill-dir>/scripts/google_account.py token --account <name>)
+ACCESS_TOKEN=$(python3 skills/google-oauth/scripts/google_account.py token --account <name>)
 ```
 
 For the default account, omit `--account`.
@@ -131,7 +131,7 @@ Choose an account in the **Accounts** section and follow **Add or Re-Authorize a
 ## Workflow
 
 1. Choose the account that matches the request using the **Accounts** section in the **google-oauth** skill.
-2. Mint its access token with `python3 <skill-dir>/scripts/google_account.py token --account <name>`. Omit `--account` for the default account.
+2. Mint its access token with `python3 skills/google-oauth/scripts/google_account.py token --account <name>`. Omit `--account` for the default account.
 3. For reads, call `spreadsheets.get` for metadata or `spreadsheets.values.get` for cell data.
 4. For writes, show the exact planned content first and wait for explicit `take off` approval.
 5. After approval, create, write, append, or batch update via Sheets API. After a successful create, return `https://docs.google.com/spreadsheets/d/{spreadsheetId}/edit`.

@@ -15,7 +15,7 @@ from typing import TypeVar
 
 import httpx
 
-from src.backends.opencode import opencode_limits, server
+from src.backends.opencode import opencode_limits, options, server
 from src.infra import event_types as ET
 from src.infra import home, log_once, process
 from src.runtime.agent_process import base
@@ -121,9 +121,15 @@ class OpenCodeBackend(base.AgentBackend):
   # A manager turn's session cwd holds this AGENTS.md, which opencode auto-detects.
   _INSTRUCTIONS_TARGET: tuple[str, str] = ("AGENTS.md", "opencode_wrote_agents_md")
 
-  def __init__(self, *, proxy_url: str | None = None, **kwargs: object) -> None:
+  def __init__(
+      self,
+      *,
+      proxy_url: str | None = None,
+      backend_option: options.OpencodeBackend | None = None,
+      **kwargs: object) -> None:
     super().__init__(**kwargs)
     self._proxy_url = proxy_url
+    self._backend_option = backend_option
     self._reset_run_state()
 
   def _build_command(self, prompt: str) -> list[str]:
@@ -531,14 +537,18 @@ class OpenCodeBackend(base.AgentBackend):
     framed = self._frame_system_prompt(system_prompt, prompt)
     root = pathlib.Path(tempfile.mkdtemp(prefix="charliebot-opencode-oneshot-"))
     try:
+      one_shot_config = {
+          "permission": {
+              "*": "deny"
+          },
+          **options.model_context_config([self._backend_option] if self._backend_option is not None else []),
+      }
       env = {
           **os.environ,
           "XDG_DATA_HOME": str(root / "data"),
           "XDG_STATE_HOME": str(root / "state"),
           "XDG_CACHE_HOME": str(root / "cache"),
-          "OPENCODE_CONFIG_CONTENT": json.dumps({"permission": {
-              "*": "deny"
-          }}),
+          "OPENCODE_CONFIG_CONTENT": json.dumps(one_shot_config),
       }
       if self._proxy_url is not None:
         base.apply_proxy_env(env, self._proxy_url)

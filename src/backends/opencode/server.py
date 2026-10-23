@@ -27,8 +27,8 @@ from collections.abc import Coroutine
 
 import httpx
 
-from src.backends.opencode import opencode_limits
-from src.infra import constants, home, log_once, process
+from src.backends.opencode import opencode_limits, options
+from src.infra import config, constants, home, log_once, process
 from src.runtime.agent_process import base, spawn
 
 log = log_once.LazyStructlogLogger()
@@ -78,6 +78,7 @@ def headless_config() -> dict:
               "mode": "primary"
           },
       },
+      **options.model_context_config(config.get_config().backends.options),
   }
 
 

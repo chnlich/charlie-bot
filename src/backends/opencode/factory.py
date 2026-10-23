@@ -9,4 +9,7 @@ from src.runtime.agent_process import base
 
 def build(option: models.BackendOption, cfg: config.CharlieBotConfig, **kwargs: Any) -> base.AgentBackend:
   return opencode.OpenCodeBackend(
-      model=models.option_default_model(option, subject="backend "), proxy_url=option.proxy_url, **kwargs)
+      model=models.option_default_model(option, subject="backend "),
+      proxy_url=option.proxy_url,
+      backend_option=option,
+      **kwargs)

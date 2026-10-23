@@ -1,6 +1,6 @@
 ---
 name: voice-notes
-description: Handle incoming voice and audio messages such as Slack voice notes. A model with native audio input hears the clip directly; everything else decodes on-box, so the reply works from the spoken content.
+description: Handle Slack voice notes and other audio messages: hear the clip natively when the model can, otherwise transcribe it through the online transcription backend.
 ---
 
 # Voice Message Handling
@@ -15,25 +15,27 @@ A conversation model that declares audio input hears the clip directly:
 wording and prosody reach the reasoning turn in one request. Backend lineups
 change, so take the deployment's declared modality over memory.
 
-## 2. On-box decode
+## 2. Online transcription
 
-[scripts/decode_audio.py](scripts/decode_audio.py) turns any audio file into
-the transcript on stdout: sherpa-onnx Qwen3-ASR 0.6B int8 + Silero VAD on
-CPU, models cached under `<charliebot_home>/models` with pinned sha256 (GPU
-hosts select `voice.engine=qwen3_hf`). Run
-`uv run --with av python3 <skill-dir>/scripts/decode_audio.py <file>`;
-8.8 s of speech decodes in ~2.7 s on the reference CPU.
+Run this command from the repo root to transcribe one file:
 
-## 3. Outside the checkout
+    uv run --with av python3 <skill-dir>/scripts/decode_audio.py <file>
 
-A host without the repo decodes with `uvx --with faster-whisper python3`
-(`small`, CPU). On Chinese clips the on-box Qwen3-ASR reads English
-loanwords better ("Skill" versus "Scale") and stays the reference decode
-where the checkout is present.
+Purpose: uv runs the script in the checkout's environment, and `--with av` adds
+the reader for any audio container.
+
+The script sends the whole clip through the online transcription backend that
+the voice upload uses. It uses `voice.default_backend` from the profile's config,
+and the backend's key comes from `credentials.yaml`. The transcript goes to stdout.
+
+When the command fails or the checkout is missing, report that to the user and do not
+guess the words.
+
+Purpose: a guessed transcript answers words the user never said.
 
 ## Slack specifics
 
-Fetch the hosted file through `url_private_download` with the app bearer;
-the on-box decode returns in seconds while Slack's `files.info`
-transcription lags by minutes. Voice content is PII: redact before quoting
-outside the thread.
+Fetch the hosted file through `url_private_download` with the app bearer.
+The online transcription finishes without waiting on Slack's `files.info`
+transcription, which lags by minutes. Voice content is PII: redact before
+quoting outside the thread.

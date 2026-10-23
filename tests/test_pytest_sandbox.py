@@ -12,10 +12,6 @@ import subprocess
 import sys
 import uuid
 
-import pytest
-
-pytestmark = pytest.mark.integration
-
 _INNER = """\
 import os, signal, subprocess, sys
 

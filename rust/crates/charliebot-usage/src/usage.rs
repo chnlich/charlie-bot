@@ -497,7 +497,7 @@ mod tests {
   use charliebot_agents::backends::codex::{self, CodexHost};
   use charliebot_core::hot_reload::HotReload;
   use charliebot_registry::backend::Env;
-  use charliebot_registry::store_hooks;
+  use charliebot_registry::{RegisterFn, store_hooks};
   use charliebot_store::Store;
   use charliebot_store::metadata::TaskProfile;
 
@@ -788,6 +788,97 @@ sys.stdout.write(json.dumps({"run_kind": run_kind, "usage": usage}, separators=(
     assert_eq!(usage["context_tokens"], 35);
     assert_eq!(usage["context_full"], 100);
     assert_eq!(usage["model"], "snapshot-model");
+  }
+
+  fn opencode_snapshot_limits(_run_kind: RunKind) -> ContextLimits {
+    ContextLimits { declared_window: None, compact_reserve: Some(20_000) }
+  }
+
+  fn custom_snapshot_limits(_run_kind: RunKind) -> ContextLimits {
+    ContextLimits { declared_window: None, compact_reserve: Some(17_000) }
+  }
+
+  fn unknown_reserve_snapshot_limits(_run_kind: RunKind) -> ContextLimits {
+    ContextLimits { declared_window: None, compact_reserve: None }
+  }
+
+  fn register_opencode_snapshot_limits(registry: &mut Registry) -> Result<(), RegistryError> {
+    registry.reading_limits("snapshot", opencode_snapshot_limits)
+  }
+
+  fn register_custom_snapshot_limits(registry: &mut Registry) -> Result<(), RegistryError> {
+    registry.reading_limits("snapshot", custom_snapshot_limits)
+  }
+
+  fn register_unknown_reserve_snapshot_limits(registry: &mut Registry) -> Result<(), RegistryError> {
+    registry.reading_limits("snapshot", unknown_reserve_snapshot_limits)
+  }
+
+  fn registry_with_snapshot_limits(register: RegisterFn) -> Registry {
+    let mut registry = Registry::new();
+    registry.register_package("src.backends.opencode", register).unwrap();
+    registry
+  }
+
+  fn snapshot_event(limit: Value) -> Value {
+    json!({
+      "type": "result",
+      "context_snapshot": {
+        "model": "snapshot-model",
+        "tokens": {"input": 95_000, "output": 2_000, "reasoning": 1_000, "cache_read": 4_000, "cache_write": 131},
+        "limit": limit,
+      }
+    })
+  }
+
+  // Python: tests/test_session_usage.py::test_snapshot_tier_window_and_compaction_line.
+  #[test]
+  fn snapshot_tier_uses_the_context_window_and_the_reserve_bounded_by_output() {
+    let registry = registry_with_snapshot_limits(register_opencode_snapshot_limits);
+    let cases = [
+      ("large-output-cap", json!({"context": 420_000, "output": 384_000}), Some(420_000), Some(400_000)),
+      ("output-above-reserve", json!({"context": 200_000, "output": 32_000}), Some(200_000), Some(180_000)),
+      ("output-below-reserve", json!({"context": 200_000, "output": 8_000}), Some(200_000), Some(192_000)),
+      ("missing-output", json!({"context": 200_000}), None, None),
+      ("null-output", json!({"context": 200_000, "output": null}), None, None),
+      ("string-output", json!({"context": 200_000, "output": "32000"}), None, None),
+      ("float-output", json!({"context": 200_000, "output": 32_000.0}), None, None),
+      (
+        "input-takes-precedence",
+        json!({"context": 420_000, "input": 300_000, "output": 384_000}),
+        Some(300_000),
+        Some(280_000),
+      ),
+      ("input-without-output", json!({"context": 420_000, "input": 300_000}), Some(300_000), Some(300_000)),
+    ];
+    for (case, limit, expected_full, expected_compact_at) in cases {
+      let events = [snapshot_event(limit)];
+      let usage = fold_usage(&events, RunKind::ManagerTurn, &registry, None).unwrap().unwrap();
+      assert_eq!(usage["context_tokens"], 102_131, "case {case}");
+      assert_eq!(usage["context_full"], json!(expected_full), "case {case}");
+      assert_eq!(usage["context_compact_at"], json!(expected_compact_at), "case {case}");
+    }
+  }
+
+  // Python: tests/test_session_usage.py::test_snapshot_tier_reads_compaction_reserve.
+  #[test]
+  fn snapshot_tier_reads_the_registered_compaction_reserve() {
+    let limit = json!({"context": 420_000, "output": 384_000});
+    let cases: [(&str, Option<RegisterFn>, Option<i64>); 3] = [
+      ("missing-registration", None, None),
+      ("unknown-reserve", Some(register_unknown_reserve_snapshot_limits), None),
+      ("registered-reserve", Some(register_custom_snapshot_limits), Some(403_000)),
+    ];
+    for (case, register, expected_compact_at) in cases {
+      let registry = match register {
+        Some(register) => registry_with_snapshot_limits(register),
+        None => registry(),
+      };
+      let events = [snapshot_event(limit.clone())];
+      let usage = fold_usage(&events, RunKind::Work, &registry, None).unwrap().unwrap();
+      assert_eq!(usage["context_full"], 420_000, "case {case}");
+      assert_eq!(usage["context_compact_at"], json!(expected_compact_at), "case {case}");
+    }
   }
 
   #[test]

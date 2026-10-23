@@ -6,7 +6,7 @@ use serde_json::Value;
 use crate::aggregator::MessageAggregator;
 use crate::hooks::EventRenderer;
 use crate::message_events;
-use crate::{StoreError, StoreResult};
+use crate::{SharedChatEvent, StoreError, StoreResult};
 
 const PAGE_BODY_CACHE_LIMIT: usize = 4;
 
@@ -41,7 +41,7 @@ pub struct MessageProjection {
   aggregator: MessageAggregator,
   committed_final: Vec<Value>,
   separators_final: Vec<usize>,
-  region_events: Vec<Value>,
+  region_events: Vec<SharedChatEvent>,
   committed: Vec<Value>,
   separator_ordinals: Vec<usize>,
   pending_draft: Option<Value>,
@@ -55,6 +55,16 @@ impl MessageProjection {
   /// Build a projection from a session's live events.
   pub fn new(
     events: &[Value],
+    event_index_offset: usize,
+    event_renderers: HashMap<String, Arc<dyn EventRenderer>>,
+  ) -> StoreResult<Self> {
+    let shared = events.iter().cloned().map(Arc::new).collect::<Vec<_>>();
+    Self::new_shared(&shared, event_index_offset, event_renderers)
+  }
+
+  /// Build a projection from the shared parsed events in a session's live cache.
+  pub fn new_shared(
+    events: &[SharedChatEvent],
     event_index_offset: usize,
     event_renderers: HashMap<String, Arc<dyn EventRenderer>>,
   ) -> StoreResult<Self> {
@@ -72,12 +82,18 @@ impl MessageProjection {
       page_bodies: Mutex::new(PageBodyCache::default()),
       page_body_gzips: Mutex::new(PageBodyCache::default()),
     };
-    projection.ingest(events)?;
+    projection.ingest_shared(events)?;
     Ok(projection)
   }
 
   /// Return a copy advanced by newly appended events.
   pub fn advanced(&self, events: &[Value]) -> StoreResult<Self> {
+    let shared = events.iter().cloned().map(Arc::new).collect::<Vec<_>>();
+    self.advanced_shared(&shared)
+  }
+
+  /// Return a copy advanced by newly appended shared events.
+  pub fn advanced_shared(&self, events: &[SharedChatEvent]) -> StoreResult<Self> {
     let mut copied = Self {
       offset: self.offset,
       aggregator: self.aggregator.clone_state(),
@@ -92,7 +108,7 @@ impl MessageProjection {
       page_bodies: Mutex::new(PageBodyCache::default()),
       page_body_gzips: Mutex::new(PageBodyCache::default()),
     };
-    copied.ingest(events)?;
+    copied.ingest_shared(events)?;
     Ok(copied)
   }
 
@@ -155,15 +171,15 @@ impl MessageProjection {
     (self.committed[start..before].to_vec(), start, start > 0)
   }
 
-  fn ingest(&mut self, events: &[Value]) -> StoreResult<()> {
+  fn ingest_shared(&mut self, events: &[SharedChatEvent]) -> StoreResult<()> {
     self.region_events.extend_from_slice(events);
     self.event_count += events.len();
-    let closed = message_events::stable_closed_prefix_len(&self.region_events);
+    let closed = message_events::stable_closed_prefix_len_shared(&self.region_events);
     if closed > 0 {
       let prefix = self.region_events[..closed].to_vec();
       self.region_events.drain(..closed);
       let base = self.event_count - self.region_events.len() - closed - self.offset;
-      let (messages, separators) = fold_messages(&mut self.aggregator, &prefix, base)?;
+      let (messages, separators) = fold_shared_messages(&mut self.aggregator, &prefix, base)?;
       let committed_len = self.committed_final.len();
       self.separators_final.extend(separators.into_iter().map(|pos| committed_len + pos));
       self.committed_final.extend(messages);
@@ -171,7 +187,8 @@ impl MessageProjection {
 
     let mut view_aggregator = self.aggregator.clone_state();
     let region_base = self.event_count - self.region_events.len() - self.offset;
-    let (region_messages, region_separators) = fold_messages(&mut view_aggregator, &self.region_events, region_base)?;
+    let (region_messages, region_separators) =
+      fold_shared_messages(&mut view_aggregator, &self.region_events, region_base)?;
     self.committed = self.committed_final.clone();
     self.committed.extend(region_messages);
     self.separator_ordinals = self.separators_final.clone();
@@ -209,6 +226,25 @@ pub fn events_to_messages(
   Ok(messages)
 }
 
+/// Convert shared raw chat events to committed render messages without cloning event payloads.
+pub fn events_to_messages_shared(
+  events: &[SharedChatEvent],
+  event_index_offset: usize,
+  event_renderers: HashMap<String, Arc<dyn EventRenderer>>,
+) -> StoreResult<Vec<Value>> {
+  let mut aggregator = MessageAggregator::with_renderers(event_index_offset, false, event_renderers);
+  let indexed = message_events::stable_history_projection_shared(events)?;
+  let mut messages: Vec<Value> = aggregator
+    .feed_indexed_refs(&indexed)?
+    .into_iter()
+    .filter_map(|delta| {
+      (delta.get("type").and_then(Value::as_str) == Some("message")).then(|| delta["message"].clone())
+    })
+    .collect();
+  messages.extend(aggregator.flush_pending().into_iter().map(|delta| delta["message"].clone()));
+  Ok(messages)
+}
+
 /// Convert raw events into committed messages and an optional pending draft.
 pub fn events_to_view(
   events: &[Value],
@@ -227,18 +263,18 @@ pub fn events_to_view(
   Ok((messages, aggregator.pending_draft_message()))
 }
 
-fn fold_messages(
+fn fold_shared_messages(
   aggregator: &mut MessageAggregator,
-  events: &[Value],
+  events: &[SharedChatEvent],
   base: usize,
 ) -> StoreResult<(Vec<Value>, Vec<usize>)> {
-  let indexed = message_events::stable_history_projection(events)?
+  let indexed = message_events::stable_history_projection_shared(events)?
     .into_iter()
     .map(|(index, event)| (base + index, event))
     .collect::<Vec<_>>();
   let mut messages = Vec::new();
   let mut separators = Vec::new();
-  for delta in aggregator.feed_indexed(&indexed)? {
+  for delta in aggregator.feed_indexed_refs(&indexed)? {
     if delta.get("type").and_then(Value::as_str) != Some("message") {
       continue;
     }

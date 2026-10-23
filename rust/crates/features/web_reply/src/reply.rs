@@ -17,7 +17,7 @@ use charliebot_core::paths;
 use charliebot_core::pystr;
 use charliebot_registry::{FeatureContext, RunningTurnInputs, StateError};
 use charliebot_store::metadata::{SessionMetadata, TaskProfile};
-use charliebot_store::{SESSION_NOT_FOUND_DETAIL, Store, StoreError};
+use charliebot_store::{SESSION_NOT_FOUND_DETAIL, SharedChatEvent, Store, StoreError};
 use serde_json::{Value, json};
 
 /// The web reply rules file under `prompts/` (`reply.RULES_FILE`).
@@ -119,7 +119,7 @@ pub async fn require_web_session(
 }
 
 /// The session's chat events in log order, read off the runtime's worker threads as `asyncio.to_thread` does.
-pub async fn load_events(features: &FeatureContext, session_id: &str) -> anyhow::Result<Arc<Vec<Value>>> {
+pub async fn load_events(features: &FeatureContext, session_id: &str) -> anyhow::Result<Arc<Vec<SharedChatEvent>>> {
   let store = Arc::clone(&features.store);
   let session_id = session_id.to_string();
   let loaded = tokio::task::spawn_blocking(move || store.load_chat_events_shared_sync(&session_id))
@@ -140,8 +140,8 @@ pub fn nudge_of(event: &Value) -> Option<&str> {
 /// The newest user message or nudge among `input_event_ids`, with the user message it answers; `None` when neither
 /// (`reply.answered_input`). `events` is in log order, so the last match is the newest. A user message answers itself;
 /// a nudge answers the user message it was posted for.
-pub fn answered_input<'a>(events: &'a [Value], input_event_ids: &[String]) -> Option<(&'a Value, String)> {
-  answered_input_from(events.iter().rev(), input_event_ids)
+pub fn answered_input<'a>(events: &'a [SharedChatEvent], input_event_ids: &[String]) -> Option<(&'a Value, String)> {
+  answered_input_from(events.iter().rev().map(SharedChatEvent::as_ref), input_event_ids)
 }
 
 fn answered_input_from<'a>(
@@ -172,7 +172,7 @@ fn answered_input_from<'a>(
 }
 
 /// Whether the log holds a web reply that answers `user_event_id` (`reply.replied`).
-pub fn replied(events: &[Value], user_event_id: &str) -> bool {
+pub fn replied(events: &[SharedChatEvent], user_event_id: &str) -> bool {
   events.iter().any(|event| {
     event.get("type").and_then(Value::as_str) == Some(WEB_REPLY)
       && event.get(WEB_REPLY).and_then(|record| record.get("answers")).and_then(Value::as_str) == Some(user_event_id)
@@ -180,12 +180,12 @@ pub fn replied(events: &[Value], user_event_id: &str) -> bool {
 }
 
 /// Whether the log holds the nudge posted for `user_event_id` (`reply.nudged`).
-pub fn nudged(events: &[Value], user_event_id: &str) -> bool {
+pub fn nudged(events: &[SharedChatEvent], user_event_id: &str) -> bool {
   events.iter().any(|event| nudge_of(event) == Some(user_event_id))
 }
 
 /// Whether the log holds the no-reply notice for `user_event_id` (`reply.noticed`).
-pub fn noticed(events: &[Value], user_event_id: &str) -> bool {
+pub fn noticed(events: &[SharedChatEvent], user_event_id: &str) -> bool {
   events.iter().any(|event| {
     event.get("type").and_then(Value::as_str) == Some(WEB_REPLY_NOTICE)
       && event.get(WEB_REPLY_NOTICE).and_then(|record| record.get(INPUT_EVENT_ID)).and_then(Value::as_str)
@@ -293,10 +293,9 @@ fn language_check_holds(user_text: Option<&str>, reply: &str) -> bool {
   letters > 0 && (reply_han as f64) / (letters as f64) < LANGUAGE_CHECK_MAX_REPLY_HAN_SHARE
 }
 
-/// The text of the newest user message in `events`, which is in log order; None when the log holds none
-/// (`newest_user_text`).
-fn newest_user_text(events: &[Value]) -> Option<&str> {
+fn newest_user_text_shared(events: &[SharedChatEvent]) -> Option<&str> {
   events.iter().rev().find_map(|event| {
+    let event = event.as_ref();
     let from_user = event.get("type").and_then(Value::as_str) == Some(USER)
       && event.get("actor").and_then(Value::as_str) == Some("user");
     if from_user { event.get("content").and_then(Value::as_str) } else { None }
@@ -397,7 +396,10 @@ pub async fn post_web_reply(
   let loaded =
     if keep_language.is_none() || !running.is_empty() { Some(load_events(features, session_id).await?) } else { None };
   if keep_language.is_none()
-    && language_check_holds(newest_user_text(loaded.as_deref().expect("the language check loads chat events")), text)
+    && language_check_holds(
+      newest_user_text_shared(loaded.as_deref().expect("the language check loads chat events")),
+      text,
+    )
   {
     tracing::info!(session = %session_id, chars, "web_reply_held");
     return Err(WebReplyError::refused(StatusCode::CONFLICT, LANGUAGE_HOLD_DETAIL));
@@ -430,8 +432,21 @@ pub async fn post_web_reply(
 
 /// The For-you layer: the user's messages, the replies and the notices, in log order, as `{role, content}` rows
 /// (`reply.for_you_entries`).
+#[cfg(test)]
 pub fn for_you_entries(store: &Store, events: &[Value]) -> Result<Vec<Value>, WebReplyError> {
   let messages = store.events_to_messages(events)?;
+  Ok(
+    messages
+      .into_iter()
+      .filter(|message| message.get("role").and_then(Value::as_str).is_some_and(|role| FOR_YOU_ROLES.contains(&role)))
+      .map(|message| json!({"role": message["role"].clone(), "content": message["content"].clone()}))
+      .collect(),
+  )
+}
+
+/// Build the For-you layer from the shared parsed-event cache.
+pub fn for_you_entries_shared(store: &Store, events: &[SharedChatEvent]) -> Result<Vec<Value>, WebReplyError> {
+  let messages = store.events_to_messages_shared(events)?;
   Ok(
     messages
       .into_iter()

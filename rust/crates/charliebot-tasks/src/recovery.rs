@@ -19,7 +19,7 @@ use anyhow::{Context, anyhow, bail};
 use charliebot_agents::runs::run_alive_probe;
 use charliebot_agents::transport::{identity, recovery as transport_recovery};
 use charliebot_core::config::BackendOption;
-use charliebot_registry::context::FeatureContext;
+use charliebot_registry::context::{FeatureContext, StartupStop};
 use charliebot_registry::sequence::{
   SequenceCompletion, SequenceController, SequenceDispatch, SequenceExecutor, SequenceSessionEvents,
   SequenceTreeRuntime, StoreSequenceTree,
@@ -355,10 +355,14 @@ pub async fn reconcile_task_tree(
       return Ok(counters);
     }
     counters.full += 1;
-    let result = reconcile_node(features, adapter, &session_id, &mut counters, None).await;
-    // The boot pass moves on from this node, so its parsed events and folded facts leave memory. The end-landing retry
-    // runs on a live server and keeps them.
-    features.store.evict_recovery_history(&session_id);
+    let result = reconcile_node_until_stopped(
+      &stop,
+      reconcile_node_inner(features, adapter, &session_id, &mut counters, None, Some(&stop)),
+    )
+    .await;
+    let Some(result) = result else {
+      return Ok(counters);
+    };
     if let Err(error) = result {
       tracing::error!(target: "charliebot_tasks", session_id = %session_id, error = %format!("{error:#}"), "task_recovery_node_failed");
       failed_node = true;
@@ -375,6 +379,13 @@ pub async fn reconcile_task_tree(
   Ok(counters)
 }
 
+async fn reconcile_node_until_stopped<T>(stop: &StartupStop, node_pass: impl Future<Output = T>) -> Option<T> {
+  tokio::select! {
+    result = node_pass => Some(result),
+    _ = stop.cancelled() => None,
+  }
+}
+
 /// One node's pass (`task_execution._reconcile_node`). `is_driven` marks the runs this process already drives: the
 /// end-landing retry passes it so that steps 1 and 2 never start a second driver, and the boot pass passes None.
 pub async fn reconcile_node(
@@ -383,6 +394,17 @@ pub async fn reconcile_node(
   session_id: &str,
   counters: &mut PassCounters,
   is_driven: Option<&(dyn Fn(&RunRecord) -> bool + Sync)>,
+) -> anyhow::Result<()> {
+  reconcile_node_inner(features, adapter, session_id, counters, is_driven, None).await
+}
+
+async fn reconcile_node_inner(
+  features: &Arc<FeatureContext>,
+  adapter: &TaskExecutionAdapter,
+  session_id: &str,
+  counters: &mut PassCounters,
+  is_driven: Option<&(dyn Fn(&RunRecord) -> bool + Sync)>,
+  stop: Option<&StartupStop>,
 ) -> anyhow::Result<()> {
   #[cfg(feature = "test-hooks")]
   adapter.recovery.reconcile_node_calls.fetch_add(1, Ordering::SeqCst);
@@ -393,7 +415,13 @@ pub async fn reconcile_node(
   }
   // Steps 1 and 2 read Run facts from this snapshot. Only the closed-task stop refreshes it, where `_reconcile_node`
   // reloads its event list.
-  let mut runs = store.node_facts(session_id)?.runs.clone();
+  let Some(node_facts) = (match stop {
+    Some(stop) => store.node_facts_until(session_id, &mut || stop.is_cancelled())?,
+    None => Some(store.node_facts(session_id)?),
+  }) else {
+    return Ok(());
+  };
+  let mut runs = node_facts.runs.clone();
   let run_records = store.list_run_records_sync(session_id)?;
   // Warm the display-backend map: a fresh boot has seen no liveness notification.
   if let Some(newest) = run_records.last()
@@ -1024,6 +1052,7 @@ mod tests {
   use charliebot_store::run_records::SequenceRef;
   use charliebot_store::{CreateTask, HistoryWork, TaskCaller};
   use serde_json::{Map, json};
+  use std::sync::atomic::Ordering;
 
   const QUEUED_RUN_ID: &str = "synthetic-queued-run";
 
@@ -1186,6 +1215,63 @@ mod tests {
   async fn node_pass(features: &Arc<FeatureContext>, session_id: &str) -> anyhow::Result<()> {
     let adapter = features.startup.require::<TaskExecutionAdapter>().expect("the startup step inserts the adapter");
     reconcile_node(features, &adapter, session_id, &mut PassCounters::default(), None).await
+  }
+
+  #[tokio::test]
+  async fn startup_stop_cancels_one_in_flight_node_before_completion() {
+    let stop = StartupStop::default();
+    let completed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let completion_count = Arc::clone(&completed);
+    let pass_stop = stop.clone();
+    let pass = tokio::spawn(async move {
+      reconcile_node_until_stopped(&pass_stop, async move {
+        std::future::pending::<()>().await;
+        completion_count.fetch_add(1, Ordering::SeqCst);
+      })
+      .await
+    });
+
+    stop.cancel();
+
+    assert_eq!(pass.await.unwrap(), None);
+    assert_eq!(completed.load(Ordering::SeqCst), 0, "the cancelled node pass never completes");
+  }
+
+  #[tokio::test]
+  async fn boot_recovery_retains_the_parsed_event_list_for_later_reads() {
+    let (_home, features) = startup_features().await;
+    let node = features
+      .store
+      .create_task(
+        CreateTask {
+          request_id: "synthetic-retained-node".to_string(),
+          task_parent_id: None,
+          profile: TaskProfile::Manager,
+          task: None,
+          name: Some("Synthetic retained node".to_string()),
+          backend: Some("synthetic".to_string()),
+          group: None,
+          session_id: None,
+        },
+        TaskCaller::Operator,
+        Map::new(),
+      )
+      .await
+      .unwrap();
+    let adapter = features.startup.require::<TaskExecutionAdapter>().unwrap();
+    let before = features.store.history_work();
+
+    reconcile_task_tree(&features, &adapter).await.unwrap();
+
+    let after_recovery = features.store.history_work();
+    assert_eq!(after_recovery.file_reads - before.file_reads, 1, "recovery parses this event file once");
+    let events = features.store.load_chat_events_shared_sync(&node.id).unwrap();
+    assert!(!events.is_empty());
+    assert_eq!(
+      features.store.history_work().file_reads,
+      after_recovery.file_reads,
+      "the post-boot read reuses its one cached list"
+    );
   }
 
   #[tokio::test]

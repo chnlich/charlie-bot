@@ -211,8 +211,8 @@ impl Store {
     }
     let cached = cache.get(session_id);
     let projection = match cached {
-      Some(cached) if live.len() >= cached.event_count() => cached.advanced(&live[cached.event_count()..])?,
-      _ => MessageProjection::new(live.as_slice(), 0, self.event_renderers.clone())?,
+      Some(cached) if live.len() >= cached.event_count() => cached.advanced_shared(&live[cached.event_count()..])?,
+      _ => MessageProjection::new_shared(live.as_slice(), 0, self.event_renderers.clone())?,
     };
     let projection = Arc::new(projection);
     cache.store(session_id, Arc::clone(&projection));

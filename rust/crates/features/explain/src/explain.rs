@@ -151,7 +151,7 @@ fn extract_round_text(store: &Store, session_id: &str, upto: i64) -> anyhow::Res
   let end = usize::try_from(upto.saturating_add(1)).unwrap_or(0);
   let range = store.load_chat_events_shared_range_sync(session_id, 0, end)?;
   let events = &range.events[range.range];
-  for message in store.events_to_messages(events)?.iter().rev() {
+  for message in store.events_to_messages_shared(events)?.iter().rev() {
     if message.get("role").and_then(Value::as_str) != Some("assistant") {
       continue;
     }

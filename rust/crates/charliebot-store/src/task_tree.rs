@@ -12,7 +12,7 @@ use charliebot_core::{event_types, fsutil};
 use serde_json::{Map, Value, json};
 
 use crate::control_events::{self, ACTOR_AGENT, ACTOR_SYSTEM, ACTOR_USER};
-use crate::events::{FileIdentity, LiveHistory};
+use crate::events::{FileIdentity, LiveHistory, SharedChatEvent};
 use crate::metadata::{EventRef, SessionMetadata, SessionStatus, TaskProfile, TaskSpec, TaskType, UtcDateTime};
 use crate::run_records::{HostBoot, RunDisplayState, RunFacts, stop_requested_in_events};
 use crate::store::{CachedNodeFacts, NodeFactsKey};
@@ -26,6 +26,7 @@ const TASK_ANCESTOR_HOP_LIMIT: usize = 1000;
 // Bound on the non-archived descendants one subtree walk may hold; archived ones do not count.
 const TASK_DESCENDANT_NODE_LIMIT: usize = 1000;
 const SUCCESSOR_HOP_LIMIT: usize = 100;
+const TASK_FACTS_STOP_CHECK_INTERVAL: usize = 256;
 /// The refusal for an agent create outside its own open manager task (`task_sessions.AGENT_CREATE_SCOPE_REFUSAL`).
 pub const AGENT_CREATE_SCOPE_REFUSAL: &str = "an agent may only create a task directly under its own open manager task";
 /// The refusal for a task create without a request id (`task_sessions.TASK_CREATE_REQUEST_ID_REQUIRED`).
@@ -87,16 +88,16 @@ pub struct TaskFacts {
   pub run_outcomes: HashMap<String, String>,
   pub run_finish_positions: HashMap<String, usize>,
   pub confirmed_input_ids: HashSet<String>,
-  pub input_candidates: Vec<Value>,
+  pub input_candidates: Vec<SharedChatEvent>,
   pub imported_pending_ids: HashSet<String>,
   pub boundary_index: Option<usize>,
   pub boundary_open: bool,
-  pub close_events: Vec<Value>,
-  pub close_requests: Vec<Value>,
+  pub close_events: Vec<SharedChatEvent>,
+  pub close_requests: Vec<SharedChatEvent>,
   pub delivered_reports: HashSet<(String, String)>,
   pub event_ids: HashSet<String>,
   pub event_order: Vec<String>,
-  pub events_by_id: HashMap<String, Value>,
+  pub events_by_id: HashMap<String, SharedChatEvent>,
   pub covered: usize,
 }
 
@@ -165,9 +166,9 @@ impl NodeState {
     Self { runs: facts.runs.clone(), task_state, user_request, event_ids: HashSet::new() }
   }
 
-  fn fold(&mut self, events: &[Value]) {
+  fn fold(&mut self, events: &[SharedChatEvent]) {
     for event in events {
-      self.runs.observe(event);
+      self.runs.observe(event.as_ref());
       match event.get("type").and_then(Value::as_str) {
         Some("clone_start") => self.user_request = false,
         _ if event_types::is_real_user_message(event) || event_types::is_platform_summon(event) => {
@@ -397,6 +398,21 @@ impl Store {
   /// takes a new generation. Within one
   /// generation the cached list changes only by `append_chat_event` pushes, which the suffix fold extends.
   pub fn node_facts(&self, session_id: &str) -> StoreResult<Arc<NodeFacts>> {
+    let mut never_stop = || false;
+    Ok(self.node_facts_until(session_id, &mut never_stop)?.expect("the no-stop fold completes"))
+  }
+
+  /// Fold a node's task and run facts, checking `should_stop` every bounded block of history events.
+  ///
+  /// A stopped fold returns `None` and leaves the previous memo intact.
+  pub fn node_facts_until(
+    &self,
+    session_id: &str,
+    should_stop: &mut impl FnMut() -> bool,
+  ) -> StoreResult<Option<Arc<NodeFacts>>> {
+    if should_stop() {
+      return Ok(None);
+    }
     let (generation, live) = match self.live_history(session_id)? {
       LiveHistory::Cached { generation, events } => (generation, events),
       LiveHistory::Cold(identity) => {
@@ -407,13 +423,13 @@ impl Store {
           && entry.key == NodeFactsKey::File(identity)
           && entry.archived == archived
         {
-          return Ok(Arc::clone(&entry.facts));
+          return Ok(Some(Arc::clone(&entry.facts)));
         }
         self.live_events_with_generation(session_id)?
       }
     };
     let archived = self.read_archive_offset(session_id)?;
-    let cached = self.node_facts_cache.lock().expect("node facts cache mutex is not poisoned").remove(session_id);
+    let cached = self.node_facts_cache.lock().expect("node facts cache mutex is not poisoned").get(session_id).cloned();
     let mut entry = match cached {
       Some(entry)
         if entry.key == (NodeFactsKey::Cached { generation, covered: entry.covered })
@@ -426,7 +442,9 @@ impl Store {
         let mut facts = NodeFacts::default();
         if archived > 0 {
           let archive = self.load_archive_range(session_id, 0, archived)?;
-          fold_node_facts_from(&mut facts, &archive, 0);
+          if !fold_node_facts_from(&mut facts, &archive, 0, should_stop)? {
+            return Ok(None);
+          }
           self.history_work.folded_events.fetch_add(archive.len() as u64, Ordering::Relaxed);
         }
         self.history_work.full_folds.fetch_add(1, Ordering::Relaxed);
@@ -440,14 +458,16 @@ impl Store {
     };
     if entry.covered < live.len() {
       let suffix = &live[entry.covered..];
-      fold_node_facts_from(Arc::make_mut(&mut entry.facts), suffix, archived + entry.covered);
+      if !fold_node_facts_from(Arc::make_mut(&mut entry.facts), suffix, archived + entry.covered, should_stop)? {
+        return Ok(None);
+      }
       self.history_work.folded_events.fetch_add(suffix.len() as u64, Ordering::Relaxed);
       entry.covered = live.len();
     }
     let facts = Arc::clone(&entry.facts);
     entry.key = NodeFactsKey::Cached { generation, covered: entry.covered };
     self.node_facts_cache.lock().expect("node facts cache mutex is not poisoned").insert(session_id.to_string(), entry);
-    Ok(facts)
+    Ok(Some(facts))
   }
 
   /// Keep a node's folded task facts past recovery eviction, keyed by the file identity they cover.
@@ -492,7 +512,12 @@ impl Store {
   }
 
   /// [`Store::node_state_versioned`] for a caller that holds the live events and their cache generation.
-  fn node_state_of(&self, session_id: &str, generation: u64, live: &[Value]) -> StoreResult<(u64, Arc<NodeState>)> {
+  fn node_state_of(
+    &self,
+    session_id: &str,
+    generation: u64,
+    live: &[SharedChatEvent],
+  ) -> StoreResult<(u64, Arc<NodeState>)> {
     let archived = self.read_archive_offset(session_id)?;
     let current = NodeStateKey::Cached { generation, covered: live.len() };
     let cached = {
@@ -2058,13 +2083,27 @@ fn archived_of(
 /// Fold `events`, which start at absolute history position `offset`, into `facts` holding the history before them.
 #[cfg(test)]
 fn fold_task_facts(events: &[Value]) -> StoreResult<TaskFacts> {
+  let events = events.iter().cloned().map(Arc::new).collect::<Vec<_>>();
   let mut facts = TaskFacts::default();
-  fold_task_facts_from(&mut facts, events, 0)?;
+  let mut never_stop = || false;
+  assert!(fold_task_facts_from(&mut facts, &events, 0, &mut never_stop)?);
   Ok(facts)
 }
 
-fn fold_task_facts_from(facts: &mut TaskFacts, events: &[Value], offset: usize) -> StoreResult<()> {
+fn fold_task_facts_from(
+  facts: &mut TaskFacts,
+  events: &[SharedChatEvent],
+  offset: usize,
+  should_stop: &mut impl FnMut() -> bool,
+) -> StoreResult<bool> {
+  if should_stop() {
+    return Ok(false);
+  }
   for (index, event) in events.iter().enumerate() {
+    if index % TASK_FACTS_STOP_CHECK_INTERVAL == 0 && should_stop() {
+      return Ok(false);
+    }
+    let event = event.as_ref();
     let position = offset + index;
     match event.get("type").and_then(Value::as_str) {
       Some("clone_start") => facts.has_user_request = false,
@@ -2079,7 +2118,7 @@ fn fold_task_facts_from(facts: &mut TaskFacts, events: &[Value], offset: usize) 
       continue;
     }
     if let Some(event_id) = event.get("id").and_then(Value::as_str) {
-      facts.events_by_id.insert(event_id.to_string(), event.clone());
+      facts.events_by_id.insert(event_id.to_string(), Arc::clone(&events[index]));
       facts.event_order.push(event_id.to_string());
     }
     let event_type = event.get("type").and_then(Value::as_str).unwrap_or_default();
@@ -2106,16 +2145,18 @@ fn fold_task_facts_from(facts: &mut TaskFacts, events: &[Value], offset: usize) 
         for input_id in imported_pending_input_ids(event)? {
           facts.imported_pending_ids.insert(input_id.to_string());
         }
-        facts.input_candidates = facts
-          .event_order
-          .iter()
-          .filter_map(|event_id| facts.events_by_id.get(event_id))
-          .filter(|prior| admits_input(prior))
-          .filter(|prior| {
-            prior.get("id").and_then(Value::as_str).is_some_and(|id| facts.imported_pending_ids.contains(id))
-          })
-          .cloned()
-          .collect();
+        facts.input_candidates.clear();
+        for (prior_index, prior_id) in facts.event_order.iter().enumerate() {
+          if prior_index % TASK_FACTS_STOP_CHECK_INTERVAL == 0 && should_stop() {
+            return Ok(false);
+          }
+          if let Some(prior) = facts.events_by_id.get(prior_id)
+            && admits_input(prior)
+            && prior.get("id").and_then(Value::as_str).is_some_and(|id| facts.imported_pending_ids.contains(id))
+          {
+            facts.input_candidates.push(Arc::clone(prior));
+          }
+        }
       }
       "task_closed" => {
         facts.task_state = event
@@ -2124,7 +2165,7 @@ fn fold_task_facts_from(facts: &mut TaskFacts, events: &[Value], offset: usize) 
           .filter(|value| !value.is_empty())
           .unwrap_or("completed")
           .to_string();
-        facts.close_events.push(event.clone());
+        facts.close_events.push(Arc::clone(&events[index]));
         facts.boundary_index = Some(position);
         facts.boundary_open = false;
         facts.imported_pending_ids.clear();
@@ -2136,7 +2177,7 @@ fn fold_task_facts_from(facts: &mut TaskFacts, events: &[Value], offset: usize) 
         facts.boundary_open = true;
       }
       "task_close_requested" => {
-        facts.close_requests.push(event.clone());
+        facts.close_requests.push(Arc::clone(&events[index]));
       }
       "run_finished" => {
         if let Some(run_id) = event.get("run_id").and_then(Value::as_str) {
@@ -2170,11 +2211,11 @@ fn fold_task_facts_from(facts: &mut TaskFacts, events: &[Value], offset: usize) 
       && facts.boundary_open
       && (facts.boundary_index.is_none_or(|boundary| position > boundary) || imported)
     {
-      facts.input_candidates.push(event.clone());
+      facts.input_candidates.push(Arc::clone(&events[index]));
     }
   }
   facts.covered = offset + events.len();
-  Ok(())
+  Ok(!should_stop())
 }
 
 /// The stable input ids that a `task_imported` fact lists as pending. A list that is not an array, or an entry without
@@ -2200,14 +2241,32 @@ fn imported_pending_input_ids(event: &Value) -> StoreResult<Vec<&str>> {
 
 /// Fold `events`, which start at absolute history position `offset`, into the node's facts. A task fold error stays:
 /// the rejected fact remains in the history for as long as the memo covers it.
-fn fold_node_facts_from(facts: &mut NodeFacts, events: &[Value], offset: usize) {
-  for event in events {
-    facts.runs.observe(event);
+fn fold_node_facts_from(
+  facts: &mut NodeFacts,
+  events: &[SharedChatEvent],
+  offset: usize,
+  should_stop: &mut impl FnMut() -> bool,
+) -> StoreResult<bool> {
+  if should_stop() {
+    return Ok(false);
   }
-  let Ok(task) = &mut facts.task else { return };
-  if let Err(error) = fold_task_facts_from(task, events, offset) {
-    facts.task = Err(error.to_string());
+  for (index, event) in events.iter().enumerate() {
+    if index % TASK_FACTS_STOP_CHECK_INTERVAL == 0 && should_stop() {
+      return Ok(false);
+    }
+    facts.runs.observe(event.as_ref());
   }
+  if should_stop() {
+    return Ok(false);
+  }
+  if let Ok(task) = &mut facts.task {
+    match fold_task_facts_from(task, events, offset, should_stop) {
+      Ok(true) => {}
+      Ok(false) => return Ok(false),
+      Err(error) => facts.task = Err(error.to_string()),
+    }
+  }
+  Ok(!should_stop())
 }
 
 fn admits_input(event: &Value) -> bool {
@@ -2363,7 +2422,7 @@ pub(crate) mod tests {
 
   use super::*;
   use crate::metadata::{TaskProfile, TaskSpec};
-  use crate::run_records::{RunKind, RunOutcome, RunRecord};
+  use crate::run_records::{RunKind, RunOutcome, RunOutcomeKind, RunRecord};
   use crate::store::{
     AccountLabelKeeper, AnchorFieldReconciler, SequenceArchiveHook, SequenceBindingMover, SequenceListingFields,
     StoreHookFuture, StoreHooks,
@@ -3913,6 +3972,65 @@ pub(crate) mod tests {
     let after = store.history_work();
     assert_eq!(after.node_state_full_folds - before.node_state_full_folds, 1);
     assert_eq!(after.node_state_folded_events - before.node_state_folded_events, event_count);
+  }
+
+  #[tokio::test]
+  async fn task_facts_share_cached_event_payloads_until_cache_invalidation() {
+    let home = tempfile::tempdir().unwrap();
+    let store = make_store(home.path());
+    let node = create_node(&store, "shared-task-events", None, TaskProfile::Manager).await;
+    let event =
+      store.append_chat_event(&node.id, json!({"type": "user", "content": "synthetic shared payload"})).await.unwrap();
+    let id = event.get("id").unwrap().as_str().unwrap();
+
+    let before = store.history_work();
+    let history = store.load_chat_events_shared_sync(&node.id).unwrap();
+    let facts = store.node_facts(&node.id).unwrap();
+    let cached = history.iter().find(|candidate| candidate.get("id").and_then(Value::as_str) == Some(id)).unwrap();
+    let fact = facts.task().unwrap().events_by_id.get(id).unwrap();
+    assert!(Arc::ptr_eq(cached, fact), "task facts point at the one cached parsed payload");
+    assert!(Arc::ptr_eq(cached, &facts.task().unwrap().input_candidates[0]));
+    assert_eq!(Arc::strong_count(cached), 3, "the history, id map, and candidate list retain one payload");
+    assert_eq!(store.history_work().owned_event_clones, before.owned_event_clones);
+
+    store.append_chat_event(&node.id, json!({"type": "agent_message", "content": "append"})).await.unwrap();
+    let appended = store.load_chat_events_shared_sync(&node.id).unwrap();
+    let still_cached =
+      appended.iter().find(|candidate| candidate.get("id").and_then(Value::as_str) == Some(id)).unwrap();
+    assert!(Arc::ptr_eq(cached, still_cached), "an append shares every existing parsed payload");
+
+    store.clear_chat_events_cache(&node.id);
+    let reloaded = store.load_chat_events_shared_sync(&node.id).unwrap();
+    let replaced = reloaded.iter().find(|candidate| candidate.get("id").and_then(Value::as_str) == Some(id)).unwrap();
+    assert!(!Arc::ptr_eq(cached, replaced), "cache invalidation reparses the event and replaces its identity");
+    let refreshed_facts = store.node_facts(&node.id).unwrap();
+    assert!(Arc::ptr_eq(replaced, refreshed_facts.task().unwrap().events_by_id.get(id).unwrap()));
+  }
+
+  #[test]
+  fn node_fact_fold_checks_stop_at_each_256_event_boundary() {
+    let events = (0..1024)
+      .map(|index| {
+        Arc::new(json!({
+          "id": format!("finish-{index}"),
+          "type": "run_finished",
+          "run_id": format!("run-{index}"),
+          "outcome": "success"
+        }))
+      })
+      .collect::<Vec<_>>();
+    let mut facts = NodeFacts::default();
+    let mut checks = 0;
+    let folded = fold_node_facts_from(&mut facts, &events, 0, &mut || {
+      checks += 1;
+      checks == 3
+    })
+    .unwrap();
+
+    assert!(!folded);
+    assert_eq!(checks, 3, "the fold checks once initially and then at the 256 event boundary");
+    assert_eq!(facts.runs.terminal_outcome("run-255").unwrap(), Some(RunOutcomeKind::Success));
+    assert_eq!(facts.runs.terminal_outcome("run-256").unwrap(), None);
   }
 
   #[tokio::test]

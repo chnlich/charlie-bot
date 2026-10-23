@@ -68,7 +68,7 @@ pub async fn name_after_round(
     let assistant_response = events
       .iter()
       .filter(|event| event.get("type").and_then(Value::as_str) == Some(event_types::ASSISTANT))
-      .map(extract_text_from_message)
+      .map(|event| extract_text_from_message(event.as_ref()))
       .collect::<String>();
     Ok::<_, charliebot_store::StoreError>((user_message, assistant_response))
   })

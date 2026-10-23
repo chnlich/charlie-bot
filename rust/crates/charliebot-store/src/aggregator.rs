@@ -95,6 +95,12 @@ impl MessageAggregator {
 
   /// Process events whose source indexes are already known.
   pub fn feed_indexed(&mut self, events: &[(usize, Value)]) -> StoreResult<Vec<Value>> {
+    let borrowed = events.iter().map(|(index, event)| (*index, event)).collect::<Vec<_>>();
+    self.feed_indexed_refs(&borrowed)
+  }
+
+  /// Process borrowed events whose source indexes are already known.
+  pub(crate) fn feed_indexed_refs(&mut self, events: &[(usize, &Value)]) -> StoreResult<Vec<Value>> {
     let mut deltas = Vec::new();
     for (index, event) in events {
       self.processed += 1;

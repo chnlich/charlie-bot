@@ -984,7 +984,10 @@ impl SyntheticLoop {
       return Ok(false);
     }
     for run in &runs {
-      if run.pid.is_none() && !terminal(&run.id) && !run_records::stop_requested_in_events(&events, &run.id, None) {
+      if run.pid.is_none()
+        && !terminal(&run.id)
+        && !run_records::stop_requested_in_shared_events(&events, &run.id, None)
+      {
         tree.request_stop(child_id, &run.id, &format!("loop-close:{}", run.id)).await?;
       }
     }

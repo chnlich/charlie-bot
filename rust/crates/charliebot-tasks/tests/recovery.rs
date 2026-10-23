@@ -2546,6 +2546,19 @@ fn write_python_boot_marker(stack: &Stack, pass_started_at: &str) -> anyhow::Res
   Ok(())
 }
 
+/// Backdates a session's two durable files to `before` ahead of the boot marker, as Python's `_stamp_durable_files`
+/// does: a skip needs both files past the mtime slack before the marker.
+fn backdate_durable_files(stack: &Stack, session_id: &str, before: Duration) -> anyhow::Result<()> {
+  let marker: Value = serde_json::from_slice(&std::fs::read(boot_marker_path(stack))?)?;
+  let pass_started_at =
+    UtcDateTime::parse(marker["pass_started_at"].as_str().context("the marker has no pass start")?)?;
+  let stamp = SystemTime::from(pass_started_at.into_inner()) - before;
+  for path in [stack.store().chat_events_path(session_id), stack.store().metadata_path(session_id)] {
+    std::fs::File::open(path)?.set_modified(stamp)?;
+  }
+  Ok(())
+}
+
 #[derive(Default)]
 struct RecoveryWorkerOptions {
   task: Option<TaskSpec>,
@@ -2641,6 +2654,8 @@ async fn clean_boot_writes_marker_and_the_next_boot_skips_a_closed_worker() -> a
   let first_time = first_marker["pass_started_at"].as_str().expect("marker stores its pass start time").to_string();
   assert!(!marker_path.with_extension("json.tmp").exists(), "the atomic rename consumes the temp file");
 
+  // The first pass's files sit within the mtime slack of its marker, so they are backdated past it before pass 2.
+  backdate_durable_files(&stack, &worker.id, Duration::from_secs(2))?;
   let second = recovery::reconcile_task_tree(&stack.features, &stack.adapter).await?;
   assert_eq!(second.nodes, 2);
   assert_eq!(second.full, 1);
@@ -2650,6 +2665,62 @@ async fn clean_boot_writes_marker_and_the_next_boot_skips_a_closed_worker() -> a
   assert_eq!(stack.store().run_backend(&worker.id).as_deref(), Some(BACKEND_ID));
   let second_marker: Value = serde_json::from_slice(&std::fs::read(&marker_path)?)?;
   assert!(second_marker["pass_started_at"].as_str().expect("marker stores its pass start time") > first_time.as_str());
+  Ok(())
+}
+
+#[tokio::test]
+async fn an_unreadable_boot_marker_reads_as_absent_and_every_node_gets_a_full_check() -> anyhow::Result<()> {
+  // Python: tests/test_boot_recovery_skip.py::test_unreadable_marker_checks_every_node_then_is_rewritten. Its five
+  // contents are the first five cases; the invalid UTF-8 and the non-string timestamp are the other unreadable inputs
+  // that src/runtime/task_recovery.py:58-74 names.
+  let stack = Stack::start("exit 0").await?;
+  add_recovery_worker(
+    &stack,
+    "unreadable-worker",
+    "run-unreadable",
+    RecoveryWorkerOptions { outcome: Some(RunOutcomeKind::Success), close: true, ..RecoveryWorkerOptions::default() },
+  )
+  .await?;
+  let marker_path = boot_marker_path(&stack);
+  std::fs::create_dir_all(marker_path.parent().expect("boot marker has a parent directory"))?;
+  let cases: [(&[u8], &str); 7] = [
+    (b"", "JSONDecodeError"),
+    (b"not json", "JSONDecodeError"),
+    (b"[]", "TypeError"),
+    (b"{}", "KeyError"),
+    (br#"{"pass_started_at": "x"}"#, "ValueError"),
+    (br#"{"pass_started_at": 5}"#, "TypeError"),
+    (b"\xff\xfe{}", "UnicodeDecodeError"),
+  ];
+  for (content, error_type) in cases {
+    std::fs::write(&marker_path, content)?;
+    let log = LogCapture::default();
+    let _subscriber = log.install();
+    let before = UtcDateTime::now();
+    let outcome = recovery::reconcile_task_tree(&stack.features, &stack.adapter).await;
+    let after = UtcDateTime::now();
+    assert!(outcome.is_ok(), "{error_type}: the unreadable marker must not stop the pass: {outcome:?}");
+    let counters = outcome?;
+    assert_eq!((counters.full, counters.skipped), (2, 0), "{error_type}: every node gets a full check");
+
+    let logged = log.text();
+    let unreadable: Vec<&str> =
+      logged.lines().filter(|line| line.contains("boot_recovery_marker_unreadable")).collect();
+    assert_eq!(unreadable.len(), 1, "{error_type}: one unreadable-marker line: {logged}");
+    let fields: Vec<&str> = unreadable[0].split_whitespace().collect();
+    let size = format!("size={}", content.len());
+    assert!(fields.contains(&size.as_str()), "{error_type}: the line carries the byte size: {}", unreadable[0]);
+    let error = format!("error_type={error_type}");
+    assert!(fields.contains(&error.as_str()), "{error_type}: the line names the exception: {}", unreadable[0]);
+
+    let rewritten: Value = serde_json::from_slice(&std::fs::read(&marker_path)?)?;
+    let instant =
+      UtcDateTime::parse(rewritten["pass_started_at"].as_str().expect("the clean pass rewrites the marker"))?;
+    assert!(
+      before <= instant && instant <= after,
+      "{error_type}: the rewritten marker holds the pass start: {rewritten}"
+    );
+  }
   Ok(())
 }
 
@@ -2871,7 +2942,7 @@ async fn recovery_done_logs_one_line_with_marker_and_skip_counters() -> anyhow::
   let log = LogCapture::default();
   let _subscriber = log.install();
   let stack = Stack::start("exit 0").await?;
-  add_recovery_worker(
+  let worker = add_recovery_worker(
     &stack,
     "logged-worker",
     "run-logged",
@@ -2880,6 +2951,7 @@ async fn recovery_done_logs_one_line_with_marker_and_skip_counters() -> anyhow::
   .await?;
 
   recovery::recovery_step(Arc::clone(&stack.features)).await?;
+  backdate_durable_files(&stack, &worker.id, Duration::from_secs(2))?;
   recovery::recovery_step(Arc::clone(&stack.features)).await?;
   let text = log.text();
   assert_eq!(text.matches("task_tree_recovery_done").count(), 2, "one done line per pass: {text}");

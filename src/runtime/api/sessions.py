@@ -1382,7 +1382,7 @@ async def archive_session(
   archived node returns an empty list.
   """
   if not caller.is_operator:
-    raise fastapi.HTTPException(status_code=403, detail="archiving a task requires operator credentials")
+    raise fastapi.HTTPException(status_code=403, detail=task_sessions.ARCHIVE_OPERATOR_REFUSAL)
   try:
     archived = await task_mgr.archive_subtree(session_id, caller=caller)
   except (task_errors.TaskInvalidError, task_errors.TaskNotFoundError, task_errors.TaskForbiddenError,

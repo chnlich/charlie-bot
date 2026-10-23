@@ -3,12 +3,14 @@
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom};
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use charliebot_core::{event_types, fsutil};
+use indexmap::IndexMap;
 use serde_json::{Map, Value, json};
 
 use crate::control_events::{self, ACTOR_AGENT, ACTOR_SYSTEM, ACTOR_USER};
@@ -95,9 +97,7 @@ pub struct TaskFacts {
   pub close_events: Vec<SharedChatEvent>,
   pub close_requests: Vec<SharedChatEvent>,
   pub delivered_reports: HashSet<(String, String)>,
-  pub event_ids: HashSet<String>,
-  pub event_order: Vec<String>,
-  pub events_by_id: HashMap<String, SharedChatEvent>,
+  pub events_by_id: IndexMap<String, SharedChatEvent>,
   pub covered: usize,
 }
 
@@ -124,100 +124,67 @@ impl Default for NodeFacts {
   }
 }
 
-/// A node's task state and Run facts: the read-path summary of its full history, kept for every node it was read for.
+/// A read-path view of the facts already retained for this node.
 ///
-/// The task state is the lifecycle verdict of the [`Store::facts_of`] fold. That fold skips an event whose id repeats
-/// an earlier one, and a malformed `task_imported` fact makes its result an error; the state keeps both rules. The Run
-/// facts read every event, as [`NodeFacts::runs`] does. The summary holds no copy of an event, so it stays small next
-/// to the history it covers.
+/// Keeping a second Run-facts fold here duplicated the task facts' outcomes and stop requests for every read node.
+/// Sharing the fact snapshot preserves one fold, one invalidation key, and one owner for the event history.
 #[derive(Clone, Debug)]
 pub struct NodeState {
-  pub runs: RunFacts,
-  task_state: Result<TaskState, String>,
-  user_request: bool,
-  event_ids: HashSet<String>,
+  facts: Arc<NodeFacts>,
+  malformed_task_events: Option<Arc<Vec<SharedChatEvent>>>,
 }
 
 impl NodeState {
   /// The task state, or the error that [`Store::facts_of`] returns for the same history.
   pub fn task_state(&self) -> StoreResult<&str> {
-    self.task_state.as_deref().map_err(|message| StoreError::new(message.clone()))
+    Ok(self.facts.task()?.task_state.as_str())
   }
 
   fn has_user_request(&self) -> bool {
-    self.user_request
+    self.facts.task.as_ref().is_ok_and(|task| task.has_user_request)
   }
 
-  /// The state without the event ids that only a fold extension reads: what a memo keyed by the log file keeps.
-  fn sealed(&self) -> Self {
-    Self {
-      runs: self.runs.clone(),
-      task_state: self.task_state.clone(),
-      user_request: self.user_request,
-      event_ids: HashSet::new(),
-    }
-  }
-
-  /// The sealed state of the same history from its [`NodeFacts`]: both folds take the lifecycle verdict from the same
-  /// facts and fail on the same `task_imported` error.
-  fn sealed_from(facts: &NodeFacts) -> Self {
-    let task_state = facts.task.as_ref().map(|task| task.task_state.clone()).map_err(Clone::clone);
-    let user_request = facts.task.as_ref().is_ok_and(|task| task.has_user_request);
-    Self { runs: facts.runs.clone(), task_state, user_request, event_ids: HashSet::new() }
-  }
-
-  fn fold(&mut self, events: &[SharedChatEvent]) {
-    for event in events {
-      self.runs.observe(event.as_ref());
-      match event.get("type").and_then(Value::as_str) {
-        Some("clone_start") => self.user_request = false,
-        _ if event_types::is_real_user_message(event) || event_types::is_platform_summon(event) => {
-          self.user_request = true;
-        }
-        _ => {}
-      }
-      if self.task_state.is_err() {
-        continue;
-      }
-      if let Some(event_id) = event.get("id").and_then(Value::as_str)
-        && !self.event_ids.insert(event_id.to_string())
-      {
-        continue;
-      }
-      match event.get("type").and_then(Value::as_str).unwrap_or_default() {
-        "clone_start" | "task_reopened" => self.task_state = Ok("open".to_string()),
-        "task_closed" => {
-          let outcome = event.get("outcome").and_then(Value::as_str).filter(|value| !value.is_empty());
-          self.task_state = Ok(outcome.unwrap_or("completed").to_string());
-        }
-        "task_imported" => {
-          if let Err(error) = imported_pending_input_ids(event) {
-            self.task_state = Err(error.to_string());
-          }
-        }
-        _ => {}
-      }
-    }
+  pub fn display_state(
+    &self,
+    run: &crate::run_records::RunRecord,
+    boot: &mut HostBoot,
+  ) -> StoreResult<RunDisplayState> {
+    let withheld = match (self.facts.task.as_ref(), self.malformed_task_events.as_deref()) {
+      (Ok(task), None) => has_withheld_reason(task.events_by_id.values().map(|event| event.as_ref()), &run.id),
+      (Err(_), Some(events)) => has_withheld_reason(events.iter().map(|event| event.as_ref()), &run.id),
+      (Err(_), None) => unreachable!("an invalid task fold retains the source events for Run display-state reads"),
+      (Ok(_), Some(_)) => unreachable!("valid task facts do not retain a fallback event view"),
+    };
+    self.facts.runs.display_state(run, boot, withheld)
   }
 }
 
-impl Default for NodeState {
-  fn default() -> Self {
-    Self {
-      runs: RunFacts::default(),
-      task_state: Ok("open".to_string()),
-      user_request: false,
-      event_ids: HashSet::new(),
+fn has_withheld_reason<'a>(events: impl Iterator<Item = &'a Value>, run_id: &str) -> bool {
+  let mut withheld = None;
+  for event in events {
+    if event.get("type").and_then(Value::as_str) == Some("run_launch_withheld")
+      && event.get("run_id").and_then(Value::as_str) == Some(run_id)
+    {
+      withheld = event.get("reason").and_then(Value::as_str).filter(|reason| !reason.is_empty());
     }
+  }
+  withheld.is_some()
+}
+
+impl Deref for NodeState {
+  type Target = NodeFacts;
+
+  fn deref(&self) -> &Self::Target {
+    &self.facts
   }
 }
 
 /// A node's [`NodeState`], the history it covers and its version. A new version marks every change of the state.
+#[derive(Clone)]
 pub(crate) struct CachedNodeState {
   key: NodeStateKey,
   archived: usize,
   version: u64,
-  state: Arc<NodeState>,
 }
 
 /// The live history a [`CachedNodeState`] covers.
@@ -255,9 +222,7 @@ impl Default for TaskFacts {
       close_events: Vec::new(),
       close_requests: Vec::new(),
       delivered_reports: HashSet::new(),
-      event_ids: HashSet::new(),
-      event_order: Vec::new(),
-      events_by_id: HashMap::new(),
+      events_by_id: IndexMap::new(),
       covered: 0,
     }
   }
@@ -431,6 +396,19 @@ impl Store {
         events
       }
     };
+    self.node_facts_of(session_id, generation, &live, should_stop)
+  }
+
+  fn node_facts_of(
+    &self,
+    session_id: &str,
+    generation: u64,
+    live: &[SharedChatEvent],
+    should_stop: &mut impl FnMut() -> bool,
+  ) -> StoreResult<Option<Arc<NodeFacts>>> {
+    if should_stop() {
+      return Ok(None);
+    }
     let archived = self.read_archive_offset(session_id)?;
     let cached = self.node_facts_cache.lock().expect("node facts cache mutex is not poisoned").get(session_id).cloned();
     let mut entry = match cached {
@@ -486,13 +464,11 @@ impl Store {
     }
   }
 
-  /// The node's task state and Run facts, shared. A read after appends folds only the events appended since the last
-  /// read. The memo has [`Store::node_facts`]' key, so it answers what a fold of [`Store::load_all_facts`] answers.
+  /// A view of the node's shared facts, keyed and invalidated by the same history as [`Store::node_facts`].
   pub fn node_state(&self, session_id: &str) -> StoreResult<Arc<NodeState>> {
     Ok(self.node_state_versioned(session_id)?.1)
   }
 
-  /// Count full task-state folds and event visits since the store opened.
   /// [`Store::node_state`] and the version of the memo entry that answered it.
   ///
   /// While the event cache is cold, a state sealed by [`Store::evict_recovery_history`] answers when the log file and
@@ -502,14 +478,22 @@ impl Store {
       LiveHistory::Cached { generation, events } => (generation, events),
       LiveHistory::Cold(identity) => {
         let archived = self.read_archive_offset(session_id)?;
-        let cache = self.node_state_cache.lock().expect("node state cache mutex is not poisoned");
-        if let (Some(identity), Some(entry)) = (identity, cache.get(session_id))
-          && entry.key == NodeStateKey::File(identity)
-          && entry.archived == archived
-        {
-          return Ok((entry.version, Arc::clone(&entry.state)));
+        let version = {
+          let states = self.node_state_cache.lock().expect("node-state cache mutex is not poisoned");
+          identity
+            .and_then(|identity| {
+              states
+                .get(session_id)
+                .filter(|entry| entry.key == NodeStateKey::File(identity) && entry.archived == archived)
+            })
+            .map(|entry| entry.version)
+        };
+        if let Some(version) = version {
+          let Some(facts) = self.node_facts_until(session_id, &mut || false)? else {
+            unreachable!("the no-stop facts lookup completes")
+          };
+          return Ok((version, self.node_state_view(session_id, facts)?));
         }
-        drop(cache);
         self.live_events_with_generation(session_id)?
       }
     };
@@ -525,49 +509,46 @@ impl Store {
   ) -> StoreResult<(u64, Arc<NodeState>)> {
     let archived = self.read_archive_offset(session_id)?;
     let current = NodeStateKey::Cached { generation, covered: live.len() };
-    let cached = {
-      let mut cache = self.node_state_cache.lock().expect("node state cache mutex is not poisoned");
-      match cache.get(session_id) {
-        Some(entry) if entry.key == current && entry.archived == archived => {
-          return Ok((entry.version, Arc::clone(&entry.state)));
-        }
-        _ => cache.remove(session_id),
+    let previous =
+      self.node_state_cache.lock().expect("node-state cache mutex is not poisoned").get(session_id).cloned();
+    let (version, state_fold_count) = match previous {
+      Some(entry) if entry.key == current && entry.archived == archived => {
+        let mut never_stop = || false;
+        let Some(facts) = self.node_facts_of(session_id, generation, live, &mut never_stop)? else {
+          unreachable!("the no-stop facts lookup completes")
+        };
+        return Ok((entry.version, self.node_state_view(session_id, facts)?));
       }
-    };
-    let (covered, mut state, mut folded_events, is_full_fold) = match cached {
       Some(CachedNodeState {
         key: NodeStateKey::Cached { generation: cached_generation, covered },
         archived: cached_archived,
-        state,
         ..
       }) if cached_generation == generation && cached_archived == archived && covered <= live.len() => {
-        (covered, state, 0, false)
+        (self.next_node_state_version.fetch_add(1, Ordering::Relaxed), Some((live.len() - covered) as u64))
       }
-      _ => {
-        self.history_work.node_state_full_folds.fetch_add(1, Ordering::Relaxed);
-        let mut state = NodeState::default();
-        let mut folded = 0;
-        if archived > 0 {
-          let archive = self.load_archive_range(session_id, 0, archived)?;
-          state.fold(&archive);
-          folded += archive.len() as u64;
-          self.history_work.node_state_folded_events.fetch_add(archive.len() as u64, Ordering::Relaxed);
-        }
-        (0, Arc::new(state), folded, true)
-      }
+      _ => (self.next_node_state_version.fetch_add(1, Ordering::Relaxed), None),
     };
-    let suffix = &live[covered..];
-    Arc::make_mut(&mut state).fold(suffix);
-    folded_events += suffix.len() as u64;
-    if is_full_fold {
-      self.history_work.full_folds.fetch_add(1, Ordering::Relaxed);
+    let mut never_stop = || false;
+    let Some(facts) = self.node_facts_of(session_id, generation, live, &mut never_stop)? else {
+      unreachable!("the no-stop facts lookup completes")
+    };
+    if let Some(folded_events) = state_fold_count {
+      self.history_work.node_state_folded_events.fetch_add(folded_events, Ordering::Relaxed);
+    } else {
+      self.history_work.node_state_full_folds.fetch_add(1, Ordering::Relaxed);
+      let folded_events = (archived + live.len()) as u64;
+      self.history_work.node_state_folded_events.fetch_add(folded_events, Ordering::Relaxed);
     }
-    self.history_work.folded_events.fetch_add(folded_events, Ordering::Relaxed);
-    self.history_work.node_state_folded_events.fetch_add(suffix.len() as u64, Ordering::Relaxed);
-    let version = self.next_node_state_version.fetch_add(1, Ordering::Relaxed);
-    let entry = CachedNodeState { key: current, archived, version, state: Arc::clone(&state) };
-    self.node_state_cache.lock().expect("node state cache mutex is not poisoned").insert(session_id.to_string(), entry);
+    let state = self.node_state_view(session_id, facts)?;
+    let entry = CachedNodeState { key: current, archived, version };
+    self.node_state_cache.lock().expect("node-state cache mutex is not poisoned").insert(session_id.to_string(), entry);
     Ok((version, state))
+  }
+
+  fn node_state_view(&self, session_id: &str, facts: Arc<NodeFacts>) -> StoreResult<Arc<NodeState>> {
+    let malformed_task_events =
+      if facts.task.is_err() { Some(self.load_all_facts_shared_sync(session_id)?) } else { None };
+    Ok(Arc::new(NodeState { facts, malformed_task_events }))
   }
 
   /// Keep a node's state past the eviction of its cached events, keyed by the log file's identity.
@@ -583,12 +564,7 @@ impl Store {
       (Some((generation, len, identity)), Some(entry))
         if entry.key == (NodeStateKey::Cached { generation, covered: len }) =>
       {
-        Some(CachedNodeState {
-          key: NodeStateKey::File(identity),
-          archived: entry.archived,
-          version: entry.version,
-          state: Arc::new(entry.state.sealed()),
-        })
+        Some(CachedNodeState { key: NodeStateKey::File(identity), archived: entry.archived, version: entry.version })
       }
       (Some((generation, len, identity)), _) => {
         let node_facts = self.node_facts_cache.lock().expect("node facts cache mutex is not poisoned");
@@ -599,7 +575,6 @@ impl Store {
             key: NodeStateKey::File(identity),
             archived: entry.archived,
             version: self.next_node_state_version.fetch_add(1, Ordering::Relaxed),
-            state: Arc::new(NodeState::sealed_from(&entry.facts)),
           })
       }
       (None, Some(entry)) if matches!(entry.key, NodeStateKey::File(_)) => Some(entry),
@@ -642,10 +617,10 @@ impl Store {
     if use_sealed_recovery_state {
       let archived = self.read_archive_offset(session_id)?;
       let sealed = {
-        let states = self.node_state_cache.lock().expect("node-state cache mutex is not poisoned");
-        identity.and_then(|identity| match states.get(session_id) {
-          Some(entry) if entry.key == NodeStateKey::File(identity) && entry.archived == archived => {
-            Some(entry.state.task_state().map(str::to_string))
+        let facts = self.node_facts_cache.lock().expect("node facts cache mutex is not poisoned");
+        identity.and_then(|identity| match facts.get(session_id) {
+          Some(entry) if entry.key == NodeFactsKey::File(identity) && entry.archived == archived => {
+            Some(entry.facts.task().map(|task| task.task_state.clone()))
           }
           _ => None,
         })
@@ -1570,7 +1545,7 @@ impl Store {
     let mut running = false;
     let mut waiting = false;
     for run in &runs {
-      match node.runs.display_state(run, &mut boot)? {
+      match node.display_state(run, &mut boot)? {
         RunDisplayState::Running => running = true,
         RunDisplayState::Queued | RunDisplayState::Withheld if task_open => waiting = true,
         RunDisplayState::Queued
@@ -2188,14 +2163,11 @@ fn fold_task_facts_from(
       }
       _ => {}
     }
-    if let Some(event_id) = event.get("id").and_then(Value::as_str)
-      && !facts.event_ids.insert(event_id.to_string())
-    {
-      continue;
-    }
     if let Some(event_id) = event.get("id").and_then(Value::as_str) {
+      if facts.events_by_id.contains_key(event_id) {
+        continue;
+      }
       facts.events_by_id.insert(event_id.to_string(), Arc::clone(&events[index]));
-      facts.event_order.push(event_id.to_string());
     }
     let event_type = event.get("type").and_then(Value::as_str).unwrap_or_default();
     match event_type {
@@ -2222,12 +2194,11 @@ fn fold_task_facts_from(
           facts.imported_pending_ids.insert(input_id.to_string());
         }
         facts.input_candidates.clear();
-        for (prior_index, prior_id) in facts.event_order.iter().enumerate() {
+        for (prior_index, prior) in facts.events_by_id.values().enumerate() {
           if prior_index % TASK_FACTS_STOP_CHECK_INTERVAL == 0 && should_stop() {
             return Ok(false);
           }
-          if let Some(prior) = facts.events_by_id.get(prior_id)
-            && admits_input(prior)
+          if admits_input(prior)
             && prior.get("id").and_then(Value::as_str).is_some_and(|id| facts.imported_pending_ids.contains(id))
           {
             facts.input_candidates.push(Arc::clone(prior));
@@ -3748,6 +3719,47 @@ pub(crate) mod tests {
   }
 
   #[test]
+  fn task_fact_event_index_keeps_one_id_key_and_two_shared_references_per_event() {
+    let facts = fold_task_facts(&[
+      json!({"id": "event-a", "type": "user", "content": "first"}),
+      json!({"id": "event-a", "type": "user", "content": "duplicate"}),
+      json!({"id": "event-b", "type": "agent_message", "content": "second"}),
+    ])
+    .unwrap();
+
+    assert_eq!(facts.events_by_id.len(), 2, "each unique event id owns one ordered map entry");
+    for (id, event) in &facts.events_by_id {
+      assert_eq!(event["id"].as_str().unwrap(), id);
+      assert!(Arc::ptr_eq(event, facts.events_by_id.get(id).unwrap()));
+    }
+    assert_eq!(facts.events_by_id.get_index(0).unwrap().0, "event-a");
+    assert_eq!(facts.events_by_id.get_index(1).unwrap().0, "event-b");
+  }
+
+  #[test]
+  fn node_state_view_retains_one_shared_node_facts_owner() {
+    let facts = Arc::new(NodeFacts::default());
+    let state = NodeState { facts: Arc::clone(&facts), malformed_task_events: None };
+
+    assert!(Arc::ptr_eq(&facts, &state.facts));
+    assert_eq!(Arc::strong_count(&facts), 2, "the view adds one Arc owner and no RunFacts copy");
+  }
+
+  #[test]
+  fn withheld_reason_scans_events_in_order_without_retaining_run_entries() {
+    let events = [
+      json!({"type": "run_launch_withheld", "run_id": "run-a", "reason": "closed task"}),
+      json!({"type": "run_launch_withheld", "run_id": "run-b", "reason": "other task"}),
+      json!({"type": "run_launch_withheld", "run_id": "run-a", "reason": ""}),
+    ];
+    let mut visited = 0;
+    let withheld = has_withheld_reason(events.iter().inspect(|_| visited += 1), "run-a");
+
+    assert_eq!(visited, 3, "the scan visits each event once");
+    assert!(!withheld, "the latest empty reason clears the earlier withheld state");
+  }
+
+  #[test]
   fn imported_pending_inputs_require_stable_input_ids() {
     let error =
       fold_task_facts(&[json!({"id": "bad-import", "type": "task_imported", "pending_inputs": [{}]})]).unwrap_err();
@@ -4115,7 +4127,7 @@ pub(crate) mod tests {
     let fact = facts.task().unwrap().events_by_id.get(id).unwrap();
     assert!(Arc::ptr_eq(cached, fact), "task facts point at the one cached parsed payload");
     assert!(Arc::ptr_eq(cached, &facts.task().unwrap().input_candidates[0]));
-    assert_eq!(Arc::strong_count(cached), 3, "the history, id map, and candidate list retain one payload");
+    assert_eq!(Arc::strong_count(cached), 3, "the history, ordered id map, and candidate list share one payload");
     assert_eq!(store.history_work().owned_event_clones, before.owned_event_clones);
 
     store.append_chat_event(&node.id, json!({"type": "agent_message", "content": "append"})).await.unwrap();

@@ -68,7 +68,7 @@ fn build_worker_transcript(store: &Store, session_id: &str, signature: Signature
   let mut boot = HostBoot::default();
   let mut states = BTreeMap::new();
   for run in &run_records {
-    states.insert(run.id.clone(), node.runs.display_state(run, &mut boot)?.as_str().to_string());
+    states.insert(run.id.clone(), node.display_state(run, &mut boot)?.as_str().to_string());
   }
 
   let cfg = store.config();

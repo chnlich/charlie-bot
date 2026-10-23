@@ -183,19 +183,11 @@ pub enum RunDisplayState {
 
 /// Run terminal outcomes, stop requests and withheld launches folded from one node history.
 ///
-/// Recovery, dispatch and the display-state readers query these facts once per run, so retaining the last outcome,
-/// the stop identities and the last withheld reason makes each lookup independent of history length, matching
-/// `src/runtime/runs.py:453-503`'s `_RUN_FACTS_MEMO`.
+/// Recovery and dispatch read the same outcome and stop-request maps as Python's bounded run-facts memo.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct RunFacts {
   outcomes: HashMap<String, Option<String>>,
-  unknown_outcome_runs: HashSet<String>,
-  stopped_runs: HashSet<String>,
-  stop_request_ids: HashSet<(String, String)>,
-  withheld_reasons: HashMap<String, String>,
-  first_finish_input_ids: HashMap<String, Vec<String>>,
-  finished_input_ids: HashMap<String, HashSet<String>>,
-  unattributed_finished_input_ids: HashSet<String>,
+  stop_requests: HashMap<String, HashSet<Option<String>>>,
 }
 
 /// The host boot time, read from `/proc/stat` on first use: only a launched run without a terminal fact needs it.
@@ -227,34 +219,15 @@ impl RunFacts {
   pub(crate) fn observe(&mut self, event: &Value) {
     match event.get("type").and_then(Value::as_str) {
       Some("run_finished") => {
-        let input_ids = event_input_ids(event);
         if let Some(run_id) = event.get("run_id").and_then(Value::as_str) {
-          self.first_finish_input_ids.entry(run_id.to_string()).or_insert_with(|| input_ids.clone());
-          self.finished_input_ids.entry(run_id.to_string()).or_default().extend(input_ids);
           let outcome = event.get("outcome").and_then(Value::as_str).map(str::to_string);
-          if outcome.as_deref().is_some_and(|value| !is_known_outcome(value)) {
-            self.unknown_outcome_runs.insert(run_id.to_string());
-          } else {
-            self.unknown_outcome_runs.remove(run_id);
-          }
           self.outcomes.insert(run_id.to_string(), outcome);
-        } else {
-          self.unattributed_finished_input_ids.extend(input_ids);
         }
       }
       Some("run_stop_requested") => {
         if let Some(run_id) = event.get("run_id").and_then(Value::as_str) {
-          self.stopped_runs.insert(run_id.to_string());
-          if let Some(request_id) = event.get("request_id").and_then(Value::as_str) {
-            self.stop_request_ids.insert((run_id.to_string(), request_id.to_string()));
-          }
-        }
-      }
-      Some("run_launch_withheld") => {
-        if let Some(run_id) = event.get("run_id").and_then(Value::as_str)
-          && let Some(reason) = event.get("reason").and_then(Value::as_str).filter(|reason| !reason.is_empty())
-        {
-          self.withheld_reasons.insert(run_id.to_string(), reason.to_string());
+          let request_id = event.get("request_id").and_then(Value::as_str).map(str::to_string);
+          self.stop_requests.entry(run_id.to_string()).or_default().insert(request_id);
         }
       }
       _ => {}
@@ -262,7 +235,7 @@ impl RunFacts {
   }
 
   /// One run's display state, as [`Store::run_display_state`] derives it from the history these facts fold.
-  pub fn display_state(&self, run: &RunRecord, boot: &mut HostBoot) -> StoreResult<RunDisplayState> {
+  pub fn display_state(&self, run: &RunRecord, boot: &mut HostBoot, withheld: bool) -> StoreResult<RunDisplayState> {
     if let Some(outcome) = self.terminal_outcome(&run.id)? {
       return Ok(match outcome {
         RunOutcomeKind::Success => RunDisplayState::Success,
@@ -274,7 +247,7 @@ impl RunFacts {
       if self.stop_requested(&run.id, None) {
         return Ok(RunDisplayState::Stopped);
       }
-      if self.withheld_reasons.contains_key(&run.id) {
+      if withheld {
         return Ok(RunDisplayState::Withheld);
       }
       return Ok(RunDisplayState::Queued);
@@ -290,17 +263,12 @@ impl RunFacts {
 
   /// Whether some run's last `run_finished` fact carries an outcome that [`RunFacts::terminal_outcome`] rejects.
   pub fn has_unknown_outcome(&self) -> bool {
-    !self.unknown_outcome_runs.is_empty()
+    self.outcomes.values().any(|outcome| outcome.as_deref().is_some_and(|value| !is_known_outcome(value)))
   }
 
   /// Whether any `run_finished` fact exists for this run, even when it has no outcome value.
   pub fn has_terminal_fact(&self, run_id: &str) -> bool {
     self.outcomes.contains_key(run_id)
-  }
-
-  /// The first durable finish payload for one run, as `finish_facts(...).next()` returns it.
-  fn first_finish_input_ids(&self, run_id: &str) -> Option<&[String]> {
-    self.first_finish_input_ids.get(run_id).map(Vec::as_slice)
   }
 
   /// The outcome of the last `run_finished` fact for `run_id`.
@@ -316,8 +284,10 @@ impl RunFacts {
 
   /// Whether a stop fact exists for this run and optional request id.
   pub fn stop_requested(&self, run_id: &str, request_id: Option<&str>) -> bool {
-    request_id.is_none_or(|request_id| self.stop_request_ids.contains(&(run_id.to_string(), request_id.to_string())))
-      && (request_id.is_some() || self.stopped_runs.contains(run_id))
+    self.stop_requests.get(run_id).is_some_and(|requests| match request_id {
+      None => !requests.is_empty(),
+      Some(request_id) => requests.iter().any(|candidate| candidate.as_deref() == Some(request_id)),
+    })
   }
 }
 
@@ -648,7 +618,7 @@ impl Store {
   /// [`RunFacts::display_state`] for each run, as Python passes one event list to `run_display_state`.
   pub fn run_display_state(&self, session_id: &str, run_id: &str) -> StoreResult<RunDisplayState> {
     let run = require_run(self, session_id, run_id)?;
-    self.node_state(session_id)?.runs.display_state(&run, &mut HostBoot::default())
+    self.node_state(session_id)?.display_state(&run, &mut HostBoot::default())
   }
 
   /// Return every structural-change blocker in chronological run order; an empty list means none.
@@ -870,7 +840,15 @@ impl Store {
       // The outcome is the last fact's and the payload is the first fact's, as Python's `terminal_outcome` and
       // `_fact_input_payload` read them. An empty `ended_at` is the half-written end record: the caller's `ended_at`
       // and `exit_code` fill it, and values already written stay.
-      let input_event_ids = run_facts.first_finish_input_ids(run_id).unwrap_or_default().to_vec();
+      let events = self.load_all_facts_shared_sync(session_id)?;
+      let input_event_ids = events
+        .iter()
+        .find(|event| {
+          event.get("type").and_then(Value::as_str) == Some("run_finished")
+            && event.get("run_id").and_then(Value::as_str) == Some(run_id)
+        })
+        .map(|event| event_input_ids(event))
+        .unwrap_or_default();
       let mut changed = run.input_event_ids != input_event_ids;
       run.input_event_ids = input_event_ids;
       if run.ended_at.is_none() {
@@ -939,10 +917,12 @@ impl Store {
       )));
     }
     let mut foreign = HashSet::new();
-    foreign.extend(run_facts.unattributed_finished_input_ids.iter().cloned());
-    for (other_run_id, input_ids) in &run_facts.finished_input_ids {
-      if other_run_id != &run.id {
-        foreign.extend(input_ids.iter().cloned());
+    for event in events {
+      if event.get("type").and_then(Value::as_str) != Some("run_finished") {
+        continue;
+      }
+      if event.get("run_id").and_then(Value::as_str).is_none_or(|other_run_id| other_run_id != run.id) {
+        foreign.extend(event_input_ids(event));
       }
     }
     for other in self.list_run_records_sync(&run.session_id)? {
@@ -1264,6 +1244,29 @@ async fn wait_for_exit(pid: u32, timeout: Duration) -> bool {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn run_facts_retain_one_outcome_and_request_set_per_run() {
+    let events = [
+      json!({"type": "run_finished", "run_id": "run-a", "outcome": "success"}),
+      json!({"type": "run_finished", "run_id": "run-b", "outcome": "future-outcome"}),
+      json!({"type": "run_stop_requested", "run_id": "run-a", "request_id": "request-a"}),
+      json!({"type": "run_stop_requested", "run_id": "run-a"}),
+      json!({"type": "run_launch_withheld", "run_id": "run-b", "reason": "closed task"}),
+    ];
+    let mut facts = RunFacts::default();
+    for event in &events {
+      facts.observe(event);
+    }
+
+    assert_eq!(facts.outcomes.len(), 2, "one last outcome is retained per run");
+    assert_eq!(facts.stop_requests.len(), 1, "one request set is retained per stopped run");
+    assert_eq!(facts.stop_requests["run-a"].len(), 2, "the set preserves both request identity forms");
+    assert!(facts.has_unknown_outcome());
+    assert!(facts.stop_requested("run-a", None));
+    assert!(facts.stop_requested("run-a", Some("request-a")));
+    assert!(!facts.stop_requested("run-a", Some("other-request")));
+  }
 
   #[test]
   fn run_record_rejects_extra_fields_and_keeps_python_field_order() {

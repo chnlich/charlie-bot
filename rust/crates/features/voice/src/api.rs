@@ -459,8 +459,7 @@ mod tests {
   use std::sync::Mutex;
 
   use axum::body::to_bytes;
-  use tracing_subscriber::Layer;
-  use tracing_subscriber::layer::{Context, SubscriberExt};
+  use charliebot_core::test_support::EventSink;
 
   const SESSION_ID: &str = "session-a";
   const BACKEND_ID: &str = "fake-remote";
@@ -530,19 +529,21 @@ mod tests {
     String::from_utf8(bytes.to_vec()).expect("the response is UTF-8")
   }
 
-  /// Runs `call` with a subscriber that records each event's fields, the way the Python tests capture structlog.
+  /// Runs `call` with the shared test capture recording each event's fields, the way the Python tests capture structlog.
   fn capture_events<T>(call: impl FnOnce() -> T) -> (T, Vec<Event>) {
     let events = Arc::new(Mutex::new(Vec::new()));
-    let subscriber = tracing_subscriber::registry().with(CaptureLayer(Arc::clone(&events)));
-    let result = tracing::subscriber::with_default(subscriber, call);
+    let result = {
+      let _capture = charliebot_core::test_support::install_events(Arc::new(CaptureSink(Arc::clone(&events))));
+      call()
+    };
     let captured = events.lock().expect("the capture lock is never poisoned").clone();
     (result, captured)
   }
 
-  struct CaptureLayer(Arc<Mutex<Vec<Event>>>);
+  struct CaptureSink(Arc<Mutex<Vec<Event>>>);
 
-  impl<S: tracing::Subscriber> Layer<S> for CaptureLayer {
-    fn on_event(&self, event: &tracing::Event<'_>, _context: Context<'_, S>) {
+  impl EventSink for CaptureSink {
+    fn event(&self, event: &tracing::Event<'_>) {
       let mut fields = Event::new();
       event.record(&mut FieldCapture(&mut fields));
       self.0.lock().expect("the capture lock is never poisoned").push(fields);

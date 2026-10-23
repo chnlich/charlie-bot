@@ -1,6 +1,4 @@
-//! The `storage_cool_sweep_done` event of one real sweep, read through a tracing subscriber. It runs in its own test binary:
-//! a callsite that an earlier test of the same process reached with no subscriber keeps an uninteresting cache entry, and the
-//! event would never reach this subscriber.
+//! The `storage_cool_sweep_done` event of one real sweep, read through the shared test capture.
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -11,13 +9,12 @@ use charliebot_agents::backends::claude_code::usage_quota::QuotaHttp;
 use charliebot_agents::backends::claude_code::{self, ClaudeHost};
 use charliebot_agents::backends::codex::{self, CodexHost};
 use charliebot_core::paths::realpath;
+use charliebot_core::test_support::EventSink;
 use charliebot_registry::{Registry, RegistryError};
 use charliebot_store::metadata::UtcDateTime;
 use charliebot_usage_page::cool_storage::run_cool_sweep;
+use tracing::Event;
 use tracing::field::{Field, Visit};
-use tracing::{Event, Subscriber};
-use tracing_subscriber::Layer;
-use tracing_subscriber::layer::{Context, SubscriberExt};
 
 thread_local! {
   /// The hosts the test registers its sources with. `register_package` takes a plain function, so the test hands them over here.
@@ -31,12 +28,12 @@ fn register_sources(registry: &mut Registry) -> Result<(), RegistryError> {
   codex::register_with_host(registry, &codex_host)
 }
 
-/// Each event the subscriber records: its field names, and each field's Debug text.
+/// Each event the capture records: its field names, and each field's Debug text.
 #[derive(Clone, Default)]
 struct RecordedEvents(Arc<Mutex<Vec<BTreeMap<String, String>>>>);
 
-impl<S: Subscriber> Layer<S> for RecordedEvents {
-  fn on_event(&self, event: &Event<'_>, _context: Context<'_, S>) {
+impl EventSink for RecordedEvents {
+  fn event(&self, event: &Event<'_>) {
     let mut fields = BTreeMap::new();
     event.record(&mut FieldText(&mut fields));
     self.0.lock().expect("the recorder lock").push(fields);
@@ -81,11 +78,8 @@ fn sweep_done_event_carries_each_python_field() {
   let cfg = Arc::new(registry.load_config(&charlie).expect("the synthetic config loads"));
   let now = UtcDateTime::parse("2026-09-04T12:00:00+00:00").expect("the instant parses");
   let recorded = RecordedEvents::default();
-  let subscriber = tracing_subscriber::Registry::default().with(recorded.clone());
-
-  tracing::subscriber::with_default(subscriber, || {
-    run_cool_sweep(Arc::clone(&cfg), &registry, now).expect("the sweep runs");
-  });
+  let _capture = charliebot_core::test_support::install_events(Arc::new(recorded.clone()));
+  run_cool_sweep(Arc::clone(&cfg), &registry, now).expect("the sweep runs");
 
   let events = recorded.0.lock().expect("the recorder lock");
   let done = events

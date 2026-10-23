@@ -30,4 +30,5 @@ tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+charliebot-core = { workspace = true, features = ["test-support"] }
 tower.workspace = true

@@ -24,10 +24,7 @@ use charliebot_tasks::git::{
 
 static GIT_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-#[path = "support/log_capture.rs"]
-mod log_capture;
-
-use log_capture::LogCapture;
+use charliebot_core::test_support::LogCapture;
 
 /// Emits one event at this call site; the capture test below reaches it from two threads.
 fn emit_probe() {

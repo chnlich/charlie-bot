@@ -1,45 +1,27 @@
-//! The startup sweep's scope and its `session_cgroup_sweep_removed` line, read through a tracing subscriber. It runs in
-//! its own test binary: the sweep's callsite, reached by an earlier test of the same process with no subscriber, keeps
-//! an uninteresting cache entry, and the event would never reach this subscriber.
+//! The startup sweep's scope and its `session_cgroup_sweep_removed` line, read through the shared test capture.
 
 use std::collections::BTreeMap;
 use std::fs;
 use std::sync::{Arc, Mutex};
 
 use charliebot_agents::transport::cgroup::sweep_stale_session_cgroups;
+use charliebot_core::test_support::EventSink;
+use tracing::Event;
 use tracing::field::{Field, Visit};
-use tracing::span::{Attributes, Id, Record};
-use tracing::{Event, Metadata, Subscriber};
 
 const SESSION_ID: &str = "abcd1234-ef56-7890-abcd-ef1234567890";
 const POPULATED_ID: &str = "9f8e7d6c-0000-4000-8000-000000000000";
 
-/// Each event the subscriber records: each field's name and Debug text.
+/// Each event the capture records: each field's name and Debug text.
 #[derive(Clone, Default)]
 struct RecordedEvents(Arc<Mutex<Vec<BTreeMap<String, String>>>>);
 
-impl Subscriber for RecordedEvents {
-  fn enabled(&self, _metadata: &Metadata<'_>) -> bool {
-    true
-  }
-
-  fn new_span(&self, _attributes: &Attributes<'_>) -> Id {
-    Id::from_u64(1)
-  }
-
-  fn record(&self, _span: &Id, _values: &Record<'_>) {}
-
-  fn record_follows_from(&self, _span: &Id, _follows: &Id) {}
-
+impl EventSink for RecordedEvents {
   fn event(&self, event: &Event<'_>) {
     let mut fields = BTreeMap::new();
     event.record(&mut FieldText(&mut fields));
     self.0.lock().expect("the recorder lock").push(fields);
   }
-
-  fn enter(&self, _span: &Id) {}
-
-  fn exit(&self, _span: &Id) {}
 }
 
 struct FieldText<'a>(&'a mut BTreeMap<String, String>);
@@ -66,9 +48,8 @@ fn sweep_removes_only_empty_cgroups_named_for_this_homes_sessions() {
   fs::create_dir(base.path().join("app-other.scope")).unwrap();
 
   let recorded = RecordedEvents::default();
-  let subscriber = recorded.clone();
-  let removed = tracing::subscriber::with_default(subscriber, || sweep_stale_session_cgroups(base.path(), &sessions))
-    .expect("the home sessions directory can be read");
+  let _capture = charliebot_core::test_support::install_events(Arc::new(recorded.clone()));
+  let removed = sweep_stale_session_cgroups(base.path(), &sessions).expect("the home sessions directory can be read");
 
   assert_eq!(removed, 1);
   assert!(!base.path().join("charliebot-sess-abcd1234").exists());

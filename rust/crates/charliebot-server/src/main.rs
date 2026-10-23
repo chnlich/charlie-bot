@@ -526,12 +526,11 @@ mod tests {
   use std::path::Path;
   use std::sync::{Arc, Mutex};
 
+  use charliebot_core::test_support::EventSink;
   use charliebot_registry::wiring::{Phase, Service, ServiceContext};
   use futures_util::future::BoxFuture;
+  use tracing::Event;
   use tracing::field::{Field, Visit};
-  use tracing::{Event, Subscriber};
-  use tracing_subscriber::layer::{Context, SubscriberExt};
-  use tracing_subscriber::{Layer, Registry};
 
   use super::*;
 
@@ -553,8 +552,8 @@ mod tests {
 
   struct Capture(Arc<Mutex<Vec<Recorded>>>);
 
-  impl<S: Subscriber> Layer<S> for Capture {
-    fn on_event(&self, event: &Event<'_>, _context: Context<'_, S>) {
+  impl EventSink for Capture {
+    fn event(&self, event: &Event<'_>) {
       let mut visitor = Visitor::default();
       event.record(&mut visitor);
       self.0.lock().unwrap().push(visitor.0);
@@ -565,15 +564,13 @@ mod tests {
   // Python: server.py:293-310.
   fn shutdown_line_has_python_fields_and_each_close_is_numeric() {
     let events = Arc::new(Mutex::new(Vec::new()));
-    let subscriber = Registry::default().with(Capture(Arc::clone(&events)));
-    tracing::subscriber::with_default(subscriber, || {
-      let step_closes = ["discord", "ext_usage", "host_auth", "merge_pool", "scheduler", "slack", "speech"]
-        .map(|name| StepTiming { name, elapsed: Duration::ZERO })
-        .into();
-      let closes =
-        CloseTimings { step_closes, http_client: Duration::from_millis(3), ws_close: Duration::from_millis(5) };
-      log_shutdown(Instant::now(), closes, false);
-    });
+    let _capture = charliebot_core::test_support::install_events(Arc::new(Capture(Arc::clone(&events))));
+    let step_closes = ["discord", "ext_usage", "host_auth", "merge_pool", "scheduler", "slack", "speech"]
+      .map(|name| StepTiming { name, elapsed: Duration::ZERO })
+      .into();
+    let closes =
+      CloseTimings { step_closes, http_client: Duration::from_millis(3), ws_close: Duration::from_millis(5) };
+    log_shutdown(Instant::now(), closes, false);
 
     let events = events.lock().unwrap();
     assert_eq!(events.len(), 1);
@@ -707,7 +704,7 @@ mod tests {
   #[tokio::test]
   async fn boot_stop_shutdown_line_covers_a_slow_service_stop() {
     let events = Arc::new(Mutex::new(Vec::new()));
-    let _subscriber = tracing::subscriber::set_default(Registry::default().with(Capture(Arc::clone(&events))));
+    let _capture = charliebot_core::test_support::install_events(Arc::new(Capture(Arc::clone(&events))));
     let home = tempfile::tempdir().expect("the synthetic home is created");
     std::fs::write(home.path().join("config.yaml"), "").expect("the synthetic config is written");
     let mut registry = charliebot_registry::Registry::new();

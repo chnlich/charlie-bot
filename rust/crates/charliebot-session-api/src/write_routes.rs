@@ -575,23 +575,21 @@ pub(crate) fn model_response(store: &Store, meta: &SessionMetadata) -> Response 
 
 #[cfg(test)]
 mod tests {
-  use std::sync::{Arc, Mutex, Once};
+  use std::sync::{Arc, Mutex};
 
   use charliebot_core::run_token::RunTokenClaims;
+  use charliebot_core::test_support::EventSink;
   use charliebot_store::{SIDEBAR_CHANNEL, session_channel};
+  use tracing::Event;
   use tracing::field::{Field, Visit};
-  use tracing::{Event, Subscriber};
-  use tracing_subscriber::Layer;
-  use tracing_subscriber::filter::LevelFilter;
-  use tracing_subscriber::layer::{Context, SubscriberExt};
 
   use super::*;
   use crate::test_support::{answer, create_node, feature_context, install_dispatcher, json_request};
 
   struct LogMessage(Arc<Mutex<Vec<String>>>);
 
-  impl<S: Subscriber> Layer<S> for LogMessage {
-    fn on_event(&self, event: &Event<'_>, _context: Context<'_, S>) {
+  impl EventSink for LogMessage {
+    fn event(&self, event: &Event<'_>) {
       let mut message = MessageField(String::new());
       event.record(&mut message);
       self.0.lock().expect("captured logs mutex").push(format!("{} {}", event.metadata().target(), message.0));
@@ -614,19 +612,12 @@ mod tests {
     }
   }
 
-  /// Captures this thread's events into the returned buffer. tracing caches each callsite's interest process-wide. With
-  /// only one scoped subscriber alive, a callsite first reached on a thread without one is cached as never, and this
-  /// thread then misses its events. Setting a global fallback first keeps that cache enabled. The server sets one at
-  /// startup (`logging::init`), so production never takes this path.
-  fn capture_logs() -> (Arc<Mutex<Vec<String>>>, tracing::subscriber::DefaultGuard) {
-    static FALLBACK: Once = Once::new();
-    FALLBACK.call_once(|| {
-      tracing::subscriber::set_global_default(tracing_subscriber::registry().with(LevelFilter::TRACE))
-        .expect("the test fallback subscriber installs once");
-    });
+  /// Captures this thread's events into the returned buffer through the shared test capture, which keeps a callsite
+  /// another thread reached first enabled for this thread.
+  fn capture_logs() -> (Arc<Mutex<Vec<String>>>, charliebot_core::test_support::CaptureGuard) {
     let logs = Arc::new(Mutex::new(Vec::new()));
-    let subscriber = tracing_subscriber::registry().with(LogMessage(Arc::clone(&logs)));
-    (logs, tracing::subscriber::set_default(subscriber))
+    let guard = charliebot_core::test_support::install_events(Arc::new(LogMessage(Arc::clone(&logs))));
+    (logs, guard)
   }
 
   #[tokio::test]

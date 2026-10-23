@@ -33,6 +33,7 @@ uuid.workspace = true
 sherpa-onnx.workspace = true
 
 [dev-dependencies]
+charliebot-core = { workspace = true, features = ["test-support"] }
 tempfile.workspace = true
 tokio-tungstenite.workspace = true
 tracing-subscriber.workspace = true

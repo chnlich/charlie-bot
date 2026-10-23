@@ -253,17 +253,15 @@ mod tests {
   use charliebot_core::credentials::load_credentials;
   use charliebot_core::hot_reload::HotReload;
   use charliebot_core::run_token::{self, RunTokenClaims};
+  use charliebot_core::test_support::EventSink;
   use charliebot_registry::context::StartupState;
   use charliebot_registry::{Registry, store_hooks};
   use charliebot_store::CreateTask;
   use charliebot_store::metadata::{SessionMetadata, TaskProfile, UtcDateTime};
   use serde_json::{Value, json};
   use tower::ServiceExt;
+  use tracing::Event;
   use tracing::field::{Field, Visit};
-  use tracing::{Event, Subscriber};
-  use tracing_subscriber::Layer;
-  use tracing_subscriber::layer::Context;
-  use tracing_subscriber::prelude::*;
 
   use super::*;
 
@@ -273,8 +271,8 @@ mod tests {
   #[derive(Clone)]
   struct MessageCapture(Arc<StdMutex<Vec<String>>>);
 
-  impl<S: Subscriber> Layer<S> for MessageCapture {
-    fn on_event(&self, event: &Event<'_>, _context: Context<'_, S>) {
+  impl EventSink for MessageCapture {
+    fn event(&self, event: &Event<'_>) {
       let mut visitor = MessageVisitor::default();
       event.record(&mut visitor);
       if let Some(message) = visitor.message {
@@ -397,8 +395,7 @@ mod tests {
     add_session(&features, "group-session", Some("Old group"), false);
     let router = crate::routes::routes(&features);
     let messages = Arc::new(StdMutex::new(Vec::new()));
-    let subscriber = tracing_subscriber::registry().with(MessageCapture(Arc::clone(&messages)));
-    let _default = tracing::subscriber::set_default(subscriber);
+    let _capture = charliebot_core::test_support::install_events(Arc::new(MessageCapture(Arc::clone(&messages))));
 
     let mut sidebar = features.store.subscribe(charliebot_store::streaming::SIDEBAR_CHANNEL);
     let (status, body) = send(&router, Method::POST, &format!("/api/sessions/{SESSION_ID}/read"), None, None).await;
@@ -552,8 +549,7 @@ mod tests {
     let agent_auth = format!("Bearer {token}");
     let router = crate::routes::routes(&features);
     let messages = Arc::new(StdMutex::new(Vec::new()));
-    let subscriber = tracing_subscriber::registry().with(MessageCapture(Arc::clone(&messages)));
-    let _default = tracing::subscriber::set_default(subscriber);
+    let _capture = charliebot_core::test_support::install_events(Arc::new(MessageCapture(Arc::clone(&messages))));
 
     let mut sidebar = features.store.subscribe(charliebot_store::streaming::SIDEBAR_CHANNEL);
     let (status, body) = send(&router, Method::DELETE, "/api/sessions/archive-session", None, None).await;

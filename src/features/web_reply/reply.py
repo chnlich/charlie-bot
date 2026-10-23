@@ -43,6 +43,7 @@ _CODE_FENCE = re.compile(r"```.*?```", re.DOTALL)
 _INLINE_CODE = re.compile(r"`[^`]*`")
 _URL = re.compile(r"\(?https?://\S+\)?")
 _PATH = re.compile(r"(?<![\w])[~/][\w.\-/]+")
+_MARKDOWN_LINK = re.compile(r"\[([^\]]*)\]\([^)]*\)")
 # CJK Unified Ideographs (U+4E00-U+9FFF) and Extension A (U+3400-U+4DBF); Latin letters are the ASCII letters.
 _HAN = re.compile(r"[㐀-䶿一-鿿]")
 _LATIN = re.compile(r"[A-Za-z]")
@@ -71,6 +72,11 @@ class WebReplyError(Exception):
     super().__init__(detail)
     self.status = status
     self.detail = detail
+
+
+def visible_reply_chars(text: str) -> int:
+  """Count *text* characters after replacing each inline markdown link with its label."""
+  return len(_MARKDOWN_LINK.sub(r"\1", text))
 
 
 def is_web_session(meta: models.SessionMetadata) -> bool:
@@ -195,13 +201,14 @@ async def post_web_reply(
     raise WebReplyError(422, file_urls.dead_links_detail(dead_links))
   if keep_language is not None and not keep_language.strip():
     raise WebReplyError(422, "Keep-language reason is empty")
+  chars = visible_reply_chars(text)
   task_tree = tree or task_execution.task_manager()
   epoch = await events.prime_aggregator(session_id)
   async with task_tree.control_lock:
     loaded = task_tree.fact_history(session_id)
     bound = answered_input(loaded, master_cc_state.running_user_event_ids(session_id))
     answers = bound[1] if bound is not None else None
-    web_reply = {"answers": answers, "chars": len(text)}
+    web_reply = {"answers": answers, "chars": chars}
     if keep_language is not None:
       web_reply["keep_language"] = keep_language
     event_id = control_events.stable_request_event_id(session_id, request_id) if request_id is not None else None
@@ -215,15 +222,15 @@ async def post_web_reply(
       )
       if existing is not None:
         stored_reply = existing[ET.WEB_REPLY]
-        over_budget = len(existing["content"]) > REPLY_BUDGET_CHARS
+        over_budget = chars > REPLY_BUDGET_CHARS
         return {
             "posted": True,
-            "chars": stored_reply["chars"],
+            "chars": chars,
             "over_budget": over_budget,
             "answers": stored_reply["answers"],
         }
     if keep_language is None and language_check_holds(newest_user_text(loaded), text):
-      logger.info("web_reply_held", session=session_id, chars=len(text))
+      logger.info("web_reply_held", session=session_id, chars=chars)
       raise WebReplyError(409, LANGUAGE_HOLD_DETAIL)
     event = {
         "type": ET.WEB_REPLY,
@@ -236,9 +243,9 @@ async def post_web_reply(
     await task_tree.session_events.save_chat_event(session_id, event)
   await events.announce_appended_event(session_id, event, epoch=epoch)
   await lifecycle.mark_unread(session_id)
-  over_budget = len(text) > REPLY_BUDGET_CHARS
-  logger.info("web_reply_posted", session=session_id, chars=len(text), over_budget=over_budget, answers=answers)
-  return {"posted": True, "chars": len(text), "over_budget": over_budget, "answers": answers}
+  over_budget = chars > REPLY_BUDGET_CHARS
+  logger.info("web_reply_posted", session=session_id, chars=chars, over_budget=over_budget, answers=answers)
+  return {"posted": True, "chars": chars, "over_budget": over_budget, "answers": answers}
 
 
 def for_you_entries(events: list[dict]) -> list[dict]:

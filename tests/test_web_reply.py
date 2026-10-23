@@ -274,6 +274,64 @@ async def test_the_budget_flags_an_over_budget_reply_and_the_reply_still_posts(
   assert [ev["content"] for ev in conftest.events_of_type(_events(blocks, sid), ET.WEB_REPLY)] == [text]
 
 
+@pytest.mark.asyncio
+async def test_markdown_link_labels_set_the_reply_count_and_replay_readback(tmp_path: pathlib.Path) -> None:
+  blocks = _rig(tmp_path)
+  sid = await _session(blocks)
+  diff_prefix = "https://example.com/"
+  pr_prefix = "https://example.com/"
+  diff_url = diff_prefix + "d" * (150 - len(diff_prefix))
+  pr_url = pr_prefix + "p" * (183 - len(pr_prefix))
+  text = "x" * 200 + f"[diff]({diff_url})[PR 页]({pr_url})"
+  expected = {"posted": True, "chars": 208, "over_budget": False, "answers": None}
+
+  readback = await reply.post_web_reply(
+      sid,
+      text,
+      blocks.store,
+      blocks.events,
+      blocks.lifecycle,
+      request_id="same-reply",
+      tree=blocks.tree,
+      scan_context=_scan_context(blocks, sid))
+  replay = await reply.post_web_reply(
+      sid,
+      text,
+      blocks.store,
+      blocks.events,
+      blocks.lifecycle,
+      request_id="same-reply",
+      tree=blocks.tree,
+      scan_context=_scan_context(blocks, sid))
+
+  assert len(diff_url) == 150
+  assert len(pr_url) == 183
+  assert readback == replay == expected
+  replies = conftest.events_of_type(_events(blocks, sid), ET.WEB_REPLY)
+  assert len(replies) == 1
+  assert replies[0][ET.WEB_REPLY]["chars"] == 208
+
+
+@pytest.mark.asyncio
+async def test_a_bare_url_counts_in_full_in_a_web_reply(tmp_path: pathlib.Path) -> None:
+  blocks = _rig(tmp_path)
+  sid = await _session(blocks)
+  text = "See https://example.com/" + "u" * 120
+
+  readback = await reply.post_web_reply(
+      sid,
+      text,
+      blocks.store,
+      blocks.events,
+      blocks.lifecycle,
+      tree=blocks.tree,
+      scan_context=_scan_context(blocks, sid))
+
+  assert readback == {"posted": True, "chars": len(text), "over_budget": False, "answers": None}
+  stored = conftest.events_of_type(_events(blocks, sid), ET.WEB_REPLY)[0][ET.WEB_REPLY]
+  assert stored["chars"] == len(text)
+
+
 # ---------------------------------------------------------------------------
 # The language check: an English reply to a Chinese message is held unless the agent gives a reason
 # ---------------------------------------------------------------------------

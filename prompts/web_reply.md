@@ -42,7 +42,7 @@ The For-you view shows your web replies and hides the rest of your turn output.
 ## Form
 
 - Write the answer reply as the answer itself: the conclusion first, in a few sentences.
-- Keep each web reply under 500 characters.
+- Keep each web reply under 500 characters. A markdown link counts as its label.
 - When the answer needs more than 500 characters, write the whole answer on a page.
 - Then post the conclusion and the link to that page as the answer reply.
 - Write the web reply and the session status in the language of your chat replies.

@@ -36,6 +36,32 @@ pub(crate) fn read_file(path: &Path) -> StoreResult<Vec<Value>> {
   Ok(values)
 }
 
+/// Parse every physical line unless `should_stop` requests cancellation between lines.
+///
+/// A cancelled read returns no values so callers cannot publish a partial event cache.
+pub(crate) fn read_file_until(path: &Path, should_stop: &mut impl FnMut() -> bool) -> StoreResult<Option<Vec<Value>>> {
+  if should_stop() {
+    return Ok(None);
+  }
+  let file = match fs::File::open(path) {
+    Ok(file) => file,
+    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Some(Vec::new())),
+    Err(error) => return Err(StoreError::new(format!("{}: {error}", path.display()))),
+  };
+  let mut values = Vec::new();
+  for line in BufReader::new(file).split(b'\n') {
+    if should_stop() {
+      return Ok(None);
+    }
+    let raw = line.map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
+    values.extend(parse_line(&raw));
+  }
+  if should_stop() {
+    return Ok(None);
+  }
+  Ok(Some(values))
+}
+
 /// One event as an NDJSON line: Python `json.dumps(..., ensure_ascii=False)` and the newline.
 pub(crate) fn encode_line(value: &Value) -> String {
   let mut line = pyfmt::json_dumps(value, &APPEND_JSON);
@@ -116,5 +142,20 @@ mod tests {
     let payload = serde_json::json!({"blob": "x".repeat(8 * 1024 * 1024)});
     fs::write(path.path(), format!("{payload}\n{{\"i\": 1}}")).unwrap();
     assert_eq!(read_file(path.path()).unwrap(), vec![payload, serde_json::json!({"i": 1})]);
+  }
+
+  #[test]
+  fn cancelled_read_checks_each_line_and_returns_no_partial_values() {
+    let path = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(path.path(), b"{\"id\":1}\n{\"id\":2}\n{\"id\":3}\n").unwrap();
+    let mut checks = 0;
+    let events = read_file_until(path.path(), &mut || {
+      checks += 1;
+      checks == 4
+    })
+    .unwrap();
+
+    assert_eq!(checks, 4, "the read checked once before opening and before each parsed line");
+    assert!(events.is_none(), "cancellation discards the parsed prefix");
   }
 }

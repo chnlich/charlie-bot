@@ -235,6 +235,21 @@ impl Store {
     Ok((generation, events))
   }
 
+  /// Load the live events for a recovery fold, checking cancellation between physical NDJSON lines.
+  pub(crate) fn live_events_with_generation_until(
+    &self,
+    session_id: &str,
+    should_stop: &mut impl FnMut() -> bool,
+  ) -> StoreResult<Option<(u64, Arc<Vec<SharedChatEvent>>)>> {
+    let cache_entry = self.events_cache_entry(session_id);
+    let mut cache = cache_entry.lock().expect("session event cache mutex is not poisoned");
+    let Some(events) = self.load_chat_events_shared_locked_until(session_id, &mut cache, should_stop)? else {
+      return Ok(None);
+    };
+    let generation = cache.as_ref().expect("event cache entry was loaded above").generation;
+    Ok(Some((generation, events)))
+  }
+
   /// The cached live events, or the log file's identity while the cache is cold; a cold cache stays cold.
   ///
   /// The identity is read under the session lock that every append holds, so it names a file that holds every event
@@ -494,6 +509,55 @@ impl Store {
     }
   }
 
+  /// Read one archive file while allowing recovery to discard a cold read when startup is stopped.
+  fn read_archive_file_until(
+    &self,
+    path: &Path,
+    session_id: &str,
+    should_stop: &mut impl FnMut() -> bool,
+  ) -> Option<Arc<Vec<SharedChatEvent>>> {
+    if should_stop() {
+      return None;
+    }
+    let metadata = match fs::metadata(path) {
+      Ok(metadata) => metadata,
+      Err(error) => {
+        tracing::debug!(session_id, path = %path.display(), error = %error, "archive_read_failed");
+        return Some(Arc::new(Vec::new()));
+      }
+    };
+    let signature = FileSignature::from_metadata(&metadata);
+    if let Some(events) = self
+      .event_read_caches
+      .lock()
+      .expect("event read cache mutex is not poisoned")
+      .archive_events
+      .fresh(&path.to_path_buf(), signature)
+    {
+      return Some(events);
+    }
+    #[cfg(test)]
+    {
+      self.event_read_caches.lock().expect("event read cache mutex is not poisoned").archive_file_reads += 1;
+    }
+    match ndjson::read_file_until(path, should_stop) {
+      Ok(Some(events)) => {
+        let events = Arc::new(events.into_iter().map(Arc::new).collect());
+        self.event_read_caches.lock().expect("event read cache mutex is not poisoned").archive_events.record(
+          path.to_path_buf(),
+          signature,
+          Arc::clone(&events),
+        );
+        Some(events)
+      }
+      Ok(None) => None,
+      Err(error) => {
+        tracing::debug!(session_id, path = %path.display(), error = %error, "archive_read_failed");
+        Some(Arc::new(Vec::new()))
+      }
+    }
+  }
+
   /// Read the parsed events at global indices `[start, end)` from the archive files in
   /// chronological order, stopping once the covered extent passes `end`.
   pub(crate) fn load_archive_range(
@@ -516,6 +580,35 @@ impl Store {
       }
     }
     Ok(events)
+  }
+
+  /// Read an archive range for recovery, returning `None` when cancellation interrupts a cold file read.
+  pub(crate) fn load_archive_range_until(
+    &self,
+    session_id: &str,
+    start: usize,
+    end: usize,
+    should_stop: &mut impl FnMut() -> bool,
+  ) -> StoreResult<Option<Vec<SharedChatEvent>>> {
+    if should_stop() {
+      return Ok(None);
+    }
+    let mut events = Vec::new();
+    let mut pos = 0usize;
+    for path in self.archive_paths(session_id)?.iter() {
+      let Some(file_events) = self.read_archive_file_until(path, session_id, should_stop) else {
+        return Ok(None);
+      };
+      let file_end = pos + file_events.len();
+      if pos < end && file_end > start {
+        events.extend(file_events[start.max(pos) - pos..end.min(file_end) - pos].iter().cloned());
+      }
+      pos = file_end;
+      if pos >= end {
+        break;
+      }
+    }
+    Ok(Some(events))
   }
 
   /// Read the live log as parsed events with one slot per physical line. This follows
@@ -802,6 +895,38 @@ impl Store {
       Arc::new(self.read_chat_events_file(&self.chat_events_path(session_id))?.into_iter().map(Arc::new).collect());
     *cache = Some(CachedChatEvents { generation: self.next_events_cache_generation(), events: Arc::clone(&events) });
     Ok(events)
+  }
+
+  fn load_chat_events_shared_locked_until(
+    &self,
+    session_id: &str,
+    cache: &mut Option<CachedChatEvents>,
+    should_stop: &mut impl FnMut() -> bool,
+  ) -> StoreResult<Option<Arc<Vec<SharedChatEvent>>>> {
+    #[cfg(test)]
+    self.history_reads.fetch_add(1, Ordering::Relaxed);
+    if let Some(cached) = cache.as_ref() {
+      return Ok(Some(Arc::clone(&cached.events)));
+    }
+    let Some(events) = self.read_chat_events_file_until(&self.chat_events_path(session_id), should_stop)? else {
+      return Ok(None);
+    };
+    let events = Arc::new(events.into_iter().map(Arc::new).collect());
+    *cache = Some(CachedChatEvents { generation: self.next_events_cache_generation(), events: Arc::clone(&events) });
+    Ok(Some(events))
+  }
+
+  fn read_chat_events_file_until(
+    &self,
+    path: &Path,
+    should_stop: &mut impl FnMut() -> bool,
+  ) -> StoreResult<Option<Vec<ChatEvent>>> {
+    self.history_work.file_reads.fetch_add(1, Ordering::Relaxed);
+    #[cfg(test)]
+    if let Some(hook) = self.event_read_hook.lock().expect("event read hook mutex is not poisoned").clone() {
+      hook();
+    }
+    ndjson::read_file_until(path, should_stop)
   }
 
   fn read_chat_events_file(&self, path: &Path) -> StoreResult<Vec<ChatEvent>> {
@@ -1424,6 +1549,38 @@ mod tests {
     assert!(!Arc::ptr_eq(&first, &appended));
     assert_eq!(first.len(), 1);
     assert_eq!(appended.last().unwrap()["id"], "second");
+  }
+
+  #[tokio::test]
+  async fn cancelled_archive_read_checks_lines_and_does_not_memoize_a_prefix() {
+    let (_home, store) = make_test_store();
+    let session_id = "synthetic-cancelled-archive";
+    let archive_path =
+      store.chat_events_path(session_id).parent().unwrap().join("archives").join("chat_events.2026-W01.jsonl");
+    fs::create_dir_all(archive_path.parent().unwrap()).unwrap();
+    fs::write(&archive_path, b"{\"id\":\"first\"}\n{\"id\":\"second\"}\n{\"id\":\"third\"}\n").unwrap();
+
+    let mut checks = 0;
+    let interrupted = store
+      .load_archive_range_until(session_id, 0, 3, &mut || {
+        checks += 1;
+        checks == 6
+      })
+      .unwrap();
+    assert!(interrupted.is_none(), "the archive range stops before returning a parsed prefix");
+    assert_eq!(checks, 6, "the archive reader checks cancellation between physical event lines");
+    assert_eq!(
+      store.event_read_caches.lock().unwrap().archive_file_reads,
+      1,
+      "the interrupted file was opened once and its partial events were not cached"
+    );
+
+    let complete = store.load_archive_range(session_id, 0, 3).unwrap();
+    assert_eq!(
+      complete.iter().map(|event| event["id"].as_str().unwrap()).collect::<Vec<_>>(),
+      ["first", "second", "third"]
+    );
+    assert_eq!(store.event_read_caches.lock().unwrap().archive_file_reads, 2, "the uncached file was read again");
   }
 
   #[tokio::test]

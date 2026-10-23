@@ -425,7 +425,10 @@ impl Store {
         {
           return Ok(Some(Arc::clone(&entry.facts)));
         }
-        self.live_events_with_generation(session_id)?
+        let Some(events) = self.live_events_with_generation_until(session_id, should_stop)? else {
+          return Ok(None);
+        };
+        events
       }
     };
     let archived = self.read_archive_offset(session_id)?;
@@ -441,7 +444,9 @@ impl Store {
       _ => {
         let mut facts = NodeFacts::default();
         if archived > 0 {
-          let archive = self.load_archive_range(session_id, 0, archived)?;
+          let Some(archive) = self.load_archive_range_until(session_id, 0, archived, should_stop)? else {
+            return Ok(None);
+          };
           if !fold_node_facts_from(&mut facts, &archive, 0, should_stop)? {
             return Ok(None);
           }
@@ -4031,6 +4036,31 @@ pub(crate) mod tests {
     assert_eq!(checks, 3, "the fold checks once initially and then at the 256 event boundary");
     assert_eq!(facts.runs.terminal_outcome("run-255").unwrap(), Some(RunOutcomeKind::Success));
     assert_eq!(facts.runs.terminal_outcome("run-256").unwrap(), None);
+  }
+
+  #[tokio::test]
+  async fn node_facts_cold_read_checks_stop_between_event_lines_without_caching_a_prefix() {
+    let home = tempfile::tempdir().unwrap();
+    let store = make_store(home.path());
+    let node = create_node(&store, "stop-cold-event-read", None, TaskProfile::Manager).await;
+    for index in 0..5 {
+      append(&store, &node.id, json!({"type": "user", "content": format!("synthetic-{index}")})).await;
+    }
+    let expected_events = store.load_chat_events_shared_sync(&node.id).unwrap().len();
+    store.clear_chat_events_cache(&node.id);
+
+    let mut checks = 0;
+    let facts = store
+      .node_facts_until(&node.id, &mut || {
+        checks += 1;
+        checks == 5
+      })
+      .unwrap();
+
+    assert!(facts.is_none(), "the stopped recovery returns no partial node facts");
+    assert_eq!(checks, 5, "the recovery stop check reached the cold event reader before its third line");
+    assert!(store.cached_chat_events(&node.id).is_none(), "a cancelled read does not publish its parsed prefix");
+    assert_eq!(store.load_chat_events_shared_sync(&node.id).unwrap().len(), expected_events);
   }
 
   #[tokio::test]

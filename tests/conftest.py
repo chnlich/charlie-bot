@@ -2697,11 +2697,13 @@ def _disk_headroom_off_host(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture(autouse=True)
 def _session_cgroup_base_off_host(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> None:
-  """The session-cgroup base points at a path that does not exist, so no test creates a cgroup under the host's
-  delegated app.slice. A spawn then degrades to no cgroup, as on a host without delegation; a test that needs a
-  base builds one under its own temp dir."""
-  missing = tmp_path_factory.mktemp("session-cgroup-base") / "app.slice"
-  monkeypatch.setattr("src.infra.process.CGROUP_V2_APP_SLICE", str(missing))
+  """The session-cgroup slices point at paths that do not exist, so no test creates a cgroup under the host's
+  delegated slices. A spawn then fails with SessionCgroupUnavailableError, as on a host whose slices are not
+  installed; a test that needs a slice builds one under its own temp dir."""
+  missing = tmp_path_factory.mktemp("session-cgroup-base")
+  monkeypatch.setattr("src.infra.process.CGROUP_V2_AGENTS_SLICE", str(missing / "charliebot-agents.slice"))
+  monkeypatch.setattr("src.infra.process.CGROUP_V2_REPAIR_SLICE", str(missing / "charliebot-repair.slice"))
+  monkeypatch.setattr("src.infra.process.CGROUP_V2_APP_SLICE", str(missing / "app.slice"))
 
 
 def _guarded_get_config(

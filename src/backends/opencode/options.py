@@ -34,7 +34,7 @@ def model_overrides_config(backend_options: Iterable[backend_models.BackendOptio
       entry["limit"] = {"context": option.context_limit}
     if option.extra_body:
       _declare(declared, option.id, provider, model, "extra_body", option.extra_body)
-      entry["options"] = option.extra_body
+      entry["body"] = option.extra_body
   return {"providers": providers} if providers else {}
 
 

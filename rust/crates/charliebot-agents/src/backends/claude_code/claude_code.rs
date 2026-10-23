@@ -559,6 +559,82 @@ mod tests {
     assert_eq!(AgentBackend::stdin_prompt(&backend, "prompt").as_deref(), Some("prompt"));
   }
 
+  // Python: tests/test_claude_code_backend.py:234.
+  #[test]
+  fn manager_turn_settings_install_six_compaction_context_slots() {
+    let backend = ClaudeCodeBackend::from_launch(
+      None,
+      None,
+      None,
+      false,
+      None,
+      LaunchArgs {
+        backend_kwargs: serde_json::json!({"run_kind": "manager_turn"}).as_object().unwrap().clone(),
+        cgroup_session_id: Some("manager-session".to_string()),
+        ..LaunchArgs::default()
+      },
+      SessionCgroupLimits { memory_max_mb: 0, swap_max_mb: 0, tasks_max: 0 },
+    )
+    .unwrap();
+    let command = backend.build_command("hi").unwrap();
+    let settings = command[command.iter().position(|value| value == "--settings").unwrap() + 1].clone();
+    assert_eq!(command.iter().filter(|value| **value == "--settings").count(), 1);
+    assert_eq!(
+      settings,
+      concat!(
+        r#"{"disableClaudeAiConnectors":true,"syncClaudeAiSkills":false,"hooks":{"SessionStart":["#,
+        r#"{"matcher":"compact","hooks":["#,
+        r#"{"type":"command","command":"charliebot compaction-context --session manager-session --slot 1"},"#,
+        r#"{"type":"command","command":"charliebot compaction-context --session manager-session --slot 2"},"#,
+        r#"{"type":"command","command":"charliebot compaction-context --session manager-session --slot 3"},"#,
+        r#"{"type":"command","command":"charliebot compaction-context --session manager-session --slot 4"},"#,
+        r#"{"type":"command","command":"charliebot compaction-context --session manager-session --slot 5"},"#,
+        r#"{"type":"command","command":"charliebot compaction-context --session manager-session --slot 6"}]}]}"#,
+      )
+    );
+    let settings: Value = serde_json::from_str(&settings).unwrap();
+    let mut without_hooks = settings.as_object().unwrap().clone();
+    without_hooks.remove("hooks");
+    assert_eq!(
+      without_hooks,
+      serde_json::json!({"disableClaudeAiConnectors": true, "syncClaudeAiSkills": false})
+        .as_object()
+        .unwrap()
+        .clone()
+    );
+    let [session_start] = settings["hooks"]["SessionStart"].as_array().unwrap().as_slice() else {
+      panic!("one SessionStart entry");
+    };
+    assert_eq!(session_start["matcher"], "compact");
+    let hooks = session_start["hooks"].as_array().unwrap();
+    assert!(hooks.iter().all(|hook| hook["type"] == "command"));
+    let commands: Vec<&str> = hooks.iter().map(|hook| hook["command"].as_str().unwrap()).collect();
+    let expected: Vec<String> = (1..=6)
+      .map(|slot| format!("charliebot compaction-context --session manager-session --slot {slot}"))
+      .collect();
+    assert_eq!(commands, expected);
+  }
+
+  // Python: tests/test_claude_code_backend.py:249.
+  #[test]
+  fn manager_turn_settings_require_the_charliebot_session_id() {
+    let backend = ClaudeCodeBackend::from_launch(
+      None,
+      None,
+      None,
+      false,
+      None,
+      LaunchArgs {
+        backend_kwargs: serde_json::json!({"run_kind": "manager_turn"}).as_object().unwrap().clone(),
+        ..LaunchArgs::default()
+      },
+      SessionCgroupLimits { memory_max_mb: 0, swap_max_mb: 0, tasks_max: 0 },
+    )
+    .unwrap();
+    let error = backend.build_command("hi").unwrap_err();
+    assert!(format!("{error:#}").contains("require a CharlieBot session id"), "{error:#}");
+  }
+
   // Python: tests/test_anthropic_compatible_backend.py:37.
   #[test]
   fn anthropic_endpoint_sets_the_endpoint_and_pins_every_model_variable_without_a_flag() {

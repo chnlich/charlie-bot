@@ -432,6 +432,7 @@ mod tests {
   use charliebot_registry::backend::Env;
   use charliebot_store::metadata::UtcDateTime;
   use charliebot_store::run_records::RunKind;
+  use serde_json::Value;
 
   use crate::backends::claude_code::claude_config;
 
@@ -719,5 +720,56 @@ mod tests {
 
     assert_eq!(account.label, "default");
     assert_eq!(env.get("CLAUDE_CONFIG_DIR").unwrap(), &default_dir.to_string_lossy());
+  }
+
+  // Python: tests/test_claude_idle_compaction.py:211 (the hook assertions of the argv-equality test).
+  #[test]
+  fn the_idle_argv_installs_the_compaction_context_hook() {
+    let root = tempfile::tempdir().unwrap();
+    let (registry, cfg) = config(root.path(), true);
+    let option = cfg.backends.options[0].clone();
+    let account = claude_config::ClaudeAccount { label: "acct-a".to_string(), config_dir: "/synthetic/account-a".to_string() };
+    let base_env = Env::from([
+      ("HOME".to_string(), root.path().to_string_lossy().into_owned()),
+      ("PATH".to_string(), "/synthetic/bin:/usr/bin:/bin".to_string()),
+    ]);
+    let (argv, _) = build_idle_process(
+      registry,
+      &cfg,
+      &option,
+      &account,
+      IdleProcessIdentity {
+        session_id: SESSION_ID.to_string(),
+        cc_session_id: CC_SESSION_ID.to_string(),
+        run_kind: RunKind::ManagerTurn,
+      },
+      &base_env,
+    )
+    .unwrap();
+    let settings = argv[argv.iter().position(|value| value == "--settings").unwrap() + 1].clone();
+    assert_eq!(
+      settings,
+      concat!(
+        r#"{"disableClaudeAiConnectors":true,"syncClaudeAiSkills":false,"hooks":{"SessionStart":["#,
+        r#"{"matcher":"compact","hooks":["#,
+        r#"{"type":"command","command":"charliebot compaction-context --session synthetic-idle-session --slot 1"},"#,
+        r#"{"type":"command","command":"charliebot compaction-context --session synthetic-idle-session --slot 2"},"#,
+        r#"{"type":"command","command":"charliebot compaction-context --session synthetic-idle-session --slot 3"},"#,
+        r#"{"type":"command","command":"charliebot compaction-context --session synthetic-idle-session --slot 4"},"#,
+        r#"{"type":"command","command":"charliebot compaction-context --session synthetic-idle-session --slot 5"},"#,
+        r#"{"type":"command","command":"charliebot compaction-context --session synthetic-idle-session --slot 6"}]}]}"#,
+      )
+    );
+    let settings: Value = serde_json::from_str(&settings).unwrap();
+    let [session_start] = settings["hooks"]["SessionStart"].as_array().unwrap().as_slice() else {
+      panic!("one SessionStart entry");
+    };
+    assert_eq!(session_start["matcher"], "compact");
+    let commands: Vec<&str> =
+      session_start["hooks"].as_array().unwrap().iter().map(|hook| hook["command"].as_str().unwrap()).collect();
+    let expected: Vec<String> = (1..=6)
+      .map(|slot| format!("charliebot compaction-context --session {SESSION_ID} --slot {slot}"))
+      .collect();
+    assert_eq!(commands, expected);
   }
 }

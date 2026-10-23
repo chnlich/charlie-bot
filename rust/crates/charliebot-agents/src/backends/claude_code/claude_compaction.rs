@@ -573,6 +573,42 @@ mod tests {
 
   use super::*;
 
+  // Python: tests/test_claude_compaction.py:152.
+  #[test]
+  fn compaction_command_disables_skills_and_installs_the_compaction_context_hook() {
+    // The fix commit renames this call to compaction_command("claude-session", "charlie-session").
+    let command = compaction_command("claude-session");
+    let disallowed_index = command.iter().position(|value| *value == DISALLOWED_TOOLS_FLAG).unwrap();
+    assert_eq!(command[disallowed_index + 1], format!("{HEADLESS_DISALLOWED_TOOLS},{EXTRA_COMPACTION_TOOLS}"));
+    assert!(command[disallowed_index + 1].split(',').any(|tool| tool == "Skill"));
+    assert_eq!(command.iter().filter(|value| **value == "--settings").count(), 1);
+    let settings = command[command.iter().position(|value| value == "--settings").unwrap() + 1].clone();
+    assert_eq!(
+      settings,
+      concat!(
+        r#"{"disableClaudeAiConnectors":true,"hooks":{"SessionStart":[{"matcher":"compact","hooks":["#,
+        r#"{"type":"command","command":"charliebot compaction-context --session charlie-session --slot 1"},"#,
+        r#"{"type":"command","command":"charliebot compaction-context --session charlie-session --slot 2"},"#,
+        r#"{"type":"command","command":"charliebot compaction-context --session charlie-session --slot 3"},"#,
+        r#"{"type":"command","command":"charliebot compaction-context --session charlie-session --slot 4"},"#,
+        r#"{"type":"command","command":"charliebot compaction-context --session charlie-session --slot 5"},"#,
+        r#"{"type":"command","command":"charliebot compaction-context --session charlie-session --slot 6"}]}]}"#,
+      )
+    );
+    let settings: Value = serde_json::from_str(&settings).unwrap();
+    assert_eq!(settings["disableClaudeAiConnectors"], json!(true));
+    let [session_start] = settings["hooks"]["SessionStart"].as_array().unwrap().as_slice() else {
+      panic!("one SessionStart entry");
+    };
+    assert_eq!(session_start["matcher"], "compact");
+    let commands: Vec<&str> =
+      session_start["hooks"].as_array().unwrap().iter().map(|hook| hook["command"].as_str().unwrap()).collect();
+    let expected: Vec<String> = (1..=6)
+      .map(|slot| format!("charliebot compaction-context --session charlie-session --slot {slot}"))
+      .collect();
+    assert_eq!(commands, expected);
+  }
+
   fn config(home: &Path) -> CharlieBotConfig {
     fs::create_dir_all(home).unwrap();
     fs::write(home.join("config.yaml"), "server:\n  session_memory_max_mb: 0\n").unwrap();

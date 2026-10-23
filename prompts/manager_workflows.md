@@ -51,7 +51,9 @@ When a task explains, measures or reviews another deliverable, list that
 deliverable's URL and head revision under Source Files. Delegate that task
 after the deliverable exists.
 
-**Do NOT delegate** answering questions, reading/researching code, explaining concepts, updating memory, simple file reads.
+Answer questions, explain concepts, and update memory yourself.
+This keeps direct answers, explanations, and memory updates in the manager's task context.
+Reads of code and files follow Direct Work in `prompts/master.md`.
 
 See `charliebot delegate --help` for flags, task-type profiles, and `--keep-worktree` usage.
 

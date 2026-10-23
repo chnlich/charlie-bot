@@ -247,6 +247,9 @@ Side effects: none. The route does not mark the session read.
 ```
 
 - `usage` is the usage object or null. The state contract and `src/runtime/session_usage.py` define how the values are derived.
+  `context_full` uses integer `limit.input`, or integer `limit.context` with integer `limit.output`.
+  A missing `limit.output` defaults to zero when `limit.input` is an integer.
+  `context_compact_at` subtracts the registered compact reserve, bounded by `limit.output`, from that full value.
 - A worker session adds `active_run_id` (string or null) after `usage`.
 
 ### `GET /api/sessions/{session_id}/events`

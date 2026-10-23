@@ -1,6 +1,6 @@
 # Configuration: `config.yaml`, `config.d/`, `credentials.yaml`
 
-Baseline: the Python tree at `24642edf5`. This document gives every key the baseline accepts, its type and
+Baseline: the Python tree at `3c4591bad`. This document gives every key the baseline accepts, its type and
 default, the validation rule, and the error a bad value raises. Error texts are quoted from source; `<...>` marks
 an interpolated value. A Rust server reading the same files must accept exactly this set and refuse the rest with
 equivalent errors. **UNVERIFIED** marks a statement not confirmed from source, with the reason.
@@ -134,7 +134,7 @@ Per-type fields:
 | `type` | Package | Extra fields | Usage source and id prefixes |
 | --- | --- | --- | --- |
 | `cc-claude` | `src.backends.claude_code` | `effort: str\|null`; `fast_mode: bool = false` (adds `"fastMode": true` to `--settings`); `cli_binary: str\|null` (replaces `claude` as argv[0]); `account_pool: str\|null` | `Claude Code`: `claude-` |
-| `cc-anthropic-compatible` | `src.backends.anthropic_compatible` | `api_base: str` (required, at least one character; the endpoint root, and a value ending in `/v1` is refused); `context_window: int` (required, > 0; sets the model window and the auto-compact window); `credential: str\|null` (section whose `api_key` is the bearer; null sends `no-auth`); `effort: str\|null` (passed to Claude Code as `--effort` when set; `src/backends/anthropic_compatible/options.py:16`, `factory.py:22`) | attributed to `Claude Code`: `claude-` |
+| `cc-anthropic-compatible` | `src.backends.anthropic_compatible` | `api_base: str` (required, at least one character; the endpoint root, and a value ending in `/v1` is refused); `context_window: int` (required, > 0; sets the model window and the auto-compact window); `credential: str\|null` (section whose `api_key` is the bearer; null sends `no-auth`); `effort: str\|null` (passed to Claude Code as `--effort` when set); `headers: dict[str,str]` (defaults to `{}`, sent to Claude Code as custom request headers; `options.py:17`, `factory.py:23`) | attributed to `Claude Code`: `claude-` |
 | `cc-openai-compatible` | `src.backends.openai_compatible` | `api_base: str` (required; upstream OpenAI-compatible base URL); `credential: str\|null` (section whose `api_key` becomes the upstream bearer) | attributed to `Claude Code`: `claude-` |
 | `codex` | `src.backends.codex` | `model_reasoning_effort: str\|null` (null means `xhigh`); `model_auto_compact_token_limit: int\|null`, > 0 | `Codex`: `codex-` |
 | `gemini` | `src.backends.gemini` | none | **none registered**, so a gemini option fails `check_backend_ids` at server start ("attributes to no usage source") |

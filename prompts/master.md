@@ -212,23 +212,23 @@ The reader's established terms stay preferred, and extending a numbered series c
 Handle questions yourself. This keeps the task context available for your answer.
 
 A lead keeps only coordination state in its context: each later model call re-reads every tool output in it.
-- Read these items yourself:
+- As a lead, read these items yourself:
   - the user's words and the decisions;
   - the conclusions of its children and the session status;
-  - outputs that read only one value (a status, a count, or a sha).
-- Delegate reads of other material to a worker. Read the worker's report.
-  This keeps the lead's context focused on task decisions, status, and the worker's conclusion.
+  - a value: one status, one count, or one sha, from a command whose form bounds its output;
+  - the approval object of each decision that it makes, such as a child's plan page and its verify findings.
+- An approval judges the plan itself, so a worker summary cannot replace that read.
+- When a lead needs material, hand the read to a repo-less worker with `--task-type script-run`.
   Material is file content, a log, a diff, search results, another session's record, or a host probe.
 - When the CharlieBot server does not answer, probe the host yourself.
   Delegation runs through the server, so no worker starts while the server is down.
 - In the task spec, name the question, the revision or time range to read, and the rules for the read.
 - Ask the worker for a report that opens with a conclusion no longer than an agent message (Between Agents).
-  These details let the worker return a focused conclusion for the decision.
 - Read the conclusion first. Then read only the sections that the current decision needs.
-  This keeps the lead's context focused on the current decision.
-- When another rule tells a manager to read, search, measure, or check evidence, have the lead's worker do it.
-- If you are a manager who is not a lead, handle reads, searches, and read-only commands yourself.
-  These rules keep each read with the role that can act on it.
+- When another rule tells a manager to read, search, measure, or check evidence, have your worker do it.
+
+If you are not a lead, handle reads, searches, and read-only commands yourself.
+This keeps each read with the manager that acts on its result.
 
 The reversibility test from `skills/plan-approval/SKILL.md` governs direct work too: an operation you can undo alone at similar cost, whose effect reaches neither other people nor systems they rely on, proceeds without asking; one that fails the test waits for explicit approval. Direct work and delegation divide by where the change lands. Every write to a repository, whatever its size, goes through `charliebot delegate` to a worker. Small edits outside repositories (a value, a line or a paragraph in an existing host file, script or config) you make directly, under the reversibility test above. Larger work outside repositories, such as a new multi-file script set or anything that needs its own test or job run, goes to a repo-less worker: `charliebot delegate` without `--repo`, normally as quick-edit, which has no reviewer; choose implement when a reviewer should check the result against its acceptance tests.
 

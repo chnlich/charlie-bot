@@ -975,7 +975,7 @@ mod tests {
   use charliebot_registry::sequence::SequenceCompletion;
   use charliebot_store::metadata::TaskProfile;
   use charliebot_store::run_records::{RunKind, RunRecord};
-  use charliebot_store::{CreateTask, TaskCaller};
+  use charliebot_store::{CreateTask, StoreError, TaskCaller};
   use serde_json::{Map, json};
   use std::collections::HashSet;
   use std::sync::Arc;
@@ -1177,6 +1177,54 @@ mod tests {
         .count(),
       1
     );
+  }
+
+  #[tokio::test]
+  async fn request_event_replay_compares_extra_fields_and_rejects_core_collisions() {
+    let (_home, features) = features().await;
+    let meta =
+      test_fixtures::manager_session(&features, "request-fields", "fable", None, "claude-request-fields").await;
+    let dispatcher = dispatcher(&features);
+
+    let collision = dispatcher
+      .admit_input(
+        &meta.id,
+        event_types::USER,
+        "message",
+        "user",
+        json!({"request_id": "collision", "fields": {"content": "replacement"}}),
+      )
+      .await;
+    assert!(
+      matches!(&collision, Err(StoreError::Invalid(detail)) if detail == "fields may not replace core event fields: content"),
+      "core event field collision was not refused: {collision:?}"
+    );
+
+    let fields = json!({"request_id": "extra-fields", "fields": {"summon": {"mention_id": "m1"}}});
+    let event = dispatcher.admit_input(&meta.id, event_types::USER, "message", "user", fields.clone()).await;
+    assert!(event.is_ok(), "extra event fields were refused: {event:?}");
+    let event = event.unwrap();
+    let replay = dispatcher.admit_input(&meta.id, event_types::USER, "message", "user", fields).await;
+    assert!(replay.as_ref().is_ok_and(|replay| replay == &event), "matching extra fields did not replay: {replay:?}");
+    assert_eq!(event["request_id"], "extra-fields");
+    assert_eq!(event["summon"], json!({"mention_id": "m1"}));
+
+    let omitted = dispatcher
+      .admit_input(&meta.id, event_types::USER, "message", "user", json!({"request_id": "extra-fields"}))
+      .await;
+    assert!(omitted.is_err(), "omitting stored extra fields did not conflict");
+    let changed = dispatcher
+      .admit_input(
+        &meta.id,
+        event_types::USER,
+        "message",
+        "user",
+        json!({"request_id": "extra-fields", "fields": {"summon": {"mention_id": "m2"}}}),
+      )
+      .await;
+    assert!(changed.is_err(), "changed extra fields did not conflict");
+    let events = features.store.load_all_facts_view_sync(&meta.id).unwrap();
+    assert_eq!(events.iter().filter(|event| event.get("request_id") == Some(&json!("extra-fields"))).count(), 1);
   }
 
   #[tokio::test]

@@ -527,6 +527,32 @@ mod tests {
     assert!(home.meta(&sid).await.has_unread);
   }
 
+  // Python: tests/test_web_reply.py::test_markdown_link_labels_set_the_reply_count_and_replay_readback
+  #[tokio::test]
+  async fn markdown_link_reply_replay_returns_the_stored_visible_count() {
+    let home = Home::new();
+    let sid = home.manager("session", None).await;
+    let diff_url = format!("https://example.com/{}", "d".repeat(150 - "https://example.com/".len()));
+    let pr_url = format!("https://example.com/{}", "p".repeat(183 - "https://example.com/".len()));
+    let text = format!("{}[diff]({diff_url})[PR 页]({pr_url})", "x".repeat(200));
+    let expected = json!({"posted": true, "chars": 208, "over_budget": false, "answers": null});
+
+    let first = post_web_reply_with_request_id(&home.features, &sid, &text, None, Some("same-reply"))
+      .await
+      .expect("the first reply posts");
+    let replay = post_web_reply_with_request_id(&home.features, &sid, &text, None, Some("same-reply"))
+      .await
+      .expect("the retry replays its reply");
+
+    assert_eq!(first, replay);
+    assert_eq!(first, expected);
+    let replies = replies(&home, &sid);
+    assert_eq!(replies.len(), 1);
+    assert_eq!(replies[0].1["chars"], 208);
+    let event = home.events(&sid).into_iter().find(|event| event["type"] == WEB_REPLY).unwrap();
+    assert_eq!(event["request_id"], "same-reply");
+  }
+
   #[tokio::test]
   async fn a_refused_web_reply_records_nothing_and_marks_nothing() {
     for (case, status) in [("unknown", 404), ("thread", 409), ("worker", 409), ("blank", 422)] {

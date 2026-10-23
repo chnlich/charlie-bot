@@ -301,13 +301,15 @@ def _snapshot_tokens_sum(tokens: dict) -> int:
 def _snapshot_full_and_compact(limit: dict, run_kind: models.RunKind) -> tuple[int | None, int | None]:
   """Derive (context_full, context_compact_at) from a snapshot ``limit`` dict.
 
-  context_full is ``limit.input`` when present, else ``limit.context - limit.output``.
-  context_compact_at is ``limit.input - min(reserve, limit.output)`` when ``input`` is
-  present, where ``reserve`` is the ``compact_reserve`` that a package registered for
-  the ``snapshot`` reading (``None`` without one: the line is not drawn); otherwise
-  ``None`` (it would coincide with full, so the line carries no information). A non-int
-  ``output`` (e.g. a JSON ``null`` in the catalog payload) degrades to ``(None, None)``
-  rather than raising ``TypeError``.
+  An int ``input`` and int ``output`` give ``context_full = input``;
+  a missing ``output`` defaults to zero for this branch.
+  Otherwise, int ``context`` and ``output`` give ``context_full = context``.
+  Without either pair, both values are ``None``.
+  context_compact_at is ``context_full - min(reserve, output)`` with the
+  registered ``snapshot`` reading's ``compact_reserve`` for *run_kind*.
+  Without a registration or a known reserve, context_compact_at is ``None``.
+  opencode reserves only this bounded amount, because ``output`` describes
+  the model's maximum output capability.
   """
   context_input = limit.get("input")
   context_output = limit.get("output", 0)
@@ -319,9 +321,13 @@ def _snapshot_full_and_compact(limit: dict, run_kind: models.RunKind) -> tuple[i
       context_compact_at = None
     else:
       context_compact_at = context_input - min(limits.compact_reserve, context_output)
-  elif isinstance(context_context, int) and isinstance(context_output, int):
-    context_full = context_context - context_output
-    context_compact_at = None
+  elif isinstance(context_context, int) and isinstance(context_output, int) and "output" in limit:
+    context_full = context_context
+    limits = backend_lifecycle_registration.reading_limits(_READING_SNAPSHOT, run_kind)
+    if limits is None or limits.compact_reserve is None:
+      context_compact_at = None
+    else:
+      context_compact_at = context_context - min(limits.compact_reserve, context_output)
   else:
     context_full = None
     context_compact_at = None

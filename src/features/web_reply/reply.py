@@ -43,6 +43,7 @@ _CODE_FENCE = re.compile(r"```.*?```", re.DOTALL)
 _INLINE_CODE = re.compile(r"`[^`]*`")
 _URL = re.compile(r"\(?https?://\S+\)?")
 _PATH = re.compile(r"(?<![\w])[~/][\w.\-/]+")
+# An inline markdown link: the visible count keeps its label and drops its URL.
 _MARKDOWN_LINK = re.compile(r"\[([^\]]*)\]\([^)]*\)")
 # CJK Unified Ideographs (U+4E00-U+9FFF) and Extension A (U+3400-U+4DBF); Latin letters are the ASCII letters.
 _HAN = re.compile(r"[㐀-䶿一-鿿]")

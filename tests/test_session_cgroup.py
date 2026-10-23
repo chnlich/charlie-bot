@@ -2,11 +2,14 @@
 failure, OOM priorities, attribution, the startup sweep) and wait_or_kill_group's no-limit path."""
 
 import asyncio
+import os
 import pathlib
+import subprocess
 
 import pytest
 from structlog import testing
 
+from src.backends.opencode import server as opencode_server
 from src.infra import config, process
 
 SESSION_ID = "abcd1234-ef56-7890-abcd-ef1234567890"
@@ -86,6 +89,23 @@ def test_ensure_session_cgroup_names_the_unwritable_slice(fake_slices: dict[str,
 
 def test_session_cgroup_oom_priorities() -> None:
   assert process.SESSION_CGROUP_OOM_SCORE_ADJ == {"agent": 500, "repair": 100}
+
+
+def test_opencode_join_script_moves_the_shell_and_sets_its_oom_priority(tmp_path: pathlib.Path) -> None:
+  """The opencode shells join their session cgroup through the join script, which sets the slice's OOM priority too."""
+  procs = tmp_path / "cgroup.procs"
+  procs.write_text("", encoding="utf-8")
+  env = {
+      **os.environ,
+      "BASH_ENV": str(opencode_server.JOIN_SCRIPT),
+      "CHARLIEBOT_SESSION_CGROUP": str(tmp_path),
+      "CHARLIEBOT_SESSION_OOM_SCORE_ADJ": "100",
+  }
+  result = subprocess.run(
+      ["bash", "-c", "echo $$; cat /proc/$$/oom_score_adj"], env=env, capture_output=True, text=True, check=True)
+  shell_pid, oom = result.stdout.split()
+  assert procs.read_text(encoding="utf-8").strip() == shell_pid
+  assert oom == "100"
 
 
 # ---------------------------------------------------------------------------

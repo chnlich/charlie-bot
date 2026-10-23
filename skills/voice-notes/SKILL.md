@@ -25,8 +25,8 @@ Purpose: uv runs the script in the checkout's environment, and `--with av` adds
 the reader for any audio container.
 
 The script sends the whole clip through the online transcription backend that
-the voice upload uses. It uses `voice.default_backend` from the profile's config,
-and the backend's key comes from `credentials.yaml`. The transcript goes to stdout.
+the voice upload uses. It uses `voice.default_backend` from the profile's config.
+The backend's key comes from `credentials.yaml`. The transcript goes to stdout.
 
 When the command fails or the checkout is missing, report that to the user and do not
 guess the words.

@@ -8,7 +8,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 use std::future::Future;
-use std::io;
+use std::io::{self, Write};
 use std::path::PathBuf;
 #[cfg(feature = "test-hooks")]
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -71,9 +71,9 @@ fn read_boot_recovery_marker(home: &std::path::Path) -> anyhow::Result<Option<Ut
     .map(Some)
 }
 
-/// The steps of this thread's marker writes, in order: `sync` for the temporary file's fsync, `rename` for the swap.
 #[cfg(feature = "test-hooks")]
 thread_local! {
+  /// The steps of this thread's marker writes, in order: `sync` for the temporary file's fsync, `rename` for the swap.
   static MARKER_WRITE_STEPS: std::cell::RefCell<Vec<&'static str>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
@@ -84,9 +84,18 @@ fn write_boot_recovery_marker(home: &std::path::Path, pass_started_at: UtcDateTi
   let temporary = path.with_extension("json.tmp");
   let payload = serde_json::json!({"pass_started_at": pass_started_at.to_python_isoformat()});
   let text = charliebot_core::pyfmt::json_dumps(&payload, &charliebot_core::pyfmt::PYTHON_JSON_DEFAULT);
-  std::fs::write(&temporary, text).with_context(|| format!("writing {}", temporary.display()))?;
+  let mut file = std::fs::File::create(&temporary).with_context(|| format!("creating {}", temporary.display()))?;
+  file.write_all(text.as_bytes()).with_context(|| format!("writing {}", temporary.display()))?;
+  // ext4 forces a file's data to disk before a rename only when the rename replaces an existing file
+  // (auto_da_alloc), so a fresh marker can read back empty after a power loss.
+  file.sync_all().with_context(|| format!("syncing {}", temporary.display()))?;
+  #[cfg(feature = "test-hooks")]
+  MARKER_WRITE_STEPS.with(|steps| steps.borrow_mut().push("sync"));
+  drop(file);
   std::fs::rename(&temporary, &path)
     .with_context(|| format!("renaming {} to {}", temporary.display(), path.display()))?;
+  #[cfg(feature = "test-hooks")]
+  MARKER_WRITE_STEPS.with(|steps| steps.borrow_mut().push("rename"));
   Ok(())
 }
 

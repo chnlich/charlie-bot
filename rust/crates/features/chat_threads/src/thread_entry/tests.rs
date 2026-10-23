@@ -282,6 +282,7 @@ fn router_command(directory: &TempDir, body: &str, arguments: &[&str]) -> Vec<St
 #[derive(Default)]
 struct FakeAdapter {
   posts: Mutex<Vec<(Value, String)>>,
+  post_delay: Duration,
   acks: Mutex<Vec<Value>>,
   removed: Mutex<Vec<Value>>,
   thread: Mutex<Vec<ThreadMessage>>,
@@ -289,7 +290,12 @@ struct FakeAdapter {
 
 impl FakeAdapter {
   fn with_thread(messages: &[(&str, &str)]) -> Arc<Self> {
-    let adapter = Self::default();
+    Self::with_thread_and_delay(messages, Duration::ZERO)
+  }
+
+  fn with_thread_and_delay(messages: &[(&str, &str)], post_delay: Duration) -> Arc<Self> {
+    let mut adapter = Self::default();
+    adapter.post_delay = post_delay;
     *adapter.thread.lock().expect("the thread lock is never poisoned") = messages
       .iter()
       .map(|(id, text)| ThreadMessage { id: id.to_string(), user: Some("u".to_string()), text: text.to_string() })
@@ -304,7 +310,9 @@ impl ThreadAdapter for FakeAdapter {
   }
 
   fn post<'a>(&'a self, address: &'a Value, text: &'a str) -> BoxFuture<'a, anyhow::Result<()>> {
+    let post_delay = self.post_delay;
     Box::pin(async move {
+      tokio::time::sleep(post_delay).await;
       self.posts.lock().expect("the post log is never poisoned").push((address.clone(), text.to_string()));
       Ok(())
     })
@@ -667,6 +675,72 @@ async fn audit_leaves_a_marker_contract_summon_alone() {
 
   assert!(!acted);
   assert_eq!(home.events("s1").len(), before);
+}
+
+#[tokio::test]
+async fn round_completion_and_boot_audit_emit_one_nudge_then_notice() {
+  let home = Home::new();
+  home.thread_session("audit-retry", origin()).await;
+  let backend_pool = home.features.startup.require::<backend_pool::BackendPool>().expect("the backend pool is in startup");
+  home
+    .features
+    .startup
+    .insert(charliebot_tasks::master_queue::MasterQueue::new(backend_pool))
+    .expect("the master queue inserts once");
+  let adapter = FakeAdapter::with_thread_and_delay(&[], Duration::from_millis(50));
+  let dyn_adapter: Arc<dyn ThreadAdapter> = adapter.clone();
+  let summon = home
+    .append(
+      "audit-retry",
+      json!({
+        "type": event_types::AGENT_MESSAGE,
+        "content": FAKECHAT.summon_line,
+        "fakechat": {"channel_id": "c1", "thread_ts": "t1", "mention_id": "m1"},
+      }),
+    )
+    .await;
+  let summon_done = home
+    .append(
+      "audit-retry",
+      json!({"type": event_types::MASTER_DONE, "input_event_id": summon["id"], "exit_code": 0}),
+    )
+    .await;
+
+  assert!(deliver_done(&dyn_adapter, &home.features, "audit-retry", &summon_done).await.unwrap());
+  settle(|| home.launches().len() == 1).await;
+  let nudge = home
+    .events("audit-retry")
+    .into_iter()
+    .find(|event| event.get("fakechat").and_then(|block| block.get("nudge_of")).is_some())
+    .expect("the silent summon creates a nudge");
+  let nudge_done = home
+    .append(
+      "audit-retry",
+      json!({"type": event_types::MASTER_DONE, "input_event_id": nudge["id"], "exit_code": 0}),
+    )
+    .await;
+
+  let (delivered, backfilled) = tokio::join!(
+    deliver_done(&dyn_adapter, &home.features, "audit-retry", &nudge_done),
+    backfill_lost_summons(&dyn_adapter, &home.features),
+  );
+  delivered.unwrap();
+  backfilled.unwrap();
+
+  let events = home.events("audit-retry");
+  let nudges: Vec<_> = events
+    .iter()
+    .filter(|event| event.get("fakechat").and_then(|block| block.get("nudge_of")).is_some())
+    .collect();
+  let notices: Vec<_> = events
+    .iter()
+    .filter(|event| event.get("fakechat_notice").and_then(|notice| notice.get(event_types::INPUT_EVENT_ID)).is_some())
+    .collect();
+  assert_eq!(nudges.len(), 1);
+  assert_eq!(notices.len(), 1);
+  assert_eq!(adapter.posts.lock().unwrap().len(), 1);
+  assert_eq!(nudges[0]["request_id"], format!("fakechat-nudge:{}", summon["id"].as_str().unwrap()));
+  assert_eq!(notices[0]["request_id"], format!("fakechat-notice:{}", summon["id"].as_str().unwrap()));
 }
 
 #[tokio::test]

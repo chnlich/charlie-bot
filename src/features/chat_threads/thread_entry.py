@@ -902,20 +902,18 @@ async def _audit_round_locked(
         request_id=nudge_request_id,
         fields={platform.name: nudge_block},
     )
-    tasks.create_logged_task(
-        master_trigger.trigger_master(
-            session_id,
-            content,
-            store,
-            successor,
-            lifecycle,
-            input_id=nudge["id"],
-            event_type=ET.AGENT_MESSAGE,
-            actor="agent",
-            from_session=session_id,
-            from_session_name=platform.display_name,
-        ),
-        name=f"{platform.name}-nudge-{session_id}")
+    master_trigger.spawn_master_turn(
+        session_id,
+        content,
+        store,
+        successor,
+        lifecycle,
+        input_id=nudge["id"],
+        event_type=ET.AGENT_MESSAGE,
+        actor="agent",
+        from_session=session_id,
+        from_session_name=platform.display_name,
+        task_name=f"{platform.name}-nudge-{session_id}")
     logger.info(
         f"{platform.name}_reply_nudge",
         session=session_id,
@@ -1349,20 +1347,18 @@ async def accept_summon(
     round_event_id = evt["id"]
     logger.info(f"{platform.name}_mention_round_started", **fields, session=session_id, user_event_id=round_event_id)
 
-    tasks.create_logged_task(
-        master_trigger.trigger_master(
-            session_id,
-            content,
-            store,
-            successor,
-            lifecycle,
-            input_id=round_event_id,
-            event_type=ET.AGENT_MESSAGE,
-            actor="agent",
-            from_session=session_id,
-            from_session_name=platform.display_name,
-        ),
-        name=f"{platform.name}-round-{session_id}")
+    master_trigger.spawn_master_turn(
+        session_id,
+        content,
+        store,
+        successor,
+        lifecycle,
+        input_id=round_event_id,
+        event_type=ET.AGENT_MESSAGE,
+        actor="agent",
+        from_session=session_id,
+        from_session_name=platform.display_name,
+        task_name=f"{platform.name}-round-{session_id}")
     tasks.create_logged_task(adapter.add_ack(block), name=f"{platform.name}-ack-{session_id}")
     return session_id
 

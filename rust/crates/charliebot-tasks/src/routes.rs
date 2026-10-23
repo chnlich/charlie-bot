@@ -1098,7 +1098,8 @@ mod tests {
   use charliebot_registry::store_hooks;
   use charliebot_registry::{FeatureContext, Registry};
   use charliebot_store::metadata::{SessionMetadata, TaskProfile};
-  use charliebot_store::{CreateTask, Store, TaskCaller};
+  use charliebot_store::{CreateTask, Store, StoreError, StoreResult, TaskCaller};
+  use futures_util::future::BoxFuture;
   use serde_json::{Value, json};
   use tower::ServiceExt;
 
@@ -1185,6 +1186,19 @@ mod tests {
     let sequence: Arc<dyn charliebot_registry::sequence::SequenceCompletion> = completion.clone();
     let run: Arc<dyn dispatch::RunFinishedCompletion> = completion;
     features.startup.insert(dispatch::Dispatcher::new(Arc::clone(&features.store), sequence, run)).unwrap();
+  }
+
+  struct FailingExecutor;
+
+  impl dispatch::DispatchExecutor for FailingExecutor {
+    fn launch<'a>(
+      &'a self,
+      _session_id: &'a str,
+      _pending_inputs: &'a [Value],
+      _launch_run_id: Option<&'a str>,
+    ) -> BoxFuture<'a, StoreResult<Option<String>>> {
+      Box::pin(async { Err(StoreError::conflict(vec!["run already active".to_string()])) })
+    }
   }
 
   /// Assert the 202 body Python returns for a valid chat message when no executor launches a run.
@@ -1639,6 +1653,74 @@ mod tests {
       json!(["body", 11]),
     )
     .await;
+  }
+
+  #[tokio::test]
+  async fn python_send_message_requires_request_id_and_replays_one_event() {
+    let (_home, features) = feature_context();
+    create_upload_session(&features, "synthetic-request-session").await;
+    install_dispatcher(&features);
+    let router = routes(&features);
+    let path = "/api/chat/synthetic-request-session/message";
+
+    for (body, error_type) in
+      [(r#"{"content":"missing"}"#, "missing"), (r#"{"content":"empty","request_id":""}"#, "string_too_short")]
+    {
+      let response = send_operator(&router, path, body.as_bytes().to_vec(), Some("application/json")).await;
+      assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+      let body = response_json(response).await;
+      assert_eq!(body["detail"][0]["type"], error_type);
+      assert_eq!(body["detail"][0]["loc"], json!(["body", "request_id"]));
+    }
+
+    let first = send_operator(
+      &router,
+      path,
+      br#"{"content":"same","request_id":"browser-send-1"}"#.to_vec(),
+      Some("application/json"),
+    )
+    .await;
+    let second = send_operator(
+      &router,
+      path,
+      br#"{"content":"same","request_id":"browser-send-1"}"#.to_vec(),
+      Some("application/json"),
+    )
+    .await;
+    let first_body = response_json(first).await;
+    let second_body = response_json(second).await;
+    assert_eq!(first_body["input_event_id"], second_body["input_event_id"]);
+    let events = features.store.load_all_facts_view_sync("synthetic-request-session").unwrap();
+    let inputs: Vec<&Value> =
+      events.iter().filter(|event| event.get("request_id").and_then(Value::as_str) == Some("browser-send-1")).collect();
+    assert_eq!(inputs.len(), 1);
+    assert_eq!(inputs[0]["id"], first_body["input_event_id"]);
+  }
+
+  #[tokio::test]
+  async fn python_dispatch_error_after_admission_returns_accepted_with_error() {
+    let (_home, features) = feature_context();
+    create_upload_session(&features, "synthetic-dispatch-error").await;
+    install_dispatcher(&features);
+    features.startup.require::<dispatch::Dispatcher>().unwrap().set_executor(Some(Arc::new(FailingExecutor)));
+    let router = routes(&features);
+
+    let response = send_operator(
+      &router,
+      "/api/chat/synthetic-dispatch-error/message",
+      br#"{"content":"stored","request_id":"dispatch-error"}"#.to_vec(),
+      Some("application/json"),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let body = response_json(response).await;
+    assert_eq!(body["launch"], false);
+    assert_eq!(body["dispatch_error"], "run already active");
+    let events = features.store.load_all_facts_view_sync("synthetic-dispatch-error").unwrap();
+    assert_eq!(
+      events.iter().filter(|event| event.get("request_id").and_then(Value::as_str) == Some("dispatch-error")).count(),
+      1
+    );
   }
 
   #[tokio::test]

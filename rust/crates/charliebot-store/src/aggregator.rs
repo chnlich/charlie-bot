@@ -1291,6 +1291,20 @@ mod tests {
   }
 
   #[test]
+  fn user_event_delta_carries_request_id() {
+    let mut aggregator = MessageAggregator::new(0, true);
+    let deltas = aggregator
+      .feed(&json!({
+        "type": "user",
+        "content": "hello",
+        "request_id": "browser-send-1",
+      }))
+      .unwrap();
+
+    assert_eq!(deltas[0]["message"]["request_id"], "browser-send-1");
+  }
+
+  #[test]
   fn assistant_text_then_master_done_commits_message() {
     let mut aggregator = MessageAggregator::new(0, true);
     aggregator

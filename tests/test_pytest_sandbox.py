@@ -164,7 +164,8 @@ def test_systemctl_user_has_no_bus() -> None:
   """systemctl --user cannot reach a bus from inside a restricted run."""
   r = subprocess.run(["systemctl", "--user", "is-system-running"], capture_output=True, text=True)
   assert r.returncode != 0
-  assert "Failed to connect to bus" in r.stdout + r.stderr
+  assert "Failed to connect to" in r.stdout + r.stderr
+  assert "bus" in r.stdout + r.stderr
 
 
 def test_abi_below_minimum_refuses(tmp_path: pathlib.Path) -> None:

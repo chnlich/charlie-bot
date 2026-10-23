@@ -7,7 +7,7 @@
 
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 
 use anyhow::Context;
 use axum::http::StatusCode;
@@ -18,7 +18,6 @@ use charliebot_core::pystr;
 use charliebot_registry::{FeatureContext, RunningTurnInputs, StateError};
 use charliebot_store::metadata::{SessionMetadata, TaskProfile};
 use charliebot_store::{SESSION_NOT_FOUND_DETAIL, Store, StoreError};
-use regex::Regex;
 use serde_json::{Value, json};
 
 /// The web reply rules file under `prompts/` (`reply.RULES_FILE`).
@@ -40,10 +39,6 @@ pub const NUDGE_SENDER_NAME: &str = "Web reply";
 /// The reply budget the readback's `over_budget` flag measures; an over-budget reply still posts
 /// (`reply.REPLY_BUDGET_CHARS`).
 pub const REPLY_BUDGET_CHARS: usize = 500;
-
-/// Python's `_MARKDOWN_LINK`: an inline link `[label](url)`, which the reader sees as its label.
-static MARKDOWN_LINK: LazyLock<Regex> =
-  LazyLock::new(|| Regex::new(r"\[([^\]]*)\]\([^)]*\)").expect("the markdown link pattern is valid"));
 
 /// The language check holds a reply when the newest user message has at least this many Han characters.
 const LANGUAGE_CHECK_MIN_USER_HAN: usize = 5;
@@ -343,7 +338,36 @@ pub fn refuse_dead_links<'a>(
 
 /// The characters the reader counts in `text`: each inline markdown link counts as its label (`visible_reply_chars`).
 fn visible_reply_chars(text: &str) -> usize {
-  MARKDOWN_LINK.replace_all(text, "${1}").chars().count()
+  let chars = text.chars().collect::<Vec<char>>();
+  let mut count = 0;
+  let mut at = 0;
+  while at < chars.len() {
+    match markdown_link_at(&chars, at) {
+      Some((label, end)) => {
+        count += label.len();
+        at = end;
+      }
+      None => {
+        count += 1;
+        at += 1;
+      }
+    }
+  }
+  count
+}
+
+/// The inline link `[label](url)` that starts at `at`, as the label's characters and the index after its `)`. Python's
+/// `_MARKDOWN_LINK` (`\[([^\]]*)\]\([^)]*\)`) takes the first `]` as the label's end and the first `)` as the link's.
+fn markdown_link_at(chars: &[char], at: usize) -> Option<(&[char], usize)> {
+  if chars.get(at) != Some(&'[') {
+    return None;
+  }
+  let close = at + 1 + chars[at + 1..].iter().position(|&character| character == ']')?;
+  if chars.get(close + 1) != Some(&'(') {
+    return None;
+  }
+  let end = close + 2 + chars[close + 2..].iter().position(|&character| character == ')')?;
+  Some((&chars[at + 1..close], end + 1))
 }
 
 /// Record `text` as the session's web reply and return the readback the CLI prints (`reply.post_web_reply`).

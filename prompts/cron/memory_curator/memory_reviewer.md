@@ -60,10 +60,11 @@ Run `charliebot memory proposal status`, and record its `head`, `opened`, and `d
 This pins the PR head that the land step names.
 Run `charliebot memory proposal land <head>` with that head.
 This moves the live store to exactly the version that this run committed and linted.
-The output has three fields:
+Use these fields in the landed-day header:
 - `landed`: the landed range
 - `commits`: the commit count
 - `diff_path`: the diff link
+The header names this run's landed range and links to its diff.
 When the command refuses, keep the PR as it stands.
 Quote the refusal on the page and in your final message.
 The next run's land carries these commits, and the user learns why the day did not land.
@@ -79,11 +80,10 @@ Fill the header from the `land` output:
 - the `landed` range
 - the `commits` count
 - the `diff_path` link
-After a refusal, fill the header from the Step 4 `status` output instead:
-- the `head` SHA
-- the `diff_path` link
-- the quoted refusal
-Both header forms name the version the user reviews and link to its diff.
+After a refusal, fill the header with:
+- the `head` SHA and `diff_path` link from the Step 4 `status` output
+- the quoted refusal from the `land` output
+The refusal header links to the pending version and explains why it stayed pending.
 Start the rejected-candidates block at the Step 4 `opened` date.
 This block lists only the rejections that this PR has held.
 Write `memory_report_<YYYY-MM-DD>.html` to the session's artifacts directory, `../../artifacts/`
@@ -91,6 +91,9 @@ relative to your working directory.
 Point the header's diff link at `diff_path` root-relatively.
 The user opens the page from that directory, and the root-relative link opens the diff page from it.
 
+For a landed day, use the `land` output's `landed` and `diff_path` fields.
+After a refusal, use the quoted refusal from the `land` output and the Step 4 `status` output's `diff_path`.
+These values keep the message aligned with the version linked on the page.
 Your final message gives:
 - the page path
 - the landed range, or the quoted refusal

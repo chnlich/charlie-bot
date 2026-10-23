@@ -1117,11 +1117,12 @@ mod tests {
   use charliebot_core::config::CREDENTIALS_FILENAME;
   use charliebot_core::credentials::load_credentials;
   use charliebot_core::hot_reload::HotReload;
+  use charliebot_core::run_token::{self, RunTokenClaims};
   use charliebot_registry::context::StartupState;
   use charliebot_registry::store_hooks;
   use charliebot_registry::{FeatureContext, Registry};
   use charliebot_store::metadata::{SessionMetadata, TaskProfile};
-  use charliebot_store::{CreateTask, Store, StoreError, StoreResult, TaskCaller};
+  use charliebot_store::{CreateTask, RunKind, RunRecord, Store, StoreError, StoreResult, TaskCaller};
   use futures_util::future::BoxFuture;
   use serde_json::{Value, json};
   use tower::ServiceExt;
@@ -1274,6 +1275,86 @@ mod tests {
       )
       .await
       .expect("the upload test session is created");
+  }
+
+  async fn register_agent_run(features: &FeatureContext, session_id: &str, run_id: &str) -> String {
+    let claims = RunTokenClaims {
+      session_id: session_id.to_string(),
+      run_id: run_id.to_string(),
+      agent: "synthetic-agent".to_string(),
+    };
+    let record = RunRecord {
+      id: run_id.to_string(),
+      session_id: session_id.to_string(),
+      kind: RunKind::Work,
+      input_event_ids: Vec::new(),
+      task_spec_hash: None,
+      task_spec_ref: None,
+      prompt_snapshot_ref: None,
+      retry_of_run_id: None,
+      review_of_run_id: None,
+      backend: None,
+      model: None,
+      native_session_id: None,
+      pid: None,
+      pid_start: None,
+      started_at: None,
+      ended_at: None,
+      exit_code: None,
+      repo_path: None,
+      base_branch: None,
+      branch_name: None,
+      worktree_path: None,
+      sequence_ref: None,
+      raw_log_ref: None,
+      events_ref: None,
+      result_ref: None,
+    };
+    let guard = features.store.control_lock().await;
+    features.store.register_run_locked(&guard, session_id, record, Some("synthetic run")).await.unwrap();
+    drop(guard);
+    features.store.record_launch(session_id, run_id, 424242, "12345").await.unwrap();
+    run_token::sign_run_token(&claims, "synthetic-access-key").unwrap()
+  }
+
+  #[tokio::test]
+  async fn session_message_replays_for_a_run_and_newly_admits_for_an_operator() {
+    let (_home, features) = feature_context();
+    create_upload_session(&features, "synthetic-sender").await;
+    create_upload_session(&features, "synthetic-target").await;
+    install_dispatcher(&features);
+    let token = register_agent_run(&features, "synthetic-sender", "synthetic-run").await;
+    let router = routes(&features);
+    let body = br#"{"session_id":"synthetic-sender","target_session_id":"synthetic-target","content":"same send"}"#;
+    for _ in 0..2 {
+      let response = send_body(
+        &router,
+        Method::POST,
+        "/api/internal/session-message",
+        body.to_vec(),
+        Some("application/json"),
+        Some(&format!("Bearer {token}")),
+      )
+      .await;
+      assert_eq!(response.status(), StatusCode::OK);
+    }
+    for _ in 0..2 {
+      let response =
+        send_operator(&router, "/api/internal/session-message", body.to_vec(), Some("application/json")).await;
+      assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    let events = features.store.load_chat_events_sync("synthetic-target").unwrap();
+    let agent_sends: Vec<_> =
+      events.iter().filter(|event| event.get("type").and_then(Value::as_str) == Some("agent_message")).collect();
+    let expected_request_id = format!(
+      "agent-send-{}",
+      &charliebot_store::control_events::sha256_hex("synthetic-run\0session send\0synthetic-target\0same send")[..24]
+    );
+    assert_eq!(agent_sends.len(), 3, "one agent replay and two distinct operator sends: {agent_sends:?}");
+    assert_eq!(agent_sends[0]["request_id"], expected_request_id);
+    assert!(agent_sends[1].get("request_id").is_none());
+    assert!(agent_sends[2].get("request_id").is_none());
   }
 
   fn multipart_upload(path: &str, filename: &str, payload: &[u8]) -> Request<Body> {

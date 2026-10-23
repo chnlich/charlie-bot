@@ -460,7 +460,7 @@ async fn session_runs(
   let mut boot = HostBoot::default();
   let mut items = Vec::with_capacity(page.items.len());
   for run in page.items {
-    let state = match node.runs.display_state(&run, &mut boot) {
+    let state = match node.display_state(&run, &mut boot) {
       Ok(state) => state.as_str(),
       Err(error) => return store_error(error),
     };

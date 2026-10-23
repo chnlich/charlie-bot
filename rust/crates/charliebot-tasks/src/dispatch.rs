@@ -1050,8 +1050,8 @@ mod tests {
     assert_eq!(node_state_folds, 1, "the terminal and stop checks share one node-state fold");
     assert_eq!(
       after.full_folds - before.full_folds - node_state_folds,
-      1,
-      "pending inputs use one memoized node-facts fold"
+      0,
+      "pending inputs reuse the node-state facts fold"
     );
   }
 

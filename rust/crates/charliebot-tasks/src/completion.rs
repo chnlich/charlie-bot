@@ -28,6 +28,15 @@ const LANDING_REF_PREFIX: &str = "landed:";
 type DeliveryRunOutcomes = (HashMap<String, RunRecord>, HashMap<String, Option<String>>);
 const RESTORE_CHAIN_HOP_LIMIT: usize = 1000;
 
+struct CloseNowRequest<'a> {
+  session_id: &'a str,
+  request_id: &'a str,
+  evidence: &'a CompletionEvidence,
+  actor: &'a str,
+  exclude_run_ids: &'a HashSet<String>,
+  exclude_input_ids: &'a HashSet<String>,
+}
+
 /// The target branch and commit offered as landing evidence.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -544,7 +553,10 @@ impl TaskCompletion {
   ) -> StoreResult<(usize, Value)> {
     Ok(
       self
-        .close_now_inner(session_id, request_id, evidence, actor, exclude_run_ids, exclude_input_ids, None)
+        .close_now_inner(
+          CloseNowRequest { session_id, request_id, evidence, actor, exclude_run_ids, exclude_input_ids },
+          None,
+        )
         .await?
         .expect("a close without a startup stop completes"),
     )
@@ -552,27 +564,18 @@ impl TaskCompletion {
 
   async fn close_now_until(
     &self,
-    session_id: &str,
-    request_id: &str,
-    evidence: &CompletionEvidence,
-    actor: &str,
-    exclude_run_ids: &HashSet<String>,
-    exclude_input_ids: &HashSet<String>,
+    request: CloseNowRequest<'_>,
     stop: &StartupStop,
   ) -> StoreResult<Option<(usize, Value)>> {
-    self.close_now_inner(session_id, request_id, evidence, actor, exclude_run_ids, exclude_input_ids, Some(stop)).await
+    self.close_now_inner(request, Some(stop)).await
   }
 
   async fn close_now_inner(
     &self,
-    session_id: &str,
-    request_id: &str,
-    evidence: &CompletionEvidence,
-    actor: &str,
-    exclude_run_ids: &HashSet<String>,
-    exclude_input_ids: &HashSet<String>,
+    request: CloseNowRequest<'_>,
     stop: Option<&StartupStop>,
   ) -> StoreResult<Option<(usize, Value)>> {
+    let CloseNowRequest { session_id, request_id, evidence, actor, exclude_run_ids, exclude_input_ids } = request;
     let (meta, blockers) = {
       let _guard = self.store().control_lock().await;
       let meta = self.store().load_task_meta(session_id).await?;
@@ -1323,7 +1326,17 @@ impl TaskCompletion {
       let exclude_run_ids = HashSet::from([run_id.to_string()]);
       let result = match stop {
         Some(stop) => match self
-          .close_now_until(session_id, request_id, &evidence, ACTOR_SYSTEM, &exclude_run_ids, &claimed, stop)
+          .close_now_until(
+            CloseNowRequest {
+              session_id,
+              request_id,
+              evidence: &evidence,
+              actor: ACTOR_SYSTEM,
+              exclude_run_ids: &exclude_run_ids,
+              exclude_input_ids: &claimed,
+            },
+            stop,
+          )
           .await?
         {
           Some(result) => Ok(result),
@@ -1652,7 +1665,7 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn delivery_outcomes_fold_once_per_node_with_many_runs() {
+  async fn delivery_outcomes_reuse_sealed_facts_for_many_runs() {
     let home = tempfile::tempdir().unwrap();
     let features = test_fixtures::claude_features(&home.path().join("home"), &test_fixtures::claude_config(None));
     let parent = test_fixtures::manager_session(&features, "delivery-parent", "fable", None, "claude-parent").await;
@@ -1690,8 +1703,8 @@ mod tests {
         .await
         .unwrap();
     }
-    let parent_events = features.store.load_chat_events_shared_sync(&parent.id).unwrap().len() as u64;
-    let child_events = features.store.load_chat_events_shared_sync(&child.id).unwrap().len() as u64;
+    features.store.load_chat_events_shared_sync(&parent.id).unwrap();
+    features.store.load_chat_events_shared_sync(&child.id).unwrap();
     features.store.evict_recovery_history(&parent.id);
     features.store.evict_recovery_history(&child.id);
     let before: HistoryWork = features.store.history_work();
@@ -1705,8 +1718,8 @@ mod tests {
       (after.full_folds - before.full_folds) - (after.node_state_full_folds - before.node_state_full_folds);
     let facts_events =
       (after.folded_events - before.folded_events) - (after.node_state_folded_events - before.node_state_folded_events);
-    assert_eq!(facts_folds, 2, "one memoized fold for the parent and one for its child");
-    assert_eq!(facts_events, parent_events + child_events);
+    assert_eq!(facts_folds, 0, "the parent and child facts remain sealed after event-cache eviction");
+    assert_eq!(facts_events, 0, "sealed facts avoid refolding either history");
   }
 
   #[tokio::test]

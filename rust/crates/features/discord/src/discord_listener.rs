@@ -119,7 +119,7 @@ impl ThreadAdapter for DiscordThreadAdapter {
 
   fn post<'a>(&'a self, address: &'a Value, text: &'a str) -> BoxFuture<'a, anyhow::Result<()>> {
     Box::pin(async move {
-      self.client().await?.create_message(str_field(address, "thread_id")?, text).await?;
+      self.client().await?.create_message_with_post_key(str_field(address, "thread_id")?, text, "unkeyed").await?;
       Ok(())
     })
   }

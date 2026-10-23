@@ -57,6 +57,29 @@ async fn create_message_json_carries_allowed_mentions() {
 }
 
 #[tokio::test]
+async fn create_message_nonce_is_first_25_hex_characters_of_post_key_sha256() {
+  let seen = recorder();
+  let sink = Arc::clone(&seen);
+  let client = client(move |request| {
+    sink.lock().unwrap().push(request.clone());
+    Reply::json(200, json!({"id": "222222222222222222"}))
+  })
+  .await;
+
+  client.create_message_with_post_key("333333333333333333", "hello", "reply#1").await.unwrap();
+
+  assert_eq!(
+    seen.lock().unwrap()[0].json(),
+    json!({
+      "content": "hello",
+      "allowed_mentions": {"parse": []},
+      "nonce": "ae0266ac0850de0ea0460b7d5",
+      "enforce_nonce": true,
+    })
+  );
+}
+
+#[tokio::test]
 async fn rate_limit_retries_once_with_reported_wait() {
   let calls = Arc::new(AtomicUsize::new(0));
   let counter = Arc::clone(&calls);

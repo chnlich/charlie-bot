@@ -1081,6 +1081,82 @@ mod tests {
   }
 
   #[tokio::test]
+  async fn request_id_replay_returns_one_event_and_conflicts_on_changed_payload() {
+    let (_home, features) = features().await;
+    let meta =
+      test_fixtures::manager_session(&features, "request-replay", "fable", None, "claude-request-replay").await;
+    let dispatcher = dispatcher(&features);
+    let first = dispatcher
+      .admit_input(&meta.id, event_types::USER, "same", "user", json!({"request_id": "browser-send-1"}))
+      .await;
+    assert!(first.is_ok(), "request_id admission failed: {first:?}");
+    let first = first.unwrap();
+    let replay = dispatcher
+      .admit_input(&meta.id, event_types::USER, "same", "user", json!({"request_id": "browser-send-1"}))
+      .await;
+    assert!(replay.as_ref().is_ok_and(|event| event == &first), "replay did not return the stored event: {replay:?}");
+    assert_eq!(first["request_id"], "browser-send-1");
+    assert_eq!(
+      features
+        .store
+        .load_all_facts_view_sync(&meta.id)
+        .unwrap()
+        .iter()
+        .filter(|event| { event.get("request_id").and_then(serde_json::Value::as_str) == Some("browser-send-1") })
+        .count(),
+      1
+    );
+
+    let changed = dispatcher
+      .admit_input(&meta.id, event_types::USER, "changed", "user", json!({"request_id": "browser-send-1"}))
+      .await;
+    assert!(changed.unwrap_err().to_string().contains("different type or content"));
+  }
+
+  #[tokio::test]
+  async fn request_id_and_input_id_are_mutually_exclusive() {
+    let (_home, features) = features().await;
+    let meta =
+      test_fixtures::manager_session(&features, "request-input-exclusive", "fable", None, "claude-exclusive").await;
+    let error = dispatcher(&features)
+      .admit_input(
+        &meta.id,
+        event_types::USER,
+        "same",
+        "user",
+        json!({"input_id": "manual-id", "request_id": "browser-send-1"}),
+      )
+      .await
+      .unwrap_err();
+
+    assert!(error.to_string().contains("mutually exclusive"), "{error}");
+  }
+
+  #[tokio::test]
+  async fn concurrent_request_id_admission_appends_one_event() {
+    let (_home, features) = features().await;
+    let meta =
+      test_fixtures::manager_session(&features, "request-concurrent", "fable", None, "claude-concurrent").await;
+    let dispatcher = dispatcher(&features);
+    let (first, second) = tokio::join!(
+      dispatcher.admit_input(&meta.id, event_types::USER, "same", "user", json!({"request_id": "browser-race"}),),
+      dispatcher.admit_input(&meta.id, event_types::USER, "same", "user", json!({"request_id": "browser-race"}),),
+    );
+    assert!(first.is_ok() && second.is_ok(), "admission failed: {first:?} {second:?}");
+    assert_eq!(first.unwrap(), second.unwrap());
+    assert_eq!(
+      features
+        .store
+        .load_all_facts_view_sync(&meta.id)
+        .unwrap()
+        .iter()
+        .filter(|event| event.get("request_id").and_then(serde_json::Value::as_str) == Some("browser-race"))
+        .count(),
+      1
+    );
+  }
+
+  #[tokio::test]
   async fn close_report_scan_reuses_one_shared_recipient_history() {
     let (_home, features) = features().await;
     let parent =

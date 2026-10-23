@@ -107,10 +107,6 @@ HTTP_VERSION_SKEW_TIMEOUT = 2.0  # seconds
 # keeps a hung git from stalling startup or CLI error reporting.
 SUBPROCESS_GIT_SHA_TIMEOUT = 2.0  # seconds
 
-# sherpa-onnx speech-model artifact download via urllib; a one-shot per host,
-# but the tarball is large.
-HTTP_MODEL_DOWNLOAD_TIMEOUT = 60  # seconds
-
 # ---------------------------------------------------------------------------
 # Router's Jev choice (src/features/router/routing.py)
 # ---------------------------------------------------------------------------

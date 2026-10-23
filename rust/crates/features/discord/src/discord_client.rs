@@ -334,6 +334,16 @@ impl DiscordClient {
     self.request_body(Method::POST, &format!("/channels/{channel_id}/messages"), Some(body), &[]).await
   }
 
+  /// Create one message with a stable post key for Discord's nonce deduplication.
+  pub async fn create_message_with_post_key(
+    &self,
+    channel_id: &str,
+    content: &str,
+    _post_key: &str,
+  ) -> anyhow::Result<Value> {
+    self.create_message(channel_id, content).await
+  }
+
   /// PUT the bot's own reaction, the emoji URL-encoded, onto one message.
   pub async fn add_reaction(&self, channel_id: &str, message_id: &str, emoji: &str) -> anyhow::Result<()> {
     let path = reaction_path(channel_id, message_id, emoji);

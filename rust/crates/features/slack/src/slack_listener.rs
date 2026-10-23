@@ -378,7 +378,10 @@ impl ThreadAdapter for SlackThreadAdapter {
 
   fn post<'a>(&'a self, address: &'a Value, text: &'a str) -> BoxFuture<'a, Result<()>> {
     Box::pin(async move {
-      self.client()?.post_message(object_text(address, "channel_id"), text, object_text(address, "thread_ts")).await?;
+      self
+        .client()?
+        .post_message(object_text(address, "channel_id"), text, object_text(address, "thread_ts"), "unkeyed")
+        .await?;
       Ok(())
     })
   }
@@ -471,6 +474,33 @@ mod tests {
     })
     .await
     .expect("the asynchronous side effect arrives");
+  }
+
+  #[tokio::test]
+  async fn keyed_slack_post_sends_metadata_for_lookup() {
+    let api = FakeApi::start(&[]).await;
+
+    api.client.post_message("C_TEST", "hello", TS, "reply#1").await.unwrap();
+
+    assert_eq!(
+      api.posts()[0]["metadata"],
+      json!({"event_type": "charliebot_post", "event_payload": {"key": "reply#1"}})
+    );
+  }
+
+  #[tokio::test]
+  async fn slack_thread_reads_request_all_metadata_and_one_hundred_messages() {
+    let home = Home::new();
+    let api = FakeApi::start(&[]).await;
+    let adapter = SlackThreadAdapter::with_client(Arc::clone(&home.features), Arc::clone(&api.client));
+    let origin = json!({"channel_id": "C_TEST", "thread_ts": TS});
+    let config = home.features.config.get().unwrap();
+
+    adapter.read_eligible(&origin, &config).await.unwrap();
+
+    let replies = api.calls().into_iter().find(|call| call.1 == "/api/conversations.replies").unwrap().2;
+    assert_eq!(replies["include_all_metadata"], "true");
+    assert_eq!(replies["limit"], "100");
   }
 
   #[tokio::test]

@@ -56,7 +56,13 @@ impl SlackClient {
   }
 
   /// POST one thread reply and return Slack's response payload.
-  pub(crate) async fn post_message(&self, channel: &str, text: &str, thread_ts: &str) -> Result<Value> {
+  pub(crate) async fn post_message(
+    &self,
+    channel: &str,
+    text: &str,
+    thread_ts: &str,
+    _post_key: &str,
+  ) -> Result<Value> {
     let body = json!({"channel": channel, "text": text, "thread_ts": thread_ts});
     let response = self.json_request("chat.postMessage", &self.bot_token, body)?.send().await?;
     checked_payload(response, "chat.postMessage").await

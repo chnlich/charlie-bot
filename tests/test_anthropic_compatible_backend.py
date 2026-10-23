@@ -1,3 +1,4 @@
+import os
 import types
 
 import pydantic
@@ -5,7 +6,7 @@ import pytest
 
 from src.app import registrations
 from src.backends.anthropic_compatible import factory, options
-from src.backends.claude_code import claude_launch
+from src.backends.claude_code import claude_code, claude_launch
 from src.infra import config, config_registry
 from src.infra import event_types as ET
 from src.runtime import session_usage
@@ -67,6 +68,60 @@ def test_factory_routes_endpoint_model_window_and_no_auth(monkeypatch: pytest.Mo
   assert "ANTHROPIC_API_KEY" not in prepared
   assert "CLAUDE_CODE_OAUTH_TOKEN" not in prepared
   assert prepared[claude_launch.THINKING_DISPLAY_UPDATES_ENV] == "0"
+
+
+def test_endpoint_env_overrides_every_inherited_gateway_variable(monkeypatch: pytest.MonkeyPatch) -> None:
+  """A cc-anthropic-compatible run keeps its own endpoint, token and model even when it
+  starts inside another cc-anthropic-compatible worker whose variables it inherits."""
+  for name in claude_code.GATEWAY_ENDPOINT_ENV_NAMES:
+    monkeypatch.setenv(name, "inherited-gateway-value")
+  backend = factory.build(_option(), config.CharlieBotConfig())
+
+  inherited_env = {name: os.environ[name] for name in claude_code.GATEWAY_ENDPOINT_ENV_NAMES}
+  prepared = backend._prepare_env(inherited_env)
+
+  assert prepared[claude_code.GATEWAY_BASE_URL_ENV] == API_BASE
+  assert prepared[claude_code.GATEWAY_AUTH_TOKEN_ENV] == "no-auth"
+  for name in claude_code.CLAUDE_MODEL_ENV_NAMES:
+    assert prepared[name] == MODEL
+
+
+def test_factory_routes_custom_headers() -> None:
+  backend = factory.build(_option(headers={"x-litellm-tags": "deepseek"}), config.CharlieBotConfig())
+
+  prepared = backend._prepare_env({})
+
+  assert prepared[claude_code.GATEWAY_CUSTOM_HEADERS_ENV] == "x-litellm-tags: deepseek"
+
+
+def test_factory_routes_multiple_custom_headers() -> None:
+  backend = factory.build(
+      _option(headers={
+          "x-litellm-tags": "deepseek",
+          "x-client-name": "charliebot"
+      }), config.CharlieBotConfig())
+
+  prepared = backend._prepare_env({})
+
+  assert prepared[claude_code.GATEWAY_CUSTOM_HEADERS_ENV] == "x-litellm-tags: deepseek\nx-client-name: charliebot"
+
+
+def test_factory_omits_custom_headers_when_option_has_none_and_parent_sets_them() -> None:
+  backend = factory.build(_option(), config.CharlieBotConfig())
+
+  prepared = backend._prepare_env({claude_code.GATEWAY_CUSTOM_HEADERS_ENV: "inherited-value"})
+
+  assert claude_code.GATEWAY_CUSTOM_HEADERS_ENV not in prepared
+
+
+def test_claude_model_env_sets_exactly_five_model_variables() -> None:
+  assert claude_code.claude_model_env(MODEL) == {
+      "ANTHROPIC_MODEL": MODEL,
+      "ANTHROPIC_DEFAULT_OPUS_MODEL": MODEL,
+      "ANTHROPIC_DEFAULT_SONNET_MODEL": MODEL,
+      "ANTHROPIC_DEFAULT_HAIKU_MODEL": MODEL,
+      "CLAUDE_CODE_SUBAGENT_MODEL": MODEL,
+  }
 
 
 def test_factory_routes_named_api_key(monkeypatch: pytest.MonkeyPatch) -> None:

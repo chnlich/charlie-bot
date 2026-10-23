@@ -1,7 +1,7 @@
 """Master-agent triggering subsystem — dispatch task-tree inputs into Runs."""
 
 from src.infra import event_types as ET
-from src.infra import log_once, models
+from src.infra import log_once, models, tasks
 from src.runtime import session_lifecycle, session_store, session_successor, task_execution
 
 log = log_once.LazyStructlogLogger()
@@ -84,3 +84,41 @@ async def trigger_master(
       from_session=from_session,
       from_session_name=from_session_name,
   )
+
+
+def spawn_master_turn(
+    session_id: str,
+    summary: str,
+    store: session_store.SessionStore,
+    successor: session_successor.SessionSuccessor,
+    lifecycle: session_lifecycle.SessionLifecycle,
+    *,
+    input_id: str,
+    event_type: str,
+    actor: str,
+    from_session: str,
+    from_session_name: str,
+    task_name: str,
+) -> None:
+  """Run one master turn as a logged background task named *task_name*.
+
+  A wake never blocks its caller: the trigger coroutine runs on the logged-task
+  spawner, whose done callback logs the trigger's exception instead of letting
+  it die silently. ``trigger_master`` resolves through this module attribute at
+  call time, so tests patch the wake there and the spawn still routes through
+  the stand-in.
+  """
+  tasks.create_logged_task(
+      trigger_master(
+          session_id,
+          summary,
+          store,
+          successor,
+          lifecycle,
+          input_id=input_id,
+          event_type=event_type,
+          actor=actor,
+          from_session=from_session,
+          from_session_name=from_session_name,
+      ),
+      name=task_name)

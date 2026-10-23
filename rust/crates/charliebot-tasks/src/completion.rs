@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use charliebot_core::event_types;
 use charliebot_registry::caller::CallerIdentity;
-use charliebot_registry::context::{FeatureContext, StateError};
+use charliebot_registry::context::{FeatureContext, StartupStop, StateError};
 use charliebot_registry::sequence::{RestoreOutcome, SequenceCompletion};
 use charliebot_store::control_events::{self, ACTOR_AGENT, ACTOR_SYSTEM, ACTOR_USER};
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskType};
@@ -127,6 +127,54 @@ impl TaskCompletion {
       blockers.insert(0, dispatch::unprocessed_input_blocker(&pending));
     }
     Ok(blockers)
+  }
+
+  fn completion_blockers_until(
+    &self,
+    session_id: &str,
+    exclude_run_ids: &HashSet<String>,
+    exclude_input_ids: &HashSet<String>,
+    should_stop: &mut impl FnMut() -> bool,
+  ) -> StoreResult<Option<Vec<String>>> {
+    if should_stop() {
+      return Ok(None);
+    }
+    let mut blockers = self
+      .store()
+      .run_blockers(session_id)?
+      .into_iter()
+      .filter(|blocker| !exclude_run_ids.contains(&blocker.run_id))
+      .map(|blocker| blocker.reason)
+      .collect::<Vec<_>>();
+    if should_stop() {
+      return Ok(None);
+    }
+    let Some(descendants) = self.store().descendant_ids_until(session_id, should_stop)? else {
+      return Ok(None);
+    };
+    for descendant in descendants {
+      if should_stop() {
+        return Ok(None);
+      }
+      if self.store().task_state(&descendant)? == "open" {
+        blockers.push(format!("has open descendant task {descendant}"));
+      }
+    }
+    if should_stop() {
+      return Ok(None);
+    }
+    let pending = self.dispatcher()?.pending_inputs(session_id)?;
+    if should_stop() {
+      return Ok(None);
+    }
+    let pending = pending
+      .into_iter()
+      .filter(|event| event.get("id").and_then(Value::as_str).is_none_or(|id| !exclude_input_ids.contains(id)))
+      .collect::<Vec<_>>();
+    if !pending.is_empty() {
+      blockers.insert(0, dispatch::unprocessed_input_blocker(&pending));
+    }
+    Ok(Some(blockers))
   }
 
   fn cancellation_blockers(&self, session_id: &str) -> StoreResult<Vec<String>> {
@@ -494,32 +542,96 @@ impl TaskCompletion {
     exclude_run_ids: &HashSet<String>,
     exclude_input_ids: &HashSet<String>,
   ) -> StoreResult<(usize, Value)> {
+    Ok(
+      self
+        .close_now_inner(session_id, request_id, evidence, actor, exclude_run_ids, exclude_input_ids, None)
+        .await?
+        .expect("a close without a startup stop completes"),
+    )
+  }
+
+  async fn close_now_until(
+    &self,
+    session_id: &str,
+    request_id: &str,
+    evidence: &CompletionEvidence,
+    actor: &str,
+    exclude_run_ids: &HashSet<String>,
+    exclude_input_ids: &HashSet<String>,
+    stop: &StartupStop,
+  ) -> StoreResult<Option<(usize, Value)>> {
+    self.close_now_inner(session_id, request_id, evidence, actor, exclude_run_ids, exclude_input_ids, Some(stop)).await
+  }
+
+  async fn close_now_inner(
+    &self,
+    session_id: &str,
+    request_id: &str,
+    evidence: &CompletionEvidence,
+    actor: &str,
+    exclude_run_ids: &HashSet<String>,
+    exclude_input_ids: &HashSet<String>,
+    stop: Option<&StartupStop>,
+  ) -> StoreResult<Option<(usize, Value)>> {
     let (meta, blockers) = {
       let _guard = self.store().control_lock().await;
       let meta = self.store().load_task_meta(session_id).await?;
-      let blockers = self.completion_blockers(session_id, exclude_run_ids, exclude_input_ids)?;
+      let blockers = match stop {
+        Some(stop) => {
+          let mut should_stop = || stop.is_cancelled();
+          match self.completion_blockers_until(session_id, exclude_run_ids, exclude_input_ids, &mut should_stop)? {
+            Some(blockers) => blockers,
+            None => return Ok(None),
+          }
+        }
+        None => self.completion_blockers(session_id, exclude_run_ids, exclude_input_ids)?,
+      };
       (meta, blockers)
     };
     if !blockers.is_empty() {
       return Err(StoreError::conflict(sorted_unique(blockers)));
     }
+    if stop.is_some_and(StartupStop::is_cancelled) {
+      return Ok(None);
+    }
     let evidence_blockers = self.verified_evidence_blockers(&meta, evidence).await?;
     if !evidence_blockers.is_empty() {
       return Err(StoreError::conflict(sorted_unique(evidence_blockers)));
     }
+    if stop.is_some_and(StartupStop::is_cancelled) {
+      return Ok(None);
+    }
 
     let child_epoch = self.store().prime_aggregator(session_id).await?;
+    if stop.is_some_and(StartupStop::is_cancelled) {
+      return Ok(None);
+    }
     let parent_epoch = match meta.task_parent_id.as_deref() {
       Some(parent_id) => Some(self.store().prime_aggregator(parent_id).await?),
       None => None,
     };
+    if stop.is_some_and(StartupStop::is_cancelled) {
+      return Ok(None);
+    }
     let (fresh_meta, close_event, report, report_created) = {
       let guard = self.store().control_lock().await;
+      if stop.is_some_and(StartupStop::is_cancelled) {
+        return Ok(None);
+      }
       if self.store().task_state(session_id)? != "open" {
         return Err(StoreError::conflict(vec![format!("task {session_id} is no longer open")]));
       }
       let fresh_meta = self.store().load_task_meta(session_id).await?;
-      let mut blockers = self.completion_blockers(session_id, exclude_run_ids, exclude_input_ids)?;
+      let mut blockers = match stop {
+        Some(stop) => {
+          let mut should_stop = || stop.is_cancelled();
+          match self.completion_blockers_until(session_id, exclude_run_ids, exclude_input_ids, &mut should_stop)? {
+            Some(blockers) => blockers,
+            None => return Ok(None),
+          }
+        }
+        None => self.completion_blockers(session_id, exclude_run_ids, exclude_input_ids)?,
+      };
       blockers.extend(self.evidence_blockers(&fresh_meta, evidence)?);
       let blockers = sorted_unique(blockers);
       if !blockers.is_empty() {
@@ -551,7 +663,7 @@ impl TaskCompletion {
     {
       tracing::warn!(target: "charliebot_tasks", session_id, parent = parent_id, report = ?report.get("id"), error = %error, "close_parent_wake_failed");
     }
-    Ok((200, json!({"session_id": session_id, "closed_event_id": close_event.get("id")})))
+    Ok(Some((200, json!({"session_id": session_id, "closed_event_id": close_event.get("id")}))))
   }
 
   #[allow(clippy::too_many_arguments)]
@@ -1157,15 +1269,45 @@ impl TaskCompletion {
 
   /// Recheck saved own-run close requests after the matching run succeeds.
   pub async fn recheck_close_requests(&self, session_id: &str, run_id: &str) -> StoreResult<Vec<String>> {
+    Ok(
+      self
+        .recheck_close_requests_inner(session_id, run_id, None)
+        .await?
+        .expect("a close-request recheck without a startup stop completes"),
+    )
+  }
+
+  /// Recheck saved own-run close requests during startup, returning `None` when recovery is stopped.
+  pub async fn recheck_close_requests_until(
+    &self,
+    session_id: &str,
+    run_id: &str,
+    stop: &StartupStop,
+  ) -> StoreResult<Option<Vec<String>>> {
+    self.recheck_close_requests_inner(session_id, run_id, Some(stop)).await
+  }
+
+  async fn recheck_close_requests_inner(
+    &self,
+    session_id: &str,
+    run_id: &str,
+    stop: Option<&StartupStop>,
+  ) -> StoreResult<Option<Vec<String>>> {
+    if stop.is_some_and(StartupStop::is_cancelled) {
+      return Ok(None);
+    }
     let facts = self.store().node_facts(session_id)?;
     let task = facts.task()?;
     if task.run_outcomes.get(run_id).map(String::as_str) != Some("success") {
-      return Ok(Vec::new());
+      return Ok(Some(Vec::new()));
     }
     let close_requests = task.close_requests.clone();
     drop(facts);
     let mut remaining = Vec::new();
     for request in close_requests {
+      if stop.is_some_and(StartupStop::is_cancelled) {
+        return Ok(None);
+      }
       if request.get("owner_run_id").and_then(Value::as_str) != Some(run_id) {
         continue;
       }
@@ -1178,10 +1320,18 @@ impl TaskCompletion {
       let evidence = evidence_from_close_request(&request)?;
       let run = self.store().read_run_sync(session_id, run_id)?;
       let claimed = run.map(|run| run.input_event_ids.into_iter().collect()).unwrap_or_default();
-      match self
-        .close_now(session_id, request_id, &evidence, ACTOR_SYSTEM, &HashSet::from([run_id.to_string()]), &claimed)
-        .await
-      {
+      let exclude_run_ids = HashSet::from([run_id.to_string()]);
+      let result = match stop {
+        Some(stop) => match self
+          .close_now_until(session_id, request_id, &evidence, ACTOR_SYSTEM, &exclude_run_ids, &claimed, stop)
+          .await?
+        {
+          Some(result) => Ok(result),
+          None => return Ok(None),
+        },
+        None => self.close_now(session_id, request_id, &evidence, ACTOR_SYSTEM, &exclude_run_ids, &claimed).await,
+      };
+      match result {
         Ok(_) => {}
         Err(StoreError::Conflict(blockers)) => {
           remaining.extend(blockers.iter().cloned());
@@ -1193,7 +1343,7 @@ impl TaskCompletion {
         Err(error) => return Err(error),
       }
     }
-    Ok(remaining)
+    Ok(Some(remaining))
   }
 
   async fn notify_close_request_blocked(
@@ -1453,6 +1603,8 @@ fn sorted_unique(mut values: Vec<String>) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+  use std::collections::HashSet;
+
   use super::TaskCompletion;
   use charliebot_store::metadata::{SessionMetadata, TaskProfile};
   use charliebot_store::run_records::{RunKind, RunRecord};
@@ -1612,5 +1764,63 @@ mod tests {
     assert_eq!(after.file_reads - before.file_reads, 2, "one history read for each node in the closed chain");
     assert_eq!(after.event_history_views - before.event_history_views, 2);
     assert_eq!(after.owned_event_clones - before.owned_event_clones, 0, "the restore scan borrows the shared history");
+  }
+
+  #[tokio::test]
+  async fn completion_blockers_check_stop_during_tree_index_build() {
+    let home = tempfile::tempdir().unwrap();
+    let features = test_fixtures::claude_features(&home.path().join("home"), &test_fixtures::claude_config(None));
+    let root = test_fixtures::manager_session(&features, "stop-root", "fable", None, "claude-parent").await;
+    let child = features
+      .store
+      .create_task(
+        CreateTask {
+          request_id: "stop-child".to_string(),
+          task_parent_id: Some(root.id.clone()),
+          profile: TaskProfile::Manager,
+          task: None,
+          name: Some("Synthetic child".to_string()),
+          backend: Some("fable".to_string()),
+          group: None,
+          session_id: None,
+        },
+        TaskCaller::System,
+        Map::new(),
+      )
+      .await
+      .unwrap();
+    features
+      .store
+      .create_task(
+        CreateTask {
+          request_id: "stop-leaf".to_string(),
+          task_parent_id: Some(child.id),
+          profile: TaskProfile::Worker,
+          task: None,
+          name: Some("Synthetic leaf".to_string()),
+          backend: Some("fable".to_string()),
+          group: None,
+          session_id: None,
+        },
+        TaskCaller::System,
+        Map::new(),
+      )
+      .await
+      .unwrap();
+    features.store.invalidate_tree_index();
+    let builds_before = features.store.task_tree_index_build_count();
+    let completion = TaskCompletion::new(std::sync::Arc::clone(&features));
+    let mut checks = 0;
+
+    let blockers = completion
+      .completion_blockers_until(&root.id, &HashSet::new(), &HashSet::new(), &mut || {
+        checks += 1;
+        checks == 5
+      })
+      .unwrap();
+
+    assert!(blockers.is_none(), "a stopped blocker scan returns no partial blocker list");
+    assert_eq!(checks, 5, "completion checks the stop during task-index directory scanning");
+    assert_eq!(features.store.task_tree_index_build_count(), builds_before, "the partial task index is discarded");
   }
 }

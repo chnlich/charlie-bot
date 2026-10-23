@@ -243,14 +243,8 @@ async def test_input_admitted_during_a_work_run_pauses_it_the_same_way(
   work_gate = asyncio.Event()
   cont_started = asyncio.Event()
   cont_gate = asyncio.Event()
-
-  async def gate_wait() -> None:
-    work_started.set()
-    await work_gate.wait()
-
-  async def cont_wait() -> None:
-    cont_started.set()
-    await cont_gate.wait()
+  gate_wait = test_task_execution.signal_then_hold(work_started, work_gate)
+  cont_wait = test_task_execution.signal_then_hold(cont_started, cont_gate)
 
   builds = install_backends(
       monkeypatch, [
@@ -339,14 +333,8 @@ async def test_review_with_pending_trigger_pauses_merge_and_continues_the_review
   work_gate = asyncio.Event()
   review_started = asyncio.Event()
   review_gate = asyncio.Event()
-
-  async def work_wait() -> None:
-    work_started.set()
-    await work_gate.wait()
-
-  async def review_wait() -> None:
-    review_started.set()
-    await review_gate.wait()
+  work_wait = test_task_execution.signal_then_hold(work_started, work_gate)
+  review_wait = test_task_execution.signal_then_hold(review_started, review_gate)
 
   builds = install_backends(
       monkeypatch, [
@@ -420,14 +408,8 @@ async def test_failed_review_continuation_reports_failure_to_the_parent(
   work_gate = asyncio.Event()
   review_started = asyncio.Event()
   review_gate = asyncio.Event()
-
-  async def work_wait() -> None:
-    work_started.set()
-    await work_gate.wait()
-
-  async def review_wait() -> None:
-    review_started.set()
-    await review_gate.wait()
+  work_wait = test_task_execution.signal_then_hold(work_started, work_gate)
+  review_wait = test_task_execution.signal_then_hold(review_started, review_gate)
 
   install_backends(
       monkeypatch, [
@@ -512,14 +494,8 @@ async def test_changed_prompt_hash_at_continuation_starts_a_fresh_conversation(
   work_gate = asyncio.Event()
   cont_started = asyncio.Event()
   cont_gate = asyncio.Event()
-
-  async def gate_wait() -> None:
-    work_started.set()
-    await work_gate.wait()
-
-  async def cont_wait() -> None:
-    cont_started.set()
-    await cont_gate.wait()
+  gate_wait = test_task_execution.signal_then_hold(work_started, work_gate)
+  cont_wait = test_task_execution.signal_then_hold(cont_started, cont_gate)
 
   builds = install_backends(
       monkeypatch, [
@@ -567,10 +543,7 @@ async def test_delivery_without_pending_wake_behaves_as_today(
   _cfg, tree, manager, worker, _repo = await _worker_child(tmp_path, monkeypatch)
   work_started = asyncio.Event()
   work_gate = asyncio.Event()
-
-  async def work_wait() -> None:
-    work_started.set()
-    await work_gate.wait()
+  work_wait = test_task_execution.signal_then_hold(work_started, work_gate)
 
   builds = install_backends(
       monkeypatch, [
@@ -626,14 +599,8 @@ async def _pause_review_with_pending_wake(tmp_path: pathlib.Path, monkeypatch: p
   work_gate = asyncio.Event()
   review_started = asyncio.Event()
   review_gate = asyncio.Event()
-
-  async def work_wait() -> None:
-    work_started.set()
-    await work_gate.wait()
-
-  async def review_wait() -> None:
-    review_started.set()
-    await review_gate.wait()
+  work_wait = test_task_execution.signal_then_hold(work_started, work_gate)
+  review_wait = test_task_execution.signal_then_hold(review_started, review_gate)
 
   builds = install_backends(
       monkeypatch, [
@@ -703,14 +670,8 @@ async def test_work_continuation_keeps_the_node_default_backend_and_model(
   work_gate = asyncio.Event()
   cont_started = asyncio.Event()
   cont_gate = asyncio.Event()
-
-  async def work_wait() -> None:
-    work_started.set()
-    await work_gate.wait()
-
-  async def cont_wait() -> None:
-    cont_started.set()
-    await cont_gate.wait()
+  work_wait = test_task_execution.signal_then_hold(work_started, work_gate)
+  cont_wait = test_task_execution.signal_then_hold(cont_started, cont_gate)
 
   builds = install_backends(
       monkeypatch, [
@@ -762,14 +723,8 @@ async def test_continuation_on_an_unchanged_backend_names_a_missing_native_id(
   work_gate = asyncio.Event()
   cont_started = asyncio.Event()
   cont_gate = asyncio.Event()
-
-  async def work_wait() -> None:
-    work_started.set()
-    await work_gate.wait()
-
-  async def cont_wait() -> None:
-    cont_started.set()
-    await cont_gate.wait()
+  work_wait = test_task_execution.signal_then_hold(work_started, work_gate)
+  cont_wait = test_task_execution.signal_then_hold(cont_started, cont_gate)
 
   # The plain double writes no raw log, so its run records no native conversation id.
   builds = install_backends(

@@ -23,8 +23,8 @@ fact or rule set per file under `entries/<topic>/<slug>.md`, with front matter r
 `scope`, `topic`, `audience`, `title` and a pure-markdown body.
 Sessions only stage candidates (`charliebot memory add` writes to `staging/`): a staging
 candidate is a free-form capture whose labels are assigned at curation and whose change intent
-lives in the body; the canon changes only by landing a user-approved proposal version with
-`charliebot memory proposal land <sha>`.
+lives in the body. The canon changes in two ways. The daily curation run lands its reviewed
+proposal with `charliebot memory proposal land <sha>`. A session commits a change that the user approves.
 
 This file governs the daily curator AND ad-hoc user-directed promotions: the same admission test
 and labeling rules apply in both flows.
@@ -136,8 +136,8 @@ Every entry carries `scope`, `topic`, `audience`, and `title` in its front matte
 One coherent fact or rule set per entry. The title lives in frontmatter; the body is pure
 content. Timeless phrasing: state the standing reality. Dates, session ids, commit hashes,
 quoted rulings, event history, and case enumerations belong in `LESSONS.md`.
-Skip decision-attribution labels (`（用户定）`, `（用户裁定）`): every entry stands by user
-approval, so the label carries no information.
+Skip decision-attribution labels (`（用户定）`, `（用户裁定）`). Every entry stands by the curation
+flow that admitted it, so the label carries no information.
 Say each fact once. Write entry prose in English. Keep each line at 120 columns or fewer. Line
 width is terminal display width: a character whose `east_asian_width` is W or F counts two columns,
 so one Chinese character counts two. Keep code, paths, identifiers, and commands verbatim. When
@@ -183,25 +183,28 @@ The day's curation reaches the user as one pull request: the `proposal` branch o
 repo, drafted in the git worktree `$CHARLIEBOT_HOME/memory-proposal/`, where the selector writes
 the day's entry and `topics` edits uncommitted and the reviewer commits them entry by entry
 through `charliebot memory proposal commit <store-relative path> --message-file F`.
-The user reviews the PR at a pinned version through the diff page (`diff_path`) and the PR page,
-which lists every PR commit with its proof lines, the reviewer's rewrites of the day, the
-conflicts between new candidates and existing PR lines, and the candidates rejected since the
-PR opened.
-When a reply links a PR version, give the diff page as an absolute markdown link:
-`[diff](<base_url><diff_path>)`. Resolve `<base_url>` as the file-server skill states.
-On the user's approval of version `<sha>`, the session that received the approval runs
-`charliebot memory proposal land <sha>`, which fast-forwards the live store
-`$CHARLIEBOT_HOME/memory/` to exactly that version.
-On partial approval, remove the unwanted commits from the PR first, re-link the new version in
-the reply, and collect the user's approval of that version.
-`charliebot memory proposal open` rebases the PR onto the live base when the base moved, and a
-rebase voids earlier SHAs, so the session re-links the current head after every `open`.
-A diff-page comment fix is a delegated worker's edit: the worker edits only the commented lines
-in the PR worktree and commits one entry per commit.
+After its commits pass the lint, the reviewer runs `charliebot memory proposal land <head>` with
+the PR head that `charliebot memory proposal status` reports. The `land` command fast-forwards the
+live store to exactly that head, so the store holds the version that the lint passed.
+The user reviews each landed range afterwards through its diff page (the `diff_path` line of the
+`land` output) and the PR page. The PR page lists:
+- every PR commit with its proof lines
+- the reviewer's rewrites of the day
+- the conflicts between new candidates and existing PR lines
+- the candidates rejected since the PR opened
+When a reply reports a curation run, give the diff page as an absolute markdown link:
+`[diff](<base_url><diff_path>&session=<curator session id>)`, beside the PR page link. Resolve
+`<base_url>` as the file-server skill states. The `session` parameter routes diff-page comments to
+the curator session.
+When a reply reports a refusal, quote the refusal and name its cause. This lets the user see the
+cause in the reply itself.
+`charliebot memory proposal open` rebases the PR onto the live base when the base moved.
+A diff-page comment on a landed range is a user-directed fix.
+A delegated worker edits only the commented lines and commits them to the live store's base branch.
+This keeps the fix to the lines the user commented on.
 When a user-directed fix or a prose-check rewrite changes lines that the PR added,
 commit it with --replace-pr-lines.
-Every adjudication round ends by re-linking the current version in the reply.
-Each user comment on a proposal is evidence of a rule gap. After applying the comment, check
+Each user comment on a landed range is evidence of a rule gap. After applying the comment, check
 whether the rules above would have kept the commented content out of the store on their own; a
 revealed gap gets its one-line amendment in the same reply, and the amendment lands through the
 normal repo change flow after approval.

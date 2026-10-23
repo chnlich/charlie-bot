@@ -1,9 +1,8 @@
 <!--
 USAGE: The daily reviewer renders the memory PR page from this skeleton. Copy the file, replace
-every {{...}} placeholder, and delete the BLOCK comments. The page describes the memory PR at
-its current head: the header carries the PR version (head SHA), the date the PR opened, the
-days it has been open, and the diff-page link (the root-relative `diff_path` from
-`charliebot memory proposal status`); one <section> per PR commit lists the commit subject
+every {{...}} placeholder, and delete the BLOCK comments. Keep one header form, the landed-day
+form or the refusal-day form, and delete the other form's markup. The header's diff link opens the
+version that the page describes, so the user reviews that version. One <section> per PR commit lists the commit subject
 (`git log <base>..<head>`) with the three proof lines from its commit body, each headed by the
 question it answers as the llm-context-guideline skill words it. Filled prose is Chinese; the
 skeleton's static text stays as written; code, paths, and commands stay English. Each proof
@@ -38,15 +37,18 @@ line is one sentence; verification runs before rendering and leaves no receipt o
 </style>
 </head>
 <body>
-<!-- BLOCK: header. Placeholders: {{YYYY-MM-DD}} (today's date), {{head SHA}} (the PR's head
-SHA), {{opened}} (the `opened` date from `charliebot memory proposal status`), {{N}} (the days
-open), {{diff_path}} (the root-relative diff link), {{disposition counts, e.g. admit 3, revise 2, reject 9}} (the day's
-counts), {{clean}} (the lint result over the PR worktree). -->
+<!-- BLOCK: landed-day header, kept when `land` landed a range. Placeholders: {{YYYY-MM-DD}} (today's
+date), {{landed range}} (the `landed` field of the `land` output), {{N}} (its `commits` field),
+{{diff_path}} (its `diff_path` field). -->
 <h1>Memory PR · {{YYYY-MM-DD}}</h1>
-<p>PR version <code>{{head SHA}}</code> · opened {{opened}} (day {{N}}) ·
-<a href="{{diff_path}}">line-comment diff page</a> ·
-{{disposition counts, e.g. admit 3, revise 2, reject 9}}
-(<code>charliebot memory lint --dir</code>: {{clean}})</p>
+<p>Landed <code>{{landed range}}</code> · {{N}} commits ·
+<a href="{{diff_path}}">line-comment diff page</a></p>
+<!-- BLOCK: refusal-day header, kept when `land` refused. Placeholders: {{YYYY-MM-DD}} (today's date),
+{{head SHA}} (the `head` field of the Step 4 `status` output), {{diff_path}} (the `diff_path` field of
+that output), {{quoted refusal}} (the refusal that `land` printed). -->
+<h1>Memory PR · {{YYYY-MM-DD}}</h1>
+<p>PR version <code>{{head SHA}}</code> · <a href="{{diff_path}}">line-comment diff page</a></p>
+<blockquote>{{quoted refusal}}</blockquote>
 
 <!-- BLOCK: one <section> per commit in the PR, in `git log <base>..<head>` order. Placeholders:
 {{admit|revise|migrate|remove|scaffold}} and {{prefix}} (the commit subject's prefix),
@@ -101,7 +103,7 @@ the candidate wanted), {{the existing PR line, quoted}} (the PR line it meets). 
 <tr><td>{{YYYY-MM-DD}}</td><td>{{staging filename stem}}</td><td>{{the question left unanswered or the one-line reason}}</td></tr>
 </table>
 
-<!-- BLOCK: footer. Placeholder: {{head SHA}} (the PR's head SHA). -->
-<footer>Approval runs <code>charliebot memory proposal land {{head SHA}}</code> for the approved version; comment fixes join the PR as new commits.</footer>
+<!-- BLOCK: footer, static text as written. -->
+<footer>To change a landed line, reply in the curator session or comment on the diff page.</footer>
 </body>
 </html>

@@ -55,18 +55,48 @@ conflict as a report row: the candidate's intent beside the PR line it meets. Wh
 prose violation, rewrite the listed text, earlier PR lines included. Then run the commit again. When the
 command prints a negation warning, rewrite the listed sentence the same way, and commit the file again.
 
-Step 4: render the PR page.
-Render the page from `~/workspace/charlie-bot/prompts/memory_report_template.html`: copy it,
-replace every placeholder, and delete the BLOCK comments, in Chinese as the template prescribes.
-The page names every PR commit (`git log <base>..<head>` subjects with their proof lines),
-today's rewrites, the recorded conflicts, and the candidates rejected since the PR opened. Run
-`charliebot memory proposal status` again after the commits and take the page's head SHA, the
-`opened` date, and the diff link from its `head`, `opened`, and `diff_path` lines. The session's
-artifacts directory sits at `../../artifacts/` relative to your working directory; write
-`memory_report_<YYYY-MM-DD>.html` there, with the header's diff link pointing at `diff_path`
-root-relatively.
+Step 4: land the PR.
+Run `charliebot memory proposal status`, and record its `head`, `opened`, and `diff_path` lines.
+This pins the PR head that the land step names.
+Run `charliebot memory proposal land <head>` with that head.
+This moves the live store to exactly the version that this run committed and linted.
+The output has three fields:
+- `landed`: the landed range
+- `commits`: the commit count
+- `diff_path`: the diff link
+When the command refuses, keep the PR as it stands.
+Quote the refusal on the page and in your final message.
+The next run's land carries these commits, and the user learns why the day did not land.
 
-Your final message gives the page path, the head SHA, the diff link, and the day's disposition
-counts (`admit N, revise N, reject N`). Write the diff link in the form that the skill's
-"Proposal review and landing" chapter states. An empty delta ends the step with a
-one-sentence final message.
+Step 5: render the PR page.
+Render the page from `~/workspace/charlie-bot/prompts/memory_report_template.html`.
+Copy the template, replace every placeholder, and delete the BLOCK comments.
+Write the filled prose in Chinese, as the template prescribes.
+The template fixes the page layout and language, so every PR page reads alike.
+The page names every PR commit (`git log <base>..<head>` subjects with their proof lines), today's
+rewrites, the recorded conflicts, and the candidates rejected since the PR opened.
+Fill the header from the `land` output:
+- the `landed` range
+- the `commits` count
+- the `diff_path` link
+After a refusal, fill the header from the Step 4 `status` output instead:
+- the `head` SHA
+- the `diff_path` link
+- the quoted refusal
+Both header forms name the version the user reviews and link to its diff.
+Start the rejected-candidates block at the Step 4 `opened` date.
+This block lists only the rejections that this PR has held.
+Write `memory_report_<YYYY-MM-DD>.html` to the session's artifacts directory, `../../artifacts/`
+relative to your working directory.
+Point the header's diff link at `diff_path` root-relatively.
+The user opens the page from that directory, and the root-relative link opens the diff page from it.
+
+Your final message gives:
+- the page path
+- the landed range, or the quoted refusal
+- the diff link
+- the day's disposition counts (`admit N, revise N, reject N`)
+The user reads this outcome before opening the page.
+Write the diff link in the form that the skill's "Proposal review and landing" chapter states.
+That form sends the user's diff-page comments to this curator session.
+An empty delta ends the step with a one-sentence final message.

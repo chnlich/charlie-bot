@@ -211,6 +211,7 @@ A lead keeps only coordination state in its context: each later model call re-re
   - the user's words and the decisions;
   - the conclusions of your children and the session status;
   - a value: one status, one count, or one sha, from a command whose form bounds its output;
+  - the rule and skill files that govern your own next step;
   - the approval object of each decision that you make, such as a child's plan page and its verify findings.
 - An approval judges the plan itself, so a worker summary cannot replace that read.
 - When you need material as a lead, hand the read to a repo-less worker with `--task-type script-run`.

@@ -323,8 +323,7 @@ run-record work is `S2`; task-tree runtime and feature-owned files remain with t
 
 ## Catch-up f58a345a6 open steps
 
-The rows below name the remaining all-stage Rust parity differences, their scenario steps and the `main` commits that
-account for them. No row is intermittent.
+At this head the all-stage Rust parity run matches all 1179 steps, so no row remains. No row is intermittent.
 
 | Scenario | Step | Stage | Main commit | Difference |
 | --- | --- | --- | --- | --- |

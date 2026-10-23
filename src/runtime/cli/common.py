@@ -431,7 +431,7 @@ def _with_caller_session(headers: dict[str, str]) -> dict[str, str]:
 
 
 def print_json(value: Any, *, indent: int | None, file: TextIO, default: Callable[[Any], Any] | None = None) -> None:
-  """Print *value* as one JSON line on *file*, with non-ASCII characters kept as written.
+  """Print *value* as JSON on *file*, with non-ASCII characters kept as written.
 
   ``indent`` and ``default`` pass through to ``json.dumps``. Every CLI JSON print goes through
   here so the encoding is decided once: a default ``json.dumps`` writes each Chinese character

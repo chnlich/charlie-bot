@@ -146,9 +146,12 @@ section of prompts/master.md, its "Text a model reads" subsection included. Appl
 test line by line as well as entry by entry.
 A user ruling stated with exceptions encodes as the criterion the exceptions reveal, not as a flat default with carve-outs; when no criterion is recoverable, present the cases to the user instead of flattening them.
 Keep each line whose removal changes what a capable model does.
-Brevity is part of the admission bar: lead with the action and keep the mechanism the action is
-unintelligible without; session reports and run dirs hold the receipts, verification notes, and
-secondary effects. Hold a bullet to three lines or fewer, and an entry body to 12 lines or fewer.
+Brevity is part of the admission bar. Lead with the action, and keep its purpose sentence.
+Keep the mechanism that the action needs to be understood.
+Session reports and run dirs hold the receipts, verification notes, and secondary effects.
+Hold the rule text of a bullet to three lines or fewer; its purpose sentence rides outside this count.
+Hold the rule text of an entry body to 12 lines or fewer; purpose sentences ride outside this count.
+Adding a purpose sentence therefore leaves the rule text as it is.
 When an edit leaves a body over 12 lines, trim the whole entry by the same test.
 A measured figure lives in its canonical source (run dir, canon table, ticket); an entry states
 the rule and points there.

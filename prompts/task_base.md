@@ -50,6 +50,10 @@ The codebase has a single user. Apply these principles:
 - **Read matching skills first** to avoid wasting time on environment setup, tooling issues, or reinventing existing workflows.
 - **Mandatory for tasks in any domain that has a matching skill**: you MUST read that skill BEFORE writing any code, running any command, or submitting any job. This includes profiling, metrics analysis, data processing — not just training. Starting work without reading the relevant skill is forbidden.
 - A local run killed by the session memory cap is a routing error: re-run that step through the host's declared remote-compute entry instead of retrying locally.
+- **Purpose over letter**: instructions include rules, task-spec items, and checks.
+  When a case falls outside every instruction, derive the action from the purposes of related instructions.
+  When an instruction's literal action would defeat its stated purpose, report the conflict before you act.
+  A step that defeats its own purpose costs the rework that the instruction exists to prevent.
 
 <!-- section: profile_home -->
 ## Profile Home
@@ -73,5 +77,5 @@ before anything else.
 ## Text a model reads
 - **Text a model reads**: before you write text for a model, read the "Text a model reads"
   subsection of `~/workspace/charlie-bot/prompts/master.md`. This text includes prompts, skills,
-  task specs, memory entries, and `CLAUDE.md` and `AGENTS.md` files.
+  task specs, memory entries, messages to other agents, and `CLAUDE.md` and `AGENTS.md` files.
 

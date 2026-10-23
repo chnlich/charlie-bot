@@ -68,6 +68,8 @@ async def test_master_child_environment_carries_its_own_session_id(
   shim, dump = _install_env_dump_shim(tmp_path)
   cfg = core_config.CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
+      # The environment passthrough, not cgroup placement, is under test.
+      server={"session_memory_max_mb": 0},
       backends={
           "options":
               [
@@ -82,6 +84,8 @@ async def test_master_child_environment_carries_its_own_session_id(
               ]
       },
   )
+  # The spawn path reads the process config for its cgroup caps.
+  monkeypatch.setattr(core_config, "get_config", lambda: cfg)
   (cfg.sessions_dir / "live-session").mkdir(parents=True)
   # A server started from inside another session's shell hands down a stale id.
   monkeypatch.setenv(constants.SESSION_ID_ENV_VAR, "stale-session")

@@ -411,7 +411,7 @@ class ClaudeCodeBackend(base.AgentBackend):
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         start_new_session=True,
-        preexec_fn=self._spawn_preexec(),
+        preexec_fn=await self._spawn_preexec(),
     )
     try:
       stdout, stderr = await asyncio.wait_for(proc.communicate(input=prompt.encode()), timeout=timeout)

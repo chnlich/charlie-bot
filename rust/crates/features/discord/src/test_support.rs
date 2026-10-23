@@ -292,12 +292,13 @@ impl Home {
     startup.insert(RunningTurnInputs::new(|_| Vec::new())).expect("the running-turn stub inserts once");
     let features = Arc::new(FeatureContext { config, credentials, store, registry, startup: Arc::new(startup) });
     features.registry.bind_feature_context(&features).expect("the registry binds its feature context once");
+    charliebot_chat_threads::test_support::install_test_dispatcher(&features);
     features
       .startup
       .insert(Arc::new(charliebot_sched::triggers::TriggerManager::new(Arc::clone(&features))))
       .expect("the trigger manager inserts once");
-    let mut fake_discord = FakeDiscord::default();
-    fake_discord.user = json!({"id": "600000000000000001", "username": "synthetic-bot"});
+    let fake_discord =
+      FakeDiscord { user: json!({"id": "600000000000000001", "username": "synthetic-bot"}), ..FakeDiscord::default() };
     let discord = Arc::new(Mutex::new(fake_discord));
     let fake = Arc::clone(&discord);
     let api = serve(move |request| fake.lock().expect("the fake lock is never poisoned").answer(request)).await;

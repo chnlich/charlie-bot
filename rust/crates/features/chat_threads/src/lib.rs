@@ -6,6 +6,8 @@ mod api;
 pub mod backfill;
 pub mod channel_service;
 mod sidebar;
+#[cfg(feature = "test-support")]
+pub mod test_support;
 pub mod thread_entry;
 mod thread_sessions;
 mod turn_contribution;

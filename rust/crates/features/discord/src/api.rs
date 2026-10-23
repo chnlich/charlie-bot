@@ -15,6 +15,7 @@ use charliebot_compat::responses;
 use charliebot_compat::routing::post_only;
 use charliebot_compat::validation::Bound;
 use charliebot_registry::FeatureContext;
+use charliebot_registry::caller;
 use http::StatusCode;
 use serde_json::{Map, Value, json};
 
@@ -73,10 +74,37 @@ async fn post_reply(State(bot): State<Bot>, request: Request<Body>) -> Response 
   };
   let session_id = text_field(&fields, "session_id");
   let text = text_field(&fields, "text");
-  let result = async {
-    discord_listener::assert_thread_fresh(&bot, &session_id).await?;
-    discord_listener::post_reply(&bot, &session_id, &text).await
-  }
+  let identity = match caller::resolve_caller(&parts.headers, &bot.features) {
+    Ok(identity) => identity,
+    Err(response) => return response,
+  };
+  let (request_id, run_started_at) = match identity.claims() {
+    Some(claims) => {
+      let run = match bot.features.store.read_run_sync(&claims.session_id, &claims.run_id) {
+        Ok(Some(run)) => run,
+        Ok(None) => return responses::internal_error("RuntimeError", "verified caller run disappeared".to_string()),
+        Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
+      };
+      let started_at = run.started_at.expect("a verified run has a start timestamp").to_python_isoformat();
+      (
+        Some(charliebot_store::control_events::derived_agent_send_request_id(
+          &claims.run_id,
+          "discord reply",
+          &session_id,
+          &text,
+        )),
+        Some(started_at),
+      )
+    }
+    None => (None, None),
+  };
+  let result = discord_listener::post_reply_with_caller_context(
+    &bot,
+    &session_id,
+    &text,
+    request_id.as_deref(),
+    run_started_at.as_deref(),
+  )
   .await;
   answer(result)
 }

@@ -36,6 +36,11 @@ fn stable_id(name: &str) -> String {
   Uuid::new_v5(&task_id_namespace(), name.as_bytes()).to_string()
 }
 
+/// A fresh request id for a delivery that has no caller-supplied retry identity.
+pub fn new_request_id() -> String {
+  Uuid::new_v4().to_string()
+}
+
 /// The task id for one `(parent, request_id)` pair.
 pub fn stable_task_id(task_parent_id: Option<&str>, request_id: &str) -> String {
   stable_id(&format!("task:{}:{request_id}", task_parent_id.unwrap_or("root")))

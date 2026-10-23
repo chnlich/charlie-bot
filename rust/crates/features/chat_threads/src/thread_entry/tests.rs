@@ -281,7 +281,8 @@ fn router_command(directory: &TempDir, body: &str, arguments: &[&str]) -> Vec<St
 /// The fakechat adapter over an in-memory thread: posts and acks record, and `read_eligible` returns `thread`.
 #[derive(Default)]
 struct FakeAdapter {
-  posts: Mutex<Vec<(Value, String)>>,
+  posts: Mutex<Vec<(Value, String, String)>>,
+  post_keys: Mutex<HashSet<String>>,
   post_delay: Duration,
   acks: Mutex<Vec<Value>>,
   removed: Mutex<Vec<Value>>,
@@ -294,11 +295,19 @@ impl FakeAdapter {
   }
 
   fn with_thread_and_delay(messages: &[(&str, &str)], post_delay: Duration) -> Arc<Self> {
-    let mut adapter = Self::default();
-    adapter.post_delay = post_delay;
+    let adapter = Self { post_delay, ..Self::default() };
     *adapter.thread.lock().expect("the thread lock is never poisoned") = messages
       .iter()
-      .map(|(id, text)| ThreadMessage { id: id.to_string(), user: Some("u".to_string()), text: text.to_string() })
+      .map(|(id, text)| ThreadMessage {
+        id: id.to_string(),
+        user: Some("u".to_string()),
+        text: text.to_string(),
+        created_at: None,
+        metadata: None,
+        bot_id: None,
+        is_bot: false,
+        eligible: true,
+      })
       .collect();
     Arc::new(adapter)
   }
@@ -309,13 +318,29 @@ impl ThreadAdapter for FakeAdapter {
     &FAKECHAT
   }
 
-  fn post<'a>(&'a self, address: &'a Value, text: &'a str) -> BoxFuture<'a, anyhow::Result<()>> {
+  fn post<'a>(&'a self, address: &'a Value, text: &'a str, post_key: &'a str) -> BoxFuture<'a, anyhow::Result<()>> {
     let post_delay = self.post_delay;
     Box::pin(async move {
       tokio::time::sleep(post_delay).await;
-      self.posts.lock().expect("the post log is never poisoned").push((address.clone(), text.to_string()));
+      self.posts.lock().expect("the post log is never poisoned").push((
+        address.clone(),
+        text.to_string(),
+        post_key.to_string(),
+      ));
+      self.post_keys.lock().expect("the post-key log is never poisoned").insert(post_key.to_string());
       Ok(())
     })
+  }
+
+  fn find_own_post_by_key<'a>(
+    &'a self,
+    _address: &'a Value,
+    post_key: &'a str,
+    _text: &'a str,
+    _created_after: &'a str,
+    _messages: Option<&'a [ThreadMessage]>,
+  ) -> BoxFuture<'a, anyhow::Result<bool>> {
+    Box::pin(async move { Ok(self.post_keys.lock().expect("the post-key log is never poisoned").contains(post_key)) })
   }
 
   fn add_ack<'a>(&'a self, block: &'a Value) -> BoxFuture<'a, anyhow::Result<()>> {
@@ -332,7 +357,7 @@ impl ThreadAdapter for FakeAdapter {
     })
   }
 
-  fn read_eligible<'a>(
+  fn read_thread<'a>(
     &'a self,
     _origin: &'a Value,
     _config: &'a CharlieBotConfig,
@@ -681,7 +706,8 @@ async fn audit_leaves_a_marker_contract_summon_alone() {
 async fn round_completion_and_boot_audit_emit_one_nudge_then_notice() {
   let home = Home::new();
   home.thread_session("audit-retry", origin()).await;
-  let backend_pool = home.features.startup.require::<backend_pool::BackendPool>().expect("the backend pool is in startup");
+  let backend_pool =
+    home.features.startup.require::<backend_pool::BackendPool>().expect("the backend pool is in startup");
   home
     .features
     .startup
@@ -700,10 +726,7 @@ async fn round_completion_and_boot_audit_emit_one_nudge_then_notice() {
     )
     .await;
   let summon_done = home
-    .append(
-      "audit-retry",
-      json!({"type": event_types::MASTER_DONE, "input_event_id": summon["id"], "exit_code": 0}),
-    )
+    .append("audit-retry", json!({"type": event_types::MASTER_DONE, "input_event_id": summon["id"], "exit_code": 0}))
     .await;
 
   assert!(deliver_done(&dyn_adapter, &home.features, "audit-retry", &summon_done).await.unwrap());
@@ -714,10 +737,7 @@ async fn round_completion_and_boot_audit_emit_one_nudge_then_notice() {
     .find(|event| event.get("fakechat").and_then(|block| block.get("nudge_of")).is_some())
     .expect("the silent summon creates a nudge");
   let nudge_done = home
-    .append(
-      "audit-retry",
-      json!({"type": event_types::MASTER_DONE, "input_event_id": nudge["id"], "exit_code": 0}),
-    )
+    .append("audit-retry", json!({"type": event_types::MASTER_DONE, "input_event_id": nudge["id"], "exit_code": 0}))
     .await;
 
   let (delivered, backfilled) = tokio::join!(
@@ -728,10 +748,8 @@ async fn round_completion_and_boot_audit_emit_one_nudge_then_notice() {
   backfilled.unwrap();
 
   let events = home.events("audit-retry");
-  let nudges: Vec<_> = events
-    .iter()
-    .filter(|event| event.get("fakechat").and_then(|block| block.get("nudge_of")).is_some())
-    .collect();
+  let nudges: Vec<_> =
+    events.iter().filter(|event| event.get("fakechat").and_then(|block| block.get("nudge_of")).is_some()).collect();
   let notices: Vec<_> = events
     .iter()
     .filter(|event| event.get("fakechat_notice").and_then(|notice| notice.get(event_types::INPUT_EVENT_ID)).is_some())

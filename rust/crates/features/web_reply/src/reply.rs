@@ -375,11 +375,23 @@ fn markdown_link_at(chars: &[char], at: usize) -> Option<(&[char], usize)> {
 /// nothing when the running turn has neither. The language check holds the text unless `keep_language`, the agent's
 /// reason for posting it as written, is given; the reason is then recorded on the reply. A refusal records nothing and
 /// marks nothing.
+#[cfg(test)]
 pub async fn post_web_reply(
   features: &FeatureContext,
   session_id: &str,
   text: &str,
   keep_language: Option<&str>,
+) -> Result<Value, WebReplyError> {
+  post_web_reply_with_request_id(features, session_id, text, keep_language, None).await
+}
+
+/// Record a web reply for one caller request, replaying the original event when the run retries it.
+pub async fn post_web_reply_with_request_id(
+  features: &FeatureContext,
+  session_id: &str,
+  text: &str,
+  keep_language: Option<&str>,
+  request_id: Option<&str>,
 ) -> Result<Value, WebReplyError> {
   require_web_session(features, session_id).await?;
   if pystr::strip(text).is_empty() {
@@ -390,44 +402,60 @@ pub async fn post_web_reply(
     return Err(WebReplyError::refused(StatusCode::UNPROCESSABLE_ENTITY, "Keep-language reason is empty"));
   }
   let chars = visible_reply_chars(text);
-  let running = features.startup.require::<RunningTurnInputs>()?.user_event_ids(session_id);
-  // With the language guard skipped and no running inputs, Python's `answered_input` must return `None`
-  // (`src/features/web_reply/reply.py:97-108`), so a cold event log need not be parsed for this reply.
-  let loaded =
-    if keep_language.is_none() || !running.is_empty() { Some(load_events(features, session_id).await?) } else { None };
-  if keep_language.is_none()
-    && language_check_holds(
-      newest_user_text_shared(loaded.as_deref().expect("the language check loads chat events")),
-      text,
-    )
-  {
-    tracing::info!(session = %session_id, chars, "web_reply_held");
-    return Err(WebReplyError::refused(StatusCode::CONFLICT, LANGUAGE_HOLD_DETAIL));
-  }
-  let answers =
-    loaded.as_deref().and_then(|events| answered_input(events, &running)).map(|(_, user_event_id)| user_event_id);
-  // Release the shared snapshot before append; Python appends into the cached list (`chat_events.py:221-224`).
-  // Keeping this Arc alive would make Store::append_chat_event deep-clone the entire event vector through Arc::make_mut.
-  drop(loaded);
-  let mut web_reply = json!({"answers": answers, "chars": chars});
-  if let Some(reason) = keep_language {
-    web_reply["keep_language"] = json!(reason);
-  }
-  features
-    .store
-    .persist_and_broadcast(
-      session_id,
-      json!({
-        "type": WEB_REPLY,
-        "content": text,
-        WEB_REPLY: web_reply,
-      }),
-    )
-    .await?;
+  let epoch = features.store.prime_aggregator(session_id).await?;
+  let event = {
+    let guard = features.store.control_lock().await;
+    let events = features.store.load_all_facts_shared_sync(session_id)?;
+    if let Some(request_id) = request_id {
+      let event_id = charliebot_store::control_events::stable_request_event_id(session_id, request_id);
+      if let Some(existing) = charliebot_store::control_events::replay_request_event(
+        events.iter().map(SharedChatEvent::as_ref),
+        &event_id,
+        request_id,
+        WEB_REPLY,
+        text,
+        None,
+      )? {
+        return Ok(web_reply_receipt(&existing));
+      }
+    }
+    let running = features.startup.require::<RunningTurnInputs>()?.user_event_ids(session_id);
+    if keep_language.is_none() && language_check_holds(newest_user_text_shared(&events), text) {
+      tracing::info!(session = %session_id, chars, "web_reply_held");
+      return Err(WebReplyError::refused(StatusCode::CONFLICT, LANGUAGE_HOLD_DETAIL));
+    }
+    let answers = answered_input(&events, &running).map(|(_, user_event_id)| user_event_id);
+    let mut web_reply = json!({"answers": answers, "chars": chars});
+    if let Some(reason) = keep_language {
+      web_reply["keep_language"] = json!(reason);
+    }
+    let mut event = json!({"type": WEB_REPLY, "content": text, WEB_REPLY: web_reply});
+    if let Some(request_id) = request_id {
+      event["id"] = json!(charliebot_store::control_events::stable_request_event_id(session_id, request_id));
+      event["request_id"] = json!(request_id);
+    }
+    // Release the shared snapshot before append; Python appends into the cached list (`chat_events.py:221-224`).
+    // Keeping this Arc alive would make Store::append_chat_event deep-clone the entire event vector through Arc::make_mut.
+    drop(events);
+    features.store.append_control_fact(&guard, session_id, event).await?
+  };
+  features.store.announce_appended_event(session_id, &event, epoch).await?;
   features.store.mark_unread(session_id).await?;
   let over_budget = chars > REPLY_BUDGET_CHARS;
+  let answers = event[WEB_REPLY]["answers"].clone();
   tracing::info!(session = %session_id, chars, over_budget, answers = ?answers, "web_reply_posted");
   Ok(json!({"posted": true, "chars": chars, "over_budget": over_budget, "answers": answers}))
+}
+
+fn web_reply_receipt(event: &Value) -> Value {
+  let reply = event.get(WEB_REPLY).expect("a stored web reply contains its payload");
+  let chars = reply.get("chars").and_then(Value::as_u64).expect("a stored web reply contains its character count");
+  json!({
+    "posted": true,
+    "chars": chars,
+    "over_budget": chars as usize > REPLY_BUDGET_CHARS,
+    "answers": reply["answers"],
+  })
 }
 
 /// The For-you layer: the user's messages, the replies and the notices, in log order, as `{role, content}` rows

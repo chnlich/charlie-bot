@@ -1604,12 +1604,12 @@ mod tests {
     install_dispatcher(&features);
     let router = routes(&features);
     let path = "/api/chat/synthetic-session/message";
-    let valid = r#"{"content":"synthetic message","uploaded_files":[{"filename":"sample.txt","path":"/tmp/sample.txt","size":2}],"input_mode":"chat"}"#;
+    let valid = r#"{"content":"synthetic message","request_id":"synthetic-send-1","uploaded_files":[{"filename":"sample.txt","path":"/tmp/sample.txt","size":2}],"input_mode":"chat"}"#;
     let response = send_operator(&router, path, valid.as_bytes().to_vec(), Some("application/json")).await;
     assert_accepted(response).await;
 
     // Python: src/infra/models.py:635 defaults uploaded_files to an empty list when the key is absent.
-    let utf16 = utf16le_json(r#"{"content":"synthetic UTF-16 message"}"#);
+    let utf16 = utf16le_json(r#"{"content":"synthetic UTF-16 message","request_id":"synthetic-send-2"}"#);
     let response = send_operator(&router, path, utf16, Some("application/json")).await;
     assert_accepted(response).await;
 
@@ -1617,14 +1617,14 @@ mod tests {
     let response = send_operator(
       &router,
       path,
-      br#"{"content":"extra fields are ignored","unknown":"value"}"#.to_vec(),
+      br#"{"content":"extra fields are ignored","request_id":"synthetic-send-3","unknown":"value"}"#.to_vec(),
       Some("application/json"),
     )
     .await;
     assert_accepted(response).await;
 
     // Python: src/infra/models.py:635 accepts two files, and UploadedFileRef ignores an item's extra keys.
-    let two_files = r#"{"content":"synthetic message","uploaded_files":[{"filename":"first.txt","path":"/tmp/first.txt","size":2},{"filename":"second.txt","path":"/tmp/second.txt","unknown":1}]}"#;
+    let two_files = r#"{"content":"synthetic message","request_id":"synthetic-send-4","uploaded_files":[{"filename":"first.txt","path":"/tmp/first.txt","size":2},{"filename":"second.txt","path":"/tmp/second.txt","unknown":1}]}"#;
     let response = send_operator(&router, path, two_files.as_bytes().to_vec(), Some("application/json")).await;
     assert_accepted(response).await;
   }
@@ -1640,7 +1640,7 @@ mod tests {
     let response = send_operator(
       &router,
       path,
-      br#"{"content":1,"uploaded_files":[{"filename":1,"path":"x"}]}"#.to_vec(),
+      br#"{"content":1,"request_id":"invalid-uploaded-file","uploaded_files":[{"filename":1,"path":"x"}]}"#.to_vec(),
       Some("application/json"),
     )
     .await;
@@ -1655,8 +1655,13 @@ mod tests {
     // Python: a non-list uploaded_files reports list_type at the field
     // (pydantic's list check runs before the items).
     assert_validation(
-      send_operator(&router, path, br#"{"content":"x","uploaded_files":"wrong"}"#.to_vec(), Some("application/json"))
-        .await,
+      send_operator(
+        &router,
+        path,
+        br#"{"content":"x","request_id":"invalid-upload-list","uploaded_files":"wrong"}"#.to_vec(),
+        Some("application/json"),
+      )
+      .await,
       "list_type",
       json!(["body", "uploaded_files"]),
     )
@@ -1665,8 +1670,13 @@ mod tests {
     // Python: a non-object item reports model_attributes_type at its index, with no trailing field
     // (FastAPI validates each list item as the model).
     assert_validation(
-      send_operator(&router, path, br#"{"content":"x","uploaded_files":[42]}"#.to_vec(), Some("application/json"))
-        .await,
+      send_operator(
+        &router,
+        path,
+        br#"{"content":"x","request_id":"invalid-upload-item","uploaded_files":[42]}"#.to_vec(),
+        Some("application/json"),
+      )
+      .await,
       "model_attributes_type",
       json!(["body", "uploaded_files", 0]),
     )
@@ -1677,7 +1687,7 @@ mod tests {
       send_operator(
         &router,
         path,
-        br#"{"content":"x","uploaded_files":[{"filename":"x"}]}"#.to_vec(),
+        br#"{"content":"x","request_id":"invalid-upload-path","uploaded_files":[{"filename":"x"}]}"#.to_vec(),
         Some("application/json"),
       )
       .await,

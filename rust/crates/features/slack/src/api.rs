@@ -12,6 +12,7 @@ use charliebot_compat::fastapi_body::{self, BodyModel, Field, FieldType};
 use charliebot_compat::responses;
 use charliebot_compat::routing::post_only;
 use charliebot_registry::FeatureContext;
+use charliebot_registry::caller;
 use http::StatusCode;
 use serde_json::{Map, Value, json};
 
@@ -49,8 +50,40 @@ async fn reply(State(features): State<Arc<FeatureContext>>, request: Request<Bod
   };
   let session_id = take_text(&mut fields, "session_id");
   let text = take_text(&mut fields, "text");
+  let identity = match caller::resolve_caller(&parts.headers, &features) {
+    Ok(identity) => identity,
+    Err(response) => return response,
+  };
+  let (request_id, run_started_at) = match identity.claims() {
+    Some(claims) => {
+      let run = match features.store.read_run_sync(&claims.session_id, &claims.run_id) {
+        Ok(Some(run)) => run,
+        Ok(None) => return responses::internal_error("RuntimeError", "verified caller run disappeared".to_string()),
+        Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
+      };
+      let started_at = run.started_at.expect("a verified run has a start timestamp").to_python_isoformat();
+      (
+        Some(charliebot_store::control_events::derived_agent_send_request_id(
+          &claims.run_id,
+          "slack reply",
+          &session_id,
+          &text,
+        )),
+        Some(started_at),
+      )
+    }
+    None => (None, None),
+  };
   let adapter: Arc<dyn ThreadAdapter> = Arc::new(slack_listener::SlackThreadAdapter::lazy(Arc::clone(&features)));
-  let result = execute_reply(&features, &adapter, &session_id, &text).await;
+  let result = execute_reply_with_caller_context(
+    &features,
+    &adapter,
+    &session_id,
+    &text,
+    request_id.as_deref(),
+    run_started_at.as_deref(),
+  )
+  .await;
   answer(result)
 }
 
@@ -77,14 +110,25 @@ async fn ack(State(features): State<Arc<FeatureContext>>, request: Request<Body>
   answer(execute_ack(&features, &adapter, &session_id, &message_ids).await)
 }
 
+#[cfg(test)]
 async fn execute_reply(
   features: &Arc<FeatureContext>,
   adapter: &Arc<dyn ThreadAdapter>,
   session_id: &str,
   text: &str,
 ) -> Result<Value, ThreadReplyError> {
-  thread_entry::assert_thread_fresh(adapter, features, session_id).await?;
-  thread_entry::post_reply(adapter, features, session_id, text).await
+  execute_reply_with_caller_context(features, adapter, session_id, text, None, None).await
+}
+
+async fn execute_reply_with_caller_context(
+  features: &Arc<FeatureContext>,
+  adapter: &Arc<dyn ThreadAdapter>,
+  session_id: &str,
+  text: &str,
+  request_id: Option<&str>,
+  run_started_at: Option<&str>,
+) -> Result<Value, ThreadReplyError> {
+  thread_entry::post_reply_with_caller_context(adapter, features, session_id, text, request_id, run_started_at).await
 }
 
 async fn execute_ack(
@@ -234,6 +278,16 @@ mod tests {
     assert_eq!(acked, json!({"acked": 2, "watermark_ts": "1700000000.000130"}));
     let reply = execute_reply(features, &adapter, &session.id, "the answer").await.unwrap();
     assert_eq!(reply["posted"], true);
-    assert_eq!(api.posts(), [json!({"channel": "C_TEST", "text": "the answer", "thread_ts": "1700000000.000100"})]);
+    let posts = api.posts();
+    assert_eq!(posts.len(), 1);
+    assert_eq!(posts[0]["channel"], "C_TEST");
+    assert_eq!(posts[0]["text"], "the answer");
+    assert_eq!(posts[0]["thread_ts"], "1700000000.000100");
+    assert_eq!(posts[0]["metadata"]["event_type"], "charliebot_post");
+    assert!(
+      posts[0]["metadata"]["event_payload"]["key"]
+        .as_str()
+        .is_some_and(|key| key.starts_with("operator-reply:") && key.ends_with("#1"))
+    );
   }
 }

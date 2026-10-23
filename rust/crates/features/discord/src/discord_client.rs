@@ -339,9 +339,16 @@ impl DiscordClient {
     &self,
     channel_id: &str,
     content: &str,
-    _post_key: &str,
+    post_key: &str,
   ) -> anyhow::Result<Value> {
-    self.create_message(channel_id, content).await
+    let nonce = &charliebot_store::control_events::sha256_hex(post_key)[..25];
+    let body = json!({
+      "content": content,
+      "allowed_mentions": {"parse": []},
+      "nonce": nonce,
+      "enforce_nonce": true,
+    });
+    self.request_body(Method::POST, &format!("/channels/{channel_id}/messages"), Some(body), &[]).await
   }
 
   /// PUT the bot's own reaction, the emoji URL-encoded, onto one message.

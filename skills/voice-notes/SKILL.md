@@ -35,7 +35,11 @@ Purpose: a guessed transcript answers words the user never said.
 
 ## Slack specifics
 
-Fetch the hosted file through `url_private_download` with the app bearer.
-The online transcription finishes without waiting on Slack's `files.info`
-transcription, which lags by minutes. Voice content is PII: redact before
-quoting outside the thread.
+When Slack hosts the file, fetch it through `url_private_download` with the app bearer.
+Purpose: the script needs the audio file to transcribe it.
+
+Use the online transcription result.
+Purpose: Slack's `files.info` transcript can take minutes.
+
+Before you quote voice content outside the thread, redact it.
+Purpose: voice content is PII.

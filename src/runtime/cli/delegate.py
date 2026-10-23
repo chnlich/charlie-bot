@@ -17,7 +17,6 @@ works from its Run directory on the host paths the task spec names:
 """
 
 import argparse
-import json
 import sys
 
 from src.infra import help_formatter
@@ -195,7 +194,7 @@ def main() -> None:
 
   result = common.post_internal_api("/api/internal/delegate", payload, readback=_readback)
   print("Worker spawned in the background; the completion summary arrives as an async wake-up.", file=sys.stderr)
-  print(json.dumps(result, indent=2))
+  common.print_json(result, indent=2, file=sys.stdout)
 
 
 if __name__ == "__main__":

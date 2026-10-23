@@ -40,7 +40,6 @@ the reply-format contract is prompts/thread_reply_format.md.
 """
 
 import argparse
-import json
 import sys
 
 from src.infra import help_formatter
@@ -92,7 +91,7 @@ def _cmd_reply(args: argparse.Namespace) -> None:
   session_id = common.resolve_session_id(args.session)
   text = common.read_reply_text(args.file)
   result = common.post_internal_api("/api/internal/discord/reply", {"session_id": session_id, "text": text})
-  print(json.dumps(result))
+  common.print_json(result, indent=None, file=sys.stdout)
 
 
 def _cmd_read(args: argparse.Namespace) -> None:
@@ -104,12 +103,12 @@ def _cmd_read(args: argparse.Namespace) -> None:
           "url": args.url,
           "limit": limit
       })
-  print(json.dumps(result))
+  common.print_json(result, indent=None, file=sys.stdout)
 
 
 def _cmd_check() -> None:
   result = common.post_internal_api("/api/internal/discord/check", {})
-  print(json.dumps(result))
+  common.print_json(result, indent=None, file=sys.stdout)
   if not result.get("ok"):
     sys.exit(1)
 

@@ -447,3 +447,27 @@ Each of the 19 commits in `git rev-list --no-merges f58a345a6..24642edf5 -- src 
 | 257e1ca1e | fail over temporary backend errors | unported | Python `src/runtime/backend_pool.py:61-78` lists the temporary-unavailable patterns, and `src/runtime/worker.py:520-523` raises `QuotaExhaustedError` on a match, so the pool cools the member and fails over. Rust `rust/crates/charliebot-agents/src/backend_pool.rs:28-53` has the quota patterns only, and its member cooldown is at `:245`. No parity step sends a temporary provider error. Fix: add the temporary patterns and the worker error branch in `backend_pool.rs`. |
 | a86a910a7 | honor optional model context limits | in Rust | Rust accepts `context_limit` (`rust/crates/charliebot-agents/src/backends/opencode/options.rs:20,37`) and builds the `providers` block in `model_context_config` (`options.rs:57`). The one-shot config adds the block of its own option (`backend.rs:202,875-876`). The shared server adds the block of every recorded option when it starts (`server.rs:154,183,410`). Python: `src/backends/opencode/options.py:14,17-34`, `opencode.py:540-548`, `server.py:83`. Tests: `context_limit_reaches_the_one_shot_and_the_shared_server_configs`, `conflicting_context_limits_fail_the_shared_server_start_naming_both_options`, `headless_providers_merge_equal_limits_and_keep_distinct_models` (`test_backend.rs`). `tools/check_opencode_context_limit.py` is Python and has no Rust port. |
 | 24642edf5 | defer config import in server | no behavior | Moves the `config` import from module level into `headless_config` (`src/backends/opencode/server.py:60-64`). Import timing only; the context-limit output this function now adds is the gap of a86a910a7. |
+
+## Catch-up 3c4591bad open steps
+
+| Scenario | Step | Stage | Main commit | Difference |
+| --- | --- | --- | --- | --- |
+
+## Catch-up 3c4591bad ignored Cargo tests
+
+| Row | Test | Binary | Main commit | Difference |
+| --- | --- | --- | --- | --- |
+
+## Catch-up 3c4591bad unported commits
+
+Each of the 7 commits in `git rev-list --no-merges 24642edf5..3c4591bad -- src server.py web` has one class.
+
+| Main commit | Change | Class | Note |
+| --- | --- | --- | --- |
+| b980e34aa | keep the opencode config import at module top | no behavior | Moves the `config` import to module scope in `src/backends/opencode/server.py`; this changes import timing only and no request or CLI output. |
+| c9cc1aef3 | scale snapshot usage to the context window | unported | Python `src/runtime/session_usage.py:301-330` uses `context` as the full scale and derives the compaction line from the registered reserve. Rust `rust/crates/charliebot-usage/src/usage.rs:364-380` still reports `context - output` with no compaction line for this branch. No parity step supplies a context snapshot with this limit shape. |
+| 44ecfaed1 | strip gateway env from every cc-claude launch | unported | Python `src/backends/claude_code/claude_code.py:142-153,326-330,341-363` removes inherited cc-anthropic-compatible endpoint and model variables from regular and one-shot Claude launches. Rust `rust/crates/charliebot-agents/src/backends/claude_code/claude_code.rs:243-253` passes the inherited environment through. No parity step inherits gateway values into a cc-claude launch. |
+| 349aa4d92 | test inherited gateway values during env preparation | no behavior | Refactors the same endpoint and model variable names into one tuple in `src/backends/claude_code/claude_code.py:115-130` and adjusts tests; the env values are unchanged by this refactor. The stripping behavior is the separate 44ecfaed1 change. |
+| 2d25e4abb | fail over on temporary Claude result errors | unported | Python `src/runtime/backend_pool.py:61-90` classifies temporary result errors, and `src/runtime/worker.py:523-527` raises the pool failover error. Rust `rust/crates/charliebot-agents/src/backend_pool.rs:27-53,286-290` handles quota patterns but does not classify a final Claude `result` event. No parity step sends a temporary result error. |
+| 064b502ca | route configured Anthropic-compatible request headers | unported | Python `src/backends/anthropic_compatible/options.py:17`, `factory.py:23` and `src/backends/claude_code/claude_code.py:404-412` accept `headers` and set `ANTHROPIC_CUSTOM_HEADERS`. Rust `rust/crates/charliebot-agents/src/backends/anthropic_compatible/options.rs:5-27` rejects that field, and its factory does not pass headers. No parity step configures custom headers. |
+| c7fb09d10 | spawn master wakes through one logged-task helper | no behavior | Replaces the repeated `tasks.create_logged_task(trigger_master(...), name=...)` calls in `src/features/chat_threads/thread_entry.py` and `src/features/web_reply/audit.py` with `master_trigger.spawn_master_turn`, which calls the same helper with the same arguments and task name. |

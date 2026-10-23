@@ -364,20 +364,18 @@ fn resolve_snapshot(fold: &UsageFold, registry: &Registry, cost: Option<f64>, ru
   let (context_full, compact_at) = match snapshot.get("limit").and_then(Value::as_object) {
     Some(limit) => {
       let input = limit.get("input").and_then(python_integer);
-      let output =
-        limit.get("output").and_then(python_integer).or_else(|| (!limit.contains_key("output")).then_some(0));
+      let output = limit.get("output").and_then(python_integer);
+      // Python's `limit.get("output", 0)`: only a missing key defaults to zero.
+      let output_for_input = output.or_else(|| (!limit.contains_key("output")).then_some(0));
       let context = limit.get("context").and_then(python_integer);
-      match (input, output, context) {
-        (Some(input), Some(output), _) => {
-          // The backend option selects only the claude limits, as in Python's `_snapshot_full_and_compact`.
-          let reserve =
-            registry.reading_limits_for(READING_SNAPSHOT, run_kind, None).and_then(|limits| limits.compact_reserve);
-          let compact_at =
-            reserve.map(|reserve| input - i64::try_from(reserve).expect("compact reserve fits i64").min(output));
-          (Some(input), compact_at)
-        }
-        (_, Some(output), Some(context)) => (Some(context - output), None),
-        _ => (None, None),
+      if let (Some(input), Some(output)) = (input, output_for_input) {
+        (Some(input), snapshot_compact_at(input, output, registry, run_kind))
+      } else if let (Some(context), Some(output)) = (context, output)
+        && limit.contains_key("output")
+      {
+        (Some(context), snapshot_compact_at(context, output, registry, run_kind))
+      } else {
+        (None, None)
       }
     }
     None => (None, None),
@@ -408,6 +406,13 @@ fn resolve_reading(fold: &UsageFold, cost: Option<f64>) -> Value {
 fn subtract_reserve(full: Option<i64>, limits: ContextLimits) -> Option<i64> {
   let reserve = i64::try_from(limits.compact_reserve?).ok()?;
   Some(full? - reserve)
+}
+
+/// The compaction line of a snapshot reading: `full` minus the registered reserve, bounded by the output cap.
+fn snapshot_compact_at(full: i64, output: i64, registry: &Registry, run_kind: RunKind) -> Option<i64> {
+  // The backend option selects only the claude limits, as in Python's `_snapshot_full_and_compact`.
+  let reserve = registry.reading_limits_for(READING_SNAPSHOT, run_kind, None).and_then(|limits| limits.compact_reserve);
+  reserve.map(|reserve| full - i64::try_from(reserve).expect("compact reserve fits i64").min(output))
 }
 
 fn usage_value(

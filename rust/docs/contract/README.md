@@ -6,7 +6,7 @@ The contract does not cover persisted file formats, the config schema, backgroun
 
 ## Baseline
 
-- Commit: `f58a345a6fd1ccc48110c34d9fe881793b539df0` on `rust-backend`.
+- Commit: `24642edf56c40708d8e81ed276e0a13da64c2bb0` on `rust-backend`.
 - Stack: FastAPI 0.135.2, Starlette 1.0.0, uvicorn 0.42.0, pydantic 2.12.5, Jinja2 3.1.6.
 
 A statement that holds at a later commit is valid only after someone checks it again.

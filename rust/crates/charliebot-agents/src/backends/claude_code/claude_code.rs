@@ -267,7 +267,10 @@ impl ClaudeCodeBackend {
       &command[0],
       command[1..].iter().map(OsString::from).collect(),
       None,
-      base_env.iter().map(|(name, value)| (OsString::from(name), OsString::from(value))).collect::<HashMap<_, _>>(),
+      one_shot_env(base_env)
+        .iter()
+        .map(|(name, value)| (OsString::from(name), OsString::from(value)))
+        .collect::<HashMap<_, _>>(),
       self.cgroup_session_id.clone(),
       system_cgroup_base_dir(),
       self.cgroup_limits.memory_max_mb,
@@ -347,19 +350,50 @@ impl AgentBackend for ClaudeCodeBackend {
   }
 }
 
+/// One home for every gateway endpoint and model variable. Endpoint backends write the first two names and may
+/// write the third; `claude_model_env` pins the final five.
+pub const GATEWAY_ENDPOINT_ENV_NAMES: [&str; 8] = [
+  "ANTHROPIC_BASE_URL",
+  "ANTHROPIC_AUTH_TOKEN",
+  "ANTHROPIC_CUSTOM_HEADERS",
+  "ANTHROPIC_MODEL",
+  "ANTHROPIC_DEFAULT_OPUS_MODEL",
+  "ANTHROPIC_DEFAULT_SONNET_MODEL",
+  "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+  "CLAUDE_CODE_SUBAGENT_MODEL",
+];
+pub const GATEWAY_BASE_URL_ENV: &str = GATEWAY_ENDPOINT_ENV_NAMES[0];
+pub const GATEWAY_AUTH_TOKEN_ENV: &str = GATEWAY_ENDPOINT_ENV_NAMES[1];
+pub const GATEWAY_CUSTOM_HEADERS_ENV: &str = GATEWAY_ENDPOINT_ENV_NAMES[2];
+pub const CLAUDE_MODEL_ENV_NAMES: [&str; 5] = [
+  GATEWAY_ENDPOINT_ENV_NAMES[3],
+  GATEWAY_ENDPOINT_ENV_NAMES[4],
+  GATEWAY_ENDPOINT_ENV_NAMES[5],
+  GATEWAY_ENDPOINT_ENV_NAMES[6],
+  GATEWAY_ENDPOINT_ENV_NAMES[7],
+];
+
 /// Every Claude Code model-selection variable pinned to one model: the main model, the opus, sonnet and haiku slot
 /// defaults, and the subagent model. An unset slot falls back to a CLI default, so the endpoint backend sets all five.
 pub fn claude_model_env(model: &str) -> Env {
-  [
-    "ANTHROPIC_MODEL",
-    "ANTHROPIC_DEFAULT_OPUS_MODEL",
-    "ANTHROPIC_DEFAULT_SONNET_MODEL",
-    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
-    "CLAUDE_CODE_SUBAGENT_MODEL",
-  ]
-  .into_iter()
-  .map(|name| (name.to_string(), model.to_string()))
-  .collect()
+  CLAUDE_MODEL_ENV_NAMES
+    .iter()
+    .map(|name| (name.to_string(), model.to_string()))
+    .collect()
+}
+
+/// A copy of `env` without the cc-anthropic-compatible gateway variables.
+pub fn without_gateway_env(env: &Env) -> Env {
+  env
+    .iter()
+    .filter(|(name, _)| !GATEWAY_ENDPOINT_ENV_NAMES.contains(&name.as_str()))
+    .map(|(name, value)| (name.clone(), value.clone()))
+    .collect()
+}
+
+/// The environment a one-shot `claude` spawn runs in.
+fn one_shot_env(base_env: &Env) -> Env {
+  base_env.clone()
 }
 
 /// Claude Code pointed at an Anthropic-compatible endpoint by environment. The endpoint URL and bearer token ride
@@ -677,6 +711,98 @@ mod tests {
     assert!(!env.contains_key("CLAUDE_CODE_OAUTH_TOKEN"));
     assert_eq!(env["CLAUDE_CODE_THINKING_DISPLAY_UPDATES"], "0");
     assert_eq!(env["PATH"], "/synthetic/bin");
+  }
+
+  // Python: tests/test_claude_code_backend.py::test_prepare_env_strips_an_inherited_cc_anthropic_compatible_worker_env
+  #[test]
+  fn prepare_env_strips_an_inherited_cc_anthropic_compatible_worker_env() {
+    let backend = ClaudeCodeBackend::from_launch(
+      Some("claude-opus-4-8".to_string()),
+      None,
+      None,
+      false,
+      None,
+      LaunchArgs::default(),
+      SessionCgroupLimits { memory_max_mb: 0, swap_max_mb: 0, tasks_max: 0 },
+    )
+    .unwrap();
+    let mut inherited = Env::new();
+    for name in GATEWAY_ENDPOINT_ENV_NAMES {
+      inherited.insert(name.to_string(), "inherited-gateway-value".to_string());
+    }
+    inherited.insert("PATH".to_string(), "/usr/bin".to_string());
+    inherited.insert("UNRELATED".to_string(), "kept".to_string());
+
+    let env = AgentBackend::prepare_env(&backend, inherited).unwrap();
+
+    for name in GATEWAY_ENDPOINT_ENV_NAMES {
+      assert!(!env.contains_key(name), "{name} survived the preparation");
+    }
+    assert_eq!(env["PATH"], "/usr/bin");
+    assert_eq!(env["UNRELATED"], "kept");
+  }
+
+  // Python: tests/test_claude_code_backend.py::test_one_shot_text_spawns_claude_without_the_gateway_variables
+  #[test]
+  fn one_shot_env_drops_the_gateway_variables_and_keeps_the_rest() {
+    let mut base_env = Env::new();
+    for name in GATEWAY_ENDPOINT_ENV_NAMES {
+      base_env.insert(name.to_string(), "inherited-gateway-value".to_string());
+    }
+    base_env.insert("UNRELATED_INHERITED_VAR".to_string(), "kept".to_string());
+
+    let env = one_shot_env(&base_env);
+
+    for name in GATEWAY_ENDPOINT_ENV_NAMES {
+      assert!(!env.contains_key(name), "{name} reached the one-shot spawn");
+    }
+    assert_eq!(env["UNRELATED_INHERITED_VAR"], "kept");
+  }
+
+  // Python: tests/test_anthropic_compatible_backend.py::test_endpoint_env_overrides_every_inherited_gateway_variable
+  #[test]
+  fn endpoint_env_overrides_every_inherited_gateway_variable() {
+    let backend = AnthropicEndpointBackend::new(
+      "http://localhost:8123/api/anthropic-proxy".to_string(),
+      "no-auth".to_string(),
+      "synthetic/model-1".to_string(),
+      None,
+      None,
+      None,
+      LaunchArgs::default(),
+      SessionCgroupLimits { memory_max_mb: 0, swap_max_mb: 0, tasks_max: 0 },
+    )
+    .unwrap();
+    let mut inherited = Env::new();
+    for name in GATEWAY_ENDPOINT_ENV_NAMES {
+      inherited.insert(name.to_string(), "inherited-gateway-value".to_string());
+    }
+
+    let env = AgentBackend::prepare_env(&backend, inherited).unwrap();
+
+    assert_eq!(env[GATEWAY_BASE_URL_ENV], "http://localhost:8123/api/anthropic-proxy");
+    assert_eq!(env[GATEWAY_AUTH_TOKEN_ENV], "no-auth");
+    for name in CLAUDE_MODEL_ENV_NAMES {
+      assert_eq!(env[name], "synthetic/model-1");
+    }
+    // Stronger than the Python case: an inherited headers variable must not survive the preparation either,
+    // so the test is red before the gateway strip lands.
+    assert!(!env.contains_key(GATEWAY_CUSTOM_HEADERS_ENV));
+  }
+
+  // Python: tests/test_anthropic_compatible_backend.py::test_claude_model_env_sets_exactly_five_model_variables
+  #[test]
+  fn claude_model_env_sets_exactly_five_model_variables() {
+    assert_eq!(
+      claude_model_env("synthetic/model-1"),
+      Env::from([
+        ("ANTHROPIC_MODEL".to_string(), "synthetic/model-1".to_string()),
+        ("ANTHROPIC_DEFAULT_OPUS_MODEL".to_string(), "synthetic/model-1".to_string()),
+        ("ANTHROPIC_DEFAULT_SONNET_MODEL".to_string(), "synthetic/model-1".to_string()),
+        ("ANTHROPIC_DEFAULT_HAIKU_MODEL".to_string(), "synthetic/model-1".to_string()),
+        ("CLAUDE_CODE_SUBAGENT_MODEL".to_string(), "synthetic/model-1".to_string()),
+      ])
+    );
   }
 
   #[test]

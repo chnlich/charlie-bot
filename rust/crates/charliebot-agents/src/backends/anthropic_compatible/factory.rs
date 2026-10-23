@@ -53,8 +53,10 @@ impl BackendFactory for AnthropicCompatibleFactory {
 mod tests {
   use charliebot_core::config::BackendOption;
   use charliebot_registry::Registry;
+  use charliebot_registry::backend::Env;
 
   use super::*;
+  use crate::backends::claude_code::GATEWAY_CUSTOM_HEADERS_ENV;
 
   fn option(type_fields: &str) -> BackendOption {
     BackendOption {
@@ -91,5 +93,34 @@ mod tests {
     assert!(plain.is_ok(), "the factory refused an option without effort: {:?}", plain.as_ref().err());
     let command = plain.unwrap().build_command("prompt").unwrap();
     assert!(!command.iter().any(|value| value == "--effort"), "{command:?}");
+  }
+
+  // Python: tests/test_anthropic_compatible_backend.py::test_factory_routes_custom_headers
+  #[test]
+  fn factory_routes_custom_headers() {
+    let endpoint = "api_base: http://localhost:8123/api/anthropic-proxy\ncontext_window: 409600\n";
+    let backend = build(&format!("{endpoint}headers:\n  x-litellm-tags: deepseek\n")).unwrap();
+    let env = backend.prepare_env(Env::new()).unwrap();
+    assert_eq!(env[GATEWAY_CUSTOM_HEADERS_ENV], "x-litellm-tags: deepseek");
+  }
+
+  // Python: tests/test_anthropic_compatible_backend.py::test_factory_routes_multiple_custom_headers
+  #[test]
+  fn factory_routes_multiple_custom_headers() {
+    let endpoint = "api_base: http://localhost:8123/api/anthropic-proxy\ncontext_window: 409600\n";
+    let backend =
+      build(&format!("{endpoint}headers:\n  x-litellm-tags: deepseek\n  x-client-name: charliebot\n")).unwrap();
+    let env = backend.prepare_env(Env::new()).unwrap();
+    assert_eq!(env[GATEWAY_CUSTOM_HEADERS_ENV], "x-litellm-tags: deepseek\nx-client-name: charliebot");
+  }
+
+  // Python: tests/test_anthropic_compatible_backend.py::test_factory_omits_custom_headers_when_option_has_none_and_parent_sets_them
+  #[test]
+  fn factory_omits_custom_headers_when_the_option_has_none_and_the_parent_sets_them() {
+    let backend = build("api_base: http://localhost:8123/api/anthropic-proxy\ncontext_window: 409600\n").unwrap();
+    let env = backend
+      .prepare_env(Env::from([(GATEWAY_CUSTOM_HEADERS_ENV.to_string(), "inherited-value".to_string())]))
+      .unwrap();
+    assert!(!env.contains_key(GATEWAY_CUSTOM_HEADERS_ENV));
   }
 }

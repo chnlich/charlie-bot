@@ -5,16 +5,16 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::Context;
-use charliebot_core::config::BackendOption;
+use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::event_types;
 use charliebot_registry::Registry;
-use charliebot_registry::backend::{AgentBackend, Env, LaunchArgs};
+use charliebot_registry::backend::{AgentBackend, BackendFactory, Env, LaunchArgs};
 use futures_util::future::BoxFuture;
 use nix::sys::signal::Signal;
 use serde_json::{Value, json};
 use tokio::task::JoinHandle;
 
-use super::backend::{extract_model_limit, image_file_attachments};
+use super::backend::{OpenCodeFactory, extract_model_limit, image_file_attachments};
 use super::opencode_limits;
 use super::server;
 use super::server::{OpenCodeHost, OpenCodeServer, OpenCodeServerPool, ServerTimeouts};
@@ -1175,6 +1175,118 @@ async fn one_shot_runs_standalone_in_a_private_root_and_fails_on_an_error_line()
   let error =
     backend.one_shot_text(&empty_env, "prompt", "system", Some(Duration::from_secs(3))).unwrap().await.unwrap_err();
   assert!(error.to_string().contains("opencode run failed: denied"));
+}
+
+const HEADLESS_PLAIN: &str = concat!(
+  r#"{"permission":{"*":"allow","question":"deny","subagent":"deny","opencode_session_move":"deny"},"#,
+  r#""shell":"bash","default_agent":"charliebot","agent":{"charliebot":{"mode":"primary"}}}"#,
+);
+const HEADLESS_WITH_LIMITS: &str = concat!(
+  r#"{"permission":{"*":"allow","question":"deny","subagent":"deny","opencode_session_move":"deny"},"#,
+  r#""shell":"bash","default_agent":"charliebot","agent":{"charliebot":{"mode":"primary"}},"#,
+  r#""providers":{"fakeprov":{"models":{"fake-model":{"limit":{"context":420000}}}},"#,
+  r#""other":{"models":{"model":{"limit":{"context":200000}}}}}}"#,
+);
+const HEADLESS_MERGED: &str = concat!(
+  r#"{"permission":{"*":"allow","question":"deny","subagent":"deny","opencode_session_move":"deny"},"#,
+  r#""shell":"bash","default_agent":"charliebot","agent":{"charliebot":{"mode":"primary"}},"#,
+  r#""providers":{"provider":{"models":{"model":{"limit":{"context":420000}},"other":{"limit":{"context":120000}}}},"#,
+  r#""other":{"models":{"model":{"limit":{"context":200000}}}}}}"#,
+);
+const ONE_SHOT_PLAIN: &str = r#"{"permission":{"*":"deny"}}"#;
+const ONE_SHOT_LIMITED: &str =
+  r#"{"permission":{"*":"deny"},"providers":{"fakeprov":{"models":{"fake-model":{"limit":{"context":420000}}}}}}"#;
+
+fn opencode_option(id: &str, model: &str, type_fields: &str) -> BackendOption {
+  BackendOption {
+    id: id.to_string(),
+    label: id.to_string(),
+    model: model.to_string(),
+    prompt_overlay: None,
+    backend_type: "opencode".to_string(),
+    type_fields: serde_yaml::from_str(type_fields).unwrap(),
+  }
+}
+
+/// The synthetic config of `root` with `options` as its `backends.options`.
+fn config_with(root: &std::path::Path, options: Vec<BackendOption>) -> CharlieBotConfig {
+  let mut cfg = Registry::new().load_config(root).unwrap();
+  cfg.backends.options = options;
+  cfg
+}
+
+/// The `OPENCODE_CONFIG_CONTENT` that the shared server of the harness starts with.
+fn headless_content(harness: &Harness) -> String {
+  harness.server.server_env_from(Env::new(), "pw").unwrap()["OPENCODE_CONFIG_CONTENT"].clone()
+}
+
+/// The `OPENCODE_CONFIG_CONTENT` of the newest one-shot run that the fake opencode logged.
+fn last_one_shot_config(harness: &Harness) -> Value {
+  harness.logs().into_iter().rev().find(|entry| entry.get("run_args").is_some()).unwrap()["config"].clone()
+}
+
+#[tokio::test]
+async fn context_limit_reaches_the_one_shot_and_the_shared_server_configs() {
+  // Python: tests/test_opencode_backend.py::test_one_shot_config_uses_its_option_and_denies_tools
+  // Python: tests/test_opencode_backend.py::test_headless_config_keeps_existing_keys_and_reads_live_options
+  let harness = Harness::new(json!({"run_lines": [{"type": "text", "part": {"text": "answer"}}], "run_exit": 0}));
+  let factory = OpenCodeFactory::new(harness.host.clone(), Arc::clone(&harness.pool));
+  let plain = opencode_option("plain", MODEL, "{}");
+  let limited = opencode_option("limited", MODEL, "context_limit: 420000\n");
+  let unrelated = opencode_option("unrelated", "other/model", "context_limit: 200000\n");
+
+  // The shared server starts with the options of the latest launch, so an option without a limit adds no providers.
+  let cfg = config_with(harness.root.path(), vec![plain.clone()]);
+  let mut backend = factory.build(Some(&plain), &cfg, LaunchArgs::default()).unwrap();
+  let empty_env = Env::new();
+  assert_eq!(headless_content(&harness), HEADLESS_PLAIN);
+  let answer = backend.one_shot_text(&empty_env, "prompt", "system", Some(Duration::from_secs(3)));
+  assert_eq!(answer.unwrap().await.unwrap(), "answer");
+  assert_eq!(last_one_shot_config(&harness), ONE_SHOT_PLAIN);
+
+  // The one-shot config carries its own option's limit, and the shared server carries every option's limit.
+  let cfg = config_with(harness.root.path(), vec![limited.clone(), unrelated]);
+  let built = factory.build(Some(&limited), &cfg, LaunchArgs::default());
+  assert!(built.is_ok(), "the factory refused context_limit: {:?}", built.as_ref().err());
+  assert_eq!(headless_content(&harness), HEADLESS_WITH_LIMITS);
+  let mut backend = built.unwrap();
+  let answer = backend.one_shot_text(&empty_env, "prompt", "system", Some(Duration::from_secs(3)));
+  assert_eq!(answer.unwrap().await.unwrap(), "answer");
+  assert_eq!(last_one_shot_config(&harness), ONE_SHOT_LIMITED);
+}
+
+#[test]
+fn conflicting_context_limits_fail_the_shared_server_start_naming_both_options() {
+  // Python: tests/test_opencode_backend.py::test_model_context_config_rejects_conflicts_naming_both_options
+  let harness = Harness::new(json!({}));
+  let factory = OpenCodeFactory::new(harness.host.clone(), Arc::clone(&harness.pool));
+  let first = opencode_option("oc-first", MODEL, "context_limit: 420000\n");
+  let second = opencode_option("oc-second", MODEL, "context_limit: 120000\n");
+  let cfg = config_with(harness.root.path(), vec![first.clone(), second]);
+
+  let built = factory.build(Some(&first), &cfg, LaunchArgs::default());
+  assert!(built.is_ok(), "the factory refused context_limit: {:?}", built.as_ref().err());
+  let error = harness.server.server_env_from(Env::new(), "pw").unwrap_err().to_string();
+  assert!(error.contains("oc-first") && error.contains("oc-second"), "{error}");
+}
+
+#[test]
+fn headless_providers_merge_equal_limits_and_keep_distinct_models() {
+  // Python: tests/test_opencode_backend.py::test_model_context_config_merges_equal_limits_and_distinct_models
+  let harness = Harness::new(json!({}));
+  let factory = OpenCodeFactory::new(harness.host.clone(), Arc::clone(&harness.pool));
+  let options = vec![
+    opencode_option("first", "provider/model", "context_limit: 420000\n"),
+    opencode_option("equal", "provider/model", "context_limit: 420000\n"),
+    opencode_option("uncapped", "provider/model", "{}"),
+    opencode_option("sibling", "provider/other", "context_limit: 120000\n"),
+    opencode_option("other", "other/model", "context_limit: 200000\n"),
+  ];
+  let cfg = config_with(harness.root.path(), options.clone());
+
+  let built = factory.build(Some(&options[0]), &cfg, LaunchArgs::default());
+  assert!(built.is_ok(), "the factory refused context_limit: {:?}", built.as_ref().err());
+  assert_eq!(headless_content(&harness), HEADLESS_MERGED);
 }
 
 #[tokio::test]

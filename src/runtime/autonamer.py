@@ -6,7 +6,7 @@ Light-backend one-shot (SDK sessions: cc-claude / codex / opencode / etc.):
   each MASTER_DONE; it assembles the prompt from the chat log and delegates to
   maybe_auto_name(...).
 - Reads CharlieBot's chat_events.jsonl (user message + assistant_text).
-- Picks backends.pool members in rotation order (iter_light_backends) and asks them, via
+- Picks backends.pool members in rotation order (backend_pool.iter_members) and asks them, via
   one_shot_text, for {name, group}.
 - Group may reuse an existing group name from other sessions.
 
@@ -17,7 +17,6 @@ a name the user has already set (matched via is_default_session_name).
 import asyncio
 import json
 import re
-from collections.abc import Iterator
 from typing import Any
 
 from src.infra import config, deferred, log_once, models, timeouts
@@ -124,18 +123,6 @@ def _parse_name_and_group(raw: str) -> tuple[str | None, str | None]:
 
   log.warning("autonamer_unexpected_json_type", response_type=type(data).__name__)
   return None, None
-
-
-def iter_light_backends(cfg: config.CharlieBotConfig) -> Iterator[models.BackendOption]:
-  """Yield one backends.pool member per attempt, each member at most once.
-
-  A caller that fails on a member asks for the next one: the pool selects from its rotation position,
-  skipping the members already yielded and the cooling members.
-  """
-  tried: list[str] = []
-  while (option := backend_pool.select(cfg, caller="light_oneshot", exclude=tried)) is not None:
-    tried.append(option.id)
-    yield option
 
 
 def _fuzzy_match_group(group: str, existing_groups: list[str]) -> str:
@@ -262,7 +249,7 @@ async def maybe_auto_name(
       )
       return
 
-    for option in iter_light_backends(cfg):
+    for option in backend_pool.iter_members(cfg, caller="light_oneshot"):
       try:
         backend = deferred_build.load_build_backend(globals())(option, cfg, cgroup_session_id=session_meta.id)
         raw = await backend.one_shot_text(

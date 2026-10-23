@@ -78,7 +78,7 @@ def headless_config() -> dict:
               "mode": "primary"
           },
       },
-      **options.model_context_config(config.get_config().backends.options),
+      **options.model_overrides_config(config.get_config().backends.options),
   }
 
 

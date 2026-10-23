@@ -7,9 +7,11 @@
  * page-table copy — and runs the fixed child sequence (pdeathsig, setsid,
  * stdio dup2, default signal dispositions, close-from-3, execve) as pure
  * syscalls: the child shares the parent's address space, so nothing here may
- * allocate or call back into Python. Setup and execve failures report the
- * child's errno over a CLOEXEC pipe and exit 127; a successful execve closes
- * that pipe, so the parent reads EOF as success.
+ * allocate or call back into Python. The parent releases the GIL across the
+ * clone-through-report-read wait, so a slow exec of one child never stops the
+ * server's other Python threads. Setup and execve failures report the child's
+ * errno over a CLOEXEC pipe and exit 127; a successful execve closes that
+ * pipe, so the parent reads EOF as success.
  */
 #define _GNU_SOURCE
 #include <Python.h>
@@ -21,6 +23,7 @@
 #include <sys/prctl.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 struct spawn_args {
@@ -32,6 +35,7 @@ struct spawn_args {
   int err_fd;
   int report_fd;
   pid_t parent_pid;
+  long exec_delay_ms; /* test hook: blocks the child before execve */
   sigset_t oldmask;
 };
 
@@ -66,6 +70,14 @@ static int child_main(void *argp) {
   if (a->cwd != NULL && chdir(a->cwd) != 0)
     report_and_exit(a, errno);
   sigprocmask(SIG_SETMASK, &a->oldmask, NULL);
+  /* Regression-test hook only: _VFORKSPAWN_TEST_EXEC_DELAY_MS makes the child
+     sit before execve so a test can watch the parent's other threads during
+     the wait. nanosleep is a pure syscall, so the child path stays
+     allocation- and Python-free. */
+  if (a->exec_delay_ms > 0) {
+    struct timespec ts = {a->exec_delay_ms / 1000, (a->exec_delay_ms % 1000) * 1000000L};
+    nanosleep(&ts, NULL);
+  }
   execve(a->argv[0], a->argv, a->envp);
   report_and_exit(a, errno);
   return 127; /* unreachable; keeps the compiler honest about the return type */
@@ -131,43 +143,72 @@ static PyObject *py_spawn(PyObject *self, PyObject *args) {
     close(report_w);
     goto fail;
   }
-  struct spawn_args a = {argv,   envp,   cwd,  in_fd,  out_fd, err_fd, report_w,
-                         (pid_t)parent_pid, {{0}}};
+  /* Test hook (see child_main): the delay rides the spawn_args struct, read
+     parent-side while the GIL is still held. */
+  long exec_delay_ms = 0;
+  const char *delay_env = getenv("_VFORKSPAWN_TEST_EXEC_DELAY_MS");
+  if (delay_env != NULL)
+    exec_delay_ms = strtol(delay_env, NULL, 10);
+  struct spawn_args a = {argv,        envp,   cwd,  in_fd,  out_fd, err_fd, report_w,
+                         (pid_t)parent_pid, exec_delay_ms, {{0}}};
   sigset_t all;
   sigfillset(&all);
+  /* Every Python C-API call above is done: from here through the report-pipe
+     read and a failed exec's waitpid the GIL is released, so a child that
+     sits before execve holds one worker thread, not the server's other
+     Python threads. While the child shares this address space those threads
+     run Python against the heap its argv/envp pointers reach into — the child
+     side stays safe beside them because child_main touches only its private
+     stack, the spawn_args struct and syscalls: no heap access, no Python. */
+  pid_t pid;
+  int clone_errno = 0;
+  int child_err = 0;
+  int exec_failed = 0;
+  int read_errno = 0;
+  Py_BEGIN_ALLOW_THREADS
   /* The blocked mask is inherited so no handler runs in the child; the child
      restores the saved mask right before execve. */
   pthread_sigmask(SIG_BLOCK, &all, &a.oldmask);
-  pid_t pid = clone(child_main, (char *)stack + 256 * 1024, CLONE_VM | CLONE_VFORK | SIGCHLD, &a);
-  int clone_errno = errno;
+  pid = clone(child_main, (char *)stack + 256 * 1024, CLONE_VM | CLONE_VFORK | SIGCHLD, &a);
+  clone_errno = errno;
   pthread_sigmask(SIG_SETMASK, &a.oldmask, NULL);
   munmap(stack, 256 * 1024);
   close(report_w);
   if (pid < 0) {
     close(report[0]);
+  } else {
+    /* The child has execed or exited here (CLONE_VFORK), so its argv/envp
+       reads are done and the arrays can go back once the GIL returns. */
+    ssize_t got = read(report[0], &child_err, sizeof(child_err));
+    close(report[0]);
+    if (got == (ssize_t)sizeof(child_err)) {
+      exec_failed = 1;
+      int status;
+      while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {
+      }
+    } else if (got < 0) {
+      read_errno = errno;
+    }
+  }
+  Py_END_ALLOW_THREADS
+  if (pid < 0) {
     errno = clone_errno;
     PyErr_SetFromErrno(PyExc_OSError);
     goto fail;
   }
-  /* The child has execed or exited here (CLONE_VFORK), so its argv/envp reads
-     are done and the arrays can go back before the parent touches Python. */
-  int err = 0;
-  ssize_t got = read(report[0], &err, sizeof(err));
-  close(report[0]);
-  if (got == (ssize_t)sizeof(err)) {
-    int status;
-    while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {
-    }
-    errno = err;
+  if (exec_failed) {
+    errno = child_err;
     PyErr_SetFromErrnoWithFilename(PyExc_OSError, argv[0]);
     goto fail;
   }
-  if (got == 0) {
-    PyMem_Free(argv);
-    PyMem_Free(envp);
-    return PyLong_FromLong((long)pid);
+  if (read_errno != 0) {
+    errno = read_errno;
+    PyErr_SetFromErrno(PyExc_OSError);
+    goto fail;
   }
-  PyErr_SetFromErrno(PyExc_OSError);
+  PyMem_Free(argv);
+  PyMem_Free(envp);
+  return PyLong_FromLong((long)pid);
 
 fail:
   PyMem_Free(argv);

@@ -188,6 +188,8 @@ pub enum RunDisplayState {
 pub struct RunFacts {
   outcomes: HashMap<String, Option<String>>,
   stop_requests: HashMap<String, HashSet<Option<String>>>,
+  #[cfg(test)]
+  pub(crate) observed_events: usize,
 }
 
 /// The host boot time, read from `/proc/stat` on first use: only a launched run without a terminal fact needs it.
@@ -217,6 +219,10 @@ fn is_known_outcome(value: &str) -> bool {
 
 impl RunFacts {
   pub(crate) fn observe(&mut self, event: &Value) {
+    #[cfg(test)]
+    {
+      self.observed_events += 1;
+    }
     match event.get("type").and_then(Value::as_str) {
       Some("run_finished") => {
         if let Some(run_id) = event.get("run_id").and_then(Value::as_str) {

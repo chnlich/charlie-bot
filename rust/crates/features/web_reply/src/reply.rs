@@ -7,7 +7,7 @@
 
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use anyhow::Context;
 use axum::http::StatusCode;
@@ -18,6 +18,7 @@ use charliebot_core::pystr;
 use charliebot_registry::{FeatureContext, RunningTurnInputs, StateError};
 use charliebot_store::metadata::{SessionMetadata, TaskProfile};
 use charliebot_store::{SESSION_NOT_FOUND_DETAIL, Store, StoreError};
+use regex::Regex;
 use serde_json::{Value, json};
 
 /// The web reply rules file under `prompts/` (`reply.RULES_FILE`).
@@ -39,6 +40,10 @@ pub const NUDGE_SENDER_NAME: &str = "Web reply";
 /// The reply budget the readback's `over_budget` flag measures; an over-budget reply still posts
 /// (`reply.REPLY_BUDGET_CHARS`).
 pub const REPLY_BUDGET_CHARS: usize = 500;
+
+/// Python's `_MARKDOWN_LINK`: an inline link `[label](url)`, which the reader sees as its label.
+static MARKDOWN_LINK: LazyLock<Regex> =
+  LazyLock::new(|| Regex::new(r"\[([^\]]*)\]\([^)]*\)").expect("the markdown link pattern is valid"));
 
 /// The language check holds a reply when the newest user message has at least this many Han characters.
 const LANGUAGE_CHECK_MIN_USER_HAN: usize = 5;
@@ -336,6 +341,11 @@ pub fn refuse_dead_links<'a>(
   Err(WebReplyError::refused(StatusCode::UNPROCESSABLE_ENTITY, file_urls::dead_links_detail(&dead)))
 }
 
+/// The characters the reader counts in `text`: each inline markdown link counts as its label (`visible_reply_chars`).
+fn visible_reply_chars(text: &str) -> usize {
+  MARKDOWN_LINK.replace_all(text, "${1}").chars().count()
+}
+
 /// Record `text` as the session's web reply and return the readback the CLI prints (`reply.post_web_reply`).
 ///
 /// The text is recorded exactly as written. It answers the newest user message or nudge of the running turn, and
@@ -356,6 +366,7 @@ pub async fn post_web_reply(
   if keep_language.is_some_and(|reason| pystr::strip(reason).is_empty()) {
     return Err(WebReplyError::refused(StatusCode::UNPROCESSABLE_ENTITY, "Keep-language reason is empty"));
   }
+  let chars = visible_reply_chars(text);
   let running = features.startup.require::<RunningTurnInputs>()?.user_event_ids(session_id);
   // With the language guard skipped and no running inputs, Python's `answered_input` must return `None`
   // (`src/features/web_reply/reply.py:97-108`), so a cold event log need not be parsed for this reply.
@@ -364,7 +375,7 @@ pub async fn post_web_reply(
   if keep_language.is_none()
     && language_check_holds(newest_user_text(loaded.as_deref().expect("the language check loads chat events")), text)
   {
-    tracing::info!(session = %session_id, chars = text.chars().count(), "web_reply_held");
+    tracing::info!(session = %session_id, chars, "web_reply_held");
     return Err(WebReplyError::refused(StatusCode::CONFLICT, LANGUAGE_HOLD_DETAIL));
   }
   let answers =
@@ -372,7 +383,6 @@ pub async fn post_web_reply(
   // Release the shared snapshot before append; Python appends into the cached list (`chat_events.py:221-224`).
   // Keeping this Arc alive would make Store::append_chat_event deep-clone the entire event vector through Arc::make_mut.
   drop(loaded);
-  let chars = text.chars().count();
   let mut web_reply = json!({"answers": answers, "chars": chars});
   if let Some(reason) = keep_language {
     web_reply["keep_language"] = json!(reason);

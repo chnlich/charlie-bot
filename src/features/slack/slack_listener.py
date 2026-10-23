@@ -519,7 +519,8 @@ class SlackThreadAdapter(thread_entry.ThreadAdapter):
 SlackReplyError = thread_entry.ThreadReplyError
 
 
-async def assert_thread_fresh(session_id: str, cfg: config.CharlieBotConfig, store: session_store.SessionStore) -> None:
+async def assert_thread_fresh(session_id: str, cfg: config.CharlieBotConfig,
+                              store: session_store.SessionStore) -> list[thread_entry.ThreadMessage]:
   """Refuse the reply when eligible thread messages sit above the session's watermark.
 
   One-line pass-through to the shared gate (``thread_entry.assert_thread_fresh``)

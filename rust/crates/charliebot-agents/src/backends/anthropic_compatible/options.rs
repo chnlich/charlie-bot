@@ -1,4 +1,5 @@
-//! The endpoint, declared context window, optional credential and optional effort of a `cc-anthropic-compatible` entry.
+//! The endpoint, declared context window, optional credential, optional effort and request headers of a
+//! `cc-anthropic-compatible` entry.
 
 use serde_yaml::{Mapping, Value};
 
@@ -6,7 +7,8 @@ const API_BASE: &str = "api_base";
 const CONTEXT_WINDOW: &str = "context_window";
 const CREDENTIAL: &str = "credential";
 const EFFORT: &str = "effort";
-const FIELDS: [&str; 4] = [API_BASE, CONTEXT_WINDOW, CREDENTIAL, EFFORT];
+const HEADERS: &str = "headers";
+const FIELDS: [&str; 5] = [API_BASE, CONTEXT_WINDOW, CREDENTIAL, EFFORT, HEADERS];
 
 /// The type-specific fields of one Anthropic-compatible backend option.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -19,6 +21,8 @@ pub struct CcAnthropicCompatibleOption {
   pub credential: Option<String>,
   /// The Claude Code `--effort` level, passed on only when set.
   pub effort: Option<String>,
+  /// The request headers the launch routes to the endpoint, in the entry's order.
+  pub headers: Vec<(String, String)>,
 }
 
 impl CcAnthropicCompatibleOption {
@@ -59,7 +63,24 @@ impl CcAnthropicCompatibleOption {
       Some(Value::String(effort)) => Some(effort.clone()),
       Some(_) => return Err("cc-anthropic-compatible option effort must be a string or null".to_string()),
     };
-    Ok(Self { api_base, context_window, credential, effort })
+    let headers = match fields.get(HEADERS) {
+      None => Vec::new(),
+      Some(Value::Mapping(headers)) => {
+        let mut parsed = Vec::new();
+        for (name, value) in headers {
+          let Some(name) = name.as_str() else {
+            return Err("cc-anthropic-compatible option headers keys must be strings".to_string());
+          };
+          let Some(value) = value.as_str() else {
+            return Err("cc-anthropic-compatible option headers values must be strings".to_string());
+          };
+          parsed.push((name.to_string(), value.to_string()));
+        }
+        parsed
+      }
+      Some(_) => return Err("cc-anthropic-compatible option headers must be a mapping of strings".to_string()),
+    };
+    Ok(Self { api_base, context_window, credential, effort, headers })
   }
 }
 

@@ -240,8 +240,9 @@ impl ClaudeCodeBackend {
     Ok(command)
   }
 
-  fn prepare_env(&self, mut env: Env) -> anyhow::Result<Env> {
+  fn prepare_env(&self, env: Env) -> anyhow::Result<Env> {
     let headless = headless_claude_env(self.run_kind, &env);
+    let mut env = without_gateway_env(&env);
     env.extend(headless);
     if let Some(config_dir) = &self.claude_config_dir {
       let home = env.get("HOME").map(String::as_str);
@@ -376,10 +377,7 @@ pub const CLAUDE_MODEL_ENV_NAMES: [&str; 5] = [
 /// Every Claude Code model-selection variable pinned to one model: the main model, the opus, sonnet and haiku slot
 /// defaults, and the subagent model. An unset slot falls back to a CLI default, so the endpoint backend sets all five.
 pub fn claude_model_env(model: &str) -> Env {
-  CLAUDE_MODEL_ENV_NAMES
-    .iter()
-    .map(|name| (name.to_string(), model.to_string()))
-    .collect()
+  CLAUDE_MODEL_ENV_NAMES.iter().map(|name| (name.to_string(), model.to_string())).collect()
 }
 
 /// A copy of `env` without the cc-anthropic-compatible gateway variables.
@@ -391,9 +389,10 @@ pub fn without_gateway_env(env: &Env) -> Env {
     .collect()
 }
 
-/// The environment a one-shot `claude` spawn runs in.
+/// The environment a one-shot `claude` spawn runs in: the inherited environment without the gateway variables, which
+/// would otherwise point Claude at an inherited cc-anthropic-compatible endpoint instead of the Anthropic account.
 fn one_shot_env(base_env: &Env) -> Env {
-  base_env.clone()
+  without_gateway_env(base_env)
 }
 
 /// Claude Code pointed at an Anthropic-compatible endpoint by environment. The endpoint URL and bearer token ride
@@ -405,6 +404,7 @@ pub struct AnthropicEndpointBackend {
   auth_token: String,
   model: String,
   context_window: Option<u64>,
+  headers: Vec<(String, String)>,
 }
 
 impl AnthropicEndpointBackend {
@@ -423,7 +423,13 @@ impl AnthropicEndpointBackend {
     cgroup_limits: SessionCgroupLimits,
   ) -> anyhow::Result<Self> {
     let backend = ClaudeCodeBackend::from_launch(None, effort, None, false, claude_config_dir, launch, cgroup_limits)?;
-    Ok(Self { backend, base_url, auth_token, model, context_window })
+    Ok(Self { backend, base_url, auth_token, model, context_window, headers: Vec::new() })
+  }
+
+  /// Route `headers` as `ANTHROPIC_CUSTOM_HEADERS` lines, in the option's order.
+  pub fn with_headers(mut self, headers: Vec<(String, String)>) -> Self {
+    self.headers = headers;
+    self
   }
 }
 
@@ -442,9 +448,15 @@ impl AgentBackend for AnthropicEndpointBackend {
 
   fn prepare_env(&self, env: Env) -> anyhow::Result<Env> {
     let mut env = self.backend.prepare_env(env)?;
-    env.insert("ANTHROPIC_BASE_URL".to_string(), self.base_url.clone());
-    env.insert("ANTHROPIC_AUTH_TOKEN".to_string(), self.auth_token.clone());
+    env.insert(GATEWAY_BASE_URL_ENV.to_string(), self.base_url.clone());
+    env.insert(GATEWAY_AUTH_TOKEN_ENV.to_string(), self.auth_token.clone());
     env.extend(claude_model_env(&self.model));
+    if !self.headers.is_empty() {
+      env.insert(
+        GATEWAY_CUSTOM_HEADERS_ENV.to_string(),
+        self.headers.iter().map(|(name, value)| format!("{name}: {value}")).collect::<Vec<_>>().join("\n"),
+      );
+    }
     if let Some(context_window) = self.context_window {
       let window = context_window.to_string();
       env.insert(claude_launch::AUTO_COMPACT_WINDOW_ENV.to_string(), window.clone());

@@ -22,7 +22,7 @@ SERVER_SCOPE=(systemd-run --user --scope --unit=charliebot-server --slice=charli
 # systemd reports for an unset limit.
 _unit_setting() {
   local file="$1" key="$2" value=""
-  while IFS='=' read -r name raw; do
+  while IFS='=' read -r name raw || [ -n "$name" ]; do
     if [ "$name" = "$key" ]; then
       value="$raw"
     fi

@@ -46,6 +46,16 @@ def test_preflight_accepts_limits_that_match_the_unit_files(tmp_path: pathlib.Pa
   assert result.stderr == ""
 
 
+def test_preflight_reads_a_unit_file_whose_last_line_has_no_newline(tmp_path: pathlib.Path) -> None:
+  launcher, bin_dir = stash_launcher(tmp_path)
+  # The repair unit's last assignment is the swap limit; bash's read drops an unterminated last line.
+  unit_file = launcher.parent / "systemd" / "charliebot-repair.slice"
+  unit_file.write_text("[Slice]\nMemoryMax=8G\nMemorySwapMax=0", encoding="utf-8")
+  systemd_stubs.write_systemctl(bin_dir)
+  result = run_preflight(launcher, bin_dir)
+  assert result.returncode == 0, result.stderr
+
+
 def test_preflight_rejects_a_slice_limit_that_differs_from_its_unit_file(tmp_path: pathlib.Path) -> None:
   launcher, bin_dir = stash_launcher(tmp_path)
   # The unit file is the single home: reading 36G from systemd against a 40G unit file stops the start.

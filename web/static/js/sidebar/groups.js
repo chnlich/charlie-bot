@@ -48,13 +48,13 @@ function groupSessionsBySortedKeys(sessions, keyFn) {
   return {groups, sortedKeys};
 }
 
-function groupLimitItemOptions(key, isExtra, isActiveRoot, expanded) {
-  if (!isExtra) return {};
+function groupLimitItemOptions(key, isHideable, expanded) {
+  if (!isHideable) return {};
   const safeKey = escapeHtmlAttr(key);
-  const hiddenClass = expanded || isActiveRoot ? '' : ' hidden';
+  const hiddenClass = expanded ? '' : ' hidden';
   return {
     extraClass: `session-group-limit-extra${hiddenClass}`,
-    extraAttrs: `data-session-group-limit-extra="${safeKey}"${isActiveRoot ? ' data-session-group-limit-active="true"' : ''}`,
+    extraAttrs: `data-session-group-limit-extra="${safeKey}"`,
   };
 }
 
@@ -72,7 +72,7 @@ function renderGroupLimitToggle(key, hasExtraRows, expanded) {
 function updateGroupLimitDom(key, expanded) {
   document.querySelectorAll('.session-group-limit-extra').forEach(el => {
     if (el.dataset.sessionGroupLimitExtra === key) {
-      el.classList.toggle('hidden', !expanded && el.dataset.sessionGroupLimitActive !== 'true');
+      el.classList.toggle('hidden', !expanded);
     }
   });
   document.querySelectorAll('.session-group-limit-toggle').forEach(btn => {
@@ -348,9 +348,11 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
       if (!excluded) previewRank += 1;
       const isExtra = !inPreview;
       if (isExtra) hasExtraRows = true;
+      // The open session's root never hides, since a hidden root hides its subtree.
+      const isHideable = isExtra && s.id !== activeRootId;
       return {
         session: s,
-        options: groupLimitItemOptions(key, isExtra, s.id === activeRootId, isLimitExpanded),
+        options: groupLimitItemOptions(key, isHideable, isLimitExpanded),
       };
     });
 

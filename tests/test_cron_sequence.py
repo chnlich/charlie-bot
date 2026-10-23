@@ -1043,7 +1043,7 @@ async def test_pooled_scheduled_step_launches_on_the_selected_pool_account(
   """The cron controller's scheduled_step Runs are fresh worker launches: the
   lifecycle selects the pool account, and the relay loop is armed (the backend
   build receives the selected account)."""
-  claude_accounts.reset_for_tests()
+  conftest.reset_claude_account_readings()
   cfg, session_blocks, tree = test_task_execution.build_pooled_env(tmp_path, monkeypatch)
   conftest.bind_deps_blocks(monkeypatch, tree, session_blocks)
   tree.dispatch.executor = test_task_execution._adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)

@@ -194,7 +194,9 @@ def main() -> None:
 
   result = common.post_internal_api("/api/internal/delegate", payload, readback=_readback)
   print("Worker spawned in the background; the completion summary arrives as an async wake-up.", file=sys.stderr)
-  common.print_json(result, indent=2, file=sys.stdout)
+  # Callers read only these two ids. The other server keys repeat the caller's own spec and ids, so
+  # they stay off stdout.
+  common.print_json({"session_id": result["session_id"], "run_id": result["run_id"]}, indent=2, file=sys.stdout)
 
 
 if __name__ == "__main__":

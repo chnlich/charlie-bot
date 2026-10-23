@@ -410,6 +410,7 @@ async def tail_follow_events(
     buffer_limit: int,
     poll_interval: float = _TAIL_POLL_INTERVAL,
     on_silence: Callable[[], Awaitable[None]] | None = None,
+    on_event: Callable[[dict], Awaitable[None]] | None = None,
     silence_threshold: float = timeouts.NO_OUTPUT_REPORT_THRESHOLD,
 ) -> AsyncIterator[dict]:
   """Tail-follow a raw NDJSON log from *start_offset*, yielding translated events.
@@ -551,8 +552,12 @@ async def tail_follow_events(
                         pending_tool_calls.discard(tool_use_id)
 
                 _clamp_event_timestamp(translated, mtime)
+                if on_event is not None:
+                  await on_event(translated)
                 yield translated
 
+                if evt_type == ET.INPUT_DELIVERED:
+                  saw_result = False
                 if not saw_result and evt_type == ET.RESULT:
                   if pending_tool_calls:
                     log.debug(
@@ -785,6 +790,9 @@ class AgentBackend(abc.ABC):
     Identity default: returns [event] unchanged.
     """
     return [event]
+
+  async def _on_event(self, event: dict) -> None:
+    """Handle a translated event before the run yields it to its caller."""
 
   async def _spawn_piped_and_pin_identity(self, cmd: list[str], cwd: str, final_env: dict) -> None:
     """Spawn the child with piped stdio, pin (pid, pid_start), then fire on_spawn.
@@ -1029,6 +1037,7 @@ class AgentBackend(abc.ABC):
           start_offset=0,
           post_result_timeout=self._POST_RESULT_TIMEOUT,
           buffer_limit=self._buffer_limit,
+          on_event=self._on_event,
       ):
         yield event
       await self._wait_for_exit_and_cleanup(self._CLEANUP_TIMEOUT, stderr_path)

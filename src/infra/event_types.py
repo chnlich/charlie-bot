@@ -9,6 +9,7 @@ instead of hard-coding the strings at construction and consumption sites.
 # -- Core chat events --------------------------------------------------------
 ASSISTANT = "assistant"
 USER = "user"
+INPUT_DELIVERED = "input_delivered"
 ERROR = "error"
 RESULT = "result"
 SYSTEM = "system"

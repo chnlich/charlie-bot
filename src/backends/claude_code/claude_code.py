@@ -11,6 +11,7 @@ from collections.abc import Mapping
 from src.backends.claude_code import claude_launch
 from src.infra import constants, home, log_once, models, process
 from src.infra import event_types as ET
+from src.runtime import midturn_delivery
 from src.runtime.agent_process import base
 from src.runtime.hooks import backend_lifecycle
 
@@ -297,11 +298,15 @@ class ClaudeCodeBackend(base.AgentBackend):
       run_kind: models.RunKind = "work",
       claude_session_id: str | None = None,
       claude_config_dir: str | None = None,
+      midturn_delivery: bool = False,
+      midturn_run_id: str | None = None,
       **kwargs: object) -> None:
     super().__init__(model=model, **kwargs)
     self._effort = effort
     self._fast_mode = fast_mode
     self._run_kind = run_kind
+    self._midturn_delivery = midturn_delivery
+    self._midturn_run_id = midturn_run_id
     self._claude_config_dir = str(pathlib.Path(claude_config_dir).expanduser()) if claude_config_dir else None
     self._cmd: list[str] = headless_command(run_kind)
     if cli_binary:
@@ -331,12 +336,29 @@ class ClaudeCodeBackend(base.AgentBackend):
 
   def _build_command(self, prompt: str) -> list[str]:
     cmd = list(self._cmd)
+    if self._midturn_delivery:
+      cmd += ["--input-format", "stream-json", "--replay-user-messages"]
     if self._instructions_file is not None:
       cmd += ["--append-system-prompt-file", str(self._instructions_file)]
     return cmd
 
   def _stdin_prompt(self, prompt: str) -> str | None:
     return prompt
+
+  def translate_event(self, event: dict) -> list[dict]:
+    """Translate stream-json replay lines into run-scoped delivery acknowledgements."""
+    return midturn_delivery.translate_replay(self._midturn_run_id, event) if self._midturn_delivery else [event]
+
+  async def _write_stdin_prompt(self, prompt: str) -> None:
+    """Keep stdin open for a web manager turn and preserve the plain-text path elsewhere."""
+    if self._midturn_delivery:
+      await midturn_delivery.write_initial_prompt(self._midturn_run_id, self, prompt)
+      return
+    await super()._write_stdin_prompt(prompt)
+
+  async def _on_event(self, event: dict) -> None:
+    """Close the gated stream-json writer when Claude emits its first result."""
+    await midturn_delivery.on_backend_event(self._midturn_run_id if self._midturn_delivery else None, event)
 
   async def one_shot_text(self, prompt: str, system_prompt: str, *, timeout: float | None) -> str:
     """Generate text via `claude -p` in text mode, using this backend's model.

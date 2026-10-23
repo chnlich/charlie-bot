@@ -90,6 +90,7 @@ def _round_ctx(
       emit=emit,
       record_account=record_account,
       context_state=context_state,
+      run_id="11111111-2222-3333-4444-555555555555",
   )
 
 
@@ -211,7 +212,10 @@ async def test_idle_argv_equals_the_master_turn_argv_for_the_same_option_and_acc
 
   argv, _env = claude_idle_compaction._compaction_process(cfg, option, account, SESSION_ID, CC_ID, ctx.run_kind)
 
-  assert argv == expected
+  format_index = expected.index("--input-format")
+  assert expected[format_index:format_index + 3] == ["--input-format", "stream-json", "--replay-user-messages"]
+  assert "--input-format" not in argv
+  assert argv == expected[:format_index] + expected[format_index + 3:]
   settings = json.loads(argv[argv.index("--settings") + 1])
   [session_start] = settings["hooks"]["SessionStart"]
   assert session_start["matcher"] == "compact"

@@ -18,7 +18,9 @@ of the default test run) and must be reviewed for isolation before it runs:
   ``extra_flags`` kwarg seam with ``--session-dir <home>/clc-sessions`` (a
   supported ``charlie-code --help`` override), so both real runs persist
   their native session state under the synthetic home, never in the CLI's
-  default state dir. Inherited production session/run credentials are cleared
+  default state dir. Claude account credentials used by the mid-turn smoke are
+  copied into the synthetic home, and each child receives only that home's
+  config directory. Inherited production session/run credentials are cleared
   from the harness environment; the shell HOME variable is never repurposed.
 - Credentials. The selected production backend entry is read only to build the
   test config (its model/api-base/credential references). The synthetic key
@@ -64,7 +66,9 @@ import urllib.error  # noqa: E402
 import urllib.request  # noqa: E402
 from typing import NoReturn  # noqa: E402
 
+from src.infra import config as config_module  # noqa: E402
 from src.infra import constants, yaml_utils  # noqa: E402
+from src.infra import event_types as ET  # noqa: E402
 from tools import browser_harness_session_tree  # noqa: E402
 
 SMOKE_PHRASE = "SMOKE-TASK-TREE-OK-7Q4F"
@@ -145,7 +149,14 @@ def install_native_session_dir_isolation(clc_sessions: pathlib.Path) -> None:
   worker_module.build_backend = wrapped
 
 
-def build_synthetic_home(home: pathlib.Path, backend_id: str, entry: dict) -> tuple[int, str]:
+def build_synthetic_home(
+    home: pathlib.Path,
+    backend_id: str,
+    entry: dict,
+    *,
+    claude_accounts: list[dict] | None = None,
+    claude_pools: dict[str, list[str]] | None = None,
+) -> tuple[int, str]:
   """Write the synthetic home's config and credentials; return (port, access_key)."""
   port = browser_harness_session_tree.pick_free_port()
   entry = dict(entry)
@@ -163,6 +174,8 @@ def build_synthetic_home(home: pathlib.Path, backend_id: str, entry: dict) -> tu
           "pool": [backend_id]
       },
   }
+  if claude_accounts is not None:
+    config["accounts"] = {"claude": claude_accounts, "claude_pools": claude_pools or {}}
   (home / "config.yaml").write_text(json.dumps(config, indent=2), encoding="utf-8")
   access_key = browser_harness_session_tree.mint_access_key("smoke-operator-key-")
   credential_sections = {"charliebot": {"access_key": access_key}}
@@ -177,7 +190,7 @@ def build_synthetic_home(home: pathlib.Path, backend_id: str, entry: dict) -> tu
   return port, access_key
 
 
-def preflight(backend_id: str, entry: dict, *, production_config: bool) -> None:
+def preflight(backend_id: str, entry: dict, *, production_config: bool, midturn: bool = False) -> None:
   """Assert the mechanisms this smoke depends on before anything starts."""
   backend_type = entry["type"]
   if backend_type == "charlie-code":
@@ -188,15 +201,55 @@ def preflight(backend_id: str, entry: dict, *, production_config: bool) -> None:
     if "--session-dir" not in help_text.stdout + help_text.stderr:
       fail("installed charlie-code does not support --session-dir; native session "
            "isolation cannot be guaranteed")
-  elif backend_type == "cc-anthropic-compatible":
-    if shutil.which("claude") is None:
+  elif backend_type in ("cc-anthropic-compatible", "cc-claude"):
+    binary = shutil.which("claude")
+    if binary is None:
       fail("Claude Code binary is not installed; the live smoke cannot run")
+    if midturn:
+      help_text = subprocess.run([binary, "--help"], capture_output=True, text=True, check=False)
+      flags = help_text.stdout + help_text.stderr
+      for flag in ("--input-format", "--replay-user-messages"):
+        if flag not in flags:
+          fail(f"installed Claude Code does not support {flag}; the live smoke cannot run")
   else:
     fail(f"backend type {backend_type!r} is not supported by this live smoke")
   if production_config:
     from src.infra import config
     if config.load_config().get_backend_option(backend_id) is None:
       fail(f"backend option {backend_id!r} missing from the production config")
+
+
+def isolate_claude_auth(home: pathlib.Path, entry: dict) -> tuple[list[dict] | None, dict[str, list[str]], str | None]:
+  """Copy the selected Claude credential files under the synthetic home."""
+  from src.backends.claude_code import claude_accounts, claude_config, login_dirs
+
+  if entry["type"] != "cc-claude":
+    return None, {}, None
+  cfg = config_module.load_config()
+  pool_name = entry.get("account_pool")
+  if cfg.accounts.claude:
+    source_accounts = claude_accounts.pool_accounts(cfg, pool_name)
+    eligible = [account for account in source_accounts if claude_accounts.credentials_present(account)]
+    if not eligible:
+      fail("the selected Claude account pool has no readable access token")
+    synthetic_accounts = []
+    for index, account in enumerate(eligible):
+      source = pathlib.Path(account.config_dir).expanduser() / login_dirs.CREDENTIALS_FILE
+      destination = home / "claude-accounts" / f"account-{index}" / login_dirs.CREDENTIALS_FILE
+      destination.parent.mkdir(parents=True, exist_ok=True)
+      shutil.copy2(source, destination)
+      synthetic_accounts.append({"label": account.label, "config_dir": str(destination.parent)})
+    pools = {pool_name: [account["label"] for account in synthetic_accounts]} if pool_name is not None else {}
+    return synthetic_accounts, pools, None
+
+  source_dir = login_dirs.claude_config_dir()
+  source_account = claude_config.ClaudeAccount(label="default", config_dir=str(source_dir))
+  if not claude_accounts.credentials_present(source_account):
+    fail("the default Claude login has no readable access token")
+  destination_dir = home / "claude-default"
+  destination_dir.mkdir(parents=True, exist_ok=True)
+  shutil.copy2(source_dir / login_dirs.CREDENTIALS_FILE, destination_dir / login_dirs.CREDENTIALS_FILE)
+  return None, {}, str(destination_dir)
 
 
 def deps_tree():
@@ -206,6 +259,25 @@ def deps_tree():
 
 def tree_run_dir(session_id: str, run_id: str) -> pathlib.Path:
   return deps_tree().runs.run_dir(session_id, run_id)
+
+
+def count_bash_sleep_calls(run_dir: pathlib.Path) -> int:
+  """Count separate ``sleep 12`` Bash tool calls across a Run's transport logs."""
+  from src.runtime import runs
+
+  count = 0
+  for raw_path in sorted(run_dir.glob(f"{runs.RAW_LOG_NAME}*")):
+    with raw_path.open("r", encoding="utf-8") as raw_file:
+      for line in raw_file:
+        event = json.loads(line)
+        message = event.get("message")
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, list):
+          continue
+        count += sum(
+            1 for block in content if isinstance(block, dict) and block.get("type") == "tool_use" and
+            block.get("name") == "Bash" and block.get("input", {}).get("command") == "sleep 12")
+  return count
 
 
 _SERVERS: list = []
@@ -619,6 +691,152 @@ async def smoke(backend_id: str, purge: bool, entry_override: dict | None = None
     await shutdown_servers()
 
 
+async def midturn_smoke(backend_id: str, purge: bool, entry_override: dict | None = None) -> None:
+  """Run the four-sleep replay and finish-claim contract on an isolated Haiku turn."""
+  entry = load_production_backend_entry(backend_id) if entry_override is None else dict(entry_override)
+  if entry.get("type") not in ("cc-anthropic-compatible", "cc-claude") or "haiku" not in str(entry.get("model",
+                                                                                                       "")).lower():
+    fail("the mid-turn smoke requires a Claude Code Haiku-class backend")
+  preflight(backend_id, entry, production_config=entry_override is None, midturn=True)
+
+  home = pathlib.Path(tempfile.mkdtemp(prefix="charliebot-midturn-smoke-"))
+  isolated_accounts, isolated_pools, default_claude_dir = isolate_claude_auth(home, entry)
+  port, access_key = build_synthetic_home(
+      home, backend_id, entry, claude_accounts=isolated_accounts, claude_pools=isolated_pools)
+  os.environ["CHARLIEBOT_HOME"] = str(home)
+  if entry["type"] == "cc-anthropic-compatible":
+    claude_config_dir = home / "claude-config"
+    claude_config_dir.mkdir(parents=True, exist_ok=True)
+    os.environ["CLAUDE_CONFIG_DIR"] = str(claude_config_dir)
+  elif default_claude_dir is not None:
+    os.environ["CLAUDE_CONFIG_DIR"] = default_claude_dir
+  else:
+    os.environ.pop("CLAUDE_CONFIG_DIR", None)
+  for var in (constants.SESSION_ID_ENV_VAR, constants.RUN_TOKEN_ENV):
+    os.environ.pop(var, None)
+
+  base = f"http://127.0.0.1:{port}"
+  log(f"mid-turn smoke home: {home}")
+  log(f"isolated server: {base}")
+
+  try:
+    await start_server(port, "charliebot-midturn-live-smoke")
+  except RuntimeError as exc:
+    fail(str(exc))
+  try:
+    status, manager = await arequest(
+        base, access_key, "POST", "/api/sessions/", {
+            "request_id": "midturn-manager-create",
+            "profile": "manager",
+            "name": "midturn-manager",
+        })
+    if status != 200 or not manager.get("id"):
+      fail(f"manager task create failed: {status} {manager}")
+    manager_id = manager["id"]
+    initial_prompt = (
+        "Take off. Make exactly four separate Bash tool calls, each running `sleep 12`, sequentially. "
+        "Do not combine, skip or shorten the sleeps. Post an opening web reply before the first sleep. "
+        "After all four sleeps, post a web reply that answers the latest user message.")
+    status, posted = await arequest(
+        base, access_key, "POST", f"/api/chat/{manager_id}/message", {
+            "content": initial_prompt,
+            "request_id": f"midturn-initial:{manager_id}",
+        })
+    if status != 202 or not posted.get("input_event_id"):
+      fail(f"initial manager input admission failed: {status} {posted}")
+    run_id = await wait_for_dispatch_run(manager_id, "mid-turn manager")
+    tree = deps_tree()
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+      run = await tree.runs.get_run(manager_id, run_id)
+      if run is not None and run.pid is not None:
+        break
+      await asyncio.sleep(0.05)
+    else:
+      fail(f"manager Run {run_id} never spawned")
+
+    launched_at = time.monotonic()
+    await asyncio.sleep(max(0.0, 5.0 - (time.monotonic() - launched_at)))
+    late_status, late = await arequest(
+        base, access_key, "POST", f"/api/chat/{manager_id}/message", {
+            "content":
+                "Please answer this message with the exact phrase MIDTURN-LATE-OK after finishing all four sleeps.",
+            "request_id":
+                f"midturn-late:{manager_id}",
+        })
+    if late_status != 202 or not late.get("input_event_id"):
+      fail(f"late manager input admission failed: {late_status} {late}")
+    late_id = str(late["input_event_id"])
+
+    ack_started = time.monotonic()
+    ack_deadline = ack_started + 20.0
+    ack = None
+    while time.monotonic() < ack_deadline:
+      chat_events = await asyncio.to_thread(tree.session_events.load_chat_events_sync, manager_id)
+      ack = next(
+          (
+              event for event in chat_events if event.get("type") == ET.INPUT_DELIVERED and
+              event.get("input_event_id") == late_id and event.get("run_id") == run_id), None)
+      if ack is not None:
+        break
+      await asyncio.sleep(0.05)
+    if ack is None:
+      fail("input_delivered did not appear within 20 seconds of the message API response")
+    ack_seconds = time.monotonic() - ack_started
+    log(f"ASSERT input_delivered within 20 s: {ack_seconds:.2f} s for {late_id}")
+
+    manager_run, outcome = await wait_for_terminal_run(manager_id, run_id, "mid-turn manager turn")
+    if outcome != "success":
+      fail(f"manager turn failed: outcome={outcome} raw_log={manager_run.raw_log_ref}")
+    sleep_calls = count_bash_sleep_calls(tree.runs.run_dir(manager_id, run_id))
+    if sleep_calls != 4:
+      fail(f"manager turn made {sleep_calls} separate `sleep 12` Bash calls; expected four")
+    log("ASSERT manager ran four separate 12 s sleeps")
+    run_events = await asyncio.to_thread(tree.runs.load_events_sync, manager_id)
+    finished = next(
+        (event for event in run_events if event.get("type") == ET.RUN_FINISHED and event.get("run_id") == run_id), None)
+    if finished is None or late_id not in finished.get("input_event_ids", []):
+      fail(f"run_finished did not claim echoed message {late_id}: {finished}")
+    log(f"ASSERT run_finished holds the message id: {late_id}")
+
+    await asyncio.sleep(1.0)
+    registered = await asyncio.to_thread(tree.runs.list_run_records_sync, manager_id)
+    pending = tree.dispatch.pending_inputs(manager_id)
+    if len(registered) != 1 or any(str(event.get("id")) == late_id for event in pending):
+      fail(f"a new Run started or the delivered id stayed pending: runs={len(registered)} pending={pending}")
+    log("ASSERT no new Run starts for the delivered message: one Run registered")
+
+    chat_events = await asyncio.to_thread(tree.session_events.load_chat_events_sync, manager_id)
+    reply_event = next(
+        (
+            event for event in chat_events
+            if event.get("type") == ET.WEB_REPLY and (event.get(ET.WEB_REPLY) or {}).get("answers") == late_id), None)
+    if reply_event is None:
+      fail(f"no web reply answers the delivered message id {late_id}")
+    log(f"ASSERT web reply answers the message id: {late_id}")
+    report = {
+        "run_id": run_id,
+        "model": manager_run.model,
+        "sleep_calls": sleep_calls,
+        "input_delivered_seconds": round(ack_seconds, 2),
+        "late_input_event_id": late_id,
+        "run_finished_input_event_ids": finished["input_event_ids"],
+        "registered_runs": len(registered),
+        "web_reply_answers": (reply_event.get(ET.WEB_REPLY) or {}).get("answers"),
+        "smoke_home": str(home),
+    }
+    (home / "midturn-smoke-report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+    log("LIVE MID-TURN SMOKE PASSED")
+    log(json.dumps(report, indent=2))
+    if purge:
+      shutil.rmtree(home)
+      log("smoke home purged")
+    else:
+      log(f"smoke home kept for inspection: {home}")
+  finally:
+    await shutdown_servers()
+
+
 def main() -> None:
   parser = argparse.ArgumentParser(description="Isolated live smoke for the v2 session task tree")
   parser.add_argument(
@@ -632,19 +850,24 @@ def main() -> None:
   parser.add_argument("--credential")
   parser.add_argument("--label")
   parser.add_argument("--prompt-overlay")
+  parser.add_argument("--midturn", action="store_true", help="Run the isolated Claude Haiku mid-turn delivery test")
   parser.add_argument("--purge", action="store_true", help="Remove the synthetic home after the run")
   args = parser.parse_args()
   # This harness runs the server stack in-process, outside server.py and the CLI entry, so it
   # registers the backend packages itself.
   from src.app import registrations
   registrations.register_all()
-  inline_values = (args.model, args.api_base, args.context_window, args.credential, args.label, args.prompt_overlay)
   if args.backend_type is None:
-    if any(value is not None for value in inline_values):
-      parser.error(
-          "--model, --api-base, --context-window, --credential, --label and --prompt-overlay require "
-          "--backend-type")
-    entry = None
+    other_inline_values = (args.api_base, args.context_window, args.credential, args.label, args.prompt_overlay)
+    if any(value is not None for value in other_inline_values):
+      parser.error("--api-base, --context-window, --credential, --label and --prompt-overlay require --backend-type")
+    if args.model is not None:
+      if not args.midturn:
+        parser.error("--model without --backend-type requires --midturn")
+      entry = load_production_backend_entry(args.backend)
+      entry["model"] = args.model
+    else:
+      entry = None
   else:
     if args.model is None or args.api_base is None or args.context_window is None:
       parser.error("--backend-type cc-anthropic-compatible requires --model, --api-base and --context-window")
@@ -660,7 +883,10 @@ def main() -> None:
             "credential": args.credential,
             "prompt_overlay": args.prompt_overlay,
         }).model_dump(mode="json")
-  asyncio.run(smoke(args.backend, args.purge, entry))
+  if args.midturn:
+    asyncio.run(midturn_smoke(args.backend, args.purge, entry))
+  else:
+    asyncio.run(smoke(args.backend, args.purge, entry))
 
 
 if __name__ == "__main__":

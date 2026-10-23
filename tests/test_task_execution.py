@@ -26,11 +26,20 @@ import pytest
 from fastapi import testclient
 
 import src.runtime.task_execution as task_execution_module
+import src.runtime.task_input_prompt as task_input_prompt_module
 from src.backends.claude_code import claude_accounts, claude_relay, master_cc_relay
 from src.features.voice import turn_contribution
 from src.infra import config, constants, models
 from src.infra import event_types as ET
-from src.runtime import backend_pool, message_events, session_anchors, session_fork, task_errors, task_sessions
+from src.runtime import (
+    backend_pool,
+    message_events,
+    midturn_delivery,
+    session_anchors,
+    session_fork,
+    task_errors,
+    task_sessions,
+)
 from src.runtime import runs as runs_mod
 from src.runtime.api import message_utils
 
@@ -506,6 +515,63 @@ async def test_first_message_on_empty_goal_task_dispatches_a_manager_turn(
 
 
 @pytest.mark.asyncio
+async def test_manager_finish_claims_only_echoed_pending_user_ids(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  _cfg, _session_blocks, tree, manager = await _wired_root_manager(tmp_path, monkeypatch)
+  initial = await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="Initial", actor="user")
+  run_id = str(uuid.uuid4())
+  run = models.RunRecord(id=run_id, session_id=manager.id, kind="manager_turn")
+  async with tree.control_lock:
+    await tree.runs.register_run_locked(run)
+    await tree.dispatch.claim_input_batch_locked(manager.id, run_id)
+  await tree.runs.record_launch(manager.id, run_id, pid=424001, pid_start="1-424000")
+  echoed = await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="Echoed", actor="user")
+  queued = await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="Still pending", actor="user")
+  agent = await tree.dispatch.admit_input(
+      manager.id, event_type=ET.AGENT_MESSAGE, content="Agent input", actor="agent", from_session="agent-session")
+  transport_dir = tree.runs.run_dir(manager.id, run_id)
+  raw_path = transport_dir / runs_mod.RAW_LOG_NAME
+  raw_path.write_text(
+      "\n".join(
+          json.dumps(event) for event in (
+              {
+                  "type": ET.USER,
+                  "uuid": run_id,
+                  "isReplay": True
+              },
+              {
+                  "type": ET.USER,
+                  "uuid": echoed["id"],
+                  "isReplay": True
+              },
+              {
+                  "type": ET.USER,
+                  "uuid": agent["id"],
+                  "isReplay": True
+              },
+          )) + "\n",
+      encoding="utf-8",
+  )
+
+  claimed = await midturn_delivery.claim_finish_inputs(manager, tree.dispatch, run_id, transport_dir, successful=True)
+
+  assert claimed == [str(echoed["id"])]
+  updated = await tree.runs.get_run(manager.id, run_id)
+  assert updated is not None
+  assert updated.input_event_ids == [str(initial["id"]), str(echoed["id"])]
+  assert {str(event["id"]) for event in tree.dispatch.pending_inputs(manager.id)
+         } == {str(queued["id"]), str(agent["id"])}
+
+  await tree.dispatch.finish_run(manager.id, run_id, outcome="success", exit_code=0)
+  finished = next(
+      event for event in tree.runs.load_events_sync(manager.id)
+      if event.get("type") == ET.RUN_FINISHED and event.get("run_id") == run_id)
+  assert finished["input_event_ids"] == [str(initial["id"]), str(echoed["id"])]
+  assert {str(event["id"]) for event in tree.dispatch.pending_inputs(manager.id)
+         } == {str(queued["id"]), str(agent["id"])}
+
+
+@pytest.mark.asyncio
 async def test_concurrent_dispatch_starts_one_process(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   _cfg, _session_blocks, tree, manager = await _wired_root_manager(tmp_path, monkeypatch)
   backend = SpawningScriptedBackend([result_event("one")])
@@ -548,10 +614,26 @@ class _SpawnFirstBackend(SpawningScriptedBackend):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("later_type", [ET.USER, ET.AGENT_MESSAGE])
+@pytest.mark.parametrize("session_kind", ["web", "slack", "discord"])
 async def test_input_admitted_during_active_run_dispatches_after_its_finish(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """The later input is consumed by the next serialized turn without a second dispatch call."""
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, later_type: str, session_kind: str) -> None:
+  """Un-delivered user and agent inputs wait for the next serialized turn."""
   _cfg, _session_blocks, tree, manager = await _wired_root_manager(tmp_path, monkeypatch)
+  if session_kind == "slack":
+    await tree.update_slot_fields(
+        manager.id, "slack", slack_origin={
+            "team_id": "T",
+            "channel_id": "C",
+            "thread_ts": "1.0"
+        })
+  elif session_kind == "discord":
+    await tree.update_slot_fields(
+        manager.id, "discord", discord_origin={
+            "guild_id": "G",
+            "parent_channel_id": "C",
+            "thread_id": "1"
+        })
   gate_release = asyncio.Event()
   first = _SpawnFirstBackend([result_event("first")], gate=gate_release.wait)
   second = _SpawnFirstBackend([result_event("second")])
@@ -573,7 +655,11 @@ async def test_input_admitted_during_active_run_dispatches_after_its_finish(
 
   # The later input is durably admitted but never launched under the active run.
   admitted_later = await tree.dispatch.admit_input(
-      manager.id, event_type=ET.USER, content="Second message.", actor="user")
+      manager.id,
+      event_type=later_type,
+      content="Second message.",
+      actor="user" if later_type == ET.USER else "agent",
+      from_session="agent-session" if later_type == ET.AGENT_MESSAGE else None)
   decision_later = await tree.dispatch.dispatch_pending(manager.id)
   assert decision_later["launch"] is False
 
@@ -1795,7 +1881,7 @@ def test_the_voice_note_opens_a_dictated_user_input_only() -> None:
   typed = {"type": ET.USER, "content": "typed in"}
   relayed = {"type": ET.AGENT_MESSAGE, "content": "from a peer", "from_session_name": "peer"}
 
-  prompt, _uploads = task_execution_module.compose_input_prompt(meta, [dictated, typed, relayed])
+  prompt, _uploads = task_input_prompt_module.compose_input_prompt(meta, [dictated, typed, relayed])
 
   assert prompt == "\n\n".join(
       [f"{turn_contribution.VOICE_NOTE}\nsaid aloud", "typed in", "[Message from session peer] from a peer"])
@@ -1806,7 +1892,7 @@ def test_compose_input_prompt_puts_the_attachment_block_after_the_text() -> None
   first, second = "/sessions/node/uploads/one.png", "/sessions/node/uploads/two.png"
   event = {"type": ET.USER, "content": "look at these", "uploaded_files": [{"path": first}, {"path": second}]}
 
-  prompt, uploads = task_execution_module.compose_input_prompt(meta, [event])
+  prompt, uploads = task_input_prompt_module.compose_input_prompt(meta, [event])
 
   assert prompt == (
       f"look at these{message_events._ATTACHED_FILES_MARKER}{message_events.DEFAULT_ATTACHED_FILES_PROMPT}"
@@ -1819,7 +1905,7 @@ def test_compose_input_prompt_gives_an_upload_only_event_the_block_alone() -> No
   path = "/sessions/node/uploads/shot.png"
   event = {"type": ET.USER, "content": "", "uploaded_files": [{"path": path}]}
 
-  prompt, uploads = task_execution_module.compose_input_prompt(meta, [event])
+  prompt, uploads = task_input_prompt_module.compose_input_prompt(meta, [event])
 
   assert prompt.startswith("[Attached files]")
   assert path in prompt
@@ -2752,6 +2838,12 @@ async def test_manager_turn_relay_registers_the_second_process_through_the_launc
   claude_accounts.reset_for_tests()
   cfg, session_blocks, tree = build_pooled_env(tmp_path, monkeypatch)
   manager = await conftest.create_task(tree, parent=None, request_id="root")
+  await tree.update_slot_fields(
+      manager.id, "slack", slack_origin={
+          "team_id": "T",
+          "channel_id": "C",
+          "thread_ts": "1.0"
+      })
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   cc_id = "8b6fd8ac-6f0e-4af2-9d0e-1c2f47ab5311"
   conftest.make_transcript(tmp_path / "claude-main", cc_id)
@@ -2820,6 +2912,12 @@ async def test_stop_in_the_relay_gap_refuses_the_second_process_and_interrupts_t
   claude_accounts.reset_for_tests()
   cfg, session_blocks, tree = build_pooled_env(tmp_path, monkeypatch)
   manager = await conftest.create_task(tree, parent=None, request_id="root")
+  await tree.update_slot_fields(
+      manager.id, "slack", slack_origin={
+          "team_id": "T",
+          "channel_id": "C",
+          "thread_ts": "1.0"
+      })
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   cc_id = "9c7fe9bd-7f1e-5f3a-be1f-2d3f58bc6422"
   conftest.make_transcript(tmp_path / "claude-main", cc_id)

@@ -98,6 +98,7 @@ async def test_one_shot_text_spawns_claude_without_the_gateway_variables(monkeyp
     monkeypatch.setenv(name, "inherited-gateway-value")
   monkeypatch.setenv("UNRELATED_INHERITED_VAR", "kept")
 
+  spawned_args: tuple[object, ...] = ()
   spawned_env: dict[str, str] = {}
 
   class _FakeProc:
@@ -108,6 +109,8 @@ async def test_one_shot_text_spawns_claude_without_the_gateway_variables(monkeyp
       return b"ok", b""
 
   async def _fake_exec(*args: object, **kwargs: object) -> _FakeProc:
+    nonlocal spawned_args
+    spawned_args = args
     spawned_env.update(kwargs["env"])
     return _FakeProc()
 
@@ -115,6 +118,7 @@ async def test_one_shot_text_spawns_claude_without_the_gateway_variables(monkeyp
   backend = claude_code.ClaudeCodeBackend(model="claude-haiku-5-5")
 
   assert await backend.one_shot_text("prompt", "system", timeout=None) == "ok"
+  assert spawned_args[spawned_args.index("--model") + 1] == "claude-haiku-5-5"
   for name in claude_code.GATEWAY_ENDPOINT_ENV_NAMES:
     assert name not in spawned_env
   assert spawned_env["UNRELATED_INHERITED_VAR"] == "kept"

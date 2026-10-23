@@ -19,6 +19,7 @@
 #include <fcntl.h>
 #include <sched.h>
 #include <signal.h>
+#include <string.h>
 #include <sys/mman.h>
 #include <sys/prctl.h>
 #include <sys/syscall.h>
@@ -83,6 +84,28 @@ static int child_main(void *argp) {
   return 127; /* unreachable; keeps the compiler honest about the return type */
 }
 
+static char *copy_utf8(PyObject *value) {
+  Py_ssize_t size;
+  const char *utf8 = PyUnicode_AsUTF8AndSize(value, &size);
+  if (utf8 == NULL)
+    return NULL;
+  char *copy = PyMem_Malloc((size_t)size + 1);
+  if (copy == NULL) {
+    PyErr_NoMemory();
+    return NULL;
+  }
+  memcpy(copy, utf8, (size_t)size + 1);
+  return copy;
+}
+
+static void free_strings(char **strings, Py_ssize_t count) {
+  if (strings == NULL)
+    return;
+  for (Py_ssize_t i = 0; i < count; i++)
+    PyMem_Free(strings[i]);
+  PyMem_Free(strings);
+}
+
 static PyObject *py_spawn(PyObject *self, PyObject *args) {
   PyObject *argv_obj, *env_obj;
   const char *cwd;
@@ -98,27 +121,25 @@ static PyObject *py_spawn(PyObject *self, PyObject *args) {
     PyErr_SetString(PyExc_ValueError, "argv must not be empty");
     return NULL;
   }
-  /* PyUnicode_AsUTF8AndSize caches inside the objects; the caller's lists keep
-     them alive through execve, so borrowed pointers need no extra pinning. */
-  char **argv = PyMem_Malloc(((size_t)argc + 1) * sizeof(char *));
-  char **envp = PyMem_Malloc(((size_t)envc + 1) * sizeof(char *));
+  /* Copy strings out of the caller's lists before releasing the GIL. The child
+     reads stable buffers even if another Python thread mutates those lists. */
+  char **argv = PyMem_Calloc((size_t)argc + 1, sizeof(char *));
+  char **envp = PyMem_Calloc((size_t)envc + 1, sizeof(char *));
   if (argv == NULL || envp == NULL) {
-    PyMem_Free(argv);
-    PyMem_Free(envp);
+    free_strings(argv, argc);
+    free_strings(envp, envc);
     return PyErr_NoMemory();
   }
-  PyObject *lists[2] = {argv_obj, env_obj};
-  char **arrays[2] = {argv, envp};
-  Py_ssize_t sizes[2] = {argc, envc};
-  for (int half = 0; half < 2; half++)
-    for (Py_ssize_t i = 0; i < sizes[half]; i++) {
-      PyObject *item = PyList_GetItem(lists[half], i); /* borrowed */
-      arrays[half][i] = item ? (char *)PyUnicode_AsUTF8AndSize(item, NULL) : NULL;
-      if (arrays[half][i] == NULL)
-        goto fail;
-    }
-  argv[argc] = NULL;
-  envp[envc] = NULL;
+  for (Py_ssize_t i = 0; i < argc; i++) {
+    PyObject *item = PyList_GetItem(argv_obj, i); /* borrowed */
+    if (item == NULL || (argv[i] = copy_utf8(item)) == NULL)
+      goto fail;
+  }
+  for (Py_ssize_t i = 0; i < envc; i++) {
+    PyObject *item = PyList_GetItem(env_obj, i); /* borrowed */
+    if (item == NULL || (envp[i] = copy_utf8(item)) == NULL)
+      goto fail;
+  }
 
   int report[2];
   if (pipe2(report, O_CLOEXEC) != 0) {
@@ -157,9 +178,10 @@ static PyObject *py_spawn(PyObject *self, PyObject *args) {
      read and a failed exec's waitpid the GIL is released, so a child that
      sits before execve holds one worker thread, not the server's other
      Python threads. While the child shares this address space those threads
-     run Python against the heap its argv/envp pointers reach into — the child
-     side stays safe beside them because child_main touches only its private
-     stack, the spawn_args struct and syscalls: no heap access, no Python. */
+     run Python against the same heap; child_main uses only its private stack,
+     spawn_args, the prebuilt argv/env buffers and syscalls. The strings were
+     copied above and stay stable through execve; child_main makes no Python or
+     allocator calls. */
   pid_t pid;
   int clone_errno = 0;
   int child_err = 0;
@@ -186,8 +208,8 @@ static PyObject *py_spawn(PyObject *self, PyObject *args) {
       int status;
       while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {
       }
-    } else if (got < 0) {
-      read_errno = errno;
+    } else if (got != 0) {
+      read_errno = got < 0 ? errno : EIO;
     }
   }
   Py_END_ALLOW_THREADS
@@ -206,13 +228,13 @@ static PyObject *py_spawn(PyObject *self, PyObject *args) {
     PyErr_SetFromErrno(PyExc_OSError);
     goto fail;
   }
-  PyMem_Free(argv);
-  PyMem_Free(envp);
+  free_strings(argv, argc);
+  free_strings(envp, envc);
   return PyLong_FromLong((long)pid);
 
 fail:
-  PyMem_Free(argv);
-  PyMem_Free(envp);
+  free_strings(argv, argc);
+  free_strings(envp, envc);
   return NULL;
 }
 

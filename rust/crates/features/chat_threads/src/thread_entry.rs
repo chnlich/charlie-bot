@@ -30,7 +30,6 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
 use std::future::Future;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex as StdMutex, Weak};
 use std::time::Duration;
 
@@ -92,11 +91,6 @@ const NO_REPLY_NOTICE: &str = "No reply was posted for this mention; the details
 static FOLLOW_FLOOR_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"floor=([0-9.]+)").expect("valid pattern"));
 static SESSION_LOCKS: LazyLock<StdMutex<HashMap<String, Weak<tokio::sync::Mutex<()>>>>> =
   LazyLock::new(|| StdMutex::new(HashMap::new()));
-static NEXT_EPHEMERAL_POST_ID: AtomicU64 = AtomicU64::new(1);
-
-fn ephemeral_post_id() -> u64 {
-  NEXT_EPHEMERAL_POST_ID.fetch_add(1, Ordering::Relaxed)
-}
 
 /// Return the process-local lock shared by reply, summon, and audit work for one session.
 pub fn session_lock_for(session_id: &str) -> Arc<tokio::sync::Mutex<()>> {
@@ -1429,7 +1423,11 @@ async fn route_thread_session(
       let message = format!("backend router failed: {error}");
       let address = adapter.address_of(origin);
       adapter
-        .post(&address, &message, &format!("{}-routerror:{}#1", adapter.platform().name, ephemeral_post_id()))
+        .post(
+          &address,
+          &message,
+          &format!("{}-routerror:{}#1", adapter.platform().name, charliebot_store::control_events::new_request_id()),
+        )
         .await?;
       return Err(ThreadReplyError::failure(message));
     }
@@ -1443,7 +1441,11 @@ async fn route_thread_session(
     let message = format!("no backend is available for the thread session: {}", pool.recovery_report(&cfg));
     let address = adapter.address_of(origin);
     adapter
-      .post(&address, &message, &format!("{}-routerror:{}#1", adapter.platform().name, ephemeral_post_id()))
+      .post(
+        &address,
+        &message,
+        &format!("{}-routerror:{}#1", adapter.platform().name, charliebot_store::control_events::new_request_id()),
+      )
       .await?;
     return Err(ThreadReplyError::failure(message));
   };

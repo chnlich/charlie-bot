@@ -12,6 +12,13 @@ import subprocess
 import sys
 import uuid
 
+import pytest
+
+# Every test here observes the plugin; without the sandbox they would fail for the wrong reason.
+pytestmark = pytest.mark.skipif(
+    os.environ.get("CHARLIEBOT_USE_TEST_SANDBOX", "1") != "1",
+    reason="the sandbox boundaries need CHARLIEBOT_USE_TEST_SANDBOX=1")
+
 _INNER = """\
 import os, signal, subprocess, sys
 

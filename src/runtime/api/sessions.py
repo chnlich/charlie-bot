@@ -676,9 +676,9 @@ _SEARCH_NULL_PIECES: dict[str, bytes] = {
 _search_row_fragments: memo.BoundedMemo[int, tuple[models.SessionMetadata,
                                                    tuple[bytes | str,
                                                          ...]]] = memo.BoundedMemo(_SEARCH_ROW_FRAGMENT_CAP)
-# The finished row's wire bytes: metadata object -> (that object, the row's five
+# The finished row's wire bytes: metadata object -> (that object, the row's
 # derived values, the spliced body). The body is a pure function of the metadata
-# object and those five values, both in the value — the metadata cache replaces
+# object and those values, both in the value — the metadata cache replaces
 # the object whenever its file provably changes, and the values ride the check —
 # so a repeat request with an unchanged row state serves the cached bytes; the
 # stored object pins the row so an id reuse can never serve another object's

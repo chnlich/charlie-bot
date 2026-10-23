@@ -417,11 +417,13 @@ async def test_quota_failover_uses_the_pool_once_the_route_is_spent(tmp_path, mo
 async def _launch_worker_error_event(
     tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
-    message: str,
+    message: str = "",
     *,
     content: str = "",
     pool_chosen: bool = True,
     event_type: str = ET.ERROR,
+    scripted_event: dict | None = None,
+    exit_code: int = 1,
 ) -> tuple[
     config.CharlieBotConfig,
     task_sessions.TaskTreeManager,
@@ -432,7 +434,7 @@ async def _launch_worker_error_event(
     list[dict],
     list[tuple[str, str, str | None]],
 ]:
-  """Run one scripted implement worker error through completion and failover delivery."""
+  """Run one scripted implement worker event through completion and failover delivery."""
   backend_pool.reset_for_tests()
   cfg, session_blocks, tree = tte.build_spawning_env(
       tmp_path,
@@ -506,14 +508,15 @@ async def _launch_worker_error_event(
     reports.append((failed_run.id, outcome, summary))
 
   monkeypatch.setattr(adapter, "_report_failure_to_parent", record_failure)
+  first_event = scripted_event if scripted_event is not None else {
+      "type": event_type,
+      "message": message,
+      "content": content,
+  }
   builds = conftest.install_scripted_backends(
       monkeypatch,
       [
-          tte.SpawningScriptedBackend([{
-              "type": event_type,
-              "message": message,
-              "content": content,
-          }], exit_code=1),
+          tte.SpawningScriptedBackend([first_event], exit_code=exit_code),
           tte.SpawningScriptedBackend([conftest.assistant_text_event("retry stopped")], exit_code=1),
       ],
       conftest.WORKER_BUILD_BACKEND_PATCH_TARGET,
@@ -521,6 +524,137 @@ async def _launch_worker_error_event(
   adapter.launch(worker_node.id, run.id)
   ended_run, outcome = await tte.wait_for_terminal_run(tree, worker_node.id, run.id)
   return cfg, tree, worker_node.id, ended_run, outcome, first_backend_id, builds, reports
+
+
+async def _wait_for_parent_failure(reports: list[tuple[str, str, str | None]], run_id: str) -> None:
+  expected = (run_id, "failed", None)
+  deadline = asyncio.get_running_loop().time() + 2.0
+  while expected not in reports and asyncio.get_running_loop().time() < deadline:
+    await asyncio.sleep(0.01)
+  assert expected in reports
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("api_error_status", "result"),
+    [
+        (502, "API Error: 502 litellm.BadGatewayError: BadGatewayError: OpenAIException - Bad Gateway"),
+        (529, 'API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}'),
+        (429, "API Error: 429 litellm.RateLimitError: RateLimitError: OpenAIException - rate limit exceeded"),
+        (None, "API Error: Connection error."),
+    ],
+)
+async def test_temporary_claude_result_errors_fail_over_on_the_worker_path(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    api_error_status: int | None,
+    result: str,
+) -> None:
+  event = {"type": ET.RESULT, "is_error": True, "api_error_status": api_error_status, "result": result}
+  cfg, tree, worker_id, failed_run, outcome, first_backend, builds, reports = await _launch_worker_error_event(
+      tmp_path, monkeypatch, scripted_event=event)
+  assert failed_run.events_ref is not None
+  logged_events = [
+      json.loads(line) for line in pathlib.Path(failed_run.events_ref).read_text(encoding="utf-8").splitlines()
+  ]
+  assert any(
+      logged_event.get("type") == ET.RESULT and logged_event.get("result") == result for logged_event in logged_events)
+  assert outcome == "failed"
+  retry = await tte._claimed_work_run_after(tree, worker_id, {failed_run.id}, timeout=15.0)
+  retry, retry_outcome = await tte.wait_for_terminal_run(tree, worker_id, retry.id)
+  await _wait_for_parent_failure(reports, retry.id)
+
+  assert retry_outcome == "failed"
+  assert backend_pool.cooling_until(first_backend) is not None
+  assert backend_pool.cooling_until("fake2") is None
+  remaining = backend_pool.cooling_until(first_backend) - models.utc_now()
+  assert datetime.timedelta(minutes=29) < remaining <= backend_pool.DEFAULT_COOLDOWN
+  assert retry.backend == "fake2"
+  assert builds[1]["option"].id == "fake2"
+  assert retry.input_event_ids == failed_run.input_event_ids
+  assert retry.worktree_path == failed_run.worktree_path
+  switches = [event for event in tree.events.load_events(worker_id) if event.get("type") == ET.QUOTA_FAILOVER]
+  assert len(switches) == 1
+  assert switches[0]["from"] == first_backend
+  assert switches[0]["to"] == "fake2"
+  assert switches[0]["recovers_at"] == backend_pool.cooling_until(first_backend).isoformat(timespec="minutes")
+  assert reports == [(retry.id, "failed", None)]
+  assert cfg.backends.pool == ["fake", "fake2"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "result",
+    [
+        (
+            "API Error: 400 litellm.BadRequestError: OpenAIException - The `reasoning_content` in the thinking mode "
+            "must be passed back to the API. (request_id: f69ad0ec-cd32-4570-917d-7689ec630120)"),
+        "API Error: 400 litellm.BadRequestError: upstream reported Bad Gateway",
+    ],
+)
+async def test_bad_request_claude_result_errors_do_not_fail_over(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    result: str,
+) -> None:
+  event = {"type": ET.RESULT, "is_error": True, "api_error_status": 400, "result": result}
+  cfg, tree, worker_id, failed_run, outcome, _first_backend, builds, reports = await _launch_worker_error_event(
+      tmp_path, monkeypatch, scripted_event=event)
+  await _wait_for_parent_failure(reports, failed_run.id)
+
+  assert outcome == "failed"
+  assert all(backend_pool.cooling_until(member) is None for member in cfg.backends.pool)
+  assert [r for r in tree.runs.list_run_records_sync(worker_id) if r.retry_of_run_id == failed_run.id] == []
+  assert not [e for e in tree.events.load_events(worker_id) if e.get("type") == ET.QUOTA_FAILOVER]
+  assert len(builds) == 1
+  assert reports == [(failed_run.id, "failed", None)]
+
+
+@pytest.mark.asyncio
+async def test_non_error_claude_result_with_temporary_message_does_not_fail_over(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  event = {
+      "type": ET.RESULT,
+      "is_error": False,
+      "subtype": "error",
+      "api_error_status": None,
+      "result": "Fixed the Bad Gateway handler.",
+  }
+  cfg, tree, worker_id, failed_run, outcome, _first_backend, builds, reports = await _launch_worker_error_event(
+      tmp_path, monkeypatch, scripted_event=event, exit_code=1)
+  await _wait_for_parent_failure(reports, failed_run.id)
+
+  assert outcome == "failed"
+  assert all(backend_pool.cooling_until(member) is None for member in cfg.backends.pool)
+  assert [r for r in tree.runs.list_run_records_sync(worker_id) if r.retry_of_run_id == failed_run.id] == []
+  assert not [e for e in tree.events.load_events(worker_id) if e.get("type") == ET.QUOTA_FAILOVER]
+  assert len(builds) == 1
+  assert reports == [(failed_run.id, "failed", None)]
+
+
+@pytest.mark.asyncio
+async def test_a_named_backend_claude_result_error_reports_failure_without_failover(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  event = {
+      "type": ET.RESULT,
+      "is_error": True,
+      "api_error_status": 502,
+      "result": "API Error: 502 litellm.BadGatewayError: BadGatewayError: OpenAIException - Bad Gateway",
+  }
+  cfg, tree, worker_id, failed_run, outcome, first_backend, builds, reports = await _launch_worker_error_event(
+      tmp_path, monkeypatch, pool_chosen=False, scripted_event=event)
+  await _wait_for_parent_failure(reports, failed_run.id)
+  meta = await tree.load_meta(worker_id)
+  fields = metadata_slots.fields_of(meta, backend_pool.METADATA_OWNER)
+
+  assert outcome == "failed"
+  assert fields.backend_from_pool is False and fields.route is None
+  assert all(backend_pool.cooling_until(member) is None for member in cfg.backends.pool)
+  assert first_backend == "fake"
+  assert [r for r in tree.runs.list_run_records_sync(worker_id) if r.retry_of_run_id == failed_run.id] == []
+  assert not [e for e in tree.events.load_events(worker_id) if e.get("type") == ET.QUOTA_FAILOVER]
+  assert len(builds) == 1
+  assert reports == [(failed_run.id, "failed", None)]
 
 
 @pytest.mark.asyncio
@@ -547,6 +681,7 @@ async def test_temporary_backend_errors_fail_over_on_the_worker_path(
   assert outcome == "failed"
   retry = await tte._claimed_work_run_after(tree, worker_id, {failed_run.id}, timeout=15.0)
   retry, retry_outcome = await tte.wait_for_terminal_run(tree, worker_id, retry.id)
+  await _wait_for_parent_failure(reports, retry.id)
 
   assert retry_outcome == "failed"
   assert backend_pool.cooling_until(first_backend) is not None
@@ -578,6 +713,7 @@ async def test_stderr_tail_and_request_id_do_not_trigger_backend_failover(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, message: str, content: str) -> None:
   cfg, tree, worker_id, failed_run, outcome, _first_backend, builds, reports = await _launch_worker_error_event(
       tmp_path, monkeypatch, message, content=content)
+  await _wait_for_parent_failure(reports, failed_run.id)
 
   assert outcome == "failed"
   assert all(backend_pool.cooling_until(member) is None for member in cfg.backends.pool)
@@ -596,6 +732,7 @@ async def test_non_error_event_with_temporary_backend_message_does_not_fail_over
       "Selected model is at capacity. Please try a different model.",
       event_type=ET.SYSTEM,
   )
+  await _wait_for_parent_failure(reports, failed_run.id)
 
   assert outcome == "failed"
   assert all(backend_pool.cooling_until(member) is None for member in cfg.backends.pool)
@@ -614,6 +751,7 @@ async def test_a_named_backend_capacity_error_reports_failure_without_failover(
       "Selected model is at capacity. Please try a different model.",
       pool_chosen=False,
   )
+  await _wait_for_parent_failure(reports, failed_run.id)
   meta = await tree.load_meta(worker_id)
   fields = metadata_slots.fields_of(meta, backend_pool.METADATA_OWNER)
 

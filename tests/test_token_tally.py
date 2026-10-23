@@ -110,10 +110,6 @@ def _codex_meta(**payload: Any) -> dict:
   return {"type": "session_meta", "payload": payload}
 
 
-def _codex_turn(model: str) -> dict:
-  return {"type": "turn_context", "payload": {"model": model}}
-
-
 def _codex_count(last: dict, total: dict, ts: str = "ts") -> dict:
   return conftest.codex_token_count_event(ts, info={"last_token_usage": last, "total_token_usage": total})
 
@@ -435,7 +431,7 @@ def _claude_codex_corpus(tmp_path: pathlib.Path) -> tuple[Claude, Codex]:
   codex.write(
       "rollout", [
           _codex_meta(session_id="rolloutroot1"),
-          _codex_turn("codex-some"),
+          conftest.codex_turn_context_event("codex-some"),
           _codex_count_solo("2024-01-03T00:00:00Z"),
       ])
   return claude, codex
@@ -553,13 +549,13 @@ def test_forked_rollout_counts_the_copied_events_once(tmp_path: pathlib.Path) ->
               "output_tokens": 13
           }, "2026-09-10T00:00:03Z"),
   ]
-  parent = [_codex_meta(session_id=root), _codex_turn("codex-m1")]
+  parent = [_codex_meta(session_id=root), conftest.codex_turn_context_event("codex-m1")]
   parent += [_codex_count(last, total, ts) for last, total, ts in calls]
   _write_rollout(codex, "forkparent1", parent)
 
   # The fork copies the parent's first two events but stamps them at fork time, then adds
   # two calls of its own whose totals continue the tree's.
-  fork = [_codex_meta(session_id=root), _codex_turn("codex-m1")]
+  fork = [_codex_meta(session_id=root), conftest.codex_turn_context_event("codex-m1")]
   fork += [_codex_count(last, total, f"2026-09-10T00:09:0{i}Z") for i, (last, total, _ts) in enumerate(calls[:2], 1)]
   fork += [
       _codex_count(
@@ -614,12 +610,16 @@ def test_reemitted_events_add_no_record_and_overwrite_nothing(tmp_path: pathlib.
   root = "reemitroot1"
   last = {"input_tokens": 60, "cached_input_tokens": 20, "output_tokens": 7}
   total = {"input_tokens": 60, "cached_input_tokens": 20, "output_tokens": 7}
-  real = [_codex_meta(session_id=root), _codex_turn("codex-m1"), _codex_count(last, total, "2026-09-10T00:00:00Z")]
+  real = [
+      _codex_meta(session_id=root),
+      conftest.codex_turn_context_event("codex-m1"),
+      _codex_count(last, total, "2026-09-10T00:00:00Z")
+  ]
   # The fork re-writes the parent's event three ways: verbatim, with the per-request usage
   # zeroed, and without any info at all.
   fork = [
       _codex_meta(session_id=root),
-      _codex_turn("codex-m1"),
+      conftest.codex_turn_context_event("codex-m1"),
       _codex_count(last, total, "2026-09-10T00:01:00Z"),
       _codex_count({
           "input_tokens": 0,
@@ -650,7 +650,7 @@ def test_codex_p2_signature_rereads_the_unchanged_rollout_once(tmp_path: pathlib
   path = _write_rollout(
       codex, "sigthread1", [
           _codex_meta(session_id="sigthread1"),
-          _codex_turn("codex-m1"),
+          conftest.codex_turn_context_event("codex-m1"),
           _codex_count_solo("2026-09-10T00:00:00Z"),
       ])
   with usage_ledger.UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
@@ -667,7 +667,7 @@ def test_rollout_without_a_session_id_fails_the_capture(tmp_path: pathlib.Path) 
   _write_rollout(
       codex, "norootthread1", [
           _codex_meta(),
-          _codex_turn("codex-m1"),
+          conftest.codex_turn_context_event("codex-m1"),
           _codex_count_solo("2026-09-10T00:00:00Z"),
       ])
   with usage_ledger.UsageLedger(tmp_path / "ledger.sqlite3") as ledger, pytest.raises(ValueError,
@@ -696,7 +696,7 @@ def _codex_rollout(codex: Codex, sid: str, model: str, last: dict, total: dict, 
   flow = codex.home / "sessions" / f"rollout-{sid}"
   flow.mkdir(parents=True, exist_ok=True)
   with (flow / f"rollout-{sid}.jsonl").open("w") as fh:
-    for line in (_codex_meta(session_id=sid), _codex_turn(model), _codex_count(last, total, ts)):
+    for line in (_codex_meta(session_id=sid), conftest.codex_turn_context_event(model), _codex_count(last, total, ts)):
       fh.write(json.dumps(line) + "\n")
   return flow / f"rollout-{sid}.jsonl"
 
@@ -1498,7 +1498,10 @@ def test_a_finished_capture_stamps_last_capture_at_and_a_failed_one_does_not(tmp
     assert stamped is not None
     assert ledger.last_capture_at("host-b") is None
 
-    _write_rollout(codex, "norootthread1", [_codex_meta(), _codex_turn("codex-m1"), _codex_count_solo("ts")])
+    _write_rollout(
+        codex, "norootthread1",
+        [_codex_meta(), conftest.codex_turn_context_event("codex-m1"),
+         _codex_count_solo("ts")])
     with pytest.raises(ValueError, match="norootthread1"):
       _capture(ledger)
     assert ledger.last_capture_at("host-a") == stamped
@@ -1565,7 +1568,10 @@ def test_a_capture_commits_once_and_a_failed_one_keeps_its_finished_files(
     with (claude.work / "projects" / "rel" / "sess1" / "sess1.jsonl").open("a") as fh:
       fh.write(json.dumps(_claude_record("m3", NAME, "2024-01-05T00:00:00Z", _usage(1, 1))) + "\n")
     stamped = reader.last_capture_at("host-a")
-    _write_rollout(Codex(tmp_path), "norootthread1", [_codex_meta(), _codex_turn("codex-m1"), _codex_count_solo("ts")])
+    _write_rollout(
+        Codex(tmp_path), "norootthread1",
+        [_codex_meta(), conftest.codex_turn_context_event("codex-m1"),
+         _codex_count_solo("ts")])
     with pytest.raises(ValueError, match="norootthread1"):
       _capture(ledger)
     assert reader.last_capture_at("host-a") == stamped  # the failed capture left the stamp alone

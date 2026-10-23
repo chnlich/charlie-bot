@@ -54,8 +54,15 @@ _TEST_HOME = tempfile.mkdtemp(prefix="charliebot-test-home-")
 atexit.register(shutil.rmtree, _TEST_HOME, ignore_errors=True)
 os.environ["HOME"] = _TEST_HOME
 # A CharlieBot session's own identity leaks into CLI/API tests and flips them to
-# 'ambiguous session' refusals; the suite always starts unauthenticated.
+# 'ambiguous session' refusals; the suite always starts unauthenticated. A run
+# inside a cc-anthropic-compatible worker also carries the worker's gateway
+# variables; a real `claude` a test spawns would then talk to the gateway
+# instead of standing down for want of credentials, so they go too.
 for _leaked in ("CHARLIEBOT_RUN_TOKEN", "CHARLIEBOT_HOME", "CHARLIEBOT_SESSION_ID"):
+  os.environ.pop(_leaked, None)
+from src.backends.claude_code import claude_code as _claude_code  # noqa: E402
+
+for _leaked in sorted(_claude_code.GATEWAY_ENDPOINT_ENV_NAMES):
   os.environ.pop(_leaked, None)
 # Subprocess probes (`python -c` import checks, the restart-recovery drivers)
 # must import the tree UNDER TEST: the venv's editable install is a meta-path
@@ -852,6 +859,11 @@ def codex_token_count_event(timestamp: Any, **payload_inner: Any) -> dict:
   parse, defined here once.
   """
   return {"timestamp": timestamp, "type": "event_msg", "payload": {"type": "token_count", **payload_inner}}
+
+
+def codex_turn_context_event(model: str) -> dict:
+  """The codex turn_context event whose payload.model prices the token_count events after it."""
+  return {"type": "turn_context", "payload": {"model": model}}
 
 
 def compact_boundary_event(

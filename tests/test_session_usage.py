@@ -13,6 +13,7 @@ from src.backends.codex import codex_usage
 from src.infra import config, models
 from src.runtime import session_usage
 from src.runtime.agent_process import base
+from src.runtime.hooks import backend_lifecycle, backend_lifecycle_registration
 
 
 def _build_cfg(tmp_path: pathlib.Path, **codex_kwargs: Any) -> config.CharlieBotConfig:
@@ -125,6 +126,97 @@ def _cumulative_result_with_assistant_reading() -> list[dict]:
       }}, input_tokens=1_500_000),
       _assistant_event("claude-opus-4-6", input_tokens=100_000, cache_creation=20_000, cache_read=30_000),
   ]
+
+
+@pytest.mark.parametrize(
+    ("limit", "expected_full", "expected_compact_at"), [
+        pytest.param({
+            "context": 420_000,
+            "output": 384_000
+        }, 420_000, 400_000, id="large-output-cap"),
+        pytest.param({
+            "context": 200_000,
+            "output": 32_000
+        }, 200_000, 180_000, id="output-above-reserve"),
+        pytest.param({
+            "context": 200_000,
+            "output": 8_000
+        }, 200_000, 192_000, id="output-below-reserve"),
+        pytest.param({"context": 200_000}, None, None, id="missing-output"),
+        pytest.param({
+            "context": 200_000,
+            "output": None
+        }, None, None, id="null-output"),
+        pytest.param({
+            "context": 200_000,
+            "output": "32000"
+        }, None, None, id="string-output"),
+        pytest.param({
+            "context": 200_000,
+            "output": 32_000.0
+        }, None, None, id="float-output"),
+        pytest.param(
+            {
+                "context": 420_000,
+                "input": 300_000,
+                "output": 384_000
+            }, 300_000, 280_000, id="input-takes-precedence"),
+        pytest.param({
+            "context": 420_000,
+            "input": 300_000
+        }, 300_000, 300_000, id="input-without-output"),
+    ])
+def test_snapshot_tier_window_and_compaction_line(
+    limit: dict, expected_full: int | None, expected_compact_at: int | None) -> None:
+  snapshot = {
+      "model": "snapshot-model",
+      "tokens": {
+          "input": 95_000,
+          "output": 2_000,
+          "reasoning": 1_000,
+          "cache_read": 4_000,
+          "cache_write": 131
+      },
+      "limit": limit,
+  }
+
+  usage = session_usage.resolve_events_usage([_result_event(0.5, context_snapshot=snapshot)], "manager_turn")
+
+  assert usage is not None
+  assert usage["context_tokens"] == 102_131
+  assert usage["context_full"] == expected_full
+  assert usage["context_compact_at"] == expected_compact_at
+
+
+@pytest.mark.parametrize(
+    ("limits", "expected_compact_at"), [
+        pytest.param(None, None, id="missing-registration"),
+        pytest.param(
+            backend_lifecycle.ContextLimits(declared_window=None, compact_reserve=None), None, id="unknown-reserve"),
+        pytest.param(
+            backend_lifecycle.ContextLimits(declared_window=None, compact_reserve=17_000),
+            403_000,
+            id="registered-reserve"),
+    ])
+def test_snapshot_tier_reads_compaction_reserve(
+    monkeypatch: pytest.MonkeyPatch,
+    limits: backend_lifecycle.ContextLimits | None,
+    expected_compact_at: int | None,
+) -> None:
+
+  def reading_limits(reading_kind: str, run_kind: models.RunKind) -> backend_lifecycle.ContextLimits | None:
+    assert reading_kind == "snapshot"
+    assert run_kind == "work"
+    return limits
+
+  monkeypatch.setattr(backend_lifecycle_registration, "reading_limits", reading_limits)
+  snapshot = {"limit": {"context": 420_000, "output": 384_000}}
+
+  usage = session_usage.resolve_events_usage([_result_event(0.5, context_snapshot=snapshot)], "work")
+
+  assert usage is not None
+  assert usage["context_full"] == 420_000
+  assert usage["context_compact_at"] == expected_compact_at
 
 
 # ---------------------------------------------------------------------------

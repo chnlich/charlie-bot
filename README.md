@@ -7,7 +7,7 @@ CharlieBot is a self-hosted multi-agent orchestration system: a master agent dri
 ### Orchestration
 
 - Master/worker/reviewer delegation in isolated git worktrees, integrated by fast-forward-only pushes to the base branch
-- Pluggable backends: Claude Code, Kimi, OpenAI-compatible, Codex, Gemini CLI, OpenCode, Charlie Code, Antigravity CLI
+- Pluggable backends: Claude Code, Anthropic-compatible, OpenAI-compatible, Codex, Gemini CLI, OpenCode, Charlie Code, Antigravity CLI
 - Chat file uploads: text attachments ride the message's path text; image attachments reach the Charlie Code CLI as repeated `--image` flags by default, and are refused with one error event (nothing sent) when the backend entry sets `image_input: false`
 - `charliebot improve` autonomous change-run-verify iteration loops
 - Plan registry (`charliebot plan`) with HTML plan artifacts and anchored comments
@@ -79,6 +79,7 @@ CharlieBot is a self-hosted multi-agent orchestration system: a master agent dri
 ## CLI at a glance
 
 - `charliebot artifact` — check a page's genre DOM assertions and cold-read probe, or wrap a content fragment into a genre page
+- `charliebot compaction-context` — restore the skills a manager session read before Claude compacted its context
 - `charliebot config` — print a config key's value through the loader (`config get <key>`)
 - `charliebot delegate` — delegate a task to a worker agent
 - `charliebot discord` — reply to or read the Discord thread a session was summoned from, and check the bot setup

@@ -646,8 +646,8 @@ async def caller_reply_identity(
   *verb* names the reply kind inside the derived id, so a retried reply of the
   same text under the same Run binds to one id. A caller without claims posts on
   operator credentials and gets ``(None, None)``: the reply records no request
-  identity. With claims, the Run must exist and carry its start time, which the
-  reply event records.
+  identity. The Run start time floors the own-post lookup, so a post from an
+  earlier Run never answers this reply.
   """
   if caller.claims is None:
     return None, None

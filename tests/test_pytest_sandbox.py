@@ -31,7 +31,7 @@ def test_inner():
 
 def _start_sentinel(marker: str) -> subprocess.Popen:
   """Start a sleep process whose argv[0] carries the marker."""
-  return subprocess.Popen(["bash", "-c", f"exec -a {marker} sleep 300"])
+  return subprocess.Popen(["bash", "-c", f"exec -a {marker} sleep 300"], start_new_session=True)
 
 
 def _run_inner(tmp_path: pathlib.Path, body: str) -> subprocess.CompletedProcess:
@@ -58,10 +58,14 @@ def test_outer_sentinel_is_unreachable(tmp_path: pathlib.Path) -> None:
     assert r.returncode == 0, r.stdout
     pid = int(r.stdout.split()[0])
     pidfd = os.pidfd_open(pid)
-    for send in (lambda: os.kill(pid, signal.SIGTERM),
-                 lambda: signal.pidfd_send_signal(pidfd, signal.SIGTERM)):
-      with pytest.raises(PermissionError):
-        send()
+    try:
+      for send in (lambda: os.kill(pid, signal.SIGTERM),
+                   lambda: os.killpg(pid, signal.SIGTERM),
+                   lambda: signal.pidfd_send_signal(pidfd, signal.SIGTERM)):
+        with pytest.raises(PermissionError):
+          send()
+    finally:
+      os.close(pidfd)
     """)
     assert result.returncode == 0, result.stdout + result.stderr
     os.kill(sentinel.pid, 0)  # the sentinel is still alive after the run
@@ -167,3 +171,62 @@ def test_abi_below_minimum_refuses(tmp_path: pathlib.Path) -> None:
       timeout=60)
   assert result.returncode != 0
   assert "CHARLIEBOT_USE_TEST_SANDBOX" in result.stderr
+
+  probe = tmp_path / "test_probe.py"
+  probe.write_text("def test_probe():\n  assert True\n")
+  env["CHARLIEBOT_USE_TEST_SANDBOX"] = "0"
+  result = subprocess.run(
+      [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
+       str(probe)],
+      capture_output=True,
+      text=True,
+      cwd=tmp_path,
+      env=env,
+      timeout=60)
+  assert result.returncode == 0, result.stdout + result.stderr
+  assert "1 passed" in result.stdout
+
+
+def test_unshare_failure_names_call_and_switch(tmp_path: pathlib.Path) -> None:
+  """A failed user namespace call is reported before collection with its errno and switch."""
+  site = tmp_path / "site"
+  site.mkdir()
+  (site / "sitecustomize.py").write_text(
+      "import errno\n"
+      "import src.infra.pytest_sandbox as m\n"
+      "m._uid_map_empty = lambda: False\n"
+      "def fail_unshare(flags):\n"
+      "  raise PermissionError(errno.EPERM, 'Operation not permitted')\n"
+      "m.os.unshare = fail_unshare\n")
+  pythonpath = str(site) + os.pathsep + os.environ.get("PYTHONPATH", "")
+  env = dict(os.environ, PYTHONPATH=pythonpath)
+  result = subprocess.run(
+      [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "--co",
+       str(tmp_path)],
+      capture_output=True,
+      text=True,
+      cwd=tmp_path,
+      env=env,
+      timeout=60)
+  assert result.returncode != 0
+  assert "os.unshare(CLONE_NEWUSER) failed (errno 1" in result.stderr
+  assert "CHARLIEBOT_USE_TEST_SANDBOX" in result.stderr
+
+
+def test_disabled_plugin_autoload_refuses_before_collection(tmp_path: pathlib.Path) -> None:
+  """Disabling pytest plugin autoload triggers the conftest guard before collection."""
+  env = dict(os.environ, PYTEST_DISABLE_PLUGIN_AUTOLOAD="1")
+  test_file = pathlib.Path(__file__).with_name("test_switch_server.py")
+  result = subprocess.run(
+      [sys.executable, "-m", "pytest", "-q", "--collect-only",
+       str(test_file)],
+      capture_output=True,
+      text=True,
+      cwd=tmp_path,
+      env=env,
+      timeout=60)
+  output = result.stdout + result.stderr
+  assert result.returncode != 0
+  assert "test sandbox plugin is not registered" in output
+  assert "CHARLIEBOT_USE_TEST_SANDBOX=1" in output
+  assert "uv sync" in output

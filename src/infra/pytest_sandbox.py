@@ -81,11 +81,21 @@ def _apply() -> None:
   global abi
   for name in _DAEMON_ENV_VARS:
     os.environ.pop(name, None)
-  tmpdir = tempfile.mkdtemp(prefix="cbpytest-")
-  atexit.register(shutil.rmtree, tmpdir, ignore_errors=True)
+  try:
+    tmpdir = tempfile.mkdtemp(prefix="cbpytest-")
+  except OSError as e:
+    raise _SandboxError("tempfile.mkdtemp", e.errno or 0) from e
+  atexit.register(shutil.rmtree, tmpdir)
   os.environ["TMUX_TMPDIR"] = tmpdir
-  if not _uid_map_empty():
-    os.unshare(os.CLONE_NEWUSER)
+  try:
+    uid_map_empty = _uid_map_empty()
+  except OSError as e:
+    raise _SandboxError("read /proc/self/uid_map", e.errno or 0) from e
+  if not uid_map_empty:
+    try:
+      os.unshare(os.CLONE_NEWUSER)
+    except OSError as e:
+      raise _SandboxError("os.unshare(CLONE_NEWUSER)", e.errno or 0) from e
   if _libc.prctl(_PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0:
     raise _SandboxError("prctl(PR_SET_NO_NEW_PRIVS)", ctypes.get_errno())
   version = landlock_abi()

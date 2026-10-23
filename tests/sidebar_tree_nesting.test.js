@@ -383,29 +383,11 @@ test('an open cron root stays visible without using a preview rank', () => {
 
   context.renderSessionList(rows, 'all');
 
-  assert.match(anchorOpenTag(nav.innerHTML, 'cron-1'), /session-group-limit-extra(?! hidden)/);
-  assert.match(anchorOpenTag(nav.innerHTML, 'cron-1'), /data-session-group-limit-active="true"/);
+  assert.doesNotMatch(anchorOpenTag(nav.innerHTML, 'cron-1'), /session-group-limit-extra/);
   for (const id of ['work-2', 'work-3', 'work-4', 'work-5', 'work-6']) {
     assert.doesNotMatch(anchorOpenTag(nav.innerHTML, id), /session-group-limit-extra/);
   }
   assert.match(anchorOpenTag(nav.innerHTML, 'work-7'), /session-group-limit-extra hidden/);
-
-  const activeRoot = createElement({
-    className: 'session-group-limit-extra',
-    dataset: {sessionGroupLimitExtra: 'Work', sessionGroupLimitActive: 'true'},
-  });
-  const otherExtra = createElement({
-    className: 'session-group-limit-extra hidden',
-    dataset: {sessionGroupLimitExtra: 'Work'},
-  });
-  context.document.querySelectorAll = (selector) =>
-    selector === '.session-group-limit-extra' ? [activeRoot, otherExtra] : [];
-
-  context.toggleSessionGroupLimit('Work');
-  context.toggleSessionGroupLimit('Work');
-
-  assert.equal(activeRoot.classList.contains('hidden'), false);
-  assert.equal(otherExtra.classList.contains('hidden'), true);
 });
 
 test('an open child keeps its cron root visible and opens the path to that child', () => {
@@ -420,7 +402,7 @@ test('an open child keeps its cron root visible and opens the path to that child
   context.renderSessionList(rows, 'all');
 
   const html = nav.innerHTML;
-  assert.match(anchorOpenTag(html, 'cron-root'), /session-group-limit-extra(?! hidden)/);
+  assert.doesNotMatch(anchorOpenTag(html, 'cron-root'), /session-group-limit-extra/);
   assert.doesNotMatch(html.match(/<div class="tree-children[^"]*"[^>]*data-tree-children="cron-root">/)[0], /hidden/);
   assert.match(anchorOpenTag(html, 'cron-child'), /bg-blue-600\/20 text-blue-300/);
 });

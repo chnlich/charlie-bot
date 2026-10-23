@@ -727,8 +727,7 @@ test('renderSessionList keeps active grouped session visible outside the first f
   context.renderSessionList(sessions, 'all');
 
   assert.equal(sessionAnchorOpenTag(nav.innerHTML, 'work-6').includes('session-group-limit-extra hidden'), true);
-  assert.equal(sessionAnchorOpenTag(nav.innerHTML, 'work-7').includes('session-group-limit-extra hidden'), false);
-  assert.equal(sessionAnchorOpenTag(nav.innerHTML, 'work-7').includes('data-session-group-limit-active="true"'), true);
+  assert.equal(sessionAnchorOpenTag(nav.innerHTML, 'work-7').includes('session-group-limit-extra'), false);
   assert.equal(sessionAnchorOpenTag(nav.innerHTML, 'work-7').includes('bg-blue-600/20 text-blue-300'), true);
 });
 

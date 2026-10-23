@@ -25,22 +25,18 @@
 // upload. A live recording that ends with no final never uploads on its own:
 // the run enters the stop state, where the buffer stays, the hint names the
 // backend and the reason, and one click on the voice button starts the upload
-// whose local decode owns the text. The budget expiry itself is not a failure:
+// whose transcript owns the text. The budget expiry itself is not a failure:
 // the relay stays open, so a final arriving before that click still wins and
 // ends the run with no upload. A relay failure (an error frame, a lost socket,
 // a failed end send) never starts an upload either: during recording the
 // reason lands in the hint at once and the recording continues; at stop the
 // run enters the stop state. On a non-live backend the whole buffer assembles
 // into a WAV and uploads once, right after stop; the server then archives the
-// recording and returns the full text. Exactly one round-trip happens
-// mid-recording, the recognition-confirm probe at 5 s: only a non-live backend
-// fires it, and its words are inserted through the same path as the final
-// text.
+// recording and returns the full text. No request goes out mid-recording.
 let activeVoiceRun = null;
 
 const VOICE_SAMPLE_RATE = 16000;
 const VOICE_CHUNK_SAMPLES = 2048; // 128 ms of audio per worklet chunk
-const VOICE_CONFIRM_TRIGGER_SAMPLES = 5 * VOICE_SAMPLE_RATE; // the one probe fires at 5 s
 const VOICE_MAX_SAMPLES = 5 * 60 * VOICE_SAMPLE_RATE; // the server's recording cap
 // The upload-phase budget: past it the request aborts into the retry state. The
 // decode wait after the body is sent is unbounded but visible ("Decoding...").
@@ -49,10 +45,6 @@ const VOICE_UPLOAD_TIMEOUT_MS = 60 * 1000;
 const VOICE_TRANSCRIBE_IN_FLIGHT_MESSAGE = 'Please wait for the voice transcription to finish';
 // The input_mode a dictated message carries (src/features/voice/turn_contribution.py VOICE_INPUT_MODE).
 const VOICE_INPUT_MODE = 'voice';
-// The note a fallback decode's inserted text carries beside the composer: the
-// upload named a live backend id and the server decoded it with the local
-// engine, the lower-quality path the user may want to drop and re-record.
-const VOICE_LOCAL_FALLBACK_NOTE = 'Transcribed by the local engine (lower quality)';
 // The preview relay's final budget after the end frame: a base plus 20 ms per
 // recorded second. The backend needs longer to finalize longer recordings, so
 // the budget grows with the run; a fixed wait is either too short for long
@@ -71,7 +63,6 @@ const VOICE_HINT_WAITING = 'Waiting for microphone signal...';
 const VOICE_HINT_UPLOADING = 'Uploading...';
 const VOICE_HINT_DECODING = 'Decoding...';
 const VOICE_HINT_RETRY = 'Upload failed — click to retry';
-const VOICE_HINT_CONFIRM_FAILED = 'Recognition check failed';
 
 const VOICE_OVERLAY_CLASS = 'absolute left-0 right-0 bottom-full mb-2 rounded-lg border border-blue-500/40 bg-slate-800 px-3 py-2 text-sm text-slate-100 shadow-lg max-h-28 overflow-y-auto';
 // Not-yet-final words from the preview relay: grey, above the level bar.
@@ -162,8 +153,8 @@ registerProcessor('voice-capture', VoiceCaptureProcessor);
 // ---------------------------------------------------------------------------
 // The choices ride the page as VOICE_BACKENDS (id, label, livePartials,
 // unavailableReason) with the server's VOICE_DEFAULT_BACKEND; the user's pick
-// lives in localStorage. The relay, the probe gate, the upload's backend field,
-// and the mic's tooltip all read the same selection; none of them compares
+// lives in localStorage. The relay, the upload's backend field, and the mic's
+// tooltip all read the same selection; none of them compares
 // against a backend id — the livePartials attribute decides everything.
 
 function selectedVoiceBackend() {
@@ -314,16 +305,15 @@ async function toggleVoice() {
   }
   // Clicks during arming or finalizing are ignored, not queued; a recording
   // converts a click into stop, an in-flight upload into a cancel, a failed
-  // upload into a retry, and a stopped live recording into the local-decode
-  // upload (stop is idempotent: the recording flag clears before the first
-  // await).
+  // upload into a retry, and a stopped live recording into the upload (stop is
+  // idempotent: the recording flag clears before the first await).
   if (run.recording) await stopRecording(run);
   else if (run.phase === 'uploading' || run.phase === 'decoding') cancelVoiceUpload(run);
   else if (run.phase === 'retry') startUpload(run);
   else if (run.phase === 'stop') {
     // The stop state's one click: the relay closes first, so a final still in
-    // flight cannot land beside or after the upload's decode result. The form
-    // keeps the live backend id; the server decodes that locally.
+    // flight cannot land beside or after the upload's transcript. The form
+    // keeps the live backend id; the server transcribes with that backend.
     closeVoiceRelay(run);
     startUpload(run);
   }
@@ -345,9 +335,6 @@ function newVoiceRun(sessionId, backend) {
     pcmChunks: [],
     totalSamples: 0,
     level: 0,
-    confirmFired: false,
-    confirmedText: '',
-    confirmedSpan: null,
     xhr: null,
     requestInFlight: false,
     uploadTimedOut: false,
@@ -541,11 +528,6 @@ function handleVoiceWorkletMessage(run, event) {
         break;
       }
     }
-    // The probe is the non-live backends' only early words; a live one shows
-    // its own partials instead.
-    if (!run.backend.livePartials && !run.confirmFired && run.totalSamples >= VOICE_CONFIRM_TRIGGER_SAMPLES) {
-      fireVoiceConfirm(run);
-    }
     if (run.totalSamples >= VOICE_MAX_SAMPLES) stopRecording(run); // auto-stop enters the stop flow
   }
 }
@@ -596,7 +578,7 @@ async function stopRecording(run) {
     if (run.backend.livePartials) {
       // No final from a live relay: the budget expired (the relay is still
       // open) or a relay failure was recorded earlier. No upload starts from
-      // here; the run stops visibly and one click starts the local decode.
+      // here; the run stops visibly and one click starts the upload.
       enterVoiceStopState(run);
       return;
     }
@@ -625,7 +607,7 @@ function finishWithRelayFinal(run, finalText) {
 // The stop state: a live recording is over, no final owns the words, and no
 // upload may start on its own. The buffer stays and the hint names the backend
 // and the reason; one click on the voice button (the toggleVoice stop branch)
-// closes the relay and starts the local-decode upload. While the relay is
+// closes the relay and starts the upload. While the relay is
 // still open, the budget-expiry case, a final arriving before that click ends
 // the run through finishWithRelayFinal instead. The phase also keeps the leave
 // guard engaged: the recording exists only in this browser until the click.
@@ -635,28 +617,6 @@ function enterVoiceStopState(run) {
   showVoiceHint(run, run.relayFailure !== null
       ? voiceRelayFailureHint(run, run.relayFailure)
       : voiceRelayBudgetHint(run));
-}
-
-function fireVoiceConfirm(run) {
-  run.confirmFired = true;
-  const wav = assembleVoiceWav(run.pcmChunks, VOICE_CONFIRM_TRIGGER_SAMPLES);
-  // Fire-and-forget by design: a failed or slow probe shows a hint only and
-  // never blocks the recording or the later upload.
-  postVoiceWav(`/api/voice/${encodeURIComponent(run.sessionId)}/confirm`, wav)
-    .then((text) => {
-      if (activeVoiceRun !== run) return;
-      const words = text.trim();
-      if (!words) return;
-      const spanStart = insertVoiceText(words);
-      run.confirmedSpan = {start: spanStart, end: spanStart + words.length};
-      run.confirmedText = words;
-      showVoiceHint(run, words);
-    })
-    .catch((err) => {
-      if (activeVoiceRun !== run) return;
-      console.warn('Voice confirm probe failed:', err);
-      showVoiceHint(run, VOICE_HINT_CONFIRM_FAILED);
-    });
 }
 
 async function startUpload(run) {
@@ -728,29 +688,10 @@ function applyVoiceFinal(run, fullText) {
   releaseVoiceRun(run);
   const words = fullText.trim();
   if (!words) {
-    if (!run.confirmedText) showToast('No speech detected');
+    showToast('No speech detected');
     return;
   }
-  const input = document.getElementById('msg-input');
-  const span = run.confirmedSpan;
-  if (span && input.value.slice(span.start, span.end) === run.confirmedText) {
-    // The confirm words are still where the probe inserted them: the full text
-    // (which contains them) replaces that span instead of duplicating it.
-    const head = input.value.slice(0, span.start);
-    const tail = input.value.slice(span.end);
-    input.value = head + words + tail;
-    Chat.setInputMode(VOICE_INPUT_MODE);
-    autoResize(input);
-    saveDraft();
-    input.focus();
-  } else {
-    insertVoiceText(words);
-  }
-  // A live backend's id reaches the upload only through the stop-state click
-  // (or its retry), and the server decodes a live id with the local engine:
-  // the inserted words carry the fallback note so the user can drop them and
-  // record again. The empty-text return above sets no note.
-  if (run.backend.livePartials) Chat.setInputNote(VOICE_LOCAL_FALLBACK_NOTE);
+  insertVoiceText(words);
 }
 
 function insertVoiceText(text) {
@@ -836,14 +777,9 @@ function sendVoiceXhr(path, body, {onSent = null, onXhr = null} = {}) {
   });
 }
 
-// The recognition probe's transport: the confirm endpoint reads the raw WAV body.
-function postVoiceWav(path, wavBuffer, opts = {}) {
-  return sendVoiceXhr(path, wavBuffer, opts);
-}
-
 // The upload's transport: a multipart form with the audio plus the
 // backend the browser selected and the recording's device object as JSON — the
-// server persists the recording, decodes it, and returns the text.
+// server persists the recording, transcribes it, and returns the text.
 function postVoiceRecording(path, wavBuffer, {backendId = null, devices = null, ...opts} = {}) {
   const form = new FormData();
   form.append('audio', new Blob([wavBuffer]), 'recording.wav');
@@ -939,14 +875,14 @@ function voiceRelayFinalBudgetMs(run) {
 }
 
 // The stop state's two hints: a relay failure names what broke, a spent budget
-// says the run is still waiting and offers the local decode.
+// says the run is still waiting and offers the upload.
 function voiceRelayFailureHint(run, reason) {
-  return run.backend.label + ': ' + reason + '. Click to transcribe locally.';
+  return run.backend.label + ': ' + reason + '. Click to transcribe.';
 }
 
 function voiceRelayBudgetHint(run) {
   const seconds = (voiceRelayFinalBudgetMs(run) / 1000).toFixed(1);
-  return run.backend.label + ': no final after ' + seconds + ' s, still waiting. Click to transcribe locally.';
+  return run.backend.label + ': no final after ' + seconds + ' s, still waiting. Click to transcribe.';
 }
 
 function voiceReadyHint(run) {

@@ -10,7 +10,7 @@ const vm = require('node:vm');
 const {readStatic, readPackageStatic} = require('./read_static');
 
 const BACKENDS = [
-  {id: 'local', label: 'Local (sherpa)', livePartials: false, unavailableReason: null},
+  {id: 'batch', label: 'Batch backend', livePartials: false, unavailableReason: null},
   {id: 'gemini', label: 'Gemini 3.5 Transcribe Live', livePartials: true, unavailableReason: null},
   {id: 'muse', label: 'Muse Voice Transcribe', livePartials: true, unavailableReason: 'needs meta.model_api_key'},
 ];
@@ -41,7 +41,7 @@ function makeEl() {
   return el;
 }
 
-function buildHarness({stored = null, defaultBackend = 'local', backends = BACKENDS} = {}) {
+function buildHarness({stored = null, defaultBackend = 'batch', backends = BACKENDS} = {}) {
   const elements = new Map();
   const voiceBtn = makeEl();
   voiceBtn.id = 'voice-btn';
@@ -93,7 +93,7 @@ function buildHarness({stored = null, defaultBackend = 'local', backends = BACKE
 
 test('first paint names the effective backend on the mic tooltip', () => {
   const {voiceBtn} = buildHarness();
-  assert.equal(voiceBtn.title, 'Voice input \u00b7 Local (sherpa)');
+  assert.equal(voiceBtn.title, 'Voice input \u00b7 Batch backend');
 });
 
 test('the menu lists every backend, checks the selection, and disables the unconfigured one', () => {
@@ -102,7 +102,7 @@ test('the menu lists every backend, checks the selection, and disables the uncon
   assert.equal(menu.children[0].textContent, 'Voice backend');
   assert.deepEqual(
       rows.map((row) => row.children[1].textContent),
-      ['Local (sherpa)', 'Gemini 3.5 Transcribe Live', 'Muse Voice Transcribe \u00b7 needs meta.model_api_key']);
+      ['Batch backend', 'Gemini 3.5 Transcribe Live', 'Muse Voice Transcribe \u00b7 needs meta.model_api_key']);
   assert.deepEqual(rows.map((row) => row.children[0].textContent), ['\u2713', '', '']);
   assert.deepEqual(rows.map((row) => row.disabled), [false, false, true]);
   assert.equal(rows[2].title, 'needs meta.model_api_key'); // the missing key is named, never its value
@@ -122,7 +122,7 @@ test('picking a backend persists it, moves the check, and retitles the mic', () 
 test('a stored id the page does not know falls back to the server default', () => {
   const {voiceBtn, rows} = buildHarness({stored: 'geminii'});
 
-  assert.equal(voiceBtn.title, 'Voice input \u00b7 Local (sherpa)');
+  assert.equal(voiceBtn.title, 'Voice input \u00b7 Batch backend');
   assert.deepEqual(rows.map((row) => row.children[0].textContent), ['\u2713', '', '']);
 });
 
@@ -130,7 +130,7 @@ test('a stored backend that lost its credential falls back until the key arrives
   const {voiceBtn, rows} = buildHarness({stored: 'muse'});
 
   // The default serves, while the stored entry stays visible and unselectable.
-  assert.equal(voiceBtn.title, 'Voice input \u00b7 Local (sherpa)');
+  assert.equal(voiceBtn.title, 'Voice input \u00b7 Batch backend');
   assert.deepEqual(rows.map((row) => row.children[0].textContent), ['\u2713', '', '']);
   assert.equal(rows[2].disabled, true);
 });

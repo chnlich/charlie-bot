@@ -411,9 +411,9 @@ def log_session_cgroup_startup(memory_max_mb: int, swap_max_mb: int, tasks_max: 
     return
   for base in (CGROUP_V2_AGENTS_SLICE, CGROUP_V2_REPAIR_SLICE):
     if not pathlib.Path(base).is_dir():
-      log.info("session_cgroup_disabled", reason=f"{base} not present on this host")
+      log.warning("session_cgroup_unavailable", reason=f"{base} not present on this host; spawns with a session fail")
       return
     if not os.access(base, os.W_OK):
-      log.info("session_cgroup_disabled", reason=f"{base} not writable by this user")
+      log.warning("session_cgroup_unavailable", reason=f"{base} not writable by this user; spawns with a session fail")
       return
   log.info("session_cgroup_enabled", memory_max_mb=memory_max_mb, swap_max_mb=swap_max_mb, tasks_max=tasks_max)

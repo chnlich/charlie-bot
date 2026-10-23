@@ -54,7 +54,8 @@ Agent processes are not stopped by the lifespan:
 
 Scope: only directories under this home's `sessions/` that hold a `metadata.json`, and only this home's records.
 
-The pass reads the boot marker `state/boot_recovery.json` (`files.md` 5.19). A node is skipped, with no
+The pass reads the boot marker `state/boot_recovery.json` (`files.md` 5.19); an unreadable marker reads as absent, so
+every node is checked. A node is skipped, with no
 `_reconcile_node` call and counter `skipped`, when the marker proves it unchanged. Python `_boot_skip_reason` skips
 when all six conditions hold: the lifecycle state is not `open`; `data/chat_events.jsonl` and `metadata.json` both
 exist and have mtimes more than one second before the marker; every Run ended; no Run has a sequence ref; no Run

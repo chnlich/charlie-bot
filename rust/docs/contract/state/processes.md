@@ -207,7 +207,9 @@ Resume styles (`backend_type_registration`, from each package's `register()`):
   `session.compaction.started`, `session.compaction.ended`. An execution no turn claims is interrupted.
 - **Headless config** (`OPENCODE_CONFIG_CONTENT`):
   `{"permission": {"*": "allow", "question": "deny", "subagent": "deny", "opencode_session_move": "deny"},
-  "shell": "bash", "default_agent": "charliebot", "agent": {"charliebot": {"mode": "primary"}}}`.
+  "shell": "bash", "default_agent": "charliebot", "agent": {"charliebot": {"mode": "primary"}}}`, plus a `providers`
+  block with the `context_limit` of every `backends.options` entry that sets one (`src/backends/opencode/server.py:60-85`,
+  `src/backends/opencode/options.py:17-34`).
 - **One-shot:** `opencode run --standalone --format json -m <model> -- <framed prompt>` in a throwaway XDG root
   with every tool denied. Its NDJSON carries `text` and `error` events.
 

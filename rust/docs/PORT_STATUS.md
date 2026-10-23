@@ -240,7 +240,7 @@ run-record work is `S2`; task-tree runtime and feature-owned files remain with t
 | `MASTER_AGENT_PROMPT.md` | agent-runtime | ported | Read only: the host supplement of a manager prompt, with `YOUR_SESSION_UUID` replaced (`charliebot-tasks/src/prompts/sources.rs:91`, `:125-134`); Python `src/runtime/task_prompts.py:233-238`, path `src/infra/config.py:287-289`. |
 | `state/home_writer.lock` | foundation | ported | |
 | `state/writer_identity.json` | foundation | ported | |
-| `state/boot_recovery.json` | tasks | ported | Python-compatible marker written atomically after a clean pass; `charliebot-tasks/src/recovery.rs` and `tests/recovery.rs::clean_boot_writes_marker_and_the_next_boot_skips_a_closed_worker`. |
+| `state/boot_recovery.json` | tasks | ported | Python-compatible marker written atomically after a clean pass; `charliebot-tasks/src/recovery.rs` and `tests/recovery.rs::clean_boot_writes_marker_and_the_next_boot_skips_a_closed_worker`. Catch-up 24642edf5 unported: an unreadable marker stops the boot here (`982bf8cb4`, `d6fb78845` in the unported-commits section), and the write skips the fsync. |
 | `state/cron_alert_fingerprint.json` | features/cron | ported | Sorted broken-task names; alerts transition once per changed set. |
 | `cache/cli_base_url.json` | foundation | not applicable | Written and read by the Python CLI (`src/runtime/cli/common.py:335`), which stays (Trade-off 2). |
 | `cache/perfetto_merge/` | features/trace | ported | Cache directory for merged Perfetto traces. |
@@ -404,6 +404,22 @@ Each of the 10 commits in `git rev-list --no-merges 78e0d10e2..f58a345a6 -- src 
 | d59e81e8c | Deduplicate agent sends and thread replies | red-list | Rows R16, R17, R18, R19, R20, R21, R22, R23, R24, R26, R27, R28, R29, R31, R32, R33, R34, R35, R36, R37, R38, R39, R40, R41, R42, R43, R44, R45. |
 | 0b5351c00 | Read the error-row rule from one shared predicate | no behavior | Python `web/static/js/chat/shared.js:204-212` centralizes the existing `Error: ` predicate used by both views. The For You filter keeps the same rows and output. |
 | 26d40d04e | Show a failed turn’s full error text in chat | in Rust | Rust serves the changed `web/static` tree through `rust/crates/charliebot-server/src/routes/static_mounts.rs:28-42,55-68`; its already-ported `/ws/sessions/{session_id}` stream supplies the message. No new API behavior is needed. |
+
+## Catch-up 24642edf5 open steps
+
+Both all-stage Rust debug runs failed the same 77 of 1176 steps, and each failing step is a row of the
+`Catch-up f58a345a6 open steps` section above. No step fails for a `main` change of this range, so this
+section has no rows. The Python-vs-Python run passed all 1116 of its steps.
+
+| Scenario | Step | Stage | Main commit | Difference |
+| --- | --- | --- | --- | --- |
+
+## Catch-up 24642edf5 ignored Cargo tests
+
+No Cargo test is ignored for a behavior introduced by this catch-up.
+
+| Row | Test | Binary | Main commit | Difference |
+| --- | --- | --- | --- | --- |
 
 ## Catch-up 24642edf5 unported commits
 

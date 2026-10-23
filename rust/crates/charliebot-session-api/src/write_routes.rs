@@ -575,13 +575,14 @@ pub(crate) fn model_response(store: &Store, meta: &SessionMetadata) -> Response 
 
 #[cfg(test)]
 mod tests {
-  use std::sync::{Arc, Mutex};
+  use std::sync::{Arc, Mutex, Once};
 
   use charliebot_core::run_token::RunTokenClaims;
   use charliebot_store::{SIDEBAR_CHANNEL, session_channel};
   use tracing::field::{Field, Visit};
   use tracing::{Event, Subscriber};
   use tracing_subscriber::Layer;
+  use tracing_subscriber::filter::LevelFilter;
   use tracing_subscriber::layer::{Context, SubscriberExt};
 
   use super::*;
@@ -613,6 +614,21 @@ mod tests {
     }
   }
 
+  /// Captures this thread's events into the returned buffer. tracing caches each callsite's interest process-wide. With
+  /// only one scoped subscriber alive, a callsite first reached on a thread without one is cached as never, and this
+  /// thread then misses its events. Setting a global fallback first keeps that cache enabled. The server sets one at
+  /// startup (`logging::init`), so production never takes this path.
+  fn capture_logs() -> (Arc<Mutex<Vec<String>>>, tracing::subscriber::DefaultGuard) {
+    static FALLBACK: Once = Once::new();
+    FALLBACK.call_once(|| {
+      tracing::subscriber::set_global_default(tracing_subscriber::registry().with(LevelFilter::TRACE))
+        .expect("the test fallback subscriber installs once");
+    });
+    let logs = Arc::new(Mutex::new(Vec::new()));
+    let subscriber = tracing_subscriber::registry().with(LogMessage(Arc::clone(&logs)));
+    (logs, tracing::subscriber::set_default(subscriber))
+  }
+
   #[tokio::test]
   async fn create_refuses_a_task_field_without_a_request_id() {
     let (_home, features) = feature_context();
@@ -627,9 +643,7 @@ mod tests {
   #[tokio::test(flavor = "current_thread")]
   async fn legacy_create_returns_the_model_logs_and_notifies_after_publishing() {
     let (_home, features) = feature_context();
-    let logs = Arc::new(Mutex::new(Vec::new()));
-    let subscriber = tracing_subscriber::registry().with(LogMessage(Arc::clone(&logs)));
-    let _subscriber = tracing::subscriber::set_default(subscriber);
+    let (logs, _subscriber) = capture_logs();
     let mut sidebar = features.store.subscribe(SIDEBAR_CHANNEL);
     let (headers, body) = json_request(json!({"name": "Synthetic root", "group": "Synthetic group"}));
 
@@ -653,9 +667,7 @@ mod tests {
   #[tokio::test(flavor = "current_thread")]
   async fn v2_create_returns_the_task_and_logs_its_creation() {
     let (_home, features) = feature_context();
-    let logs = Arc::new(Mutex::new(Vec::new()));
-    let subscriber = tracing_subscriber::registry().with(LogMessage(Arc::clone(&logs)));
-    let _subscriber = tracing::subscriber::set_default(subscriber);
+    let (logs, _subscriber) = capture_logs();
     let mut sidebar = features.store.subscribe(SIDEBAR_CHANNEL);
     let (headers, body) = json_request(json!({"request_id": "api-v2-root", "profile": "manager", "name": "V2 root"}));
 
@@ -762,9 +774,7 @@ mod tests {
   #[tokio::test(flavor = "current_thread")]
   async fn backend_switch_same_target_is_quiet_and_new_target_broadcasts_and_audits() {
     let (_home, features) = feature_context();
-    let logs = Arc::new(Mutex::new(Vec::new()));
-    let subscriber = tracing_subscriber::registry().with(LogMessage(Arc::clone(&logs)));
-    let _subscriber = tracing::subscriber::set_default(subscriber);
+    let (logs, _subscriber) = capture_logs();
     let node = create_node(&features.store, "switch-node", None, TaskProfile::Manager).await;
     let mut sidebar = features.store.subscribe(SIDEBAR_CHANNEL);
     let mut session = features.store.subscribe(&session_channel(&node.id));
@@ -854,9 +864,7 @@ mod tests {
   #[tokio::test]
   async fn rename_answers_the_session_detail_form() {
     let (_home, features) = feature_context();
-    let logs = Arc::new(Mutex::new(Vec::new()));
-    let subscriber = tracing_subscriber::registry().with(LogMessage(Arc::clone(&logs)));
-    let _subscriber = tracing::subscriber::set_default(subscriber);
+    let (logs, _subscriber) = capture_logs();
     let node = create_node(&features.store, "node", None, TaskProfile::Manager).await;
     let mut sidebar = features.store.subscribe(SIDEBAR_CHANNEL);
     let (headers, body) = json_request(json!({"name": "Renamed"}));

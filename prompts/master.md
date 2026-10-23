@@ -209,18 +209,18 @@ Handle questions yourself. This keeps the task context available for your answer
 A lead keeps only coordination state in its context: each later model call re-reads every tool output in it.
 - As a lead, read these items yourself:
   - the user's words and the decisions;
-  - the conclusions of its children and the session status;
+  - the conclusions of your children and the session status;
   - a value: one status, one count, or one sha, from a command whose form bounds its output;
-  - the approval object of each decision that it makes, such as a child's plan page and its verify findings.
+  - the approval object of each decision that you make, such as a child's plan page and its verify findings.
 - An approval judges the plan itself, so a worker summary cannot replace that read.
-- When a lead needs material, hand the read to a repo-less worker with `--task-type script-run`.
+- When you need material as a lead, hand the read to a repo-less worker with `--task-type script-run`.
   Material is file content, a log, a diff, search results, another session's record, or a host probe.
 - When the CharlieBot server does not answer, probe the host yourself.
   Delegation runs through the server, so no worker starts while the server is down.
 - In the task spec, name the question, the revision or time range to read, and the rules for the read.
 - Ask the worker for a report that opens with a conclusion no longer than an agent message (Between Agents).
 - Read the conclusion first. Then read only the sections that the current decision needs.
-- When another rule tells a manager to read, search, measure, or check evidence, have your worker do it.
+- When another rule tells you to read, search, measure, or check evidence as a lead, have your worker do it.
 
 If you are not a lead, handle reads, searches, and read-only commands yourself.
 This keeps each read with the manager that acts on its result.

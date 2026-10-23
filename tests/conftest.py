@@ -2605,6 +2605,14 @@ def _reset_backend_pool() -> Iterator[None]:
   backend_pool.reset_for_tests()
 
 
+def _reset_thinking_state() -> None:
+  """Empty the running-state registries of thinking_state: busy intervals and display backends."""
+  from src.runtime import thinking_state as _thinking_state
+  _thinking_state._busy_since.clear()
+  _thinking_state._run_busy.clear()
+  _thinking_state._run_backends.clear()
+
+
 @pytest.fixture(autouse=True)
 def _isolate_profile(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
   """Every test runs under its own empty profile home, so a code path that calls the real
@@ -2631,15 +2639,14 @@ def _isolate_profile(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pyte
   # the interval its own Run opened) and a recovered node can read as still
   # running.
   from src.features.chat_threads import thread_entry as _thread_entry
-  from src.runtime import thinking_state as _thinking_state
-  _thinking_state.reset_run_state_for_tests()
+  _reset_thinking_state()
   if hasattr(_thread_entry, "_SESSION_LOCKS"):
     _thread_entry._SESSION_LOCKS.clear()
   reset_config_caches()
   yield
   if hasattr(_thread_entry, "_SESSION_LOCKS"):
     _thread_entry._SESSION_LOCKS.clear()
-  _thinking_state.reset_run_state_for_tests()
+  _reset_thinking_state()
   reset_config_caches()
 
 

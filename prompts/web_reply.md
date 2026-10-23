@@ -57,9 +57,7 @@ The For-you view shows your web replies and hides the rest of your turn output.
   - the options, the consequence of each, and your recommendation;
   - the links to the evidence: pages, diffs, PRs or logs.
 - Give each Waiting on you item the link to the place where the user answers it, when that place has a link.
-- List each Waiting on you item in the session where the user answers it.
 - The user answers your Waiting on you items in your own session.
-- When your approver is your parent node, send your divergences to your parent instead.
 - The status panel shows the Waiting on you items of your open descendant sessions below your items.
 - The status panel shows the **Now** of each open child session in a folded block below your items.
 
@@ -79,13 +77,15 @@ The For-you view shows your web replies and hides the rest of your turn output.
 - When the command prints these restatements, it stored nothing.
 - Compare each restatement with your intent:
   - When a part reads NOT STATED or differs from your intent, revise the item.
-  - When the reader names a step that you can undo, check that the step is no consequence step.
+  - When the reader names an undoable step, check that the item holds no decision that only the user makes.
     Then remove the item, and carry out the step on your recommendation.
+    The list then holds only what the next milestone needs from the user.
 - Then run the command again.
 - The command stores the status when the reader has read every item as it stands.
 - The command replaces the items that the file names and keeps the other items. It prints the stored session status.
 - The printout also holds `now_chars` and `now_over_budget`.
 - When `now_over_budget` is true, shorten **Now** and set it again.
 - After a context reset, read the session status with `charliebot web status show`.
+- The command also prints the Waiting on you items of each open descendant session.
 - The command also prints the **Now** of each open child session.
 - Then read the For-you view with `charliebot web dialog`.

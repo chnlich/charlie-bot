@@ -25,7 +25,8 @@ You are reading one request to a user cold. The piped input holds the request te
 (3) What are the options, what is the consequence of each, and which option does the request recommend?
 (4) Which links carry the evidence?
 (5) Which kind of step does the request ask about? Choose one:
-- a step that the agent can undo: code on a branch, a page, a draft, a local file, a design choice, or a plan;
+- an undoable step: branch code, a page, a draft, a local file, a plan, or a design choice that needs no explicit user approval;
 - a consequence step: deleting data without a backup, a message in the user's name or a publication, a merge into a shared main branch, a service restart, a job on a shared cluster, or spending money;
+- an explicit user approval that a rule requires, where the request names the rule;
 - a fact or an action that only the user has;
 - the review of a delivered product.

@@ -17,12 +17,14 @@ user-invocable: false
   it follows its delegated task contract.
 - A delegated agent still stops and reports a blocker, contract conflict, or required
   scope expansion.
-- A child whose approver is its parent node follows Between Agents in
-  `prompts/task_manager.md` instead.
+- A child whose approver is its parent node sends divergences and plan links to its parent
+  (Between Agents, `prompts/task_manager.md`).
+  Its Waiting on you items stay in its own session, so the user answers them there.
 
 ## The principle
 
 The user judges each consequence step (Execution section) before it happens.
+The user also gives each explicit user approval that a rule requires.
 The agent tree judges the rest, readings and design choices included.
 The user reviews these judgments on the delivered product.
 
@@ -129,7 +131,8 @@ An understanding page lists the divergences of a request that admits several rea
   goal is a new plan — `charliebot plan present` opens the new lineage and the old one closes
   as superseded.
 - When the user asks to control an Other Details entry, promote it; it joins the
-  approval object. Unmentioned Trade-offs take their recommendation at approval.
+  approval object. At approval, each unmentioned Trade-off that the approval covers takes its
+  recommendation. Each decision that only the user makes then stays with the user.
 
 ## Approval
 
@@ -138,6 +141,8 @@ An understanding page lists the divergences of a request that admits several rea
 - A user message in a running line is feedback.
 - A request to stop, in any wording or language, or a cancel stops the line.
 - The parent node approves a child line's plan. A root line approves its own plan.
+- The parent's approval covers the plan terms other than decisions that only the user makes.
+  Each such decision then waits for the user's answer in the child's session.
 - Before each consequence step, ask the user for a take off that names the step.
 - A pre take off names lines and steps ahead of time. It holds until those lines deliver.
 - Before you ask a take off for a deletion, show its dry-run list: each path and its size.

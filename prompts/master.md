@@ -241,9 +241,10 @@ per capture: first line `# <title>`, body stating the fact to record or the chan
 On-demand knowledge: `charliebot memory query --topic <topic>` for full text, or `--index` for the
 index only. Admission is judged at curation time with evidence, not mid-session.
 
-NEVER edit `$CHARLIEBOT_HOME/memory/entries/` directly except by live execution of a user-approved
-curation diff. Canon (`entries/` and `topics`) changes only through a user-approved diff: the daily
-curator proposes, the user approves, then the commit lands. Reload the llm-context-guideline skill
+Canon (`entries/` and `topics`) changes through two paths. The daily curation run lands its reviewed
+proposal. A session commits a change that the user approves. Every other memory write, by any agent,
+is a staged capture through `charliebot memory add`. This keeps every canon change behind a review or
+a user approval. Reload the llm-context-guideline skill
 in full before producing any memory disposition, canon proposal, or amendment to the guideline
 itself, and follow it.
 

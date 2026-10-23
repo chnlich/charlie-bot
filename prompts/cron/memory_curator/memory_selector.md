@@ -64,4 +64,4 @@ staging file the entry consumed. The selector's output is the handoff sheet alon
 Session mining reads user messages at daily curation, and its findings reach curation as
 staging captures judged by the same admission test. The day's canon edits live in the PR
 worktree, and the llm-context-guideline skill's "Proposal review and landing" chapter owns the
-approval and landing flow.
+review and landing flow.

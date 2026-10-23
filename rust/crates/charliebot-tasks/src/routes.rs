@@ -18,7 +18,7 @@ use charliebot_registry::task_errors::task_http_error;
 use charliebot_store::control_events;
 use charliebot_store::metadata::{ColdReadSpec, SessionMetadata, TaskProfile, TaskSpec, TaskType};
 use charliebot_store::run_records::RunOutcomeKind;
-use charliebot_store::{CreateTask, TaskCaller};
+use charliebot_store::{CreateTask, StoreError, TaskCaller};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -82,6 +82,7 @@ struct SendMessageRequest {
   content: String,
   uploaded_files: Vec<UploadedFileRef>,
   input_mode: Option<Option<String>>,
+  request_id: String,
 }
 
 const UPLOADED_FILE_BODY_FIELDS: &[Field] = &[
@@ -94,6 +95,7 @@ const SEND_MESSAGE_BODY_FIELDS: &[Field] = &[
   Field::required("content", FieldType::String),
   Field::optional("uploaded_files", FieldType::ModelList { class_name: "UploadedFileRef", model: &UPLOADED_FILE_BODY }),
   Field::optional("input_mode", FieldType::NullableString),
+  Field::required("request_id", FieldType::String).min_length(1),
 ];
 const SEND_MESSAGE_BODY: BodyModel = BodyModel::required(SEND_MESSAGE_BODY_FIELDS);
 
@@ -541,7 +543,8 @@ fn parse_send_message_request(body: &RequestBody) -> Result<SendMessageRequest, 
     _ => unreachable!("validated uploaded_files is a list"),
   };
   let input_mode = values.get("input_mode").map(|value| value.as_str().map(str::to_string));
-  Ok(SendMessageRequest { content, uploaded_files, input_mode })
+  let request_id = values["request_id"].as_str().expect("validated request_id is a string").to_string();
+  Ok(SendMessageRequest { content, uploaded_files, input_mode, request_id })
 }
 
 fn uploaded_file(item: &Value) -> UploadedFileRef {
@@ -609,6 +612,7 @@ async fn send_message(
     })
     .collect::<Vec<_>>();
   let fields = json!({
+    "request_id": request.request_id.clone(),
     "uploaded_files": files,
     "from_session": from_session,
     "from_session_name": from_session_name,
@@ -631,8 +635,24 @@ async fn send_message(
     Ok(event) => event,
     Err(error) => return task_http_error(error),
   };
+  let mut dispatch_error = None;
   let decision = match dispatch.dispatch_pending(&session_id).await {
     Ok(decision) => decision,
+    Err(
+      error @ (StoreError::Conflict(_) | StoreError::Forbidden(_) | StoreError::Invalid(_) | StoreError::NotFound(_)),
+    ) => {
+      let message = error.to_string();
+      tracing::warn!(
+        target: "charliebot_tasks",
+        session = %session_id,
+        request_id = %request.request_id,
+        input_event_id = %admitted.get("id").and_then(serde_json::Value::as_str).expect("admitted input event has an id"),
+        error = %message,
+        "send_message_dispatch_failed"
+      );
+      dispatch_error = Some(message);
+      json!({"launch": false})
+    }
     Err(error) => return task_http_error(error),
   };
   tracing::info!(
@@ -657,6 +677,9 @@ async fn send_message(
     decision.get("reason").filter(|value| !value.is_null() && value.as_str().is_some_and(|text| !text.is_empty()))
   {
     response["reason"] = reason.clone();
+  }
+  if let Some(dispatch_error) = dispatch_error {
+    response["dispatch_error"] = json!(dispatch_error);
   }
   responses::json(StatusCode::ACCEPTED, &response)
 }

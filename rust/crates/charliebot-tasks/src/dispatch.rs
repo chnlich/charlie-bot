@@ -18,8 +18,8 @@ use serde_json::{Map, Value, json};
 
 const INPUT_EVENT_TYPES: [&str; 4] =
   [event_types::USER, event_types::AGENT_MESSAGE, event_types::SCHEDULED_TRIGGER, event_types::CHILD_REPORT];
-const ADMIT_FIELDS: [&str; 6] =
-  ["input_id", "uploaded_files", "timestamp", "from_session", "from_session_name", "input_mode"];
+const ADMIT_FIELDS: [&str; 7] =
+  ["input_id", "request_id", "uploaded_files", "timestamp", "from_session", "from_session_name", "input_mode"];
 
 /// The executor that reserves a run and launches the claimed input batch.
 pub trait DispatchExecutor: Send + Sync {
@@ -82,6 +82,9 @@ impl Dispatcher {
       return Err(StoreError::forbidden("only the server's own scheduler mints scheduled triggers"));
     }
     let fields = admit_fields(&fields)?;
+    if fields.input_id.is_some() && fields.request_id.is_some() {
+      return Err(StoreError::invalid("input_id and request_id are mutually exclusive"));
+    }
 
     let epoch = self.store.prime_aggregator(session_id).await?;
     let mut restore_announcements = Vec::new();
@@ -94,13 +97,31 @@ impl Dispatcher {
         return Err(StoreError::archived(session_id));
       }
       self.authorize_agent_message(&meta, event_type, fields.from_session.as_deref())?;
-      if let Some(input_id) = fields.input_id.as_deref() {
+      let mut event_id = fields.input_id.clone();
+      if let Some(request_id) = fields.request_id.as_deref() {
+        let stable_id = charliebot_store::control_events::stable_request_event_id(session_id, request_id);
+        let events = self.store.load_all_facts_view_sync(session_id)?;
+        if let Some(existing) = charliebot_store::control_events::replay_request_event(
+          events.iter(),
+          &stable_id,
+          request_id,
+          event_type,
+          content,
+          None,
+        )? {
+          return Ok(existing);
+        }
+        event_id = Some(stable_id);
+      } else if let Some(input_id) = fields.input_id.as_deref() {
         let events = self.store.load_all_facts_view_sync(session_id)?;
         if let Some(existing) = events.iter().find(|event| event.get("id").and_then(Value::as_str) == Some(input_id)) {
           return Ok(existing.clone());
         }
       }
       let mut payload = vec![("content".to_string(), Value::String(content.to_string()))];
+      if let Some(request_id) = fields.request_id.as_deref() {
+        payload.push(("request_id".to_string(), Value::String(request_id.to_string())));
+      }
       if let Some(uploaded_files) = fields.uploaded_files.as_ref().filter(|files| !files.is_empty()) {
         payload.push(("uploaded_files".to_string(), Value::Array(uploaded_files.clone())));
       }
@@ -117,7 +138,7 @@ impl Dispatcher {
         event_type,
         actor,
         session_id,
-        fields.input_id.as_deref(),
+        event_id.as_deref(),
         None,
         payload,
       );
@@ -852,6 +873,7 @@ fn deduplicate_pending_inputs<E: AsRef<Value>>(
 
 struct AdmitFields {
   input_id: Option<String>,
+  request_id: Option<String>,
   uploaded_files: Option<Vec<Value>>,
   timestamp: Option<String>,
   from_session: Option<String>,
@@ -888,6 +910,7 @@ fn admit_fields(fields: &Value) -> StoreResult<AdmitFields> {
   };
   Ok(AdmitFields {
     input_id: optional_string("input_id")?,
+    request_id: optional_string("request_id")?,
     uploaded_files,
     timestamp: optional_string("timestamp")?,
     from_session: optional_string("from_session")?,

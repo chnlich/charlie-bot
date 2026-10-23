@@ -161,6 +161,16 @@ def result_event(text: str) -> dict:
   return event
 
 
+def signal_then_hold(started: asyncio.Event, release: asyncio.Event) -> Callable[[], Awaitable[None]]:
+  """A backend gate: set *started* when the run reaches it, then hold the run until *release* is set."""
+
+  async def hold() -> None:
+    started.set()
+    await release.wait()
+
+  return hold
+
+
 def make_pm_build(text: str, pm_builds: list | None = None):
   """The parent-manager turn's build function for conftest.BUILD_BACKEND_PATCH_TARGET:
     one scripted double per registry build, wired for on_spawn the way
@@ -273,6 +283,70 @@ def implement_marker_commit(tree: task_sessions.TaskTreeManager, worker_id: str)
 # ---------------------------------------------------------------------------
 # Manager turns: durable dispatch to actual execution
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_admit_input_replay_compares_extra_fields_and_rejects_core_collisions(tmp_path: pathlib.Path) -> None:
+  _cfg, _blocks, tree = conftest.build_env(tmp_path)
+  manager = await conftest.create_task(tree, parent=None, request_id="fields", name="Fields")
+
+  with pytest.raises(task_errors.TaskInvalidError):
+    await tree.dispatch.admit_input(
+        manager.id,
+        event_type=ET.USER,
+        content="message",
+        actor="user",
+        request_id="collision",
+        fields={"content": "replacement"},
+    )
+
+  event = await tree.dispatch.admit_input(
+      manager.id,
+      event_type=ET.USER,
+      content="message",
+      actor="user",
+      request_id="fields-request",
+      fields={"summon": {
+          "mention_id": "m1"
+      }},
+  )
+  replay = await tree.dispatch.admit_input(
+      manager.id,
+      event_type=ET.USER,
+      content="message",
+      actor="user",
+      request_id="fields-request",
+      fields={"summon": {
+          "mention_id": "m1"
+      }},
+  )
+  assert replay == event
+  assert event["request_id"] == "fields-request"
+  assert event["summon"] == {"mention_id": "m1"}
+
+  with pytest.raises(task_errors.TaskConflictError):
+    await tree.dispatch.admit_input(
+        manager.id,
+        event_type=ET.USER,
+        content="message",
+        actor="user",
+        request_id="fields-request",
+    )
+
+  with pytest.raises(task_errors.TaskConflictError):
+    await tree.dispatch.admit_input(
+        manager.id,
+        event_type=ET.USER,
+        content="message",
+        actor="user",
+        request_id="fields-request",
+        fields={"summon": {
+            "mention_id": "m2"
+        }},
+    )
+
+  inputs = [event for event in tree.events.load_events(manager.id) if event.get("request_id") == "fields-request"]
+  assert inputs == [event]
 
 
 @pytest.mark.asyncio
@@ -1516,10 +1590,7 @@ async def test_a_follow_up_upload_on_a_worker_node_reaches_its_continuation_prom
 
   work_started = asyncio.Event()
   work_gate = asyncio.Event()
-
-  async def hold_work_run() -> None:
-    work_started.set()
-    await work_gate.wait()
+  hold_work_run = signal_then_hold(work_started, work_gate)
 
   async def record_native_id() -> None:
     # The finalize scan reads the native session id from the run's raw log.

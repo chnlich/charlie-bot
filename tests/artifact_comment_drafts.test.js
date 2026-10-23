@@ -176,7 +176,7 @@ function sessionFetch(ok) {
       return {ok: true, status: 200, async json() { return {name: 'Draft Session'}; }};
     }
     if (url === '/api/chat/sess-draft/message') {
-      return ok ? {ok: true, status: 200} : {ok: false, status: 500};
+      return ok ? {ok: true, status: 202, async json() { return {}; }} : {ok: false, status: 400};
     }
     throw new Error('unexpected fetch: ' + url);
   };
@@ -328,7 +328,7 @@ test('send puts shortcut entries ahead of block comments and keeps their order',
     }
     if (url === '/api/chat/sess-draft/message') {
       posted = JSON.parse(options.body).content;
-      return {ok: true, status: 200};
+      return {ok: true, status: 202, async json() { return {}; }};
     }
     throw new Error('unexpected fetch: ' + url);
   };

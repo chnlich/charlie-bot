@@ -7,6 +7,7 @@
   const renderRoundRatingButtons = Chat.renderRoundRatingButtons;
   const markFileLinks = Chat.markFileLinks;
   const toolInputSummary = Chat.toolInputSummary;
+  const isErrorRow = Chat.isErrorRow;
 
 // The one branch glyph: the clone_start banner's "Cloned from" marker below
 // and the separator's "Clone to here" button (sidebar/modals.js).
@@ -725,7 +726,8 @@ function renderMessage(msg, sessionId) {
 
   if (msg.role === "user") {
     return openMessageWrapper("flex justify-end", msg)
-      + renderUserMessageBubble(msg.content, msg.input_mode, msg.timestamp, msg.uploaded_files) + "</div>";
+      + renderUserMessageBubble(
+          msg.content, msg.input_mode, msg.timestamp, msg.uploaded_files, msg.request_id, msg.delivery_status) + "</div>";
   }
   if (msg.role === "assistant") {
     var content = msg.content || "";
@@ -751,6 +753,16 @@ function renderMessage(msg, sessionId) {
       + "<div class=\"max-w-[90%] overflow-hidden bg-red-900/20 border border-red-700/30 rounded-lg px-3 py-1.5 text-xs text-red-400\">"
       + "<span class=\"whitespace-pre-wrap break-words\">" + errorLinesToggleHtml(msg.content) + "</span>"
       + "</div></div>";
+  }
+  // A failed turn's error row (isErrorRow): left-aligned in the run_error palette, with the whole text
+  // kept on its line breaks and scrolled inside the row past about twelve lines. A run_error row
+  // takes the branch above, so it never reaches this one.
+  if (isErrorRow(msg)) {
+    var titleAttr = msg.timestamp ? " title=\"" + formatBubbleTime(msg.timestamp) + "\"" : "";
+    return openMessageWrapper("flex justify-start", msg)
+      + "<div class=\"max-w-[90%] max-h-48 overflow-y-auto bg-red-900/20 border border-red-700/30 rounded-lg px-3 py-1.5 text-xs text-red-400\""
+      + titleAttr + ">"
+      + "<span class=\"whitespace-pre-wrap break-words\">" + escapeHtml(msg.content) + "</span></div></div>";
   }
   // A web_status change and a cold read of a waiting item read as a system line; the For you view folds both instead.
   if (msg.role === "system" || msg.role === "web_status" || msg.role === "web_ask_check") {
@@ -941,7 +953,7 @@ function appendMessageObject(msg, sessionId, forceScroll) {
   _appendRenderedMessage(globalThis.renderMessage(msg, sessionId || SESSION_ID), follow);
 }
 
-function appendMessage(role, content, inputMode, timestamp, uploadedFiles) {
+function appendMessage(role, content, inputMode, timestamp, uploadedFiles, requestId) {
   var msg = {
     role: role,
     content: content || "",
@@ -949,10 +961,22 @@ function appendMessage(role, content, inputMode, timestamp, uploadedFiles) {
     timestamp: timestamp || null,
     uploaded_files: uploadedFiles || null,
   };
+  if (requestId !== undefined) {
+    msg.id = requestId;
+    msg.request_id = requestId;
+    msg.delivery_status = 'Sending…';
+  }
   if (!ingestLiveMessage(msg, SESSION_ID, role === "user")) {
     _appendRenderedMessage(globalThis.renderMessage(msg, SESSION_ID), role === "user");
   }
   return msg;
+}
+
+function setMessageDeliveryStatus(msg, status) {
+  msg.delivery_status = status;
+  const marker = document.getElementById('message-delivery-' + msg.request_id);
+  if (!marker) return;
+  marker.textContent = status;
 }
 
 const GLOBALS = {
@@ -963,6 +987,7 @@ const GLOBALS = {
   renderMessagesToDetachedContainer,
   appendMessageObject,
   appendMessage,
+  setMessageDeliveryStatus,
   applyTurnOutline,
 };
 // Turn primitives the window engine builds wraps from and drives through Chat;

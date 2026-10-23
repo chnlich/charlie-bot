@@ -67,10 +67,33 @@ async def send_message(
         from_session=from_session,
         from_session_name=from_session_name,
         input_mode=req.input_mode,
+        request_id=req.request_id,
     )
-    decision = await task_mgr.dispatch.dispatch_pending(session_id)
-  except (task_errors.TaskConflictError, task_errors.TaskForbiddenError, task_errors.TaskInvalidError) as e:
+  except (
+      task_errors.TaskConflictError,
+      task_errors.TaskForbiddenError,
+      task_errors.TaskInvalidError,
+      task_errors.TaskNotFoundError,
+  ) as e:
     raise sessions._task_http_error(e) from e
+  dispatch_error = None
+  try:
+    decision = await task_mgr.dispatch.dispatch_pending(session_id)
+  except (
+      task_errors.TaskConflictError,
+      task_errors.TaskForbiddenError,
+      task_errors.TaskInvalidError,
+      task_errors.TaskNotFoundError,
+  ) as e:
+    dispatch_error = str(e)
+    log.warning(
+        "send_message_dispatch_failed",
+        session=session_id,
+        request_id=req.request_id,
+        input_event_id=str(admitted.get("id")),
+        error=dispatch_error,
+    )
+    decision = {"launch": False}
   log.info(
       "send_message",
       session=session_id,
@@ -83,6 +106,9 @@ async def send_message(
           "status": "accepted",
           "input_event_id": str(admitted.get("id")),
           "launch": bool(decision.get("launch")),
+          **({
+              "dispatch_error": dispatch_error
+          } if dispatch_error is not None else {}),
           **({
               "reason": decision["reason"]
           } if decision.get("reason") else {}),

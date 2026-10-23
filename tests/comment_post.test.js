@@ -7,7 +7,12 @@ const { readStatic } = require('./read_static');
 const COMMENT_POST_JS = readStatic('comment_post.js');
 
 function loadCommentPost(fetchImpl) {
-  const context = { fetch: fetchImpl };
+  let requestSequence = 0;
+  const context = {
+    fetch: fetchImpl,
+    crypto: {randomUUID: () => `comment-request-${++requestSequence}`},
+    setTimeout: (callback) => { callback(); return 1; },
+  };
   vm.createContext(context);
   vm.runInContext(COMMENT_POST_JS, context, { filename: 'comment_post.js' });
   return context;
@@ -85,7 +90,7 @@ test('postCommentMessage sends the comment-tray request shape', async () => {
   const calls = [];
   const context = loadCommentPost(async (url, options = {}) => {
     calls.push({ url, options });
-    return { ok: true, status: 200 };
+    return {ok: true, status: 202, json: async () => ({})};
   });
 
   await context.postCommentMessage('session 7', 'two lines\nof comment');
@@ -96,13 +101,54 @@ test('postCommentMessage sends the comment-tray request shape', async () => {
   assert.equal(call.options.method, 'POST');
   assert.equal(call.options.credentials, 'same-origin');
   assert.equal(call.options.headers['Content-Type'], 'application/json');
-  assert.equal(call.options.body, JSON.stringify({ content: 'two lines\nof comment', uploaded_files: [] }));
+  const body = JSON.parse(call.options.body);
+  assert.equal(body.content, 'two lines\nof comment');
+  assert.deepEqual(body.uploaded_files, []);
+  assert.equal(body.request_id, 'comment-request-1');
 });
 
-test('postCommentMessage throws the auth message on 401 and the HTTP message otherwise', async () => {
+test('postCommentMessage retries a network error and a 5xx with one request id', async () => {
+  const calls = [];
+  const context = loadCommentPost(async (url, options = {}) => {
+    calls.push({url, options});
+    if (calls.length === 1) throw new TypeError('offline');
+    if (calls.length === 2) return {ok: false, status: 503};
+    return {ok: true, status: 202, json: async () => ({})};
+  });
+  const delays = [];
+  context.setTimeout = (callback, delay) => { delays.push(delay); callback(); return 1; };
+
+  await context.postCommentMessage('s', 'c');
+
+  assert.deepEqual(delays, [1000, 2000]);
+  assert.equal(calls.length, 3);
+  assert.deepEqual(calls.map((call) => JSON.parse(call.options.body).request_id), [
+    'comment-request-1', 'comment-request-1', 'comment-request-1',
+  ]);
+});
+
+test('postCommentMessage treats a 202 dispatch_error as accepted without retry', async () => {
+  let attempts = 0;
+  const context = loadCommentPost(async () => {
+    attempts += 1;
+    return {ok: true, status: 202, json: async () => ({dispatch_error: 'run already active'})};
+  });
+
+  const result = await context.postCommentMessage('s', 'c');
+
+  assert.equal(attempts, 1);
+  assert.deepEqual(result, {dispatch_error: 'run already active'});
+});
+
+test('postCommentMessage stops on a 4xx and preserves the auth and HTTP messages', async () => {
   const unauthorized = loadCommentPost(async () => ({ ok: false, status: 401 }));
   await assert.rejects(unauthorized.postCommentMessage('s', 'c'), { message: 'log in to comment' });
 
-  const serverError = loadCommentPost(async () => ({ ok: false, status: 502 }));
-  await assert.rejects(serverError.postCommentMessage('s', 'c'), { message: 'Comment post failed: HTTP 502' });
+  let attempts = 0;
+  const badRequest = loadCommentPost(async () => {
+    attempts += 1;
+    return {ok: false, status: 409};
+  });
+  await assert.rejects(badRequest.postCommentMessage('s', 'c'), {message: 'Comment post failed: HTTP 409'});
+  assert.equal(attempts, 1);
 });

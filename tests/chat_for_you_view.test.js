@@ -136,6 +136,16 @@ test('For you shows only the user, web reply, notice and error rows, in order', 
   assert.deepEqual(rowsOf(rig.root), FIXTURE_ROWS);
 });
 
+test('For you shows an error row with every line of its text', () => {
+  const text = "Error: Agent error: Usage: charlie-code [OPTIONS]\n"
+      + "Try 'charlie-code --help' for help.\n\n"
+      + "Error: Invalid value: --image: '/tmp/example.jpg' is 5000000 bytes";
+  const rig = forYouRig([eMsg('user', 'u1', 'attach the photo'), eMsg('system', 'e2', text)]);
+  const row = rig.root.children.find((el) => el.dataset.messageRole === 'system');
+  assert.ok(row, 'the error row is shown');
+  assert.equal(row.textContent, text, 'the row keeps the whole text, line breaks included');
+});
+
 test('a web reply mid-turn shows in For you and sits inside the folded steps in Everything', () => {
   const rig = forYouRig(fixture());
   assert.ok(rowsOf(rig.root).includes('web_reply'), 'For you shows the reply');

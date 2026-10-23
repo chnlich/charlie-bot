@@ -194,7 +194,7 @@ class CompactionOutcome:
   cache_read_tokens: int | None = None
 
 
-def compaction_command(cc_session_id: str) -> list[str]:
+def compaction_command(cc_session_id: str, session_id: str) -> list[str]:
   return [
       claude_code.BASE_COMMAND[0],
       "-p",
@@ -209,7 +209,12 @@ def compaction_command(cc_session_id: str) -> list[str]:
       # The compaction subprocess is a CharlieBot-spawned Claude session too,
       # so connector sync stays off here as well (claude_launch.DISABLE_CONNECTOR_SETTINGS).
       "--settings",
-      json.dumps(claude_launch.DISABLE_CONNECTOR_SETTINGS),
+      json.dumps(
+          {
+              **claude_launch.DISABLE_CONNECTOR_SETTINGS,
+              **claude_launch.compaction_context_hook_settings(session_id),
+          },
+          separators=(",", ":")),
   ]
 
 
@@ -395,7 +400,7 @@ async def compact_with_sonnet(
     log_context: dict,
     run_kind: models.RunKind,
     timeout: float = CLAUDE_COMPACTION_TIMEOUT,
-    cgroup_session_id: str | None = None,
+    cgroup_session_id: str,
 ) -> bool:
   """Compact *cc_session_id*'s transcript under *config_dir* with Sonnet; True on success.
 
@@ -408,7 +413,7 @@ async def compact_with_sonnet(
   raises for a failed run; see :func:`run_compaction`.
   """
   outcome = await run_compaction(
-      argv=compaction_command(cc_session_id),
+      argv=compaction_command(cc_session_id, cgroup_session_id),
       env=compaction_env(config_dir, run_kind),
       cwd=cwd,
       config_dir=config_dir,

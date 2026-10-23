@@ -8,11 +8,13 @@ the Rust binary, and the switch tells them apart by argv. Its behavior comes fro
 The preflight refusals stop before any pane is looked up, so they need no tmux. The steps after the preflight drive a
 pane on a private tmux server (tmux -L). The repo caps integration tests at 50 and already uses all 50, so those steps
 share one test. The probe turn's cases run its functions in a shell against a fake server of their own, with one-second
-waits, so each stays under the unit budget.
+waits, so each stays under the unit budget. The escalation cases run escalate_pane the same way, against stand-in
+servers under a shell that plays the pane, so they need no tmux either.
 """
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import datetime
 import hashlib
@@ -22,6 +24,7 @@ import pathlib
 import re
 import shlex
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -127,7 +130,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
     self._route("DELETE")
 
   def _route(self, method):
-    self.rfile.read(int(self.headers.get("Content-Length") or 0))
+    request_body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+    request_json = json.loads(request_body) if request_body else {}
     if self.headers.get("Authorization") != f"Bearer {KEY}":
       return self._reply(401, {"detail": "unauthorized"})
     if method == "GET" and self.path == "/api/internal/version":
@@ -137,6 +141,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
     if method == "POST" and self.path == "/api/sessions/":
       return self._reply(200, {"id": PROBE_SESSION})
     if method == "POST" and re.fullmatch(r"/api/chat/[^/]+/message", self.path):
+      if not request_json.get("request_id"):
+        return self._reply(422, {"detail": "request_id is required"})
       if BEHAVIOR["message_status"] != 202:
         return self._reply(BEHAVIOR["message_status"], {"detail": "message refused"})
       RUNS.append({"id": "probe-run", "state": BEHAVIOR["run_state"]})
@@ -636,6 +642,116 @@ def test_probe_archive_bounds_a_slow_run_list_by_its_wait(probe: ProbeRun) -> No
   assert any(line.startswith("GET /api/sessions/probe-session/runs?limit=500") for line in calls)
   assert "probe: listing the runs answered 000" in proc.stdout
   _assert_stage_lines(proc)
+
+
+# A stand-in for a server under a pane. The escalation finds it by its argv, which names server.py; stubborn mode
+# ignores SIGTERM.
+STAND_IN_SERVER = """\
+import signal
+import sys
+import time
+
+if sys.argv[1] == "stubborn":
+  signal.signal(signal.SIGTERM, signal.SIG_IGN)
+time.sleep(300)
+"""
+
+
+def _children(pid: int) -> list[int]:
+  out = subprocess.run(["pgrep", "-P", str(pid)], capture_output=True, text=True, check=False).stdout
+  return [int(child) for child in out.split()]
+
+
+def _server_under(pid: int) -> int:
+  """The stand-in server forked under the pane shell, once exec has run and its argv names server.py."""
+
+  def exec_done() -> bool:
+    return any(b"server.py" in pathlib.Path(f"/proc/{child}/cmdline").read_bytes() for child in _children(pid))
+
+  _wait_until(exec_done, 10)
+  return _children(pid)[0]
+
+
+@pytest.fixture
+def pane(tmp_path: pathlib.Path) -> Iterator[Callable[[str], subprocess.Popen[bytes]]]:
+  """Starts a pane shell whose one child is a stand-in server in the given mode; teardown kills what is left."""
+  shells: list[subprocess.Popen[bytes]] = []
+
+  def start(mode: str) -> subprocess.Popen[bytes]:
+    directory = tmp_path / f"pane{len(shells)}"
+    directory.mkdir()
+    (directory / "server.py").write_text(STAND_IN_SERVER, encoding="utf-8")
+    shell = subprocess.Popen(
+        ["bash", "-c", '"$1" "$2" "$3"; true', "bash", sys.executable,
+         str(directory / "server.py"), mode])
+    shells.append(shell)
+    return shell
+
+  yield start
+  for shell in shells:
+    for child in _children(shell.pid):
+      with contextlib.suppress(ProcessLookupError):
+        os.kill(child, signal.SIGKILL)
+    shell.kill()
+    shell.wait()
+
+
+def _escalate(tmp_path: pathlib.Path, shell_pid: int) -> subprocess.CompletedProcess[str]:
+  """The switch's escalate_pane against the pane shell, with a one-second SIGTERM wait."""
+  # impl_of_pid reads RELEASES_REAL, which run_detached sets; a sourced copy of the script needs it set too.
+  env = {
+      **os.environ,
+      "PANE": "%escalation",
+      "PANE_PID": str(shell_pid),
+      "RELEASES_REAL": str(tmp_path / "releases"),
+      "CHARLIEBOT_SWITCH_STOP_WAIT_S": "1",
+  }
+  return subprocess.run(
+      ["bash", "-c", 'source "$1" python && escalate_pane', "bash",
+       str(SWITCH)],
+      env=env,
+      capture_output=True,
+      text=True,
+      timeout=30,
+      check=False)
+
+
+def _logged_with(output: str, signal_name: str, pid: int) -> bool:
+  """Whether one escalation log line names the signal and the PID it was sent to."""
+  return any(signal_name in line and re.search(rf"\b{pid}\b", line) for line in output.splitlines())
+
+
+def test_escalation_stops_a_server_under_the_pane_with_sigterm(
+    pane: Callable[[str], subprocess.Popen[bytes]], tmp_path: pathlib.Path) -> None:
+  """A server that honors SIGTERM is stopped by SIGTERM alone, and the pane then goes idle."""
+  shell = pane("honest")
+  server = _server_under(shell.pid)
+  proc = _escalate(tmp_path, shell.pid)
+  assert proc.returncode == 0, proc.stdout + proc.stderr
+  assert _logged_with(proc.stdout, "SIGTERM", server), proc.stdout
+  assert "SIGKILL" not in proc.stdout
+  assert shell.wait(timeout=5) == 0
+
+
+def test_escalation_sigkills_a_survivor_and_spares_a_server_outside_the_pane(
+    pane: Callable[[str], subprocess.Popen[bytes]], tmp_path: pathlib.Path) -> None:
+  """A server that ignores SIGTERM gets SIGKILL after the SIGTERM wait; a server outside the pane gets no signal."""
+  shell = pane("stubborn")
+  server = _server_under(shell.pid)
+  outside = tmp_path / "outside"
+  outside.mkdir()
+  (outside / "server.py").write_text(STAND_IN_SERVER, encoding="utf-8")
+  bystander = subprocess.Popen([sys.executable, str(outside / "server.py"), "honest"])
+  try:
+    proc = _escalate(tmp_path, shell.pid)
+    assert bystander.poll() is None, "a server outside the pane was signaled"
+  finally:
+    bystander.kill()
+    bystander.wait()
+  assert proc.returncode == 0, proc.stdout + proc.stderr
+  assert _logged_with(proc.stdout, "SIGTERM", server), proc.stdout
+  assert _logged_with(proc.stdout, "SIGKILL", server), proc.stdout
+  assert shell.wait(timeout=5) == 0
 
 
 @pytest.mark.integration

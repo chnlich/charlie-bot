@@ -116,6 +116,8 @@ class DispatchTree(Protocol):
 # machine-typed events, is a user request.
 INPUT_EVENT_TYPES: frozenset[str] = frozenset({ET.USER, ET.AGENT_MESSAGE, ET.SCHEDULED_TRIGGER, ET.CHILD_REPORT})
 
+_ADMIT_INPUT_CORE_FIELDS = control_events.REQUEST_EVENT_CORE_FIELDS
+
 
 def child_report_text(report: dict, provenance: str | None = None) -> str:
   """A child_report event as the parent's turn input: the typed header, then its summary.
@@ -174,6 +176,8 @@ class TaskInputDispatcher:
       actor: str,
       uploaded_files: list[dict] | None = None,
       input_id: str | None = None,
+      request_id: str | None = None,
+      fields: dict | None = None,
       timestamp: str | None = None,
       from_session: str | None = None,
       from_session_name: str | None = None,
@@ -181,9 +185,10 @@ class TaskInputDispatcher:
   ) -> dict:
     """Persist one input as a durable fact and return it.
 
-        Identity is stable: a caller retrying with the same ``input_id`` gets
-        the original event back and no second append. The event lands before
-        the lock is released; the live announcement follows outside the lock.
+        Identity is stable: a caller retrying with the same ``input_id`` or
+        ``request_id`` gets the original event back and no second append. The
+        event lands before the lock is released; the live announcement follows
+        outside the lock.
         ``event_type`` is the caller's proof of origin — the user-message
         route may mint USER only for operator callers (the route enforces
         that; this method refuses the mismatch as a backstop).
@@ -191,6 +196,11 @@ class TaskInputDispatcher:
         client sets it); the event stores it as ``input_mode``, and only a
         user event carries one.
         """
+    if input_id is not None and request_id is not None:
+      raise task_errors.TaskInvalidError("input_id and request_id are mutually exclusive")
+    collisions = _ADMIT_INPUT_CORE_FIELDS.intersection(fields or {})
+    if collisions:
+      raise task_errors.TaskInvalidError(f"fields may not replace core event fields: {', '.join(sorted(collisions))}")
     if event_type not in INPUT_EVENT_TYPES:
       raise task_errors.TaskInvalidError(f"{event_type} is not a task input type")
     if input_mode is not None and event_type != ET.USER:
@@ -214,7 +224,22 @@ class TaskInputDispatcher:
         raise task_errors.TaskArchivedError(session_id)
       await self._authorize_agent_message(meta, event_type, from_session)
       events = tree.fact_history(session_id)
-      if input_id is not None:
+      event_id = input_id
+      if request_id is not None:
+        event_id = control_events.stable_request_event_id(session_id, request_id)
+        existing = control_events.replay_request_event(
+            events,
+            event_id=event_id,
+            request_id=request_id,
+            event_type=event_type,
+            content=content,
+            fields=fields or {},
+        )
+        if existing is not None:
+          # A replayed request keeps its original event and causes no second
+          # append, broadcast, or sidebar lift.
+          return existing
+      elif input_id is not None:
         existing = next((e for e in events if e.get("id") == input_id), None)
         if existing is not None:
           # A replayed input keeps its original identity, timestamps,
@@ -224,9 +249,11 @@ class TaskInputDispatcher:
           event_type,
           actor=actor,
           source_session_id=session_id,
-          event_id=input_id,
+          event_id=event_id,
           content=content,
       )
+      if request_id is not None:
+        event["request_id"] = request_id
       if timestamp is not None:
         event["timestamp"] = timestamp  # imported history keeps original times
       if uploaded_files:
@@ -237,6 +264,8 @@ class TaskInputDispatcher:
         event["from_session_name"] = from_session_name
       if input_mode is not None:
         event["input_mode"] = input_mode
+      if fields:
+        event.update(fields)
       if tree.task_state(session_id) != "open":
         # A real user message is the one input that restores an archived
         # chain: the target and every archived ancestor reopen (topmost

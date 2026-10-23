@@ -638,6 +638,7 @@ class SendMessageRequest(pydantic.BaseModel):
   content: str
   uploaded_files: list[UploadedFileRef] = pydantic.Field(default_factory=list)
   input_mode: str | None = None
+  request_id: str = pydantic.Field(min_length=1)
 
 
 class SwitchBackendRequest(pydantic.BaseModel):

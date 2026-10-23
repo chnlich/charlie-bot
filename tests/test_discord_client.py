@@ -7,6 +7,7 @@ are synthetic throughout.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from unittest import mock
 
@@ -48,9 +49,16 @@ async def test_create_message_json_carries_allowed_mentions():
     return httpx.Response(200, json={"id": "222222222222222222"})
 
   seen: dict = {}
-  result = await _client(handler).create_message("333333333333333333", "hello")
+  result = await _client(handler).create_message("333333333333333333", "hello", post_key="reply#1")
   assert result == {"id": "222222222222222222"}
-  assert seen["body"] == {"content": "hello", "allowed_mentions": {"parse": []}}
+  assert seen["body"] == {
+      "content": "hello",
+      "nonce": hashlib.sha256(b"reply#1").hexdigest()[:25],
+      "enforce_nonce": True,
+      "allowed_mentions": {
+          "parse": []
+      },
+  }
 
 
 @pytest.mark.asyncio

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import datetime
 import pathlib
 
@@ -12,7 +13,7 @@ from fastapi import testclient
 
 from src.infra import event_types as ET
 from src.infra import models
-from src.runtime import run_token, task_errors, task_sessions
+from src.runtime import control_events, run_token, task_errors, task_sessions
 from src.runtime.api import message_utils
 
 
@@ -24,9 +25,16 @@ async def admit(
     event_type: str = ET.USER,
     actor: str = "user",
     input_id: str | None = None,
+    request_id: str | None = None,
     **payload: object) -> dict:
   return await tree.dispatch.admit_input(
-      session_id, event_type=event_type, content=content, actor=actor, input_id=input_id, **payload)
+      session_id,
+      event_type=event_type,
+      content=content,
+      actor=actor,
+      input_id=input_id,
+      request_id=request_id,
+      **payload)
 
 
 class ScriptedExecutor:
@@ -62,6 +70,96 @@ def child_report_messages(session_blocks: conftest.SessionBlocks, session_id: st
 
 def input_events(tree: task_sessions.TaskTreeManager, session_id: str) -> list[dict]:
   return tree.dispatch.pending_inputs(session_id)
+
+
+@pytest.mark.asyncio
+async def test_request_id_replay_returns_the_stored_event_and_conflicts_on_changed_content(
+    tmp_path: pathlib.Path) -> None:
+  _, _, tree = conftest.build_env(tmp_path)
+  root = await conftest.create_task(tree, parent=None, request_id="root")
+  request_id = "browser-send-1"
+
+  stored = await admit(tree, root.id, "hello", request_id=request_id)
+  replay = await admit(tree, root.id, "hello", request_id=request_id)
+
+  assert stored["id"] == control_events.stable_request_event_id(root.id, request_id)
+  assert stored["request_id"] == request_id
+  assert replay == stored
+  assert [e for e in tree.events.load_events(root.id) if e.get("type") == ET.USER] == [stored]
+
+  expected = f"request_id {request_id} is already event {stored['id']} with a different type or content"
+  with pytest.raises(task_errors.TaskConflictError, match=expected):
+    await admit(tree, root.id, "changed", request_id=request_id)
+  with pytest.raises(task_errors.TaskConflictError, match=expected):
+    await admit(tree, root.id, "hello", event_type=ET.AGENT_MESSAGE, actor="agent", request_id=request_id)
+
+
+@pytest.mark.asyncio
+async def test_request_id_and_input_id_are_mutually_exclusive(tmp_path: pathlib.Path) -> None:
+  _, _, tree = conftest.build_env(tmp_path)
+  root = await conftest.create_task(tree, parent=None, request_id="root")
+
+  with pytest.raises(task_errors.TaskInvalidError, match="mutually exclusive"):
+    await tree.dispatch.admit_input(
+        root.id,
+        event_type=ET.USER,
+        content="hello",
+        actor="user",
+        input_id="manual-id",
+        request_id="browser-id",
+    )
+
+
+@pytest.mark.asyncio
+async def test_concurrent_request_id_admission_checks_and_appends_under_one_lock(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  _, _, tree = conftest.build_env(tmp_path)
+  root = await conftest.create_task(tree, parent=None, request_id="root")
+  first_append_entered = asyncio.Event()
+  second_primed = asyncio.Event()
+  release_append = asyncio.Event()
+  append_count = 0
+  prime_count = 0
+  lock_states: list[bool] = []
+  original_append = tree.events.append
+  original_fact_history = tree.fact_history
+  original_prime = tree.session_events.prime_aggregator
+
+  async def gated_append(session_id: str, event: dict) -> None:
+    nonlocal append_count
+    append_count += 1
+    lock_states.append(tree.control_lock.locked())
+    if append_count == 1:
+      first_append_entered.set()
+      await release_append.wait()
+    await original_append(session_id, event)
+
+  def recording_fact_history(session_id: str) -> list[dict]:
+    lock_states.append(tree.control_lock.locked())
+    return original_fact_history(session_id)
+
+  async def signal_second_prime(session_id: str) -> int:
+    nonlocal prime_count
+    prime_count += 1
+    if prime_count == 2:
+      second_primed.set()
+    return await original_prime(session_id)
+
+  monkeypatch.setattr(tree.events, "append", gated_append)
+  monkeypatch.setattr(tree, "fact_history", recording_fact_history)
+  monkeypatch.setattr(tree.session_events, "prime_aggregator", signal_second_prime)
+
+  first = asyncio.create_task(admit(tree, root.id, "same", request_id="race"))
+  await first_append_entered.wait()
+  second = asyncio.create_task(admit(tree, root.id, "same", request_id="race"))
+  await second_primed.wait()
+  release_append.set()
+  first_event, second_event = await asyncio.gather(first, second)
+
+  assert first_event == second_event
+  assert append_count == 1
+  assert lock_states and all(lock_states)
+  assert [e for e in tree.events.load_events(root.id) if e.get("request_id") == "race"] == [first_event]
 
 
 # ---------------------------------------------------------------------------
@@ -400,6 +498,7 @@ async def test_message_routes_use_the_dispatcher_on_v2_nodes(tmp_path: pathlib.P
           f"/api/sessions/{worker.id}/message",
           json={
               "content": "please handle this",
+              "request_id": "web-message-1",
               "uploaded_files": [{
                   "filename": "brief.txt",
                   "path": "/tmp/brief.txt"
@@ -425,7 +524,12 @@ async def test_message_routes_use_the_dispatcher_on_v2_nodes(tmp_path: pathlib.P
       claims = run_token.RunTokenClaims(run_id="run-agent", session_id=worker.id, agent="worker-agent")
       agent_client_headers = {"Authorization": f"Bearer {run_token.sign_run_token(claims, key)}"}
       relayed = client.post(
-          f"/api/sessions/{worker.id}/message", json={"content": "agent view"}, headers=agent_client_headers)
+          f"/api/sessions/{worker.id}/message",
+          json={
+              "content": "agent view",
+              "request_id": "agent-message-1"
+          },
+          headers=agent_client_headers)
       assert relayed.status_code == 403
       events = tree.events.load_events(worker.id)
       assert len([e for e in events if e["type"] == ET.USER]) == 1  # no second USER
@@ -470,13 +574,88 @@ async def test_message_route_stores_input_mode_only_when_the_post_carries_it(tmp
   app.dependency_overrides[deps.get_run_store] = lambda: tree.runs
 
   with testclient.TestClient(app) as client:
-    dictated = client.post(f"/api/chat/{root.id}/message", json={"content": "said aloud", "input_mode": "voice"})
-    typed = client.post(f"/api/chat/{root.id}/message", json={"content": "typed in"})
+    dictated = client.post(
+        f"/api/chat/{root.id}/message",
+        json={
+            "content": "said aloud",
+            "input_mode": "voice",
+            "request_id": "dictated-1"
+        })
+    typed = client.post(f"/api/chat/{root.id}/message", json={"content": "typed in", "request_id": "typed-1"})
 
   assert dictated.status_code == 202 and typed.status_code == 202
   users = {e["content"]: e for e in tree.events.load_events(root.id) if e["type"] == ET.USER}
   assert users["said aloud"]["input_mode"] == "voice"
   assert "input_mode" not in users["typed in"]
+
+
+@pytest.mark.asyncio
+async def test_message_route_requires_request_id_and_replays_one_launch(tmp_path: pathlib.Path) -> None:
+  import src.runtime.api.chat as chat_api
+  from src.infra import config
+  from src.runtime.api import deps
+
+  cfg, session_blocks, tree = conftest.build_env(tmp_path)
+  root = await conftest.create_task(tree, parent=None, request_id="root", name="Root")
+  executor = ScriptedExecutor(tree)
+  tree.dispatch.executor = executor
+  app = fastapi.FastAPI()
+  app.include_router(chat_api.router, prefix="/api/chat")
+  app.dependency_overrides[config.get_config] = lambda: cfg
+  app.dependency_overrides[deps.get_session_store] = lambda: session_blocks.store
+  app.dependency_overrides[deps.get_task_manager] = lambda: tree
+  app.dependency_overrides[deps.get_run_store] = lambda: tree.runs
+  request_id = "browser-send-2"
+
+  with testclient.TestClient(app) as client:
+    missing = client.post(f"/api/chat/{root.id}/message", json={"content": "missing"})
+    empty = client.post(f"/api/chat/{root.id}/message", json={"content": "empty", "request_id": ""})
+    first = client.post(f"/api/chat/{root.id}/message", json={"content": "same", "request_id": request_id})
+    second = client.post(f"/api/chat/{root.id}/message", json={"content": "same", "request_id": request_id})
+    conflict = client.post(f"/api/chat/{root.id}/message", json={"content": "changed", "request_id": request_id})
+
+  assert missing.status_code == 422
+  assert empty.status_code == 422
+  assert first.status_code == second.status_code == 202
+  expected_event_id = control_events.stable_request_event_id(root.id, request_id)
+  assert first.json()["input_event_id"] == second.json()["input_event_id"] == expected_event_id
+  assert first.json()["launch"] is True and second.json()["launch"] is False
+  assert len(executor.batches) == 1
+  stored = [e for e in tree.events.load_events(root.id) if e.get("request_id") == request_id]
+  assert len(stored) == 1 and stored[0]["content"] == "same"
+  assert conflict.status_code == 409
+  assert conflict.json()["detail"]["blockers"] == [
+      f"request_id {request_id} is already event {expected_event_id} with a different type or content"
+  ]
+
+
+@pytest.mark.asyncio
+async def test_dispatch_error_after_admission_returns_accepted_and_keeps_one_event(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  import src.runtime.api.chat as chat_api
+  from src.infra import config
+  from src.runtime.api import deps
+
+  cfg, session_blocks, tree = conftest.build_env(tmp_path)
+  root = await conftest.create_task(tree, parent=None, request_id="root", name="Root")
+  app = fastapi.FastAPI()
+  app.include_router(chat_api.router, prefix="/api/chat")
+  app.dependency_overrides[config.get_config] = lambda: cfg
+  app.dependency_overrides[deps.get_session_store] = lambda: session_blocks.store
+  app.dependency_overrides[deps.get_task_manager] = lambda: tree
+  app.dependency_overrides[deps.get_run_store] = lambda: tree.runs
+
+  async def fail_dispatch(_session_id: str) -> dict:
+    raise task_errors.TaskConflictError(["run already active"])
+
+  monkeypatch.setattr(tree.dispatch, "dispatch_pending", fail_dispatch)
+  with testclient.TestClient(app) as client:
+    sent = client.post(f"/api/chat/{root.id}/message", json={"content": "stored", "request_id": "dispatch-fails"})
+
+  assert sent.status_code == 202
+  assert sent.json()["launch"] is False
+  assert sent.json()["dispatch_error"] == "run already active"
+  assert len([e for e in tree.events.load_events(root.id) if e.get("request_id") == "dispatch-fails"]) == 1
 
 
 @pytest.mark.asyncio

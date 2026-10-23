@@ -713,10 +713,11 @@
     refreshTray();
     const count = pending.length;
     try {
-      await postCommentMessage(target.id, buildBatchMessage(batchContext, pending, overallInput.value));
+      const result = await postCommentMessage(target.id, buildBatchMessage(batchContext, pending, overallInput.value));
       sending = false;
       clearAll();
-      showToast(`${count} comments sent to ${target.name}`, false);
+      if (result.dispatch_error) showToast(result.dispatch_error, true);
+      else showToast(`${count} comments sent to ${target.name}`, false);
     } catch (error) {
       console.error('Diff comment batch send failed:', error);
       sending = false;

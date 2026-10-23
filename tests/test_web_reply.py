@@ -26,7 +26,7 @@ from src.features.web_reply import audit, cli, metadata, reply, status
 from src.features.web_reply import turn_contribution as web_turn_contribution
 from src.infra import event_types as ET
 from src.infra import models
-from src.runtime import backend_pool, file_urls, master_cc_state, streaming, task_prompts
+from src.runtime import backend_pool, control_events, file_urls, master_cc_state, run_token, streaming, task_prompts
 from src.runtime.api import deps, message_utils
 from src.runtime.cli import common
 from src.runtime.hooks import backend_types
@@ -133,6 +133,54 @@ async def test_a_web_reply_records_the_text_and_reads_back_the_outcome(tmp_path:
 
 
 @pytest.mark.asyncio
+async def test_concurrent_web_reply_replay_returns_one_stored_receipt(tmp_path: pathlib.Path) -> None:
+  blocks = _rig(tmp_path)
+  sid = await _session(blocks)
+  route_client = conftest.make_internal_router_client(blocks.cfg, blocks, blocks.tree)
+  claims = run_token.RunTokenClaims(session_id=sid, run_id="web-run", agent="manager")
+  route_client.app.dependency_overrides[deps.require_caller] = lambda: run_token.CallerIdentity(
+      kind="agent", claims=claims)
+
+  original_prime = blocks.events.prime_aggregator
+  arrivals = 0
+  ready = asyncio.Event()
+
+  async def synchronize(session_id: str) -> int:
+    nonlocal arrivals
+    epoch = await original_prime(session_id)
+    if session_id == sid:
+      arrivals += 1
+      if arrivals == 2:
+        ready.set()
+      await ready.wait()
+    return epoch
+
+  blocks.events.prime_aggregator = synchronize
+  try:
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=route_client.app), base_url="http://test") as client:
+      responses = await asyncio.gather(
+          *
+          [client.post("/api/internal/web/reply", json={
+              "session_id": sid,
+              "text": "same response"
+          }) for _ in range(2)])
+  finally:
+    blocks.events.prime_aggregator = original_prime
+
+  assert [response.status_code for response in responses] == [200, 200]
+  assert responses[0].json() == responses[1].json() == {
+      "posted": True,
+      "chars": len("same response"),
+      "over_budget": False,
+      "answers": None,
+  }
+  replies = conftest.events_of_type(_events(blocks, sid), ET.WEB_REPLY)
+  assert len(replies) == 1
+  assert replies[0]["request_id"] == control_events.derived_agent_send_request_id(
+      "web-run", "web reply", sid, "same response")
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("case, status", [("unknown", 404), ("thread", 409), ("worker", 409), ("blank", 422)])
 async def test_a_refused_web_reply_records_nothing_and_marks_nothing(
     tmp_path: pathlib.Path, case: str, status: int) -> None:
@@ -214,7 +262,13 @@ async def test_the_budget_flags_an_over_budget_reply_and_the_reply_still_posts(
   text = "x" * chars
 
   readback = await reply.post_web_reply(
-      sid, text, blocks.store, blocks.events, blocks.lifecycle, scan_context=_scan_context(blocks, sid))
+      sid,
+      text,
+      blocks.store,
+      blocks.events,
+      blocks.lifecycle,
+      tree=blocks.tree,
+      scan_context=_scan_context(blocks, sid))
 
   assert readback == {"posted": True, "chars": chars, "over_budget": over_budget, "answers": None}
   assert [ev["content"] for ev in conftest.events_of_type(_events(blocks, sid), ET.WEB_REPLY)] == [text]
@@ -247,6 +301,7 @@ async def _post_reply(blocks: conftest.SessionBlocks, sid: str, text: str, keep_
       blocks.events,
       blocks.lifecycle,
       keep_language=keep_language,
+      tree=blocks.tree,
       scan_context=_scan_context(blocks, sid))
 
 

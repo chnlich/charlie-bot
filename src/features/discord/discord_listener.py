@@ -65,6 +65,7 @@ notice pointing back to the server channels.
 
 import asyncio
 import contextlib
+import datetime
 import json
 import random
 import re
@@ -236,6 +237,7 @@ class DiscordThreadAdapter(thread_entry.ThreadAdapter):
 
   def __init__(self, client: discord_client.DiscordClient | None = None) -> None:
     self._client = client
+    self._bot_user_id: str | None = None
 
   def _ensure_client(self) -> discord_client.DiscordClient:
     """The bot client every platform call posts through: built once, then reused."""
@@ -243,8 +245,8 @@ class DiscordThreadAdapter(thread_entry.ThreadAdapter):
       self._client = _bot_client()
     return self._client
 
-  async def post(self, address: dict, text: str) -> None:
-    await self._ensure_client().create_message(address["thread_id"], text)
+  async def post(self, address: dict, text: str, post_key: str) -> None:
+    await self._ensure_client().create_message(address["thread_id"], text, post_key=post_key)
 
   async def add_ack(self, block: dict) -> None:
     await self._ensure_client().add_reaction(block["channel_id"], block[self.platform.mention_key], _ACCEPTANCE_EMOJI)
@@ -253,14 +255,14 @@ class DiscordThreadAdapter(thread_entry.ThreadAdapter):
     await self._ensure_client().remove_own_reaction(
         block["channel_id"], block[self.platform.mention_key], _ACCEPTANCE_EMOJI)
 
-  async def read_eligible(self, origin: metadata.DiscordOrigin,
-                          cfg: config.CharlieBotConfig) -> list[thread_entry.ThreadMessage]:
-    """The thread's eligible messages, paged oldest-first through the REST readback.
+  async def read_thread(self, origin: metadata.DiscordOrigin,
+                        cfg: config.CharlieBotConfig) -> list[thread_entry.ThreadMessage]:
+    """The thread's messages, paged oldest-first through the REST readback.
 
     Discord returns at most 100 messages per call, so the read pages from id
     ``"0"`` (before every snowflake), continuing after the page's last id,
-    until a page comes back shorter than the limit. Each page already arrives
-    sorted oldest-first by the client; eligibility is the shared rule.
+    until a page comes back shorter than the limit. Discord reads return no
+    nonce, so keyed recovery uses bot authorship, content, and snowflake time.
     """
     client = self._ensure_client()
     messages: list[thread_entry.ThreadMessage] = []
@@ -268,13 +270,37 @@ class DiscordThreadAdapter(thread_entry.ThreadAdapter):
     while True:
       page = await client.get_messages(origin.thread_id, after=after, limit=100)
       messages.extend(
-          thread_entry.ThreadMessage(m["id"], m["author"]["id"],
-                                     m.get("content") or "")
-          for m in page
-          if eligible_message(m, cfg.discord.allowed_users))
+          thread_entry.ThreadMessage(
+              m["id"],
+              m["author"]["id"],
+              m.get("content") or "",
+              created_at=discord_client.snowflake_datetime(m["id"]),
+              is_bot=bool(m["author"].get("bot")),
+              eligible=eligible_message(m, cfg.discord.allowed_users)) for m in page)
       if len(page) < 100:
         return messages
       after = page[-1]["id"]
+
+  async def find_own_post_by_key(
+      self,
+      address: dict,
+      post_key: str,
+      content: str,
+      created_after: datetime.datetime,
+      cfg: config.CharlieBotConfig,
+      *,
+      messages: list[thread_entry.ThreadMessage] | None = None,
+  ) -> bool:
+    if self._bot_user_id is None:
+      self._bot_user_id = (await self._ensure_client().get_current_user())["id"]
+    thread = messages
+    if thread is None:
+      origin = metadata.DiscordOrigin(
+          guild_id=address["guild_id"], parent_channel_id=address["thread_id"], thread_id=address["thread_id"])
+      thread = await self.read_thread(origin, cfg)
+    return any(
+        message.is_bot and message.user == self._bot_user_id and message.text == content and
+        message.created_at is not None and message.created_at >= created_after for message in thread)
 
   def address_of(self, origin: metadata.DiscordOrigin) -> dict:
     return {"guild_id": origin.guild_id, "thread_id": origin.thread_id}
@@ -356,7 +382,7 @@ async def handle_message_create(
 
   if guild_id is None:
     if mentioned:
-      await client.create_message(channel_id, _DM_NOTICE)
+      await client.create_message(channel_id, _DM_NOTICE, post_key=f"discord-dm:{message_id}#1")
       logger.info("discord_dm_notice_posted", channel=channel_id, user=author_id)
     return None
 
@@ -436,21 +462,42 @@ async def ack_messages(
 
 
 async def post_reply(
-    session_id: str, text: str, cfg: config.CharlieBotConfig, store: session_store.SessionStore,
-    events: session_events.SessionEvents) -> dict:
+    session_id: str,
+    text: str,
+    cfg: config.CharlieBotConfig,
+    store: session_store.SessionStore,
+    events: session_events.SessionEvents,
+    *,
+    request_id: str | None = None,
+    run_started_at: datetime.datetime | None = None,
+    tree: object | None = None) -> dict:
   """Post *text* to the session's Discord thread and return the readback the CLI prints.
 
   One-line pass-through to the shared reply path (``thread_entry.post_reply``)
   on a lazily-built Discord adapter; the link check, chunking, refusals, reply
   event, and readback live there.
   """
-  return await thread_entry.post_reply(DiscordThreadAdapter(), session_id, text, cfg, store, events)
+  return await thread_entry.post_reply(
+      DiscordThreadAdapter(),
+      session_id,
+      text,
+      cfg,
+      store,
+      events,
+      request_id=request_id,
+      run_started_at=run_started_at,
+      tree=tree)
 
 
 async def deliver_done(
-    session_id: str, done: dict, cfg: config.CharlieBotConfig, store: session_store.SessionStore,
-    lifecycle: session_lifecycle.SessionLifecycle, events: session_events.SessionEvents,
-    successor: session_successor.SessionSuccessor) -> bool:
+    session_id: str,
+    done: dict,
+    cfg: config.CharlieBotConfig,
+    store: session_store.SessionStore,
+    lifecycle: session_lifecycle.SessionLifecycle,
+    events: session_events.SessionEvents,
+    successor: session_successor.SessionSuccessor,
+    tree: object | None = None) -> bool:
   """Round-end audit for one finished round; True when it nudged or posted the notice.
 
   One-line pass-through to the shared audit (``thread_entry.deliver_done``) on
@@ -458,13 +505,17 @@ async def deliver_done(
   live there.
   """
   return await thread_entry.deliver_done(
-      DiscordThreadAdapter(), session_id, done, cfg, store, lifecycle, events, successor)
+      DiscordThreadAdapter(), session_id, done, cfg, store, lifecycle, events, successor, tree)
 
 
 async def backfill_lost_summons(
-    cfg: config.CharlieBotConfig, listing: session_listing.SessionListing, store: session_store.SessionStore,
-    lifecycle: session_lifecycle.SessionLifecycle, events: session_events.SessionEvents,
-    successor: session_successor.SessionSuccessor) -> int:
+    cfg: config.CharlieBotConfig,
+    listing: session_listing.SessionListing,
+    store: session_store.SessionStore,
+    lifecycle: session_lifecycle.SessionLifecycle,
+    events: session_events.SessionEvents,
+    successor: session_successor.SessionSuccessor,
+    tree: object | None = None) -> int:
   """Boot pass over every Discord session; returns how many notices and nudges it produced.
 
   One-line pass-through to the shared boot audit
@@ -472,7 +523,7 @@ async def backfill_lost_summons(
   the lost-summon report and the per-round audit live there.
   """
   return await thread_entry.backfill_lost_summons(
-      DiscordThreadAdapter(), cfg, listing, store, lifecycle, events, successor)
+      DiscordThreadAdapter(), cfg, listing, store, lifecycle, events, successor, tree)
 
 
 async def _backfill_followed_threads(

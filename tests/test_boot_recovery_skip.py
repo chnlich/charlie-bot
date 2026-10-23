@@ -92,6 +92,49 @@ async def _pass_checked(cfg, tree) -> list[str]:
   return spy.checked
 
 
+class _ReasonSpy:
+  """Records the keep reason the pass decided for each session id (None skips)."""
+
+  def __init__(self):
+    self.reasons: dict[str, str | None] = {}
+    self._orig = task_recovery._boot_skip_reason
+
+  def __call__(self, tree, session_id, session_dir, meta, marker):
+    reason = self._orig(tree, session_id, session_dir, meta, marker)
+    self.reasons[session_id] = reason
+    return reason
+
+  def __enter__(self):
+    task_recovery._boot_skip_reason = self
+    return self
+
+  def __exit__(self, *exc):
+    task_recovery._boot_skip_reason = self._orig
+
+
+async def _pass_reasons(cfg, tree) -> tuple[list[str], dict[str, str | None]]:
+  checked, reasons = _NodeSpy(), _ReasonSpy()
+  with checked, reasons:
+    await task_recovery.reconcile_task_tree(cfg, tree)
+  return checked.checked, reasons.reasons
+
+
+def _marker_ts(cfg) -> float:
+  return datetime.datetime.fromisoformat(_read_marker(cfg)["pass_started_at"]).timestamp()
+
+
+def _stamp_durable_files(cfg, session_id: str, offset_s: float) -> None:
+  """Set both durable files' mtimes ``offset_s`` from the recorded marker.
+
+  A skip needs the files more than the slack before the marker: a fast test
+  writes its files within the slack of the next pass start.
+  """
+  stamp = _marker_ts(cfg) + offset_s
+  node = cfg.sessions_dir / session_id
+  for path in (node / runs.DATA_DIR_NAME / "chat_events.jsonl", node / runs.METADATA_NAME):
+    os.utime(path, (stamp, stamp))
+
+
 @pytest.mark.asyncio
 async def test_clean_pass_writes_marker_and_second_pass_skips_closed_node(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -104,6 +147,7 @@ async def test_clean_pass_writes_marker_and_second_pass_skips_closed_node(
   assert marker["pass_started_at"]
   before = marker["pass_started_at"]
 
+  _stamp_durable_files(cfg, worker.id, offset_s=-2.0)
   second = await _pass_checked(cfg, tree)
   # Pass 2 skips the closed worker; the open manager is still checked.
   assert second == [manager.id]
@@ -143,13 +187,19 @@ async def test_failed_node_leaves_marker_unchanged(tmp_path: pathlib.Path, monke
     ])
 async def test_each_skip_condition_broken_alone_forces_full_check(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, condition: str) -> None:
+  """Pass 2 checks the node and records the one condition broken on its own."""
   cfg, tree, _manager, worker = await _closed_worker(
       tmp_path,
       monkeypatch,
       outcome="failed" if condition == "cold_read_failed" else "success",
       cold_read=condition == "cold_read_failed")
 
+  # Pass 1 runs with all six conditions holding, so it records a clean marker.
+  await _pass_checked(cfg, tree)
+
   if condition == "state_open":
+    # Opening the node before pass 1 would let pass 1 close it again, leaving
+    # pass 2 to test the file condition instead.
     await tree.events.append(
         worker.id,
         control_events.build_control_event(
@@ -166,6 +216,7 @@ async def test_each_skip_condition_broken_alone_forces_full_check(
             backend="fake",
             model="fake-model",
             sequence_ref=models.SequenceRef(kind="retry", owner_ref="owner-1", position=0)))
+    await tree.runs.record_finish(worker.id, "run-seq", "success", ended_at=models.utc_now())
   elif condition == "worktree_exists":
     worktree = tmp_path / "wt-live"
     worktree.mkdir()
@@ -177,15 +228,29 @@ async def test_each_skip_condition_broken_alone_forces_full_check(
             backend="fake",
             model="fake-model",
             worktree_path=str(worktree)))
+    await tree.runs.record_finish(worker.id, "run-wt", "success", ended_at=models.utc_now())
 
-  await _pass_checked(cfg, tree)
-  if condition == "file_after_marker":
-    stamp = datetime.datetime.now(datetime.timezone.utc).timestamp() + 60
-    node = cfg.sessions_dir / worker.id
-    os.utime(node / runs.METADATA_NAME, (stamp, stamp))
+  # A file newer than the marker keeps the node; every other case backdates
+  # its files past the slack so only its own condition is left broken.
+  _stamp_durable_files(cfg, worker.id, offset_s=60.0 if condition == "file_after_marker" else -2.0)
 
-  checked = await _pass_checked(cfg, tree)
+  checked, reasons = await _pass_reasons(cfg, tree)
   assert worker.id in checked
+  assert reasons[worker.id] == condition
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("offset_s, reason", [(-0.5, "file_after_marker"), (-1.5, None)])
+async def test_mtime_slack_bounds_the_marker_comparison(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, offset_s: float, reason: str | None) -> None:
+  """A file 0.5 s before the marker keeps the node; 1.5 s before skips it."""
+  cfg, tree, _manager, worker = await _closed_worker(tmp_path, monkeypatch)
+  await _pass_checked(cfg, tree)
+  _stamp_durable_files(cfg, worker.id, offset_s=offset_s)
+
+  checked, reasons = await _pass_reasons(cfg, tree)
+  assert reasons[worker.id] == reason
+  assert (worker.id in checked) == (reason is not None)
 
 
 @pytest.mark.asyncio
@@ -193,6 +258,7 @@ async def test_end_landing_retry_checks_a_node_the_boot_pass_skips(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, tree, _manager, worker = await _closed_worker(tmp_path, monkeypatch)
   await _pass_checked(cfg, tree)
+  _stamp_durable_files(cfg, worker.id, offset_s=-2.0)
 
   spy = _NodeSpy()
   executor = tree.dispatch.executor
@@ -209,7 +275,12 @@ async def test_node_check_scan_count_does_not_grow_with_run_count(
   import src.runtime.runs as runs_mod
 
   async def _pass_stats(run_count: int) -> tuple[int, int]:
-    cfg, _session_blocks, tree, _manager, worker = await test_task_recovery._manager_and_worker(tmp_path, monkeypatch)
+    # Each measurement gets its own home: a shared one hands the second
+    # take-off the first environment's unacknowledged input and its Run, and
+    # the take-off then finds the node already consumed.
+    home = tmp_path / f"runs-{run_count}"
+    home.mkdir()
+    cfg, _session_blocks, tree, _manager, worker = await test_task_recovery._manager_and_worker(home, monkeypatch)
     for i in range(run_count):
       run_id = f"run-{i}"
       await tree.runs.register_run_locked(

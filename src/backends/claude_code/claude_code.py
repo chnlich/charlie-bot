@@ -296,7 +296,7 @@ class ClaudeCodeBackend(base.AgentBackend):
     if self._effort:
       self._cmd += ["--effort", self._effort]
     # The CLI's handling of repeated --settings flags is not a contract, so the argv carries one object.
-    settings = claude_launch.headless_claude_settings(run_kind)
+    settings = claude_launch.headless_claude_settings(run_kind, self._cgroup_session_id)
     if self._fast_mode:
       settings["fastMode"] = True
     self._cmd += ["--settings", json.dumps(settings, separators=(",", ":"))]

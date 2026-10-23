@@ -1,6 +1,9 @@
 """Headless render tests: warm-pool lifecycle under fakes, plus a local_only real-Chrome drive check."""
 
+import asyncio
 import pathlib
+import subprocess
+import sys
 import types
 from collections.abc import Iterator
 
@@ -32,6 +35,23 @@ def test_render_height_launches_once_and_serves_warm(tmp_path: pathlib.Path, mon
   assert renderer.render_height("file:///p.html") == 800
   assert renderer.render_height("file:///p.html") == 800
   assert launches == [1]
+
+
+def test_stop_service_closes_the_open_renderer(tmp_path: pathlib.Path) -> None:
+  """The server ends in ``os._exit``, which skips the atexit hook, so its stop hook owns the browser."""
+  browser = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+  profile = tmp_path / "profile"
+  profile.mkdir()
+  renderer = headless_render._WarmRenderer(tmp_path / "chrome")
+  renderer._proc = browser
+  renderer._udd = profile
+  renderer._stderr_path = profile / "stderr.log"
+  headless_render._renderer = renderer
+
+  asyncio.run(headless_render.stop_service())
+
+  assert browser.poll() is not None, "the browser outlived the stop hook"
+  assert not profile.exists(), "the profile directory outlived the stop hook"
 
 
 @pytest.mark.local_only

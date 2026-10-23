@@ -42,6 +42,7 @@ async def test_send_message_admits_structured_files_to_the_task_tree(tmp_path: p
   task_mgr.dispatch.dispatch_pending = mock.AsyncMock(return_value={"launch": True})
   req = models.SendMessageRequest(
       content="Summarize this",
+      request_id="attachment-message-1",
       uploaded_files=[
           models.UploadedFileRef(filename="notes.txt", path="/tmp/notes.txt", size=12),
       ],
@@ -59,6 +60,7 @@ async def test_send_message_admits_structured_files_to_the_task_tree(tmp_path: p
   task_mgr.dispatch.admit_input.assert_awaited_once()
   assert task_mgr.dispatch.admit_input.await_args.args == (meta.id,)
   assert task_mgr.dispatch.admit_input.await_args.kwargs["content"] == "Summarize this"
+  assert task_mgr.dispatch.admit_input.await_args.kwargs["request_id"] == "attachment-message-1"
   assert task_mgr.dispatch.admit_input.await_args.kwargs["uploaded_files"] == [
       {
           "filename": "notes.txt",

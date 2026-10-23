@@ -26,7 +26,8 @@ print(sorted(name for name in ("pydantic", "dataclasses") if name in sys.modules
 """
 
 
-@pytest.mark.parametrize("argv", [["--help"], ["usage-ledger", "--help"], ["storage", "--help"]])
+@pytest.mark.parametrize(
+    "argv", [["--help"], ["usage-ledger", "--help"], ["storage", "--help"], ["compaction-context", "--help"]])
 def test_help_imports_no_pydantic_and_no_dataclasses(argv: list[str], tmp_path: pathlib.Path) -> None:
   env = {**os.environ, "CHARLIEBOT_HOME": str(tmp_path)}
 

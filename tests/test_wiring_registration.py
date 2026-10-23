@@ -90,8 +90,8 @@ def test_a_second_registration_of_one_name_raises() -> None:
 def _run_server_main(
     monkeypatch: pytest.MonkeyPatch, cfg: config.CharlieBotConfig, events: list[str],
     check_error: ValueError | None) -> None:
-  """Run server.main() against *cfg* with one recording startup check and a recording uvicorn.run;
-  *events* receives their calls in run order."""
+  """Run server.main() against *cfg* with one recording startup check, a recording uvicorn.run and a
+  recording os._exit; *events* receives their calls in run order."""
 
   def recording_check(_cfg: config.CharlieBotConfig) -> None:
     events.append("startup_check")
@@ -102,6 +102,7 @@ def _run_server_main(
   monkeypatch.setattr(server.config, "get_config", lambda: cfg)
   monkeypatch.setattr(server.wiring, "startup_checks", lambda: [recording_check])
   monkeypatch.setattr(uvicorn, "run", lambda *_args, **_kwargs: events.append("uvicorn.run"))
+  monkeypatch.setattr(server.os, "_exit", lambda code: events.append(f"os._exit({code})"))
   server.main()
 
 
@@ -125,7 +126,7 @@ def test_server_main_serves_only_after_every_startup_check_passes(monkeypatch: p
   with pytest.raises(ValueError, match="stop the start"):
     _run_server_main(monkeypatch, cfg, stopped, ValueError("stop the start"))
 
-  assert passed == ["startup_check", "uvicorn.run"]
+  assert passed == ["startup_check", "uvicorn.run", "os._exit(0)"]
   assert stopped == ["startup_check"]
 
 

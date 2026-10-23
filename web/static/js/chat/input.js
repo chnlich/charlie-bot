@@ -65,12 +65,59 @@ function bumpCurrentSessionToTop() {
   }
 }
 
-function postChatMessage(content, extra) {
-  return fetch(`/api/chat/${SESSION_ID}/message`, {
+function postChatMessage(sessionId, content, extra, requestId) {
+  return fetch(`/api/chat/${sessionId}/message`, {
     method: 'POST',
     headers: JSON_HEADERS,
-    body: JSON.stringify(Object.assign({ content }, extra || {})),
+    body: JSON.stringify(Object.assign({content}, extra || {}, {request_id: requestId || crypto.randomUUID()})),
   });
+}
+
+async function postChatMessageWithRetry(sessionId, content, extra, requestId) {
+  let retryDelay = 1000;
+  while (true) {
+    let response;
+    try {
+      response = await postChatMessage(sessionId, content, extra, requestId);
+    } catch (_error) {
+      await waitForSendRetry(retryDelay);
+      retryDelay = Math.min(retryDelay * 2, 30000);
+      continue;
+    }
+    if (response.status >= 500) {
+      await waitForSendRetry(retryDelay);
+      retryDelay = Math.min(retryDelay * 2, 30000);
+      continue;
+    }
+    if (response.status >= 400 && response.status < 500) {
+      const error = new Error(String(response.status));
+      error.status = response.status;
+      throw error;
+    }
+    if (!response.ok) throw new Error(String(response.status));
+    return response.json();
+  }
+}
+
+function waitForSendRetry(delay) {
+  return new Promise((resolve) => setTimeout(resolve, delay));
+}
+
+// Resolves true when the server accepted the message and false when it refused it with a 4xx.
+// The session is the one the message was typed in: a retry after a view switch still lands there.
+async function submitUserMessage(sessionId, content, extra, requestId, optimisticMessage) {
+  try {
+    const response = await postChatMessageWithRetry(sessionId, content, extra, requestId);
+    setMessageDeliveryStatus(optimisticMessage, 'Sent');
+    if (response.dispatch_error) appendMessage('system', response.dispatch_error);
+    return true;
+  } catch (error) {
+    if (!(error.status >= 400 && error.status < 500)) throw error;
+    pendingUserRequestIds.delete(requestId);
+    setMessageDeliveryStatus(optimisticMessage, 'Failed');
+    appendMessage('system', 'Failed to send message');
+    return false;
+  }
 }
 
 async function sendMessage() {
@@ -83,10 +130,12 @@ async function sendMessage() {
   clearSentUploadedFiles(uploadedFilesForPayload.map((file) => file.id));
 
   const inputMode = composerInputMode;
+  const sessionId = SESSION_ID;
+  const requestId = crypto.randomUUID();
 
   // Optimistic UI: append user message and bump session to top
-  pendingUserEchoes++;
-  appendMessage('user', content, inputMode, new Date().toISOString(), payloadFiles);
+  pendingUserRequestIds.add(requestId);
+  const optimisticMessage = appendMessage('user', content, inputMode, new Date().toISOString(), payloadFiles, requestId);
   bumpCurrentSessionToTop();
   input.value = '';
   input.style.height = 'auto';
@@ -97,15 +146,10 @@ async function sendMessage() {
   // in-flight lock, so a master run never locks typing.
   startThinking({keepSendEnabled: true});
 
-  try {
-    const res = await postChatMessage(content, { uploaded_files: payloadFiles, input_mode: inputMode });
-    if (!res.ok) throw new Error(String(res.status));
-  } catch (err) {
-    console.error('Send failed:', err);
-    pendingUserEchoes--;
-    appendMessage('system', 'Failed to send message');
-    stopThinking();
-  }
+  const accepted = await submitUserMessage(
+      sessionId, content, {uploaded_files: payloadFiles, input_mode: inputMode}, requestId, optimisticMessage);
+  // Only a send that started the thinking round above ends it on refusal; /compact never starts one.
+  if (!accepted) stopThinking();
 }
 
 // ---------------------------------------------------------------------------
@@ -121,17 +165,11 @@ async function compactContext() {
   );
   if (!confirmed) return;
 
-  pendingUserEchoes++;
-  appendMessage('user', '/compact', null, new Date().toISOString(), null);
-
-  try {
-    const res = await postChatMessage('/compact');
-    if (!res.ok) throw new Error(String(res.status));
-  } catch (err) {
-    console.error('Compact failed:', err);
-    pendingUserEchoes--;
-    appendMessage('system', 'Failed to send message');
-  }
+  const sessionId = SESSION_ID;
+  const requestId = crypto.randomUUID();
+  pendingUserRequestIds.add(requestId);
+  const optimisticMessage = appendMessage('user', '/compact', null, new Date().toISOString(), null, requestId);
+  await submitUserMessage(sessionId, '/compact', {}, requestId, optimisticMessage);
 }
 
 const GLOBALS = {

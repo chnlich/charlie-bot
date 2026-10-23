@@ -43,6 +43,7 @@ function fakeHeaderButton() {
 }
 
 function loadChatContext(elements) {
+  let requestSequence = 0;
   const context = {
     document: makeDocument(elements),
     console: { error: () => {}, log: () => {} },
@@ -57,7 +58,8 @@ function loadChatContext(elements) {
     CSS: { escape: (v) => String(v) },
     SESSION_ID: 'session-a',
     confirm: () => true,
-    fetch: () => Promise.resolve({ ok: true }),
+    fetch: () => Promise.resolve({ok: true, status: 202, json: async () => ({})}),
+    crypto: {randomUUID: () => `request-${++requestSequence}`},
     // No stored key: mirrors page-load order config.js → websocket.js on the no-key path.
     wsUrlWithToken: (path) => path,
     // No stubs above run config.js: stand in for its shared header literal.
@@ -141,18 +143,53 @@ test('compactContext posts the exact same request shape as the shared message-se
   const context = loadChatContext(elements);
   context.confirm = () => true;
   const calls = [];
-  context.fetch = (url, opts) => { calls.push({ url, opts }); return Promise.resolve({ ok: true }); };
+  context.fetch = (url, opts) => {
+    calls.push({url, opts});
+    return Promise.resolve({ok: true, status: 202, json: async () => ({})});
+  };
 
   await context.compactContext();
   assert.equal(calls.length, 1);
 
-  await context.Chat.postChatMessage('/compact');
+  await context.Chat.postChatMessage('session-a', '/compact');
   assert.equal(calls.length, 2);
 
   assert.equal(calls[0].url, calls[1].url);
   assert.equal(calls[0].opts.method, calls[1].opts.method);
-  assert.equal(calls[0].opts.body, calls[1].opts.body);
-  assert.deepEqual(JSON.parse(calls[0].opts.body), { content: '/compact' });
+  const firstBody = JSON.parse(calls[0].opts.body);
+  const secondBody = JSON.parse(calls[1].opts.body);
+  assert.equal(firstBody.content, '/compact');
+  assert.equal(secondBody.content, '/compact');
+  assert.equal(firstBody.request_id, 'request-1');
+  assert.equal(secondBody.request_id, 'request-2');
+});
+
+test('a /compact the server refuses fails its bubble without ending a thinking round it never started', async () => {
+  const context = loadChatContext(new Map([
+    ['messages', new FakeElement('DIV')],
+    ['usage-text', Object.assign(new FakeElement('SPAN'), { textContent: '50k / 200k' })],
+  ]));
+  const systemLines = [];
+  let stopped = 0;
+  let attempts = 0;
+  context.appendMessage = (role, content) => {
+    if (role === 'system') systemLines.push(content);
+    return {};
+  };
+  context.setMessageDeliveryStatus = () => {};
+  context.stopThinking = () => {
+    stopped += 1;
+  };
+  context.fetch = async () => {
+    attempts += 1;
+    return {ok: false, status: 409, json: async () => ({})};
+  };
+
+  await context.compactContext();
+
+  assert.equal(attempts, 1, 'a 4xx is never retried');
+  assert.equal(stopped, 0);
+  assert.deepEqual(systemLines, ['Failed to send message']);
 });
 
 // ---------------------------------------------------------------------------
@@ -174,7 +211,10 @@ test('a typed /compact posts through the shared message-send path like the Compa
   context.startThinking = () => {};
   context.stopThinking = () => {};
   const calls = [];
-  context.fetch = (url, opts) => { calls.push({ url, opts }); return Promise.resolve({ ok: true }); };
+  context.fetch = (url, opts) => {
+    calls.push({url, opts});
+    return Promise.resolve({ok: true, status: 202, json: async () => ({})});
+  };
 
   await context.sendMessage();
 
@@ -186,6 +226,7 @@ test('a typed /compact posts through the shared message-send path like the Compa
     content: '/compact',
     uploaded_files: [],
     input_mode: null,
+    request_id: 'request-1',
   });
 
   // The button path lands on the same URL and body.
@@ -193,7 +234,10 @@ test('a typed /compact posts through the shared message-send path like the Compa
   await context.compactContext();
   assert.equal(calls.length, 2);
   assert.equal(calls[1].url, calls[0].url);
-  assert.deepEqual(JSON.parse(calls[1].opts.body), { content: '/compact' });
+  assert.deepEqual(JSON.parse(calls[1].opts.body), {
+    content: '/compact',
+    request_id: 'request-2',
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -211,7 +255,10 @@ test('a dictated message posts input_mode voice and the next typed message posts
   context.startThinking = () => {};
   context.stopThinking = () => {};
   const calls = [];
-  context.fetch = (url, opts) => { calls.push({ url, opts }); return Promise.resolve({ ok: true }); };
+  context.fetch = (url, opts) => {
+    calls.push({url, opts});
+    return Promise.resolve({ok: true, status: 202, json: async () => ({})});
+  };
 
   context.Chat.setInputMode('voice');
   input.value = 'dictated words';
@@ -222,8 +269,8 @@ test('a dictated message posts input_mode voice and the next typed message posts
   assert.deepEqual(
     calls.map((call) => JSON.parse(call.opts.body)),
     [
-      { content: 'dictated words', uploaded_files: [], input_mode: 'voice' },
-      { content: 'typed words', uploaded_files: [], input_mode: null },
+      {content: 'dictated words', uploaded_files: [], input_mode: 'voice', request_id: 'request-1'},
+      {content: 'typed words', uploaded_files: [], input_mode: null, request_id: 'request-2'},
     ]);
 });
 
@@ -243,7 +290,7 @@ function loadNoteContext() {
   context.DRAFT_KEY = null;
   context.startThinking = () => {};
   context.stopThinking = () => {};
-  context.fetch = () => Promise.resolve({ ok: true });
+  context.fetch = () => Promise.resolve({ok: true, status: 202, json: async () => ({})});
   return { context, input, note };
 }
 

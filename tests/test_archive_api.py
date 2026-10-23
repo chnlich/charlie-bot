@@ -84,7 +84,13 @@ async def test_user_message_restores_through_the_chat_route_and_agent_is_409(tmp
   }
   with testclient.TestClient(app) as client:
     # Agent message via the chat route: 409 with the one archived sentence.
-    agent_msg = client.post(f"/api/chat/{leaf.id}/message", json={"content": "keep going"}, headers=agent_headers)
+    agent_msg = client.post(
+        f"/api/chat/{leaf.id}/message",
+        json={
+            "content": "keep going",
+            "request_id": "archived-agent-message"
+        },
+        headers=agent_headers)
     assert agent_msg.status_code == 409
     assert agent_msg.json()["detail"] == f"task {leaf.id} is archived"
 
@@ -103,7 +109,11 @@ async def test_user_message_restores_through_the_chat_route_and_agent_is_409(tmp
     # The user's own message restores the chain and is the round's only input
     # (the executor is unregistered, so the decision records the pending batch
     # instead of launching — the restore itself is the behavior under test).
-    sent = client.post(f"/api/chat/{leaf.id}/message", json={"content": "continue from here"})
+    sent = client.post(
+        f"/api/chat/{leaf.id}/message", json={
+            "content": "continue from here",
+            "request_id": "restore-user-message"
+        })
     assert sent.status_code == 202
     body = sent.json()
     assert body["status"] == "accepted"

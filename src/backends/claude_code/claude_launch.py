@@ -1,6 +1,7 @@
 """Claude CLI launch vocabulary: the per-run-kind environment and settings."""
 
 import os
+import shlex
 
 from src.infra import models
 
@@ -11,13 +12,31 @@ from src.infra import models
 DISABLE_CONNECTOR_SETTINGS = {"disableClaudeAiConnectors": True}
 
 
-def headless_claude_settings(run_kind: models.RunKind) -> dict[str, bool]:
+def compaction_context_hook_settings(session_id: str) -> dict[str, object]:
+  """Return the SessionStart hook that restores a manager session's read skills after compaction."""
+  commands = [
+      {
+          "type": "command",
+          "command": f"charliebot compaction-context --session {shlex.quote(session_id)} --slot {slot}",
+      } for slot in range(1, 7)
+  ]
+  return {"hooks": {"SessionStart": [{"matcher": "compact", "hooks": commands}]}}
+
+
+def headless_claude_settings(
+    run_kind: models.RunKind,
+    session_id: str | None = None,
+) -> dict[str, object]:
   """The ``--settings`` values for a headless Claude Code process of *run_kind*."""
   settings = {
       **DISABLE_CONNECTOR_SETTINGS,
       "syncClaudeAiSkills": False,  # No run kind uses synced skills.
   }
-  if run_kind != "manager_turn":
+  if run_kind == "manager_turn":
+    if session_id is None:
+      raise ValueError("manager_turn Claude settings require a CharlieBot session id")
+    settings.update(compaction_context_hook_settings(session_id))
+  else:
     # Bundled skills have uses only in manager turns.
     settings["disableBundledSkills"] = True
   return settings

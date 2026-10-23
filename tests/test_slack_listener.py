@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import pathlib
 import time
 from unittest import mock
@@ -161,8 +162,33 @@ async def test_read_eligible_over_the_real_client_keeps_only_allowed_human_messa
 
   [request] = requests
   assert request.url.path == "/api/conversations.replies"
-  assert dict(request.url.params) == {"channel": "C_TEST", "ts": _TS}
+  assert dict(request.url.params) == {
+      "channel": "C_TEST",
+      "ts": _TS,
+      "include_all_metadata": "true",
+      "limit": "100",
+  }
   assert [(m.id, m.user, m.text) for m in messages] == [("1700000000.000200", "U_ALLOWED", "hi")]
+
+
+@pytest.mark.asyncio
+async def test_keyed_slack_post_sends_metadata_for_lookup() -> None:
+  request_body: dict = {}
+
+  def handler(request: httpx.Request) -> httpx.Response:
+    request_body.update(json.loads(request.read()))
+    return httpx.Response(200, json={"ok": True, "ts": _TS})
+
+  async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+    client = slack_listener.SlackClient(http, bot_token="test-bot-token", app_token="test-app-token")
+    await client.post_message("C_TEST", "answer", _TS, post_key="request#1")
+
+  assert request_body["metadata"] == {
+      "event_type": "charliebot_post",
+      "event_payload": {
+          "key": "request#1"
+      },
+  }
 
 
 @pytest.mark.asyncio

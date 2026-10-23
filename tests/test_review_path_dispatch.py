@@ -68,14 +68,8 @@ async def test_input_admitted_during_a_review_pauses_the_merge_and_continues_the
   review_gate = asyncio.Event()
   tweak_started = asyncio.Event()
   tweak_gate = asyncio.Event()
-
-  async def review_gate_wait() -> None:
-    review_started.set()
-    await review_gate.wait()
-
-  async def tweak_gate_wait() -> None:
-    tweak_started.set()
-    await tweak_gate.wait()
+  review_gate_wait = test_task_execution.signal_then_hold(review_started, review_gate)
+  tweak_gate_wait = test_task_execution.signal_then_hold(tweak_started, tweak_gate)
 
   conftest.install_scripted_backends(
       monkeypatch,

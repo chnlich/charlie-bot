@@ -46,6 +46,13 @@ def test_user_event_with_an_input_mode_renders_a_message_that_carries_it() -> No
   assert [delta["message"]["input_mode"] for delta in deltas] == ["voice"]
 
 
+def test_user_event_delta_carries_request_id_when_the_event_has_one() -> None:
+  agg = message_aggregator.MessageAggregator()
+  deltas = list(agg.feed({"type": ET.USER, "content": "hello", "request_id": "browser-send-1"}))
+
+  assert [delta["message"]["request_id"] for delta in deltas] == ["browser-send-1"]
+
+
 def test_assistant_text_then_master_done_commits_message() -> None:
   agg = message_aggregator.MessageAggregator()
   list(agg.feed({**conftest.assistant_text_event("Hi"), "timestamp": "t1"}))

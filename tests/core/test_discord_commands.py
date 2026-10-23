@@ -84,14 +84,14 @@ class FakeDiscordClient:
     matches = [m for m in self.channels.get(channel_id, []) if discord_client.snowflake_key(m["id"]) > floor]
     return matches[-limit:] if after is None else matches[:limit]
 
-  async def create_message(self, channel_id: str, content: str) -> dict:
+  async def create_message(self, channel_id: str, content: str, *, post_key: str) -> dict:
     self.calls.append(("create_message", {"channel_id": channel_id}))
     self.posts.append({"channel_id": channel_id, "content": content})
     return {"id": _mid(99)}
 
   async def get_current_user(self) -> dict:
     self.calls.append(("get_current_user", {}))
-    return self.user
+    return self.user or {"id": _BOT, "bot": True}
 
   async def get_current_application(self) -> dict:
     self.calls.append(("get_current_application", {}))

@@ -174,7 +174,7 @@ async def test_slash_prefix_message_is_ordinary_task_input(
   client = testclient.TestClient(app)
   handler = mock.AsyncMock(return_value="done")
   with conftest.registered_cron_handler("untouched", handler):
-    sent = client.post(f"/api/chat/{meta.id}/message", json={"content": "/run backup"})
+    sent = client.post(f"/api/chat/{meta.id}/message", json={"content": "/run backup", "request_id": "slash-input-1"})
   assert sent.status_code == 202
 
   users = [e for e in tree.events.load_events(meta.id) if e["type"] == ET.USER]

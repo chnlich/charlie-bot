@@ -19,7 +19,7 @@ import pytest
 from src.features.chat_threads import thread_entry
 from src.infra import config, metadata_slots, models
 from src.infra import event_types as ET
-from src.runtime import file_urls
+from src.runtime import control_events, file_urls
 
 FAKECHAT = thread_entry.ThreadPlatform(
     name="fakechat",
@@ -304,13 +304,15 @@ class FakeAdapter(thread_entry.ThreadAdapter):
   platform = FAKECHAT
 
   def __init__(self) -> None:
-    self.posts: list[tuple[dict, str]] = []
+    self.posts: list[tuple[dict, str, str]] = []
+    self.post_keys: set[str] = set()
     self.acks: list[dict] = []
     self.removed: list[dict] = []
     self.thread: list[thread_entry.ThreadMessage] = []
 
-  async def post(self, address: dict, text: str) -> None:
-    self.posts.append((address, text))
+  async def post(self, address: dict, text: str, post_key: str) -> None:
+    self.posts.append((address, text, post_key))
+    self.post_keys.add(post_key)
 
   async def add_ack(self, block: dict) -> None:
     self.acks.append(block)
@@ -318,8 +320,20 @@ class FakeAdapter(thread_entry.ThreadAdapter):
   async def remove_ack(self, block: dict) -> None:
     self.removed.append(block)
 
-  async def read_eligible(self, origin, cfg: config.CharlieBotConfig) -> list[thread_entry.ThreadMessage]:
+  async def read_thread(self, origin, cfg: config.CharlieBotConfig) -> list[thread_entry.ThreadMessage]:
     return list(self.thread)
+
+  async def find_own_post_by_key(
+      self,
+      address: dict,
+      post_key: str,
+      content: str,
+      created_after,
+      cfg: config.CharlieBotConfig,
+      *,
+      messages: list[thread_entry.ThreadMessage] | None = None,
+  ) -> bool:
+    return post_key in self.post_keys
 
   def address_of(self, origin) -> dict:
     return dict(origin)
@@ -368,6 +382,12 @@ class FakeTree:
 
   def __init__(self, sessions: FakeSessions) -> None:
     self._sessions = sessions
+    self.control_lock = asyncio.Lock()
+    self.session_events = sessions
+    self.dispatch = FakeDispatch(self)
+
+  def fact_history(self, session_id: str) -> list[dict]:
+    return [*self._sessions.chat_events, *self._sessions.persisted]
 
   async def create_task(self, **kwargs) -> None:
     self._sessions.created.append(types.SimpleNamespace(**kwargs))
@@ -381,6 +401,29 @@ class FakeTree:
         fakechat_origin=slot_values["fakechat_origin"],
         fakechat_watermark_id=None,
     )
+
+
+class FakeDispatch:
+  """The shared input owner for fakechat's summon and audit paths."""
+
+  def __init__(self, tree: FakeTree) -> None:
+    self._tree = tree
+
+  async def admit_input(self, session_id: str, **kwargs: object) -> dict:
+    request_id = str(kwargs["request_id"])
+    event = {
+        "id": control_events.stable_request_event_id(session_id, request_id),
+        "request_id": request_id,
+        "type": kwargs["event_type"],
+        "content": kwargs["content"],
+        "actor": kwargs["actor"],
+        "source_session_id": session_id,
+        "from_session": kwargs["from_session"],
+        "from_session_name": kwargs["from_session_name"],
+        **kwargs["fields"],
+    }
+    await self._tree.session_events.persist_and_broadcast(session_id, event)
+    return event
 
 
 class FakeSessions:
@@ -437,8 +480,17 @@ class FakeSessions:
     event.setdefault("timestamp", "2026-01-01T00:00:00Z")
     self.persisted.append(event)
 
+  async def prime_aggregator(self, session_id: str) -> int:
+    return 0
+
+  async def announce_appended_event(self, session_id: str, event: dict, *, epoch: int) -> None:
+    return None
+
+  async def save_chat_event(self, session_id: str, event: dict) -> None:
+    await self.persist_and_broadcast(session_id, event)
+
   def load_chat_events_sync(self, session_id: str) -> list[dict]:
-    return list(self.chat_events)
+    return [*self.chat_events, *self.persisted]
 
   async def read_metadata_fresh(self, session_id: str) -> None:
     return None
@@ -497,7 +549,8 @@ async def test_audit_nudges_a_summon_of_the_current_contract(tmp_path, content: 
       mock.patch(conftest.MASTER_TRIGGER_PATCH_TARGET, new=mock.AsyncMock()) as mock_trigger,
       mock.patch(conftest.TASKS_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=conftest.make_task_spawner(tasks)),
   ):
-    acted = await thread_entry.deliver_done(adapter, "s1", done, cfg, *conftest.thread_blocks(sessions))
+    acted = await thread_entry.deliver_done(
+        adapter, "s1", done, cfg, *conftest.thread_blocks(sessions), tree=FakeTree(sessions))
     await asyncio.gather(*tasks)
 
   assert acted is True
@@ -533,7 +586,8 @@ async def test_audit_leaves_a_marker_contract_summon_alone(tmp_path) -> None:
   ]
   done = {"type": ET.MASTER_DONE, "input_event_id": "s1", "exit_code": 0, "still_thinking": False}
 
-  acted = await thread_entry.deliver_done(adapter, "s1", done, cfg, *conftest.thread_blocks(sessions))
+  acted = await thread_entry.deliver_done(
+      adapter, "s1", done, cfg, *conftest.thread_blocks(sessions), tree=FakeTree(sessions))
 
   assert acted is False
   assert sessions.persisted == []

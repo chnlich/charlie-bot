@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
+import hashlib
 import json
 import pathlib
+import time
+import types
 from unittest import mock
 
 import conftest
@@ -15,7 +19,8 @@ from src.features.chat_threads import thread_entry
 from src.features.discord import discord_client, discord_listener, event_types, metadata, turn_contribution
 from src.infra import config, metadata_slots, models
 from src.infra import event_types as ET
-from src.runtime import triggers
+from src.runtime import control_events, run_token, triggers
+from src.runtime.api import deps
 
 _GUILD = "900000000000000001"
 _PARENT = "900000000000000002"
@@ -52,8 +57,12 @@ class FakeDiscordClient:
     self.thread = thread or []
     self.thread_id = thread_id
     self.posts: list[dict] = []
+    self._nonce_messages: dict[str, dict] = {}
+    self.nonce_deduplication = True
+    self.raise_after_accept_once = False
     self.started_threads: list[dict] = []
     self.reactions: dict[tuple[str, str], set[str]] = {}
+    self._bot_user_id = "bot-user"
 
   async def get_channel(self, channel_id: str) -> dict:
     self.calls.append(("get_channel", {"channel_id": channel_id}))
@@ -71,10 +80,41 @@ class FakeDiscordClient:
     self.started_threads.append(dict(payload))
     return {"id": self.thread_id, "name": name, "type": 11}
 
-  async def create_message(self, channel_id: str, content: str) -> dict:
-    self.calls.append(("create_message", {"channel_id": channel_id, "content": content}))
+  async def create_message(self, channel_id: str, content: str, *, post_key: str) -> dict:
+    nonce = hashlib.sha256(post_key.encode("utf-8")).hexdigest()[:25]
+    body = {
+        "channel_id": channel_id,
+        "content": content,
+        "nonce": nonce,
+        "enforce_nonce": True,
+    }
+    self.calls.append(("create_message", body))
+    existing = self._nonce_messages.get(nonce) if self.nonce_deduplication else None
+    if existing is not None:
+      return existing
+    timestamp_ms = int(time.time() * 1000) + 1000 + len(self.posts)
+    message_id = str((timestamp_ms - 1420070400000) << 22)
+    post = {
+        "id": message_id,
+        "channel_id": channel_id,
+        "content": content,
+        "nonce": nonce,
+        "author": {
+            "id": self._bot_user_id,
+            "bot": True
+        },
+    }
     self.posts.append({"channel_id": channel_id, "content": content})
-    return {"id": "0", "channel_id": channel_id, "content": content}
+    self._nonce_messages[nonce] = post
+    self.thread.append({key: value for key, value in post.items() if key != "nonce"})
+    if self.raise_after_accept_once:
+      self.raise_after_accept_once = False
+      raise TimeoutError("read timed out after Discord accepted the post")
+    return post
+
+  async def get_current_user(self) -> dict:
+    self.calls.append(("get_current_user", {}))
+    return {"id": self._bot_user_id}
 
   async def add_reaction(self, channel_id: str, message_id: str, emoji: str) -> None:
     self.calls.append(("add_reaction", {"channel_id": channel_id, "message_id": message_id, "emoji": emoji}))
@@ -204,9 +244,6 @@ async def test_text_channel_summon_starts_thread_and_session(
   assert not [name for name, _ in client.calls if name == "create_message"]
   assert client.reactions[(_PARENT, _MENTION)] == {"👀"}
 
-  # The summon is persisted under the platform key with the block, and its
-  # content is the one fixed line: the rules ride the session's managed
-  # instructions (the thread reply contract), not the input.
   events = session_blocks.events.load_chat_events_sync(sid)
   agent_messages = [ev for ev in events if ev.get("type") == ET.AGENT_MESSAGE]
   assert len(agent_messages) == 1
@@ -217,11 +254,68 @@ async def test_text_channel_summon_starts_thread_and_session(
       "mention_id": _MENTION,
   }
   assert agent_messages[0]["content"] == discord_listener.DISCORD.summon_line
-  assert agent_messages[0]["content"] == "Discord 线程召唤"
-
   trigger.assert_awaited_once()
   assert trigger.await_args.kwargs["input_id"] == agent_messages[0]["id"]
   assert trigger.await_args.args[1] == discord_listener.DISCORD.summon_line
+
+
+@pytest.mark.asyncio
+async def test_duplicate_discord_message_create_accepts_one_thread_summon(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg, session_blocks, trigger_mgr, client = _summon_rig(
+      tmp_path,
+      monkeypatch,
+      channels={
+          _THREAD: {
+              "id": _THREAD,
+              "type": 11,
+              "parent_id": _PARENT,
+          },
+          _PARENT: {
+              "id": _PARENT,
+              "type": 0,
+              "name": "general",
+          },
+      })
+  message = _message(channel_id=_THREAD)
+  thread_reads = 0
+  both_read = asyncio.Event()
+  original_get_channel = client.get_channel
+
+  async def synchronize_channel(channel_id: str) -> dict:
+    nonlocal thread_reads
+    if channel_id == _THREAD:
+      thread_reads += 1
+      if thread_reads == 2:
+        both_read.set()
+      await both_read.wait()
+    return await original_get_channel(channel_id)
+
+  client.get_channel = synchronize_channel
+  tasks: list[asyncio.Task] = []
+  with conftest.mention_seam(tasks) as trigger:
+    pair = await asyncio.gather(
+        *[
+            discord_listener.handle_message_create(
+                message, cfg, *conftest.thread_blocks(session_blocks), client, trigger_mgr, bot_user_id=_BOT_USER)
+            for _ in range(2)
+        ])
+    for _ in range(2):
+      assert await discord_listener.handle_message_create(
+          message, cfg, *conftest.thread_blocks(session_blocks), client, trigger_mgr, bot_user_id=_BOT_USER) == pair[0]
+    await _drain(tasks)
+
+  assert pair[0] == pair[1]
+  sid = pair[0]
+  assert sid is not None
+  summons = [
+      ev for ev in session_blocks.tree.fact_history(sid) if ev.get("type") == ET.AGENT_MESSAGE and "discord" in ev
+  ]
+  assert len(summons) == 1
+  assert summons[0]["request_id"] == f"discord-mention:{_MENTION}"
+  trigger.assert_awaited_once()
+  assert len([call for method, call in client.calls if method == "add_reaction"]) == 1
+  assert not client.started_threads
 
 
 def test_contract_part_names_the_read_command_and_the_summon_mark() -> None:
@@ -314,7 +408,11 @@ async def test_second_summon_reuses_and_unarchives(tmp_path: pathlib.Path, monke
   sessions = await session_blocks.listing.list_sessions()
   assert len(sessions) == 1
   meta = await session_blocks.store.get_session(first)
-  assert meta is not None and meta.status == models.SessionStatus.ACTIVE
+  assert meta is not None and meta.status == models.SessionStatus.ARCHIVED
+  summon_events = [
+      ev for ev in session_blocks.events.load_chat_events_sync(first) if ev.get("type") == ET.AGENT_MESSAGE
+  ]
+  assert len(summon_events) == 1
 
 
 @pytest.mark.asyncio
@@ -504,22 +602,165 @@ async def test_post_reply_posts_a_published_url_byte_identical(tmp_path: pathlib
 
   def handler(request: httpx.Request) -> httpx.Response:
     requests.append(request)
-    return httpx.Response(200, json={"id": "0"})
+    if request.url.path == "/api/v10/users/@me":
+      return httpx.Response(200, json={"id": "bot-user"})
+    if request.method == "GET":
+      return httpx.Response(200, json=[])
+    message_id = str((int(time.time() * 1000) - 1420070400000 + 1000) << 22)
+    return httpx.Response(200, json={"id": message_id, "channel_id": _THREAD, "content": text})
 
   # The real REST client over an in-memory transport: the wire request shows
   # whether the post went out as JSON or as a multipart upload.
   client = discord_client.DiscordClient(
       httpx.AsyncClient(transport=httpx.MockTransport(handler)), bot_token="test-bot-token")
   with mock.patch(conftest.DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
-    readback = await discord_listener.post_reply(sid, text, cfg, session_blocks.store, session_blocks.events)
+    readback = await discord_listener.post_reply(
+        sid, text, cfg, session_blocks.store, session_blocks.events, tree=session_blocks.tree)
 
-  assert len(requests) == 1
-  request = requests[0]
+  assert len(requests) == 3
+  request = next(request for request in requests if request.method == "POST")
   assert (request.method, str(request.url)) == ("POST", f"{discord_client.BASE_URL}/channels/{_THREAD}/messages")
   assert request.headers["content-type"] == "application/json"
-  assert json.loads(request.content)["content"] == text
+  body = json.loads(request.content)
+  assert body["content"] == text
+  assert len(body["nonce"]) == 25
+  assert body["enforce_nonce"] is True
   assert readback["text"] == text
   assert readback["operator_only_note"] is None
+
+
+@pytest.mark.asyncio
+async def test_discord_reply_route_reuses_one_post_for_same_run_concurrently(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg, session_blocks, _trigger_mgr, client = _rig(tmp_path)
+  sid = (await _discord_session(session_blocks)).id
+  tree = session_blocks.tree
+  assert tree is not None
+  started_at = datetime.datetime.now(datetime.UTC)
+  monkeypatch.setattr(tree.runs, "get_run", mock.AsyncMock(return_value=types.SimpleNamespace(started_at=started_at)))
+  route_client = conftest.make_internal_router_client(cfg, session_blocks, tree)
+  claims = run_token.RunTokenClaims(session_id=sid, run_id="discord-run", agent="discord manager")
+  route_client.app.dependency_overrides[deps.require_caller] = lambda: run_token.CallerIdentity(
+      kind="agent", claims=claims)
+  post_entered = asyncio.Event()
+  allow_post = asyncio.Event()
+  original_post = client.create_message
+
+  async def delayed_post(channel_id: str, content: str, *, post_key: str) -> dict:
+    post_entered.set()
+    await allow_post.wait()
+    return await original_post(channel_id, content, post_key=post_key)
+
+  client.create_message = delayed_post
+  with mock.patch(conftest.DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=route_client.app), base_url="http://test") as http:
+      first_task = asyncio.create_task(
+          http.post("/api/internal/discord/reply", json={
+              "session_id": sid,
+              "text": "one discord reply"
+          }))
+      await asyncio.wait_for(post_entered.wait(), timeout=1)
+      second_task = asyncio.create_task(
+          http.post("/api/internal/discord/reply", json={
+              "session_id": sid,
+              "text": "one discord reply"
+          }))
+      await asyncio.sleep(0)
+      allow_post.set()
+      first, second = await asyncio.gather(first_task, second_task)
+
+  assert first.status_code == second.status_code == 200
+  assert first.json() == second.json()
+  assert len(client.posts) == 1
+  reply_events = [ev for ev in tree.fact_history(sid) if ev.get("type") == event_types.DISCORD_REPLY]
+  assert len(reply_events) == 1
+  request_id = control_events.derived_agent_send_request_id("discord-run", "discord reply", sid, "one discord reply")
+  assert reply_events[0]["request_id"] == request_id
+  create_calls = [body for method, body in client.calls if method == "create_message"]
+  assert len(create_calls) == 1
+  assert create_calls[0]["nonce"] == hashlib.sha256(f"{request_id}#1".encode()).hexdigest()[:25]
+  assert create_calls[0]["enforce_nonce"] is True
+  assert all("nonce" not in message for message in client.thread)
+
+
+@pytest.mark.asyncio
+async def test_discord_accepted_post_timeout_retries_with_same_nonce_once(tmp_path: pathlib.Path) -> None:
+  cfg, session_blocks, _trigger_mgr, client = _rig(tmp_path)
+  sid = (await _discord_session(session_blocks)).id
+  client.raise_after_accept_once = True
+
+  with (
+      mock.patch(conftest.DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client),
+      mock.patch("src.features.chat_threads.thread_entry._RETRY_DELAYS", (0.0, 0.0)),
+  ):
+    result = await discord_listener.post_reply(
+        sid,
+        "accepted then timed out",
+        cfg,
+        session_blocks.store,
+        session_blocks.events,
+        request_id="discord-timeout",
+        run_started_at=datetime.datetime.now(datetime.UTC),
+        tree=session_blocks.tree,
+    )
+
+  assert result["posted"] is True
+  assert len(client.posts) == 1
+  calls = [body for method, body in client.calls if method == "create_message"]
+  assert len(calls) == 2
+  assert calls[0]["nonce"] == calls[1]["nonce"]
+  assert all(body["enforce_nonce"] is True for body in calls)
+  assert all("nonce" not in message for message in client.thread)
+
+
+@pytest.mark.asyncio
+async def test_discord_existing_content_blocks_rerun_without_nonce_deduplication(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg, session_blocks, _trigger_mgr, client = _rig(tmp_path)
+  sid = (await _discord_session(session_blocks)).id
+  client.nonce_deduplication = False
+  started_at = datetime.datetime.now(datetime.UTC) - datetime.timedelta(minutes=10)
+  original_save = session_blocks.events.save_chat_event
+  failed = False
+
+  async def fail_reply_write(session_id: str, event: dict) -> None:
+    nonlocal failed
+    if not failed and event.get("type") == event_types.DISCORD_REPLY:
+      failed = True
+      raise RuntimeError("injected event write failure")
+    await original_save(session_id, event)
+
+  monkeypatch.setattr(session_blocks.events, "save_chat_event", fail_reply_write)
+  with mock.patch(conftest.DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET,
+                  return_value=client), pytest.raises(RuntimeError, match="injected event write failure"):
+    await discord_listener.post_reply(
+        sid,
+        "persist after post",
+        cfg,
+        session_blocks.store,
+        session_blocks.events,
+        request_id="discord-write",
+        run_started_at=started_at,
+        tree=session_blocks.tree)
+
+  monkeypatch.setattr(session_blocks.events, "save_chat_event", original_save)
+  with mock.patch(conftest.DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
+    result = await discord_listener.post_reply(
+        sid,
+        "persist after post",
+        cfg,
+        session_blocks.store,
+        session_blocks.events,
+        request_id="discord-write",
+        run_started_at=started_at,
+        tree=session_blocks.tree)
+
+  assert result["posted"] is True
+  assert len(client.posts) == 1
+  assert len(
+      [ev for ev in session_blocks.events.load_chat_events_sync(sid) if ev.get("type") == event_types.DISCORD_REPLY
+      ]) == 1
+  assert all("nonce" not in message for message in client.thread)
 
 
 @pytest.mark.asyncio
@@ -533,14 +774,23 @@ async def test_post_reply_names_an_application_route_link_for_the_operator(tmp_p
 
   def handler(request: httpx.Request) -> httpx.Response:
     requests.append(request)
-    return httpx.Response(200, json={"id": "0"})
+    if request.url.path == "/api/v10/users/@me":
+      return httpx.Response(200, json={"id": "bot-user"})
+    if request.method == "GET":
+      return httpx.Response(200, json=[])
+    message_id = str((int(time.time() * 1000) - 1420070400000 + 1000) << 22)
+    return httpx.Response(200, json={"id": message_id, "channel_id": _THREAD, "content": text})
 
   client = discord_client.DiscordClient(
       httpx.AsyncClient(transport=httpx.MockTransport(handler)), bot_token="test-bot-token")
   with mock.patch(conftest.DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
-    readback = await discord_listener.post_reply(sid, text, cfg, session_blocks.store, session_blocks.events)
+    readback = await discord_listener.post_reply(
+        sid, text, cfg, session_blocks.store, session_blocks.events, tree=session_blocks.tree)
 
-  assert json.loads(requests[0].content)["content"] == text
+  body = json.loads(next(request for request in requests if request.method == "POST").content)
+  assert body["content"] == text
+  assert len(body["nonce"]) == 25
+  assert body["enforce_nonce"] is True
   assert readback["operator_only_note"] is not None and route_url in readback["operator_only_note"]
 
 
@@ -568,7 +818,8 @@ async def test_post_reply_refuses_422_and_posts_nothing_on_a_file_server_link(
       mock.patch(conftest.DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client),
       pytest.raises(thread_entry.ThreadReplyError) as excinfo,
   ):
-    await discord_listener.post_reply(sid, f"see {link} for details", cfg, session_blocks.store, session_blocks.events)
+    await discord_listener.post_reply(
+        sid, f"see {link} for details", cfg, session_blocks.store, session_blocks.events, tree=session_blocks.tree)
 
   assert excinfo.value.status == 422
   assert link in excinfo.value.detail
@@ -626,5 +877,8 @@ async def test_deliver_done_skips_a_session_without_discord_origin(tmp_path: pat
       meta.id, {
           "type": ET.MASTER_DONE,
           "input_event_id": "e1"
-      }, cfg, *conftest.thread_blocks(session_blocks)) is False
+      },
+      cfg,
+      *conftest.thread_blocks(session_blocks),
+      tree=session_blocks.tree) is False
   assert session_blocks.events.load_chat_events_sync(meta.id) == events_before

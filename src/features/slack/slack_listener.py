@@ -44,6 +44,7 @@ block, outside the audit.
 """
 
 import asyncio
+import datetime
 import json
 import uuid
 from typing import TYPE_CHECKING, Any
@@ -142,9 +143,19 @@ class SlackClient:
     resp = await self._http.post("https://slack.com/api/apps.connections.open", headers=self._app_headers)
     return self._checked_payload(resp, "apps.connections.open")["url"]
 
-  async def post_message(self, channel: str, text: str, thread_ts: str) -> dict:
+  async def post_message(self, channel: str, text: str, thread_ts: str, *, post_key: str) -> dict:
     """POST chat.postMessage as a thread reply; returns the API payload."""
-    body: dict[str, Any] = {"channel": channel, "text": text, "thread_ts": thread_ts}
+    body: dict[str, Any] = {
+        "channel": channel,
+        "text": text,
+        "thread_ts": thread_ts,
+        "metadata": {
+            "event_type": "charliebot_post",
+            "event_payload": {
+                "key": post_key
+            },
+        },
+    }
     resp = await self._http.post("https://slack.com/api/chat.postMessage", headers=self._bot_headers, json=body)
     return self._checked_payload(resp, "chat.postMessage")
 
@@ -168,17 +179,32 @@ class SlackClient:
       raise RuntimeError(f"reactions.remove failed: {payload}")
     return payload
 
+  async def auth_test(self) -> dict:
+    """Return the bot identity associated with this token."""
+    resp = await self._http.post("https://slack.com/api/auth.test", headers=self._bot_headers)
+    return self._checked_payload(resp, "auth.test")
+
   async def get_thread_replies(self, channel: str, thread_ts: str) -> list[dict]:
-    """GET conversations.replies for one thread; return its messages in order."""
-    resp = await self._http.get(
-        "https://slack.com/api/conversations.replies",
-        headers=self._bot_headers,
-        params={
-            "channel": channel,
-            "ts": thread_ts
-        },
-    )
-    return self._checked_payload(resp, "conversations.replies")["messages"]
+    """GET every conversations.replies page with metadata enabled."""
+    messages = []
+    params: dict[str, Any] = {
+        "channel": channel,
+        "ts": thread_ts,
+        "include_all_metadata": True,
+        "limit": 100,
+    }
+    while True:
+      resp = await self._http.get(
+          "https://slack.com/api/conversations.replies",
+          headers=self._bot_headers,
+          params=params,
+      )
+      payload = self._checked_payload(resp, "conversations.replies")
+      messages.extend(payload["messages"])
+      cursor = (payload.get("response_metadata") or {}).get("next_cursor")
+      if not cursor:
+        return messages
+      params["cursor"] = cursor
 
   async def get_channel_name(self, channel_id: str) -> str | None:
     """Resolve a channel id to its display name via conversations.info.
@@ -409,6 +435,7 @@ class SlackThreadAdapter(thread_entry.ThreadAdapter):
 
   def __init__(self, client: SlackClient | None = None) -> None:
     self._given = client
+    self._identity: dict | None = None
 
   @property
   def _client(self) -> SlackClient:
@@ -423,8 +450,8 @@ class SlackThreadAdapter(thread_entry.ThreadAdapter):
       self._given = _bot_client()
     return self._given
 
-  async def post(self, address: dict, text: str) -> None:
-    await self._client.post_message(address["channel_id"], text, thread_ts=address["thread_ts"])
+  async def post(self, address: dict, text: str, post_key: str) -> None:
+    await self._client.post_message(address["channel_id"], text, thread_ts=address["thread_ts"], post_key=post_key)
 
   async def add_ack(self, block: dict) -> None:
     await self._client.add_reaction(block["channel_id"], _ACCEPTANCE_REACTION, block[self.platform.mention_key])
@@ -432,15 +459,49 @@ class SlackThreadAdapter(thread_entry.ThreadAdapter):
   async def remove_ack(self, block: dict) -> None:
     await self._client.remove_reaction(block["channel_id"], _ACCEPTANCE_REACTION, block[self.platform.mention_key])
 
-  async def read_eligible(self, origin: metadata.SlackOrigin,
-                          cfg: config.CharlieBotConfig) -> list[thread_entry.ThreadMessage]:
+  async def read_thread(self, origin: metadata.SlackOrigin,
+                        cfg: config.CharlieBotConfig) -> list[thread_entry.ThreadMessage]:
     messages = await self._client.get_thread_replies(origin.channel_id, origin.thread_ts)
     return [
-        thread_entry.ThreadMessage(m["ts"], m.get("user"),
-                                   m.get("text") or "")
-        for m in messages
-        if _eligible_thread_message(m, cfg.slack.allowed_user_ids)
+        thread_entry.ThreadMessage(
+            m["ts"],
+            m.get("user"),
+            m.get("text") or "",
+            metadata=m.get("metadata"),
+            bot_id=m.get("bot_id"),
+            eligible=_eligible_thread_message(m, cfg.slack.allowed_user_ids)) for m in messages
     ]
+
+  async def find_own_post_by_key(
+      self,
+      address: dict,
+      post_key: str,
+      content: str,
+      created_after: datetime.datetime,
+      cfg: config.CharlieBotConfig,
+      *,
+      messages: list[thread_entry.ThreadMessage] | None = None,
+  ) -> bool:
+    if self._identity is None:
+      self._identity = await self._client.auth_test()
+    thread = messages
+    if thread is None:
+      raw = await self._client.get_thread_replies(address["channel_id"], address["thread_ts"])
+      thread = [
+          thread_entry.ThreadMessage(
+              message["ts"],
+              message.get("user"),
+              message.get("text") or "",
+              metadata=message.get("metadata"),
+              bot_id=message.get("bot_id")) for message in raw
+      ]
+    for message in thread:
+      event_metadata = message.metadata or {}
+      payload = event_metadata.get("event_payload") or {}
+      is_own = message.user == self._identity.get("user_id") or message.bot_id == self._identity.get("bot_id")
+      if is_own and event_metadata.get("event_type") == "charliebot_post" and payload.get("key") == post_key:
+        return True
+    return False
 
   def address_of(self, origin: metadata.SlackOrigin) -> dict:
     return {"channel_id": origin.channel_id, "thread_ts": origin.thread_ts}
@@ -480,15 +541,31 @@ async def ack_messages(
 
 
 async def post_reply(
-    session_id: str, text: str, cfg: config.CharlieBotConfig, store: session_store.SessionStore,
-    events: session_events.SessionEvents) -> dict:
+    session_id: str,
+    text: str,
+    cfg: config.CharlieBotConfig,
+    store: session_store.SessionStore,
+    events: session_events.SessionEvents,
+    *,
+    request_id: str | None = None,
+    run_started_at: datetime.datetime | None = None,
+    tree: Any | None = None) -> dict:
   """Post *text* to the session's Slack thread and return the readback the CLI prints.
 
   One-line pass-through to the shared reply path (``thread_entry.post_reply``)
   on the Slack adapter; the link check, chunking, refusals, reply event, and
   readback live there.
   """
-  return await thread_entry.post_reply(SlackThreadAdapter(), session_id, text, cfg, store, events)
+  return await thread_entry.post_reply(
+      SlackThreadAdapter(),
+      session_id,
+      text,
+      cfg,
+      store,
+      events,
+      request_id=request_id,
+      run_started_at=run_started_at,
+      tree=tree)
 
 
 # ---------------------------------------------------------------------------
@@ -497,16 +574,21 @@ async def post_reply(
 
 
 async def deliver_done(
-    session_id: str, done: dict, cfg: config.CharlieBotConfig, store: session_store.SessionStore,
-    lifecycle: session_lifecycle.SessionLifecycle, events: session_events.SessionEvents,
-    successor: session_successor.SessionSuccessor) -> bool:
+    session_id: str,
+    done: dict,
+    cfg: config.CharlieBotConfig,
+    store: session_store.SessionStore,
+    lifecycle: session_lifecycle.SessionLifecycle,
+    events: session_events.SessionEvents,
+    successor: session_successor.SessionSuccessor,
+    tree: Any | None = None) -> bool:
   """Round-end audit for one finished round; True when it nudged or posted the notice.
 
   One-line pass-through to the shared audit (``thread_entry.deliver_done``) on
   the Slack adapter; the audit gate, the nudge, and the notice live there.
   """
   return await thread_entry.deliver_done(
-      SlackThreadAdapter(), session_id, done, cfg, store, lifecycle, events, successor)
+      SlackThreadAdapter(), session_id, done, cfg, store, lifecycle, events, successor, tree)
 
 
 # ---------------------------------------------------------------------------
@@ -515,9 +597,13 @@ async def deliver_done(
 
 
 async def backfill_lost_summons(
-    cfg: config.CharlieBotConfig, listing: session_listing.SessionListing, store: session_store.SessionStore,
-    lifecycle: session_lifecycle.SessionLifecycle, events: session_events.SessionEvents,
-    successor: session_successor.SessionSuccessor) -> int:
+    cfg: config.CharlieBotConfig,
+    listing: session_listing.SessionListing,
+    store: session_store.SessionStore,
+    lifecycle: session_lifecycle.SessionLifecycle,
+    events: session_events.SessionEvents,
+    successor: session_successor.SessionSuccessor,
+    tree: Any | None = None) -> int:
   """Boot pass over every Slack session; returns how many notices and nudges it produced.
 
   One-line pass-through to the shared boot audit
@@ -525,7 +611,7 @@ async def backfill_lost_summons(
   lost-summon report and the per-round audit live there.
   """
   return await thread_entry.backfill_lost_summons(
-      SlackThreadAdapter(), cfg, listing, store, lifecycle, events, successor)
+      SlackThreadAdapter(), cfg, listing, store, lifecycle, events, successor, tree)
 
 
 async def _expect_hello(ws: client.ClientConnection) -> None:

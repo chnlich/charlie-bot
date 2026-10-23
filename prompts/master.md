@@ -83,9 +83,9 @@ Applies to all writing.
 
 ### Text a model reads
 
-A model reads prompts, skills, task specs, and memory entries. Each word in this text must carry
-one meaning. Write this text with the writing rules of ASD-STE100 Issue 9 (Simplified Technical
-English):
+A model reads prompts, skills, task specs, memory entries, and messages to other agents.
+Each word in this text must carry one meaning. Write this text with the writing rules of ASD-STE100
+Issue 9 (Simplified Technical English):
 
 - Name things with plain words and the established terms of the field.
 - Give each concept one name, and use that name every time. Each word keeps one meaning.
@@ -93,6 +93,11 @@ English):
 - Write one fact or one instruction in each sentence.
 - A sentence runs to its period. A colon or a semicolon joins clauses inside one sentence.
 - Write each instruction in the imperative, and put its condition first.
+- Follow each instruction with one sentence that states its purpose: the result the instruction protects.
+- Let instructions that protect one result share one purpose sentence.
+  A reader who knows the result can handle cases beyond the ones the text names.
+- When a task spec writes or changes rule text, list in its Reviewer Checklist: each instruction states its purpose.
+  The reviewer then checks each changed instruction for its purpose.
 - Use the active voice. Keep the subject, the verb, and the connecting words.
 - In English, an instruction has at most 20 words, and a description has at most 25 words.
 - In Chinese, an instruction has at most 30 units, and a description has at most 40 units.

@@ -364,28 +364,49 @@ class ClaudeCodeBackend(base.AgentBackend):
     """Close the gated stream-json writer when Claude emits its first result."""
     await midturn_delivery.on_backend_event(self._midturn_run_id if self._midturn_delivery else None, event)
 
-  async def one_shot_text(self, prompt: str, system_prompt: str, *, timeout: float | None) -> str:
-    """Generate text via `claude -p` in text mode, using this backend's model.
+  def _one_shot_env(self) -> dict[str, str]:
+    """The environment a ``claude -p`` one-shot of this backend launches with.
 
-    Print mode with tools disabled: no session persistence, prompt on stdin,
-    plain-text stdout. The process group is killed on timeout; ``None`` waits without a limit.
-    The gateway variables an inherited cc-anthropic-compatible worker environment
-    carries are stripped: with them, `claude` sends this backend's Claude model
+    A cc-claude entry strips the gateway variables an inherited cc-anthropic-compatible
+    worker environment carries: with them, ``claude`` sends this backend's Claude model
     name to the gateway instead of the Anthropic account.
     """
-    proc = await asyncio.create_subprocess_exec(
+    return without_gateway_env(os.environ)
+
+  def _one_shot_model_args(self) -> list[str]:
+    """The model-selection flags of this backend's one-shot, the one per-class argv difference.
+
+    A cc-claude entry names its model with ``--model``.
+    """
+    return ["--model", self._model] if self._model else []
+
+  def _one_shot_command(self, system_prompt: str) -> list[str]:
+    """The argv of a ``claude -p`` text one-shot: no session persistence, tools disabled."""
+    return [
         "claude",
         "-p",
         "--output-format",
         "text",
         "--no-session-persistence",
-        "--model",
-        self._model,
+        *self._one_shot_model_args(),
         "--system-prompt",
         system_prompt,
         base.DISALLOWED_TOOLS_FLAG,
         "Bash,Read,Write,Edit,Glob,Grep,Agent",
-        env=without_gateway_env(os.environ),
+    ]
+
+  async def one_shot_text(self, prompt: str, system_prompt: str, *, timeout: float | None) -> str:
+    """Generate text via `claude -p` in text mode.
+
+    Print mode with tools disabled: no session persistence, prompt on stdin,
+    plain-text stdout. ``_one_shot_env`` and ``_one_shot_model_args`` are the only
+    per-class differences, so a cc-claude account backend and an endpoint backend
+    share this launch and process handling. The process group is killed on timeout;
+    ``None`` waits without a limit.
+    """
+    proc = await asyncio.create_subprocess_exec(
+        *self._one_shot_command(system_prompt),
+        env=self._one_shot_env(),
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
@@ -452,3 +473,11 @@ class AnthropicEndpointBackend(ClaudeCodeBackend):
       out.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
       out[claude_launch.THINKING_DISPLAY_UPDATES_ENV] = "0"
     return out
+
+  def _one_shot_env(self) -> dict[str, str]:
+    """The run environment: the one-shot reaches the same endpoint, model and body as the entry's runs."""
+    return self._prepare_env(dict(os.environ))
+
+  def _one_shot_model_args(self) -> list[str]:
+    """No ``--model`` — the model variables select the model — and the entry's ``effort`` rides ``--effort``."""
+    return ["--effort", self._effort] if self._effort else []

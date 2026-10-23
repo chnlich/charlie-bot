@@ -48,3 +48,19 @@ What differs is the per-event cost of the parsed representation. A tracemalloc s
 Swapping the global allocator to jemalloc moved the peak only from 20.6 GB to 20.0 GB (`20261023T181456093331Z-api-parity-73ee4bc8`): allocator retention is not the cause. The same run, on the eviction page-cache policy, measured `rust_ready_in_ms=81175` against `python_ready_in_ms=57542`, so the cold-cache ready-time gate is also unproven for the candidate.
 
 Closing the memory acceptance therefore needs a cheaper parsed-event representation — for example interned object keys, or retaining each event's raw line and parsing on demand — not a retention change: both servers already keep exactly the same data.
+
+## Parsed-event form: interned compact events
+
+A census compared the three candidate in-memory forms for the cached chat events. The census binary parsed 20 production `chat_events.jsonl` files (5,018 events, the seed-7 sample of the same production home the acceptance runs use) in a release build on host3 and reported each form's retained bytes and per-event times:
+
+| form | retained bytes/event | parse µs/event | notes |
+| --- | --- | --- | --- |
+| 1. `serde_json::Value` (the pre-change form) | 4,153 | 3.89 | 22.68 µs in a debug build |
+| 2. raw JSON line, parsed when a reader asks | 1,676 | deferred | the 3.89 µs parse moves to every read; the whole-corpus average is 2,040 bytes/event |
+| 3. interned compact events (chosen) | 1,779 | 3.55 | 25.40 µs in a debug build; `to_value` at a response boundary costs 0.96 µs/event (6.02 µs debug) |
+
+Form 3 keeps each event as an enum whose object keys are interned process-wide (the sample's 5,018 events share 550 distinct keys, a 52,775-byte table), whose objects, arrays and strings are exact-fit allocations with no growth slack, and whose numbers keep serde_json's three forms so round trips stay byte-identical.
+
+The choice is form 3. It retains only ~6% more bytes than the raw-line floor while keeping Python's parse-once read semantics; form 2 re-parses on every facts fold and display-state query, and Python's facts structures hold shared event references, so form 2 would either re-parse per query or keep unbounded parsed copies outside the cache. Parse time is lower than the Value form's (3.55 vs 3.89 µs/event) and the convert-back runs only at response and aggregator boundaries, so the request-time gate is paid for by the cheaper parse. Retention, keys, invalidation and bounds are unchanged; only the representation is new. The count tests are `object_keys_are_shared_across_values` (one interned id per distinct key) and `a_chat_event_is_exact_fit_with_no_growth_slack` (capacity equals entry slots plus exact string bytes).
+
+Census source: the measurement-only binary `event_forms.rs` over `fixtures/event_census_sample/`, both never landed; the binary is archived at `/home/chaoli/scripts/20261024_event_form_census/event_forms.rs` and the sample is regenerable from the production home with the archived `make_sample.py` alongside it.

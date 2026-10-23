@@ -71,12 +71,12 @@ PROMPT_BODIES_DIR_NAME = "prompt_bodies"
 # stay invisible for.
 _TREE_INDEX_TTL_SECONDS = 2.0
 
-# The create route (src/runtime/api/sessions.py) reproduces these two refusals
-# verbatim as its client-visible details — the first in the v2 pre-check, the
-# second in the legacy-shape guard; the wording lives beside the raises that
-# own the contracts.
+# Refusal wording shared by the raises that own the contracts and their routes in
+# src/runtime/api/sessions.py, which carry it as the client-visible detail: the create route's v2
+# pre-check and legacy-shape guard read the first two, the archive route's operator guard the third.
 TASK_CREATE_REQUEST_ID_REQUIRED = "request_id is required for task creation"
 AGENT_CREATE_SCOPE_REFUSAL = "an agent may only create a task directly under its own open manager task"
+ARCHIVE_OPERATOR_REFUSAL = "archiving a task requires operator credentials"
 
 
 def closed_ancestors_blocker(closed_ids: list[str]) -> str:
@@ -1871,7 +1871,7 @@ class TaskTreeManager:
     the ids this call archived, in parent-before-child order; an already-archived target returns [].
     """
 
-    task_errors.require_operator(caller, "archiving a task requires operator credentials")
+    task_errors.require_operator(caller, ARCHIVE_OPERATOR_REFUSAL)
     tree = self
     async with tree.control_lock:
       index = await tree._get_index(force=True)

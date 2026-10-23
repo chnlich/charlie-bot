@@ -10,6 +10,7 @@ use std::time::Duration as StdDuration;
 use anyhow::Context;
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot, SlotField};
+use charliebot_core::pyfmt;
 use charliebot_core::timeouts::ROUTER_TIMEOUT_SECONDS;
 use charliebot_registry::context::FeatureContext;
 use charliebot_registry::{Registry, RegistryError};
@@ -50,6 +51,25 @@ pub const QUOTA_ERROR_PATTERNS: &[&str] = &[
   "rate limit",
   "usage limit",
   "budget has been exceeded",
+];
+
+/// Error substrings of a temporary provider or gateway failure, or of a no-output stall. A pool-chosen run that hits
+/// one fails over to the next member. Bare HTTP status digits, which also occur in request ids, and BadRequest or HTTP
+/// 400 text stay out: those are request errors that must fail fast.
+pub const BACKEND_TEMPORARY_UNAVAILABLE_PATTERNS: &[&str] = &[
+  "at capacity",
+  "bad gateway",
+  "badgateway",
+  "internal server error",
+  "internalservererror",
+  "service unavailable",
+  "serviceunavailable",
+  "gateway timeout",
+  "apiconnectionerror",
+  "connection error",
+  "peer closed connection",
+  "no output for",
+  "no session progress for",
 ];
 
 /// The session metadata slot that records whether the backend pool selected a worker's backend.
@@ -287,6 +307,24 @@ impl BackendPool {
 pub fn is_quota_error(text: &str) -> bool {
   let lowered = text.to_lowercase();
   QUOTA_ERROR_PATTERNS.iter().any(|pattern| lowered.contains(pattern))
+}
+
+/// Return whether an error string contains a temporary backend failure substring.
+pub fn is_temporary_unavailable_error(text: &str) -> bool {
+  let lowered = text.to_lowercase();
+  BACKEND_TEMPORARY_UNAVAILABLE_PATTERNS.iter().any(|pattern| lowered.contains(pattern))
+}
+
+/// Return whether a Claude Code `result` event reports a temporary backend failure. A present status decides alone:
+/// 429 and 5xx fail over, and any other integer or non-integer status does not, without reading the text. A null or
+/// absent status falls back to the text of the result.
+pub fn is_temporary_unavailable_result(event: &Value) -> bool {
+  match event.get("api_error_status") {
+    None | Some(Value::Null) => {
+      is_temporary_unavailable_error(&event.get("result").map(pyfmt::python_str).unwrap_or_default())
+    }
+    Some(status) => status.as_i64().is_some_and(|code| code == 429 || code >= 500),
+  }
 }
 
 /// Read the process-wide pool inserted by the startup step.

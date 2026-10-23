@@ -112,26 +112,20 @@ def claude_supervisor_env(env: Mapping[str, str]) -> dict[str, str]:
   return out
 
 
-# The model-selection variables Claude Code reads separately: the main model,
-# the opus/sonnet/haiku slot defaults, and the subagent model.
-CLAUDE_MODEL_ENV_NAMES: tuple[str, ...] = (
+# One home for every gateway endpoint and model variable. The endpoint backend
+# writes the first two names; claude_model_env pins the remaining model names.
+GATEWAY_ENDPOINT_ENV_NAMES: tuple[str, ...] = (
+    "ANTHROPIC_BASE_URL",
+    "ANTHROPIC_AUTH_TOKEN",
     "ANTHROPIC_MODEL",
     "ANTHROPIC_DEFAULT_OPUS_MODEL",
     "ANTHROPIC_DEFAULT_SONNET_MODEL",
     "ANTHROPIC_DEFAULT_HAIKU_MODEL",
     "CLAUDE_CODE_SUBAGENT_MODEL",
 )
-
-# The endpoint variables a cc-anthropic-compatible entry writes into its worker
-# process: the gateway URL, its bearer token, and claude_model_env's model pins.
-# Every process the worker starts inherits them, and a child that then launches
-# a cc-claude backend would send Claude model names to the gateway, whose key
-# has no Claude access. A cc-claude launch strips this set from what it
-# inherits; an endpoint backend overwrites the same names with its own values.
-GATEWAY_BASE_URL_ENV = "ANTHROPIC_BASE_URL"
-GATEWAY_AUTH_TOKEN_ENV = "ANTHROPIC_AUTH_TOKEN"
-GATEWAY_ENDPOINT_ENV_NAMES: frozenset[str] = frozenset(
-    (GATEWAY_BASE_URL_ENV, GATEWAY_AUTH_TOKEN_ENV, *CLAUDE_MODEL_ENV_NAMES))
+GATEWAY_BASE_URL_ENV = GATEWAY_ENDPOINT_ENV_NAMES[0]
+GATEWAY_AUTH_TOKEN_ENV = GATEWAY_ENDPOINT_ENV_NAMES[1]
+CLAUDE_MODEL_ENV_NAMES = GATEWAY_ENDPOINT_ENV_NAMES[2:]
 
 
 def claude_model_env(model: str) -> dict[str, str]:

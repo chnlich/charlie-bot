@@ -100,13 +100,7 @@ Known-alive symbols:
   The server-start path never calls the pair, by design: only the setup command seeds cron config.
   `tests/test_cron_defaults.py` asserts that `seed_default_cron_tasks` stays out of
   `init_charliebot_home.__code__.co_names`.
-- `threshold`, `min_silence_duration`, `min_speech_duration`, `max_speech_duration` (on
-  `vad_config.silero_vad`) and `sample_rate` (on `vad_config`) — attribute writes on the
-  sherpa-onnx `VadModelConfig` in `src/features/voice/transcriber.py` (`_get_model_bundle`). The vendor
-  C++ binding reads them when the VAD runs; nothing in the repo reads them back, so vulture
-  flags the writes as unused attributes. `min_silence_duration`, `min_speech_duration`, and
-  `max_speech_duration` each have exactly one whole-repo match (the write site), so they sit
-  one grep away from looking phase-1-deletable. Vulture also flags pydantic response-model
+- Vulture flags pydantic response-model
   fields served to `web/` (`schedule_cron`/`schedule_enabled`/`schedule_next_run`/
   `schedule_timezone`/`schedule_project`/`schedule_allow_failure` on `SessionMetadata`,
   `parent_session_id` likewise,
@@ -387,13 +381,6 @@ Known-alive symbols:
   string at the first config parse or first use. The names have no whole-repo matches outside their
   definitions, so vulture flags them as unused. `check_default_backend` rejects a
   `voice.default_backend` typo against the transcription registry's ids at startup.
-- `voice_setup` (the module `src/features/voice/voice_setup.py`) — imported only by string outside `tests/`:
-  the `register()` of the voice package passes `"src.features.voice.voice_setup"` to
-  `wiring.register_setup_step`, and `setup_step` re-enters the runner that called it with
-  `python -m <that runner's module> --step src.features.voice.voice_setup:enable_step`, building the step
-  argument as `f"{__name__}:enable_step"`. No file outside `tests/` imports the module
-  (`tests/test_setup_runner.py` does), so a reference scan that excludes tests reads it as an unreferenced
-  module. `enable_step` has no whole-repo match outside `voice_setup.py` and that test.
 - `_theme`, `_decolor` (attributes set by the no-color arm of `CliHelpFormatter._set_color`,
   `src/infra/help_formatter.py`) — read by stdlib argparse 3.14's own formatting methods
   (`_Section.format_help`, `_format_usage`, `_format_action` read `self._theme` /
@@ -535,7 +522,7 @@ Known-alive symbols:
 - `first_step`, `second_step` and `lone_step` (`tests/test_setup_runner.py`) — reached by string:
   the tests pass `attr="first_step"` and `attr="second_step"` to `wiring.register_setup_step` and
   `f"{__name__}:lone_step"` to `setup_runner.main --step`, and the runner resolves the function
-  from the string, same class as the `enable_step` entry above. Vulture flags each as an unused
+  from the string, same class as the `setup_step` entry above. Vulture flags each as an unused
   function at 60% confidence.
 - `OPENS_A` and `OPENS_B` (`tests/test_turn_contributions.py`) — `_Opens` instances reached by
   string: the tests register them through `register(opens_a="OPENS_A")`, which builds

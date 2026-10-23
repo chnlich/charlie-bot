@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import pathlib
+import sys
 
 import pytest
 
@@ -84,7 +85,6 @@ def lifespan_env(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch):
   """
   import server as server_module
   from src.features.cron import scheduler as scheduler_module
-  from src.features.voice import service as voice_service
   from src.infra import config
   from src.runtime.hooks import usage_sources
 
@@ -97,7 +97,6 @@ def lifespan_env(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch):
 
   monkeypatch.setattr(server_module.config, "get_config", lambda: cfg)
   monkeypatch.setattr(server_module, "_run_task_recovery", _AsyncStub())
-  monkeypatch.setattr(voice_service, "_provision_speech_models", lambda cfg: None)
   monkeypatch.setattr(server_module.process, "log_session_cgroup_startup", lambda *a, **k: None)
   monkeypatch.setattr(server_module.process, "sweep_stale_session_cgroups", lambda *a, **k: None)
   monkeypatch.setattr(scheduler_module, "Scheduler", _StubScheduler)
@@ -127,6 +126,22 @@ async def test_server_startup_preloads_the_usage_tally_stack(lifespan_env, monke
   async with server_module.lifespan(fastapi.FastAPI()):
     await asyncio.wait_for(usage_api._warmup_task, timeout=10)
   assert calls == [1]
+
+
+@pytest.mark.asyncio
+async def test_server_startup_builds_no_speech_model_and_imports_no_local_engine(lifespan_env) -> None:
+  """Startup holds no speech model: no voice warm-up line is logged and no local engine module loads."""
+  import fastapi
+  from structlog import testing
+
+  server_module = lifespan_env
+  with testing.capture_logs() as logs:
+    async with server_module.lifespan(fastapi.FastAPI()):
+      pass
+
+  assert not [entry for entry in logs if entry["event"] == "voice_warmup_complete"]
+  assert not {"sherpa_onnx", "src.features.voice.transcriber", "src.features.voice.transcription.local"
+             } & sys.modules.keys()
 
 
 @pytest.mark.asyncio
@@ -189,7 +204,6 @@ _SHUTDOWN_TIMING_FIELDS = (
     "discord_ms",
     "host_auth_ms",
     "scheduler_ms",
-    "speech_ms",
     "http_client_ms",
     "ws_close_ms",
     "merge_pool_ms",

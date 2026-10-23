@@ -21,7 +21,7 @@ def test_config_d_fragments_are_rejected(
   home = tmp_path / "home"
   (home / "config.d").mkdir(parents=True)
   (home / "config.yaml").write_text("server:\n  host: 127.0.0.1\n", encoding="utf-8")
-  (home / "config.d" / fragment_name).write_text("voice:\n  engine: sherpa\n", encoding="utf-8")
+  (home / "config.d" / fragment_name).write_text("voice:\n  default_backend: gemini\n", encoding="utf-8")
   monkeypatch.setenv(config.CHARLIEBOT_HOME_ENV, str(home))
   with pytest.raises(ValueError) as excinfo:
     config.load_config()

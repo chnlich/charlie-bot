@@ -1,7 +1,7 @@
 """The fallback upload's devices field: logged when present, 400 when malformed.
 
-Each test drives upload_voice_recording directly with the speech bundle faked;
-the browser's devices object rides the multipart form as JSON, the
+Each test drives upload_voice_recording directly with a fake live backend
+registered in the transcription registry; the browser's devices object rides the multipart form as JSON, the
 voice_transcribed line logs its five fields, and a present-but-malformed field
 is a 400 — only an absent field (a page loaded before the devices existed)
 logs all five as None. Every string here is synthetic.
@@ -16,10 +16,12 @@ import pytest
 from structlog import testing
 
 from src.features.voice import api as voice
+from src.features.voice.transcription import base
+from src.features.voice.transcription import registry as transcription_registry
 from src.infra import config
 
 SESSION_ID = "session-a"
-BACKEND = "local"
+BACKEND = "fake-live"
 DECODED_TEXT = "synthetic decoded words"
 DEVICES = {
     "input_device": "Test Microphone",
@@ -36,22 +38,24 @@ DEVICES = {
 }
 
 
+class _FakeLiveBackend(base.TranscriptionBackend):
+  id = BACKEND
+  label = "Fake live backend"
+  live_partials = True
+
+  async def transcribe(self, audio, *, vocabulary, languages):
+    async for _chunk in audio:
+      pass
+    yield base.TranscriptEvent(kind="final", text=DECODED_TEXT)
+
+
 @pytest.fixture
 def endpoint(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch):
-  """The upload endpoint against a temporary sessions dir and a faked decode."""
+  """The upload endpoint against a temporary sessions dir and a fake live backend."""
   cfg = config.CharlieBotConfig(charliebot_home=tmp_path / "home")
   monkeypatch.setattr(voice, "config", types.SimpleNamespace(get_config=lambda: cfg))
-  monkeypatch.setattr(voice, "_speech_bundle", _fake_bundle)
-  monkeypatch.setattr(voice, "_transcribe_with_bundle", _fake_decode)
+  monkeypatch.setitem(transcription_registry._FACTORIES, BACKEND, lambda cfg, **_: _FakeLiveBackend())
   return cfg
-
-
-async def _fake_bundle() -> object:
-  return object()
-
-
-async def _fake_decode(session_id: str, bundle: object, pcm_bytes: bytes) -> str:
-  return DECODED_TEXT
 
 
 async def _post(cfg: config.CharlieBotConfig, devices: str | None) -> tuple[object, list[dict]]:
@@ -74,7 +78,7 @@ async def test_a_devices_field_is_logged_field_for_field(endpoint) -> None:
   assert transcribed[0]["communications_output_device"] == "Test Comms Headset"
   assert transcribed[0]["device_error"] is None
   # The pre-devices fields are unchanged.
-  assert transcribed[0]["backend"] == "local"
+  assert transcribed[0]["backend"] == BACKEND
   assert transcribed[0]["selected_backend"] == BACKEND
   assert transcribed[0]["transcription_preview"] == DECODED_TEXT
 

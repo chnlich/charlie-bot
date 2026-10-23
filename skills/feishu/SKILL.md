@@ -82,7 +82,7 @@ When `docs_types` contains `"doc"`, search returns an empty result. Search has p
 - Treat an empty result as inconclusive.
 - Verify an absence claim with another search surface or a known document link.
 
-After a recorded meeting, Feishu stores AI notes and the transcript in the meeting owner's space.
+After a recorded meeting, Feishu stores AI notes and the transcript in the meeting owner's space. Search can match these title prefixes: notes titled `智能纪要：<title>` or `AI notes: <title>`, and transcripts titled `文字记录：<title>` or `Meeting transcript: <title>`.
 
 - Search returns only notes the user owns or the owner shared with the user.
 - When the notes of a meeting that another person owns are not visible, ask the user for the notes link.

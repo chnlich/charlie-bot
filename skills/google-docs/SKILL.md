@@ -1,6 +1,6 @@
 ---
 name: google-docs
-description: This skill should be used when the user asks to read, create, or edit Google Docs documents, or manage document content through the Google Docs and Drive APIs.
+description: This skill should be used when the user asks to read, create, or edit Google Docs documents, or manage document content through the Google Docs and Drive APIs. This skill should also be used when the user asks to import a PPTX deck into Google Slides.
 version: 1.0.0
 ---
 

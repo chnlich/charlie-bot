@@ -291,6 +291,7 @@ impl Store {
       event_history_views: self.history_work.event_history_views.load(Ordering::Relaxed),
       node_state_full_folds: self.history_work.node_state_full_folds.load(Ordering::Relaxed),
       node_state_folded_events: self.history_work.node_state_folded_events.load(Ordering::Relaxed),
+      run_event_bytes_read: self.history_work.run_event_bytes_read.load(Ordering::Relaxed),
     }
   }
 
@@ -342,6 +343,18 @@ impl Store {
     let archived =
       if archive_offset == 0 { Vec::new() } else { self.load_archive_range(session_id, 0, archive_offset)? };
     Ok(ChatEventHistory { archived, live })
+  }
+
+  /// Read one NDJSON file's parsed events in the compact form, blank and malformed lines skipped.
+  ///
+  /// This is `src/runtime/worker_transcript.py::_read_events`'s parse for the run event logs, which
+  /// the worker transcript folds in place rather than retaining a second `Value` tree of. The parsed
+  /// byte count rides the history-work census, the count the transcript latency tests pin.
+  pub fn read_ndjson_compact(&self, path: &Path) -> StoreResult<Vec<ChatEvent>> {
+    let events = ndjson::read_file_compact(path)?;
+    let bytes = fs::metadata(path).map(|metadata| metadata.size()).unwrap_or(0);
+    self.history_work.run_event_bytes_read.fetch_add(bytes, Ordering::Relaxed);
+    Ok(events)
   }
 
   /// Read the latest live-log events without priming the event cache. It follows

@@ -793,13 +793,13 @@ fn tool_preview(tool: Value) -> Value {
 }
 
 /// Count the tool rows opened by these run events.
-pub fn run_tool_call_count(events: &[Value]) -> usize {
+pub fn run_tool_call_count<E: EventFields>(events: &[&E]) -> usize {
   events
     .iter()
-    .map(|event| match event.get("type").and_then(Value::as_str) {
-      Some(event_types::ASSISTANT) => run_assistant_tool_uses(event)
+    .map(|event| match event.field("type").and_then(EventFields::as_str_field) {
+      Some(event_types::ASSISTANT) => run_assistant_tool_uses(*event)
         .iter()
-        .filter(|block| block.get("name").and_then(Value::as_str) != Some("ExitPlanMode"))
+        .filter(|block| block.field("name").and_then(EventFields::as_str_field) != Some("ExitPlanMode"))
         .count(),
       Some(event_types::TOOL_USE) => 1,
       _ => 0,
@@ -808,17 +808,22 @@ pub fn run_tool_call_count(events: &[Value]) -> usize {
 }
 
 /// Return the newest tool row opened by these run events, with its preview and source timestamp.
-pub fn run_last_tool(events: &[Value]) -> Option<Value> {
+pub fn run_last_tool<E: EventFields>(events: &[&E]) -> Option<Value> {
   for event in events.iter().rev() {
-    let call = match event.get("type").and_then(Value::as_str) {
-      Some(event_types::ASSISTANT) => run_assistant_tool_uses(event)
+    let call = match event.field("type").and_then(EventFields::as_str_field) {
+      Some(event_types::ASSISTANT) => run_assistant_tool_uses(*event)
         .into_iter()
         .rev()
-        .find(|block| block.get("name").and_then(Value::as_str) != Some("ExitPlanMode"))
-        .map(|block| json!({"name": block.get("name").and_then(Value::as_str).unwrap_or(""), "input": block.get("input").cloned().unwrap_or(Value::Null)})),
+        .find(|block| block.field("name").and_then(EventFields::as_str_field) != Some("ExitPlanMode"))
+        .map(|block| {
+          json!({
+            "name": block.field("name").and_then(EventFields::as_str_field).unwrap_or(""),
+            "input": block.field("input").map(EventFields::to_owned_value).unwrap_or(Value::Null),
+          })
+        }),
       Some(event_types::TOOL_USE) => Some(json!({
-        "name": event.get("name").and_then(Value::as_str).unwrap_or(""),
-        "input": event.get("input").cloned().unwrap_or(Value::Null),
+        "name": event.field("name").and_then(EventFields::as_str_field).unwrap_or(""),
+        "input": event.field("input").map(EventFields::to_owned_value).unwrap_or(Value::Null),
       })),
       _ => None,
     };
@@ -827,7 +832,7 @@ pub fn run_last_tool(events: &[Value]) -> Option<Value> {
       return Some(json!({
         "name": tool.get("name").cloned().unwrap_or_else(|| json!("")),
         "input": tool.get("input").cloned().unwrap_or(Value::Null),
-        "timestamp": event.get("timestamp").cloned().unwrap_or(Value::Null),
+        "timestamp": event.field("timestamp").map(EventFields::to_owned_value).unwrap_or(Value::Null),
       }));
     }
   }
@@ -835,18 +840,22 @@ pub fn run_last_tool(events: &[Value]) -> Option<Value> {
 }
 
 /// Return the newest non-empty assistant text and its source timestamp.
-pub fn run_last_assistant_text(events: &[Value]) -> StoreResult<Option<Value>> {
+pub fn run_last_assistant_text<E: EventFields>(events: &[&E]) -> StoreResult<Option<Value>> {
   for event in events.iter().rev() {
-    if event.get("type").and_then(Value::as_str) != Some(event_types::ASSISTANT) {
+    if event.field("type").and_then(EventFields::as_str_field) != Some(event_types::ASSISTANT) {
       continue;
     }
-    let Some(blocks) = event.pointer("/message/content").and_then(Value::as_array) else { continue };
-    let block_refs: Vec<&Value> = blocks.iter().collect();
+    let Some(blocks) =
+      event.field("message").and_then(|message| message.field("content")).and_then(EventFields::array_items)
+    else {
+      continue;
+    };
+    let block_refs: Vec<&E> = blocks.iter().collect();
     let text = extract_message_field(&block_refs, "text")?.trim().to_string();
     if !text.is_empty() {
       return Ok(Some(json!({
         "text": text,
-        "timestamp": event.get("timestamp").cloned().unwrap_or(Value::Null),
+        "timestamp": event.field("timestamp").map(EventFields::to_owned_value).unwrap_or(Value::Null),
       })));
     }
   }
@@ -854,19 +863,21 @@ pub fn run_last_assistant_text(events: &[Value]) -> StoreResult<Option<Value>> {
 }
 
 /// Return the newest non-empty result or assistant text and its source timestamp.
-pub fn run_last_text(events: &[Value]) -> StoreResult<Option<Value>> {
+pub fn run_last_text<E: EventFields>(events: &[&E]) -> StoreResult<Option<Value>> {
   for event in events.iter().rev() {
-    match event.get("type").and_then(Value::as_str) {
+    match event.field("type").and_then(EventFields::as_str_field) {
       Some(event_types::RESULT) => {
-        if let Some(text) = event.get("result").and_then(Value::as_str).map(str::trim).filter(|text| !text.is_empty()) {
+        if let Some(text) =
+          event.field("result").and_then(EventFields::as_str_field).map(str::trim).filter(|text| !text.is_empty())
+        {
           return Ok(Some(json!({
             "text": text,
-            "timestamp": event.get("timestamp").cloned().unwrap_or(Value::Null),
+            "timestamp": event.field("timestamp").map(EventFields::to_owned_value).unwrap_or(Value::Null),
           })));
         }
       }
       Some(event_types::ASSISTANT) => {
-        if let Some(text) = run_last_assistant_text(std::slice::from_ref(event))? {
+        if let Some(text) = run_last_assistant_text::<E>(&[*event])? {
           return Ok(Some(text));
         }
       }
@@ -877,15 +888,21 @@ pub fn run_last_text(events: &[Value]) -> StoreResult<Option<Value>> {
 }
 
 /// Return the selected error text, its first line, its event position and timestamp.
-pub fn run_cause(events: &[Value]) -> Option<(String, String, usize, String)> {
+pub fn run_cause<E: EventFields>(events: &[&E]) -> Option<(String, String, usize, String)> {
   for key in ["message", "content"] {
     for (index, event) in events.iter().enumerate().rev() {
-      if event.get("type").and_then(Value::as_str) != Some(event_types::ERROR) {
+      if event.field("type").and_then(EventFields::as_str_field) != Some(event_types::ERROR) {
         continue;
       }
-      if let Some(text) = event.get(key).and_then(Value::as_str).map(str::trim).filter(|text| !text.is_empty()) {
+      if let Some(text) =
+        event.field(key).and_then(EventFields::as_str_field).map(str::trim).filter(|text| !text.is_empty())
+      {
         let first_line = text.split('\n').next().unwrap_or_default().to_string();
-        let timestamp = event.get("timestamp").filter(|value| is_truthy(*value)).map(python_string).unwrap_or_default();
+        let timestamp = event
+          .field("timestamp")
+          .filter(|value| is_truthy(*value))
+          .map(|value| python_string(&value.to_owned_value()))
+          .unwrap_or_default();
         return Some((text.to_string(), first_line, index, timestamp));
       }
     }
@@ -893,13 +910,14 @@ pub fn run_cause(events: &[Value]) -> Option<(String, String, usize, String)> {
   None
 }
 
-fn run_assistant_tool_uses(event: &Value) -> Vec<&Value> {
+fn run_assistant_tool_uses<E: EventFields>(event: &E) -> Vec<&E> {
   event
-    .pointer("/message/content")
-    .and_then(Value::as_array)
+    .field("message")
+    .and_then(|message| message.field("content"))
+    .and_then(EventFields::array_items)
     .into_iter()
     .flatten()
-    .filter(|block| block.get("type").and_then(Value::as_str) == Some("tool_use"))
+    .filter(|block| block.field("type").and_then(EventFields::as_str_field) == Some("tool_use"))
     .collect()
 }
 
@@ -1535,34 +1553,34 @@ mod tests {
     let rendered_tool_rows =
       messages.iter().map(|message| message.get("tools").and_then(Value::as_array).map_or(0, Vec::len)).sum::<usize>();
 
-    assert_eq!(run_tool_call_count(&events), rendered_tool_rows);
+    assert_eq!(run_tool_call_count(&events.iter().collect::<Vec<_>>()), rendered_tool_rows);
     assert_eq!(rendered_tool_rows, 3);
     assert_eq!(
-      run_last_tool(&events),
+      run_last_tool(&events.iter().collect::<Vec<_>>()),
       Some(json!({"name": "ExitPlanMode", "input": {"plan": "standalone event"}, "timestamp": "standalone-plan-time"}))
     );
-    let last_bash = run_last_tool(&events[..1]).unwrap();
+    let last_bash = run_last_tool(&events[..1].iter().collect::<Vec<_>>()).unwrap();
     assert_eq!(last_bash["name"], "Bash");
     assert_eq!(last_bash["input"]["command"].as_str().unwrap().chars().count(), TOOL_PREVIEW_CHARS);
   }
 
   #[test]
   fn run_cause_uses_message_before_content_and_falls_back_to_newest_text() {
-    let events = vec![
+    let events = [
       json!({"type": "error", "content": "usable older stderr", "timestamp": "older"}),
       json!({"type": "error", "content": "  ", "timestamp": "empty"}),
       json!({"type": "error", "timestamp": "newest-empty"}),
     ];
     assert_eq!(
-      run_cause(&events),
+      run_cause(&events.iter().collect::<Vec<_>>()),
       Some(("usable older stderr".to_string(), "usable older stderr".to_string(), 0, "older".to_string()))
     );
 
-    let events = vec![
+    let events = [
       json!({"type": "error", "message": "older message", "timestamp": "older"}),
       json!({"type": "error", "message": "newest message", "content": "newer content", "timestamp": "newest"}),
     ];
-    assert_eq!(run_cause(&events).unwrap().0, "newest message");
+    assert_eq!(run_cause(&events.iter().collect::<Vec<_>>()).unwrap().0, "newest message");
   }
 
   #[test]

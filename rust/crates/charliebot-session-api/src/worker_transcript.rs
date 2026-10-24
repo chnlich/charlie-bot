@@ -9,6 +9,7 @@ use std::sync::{Arc, LazyLock, Mutex};
 use charliebot_core::event_types;
 use charliebot_core::pyfmt;
 use charliebot_store::ChatEvent;
+use charliebot_store::CompactValue;
 use charliebot_store::aggregator;
 use charliebot_store::control_events;
 use charliebot_store::metadata::UtcDateTime;
@@ -30,7 +31,7 @@ static WORKER_MEMO: LazyLock<TranscriptMemo> = LazyLock::new(|| Mutex::new(VecDe
 pub struct TranscriptEntry {
   pub revision: String,
   rebuild_key: String,
-  pub events: Arc<Vec<Value>>,
+  pub events: Arc<Vec<SharedChatEvent>>,
   pub projection: Arc<MessageProjection>,
   pub summary: Value,
   pub active_run_id: Option<String>,
@@ -73,31 +74,37 @@ fn build_worker_transcript(store: &Store, session_id: &str, signature: Signature
   }
 
   let cfg = store.config();
-  let mut transcript = Vec::new();
+  // The transcript events stay in the compact form from parse to projection fold: Python's builder
+  // (src/runtime/worker_transcript.py) shares its parsed dicts between the summary, the map, and the
+  // projection input, and the compact form is the one tree the fold and the summary read in place.
+  let mut transcript: Vec<SharedChatEvent> = Vec::new();
   let mut run_events_map = HashMap::new();
   let mut run_tools = HashMap::new();
   let mut run_causes = HashMap::new();
   for run in &run_records {
     let state = states.get(&run.id).expect("every listed run has a display state");
     let run_dir = store.run_dir(session_id, &run.id);
-    let mut run_events = read_run_events(&run_dir.join("events.jsonl"));
+    let mut run_events: Vec<ChatEvent> = read_run_events(store, &run_dir.join("events.jsonl"));
     let mut error = String::new();
     if FAILED_STATES.contains(&state.as_str())
-      && let Some((text, first_line, index, timestamp)) = aggregator::run_cause(&run_events)
+      && let Some((text, first_line, index, timestamp)) =
+        aggregator::run_cause(&run_events.iter().collect::<Vec<&ChatEvent>>())
     {
       error = text;
       run_causes.insert(run.id.clone(), (first_line, timestamp));
       run_events.remove(index);
     }
-    let tool_calls = aggregator::run_tool_call_count(&run_events);
+    let tool_calls = aggregator::run_tool_call_count(&run_events.iter().collect::<Vec<&ChatEvent>>());
     run_tools.insert(run.id.clone(), tool_calls);
-    run_events_map.insert(run.id.clone(), run_events.clone());
+    // One shared tree per event: the map, the summary, and the transcript read the same parse.
+    let shared: Vec<SharedChatEvent> = run_events.into_iter().map(Arc::new).collect();
+    run_events_map.insert(run.id.clone(), shared.clone());
     let launch_prompt_path = run_dir.join("launch_prompt.md");
     let launch_prompt_ref =
       if launch_prompt_path.is_file() { launch_prompt_path.to_string_lossy().into_owned() } else { String::new() };
     let backend = run.backend.as_deref().unwrap_or("");
     let backend_label = cfg.get_backend_option(backend).map_or(backend, |option| option.label.as_str());
-    transcript.push(run_header_event(
+    transcript.push(Arc::new(ChatEvent::from_value(&run_header_event(
       run,
       state,
       &error,
@@ -105,21 +112,27 @@ fn build_worker_transcript(store: &Store, session_id: &str, signature: Signature
       &launch_prompt_ref,
       if state == "withheld" { withheld_reason(facts_events.as_slice(), &run.id) } else { None },
       (!SIGNALLABLE_STATES.contains(&state.as_str())).then_some(tool_calls),
-    ));
-    for mut event in run_events {
-      if event.get("type").and_then(Value::as_str) == Some(event_types::ERROR) {
-        event["type"] = json!(event_types::RUN_ERROR);
-      }
+    ))));
+    for event in shared {
+      // The rewrite replaces the transcript's copy only: the summary map keeps the raw event, as
+      // Python's `{**event, "type": ET.RUN_ERROR}` does.
+      let event = if event.get("type").and_then(CompactValue::as_str) == Some(event_types::ERROR) {
+        let mut value = event.as_ref().to_value();
+        value["type"] = json!(event_types::RUN_ERROR);
+        Arc::new(ChatEvent::from_value(&value))
+      } else {
+        event
+      };
       transcript.push(event);
     }
     if !SIGNALLABLE_STATES.contains(&state.as_str()) {
-      transcript.push(run_end_event(run));
+      transcript.push(Arc::new(ChatEvent::from_value(&run_end_event(run))));
     }
   }
 
   let task_state = store.task_state(session_id)?;
   if let Some(delivery) = delivery_event(&task_state, facts_events.as_slice(), &run_records)? {
-    transcript.push(delivery);
+    transcript.push(Arc::new(ChatEvent::from_value(&delivery)));
   }
   let active_run_id = run_records.iter().rev().find_map(|run| {
     states.get(&run.id).filter(|state| SIGNALLABLE_STATES.contains(&state.as_str())).map(|_| run.id.clone())
@@ -139,9 +152,7 @@ fn build_worker_transcript(store: &Store, session_id: &str, signature: Signature
       run_causes: &run_causes,
     },
   )?;
-  // The synthesized transcript is the projection's input; the projection reads the compact form.
-  let compact: Vec<SharedChatEvent> = transcript.iter().map(|event| Arc::new(ChatEvent::from_value(event))).collect();
-  let projection = store.build_message_projection(&compact, 0)?;
+  let projection = store.build_message_projection(&transcript, 0)?;
   Ok(TranscriptEntry {
     revision: client_revision,
     rebuild_key: revision,
@@ -151,6 +162,11 @@ fn build_worker_transcript(store: &Store, session_id: &str, signature: Signature
     active_run_id,
     states,
   })
+}
+
+/// One run's shared events borrowed as the fold input the aggregator helpers read.
+fn run_event_refs<'a>(run_events: &'a HashMap<String, Vec<SharedChatEvent>>, run_id: &str) -> Vec<&'a ChatEvent> {
+  run_events.get(run_id).map(|events| events.iter().map(Arc::as_ref).collect()).unwrap_or_default()
 }
 
 fn worker_signature(store: &Store, session_id: &str) -> StoreResult<Signature> {
@@ -189,28 +205,21 @@ fn stat_signature(path: &Path) -> StoreResult<Value> {
   }
 }
 
-fn read_run_events(path: &Path) -> Vec<Value> {
-  let raw = match fs::read(path) {
-    Ok(raw) => raw,
-    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+/// One run's events.jsonl parsed into the compact form; a missing or unreadable log is an empty segment.
+fn read_run_events(store: &Store, path: &Path) -> Vec<ChatEvent> {
+  match store_read(store, path) {
+    Ok(events) => events,
     Err(error) => {
       tracing::warn!(path = %path.display(), error = %error, "worker transcript run log could not be read");
-      return Vec::new();
+      Vec::new()
     }
-  };
-  if raw.is_empty() {
-    return Vec::new();
   }
-  raw
-    .split(|byte| *byte == b'\n')
-    .filter(|line| !line.iter().all(u8::is_ascii_whitespace))
-    .filter_map(|line| {
-      serde_json::from_slice::<Value>(line)
-        .or_else(|_| serde_json::from_slice::<Value>(String::from_utf8_lossy(line).as_bytes()))
-        .ok()
-    })
-    .filter(|event| event.get("type").and_then(Value::as_str) != Some(event_types::SESSION_ATTACHED))
-    .collect()
+}
+
+fn store_read(store: &Store, path: &Path) -> StoreResult<Vec<ChatEvent>> {
+  let mut events = store.read_ndjson_compact(path)?;
+  events.retain(|event| event.get("type").and_then(CompactValue::as_str) != Some(event_types::SESSION_ATTACHED));
+  Ok(events)
 }
 
 fn run_header_event(
@@ -339,7 +348,7 @@ struct SummaryInputs<'a> {
   facts_events: &'a [SharedChatEvent],
   run_records: &'a [RunRecord],
   states: &'a BTreeMap<String, String>,
-  run_events: &'a HashMap<String, Vec<Value>>,
+  run_events: &'a HashMap<String, Vec<SharedChatEvent>>,
   run_tools: &'a HashMap<String, usize>,
   run_causes: &'a HashMap<String, (String, String)>,
 }
@@ -391,13 +400,13 @@ fn build_summary(store: &Store, session_id: &str, inputs: SummaryInputs<'_>) -> 
   let newest = run_records.last();
   let active = match newest.filter(|run| states.get(&run.id).is_some_and(|state| state == "running")) {
     Some(run) => {
-      let events = run_events.get(&run.id).map(Vec::as_slice).unwrap_or_default();
+      let events = run_event_refs(run_events, &run.id);
       json!({
         "run_id": run.id,
         "started_at": run.started_at.map(UtcDateTime::to_python_isoformat),
         "tool_calls": run_tools.get(&run.id).copied().unwrap_or(0),
-        "last_text": aggregator::run_last_assistant_text(events)?,
-        "last_tool": aggregator::run_last_tool(events),
+        "last_text": aggregator::run_last_assistant_text(&events)?,
+        "last_tool": aggregator::run_last_tool(&events),
       })
     }
     None => Value::Null,
@@ -405,8 +414,9 @@ fn build_summary(store: &Store, session_id: &str, inputs: SummaryInputs<'_>) -> 
 
   let closing_for = |kind: RunKind| -> StoreResult<Value> {
     let Some(run) = run_records.iter().rev().find(|run| run.kind == kind) else { return Ok(Value::Null) };
-    let events = run_events.get(&run.id).map(Vec::as_slice).unwrap_or_default();
-    let text = aggregator::run_last_text(events)?.and_then(|value| value.get("text").cloned()).unwrap_or(Value::Null);
+    let text = aggregator::run_last_text(&run_event_refs(run_events, &run.id))?
+      .and_then(|value| value.get("text").cloned())
+      .unwrap_or(Value::Null);
     Ok(json!({"run_id": run.id, "text": text}))
   };
   let closing = json!({"work": closing_for(RunKind::Work)?, "review": closing_for(RunKind::Review)?});
@@ -723,8 +733,8 @@ mod tests {
     assert_eq!(ends[0]["thinking_seconds"], 10);
     assert_eq!(ends[1]["thinking_seconds"], 2);
     let run_end_events = entry.events.iter().filter(|event| event["type"] == event_types::RUN_END).collect::<Vec<_>>();
-    assert_eq!(run_end_events[0]["timestamp"], summary["runs"][0]["ended_at"]);
-    assert_eq!(run_end_events[0]["duration_seconds"], 10);
+    assert_eq!(run_end_events[0]["timestamp"].to_value(), summary["runs"][0]["ended_at"]);
+    assert_eq!(run_end_events[0]["duration_seconds"].to_value(), 10);
 
     let bootstrap = crate::detail::build_bootstrap_payload(
       store,
@@ -734,6 +744,46 @@ mod tests {
     )
     .unwrap();
     assert_eq!(bootstrap["worker_summary"], summary.clone());
+  }
+
+  /// The rebuild parses each run log once for its whole byte count: the counter moves by the log
+  /// sizes on the first build, by nothing on an unchanged memo hit, and by the grown log only after
+  /// an append moves that log's signature.
+  #[tokio::test]
+  async fn a_transcript_rebuild_parses_each_run_log_once_for_its_bytes() {
+    let (_home, features, session_id) = worker_context(&format!("run-bytes-{}", uuid::Uuid::new_v4())).await;
+    let store = features.store.as_ref();
+    let started_at = UtcDateTime::parse("2026-10-17T09:00:00Z").unwrap();
+    register_run(store, run_record("run-bytes-a", &session_id, RunKind::Work, Some(started_at))).await;
+    register_run(store, run_record("run-bytes-b", &session_id, RunKind::Work, Some(started_at))).await;
+    write_run_events(store, &session_id, "run-bytes-a", &[json!({"type": "result", "result": "first"})]);
+    write_run_events(store, &session_id, "run-bytes-b", &[json!({"type": "result", "result": "second"})]);
+    let log_a = store.run_dir(&session_id, "run-bytes-a").join("events.jsonl");
+    let log_b = store.run_dir(&session_id, "run-bytes-b").join("events.jsonl");
+    let both = fs::metadata(&log_a).unwrap().len() + fs::metadata(&log_b).unwrap().len();
+
+    let before = store.history_work().run_event_bytes_read;
+    load_worker_transcript(store, &session_id).unwrap();
+    assert_eq!(store.history_work().run_event_bytes_read - before, both, "the first build parses both logs");
+
+    let before = store.history_work().run_event_bytes_read;
+    load_worker_transcript(store, &session_id).unwrap();
+    assert_eq!(store.history_work().run_event_bytes_read - before, 0, "an unchanged memo hit parses nothing");
+
+    use std::io::Write as _;
+    let mut log = fs::OpenOptions::new().append(true).open(&log_b).unwrap();
+    log.write_all(b"{\"type\":\"result\",\"result\":\"appended\"}\n").unwrap();
+    log.flush().unwrap();
+    let grown = fs::metadata(&log_b).unwrap().len();
+
+    let before = store.history_work().run_event_bytes_read;
+    load_worker_transcript(store, &session_id).unwrap();
+    let size_a = fs::metadata(&log_a).unwrap().len();
+    assert_eq!(
+      store.history_work().run_event_bytes_read - before,
+      size_a + grown,
+      "the rebuild parses every run log once, never twice"
+    );
   }
 
   #[tokio::test]

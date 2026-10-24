@@ -151,6 +151,8 @@ pub struct HistoryWork {
   pub node_state_full_folds: u64,
   /// Events visited by node-state folds and suffix extensions.
   pub node_state_folded_events: u64,
+  /// Run event-log bytes parsed for the worker transcript rebuilds.
+  pub run_event_bytes_read: u64,
 }
 
 #[derive(Default)]
@@ -162,6 +164,7 @@ pub(crate) struct HistoryWorkCounters {
   pub(crate) event_history_views: AtomicU64,
   pub(crate) node_state_full_folds: AtomicU64,
   pub(crate) node_state_folded_events: AtomicU64,
+  pub(crate) run_event_bytes_read: AtomicU64,
 }
 
 /// Session metadata and event-log persistence for one configured CharlieBot home.

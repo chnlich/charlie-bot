@@ -80,5 +80,5 @@ async def test_failure_report_dispatches_a_task_tree_parents_pending_inputs(
   assert dispatch.await_count == 1
   assert dispatch.await_args.args == (manager.id,)
   assert trigger.await_count == 0
-  reports = [e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]
+  reports = conftest.child_reports(tree, manager.id)
   assert len(reports) == 1 and reports[0]["outcome"] == "failed"

@@ -125,7 +125,7 @@ async def test_input_admitted_during_a_review_pauses_the_merge_and_continues_the
   # blocked report reached the parent yet, and the child stays open.
   await test_task_execution.wait_for_terminal_run(tree, child.id, review_run.id, timeout=10.0)
   assert tree.task_state(child.id) == "open"
-  reports = [e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]
+  reports = conftest.child_reports(tree, manager.id)
   assert not reports, f"the paused review reported before its continuation: {reports}"
 
   # The stranded input's next permitted serialized dispatch is the review's
@@ -150,7 +150,7 @@ async def test_input_admitted_during_a_review_pauses_the_merge_and_continues_the
   assert tweak_outcome == "success"
   deadline = asyncio.get_event_loop().time() + 15
   while asyncio.get_event_loop().time() < deadline:
-    reports = [e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]
+    reports = conftest.child_reports(tree, manager.id)
     if any("review" in str(e.get("summary", "")).lower() for e in reports) and tree.task_state(child.id) == "archived":
       break
     await asyncio.sleep(0.1)

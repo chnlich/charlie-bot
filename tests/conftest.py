@@ -1105,7 +1105,7 @@ def build_task_tree(cfg: Any, blocks: SessionBlocks) -> task_sessions.TaskTreeMa
 
 
 def child_reports(tree: task_sessions.TaskTreeManager, session_id: str) -> list[dict]:
-  """Every child report on the node, in delivery order."""
+  """Every child report on the node, in delivery order, archived segments included."""
   return [e for e in tree.fact_history(session_id) if e.get("type") == ET.CHILD_REPORT]
 
 

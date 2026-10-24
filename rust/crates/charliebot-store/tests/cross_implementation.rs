@@ -16,7 +16,7 @@ use charliebot_registry::context::{FeatureContext, StartupState};
 use charliebot_registry::sequence::SequenceCompletion;
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskSpec, TaskType, ThreadMetadata, UtcDateTime};
 use charliebot_store::run_records::terminal_outcome;
-use charliebot_store::session_fork::CloseReportRedelivery;
+use charliebot_store::session_fork::{CloseReportRedelivery, ReplacedSourceArchive};
 use charliebot_store::{
   AccountLabelKeeper, AnchorFieldReconciler, ControlGuard, CreateTask, EmptyRuntimeEventHooks, RetryRunFields,
   RunBlocker, RunKind, RunOrder, RunOutcome, RunOutcomeKind, RunPage, RunRecord, SequenceArchiveHook,
@@ -754,6 +754,43 @@ impl CloseReportRedelivery for NoRedelivery {
   }
 }
 
+impl ReplacedSourceArchive for NoRedelivery {
+  fn archive_replaced_source_locked<'a>(
+    &'a self,
+    store: &'a Store,
+    guard: &'a ControlGuard,
+    source_id: &'a str,
+    successor_id: &'a str,
+  ) -> StoreHookFuture<'a, ()> {
+    Box::pin(async move {
+      if store.task_state(source_id)? != "open" {
+        return Ok(());
+      }
+      let request_id = format!("elone-{}", uuid::Uuid::new_v4());
+      let event_id = charliebot_store::control_events::stable_close_event_id(source_id, &request_id);
+      let summary = format!("archived by elone successor {successor_id}");
+      let event = charliebot_store::control_events::build_control_event(
+        charliebot_core::event_types::TASK_CLOSED,
+        charliebot_store::control_events::ACTOR_USER,
+        source_id,
+        Some(&event_id),
+        None,
+        [
+          ("request_id".to_string(), json!(request_id)),
+          ("outcome".to_string(), json!("archived")),
+          ("summary".to_string(), json!(summary)),
+          ("result_refs".to_string(), json!([])),
+          ("run_ids".to_string(), json!([])),
+          ("report_to".to_string(), Value::Null),
+        ],
+      );
+      store.append_control_fact(guard, source_id, event).await?;
+      store.invalidate_tree_index();
+      Ok(())
+    })
+  }
+}
+
 /// The session directory names under a home.
 fn session_names(home: &Path) -> BTreeSet<String> {
   fs::read_dir(home.join("sessions"))
@@ -801,7 +838,7 @@ async fn python_and_rust_fork_and_elone_write_the_same_session_files_at_every_in
       store.fork_session(FORK_ROOT_ID, event_index, Some("synthetic")).await.map(|_| ())
     } else {
       let index = event_index.expect("an elone case names an index");
-      store.elone_session(FORK_ROOT_ID, index, Some("synthetic"), &NoRedelivery).await.map(|_| ())
+      store.elone_session(FORK_ROOT_ID, index, Some("synthetic"), &NoRedelivery, &NoRedelivery).await.map(|_| ())
     };
     let rust_refused = match rust {
       Ok(()) => false,

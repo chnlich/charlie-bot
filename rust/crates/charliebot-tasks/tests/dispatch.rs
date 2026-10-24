@@ -11,6 +11,7 @@ use charliebot_registry::context::{FeatureContext, StartupState};
 use charliebot_store::metadata::{ColdReadSpec, SessionMetadata, TaskProfile, TaskSpec, TaskType};
 use charliebot_store::run_records::{self, RunKind, RunOutcome, RunOutcomeKind, RunRecord, SequenceRef};
 use charliebot_store::{ChatEvent, CreateTask, StoreError, StoreResult, TaskCaller};
+use charliebot_tasks::completion::TaskCompletion;
 use charliebot_tasks::dispatch::{
   DispatchExecutor, child_report_text, dispatcher, inputs_not_pending_conflict, note_run_liveness,
   unprocessed_input_blocker,
@@ -375,7 +376,8 @@ async fn elone_redelivers_a_subtree_close_report_before_the_source_closes() {
   harness.close_task(&child.id, "close-child", Some(&source.id)).await;
   assert_eq!(harness.dispatcher.undelivered_report_blockers(&child.id).unwrap().len(), 1);
 
-  harness.store.elone_session(&source.id, 0, None, &*harness.dispatcher).await.unwrap();
+  let completion = TaskCompletion::new(Arc::clone(&harness.features));
+  harness.store.elone_session(&source.id, 0, None, &*harness.dispatcher, &completion).await.unwrap();
 
   let facts = harness.store.load_all_facts(&source.id).unwrap();
   let reports: Vec<usize> =

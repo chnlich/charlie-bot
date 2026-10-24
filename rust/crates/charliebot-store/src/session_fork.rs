@@ -15,7 +15,6 @@ use uuid::Uuid;
 use crate::control_events::{self, ACTOR_USER};
 use crate::metadata::{EventRef, SessionMetadata, SessionStatus, TaskProfile, UtcDateTime};
 use crate::sidebar_state;
-use crate::task_tree::archived_close_event;
 use crate::{ControlGuard, SESSION_NOT_FOUND_DETAIL, Store, StoreError, StoreHookFuture, StoreResult, ndjson};
 
 /// The opener of a clone's bootstrap prompt (`session_fork.FORK_BOOTSTRAP_OPENER`).
@@ -40,6 +39,18 @@ pub trait CloseReportRedelivery: Send + Sync {
     &'a self,
     guard: &'a ControlGuard,
     session_id: &'a str,
+  ) -> StoreHookFuture<'a, ()>;
+}
+
+/// The completion owner's archive write for a replaced elone source.
+pub trait ReplacedSourceArchive: Send + Sync {
+  /// Archive `source_id` after the elone successor is published and its children are moved.
+  fn archive_replaced_source_locked<'a>(
+    &'a self,
+    store: &'a Store,
+    guard: &'a ControlGuard,
+    source_id: &'a str,
+    successor_id: &'a str,
   ) -> StoreHookFuture<'a, ()>;
 }
 
@@ -68,12 +79,13 @@ impl Store {
     event_index: i64,
     backend: Option<&str>,
     redelivery: &dyn CloseReportRedelivery,
+    source_archive: &dyn ReplacedSourceArchive,
   ) -> StoreResult<SessionMetadata> {
     let fresh_parent = self.read_metadata_fresh(parent_id)?.ok_or_else(session_not_found)?;
     if fresh_parent.profile != TaskProfile::Manager {
       return self.elone_ordinary_session(parent_id, event_index, backend).await;
     }
-    let meta = self.run_elone_replacement(&fresh_parent, event_index, backend, redelivery).await?;
+    let meta = self.run_elone_replacement(&fresh_parent, event_index, backend, redelivery, source_archive).await?;
     log_spawn("session_eloned", &meta, parent_id, Some(event_index));
     Ok(meta)
   }
@@ -100,10 +112,12 @@ impl Store {
     event_index: i64,
     backend: Option<&str>,
     redelivery: &dyn CloseReportRedelivery,
+    source_archive: &dyn ReplacedSourceArchive,
   ) -> StoreResult<SessionMetadata> {
     let guard = self.control_lock().await;
     let mut completed = Vec::new();
-    let result = self.replace_source(&guard, source, event_index, backend, redelivery, &mut completed).await;
+    let result =
+      self.replace_source(&guard, source, event_index, backend, redelivery, source_archive, &mut completed).await;
     if let Err(error) = &result {
       tracing::warn!(
         source_id = %source.id,
@@ -122,6 +136,7 @@ impl Store {
     event_index: i64,
     backend: Option<&str>,
     redelivery: &dyn CloseReportRedelivery,
+    source_archive: &dyn ReplacedSourceArchive,
     completed: &mut Vec<&'static str>,
   ) -> StoreResult<SessionMetadata> {
     let blockers = self.elone_blockers(source)?;
@@ -135,7 +150,7 @@ impl Store {
     completed.push("published the new node");
     self.move_source_children(&source.id, &new_meta.id).await?;
     completed.push("moved the source's child tasks");
-    self.close_source_archived(guard, &source.id, &new_meta.id).await?;
+    source_archive.archive_replaced_source_locked(self, guard, &source.id, &new_meta.id).await?;
     completed.push("closed the source");
     self.archive_source(&source.id, &new_meta.id).await?;
     completed.push("archived the source with its successor pointer");
@@ -185,19 +200,6 @@ impl Store {
         .await?
         .ok_or_else(|| StoreError::not_found(format!("task {child_id} not found")))?;
     }
-    self.invalidate_tree_index();
-    Ok(())
-  }
-
-  /// `TaskTreeManager._close_source_archived`: close an open source with the archive format, which reports to nobody.
-  async fn close_source_archived(&self, guard: &ControlGuard, source_id: &str, new_id: &str) -> StoreResult<()> {
-    if self.task_state(source_id)? != "open" {
-      return Ok(());
-    }
-    let request_id = format!("elone-{}", Uuid::new_v4());
-    let summary = format!("archived by elone successor {new_id}");
-    let event = archived_close_event(source_id, &request_id, ACTOR_USER, &summary, &[], None);
-    self.append_control_fact(guard, source_id, event).await?;
     self.invalidate_tree_index();
     Ok(())
   }
@@ -431,6 +433,28 @@ mod tests {
     }
   }
 
+  impl ReplacedSourceArchive for NoRedelivery {
+    fn archive_replaced_source_locked<'a>(
+      &'a self,
+      store: &'a Store,
+      guard: &'a ControlGuard,
+      source_id: &'a str,
+      successor_id: &'a str,
+    ) -> StoreHookFuture<'a, ()> {
+      Box::pin(async move {
+        if store.task_state(source_id)? != "open" {
+          return Ok(());
+        }
+        let request_id = format!("elone-{}", Uuid::new_v4());
+        let summary = format!("archived by elone successor {successor_id}");
+        let event = crate::task_tree::archived_close_event(source_id, &request_id, ACTOR_USER, &summary, &[], None);
+        store.append_control_fact(guard, source_id, event).await?;
+        store.invalidate_tree_index();
+        Ok(())
+      })
+    }
+  }
+
   async fn create_with_goal(
     store: &Store,
     request_id: &str,
@@ -594,7 +618,7 @@ mod tests {
     let store = make_store(home.path());
     let parent = create_node(&store, "parent", None, TaskProfile::Manager).await;
 
-    let child = store.elone_session(&parent.id, 0, None, &NoRedelivery).await.unwrap();
+    let child = store.elone_session(&parent.id, 0, None, &NoRedelivery, &NoRedelivery).await.unwrap();
 
     let fresh_parent = store.read_metadata_fresh(&parent.id).unwrap().unwrap();
     assert_eq!(fresh_parent.successor_session_id.as_deref(), Some(child.id.as_str()));
@@ -607,9 +631,9 @@ mod tests {
     let store = make_store(home.path());
     let gen0 = create_node(&store, "G0", None, TaskProfile::Manager).await;
 
-    let gen1 = store.elone_session(&gen0.id, 0, None, &NoRedelivery).await.unwrap();
-    let gen2 = store.elone_session(&gen1.id, 0, None, &NoRedelivery).await.unwrap();
-    let gen3 = store.elone_session(&gen2.id, 0, None, &NoRedelivery).await.unwrap();
+    let gen1 = store.elone_session(&gen0.id, 0, None, &NoRedelivery, &NoRedelivery).await.unwrap();
+    let gen2 = store.elone_session(&gen1.id, 0, None, &NoRedelivery, &NoRedelivery).await.unwrap();
+    let gen3 = store.elone_session(&gen2.id, 0, None, &NoRedelivery, &NoRedelivery).await.unwrap();
 
     let resolved = store.resolve_successor_chain(&gen0.id).unwrap();
     assert_eq!(resolved.last().unwrap().id, gen3.id);
@@ -676,7 +700,7 @@ mod tests {
       store.register_run_locked(&guard, &running.id, queued_run(&running.id, "run-queued"), None).await.unwrap();
     }
 
-    let new = store.elone_session(&source.id, 0, None, &NoRedelivery).await.unwrap();
+    let new = store.elone_session(&source.id, 0, None, &NoRedelivery, &NoRedelivery).await.unwrap();
 
     assert_eq!(
       store.get_session(&still_child.id).await.unwrap().unwrap().task_parent_id.as_deref(),
@@ -711,7 +735,7 @@ mod tests {
     // The cut at index 0 copies only the creation fact, and this child is created after that point.
     let late_child = create_node(&store, "late-child", Some(&source.id), TaskProfile::Manager).await;
 
-    let new = store.elone_session(&source.id, 0, None, &NoRedelivery).await.unwrap();
+    let new = store.elone_session(&source.id, 0, None, &NoRedelivery, &NoRedelivery).await.unwrap();
 
     assert_eq!(
       store.get_session(&late_child.id).await.unwrap().unwrap().task_parent_id.as_deref(),
@@ -742,7 +766,7 @@ mod tests {
     }
 
     // The test store's binding mover reports that it moved a binding, so the elone copies the scheduler fields.
-    let new = store.elone_session(&source.id, 0, None, &NoRedelivery).await.unwrap();
+    let new = store.elone_session(&source.id, 0, None, &NoRedelivery, &NoRedelivery).await.unwrap();
 
     let fresh = store.get_session(&new.id).await.unwrap().unwrap();
     assert_eq!(fresh.extra("last_scheduled_run"), Some(&json!("2026-01-02T03:04:05+00:00")));
@@ -762,7 +786,7 @@ mod tests {
     let dirs_before = session_dirs(&store);
     let source_before = store.read_metadata_fresh(&source.id).unwrap().unwrap();
 
-    let error = store.elone_session(&source.id, 0, None, &NoRedelivery).await.unwrap_err();
+    let error = store.elone_session(&source.id, 0, None, &NoRedelivery, &NoRedelivery).await.unwrap_err();
 
     assert!(matches!(&error, StoreError::Conflict(blockers) if blockers.len() == 1));
     assert_eq!(session_dirs(&store), dirs_before);
@@ -784,7 +808,7 @@ mod tests {
     assert_eq!(fresh_clone.task_parent_id, None);
     assert!(fresh_clone.name.starts_with('C'));
 
-    let elone = store.elone_session(&worker.id, 0, None, &NoRedelivery).await.unwrap();
+    let elone = store.elone_session(&worker.id, 0, None, &NoRedelivery, &NoRedelivery).await.unwrap();
     let fresh_elone = store.get_session(&elone.id).await.unwrap().unwrap();
     assert_eq!(fresh_elone.profile, TaskProfile::Manager);
     assert_eq!(fresh_elone.task_parent_id, None);
@@ -803,7 +827,7 @@ mod tests {
     let log_before = fs::read(store.chat_events_path(&root.id)).unwrap();
 
     store.fork_session(&source.id, None, None).await.unwrap();
-    store.elone_session(&source.id, 0, None, &NoRedelivery).await.unwrap();
+    store.elone_session(&source.id, 0, None, &NoRedelivery, &NoRedelivery).await.unwrap();
 
     assert_eq!(fs::read(store.chat_events_path(&root.id)).unwrap(), log_before);
   }
@@ -819,7 +843,7 @@ mod tests {
 
     let clone_error = store.fork_session(&source.id, None, None).await.unwrap_err();
     assert!(matches!(&clone_error, StoreError::Conflict(blockers) if blockers.len() == 1));
-    let elone_error = store.elone_session(&source.id, 0, None, &NoRedelivery).await.unwrap_err();
+    let elone_error = store.elone_session(&source.id, 0, None, &NoRedelivery, &NoRedelivery).await.unwrap_err();
     assert!(matches!(&elone_error, StoreError::Conflict(blockers) if blockers.len() == 1));
 
     assert_eq!(session_dirs(&store), dirs_before);
@@ -847,7 +871,7 @@ mod tests {
     archive_task(&store, &source.id).await;
     assert_eq!(store.task_state(&source.id).unwrap(), "archived");
 
-    let new = store.elone_session(&source.id, 0, None, &NoRedelivery).await.unwrap();
+    let new = store.elone_session(&source.id, 0, None, &NoRedelivery, &NoRedelivery).await.unwrap();
 
     assert_eq!(store.task_state(&new.id).unwrap(), "open");
   }

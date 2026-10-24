@@ -13,7 +13,8 @@ use charliebot_store::compact::CompactValue;
 use charliebot_store::control_events::{self, ACTOR_AGENT, ACTOR_SYSTEM, ACTOR_USER};
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskType};
 use charliebot_store::run_records::{self, RunDisplayState, RunKind, RunOutcomeKind, RunRecord};
-use charliebot_store::{ControlGuard, StoreError, StoreResult};
+use charliebot_store::session_fork::ReplacedSourceArchive;
+use charliebot_store::{ControlGuard, StoreError, StoreHookFuture, StoreResult};
 use futures_util::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -675,6 +676,38 @@ impl TaskCompletion {
     }
     blockers.sort();
     Ok(blockers)
+  }
+
+  /// Close an elone source with archive facts while its caller holds the tree lock.
+  pub async fn archive_replaced_source_locked(
+    &self,
+    guard: &ControlGuard,
+    session_id: &str,
+    successor_id: &str,
+  ) -> StoreResult<()> {
+    if self.store().task_state(session_id)? != "open" {
+      return Ok(());
+    }
+    let request_id = format!("elone-{}", Uuid::new_v4());
+    let summary = format!("archived by elone successor {successor_id}");
+    self
+      .append_closed(
+        guard,
+        CloseAppend {
+          session_id,
+          request_id: &request_id,
+          outcome: "archived",
+          summary: &summary,
+          result_refs: &[],
+          run_ids: &[],
+          actor: ACTOR_USER,
+          report_to: None,
+          archived_with: None,
+          sequence_outcome: None,
+        },
+      )
+      .await?;
+    Ok(())
   }
 
   /// Archive a failed worker after its report lands, when no work remains.
@@ -1839,6 +1872,18 @@ fn with_stopped_runs(mut response: Value, stopped_runs: Vec<Value>) -> StoreResu
 impl RunFinishedCompletion for TaskCompletion {
   fn after_run_finished<'a>(&'a self, session_id: &'a str, run_id: &'a str) -> BoxFuture<'a, StoreResult<()>> {
     Box::pin(async move { TaskCompletion::after_run_finished(self, session_id, run_id).await })
+  }
+}
+
+impl ReplacedSourceArchive for TaskCompletion {
+  fn archive_replaced_source_locked<'a>(
+    &'a self,
+    _store: &'a charliebot_store::Store,
+    guard: &'a ControlGuard,
+    source_id: &'a str,
+    successor_id: &'a str,
+  ) -> StoreHookFuture<'a, ()> {
+    Box::pin(async move { TaskCompletion::archive_replaced_source_locked(self, guard, source_id, successor_id).await })
   }
 }
 

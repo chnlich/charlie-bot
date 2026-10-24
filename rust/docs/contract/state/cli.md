@@ -1,6 +1,6 @@
 # The `charliebot` CLI
 
-Baseline: the Python tree at `3c4591bad`. Entry point: `[project.scripts] charliebot = "src.app.main:main"`.
+Baseline: the Python tree at `d1f7e3ba6`. Entry point: `[project.scripts] charliebot = "src.app.main:main"`.
 Agents reach it through the shim `src/runtime/agent_entry_points/charliebot` (`env.md` section 3). Per
 subcommand, this document gives the HTTP routes it calls, the files it reads or writes itself, and its exit codes.
 Route payloads belong to the parallel HTTP contract and are not repeated here. **UNVERIFIED** marks a statement

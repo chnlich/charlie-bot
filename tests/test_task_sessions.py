@@ -145,7 +145,13 @@ async def test_fork_child_of_an_archived_v2_parent_starts_open_with_no_inherited
   _, session_blocks, mgr = conftest.build_env(tmp_path)
   parent = await conftest.create_task(mgr, parent=None, request_id="parent", name="Parent")
   await mgr.dispatch.admit_input(parent.id, event_type="user", content="old input", actor="user")
-  await mgr.archive_subtree(parent.id, caller=conftest.OPERATOR)
+  await mgr.completion.archive_subtree(
+      parent.id,
+      request_id="archive-test",
+      summary="archived by the user",
+      result_refs=[],
+      run_ids=[],
+      caller=conftest.OPERATOR)
   assert mgr.task_state(parent.id) == "archived"
 
   child = await session_blocks.fork.fork_session(parent.id)

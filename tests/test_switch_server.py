@@ -163,7 +163,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
       if BEHAVIOR["cancel"] == "settles" and run["state"] not in TERMINAL:
         run["state"] = "interrupted"
       return self._reply(200, {"run_id": run["id"], "stop_requested": True, "outcome": None})
-    if method == "DELETE" and self.path == f"/api/sessions/{PROBE_SESSION}":
+    if method == "POST" and self.path == f"/api/sessions/{PROBE_SESSION}/archive":
+      if not request_json.get("request_id"):
+        return self._reply(422, {"detail": "request_id is required"})
       if BEHAVIOR["followup"] == "nudge" and not any(run["id"] == "nudge-run" for run in RUNS):
         RUNS.append({"id": "nudge-run", "state": "running"})
       if any(run["state"] not in TERMINAL for run in RUNS):
@@ -497,7 +499,7 @@ def test_preflight_refusal_exits_1_and_changes_nothing(world: World, case: str) 
 ProbeRun = Callable[..., tuple[subprocess.CompletedProcess[str], list[str]]]
 PROBE_BOOTSTRAP = "GET /api/sessions/probe-session/bootstrap"
 PROBE_CANCEL = "POST /api/sessions/probe-session/runs/probe-run/cancel"
-PROBE_ARCHIVE = "DELETE /api/sessions/probe-session"
+PROBE_ARCHIVE = "POST /api/sessions/probe-session/archive"
 
 
 def _answers_version(port: int) -> bool:

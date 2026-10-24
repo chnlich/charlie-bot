@@ -52,8 +52,8 @@ the inherited rules above define your task.
   The landing then wakes you, as the report of your own child does.
 - Summarize the state of all lines only when the user asks for it.
   Then read each child's session status, and answer with a sitrep.
-- When your own completion conditions hold, request completion through the completion entry
-  point. Finished children alone do not close your task.
+- When your own completion conditions hold, archive your own task with `charliebot session archive`.
+  The parent continues its own work from that report.
 
 ### Between Agents
 

@@ -253,7 +253,13 @@ async def test_delivery_card_timestamp_is_the_task_close_time(
   await tree.runs.record_launch(worker.id, "run-1", pid=424301, pid_start="1-424301")
   await tree.runs.record_finish(worker.id, "run-1", "success")
 
-  await tree.archive_subtree(worker.id, caller=conftest.OPERATOR)
+  await tree.completion.archive_subtree(
+      worker.id,
+      request_id="archive-test",
+      summary="archived by the user",
+      result_refs=[],
+      run_ids=[],
+      caller=conftest.OPERATOR)
   first_close_at = _last_close_timestamp(tree, worker.id)
   assert _delivery_message(worker_transcript.load_worker_transcript(tree, worker.id))["timestamp"] == first_close_at
 
@@ -261,7 +267,13 @@ async def test_delivery_card_timestamp_is_the_task_close_time(
   assert _delivery_message(worker_transcript.load_worker_transcript(tree, worker.id))["timestamp"] == first_close_at
 
   await tree.completion.restore_task(worker.id, request_id="reopen-1", reason="test", caller=conftest.OPERATOR)
-  await tree.archive_subtree(worker.id, caller=conftest.OPERATOR)
+  await tree.completion.archive_subtree(
+      worker.id,
+      request_id="archive-test",
+      summary="archived by the user",
+      result_refs=[],
+      run_ids=[],
+      caller=conftest.OPERATOR)
   second_close_at = _last_close_timestamp(tree, worker.id)
   assert second_close_at != first_close_at
 
@@ -292,13 +304,14 @@ async def test_summary_and_delivery_read_only_the_current_close(
     async with tree.control_lock:
       await tree.completion._append_closed(
           worker.id,
-          meta,
           request_id=request_id,
           outcome=outcome,
           summary=outcome,
           result_refs=result_refs,
           run_ids=["run-1"],
-          actor=control_events.ACTOR_SYSTEM)
+          actor=control_events.ACTOR_SYSTEM,
+          report_to=meta.task_parent_id,
+          archived_with=None)
 
   await close("close-1", "completed", ["run:run-1", f"{task_completion.LANDING_REF_PREFIX}origin/main@aaa111"])
   assert worker_transcript.load_worker_transcript(tree, worker.id).summary["landed"] == "origin/main@aaa111"
@@ -445,13 +458,14 @@ async def test_summary_reports_a_delivered_task_with_delivery_links_and_closing_
   async with tree.control_lock:
     await tree.completion._append_closed(
         worker.id,
-        meta,
         request_id="complete-run-1",
         outcome="completed",
         summary="Delivered result",
         result_refs=["run:run-1", "review:run-2", f"{task_completion.LANDING_REF_PREFIX}origin/main@abc123"],
         run_ids=["run-1", "run-2"],
-        actor=control_events.ACTOR_SYSTEM)
+        actor=control_events.ACTOR_SYSTEM,
+        report_to=meta.task_parent_id,
+        archived_with=None)
   entry = worker_transcript.load_worker_transcript(tree, worker.id)
   summary = entry.summary
   assert summary["task_state"] == "completed"

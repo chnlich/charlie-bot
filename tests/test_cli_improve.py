@@ -193,6 +193,7 @@ def test_improve_stop_cli_posts_to_stop_endpoint_and_prints_stopped(
 def test_improve_stop_cli_exits_1_without_a_running_loop(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   """The server's no-running-loop rejection reaches the operator as exit 1."""
+  monkeypatch.setattr(common, "_maybe_version_skew_hint", lambda _base_url: None)
   cfg = conftest.make_sessions_dir_config(tmp_path)
   monkeypatch.chdir(tmp_path)
 

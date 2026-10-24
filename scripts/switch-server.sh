@@ -568,7 +568,8 @@ probe_archive() {
   local end=$(($(probe_clock) + PROBE_CANCEL_WAIT_S * 1000000))
   while :; do
     probe_clear_runs "$end" || return 1
-    probe_api "$end" DELETE "/api/sessions/$PROBE_SESSION" ""
+    probe_api "$end" POST "/api/sessions/$PROBE_SESSION/archive" \
+      "{\"request_id\":\"switch-probe-archive:$PROBE_SESSION\"}"
     if [ "$API_STATUS" = 200 ]; then
       probe_log "archived"
       return 0

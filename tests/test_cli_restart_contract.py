@@ -115,9 +115,48 @@ def test_connect_never_established_retries_with_backoff_then_exhausts(
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
-# Session close readback -- a lost cancel/complete response reads back this
+# Session close readback -- a lost cancel/archive response reads back this
 # request's own close fact from the task's chat_events.jsonl.
 # ---------------------------------------------------------------------------
+
+
+def test_session_help_lists_archive_without_complete(capsys: pytest.CaptureFixture[str]) -> None:
+  with pytest.raises(SystemExit) as exc_info:
+    session_module._build_parser().parse_args(["--help"])
+
+  assert exc_info.value.code == 0
+  help_text = capsys.readouterr().out
+  assert "archive" in help_text
+  assert "complete" not in help_text
+
+
+def test_session_archive_readback_resolves_to_own_archived_fact_on_sent_but_lost(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+  cfg = _patch_readback_env(monkeypatch, tmp_path)
+
+  session_id = "sess-archive"
+  request_id = "req-archive-1"
+  closed_id = control_events.stable_close_event_id(session_id, request_id)
+  events_dir = cfg.sessions_dir / session_id / "data"
+  events_dir.mkdir(parents=True)
+  (events_dir / "chat_events.jsonl").write_text(
+      json.dumps({
+          "id": closed_id,
+          "type": "task_closed",
+          "request_id": request_id,
+          "outcome": "archived",
+      }) + "\n",
+      encoding="utf-8")
+
+  monkeypatch.setattr(sys, "argv", ["charliebot-session", "archive", session_id, "--request-id", request_id])
+
+  session_module.main()
+
+  assert json.loads(capsys.readouterr().out) == {
+      "session_id": session_id,
+      "task_state": "archived",
+      "closed_event_id": closed_id,
+  }
 
 
 def test_session_cancel_readback_resolves_to_own_task_closed_fact_on_sent_but_lost(

@@ -2600,7 +2600,7 @@ class TaskExecutionAdapter:
       await self._tree.dispatch.finish_report_delivery(
           parent_id, report, epoch=parent_epoch, child_session_id=session_id)
     archive_run = deciding_run if deciding_run is not None else run
-    await self._tree.archive_unsuccessful_worker(session_id, run_id=archive_run.id, outcome=outcome)
+    await self._tree.completion.archive_unsuccessful_worker(session_id, run_id=archive_run.id, outcome=outcome)
 
   async def _worker_failure_summary(self, session_id: str, run: models.RunRecord) -> str:
     """The failed run's own closing words (or its error, or the bare outcome).

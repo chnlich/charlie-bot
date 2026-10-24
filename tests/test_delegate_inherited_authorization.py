@@ -114,7 +114,17 @@ async def test_closed_ancestor_refuses_delegation(
   cfg, session_blocks, tree, root, child = await make_tree(tmp_path, monkeypatch)
   builds = conftest.install_scripted_backends(monkeypatch, [], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
   await tree.dispatch.admit_input(child.id, event_type=ET.USER, content="Can you fix it?", actor="user")
-  await tree.events.append(root.id, tree.archived_close_event(root.id, "close-root", summary="archived by the user"))
+  await tree.events.append(
+      root.id,
+      tree.completion.archived_close_event(
+          root.id,
+          "close-root",
+          summary="archived by the user",
+          report_to=None,
+          archived_with=None,
+          actor="user",
+          result_refs=[],
+          run_ids=[]))
 
   with test_task_execution.make_api_client(cfg, session_blocks, tree) as client:
     resp = client.post(

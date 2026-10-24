@@ -442,7 +442,7 @@ async def deliver_boundary_report(
   if outcome == "failed":
     last_run_id = tree.runs.last_ended_run_id(leaf_id)
     if last_run_id is not None:
-      await tree.archive_unsuccessful_worker(leaf_id, run_id=last_run_id, outcome="failed")
+      await tree.completion.archive_unsuccessful_worker(leaf_id, run_id=last_run_id, outcome="failed")
   log.info(
       "cron_sequence_report_delivered",
       task=task_cfg.name,

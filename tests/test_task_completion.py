@@ -1,4 +1,4 @@
-"""Completion-stage tests: evidence, close/cancel/restore, projection, routes."""
+"""Completion-stage tests: evidence, archive/cancel/restore, projection, routes."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import pytest
 
 from src.infra import event_types as ET
 from src.infra import models
-from src.runtime import run_token, runs, task_completion, task_errors, task_sessions
+from src.runtime import control_events, run_token, runs, task_completion, task_errors, task_sessions
 
 
 def live_identity() -> tuple[int, str, datetime.datetime]:
@@ -63,7 +63,7 @@ def persisted_close_and_report(tree: task_sessions.TaskTreeManager, parent_id: s
 
 
 # ---------------------------------------------------------------------------
-# Three-level delivery: workers close, explicit feature close, project open
+# Three-level delivery: workers close, feature archive, project open
 # ---------------------------------------------------------------------------
 
 
@@ -104,28 +104,30 @@ async def test_three_level_delivery_closes_workers_and_keeps_project_open(tmp_pa
   await tree.dispatch.finish_run(feature.id, "run-feature-turn", outcome="success")
   assert tree.dispatch.pending_inputs(feature.id) == []
 
-  # Explicitly closing the feature leaves the project open; the feature's
+  # Archiving the feature leaves the project open; the feature's
   # report lands on the project with summary, evidence refs, and its node id.
   evidence = task_completion.CompletionEvidence(
       summary="feature delivered", result_refs=["run:run-w1"], run_ids=["run-w1"])
-  status, payload = await tree.completion.complete_task(
+  status, payload = await tree.completion.archive_task(
       feature.id, request_id="close-feature", evidence=evidence, caller=conftest.OPERATOR)
   assert status == 200
-  assert tree.task_state(feature.id) == "completed"
+  assert payload == {"archived": [feature.id]}
+  assert tree.task_state(feature.id) == "archived"
   assert tree.task_state(project.id) == "open"
   project_events = tree.events.load_events(project.id)
   feature_reports = [e for e in project_events if e["type"] == ET.CHILD_REPORT and e["child_session_id"] == feature.id]
   assert len(feature_reports) == 1
+  assert feature_reports[0]["outcome"] == "archived"
   assert feature_reports[0]["summary"] == "feature delivered"
   assert feature_reports[0]["result_refs"] == ["run:run-w1"]
 
   # Blockers: an open child (the project) blocks the feature... in reverse: the
   # project cannot close while the feature was open — now it is closed, and a
-  # second attempt with the same request id replays the original outcome.
-  status_again, payload_again = await tree.completion.complete_task(
+  # A repeated archive of the closed target writes no new facts.
+  status_again, payload_again = await tree.completion.archive_task(
       feature.id, request_id="close-feature", evidence=evidence, caller=conftest.OPERATOR)
-  assert (status_again, payload_again["closed_event_id"]) == (200, payload["closed_event_id"])
   close_events = [e for e in tree.events.load_events(feature.id) if e["type"] == ET.TASK_CLOSED]
+  assert (status_again, payload_again["closed_event_id"]) == (200, close_events[0]["id"])
   assert len(close_events) == 1
 
 
@@ -184,10 +186,8 @@ async def test_implement_completion_requires_review_and_landing_evidence(tmp_pat
   blockers = tree.completion.evidence_blockers(index, index.metas[worker.id], wrong_owner)
   assert any("review Run of task" in b for b in blockers)
 
-  # Complete evidence closes the implement worker: a successful review run of
-  # this task (chained to the named work Run) plus a commit that REALLY landed
-  # on the target branch of the task's repository — the git layer verifies
-  # existence and ancestry, so a forged or unlanded hash cannot close.
+  # Automatic worker evidence closes the implement worker: a successful
+  # review run of this task plus a commit that landed on its target branch.
   repo = tmp_path / "task-repo"
   subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
   subprocess.run(["git", "-C", str(repo), "config", "user.email", "t@example.com"], check=True)
@@ -214,19 +214,18 @@ async def test_implement_completion_requires_review_and_landing_evidence(tmp_pat
       review_run_ids=["run-review"],
       landing=task_completion.LandingEvidence(branch="main", commit=landed_commit, repo_path=str(repo)))
 
-  # The forged variant of the same shape — a hash that exists nowhere — is an
-  # explicit verified blocker on the manual path.
+  # A hash that exists nowhere is an explicit verified blocker.
   forged = task_completion.CompletionEvidence(
       summary="forged",
       result_refs=["run:run-work", f"landed:main@{'d' * 40}"],
       run_ids=["run-work"],
       review_run_ids=["run-review"],
       landing=task_completion.LandingEvidence(branch="main", commit="d" * 40, repo_path=str(repo)))
-  with pytest.raises(task_errors.TaskConflictError, match="landing evidence unverified"):
-    await tree.completion.complete_task(worker.id, request_id="close-forged", evidence=forged, caller=conftest.OPERATOR)
+  blockers = await tree.completion.verified_evidence_blockers(index, index.metas[worker.id], forged)
+  assert any("landing evidence unverified" in blocker for blocker in blockers)
   assert tree.task_state(worker.id) == "open"
-  status, _payload = await tree.completion.complete_task(
-      worker.id, request_id="close-implement", evidence=good, caller=conftest.OPERATOR)
+  status, _payload = await tree.completion.evaluate_automatic_completion(
+      worker.id, run_id="run-work", request_id="close-implement", evidence=good)
   assert status == 200
   assert tree.task_state(worker.id) == "completed"
   # The run records survive the close (evidence preserved).
@@ -266,7 +265,7 @@ async def test_own_run_request_naming_a_foreign_run_is_refused_and_not_saved(tmp
   evidence = task_completion.CompletionEvidence(
       summary="done", result_refs=["report:done"], run_ids=["run-mgr", "rollout-1"])
   with pytest.raises(task_errors.TaskConflictError) as refused:
-    await tree.completion.complete_task(manager.id, request_id="close-1", evidence=evidence, caller=agent)
+    await tree.completion.archive_task(manager.id, request_id="close-1", evidence=evidence, caller=agent)
   assert any("rollout-1 is not a Run of task" in b for b in refused.value.blockers)
   # The caller's own still-active Run is no blocker: it is judged as the success it must become.
   assert not any("run-mgr" in b for b in refused.value.blockers)
@@ -284,7 +283,7 @@ async def test_own_run_request_with_an_open_child_is_refused_and_not_saved(tmp_p
 
   evidence = task_completion.CompletionEvidence(summary="done", result_refs=["report:done"], run_ids=["run-mgr"])
   with pytest.raises(task_errors.TaskConflictError) as refused:
-    await tree.completion.complete_task(manager.id, request_id="close-1", evidence=evidence, caller=agent)
+    await tree.completion.archive_task(manager.id, request_id="close-1", evidence=evidence, caller=agent)
   assert f"has open descendant task {child.id}" in refused.value.blockers
   assert close_requests_of(tree, manager.id) == []
   assert tree.task_state(manager.id) == "open"
@@ -304,7 +303,7 @@ async def test_saved_request_blocked_after_its_run_wakes_the_requester_once(tmp_
   agent = await live_manager_caller(tree, manager.id, "run-mgr")
 
   evidence = task_completion.CompletionEvidence(summary="done", result_refs=["report:done"], run_ids=["run-mgr"])
-  status, payload = await tree.completion.complete_task(
+  status, payload = await tree.completion.archive_task(
       manager.id, request_id="close-1", evidence=evidence, caller=agent)
   assert (status, payload["status"]) == (202, "pending_run_finish")
   assert len(close_requests_of(tree, manager.id)) == 1
@@ -323,6 +322,35 @@ async def test_saved_request_blocked_after_its_run_wakes_the_requester_once(tmp_
   await task_recovery.reconcile_task_tree(cfg, tree)
   assert tree.task_state(manager.id) == "open"
   assert [e["id"] for e in tree.events.load_events(manager.id) if e["type"] == notice["type"]] == [notice["id"]]
+
+
+@pytest.mark.asyncio
+async def test_preexisting_close_request_closes_as_archived_and_reports_to_parent(tmp_path: pathlib.Path) -> None:
+  _cfg, _session_blocks, tree = conftest.build_env(tmp_path)
+  root = await conftest.create_task(tree, parent=None, request_id="root")
+  manager = await conftest.create_task(tree, parent=root.id, request_id="manager")
+  await live_manager_caller(tree, manager.id, "run-manager")
+  request_id = "saved-before-archive-route"
+  request = control_events.build_control_event(
+      ET.TASK_CLOSE_REQUESTED,
+      actor=control_events.ACTOR_SYSTEM,
+      source_session_id=manager.id,
+      event_id=control_events.stable_close_request_event_id(manager.id, request_id),
+      request_id=request_id,
+      owner_run_id="run-manager",
+      summary="finished the task",
+      result_refs=["report:finished"],
+      run_ids=[])
+  await tree.events.append(manager.id, request)
+  tree._invalidate_index()
+
+  await tree.dispatch.finish_run(manager.id, "run-manager", outcome="success")
+
+  close = [e for e in tree.events.load_events(manager.id) if e["type"] == ET.TASK_CLOSED]
+  reports = [e for e in tree.events.load_events(root.id) if e["type"] == ET.CHILD_REPORT]
+  assert len(close) == 1 and close[0]["outcome"] == "archived"
+  assert close[0]["report_to"] == root.id
+  assert len(reports) == 1 and reports[0]["outcome"] == "archived"
 
 
 # ---------------------------------------------------------------------------
@@ -489,7 +517,7 @@ async def test_failure_report_reaching_lock_after_cancel_is_skipped(tmp_path: pa
     archive_calls.append(session_id)
     return False
 
-  tree.archive_unsuccessful_worker = record_archive
+  tree.completion.archive_unsuccessful_worker = record_archive
   adapter = conftest.build_execution_adapter(cfg, session_blocks, tree)
   run = await tree.runs.get_run(worker.id, "run-failed")
   assert run is not None

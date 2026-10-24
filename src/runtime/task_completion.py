@@ -1,7 +1,7 @@
-"""Completion evidence and the close / cancel / reopen transitions.
+"""Completion evidence and the archive / cancel / reopen transitions.
 
 This module owns every evidence check and every blocker for manual
-``complete``, automatic successful worker completion, operator ``cancel``,
+``archive``, automatic successful worker completion, operator ``cancel``,
 explicit ``reopen``, and the sequence controllers' close of an ended loop's
 worker child. Nothing else appends a task_closed, task_reopened,
 or task_close_requested fact.
@@ -44,11 +44,13 @@ from __future__ import annotations
 
 import dataclasses
 import pathlib
+import uuid
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from src.infra import event_types as ET
 from src.infra import git, log_once, models
 from src.runtime import control_events, review, run_token, runs, session_dispatch, session_sidebar, task_errors
+from src.runtime.hooks import sequence_controllers
 
 if TYPE_CHECKING:
   import asyncio
@@ -57,6 +59,7 @@ if TYPE_CHECKING:
   from src.runtime import control_sink, session_events, session_store
 
 log = log_once.LazyStructlogLogger()
+ARCHIVE_OPERATOR_REFUSAL = "archiving a task requires operator credentials"
 
 
 class CompletionFacts(Protocol):
@@ -143,7 +146,7 @@ class LandingEvidence:
 class CompletionEvidence:
   """The internal evidence bundle a completion claim carries.
 
-  Manual complete builds it from the request body; the execution stage's
+  An archive request builds it from the request body; the execution stage's
   automatic worker completion builds it from the run's recorded artifacts.
   ``review_run_ids`` and ``landing`` carry the implement workflow's review
   and target-branch delivery evidence.
@@ -299,7 +302,8 @@ class TaskCompletionManager:
             (" (a bare exit code is not evidence)" if run.exit_code == 0 else ""))
     if evidence.run_ids and not claimed:
       blockers.append("completion evidence names no delivery Run of this task")
-    if not evidence.run_ids and any(outcome == "success" for outcome in outcomes.values()):
+    if not evidence.run_ids and any(
+        outcome == "success" for run_id, outcome in outcomes.items() if run_id not in (succeeding_run_ids or set())):
       # Delivery run evidence is required while the delivery universe has
       # a successful Run to cite.
       blockers.append("completion requires delivery run evidence (run_ids)")
@@ -471,23 +475,29 @@ class TaskCompletionManager:
         blockers.append(f"landing evidence unverified in {repo}: {branch}@{commit}: {reason}")
     return blockers
 
-  async def verified_evidence_blockers(self, index: Any, meta: models.SessionMetadata,
-                                       evidence: CompletionEvidence) -> list[str]:
+  async def verified_evidence_blockers(
+      self,
+      index: Any,
+      meta: models.SessionMetadata,
+      evidence: CompletionEvidence,
+      *,
+      succeeding_run_ids: set[str] | None = None,
+  ) -> list[str]:
     """The full evidence check: the shape/record layer plus the git landing layer.
 
         The slow git verification runs outside the control lock; the locked
         revalidation re-runs the shape layer over fresh facts (a landed commit
         cannot un-land, so the outside-lock git verdict stands).
         """
-    blockers = self.evidence_blockers(index, meta, evidence)
+    blockers = self.evidence_blockers(index, meta, evidence, succeeding_run_ids=succeeding_run_ids)
     blockers.extend(await self.landing_blockers(meta, evidence))
     return blockers
 
   # ------------------------------------------------------------------
-  # Complete
+  # Archive
   # ------------------------------------------------------------------
 
-  async def complete_task(
+  async def archive_task(
       self,
       session_id: str,
       *,
@@ -495,51 +505,235 @@ class TaskCompletionManager:
       evidence: CompletionEvidence,
       caller: object,
   ) -> tuple[int, dict]:
-    """One completion operation: 200 Session, 202 pending_run_finish, or 409 blockers.
+    """Archive one task: operator calls close its subtree; agent calls wait for their Run.
 
-        Operator callers close immediately (after evidence validation and a
-        locked revalidation). A run-token agent may request closure only for
-        its own manager task, only through its own active Run: a request that
-        already faces blockers is refused with them, anything else is saved
-        durably with the verified owner run id and re-evaluated once that Run
-        finishes successfully.
+        An operator closes the open subtree after the unfinished-Run check.
+        A run-token agent may archive only its own manager task through its
+        active Run; blockers refuse the request before it is saved.
         """
 
     if not request_id:
-      raise task_errors.TaskInvalidError("request_id is required for completion")
+      raise task_errors.TaskInvalidError("request_id is required for archive")
     tree = self._tree
-    caller_run_id: str | None = None
+    if isinstance(caller, run_token.CallerIdentity) and caller.is_operator:
+      replay = self._replay_close_request(session_id, request_id)
+      if replay is not None:
+        return replay
+      archived = await self.archive_subtree(
+          session_id,
+          request_id=request_id,
+          summary=evidence.summary or "archived by the user",
+          result_refs=evidence.result_refs,
+          run_ids=evidence.run_ids,
+          caller=caller)
+      return 200, {"archived": archived}
+
     if isinstance(caller, run_token.CallerIdentity) and not caller.is_operator:
       claims = caller.claims
       assert claims is not None
       if claims.session_id != session_id:
-        raise task_errors.TaskForbiddenError("an agent may only request closure of its own task")
+        raise task_errors.TaskForbiddenError("an agent may only archive its own task")
       meta = await tree.load_task_meta(session_id)
       if meta.profile != "manager":
-        raise task_errors.TaskForbiddenError("own-run closure requests come from manager tasks only")
+        raise task_errors.TaskForbiddenError("own-task archive requests come from manager tasks only")
       run = await tree.runs.get_run(session_id, claims.run_id)
       if run is None:
         raise task_errors.TaskInvalidError(f"caller run {claims.run_id} not found in task {session_id}")
       events = tree.runs.load_events_sync(session_id)
       if tree.runs.run_has_terminal_fact(run, events) or not tree.runs.run_is_active(run, tree._host_boot_time()):
-        raise task_errors.TaskConflictError([f"caller run {claims.run_id} is not active; it cannot request closure"])
-      caller_run_id = claims.run_id
+        raise task_errors.TaskConflictError([f"caller run {claims.run_id} is not active; it cannot request archive"])
       replay = self._replay_close_request(session_id, request_id)
       if replay is not None:
         return replay
       blockers = await self._own_run_close_blockers(session_id, run, evidence)
       if blockers:
-        # Saved, this request could only stay blocked after the Run
-        # ends; refusing it now puts the blockers in the requester's
-        # own response.
         raise task_errors.TaskConflictError(blockers)
       return await self._save_close_request(
-          session_id, request_id=request_id, owner_run_id=caller_run_id, evidence=evidence)
+          session_id, request_id=request_id, owner_run_id=claims.run_id, evidence=evidence)
+    raise task_errors.TaskForbiddenError("task archive requires operator or run-token credentials")
 
-    replay = self._replay_close_request(session_id, request_id)
-    if replay is not None:
-      return replay
-    return await self._close_now(session_id, request_id=request_id, evidence=evidence, actor=control_events.ACTOR_USER)
+  def archived_close_event(
+      self,
+      session_id: str,
+      request_id: str,
+      *,
+      summary: str,
+      report_to: str | None,
+      archived_with: str | None,
+      actor: str,
+      result_refs: list[str],
+      run_ids: list[str],
+  ) -> dict:
+    """Build an archive close fact with its fixed report recipient and subtree owner."""
+    return control_events.build_control_event(
+        ET.TASK_CLOSED,
+        actor=actor,
+        source_session_id=session_id,
+        event_id=control_events.stable_close_event_id(session_id, request_id),
+        request_id=request_id,
+        outcome="archived",
+        summary=summary,
+        result_refs=list(result_refs),
+        run_ids=list(run_ids),
+        report_to=report_to,
+        **({
+            "archived_with": archived_with
+        } if archived_with is not None else {}),
+    )
+
+  async def archive_subtree(
+      self,
+      session_id: str,
+      *,
+      request_id: str | None = None,
+      summary: str,
+      result_refs: list[str],
+      run_ids: list[str],
+      caller: object,
+  ) -> list[str]:
+    """Archive an open task subtree and report the target close to its parent."""
+    task_errors.require_operator(caller, ARCHIVE_OPERATOR_REFUSAL)
+    if request_id is None:
+      request_id = f"archive-{uuid.uuid4()}"
+    if not request_id:
+      raise task_errors.TaskInvalidError("request_id is required for archive")
+    tree = self._tree
+    async with tree.control_lock:
+      index = await tree._get_index(force=True)
+      tree._index_meta(index, session_id)
+      if tree.task_state(session_id) != "open":
+        return []
+      subtree = [session_id, *tree._descendants(index, session_id)]
+      blockers = self._archive_run_blockers(subtree)
+      if blockers:
+        raise task_errors.TaskConflictError(blockers)
+
+    epochs = {sid: await tree.session_events.prime_aggregator(sid) for sid in subtree}
+    parent_epoch = None
+    if index.metas[session_id].task_parent_id:
+      parent_epoch = await tree.session_events.prime_aggregator(str(index.metas[session_id].task_parent_id))
+
+    archived: list[str] = []
+    close_announcements: list[tuple[str, dict, int]] = []
+    report: dict | None = None
+    report_created = False
+    parent_id: str | None = None
+    async with tree.control_lock:
+      index = await tree._get_index(force=True)
+      target_meta = tree._index_meta(index, session_id)
+      if tree.task_state(session_id) != "open":
+        return []
+      subtree = [session_id, *tree._descendants(index, session_id)]
+      blockers = self._archive_run_blockers(subtree)
+      if blockers:
+        raise task_errors.TaskConflictError(blockers)
+      parent_id = target_meta.task_parent_id
+      if parent_id is not None and parent_id not in epochs:
+        parent_epoch = await tree.session_events.prime_aggregator(parent_id)
+      for sid in subtree:
+        if tree.task_state(sid) != "open":
+          continue
+        is_target = sid == session_id
+        if sid not in epochs:
+          epochs[sid] = await tree.session_events.prime_aggregator(sid)
+        close_event, delivered_report, created = await self._append_closed(
+            sid,
+            request_id=request_id,
+            outcome="archived",
+            summary=summary if is_target else "",
+            result_refs=result_refs if is_target else [],
+            run_ids=run_ids if is_target else [],
+            actor=control_events.ACTOR_USER,
+            report_to=parent_id if is_target else None,
+            archived_with=None if is_target else session_id,
+        )
+        archived.append(sid)
+        close_announcements.append((sid, close_event, epochs[sid]))
+        if is_target:
+          report = delivered_report
+          report_created = created
+      for sid in archived:
+        binding = sequence_controllers.binding_for(sid)
+        if binding is not None:
+          await binding.on_archive()
+
+    for sid, event, epoch in close_announcements:
+      await tree.session_events.announce_appended_event(sid, event, epoch=epoch)
+    if report_created and parent_id is not None and parent_epoch is not None and report is not None:
+      await tree.session_events.announce_appended_event(parent_id, report, epoch=parent_epoch)
+    if report_created and parent_id is not None and report is not None:
+      try:
+        await tree.dispatch.wake_parent(parent_id, report=report)
+      except Exception as exc:
+        log.warning(
+            "archive_parent_wake_failed",
+            session_id=session_id,
+            parent=parent_id,
+            report=str(report.get("id")),
+            error=str(exc))
+    return archived
+
+  def _archive_run_blockers(self, subtree: list[str]) -> list[str]:
+    """Return unfinished Run blockers across a subtree before any close fact."""
+    tree = self._tree
+    host_boot = tree._host_boot_time()
+    blockers = [
+        f"{sid}: {blocker}" for sid in subtree for run in tree.runs.list_run_records_sync(sid)
+        if (blocker := tree.runs.run_blocker(run, tree.runs.load_events_sync(sid), host_boot)) is not None
+    ]
+    return sorted(blockers)
+
+  async def archive_replaced_source_locked(self, session_id: str, successor_id: str) -> None:
+    """Close an elone source with archive facts while its caller holds the tree lock."""
+    tree = self._tree
+    if tree.task_state(session_id) != "open":
+      return
+    await self._append_closed(
+        session_id,
+        request_id=f"elone-{uuid.uuid4()}",
+        outcome="archived",
+        summary=f"archived by elone successor {successor_id}",
+        result_refs=[],
+        run_ids=[],
+        actor=control_events.ACTOR_USER,
+        report_to=None,
+        archived_with=None,
+    )
+
+  async def archive_unsuccessful_worker(self, session_id: str, *, run_id: str, outcome: str) -> bool:
+    """Archive a failed worker after its report lands, when no work remains."""
+    tree = self._tree
+    epoch = await tree.session_events.prime_aggregator(session_id)
+    request_id = f"unsuccessful:{run_id}"
+    async with tree.control_lock:
+      index = await tree._get_index()
+      meta = tree._index_meta(index, session_id)
+      if meta.profile != "worker" or tree.task_state(session_id) != "open":
+        return False
+      if tree.runs.last_ended_run_id(session_id) != run_id:
+        return False
+      if self._execution_blockers(index, session_id):
+        return False
+      if self.pause_reason(session_id) is not None:
+        return False
+      if any(event.get("type") == ET.TASK_CLOSED and event.get("request_id") == request_id
+             for event in tree.fact_history(session_id)):
+        return False
+      close_event, _report, _report_created = await self._append_closed(
+          session_id,
+          request_id=request_id,
+          outcome="archived",
+          summary=f"run {run_id} ended {outcome}; archived by the server",
+          result_refs=[],
+          run_ids=[run_id],
+          actor=control_events.ACTOR_SYSTEM,
+          report_to=None,
+          archived_with=None)
+      binding = sequence_controllers.binding_for(session_id)
+      if binding is not None:
+        await binding.on_archive()
+    await tree.session_events.announce_appended_event(session_id, close_event, epoch=epoch)
+    return True
 
   def _replay_close_request(self, session_id: str, request_id: str) -> tuple[int, dict] | None:
     """The original outcome of an already-recorded operation id, if one exists.
@@ -620,10 +814,11 @@ class TaskCompletionManager:
       request_id: str,
       evidence: CompletionEvidence,
       actor: str,
+      outcome: str,
       exclude_run_ids: set[str] | None = None,
       exclude_input_ids: set[str] | None = None,
   ) -> tuple[int, dict]:
-    """Evaluate, validate, and land one completed close (the operator path).
+    """Evaluate, validate, and append one close fact.
 
         Facts are snapshotted and checked under the lock, evidence validation
         runs outside it, and the relevant facts/spec/refs are revalidated
@@ -647,7 +842,9 @@ class TaskCompletionManager:
     # cannot un-land between the two passes, and a moving condition
     # (run finished, input processed) is caught by the fresh structural
     # and shape revalidation.
-    evidence_blockers = await self.verified_evidence_blockers(index, meta, evidence)
+    succeeding_run_ids = exclude_run_ids if outcome == "archived" else None
+    evidence_blockers = await self.verified_evidence_blockers(
+        index, meta, evidence, succeeding_run_ids=succeeding_run_ids)
     if evidence_blockers:
       raise task_errors.TaskConflictError(sorted(set(evidence_blockers)))
     # Live-announce epochs are taken before any append, so the announce
@@ -663,7 +860,8 @@ class TaskCompletionManager:
           fresh_index, session_id, exclude_run_ids=exclude_run_ids, exclude_input_ids=exclude_input_ids)
       fresh_meta = await tree.load_meta(session_id)
       assert fresh_meta is not None
-      fresh_evidence_blockers = self.evidence_blockers(fresh_index, fresh_meta, evidence)
+      fresh_evidence_blockers = self.evidence_blockers(
+          fresh_index, fresh_meta, evidence, succeeding_run_ids=succeeding_run_ids)
       all_blockers = sorted(set(fresh_blockers + fresh_evidence_blockers))
       if all_blockers:
         # The locked revalidation is authoritative: conditions changed
@@ -672,13 +870,14 @@ class TaskCompletionManager:
         raise task_errors.TaskConflictError(all_blockers)
       close_event, report, report_created = await self._append_closed(
           session_id,
-          fresh_meta,
           request_id=request_id,
-          outcome="completed",
+          outcome=outcome,
           summary=evidence.summary,
           result_refs=evidence.result_refs,
           run_ids=evidence.run_ids,
-          actor=actor)
+          actor=actor,
+          report_to=fresh_meta.task_parent_id,
+          archived_with=None)
     await self._announce_close_and_wake_parent(
         session_id,
         fresh_meta,
@@ -693,7 +892,6 @@ class TaskCompletionManager:
   async def _append_closed(
       self,
       session_id: str,
-      meta: models.SessionMetadata,
       *,
       request_id: str,
       outcome: str,
@@ -701,6 +899,8 @@ class TaskCompletionManager:
       result_refs: list[str],
       run_ids: list[str],
       actor: str,
+      report_to: str | None,
+      archived_with: str | None,
       sequence_outcome: str | None = None,
   ) -> tuple[dict, dict, bool]:
     """Append one task_closed fact, then deliver its parent report.
@@ -721,19 +921,32 @@ class TaskCompletionManager:
     if sequence_outcome is not None:
       # The loop's own outcome: only a sequence close carries this field.
       payload["sequence_outcome"] = sequence_outcome
-    close_event = control_events.build_control_event(
-        ET.TASK_CLOSED,
-        actor=actor,
-        source_session_id=session_id,
-        event_id=control_events.stable_close_event_id(session_id, request_id),
-        request_id=request_id,
-        outcome=outcome,
-        summary=summary,
-        result_refs=list(result_refs),
-        run_ids=list(run_ids),
-        report_to=meta.task_parent_id,
-        **payload,
-    )
+    if outcome == "archived":
+      close_event = self.archived_close_event(
+          session_id,
+          request_id,
+          summary=summary,
+          report_to=report_to,
+          archived_with=archived_with,
+          actor=actor,
+          result_refs=result_refs,
+          run_ids=run_ids)
+    elif outcome in ("completed", "cancelled"):
+      close_event = control_events.build_control_event(
+          ET.TASK_CLOSED,
+          actor=actor,
+          source_session_id=session_id,
+          event_id=control_events.stable_close_event_id(session_id, request_id),
+          request_id=request_id,
+          outcome=outcome,
+          summary=summary,
+          result_refs=list(result_refs),
+          run_ids=list(run_ids),
+          report_to=report_to,
+          **payload,
+      )
+    else:
+      raise ValueError(f"unknown task close outcome: {outcome}")
     await tree.events.append(session_id, close_event)
     report, report_created = await tree.dispatch.deliver_child_report_locked(
         session_id,
@@ -741,7 +954,7 @@ class TaskCompletionManager:
         outcome=sequence_outcome if sequence_outcome is not None else outcome,
         summary=summary,
         result_refs=list(result_refs),
-        recipient=meta.task_parent_id,
+        recipient=report_to,
         actor=control_events.ACTOR_SYSTEM,
     )
     tree._invalidate_index()
@@ -858,13 +1071,14 @@ class TaskCompletionManager:
         raise task_errors.TaskConflictError(sorted(set(fresh_blockers)))
       close_event, report, report_created = await self._append_closed(
           session_id,
-          fresh_meta,
           request_id=request_id,
           outcome="completed" if completing else "cancelled",
           summary=evidence.summary,
           result_refs=evidence.result_refs,
           run_ids=evidence.run_ids,
           actor=control_events.ACTOR_SYSTEM,
+          report_to=fresh_meta.task_parent_id,
+          archived_with=None,
           sequence_outcome=outcome)
     await self._announce_close_and_wake_parent(
         session_id,
@@ -922,6 +1136,7 @@ class TaskCompletionManager:
             request_id=request_id,
             evidence=evidence,
             actor=control_events.ACTOR_SYSTEM,
+            outcome="archived",
             exclude_run_ids={run_id},
             exclude_input_ids=claimed)
       except task_errors.TaskConflictError as e:
@@ -1014,7 +1229,11 @@ class TaskCompletionManager:
     if replay is not None:
       return replay
     return await self._close_now(
-        session_id, request_id=effective_request_id, evidence=evidence, actor=control_events.ACTOR_SYSTEM)
+        session_id,
+        request_id=effective_request_id,
+        evidence=evidence,
+        actor=control_events.ACTOR_SYSTEM,
+        outcome="completed")
 
   def pause_reason(self, session_id: str) -> str | None:
     """The node's pause reason, or None when nothing waits.
@@ -1253,13 +1472,14 @@ class TaskCompletionManager:
         raise task_errors.TaskConflictError(sorted(set(blockers)))
       close_event, report, report_created = await self._append_closed(
           session_id,
-          meta,
           request_id=request_id,
           outcome="cancelled",
           summary=reason,
           result_refs=[],
           run_ids=[],
-          actor=actor)
+          actor=actor,
+          report_to=meta.task_parent_id,
+          archived_with=None)
     await self._announce_close_and_wake_parent(
         session_id,
         meta,
@@ -1313,13 +1533,14 @@ class TaskCompletionManager:
         stoppable_runs = [run for run in run_records if not tree.runs.run_has_terminal_fact(run, events)]
         close_event, report, report_created = await self._append_closed(
             session_id,
-            meta,
             request_id=request_id,
             outcome="cancelled",
             summary=reason,
             result_refs=[],
             run_ids=[],
-            actor=actor)
+            actor=actor,
+            report_to=meta.task_parent_id,
+            archived_with=None)
         for run in stoppable_runs:
           appended = await tree.runs.append_stop_request_locked(session_id, run.id, f"cancel:{request_id}")
           assert appended, f"run {run.id} became terminal while the worker cancel lock was held"

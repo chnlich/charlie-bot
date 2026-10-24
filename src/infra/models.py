@@ -594,8 +594,8 @@ class RetryRunRequest(pydantic.BaseModel):
   run_id: str
 
 
-class CompleteTaskRequest(pydantic.BaseModel):
-  # POST /api/sessions/{id}/complete body: the completion claim (plan 4.1).
+class ArchiveTaskRequest(pydantic.BaseModel):
+  # POST /api/sessions/{id}/archive body: the archive summary and evidence (plan 4.1).
   # owner_run_id is NEVER accepted here: an own-run close request takes the
   # verified caller's bound run id, never a spoofable payload field.
   model_config = pydantic.ConfigDict(extra="forbid")

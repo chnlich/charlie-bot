@@ -383,7 +383,13 @@ async def test_recreated_task_reattaches_to_its_original_node(tick_env) -> None:
   original_id = _read_task_yaml(home)["session_id"]
   # The user archived the node, then deleted the task and re-created it under
   # the same name without a binding.
-  assert await tree.archive_subtree(original_id, caller=conftest.OPERATOR) == [original_id]
+  assert await tree.completion.archive_subtree(
+      original_id,
+      request_id="archive-test",
+      summary="archived by the user",
+      result_refs=[],
+      run_ids=[],
+      caller=conftest.OPERATOR) == [original_id]
   (home / ".charliebot" / "config.d" / "cron.d" / "nightly.yaml").unlink()
   conftest.write_nightly_task(home)
 
@@ -487,7 +493,7 @@ async def test_archiving_bound_node_writes_enabled_false(tick_env) -> None:
   node_id = _read_task_yaml(home)["session_id"]
 
   with conftest.make_cron_sessions_client(cfg, session_blocks, tree) as client:
-    response = client.delete(f"/api/sessions/{node_id}")
+    response = client.post(f"/api/sessions/{node_id}/archive", json={"request_id": "archive-bound-node"})
 
   assert response.status_code == 200
   body = _read_task_yaml(home)

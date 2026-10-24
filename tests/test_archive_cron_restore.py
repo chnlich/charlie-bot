@@ -40,7 +40,13 @@ async def test_cron_editor_enable_restores_the_bound_archived_node(cron_env) -> 
   node = await conftest.create_scheduled_node(tree, name="nightly", backend=conftest.OPUS_BACKEND_ID)
   # Bind, then let the user archive the node (its cron task stops with it).
   cron_files.write_cron_key("nightly", "session_id", node.id)
-  await tree.archive_subtree(node.id, caller=conftest.OPERATOR)
+  await tree.completion.archive_subtree(
+      node.id,
+      request_id="archive-test",
+      summary="archived by the user",
+      result_refs=[],
+      run_ids=[],
+      caller=conftest.OPERATOR)
   assert tree.task_state(node.id) == "archived"
   # The archive disabled the bound task.
   body = test_cron_auto_bind._read_task_yaml(home)
@@ -58,7 +64,13 @@ async def test_cron_editor_enable_restores_the_bound_archived_node(cron_env) -> 
 
   # Disabling again (and archiving again) writes no restore.
   cron_files.write_cron_key("nightly", "enabled", value=False)
-  await tree.archive_subtree(node.id, caller=conftest.OPERATOR)
+  await tree.completion.archive_subtree(
+      node.id,
+      request_id="archive-test-after-enable",
+      summary="archived by the user",
+      result_refs=[],
+      run_ids=[],
+      caller=conftest.OPERATOR)
   with make_cron_client(cfg, session_blocks) as client:
     disabled = client.put("/api/cron/tasks/nightly", json={"enabled": False})
     assert disabled.status_code == 200
@@ -78,7 +90,13 @@ async def test_archive_disables_every_task_bound_to_the_node(cron_env) -> None:
   cron_files.write_cron_key("nightly", "session_id", node.id)
   cron_files.write_cron_key("weekly", "session_id", node.id)
 
-  await tree.archive_subtree(node.id, caller=conftest.OPERATOR)
+  await tree.completion.archive_subtree(
+      node.id,
+      request_id="archive-test",
+      summary="archived by the user",
+      result_refs=[],
+      run_ids=[],
+      caller=conftest.OPERATOR)
 
   assert tree.task_state(node.id) == "archived"
   for name in ("nightly", "weekly"):

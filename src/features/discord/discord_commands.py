@@ -6,7 +6,7 @@ oldest-first through the bot client, prepends the thread's starter message
 when it lives in the parent channel, marks exactly the unread messages it
 returns as read (Discord has no separate ack verb, so the read is the ack),
 and flags the pending summon's mention with ``summon: true`` — the one fact
-the one-line summon input no longer carries.
+the one-line summon input cannot carry.
 With a channel link it reads that channel instead and marks nothing. Every
 Discord call runs inside the server process through the client
 ``discord_listener._bot_client`` builds — the token never reaches the CLI.

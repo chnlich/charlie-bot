@@ -11,7 +11,7 @@ const { readStatic } = require('./read_static');
 const { buildRendererContext } = require('./renderer_vm_context');
 
 // Fetch the exact marked build the browser serves (web/templates/index.html).
-// No version is pinned, so resolving the range today and caching it keeps the
+// No version is pinned, so resolving the range at fetch time and caching it keeps the
 // tests stable while tracking whatever marked ships.
 const MARKED_URL = 'https://cdn.jsdelivr.net/npm/marked/marked.min.js';
 

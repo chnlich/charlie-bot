@@ -129,7 +129,7 @@ async def test_finished_label_exit_file_missing_states_no_code(
 @pytest.mark.asyncio
 async def test_finished_label_both_fields_null_keeps_the_bare_pid(
     tmp_path: pathlib.Path, pidfd_open_available: None) -> None:
-  """A target with neither field keeps today's label."""
+  """A target with neither field keeps the bare pid label."""
   _, _, trigger_mgr, session_id = await conftest.make_trigger_setup(tmp_path)
   missing_pid = _find_unused_pid()
 
@@ -148,7 +148,7 @@ async def test_finished_label_both_fields_null_keeps_the_bare_pid(
 
 @pytest.mark.asyncio
 async def test_still_alive_at_timeout_carries_the_log(tmp_path: pathlib.Path, pidfd_open_available: None) -> None:
-  """A target alive at --max-wait reads as today, plus its log path."""
+  """A target still alive at --max-wait reports that fact plus its log path."""
   _, _, trigger_mgr, session_id = await conftest.make_trigger_setup(tmp_path)
   log_path = tmp_path / "log"
 

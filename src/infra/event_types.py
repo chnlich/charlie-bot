@@ -92,6 +92,13 @@ WEB_REPLY_NOTICE = "web_reply_notice"
 # A set of the web session's status through ``charliebot web status set``. The payload keys ``web_status`` (the status
 # after the set) and ``web_status_changed`` (the items the set named) carry the record; the status itself is metadata.
 WEB_STATUS = "web_status"
+# A confirmation through ``charliebot web status confirm`` that the stored status needs no change this turn. The event
+# records that the turn ran a status command; the For-you view hides it.
+WEB_STATUS_CONFIRMED = "web_status_confirmed"
+# The round-end status reminder is an AGENT_MESSAGE whose same-named key marks it and names the turn it was posted for.
+# A turn that answers such a reminder posts no further status reminder. A combined reminder also carries the web_reply
+# payload key with nudge_of.
+WEB_STATUS_REMINDER = "web_status_reminder"
 # One cold read of a Waiting on you item, recorded through ``POST /api/internal/web/ask-check``. The item's digest, the
 # answering backend and the answer are top-level wire keys; a later unread query matches the digest, and the For-you
 # view hides the event. The digest is the only thing that ties the record to the item: the server does not attest it.

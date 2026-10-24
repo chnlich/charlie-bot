@@ -13,7 +13,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const {readStatic, readPackageStatic, chatModules, sidebarModules} = require('./read_static');
+const {readStatic, readPackageStatic} = require('./read_static');
 const {createElement, createClassList} = require('./dom_element_stub');
 const {
   baseSessionContext,

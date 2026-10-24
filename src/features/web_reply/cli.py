@@ -3,6 +3,7 @@
   charliebot web reply --file <path> [--keep-language <reason>]   (``-`` reads the reply from stdin)
   charliebot web dialog [--session ID]
   charliebot web status set --file <path>       (``-`` reads JSON from stdin; cold reads exit 3 without storing)
+  charliebot web status confirm
   charliebot web status show [--session ID]
 
 ``reply`` records the file's text as the session's web reply through the internal web/reply endpoint and prints the
@@ -17,15 +18,18 @@ skips the check, and records the reason on the reply.
 as ``Reply:`` and each notice as ``Notice:``. The session resolves per ``resolve_session_id``; the reply rules are
 prompts/web_reply.md.
 
-``status set`` first checks whether each Waiting on you item has a cold read of its current text, context, link and
-host-served page. It prints each new read and exits 3 without storing; revise the items and run the command again. When
-every item has a read, the command stores the named items and prints one JSON line with the status, ``now_chars`` and
-``now_over_budget``. A refusal exits non-zero with a JSON error on stderr and stores nothing. ``status show`` prints
-the session's status as plain text, including each item's context, then the waiting items of its open child sessions,
+``status set`` first refuses a Waiting on you item whose plan link names an older version or a closed lineage. It then
+checks whether each remaining item has a cold read of its current text, context, link and host-served page. It prints
+each new read and exits 3 without storing; revise the items and run the command again. When every item has a read, the
+command stores the named items and prints one JSON line with the status, ``now_chars`` and ``now_over_budget``. A
+refusal exits non-zero with a JSON error on stderr and stores nothing. ``status confirm`` records that the stored
+status needs no change; it refuses a stale stored plan link and cold reads nothing. ``status show`` prints the
+session's status as plain text, including each item's context, then the waiting items of its open child sessions,
 then one line of Now per open child session that holds a Now, newest first.
 """
 
 import argparse
+import json
 import sys
 
 from src.infra import help_formatter
@@ -65,6 +69,8 @@ def _build_parser() -> argparse.ArgumentParser:
       required=True,
       help="JSON object with any of goal, now, waiting; prints cold reads and exits 3 before storing; - reads stdin")
   common.add_session_arg(status_set)
+  status_sub.add_parser(
+      "confirm", help="Confirm that the stored status needs no change", formatter_class=help_formatter.CliHelpFormatter)
   status_show = status_sub.add_parser(
       "show",
       help="Print this session's status and the waiting items of its child sessions",
@@ -127,13 +133,19 @@ def _cmd_status_set(args: argparse.Namespace) -> None:
   sys.exit(3)
 
 
+def _cmd_status_confirm() -> None:
+  session_id = common.resolve_session_id(None)
+  result = common.post_internal_api("/api/internal/web/status/confirm", {"session_id": session_id})
+  common.print_json(result, indent=None, file=sys.stdout)
+
+
 def _item_line(item: dict) -> str:
   return f"- {item['text']}" + (f" ({item['link']})" if item["link"] else "")
 
 
 def _item_lines(item: dict) -> list[str]:
   """The item line and its context indented below it, when stored."""
-  lines = [_item_line(item)]
+  lines = [_item_line(item), f"  since: {item['since']}", f"  since_exact: {json.dumps(item['since_exact'])}"]
   context = item.get("context")
   if context is not None:
     context_lines = context.splitlines()
@@ -185,6 +197,8 @@ def main() -> None:
     _cmd_dialog(args)
   elif args.web_command == "status" and args.status_command == "set":
     _cmd_status_set(args)
+  elif args.web_command == "status" and args.status_command == "confirm":
+    _cmd_status_confirm()
   elif args.web_command == "status" and args.status_command == "show":
     _cmd_status_show(args)
   else:

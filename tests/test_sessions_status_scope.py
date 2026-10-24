@@ -66,8 +66,8 @@ async def test_status_derived_map_serves_whole_between_state_bumps(tmp_path: pat
 
   The memo is the /status poll's freshness boundary: a bump that failed to
   invalidate would serve a stale has_running_tasks for a full memo lifetime,
-  and a memo that never hit would silently return the poll to the per-session
-  rebuild the fold used to pay.
+  and a memo that never hit would return the poll to a per-session rebuild on
+  every request.
   """
   conftest.reset_sidebar_state()
   cfg = conftest.build_two_backend_cfg(tmp_path)
@@ -109,8 +109,8 @@ async def test_status_body_memo_serves_whole_between_state_bumps(
 
   The body memo is the poll's byte-level freshness boundary on top of the
   fold's: a bump that failed to re-render would serve a stale thinking_since
-  for a full memo lifetime, and a memo that never hit would silently return
-  the poll to the per-request render it used to pay.
+  for a full memo lifetime, and a memo that never hit would return the poll to
+  a per-request render.
   """
   conftest.reset_sidebar_state()
   cfg = conftest.build_two_backend_cfg(tmp_path)

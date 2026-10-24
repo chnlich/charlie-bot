@@ -1,11 +1,11 @@
 """Muse Voice Transcribe backend: Meta's realtime ASR over a PUSH_TO_TALK session.
 
-The client moved here from src/features/voice/replay_eval.py (handshake, transcript
-parsing, close-code handling) so exactly one implementation exists. Meta
-disconnects when received audio leads real time by more than 5 s, so audio goes
-out on an absolute schedule that leads the session clock by at most 4 s: chunks
-queued before the handshake completed are flushed at once up to that lead, the
-rest at real time (the LiteLLM Meta-realtime pacing pattern).
+The handshake, the transcript parsing and the close-code handling live here, so
+exactly one client implementation exists. Meta disconnects when received audio
+leads real time by more than 5 s, so audio goes out on an absolute schedule that
+leads the session clock by at most 4 s: chunks queued before the handshake
+completed are flushed at once up to that lead, the rest at real time (the LiteLLM
+Meta-realtime pacing pattern).
 """
 
 from __future__ import annotations

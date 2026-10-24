@@ -1,4 +1,4 @@
-"""The archive API surface: DELETE archives the subtree, the message routes
+"""The archive API surface: POST archives the subtree, the message routes
 enforce the input table (the user's message restores; an agent's is 409 with
 the one archived sentence), and unarchive restores the chain — all through the
 real TaskTreeManager and session blocks behind the real routers."""
@@ -25,12 +25,13 @@ async def test_archive_route_returns_the_archived_ids_and_409_detail_reaches_the
   key = "op-secret"
   conftest.stub_credentials({"charliebot": {"access_key": key}})
   with test_task_execution.make_api_client(cfg, session_blocks, tree) as client:
-    archived = client.delete(f"/api/sessions/{root.id}")
+    archived = client.post(f"/api/sessions/{root.id}/archive", json={"request_id": "archive-root"})
     assert archived.status_code == 200
     assert archived.json() == {"archived": [root.id, mid.id]}
+    assert not [e for e in tree.events.load_events(root.id) if e["type"] == ET.CHILD_REPORT]
 
     # An already-archived target: 200 with an empty list.
-    again = client.delete(f"/api/sessions/{root.id}")
+    again = client.post(f"/api/sessions/{root.id}/archive", json={"request_id": "archive-again"})
     assert again.status_code == 200 and again.json() == {"archived": []}
 
     # The tree detail reads both nodes as archived with no open node below an
@@ -44,9 +45,22 @@ async def test_archive_route_returns_the_archived_ids_and_409_detail_reaches_the
     leaf = await conftest.create_task(tree, parent=None, request_id="leaf")
     await tree.runs.register_run_locked(
         models.RunRecord(id="run-live", session_id=leaf.id, kind="work", pid=424242, pid_start="ps-live"))
-    refused = client.delete(f"/api/sessions/{leaf.id}")
+    refused = client.post(f"/api/sessions/{leaf.id}/archive", json={"request_id": "archive-live"})
     assert refused.status_code == 409
     assert "run run-live" in refused.json()["detail"]["blockers"][0]
+    assert not [e for e in tree.events.load_events(leaf.id) if e["type"] == ET.TASK_CLOSED]
+
+
+@pytest.mark.asyncio
+async def test_removed_close_routes_are_absent(tmp_path: pathlib.Path) -> None:
+  from tests import test_task_execution
+
+  cfg, session_blocks, tree = conftest.build_env(tmp_path)
+  root = await conftest.create_task(tree, parent=None, request_id="root")
+  conftest.stub_credentials({"charliebot": {"access_key": "op-secret"}})
+  with test_task_execution.make_api_client(cfg, session_blocks, tree) as client:
+    assert client.post(f"/api/sessions/{root.id}/complete", json={"request_id": "removed"}).status_code == 404
+    assert client.delete(f"/api/sessions/{root.id}").status_code == 405
 
 
 @pytest.mark.asyncio
@@ -63,7 +77,13 @@ async def test_user_message_restores_through_the_chat_route_and_agent_is_409(tmp
   root = await conftest.create_task(tree, parent=None, request_id="root")
   mid = await conftest.create_task(tree, parent=root.id, request_id="mid")
   leaf = await conftest.create_task(tree, parent=mid.id, request_id="leaf", profile="worker")
-  await tree.archive_subtree(root.id, caller=conftest.OPERATOR)
+  await tree.completion.archive_subtree(
+      root.id,
+      request_id="archive-test",
+      summary="archived by the user",
+      result_refs=[],
+      run_ids=[],
+      caller=conftest.OPERATOR)
   await tree.runs.register_run_locked(models.RunRecord(id="run-agent", session_id=mid.id, kind="manager_turn"))
   await tree.runs.record_launch(mid.id, "run-agent", pid=424242, pid_start="ps-1")
 
@@ -135,7 +155,13 @@ async def test_unarchive_route_restores_the_chain_and_reports_the_ids(tmp_path: 
   root = await conftest.create_task(tree, parent=None, request_id="root")
   mid = await conftest.create_task(tree, parent=root.id, request_id="mid")
   leaf = await conftest.create_task(tree, parent=root.id, request_id="leaf")
-  await tree.archive_subtree(root.id, caller=conftest.OPERATOR)
+  await tree.completion.archive_subtree(
+      root.id,
+      request_id="archive-test",
+      summary="archived by the user",
+      result_refs=[],
+      run_ids=[],
+      caller=conftest.OPERATOR)
   key = "op-secret"
   conftest.stub_credentials({"charliebot": {"access_key": key}})
   with test_task_execution.make_api_client(cfg, session_blocks, tree) as client:

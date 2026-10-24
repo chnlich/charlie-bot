@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import os
 import pathlib
 
 import conftest
@@ -671,7 +672,7 @@ async def test_input_mode_on_a_non_user_input_is_refused(tmp_path: pathlib.Path)
 
 
 @pytest.mark.asyncio
-async def test_complete_cancel_reopen_routes_and_scope(tmp_path: pathlib.Path) -> None:
+async def test_archive_cancel_reopen_routes_and_scope(tmp_path: pathlib.Path) -> None:
   import src.runtime.api.sessions as sessions_api
   from src.infra import config
   from src.runtime.api import deps
@@ -679,6 +680,11 @@ async def test_complete_cancel_reopen_routes_and_scope(tmp_path: pathlib.Path) -
   cfg, session_blocks, tree = conftest.build_env(tmp_path)
   root = await conftest.create_task(tree, parent=None, request_id="root")
   worker = await conftest.create_task(tree, parent=root.id, request_id="worker", profile="worker")
+  other = await conftest.create_task(tree, parent=None, request_id="other")
+  pid, pid_start = conftest.identity_of(os.getpid())
+  await tree.runs.register_run_locked(
+      models.RunRecord(id="agent-run", session_id=other.id, kind="manager_turn", pid=pid, pid_start=pid_start))
+  await tree.runs.record_launch(other.id, "agent-run", pid=pid, pid_start=pid_start)
 
   app = fastapi.FastAPI()
   app.include_router(sessions_api.router, prefix="/api/sessions")
@@ -689,72 +695,24 @@ async def test_complete_cancel_reopen_routes_and_scope(tmp_path: pathlib.Path) -
   app.dependency_overrides[deps.get_task_manager] = lambda: tree
   app.dependency_overrides[deps.get_run_store] = lambda: tree.runs
   with testclient.TestClient(app) as client:
-    # Blockers are a concrete 409 list: the open child blocks the root.
-    blocked = client.post(
-        f"/api/sessions/{root.id}/complete",
-        json={
-            "request_id": "route-1",
-            "summary": "s",
-            "result_refs": [],
-            "run_ids": []
-        })
-    assert blocked.status_code == 409
-    assert any("open descendant" in b for b in blocked.json()["detail"]["blockers"])
-
-    # The worker's successful run closes it; the route returns the Session detail.
-    await tree.runs.register_run_locked(models.RunRecord(id="run-w", session_id=worker.id, kind="work"))
-    await tree.dispatch.finish_run(worker.id, "run-w", outcome="success")
-    ok = client.post(
-        f"/api/sessions/{root.id}/complete",
-        json={
-            "request_id": "route-2",
-            "summary": "delivered",
-            "result_refs": ["run:run-w"],
-            "run_ids": ["run-w"]
-        })
-    assert ok.status_code == 409  # the worker's report is unprocessed input
-    await tree.runs.register_run_locked(models.RunRecord(id="run-root-turn", session_id=root.id, kind="manager_turn"))
-    async with tree.control_lock:
-      await tree.dispatch.claim_input_batch_locked(root.id, "run-root-turn")
-    await tree.dispatch.finish_run(root.id, "run-root-turn", outcome="success")
-    ok = client.post(
-        f"/api/sessions/{root.id}/complete",
-        json={
-            "request_id": "route-2",
-            "summary": "delivered",
-            "result_refs": ["run:run-root-turn"],
-            "run_ids": ["run-root-turn"]
-        })
-    assert ok.status_code == 200 and ok.json()["task_state"] == "completed"
-
-    # Duplicate operation id replays the original outcome.
-    replay = client.post(
-        f"/api/sessions/{root.id}/complete",
-        json={
-            "request_id": "route-2",
-            "summary": "delivered",
-            "result_refs": ["run:run-root-turn"],
-            "run_ids": ["run-root-turn"]
-        })
-    assert replay.status_code == 200
-    closes = [e for e in tree.events.load_events(root.id) if e["type"] == ET.TASK_CLOSED]
-    assert len(closes) == 1
-
-    # Archive (DELETE) is the single end state; an agent token cannot mutate.
-    await tree.runs.register_run_locked(models.RunRecord(id="run-root-agent", session_id=root.id, kind="work"))
-    await tree.runs.record_launch(root.id, "run-root-agent", pid=424243, pid_start="ps-2")
     agent_token = run_token.sign_run_token(
-        run_token.RunTokenClaims(run_id="run-root-agent", session_id=root.id, agent="a"), key)
+        run_token.RunTokenClaims(run_id="agent-run", session_id=other.id, agent="a"), key)
     key2_headers = {"Authorization": f"Bearer {agent_token}"}
-    forbidden = client.delete(f"/api/sessions/{root.id}", headers=key2_headers)
+    forbidden = client.post(f"/api/sessions/{root.id}/archive", json={"request_id": "wrong-task"}, headers=key2_headers)
     assert forbidden.status_code == 403
+
+    archived = client.post(f"/api/sessions/{root.id}/archive", json={"request_id": "archive-root"})
+    assert archived.status_code == 200
+    assert archived.json() == {"archived": [root.id, worker.id]}
+    assert tree.task_state(root.id) == "archived" and tree.task_state(worker.id) == "archived"
+
     # Unarchive is operator action too; an agent token cannot mutate.
     agent_restore = client.post(f"/api/sessions/{root.id}/unarchive", headers=key2_headers)
     assert agent_restore.status_code == 403
-    await tree.dispatch.finish_run(root.id, "run-root-agent", outcome="success")
     restored = client.post(f"/api/sessions/{root.id}/unarchive")
     assert restored.status_code == 200 and restored.json()["restored"] == [root.id]
     assert tree.task_state(root.id) == "open"
+    assert tree.task_state(worker.id) == "archived"
 
     # Cancel preserves history and stays visible (an end state like archive).
     cancelled = client.post(f"/api/sessions/{root.id}/cancel", json={"request_id": "route-5", "reason": "not needed"})

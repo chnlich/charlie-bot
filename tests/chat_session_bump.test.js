@@ -3,13 +3,9 @@ const test = require('node:test');
 
 const { baseSessionContext, createChatSidebarContext } = require('./session_context_stub');
 const {
-  ELEMENT_NODE,
   TEXT_NODE,
-  FakeText,
   FakeElement,
   loadChatContext,
-  PROSE_ROLES,
-  BUBBLE_TIME_TEXT,
   msg,
   separator,
   plain,
@@ -31,7 +27,6 @@ const {
   scrollTo,
   distanceFromBottom,
   containerDescendants,
-  styleHeightPx,
   engineDebug,
   assertEngineInvariants,
   assertFoldedWrapsBodyFree,
@@ -178,7 +173,7 @@ function lastMatch(items, predicate) {
 // the next span (they open it, ahead of its own items), the head keeps the
 // user-over-stimulus priority over those inputs, and the fold holds the work
 // from the first assistant message to the conclusion — or, in a span with no
-// inputs at all, today's shape: head = body[0], fold after it.
+// inputs at all, this shape: head = body[0], fold after it.
 function expectedTurns(items) {
   const spans = [];
   let span = [];

@@ -46,10 +46,6 @@ def close_facts(tree: conftest.task_sessions.TaskTreeManager, session_id: str) -
   return [e for e in tree.fact_history(session_id) if e.get("type") == ET.TASK_CLOSED]
 
 
-def report_facts(tree: conftest.task_sessions.TaskTreeManager, session_id: str) -> list[dict]:
-  return [e for e in tree.fact_history(session_id) if e.get("type") == ET.CHILD_REPORT]
-
-
 def event_ids(tree: conftest.task_sessions.TaskTreeManager, session_id: str) -> list[str]:
   return [str(e.get("id")) for e in tree.fact_history(session_id)]
 
@@ -147,7 +143,7 @@ async def test_elone_moves_subtree_and_archives_source(tmp_path: pathlib.Path) -
     await tree.dispatch.finish_run(running.id, run.id, outcome="failed", exit_code=1)
     adapter = conftest.build_execution_adapter(cfg, blocks, tree)
     await adapter._report_failure_to_parent(running.id, run, "failed")
-    reports = report_facts(tree, new.id)
+    reports = conftest.child_reports(tree, new.id)
     assert [r.get("child_session_id") for r in reports] == [running.id]
 
     closes = close_facts(tree, source.id)
@@ -462,7 +458,15 @@ async def test_closed_parent_refuses_clone_and_elone(tmp_path: pathlib.Path, mon
   monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
   root = await manager_child(tree, None, "root", name="Root")
   source = await manager_child(tree, root.id, "source", name="Feature")
-  event = tree.archived_close_event(root.id, "close-root", summary="archived by the user")
+  event = tree.completion.archived_close_event(
+      root.id,
+      "close-root",
+      summary="archived by the user",
+      report_to=None,
+      archived_with=None,
+      actor="user",
+      result_refs=[],
+      run_ids=[])
   await tree.events.append(root.id, event)
   assert tree.task_state(root.id) == "archived"
   sessions_before = {p.name for p in cfg.sessions_dir.iterdir()}
@@ -523,11 +527,19 @@ async def test_elone_redelivers_subtree_close_report_before_the_close(tmp_path: 
   source = await manager_child(tree, root.id, "source", name="Feature")
   child = await manager_child(tree, source.id, "child", name="Child")
   # The crash window: the child's close fact is durable, its report is not.
-  close = tree.archived_close_event(child.id, "close-child", summary="done")
+  close = tree.completion.archived_close_event(
+      child.id,
+      "close-child",
+      summary="done",
+      report_to=None,
+      archived_with=None,
+      actor="user",
+      result_refs=[],
+      run_ids=[])
   close["outcome"] = "completed"
   close["report_to"] = source.id
   await tree.events.append(child.id, close)
-  assert report_facts(tree, source.id) == []
+  assert conftest.child_reports(tree, source.id) == []
 
   new = await blocks.fork.elone_session(source.id, event_index=0)
 
@@ -545,14 +557,14 @@ async def test_elone_redelivers_subtree_close_report_before_the_close(tmp_path: 
 
 
 # ---------------------------------------------------------------------------
-# (p) A completed source's successor starts open and recovers to nothing
+# (p) An archived source's successor starts open and recovers to nothing
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_completed_source_successor_starts_open_and_recovers_to_nothing(
+async def test_archived_source_successor_starts_open_and_recovers_to_nothing(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """(p) Clone and elone of a completed node: both successors are open, the
+  """(p) Clone and elone of an archived node: both successors are open, the
   bootstrap starts the elone successor's first round, and a recovery scan
   leaves the parent with no new line and no report from the new node."""
   cfg, blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
@@ -560,12 +572,12 @@ async def test_completed_source_successor_starts_open_and_recovers_to_nothing(
   monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
   root = await manager_child(tree, None, "root", name="Root")
   source = await manager_child(tree, root.id, "source", name="Feature")
-  await tree.completion.complete_task(
+  await tree.completion.archive_task(
       source.id,
       request_id="complete-1",
       evidence=task_completion.CompletionEvidence(summary="done", result_refs=["ref-1"], run_ids=[]),
       caller=conftest.OPERATOR)
-  assert tree.task_state(source.id) == "completed"
+  assert tree.task_state(source.id) == "archived"
   assert len(close_facts(tree, source.id)) == 1
   root_events_before = event_ids(tree, root.id)
   tree.dispatch.executor = test_task_execution._adapter_with_silent_broadcast(cfg, blocks, tree, monkeypatch)

@@ -4,6 +4,7 @@ import json
 import uuid
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any
+from urllib import parse
 
 import fastapi
 import orjson
@@ -46,14 +47,49 @@ def _blocks_to_text(content: Any, label: str) -> str:
   return "".join(parts)
 
 
-def _tool_result_to_text(content: Any) -> str:
-  return _blocks_to_text(content, "tool_result content")
+def _image_block_to_openai_part(block: dict, label: str) -> dict:
+  source = _require_dict(block.get("source"), f"{label} source")
+  if source.get("type") != "base64":
+    raise ValueError(f"unsupported {label} source type: {source.get('type')}")
+  media_type = source.get("media_type")
+  data = source.get("data")
+  if not media_type or not isinstance(data, str):
+    raise ValueError(f"{label} source missing media_type or data")
+  return {
+      "type": "image_url",
+      "image_url": {
+          "url": f"data:{media_type};base64,{data}",
+      },
+  }
 
 
-def _flush_user_text(messages: list[dict], parts: list[str]) -> None:
+def _tool_result_to_openai_content(content: Any) -> tuple[str, list[dict]]:
+  if isinstance(content, str):
+    return content, []
+  if not isinstance(content, list):
+    raise ValueError("tool_result content must be a string or content block list")
+  text_parts: list[str] = []
+  images: list[dict] = []
+  for raw_block in content:
+    block = _require_dict(raw_block, "tool_result content block")
+    block_type = block.get("type")
+    if block_type == "text":
+      text_parts.append(str(block.get("text", "")))
+    elif block_type == "image":
+      images.append(_image_block_to_openai_part(block, "tool_result image"))
+    else:
+      raise ValueError(f"unsupported tool_result content block type: {block_type}")
+  return "".join(text_parts), images
+
+
+def _flush_user_parts(messages: list[dict], parts: list[dict]) -> None:
   if not parts:
     return
-  messages.append({"role": "user", "content": "".join(parts)})
+  if all(part["type"] == "text" for part in parts):
+    content: Any = "".join(part["text"] for part in parts)
+  else:
+    content = parts.copy()
+  messages.append({"role": "user", "content": content})
   parts.clear()
 
 
@@ -65,26 +101,32 @@ def _convert_user_message(message: dict) -> list[dict]:
     raise ValueError("user message content must be a string or content block list")
 
   converted: list[dict] = []
-  text_parts: list[str] = []
+  user_parts: list[dict] = []
+  tool_result_images: list[dict] = []
   for raw_block in content:
     block = _require_dict(raw_block, "user content block")
     block_type = block.get("type")
     if block_type == "text":
-      text_parts.append(str(block.get("text", "")))
+      user_parts.append({"type": "text", "text": str(block.get("text", ""))})
+    elif block_type == "image":
+      user_parts.append(_image_block_to_openai_part(block, "user image"))
     elif block_type == "tool_result":
-      _flush_user_text(converted, text_parts)
+      _flush_user_parts(converted, user_parts)
       tool_use_id = block.get("tool_use_id")
       if not tool_use_id:
         raise ValueError("tool_result block missing tool_use_id")
-      converted.append(
-          {
-              "role": "tool",
-              "tool_call_id": tool_use_id,
-              "content": _tool_result_to_text(block.get("content", "")),
-          })
+      result_text, result_images = _tool_result_to_openai_content(block.get("content", ""))
+      converted.append({
+          "role": "tool",
+          "tool_call_id": tool_use_id,
+          "content": result_text,
+      })
+      tool_result_images.extend(result_images)
     else:
       raise ValueError(f"unsupported user content block type: {block_type}")
-  _flush_user_text(converted, text_parts)
+  _flush_user_parts(converted, user_parts)
+  if tool_result_images:
+    converted.append({"role": "user", "content": tool_result_images})
   return converted
 
 
@@ -107,15 +149,17 @@ def _convert_assistant_message(message: dict) -> dict:
       name = block.get("name")
       if not tool_id or not name:
         raise ValueError("tool_use block missing id or name")
-      tool_calls.append(
-          {
-              "id": tool_id,
-              "type": "function",
-              "function": {
-                  "name": name,
-                  "arguments": json.dumps(block.get("input", {}), separators=(",", ":")),
-              },
-          })
+      tool_call = {
+          "id": tool_id,
+          "type": "function",
+          "function": {
+              "name": name,
+              "arguments": json.dumps(block.get("input", {}), separators=(",", ":")),
+          },
+      }
+      if block.get("extra_content") is not None:
+        tool_call["extra_content"] = block["extra_content"]
+      tool_calls.append(tool_call)
     else:
       raise ValueError(f"unsupported assistant content block type: {block_type}")
 
@@ -126,20 +170,29 @@ def _convert_assistant_message(message: dict) -> dict:
 
 
 def _convert_messages(messages: list[dict], system: Any) -> list[dict]:
-  converted: list[dict] = []
+  system_parts: list[str] = []
   if system:
-    converted.append({"role": "system", "content": _blocks_to_text(system, "system")})
+    system_parts.append(_blocks_to_text(system, "system"))
 
+  converted: list[dict] = []
   for raw_message in messages:
     message = _require_dict(raw_message, "message")
     role = message.get("role")
-    if role == "user":
+    if role == "system":
+      system_parts.append(_blocks_to_text(message.get("content", ""), "system message"))
+    elif role == "user":
       converted.extend(_convert_user_message(message))
     elif role == "assistant":
       converted.append(_convert_assistant_message(message))
     else:
       raise ValueError(f"unsupported message role: {role}")
+  if system_parts:
+    converted.insert(0, {"role": "system", "content": "\n\n".join(system_parts)})
   return converted
+
+
+def _is_google_gemini_endpoint(api_base: str) -> bool:
+  return parse.urlsplit(api_base).hostname == "generativelanguage.googleapis.com"
 
 
 def _convert_tools(tools: list[dict]) -> list[dict]:
@@ -208,11 +261,6 @@ def anthropic_to_openai_chat_request(payload: dict, upstream_model: str) -> dict
       converted["parallel_tool_calls"] = not bool(tool_choice["disable_parallel_tool_use"])
   if converted["stream"]:
     converted["stream_options"] = {"include_usage": True}
-  # Do not pass Anthropic thinking through yet: the OpenAI-compatible upstream's
-  # reasoning_content is not an Anthropic thinking block and does not provide
-  # Anthropic signatures.
-  if payload.get("thinking") is not None:
-    raise ValueError("OpenAI-compatible proxy does not support Anthropic thinking blocks")
   if payload.get("top_k") is not None:
     raise ValueError("OpenAI-compatible proxy does not support Anthropic top_k")
   return converted
@@ -258,12 +306,15 @@ def openai_chat_response_to_anthropic(response: dict, requested_model: str) -> d
     if not tool_id or not name:
       raise ValueError("OpenAI tool_call missing id or function.name")
     arguments = function.get("arguments") or "{}"
-    content_blocks.append({
+    tool_use = {
         "type": "tool_use",
         "id": tool_id,
         "name": name,
         "input": json.loads(arguments),
-    })
+    }
+    if tool_call.get("extra_content") is not None:
+      tool_use["extra_content"] = tool_call["extra_content"]
+    content_blocks.append(tool_use)
 
   return {
       "id": response.get("id") or f"msg_{uuid.uuid4().hex}",
@@ -287,14 +338,21 @@ def _sse_event(event: str, data: dict) -> bytes:
 class OpenAIChatStreamToAnthropic:
   """Stateful translator from OpenAI chat stream chunks to Anthropic SSE events."""
 
-  def __init__(self, model: str) -> None:
+  def __init__(self, model: str, gemini_stream_rules: bool = False) -> None:
     self._message_id = f"msg_{uuid.uuid4().hex}"
     self._model = model
+    # One switch for the two Gemini stream shapes: a tool call that arrives in
+    # one delta with no index, and a thought signature that arrives with or
+    # after the call's fragments (other upstreams send neither).
+    self._gemini_stream_rules = gemini_stream_rules
     self._next_index = 0
     self._text_index: int | None = None
     self._tool_indexes: dict[int, int] = {}
     self._tool_names: dict[int, str] = {}
     self._tool_ids: dict[int, str] = {}
+    self._tool_extra_content: dict[int, Any] = {}
+    self._tool_pending_arguments: dict[int, list[str]] = {}
+    self._tool_started: set[int] = set()
     self._usage: dict = {}
     self._finish_reason: str | None = None
 
@@ -389,22 +447,74 @@ class OpenAIChatStreamToAnthropic:
     self._text_index = None
     return [("content_block_stop", {"index": index})]
 
+  def _start_tool_block(self, call_index: int) -> list[tuple[str, dict]]:
+    if call_index in self._tool_started:
+      return []
+    content_block = {
+        "type": "tool_use",
+        "id": self._tool_ids[call_index],
+        "name": self._tool_names[call_index],
+        "input": {},
+    }
+    extra_content = self._tool_extra_content.get(call_index)
+    if extra_content is not None:
+      content_block["extra_content"] = extra_content
+    events = [("content_block_start", {
+        "index": self._tool_indexes[call_index],
+        "content_block": content_block,
+    })]
+    self._tool_started.add(call_index)
+    pending_arguments = self._tool_pending_arguments[call_index]
+    events.extend(
+        [
+            (
+                "content_block_delta",
+                {
+                    "index": self._tool_indexes[call_index],
+                    "delta": {
+                        "type": "input_json_delta",
+                        "partial_json": arguments,
+                    },
+                },
+            ) for arguments in pending_arguments
+        ])
+    pending_arguments.clear()
+    return events
+
   def _close_tool_blocks(self) -> list[tuple[str, dict]]:
     events: list[tuple[str, dict]] = []
     for call_index in list(self._tool_indexes):
-      block_index = self._tool_indexes.pop(call_index)
-      events.append(("content_block_stop", {"index": block_index}))
+      events.extend(self._close_tool_block(call_index))
+    return events
+
+  def _close_tool_block(self, call_index: int) -> list[tuple[str, dict]]:
+    events = self._start_tool_block(call_index)
+    block_index = self._tool_indexes.pop(call_index)
+    self._tool_names.pop(call_index)
+    self._tool_ids.pop(call_index)
+    self._tool_extra_content.pop(call_index, None)
+    self._tool_pending_arguments.pop(call_index)
+    self._tool_started.remove(call_index)
+    events.append(("content_block_stop", {"index": block_index}))
     return events
 
   def _handle_tool_delta(self, tool_call: dict) -> list[tuple[str, dict]]:
     call_index = tool_call.get("index")
     if call_index is None:
-      raise ValueError("streaming tool_call missing index")
+      if not self._gemini_stream_rules:
+        raise ValueError("streaming tool_call missing index")
+      # Gemini sends one whole tool call per delta with no index. Slot it at
+      # index 0; the id split below closes the previous call there and starts
+      # the next one, and an id-less delta continues the current call.
+      call_index = 0
     function = tool_call.get("function") or {}
     events: list[tuple[str, dict]] = []
 
+    tool_id = tool_call.get("id")
+    if call_index in self._tool_indexes and tool_id and tool_id != self._tool_ids[call_index]:
+      events.extend(self._close_tool_block(call_index))
+
     if call_index not in self._tool_indexes:
-      tool_id = tool_call.get("id")
       name = function.get("name")
       if not tool_id or not name:
         raise ValueError("first streaming tool_call delta missing id or function.name")
@@ -414,38 +524,40 @@ class OpenAIChatStreamToAnthropic:
       self._tool_indexes[call_index] = block_index
       self._tool_ids[call_index] = tool_id
       self._tool_names[call_index] = name
-      events.append(
-          (
-              "content_block_start",
-              {
-                  "index": block_index,
-                  "content_block": {
-                      "type": "tool_use",
-                      "id": tool_id,
-                      "name": name,
-                      "input": {},
-                  },
-              },
-          ))
+      self._tool_pending_arguments[call_index] = []
+
+    extra_content = tool_call.get("extra_content")
+    if extra_content is not None:
+      previous_extra_content = self._tool_extra_content.get(call_index)
+      if call_index in self._tool_started and previous_extra_content != extra_content:
+        raise ValueError("streaming tool_call extra_content changed after its content block started")
+      self._tool_extra_content[call_index] = extra_content
+    if extra_content is not None or not self._gemini_stream_rules:
+      events.extend(self._start_tool_block(call_index))
 
     arguments = function.get("arguments")
     if arguments is not None:
-      events.append(
-          (
-              "content_block_delta",
-              {
-                  "index": self._tool_indexes[call_index],
-                  "delta": {
-                      "type": "input_json_delta",
-                      "partial_json": arguments,
-                  },
-              },
-          ))
+      if call_index in self._tool_started:
+        events.append(
+            (
+                "content_block_delta",
+                {
+                    "index": self._tool_indexes[call_index],
+                    "delta": {
+                        "type": "input_json_delta",
+                        "partial_json": arguments,
+                    },
+                },
+            ))
+      else:
+        self._tool_pending_arguments[call_index].append(arguments)
     return events
 
 
-async def _iter_anthropic_sse(upstream: httpx.Response, model: str) -> AsyncIterator[bytes]:
-  translator = OpenAIChatStreamToAnthropic(model)
+async def _iter_anthropic_sse(upstream: httpx.Response,
+                              model: str,
+                              gemini_stream_rules: bool = False) -> AsyncIterator[bytes]:
+  translator = OpenAIChatStreamToAnthropic(model, gemini_stream_rules=gemini_stream_rules)
   try:
     for event, data in translator.start_events():
       yield _sse_event(event, data)
@@ -510,6 +622,7 @@ async def openai_compatible_messages(
 
   try:
     anthropic_payload = await request.json()
+    google_gemini_endpoint = _is_google_gemini_endpoint(option.api_base)
     openai_payload = anthropic_to_openai_chat_request(anthropic_payload, upstream_model=option.model)
     upstream_url = _join_openai_chat_url(option.api_base)
     headers = _upstream_headers(option.credential, backend_id)
@@ -530,7 +643,9 @@ async def openai_compatible_messages(
     upstream = await client.send(upstream_request, stream=True)
     if upstream.status_code >= 400:
       raise await _upstream_error(upstream)
-    return responses.StreamingResponse(_iter_anthropic_sse(upstream, model), media_type="text/event-stream")
+    return responses.StreamingResponse(
+        _iter_anthropic_sse(upstream, model, gemini_stream_rules=google_gemini_endpoint),
+        media_type="text/event-stream")
 
   upstream = await client.post(upstream_url, json=openai_payload, headers=headers, timeout=None)
   if upstream.status_code >= 400:

@@ -2,8 +2,8 @@
 
 The user's correction: a logical manager session is agent-organizable — a valid
 active manager Run creates logical manager children under its own open task
-through the ordinary task-create API/CLI at any depth, and requests its own
-task's normal completion through the completion owner, both with no user
+through the ordinary task-create API/CLI at any depth, and archives its own
+task through the completion owner, both with no user
 message anywhere on the tree. Implementation stays gated: worker children ride
 the runtime gate (a real user message or a thread summon on the open task
 chain), agent relay text and child reports never count as user requests, and
@@ -16,6 +16,7 @@ with scripted backends; no real model or provider takes part.
 from __future__ import annotations
 
 import datetime
+import os
 import pathlib
 import subprocess
 
@@ -30,11 +31,10 @@ from tests import test_task_execution
 
 def live_run_identity() -> tuple[int, str]:
   """A real live process identity (the verified-live precondition of an own-run request)."""
-  proc = subprocess.Popen(["/bin/sleep", "30"])
-  from src.runtime import runs
-  pair = runs.read_pid_stat(proc.pid)
+  pid = os.getpid()
+  pair = runs.read_pid_stat(pid)
   assert pair is not None
-  return proc.pid, pair[0]
+  return pid, pair[0]
 
 
 async def register_live_manager_run(tree: task_sessions.TaskTreeManager, session_id: str, run_id: str) -> None:
@@ -106,14 +106,15 @@ async def test_manager_child_creation_needs_no_takeoff_and_replays_stably(
 
 
 # ---------------------------------------------------------------------------
-# Normal own-run completion without authorization prompts
+# Normal own-run archive without authorization prompts
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_own_run_completion_closes_without_takeoff_and_ancestor_stays_open(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """A manager's own active Run requests its task's normal closure with no
+@pytest.mark.parametrize("previous_outcome", [None, "success", "failed"])
+async def test_own_run_archive_closes_without_takeoff_and_reports_to_ancestor(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, previous_outcome: str | None) -> None:
+  """A manager's own active Run requests its task's archive with no
   user authorization anywhere: 202 pending_run_finish, then the close lands
   when that Run finishes successfully. The parent stays open — a child's
   completion never finishes a long-lived ancestor."""
@@ -126,16 +127,44 @@ async def test_own_run_completion_closes_without_takeoff_and_ancestor_stays_open
       name="Feature",
       backend=None,
       caller=conftest.OPERATOR)
+  if previous_outcome is not None:
+    await tree.runs.register_run_locked(models.RunRecord(id="previous-turn", session_id=child.id, kind="manager_turn"))
+    await tree.dispatch.finish_run(child.id, "previous-turn", outcome=previous_outcome)
   await register_live_manager_run(tree, child.id, "child-owner-run")
+  blocked_manager = await conftest.create_task(tree, parent=root.id, request_id="blocked-manager")
+  await register_live_manager_run(tree, blocked_manager.id, "blocked-owner-run")
+  await conftest.create_task(tree, parent=blocked_manager.id, request_id="open-child")
 
   with test_task_execution.make_api_client(cfg, session_blocks, tree) as client:
     pending = client.post(
-        f"/api/sessions/{child.id}/complete",
+        f"/api/sessions/{root.id}/archive",
         json={
-            "request_id": "close-1",
+            "request_id": "wrong-task",
             "summary": "coordination complete",
             "result_refs": ["report:feature-coordinated"],
             "run_ids": ["child-owner-run"]
+        },
+        headers=conftest.agent_headers(child.id, "child-owner-run"))
+    assert pending.status_code == 403
+
+    blocked = client.post(
+        f"/api/sessions/{blocked_manager.id}/archive",
+        json={
+            "request_id": "blocked-by-child",
+            "summary": "manager report",
+            "result_refs": ["report:manager-report"],
+        },
+        headers=conftest.agent_headers(blocked_manager.id, "blocked-owner-run"))
+    assert blocked.status_code == 409
+    assert "open descendant" in blocked.json()["detail"]["blockers"][0]
+    assert not [e for e in tree.events.load_events(blocked_manager.id) if e["type"] == ET.TASK_CLOSE_REQUESTED]
+
+    pending = client.post(
+        f"/api/sessions/{child.id}/archive",
+        json={
+            "request_id": "close-1",
+            "summary": "coordination complete",
+            "result_refs": ["report:feature-coordinated"]
         },
         headers=conftest.agent_headers(child.id, "child-owner-run"))
     assert pending.status_code == 202, pending.text
@@ -143,9 +172,14 @@ async def test_own_run_completion_closes_without_takeoff_and_ancestor_stays_open
     assert tree.task_state(child.id) == "open"
 
   # The owner Run finishes successfully: the close lands through the existing
-  # post-finish re-evaluation, with no authorization prompt anywhere.
+  # post-finish re-evaluation and reports to the parent.
   await tree.dispatch.finish_run(child.id, "child-owner-run", outcome="success")
-  assert tree.task_state(child.id) == "completed"  # the close outcome is the state
+  assert tree.task_state(child.id) == "archived"
+  closes = [e for e in tree.events.load_events(child.id) if e["type"] == ET.TASK_CLOSED]
+  assert len(closes) == 1 and closes[0]["outcome"] == "archived"
+  assert closes[0]["report_to"] == root.id
+  reports = [e for e in tree.events.load_events(root.id) if e["type"] == ET.CHILD_REPORT]
+  assert len(reports) == 1 and reports[0]["outcome"] == "archived"
 
   # The ancestor holds its own conditions: it stays open after the child closed.
   assert tree.task_state(root.id) == "open"

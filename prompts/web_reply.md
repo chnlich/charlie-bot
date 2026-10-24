@@ -36,12 +36,16 @@ The For-you view shows your web replies and hides the rest of your turn output.
 
 ## When to set the session status
 
-- Before the turn ends, compare the session status with the state that this turn read back.
-- When an item differs, set the new value before the turn ends.
-- When no item differs, leave the session status unchanged.
+- At the end of each turn, run one status command. When Goal, Now or Waiting on you differs from the state that this
+  turn read back, run `charliebot web status set`. Otherwise, run `charliebot web status confirm`. The panel then
+  shows the state that the last turn read back.
+- The server reminds the session once when a turn ends without either command.
 - A child session keeps its own progress in its own **Now**.
 - When a child session reports progress that changes this session's next milestone, set the new **Now**.
 - When the user resolves a Waiting on you item, remove the item in the same turn.
+- When the session's goal is delivered and no Waiting on you item remains, archive your task as
+  prompts/task_manager.md says. The user's next message reopens the task. The panel and the sidebar then list only
+  open work.
 
 ## Form
 
@@ -49,12 +53,18 @@ The For-you view shows your web replies and hides the rest of your turn output.
 - Keep each web reply under 500 characters. A markdown link counts as its label.
 - When the answer needs more than 500 characters, write the whole answer on a page.
 - Then post the conclusion and the link to that page as the answer reply.
+- Write an optional review, and a default that proceeds without a reply, into the web reply. The panel then lists only
+  what the next milestone waits on.
 - Write the web reply and the session status in the language of your chat replies.
 - Write **Now** in one or two sentences.
 - Keep **Now** under 200 characters.
 - Each set replaces the whole **Now** text. Write only the open state of the next milestone into it.
 - Write your messages without the status block. The status panel is the one home of the session status.
-- Put each decision or action that you ask of the user into a Waiting on you item.
+- Put the decisions and actions that one user reply settles into one Waiting on you item.
+- The steps of one plan that wait for a take off and its open trade-offs form one Waiting on you item.
+- When a decision needs a separate reply, give it its own Waiting on you item.
+- A separate reply comes from another person or at another time.
+- The user then clears each Waiting on you item with one reply.
 - Write the decision or the action in the item's `text`, in one sentence.
 - Write the item's `context` with these three parts:
   - what the line does now, and why the decision comes now;
@@ -75,7 +85,10 @@ The For-you view shows your web replies and hides the rest of your turn output.
 - The JSON object takes any of the keys `goal`, `now` and `waiting`.
 - `waiting` is a list of objects with the keys `text`, `context` and `link`. Set `link` to null when the place has no link.
 - Then run `charliebot web status set --file <path>`.
-- The command gives each Waiting on you item to a cold reader, unless the reader has already read it as it stands.
+- The command refuses a link to an older version of a plan, or to a closed plan, and names the newest file. The
+  panel then shows the version that the user decides on.
+- The command gives each remaining Waiting on you item to a cold reader, unless the reader has already read it as it
+  stands.
 - The cold reader reads the item, and the page at its link when this host serves that page. It has no other context.
 - The reader restates the decision and the three parts of its context, and names the kind of step.
 - When the command prints these restatements, it stored nothing.
@@ -89,6 +102,9 @@ The For-you view shows your web replies and hides the rest of your turn output.
 - The command replaces the items that the file names and keeps the other items. It prints the stored session status.
 - The printout also holds `now_chars` and `now_over_budget`.
 - When `now_over_budget` is true, shorten **Now** and set it again.
+- When no item differs, run `charliebot web status confirm`.
+- The command records the confirmation and cold reads nothing. It refuses a stale stored plan link and names the
+  newest file.
 - After a context reset, read the session status with `charliebot web status show`.
 - The command also prints the Waiting on you items of each open descendant session.
 - The command also prints the **Now** of each open child session.

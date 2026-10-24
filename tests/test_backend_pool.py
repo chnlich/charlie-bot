@@ -91,7 +91,7 @@ def test_reviewer_never_falls_back_to_a_member_the_worker_node_used(tmp_path) ->
 
 
 def test_a_check_without_used_members_keeps_the_session_backend_fallback(tmp_path) -> None:
-  """Verify and the cold read name no used members: a spent pool falls back to the session backend, as today."""
+  """Verify and the cold read name no used members: a spent pool falls back to the session backend."""
   cfg = _cfg(tmp_path, ["a", "b"])
   backend_pool.cool("b", None)
   selection = review.select_reviewer_backend(cfg, "verify", "a", "m", [])

@@ -383,7 +383,13 @@ async def test_recreated_task_reattaches_to_its_original_node(tick_env) -> None:
   original_id = _read_task_yaml(home)["session_id"]
   # The user archived the node, then deleted the task and re-created it under
   # the same name without a binding.
-  assert await tree.archive_subtree(original_id, caller=conftest.OPERATOR) == [original_id]
+  assert await tree.completion.archive_subtree(
+      original_id,
+      request_id="archive-test",
+      summary="archived by the user",
+      result_refs=[],
+      run_ids=[],
+      caller=conftest.OPERATOR) == [original_id]
   (home / ".charliebot" / "config.d" / "cron.d" / "nightly.yaml").unlink()
   conftest.write_nightly_task(home)
 
@@ -487,7 +493,7 @@ async def test_archiving_bound_node_writes_enabled_false(tick_env) -> None:
   node_id = _read_task_yaml(home)["session_id"]
 
   with conftest.make_cron_sessions_client(cfg, session_blocks, tree) as client:
-    response = client.delete(f"/api/sessions/{node_id}")
+    response = client.post(f"/api/sessions/{node_id}/archive", json={"request_id": "archive-bound-node"})
 
   assert response.status_code == 200
   body = _read_task_yaml(home)
@@ -621,10 +627,14 @@ async def test_bound_node_wake_on_a_live_anchor_carries_no_prefix(tick_env, monk
   conftest.stub_credentials({"charliebot": {"access_key": "op-secret"}})
   tree.dispatch.executor = test_task_execution._adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   builds = conftest.install_scripted_backends(
-      monkeypatch, [
+      monkeypatch,
+      [
           test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("first")]),
+          # The first turn's status reminder wakes one turn before the second report does.
+          test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("reminder")]),
           test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("second")])
-      ], conftest.BUILD_BACKEND_PATCH_TARGET)
+      ],
+      conftest.BUILD_BACKEND_PATCH_TARGET)
 
   # Turn 1: a firing report wakes the anchor-less node — a fresh native
   # conversation carrying the prefix; the launch records the native anchor.
@@ -649,7 +659,7 @@ async def test_bound_node_wake_on_a_live_anchor_carries_no_prefix(tick_env, monk
   assert outcome2 == "success"
   # The turn 2 prompt carried neither the scheduled prefix nor a reset notice:
   # the same native conversation continued.
-  prompt2 = builds[1]["backend"].prompt
+  prompt2 = builds[2]["backend"].prompt
   assert prompt2 is not None
   assert sequence_controller.scheduled_report_prefix("nightly") not in prompt2
   assert "[Context reset" not in prompt2

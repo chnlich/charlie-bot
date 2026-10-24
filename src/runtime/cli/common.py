@@ -777,9 +777,9 @@ def find_local_task_child(
 
 
 def find_local_task_close(task_id: str, request_id: str) -> dict | None:
-  """The close fact THIS cancel/complete request's own identity binds to.
+  """The close fact THIS cancel/archive request's own identity binds to.
 
-  The sent-but-lost readback for ``session cancel`` / ``session complete``
+  The sent-but-lost readback for ``session cancel`` / ``session archive``
   binds to the operation's request identity, never to a scan: this request's
   closed fact is the event whose id derives from (task id, request id) via
   ``stable_close_event_id``, and its run-token deferral is the
@@ -810,7 +810,7 @@ def find_local_task_close(task_id: str, request_id: str) -> dict | None:
     if event.get("type") == "task_closed" and event.get("id") == closed_id:
       return {
           "session_id": task_id,
-          "task_state": "cancelled" if event.get("outcome") == "cancelled" else "completed",
+          "task_state": str(event.get("outcome") or "completed"),
           "closed_event_id": closed_id,
       }
     if event.get("type") == "task_close_requested" and event.get("request_id") == request_id:
@@ -842,8 +842,8 @@ def resolve_session_id(arg_session: str | None) -> str:
   explicit ``--session`` must agree with it and a mismatch exits 2 naming both,
   because either value can carry a caller's intent. cwd serves as the fallback
   for an invocation the server did not start (a hand-run shell):
-  with the variable absent, $CHARLIEBOT_HOME/sessions/{session_id} supplies the id
-  exactly as it does today. With the variable present, a cwd sitting in another
+  with the variable absent, $CHARLIEBOT_HOME/sessions/{session_id} supplies the id.
+  With the variable present, a cwd sitting in another
   session's directory routes by the variable and prints a non-fatal warning
   naming both ids, so a stale copied path stays visible while a legitimate cd
   (reading a sibling session's artifacts, entering a worktree) keeps working.

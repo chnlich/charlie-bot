@@ -1,6 +1,6 @@
 """Run truth on disk for the restart-safe agent runtime.
 
-A worker/master run's ground truth lives in its thread data directory, not in
+A worker/master run's ground truth lives in its per-run directory, not in
 the server process: the agent subprocess writes its NDJSON stdout straight to
 ``agent.raw.ndjson`` and stderr to ``agent.stderr.log`` via inherited file
 descriptors, and the server is a tail-follow consumer that can die and
@@ -51,17 +51,16 @@ CURSOR_NAME = "agent.raw.cursor"
 # never in the worktree the run works in.
 HARNESS_INSTRUCTIONS_NAME = "harness_instructions.md"
 
-# The transport directory every per-run file sits in (a thread's data dir, a
-# master run's <session>/data/master_runs/<started_at> dir) and the
-# master-capture directory name under a session's data dir. Writers (the
-# master turn in src/runtime, the task tree's node creation) and readers
-# (token_tally's corpus walk, the cold-storage transport sweep) must agree on
-# these names.
+# A session's data directory, and the master-capture directory name under it: a
+# task Run's transport sits in data/runs/<run_id>/ and a master run's in
+# data/master_runs/<started_at>/. Writers (the master turn in src/runtime, the
+# task tree's node creation) and readers (token_tally's corpus walk, the
+# cold-storage transport sweep) must agree on these names.
 DATA_DIR_NAME = "data"
 MASTER_RUNS_DIR_NAME = "master_runs"
 
 # The sessions-tree directory holding a session's pre-task-tree thread
-# directories. No writer lays it down anymore; the storage-cool scan,
+# directories. No writer lays it down; the storage-cool scan,
 # token_tally's corpus walk and backup's path classification still read it by
 # name, so all sides must agree on this name.
 THREADS_DIR_NAME = "threads"
@@ -461,16 +460,6 @@ def terminal_outcome_in_events(events: list[dict], run_id: str) -> str | None:
   the whole list.
   """
   return _RUN_FACTS_MEMO.fold(events).outcomes.get(run_id)
-
-
-def run_outcomes_in_events(events: list[dict]) -> dict[str, str | None]:
-  """The run-finished outcome map over one event list (last finish wins per run id).
-
-  Answers from the same shared one-fold-per-list memo as
-  :func:`terminal_outcome_in_events`, so a caller that folds for the map and
-  then asks per-Run questions pays one fold for the whole list.
-  """
-  return dict(_RUN_FACTS_MEMO.fold(events).outcomes)
 
 
 def withheld_reason_in_events(events: list[dict], run_id: str) -> str | None:

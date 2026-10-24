@@ -2,9 +2,10 @@
 // Session status panel (chat column)
 // ---------------------------------------------------------------------------
 // The panel under the view toggle, above the message list, shows a web session's
-// Goal, Now and Waiting on you, and in a parent session the Waiting on you items
-// of its open descendant sessions and a folded block of the Now of its open direct
-// children. A web session is one that Chat.ForYou.isWebSession (for-you.js) accepts.
+// Goal, Now and Waiting on you, how long each waiting item has waited, and in a
+// parent session the Waiting on you items of its open descendant sessions and a
+// folded block of the Now of its open direct children. A web session is one that
+// Chat.ForYou.isWebSession (for-you.js) accepts.
 // A thread session and a worker session show no panel. Both platforms draw the
 // toggle row; the phone starts folded and desktop state persists in localStorage.
 //
@@ -139,6 +140,24 @@
     return row;
   }
 
+  // How long an item has waited, in hours or days. An item whose start time is a
+  // lower bound (since_exact false) reads with the bound mark in front.
+  const HOUR_MS = 60 * 60 * 1000;
+  function waitedAge(item) {
+    if (!item.since) return null;
+    const hours = Math.floor(Math.max(0, Date.now() - Date.parse(item.since)) / HOUR_MS);
+    const value = hours >= 24 ? Math.floor(hours / 24) + 'd' : hours + 'h';
+    return (item.since_exact === false ? '至少 ' : '') + value;
+  }
+
+  function waitedAgeSpan(item) {
+    const age = waitedAge(item);
+    if (!age) return null;
+    const span = textSpan('whitespace-nowrap text-slate-500', age);
+    span.dataset.waitingAge = 'true';
+    return span;
+  }
+
   function waitingItem(item) {
     const el = document.createElement('div');
     el.className = 'break-words text-amber-200';
@@ -146,6 +165,8 @@
     const line = document.createElement('div');
     line.className = 'flex gap-2';
     line.appendChild(textSpan('min-w-0', item.text));
+    const age = waitedAgeSpan(item);
+    if (age) line.appendChild(age);
     const href = safeLink(item.link);
     if (href) line.appendChild(openLink(href));
     el.appendChild(line);
@@ -175,6 +196,8 @@
     const line = document.createElement('div');
     line.className = 'flex gap-2';
     line.appendChild(textSpan('min-w-0', prefix + item.text));
+    const age = waitedAgeSpan(item);
+    if (age) line.appendChild(age);
     line.appendChild(openLink('/?session=' + encodeURIComponent(sessionId)));
     el.appendChild(line);
     if (item.context) el.appendChild(contextFold(item.context));
@@ -336,6 +359,9 @@
       return;
     }
     if (gen !== panelFetchGen || sessionId !== panelSessionId) return;
+    if (body.web_status && (!panelStatus || Date.parse(body.web_status.updated_at) >= Date.parse(panelStatus.updated_at))) {
+      panelStatus = body.web_status;
+    }
     panelDescendants = body.descendants;
     panelChildren = body.children;
     renderPanel();

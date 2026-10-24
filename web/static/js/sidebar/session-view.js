@@ -1012,7 +1012,7 @@ function renderUsageFromData(usage) {
         else if (contextTokens >= contextCompactAt / 2) color = 'bg-yellow-500';
         else color = 'bg-blue-500';
       } else {
-        // No line: fall back to today's thresholds (50% / 80% of full).
+        // No line: fall back to the default thresholds (50% / 80% of full).
         color = pct > 80 ? 'bg-red-500' : pct > 50 ? 'bg-yellow-500' : 'bg-blue-500';
       }
       bar.className = PROGRESS_BAR_FILL_CLASS + ' ' + color;
@@ -1051,7 +1051,7 @@ function renderUsageFromData(usage) {
 // send the task creation body: a client request key (a replay under the same
 // parent returns the same node), the parent id (null for a root), always the
 // manager profile, and an empty goal. The server names the node from its
-// session counter, as it names a session today.
+// session counter, as it names a session.
 function newTaskRequestId() {
   if (globalThis.crypto && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
   return 'ui-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);

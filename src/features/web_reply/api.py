@@ -52,6 +52,13 @@ class WebStatusRequest(pydantic.BaseModel):
   text: str
 
 
+class WebStatusConfirmRequest(pydantic.BaseModel):
+  """Request body for the internal web/status/confirm endpoint: the calling session."""
+  model_config = pydantic.ConfigDict(extra="forbid")
+
+  session_id: str
+
+
 class WebAskCheckRequest(pydantic.BaseModel):
   """Request body for the internal web/ask-check endpoint: one cold read of a Waiting on you item."""
   model_config = pydantic.ConfigDict(extra="forbid")
@@ -121,13 +128,32 @@ async def web_status_set(
 ) -> dict:
   """Store the calling session's status items and return the stored status the CLI prints.
 
-  Refusals map WebReplyError's status: 404 unknown session, 409 a thread session, worker, or unread waiting item, and
-  422 a file that is not a JSON object of valid items, has a waiting item without context or links a dead file.
-  Nothing is stored or recorded on a refusal.
+  Refusals map WebReplyError's status: 404 unknown session, 409 a thread session, a worker, a stale plan link or an
+  unread waiting item, and 422 a file that is not a JSON object of valid items, carries a server-written field, has a
+  waiting item without context or links a dead file. Nothing is stored or recorded on a refusal.
   """
   try:
     return await status.set_status(
         req.session_id, req.text, store, events, tree, scan_context=_file_link_scan_context(cfg, store, req.session_id))
+  except reply.WebReplyError as exc:
+    raise fastapi.HTTPException(status_code=exc.status, detail=exc.detail) from exc
+
+
+@router.post("/web/status/confirm")
+async def web_status_confirm(
+    req: WebStatusConfirmRequest,
+    cfg: config.CharlieBotConfig = fastapi.Depends(deps.get_config_on_loop),
+    store: session_store.SessionStore = fastapi.Depends(deps.get_session_store),
+    events: session_events.SessionEvents = fastapi.Depends(deps.get_session_events),
+) -> dict:
+  """Confirm the calling session's stored status and return it.
+
+  Refusals map WebReplyError's status: 404 unknown session, 409 a thread session, a worker or a stale plan link. A
+  confirmation records one event and cold reads nothing.
+  """
+  try:
+    return await status.confirm_status(
+        req.session_id, store, events, scan_context=_file_link_scan_context(cfg, store, req.session_id))
   except reply.WebReplyError as exc:
     raise fastapi.HTTPException(status_code=exc.status, detail=exc.detail) from exc
 

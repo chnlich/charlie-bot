@@ -60,6 +60,7 @@ MOVED_ROUTES = [
     MovedRoute(WEB_REPLY, "POST", "/api/internal/web/reply", _session_body(text="t"), 404, SESSION_NOT_FOUND),
     MovedRoute(WEB_REPLY, "GET", "/api/internal/web/dialog?session_id={session_id}", {}, 404, SESSION_NOT_FOUND),
     MovedRoute(WEB_REPLY, "POST", "/api/internal/web/status", _session_body(text="{}"), 404, SESSION_NOT_FOUND),
+    MovedRoute(WEB_REPLY, "POST", "/api/internal/web/status/confirm", _session_body(), 404, SESSION_NOT_FOUND),
     MovedRoute(WEB_REPLY, "GET", "/api/internal/web/status?session_id={session_id}", {}, 404, SESSION_NOT_FOUND),
     MovedRoute(WEB_REPLY, "POST", "/api/internal/web/status/unread", _session_body(text="{}"), 404, SESSION_NOT_FOUND),
     MovedRoute(

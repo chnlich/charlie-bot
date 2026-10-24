@@ -83,6 +83,7 @@ CharlieBot is a self-hosted multi-agent orchestration system: a master agent dri
 - `charliebot config` — print a config key's value through the loader (`config get <key>`)
 - `charliebot delegate` — delegate a task to a worker agent
 - `charliebot discord` — reply to or read the Discord thread a session was summoned from, and check the bot setup
+- `charliebot disk-sweep` — list or remove old task worktrees and scratch directories (`--yes` applies; without it the run is a read-only dry run)
 - `charliebot improve` — start an iterative improvement loop
 - `charliebot improve-stop` — stop this session's running improvement loop after the current iteration
 - `charliebot memory` — query and lint the store; `add` stages a capture

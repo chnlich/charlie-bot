@@ -1104,6 +1104,11 @@ def build_task_tree(cfg: Any, blocks: SessionBlocks) -> task_sessions.TaskTreeMa
   return blocks.tree
 
 
+def child_reports(tree: task_sessions.TaskTreeManager, session_id: str) -> list[dict]:
+  """Every child report on the node, in delivery order."""
+  return [e for e in tree.fact_history(session_id) if e.get("type") == ET.CHILD_REPORT]
+
+
 def build_execution_adapter(
     cfg: Any, blocks: SessionBlocks, tree: task_sessions.TaskTreeManager) -> task_execution.TaskExecutionAdapter:
   """A task execution adapter over *blocks* and *tree*."""
@@ -2295,6 +2300,7 @@ def build_worktree_cfg(tmp_path: pathlib.Path) -> core_config.CharlieBotConfig:
 
 
 PUBLISH_BASE_URL = "https://pub.example.test/charliebot_pub"
+PUBLISH_READER_URL = "https://reader.example.com/s/abc123/"
 
 
 def deploy_publish_lane(tmp_path: pathlib.Path) -> pathlib.Path:
@@ -2316,6 +2322,24 @@ def build_publish_cfg(tmp_path: pathlib.Path) -> core_config.CharlieBotConfig:
           "public_base_url": PUBLISH_BASE_URL
       },
   )
+
+
+PUBLISH_RECORD_ARGV_PROGRAM = f"""\
+import json
+import pathlib
+import sys
+
+pathlib.Path(__file__).with_name("argv.json").write_text(json.dumps(sys.argv[1:]), encoding="utf-8")
+print({PUBLISH_READER_URL!r})
+"""
+
+
+def write_publish_program(tmp_path: pathlib.Path, body: str) -> list[str]:
+  """Write *body* as the external publish program under tmp_path and return the command that runs it; the
+  command lane runs a program this repository does not ship."""
+  script = tmp_path / "program.py"
+  script.write_text(body, encoding="utf-8")
+  return [sys.executable, str(script)]
 
 
 def write_artifact(tmp_path: pathlib.Path, name: str = "page.html", body: str = "<p>hello</p>") -> pathlib.Path:
@@ -2578,6 +2602,36 @@ def mention_seam(tasks: list[asyncio.Task] | None = None) -> Iterator[mock.Async
     if tasks is not None:
       stack.enter_context(mock.patch(TASKS_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=make_task_spawner(tasks)))
     yield trigger
+
+
+@contextlib.contextmanager
+def prime_barrier(events: session_events.SessionEvents, session_id: str, arrivals: int = 2) -> Iterator[None]:
+  """Force *arrivals* concurrent ``prime_aggregator`` calls for *session_id* to wait for each other.
+
+  The one home the reply and session-message replay suites drive a duplicate-delivery race
+  through: a request's second concurrent delivery reaches ``prime_aggregator`` only after the
+  first has, so the idempotence check under test runs on two requests in flight at once. The
+  original method is restored on exit.
+  """
+  original_prime = events.prime_aggregator
+  seen = 0
+  ready = asyncio.Event()
+
+  async def synchronize(called_session_id: str) -> int:
+    nonlocal seen
+    epoch = await original_prime(called_session_id)
+    if called_session_id == session_id:
+      seen += 1
+      if seen == arrivals:
+        ready.set()
+      await ready.wait()
+    return epoch
+
+  events.prime_aggregator = synchronize
+  try:
+    yield
+  finally:
+    events.prime_aggregator = original_prime
 
 
 def dump_yaml(body: Any) -> str:

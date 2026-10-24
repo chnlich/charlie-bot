@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
+import asyncio
 import datetime
 import json
+import os
 import pathlib
+import threading
 
 import conftest
 import pytest
 
 from src.features.slack import metadata
 from src.infra import event_types as ET
-from src.infra import metadata_slots, models
-from src.runtime import control_events, run_token, task_errors, task_sessions
+from src.infra import metadata_slots, models, ndjson
+from src.runtime import control_events, run_token, runs, task_errors, task_sessions
 
 
 async def build_three_levels(mgr: task_sessions.TaskTreeManager) -> dict[str, str]:
@@ -142,7 +145,13 @@ async def test_fork_child_of_an_archived_v2_parent_starts_open_with_no_inherited
   _, session_blocks, mgr = conftest.build_env(tmp_path)
   parent = await conftest.create_task(mgr, parent=None, request_id="parent", name="Parent")
   await mgr.dispatch.admit_input(parent.id, event_type="user", content="old input", actor="user")
-  await mgr.archive_subtree(parent.id, caller=conftest.OPERATOR)
+  await mgr.completion.archive_subtree(
+      parent.id,
+      request_id="archive-test",
+      summary="archived by the user",
+      result_refs=[],
+      run_ids=[],
+      caller=conftest.OPERATOR)
   assert mgr.task_state(parent.id) == "archived"
 
   child = await session_blocks.fork.fork_session(parent.id)
@@ -313,3 +322,224 @@ async def test_task_state_fast_without_lifecycle_fact_and_headless_lines_matches
   await _append_raw_lines(cfg, node, [json.dumps({"is_error": False})])
 
   assert tree.task_state_fast(node.id) == tree.task_state(node.id)
+
+
+def _forget_cached_history(tree: task_sessions.TaskTreeManager, session_id: str) -> None:
+  """Drop the events cache entry a setup step may have left, so a read's cache effect shows."""
+  tree.session_events.chat_events.events_cache.pop(session_id, None)
+
+
+@pytest.mark.asyncio
+async def test_tail_without_lifecycle_fact_reads_the_deep_fact_without_caching_history(tmp_path: pathlib.Path) -> None:
+  """A closing fact 1001+ lines above the end is found by the walk, and the history is never cached."""
+  cfg, _blocks, tree = conftest.build_env(tmp_path)
+  node = await conftest.create_task(tree, parent=None, request_id="root", name="Root")
+  closed = json.dumps(
+      control_events.build_control_event(
+          ET.TASK_CLOSED, actor="operator", source_session_id=node.id, request_id="c", outcome="completed"))
+  filler = json.dumps(
+      control_events.build_control_event(ET.AGENT_MESSAGE, actor="operator", source_session_id=node.id, text="x"))
+  await _append_raw_lines(cfg, node, [closed, *[filler] * 1001])
+  _forget_cached_history(tree, node.id)
+
+  assert tree.task_state_fast(node.id) == "completed"
+  assert node.id not in tree.session_events.chat_events.events_cache
+  assert tree.task_state(node.id) == "completed"  # the full fold agrees
+
+
+@pytest.mark.asyncio
+async def test_tail_without_lifecycle_fact_reads_an_archived_fact_without_caching_history(
+    tmp_path: pathlib.Path) -> None:
+  """A closing fact that rotated into an archive segment is found by the walk, and the history is never cached."""
+  cfg, blocks, tree = conftest.build_env(tmp_path)
+  node = await conftest.create_task(tree, parent=None, request_id="root", name="Root")
+  archives = cfg.sessions_dir / node.id / "data" / "archives"
+  archives.mkdir(parents=True, exist_ok=True)
+  closed = control_events.build_control_event(
+      ET.TASK_CLOSED, actor="operator", source_session_id=node.id, request_id="c", outcome="completed")
+  (archives / "chat_events.2026-W01.jsonl").write_text(json.dumps(closed) + "\n", encoding="utf-8")
+  live_filler = json.dumps(
+      control_events.build_control_event(ET.AGENT_MESSAGE, actor="operator", source_session_id=node.id, text="x"))
+  await _append_raw_lines(cfg, node, [live_filler] * 3)
+  meta = await tree.load_meta(node.id)
+  meta.archive_offset = 1
+  await tree.session_store.save_metadata(meta)
+  tree = conftest.build_task_tree(cfg, blocks)  # a fresh block: nothing cached, the archive is the only source
+  _forget_cached_history(tree, node.id)
+
+  assert tree.task_state_fast(node.id) == "completed"
+  assert node.id not in tree.session_events.chat_events.events_cache
+  assert tree.task_state(node.id) == "completed"
+
+
+async def _queued_worker(tree: task_sessions.TaskTreeManager, tmp_path: pathlib.Path) -> str:
+  root = await conftest.create_task(tree, parent=None, request_id="root", name="Root")
+  worker = await conftest.create_task(tree, parent=root.id, request_id="w1", profile="worker", name="W1")
+  return worker.id
+
+
+@pytest.mark.asyncio
+async def test_queued_run_with_a_stop_request_is_idle_and_caches_no_history(tmp_path: pathlib.Path) -> None:
+  _cfg, _blocks, tree = conftest.build_env(tmp_path)
+  worker = await _queued_worker(tree, tmp_path)
+  await tree.runs.register_run_locked(models.RunRecord(id="r-stop", session_id=worker))
+  assert tree.activity_of(worker).work_state == "waiting"
+
+  await tree.runs.request_stop(worker, "r-stop", "stop-1")
+  _forget_cached_history(tree, worker)
+  assert tree.activity_of(worker).work_state == "idle"
+  assert worker not in tree.session_events.chat_events.events_cache
+
+
+@pytest.mark.asyncio
+async def test_launched_run_with_a_live_pid_and_no_terminal_fact_is_running_and_caches_no_history(
+    tmp_path: pathlib.Path) -> None:
+  _cfg, _blocks, tree = conftest.build_env(tmp_path)
+  worker = await _queued_worker(tree, tmp_path)
+  await tree.runs.register_run_locked(models.RunRecord(id="r-live", session_id=worker))
+  pid_start, _state = runs.read_pid_stat(os.getpid())
+  await tree.runs.record_launch(worker, "r-live", pid=os.getpid(), pid_start=pid_start)
+  _forget_cached_history(tree, worker)
+
+  activity = tree.activity_of(worker)
+  assert (activity.has_running_tasks, activity.work_state) == (True, "running")
+  assert worker not in tree.session_events.chat_events.events_cache
+
+
+@pytest.mark.asyncio
+async def test_run_with_ended_at_is_settled_without_reading_its_history(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  _cfg, _blocks, tree = conftest.build_env(tmp_path)
+  worker = await _queued_worker(tree, tmp_path)
+  await tree.runs.register_run_locked(models.RunRecord(id="r-done", session_id=worker))
+  await tree.runs.record_finish(worker, "r-done", "completed")
+  _forget_cached_history(tree, worker)
+
+  def no_history_read(*_args: object, **_kwargs: object) -> None:
+    raise AssertionError("a run whose record has ended_at reads no history")
+
+  monkeypatch.setattr(tree.session_events.chat_events, "iter_events_from_end", no_history_read)
+  assert tree.activity_of(worker).work_state == "idle"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pause_after_stat", [False, True])
+async def test_tree_rows_computed_across_an_append_equal_the_rows_before_or_after_it(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, pause_after_stat: bool) -> None:
+  """The page's rows come from the worker thread; an append that lands mid-page is seen wholly or not at all.
+
+  The worker's history identity is taken on the thread, and the loop appends a
+  closing fact to that worker while the thread is held either just before or
+  just after that stat. The page's rows follow the identity the thread took, so
+  every row shows the worker wholly before the append (stat first) or wholly
+  after it (append first). The parent's row counts the worker's open descendant,
+  so a read that mixed the two would show neither page.
+  """
+  _cfg, _blocks, tree = conftest.build_env(tmp_path)
+  root = await conftest.create_task(tree, parent=None, request_id="root", name="Root")
+  mid = await conftest.create_task(tree, parent=root.id, request_id="mid", name="Mid")
+  worker = await conftest.create_task(tree, parent=mid.id, request_id="w1", profile="worker", name="W1")
+  await tree.runs.register_run_locked(models.RunRecord(id="r-queued", session_id=worker.id))
+  for session_id in (root.id, mid.id, worker.id):
+    _forget_cached_history(tree, session_id)
+  # The index is built before the pause: a rebuild would read the worker on the wrong thread.
+  monkeypatch.setattr(task_sessions, "_TREE_INDEX_TTL_SECONDS", 3600.0)
+  await tree.tree_page(parent_id=None, include_archived=True, limit=100, cursor=None)
+  before = (await tree.tree_page(parent_id=root.id, include_archived=True, limit=100, cursor=None))["items"]
+  assert before[0]["open_descendant_count"] == 1
+
+  paused = threading.Event()
+  resume = threading.Event()
+  original_identity = tree._history_identity
+
+  def paused_identity(session_id: str) -> tuple[int, int, int] | None:
+    if session_id != worker.id or paused.is_set():
+      return original_identity(session_id)
+    if pause_after_stat:
+      identity = original_identity(session_id)
+      paused.set()
+      resume.wait(timeout=10)
+      return identity
+    paused.set()
+    resume.wait(timeout=10)
+    return original_identity(session_id)
+
+  monkeypatch.setattr(tree, "_history_identity", paused_identity)
+  request = asyncio.ensure_future(tree.tree_page(parent_id=root.id, include_archived=True, limit=100, cursor=None))
+  assert await asyncio.to_thread(paused.wait, 10)
+  closed = control_events.build_control_event(
+      ET.TASK_CLOSED, actor="operator", source_session_id=worker.id, request_id="c", outcome="completed")
+  await tree.events.append(worker.id, closed)
+  resume.set()
+  during = (await request)["items"]
+  monkeypatch.setattr(tree, "_history_identity", original_identity)
+
+  after = (await tree.tree_page(parent_id=root.id, include_archived=True, limit=100, cursor=None))["items"]
+  assert after[0]["open_descendant_count"] == 0
+  assert during == (before if pause_after_stat else after)
+  # A later serial read agrees with the memos the page left behind.
+  assert tree.task_state_fast(worker.id) == "completed"
+  assert tree.activity_of(worker.id).work_state == "idle"
+  for session_id in (root.id, mid.id, worker.id):
+    assert session_id not in tree.session_events.chat_events.events_cache
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("parse_reads_append", [True, False])
+async def test_cold_events_fill_on_a_thread_keeps_an_append_exactly_once(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, parse_reads_append: bool) -> None:
+  """A cold fill on a worker thread and one append race; the events cache then equals the file's events.
+
+  With parse_reads_append the parse reads the appended line, and the fill installs before the append checks
+  the cache. Without it the parse reads before the write, and the fill installs after that check. Either way
+  the appended event is in the cache once, and the cache equals what the file holds.
+  """
+  _cfg, _blocks, tree = conftest.build_env(tmp_path)
+  root = await conftest.create_task(tree, parent=None, request_id="root", name="Root")
+  store = tree.session_events.chat_events
+  store.clear_cache(root.id)
+  path = store.get_chat_events_path(root.id)
+  real_parse = ndjson.parse_ndjson_file
+  real_append = ndjson.append_ndjson
+  appended = threading.Event()
+  parsed = threading.Event()
+  installed = threading.Event()
+  checked = threading.Event()
+
+  def parse(parse_path: pathlib.Path) -> list[dict]:
+    if parse_path != path:
+      return real_parse(parse_path)
+    if parse_reads_append:
+      assert appended.wait(10)
+      return real_parse(parse_path)
+    events = real_parse(parse_path)
+    parsed.set()
+    assert checked.wait(10)
+    return events
+
+  async def append(append_path: pathlib.Path, data: dict) -> None:
+    await real_append(append_path, data)
+    if append_path != path:
+      return
+    appended.set()
+    if parse_reads_append:
+      assert await asyncio.to_thread(installed.wait, 10)
+
+  monkeypatch.setattr(ndjson, "parse_ndjson_file", parse)
+  monkeypatch.setattr(ndjson, "append_ndjson", append)
+  event = {"type": "pressure_probe", "content": "appended during the fill"}
+  fill = asyncio.ensure_future(asyncio.to_thread(store.load_chat_events_sync, root.id))
+  if parse_reads_append:
+    save = asyncio.ensure_future(store.save_chat_event(root.id, event))
+    loaded = await fill
+    installed.set()
+    await save
+  else:
+    assert await asyncio.to_thread(parsed.wait, 10)
+    await store.save_chat_event(root.id, event)
+    checked.set()
+    loaded = await fill
+
+  assert loaded is store.events_cache[root.id]
+  assert loaded == real_parse(path)
+  assert [e["id"] for e in loaded].count(event["id"]) == 1

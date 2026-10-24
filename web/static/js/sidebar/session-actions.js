@@ -54,7 +54,11 @@ async function removeSessionRowInline(sessionId) {
 
 async function archiveSession(id) {
   try {
-    const res = await fetch(`/api/sessions/${id}`, { method: 'DELETE' });
+    const res = await fetch(`/api/sessions/${id}/archive`, {
+      method: 'POST',
+      headers: JSON_HEADERS,
+      body: JSON.stringify({request_id: crypto.randomUUID()}),
+    });
     if (!res.ok) throw new Error(await archiveRefusalDetail(res));
     await removeSessionRowInline(id);
   } catch (err) {

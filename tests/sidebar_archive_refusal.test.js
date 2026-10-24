@@ -1,6 +1,6 @@
 // ---------------------------------------------------------------------------
 // The sidebar list operations' server-answer handling (session-actions.js):
-// a failed archive (DELETE /api/sessions/{id}) or unarchive
+// a failed archive (POST /api/sessions/{id}/archive) or unarchive
 // (POST /api/sessions/{id}/unarchive) surfaces the server's detail to the
 // user through the page toast — the 409 blockers shape (message + blocker
 // list), a plain string detail, and the status line when the refusal carries
@@ -19,6 +19,8 @@ function buildContext({fetchImpl, showToastImpl, archivedForgetSessionImpl = () 
   const context = {
     console,
     fetch: fetchImpl,
+    JSON_HEADERS: {'Content-Type': 'application/json'},
+    crypto: {randomUUID: () => 'archive-request-id'},
     showToast: showToastImpl,
     setTimeout: () => 0,
     clearTimeout: () => {},

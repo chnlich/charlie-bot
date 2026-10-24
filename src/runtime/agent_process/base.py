@@ -608,7 +608,7 @@ def _rotate_stale_transport(
   The raw log is opened O_APPEND and a fresh tail-follow always starts at
   offset 0, so a fresh spawn into a log dir that already holds a previous
   attempt's raw bytes (e.g. the VERIFY quota-retry fallback, which respawns
-  into the same thread data dir) would replay that entire prior stream —
+  into the same Run directory) would replay that entire prior stream —
   including whatever terminal error ended it. Rotated files are kept under a
   numbered suffix distinct from RAW_LOG_NAME/STDERR_LOG_NAME (so
   raw_completion_time keeps seeing only the current attempt) for

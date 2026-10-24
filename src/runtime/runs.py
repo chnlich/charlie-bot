@@ -463,16 +463,6 @@ def terminal_outcome_in_events(events: list[dict], run_id: str) -> str | None:
   return _RUN_FACTS_MEMO.fold(events).outcomes.get(run_id)
 
 
-def run_outcomes_in_events(events: list[dict]) -> dict[str, str | None]:
-  """The run-finished outcome map over one event list (last finish wins per run id).
-
-  Answers from the same shared one-fold-per-list memo as
-  :func:`terminal_outcome_in_events`, so a caller that folds for the map and
-  then asks per-Run questions pays one fold for the whole list.
-  """
-  return dict(_RUN_FACTS_MEMO.fold(events).outcomes)
-
-
 def withheld_reason_in_events(events: list[dict], run_id: str) -> str | None:
   """The newest recorded run_launch_withheld reason of one Run (None while none).
 

@@ -624,17 +624,6 @@ def _systemd_run_command(
   )
 
 
-def _stop_scope(unit: str, command_process: subprocess.Popen[str], cgroup: pathlib.Path) -> None:
-  if command_process.poll() is None:
-    subprocess.run(["/usr/bin/systemctl", "--user", "stop", unit], check=True, capture_output=True, text=True)
-  try:
-    command_process.wait(timeout=30)
-  except subprocess.TimeoutExpired:
-    raise TimeoutError(f"systemd-run client for {unit} did not exit after stop")
-  if _cgroup_pids(cgroup):
-    raise RuntimeError(f"scope {unit} still has processes after stop: {sorted(_cgroup_pids(cgroup))}")
-
-
 def _remove_pressure_slice(cgroup: pathlib.Path | None) -> None:
   if cgroup is None:
     return

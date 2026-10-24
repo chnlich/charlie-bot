@@ -300,6 +300,7 @@ pub fn openai_chat_response_to_anthropic(response: &Value, requested_model: &str
 pub struct OpenAiChatStream {
   message_id: String,
   model: String,
+  gemini_stream_rules: bool,
   next_index: u64,
   text_index: Option<u64>,
   /// The open tool blocks in opening order, each with the call index the upstream gave it.
@@ -309,10 +310,11 @@ pub struct OpenAiChatStream {
 }
 
 impl OpenAiChatStream {
-  pub fn new(model: &str, _gemini_stream_rules: bool) -> Self {
+  pub fn new(model: &str, gemini_stream_rules: bool) -> Self {
     Self {
       message_id: new_message_id(),
       model: model.to_string(),
+      gemini_stream_rules,
       next_index: 0,
       text_index: None,
       tool_indexes: Vec::new(),
@@ -413,6 +415,7 @@ impl OpenAiChatStream {
   /// `_handle_tool_delta`: a call's first delta opens its block; later deltas carry its arguments.
   fn tool_delta(&mut self, tool_call: &Value, events: &mut Vec<Event>) -> PyResult<()> {
     let call_index = match get(tool_call, "index")? {
+      None | Some(Value::Null) if self.gemini_stream_rules => json!(0),
       None | Some(Value::Null) => return value_error("streaming tool_call missing index"),
       Some(index) => index.clone(),
     };

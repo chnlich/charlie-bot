@@ -206,7 +206,12 @@ mod tests {
     let (status, body) =
       home.send(Method::POST, "/api/internal/web/status", Some(json!({"session_id": sid, "text": status_text}))).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["waiting"], json!([item]));
+    let stored_item = &body["waiting"][0];
+    assert_eq!(stored_item["text"], item["text"]);
+    assert_eq!(stored_item["context"], item["context"]);
+    assert_eq!(stored_item["link"], item["link"]);
+    assert!(stored_item.get("since").is_some(), "a stored item carries its start time");
+    assert_eq!(stored_item["since_exact"], json!(true));
     assert_eq!(body["now_chars"], json!(0));
     assert_eq!(body["now_over_budget"], json!(false));
 

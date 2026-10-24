@@ -307,6 +307,118 @@ mod tests {
     }
   }
 
+  // -------------------------------------------------------------------------
+  // The status reminder: every finished turn, once, and no reminder from its own wake
+  // -------------------------------------------------------------------------
+
+  /// The web contribution's after_turn for one finished turn, over the test home's feature context.
+  async fn after_turn(home: &Home, session_id: &str, done: &Value) {
+    let meta = home.meta(session_id).await;
+    WebReplyTurnContribution.after_turn(&meta, done, &config(), &home.features).await.unwrap();
+  }
+
+  /// The status reminders of the session's log, in log order: the agent messages a turn's missing status set or
+  /// confirm woke (`_status_reminders`).
+  fn status_reminders(home: &Home, session_id: &str) -> Vec<Value> {
+    home.events(session_id).into_iter().filter(|event| event.get("web_status_reminder").is_some()).collect()
+  }
+
+  /// A master_done event that answers `input_event_ids`, carries `id` as its persisted id, and ended cleanly.
+  fn done_with_id(input_event_ids: &[&str], id: &str) -> Value {
+    json!({"type": "master_done", "exit_code": 0, "input_event_ids": input_event_ids, "id": id})
+  }
+
+  #[tokio::test]
+  async fn a_turn_without_a_status_gets_one_reminder_and_its_reminder_turn_gets_none() {
+    let home = Home::new();
+    let sid = home.manager("session", None).await;
+    let done = done_with_id(&[], "turn-1");
+
+    after_turn(&home, &sid, &done).await;
+    after_turn(&home, &sid, &done).await;
+
+    let reminders = status_reminders(&home, &sid);
+    assert_eq!(reminders.len(), 1);
+    assert_eq!(reminders[0]["type"], json!("agent_message"));
+    assert_eq!(reminders[0]["web_status_reminder"], json!("turn-1"));
+    assert_eq!(reminders[0]["from_session_name"], json!("Session status"));
+    assert_eq!(reminders[0].get("web_reply"), None, "a plain reminder answers no user message");
+
+    let reminder_id = id_of(&reminders[0]).to_string();
+    after_turn(&home, &sid, &done_with_id(&[reminder_id.as_str()], "turn-2")).await;
+
+    assert_eq!(status_reminders(&home, &sid).len(), 1, "the reminder's own turn gets no reminder");
+  }
+
+  #[tokio::test]
+  async fn a_turn_missing_reply_and_status_gets_one_combined_reminder_and_one_wake() {
+    let home = Home::new();
+    let sid = home.manager("session", None).await;
+    let user = home.append(&sid, user_event("the question")).await;
+    let done = done_with_id(&[id_of(&user)], "turn-1");
+
+    after_turn(&home, &sid, &done).await;
+
+    let events = home.events(&sid);
+    let reminders: Vec<Value> =
+      events.iter().filter(|event| event.get("web_status_reminder").is_some()).cloned().collect();
+    assert_eq!(reminders.len(), 1);
+    assert_eq!(reminders[0]["web_reply"]["nudge_of"], json!(id_of(&user)));
+    // The combined reminder is the turn's one nudge: no separate reply nudge rides it.
+    let nudges = home.nudges(&sid);
+    assert_eq!(nudges.len(), 1);
+    assert_eq!(id_of(&nudges[0]), id_of(&reminders[0]));
+    assert_eq!(events.iter().filter(|event| event["type"] == "agent_message").count(), 1);
+
+    let reminder_id = id_of(&reminders[0]).to_string();
+    after_turn(&home, &sid, &done_with_id(&[reminder_id.as_str()], "turn-2")).await;
+
+    let events = home.events(&sid);
+    assert_eq!(events.iter().filter(|event| event.get("web_status_reminder").is_some()).count(), 1);
+    assert_eq!(events.iter().filter(|event| event["type"] == "web_reply_notice").count(), 1);
+  }
+
+  #[tokio::test]
+  async fn a_pending_close_request_skips_only_the_status_reminder() {
+    for missing_reply in [false, true] {
+      let home = Home::new();
+      let sid = home.manager("session", None).await;
+      let mut input_ids: Vec<String> = Vec::new();
+      if missing_reply {
+        let user = home.append(&sid, user_event("the question")).await;
+        input_ids.push(id_of(&user).to_string());
+      }
+      home
+        .append(&sid, json!({"type": "task_close_requested", "request_id": "close-1", "owner_run_id": "run-1"}))
+        .await;
+      let input_refs: Vec<&str> = input_ids.iter().map(String::as_str).collect();
+
+      after_turn(&home, &sid, &done_with_id(&input_refs, "turn-1")).await;
+
+      assert!(status_reminders(&home, &sid).is_empty(), "missing reply {missing_reply}");
+      assert_eq!(home.nudges(&sid).len(), usize::from(missing_reply), "missing reply {missing_reply}");
+    }
+  }
+
+  #[tokio::test]
+  async fn a_turn_that_recorded_a_status_command_gets_no_status_reminder() {
+    for event_type in ["web_status", "web_status_confirmed"] {
+      let home = Home::new();
+      let sid = home.manager("session", None).await;
+      home.append(&sid, json!({"type": event_type, "content": "Status command"})).await;
+      let done = home.append(&sid, json!({"type": "master_done", "exit_code": 0, "input_event_ids": []})).await;
+
+      after_turn(&home, &sid, &done).await;
+
+      assert!(status_reminders(&home, &sid).is_empty(), "{event_type}");
+
+      // A status command from the previous turn cannot satisfy the next background turn.
+      let next = home.append(&sid, json!({"type": "master_done", "exit_code": 0, "input_event_ids": []})).await;
+      after_turn(&home, &sid, &next).await;
+      assert_eq!(status_reminders(&home, &sid).len(), 1, "{event_type}");
+    }
+  }
+
   #[tokio::test]
   async fn an_errored_turn_gets_no_audit() {
     for (errored_input, expected_nudges) in [("user", 0), ("nudge", 1)] {

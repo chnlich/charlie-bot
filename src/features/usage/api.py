@@ -60,7 +60,7 @@ async def start_service(ctx: wiring.ServiceContext) -> None:
   The stack loads at startup, not on the request path: a request-time first-import reads
   whatever files a mid-flight deploy left under a server whose in-memory modules are the
   started code, and the mixed-version import 500s the usage page and the ledger cron handler
-  until restart. Same thread pattern as the speech service: the server import floor stays.
+  until restart. Running it on a worker thread keeps the stack off the server import floor.
   """
   global _warmup_task
   _warmup_task = tasks.create_logged_task(asyncio.to_thread(preload_usage_tally_stack), name="usage-tally-warmup")

@@ -2104,6 +2104,9 @@ mod tests {
     }
     features.store.load_chat_events_shared_sync(&parent.id).unwrap();
     features.store.load_chat_events_shared_sync(&child.id).unwrap();
+    // The seal keeps only facts that were folded at eviction, and a task-state read no longer folds them.
+    features.store.node_facts(&parent.id).unwrap();
+    features.store.node_facts(&child.id).unwrap();
     features.store.evict_recovery_history(&parent.id);
     features.store.evict_recovery_history(&child.id);
     let before: HistoryWork = features.store.history_work();

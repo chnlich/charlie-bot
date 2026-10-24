@@ -208,6 +208,9 @@ pub struct Store {
   pub(crate) history_fact_walks: AtomicU64,
   pub(crate) run_record_reads: AtomicU64,
   pub(crate) task_tree_activity_calls: AtomicU64,
+  /// Python's `_tree_rows_lock`: one tree page's row computation runs at a time, so concurrent pages never walk the
+  /// same histories in parallel.
+  pub(crate) tree_rows_lock: StdMutex<()>,
   pub(crate) history_work: HistoryWorkCounters,
   /// Reads of a node's history, each a call that hands out the live event list, cached or not.
   #[cfg(test)]
@@ -296,6 +299,7 @@ impl Store {
       history_fact_walks: AtomicU64::new(0),
       run_record_reads: AtomicU64::new(0),
       task_tree_activity_calls: AtomicU64::new(0),
+      tree_rows_lock: StdMutex::new(()),
       history_work: HistoryWorkCounters::default(),
       #[cfg(test)]
       history_reads: AtomicU64::new(0),

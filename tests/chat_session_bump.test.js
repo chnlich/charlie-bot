@@ -3,13 +3,9 @@ const test = require('node:test');
 
 const { baseSessionContext, createChatSidebarContext } = require('./session_context_stub');
 const {
-  ELEMENT_NODE,
   TEXT_NODE,
-  FakeText,
   FakeElement,
   loadChatContext,
-  PROSE_ROLES,
-  BUBBLE_TIME_TEXT,
   msg,
   separator,
   plain,
@@ -31,7 +27,6 @@ const {
   scrollTo,
   distanceFromBottom,
   containerDescendants,
-  styleHeightPx,
   engineDebug,
   assertEngineInvariants,
   assertFoldedWrapsBodyFree,

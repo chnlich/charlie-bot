@@ -23,7 +23,7 @@ from src.runtime.hooks import backend_lifecycle
 CC_ID = "11111111-2222-3333-4444-555555555555"
 NOW = datetime.datetime(2026, 9, 6, 20, 0, tzinfo=datetime.UTC)
 
-_fresh_pool_state = conftest.fresh_state_fixture(claude_accounts.reset_for_tests)
+_fresh_pool_state = conftest.fresh_state_fixture(conftest.reset_claude_account_readings)
 
 
 def _result() -> dict:

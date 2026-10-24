@@ -87,3 +87,5 @@ def test_claude_resume_launch_still_passes_the_run_instructions_file(tmp_path: p
 
   assert cmd[cmd.index("--resume") + 1] == "held-conversation"
   assert cmd[cmd.index("--append-system-prompt-file") + 1] == str(tmp_path / "data" / runs.HARNESS_INSTRUCTIONS_NAME)
+  assert "--input-format" not in cmd
+  assert "--replay-user-messages" not in cmd

@@ -13,11 +13,14 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import io
+import itertools
 import os
 import pathlib
 import signal
 import subprocess
 import sys
+import threading
+import time
 
 import pytest
 import uvicorn
@@ -104,6 +107,47 @@ async def test_vfork_killed_child_reports_signal_exit() -> None:
   os.kill(proc.pid, signal.SIGKILL)
   assert await asyncio.wait_for(proc.wait(), timeout=5) == -signal.SIGKILL
   assert await proc.stdout.read() == b""
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="the vfork stub is Linux-only")
+def test_vfork_slow_exec_does_not_stop_other_threads(monkeypatch: pytest.MonkeyPatch) -> None:
+  """The stub's clone-through-report-read wait releases the GIL.
+
+  A child that sits before execve held the GIL on the pre-fix stub — a probe
+  with an strace-injected 3 s exec delay stopped every other Python thread of
+  the server for 3.005 s — so a ticker thread here must keep ticking through
+  the spawn. The stall rides the stub's test hook
+  (``_VFORKSPAWN_TEST_EXEC_DELAY_MS``, a nanosleep in child_main) instead of
+  the probe's ptrace injection.
+  """
+  monkeypatch.setenv("_VFORKSPAWN_TEST_EXEC_DELAY_MS", "1000")
+  ticks: list[float] = []
+  stop = threading.Event()
+
+  def ticker() -> None:
+    while not stop.is_set():
+      ticks.append(time.monotonic())
+      time.sleep(0.01)
+
+  tick_thread = threading.Thread(target=ticker)
+  tick_thread.start()
+  try:
+    t0 = time.monotonic()
+    devnull = os.open(os.devnull, os.O_RDWR)
+    try:
+      pid = spawn.vfkspawn.spawn(
+          ["/bin/true"], [f"PATH={os.environ['PATH']}"], None, devnull, devnull, devnull, os.getpid())
+      os.waitpid(pid, 0)
+    finally:
+      os.close(devnull)
+    spawn_s = time.monotonic() - t0
+  finally:
+    stop.set()
+    tick_thread.join()
+  assert spawn_s >= 0.9, f"the child never blocked before execve; the hook did not fire (spawn took {spawn_s:.3f}s)"
+  inside = [t for t in ticks if t0 - 0.05 <= t <= t0 + spawn_s + 0.05]
+  max_gap = max((b - a for a, b in itertools.pairwise(inside)), default=float("nan"))
+  assert max_gap < 0.5, f"the other threads stalled {max_gap:.3f}s during the spawn"
 
 
 class _FdReuseProbe(io.FileIO):

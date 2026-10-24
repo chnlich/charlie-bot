@@ -5,9 +5,6 @@ a step re-enters in a fresh interpreter after ``uv sync``.
 """
 
 import pathlib
-import subprocess
-import sys
-import types
 
 import pytest
 
@@ -15,7 +12,6 @@ from src.app import registrations
 from src.app import setup as setup_runner
 from src.backends.claude_code import setup_check
 from src.features.cron import seed
-from src.features.voice import voice_setup
 from src.infra import config
 from src.runtime.hooks import wiring
 
@@ -63,40 +59,7 @@ def test_step_calls_an_unregistered_function_once_and_runs_nothing_else(fresh_re
   assert not (fresh_registry / "config.yaml").exists()
 
 
-def test_the_packages_register_the_cron_voice_and_claude_code_steps_in_that_order() -> None:
+def test_the_packages_register_the_cron_and_claude_code_steps_in_that_order() -> None:
   registrations.register_all()
 
-  assert wiring.setup_steps() == [seed.setup_step, voice_setup.setup_step, setup_check.setup_step]
-
-
-@pytest.fixture
-def recorded_commands(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
-  commands: list[list[str]] = []
-  monkeypatch.setattr(subprocess, "run", lambda command, **kwargs: commands.append(command))
-  return commands
-
-
-def test_the_voice_step_syncs_then_re_enters_only_on_enable_step_when_a_gpu_is_present(
-    monkeypatch: pytest.MonkeyPatch, recorded_commands: list[list[str]]) -> None:
-  monkeypatch.setattr(voice_setup.shutil, "which", lambda name: "/usr/bin/nvidia-smi")
-  runner = types.SimpleNamespace(__spec__=types.SimpleNamespace(name="sentinel.runner"))
-  monkeypatch.setitem(sys.modules, "__main__", runner)
-
-  voice_setup.setup_step(config.CharlieBotConfig(), dry_run=False)
-
-  assert recorded_commands[0] == ["uv", "sync", "--group", "gpu-voice"]
-  assert recorded_commands[1] == [
-      "uv", "run", "--no-sync", "python", "-m", "sentinel.runner", "--step",
-      "src.features.voice.voice_setup:enable_step"
-  ]
-  assert len(recorded_commands) == 2
-
-
-@pytest.mark.parametrize(("gpu", "dry_run"), [(False, False), (False, True), (True, True)])
-def test_the_voice_step_runs_no_command_without_a_gpu_or_in_a_dry_run(
-    monkeypatch: pytest.MonkeyPatch, recorded_commands: list[list[str]], gpu: bool, dry_run: bool) -> None:
-  monkeypatch.setattr(voice_setup.shutil, "which", lambda name: "/usr/bin/nvidia-smi" if gpu else None)
-
-  voice_setup.setup_step(config.CharlieBotConfig(), dry_run=dry_run)
-
-  assert recorded_commands == []
+  assert wiring.setup_steps() == [seed.setup_step, setup_check.setup_step]

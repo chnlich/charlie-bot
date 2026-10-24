@@ -190,7 +190,7 @@ A local git repo at `$CHARLIEBOT_HOME/memory/` holds one durable fact or rule se
 1. User presses/clicks button to start recording
 2. Presses/clicks again to stop and send
 3. Audio uploaded to backend
-4. **Local speech transcription** decodes the complete recording offline: the VAD segments it and each segment decodes in one shot (sherpa-onnx Qwen3-ASR on CPU by default, `voice.engine=qwen3_hf` on GPU hosts; supports Chinese, English, mixed, and ~30 languages)
+4. **Online transcription** sends the complete recording through the selected backend (`gemini` or `muse`; `voice.default_backend` when the request names none). No speech model runs on the server.
 5. Transcription displayed in UI first
 6. Passed to Master with a note: the displayed message stays verbatim, the web client sends the message with `input_mode: "voice"`, and the voice package's turn contribution (`src/features/voice/turn_contribution.py`) opens the prompt's copy of the message with the fixed voice note (`VOICE_NOTE`)
 
@@ -298,10 +298,10 @@ Voice input records locally and ends one of two ways. With a live transcription 
 browser also streams every audio chunk to the preview relay `/ws/voice/{session_id}`; on stop
 the relay archives the recording it already received (under `sessions/{id}/voice/`, 16 kHz mono
 PCM16 WAV plus a `.txt` with the final text) and pushes the final, and the browser uploads
-nothing. The fallback — no final inside the 2 s budget, a relay failure, or the local backend —
-uploads the whole recording: `POST /api/voice/{session_id}` persists it under
-`sessions/{id}/voice/`, then decodes it offline, and `POST /api/voice/{session_id}/confirm`
-decodes the opening clip as a recognition probe.
+nothing. The fallback — no final inside the budget or a relay failure — uploads the whole
+recording: `POST /api/voice/{session_id}` persists it under `sessions/{id}/voice/`, then transcribes
+it through the selected online backend and returns the text. A failed transcription keeps the
+recording for the browser's retry.
 
 **Frontend**
 - Vanilla-JS UI under `web/static/js/`, served by FastAPI StaticFiles (Node.js/npm is build-time only: Tailwind CSS)

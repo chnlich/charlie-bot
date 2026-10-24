@@ -9,7 +9,7 @@ from collections.abc import Awaitable, Callable
 
 from src.infra import config, constants, log_once, models, ndjson, process
 from src.infra import event_types as ET
-from src.runtime import launch_loop, master_cc_state, runs, spawner_backends, streaming
+from src.runtime import launch_loop, master_cc_state, midturn_delivery, runs, spawner_backends, streaming
 from src.runtime.agent_process import base
 from src.runtime.hooks import backend_lifecycle, backend_type_registration, backend_types, turn_contributions
 
@@ -279,6 +279,8 @@ async def _handle_event(
     session_id: str,
     cc_session_id: str | None,
     persist_and_broadcast: Callable[[str, dict], Awaitable[None]],
+    *,
+    work_item: master_cc_state._WorkItem | None = None,
 ) -> str | None:
   """Process a single backend event: persist, broadcast, and handle compaction events.
 
@@ -289,6 +291,7 @@ async def _handle_event(
     if sid:
       cc_session_id = sid
 
+  await midturn_delivery.record_ack(work_item, event)
   # Persist first (injects timestamp), then broadcast with timestamp included
   await persist_and_broadcast(session_id, event)
 
@@ -404,7 +407,8 @@ def _turn_launch_context(
       preassigned_native_id=None,
       emit=emit,
       record_account=record_account,
-      context_state=context_state)
+      context_state=context_state,
+      run_id=item.task_run.run_id)
 
 
 async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str | None, dict]:
@@ -572,6 +576,8 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
         log_dir=log_dir,
         cgroup_session_id=session_meta.id,
     )
+    if launch_kwargs.get("midturn_delivery"):
+      midturn_delivery.bind_process(item.task_run.run_id, backend)
     master_cc_state._active_procs[session_meta.id] = backend
 
     spawn_prompt = process_launch.prompt if process_launch.prompt is not None else process_prompt
@@ -579,7 +585,8 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
       tracker.on_event(event)
       if event.get("type") == ET.ERROR:
         error_event_messages.append(event.get("message", ""))
-      cc_session_id = await _handle_event(event, session_meta.id, cc_session_id, item.callbacks.persist_and_broadcast)
+      cc_session_id = await _handle_event(
+          event, session_meta.id, cc_session_id, item.callbacks.persist_and_broadcast, work_item=item)
       if watch is not None and watch.observe(event):
         # Armed relay at its safe point: the tool result is on disk, stop here.
         await backend.terminate()
@@ -645,7 +652,8 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
         # filter cannot read parses anyway, keeping a foreign raw shape on
         # the whole-file projection.
         turn_events = await asyncio.to_thread(
-            runs.project_raw_file, raw_path, _build_fresh_translate(cfg, option), _ASSISTANT_LINE_FILTER)
+            runs.project_raw_file, raw_path, _build_fresh_translate(cfg, option, session_meta, item.task_run.run_id),
+            _ASSISTANT_LINE_FILTER)
         await _emit_round_notices(item, option, turn_events)
 
   except asyncio.CancelledError:
@@ -719,8 +727,12 @@ def _resolve_resume_option(
   return cfg.backends.options[0] if cfg.backends.options else None
 
 
-def _build_fresh_translate(cfg: config.CharlieBotConfig,
-                           option: models.BackendOption | None) -> Callable[[dict], list[dict]]:
+def _build_fresh_translate(
+    cfg: config.CharlieBotConfig,
+    option: models.BackendOption | None,
+    meta: models.SessionMetadata,
+    run_id: str,
+) -> Callable[[dict], list[dict]]:
   """A fresh translate_event callable for one scan/stream.
 
   Stateful translates (codex text buffering, gemini) require one instance per
@@ -728,13 +740,7 @@ def _build_fresh_translate(cfg: config.CharlieBotConfig,
   claude shape) instead of failing the re-attach — same rule as the worker
   side's reconcile translate.
   """
-  if option is None:
-    return lambda event: [event]
-  try:
-    return backend_types.build_backend(option, cfg).translate_event
-  except Exception as e:
-    log.warning("master_cc_resume_translate_unresolved", backend=option.id, error=str(e))
-    return lambda event: [event]
+  return midturn_delivery.fresh_translate(cfg, option, meta, run_id)
 
 
 async def _emit_round_notices(
@@ -774,7 +780,7 @@ async def _resume_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, 
   tracker = _RunTimingTracker(session_meta.id, option.type if option else "unknown", option.model if option else None)
 
   try:
-    stream_translate = _build_fresh_translate(cfg, option)
+    stream_translate = _build_fresh_translate(cfg, option, session_meta, item.task_run.run_id)
     async for event in base.tail_follow_events(
         raw_path,
         translate=stream_translate,
@@ -785,9 +791,11 @@ async def _resume_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, 
         buffer_limit=cfg.subprocess_buffer_limit,
     ):
       tracker.on_event(event)
-      cc_session_id = await _handle_event(event, session_meta.id, cc_session_id, item.callbacks.persist_and_broadcast)
+      cc_session_id = await _handle_event(
+          event, session_meta.id, cc_session_id, item.callbacks.persist_and_broadcast, work_item=item)
 
-    events, _, exit_code = await asyncio.to_thread(runs.scan_result_exit, raw_path, _build_fresh_translate(cfg, option))
+    events, _, exit_code = await asyncio.to_thread(
+        runs.scan_result_exit, raw_path, _build_fresh_translate(cfg, option, session_meta, item.task_run.run_id))
     # Recover the manual-compaction observation from the same whole-file
     # projection the result summary uses (zero new I/O): the persisted cursor
     # may already sit past the boundary line, so the cursor-forward tail above

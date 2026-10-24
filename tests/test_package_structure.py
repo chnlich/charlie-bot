@@ -86,7 +86,9 @@ RUNTIME_LAYERS = (
             "autonamer", "master_cc_queue", "master_cc_run", "master_trigger", "task_execution", "task_recovery",
             "triggers")),
     Layer(
-        6, "task tree", ("session_dispatch", "task_completion", "task_prompts", "task_sessions", "worker_transcript")),
+        6, "task tree", (
+            "midturn_delivery", "session_dispatch", "task_completion", "task_input_prompt", "task_prompts",
+            "task_sessions", "worker_transcript")),
     Layer(
         5, "session services", (
             "control_sink", "scheduled_sessions", "session_anchors", "session_fork", "session_lifecycle",
@@ -95,7 +97,7 @@ RUNTIME_LAYERS = (
     Layer(
         4, "agent processes", (
             "agent_environment", "agent_process.base", "agent_process.deferred_build", "agent_process.spawn",
-            "master_cc_state", "session_events", "streaming", "worker")),
+            "master_cc_state", "resource_class", "session_events", "streaming", "worker")),
     Layer(
         3, "records and events", (
             "backend_pool", "cold_read", "control_events", "home_writer_fence", "launch_loop", "message_aggregator",

@@ -7,9 +7,11 @@
  * page-table copy — and runs the fixed child sequence (pdeathsig, setsid,
  * stdio dup2, default signal dispositions, close-from-3, execve) as pure
  * syscalls: the child shares the parent's address space, so nothing here may
- * allocate or call back into Python. Setup and execve failures report the
- * child's errno over a CLOEXEC pipe and exit 127; a successful execve closes
- * that pipe, so the parent reads EOF as success.
+ * allocate or call back into Python. The parent releases the GIL across the
+ * clone-through-report-read wait, so a slow exec of one child never stops the
+ * server's other Python threads. Setup and execve failures report the child's
+ * errno over a CLOEXEC pipe and exit 127; a successful execve closes that
+ * pipe, so the parent reads EOF as success.
  */
 #define _GNU_SOURCE
 #include <Python.h>
@@ -17,10 +19,12 @@
 #include <fcntl.h>
 #include <sched.h>
 #include <signal.h>
+#include <string.h>
 #include <sys/mman.h>
 #include <sys/prctl.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 struct spawn_args {
@@ -32,6 +36,7 @@ struct spawn_args {
   int err_fd;
   int report_fd;
   pid_t parent_pid;
+  long exec_delay_ms; /* test hook: blocks the child before execve */
   sigset_t oldmask;
 };
 
@@ -66,9 +71,39 @@ static int child_main(void *argp) {
   if (a->cwd != NULL && chdir(a->cwd) != 0)
     report_and_exit(a, errno);
   sigprocmask(SIG_SETMASK, &a->oldmask, NULL);
+  /* Regression-test hook only: _VFORKSPAWN_TEST_EXEC_DELAY_MS makes the child
+     sit before execve so a test can watch the parent's other threads during
+     the wait. nanosleep is a pure syscall, so the child path stays
+     allocation- and Python-free. */
+  if (a->exec_delay_ms > 0) {
+    struct timespec ts = {a->exec_delay_ms / 1000, (a->exec_delay_ms % 1000) * 1000000L};
+    nanosleep(&ts, NULL);
+  }
   execve(a->argv[0], a->argv, a->envp);
   report_and_exit(a, errno);
   return 127; /* unreachable; keeps the compiler honest about the return type */
+}
+
+static char *copy_utf8(PyObject *value) {
+  Py_ssize_t size;
+  const char *utf8 = PyUnicode_AsUTF8AndSize(value, &size);
+  if (utf8 == NULL)
+    return NULL;
+  char *copy = PyMem_Malloc((size_t)size + 1);
+  if (copy == NULL) {
+    PyErr_NoMemory();
+    return NULL;
+  }
+  memcpy(copy, utf8, (size_t)size + 1);
+  return copy;
+}
+
+static void free_strings(char **strings, Py_ssize_t count) {
+  if (strings == NULL)
+    return;
+  for (Py_ssize_t i = 0; i < count; i++)
+    PyMem_Free(strings[i]);
+  PyMem_Free(strings);
 }
 
 static PyObject *py_spawn(PyObject *self, PyObject *args) {
@@ -86,27 +121,25 @@ static PyObject *py_spawn(PyObject *self, PyObject *args) {
     PyErr_SetString(PyExc_ValueError, "argv must not be empty");
     return NULL;
   }
-  /* PyUnicode_AsUTF8AndSize caches inside the objects; the caller's lists keep
-     them alive through execve, so borrowed pointers need no extra pinning. */
-  char **argv = PyMem_Malloc(((size_t)argc + 1) * sizeof(char *));
-  char **envp = PyMem_Malloc(((size_t)envc + 1) * sizeof(char *));
+  /* Copy strings out of the caller's lists before releasing the GIL. The child
+     reads stable buffers even if another Python thread mutates those lists. */
+  char **argv = PyMem_Calloc((size_t)argc + 1, sizeof(char *));
+  char **envp = PyMem_Calloc((size_t)envc + 1, sizeof(char *));
   if (argv == NULL || envp == NULL) {
-    PyMem_Free(argv);
-    PyMem_Free(envp);
+    free_strings(argv, argc);
+    free_strings(envp, envc);
     return PyErr_NoMemory();
   }
-  PyObject *lists[2] = {argv_obj, env_obj};
-  char **arrays[2] = {argv, envp};
-  Py_ssize_t sizes[2] = {argc, envc};
-  for (int half = 0; half < 2; half++)
-    for (Py_ssize_t i = 0; i < sizes[half]; i++) {
-      PyObject *item = PyList_GetItem(lists[half], i); /* borrowed */
-      arrays[half][i] = item ? (char *)PyUnicode_AsUTF8AndSize(item, NULL) : NULL;
-      if (arrays[half][i] == NULL)
-        goto fail;
-    }
-  argv[argc] = NULL;
-  envp[envc] = NULL;
+  for (Py_ssize_t i = 0; i < argc; i++) {
+    PyObject *item = PyList_GetItem(argv_obj, i); /* borrowed */
+    if (item == NULL || (argv[i] = copy_utf8(item)) == NULL)
+      goto fail;
+  }
+  for (Py_ssize_t i = 0; i < envc; i++) {
+    PyObject *item = PyList_GetItem(env_obj, i); /* borrowed */
+    if (item == NULL || (envp[i] = copy_utf8(item)) == NULL)
+      goto fail;
+  }
 
   int report[2];
   if (pipe2(report, O_CLOEXEC) != 0) {
@@ -131,47 +164,77 @@ static PyObject *py_spawn(PyObject *self, PyObject *args) {
     close(report_w);
     goto fail;
   }
-  struct spawn_args a = {argv,   envp,   cwd,  in_fd,  out_fd, err_fd, report_w,
-                         (pid_t)parent_pid, {{0}}};
+  /* Test hook (see child_main): the delay rides the spawn_args struct, read
+     parent-side while the GIL is still held. */
+  long exec_delay_ms = 0;
+  const char *delay_env = getenv("_VFORKSPAWN_TEST_EXEC_DELAY_MS");
+  if (delay_env != NULL)
+    exec_delay_ms = strtol(delay_env, NULL, 10);
+  struct spawn_args a = {argv,        envp,   cwd,  in_fd,  out_fd, err_fd, report_w,
+                         (pid_t)parent_pid, exec_delay_ms, {{0}}};
   sigset_t all;
   sigfillset(&all);
+  /* Every Python C-API call above is done: from here through the report-pipe
+     read and a failed exec's waitpid the GIL is released, so a child that
+     sits before execve holds one worker thread, not the server's other
+     Python threads. While the child shares this address space those threads
+     run Python against the same heap; child_main uses only its private stack,
+     spawn_args, the prebuilt argv/env buffers and syscalls. The strings were
+     copied above and stay stable through execve; child_main makes no Python or
+     allocator calls. */
+  pid_t pid;
+  int clone_errno = 0;
+  int child_err = 0;
+  int exec_failed = 0;
+  int read_errno = 0;
+  Py_BEGIN_ALLOW_THREADS
   /* The blocked mask is inherited so no handler runs in the child; the child
      restores the saved mask right before execve. */
   pthread_sigmask(SIG_BLOCK, &all, &a.oldmask);
-  pid_t pid = clone(child_main, (char *)stack + 256 * 1024, CLONE_VM | CLONE_VFORK | SIGCHLD, &a);
-  int clone_errno = errno;
+  pid = clone(child_main, (char *)stack + 256 * 1024, CLONE_VM | CLONE_VFORK | SIGCHLD, &a);
+  clone_errno = errno;
   pthread_sigmask(SIG_SETMASK, &a.oldmask, NULL);
   munmap(stack, 256 * 1024);
   close(report_w);
   if (pid < 0) {
     close(report[0]);
+  } else {
+    /* The child has execed or exited here (CLONE_VFORK), so its argv/envp
+       reads are done and the arrays can go back once the GIL returns. */
+    ssize_t got = read(report[0], &child_err, sizeof(child_err));
+    close(report[0]);
+    if (got == (ssize_t)sizeof(child_err)) {
+      exec_failed = 1;
+      int status;
+      while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {
+      }
+    } else if (got != 0) {
+      read_errno = got < 0 ? errno : EIO;
+    }
+  }
+  Py_END_ALLOW_THREADS
+  if (pid < 0) {
     errno = clone_errno;
     PyErr_SetFromErrno(PyExc_OSError);
     goto fail;
   }
-  /* The child has execed or exited here (CLONE_VFORK), so its argv/envp reads
-     are done and the arrays can go back before the parent touches Python. */
-  int err = 0;
-  ssize_t got = read(report[0], &err, sizeof(err));
-  close(report[0]);
-  if (got == (ssize_t)sizeof(err)) {
-    int status;
-    while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {
-    }
-    errno = err;
+  if (exec_failed) {
+    errno = child_err;
     PyErr_SetFromErrnoWithFilename(PyExc_OSError, argv[0]);
     goto fail;
   }
-  if (got == 0) {
-    PyMem_Free(argv);
-    PyMem_Free(envp);
-    return PyLong_FromLong((long)pid);
+  if (read_errno != 0) {
+    errno = read_errno;
+    PyErr_SetFromErrno(PyExc_OSError);
+    goto fail;
   }
-  PyErr_SetFromErrno(PyExc_OSError);
+  free_strings(argv, argc);
+  free_strings(envp, envc);
+  return PyLong_FromLong((long)pid);
 
 fail:
-  PyMem_Free(argv);
-  PyMem_Free(envp);
+  free_strings(argv, argc);
+  free_strings(envp, envc);
   return NULL;
 }
 

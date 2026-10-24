@@ -16,7 +16,7 @@ from src.runtime.agent_process import base as backend_base
 NOW = datetime.datetime(2026, 9, 6, 20, 0, tzinfo=datetime.UTC)
 UUID = "uuid-relay-1"
 
-_fresh_pool_state = conftest.fresh_state_fixture(claude_accounts.reset_for_tests)
+_fresh_pool_state = conftest.fresh_state_fixture(conftest.reset_claude_account_readings)
 
 
 def _install_backends(monkeypatch: pytest.MonkeyPatch, backends: list[conftest.ScriptedRelayBackend]) -> list[dict]:

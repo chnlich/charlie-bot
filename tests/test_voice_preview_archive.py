@@ -4,7 +4,7 @@ Each test drives src/features/voice/api.py's relay handler against a fake live b
 and a temporary sessions dir; the fake websocket scripts the browser's frames
 and records the server's. The contract under test: the recording+text pair is
 on disk before the final frame goes out, a failed or unwanted final leaves no
-files behind, and the kept audio never exceeds the transcriber's sample cap.
+files behind, and the kept audio never exceeds the recording cap.
 """
 
 import asyncio
@@ -367,11 +367,11 @@ async def test_a_browser_leaving_before_the_final_logs_voice_preview_abandoned(
 @pytest.mark.asyncio
 async def test_frames_past_the_cap_are_cut_sample_exactly(
     monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
-  from src.features.voice import transcriber
+  from src.features.voice.transcription import base
 
   # Three 2048-sample frames against a 3072-sample cap: the second frame is cut
   # in half (2048 of its samples kept), the third does not survive at all.
-  monkeypatch.setattr(transcriber, "MAX_RECORDING_SAMPLES", 3072)
+  monkeypatch.setattr(base, "MAX_RECORDING_SAMPLES", 3072)
   socket = FakePreviewSocket([FRAME_B, FRAME_B, FRAME_B, _END_FRAME], hang_when_script_ends=True)
   backend = FakeLiveBackend(FINAL_TEXT)
   relay = _start_relay(monkeypatch, tmp_path, socket, backend)

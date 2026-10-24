@@ -398,7 +398,7 @@ async def _pooled_pm_manager(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyP
   """One pooled-account trial stage: the account registry reset, the pooled env,
   and its root PM manager node. The pooled-account tests script their own
   backends and wake recording on top of this stage."""
-  claude_accounts.reset_for_tests()
+  conftest.reset_claude_account_readings()
   cfg, session_blocks, tree = test_task_execution.build_pooled_env(tmp_path, monkeypatch)
   manager = await tree.create_task(
       request_id="root",
@@ -657,7 +657,7 @@ async def test_three_iterations_deliver_three_reports_and_wake_the_parent_four_t
   ids: the per-iteration source id carries the improve-iteration prefix over
   the iteration's own run_finished event, so the final report (the raw latest
   run_finished) is never deduplicated away."""
-  claude_accounts.reset_for_tests()
+  conftest.reset_claude_account_readings()
   cfg, session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
   manager = await conftest.create_task(
       tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
@@ -710,7 +710,7 @@ async def test_iteration_report_header_carries_the_judgment(
   report path. An iteration whose worker wrote no report file is invalid with
   the reason "no report file" (decided before the controller's fallback file
   is written); an iteration with a well-formed report is valid."""
-  claude_accounts.reset_for_tests()
+  conftest.reset_claude_account_readings()
   cfg, session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
   manager = await conftest.create_task(
       tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
@@ -774,7 +774,7 @@ async def test_failed_iteration_still_delivers_its_report_and_continues(
   (outcome failed, the worker's own closing words as the body) and the loop
   continues: only a quota blocker or a withheld launch skips the delivery
   point."""
-  claude_accounts.reset_for_tests()
+  conftest.reset_claude_account_readings()
   cfg, session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
   manager = await conftest.create_task(
       tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
@@ -820,7 +820,7 @@ async def test_replaying_an_iteration_report_creates_no_event_and_wakes_nobody(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, repo: pathlib.Path) -> None:
   """A per-iteration report re-delivered under the same source id dedups: no
   second event lands in the parent's log and nobody is woken."""
-  claude_accounts.reset_for_tests()
+  conftest.reset_claude_account_readings()
   cfg, session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
   manager = await conftest.create_task(
       tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
@@ -972,7 +972,7 @@ async def test_merge_back_with_only_failed_iterations_closes_cancelled_with_comp
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, repo: pathlib.Path) -> None:
   """The landing succeeds but no iteration did: lifecycle cancelled (an
   empty-handed delivery is never completed), report outcome completed."""
-  claude_accounts.reset_for_tests()
+  conftest.reset_claude_account_readings()
   cfg, session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
   manager = await conftest.create_task(
       tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
@@ -1017,7 +1017,7 @@ async def test_ff_push_rejection_reports_the_landing_error_and_the_pushed_branch
   """The fast-forward push is rejected but the work branch push succeeds: the
   loop ends blocked and the final report names both facts (the old report
   always claimed the work branch was pushed)."""
-  claude_accounts.reset_for_tests()
+  conftest.reset_claude_account_readings()
   cfg, session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
   manager = await conftest.create_task(
       tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
@@ -1061,7 +1061,7 @@ async def test_both_landing_pushes_failing_names_the_branch_push_error(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, repo: pathlib.Path) -> None:
   """The fast-forward push AND the work branch push both fail: the final
   report no longer claims the work branch was pushed to origin."""
-  claude_accounts.reset_for_tests()
+  conftest.reset_claude_account_readings()
   cfg, session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
   manager = await conftest.create_task(
       tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
@@ -1099,7 +1099,7 @@ async def test_best_effort_branch_push_failure_is_reported_without_merge_back(
   """Without merge-back the loop still pushes the work branch best-effort; a
   failed push rides the final report so the manager knows origin holds
   nothing to land."""
-  claude_accounts.reset_for_tests()
+  conftest.reset_claude_account_readings()
   cfg, session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
   manager = await conftest.create_task(
       tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
@@ -1134,7 +1134,7 @@ async def test_controller_exception_closes_the_child_failed(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, repo: pathlib.Path) -> None:
   """A controller failure after the iterations closes the child cancelled with
   the loop's failed outcome and exactly one final report."""
-  claude_accounts.reset_for_tests()
+  conftest.reset_claude_account_readings()
   cfg, session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
   manager = await conftest.create_task(
       tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
@@ -1171,7 +1171,7 @@ async def test_worktree_failure_closes_the_child_failed(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, repo: pathlib.Path) -> None:
   """A worktree creation failure before the first iteration closes the child
   cancelled with the loop's failed outcome and exactly one final report."""
-  claude_accounts.reset_for_tests()
+  conftest.reset_claude_account_readings()
   cfg, session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
   manager = await conftest.create_task(
       tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
@@ -1213,7 +1213,7 @@ async def test_improve_stop_mid_iteration_closes_after_the_controller_ends(
   the loop's cancelled outcome, and the final report holds the iteration's
   summary."""
 
-  claude_accounts.reset_for_tests()
+  conftest.reset_claude_account_readings()
   cfg, session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
   manager = await conftest.create_task(
       tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
@@ -1277,7 +1277,7 @@ async def test_withheld_iteration_launch_closes_the_child_blocked(
   """A withheld iteration launch: the queued Run takes the close step's stop
   request and never launches; the child closes cancelled with the loop's
   blocked outcome and its work state reads idle."""
-  claude_accounts.reset_for_tests()
+  conftest.reset_claude_account_readings()
   cfg, session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
   cfg.server.min_free_disk_gib = 10**9  # no filesystem holds this much: every worker launch is withheld
   manager = await conftest.create_task(
@@ -1317,7 +1317,7 @@ async def test_controller_exception_while_an_iteration_runs_closes_after_its_fin
   """The controller fails while its iteration still runs: the close step
   leaves the child open, and the iteration's own finish closes it cancelled
   with the loop's failed outcome."""
-  claude_accounts.reset_for_tests()
+  conftest.reset_claude_account_readings()
   cfg, session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
   manager = await conftest.create_task(
       tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")

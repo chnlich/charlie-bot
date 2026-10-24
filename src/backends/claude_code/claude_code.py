@@ -11,6 +11,7 @@ from collections.abc import Mapping
 from src.backends.claude_code import claude_launch
 from src.infra import constants, home, log_once, models, process
 from src.infra import event_types as ET
+from src.runtime import midturn_delivery
 from src.runtime.agent_process import base
 from src.runtime.hooks import backend_lifecycle
 
@@ -113,11 +114,14 @@ def claude_supervisor_env(env: Mapping[str, str]) -> dict[str, str]:
 
 
 # One home for every gateway endpoint and model variable. Endpoint backends write the
-# first two names and may write the third; claude_model_env pins the final five.
+# first two names, may write the extra-body and custom-headers names, and claude_model_env
+# pins the final five. CLAUDE_CODE_EXTRA_BODY is gateway-only: without_gateway_env strips
+# it because the official Anthropic API must never receive the gateway-only field.
 GATEWAY_ENDPOINT_ENV_NAMES: tuple[str, ...] = (
     "ANTHROPIC_BASE_URL",
     "ANTHROPIC_AUTH_TOKEN",
     "ANTHROPIC_CUSTOM_HEADERS",
+    "CLAUDE_CODE_EXTRA_BODY",
     "ANTHROPIC_MODEL",
     "ANTHROPIC_DEFAULT_OPUS_MODEL",
     "ANTHROPIC_DEFAULT_SONNET_MODEL",
@@ -127,7 +131,8 @@ GATEWAY_ENDPOINT_ENV_NAMES: tuple[str, ...] = (
 GATEWAY_BASE_URL_ENV = GATEWAY_ENDPOINT_ENV_NAMES[0]
 GATEWAY_AUTH_TOKEN_ENV = GATEWAY_ENDPOINT_ENV_NAMES[1]
 GATEWAY_CUSTOM_HEADERS_ENV = GATEWAY_ENDPOINT_ENV_NAMES[2]
-CLAUDE_MODEL_ENV_NAMES = GATEWAY_ENDPOINT_ENV_NAMES[3:]
+GATEWAY_EXTRA_BODY_ENV = GATEWAY_ENDPOINT_ENV_NAMES[3]
+CLAUDE_MODEL_ENV_NAMES = GATEWAY_ENDPOINT_ENV_NAMES[4:]
 
 
 def claude_model_env(model: str) -> dict[str, str]:
@@ -297,11 +302,15 @@ class ClaudeCodeBackend(base.AgentBackend):
       run_kind: models.RunKind = "work",
       claude_session_id: str | None = None,
       claude_config_dir: str | None = None,
+      midturn_delivery: bool = False,
+      midturn_run_id: str | None = None,
       **kwargs: object) -> None:
     super().__init__(model=model, **kwargs)
     self._effort = effort
     self._fast_mode = fast_mode
     self._run_kind = run_kind
+    self._midturn_delivery = midturn_delivery
+    self._midturn_run_id = midturn_run_id
     self._claude_config_dir = str(pathlib.Path(claude_config_dir).expanduser()) if claude_config_dir else None
     self._cmd: list[str] = headless_command(run_kind)
     if cli_binary:
@@ -331,6 +340,8 @@ class ClaudeCodeBackend(base.AgentBackend):
 
   def _build_command(self, prompt: str) -> list[str]:
     cmd = list(self._cmd)
+    if self._midturn_delivery:
+      cmd += ["--input-format", "stream-json", "--replay-user-messages"]
     if self._instructions_file is not None:
       cmd += ["--append-system-prompt-file", str(self._instructions_file)]
     return cmd
@@ -338,33 +349,69 @@ class ClaudeCodeBackend(base.AgentBackend):
   def _stdin_prompt(self, prompt: str) -> str | None:
     return prompt
 
-  async def one_shot_text(self, prompt: str, system_prompt: str, *, timeout: float | None) -> str:
-    """Generate text via `claude -p` in text mode, using this backend's model.
+  def translate_event(self, event: dict) -> list[dict]:
+    """Translate stream-json replay lines into run-scoped delivery acknowledgements."""
+    return midturn_delivery.translate_replay(self._midturn_run_id, event) if self._midturn_delivery else [event]
 
-    Print mode with tools disabled: no session persistence, prompt on stdin,
-    plain-text stdout. The process group is killed on timeout; ``None`` waits without a limit.
-    The gateway variables an inherited cc-anthropic-compatible worker environment
-    carries are stripped: with them, `claude` sends this backend's Claude model
+  async def _write_stdin_prompt(self, prompt: str) -> None:
+    """Keep stdin open for a web manager turn and preserve the plain-text path elsewhere."""
+    if self._midturn_delivery:
+      await midturn_delivery.write_initial_prompt(self._midturn_run_id, self, prompt)
+      return
+    await super()._write_stdin_prompt(prompt)
+
+  async def _on_event(self, event: dict) -> None:
+    """Close the gated stream-json writer when Claude emits its first result."""
+    await midturn_delivery.on_backend_event(self._midturn_run_id if self._midturn_delivery else None, event)
+
+  def _one_shot_env(self) -> dict[str, str]:
+    """The environment a ``claude -p`` one-shot of this backend launches with.
+
+    A cc-claude entry strips the gateway variables an inherited cc-anthropic-compatible
+    worker environment carries: with them, ``claude`` sends this backend's Claude model
     name to the gateway instead of the Anthropic account.
     """
-    proc = await asyncio.create_subprocess_exec(
+    return without_gateway_env(os.environ)
+
+  def _one_shot_model_args(self) -> list[str]:
+    """The model-selection flags of this backend's one-shot, the one per-class argv difference.
+
+    A cc-claude entry names its model with ``--model``.
+    """
+    return ["--model", self._model] if self._model else []
+
+  def _one_shot_command(self, system_prompt: str) -> list[str]:
+    """The argv of a ``claude -p`` text one-shot: no session persistence, tools disabled."""
+    return [
         "claude",
         "-p",
         "--output-format",
         "text",
         "--no-session-persistence",
-        "--model",
-        self._model,
+        *self._one_shot_model_args(),
         "--system-prompt",
         system_prompt,
         base.DISALLOWED_TOOLS_FLAG,
         "Bash,Read,Write,Edit,Glob,Grep,Agent",
-        env=without_gateway_env(os.environ),
+    ]
+
+  async def one_shot_text(self, prompt: str, system_prompt: str, *, timeout: float | None) -> str:
+    """Generate text via `claude -p` in text mode.
+
+    Print mode with tools disabled: no session persistence, prompt on stdin,
+    plain-text stdout. ``_one_shot_env`` and ``_one_shot_model_args`` are the only
+    per-class differences, so a cc-claude account backend and an endpoint backend
+    share this launch and process handling. The process group is killed on timeout;
+    ``None`` waits without a limit.
+    """
+    proc = await asyncio.create_subprocess_exec(
+        *self._one_shot_command(system_prompt),
+        env=self._one_shot_env(),
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         start_new_session=True,
-        preexec_fn=self._spawn_preexec(),
+        preexec_fn=await self._spawn_preexec(),
     )
     try:
       stdout, stderr = await asyncio.wait_for(proc.communicate(input=prompt.encode()), timeout=timeout)
@@ -393,12 +440,14 @@ class AnthropicEndpointBackend(ClaudeCodeBackend):
       model: str,
       context_window: int | None = None,
       headers: Mapping[str, str] | None = None,
+      extra_body: Mapping[str, object] | None = None,
       **kwargs: object) -> None:
     self._base_url = base_url
     self._auth_token = auth_token
     self._env_model = model
     self._context_window = context_window
     self._headers = {} if headers is None else dict(headers)
+    self._extra_body = {} if extra_body is None else dict(extra_body)
     super().__init__(model=None, **kwargs)
 
   def _prepare_env(self, env: dict) -> dict:
@@ -410,6 +459,8 @@ class AnthropicEndpointBackend(ClaudeCodeBackend):
     }
     if self._headers:
       out[GATEWAY_CUSTOM_HEADERS_ENV] = "\n".join(f"{name}: {value}" for name, value in self._headers.items())
+    if self._extra_body:
+      out[GATEWAY_EXTRA_BODY_ENV] = json.dumps(self._extra_body)
     if self._context_window is not None:
       # Claude Code assumes 200000 tokens for a model name it does not know and caps the
       # auto-compact window to that, so both the model window and the compaction point
@@ -422,3 +473,11 @@ class AnthropicEndpointBackend(ClaudeCodeBackend):
       out.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
       out[claude_launch.THINKING_DISPLAY_UPDATES_ENV] = "0"
     return out
+
+  def _one_shot_env(self) -> dict[str, str]:
+    """The run environment: the one-shot reaches the same endpoint, model and body as the entry's runs."""
+    return self._prepare_env(dict(os.environ))
+
+  def _one_shot_model_args(self) -> list[str]:
+    """No ``--model`` — the model variables select the model — and the entry's ``effort`` rides ``--effort``."""
+    return ["--effort", self._effort] if self._effort else []

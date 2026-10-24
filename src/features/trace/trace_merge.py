@@ -93,10 +93,10 @@ def _gzip_exit_or_raise(gzip_proc: subprocess.Popen, context: str) -> None:
     raise RuntimeError(f"isal.igzip -{_MERGE_COMPRESSLEVEL} failed ({context}): {detail}")
 
 
-def _kill_gzip_run(gzip_proc: subprocess.Popen) -> None:
-  """Kill an abandoned compressor run and reap it; kill alone leaves a zombie."""
-  gzip_proc.kill()
-  gzip_proc.wait()
+def _kill_and_reap(proc: subprocess.Popen) -> None:
+  """Kill an abandoned build subprocess and reap it; kill alone leaves a zombie."""
+  proc.kill()
+  proc.wait()
 
 
 def igzip_command(*extra_args: str) -> list[str]:
@@ -372,7 +372,7 @@ def _gzip_output_stream(out_path: pathlib.Path) -> Iterator[BinaryIO]:
       # own error would be replaced by it.
       with contextlib.suppress(BrokenPipeError):
         output.close()
-      _kill_gzip_run(gzip_proc)
+      _kill_and_reap(gzip_proc)
       raise
 
 
@@ -489,7 +489,7 @@ def _merge_chunked_build(
   except (_ChunkHelperError, OSError, ValueError) as exc:
     # A dead helper leaves no verdict: kill the rest (a blocked report write hangs a graceful close).
     for proc in helpers:
-      proc.kill(), proc.wait()
+      _kill_and_reap(proc)
     log.warning("perfetto_merge_chunk_fallback", path=str(path), reason=str(exc)[:300])
     return None
   finally:

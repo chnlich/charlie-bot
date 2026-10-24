@@ -169,15 +169,3 @@ def register_poll(force: bool) -> bool:
   global _poll_count
   _poll_count += 1
   return force or _poll_count % _FORCE_FULL_EVERY == 0
-
-
-def reset_for_tests() -> None:
-  """Clear the dirty set, the snapshot, the probe signatures, and the poll counter (tests only)."""
-  global _poll_count
-  _dirty.clear()
-  _snapshot.clear()
-  _probe_signatures.clear()
-  _poll_count = 0
-  global _derived_generation
-  _derived_generation = 0
-  _derived_maps.clear()

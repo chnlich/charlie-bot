@@ -8,11 +8,12 @@ messages, the replies and the notices, in log order.
 import re
 
 from src.infra import event_types as ET
-from src.infra import log_once, metadata_slots, models
+from src.infra import log_once, models
 from src.runtime import (
     control_events,
     file_urls,
     master_cc_state,
+    midturn_delivery,
     session_events,
     session_lifecycle,
     session_store,
@@ -81,15 +82,8 @@ def visible_reply_chars(text: str) -> int:
 
 
 def is_web_session(meta: models.SessionMetadata) -> bool:
-  """True for a manager session that no Slack or Discord thread owns.
-
-  The thread test is chat_threads' ``thread_sessions.is_thread_session``, restated over the same metadata slots:
-  this package may import only runtime and infra, so the parity is pinned by a test instead of an import.
-  """
-  slack = metadata_slots.fields_of(meta, "slack")
-  discord = metadata_slots.fields_of(meta, "discord")
-  is_thread = slack.slack_origin is not None or discord.discord_origin is not None
-  return meta.profile == "manager" and not is_thread
+  """True for a manager session that no Slack or Discord thread owns."""
+  return midturn_delivery.is_web_session(meta)
 
 
 async def require_web_session(store: session_store.SessionStore, session_id: str) -> models.SessionMetadata:

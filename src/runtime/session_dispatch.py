@@ -14,9 +14,10 @@ Ordering contract (the one this stage exists to pin):
   released; a notification failure is repaired by catch-up, never by a second
   persisted copy.
 - A node has at most one executing input consumer while siblings progress
-  independently: a Run claims one exact batch, later arrivals stay pending for
-  the next run, and only that Run's own successful ``run_finished``
-  acknowledges its batch. Failures and interruptions acknowledge nothing.
+  independently: a Run claims one exact batch at launch, a user message that the
+  running Run's process echoes as received joins that Run's batch, every other
+  later arrival stays pending for the next run, and only that Run's own successful
+  ``run_finished`` acknowledges its batch. Failures and interruptions acknowledge nothing.
 - Recovery derives everything from disk facts — the valid input boundary
   (post-creation, or post-import plus the explicitly listed old pending
   inputs), minus successful acknowledgements, minus live claims — so a fresh
@@ -26,12 +27,12 @@ Ordering contract (the one this stage exists to pin):
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterator
+from collections.abc import Awaitable, Callable, Iterator
 from typing import TYPE_CHECKING, Any, Protocol
 
 from src.infra import event_types as ET
 from src.infra import log_once, models
-from src.runtime import control_events, run_token, takeoff_gate, task_errors
+from src.runtime import control_events, midturn_delivery, run_token, takeoff_gate, task_errors
 
 if TYPE_CHECKING:
   from src.runtime import control_sink, runs, session_anchors, session_events, session_store
@@ -117,22 +118,6 @@ class DispatchTree(Protocol):
 INPUT_EVENT_TYPES: frozenset[str] = frozenset({ET.USER, ET.AGENT_MESSAGE, ET.SCHEDULED_TRIGGER, ET.CHILD_REPORT})
 
 _ADMIT_INPUT_CORE_FIELDS = control_events.REQUEST_EVENT_CORE_FIELDS
-
-
-def child_report_text(report: dict, provenance: str | None = None) -> str:
-  """A child_report event as the parent's turn input: the typed header, then its summary.
-
-  *provenance* names a fork/elone child's origin in the header —
-  ``clone of <source id>`` or ``elone of <source id>``, resolved from the
-  child's ``parent_session_id`` (``TaskInputDispatcher.child_report_provenance``
-  owns the judgment); a task-tree-born child carries none and the header keeps
-  its original shape. The child_report event's own format never changes.
-  """
-  header = f"[Report from task {report.get('child_session_id')}"
-  if provenance:
-    header += f" ({provenance})"
-  return f"{header} | outcome {report.get('outcome')}] {str(report.get('summary') or '')}"
-
 
 # The admitted input types a message route may produce. A run-token caller on
 # the user-message route is agent input; only verified operator credentials
@@ -453,6 +438,34 @@ class TaskInputDispatcher:
     await tree.runs.write_record(session_id, run)
     return batch
 
+  async def claim_echoed_user_inputs(self, session_id: str, run_id: str, echoed_ids: set[str]) -> list[str]:
+    """Append the still-pending USER events that this launched manager Run echoed."""
+    tree = self._tree
+    async with tree.control_lock:
+      run = await tree.runs.get_run(session_id, run_id)
+      if run is None:
+        raise task_errors.TaskNotFoundError(f"run {run_id} not found in session {session_id}")
+      if run.kind != "manager_turn":
+        raise task_errors.TaskInvalidError(f"run {run_id} is not a manager turn")
+      events = tree.runs.load_events_sync(session_id)
+      if tree.runs.run_has_terminal_fact(run, events):
+        raise task_errors.TaskConflictError([f"run {run_id} already finished; it claims no new inputs"])
+      if run.pid is None:
+        raise task_errors.TaskConflictError([f"run {run_id} has no launched process to echo inputs"])
+      if tree.runs.stop_requested(events, run_id):
+        return []
+      claimed = set(run.input_event_ids)
+      appended = [
+          str(event["id"])
+          for event in self.pending_inputs(session_id)
+          if event.get("type") == ET.USER and str(event.get("id")) in echoed_ids and str(event.get("id")) not in claimed
+      ]
+      if not appended:
+        return []
+      run.input_event_ids.extend(appended)
+      await tree.runs.write_record(session_id, run)
+      return appended
+
   # ------------------------------------------------------------------
   # Launch decision (the executor seam)
   # ------------------------------------------------------------------
@@ -474,7 +487,7 @@ class TaskInputDispatcher:
         """
 
     tree = self._tree
-    await tree.load_task_meta(session_id)  # raises for an absent or non-task session
+    meta = await tree.load_task_meta(session_id)  # raises for an absent or non-task session
     pending = self.pending_inputs(session_id)
     decision: dict = {"session_id": session_id, "pending": len(pending)}
     if tree.task_state(session_id) != "open":
@@ -487,6 +500,7 @@ class TaskInputDispatcher:
       if tree.runs.run_has_terminal_fact(run, events):
         continue
       if run.pid is not None:
+        await midturn_delivery.offer(meta, run, pending)
         decision["launch"] = False
         decision["reason"] = f"run {run.id} already consumes this node's inputs"
         return decision
@@ -556,6 +570,24 @@ class TaskInputDispatcher:
         """
     await self.dispatch_pending(parent_id)
     return None
+
+  async def finish_report_delivery(self, recipient: str, report: dict, *, epoch: int, child_session_id: str) -> None:
+    """Deliver a newly created report live, outside the control lock: announce it, then wake the parent.
+
+        Only a report this process created reaches here, with the aggregator
+        epoch primed before its append. An archived parent keeps the report as
+        history: it counts as delivered and never wakes the node, which the log
+        line records.
+        """
+    await self._tree.session_events.announce_appended_event(recipient, report, epoch=epoch)
+    if self._tree.task_state(recipient) != "open":
+      log.info(
+          "child_report_into_archived_parent_kept_as_history",
+          parent=recipient,
+          child=child_session_id,
+          report=str(report.get("id")))
+      return
+    await self.wake_parent(recipient, report=report)
 
   async def finish_run(
       self,
@@ -668,10 +700,11 @@ class TaskInputDispatcher:
         the report's presence.
 
         This entry owns the wake: after the lock is released, a created=True
-        delivery wakes the recipient exactly once (wake_parent), so callers
-        never add their own. A replayed delivery (created False) wakes nobody.
-        The locked entry stays wake-free: its callers write further events
-        under the lock and wake themselves after releasing it.
+        delivery finishes the live delivery exactly once
+        (``finish_report_delivery``), so callers never add their own. A
+        replayed delivery (created False) wakes nobody. The locked entry stays
+        wake-free: its callers write further events under the lock and wake
+        themselves after releasing it.
         """
 
     if recipient is None:
@@ -688,18 +721,7 @@ class TaskInputDispatcher:
           recipient=recipient,
           actor=actor)
     if created:
-      await tree.session_events.announce_appended_event(recipient, report, epoch=epoch)
-      if tree.task_state(recipient) != "open":
-        # The archived parent keeps the report as history: it counts as
-        # delivered and never wakes the node.
-        log.info(
-            "child_report_into_archived_parent_kept_as_history",
-            parent=recipient,
-            child=child_session_id,
-            report=str(report.get("id")),
-        )
-        return report, created
-      await self.wake_parent(recipient, report=report)
+      await self.finish_report_delivery(recipient, report, epoch=epoch, child_session_id=child_session_id)
     return report, created
 
   async def deliver_child_report_locked(
@@ -788,22 +810,7 @@ class TaskInputDispatcher:
         on the same single report event. Late reports to a closed parent stay
         history (the parent is not reopened by them).
         """
-    tree = self._tree
-    await tree.load_task_meta(session_id)
-    delivered: list[dict] = []
-    for close, recipient in self._undelivered_close_recipients(session_id):
-      report, created = await self.deliver_child_report(
-          session_id,
-          source_event=close,
-          outcome=self._close_report_outcome(close),
-          summary=str(close.get("summary") or ""),
-          result_refs=list(close.get("result_refs") or []),
-          recipient=recipient,
-          actor=control_events.ACTOR_SYSTEM,
-      )
-      if created:
-        delivered.append(report)
-    return delivered
+    return await self._deliver_pending_reports(session_id, self.deliver_child_report)
 
   async def recover_pending_reports_locked(self, session_id: str) -> list[dict]:
     """recover_pending_reports for a caller already holding the control lock.
@@ -812,11 +819,20 @@ class TaskInputDispatcher:
         lock and wakes nobody — the locked entry's callers own their wakes, and
         the elone flow closes the redelivery's recipient right after.
         """
+    return await self._deliver_pending_reports(session_id, self.deliver_child_report_locked)
+
+  async def _deliver_pending_reports(self, session_id: str,
+                                     deliver: Callable[..., Awaitable[tuple[dict, bool]]]) -> list[dict]:
+    """Walk *session_id*'s close reports the recipient's log still owes through ``deliver``.
+
+        ``deliver`` is the waking or the caller-locked delivery entry. Both recovery
+        entries run this one scan, so they cannot disagree about which reports are owed.
+        """
     tree = self._tree
     await tree.load_task_meta(session_id)
     delivered: list[dict] = []
     for close, recipient in self._undelivered_close_recipients(session_id):
-      report, created = await self.deliver_child_report_locked(
+      report, created = await deliver(
           session_id,
           source_event=close,
           outcome=self._close_report_outcome(close),

@@ -1332,7 +1332,7 @@ async def switch_session_backend(
   # The pre-rule backfill: record the effective current backend as the held
   # id's producer through the authorized anchor channel, before the backend
   # field changes. Same-domain switches backfill too, so the next same-domain
-  # turn still resumes as today.
+  # turn still resumes its conversation.
   if parent.cc_session_id and not parent.native_backend:
     await anchors.persist_native_backend(session_id, effective_current)
 

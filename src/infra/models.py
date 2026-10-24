@@ -763,7 +763,7 @@ class SessionCallbacks:
   context_state: Callable[[str, SessionMetadata], Awaitable[tuple[int | None, datetime.datetime | None]]] | None = None
   # The task-tree owner supplies its shared activity verdict for sidebar updates.
   task_tree_activity: Callable[[str], tuple[bool, str]] | None = None
-  # Runs after each finished round (session naming today) with the round's config and the session
-  # id. Optional so callback bundles built without it (tests) stay valid; the live bundle always
-  # sets it.
+  # Runs after each finished round with the round's config and the session id; the autonamer
+  # consumes it. Optional so callback bundles built without it (tests) stay valid; the live bundle
+  # always sets it.
   after_round: Callable[[config.CharlieBotConfig, str], Awaitable[None]] | None = None

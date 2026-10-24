@@ -60,7 +60,7 @@ DATA_DIR_NAME = "data"
 MASTER_RUNS_DIR_NAME = "master_runs"
 
 # The sessions-tree directory holding a session's pre-task-tree thread
-# directories. No writer lays it down anymore; the storage-cool scan,
+# directories. No writer lays it down; the storage-cool scan,
 # token_tally's corpus walk and backup's path classification still read it by
 # name, so all sides must agree on this name.
 THREADS_DIR_NAME = "threads"

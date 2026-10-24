@@ -208,7 +208,8 @@ def _cmd_retry(args: argparse.Namespace) -> None:
 
 
 def _cmd_archive(args: argparse.Namespace) -> None:
-  body = json.loads(common.read_required_text_file("--result-file", args.result_file)) if args.result_file else {}
+  body = json.loads(common.read_required_text_file("--result-file",
+                                                   args.result_file)) if args.result_file is not None else {}
   if not isinstance(body, dict):
     common.exit_usage_error("--result-file must carry the archive request's JSON object")
   body = dict(body)

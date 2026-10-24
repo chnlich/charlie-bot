@@ -21,8 +21,7 @@ from src.infra import constants, models, text_length
 from src.infra import event_types as ET
 from src.runtime import control_events, run_token
 from src.runtime.api import deps
-from src.runtime.cli import common
-from src.runtime.cli import session
+from src.runtime.cli import common, session
 
 # ---------------------------------------------------------------------------
 # A2 route boundaries

@@ -3,14 +3,15 @@
 //! event and tells every ancestor page. A set refuses a Waiting on you item until a cold read of it is recorded. A read
 //! lists the open descendants whose status holds Waiting on you items and the open children that hold a Now.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::sync::Arc;
 
 use axum::http::StatusCode;
 use charliebot_compat::file_urls;
+use charliebot_compat::file_urls::ScanContext;
 use charliebot_compat::python_json::{self, LoadError};
-use charliebot_core::event_types::{WEB_ASK_CHECK, WEB_STATUS};
+use charliebot_core::event_types::{WEB_ASK_CHECK, WEB_STATUS, WEB_STATUS_CONFIRMED};
 use charliebot_core::pyfmt::{JsonStyle, json_dumps};
 use charliebot_core::pystr;
 use charliebot_registry::FeatureContext;
@@ -21,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 use crate::json_input::replace_unrepresentable_numbers;
+use crate::plan_links::{self, PlanLinks};
 use crate::reply::{self, WebReplyError};
 
 /// The owner the web reply package registers its metadata under (`status.OWNER`).
@@ -67,10 +69,10 @@ const NOT_A_BOOLEAN: &str = "Input should be a valid boolean";
 /// false when `since` is that lower bound. An item stored before these fields existed carries neither.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WaitingItem {
-  text: String,
+  pub(crate) text: String,
   #[serde(default, skip_serializing_if = "Option::is_none")]
-  context: Option<String>,
-  link: Option<String>,
+  pub(crate) context: Option<String>,
+  pub(crate) link: Option<String>,
   #[serde(default, skip_serializing_if = "Option::is_none")]
   since: Option<UtcDateTime>,
   #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -226,6 +228,66 @@ fn status_payload(status: &WebStatus) -> Value {
   payload
 }
 
+/// Refuse `items` when any of their links names an older version of a registered plan or a closed plan, before the
+/// cold read runs; return the lookup the since pairing then uses (`status._require_current_plan_links`).
+fn require_current_plan_links(items: &[WaitingItem], scan_context: &ScanContext) -> Result<PlanLinks, WebReplyError> {
+  let mut links = PlanLinks::new(scan_context.charliebot_home.join("sessions"));
+  let stale = links.stale_links(items, scan_context)?;
+  if !stale.is_empty() {
+    return Err(WebReplyError::refused(StatusCode::CONFLICT, plan_links::stale_detail(&stale)));
+  }
+  Ok(links)
+}
+
+/// The new items with each one's start time kept from the stored item it continues (`status._assign_since`).
+///
+/// An item whose text equals a stored item's text keeps that item's time. The remaining items pair in order within
+/// groups of one link target: a registered plan lineage, another link, or no link at all.
+fn assign_since(
+  new_items: &[WaitingItem],
+  stored_items: &[WaitingItem],
+  links: &mut PlanLinks,
+  now: UtcDateTime,
+) -> Result<Vec<WaitingItem>, WebReplyError> {
+  let mut available: Vec<Option<&WaitingItem>> = stored_items.iter().map(Some).collect();
+  let mut assigned: Vec<Option<WaitingItem>> = vec![None; new_items.len()];
+  for (index, item) in new_items.iter().enumerate() {
+    let Some(match_slot) = available.iter().position(|stored| stored.is_some_and(|stored| stored.text == item.text))
+    else {
+      continue;
+    };
+    let stored = available[match_slot].take().expect("the matched slot holds a stored item");
+    assigned[index] = Some(WaitingItem { since: stored.since, since_exact: stored.since_exact, ..item.clone() });
+  }
+  let mut new_groups: HashMap<String, Vec<usize>> = HashMap::new();
+  let mut stored_groups: HashMap<String, Vec<usize>> = HashMap::new();
+  for (index, item) in new_items.iter().enumerate() {
+    if assigned[index].is_none() {
+      new_groups.entry(links.target(item)?).or_default().push(index);
+    }
+  }
+  for (slot, stored) in available.iter().enumerate() {
+    if let Some(stored) = stored {
+      stored_groups.entry(links.target(stored)?).or_default().push(slot);
+    }
+  }
+  for indices in new_groups.values() {
+    let target = links.target(&new_items[indices[0]])?;
+    let paired = stored_groups.get(&target).map(Vec::as_slice).unwrap_or_default();
+    for (position, index) in indices.iter().enumerate() {
+      assigned[*index] = Some(match paired.get(position).and_then(|slot| available[*slot]) {
+        Some(stored) => {
+          WaitingItem { since: stored.since, since_exact: stored.since_exact, ..new_items[*index].clone() }
+        }
+        None => WaitingItem { since: Some(now), since_exact: Some(true), ..new_items[*index].clone() },
+      });
+    }
+  }
+  let result: Vec<WaitingItem> = assigned.into_iter().flatten().collect();
+  assert_eq!(result.len(), new_items.len(), "every new item is assigned a start time");
+  Ok(result)
+}
+
 /// One `WaitingItem` parsed with the `item` model's refusal (`status.parse_item`).
 pub fn parse_item(raw: &Value) -> Result<WaitingItem, WebReplyError> {
   let mut problems = Vec::new();
@@ -323,11 +385,18 @@ pub async fn record_ask_check(
 
 /// Return the waiting items in `text` whose current digest has no matching ask-check event.
 pub async fn unread_waiting(features: &FeatureContext, session_id: &str, text: &str) -> Result<Value, WebReplyError> {
-  reply::require_web_session(features, session_id).await?;
+  let meta = reply::require_web_session(features, session_id).await?;
   let patch = parse_patch(text)?;
-  reply::refuse_dead_links(scanned_texts(&patch), &reply::file_link_scan_context(features, session_id)?)?;
+  let scan_context = reply::file_link_scan_context(features, session_id)?;
+  reply::refuse_dead_links(scanned_texts(&patch), &scan_context)?;
   let items = patch.waiting.as_deref().unwrap_or_default();
   require_waiting_context(items)?;
+  let stored = stored_status(&meta)?;
+  let prospective = match patch.waiting.as_deref() {
+    Some(items) => items.to_vec(),
+    None => stored.map(|status| status.waiting).unwrap_or_default(),
+  };
+  require_current_plan_links(&prospective, &scan_context)?;
   let read_digests = read_item_digests(features, session_id).await?;
   let unread = unread_items(items, &read_digests)?;
   Ok(json!({"unread": unread}))
@@ -417,8 +486,7 @@ fn waiting_item(item: &Value, loc: &str, problems: &mut Vec<Problem>) -> Option<
       None
     }
   };
-  for key in
-    fields.keys().filter(|key| !matches!(key.as_str(), "text" | "context" | "link" | "since" | "since_exact"))
+  for key in fields.keys().filter(|key| !matches!(key.as_str(), "text" | "context" | "link" | "since" | "since_exact"))
   {
     problems.push(Problem { loc: nested_loc(loc, key), msg: EXTRA_FORBIDDEN });
   }
@@ -442,14 +510,21 @@ fn scanned_texts(patch: &StatusPatch) -> Vec<&str> {
 }
 
 /// `status.set_status`: store the items the JSON `text` names, record one `web_status` event and notify the
-/// ancestors. Waiting items need a non-blank context and a matching cold-read digest. The return adds the Now length;
-/// a refusal stores and records nothing.
+/// ancestors. Waiting items need a non-blank context and a matching cold-read digest. A stale plan link refuses the
+/// set before the cold read. The return adds the Now length; a refusal stores and records nothing.
 pub async fn set_status(features: &FeatureContext, session_id: &str, text: &str) -> Result<Value, WebReplyError> {
+  let scan_context = reply::file_link_scan_context(features, session_id)?;
   let meta = reply::require_web_session(features, session_id).await?;
   let patch = parse_patch(text)?;
-  reply::refuse_dead_links(scanned_texts(&patch), &reply::file_link_scan_context(features, session_id)?)?;
+  reply::refuse_dead_links(scanned_texts(&patch), &scan_context)?;
+  require_waiting_context(patch.waiting.as_deref().unwrap_or_default())?;
+  let stored = stored_status(&meta)?;
+  let base =
+    stored.clone().unwrap_or(WebStatus { goal: None, now: None, waiting: Vec::new(), updated_at: UtcDateTime::now() });
+  let stored_waiting = effective_waiting(&base);
+  let prospective = patch.waiting.clone().unwrap_or_else(|| stored_waiting.clone());
+  let mut links = require_current_plan_links(&prospective, &scan_context)?;
   if let Some(items) = patch.waiting.as_deref() {
-    require_waiting_context(items)?;
     let read_digests = read_item_digests(features, session_id).await?;
     let unread = unread_items(items, &read_digests)?;
     if !unread.is_empty() {
@@ -461,19 +536,20 @@ pub async fn set_status(features: &FeatureContext, session_id: &str, text: &str)
     }
   }
   let now = UtcDateTime::now();
-  let mut status =
-    stored_status(&meta)?.unwrap_or(WebStatus { goal: None, now: None, waiting: Vec::new(), updated_at: now });
+  let waiting = match patch.waiting.as_deref() {
+    Some(items) => assign_since(items, &stored_waiting, &mut links, now)?,
+    None => stored_waiting,
+  };
+  let mut status = base;
   let changed = patch.named();
-  let StatusPatch { goal, now: now_item, waiting } = patch;
+  let StatusPatch { goal, now: now_item, waiting: _ } = patch;
   if let Some(goal) = goal {
     status.goal = goal;
   }
   if let Some(now_item) = now_item {
     status.now = now_item;
   }
-  if let Some(waiting) = waiting {
-    status.waiting = waiting;
-  }
+  status.waiting = waiting;
   status.updated_at = now;
   let payload = payload_of(&status);
   {
@@ -504,6 +580,28 @@ pub async fn set_status(features: &FeatureContext, session_id: &str, text: &str)
   result.insert("now_chars".to_string(), json!(now_chars));
   result.insert("now_over_budget".to_string(), json!(now_chars > NOW_BUDGET_CHARS));
   Ok(Value::Object(result))
+}
+
+/// `status.confirm_status`: confirm that the stored status needs no change and return it.
+///
+/// A stale plan link in a stored item refuses the confirmation with 409 and names the newest file. A confirmation
+/// records one web_status_confirmed event and cold reads nothing.
+pub async fn confirm_status(features: &FeatureContext, session_id: &str) -> Result<Value, WebReplyError> {
+  let meta = reply::require_web_session(features, session_id).await?;
+  let status = stored_status(&meta)?.unwrap_or(WebStatus {
+    goal: None,
+    now: None,
+    waiting: Vec::new(),
+    updated_at: UtcDateTime::now(),
+  });
+  let scan_context = reply::file_link_scan_context(features, session_id)?;
+  require_current_plan_links(&effective_waiting(&status), &scan_context)?;
+  features
+    .store
+    .persist_and_broadcast(session_id, json!({"type": WEB_STATUS_CONFIRMED, "content": "Status confirmed"}))
+    .await?;
+  tracing::info!(session = %session_id, "web_status_confirmed");
+  Ok(status_payload(&status))
 }
 
 /// The sessions among `session_ids` with a status, an open task and no archived marker.
@@ -683,6 +781,11 @@ mod tests {
   /// The link form the file server accepts for `path`.
   fn file_link(path: &std::path::Path) -> String {
     format!("https://synthetic.invalid{}{}", file_urls::FILE_SERVER_MOUNT, path.display())
+  }
+
+  /// The bare file-server path an agent writes as an item link (`_host_file_link`).
+  fn host_link(path: &std::path::Path) -> String {
+    format!("{}{}", file_urls::FILE_SERVER_MOUNT, path.display())
   }
 
   /// The frames a page has received, read until the page goes quiet.
@@ -1469,16 +1572,15 @@ mod tests {
           "context": "The plan waits. Options are approve or revise; approve is recommended.",
           "link": null,
         });
-        item[field] = json!(file_link(&v9));
+        item[field] = json!(host_link(&v9));
         let text = json!({"waiting": [item]}).to_string();
 
-        let (status, response) =
-          home.send(Method::POST, uri, Some(json!({"session_id": sid, "text": text}))).await;
+        let (status, response) = home.send(Method::POST, uri, Some(json!({"session_id": sid, "text": text}))).await;
 
         assert_eq!(status, StatusCode::CONFLICT, "{endpoint} {field}");
         let detail = response["detail"].as_str().expect("a refusal detail");
         assert!(detail.starts_with("Stale plan links"), "{endpoint} {field}: {detail}");
-        assert!(detail.contains(file_link(&v9).as_str()), "{endpoint} {field}: {detail}");
+        assert!(detail.contains(host_link(&v9).as_str()), "{endpoint} {field}: {detail}");
         assert!(detail.contains(&v11.display().to_string()), "{endpoint} {field}: {detail}");
         assert_eq!(stored(&home, &sid).await, Value::Null, "{endpoint} {field}");
         assert!(status_events(&home, &sid).is_empty(), "{endpoint} {field}");
@@ -1503,8 +1605,7 @@ mod tests {
           Value::Null,
         )]),
       );
-      let link =
-        if local_path { v9.display().to_string() } else { file_link(&v9) };
+      let link = if local_path { v9.display().to_string() } else { host_link(&v9) };
       write_stored_status(
         &home,
         &sid,
@@ -1529,9 +1630,11 @@ mod tests {
 
   #[tokio::test]
   async fn status_refuses_a_link_to_a_closed_lineage() {
-    for (endpoint, uri) in
-      [("set", "/api/internal/web/status"), ("unread", "/api/internal/web/status/unread"), ("confirm", "/api/internal/web/status/confirm")]
-    {
+    for (endpoint, uri) in [
+      ("set", "/api/internal/web/status"),
+      ("unread", "/api/internal/web/status/unread"),
+      ("confirm", "/api/internal/web/status/confirm"),
+    ] {
       let home = Home::new();
       let sid = home.manager("session", None).await;
       let page = session_artifact(&home, &sid, "plan_02_v1.html");
@@ -1546,14 +1649,14 @@ mod tests {
         json!({"waiting": [{
           "text": "Decide plan 2",
           "context": "The plan is closed. Options are reopen or stop; reopen is recommended.",
-          "link": file_link(&page),
+          "link": host_link(&page),
         }]}),
       )
       .await;
       let payload = if endpoint == "confirm" {
         json!({"session_id": sid})
       } else {
-        json!({"session_id": sid, "text": waiting_with_link("Decide plan 2", json!(file_link(&page)))})
+        json!({"session_id": sid, "text": waiting_with_link("Decide plan 2", json!(host_link(&page)))})
       };
 
       let (status, response) = home.send(Method::POST, uri, Some(payload)).await;
@@ -1574,7 +1677,7 @@ mod tests {
     write_stored_status(
       &home,
       &sid,
-      json!({"waiting": [{"text": "Decide", "context": "The line is active now. Options are continue or stop; continue is recommended.", "link": file_link(&page)}]}),
+      json!({"waiting": [{"text": "Decide", "context": "The line is active now. Options are continue or stop; continue is recommended.", "link": host_link(&page)}]}),
     )
     .await;
 
@@ -1635,9 +1738,7 @@ mod tests {
     record_ask_check(&home.features, session_id, &item, "synthetic-haiku", "continue is recommended.")
       .await
       .expect("the item cold read records");
-    set_status(&home.features, session_id, &json!({"waiting": [item]}).to_string())
-      .await
-      .expect("the set stores")
+    set_status(&home.features, session_id, &json!({"waiting": [item]}).to_string()).await.expect("the set stores")
   }
 
   #[tokio::test]
@@ -1662,14 +1763,13 @@ mod tests {
     let sid = home.manager("session", None).await;
     let page = home.root().join("linked-page.html");
     fs::write(&page, "page").expect("the linked page writes");
-    let link = file_link(&page);
+    let link = host_link(&page);
 
     let first = set_after_reads(&home, &sid, planned_item("Review A", json!(link))).await;
     let second = set_after_reads(&home, &sid, planned_item("Review B", json!(link))).await;
 
     assert_eq!(
-      second["waiting"][0]["since"],
-      first["waiting"][0]["since"],
+      second["waiting"][0]["since"], first["waiting"][0]["since"],
       "the same link pairs the reworded item with its stored item"
     );
   }
@@ -1682,7 +1782,7 @@ mod tests {
     let v3 = session_artifact(&home, &sid, "plan_03_v3.html");
     write_plans(&home, &sid, json!([plan(3, json!([plan_version(2, "artifacts/plan_03_v2.html")]), Value::Null)]));
 
-    let first = set_after_reads(&home, &sid, planned_item("Decide plan A", json!(file_link(&v2)))).await;
+    let first = set_after_reads(&home, &sid, planned_item("Decide plan A", json!(host_link(&v2)))).await;
     let since = first["waiting"][0]["since"].as_str().expect("a start time").to_string();
     write_plans(
       &home,
@@ -1693,7 +1793,7 @@ mod tests {
         Value::Null,
       )]),
     );
-    let second = set_after_reads(&home, &sid, planned_item("Decide plan B", json!(file_link(&v3)))).await;
+    let second = set_after_reads(&home, &sid, planned_item("Decide plan B", json!(host_link(&v3)))).await;
 
     assert_eq!(second["waiting"][0]["since"], json!(since), "one plan lineage pairs its versions");
   }
@@ -1716,8 +1816,7 @@ mod tests {
     )
     .await;
 
-    let (read_status, read) =
-      home.send(Method::GET, &format!("/api/internal/web/status?session_id={sid}"), None).await;
+    let (read_status, read) = home.send(Method::GET, &format!("/api/internal/web/status?session_id={sid}"), None).await;
     assert_eq!(read_status, StatusCode::OK);
     assert_eq!(read["web_status"]["waiting"][0]["since"], json!(stored_at));
     assert_eq!(read["web_status"]["waiting"][0]["since_exact"], json!(false));
@@ -1739,8 +1838,13 @@ mod tests {
       "since_exact": true,
     });
 
-    let (status, response) =
-      home.send(Method::POST, "/api/internal/web/status", Some(json!({"session_id": sid, "text": json!({"waiting": [item]}).to_string()}))).await;
+    let (status, response) = home
+      .send(
+        Method::POST,
+        "/api/internal/web/status",
+        Some(json!({"session_id": sid, "text": json!({"waiting": [item]}).to_string()})),
+      )
+      .await;
 
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     assert!(response["detail"].as_str().expect("a refusal detail").contains("are written by the server"));

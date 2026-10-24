@@ -83,6 +83,21 @@ pub async fn post_status(State(features): State<Arc<FeatureContext>>, request: R
   answer(status::set_status(&features, &model.session_id, &model.text).await)
 }
 
+/// `POST /api/internal/web/status/confirm`: confirms the calling session's stored status needs no change and answers
+/// it.
+pub async fn post_status_confirm(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
+  let (parts, stream) = request.into_parts();
+  let body = match fastapi_body::read(&parts.headers, stream).await {
+    Ok(body) => body,
+    Err(response) => return *response,
+  };
+  let model = match SessionId::validate(&body) {
+    Ok(model) => model,
+    Err(response) => return *response,
+  };
+  answer(status::confirm_status(&features, &model.session_id).await)
+}
+
 /// `POST /api/internal/web/status/unread`: returns the waiting items that have no matching cold-read event.
 pub async fn post_status_unread(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
   let (parts, stream) = request.into_parts();
@@ -162,6 +177,10 @@ const SESSION_TEXT_FIELDS: &[Field] =
   &[Field::required("session_id", FieldType::String), Field::required("text", FieldType::String)];
 const SESSION_TEXT_BODY: BodyModel = BodyModel::required(SESSION_TEXT_FIELDS).forbid_extra();
 
+/// The fields of `WebStatusConfirmRequest`: the calling session's id, a required string.
+const SESSION_ID_FIELDS: &[Field] = &[Field::required("session_id", FieldType::String)];
+const SESSION_ID_BODY: BodyModel = BodyModel::required(SESSION_ID_FIELDS).forbid_extra();
+
 /// The fields of `WebAskCheckRequest` in declaration order.
 const ASK_CHECK_FIELDS: &[Field] = &[
   Field::required("session_id", FieldType::String),
@@ -206,6 +225,21 @@ impl SessionText {
       unreachable!("a required model validates a body to its fields")
     };
     Ok(Self { session_id: text_field(&mut fields, "session_id"), text: text_field(&mut fields, "text") })
+  }
+}
+
+/// The validated `WebStatusConfirmRequest`.
+struct SessionId {
+  session_id: String,
+}
+
+impl SessionId {
+  /// Validates the body against `SESSION_ID_BODY`, which forbids the keys the model does not declare.
+  fn validate(body: &RequestBody) -> Result<Self, Box<Response>> {
+    let Some(Value::Object(mut fields)) = body.validate(&SESSION_ID_BODY)? else {
+      unreachable!("a required model validates a body to its fields")
+    };
+    Ok(Self { session_id: text_field(&mut fields, "session_id") })
   }
 }
 

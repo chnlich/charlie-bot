@@ -278,7 +278,7 @@ Known-alive symbols:
   and `_serve_socket_mode` parameters are annotated `client.ClientConnection`, and that
   import is what resolves the forward reference for type checkers and IDEs. No type checker
   runs in CI, so a deletion stays suite-green while leaving the annotations unresolved.
-  Current vulture reads the annotations as a use and no longer flags the import; the
+  Vulture reads the annotations as a use and does not flag the import; the
   no-type-checker fact is what keeps a deletion suite-green, so the guard stays.
 - `__getattr__` (`src/features/artifacts/artifact_wrap.py`) — the PEP 562 lazy-`requests` hook, a one-line
   delegate to the shared `deferred_module_getattr` (`src/infra/deferred.py`), which serves
@@ -434,7 +434,7 @@ Known-alive symbols:
   `DiscordSessionFields` (`src/features/discord/metadata.py`) and the claude_code pair
   (`ClaudeSessionFields`, `ClaudeThreadFields` in `src/backends/claude_code/claude_metadata.py`)
   register through the same call; a direct reference (`cast` in `discord_commands.py`, the
-  module's own `isinstance` checks) keeps vulture silent on them today.
+  module's own `isinstance` checks) keeps vulture silent on them.
 - `last_run_status` (`CronMetadata` in `src/features/cron/metadata.py`) and `slack_watermark_ts`
   (`SlackSessionFields` in `src/features/slack/metadata.py`) — fields of string-registered slot
   models, set by keyword and read by string. The scheduler writes `last_run_status` through
@@ -603,7 +603,7 @@ Known-alive symbols:
 - `prompt_rules` (`SessionDetailResponse` in `src/runtime/api/sessions.py`) — kept
   deliberately: the detail builder writes `prompt_rule_summaries` into every session-detail
   payload, and the field's comment names its reader, the later Task/Context UI. Nothing reads
-  the attribute today, so vulture flags the declaration as an unused variable at 60%
+  the attribute, so vulture flags the declaration as an unused variable at 60%
   confidence.
 - `stray` (`tests/test_metadata_slots.py`) and `unregistered_key`
   (`tests/test_sessions_status_scope.py`) — attribute writes of keys no owner registers on an

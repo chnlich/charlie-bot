@@ -2171,6 +2171,7 @@ def _run_server_stage(
   pressure_target_bytes: int | None = None
   server_rss_anon_kib_after_warmup: int | None = None
   window_started_by: str | None = None
+  kill_fill_file: pathlib.Path | None = None
   try:
     if slice_cgroup.name != PRESSURE_SLICE:
       raise RuntimeError(f"test server did not enter {PRESSURE_SLICE}: {server_cgroup}")

@@ -43,7 +43,7 @@ comparison_rules:
   - either_order_of_adjacent_events:
       first:
         type: agent_message
-        match_fields: {from_session_name: "Web reply"}
+        match_fields: {from_session_name: "Session status"}
       second:
         type: run_finished
         match_fields: {outcome: success}
@@ -70,7 +70,7 @@ steps:
       event:
         session: ${sessions.web_reply}
         type: agent_message
-        fields: {from_session_name: "Web reply"}
+        fields: {from_session_name: "Session status"}
   - kind: wait
     name: wait for the nudged turn to finish
     timeout_seconds: 30

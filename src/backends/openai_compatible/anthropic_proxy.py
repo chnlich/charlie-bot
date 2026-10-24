@@ -338,10 +338,13 @@ def _sse_event(event: str, data: dict) -> bytes:
 class OpenAIChatStreamToAnthropic:
   """Stateful translator from OpenAI chat stream chunks to Anthropic SSE events."""
 
-  def __init__(self, model: str, preserve_late_tool_extra_content: bool = False) -> None:
+  def __init__(self, model: str, gemini_stream_rules: bool = False) -> None:
     self._message_id = f"msg_{uuid.uuid4().hex}"
     self._model = model
-    self._preserve_late_tool_extra_content = preserve_late_tool_extra_content
+    # One switch for the two Gemini stream shapes: a tool call that arrives in
+    # one delta with no index, and a thought signature that arrives with or
+    # after the call's fragments (other upstreams send neither).
+    self._gemini_stream_rules = gemini_stream_rules
     self._next_index = 0
     self._text_index: int | None = None
     self._tool_indexes: dict[int, int] = {}
@@ -498,7 +501,12 @@ class OpenAIChatStreamToAnthropic:
   def _handle_tool_delta(self, tool_call: dict) -> list[tuple[str, dict]]:
     call_index = tool_call.get("index")
     if call_index is None:
-      raise ValueError("streaming tool_call missing index")
+      if not self._gemini_stream_rules:
+        raise ValueError("streaming tool_call missing index")
+      # Gemini sends one whole tool call per delta with no index. Slot it at
+      # index 0; the id split below closes the previous call there and starts
+      # the next one, and an id-less delta continues the current call.
+      call_index = 0
     function = tool_call.get("function") or {}
     events: list[tuple[str, dict]] = []
 
@@ -524,7 +532,7 @@ class OpenAIChatStreamToAnthropic:
       if call_index in self._tool_started and previous_extra_content != extra_content:
         raise ValueError("streaming tool_call extra_content changed after its content block started")
       self._tool_extra_content[call_index] = extra_content
-    if extra_content is not None or not self._preserve_late_tool_extra_content:
+    if extra_content is not None or not self._gemini_stream_rules:
       events.extend(self._start_tool_block(call_index))
 
     arguments = function.get("arguments")
@@ -548,8 +556,8 @@ class OpenAIChatStreamToAnthropic:
 
 async def _iter_anthropic_sse(upstream: httpx.Response,
                               model: str,
-                              preserve_late_tool_extra_content: bool = False) -> AsyncIterator[bytes]:
-  translator = OpenAIChatStreamToAnthropic(model, preserve_late_tool_extra_content=preserve_late_tool_extra_content)
+                              gemini_stream_rules: bool = False) -> AsyncIterator[bytes]:
+  translator = OpenAIChatStreamToAnthropic(model, gemini_stream_rules=gemini_stream_rules)
   try:
     for event, data in translator.start_events():
       yield _sse_event(event, data)
@@ -636,7 +644,7 @@ async def openai_compatible_messages(
     if upstream.status_code >= 400:
       raise await _upstream_error(upstream)
     return responses.StreamingResponse(
-        _iter_anthropic_sse(upstream, model, preserve_late_tool_extra_content=google_gemini_endpoint),
+        _iter_anthropic_sse(upstream, model, gemini_stream_rules=google_gemini_endpoint),
         media_type="text/event-stream")
 
   upstream = await client.post(upstream_url, json=openai_payload, headers=headers, timeout=None)

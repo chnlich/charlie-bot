@@ -55,6 +55,19 @@ mod tests {
   use super::*;
 
   #[test]
+  fn test_server_startup_builds_no_speech_model_and_registers_no_speech_service() {
+    let home = tempfile::tempdir().expect("make an isolated home");
+    let mut registry = Registry::new();
+
+    registry.register_package("src.features.voice", register).expect("register voice");
+
+    assert!(
+      registry.services_in(charliebot_registry::wiring::Phase::Early).iter().all(|service| service.name() != "speech")
+    );
+    assert!(!home.path().join("models").exists());
+  }
+
+  #[test]
   fn voice_input_gets_the_python_preamble_byte_for_byte() {
     let contribution = VoiceTurnContribution;
     let meta =

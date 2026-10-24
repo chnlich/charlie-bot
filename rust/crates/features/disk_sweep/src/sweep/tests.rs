@@ -9,7 +9,7 @@ use chrono::{DateTime, Utc};
 use serde_json::json;
 use tempfile::tempdir;
 
-use super::{SweepRoots, run_sweep_blocking};
+use super::{SweepAction, SweepRoots, run_sweep};
 
 fn fixture(base: &Path) -> SweepRoots {
   let roots = SweepRoots {
@@ -49,53 +49,54 @@ fn create_worktree(roots: &SweepRoots, repo: &Path, name: &str) -> (PathBuf, Str
   (path, branch)
 }
 
-fn write_owner(
-  roots: &SweepRoots,
-  session_id: &str,
-  worktree: &Path,
-  repo: &Path,
-  branch: &str,
+struct Owner<'a> {
+  session_id: &'a str,
+  worktree: &'a Path,
+  repo: &'a Path,
+  branch: &'a str,
   closed_at: Option<DateTime<Utc>>,
   keep_worktree: bool,
   reopened: bool,
-) -> PathBuf {
-  let run_id = format!("run-{session_id}");
-  let session = roots.sessions_root.join(session_id);
+}
+
+fn write_owner(roots: &SweepRoots, owner: Owner<'_>) -> PathBuf {
+  let run_id = format!("run-{}", owner.session_id);
+  let session = roots.sessions_root.join(owner.session_id);
   let run = session.join("data/runs").join(&run_id);
   fs::create_dir_all(&run).unwrap();
   fs::write(
     session.join("metadata.json"),
-    serde_json::to_vec(&json!({"task": {"goal": "synthetic task", "keep_worktree": keep_worktree}})).unwrap(),
+    serde_json::to_vec(&json!({"task": {"goal": "synthetic task", "keep_worktree": owner.keep_worktree}})).unwrap(),
   )
   .unwrap();
   let mut events = Vec::new();
-  if let Some(closed_at) = closed_at {
+  if let Some(closed_at) = owner.closed_at {
     events.push(json!({"type": "task_closed", "timestamp": closed_at.to_rfc3339(), "outcome": "archived"}));
   }
-  if reopened {
+  if owner.reopened {
     events.push(json!({
       "type": "task_reopened",
-      "timestamp": closed_at.map(|value| value.to_rfc3339()),
+      "timestamp": owner.closed_at.map(|value| value.to_rfc3339()),
     }));
   }
   let event_path = session.join("data/chat_events.jsonl");
   fs::create_dir_all(event_path.parent().unwrap()).unwrap();
   let event_lines = events.into_iter().map(|event| format!("{event}\n")).collect::<String>();
   fs::write(event_path, event_lines).unwrap();
-  let worktree = worktree.canonicalize().unwrap();
+  let worktree = owner.worktree.canonicalize().unwrap();
   let record = json!({
     "id": run_id,
-    "session_id": session_id,
+    "session_id": owner.session_id,
     "worktree_path": worktree,
-    "repo_path": repo.to_string_lossy(),
-    "branch_name": branch,
+    "repo_path": owner.repo.to_string_lossy(),
+    "branch_name": owner.branch,
   });
   fs::write(run.join("metadata.json"), serde_json::to_vec(&record).unwrap()).unwrap();
   run
 }
 
-fn run(roots: &SweepRoots, apply: bool, now: DateTime<Utc>) -> super::SweepReport {
-  run_sweep_blocking(roots.clone(), apply, now).unwrap()
+async fn run(roots: &SweepRoots, apply: bool, now: DateTime<Utc>) -> super::SweepReport {
+  run_sweep(roots.clone(), apply, now).await.unwrap()
 }
 
 fn utc(value: &str) -> DateTime<Utc> {
@@ -120,8 +121,10 @@ fn set_tree_mtime(path: &Path, timestamp: SystemTime) {
   File::open(path).unwrap().set_times(FileTimes::new().set_modified(timestamp)).unwrap();
 }
 
-fn snapshot_tree(path: &Path) -> Vec<(String, u32, u64, i64, i64, Option<Vec<u8>>)> {
-  fn visit(base: &Path, path: &Path, output: &mut Vec<(String, u32, u64, i64, i64, Option<Vec<u8>>)>) {
+type TreeEntry = (String, u32, u64, i64, i64, Option<Vec<u8>>);
+
+fn snapshot_tree(path: &Path) -> Vec<TreeEntry> {
+  fn visit(base: &Path, path: &Path, output: &mut Vec<TreeEntry>) {
     let mut entries = fs::read_dir(path).unwrap().map(|entry| entry.unwrap().path()).collect::<Vec<_>>();
     entries.sort();
     for entry in entries {
@@ -147,24 +150,25 @@ fn snapshot_tree(path: &Path) -> Vec<(String, u32, u64, i64, i64, Option<Vec<u8>
   result
 }
 
-fn fake_process(
-  proc_root: &Path,
-  pid: &str,
-  cwd: &Path,
-  cmdline: &[u8],
-  exe: &Path,
-  fd_target: &Path,
-  root: &Path,
-  maps: &str,
-) {
-  let process = proc_root.join(pid);
+struct FakeProcess<'a> {
+  pid: &'a str,
+  cwd: &'a Path,
+  cmdline: &'a [u8],
+  exe: &'a Path,
+  fd_target: &'a Path,
+  root: &'a Path,
+  maps: &'a str,
+}
+
+fn fake_process(proc_root: &Path, fixture: FakeProcess<'_>) {
+  let process = proc_root.join(fixture.pid);
   fs::create_dir_all(process.join("fd")).unwrap();
-  std::os::unix::fs::symlink(cwd, process.join("cwd")).unwrap();
-  std::os::unix::fs::symlink(root, process.join("root")).unwrap();
-  std::os::unix::fs::symlink(exe, process.join("exe")).unwrap();
-  std::os::unix::fs::symlink(fd_target, process.join("fd/3")).unwrap();
-  fs::write(process.join("maps"), maps).unwrap();
-  fs::write(process.join("cmdline"), cmdline).unwrap();
+  std::os::unix::fs::symlink(fixture.cwd, process.join("cwd")).unwrap();
+  std::os::unix::fs::symlink(fixture.root, process.join("root")).unwrap();
+  std::os::unix::fs::symlink(fixture.exe, process.join("exe")).unwrap();
+  std::os::unix::fs::symlink(fixture.fd_target, process.join("fd/3")).unwrap();
+  fs::write(process.join("maps"), fixture.maps).unwrap();
+  fs::write(process.join("cmdline"), fixture.cmdline).unwrap();
 }
 
 struct RestorePermissions(PathBuf);
@@ -190,49 +194,77 @@ fn tar_files(path: &Path) -> BTreeMap<String, Vec<u8>> {
     .collect()
 }
 
-#[test]
-fn test_worktree_age_reopen_keep_and_unknown_owner_rules() {
+#[tokio::test]
+async fn test_worktree_age_reopen_keep_and_unknown_owner_rules() {
   let root = tempdir().unwrap();
   let roots = fixture(root.path());
   let repo = create_repo(&root.path().join("repo"));
   let now = utc("2026-05-20T00:00:00Z");
 
   let (due, due_branch) = create_worktree(&roots, &repo, "due");
-  write_owner(&roots, "due", &due, &repo, &due_branch, Some(now - chrono::Duration::days(3)), false, false);
+  write_owner(
+    &roots,
+    Owner {
+      session_id: "due",
+      worktree: &due,
+      repo: &repo,
+      branch: &due_branch,
+      closed_at: Some(now - chrono::Duration::days(3)),
+      keep_worktree: false,
+      reopened: false,
+    },
+  );
   let (young, young_branch) = create_worktree(&roots, &repo, "young");
   write_owner(
     &roots,
-    "young",
-    &young,
-    &repo,
-    &young_branch,
-    Some(now - chrono::Duration::days(2) - chrono::Duration::hours(23)),
-    false,
-    false,
+    Owner {
+      session_id: "young",
+      worktree: &young,
+      repo: &repo,
+      branch: &young_branch,
+      closed_at: Some(now - chrono::Duration::days(2) - chrono::Duration::hours(23)),
+      keep_worktree: false,
+      reopened: false,
+    },
   );
   let (kept, kept_branch) = create_worktree(&roots, &repo, "kept");
-  write_owner(&roots, "kept", &kept, &repo, &kept_branch, Some(now - chrono::Duration::days(14)), true, false);
+  write_owner(
+    &roots,
+    Owner {
+      session_id: "kept",
+      worktree: &kept,
+      repo: &repo,
+      branch: &kept_branch,
+      closed_at: Some(now - chrono::Duration::days(14)),
+      keep_worktree: true,
+      reopened: false,
+    },
+  );
   let (kept_young, kept_young_branch) = create_worktree(&roots, &repo, "kept-young");
   write_owner(
     &roots,
-    "kept-young",
-    &kept_young,
-    &repo,
-    &kept_young_branch,
-    Some(now - chrono::Duration::days(13)),
-    true,
-    false,
+    Owner {
+      session_id: "kept-young",
+      worktree: &kept_young,
+      repo: &repo,
+      branch: &kept_young_branch,
+      closed_at: Some(now - chrono::Duration::days(13)),
+      keep_worktree: true,
+      reopened: false,
+    },
   );
   let (reopened, reopened_branch) = create_worktree(&roots, &repo, "reopened");
   write_owner(
     &roots,
-    "reopened",
-    &reopened,
-    &repo,
-    &reopened_branch,
-    Some(now - chrono::Duration::days(30)),
-    false,
-    true,
+    Owner {
+      session_id: "reopened",
+      worktree: &reopened,
+      repo: &repo,
+      branch: &reopened_branch,
+      closed_at: Some(now - chrono::Duration::days(30)),
+      keep_worktree: false,
+      reopened: true,
+    },
   );
   let (unknown, unknown_branch) = create_worktree(&roots, &repo, "unknown");
   let unknown_run = roots.sessions_root.join("missing-owner/data/runs/run-missing-owner");
@@ -250,17 +282,17 @@ fn test_worktree_age_reopen_keep_and_unknown_owner_rules() {
   )
   .unwrap();
 
-  let report = run(&roots, false, now);
-  assert_eq!(row_by_path(&report, &due).action, "delete");
-  assert_eq!(row_by_path(&report, &kept).action, "delete");
+  let report = run(&roots, false, now).await;
+  assert_eq!(row_by_path(&report, &due).action, SweepAction::Delete);
+  assert_eq!(row_by_path(&report, &kept).action, SweepAction::Delete);
   assert_eq!(row_by_path(&report, &reopened).reason, "task-open");
   assert_eq!(row_by_path(&report, &unknown).reason, "unknown-owner");
   assert!(report.rows.iter().all(|row| row.path != young));
   assert!(report.rows.iter().all(|row| row.path != kept_young));
 }
 
-#[test]
-fn test_shared_worktree_uses_newest_owner_close_and_any_keep_flag() {
+#[tokio::test]
+async fn test_shared_worktree_uses_newest_owner_close_and_any_keep_flag() {
   let root = tempdir().unwrap();
   let roots = fixture(root.path());
   let repo = create_repo(&root.path().join("repo"));
@@ -269,70 +301,88 @@ fn test_shared_worktree_uses_newest_owner_close_and_any_keep_flag() {
   let (recent, recent_branch) = create_worktree(&roots, &repo, "recent-owner");
   write_owner(
     &roots,
-    "old-owner",
-    &recent,
-    &repo,
-    &recent_branch,
-    Some(now - chrono::Duration::days(30)),
-    false,
-    false,
+    Owner {
+      session_id: "old-owner",
+      worktree: &recent,
+      repo: &repo,
+      branch: &recent_branch,
+      closed_at: Some(now - chrono::Duration::days(30)),
+      keep_worktree: false,
+      reopened: false,
+    },
   );
   write_owner(
     &roots,
-    "recent-owner",
-    &recent,
-    &repo,
-    &recent_branch,
-    Some(now - chrono::Duration::days(2)),
-    false,
-    false,
+    Owner {
+      session_id: "recent-owner",
+      worktree: &recent,
+      repo: &repo,
+      branch: &recent_branch,
+      closed_at: Some(now - chrono::Duration::days(2)),
+      keep_worktree: false,
+      reopened: false,
+    },
   );
   let (kept, kept_branch) = create_worktree(&roots, &repo, "shared-kept");
   write_owner(
     &roots,
-    "shared-ordinary-owner",
-    &kept,
-    &repo,
-    &kept_branch,
-    Some(now - chrono::Duration::days(15)),
-    false,
-    false,
+    Owner {
+      session_id: "shared-ordinary-owner",
+      worktree: &kept,
+      repo: &repo,
+      branch: &kept_branch,
+      closed_at: Some(now - chrono::Duration::days(15)),
+      keep_worktree: false,
+      reopened: false,
+    },
   );
   write_owner(
     &roots,
-    "shared-kept-owner",
-    &kept,
-    &repo,
-    &kept_branch,
-    Some(now - chrono::Duration::days(15)),
-    true,
-    false,
+    Owner {
+      session_id: "shared-kept-owner",
+      worktree: &kept,
+      repo: &repo,
+      branch: &kept_branch,
+      closed_at: Some(now - chrono::Duration::days(15)),
+      keep_worktree: true,
+      reopened: false,
+    },
   );
 
-  let report = run(&roots, false, now);
+  let report = run(&roots, false, now).await;
   assert!(report.rows.iter().all(|row| row.path != recent));
-  assert_eq!(row_by_path(&report, &kept).action, "delete");
+  assert_eq!(row_by_path(&report, &kept).action, SweepAction::Delete);
 }
 
-#[test]
-fn test_apply_archives_worktree_changes_before_removing_it() {
+#[tokio::test]
+async fn test_apply_archives_worktree_changes_before_removing_it() {
   let root = tempdir().unwrap();
   for change in ["tracked", "untracked"] {
     let leg = root.path().join(change);
     let roots = fixture(&leg);
     let repo = create_repo(&leg.join("repo"));
     let (worktree, branch) = create_worktree(&roots, &repo, change);
-    let run_dir =
-      write_owner(&roots, change, &worktree, &repo, &branch, Some(utc("2026-01-01T00:00:00Z")), false, false);
+    let run_dir = write_owner(
+      &roots,
+      Owner {
+        session_id: change,
+        worktree: &worktree,
+        repo: &repo,
+        branch: &branch,
+        closed_at: Some(utc("2026-01-01T00:00:00Z")),
+        keep_worktree: false,
+        reopened: false,
+      },
+    );
     if change == "tracked" {
       fs::write(worktree.join("tracked.txt"), b"changed\n").unwrap();
     } else {
       fs::write(worktree.join("new.txt"), b"untracked contents\n").unwrap();
     }
-    let report = run(&roots, true, utc("2026-01-20T00:00:00Z"));
+    let report = run(&roots, true, utc("2026-01-20T00:00:00Z")).await;
     let row = row_by_path(&report, &worktree);
     let archive = run_dir.join("worktree-changes.tar");
-    assert_eq!(row.action, "archive+delete");
+    assert_eq!(row.action, SweepAction::ArchiveDelete);
     assert!(!worktree.exists());
     assert!(archive.is_file());
     let files = tar_files(&archive);
@@ -347,8 +397,8 @@ fn test_apply_archives_worktree_changes_before_removing_it() {
   }
 }
 
-#[test]
-fn test_large_untracked_and_dirty_submodule_worktrees_are_skipped() {
+#[tokio::test]
+async fn test_large_untracked_and_dirty_submodule_worktrees_are_skipped() {
   let root = tempdir().unwrap();
   let roots = fixture(root.path());
   let repo = create_repo(&root.path().join("repo"));
@@ -359,27 +409,60 @@ fn test_large_untracked_and_dirty_submodule_worktrees_are_skipped() {
   let (large, large_branch) = create_worktree(&roots, &repo, "large");
   let (dirty, dirty_branch) = create_worktree(&roots, &repo, "dirty-submodule");
   git(&dirty, &["-c", "protocol.file.allow=always", "submodule", "update", "--init"]);
-  write_owner(&roots, "large", &large, &repo, &large_branch, Some(utc("2026-01-01T00:00:00Z")), false, false);
-  write_owner(&roots, "dirty-submodule", &dirty, &repo, &dirty_branch, Some(utc("2026-01-01T00:00:00Z")), false, false);
+  write_owner(
+    &roots,
+    Owner {
+      session_id: "large",
+      worktree: &large,
+      repo: &repo,
+      branch: &large_branch,
+      closed_at: Some(utc("2026-01-01T00:00:00Z")),
+      keep_worktree: false,
+      reopened: false,
+    },
+  );
+  write_owner(
+    &roots,
+    Owner {
+      session_id: "dirty-submodule",
+      worktree: &dirty,
+      repo: &repo,
+      branch: &dirty_branch,
+      closed_at: Some(utc("2026-01-01T00:00:00Z")),
+      keep_worktree: false,
+      reopened: false,
+    },
+  );
   fs::write(large.join("too-large.bin"), vec![b'x'; 10 * 1024 * 1024 + 1]).unwrap();
   fs::write(dirty.join("deps/lib/tracked.txt"), b"submodule edit\n").unwrap();
 
-  let report = run(&roots, false, utc("2026-01-20T00:00:00Z"));
+  let report = run(&roots, false, utc("2026-01-20T00:00:00Z")).await;
   assert_eq!(row_by_path(&report, &large).reason, "large-untracked");
   assert_eq!(row_by_path(&report, &dirty).reason, "dirty-submodule");
   assert!(large.is_dir());
   assert!(dirty.is_dir());
 }
 
-#[test]
-fn test_process_cwd_and_cmdline_paths_protect_a_worktree() {
+#[tokio::test]
+async fn test_process_cwd_and_cmdline_paths_protect_a_worktree() {
   let root = tempdir().unwrap();
   for source in ["cwd", "cmdline"] {
     let leg = root.path().join(source);
     let roots = fixture(&leg);
     let repo = create_repo(&leg.join("repo"));
     let (worktree, branch) = create_worktree(&roots, &repo, source);
-    write_owner(&roots, source, &worktree, &repo, &branch, Some(utc("2026-01-01T00:00:00Z")), false, false);
+    write_owner(
+      &roots,
+      Owner {
+        session_id: source,
+        worktree: &worktree,
+        repo: &repo,
+        branch: &branch,
+        closed_at: Some(utc("2026-01-01T00:00:00Z")),
+        keep_worktree: false,
+        reopened: false,
+      },
+    );
     let outside = leg.join("outside");
     fs::write(&outside, b"open file\n").unwrap();
     let cwd = if source == "cwd" { worktree.as_path() } else { leg.as_path() };
@@ -387,34 +470,48 @@ fn test_process_cwd_and_cmdline_paths_protect_a_worktree() {
     let mut cmdline = b"python\0".to_vec();
     cmdline.extend_from_slice(target.to_str().unwrap().as_bytes());
     cmdline.push(0);
+    let exe = std::env::current_exe().unwrap();
     fake_process(
       &roots.proc_root,
-      "12345",
-      cwd,
-      &cmdline,
-      &std::env::current_exe().unwrap(),
-      &outside,
-      Path::new("/"),
-      "",
+      FakeProcess {
+        pid: "12345",
+        cwd,
+        cmdline: &cmdline,
+        exe: &exe,
+        fd_target: &outside,
+        root: Path::new("/"),
+        maps: "",
+      },
     );
 
-    let report = run(&roots, false, utc("2026-01-20T00:00:00Z"));
+    let report = run(&roots, false, utc("2026-01-20T00:00:00Z")).await;
     let row = row_by_path(&report, &worktree);
     assert_eq!(row.reason, "in-use");
-    assert_eq!(row.action, "skip");
+    assert_eq!(row.action, SweepAction::Skip);
     assert!(worktree.is_dir());
   }
 }
 
-#[test]
-fn test_process_root_exe_fd_and_maps_paths_protect_a_worktree() {
+#[tokio::test]
+async fn test_process_root_exe_fd_and_maps_paths_protect_a_worktree() {
   let root = tempdir().unwrap();
   for source in ["root", "exe", "fd", "maps"] {
     let leg = root.path().join(source);
     let roots = fixture(&leg);
     let repo = create_repo(&leg.join("repo"));
     let (worktree, branch) = create_worktree(&roots, &repo, source);
-    write_owner(&roots, source, &worktree, &repo, &branch, Some(utc("2026-01-01T00:00:00Z")), false, false);
+    write_owner(
+      &roots,
+      Owner {
+        session_id: source,
+        worktree: &worktree,
+        repo: &repo,
+        branch: &branch,
+        closed_at: Some(utc("2026-01-01T00:00:00Z")),
+        keep_worktree: false,
+        reopened: false,
+      },
+    );
     let outside = leg.join("outside");
     fs::write(&outside, b"open file\n").unwrap();
     let target = worktree.join("tracked.txt");
@@ -426,18 +523,29 @@ fn test_process_root_exe_fd_and_maps_paths_protect_a_worktree() {
     } else {
       String::new()
     };
-    fake_process(&roots.proc_root, "12346", &leg, b"python\0", exe, fd, process_root, &maps);
+    fake_process(
+      &roots.proc_root,
+      FakeProcess {
+        pid: "12346",
+        cwd: &leg,
+        cmdline: b"python\0",
+        exe,
+        fd_target: fd,
+        root: process_root,
+        maps: &maps,
+      },
+    );
 
-    let report = run(&roots, false, utc("2026-01-20T00:00:00Z"));
+    let report = run(&roots, false, utc("2026-01-20T00:00:00Z")).await;
     let row = row_by_path(&report, &worktree);
     assert_eq!(row.reason, "in-use");
-    assert_eq!(row.action, "skip");
+    assert_eq!(row.action, SweepAction::Skip);
     assert!(worktree.is_dir());
   }
 }
 
-#[test]
-fn test_scratch_age_and_nested_repository_safety() {
+#[tokio::test]
+async fn test_scratch_age_and_nested_repository_safety() {
   let root = tempdir().unwrap();
   let roots = fixture(root.path());
   let now = utc("2026-05-20T00:00:00Z");
@@ -471,16 +579,16 @@ fn test_scratch_age_and_nested_repository_safety() {
   git(&detached_repo, &["commit", "-am", "detached head commit"]);
   set_tree_mtime(&detached, old_time);
 
-  let report = run(&roots, false, now);
-  assert_eq!(row_by_path(&report, &old_clean).action, "delete");
+  let report = run(&roots, false, now).await;
+  assert_eq!(row_by_path(&report, &old_clean).action, SweepAction::Delete);
   assert_eq!(row_by_path(&report, &dirty).reason, "has-unsaved-repo");
   assert_eq!(row_by_path(&report, &unpushed).reason, "has-unsaved-repo");
   assert_eq!(row_by_path(&report, &detached).reason, "has-unsaved-repo");
   assert!(report.rows.iter().all(|row| row.path != new));
 }
 
-#[test]
-fn test_scratch_tree_with_unreadable_entries_is_reported_as_skipped() {
+#[tokio::test]
+async fn test_scratch_tree_with_unreadable_entries_is_reported_as_skipped() {
   let root = tempdir().unwrap();
   let roots = fixture(root.path());
   let unreadable = roots.scratch_root.join("unreadable");
@@ -488,26 +596,36 @@ fn test_scratch_tree_with_unreadable_entries_is_reported_as_skipped() {
   fs::set_permissions(&unreadable, Permissions::from_mode(0o000)).unwrap();
   let _restore_permissions = RestorePermissions(unreadable.clone());
 
-  let report = run(&roots, false, utc("2026-05-20T00:00:00Z"));
+  let report = run(&roots, false, utc("2026-05-20T00:00:00Z")).await;
   let row = row_by_path(&report, &unreadable);
-  assert_eq!(row.action, "skip");
+  assert_eq!(row.action, SweepAction::Skip);
   assert!(row.reason.starts_with("unreadable-path:"));
   assert!(unreadable.is_dir());
   fs::set_permissions(&unreadable, Permissions::from_mode(0o700)).unwrap();
 }
 
-#[test]
-fn test_cli_without_yes_is_read_only_and_reports_a_total() {
+#[tokio::test]
+async fn test_cli_without_yes_is_read_only_and_reports_a_total() {
   let root = tempdir().unwrap();
   let roots = fixture(root.path());
   let repo = create_repo(&root.path().join("repo"));
   let (worktree, branch) = create_worktree(&roots, &repo, "dry-run");
-  let run_dir =
-    write_owner(&roots, "dry-run", &worktree, &repo, &branch, Some(utc("2026-01-01T00:00:00Z")), false, false);
+  let run_dir = write_owner(
+    &roots,
+    Owner {
+      session_id: "dry-run",
+      worktree: &worktree,
+      repo: &repo,
+      branch: &branch,
+      closed_at: Some(utc("2026-01-01T00:00:00Z")),
+      keep_worktree: false,
+      reopened: false,
+    },
+  );
   fs::write(worktree.join("tracked.txt"), b"dry-run edit\n").unwrap();
   let before = snapshot_tree(root.path());
 
-  let report = run(&roots, false, utc("2026-01-20T00:00:00Z"));
+  let report = run(&roots, false, utc("2026-01-20T00:00:00Z")).await;
   let row = row_by_path(&report, &worktree);
   let fields = row.to_tsv().split('\t').map(str::to_string).collect::<Vec<_>>();
   assert_eq!(fields.len(), 5);

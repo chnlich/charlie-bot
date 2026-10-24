@@ -479,9 +479,11 @@ dependencies = [
  "charliebot-tasks",
  "chrono",
  "futures-util",
+ "libc",
  "serde_json",
  "tar",
  "tempfile",
+ "tokio",
 ]
 
 [[package]]

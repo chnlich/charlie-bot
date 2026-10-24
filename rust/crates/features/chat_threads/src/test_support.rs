@@ -3,11 +3,10 @@
 use std::sync::Arc;
 
 use charliebot_registry::FeatureContext;
-use charliebot_store::StoreResult;
+use charliebot_store::{ChatEvent, StoreResult};
 use charliebot_tasks::completion::TaskCompletion;
 use charliebot_tasks::dispatch::{DispatchExecutor, Dispatcher};
 use futures_util::future::BoxFuture;
-use serde_json::Value;
 
 struct NoopExecutor;
 
@@ -15,7 +14,7 @@ impl DispatchExecutor for NoopExecutor {
   fn launch<'a>(
     &'a self,
     _session_id: &'a str,
-    _pending_inputs: &'a [Value],
+    _pending_inputs: &'a [ChatEvent],
     _launch_run_id: Option<&'a str>,
   ) -> BoxFuture<'a, StoreResult<Option<String>>> {
     Box::pin(async { Ok(None) })

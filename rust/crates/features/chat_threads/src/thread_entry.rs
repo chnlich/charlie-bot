@@ -819,7 +819,7 @@ pub async fn post_reply_with_caller_context(
   drop(chat_events);
   let payload = json!({"answers": answers, "chars": chars, "chunks": bodies.len()});
   let _event = if let (Some(request_id), Some(event_id)) = (request_id, event_id.as_deref()) {
-    let mut event = json!({
+    let event = json!({
       "id": event_id,
       "request_id": request_id,
       "type": platform.reply_event_type,
@@ -827,7 +827,7 @@ pub async fn post_reply_with_caller_context(
       (platform.reply_event_type): payload,
     });
     let epoch = features.store.prime_aggregator(session_id).await?;
-    {
+    let event = {
       let guard = features.store.control_lock().await;
       let events = features.store.load_all_facts_view_sync(session_id)?;
       if let Some(existing) = charliebot_store::control_events::replay_request_event(
@@ -840,8 +840,8 @@ pub async fn post_reply_with_caller_context(
       )? {
         return Ok(reply_receipt(&existing, &operator_only_links, platform));
       }
-      event = features.store.append_control_fact(&guard, session_id, event).await?;
-    }
+      features.store.append_control_fact(&guard, session_id, event).await?
+    };
     features.store.announce_appended_event(session_id, &event, epoch).await?;
     event
   } else {
@@ -917,7 +917,7 @@ async fn persist_request_event(
   event_type: &str,
   content: &str,
   fields: Map<String, Value>,
-) -> Result<Value, ThreadReplyError> {
+) -> Result<ChatEvent, ThreadReplyError> {
   let event_id = charliebot_store::control_events::stable_request_event_id(session_id, request_id);
   let epoch = features.store.prime_aggregator(session_id).await?;
   let event = {
@@ -932,7 +932,7 @@ async fn persist_request_event(
       content,
       Some(&request_fields),
     )? {
-      return Ok(existing);
+      return Ok(existing.into());
     }
     let mut event = json!({"id": event_id, "request_id": request_id, "type": event_type, "content": content});
     for (key, value) in fields {

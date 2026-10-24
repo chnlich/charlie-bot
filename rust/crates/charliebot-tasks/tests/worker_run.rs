@@ -31,7 +31,7 @@ use charliebot_registry::{RegisterFn, Registry, RegistryError};
 use charliebot_store::metadata::{TaskProfile, TaskSpec, TaskType, UtcDateTime};
 use charliebot_store::run_records::{self, RunKind, RunOutcome, RunOutcomeKind, RunRecord};
 use charliebot_store::write_faults::{self, Hit};
-use charliebot_store::{CreateTask, PatchTask, TaskCaller};
+use charliebot_store::{ChatEvent, CreateTask, PatchTask, TaskCaller};
 use charliebot_tasks::prompts::{LAUNCH_TEXT_FILENAME, SNAPSHOT_FILENAME};
 use charliebot_tasks::{cold_read, routes, spawner_backends, task_sessions};
 use process_guard::ProcessGroupGuard;
@@ -1934,7 +1934,7 @@ async fn wait_for_retry(stack: &Stack, session_id: &str, run_id: &str) -> anyhow
   }
 }
 
-fn quota_failover_events(stack: &Stack, session_id: &str) -> anyhow::Result<Vec<Value>> {
+fn quota_failover_events(stack: &Stack, session_id: &str) -> anyhow::Result<Vec<ChatEvent>> {
   Ok(stack.run_events(session_id)?.into_iter().filter(|event| event["type"] == event_types::QUOTA_FAILOVER).collect())
 }
 

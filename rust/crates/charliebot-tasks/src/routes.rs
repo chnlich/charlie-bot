@@ -647,7 +647,7 @@ async fn send_message(
         target: "charliebot_tasks",
         session = %session_id,
         request_id = %request.request_id,
-        input_event_id = %admitted.get("id").and_then(serde_json::Value::as_str).expect("admitted input event has an id"),
+        input_event_id = %admitted.get("id").and_then(CompactValue::as_str).expect("admitted input event has an id"),
         error = %message,
         "send_message_dispatch_failed"
       );
@@ -1238,7 +1238,7 @@ mod tests {
     fn launch<'a>(
       &'a self,
       _session_id: &'a str,
-      _pending_inputs: &'a [Value],
+      _pending_inputs: &'a [charliebot_store::ChatEvent],
       _launch_run_id: Option<&'a str>,
     ) -> BoxFuture<'a, StoreResult<Option<String>>> {
       Box::pin(async { Err(StoreError::conflict(vec!["run already active".to_string()])) })
@@ -1366,7 +1366,7 @@ mod tests {
 
     let events = features.store.load_chat_events_sync("synthetic-target").unwrap();
     let agent_sends: Vec<_> =
-      events.iter().filter(|event| event.get("type").and_then(Value::as_str) == Some("agent_message")).collect();
+      events.iter().filter(|event| event.get("type").and_then(CompactValue::as_str) == Some("agent_message")).collect();
     let expected_request_id = format!(
       "agent-send-{}",
       &charliebot_store::control_events::sha256_hex("synthetic-run\0session send\0synthetic-target\0same send")[..24]
@@ -1825,10 +1825,12 @@ mod tests {
     let second_body = response_json(second).await;
     assert_eq!(first_body["input_event_id"], second_body["input_event_id"]);
     let events = features.store.load_all_facts_view_sync("synthetic-request-session").unwrap();
-    let inputs: Vec<&Value> =
-      events.iter().filter(|event| event.get("request_id").and_then(Value::as_str) == Some("browser-send-1")).collect();
+    let inputs: Vec<_> = events
+      .iter()
+      .filter(|event| event.get("request_id").and_then(CompactValue::as_str) == Some("browser-send-1"))
+      .collect();
     assert_eq!(inputs.len(), 1);
-    assert_eq!(inputs[0]["id"], first_body["input_event_id"]);
+    assert_eq!(inputs[0]["id"].as_str(), first_body["input_event_id"].as_str());
   }
 
   #[tokio::test]
@@ -1852,7 +1854,10 @@ mod tests {
     assert_eq!(body["dispatch_error"], "run already active");
     let events = features.store.load_all_facts_view_sync("synthetic-dispatch-error").unwrap();
     assert_eq!(
-      events.iter().filter(|event| event.get("request_id").and_then(Value::as_str) == Some("dispatch-error")).count(),
+      events
+        .iter()
+        .filter(|event| event.get("request_id").and_then(CompactValue::as_str) == Some("dispatch-error"))
+        .count(),
       1
     );
   }

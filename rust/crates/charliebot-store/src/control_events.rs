@@ -1,5 +1,6 @@
 //! Stable task-tree identifiers and the ordered headers for durable control facts.
 
+use charliebot_core::event_types::EventFields;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
@@ -87,18 +88,21 @@ pub fn derived_agent_send_request_id(run_id: &str, verb: &str, target: &str, tex
   format!("agent-send-{}", &sha256_hex(&material)[..24])
 }
 
-/// Return the stored event for a replay, or a conflict when its request payload differs.
-pub fn replay_request_event<'a>(
-  mut events: impl Iterator<Item = &'a Value>,
+/// Return the stored event for a replay, or a conflict when its request payload differs. The events are
+/// searched in place, so a compact cache needs no owned copy unless a replay matches.
+pub fn replay_request_event<'a, E: EventFields + 'a>(
+  mut events: impl Iterator<Item = &'a E>,
   event_id: &str,
   request_id: &str,
   event_type: &str,
   content: &str,
   fields: Option<&Value>,
 ) -> StoreResult<Option<Value>> {
-  let Some(existing) = events.find(|event| event.get("id").and_then(Value::as_str) == Some(event_id)) else {
+  let Some(existing) = events.find(|event| event.field("id").and_then(EventFields::as_str_field) == Some(event_id))
+  else {
     return Ok(None);
   };
+  let existing = existing.to_owned_value();
   let extra_fields_match = match fields {
     None => true,
     Some(fields) => {

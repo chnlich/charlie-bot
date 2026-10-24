@@ -451,7 +451,7 @@ pub async fn post_web_reply_with_request_id(
   features.store.announce_appended_event(session_id, &event, epoch).await?;
   features.store.mark_unread(session_id).await?;
   let over_budget = chars > REPLY_BUDGET_CHARS;
-  let answers = event[WEB_REPLY]["answers"].clone();
+  let answers = event[WEB_REPLY]["answers"].to_value();
   tracing::info!(session = %session_id, chars, over_budget, answers = ?answers, "web_reply_posted");
   Ok(json!({"posted": true, "chars": chars, "over_budget": over_budget, "answers": answers}))
 }

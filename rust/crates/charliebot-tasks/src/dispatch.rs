@@ -130,7 +130,7 @@ impl Dispatcher {
           content,
           Some(&extra_fields),
         )? {
-          return Ok(existing);
+          return Ok(existing.into());
         }
         event_id = Some(stable_id);
       } else if let Some(input_id) = fields.input_id.as_deref() {
@@ -1216,7 +1216,8 @@ mod tests {
         .load_all_facts_view_sync(&meta.id)
         .unwrap()
         .iter()
-        .filter(|event| { event.get("request_id").and_then(serde_json::Value::as_str) == Some("browser-send-1") })
+        .filter(|event| event.get("request_id").and_then(charliebot_store::compact::CompactValue::as_str)
+          == Some("browser-send-1"))
         .count(),
       1
     );
@@ -1264,7 +1265,8 @@ mod tests {
         .load_all_facts_view_sync(&meta.id)
         .unwrap()
         .iter()
-        .filter(|event| event.get("request_id").and_then(serde_json::Value::as_str) == Some("browser-race"))
+        .filter(|event| event.get("request_id").and_then(charliebot_store::compact::CompactValue::as_str)
+          == Some("browser-race"))
         .count(),
       1
     );
@@ -1298,7 +1300,7 @@ mod tests {
     let replay = dispatcher.admit_input(&meta.id, event_types::USER, "message", "user", fields).await;
     assert!(replay.as_ref().is_ok_and(|replay| replay == &event), "matching extra fields did not replay: {replay:?}");
     assert_eq!(event["request_id"], "extra-fields");
-    assert_eq!(event["summon"], json!({"mention_id": "m1"}));
+    assert_eq!(event["summon"].to_value(), json!({"mention_id": "m1"}));
 
     let omitted = dispatcher
       .admit_input(&meta.id, event_types::USER, "message", "user", json!({"request_id": "extra-fields"}))
@@ -1315,7 +1317,14 @@ mod tests {
       .await;
     assert!(changed.is_err(), "changed extra fields did not conflict");
     let events = features.store.load_all_facts_view_sync(&meta.id).unwrap();
-    assert_eq!(events.iter().filter(|event| event.get("request_id") == Some(&json!("extra-fields"))).count(), 1);
+    assert_eq!(
+      events
+        .iter()
+        .filter(|event| event.get("request_id").and_then(charliebot_store::compact::CompactValue::as_str)
+          == Some("extra-fields"))
+        .count(),
+      1
+    );
   }
 
   #[tokio::test]

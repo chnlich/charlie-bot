@@ -23,7 +23,7 @@ use super::server::{OpenCodeHost, OpenCodeServer, OpenCodeServerPool, Turn, Turn
 use crate::cli_base::{IMAGE_MIME_BY_EXT, apply_proxy_env};
 use crate::event_builders;
 use crate::runner::EventFn;
-use crate::transport::cgroup::SessionCgroupConfig;
+use crate::transport::cgroup::{SessionCgroup, SessionCgroupConfig};
 use crate::transport::kill::{kill_process_group, python_exit_code};
 use crate::transport::spawn::{AgentPipeReader, SpawnSpec, spawn_one_shot};
 
@@ -208,7 +208,7 @@ impl BackendFactory for OpenCodeFactory {
       self.host.clone(),
       Arc::clone(&self.pool),
       launch,
-      SessionCgroupConfig::from_config(&cfg),
+      SessionCgroupConfig::from_config(cfg),
     )))
   }
 }
@@ -238,7 +238,7 @@ pub(crate) struct OpenCodeRunArgs {
   pub env: Env,
   pub uploaded_files: Vec<Value>,
   pub process_id: u32,
-  pub cgroup_path: Option<PathBuf>,
+  pub cgroup: Option<SessionCgroup>,
   pub exit: watch::Receiver<Option<Result<i32, String>>>,
   pub on_event: EventFn,
 }
@@ -343,7 +343,7 @@ async fn run_turn_body(
   };
   await_or_exit(server.wait_interrupts_settled(&session_id), &mut args.exit).await?.map_err(RunError::Backend)?;
   current.drop_earlier_interrupts();
-  await_or_exit(put_environment(plan, server, &session_id, &args.env, args.cgroup_path.as_deref()), &mut args.exit)
+  await_or_exit(put_environment(plan, server, &session_id, &args.env, args.cgroup.as_ref()), &mut args.exit)
     .await?
     .map_err(RunError::Backend)?;
   if plan.instructions_file.is_none() && plan.instructions_content.as_ref().is_some_and(|content| !content.is_empty()) {
@@ -537,7 +537,7 @@ async fn put_environment(
   server: &OpenCodeServer,
   session_id: &str,
   env: &Env,
-  cgroup_path: Option<&std::path::Path>,
+  cgroup: Option<&SessionCgroup>,
 ) -> anyhow::Result<()> {
   let join_script = plan.host.join_script();
   if !join_script.is_file() {
@@ -547,9 +547,10 @@ async fn put_environment(
   if let Some(proxy_url) = &plan.proxy_url {
     apply_proxy_env(&mut variables, proxy_url);
   }
-  if let Some(cgroup) = cgroup_path {
+  if let Some(cgroup) = cgroup {
     variables.insert("BASH_ENV".to_string(), join_script.display().to_string());
-    variables.insert("CHARLIEBOT_SESSION_CGROUP".to_string(), cgroup.display().to_string());
+    variables.insert("CHARLIEBOT_SESSION_CGROUP".to_string(), cgroup.path.display().to_string());
+    variables.insert("CHARLIEBOT_SESSION_OOM_SCORE_ADJ".to_string(), cgroup.oom_score_adj().to_string());
   }
   let response = server
     .client_request(reqwest::Method::PUT, &format!("/api/session/{session_id}/environment"))?

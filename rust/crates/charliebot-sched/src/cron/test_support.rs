@@ -35,6 +35,8 @@ pub fn feature_context_with_extra_backends(extra_backend_ids: &[&str]) -> (tempf
   let registry = Arc::new(registry);
   let mut cfg = registry.load_config(home.path()).expect("default config loads");
   cfg.paths.worktree_dir = home.path().join("worktrees").display().to_string();
+  // The synthetic sessions have no metadata; a zero cap starts no session cgroup, so no spawn walks the task-parent chain.
+  cfg.server.session_memory_max_mb = 0;
   for id in std::iter::once("synthetic").chain(extra_backend_ids.iter().copied()) {
     cfg.backends.options.push(BackendOption {
       id: id.to_string(),

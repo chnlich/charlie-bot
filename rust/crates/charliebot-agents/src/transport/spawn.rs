@@ -30,8 +30,6 @@ use tokio::io::unix::AsyncFd;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, Interest, ReadBuf};
 use tokio::sync::{oneshot, watch};
 
-use charliebot_core::cgroup::ResourceClass;
-
 use super::cgroup::{self, SessionCgroup, SessionCgroupConfig};
 use super::identity::{self, ProcessIdentity};
 
@@ -70,8 +68,8 @@ impl SpawnSpec {
     Self { program: program.into(), args, cwd, env, session_id, cgroup }
   }
 
-  fn prepare_cgroup(&self) -> Option<SessionCgroup> {
-    cgroup::prepare_session_cgroup(&self.cgroup, self.session_id.as_deref(), ResourceClass::Agent)
+  async fn prepare_cgroup(&self) -> io::Result<Option<SessionCgroup>> {
+    cgroup::prepare_session_cgroup(&self.cgroup, self.session_id.as_deref()).await
   }
 }
 
@@ -139,7 +137,7 @@ pub async fn spawn_raw_log<C: Send + 'static>(
   }
   let raw = OpenOptions::new().create(true).append(true).mode(0o644).open(raw_path)?;
   let stderr = OpenOptions::new().create(true).append(true).mode(0o644).open(stderr_path)?;
-  let cgroup = spec.prepare_cgroup();
+  let cgroup = spec.prepare_cgroup().await?;
   let (child_stdin, parent_stdin) = match stdin {
     RawStdin::Piped => piped_stdin()?,
     RawStdin::Null => (devnull_fd()?, None),
@@ -190,7 +188,7 @@ pub async fn spawn_with_setup(
   let cgroup = match setup {
     SpawnSetup::None => None,
     SpawnSetup::ParentSideTurnTree | SpawnSetup::ChildSideTurnTree | SpawnSetup::ChildSideCgroup => {
-      spec.prepare_cgroup()
+      spec.prepare_cgroup().await?
     }
   };
   let (child_fds, parent_io) = captured_io(stdin)?;
@@ -268,6 +266,7 @@ struct PreparedSpawn {
   exec_paths: Vec<CString>,
   cwd: Option<CString>,
   cgroup_path: Option<CString>,
+  cgroup_oom_score_adj: libc::c_int,
   pdeath_signal: Option<libc::c_int>,
   child_nice: bool,
   fds: ChildFds,
@@ -316,11 +315,12 @@ impl PreparedSpawn {
         .collect::<io::Result<Vec<_>>>()?
     };
     let cwd = spec.cwd.as_ref().map(|path| c_string(path.as_os_str().as_bytes())).transpose()?;
-    let child_cgroup = match setup {
-      SpawnSetup::ChildSideTurnTree | SpawnSetup::ChildSideCgroup => {
-        cgroup.as_ref().map(|state| c_string(state.path.join("cgroup.procs").as_os_str().as_bytes())).transpose()?
-      }
-      SpawnSetup::ParentSideTurnTree | SpawnSetup::None => None,
+    let (child_cgroup, child_oom_score_adj) = match (setup, cgroup.as_ref()) {
+      (SpawnSetup::ChildSideTurnTree | SpawnSetup::ChildSideCgroup, Some(state)) => (
+        Some(c_string(state.path.join("cgroup.procs").as_os_str().as_bytes())?),
+        libc::c_int::try_from(state.oom_score_adj()).expect("oom_score_adj fits c_int"),
+      ),
+      _ => (None, 0),
     };
     Ok(Self {
       argv,
@@ -328,6 +328,7 @@ impl PreparedSpawn {
       exec_paths,
       cwd,
       cgroup_path: child_cgroup,
+      cgroup_oom_score_adj: child_oom_score_adj,
       pdeath_signal: pdeathsig.map(|signal| signal as libc::c_int),
       child_nice: setup == SpawnSetup::ChildSideTurnTree,
       fds,
@@ -350,6 +351,7 @@ struct ChildSetupArgs {
   exec_path_count: usize,
   cwd: *const libc::c_char,
   cgroup_path: *const libc::c_char,
+  cgroup_oom_score_adj: libc::c_int,
   stdin_fd: RawFd,
   stdout_fd: RawFd,
   stderr_fd: RawFd,
@@ -675,6 +677,7 @@ fn clone_vfork_exec(prepared: PreparedSpawn) -> io::Result<VforkOutcome> {
     exec_path_count: exec_paths.len(),
     cwd: prepared.cwd.as_ref().map_or(std::ptr::null(), |path| path.as_ptr()),
     cgroup_path: prepared.cgroup_path.as_ref().map_or(std::ptr::null(), |path| path.as_ptr()),
+    cgroup_oom_score_adj: prepared.cgroup_oom_score_adj,
     stdin_fd: prepared.fds.stdin.as_raw_fd(),
     stdout_fd: prepared.fds.stdout.as_raw_fd(),
     stderr_fd: prepared.fds.stderr.as_raw_fd(),
@@ -822,20 +825,28 @@ unsafe fn report_spawn_error(args: &ChildSetupArgs, errno: libc::c_int) -> ! {
   }
 }
 
+/// Move the calling child into its session cgroup, then set its OOM priority, both before exec.
 unsafe fn move_child_to_cgroup(args: &ChildSetupArgs, path: *const libc::c_char) {
+  unsafe {
+    write_decimal_to_file(args, path, libc::getpid() as u32);
+    write_decimal_to_file(args, c"/proc/self/oom_score_adj".as_ptr(), args.cgroup_oom_score_adj as u32);
+  }
+}
+
+/// Write `value` in decimal to the file at `path`. A failure reports to the parent: pre-exec code allocates nothing.
+unsafe fn write_decimal_to_file(args: &ChildSetupArgs, path: *const libc::c_char, mut value: u32) {
   unsafe {
     let fd = libc::open(path, libc::O_WRONLY | libc::O_CLOEXEC);
     if fd == -1 {
       report_spawn_error(args, current_errno());
     }
-    let mut pid = libc::getpid() as u32;
     let mut digits = [0u8; 10];
     let mut start = digits.len();
     loop {
       start -= 1;
-      digits[start] = b'0' + (pid % 10) as u8;
-      pid /= 10;
-      if pid == 0 {
+      digits[start] = b'0' + (value % 10) as u8;
+      value /= 10;
+      if value == 0 {
         break;
       }
     }
@@ -1084,12 +1095,16 @@ mod tests {
   }
 
   fn temp_cgroup(root: &Path) -> (PathBuf, PathBuf) {
-    let base = root.join("app.slice");
-    fs::create_dir(&base).unwrap();
-    let path = base.join("charliebot-sess-test1234");
+    let base = root.join("user@1001.service");
+    let slice = base.join("charliebot-agents.slice");
+    fs::create_dir_all(&slice).unwrap();
+    let path = slice.join("charliebot-sess-test1234");
     fs::create_dir(&path).unwrap();
     let procs = path.join("cgroup.procs");
     fs::write(&procs, "").unwrap();
+    let session = root.join("sessions").join("test1234-session");
+    fs::create_dir_all(&session).unwrap();
+    fs::write(session.join("metadata.json"), r#"{"name":"synthetic","profile":"manager"}"#).unwrap();
     (base, procs)
   }
 
@@ -1176,9 +1191,14 @@ mod tests {
   #[tokio::test]
   async fn spawn_applies_nice_and_moves_into_the_session_cgroup_parent_side() {
     let root = tempfile::tempdir().unwrap();
-    let base = root.path().join("app.slice");
-    fs::create_dir(&base).unwrap();
-    let cgroup_path = base.join("charliebot-sess-test1234");
+    let sessions = root.path().join("sessions");
+    fs::create_dir_all(sessions.join("test1234-session")).unwrap();
+    fs::write(sessions.join("test1234-session").join("metadata.json"), r#"{"name":"synthetic","profile":"manager"}"#)
+      .unwrap();
+    let base = root.path().join("user@1001.service");
+    let slice = base.join("charliebot-agents.slice");
+    fs::create_dir_all(&slice).unwrap();
+    let cgroup_path = slice.join("charliebot-sess-test1234");
     fs::create_dir(&cgroup_path).unwrap();
     fs::write(cgroup_path.join("cgroup.procs"), "").unwrap();
     let spec = SpawnSpec::new(
@@ -1187,13 +1207,7 @@ mod tests {
       None,
       HashMap::new(),
       Some("test1234-session".into()),
-      SessionCgroupConfig {
-        base_dir: base,
-        sessions_dir: PathBuf::new(),
-        memory_max_mb: 64,
-        swap_max_mb: 32,
-        tasks_max: 0,
-      },
+      SessionCgroupConfig { base_dir: base, sessions_dir: sessions, memory_max_mb: 64, swap_max_mb: 32, tasks_max: 0 },
     );
     let mut spawned = spawn_piped(&spec).await.unwrap();
     let pid = spawned.child.id().unwrap();
@@ -1217,7 +1231,7 @@ mod tests {
       None,
       SessionCgroupConfig {
         base_dir: base,
-        sessions_dir: PathBuf::new(),
+        sessions_dir: root.path().join("sessions"),
         memory_max_mb: 0,
         swap_max_mb: 0,
         tasks_max: 0,
@@ -1248,7 +1262,7 @@ mod tests {
       Some("test1234-session".into()),
       SessionCgroupConfig {
         base_dir: base,
-        sessions_dir: PathBuf::new(),
+        sessions_dir: root.path().join("sessions"),
         memory_max_mb: 64,
         swap_max_mb: 0,
         tasks_max: 16,
@@ -1278,7 +1292,7 @@ mod tests {
       Some("test1234-session".into()),
       SessionCgroupConfig {
         base_dir: base,
-        sessions_dir: PathBuf::new(),
+        sessions_dir: root.path().join("sessions"),
         memory_max_mb: 64,
         swap_max_mb: 0,
         tasks_max: 16,
@@ -1315,7 +1329,7 @@ mod tests {
       Some("test1234-session".into()),
       SessionCgroupConfig {
         base_dir: base,
-        sessions_dir: PathBuf::new(),
+        sessions_dir: root.path().join("sessions"),
         memory_max_mb: 64,
         swap_max_mb: 0,
         tasks_max: 16,
@@ -1360,7 +1374,7 @@ mod tests {
       Some("test1234-session".into()),
       SessionCgroupConfig {
         base_dir: base,
-        sessions_dir: PathBuf::new(),
+        sessions_dir: root.path().join("sessions"),
         memory_max_mb: 64,
         swap_max_mb: 0,
         tasks_max: 16,

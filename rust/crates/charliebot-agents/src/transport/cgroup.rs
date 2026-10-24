@@ -1,4 +1,4 @@
-//! Session cgroups use one delegated directory per session.
+//! Session cgroups: one delegated directory per session, under the leaf slice of the session's resource class.
 
 use std::collections::HashSet;
 use std::ffi::OsString;
@@ -7,13 +7,12 @@ use std::fs::OpenOptions;
 use std::io;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
 
-use charliebot_core::cgroup::{ResourceClass, session_cgroup_name, session_cgroup_path};
+use charliebot_core::cgroup::{
+  ResourceClass, session_cgroup_name, session_cgroup_path, session_slice_dir, session_slice_dirs,
+};
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_registry::StartupStop;
-
-static DEGRADED_WARNINGS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 
 /// The session cgroup placement of one spawn: the delegated cgroup base, the home's sessions directory that the class
 /// walk reads, and the caps copied from the server configuration.
@@ -51,6 +50,8 @@ impl SessionCgroupConfig {
 pub struct SessionCgroup {
   /// Session cgroup directory.
   pub path: PathBuf,
+  /// The class that chose the slice; it also fixes the OOM priority of the spawn's processes.
+  pub resource_class: ResourceClass,
   /// Configured memory cap in megabytes.
   pub memory_max_mb: i64,
   /// `memory.events` counters recorded before spawn.
@@ -58,14 +59,19 @@ pub struct SessionCgroup {
 }
 
 impl SessionCgroup {
+  /// The `oom_score_adj` the spawn's processes run with.
+  pub fn oom_score_adj(&self) -> i64 {
+    self.resource_class.oom_score_adj()
+  }
+
   /// Classify an exited process against this spawn's memory event counters.
   pub fn classify_exit(&self, returncode: Option<i32>) -> Option<String> {
     classify_cgroup_exit(returncode, self.events_before, read_memory_events(&self.path), self.memory_max_mb)
   }
 }
 
-/// Create or refresh cgroup limits under `base_dir`, returning the cgroup directory. The class is logged with the
-/// creation; the directory is not yet placed under the class's slice.
+/// Create or refresh the session's cgroup under its class's slice, returning the cgroup directory. A missing or
+/// unwritable slice is an error that names the slice: an unbounded spawn is the failure this guard exists to prevent.
 pub fn ensure_session_cgroup(
   base_dir: &Path,
   resource_class: ResourceClass,
@@ -74,32 +80,54 @@ pub fn ensure_session_cgroup(
   swap_max_mb: i64,
   tasks_max: i64,
 ) -> io::Result<PathBuf> {
-  let path = session_cgroup_path(base_dir, session_id);
+  let slice = session_slice_dir(base_dir, resource_class);
+  let slice_name = resource_class.slice_name();
+  if !slice.is_dir() || !is_writable(&slice) {
+    return Err(io::Error::other(format!(
+      "session cgroup slice {slice_name} ({}) is missing or not writable; install and start the slices from \
+       scripts/systemd/ with scripts/setup.sh",
+      slice.display()
+    )));
+  }
+  let path = session_cgroup_path(&slice, session_id);
   match fs::create_dir(&path) {
     Ok(()) => tracing::info!(
       target: "charliebot_agents",
       path = %path.display(),
-      resource_class = ?resource_class,
+      resource_class = resource_class.as_str(),
       memory_max_mb,
       swap_max_mb,
       tasks_max,
       "session_cgroup_created"
     ),
     Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
-    Err(error) => return Err(error),
+    Err(error) => {
+      return Err(io::Error::other(format!(
+        "session cgroup slice {slice_name} cannot hold {}: {error}",
+        path.display()
+      )));
+    }
   }
-  fs::write(path.join("memory.max"), (memory_max_mb * 1024 * 1024).to_string())?;
-  fs::write(path.join("memory.swap.max"), (swap_max_mb * 1024 * 1024).to_string())?;
-  fs::write(path.join("pids.max"), if tasks_max > 0 { tasks_max.to_string() } else { "max".to_string() })?;
+  let limits = [
+    ("memory.max", (memory_max_mb * 1024 * 1024).to_string()),
+    ("memory.swap.max", (swap_max_mb * 1024 * 1024).to_string()),
+    ("pids.max", if tasks_max > 0 { tasks_max.to_string() } else { "max".to_string() }),
+  ];
+  for (file, value) in limits {
+    fs::write(path.join(file), value).map_err(|error| {
+      io::Error::other(format!(
+        "session cgroup slice {slice_name} cannot take the limit files in {}: {error}",
+        path.display()
+      ))
+    })?;
+  }
   Ok(path)
 }
 
-fn warn_cgroup_unavailable(path: &Path, error: &io::Error) {
-  let key = error.to_string();
-  let seen = DEGRADED_WARNINGS.get_or_init(|| Mutex::new(HashSet::new()));
-  if seen.lock().expect("cgroup warning registry poisoned").insert(key.clone()) {
-    tracing::warn!(target: "charliebot_agents", path = %path.display(), error = %key, "session_cgroup_unavailable");
-  }
+/// Whether this user may write to `path`, by the `access(2)` check that the startup log also makes.
+fn is_writable(path: &Path) -> bool {
+  let path = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).expect("path has no NUL byte");
+  unsafe { libc::access(path.as_ptr(), libc::W_OK) == 0 }
 }
 
 /// Read `(max, oom_kill)` from `memory.events`, or `None` when either counter is unavailable.
@@ -146,47 +174,61 @@ pub fn classify_cgroup_exit(
   }
 }
 
-/// Ensure a session cgroup and snapshot its counters; disabled or unavailable cgroups return `None`. A memory limit of
-/// zero or below disables the cgroup, and no directory is created.
-pub fn prepare_session_cgroup(
+/// The session cgroup of one spawn, ensured under its class's slice with its counters snapshot. `None` when cgroup
+/// control is off for the spawn: no session, or a memory limit of zero or below. The class is the nearest repair mark
+/// up the session's task-parent chain, so a failed walk or an unavailable slice fails the spawn.
+pub async fn prepare_session_cgroup(
   config: &SessionCgroupConfig,
   session_id: Option<&str>,
-  resource_class: ResourceClass,
-) -> Option<SessionCgroup> {
-  let session_id = session_id?;
-  if session_id.is_empty() || config.memory_max_mb <= 0 {
-    return None;
-  }
-  let path = match ensure_session_cgroup(
+) -> io::Result<Option<SessionCgroup>> {
+  let session_id = match session_id {
+    Some(session_id) if !session_id.is_empty() && config.memory_max_mb > 0 => session_id,
+    _ => return Ok(None),
+  };
+  let resource_class = resolve_resource_class(&config.sessions_dir, session_id).await?;
+  let path = ensure_session_cgroup(
     &config.base_dir,
     resource_class,
     session_id,
     config.memory_max_mb,
     config.swap_max_mb,
     config.tasks_max,
-  ) {
-    Ok(path) => path,
-    Err(error) => {
-      warn_cgroup_unavailable(&config.base_dir, &error);
-      return None;
-    }
-  };
-  Some(SessionCgroup { events_before: read_memory_events(&path), path, memory_max_mb: config.memory_max_mb })
+  )?;
+  Ok(Some(SessionCgroup {
+    events_before: read_memory_events(&path),
+    path,
+    resource_class,
+    memory_max_mb: config.memory_max_mb,
+  }))
 }
 
-/// Move a spawned process into a cgroup; failures match the Python warning and do not fail spawn.
+/// The spawn-time class of `session_id`, resolved by the store's task-parent walk on a blocking thread.
+async fn resolve_resource_class(sessions_dir: &Path, session_id: &str) -> io::Result<ResourceClass> {
+  let sessions_dir = sessions_dir.to_path_buf();
+  let session_id = session_id.to_string();
+  tokio::task::spawn_blocking(move || charliebot_store::resource_class::resolve(&sessions_dir, &session_id))
+    .await
+    .map_err(io::Error::other)?
+    .map_err(|error| io::Error::other(error.to_string()))
+}
+
+/// Move a spawned process into its cgroup and set its OOM priority; failures match the Python warnings and do not fail
+/// the spawn.
 pub fn move_process_to_cgroup(pid: u32, cgroup: &SessionCgroup) {
   let path = cgroup.path.join("cgroup.procs");
-  let result = write_process_to_cgroup(pid, &path);
-  if let Err(error) = result {
+  if let Err(error) = write_process_to_cgroup(pid, &path) {
     tracing::warn!(target: "charliebot_agents", pid, path = %path.display(), error = %error, "session_cgroup_move_failed");
   }
-}
-
-/// Move the current child into its prepared cgroup before exec; return write failures to `pre_exec`.
-pub fn move_current_process_to_cgroup(cgroup: &SessionCgroup) -> io::Result<()> {
-  let pid = u32::try_from(unsafe { libc::getpid() }).expect("process id fits u32");
-  write_process_to_cgroup(pid, &cgroup.path.join("cgroup.procs"))
+  let oom_path = PathBuf::from(format!("/proc/{pid}/oom_score_adj"));
+  if let Err(error) = fs::write(&oom_path, cgroup.oom_score_adj().to_string()) {
+    tracing::warn!(
+      target: "charliebot_agents",
+      pid,
+      path = %oom_path.display(),
+      error = %error,
+      "session_cgroup_oom_adjust_failed"
+    );
+  }
 }
 
 fn write_process_to_cgroup(pid: u32, path: &Path) -> io::Result<()> {
@@ -211,43 +253,32 @@ pub fn sweep_stale_session_cgroups_until_stopped(
   stop: &StartupStop,
 ) -> io::Result<usize> {
   let is_stopped = || stop.is_cancelled();
-  let directory = match fs::read_dir(base_dir) {
-    Ok(directory) => directory,
-    Err(error) => {
-      tracing::info!(target: "charliebot_agents", base = %base_dir.display(), error = %error, "session_cgroup_sweep_unavailable");
-      return Ok(0);
-    }
-  };
-  let mut entries = Vec::new();
-  for entry in directory {
-    if is_stopped() {
-      return Ok(0);
-    }
-    match entry {
-      Ok(entry) => entries.push(entry),
-      Err(error) => {
-        tracing::info!(target: "charliebot_agents", base = %base_dir.display(), error = %error, "session_cgroup_sweep_unavailable");
-        return Ok(0);
-      }
-    }
-  }
   let Some(owned) = home_session_cgroup_names(sessions_dir, &is_stopped)? else {
     return Ok(0);
   };
   let mut removed = Vec::new();
-  for entry in entries {
-    if is_stopped() {
-      break;
-    }
-    let path = entry.path();
-    let name = entry.file_name();
-    if !owned.contains(&name) || !path.is_dir() {
-      continue;
-    }
-    match fs::remove_dir(&path) {
-      Ok(()) => removed.push(name.to_string_lossy().into_owned()),
+  'slices: for slice in session_slice_dirs(base_dir) {
+    let entries = match fs::read_dir(&slice).and_then(|directory| directory.collect::<io::Result<Vec<_>>>()) {
+      Ok(entries) => entries,
       Err(error) => {
-        tracing::warn!(target: "charliebot_agents", path = %path.display(), error = %error, "session_cgroup_sweep_retained")
+        tracing::info!(target: "charliebot_agents", base = %slice.display(), error = %error, "session_cgroup_sweep_unavailable");
+        continue;
+      }
+    };
+    for entry in entries {
+      if is_stopped() {
+        break 'slices;
+      }
+      let path = entry.path();
+      let name = entry.file_name();
+      if !owned.contains(&name) || !path.is_dir() {
+        continue;
+      }
+      match fs::remove_dir(&path) {
+        Ok(()) => removed.push(name.to_string_lossy().into_owned()),
+        Err(error) => {
+          tracing::warn!(target: "charliebot_agents", path = %path.display(), error = %error, "session_cgroup_sweep_retained")
+        }
       }
     }
   }
@@ -276,21 +307,25 @@ fn home_session_cgroup_names(
   Ok(Some(names))
 }
 
-/// Log whether session cgroups are enabled for the supplied base and limits. A memory limit of zero or below disables
-/// them.
+/// The one startup line that states whether session cgroup control is on. A memory limit of zero or below turns it off.
+/// A leaf slice that is missing or unwritable is a warning, because every spawn with a session then fails.
 pub fn log_session_cgroup_startup(base_dir: &Path, memory_max_mb: i64, swap_max_mb: i64, tasks_max: i64) {
   if memory_max_mb <= 0 {
     tracing::info!(target: "charliebot_agents", reason = "server.session_memory_max_mb is 0", "session_cgroup_disabled");
-  } else if !base_dir.is_dir() {
-    tracing::info!(target: "charliebot_agents", reason = %format!("{} not present on this host", base_dir.display()), "session_cgroup_disabled");
-  } else {
-    let path = std::ffi::CString::new(base_dir.as_os_str().as_encoded_bytes()).expect("path has no NUL byte");
-    if unsafe { libc::access(path.as_ptr(), libc::W_OK) } != 0 {
-      tracing::info!(target: "charliebot_agents", reason = %format!("{} not writable by this user", base_dir.display()), "session_cgroup_disabled");
-    } else {
-      tracing::info!(target: "charliebot_agents", memory_max_mb, swap_max_mb, tasks_max, "session_cgroup_enabled");
+    return;
+  }
+  for resource_class in [ResourceClass::Agent, ResourceClass::Repair] {
+    let slice = session_slice_dir(base_dir, resource_class);
+    if !slice.is_dir() {
+      tracing::warn!(target: "charliebot_agents", reason = %format!("{} not present on this host; spawns with a session fail", slice.display()), "session_cgroup_unavailable");
+      return;
+    }
+    if !is_writable(&slice) {
+      tracing::warn!(target: "charliebot_agents", reason = %format!("{} not writable by this user; spawns with a session fail", slice.display()), "session_cgroup_unavailable");
+      return;
     }
   }
+  tracing::info!(target: "charliebot_agents", memory_max_mb, swap_max_mb, tasks_max, "session_cgroup_enabled");
 }
 
 #[cfg(test)]
@@ -394,12 +429,12 @@ mod tests {
     assert!(!path.exists());
   }
 
-  #[test]
-  fn negative_memory_limit_starts_no_session_cgroup() {
+  #[tokio::test]
+  async fn negative_memory_limit_starts_no_session_cgroup() {
     let root = fake_slices();
     let config = cgroup_config(root.path(), -1);
-    assert!(prepare_session_cgroup(&config, Some(SESSION_ID), ResourceClass::Agent).is_none());
-    assert!(!session_cgroup_path(root.path(), SESSION_ID).exists());
+    assert!(prepare_session_cgroup(&config, Some(SESSION_ID)).await.unwrap().is_none());
+    assert!(!session_cgroup_path(&root.path().join(AGENTS_SLICE), SESSION_ID).exists());
   }
 
   #[test]

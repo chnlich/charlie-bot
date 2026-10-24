@@ -43,7 +43,7 @@ impl BackendFactory for AnthropicCompatibleFactory {
       fields.effort,
       config_dir,
       launch,
-      SessionCgroupConfig::from_config(&cfg),
+      SessionCgroupConfig::from_config(cfg),
     )?
     .with_headers(fields.headers)
     .with_extra_body(fields.extra_body);

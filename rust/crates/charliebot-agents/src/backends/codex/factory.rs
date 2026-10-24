@@ -42,7 +42,7 @@ impl BackendFactory for CodexFactory {
       &option.model,
       &fields,
       launch,
-      SessionCgroupConfig::from_config(&cfg),
+      SessionCgroupConfig::from_config(cfg),
     )?))
   }
 }

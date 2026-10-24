@@ -402,7 +402,7 @@ impl AgentRunner {
         env,
         uploaded_files: request.uploaded_files,
         process_id: identity.pid,
-        cgroup_path: cgroup.as_ref().map(|state| state.path.clone()),
+        cgroup: cgroup.clone(),
         exit: active.exit.clone(),
         on_event: request.on_event.clone(),
       },
@@ -1194,10 +1194,14 @@ mod tests {
   #[tokio::test]
   async fn outcome_reports_a_session_cgroup_memory_kill_from_the_injected_base() {
     let root = tempfile::tempdir().unwrap();
-    let cgroup_base = root.path().join("cgroups");
-    fs::create_dir(&cgroup_base).unwrap();
-    let cgroup_dir = cgroup_base.join("charliebot-sess-test1234");
+    let cgroup_base = root.path().join("user@1001.service");
+    let agents_slice = cgroup_base.join("charliebot-agents.slice");
+    fs::create_dir_all(&agents_slice).unwrap();
+    let cgroup_dir = agents_slice.join("charliebot-sess-test1234");
     fs::create_dir(&cgroup_dir).unwrap();
+    let session = root.path().join("sessions").join("test1234-session");
+    fs::create_dir_all(&session).unwrap();
+    fs::write(session.join("metadata.json"), r#"{"name":"synthetic","profile":"manager"}"#).unwrap();
     fs::write(cgroup_dir.join("memory.events"), "max 0\noom_kill 0\n").unwrap();
     fs::write(cgroup_dir.join("cgroup.procs"), "").unwrap();
     let script =
@@ -1217,6 +1221,7 @@ mod tests {
       cgroup_base,
     );
     request.cgroup_config.memory_max_mb = 64;
+    request.cgroup_config.sessions_dir = root.path().join("sessions");
     let outcome = runner.run(request).await.unwrap();
     assert_eq!(outcome.exit_code, Some(-libc::SIGKILL));
     assert!(outcome.cgroup_exit_report.as_deref().unwrap().contains("session 内存上限触发"));

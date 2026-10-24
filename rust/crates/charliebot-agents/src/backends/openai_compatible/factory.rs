@@ -35,7 +35,7 @@ impl BackendFactory for OpenAiCompatibleFactory {
       &option.model,
       config_dir,
       launch,
-      SessionCgroupConfig::from_config(&cfg),
+      SessionCgroupConfig::from_config(cfg),
     )?;
     Ok(Box::new(backend))
   }

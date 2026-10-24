@@ -20,7 +20,7 @@ Side effects: none. The CLI uses the route to detect a server that runs older co
 ## `POST /api/internal/delegate`
 
 - Auth: access key + caller.
-- Handler: `src/runtime/api/internal.py:265`.
+- Handler: `src/runtime/api/internal.py:266`.
 - Dependency: `require_caller`.
 
 Body (`DelegateRequest`, JSON, required):
@@ -86,7 +86,7 @@ When the request has no `delegate_invocation`, the event carries one built from 
 ## `POST /api/internal/schedule-trigger`
 
 - Auth: access key.
-- Handler: `src/runtime/api/internal.py:308`.
+- Handler: `src/runtime/api/internal.py:309`.
 
 Body (`ScheduleTriggerRequest`, unknown keys give 422 `extra_forbidden`):
 
@@ -129,7 +129,7 @@ UNVERIFIED: the fire path (watch polling, the timeout rule, the event content) l
 ## `POST /api/internal/triggers/{session_id}/{trigger_id}/cancel`
 
 - Auth: access key.
-- Handler: `src/runtime/api/internal.py:356`.
+- Handler: `src/runtime/api/internal.py:357`.
 - Body: none.
 
 | Status | Case | Body |
@@ -143,7 +143,7 @@ Side effects: for a pending trigger, the server sets `status` to `cancelled` in 
 
 - Auth: access key + caller. The body `session_id` names the sender; an agent run token supplies the caller identity
   used to make retries idempotent.
-- Handler: `src/runtime/api/internal.py:370`.
+- Handler: `src/runtime/api/internal.py:371`.
 
 Body (`SessionMessageRequest`, unknown keys give 422):
 

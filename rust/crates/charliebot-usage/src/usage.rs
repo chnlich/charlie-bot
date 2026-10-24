@@ -4,13 +4,13 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
-use charliebot_core::event_types;
+use charliebot_core::event_types::{self, EventFields, is_truthy};
 use charliebot_core::hot_reload::HotReload;
 use charliebot_registry::backend::{ContextLimits, UsageResolver, UsageResolverHost};
 use charliebot_registry::{FeatureContext, Registry, RegistryError};
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, UtcDateTime};
 use charliebot_store::run_records::RunKind;
-use charliebot_store::{SharedChatEvent, Store, StoreError, StoreResult};
+use charliebot_store::{ChatEvent, Store, StoreError, StoreResult};
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
 
@@ -19,67 +19,49 @@ const READING_SNAPSHOT: &str = "snapshot";
 const READING_RESOLVED: &str = "resolved";
 const FACTS_MEMO_CAP: usize = 8;
 
-pub trait EventData {
-  /// The event as the `Value` form the usage fold reads.
-  fn value(&self) -> Value;
-}
-
-impl EventData for Value {
-  fn value(&self) -> Value {
-    self.clone()
-  }
-}
-
-impl EventData for SharedChatEvent {
-  fn value(&self) -> Value {
-    self.as_ref().to_value()
-  }
-}
-
 #[derive(Clone, Default)]
 struct UsageFold {
   chosen_prompt_tokens: i64,
   chosen_model: String,
   post_compact_tokens: Option<i64>,
   model_windows: Map<String, Value>,
-  snapshot: Option<Map<String, Value>>,
+  snapshot: Option<Value>,
   reading_kind: String,
-  reading: Option<Map<String, Value>>,
+  reading: Option<Value>,
   total_cost: f64,
   unknown_cost: bool,
   last_request_at: Option<UtcDateTime>,
 }
 
 impl UsageFold {
-  fn feed<E: EventData>(&mut self, events: &[E]) -> StoreResult<()> {
+  fn feed<E: EventFields>(&mut self, events: &[&E]) -> StoreResult<()> {
     for event in events {
-      let event = event.value();
-      let event_type = event.get("type").and_then(Value::as_str);
+      let event_type = (*event).field("type").and_then(EventFields::as_str_field);
       if matches!(event_type, Some(event_types::ASSISTANT | event_types::RESULT))
-        && let Some(timestamp) = event.get("timestamp").and_then(Value::as_str)
+        && let Some(timestamp) = event.field("timestamp").and_then(EventFields::as_str_field)
         && let Ok(parsed) = UtcDateTime::parse(timestamp)
       {
         self.last_request_at = Some(parsed);
       }
       match event_type {
-        Some(event_types::ASSISTANT) => self.feed_assistant(&event)?,
-        Some(event_types::SYSTEM) => self.feed_system(&event)?,
+        Some(event_types::ASSISTANT) => self.feed_assistant(*event)?,
+        Some(event_types::SYSTEM) => self.feed_system(*event)?,
         Some(event_types::CONTEXT_COMPACTED) if self.reading_kind == READING_CLAUDE => {
-          self.feed_compaction_metadata(&event)?;
+          self.feed_compaction_metadata(*event)?;
         }
-        Some(event_types::RESULT) => self.feed_result(&event)?,
+        Some(event_types::RESULT) => self.feed_result(*event)?,
         _ => {}
       }
     }
     Ok(())
   }
 
-  fn feed_assistant(&mut self, event: &Value) -> StoreResult<()> {
-    if truthy(event.get("parent_tool_use_id")) {
+  fn feed_assistant<E: EventFields>(&mut self, event: &E) -> StoreResult<()> {
+    if truthy_field(event.field("parent_tool_use_id")) {
       return Ok(());
     }
-    let message = truthy_object(event.get("message"), "assistant.message")?;
-    let usage = truthy_object(message.get("usage"), "assistant.message.usage")?;
+    let Some(message) = truthy_object(event.field("message"), "assistant.message")? else { return Ok(()) };
+    let Some(usage) = truthy_object(message.field("usage"), "assistant.message.usage")? else { return Ok(()) };
     let tokens = add_int_fields(
       usage,
       &[
@@ -91,22 +73,22 @@ impl UsageFold {
     if tokens > 0 {
       self.chosen_prompt_tokens = tokens;
       self.chosen_model =
-        message.get("model").filter(|value| truthy(Some(value))).map_or_else(String::new, value_to_python_string);
+        message.field("model").filter(|value| is_truthy(*value)).map_or_else(String::new, value_to_python_string);
       self.post_compact_tokens = None;
       self.reading_kind = READING_CLAUDE.to_string();
     }
     Ok(())
   }
 
-  fn feed_system(&mut self, event: &Value) -> StoreResult<()> {
-    match event.get("subtype").and_then(Value::as_str) {
+  fn feed_system<E: EventFields>(&mut self, event: &E) -> StoreResult<()> {
+    match event.field("subtype").and_then(EventFields::as_str_field) {
       Some(event_types::COMPACT_BOUNDARY) if self.reading_kind == READING_CLAUDE => {
         self.feed_compaction_metadata(event)?;
       }
       Some(event_types::CONTEXT_READING) => {
-        if let Some(reading) = event.get(event_types::CONTEXT_READING).and_then(Value::as_object) {
+        if let Some(reading) = event.field(event_types::CONTEXT_READING).filter(|value| is_truthy(*value)) {
           self.reading_kind = READING_RESOLVED.to_string();
-          self.reading = Some(reading.clone());
+          self.reading = Some(reading.to_owned_value());
         }
       }
       _ => {}
@@ -114,29 +96,35 @@ impl UsageFold {
     Ok(())
   }
 
-  fn feed_compaction_metadata(&mut self, event: &Value) -> StoreResult<()> {
-    let compact = truthy_object(event.get(event_types::COMPACT_METADATA), "compact_metadata")?;
-    if let Some(tokens) = compact.get(event_types::COMPACT_POST_TOKENS).and_then(python_integer) {
+  fn feed_compaction_metadata<E: EventFields>(&mut self, event: &E) -> StoreResult<()> {
+    let Some(compact) = truthy_object(event.field(event_types::COMPACT_METADATA), "compact_metadata")? else {
+      return Ok(());
+    };
+    if let Some(tokens) = compact.field(event_types::COMPACT_POST_TOKENS).and_then(python_integer) {
       self.post_compact_tokens = Some(tokens);
     }
     Ok(())
   }
 
-  fn feed_result(&mut self, event: &Value) -> StoreResult<()> {
-    let model_usage = truthy_object(event.get("modelUsage"), "result.modelUsage")?;
-    for (model_name, info_value) in model_usage {
-      let info = truthy_object(Some(info_value), "result.modelUsage entry")?;
-      if let Some(window) = info.get("contextWindow").and_then(python_integer) {
-        self.model_windows.insert(model_name.clone(), Value::from(window));
+  fn feed_result<E: EventFields>(&mut self, event: &E) -> StoreResult<()> {
+    if let Some(model_usage) = truthy_object(event.field("modelUsage"), "result.modelUsage")? {
+      // One result event per run: its model-usage table converts once and reads as the Value form.
+      let model_usage = model_usage.to_owned_value();
+      let model_usage = model_usage.as_object().expect("a truthy modelUsage object reads as an object");
+      for (model_name, info_value) in model_usage {
+        let Some(info) = truthy_object(Some(info_value), "result.modelUsage entry")? else { continue };
+        if let Some(window) = info.get("contextWindow").and_then(python_integer) {
+          self.model_windows.insert(model_name.clone(), Value::from(window));
+        }
       }
     }
-    if let Some(snapshot) = event.get("context_snapshot").and_then(Value::as_object) {
-      self.snapshot = Some(snapshot.clone());
+    if let Some(snapshot) = event.field("context_snapshot").filter(|value| value.is_object()) {
+      self.snapshot = Some(snapshot.to_owned_value());
       self.reading_kind = READING_SNAPSHOT.to_string();
     }
-    match event.get(event_types::RESULT_TOTAL_COST_USD) {
-      Some(Value::Null) => self.unknown_cost = true,
-      Some(value) => self.total_cost += python_number(value, "result.total_cost_usd")?,
+    match event.field(event_types::RESULT_TOTAL_COST_USD) {
+      Some(value) if value.is_null() => self.unknown_cost = true,
+      Some(value) => self.total_cost += python_number(&value.to_owned_value(), "result.total_cost_usd")?,
       None => {}
     }
     Ok(())
@@ -191,9 +179,9 @@ impl SessionUsage {
   }
 
   /// Resolve the event-only tiers for an already-loaded transcript, without a backend resolver or cross-call memo.
-  pub fn resolve_events_usage<E: EventData>(
+  pub fn resolve_events_usage<E: EventFields>(
     &self,
-    events: &[E],
+    events: &[&E],
     run_kind: RunKind,
     backend_option: Option<&BackendOption>,
   ) -> StoreResult<Option<Value>> {
@@ -273,7 +261,8 @@ impl SessionUsage {
       Some((generation, covered, fold)) if generation == delta.generation && covered == delta.start_index => fold,
       _ => UsageFold::default(),
     };
-    fold.feed(&delta.events[delta.start_index..])?;
+    let refs = delta.events[delta.start_index..].iter().map(Arc::as_ref).collect::<Vec<&ChatEvent>>();
+    fold.feed(&refs)?;
     let memo_entry = FactsMemoEntry {
       session_id: session_id.to_string(),
       generation: delta.generation,
@@ -309,8 +298,8 @@ fn initialize(features: Arc<FeatureContext>) -> BoxFuture<'static, anyhow::Resul
 }
 
 /// Fold session events through the source tiers, without invoking a registered backend usage resolver.
-pub fn fold_usage<E: EventData>(
-  events: &[E],
+pub fn fold_usage<E: EventFields>(
+  events: &[&E],
   run_kind: RunKind,
   registry: &Registry,
   backend_option: Option<&BackendOption>,
@@ -378,7 +367,10 @@ fn resolve_claude(
 fn resolve_snapshot(fold: &UsageFold, registry: &Registry, cost: Option<f64>, run_kind: RunKind) -> StoreResult<Value> {
   let snapshot = fold.snapshot.as_ref().expect("snapshot reading kind carries a snapshot");
   let tokens = truthy_object(snapshot.get("tokens"), "context_snapshot.tokens")?;
-  let token_sum = add_int_fields(tokens, &["input", "output", "reasoning", "cache_read", "cache_write"])?;
+  let token_sum = match tokens {
+    Some(tokens) => add_int_fields(tokens, &["input", "output", "reasoning", "cache_read", "cache_write"])?,
+    None => 0,
+  };
   let (context_full, compact_at) = match snapshot.get("limit").and_then(Value::as_object) {
     Some(limit) => {
       let input = limit.get("input").and_then(python_integer);
@@ -449,6 +441,11 @@ fn usage_value(
   })
 }
 
+/// `truthy` over one borrowed event field, `None` included.
+fn truthy_field<E: EventFields>(value: Option<&E>) -> bool {
+  value.is_some_and(is_truthy)
+}
+
 fn truthy(value: Option<&Value>) -> bool {
   match value {
     None | Some(Value::Null) => false,
@@ -460,28 +457,27 @@ fn truthy(value: Option<&Value>) -> bool {
   }
 }
 
-fn truthy_object<'a>(value: Option<&'a Value>, field: &str) -> StoreResult<&'a Map<String, Value>> {
-  if !truthy(value) {
-    return Ok(empty_object());
+fn truthy_object<'a, E: EventFields>(value: Option<&'a E>, field: &str) -> StoreResult<Option<&'a E>> {
+  let Some(value) = value else { return Ok(None) };
+  if !is_truthy(value) {
+    return Ok(None);
   }
-  value.and_then(Value::as_object).ok_or_else(|| StoreError::new(format!("{field} must be an object")))
-}
-
-fn empty_object() -> &'static Map<String, Value> {
-  static EMPTY: std::sync::LazyLock<Map<String, Value>> = std::sync::LazyLock::new(Map::new);
-  &EMPTY
-}
-
-fn python_integer(value: &Value) -> Option<i64> {
-  match value {
-    Value::Bool(value) => Some(i64::from(*value)),
-    Value::Number(number) => number.as_i64().or_else(|| number.as_u64().and_then(|value| i64::try_from(value).ok())),
-    _ => None,
+  if !value.is_object() {
+    return Err(StoreError::new(format!("{field} must be an object")));
   }
+  Ok(Some(value))
 }
 
-fn add_int_fields(object: &Map<String, Value>, fields: &[&str]) -> StoreResult<i64> {
-  fields.iter().try_fold(0_i64, |sum, field| match object.get(*field) {
+fn python_integer<E: EventFields>(value: &E) -> Option<i64> {
+  value
+    .as_bool_field()
+    .map(i64::from)
+    .or_else(|| value.as_i64_field())
+    .or_else(|| value.as_u64_field().and_then(|value| i64::try_from(value).ok()))
+}
+
+fn add_int_fields<E: EventFields>(object: &E, fields: &[&str]) -> StoreResult<i64> {
+  fields.iter().try_fold(0_i64, |sum, field| match object.field(field) {
     None => Ok(sum),
     Some(value) => python_integer(value)
       .map(|value| sum + value)
@@ -499,17 +495,26 @@ fn python_number(value: &Value, field: &str) -> StoreResult<f64> {
   }
 }
 
-fn value_to_python_string(value: &Value) -> String {
-  match value {
-    Value::String(value) => value.clone(),
-    Value::Null => "None".to_string(),
-    Value::Bool(value) => if *value { "True" } else { "False" }.to_string(),
-    _ => value.to_string(),
+fn value_to_python_string<E: EventFields>(value: &E) -> String {
+  if let Some(text) = value.as_str_field() {
+    return text.to_string();
   }
+  if value.is_null() {
+    return "None".to_string();
+  }
+  if let Some(flag) = value.as_bool_field() {
+    return if flag { "True" } else { "False" }.to_string();
+  }
+  value.to_owned_value().to_string()
 }
 
 #[cfg(test)]
 mod tests {
+  /// The fold input over a test's owned events, matching the shared slices the routes fold.
+  fn event_refs(events: &[Value]) -> Vec<&Value> {
+    events.iter().collect()
+  }
+
   use std::io::Write;
   use std::path::Path;
   use std::process::{Command, Stdio};
@@ -628,13 +633,33 @@ sys.stdout.write(json.dumps({"run_kind": run_kind, "usage": usage}, separators=(
     std::fs::write(path, format!("{body}\n")).unwrap();
   }
 
+  /// The generic fold reads compact events in place: over one corpus the shared-form fold answers
+  /// exactly what the Value-form fold answers, with no per-event conversion in between.
+  #[test]
+  fn the_compact_form_fold_answers_what_the_value_form_fold_answers() {
+    let events = vec![
+      json!({"type": "assistant", "message": {"model": "model-a", "usage": {"input_tokens": 10, "cache_creation_input_tokens": 2, "cache_read_input_tokens": 3}}}),
+      json!({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "synthetic body"}], "usage": {"input_tokens": 20, "output_tokens": 5}}, "timestamp": "2026-01-01T00:00:00Z"}),
+      json!({"type": "result", "modelUsage": {"model-a": {"contextWindow": 100}}, "total_cost_usd": 0.25}),
+      json!({"type": "system", "subtype": "compact_boundary", "compact_metadata": {"post_tokens": 12345}}),
+    ];
+    let compact = events.iter().map(|event| ChatEvent::from_value(event)).collect::<Vec<_>>();
+    let value_refs = event_refs(&events);
+    let compact_refs = compact.iter().collect::<Vec<_>>();
+    let from_values = fold_usage(&value_refs, RunKind::Work, &registry(), None).unwrap().unwrap();
+    let from_compact = fold_usage(&compact_refs, RunKind::Work, &registry(), None).unwrap().unwrap();
+    assert_eq!(from_values, from_compact);
+    // The compact boundary's post-tokens replace the chosen prompt tokens, in both forms alike.
+    assert_eq!(from_compact["context_tokens"], 12345);
+  }
+
   #[test]
   fn claude_tier_uses_assistant_event_tokens_not_result_cumulative() {
     let events = vec![
       json!({"type": "assistant", "message": {"model": "model-a", "usage": {"input_tokens": 10, "cache_creation_input_tokens": 2, "cache_read_input_tokens": 3}}}),
       json!({"type": "result", "modelUsage": {"model-a": {"contextWindow": 100}}, "total_cost_usd": 0.25}),
     ];
-    let usage = fold_usage(&events, RunKind::Work, &registry(), None).unwrap().unwrap();
+    let usage = fold_usage(&event_refs(&events), RunKind::Work, &registry(), None).unwrap().unwrap();
     assert_eq!(usage["context_tokens"], 15);
     assert_eq!(usage["model"], "model-a");
     assert_eq!(usage["total_cost_usd"], 0.25);
@@ -672,7 +697,7 @@ sys.stdout.write(json.dumps({"run_kind": run_kind, "usage": usage}, separators=(
         "context_window": 409_600,
       })),
     );
-    let usage = fold_usage(&events, RunKind::ManagerTurn, &registry, Some(option)).unwrap().unwrap();
+    let usage = fold_usage(&event_refs(&events), RunKind::ManagerTurn, &registry, Some(option)).unwrap().unwrap();
 
     assert_eq!(serde_json::to_value(RunKind::ManagerTurn).unwrap(), python["run_kind"]);
     assert_eq!(usage, python["usage"]);
@@ -687,7 +712,7 @@ sys.stdout.write(json.dumps({"run_kind": run_kind, "usage": usage}, separators=(
       json!({"type": "assistant", "message": {"model": "empty", "usage": {"input_tokens": 0}}}),
       json!({"type": "assistant", "message": {"model": "main", "usage": {"input_tokens": 7}}}),
     ];
-    let usage = fold_usage(&events, RunKind::Work, &registry(), None).unwrap().unwrap();
+    let usage = fold_usage(&event_refs(&events), RunKind::Work, &registry(), None).unwrap().unwrap();
     assert_eq!(usage["context_tokens"], 7);
     assert_eq!(usage["model"], "main");
   }
@@ -696,7 +721,10 @@ sys.stdout.write(json.dumps({"run_kind": run_kind, "usage": usage}, separators=(
   fn total_cost_sums_results_and_rounds_to_four_places() {
     let events =
       vec![json!({"type": "result", "total_cost_usd": 0.12345}), json!({"type": "result", "total_cost_usd": 0.00005})];
-    assert_eq!(fold_usage(&events, RunKind::Work, &registry(), None).unwrap().unwrap()["total_cost_usd"], 0.1235);
+    assert_eq!(
+      fold_usage(&event_refs(&events), RunKind::Work, &registry(), None).unwrap().unwrap()["total_cost_usd"],
+      0.1235
+    );
   }
 
   #[test]
@@ -727,7 +755,7 @@ sys.stdout.write(json.dumps({"run_kind": run_kind, "usage": usage}, separators=(
       let run_kind = usage_run_kind(&meta);
       let python = python_usage_reference(profile_name, &events, None);
       assert_eq!(serde_json::to_value(run_kind).unwrap(), python["run_kind"]);
-      assert_eq!(fold_usage(&events, run_kind, &registry, None).unwrap().unwrap(), python["usage"]);
+      assert_eq!(fold_usage(&event_refs(&events), run_kind, &registry, None).unwrap().unwrap(), python["usage"]);
     }
   }
 
@@ -735,14 +763,19 @@ sys.stdout.write(json.dumps({"run_kind": run_kind, "usage": usage}, separators=(
   fn total_cost_is_unknown_when_all_result_reports_are_zero() {
     let events =
       vec![json!({"type": "result", "total_cost_usd": 0.0}), json!({"type": "result", "total_cost_usd": 0.0})];
-    assert!(fold_usage(&events, RunKind::Work, &registry(), None).unwrap().unwrap()["total_cost_usd"].is_null());
+    assert!(
+      fold_usage(&event_refs(&events), RunKind::Work, &registry(), None).unwrap().unwrap()["total_cost_usd"].is_null()
+    );
   }
 
   #[test]
   fn total_cost_sums_positive_result_reports() {
     let events =
       vec![json!({"type": "result", "total_cost_usd": 0.1}), json!({"type": "result", "total_cost_usd": 0.2})];
-    assert_eq!(fold_usage(&events, RunKind::Work, &registry(), None).unwrap().unwrap()["total_cost_usd"], 0.3);
+    assert_eq!(
+      fold_usage(&event_refs(&events), RunKind::Work, &registry(), None).unwrap().unwrap()["total_cost_usd"],
+      0.3
+    );
   }
 
   #[test]
@@ -750,7 +783,10 @@ sys.stdout.write(json.dumps({"run_kind": run_kind, "usage": usage}, separators=(
     // Python: round(0.12345, 4) == 0.1235 and round(2.67895, 4) == 2.6789; scaling by 10_000 gets the first wrong.
     for (cost, expected) in [(0.12345, 0.1235), (2.67895, 2.6789)] {
       let events = vec![json!({"type": "result", "total_cost_usd": cost})];
-      assert_eq!(fold_usage(&events, RunKind::Work, &registry(), None).unwrap().unwrap()["total_cost_usd"], expected);
+      assert_eq!(
+        fold_usage(&event_refs(&events), RunKind::Work, &registry(), None).unwrap().unwrap()["total_cost_usd"],
+        expected
+      );
     }
   }
 
@@ -769,7 +805,7 @@ sys.stdout.write(json.dumps({"run_kind": run_kind, "usage": usage}, separators=(
       json!({"type": "assistant", "message": {"model": "model-a", "usage": {"input_tokens": 150_000}}}),
       json!({"type": "result", "modelUsage": {"model-a": {"contextWindow": 200_000}}, "total_cost_usd": 0.5}),
     ];
-    let usage = fold_usage(&events, RunKind::Work, &registry, None).unwrap().unwrap();
+    let usage = fold_usage(&event_refs(&events), RunKind::Work, &registry, None).unwrap().unwrap();
     assert_eq!(usage["context_tokens"], 150_000);
     assert_eq!(usage["context_full"], 200_000);
     assert_eq!(usage["context_compact_at"], 180_000);
@@ -777,7 +813,7 @@ sys.stdout.write(json.dumps({"run_kind": run_kind, "usage": usage}, separators=(
 
     // A model absent from modelUsage falls back to the declared window alone.
     let unlisted = vec![json!({"type": "assistant", "message": {"model": "model-b", "usage": {"input_tokens": 1}}})];
-    let usage = fold_usage(&unlisted, RunKind::Work, &registry, None).unwrap().unwrap();
+    let usage = fold_usage(&event_refs(&unlisted), RunKind::Work, &registry, None).unwrap().unwrap();
     assert_eq!(usage["context_full"], 500_000);
     assert_eq!(usage["context_compact_at"], 480_000);
   }
@@ -789,7 +825,7 @@ sys.stdout.write(json.dumps({"run_kind": run_kind, "usage": usage}, separators=(
       json!({"type": "system", "subtype": "context_reading", "context_reading": {"context_tokens": 31, "context_full": 80, "context_compact_at": 70, "model": "resolved"}}),
       json!({"type": "result", "modelUsage": {"model-a": {"contextWindow": 1000}}}),
     ];
-    let usage = fold_usage(&events, RunKind::Work, &registry(), None).unwrap().unwrap();
+    let usage = fold_usage(&event_refs(&events), RunKind::Work, &registry(), None).unwrap().unwrap();
     assert_eq!(usage["context_tokens"], 31);
     assert_eq!(usage["model"], "resolved");
   }
@@ -807,7 +843,7 @@ sys.stdout.write(json.dumps({"run_kind": run_kind, "usage": usage}, separators=(
         }
       }),
     ];
-    let usage = fold_usage(&events, RunKind::Work, &registry(), None).unwrap().unwrap();
+    let usage = fold_usage(&event_refs(&events), RunKind::Work, &registry(), None).unwrap().unwrap();
     assert_eq!(usage["context_tokens"], 35);
     assert_eq!(usage["context_full"], 100);
     assert_eq!(usage["model"], "snapshot-model");
@@ -876,7 +912,7 @@ sys.stdout.write(json.dumps({"run_kind": run_kind, "usage": usage}, separators=(
     ];
     for (case, limit, expected_full, expected_compact_at) in cases {
       let events = [snapshot_event(limit)];
-      let usage = fold_usage(&events, RunKind::ManagerTurn, &registry, None).unwrap().unwrap();
+      let usage = fold_usage(&event_refs(&events), RunKind::ManagerTurn, &registry, None).unwrap().unwrap();
       assert_eq!(usage["context_tokens"], 102_131, "case {case}");
       assert_eq!(usage["context_full"], json!(expected_full), "case {case}");
       assert_eq!(usage["context_compact_at"], json!(expected_compact_at), "case {case}");
@@ -898,7 +934,7 @@ sys.stdout.write(json.dumps({"run_kind": run_kind, "usage": usage}, separators=(
         None => registry(),
       };
       let events = [snapshot_event(limit.clone())];
-      let usage = fold_usage(&events, RunKind::Work, &registry, None).unwrap().unwrap();
+      let usage = fold_usage(&event_refs(&events), RunKind::Work, &registry, None).unwrap().unwrap();
       assert_eq!(usage["context_full"], 420_000, "case {case}");
       assert_eq!(usage["context_compact_at"], json!(expected_compact_at), "case {case}");
     }
@@ -907,7 +943,7 @@ sys.stdout.write(json.dumps({"run_kind": run_kind, "usage": usage}, separators=(
   #[test]
   fn empty_slot_keeps_context_unknown() {
     let events = vec![json!({"type": "user", "content": "hello"})];
-    let usage = fold_usage(&events, RunKind::Work, &registry(), None).unwrap().unwrap();
+    let usage = fold_usage(&event_refs(&events), RunKind::Work, &registry(), None).unwrap().unwrap();
     assert!(usage["context_tokens"].is_null());
     assert!(usage["context_full"].is_null());
     assert!(usage["context_compact_at"].is_null());
@@ -1023,7 +1059,7 @@ sys.stdout.write(json.dumps({"run_kind": run_kind, "usage": usage}, separators=(
         "model": "claude-fable-5-1"
       }),
     ];
-    let usage = fold_usage(&events, RunKind::ManagerTurn, &registry(), None).unwrap().unwrap();
+    let usage = fold_usage(&event_refs(&events), RunKind::ManagerTurn, &registry(), None).unwrap().unwrap();
 
     assert_eq!(usage["context_tokens"], 9111);
 

@@ -1825,8 +1825,6 @@ class TaskTreeManager:
   async def run_elone_replacement(
       self,
       source: models.SessionMetadata,
-      event_index: int,
-      backend: str | None,
       publish: Callable[[], Awaitable[models.SessionMetadata]],
       archive: Callable[[str], Awaitable[None]],
   ) -> models.SessionMetadata:

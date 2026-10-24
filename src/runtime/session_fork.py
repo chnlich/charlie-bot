@@ -224,8 +224,6 @@ class TaskTreeOwner(Protocol):
   async def run_elone_replacement(
       self,
       source: models.SessionMetadata,
-      event_index: int,
-      backend: str | None,
       publish: Callable[[], Awaitable[models.SessionMetadata]],
       archive: Callable[[str], Awaitable[None]],
   ) -> models.SessionMetadata:
@@ -318,8 +316,6 @@ class SessionFork:
       raise RuntimeError("no task-tree owner is wired over this fork; build the TaskTreeManager first")
     meta = await tree.run_elone_replacement(
         fresh_parent,
-        event_index,
-        backend,
         publish=lambda: self._spawn_with_history(parent_id, event_index, backend, "E"),
         archive=lambda new_id: self._archive_source(parent_id, new_id))
     self._log_spawn("session_eloned", meta, parent_id, event_index)

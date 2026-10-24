@@ -2435,6 +2435,18 @@ def pidfd_open_available() -> None:
     pytest.skip("pidfd not supported on this host (not even via syscall)")
 
 
+def make_cli_config(tmp_path: pathlib.Path) -> mock.MagicMock:
+  """A config stand-in for a CLI main() call: the server port and base URL it reads, a sessions dir
+  under *tmp_path*, and an empty access key planted so no credentials file is read."""
+  cfg = mock.MagicMock()
+  cfg.server.port = 9443
+  cfg.server_base_url = "http://localhost:9443"
+  stub_credentials({"charliebot": {"access_key": ""}})
+  cfg.sessions_dir = tmp_path / "sessions"
+  cfg.sessions_dir.mkdir(parents=True, exist_ok=True)
+  return cfg
+
+
 def fake_cli_cfg(monkeypatch: pytest.MonkeyPatch, sessions_dir: pathlib.Path) -> None:
   """Point the CLI HTTP layer at a fake config so tests never touch a real server."""
   stub_credentials({"charliebot": {"access_key": ""}})

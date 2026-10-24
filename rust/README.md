@@ -55,12 +55,11 @@ in-flight requests up to 5 s. Rust stops services, closes the HTTP client and We
 and logs `charliebot_shutdown` (`server.py:293-310`). SIGTERM then restores and raises its default signal action;
 it skips let-go steps, as Uvicorn does (`uvicorn/server.py:322-339`).
 
-SIGINT runs the `task_execution`, `headless_renderer`, and `speech` let-go steps after the shutdown line, then exits 0.
+SIGINT runs the `task_execution` and `headless_renderer` let-go steps after the shutdown line, then exits 0.
 A failed bind runs those steps after its shutdown line and exits 1 (`uvicorn/server.py:179-182`). Python's normal exit
 cancels pending tasks and joins the default executor (`asyncio/runners.py:63-75`; `concurrent/futures/thread.py:23-31`),
 then its `atexit` hook closes the browser
-(`src/features/artifacts/headless_render.py:184`). The speech worker starts at `src/features/voice/service.py:43-54`;
-turn cancellation follows `src/runtime/master_cc_run.py:648-664`.
+(`src/features/artifacts/headless_render.py:184`). Turn cancellation follows `src/runtime/master_cc_run.py:648-664`.
 
 Logs are JSON lines on stdout. Each line is `{"event": ..., <fields>, "level": ..., "timestamp": ...}`
 and uses the Python server's event names and fields. Every HTTP response logs one `http_request` line

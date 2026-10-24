@@ -16,7 +16,7 @@ use charliebot_core::event_types::{AGENT_MESSAGE, INPUT_EVENT_ID, USER, WEB_REPL
 use charliebot_core::paths;
 use charliebot_core::pystr;
 use charliebot_registry::{FeatureContext, RunningTurnInputs, StateError};
-use charliebot_store::metadata::{SessionMetadata, TaskProfile};
+use charliebot_store::metadata::SessionMetadata;
 use charliebot_store::{SESSION_NOT_FOUND_DETAIL, SharedChatEvent, Store, StoreError};
 use serde_json::{Value, json};
 
@@ -93,9 +93,7 @@ impl From<anyhow::Error> for WebReplyError {
 
 /// True for a manager session that no Slack or Discord thread owns (`reply.is_web_session`).
 pub fn is_web_session(meta: &SessionMetadata) -> bool {
-  meta.profile == TaskProfile::Manager
-    && meta.extra.get("slack_origin").is_none_or(Value::is_null)
-    && meta.extra.get("discord_origin").is_none_or(Value::is_null)
+  charliebot_agents::backends::claude_code::midturn_delivery::is_web_session(meta)
 }
 
 /// The web session named by `session_id` (`reply.require_web_session`): 404 for an unknown session, 409 for a thread
@@ -489,6 +487,7 @@ mod tests {
   use std::fs;
 
   use axum::http::Method;
+  use charliebot_store::metadata::TaskProfile;
 
   use super::*;
   use crate::test_support::{Home, id_of, user_event};

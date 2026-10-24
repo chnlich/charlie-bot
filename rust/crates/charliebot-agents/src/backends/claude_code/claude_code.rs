@@ -8,11 +8,13 @@ use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use anyhow::{Context, bail};
-use charliebot_registry::backend::{AgentBackend, ContextLimits, Env, LaunchArgs, Translate, TransportKind};
+use charliebot_registry::backend::{
+  AgentBackend, ContextLimits, Env, ExitedProbe, LaunchArgs, Translate, TransportKind,
+};
 use charliebot_store::run_records::RunKind;
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncWrite, AsyncWriteExt};
 
 use crate::transport::cgroup::SessionCgroupConfig;
 use crate::transport::kill::{kill_process_group, python_exit_code};
@@ -20,6 +22,7 @@ use crate::transport::spawn::{ChildStdin, SpawnSetup, SpawnSpec, spawn_with_setu
 
 use super::claude_launch;
 use super::login_dirs;
+use super::midturn_delivery::{self, MidturnTranslate};
 
 pub const HEADLESS_DISALLOWED_TOOLS: &str = concat!(
   "Monitor,ScheduleWakeup,CronCreate,CronDelete,CronList,Agent,Workflow,TaskCreate,",
@@ -175,6 +178,8 @@ pub struct ClaudeCodeBackend {
   cgroup_config: SessionCgroupConfig,
   extra_flags: Vec<String>,
   instructions_file: Option<PathBuf>,
+  midturn_delivery: bool,
+  midturn_run_id: Option<String>,
 }
 
 impl ClaudeCodeBackend {
@@ -200,6 +205,17 @@ impl ClaudeCodeBackend {
       Some(_) => bail!("claude_session_id must be a string"),
     }
     .filter(|value| !value.is_empty());
+    let midturn_delivery = match launch.backend_kwargs.get("midturn_delivery") {
+      None | Some(Value::Null) => false,
+      Some(Value::Bool(value)) => *value,
+      Some(_) => bail!("midturn_delivery must be a boolean"),
+    };
+    let midturn_run_id = match launch.backend_kwargs.get("midturn_run_id") {
+      None | Some(Value::Null) => None,
+      Some(Value::String(value)) => Some(value.clone()),
+      Some(_) => bail!("midturn_run_id must be a string"),
+    }
+    .filter(|value| !value.is_empty());
     Ok(Self {
       model,
       effort: effort.filter(|value| !value.is_empty()),
@@ -212,6 +228,8 @@ impl ClaudeCodeBackend {
       cgroup_config,
       extra_flags: launch.extra_flags,
       instructions_file: launch.instructions_file,
+      midturn_delivery,
+      midturn_run_id,
     })
   }
 
@@ -234,6 +252,9 @@ impl ClaudeCodeBackend {
     }
     command.extend(["--settings".to_string(), Value::Object(settings).to_string()]);
     command.extend(self.extra_flags.clone());
+    if self.midturn_delivery {
+      command.extend(["--input-format".to_string(), "stream-json".to_string(), "--replay-user-messages".to_string()]);
+    }
     if let Some(path) = &self.instructions_file {
       command.extend(["--append-system-prompt-file".to_string(), path.to_string_lossy().into_owned()]);
     }
@@ -373,8 +394,37 @@ impl AgentBackend for ClaudeCodeBackend {
     Some(prompt.to_string())
   }
 
+  fn midturn_run_id(&self) -> Option<String> {
+    self.midturn_delivery.then(|| self.midturn_run_id.clone()).flatten()
+  }
+
+  fn write_stdin_prompt(
+    &self,
+    stdin: Box<dyn AsyncWrite + Send + Unpin>,
+    exited: ExitedProbe,
+    prompt: &str,
+  ) -> Option<BoxFuture<'static, anyhow::Result<()>>> {
+    if !self.midturn_delivery {
+      return None;
+    }
+    let run_id = self.midturn_run_id.clone();
+    let prompt = prompt.to_string();
+    Some(Box::pin(async move { midturn_delivery::write_initial_prompt(run_id, stdin, exited, prompt).await }))
+  }
+
+  fn on_event<'a>(&'a self, event: &'a Value) -> Option<BoxFuture<'a, anyhow::Result<()>>> {
+    if !self.midturn_delivery {
+      return None;
+    }
+    let run_id = self.midturn_run_id.clone();
+    Some(Box::pin(async move { midturn_delivery::on_backend_event(run_id, event).await }))
+  }
+
   fn translator(&self) -> Box<dyn Translate> {
-    Box::new(IdentityTranslate)
+    match self.midturn_run_id() {
+      Some(run_id) => Box::new(MidturnTranslate { run_id: Some(run_id) }),
+      None => Box::new(IdentityTranslate),
+    }
   }
 
   fn transport(&self) -> TransportKind {
@@ -533,6 +583,23 @@ impl AgentBackend for AnthropicEndpointBackend {
 
   fn stdin_prompt(&self, prompt: &str) -> Option<String> {
     self.backend.stdin_prompt(prompt)
+  }
+
+  fn midturn_run_id(&self) -> Option<String> {
+    self.backend.midturn_run_id()
+  }
+
+  fn write_stdin_prompt(
+    &self,
+    stdin: Box<dyn AsyncWrite + Send + Unpin>,
+    exited: ExitedProbe,
+    prompt: &str,
+  ) -> Option<BoxFuture<'static, anyhow::Result<()>>> {
+    self.backend.write_stdin_prompt(stdin, exited, prompt)
+  }
+
+  fn on_event<'a>(&'a self, event: &'a Value) -> Option<BoxFuture<'a, anyhow::Result<()>>> {
+    self.backend.on_event(event)
   }
 
   fn translator(&self) -> Box<dyn Translate> {

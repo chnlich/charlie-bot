@@ -957,6 +957,8 @@ async fn test_claude_resume_launch_still_passes_the_run_instructions_file() -> a
     cmd[instructions + 1],
     root.path().join("data").join(worker::HARNESS_INSTRUCTIONS_NAME).display().to_string()
   );
+  assert!(!cmd.iter().any(|arg| arg == "--input-format"));
+  assert!(!cmd.iter().any(|arg| arg == "--replay-user-messages"));
   Ok(())
 }
 

@@ -243,8 +243,9 @@ impl RunFinishedCompletion for NoCompletion {
   }
 }
 
-pub(crate) fn install_dispatcher(features: &FeatureContext) {
-  let dispatcher = Dispatcher::new(Arc::clone(&features.store), Arc::new(NoCompletion), Arc::new(NoCompletion));
+pub(crate) fn install_dispatcher(features: &Arc<FeatureContext>) {
+  let dispatcher =
+    Dispatcher::new(Arc::clone(&features.store), Arc::clone(features), Arc::new(NoCompletion), Arc::new(NoCompletion));
   features.startup.insert(dispatcher).expect("one dispatcher per startup");
 }
 

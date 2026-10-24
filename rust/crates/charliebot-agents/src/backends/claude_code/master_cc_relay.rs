@@ -418,6 +418,7 @@ mod tests {
       record_account,
       context_state,
       running_turns: Some(running_turns),
+      run_id: None,
     }
   }
 

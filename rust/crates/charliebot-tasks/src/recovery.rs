@@ -928,7 +928,7 @@ async fn enqueue_manager_resume(
     Box::pin(async move { Err::<(), anyhow::Error>(anyhow!("resume follow of run {run_id} must not spawn a process")) })
   });
   let on_task_finish = adapter.manager_finish_recorder(
-    session_id,
+    meta,
     &run.id,
     option,
     raw_log.clone(),
@@ -1019,7 +1019,13 @@ pub async fn repair_end_metadata(
   if raw_path.is_file() {
     let cfg = adapter.features.config.get().context("reading the configuration for a metadata repair")?;
     let option = adapter.resolve_run_backend(&cfg, run)?;
-    let translate = master_run::build_fresh_translate(&adapter.features, &cfg, Some(&option));
+    let meta = adapter
+      .features
+      .store
+      .get_session(session_id)
+      .await?
+      .with_context(|| format!("run {} repairs end metadata but session {session_id} has no metadata", run.id))?;
+    let translate = master_run::build_fresh_translate(&adapter.features, &cfg, Some(&option), &meta, &run.id)?;
     let (_, _, scanned) = transport_recovery::scan_result_exit(&raw_path, translate)?;
     exit_code = scanned;
   }

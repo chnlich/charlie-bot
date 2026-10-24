@@ -128,7 +128,14 @@ where
                 track_pending_tool_calls(&translated, &mut pending_tool_calls);
                 clamp_event_timestamp(&mut translated, event_mtime);
                 let is_result = translated.get("type").and_then(Value::as_str) == Some("result");
+                // A delivered input starts a same-process second turn: its result re-arms the post-result clock
+                // (`base.py` resets `saw_result` on every INPUT_DELIVERED event).
+                let is_input_delivered =
+                  translated.get("type").and_then(Value::as_str) == Some(charliebot_core::event_types::INPUT_DELIVERED);
                 handle_event(translated).await?;
+                if is_input_delivered {
+                  saw_result = false;
+                }
                 if !saw_result && is_result {
                   if pending_tool_calls.is_empty() {
                     saw_result = true;

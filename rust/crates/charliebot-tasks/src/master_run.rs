@@ -405,6 +405,7 @@ fn turn_launch_context(
     record_account,
     context_state,
     running_turns: Some(Arc::new(move || running_queue.running_turns_except(&running_session_id))),
+    run_id: Some(item.task_run.run_id.clone()),
   })
 }
 
@@ -512,6 +513,13 @@ impl RunProcess for TurnProcess<'_> {
         .collect();
       let built =
         backend_types::build_backend(Arc::clone(&self.features.registry), &self.option, &self.item.cfg, launch_args)?;
+      if launch.backend_kwargs.get("midturn_delivery").and_then(Value::as_bool).unwrap_or(false) {
+        crate::midturn_delivery::claude_midturn::bind_process(
+          &self.item.task_run.run_id,
+          built.backend.midturn_run_id(),
+        )
+        .await?;
+      }
       let runner = Arc::new(AgentRunner::new(built.backend, built.launch.clone()));
       self.was_built = true;
       let session_id = metadata.id.clone();
@@ -574,6 +582,11 @@ impl RunProcess for TurnProcess<'_> {
               if stream_event.event.get("type").and_then(Value::as_str) == Some(event_types::ERROR) {
                 self.error_event_messages.push(stream_event.event.get("message").and_then(Value::as_str).unwrap_or_default().to_string());
               }
+              crate::midturn_delivery::record_ack(
+                &mut self.item.user_event_ids,
+                &self.item.task_run.run_id,
+                &stream_event.event,
+              )?;
               let mut cc_session_id = self.cc_session_id.lock().expect("native session id mutex is not poisoned").clone();
               handle_event(
                 &self.features,
@@ -640,7 +653,16 @@ impl RunProcess for TurnProcess<'_> {
         if !raw_path.is_file() {
           tracing::warn!(target: "charliebot_tasks", session = %session_id, raw_log = %raw_path.display(), "master_cc_fallback_notice_raw_log_missing");
         } else {
-          let events = project_fresh_raw(&self.features, &self.option, &self.item.cfg, &raw_path, true)?;
+          let metadata = self.item.session_metadata();
+          let events = project_fresh_raw(
+            &self.features,
+            &self.option,
+            &self.item.cfg,
+            &metadata,
+            &self.item.task_run.run_id,
+            &raw_path,
+            true,
+          )?;
           emit_round_notices(self.item, &self.option, &self.features, &events).await?;
         }
       }
@@ -677,13 +699,14 @@ fn project_fresh_raw(
   features: &FeatureContext,
   option: &BackendOption,
   cfg: &CharlieBotConfig,
+  meta: &SessionMetadata,
+  run_id: &str,
   raw_path: &Path,
   notices_only: bool,
 ) -> anyhow::Result<Vec<Value>> {
-  let built = backend_types::build_backend(Arc::clone(&features.registry), option, cfg, LaunchArgs::default())?;
-  let mut translator = built.backend.translator();
+  let translator = crate::midturn_delivery::fresh_translate(features, cfg, Some(option), meta, run_id)?;
   let filter = notices_only.then(|| recovery::TypeLineFilter::new([event_types::ASSISTANT]));
-  recovery::project_raw_file(raw_path, |raw| translator.translate(raw), filter.as_ref())
+  recovery::project_raw_file(raw_path, translator, filter.as_ref())
 }
 
 async fn emit_round_notices(
@@ -849,20 +872,10 @@ pub(crate) fn build_fresh_translate(
   features: &FeatureContext,
   cfg: &CharlieBotConfig,
   option: Option<&BackendOption>,
-) -> Box<dyn FnMut(Value) -> anyhow::Result<Vec<Value>> + Send> {
-  let Some(option) = option else {
-    return Box::new(|event| Ok(vec![event]));
-  };
-  match backend_types::build_backend(Arc::clone(&features.registry), option, cfg, LaunchArgs::default()) {
-    Ok(built) => {
-      let mut translator = built.backend.translator();
-      Box::new(move |event| translator.translate(event))
-    }
-    Err(error) => {
-      tracing::warn!(target: "charliebot_tasks", backend = %option.id, error = %error, "master_cc_resume_translate_unresolved");
-      Box::new(|event| Ok(vec![event]))
-    }
-  }
+  meta: &SessionMetadata,
+  run_id: &str,
+) -> anyhow::Result<crate::midturn_delivery::FreshTranslate> {
+  crate::midturn_delivery::fresh_translate(features, cfg, option, meta, run_id)
 }
 
 pub(crate) async fn resume_cc(item: &mut WorkItem) -> anyhow::Result<MasterRunOutcome> {
@@ -886,16 +899,22 @@ pub(crate) async fn resume_cc(item: &mut WorkItem) -> anyhow::Result<MasterRunOu
   let cfg = Arc::clone(&item.cfg);
   let session_id = metadata.id.clone();
   let buffer_limit = subprocess_buffer_bytes(&cfg)?;
-  let translate = build_fresh_translate(&features, &cfg, option.as_ref());
+  let resume_meta = metadata.clone();
+  let resume_run_id = item.task_run.run_id.clone();
+  let translate = build_fresh_translate(&features, &cfg, option.as_ref(), &resume_meta, &resume_run_id)?;
   let translate_stream = translate;
   let cursor_read = cursor::read_raw_cursor(&cursor_path);
   let cancel = item.cancel.clone();
+  // The resume follow's acknowledgements join the item's web-reply binding like a fresh turn's do.
+  let ack_run_id = item.task_run.run_id.clone();
+  let ack_ids = Arc::new(std::sync::Mutex::new(std::mem::take(&mut item.user_event_ids)));
   let stream_tracker = Arc::clone(&tracker);
   let stream_callbacks = callbacks.clone();
   let stream_features = Arc::clone(&features);
   let stream_cc_session_id = Arc::clone(&callback_cc_session_id);
   let stream_events = Arc::new(Mutex::new(Vec::<Value>::new()));
   let persisted_events = Arc::clone(&stream_events);
+  let stream_ack_ids = Arc::clone(&ack_ids);
   let follow_result = follow::tail_follow_events(
     &raw_path,
     translate_stream,
@@ -907,8 +926,16 @@ pub(crate) async fn resume_cc(item: &mut WorkItem) -> anyhow::Result<MasterRunOu
         let session_id = session_id.clone();
         let cc_session_id = Arc::clone(&stream_cc_session_id);
         let events = Arc::clone(&persisted_events);
+        let ack_ids = Arc::clone(&stream_ack_ids);
+        let ack_run_id = ack_run_id.clone();
         async move {
           tracker.lock().expect("run timing mutex is not poisoned").on_event(&event);
+          crate::midturn_delivery::record_ack(
+            &mut ack_ids.lock().expect("resume acknowledgement mutex is not poisoned"),
+            &ack_run_id,
+            &event,
+          )
+          .map_err(|error| std::io::Error::other(error.to_string()))?;
           let mut cc_session_id_value = cc_session_id.lock().expect("native session id mutex is not poisoned").clone();
           handle_event(&features, &callbacks, &session_id, event.clone(), &mut cc_session_id_value)
             .await
@@ -966,7 +993,7 @@ pub(crate) async fn resume_cc(item: &mut WorkItem) -> anyhow::Result<MasterRunOu
   } else {
     let mut events = stream_events.lock().expect("resume event mutex is not poisoned").clone();
     // Replay from the start of the stored stream to preserve completion and manual-compaction evidence.
-    let translate_scan = build_fresh_translate(&features, &cfg, option.as_ref());
+    let translate_scan = build_fresh_translate(&features, &cfg, option.as_ref(), &resume_meta, &resume_run_id)?;
     let scanned = recovery::scan_result_exit(&raw_path, translate_scan);
     match scanned {
       Ok((projected, _, code)) => {
@@ -1008,6 +1035,7 @@ pub(crate) async fn resume_cc(item: &mut WorkItem) -> anyhow::Result<MasterRunOu
     }
   }
   let finish_extras = tracker.lock().expect("run timing mutex is not poisoned").finish_extras();
+  item.user_event_ids = std::mem::take(&mut *ack_ids.lock().expect("resume acknowledgement mutex is not poisoned"));
   report_turn_error_and_salvage(&tracker, item, error_msg.as_deref(), None).await?;
   if !let_go {
     mark_turn_end_unread(item, error_msg.as_deref(), exit_code, &finish_extras).await?;
@@ -1139,6 +1167,9 @@ mod tests {
     )
     .unwrap();
 
-    assert_eq!(argv, expected);
+    let format_index = expected.iter().position(|value| value == "--input-format").unwrap();
+    assert_eq!(&expected[format_index..format_index + 3], &["--input-format", "stream-json", "--replay-user-messages"]);
+    assert!(!argv.iter().any(|value| value == "--input-format"));
+    assert_eq!(argv, [&expected[..format_index], &expected[format_index + 3..]].concat());
   }
 }

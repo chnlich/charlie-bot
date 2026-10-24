@@ -20,6 +20,7 @@ use charliebot_store::run_records::RunKind;
 use charliebot_store::{SharedChatEvent, Store};
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value};
+use tokio::io::AsyncWrite;
 
 use crate::registry::{Registry, RegistryError};
 
@@ -159,6 +160,9 @@ pub trait Translate: Send {
   fn translate(&mut self, raw: Value) -> anyhow::Result<Vec<Value>>;
 }
 
+/// Whether the spawned child has exited, read by the mid-turn delivery path before it writes.
+pub type ExitedProbe = Arc<dyn Fn() -> bool + Send + Sync>;
+
 /// The per-process pieces of the backend template method. The runner in `charliebot-agents` drives them.
 pub trait AgentBackend: Send {
   /// The instructions file name and the log event that reports writing it, or `None` when the backend takes none.
@@ -167,6 +171,25 @@ pub trait AgentBackend: Send {
   fn build_command(&self, prompt: &str) -> anyhow::Result<Vec<String>>;
   fn prepare_env(&self, env: Env) -> anyhow::Result<Env>;
   fn stdin_prompt(&self, prompt: &str) -> Option<String>;
+  /// The run id whose stdin this backend keeps open for mid-turn delivery (`midturn_delivery`), or `None` for the
+  /// plain-text path.
+  fn midturn_run_id(&self) -> Option<String> {
+    None
+  }
+  /// Write the run's first stdin payload and keep its stdin open for mid-turn writes (`base.py` `_write_stdin_prompt`).
+  /// `exited` reports the child's exit. The runner writes `stdin_prompt` and closes stdin when this returns `None`.
+  fn write_stdin_prompt(
+    &self,
+    _stdin: Box<dyn AsyncWrite + Send + Unpin>,
+    _exited: ExitedProbe,
+    _prompt: &str,
+  ) -> Option<BoxFuture<'static, anyhow::Result<()>>> {
+    None
+  }
+  /// Handle one translated event before the run's consumer sees it (`base.py` `_on_event`), or `None`.
+  fn on_event<'a>(&'a self, _event: &'a Value) -> Option<BoxFuture<'a, anyhow::Result<()>>> {
+    None
+  }
   fn translator(&self) -> Box<dyn Translate>;
   fn transport(&self) -> TransportKind;
   /// Checks the run's uploaded files before any process starts (`base.py` `run` ignores them). `Err` ends the run
@@ -246,6 +269,8 @@ pub struct LaunchContext {
   pub context_state: ContextStateFn,
   /// Present for manager turns; task launches carry `None`.
   pub running_turns: Option<RunningTurnsFn>,
+  /// The task-tree Run id, when the turn belongs to a Run (`backend_lifecycle.LaunchContext.run_id`).
+  pub run_id: Option<String>,
 }
 
 /// The plan for one process of a run: the factory arguments, the conversation to resume, and after a relay the

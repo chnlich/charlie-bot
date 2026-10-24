@@ -2249,12 +2249,17 @@ mod tests {
     }
   }
 
-  fn install_dispatcher(features: &FeatureContext) -> Arc<charliebot_tasks::dispatch::Dispatcher> {
+  fn install_dispatcher(features: &Arc<FeatureContext>) -> Arc<charliebot_tasks::dispatch::Dispatcher> {
     let completion: Arc<dyn SequenceCompletion> = Arc::new(NoopCompletion);
     let run_completion: Arc<dyn charliebot_tasks::dispatch::RunFinishedCompletion> = Arc::new(NoopCompletion);
     features
       .startup
-      .insert(charliebot_tasks::dispatch::Dispatcher::new(Arc::clone(&features.store), completion, run_completion))
+      .insert(charliebot_tasks::dispatch::Dispatcher::new(
+        Arc::clone(&features.store),
+        Arc::clone(features),
+        completion,
+        run_completion,
+      ))
       .expect("insert dispatcher");
     charliebot_tasks::dispatch::dispatcher(features).expect("dispatcher is in startup state")
   }

@@ -397,6 +397,7 @@ impl Worker {
         Box::pin(async move { Ok((tokens, None)) })
       }),
       running_turns: None,
+      run_id: None,
     })
   }
 

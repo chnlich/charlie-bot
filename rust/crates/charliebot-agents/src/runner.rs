@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use anyhow::{Context, bail};
 use charliebot_registry::Registry;
-use charliebot_registry::backend::{AgentBackend, Env, LaunchArgs, TransportKind};
+use charliebot_registry::backend::{AgentBackend, Env, ExitedProbe, LaunchArgs, TransportKind};
 use charliebot_registry::context::FeatureContext;
 use charliebot_store::run_records::{RAW_LOG_NAME, STDERR_LOG_NAME};
 use futures_util::future::BoxFuture;
@@ -248,10 +248,17 @@ impl AgentRunner {
     if gate.is_some() {
       wait_until_stopped_or_terminate(&mut spawned.child).await?;
     }
-    let stdin = spawned.child.stdin.take();
-    let stdin_task = match stdin_prompt {
+    let mut stdin_slot = spawned.child.stdin.take();
+    let midturn = backend.midturn_run_id().is_some();
+    // The mid-turn writer runs after the spawn gate opens: a stopped child cannot drain its pipe.
+    let (plain_prompt, midturn_prompt) = match stdin_prompt {
+      Some(prompt) if midturn => (None, Some(prompt)),
+      Some(prompt) => (Some(prompt), None),
+      None => (None, None),
+    };
+    let mut stdin_task: Option<tokio::task::JoinHandle<std::io::Result<()>>> = match plain_prompt {
       Some(prompt) => {
-        let mut stdin = stdin.context("agent stdin was not piped")?;
+        let mut stdin = stdin_slot.take().context("agent stdin was not piped")?;
         Some(tokio::spawn(async move {
           stdin.write_all(prompt.as_bytes()).await?;
           stdin.shutdown().await
@@ -279,6 +286,20 @@ impl AgentRunner {
     let active = Arc::new(ActiveProcess { pid, exit: receiver, detached: AtomicBool::new(false) });
     *self.active.lock().expect("active process lock poisoned") = Some(Arc::clone(&active));
 
+    if let Some(prompt) = midturn_prompt {
+      let stdin = stdin_slot.take().context("agent stdin was not piped")?;
+      let exited: ExitedProbe = {
+        let exit = active.exit.clone();
+        Arc::new(move || exit.borrow().is_some())
+      };
+      stdin_task = Some(match backend.write_stdin_prompt(Box::new(stdin), exited, &prompt) {
+        Some(write) => {
+          tokio::spawn(async move { write.await.map_err(|error| std::io::Error::other(error.to_string())) })
+        }
+        None => bail!("a mid-turn backend writes its own stdin prompt"),
+      });
+    }
+
     drop(backend);
 
     let mut translator = self.backend.lock().await.translator();
@@ -287,12 +308,22 @@ impl AgentRunner {
     let follow_active = Arc::clone(&active);
     let is_alive = move || !follow_active.detached.load(Ordering::Acquire) && exit_receiver.borrow().is_none();
     let handler = request.on_event.clone();
+    let hook_backend = &self.backend;
     let follow = follow::tail_follow_events(
       &raw_path,
       translate,
       move |event| {
         let handler = handler.clone();
-        async move { handler(event).await.map_err(|error| std::io::Error::other(error.to_string())) }
+        async move {
+          {
+            // The backend hook runs before the consumer sees the event, like `tail_follow_events(on_event=...)`.
+            let backend = hook_backend.lock().await;
+            if let Some(hook) = backend.on_event(&event) {
+              hook.await.map_err(|error| std::io::Error::other(error.to_string()))?;
+            }
+          }
+          handler(event).await.map_err(|error| std::io::Error::other(error.to_string()))
+        }
       },
       is_alive,
       Some(&cursor_path),

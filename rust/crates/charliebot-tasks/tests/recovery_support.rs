@@ -614,7 +614,12 @@ impl Stack {
     });
     let sequence_completion: Arc<dyn SequenceCompletion> = completion.clone();
     let run_completion: Arc<dyn RunFinishedCompletion> = fault.clone();
-    features.startup.insert(Dispatcher::new(Arc::clone(&features.store), sequence_completion, run_completion))?;
+    features.startup.insert(Dispatcher::new(
+      Arc::clone(&features.store),
+      Arc::clone(&features),
+      sequence_completion,
+      run_completion,
+    ))?;
     let dispatch = features.startup.require::<Dispatcher>()?;
     let adapter = TaskExecutionAdapter::new(Arc::clone(&features), queue, Arc::clone(&dispatch));
     dispatch.set_executor(Some(Arc::new(adapter.clone())));

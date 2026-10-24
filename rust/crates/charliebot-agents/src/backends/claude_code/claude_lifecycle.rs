@@ -13,7 +13,7 @@ use serde_json::{Map, Value, json};
 
 use super::{
   EXCLUDE_DYNAMIC_SECTIONS_FLAG, claude_accounts, claude_config, claude_idle_compaction, claude_metadata, claude_relay,
-  login_dirs, master_cc_relay, out_of_family_served_models,
+  login_dirs, master_cc_relay, midturn_delivery, out_of_family_served_models,
 };
 
 pub struct ClaudeCliLifecycle;
@@ -41,7 +41,7 @@ impl ClaudeCliLifecycle {
     Ok(None)
   }
 
-  fn launch(&self, ctx: &LaunchContext, resume_id: Option<String>) -> Launch {
+  fn launch(&self, ctx: &LaunchContext, resume_id: Option<String>) -> anyhow::Result<Launch> {
     let mut backend_kwargs = Map::new();
     backend_kwargs.insert("run_kind".to_string(), json!(ctx.run_kind));
     if ctx.kind == LaunchKind::Turn {
@@ -49,6 +49,7 @@ impl ClaudeCliLifecycle {
         "extra_flags".to_string(),
         Value::Array(vec![Value::String(EXCLUDE_DYNAMIC_SECTIONS_FLAG.to_string())]),
       );
+      midturn_delivery::insert_launch_kwargs(&mut backend_kwargs, ctx)?;
     }
     if ctx.kind == LaunchKind::Task
       && ctx.held_native_id.is_none()
@@ -56,7 +57,7 @@ impl ClaudeCliLifecycle {
     {
       backend_kwargs.insert("claude_session_id".to_string(), Value::String(native_id.to_string()));
     }
-    Launch { backend_kwargs, resume_id, prompt: None, account_label: None, private: None }
+    Ok(Launch { backend_kwargs, resume_id, prompt: None, account_label: None, private: None })
   }
 }
 
@@ -64,7 +65,7 @@ impl BackendLifecycle for ClaudeCliLifecycle {
   fn place<'a>(&'a self, ctx: &'a LaunchContext) -> BoxFuture<'a, Result<Launch, LaunchRefused>> {
     Box::pin(async move {
       let resume_id = self.checked_resume_id(ctx).map_err(|error| refused(error, false, None))?;
-      Ok(self.launch(ctx, resume_id))
+      self.launch(ctx, resume_id).map_err(|error| refused(error, false, None))
     })
   }
 
@@ -115,6 +116,7 @@ impl ClaudeCodeLifecycle {
         "extra_flags".to_string(),
         Value::Array(vec![Value::String(EXCLUDE_DYNAMIC_SECTIONS_FLAG.to_string())]),
       );
+      midturn_delivery::insert_launch_kwargs(&mut kwargs, ctx)?;
     } else if ctx.kind == LaunchKind::Task {
       if first_process
         && ctx.held_native_id.is_none()
@@ -435,15 +437,20 @@ fn refused(
 mod tests {
   use std::fs;
   use std::path::PathBuf;
+  use std::sync::Arc;
 
   use charliebot_registry::Registry;
-  use charliebot_registry::backend::{ContextStateFn, EmitFn, RecordAccountFn, RunningTurnsFn};
+  use charliebot_registry::backend::{ContextStateFn, EmitFn, LaunchArgs, RecordAccountFn, RunningTurnsFn};
   use charliebot_store::metadata::{TaskProfile, UtcDateTime};
   use charliebot_store::run_records::RunKind;
   use serde_json::json;
 
   use super::*;
-  use crate::backends::claude_code::{event_types, turn_contribution};
+  use crate::backends::claude_code::{ClaudeCodeBackend, event_types, turn_contribution};
+
+  fn disabled_cgroup() -> crate::transport::cgroup::SessionCgroupConfig {
+    crate::transport::cgroup::SessionCgroupConfig::disabled()
+  }
 
   fn config(home: &Path, accounts: &[(&str, &Path)]) -> CharlieBotConfig {
     fs::create_dir_all(home).unwrap();
@@ -514,6 +521,7 @@ mod tests {
       record_account,
       context_state,
       running_turns,
+      run_id: Some("11111111-2222-3333-4444-555555555555".to_string()),
     }
   }
 
@@ -555,10 +563,10 @@ mod tests {
     let cli = ClaudeCliLifecycle;
     let claude = ClaudeCodeLifecycle::new();
     let missing = cli.checked_resume_id_for(&ctx, &config_dir).unwrap();
-    let missing_launch = cli.launch(&ctx, missing);
+    let missing_launch = cli.launch(&ctx, missing).unwrap();
     assert_eq!(missing_launch.resume_id, None);
     let cc_missing = claude.no_pool.checked_resume_id_for(&ctx, &config_dir).unwrap();
-    let cc_missing_launch = claude.no_pool.launch(&ctx, cc_missing);
+    let cc_missing_launch = claude.no_pool.launch(&ctx, cc_missing).unwrap();
     assert_eq!(cc_missing_launch.resume_id, None);
 
     let transcript = config_dir.join("projects/synthetic-project").join(format!("{cc_session_id}.jsonl"));
@@ -566,16 +574,21 @@ mod tests {
     fs::write(&transcript, "synthetic transcript\n").unwrap();
     let present = cli.checked_resume_id_for(&ctx, &config_dir).unwrap();
     assert_eq!(present.as_deref(), Some(cc_session_id));
-    let cli_launch = cli.launch(&ctx, present.clone());
+    let cli_launch = cli.launch(&ctx, present.clone()).unwrap();
 
     let cc_resume = claude.no_pool.checked_resume_id_for(&ctx, &config_dir).unwrap();
     assert_eq!(cc_resume.as_deref(), Some(cc_session_id));
-    let claude_launch = claude.no_pool.launch(&ctx, cc_resume);
-    let expected = json!({"extra_flags": [EXCLUDE_DYNAMIC_SECTIONS_FLAG], "run_kind": "manager_turn"});
+    let claude_launch = claude.no_pool.launch(&ctx, cc_resume).unwrap();
+    let expected = json!({
+      "extra_flags": [EXCLUDE_DYNAMIC_SECTIONS_FLAG],
+      "run_kind": "manager_turn",
+      "midturn_delivery": true,
+      "midturn_run_id": "11111111-2222-3333-4444-555555555555",
+    });
 
     let fresh_ctx = context(cfg, LaunchKind::Turn, None, None, Some(Arc::new(Vec::new)));
     let fresh = cli.checked_resume_id_for(&fresh_ctx, &config_dir).unwrap();
-    let fresh_launch = cli.launch(&fresh_ctx, fresh);
+    let fresh_launch = cli.launch(&fresh_ctx, fresh).unwrap();
     for launch in [&missing_launch, &cc_missing_launch, &cli_launch, &fresh_launch, &claude_launch] {
       assert_eq!(json!(launch.backend_kwargs), expected);
       assert_eq!(launch.account_label, None);
@@ -705,5 +718,64 @@ mod tests {
     placed.await.unwrap().unwrap();
     assert!(compaction.is_finished(), "the turn starts after the compaction ends");
     compaction.await.unwrap();
+  }
+
+  // Python: tests/test_backend_hooks.py::test_pooled_relay_turn_uses_the_same_midturn_launch_arguments
+  #[test]
+  fn pooled_relay_turn_uses_the_same_midturn_launch_arguments() {
+    let root = tempfile::tempdir().unwrap();
+    let account_dir = root.path().join("account");
+    account_credentials(&account_dir);
+    let cfg = config(&root.path().join("home"), &[("a", &account_dir)]);
+    let ctx = context(cfg.clone(), LaunchKind::Turn, None, None, Some(Arc::new(Vec::new)));
+    let account =
+      claude_config::ClaudeAccount { label: "a".to_string(), config_dir: account_dir.display().to_string() };
+    let lifecycle = ClaudeCodeLifecycle::new();
+
+    let first = lifecycle.pooled_launch(&ctx, account.clone(), None, None, 0).unwrap();
+    let relay = lifecycle.pooled_launch(&ctx, account, None, Some("continue".to_string()), 1).unwrap();
+
+    assert_eq!(first.backend_kwargs["midturn_delivery"], json!(true));
+    assert_eq!(relay.backend_kwargs["midturn_delivery"], json!(true));
+    let run_id = ctx.run_id.clone().unwrap();
+    assert_eq!(first.backend_kwargs["midturn_run_id"], json!(run_id));
+    assert_eq!(relay.backend_kwargs["midturn_run_id"], json!(run_id));
+  }
+
+  // Python: tests/test_backend_hooks.py::test_thread_turn_keeps_plain_text_stdin_and_queues_later_messages
+  #[tokio::test]
+  async fn thread_turn_keeps_plain_text_stdin_and_queues_later_messages() {
+    for (field, origin) in [
+      ("slack_origin", json!({"team_id": "T", "channel_id": "C", "thread_ts": "1.0"})),
+      ("discord_origin", json!({"guild_id": "G", "parent_channel_id": "C", "thread_id": "1"})),
+    ] {
+      let root = tempfile::tempdir().unwrap();
+      let cfg = unpooled_config(&root.path().join("home"));
+      let ctx = context(cfg.clone(), LaunchKind::Turn, None, None, Some(Arc::new(Vec::new)));
+      let mut meta = charliebot_store::metadata::SessionMetadata::new("s1", "thread", TaskProfile::Manager);
+      meta.extra.insert(field.to_string(), origin);
+      *ctx.session_meta.lock().expect("launch metadata mutex is not poisoned") = meta.clone();
+      let lifecycle = ClaudeCodeLifecycle::new();
+
+      let launch = lifecycle.place(&ctx).await.unwrap();
+      assert_eq!(launch.backend_kwargs.get("midturn_delivery"), None, "{field}: the thread turn is not gated");
+      let backend = ClaudeCodeBackend::from_launch(
+        None,
+        None,
+        None,
+        false,
+        None,
+        LaunchArgs {
+          backend_kwargs: launch.backend_kwargs.clone(),
+          cgroup_session_id: Some(meta.id.clone()),
+          ..LaunchArgs::default()
+        },
+        disabled_cgroup(),
+      )
+      .unwrap();
+      let command = backend.build_command("prompt").unwrap();
+      assert!(!command.iter().any(|value| value == "--input-format"), "{field}: {command:?}");
+      assert!(!command.iter().any(|value| value == "--replay-user-messages"), "{field}: {command:?}");
+    }
   }
 }

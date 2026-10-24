@@ -175,10 +175,13 @@ async fn session_usage(
   let run_kind = charliebot_usage::usage_run_kind(&meta);
   let (usage, active_run_id) = if meta.profile == TaskProfile::Worker {
     match worker_transcript::load_worker_transcript(&features.store, &session_id) {
-      Ok(transcript) => (
-        usage_owner.resolve_events_usage(&transcript.events, run_kind, cfg.get_backend_option(&meta.backend)),
-        transcript.active_run_id.clone(),
-      ),
+      Ok(transcript) => {
+        let events = transcript.events.iter().map(Arc::as_ref).collect::<Vec<_>>();
+        (
+          usage_owner.resolve_events_usage(&events, run_kind, cfg.get_backend_option(&meta.backend)),
+          transcript.active_run_id.clone(),
+        )
+      }
       Err(error) => return store_error(error),
     }
   } else {

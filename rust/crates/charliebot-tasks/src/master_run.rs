@@ -582,7 +582,10 @@ impl RunProcess for TurnProcess<'_> {
               if stream_event.event.get("type").and_then(Value::as_str) == Some(event_types::ERROR) {
                 self.error_event_messages.push(stream_event.event.get("message").and_then(Value::as_str).unwrap_or_default().to_string());
               }
+              let queue = self.queue;
               crate::midturn_delivery::record_ack(
+                queue,
+                &session_id,
                 &mut self.item.user_event_ids,
                 &self.item.task_run.run_id,
                 &stream_event.event,
@@ -905,9 +908,11 @@ pub(crate) async fn resume_cc(item: &mut WorkItem) -> anyhow::Result<MasterRunOu
   let translate_stream = translate;
   let cursor_read = cursor::read_raw_cursor(&cursor_path);
   let cancel = item.cancel.clone();
-  // The resume follow's acknowledgements join the item's web-reply binding like a fresh turn's do.
+  // The resume follow's acknowledgements join the item's web-reply binding like a fresh turn's do. The item keeps its
+  // own ids so a failing follow leaves the binding as Python's in-place mutation does.
   let ack_run_id = item.task_run.run_id.clone();
-  let ack_ids = Arc::new(std::sync::Mutex::new(std::mem::take(&mut item.user_event_ids)));
+  let ack_queue = features.startup.require::<crate::master_queue::MasterQueue>()?;
+  let ack_ids = Arc::new(std::sync::Mutex::new(item.user_event_ids.clone()));
   let stream_tracker = Arc::clone(&tracker);
   let stream_callbacks = callbacks.clone();
   let stream_features = Arc::clone(&features);
@@ -927,10 +932,13 @@ pub(crate) async fn resume_cc(item: &mut WorkItem) -> anyhow::Result<MasterRunOu
         let cc_session_id = Arc::clone(&stream_cc_session_id);
         let events = Arc::clone(&persisted_events);
         let ack_ids = Arc::clone(&stream_ack_ids);
+        let ack_queue = Arc::clone(&ack_queue);
         let ack_run_id = ack_run_id.clone();
         async move {
           tracker.lock().expect("run timing mutex is not poisoned").on_event(&event);
           crate::midturn_delivery::record_ack(
+            &ack_queue,
+            &session_id,
             &mut ack_ids.lock().expect("resume acknowledgement mutex is not poisoned"),
             &ack_run_id,
             &event,

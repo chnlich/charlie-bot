@@ -50,7 +50,17 @@ pub async fn offer(
 }
 
 /// Add one replayed user id to the live manager item's web-reply binding (`midturn_delivery.record_ack`).
-pub fn record_ack(user_event_ids: &mut Vec<String>, item_run_id: &str, event: &Value) -> anyhow::Result<()> {
+///
+/// The manager queue carries the running ids by value, so an acknowledged input joins both the item and the queue's
+/// binding. A reply posted while the turn runs reads the queue (`running_user_event_ids`), as it reads the live item
+/// in Python.
+pub fn record_ack(
+  queue: &crate::master_queue::MasterQueue,
+  session_id: &str,
+  user_event_ids: &mut Vec<String>,
+  item_run_id: &str,
+  event: &Value,
+) -> anyhow::Result<()> {
   if event.get("type").and_then(Value::as_str) != Some(event_types::INPUT_DELIVERED) {
     return Ok(());
   }
@@ -60,8 +70,9 @@ pub fn record_ack(user_event_ids: &mut Vec<String>, item_run_id: &str, event: &V
   }
   let input_id = python_string(event.get("input_event_id"));
   if !user_event_ids.contains(&input_id) {
-    user_event_ids.push(input_id);
+    user_event_ids.push(input_id.clone());
   }
+  queue.append_running_user_event_id(session_id, &input_id);
   Ok(())
 }
 

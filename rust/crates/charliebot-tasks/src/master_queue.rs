@@ -330,6 +330,20 @@ impl MasterQueue {
       .unwrap_or_default()
   }
 
+  /// Append one acknowledged input id to the running session's binding (`running_user_event_ids`).
+  ///
+  /// Python's `_current_items` holds the live `_WorkItem`, so `midturn_delivery.record_ack`'s append is visible to a
+  /// web reply posted while the turn runs. This queue stores the ids by value, so the ack reaches the reader through
+  /// this method as well as through the item.
+  pub fn append_running_user_event_id(&self, session_id: &str, input_id: &str) {
+    let mut state = self.state.lock().expect("master queue mutex is not poisoned");
+    if let Some(ids) = state.current_items.get_mut(session_id)
+      && !ids.iter().any(|id| id == input_id)
+    {
+      ids.push(input_id.to_string());
+    }
+  }
+
   pub fn running_turns_except(&self, session_id: &str) -> Vec<SessionMetadata> {
     let metadata = {
       let state = self.state.lock().expect("master queue mutex is not poisoned");

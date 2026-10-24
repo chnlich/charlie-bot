@@ -3050,6 +3050,22 @@ mod tests {
       .await
       .expect("the running turn reaches its refusal callback");
     assert_eq!(inputs.user_event_ids(session_id), ["input-first", "input-second"]);
+    // A mid-turn delivery joins the running binding: Python's `_current_items` holds the live item, so `record_ack`'s
+    // append reaches a web reply posted while the turn runs.
+    let mut acked = vec!["input-first".to_string(), "input-second".to_string()];
+    crate::midturn_delivery::record_ack(
+      &queue,
+      session_id,
+      &mut acked,
+      "synthetic-run",
+      &serde_json::json!({
+        "type": charliebot_core::event_types::INPUT_DELIVERED,
+        "input_event_id": "input-delivered",
+        "run_id": "synthetic-run",
+      }),
+    )
+    .expect("the delivered input is acknowledged");
+    assert_eq!(inputs.user_event_ids(session_id), ["input-first", "input-second", "input-delivered"]);
     release.notify_one();
     queue_task.await.expect("the queue task joins").expect("the turn settles");
     queue.shutdown().await.expect("the queue shuts down");

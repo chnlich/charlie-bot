@@ -91,6 +91,21 @@ impl StartupStop {
     ready
   }
 
+  /// Wait until startup is ready, or return false when a stop request arrived first.
+  pub async fn ready(&self) -> bool {
+    let mut receiver = self.receiver.clone();
+    loop {
+      match *receiver.borrow() {
+        StartupPhase::Ready => return true,
+        StartupPhase::Stopped => return false,
+        StartupPhase::Starting => {}
+      }
+      if receiver.changed().await.is_err() {
+        return false;
+      }
+    }
+  }
+
   /// Wait until startup receives a stop request.
   pub async fn cancelled(&self) {
     let mut receiver = self.receiver.clone();

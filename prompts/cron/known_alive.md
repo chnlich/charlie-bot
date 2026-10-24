@@ -410,12 +410,14 @@ Known-alive symbols:
   (`src/runtime/agent_process/base.py` awaits `stdin.wait_closed()`) dispatches through it.
   A whole-repo grep finds only the definition, so vulture flags it as an unused method.
 - `run_scheduled_backup` (`src/features/backup/backup.py`), `run_scheduled_usage_ledger`
-  (`src/features/usage/usage_ledger.py`) and `run_scheduled_cool_storage`
-  (`src/features/usage/storage_cool.py`) — reached by string: each feature package's
+  (`src/features/usage/usage_ledger.py`), `run_scheduled_cool_storage`
+  (`src/features/usage/storage_cool.py`) and `run_scheduled`
+  (`src/features/disk_sweep/sweep.py`) — reached by string: each feature package's
   `register()` passes the function to `scheduled_handlers.register_handler(<name>, <module>,
-  attr=<attr>)` (`src/features/backup/__init__.py`, `src/features/usage/__init__.py`), and a
+  attr=<attr>)` (`src/features/backup/__init__.py`, `src/features/usage/__init__.py`,
+  `src/features/disk_sweep/__init__.py`), and a
   registered task with `handler: <name>` awaits `getattr(import_module(module), attr)()`
-  (`src/runtime/hooks/scheduled_handlers.py`). Vulture flags each of the three as an unused
+  (`src/runtime/hooks/scheduled_handlers.py`). Vulture flags each of the four as an unused
   function at 60% confidence.
 - `set_task_manager` (`src/runtime/task_execution.py`) — kept deliberately as the test
   injection seam for the task-tree owner singleton: `tests/test_chat_cancel.py` imports it to
@@ -482,6 +484,12 @@ Known-alive symbols:
   validation and serialization. Each name has exactly zero whole-repo matches outside its
   definition, so vulture flags each as an unused method. Same framework-registered class as the
   `check_sources_and_mode` entry above.
+- `api_base_is_root` (`CcAnthropicCompatibleBackend` in
+  `src/backends/anthropic_compatible/options.py`) — pydantic `@field_validator("api_base")`
+  classmethod, registered with pydantic at class-definition time and invoked during validation.
+  It refuses an `api_base` that ends in `/v1`, because Claude Code appends `/v1/messages` to the
+  base. The name has exactly zero whole-repo matches outside its definition, so vulture flags it
+  as an unused method.
 - `content_type_is_excluded` (the `_IsalGZipResponder` write in `server.py`), `row_factory` (the
   `UsageLedger` connection write in `src/features/usage/usage_ledger.py`), `should_exit` (the
   uvicorn `Server` writes in `tools/chat_scroll_regression.py` and
@@ -499,9 +507,12 @@ Known-alive symbols:
   hook. Vulture flags each at 100% confidence as an unused variable; dropping one from the
   signature breaks the protocol.
 - `pytest_addoption`, `pytest_runtest_protocol`, `pytest_terminal_summary`,
-  `pytest_collection_finish` and `pytest_plugins` (`tests/conftest.py`) — pytest hook bindings
+  `pytest_collection_finish`, `pytest_plugins` and `pytest_configure` (`tests/conftest.py`), plus
+  `pytest_load_initial_conftests` (`src/infra/pytest_sandbox.py`) — pytest hook bindings
   pluggy resolves by module attribute name, same class as the `pytest_runtest_setup/call/teardown`
-  entry above; `pytest_plugins` is the module-level list pytest reads at collection. Vulture
+  entry above; `pytest_plugins` is the module-level list pytest reads at collection. The sandbox
+  module reaches pytest through the `pytest11` entry point, and its
+  `pytest_load_initial_conftests` applies the sandbox before any conftest loads. Vulture
   flags each binding as an unused function or variable.
 - `empty_registry` (`tests/test_usage_sources.py` and `tests/test_sidebar_contributions.py`,
   reached by string via `@pytest.mark.usefixtures("empty_registry")`; the

@@ -1,8 +1,7 @@
-"""Helpers for the worktree quarantine trash dir (`<worktree_dir>/.trash/`).
+"""Helpers for listing and measuring the quarantined worktree trash directory.
 
-Stale failed worktrees are *moved* here by the startup sweep (never hard-deleted),
-and only the manual `charliebot gc-trash --yes` command ever removes them. These
-helpers are shared by the sweep (size reporting) and the CLI (listing + purge).
+Failed worktrees can remain under `<worktree_dir>/.trash/` for manual
+inspection. The charliebot gc-trash command lists or purges those entries.
 """
 
 import dataclasses

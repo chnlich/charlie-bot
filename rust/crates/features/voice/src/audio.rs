@@ -27,9 +27,22 @@ pub(crate) struct AudioQueue {
 
 impl AudioQueue {
   pub(crate) fn new() -> Arc<Self> {
+    Self::with_limits(PREVIEW_QUEUE_SECONDS * SAMPLE_RATE * 2, MAX_RECORDING_SAMPLES * 2)
+  }
+
+  #[cfg(test)]
+  pub(crate) fn new_with_recording_budget_for_test(recording_budget_bytes: usize) -> Arc<Self> {
+    Self::with_limits(PREVIEW_QUEUE_SECONDS * SAMPLE_RATE * 2, recording_budget_bytes)
+  }
+
+  pub(crate) fn new_recording(max_bytes: usize) -> Arc<Self> {
+    Self::with_limits(max_bytes, 0)
+  }
+
+  fn with_limits(max_bytes: usize, recording_budget_bytes: usize) -> Arc<Self> {
     Arc::new(Self {
-      max_bytes: PREVIEW_QUEUE_SECONDS * SAMPLE_RATE * 2,
-      recording_budget_bytes: MAX_RECORDING_SAMPLES * 2,
+      max_bytes,
+      recording_budget_bytes,
       state: Mutex::new(QueueState {
         frames: VecDeque::new(),
         queued_bytes: 0,

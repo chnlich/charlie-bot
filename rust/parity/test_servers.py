@@ -105,9 +105,9 @@ def test_log_event_wait_reads_each_side_from_its_own_log(tmp_path: pathlib.Path)
 def test_log_event_wait_names_both_events_when_neither_arrives(tmp_path: pathlib.Path) -> None:
   log = tmp_path / "baseline.server-1.log"
   log.write_text(PYTHON_FIELDS, encoding="utf-8")
-  assert servers.wait_for_log_events({"baseline": log}, ("synthetic_event_a", "synthetic_event_b"), {}, timeout_seconds=0.2) == [
-      "baseline server did not log synthetic_event_a or synthetic_event_b within 0.2s"
-  ]
+  assert servers.wait_for_log_events(
+      {"baseline": log}, ("synthetic_event_a", "synthetic_event_b"), {},
+      timeout_seconds=0.2) == ["baseline server did not log synthetic_event_a or synthetic_event_b within 0.2s"]
 
 
 def test_log_event_wait_ignores_a_line_until_its_newline_arrives(tmp_path: pathlib.Path) -> None:

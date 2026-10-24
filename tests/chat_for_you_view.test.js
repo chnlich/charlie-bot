@@ -104,10 +104,6 @@ function rowsOf(root) {
   });
 }
 
-function messageIds(el) {
-  return el.dataset.messageId;
-}
-
 // The fixture the cases read: a first turn with a web reply mid-steps, a notice
 // after it, a second turn with a status block, an error row, a plain system line
 // and a child report behind the last separator.

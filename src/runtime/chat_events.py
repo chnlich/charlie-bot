@@ -1,8 +1,10 @@
 """Chat event persistence for CharlieBot sessions."""
 
+import dataclasses
 import datetime
 import os
 import pathlib
+import threading
 import uuid
 from collections.abc import Callable, Iterator
 
@@ -151,6 +153,18 @@ def _live_range_event(segment: str, session_id: str) -> dict | None:
   return ndjson.parse_ndjson_line(segment, log_event="live_range_parse_skip", log_fields={"session_id": session_id})
 
 
+@dataclasses.dataclass
+class _AppendLedger:
+  """One session's appends that can race a cold fill of its events cache. Guarded by ChatEventStore._cache_lock."""
+
+  # Each append from before its write until its cache check, by event id.
+  in_flight: dict[str, dict] = dataclasses.field(default_factory=dict)
+  # While a fill runs, the appends checked before it installed; None when no fill runs.
+  pending: list[dict] | None = None
+  # In-flight appends the installed fill's parse already read; their check must not append them again.
+  covered: set[str] = dataclasses.field(default_factory=set)
+
+
 class ChatEventStore:
   """Persistence and cache operations for per-session chat_events.jsonl."""
 
@@ -166,6 +180,11 @@ class ChatEventStore:
     # In-memory cache: session_id -> list[dict] of parsed NDJSON events.
     # Populated on first read, kept in sync by save_chat_event().
     self._events_cache: dict[str, list[dict]] = {}
+    # Guards the events cache's cold fill against save_chat_event's append, and the appends the fill must reconcile.
+    self._cache_lock = threading.Lock()
+    self._append_ledgers: dict[str, _AppendLedger] = {}
+    # One cold fill per session at a time: a second fill would discard the first one's pending appends.
+    self._fill_locks: dict[str, threading.Lock] = {}
     # Parsed-archive memo: path -> (mtime_ns, size, events). Archive files are
     # append-only within their week and frozen after, so an unchanged
     # (mtime_ns, size) means unchanged bytes; an append re-parses one file.
@@ -218,18 +237,59 @@ class ChatEventStore:
       event['id'] = str(uuid.uuid4())
     if 'timestamp' not in event:
       event['timestamp'] = models.utc_now_iso()
-    await ndjson.append_ndjson(self._chat_events_path(session_id), event)
-    # Keep in-memory cache in sync
-    if session_id in self._events_cache:
-      self._events_cache[session_id].append(event)
+    event_id = event['id']
+    with self._cache_lock:
+      ledger = self._append_ledgers.setdefault(session_id, _AppendLedger())
+      ledger.in_flight[event_id] = event
+    try:
+      await ndjson.append_ndjson(self._chat_events_path(session_id), event)
+    except BaseException:
+      with self._cache_lock:
+        ledger.in_flight.pop(event_id)
+      raise
+    # The check and the cache update share one lock section with the fill's install, so the append lands in the
+    # cache exactly once whichever side of the fill's parse it falls on.
+    with self._cache_lock:
+      ledger.in_flight.pop(event_id)
+      cached = self._events_cache.get(session_id)
+      if cached is not None:
+        if event_id in ledger.covered:
+          ledger.covered.discard(event_id)
+        else:
+          cached.append(event)
+      elif ledger.pending is not None:
+        ledger.pending.append(event)
 
   def load_chat_events_sync(self, session_id: str) -> list[dict]:
-    """Read all chat events for catch-up. Uses in-memory cache after first read."""
-    if session_id in self._events_cache:
-      return self._events_cache[session_id]
-    events = ndjson.parse_ndjson_file(self._chat_events_path(session_id))
-    self._events_cache[session_id] = events
-    return events
+    """Read all chat events for catch-up. Uses in-memory cache after first read.
+
+    A cold read may run on a thread while save_chat_event appends. The parse reads the file
+    without the cache lock; the install then adds each append the parse missed and skips each
+    append it already holds, so the cache holds every event exactly once.
+    """
+    cached = self._events_cache.get(session_id)
+    if cached is not None:
+      return cached
+    with self._fill_locks.setdefault(session_id, threading.Lock()):
+      cached = self._events_cache.get(session_id)
+      if cached is not None:
+        return cached
+      with self._cache_lock:
+        ledger = self._append_ledgers.setdefault(session_id, _AppendLedger())
+        ledger.pending = []
+      try:
+        events = ndjson.parse_ndjson_file(self._chat_events_path(session_id))
+      except BaseException:
+        with self._cache_lock:
+          ledger.pending = None
+        raise
+      parsed_ids = {event.get("id") for event in events}
+      with self._cache_lock:
+        pending, ledger.pending = ledger.pending or [], None
+        ledger.covered = {event_id for event_id in ledger.in_flight if event_id in parsed_ids}
+        events.extend(event for event in pending if event.get("id") not in parsed_ids)
+        self._events_cache[session_id] = events
+      return events
 
   def peek_cached_events(self, session_id: str) -> list[dict] | None:
     """Return the cached events list without reading disk; None when the cache is cold.

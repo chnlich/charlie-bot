@@ -893,8 +893,8 @@ class TaskExecutionAdapter:
     """Land one post-admission launch exception as the Run's durable failure.
 
         The admitted run's evidence trail: the error text rides the run's
-        events log (where the leaf card's event view and the failure-summary
-        reader already look), the terminal ``run_finished`` fact carries
+        events log (where the worker summary card's Events link and the
+        failure-summary reader already look), the terminal ``run_finished`` fact carries
         outcome ``failed``, and the failed run then walks the same after-run
         path a failed process takes — the worker's failure report to its
         parent and the node's pending-input dispatch.
@@ -968,7 +968,7 @@ class TaskExecutionAdapter:
       self, session_id: str, run_id: str, error_text: str, *, quota_exhausted: bool | None) -> None:
     """Write the launch error into the run's events log as durable evidence.
 
-        The events log is where the leaf card's event view already reads and
+        The events log is what the worker summary card's Events link opens and
         where ``_worker_failure_summary`` looks for the run's closing words, so
         the error is reachable without any new evidence channel.
         ``quota_exhausted`` is the ``LaunchRefused`` flag of a refused launch and
@@ -985,7 +985,7 @@ class TaskExecutionAdapter:
     if quota_exhausted is not None:
       event[ET.QUOTA_EXHAUSTED] = quota_exhausted
     await ndjson.append_ndjson(events_log, event)
-    # The leaf card's Events link reads the record's events_ref: the
+    # The worker summary card's Events link reads the record's events_ref: the
     # launch-failed run's evidence is reachable exactly the way a process
     # run's is (record_observation writes only the provided fields).
     await self._tree.runs.record_observation(session_id, run_id, events_ref=str(events_log))

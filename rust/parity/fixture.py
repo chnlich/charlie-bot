@@ -699,7 +699,9 @@ async def build_beacon(b: Builder) -> None:
               base.make_result_event(500, 60, cost=0.003)],
       thinking_seconds=6)
   await b.lifecycle.star_session(beacon)
-  await b.tree.archive_subtree(beacon, caller=b.operator)
+  await b.tree.completion.archive_subtree(
+      beacon, request_id="fixture-archive-beacon", summary="archived by the user", result_refs=[], run_ids=[],
+      caller=b.operator)
 
 
 async def build_cobalt(b: Builder) -> None:
@@ -758,7 +760,9 @@ async def build_ember(b: Builder) -> None:
   result = await b.lifecycle.recycle_history_before(ember, cutoff)
   if not result["events_archived"]:
     raise RuntimeError("ember history recycle archived nothing")
-  await b.tree.archive_subtree(ember, caller=b.operator)
+  await b.tree.completion.archive_subtree(
+      ember, request_id="fixture-archive-ember", summary="archived by the user", result_refs=[], run_ids=[],
+      caller=b.operator)
   await b.tree.completion.restore_task(
       ember, request_id="fixture-ember-restore", reason="fixture restore", caller=b.operator)
 

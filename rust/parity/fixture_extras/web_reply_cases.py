@@ -48,5 +48,7 @@ async def build(b: Builder) -> dict:
   archived = await _waiting(b, "web_archived", "web_reply", "Archived decisions", "Confirm the archive policy")
   await b.lifecycle.archive_session(archived)
   closed = await _waiting(b, "web_closed", "web_reply", "Closed decisions", "Approve the closed plan")
-  await b.tree.archive_subtree(closed, caller=b.operator)
+  await b.tree.completion.archive_subtree(
+      closed, request_id="fixture-archive-web-closed", summary="archived by the user", result_refs=[], run_ids=[],
+      caller=b.operator)
   return {"root": root}

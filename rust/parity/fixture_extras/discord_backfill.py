@@ -35,5 +35,7 @@ async def build(b: Builder) -> dict[str, str]:
           },
       },
   )
-  await b.tree.archive_subtree(session, caller=b.operator)
+  await b.tree.completion.archive_subtree(
+      session, request_id="fixture-archive-discord-session", summary="archived by the user", result_refs=[],
+      run_ids=[], caller=b.operator)
   return {"session": session}

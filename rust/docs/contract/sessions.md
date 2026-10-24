@@ -501,6 +501,21 @@ Side effects of a switch:
 2. It writes the new `backend` to the metadata, and sends a sidebar `backend_switched` frame.
 3. It appends a `backend_switched` chat event `{"type","from","to","previous_native_backend","previous_native_session_id"}` and broadcasts it.
 
+### `PUT /api/sessions/{session_id}/resource-class`
+
+- Auth: access key + caller, operator only.
+- Handler: `src/runtime/api/sessions.py:1357`.
+- Dependency: `require_caller`. No `require_session`; the store lookup gives 404 when the session is absent.
+- Body: `{"resource_class": "agent" | "repair"}`, extra keys refused (`ResourceClassRequest`, `src/infra/models.py:526`). UNVERIFIED: another value gives 422 `literal_error`, and whether an agent caller with an invalid body gets 403 or 422; neither was probed.
+
+| Status | Case | Body |
+|---|---|---|
+| 403 | Agent caller | `{"detail":"setting a session's resource class requires operator credentials"}` |
+| 404 | Session absent | `{"detail":"Session not found"}` |
+| 200 | | `{"id": <session id>, "resource_class": "agent" \| "repair"}` (`ResourceClassResponse`) |
+
+Side effects: writes `resource_class` and `updated_at` on this session's `metadata.json`, and logs `session_resource_class_set` with the class. Descendants are not written: each spawn resolves the nearest `repair` mark on the task-parent chain (`src/runtime/resource_class.py`). Session cgroup placement that follows the mark is not ported (see `PORT_STATUS.md`, `todo`).
+
 ### `DELETE /api/sessions/{session_id}`
 
 - Auth: access key + caller, operator only.

@@ -452,4 +452,9 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-  sys.exit(main())
+  # Exit without interpreter finalization. A stream-json stdin thread can still be blocked in a read of the buffered
+  # stdin, and finalization then aborts with "could not acquire lock for <stdin>" instead of the exit status.
+  status = main()
+  sys.stdout.flush()
+  sys.stderr.flush()
+  os._exit(status)

@@ -110,7 +110,12 @@ pub fn session_cgroup_step(features: Arc<FeatureContext>) -> BoxFuture<'static, 
   Box::pin(async move {
     let cfg = features.config.get()?;
     let stop = features.startup.stop();
-    run_session_cgroup_startup_inner(&cgroup::system_cgroup_base_dir(), &cfg.sessions_dir(), &cfg.server, Some(&stop))?;
+    run_session_cgroup_startup_inner(
+      &charliebot_core::cgroup::system_cgroup_base_dir(),
+      &cfg.sessions_dir(),
+      &cfg.server,
+      Some(&stop),
+    )?;
     Ok(())
   })
 }

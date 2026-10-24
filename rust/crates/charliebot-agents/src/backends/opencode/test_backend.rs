@@ -21,7 +21,7 @@ use super::server::{OpenCodeHost, OpenCodeServer, OpenCodeServerPool, ServerTime
 use super::{OpenCodeBackend, OpenCodeOption, OpenCodeTranslator};
 use crate::agent_environment::AgentBaseEnvironment;
 use crate::runner::{AgentRunner, RunOutcome, RunRequest};
-use crate::transport::cgroup::SessionCgroupLimits;
+use crate::transport::cgroup::SessionCgroupConfig;
 use crate::transport::identity::{ProcessIdentity, read_pid_stat};
 use crate::transport::kill::kill_process_group;
 
@@ -123,7 +123,7 @@ impl Harness {
       self.host.clone(),
       Arc::clone(&self.pool),
       launch.clone(),
-      SessionCgroupLimits { memory_max_mb: 0, swap_max_mb: 0, tasks_max: 0 },
+      SessionCgroupConfig::disabled(),
     );
     let server = self.pool.server_for(proxy_url);
     let mut servers = self.servers.lock().expect("test server list is not poisoned");
@@ -138,7 +138,7 @@ impl Harness {
       prompt.to_string(),
       self.root.path().join("work"),
       AgentBaseEnvironment { values },
-      self.root.path().join("cgroups"),
+      SessionCgroupConfig::disabled(),
       Arc::new(Registry::new()),
     );
     fs::create_dir_all(&request.cwd).unwrap();
@@ -1150,7 +1150,7 @@ async fn one_shot_runs_standalone_in_a_private_root_and_fails_on_an_error_line()
     harness.host.clone(),
     Arc::clone(&harness.pool),
     LaunchArgs::default(),
-    SessionCgroupLimits { memory_max_mb: 0, swap_max_mb: 0, tasks_max: 0 },
+    SessionCgroupConfig::disabled(),
   );
   let empty_env = Env::new();
   let answer =
@@ -1484,4 +1484,29 @@ async fn iter_ndjson_events_parses_and_skips() {
   .await
   .unwrap();
   assert_eq!(events.lock().unwrap().as_slice(), [json!({"type": "text", "part": {"text": "answer"}})]);
+}
+
+#[test]
+fn opencode_join_script_moves_the_shell_and_sets_its_oom_priority() {
+  // Python: tests/test_session_cgroup.py::test_opencode_join_script_moves_the_shell_and_sets_its_oom_priority
+  let root = tempfile::tempdir().unwrap();
+  let procs = root.path().join("cgroup.procs");
+  fs::write(&procs, "").unwrap();
+  let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../src/backends/opencode/cgroup_join.sh");
+  // bash skips BASH_ENV when the environment says sshd started it (SSH_CLIENT), so the shell starts clean.
+  let output = std::process::Command::new("bash")
+    .args(["-c", "echo $$; cat /proc/$$/oom_score_adj"])
+    .env_clear()
+    .env("PATH", "/usr/bin:/bin")
+    .env("BASH_ENV", &script)
+    .env("CHARLIEBOT_SESSION_CGROUP", root.path())
+    .env("CHARLIEBOT_SESSION_OOM_SCORE_ADJ", "100")
+    .output()
+    .unwrap();
+  assert!(output.status.success(), "the join script must let the shell run: {:?}", output.status);
+  let stdout = String::from_utf8(output.stdout).unwrap();
+  let mut fields = stdout.split_whitespace();
+  let shell_pid = fields.next().unwrap();
+  assert_eq!(fs::read_to_string(&procs).unwrap().trim(), shell_pid);
+  assert_eq!(fields.next(), Some("100"));
 }

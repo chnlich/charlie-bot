@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
 
+use charliebot_agents::transport::cgroup::SessionCgroupConfig;
 use charliebot_agents::transport::identity::{is_run_alive, pin_process_identity, read_host_boot_time};
 use charliebot_agents::transport::kill::{detach, kill_process_group};
 use charliebot_agents::transport::spawn::{
@@ -37,7 +38,14 @@ fn assert_pdeath_child_survives_blocking_keep_alive(spawn_kind: ParentDeathSpawn
   let root = tempfile::tempdir().unwrap();
   let base = root.path().join("app.slice");
   fs::create_dir(&base).unwrap();
-  let spec = SpawnSpec::new("/bin/sleep", vec!["30".into()], None, HashMap::new(), None, base, 0, 0, 0);
+  let spec = SpawnSpec::new(
+    "/bin/sleep",
+    vec!["30".into()],
+    None,
+    HashMap::new(),
+    None,
+    SessionCgroupConfig { base_dir: base, ..SessionCgroupConfig::disabled() },
+  );
   let runtime =
     Builder::new_current_thread().enable_all().thread_keep_alive(Duration::from_millis(100)).build().unwrap();
   let boot_time = read_host_boot_time().unwrap();
@@ -139,7 +147,14 @@ async fn spawn_and_exit_helper() {
   } else {
     vec!["30".into()]
   };
-  let spec = SpawnSpec::new(program, args, None, HashMap::new(), None, base, 0, 0, 0);
+  let spec = SpawnSpec::new(
+    program,
+    args,
+    None,
+    HashMap::new(),
+    None,
+    SessionCgroupConfig { base_dir: base, ..SessionCgroupConfig::disabled() },
+  );
   let pid = if mode == "raw" {
     let child = spawn_raw_log(&spec, &raw_path, &stderr_path, RawStdin::Null, |_| ()).await.unwrap().0.child;
     let pid = child.id().unwrap();

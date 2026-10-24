@@ -5,6 +5,7 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use charliebot_agents::transport::cgroup::SessionCgroupConfig;
 use charliebot_agents::transport::cursor::{RawCursorWriter, read_raw_cursor};
 use charliebot_agents::transport::follow::{DEFAULT_BUFFER_LIMIT, tail_follow_events};
 use charliebot_agents::transport::identity::pin_process_identity;
@@ -54,7 +55,14 @@ async fn python_and_rust_share_cursors_follow_offsets_and_pid_start() {
 
   let base = root.path().join("app.slice");
   fs::create_dir(&base).unwrap();
-  let spec = SpawnSpec::new("/bin/sleep", vec!["30".into()], None, HashMap::new(), None, base, 0, 0, 0);
+  let spec = SpawnSpec::new(
+    "/bin/sleep",
+    vec!["30".into()],
+    None,
+    HashMap::new(),
+    None,
+    SessionCgroupConfig { base_dir: base, ..SessionCgroupConfig::disabled() },
+  );
   let spawned = spawn_piped(&spec).await.unwrap();
   let (mut spawned, pinned) = pin_identity_and_on_spawn(spawned, |_| async { Ok::<(), ()>(()) }).await.unwrap();
   assert_eq!(pinned, pin_process_identity(spawned.child.id().unwrap()));

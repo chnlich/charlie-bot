@@ -5,7 +5,7 @@ use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_registry::backend::{AgentBackend, BackendFactory, LaunchArgs};
 
 use crate::cli_base::resolve_binary;
-use crate::transport::cgroup::SessionCgroupLimits;
+use crate::transport::cgroup::SessionCgroupConfig;
 
 use super::CodexHost;
 use super::backend::CodexBackend;
@@ -42,7 +42,7 @@ impl BackendFactory for CodexFactory {
       &option.model,
       &fields,
       launch,
-      SessionCgroupLimits::from_server(&cfg.server),
+      SessionCgroupConfig::from_config(&cfg),
     )?))
   }
 }

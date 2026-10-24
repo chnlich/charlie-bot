@@ -18,7 +18,7 @@ use charliebot_agents::launch_loop::{self, ProcessResult, RunProcess};
 use charliebot_agents::runner::{
   AgentRunner, DEFAULT_CLEANUP_TIMEOUT, DEFAULT_POST_RESULT_TIMEOUT, OnSpawnFn, RunRequest, capture_process_diagnostics,
 };
-use charliebot_agents::transport::cgroup;
+use charliebot_agents::transport::cgroup::SessionCgroupConfig;
 use charliebot_agents::transport::cursor;
 use charliebot_agents::transport::follow::{self, SilenceCallback};
 use charliebot_agents::transport::identity::ProcessIdentity;
@@ -496,14 +496,11 @@ impl Worker {
       prompt,
       self.working_dir.clone(),
       base_env.as_ref().clone(),
-      cgroup::system_cgroup_base_dir(),
+      SessionCgroupConfig::from_config(&self.cfg),
       Arc::clone(&self.features.registry),
     );
     request.environment_overlay = env.clone();
     request.session_id = self.extra_env.get(launch_loop::SESSION_ID_ENV).cloned();
-    request.memory_max_mb = self.cfg.server.session_memory_max_mb;
-    request.swap_max_mb = self.cfg.server.session_swap_max_mb;
-    request.tasks_max = self.cfg.server.session_tasks_max;
     request.post_result_timeout = self.post_result_timeout;
     request.cleanup_timeout = self.cleanup_timeout;
     request.on_event = on_event;

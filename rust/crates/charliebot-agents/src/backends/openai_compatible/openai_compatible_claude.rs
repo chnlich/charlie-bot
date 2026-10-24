@@ -5,7 +5,7 @@ use anyhow::bail;
 use charliebot_registry::backend::LaunchArgs;
 
 use crate::backends::claude_code::AnthropicEndpointBackend;
-use crate::transport::cgroup::SessionCgroupLimits;
+use crate::transport::cgroup::SessionCgroupConfig;
 
 /// The backend for `model` behind the proxy at `proxy_base_url`, authenticated with the access key `auth_token`.
 /// The trailing slashes of the URL are dropped, as `rstrip("/")` drops them.
@@ -15,7 +15,7 @@ pub fn backend(
   model: &str,
   claude_config_dir: Option<String>,
   launch: LaunchArgs,
-  cgroup_limits: SessionCgroupLimits,
+  cgroup_config: SessionCgroupConfig,
 ) -> anyhow::Result<AnthropicEndpointBackend> {
   if proxy_base_url.is_empty() {
     bail!("cc-openai-compatible backend requires proxy_base_url");
@@ -34,7 +34,7 @@ pub fn backend(
     None,
     claude_config_dir,
     launch,
-    cgroup_limits,
+    cgroup_config,
   )
 }
 
@@ -46,11 +46,12 @@ mod tests {
   fn each_constructor_check_names_its_missing_input() {
     let url = "http://localhost:8000/proxy";
     let message = |result: anyhow::Result<AnthropicEndpointBackend>| format!("{:#}", result.err().unwrap());
-    let limits = SessionCgroupLimits { memory_max_mb: 0, swap_max_mb: 0, tasks_max: 0 };
+    let limits = SessionCgroupConfig::disabled();
     assert!(
-      message(backend("", "key", "model", None, LaunchArgs::default(), limits)).contains("requires proxy_base_url")
+      message(backend("", "key", "model", None, LaunchArgs::default(), limits.clone()))
+        .contains("requires proxy_base_url")
     );
-    assert!(message(backend(url, "", "model", None, LaunchArgs::default(), limits)).contains("auth_token"));
+    assert!(message(backend(url, "", "model", None, LaunchArgs::default(), limits.clone())).contains("auth_token"));
     assert!(message(backend(url, "key", "", None, LaunchArgs::default(), limits)).contains("requires a model"));
   }
 
@@ -62,7 +63,7 @@ mod tests {
       "nvidia/GLM-5.2-NVFP4",
       None,
       LaunchArgs::default(),
-      SessionCgroupLimits { memory_max_mb: 0, swap_max_mb: 0, tasks_max: 0 },
+      SessionCgroupConfig::disabled(),
     )
     .unwrap();
     let env = charliebot_registry::backend::AgentBackend::prepare_env(&backend, Default::default()).unwrap();

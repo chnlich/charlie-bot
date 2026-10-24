@@ -15,8 +15,9 @@ use serde_json::{Map, Value, json};
 use tokio::io::AsyncWriteExt;
 use tokio::time::timeout;
 
+use crate::transport::cgroup::SessionCgroupConfig;
+use crate::transport::kill;
 use crate::transport::spawn::{ChildStdin, SpawnSetup, SpawnSpec, spawn_with_setup};
-use crate::transport::{cgroup, kill};
 
 use super::{
   DISALLOWED_TOOLS_FLAG, HEADLESS_DISALLOWED_TOOLS, claude_accounts, claude_config, claude_launch, login_dirs,
@@ -461,10 +462,7 @@ async fn run_compaction_inner(run: CompactionRun<'_>) -> anyhow::Result<Compacti
     Some(cwd.to_path_buf()),
     env.into_iter().map(|(name, value)| (OsString::from(name), OsString::from(value))).collect::<HashMap<_, _>>(),
     session_cgroup_id.map(str::to_string),
-    cgroup::system_cgroup_base_dir(),
-    cfg.server.session_memory_max_mb,
-    cfg.server.session_swap_max_mb,
-    cfg.server.session_tasks_max,
+    SessionCgroupConfig::from_config(cfg),
   );
   let mut child = match spawn_with_setup(&spec, None, ChildStdin::Piped, SpawnSetup::ChildSideCgroup).await {
     Ok(spawned) => spawned.child,

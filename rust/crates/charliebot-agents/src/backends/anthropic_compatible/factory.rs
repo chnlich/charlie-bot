@@ -8,7 +8,7 @@ use charliebot_registry::backend::{AgentBackend, BackendFactory, LaunchArgs};
 use super::options::CcAnthropicCompatibleOption;
 use crate::backends::claude_code::AnthropicEndpointBackend;
 use crate::backends::claude_code::factory::{launch_config_dir, launch_with_kwargs};
-use crate::transport::cgroup::SessionCgroupLimits;
+use crate::transport::cgroup::SessionCgroupConfig;
 
 const NO_AUTH_TOKEN: &str = "no-auth";
 
@@ -43,7 +43,7 @@ impl BackendFactory for AnthropicCompatibleFactory {
       fields.effort,
       config_dir,
       launch,
-      SessionCgroupLimits::from_server(&cfg.server),
+      SessionCgroupConfig::from_config(&cfg),
     )?
     .with_headers(fields.headers)
     .with_extra_body(fields.extra_body);

@@ -46,7 +46,7 @@ pub async fn agent_one_shot_text(
     frame_system_prompt(system_prompt, prompt),
     cwd.path().to_path_buf(),
     crate::agent_environment::AgentBaseEnvironment { values: base_env.clone() },
-    crate::transport::cgroup::system_cgroup_base_dir(),
+    crate::transport::cgroup::SessionCgroupConfig::disabled(),
     built.registry,
   );
   request.child_env_policy = ChildEnvPolicy::Inherited;

@@ -596,4 +596,39 @@ mod tests {
     assert!(!features.store.session_dir("permanent-session").exists());
     assert!(messages.lock().unwrap().iter().any(|message| message == "session_deleted_permanently"));
   }
+
+  fn stored_resource_class(features: &FeatureContext, session_id: &str) -> Value {
+    let raw = fs::read_to_string(features.store.metadata_path(session_id)).unwrap();
+    serde_json::from_str::<Value>(&raw).unwrap()["resource_class"].clone()
+  }
+
+  #[tokio::test(flavor = "current_thread")]
+  async fn resource_class_route_refuses_an_agent_run_and_accepts_the_operator() {
+    let (_home, features) = feature_context();
+    add_task(&features, "root-session").await;
+    add_run(&features, "root-session", "run-agent", true);
+    let token = run_token::sign_run_token(
+      &RunTokenClaims {
+        session_id: "root-session".to_string(),
+        run_id: "run-agent".to_string(),
+        agent: "synthetic-agent".to_string(),
+      },
+      ACCESS_KEY,
+    )
+    .unwrap();
+    let agent_auth = format!("Bearer {token}");
+    let router = crate::routes::routes(&features);
+    let path = "/api/sessions/root-session/resource-class";
+
+    let (status, detail) =
+      send(&router, Method::PUT, path, Some(json!({"resource_class": "repair"})), Some(&agent_auth)).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(detail, json!({"detail": "setting a session's resource class requires operator credentials"}));
+    assert_eq!(stored_resource_class(&features, "root-session"), json!("agent"));
+
+    let (status, body) = send(&router, Method::PUT, path, Some(json!({"resource_class": "repair"})), None).await;
+    assert_eq!(status, StatusCode::OK, "resource-class response: {body}");
+    assert_eq!(body, json!({"id": "root-session", "resource_class": "repair"}));
+    assert_eq!(stored_resource_class(&features, "root-session"), json!("repair"));
+  }
 }

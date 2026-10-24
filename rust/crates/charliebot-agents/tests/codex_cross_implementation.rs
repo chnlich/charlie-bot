@@ -124,7 +124,7 @@ fn main_module() -> CharlieBotConfig {
       host: "127.0.0.1".to_string(),
       port: 18499,
       subprocess_buffer_limit_mb: 1024,
-      session_memory_max_mb: 12288,
+      session_memory_max_mb: 0,
       session_swap_max_mb: 0,
       session_tasks_max: 4096,
       min_free_disk_gib: 10,

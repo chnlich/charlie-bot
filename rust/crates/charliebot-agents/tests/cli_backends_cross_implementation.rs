@@ -21,6 +21,7 @@ use charliebot_agents::backends::gemini::factory::GeminiFactory;
 use charliebot_agents::cli_base::CliHost;
 use charliebot_agents::launch_loop::ChildEnvPolicy;
 use charliebot_agents::runner::{AgentRunner, RunRequest};
+use charliebot_agents::transport::cgroup::SessionCgroupConfig;
 use charliebot_core::config::{
   BackendOption, BackendsConfig, CharlieBotConfig, PathsConfig, Sections, ServerConfig, TelegramConfig, UiConfig,
 };
@@ -89,7 +90,7 @@ impl Fixture {
         host: "127.0.0.1".to_string(),
         port: 18499,
         subprocess_buffer_limit_mb: 1024,
-        session_memory_max_mb: 12288,
+        session_memory_max_mb: 0,
         session_swap_max_mb: 0,
         session_tasks_max: 4096,
         min_free_disk_gib: 10,
@@ -565,7 +566,7 @@ async fn run_finish(fx: &Fixture, case: &Value) -> Value {
     text(&case["prompt"]).to_string(),
     dir.join("cwd"),
     environment,
-    fx.root.join("cgroups"),
+    SessionCgroupConfig::disabled(),
     Arc::new(Registry::new()),
   );
   request.child_env_policy = ChildEnvPolicy::Inherited;

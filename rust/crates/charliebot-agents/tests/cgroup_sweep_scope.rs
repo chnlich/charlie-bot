@@ -33,37 +33,53 @@ impl Visit for FieldText<'_> {
 }
 
 #[test]
-fn sweep_removes_only_empty_cgroups_named_for_this_homes_sessions() {
+fn sweep_removes_only_empty_cgroups_of_this_home_across_the_slices() {
   let base = tempfile::tempdir().unwrap();
   let home = tempfile::tempdir().unwrap();
   let sessions = home.path().join("sessions");
   fs::create_dir(&sessions).unwrap();
   fs::create_dir(sessions.join(SESSION_ID)).unwrap();
   fs::create_dir(sessions.join(POPULATED_ID)).unwrap();
-  fs::create_dir(base.path().join("charliebot-sess-abcd1234")).unwrap();
-  fs::create_dir(base.path().join("charliebot-sess-0badc0de")).unwrap();
-  let populated = base.path().join("charliebot-sess-9f8e7d6c");
+  for slice in ["charliebot-agents.slice", "charliebot-repair.slice", "app.slice"] {
+    fs::create_dir(base.path().join(slice)).unwrap();
+  }
+  // The same home's cgroup in each slice; the pre-split app.slice leftover is cleared too.
+  let agents_empty = base.path().join("charliebot-agents.slice").join("charliebot-sess-abcd1234");
+  let repair_empty = base.path().join("charliebot-repair.slice").join("charliebot-sess-abcd1234");
+  let app_empty = base.path().join("app.slice").join("charliebot-sess-abcd1234");
+  for path in [&agents_empty, &repair_empty, &app_empty] {
+    fs::create_dir(path).unwrap();
+  }
+  let populated = base.path().join("charliebot-agents.slice").join("charliebot-sess-9f8e7d6c");
   fs::create_dir(&populated).unwrap();
   fs::write(populated.join("cgroup.procs"), "1").unwrap();
-  fs::create_dir(base.path().join("app-other.scope")).unwrap();
+  let other_home = base.path().join("charliebot-repair.slice").join("charliebot-sess-0badc0de");
+  fs::create_dir(&other_home).unwrap();
+  let non_session = base.path().join("charliebot-agents.slice").join("app-other.scope");
+  fs::create_dir(&non_session).unwrap();
 
   let recorded = RecordedEvents::default();
   let _capture = charliebot_core::test_support::install_events(Arc::new(recorded.clone()));
   let removed = sweep_stale_session_cgroups(base.path(), &sessions).expect("the home sessions directory can be read");
 
-  assert_eq!(removed, 1);
-  assert!(!base.path().join("charliebot-sess-abcd1234").exists());
-  assert!(base.path().join("charliebot-sess-0badc0de").is_dir());
+  assert_eq!(removed, 3);
+  assert!(!agents_empty.exists());
+  assert!(!repair_empty.exists());
+  assert!(!app_empty.exists());
   assert!(populated.is_dir());
-  assert!(base.path().join("app-other.scope").is_dir());
+  assert!(other_home.is_dir());
+  assert!(non_session.is_dir());
   let events = recorded.0.lock().expect("the recorder lock");
   let sweeps: Vec<&BTreeMap<String, String>> = events
     .iter()
     .filter(|fields| fields.get("message").is_some_and(|text| text == "session_cgroup_sweep_removed"))
     .collect();
   assert_eq!(sweeps.len(), 1);
-  assert_eq!(sweeps[0]["count"], "1");
-  assert_eq!(sweeps[0]["names"], r#"["charliebot-sess-abcd1234"]"#);
+  assert_eq!(sweeps[0]["count"], "3");
+  assert_eq!(
+    sweeps[0]["names"],
+    r#"["charliebot-sess-abcd1234", "charliebot-sess-abcd1234", "charliebot-sess-abcd1234"]"#
+  );
 }
 
 #[test]

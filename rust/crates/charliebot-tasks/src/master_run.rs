@@ -528,15 +528,12 @@ impl RunProcess for TurnProcess<'_> {
         process_prompt.to_string(),
         self.cwd.clone(),
         self.features.startup.require::<AgentBaseEnvironment>()?.as_ref().clone(),
-        charliebot_agents::transport::cgroup::system_cgroup_base_dir(),
+        charliebot_agents::transport::cgroup::SessionCgroupConfig::from_config(&self.item.cfg),
         Arc::clone(&self.features.registry),
       );
       request.environment_overlay = self.env.clone();
       request.uploaded_files = self.item.uploaded_files.clone().unwrap_or_default();
       request.session_id = Some(task_session_id);
-      request.memory_max_mb = self.item.cfg.server.session_memory_max_mb;
-      request.swap_max_mb = self.item.cfg.server.session_swap_max_mb;
-      request.tasks_max = self.item.cfg.server.session_tasks_max;
       request.on_event = on_event;
       request.gate_child_until_on_spawn();
       request.on_spawn = Some({

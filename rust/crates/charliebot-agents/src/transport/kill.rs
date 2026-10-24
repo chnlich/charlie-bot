@@ -151,9 +151,9 @@ pub fn python_exit_code(status: std::process::ExitStatus) -> i32 {
 mod tests {
   use std::collections::HashMap;
   use std::ffi::OsString;
-  use std::path::PathBuf;
 
   use super::*;
+  use crate::transport::cgroup::SessionCgroupConfig;
   use crate::transport::spawn::{ChildStdin, SpawnSetup, SpawnSpec, spawn_with_setup};
 
   async fn shell(args: &[&str]) -> AgentChild {
@@ -163,10 +163,7 @@ mod tests {
       None,
       HashMap::new(),
       None,
-      PathBuf::new(),
-      0,
-      0,
-      0,
+      SessionCgroupConfig::disabled(),
     );
     spawn_with_setup(&spec, None, ChildStdin::Null, SpawnSetup::None).await.unwrap().child
   }

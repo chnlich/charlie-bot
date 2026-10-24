@@ -1,4 +1,4 @@
-use std::fs::{self, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
@@ -31,6 +31,9 @@ const ARCHIVE_MEMO_LIMIT: usize = 16;
 const LIVE_RANGE_MEMO_LIMIT: usize = 4;
 const TAIL_WINDOW_SIZE: usize = 512 * 1024;
 const LIVE_RANGE_WALK_BYTE_BUDGET: usize = 32 * 1024 * 1024;
+// The head a type walk reads before it parses a line: a type string within it is proven without the rest of the line.
+const TYPE_HEAD_PROOF_BYTES: usize = 256;
+const REVERSE_WALK_CHUNK_BYTES: usize = 1 << 16;
 
 #[derive(Clone)]
 struct LiveRangeMemo {
@@ -138,6 +141,11 @@ pub(crate) struct FileIdentity {
 }
 
 impl FileIdentity {
+  /// The byte length the identity covers: the offset a walk of this file starts from.
+  pub(crate) fn size(&self) -> u64 {
+    self.size
+  }
+
   /// The identity of the file at `path`, or None when no file is there.
   pub(crate) fn read(path: &Path) -> StoreResult<Option<Self>> {
     use std::os::unix::fs::MetadataExt;
@@ -279,6 +287,36 @@ impl Store {
       }
       None => Ok(LiveHistory::Cold(FileIdentity::read(&self.chat_events_path(session_id))?)),
     }
+  }
+
+  /// Visit the session's events whose type is in `types`, newest first, and stop at the first value `visit` returns.
+  ///
+  /// The live log is read backward from byte `live_end`, the size an identity stat reported, so the walk sees the
+  /// history that identity names. Each archive segment follows whole, newest first. Nothing is cached: the walk holds
+  /// one line at a time and parses only the lines whose type it keeps, so a fact read from a long history costs the
+  /// bytes back to that fact, not the history.
+  pub(crate) fn visit_chat_facts_from_end<T>(
+    &self,
+    session_id: &str,
+    types: &[&str],
+    live_end: u64,
+    mut visit: impl FnMut(ChatEvent) -> Option<T>,
+  ) -> StoreResult<Option<T>> {
+    let live_path = self.chat_events_path(session_id);
+    if let Some(value) = visit_file_facts_from_end(&live_path, live_end, types, &mut visit)? {
+      return Ok(Some(value));
+    }
+    for archive in self.archive_paths(session_id)?.iter().rev() {
+      let len = match fs::metadata(archive) {
+        Ok(metadata) => metadata.len(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+        Err(error) => return Err(StoreError::new(format!("{}: {error}", archive.display()))),
+      };
+      if let Some(value) = visit_file_facts_from_end(archive, len, types, &mut visit)? {
+        return Ok(Some(value));
+      }
+    }
+    Ok(None)
   }
 
   /// Work done on node histories since the store opened.
@@ -1176,6 +1214,127 @@ fn file_signature(path: &Path) -> StoreResult<Option<(fs::Metadata, FileSignatur
     Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
     Err(error) => Err(StoreError::new(format!("{}: {error}", path.display()))),
   }
+}
+
+/// Visit one NDJSON file's lines whose type is in `types`, newest first, from byte `end` back to the file's start.
+fn visit_file_facts_from_end<T>(
+  path: &Path,
+  end: u64,
+  types: &[&str],
+  visit: &mut impl FnMut(ChatEvent) -> Option<T>,
+) -> StoreResult<Option<T>> {
+  let mut file = match File::open(path) {
+    Ok(file) => file,
+    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+    Err(error) => return Err(StoreError::new(format!("{}: {error}", path.display()))),
+  };
+  let mut pos = end;
+  let mut line_end = end;
+  let mut chunk = vec![0_u8; REVERSE_WALK_CHUNK_BYTES];
+  while pos > 0 {
+    let start = pos.saturating_sub(REVERSE_WALK_CHUNK_BYTES as u64);
+    let size = usize::try_from(pos - start).expect("a walk chunk fits in memory");
+    read_exact_at(&mut file, path, start, &mut chunk[..size])?;
+    for index in (0..size).rev() {
+      if chunk[index] != b'\n' {
+        continue;
+      }
+      let newline = start + index as u64;
+      if newline + 1 < line_end {
+        if let Some(value) = visit_line_facts(&mut file, path, newline + 1..line_end, types, visit)? {
+          return Ok(Some(value));
+        }
+      }
+      line_end = newline;
+    }
+    pos = start;
+  }
+  if line_end > 0 {
+    return visit_line_facts(&mut file, path, 0..line_end, types, visit);
+  }
+  Ok(None)
+}
+
+/// Visit one line when its type is in `types`; a line whose first bytes prove another type is skipped unparsed.
+fn visit_line_facts<T>(
+  file: &mut File,
+  path: &Path,
+  line: std::ops::Range<u64>,
+  types: &[&str],
+  visit: &mut impl FnMut(ChatEvent) -> Option<T>,
+) -> StoreResult<Option<T>> {
+  let len = usize::try_from(line.end - line.start).expect("one event line fits in memory");
+  let mut head = vec![0; len.min(TYPE_HEAD_PROOF_BYTES)];
+  read_exact_at(file, path, line.start, &mut head)?;
+  if type_head_verdict(&head, types) == Some(false) {
+    return Ok(None);
+  }
+  let raw = if head.len() == len {
+    head
+  } else {
+    let mut raw = vec![0; len];
+    read_exact_at(file, path, line.start, &mut raw)?;
+    raw
+  };
+  let Some(event) = ndjson::parse_line_compact(&raw) else { return Ok(None) };
+  let Some(event_type) = event.get("type").and_then(CompactValue::as_str) else { return Ok(None) };
+  if !types.contains(&event_type) {
+    return Ok(None);
+  }
+  Ok(visit(event))
+}
+
+fn read_exact_at(file: &mut File, path: &Path, start: u64, buffer: &mut [u8]) -> StoreResult<()> {
+  file.seek(SeekFrom::Start(start)).map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
+  file.read_exact(buffer).map_err(|error| StoreError::new(format!("{}: {error}", path.display())))
+}
+
+/// `Some(false)` when the `type` string that the head's first bytes serialize is not one of `types`; `None` when the
+/// head cannot prove it (a string that runs past the head, or an escape).
+fn type_head_verdict(head: &[u8], types: &[&str]) -> Option<bool> {
+  let (event_type, _) = if head.starts_with(b"{\"type\"") {
+    string_value_after_key(head, b"{\"type\"".len())?
+  } else if head.starts_with(b"{\"id\"") {
+    let (_, after_id) = string_value_after_key(head, b"{\"id\"".len())?;
+    if head.get(after_id) != Some(&b',') {
+      return None;
+    }
+    let mut type_key = after_id + 1;
+    while head.get(type_key).is_some_and(u8::is_ascii_whitespace) {
+      type_key += 1;
+    }
+    if !head[type_key..].starts_with(b"\"type\"") {
+      return None;
+    }
+    string_value_after_key(head, type_key + b"\"type\"".len())?
+  } else {
+    return None;
+  };
+  Some(types.iter().any(|candidate| candidate.as_bytes() == event_type))
+}
+
+fn string_value_after_key(head: &[u8], mut cursor: usize) -> Option<(&[u8], usize)> {
+  while head.get(cursor).is_some_and(|byte| matches!(byte, b' ' | b'\t')) {
+    cursor += 1;
+  }
+  if head.get(cursor) != Some(&b':') {
+    return None;
+  }
+  cursor += 1;
+  while head.get(cursor).is_some_and(|byte| matches!(byte, b' ' | b'\t')) {
+    cursor += 1;
+  }
+  if head.get(cursor) != Some(&b'"') {
+    return None;
+  }
+  let start = cursor + 1;
+  let tail = head.get(start..)?;
+  let end = tail.iter().position(|byte| *byte == b'"')?;
+  let value = &tail[..end];
+  if value.contains(&b'\\') {
+    return None;
+  }
+  Some((value, start + end + 1))
 }
 
 fn read_ndjson_tail_lines(path: &Path, file_size: u64, take: usize) -> StoreResult<(Vec<Vec<u8>>, usize)> {

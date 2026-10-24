@@ -346,26 +346,95 @@ fn write_closing_indent(out: &mut String, style: &JsonStyle, level: usize) {
 /// characters above `~` as `\uXXXX` pairs when `ensure_ascii`.
 pub fn write_json_str(out: &mut String, text: &str, ensure_ascii: bool) {
   out.push('"');
-  for c in text.chars() {
-    match c {
-      '"' => out.push_str("\\\""),
-      '\\' => out.push_str("\\\\"),
-      '\n' => out.push_str("\\n"),
-      '\r' => out.push_str("\\r"),
-      '\t' => out.push_str("\\t"),
-      '\u{8}' => out.push_str("\\b"),
-      '\u{c}' => out.push_str("\\f"),
-      c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
-      c if ensure_ascii && (c as u32) > 0x7e => {
+  // The hot bodies are megabytes of nearly plain ASCII, so the scan runs eight bytes at a time: a word
+  // whose bytes all pass moves with one push_str, and only a word with a candidate byte falls to the
+  // per-byte path. `word_has_candidate` can over-report (its word trick is inexact), never under-report,
+  // so the per-byte verification below owns every decision. The emitted bytes match a char loop: escapes
+  // exist only for ASCII bytes, and a copied byte run inside `text` is valid UTF-8.
+  out.reserve(text.len() + 2);
+  let bytes = text.as_bytes();
+  let mut plain = 0;
+  let mut index = 0;
+  while index < bytes.len() {
+    if index + WORD_BYTES <= bytes.len() {
+      let mut word = [0u8; WORD_BYTES];
+      word.copy_from_slice(&bytes[index..index + WORD_BYTES]);
+      if !word_has_candidate(u64::from_le_bytes(word), ensure_ascii) {
+        index += WORD_BYTES;
+        continue;
+      }
+    }
+    let byte = bytes[index];
+    if !byte_needs_attention(byte, ensure_ascii) {
+      index += 1;
+      continue;
+    }
+    out.push_str(&text[plain..index]);
+    match byte {
+      b'"' => {
+        out.push_str("\\\"");
+        index += 1;
+      }
+      b'\\' => {
+        out.push_str("\\\\");
+        index += 1;
+      }
+      b'\n' => {
+        out.push_str("\\n");
+        index += 1;
+      }
+      b'\r' => {
+        out.push_str("\\r");
+        index += 1;
+      }
+      b'\t' => {
+        out.push_str("\\t");
+        index += 1;
+      }
+      0x08 => {
+        out.push_str("\\b");
+        index += 1;
+      }
+      0x0c => {
+        out.push_str("\\f");
+        index += 1;
+      }
+      0x00..=0x1f => {
+        out.push_str(&format!("\\u{byte:04x}"));
+        index += 1;
+      }
+      _ => {
+        let character = text[index..].chars().next().expect("a byte index inside `text` opens a character");
         let mut units = [0u16; 2];
-        for unit in c.encode_utf16(&mut units) {
+        for unit in character.encode_utf16(&mut units) {
           out.push_str(&format!("\\u{unit:04x}"));
         }
+        index += character.len_utf8();
       }
-      c => out.push(c),
     }
+    plain = index;
   }
+  out.push_str(&text[plain..]);
   out.push('"');
+}
+
+const WORD_BYTES: usize = 8;
+
+/// Whether a JSON string escaper must look at some byte of this word.
+///
+/// The has-zero and has-less word tricks from Bit Twiddling Hacks over-report for some inputs, which
+/// only costs a per-byte pass; a clean word always moves eight bytes at once.
+fn word_has_candidate(word: u64, ensure_ascii: bool) -> bool {
+  let has_zero = |value: u64| value.wrapping_sub(0x0101_0101_0101_0101) & !value & 0x8080_8080_8080_8080 != 0;
+  let has_less_0x20 = word.wrapping_sub(0x2020_2020_2020_2020) & !word & 0x8080_8080_8080_8080 != 0;
+  if has_less_0x20 || has_zero(word ^ 0x2222_2222_2222_2222) || has_zero(word ^ 0x5c5c_5c5c_5c5c_5c5c) {
+    return true;
+  }
+  ensure_ascii && (word & 0x8080_8080_8080_8080 != 0 || has_zero(word ^ 0x7f7f_7f7f_7f7f_7f7f))
+}
+
+fn byte_needs_attention(byte: u8, ensure_ascii: bool) -> bool {
+  byte < 0x20 || byte == b'"' || byte == b'\\' || (ensure_ascii && byte >= 0x7f)
 }
 
 #[cfg(test)]
@@ -446,6 +515,76 @@ mod tests {
     for (value, expected) in cases {
       assert_eq!(float_repr(value), expected, "repr({value})");
     }
+  }
+
+  /// The reference escaper: one char at a time, the form `json.dumps` documents.
+  fn reference_json_str(out: &mut String, text: &str, ensure_ascii: bool) {
+    out.push('"');
+    for c in text.chars() {
+      match c {
+        '"' => out.push_str("\\\""),
+        '\\' => out.push_str("\\\\"),
+        '\n' => out.push_str("\\n"),
+        '\r' => out.push_str("\\r"),
+        '\t' => out.push_str("\\t"),
+        '\u{8}' => out.push_str("\\b"),
+        '\u{c}' => out.push_str("\\f"),
+        c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+        c if ensure_ascii && (c as u32) > 0x7e => {
+          let mut units = [0u16; 2];
+          for unit in c.encode_utf16(&mut units) {
+            out.push_str(&format!("\\u{unit:04x}"));
+          }
+        }
+        c => out.push(c),
+      }
+    }
+    out.push('"');
+  }
+
+  #[test]
+  fn json_str_matches_the_char_reference_over_every_byte_class() {
+    // A deterministic corpus over all byte classes, at lengths that cross the eight-byte scan's word
+    // boundaries: any scan hole changes some output.
+    let mut state = 0x2545_f491_4f6c_dd1du64;
+    let mut next = move || {
+      state ^= state << 13;
+      state ^= state >> 7;
+      state ^= state << 17;
+      state
+    };
+    let alphabet: Vec<char> = (0u32..0x2fff)
+      .filter_map(char::from_u32)
+      .chain(['\u{1f600}', '\u{7f}', '\u{1}', '\u{b}', '\u{c}', '"', '\\', '\n', 'a', ' ', '~'].map(|c| c))
+      .collect();
+    for length in 0..400 {
+      let text: String = (0..length).map(|_| alphabet[(next() % alphabet.len() as u64) as usize]).collect();
+      for ensure_ascii in [false, true] {
+        let mut fast = String::new();
+        write_json_str(&mut fast, &text, ensure_ascii);
+        let mut reference = String::new();
+        reference_json_str(&mut reference, &text, ensure_ascii);
+        assert_eq!(fast, reference, "length {length}, ensure_ascii {ensure_ascii}");
+      }
+    }
+  }
+
+  #[test]
+  fn json_str_output_is_the_input_bytes_plus_the_escapes() {
+    // Every byte of a long plain-ASCII body passes through: the quoted output is exactly the two
+    // quote bytes longer, so a per-char transformation would move the count.
+    let plain = "synthetic bulk event text for latency probing. ".repeat(400);
+    let mut out = String::new();
+    write_json_str(&mut out, &plain, false);
+    assert_eq!(out.len(), plain.len() + 2);
+
+    let mut escaped = String::new();
+    write_json_str(&mut escaped, "quote\" back\\ nl\newline\r tab\t del\u{7f} \u{e9} \u{2014} \u{1f600}", true);
+    assert_eq!(escaped, "\"quote\\\" back\\\\ nl\\newline\\r tab\\t del\\u007f \\u00e9 \\u2014 \\ud83d\\ude00\"");
+
+    let mut raw = String::new();
+    write_json_str(&mut raw, "raw \u{e9} \u{2014} \u{1f600} \u{1} \u{b}", false);
+    assert_eq!(raw, "\"raw \u{e9} \u{2014} \u{1f600} \\u0001 \\u000b\"");
   }
 
   #[test]

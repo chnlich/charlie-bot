@@ -8,6 +8,7 @@ use std::sync::atomic::Ordering;
 use charliebot_core::{fsutil, pystr};
 use serde_json::Value;
 
+use crate::chat_events::is_chat_events_archive;
 use crate::metadata::{SessionMetadata, UtcDateTime};
 use crate::ndjson;
 use crate::read_memos::{BoundedMemo, FileSignature, StatSignatureMemo};
@@ -1090,10 +1091,7 @@ impl Store {
     let mut paths = Vec::new();
     for entry in entries {
       let entry = entry.map_err(|error| StoreError::new(format!("{}: {error}", dir.display())))?;
-      let name = entry.file_name();
-      // The archive glob `chat_events.*.jsonl`: a bare `chat_events.jsonl` is not an archive.
-      let name = name.to_string_lossy();
-      if name.strip_prefix("chat_events.").and_then(|rest| rest.strip_suffix(".jsonl")).is_some() {
+      if is_chat_events_archive(&entry.file_name().to_string_lossy()) {
         paths.push(entry.path());
       }
     }

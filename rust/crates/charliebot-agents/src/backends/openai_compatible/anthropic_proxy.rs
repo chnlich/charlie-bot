@@ -108,8 +108,7 @@ async fn forward(features: &FeatureContext, backend_id: &str, body: Body) -> Res
   let anthropic_payload = pyvalue::loads_bytes(&body)?;
   let gemini_stream_rules =
     translate::gemini_stream_rules(&fields.api_base).map_err(|error| unhandled("ValueError", error))?;
-  let openai_payload =
-    translate::anthropic_to_openai_chat_request(&anthropic_payload, &option.model, gemini_stream_rules)?;
+  let openai_payload = translate::anthropic_to_openai_chat_request(&anthropic_payload, &option.model)?;
   let upstream_url = format!("{}/chat/completions", fields.api_base.trim_end_matches('/'));
   let authorization = match fields.credential.as_deref().filter(|section| !section.is_empty()) {
     None => None,

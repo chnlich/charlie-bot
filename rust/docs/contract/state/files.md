@@ -149,8 +149,6 @@ Schema, defaults and errors: `config.md`. Writers:
   from `configs/config.example.yaml`; when that is absent it is written as YAML
   `{paths: {workspace_dirs: ["~/workspace"], worktree_dir: "~/worktrees"}}`. If `credentials.yaml` is missing it
   is copied from `configs/credentials.example.yaml` and chmod 0600. Existing files are never touched.
-- `src/features/voice/voice_setup.py` (setup step, run by `scripts/setup.sh`, not by the server) rewrites the
-  `voice:` block of `config.yaml` with PLAIN writes.
 - Cron files: `src/features/cron/api.py` (HTTP edits), `src/features/cron/seed.py` (setup step), and
   `src/features/cron/cron_files.py::write_cron_key` (single-key write-back, for example the `session_id`
   auto-bind). All three use YAML.
@@ -531,6 +529,7 @@ Module: `src/runtime/runs.py` (with `worker.py`, `task_execution.py`, `agent_pro
 | `launch_prompt.md` | `task_execution`, ATOMIC | the exact launch text handed to the adapter |
 | `cold_read.json` | `task_execution` | `{page_path, page_sha256, error?}` evidence of a cold-read attempt |
 | `hang_diagnostics.json` | `worker.py`, PLAIN `json.dumps(indent=2)` | diagnostics when a run hangs after its result |
+| `worktree-changes.tar` | `disk_sweep._archive_worktree`, temporary tar then ATOMIC rename | `tracked.patch` and unignored untracked worktree files under `untracked/`, written before an old changed worktree is removed |
 
 `RunRecord` (`extra="forbid"`):
 
@@ -638,7 +637,10 @@ instead.
 
 | Path | Written by | What |
 | --- | --- | --- |
-| `/sys/fs/cgroup/user.slice/user-<uid>.slice/user@<uid>.service/app.slice/charliebot-sess-<sid[:8]>/` | `src/infra/process.py` | session cgroups; see `services.md` |
+| `/sys/fs/cgroup/user.slice/user-<uid>.slice/user@<uid>.service/charliebot-agents.slice/charliebot-sess-<sid[:8]>/` | `src/infra/process.py` | agent session cgroups; see `services.md` |
+| `/sys/fs/cgroup/user.slice/user-<uid>.slice/user@<uid>.service/charliebot-repair.slice/charliebot-sess-<sid[:8]>/` | `src/infra/process.py` | repair session cgroups; see `services.md` |
+| `/sys/fs/cgroup/user.slice/user-<uid>.slice/user@<uid>.service/app.slice/charliebot-sess-<sid[:8]>/` | `src/infra/process.py` | retired session cgroups that the startup sweep may remove; see `services.md` |
+| `<paths.scratch_dir>/<top-level entry>` | `src/features/disk_sweep/sweep.py` | eligible scratch directories are removed after 14 quiet days; paths in use are skipped |
 | `<login dir>/.credentials.json` (`/home/<user>/.claude` or each `accounts.claude[].config_dir`) | `src/backends/claude_code/usage_quota.py` (from the `ext_usage` service) | rewritten ATOMIC-JSON `indent=2, private=True` when an OAuth token refresh succeeds |
 | `<login dir>/projects/<cwd slug>/<cc_session_id>.jsonl` and sidecar `<cc_session_id>/` | `src/backends/claude_code/claude_accounts.py::move_transcript`, `retire_transcript_copies` | copies a Claude transcript between pool logins (staged copy, then `os.replace`), and later deletes all but the newest 2 copies |
 | `<login dir>/projects/...`, `/home/<user>/.codex/sessions/...` | `usage_sweep.py` of the claude and codex backends, through `storage cool` | deletes backend transcripts of cold or orphaned sessions |

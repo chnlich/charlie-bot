@@ -11,6 +11,7 @@ not confirmed from source, with the reason.
 - The vocabulary is `_RUNTIME_COMMANDS` (`config`, `delegate`, `schedule-trigger`, `gc-trash`, `session`) plus every
   `wiring.register_command(name, module)`:
   - `artifact`, `plan`, `publish` → `src.features.artifacts`
+  - `disk-sweep` → `src.features.disk_sweep`
   - `memory` → `src.features.memory`
   - `usage-ledger`, `storage` → `src.features.usage`
   - `slack`, `discord`, `web` → `src.features.slack`, `src.features.discord`, `src.features.web_reply`
@@ -24,9 +25,10 @@ not confirmed from source, with the reason.
   module's `main()`.
 - Every argparse usage error exits 2.
 
-The 19 top-level subcommands that `uv run python -m src.app.main --help` lists at the baseline: `artifact`,
-`compaction-context`, `config`, `delegate`, `discord`, `gc-trash`, `improve`, `improve-stop`, `memory`, `plan`, `publish`,
-`router`, `schedule-trigger`, `session`, `slack`, `storage`, `usage-ledger`, `voice-replay-eval`, `web`. Each has a section
+The 20 top-level subcommands that `uv run python -m src.app.main --help` lists at the baseline: `artifact`,
+`compaction-context`, `config`, `delegate`, `discord`, `disk-sweep`, `gc-trash`, `improve`, `improve-stop`, `memory`,
+`plan`, `publish`, `router`, `schedule-trigger`, `session`, `slack`, `storage`, `usage-ledger`, `voice-replay-eval`,
+`web`. Each has a section
 below.
 
 ## 2. Shared client contract (`src/runtime/cli/common.py`)
@@ -70,7 +72,7 @@ below.
 | `discord reply --file F [--session]` | `POST /api/internal/discord/reply` | Reads `F` | 0; 1; 2 |
 | `discord read [--url] [--limit N] [--session]` | `POST /api/internal/discord/read` | none | 0; 1; 2 (`--limit` out of range) |
 | `discord check` | `POST /api/internal/discord/check` | none | 0 when the result's `ok` is true; 1 otherwise or on error |
-| `disk-sweep [--yes]` | none | Reads `paths.worktree_dir` and `paths.scratch_dir`, and the process table under `/proc` to skip paths in use (`src/features/disk_sweep/sweep.py`). Without `--yes` it prints the candidate rows only. With it, it archives changed worktrees and removes the candidates (`rmtree`). Prints one row per candidate and a totals line | 0; 1 when a path fails to remove |
+| `disk-sweep [--yes]` | none | Reads Run metadata, lifecycle events, `paths.worktree_dir`, `paths.scratch_dir` and `/proc` to select old paths and skip paths in use (`src/features/disk_sweep/sweep.py`). Without `--yes` it prints candidate rows only. With it, it archives changed worktrees to the owner Run, removes worktrees through git and scratch directories with `rmtree`. Prints one row per candidate and a totals line | 0; 1 when a path fails to remove |
 | `gc-trash [--yes]` | none | Lists `<paths.worktree_dir>/.trash/` with sizes; `--yes` deletes every entry (`rmtree`) | 0; 1 when a deletion fails |
 | `improve --repo R --goal-file G --base-branch B [--iterations N] [--plan-file P] [--backend] [--work-branch] [--merge-back] [--session]` | `POST /api/internal/improve`, with a readback | Reads `G` and `P` | 0; 1; 2 |
 | `improve-stop [--session]` | `POST /api/internal/improve/stop` | none | 0 prints `stopped`; 1; 2 |

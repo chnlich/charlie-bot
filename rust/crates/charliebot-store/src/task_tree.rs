@@ -20,9 +20,7 @@ use crate::compact::CompactValue;
 use crate::control_events::{self, ACTOR_AGENT, ACTOR_SYSTEM, ACTOR_USER};
 use crate::events::{FileIdentity, LiveHistory, SharedChatEvent};
 use crate::metadata::{EventRef, SessionMetadata, SessionStatus, TaskProfile, TaskSpec, TaskType, UtcDateTime};
-use crate::run_records::{
-  CachedRunFacts, HostBoot, RunDisplayState, RunFacts, RunOutcomeKind, stop_requested_in_events,
-};
+use crate::run_records::{CachedRunFacts, HostBoot, RunDisplayState, RunFacts, RunOutcomeKind};
 use crate::store::{CachedNodeFacts, NodeFactsKey};
 use crate::{ControlGuard, Store, StoreError, StoreResult};
 
@@ -1339,99 +1337,9 @@ impl Store {
     Ok(())
   }
 
-  /// Archive an unsuccessful worker after rechecking its durable blockers under the control lock.
-  pub async fn archive_unsuccessful_worker(
-    &self,
-    guard: &ControlGuard,
-    session_id: &str,
-    run_id: &str,
-    outcome: &str,
-  ) -> StoreResult<bool> {
-    self.require_control_guard(guard)?;
-    let index = self.tree_index()?;
-    let meta =
-      index.metas.get(session_id).ok_or_else(|| StoreError::not_found(format!("task {session_id} not found")))?;
-    if meta.profile != TaskProfile::Worker || self.task_state(session_id)? != "open" {
-      return Ok(false);
-    }
-    if self.last_ended_run_id(session_id)?.as_deref() != Some(run_id) {
-      return Ok(false);
-    }
-    if !self.run_blockers(session_id)?.is_empty() {
-      return Ok(false);
-    }
-    for descendant in descendant_ids(self, &index, session_id)? {
-      if self.task_state(&descendant)? == "open" {
-        return Ok(false);
-      }
-    }
-    if self.has_pending_trigger(session_id)? || self.has_pending_input(session_id)? {
-      return Ok(false);
-    }
-    let request_id = format!("unsuccessful:{run_id}");
-    let facts = self.load_all_facts(session_id)?;
-    if facts.iter().any(|event| {
-      event.get("type").and_then(CompactValue::as_str) == Some("task_closed")
-        && event.get("request_id").and_then(CompactValue::as_str) == Some(request_id.as_str())
-    }) {
-      return Ok(false);
-    }
-    let summary = format!("run {run_id} ended {outcome}; archived by the server");
-    let event = archived_close_event(session_id, &request_id, ACTOR_SYSTEM, &summary, &[run_id], None);
-    self.append_control_fact(guard, session_id, event).await?;
-    self.invalidate_tree_index();
-    self.sequence_archive.on_archive(session_id).await?;
-    Ok(true)
-  }
-
-  /// Archive a task subtree as one end state: one archived close fact per open node, parent before child.
-  ///
-  /// Operator scope only. Under the control lock, every unfinished run in the subtree is collected before any
-  /// fact is written, so a refusal writes nothing. An already archived target returns an empty list. Each
-  /// archived node's sequence binding then runs its archive duty, in the same order.
-  pub async fn archive_subtree(&self, session_id: &str, caller: TaskCaller) -> StoreResult<Vec<String>> {
-    if caller != TaskCaller::Operator {
-      return Err(StoreError::forbidden("archiving a task requires operator credentials"));
-    }
-    let guard = self.control_lock().await;
-    // Rebuild from disk under the lock: the cache can predate writes that another process made.
-    self.invalidate_tree_index();
-    let index = self.tree_index()?;
-    if !index.metas.contains_key(session_id) {
-      return Err(StoreError::not_found(format!("task {session_id} not found")));
-    }
-    if self.task_state(session_id)? != "open" {
-      return Ok(Vec::new());
-    }
-    let mut subtree = vec![session_id.to_string()];
-    subtree.extend(descendant_ids(self, &index, session_id)?);
-    let mut blocked = Vec::new();
-    for node in &subtree {
-      for blocker in self.run_blockers(node)? {
-        blocked.push(format!("{node}: {}", blocker.reason));
-      }
-    }
-    if !blocked.is_empty() {
-      blocked.sort();
-      return Err(StoreError::conflict(blocked));
-    }
-    let request_id = format!("archive-{}", uuid::Uuid::new_v4());
-    let mut archived = Vec::new();
-    for node in &subtree {
-      if self.task_state(node)? != "open" {
-        continue;
-      }
-      let (summary, archived_with) =
-        if node == session_id { ("archived by the user", None) } else { ("", Some(session_id)) };
-      let event = archived_close_event(node, &request_id, ACTOR_USER, summary, &[], archived_with);
-      self.append_control_fact(&guard, node, event).await?;
-      archived.push(node.clone());
-    }
-    self.invalidate_tree_index();
-    for node in &archived {
-      self.sequence_archive.on_archive(node).await?;
-    }
-    Ok(archived)
+  /// Run the sequence binding's archive duty for one node (`sequence_controllers.binding_for(sid).on_archive`).
+  pub async fn sequence_archive_on_archive(&self, session_id: &str) -> StoreResult<()> {
+    self.sequence_archive.on_archive(session_id).await
   }
 
   /// Permanently delete an empty, unreferenced task while holding the tree control lock.
@@ -1986,55 +1894,6 @@ impl Store {
     };
     fs::write(&counter, (number + 1).to_string()).map_err(|error| path_error(&counter, error))?;
     Ok(format!("Session {number}"))
-  }
-
-  fn has_pending_trigger(&self, session_id: &str) -> StoreResult<bool> {
-    let triggers_dir = self.session_dir(session_id).join("triggers");
-    let entries = match fs::read_dir(&triggers_dir) {
-      Ok(entries) => entries,
-      Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-      Err(error) => return Err(path_error(&triggers_dir, error)),
-    };
-    for entry in entries {
-      let entry = entry.map_err(|error| path_error(&triggers_dir, error))?;
-      if !entry.file_type().map_err(|error| path_error(&entry.path(), error))?.is_file()
-        || entry.path().extension().is_none_or(|extension| extension != "json")
-      {
-        continue;
-      }
-      let raw = fs::read_to_string(entry.path()).map_err(|error| path_error(&entry.path(), error))?;
-      let value: Value = serde_json::from_str(&raw)
-        .map_err(|error| StoreError::new(format!("{}: invalid trigger metadata: {error}", entry.path().display())))?;
-      if value.get("status").and_then(Value::as_str) == Some("pending") {
-        return Ok(true);
-      }
-    }
-    Ok(false)
-  }
-
-  fn has_pending_input(&self, session_id: &str) -> StoreResult<bool> {
-    let facts = self.facts_of(session_id)?;
-    if facts.input_candidates.is_empty() {
-      return Ok(false);
-    }
-    let events = self.load_all_facts(session_id)?;
-    let records = self.list_run_records_sync(session_id)?;
-    let confirmed = facts.confirmed_input_ids;
-    let mut claimed = HashSet::new();
-    for run in records {
-      let stopped_before_launch = run.pid.is_none() && stop_requested_in_events(&events, &run.id, None);
-      if stopped_before_launch {
-        continue;
-      }
-      claimed.extend(run.input_event_ids);
-    }
-    for candidate in facts.input_candidates {
-      let input_id = candidate.get("id").and_then(CompactValue::as_str).unwrap_or_default();
-      if !confirmed.contains(input_id) && !claimed.contains(input_id) {
-        return Ok(true);
-      }
-    }
-    Ok(false)
   }
 }
 
@@ -2762,7 +2621,7 @@ fn staging_dir_name(task_id: &str) -> String {
 #[cfg(test)]
 pub(crate) mod tests {
   use std::collections::HashMap;
-  use std::sync::{Arc, Mutex};
+  use std::sync::Arc;
 
   use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot, SlotField};
   use serde_json::{Map, Value, json};
@@ -2772,7 +2631,7 @@ pub(crate) mod tests {
 
   use super::*;
   use crate::metadata::{TaskProfile, TaskSpec};
-  use crate::run_records::{RunKind, RunOutcome, RunOutcomeKind, RunRecord};
+  use crate::run_records::{RunKind, RunOutcomeKind, RunRecord};
   use crate::store::{
     AccountLabelKeeper, AnchorFieldReconciler, SequenceArchiveHook, SequenceBindingMover, SequenceListingFields,
     StoreHookFuture, StoreHooks,
@@ -3326,62 +3185,6 @@ pub(crate) mod tests {
     assert_eq!(updated.extra("last_run_status"), Some(&json!("success")));
   }
 
-  #[tokio::test]
-  async fn unsuccessful_worker_archives_once_after_a_failed_run() {
-    let home = tempfile::tempdir().unwrap();
-    let store = make_store(home.path());
-    let root = create_node(&store, "root", None, TaskProfile::Manager).await;
-    let worker = create_node(&store, "worker", Some(&root.id), TaskProfile::Worker).await;
-    let run = RunRecord {
-      id: "failed-run".to_string(),
-      session_id: worker.id.clone(),
-      kind: RunKind::Work,
-      input_event_ids: Vec::new(),
-      task_spec_hash: None,
-      task_spec_ref: None,
-      prompt_snapshot_ref: None,
-      retry_of_run_id: None,
-      review_of_run_id: None,
-      backend: Some("synthetic".to_string()),
-      model: None,
-      native_session_id: None,
-      pid: None,
-      pid_start: None,
-      started_at: None,
-      ended_at: None,
-      exit_code: None,
-      repo_path: None,
-      base_branch: None,
-      branch_name: None,
-      worktree_path: None,
-      sequence_ref: None,
-      raw_log_ref: None,
-      events_ref: None,
-      result_ref: None,
-    };
-    let guard = store.control_lock().await;
-    store.register_run_locked(&guard, &worker.id, run, None).await.unwrap();
-    store
-      .record_finish_locked(&guard, &worker.id, "failed-run", RunOutcome::new(crate::RunOutcomeKind::Failed))
-      .await
-      .unwrap();
-    assert!(store.archive_unsuccessful_worker(&guard, &worker.id, "failed-run", "failed").await.unwrap());
-    assert!(!store.archive_unsuccessful_worker(&guard, &worker.id, "failed-run", "failed").await.unwrap());
-    assert_eq!(store.task_state(&worker.id).unwrap(), "archived");
-  }
-
-  #[derive(Default)]
-  struct RecordingArchive {
-    calls: Mutex<Vec<String>>,
-  }
-
-  impl SequenceArchiveHook for RecordingArchive {
-    fn on_archive<'a>(&'a self, session_id: &'a str) -> StoreHookFuture<'a, ()> {
-      self.calls.lock().unwrap().push(session_id.to_string());
-      Box::pin(async { Ok(()) })
-    }
-  }
-
   pub(crate) fn queued_run(session_id: &str, run_id: &str) -> RunRecord {
     RunRecord {
       id: run_id.to_string(),
@@ -3410,117 +3213,6 @@ pub(crate) mod tests {
       events_ref: None,
       result_ref: None,
     }
-  }
-
-  #[tokio::test]
-  async fn archive_subtree_closes_each_open_node_once_and_calls_each_binding_parent_first() {
-    let home = tempfile::tempdir().unwrap();
-    let archive = Arc::new(RecordingArchive::default());
-    let store = make_store_with_archive(home.path(), archive.clone());
-    let root = create_node(&store, "root", None, TaskProfile::Manager).await;
-    let mid = create_node(&store, "mid", Some(&root.id), TaskProfile::Manager).await;
-    let leaf = create_node(&store, "leaf", Some(&mid.id), TaskProfile::Worker).await;
-    let completed = create_node(&store, "done", Some(&root.id), TaskProfile::Worker).await;
-    let guard = store.control_lock().await;
-    let close = control_events::build_control_event(
-      "task_closed",
-      ACTOR_SYSTEM,
-      &completed.id,
-      None,
-      None,
-      [("outcome".to_string(), json!("completed"))],
-    );
-    store.append_control_fact(&guard, &completed.id, close).await.unwrap();
-    drop(guard);
-
-    for node in [&root.id, &mid.id, &leaf.id, &completed.id] {
-      store.clear_chat_events_cache(node);
-    }
-    let before = store.history_work();
-    let archived = store.archive_subtree(&root.id, TaskCaller::Operator).await.unwrap();
-    let after = store.history_work();
-    assert_eq!(after.full_folds - before.full_folds, 4, "run and lifecycle checks fold each subtree node once");
-
-    assert_eq!(archived, [root.id.clone(), mid.id.clone(), leaf.id.clone()]);
-    assert_eq!(archive.calls.lock().unwrap().clone(), archived);
-    let closes = |session_id: &str| -> Vec<ChatEvent> {
-      store
-        .load_chat_events_sync(session_id)
-        .unwrap()
-        .into_iter()
-        .filter(|event| event["type"].as_str() == Some("task_closed"))
-        .collect()
-    };
-    for node in [&root.id, &mid.id, &leaf.id] {
-      assert_eq!(store.task_state(node).unwrap(), "archived");
-    }
-    let root_closes = closes(&root.id);
-    assert_eq!(root_closes.len(), 1);
-    assert_eq!(root_closes[0]["outcome"].as_str(), Some("archived"));
-    assert_eq!(root_closes[0]["actor"].as_str(), Some("user"));
-    assert_eq!(root_closes[0]["summary"].as_str(), Some("archived by the user"));
-    assert_eq!(root_closes[0]["run_ids"].to_value(), json!([]));
-    assert_eq!(root_closes[0]["report_to"].to_value(), Value::Null);
-    assert!(root_closes[0].get("archived_with").is_none());
-    for descendant in [&mid.id, &leaf.id] {
-      let descendant_closes = closes(descendant);
-      assert_eq!(descendant_closes.len(), 1);
-      assert_eq!(descendant_closes[0]["outcome"].as_str(), Some("archived"));
-      assert_eq!(descendant_closes[0]["summary"].as_str(), Some(""));
-      assert_eq!(descendant_closes[0]["archived_with"].as_str(), Some(root.id.as_str()));
-    }
-    assert_eq!(store.task_state(&completed.id).unwrap(), "completed");
-    assert!(closes(&completed.id).iter().all(|fact| fact["outcome"].as_str() != Some("archived")));
-
-    assert!(store.archive_subtree(&root.id, TaskCaller::Operator).await.unwrap().is_empty());
-    assert_eq!(closes(&root.id).len(), 1);
-    assert_eq!(archive.calls.lock().unwrap().len(), 3);
-    let error = store.archive_subtree("missing-task", TaskCaller::Operator).await.unwrap_err();
-    assert_eq!(error.to_string(), "task missing-task not found");
-  }
-
-  #[tokio::test]
-  async fn archive_subtree_refuses_an_unfinished_run_anywhere_in_the_subtree_and_writes_nothing() {
-    let home = tempfile::tempdir().unwrap();
-    let archive = Arc::new(RecordingArchive::default());
-    let store = make_store_with_archive(home.path(), archive.clone());
-    let root = create_node(&store, "root", None, TaskProfile::Manager).await;
-    let mid = create_node(&store, "mid", Some(&root.id), TaskProfile::Manager).await;
-    let leaf = create_node(&store, "leaf", Some(&mid.id), TaskProfile::Worker).await;
-    let guard = store.control_lock().await;
-    store.register_run_locked(&guard, &leaf.id, queued_run(&leaf.id, "queued-run"), None).await.unwrap();
-    drop(guard);
-
-    let error = store.archive_subtree(&root.id, TaskCaller::Operator).await.unwrap_err();
-
-    let blocker = format!("{}: run queued-run is queued (pending dispatch)", leaf.id);
-    assert_eq!(error.to_string(), blocker);
-    assert_eq!(error.status_code(), Some(409));
-    assert_eq!(error.blockers(), Some(std::slice::from_ref(&blocker)));
-    for node in [&root.id, &mid.id, &leaf.id] {
-      assert_eq!(store.task_state(node).unwrap(), "open");
-      assert!(
-        store.load_chat_events_sync(node).unwrap().iter().all(|event| event["type"].as_str() != Some("task_closed"))
-      );
-    }
-    assert!(archive.calls.lock().unwrap().is_empty());
-  }
-
-  #[tokio::test]
-  async fn archive_subtree_is_operator_only_and_writes_nothing_for_other_callers() {
-    let home = tempfile::tempdir().unwrap();
-    let store = make_store(home.path());
-    let root = create_node(&store, "root", None, TaskProfile::Manager).await;
-
-    for caller in [TaskCaller::System, TaskCaller::Agent { session_id: root.id.clone() }] {
-      let error = store.archive_subtree(&root.id, caller).await.unwrap_err();
-      assert_eq!(error.to_string(), "archiving a task requires operator credentials");
-      assert_eq!(error.status_code(), Some(403));
-    }
-    assert_eq!(store.task_state(&root.id).unwrap(), "open");
-    assert!(
-      store.load_chat_events_sync(&root.id).unwrap().iter().all(|event| event["type"].as_str() != Some("task_closed"))
-    );
   }
 
   /// Structural guards keyed by node: the dispatcher answers these in production.
@@ -3790,12 +3482,21 @@ pub(crate) mod tests {
     assert_eq!(error.status_code(), Some(403));
   }
 
+  /// Write one archive close fact directly, as the completion owner's archive writes it.
+  async fn archive_node(store: &Store, session_id: &str) {
+    let guard = store.control_lock().await;
+    let event = archived_close_event(session_id, "archive-test", ACTOR_USER, "archived by the user", &[], None);
+    store.append_control_fact(&guard, session_id, event).await.unwrap();
+    drop(guard);
+    store.invalidate_tree_index();
+  }
+
   #[tokio::test]
   async fn create_under_an_archived_parent_is_a_conflict_naming_the_parent() {
     let home = tempfile::tempdir().unwrap();
     let store = make_store(home.path());
     let root = create_node(&store, "root", None, TaskProfile::Manager).await;
-    store.archive_subtree(&root.id, TaskCaller::Operator).await.unwrap();
+    archive_node(&store, &root.id).await;
 
     // `task_sessions.create_task`: a closed parent is a `TaskConflictError` whose one blocker names the state.
     let late = CreateTask {
@@ -3896,7 +3597,8 @@ pub(crate) mod tests {
       );
     }
 
-    store.archive_subtree(&root.id, TaskCaller::Operator).await.unwrap();
+    archive_node(&store, &root.id).await;
+    archive_node(&store, &child.id).await;
 
     for node in [&root.id, &child.id] {
       assert_eq!(

@@ -640,8 +640,7 @@ async fn deliver_boundary_report(
   if outcome == "failed"
     && let Some(run_id) = tree.last_ended_run_id(leaf_id)?
   {
-    let guard = tree.control_lock().await;
-    tree.archive_unsuccessful_worker(&guard, leaf_id, &run_id, "failed").await?;
+    tree.completion().archive_unsuccessful_worker(leaf_id, &run_id, "failed").await?;
   }
   tracing::info!(task = %task.name, leaf = leaf_id, firing, outcome, created, "cron_sequence_report_delivered");
   Ok(())

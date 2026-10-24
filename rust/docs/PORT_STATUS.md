@@ -422,7 +422,7 @@ Each of the 7 commits in `git rev-list --no-merges 24642edf5..3c4591bad -- src s
 
 ## Catch-up d1f7e3ba6 open steps
 
-Both all-stage Rust debug runs failed the same 176 of 1169 steps, and no step failed in only one of them, so no row is intermittent. The Python-vs-Python run passed all 1109 of its steps. Four main changes account for every row: `4c3bd3fda` (99 rows: speech models at startup and the online-only voice upload), `9b83e3b1f` (63 rows: mid-turn stdin and argv, and the raw-log cursor), `df7920bd7` (29 rows: `resource_class` in session metadata and bodies) and `93b427659` (2 rows: the removed confirm route). 17 rows name two commits.
+The all-stage Rust debug run at the C4 commit failed 164 of 1169 steps, and the checker finds every one of them in this table. An earlier Python-vs-Python run passed all 1109 of its steps. Three main changes account for every row: `4c3bd3fda` (99 rows: speech models at startup and the online-only voice upload), `9b83e3b1f` (63 rows: mid-turn stdin and argv, and the raw-log cursor) and `93b427659` (2 rows: the removed confirm route). The `df7920bd7` session-share rows that remain are the 17 rows where `9b83e3b1f` also differs.
 
 | Scenario | Step | Stage | Main commit | Difference |
 | --- | --- | --- | --- | --- |
@@ -430,11 +430,11 @@ Both all-stage Rust debug runs failed the same 176 of 1169 steps, and no step fa
 | manager-turn-cancellation-routes | wait at the retried manager run cancel gate | agent-orchestration-cancel | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R79) |
 | manager-turn-cancellation-routes | server shutdown and fake-agent cleanup | agent-orchestration-cancel | 9b83e3b1f | manager-turn argv or stdin differs (R80) |
 | agent-orchestration-cold-read | server startup | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R81) |
-| agent-orchestration-cold-read | delegate a cold read of the synthetic page | agent-orchestration | df7920bd7, 9b83e3b1f | `metadata.json` lacks `resource_class`; raw-log cursor differs; replay echo line missing from the raw log (R82) |
+| agent-orchestration-cold-read | delegate a cold read of the synthetic page | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R82) |
 | agent-orchestration-cold-read | let the manager finish the cold-read report | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R83) |
-| agent-orchestration-cold-read | delegate a cold read whose first reader fails and second answers | agent-orchestration | df7920bd7, 9b83e3b1f | `metadata.json` lacks `resource_class`; raw-log cursor differs; replay echo line missing from the raw log (R84) |
+| agent-orchestration-cold-read | delegate a cold read whose first reader fails and second answers | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R84) |
 | agent-orchestration-cold-read | let the manager finish the retry report | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R85) |
-| agent-orchestration-cold-read | delegate a cold read whose two readers fail | agent-orchestration | df7920bd7, 9b83e3b1f | `metadata.json` lacks `resource_class`; raw-log cursor differs; replay echo line missing from the raw log (R86) |
+| agent-orchestration-cold-read | delegate a cold read whose two readers fail | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R86) |
 | agent-orchestration-cold-read | let the manager finish the all-failed report | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R87) |
 | agent-orchestration-cold-read | server shutdown and fake-agent cleanup | agent-orchestration | 9b83e3b1f | manager-turn argv or stdin differs (R88) |
 | task-completion-routes | server startup | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R89) |
@@ -443,10 +443,10 @@ Both all-stage Rust debug runs failed the same 176 of 1169 steps, and no step fa
 | task-completion-routes | cancel the task after its run finishes | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R92) |
 | task-completion-routes | server shutdown and fake-agent cleanup | agent-orchestration | 9b83e3b1f | manager-turn argv or stdin differs (R93) |
 | agent-orchestration-delegate | server startup | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R94) |
-| agent-orchestration-delegate | delegate one repo-less script run | agent-orchestration | df7920bd7, 9b83e3b1f | `metadata.json` lacks `resource_class`; raw-log cursor differs; replay echo line missing from the raw log (R95) |
-| agent-orchestration-delegate | delegate a failing repo-less worker | agent-orchestration | df7920bd7, 9b83e3b1f | `metadata.json` lacks `resource_class`; raw-log cursor differs; replay echo line missing from the raw log (R96) |
+| agent-orchestration-delegate | delegate one repo-less script run | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R95) |
+| agent-orchestration-delegate | delegate a failing repo-less worker | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R96) |
 | agent-orchestration-delegate | let the manager finish the failed-script report | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R97) |
-| agent-orchestration-delegate | delegate a failing implement worker on the local repository | agent-orchestration | df7920bd7, 9b83e3b1f | `metadata.json` lacks `resource_class`; raw-log cursor differs; replay echo line missing from the raw log (R98) |
+| agent-orchestration-delegate | delegate a failing implement worker on the local repository | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R98) |
 | agent-orchestration-delegate | let the manager finish the failed-repository report | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R99) |
 | agent-orchestration-delegate | server shutdown and fake-agent cleanup | agent-orchestration | 9b83e3b1f | manager-turn argv or stdin differs (R100) |
 | manager-turn-execution-and-routes | server startup | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R101) |
@@ -454,9 +454,9 @@ Both all-stage Rust debug runs failed the same 176 of 1169 steps, and no step fa
 | manager-turn-execution-and-routes | server shutdown and fake-agent cleanup | agent-orchestration | 9b83e3b1f | manager-turn argv or stdin differs (R103) |
 | manager-turn-opencode | server startup | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R104) |
 | implement-review-chain | server startup | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R105) |
-| implement-review-chain | delegate a repo task whose unchanged branch already landed on origin main | agent-orchestration | df7920bd7, 9b83e3b1f | `metadata.json` lacks `resource_class`; raw-log cursor differs; replay echo line missing from the raw log (R106) |
-| implement-review-chain | delegate a repo-less implement task | agent-orchestration | df7920bd7, 9b83e3b1f | `metadata.json` lacks `resource_class`; raw-log cursor differs; replay echo line missing from the raw log (R107) |
-| implement-review-chain | delegate a task whose reviewer exhausts the configured pool | agent-orchestration | 9b83e3b1f, df7920bd7 | raw-log cursor differs; replay echo line missing from the raw log; `metadata.json` lacks `resource_class` (R108) |
+| implement-review-chain | delegate a repo task whose unchanged branch already landed on origin main | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R106) |
+| implement-review-chain | delegate a repo-less implement task | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R107) |
+| implement-review-chain | delegate a task whose reviewer exhausts the configured pool | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R108) |
 | implement-review-chain | server shutdown and fake-agent cleanup | agent-orchestration | 9b83e3b1f | manager-turn argv or stdin differs (R109) |
 | agent-orchestration-session-message | server startup | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R110) |
 | agent-orchestration-session-message | a relay to a live session is accepted | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R111) |
@@ -465,12 +465,12 @@ Both all-stage Rust debug runs failed the same 176 of 1169 steps, and no step fa
 | chat-request-id | server startup | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R114) |
 | chat-upload | server startup | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R115) |
 | cron-routes-and-ticks | server startup | triggers-cron-improve | 4c3bd3fda | candidate writes `home/models` at startup (R116) |
-| cron-routes-and-ticks | wait for the manual cron firing report | triggers-cron-improve | df7920bd7, 9b83e3b1f | `metadata.json` lacks `resource_class`; raw-log cursor differs; replay echo line missing from the raw log (R117) |
-| cron-routes-and-ticks | wait for a scheduler tick to fire the same task again | triggers-cron-improve | df7920bd7, 9b83e3b1f | `metadata.json` lacks `resource_class`; raw-log cursor differs; replay echo line missing from the raw log (R118) |
+| cron-routes-and-ticks | wait for the manual cron firing report | triggers-cron-improve | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R117) |
+| cron-routes-and-ticks | wait for a scheduler tick to fire the same task again | triggers-cron-improve | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R118) |
 | cron-routes-and-ticks | server shutdown and fake-agent cleanup | triggers-cron-improve | 9b83e3b1f | manager-turn argv or stdin differs (R119) |
 | features-artifact-view | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R120) |
 | features-artifacts-plan-fork | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R121) |
-| features-artifacts-plan-fork | fork of the plan worker at a null index | features | df7920bd7, 9b83e3b1f | `metadata.json` lacks `resource_class`; raw-log cursor differs; replay echo line missing from the raw log (R122) |
+| features-artifacts-plan-fork | fork of the plan worker at a null index | features | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R122) |
 | features-artifacts-plan-fork | server shutdown and fake-agent cleanup | features | 9b83e3b1f | manager-turn argv or stdin differs (R123) |
 | features-artifacts-plan-present | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R124) |
 | features-artifacts-plan-verbs | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R125) |
@@ -486,11 +486,7 @@ Both all-stage Rust debug runs failed the same 176 of 1169 steps, and no step fa
 | features-ext-usage | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R135) |
 | features-files | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R136) |
 | features-harness-discord | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R137) |
-| features-harness-discord | allowed user mention starts a Discord thread session | features | df7920bd7 | `metadata.json` lacks `resource_class` (R138) |
-| features-harness-discord | release the silent summon result | features | df7920bd7 | `metadata.json` lacks `resource_class` (R139) |
 | features-harness-slack | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R140) |
-| features-harness-slack | allowed app mention starts its Slack thread session | features | df7920bd7 | `metadata.json` lacks `resource_class` (R141) |
-| features-harness-slack | release summon agent after its result | features | df7920bd7 | `metadata.json` lacks `resource_class` (R142) |
 | features-harness-terminal | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R143) |
 | features-harness-trace-merge | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R144) |
 | features-harness-tree | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R145) |
@@ -540,7 +536,6 @@ Both all-stage Rust debug runs failed the same 176 of 1169 steps, and no step fa
 | handover-improve | release the iteration's second gate so its agent exits · python-to-candidate | triggers-cron-improve | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R189) |
 | handover-improve | server shutdown and fake-agent cleanup · python-to-candidate | triggers-cron-improve | 9b83e3b1f | manager-turn argv or stdin differs (R190) |
 | handover-improve | server startup · candidate-to-python | triggers-cron-improve | 4c3bd3fda | candidate writes `home/models` at startup (R191) |
-| handover-improve | wait for the iteration at its first gate · candidate-to-python | triggers-cron-improve | df7920bd7 | `metadata.json` lacks `resource_class` (R192) |
 | handover-manager-turn | hand over the live manager run · python-to-candidate | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R193) |
 | handover-manager-turn | server startup · candidate-to-python | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R194) |
 | handover-manager-turn | wait for the raw log cursor at the gate · candidate-to-python | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R195) |
@@ -552,16 +547,13 @@ Both all-stage Rust debug runs failed the same 176 of 1169 steps, and no step fa
 | handover-review-run | release the adopted reviewer · python-to-candidate | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R201) |
 | handover-review-run | server shutdown and fake-agent cleanup · python-to-candidate | agent-orchestration | 9b83e3b1f | manager-turn argv or stdin differs (R202) |
 | handover-review-run | server startup · candidate-to-python | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R203) |
-| handover-review-run | delegate an implement task whose reviewer remains alive through handover · candidate-to-python | agent-orchestration | df7920bd7 | `metadata.json` lacks `resource_class` (R204) |
 | handover-stop-request | hand over the durable interrupted outcome · python-to-candidate | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R205) |
 | handover-stop-request | server startup · candidate-to-python | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R206) |
 | handover-stop-request | wait for the stop target at its first gate · candidate-to-python | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R207) |
 | handover-stop-request | server shutdown and fake-agent cleanup · candidate-to-python | agent-orchestration | 9b83e3b1f | manager-turn argv or stdin differs (R208) |
 | handover-worker-run | hand over the live worker run · python-to-candidate | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R209) |
 | handover-worker-run | server startup · candidate-to-python | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R210) |
-| handover-worker-run | wait for the worker agent at its live gate · candidate-to-python | agent-orchestration | df7920bd7 | `metadata.json` lacks `resource_class` (R211) |
 | improve-loop-reports | server startup | triggers-cron-improve | 4c3bd3fda | candidate writes `home/models` at startup (R212) |
-| improve-loop-reports | wait for both iteration reports to reach the busy parent | triggers-cron-improve | df7920bd7 | `metadata.json` lacks `resource_class` (R213) |
 | improve-routes | server startup | triggers-cron-improve | 4c3bd3fda | candidate writes `home/models` at startup (R214) |
 | other-backends-openai-proxy | server startup | other-backends | 4c3bd3fda | candidate writes `home/models` at startup (R215) |
 | skeleton | server startup | server-skeleton | 4c3bd3fda | candidate writes `home/models` at startup (R216) |
@@ -582,20 +574,16 @@ Both all-stage Rust debug runs failed the same 176 of 1169 steps, and no step fa
 | session-stream | server shutdown and fake-agent cleanup | session-stream | 9b83e3b1f | manager-turn argv or stdin differs (R231) |
 | session-usage-anthropic-compatible | server startup | session-read-api | 4c3bd3fda | candidate writes `home/models` at startup (R232) |
 | session-write-agent | server startup | session-write | 4c3bd3fda | candidate writes `home/models` at startup (R233) |
-| session-write-agent | create under the run's own manager task | session-write | df7920bd7 | `metadata.json` lacks `resource_class` (R234) |
-| session-write-agent | release the agent caller turn | session-write | df7920bd7 | `metadata.json` lacks `resource_class` (R235) |
 | session-write-cron-listing | server startup | session-write | 4c3bd3fda | candidate writes `home/models` at startup (R236) |
 | session-write-fork | server startup | session-write | 4c3bd3fda | candidate writes `home/models` at startup (R237) |
-| session-write-fork | fork of the source at a null index, the whole log | session-write | df7920bd7, 9b83e3b1f | `metadata.json` lacks `resource_class`; raw-log cursor differs; replay echo line missing from the raw log (R238) |
-| session-write-fork | fork of the source at its first line | session-write | df7920bd7, 9b83e3b1f | `metadata.json` lacks `resource_class`; raw-log cursor differs; replay echo line missing from the raw log (R239) |
-| session-write-fork | fork of the source at a middle line | session-write | df7920bd7, 9b83e3b1f | `metadata.json` lacks `resource_class`; raw-log cursor differs; replay echo line missing from the raw log (R240) |
-| session-write-fork | fork of the source at its last line | session-write | df7920bd7, 9b83e3b1f | `metadata.json` lacks `resource_class`; raw-log cursor differs; replay echo line missing from the raw log (R241) |
-| session-write-fork | elone of the source at a middle line takes over and archives the source | session-write | df7920bd7, 9b83e3b1f | `metadata.json` lacks `resource_class`; raw-log cursor differs; replay echo line missing from the raw log (R242) |
+| session-write-fork | fork of the source at a null index, the whole log | session-write | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R238) |
+| session-write-fork | fork of the source at its first line | session-write | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R239) |
+| session-write-fork | fork of the source at a middle line | session-write | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R240) |
+| session-write-fork | fork of the source at its last line | session-write | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R241) |
+| session-write-fork | elone of the source at a middle line takes over and archives the source | session-write | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R242) |
 | session-write-fork | server shutdown and fake-agent cleanup | session-write | 9b83e3b1f | manager-turn argv or stdin differs (R243) |
 | session-write-meta | server startup | session-write | 4c3bd3fda | candidate writes `home/models` at startup (R244) |
 | session-write-task | server startup | session-write | 4c3bd3fda | candidate writes `home/models` at startup (R245) |
-| session-write-task | legacy create opens a manager root | session-write | df7920bd7 | `metadata.json` lacks `resource_class` (R246) |
-| session-write-task | v2 create under the manager root | session-write | df7920bd7 | `metadata.json` lacks `resource_class` (R247) |
 | wait-trigger-delay | server startup | triggers-cron-improve | 4c3bd3fda | candidate writes `home/models` at startup (R248) |
 | wait-trigger-delay | wait until the trigger file is fired | triggers-cron-improve | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R249) |
 | wait-trigger-delay | server shutdown and fake-agent cleanup | triggers-cron-improve | 9b83e3b1f | manager-turn argv or stdin differs (R250) |
@@ -628,7 +616,7 @@ Each of the 30 commits in `git rev-list --no-merges 3c4591bad..d1f7e3ba6 -- src 
 | 224e4e5cf | report a missing session slice as unavailable at startup | in Rust | `log_session_cgroup_startup` warns `session_cgroup_unavailable` with "spawns with a session fail" (`rust/crates/charliebot-agents/src/transport/cgroup.rs:312`); `ensure_session_cgroup` fails the spawn on a missing or unwritable slice (`rust/crates/charliebot-agents/src/transport/cgroup.rs:75`). Python source: `src/infra/process.py:114-119,142-179,408-416`. |
 | 3530285d8 | drop the unused session_cgroup_path helper | in Rust | Python dropped the helper. The Rust `session_cgroup_path` (`rust/crates/charliebot-core/src/cgroup.rs:78`) is the join that `ensure_session_cgroup` and `cleanup_session_cgroup` use, so no unused helper remains and no behavior changes. |
 | 8fccbda46 | give the session join script the slice's OOM priority | in Rust | The turn's environment carries `CHARLIEBOT_SESSION_OOM_SCORE_ADJ` (`rust/crates/charliebot-agents/src/backends/opencode/backend.rs:553`, set in `put_environment` at `:535`). The join script `src/backends/opencode/cgroup_join.sh` reads it. No parity step reads the priority. |
-| df7920bd7 | isolate server, agent and repair session shares | in Rust | `ResourceClass` and the slice names (`rust/crates/charliebot-core/src/cgroup.rs:18`); the metadata field (`rust/crates/charliebot-store/src/metadata.rs:429`); the class walk (`rust/crates/charliebot-store/src/resource_class.rs:23`); the PUT route (`rust/crates/charliebot-session-api/src/writes.rs:51`); the spawn placement and OOM writes (`rust/crates/charliebot-agents/src/transport/cgroup.rs:180`, `:217`; `rust/crates/charliebot-agents/src/transport/spawn.rs:829`). Its red-list rows R82–R247 stay open until the parity run passes them. Python source: `src/runtime/resource_class.py`, `src/runtime/api/sessions.py:1357`. |
+| df7920bd7 | isolate server, agent and repair session shares | in Rust | `ResourceClass` and the slice names (`rust/crates/charliebot-core/src/cgroup.rs:18`); the metadata field (`rust/crates/charliebot-store/src/metadata.rs:429`); the class walk (`rust/crates/charliebot-store/src/resource_class.rs:23`); the PUT route (`rust/crates/charliebot-session-api/src/writes.rs:51`); the spawn placement and OOM writes (`rust/crates/charliebot-agents/src/transport/cgroup.rs:180`, `:217`; `rust/crates/charliebot-agents/src/transport/spawn.rs:829`). The all-stage run passes its 12 single-commit rows; its 17 two-commit rows stay open on `9b83e3b1f`'s raw-log cursor. Python source: `src/runtime/resource_class.py`, `src/runtime/api/sessions.py:1357`. |
 | 1043df01b | single-home the archive operator refusal | no behavior | Moves the archive operator refusal into `ARCHIVE_OPERATOR_REFUSAL` (`src/runtime/task_sessions.py`). The 403 detail keeps its text. |
 | 4c3bd3fda | transcribe uploads through the online backend | red-list | Deletes the local transcription engine and `voice_setup`, and sends uploads through online backends (`src/features/voice/`). Rust owner: `rust/crates/features/voice`, including `provisioning.rs`, `transcriber.rs` and `api.rs`. Rust still provisions `home/models` and accepts `local`. Rows: R78, R81, R89, R94, R101, R104–R105, R110, R114–R116, R120–R121, R124–R137, R140, R143–R146, R148–R163, R165–R174, R177, R180–R184, R188, R191, R193–R194, R198–R200, R203, R205–R206, R209–R210, R212, R214–R227, R232–R233, R236–R237, R244–R245, R248, R251. |
 | 93b427659 | drop the browser's confirm probe and local-engine note | red-list | Drops the browser's confirm probe (`src/features/voice/static/voice-input.js`). Rust owner: `rust/crates/features/voice/src/api.rs` still registers the removed confirm route. Rows: R147, R164. |

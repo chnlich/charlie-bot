@@ -517,8 +517,20 @@ def _server_logs(sides: list[Side]) -> dict[str, pathlib.Path]:
 
 
 def _wait_for_provisioning(sides: list[Side]) -> list[str]:
-  """Wait until each side logs the end of its background speech-model provisioning, ready or failed."""
-  return servers.wait_for_log_events(_server_logs(sides), PROVISIONING_EVENTS, {}, PROVISIONING_TIMEOUT_SECONDS)
+  """Wait until each Rust side logs the end of its background speech-model provisioning, ready or failed.
+
+  The Python server builds no local speech engine, so it logs neither event; a side whose server is Python is not
+  waited for.
+  """
+  rust_sides = []
+  for side in sides:
+    if side.server is None:
+      raise RuntimeError(f"{side.label} has no running server")
+    if side.server.argv[0] != str(PYTHON):
+      rust_sides.append(side)
+  if not rust_sides:
+    return []
+  return servers.wait_for_log_events(_server_logs(rust_sides), PROVISIONING_EVENTS, {}, PROVISIONING_TIMEOUT_SECONDS)
 
 
 def _write_fake_agent_script(sides: list[Side], script: dict | None) -> None:

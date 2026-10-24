@@ -6,9 +6,9 @@ from typing import Any
 import yaml
 
 # libyaml's C safe parser/emitter: the same safe subset SafeLoader/SafeDumper
-# constructs (parity pinned by tests/test_yaml_utils.py), at ~1/9 the parse
-# wall of the pure-Python pair. This venv's pyyaml builds with libyaml; a
-# build without it fails this import loud rather than parsing slowly.
+# constructs, at ~1/9 the parse wall of the pure-Python pair. This venv's
+# pyyaml builds with libyaml; a build without it fails this import loud
+# rather than parsing slowly.
 _SAFE_LOADER = yaml.CSafeLoader
 _SAFE_DUMPER = yaml.CSafeDumper
 

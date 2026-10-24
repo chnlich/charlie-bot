@@ -1,5 +1,4 @@
-"""The yaml_utils loader contract: libyaml's C safe pair, its parity with the
-pure-Python safe pair, and the load/save behaviors every caller relies on."""
+"""The yaml_utils loader contract: a malformed document surfaces as a yaml error."""
 
 import pytest
 import yaml

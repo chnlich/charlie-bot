@@ -20,8 +20,7 @@ router = fastapi.APIRouter()
 
 # Wire sentence of the cron editor's 404 for a missing task file. Both raisers
 # (apply_task_yaml_update's pre-flight, which the cron PUT route runs, and
-# delete_cron_task) must carry the same bytes: tests/test_cron_delete.py pins
-# each one.
+# delete_cron_task) must carry the same bytes.
 _TASK_NOT_FOUND_DETAIL = 'Task "{}" not found'
 
 

@@ -648,6 +648,26 @@ def test_scenario_cleanup_kills_a_fake_group_that_ignores_sigterm(
   assert notes == []
 
 
+def test_scenario_cleanup_waits_for_a_fake_group_that_has_written_its_exit_marker(tmp_path: pathlib.Path) -> None:
+  # A fake agent writes its exit marker and then leaves the process table. The server's shutdown closes its stdin, so
+  # that can happen after cleanup has begun. Cleanup must give such a start the grace period, not report or kill it.
+  side = parity.Side(
+      "candidate", parity.servers.Tree(label="candidate", root=tmp_path), port=18600, strace=parity.servers.STRACE_BIN)
+  agent_dir = tmp_path / "fake-agent"
+  agent_dir.mkdir()
+  leaving = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(0.5)"], start_new_session=True)
+  try:
+    (agent_dir / "exit-1").write_text("1", encoding="utf-8")
+    (agent_dir / "spawns.jsonl").write_text(json.dumps(_spawn_record(leaving)) + "\n", encoding="utf-8")
+
+    cleanup_lines, notes = parity._cleanup_scenario([side])
+
+    assert cleanup_lines == []
+    assert notes == []
+  finally:
+    leaving.wait(timeout=10)
+
+
 @pytest.mark.parametrize(
     "step,fields", [
         (

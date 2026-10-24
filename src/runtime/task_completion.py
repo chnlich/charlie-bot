@@ -679,29 +679,15 @@ class TaskCompletionManager:
           result_refs=evidence.result_refs,
           run_ids=evidence.run_ids,
           actor=actor)
-    await tree.session_events.announce_appended_event(session_id, close_event, epoch=child_epoch)
-    if report_created and parent_epoch is not None:
-      await tree.session_events.announce_appended_event(str(fresh_meta.task_parent_id), report, epoch=parent_epoch)
-    if report_created and fresh_meta.task_parent_id:
-      # The delivered report is the parent's new durable input: its next
-      # serialized turn wakes now. The close fact and
-      # the report are already durable at this point, so a failed wake
-      # must not fail the close: the automatic-completion callers would
-      # classify the landed boundary as blocked and deliver a
-      # contradictory second report over the completed close. The wake
-      # is separately re-drivable — any later dispatch or recovery pass
-      # launches the parent's queued reservation with the delivered
-      # report — so the failure is logged loudly and the close result
-      # stands.
-      try:
-        await tree.dispatch.wake_parent(str(fresh_meta.task_parent_id), report=report)
-      except Exception as exc:
-        log.warning(
-            "close_parent_wake_failed",
-            session_id=session_id,
-            parent=str(fresh_meta.task_parent_id),
-            report=str(report.get("id")),
-            error=str(exc))
+    await self._announce_close_and_wake_parent(
+        session_id,
+        fresh_meta,
+        close_event,
+        report,
+        report_created,
+        child_epoch=child_epoch,
+        parent_epoch=parent_epoch,
+        wake_log_event="close_parent_wake_failed")
     return 200, {"session_id": session_id, "closed_event_id": close_event["id"]}
 
   async def _append_closed(
@@ -760,6 +746,41 @@ class TaskCompletionManager:
     )
     tree._invalidate_index()
     return close_event, report, report_created
+
+  async def _announce_close_and_wake_parent(
+      self,
+      session_id: str,
+      meta: models.SessionMetadata,
+      close_event: dict,
+      report: dict,
+      report_created: bool,
+      *,
+      child_epoch: int,
+      parent_epoch: int | None,
+      wake_log_event: str,
+  ) -> None:
+    """Announce a landed close and hand its report to the parent as a wake input.
+
+    The close fact and its report are already durable here, so a failed wake is
+    logged and the close stands: any later dispatch or recovery pass launches
+    the parent's queued reservation with the report. Failing the close instead
+    would let an automatic-completion caller classify the landed boundary as
+    blocked and deliver a contradictory second report over it.
+    """
+    tree = self._tree
+    await tree.session_events.announce_appended_event(session_id, close_event, epoch=child_epoch)
+    if report_created and parent_epoch is not None:
+      await tree.session_events.announce_appended_event(str(meta.task_parent_id), report, epoch=parent_epoch)
+    if report_created and meta.task_parent_id:
+      try:
+        await tree.dispatch.wake_parent(str(meta.task_parent_id), report=report)
+      except Exception as exc:
+        log.warning(
+            wake_log_event,
+            session_id=session_id,
+            parent=str(meta.task_parent_id),
+            report=str(report.get("id")),
+            error=str(exc))
 
   async def close_sequence_child(
       self,
@@ -845,22 +866,15 @@ class TaskCompletionManager:
           run_ids=evidence.run_ids,
           actor=control_events.ACTOR_SYSTEM,
           sequence_outcome=outcome)
-    await tree.session_events.announce_appended_event(session_id, close_event, epoch=child_epoch)
-    if report_created and parent_epoch is not None:
-      await tree.session_events.announce_appended_event(str(fresh_meta.task_parent_id), report, epoch=parent_epoch)
-    if report_created and fresh_meta.task_parent_id:
-      # Same delivered-report wake the cancel close performs. The close and
-      # its report are already durable here, so a failed wake is logged and
-      # the close stands (the parent's turn is re-drivable; see _close_now).
-      try:
-        await tree.dispatch.wake_parent(str(fresh_meta.task_parent_id), report=report)
-      except Exception as exc:
-        log.warning(
-            "sequence_close_parent_wake_failed",
-            session_id=session_id,
-            parent=str(fresh_meta.task_parent_id),
-            report=str(report.get("id")),
-            error=str(exc))
+    await self._announce_close_and_wake_parent(
+        session_id,
+        fresh_meta,
+        close_event,
+        report,
+        report_created,
+        child_epoch=child_epoch,
+        parent_epoch=parent_epoch,
+        wake_log_event="sequence_close_parent_wake_failed")
     return 200, {"session_id": session_id, "closed_event_id": close_event["id"]}
 
   # ------------------------------------------------------------------
@@ -1246,23 +1260,15 @@ class TaskCompletionManager:
           result_refs=[],
           run_ids=[],
           actor=actor)
-    await tree.session_events.announce_appended_event(session_id, close_event, epoch=child_epoch)
-    if report_created and parent_epoch is not None:
-      await tree.session_events.announce_appended_event(str(meta.task_parent_id), report, epoch=parent_epoch)
-    if report_created and meta.task_parent_id:
-      # Same delivered-report wake the completed close performs. The
-      # cancelled close and its report are already durable here, so a
-      # failed wake is logged and the cancellation result stands (the
-      # parent's turn is re-drivable; see _close_now).
-      try:
-        await tree.dispatch.wake_parent(str(meta.task_parent_id), report=report)
-      except Exception as exc:
-        log.warning(
-            "cancel_parent_wake_failed",
-            session_id=session_id,
-            parent=str(meta.task_parent_id),
-            report=str(report.get("id")),
-            error=str(exc))
+    await self._announce_close_and_wake_parent(
+        session_id,
+        meta,
+        close_event,
+        report,
+        report_created,
+        child_epoch=child_epoch,
+        parent_epoch=parent_epoch,
+        wake_log_event="cancel_parent_wake_failed")
     return {"session_id": session_id, "closed_event_id": close_event["id"]}
 
   async def _cancel_worker_task(
@@ -1336,19 +1342,15 @@ class TaskCompletionManager:
           log.warning("worker_cancel_stop_identity_conflict", session_id=session_id, run_id=run.id, error=str(exc))
 
     if close_event is not None:
-      await tree.session_events.announce_appended_event(session_id, close_event, epoch=child_epoch)
-      if report_created and parent_epoch is not None:
-        await tree.session_events.announce_appended_event(str(target_meta.task_parent_id), report, epoch=parent_epoch)
-      if report_created and target_meta.task_parent_id:
-        try:
-          await tree.dispatch.wake_parent(str(target_meta.task_parent_id), report=report)
-        except Exception as exc:
-          log.warning(
-              "cancel_parent_wake_failed",
-              session_id=session_id,
-              parent=str(target_meta.task_parent_id),
-              report=str(report.get("id")),
-              error=str(exc))
+      await self._announce_close_and_wake_parent(
+          session_id,
+          target_meta,
+          close_event,
+          report,
+          report_created,
+          child_epoch=child_epoch,
+          parent_epoch=parent_epoch,
+          wake_log_event="cancel_parent_wake_failed")
     if identity_error is not None:
       raise identity_error
     return {

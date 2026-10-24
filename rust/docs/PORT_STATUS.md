@@ -57,6 +57,7 @@ by the run id its stop request captured (see `rust/parity/README.md`).
 | POST | `/api/sessions/{session_id}/fork` | sessions | ported |  |
 | POST | `/api/sessions/{session_id}/elone` | sessions | ported |  |
 | POST | `/api/sessions/{session_id}/backend` | sessions | ported |  |
+| PUT | `/api/sessions/{session_id}/resource-class` | sessions | todo | Operator credentials only. Sets the `resource_class` metadata field that places the session's cgroup (df7920bd7). |
 | GET | `/api/sessions/{session_id}` | sessions | ported |  |
 | DELETE | `/api/sessions/{session_id}` | sessions | ported |  |
 | DELETE | `/api/sessions/{session_id}/permanent` | sessions | ported |  |
@@ -127,7 +128,6 @@ by the run id its stop request captured (see `rust/parity/README.md`).
 | GET | `/perfetto/merged` | features/trace | ported |  |
 | GET | `/api/ext-usage` | features/usage | ported | `{"error": ...}` until the first round writes an entry; HEAD and other methods answer 405 with `allow: GET` |
 | GET | `/token-usage` | features/usage | ported | HEAD and other methods answer 405; loading the page reads the ledger alone and never captures |
-| POST | `/api/voice/{session_id}/confirm` | features/voice | ported | raw WAV body: decodes the opening clip locally and persists nothing. The static sherpa-onnx 1.13.4 archive decodes some recordings differently from the Python wheel on aarch64 (see the differential). |
 | POST | `/api/voice/{session_id}` | features/voice | ported | multipart upload: local decode, or the selected non-live cloud backend (the production registry has none). Same transcript divergence as the confirm route. |
 | WS | `/ws/voice/{session_id}` | features/voice | ported | live preview relay and recording archive |
 | POST | `/api/anthropic-proxy/openai-compatible/{backend_id}/v1/messages` | backends/openai_compatible | ported | streaming and JSON answers; parity stage other-backends |
@@ -141,6 +141,7 @@ by the run id its stop request captured (see `rust/parity/README.md`).
 | GET, HEAD | `/static/features/diag` | foundation | ported |  |
 | GET, HEAD | `/static/features/slack` | foundation | ported |  |
 | GET, HEAD | `/static/features/discord` | foundation | ported |  |
+| GET, HEAD | `/static/features/disk_sweep` | foundation | todo | Registered for `src/features/disk_sweep`, which has no `static/` directory at the baseline. |
 | GET, HEAD | `/static/features/web_reply` | foundation | ported |  |
 | GET, HEAD | `/static/features/host_auth` | foundation | ported |  |
 | GET, HEAD | `/static/features/diff_view` | foundation | ported |  |

@@ -308,7 +308,13 @@ class ChatEventStore:
     events, total, has_more = ndjson.parse_ndjson_tail(self._chat_events_path(session_id), limit)
     return events, total, has_more
 
-  def iter_events_from_end(self, session_id: str, types: frozenset[str], live_end: int) -> Iterator[dict]:
+  def iter_events_from_end(
+      self,
+      session_id: str,
+      types: frozenset[str],
+      live_end: int,
+      yield_gil_every: int = 0,
+  ) -> Iterator[dict]:
     """Yield the session's events whose type is in *types*, newest first, read from the files.
 
     The live file is walked from byte *live_end* (the size a caller stat'd), then each
@@ -316,7 +322,8 @@ class ChatEventStore:
     rotation moves the live file's identity, so a caller keyed on that identity sees
     each rotation. Nothing is cached: the walk holds one line at a time and parses only
     the lines its type filter keeps, so a caller that needs a few facts from a long
-    history never loads the history itself.
+    history never loads the history itself. *yield_gil_every* passes to the walk (see
+    :func:`ndjson.iter_ndjson_events_from_end`).
     """
     parse_filter = ndjson.type_line_filter(types)
     log_fields = {"session_id": session_id}
@@ -325,7 +332,8 @@ class ChatEventStore:
     for path, end in walks:
       # The head filter keeps any line it cannot read, so the parsed type decides here.
       for event in ndjson.iter_ndjson_events_from_end(path, log_event="chat_events_fact_parse_skipped",
-                                                      log_fields=log_fields, parse_filter=parse_filter, end=end):
+                                                      log_fields=log_fields, parse_filter=parse_filter, end=end,
+                                                      yield_gil_every=yield_gil_every):
         if event.get("type") in types:
           yield event
 

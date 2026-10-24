@@ -128,6 +128,9 @@ class _TaskFacts:
 _LIFECYCLE_STATE_TYPES = frozenset({ET.CLONE_START, ET.TASK_CLOSED, ET.TASK_REOPENED})
 # The history facts a node's Run verdicts read: terminal outcomes and stop requests.
 _RUN_FACT_TYPES = frozenset({ET.RUN_FINISHED, ET.RUN_STOP_REQUESTED})
+# The tree's history walks release the GIL every this many lines. A walk holds the GIL in pure Python between
+# file reads, so the event loop's thread would otherwise wait out the interpreter's forced switch on each request.
+_TREE_WALK_GIL_YIELD_LINES = 256
 
 
 def _task_state_of_lifecycle(event: dict) -> str:
@@ -794,8 +797,12 @@ class TaskTreeManager:
     if memoized is not None:
       return memoized
     newest = next(
-        self.session_events.chat_events.iter_events_from_end(session_id, _LIFECYCLE_STATE_TYPES, _live_end(identity)),
-        None)
+        self.session_events.chat_events.iter_events_from_end(
+            session_id,
+            _LIFECYCLE_STATE_TYPES,
+            _live_end(identity),
+            yield_gil_every=_TREE_WALK_GIL_YIELD_LINES,
+        ), None)
     state = "open" if newest is None else _task_state_of_lifecycle(newest)
     self._state_tail_memo[session_id] = (identity, state)
     return state
@@ -817,7 +824,7 @@ class TaskTreeManager:
     if cached is not None and cached[0] == identity:
       return cached[1]
     newest_first = self.session_events.chat_events.iter_events_from_end(
-        session_id, _RUN_FACT_TYPES, _live_end(identity))
+        session_id, _RUN_FACT_TYPES, _live_end(identity), yield_gil_every=_TREE_WALK_GIL_YIELD_LINES)
     facts = runs.fold_run_facts(runs.RunFacts(), list(reversed(list(newest_first))))
     self._outcomes_memo[session_id] = (identity, facts)
     return facts
@@ -1693,7 +1700,11 @@ class TaskTreeManager:
     history identity or records generation (see _NodeReads).
     """
     reads = _NodeReads(self)
-    rows_all = [self.session_row(index, sid, reads) for sid in self._children_of(index, parent_id)]
+    rows_all = []
+    for sid in self._children_of(index, parent_id):
+      rows_all.append(self.session_row(index, sid, reads))
+      # Release the GIL between rows: most rows are sub-millisecond, and the loop waits on the GIL between them.
+      time.sleep(0)
     if not include_archived:
       # An archived row stays navigable while running work lives at or below
       # it: dropping it would sever the path to that work in a partial client

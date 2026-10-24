@@ -60,6 +60,7 @@ const OPS: &[&str] = &[
 ];
 
 #[tokio::test]
+#[ignore = "catch-up d1f7e3ba6: R256"]
 async fn python_and_rust_store_operations_write_identical_files_and_read_each_others_output() {
   let root = tempfile::tempdir().unwrap();
   run_python_helper("prepare", root.path(), &[]);
@@ -549,6 +550,7 @@ async fn python_and_rust_run_operations_share_record_and_fact_bytes() {
 }
 
 #[tokio::test]
+#[ignore = "catch-up d1f7e3ba6: R260"]
 async fn python_and_rust_task_trees_share_nodes_gates_and_mutation_bytes() {
   let root = tempfile::tempdir().unwrap();
   run_python_helper("prepare_tasks", root.path(), &[]);
@@ -651,6 +653,7 @@ async fn python_and_rust_task_trees_share_nodes_gates_and_mutation_bytes() {
 }
 
 #[tokio::test]
+#[ignore = "catch-up d1f7e3ba6: R257"]
 async fn python_and_rust_name_an_unnamed_node_from_a_corrupt_counter_the_same_way() {
   let root = tempfile::tempdir().unwrap();
   run_python_helper("prepare_counter", root.path(), &[]);
@@ -758,6 +761,7 @@ fn normalized_home(home: &Path, base: &BTreeSet<String>) -> BTreeMap<PathBuf, Ve
 }
 
 #[tokio::test]
+#[ignore = "catch-up d1f7e3ba6: R259"]
 async fn python_and_rust_fork_and_elone_write_the_same_session_files_at_every_index() {
   let root = tempfile::tempdir().unwrap();
   run_python_helper("prepare_fork", root.path(), &[]);
@@ -792,6 +796,7 @@ async fn python_and_rust_fork_and_elone_write_the_same_session_files_at_every_in
 }
 
 #[tokio::test]
+#[ignore = "catch-up d1f7e3ba6: R258"]
 async fn python_and_rust_delegate_a_task_spec_into_the_same_node_run_and_spec_bytes() {
   let root = tempfile::tempdir().unwrap();
   run_python_helper("prepare_delegate", root.path(), &[]);

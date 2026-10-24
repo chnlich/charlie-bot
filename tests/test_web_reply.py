@@ -877,10 +877,12 @@ async def test_a_turn_missing_reply_and_status_gets_one_combined_reminder_and_on
 
 
 @pytest.mark.asyncio
-async def test_a_pending_close_request_skips_the_status_reminder(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("missing_reply", [False, True])
+async def test_a_pending_close_request_skips_only_the_status_reminder(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, missing_reply: bool) -> None:
   blocks = _rig(tmp_path)
   sid = await _session(blocks)
+  user = await _append(blocks, sid, conftest.user_event("the question"))
   await _append(blocks, sid, {
       "type": ET.TASK_CLOSE_REQUESTED,
       "request_id": "close-1",
@@ -889,27 +891,38 @@ async def test_a_pending_close_request_skips_the_status_reminder(
   tasks: list[asyncio.Task] = []
 
   with _wake_seams(tasks) as trigger:
-    await _after_turn(monkeypatch, blocks, sid, {**_done([]), "id": "turn-1"})
+    await _after_turn(monkeypatch, blocks, sid, {**_done([user["id"]] if missing_reply else []), "id": "turn-1"})
     await asyncio.gather(*tasks)
 
   assert _status_reminders(_events(blocks, sid)) == []
-  trigger.assert_not_awaited()
+  assert len(_nudges(_events(blocks, sid))) == int(missing_reply)
+  assert trigger.await_count == int(missing_reply)
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("event_type", [ET.WEB_STATUS, ET.WEB_STATUS_CONFIRMED])
 async def test_a_turn_that_recorded_a_status_command_gets_no_status_reminder(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, event_type: str) -> None:
   blocks = _rig(tmp_path)
   sid = await _session(blocks)
-  await _append(blocks, sid, {"type": ET.WEB_STATUS, "content": "Status updated: Now"})
+  await _append(blocks, sid, {"type": event_type, "content": "Status command"})
+  done = await _append(blocks, sid, _done([]))
   tasks: list[asyncio.Task] = []
 
   with _wake_seams(tasks) as trigger:
-    await _after_turn(monkeypatch, blocks, sid, {**_done([]), "id": "turn-1"})
+    await _after_turn(monkeypatch, blocks, sid, done)
     await asyncio.gather(*tasks)
 
   assert _status_reminders(_events(blocks, sid)) == []
   trigger.assert_not_awaited()
+
+  # A status command from the previous turn cannot satisfy the next background turn.
+  next_done = await _append(blocks, sid, _done([]))
+  with _wake_seams(tasks) as next_trigger:
+    await _after_turn(monkeypatch, blocks, sid, next_done)
+    await asyncio.gather(*tasks)
+  assert len(_status_reminders(_events(blocks, sid))) == 1
+  next_trigger.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------
@@ -1435,24 +1448,29 @@ async def test_a_status_event_leaves_the_unread_mark_unchanged(tmp_path: pathlib
 
 
 @pytest.mark.asyncio
-async def test_a_status_set_refuses_an_old_plan_link_before_the_cold_read(tmp_path: pathlib.Path) -> None:
+@pytest.mark.parametrize("endpoint", [_STATUS_URL, "/api/internal/web/status/unread"])
+@pytest.mark.parametrize("field", ["text", "context", "link"])
+async def test_a_status_set_refuses_an_old_plan_link_before_the_cold_read(
+    tmp_path: pathlib.Path, endpoint: str, field: str) -> None:
   blocks = _rig(tmp_path)
   sid = await _session(blocks)
+  plan_sid = await _session(blocks)
   client = _status_client(blocks)
-  v9 = _session_artifact(blocks, sid, "plan_01_v9.html")
-  v11 = _session_artifact(blocks, sid, "plan_01_v11.html")
+  v9 = _session_artifact(blocks, plan_sid, "plan_01_v9.html")
+  v11 = _session_artifact(blocks, plan_sid, "plan_01_v11.html")
   _write_plans(
-      blocks, sid,
+      blocks, plan_sid,
       [_plan(1, [_plan_version(9, "artifacts/plan_01_v9.html"),
                  _plan_version(11, "artifacts/plan_01_v11.html")])])
   item = {
       "text": "Decide plan 1",
       "context": "The plan waits. Options are approve or revise; approve is recommended.",
-      "link": _host_file_link(v9),
+      "link": None,
   }
+  item[field] = _host_file_link(v9)
 
   with mock.patch.object(status, "_read_item_digests", side_effect=AssertionError("cold read ran")) as digest_reads:
-    response = _set(client, sid, json.dumps({"waiting": [item]}))
+    response = client.post(endpoint, json={"session_id": sid, "text": json.dumps({"waiting": [item]})})
 
   assert response.status_code == 409
   detail = response.json()["detail"]
@@ -1465,7 +1483,8 @@ async def test_a_status_set_refuses_an_old_plan_link_before_the_cold_read(tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_status_confirm_refuses_a_stale_stored_plan_link(tmp_path: pathlib.Path) -> None:
+@pytest.mark.parametrize("local_path", [False, True])
+async def test_status_confirm_refuses_a_stale_stored_plan_link(tmp_path: pathlib.Path, local_path: bool) -> None:
   blocks = _rig(tmp_path)
   sid = await _session(blocks)
   client = _status_client(blocks)
@@ -1475,6 +1494,7 @@ async def test_status_confirm_refuses_a_stale_stored_plan_link(tmp_path: pathlib
       blocks, sid,
       [_plan(1, [_plan_version(9, "artifacts/plan_01_v9.html"),
                  _plan_version(11, "artifacts/plan_01_v11.html")])])
+  link = str(v9) if local_path else _host_file_link(v9)
   assert blocks.tree is not None
   await blocks.tree.update_slot_fields(
       sid,
@@ -1484,20 +1504,22 @@ async def test_status_confirm_refuses_a_stale_stored_plan_link(tmp_path: pathlib
               metadata.WaitingItem(
                   text="Decide plan 1",
                   context="The plan waits. Options are approve or revise; approve is recommended.",
-                  link=_host_file_link(v9))
+                  link=link)
           ]))
 
   response = client.post("/api/internal/web/status/confirm", json={"session_id": sid})
 
   assert response.status_code == 409
   detail = response.json()["detail"]
-  assert _host_file_link(v9) in detail
+  assert link in detail
   assert str(v11) in detail
   assert conftest.events_of_type(_events(blocks, sid), ET.WEB_STATUS_CONFIRMED) == []
 
 
 @pytest.mark.asyncio
-async def test_status_confirm_refuses_a_link_to_a_closed_lineage(tmp_path: pathlib.Path) -> None:
+@pytest.mark.parametrize(
+    "endpoint", [_STATUS_URL, "/api/internal/web/status/unread", "/api/internal/web/status/confirm"])
+async def test_status_refuses_a_link_to_a_closed_lineage(tmp_path: pathlib.Path, endpoint: str) -> None:
   blocks = _rig(tmp_path)
   sid = await _session(blocks)
   client = _status_client(blocks)
@@ -1515,10 +1537,32 @@ async def test_status_confirm_refuses_a_link_to_a_closed_lineage(tmp_path: pathl
                   link=_host_file_link(page))
           ]))
 
-  response = client.post("/api/internal/web/status/confirm", json={"session_id": sid})
+  payload = {"session_id": sid}
+  if endpoint != "/api/internal/web/status/confirm":
+    payload["text"] = _waiting_with_link("Decide plan 2", _host_file_link(page))
+  response = client.post(endpoint, json=payload)
 
   assert response.status_code == 409
   assert "closed" in response.json()["detail"]
+  assert conftest.events_of_type(_events(blocks, sid), ET.WEB_STATUS_CONFIRMED) == []
+
+
+@pytest.mark.asyncio
+async def test_status_confirmation_surfaces_an_unreadable_plan_registry(tmp_path: pathlib.Path) -> None:
+  blocks = _rig(tmp_path)
+  sid = await _session(blocks)
+  client = _status_client(blocks)
+  page = _session_artifact(blocks, sid, "plan.html")
+  (blocks.cfg.sessions_dir / sid / "plans.json").write_text("invalid JSON", encoding="utf-8")
+  assert blocks.tree is not None
+  await blocks.tree.update_slot_fields(
+      sid,
+      status.OWNER,
+      web_status=metadata.WebStatus(waiting=[metadata.WaitingItem(text="Decide", link=_host_file_link(page))]))
+
+  with pytest.raises(json.JSONDecodeError):
+    client.post("/api/internal/web/status/confirm", json={"session_id": sid})
+
   assert conftest.events_of_type(_events(blocks, sid), ET.WEB_STATUS_CONFIRMED) == []
 
 
@@ -2409,7 +2453,9 @@ def test_the_cli_status_show_prints_the_status_and_one_block_per_child_with_wait
               {
                   "text": "Pick a layout",
                   "context": "The line is ready. Options are fold or show; fold is recommended.",
-                  "link": None
+                  "link": None,
+                  "since": "2026-10-16T18:00:00Z",
+                  "since_exact": True,
               }
           ],
       "updated_at": "2026-10-16T21:00:00+00:00",
@@ -2426,7 +2472,9 @@ def test_the_cli_status_show_prints_the_status_and_one_block_per_child_with_wait
               {
                   "text": "Answer plan 5",
                   "context": "The plan needs review. Options are approve or revise; revise is recommended.",
-                  "link": "/x"
+                  "link": "/x",
+                  "since": "2026-10-16T18:00:00Z",
+                  "since_exact": False,
               }
           ],
   }
@@ -2448,6 +2496,9 @@ def test_the_cli_status_show_prints_the_status_and_one_block_per_child_with_wait
   assert out.index("Panel child (d7645e8f)") < out.index("Answer plan 5 (/x)")
   if has_status:
     assert "  context: The line is ready. Options are fold or show; fold is recommended." in out
+    assert "  since_exact: true" in out
+  assert "  since: 2026-10-16T18:00:00Z" in out
+  assert "  since_exact: false" in out
   assert "  context: The plan needs review. Options are approve or revise; revise is recommended." in out
 
 

@@ -131,6 +131,15 @@ def status_payload(status: metadata.WebStatus) -> dict:
   return payload
 
 
+def _require_current_plan_links(
+    items: list[metadata.WaitingItem], scan_context: file_urls.ScanContext) -> plan_links.PlanLinks:
+  links = plan_links.PlanLinks(scan_context.charliebot_home / "sessions")
+  stale = links.stale_links(items, scan_context)
+  if stale:
+    raise reply.WebReplyError(409, plan_links.stale_detail(stale))
+  return links
+
+
 def _assign_since(
     new_items: list[metadata.WaitingItem], stored_items: list[metadata.WaitingItem], links: plan_links.PlanLinks,
     now: datetime.datetime) -> list[metadata.WaitingItem]:
@@ -189,10 +198,7 @@ async def set_status(
   base = metadata.WebStatus() if stored is None else stored
   stored_waiting = effective_waiting(base)
   prospective = patch.waiting if "waiting" in patch.model_fields_set else stored_waiting
-  links = plan_links.PlanLinks(scan_context.charliebot_home / "sessions")
-  stale = links.stale_links(prospective, scan_context)
-  if stale:
-    raise reply.WebReplyError(409, plan_links.stale_detail(stale))
+  links = _require_current_plan_links(prospective, scan_context)
   if "waiting" in patch.model_fields_set:
     unread = _unread_items(patch.waiting, await _read_item_digests(session_id, events))
     if unread:
@@ -236,10 +242,7 @@ async def confirm_status(
   meta = await reply.require_web_session(store, session_id)
   stored = metadata_slots.fields_of(meta, OWNER).web_status
   status = metadata.WebStatus() if stored is None else stored
-  links = plan_links.PlanLinks(scan_context.charliebot_home / "sessions")
-  stale = links.stale_links(effective_waiting(status), scan_context)
-  if stale:
-    raise reply.WebReplyError(409, plan_links.stale_detail(stale))
+  _require_current_plan_links(effective_waiting(status), scan_context)
   await events.persist_and_broadcast(session_id, {
       "type": ET.WEB_STATUS_CONFIRMED,
       "content": "Status confirmed",
@@ -312,9 +315,12 @@ async def unread_waiting(
   The file is parsed and validated as a set parses it, including the waiting-item context check; refusals match the
   set's. Nothing is stored or recorded.
   """
-  await reply.require_web_session(store, session_id)
+  meta = await reply.require_web_session(store, session_id)
   patch = parse_patch(text, scan_context)
   _require_waiting_context(patch)
+  stored = metadata_slots.fields_of(meta, OWNER).web_status
+  prospective = patch.waiting if "waiting" in patch.model_fields_set else ([] if stored is None else stored.waiting)
+  _require_current_plan_links(prospective, scan_context)
   unread = _unread_items(patch.waiting, await _read_item_digests(session_id, events))
   return {"unread": [item.model_dump(mode="json") for item in unread]}
 

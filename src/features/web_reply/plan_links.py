@@ -12,10 +12,7 @@ import posixpath
 import re
 
 from src.features.web_reply import metadata
-from src.infra import log_once
 from src.runtime import file_urls
-
-logger = log_once.LazyStructlogLogger()
 
 # A bare file-server path inside prose: the context and text fields carry these without a Markdown target.
 _MOUNT_PATH = re.compile(re.escape(file_urls.FILE_SERVER_MOUNTS[0]) + r"/[^\s<>\"'`)]*")
@@ -66,7 +63,7 @@ class PlanLinks:
     return parts[0], posixpath.normpath("/".join(parts[1:]))
 
   def _registry(self, session_id: str) -> list[dict] | None:
-    """The plans of *session_id*, or None when its registry is missing or unreadable."""
+    """The plans of *session_id*, or None when its registry is missing."""
     if session_id not in self._registries:
       path = self._sessions_dir / session_id / "plans.json"
       try:
@@ -74,12 +71,7 @@ class PlanLinks:
       except FileNotFoundError:
         self._registries[session_id] = None
         return None
-      except (OSError, ValueError) as exc:
-        logger.warning("web_status_plan_registry_unreadable", session=session_id, error=str(exc))
-        self._registries[session_id] = None
-        return None
-      plans = data.get("plans") if isinstance(data, dict) else None
-      self._registries[session_id] = plans if isinstance(plans, list) else None
+      self._registries[session_id] = data["plans"]
     return self._registries[session_id]
 
   def binding(self, path: pathlib.Path) -> Binding | None:
@@ -92,36 +84,19 @@ class PlanLinks:
     if plans is None:
       return None
     for plan in plans:
-      if not isinstance(plan, dict):
-        continue
-      versions = plan.get("versions")
-      if not isinstance(versions, list):
-        continue
-      matched = next(
-          (
-              ver for ver in versions if isinstance(ver, dict) and isinstance(ver.get("file"), str) and
-              posixpath.normpath(ver["file"]) == file_relative), None)
+      versions = plan["versions"]
+      matched = next((ver for ver in versions if posixpath.normpath(ver["file"]) == file_relative), None)
       if matched is None:
         continue
-      numbered = [
-          ver for ver in versions
-          if isinstance(ver, dict) and isinstance(ver.get("v"), int) and isinstance(ver.get("file"), str)
-      ]
-      if not numbered:
-        return None
-      newest = max(numbered, key=lambda ver: ver["v"])
+      newest = max(versions, key=lambda ver: ver["v"])
       closed = plan.get("closed")
-      closed_as = None if closed is None else (closed.get("as") if isinstance(closed, dict) else str(closed))
-      plan_id = plan.get("id")
-      if not isinstance(plan_id, int):
-        return None
       return Binding(
           session_id=session_id,
-          plan_id=plan_id,
+          plan_id=plan["id"],
           version=matched["v"],
           newest_version=newest["v"],
           newest_file=self._sessions_dir / session_id / newest["file"],
-          closed=closed_as,
+          closed=None if closed is None else closed["as"],
       )
     return None
 
@@ -158,7 +133,12 @@ class PlanLinks:
     seen: set[tuple[str, str, int]] = set()
     for item in items:
       for value in (item.text, item.context, item.link):
-        for link, path in self._links(value, scan_context):
+        links = self._links(value, scan_context)
+        if value == item.link:
+          path = file_urls.host_file(value)
+          if path is not None:
+            links.append((value, path))
+        for link, path in links:
           binding = self.binding(path)
           if binding is None or not binding.stale:
             continue

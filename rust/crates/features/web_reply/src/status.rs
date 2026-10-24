@@ -625,13 +625,14 @@ mod tests {
     assert_eq!(second["goal"], json!("Ship the panel"));
     assert_eq!(second["now"], json!("Running"));
     assert_eq!(
-      second["waiting"],
+      without_item_times(&second["waiting"]),
       json!([{
         "text": "Pick a layout",
         "context": "The decision is active now. Options are continue or stop; continue is recommended.",
         "link": null
       }])
     );
+    assert_eq!(second["waiting"][0]["since_exact"], json!(true), "a new item starts at the set's time");
     assert_eq!(second["now_chars"], json!(7));
     assert_eq!(second["now_over_budget"], json!(false));
     assert_ne!(second["updated_at"], first["updated_at"]);
@@ -815,7 +816,7 @@ mod tests {
       body["descendants"].as_array().expect("a list").iter().map(|row| row["session_id"].as_str().unwrap()).collect();
     assert_eq!(ids, vec![deep.as_str(), new.as_str(), old.as_str()]);
     assert_eq!(
-      body["descendants"][0]["waiting"],
+      without_item_times(&body["descendants"][0]["waiting"]),
       json!([{
         "text": "decision",
         "context": "The decision is active now. Options are continue or stop; continue is recommended.",
@@ -989,8 +990,8 @@ mod tests {
       home.send(Method::POST, "/api/internal/web/status", Some(json!({"session_id": sid, "text": text}))).await;
 
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(response["waiting"], json!([item.clone()]));
-    assert_eq!(stored(&home, &sid).await["waiting"], json!([item]));
+    assert_eq!(without_item_times(&response["waiting"]), json!([item.clone()]));
+    assert_eq!(without_item_times(&stored(&home, &sid).await["waiting"]), json!([item]));
   }
 
   #[tokio::test]
@@ -1206,7 +1207,7 @@ mod tests {
       .expect("the cold read records");
     let response = set_status(&home.features, &sid, &text).await.expect("the read item stores");
     assert_eq!(
-      response["waiting"],
+      without_item_times(&response["waiting"]),
       json!([{
         "text": "Approve the deploy",
         "context": "The release is ready now. Options are deploy or wait; deploy is recommended.",
@@ -1275,6 +1276,389 @@ mod tests {
     home.features.store.mark_unread(&sid).await.expect("the session is marked");
     set_status(&home.features, &sid, r#"{"now": "Done"}"#).await.expect("the set stores");
     assert!(home.meta(&sid).await.has_unread);
+  }
+
+  // -------------------------------------------------------------------------
+  // Stale plan links: an old version or a closed lineage is refused in set and confirm
+  // -------------------------------------------------------------------------
+
+  /// The waiting items without the start-time fields that the server writes (`_without_item_times`).
+  fn without_item_times(items: &Value) -> Value {
+    Value::Array(
+      items
+        .as_array()
+        .expect("a waiting list")
+        .iter()
+        .map(|item| {
+          let mut item = item.as_object().expect("a waiting item object").clone();
+          item.remove("since");
+          item.remove("since_exact");
+          Value::Object(item)
+        })
+        .collect(),
+    )
+  }
+
+  /// The sessions directory the plan-link lookup reads the plan registries from.
+  fn sessions_dir(home: &Home) -> PathBuf {
+    home.root().join("sessions")
+  }
+
+  /// A session artifact page whose bytes are the file name (`_session_artifact`).
+  fn session_artifact(home: &Home, session_id: &str, name: &str) -> PathBuf {
+    let path = sessions_dir(home).join(session_id).join("artifacts").join(name);
+    fs::create_dir_all(path.parent().expect("the artifact directory")).expect("the artifact directory writes");
+    fs::write(&path, name).expect("the artifact page writes");
+    path
+  }
+
+  /// One plan-registry version row (`_plan_version`).
+  fn plan_version(v: i64, relative: &str) -> Value {
+    json!({
+      "v": v,
+      "file": relative,
+      "created_at": "2026-10-24T00:00:00+00:00",
+      "trigger": "initial",
+      "base": null,
+      "note": null,
+    })
+  }
+
+  /// One plan-registry plan row (`_plan`).
+  fn plan(plan_id: i64, versions: Value, closed: Value) -> Value {
+    json!({"id": plan_id, "title": format!("Plan {plan_id}"), "versions": versions, "takeoff": null, "closed": closed})
+  }
+
+  /// Writes `plans` as the session's plan registry (`_write_plans`).
+  fn write_plans(home: &Home, session_id: &str, plans: Value) {
+    let path = sessions_dir(home).join(session_id).join("plans.json");
+    fs::create_dir_all(path.parent().expect("the session directory")).expect("the session directory writes");
+    fs::write(&path, json!({"plans": plans}).to_string()).expect("the plan registry writes");
+  }
+
+  /// Writes `web_status` as the session's stored status field, as a prior set left it.
+  async fn write_stored_status(home: &Home, session_id: &str, web_status: Value) {
+    let guard = home.features.store.control_lock().await;
+    let mut values = Map::new();
+    values.insert(STATUS_FIELD.to_string(), web_status);
+    home
+      .features
+      .store
+      .update_task_slot_fields_locked(&guard, session_id, OWNER, values)
+      .await
+      .expect("the stored status writes");
+  }
+
+  /// A status file whose one waiting item names `text`, `context` and `link` (`_waiting_with_link`).
+  fn waiting_with_link(text: &str, link: Value) -> String {
+    json!({"waiting": [{
+      "text": text,
+      "context": "The line is active now. Options are continue or stop; continue is recommended.",
+      "link": link,
+    }]})
+    .to_string()
+  }
+
+  #[tokio::test]
+  async fn a_status_set_refuses_an_old_plan_link_before_the_cold_read() {
+    for (endpoint, uri) in [("set", "/api/internal/web/status"), ("unread", "/api/internal/web/status/unread")] {
+      for field in ["text", "context", "link"] {
+        let home = Home::new();
+        let sid = home.manager("session", None).await;
+        let plan_sid = home.manager("plan-session", None).await;
+        let v9 = session_artifact(&home, &plan_sid, "plan_01_v9.html");
+        let v11 = session_artifact(&home, &plan_sid, "plan_01_v11.html");
+        write_plans(
+          &home,
+          &plan_sid,
+          json!([plan(
+            1,
+            json!([plan_version(9, "artifacts/plan_01_v9.html"), plan_version(11, "artifacts/plan_01_v11.html")]),
+            Value::Null,
+          )]),
+        );
+        let mut item = json!({
+          "text": "Decide plan 1",
+          "context": "The plan waits. Options are approve or revise; approve is recommended.",
+          "link": null,
+        });
+        item[field] = json!(file_link(&v9));
+        let text = json!({"waiting": [item]}).to_string();
+
+        let (status, response) =
+          home.send(Method::POST, uri, Some(json!({"session_id": sid, "text": text}))).await;
+
+        assert_eq!(status, StatusCode::CONFLICT, "{endpoint} {field}");
+        let detail = response["detail"].as_str().expect("a refusal detail");
+        assert!(detail.starts_with("Stale plan links"), "{endpoint} {field}: {detail}");
+        assert!(detail.contains(file_link(&v9).as_str()), "{endpoint} {field}: {detail}");
+        assert!(detail.contains(&v11.display().to_string()), "{endpoint} {field}: {detail}");
+        assert_eq!(stored(&home, &sid).await, Value::Null, "{endpoint} {field}");
+        assert!(status_events(&home, &sid).is_empty(), "{endpoint} {field}");
+        assert!(home.events(&sid).iter().all(|event| event["type"] != WEB_ASK_CHECK), "{endpoint} {field}");
+      }
+    }
+  }
+
+  #[tokio::test]
+  async fn status_confirm_refuses_a_stale_stored_plan_link() {
+    for local_path in [false, true] {
+      let home = Home::new();
+      let sid = home.manager("session", None).await;
+      let v9 = session_artifact(&home, &sid, "plan_01_v9.html");
+      let v11 = session_artifact(&home, &sid, "plan_01_v11.html");
+      write_plans(
+        &home,
+        &sid,
+        json!([plan(
+          1,
+          json!([plan_version(9, "artifacts/plan_01_v9.html"), plan_version(11, "artifacts/plan_01_v11.html")]),
+          Value::Null,
+        )]),
+      );
+      let link =
+        if local_path { v9.display().to_string() } else { file_link(&v9) };
+      write_stored_status(
+        &home,
+        &sid,
+        json!({"waiting": [{
+          "text": "Decide plan 1",
+          "context": "The plan waits. Options are approve or revise; approve is recommended.",
+          "link": link,
+        }]}),
+      )
+      .await;
+
+      let (status, response) =
+        home.send(Method::POST, "/api/internal/web/status/confirm", Some(json!({"session_id": sid}))).await;
+
+      assert_eq!(status, StatusCode::CONFLICT, "local path {local_path}");
+      let detail = response["detail"].as_str().expect("a refusal detail");
+      assert!(detail.contains(link.as_str()), "local path {local_path}: {detail}");
+      assert!(detail.contains(&v11.display().to_string()), "local path {local_path}: {detail}");
+      assert!(home.events(&sid).iter().all(|event| event["type"] != "web_status_confirmed"));
+    }
+  }
+
+  #[tokio::test]
+  async fn status_refuses_a_link_to_a_closed_lineage() {
+    for (endpoint, uri) in
+      [("set", "/api/internal/web/status"), ("unread", "/api/internal/web/status/unread"), ("confirm", "/api/internal/web/status/confirm")]
+    {
+      let home = Home::new();
+      let sid = home.manager("session", None).await;
+      let page = session_artifact(&home, &sid, "plan_02_v1.html");
+      write_plans(
+        &home,
+        &sid,
+        json!([plan(2, json!([plan_version(1, "artifacts/plan_02_v1.html")]), json!({"as": "completed"}))]),
+      );
+      write_stored_status(
+        &home,
+        &sid,
+        json!({"waiting": [{
+          "text": "Decide plan 2",
+          "context": "The plan is closed. Options are reopen or stop; reopen is recommended.",
+          "link": file_link(&page),
+        }]}),
+      )
+      .await;
+      let payload = if endpoint == "confirm" {
+        json!({"session_id": sid})
+      } else {
+        json!({"session_id": sid, "text": waiting_with_link("Decide plan 2", json!(file_link(&page)))})
+      };
+
+      let (status, response) = home.send(Method::POST, uri, Some(payload)).await;
+
+      assert_eq!(status, StatusCode::CONFLICT, "{endpoint}");
+      assert!(response["detail"].as_str().expect("a refusal detail").contains("closed"), "{endpoint}");
+      assert!(home.events(&sid).iter().all(|event| event["type"] != "web_status_confirmed"), "{endpoint}");
+    }
+  }
+
+  #[tokio::test]
+  async fn status_confirmation_surfaces_an_unreadable_plan_registry() {
+    let home = Home::new();
+    let sid = home.manager("session", None).await;
+    let page = session_artifact(&home, &sid, "plan.html");
+    fs::create_dir_all(sessions_dir(&home).join(&sid)).expect("the session directory writes");
+    fs::write(sessions_dir(&home).join(&sid).join("plans.json"), "invalid JSON").expect("the broken registry writes");
+    write_stored_status(
+      &home,
+      &sid,
+      json!({"waiting": [{"text": "Decide", "context": "The line is active now. Options are continue or stop; continue is recommended.", "link": file_link(&page)}]}),
+    )
+    .await;
+
+    let (status, _response) =
+      home.send(Method::POST, "/api/internal/web/status/confirm", Some(json!({"session_id": sid}))).await;
+
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "the unreadable registry fails the confirmation");
+    assert!(home.events(&sid).iter().all(|event| event["type"] != "web_status_confirmed"));
+  }
+
+  #[tokio::test]
+  async fn status_confirm_returns_the_stored_status_with_start_times_and_records_one_event() {
+    let home = Home::new();
+    let sid = home.manager("session", None).await;
+    let stored_at = "2026-10-24T00:00:00Z";
+    write_stored_status(
+      &home,
+      &sid,
+      json!({
+        "waiting": [{
+          "text": "Decide the deploy",
+          "context": "The release is ready. Options are deploy or wait; deploy is recommended.",
+        }],
+        "updated_at": stored_at,
+      }),
+    )
+    .await;
+
+    let (status, response) =
+      home.send(Method::POST, "/api/internal/web/status/confirm", Some(json!({"session_id": sid}))).await;
+
+    assert_eq!(status, StatusCode::OK);
+    let waited = &response["waiting"][0];
+    assert_eq!(waited["since"], json!(stored_at), "the status time is the item's lower bound");
+    assert_eq!(waited["since_exact"], json!(false));
+    assert_eq!(response["updated_at"], json!(stored_at));
+    let confirmed =
+      home.events(&sid).into_iter().filter(|event| event["type"] == "web_status_confirmed").collect::<Vec<_>>();
+    assert_eq!(confirmed.len(), 1);
+  }
+
+  // -------------------------------------------------------------------------
+  // since: a stored item keeps its start time across a rewording or a plan version
+  // -------------------------------------------------------------------------
+
+  /// A waiting item whose text is `text` and whose link is `link`, as a status file names it.
+  fn planned_item(text: &str, link: Value) -> Value {
+    json!({
+      "text": text,
+      "context": "The line is active now. Options are continue or stop; continue is recommended.",
+      "link": link,
+    })
+  }
+
+  /// Records a cold read of `item`, then stores the one-item status file that names it
+  /// (`_set_after_reads`). Answers the stored status.
+  async fn set_after_reads(home: &Home, session_id: &str, item: Value) -> Value {
+    record_ask_check(&home.features, session_id, &item, "synthetic-haiku", "continue is recommended.")
+      .await
+      .expect("the item cold read records");
+    set_status(&home.features, session_id, &json!({"waiting": [item]}).to_string())
+      .await
+      .expect("the set stores")
+  }
+
+  #[tokio::test]
+  async fn since_keeps_the_start_time_of_the_same_text_and_a_reworded_item() {
+    let home = Home::new();
+    let sid = home.manager("session", None).await;
+
+    let first = set_after_reads(&home, &sid, planned_item("Decide A", Value::Null)).await;
+    let since = first["waiting"][0]["since"].as_str().expect("a start time").to_string();
+    assert_eq!(first["waiting"][0]["since_exact"], json!(true));
+    let second = set_after_reads(&home, &sid, planned_item("Decide A", Value::Null)).await;
+    let third = set_after_reads(&home, &sid, planned_item("Decide B", Value::Null)).await;
+
+    assert_eq!(second["waiting"][0]["since"], json!(since), "the same text keeps its start time");
+    assert_eq!(third["waiting"][0]["since"], json!(since), "a reworded item keeps its start time");
+    assert_eq!(third["waiting"][0]["since_exact"], json!(true));
+  }
+
+  #[tokio::test]
+  async fn since_keeps_the_start_time_of_a_reworded_item_with_the_same_link() {
+    let home = Home::new();
+    let sid = home.manager("session", None).await;
+    let page = home.root().join("linked-page.html");
+    fs::write(&page, "page").expect("the linked page writes");
+    let link = file_link(&page);
+
+    let first = set_after_reads(&home, &sid, planned_item("Review A", json!(link))).await;
+    let second = set_after_reads(&home, &sid, planned_item("Review B", json!(link))).await;
+
+    assert_eq!(
+      second["waiting"][0]["since"],
+      first["waiting"][0]["since"],
+      "the same link pairs the reworded item with its stored item"
+    );
+  }
+
+  #[tokio::test]
+  async fn since_keeps_the_start_time_when_a_plan_link_moves_to_its_new_version() {
+    let home = Home::new();
+    let sid = home.manager("session", None).await;
+    let v2 = session_artifact(&home, &sid, "plan_03_v2.html");
+    let v3 = session_artifact(&home, &sid, "plan_03_v3.html");
+    write_plans(&home, &sid, json!([plan(3, json!([plan_version(2, "artifacts/plan_03_v2.html")]), Value::Null)]));
+
+    let first = set_after_reads(&home, &sid, planned_item("Decide plan A", json!(file_link(&v2)))).await;
+    let since = first["waiting"][0]["since"].as_str().expect("a start time").to_string();
+    write_plans(
+      &home,
+      &sid,
+      json!([plan(
+        3,
+        json!([plan_version(2, "artifacts/plan_03_v2.html"), plan_version(3, "artifacts/plan_03_v3.html")]),
+        Value::Null,
+      )]),
+    );
+    let second = set_after_reads(&home, &sid, planned_item("Decide plan B", json!(file_link(&v3)))).await;
+
+    assert_eq!(second["waiting"][0]["since"], json!(since), "one plan lineage pairs its versions");
+  }
+
+  #[tokio::test]
+  async fn legacy_items_read_with_a_lower_bound_and_keep_it_after_a_set() {
+    let home = Home::new();
+    let sid = home.manager("session", None).await;
+    let stored_at = "2026-10-24T00:00:00Z";
+    write_stored_status(
+      &home,
+      &sid,
+      json!({
+        "waiting": [{
+          "text": "Legacy decision",
+          "context": "The line is active now. Options are continue or stop; continue is recommended.",
+        }],
+        "updated_at": stored_at,
+      }),
+    )
+    .await;
+
+    let (read_status, read) =
+      home.send(Method::GET, &format!("/api/internal/web/status?session_id={sid}"), None).await;
+    assert_eq!(read_status, StatusCode::OK);
+    assert_eq!(read["web_status"]["waiting"][0]["since"], json!(stored_at));
+    assert_eq!(read["web_status"]["waiting"][0]["since_exact"], json!(false));
+
+    let written = set_after_reads(&home, &sid, planned_item("Legacy decision", Value::Null)).await;
+
+    assert_eq!(written["waiting"][0]["since"], json!(stored_at));
+    assert_eq!(written["waiting"][0]["since_exact"], json!(false));
+  }
+
+  #[tokio::test]
+  async fn a_set_file_that_carries_a_start_time_field_is_refused() {
+    let home = Home::new();
+    let sid = home.manager("session", None).await;
+    let item = json!({
+      "text": "Decide",
+      "context": "The line is active. Options are continue or stop; continue is recommended.",
+      "since": "2026-10-24T00:00:00Z",
+      "since_exact": true,
+    });
+
+    let (status, response) =
+      home.send(Method::POST, "/api/internal/web/status", Some(json!({"session_id": sid, "text": json!({"waiting": [item]}).to_string()}))).await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(response["detail"].as_str().expect("a refusal detail").contains("are written by the server"));
+    assert_eq!(stored(&home, &sid).await, Value::Null);
+    assert!(status_events(&home, &sid).is_empty());
   }
 
   #[tokio::test]

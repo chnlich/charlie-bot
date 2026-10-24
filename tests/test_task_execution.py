@@ -3388,7 +3388,7 @@ async def test_disk_headroom_precheck_withholds_worker_run_but_not_manager_turn(
 async def test_withheld_launch_on_a_completed_task_settles_the_queued_run(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A launch withheld because its task is closed records the withheld fact
-    and the blocked report as today, plus one durable stop request settling
+    and the blocked report, plus one durable stop request settling
     the never-launched run: the archive check reads it resolved and the
     parent's archive passes."""
   cfg, session_blocks, tree, manager, worker = await _manager_with_worker_child(tmp_path, monkeypatch)
@@ -3477,7 +3477,7 @@ async def test_startup_recovery_stops_a_launched_run_on_a_closed_worker(
 async def test_non_space_end_failure_lands_immediately_and_starts_no_retry(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """(j) A non-out-of-space exception in the end path lands the run
-    immediately (as today) and starts no retry; a success fact that hits
+    immediately and starts no retry; a success fact that hits
     OSError(EIO) during delivery sends no failed report."""
   monkeypatch.setattr(task_execution_module, "RUN_END_LANDING_RETRY_INTERVAL_SECONDS", 0.05)
   cfg, session_blocks, tree, manager, worker = await _manager_with_worker_child(tmp_path, monkeypatch)
@@ -3650,7 +3650,7 @@ async def test_quota_failure_on_a_pool_node_fails_over_to_the_next_member(
 @pytest.mark.asyncio
 async def test_a_pinned_worker_is_not_failed_over_and_its_member_is_not_cooled(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """A node whose delegation named its backend keeps today's quota behavior: the failure is reported, nothing
+  """A node whose delegation named its backend keeps its quota behavior: the failure is reported, nothing
   retries, and the pool is untouched."""
   cfg, tree, adapter, launched = _failover_env(tmp_path, monkeypatch)
   manager = await conftest.create_task(tree, parent=None, request_id="root")

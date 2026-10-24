@@ -225,7 +225,7 @@ async def test_implement_work_run_with_pending_trigger_pauses_then_continues_and
   assert tree.task_state(worker.id) == "open"
   assert run1.worktree_path and pathlib.Path(run1.worktree_path).is_dir()
   assert run1.branch_name and run1.branch_name in conftest.run_git(repo, "branch", "--list", run1.branch_name)
-  # The first run's prompt is today's full context: spec, bindings and batch.
+  # The first run's prompt carries the full context: spec, bindings and batch.
   assert "add a marker file" in _launch_prompt(tree, worker.id, run1_id)
 
   # The trigger fires: the next run is a work continuation — same
@@ -294,7 +294,7 @@ async def test_input_admitted_during_a_work_run_pauses_it_the_same_way(
   assert "one more thing" in prompt2
   assert "add a marker file" not in prompt2
 
-  # The continuation ends with nothing pending: the review spawns as today.
+  # The continuation ends with nothing pending: the review spawns.
   cont_gate.set()
   _run2, outcome2 = await test_task_execution.wait_for_terminal_run(tree, worker.id, run2.id)
   assert outcome2 == "success"
@@ -369,7 +369,7 @@ async def test_review_with_pending_trigger_pauses_merge_and_continues_the_review
   work_gate.set()
   main_before = conftest.run_git(repo, "rev-parse", "origin/main")
 
-  # The review spawns as today; the trigger lands while it runs.
+  # The review spawns; the trigger lands while it runs.
   await asyncio.wait_for(review_started.wait(), timeout=15)
   review1 = (await _wait_for_review_of(tree, worker.id, run1_id))
   mgr = await _save_trigger(cfg, tree, _trigger(worker.id, message="CI passed"))
@@ -458,7 +458,7 @@ async def test_failed_review_continuation_reports_failure_to_the_parent(
 
 
 @pytest.mark.asyncio
-async def test_failed_run_with_pending_trigger_reports_failure_as_today(
+async def test_failed_run_with_pending_trigger_still_reports_failure(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, tree, manager, worker, _repo = await _worker_child(tmp_path, monkeypatch)
   install_backends(monkeypatch, [test_task_execution.SpawningScriptedBackend([], exit_code=1)])
@@ -538,10 +538,10 @@ async def test_changed_prompt_hash_at_continuation_starts_a_fresh_conversation(
 
 
 @pytest.mark.asyncio
-async def test_delivery_without_pending_wake_behaves_as_today(
+async def test_delivery_without_pending_wake_runs_the_full_chain(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Regression pin: with no pending trigger and no pending input, the whole
-    implement delivery chain runs exactly as before the pause existed."""
+    implement delivery chain runs to the end: review, merge, close."""
   _cfg, tree, manager, worker, _repo = await _worker_child(tmp_path, monkeypatch)
   work_started = asyncio.Event()
   work_gate = asyncio.Event()
@@ -568,7 +568,7 @@ async def test_delivery_without_pending_wake_behaves_as_today(
   assert outcome1 == "success"
 
   # The review spawns at once, starts a fresh conversation, and its success
-  # merges and closes exactly as today.
+  # merges and closes.
   review = await _wait_for_review_of(tree, worker.id, run1_id)
   _review, outcome_r = await test_task_execution.wait_for_terminal_run(tree, worker.id, review.id)
   assert outcome_r == "success"

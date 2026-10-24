@@ -4,7 +4,7 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use charliebot_core::pyfmt;
 use charliebot_store::metadata::{SessionMetadata, UtcDateTime};
-use charliebot_store::{Store, StoreError, StoreResult};
+use charliebot_store::{Store, StoreError, StoreResult, TaskTreeRow};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -43,15 +43,10 @@ pub(crate) fn tree_page(
     index.meta(parent_id)?;
   }
   let revision = index.revision().to_string();
-  let mut rows = Vec::with_capacity(index.child_ids(parent_id).len());
-  for session_id in index.child_ids(parent_id) {
-    let meta = index.meta(session_id)?;
-    let row = session_row(store, &index, meta)?;
-    let has_running_descendant = row.running_descendant_count > 0;
-    if !include_archived && row.archived && row.work_state != "running" && !has_running_descendant {
-      continue;
-    }
-    rows.push((meta.created_at, meta.id.clone(), row));
+  let mut rows = Vec::new();
+  for row in store.task_tree_rows(&index, parent_id, include_archived)? {
+    let meta = index.meta(&row.session_id)?;
+    rows.push((meta.created_at, meta.id.clone(), session_row(meta, row)));
   }
 
   if let Some(cursor) = cursor {
@@ -73,36 +68,20 @@ pub(crate) fn tree_page(
   }))
 }
 
-fn session_row(
-  store: &Store,
-  index: &charliebot_store::TaskTreeSnapshot,
-  meta: &SessionMetadata,
-) -> StoreResult<SessionRow> {
-  let descendants = index.descendant_ids(store, &meta.id)?;
-  let mut open_descendant_count = 0;
-  let mut running_descendant_count = 0;
-  for descendant in descendants {
-    if index.task_state(&descendant)? == "open" {
-      open_descendant_count += 1;
-    }
-    if store.task_tree_activity(&descendant)?.work_state == "running" {
-      running_descendant_count += 1;
-    }
-  }
-  let activity = store.task_tree_activity(&meta.id)?;
-  Ok(SessionRow {
+fn session_row(meta: &SessionMetadata, row: TaskTreeRow) -> SessionRow {
+  SessionRow {
     id: meta.id.clone(),
     name: meta.name.clone(),
     profile: meta.profile,
     task_parent_id: meta.task_parent_id.clone(),
-    task_state: index.task_state(&meta.id)?.to_string(),
-    work_state: activity.work_state,
-    archived: index.archived(&meta.id)?,
-    child_count: index.child_ids(Some(&meta.id)).len(),
-    open_descendant_count,
-    running_descendant_count,
+    task_state: row.task_state,
+    work_state: row.work_state,
+    archived: row.archived,
+    child_count: row.child_count,
+    open_descendant_count: row.open_descendant_count,
+    running_descendant_count: row.running_descendant_count,
     has_unread: meta.has_unread,
-  })
+  }
 }
 
 fn encode_cursor(revision: &str, created_at: UtcDateTime, session_id: &str) -> String {
@@ -149,6 +128,25 @@ mod tests {
     tree_page(&features.store, Some(&root.id), true, 20, None).unwrap();
     assert_eq!(features.store.task_tree_index_build_count(), after_first_page);
     assert_eq!(features.store.task_state_tail_read_count(), after_first_tail_reads);
+  }
+
+  #[tokio::test]
+  async fn a_tree_page_leaves_the_events_cache_unchanged() {
+    let (_home, features) = feature_context();
+    let root = create_node(&features.store, "tree-root", None, TaskProfile::Manager).await;
+    let first = create_node(&features.store, "tree-first", Some(&root.id), TaskProfile::Manager).await;
+    let second = create_node(&features.store, "tree-second", Some(&root.id), TaskProfile::Manager).await;
+    let grandchild = create_node(&features.store, "tree-grandchild", Some(&first.id), TaskProfile::Manager).await;
+    for session_id in [&root.id, &first.id, &second.id, &grandchild.id] {
+      features.store.append_chat_event(session_id, json!({"type": "user", "content": "hello"})).await.unwrap();
+      features.store.clear_chat_events_cache(session_id);
+    }
+    let cached_before = features.store.events_cache_totals();
+
+    tree_page(&features.store, Some(&root.id), true, 20, None).unwrap();
+    tree_page(&features.store, None, true, 20, None).unwrap();
+
+    assert_eq!(features.store.events_cache_totals(), cached_before, "a tree page reads no history into the cache");
   }
 
   #[test]

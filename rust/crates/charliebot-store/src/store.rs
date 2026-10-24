@@ -215,6 +215,10 @@ pub struct Store {
   #[cfg(test)]
   pub(crate) event_append_hook: StdMutex<Option<Arc<dyn Fn() + Send + Sync>>>,
   #[cfg(test)]
+  pub(crate) identity_hook: StdMutex<Option<crate::task_tree::IdentityHook>>,
+  #[cfg(test)]
+  pub(crate) tree_rows_hook: StdMutex<Option<Arc<dyn Fn() + Send + Sync>>>,
+  #[cfg(test)]
   pub(crate) tree_index_metadata_reads: AtomicU64,
   pub(crate) control: ControlLock,
   pub(crate) records_generation: AtomicU64,
@@ -294,6 +298,10 @@ impl Store {
       event_read_hook: StdMutex::new(None),
       #[cfg(test)]
       event_append_hook: StdMutex::new(None),
+      #[cfg(test)]
+      identity_hook: StdMutex::new(None),
+      #[cfg(test)]
+      tree_rows_hook: StdMutex::new(None),
       #[cfg(test)]
       tree_index_metadata_reads: AtomicU64::new(0),
       control: ControlLock::new(store_id),

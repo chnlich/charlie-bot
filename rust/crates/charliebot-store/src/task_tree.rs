@@ -411,6 +411,30 @@ pub(crate) struct CachedTaskStateTail {
   pub(crate) state: String,
 }
 
+/// One child row of a task-tree page: the node's derived facts, read in one pass over the history.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TaskTreeRow {
+  pub session_id: String,
+  pub task_state: String,
+  pub work_state: String,
+  pub archived: bool,
+  pub child_count: usize,
+  pub open_descendant_count: usize,
+  pub running_descendant_count: usize,
+}
+
+/// Which side of the history identity's stat a test hook observes.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum IdentityStage {
+  BeforeStat,
+  AfterStat,
+}
+
+/// A test hook that observes each history identity read of a session.
+#[cfg(test)]
+pub(crate) type IdentityHook = Arc<dyn Fn(&str, IdentityStage) + Send + Sync>;
+
 /// A shared task-tree index snapshot for read-only projections.
 #[derive(Clone)]
 pub struct TaskTreeSnapshot {
@@ -880,7 +904,7 @@ impl Store {
 
   fn task_state_from_file_tail(&self, session_id: &str, use_sealed_recovery_state: bool) -> StoreResult<TaskState> {
     let path = self.chat_events_path(session_id);
-    let identity = FileIdentity::read(&path)?;
+    let identity = self.history_identity(session_id)?;
     if let Some(cached) =
       self.task_state_tail_cache.lock().expect("task-state tail cache mutex is not poisoned").get(session_id)
       && cached.identity == identity
@@ -980,6 +1004,80 @@ impl Store {
   /// Return a shared snapshot for a task-tree read page.
   pub fn task_tree_snapshot(&self) -> StoreResult<TaskTreeSnapshot> {
     Ok(TaskTreeSnapshot { index: self.tree_index()? })
+  }
+
+  /// The rows of one parent's children, in the snapshot's order, with an archived row that has running work kept.
+  ///
+  /// An archived row stays navigable while running work lives at or below it: dropping it would sever the path to
+  /// that work in a partial client tree. The row's own work state counts, so a running leaf below a retained archived
+  /// parent keeps that parent's child page visible; the row still reports `archived`.
+  pub fn task_tree_rows(
+    &self,
+    snapshot: &TaskTreeSnapshot,
+    parent_id: Option<&str>,
+    include_archived: bool,
+  ) -> StoreResult<Vec<TaskTreeRow>> {
+    #[cfg(test)]
+    {
+      let hook = self.tree_rows_hook.lock().expect("tree rows hook mutex is not poisoned").clone();
+      if let Some(hook) = hook {
+        hook();
+      }
+    }
+    let mut rows = Vec::with_capacity(snapshot.child_ids(parent_id).len());
+    for session_id in snapshot.child_ids(parent_id) {
+      let row = self.tree_row(snapshot, session_id)?;
+      if !include_archived && row.archived && row.work_state != "running" && row.running_descendant_count == 0 {
+        continue;
+      }
+      rows.push(row);
+    }
+    Ok(rows)
+  }
+
+  fn tree_row(&self, snapshot: &TaskTreeSnapshot, session_id: &str) -> StoreResult<TaskTreeRow> {
+    let descendants = snapshot.descendant_ids(self, session_id)?;
+    let mut open_descendant_count = 0;
+    let mut running_descendant_count = 0;
+    for descendant in descendants {
+      if snapshot.task_state(&descendant)? == "open" {
+        open_descendant_count += 1;
+      }
+      if self.task_tree_activity(&descendant)?.work_state == "running" {
+        running_descendant_count += 1;
+      }
+    }
+    let activity = self.task_tree_activity(session_id)?;
+    Ok(TaskTreeRow {
+      session_id: session_id.to_string(),
+      task_state: snapshot.task_state(session_id)?.to_string(),
+      work_state: activity.work_state,
+      archived: snapshot.archived(session_id)?,
+      child_count: snapshot.child_ids(Some(session_id)).len(),
+      open_descendant_count,
+      running_descendant_count,
+    })
+  }
+
+  /// The identity of a node's live history file, read before and after its stat by the test hook.
+  ///
+  /// Every task-state and activity memo keys on this value, so the read is the one place a test can pause between
+  /// a memo's key and its history read.
+  pub(crate) fn history_identity(&self, session_id: &str) -> StoreResult<Option<FileIdentity>> {
+    #[cfg(test)]
+    self.run_identity_hook(session_id, IdentityStage::BeforeStat);
+    let identity = FileIdentity::read(&self.chat_events_path(session_id))?;
+    #[cfg(test)]
+    self.run_identity_hook(session_id, IdentityStage::AfterStat);
+    Ok(identity)
+  }
+
+  #[cfg(test)]
+  fn run_identity_hook(&self, session_id: &str, stage: IdentityStage) {
+    let hook = self.identity_hook.lock().expect("identity hook mutex is not poisoned").clone();
+    if let Some(hook) = hook {
+      hook(session_id, stage);
+    }
   }
 
   /// Count full task-tree index builds since the store opened.
@@ -4024,6 +4122,234 @@ pub(crate) mod tests {
 
     assert_eq!(store.task_state_tail_read_count(), tails_before, "a sealed recovery fold avoids a tail-file read");
     assert_eq!(store.history_work().file_reads, files_before, "the sealed state avoids loading the chat history");
+  }
+
+  #[tokio::test]
+  async fn task_state_tail_reads_the_deep_fact_without_caching_history() {
+    let home = tempfile::tempdir().unwrap();
+    let store = make_store(home.path());
+    let node = create_node(&store, "deep-close", None, TaskProfile::Manager).await;
+    let mut raw = String::from("{\"id\":\"close-a\",\"type\":\"task_closed\",\"outcome\":\"completed\"}\n");
+    for index in 0..1001 {
+      raw.push_str(&format!("{{\"id\":\"message-{index}\",\"type\":\"user\"}}\n"));
+    }
+    fs::write(store.chat_events_path(&node.id), raw).unwrap();
+    store.clear_chat_events_cache(&node.id);
+
+    assert_eq!(store.task_state_fast(&node.id).unwrap(), "completed");
+    assert!(store.cached_chat_events(&node.id).is_none(), "the tail read leaves the history out of the events cache");
+    assert_eq!(store.task_state(&node.id).unwrap(), "completed", "the full fold agrees");
+  }
+
+  #[tokio::test]
+  async fn task_state_tail_reads_an_archived_fact_without_caching_history() {
+    let home = tempfile::tempdir().unwrap();
+    let store = make_store(home.path());
+    let node = create_node(&store, "archived-close", None, TaskProfile::Manager).await;
+    let mut raw = String::from(
+      "{\"id\":\"close-a\",\"type\":\"task_closed\",\"outcome\":\"completed\",\"timestamp\":\"2025-02-01T00:00:00+00:00\"}\n",
+    );
+    for index in 0..3 {
+      raw.push_str(&format!(
+        "{{\"id\":\"new-{index}\",\"type\":\"user\",\"timestamp\":\"2025-02-05T00:00:0{index}+00:00\"}}\n"
+      ));
+    }
+    fs::write(store.chat_events_path(&node.id), raw).unwrap();
+    store.archive_events_before(&node.id, UtcDateTime::parse("2025-02-04T00:00:00Z").unwrap()).await.unwrap().unwrap();
+    let mut live = fs::OpenOptions::new().append(true).open(store.chat_events_path(&node.id)).unwrap();
+    for index in 0..3 {
+      std::io::Write::write_all(&mut live, format!("{{\"id\":\"filler-{index}\",\"type\":\"user\"}}\n").as_bytes())
+        .unwrap();
+    }
+    store.clear_chat_events_cache(&node.id);
+
+    assert_eq!(store.task_state_fast(&node.id).unwrap(), "completed");
+    assert!(
+      store.cached_chat_events(&node.id).is_none(),
+      "the archive walk leaves the history out of the events cache"
+    );
+    assert_eq!(store.task_state(&node.id).unwrap(), "completed", "the full fold agrees");
+  }
+
+  async fn queued_worker(store: &Store) -> SessionMetadata {
+    let root = create_node(store, "root", None, TaskProfile::Manager).await;
+    create_node(store, "w1", Some(&root.id), TaskProfile::Worker).await
+  }
+
+  #[tokio::test]
+  async fn queued_run_with_a_stop_request_is_idle_and_caches_no_history() {
+    let home = tempfile::tempdir().unwrap();
+    let store = make_store(home.path());
+    let worker = queued_worker(&store).await;
+    let guard = store.control_lock().await;
+    store.register_run_locked(&guard, &worker.id, queued_run(&worker.id, "r-stop"), None).await.unwrap();
+    drop(guard);
+    assert_eq!(store.task_tree_activity(&worker.id).unwrap().work_state, "waiting");
+
+    store.request_stop(&worker.id, "r-stop", "stop-1").await.unwrap();
+    store.clear_chat_events_cache(&worker.id);
+    assert_eq!(store.task_tree_activity(&worker.id).unwrap().work_state, "idle");
+    assert!(store.cached_chat_events(&worker.id).is_none(), "the stop verdict leaves the history uncached");
+  }
+
+  #[tokio::test]
+  async fn launched_run_with_a_live_pid_and_no_terminal_fact_is_running_and_caches_no_history() {
+    let home = tempfile::tempdir().unwrap();
+    let store = make_store(home.path());
+    let worker = queued_worker(&store).await;
+    let guard = store.control_lock().await;
+    store.register_run_locked(&guard, &worker.id, queued_run(&worker.id, "r-live"), None).await.unwrap();
+    drop(guard);
+    let pid = std::process::id();
+    let pid_start = charliebot_core::proc_identity::read_pid_stat(pid).unwrap().pid_start;
+    store.record_launch(&worker.id, "r-live", pid, &pid_start).await.unwrap();
+    store.clear_chat_events_cache(&worker.id);
+
+    let activity = store.task_tree_activity(&worker.id).unwrap();
+    assert_eq!((activity.has_running_tasks, activity.work_state.as_str()), (true, "running"));
+    assert!(store.cached_chat_events(&worker.id).is_none(), "the liveness verdict leaves the history uncached");
+  }
+
+  #[tokio::test]
+  async fn run_with_ended_at_is_settled_without_reading_its_history() {
+    let home = tempfile::tempdir().unwrap();
+    let store = make_store(home.path());
+    let worker = queued_worker(&store).await;
+    let guard = store.control_lock().await;
+    store.register_run_locked(&guard, &worker.id, queued_run(&worker.id, "r-done"), None).await.unwrap();
+    store.record_finish_locked(&guard, &worker.id, "r-done", RunOutcome::new(RunOutcomeKind::Success)).await.unwrap();
+    drop(guard);
+    store.clear_chat_events_cache(&worker.id);
+
+    let reads_before = store.history_work().file_reads;
+    assert_eq!(store.task_tree_activity(&worker.id).unwrap().work_state, "idle");
+    assert_eq!(store.history_work().file_reads, reads_before, "a run whose record has ended_at reads no history");
+    assert!(store.cached_chat_events(&worker.id).is_none());
+  }
+
+  /// A page's rows across an append to an open worker: the worker's history identity is read either just before or
+  /// just after the append, and every row shows the worker wholly before or wholly after it.
+  async fn tree_rows_computed_across_an_append(stage: IdentityStage) {
+    let home = tempfile::tempdir().unwrap();
+    let store = Arc::new(make_store(home.path()));
+    let root = create_node(&store, "tree-root", None, TaskProfile::Manager).await;
+    let mid = create_node(&store, "tree-mid", Some(&root.id), TaskProfile::Manager).await;
+    let worker = create_node(&store, "tree-worker", Some(&mid.id), TaskProfile::Worker).await;
+    let guard = store.control_lock().await;
+    store.register_run_locked(&guard, &worker.id, queued_run(&worker.id, "r-queued"), None).await.unwrap();
+    drop(guard);
+    for session_id in [&root.id, &mid.id, &worker.id] {
+      store.clear_chat_events_cache(session_id);
+    }
+    let before = store.task_tree_rows(&store.task_tree_snapshot().unwrap(), Some(&root.id), true).unwrap();
+    assert_eq!(before[0].open_descendant_count, 1);
+
+    let (paused_tx, paused_rx) = std::sync::mpsc::channel();
+    let (resume_tx, resume_rx) = std::sync::mpsc::channel::<()>();
+    let resume_rx = Mutex::new(resume_rx);
+    let worker_id = worker.id.clone();
+    let paused = std::sync::atomic::AtomicBool::new(false);
+    *store.identity_hook.lock().unwrap() = Some(Arc::new(move |session_id: &str, seen: IdentityStage| {
+      if session_id != worker_id || seen != stage || paused.swap(true, Ordering::SeqCst) {
+        return;
+      }
+      paused_tx.send(()).unwrap();
+      let _ = resume_rx.lock().unwrap().recv_timeout(Duration::from_secs(1));
+    }));
+
+    let reader = Arc::clone(&store);
+    let root_id = root.id.clone();
+    let rows = tokio::task::spawn_blocking(move || -> StoreResult<Vec<TaskTreeRow>> {
+      let snapshot = reader.task_tree_snapshot()?;
+      reader.task_tree_rows(&snapshot, Some(&root_id), true)
+    });
+    let paused_seen =
+      tokio::task::spawn_blocking(move || paused_rx.recv_timeout(Duration::from_secs(1)).is_ok()).await.unwrap();
+    assert!(paused_seen, "the row computation reads the worker's history identity");
+    append(&store, &worker.id, json!({"type": "task_closed", "outcome": "completed"})).await;
+    resume_tx.send(()).unwrap();
+    let during = rows.await.unwrap().unwrap();
+    *store.identity_hook.lock().unwrap() = None;
+
+    let after = store.task_tree_rows(&store.task_tree_snapshot().unwrap(), Some(&root.id), true).unwrap();
+    assert_eq!(after[0].open_descendant_count, 0);
+    let expected = if stage == IdentityStage::AfterStat { &before } else { &after };
+    assert_eq!(&during, expected);
+    assert_eq!(store.task_state_fast(&worker.id).unwrap(), "completed");
+    assert_eq!(store.task_tree_activity(&worker.id).unwrap().work_state, "idle");
+    for session_id in [&root.id, &mid.id, &worker.id] {
+      assert!(store.cached_chat_events(session_id).is_none(), "the page leaves the history uncached");
+    }
+  }
+
+  #[tokio::test]
+  async fn tree_rows_computed_across_an_append_equal_the_rows_before_or_after_it_before_stat() {
+    tree_rows_computed_across_an_append(IdentityStage::BeforeStat).await;
+  }
+
+  #[tokio::test]
+  async fn tree_rows_computed_across_an_append_equal_the_rows_before_or_after_it_after_stat() {
+    tree_rows_computed_across_an_append(IdentityStage::AfterStat).await;
+  }
+
+  #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+  async fn tree_row_computations_share_one_computation_at_a_time() {
+    let home = tempfile::tempdir().unwrap();
+    let store = Arc::new(make_store(home.path()));
+    let root = create_node(&store, "tree-root", None, TaskProfile::Manager).await;
+    create_node(&store, "tree-child", Some(&root.id), TaskProfile::Manager).await;
+    let active = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let peak = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (active_in_hook, peak_in_hook) = (Arc::clone(&active), Arc::clone(&peak));
+    *store.tree_rows_hook.lock().unwrap() = Some(Arc::new(move || {
+      let now = active_in_hook.fetch_add(1, Ordering::SeqCst) + 1;
+      peak_in_hook.fetch_max(now, Ordering::SeqCst);
+      std::thread::sleep(Duration::from_millis(50));
+      active_in_hook.fetch_sub(1, Ordering::SeqCst);
+    }));
+
+    let snapshot = store.task_tree_snapshot().unwrap();
+    let computations: Vec<_> = (0..2)
+      .map(|_| {
+        let store = Arc::clone(&store);
+        let snapshot = snapshot.clone();
+        let root_id = root.id.clone();
+        tokio::task::spawn_blocking(move || store.task_tree_rows(&snapshot, Some(&root_id), true))
+      })
+      .collect();
+    for computation in computations {
+      computation.await.unwrap().unwrap();
+    }
+    *store.tree_rows_hook.lock().unwrap() = None;
+    assert_eq!(peak.load(Ordering::SeqCst), 1, "concurrent tree requests share one computation at a time");
+  }
+
+  #[tokio::test]
+  async fn run_facts_agree_with_a_cold_refold_across_a_recycle() {
+    let home = tempfile::tempdir().unwrap();
+    let store = make_store(home.path());
+    let worker = queued_worker(&store).await;
+    let guard = store.control_lock().await;
+    store.register_run_locked(&guard, &worker.id, queued_run(&worker.id, "r1"), None).await.unwrap();
+    store.record_finish_locked(&guard, &worker.id, "r1", RunOutcome::new(RunOutcomeKind::Success)).await.unwrap();
+    drop(guard);
+    assert_eq!(store.task_tree_activity(&worker.id).unwrap().work_state, "idle");
+
+    let archive = store.archive_events_before(&worker.id, UtcDateTime::parse("2999-01-01T00:00:00Z").unwrap()).await;
+    assert!(archive.unwrap().is_some(), "the recycle archives the finished run's facts");
+    assert_eq!(store.task_tree_activity(&worker.id).unwrap().work_state, "idle");
+
+    let guard = store.control_lock().await;
+    store.register_run_locked(&guard, &worker.id, queued_run(&worker.id, "r2"), None).await.unwrap();
+    store.record_finish_locked(&guard, &worker.id, "r2", RunOutcome::new(RunOutcomeKind::Success)).await.unwrap();
+    drop(guard);
+    let warm = store.run_facts(&worker.id).unwrap();
+    store.clear_chat_events_cache(&worker.id);
+    let cold = store.run_facts(&worker.id).unwrap();
+    for run_id in ["r1", "r2"] {
+      assert_eq!(warm.terminal_outcome(run_id).unwrap(), Some(RunOutcomeKind::Success));
+      assert_eq!(cold.terminal_outcome(run_id).unwrap(), warm.terminal_outcome(run_id).unwrap());
+    }
   }
 
   fn history_reads(store: &Store) -> u64 {

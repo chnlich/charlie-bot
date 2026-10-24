@@ -141,22 +141,7 @@ async def test_concurrent_web_reply_replay_returns_one_stored_receipt(tmp_path: 
   route_client.app.dependency_overrides[deps.require_caller] = lambda: run_token.CallerIdentity(
       kind="agent", claims=claims)
 
-  original_prime = blocks.events.prime_aggregator
-  arrivals = 0
-  ready = asyncio.Event()
-
-  async def synchronize(session_id: str) -> int:
-    nonlocal arrivals
-    epoch = await original_prime(session_id)
-    if session_id == sid:
-      arrivals += 1
-      if arrivals == 2:
-        ready.set()
-      await ready.wait()
-    return epoch
-
-  blocks.events.prime_aggregator = synchronize
-  try:
+  with conftest.prime_barrier(blocks.events, sid):
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=route_client.app), base_url="http://test") as client:
       responses = await asyncio.gather(
           *
@@ -164,8 +149,6 @@ async def test_concurrent_web_reply_replay_returns_one_stored_receipt(tmp_path: 
               "session_id": sid,
               "text": "same response"
           }) for _ in range(2)])
-  finally:
-    blocks.events.prime_aggregator = original_prime
 
   assert [response.status_code for response in responses] == [200, 200]
   assert responses[0].json() == responses[1].json() == {

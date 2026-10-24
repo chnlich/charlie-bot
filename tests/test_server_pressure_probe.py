@@ -119,3 +119,40 @@ def test_guard_freezes_slow_probe_and_thaws_after_30_fast_seconds() -> None:
   interval = guard.snapshot()["freeze_intervals"][0]
   assert interval["thaw_reason"] == "30_seconds_of_fast_probes"
   assert interval["duration_s"] == 31.0
+
+
+def test_cold_verdict_applies_the_p95_and_longest_standard() -> None:
+  tree = "GET /api/sessions/tree"
+  status = "GET /api/sessions/status"
+  web_status = "POST /api/internal/web/status"
+  reference = {
+      status: {
+          "p95_ms": 10.0,
+          "longest_ms": 20.0
+      },
+      web_status: {
+          "p95_ms": 10.0,
+          "longest_ms": 1.0
+      },
+  }
+  concurrent = {
+      tree: {
+          "p95_ms": 1500.0,
+          "longest_ms": 1500.0
+      },
+      status: {
+          "p95_ms": 20.0,
+          "longest_ms": 5020.0
+      },
+      web_status: {
+          "p95_ms": 3.0,
+          "longest_ms": 5002.0
+      },
+  }
+
+  verdict = server_pressure_probe._judge_against_reference(concurrent, reference)
+
+  assert tree not in verdict["endpoints"]
+  assert verdict["endpoints"][status]["passed"] is True
+  assert verdict["endpoints"][web_status]["passed"] is False
+  assert verdict["passed"] is False

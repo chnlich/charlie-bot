@@ -70,6 +70,7 @@ REPAIR_PROBE_BYTES = 256 * MIB
 REPAIR_PROBE_RUNS = 8
 VM_SWAP_SAMPLE_INTERVAL_S = 1.0
 PRESSURE_WINDOW_START_TIMEOUT_S = 600.0
+PRESSURE_KILL_OBSERVATION_TIMEOUT_S = 2400.0
 MAX_KILL_RESTARTS = 64
 MAX_DISK_DELAY_MS = 1.0
 MAX_LIVE_EVENT_GIB = 1.2
@@ -2099,6 +2100,7 @@ def _run_server_stage(
   repair_keeper: tuple[subprocess.Popen[str], str, pathlib.Path] | None = None
   pressure_target_bytes: int | None = None
   server_rss_anon_kib_after_warmup: int | None = None
+  window_started_by: str | None = None
   try:
     if slice_cgroup.name != PRESSURE_SLICE:
       raise RuntimeError(f"test server did not enter {PRESSURE_SLICE}: {server_cgroup}")
@@ -2211,8 +2213,21 @@ def _run_server_stage(
         supervisor_thread = threading.Thread(
             target=supervisor.run, name="charliebot-pressure-worker-supervisor", daemon=True)
         supervisor_thread.start()
-        if not supervisor.first_activity.wait(timeout=PRESSURE_WINDOW_START_TIMEOUT_S):
-          raise TimeoutError("pressure worker never reached its target and was never killed")
+        window_started_by = None
+        deadline = time.monotonic() + PRESSURE_WINDOW_START_TIMEOUT_S
+        while not supervisor.first_activity.is_set():
+          if layout == "protected" and agents_slice_cgroup is not None:
+            agents_current = int((agents_slice_cgroup / "memory.current").read_text(encoding="ascii"))
+            if agents_current >= AGENTS_MEMORY_HIGH:
+              window_started_by = "agents_share_over_memory_high"
+              break
+          if time.monotonic() >= deadline:
+            raise TimeoutError(
+                "pressure worker never reached its target, was never killed, and the "
+                "agents share never crossed its MemoryHigh")
+          time.sleep(0.25)
+        if window_started_by is None:
+          window_started_by = "worker_allocation_or_kill"
       if cold_concurrent:
         cold_metrics = asyncio.run(
             _measure_cold_burst(
@@ -2237,6 +2252,19 @@ def _run_server_stage(
           log_dir=results_dir / "logs",
           stage_name=run_name,
       )
+    kill_observation: dict[str, Any] = {"observed": False, "kills": 0, "timed_out_without_kill": False}
+    if is_pressure_stage and layout == "protected" and supervisor is not None:
+      # The kernel pins a workload between MemoryHigh and MemoryMax instead of
+      # reaching MemoryMax quickly, so keep the supervisor restarting workers
+      # after the measured window until the first kill lands or the cap passes.
+      kill_observation["observed"] = True
+      kill_deadline = time.monotonic() + PRESSURE_KILL_OBSERVATION_TIMEOUT_S
+      while not supervisor.kills and supervisor.failure is None:
+        if time.monotonic() >= kill_deadline:
+          kill_observation["timed_out_without_kill"] = True
+          break
+        time.sleep(1.0)
+      kill_observation["kills"] = len(supervisor.kills)
     memory_event_groups = [(PRESSURE_SLICE, slice_cgroup), ("test_server_scope", server_cgroup)]
     if layout == "protected":
       memory_event_groups.extend(
@@ -2332,6 +2360,8 @@ def _run_server_stage(
         "pressure_kills": pressure_kills,
         "pressure_worker_starts": pressure_worker_starts,
         "pressure_worker_exit_codes": pressure_worker_exits,
+        "pressure_window_started_by": window_started_by,
+        "pressure_kill_observation": kill_observation if is_pressure_stage else None,
         "vm_swap": vm_swap,
         "memory_events_at_end": memory_events_at_end,
         "repair_probe": repair_probe,

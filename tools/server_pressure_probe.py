@@ -71,7 +71,9 @@ REPAIR_PROBE_BYTES = 256 * MIB
 REPAIR_PROBE_RUNS = 8
 VM_SWAP_SAMPLE_INTERVAL_S = 1.0
 PRESSURE_WINDOW_START_TIMEOUT_S = 600.0
-PRESSURE_KILL_OBSERVATION_TIMEOUT_S = 2400.0
+# Crossing MemoryHigh to MemoryMax crawls at about 250 KB/s on this kernel, so a
+# kill needs roughly 35 to 50 minutes of worker runtime.
+PRESSURE_KILL_OBSERVATION_TIMEOUT_S = 5400.0
 KILL_FILL_MAX_BYTES = 2 * GIB
 KILL_FILL_DIR = pathlib.Path("/dev/shm")
 MAX_KILL_RESTARTS = 64

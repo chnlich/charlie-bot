@@ -3,7 +3,6 @@
 import json
 import pathlib
 import re
-import sys
 from unittest import mock
 
 import conftest
@@ -12,15 +11,6 @@ import yaml
 
 from src.features.artifacts import publish_cli as publish
 from src.infra import config
-
-_RECORD_ARGV_PROGRAM = """\
-import json
-import pathlib
-import sys
-
-pathlib.Path(__file__).with_name("argv.json").write_text(json.dumps(sys.argv[1:]), encoding="utf-8")
-print("https://reader.example.com/s/abc123/")
-"""
 
 
 def test_publish_prints_the_url_on_stdout_and_exits_zero(
@@ -59,9 +49,8 @@ def test_missing_artifact_exits_non_zero_naming_the_path(
 def test_arguments_after_double_dash_reach_the_program_unchanged(
     tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:
   artifact = conftest.write_artifact(tmp_path)
-  script = tmp_path / "program.py"
-  script.write_text(_RECORD_ARGV_PROGRAM, encoding="utf-8")
-  cfg = config.CharlieBotConfig(charliebot_home=tmp_path / "home", publish={"command": [sys.executable, str(script)]})
+  command = conftest.write_publish_program(tmp_path, conftest.PUBLISH_RECORD_ARGV_PROGRAM)
+  cfg = config.CharlieBotConfig(charliebot_home=tmp_path / "home", publish={"command": command})
 
   argv = ["publish", str(artifact), "--", "--reader", "reader@example.com", "--", "--group", "staff"]
   with (
@@ -71,7 +60,7 @@ def test_arguments_after_double_dash_reach_the_program_unchanged(
     publish.main()
 
   out = capsys.readouterr()
-  assert out.out == "https://reader.example.com/s/abc123/\n"
+  assert out.out == f"{conftest.PUBLISH_READER_URL}\n"
   assert out.err == ""
   received = json.loads((tmp_path / "argv.json").read_text(encoding="utf-8"))
   assert received == [str(artifact), "--reader", "reader@example.com", "--", "--group", "staff"]
@@ -80,14 +69,13 @@ def test_arguments_after_double_dash_reach_the_program_unchanged(
 def test_command_lane_failure_exits_one_with_the_programs_stderr_and_no_url(
     tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:
   artifact = conftest.write_artifact(tmp_path)
-  script = tmp_path / "program.py"
-  script.write_text(
+  body = (
       "import sys\n"
-      "print('https://reader.example.com/s/abc123/')\n"
+      f"print({conftest.PUBLISH_READER_URL!r})\n"
       "print('reader list is locked', file=sys.stderr)\n"
-      "sys.exit(4)\n",
-      encoding="utf-8")
-  cfg = config.CharlieBotConfig(charliebot_home=tmp_path / "home", publish={"command": [sys.executable, str(script)]})
+      "sys.exit(4)\n")
+  command = conftest.write_publish_program(tmp_path, body)
+  cfg = config.CharlieBotConfig(charliebot_home=tmp_path / "home", publish={"command": command})
 
   with (
       mock.patch("sys.argv", ["publish", str(artifact)]),

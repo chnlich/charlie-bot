@@ -2295,6 +2295,7 @@ def build_worktree_cfg(tmp_path: pathlib.Path) -> core_config.CharlieBotConfig:
 
 
 PUBLISH_BASE_URL = "https://pub.example.test/charliebot_pub"
+PUBLISH_READER_URL = "https://reader.example.com/s/abc123/"
 
 
 def deploy_publish_lane(tmp_path: pathlib.Path) -> pathlib.Path:
@@ -2316,6 +2317,24 @@ def build_publish_cfg(tmp_path: pathlib.Path) -> core_config.CharlieBotConfig:
           "public_base_url": PUBLISH_BASE_URL
       },
   )
+
+
+PUBLISH_RECORD_ARGV_PROGRAM = f"""\
+import json
+import pathlib
+import sys
+
+pathlib.Path(__file__).with_name("argv.json").write_text(json.dumps(sys.argv[1:]), encoding="utf-8")
+print({PUBLISH_READER_URL!r})
+"""
+
+
+def write_publish_program(tmp_path: pathlib.Path, body: str) -> list[str]:
+  """Write *body* as the external publish program under tmp_path and return the command that runs it; the
+  command lane runs a program this repository does not ship."""
+  script = tmp_path / "program.py"
+  script.write_text(body, encoding="utf-8")
+  return [sys.executable, str(script)]
 
 
 def write_artifact(tmp_path: pathlib.Path, name: str = "page.html", body: str = "<p>hello</p>") -> pathlib.Path:

@@ -4,7 +4,6 @@ import json
 import os
 import pathlib
 import re
-import sys
 
 import conftest
 import pytest
@@ -15,8 +14,6 @@ from src.infra import config
 # The published URL for page.html: secrets.token_urlsafe(16) is 16 random bytes,
 # base64url without padding, so 22 URL-safe characters.
 _URL_RE = re.compile(r"https://pub\.example\.test/charliebot_pub/([A-Za-z0-9_-]{22})/page\.html")
-
-_READER_URL = "https://reader.example.com/s/abc123/"
 
 
 @pytest.mark.parametrize(
@@ -105,31 +102,17 @@ def test_directory_lane_preflight_messages_stay_word_for_word(tmp_path: pathlib.
   assert str(exc_info.value) == f"artifact is not an existing regular file: {absent}"
 
 
-def _write_program(tmp_path: pathlib.Path, body: str) -> list[str]:
-  """Write *body* as the external publish program under tmp_path and return the argv that runs it."""
-  script = tmp_path / "program.py"
-  script.write_text(body, encoding="utf-8")
-  return [sys.executable, str(script)]
-
-
 def _command_cfg(tmp_path: pathlib.Path, command: list[str]) -> config.CharlieBotConfig:
   return config.CharlieBotConfig(charliebot_home=tmp_path / "home", publish={"command": command})
 
 
-_RECORD_ARGV_PROGRAM = """\
-import json
-import pathlib
-import sys
-
-pathlib.Path(__file__).with_name("argv.json").write_text(json.dumps(sys.argv[1:]), encoding="utf-8")
-print("https://reader.example.com/s/abc123/")
-"""
-
-
-@pytest.mark.parametrize("url", ["https://reader.example.com/s/abc123/", "http://reader.example.com/s/abc123/"])
+@pytest.mark.parametrize(
+    "url", [conftest.PUBLISH_READER_URL,
+            conftest.PUBLISH_READER_URL.replace("https://", "http://")],
+    ids=["https", "http"])
 def test_command_lane_returns_the_url_the_program_prints(tmp_path: pathlib.Path, url: str) -> None:
   artifact = conftest.write_artifact(tmp_path)
-  command = _write_program(tmp_path, f"print({url!r})\n")
+  command = conftest.write_publish_program(tmp_path, f"print({url!r})\n")
 
   result = publish.publish_artifact(artifact, _command_cfg(tmp_path, command))
 
@@ -140,13 +123,13 @@ def test_command_lane_returns_the_url_the_program_prints(tmp_path: pathlib.Path,
 def test_command_lane_runs_the_command_on_the_absolute_artifact_path_then_the_lane_options(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   artifact = conftest.write_artifact(tmp_path)
-  command = [*_write_program(tmp_path, _RECORD_ARGV_PROGRAM), "--site", "main"]
+  command = [*conftest.write_publish_program(tmp_path, conftest.PUBLISH_RECORD_ARGV_PROGRAM), "--site", "main"]
   monkeypatch.chdir(tmp_path)
 
   result = publish.publish_artifact(
       "artifacts/page.html", _command_cfg(tmp_path, command), ["--reader", "reader@example.com"])
 
-  assert result == _READER_URL
+  assert result == conftest.PUBLISH_READER_URL
   received = json.loads((tmp_path / "argv.json").read_text(encoding="utf-8"))
   assert received == ["--site", "main", str(artifact), "--reader", "reader@example.com"]
 
@@ -155,27 +138,27 @@ def test_command_lane_nonzero_exit_raises_with_the_exit_code_and_stderr(tmp_path
   artifact = conftest.write_artifact(tmp_path)
   body = (
       "import sys\n"
-      f"print({_READER_URL!r})\n"
+      f"print({conftest.PUBLISH_READER_URL!r})\n"
       "print('reader list is locked', file=sys.stderr)\n"
       "sys.exit(4)\n")
 
   with pytest.raises(publish.PublishError) as exc_info:
-    publish.publish_artifact(artifact, _command_cfg(tmp_path, _write_program(tmp_path, body)))
+    publish.publish_artifact(artifact, _command_cfg(tmp_path, conftest.write_publish_program(tmp_path, body)))
 
   message = str(exc_info.value)
   assert "exited 4" in message
   assert "reader list is locked" in message
-  assert _READER_URL not in message
+  assert conftest.PUBLISH_READER_URL not in message
 
 
 @pytest.mark.parametrize(
     "stdout",
-    ["", f"{_READER_URL}\n{_READER_URL}\n", "done\n"],
+    ["", f"{conftest.PUBLISH_READER_URL}\n{conftest.PUBLISH_READER_URL}\n", "done\n"],
     ids=["empty", "two-lines", "no-url"],
 )
 def test_command_lane_refuses_stdout_that_is_not_exactly_one_url(tmp_path: pathlib.Path, stdout: str) -> None:
   artifact = conftest.write_artifact(tmp_path)
-  command = _write_program(tmp_path, f"import sys\nsys.stdout.write({stdout!r})\n")
+  command = conftest.write_publish_program(tmp_path, f"import sys\nsys.stdout.write({stdout!r})\n")
 
   with pytest.raises(publish.PublishError) as exc_info:
     publish.publish_artifact(artifact, _command_cfg(tmp_path, command))
@@ -196,7 +179,7 @@ def test_command_lane_names_a_program_that_cannot_start(tmp_path: pathlib.Path) 
 def test_command_lane_checks_the_artifact_before_running_the_program(tmp_path: pathlib.Path) -> None:
   absent = tmp_path / "artifacts" / "gone.html"
   ran = tmp_path / "ran"
-  command = _write_program(tmp_path, f"import pathlib\npathlib.Path({str(ran)!r}).touch()\n")
+  command = conftest.write_publish_program(tmp_path, f"import pathlib\npathlib.Path({str(ran)!r}).touch()\n")
 
   with pytest.raises(publish.PublishError) as exc_info:
     publish.publish_artifact(absent, _command_cfg(tmp_path, command))

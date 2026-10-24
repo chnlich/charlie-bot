@@ -70,7 +70,8 @@ impl TurnContribution for WebReplyTurnContribution {
       if exit_code.as_i64() != Some(0) {
         return Ok(());
       }
-      audit::audit_turn(features, &meta.id, done_event).await
+      let archived = meta.status == charliebot_store::metadata::SessionStatus::Archived;
+      audit::audit_turn(features, &meta.id, done_event, archived).await
     })
   }
 
@@ -428,7 +429,7 @@ mod tests {
       let input_id = match errored_input {
         "user" => user_id.clone(),
         "nudge" => {
-          audit::audit_turn(&home.features, &sid, &master_done(&[user_id.as_str()], 0)).await.unwrap();
+          audit::audit_reply(&home.features, &sid, &master_done(&[user_id.as_str()], 0)).await.unwrap();
           id_of(&home.nudges(&sid)[0]).to_string()
         }
         other => unreachable!("no errored input {other}"),

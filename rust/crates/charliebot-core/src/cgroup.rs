@@ -20,6 +20,14 @@ pub enum ResourceClass {
 }
 
 impl ResourceClass {
+  /// The wire name of this class, as the metadata file and the API spell it.
+  pub fn as_str(self) -> &'static str {
+    match self {
+      Self::Agent => "agent",
+      Self::Repair => "repair",
+    }
+  }
+
   /// The leaf slice that holds the session cgroups of this class.
   pub fn slice_name(self) -> &'static str {
     match self {

@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 
+use charliebot_core::cgroup::ResourceClass;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::fsutil;
 use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot};
@@ -728,6 +729,28 @@ impl Store {
         updated_at,
       )
       .await
+  }
+
+  /// Set the operator's repair mark on a session and update its activity timestamp.
+  pub async fn set_resource_class(
+    &self,
+    session_id: &str,
+    resource_class: ResourceClass,
+  ) -> StoreResult<Option<SessionMetadata>> {
+    let meta = self
+      .update_field(
+        session_id,
+        |meta| {
+          meta.resource_class = resource_class;
+          Ok(())
+        },
+        UtcDateTime::now(),
+      )
+      .await?;
+    if meta.is_some() {
+      tracing::info!(session_id, resource_class = resource_class.as_str(), "session_resource_class_set");
+    }
+    Ok(meta)
   }
 
   /// Assign the session to a group and update its activity timestamp.

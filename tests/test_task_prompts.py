@@ -109,7 +109,7 @@ async def test_manager_template_identical_at_every_depth_and_no_pm_load(tmp_path
 async def test_manager_prompt_carries_the_shared_master_rules(tmp_path: pathlib.Path) -> None:
   """One division of work for both manager kinds: the snapshot holds master.md
   followed by manager_workflows.md between the shared base and the task-tree
-  template, and the rules master.md no longer carries ride in the second file."""
+  template, and the manager-specific rules ride in the second file."""
   cfg, _sm, mgr = conftest.build_env(tmp_path)
   ids = await build_three_levels(mgr)
   meta = await mgr.load_meta(ids["root"])

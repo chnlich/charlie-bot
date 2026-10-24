@@ -1,11 +1,10 @@
-"""The reviewer prompt's numbered git steps: the no-stash rewrite (plan 3 v3).
+"""The reviewer prompt's numbered git steps carry no stash instruction.
 
-Review step 10 used to order `git stash --include-untracked`; every worktree
-of a repository shares one stash stack, so the step trained agents into the
-habit behind the cross-task stash incidents. The landed contract: step 10
-reads exactly the replacement line, "stash" appears nowhere in the rendered
-prompt (the volatile steps or the stable rules), and every other step and the
-numbering stay unchanged.
+Every worktree of a repository shares one stash stack, so a stash write raises
+workspace edits into another task's work. The contract: step 10 orders a commit
+of the kept changes and a `git restore` of the tool-generated files, "stash"
+appears nowhere in the rendered prompt (the volatile steps or the stable
+rules), and every other step and the numbering stay unchanged.
 """
 
 import re

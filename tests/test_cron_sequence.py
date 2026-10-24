@@ -263,13 +263,11 @@ async def test_recovery_redrives_a_mid_chain_firing_from_durable_facts(
   The fixture builds the mid-chain state from durable facts only — the state a
   stopped process actually leaves behind (step 0's Run terminally successful,
   no later position registered, no close, no report) — and never rewrites
-  event files under live writers: the old fixture drove a real controller and
-  then dropped its CHILD_REPORT/TASK_CLOSED facts while the un-cancelled
-  step-finish chains were still running, tearing the manager's pending batch
-  out of the events store between a wake dispatch's two reservation reads.
-  That torn state used to trip the dispatch reservation invariant and the
-  close owner then fabricated a blocked boundary report on top of the landed
-  completed one (two reports — the retained acceptance flake).
+  event files under live writers: a rewrite that drops CHILD_REPORT/TASK_CLOSED
+  while the step-finish chains still run tears the manager's pending batch out
+  of the events store between a wake dispatch's two reservation reads, which
+  trips the dispatch reservation invariant, and the close owner then fabricates
+  a blocked boundary report on top of the landed completed one.
 
   Fresh recovery must launch the next position through the same launch checks,
   complete the leaf, and deliver exactly ONE completed boundary report; a

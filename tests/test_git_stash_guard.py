@@ -5,8 +5,8 @@ reviewer child, so these tests invoke the wrapper as a subprocess in fresh
 temp repos with real git reachable behind it: direct stash write forms return
 2 with the notice byte for byte while refs/stash, its reflog and the dirty
 worktree stay untouched; stash read forms, alias forms and every other
-command come out byte-identical to real git (plan 1 v4: alias resolution is
-no longer emulated, so an alias expanding to stash runs in real git). The
+command come out byte-identical to real git, because the wrapper leaves
+alias resolution to git: an alias expanding to stash runs in real git. The
 worker/reviewer child PATH contract is checked through the launch harness for
 a work Run and a review Run.
 """

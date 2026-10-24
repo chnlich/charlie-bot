@@ -182,8 +182,8 @@ async def test_recovery_never_rereviews_a_successfully_reviewed_work_run(
           branch_name="task/work",
           worktree_path=str(repo)))
   await tree.dispatch.finish_run(worker.id, run_id, outcome="success", exit_code=0)
-  # The review ran to its own successful terminal fact (the state every
-  # server restart used to re-enter with a fresh reviewer backend).
+  # The review ran to its own successful terminal fact: recovery reads that
+  # fact and launches no second reviewer backend.
   review_id = "review-done"
   await tree.runs.register_run_locked(
       models.RunRecord(

@@ -1515,8 +1515,7 @@ async def test_a_failed_worker_run_reports_once_and_archives_the_worker(
 async def test_an_interrupted_worker_run_reports_once_and_archives_the_worker(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """An interrupted run reports on the spot through the same failure entry
-    (the report used to wait for the next restart's replay), and the report's
-    delivery archives the worker."""
+    the live finalize uses, and the report's delivery archives the worker."""
   cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   manager = await conftest.create_task(tree, parent=None, request_id="root")
   task_spec = {"goal": "say the phrase", "task_type": "quick-edit"}

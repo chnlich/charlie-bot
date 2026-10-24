@@ -24,23 +24,31 @@ pub fn gemini_stream_rules(api_base: &str) -> Result<bool, String> {
 pub fn anthropic_to_openai_chat_request(
   payload: &Value,
   upstream_model: &str,
-  _gemini_stream_rules: bool,
+  gemini_stream_rules: bool,
 ) -> PyResult<Value> {
   let messages = match get(payload, "messages")? {
     Some(Value::Array(messages)) => messages,
     _ => return value_error("messages must be a list"),
   };
-  let mut converted_messages = Vec::new();
+  let mut system_parts = Vec::new();
   if let Some(system) = get(payload, "system")?.filter(|system| truthy(system)) {
-    converted_messages.push(json!({"role": "system", "content": blocks_to_text(system, "system")?}));
+    system_parts.push(blocks_to_text(system, "system")?);
   }
+  let mut converted_messages = Vec::new();
   for raw in messages {
     let message = require_dict(raw, "message")?;
     match message.get("role").and_then(Value::as_str) {
+      Some("system") => {
+        let content = message.get("content").cloned().unwrap_or_else(|| json!(""));
+        system_parts.push(blocks_to_text(&content, "system message")?);
+      }
       Some("user") => converted_messages.extend(convert_user_message(message)?),
       Some("assistant") => converted_messages.push(convert_assistant_message(message)?),
       _ => return value_error(format!("unsupported message role: {}", py_str(message.get("role"), "None"))),
     }
+  }
+  if !system_parts.is_empty() {
+    converted_messages.insert(0, json!({"role": "system", "content": system_parts.join("\n\n")}));
   }
 
   let stream = get(payload, "stream")?.is_some_and(truthy);
@@ -56,7 +64,7 @@ pub fn anthropic_to_openai_chat_request(
     }
   }
   if let Some(tools) = get(payload, "tools")?.filter(|tools| !tools.is_null()) {
-    converted.insert("tools".to_string(), Value::Array(convert_tools(tools)?));
+    converted.insert("tools".to_string(), Value::Array(convert_tools(tools, gemini_stream_rules)?));
   }
   if let Some(choice) = get(payload, "tool_choice")?.filter(|choice| !choice.is_null()) {
     let choice = require_dict(choice, "tool_choice")?;
@@ -67,10 +75,6 @@ pub fn anthropic_to_openai_chat_request(
   }
   if stream {
     converted.insert("stream_options".to_string(), json!({"include_usage": true}));
-  }
-  // The upstream's reasoning field is not an Anthropic thinking block and carries no signature, so thinking is refused.
-  if get(payload, "thinking")?.is_some_and(|thinking| !thinking.is_null()) {
-    return value_error("OpenAI-compatible proxy does not support Anthropic thinking blocks");
   }
   if get(payload, "top_k")?.is_some_and(|top_k| !top_k.is_null()) {
     return value_error("OpenAI-compatible proxy does not support Anthropic top_k");
@@ -183,7 +187,53 @@ fn convert_assistant_message(message: &Map<String, Value>) -> PyResult<Value> {
 }
 
 /// `_convert_tools`: each custom tool becomes a function. A built-in tool type is refused.
-fn convert_tools(tools: &Value) -> PyResult<Vec<Value>> {
+fn convert_google_schema(schema: &Value) -> PyResult<Value> {
+  let Value::Object(fields) = schema else {
+    return raised("AttributeError", format!("'{}' object has no attribute 'items'", type_name(schema)));
+  };
+  let mut converted = Map::new();
+  for (keyword, value) in fields {
+    match keyword.as_str() {
+      "$schema" | "allOf" | "const" | "exclusiveMinimum" => continue,
+      "properties" | "$defs" | "definitions" => {
+        if let Value::Object(children) = value {
+          let mut converted_children = Map::new();
+          for (name, child) in children {
+            converted_children.insert(name.clone(), convert_google_schema(child)?);
+          }
+          converted.insert(keyword.clone(), Value::Object(converted_children));
+        } else {
+          converted.insert(keyword.clone(), value.clone());
+        }
+      }
+      "items" | "additionalProperties" | "not" | "if" | "then" | "else" | "contains" => {
+        let converted_value = match value {
+          Value::Object(_) => convert_google_schema(value)?,
+          Value::Array(children) => {
+            Value::Array(children.iter().map(convert_google_schema).collect::<PyResult<Vec<_>>>()?)
+          }
+          _ => value.clone(),
+        };
+        converted.insert(keyword.clone(), converted_value);
+      }
+      "anyOf" | "oneOf" | "prefixItems" => {
+        let converted_value = if let Value::Array(children) = value {
+          Value::Array(children.iter().map(convert_google_schema).collect::<PyResult<Vec<_>>>()?)
+        } else {
+          value.clone()
+        };
+        converted.insert(keyword.clone(), converted_value);
+      }
+      _ => {
+        converted.insert(keyword.clone(), value.clone());
+      }
+    }
+  }
+  Ok(Value::Object(converted))
+}
+
+/// `_convert_tools`: each custom tool becomes a function. A built-in tool type is refused.
+fn convert_tools(tools: &Value, gemini_stream_rules: bool) -> PyResult<Vec<Value>> {
   let mut converted = Vec::new();
   for raw in iterate(tools)? {
     let tool = require_dict(&raw, "tool")?;
@@ -195,12 +245,13 @@ fn convert_tools(tools: &Value) -> PyResult<Vec<Value>> {
     let (Some(name), Some(input_schema)) = (name, input_schema) else {
       return value_error("tool missing name or input_schema");
     };
+    let parameters = if gemini_stream_rules { convert_google_schema(input_schema)? } else { input_schema.clone() };
     converted.push(json!({
       "type": "function",
       "function": {
         "name": name,
         "description": tool.get("description").cloned().unwrap_or_else(|| json!("")),
-        "parameters": input_schema,
+        "parameters": parameters,
       },
     }));
   }

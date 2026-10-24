@@ -504,9 +504,9 @@ class SessionStore:
       # signature-less entry paid on every expiry.
       self.metadata_cache[meta.id] = (
           models.validate_session_metadata(serialized, str(self.metadata_path(meta.id))), time.monotonic(), sig)
-      # The single funnel for every session-metadata write (35+ call sites, plus
-      # the save funnel): status transitions (archive/unarchive)
-      # land here, so the sidebar snapshot must re-probe this session.
+      # The single funnel for every session-metadata write: status transitions
+      # (archive/unarchive) land here, so the sidebar snapshot must re-probe this
+      # session.
       sidebar_state.mark_sidebar_dirty(meta.id)
       self._listings_revision += 1
 

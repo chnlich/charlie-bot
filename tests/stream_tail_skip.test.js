@@ -38,7 +38,7 @@ test('a completed last block keeps its highlight: the closing-fence raw test gat
   const { calls, hljs } = countingHljs();
   const context = await loadRendererContext(hljs);
   // The draft ends on a completed block, the shape the final-frame parity
-  // contract pins: the last paint must carry today's highlighted bytes.
+  // contract pins: the last paint must carry the same highlighted bytes.
   const html = paint(context, '```js\nconst a = 1;\n```\nprose tail');
   assert.equal(calls.lang, 1);
   assert.match(html, /HL\[LANG\]/);

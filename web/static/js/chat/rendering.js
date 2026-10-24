@@ -805,7 +805,7 @@ function renderMessage(msg, sessionId) {
   if (msg.role === "child_report") {
     var reportOutcome = String(msg.outcome || "completed");
     // Literal classes only: the Tailwind scanner never sees composed names.
-    var outcomeColorCls = reportOutcome === "completed" ? "text-emerald-400" : (reportOutcome === "cancelled" ? "text-slate-400" : "text-amber-400");
+    var outcomeColorCls = (reportOutcome === "completed" || reportOutcome === "archived") ? "text-emerald-400" : (reportOutcome === "cancelled" ? "text-slate-400" : "text-amber-400");
     var reportText = String(msg.content || "");
     var refs = Array.isArray(msg.result_refs) ? msg.result_refs : [];
     // A report folds behind a button when it is a long passage or it has refs.

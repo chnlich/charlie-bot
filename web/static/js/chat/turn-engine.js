@@ -235,7 +235,7 @@
       // itself: tab visibility flips and window/sidebar resizes all funnel
       // into reproject('resize'), coalesced to one frame per burst on its own
       // scheduling flag (never the scroll flag). Runtimes without
-      // ResizeObserver install nothing and keep today's behavior exactly.
+      // ResizeObserver install nothing and project on scroll alone.
       if (typeof ResizeObserver === 'function') {
         this.resizeObserver = new ResizeObserver(() => {
           if (this.resizeRafScheduled || !this.alive) return;

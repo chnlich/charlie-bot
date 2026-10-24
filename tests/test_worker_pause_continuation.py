@@ -171,6 +171,20 @@ async def _wait_for_review_of(tree, session_id: str, work_run_id: str, timeout: 
   pytest.fail(f"no review of {work_run_id} was registered within {timeout}s")
 
 
+async def _wait_for_delivery_cleanup(tree, session_id: str, worktree: pathlib.Path, timeout: float = 10.0) -> None:
+  """Poll until the node is closed and its worktree removed.
+
+  The finalize chain removes a delivered worktree after the close report is durable, so the
+  removal follows the completed state instead of arriving with it.
+  """
+  deadline = asyncio.get_event_loop().time() + timeout
+  while asyncio.get_event_loop().time() < deadline:
+    if tree.task_state(session_id) == "completed" and not worktree.exists():
+      return
+    await asyncio.sleep(0.05)
+  pytest.fail(f"node {session_id} was not closed with {worktree} removed within {timeout}s")
+
+
 def _reviewer_push(tree, worker, run_id: str) -> None:
   """The reviewer's landing work: rebase the worker's branch onto main and push."""
   record = tree.runs.read_run_sync(worker.id, run_id)
@@ -211,7 +225,7 @@ async def test_implement_work_run_with_pending_trigger_pauses_then_continues_and
   assert tree.task_state(worker.id) == "open"
   assert run1.worktree_path and pathlib.Path(run1.worktree_path).is_dir()
   assert run1.branch_name and run1.branch_name in conftest.run_git(repo, "branch", "--list", run1.branch_name)
-  # The first run's prompt is today's full context: spec, bindings and batch.
+  # The first run's prompt carries the full context: spec, bindings and batch.
   assert "add a marker file" in _launch_prompt(tree, worker.id, run1_id)
 
   # The trigger fires: the next run is a work continuation — same
@@ -280,7 +294,7 @@ async def test_input_admitted_during_a_work_run_pauses_it_the_same_way(
   assert "one more thing" in prompt2
   assert "add a marker file" not in prompt2
 
-  # The continuation ends with nothing pending: the review spawns as today.
+  # The continuation ends with nothing pending: the review spawns.
   cont_gate.set()
   _run2, outcome2 = await test_task_execution.wait_for_terminal_run(tree, worker.id, run2.id)
   assert outcome2 == "success"
@@ -316,13 +330,7 @@ async def test_non_implement_work_run_with_pending_trigger_skips_auto_complete(
   _run2, outcome2 = await test_task_execution.wait_for_terminal_run(tree, worker.id, run2.id)
   assert outcome2 == "success"
   assert builds[1]["kwargs"].get("resume_session_id") == "native-1"
-  deadline = asyncio.get_event_loop().time() + 10
-  while asyncio.get_event_loop().time() < deadline:
-    if tree.task_state(worker.id) == "completed":
-      break
-    await asyncio.sleep(0.1)
-  assert tree.task_state(worker.id) == "completed"
-  assert not pathlib.Path(run1.worktree_path).exists()
+  await _wait_for_delivery_cleanup(tree, worker.id, pathlib.Path(run1.worktree_path))
 
 
 @pytest.mark.asyncio
@@ -361,7 +369,7 @@ async def test_review_with_pending_trigger_pauses_merge_and_continues_the_review
   work_gate.set()
   main_before = conftest.run_git(repo, "rev-parse", "origin/main")
 
-  # The review spawns as today; the trigger lands while it runs.
+  # The review spawns; the trigger lands while it runs.
   await asyncio.wait_for(review_started.wait(), timeout=15)
   review1 = (await _wait_for_review_of(tree, worker.id, run1_id))
   mgr = await _save_trigger(cfg, tree, _trigger(worker.id, message="CI passed"))
@@ -388,14 +396,8 @@ async def test_review_with_pending_trigger_pauses_merge_and_continues_the_review
   assert "add a marker file" not in prompt2
 
   # The continuation delivers by the standing rules: merge, close, cleanup, report.
-  deadline = asyncio.get_event_loop().time() + 10
-  while asyncio.get_event_loop().time() < deadline:
-    if tree.task_state(worker.id) == "completed":
-      break
-    await asyncio.sleep(0.1)
-  assert tree.task_state(worker.id) == "completed"
+  await _wait_for_delivery_cleanup(tree, worker.id, work_wt)
   assert conftest.run_git(repo, "rev-parse", "origin/main") != main_before
-  assert not pathlib.Path(record.worktree_path).exists()
   reports = [e for e in tree.events.load_events(manager.id) if e["type"] == ET.CHILD_REPORT]
   assert reports and reports[-1]["outcome"] == "completed"
 
@@ -456,7 +458,7 @@ async def test_failed_review_continuation_reports_failure_to_the_parent(
 
 
 @pytest.mark.asyncio
-async def test_failed_run_with_pending_trigger_reports_failure_as_today(
+async def test_failed_run_with_pending_trigger_still_reports_failure(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, tree, manager, worker, _repo = await _worker_child(tmp_path, monkeypatch)
   install_backends(monkeypatch, [test_task_execution.SpawningScriptedBackend([], exit_code=1)])
@@ -536,10 +538,10 @@ async def test_changed_prompt_hash_at_continuation_starts_a_fresh_conversation(
 
 
 @pytest.mark.asyncio
-async def test_delivery_without_pending_wake_behaves_as_today(
+async def test_delivery_without_pending_wake_runs_the_full_chain(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Regression pin: with no pending trigger and no pending input, the whole
-    implement delivery chain runs exactly as before the pause existed."""
+    implement delivery chain runs to the end: review, merge, close."""
   _cfg, tree, manager, worker, _repo = await _worker_child(tmp_path, monkeypatch)
   work_started = asyncio.Event()
   work_gate = asyncio.Event()
@@ -566,18 +568,12 @@ async def test_delivery_without_pending_wake_behaves_as_today(
   assert outcome1 == "success"
 
   # The review spawns at once, starts a fresh conversation, and its success
-  # merges and closes exactly as today.
+  # merges and closes.
   review = await _wait_for_review_of(tree, worker.id, run1_id)
   _review, outcome_r = await test_task_execution.wait_for_terminal_run(tree, worker.id, review.id)
   assert outcome_r == "success"
   assert builds[1]["kwargs"].get("resume_session_id") is None
-  deadline = asyncio.get_event_loop().time() + 10
-  while asyncio.get_event_loop().time() < deadline:
-    if tree.task_state(worker.id) == "completed":
-      break
-    await asyncio.sleep(0.1)
-  assert tree.task_state(worker.id) == "completed"
-  assert not pathlib.Path(record.worktree_path).exists()
+  await _wait_for_delivery_cleanup(tree, worker.id, work_wt)
   reports = [e for e in tree.events.load_events(manager.id) if e["type"] == ET.CHILD_REPORT]
   assert reports and reports[-1]["outcome"] == "completed"
 

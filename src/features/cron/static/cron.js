@@ -21,7 +21,7 @@ let cronAddSessionId = null;
 const CRON_EDITABLE_FIELD_IDS = ['cron-expr', 'cron-prompt-file', 'cron-repo', 'cron-project', 'cron-timezone'];
 
 // Switch the modal between the broken read-only error view (task.broken) and
-// today's editable form. Broken: every field read-only, Enabled disabled and
+// the normal editable form. Broken: every field read-only, Enabled disabled and
 // rendering the file's raw value (indeterminate when the file was
 // unparseable), the full load error + path in the error box, Save hidden,
 // Delete kept. Normal/add: byte-identical behavior to the pre-broken form.

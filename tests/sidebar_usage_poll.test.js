@@ -1052,8 +1052,8 @@ test('archiveSession removes the row inline and switches to the next rendered se
   let pushedUrl = null;
   context.fetch = async (url, opts = {}) => {
     requests.push({url, opts});
-    if (url === '/api/sessions/session-a') {
-      assert.equal(opts.method, 'DELETE');
+    if (url === '/api/sessions/session-a/archive') {
+      assert.equal(opts.method, 'POST');
       return {ok: true, async json() { return {}; }};
     }
     if (url === '/api/sessions/session-b/bootstrap') {
@@ -1085,7 +1085,7 @@ test('archiveSession removes the row inline and switches to the next rendered se
   await context.archiveSession('session-a');
 
   assert.deepEqual(requests.map((req) => req.url), [
-    '/api/sessions/session-a',
+    '/api/sessions/session-a/archive',
     '/api/sessions/session-b/bootstrap',
     '/api/sessions/session-b/read',  // the landed switch marks the new session read post-render
   ]);

@@ -182,8 +182,8 @@ async def test_recovery_never_rereviews_a_successfully_reviewed_work_run(
           branch_name="task/work",
           worktree_path=str(repo)))
   await tree.dispatch.finish_run(worker.id, run_id, outcome="success", exit_code=0)
-  # The review ran to its own successful terminal fact (the state every
-  # server restart used to re-enter with a fresh reviewer backend).
+  # The review ran to its own successful terminal fact: recovery reads that
+  # fact and launches no second reviewer backend.
   review_id = "review-done"
   await tree.runs.register_run_locked(
       models.RunRecord(
@@ -350,7 +350,7 @@ async def test_recovery_spawns_no_review_behind_a_registered_unstarted_work_run(
   """An open idle implement worker whose newest work run is registered but
     never started: the replay spawns no review for the earlier successful run
     (the live path read the reservation as a pause), and the queued run's own
-    withheld launch on an open node keeps today's shape — queued, no stop
+    withheld launch on an open node keeps its shape — queued, no stop
     request."""
   cfg, _session_blocks, tree, manager, worker, repo = await _implement_worker_with_landed_branch(tmp_path, monkeypatch)
   cfg.server.min_free_disk_gib = 10**9  # no filesystem holds this much: the queued run's launch is withheld
@@ -639,7 +639,7 @@ async def test_recovery_replays_a_lost_cold_read_delivery(
   await tree.dispatch.finish_run(worker.id, run_id, outcome="success", exit_code=0)
 
   await task_recovery.reconcile_task_tree(cfg, tree)
-  reports = test_task_execution.child_reports(tree, manager.id)
+  reports = conftest.child_reports(tree, manager.id)
   assert len(reports) == 1
   assert reports[-1]["outcome"] == "completed"
   assert reports[-1]["summary"] == "\n".join(
@@ -653,7 +653,7 @@ async def test_recovery_replays_a_lost_cold_read_delivery(
   await conftest._settle_parent(tree, manager, timeout=5.0, poll=0.02)
   # A repeated pass lands nothing twice.
   await task_recovery.reconcile_task_tree(cfg, tree)
-  assert len(test_task_execution.child_reports(tree, manager.id)) == 1
+  assert len(conftest.child_reports(tree, manager.id)) == 1
   assert len(tree.runs.list_run_records_sync(worker.id)) == 1
   assert tree.task_state(worker.id) == "completed"
 
@@ -678,10 +678,8 @@ async def test_recovery_replays_a_lost_cold_read_failure_chain(
 
   await task_recovery.reconcile_task_tree(cfg, tree)
   await test_task_execution.poll_until(
-      lambda: bool(test_task_execution.child_reports(tree, manager.id)),
-      timeout=15.0,
-      what="the cold-read child report")
-  reports = test_task_execution.child_reports(tree, manager.id)
+      lambda: bool(conftest.child_reports(tree, manager.id)), timeout=15.0, what="the cold-read child report")
+  reports = conftest.child_reports(tree, manager.id)
   assert reports[-1]["outcome"] == "completed"
   assert reports[-1]["summary"] == "\n".join(
       [
@@ -695,7 +693,7 @@ async def test_recovery_replays_a_lost_cold_read_failure_chain(
   await conftest._settle_parent(tree, manager, timeout=5.0, poll=0.02)
   # A repeated pass lands nothing twice.
   await task_recovery.reconcile_task_tree(cfg, tree)
-  assert len(test_task_execution.child_reports(tree, manager.id)) == 1
+  assert len(conftest.child_reports(tree, manager.id)) == 1
   assert len(tree.runs.list_run_records_sync(worker.id)) == 2
   assert tree.task_state(worker.id) == "completed"
 
@@ -716,7 +714,7 @@ async def test_recovery_replays_a_lost_cold_read_all_failed_report(
   await tree.dispatch.finish_run(worker.id, failed_run, outcome="failed", exit_code=1)
 
   await task_recovery.reconcile_task_tree(cfg, tree)
-  reports = test_task_execution.child_reports(tree, manager.id)
+  reports = conftest.child_reports(tree, manager.id)
   assert len(reports) == 1
   assert reports[-1]["outcome"] == "failed"
   assert reports[-1]["summary"] == "\n".join(
@@ -735,7 +733,7 @@ async def test_recovery_replays_a_lost_cold_read_all_failed_report(
   await conftest._settle_parent(tree, manager, timeout=5.0, poll=0.02)
   # A repeated pass lands nothing twice.
   await task_recovery.reconcile_task_tree(cfg, tree)
-  assert len(test_task_execution.child_reports(tree, manager.id)) == 1
+  assert len(conftest.child_reports(tree, manager.id)) == 1
   assert len(tree.runs.list_run_records_sync(worker.id)) == 1
   assert len([e for e in tree.events.load_events(worker.id) if e["type"] == ET.TASK_CLOSED]) == 1
   assert tree.task_state(worker.id) == "archived"
@@ -756,7 +754,7 @@ async def test_recovery_replays_a_lost_cold_read_interrupted_report(
   await tree.dispatch.finish_run(worker.id, run_id, outcome="interrupted", exit_code=-1)
 
   await task_recovery.reconcile_task_tree(cfg, tree)
-  reports = test_task_execution.child_reports(tree, manager.id)
+  reports = conftest.child_reports(tree, manager.id)
   assert [r["outcome"] for r in reports] == ["interrupted"]
   # No retry run: an interrupted cold read never takes the next-backend chain.
   assert len(tree.runs.list_run_records_sync(worker.id)) == 1
@@ -769,7 +767,7 @@ async def test_recovery_replays_a_lost_cold_read_interrupted_report(
   await conftest._settle_parent(tree, manager, timeout=5.0, poll=0.02)
   # A repeated pass lands nothing twice.
   await task_recovery.reconcile_task_tree(cfg, tree)
-  assert len(test_task_execution.child_reports(tree, manager.id)) == 1
+  assert len(conftest.child_reports(tree, manager.id)) == 1
   assert len([e for e in tree.events.load_events(worker.id) if e["type"] == ET.TASK_CLOSED]) == 1
 
 
@@ -790,7 +788,7 @@ async def test_recovery_replays_an_earlier_failed_run_without_archiving_a_node_a
   await tree.dispatch.finish_run(worker.id, "run-b", outcome="success", exit_code=0)
 
   await task_recovery.reconcile_task_tree(cfg, tree)
-  reports = test_task_execution.child_reports(tree, manager.id)
+  reports = conftest.child_reports(tree, manager.id)
   assert [r["outcome"] for r in reports] == ["failed"]
   assert [r["result_refs"] for r in reports] == [["run:run-a"]]
   # Run B ended last and awaits its review: the node stays open, unarchived.
@@ -836,7 +834,7 @@ async def test_recovery_archives_an_open_worker_whose_failure_report_the_parent_
   await task_recovery.reconcile_task_tree(cfg, tree)
   # No second report and no second wake: the manager holds exactly the one
   # delivery and its takeoff + report turns.
-  assert len(test_task_execution.child_reports(tree, manager.id)) == 1
+  assert len(conftest.child_reports(tree, manager.id)) == 1
   assert len(report_turns()) == 2
   assert tree.task_state(worker.id) == "archived"
   closes = [e for e in tree.events.load_events(worker.id) if e["type"] == ET.TASK_CLOSED]
@@ -847,7 +845,7 @@ async def test_recovery_archives_an_open_worker_whose_failure_report_the_parent_
 
   # A second startup writes no second fact.
   await task_recovery.reconcile_task_tree(cfg, tree)
-  assert len(test_task_execution.child_reports(tree, manager.id)) == 1
+  assert len(conftest.child_reports(tree, manager.id)) == 1
   assert len(report_turns()) == 2
   assert len([e for e in tree.events.load_events(worker.id) if e["type"] == ET.TASK_CLOSED]) == 1
 
@@ -875,10 +873,8 @@ async def test_recovery_cold_read_failure_with_a_registered_retry_never_double_r
 
   await task_recovery.reconcile_task_tree(cfg, tree)
   await test_task_execution.poll_until(
-      lambda: bool(test_task_execution.child_reports(tree, manager.id)),
-      timeout=15.0,
-      what="the cold-read child report")
-  reports = test_task_execution.child_reports(tree, manager.id)
+      lambda: bool(conftest.child_reports(tree, manager.id)), timeout=15.0, what="the cold-read child report")
+  reports = conftest.child_reports(tree, manager.id)
   assert reports[-1]["outcome"] == "completed"
   assert "backend fake2" in reports[-1]["summary"].splitlines()
   assert tree.task_state(worker.id) == "completed"
@@ -1068,21 +1064,21 @@ async def test_boot_node_out_of_space_hands_node_to_retry(
   await tree.runs.register_run_locked(
       models.RunRecord(id="run-failed", session_id=worker.id, kind="work", backend="fake", model="fake-model"))
   await tree.dispatch.finish_run(worker.id, "run-failed", outcome="failed", exit_code=-1)
-  assert test_task_execution.child_reports(tree, manager.id) == []
+  assert conftest.child_reports(tree, manager.id) == []
 
   # The boot pass's delivery write fails out of space: the node pass raises,
   # the boot hands the node to the retry, and the retry's round delivers.
   test_task_execution.inject_chat_append_fault(monkeypatch, event_type=ET.CHILD_REPORT, session_ids={manager.id})
   await task_recovery.reconcile_task_tree(cfg, tree, adapter)
   await test_task_execution.poll_until(
-      lambda: len(test_task_execution.child_reports(tree, manager.id)) == 1,
+      lambda: len(conftest.child_reports(tree, manager.id)) == 1,
       what="the retry's parent report delivery",
       timeout=10.0)
-  reports = test_task_execution.child_reports(tree, manager.id)
+  reports = conftest.child_reports(tree, manager.id)
   assert [r.get("outcome") for r in reports] == ["failed"]
   await test_task_execution.poll_until(
       lambda: worker.id not in adapter._landing_retries, what="the clean round ending the retry task")
-  assert len(test_task_execution.child_reports(tree, manager.id)) == 1  # exactly one report
+  assert len(conftest.child_reports(tree, manager.id)) == 1  # exactly one report
 
 
 @pytest.mark.asyncio

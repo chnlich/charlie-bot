@@ -32,7 +32,7 @@ async def test_archive_non_empty_session_keeps_files_and_marks_archived(tmp_path
   events_path = session_blocks.events.get_chat_events_path(meta.id)
 
   with test_task_execution.make_api_client(cfg, session_blocks, tree) as client:
-    response = client.delete(f"/api/sessions/{meta.id}")
+    response = client.post(f"/api/sessions/{meta.id}/archive", json={"request_id": "archive-non-empty"})
 
   assert response.status_code == 200
   assert response.json() == {"archived": [meta.id]}

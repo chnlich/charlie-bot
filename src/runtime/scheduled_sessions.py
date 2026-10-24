@@ -20,7 +20,7 @@ def subtree_roots(
   to a subtree when its ``task_parent_id`` chain (followed by id, whatever the
   ancestors' status) reaches a session answering *is_root*; *include_root*
   decides whether that root session itself is a member of its subtree. The two
-  rules served today:
+  rules it serves:
 
   - the sequence rule (``sequence_subtree_roots``): the root is owned by a
     registered sequence controller, and the root itself is not part of its subtree;

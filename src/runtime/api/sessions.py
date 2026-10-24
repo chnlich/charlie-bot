@@ -1332,7 +1332,7 @@ async def switch_session_backend(
   # The pre-rule backfill: record the effective current backend as the held
   # id's producer through the authorized anchor channel, before the backend
   # field changes. Same-domain switches backfill too, so the next same-domain
-  # turn still resumes as today.
+  # turn still resumes its conversation.
   if parent.cc_session_id and not parent.native_backend:
     await anchors.persist_native_backend(session_id, effective_current)
 
@@ -1393,28 +1393,30 @@ async def get_session(
   return SessionDetailResponse.model_validate(detail)
 
 
-@router.delete("/{session_id}")
-async def archive_session(
+@router.post("/{session_id}/archive")
+async def archive_session_task(
     session_id: str,
+    req: models.ArchiveTaskRequest,
+    _meta: models.SessionMetadata = fastapi.Depends(deps.require_session),
     task_mgr: task_sessions.TaskTreeManager = fastapi.Depends(deps.get_task_manager),
     caller: run_token.CallerIdentity = fastapi.Depends(deps.require_caller),
 ) -> responses.Response:
-  """Archive a task subtree as one end state.
+  """Archive a task or its subtree and deliver the target's report.
 
-  A task node's archive ends its whole subtree: every open node gets one
-  ``task_closed`` fact with outcome ``archived`` (operator scope required; an
-  unfinished run anywhere in the subtree refuses with 409 before anything is
-  written). The response names the ids this call archived; an already
-  archived node returns an empty list.
+  An operator archives the open subtree after all unfinished Runs pass the
+  blocker check. An agent archives its own manager task after its Run succeeds.
   """
-  if not caller.is_operator:
-    raise fastapi.HTTPException(status_code=403, detail=task_sessions.ARCHIVE_OPERATOR_REFUSAL)
+  evidence = task_completion.CompletionEvidence(summary=req.summary, result_refs=req.result_refs, run_ids=req.run_ids)
   try:
-    archived = await task_mgr.archive_subtree(session_id, caller=caller)
+    status, payload = await task_mgr.completion.archive_task(
+        session_id, request_id=req.request_id, evidence=evidence, caller=caller)
   except (task_errors.TaskInvalidError, task_errors.TaskNotFoundError, task_errors.TaskForbiddenError,
           task_errors.TaskConflictError) as e:
     raise _task_http_error(e) from e
-  return responses.JSONResponse({"archived": archived})
+  if status == 202 or "archived" in payload:
+    return responses.JSONResponse(status_code=status, content=payload)
+  detail = await _closed_session_detail(task_mgr, session_id)
+  return responses.JSONResponse(status_code=status, content=detail)
 
 
 @router.delete("/{session_id}/permanent", status_code=204)
@@ -1792,35 +1794,7 @@ async def acknowledge_task_inputs(
     raise _task_http_error(e) from e
 
 
-@router.post("/{session_id}/complete")
-async def complete_session_task(
-    session_id: str,
-    req: models.CompleteTaskRequest,
-    _meta: models.SessionMetadata = fastapi.Depends(deps.require_session),
-    task_mgr: task_sessions.TaskTreeManager = fastapi.Depends(deps.get_task_manager),
-    caller: run_token.CallerIdentity = fastapi.Depends(deps.require_caller),
-) -> responses.Response:
-  """One completion operation: 200 Session, 202 pending_run_finish, or 409 blockers.
-
-  A run-token agent may request closure only of its own manager task through
-  its own active Run (the verified caller's bound run id — the payload never
-  names one); the close re-evaluates only after that Run succeeds. Duplicate
-  request ids replay the original outcome, across later epochs included.
-  """
-  evidence = task_completion.CompletionEvidence(summary=req.summary, result_refs=req.result_refs, run_ids=req.run_ids)
-  try:
-    status, payload = await task_mgr.completion.complete_task(
-        session_id, request_id=req.request_id, evidence=evidence, caller=caller)
-  except (task_errors.TaskInvalidError, task_errors.TaskNotFoundError, task_errors.TaskForbiddenError,
-          task_errors.TaskConflictError) as e:
-    raise _task_http_error(e) from e
-  if status == 202:
-    return responses.JSONResponse(status_code=202, content=payload)
-  detail = await _completed_session_detail(task_mgr, session_id)
-  return responses.JSONResponse(status_code=200, content=detail)
-
-
-async def _completed_session_detail(task_mgr: task_sessions.TaskTreeManager, session_id: str) -> dict:
+async def _closed_session_detail(task_mgr: task_sessions.TaskTreeManager, session_id: str) -> dict:
   try:
     return await task_mgr.session_detail(session_id)
   except (task_errors.TaskInvalidError, task_errors.TaskNotFoundError, task_errors.TaskConflictError) as e:
@@ -1847,7 +1821,7 @@ async def cancel_session_task(
   except (task_errors.TaskInvalidError, task_errors.TaskNotFoundError, task_errors.TaskForbiddenError,
           task_errors.TaskConflictError, runs.RunIdentityConflictError) as e:
     raise _task_http_error(e) from e
-  detail = await _completed_session_detail(task_mgr, session_id)
+  detail = await _closed_session_detail(task_mgr, session_id)
   return CancelSessionResponse.model_validate({**detail, "stopped_runs": result.get("stopped_runs", [])})
 
 

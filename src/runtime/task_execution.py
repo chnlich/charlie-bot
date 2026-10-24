@@ -907,7 +907,7 @@ class TaskExecutionAdapter:
         written, the run stays unfinished, and the node reconcile pass drains
         it from its raw log once space returns — landing a failed end record
         here could contradict a success fact the delivery stage has yet to
-        read. Any other error keeps today's immediate landing, whose delivery
+        read. Any other error keeps the immediate landing, whose delivery
         reads the durable outcome (never a literal ``failed``): a run with a
         success fact that hits a further write error during delivery must not
         send a contradicting failed report.
@@ -961,7 +961,7 @@ class TaskExecutionAdapter:
       if is_out_of_space_error(land_exc):
         # A run that never launched keeps its queued registration: the node
         # reconcile pass's dispatch re-dispatches it after space returns, the
-        # same as after a restart today.
+        # same as after a restart.
         self.start_run_end_landing_retry(session_id, run_id)
 
   async def _record_launch_error_event(
@@ -1325,7 +1325,7 @@ class TaskExecutionAdapter:
         system-instruction seam — while the controllers keep owning their task /
         step input: this adapter renders only the task/input context (bindings,
         pinned spec, claimed batch, sequence positions) from the same maintained
-        template sections. A scheduled prompt override no longer bypasses the
+        template sections. A scheduled prompt override passes through the
         assembly.
         """
     session_id, run_id = meta.id, run.id
@@ -1387,7 +1387,7 @@ class TaskExecutionAdapter:
     binding = run_worker_binding(run_id, session_id)
     if backend_types.traits_for(option.type).preassigned_session_id:
       # A continued conversation keeps its own native id (the resume flag
-      # names it); a fresh one gets the runtime-chosen id as today.
+      # names it); a fresh one gets the runtime-chosen id.
       preassigned = continuation.native_id if continued else str(uuid.uuid4())
       backend_types.lifecycle_for(option).assign_thread_native_id(binding, preassigned)
 
@@ -1507,8 +1507,7 @@ class TaskExecutionAdapter:
           self._tree.runs.terminal_outcome(events, previous.id) != "success"):
         return None
     elif run.kind == "work":
-      # An episode that closed (delivered or cancelled) starts fresh, exactly
-      # as it did before continuations existed.
+      # An episode that closed (delivered or cancelled) starts fresh.
       if self._tree.facts_of(meta.id).close_events:
         return None
     else:
@@ -2370,7 +2369,7 @@ class TaskExecutionAdapter:
       tried = [r.backend for r in existing if r.backend]
       # A routed node's reviewer reuses the worker's route list (no router call): the first
       # available member that avoids the worker's and the node's used backends. An empty or fully
-      # avoided list, and every unrouted node, take today's pool selection.
+      # avoided list, and every unrouted node, take the pool selection.
       meta = await tree.load_meta(session_id)
       route = metadata_slots.fields_of(meta, backend_pool.METADATA_OWNER).route if meta else None
       selection = None
@@ -2601,7 +2600,7 @@ class TaskExecutionAdapter:
       await self._tree.dispatch.finish_report_delivery(
           parent_id, report, epoch=parent_epoch, child_session_id=session_id)
     archive_run = deciding_run if deciding_run is not None else run
-    await self._tree.archive_unsuccessful_worker(session_id, run_id=archive_run.id, outcome=outcome)
+    await self._tree.completion.archive_unsuccessful_worker(session_id, run_id=archive_run.id, outcome=outcome)
 
   async def _worker_failure_summary(self, session_id: str, run: models.RunRecord) -> str:
     """The failed run's own closing words (or its error, or the bare outcome).

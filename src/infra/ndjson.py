@@ -7,6 +7,7 @@ import json
 import mmap
 import os
 import pathlib
+import time
 from collections.abc import Callable, Iterable, Iterator
 from typing import Any, BinaryIO
 
@@ -407,11 +408,18 @@ def iter_ndjson_events_from_end(
     log_event: str,
     log_fields: dict[str, Any],
     parse_filter: Callable[[bytes], bool] | None = None,
-    max_lines: int | None = None) -> Iterator[dict]:
+    max_lines: int | None = None,
+    end: int | None = None,
+    yield_gil_every: int = 0) -> Iterator[dict]:
   """Yield the JSON objects parsed from *path*, newest line first.
 
   With *max_lines*, the walk visits at most that many non-empty lines (kept
-  and filtered lines alike count toward the cap) and stops there.
+  and filtered lines alike count toward the cap) and stops there. With
+  *yield_gil_every* (zero leaves the walk unbroken), the walk releases the GIL
+  after every that many visited lines, so another thread waiting on the GIL
+  takes it between lines instead of after the interpreter's forced switch. With *end*,
+  the walk starts at that byte offset rather than at the file's current end, so
+  a reader holding a stat taken at that size sees exactly the bytes it stat'd.
 
   Same skip contract as :func:`iter_ndjson_events` (an empty or
   whitespace-only line is invisible, a line the parser rejects logs and
@@ -436,7 +444,7 @@ def iter_ndjson_events_from_end(
     if mm is None:
       return
     rfind = mm.rfind
-    pos = size
+    pos = size if end is None else min(end, size)
     visited = 0
     while pos > 0:
       if max_lines is not None and visited >= max_lines:
@@ -449,6 +457,8 @@ def iter_ndjson_events_from_end(
         pos = max(nl, 0)
         continue
       visited += 1
+      if yield_gil_every and visited % yield_gil_every == 0:
+        time.sleep(0)
       if parse_filter is None:
         event = _parse_mapped_line(mm, start, pos, log_event=log_event, log_fields=log_fields)
         if event is not None:

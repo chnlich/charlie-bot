@@ -31,6 +31,7 @@ RAW_EVENTS_REPLACED_BY_DELTAS: frozenset[str] = frozenset(
         ET.WEB_REPLY,
         ET.WEB_REPLY_NOTICE,
         ET.WEB_STATUS,
+        ET.WEB_STATUS_CONFIRMED,
         ET.WEB_ASK_CHECK,
     })
 

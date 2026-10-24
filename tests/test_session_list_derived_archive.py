@@ -94,7 +94,13 @@ async def test_archiving_a_parent_archives_its_open_subtree_and_restore_brings_i
   assert await active_ids(session_blocks) == {root.id, worker.id}
   assert await archived_by_id(session_blocks) == {}
 
-  assert await tree.archive_subtree(root.id, caller=conftest.OPERATOR) == [root.id, worker.id]
+  assert await tree.completion.archive_subtree(
+      root.id,
+      request_id="archive-test",
+      summary="archived by the user",
+      result_refs=[],
+      run_ids=[],
+      caller=conftest.OPERATOR) == [root.id, worker.id]
 
   assert await active_ids(session_blocks) == set()
   archived = await archived_by_id(session_blocks)
@@ -140,11 +146,11 @@ def bind_in_memory_tree(
   async def get_index(*, force: bool = False) -> task_sessions._TreeIndex:
     return index
 
-  def facts_of(session_id: str) -> task_sessions._TaskFacts:
-    return task_sessions._TaskFacts(task_state="completed" if session_id in closed else "open")
+  def task_state_at(session_id: str, identity: tuple[int, int, int] | None) -> str:
+    return "completed" if session_id in closed else "open"
 
   monkeypatch.setattr(tree, "_get_index", get_index)
-  monkeypatch.setattr(tree, "_facts_of", facts_of)
+  monkeypatch.setattr(tree, "_task_state_at", task_state_at)
 
 
 @pytest.mark.asyncio

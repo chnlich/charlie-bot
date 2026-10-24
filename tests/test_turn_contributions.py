@@ -469,9 +469,14 @@ async def test_one_master_done_calls_each_platforms_deliver_done_once(
 
   slack.assert_awaited_once_with(meta.id, done, cfg, mgr.store, mgr.lifecycle, mgr.events, mgr.successor)
   discord.assert_awaited_once_with(meta.id, done, cfg, mgr.store, mgr.lifecycle, mgr.events, mgr.successor)
-  assert len(tasks) == len(real) + 1
-  assert [e["type"] for e in mgr.events.load_chat_events_sync(meta.id)
-         ] == [ET.TASK_CREATED, ET.MASTER_DONE, ET.SCHEDULED_TRIGGER]
+  # The web contribution's status reminder wakes one more turn, so it adds one task and one event.
+  assert len(tasks) == len(real) + 2
+  events = mgr.events.load_chat_events_sync(meta.id)
+  # The round's event lands before any contribution reacts. The reminder's event and the
+  # caller's next event have no promised order between them: the contribution runs in its own
+  # task, so it may append before or after that later persist.
+  assert [e["type"] for e in events[:2]] == [ET.TASK_CREATED, ET.MASTER_DONE]
+  assert sorted(e["type"] for e in events[2:]) == sorted([ET.AGENT_MESSAGE, ET.SCHEDULED_TRIGGER])
 
 
 # ---------------------------------------------------------------------------

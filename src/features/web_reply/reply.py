@@ -200,7 +200,7 @@ async def post_web_reply(
   task_tree = tree or task_execution.task_manager()
   epoch = await events.prime_aggregator(session_id)
   async with task_tree.control_lock:
-    loaded = task_tree.fact_history(session_id)
+    loaded = await task_tree.read_fact_history(session_id)
     bound = answered_input(loaded, master_cc_state.running_user_event_ids(session_id))
     answers = bound[1] if bound is not None else None
     web_reply = {"answers": answers, "chars": chars}

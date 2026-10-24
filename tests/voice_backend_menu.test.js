@@ -7,7 +7,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const vm = require('node:vm');
 
-const {readStatic, readPackageStatic} = require('./read_static');
+const {readPackageStatic} = require('./read_static');
 
 const BACKENDS = [
   {id: 'batch', label: 'Batch backend', livePartials: false, unavailableReason: null},

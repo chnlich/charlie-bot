@@ -380,7 +380,7 @@ function authoredLineWidths(text, isWide) {
   });
 }
 
-// The browser today: the CJK fallback glyph advances ~5/3 of a Latin column
+// The browser's CJK fallback glyph advances ~5/3 of a Latin column
 // (1em vs Fira Code's 0.6em '0'), so a wide char renders 5/3 wide.
 function failingLineWidths(text, isWide) {
   return text.split('\n').map((line) => {
@@ -445,7 +445,7 @@ test('diagram fixture: per-line box-width sums (1ch/2ch) render exactly the auth
   // textContent of the pre is byte-identical to the embedded source.
   assert.equal(textContent(pre), DIAGRAM);
 
-  // Verbose re-run: print the failing (browser today) and fixed line-width
+  // Verbose re-run: print the failing (browser) and fixed line-width
   // vectors. The 步骤-1 title row (index 7, 12 wide chars) shows the bug:
   // 73.00 rendered columns vs 77 authored — the 12 x 0.333-column (~30.7px)
   // shortfall, plus that row's own +1 author offset.

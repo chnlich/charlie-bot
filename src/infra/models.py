@@ -594,8 +594,8 @@ class RetryRunRequest(pydantic.BaseModel):
   run_id: str
 
 
-class CompleteTaskRequest(pydantic.BaseModel):
-  # POST /api/sessions/{id}/complete body: the completion claim (plan 4.1).
+class ArchiveTaskRequest(pydantic.BaseModel):
+  # POST /api/sessions/{id}/archive body: the archive summary and evidence (plan 4.1).
   # owner_run_id is NEVER accepted here: an own-run close request takes the
   # verified caller's bound run id, never a spoofable payload field.
   model_config = pydantic.ConfigDict(extra="forbid")
@@ -763,7 +763,7 @@ class SessionCallbacks:
   context_state: Callable[[str, SessionMetadata], Awaitable[tuple[int | None, datetime.datetime | None]]] | None = None
   # The task-tree owner supplies its shared activity verdict for sidebar updates.
   task_tree_activity: Callable[[str], tuple[bool, str]] | None = None
-  # Runs after each finished round (session naming today) with the round's config and the session
-  # id. Optional so callback bundles built without it (tests) stay valid; the live bundle always
-  # sets it.
+  # Runs after each finished round with the round's config and the session id; the autonamer
+  # consumes it. Optional so callback bundles built without it (tests) stay valid; the live bundle
+  # always sets it.
   after_round: Callable[[config.CharlieBotConfig, str], Awaitable[None]] | None = None

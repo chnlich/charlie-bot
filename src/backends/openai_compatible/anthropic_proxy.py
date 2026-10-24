@@ -191,35 +191,11 @@ def _convert_messages(messages: list[dict], system: Any) -> list[dict]:
   return converted
 
 
-_GOOGLE_UNSUPPORTED_SCHEMA_KEYWORDS = frozenset({"$schema", "allOf", "const", "exclusiveMinimum"})
-
-
-def _convert_google_schema(schema: dict) -> dict:
-  converted: dict[str, Any] = {}
-  for keyword, value in schema.items():
-    if keyword in _GOOGLE_UNSUPPORTED_SCHEMA_KEYWORDS:
-      continue
-    if keyword in ("properties", "$defs", "definitions") and isinstance(value, dict):
-      converted[keyword] = {name: _convert_google_schema(child) for name, child in value.items()}
-    elif keyword in ("items", "additionalProperties", "not", "if", "then", "else", "contains"):
-      if isinstance(value, dict):
-        converted[keyword] = _convert_google_schema(value)
-      elif isinstance(value, list):
-        converted[keyword] = [_convert_google_schema(child) for child in value]
-      else:
-        converted[keyword] = value
-    elif keyword in ("anyOf", "oneOf", "prefixItems") and isinstance(value, list):
-      converted[keyword] = [_convert_google_schema(child) for child in value]
-    else:
-      converted[keyword] = value
-  return converted
-
-
 def _is_google_gemini_endpoint(api_base: str) -> bool:
   return parse.urlsplit(api_base).hostname == "generativelanguage.googleapis.com"
 
 
-def _convert_tools(tools: list[dict], *, google_gemini_endpoint: bool) -> list[dict]:
+def _convert_tools(tools: list[dict]) -> list[dict]:
   converted: list[dict] = []
   for raw_tool in tools:
     tool = _require_dict(raw_tool, "tool")
@@ -229,14 +205,13 @@ def _convert_tools(tools: list[dict], *, google_gemini_endpoint: bool) -> list[d
     input_schema = tool.get("input_schema")
     if not name or input_schema is None:
       raise ValueError("tool missing name or input_schema")
-    parameters = _convert_google_schema(input_schema) if google_gemini_endpoint else input_schema
     converted.append(
         {
             "type": "function",
             "function": {
                 "name": name,
                 "description": tool.get("description", ""),
-                "parameters": parameters,
+                "parameters": input_schema,
             },
         })
   return converted
@@ -258,7 +233,7 @@ def _convert_tool_choice(choice: dict) -> str | dict:
   raise ValueError(f"unsupported tool_choice type: {choice_type}")
 
 
-def anthropic_to_openai_chat_request(payload: dict, upstream_model: str, api_base: str | None = None) -> dict:
+def anthropic_to_openai_chat_request(payload: dict, upstream_model: str) -> dict:
   """Translate an Anthropic Messages payload into an OpenAI chat completions payload."""
   messages = payload.get("messages")
   if not isinstance(messages, list):
@@ -278,8 +253,7 @@ def anthropic_to_openai_chat_request(payload: dict, upstream_model: str, api_bas
   if payload.get("stop_sequences") is not None:
     converted["stop"] = payload["stop_sequences"]
   if payload.get("tools") is not None:
-    google_gemini_endpoint = _is_google_gemini_endpoint(api_base) if api_base else False
-    converted["tools"] = _convert_tools(payload["tools"], google_gemini_endpoint=google_gemini_endpoint)
+    converted["tools"] = _convert_tools(payload["tools"])
   if payload.get("tool_choice") is not None:
     tool_choice = _require_dict(payload["tool_choice"], "tool_choice")
     converted["tool_choice"] = _convert_tool_choice(tool_choice)
@@ -641,8 +615,7 @@ async def openai_compatible_messages(
   try:
     anthropic_payload = await request.json()
     google_gemini_endpoint = _is_google_gemini_endpoint(option.api_base)
-    openai_payload = anthropic_to_openai_chat_request(
-        anthropic_payload, upstream_model=option.model, api_base=option.api_base)
+    openai_payload = anthropic_to_openai_chat_request(anthropic_payload, upstream_model=option.model)
     upstream_url = _join_openai_chat_url(option.api_base)
     headers = _upstream_headers(option.credential, backend_id)
   except ValueError as e:

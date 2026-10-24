@@ -287,7 +287,7 @@ def test_stream_tool_call_without_index_is_rejected() -> None:
         })
 
 
-def test_claude_code_request_shape_uses_inline_system_and_google_schema() -> None:
+def test_claude_code_request_shape_preserves_input_schema() -> None:
   payload = {
       "model": "gemini-3.8-flash",
       "system": [{
@@ -359,11 +359,7 @@ def test_claude_code_request_shape_uses_inline_system_and_google_schema() -> Non
       "stream": True,
   }
 
-  converted = anthropic_proxy.anthropic_to_openai_chat_request(
-      payload,
-      upstream_model="gemini-3.8-flash",
-      api_base="https://generativelanguage.googleapis.com/v1beta/openai/",
-  )
+  converted = anthropic_proxy.anthropic_to_openai_chat_request(payload, upstream_model="gemini-3.8-flash")
 
   assert converted["messages"][0] == {
       "role": "system",
@@ -375,23 +371,7 @@ def test_claude_code_request_shape_uses_inline_system_and_google_schema() -> Non
   }
   assert "thinking" not in converted
   assert "output_config" not in converted
-  schema = converted["tools"][0]["function"]["parameters"]
-  assert schema == {
-      "type": "object",
-      "additionalProperties": False,
-      "properties": {
-          "cmd": {
-              "type": "string",
-          },
-          "count": {
-              "type": "number",
-          },
-          "choice": {
-              "type": "string",
-          },
-      },
-      "required": ["cmd"],
-  }
+  assert converted["tools"][0]["function"]["parameters"] is payload["tools"][0]["input_schema"]
 
 
 def test_stream_tool_signatures_round_trip_for_calls_sharing_an_index() -> None:
@@ -485,7 +465,6 @@ def test_stream_tool_signatures_round_trip_for_calls_sharing_an_index() -> None:
           }],
       },
       upstream_model="gemini-3.8-flash",
-      api_base="https://generativelanguage.googleapis.com/v1beta/openai/",
   )
 
   tool_calls = converted["messages"][0]["tool_calls"]
@@ -540,7 +519,6 @@ def test_non_stream_tool_signatures_round_trip_to_next_request() -> None:
           }],
       },
       upstream_model="gemini-3.8-flash",
-      api_base="https://generativelanguage.googleapis.com/v1beta/openai/",
   )
 
   assert converted_request["messages"][0]["tool_calls"][0]["extra_content"] == {

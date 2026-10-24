@@ -533,6 +533,9 @@ field one side omits still shows as a difference:
   masks `exit_code` of a run record that the `handover-stop-request` stop interrupted, and only when the value is
   `null` or `-9`. Python's stopper and its launcher race for the first write of that record (`runs.py:1161`,
   `runs.py:1036-1047`). The rule names the scenario by its stop request id, so no other scenario's run is masked;
+- the cancelled run exit code rule (`cancelled-run-exit-code`) is the same race on the run cancel route: the
+  launcher records the SIGTERM exit `-15` (or `-9` after escalation) where the stopper records `null`. It masks the
+  run that `agent-orchestration-cancel` cancels by its request id;
 - the stopped run's pair order is a comparison rule, not a `FieldRule`: `handover-stop-request` declares an
   `either_order_of_adjacent_events` rule whose `first` is the `run_finished` with its captured `run_id` and
   `outcome: interrupted`, and whose `second` is the `master_done` with `exit_code: -9`. Python's stop path and master

@@ -36,7 +36,6 @@ _NEGATION = re.compile(
 _NEGATION_ADVICE = "state the standing reality or the action to take, and keep the fact it carried"
 _BODY_LINE_LIMIT = 12
 _BODY_LINE_COLUMN_LIMIT = 120
-_BACKTICKED = re.compile(r"`[^`]*`")
 
 
 class ProposalRefusalError(Exception):

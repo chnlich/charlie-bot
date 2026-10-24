@@ -406,11 +406,11 @@ def _check_page_height(ctx: _Context) -> list[AssertionOutcome]:
 
 
 # ---------------------------------------------------------------------------
-# ordinal-named — lexical check for the Naming rule, ported from the prototype
+# ordinal-named — lexical check for the Naming rule
 # ---------------------------------------------------------------------------
 
 # An ordinal label is a bare numbered reference (plan 3, 第 2 节, Trade-off 5, 4.1). The Chinese
-# label words are the language of the checked pages and stay as the prototype wrote them.
+# label words are the language of the checked pages, so they stay literal.
 ORD = re.compile(
     r"(?<![A-Za-z0-9_.])(?:(?:Trade-offs?|sections?|Section|fork|Fork|round|Round|"
     r"divergence|Divergence|question|Question|item|Item|plan|Plan)(?:\s+\(|\s*)(\d+)\)?(?!\w)"

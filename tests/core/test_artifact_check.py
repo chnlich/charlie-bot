@@ -1,8 +1,8 @@
 """Tests for src/features/artifacts/artifact_check.py, the ``charliebot artifact check`` CLI,
 and the cold-read task type end to end (delegate entry, run, report).
 
-The goal-length and page-height measurements moved here from src/features/artifacts/plans.py with their
-budgets unchanged; the DOM assertions are the new mechanical half of each genre's GRAMMAR.
+The goal-length and page-height measurements and their budgets live here; the DOM assertions are the
+mechanical half of each genre's GRAMMAR.
 Renderer work and the probe's model call are doubled out — no headless chrome, no backend
 subprocess, no HTTP; the cold-read runs execute on scripted backends.
 """

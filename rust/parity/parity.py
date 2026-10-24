@@ -63,6 +63,9 @@ HEADLESS_CHROME_BIN = (
 # A fake agent's process group must be gone this long after its SIGKILL. A zombie member keeps the group alive until
 # its parent reaps it, and the harness reaps only the fake leaders it adopted.
 FAKE_GROUP_EXIT_TIMEOUT_SECONDS = 10.0
+# A fake agent writes its exit marker before it leaves the process table. The shutdown closes its stdin, so the marker
+# can land in the same second as the server stop, and the cleanup waits this long for such a start to exit.
+FAKE_EXIT_GRACE_SECONDS = 5.0
 
 
 @dataclasses.dataclass
@@ -1119,6 +1122,15 @@ def _kill_fake_group(label: str, record: dict) -> list[str]:
     time.sleep(servers.POLL_INTERVAL_SECONDS)
 
 
+def _await_marked_exit(side: Side, record: dict) -> None:
+  """Wait up to FAKE_EXIT_GRACE_SECONDS for a start that already wrote its exit marker to leave the process table."""
+  if not (side.tree.root / "fake-agent" / f"exit-{record['index']}").is_file():
+    return
+  deadline = time.monotonic() + FAKE_EXIT_GRACE_SECONDS
+  while _process_alive(record) and time.monotonic() < deadline:
+    time.sleep(0.02)
+
+
 def _cleanup_scenario(sides: list[Side]) -> tuple[list[str], list[str]]:
   lines = _exit_lines(sides, "before the shutdown step")
   notes = []
@@ -1149,6 +1161,8 @@ def _cleanup_scenario(sides: list[Side]) -> tuple[list[str], list[str]]:
       for host, count in sorted(side.fake_set.refused_hosts().items()):
         notes.append(f"{side.label} fake proxy refused {host} x{count}")
   starts = [(side, record) for side in sides for record in _read_spawns(side.tree)]
+  for side, record in starts:
+    _await_marked_exit(side, record)
   for _, record in starts:
     if _process_alive(record):
       lines.append(f"fake agent remained alive at scenario end and was killed: {record}")

@@ -1144,12 +1144,15 @@ impl Store {
   /// An archived row stays navigable while running work lives at or below it: dropping it would sever the path to
   /// that work in a partial client tree. The row's own work state counts, so a running leaf below a retained archived
   /// parent keeps that parent's child page visible; the row still reports `archived`.
+  ///
+  /// The rows are computed under `tree_rows_lock`, as Python's `_tree_rows_lock` serializes its page computations.
   pub fn task_tree_rows(
     &self,
     snapshot: &TaskTreeSnapshot,
     parent_id: Option<&str>,
     include_archived: bool,
   ) -> StoreResult<Vec<TaskTreeRow>> {
+    let _computing = self.tree_rows_lock.lock().expect("tree rows lock is not poisoned");
     #[cfg(test)]
     {
       let hook = self.tree_rows_hook.lock().expect("tree rows hook mutex is not poisoned").clone();

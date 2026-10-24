@@ -160,6 +160,8 @@ pub struct PathsConfig {
   pub workspace_dirs: Vec<String>,
   #[serde(default = "default_worktree_dir")]
   pub worktree_dir: String,
+  #[serde(default = "default_scratch_dir")]
+  pub scratch_dir: String,
 }
 
 fn default_workspace_dirs() -> Vec<String> {
@@ -167,6 +169,9 @@ fn default_workspace_dirs() -> Vec<String> {
 }
 fn default_worktree_dir() -> String {
   "~/worktrees".to_string()
+}
+fn default_scratch_dir() -> String {
+  "~/scripts".to_string()
 }
 
 /// One `backends.options[]` entry: the fields every backend type shares, plus its type's own fields.
@@ -370,6 +375,7 @@ pub fn load_config(home: &Path, schema: &ConfigSchema) -> Result<CharlieBotConfi
   let mut paths_config: PathsConfig = typed_section(&config_path_text, "paths", section("paths"), default_paths)?;
   paths_config.workspace_dirs = paths_config.workspace_dirs.iter().map(|dir| paths::expanduser(dir)).collect();
   paths_config.worktree_dir = paths::expanduser(&paths_config.worktree_dir);
+  paths_config.scratch_dir = paths::expanduser(&paths_config.scratch_dir);
 
   let headless_chrome_bin = match data.get("headless_chrome_bin") {
     None => String::new(),
@@ -470,7 +476,11 @@ fn default_server() -> ServerConfig {
 }
 
 fn default_paths() -> PathsConfig {
-  PathsConfig { workspace_dirs: default_workspace_dirs(), worktree_dir: default_worktree_dir() }
+  PathsConfig {
+    workspace_dirs: default_workspace_dirs(),
+    worktree_dir: default_worktree_dir(),
+    scratch_dir: default_scratch_dir(),
+  }
 }
 
 /// Deserialize one core section; an absent section takes `absent()`, the model's defaults.
@@ -687,7 +697,20 @@ mod tests {
     assert_eq!(option.type_fields.get("effort"), Some(&Value::String("xhigh".to_string())));
     assert!(cfg.section::<Value>("voice").is_mapping());
     assert_eq!(cfg.paths.worktree_dir, paths::expanduser("~/worktrees"));
+    assert_eq!(cfg.paths.scratch_dir, paths::expanduser("~/scripts"));
     require_backends(&cfg).unwrap();
+  }
+
+  #[test]
+  fn scratch_dir_uses_its_default_and_expands_a_configured_tilde() {
+    let home = home_with(VALID);
+    let cfg = load(&home).unwrap();
+    assert_eq!(cfg.paths.scratch_dir, paths::expanduser("~/scripts"));
+
+    let config_text = format!("{VALID}paths:\n  scratch_dir: ~/synthetic-scripts\n");
+    let home = home_with(&config_text);
+    let cfg = load(&home).unwrap();
+    assert_eq!(cfg.paths.scratch_dir, paths::expanduser("~/synthetic-scripts"));
   }
 
   #[test]

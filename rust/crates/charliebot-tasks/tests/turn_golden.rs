@@ -263,7 +263,11 @@ fn config(home: &Path, option: Option<BackendOption>) -> CharlieBotConfig {
       session_tasks_max: 0,
       min_free_disk_gib: 0,
     },
-    paths: PathsConfig { workspace_dirs: Vec::new(), worktree_dir: "/synthetic/worktrees".to_string() },
+    paths: PathsConfig {
+      workspace_dirs: Vec::new(),
+      worktree_dir: "/synthetic/worktrees".to_string(),
+      scratch_dir: "/synthetic/scripts".to_string(),
+    },
     backends: BackendsConfig { pool, routing: None, options },
     ui: UiConfig { home_services: Vec::new() },
     telegram: TelegramConfig { chat_id: None },

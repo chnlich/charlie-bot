@@ -21,6 +21,7 @@ charliebot-compat.workspace = true
 charliebot-agents = { path = "../charliebot-agents" }
 charliebot-core.workspace = true
 charliebot-diag.workspace = true
+charliebot-disk-sweep.workspace = true
 charliebot-diff-view.workspace = true
 charliebot-discord.workspace = true
 charliebot-explain.workspace = true

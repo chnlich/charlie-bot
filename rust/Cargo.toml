@@ -12,6 +12,7 @@ members = [
     "crates/features/chat_threads",
     "crates/features/code_server",
     "crates/features/diag",
+    "crates/features/disk_sweep",
     "crates/features/diff_view",
     "crates/features/discord",
     "crates/features/explain",
@@ -97,6 +98,7 @@ charliebot-code-server = { path = "crates/features/code_server" }
 charliebot-compat = { path = "crates/charliebot-compat" }
 charliebot-core = { path = "crates/charliebot-core" }
 charliebot-diag = { path = "crates/features/diag" }
+charliebot-disk-sweep = { path = "crates/features/disk_sweep" }
 charliebot-diff-view = { path = "crates/features/diff_view" }
 charliebot-discord = { path = "crates/features/discord" }
 charliebot-explain = { path = "crates/features/explain" }

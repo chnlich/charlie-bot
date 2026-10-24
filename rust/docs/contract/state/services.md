@@ -32,7 +32,7 @@ Logs go to stdout and stderr only; the server writes no log file. `scripts/start
 | 2 | Home writer fence: `home_writer_fence.acquire_home_writer_fence(home, purpose="server startup")` | creates `<home>/state/home_writer.lock` (flock `LOCK_EX\|LOCK_NB`) and writes `<home>/state/writer_identity.json` | `HomeWriterActiveError` logs `server_startup_refused_home_writer_fence` and re-raises; startup fails |
 | 3 | `buildinfo.init_build_info()` | runs `git rev-parse --short HEAD` in the repo root (sha `"unknown"` on failure) and records the UTC start time; served by `GET /api/internal/version` | never raises |
 | 4 | `await init_seed.init_charliebot_home()` | mkdirs `<home>`, `sessions/`, `config.d/`; seeds `config.yaml` and `credentials.yaml` when missing (`files.md` 5.1); logs `charliebot_home_ready` | raises |
-| 5 | `process.log_session_cgroup_startup(memory, swap, tasks)` then `process.sweep_stale_session_cgroups(cfg.sessions_dir)` | logs whether session cgroups are on; `rmdir`s every **empty** `charliebot-sess-*` directory under the user's `app.slice` that names a session of this home (section 4) | an unavailable `app.slice` is logged; a failure to read this home's `sessions/` directory raises |
+| 5 | `process.log_session_cgroup_startup(memory, swap, tasks)` then `process.sweep_stale_session_cgroups(cfg.sessions_dir)` | logs whether session cgroups are on; removes every **empty** `charliebot-sess-*` directory for this home's sessions from the agents, repair and retired app slices (section 4) | an unavailable slice is logged; a failure to read this home's `sessions/` directory raises |
 | 6 | `app.state.recovery_task = create_task(_run_task_recovery(cfg, task_manager))` | crash recovery (section 3), concurrent with step 7 | logged as `task_tree_recovery_failed`; startup continues |
 | 7 | Start `early` services in registration order (`usage_tally`) | section 5 | an exception from `start_service` fails startup |
 | 8 | `await app.state.recovery_task` | waits until recovery ends, so no scheduler fire or recovered trigger races a recorded run | |
@@ -175,7 +175,7 @@ Packages that register config sections, checks, legacy keys or option types are 
   - `usage_ledger` → `src.features.usage.usage_ledger:run_scheduled_usage_ledger`;
   - `cool_storage` → `src.features.usage.storage_cool:run_scheduled_cool_storage`;
   - `disk_sweep` → `src.features.disk_sweep.sweep:run_scheduled`, which runs the sweep in apply mode (archives changed
-    worktrees and removes old scratch directories under `paths.scratch_dir`) and returns the totals line.
+    worktrees, removes eligible worktrees and scratch directories under `paths.scratch_dir`) and returns the totals line.
 
 ## 7 Per-session Claude idle compaction
 

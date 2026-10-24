@@ -1,6 +1,6 @@
 # Configuration: `config.yaml`, `config.d/`, `credentials.yaml`
 
-Baseline: the Python tree at `3c4591bad`. This document gives every key the baseline accepts, its type and
+Baseline: the Python tree at `d1f7e3ba6`. This document gives every key the baseline accepts, its type and
 default, the validation rule, and the error a bad value raises. Error texts are quoted from source; `<...>` marks
 an interpolated value. A Rust server reading the same files must accept exactly this set and refuse the rest with
 equivalent errors. **UNVERIFIED** marks a statement not confirmed from source, with the reason.
@@ -88,12 +88,13 @@ Every core section model sets `extra='forbid'`.
 | `server.host` | str | `127.0.0.1` | uvicorn bind address |
 | `server.port` | int | `18498` | uvicorn port; also `server_base_url = http://localhost:<port>` for CLI-to-server and server-to-self calls |
 | `server.subprocess_buffer_limit_mb` | int | `1024` | asyncio stream buffer limit for agent stdout, in MB |
-| `server.session_memory_max_mb` | int | `12288` | per-session cgroup `memory.max`, in MB; `0` disables session cgroups entirely |
+| `server.session_memory_max_mb` | int | `12288` | per-session cgroup `memory.max`, in MB; `0` disables session cgroups entirely. A value above 0 places the session under its resource-class slice, and a missing slice raises `SessionCgroupUnavailableError` instead of running the session unbounded (`src/infra/process.py`, `ensure_session_cgroup`) |
 | `server.session_swap_max_mb` | int | `0` | per-session cgroup `memory.swap.max`, in MB |
 | `server.session_tasks_max` | int | `4096` | per-session cgroup `pids.max`; `0` writes `max` |
 | `server.min_free_disk_gib` | int | `10` | worker-class launch precheck on the filesystems of the home and `paths.worktree_dir`; `0` disables it. A failing check keeps the run queued and reports blocked to the parent. Manager turns skip it. |
 | `paths.workspace_dirs` | list[str] | `["~/workspace"]` | directories scanned one level deep for git repositories (`discover_repos`); `~` is expanded at load |
 | `paths.worktree_dir` | str | `"~/worktrees"` | root for worker git worktrees; `~` is expanded at load |
+| `paths.scratch_dir` | str | `"~/scripts"` | root whose top-level entries `disk-sweep` treats as old scratch directories; `~` is expanded at load (`src/infra/config.py:98`, `:105`) |
 | `backends.pool` | list[str] | `[]` | rotation order of option ids for unpinned work; each must name an option (startup check) |
 | `backends.routing` | `RoutingConfig` or null | null | optional router command; routed unpinned work asks it to order candidates before pool rotation |
 | `backends.options` | list[option] | `[]` | backend catalog (section 4); an empty list fails server startup |
@@ -134,13 +135,13 @@ Per-type fields:
 | `type` | Package | Extra fields | Usage source and id prefixes |
 | --- | --- | --- | --- |
 | `cc-claude` | `src.backends.claude_code` | `effort: str\|null`; `fast_mode: bool = false` (adds `"fastMode": true` to `--settings`); `cli_binary: str\|null` (replaces `claude` as argv[0]); `account_pool: str\|null` | `Claude Code`: `claude-` |
-| `cc-anthropic-compatible` | `src.backends.anthropic_compatible` | `api_base: str` (required, at least one character; the endpoint root, and a value ending in `/v1` is refused); `context_window: int` (required, > 0; sets the model window and the auto-compact window); `credential: str\|null` (section whose `api_key` is the bearer; null sends `no-auth`); `effort: str\|null` (passed to Claude Code as `--effort` when set); `headers: dict[str,str]` (defaults to `{}`, sent to Claude Code as custom request headers; `options.py:17`, `factory.py:23`) | attributed to `Claude Code`: `claude-` |
+| `cc-anthropic-compatible` | `src.backends.anthropic_compatible` | `api_base: str` (required, at least one character; the endpoint root, and a value ending in `/v1` is refused); `context_window: int` (required, > 0; sets the model window and the auto-compact window); `credential: str\|null` (section whose `api_key` is the bearer; null sends `no-auth`); `effort: str\|null` (passed to Claude Code as `--effort` when set); `headers: dict[str,str]` (defaults to `{}`, sent to Claude Code as custom request headers; `options.py:17`, `factory.py:23`); `extra_body: dict[str,Any]` (defaults to `{}`; sent to Claude Code as `CLAUDE_CODE_EXTRA_BODY`, a gateway-only variable that `without_gateway_env` strips from the official Anthropic path; `options.py:18`, `factory.py:24`, `claude_code.py:462-463`) | attributed to `Claude Code`: `claude-` |
 | `cc-openai-compatible` | `src.backends.openai_compatible` | `api_base: str` (required; upstream OpenAI-compatible base URL); `credential: str\|null` (section whose `api_key` becomes the upstream bearer) | attributed to `Claude Code`: `claude-` |
 | `codex` | `src.backends.codex` | `model_reasoning_effort: str\|null` (null means `xhigh`); `model_auto_compact_token_limit: int\|null`, > 0 | `Codex`: `codex-` |
 | `gemini` | `src.backends.gemini` | none | **none registered**, so a gemini option fails `check_backend_ids` at server start ("attributes to no usage source") |
 | `antigravity` | `src.backends.antigravity` | `print_timeout: str\|null` (Go duration for `agy --print-timeout`; null means `1h`) | `Antigravity`: `antigravity-`, `agy-` |
 | `charlie-code` | `src.backends.charlie_code` | `api_base: str\|null` (required at use: `"charlie-code backend requires api_base (set api_base on its backends.options entry in config.yaml)"`); `context_window: int\|null` > 0; `credential: str\|null`; `proxy_url: str\|null`; `image_input: bool = true`; `stream: bool = true`; `timeout_seconds: int\|null` > 0; `top_p: float\|null` in (0, 1]; `temperature: float\|null` >= 0 | `CLC`: `charlie-code-`, `clc-` |
-| `opencode` | `src.backends.opencode` | `proxy_url: str\|null`; `context_limit: int\|null` > 0 (the model's context limit in opencode's `providers` config; two options that name one model with different limits raise `ValueError` at use, `src/backends/opencode/options.py:14`, `:17-34`); `model` must be `<provider>/<model>` (split on the first `/` at use) | `opencode`: `opencode-`, `oc-` |
+| `opencode` | `src.backends.opencode` | `proxy_url: str\|null`; `context_limit: int\|null` > 0 (the model's context limit in opencode's `providers` config; `extra_body: dict` (defaults to `{}`; top-level fields added to every request body that model sends, under the model's `body` in the `providers` config; `src/backends/opencode/options.py:16`, `:35-37`); two options that name one model must agree on each field they set, else `ValueError` naming both options at use (`model_overrides_config`, `options.py:19`); `model` must be `<provider>/<model>` (split on the first `/` at use) | `opencode`: `opencode-`, `oc-` |
 
 Run-time credential errors: `credentials.require(section, key)` raises
 `"credentials.<section>.<key> is not set in <credentials path>"`. A cc-openai-compatible backend also needs
@@ -193,9 +194,7 @@ into discord.allowed_users as <user id>: <the person that account belongs to>"`.
 
 | Key | Type | Default | Rule |
 | --- | --- | --- | --- |
-| `voice.engine` | `sherpa` or `qwen3_hf` | `sherpa` | local ASR engine |
-| `voice.model_id` | str | `"Qwen/Qwen3-ASR-1.7B-hf"` | HF repo for `qwen3_hf` |
-| `voice.default_backend` | str | `"local"` | must be a transcription registry id (`local`, `gemini`, `muse`). Config check: `"voice.default_backend '<v>' is not a transcription backend; known: <ids>"`. |
+| `voice.default_backend` | str | `"gemini"` | must be a transcription registry id (`gemini`, `muse`). `VoiceConfig` forbids other keys (`src/features/voice/config.py:9`), so a `voice.engine` or `voice.model_id` key is refused; UNVERIFIED: the load failure was read from the pydantic model and not probed. Config check: `"voice.default_backend '<v>' is not a transcription backend; known: <ids>"`. |
 | `voice.vocabulary` | list[str] | `[]` | proper nouns for backends that accept them |
 | `voice.languages` | list[str] | `[]` | BCP-47 base codes; empty means auto-detect |
 
@@ -236,7 +235,7 @@ done
 | `src.features.code_server` | section `code_server` (+ legacy keys) |
 | `src.features.slack` | section `slack` (+ legacy keys) |
 | `src.features.discord` | section `discord` |
-| `src.features.voice` | section `voice` (+ legacy keys), check `check_default_backend` |
+| `src.features.voice` | section `voice`, check `check_default_backend` |
 | `src.backends.claude_code` | section `accounts` (+ legacy keys), check `check_claude_pools`, option type `cc-claude` |
 | `src.backends.gemini` | legacy keys, option type `gemini` |
 | `src.backends.openai_compatible` | option type `cc-openai-compatible` (through `register_backend_type`) |
@@ -276,7 +275,6 @@ Packages (`register_legacy_keys` or `register_config_section(legacy_keys=...)`):
 | `code_server_bin`, `code_server_config` | `code_server.bin`, `code_server.config` | code_server |
 | `slack_allowed_user_ids` | `slack.allowed_user_ids` | slack |
 | `slack_bot_token`, `slack_app_token`, `slack_user_token` | credentials `slack.bot_token`, `slack.app_token`, `slack.user_token` | slack |
-| `voice_engine`, `voice_model_id` | `voice.engine`, `voice.model_id` | voice |
 | `claude_accounts`, `claude_compaction` | `accounts.claude`, `accounts.claude_compaction` | claude_code |
 | `gemini_api_key`, `gemini_model` | credentials `gemini.api_key`, `gemini.model` | gemini |
 

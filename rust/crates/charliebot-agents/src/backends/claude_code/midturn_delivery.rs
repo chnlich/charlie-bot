@@ -163,8 +163,23 @@ pub async fn write_initial_prompt(
   exited: ExitedProbe,
   prompt: String,
 ) -> anyhow::Result<()> {
-  todo!("the mid-turn initial write lands with the feature");
-
+  let run_id = run_id.filter(|value| !value.is_empty()).context("a gated web manager turn needs its Run id")?;
+  let state =
+    state_of(&run_id).with_context(|| format!("Run {run_id} has no mid-turn delivery state for its initial prompt"))?;
+  let mut writer = state.writer.lock().await;
+  if *state.initial_written.1.borrow() {
+    bail!("Run {run_id} already wrote its initial stream-json prompt");
+  }
+  writer.exited = Some(exited);
+  writer.stdin = Some(stdin);
+  let result = write_line(writer.stdin.as_mut().expect("the writer was just stored"), &run_id, &prompt).await;
+  if let Err(error) = result {
+    writer.write_error = Some(error.to_string());
+    state.initial_written.0.send_replace(true);
+    return Err(error);
+  }
+  state.initial_written.0.send_replace(true);
+  Ok(())
 }
 
 async fn write_line(
@@ -182,20 +197,84 @@ async fn write_line(
 /// `inputs` carries one composed `(event id, content)` pair per pending web user event. An id is attempted once per
 /// Run: a later offer of the same event writes nothing.
 pub async fn offer(run_id: &str, inputs: Vec<(String, String)>) -> anyhow::Result<Vec<String>> {
-  todo!("the mid-turn stdin offer lands with the feature");
-
+  let Some(state) = state_of(run_id) else {
+    return Ok(Vec::new());
+  };
+  state.wait_initial_written().await;
+  let mut writer = state.writer.lock().await;
+  if let Some(error) = &writer.write_error {
+    return Err(anyhow::anyhow!(error.clone()));
+  }
+  let mut written = Vec::new();
+  if state.released.load(Ordering::Acquire) || writer.closed {
+    return Ok(written);
+  }
+  if writer.stdin.is_none() || writer.exited.as_ref().is_some_and(|exited| exited()) {
+    return Ok(written);
+  }
+  for (input_id, content) in inputs {
+    {
+      let mut evidence = state.evidence.lock().expect("mid-turn evidence mutex is not poisoned");
+      if evidence.attempted.contains(&input_id) {
+        continue;
+      }
+      evidence.attempted.insert(input_id.clone());
+    }
+    write_line(writer.stdin.as_mut().expect("the checked stdin writer exists"), &input_id, &content).await?;
+    state.evidence.lock().expect("mid-turn evidence mutex is not poisoned").written.insert(input_id.clone());
+    written.push(input_id);
+  }
+  Ok(written)
 }
 
 /// Turn a Claude replay of a delivered user message into a non-rendered acknowledgement.
 pub fn translate_replay(run_id: Option<&str>, event: &Value) -> anyhow::Result<Vec<Value>> {
-  todo!("the mid-turn replay translation lands with the feature");
-
+  if event.get("type").and_then(Value::as_str) != Some(event_types::USER)
+    || event.get("isReplay") != Some(&Value::Bool(true))
+  {
+    return Ok(vec![event.clone()]);
+  }
+  let run_id = run_id.filter(|value| !value.is_empty()).context("a replayed Claude user message has no Run id")?;
+  let input_id = match event.get("uuid") {
+    Some(Value::String(input_id)) if !input_id.is_empty() => input_id.clone(),
+    _ => bail!("a replayed Claude user message has no uuid"),
+  };
+  if input_id == run_id {
+    return Ok(Vec::new());
+  }
+  if let Some(state) = state_of(run_id)
+    && !state.evidence.lock().expect("mid-turn evidence mutex is not poisoned").written.contains(&input_id)
+  {
+    bail!("Run {run_id} replayed user input {input_id} without a matching stdin write");
+  }
+  Ok(vec![json!({
+    "type": event_types::INPUT_DELIVERED,
+    "input_event_id": input_id,
+    "run_id": run_id,
+  })])
 }
 
 /// Close gated stdin under the write lock at the first result event.
 pub async fn on_backend_event(run_id: Option<String>, event: &Value) -> anyhow::Result<()> {
-  todo!("the mid-turn stdin close lands with the feature");
-
+  let Some(run_id) = run_id else {
+    return Ok(());
+  };
+  if event.get("type").and_then(Value::as_str) != Some(event_types::RESULT) {
+    return Ok(());
+  }
+  let state =
+    state_of(&run_id).with_context(|| format!("Run {run_id} has no mid-turn delivery state for its result event"))?;
+  state.wait_initial_written().await;
+  let mut writer = state.writer.lock().await;
+  if writer.closed || state.released.load(Ordering::Acquire) {
+    return Ok(());
+  }
+  if writer.stdin.is_none() {
+    bail!("Run {run_id} has no subprocess stdin to close");
+  }
+  writer.closed = true;
+  writer.stdin = None;
+  Ok(())
 }
 
 /// Release process state after the Run's terminal fact is recorded.

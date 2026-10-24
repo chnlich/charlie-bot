@@ -422,56 +422,23 @@ Each of the 7 commits in `git rev-list --no-merges 24642edf5..3c4591bad -- src s
 
 ## Catch-up d1f7e3ba6 open steps
 
-The all-stage Rust debug run at the C4 commit failed 164 of 1169 steps, and the checker finds every one of them in this table. An earlier Python-vs-Python run passed all 1109 of its steps. Three main changes account for every row: `4c3bd3fda` (99 rows: speech models at startup and the online-only voice upload), `9b83e3b1f` (63 rows: mid-turn stdin and argv, and the raw-log cursor) and `93b427659` (2 rows: the removed confirm route). The `df7920bd7` session-share rows that remain are the 17 rows where `9b83e3b1f` also differs.
+The all-stage Rust debug run at HEAD failed 101 of 1169 steps, and the checker finds every one of them in this table. An earlier Python-vs-Python run passed all 1109 of its steps. Two main changes account for every row: `4c3bd3fda` (99 rows: speech models at startup and the online-only voice upload) and `93b427659` (2 rows: the removed confirm route). The 63 rows that `9b83e3b1f` named are gone now that the mid-turn delivery is in Rust.
 
 | Scenario | Step | Stage | Main commit | Difference |
 | --- | --- | --- | --- | --- |
 | manager-turn-cancellation-routes | server startup | agent-orchestration-cancel | 4c3bd3fda | candidate writes `home/models` at startup (R78) |
-| manager-turn-cancellation-routes | wait at the retried manager run cancel gate | agent-orchestration-cancel | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R79) |
-| manager-turn-cancellation-routes | server shutdown and fake-agent cleanup | agent-orchestration-cancel | 9b83e3b1f | manager-turn argv or stdin differs (R80) |
 | agent-orchestration-cold-read | server startup | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R81) |
-| agent-orchestration-cold-read | delegate a cold read of the synthetic page | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R82) |
-| agent-orchestration-cold-read | let the manager finish the cold-read report | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R83) |
-| agent-orchestration-cold-read | delegate a cold read whose first reader fails and second answers | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R84) |
-| agent-orchestration-cold-read | let the manager finish the retry report | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R85) |
-| agent-orchestration-cold-read | delegate a cold read whose two readers fail | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R86) |
-| agent-orchestration-cold-read | let the manager finish the all-failed report | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R87) |
-| agent-orchestration-cold-read | server shutdown and fake-agent cleanup | agent-orchestration | 9b83e3b1f | manager-turn argv or stdin differs (R88) |
 | task-completion-routes | server startup | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R89) |
-| task-completion-routes | cancel the stopped queued worker to deliver its report | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R90) |
-| task-completion-routes | release the active manager run | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R91) |
-| task-completion-routes | cancel the task after its run finishes | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R92) |
-| task-completion-routes | server shutdown and fake-agent cleanup | agent-orchestration | 9b83e3b1f | manager-turn argv or stdin differs (R93) |
 | agent-orchestration-delegate | server startup | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R94) |
-| agent-orchestration-delegate | delegate one repo-less script run | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R95) |
-| agent-orchestration-delegate | delegate a failing repo-less worker | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R96) |
-| agent-orchestration-delegate | let the manager finish the failed-script report | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R97) |
-| agent-orchestration-delegate | delegate a failing implement worker on the local repository | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R98) |
-| agent-orchestration-delegate | let the manager finish the failed-repository report | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R99) |
-| agent-orchestration-delegate | server shutdown and fake-agent cleanup | agent-orchestration | 9b83e3b1f | manager-turn argv or stdin differs (R100) |
 | manager-turn-execution-and-routes | server startup | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R101) |
-| manager-turn-execution-and-routes | wait for the retried manager run to finish | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R102) |
-| manager-turn-execution-and-routes | server shutdown and fake-agent cleanup | agent-orchestration | 9b83e3b1f | manager-turn argv or stdin differs (R103) |
 | manager-turn-opencode | server startup | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R104) |
 | implement-review-chain | server startup | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R105) |
-| implement-review-chain | delegate a repo task whose unchanged branch already landed on origin main | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R106) |
-| implement-review-chain | delegate a repo-less implement task | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R107) |
-| implement-review-chain | delegate a task whose reviewer exhausts the configured pool | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R108) |
-| implement-review-chain | server shutdown and fake-agent cleanup | agent-orchestration | 9b83e3b1f | manager-turn argv or stdin differs (R109) |
 | agent-orchestration-session-message | server startup | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R110) |
-| agent-orchestration-session-message | a relay to a live session is accepted | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R111) |
-| agent-orchestration-session-message | let the target manager answer the relay | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R112) |
-| agent-orchestration-session-message | server shutdown and fake-agent cleanup | agent-orchestration | 9b83e3b1f | manager-turn argv or stdin differs (R113) |
 | chat-request-id | server startup | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R114) |
 | chat-upload | server startup | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R115) |
 | cron-routes-and-ticks | server startup | triggers-cron-improve | 4c3bd3fda | candidate writes `home/models` at startup (R116) |
-| cron-routes-and-ticks | wait for the manual cron firing report | triggers-cron-improve | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R117) |
-| cron-routes-and-ticks | wait for a scheduler tick to fire the same task again | triggers-cron-improve | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R118) |
-| cron-routes-and-ticks | server shutdown and fake-agent cleanup | triggers-cron-improve | 9b83e3b1f | manager-turn argv or stdin differs (R119) |
 | features-artifact-view | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R120) |
 | features-artifacts-plan-fork | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R121) |
-| features-artifacts-plan-fork | fork of the plan worker at a null index | features | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R122) |
-| features-artifacts-plan-fork | server shutdown and fake-agent cleanup | features | 9b83e3b1f | manager-turn argv or stdin differs (R123) |
 | features-artifacts-plan-present | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R124) |
 | features-artifacts-plan-verbs | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R125) |
 | features-artifacts-plans | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R126) |
@@ -519,38 +486,22 @@ The all-stage Rust debug run at the C4 commit failed 164 of 1169 steps, and the 
 | features-voice-refusals | unknown backend id | features | 4c3bd3fda | voice refusal message differs (R172) |
 | features-voice-relay | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R173) |
 | features-web-reply-audit | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R174) |
-| features-web-reply-audit | wait for the audit nudge | features | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R175) |
-| features-web-reply-audit | server shutdown and fake-agent cleanup | features | 9b83e3b1f | manager-turn argv or stdin differs (R176) |
 | features-web-reply-language | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R177) |
-| features-web-reply-language | wait for the audit nudge | features | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R178) |
-| features-web-reply-language | server shutdown and fake-agent cleanup | features | 9b83e3b1f | manager-turn argv or stdin differs (R179) |
 | features-web-reply | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R180) |
 | handover-admitted-input | hand over the live manager run · python-to-candidate | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R181) |
 | handover-admitted-input | server startup · candidate-to-python | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R182) |
 | handover-drain | stop both servers and let the agent exit while none runs · python-to-candidate | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R183) |
 | handover-drain | server startup · candidate-to-python | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R184) |
-| handover-drain | wait for the raw log cursor at the gate · candidate-to-python | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R185) |
-| handover-drain | stop both servers and let the agent exit while none runs · candidate-to-python | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R186) |
-| handover-drain | server shutdown and fake-agent cleanup · candidate-to-python | agent-orchestration | 9b83e3b1f | manager-turn argv or stdin differs (R187) |
 | handover-improve | hand over the loop with its iteration in flight · python-to-candidate | triggers-cron-improve | 4c3bd3fda | candidate writes `home/models` at startup (R188) |
-| handover-improve | release the iteration's second gate so its agent exits · python-to-candidate | triggers-cron-improve | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R189) |
-| handover-improve | server shutdown and fake-agent cleanup · python-to-candidate | triggers-cron-improve | 9b83e3b1f | manager-turn argv or stdin differs (R190) |
 | handover-improve | server startup · candidate-to-python | triggers-cron-improve | 4c3bd3fda | candidate writes `home/models` at startup (R191) |
 | handover-manager-turn | hand over the live manager run · python-to-candidate | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R193) |
 | handover-manager-turn | server startup · candidate-to-python | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R194) |
-| handover-manager-turn | wait for the raw log cursor at the gate · candidate-to-python | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R195) |
-| handover-manager-turn | release the manager agent · candidate-to-python | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R196) |
-| handover-manager-turn | server shutdown and fake-agent cleanup · candidate-to-python | agent-orchestration | 9b83e3b1f | manager-turn argv or stdin differs (R197) |
 | handover-opencode | hand over the terminated OpenCode turn to server B · python-to-candidate | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R198) |
 | handover-opencode | server startup · candidate-to-python | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R199) |
 | handover-review-run | adopt the live review run · python-to-candidate | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R200) |
-| handover-review-run | release the adopted reviewer · python-to-candidate | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R201) |
-| handover-review-run | server shutdown and fake-agent cleanup · python-to-candidate | agent-orchestration | 9b83e3b1f | manager-turn argv or stdin differs (R202) |
 | handover-review-run | server startup · candidate-to-python | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R203) |
 | handover-stop-request | hand over the durable interrupted outcome · python-to-candidate | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R205) |
 | handover-stop-request | server startup · candidate-to-python | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R206) |
-| handover-stop-request | wait for the stop target at its first gate · candidate-to-python | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R207) |
-| handover-stop-request | server shutdown and fake-agent cleanup · candidate-to-python | agent-orchestration | 9b83e3b1f | manager-turn argv or stdin differs (R208) |
 | handover-worker-run | hand over the live worker run · python-to-candidate | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R209) |
 | handover-worker-run | server startup · candidate-to-python | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R210) |
 | improve-loop-reports | server startup | triggers-cron-improve | 4c3bd3fda | candidate writes `home/models` at startup (R212) |
@@ -568,28 +519,14 @@ The all-stage Rust debug run at the C4 commit failed 164 of 1169 steps, and the 
 | session-listings | server startup | session-read-api | 4c3bd3fda | candidate writes `home/models` at startup (R225) |
 | session-runs | server startup | session-read-api | 4c3bd3fda | candidate writes `home/models` at startup (R226) |
 | session-stream | server startup | session-stream | 4c3bd3fda | candidate writes `home/models` at startup (R227) |
-| session-stream | the trigger turns reach the live socket on the session channel | session-stream | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R228) |
-| session-stream | the trigger turns reach the live socket on the sidebar channel | session-stream | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R229) |
-| session-stream | wait for the last live trigger to fire before shutdown | session-stream | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R230) |
-| session-stream | server shutdown and fake-agent cleanup | session-stream | 9b83e3b1f | manager-turn argv or stdin differs (R231) |
 | session-usage-anthropic-compatible | server startup | session-read-api | 4c3bd3fda | candidate writes `home/models` at startup (R232) |
 | session-write-agent | server startup | session-write | 4c3bd3fda | candidate writes `home/models` at startup (R233) |
 | session-write-cron-listing | server startup | session-write | 4c3bd3fda | candidate writes `home/models` at startup (R236) |
 | session-write-fork | server startup | session-write | 4c3bd3fda | candidate writes `home/models` at startup (R237) |
-| session-write-fork | fork of the source at a null index, the whole log | session-write | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R238) |
-| session-write-fork | fork of the source at its first line | session-write | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R239) |
-| session-write-fork | fork of the source at a middle line | session-write | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R240) |
-| session-write-fork | fork of the source at its last line | session-write | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R241) |
-| session-write-fork | elone of the source at a middle line takes over and archives the source | session-write | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R242) |
-| session-write-fork | server shutdown and fake-agent cleanup | session-write | 9b83e3b1f | manager-turn argv or stdin differs (R243) |
 | session-write-meta | server startup | session-write | 4c3bd3fda | candidate writes `home/models` at startup (R244) |
 | session-write-task | server startup | session-write | 4c3bd3fda | candidate writes `home/models` at startup (R245) |
 | wait-trigger-delay | server startup | triggers-cron-improve | 4c3bd3fda | candidate writes `home/models` at startup (R248) |
-| wait-trigger-delay | wait until the trigger file is fired | triggers-cron-improve | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R249) |
-| wait-trigger-delay | server shutdown and fake-agent cleanup | triggers-cron-improve | 9b83e3b1f | manager-turn argv or stdin differs (R250) |
 | wait-trigger-local-pid | server startup | triggers-cron-improve | 4c3bd3fda | candidate writes `home/models` at startup (R251) |
-| wait-trigger-local-pid | end the synthetic watched process | triggers-cron-improve | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R252) |
-| wait-trigger-local-pid | server shutdown and fake-agent cleanup | triggers-cron-improve | 9b83e3b1f | manager-turn argv or stdin differs (R253) |
 
 
 ## Catch-up d1f7e3ba6 ignored Cargo tests
@@ -637,5 +574,5 @@ Each of the 30 commits in `git rev-list --no-merges 3c4591bad..d1f7e3ba6 -- src 
 | 72cf7dbf6 | single-home the reply's caller-claims derivation | no behavior | Single-homes the reply's caller-claims derivation (`src/features/chat_threads/thread_entry.py`). Refactor only. |
 | fb4529dc3 | single-home the backend pool's skip check | no behavior | Single-homes the backend pool's skip check (`src/runtime/backend_pool.py`). Refactor only. |
 | fa4ac13b9 | move the remaining test resets out of production modules | no behavior | Moves the remaining test resets out of three production modules (`src/backends/claude_code/claude_accounts.py`, `src/runtime/backend_pool.py`, `src/runtime/sidebar_state.py`). The Rust claude-pool reference helper now clears the same four account registries itself (`rust/crates/charliebot-agents/tests/claude_pool_reference.py:23-28`), so R254 and R255 run again. |
-| b03c38579 | scan the echoed raw log off the loop | no behavior | Scans the echoed raw log on a thread (`src/runtime/midturn_delivery.py`). The scan result is unchanged. The mid-turn delivery it serves is `9b83e3b1f`. |
-| 9b83e3b1f | deliver messages during manager turns | red-list | Delivers messages during manager turns through stream-json stdin with the replay echo (`src/runtime/midturn_delivery.py`, `src/backends/claude_code/claude_code.py`). Rust has no mid-turn delivery. Rows: R79–R80, R82–R88, R90–R93, R95–R100, R102–R103, R106–R109, R111–R113, R117–R119, R122–R123, R175–R176, R178–R179, R185–R187, R189–R190, R195–R197, R201–R202, R207–R208, R228–R231, R238–R243, R249–R250, R252–R253. |
+| b03c38579 | scan the echoed raw log off the loop | in Rust | Scans the echoed raw log on a thread (`src/runtime/midturn_delivery.py`). The scan result is unchanged. Rust `echoed_input_ids` (`rust/crates/charliebot-tasks/src/midturn_delivery.rs:69`) parses the raw lines and `claim_finish_inputs` (`:116`) rides `tokio::task::spawn_blocking` (`:128`), so the scan never runs on an async worker thread. Test: `manager_finish_claims_only_echoed_pending_user_ids` (`rust/crates/charliebot-tasks/tests/dispatch.rs`). |
+| 9b83e3b1f | deliver messages during manager turns | in Rust | Delivers messages during manager turns through stream-json stdin with the replay echo (`src/runtime/midturn_delivery.py`, `src/backends/claude_code/claude_code.py`). The delivery state lives in `rust/crates/charliebot-agents/src/backends/claude_code/midturn_delivery.rs`: `launch_kwargs` names the gated Run (`:93`), `write_initial_prompt` writes the first stream-json user line (`:160`), `offer` writes each composed input under the stdin write lock (`:199`), `translate_replay` turns a replay into the non-rendered `input_delivered` event (`:231`), and `on_backend_event` closes stdin at the first result (`:258`). `rust/crates/charliebot-agents/src/backends/claude_code/claude_code.rs:256` adds `--input-format stream-json --replay-user-messages`, and `rust/crates/charliebot-agents/src/runner.rs:298` defers the initial write until the active process exists. The dispatcher half lives in `rust/crates/charliebot-tasks/src/midturn_delivery.rs` (`offer` `:32`, `record_ack` `:53`, `claim_finish_inputs` `:116`, `fresh_translate` `:142`) and `claim_echoed_user_inputs` (`rust/crates/charliebot-tasks/src/dispatch.rs:314`) claims the echoed pending ids. Tests: `midturn_offer_writes_only_web_user_messages_and_stops_at_result`, `replay_becomes_non_rendered_input_delivered_event`, `replay_after_result_resets_post_result_timeout`, `pooled_relay_turn_uses_the_same_midturn_launch_arguments`, `thread_turn_keeps_plain_text_stdin_and_queues_later_messages`, `manager_finish_claims_only_echoed_pending_user_ids`, `input_admitted_during_an_active_run_dispatches_after_its_finish_for_every_session_kind`. |

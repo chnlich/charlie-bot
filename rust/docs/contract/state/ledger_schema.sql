@@ -1,5 +1,5 @@
 -- The sqlite_master.sql text of every object in <home>/usage/ledger.sqlite3, dumped from a ledger that
--- src/features/usage/usage_ledger.py created at baseline d1f7e3ba6. Objects are separated by one blank
+-- src/features/usage/usage_ledger.py created at baseline d113f2c4d. Objects are separated by one blank
 -- line. Each object's stored text runs from its CREATE line to the end of its block, minus the final ';'
 -- this dump appends (inner ';' inside trigger bodies are part of the text). The five usage_agg_after_*
 -- trigger texts are compared with sqlite_master.sql byte for byte on every open, including the lines inside

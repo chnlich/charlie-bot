@@ -16,6 +16,7 @@ charliebot-store.workspace = true
 charliebot-tasks.workspace = true
 futures-util.workspace = true
 http.workspace = true
+regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

@@ -878,6 +878,7 @@ dependencies = [
  "charliebot-tasks",
  "futures-util",
  "http",
+ "regex",
  "serde",
  "serde_json",
  "tempfile",

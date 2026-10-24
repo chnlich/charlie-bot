@@ -6,6 +6,7 @@
 mod api;
 mod audit;
 mod json_input;
+mod plan_links;
 mod reply;
 mod status;
 mod turn_contribution;
@@ -116,6 +117,7 @@ fn routes(features: &Arc<FeatureContext>) -> Router {
     .route("/api/internal/web/reply", post_only(api::post_reply))
     .route("/api/internal/web/dialog", get_only(api::get_dialog))
     .route("/api/internal/web/status", refuse_other_methods(post(api::post_status).get(api::get_status), "POST"))
+    .route("/api/internal/web/status/confirm", post_only(api::post_status_confirm))
     .route("/api/internal/web/status/unread", post_only(api::post_status_unread))
     .route("/api/internal/web/ask-check", post_only(api::post_ask_check))
     .with_state(Arc::clone(features))
@@ -129,6 +131,7 @@ fn matches(path: &str) -> bool {
     "/api/internal/web/reply"
       | "/api/internal/web/dialog"
       | "/api/internal/web/status"
+      | "/api/internal/web/status/confirm"
       | "/api/internal/web/status/unread"
       | "/api/internal/web/ask-check"
   )
@@ -151,6 +154,7 @@ mod tests {
     assert!((routers[0].matches)("/api/internal/web/reply"));
     assert!((routers[0].matches)("/api/internal/web/dialog"));
     assert!((routers[0].matches)("/api/internal/web/status"));
+    assert!((routers[0].matches)("/api/internal/web/status/confirm"));
     assert!((routers[0].matches)("/api/internal/web/status/unread"));
     assert!((routers[0].matches)("/api/internal/web/ask-check"));
     assert!(!(routers[0].matches)("/api/internal/web"));

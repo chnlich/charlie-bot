@@ -31,7 +31,7 @@ web/templates/index.html loads core in five layers, lowest first:
     control     chat/input.js, websocket-handlers.js and app.js
 
 A package learns core's facts through a registration entry: a function core provides, and the
-package's script registers a handler with it at load time. The core registration entries today:
+package's script registers a handler with it at load time. The core registration entries:
 
     Chat.registerDeliveryLink   web/static/js/chat/rendering.js (a link on the worker delivery banner)
     Chat.registerFileLinkFamily web/static/js/chat/file-links.js (a family of file links the package owns)
@@ -60,7 +60,7 @@ element to the menu's container (the voice package adds the composer ⋯ menu's 
 entry to #overflow-menu), so the core markup names nothing the package defines.
 
 Core announces a moment that needs no answer as a CustomEvent on document, and a package listens
-for it. The core page events today:
+for it. The core page events:
 
     charliebot:active-session-changed
                                 web/static/js/sidebar/session-view.js (SESSION_ID names another session)

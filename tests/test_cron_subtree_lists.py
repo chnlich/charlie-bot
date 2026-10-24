@@ -159,7 +159,7 @@ async def test_search_and_starred_keep_their_rows(tmp_path: pathlib.Path) -> Non
   resp = client.get("/api/sessions/search")
   assert resp.status_code == 200
   assert {fx.cron.id, fx.worker.id} <= {row["id"] for row in resp.json()}
-  # Starred keeps today's behavior: a starred cron session still lists.
+  # Starred returns a starred cron session like any other.
   await fx.session_blocks.lifecycle.star_session(fx.cron.id)
   resp = client.get("/api/sessions/starred")
   assert resp.status_code == 200

@@ -201,7 +201,7 @@ def test_select_prefers_an_idle_under_line_account_over_a_busier_one(tmp_path: p
 
 def test_select_without_an_under_line_account_keeps_idle_first(tmp_path: pathlib.Path) -> None:
   """Every account at or above the line: the tier is empty, so all available accounts
-  contend under today's order and the idle account still wins."""
+  contend under the ranking rules and the idle account still wins."""
   cfg = _pool_cfg(tmp_path, labels=("main", "ext-1"))
   claude_accounts.observe_rate_limit("main", _event("allowed", 0.95, 0.10), now=NOW)
   claude_accounts.observe_rate_limit("ext-1", _event("allowed", 0.92, 0.10), now=NOW)

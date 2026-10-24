@@ -137,7 +137,7 @@ function codeBlockHtml(displayLang, isMarkdown, innerHtml, markerId) {
 // Ambiguous-width characters (box-drawing ─│, ±, ·, arrows) are NOT
 // boxed: their glyphs come from the Latin monospace font itself and already
 // render one column — which is exactly why the box-drawing rails of a CJK
-// diagram align today while its CJK labels drift. Boxing them at 2ch would
+// diagram align while its CJK labels drift. Boxing them at 2ch would
 // double widths that are already correct.
 // ---------------------------------------------------------------------------
 
@@ -288,7 +288,7 @@ function wc2chWrapText(text, out) {
 // One linear pass over a code block's inner HTML: tags verbatim, text
 // segments with each W/F character in exactly one 2ch box. A block without
 // wide chars round-trips byte-identically (split/join plus unit copies), so
-// today's bytes are preserved wherever the fix does not apply.
+// its bytes are preserved wherever the fix does not apply.
 function wrapWideChars(html) {
   var parts = html.split(WC2CH_TAG_SPLIT_RE);
   var out = [];
@@ -349,7 +349,7 @@ function cachedHighlight(lang, code, run) {
 // trailing newline from a terminated token's raw but keeps it on an
 // unterminated one); an unterminated block's raw ends on content. The one
 // shape this misreads — a long-fence draft whose content ends on a shorter
-// bare fence line — reads as complete and keeps today's per-paint highlight,
+// bare fence line — reads as complete and keeps the per-paint highlight,
 // so a misread costs coverage, never bytes.
 function endsOnClosingFence(raw) {
   var body = raw.endsWith('\n') ? raw.slice(0, -1) : raw;
@@ -537,7 +537,7 @@ function statusBlockParagraphLines(text) {
     // parse's code tokens in document order, the unterminated block is the
     // last of them, and its raw not ending on a closing fence says it never
     // closed. The cache check first keeps a completed block that shares the
-    // tail's cache key on today's highlighted bytes.
+    // tail's cache key on the bytes already highlighted.
     const isGrowingTail = streamPaintCodeTokens !== null
       && !highlightCache.has(highlightKey(resolvedLang, trimmed))
       && token === streamPaintCodeTokens[streamPaintCodeTokens.length - 1]
@@ -1044,8 +1044,8 @@ function copyCode(btn) {
 // one pass, off the render path; a real block then pays only its own scoring.
 // Idle-callback scheduling only: a setTimeout fallback would land this warm in
 // the same timer queue the deferred highlight flush drives, and environments
-// without requestIdleCallback (the render-test vm harnesses) keep today's
-// compile-on-first-block behavior.
+// without requestIdleCallback (the render-test vm harnesses) compile each
+// block on first paint.
 (function warmHighlighterAtIdle() {
   if (typeof hljs === 'undefined' || typeof hljs.highlightAuto !== 'function') return;
   if (typeof requestIdleCallback !== 'function') return;

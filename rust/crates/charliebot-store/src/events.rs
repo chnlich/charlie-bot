@@ -978,6 +978,18 @@ impl Store {
     ndjson::read_file_compact(path)
   }
 
+  /// The number of sessions whose live events are cached, and the number of cached events across them.
+  pub fn events_cache_totals(&self) -> (usize, usize) {
+    let entries: Vec<_> =
+      self.events_cache.lock().expect("event cache mutex is not poisoned").values().cloned().collect();
+    entries.iter().fold((0, 0), |(sessions, events), entry| {
+      match entry.lock().expect("session event cache mutex is not poisoned").as_ref() {
+        Some(cached) => (sessions + 1, events + cached.events.len()),
+        None => (sessions, events),
+      }
+    })
+  }
+
   pub(crate) fn cached_chat_events(&self, session_id: &str) -> Option<Arc<Vec<SharedChatEvent>>> {
     let cache_entry = self.events_cache.lock().expect("event cache mutex is not poisoned").get(session_id).cloned()?;
     let cache = cache_entry.lock().expect("session event cache mutex is not poisoned");
@@ -1484,6 +1496,52 @@ mod tests {
 
     assert!(appended_while_read_held, "session B append waited for session A file read");
     assert_eq!(appended["id"].as_str(), Some("event-b"));
+  }
+
+  #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+  async fn cold_events_fill_on_a_thread_keeps_an_append_exactly_once() {
+    for append_first in [true, false] {
+      let (_home, store) = make_test_store();
+      let store = Arc::new(store);
+      let session_id = "synthetic-cold-fill";
+      let path = store.chat_events_path(session_id);
+      std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+      std::fs::write(&path, "{\"id\": \"seed\", \"type\": \"user\"}\n").unwrap();
+      let event = json!({"id": "appended", "type": "user"});
+      if append_first {
+        store.append_chat_event(session_id, event).await.unwrap();
+      } else {
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let release_rx = Arc::new(Mutex::new(release_rx));
+        *store.event_read_hook.lock().unwrap() = Some(Arc::new(move || {
+          entered_tx.send(()).unwrap();
+          release_rx.lock().unwrap().recv().unwrap();
+        }));
+        let reader_store = Arc::clone(&store);
+        let reader =
+          tokio::task::spawn_blocking(move || reader_store.load_chat_events_shared_sync(session_id).map(|_| ()));
+        assert!(entered_rx.recv_timeout(Duration::from_secs(1)).is_ok(), "the cold fill reaches its file read");
+        let append_store = Arc::clone(&store);
+        let append = tokio::spawn(async move { append_store.append_chat_event(session_id, event).await });
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        release_tx.send(()).unwrap();
+        reader.await.unwrap().unwrap();
+        append.await.unwrap().unwrap();
+        *store.event_read_hook.lock().unwrap() = None;
+      }
+
+      let file_ids: Vec<String> = std::fs::read_to_string(&path)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap()["id"].as_str().unwrap().to_string())
+        .collect();
+      let cached = store.load_chat_events_shared_sync(session_id).unwrap();
+      let cached_ids: Vec<String> =
+        cached.iter().map(|event| event.get("id").and_then(CompactValue::as_str).unwrap().to_string()).collect();
+      assert_eq!(cached_ids, file_ids, "append_first={append_first}");
+      assert_eq!(store.events_cache_totals(), (1, 2), "append_first={append_first}");
+    }
   }
 
   #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

@@ -166,11 +166,15 @@ fn convert_assistant_message(message: &Map<String, Value>) -> PyResult<Value> {
           return value_error("tool_use block missing id or name");
         };
         let input = block.get("input").cloned().unwrap_or_else(|| json!({}));
-        tool_calls.push(json!({
+        let mut tool_call = json!({
           "id": id,
           "type": "function",
           "function": {"name": name, "arguments": pyfmt::json_dumps(&input, &COMPACT_ASCII_JSON)},
-        }));
+        });
+        if let Some(extra_content) = block.get("extra_content").filter(|extra_content| !extra_content.is_null()) {
+          tool_call["extra_content"] = extra_content.clone();
+        }
+        tool_calls.push(tool_call);
       }
       _ => {
         return value_error(format!("unsupported assistant content block type: {}", py_str(block.get("type"), "None")));
@@ -348,6 +352,16 @@ pub fn openai_chat_response_to_anthropic(response: &Value, requested_model: &str
 }
 
 /// `OpenAIChatStreamToAnthropic`: the stateful translation of the OpenAI chat chunks to Anthropic's stream events.
+struct StreamToolCall {
+  call_index: Value,
+  block_index: u64,
+  id: Value,
+  name: Value,
+  extra_content: Option<Value>,
+  pending_arguments: Vec<Value>,
+  started: bool,
+}
+
 pub struct OpenAiChatStream {
   message_id: String,
   model: String,
@@ -355,7 +369,7 @@ pub struct OpenAiChatStream {
   next_index: u64,
   text_index: Option<u64>,
   /// The open tool blocks in opening order, each with the call index the upstream gave it.
-  tool_indexes: Vec<(Value, u64)>,
+  tool_calls: Vec<StreamToolCall>,
   usage: Value,
   finish_reason: Option<Value>,
 }
@@ -368,7 +382,7 @@ impl OpenAiChatStream {
       gemini_stream_rules,
       next_index: 0,
       text_index: None,
-      tool_indexes: Vec::new(),
+      tool_calls: Vec::new(),
       usage: json!({}),
       finish_reason: None,
     }
@@ -458,9 +472,47 @@ impl OpenAiChatStream {
   }
 
   fn close_tool_blocks(&mut self, events: &mut Vec<Event>) {
-    for (_, index) in self.tool_indexes.drain(..) {
-      events.push(("content_block_stop", json!({"index": index})));
+    while !self.tool_calls.is_empty() {
+      self.close_tool_block(0, events);
     }
+  }
+
+  fn start_tool_block(&mut self, position: usize, events: &mut Vec<Event>) {
+    let (block_index, id, name, extra_content, pending_arguments) = {
+      let call = &mut self.tool_calls[position];
+      if call.started {
+        return;
+      }
+      call.started = true;
+      (
+        call.block_index,
+        call.id.clone(),
+        call.name.clone(),
+        call.extra_content.clone(),
+        std::mem::take(&mut call.pending_arguments),
+      )
+    };
+    let mut content_block = Map::new();
+    content_block.insert("type".to_string(), json!("tool_use"));
+    content_block.insert("id".to_string(), id);
+    content_block.insert("name".to_string(), name);
+    content_block.insert("input".to_string(), json!({}));
+    if let Some(extra_content) = extra_content {
+      content_block.insert("extra_content".to_string(), extra_content);
+    }
+    events.push(("content_block_start", json!({"index": block_index, "content_block": Value::Object(content_block)})));
+    for arguments in pending_arguments {
+      events.push((
+        "content_block_delta",
+        json!({"index": block_index, "delta": {"type": "input_json_delta", "partial_json": arguments}}),
+      ));
+    }
+  }
+
+  fn close_tool_block(&mut self, position: usize, events: &mut Vec<Event>) {
+    self.start_tool_block(position, events);
+    let call = self.tool_calls.remove(position);
+    events.push(("content_block_stop", json!({"index": call.block_index})));
   }
 
   /// `_handle_tool_delta`: a call's first delta opens its block; later deltas carry its arguments.
@@ -474,34 +526,59 @@ impl OpenAiChatStream {
     if matches!(call_index, Value::Array(_) | Value::Object(_)) {
       return raised("TypeError", format!("unhashable type: '{}'", type_name(&call_index)));
     }
-    if !self.tool_indexes.iter().any(|(known, _)| known == &call_index) {
-      let tool_id = get(tool_call, "id")?.filter(|id| truthy(id)).cloned();
-      let name = get(&function, "name")?.filter(|name| truthy(name)).cloned();
-      let (Some(tool_id), Some(name)) = (tool_id, name) else {
-        return value_error("first streaming tool_call delta missing id or function.name");
-      };
-      self.close_text_block(events);
-      let block_index = self.take_index();
-      self.tool_indexes.push((call_index.clone(), block_index));
-      events.push((
-        "content_block_start",
-        json!({
-          "index": block_index,
-          "content_block": {"type": "tool_use", "id": tool_id, "name": name, "input": {}},
-        }),
-      ));
+    let tool_id = get(tool_call, "id")?.filter(|id| truthy(id)).cloned();
+    let mut position = self.tool_calls.iter().position(|call| call.call_index == call_index);
+    if let Some(current_position) = position {
+      if tool_id.as_ref().is_some_and(|tool_id| tool_id != &self.tool_calls[current_position].id) {
+        self.close_tool_block(current_position, events);
+        position = None;
+      }
+    }
+    let position = match position {
+      Some(position) => position,
+      None => {
+        let name = get(&function, "name")?.filter(|name| truthy(name)).cloned();
+        let (Some(tool_id), Some(name)) = (tool_id, name) else {
+          return value_error("first streaming tool_call delta missing id or function.name");
+        };
+        self.close_text_block(events);
+        let block_index = self.take_index();
+        self.tool_calls.push(StreamToolCall {
+          call_index: call_index.clone(),
+          block_index,
+          id: tool_id,
+          name,
+          extra_content: None,
+          pending_arguments: Vec::new(),
+          started: false,
+        });
+        self.tool_calls.len() - 1
+      }
+    };
+    let extra_content = get(tool_call, "extra_content")?.filter(|extra_content| !extra_content.is_null()).cloned();
+    if let Some(extra_content) = extra_content.as_ref() {
+      let call = &mut self.tool_calls[position];
+      if call.started && call.extra_content.as_ref() != Some(extra_content) {
+        return value_error("streaming tool_call extra_content changed after its content block started");
+      }
+      call.extra_content = Some(extra_content.clone());
+    }
+    if extra_content.is_some() || !self.gemini_stream_rules {
+      self.start_tool_block(position, events);
     }
     if let Some(arguments) = get(&function, "arguments")?.filter(|arguments| !arguments.is_null()) {
-      let index = self
-        .tool_indexes
-        .iter()
-        .find(|(known, _)| known == &call_index)
-        .map(|(_, index)| *index)
-        .expect("the call's block is open once its first delta has run");
-      events.push((
-        "content_block_delta",
-        json!({"index": index, "delta": {"type": "input_json_delta", "partial_json": arguments}}),
-      ));
+      let call = &mut self.tool_calls[position];
+      if call.started {
+        events.push((
+          "content_block_delta",
+          json!({
+            "index": call.block_index,
+            "delta": {"type": "input_json_delta", "partial_json": arguments},
+          }),
+        ));
+      } else {
+        call.pending_arguments.push(arguments.clone());
+      }
     }
     Ok(())
   }

@@ -4,7 +4,7 @@ import datetime
 import os
 import pathlib
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 
 import orjson
 
@@ -248,6 +248,27 @@ class ChatEventStore:
     events, total, has_more = ndjson.parse_ndjson_tail(self._chat_events_path(session_id), limit)
     return events, total, has_more
 
+  def iter_events_from_end(self, session_id: str, types: frozenset[str], live_end: int) -> Iterator[dict]:
+    """Yield the session's events whose type is in *types*, newest first, read from the files.
+
+    The live file is walked from byte *live_end* (the size a caller stat'd), then each
+    archive segment newest first, whole. Archive segments change only by rotation, and
+    rotation moves the live file's identity, so a caller keyed on that identity sees
+    each rotation. Nothing is cached: the walk holds one line at a time and parses only
+    the lines its type filter keeps, so a caller that needs a few facts from a long
+    history never loads the history itself.
+    """
+    parse_filter = ndjson.type_line_filter(types)
+    log_fields = {"session_id": session_id}
+    archives = sorted(chat_event_archives_dir(self._session_dir(session_id)).glob(ARCHIVE_FILE_GLOB))
+    walks = [(self._chat_events_path(session_id), live_end), *((path, None) for path in reversed(archives))]
+    for path, end in walks:
+      # The head filter keeps any line it cannot read, so the parsed type decides here.
+      for event in ndjson.iter_ndjson_events_from_end(path, log_event="chat_events_fact_parse_skipped",
+                                                      log_fields=log_fields, parse_filter=parse_filter, end=end):
+        if event.get("type") in types:
+          yield event
+
   def get_chat_event_count_sync(self, session_id: str, session_meta: models.SessionMetadata | None = None) -> int:
     """Return the current global chat event count without parsing event payloads.
 
@@ -305,6 +326,11 @@ class ChatEventStore:
     live_events = [e for e in lines[:live_end - line_start] if e is not None]
     return archive_events + live_events, start > 0
 
+  def peek_archive_offset(self, session_id: str) -> int | None:
+    """The archive_offset the metadata cache holds; None when that entry is cold (no disk read)."""
+    cached = self._metadata_cache.get(session_id)
+    return None if cached is None else cached[0].archive_offset
+
   def read_archive_offset_sync(self, session_id: str) -> int:
     """Synchronously read the archive_offset from metadata.json.
 
@@ -313,9 +339,9 @@ class ChatEventStore:
     learn the live/archive split. Falls back to 0 if the metadata file is
     missing or unreadable.
     """
-    cached = self._metadata_cache.get(session_id)
-    if cached is not None:
-      return cached[0].archive_offset
+    archived = self.peek_archive_offset(session_id)
+    if archived is not None:
+      return archived
     path = self._metadata_path(session_id)
     if not path.exists():
       return 0

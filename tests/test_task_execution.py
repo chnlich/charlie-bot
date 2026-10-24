@@ -796,7 +796,7 @@ async def test_delegate_creates_one_child_and_replays_are_stable(
     assert tree.task_state(manager.id) == "open"
 
     def reports_of(cid: str) -> list[dict]:
-      return [e for e in child_reports(tree, manager.id) if e["child_session_id"] == cid]
+      return [e for e in conftest.child_reports(tree, manager.id) if e["child_session_id"] == cid]
 
     # Each child's close fact and its parent report are two appends under one
     # lock (_append_closed). The lock-free state reads above can fall between
@@ -1495,7 +1495,7 @@ async def test_a_failed_worker_run_reports_once_and_archives_the_worker(
 
   await wait_for_terminal_run(tree, worker.id, "run-work")
   await poll_until(lambda: tree.task_state(worker.id) == "archived", timeout=15.0, what="the failed worker's archive")
-  reports = child_reports(tree, manager.id)
+  reports = conftest.child_reports(tree, manager.id)
   assert [r["outcome"] for r in reports] == ["failed"]
   closes = [e for e in tree.events.load_events(worker.id) if e["type"] == ET.TASK_CLOSED]
   assert len(closes) == 1
@@ -1537,7 +1537,7 @@ async def test_an_interrupted_worker_run_reports_once_and_archives_the_worker(
   await tree.dispatch.executor._after_worker_run(meta, fresh, "interrupted")
 
   assert tree.task_state(worker.id) == "archived"
-  reports = child_reports(tree, manager.id)
+  reports = conftest.child_reports(tree, manager.id)
   assert [r["outcome"] for r in reports] == ["interrupted"]
   closes = [e for e in tree.events.load_events(worker.id) if e["type"] == ET.TASK_CLOSED]
   assert len(closes) == 1
@@ -1601,7 +1601,7 @@ async def test_a_failed_review_with_a_queued_retry_reports_nothing_and_stays_ope
   assert len(reviews) == 2
   retried = next(r for r in reviews if r.id != "run-review-1")
   assert retried.backend == "fake3"
-  assert child_reports(tree, manager.id) == []
+  assert conftest.child_reports(tree, manager.id) == []
   assert [e for e in tree.events.load_events(worker.id) if e["type"] == ET.TASK_CLOSED] == []
   assert tree.task_state(worker.id) == "open"
 
@@ -1640,7 +1640,7 @@ async def test_an_improve_childs_failed_run_keeps_the_loop_controllers_close_pat
 
   # The loop's close step found no ended loop (the ref names none), and the
   # generic failure entry never ran: no report, no archive, the node open.
-  assert child_reports(tree, manager.id) == []
+  assert conftest.child_reports(tree, manager.id) == []
   assert [e for e in tree.events.load_events(worker.id) if e["type"] == ET.TASK_CLOSED] == []
   assert tree.task_state(worker.id) == "open"
 
@@ -1676,8 +1676,8 @@ async def test_repo_less_quick_edit_closes_without_review(
   # The close fact and the parent report are two appends under one lock
   # (_append_closed); this lock-free read of the closed state can fall between
   # them, so the report is waited for on its own.
-  await poll_until(lambda: child_reports(tree, manager.id), timeout=15.0, what="the completed child report")
-  assert child_reports(tree, manager.id)[-1]["outcome"] == "completed"
+  await poll_until(lambda: conftest.child_reports(tree, manager.id), timeout=15.0, what="the completed child report")
+  assert conftest.child_reports(tree, manager.id)[-1]["outcome"] == "completed"
 
   await conftest._settle_parent(tree, manager, timeout=30.0, poll=0.2)
   assert pm_builds, "the delivered report never triggered a parent manager turn"
@@ -2500,7 +2500,7 @@ async def test_worktree_preparation_failure_lands_failed_run_and_reports_to_pare
     # report, then the end state.
     await poll_until(
         lambda: tree.task_state(child_id) == "archived", timeout=15.0, what="the launch-failed worker's archive")
-    assert len(child_reports(tree, manager.id)) == 1
+    assert len(conftest.child_reports(tree, manager.id)) == 1
     closes = [e for e in tree.events.load_events(child_id) if e["type"] == ET.TASK_CLOSED]
     assert len(closes) == 1
     assert closes[0]["outcome"] == "archived"
@@ -3157,10 +3157,6 @@ async def poll_until(predicate, *, timeout: float = 5.0, poll: float = 0.02, wha
   pytest.fail(f"{what} never settled within {timeout}s")
 
 
-def child_reports(tree: task_sessions.TaskTreeManager, session_id: str) -> list[dict]:
-  return [e for e in tree.fact_history(session_id) if e.get("type") == ET.CHILD_REPORT]
-
-
 def test_is_out_of_space_error_walks_cause_and_context_chain() -> None:
   """Only ENOSPC/EDQUOT enter the retry, wherever they sit on the chain."""
   enospc = OSError(errno.ENOSPC, "No space left on device")
@@ -3216,9 +3212,9 @@ async def test_worker_run_finished_enospc_retries_and_lands_without_restart(
   # the parent's report turn settles without a restart. The report rides the
   # retry task's async delivery chain, so wait for the report itself: an
   # idle-parent poll can win the race against the not-yet-appended report.
-  await poll_until(lambda: len(child_reports(tree, manager.id)) == 1, what="the retried landing's report")
+  await poll_until(lambda: len(conftest.child_reports(tree, manager.id)) == 1, what="the retried landing's report")
   await conftest._settle_parent(tree, manager, timeout=5.0, poll=0.02)
-  reports = child_reports(tree, manager.id)
+  reports = conftest.child_reports(tree, manager.id)
   assert [r.get("outcome") for r in reports] == ["completed"]
   assert adapter._landing_retries == {}  # a clean round ended the retry task
   assert len(worker_builds) == 1  # one process: the retry drained, never relaunched
@@ -3286,12 +3282,12 @@ async def test_parent_report_enospc_retry_delivers_report_once(
   assert outcome == "success"
   # The retry's re-delivery is asynchronous with the live finish: wait for
   # the one report before naming the appends and settling the parent.
-  await poll_until(lambda: len(child_reports(tree, manager.id)) == 1, what="the retried delivery's report")
+  await poll_until(lambda: len(conftest.child_reports(tree, manager.id)) == 1, what="the retried delivery's report")
   assert fault_hits == [True, False]  # the live delivery failed; the retry's landed
   ended_at = run.ended_at
   assert ended_at is not None
   await conftest._settle_parent(tree, manager, timeout=5.0, poll=0.02)
-  reports = child_reports(tree, manager.id)
+  reports = conftest.child_reports(tree, manager.id)
   assert [r.get("outcome") for r in reports] == ["completed"]  # success-based, once
   fresh = await tree.runs.get_run(worker.id, run_id)
   assert fresh is not None and fresh.ended_at == ended_at  # (k) the retry kept it
@@ -3370,8 +3366,8 @@ async def test_disk_headroom_precheck_withholds_worker_run_but_not_manager_turn(
   assert run is not None and run.pid is None  # no process, stays queued
   assert tree.runs.terminal_outcome(tree.runs.load_events_sync(worker.id), run_id) is None
   assert worker_builds == []
-  await poll_until(lambda: len(child_reports(tree, manager.id)) == 1, what="the blocked report")
-  assert [r.get("outcome") for r in child_reports(tree, manager.id)] == ["blocked"]
+  await poll_until(lambda: len(conftest.child_reports(tree, manager.id)) == 1, what="the blocked report")
+  assert [r.get("outcome") for r in conftest.child_reports(tree, manager.id)] == ["blocked"]
 
   # A manager turn launches under the same threshold: the blocked report's
   # own wake started one (worker-class runs only are checked).
@@ -3416,7 +3412,7 @@ async def test_withheld_launch_on_a_completed_task_settles_the_queued_run(
   # The withheld rule stands: a run that never launched has no terminal fact.
   assert tree.runs.terminal_outcome(events, "run-queued") is None
   assert tree.runs.run_blocker(run, events, runs_mod.read_host_boot_time()) is None
-  assert [r.get("outcome") for r in child_reports(tree, manager.id)] == ["completed", "blocked"]
+  assert [r.get("outcome") for r in conftest.child_reports(tree, manager.id)] == ["completed", "blocked"]
   # The completed worker's stopped run blocks nothing: the archive passes and
   # archives the open parent (a completed node is left unchanged).
   assert await tree.archive_subtree(manager.id, caller=conftest.OPERATOR) == [manager.id]
@@ -3501,7 +3497,7 @@ async def test_non_space_end_failure_lands_immediately_and_starts_no_retry(
       lambda: (worker.id, run_id) not in adapter._launch_inflight, timeout=15.0, what="the failed run's launch chain")
   assert adapter._landing_retries == {}  # no retry for a non-space error
   await conftest._settle_parent(tree, manager, timeout=5.0, poll=0.02)
-  assert [r.get("outcome") for r in child_reports(tree, manager.id)] == ["failed"]
+  assert [r.get("outcome") for r in conftest.child_reports(tree, manager.id)] == ["failed"]
 
   # Second half: a success fact that hits EIO during delivery — the durable
   # outcome governs the delivery, so no contradicting failed report, and no
@@ -3519,7 +3515,7 @@ async def test_non_space_end_failure_lands_immediately_and_starts_no_retry(
       timeout=15.0,
       what="the second run's launch chain")
   assert adapter._landing_retries == {}
-  outcomes = [r.get("outcome") for r in child_reports(tree, manager.id)]
+  outcomes = [r.get("outcome") for r in conftest.child_reports(tree, manager.id)]
   assert "failed" not in outcomes[1:], outcomes  # the second run sent no failed report
 
 

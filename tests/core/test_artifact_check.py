@@ -535,8 +535,8 @@ def _error_event(message: str) -> dict:
 async def _wait_child_report(tree, parent_id: str) -> dict:
   """Poll the parent's fact history until the cold-read child's report lands; return it."""
   await test_task_execution.poll_until(
-      lambda: test_task_execution.child_reports(tree, parent_id), timeout=15.0, what="the cold-read child report")
-  return test_task_execution.child_reports(tree, parent_id)[-1]
+      lambda: conftest.child_reports(tree, parent_id), timeout=15.0, what="the cold-read child report")
+  return conftest.child_reports(tree, parent_id)[-1]
 
 
 async def _delegate_cold_read(tree, session_blocks, manager, page: pathlib.Path) -> str:

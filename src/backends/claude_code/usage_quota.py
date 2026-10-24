@@ -41,9 +41,9 @@ CLAUDE_WINDOW_FIELDS = (
     ("sevenDay", "seven_day", 10080),
 )
 
-# limits[].group -> window length in minutes. Both values the endpoint reports
-# today, kept as a table rather than an if/else so an unknown group is skipped
-# with a warning instead of guessed at from array position.
+# limits[].group -> window length in minutes. Both values the endpoint reports,
+# kept as a table rather than an if/else so an unknown group is skipped with a
+# warning instead of guessed at from array position.
 LIMIT_GROUP_WINDOW_MINUTES = {"session": 300, "weekly": 10080}
 
 # ---------------------------------------------------------------------------

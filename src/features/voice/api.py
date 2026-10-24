@@ -7,8 +7,8 @@ the copy it already received: sessions/{id}/voice/, a 16 kHz mono PCM16 WAV
 plus a .txt carrying the final text. The final is pushed only once that pair is
 on disk, so a browser that receives it ends the recording with no upload. The
 browser's wait for that final is a budget that grows with the recording's
-length, no longer a fixed 2 s; past the budget it keeps the relay open and
-still adopts a late final. A missed final or a relay failure leaves the
+length; past the budget it keeps the relay open and adopts a late final. A
+missed final or a relay failure leaves the
 recording in the browser, and the upload endpoint (POST /api/voice/{session_id})
 runs when the user clicks. The upload persists the recording BEFORE it
 transcribes, so a backend failure or an abandoned request never loses the audio.

@@ -101,8 +101,9 @@ async def _authorize_spawn_request(
   return resolved_backend, resolved_model, backend_from_pool, route
 
 
-# The delegation entry's unpinned roles that ask the router first (plan 4.2's scope: cold read,
-# naming, the page check, the improve loop and pinned work stay on today's paths).
+# The delegation entry's unpinned roles that ask the router first. Every other delegation — cold
+# read, session naming, the page check, the improve loop and pinned work — resolves its backend
+# directly.
 _ROUTED_ROLES = frozenset(
     {models.TaskType.IMPLEMENT, models.TaskType.QUICK_EDIT, models.TaskType.SCRIPT_RUN, models.TaskType.VERIFY})
 

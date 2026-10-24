@@ -374,10 +374,9 @@ async def run_compaction(
     await persist_and_broadcast(
         base.make_context_compact_failed_event(outcome.error, model=model, trigger=failure_trigger))
     return outcome
-  # The boundary row's payload travels whole; the caller's own reading still wins
-  # for the pre count (today's precedence). When the row carries no readable
-  # compactMetadata the payload stays None and the line renders from what the
-  # caller contributed alone.
+  # The boundary row's payload travels whole; for the pre count the caller's own reading wins.
+  # When the row carries no readable compactMetadata the payload stays None and the line renders
+  # from what the caller contributed alone.
   compact_metadata = _newest_boundary_compact_metadata(transcript)
   if pre_tokens is not None:
     compact_metadata = {**(compact_metadata or {}), ET.COMPACT_PRE_TOKENS: pre_tokens}

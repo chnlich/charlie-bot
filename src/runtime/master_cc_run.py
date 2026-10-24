@@ -619,7 +619,7 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
       if exit_code != 0 and not backend.terminated:
         # The invocation's own structured error event outranks the stderr
         # help banner (runs.select_error_hint); an explicit user stop keeps
-        # today's no-hint behavior, and the cgroup report below still wins
+        # the no-hint behavior, and the cgroup report below still wins
         # over both channels.
         error_msg = runs.select_error_hint(error_event_messages, backend.stderr_text)
       # Session memory-cap / host-OOM attribution: the

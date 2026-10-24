@@ -258,9 +258,23 @@ RESPONSE_RULES: tuple[FieldRule, ...] = (
         reason=_WEB_STATUS_STAMP,
     ),
     FieldRule(
+        name="web-status-set-since",
+        target="POST /api/internal/web/status",
+        field="waiting[*].since",
+        when=(),
+        reason=_WEB_STATUS_STAMP,
+    ),
+    FieldRule(
         name="web-status-read-time",
         target="GET /api/internal/web/status",
         field="web_status.updated_at",
+        when=(),
+        reason=_WEB_STATUS_STAMP,
+    ),
+    FieldRule(
+        name="web-status-read-since",
+        target="GET /api/internal/web/status",
+        field="web_status.waiting[*].since",
         when=(),
         reason=_WEB_STATUS_STAMP,
     ),
@@ -556,10 +570,24 @@ FILE_RULES: tuple[FieldRule, ...] = (
         reason=_WEB_STATUS_STAMP,
     ),
     FieldRule(
+        name="web-status-file-since",
+        target="home/sessions/*/metadata.json",
+        field="web_status.waiting[*].since",
+        when=(),
+        reason=_WEB_STATUS_STAMP,
+    ),
+    FieldRule(
         name="web-status-event-time",
         target="home/sessions/*/data/chat_events.jsonl",
         field="web_status.updated_at",
         # `when` sees the status object that holds this leaf; only web_status events carry that object.
+        when=(),
+        reason=_WEB_STATUS_STAMP,
+    ),
+    FieldRule(
+        name="web-status-event-since",
+        target="home/sessions/*/data/chat_events.jsonl",
+        field="web_status.waiting[*].since",
         when=(),
         reason=_WEB_STATUS_STAMP,
     ),

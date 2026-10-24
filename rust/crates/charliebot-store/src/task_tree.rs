@@ -1,9 +1,8 @@
 //! Durable task nodes, fact-derived tree state, and delegation authorization.
 
 use std::collections::{HashMap, HashSet};
-use std::fs::{self, File};
+use std::fs;
 use std::hash::{DefaultHasher, Hash, Hasher};
-use std::io::{Read, Seek, SeekFrom};
 use std::ops::Deref;
 use std::ops::Index;
 use std::path::{Path, PathBuf};
@@ -25,9 +24,8 @@ use crate::store::{CachedNodeFacts, NodeFactsKey};
 use crate::{ControlGuard, Store, StoreError, StoreResult};
 
 const TREE_INDEX_TTL: Duration = Duration::from_secs(2);
-const LIFECYCLE_TAIL_LINES: usize = 1000;
-const LIFECYCLE_TAIL_CHUNK_BYTES: usize = 1 << 16;
-const LIFECYCLE_HEAD_PROOF_BYTES: usize = 256;
+// The lifecycle facts that set a node's task state: the walk stops at the newest of these.
+const LIFECYCLE_STATE_TYPES: &[&str] = &["clone_start", "task_closed", "task_reopened"];
 const TASK_ANCESTOR_HOP_LIMIT: usize = 1000;
 // Bound on the non-archived descendants one subtree walk may hold; archived ones do not count.
 const TASK_DESCENDANT_NODE_LIMIT: usize = 1000;
@@ -888,9 +886,9 @@ impl Store {
     Ok(self.node_state(session_id)?.task_state()?.to_string())
   }
 
-  /// Read task lifecycle state from the last 1000 history lines before falling back to the full fold.
+  /// Read the task lifecycle state from the history's newest lifecycle fact, without loading the history.
   ///
-  /// This uses Python's `_task_state_fast` key `(inode, size, mtime)` and its 1000-line tail bound.
+  /// The verdict is memoized by the history identity `(inode, size, mtime)`, as Python's `_task_state_fast` memoizes it.
   pub fn task_state_fast(&self, session_id: &str) -> StoreResult<TaskState> {
     self.task_state_from_file_tail(session_id, false)
   }
@@ -903,7 +901,6 @@ impl Store {
   }
 
   fn task_state_from_file_tail(&self, session_id: &str, use_sealed_recovery_state: bool) -> StoreResult<TaskState> {
-    let path = self.chat_events_path(session_id);
     let identity = self.history_identity(session_id)?;
     if let Some(cached) =
       self.task_state_tail_cache.lock().expect("task-state tail cache mutex is not poisoned").get(session_id)
@@ -935,16 +932,23 @@ impl Store {
     }
 
     self.task_state_tail_reads.fetch_add(1, Ordering::Relaxed);
-    let state = match lifecycle_state_from_file(&path)? {
-      Some(state) => state,
-      None => self.task_state(session_id)?,
-    };
+    let state = self.lifecycle_state_at(session_id, identity)?;
     self
       .task_state_tail_cache
       .lock()
       .expect("task-state tail cache mutex is not poisoned")
       .insert(session_id.to_string(), CachedTaskStateTail { identity, state: state.clone() });
     Ok(state)
+  }
+
+  /// The task state of the history at `identity`: its newest lifecycle fact, or open when it holds none.
+  ///
+  /// The walk reads back through the live log and then the archives, and caches nothing but the verdict.
+  fn lifecycle_state_at(&self, session_id: &str, identity: Option<FileIdentity>) -> StoreResult<TaskState> {
+    let live_end = identity.map_or(0, |identity| identity.size());
+    let state = self
+      .visit_chat_facts_from_end(session_id, LIFECYCLE_STATE_TYPES, live_end, |event| lifecycle_state_of(&event))?;
+    Ok(state.unwrap_or_else(|| "open".to_string()))
   }
 
   /// Count actual lifecycle-tail file scans since the store opened.
@@ -2111,138 +2115,20 @@ fn build_tree_index_until(store: &Store, should_stop: &mut impl FnMut() -> bool)
   Ok(Some(index))
 }
 
-/// Read the task lifecycle fact in the last 1000 non-empty lines, matching `_task_state_fast`.
-fn lifecycle_state_from_file(path: &Path) -> StoreResult<Option<String>> {
-  let mut file = match File::open(path) {
-    Ok(file) => file,
-    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-    Err(error) => return Err(path_error(path, error)),
-  };
-  let size = file.metadata().map_err(|error| path_error(path, error))?.len();
-  let ranges = lifecycle_tail_ranges(&mut file, size, path)?;
-  for range in ranges {
-    let length = usize::try_from(range.end - range.start).expect("one event line fits in memory");
-    let mut head = vec![0; length.min(LIFECYCLE_HEAD_PROOF_BYTES)];
-    file.seek(SeekFrom::Start(range.start)).map_err(|error| path_error(path, error))?;
-    file.read_exact(&mut head).map_err(|error| path_error(path, error))?;
-    if lifecycle_head_verdict(&head) == Some(false) {
-      continue;
-    }
-    let raw = if head.len() == length {
-      head
-    } else {
-      let mut line = vec![0; length];
-      file.seek(SeekFrom::Start(range.start)).map_err(|error| path_error(path, error))?;
-      file.read_exact(&mut line).map_err(|error| path_error(path, error))?;
-      line
-    };
-    let Some(event) = crate::ndjson::parse_line_compact(&raw) else { continue };
-    let Some(event_type) = event.get("type").and_then(CompactValue::as_str) else { continue };
-    match event_type {
-      "clone_start" | "task_reopened" => return Ok(Some("open".to_string())),
-      "task_closed" => {
-        let state = event
-          .get("outcome")
-          .and_then(CompactValue::as_str)
-          .filter(|value| !value.is_empty())
-          .unwrap_or("completed")
-          .to_string();
-        return Ok(Some(state));
-      }
-      _ => {}
-    }
+/// The task state a lifecycle fact sets, or None for any other event.
+fn lifecycle_state_of(event: &ChatEvent) -> Option<TaskState> {
+  match event.get("type").and_then(CompactValue::as_str)? {
+    "clone_start" | "task_reopened" => Some("open".to_string()),
+    "task_closed" => Some(
+      event
+        .get("outcome")
+        .and_then(CompactValue::as_str)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("completed")
+        .to_string(),
+    ),
+    _ => None,
   }
-  Ok(None)
-}
-
-/// Find the last 1000 non-empty physical lines without retaining their contents.
-fn lifecycle_tail_ranges(file: &mut File, size: u64, path: &Path) -> StoreResult<Vec<std::ops::Range<u64>>> {
-  let mut ranges = Vec::new();
-  if size == 0 {
-    return Ok(ranges);
-  }
-  let mut cursor = size;
-  let mut line_end = size;
-  let mut last = [0_u8; 1];
-  file.seek(SeekFrom::Start(size - 1)).map_err(|error| path_error(path, error))?;
-  file.read_exact(&mut last).map_err(|error| path_error(path, error))?;
-  if last[0] == b'\n' {
-    cursor -= 1;
-    line_end -= 1;
-  }
-
-  let mut block = vec![0_u8; LIFECYCLE_TAIL_CHUNK_BYTES];
-  while cursor > 0 && ranges.len() < LIFECYCLE_TAIL_LINES {
-    let block_start = cursor.saturating_sub(LIFECYCLE_TAIL_CHUNK_BYTES as u64);
-    let block_length = usize::try_from(cursor - block_start).expect("a tail block fits in memory");
-    file.seek(SeekFrom::Start(block_start)).map_err(|error| path_error(path, error))?;
-    file.read_exact(&mut block[..block_length]).map_err(|error| path_error(path, error))?;
-    for (index, byte) in block[..block_length].iter().enumerate().rev() {
-      if *byte == b'\n' {
-        let newline = block_start + index as u64;
-        let line_start = newline + 1;
-        if line_start < line_end {
-          ranges.push(line_start..line_end);
-          if ranges.len() == LIFECYCLE_TAIL_LINES {
-            break;
-          }
-        }
-        line_end = newline;
-      }
-    }
-    cursor = block_start;
-  }
-  if ranges.len() < LIFECYCLE_TAIL_LINES && line_end > 0 {
-    ranges.push(0..line_end);
-  }
-  Ok(ranges)
-}
-
-/// Return a proven lifecycle verdict for the two serialized event headers used by the Python reader.
-fn lifecycle_head_verdict(head: &[u8]) -> Option<bool> {
-  let (event_type, _) = if head.starts_with(b"{\"type\"") {
-    string_value_after_key(head, b"{\"type\"".len())?
-  } else if head.starts_with(b"{\"id\"") {
-    let (_, after_id) = string_value_after_key(head, b"{\"id\"".len())?;
-    if head.get(after_id) != Some(&b',') {
-      return None;
-    }
-    let mut type_key = after_id + 1;
-    while head.get(type_key).is_some_and(u8::is_ascii_whitespace) {
-      type_key += 1;
-    }
-    if !head[type_key..].starts_with(b"\"type\"") {
-      return None;
-    }
-    string_value_after_key(head, type_key + b"\"type\"".len())?
-  } else {
-    return None;
-  };
-  Some(event_type == b"clone_start" || event_type == b"task_closed" || event_type == b"task_reopened")
-}
-
-fn string_value_after_key(head: &[u8], mut cursor: usize) -> Option<(&[u8], usize)> {
-  while head.get(cursor).is_some_and(|byte| matches!(byte, b' ' | b'\t')) {
-    cursor += 1;
-  }
-  if head.get(cursor) != Some(&b':') {
-    return None;
-  }
-  cursor += 1;
-  while head.get(cursor).is_some_and(|byte| matches!(byte, b' ' | b'\t')) {
-    cursor += 1;
-  }
-  if head.get(cursor) != Some(&b'"') {
-    return None;
-  }
-  let start = cursor + 1;
-  let tail = head.get(start..)?;
-  let end = tail.iter().position(|byte| *byte == b'"')?;
-  let value = &tail[..end];
-  if value.contains(&b'\\') {
-    return None;
-  }
-  Some((value, start + end + 1))
 }
 
 fn index_meta<'a>(index: &'a TreeIndex, session_id: &str) -> StoreResult<&'a SessionMetadata> {
@@ -4745,26 +4631,6 @@ pub(crate) mod tests {
     assert_eq!(checks, 5, "the recovery stop check reached the cold event reader before its third line");
     assert!(store.cached_chat_events(&node.id).is_none(), "a cancelled read does not publish its parsed prefix");
     assert_eq!(store.load_chat_events_shared_sync(&node.id).unwrap().len(), expected_events);
-  }
-
-  #[tokio::test]
-  async fn task_state_fast_falls_back_after_one_thousand_lines_without_a_lifecycle_fact() {
-    let home = tempfile::tempdir().unwrap();
-    let store = make_store(home.path());
-    let node = create_node(&store, "state-fast-bound", None, TaskProfile::Manager).await;
-    let path = store.chat_events_path(&node.id);
-    let mut raw = String::from("{\"id\":\"close-a\",\"type\":\"task_closed\",\"outcome\":\"cancelled\"}\n");
-    for index in 0..1000 {
-      raw.push_str(&format!("{{\"id\":\"message-{index}\",\"type\":\"user\"}}\n"));
-    }
-    fs::write(&path, raw).unwrap();
-    store.clear_chat_events_cache(&node.id);
-
-    let before = store.history_work();
-    assert_eq!(store.task_state_fast(&node.id).unwrap(), "cancelled");
-    let after = store.history_work();
-    assert_eq!(after.full_folds - before.full_folds, 1, "the full memoized fold is the tail-miss fallback");
-    assert_eq!(after.folded_events - before.folded_events, 1001);
   }
 
   #[test]

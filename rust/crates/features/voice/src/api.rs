@@ -597,13 +597,17 @@ mod tests {
   struct FakeRemote {
     state: Arc<Mutex<RemoteState>>,
     sessions_dir: PathBuf,
+    backend_id: String,
   }
 
   impl ClipBackends for FakeRemote {
     fn clip_backend(&self, id: &str) -> Option<Box<dyn ClipBackend>> {
-      (id == BACKEND_ID).then(|| {
-        Box::new(FakeClip { state: Arc::clone(&self.state), sessions_dir: self.sessions_dir.clone() })
-          as Box<dyn ClipBackend>
+      (id == self.backend_id).then(|| {
+        Box::new(FakeClip {
+          state: Arc::clone(&self.state),
+          sessions_dir: self.sessions_dir.clone(),
+          backend_id: self.backend_id.clone(),
+        }) as Box<dyn ClipBackend>
       })
     }
   }
@@ -611,11 +615,12 @@ mod tests {
   struct FakeClip {
     state: Arc<Mutex<RemoteState>>,
     sessions_dir: PathBuf,
+    backend_id: String,
   }
 
   impl ClipBackend for FakeClip {
     fn id(&self) -> &str {
-      BACKEND_ID
+      &self.backend_id
     }
 
     fn unavailable_reason(&self) -> Option<String> {
@@ -640,8 +645,19 @@ mod tests {
   }
 
   fn remote(sessions_dir: &Path) -> (FakeRemote, Arc<Mutex<RemoteState>>) {
+    remote_for(BACKEND_ID, sessions_dir)
+  }
+
+  fn remote_for(backend_id: &str, sessions_dir: &Path) -> (FakeRemote, Arc<Mutex<RemoteState>>) {
     let state = Arc::new(Mutex::new(RemoteState::default()));
-    (FakeRemote { state: Arc::clone(&state), sessions_dir: sessions_dir.to_path_buf() }, state)
+    (
+      FakeRemote {
+        state: Arc::clone(&state),
+        sessions_dir: sessions_dir.to_path_buf(),
+        backend_id: backend_id.to_string(),
+      },
+      state,
+    )
   }
 
   #[tokio::test]
@@ -649,9 +665,19 @@ mod tests {
     let home = tempfile::tempdir().expect("make an isolated home");
     let cfg = synthetic_config(home.path(), "");
 
-    let (response, logs) = post_local(&cfg, upload(Some(LOCAL_BACKEND_ID), Some(DEVICES_JSON)));
+    let (clips, _) = remote(&cfg.sessions_dir());
+    let (response, logs) = capture_events(|| {
+      upload_recording(
+        &cfg,
+        SESSION_ID,
+        upload(Some(BACKEND_ID), Some(DEVICES_JSON)),
+        || -> Result<(), VoiceRequestError> { panic!("the live backend must not acquire a local speech model") },
+        |(), _| unreachable!("the live backend owns transcription"),
+        &clips,
+      )
+    });
 
-    assert_eq!(body_text(response).await, r#"{"text":"synthetic decoded words"}"#);
+    assert_eq!(body_text(response).await, r#"{"text":"synthetic remote words"}"#);
     let transcribed = transcribed(&logs);
     assert_eq!(transcribed.len(), 1);
     let line = transcribed[0];
@@ -663,9 +689,9 @@ mod tests {
     assert_eq!(line["output_device"], "Test Speakers");
     assert_eq!(line["communications_output_device"], "Test Comms Headset");
     assert_eq!(line["device_error"], "null");
-    assert_eq!(line["backend"], "local");
-    assert_eq!(line["selected_backend"], "local");
-    assert_eq!(line["transcription_preview"], DECODED_TEXT);
+    assert_eq!(line["backend"], BACKEND_ID);
+    assert_eq!(line["selected_backend"], BACKEND_ID);
+    assert_eq!(line["transcription_preview"], REMOTE_TEXT);
   }
 
   #[tokio::test]
@@ -674,7 +700,17 @@ mod tests {
     let home = tempfile::tempdir().expect("make an isolated home");
     let cfg = synthetic_config(home.path(), "");
 
-    let (response, logs) = post_local(&cfg, upload(Some(LOCAL_BACKEND_ID), None));
+    let (clips, _) = remote(&cfg.sessions_dir());
+    let (response, logs) = capture_events(|| {
+      upload_recording(
+        &cfg,
+        SESSION_ID,
+        upload(Some(BACKEND_ID), None),
+        || -> Result<(), VoiceRequestError> { panic!("the live backend must not acquire a local speech model") },
+        |(), _| unreachable!("the live backend owns transcription"),
+        &clips,
+      )
+    });
 
     assert_eq!(response.status(), StatusCode::OK);
     let line = transcribed(&logs)[0];
@@ -711,7 +747,7 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn the_selected_backend_decodes_after_the_recording_is_on_disk() {
+  async fn test_a_live_backend_id_returns_its_final_text_after_the_recording_is_on_disk() {
     let home = tempfile::tempdir().expect("make an isolated home");
     let cfg = synthetic_config(home.path(), "voice:\n  vocabulary: [CharlieBot]\n  languages: [zh]\n");
     let (clips, state) = remote(&cfg.sessions_dir());
@@ -750,7 +786,7 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn a_transcription_failure_leaves_the_wav_on_disk() {
+  async fn test_a_transcription_failure_returns_the_error_and_leaves_the_wav_on_disk() {
     let home = tempfile::tempdir().expect("make an isolated home");
     let cfg = synthetic_config(home.path(), "");
     let (clips, state) = remote(&cfg.sessions_dir());
@@ -778,7 +814,7 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn an_unavailable_selection_is_an_error_without_a_local_fallback() {
+  async fn test_an_unavailable_selection_is_a_400_that_keeps_the_recording() {
     let home = tempfile::tempdir().expect("make an isolated home");
     let cfg = synthetic_config(home.path(), "");
     let (clips, state) = remote(&cfg.sessions_dir());
@@ -798,8 +834,56 @@ mod tests {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     assert_eq!(body_text(response).await, r#"{"error":"fake-remote is unavailable: needs fake.api_key"}"#);
     assert!(state.lock().expect("the fake's lock is never poisoned").calls.is_empty());
-    assert!(!voice_dir(&cfg).exists());
+    assert_eq!(
+      files_under(&voice_dir(&cfg)).iter().filter(|path| path.extension().is_some_and(|ext| ext == "wav")).count(),
+      1
+    );
     assert!(transcribed(&logs).is_empty());
+  }
+
+  #[tokio::test]
+  async fn test_an_unknown_backend_id_is_a_400_that_keeps_the_recording() {
+    let home = tempfile::tempdir().expect("make an isolated home");
+    let cfg = synthetic_config(home.path(), "");
+
+    let (response, _logs) = post_local(&cfg, upload(Some("does-not-exist"), None));
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(body_text(response).await.contains("does-not-exist"));
+    assert_eq!(
+      files_under(&voice_dir(&cfg)).iter().filter(|path| path.extension().is_some_and(|ext| ext == "wav")).count(),
+      1
+    );
+  }
+
+  #[tokio::test]
+  async fn test_an_absent_backend_field_selects_the_default_backend() {
+    let home = tempfile::tempdir().expect("make an isolated home");
+    let cfg = synthetic_config(home.path(), "voice:\n  default_backend: gemini\n");
+    let (clips, state) = remote_for("gemini", &cfg.sessions_dir());
+
+    let (response, logs) = capture_events(|| {
+      upload_recording(
+        &cfg,
+        SESSION_ID,
+        upload(None, None),
+        || Ok::<(), VoiceRequestError>(()),
+        |(), _| Ok(DECODED_TEXT.to_string()),
+        &clips,
+      )
+    });
+
+    assert_eq!(body_text(response).await, r#"{"text":"synthetic remote words"}"#);
+    assert_eq!(state.lock().expect("the fake's lock is never poisoned").calls.len(), 1);
+    let transcribed = transcribed(&logs);
+    assert_eq!(transcribed.len(), 1);
+    assert_eq!(transcribed[0]["backend"], BACKEND_ID);
+    assert_eq!(transcribed[0]["selected_backend"], "null");
+  }
+
+  #[test]
+  fn test_the_confirm_probe_endpoint_no_longer_exists() {
+    assert!(!matches("/api/voice/session-a/confirm"));
   }
 
   #[tokio::test]

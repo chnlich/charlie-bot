@@ -1661,6 +1661,9 @@ class VmSwapSampler:
       if self.stop_event.wait(self._interval_s):
         return
 
+  def stop(self) -> None:
+    self.stop_event.set()
+
   def snapshot(self) -> dict[str, Any]:
     return {
         "sample_interval_s": self._interval_s,
@@ -1994,11 +1997,12 @@ def _run_repair_probes(
               "--read-file",
               str(read_file),
           ],
-          stdout=log_fd,
-          stderr=subprocess.STDOUT,
+          stdout=subprocess.PIPE,
+          stderr=log_fd,
       )
       stdout, _ = process.communicate()
       wall_ms = (time.perf_counter() - started) * 1000
+      log_fd.write(stdout)
     code = process.returncode
     if code != 0:
       raise RuntimeError(f"repair probe {unit} exited with status {code}; see {log_path}")

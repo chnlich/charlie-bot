@@ -583,11 +583,11 @@ impl OpenAiChatStream {
     }
     let tool_id = get(tool_call, "id")?.filter(|id| truthy(id)).cloned();
     let mut position = self.tool_calls.iter().position(|call| call.call_index == call_index);
-    if let Some(current_position) = position {
-      if tool_id.as_ref().is_some_and(|tool_id| tool_id != &self.tool_calls[current_position].id) {
-        self.close_tool_block(current_position, events);
-        position = None;
-      }
+    if let Some(current_position) = position
+      && tool_id.as_ref().is_some_and(|tool_id| tool_id != &self.tool_calls[current_position].id)
+    {
+      self.close_tool_block(current_position, events);
+      position = None;
     }
     let position = match position {
       Some(position) => position,

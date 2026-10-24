@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """Layout parity check: main against this branch on the whole chat page.
 
-The web frontend restructure (eight landings, each moving one feature's UI
-code into its own package) may change the production page only by an explicit
-list of intended differences. This check renders the whole page of both
-checkouts from identical session files, at desktop and phone widths, after
-load, under the archived sidebar filter, and after a click on every tab
-button, and fails on any outline difference outside that list and on any
-script error the branch side raises that main does not.
+The production page may change only by an explicit list of intended
+differences. This check renders the whole page of both checkouts from identical
+session files, at desktop and phone widths, after load, under the archived
+sidebar filter, and after a click on every tab button, and fails on any outline
+difference outside that list and on any script error the branch side raises
+that main does not.
 
 How it works:
 
@@ -36,8 +35,8 @@ How it works:
 - Views. Each width renders the page after load (``all``), after the archived
   sidebar filter (``archived``), and after a click on each button inside
   ``#tab-buttons`` (``tab-<button id>``). The buttons come from the main
-  side's loaded DOM in page order, never from a list in this tool, because
-  later landings move tab buttons into packages and change their order.
+  side's loaded DOM in page order, never from a list in this tool, so the
+  views follow the page's own button set and order.
 - Script errors. Per side and view the check collects uncaught exceptions
   (Runtime.exceptionThrown), console errors (Runtime.consoleAPICalled with
   type error) and log errors (Log.entryAdded with level error), normalized so

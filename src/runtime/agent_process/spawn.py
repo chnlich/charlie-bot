@@ -37,8 +37,7 @@ def _reap(
 
   The reaper thread owns this child's status: no other code path waitpid()s
   it, so ``returncode`` reads race nothing. Daemon, so a child outliving the
-  process never blocks interpreter exit (the old child-watcher threads were
-  daemons too).
+  process never blocks interpreter exit.
   """
   code = popen.wait()
   loop.call_soon_threadsafe(exit_future.set_result, code)

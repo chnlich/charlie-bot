@@ -9,7 +9,7 @@ use std::future::{Ready, ready};
 
 use axum::handler::Handler;
 use axum::response::Response;
-use axum::routing::{MethodRouter, get, post};
+use axum::routing::{MethodRouter, get, post, put};
 
 use crate::responses;
 
@@ -61,6 +61,16 @@ where
   S: Clone + Send + Sync + 'static,
 {
   post(handler).fallback(refuse("POST"))
+}
+
+/// A FastAPI PUT route: PUT is served. HEAD and every other method answer 405 with `allow: PUT`.
+pub fn put_only<H, T, S>(handler: H) -> MethodRouter<S>
+where
+  H: Handler<T, S>,
+  T: 'static,
+  S: Clone + Send + Sync + 'static,
+{
+  put(handler).fallback(refuse("PUT"))
 }
 
 /// A path that serves several methods, through `method_router`. Each method the router does not serve answers 405

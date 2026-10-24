@@ -57,7 +57,7 @@ by the run id its stop request captured (see `rust/parity/README.md`).
 | POST | `/api/sessions/{session_id}/fork` | sessions | ported |  |
 | POST | `/api/sessions/{session_id}/elone` | sessions | ported |  |
 | POST | `/api/sessions/{session_id}/backend` | sessions | ported |  |
-| PUT | `/api/sessions/{session_id}/resource-class` | sessions | todo | Operator credentials only. Sets the `resource_class` metadata field that places the session's cgroup (df7920bd7). |
+| PUT | `/api/sessions/{session_id}/resource-class` | sessions | ported | Operator credentials only. Sets the `resource_class` metadata field that places the session's cgroup (df7920bd7). Rust: `rust/crates/charliebot-session-api/src/writes.rs` `set_resource_class`. |
 | GET | `/api/sessions/{session_id}` | sessions | ported |  |
 | DELETE | `/api/sessions/{session_id}` | sessions | ported |  |
 | DELETE | `/api/sessions/{session_id}/permanent` | sessions | ported |  |

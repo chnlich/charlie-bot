@@ -54,15 +54,27 @@ const EXTRA_FORBIDDEN: &str = "Extra inputs are not permitted";
 const NOW_BUDGET_CHARS: usize = 200;
 const ASK_CHECK_CONTENT: &str = "Cold read of a Waiting on you item";
 const ITEM_SHA256: &str = "item_sha256";
+/// The item fields that only the server writes; a set file carries neither (`status._refuse_server_fields`).
+const SERVER_WRITTEN_ITEM_FIELDS: [&str; 2] = ["since", "since_exact"];
+/// The pydantic message a since field that is not a datetime raises.
+const NOT_A_DATETIME: &str = "Input should be a valid datetime";
+/// The pydantic message a since_exact field that is not a boolean raises.
+const NOT_A_BOOLEAN: &str = "Input should be a valid boolean";
 
 /// One Waiting on you item: a decision or an action, its context, and the link to the place where the user answers it
-/// (`metadata.WaitingItem`). An absent context stays absent in stored legacy items.
+/// (`metadata.WaitingItem`). An absent context stays absent in stored legacy items. `since` and `since_exact` are
+/// written by the server: `since` is the time the item first appeared or a lower bound on it, and `since_exact` is
+/// false when `since` is that lower bound. An item stored before these fields existed carries neither.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WaitingItem {
   text: String,
   #[serde(default, skip_serializing_if = "Option::is_none")]
   context: Option<String>,
   link: Option<String>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  since: Option<UtcDateTime>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  since_exact: Option<bool>,
 }
 
 /// The session status: Goal, Now and Waiting on you, and the time the last set stored them (`metadata.WebStatus`).
@@ -71,6 +83,7 @@ pub struct WebStatus {
   goal: Option<String>,
   now: Option<String>,
   waiting: Vec<WaitingItem>,
+  #[serde(default = "UtcDateTime::now")]
   updated_at: UtcDateTime,
 }
 
@@ -140,6 +153,7 @@ pub fn parse_patch(text: &str) -> Result<StatusPatch, WebReplyError> {
   let Value::Object(fields) = raw else {
     return Err(WebReplyError::refused(StatusCode::UNPROCESSABLE_ENTITY, "Status file is not a JSON object"));
   };
+  refuse_server_fields(&fields)?;
   let mut problems = Vec::new();
   // pydantic validates the fields in declaration order, each with its nested errors, then the object's extra keys.
   let goal = fields.get("goal").map(|value| nullable_text(value, "goal", &mut problems));
@@ -163,6 +177,53 @@ pub fn parse_patch(text: &str) -> Result<StatusPatch, WebReplyError> {
     ));
   }
   Ok(patch)
+}
+
+/// Refuse a set file whose waiting item carries a field that only the server writes
+/// (`status._refuse_server_fields`). Only a list `waiting` is examined, and only its object items.
+fn refuse_server_fields(fields: &Map<String, Value>) -> Result<(), WebReplyError> {
+  let Some(Value::Array(waiting)) = fields.get("waiting") else {
+    return Ok(());
+  };
+  for raw_item in waiting {
+    let Value::Object(item) = raw_item else { continue };
+    let written: Vec<&str> =
+      SERVER_WRITTEN_ITEM_FIELDS.iter().copied().filter(|name| item.contains_key(*name)).collect();
+    if !written.is_empty() {
+      return Err(WebReplyError::refused(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        format!("Waiting item fields {} are written by the server; remove them from the file", written.join(", ")),
+      ));
+    }
+  }
+  Ok(())
+}
+
+/// The status's waiting items with `since` and `since_exact` filled in (`status.effective_waiting`).
+///
+/// An item stored before the fields existed has no start time of its own; the status's `updated_at` is the lower
+/// bound, so the item reads with `since_exact` false.
+fn effective_waiting(status: &WebStatus) -> Vec<WaitingItem> {
+  status
+    .waiting
+    .iter()
+    .map(|item| match (item.since, item.since_exact) {
+      (Some(_), Some(_)) => item.clone(),
+      _ => WaitingItem {
+        since: Some(item.since.unwrap_or(status.updated_at)),
+        since_exact: Some(item.since_exact.unwrap_or(false)),
+        ..item.clone()
+      },
+    })
+    .collect()
+}
+
+/// The status as the API and the CLI return it, with each waiting item's start time filled in
+/// (`status.status_payload`).
+fn status_payload(status: &WebStatus) -> Value {
+  let mut payload = payload_of(status);
+  payload["waiting"] = serde_json::to_value(effective_waiting(status)).expect("waiting items serialize to JSON");
+  payload
 }
 
 /// One `WaitingItem` parsed with the `item` model's refusal (`status.parse_item`).
@@ -308,7 +369,8 @@ fn waiting_items(value: &Value, problems: &mut Vec<Problem>) -> Vec<WaitingItem>
     .collect()
 }
 
-/// One `WaitingItem`: its required non-blank `text`, optional non-blank `context`, optional `link`, then extra keys.
+/// One `WaitingItem`: its required non-blank `text`, optional non-blank `context`, optional `link`, the server-written
+/// start-time fields, then extra keys.
 fn waiting_item(item: &Value, loc: &str, problems: &mut Vec<Problem>) -> Option<WaitingItem> {
   let Value::Object(fields) = item else {
     problems.push(Problem { loc: loc.to_string(), msg: NOT_A_WAITING_ITEM });
@@ -333,10 +395,34 @@ fn waiting_item(item: &Value, loc: &str, problems: &mut Vec<Problem>) -> Option<
       None
     }
   };
-  for key in fields.keys().filter(|key| !matches!(key.as_str(), "text" | "context" | "link")) {
+  let since = match fields.get("since") {
+    None | Some(Value::Null) => None,
+    Some(Value::String(value)) => match UtcDateTime::parse(value) {
+      Ok(value) => Some(value),
+      Err(_) => {
+        problems.push(Problem { loc: nested_loc(loc, "since"), msg: NOT_A_DATETIME });
+        None
+      }
+    },
+    Some(_) => {
+      problems.push(Problem { loc: nested_loc(loc, "since"), msg: NOT_A_DATETIME });
+      None
+    }
+  };
+  let since_exact = match fields.get("since_exact") {
+    None | Some(Value::Null) => None,
+    Some(Value::Bool(value)) => Some(*value),
+    Some(_) => {
+      problems.push(Problem { loc: nested_loc(loc, "since_exact"), msg: NOT_A_BOOLEAN });
+      None
+    }
+  };
+  for key in
+    fields.keys().filter(|key| !matches!(key.as_str(), "text" | "context" | "link" | "since" | "since_exact"))
+  {
     problems.push(Problem { loc: nested_loc(loc, key), msg: EXTRA_FORBIDDEN });
   }
-  text.map(|text| WaitingItem { text, context, link })
+  text.map(|text| WaitingItem { text, context, link, since, since_exact })
 }
 
 /// A nested Pydantic location, including the root model's empty location.
@@ -458,11 +544,12 @@ pub async fn read_status(features: &FeatureContext, session_id: &str) -> Result<
     if child_status.waiting.is_empty() {
       continue;
     }
+    let payload = status_payload(&child_status);
     let row = json!({
       "session_id": descendant_id,
       "name": child.name,
       "updated_at": child_status.updated_at.to_python_string(),
-      "waiting": child_status.waiting,
+      "waiting": payload["waiting"],
     });
     rows.push((child_status.updated_at, row));
   }
@@ -488,7 +575,7 @@ pub async fn read_status(features: &FeatureContext, session_id: &str) -> Result<
   children.sort_by_key(|(updated_at, _)| std::cmp::Reverse(*updated_at));
   Ok(json!({
     "session_id": session_id,
-    "web_status": stored.as_ref().map(payload_of),
+    "web_status": stored.as_ref().map(status_payload),
     "descendants": rows.into_iter().map(|(_, row)| row).collect::<Vec<_>>(),
     "children": children.into_iter().map(|(_, row)| row).collect::<Vec<_>>(),
   }))

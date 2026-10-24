@@ -67,7 +67,7 @@ fn normalize_web_status(value: &mut Value) -> bool {
   let Some(items) = waiting.as_array_mut() else { return false };
   for item in items {
     let Some(item) = item.as_object_mut() else { return false };
-    if item.keys().any(|name| !["text", "context", "link"].contains(&name.as_str())) {
+    if item.keys().any(|name| !["text", "context", "link", "since", "since_exact"].contains(&name.as_str())) {
       return false;
     }
     if !item.get("text").and_then(Value::as_str).is_some_and(|text| !text.trim().is_empty()) {
@@ -82,6 +82,24 @@ fn normalize_web_status(value: &mut Value) -> bool {
         item.remove("context");
       }
       Some(Value::String(context)) if !context.trim().is_empty() => {}
+      Some(_) => return false,
+    }
+    // `since` and `since_exact` are written by the server; an item stored before they existed carries neither, so a
+    // null reads as absent, as the model's exclude-if-None fields do.
+    match item.get("since") {
+      None => {}
+      Some(Value::Null) => {
+        item.remove("since");
+      }
+      Some(Value::String(value)) if UtcDateTime::parse(value).is_ok() => {}
+      Some(_) => return false,
+    }
+    match item.get("since_exact") {
+      None => {}
+      Some(Value::Null) => {
+        item.remove("since_exact");
+      }
+      Some(Value::Bool(_)) => {}
       Some(_) => return false,
     }
     item.entry("link".to_string()).or_insert(Value::Null);

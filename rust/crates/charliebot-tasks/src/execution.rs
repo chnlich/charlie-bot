@@ -2776,14 +2776,6 @@ fn native_anchor_matches(meta: &SessionMetadata, prompt_hash: &str, backend: &st
   )
 }
 
-fn python_string(value: Option<&Value>) -> String {
-  match value {
-    Some(Value::String(value)) => value.clone(),
-    Some(Value::Null) | None => "None".to_string(),
-    Some(value) => value.to_string(),
-  }
-}
-
 fn outcome_text(outcome: RunOutcomeKind) -> String {
   match outcome {
     RunOutcomeKind::Success => "success",

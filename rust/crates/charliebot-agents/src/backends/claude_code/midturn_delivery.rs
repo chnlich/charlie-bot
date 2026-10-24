@@ -344,7 +344,11 @@ mod tests {
     assert_eq!(delivered[0]["type"], "input_delivered");
     assert_eq!(delivered[0]["input_event_id"], message_id);
     assert_eq!(delivered[0]["run_id"], run_id);
-    assert_eq!(charliebot_store::message_utils::events_to_messages(&delivered).unwrap(), Vec::<Value>::new());
+    let compact = delivered.iter().map(charliebot_store::ChatEvent::from_value).collect::<Vec<_>>();
+    assert_eq!(
+      charliebot_store::projection::events_to_messages(&compact, 0, Default::default()).unwrap(),
+      Vec::<Value>::new()
+    );
   }
 
   // Python: tests/test_claude_code_backend.py::test_replay_after_result_resets_post_result_timeout

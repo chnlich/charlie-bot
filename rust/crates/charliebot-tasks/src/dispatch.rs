@@ -346,11 +346,12 @@ impl Dispatcher {
       .pending_inputs(session_id)?
       .into_iter()
       .filter(|event| {
-        event.get("type").and_then(Value::as_str) == Some(event_types::USER)
-          && echoed_ids.contains(&python_string(event.get("id")))
-          && !claimed.contains(&python_string(event.get("id")))
+        let id = event.get("id").and_then(CompactValue::as_str).map_or("None".to_string(), str::to_string);
+        event.get("type").and_then(CompactValue::as_str) == Some(event_types::USER)
+          && echoed_ids.contains(&id)
+          && !claimed.contains(&id)
       })
-      .map(|event| python_string(event.get("id")))
+      .map(|event| event.get("id").and_then(CompactValue::as_str).map_or("None".to_string(), str::to_string))
       .collect::<Vec<_>>();
     if appended.is_empty() {
       return Ok(Vec::new());

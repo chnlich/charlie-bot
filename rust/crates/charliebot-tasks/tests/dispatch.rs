@@ -843,7 +843,7 @@ async fn manager_finish_claims_only_echoed_pending_user_ids() {
     .into_iter()
     .find(|event| event["type"] == event_types::RUN_FINISHED && event["run_id"] == run_id)
     .expect("the run finished");
-  assert_eq!(finished["input_event_ids"], json!([initial_id, echoed_id]));
+  assert_eq!(finished.to_value()["input_event_ids"], json!([initial_id, echoed_id]));
   let pending_ids = harness
     .dispatcher
     .pending_inputs(&manager.id)

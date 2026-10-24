@@ -13,6 +13,8 @@ use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::event_types;
 use charliebot_registry::backend::LaunchArgs;
 use charliebot_registry::context::FeatureContext;
+use charliebot_store::ChatEvent;
+use charliebot_store::compact::CompactValue;
 use charliebot_store::metadata::SessionMetadata;
 use charliebot_store::run_records::{RAW_LOG_NAME, RunKind, RunRecord};
 use serde_json::{Map, Value};
@@ -33,18 +35,19 @@ pub async fn offer(
   features: &FeatureContext,
   meta: &SessionMetadata,
   run: &RunRecord,
-  pending: &[Value],
+  pending: &[ChatEvent],
 ) -> anyhow::Result<Vec<String>> {
   if !is_gated_turn(meta, run.kind == RunKind::ManagerTurn, run.kind) {
     return Ok(Vec::new());
   }
   let mut inputs = Vec::new();
   for event in pending {
-    if event.get("type").and_then(Value::as_str) != Some(event_types::USER) {
+    if event.get("type").and_then(CompactValue::as_str) != Some(event_types::USER) {
       continue;
     }
     let (content, _uploads) = compose_input_prompt(features, meta, std::slice::from_ref(event), &Map::new())?;
-    inputs.push((python_string(event.get("id")), content));
+    let id = event.get("id").and_then(CompactValue::as_str).map_or("None".to_string(), str::to_string);
+    inputs.push((id, content));
   }
   offer_write(&run.id, inputs).await
 }
@@ -253,8 +256,10 @@ mod tests {
     };
     let meta = SessionMetadata::new("session", "Web", TaskProfile::Manager);
     let run = test_fixtures::run_record(&meta.id, run_id, RunKind::ManagerTurn);
-    let user_event = json!({"id": message_id, "type": event_types::USER, "content": "Please change the answer."});
-    let agent_event = json!({"id": "agent-1", "type": event_types::AGENT_MESSAGE, "content": "Keep this queued."});
+    let user_event =
+      ChatEvent::from(json!({"id": message_id, "type": event_types::USER, "content": "Please change the answer."}));
+    let agent_event =
+      ChatEvent::from(json!({"id": "agent-1", "type": event_types::AGENT_MESSAGE, "content": "Keep this queued."}));
     let recorded = Arc::new(Mutex::new(Vec::<u8>::new()));
     claude_midturn::bind_process(run_id, backend.midturn_run_id()).await.unwrap();
     claude_midturn::write_initial_prompt(
@@ -296,7 +301,7 @@ mod tests {
     );
 
     claude_midturn::on_backend_event(Some(run_id.to_string()), &json!({"type": "result"})).await.unwrap();
-    let late = json!({"id": "late-after-result", "type": event_types::USER, "content": "Too late."});
+    let late = ChatEvent::from(json!({"id": "late-after-result", "type": event_types::USER, "content": "Too late."}));
     assert_eq!(offer(&features, &meta, &run, &[late]).await.unwrap(), Vec::<String>::new());
     assert_eq!(
       recorded.lock().expect("recording stdin mutex is not poisoned").iter().filter(|byte| **byte == b'\n').count(),
@@ -306,7 +311,7 @@ mod tests {
     claude_midturn::release_run(run_id);
   }
 
-  fn user_event_ref(message_id: &str) -> Value {
-    json!({"id": message_id, "type": event_types::USER, "content": "Please change the answer."})
+  fn user_event_ref(message_id: &str) -> ChatEvent {
+    ChatEvent::from(json!({"id": message_id, "type": event_types::USER, "content": "Please change the answer."}))
   }
 }

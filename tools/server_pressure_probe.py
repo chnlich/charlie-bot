@@ -71,6 +71,7 @@ REPAIR_PROBE_RUNS = 8
 VM_SWAP_SAMPLE_INTERVAL_S = 1.0
 PRESSURE_WINDOW_START_TIMEOUT_S = 600.0
 PRESSURE_KILL_OBSERVATION_TIMEOUT_S = 2400.0
+KILL_FILL_MAX_BYTES = 2 * GIB
 MAX_KILL_RESTARTS = 64
 MAX_DISK_DELAY_MS = 1.0
 MAX_LIVE_EVENT_GIB = 1.2
@@ -930,15 +931,25 @@ def _pressure_main(argv: list[str]) -> None:
   parser.add_argument("--size-bytes", type=int, required=True)
   parser.add_argument("--start-file", type=pathlib.Path, required=True)
   parser.add_argument("--ready-file", type=pathlib.Path, required=True)
+  parser.add_argument("--kill-fill-file", type=pathlib.Path)
+  parser.add_argument("--kill-fill-delay-s", type=float, default=45.0)
   args = parser.parse_args(argv)
   _wait_for_file(args.start_file, timeout=120.0)
   stopped = threading.Event()
   signal.signal(signal.SIGTERM, lambda _signum, _frame: stopped.set())
   signal.signal(signal.SIGINT, lambda _signum, _frame: stopped.set())
+  started = time.monotonic()
   blocks: list[bytearray] = []
   remaining = args.size_bytes
   block_size = 64 * MIB
   while remaining and not stopped.is_set():
+    if args.kill_fill_file is not None and time.monotonic() - started > args.kill_fill_delay_s:
+      # Pinned between MemoryHigh and MemoryMax: user faults throttle to about
+      # 1 MiB/s, so cross MemoryMax with kernel-context charges instead. Buffered
+      # writes leave dirty page cache the kernel cannot drop, and the memcg OOM
+      # kill then ends this process, which the supervisor records and restarts.
+      _kill_fill(args.kill_fill_file, stopped)
+      return
     size = min(block_size, remaining)
     block = bytearray(size)
     for offset in range(0, size, 4096):
@@ -948,9 +959,6 @@ def _pressure_main(argv: list[str]) -> None:
   if stopped.is_set():
     return
   flush_json(args.ready_file, {"pid": os.getpid(), "allocated_bytes": args.size_bytes})
-  stopped = threading.Event()
-  signal.signal(signal.SIGTERM, lambda _signum, _frame: stopped.set())
-  signal.signal(signal.SIGINT, lambda _signum, _frame: stopped.set())
   # Rewrite every page in a loop so reclaim under the slice limit finds the pressure
   # pages hot and picks the test server's colder pages instead.
   while not stopped.is_set():
@@ -961,6 +969,19 @@ def _pressure_main(argv: list[str]) -> None:
         block[offset] = (block[offset] + 1) & 0x7F
   if sum(len(block) for block in blocks) != args.size_bytes:
     raise AssertionError("pressure allocation changed while resident")
+
+
+def _kill_fill(kill_fill_file: pathlib.Path, stopped: threading.Event) -> None:
+  chunk = b"x" * (64 * MIB)
+  written = 0
+  with kill_fill_file.open("wb") as stream:
+    while not stopped.is_set():
+      stream.write(chunk)
+      written += len(chunk)
+      if written > KILL_FILL_MAX_BYTES:
+        raise RuntimeError(
+            f"kill-fill wrote {written} bytes without the kernel ending the process; "
+            "the agents slice limits are not in effect")
 
 
 def _repair_probe_main(argv: list[str]) -> None:
@@ -1168,8 +1189,11 @@ def _parse_measurement_args(argv: list[str] | None) -> argparse.Namespace:
           "hold, so the kernel swaps server pages out instead of killing a process. Current: server and "
           "pressure share the parent slice and the server may use up to 512 MiB of swap. Protected: the "
           "server scope keeps its 3 GiB bound with MemorySwapMax=0; the pressure worker runs in the agents "
-          "child slice charliebot-pressure-test-agents.slice (MemoryHigh=3.5G, MemoryMax=4G, no swap) and "
-          "is restarted every time the kernel ends it until the measured window ends; a repair child slice "
+          "child slice charliebot-pressure-test-agents.slice (MemoryHigh=3.5G, MemoryMax=4G, no swap), the "
+          "measured window starts when the share crosses its MemoryHigh, and because this kernel pins a "
+          "throttled workload below MemoryMax the worker switches to buffered dirty page-cache writes after "
+          "45 s to bring the kernel's MemoryMax OOM kill; the supervisor records and restarts every kill "
+          "until the window ends; a repair child slice "
           "charliebot-pressure-test-repair.slice (MemoryMax=768M, no swap) holds the repair probe. The "
           "repair probe allocates and touches 256 MiB, reads one small file of the copy, and exits; it runs "
           "8 times without pressure and 8 times under pressure in the repair child (protected) or the test "
@@ -1791,6 +1815,7 @@ class PressureWorker:
       ready_file: pathlib.Path,
       target_bytes: int,
       scope_bounds: dict[str, Any] | None = None,
+      slice_bounds: dict[str, Any] | None = None,
   ) -> None:
     self.process = process
     self.unit = unit
@@ -1800,6 +1825,7 @@ class PressureWorker:
     self.target_bytes = target_bytes
     self.allocated = False
     self.scope_bounds = scope_bounds
+    self.slice_bounds = slice_bounds
 
   def is_running(self) -> bool:
     return self.process.poll() is None
@@ -1850,7 +1876,7 @@ class PressureSupervisor:
       self,
       *,
       start_worker: Callable[[], PressureWorker],
-      kill_total: Callable[[], int],
+      kill_total: Callable[[], int | None],
       wall_clock: Callable[[], str] = utc_now,
       poll_interval_s: float = 0.05,
   ) -> None:
@@ -1866,6 +1892,7 @@ class PressureSupervisor:
     self.active: PressureWorker | None = None
     self.failure: Exception | None = None
     self._last_kill_total: int | None = None
+    self._cumulative_kills = 0
 
   def run(self) -> None:
     try:
@@ -1893,14 +1920,21 @@ class PressureSupervisor:
       if code in (0, -signal.SIGTERM):
         return
       total = self._kill_total()
-      delta = total if self._last_kill_total is None else total - self._last_kill_total
+      # A wiped and recreated slice restarts its counter at zero, so a total
+      # below the previous one means the fresh generation's count is all new.
+      if total is not None and self._last_kill_total is not None and total < self._last_kill_total:
+        self._cumulative_kills += total
+      elif total is not None and self._last_kill_total is not None:
+        self._cumulative_kills += total - self._last_kill_total
+      elif total is not None:
+        self._cumulative_kills += total
       self._last_kill_total = total
       self.kills.append(
           {
               "at": self._wall_clock(),
               "worker_exit_code": code,
               "oom_kill_total": total,
-              "oom_kill_delta": delta,
+              "cumulative_kills": self._cumulative_kills,
           })
       self.first_activity.set()
       if len(self.kills) > MAX_KILL_RESTARTS:
@@ -1916,14 +1950,15 @@ def _start_pressure_worker(
     *,
     layout: str,
     target_bytes: int,
-    start_file: pathlib.Path,
     control_dir: pathlib.Path,
+    parent_slice_cgroup: pathlib.Path,
     log_path: pathlib.Path,
 ) -> PressureWorker:
   worker_id = uuid.uuid4().hex[:8]
   slice_name = PRESSURE_SLICE if layout == "current" else PRESSURE_AGENTS_SLICE
   unit = f"charliebot-pressure-memory-{worker_id}.scope"
   ready_file = control_dir / f"pressure_ready_{worker_id}.json"
+  start_file = control_dir / f"pressure_start_{worker_id}"
   properties = ["MemorySwapMax=0"] if layout == "protected" else []
   command = [
       sys.executable,
@@ -1936,6 +1971,8 @@ def _start_pressure_worker(
       "--ready-file",
       str(ready_file),
   ]
+  if layout == "protected":
+    command.extend(("--kill-fill-file", str(control_dir / "kill_fill.bin"), "--kill-fill-delay-s", "45.0"))
   log_path.parent.mkdir(parents=True, exist_ok=True)
   log_fd = log_path.open("w", encoding="utf-8")
   process = _systemd_run_command(
@@ -1947,6 +1984,29 @@ def _start_pressure_worker(
       stderr=subprocess.STDOUT,
   )
   cgroup = _wait_for_cgroup(unit, process)
+  slice_bounds: dict[str, Any] | None = None
+  if layout == "protected":
+    # systemd wipes every member of a slice on a memcg OOM and the transient
+    # slice then unloads, so each worker generation recreates it with default
+    # limits. Re-apply the layout before the worker starts allocating, and use
+    # a per-worker start file so no allocation runs ahead of the configuration.
+    agents_slice_cgroup = parent_slice_cgroup / PRESSURE_AGENTS_SLICE
+    _configure_unit(
+        PRESSURE_AGENTS_SLICE,
+        [f"MemoryHigh={AGENTS_MEMORY_HIGH}", f"MemoryMax={AGENTS_MEMORY_MAX}", "MemorySwapMax=0"],
+    )
+    slice_bounds = {
+        "memory_high_bytes": _read_cgroup_bound(agents_slice_cgroup, "memory.high"),
+        "memory_max_bytes": _read_cgroup_bound(agents_slice_cgroup, "memory.max"),
+        "memory_swap_max_bytes": _read_cgroup_bound(agents_slice_cgroup, "memory.swap.max"),
+    }
+    if slice_bounds != {
+        "memory_high_bytes": AGENTS_MEMORY_HIGH,
+        "memory_max_bytes": AGENTS_MEMORY_MAX,
+        "memory_swap_max_bytes": 0,
+    }:
+      raise RuntimeError(f"agents child slice bounds differ from the requested values: {slice_bounds}")
+  start_file.touch()
   scope_bounds = {
       "unit": unit,
       "slice": slice_name,
@@ -1964,6 +2024,7 @@ def _start_pressure_worker(
       ready_file=ready_file,
       target_bytes=target_bytes,
       scope_bounds=scope_bounds,
+      slice_bounds=slice_bounds,
   )
 
 
@@ -2096,7 +2157,6 @@ def _run_server_stage(
   sampler_thread: threading.Thread | None = None
   supervisor: PressureSupervisor | None = None
   supervisor_thread: threading.Thread | None = None
-  agents_keeper: tuple[subprocess.Popen[str], str, pathlib.Path] | None = None
   repair_keeper: tuple[subprocess.Popen[str], str, pathlib.Path] | None = None
   pressure_target_bytes: int | None = None
   server_rss_anon_kib_after_warmup: int | None = None
@@ -2129,28 +2189,13 @@ def _run_server_stage(
     if _cgroup_pids(server_cgroup) != {pid}:
       raise RuntimeError(f"test server scope has unexpected processes: {sorted(_cgroup_pids(server_cgroup))}")
     agents_slice_cgroup: pathlib.Path | None = None
-    repair_slice_cgroup: pathlib.Path | None = None
     agents_slice_bounds: dict[str, int | str] | None = None
+    repair_slice_cgroup: pathlib.Path | None = None
     repair_slice_bounds: dict[str, int | str] | None = None
     if layout == "protected":
-      agents_keeper = _start_keeper_scope(
-          slice_name=PRESSURE_AGENTS_SLICE, log_path=results_dir / "logs" / f"agents_keeper_{run_name}.log")
-      agents_slice_cgroup = agents_keeper[2].parent
-      _configure_unit(
-          PRESSURE_AGENTS_SLICE,
-          [f"MemoryHigh={AGENTS_MEMORY_HIGH}", f"MemoryMax={AGENTS_MEMORY_MAX}", "MemorySwapMax=0"],
-      )
-      agents_slice_bounds = {
-          "memory_high_bytes": _read_cgroup_bound(agents_slice_cgroup, "memory.high"),
-          "memory_max_bytes": _read_cgroup_bound(agents_slice_cgroup, "memory.max"),
-          "memory_swap_max_bytes": _read_cgroup_bound(agents_slice_cgroup, "memory.swap.max"),
-      }
-      if agents_slice_bounds != {
-          "memory_high_bytes": AGENTS_MEMORY_HIGH,
-          "memory_max_bytes": AGENTS_MEMORY_MAX,
-          "memory_swap_max_bytes": 0,
-      }:
-        raise RuntimeError(f"agents child slice bounds differ from the requested values: {agents_slice_bounds}")
+      # The agents slice holds no keeper: an OOM in it wipes every member, so the
+      # slice unloads and each worker generation recreates and reconfigures it.
+      agents_slice_cgroup = slice_cgroup / PRESSURE_AGENTS_SLICE
       repair_keeper = _start_keeper_scope(
           slice_name=PRESSURE_REPAIR_SLICE, log_path=results_dir / "logs" / f"repair_keeper_{run_name}.log")
       repair_slice_cgroup = repair_keeper[2].parent
@@ -2197,15 +2242,25 @@ def _run_server_stage(
         )
         kill_cgroup = agents_slice_cgroup if layout == "protected" else slice_cgroup
 
-        def kill_total() -> int:
-          return _read_cgroup_event_counters(kill_cgroup, "memory.events", {"high", "max", "oom_kill"})["oom_kill"]
+        def kill_total() -> int | None:
+          # A memcg OOM in the agents slice wipes the whole slice and the
+          # transient slice unloads, so the counter may already be gone; race
+          # the unload briefly and report None when it is lost.
+          deadline = time.monotonic() + 2.0
+          while True:
+            try:
+              return _read_cgroup_event_counters(kill_cgroup, "memory.events", {"high", "max", "oom_kill"})["oom_kill"]
+            except OSError:
+              if time.monotonic() >= deadline:
+                return None
+              time.sleep(0.01)
 
         def start_worker() -> PressureWorker:
           return _start_pressure_worker(
               layout=layout,
               target_bytes=pressure_target_bytes,
-              start_file=start_file,
               control_dir=control,
+              parent_slice_cgroup=slice_cgroup,
               log_path=results_dir / "logs" / f"pressure_{run_name}.log",
           )
 
@@ -2216,7 +2271,8 @@ def _run_server_stage(
         window_started_by = None
         deadline = time.monotonic() + PRESSURE_WINDOW_START_TIMEOUT_S
         while not supervisor.first_activity.is_set():
-          if layout == "protected" and agents_slice_cgroup is not None:
+          if (layout == "protected" and agents_slice_cgroup is not None and
+              (agents_slice_cgroup / "memory.current").exists()):
             agents_current = int((agents_slice_cgroup / "memory.current").read_text(encoding="ascii"))
             if agents_current >= AGENTS_MEMORY_HIGH:
               window_started_by = "agents_share_over_memory_high"
@@ -2260,6 +2316,8 @@ def _run_server_stage(
       kill_observation["observed"] = True
       kill_deadline = time.monotonic() + PRESSURE_KILL_OBSERVATION_TIMEOUT_S
       while not supervisor.kills and supervisor.failure is None:
+        if not supervisor_thread.is_alive():
+          break
         if time.monotonic() >= kill_deadline:
           kill_observation["timed_out_without_kill"] = True
           break
@@ -2267,11 +2325,11 @@ def _run_server_stage(
       kill_observation["kills"] = len(supervisor.kills)
     memory_event_groups = [(PRESSURE_SLICE, slice_cgroup), ("test_server_scope", server_cgroup)]
     if layout == "protected":
-      memory_event_groups.extend(
-          (
-              (PRESSURE_AGENTS_SLICE, agents_slice_cgroup),
-              (PRESSURE_REPAIR_SLICE, repair_slice_cgroup),
-          ))
+      # The agents slice only exists while a worker generation lives; after an
+      # OOM it is wiped and unloaded, so record it when present.
+      if agents_slice_cgroup is not None and agents_slice_cgroup.exists():
+        memory_event_groups.append((PRESSURE_AGENTS_SLICE, agents_slice_cgroup))
+      memory_event_groups.append((PRESSURE_REPAIR_SLICE, repair_slice_cgroup))
     if supervisor is not None and supervisor.active is not None and supervisor.active.is_running():
       memory_event_groups.append((supervisor.active.unit, supervisor.active.cgroup))
     memory_events_at_end = {name: _read_memory_events(cgroup) for name, cgroup in memory_event_groups}
@@ -2287,6 +2345,7 @@ def _run_server_stage(
       active = supervisor.active
       if active is not None:
         pressure_scope_bounds = active.scope_bounds
+        agents_slice_bounds = active.slice_bounds
         if active.is_running():
           active.stop()
         else:
@@ -2399,7 +2458,7 @@ def _run_server_stage(
       elif active is not None:
         active.close_log()
     try:
-      for keeper in (agents_keeper, repair_keeper):
+      for keeper in (repair_keeper,):
         if keeper is not None:
           _stop_keeper_scope(*keeper)
     finally:

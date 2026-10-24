@@ -286,7 +286,7 @@ def test_supervisor_restarts_a_killed_allocated_worker_until_stop() -> None:
             "at": supervisor.kills[0]["at"],
             "worker_exit_code": -9,
             "oom_kill_total": 1,
-            "oom_kill_delta": 1,
+            "cumulative_kills": 1,
         }
     ]
     assert supervisor.worker_starts == ["worker-killed", "worker-survivor"]

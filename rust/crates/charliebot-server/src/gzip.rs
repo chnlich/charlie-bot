@@ -154,9 +154,7 @@ fn new_encoder() -> GzEncoder<Vec<u8>> {
 
 /// The whole body deflated at once (the single-message case).
 pub fn gzip_whole(data: &[u8]) -> Vec<u8> {
-  let mut encoder = new_encoder();
-  encoder.write_all(data).expect("writing to a Vec cannot fail");
-  encoder.finish().expect("finishing into a Vec cannot fail")
+  charliebot_compat::compression::gzip_level_one(data)
 }
 
 /// `first` and the rest of `body` deflated as one gzip stream, each message emitting what it produced.

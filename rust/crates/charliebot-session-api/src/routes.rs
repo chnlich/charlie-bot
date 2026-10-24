@@ -12,8 +12,6 @@ use charliebot_registry::FeatureContext;
 use charliebot_registry::task_errors::task_http_error;
 use charliebot_store::metadata::{SessionMetadata, UtcDateTime};
 use charliebot_store::sidebar_state;
-use flate2::Compression;
-use flate2::write::GzEncoder;
 use http::header::HeaderValue;
 use serde_json::{Map, Value, json};
 
@@ -480,10 +478,7 @@ fn gzip_response(
       cache.push(entry);
       compressed
     } else {
-      let mut encoder = GzEncoder::new(Vec::new(), Compression::new(1));
-      use std::io::Write;
-      encoder.write_all(&body).expect("writing to a Vec cannot fail");
-      let compressed = encoder.finish().expect("finishing into a Vec cannot fail");
+      let compressed = charliebot_compat::compression::gzip_level_one(&body);
       cache.push((body, compressed.clone()));
       while cache.len() > limit {
         cache.remove(0);

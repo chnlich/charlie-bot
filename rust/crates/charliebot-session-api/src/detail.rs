@@ -21,8 +21,6 @@ use charliebot_sched::triggers::{PendingTrigger, TriggerManager, TriggerStatus};
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, UtcDateTime};
 use charliebot_store::run_records::{HostBoot, RunFacts, RunOrder, RunRecord};
 use charliebot_store::{Store, StoreError, StoreResult, TaskFacts};
-use flate2::Compression;
-use flate2::write::GzEncoder;
 use http::header::HeaderValue;
 use serde_json::{Map, Value, json};
 
@@ -703,10 +701,7 @@ fn gzip_file(path: &Path, metadata: fs::Metadata) -> StoreResult<Vec<u8>> {
 }
 
 fn gzip_level_one(body: &[u8]) -> Vec<u8> {
-  let mut encoder = GzEncoder::new(Vec::new(), Compression::new(1));
-  use std::io::Write;
-  encoder.write_all(body).expect("gzip writes into a Vec");
-  encoder.finish().expect("gzip finishes into a Vec")
+  charliebot_compat::compression::gzip_level_one(body)
 }
 
 fn json_bytes_response(body: Vec<u8>, encoding: Option<&'static str>) -> Response {
@@ -805,6 +800,47 @@ mod tests {
       events_ref: None,
       result_ref: None,
     }
+  }
+
+  async fn bootstrap_body(features: &Arc<FeatureContext>, session_id: &str, gzip: bool) -> Vec<u8> {
+    let mut request = Request::builder().uri("/bootstrap");
+    if gzip {
+      request = request.header(header::ACCEPT_ENCODING, "gzip");
+    }
+    let response = session_bootstrap(
+      State(Arc::clone(features)),
+      AxumPath(session_id.to_string()),
+      request.body(Body::empty()).expect("the bootstrap request builds"),
+    )
+    .await;
+    axum::body::to_bytes(response.into_body(), usize::MAX).await.expect("bootstrap body").to_vec()
+  }
+
+  /// The bootstrap's body-keyed gzip memo: the first gzip answer deflates the plain body once,
+  /// and a repeat serves the stored bytes without charging the deflator again.
+  #[tokio::test]
+  async fn a_repeat_bootstrap_deflates_no_further_body_bytes() {
+    let (_home, features) = feature_context();
+    let meta = crate::test_support::create_node(&features.store, "gzip-bootstrap", None, TaskProfile::Manager).await;
+    features
+      .store
+      .append_chat_event(&meta.id, json!({"type": "user", "content": "a question for the gzip memo"}))
+      .await
+      .unwrap();
+    let plain = bootstrap_body(&features, &meta.id, false).await;
+
+    let before = charliebot_compat::compression::level_one_bytes_deflated();
+    let first = bootstrap_body(&features, &meta.id, true).await;
+    assert_eq!(
+      charliebot_compat::compression::level_one_bytes_deflated() - before,
+      plain.len() as u64,
+      "the first gzip answer deflates exactly the plain body"
+    );
+
+    let before = charliebot_compat::compression::level_one_bytes_deflated();
+    let second = bootstrap_body(&features, &meta.id, true).await;
+    assert_eq!(charliebot_compat::compression::level_one_bytes_deflated() - before, 0);
+    assert_eq!(first, second, "the memo serves the stored gzip bytes");
   }
 
   #[tokio::test]

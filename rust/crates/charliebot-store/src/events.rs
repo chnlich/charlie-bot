@@ -1241,10 +1241,10 @@ fn visit_file_facts_from_end<T>(
         continue;
       }
       let newline = start + index as u64;
-      if newline + 1 < line_end {
-        if let Some(value) = visit_line_facts(&mut file, path, newline + 1..line_end, types, visit)? {
-          return Ok(Some(value));
-        }
+      if newline + 1 < line_end
+        && let Some(value) = visit_line_facts(&mut file, path, newline + 1..line_end, types, visit)?
+      {
+        return Ok(Some(value));
       }
       line_end = newline;
     }

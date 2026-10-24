@@ -1,6 +1,6 @@
 # Chat Platforms
 
-This document is what a contributor reads before adding a chat platform to CharlieBot. It explains why the thread entrypoint is one shared core plus one thin adapter per platform, what the core owns, what an adapter must supply, how Slack and Discord fill that contract today, and how Telegram would map onto it. It is written from the code in `src/features/chat_threads/thread_entry.py`, `src/features/slack/slack_listener.py`, and `src/features/discord/discord_listener.py`.
+This document is what a contributor reads before adding a chat platform to CharlieBot. It explains why the thread entrypoint is one shared core plus one thin adapter per platform, what the core owns, what an adapter must supply, how Slack and Discord fill that contract, and how Telegram would map onto it. It is written from the code in `src/features/chat_threads/thread_entry.py`, `src/features/slack/slack_listener.py`, and `src/features/discord/discord_listener.py`.
 
 ---
 
@@ -102,7 +102,7 @@ A new platform repeats the shape Slack and Discord already fill. Work down this 
 
 ## Telegram mapping
 
-This section is design only: no Telegram code exists in the repository. Every point below states what the Bot API documentation (https://core.telegram.org/bots/api) documents today; re-check each against it before building.
+This section is design only: no Telegram code exists in the repository. Every point below states what the Bot API documentation (https://core.telegram.org/bots/api) specifies; re-check each against it before building.
 
 - **Thread.** A forum topic in a supergroup with topics enabled (`message_thread_id`), or a reply chain in a plain group (its root message id). The session id derives from the chat id plus the thread id, in the pattern of the two `summon_session_id` functions above.
 - **Message ids.** Integers unique per chat, so `id_key=int` — the Discord row's ordering, not Slack's string sort.

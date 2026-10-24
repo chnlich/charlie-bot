@@ -34,6 +34,21 @@ fake_agent:
       exit_code: 0
     - name: claude
       steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-status-reminder-after-cron-report}
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: Status reviewed after the cron report.}]
+        - emit:
+            type: result
+            result: ""
+            usage: {input_tokens: 5, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+      exit_code: 0
+    - name: claude
+      steps:
         - emit: {type: system, subtype: init, session_id: synthetic-cron-tick}
         - emit:
             type: assistant
@@ -62,7 +77,22 @@ fake_agent:
             usage: {input_tokens: 5, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
             total_cost_usd: 0.0
       exit_code: 0
-expect_starts: 4
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-status-reminder-cron-tick-1}
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: Status reviewed at the end of the scenario.}]
+        - emit:
+            type: result
+            result: ""
+            usage: {input_tokens: 2, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+      exit_code: 0
+expect_starts: 6
 steps:
   - name: malformed create body keeps the FastAPI validation identity
     method: POST

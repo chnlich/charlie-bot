@@ -107,7 +107,43 @@ fake_agent:
               content: [{type: text, text: The blocked delivery report is recorded.}]
         - emit: {type: result, result: "", usage: {input_tokens: 3, output_tokens: 2}}
       exit_code: 0
-expect_starts: 9
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-review-exhausted-reviewer}
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-opus-5-5
+              content: [{type: text, text: The reviewer exhausted its attempt.}]
+      exit_code: 1
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-review-parent-after-blocked-report}
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: The blocked review report was received.}]
+        - emit: {type: result, result: "", usage: {input_tokens: 3, output_tokens: 2}}
+      exit_code: 0
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-status-reminder-review}
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: Status reviewed after the blocked review report.}]
+        - emit:
+            type: result
+            result: ""
+            usage: {input_tokens: 2, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+      exit_code: 0
+expect_starts: 12
 steps:
   - name: delegate a repo task whose unchanged branch already landed on origin main
     method: POST

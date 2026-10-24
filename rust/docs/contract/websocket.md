@@ -275,13 +275,13 @@ After auth, the server builds the backend. The server refuses the connection in 
 
 | Case | Error message |
 |---|---|
-| Unknown backend id | `unknown transcription backend '<id>'; known: local, gemini, muse` |
+| Unknown backend id | `unknown transcription backend '<id>'; known: gemini, muse` |
 | Backend not available | `voice backend '<id>' is unavailable: <reason>` |
 | Backend has no live partials | `voice backend '<id>' does not stream live partials` |
 
 A refusal is: `accept`, one frame `{"type":"error","message":"<message>"}`, then a close with the default code.
 
-The known ids come from the voice registry in registration order. The `local` backend never streams live partials.
+The known ids come from the voice registry in registration order.
 
 ### Client to server
 

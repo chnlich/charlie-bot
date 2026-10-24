@@ -1,6 +1,6 @@
 # Persisted state: every file the Python server reads or writes
 
-Baseline: the Python tree at `d1f7e3ba6` on `rust-backend`. A Rust server that shares a `CHARLIEBOT_HOME` with
+Baseline: the Python tree at `d113f2c4d` on `rust-backend`. A Rust server that shares a `CHARLIEBOT_HOME` with
 this baseline must read every file below as the baseline writes it and must write it so the baseline reads it
 back. Paths use `<home>` for the resolved `CHARLIEBOT_HOME`, `<sid>` for a session id, `<run>` for a run id and
 `/home/<user>` for the operator's home directory. Module paths are repo-relative. A statement marked
@@ -450,7 +450,7 @@ from `metadata_slot_registration.register_metadata_fields` and are placed after 
 | `archive_offset` | int | 0 | core | count of chat event lines moved to archives |
 | `backend_from_pool` | bool | false | `src.features.backend_pool` | backend chosen by pool rotation |
 | `route` | `{backends: [str], reason: str}` or null | null | `src.features.backend_pool` | router stdout saved on a node that asked the router before selecting a backend |
-| `web_status` | `{goal, now, waiting: [{text, context, link}], updated_at}` or null | null | `src.features.web_reply` | Older items can lack `context` and serialize without it; new status writes require non-blank context |
+| `web_status` | `{goal, now, waiting: [{text, context, link, since, since_exact}], updated_at}` or null | null | `src.features.web_reply` | Older items can lack `context` and serialize without it; new status writes require non-blank context. `since` and `since_exact` are written by the server (`src/features/web_reply/metadata.py`); an item stored before them carries neither, and the status read fills them from the status time. |
 
 `TaskSpec` (`extra="forbid"`): `goal: str`, `acceptance: list[str]`, `context_refs: list[str]`,
 `repo_path: str|None`, `base_branch: str|None`, `task_type` (`implement`, `quick-edit`, `script-run`, `verify`,

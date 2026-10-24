@@ -29,32 +29,31 @@ POST	/api/sessions/{session_id}/elone	sessions	access key + caller	src/runtime/a
 POST	/api/sessions/{session_id}/backend	sessions	access key	src/runtime/api/sessions.py:1291	session-write-streaming
 PUT	/api/sessions/{session_id}/resource-class	sessions	access key + caller, operator only	src/runtime/api/sessions.py:1357	session-write-streaming
 GET	/api/sessions/{session_id}	sessions	access key	src/runtime/api/sessions.py:1383	session-read-api
-DELETE	/api/sessions/{session_id}	sessions	access key + caller, operator only	src/runtime/api/sessions.py:1396	session-write-streaming
-DELETE	/api/sessions/{session_id}/permanent	sessions	access key + caller	src/runtime/api/sessions.py:1420	session-write-streaming
-POST	/api/sessions/{session_id}/unarchive	sessions	access key + caller, operator only	src/runtime/api/sessions.py:1437	session-write-streaming
-POST	/api/sessions/{session_id}/star	sessions	access key	src/runtime/api/sessions.py:1462	session-write-streaming
-POST	/api/sessions/{session_id}/unstar	sessions	access key	src/runtime/api/sessions.py:1469	session-write-streaming
-POST	/api/sessions/{session_id}/rounds/{round_id}/rate	sessions	access key	src/runtime/api/sessions.py:1476	session-write-streaming
-PATCH	/api/sessions/{session_id}	sessions	access key + caller	src/runtime/api/sessions.py:1494	session-write-streaming
-POST	/api/sessions/{session_id}/group	sessions	access key	src/runtime/api/sessions.py:1522	session-write-streaming
-GET	/api/sessions/{session_id}/events.jsonl	sessions	access key	src/runtime/api/sessions.py:1539	session-read-api
-GET	/api/sessions/{session_id}/runs	sessions	access key	src/runtime/api/sessions.py:1561	session-read-api
-GET	/api/sessions/{session_id}/effective-prompt	sessions	access key	src/runtime/api/sessions.py:1604	session-read-api
-GET	/api/sessions/{session_id}/runs/{run_id}/context	sessions	access key	src/runtime/api/sessions.py:1664	session-read-api
-POST	/api/sessions/{session_id}/retry	sessions	access key + caller, operator only	src/runtime/api/sessions.py:1713	agent-orchestration
-GET	/api/sessions/{session_id}/task-inputs/pending	sessions	access key	src/runtime/api/sessions.py:1741	session-read-api
-POST	/api/sessions/{session_id}/task-inputs/acknowledge	sessions	access key + caller	src/runtime/api/sessions.py:1771	session-write-streaming
-POST	/api/sessions/{session_id}/complete	sessions	access key + caller	src/runtime/api/sessions.py:1795	session-write-streaming
-POST	/api/sessions/{session_id}/cancel	sessions	access key + caller	src/runtime/api/sessions.py:1830	session-write-streaming
-POST	/api/sessions/{session_id}/runs/{run_id}/cancel	sessions	access key + caller, own run	src/runtime/api/sessions.py:1867	agent-orchestration
+POST	/api/sessions/{session_id}/archive	sessions	access key + caller	src/runtime/api/sessions.py:1396	session-write-streaming
+DELETE	/api/sessions/{session_id}/permanent	sessions	access key + caller	src/runtime/api/sessions.py:1422	session-write-streaming
+POST	/api/sessions/{session_id}/unarchive	sessions	access key + caller, operator only	src/runtime/api/sessions.py:1439	session-write-streaming
+POST	/api/sessions/{session_id}/star	sessions	access key	src/runtime/api/sessions.py:1464	session-write-streaming
+POST	/api/sessions/{session_id}/unstar	sessions	access key	src/runtime/api/sessions.py:1471	session-write-streaming
+POST	/api/sessions/{session_id}/rounds/{round_id}/rate	sessions	access key	src/runtime/api/sessions.py:1478	session-write-streaming
+PATCH	/api/sessions/{session_id}	sessions	access key + caller	src/runtime/api/sessions.py:1496	session-write-streaming
+POST	/api/sessions/{session_id}/group	sessions	access key	src/runtime/api/sessions.py:1524	session-write-streaming
+GET	/api/sessions/{session_id}/events.jsonl	sessions	access key	src/runtime/api/sessions.py:1541	session-read-api
+GET	/api/sessions/{session_id}/runs	sessions	access key	src/runtime/api/sessions.py:1563	session-read-api
+GET	/api/sessions/{session_id}/effective-prompt	sessions	access key	src/runtime/api/sessions.py:1606	session-read-api
+GET	/api/sessions/{session_id}/runs/{run_id}/context	sessions	access key	src/runtime/api/sessions.py:1666	session-read-api
+POST	/api/sessions/{session_id}/retry	sessions	access key + caller, operator only	src/runtime/api/sessions.py:1715	agent-orchestration
+GET	/api/sessions/{session_id}/task-inputs/pending	sessions	access key	src/runtime/api/sessions.py:1743	session-read-api
+POST	/api/sessions/{session_id}/task-inputs/acknowledge	sessions	access key + caller	src/runtime/api/sessions.py:1773	session-write-streaming
+POST	/api/sessions/{session_id}/cancel	sessions	access key + caller	src/runtime/api/sessions.py:1804	session-write-streaming
+POST	/api/sessions/{session_id}/runs/{run_id}/cancel	sessions	access key + caller, own run	src/runtime/api/sessions.py:1841	agent-orchestration
 POST	/api/chat/{session_id}/upload	chat	access key	src/runtime/api/chat.py:19	session-write-streaming
 POST	/api/chat/{session_id}/message	chat	access key + caller	src/runtime/api/chat.py:48	agent-orchestration
 POST	/api/chat/{session_id}/cancel	chat	access key	src/runtime/api/chat.py:138	agent-orchestration
 GET	/api/internal/version	internal	access key	src/runtime/api/internal.py:29	server-skeleton
-POST	/api/internal/delegate	internal	access key + caller	src/runtime/api/internal.py:265	agent-orchestration
-POST	/api/internal/schedule-trigger	internal	access key	src/runtime/api/internal.py:308	triggers-cron-improve
-POST	/api/internal/triggers/{session_id}/{trigger_id}/cancel	internal	access key	src/runtime/api/internal.py:356	triggers-cron-improve
-POST	/api/internal/session-message	internal	access key + caller	src/runtime/api/internal.py:370	agent-orchestration
+POST	/api/internal/delegate	internal	access key + caller	src/runtime/api/internal.py:266	agent-orchestration
+POST	/api/internal/schedule-trigger	internal	access key	src/runtime/api/internal.py:309	triggers-cron-improve
+POST	/api/internal/triggers/{session_id}/{trigger_id}/cancel	internal	access key	src/runtime/api/internal.py:357	triggers-cron-improve
+POST	/api/internal/session-message	internal	access key + caller	src/runtime/api/internal.py:371	agent-orchestration
 WS	/ws/sessions/{session_id}	websocket	ws token	server.py:362	session-write-streaming
 POST	/api/internal/plan/present	plans	access key	src/features/artifacts/api.py:110	features
 POST	/api/internal/plan/amend	plans	access key	src/features/artifacts/api.py:129	features
@@ -62,23 +61,24 @@ POST	/api/internal/plan/approve	plans	access key	src/features/artifacts/api.py:1
 POST	/api/internal/plan/close	plans	access key	src/features/artifacts/api.py:164	features
 GET	/api/sessions/{session_id}/plans	plans	access key	src/features/artifacts/api.py:85	session-read-api
 GET	/api/code-server/open	tools	access key	src/features/code_server/api.py:76	features
-GET	/api/cron/tasks	cron	access key	src/features/cron/api.py:163	triggers-cron-improve
-PUT	/api/cron/tasks/{name}	cron	access key	src/features/cron/api.py:257	triggers-cron-improve
-POST	/api/cron/tasks	cron	access key	src/features/cron/api.py:270	triggers-cron-improve
-POST	/api/cron/tasks/{name}/run	cron	access key	src/features/cron/api.py:301	triggers-cron-improve
-DELETE	/api/cron/tasks/{name}	cron	access key	src/features/cron/api.py:329	triggers-cron-improve
+GET	/api/cron/tasks	cron	access key	src/features/cron/api.py:162	triggers-cron-improve
+PUT	/api/cron/tasks/{name}	cron	access key	src/features/cron/api.py:256	triggers-cron-improve
+POST	/api/cron/tasks	cron	access key	src/features/cron/api.py:269	triggers-cron-improve
+POST	/api/cron/tasks/{name}/run	cron	access key	src/features/cron/api.py:300	triggers-cron-improve
+DELETE	/api/cron/tasks/{name}	cron	access key	src/features/cron/api.py:328	triggers-cron-improve
 POST	/api/diag/switch-events	tools	access key	src/features/diag/api.py:32	features
 POST	/api/internal/slack/reply	replies	access key + caller	src/features/slack/api.py:31	features
 POST	/api/internal/slack/ack	replies	access key	src/features/slack/api.py:69	features
 POST	/api/internal/discord/reply	replies	access key + caller	src/features/discord/api.py:37	features
 POST	/api/internal/discord/read	replies	access key	src/features/discord/api.py:74	features
 POST	/api/internal/discord/check	replies	access key	src/features/discord/api.py:100	features
-POST	/api/internal/web/reply	replies	access key + caller	src/features/web_reply/api.py:65	features
-GET	/api/internal/web/dialog	replies	access key	src/features/web_reply/api.py:99	features
-POST	/api/internal/web/status	replies	access key	src/features/web_reply/api.py:114	features
-POST	/api/internal/web/status/unread	replies	access key	src/features/web_reply/api.py:135	features
-POST	/api/internal/web/ask-check	replies	access key	src/features/web_reply/api.py:154	features
-GET	/api/internal/web/status	replies	access key	src/features/web_reply/api.py:171	features
+POST	/api/internal/web/reply	replies	access key + caller	src/features/web_reply/api.py:72	features
+GET	/api/internal/web/dialog	replies	access key	src/features/web_reply/api.py:106	features
+POST	/api/internal/web/status	replies	access key	src/features/web_reply/api.py:121	features
+POST	/api/internal/web/status/confirm	replies	access key	src/features/web_reply/api.py:142	features
+POST	/api/internal/web/status/unread	replies	access key	src/features/web_reply/api.py:161	features
+POST	/api/internal/web/ask-check	replies	access key	src/features/web_reply/api.py:180	features
+GET	/api/internal/web/status	replies	access key	src/features/web_reply/api.py:197	features
 GET	/host-auth	pages	access key	src/features/host_auth/api.py:123	features
 GET	/api/host-auth/status	tools	access key	src/features/host_auth/api.py:143	features
 POST	/api/host-auth/probe	tools	access key	src/features/host_auth/api.py:152	features
@@ -100,7 +100,7 @@ GET	/api/ext-usage	tools	access key	src/features/usage/ext_usage.py:141	features
 GET	/token-usage	pages	access key	src/features/usage/api.py:304	features
 POST	/api/voice/{session_id}	voice	access key	src/features/voice/api.py:70	features
 WS	/ws/voice/{session_id}	websocket	ws token	src/features/voice/api.py:308	features
-POST	/api/anthropic-proxy/openai-compatible/{backend_id}/v1/messages	proxy	access key	src/backends/openai_compatible/anthropic_proxy.py:493	other-backends
+POST	/api/anthropic-proxy/openai-compatible/{backend_id}/v1/messages	proxy	access key	src/backends/openai_compatible/anthropic_proxy.py:605	other-backends
 GET,HEAD	/absolute_filepath/{path:path}	files	access key	src/features/files/api.py:116	features
 GET,HEAD	/static/features/artifacts	static	public	server.py:569	server-skeleton
 GET,HEAD	/static/features/backup	static	public	server.py:569	server-skeleton

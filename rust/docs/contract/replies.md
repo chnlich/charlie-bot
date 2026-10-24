@@ -96,7 +96,7 @@ Side effects:
 
 ### `POST /api/internal/slack/ack`
 
-- Handler: `src/features/slack/api.py:74`.
+- Handler: `src/features/slack/api.py:69`.
 - Body: `{"session_id": string, "message_ids": [string]}`, both required.
 
 | Status | Case | `detail` |
@@ -117,7 +117,7 @@ Ids at or below the watermark are acked again with no change.
 
 ### `POST /api/internal/discord/read`
 
-- Handler: `src/features/discord/api.py:80`.
+- Handler: `src/features/discord/api.py:74`.
 - Body: `{"session_id": string, "url": string or null, "limit": int}`. `limit` defaults to 50 and must be 1..100 (422 otherwise).
 
 Without `url` (the session's own thread):
@@ -151,7 +151,7 @@ Any other Discord API failure gives 502 with the error text.
 
 ### `POST /api/internal/discord/check`
 
-- Handler: `src/features/discord/api.py:106`.
+- Handler: `src/features/discord/api.py:100`.
 - Body: `{}`. Any key gives 422.
 
 | Status | Case | Body |
@@ -175,7 +175,7 @@ A web session is a manager session with no Slack or Discord origin. Every web ro
 
 ### `POST /api/internal/web/reply`
 
-- Handler: `src/features/web_reply/api.py:65`.
+- Handler: `src/features/web_reply/api.py:72`.
 - Body: `{"session_id": string, "text": string, "keep_language": string or null}`; `keep_language` is optional.
 - 422 `Reply text is empty` for blank text.
 - 422 `Keep-language reason is empty` for a blank `keep_language`.
@@ -195,7 +195,7 @@ Side effects:
 
 ### `GET /api/internal/web/dialog`
 
-- Handler: `src/features/web_reply/api.py:99`.
+- Handler: `src/features/web_reply/api.py:106`.
 - Query: `session_id` (string, required).
 - 200: `{"session_id": "…", "entries": [{"role": "user" | "web_reply" | "web_reply_notice", "content": "…"}]}`.
 
@@ -203,7 +203,7 @@ Side effects:
 
 ### `POST /api/internal/web/status`
 
-- Handler: `src/features/web_reply/api.py:114`.
+- Handler: `src/features/web_reply/api.py:121`.
 - Body: `{"session_id": string, "text": string}`. `text` is the content of a JSON file.
 
 The server parses `text` as a status patch with the optional keys `goal` (non-blank string), `now` (non-blank string) and `waiting` (list of `{"text": non-blank string, "context": non-blank string, "link": string or null}`). Unknown keys are refused. Each waiting item needs context and a cold-read record for its current text, context, link and linked host-file bytes.
@@ -215,31 +215,40 @@ The server parses `text` as a status patch with the optional keys `goal` (non-bl
 | 422 | Invalid items | `Status file is invalid: <loc>: <msg>; …` |
 | 422 | No item named | `Status file names no item: give goal, now or waiting` |
 | 422 | Waiting item has no context | `Waiting item needs context: <text>` |
+| 409 | A waiting item's plan link is stale: an older version or a closed lineage. Checked before any cold read. | `Stale plan links; nothing was stored.` and one line per link (`plan_links.stale_detail`) |
 | 409 | One or more waiting items have no current cold-read record | `Waiting on you items need a cold read: <names>` |
 
-200: the stored status plus `now_chars` and `now_over_budget`. The stored `web_status` slot is `{"goal": string or null, "now": string or null, "waiting": [{"text","context","link"}], "updated_at": "<datetime Z>"}`.
+200: the stored status plus `now_chars` and `now_over_budget`. The stored `web_status` slot is `{"goal": string or null, "now": string or null, "waiting": [{"text","context","link","since","since_exact"}], "updated_at": "<datetime Z>"}`.
 
 Side effects:
 
-1. Merge the named items into the stored `web_status` slot and set `updated_at`. Items the patch leaves out keep their stored values.
+1. Merge the named items into the stored `web_status` slot and set `updated_at`. Items the patch leaves out keep their stored values. The route stamps `since` and `since_exact` on each waiting item it stores (`_assign_since`).
 2. Append and broadcast `{"type":"web_status","content":"Status updated: <labels>","web_status":<status>,"web_status_changed":[<items>]}`. The labels are `Goal`, `Now` and `Waiting on you`.
 3. Send `{"type":"web_status_subtree","source_session_id":<id>}` to each ancestor's session channel.
 4. Log `web_status_set`.
 
+### `POST /api/internal/web/status/confirm`
+
+- Handler: `src/features/web_reply/api.py:142`.
+- Body: `{"session_id": string}`. Unknown keys give 422.
+- 200: the stored status as `status_payload` builds it: `goal`, `now`, `waiting` (each item's start time filled in) and `updated_at`. An unset slot gives the empty status.
+- Errors: 404 unknown session; 409 a thread session or a worker; 409 a stored item whose plan link is stale, with the newest file named.
+- The route writes one `web_status_confirmed` event with content `Status confirmed`, and broadcasts it. It cold reads nothing and changes no stored status. UNVERIFIED: the `web_status_confirmed` event's other fields were not traced.
+
 ### `POST /api/internal/web/status/unread`
 
-- Handler: `src/features/web_reply/api.py:135`.
+- Handler: `src/features/web_reply/api.py:161`.
 - Body: `{"session_id": string, "text": string}`. `text` is the same status file used by the set route.
 - 200: `{"unread": [waiting item, …]}` for items whose current digest has no `web_ask_check` event in the session.
-- Session, web-session, parsing and context-validation refusals match `POST /api/internal/web/status`; unlike the set
-  route, this one returns unread items instead of refusing when no cold-read event matches.
+- Session, web-session, parsing, context-validation and stale plan link refusals match `POST /api/internal/web/status`;
+  unlike the set route, this one returns unread items instead of refusing when no cold-read event matches.
 - The route writes nothing.
 
 The digest covers the item's text, context, link and the bytes of a host-served file named by its link.
 
 ### `POST /api/internal/web/ask-check`
 
-- Handler: `src/features/web_reply/api.py:154`.
+- Handler: `src/features/web_reply/api.py:180`.
 - Body: `{"session_id": string, "item": {"text": string, "context": string or null, "link": string or null}, "backend": string, "answer": string}`.
 - 200: `{"item_sha256": "<digest>"}`.
 - Errors: 404 unknown session; 409 a thread session or worker; 422 an invalid waiting item.
@@ -248,7 +257,7 @@ The route appends and broadcasts `{"type":"web_ask_check","content":"Cold read o
 
 ### `GET /api/internal/web/status`
 
-- Handler: `src/features/web_reply/api.py:171`.
+- Handler: `src/features/web_reply/api.py:197`.
 - Query: `session_id` (string, required).
 - 200:
 

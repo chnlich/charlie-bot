@@ -1,6 +1,6 @@
 # The `charliebot` CLI
 
-Baseline: the Python tree at `d1f7e3ba6`. Entry point: `[project.scripts] charliebot = "src.app.main:main"`.
+Baseline: the Python tree at `d113f2c4d`. Entry point: `[project.scripts] charliebot = "src.app.main:main"`.
 Agents reach it through the shim `src/runtime/agent_entry_points/charliebot` (`env.md` section 3). Per
 subcommand, this document gives the HTTP routes it calls, the files it reads or writes itself, and its exit codes.
 Route payloads belong to the parallel HTTP contract and are not repeated here. **UNVERIFIED** marks a statement
@@ -88,7 +88,7 @@ below.
 | `session create [--name] [--backend] [--parent P --profile manager\|worker] [--task-file F] [--request-id] [--group G] ...` | `POST /api/sessions/`, then `POST /api/sessions/<id>/group` when `--group` is given | Reads `F` | 0 prints JSON; 1; 2 (for example `"v2 task create requires both --parent and --profile"`) |
 | `session tree [--root] [--include-archived] [--limit]` | `GET /api/sessions/tree` | none | 0; 1; 2 |
 | `session retry <sid> --run R [--request-id]` | `POST /api/sessions/<sid>/retry` | none | 0; 1; 2 |
-| `session complete <sid> --result-file F ...` | `POST /api/sessions/<sid>/complete` | Reads `F` | 0; 1; 2 |
+| `session archive <sid> [--result-file F] [--request-id]` | `POST /api/sessions/<sid>/archive` | Reads `F` when given; its JSON must be an object. Without `F` the body is `{}`. The help text says an agent must give `F`. | 0; 1; 2 |
 | `session acknowledge <sid> --input-ids IDS [--note]` | `POST /api/sessions/<sid>/task-inputs/acknowledge` | none | 0; 1; 2 |
 | `session cancel <sid> --reason R [--request-id]` | `POST /api/sessions/<sid>/cancel`; `GET /api/sessions/<sid>/runs` when a stopped run has no outcome | Reads run rows only for unresolved stops; prints each unresolved run id and pid to stderr. | 0; 1 when a stopped run is still running; 2 usage or refusal |
 | `session send (--message M \| --file F) ...` | `POST /api/internal/session-message` (422 maps to exit 2) | Reads `F` | 0; 2 refused (`EXIT_SEND_REFUSED`) or usage; 1 |
@@ -101,8 +101,9 @@ below.
 | `voice-replay-eval [--engines] [--terms] [--only] [--limit] [--out DIR] [--dry-run] ...` | none | Reads `<home>/sessions/*/voice/*.wav`, `.txt` and the chat events that hold the sent messages; runs the transcription backends in-process (cloud ones call their APIs). Writes `<out>/results.json` and `<out>/summary.md`, default `<home>/voice_eval/<UTC timestamp>/`. It refuses an `--out` inside the repo. | 0; 1 (`SystemExit` with a message); 2 usage |
 | `web reply --file F [--keep-language REASON] [--session]` | `POST /api/internal/web/reply` | Reads `F` | 0; 1; 2 |
 | `web dialog [--session]` | `GET /api/internal/web/dialog` | none | 0; 1; 2 |
-| `web status set --file F [--session]` | `POST /api/internal/web/status/unread`, then `POST /api/internal/web/ask-check` for each unread item, then `POST /api/internal/web/status` after every item has a current read | Reads `F`; for a linked item, reads the host-served file and runs a light backend one-shot. | 0 stored; 3 after recording cold reads without storing; 1; 2 |
-| `web status show [--session]` | `GET /api/internal/web/status` | none | 0; 1; 2 |
+| `web status set --file F [--session]` | `POST /api/internal/web/status/unread`, then `POST /api/internal/web/ask-check` for each unread item, then `POST /api/internal/web/status` after every item has a current read | Reads `F`; for a linked item, reads the host-served file and runs a light backend one-shot. The server refuses a stale plan link with 409 before any cold read. | 0 stored; 3 after recording cold reads without storing; 1; 2 |
+| `web status confirm` | `POST /api/internal/web/status/confirm` | none. Prints the route's JSON answer on one line. | 0; 1; 2 |
+| `web status show [--session]` | `GET /api/internal/web/status` | none. Each waiting item prints its `since` and `since_exact` lines under the item. | 0; 1; 2 |
 
 ## 4. Acceptance check
 

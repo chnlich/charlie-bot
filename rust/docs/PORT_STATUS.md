@@ -59,7 +59,7 @@ by the run id its stop request captured (see `rust/parity/README.md`).
 | POST | `/api/sessions/{session_id}/backend` | sessions | ported |  |
 | PUT | `/api/sessions/{session_id}/resource-class` | sessions | ported | Operator credentials only. Sets the `resource_class` metadata field that places the session's cgroup (df7920bd7). Rust: `rust/crates/charliebot-session-api/src/writes.rs` `set_resource_class`. |
 | GET | `/api/sessions/{session_id}` | sessions | ported |  |
-| DELETE | `/api/sessions/{session_id}` | sessions | ported |  |
+| POST | `/api/sessions/{session_id}/archive` | sessions | todo |  |
 | DELETE | `/api/sessions/{session_id}/permanent` | sessions | ported |  |
 | POST | `/api/sessions/{session_id}/unarchive` | sessions | ported |  |
 | POST | `/api/sessions/{session_id}/star` | sessions | ported |  |
@@ -74,7 +74,6 @@ by the run id its stop request captured (see `rust/parity/README.md`).
 | POST | `/api/sessions/{session_id}/retry` | sessions | ported |  |
 | GET | `/api/sessions/{session_id}/task-inputs/pending` | sessions | ported |  |
 | POST | `/api/sessions/{session_id}/task-inputs/acknowledge` | sessions | ported |  |
-| POST | `/api/sessions/{session_id}/complete` | sessions | ported |  |
 | POST | `/api/sessions/{session_id}/cancel` | sessions | ported |  |
 | POST | `/api/sessions/{session_id}/runs/{run_id}/cancel` | sessions | ported |  |
 | POST | `/api/chat/{session_id}/upload` | chat | ported |  |
@@ -106,6 +105,7 @@ by the run id its stop request captured (see `rust/parity/README.md`).
 | POST | `/api/internal/web/reply` | features/web_reply | ported |  |
 | GET | `/api/internal/web/dialog` | features/web_reply | ported |  |
 | POST | `/api/internal/web/status` | features/web_reply | ported |  |
+| POST | `/api/internal/web/status/confirm` | features/web_reply | todo |  |
 | POST | `/api/internal/web/status/unread` | features/web_reply | ported |  |
 | POST | `/api/internal/web/ask-check` | features/web_reply | ported |  |
 | GET | `/api/internal/web/status` | features/web_reply | ported |  |

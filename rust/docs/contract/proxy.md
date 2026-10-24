@@ -16,7 +16,7 @@ The CLI sends `Authorization: Bearer <access key>`, which passes the auth middle
 ## `POST /api/anthropic-proxy/openai-compatible/{backend_id}/v1/messages`
 
 - Auth: access key.
-- Handler: `src/backends/openai_compatible/anthropic_proxy.py:493`.
+- Handler: `src/backends/openai_compatible/anthropic_proxy.py:605`.
 - Path parameter: `backend_id`, a backend option id.
 - Body: an Anthropic Messages API request (JSON object).
 

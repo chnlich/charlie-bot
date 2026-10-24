@@ -35,7 +35,7 @@ A step: `{"name", "prompt_file", "backend", "distinct_backend_from", …}` witho
 
 ## `GET /api/cron/tasks`
 
-- Handler: `src/features/cron/api.py:163`.
+- Handler: `src/features/cron/api.py:162`.
 - Parameters: none.
 - 200: a list. First the valid tasks sorted by name. Then one entry per broken file:
 
@@ -47,7 +47,7 @@ A step: `{"name", "prompt_file", "backend", "distinct_backend_from", …}` witho
 
 ## `PUT /api/cron/tasks/{name}`
 
-- Handler: `src/features/cron/api.py:257`.
+- Handler: `src/features/cron/api.py:256`.
 - Body (`TaskUpdate`, all optional, unknown keys ignored):
 
 | Field | Type | Effect when present |
@@ -79,7 +79,7 @@ Checks, in order:
 
 ## `POST /api/cron/tasks`
 
-- Handler: `src/features/cron/api.py:270`.
+- Handler: `src/features/cron/api.py:269`.
 - Body (`TaskCreate`, unknown keys ignored):
 
 | Field | Type | Required | Default |
@@ -106,7 +106,7 @@ Side effects: creates `config.d/cron.d/` when absent and writes `<name>.yaml`.
 
 ## `POST /api/cron/tasks/{name}/run`
 
-- Handler: `src/features/cron/api.py:301`.
+- Handler: `src/features/cron/api.py:300`.
 - Body: none.
 - The name rule does not apply on this route.
 
@@ -120,7 +120,7 @@ Side effects: the scheduler runs the task once through the same path as a cron f
 
 ## `DELETE /api/cron/tasks/{name}`
 
-- Handler: `src/features/cron/api.py:329`.
+- Handler: `src/features/cron/api.py:328`.
 - Checks: name rule (400); task file exists (404).
 - 200: `{"ok": true}`.
 - Side effects: deletes the YAML file. The bound node stays unchanged.

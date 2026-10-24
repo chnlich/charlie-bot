@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import datetime
 import io
 import json
 import pathlib
@@ -68,6 +69,10 @@ def _nudges(events: list[dict]) -> list[dict]:
   return [ev for ev in conftest.events_of_type(events, ET.AGENT_MESSAGE) if reply.nudge_of(ev) is not None]
 
 
+def _status_reminders(events: list[dict]) -> list[dict]:
+  return [ev for ev in events if audit.is_status_reminder(ev)]
+
+
 def _done(input_event_ids: list[str], exit_code: int = 0) -> dict:
   return {"type": ET.MASTER_DONE, "exit_code": exit_code, ET.STILL_THINKING: False, ET.INPUT_EVENT_IDS: input_event_ids}
 
@@ -100,14 +105,16 @@ async def _post_nudge(blocks: conftest.SessionBlocks, sid: str, user_event_id: s
   """Audit a turn that answered *user_event_id* without a reply; returns the nudge it persisted."""
   tasks: list[asyncio.Task] = []
   with _wake_seams(tasks):
-    await audit.audit_turn(sid, _done([user_event_id]), blocks.store, blocks.events, blocks.lifecycle, blocks.successor)
+    await audit.audit_reply(
+        sid, _done([user_event_id]), blocks.store, blocks.events, blocks.lifecycle, blocks.successor)
     await asyncio.gather(*tasks)
   return _nudges(_events(blocks, sid))[-1]
 
 
 async def _after_turn(monkeypatch: pytest.MonkeyPatch, blocks: conftest.SessionBlocks, sid: str, done: dict) -> None:
   """The web contribution's after_turn for one finished turn, over the process singletons bound to *blocks*."""
-  conftest.bind_session_blocks(monkeypatch, blocks)
+  assert blocks.tree is not None, "a session-creating rig builds the task tree"
+  conftest.bind_deps_blocks(monkeypatch, blocks.tree, blocks)
   meta = await blocks.store.get_session(sid)
   await web_turn_contribution.CONTRIBUTION.after_turn(meta, done, cfg=blocks.cfg)
 
@@ -704,8 +711,8 @@ async def test_a_user_turn_without_a_reply_gets_one_nudge_that_wakes_a_turn(tmp_
   tasks: list[asyncio.Task] = []
 
   with _wake_seams(tasks) as trigger:
-    await audit.audit_turn(sid, done, blocks.store, blocks.events, blocks.lifecycle, blocks.successor)
-    await audit.audit_turn(sid, done, blocks.store, blocks.events, blocks.lifecycle, blocks.successor)
+    await audit.audit_reply(sid, done, blocks.store, blocks.events, blocks.lifecycle, blocks.successor)
+    await audit.audit_reply(sid, done, blocks.store, blocks.events, blocks.lifecycle, blocks.successor)
     await asyncio.gather(*tasks)
 
   nudges = _nudges(_events(blocks, sid))
@@ -727,8 +734,8 @@ async def test_a_nudge_turn_without_a_reply_posts_one_notice_and_marks_the_sessi
   tasks: list[asyncio.Task] = []
 
   with _wake_seams(tasks) as trigger:
-    await audit.audit_turn(sid, done, blocks.store, blocks.events, blocks.lifecycle, blocks.successor)
-    await audit.audit_turn(sid, done, blocks.store, blocks.events, blocks.lifecycle, blocks.successor)
+    await audit.audit_reply(sid, done, blocks.store, blocks.events, blocks.lifecycle, blocks.successor)
+    await audit.audit_reply(sid, done, blocks.store, blocks.events, blocks.lifecycle, blocks.successor)
     await asyncio.gather(*tasks)
 
   notices = conftest.events_of_type(_events(blocks, sid), ET.WEB_REPLY_NOTICE)
@@ -750,7 +757,7 @@ async def test_a_reply_in_the_nudge_turn_ends_the_audit_with_no_notice(tmp_path:
 
   with _running_turn(blocks, sid, [nudge["id"]]):
     await _post_reply(blocks, sid, "the answer")
-  await audit.audit_turn(sid, _done([nudge["id"]]), blocks.store, blocks.events, blocks.lifecycle, blocks.successor)
+  await audit.audit_reply(sid, _done([nudge["id"]]), blocks.store, blocks.events, blocks.lifecycle, blocks.successor)
 
   events = _events(blocks, sid)
   assert not conftest.events_of_type(events, ET.WEB_REPLY_NOTICE)
@@ -803,6 +810,106 @@ async def test_an_errored_turn_gets_no_audit(
   trigger.assert_not_awaited()
   assert len(_nudges(events)) == (1 if errored_input == "nudge" else 0)
   assert not conftest.events_of_type(events, ET.WEB_REPLY_NOTICE)
+
+
+# ---------------------------------------------------------------------------
+# The status reminder: every finished turn, once, and no reminder from its own wake
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_turn_without_a_status_gets_one_reminder_and_its_reminder_turn_gets_none(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  blocks = _rig(tmp_path)
+  sid = await _session(blocks)
+  done = {**_done([]), "id": "turn-1"}
+  tasks: list[asyncio.Task] = []
+
+  with _wake_seams(tasks) as trigger:
+    await _after_turn(monkeypatch, blocks, sid, done)
+    await _after_turn(monkeypatch, blocks, sid, done)
+    await asyncio.gather(*tasks)
+
+  reminders = _status_reminders(_events(blocks, sid))
+  assert len(reminders) == 1
+  assert reminders[0][ET.WEB_STATUS_REMINDER] == "turn-1"
+  trigger.assert_awaited_once()
+
+  reminder = reminders[0]
+  reminder_tasks: list[asyncio.Task] = []
+  with _wake_seams(reminder_tasks) as reminder_trigger:
+    await _after_turn(monkeypatch, blocks, sid, {**_done([reminder["id"]]), "id": "turn-2"})
+    await asyncio.gather(*reminder_tasks)
+
+  assert len(_status_reminders(_events(blocks, sid))) == 1
+  reminder_trigger.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_turn_missing_reply_and_status_gets_one_combined_reminder_and_one_wake(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  blocks = _rig(tmp_path)
+  sid = await _session(blocks)
+  user = await _append(blocks, sid, conftest.user_event("the question"))
+  done = {**_done([user["id"]]), "id": "turn-1"}
+  tasks: list[asyncio.Task] = []
+
+  with _wake_seams(tasks) as trigger:
+    await _after_turn(monkeypatch, blocks, sid, done)
+    await asyncio.gather(*tasks)
+
+  events = _events(blocks, sid)
+  reminders = _status_reminders(events)
+  assert len(reminders) == 1
+  assert reminders[0][ET.WEB_REPLY]["nudge_of"] == user["id"]
+  assert _nudges(events) == reminders
+  trigger.assert_awaited_once()
+
+  reminder_tasks: list[asyncio.Task] = []
+  with _wake_seams(reminder_tasks) as reminder_trigger:
+    await _after_turn(monkeypatch, blocks, sid, {**_done([reminders[0]["id"]]), "id": "turn-2"})
+    await asyncio.gather(*reminder_tasks)
+
+  events = _events(blocks, sid)
+  assert len(_status_reminders(events)) == 1
+  assert len(conftest.events_of_type(events, ET.WEB_REPLY_NOTICE)) == 1
+  reminder_trigger.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_pending_close_request_skips_the_status_reminder(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  blocks = _rig(tmp_path)
+  sid = await _session(blocks)
+  await _append(blocks, sid, {
+      "type": ET.TASK_CLOSE_REQUESTED,
+      "request_id": "close-1",
+      "owner_run_id": "run-1",
+  })
+  tasks: list[asyncio.Task] = []
+
+  with _wake_seams(tasks) as trigger:
+    await _after_turn(monkeypatch, blocks, sid, {**_done([]), "id": "turn-1"})
+    await asyncio.gather(*tasks)
+
+  assert _status_reminders(_events(blocks, sid)) == []
+  trigger.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_turn_that_recorded_a_status_command_gets_no_status_reminder(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  blocks = _rig(tmp_path)
+  sid = await _session(blocks)
+  await _append(blocks, sid, {"type": ET.WEB_STATUS, "content": "Status updated: Now"})
+  tasks: list[asyncio.Task] = []
+
+  with _wake_seams(tasks) as trigger:
+    await _after_turn(monkeypatch, blocks, sid, {**_done([]), "id": "turn-1"})
+    await asyncio.gather(*tasks)
+
+  assert _status_reminders(_events(blocks, sid)) == []
+  trigger.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
@@ -940,12 +1047,62 @@ def _without_budget(status: dict) -> dict:
   return {key: value for key, value in status.items() if key not in ("now_chars", "now_over_budget")}
 
 
+def _without_item_times(items: list[dict]) -> list[dict]:
+  """The waiting items without the start-time fields that the server adds."""
+  return [{key: value for key, value in item.items() if key not in ("since", "since_exact")} for item in items]
+
+
 async def _stored_status(blocks: conftest.SessionBlocks, sid: str) -> dict | None:
   return (await blocks.store.get_session(sid)).model_dump(mode="json")["web_status"]
 
 
 def _status_events(blocks: conftest.SessionBlocks, sid: str) -> list[dict]:
   return conftest.events_of_type(_events(blocks, sid), ET.WEB_STATUS)
+
+
+def _waiting_with_link(text: str, link: str) -> str:
+  return json.dumps(
+      {
+          "waiting":
+              [
+                  {
+                      "text": text,
+                      "context": "The line is active now. Options are continue or stop; continue is recommended.",
+                      "link": link,
+                  }
+              ]
+      })
+
+
+def _session_artifact(blocks: conftest.SessionBlocks, sid: str, name: str) -> pathlib.Path:
+  path = blocks.cfg.sessions_dir / sid / "artifacts" / name
+  path.parent.mkdir(parents=True, exist_ok=True)
+  path.write_text(name, encoding="utf-8")
+  return path
+
+
+def _plan_version(v: int, relative: str) -> dict:
+  return {
+      "v": v,
+      "file": relative,
+      "created_at": "2026-10-24T00:00:00+00:00",
+      "trigger": "initial",
+      "base": None,
+      "note": None,
+  }
+
+
+def _write_plans(blocks: conftest.SessionBlocks, sid: str, plans: list[dict]) -> None:
+  path = blocks.cfg.sessions_dir / sid / "plans.json"
+  path.write_text(json.dumps({"plans": plans}), encoding="utf-8")
+
+
+def _plan(plan_id: int, versions: list[dict], closed: dict | None = None) -> dict:
+  return {"id": plan_id, "title": f"Plan {plan_id}", "versions": versions, "takeoff": None, "closed": closed}
+
+
+def _parse_time(value: str) -> datetime.datetime:
+  return datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
 @pytest.mark.asyncio
@@ -980,7 +1137,7 @@ async def test_a_status_set_of_now_alone_keeps_the_other_items_and_records_one_e
   stored = second.json()
   assert stored["goal"] == "Ship the panel"
   assert stored["now"] == "Running"
-  assert stored["waiting"] == [
+  assert _without_item_times(stored["waiting"]) == [
       {
           "text": "Pick a layout",
           "context": "The panel is one row per item. Options: fold the line or show it. Fold is recommended.",
@@ -1178,7 +1335,7 @@ async def test_the_status_read_lists_open_waiting_descendants_newest_first(tmp_p
 
   assert body["web_status"] is None
   assert [row["session_id"] for row in body["descendants"]] == [deep.id, new.id, old.id]
-  assert [row["waiting"] for row in body["descendants"]] == [
+  assert [_without_item_times(row["waiting"]) for row in body["descendants"]] == [
       [
           {
               "text": "Deep decision",
@@ -1270,6 +1427,230 @@ async def test_a_status_event_leaves_the_unread_mark_unchanged(tmp_path: pathlib
   await blocks.lifecycle.mark_unread(sid)
   _set(client, sid, json.dumps({"now": "Done"}))
   assert (await blocks.store.get_session(sid)).has_unread
+
+
+# ---------------------------------------------------------------------------
+# Stale plan links: an old version or a closed lineage is refused in set and confirm
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_status_set_refuses_an_old_plan_link_before_the_cold_read(tmp_path: pathlib.Path) -> None:
+  blocks = _rig(tmp_path)
+  sid = await _session(blocks)
+  client = _status_client(blocks)
+  v9 = _session_artifact(blocks, sid, "plan_01_v9.html")
+  v11 = _session_artifact(blocks, sid, "plan_01_v11.html")
+  _write_plans(
+      blocks, sid,
+      [_plan(1, [_plan_version(9, "artifacts/plan_01_v9.html"),
+                 _plan_version(11, "artifacts/plan_01_v11.html")])])
+  item = {
+      "text": "Decide plan 1",
+      "context": "The plan waits. Options are approve or revise; approve is recommended.",
+      "link": _host_file_link(v9),
+  }
+
+  with mock.patch.object(status, "_read_item_digests", side_effect=AssertionError("cold read ran")) as digest_reads:
+    response = _set(client, sid, json.dumps({"waiting": [item]}))
+
+  assert response.status_code == 409
+  detail = response.json()["detail"]
+  assert _host_file_link(v9) in detail
+  assert str(v11) in detail
+  digest_reads.assert_not_called()
+  assert await _stored_status(blocks, sid) is None
+  assert _status_events(blocks, sid) == []
+  assert _ask_checks(blocks, sid) == []
+
+
+@pytest.mark.asyncio
+async def test_status_confirm_refuses_a_stale_stored_plan_link(tmp_path: pathlib.Path) -> None:
+  blocks = _rig(tmp_path)
+  sid = await _session(blocks)
+  client = _status_client(blocks)
+  v9 = _session_artifact(blocks, sid, "plan_01_v9.html")
+  v11 = _session_artifact(blocks, sid, "plan_01_v11.html")
+  _write_plans(
+      blocks, sid,
+      [_plan(1, [_plan_version(9, "artifacts/plan_01_v9.html"),
+                 _plan_version(11, "artifacts/plan_01_v11.html")])])
+  assert blocks.tree is not None
+  await blocks.tree.update_slot_fields(
+      sid,
+      status.OWNER,
+      web_status=metadata.WebStatus(
+          waiting=[
+              metadata.WaitingItem(
+                  text="Decide plan 1",
+                  context="The plan waits. Options are approve or revise; approve is recommended.",
+                  link=_host_file_link(v9))
+          ]))
+
+  response = client.post("/api/internal/web/status/confirm", json={"session_id": sid})
+
+  assert response.status_code == 409
+  detail = response.json()["detail"]
+  assert _host_file_link(v9) in detail
+  assert str(v11) in detail
+  assert conftest.events_of_type(_events(blocks, sid), ET.WEB_STATUS_CONFIRMED) == []
+
+
+@pytest.mark.asyncio
+async def test_status_confirm_refuses_a_link_to_a_closed_lineage(tmp_path: pathlib.Path) -> None:
+  blocks = _rig(tmp_path)
+  sid = await _session(blocks)
+  client = _status_client(blocks)
+  page = _session_artifact(blocks, sid, "plan_02_v1.html")
+  _write_plans(blocks, sid, [_plan(2, [_plan_version(1, "artifacts/plan_02_v1.html")], closed={"as": "completed"})])
+  assert blocks.tree is not None
+  await blocks.tree.update_slot_fields(
+      sid,
+      status.OWNER,
+      web_status=metadata.WebStatus(
+          waiting=[
+              metadata.WaitingItem(
+                  text="Decide plan 2",
+                  context="The plan is closed. Options are reopen or stop; reopen is recommended.",
+                  link=_host_file_link(page))
+          ]))
+
+  response = client.post("/api/internal/web/status/confirm", json={"session_id": sid})
+
+  assert response.status_code == 409
+  assert "closed" in response.json()["detail"]
+  assert conftest.events_of_type(_events(blocks, sid), ET.WEB_STATUS_CONFIRMED) == []
+
+
+@pytest.mark.asyncio
+async def test_status_confirm_returns_the_stored_status_with_start_times_and_records_one_event(
+    tmp_path: pathlib.Path) -> None:
+  blocks = _rig(tmp_path)
+  sid = await _session(blocks)
+  client = _status_client(blocks)
+  stored_at = models.utc_now() - datetime.timedelta(hours=5)
+  assert blocks.tree is not None
+  await blocks.tree.update_slot_fields(
+      sid,
+      status.OWNER,
+      web_status=metadata.WebStatus(
+          waiting=[
+              metadata.WaitingItem(
+                  text="Decide the deploy",
+                  context="The release is ready. Options are deploy or wait; deploy is recommended.")
+          ],
+          updated_at=stored_at))
+
+  with mock.patch.object(status, "_read_item_digests", side_effect=AssertionError("cold read ran")) as digest_reads:
+    response = client.post("/api/internal/web/status/confirm", json={"session_id": sid})
+
+  assert response.status_code == 200
+  waited = response.json()["waiting"][0]
+  assert _parse_time(waited["since"]) == stored_at
+  assert waited["since_exact"] is False
+  digest_reads.assert_not_called()
+  assert len(conftest.events_of_type(_events(blocks, sid), ET.WEB_STATUS_CONFIRMED)) == 1
+
+
+# ---------------------------------------------------------------------------
+# since: a stored item keeps its start time across a rewording or a plan version
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_since_keeps_the_start_time_of_the_same_text_and_a_reworded_item(tmp_path: pathlib.Path) -> None:
+  blocks = _rig(tmp_path)
+  sid = await _session(blocks)
+  client = _status_client(blocks)
+
+  first = _set_after_reads(client, sid, _waiting_set("Decide A"))
+  since = first.json()["waiting"][0]["since"]
+  second = _set_after_reads(client, sid, _waiting_set("Decide A"))
+  third = _set_after_reads(client, sid, _waiting_set("Decide B"))
+
+  assert first.status_code == second.status_code == third.status_code == 200
+  assert second.json()["waiting"][0]["since"] == since
+  assert third.json()["waiting"][0]["since"] == since
+  assert third.json()["waiting"][0]["since_exact"] is True
+
+
+@pytest.mark.asyncio
+async def test_since_keeps_the_start_time_of_a_reworded_item_with_the_same_link(tmp_path: pathlib.Path) -> None:
+  blocks = _rig(tmp_path)
+  sid = await _session(blocks)
+  client = _status_client(blocks)
+  page = tmp_path / "linked-page.html"
+  page.write_text("page", encoding="utf-8")
+  link = _host_file_link(page)
+
+  first = _set_after_reads(client, sid, _waiting_with_link("Review A", link))
+  second = _set_after_reads(client, sid, _waiting_with_link("Review B", link))
+
+  assert first.status_code == second.status_code == 200
+  assert second.json()["waiting"][0]["since"] == first.json()["waiting"][0]["since"]
+
+
+@pytest.mark.asyncio
+async def test_since_keeps_the_start_time_when_a_plan_link_moves_to_its_new_version(tmp_path: pathlib.Path) -> None:
+  blocks = _rig(tmp_path)
+  sid = await _session(blocks)
+  client = _status_client(blocks)
+  v2 = _session_artifact(blocks, sid, "plan_03_v2.html")
+  v3 = _session_artifact(blocks, sid, "plan_03_v3.html")
+  _write_plans(blocks, sid, [_plan(3, [_plan_version(2, "artifacts/plan_03_v2.html")])])
+
+  first = _set_after_reads(client, sid, _waiting_with_link("Decide plan A", _host_file_link(v2)))
+  since = first.json()["waiting"][0]["since"]
+  _write_plans(
+      blocks, sid,
+      [_plan(3, [_plan_version(2, "artifacts/plan_03_v2.html"),
+                 _plan_version(3, "artifacts/plan_03_v3.html")])])
+  second = _set_after_reads(client, sid, _waiting_with_link("Decide plan B", _host_file_link(v3)))
+
+  assert first.status_code == second.status_code == 200
+  assert second.json()["waiting"][0]["since"] == since
+
+
+@pytest.mark.asyncio
+async def test_legacy_items_read_with_a_lower_bound_and_keep_it_after_a_set(tmp_path: pathlib.Path) -> None:
+  blocks = _rig(tmp_path)
+  sid = await _session(blocks)
+  client = _status_client(blocks)
+  stored_at = models.utc_now() - datetime.timedelta(hours=5)
+  item = metadata.WaitingItem(
+      text="Legacy decision", context="The line is active now. Options are continue or stop; continue is recommended.")
+  assert blocks.tree is not None
+  await blocks.tree.update_slot_fields(
+      sid, status.OWNER, web_status=metadata.WebStatus(waiting=[item], updated_at=stored_at))
+
+  read = client.get(_STATUS_URL, params={"session_id": sid}).json()["web_status"]["waiting"][0]
+  assert _parse_time(read["since"]) == stored_at
+  assert read["since_exact"] is False
+
+  written = _set_after_reads(client, sid, _waiting_set("Legacy decision"))
+
+  assert written.status_code == 200
+  assert _parse_time(written.json()["waiting"][0]["since"]) == stored_at
+  assert written.json()["waiting"][0]["since_exact"] is False
+
+
+@pytest.mark.asyncio
+async def test_a_set_file_that_carries_a_start_time_field_is_refused(tmp_path: pathlib.Path) -> None:
+  blocks = _rig(tmp_path)
+  sid = await _session(blocks)
+  client = _status_client(blocks)
+  item = {
+      "text": "Decide",
+      "context": "The line is active. Options are continue or stop; continue is recommended.",
+      "since": models.utc_now_iso(),
+      "since_exact": True,
+  }
+
+  response = _set(client, sid, json.dumps({"waiting": [item]}))
+
+  assert response.status_code == 422
+  assert await _stored_status(blocks, sid) is None
+  assert _status_events(blocks, sid) == []
 
 
 # ---------------------------------------------------------------------------
@@ -1412,7 +1793,7 @@ async def test_a_status_set_stores_context_after_the_item_was_read(tmp_path: pat
 
   assert resp.status_code == 200
   stored = (await _stored_status(blocks, sid))["waiting"]
-  assert stored == [with_context]
+  assert _without_item_times(stored) == [with_context]
   assert _status_events(blocks, sid)[-1]["web_status"]["waiting"] == stored
 
 
@@ -1480,7 +1861,7 @@ async def test_a_status_set_stores_an_item_after_ask_check_with_the_same_digest(
   resp = _set(client, sid, json.dumps({"waiting": [item]}))
 
   assert resp.status_code == 200
-  assert resp.json()["waiting"] == [item]
+  assert _without_item_times(resp.json()["waiting"]) == [item]
   assert await _stored_status(blocks, sid) == _without_budget(resp.json())
   assert len(_status_events(blocks, sid)) == 1
 
@@ -1571,8 +1952,8 @@ async def test_a_waiting_link_to_a_directory_can_be_cold_read_and_stored(tmp_pat
   response = _set(client, sid, json.dumps({"waiting": [item]}))
 
   assert response.status_code == 200
-  assert response.json()["waiting"] == [item]
-  assert (await _stored_status(blocks, sid))["waiting"] == [item]
+  assert _without_item_times(response.json()["waiting"]) == [item]
+  assert _without_item_times((await _stored_status(blocks, sid))["waiting"]) == [item]
 
 
 @pytest.mark.asyncio
@@ -1980,6 +2361,39 @@ def test_the_cli_status_set_prints_each_backend_error_and_records_no_failed_item
   assert "attempt fake-a failed: RuntimeError: fake-a failed" in output.err
   assert "attempt fake-b failed: RuntimeError: fake-b failed" in output.err
   assert output.out == ""
+
+
+def test_the_cli_status_confirm_posts_the_session_and_prints_the_stored_status(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+  conftest.setup_session_cwd(tmp_path, monkeypatch, "abc")
+  stored = {
+      "goal": "g",
+      "now": "n",
+      "waiting":
+          [
+              {
+                  "text": "Decide",
+                  "context": "The line is active.",
+                  "link": None,
+                  "since": "2026-10-24T00:00:00+00:00",
+                  "since_exact": False,
+              }
+          ],
+      "updated_at": "2026-10-24T05:00:00+00:00",
+  }
+  calls: list[tuple[str, dict]] = []
+
+  def fake_post(endpoint: str, payload: dict) -> dict:
+    calls.append((endpoint, payload))
+    return stored
+
+  monkeypatch.setattr(common, "post_internal_api", fake_post)
+  monkeypatch.setattr(sys, "argv", ["web", "status", "confirm"])
+
+  cli.main()
+
+  assert calls == [("/api/internal/web/status/confirm", {"session_id": "abc"})]
+  assert json.loads(capsys.readouterr().out) == stored
 
 
 @pytest.mark.parametrize("has_status", [False, True])

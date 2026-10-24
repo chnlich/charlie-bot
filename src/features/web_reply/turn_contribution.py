@@ -5,7 +5,14 @@ from collections.abc import Callable
 from src.features.web_reply import audit, reply
 from src.infra import config, models
 from src.infra import event_types as ET
-from src.runtime import session_events, session_lifecycle, session_store, session_successor, task_prompts
+from src.runtime import (
+    session_events,
+    session_lifecycle,
+    session_store,
+    session_successor,
+    task_execution,
+    task_prompts,
+)
 from src.runtime.hooks import turn_contributions
 
 
@@ -33,8 +40,14 @@ class WebReplyTurnContribution(turn_contributions.TurnContribution):
     if not reply.is_web_session(meta) or done_event["exit_code"] != 0:
       return
     await audit.audit_turn(
-        meta.id, done_event, session_store.store(), session_events.events(), session_lifecycle.lifecycle(),
-        session_successor.successor())
+        meta.id,
+        done_event,
+        session_store.store(),
+        session_events.events(),
+        session_lifecycle.lifecycle(),
+        session_successor.successor(),
+        task_execution.task_manager(),
+        archived=meta.status == models.SessionStatus.ARCHIVED)
 
   def instruction_segments(self, meta: models.SessionMetadata, kind: str,
                            cfg: config.CharlieBotConfig) -> list[task_prompts.RuleSegment]:

@@ -2,9 +2,12 @@
 
 A set replaces the items its file names, stores the status in the ``web_status`` metadata field, records one
 ``web_status`` event and tells every ancestor page. Waiting items need non-blank context before either the unread query
-or the set checks digests. The set stores them only after a matching ``web_ask_check`` digest. The set's return holds
-the stored status plus ``now_chars`` and ``now_over_budget``; the stored status and event keep neither. A read lists
-open waiting descendants and open children with a Now, both newest first.
+or the set checks digests. A set and a confirm refuse an item link to an older version of a registered plan or to a
+closed plan before anything else runs. The set stores items only after a matching ``web_ask_check`` digest. The server
+writes each item's ``since`` and ``since_exact``, keeping the start time of the item an update continues. The set's
+return holds the stored status plus ``now_chars`` and ``now_over_budget``; the stored status and event keep neither. A
+confirm records one ``web_status_confirmed`` event and cold reads nothing. A read lists open waiting descendants and
+open children with a Now, both newest first, with every waiting item's start time filled in.
 
 The cold-read side keeps one digest of a Waiting on you item. The unread query and set gate use the same digest and
 ``web_ask_check`` event lookup.
@@ -17,7 +20,7 @@ import json
 
 import pydantic
 
-from src.features.web_reply import metadata, reply
+from src.features.web_reply import metadata, plan_links, reply
 from src.infra import event_types as ET
 from src.infra import log_once, metadata_slots, models
 from src.runtime import file_urls, session_events, session_store, streaming, task_sessions
@@ -60,6 +63,20 @@ def _error_summary(exc: pydantic.ValidationError) -> str:
   return "; ".join(f"{'.'.join(str(part) for part in err['loc'])}: {err['msg']}" for err in exc.errors())
 
 
+def _refuse_server_fields(raw: dict) -> None:
+  """Refuse a set file whose waiting item carries a field that only the server writes."""
+  waiting = raw.get("waiting")
+  if not isinstance(waiting, list):
+    return
+  for raw_item in waiting:
+    if not isinstance(raw_item, dict):
+      continue
+    written = [name for name in ("since", "since_exact") if name in raw_item]
+    if written:
+      raise reply.WebReplyError(
+          422, f"Waiting item fields {', '.join(written)} are written by the server; remove them from the file")
+
+
 def parse_patch(text: str, scan_context: file_urls.ScanContext) -> StatusPatch:
   """The valid status patch in *text*; WebReplyError 422 for invalid items, no named item or a dead file link."""
   try:
@@ -68,6 +85,7 @@ def parse_patch(text: str, scan_context: file_urls.ScanContext) -> StatusPatch:
     raise reply.WebReplyError(422, f"Status file is not JSON: {exc.msg}") from exc
   if not isinstance(raw, dict):
     raise reply.WebReplyError(422, "Status file is not a JSON object")
+  _refuse_server_fields(raw)
   try:
     patch = StatusPatch.model_validate(raw)
   except pydantic.ValidationError as exc:
@@ -89,27 +107,103 @@ def parse_patch(text: str, scan_context: file_urls.ScanContext) -> StatusPatch:
   return patch
 
 
+def effective_waiting(status: metadata.WebStatus) -> list[metadata.WaitingItem]:
+  """The status's waiting items with ``since`` and ``since_exact`` filled in.
+
+  An item stored before the fields existed has no start time of its own; the status's ``updated_at`` is the lower
+  bound, so the item reads with ``since_exact`` false.
+  """
+  items: list[metadata.WaitingItem] = []
+  for item in status.waiting:
+    since = status.updated_at if item.since is None else item.since
+    exact = False if item.since_exact is None else item.since_exact
+    if item.since == since and item.since_exact == exact:
+      items.append(item)
+    else:
+      items.append(item.model_copy(update={"since": since, "since_exact": exact}))
+  return items
+
+
+def status_payload(status: metadata.WebStatus) -> dict:
+  """The status as the API and the CLI return it, with each waiting item's start time filled in."""
+  payload = status.model_dump(mode="json")
+  payload["waiting"] = [item.model_dump(mode="json") for item in effective_waiting(status)]
+  return payload
+
+
+def _assign_since(
+    new_items: list[metadata.WaitingItem], stored_items: list[metadata.WaitingItem], links: plan_links.PlanLinks,
+    now: datetime.datetime) -> list[metadata.WaitingItem]:
+  """The new items with each one's start time kept from the stored item it continues.
+
+  An item whose text equals a stored item's text keeps that item's time. The remaining items pair in order within
+  groups of one link target: a registered plan lineage, another link, or no link at all.
+  """
+  available: list[metadata.WaitingItem | None] = list(stored_items)
+  assigned: list[metadata.WaitingItem | None] = [None] * len(new_items)
+  for index, item in enumerate(new_items):
+    match = next(
+        (slot for slot, stored in enumerate(available) if stored is not None and stored.text == item.text), None)
+    if match is None:
+      continue
+    stored = available[match]
+    assert stored is not None
+    available[match] = None
+    assigned[index] = item.model_copy(update={"since": stored.since, "since_exact": stored.since_exact})
+  new_groups: dict[str, list[int]] = {}
+  stored_groups: dict[str, list[int]] = {}
+  for index, item in enumerate(new_items):
+    if assigned[index] is None:
+      new_groups.setdefault(links.target(item), []).append(index)
+  for slot, stored in enumerate(available):
+    if stored is not None:
+      stored_groups.setdefault(links.target(stored), []).append(slot)
+  for target, indices in new_groups.items():
+    paired = stored_groups.get(target, [])
+    for position, index in enumerate(indices):
+      if position < len(paired):
+        stored = available[paired[position]]
+        assert stored is not None
+        assigned[index] = new_items[index].model_copy(update={"since": stored.since, "since_exact": stored.since_exact})
+      else:
+        assigned[index] = new_items[index].model_copy(update={"since": now, "since_exact": True})
+  result = [item for item in assigned if item is not None]
+  assert len(result) == len(new_items)
+  return result
+
+
 async def set_status(
     session_id: str, text: str, store: session_store.SessionStore, events: session_events.SessionEvents,
     tree: task_sessions.TaskTreeManager, *, scan_context: file_urls.ScanContext) -> dict:
   """Store the items that *text* names as the session's status and return the stored status with the Now length.
 
-  Refusals raise WebReplyError before anything is stored or recorded. A stored set records one web_status event and
-  sends the ancestor notice to every ancestor's page. The return adds ``now_chars`` and ``now_over_budget`` to the
-  stored status; the event and the stored metadata keep neither.
+  Refusals raise WebReplyError before anything is stored or recorded. A stale plan link refuses the set before the
+  cold read. A stored set records one web_status event and sends the ancestor notice to every ancestor's page. The
+  return adds ``now_chars`` and ``now_over_budget`` to the stored status; the event and the stored metadata keep
+  neither.
   """
   meta = await reply.require_web_session(store, session_id)
   patch = parse_patch(text, scan_context)
   _require_waiting_context(patch)
+  stored = metadata_slots.fields_of(meta, OWNER).web_status
+  base = metadata.WebStatus() if stored is None else stored
+  stored_waiting = effective_waiting(base)
+  prospective = patch.waiting if "waiting" in patch.model_fields_set else stored_waiting
+  links = plan_links.PlanLinks(scan_context.charliebot_home / "sessions")
+  stale = links.stale_links(prospective, scan_context)
+  if stale:
+    raise reply.WebReplyError(409, plan_links.stale_detail(stale))
   if "waiting" in patch.model_fields_set:
     unread = _unread_items(patch.waiting, await _read_item_digests(session_id, events))
     if unread:
       names = "; ".join(item.text for item in unread)
       raise reply.WebReplyError(409, f"Waiting on you items need a cold read: {names}")
-  stored = metadata_slots.fields_of(meta, OWNER).web_status
-  base = metadata.WebStatus() if stored is None else stored
+  now = models.utc_now()
+  waiting = (
+      _assign_since(patch.waiting, stored_waiting, links, now)
+      if "waiting" in patch.model_fields_set else stored_waiting)
   named = {item: getattr(patch, item) for item in ITEMS if item in patch.model_fields_set}
-  status = base.model_copy(update={**named, "updated_at": models.utc_now()})
+  status = base.model_copy(update={**named, "waiting": waiting, "updated_at": now})
   await tree.update_slot_fields(session_id, OWNER, web_status=status)
   payload = status.model_dump(mode="json")
   changed = list(named)
@@ -129,6 +223,29 @@ async def set_status(
   logger.info("web_status_set", session=session_id, changed=changed)
   now_chars = 0 if status.now is None else len(status.now)
   return {**payload, "now_chars": now_chars, "now_over_budget": now_chars > NOW_BUDGET_CHARS}
+
+
+async def confirm_status(
+    session_id: str, store: session_store.SessionStore, events: session_events.SessionEvents, *,
+    scan_context: file_urls.ScanContext) -> dict:
+  """Confirm that the stored status needs no change and return it.
+
+  A stale plan link in a stored item refuses the confirmation with 409 and names the newest file. A confirmation
+  records one web_status_confirmed event and cold reads nothing.
+  """
+  meta = await reply.require_web_session(store, session_id)
+  stored = metadata_slots.fields_of(meta, OWNER).web_status
+  status = metadata.WebStatus() if stored is None else stored
+  links = plan_links.PlanLinks(scan_context.charliebot_home / "sessions")
+  stale = links.stale_links(effective_waiting(status), scan_context)
+  if stale:
+    raise reply.WebReplyError(409, plan_links.stale_detail(stale))
+  await events.persist_and_broadcast(session_id, {
+      "type": ET.WEB_STATUS_CONFIRMED,
+      "content": "Status confirmed",
+  })
+  logger.info("web_status_confirmed", session=session_id)
+  return status_payload(status)
 
 
 def item_sha256(item: metadata.WaitingItem) -> str:
@@ -247,7 +364,7 @@ async def read_status(session_id: str, store: session_store.SessionStore, tree: 
   for descendant_id, child, child_status in await _open_statuses(descendant_ids, store, tree, archived):
     if not child_status.waiting:
       continue
-    payload = child_status.model_dump(mode="json")
+    payload = status_payload(child_status)
     row = {
         "session_id": descendant_id,
         "name": child.name,
@@ -271,7 +388,7 @@ async def read_status(session_id: str, store: session_store.SessionStore, tree: 
   children.sort(key=lambda entry: entry[0], reverse=True)
   return {
       "session_id": session_id,
-      "web_status": None if stored is None else stored.model_dump(mode="json"),
+      "web_status": None if stored is None else status_payload(stored),
       "descendants": [row for _, row in rows],
       "children": [row for _, row in children],
   }

@@ -236,6 +236,31 @@ test('a waiting item with a link ends with a link to that URL, and one without a
   assert.equal(withoutLink.querySelectorAll('[data-open-link]').length, 0);
 });
 
+test('waiting items show how long they have waited, own and in child sessions', async () => {
+  const rig = panelRig();
+  const now = Date.now();
+  const ownSince = new Date(now - 6.5 * 60 * 60 * 1000).toISOString();
+  const childSince = new Date(now - 3.5 * 24 * 60 * 60 * 1000).toISOString();
+  const status = {
+    ...STATUS,
+    waiting: [{text: 'Own decision', link: null, since: ownSince, since_exact: true}],
+  };
+  rig.page.descendants = [{
+    session_id: CHILD_ID,
+    name: 'Child one',
+    updated_at: '2026-10-16T20:30:00Z',
+    waiting: [{text: 'Child decision', link: null, since: childSince, since_exact: false}],
+  }];
+
+  await openSession(rig, {web_status: status});
+
+  const ownAge = waitingItems(rig.panel)[0].querySelector('[data-waiting-age]');
+  assert.equal(ownAge.textContent, '6h');
+  childToggle(rig.panel).onclick();
+  const childAge = childItems(rig.panel)[0].querySelector('[data-waiting-age]');
+  assert.equal(childAge.textContent, '至少 3d');
+});
+
 test('an item whose link is not a web or host-absolute URL gets no link', async () => {
   const rig = panelRig();
   await openSession(rig, {web_status: {...STATUS, waiting: [{text: 'Run it', link: 'javascript:alert(1)'}]}});

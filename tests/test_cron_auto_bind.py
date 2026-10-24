@@ -627,10 +627,14 @@ async def test_bound_node_wake_on_a_live_anchor_carries_no_prefix(tick_env, monk
   conftest.stub_credentials({"charliebot": {"access_key": "op-secret"}})
   tree.dispatch.executor = test_task_execution._adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   builds = conftest.install_scripted_backends(
-      monkeypatch, [
+      monkeypatch,
+      [
           test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("first")]),
+          # The first turn's status reminder wakes one turn before the second report does.
+          test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("reminder")]),
           test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("second")])
-      ], conftest.BUILD_BACKEND_PATCH_TARGET)
+      ],
+      conftest.BUILD_BACKEND_PATCH_TARGET)
 
   # Turn 1: a firing report wakes the anchor-less node — a fresh native
   # conversation carrying the prefix; the launch records the native anchor.
@@ -655,7 +659,7 @@ async def test_bound_node_wake_on_a_live_anchor_carries_no_prefix(tick_env, monk
   assert outcome2 == "success"
   # The turn 2 prompt carried neither the scheduled prefix nor a reset notice:
   # the same native conversation continued.
-  prompt2 = builds[1]["backend"].prompt
+  prompt2 = builds[2]["backend"].prompt
   assert prompt2 is not None
   assert sequence_controller.scheduled_report_prefix("nightly") not in prompt2
   assert "[Context reset" not in prompt2

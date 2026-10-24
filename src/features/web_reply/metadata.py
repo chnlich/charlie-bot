@@ -18,7 +18,12 @@ Text = Annotated[str, pydantic.AfterValidator(_reject_blank)]
 
 
 class WaitingItem(pydantic.BaseModel):
-  """One Waiting on you item: a decision or an action, its context, and the link to where the user answers it."""
+  """One Waiting on you item: a decision or an action, its context, and the link to where the user answers it.
+
+  ``since`` and ``since_exact`` are written by the server. ``since`` is the time the item first appeared or a lower
+  bound on it, and ``since_exact`` is false when ``since`` is that lower bound. An item stored before these fields
+  existed carries neither; the status read fills them from the status time.
+  """
   model_config = pydantic.ConfigDict(extra="forbid")
 
   text: Text
@@ -26,6 +31,8 @@ class WaitingItem(pydantic.BaseModel):
   # item stored before the field existed serializes without it, so the stored shape stays as it was.
   context: Text | None = pydantic.Field(default=None, exclude_if=lambda value: value is None)
   link: str | None = None
+  since: models.UtcDatetime | None = pydantic.Field(default=None, exclude_if=lambda value: value is None)
+  since_exact: bool | None = pydantic.Field(default=None, exclude_if=lambda value: value is None)
 
 
 class WebStatus(pydantic.BaseModel):

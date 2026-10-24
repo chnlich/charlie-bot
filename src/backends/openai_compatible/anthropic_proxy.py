@@ -524,7 +524,7 @@ class OpenAIChatStreamToAnthropic:
   def _handle_tool_delta(self, tool_call: dict) -> list[tuple[str, dict]]:
     call_index = tool_call.get("index")
     if call_index is None:
-      call_index = 0
+      raise ValueError("streaming tool_call missing index")
     function = tool_call.get("function") or {}
     events: list[tuple[str, dict]] = []
 

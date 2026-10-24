@@ -317,8 +317,40 @@ impl Dispatcher {
     run_id: &str,
     echoed_ids: &HashSet<String>,
   ) -> StoreResult<Vec<String>> {
-    todo!("the echoed-input claim lands with the feature");
-
+    let guard = self.store.control_lock().await;
+    let run = self
+      .store
+      .read_run_sync(session_id, run_id)?
+      .ok_or_else(|| StoreError::not_found(format!("run {run_id} not found in session {session_id}")))?;
+    if run.kind != RunKind::ManagerTurn {
+      return Err(StoreError::invalid(format!("run {run_id} is not a manager turn")));
+    }
+    let facts = self.store.node_state(session_id)?;
+    if facts.runs.has_terminal_fact(run_id) {
+      return Err(StoreError::conflict(vec![format!("run {run_id} already finished; it claims no new inputs")]));
+    }
+    if run.pid.is_none() {
+      return Err(StoreError::conflict(vec![format!("run {run_id} has no launched process to echo inputs")]));
+    }
+    if facts.runs.stop_requested(run_id, None) {
+      return Ok(Vec::new());
+    }
+    let claimed = run.input_event_ids.iter().cloned().collect::<HashSet<_>>();
+    let appended = self
+      .pending_inputs(session_id)?
+      .into_iter()
+      .filter(|event| {
+        event.get("type").and_then(Value::as_str) == Some(event_types::USER)
+          && echoed_ids.contains(&python_string(event.get("id")))
+          && !claimed.contains(&python_string(event.get("id")))
+      })
+      .map(|event| python_string(event.get("id")))
+      .collect::<Vec<_>>();
+    if appended.is_empty() {
+      return Ok(Vec::new());
+    }
+    self.store.claim_input_events_locked(&guard, session_id, run_id, &appended)?;
+    Ok(appended)
   }
 
   /// Decide whether pending inputs should start a run, and ask the executor when one is available.

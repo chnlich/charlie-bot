@@ -29,6 +29,13 @@ pub const AGENT_MESSAGE: &str = "agent_message";
 pub const WEB_REPLY: &str = "web_reply";
 pub const WEB_REPLY_NOTICE: &str = "web_reply_notice";
 pub const WEB_STATUS: &str = "web_status";
+/// A confirmation through `charliebot web status confirm` that the stored status needs no change this turn. The
+/// event records that the turn ran a status command; the For-you view hides it.
+pub const WEB_STATUS_CONFIRMED: &str = "web_status_confirmed";
+/// The round-end status reminder is an agent_message whose same-named key marks it and names the turn it was posted
+/// for. A turn that answers such a reminder posts no further status reminder. A combined reminder also carries the
+/// web_reply payload key with nudge_of.
+pub const WEB_STATUS_REMINDER: &str = "web_status_reminder";
 pub const WEB_ASK_CHECK: &str = "web_ask_check";
 pub const CONTEXT_COMPACTED: &str = "context_compacted";
 pub const CONTEXT_COMPACT_FAILED: &str = "context_compact_failed";

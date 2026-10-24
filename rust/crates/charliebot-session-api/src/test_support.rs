@@ -235,6 +235,15 @@ impl SequenceCompletion for NoCompletion {
   ) -> BoxFuture<'a, StoreResult<RestoreOutcome>> {
     Box::pin(async { Err(StoreError::new("unused sequence completion")) })
   }
+
+  fn archive_unsuccessful_worker<'a>(
+    &'a self,
+    _session_id: &'a str,
+    _run_id: &'a str,
+    _outcome: &'a str,
+  ) -> BoxFuture<'a, StoreResult<bool>> {
+    Box::pin(async { Err(StoreError::new("unused sequence completion")) })
+  }
 }
 
 impl RunFinishedCompletion for NoCompletion {

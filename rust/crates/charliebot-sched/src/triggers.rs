@@ -1577,6 +1577,7 @@ mod tests {
   use charliebot_core::config::CREDENTIALS_FILENAME;
   use charliebot_core::credentials::load_credentials;
   use charliebot_core::hot_reload::HotReload;
+  use charliebot_registry::caller::CallerIdentity;
   use charliebot_registry::context::StartupState;
   use charliebot_registry::sequence::{RestoreOutcome, SequenceCompletion};
   use charliebot_registry::store_hooks;
@@ -1584,6 +1585,7 @@ mod tests {
   use charliebot_store::compact::CompactValue;
   use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskSpec};
   use charliebot_store::{ControlGuard, CreateTask, Store, StoreError, StoreResult, TaskCaller};
+  use charliebot_tasks::completion::TaskCompletion;
   use futures_util::future::BoxFuture;
   use serde_json::Value;
   use tower::ServiceExt;
@@ -1635,7 +1637,27 @@ mod tests {
     ));
     let features =
       Arc::new(FeatureContext { config, credentials, store, registry, startup: Arc::new(StartupState::default()) });
+    features.startup.insert(TaskCompletion::new(Arc::clone(&features))).expect("one completion enters startup state");
     (home, features)
+  }
+
+  /// Archive one task through the completion owner, as the operator's archive route does.
+  async fn archive_task(features: &Arc<FeatureContext>, session_id: &str) {
+    if features.startup.get::<charliebot_tasks::dispatch::Dispatcher>().is_none() {
+      install_dispatcher(features);
+    }
+    let completion = features.startup.require::<TaskCompletion>().expect("the completion is installed by the fixture");
+    completion
+      .archive_subtree(
+        session_id,
+        Some("synthetic-archive"),
+        "archived by the user",
+        &[],
+        &[],
+        &CallerIdentity::Operator { session_id: None },
+      )
+      .await
+      .expect("archive task subtree");
   }
 
   fn add_session(features: &FeatureContext, session_id: &str) {
@@ -2242,6 +2264,15 @@ mod tests {
     ) -> BoxFuture<'a, StoreResult<RestoreOutcome>> {
       Box::pin(async { Err(StoreError::new("unused sequence completion")) })
     }
+
+    fn archive_unsuccessful_worker<'a>(
+      &'a self,
+      _session_id: &'a str,
+      _run_id: &'a str,
+      _outcome: &'a str,
+    ) -> BoxFuture<'a, StoreResult<bool>> {
+      Box::pin(async { Err(StoreError::new("unused sequence completion")) })
+    }
   }
 
   impl charliebot_tasks::dispatch::RunFinishedCompletion for NoopCompletion {
@@ -2329,7 +2360,7 @@ mod tests {
   async fn archived_session_refuses_trigger_creation_without_writing_a_record() {
     let (_home, features) = feature_context();
     add_task_node(&features, SESSION_ID).await;
-    features.store.archive_subtree(SESSION_ID, TaskCaller::Operator).await.expect("archive task subtree");
+    archive_task(&features, SESSION_ID).await;
     let manager = Arc::new(TriggerManager::new(Arc::clone(&features)));
     let error = manager
       .create_trigger(SESSION_ID, 60, "wake", None, None, None, true)
@@ -2345,7 +2376,7 @@ mod tests {
     let (_home, features) = feature_context();
     add_task_node(&features, SESSION_ID).await;
     add_task_node(&features, "synthetic-trigger-successor").await;
-    features.store.archive_subtree(SESSION_ID, TaskCaller::Operator).await.expect("archive task subtree");
+    archive_task(&features, SESSION_ID).await;
     let mut metadata =
       features.store.get_session(SESSION_ID).await.expect("read archived target").expect("target exists");
     metadata.successor_session_id = Some("synthetic-trigger-successor".to_string());
@@ -2370,7 +2401,7 @@ mod tests {
     let manager = Arc::new(TriggerManager::new(Arc::clone(&features)));
     let trigger = pending_trigger("synthetic-archived-trigger", SESSION_ID, near_future(0), Vec::new());
     manager.save_trigger(&trigger).await.expect("save trigger");
-    features.store.archive_subtree(SESSION_ID, TaskCaller::Operator).await.expect("archive task subtree");
+    archive_task(&features, SESSION_ID).await;
     manager.wait_and_fire(trigger.clone()).await.expect("dormant trigger retires");
     let fresh = manager.load_trigger(SESSION_ID, &trigger.id).await.expect("read cancelled trigger");
     assert_eq!(fresh.status, TriggerStatus::Cancelled);
@@ -2388,7 +2419,7 @@ mod tests {
   async fn dormancy_watchdog_carries_its_reason_to_the_cancel_record() {
     let (_home, features) = feature_context();
     add_task_node(&features, SESSION_ID).await;
-    features.store.archive_subtree(SESSION_ID, TaskCaller::Operator).await.expect("archive task subtree");
+    archive_task(&features, SESSION_ID).await;
     let mut manager_value = TriggerManager::new(Arc::clone(&features));
     manager_value.timing.dormancy_interval = Duration::from_millis(2);
     let manager = Arc::new(manager_value);
@@ -2434,7 +2465,7 @@ mod tests {
   async fn schedule_route_maps_archived_target_to_422() {
     let (_home, features) = feature_context();
     add_task_node(&features, SESSION_ID).await;
-    features.store.archive_subtree(SESSION_ID, TaskCaller::Operator).await.expect("archive task subtree");
+    archive_task(&features, SESSION_ID).await;
     let manager = Arc::new(TriggerManager::new(Arc::clone(&features)));
     features.startup.insert(Arc::clone(&manager)).expect("insert trigger manager");
     let response = send(

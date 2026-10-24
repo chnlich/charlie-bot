@@ -5,9 +5,15 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::sync::Arc;
 
+use charliebot_core::credentials::load_credentials;
+use charliebot_core::hot_reload::HotReload;
 use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot, SlotField};
 use charliebot_core::proc_identity;
 use charliebot_core::run_token;
+use charliebot_registry::Registry;
+use charliebot_registry::caller::CallerIdentity;
+use charliebot_registry::context::{FeatureContext, StartupState};
+use charliebot_registry::sequence::SequenceCompletion;
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskSpec, TaskType, ThreadMetadata, UtcDateTime};
 use charliebot_store::run_records::terminal_outcome;
 use charliebot_store::session_fork::CloseReportRedelivery;
@@ -16,6 +22,8 @@ use charliebot_store::{
   RunBlocker, RunKind, RunOrder, RunOutcome, RunOutcomeKind, RunPage, RunRecord, SequenceArchiveHook,
   SequenceBindingMover, SequenceListingFields, StopResult, Store, StoreError, StoreHookFuture, StoreHooks, TaskCaller,
 };
+use charliebot_tasks::completion::TaskCompletion;
+use charliebot_tasks::dispatch::{Dispatcher, RunFinishedCompletion};
 use nix::sys::signal::{Signal, killpg};
 use nix::unistd::{Pid, getpgid};
 use regex::Regex;
@@ -551,7 +559,6 @@ async fn python_and_rust_run_operations_share_record_and_fact_bytes() {
 }
 
 #[tokio::test]
-#[ignore = "catch-up d113f2c4d: R338"]
 async fn python_and_rust_task_trees_share_nodes_gates_and_mutation_bytes() {
   let root = tempfile::tempdir().unwrap();
   run_python_helper("prepare_tasks", root.path(), &[]);
@@ -562,8 +569,9 @@ async fn python_and_rust_task_trees_share_nodes_gates_and_mutation_bytes() {
   copy_tree(&root.path().join("task-base"), &rust_home);
 
   let python_seed = make_store(&python_home);
-  let rust_seed = make_store(&rust_home);
-  for store in [&python_seed, &rust_seed] {
+  let rust_seed = Arc::new(make_store(&rust_home));
+  let rust_completion = make_completion(Arc::clone(&rust_seed), &rust_home);
+  for store in [&python_seed, &*rust_seed] {
     let task_root = store.read_metadata_fresh("synthetic-task-root").unwrap().unwrap();
     assert_eq!(task_root.profile, charliebot_store::metadata::TaskProfile::Manager);
     assert_eq!(store.child_ids(&task_root.id).unwrap().len(), 3);
@@ -624,18 +632,20 @@ async fn python_and_rust_task_trees_share_nodes_gates_and_mutation_bytes() {
   let mut slot_values = Map::new();
   slot_values.insert("slack_watermark_ts".to_string(), json!("updated-watermark"));
   rust_seed.update_task_slot_fields_locked(&guard, "synthetic-task-worker", "slack", slot_values).await.unwrap();
+  drop(guard);
   assert!(
-    rust_seed
-      .archive_unsuccessful_worker(&guard, "synthetic-task-worker", "synthetic-failed-run", "failed",)
+    rust_completion
+      .archive_unsuccessful_worker("synthetic-task-worker", "synthetic-failed-run", "failed")
       .await
       .unwrap()
   );
   assert!(
-    !rust_seed
-      .archive_unsuccessful_worker(&guard, "synthetic-task-worker", "synthetic-failed-run", "failed",)
+    !rust_completion
+      .archive_unsuccessful_worker("synthetic-task-worker", "synthetic-failed-run", "failed")
       .await
       .unwrap()
   );
+  let guard = rust_seed.control_lock().await;
   assert!(
     rust_seed.rebind_elone_bindings_locked(&guard, "synthetic-elone-source", "synthetic-elone-new").await.unwrap()
   );
@@ -686,7 +696,6 @@ async fn python_and_rust_name_an_unnamed_node_from_a_corrupt_counter_the_same_wa
 }
 
 #[tokio::test]
-#[ignore = "catch-up d113f2c4d: R339"]
 async fn python_and_rust_archive_a_subtree_into_the_same_fact_bytes() {
   let root = tempfile::tempdir().unwrap();
   run_python_helper("prepare_archive", root.path(), &[]);
@@ -697,7 +706,19 @@ async fn python_and_rust_archive_a_subtree_into_the_same_fact_bytes() {
   copy_tree(&root.path().join("archive-base"), &rust_home);
 
   run_python_helper("archive_subtree", root.path(), &["python-archive-home"]);
-  let archived = make_store(&rust_home).archive_subtree("synthetic-archive-root", TaskCaller::Operator).await.unwrap();
+  let rust_store = Arc::new(make_store(&rust_home));
+  let rust_completion = make_completion(Arc::clone(&rust_store), &rust_home);
+  let archived = rust_completion
+    .archive_subtree(
+      "synthetic-archive-root",
+      Some("synthetic-archive-request"),
+      "archived by the user",
+      &[],
+      &[],
+      &CallerIdentity::Operator { session_id: None },
+    )
+    .await
+    .unwrap();
   assert_eq!(archived, ["synthetic-archive-root", "synthetic-archive-mid", "synthetic-archive-leaf"]);
   let leaf_facts =
     fs::read_to_string(rust_home.join("sessions/synthetic-archive-leaf/data/chat_events.jsonl")).unwrap();
@@ -1463,6 +1484,39 @@ fn launched_process_run(run_id: &str, pid: u32, pid_start: &str) -> RunRecord {
   run.pid_start = Some(pid_start.to_string());
   run.started_at = Some(UtcDateTime::now());
   run
+}
+
+/// Build the completion owner over one test store, with the dispatch backend its close facts deliver through.
+fn make_completion(store: Arc<Store>, home: &Path) -> Arc<TaskCompletion> {
+  let cfg = store.config().clone();
+  let reload = cfg.clone();
+  let config = Arc::new(HotReload::new(
+    cfg.config_file(),
+    "cross_impl_config_reload_failed",
+    Box::new(move || Ok(reload.clone())),
+  ));
+  let credential_home = home.to_path_buf();
+  let credentials = Arc::new(HotReload::new(
+    cfg.credentials_file(),
+    "cross_impl_credentials_reload_failed",
+    Box::new(move || load_credentials(&credential_home)),
+  ));
+  let startup = Arc::new(StartupState::default());
+  let features = Arc::new(FeatureContext {
+    config,
+    credentials,
+    store: Arc::clone(&store),
+    registry: Arc::new(Registry::new()),
+    startup: Arc::clone(&startup),
+  });
+  let completion = Arc::new(TaskCompletion::new(Arc::clone(&features)));
+  startup.insert(Arc::clone(&completion)).expect("one completion enters startup state");
+  let sequence_completion: Arc<dyn SequenceCompletion> = completion.clone();
+  let run_completion: Arc<dyn RunFinishedCompletion> = completion.clone();
+  startup
+    .insert(Dispatcher::new(store, features, sequence_completion, run_completion))
+    .expect("one dispatcher enters startup state");
+  completion
 }
 
 fn make_store(home: &Path) -> Store {

@@ -716,8 +716,8 @@ async def _mutate_tasks(home: pathlib.Path) -> None:
   )
   assert replay.id == child.id
   await tree.update_slot_fields(TASK_WORKER_ID, "slack", slack_watermark_ts="updated-watermark")
-  assert await tree.archive_unsuccessful_worker(TASK_WORKER_ID, run_id=TASK_RUN_ID, outcome="failed")
-  assert not await tree.archive_unsuccessful_worker(TASK_WORKER_ID, run_id=TASK_RUN_ID, outcome="failed")
+  assert await tree.completion.archive_unsuccessful_worker(TASK_WORKER_ID, run_id=TASK_RUN_ID, outcome="failed")
+  assert not await tree.completion.archive_unsuccessful_worker(TASK_WORKER_ID, run_id=TASK_RUN_ID, outcome="failed")
   source = await tree.load_task_meta(TASK_SOURCE_ID)
   new = await tree.load_task_meta(TASK_NEW_ID)
   await tree._rebind_scheduled_tasks(source, new)
@@ -823,7 +823,13 @@ async def _archive_subtree(home: pathlib.Path) -> None:
   _registered()
   tree = _task_tree(home)
   _install_test_sequence_controller()
-  archived = await tree.archive_subtree(TASK_ARCHIVE_ROOT_ID, caller=run_token.CallerIdentity(kind="operator"))
+  archived = await tree.completion.archive_subtree(
+      TASK_ARCHIVE_ROOT_ID,
+      request_id="synthetic-archive-request",
+      summary="archived by the user",
+      result_refs=[],
+      run_ids=[],
+      caller=run_token.CallerIdentity(kind="operator"))
   assert archived == [TASK_ARCHIVE_ROOT_ID, TASK_ARCHIVE_MID_ID, TASK_ARCHIVE_LEAF_ID], archived
 
 

@@ -486,6 +486,15 @@ mod tests {
       .collect()
   }
 
+  /// Write one archived close fact, as the completion owner's archive writes it.
+  async fn archive_task(store: &Store, session_id: &str) {
+    let guard = store.control_lock().await;
+    let event = archived_close_event(session_id, "elone-test-archive", ACTOR_USER, "archived by the user", &[], None);
+    store.append_control_fact(&guard, session_id, event).await.unwrap();
+    drop(guard);
+    store.invalidate_tree_index();
+  }
+
   async fn task_closed(store: &Store, session_id: &str, outcome: &str) {
     let guard = store.control_lock().await;
     let event = build_control_event(
@@ -826,7 +835,7 @@ mod tests {
     let store = make_store(home.path());
     let root = create_node(&store, "root", None, TaskProfile::Manager).await;
     let source = create_node(&store, "source", Some(&root.id), TaskProfile::Manager).await;
-    store.archive_subtree(&root.id, TaskCaller::Operator).await.unwrap();
+    archive_task(&store, &root.id).await;
     let dirs_before = session_dirs(&store);
 
     let clone_error = store.fork_session(&source.id, None, None).await.unwrap_err();
@@ -870,7 +879,7 @@ mod tests {
     let store = make_store(home.path());
     let root = create_node(&store, "root", None, TaskProfile::Manager).await;
     let source = create_node(&store, "source", Some(&root.id), TaskProfile::Manager).await;
-    store.archive_subtree(&source.id, TaskCaller::Operator).await.unwrap();
+    archive_task(&store, &source.id).await;
     assert_eq!(store.task_state(&source.id).unwrap(), "archived");
 
     let clone = store.fork_session(&source.id, None, None).await.unwrap();

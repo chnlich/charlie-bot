@@ -332,7 +332,11 @@ pub fn openai_chat_response_to_anthropic(response: &Value, requested_model: &str
         );
       }
     };
-    content_blocks.push(json!({"type": "tool_use", "id": tool_id, "name": name, "input": input}));
+    let mut tool_use = json!({"type": "tool_use", "id": tool_id, "name": name, "input": input});
+    if let Some(extra_content) = get(&tool_call, "extra_content")?.filter(|extra_content| !extra_content.is_null()) {
+      tool_use["extra_content"] = extra_content.clone();
+    }
+    content_blocks.push(tool_use);
   }
 
   let id = get(response, "id")?.filter(|id| truthy(id)).cloned().unwrap_or_else(|| json!(new_message_id()));

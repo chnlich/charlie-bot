@@ -180,10 +180,8 @@ def thread_contract_part() -> str:
   The thread session's managed instructions carry this part once, joined with
   the three rule docs by ``thread_entry.thread_reply_contract`` — so the
   summon input stays the one line ``DISCORD.summon_line`` and a rule edit
-  takes effect on the next round. The platform line and the two read
-  sentences move here unchanged from the old summon prompt and follow wake;
-  the summon mark sentence is new — the readback flags the pending summon
-  this round answers.
+  takes effect on the next round. The readback flags the pending summon this
+  round answers.
   """
   return (
       f"{_PLATFORM_LINE}\n"

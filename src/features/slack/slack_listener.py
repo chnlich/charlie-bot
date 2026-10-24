@@ -241,12 +241,10 @@ def thread_contract_part(origin: metadata.SlackOrigin) -> str:
   The thread session's managed instructions carry this part once, joined with
   the three rule docs by ``thread_entry.thread_reply_contract`` — so the
   summon input stays the one line ``SLACK.summon_line`` and a rule edit takes
-  effect on the next round. The platform line and the read and ack sentences
-  move here from the old summon prompt and follow wake, with the session's
-  thread address (the ``slack_origin`` ids) in place of the summon link —
-  the master reads the thread itself via its slack skill when the round runs.
-  The summon rule sentence is new: the newest bot mention in the thread is
-  the summon this round answers.
+  effect on the next round. The thread address is the ``slack_origin`` ids
+  rather than a summon link: the master reads the thread itself via its slack
+  skill when the round runs. The newest bot mention in the thread is the
+  summon this round answers.
   """
   return (
       f"{_PLATFORM_LINE}\n"

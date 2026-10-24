@@ -140,11 +140,11 @@ def bind_in_memory_tree(
   async def get_index(*, force: bool = False) -> task_sessions._TreeIndex:
     return index
 
-  def facts_of(session_id: str) -> task_sessions._TaskFacts:
-    return task_sessions._TaskFacts(task_state="completed" if session_id in closed else "open")
+  def task_state_at(session_id: str, identity: tuple[int, int, int] | None) -> str:
+    return "completed" if session_id in closed else "open"
 
   monkeypatch.setattr(tree, "_get_index", get_index)
-  monkeypatch.setattr(tree, "_facts_of", facts_of)
+  monkeypatch.setattr(tree, "_task_state_at", task_state_at)
 
 
 @pytest.mark.asyncio

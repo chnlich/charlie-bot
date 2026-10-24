@@ -696,13 +696,13 @@ def _freeze_cgroup(cgroup: pathlib.Path) -> None:
   if not freeze_path.is_file():
     raise RuntimeError(f"cgroup.freeze is unavailable for {cgroup}")
   freeze_path.write_text("1", encoding="ascii")
-  deadline = time.monotonic() + 2.0
+  deadline = time.monotonic() + 10.0
   while time.monotonic() < deadline:
     events = (cgroup / "cgroup.events").read_text(encoding="ascii")
     if "frozen 1" in events.splitlines():
       return
     time.sleep(0.01)
-  raise TimeoutError(f"cgroup did not freeze within 2 seconds: {cgroup}")
+  raise TimeoutError(f"cgroup did not freeze within 10 seconds: {cgroup}")
 
 
 def _thaw_cgroup(cgroup: pathlib.Path) -> None:
@@ -710,13 +710,13 @@ def _thaw_cgroup(cgroup: pathlib.Path) -> None:
   if not freeze_path.is_file():
     raise RuntimeError(f"cgroup.freeze is unavailable for {cgroup}")
   freeze_path.write_text("0", encoding="ascii")
-  deadline = time.monotonic() + 2.0
+  deadline = time.monotonic() + 10.0
   while time.monotonic() < deadline:
     events = (cgroup / "cgroup.events").read_text(encoding="ascii")
     if "frozen 0" in events.splitlines():
       return
     time.sleep(0.01)
-  raise TimeoutError(f"cgroup did not thaw within 2 seconds: {cgroup}")
+  raise TimeoutError(f"cgroup did not thaw within 10 seconds: {cgroup}")
 
 
 class ResultRecorder:
@@ -972,7 +972,9 @@ def _pressure_main(argv: list[str]) -> None:
 
 
 def _kill_fill(kill_fill_file: pathlib.Path, stopped: threading.Event) -> None:
-  chunk = b"x" * (64 * MIB)
+  # Small chunks keep each write's balance_dirty_pages stall short, so a guard
+  # freeze of the slice does not wait long on a task inside this loop.
+  chunk = b"x" * (16 * MIB)
   written = 0
   with kill_fill_file.open("wb") as stream:
     while not stopped.is_set():

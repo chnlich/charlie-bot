@@ -302,6 +302,7 @@ impl Store {
     live_end: u64,
     mut visit: impl FnMut(ChatEvent) -> Option<T>,
   ) -> StoreResult<Option<T>> {
+    self.history_fact_walks.fetch_add(1, Ordering::Relaxed);
     let live_path = self.chat_events_path(session_id);
     if let Some(value) = visit_file_facts_from_end(&live_path, live_end, types, &mut visit)? {
       return Ok(Some(value));

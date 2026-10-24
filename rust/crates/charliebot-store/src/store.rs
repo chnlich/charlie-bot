@@ -25,7 +25,9 @@ use crate::metadata::{RoundRating, SessionMetadata, SessionStatus, UtcDateTime};
 use crate::run_records::RunFactsMemo;
 use crate::session_events::SessionEventState;
 use crate::streaming::StreamingManager;
-use crate::task_tree::{CachedActivity, CachedNodeState, CachedTaskStateTail, CachedTreeIndex, NodeFacts};
+use crate::task_tree::{
+  CachedActivity, CachedNodeState, CachedRunFactsAt, CachedTaskStateTail, CachedTreeIndex, NodeFacts,
+};
 use crate::thinking::ThinkingState;
 use crate::{ControlGuard, StoreError, StoreResult};
 
@@ -198,7 +200,12 @@ pub struct Store {
   pub(crate) node_state_cache: StdMutex<HashMap<String, CachedNodeState>>,
   pub(crate) task_state_tail_cache: StdMutex<HashMap<String, CachedTaskStateTail>>,
   pub(crate) task_state_tail_reads: AtomicU64,
+  /// Python's `_activity_memo`: each node's verdict keyed by the records generation and the history identity.
   pub(crate) activity_cache: StdMutex<HashMap<String, CachedActivity>>,
+  /// Python's `_outcomes_memo`: each node's run facts keyed by the history identity they were folded from.
+  pub(crate) run_facts_by_session: StdMutex<HashMap<String, CachedRunFactsAt>>,
+  /// Chat-history walks that read a node's facts from its files without caching them.
+  pub(crate) history_fact_walks: AtomicU64,
   pub(crate) run_record_reads: AtomicU64,
   pub(crate) task_tree_activity_calls: AtomicU64,
   pub(crate) history_work: HistoryWorkCounters,
@@ -285,6 +292,8 @@ impl Store {
       task_state_tail_cache: StdMutex::new(HashMap::new()),
       task_state_tail_reads: AtomicU64::new(0),
       activity_cache: StdMutex::new(HashMap::new()),
+      run_facts_by_session: StdMutex::new(HashMap::new()),
+      history_fact_walks: AtomicU64::new(0),
       run_record_reads: AtomicU64::new(0),
       task_tree_activity_calls: AtomicU64::new(0),
       history_work: HistoryWorkCounters::default(),

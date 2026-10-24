@@ -115,15 +115,10 @@ def _persist_chained_cron_d(cfg: config.CharlieBotConfig, session_id: str) -> cr
   return task_cfg
 
 
-def _child_reports(tree: task_sessions.TaskTreeManager, node_id: str) -> list[dict]:
-  """Every child report on the node, in delivery order."""
-  return [e for e in tree.events.load_events(node_id) if e.get("type") == ET.CHILD_REPORT]
-
-
 async def _wait_for_child_report(tree, node_id: str, what: str, timeout: float = 20.0) -> list[dict]:
   """Wait out the node's report turn and return its child reports."""
-  await conftest._async_wait_for(lambda: bool(_child_reports(tree, node_id)), timeout, what)
-  return _child_reports(tree, node_id)
+  await conftest._async_wait_for(lambda: bool(conftest.child_reports(tree, node_id)), timeout, what)
+  return conftest.child_reports(tree, node_id)
 
 
 # ---------------------------------------------------------------------------
@@ -311,7 +306,7 @@ async def test_recovery_redrives_a_mid_chain_firing_from_durable_facts(
   leaf_events = tree.runs.load_events_sync(leaf_id)
   assert tree.runs.terminal_outcome(leaf_events, run0.id) == "success"
   assert tree.task_state(leaf_id) == "open"
-  assert [e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT] == []
+  assert conftest.child_reports(tree, manager.id) == []
   assert [e for e in tree.events.load_events(leaf_id) if e.get("type") == ET.TASK_CLOSED] == []
   old_callbacks = [
       t.get_name() for t in asyncio.all_tasks() if t is not asyncio.current_task() and "chained" in t.get_name()
@@ -325,7 +320,7 @@ async def test_recovery_redrives_a_mid_chain_firing_from_durable_facts(
   deadline = asyncio.get_event_loop().time() + 20
   while asyncio.get_event_loop().time() < deadline:
     records = tree.runs.list_run_records_sync(leaf_id)
-    reports = [e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]
+    reports = conftest.child_reports(tree, manager.id)
     if (len(records) == 2 and
         all(tree.runs.terminal_outcome(tree.runs.load_events_sync(leaf_id), r.id) is not None for r in records) and
         len(reports) == 1):
@@ -340,7 +335,7 @@ async def test_recovery_redrives_a_mid_chain_firing_from_durable_facts(
   assert sorted(r.sequence_ref.position for r in records if r.sequence_ref) == [0, 1]
   assert tree.task_state(leaf_id) == "completed"
   assert len([e for e in tree.events.load_events(leaf_id) if e.get("type") == ET.TASK_CLOSED]) == 1
-  reports = [e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]
+  reports = conftest.child_reports(tree, manager.id)
   assert len(reports) == 1, f"expected exactly one boundary report: {reports}"
   assert reports[0]["outcome"] == "completed"
   assert "completed all 2 step(s)" in str(reports[0]["summary"])
@@ -352,7 +347,7 @@ async def test_recovery_redrives_a_mid_chain_firing_from_durable_facts(
   await task_recovery.reconcile_task_tree(cfg, tree)
   await task_recovery.reconcile_task_tree(cfg, tree)
   assert len(tree.runs.list_run_records_sync(leaf_id)) == 2
-  assert len([e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]) == 1
+  assert len(conftest.child_reports(tree, manager.id)) == 1
   assert len([e for e in tree.events.load_events(leaf.id) if e.get("type") == ET.TASK_CLOSED]) == 1
   assert tree.task_state(leaf.id) == "completed"
 
@@ -375,10 +370,7 @@ async def reopen_task_node(tree: task_sessions.TaskTreeManager, session_id: str,
 
 
 def blocked_reports(tree: task_sessions.TaskTreeManager, manager_id: str) -> list[dict]:
-  return [
-      e for e in tree.events.load_events(manager_id)
-      if e.get("type") == ET.CHILD_REPORT and e.get("outcome") == "blocked"
-  ]
+  return [e for e in conftest.child_reports(tree, manager_id) if e.get("outcome") == "blocked"]
 
 
 @pytest.mark.asyncio
@@ -540,7 +532,7 @@ async def test_recovered_successful_final_step_close_blocked_delivers_one_blocke
 
   from src.features.cron import cron_sequence
   await cron_sequence.reconcile_bound_firings(task_cfg, meta, tree, FIRING, leaf.id)
-  reports = [e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]
+  reports = conftest.child_reports(tree, manager.id)
   assert len(reports) == 1
   assert reports[0]["outcome"] == "blocked"
   assert "blocked" in str(reports[0]["summary"])
@@ -549,7 +541,7 @@ async def test_recovered_successful_final_step_close_blocked_delivers_one_blocke
   # Repeated recovery at the blocked-close window adds nothing.
   await cron_sequence.reconcile_bound_firings(task_cfg, meta, tree, FIRING, leaf.id)
   await cron_sequence.reconcile_bound_firings(task_cfg, meta, tree, FIRING, leaf.id)
-  assert len([e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]) == 1
+  assert len(conftest.child_reports(tree, manager.id)) == 1
   assert len([e for e in tree.events.load_events(leaf.id) if e.get("type") == ET.TASK_CLOSED]) == 0
 
   # The repaired close: consume the pending input with a successful run; the
@@ -560,16 +552,12 @@ async def test_recovered_successful_final_step_close_blocked_delivers_one_blocke
   decision = await tree.dispatch.dispatch_pending(leaf.id)
   assert decision["launch"] is True
   await conftest._async_wait_for(
-      lambda: tree.task_state(leaf.id) != "open" and len(_child_reports(tree, manager.id)) == 2,
+      lambda: tree.task_state(leaf.id) != "open" and len(conftest.child_reports(tree, manager.id)) == 2,
       15.0,
       "the repaired close and its parent report never landed",
   )
   assert len(builds) == 1
-  kinds = [
-      (e.get("outcome"), str(e.get("summary"))[:60])
-      for e in tree.events.load_events(manager.id)
-      if e.get("type") == ET.CHILD_REPORT
-  ]
+  kinds = [(e.get("outcome"), str(e.get("summary"))[:60]) for e in conftest.child_reports(tree, manager.id)]
   assert len(kinds) == 2
   assert sorted(o for o, _ in kinds) == ["blocked", "completed"]
   assert tree.task_state(leaf.id) == "completed"
@@ -586,7 +574,7 @@ async def test_recovered_final_step_boundary_settles_without_a_new_tick(
   from src.features.cron import cron_sequence
   await cron_sequence.reconcile_bound_firings(task_cfg, meta, tree, FIRING, leaf.id)
   assert tree.task_state(leaf.id) == "completed"
-  reports = [e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]
+  reports = conftest.child_reports(tree, manager.id)
   assert len(reports) == 1
   assert "completed all 2 step(s)" in str(reports[0].get("summary"))
   await test_task_execution.drain_manager_turns(tree, manager.id)
@@ -605,7 +593,7 @@ async def test_simultaneous_fresh_and_recovery_followup_produce_no_duplicate(
       cron_sequence.reconcile_bound_firings(task_cfg, meta, tree, FIRING, leaf.id),
   )
   # Both scans converge on the same boundary product (stable close/report ids).
-  assert len([e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]) == 1
+  assert len(conftest.child_reports(tree, manager.id)) == 1
   assert len([e for e in tree.events.load_events(leaf.id) if e.get("type") == ET.TASK_CLOSED]) == 1
   assert len(tree.runs.list_run_records_sync(leaf.id)) == 2
   await test_task_execution.drain_manager_turns(tree, manager.id)
@@ -643,7 +631,7 @@ async def test_completed_close_survives_a_failing_parent_wake_without_a_blocked_
   assert calls["n"] == 1
   # The close landed and the boundary product is exactly ONE completed report.
   assert tree.task_state(leaf.id) == "completed"
-  reports = [e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]
+  reports = conftest.child_reports(tree, manager.id)
   assert len(reports) == 1
   assert reports[0]["outcome"] == "completed"
   assert len([e for e in tree.events.load_events(leaf.id) if e.get("type") == ET.TASK_CLOSED]) == 1
@@ -654,7 +642,7 @@ async def test_completed_close_survives_a_failing_parent_wake_without_a_blocked_
   decision = await tree.dispatch.dispatch_pending(manager.id)
   assert decision["launch"] is True
   await test_task_execution.drain_manager_turns(tree, manager.id)
-  assert len([e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]) == 1
+  assert len(conftest.child_reports(tree, manager.id)) == 1
   assert len(tree.runs.list_run_records_sync(leaf.id)) == 2
 
 
@@ -826,7 +814,7 @@ async def test_unbound_steps_task_binds_then_advances_step_by_step(bound_env, mo
   deadline = asyncio.get_event_loop().time() + 20
   while asyncio.get_event_loop().time() < deadline:
     records = tree.runs.list_run_records_sync(leaf_id)
-    reports = [e for e in tree.events.load_events(node_id) if e.get("type") == ET.CHILD_REPORT]
+    reports = conftest.child_reports(tree, node_id)
     if len(records) == 2 and reports:
       break
     await asyncio.sleep(0.1)
@@ -843,7 +831,7 @@ async def test_unbound_steps_task_binds_then_advances_step_by_step(bound_env, mo
   assert "Result of the previous step (selector)" in builds[1]["backend"].prompt
   assert "selector says pick three" in builds[1]["backend"].prompt
   # ONE report at the boundary, delivered to the node the task now binds.
-  reports = [e for e in tree.events.load_events(node_id) if e.get("type") == ET.CHILD_REPORT]
+  reports = conftest.child_reports(tree, node_id)
   assert len(reports) == 1
   assert "completed all 2 step(s)" in str(reports[0].get("summary"))
   assert tree.task_state(leaf_id) == "completed"

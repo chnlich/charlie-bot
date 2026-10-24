@@ -130,6 +130,21 @@ def test_session_help_lists_archive_without_complete(capsys: pytest.CaptureFixtu
   assert "complete" not in help_text
 
 
+def test_session_archive_rejects_an_explicit_empty_result_file(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+  monkeypatch.setattr(sys, "argv", ["charliebot-session", "archive", "sess-archive", "--result-file", ""])
+
+  def unexpected_post(*args: object, **kwargs: object) -> None:
+    pytest.fail("an invalid result file must fail before sending the archive")
+
+  monkeypatch.setattr(common, "post_internal_api", unexpected_post)
+  with pytest.raises(SystemExit) as exc_info:
+    session_module.main()
+
+  assert exc_info.value.code == 2
+  assert "--result-file" in capsys.readouterr().err
+
+
 def test_session_archive_readback_resolves_to_own_archived_fact_on_sent_but_lost(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   cfg = _patch_readback_env(monkeypatch, tmp_path)

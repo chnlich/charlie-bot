@@ -111,8 +111,9 @@ async def test_manager_child_creation_needs_no_takeoff_and_replays_stably(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("previous_outcome", [None, "success", "failed"])
 async def test_own_run_archive_closes_without_takeoff_and_reports_to_ancestor(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, previous_outcome: str | None) -> None:
   """A manager's own active Run requests its task's archive with no
   user authorization anywhere: 202 pending_run_finish, then the close lands
   when that Run finishes successfully. The parent stays open — a child's
@@ -126,6 +127,9 @@ async def test_own_run_archive_closes_without_takeoff_and_reports_to_ancestor(
       name="Feature",
       backend=None,
       caller=conftest.OPERATOR)
+  if previous_outcome is not None:
+    await tree.runs.register_run_locked(models.RunRecord(id="previous-turn", session_id=child.id, kind="manager_turn"))
+    await tree.dispatch.finish_run(child.id, "previous-turn", outcome=previous_outcome)
   await register_live_manager_run(tree, child.id, "child-owner-run")
   blocked_manager = await conftest.create_task(tree, parent=root.id, request_id="blocked-manager")
   await register_live_manager_run(tree, blocked_manager.id, "blocked-owner-run")

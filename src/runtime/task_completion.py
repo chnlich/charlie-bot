@@ -302,12 +302,11 @@ class TaskCompletionManager:
             (" (a bare exit code is not evidence)" if run.exit_code == 0 else ""))
     if evidence.run_ids and not claimed:
       blockers.append("completion evidence names no delivery Run of this task")
-    if not evidence.run_ids and any(
-        outcome == "success" for run_id, outcome in outcomes.items() if run_id not in (succeeding_run_ids or set())):
+    if not evidence.run_ids and not succeeding_run_ids and any(outcome == "success" for outcome in outcomes.values()):
       # Delivery run evidence is required while the delivery universe has
       # a successful Run to cite.
       blockers.append("completion requires delivery run evidence (run_ids)")
-    elif not evidence.run_ids and any(outcome == "failed" for outcome in outcomes.values()):
+    elif not evidence.run_ids and not succeeding_run_ids and any(outcome == "failed" for outcome in outcomes.values()):
       # A failed-only subtree still refuses to be called completed on a
       # bare claim: the failed Run is not completion evidence — cancel
       # the failed work, or retry it to success and cite that Run. Only

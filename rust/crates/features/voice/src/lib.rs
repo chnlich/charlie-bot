@@ -47,15 +47,13 @@ mod tests {
 
   #[test]
   fn test_server_startup_builds_no_speech_model_and_imports_no_local_engine() {
-    let home = tempfile::tempdir().expect("make an isolated home");
     let mut registry = Registry::new();
 
     registry.register_package("src.features.voice", register).expect("register voice");
 
-    assert!(
-      registry.services_in(charliebot_registry::wiring::Phase::Early).iter().all(|service| service.name() != "speech")
-    );
-    assert!(!home.path().join("models").exists());
+    for phase in [charliebot_registry::wiring::Phase::Early, charliebot_registry::wiring::Phase::Ready] {
+      assert!(registry.services_in(phase).iter().all(|service| service.name() != "speech"));
+    }
   }
 
   #[test]

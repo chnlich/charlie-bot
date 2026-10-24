@@ -32,7 +32,6 @@ members = [
     "crates/charliebot-sched",
     "crates/charliebot-usage",
 ]
-exclude = ["vendor/sherpa-onnx-sys"]
 
 [workspace.package]
 edition = "2024"
@@ -43,7 +42,6 @@ publish = false
 anyhow = "1"
 axum = { version = "0.8", features = ["ws"] }
 base64 = "0.22"
-bzip2 = "0.5"
 bytes = "1"
 chrono = "0.4"
 chrono-tz = "0.10"
@@ -74,10 +72,9 @@ serde_path_to_error = "0.1"
 serde_yaml = "0.9"
 sha1 = "0.10"
 sha2 = "0.10"
-sherpa-onnx = { version = "=1.13.4", default-features = false, features = ["shared"] }
 subtle = "2"
-tar = "0.4"
 tempfile = "3"
+tar = "0.4"
 time = { version = "0.3", features = ["formatting", "parsing"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "fs", "time", "process", "sync", "io-util"] }
 tokio-rustls = "0.26"
@@ -126,6 +123,3 @@ debug = "line-tables-only"
 
 [profile.dev.package."*"]
 debug = false
-
-[patch.crates-io]
-sherpa-onnx-sys = { path = "vendor/sherpa-onnx-sys" }

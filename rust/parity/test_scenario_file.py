@@ -126,7 +126,7 @@ def _fake_agent() -> dict[str, Any]:
             {
                 "kind": "log_event",
                 "name": "log event step",
-                "event": "speech_models_ready",
+                "event": "server_started",
                 "fields": {
                     "ok": True
                 },
@@ -240,9 +240,6 @@ def test_ws_fake_handshake_requires_a_declared_fake(tmp_path: pathlib.Path) -> N
         },
         {
             "fixture_extras": ["sample_files"]
-        },
-        {
-            "voice_models": True
         },
         {
             "headless_chrome": True
@@ -897,7 +894,7 @@ def test_new_http_websocket_and_fake_forms_load(
         {
             "kind": "log_event",
             "name": "log event with a list field",
-            "event": "speech_models_ready",
+            "event": "server_started",
             "fields": {
                 "cache_dir": ["/tmp/synthetic"]
             },
@@ -906,7 +903,7 @@ def test_new_http_websocket_and_fake_forms_load(
         {
             "kind": "log_event",
             "name": "log event without a timeout",
-            "event": "speech_models_ready",
+            "event": "server_started",
         },
     ])
 def test_invalid_step_names_the_step(tmp_path: pathlib.Path, step: dict[str, Any]) -> None:
@@ -1147,9 +1144,6 @@ def test_tree_references_use_route_placeholders(tmp_path: pathlib.Path) -> None:
         ({
             "fixture_extras": ["missing_extra"]
         }, "scenario.yaml.fixture_extras names missing module 'missing_extra'"),
-        ({
-            "voice_models": "yes"
-        }, "scenario.yaml.voice_models must be a boolean"),
         ({
             "headless_chrome": "yes"
         }, "scenario.yaml.headless_chrome must be a boolean"),

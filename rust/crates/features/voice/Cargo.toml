@@ -6,31 +6,22 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
-anyhow.workspace = true
 axum.workspace = true
 base64.workspace = true
-bzip2.workspace = true
 charliebot-compat.workspace = true
 charliebot-core.workspace = true
 charliebot-registry.workspace = true
 charliebot-store.workspace = true
 futures-util.workspace = true
-libc.workspace = true
 minijinja.workspace = true
 percent-encoding.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, features = ["preserve_order"] }
 serde_yaml.workspace = true
-sha2.workspace = true
-sherpa-onnx.workspace = true
 time.workspace = true
-tar.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 uuid.workspace = true
-
-[build-dependencies]
-sherpa-onnx.workspace = true
 
 [dev-dependencies]
 charliebot-core = { workspace = true, features = ["test-support"] }

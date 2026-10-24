@@ -102,7 +102,7 @@ them; correctness does not depend on it.
   prompt_bodies/<sha256>.md
   memory/                          git repository
   memory-proposal/                 git worktree of memory/ on branch "proposal"
-  models/                          speech models
+  models/                          not created by the server
   vendor/katex/katex.min.js
   voice_eval/<ts>/                 CLI output
   opencode/{data,state,cache}/     opencode server XDG store
@@ -311,22 +311,10 @@ Modules: `src/features/memory/memory.py`, `memory_proposal.py`, `cli.py`, `store
 - Readers: `charliebot memory query` and task prompt assembly (`src/runtime/task_prompts.py` through
   `load_store`). `wiring.register_diff_root` exposes `memory/` to the diff viewer.
 
-### 5.11 Speech models: `models/`
+### 5.11 `models/`
 
-Not written by the Python server at `d1f7e3ba6`: the local speech engine and its provisioning were removed (`93b427659`, `4c3bd3fda`). The text below is the baseline before that. The Rust server still provisions these files until the voice port removes it.
-
-- Writer: `src/features/voice/transcriber.py::ensure_models_cached`, run on a thread by the early `speech`
-  service. Paths (`voice_model_paths`):
-  - `models/silero_vad.onnx`, from
-    `https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx`;
-  - `models/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25.tar.bz2` and its extracted directory of the same name,
-    which holds `conv_frontend.onnx`, `encoder.int8.onnx`, `decoder.int8.onnx` and `tokenizer`;
-  - with `voice.engine: qwen3_hf`: a Hugging Face `snapshot_download(repo_id=voice.model_id, cache_dir=models/)`
-    in the standard HF cache layout under `models/`.
-- The two GitHub downloads are checked against pinned sha256 values (`SILERO_VAD_SHA256`, `QWEN3_ASR_SHA256`);
-  an HF snapshot goes through `_verify_hf_snapshot`.
-- The Qwen3 archive extracts into `models/.<QWEN3_ASR_DIR_NAME>.<uuid4 hex>.extracting/`, which is `os.replace`d onto
-  `models/<QWEN3_ASR_DIR_NAME>/`. The staging directory is removed in a `finally` (`transcriber._ensure_qwen3_extracted`).
+The server does not create a speech-model directory. Python removed the local speech engine and its provisioning at
+`d1f7e3ba6` (`4c3bd3fda`); the Rust voice port removes its matching startup service and model files.
 
 ### 5.12 `vendor/katex/katex.min.js`
 

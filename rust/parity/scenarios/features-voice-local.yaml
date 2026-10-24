@@ -1,6 +1,5 @@
 stage: features
 name: features-voice-local
-voice_models: true
 steps:
   - name: the removed confirm route answers as an unknown path
     method: POST
@@ -14,7 +13,7 @@ steps:
       audio: {file: audio/silence.wav, content_type: audio/wav}
       devices: &devices '{"input_device": "Synthetic microphone", "capture_settings": {"echoCancellation": true, "noiseSuppression": false, "autoGainControl": true, "sampleRate": 16000}, "output_device": "Synthetic speakers", "communications_output_device": "Synthetic headset", "device_error": null}'
     expect_status: 400
-  - name: upload with the removed local backend id is refused
+  - name: upload with the removed backend id is unknown
     method: POST
     path: /api/voice/${sessions.atlas}
     multipart:

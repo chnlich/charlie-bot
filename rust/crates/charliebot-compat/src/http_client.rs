@@ -1,9 +1,8 @@
-//! The outbound HTTP clients, as the Python app builds them: `src/infra/http.py`'s `httpx.AsyncClient` and the
-//! `urllib.request.urlopen` of the speech model download.
+//! The outbound HTTP client, as the Python app builds it: `src/infra/http.py`'s `httpx.AsyncClient`.
 
 use std::sync::{Arc, Mutex};
 
-use reqwest::{Proxy, Url};
+use reqwest::Proxy;
 
 pub use crate::transport::{ClientError, Settings};
 
@@ -14,7 +13,17 @@ static SHARED: Mutex<Option<reqwest::Client>> = Mutex::new(None);
 /// The outbound HTTP client with shared TLS roots and HTTPS proxy selection. A 3xx response is returned as it
 /// arrived: `httpx.AsyncClient()` does not follow redirects by default, and no Python caller asks it to.
 pub fn client(settings: &Settings) -> Result<reqwest::Client, ClientError> {
-  build_client(settings, reqwest::redirect::Policy::none())
+  let tls = crate::transport::tls_config(settings.cert_file.as_deref())?;
+  let proxy_settings = crate::transport::proxy_settings(settings)?;
+  let mut builder =
+    reqwest::Client::builder().use_preconfigured_tls(tls).no_proxy().redirect(reqwest::redirect::Policy::none());
+  if let Some(proxy_settings) = proxy_settings {
+    let proxy_settings = Arc::new(proxy_settings);
+    builder = builder.proxy(Proxy::custom(move |url: &reqwest::Url| {
+      proxy_settings.should_proxy_http_url(url).then(|| proxy_settings.url.clone())
+    }));
+  }
+  Ok(builder.build()?)
 }
 
 /// A clone of the shared client, built on the first call. A clone shares the connection pool, so a holder that keeps
@@ -33,24 +42,4 @@ pub fn shared_client() -> Result<reqwest::Client, ClientError> {
 /// the last clone of it is dropped.
 pub fn close_shared_client() -> bool {
   SHARED.lock().expect("the shared client lock is never poisoned").take().is_some()
-}
-
-/// The client for `urllib.request.urlopen` in `src/features/voice/transcriber.py:362`, the speech model download.
-/// urlopen follows up to ten redirects (`HTTPRedirectHandler.max_redirections`), so this client follows as many.
-/// The TLS roots and proxy selection are those of [`client`].
-pub fn urllib_client(settings: &Settings) -> Result<reqwest::Client, ClientError> {
-  build_client(settings, reqwest::redirect::Policy::limited(10))
-}
-
-fn build_client(settings: &Settings, redirect: reqwest::redirect::Policy) -> Result<reqwest::Client, ClientError> {
-  let tls = crate::transport::tls_config(settings.cert_file.as_deref())?;
-  let proxy_settings = crate::transport::proxy_settings(settings)?;
-  let mut builder = reqwest::Client::builder().use_preconfigured_tls(tls).no_proxy().redirect(redirect);
-  if let Some(proxy_settings) = proxy_settings {
-    let proxy_settings = Arc::new(proxy_settings);
-    builder = builder.proxy(Proxy::custom(move |url: &Url| {
-      proxy_settings.should_proxy_http_url(url).then(|| proxy_settings.url.clone())
-    }));
-  }
-  Ok(builder.build()?)
 }

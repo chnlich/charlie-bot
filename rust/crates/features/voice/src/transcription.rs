@@ -53,7 +53,6 @@ pub(crate) struct TranscriptEvent {
 
 #[derive(Clone, Copy)]
 enum BackendKind {
-  Local,
   Gemini,
   Muse,
 }
@@ -69,7 +68,6 @@ pub(crate) struct Backend {
 impl Backend {
   pub(crate) fn build(id: &str, credentials: &Credentials) -> Result<Self, String> {
     match id {
-      "local" => Ok(Self::local()),
       "gemini" => Ok(Self {
         id: "gemini",
         kind: BackendKind::Gemini,
@@ -87,17 +85,7 @@ impl Backend {
         endpoint_url: MUSE_ENDPOINT.to_string(),
         clock: Arc::new(EventLoopClock),
       }),
-      _ => Err(format!("unknown transcription backend {}; known: local, gemini, muse", pyfmt::str_repr(id))),
-    }
-  }
-
-  fn local() -> Self {
-    Self {
-      id: "local",
-      kind: BackendKind::Local,
-      token: None,
-      endpoint_url: String::new(),
-      clock: Arc::new(EventLoopClock),
+      _ => Err(format!("unknown transcription backend {}; known: gemini, muse", pyfmt::str_repr(id))),
     }
   }
 
@@ -127,10 +115,6 @@ impl Backend {
     self.id
   }
 
-  pub(crate) fn live_partials(&self) -> bool {
-    !matches!(self.kind, BackendKind::Local)
-  }
-
   pub(crate) fn unavailable_reason(&self) -> Option<&'static str> {
     match (&self.kind, self.token.as_deref()) {
       (BackendKind::Gemini, None) => Some("needs gemini.api_key"),
@@ -148,10 +132,6 @@ impl Backend {
     languages: Vec<String>,
   ) -> Result<(), TranscriptionError> {
     match self.kind {
-      BackendKind::Local => Err(TranscriptionError::Rejected(format!(
-        "voice backend {} does not stream live partials",
-        pyfmt::str_repr(self.id)
-      ))),
       BackendKind::Gemini => {
         let token = self
           .token
@@ -1188,7 +1168,6 @@ mod tests {
         let reply = match backend_kind {
           BackendKind::Gemini => r#"{"setupComplete":{}}"#,
           BackendKind::Muse => r#"{"type":"sessionStarted"}"#,
-          BackendKind::Local => unreachable!(),
         };
         socket.send(ServerMessage::Text(reply.into())).await.expect("send the session reply");
         if matches!(backend_kind, BackendKind::Gemini) {
@@ -1201,7 +1180,6 @@ mod tests {
       let backend = match backend_kind {
         BackendKind::Gemini => Backend::gemini_for_test("synthetic-key", &endpoint),
         BackendKind::Muse => Backend::muse_for_test("synthetic-token", &endpoint, Arc::new(EventLoopClock)),
-        BackendKind::Local => unreachable!(),
       };
       let (task, _events, cancel) = start_transcription(backend, AudioQueue::new());
       tokio::time::timeout(Duration::from_secs(3), wait_until_open)

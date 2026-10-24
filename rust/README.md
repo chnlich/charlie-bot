@@ -164,7 +164,7 @@ listed here:
   server's v1-sessions and package startup checks, session cgroups, task recovery and background
   services; those port with their stages.
 - Package-registered config sections stay raw YAML until their packages port. The page reads only
-  `voice.engine` and `voice.default_backend`.
+  `voice.default_backend`.
 - A run token whose base64 holds characters outside the base64url alphabet fails here. CPython's
   decoder skips such characters.
 - The diff page's `code_server_enabled` template global is not registered, because the diff page is

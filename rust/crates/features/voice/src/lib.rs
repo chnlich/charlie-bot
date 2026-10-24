@@ -1,20 +1,13 @@
-//! Voice input: the live preview relay, the upload fallback, the sherpa speech models and their offline decode.
+//! Voice input: the live preview relay, the online upload transcription and the turn contribution.
 
 mod api;
 mod archive;
 mod audio;
 mod config;
-#[doc(hidden)]
-pub mod differential;
-pub(crate) mod provisioning;
-mod qwen3_hf;
+mod recording;
 mod relay;
-mod transcriber;
 mod transcription;
 mod wav;
-
-#[cfg(test)]
-pub(crate) static HELPER_LIFECYCLE_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 use std::sync::Arc;
 
@@ -30,8 +23,6 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.router(api::routes, api::matches)?;
   registry.websocket("/ws/voice/*", relay::handler)?;
   registry.turn_contribution("voice", Arc::new(VoiceTurnContribution))?;
-  registry.service(Arc::new(provisioning::SpeechService::default()))?;
-  registry.let_go_step("speech", provisioning::let_go_step)?;
   registry.template_global("voice_backends", config::voice_backends)?;
   registry.template_global("voice_default_backend", config::voice_default_backend)?;
   registry.config_section(config::section())?;
@@ -55,7 +46,7 @@ mod tests {
   use super::*;
 
   #[test]
-  fn test_server_startup_builds_no_speech_model_and_registers_no_speech_service() {
+  fn test_server_startup_builds_no_speech_model_and_imports_no_local_engine() {
     let home = tempfile::tempdir().expect("make an isolated home");
     let mut registry = Registry::new();
 

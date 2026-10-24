@@ -8,32 +8,11 @@ use minijinja::Value;
 use serde::Deserialize;
 use serde_json::json;
 
-pub(crate) const BACKEND_IDS: &[&str] = &["local", "gemini", "muse"];
-const LEGACY_KEYS: &[(&str, &str)] = &[("voice_engine", "voice.engine"), ("voice_model_id", "voice.model_id")];
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum VoiceEngine {
-  Sherpa,
-  Qwen3Hf,
-}
-
-impl VoiceEngine {
-  pub(crate) fn name(self) -> &'static str {
-    match self {
-      VoiceEngine::Sherpa => "sherpa",
-      VoiceEngine::Qwen3Hf => "qwen3_hf",
-    }
-  }
-}
+use crate::recording;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct VoiceSettings {
-  #[serde(default = "default_engine")]
-  pub(crate) engine: VoiceEngine,
-  #[serde(default = "default_model_id")]
-  pub(crate) model_id: String,
   #[serde(default = "default_backend")]
   pub(crate) default_backend: String,
   #[serde(default)]
@@ -44,26 +23,12 @@ pub(crate) struct VoiceSettings {
 
 impl Default for VoiceSettings {
   fn default() -> Self {
-    Self {
-      engine: default_engine(),
-      model_id: default_model_id(),
-      default_backend: default_backend(),
-      vocabulary: Vec::new(),
-      languages: Vec::new(),
-    }
+    Self { default_backend: default_backend(), vocabulary: Vec::new(), languages: Vec::new() }
   }
 }
 
-fn default_engine() -> VoiceEngine {
-  VoiceEngine::Sherpa
-}
-
-fn default_model_id() -> String {
-  "Qwen/Qwen3-ASR-1.7B-hf".to_string()
-}
-
 fn default_backend() -> String {
-  "local".to_string()
+  "gemini".to_string()
 }
 
 impl VoiceSettings {
@@ -76,12 +41,6 @@ impl VoiceSettings {
       }
     };
     json!([
-      {
-        "id": "local",
-        "label": format!("Local ({})", self.engine.name()),
-        "live_partials": false,
-        "unavailable_reason": null
-      },
       {
         "id": "gemini",
         "label": "Gemini 3.5 Transcribe Live",
@@ -99,7 +58,7 @@ impl VoiceSettings {
 }
 
 pub(crate) fn section() -> ConfigSection {
-  ConfigSection { key: "voice", legacy_keys: LEGACY_KEYS, parse: parse_settings }
+  ConfigSection { key: "voice", legacy_keys: &[], parse: parse_settings }
 }
 
 fn parse_settings(raw: &serde_yaml::Value) -> Result<SectionValue, String> {
@@ -112,13 +71,13 @@ fn parse_settings(raw: &serde_yaml::Value) -> Result<SectionValue, String> {
 
 pub(crate) fn check_default_backend(cfg: &CharlieBotConfig) -> Result<(), String> {
   let value = &cfg.section::<VoiceSettings>("voice").default_backend;
-  if BACKEND_IDS.contains(&value.as_str()) {
+  if recording::BACKEND_IDS.contains(&value.as_str()) {
     return Ok(());
   }
   Err(format!(
     "voice.default_backend {} is not a transcription backend; known: {}",
     pyfmt::str_repr(value),
-    BACKEND_IDS.join(", ")
+    recording::BACKEND_IDS.join(", ")
   ))
 }
 
@@ -139,20 +98,14 @@ mod tests {
   use super::*;
 
   #[test]
-  fn config_defaults_and_custom_values_cover_all_five_fields() {
+  fn config_defaults_and_custom_values_cover_the_three_voice_fields() {
     let default = VoiceSettings::default();
-    assert_eq!(default.engine.name(), "sherpa");
-    assert_eq!(default.model_id, "Qwen/Qwen3-ASR-1.7B-hf");
-    assert_eq!(default.default_backend, "local");
+    assert_eq!(default.default_backend, "gemini");
     assert!(default.vocabulary.is_empty());
     assert!(default.languages.is_empty());
 
-    let custom: VoiceSettings = serde_yaml::from_str(
-      "engine: qwen3_hf\nmodel_id: synthetic/model\ndefault_backend: muse\nvocabulary: [Ada]\nlanguages: [en]\n",
-    )
-    .expect("all voice fields parse");
-    assert_eq!(custom.engine.name(), "qwen3_hf");
-    assert_eq!(custom.model_id, "synthetic/model");
+    let custom: VoiceSettings = serde_yaml::from_str("default_backend: muse\nvocabulary: [Ada]\nlanguages: [en]\n")
+      .expect("all voice fields parse");
     assert_eq!(custom.default_backend, "muse");
     assert_eq!(custom.vocabulary, ["Ada"]);
     assert_eq!(custom.languages, ["en"]);
@@ -166,13 +119,14 @@ mod tests {
       .expect("write synthetic credentials");
     let credentials = charliebot_core::credentials::load_credentials(home.path()).expect("load credentials");
     let backends = VoiceSettings::default().backends(&credentials);
-    assert_eq!(backends[0]["id"], "local");
-    assert_eq!(backends[1]["unavailable_reason"], serde_json::Value::Null);
-    assert_eq!(backends[2]["unavailable_reason"], "needs meta.model_api_key");
+    assert_eq!(backends[0]["id"], "gemini");
+    assert_eq!(backends[0]["unavailable_reason"], serde_json::Value::Null);
+    assert_eq!(backends[1]["id"], "muse");
+    assert_eq!(backends[1]["unavailable_reason"], "needs meta.model_api_key");
   }
 
   #[test]
-  fn legacy_keys_and_default_backend_check_match_python_contract() {
+  fn default_backend_check_matches_python_backend_ids() {
     let home = tempfile::tempdir().expect("make an isolated config home");
     std::fs::write(
       home.path().join("config.yaml"),
@@ -183,15 +137,21 @@ mod tests {
     .expect("write a synthetic config");
     let mut registry = charliebot_registry::Registry::new();
     registry.register_package("src.features.voice", crate::register).expect("register voice config");
-    assert_eq!(registry.config_schema().legacy_keys, LEGACY_KEYS);
+    assert!(registry.config_schema().legacy_keys.is_empty());
     let cfg = charliebot_core::config::load_config(home.path(), &registry.config_schema())
       .expect("parse config before its registered check");
     assert_eq!(
       check_default_backend(&cfg),
-      Err(
-        "voice.default_backend 'unknown\\\\backend' is not a transcription backend; known: local, gemini, muse"
-          .to_string()
-      )
+      Err("voice.default_backend 'unknown\\\\backend' is not a transcription backend; known: gemini, muse".to_string())
     );
+  }
+
+  #[test]
+  fn removed_engine_fields_are_unknown_voice_keys() {
+    for field in ["engine", "model_id"] {
+      let error = serde_yaml::from_str::<VoiceSettings>(&format!("{field}: synthetic\n"))
+        .expect_err("the removed local-engine setting must fail config loading");
+      assert!(error.to_string().contains("unknown field"), "{error}");
+    }
   }
 }

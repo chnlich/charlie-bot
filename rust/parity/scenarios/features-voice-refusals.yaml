@@ -1,6 +1,5 @@
 stage: features
 name: features-voice-refusals
-voice_models: true
 steps:
   - kind: ws
     name: empty backend id
@@ -10,7 +9,7 @@ steps:
     until: {frames: 1}
     timeout_seconds: 5
   - kind: ws
-    name: local backend does not stream live partials
+    name: removed backend id is unknown
     path: /ws/voice/${sessions.atlas}
     query: {backend: local}
     send: []

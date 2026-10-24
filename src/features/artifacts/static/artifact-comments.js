@@ -1093,7 +1093,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
       }
       gutter.style.display = '';
       // The column exists now, so placeColumn() can read its geometry back. A refusal
-      // here means the artifact is out of range: keep today's corner list instead.
+      // here means the artifact is out of range: keep the corner list unchanged instead.
       if (!placeColumn()) {
         presentCorner();
         return;
@@ -1155,7 +1155,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     // The last card's top is capped at band - its height, each earlier card at its
     // successor's top minus gap minus its own height; cascading upward keeps every
     // pair apart and puts the last card wholly inside the column. There is no floor:
-    // an anchor scrolled above the viewport takes its card with it, as today. Pinning
+    // an anchor scrolled above the viewport takes its card with it. Pinning
     // the top card to 0 instead would push it into its neighbour.
     function fitColumn(docTops, heights, gap, band, scrolled) {
       var tops = [], i;
@@ -1333,7 +1333,7 @@ if (!framed || _hasPanelReviewMarker(window.location.hash)) {
     // that -- a transform, zoom, filter or contain:paint anywhere up the tree, on any
     // axis -- write the values and read them back: the column must land where it was put,
     // and the bar must sit its own offset above the viewport's bottom edge. Whatever
-    // fails this is out of range by section 1 and keeps today's corner list.
+    // fails this is out of range by section 1 and keeps the corner list unchanged.
     //
     // Both readings must be non-degenerate before they can disagree, so an environment
     // that reports no geometry at all (a test double) is not mistaken for a hostile one.

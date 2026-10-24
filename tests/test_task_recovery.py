@@ -350,7 +350,7 @@ async def test_recovery_spawns_no_review_behind_a_registered_unstarted_work_run(
   """An open idle implement worker whose newest work run is registered but
     never started: the replay spawns no review for the earlier successful run
     (the live path read the reservation as a pause), and the queued run's own
-    withheld launch on an open node keeps today's shape — queued, no stop
+    withheld launch on an open node keeps its shape — queued, no stop
     request."""
   cfg, _session_blocks, tree, manager, worker, repo = await _implement_worker_with_landed_branch(tmp_path, monkeypatch)
   cfg.server.min_free_disk_gib = 10**9  # no filesystem holds this much: the queued run's launch is withheld

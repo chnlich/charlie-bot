@@ -369,7 +369,7 @@ def _assert_k3_reading(usage: dict) -> None:
 async def test_context_reading_tier_beats_cumulative_result_usage(tmp_path: pathlib.Path) -> None:
   session_blocks, meta = _session_rig(tmp_path, "session-reading", "Reading", conftest.OPUS_BACKEND_ID)
   # Several result events with turn-cumulative usage and no context_snapshot
-  # (charlie-code today), plus context_reading events: the newest reading
+  # (the charlie-code shape), plus context_reading events: the newest reading
   # decides all four fields, the cumulative usage never reaches the readout.
   _write_session(
       session_blocks, meta, [

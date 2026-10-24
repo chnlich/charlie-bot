@@ -24,7 +24,7 @@ How it works:
   (TMUX_TMPDIR) and is killed when the side stops.
 - Data. The same metadata.json files are written into both homes: three
   groups, one root with a child session and a worker, two archived workers and
-  plain sessions. Every row carries the schema_version 2 profile today's
+  plain sessions. Every row carries the schema_version 2 profile the
   server requires, and the task rows nest the same on both sides.
 - Browser. The first of google-chrome, google-chrome-stable, chromium,
   chromium-browser on PATH, headless, over CDP with a private profile; pass
@@ -150,7 +150,7 @@ def _sid(n: int) -> str:
 def synthetic_sessions() -> list[dict]:
   """(id, name, group, status, parent, profile, starred) rows, newest first.
 
-  Every row carries the schema_version 2 profile today's server requires: the
+  Every row carries the schema_version 2 profile the server requires: the
   independent roots are managers, and the root's descendants keep their
   manager and worker profiles.
   """

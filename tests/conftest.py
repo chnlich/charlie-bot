@@ -2580,6 +2580,36 @@ def mention_seam(tasks: list[asyncio.Task] | None = None) -> Iterator[mock.Async
     yield trigger
 
 
+@contextlib.contextmanager
+def prime_barrier(events: session_events.SessionEvents, session_id: str, arrivals: int = 2) -> Iterator[None]:
+  """Force *arrivals* concurrent ``prime_aggregator`` calls for *session_id* to wait for each other.
+
+  The one home the reply and session-message replay suites drive a duplicate-delivery race
+  through: a request's second concurrent delivery reaches ``prime_aggregator`` only after the
+  first has, so the idempotence check under test runs on two requests in flight at once. The
+  original method is restored on exit.
+  """
+  original_prime = events.prime_aggregator
+  seen = 0
+  ready = asyncio.Event()
+
+  async def synchronize(called_session_id: str) -> int:
+    nonlocal seen
+    epoch = await original_prime(called_session_id)
+    if called_session_id == session_id:
+      seen += 1
+      if seen == arrivals:
+        ready.set()
+      await ready.wait()
+    return epoch
+
+  events.prime_aggregator = synchronize
+  try:
+    yield
+  finally:
+    events.prime_aggregator = original_prime
+
+
 def dump_yaml(body: Any) -> str:
   """Block-style ``yaml.safe_dump`` with the dict's insertion key order kept; callers write the result
   into cron host files whose key order should read like a hand-written file."""

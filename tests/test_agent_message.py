@@ -125,29 +125,12 @@ async def test_session_message_replays_for_a_run_and_newly_admits_for_an_operato
     first = await client.post("/api/internal/session-message", json=_relay_payload(caller.id, target.id, "same send"))
     second = await client.post("/api/internal/session-message", json=_relay_payload(caller.id, target.id, "same send"))
 
-    original_prime = session_blocks.events.prime_aggregator
-    arrivals = 0
-    ready = asyncio.Event()
-
-    async def synchronize(session_id: str) -> int:
-      nonlocal arrivals
-      epoch = await original_prime(session_id)
-      if session_id == target.id:
-        arrivals += 1
-        if arrivals == 2:
-          ready.set()
-        await ready.wait()
-      return epoch
-
-    session_blocks.events.prime_aggregator = synchronize
-    try:
+    with conftest.prime_barrier(session_blocks.events, target.id):
       concurrent = await asyncio.gather(
           *[
               client.post("/api/internal/session-message", json=_relay_payload(caller.id, target.id, "same send"))
               for _ in range(2)
           ])
-    finally:
-      session_blocks.events.prime_aggregator = original_prime
 
     assert [response.status_code for response in (first, second, *concurrent)] == [200, 200, 200, 200]
     assert [response.json() for response in (first, second, *concurrent)] == [{"status": "accepted"}] * 4

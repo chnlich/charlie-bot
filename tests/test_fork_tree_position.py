@@ -46,10 +46,6 @@ def close_facts(tree: conftest.task_sessions.TaskTreeManager, session_id: str) -
   return [e for e in tree.fact_history(session_id) if e.get("type") == ET.TASK_CLOSED]
 
 
-def report_facts(tree: conftest.task_sessions.TaskTreeManager, session_id: str) -> list[dict]:
-  return [e for e in tree.fact_history(session_id) if e.get("type") == ET.CHILD_REPORT]
-
-
 def event_ids(tree: conftest.task_sessions.TaskTreeManager, session_id: str) -> list[str]:
   return [str(e.get("id")) for e in tree.fact_history(session_id)]
 
@@ -147,7 +143,7 @@ async def test_elone_moves_subtree_and_archives_source(tmp_path: pathlib.Path) -
     await tree.dispatch.finish_run(running.id, run.id, outcome="failed", exit_code=1)
     adapter = conftest.build_execution_adapter(cfg, blocks, tree)
     await adapter._report_failure_to_parent(running.id, run, "failed")
-    reports = report_facts(tree, new.id)
+    reports = conftest.child_reports(tree, new.id)
     assert [r.get("child_session_id") for r in reports] == [running.id]
 
     closes = close_facts(tree, source.id)
@@ -527,7 +523,7 @@ async def test_elone_redelivers_subtree_close_report_before_the_close(tmp_path: 
   close["outcome"] = "completed"
   close["report_to"] = source.id
   await tree.events.append(child.id, close)
-  assert report_facts(tree, source.id) == []
+  assert conftest.child_reports(tree, source.id) == []
 
   new = await blocks.fork.elone_session(source.id, event_index=0)
 

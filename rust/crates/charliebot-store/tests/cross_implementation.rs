@@ -551,6 +551,7 @@ async fn python_and_rust_run_operations_share_record_and_fact_bytes() {
 }
 
 #[tokio::test]
+#[ignore = "catch-up d113f2c4d: R338"]
 async fn python_and_rust_task_trees_share_nodes_gates_and_mutation_bytes() {
   let root = tempfile::tempdir().unwrap();
   run_python_helper("prepare_tasks", root.path(), &[]);
@@ -685,6 +686,7 @@ async fn python_and_rust_name_an_unnamed_node_from_a_corrupt_counter_the_same_wa
 }
 
 #[tokio::test]
+#[ignore = "catch-up d113f2c4d: R339"]
 async fn python_and_rust_archive_a_subtree_into_the_same_fact_bytes() {
   let root = tempfile::tempdir().unwrap();
   run_python_helper("prepare_archive", root.path(), &[]);

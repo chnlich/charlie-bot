@@ -287,6 +287,156 @@ def test_stream_tool_call_without_index_is_rejected() -> None:
         })
 
 
+def test_gemini_stream_index_less_delta_with_signature_yields_one_tool_block() -> None:
+  """The 2026-10-23 Gemini probe shape: one whole tool call in one delta, no index."""
+  translator = anthropic_proxy.OpenAIChatStreamToAnthropic("gemini-3.8-flash", gemini_stream_rules=True)
+  events = translator.start_events()
+  events.extend(
+      translator.events_for_chunk(
+          {
+              "choices":
+                  [
+                      {
+                          "delta":
+                              {
+                                  "tool_calls":
+                                      [
+                                          {
+                                              "extra_content": {
+                                                  "google": {
+                                                      "thought_signature": "EqMDCqAD...",
+                                                  },
+                                              },
+                                              "function":
+                                                  {
+                                                      "arguments":
+                                                          '{"description":"Print working directory","command":"pwd"}',
+                                                      "name":
+                                                          "Bash",
+                                                  },
+                                              "id": "call_371733",
+                                              "type": "function",
+                                          }
+                                      ],
+                              },
+                      }
+                  ],
+          }))
+  events.extend(translator.finish_events())
+
+  tool_starts = [
+      data["content_block"]
+      for event, data in events
+      if event == "content_block_start" and data["content_block"]["type"] == "tool_use"
+  ]
+  argument_fragments = [
+      data["delta"]["partial_json"]
+      for event, data in events
+      if event == "content_block_delta" and data["delta"]["type"] == "input_json_delta"
+  ]
+  assert tool_starts == [
+      {
+          "type": "tool_use",
+          "id": "call_371733",
+          "name": "Bash",
+          "input": {},
+          "extra_content": {
+              "google": {
+                  "thought_signature": "EqMDCqAD...",
+              },
+          },
+      }
+  ]
+  assert argument_fragments == ['{"description":"Print working directory","command":"pwd"}']
+
+
+def test_gemini_stream_two_index_less_calls_split_by_id() -> None:
+  translator = anthropic_proxy.OpenAIChatStreamToAnthropic("gemini-3.8-flash", gemini_stream_rules=True)
+  events = translator.start_events()
+  events.extend(
+      translator.events_for_chunk(
+          {
+              "choices":
+                  [
+                      {
+                          "delta":
+                              {
+                                  "tool_calls":
+                                      [{
+                                          "id": "call-a",
+                                          "function": {
+                                              "name": "Bash",
+                                              "arguments": '{"cmd":',
+                                          },
+                                      },],
+                              },
+                      }
+                  ],
+          }))
+  events.extend(
+      translator.events_for_chunk(
+          {
+              "choices": [{
+                  "delta": {
+                      "tool_calls": [{
+                          "function": {
+                              "arguments": '"pwd"}',
+                          },
+                      }],
+                  },
+              }],
+          }))
+  events.extend(
+      translator.events_for_chunk(
+          {
+              "choices":
+                  [
+                      {
+                          "delta":
+                              {
+                                  "tool_calls":
+                                      [
+                                          {
+                                              "id": "call-b",
+                                              "function": {
+                                                  "name": "Read",
+                                                  "arguments": '{"file_path":"image.png"}',
+                                              },
+                                          },
+                                      ],
+                              },
+                      }
+                  ],
+          }))
+  events.extend(translator.finish_events())
+
+  tool_starts = [
+      data["content_block"]
+      for event, data in events
+      if event == "content_block_start" and data["content_block"]["type"] == "tool_use"
+  ]
+  argument_fragments = [
+      data["delta"]["partial_json"]
+      for event, data in events
+      if event == "content_block_delta" and data["delta"]["type"] == "input_json_delta"
+  ]
+  assert tool_starts == [
+      {
+          "type": "tool_use",
+          "id": "call-a",
+          "name": "Bash",
+          "input": {},
+      },
+      {
+          "type": "tool_use",
+          "id": "call-b",
+          "name": "Read",
+          "input": {},
+      },
+  ]
+  assert argument_fragments == ['{"cmd":', '"pwd"}', '{"file_path":"image.png"}']
+
+
 def test_claude_code_request_shape_preserves_input_schema() -> None:
   payload = {
       "model": "gemini-3.8-flash",
@@ -375,7 +525,7 @@ def test_claude_code_request_shape_preserves_input_schema() -> None:
 
 
 def test_stream_tool_signatures_round_trip_for_calls_sharing_an_index() -> None:
-  translator = anthropic_proxy.OpenAIChatStreamToAnthropic("gemini-3.8-flash", preserve_late_tool_extra_content=True)
+  translator = anthropic_proxy.OpenAIChatStreamToAnthropic("gemini-3.8-flash", gemini_stream_rules=True)
   events = translator.start_events()
   events.extend(
       translator.events_for_chunk(

@@ -1304,7 +1304,7 @@ async def test_withheld_iteration_launch_closes_the_child_blocked(
   assert tree.runs.terminal_outcome(events, records[0].id) is None
   stops = [e for e in events if e["type"] == ET.RUN_STOP_REQUESTED and e.get("run_id") == records[0].id]
   assert len(stops) == 1 and stops[0]["request_id"] == "improve:1:close"
-  assert tree.work_state_of(child_id) == "idle"
+  assert tree.activity_of(child_id).work_state == "idle"
   assert builds == []  # no process ever started
   finals = _final_reports(tree, manager.id)
   assert len(finals) == 1 and finals[0]["outcome"] == "blocked"
@@ -1632,7 +1632,7 @@ async def test_startup_closes_a_loop_that_crashed_with_an_iteration_registered_u
   assert queued is not None and queued.pid is None
   assert tree.runs.terminal_outcome(events, "iter-run-2") is None
   assert tree.runs.stop_requested(events, "iter-run-2")
-  assert tree.work_state_of(child_id) == "idle"
+  assert tree.activity_of(child_id).work_state == "idle"
   finals = _final_reports(tree, manager.id)
   assert len(finals) == 1 and finals[0]["outcome"] == "blocked"
 

@@ -448,6 +448,19 @@ FILE_RULES: tuple[FieldRule, ...] = (
             "request id is handover-stop-request's own, so no other scenario's run is masked"),
     ),
     FieldRule(
+        name="cancelled-run-exit-code",
+        target="home/sessions/*/data/runs/*/metadata.json",
+        field="exit_code",
+        when=(),
+        values=(None, -15, -9),
+        stop_request="synthetic-manager-run-cancel",
+        reason=(
+            "the same race as interrupted-run-exit-code, on the run cancel route: the stopper records the interrupted "
+            "outcome with no exit code, and the launcher records the signal exit of the SIGTERM it sends (-15), or -9 "
+            "when it escalates; the request id is agent-orchestration-cancel's own, so no other scenario's run is "
+            "masked"),
+    ),
+    FieldRule(
         name="run-local-repo-task-spec-hash",
         target="home/sessions/*/data/runs/*/metadata.json",
         field="task_spec_hash",

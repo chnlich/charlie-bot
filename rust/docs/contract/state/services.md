@@ -34,12 +34,12 @@ Logs go to stdout and stderr only; the server writes no log file. `scripts/start
 | 4 | `await init_seed.init_charliebot_home()` | mkdirs `<home>`, `sessions/`, `config.d/`; seeds `config.yaml` and `credentials.yaml` when missing (`files.md` 5.1); logs `charliebot_home_ready` | raises |
 | 5 | `process.log_session_cgroup_startup(memory, swap, tasks)` then `process.sweep_stale_session_cgroups(cfg.sessions_dir)` | logs whether session cgroups are on; `rmdir`s every **empty** `charliebot-sess-*` directory under the user's `app.slice` that names a session of this home (section 4) | an unavailable `app.slice` is logged; a failure to read this home's `sessions/` directory raises |
 | 6 | `app.state.recovery_task = create_task(_run_task_recovery(cfg, task_manager))` | crash recovery (section 3), concurrent with step 7 | logged as `task_tree_recovery_failed`; startup continues |
-| 7 | Start `early` services in registration order (`usage_tally`, `speech`) | section 5 | an exception from `start_service` fails startup |
+| 7 | Start `early` services in registration order (`usage_tally`) | section 5 | an exception from `start_service` fails startup |
 | 8 | `await app.state.recovery_task` | waits until recovery ends, so no scheduler fire or recovered trigger races a recorded run | |
 | 9 | `TriggerManager(cfg, task_manager)`, `triggers.set_trigger_manager`, `await trigger_mgr.recover_pending()` | reads every `sessions/*/triggers/*.json`; restarts a wait task for each `status: pending` file. Unparsable files log `trigger_recovery_load_failed` and are skipped. | per-file errors are logged |
 | 10 | Start `ready` services in registration order (`artifacts_headless_render`, `scheduler`, `slack`, `discord`, `host_auth`, `merge_pool`, `ext_usage`) | section 5 | an exception fails startup |
 | 11 | Log `server_ready` with `ready_in_ms`, then serve | | |
-| 12 | Shutdown: every `stop_service` (ready services in reverse order, then early in reverse: `ext_usage`, `merge_pool`, `host_auth`, `discord`, `slack`, `scheduler`, `artifacts_headless_render`, `speech`, `usage_tally`), then `http.close_http_client`, then `streaming.streaming_manager.close_all` (closes WebSockets) | each step timed into `charliebot_shutdown` | an exception propagates and skips the `charliebot_shutdown` line |
+| 12 | Shutdown: every `stop_service` (ready services in reverse order, then early in reverse: `ext_usage`, `merge_pool`, `host_auth`, `discord`, `slack`, `scheduler`, `artifacts_headless_render`, `usage_tally`), then `http.close_http_client`, then `streaming.streaming_manager.close_all` (closes WebSockets) | each step timed into `charliebot_shutdown` | an exception propagates and skips the `charliebot_shutdown` line |
 | 13 | `finally`: `writer_fence.release()` | unlinks `writer_identity.json`, then unlocks | |
 
 Agent processes are not stopped by the lifespan:
@@ -83,32 +83,32 @@ The liveness rule and stable ids that make this idempotent are in `files.md` sec
 
 ## 4. Session cgroups (`src/infra/process.py`)
 
-- Base: `/sys/fs/cgroup/user.slice/user-<uid>.slice/user@<uid>.service/app.slice`, built from `os.getuid()` at
-  import. It requires cgroup v2 with systemd user delegation.
-- Directory per session: `charliebot-sess-<first 8 chars of the session id>`, created lazily by
-  `ensure_session_cgroup` on the first spawn of that session. Each later spawn rewrites the limits from the current
-  config:
+- Slices: `charliebot-agents.slice` (the agents' share) and `charliebot-repair.slice` (the repair share), both under `/sys/fs/cgroup/user.slice/user-<uid>.slice/user@<uid>.service/`. It requires cgroup v2 with systemd user delegation. `scripts/systemd/` holds the unit files; `scripts/setup.sh` installs them and starts both slices, and `scripts/start-server.sh` asserts both slices against their unit files before the server starts (`CGROUP_V2_AGENTS_SLICE`, `CGROUP_V2_REPAIR_SLICE`, `process.py:96-98`).
+- The retired `app.slice` at the same base gets no new directories. The startup sweep still clears this home's empty leftovers in it.
+- Slice choice: each spawn resolves the session's `resource_class` (`src/runtime/resource_class.py`): the nearest `repair` mark on the task-parent chain, else `agent`. `repair` goes to the repair slice and `agent` to the agents' slice (`session_cgroup_slice`, `process.py:122`).
+- OOM priority: the child writes its slice's `oom_score_adj` to `/proc/self/oom_score_adj` before exec, `agent` 500 and `repair` 100 (`SESSION_CGROUP_OOM_SCORE_ADJ`, `process.py:111`; the write at `process.py:235-253`, the caller at `:343`). The server keeps 0. Opencode tool shells get the value through `CHARLIEBOT_SESSION_OOM_SCORE_ADJ` in `src/backends/opencode/cgroup_join.sh`.
+- Directory per session: `charliebot-sess-<first 8 chars of the session id>` under the slice of its class, created lazily by `ensure_session_cgroup(session_id, resource_class, ...)` on the first spawn of that session. Each later spawn rewrites the limits from the current config:
   - `memory.max` = `session_memory_max_mb * 1024 * 1024`
   - `memory.swap.max` = `session_swap_max_mb * 1024 * 1024`
   - `pids.max` = `session_tasks_max`, or `max` when it is 0
 - `session_memory_max_mb: 0` disables the whole feature: no directory, no task cap.
-- An `OSError` on create or write degrades to "no cgroup" with one warning per failure shape
-  (`session_cgroup_unavailable`); a spawn never fails for it.
+- A missing or unwritable slice raises `SessionCgroupUnavailableError` and no longer degrades to "no cgroup" (`ensure_session_cgroup`). UNVERIFIED: that the spawn then fails was read from the code and not probed. Any other `OSError` on create or write raises too. `session_cgroup_created` carries `resource_class`.
 - Joining:
   - raw-log spawns (no preexec, so the vfork fast path holds) write the child pid into `<cgroup>/cgroup.procs` from
     the parent right after exec (`AgentBackend._apply_turn_tree_limits`), together with a nice raise of 10;
   - spawns with a preexec (`make_session_cgroup_preexec`) write `"0"` to `cgroup.procs` in the child before exec;
   - opencode tool shells join through `BASH_ENV` pointing at `src/backends/opencode/cgroup_join.sh`
-    (`echo $$ > "$CHARLIEBOT_SESSION_CGROUP/cgroup.procs" || exit 97`).
+    (`echo $$ > "$CHARLIEBOT_SESSION_CGROUP/cgroup.procs" || exit 97`, then the OOM value above).
 - Exit attribution: `memory.events` counters `max` and `oom_kill` are read before the spawn and after the exit. A
   SIGKILL exit whose `max` count grew is reported as a memory-cap kill (`classify_cgroup_exit`).
 - Removal: at startup (step 5), every empty `charliebot-sess-*` directory whose name is `session_cgroup_name(<id>)` for
-  a session directory under this home's `sessions/` is `rmdir`ed, and a non-empty one is kept with
-  `session_cgroup_sweep_retained`. A sweep that removes any directory logs `session_cgroup_sweep_removed` with `count`
-  and `names` (the sorted names). Permanent session deletion `rmdir`s that session's cgroup when it is empty.
+  a session directory under this home's `sessions/` is `rmdir`ed, in each of the three slices (`session_cgroup_slices()`).
+  A non-empty one is kept with `session_cgroup_sweep_retained`. A sweep that removes any directory logs
+  `session_cgroup_sweep_removed` with `count` and `names` (the sorted names). Permanent session deletion `rmdir`s that
+  session's cgroup when it is empty. UNVERIFIED: which slice that delete path looks in was not traced.
 - Cross-instance effects:
   - The sweep is scoped to this home: a live server's cgroups stay unless a session of this home has the same first
-    eight id characters. Every other entry under `app.slice` stays too.
+    eight id characters. Every other entry under the three slices stays too.
   - Two homes whose session ids share the first 8 characters share one cgroup and its limits. Either home's sweep can
     remove that cgroup while it is empty; the next spawn recreates it.
 
@@ -128,11 +128,9 @@ every baseline package registered, in registration order.
 | `merge_pool` | `src.features.trace.api` | ready | Perfetto trace merge process pool | start does nothing; the pool is built on the first merge | `<home>/cache/perfetto_merge/`; stop calls `shutdown(wait=False, cancel_futures=True)` | none |
 | `usage_tally` | `src.features.usage.api` | early | Preloads the usage tally modules on a thread so a later request never imports a mid-deploy tree | once | none | none |
 | `ext_usage` | `src.features.usage.ext_usage` | ready | Quota panel poller | one account per 60 s (`EXT_USAGE_ROUND_GAP_SECONDS`), round-robin, re-deriving the account set every round | Accounts: the default Claude login (`$CLAUDE_CONFIG_DIR`, else `/home/<user>/.claude`), each `accounts.claude[].config_dir`, and Codex (`/home/<user>/.codex/sessions`). Calls `https://api.anthropic.com/api/oauth/usage`. Broadcasts `ext_usage` on the sidebar channel; serves `GET /api/ext-usage`. | On a 401 it refreshes the token through `https://platform.claude.com/v1/oauth/token` and rewrites `<login dir>/.credentials.json` (0600, atomic) |
-| `speech` | `src.features.voice.service` | early | Provisions and warms the speech models on a thread; the server does not wait | once | Downloads into `<home>/models/` (`files.md` 5.11) | none |
 
 Test-run consequences on a scratch home (`/tmp/...`): `host_auth` still probes every host in the operator's ssh
-config. `ext_usage` still reads, and on a 401 rewrites, the operator's Claude login files. `speech` downloads its
-models into the scratch home. The cgroup sweep removes only empty cgroups named for the scratch home's own sessions.
+config. `ext_usage` still reads, and on a 401 rewrites, the operator's Claude login files. The cgroup sweep removes only empty cgroups named for the scratch home's own sessions.
 A Rust port that wants side-effect-free test runs needs a way to disable these services; the baseline has none, short of
 `session_memory_max_mb: 0` for cgroups.
 
@@ -148,8 +146,8 @@ done
 ```
 
 Packages with `register_service`: `src.features.artifacts`, `src.features.cron`, `src.features.slack`, `src.features.discord`,
-`src.features.host_auth`, `src.features.trace`, `src.features.usage` (two), and `src.features.voice`. All nine
-services are in the table above.
+`src.features.host_auth`, `src.features.trace`, `src.features.usage` (two). All eight
+services are in the table above. `src.features.voice` registers none since d1f7e3ba6 (the local speech engine is gone).
 
 Packages with `register_metadata_fields`: `src.features.backend_pool`, `src.features.cron`, `src.features.slack`,
 `src.features.discord`, `src.features.web_reply`, and `src.backends.claude_code` (two: one session slot, one
@@ -170,13 +168,14 @@ Packages that register config sections, checks, legacy keys or option types are 
 ## 6. Other startup registries
 
 - Startup checks: section 1, step 5.
-- Setup steps (run by `scripts/setup.sh`, never by the server): `src.features.cron.seed:setup_step`,
-  `src.features.voice.voice_setup` and `src.backends.claude_code.setup_check`.
+- Setup steps (run by `scripts/setup.sh`, never by the server): `src.features.cron.seed:setup_step` and `src.backends.claude_code.setup_check`.
 - Diff root: `src.features.memory.store_root:memory_dir` (`<home>/memory`).
 - Scheduled handlers (`src/runtime/hooks/scheduled_handlers.py`):
   - `backup` → `src.features.backup.backup:run_scheduled_backup`;
   - `usage_ledger` → `src.features.usage.usage_ledger:run_scheduled_usage_ledger`;
-  - `cool_storage` → `src.features.usage.storage_cool:run_scheduled_cool_storage`.
+  - `cool_storage` → `src.features.usage.storage_cool:run_scheduled_cool_storage`;
+  - `disk_sweep` → `src.features.disk_sweep.sweep:run_scheduled`, which runs the sweep in apply mode (archives changed
+    worktrees and removes old scratch directories under `paths.scratch_dir`) and returns the totals line.
 
 ## 7 Per-session Claude idle compaction
 

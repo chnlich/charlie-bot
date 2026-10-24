@@ -213,8 +213,8 @@ Resume styles (`backend_type_registration`, from each package's `register()`):
 - **Headless config** (`OPENCODE_CONFIG_CONTENT`):
   `{"permission": {"*": "allow", "question": "deny", "subagent": "deny", "opencode_session_move": "deny"},
   "shell": "bash", "default_agent": "charliebot", "agent": {"charliebot": {"mode": "primary"}}}`, plus a `providers`
-  block with the `context_limit` of every `backends.options` entry that sets one (`src/backends/opencode/server.py:60-85`,
-  `src/backends/opencode/options.py:17-34`).
+  block with each `backends.options` entry's `context_limit` and fixed `extra_body` fields under the model's `body`
+  (`src/backends/opencode/server.py:60-85`, `src/backends/opencode/options.py:19` `model_overrides_config`, `:35-37`).
 - **One-shot:** `opencode run --standalone --format json -m <model> -- <framed prompt>` in a throwaway XDG root
   with every tool denied. Its NDJSON carries `text` and `error` events.
 

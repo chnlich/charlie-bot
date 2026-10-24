@@ -2,8 +2,9 @@
 
 ``backends.pool`` lists the members in rotation order. Every caller that picks a backend without a
 name asks :func:`select`: the four worker task types, the improve loop, the reviewer and the cold-read
-chain, the session namer and the page check. The rotation position and the cooldowns live in process
-memory, like the Claude account readings, so a restart clears both.
+chain, the session namer and the page check. A caller that retries down the pool on failure asks
+:func:`iter_members` instead. The rotation position and the cooldowns live in process memory, like the
+Claude account readings, so a restart clears both.
 
 Vocabulary:
 
@@ -20,7 +21,7 @@ import asyncio
 import datetime
 import json
 import threading
-from collections.abc import Collection
+from collections.abc import Collection, Iterator
 
 import pydantic
 
@@ -131,14 +132,6 @@ class RouterError(RuntimeError):
   stdout outside the contract, or named an id outside the candidates."""
 
 
-def reset_for_tests() -> None:
-  """Clear the rotation position and every cooldown; the suite calls it around each test."""
-  global _position
-  with _lock:
-    _position = 0
-    _cooling_until.clear()
-
-
 def is_quota_error(text: str) -> bool:
   """True when *text* names a spent quota: one of :data:`QUOTA_ERROR_PATTERNS` appears in it."""
   lowered = text.lower()
@@ -162,6 +155,19 @@ def cool(backend_id: str, resets_at: datetime.datetime | None) -> datetime.datet
   return until
 
 
+def _skip_reason(member: str, exclude: Collection[str], now: datetime.datetime) -> str | None:
+  """Why a selector must skip *member* at *now*, or None when it may take it.
+
+  The caller holds :data:`_lock`, so the cooldown read agrees with the position that same lock guards.
+  """
+  if member in exclude:
+    return "excluded by caller"
+  until = _cooling_until.get(member)
+  if until is not None and until > now:
+    return f"cooling until {until.isoformat(timespec='minutes')}"
+  return None
+
+
 def select(
     cfg: config.CharlieBotConfig,
     *,
@@ -179,22 +185,27 @@ def select(
     for offset in range(len(members)):
       index = (_position + offset) % len(members)
       member = members[index]
-      if member in exclude:
-        log.info("backend_pool_skipped", caller=caller, member=member, reason="excluded by caller")
-        continue
-      until = _cooling_until.get(member)
-      if until is not None and until > now:
-        log.info(
-            "backend_pool_skipped",
-            caller=caller,
-            member=member,
-            reason=f"cooling until {until.isoformat(timespec='minutes')}")
+      reason = _skip_reason(member, exclude, now)
+      if reason is not None:
+        log.info("backend_pool_skipped", caller=caller, member=member, reason=reason)
         continue
       _position = (index + 1) % len(members)
       log.info("backend_pool_selected", caller=caller, member=member, position=index)
       return config.require_backend_option(cfg, member, subject="backends.pool entry ")
   log.warning("backend_pool_exhausted", caller=caller, members=list(members), excluded=sorted(exclude))
   return None
+
+
+def iter_members(cfg: config.CharlieBotConfig, *, caller: str) -> Iterator[models.BackendOption]:
+  """Yield one available member per call, in rotation order, each member at most once.
+
+  A caller that fails on a member asks for the next: :func:`select` skips both the members
+  already yielded and the cooling ones.
+  """
+  tried: list[str] = []
+  while (option := select(cfg, caller=caller, exclude=tried)) is not None:
+    tried.append(option.id)
+    yield option
 
 
 def cooling_until(backend_id: str) -> datetime.datetime | None:
@@ -219,16 +230,9 @@ def pick_ordered(
   now = models.utc_now()
   with _lock:
     for member in backends:
-      if member in exclude:
-        log.info("backend_pool_skipped", caller=caller, member=member, reason="excluded by caller")
-        continue
-      until = _cooling_until.get(member)
-      if until is not None and until > now:
-        log.info(
-            "backend_pool_skipped",
-            caller=caller,
-            member=member,
-            reason=f"cooling until {until.isoformat(timespec='minutes')}")
+      reason = _skip_reason(member, exclude, now)
+      if reason is not None:
+        log.info("backend_pool_skipped", caller=caller, member=member, reason=reason)
         continue
       log.info("backend_pool_selected", caller=caller, member=member, source="route")
       return config.require_backend_option(cfg, member, subject="routed backend ")

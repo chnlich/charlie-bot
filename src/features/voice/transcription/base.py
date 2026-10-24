@@ -16,16 +16,21 @@ from typing import ClassVar, Literal
 # The capture worklet's chunk (src/features/voice/static/voice-input.js VOICE_CHUNK_SAMPLES):
 # 2048 samples = 128 ms of PCM16. The voice relay forwards the browser's frames
 # unsplit, so this is the chunk size a live backend's audio iterator carries in
-# production; the replay script paces at it and the backend tests build their
-# fake audio at it.
+# production; the replay script paces at it, the recording transcription cuts
+# uploads into it, and the backend tests build their fake audio at it.
 VOICE_CHUNK_SAMPLES = 2048
 
 # The capture rate, mono PCM16 (src/features/voice/static/voice-input.js VOICE_SAMPLE_RATE):
 # the worklet resamples the microphone to this rate before emitting chunks. Every
-# Python reader of captured audio — the upload's WAV validation, the offline VAD
-# and decode, the live backends' mimeType and byte pacing — must read this same
-# number, so a rate change is a joint edit with that JS constant.
+# Python reader of captured audio — the upload's WAV validation, the recording
+# transcription's chunking, the live backends' mimeType and byte pacing — must read
+# this same number, so a rate change is a joint edit with that JS constant.
 SAMPLE_RATE = 16_000
+
+# The longest recording the upload and the preview relay keep (the browser's cap is
+# VOICE_MAX_SAMPLES in voice-input.js, a joint edit like the rate above).
+MAX_RECORDING_SECONDS = 5 * 60
+MAX_RECORDING_SAMPLES = SAMPLE_RATE * MAX_RECORDING_SECONDS
 
 
 @dataclasses.dataclass(frozen=True)
@@ -56,7 +61,7 @@ class TranscriptionBackend(abc.ABC):
   call order to follow.
   """
 
-  # Registry key ("local", "gemini", "muse") and the dropdown text shown beside
+  # Registry key ("gemini", "muse") and the dropdown text shown beside
   # the microphone. A backend whose label depends on config overrides ``label``
   # with a property.
   id: ClassVar[str]

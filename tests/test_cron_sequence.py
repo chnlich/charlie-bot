@@ -115,16 +115,6 @@ def _persist_chained_cron_d(cfg: config.CharlieBotConfig, session_id: str) -> cr
   return task_cfg
 
 
-def _script_manager_turn(monkeypatch: pytest.MonkeyPatch, notes: list[str]) -> None:
-  """Script the parent node's report-consuming turn through the registry
-  builder (the manager dispatch path), so no external process starts from
-  these tests. One scripted backend per expected manager-turn build."""
-  conftest.install_scripted_backends(
-      monkeypatch,
-      [test_task_execution.SpawningScriptedBackend([test_task_execution.result_event(note)]) for note in notes],
-      conftest.BUILD_BACKEND_PATCH_TARGET)
-
-
 def _child_reports(tree: task_sessions.TaskTreeManager, node_id: str) -> list[dict]:
   """Every child report on the node, in delivery order."""
   return [e for e in tree.events.load_events(node_id) if e.get("type") == ET.CHILD_REPORT]
@@ -134,19 +124,6 @@ async def _wait_for_child_report(tree, node_id: str, what: str, timeout: float =
   """Wait out the node's report turn and return its child reports."""
   await conftest._async_wait_for(lambda: bool(_child_reports(tree, node_id)), timeout, what)
   return _child_reports(tree, node_id)
-
-
-async def _drain_manager_turns(tree: task_sessions.TaskTreeManager, manager_id: str) -> None:
-  """Wait until every manager_turn Run of the node reached a terminal fact,
-  so no launch task outlives the test as background residue."""
-  deadline = asyncio.get_event_loop().time() + 15
-  while asyncio.get_event_loop().time() < deadline:
-    records = [r for r in tree.runs.list_run_records_sync(manager_id) if r.kind == "manager_turn"]
-    events = tree.runs.load_events_sync(manager_id)
-    if records and all(tree.runs.terminal_outcome(events, r.id) is not None for r in records):
-      return
-    await asyncio.sleep(0.05)
-  pytest.fail(f"the manager turn never settled: {tree.runs.list_run_records_sync(manager_id)}")
 
 
 # ---------------------------------------------------------------------------
@@ -199,6 +176,9 @@ async def test_bound_steps_failure_stops_chain_and_reports_failed(bound_env, mon
       monkeypatch, [
           test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("broke")], exit_code=1),
       ], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
+  # The failed step's report wakes the manager: its report-consuming turn rides
+  # the registry builder (scripted), so no external process starts from this test.
+  test_task_execution.script_manager_turn(monkeypatch, ["report noted"])
   task_cfg = _persist_chained_cron_d(cfg, manager.id)
   scheduler = conftest.build_scheduler(cfg, session_blocks)
   firing = "2026-01-01T03:00:00+00:00"
@@ -219,6 +199,8 @@ async def test_bound_steps_failure_stops_chain_and_reports_failed(bound_env, mon
   assert closes[0]["actor"] == "system"
   assert closes[0]["request_id"] == f"unsuccessful:{records[0].id}"
   assert closes[0]["run_ids"] == [records[0].id]
+  # The manager's report turn settles inside the test: no launch outlives the scripted build.
+  await test_task_execution.drain_manager_turns(tree, manager.id)
 
 
 # ---------------------------------------------------------------------------
@@ -302,7 +284,7 @@ async def test_recovery_redrives_a_mid_chain_firing_from_durable_facts(
       monkeypatch, [
           test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("reviewer wrote the report")]),
       ], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
-  _script_manager_turn(monkeypatch, ["report noted"])
+  test_task_execution.script_manager_turn(monkeypatch, ["report noted"])
   task_cfg = _persist_chained_cron_d(cfg, manager.id)
   # The durable mid-chain facts of a stopped process: the firing's leaf with
   # step 0's Run terminally successful (exit 0 — the frontier's advance
@@ -365,7 +347,7 @@ async def test_recovery_redrives_a_mid_chain_firing_from_durable_facts(
   assert reports[0]["outcome"] == "completed"
   assert "completed all 2 step(s)" in str(reports[0]["summary"])
   # The parent's report-consuming turn settled (no background residue).
-  await _drain_manager_turns(tree, manager.id)
+  await test_task_execution.drain_manager_turns(tree, manager.id)
 
   # A repeated pass adds nothing: no second step, no second close, no second
   # report.
@@ -515,7 +497,7 @@ async def _successful_two_step_leaf(bound_env, monkeypatch: pytest.MonkeyPatch):
       ], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
   # The boundary close dispatches the parent's report-consuming turn through
   # the registry builder: script it so no external process starts here.
-  _script_manager_turn(monkeypatch, ["report noted"])
+  test_task_execution.script_manager_turn(monkeypatch, ["report noted"])
   task_cfg = _bound_task(
       "recovered-boundary",
       manager.id,
@@ -593,7 +575,7 @@ async def test_recovered_successful_final_step_close_blocked_delivers_one_blocke
   assert len(kinds) == 2
   assert sorted(o for o, _ in kinds) == ["blocked", "completed"]
   assert tree.task_state(leaf.id) == "completed"
-  await _drain_manager_turns(tree, manager.id)
+  await test_task_execution.drain_manager_turns(tree, manager.id)
 
 
 @pytest.mark.asyncio
@@ -609,7 +591,7 @@ async def test_recovered_final_step_boundary_settles_without_a_new_tick(
   reports = [e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]
   assert len(reports) == 1
   assert "completed all 2 step(s)" in str(reports[0].get("summary"))
-  await _drain_manager_turns(tree, manager.id)
+  await test_task_execution.drain_manager_turns(tree, manager.id)
 
 
 @pytest.mark.asyncio
@@ -628,7 +610,7 @@ async def test_simultaneous_fresh_and_recovery_followup_produce_no_duplicate(
   assert len([e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]) == 1
   assert len([e for e in tree.events.load_events(leaf.id) if e.get("type") == ET.TASK_CLOSED]) == 1
   assert len(tree.runs.list_run_records_sync(leaf.id)) == 2
-  await _drain_manager_turns(tree, manager.id)
+  await test_task_execution.drain_manager_turns(tree, manager.id)
 
 
 @pytest.mark.asyncio
@@ -673,7 +655,7 @@ async def test_completed_close_survives_a_failing_parent_wake_without_a_blocked_
   monkeypatch.setattr(task_execution.TaskExecutionAdapter, "__call__", orig_call)
   decision = await tree.dispatch.dispatch_pending(manager.id)
   assert decision["launch"] is True
-  await _drain_manager_turns(tree, manager.id)
+  await test_task_execution.drain_manager_turns(tree, manager.id)
   assert len([e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]) == 1
   assert len(tree.runs.list_run_records_sync(leaf.id)) == 2
 
@@ -765,7 +747,7 @@ async def test_repo_prompt_task_launches_its_type_less_leaf_in_a_worktree(
   conftest.install_scripted_backends(monkeypatch, [backend], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
   # The close report's wake dispatches the bound node's report-consuming turn;
   # script it through the registry builder so no external process starts.
-  _script_manager_turn(monkeypatch, ["report noted"])
+  test_task_execution.script_manager_turn(monkeypatch, ["report noted"])
 
   task_cfg = cron_config.ScheduledTaskConfig(
       name="repo-sweep", cron="0 3 * * *", prompt="Do the sweep.", backend="fake", repo=str(repo))
@@ -879,13 +861,16 @@ async def test_firing_with_same_resolved_backend_stops_before_any_step_launches(
     bound_env, monkeypatch: pytest.MonkeyPatch) -> None:
   """Linked steps resolving to the same (type, model) stop the firing before
   any step launches: the failure report names both steps and the shared
-  backend, and no scripted process ever starts."""
+  backend, and no step process ever starts."""
   cfg, session_blocks, tree = bound_env
   manager = await make_manager(tree)
   builds = conftest.install_scripted_backends(
       monkeypatch,
       [test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("should never run")])],
       conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
+  # The failure report wakes the manager: its report-consuming turn rides the
+  # registry builder (scripted), so no external process starts from this test.
+  test_task_execution.script_manager_turn(monkeypatch, ["report noted"])
   # No backend written anywhere: the config loads (the repo default's shape),
   # and both steps resolve to the first configured option.
   task_cfg = _bound_task(
@@ -916,6 +901,7 @@ async def test_firing_with_same_resolved_backend_stops_before_any_step_launches(
   assert "stopped before its first step" in summary
   assert "steps 'selector' and 'reviewer'" in summary
   assert conftest.OPUS_BACKEND_ID in summary
+  await test_task_execution.drain_manager_turns(tree, manager.id)
 
 
 @pytest.mark.asyncio
@@ -1014,7 +1000,7 @@ async def test_boundary_report_headings_carry_each_step_backend(bound_env, monke
   # drains it below); script it so no external CLI process starts — a real
   # spawn's process start spends the unit budget's headroom and flakes under
   # CI jitter.
-  _script_manager_turn(monkeypatch, ["report noted"])
+  test_task_execution.script_manager_turn(monkeypatch, ["report noted"])
   task_cfg = _bound_task(
       "chained",
       manager.id,
@@ -1029,7 +1015,7 @@ async def test_boundary_report_headings_carry_each_step_backend(bound_env, monke
   summary = str(reports[0].get("summary"))
   assert "**selector result (fake):**" in summary
   assert "**reviewer result (codex-o3):**" in summary
-  await _drain_manager_turns(tree, manager.id)
+  await test_task_execution.drain_manager_turns(tree, manager.id)
 
 
 # ---------------------------------------------------------------------------
@@ -1043,7 +1029,7 @@ async def test_pooled_scheduled_step_launches_on_the_selected_pool_account(
   """The cron controller's scheduled_step Runs are fresh worker launches: the
   lifecycle selects the pool account, and the relay loop is armed (the backend
   build receives the selected account)."""
-  claude_accounts.reset_for_tests()
+  conftest.reset_claude_account_readings()
   cfg, session_blocks, tree = test_task_execution.build_pooled_env(tmp_path, monkeypatch)
   conftest.bind_deps_blocks(monkeypatch, tree, session_blocks)
   tree.dispatch.executor = test_task_execution._adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)

@@ -1,0 +1,6 @@
+[Unit]
+Description=CharlieBot resource hierarchy
+
+# The parent of the server scope and both leaf slices. It carries no limit of its own: the two
+# leaves hold the split, and the server's scope sets only MemorySwapMax=0.
+[Slice]

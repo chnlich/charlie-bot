@@ -676,9 +676,9 @@ _SEARCH_NULL_PIECES: dict[str, bytes] = {
 _search_row_fragments: memo.BoundedMemo[int, tuple[models.SessionMetadata,
                                                    tuple[bytes | str,
                                                          ...]]] = memo.BoundedMemo(_SEARCH_ROW_FRAGMENT_CAP)
-# The finished row's wire bytes: metadata object -> (that object, the row's five
+# The finished row's wire bytes: metadata object -> (that object, the row's
 # derived values, the spliced body). The body is a pure function of the metadata
-# object and those five values, both in the value — the metadata cache replaces
+# object and those values, both in the value — the metadata cache replaces
 # the object whenever its file provably changes, and the values ride the check —
 # so a repeat request with an unchanged row state serves the cached bytes; the
 # stored object pins the row so an id reuse can never serve another object's
@@ -1354,6 +1354,32 @@ async def switch_session_backend(
   return meta
 
 
+@router.put("/{session_id}/resource-class", response_model=models.ResourceClassResponse)
+async def set_session_resource_class(
+    session_id: str,
+    body: models.ResourceClassRequest,
+    caller: run_token.CallerIdentity = fastapi.Depends(deps.require_caller),
+    store: session_store.SessionStore = fastapi.Depends(deps.get_session_store),
+) -> models.ResourceClassResponse:
+  """Set the operator's repair mark; the next spawn of this session and its descendants follows it.
+
+  Operator scope only: an agent's run credential cannot move a session (or itself) out of
+  the agents' share, which would make the share unenforceable. The mark is persisted on this
+  session alone; descendants resolve it through their nearest marked ancestor at spawn time.
+  """
+  if not caller.is_operator:
+    raise fastapi.HTTPException(
+        status_code=403, detail="setting a session's resource class requires operator credentials")
+  meta = deps.require_found(
+      await store.update_field(
+          session_id,
+          "resource_class",
+          body.resource_class,
+          "session_resource_class_set",
+          resource_class=body.resource_class))
+  return models.ResourceClassResponse(id=meta.id, resource_class=meta.resource_class)
+
+
 @router.get("/{session_id}", response_model=SessionDetailResponse)
 async def get_session(
     meta: models.SessionMetadata = fastapi.Depends(deps.require_session),
@@ -1382,7 +1408,7 @@ async def archive_session(
   archived node returns an empty list.
   """
   if not caller.is_operator:
-    raise fastapi.HTTPException(status_code=403, detail="archiving a task requires operator credentials")
+    raise fastapi.HTTPException(status_code=403, detail=task_sessions.ARCHIVE_OPERATOR_REFUSAL)
   try:
     archived = await task_mgr.archive_subtree(session_id, caller=caller)
   except (task_errors.TaskInvalidError, task_errors.TaskNotFoundError, task_errors.TaskForbiddenError,

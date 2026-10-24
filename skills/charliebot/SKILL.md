@@ -222,7 +222,7 @@ One Claude login carries a five-hour and a weekly window, so a long master turn 
 
 ### Feature-Use Audits
 
-- Session metadata and chat events provide the complete audit record for backend, profile, origin, creation time, slash commands, and manager shell commands.
+- Session metadata and chat events provide the complete audit record for backend, profile, origin, creation time, and manager shell commands.
 - Worker shell commands appear only in their runs' `events.jsonl`.
 - Attribute manager shell commands to the `manager_turn` run whose time span contains them.
 - Claude nests `tool_use` in `assistant.message.content`.

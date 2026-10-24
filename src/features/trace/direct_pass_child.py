@@ -282,11 +282,11 @@ def main(argv: list[str]) -> int:
     try:
       _validate(trace_path, orjson, trace_merge._trace_events_or_raise, gc_control.gc_off, _MIN_CHUNK_BYTES)
     except trace_merge.NotATraceError as error:
-      _kill(gzip_proc)
+      trace_merge._kill_and_reap(gzip_proc)
       print(str(error), file=sys.stderr)
       return EXIT_NOT_A_TRACE
     except ValueError as error:  # orjson's decode errors are ValueError subclasses
-      _kill(gzip_proc)
+      trace_merge._kill_and_reap(gzip_proc)
       print(f"trace failed to parse: {error}", file=sys.stderr)
       return EXIT_PARSE_FAILED
     detail = gzip_proc.stderr.read().decode(errors="replace").strip()
@@ -294,11 +294,6 @@ def main(argv: list[str]) -> int:
       print(detail, file=sys.stderr)
       return EXIT_IGZIP_FAILED
   return EXIT_OK
-
-
-def _kill(gzip_proc: subprocess.Popen) -> None:
-  gzip_proc.kill()
-  gzip_proc.wait()
 
 
 if __name__ == "__main__":

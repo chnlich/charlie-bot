@@ -19,12 +19,12 @@ from src.infra import gc_control
 # The backend packages register their types before the import chain below can parse a config.
 registrations.register_all()
 
-# The import chain is the server's largest bulk build: ~560 modules — fastapi's
-# own chain, every router, and the pydantic models every route registers
-# against. GC is global, and the chain's gen-2 walks re-traverse a heap that
-# only grows — ~43 ms of the import wall (the M99 floor) that reclaims nothing
-# the process keeps, so the whole chain runs inside the same bounded span the
-# server's other bulk builds use; gc is back on before any request can arrive.
+# The import chain is the server's largest bulk build: fastapi's own chain,
+# every router, and the pydantic models every route registers against. GC is
+# global, and the chain's gen-2 walks re-traverse a heap that only grows —
+# ~43 ms of the import wall (the M99 floor) that reclaims nothing the process
+# keeps, so the whole chain runs inside the same bounded span the server's
+# other bulk builds use; gc is back on before any request can arrive.
 with gc_control.gc_off(collect=False):
   import fastapi
   from fastapi import staticfiles

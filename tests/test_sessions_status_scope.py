@@ -69,7 +69,7 @@ async def test_status_derived_map_serves_whole_between_state_bumps(tmp_path: pat
   and a memo that never hit would silently return the poll to the per-session
   rebuild the fold used to pay.
   """
-  sidebar_state.reset_for_tests()
+  conftest.reset_sidebar_state()
   cfg = conftest.build_two_backend_cfg(tmp_path)
   session_blocks = conftest.build_session_blocks(cfg)
   session = await conftest.create_root_session(session_blocks, models.CreateSessionRequest(name="Memo"))
@@ -112,7 +112,7 @@ async def test_status_body_memo_serves_whole_between_state_bumps(
   for a full memo lifetime, and a memo that never hit would silently return
   the poll to the per-request render it used to pay.
   """
-  sidebar_state.reset_for_tests()
+  conftest.reset_sidebar_state()
   cfg = conftest.build_two_backend_cfg(tmp_path)
   session_blocks = conftest.build_session_blocks(cfg)
   session = await conftest.create_root_session(session_blocks, models.CreateSessionRequest(name="Body memo"))
@@ -162,7 +162,7 @@ async def test_status_body_memo_serves_no_ghost_row_after_delete(tmp_path: pathl
   bump would memo-hit at the unchanged generation and serve the deleted
   session's ghost row for a full memo lifetime.
   """
-  sidebar_state.reset_for_tests()
+  conftest.reset_sidebar_state()
   cfg = conftest.build_two_backend_cfg(tmp_path)
   session_blocks = conftest.build_session_blocks(cfg)
   kept = await conftest.create_root_session(session_blocks, models.CreateSessionRequest(name="Survivor"))
@@ -197,7 +197,7 @@ async def test_list_sessions_rows_carry_stamp_and_derived_fields(tmp_path: pathl
   aliased the shared cache object would let a caller's mutation corrupt every
   later listing.
   """
-  sidebar_state.reset_for_tests()
+  conftest.reset_sidebar_state()
   cfg = conftest.build_two_backend_cfg(tmp_path)
   session_blocks = conftest.build_session_blocks(cfg)
   session = await conftest.create_root_session(session_blocks, models.CreateSessionRequest(name="Stamped"))
@@ -255,7 +255,7 @@ async def test_root_list_changed_round_rerenders_only_moved_rows(
   render can only be served for a row whose content provably did not move;
   the served body must still equal a full re-render's bytes.
   """
-  sidebar_state.reset_for_tests()
+  conftest.reset_sidebar_state()
   sessions_api._workspace_list_memos.whole_body = None
   sessions_api._workspace_list_memos.row_render.clear()
   cfg = conftest.build_two_backend_cfg(tmp_path)

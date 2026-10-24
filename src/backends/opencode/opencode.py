@@ -349,6 +349,7 @@ class OpenCodeBackend(base.AgentBackend):
     if cgroup is not None:
       variables["BASH_ENV"] = str(server.JOIN_SCRIPT)
       variables["CHARLIEBOT_SESSION_CGROUP"] = str(cgroup.path)
+      variables["CHARLIEBOT_SESSION_OOM_SCORE_ADJ"] = str(cgroup.oom_score_adj)
     response = await shared.client.put(f"/api/session/{self._session_id}/environment", json={"variables": variables})
     response.raise_for_status()
 
@@ -541,7 +542,7 @@ class OpenCodeBackend(base.AgentBackend):
           "permission": {
               "*": "deny"
           },
-          **options.model_context_config([self._backend_option] if self._backend_option is not None else []),
+          **options.model_overrides_config([self._backend_option] if self._backend_option is not None else []),
       }
       env = {
           **os.environ,

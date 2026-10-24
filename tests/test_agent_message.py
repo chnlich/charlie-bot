@@ -178,18 +178,8 @@ async def test_session_message_replays_for_a_run_and_newly_admits_for_an_operato
 # ---------------------------------------------------------------------------
 
 
-def _mock_cli_config(tmp_path: pathlib.Path) -> mock.MagicMock:
-  cfg = mock.MagicMock()
-  cfg.server.port = 9443
-  cfg.server_base_url = "http://localhost:9443"
-  conftest.stub_credentials({"charliebot": {"access_key": ""}})
-  cfg.sessions_dir = tmp_path / "sessions"
-  cfg.sessions_dir.mkdir(parents=True, exist_ok=True)
-  return cfg
-
-
 def test_cli_session_send_relays_message(tmp_path: pathlib.Path) -> None:
-  cfg = _mock_cli_config(tmp_path)
+  cfg = conftest.make_cli_config(tmp_path)
   resp = conftest.make_json_response({"status": "accepted"})
 
   with conftest.patched_cli_post(cfg,
@@ -296,7 +286,7 @@ def test_cli_session_send_maps_a_422_refusal_to_exit_2(
       "CJK characters, CJK punctuation, and fullwidth characters count 2.\n"
       "Write the long content to a file. Send a short message with the conclusion,\n"
       "the request, and the file path.")
-  cfg = _mock_cli_config(tmp_path)
+  cfg = conftest.make_cli_config(tmp_path)
   resp = conftest.make_json_response({"detail": detail}, status_code=422)
 
   with pytest.raises(SystemExit) as excinfo, conftest.patched_cli_post(

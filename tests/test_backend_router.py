@@ -435,7 +435,7 @@ async def _launch_worker_error_event(
     list[tuple[str, str, str | None]],
 ]:
   """Run one scripted implement worker event through completion and failover delivery."""
-  backend_pool.reset_for_tests()
+  conftest.reset_backend_pool_state()
   cfg, session_blocks, tree = tte.build_spawning_env(
       tmp_path,
       monkeypatch,
@@ -823,11 +823,10 @@ async def test_a_fully_avoided_route_falls_back_to_todays_reviewer_selection(tmp
   assert review_run.backend == "fake2"  # today's pool selection picks the other member
 
 
-def test_session_naming_never_starts_the_router(tmp_path, monkeypatch) -> None:
-  """The session namer walks the pool (iter_light_backends): no router process runs."""
-  from src.runtime import autonamer
+def test_the_pool_walk_never_starts_the_router(tmp_path, monkeypatch) -> None:
+  """The light-backend walk (iter_members) reaches each pool member once: no router process runs."""
   cfg = _router_cfg(tmp_path, monkeypatch, sys.executable, _router_script(tmp_path), "fail")
-  names = [option.id for option in autonamer.iter_light_backends(cfg)]
+  names = [option.id for option in backend_pool.iter_members(cfg, caller="light_oneshot")]
   assert names == ["fake", "fake2"]
 
 

@@ -27,7 +27,7 @@ All Gmail API requests use:
 Choose the account using the **Accounts** section in the **google-oauth** skill, then mint its access token:
 
 ```bash
-ACCESS_TOKEN=$(python3 <skill-dir>/scripts/google_account.py token --account <name>)
+ACCESS_TOKEN=$(python3 skills/google-oauth/scripts/google_account.py token --account <name>)
 ```
 
 For the default account, omit `--account`.
@@ -81,7 +81,7 @@ Choose an account in the **Accounts** section and follow **Add or Re-Authorize a
 ## Workflow
 
 1. Choose the account that matches the request using the **Accounts** section in the **google-oauth** skill.
-2. Mint its access token with `python3 <skill-dir>/scripts/google_account.py token --account <name>`. Omit `--account` for the default account.
+2. Mint its access token with `python3 skills/google-oauth/scripts/google_account.py token --account <name>`. Omit `--account` for the default account.
 3. Search or list messages using Gmail search syntax (`q=` parameter).
 4. Fetch full message content and decode the body.
 5. Present extracted text to the user.

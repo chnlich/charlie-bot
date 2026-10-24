@@ -16,11 +16,6 @@ dependencies = [
     "python-multipart>=0.0.22",
     "pyyaml>=6.0.3",
     "requests>=2.33.0",
-    "sherpa-onnx>=1.13.4",
-    # sherpa-onnx-core ships libonnxruntime.so; sherpa-onnx's PyPI sdist omits
-    # the dependency, so uv's universal resolution would drop it without this
-    # direct requirement. Keep the pin matched to the resolved sherpa-onnx.
-    "sherpa-onnx-core==1.13.4",
     "structlog>=25.5.0",
     "uvicorn[standard]>=0.42.0",
     "websockets>=16.0",
@@ -33,13 +28,6 @@ dev = [
     "pytest>=9.0.2",
     "pytest-asyncio>=1.3.0",
     "ruff==0.16.1",
-]
-# Optional GPU voice engine (qwen3_hf): official transformers Qwen3-ASR weights on
-# NVIDIA GPUs. Not installed by default — setup.sh syncs this group only on hosts
-# with nvidia-smi, so plain `uv sync` and CI never pull torch.
-gpu-voice = [
-    "torch",
-    "transformers>=5.13",
 ]
 
 [project.scripts]
@@ -156,8 +144,3 @@ enable = [
     "relative-import",
     "import-module-unresolvable",
 ]
-
-# gpu-voice dependencies: the group is not installed by a default `uv sync`,
-# so these imports cannot resolve and W9001 would fire on every one of them.
-[tool.pylint."import-module"]
-import-module-exceptions = ["PIL", "huggingface_hub", "transformers"]

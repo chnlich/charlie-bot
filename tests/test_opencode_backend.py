@@ -106,7 +106,7 @@ def _usage_step(input_tokens: int, output_tokens: int) -> dict:
 
 
 @pytest.mark.parametrize("context_limit", [None, 420000])
-def test_model_context_config_overrides_only_context(context_limit: int | None) -> None:
+def test_model_overrides_config_overrides_only_context(context_limit: int | None) -> None:
   option = options.OpencodeBackend(id="oc", label="OC", model="provider/org/model", context_limit=context_limit)
   expected = {} if context_limit is None else {
       "providers": {
@@ -122,8 +122,8 @@ def test_model_context_config_overrides_only_context(context_limit: int | None) 
       }
   }
   other = backend_models.BackendOption(id="other", label="Other", type="codex", model=MODEL)
-  assert options.model_context_config([other, option]) == expected
-  assert options.model_context_config([]) == {}
+  assert options.model_overrides_config([other, option]) == expected
+  assert options.model_overrides_config([]) == {}
 
 
 @pytest.mark.parametrize("fields", [{"context_limit": 0}, {"context_limit": -1}, {"unknown": 1}])
@@ -132,16 +132,46 @@ def test_opencode_option_rejects_invalid_fields(fields: dict) -> None:
     options.OpencodeBackend(id="oc", label="OC", model=MODEL, **fields)
 
 
-def test_model_context_config_rejects_conflicts_naming_both_options() -> None:
-  first = options.OpencodeBackend(id="oc-first", label="First", model=MODEL, context_limit=420000)
-  second = options.OpencodeBackend(id="oc-second", label="Second", model=MODEL, context_limit=120000)
+@pytest.mark.parametrize(
+    "field, first_value, second_value", [
+        ("context_limit", 420000, 120000),
+        ("extra_body", {
+            "cache": True
+        }, {
+            "cache": False
+        }),
+    ])
+def test_model_overrides_config_rejects_conflicts_naming_both_options(
+    field: str, first_value: object, second_value: object) -> None:
+  first = options.OpencodeBackend(id="oc-first", label="First", model=MODEL, **{field: first_value})
+  second = options.OpencodeBackend(id="oc-second", label="Second", model=MODEL, **{field: second_value})
   with pytest.raises(ValueError) as error:
-    options.model_context_config([first, second])
+    options.model_overrides_config([first, second])
   assert first.id in str(error.value)
   assert second.id in str(error.value)
 
 
-def test_model_context_config_merges_equal_limits_and_distinct_models() -> None:
+def test_model_overrides_config_carries_extra_body_at_the_model_body_key() -> None:
+  extra_body = {"cache": {"no-store": True, "no-cache": True}}
+  option = options.OpencodeBackend(id="oc", label="OC", model=MODEL, extra_body=extra_body)
+  config = options.model_overrides_config([option])
+  assert config["providers"]["fakeprov"]["models"]["fake-model"]["body"] == extra_body
+
+
+def test_model_overrides_config_keeps_context_and_extra_body_of_two_options_on_one_model() -> None:
+  extra_body = {"cache": {"no-store": True, "no-cache": True}}
+  limited = options.OpencodeBackend(id="limited", label="Limited", model=MODEL, context_limit=420000)
+  cached = options.OpencodeBackend(id="cached", label="Cached", model=MODEL, extra_body=extra_body)
+  config = options.model_overrides_config([limited, cached])
+  assert config["providers"]["fakeprov"]["models"]["fake-model"] == {
+      "limit": {
+          "context": 420000
+      },
+      "body": extra_body,
+  }
+
+
+def test_model_overrides_config_merges_equal_limits_and_distinct_models() -> None:
   entries = [
       options.OpencodeBackend(id=option_id, label=option_id, model=model, context_limit=limit)
       for option_id, model, limit in [
@@ -152,7 +182,7 @@ def test_model_context_config_merges_equal_limits_and_distinct_models() -> None:
           ("other", "other/model", 200000),
       ]
   ]
-  assert options.model_context_config(entries) == {
+  assert options.model_overrides_config(entries) == {
       "providers":
           {
               "provider":

@@ -84,7 +84,7 @@ class ServerConfig(pydantic.BaseModel):
 
 
 class PathsConfig(pydantic.BaseModel):
-  """``paths:`` section: repos to scan and where worker worktrees live."""
+  """``paths:`` section: workspace repos, worker worktrees and scratch directories."""
 
   model_config = pydantic.ConfigDict(extra='forbid')
 
@@ -94,11 +94,15 @@ class PathsConfig(pydantic.BaseModel):
   # Root directory for worker worktrees
   worktree_dir: str = "~/worktrees"
 
+  # Root directory for task scratch directories managed by disk-sweep.
+  scratch_dir: str = "~/scripts"
+
   @pydantic.model_validator(mode="after")
   def _expand_tilde(self) -> PathsConfig:
-    """Expand ``~`` in both path settings against the process HOME."""
+    """Expand ``~`` in path settings against the process HOME."""
     self.workspace_dirs = [os.path.expanduser(p) for p in self.workspace_dirs]
     self.worktree_dir = os.path.expanduser(self.worktree_dir)
+    self.scratch_dir = os.path.expanduser(self.scratch_dir)
     return self
 
 

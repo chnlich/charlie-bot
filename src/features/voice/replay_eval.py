@@ -3,8 +3,7 @@
 Replays every recorded dictation under ``<sessions_dir>/*/voice/`` through the
 transcription backends (src/features/voice/transcription/), then reports stop-to-final
 latency and proper-noun accuracy against the message the user actually sent.
-Engine names are the registry ids plus variants: ``local-hotwords`` (the local
-backend built with --hotwords) and ``<id>-vocab`` for any backend (the same
+Engine names are the registry ids plus the ``<id>-vocab`` variant (the same
 backend called with --vocabulary). Backends with live_partials=False receive
 the whole clip at once; the others receive the capture worklet's chunk cadence
 (VOICE_CHUNK_SAMPLES) on a real-time schedule, so every stop-to-final number
@@ -35,8 +34,8 @@ from collections.abc import AsyncIterator
 
 import numpy as np
 
-from src.features.voice import transcriber, turn_contribution
-from src.features.voice.transcription import base, local, registry
+from src.features.voice import turn_contribution
+from src.features.voice.transcription import base, registry
 from src.infra import config, models
 
 # The file sits at src/features/voice/, so parents[3] is the checkout root; moving it breaks the depth.
@@ -48,11 +47,10 @@ SAMPLE_RATE = base.SAMPLE_RATE
 GROUND_TRUTH_WINDOW_S = 900
 # recordings/<UTC timestamp>_<hex>.wav, written by the voice upload endpoint
 WAV_FILENAME_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{6}\.\d{3})Z_[0-9a-f]+\.wav$")
-HOTWORDS_ENGINE = "local-hotwords"
 VOCAB_SUFFIX = "-vocab"
 SUMMARY_COLUMNS = (
     "engine", "clips", "failures", "stop_to_final_p50_s", "stop_to_final_p90_s", "first_partial_p50_s", "term_correct",
-    "term_total", "sim_mean", "better_vs_local", "worse_vs_local")
+    "term_total", "sim_mean")
 
 
 def _note(message: str) -> None:
@@ -60,9 +58,9 @@ def _note(message: str) -> None:
 
 
 def _variant_engine_ids() -> set[str]:
-  """Every engine name the script accepts: registry ids plus the two variant forms."""
+  """Every engine name the script accepts: registry ids plus the vocabulary variant."""
   ids = set(registry.backend_ids())
-  return ids | {HOTWORDS_ENGINE} | {f"{engine_id}{VOCAB_SUFFIX}" for engine_id in ids}
+  return ids | {f"{engine_id}{VOCAB_SUFFIX}" for engine_id in ids}
 
 
 @dataclasses.dataclass
@@ -243,40 +241,6 @@ async def run_engine(
   return records
 
 
-def _warmup_pcm() -> bytes:
-  """The transcriber's warm-up sine as PCM16 — its shape pays the cold cost, its content none."""
-  positions = np.arange(int(SAMPLE_RATE * transcriber.WARMUP_SECONDS), dtype=np.float64)
-  samples = np.sin(2 * np.pi * transcriber.WARMUP_FREQUENCY_HZ * positions / SAMPLE_RATE)
-  return samples.astype("<i2").tobytes()
-
-
-def _prepare_local_backends(backends: dict[str, base.TranscriptionBackend], cfg: config.CharlieBotConfig) -> None:
-  """Provision the speech models and warm every local backend's bundle before the timed runs.
-
-  The server does both on its provisioning thread at boot; the replay process
-  has no boot, so the first timed clip would otherwise pay the cold decode.
-  Each sine goes through the public transcribe and the text is discarded. A run
-  without a local backend provisions nothing: the speech models are the local
-  backend's alone.
-  """
-  local_backends = [backend for backend in backends.values() if isinstance(backend, local.LocalTranscriptionBackend)]
-  if not local_backends:
-    return
-  transcriber.ensure_models_cached(cfg)
-  sine = _warmup_pcm()
-
-  async def warm(backend: base.TranscriptionBackend) -> None:
-
-    async def one_chunk() -> AsyncIterator[bytes]:
-      yield sine
-
-    async for _event in backend.transcribe(one_chunk(), vocabulary=[], languages=[]):
-      pass
-
-  for backend in local_backends:
-    asyncio.run(warm(backend))
-
-
 def _percentile(values: list[float], q: float) -> float | None:
   if not values:
     return None
@@ -323,7 +287,6 @@ def write_outputs(
   }
   (out_dir / "results.json").write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
 
-  local_records = records.get("local")
   rows = []
   for engine in engines:
     engine_records = records[engine]
@@ -338,15 +301,6 @@ def write_outputs(
     term_correct = sum(r["terms"][term]["correct"] for r in scored for term in terms)
     term_total = sum(r["terms"][term]["sent"] for r in scored for term in terms)
     sim_mean = (sum(r["sim"] for r in scored) / len(scored)) if scored else None
-    better = worse = None
-    if local_records is not None and engine != "local":
-      pairs = [
-          (record, local_record)
-          for record, local_record in zip(engine_records, local_records, strict=True)
-          if record.get("ok") and local_record.get("ok") and "sim" in record and "sim" in local_record
-      ]
-      better = sum(1 for record, local_record in pairs if record["sim"] > local_record["sim"])
-      worse = sum(1 for record, local_record in pairs if record["sim"] < local_record["sim"])
     rows.append(
         {
             "engine": engine,
@@ -358,8 +312,6 @@ def write_outputs(
             "term_correct": term_correct,
             "term_total": term_total,
             "sim_mean": sim_mean,
-            "better_vs_local": better,
-            "worse_vs_local": worse,
         })
 
   lines = [
@@ -394,7 +346,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
   known_engines = sorted(_variant_engine_ids())
   parser.add_argument(
       "--engines", default=",".join(registry.backend_ids()), help=f"comma list from {', '.join(known_engines)}")
-  parser.add_argument("--hotwords", default="", help=f"comma list of local-engine hotwords (engine {HOTWORDS_ENGINE})")
   parser.add_argument(
       "--vocabulary", default="", help="comma list passed as the backend vocabulary by the <id>-vocab variants")
   parser.add_argument(
@@ -414,12 +365,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.error(f"unknown engines {unknown}; choose from {', '.join(known_engines)}")
   if not engines:
     parser.error("--engines is empty")
-  if HOTWORDS_ENGINE in engines and not args.hotwords:
-    parser.error(f"engine {HOTWORDS_ENGINE} needs --hotwords")
   if any(engine.endswith(VOCAB_SUFFIX) for engine in engines) and not args.vocabulary:
     parser.error("a <id>-vocab engine needs --vocabulary")
   args.engines = engines
-  args.hotwords_list = [h.strip() for h in args.hotwords.split(",") if h.strip()]
   args.vocabulary_list = [v.strip() for v in args.vocabulary.split(",") if v.strip()]
   args.languages_list = [code.strip() for code in args.languages.split(",") if code.strip()]
   args.terms_list = [t.strip() for t in args.terms.split(",") if t.strip()]
@@ -443,19 +391,10 @@ def main(argv: list[str] | None = None) -> int:
     print(f"audio minutes: {total_minutes:.1f}")
     return 0
 
-  if HOTWORDS_ENGINE in args.engines:
-    # The script's own variant: the local backend built with --hotwords,
-    # registered like any backend so the runner below drives it through the
-    # same registry interface.
-    hotwords = ",".join(args.hotwords_list)
-    registry.register_transcription_backend(
-        HOTWORDS_ENGINE, lambda backend_cfg, **_: local.LocalTranscriptionBackend(backend_cfg, hotwords=hotwords))
-
   out_dir.mkdir(parents=True, exist_ok=True)
   backends = {
       engine: registry.build_transcription_backend(engine.removesuffix(VOCAB_SUFFIX), cfg) for engine in args.engines
   }
-  _prepare_local_backends(backends, cfg)
 
   records: dict[str, list[dict]] = {}
   for engine in args.engines:

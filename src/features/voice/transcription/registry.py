@@ -1,8 +1,7 @@
 """Transcription backend registry — the only place that maps ids to backends.
 
 Adding a backend is one subclass module plus one line in ``_FACTORIES``. Importing
-this module loads every backend module but neither numpy nor websockets: the local
-backend loads the engine module when it first decodes, and the streaming backends
+this module loads every backend module but not websockets: the streaming backends
 import websockets when they open a connection.
 """
 
@@ -11,17 +10,13 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
-from src.features.voice.transcription import base, gemini, local, muse
+from src.features.voice.transcription import base, gemini, muse
 
 if TYPE_CHECKING:
   from src.infra import config
 
 # id -> factory(cfg, **kwargs) -> backend.
 _FACTORIES: dict[str, Callable[..., base.TranscriptionBackend]] = {}
-
-
-def _local(cfg: config.CharlieBotConfig, **kwargs: object) -> base.TranscriptionBackend:
-  return local.LocalTranscriptionBackend(cfg, **kwargs)
 
 
 def _gemini(cfg: config.CharlieBotConfig, **kwargs: object) -> base.TranscriptionBackend:
@@ -32,21 +27,12 @@ def _muse(cfg: config.CharlieBotConfig, **kwargs: object) -> base.TranscriptionB
   return muse.MuseTranscriptionBackend(cfg, **kwargs)
 
 
-_FACTORIES.update({"local": _local, "gemini": _gemini, "muse": _muse})
+_FACTORIES.update({"gemini": _gemini, "muse": _muse})
 
 
 def backend_ids() -> tuple[str, ...]:
   """The registered backend ids, in registration order."""
   return tuple(_FACTORIES)
-
-
-def register_transcription_backend(backend_id: str, factory: Callable[..., base.TranscriptionBackend]) -> None:
-  """Add one backend to the registry.
-
-  The replay script's variants register here, and tests register fakes the same
-  way, so a consumer driven through the registry needs no code change.
-  """
-  _FACTORIES[backend_id] = factory
 
 
 def build_transcription_backend(

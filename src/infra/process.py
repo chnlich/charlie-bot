@@ -9,7 +9,7 @@ import time
 from collections.abc import Callable, Coroutine
 from typing import Any, TypeVar
 
-from src.infra import log_once, tasks, timeouts
+from src.infra import log_once, models, tasks, timeouts
 
 log = log_once.LazyStructlogLogger()
 
@@ -71,30 +71,67 @@ async def wait_or_kill_group(
 # ---------------------------------------------------------------------------
 # Session cgroups: memory cap and task cap
 #
-# systemd delegates the user's app.slice subtree, so an unprivileged server can
-# create one cgroup per session under it, hold every agent process the session
-# spawns to hard memory.max / memory.swap.max limits, and let the kernel kill
-# only the cgroup's largest process on a breach. pids.max caps the session's
-# task count, so a runaway fork loop gets EAGAIN inside its own session and the
-# kernel logs "cgroup: fork rejected by pids controller in <cgroup path>"
-# instead of the host running out of PIDs. The parent creates the
-# directory and writes the limits; the child-side preexec move runs only under
-# asyncio.create_subprocess_exec with start_new_session=True — keep both the
-# flag and the preexec hook on every session spawn path.
+# systemd delegates the user's subtree, so an unprivileged server can create
+# one cgroup per session under either leaf slice, hold every agent process the
+# session spawns to hard memory.max / memory.swap.max limits, and let the
+# kernel kill only the cgroup's largest process on a breach. pids.max caps the
+# session's task count, so a runaway fork loop gets EAGAIN inside its own
+# session and the kernel logs "cgroup: fork rejected by pids controller in
+# <cgroup path>" instead of the host running out of PIDs. The parent creates
+# the directory and writes the limits; the child-side preexec move runs only
+# under asyncio.create_subprocess_exec with start_new_session=True — keep both
+# the flag and the preexec hook on every session spawn path.
+#
+# The two leaf slices carry the host-level split, and their limits live in the
+# unit files under scripts/systemd/. A session goes to the repair slice when it
+# or its nearest marked task ancestor carries the operator's repair mark; every
+# other session goes to the agents' slice. The per-session caps below are
+# unchanged by the choice.
 # ---------------------------------------------------------------------------
 
-# The user-delegated cgroup v2 subtree the session cgroups live under. systemd
-# names each user's delegated subtree by uid (user-<uid>.slice/user@<uid>.service),
-# so the path is built from this process's uid at import — a host whose user is
-# not uid 1000 gets its own slice, not a hardcoded one.
-CGROUP_V2_APP_SLICE = (f"/sys/fs/cgroup/user.slice/user-{os.getuid()}.slice/user@{os.getuid()}.service/app.slice")
+# The user-delegated cgroup v2 subtree. systemd names each user's delegated
+# subtree by uid (user-<uid>.slice/user@<uid>.service), so the path is built
+# from this process's uid at import — a host whose user is not uid 1000 gets
+# its own slice, not a hardcoded one.
+CGROUP_V2_USER_SERVICE = f"/sys/fs/cgroup/user.slice/user-{os.getuid()}.slice/user@{os.getuid()}.service"
+CGROUP_V2_AGENTS_SLICE = f"{CGROUP_V2_USER_SERVICE}/charliebot-agents.slice"
+CGROUP_V2_REPAIR_SLICE = f"{CGROUP_V2_USER_SERVICE}/charliebot-repair.slice"
+# The pre-split parent. Nothing is created here any more; the startup sweep
+# still clears this home's empty leftovers, and a process already running in
+# it stays until it exits.
+CGROUP_V2_APP_SLICE = f"{CGROUP_V2_USER_SERVICE}/app.slice"
 # Directory-name prefix; the suffix is the session id's first 8 chars, so a
 # human can match cgroup directories against the session list.
 SESSION_CGROUP_PREFIX = "charliebot-sess-"
 
-# Host-level degradation (missing delegation, read-only base) is a per-host
-# state, not a per-spawn event: one line per failure shape per process.
-_session_cgroup_degraded = log_once.WarnOnceRegistry()
+# The operator mark selects one of two slices, and the slice fixes the OOM
+# priority: a host-wide OOM picks an agent process before a repair one, and
+# never the server, which keeps the default 0. Both values are positive, which
+# an unprivileged writer may set.
+SESSION_CGROUP_OOM_SCORE_ADJ: dict[models.ResourceClass, int] = {"agent": 500, "repair": 100}
+
+
+class SessionCgroupUnavailableError(RuntimeError):
+  """The session's slice is missing or not writable, so the spawn has no memory guard.
+
+  The launcher's preflight and setup.sh install and start both slices; a host
+  that lost one must stop the spawn visibly instead of running it unbounded.
+  """
+
+
+def session_cgroup_slice(resource_class: models.ResourceClass) -> str:
+  """The leaf-slice directory for *resource_class*."""
+  match resource_class:
+    case "agent":
+      return CGROUP_V2_AGENTS_SLICE
+    case "repair":
+      return CGROUP_V2_REPAIR_SLICE
+  raise ValueError(f"resource_class is 'agent' or 'repair', got {resource_class!r}")
+
+
+def session_cgroup_slices() -> tuple[str, ...]:
+  """Every directory a session cgroup may live under, the retired app.slice included."""
+  return (CGROUP_V2_AGENTS_SLICE, CGROUP_V2_REPAIR_SLICE, CGROUP_V2_APP_SLICE)
 
 
 def session_cgroup_name(session_id: str) -> str:
@@ -102,42 +139,44 @@ def session_cgroup_name(session_id: str) -> str:
   return f"{SESSION_CGROUP_PREFIX}{session_id[:8]}"
 
 
-def session_cgroup_path(session_id: str) -> pathlib.Path:
-  """Full cgroup directory path for *session_id* under the app.slice base."""
-  return pathlib.Path(CGROUP_V2_APP_SLICE) / session_cgroup_name(session_id)
-
-
-def ensure_session_cgroup(session_id: str, memory_max_mb: int, swap_max_mb: int, tasks_max: int) -> pathlib.Path | None:
-  """Create or refresh the session's cgroup; None when the host cannot.
+def ensure_session_cgroup(
+    session_id: str, resource_class: models.ResourceClass, memory_max_mb: int, swap_max_mb: int,
+    tasks_max: int) -> pathlib.Path:
+  """Create or refresh the session's cgroup under its slice; raise when the slice cannot hold it.
 
   Lazy per-session creation: the directory is made with the configured
   ``memory.max`` / ``memory.swap.max`` / ``pids.max``; an existing directory
   (the session's later spawns) just has its limit files rewritten to the
-  current config values. *tasks_max* 0 writes ``max`` (no task cap). Any
-  OSError degrades to None with one logged warning — cgroup control never
-  blocks a spawn (the host guard).
+  current config values. *tasks_max* 0 writes ``max`` (no task cap). A missing
+  or unwritable slice, and any other OSError, raises instead of degrading: an
+  unbounded spawn is the failure this guard exists to prevent.
   """
-  path = session_cgroup_path(session_id)
+  base = pathlib.Path(session_cgroup_slice(resource_class))
+  if not base.is_dir() or not os.access(base, os.W_OK):
+    raise SessionCgroupUnavailableError(
+        f"session cgroup slice {base.name} ({base}) is missing or not writable; "
+        "install and start the slices from scripts/systemd/ with scripts/setup.sh")
+  path = base / session_cgroup_name(session_id)
   try:
     path.mkdir()
     log.info(
         "session_cgroup_created",
         path=str(path),
+        resource_class=resource_class,
         memory_max_mb=memory_max_mb,
         swap_max_mb=swap_max_mb,
         tasks_max=tasks_max)
   except FileExistsError:
     pass
   except OSError as e:
-    _session_cgroup_degraded.log(log.warning, "session_cgroup_unavailable", str(e), path=str(path), error=str(e))
-    return None
+    raise SessionCgroupUnavailableError(f"session cgroup slice {base.name} cannot hold {path.name}: {e}") from e
   try:
     (path / "memory.max").write_text(str(memory_max_mb * 1024 * 1024))
     (path / "memory.swap.max").write_text(str(swap_max_mb * 1024 * 1024))
     (path / "pids.max").write_text(str(tasks_max) if tasks_max > 0 else "max")
   except OSError as e:
-    _session_cgroup_degraded.log(log.warning, "session_cgroup_unavailable", str(e), path=str(path), error=str(e))
-    return None
+    raise SessionCgroupUnavailableError(
+        f"session cgroup slice {base.name} cannot take the limit files in {path}: {e}") from e
   return path
 
 
@@ -166,23 +205,52 @@ def read_memory_events(cgroup_dir: pathlib.Path) -> tuple[int, int] | None:
   return counts["max"], counts["oom_kill"]
 
 
-def make_session_cgroup_preexec(cgroup_dir: pathlib.Path | None) -> Callable[[], None] | None:
-  """preexec_fn moving the forked child into *cgroup_dir*, or None when cgroup control is off.
+@dataclasses.dataclass(frozen=True)
+class SessionCgroup:
+  """One spawn's handle on the session cgroup.
+
+  Carries the cgroup directory, the class that chose its slice, the slice's
+  OOM priority, the configured cap (for the report text), and the
+  ``memory.events`` counters captured before the spawn — the baseline the exit
+  attribution compares against.
+  """
+
+  path: pathlib.Path
+  resource_class: models.ResourceClass
+  oom_score_adj: int
+  memory_max_mb: int
+  events_before: tuple[int, int] | None
+
+  def classify_exit(self, returncode: int | None) -> str | None:
+    """Attribution verdict for an exited process of this spawn (see :func:`classify_cgroup_exit`)."""
+    return classify_cgroup_exit(returncode, self.events_before, read_memory_events(self.path), self.memory_max_mb)
+
+
+def make_session_cgroup_preexec(session_cgroup: SessionCgroup | None) -> Callable[[], None] | None:
+  """preexec_fn moving the forked child into its session cgroup and setting its OOM priority.
 
   Runs in the child between fork and exec: opens ``<cgroup>/cgroup.procs`` and
   writes ``0`` — the kernel convention that moves the calling process itself
-  into the cgroup. A failure here raises and fails the spawn loudly: the
-  directory was just created and verified writable by the parent, so an error
-  is a system-level anomaly, not a degraded mode.
+  into the cgroup — then writes the slice's positive ``oom_score_adj`` to
+  ``/proc/self/oom_score_adj``. A failure here raises and fails the spawn
+  loudly: the directory was just created and verified writable by the parent,
+  so an error is a system-level anomaly, not a degraded mode. None means
+  cgroup control is off for this spawn, and then no OOM priority is set either.
   """
-  if cgroup_dir is None:
+  if session_cgroup is None:
     return None
-  procs_path = str(cgroup_dir / "cgroup.procs")
+  procs_path = str(session_cgroup.path / "cgroup.procs")
+  oom_score_adj = str(session_cgroup.oom_score_adj).encode()
 
   def _preexec() -> None:
     fd = os.open(procs_path, os.O_WRONLY)
     try:
       os.write(fd, b"0")
+    finally:
+      os.close(fd)
+    fd = os.open("/proc/self/oom_score_adj", os.O_WRONLY)
+    try:
+      os.write(fd, oom_score_adj)
     finally:
       os.close(fd)
 
@@ -223,24 +291,6 @@ def compose_preexec(*preexecs: Callable[[], None] | None) -> Callable[[], None] 
   return _preexec
 
 
-@dataclasses.dataclass(frozen=True)
-class SessionCgroup:
-  """One spawn's handle on the session cgroup.
-
-  Carries the cgroup directory, the configured cap (for the report text), and
-  the ``memory.events`` counters captured before the spawn — the baseline the
-  exit attribution compares against.
-  """
-
-  path: pathlib.Path
-  memory_max_mb: int
-  events_before: tuple[int, int] | None
-
-  def classify_exit(self, returncode: int | None) -> str | None:
-    """Attribution verdict for an exited process of this spawn (see :func:`classify_cgroup_exit`)."""
-    return classify_cgroup_exit(returncode, self.events_before, read_memory_events(self.path), self.memory_max_mb)
-
-
 def classify_cgroup_exit(
     returncode: int | None,
     before: tuple[int, int] | None,
@@ -270,66 +320,85 @@ def classify_cgroup_exit(
 
 
 def prepare_session_cgroup(
-    session_id: str | None, *, memory_max_mb: int, swap_max_mb: int, tasks_max: int) -> SessionCgroup | None:
-  """Ensure the session's cgroup and snapshot its pre-spawn ``memory.events`` counters.
+    session_id: str | None,
+    resource_class: models.ResourceClass,
+    *,
+    memory_max_mb: int,
+    swap_max_mb: int,
+    tasks_max: int,
+) -> SessionCgroup | None:
+  """Ensure the session's cgroup under *resource_class*'s slice and snapshot its ``memory.events``.
 
-  Returns None when cgroup control is off for this spawn: *session_id* is None
-  (a spawn with no session home), the configured memory cap is 0, or the host
-  does not support user-owned cgroups — the spawn then proceeds exactly as before.
+  Returns None only when cgroup control is off for this spawn: *session_id* is
+  None (a spawn with no session home) or the configured memory cap is 0 — the
+  spawn then proceeds exactly as before. With control on, a slice that cannot
+  hold the cgroup raises :class:`SessionCgroupUnavailableError`.
   """
   if not session_id or memory_max_mb <= 0:
     return None
-  path = ensure_session_cgroup(session_id, memory_max_mb, swap_max_mb, tasks_max)
-  if path is None:
-    return None
-  return SessionCgroup(path=path, memory_max_mb=memory_max_mb, events_before=read_memory_events(path))
+  path = ensure_session_cgroup(session_id, resource_class, memory_max_mb, swap_max_mb, tasks_max)
+  return SessionCgroup(
+      path=path,
+      resource_class=resource_class,
+      oom_score_adj=SESSION_CGROUP_OOM_SCORE_ADJ[resource_class],
+      memory_max_mb=memory_max_mb,
+      events_before=read_memory_events(path))
 
 
 def cleanup_session_cgroup(session_id: str) -> bool:
-  """Remove the session's cgroup directory; True when removed.
+  """Remove the session's cgroup directory from every slice; True when one was removed.
 
-  rmdir succeeds only for an empty cgroup — a directory still holding live
-  processes stays, and the failure is logged at debug: the kernel reclaims the
-  empty directory naturally once its last member exits.
+  A session's directory lands under the slice its last spawn chose, and that
+  choice may have changed since; the retired app.slice is included so a
+  directory left by the pre-split server is cleared too. rmdir succeeds only
+  for an empty cgroup — a directory still holding live processes stays, and
+  the failure is logged at debug: the kernel reclaims the empty directory
+  naturally once its last member exits.
   """
-  path = session_cgroup_path(session_id)
-  try:
-    path.rmdir()
-  except FileNotFoundError:
-    return False
-  except OSError as e:
-    log.debug("session_cgroup_cleanup_retained", path=str(path), error=str(e))
-    return False
-  log.info("session_cgroup_removed", path=str(path))
-  return True
+  removed = False
+  name = session_cgroup_name(session_id)
+  for base in session_cgroup_slices():
+    path = pathlib.Path(base) / name
+    try:
+      path.rmdir()
+    except FileNotFoundError:
+      continue
+    except OSError as e:
+      log.debug("session_cgroup_cleanup_retained", path=str(path), error=str(e))
+      continue
+    log.info("session_cgroup_removed", path=str(path))
+    removed = True
+  return removed
 
 
 def sweep_stale_session_cgroups(sessions_dir: pathlib.Path) -> int:
   """Remove this home's leftover session cgroups from a previous server life at startup.
 
   A cgroup belongs to this home when its name is ``session_cgroup_name`` of a
-  session directory under *sessions_dir*. Any other entry under the app.slice
-  base stays: other homes' cgroups and unrelated scopes alike. Only empty directories
-  are removed; one still holding processes (a detached run outliving the
-  restart) is kept with a warning — its members must not be re-homed by force.
-  Returns the removed count.
+  session directory under *sessions_dir*. The walk covers both leaf slices and
+  the retired app.slice: processes that already run in app.slice stay there
+  until they exit, and their empty directory is reclaimed here. Any other
+  entry stays: other homes' cgroups and unrelated scopes alike. Only empty
+  directories are removed; one still holding processes (a detached run
+  outliving the restart) is kept with a warning — its members must not be
+  re-homed by force. Returns the removed count.
   """
-  base = pathlib.Path(CGROUP_V2_APP_SLICE)
-  try:
-    entries = list(base.iterdir())
-  except OSError as e:
-    log.info("session_cgroup_sweep_unavailable", base=CGROUP_V2_APP_SLICE, error=str(e))
-    return 0
   owned = {session_cgroup_name(session.name) for session in sessions_dir.iterdir() if session.is_dir()}
   removed: list[str] = []
-  for entry in entries:
-    if entry.name not in owned or not entry.is_dir():
-      continue
+  for base in session_cgroup_slices():
     try:
-      entry.rmdir()
-      removed.append(entry.name)
+      entries = list(pathlib.Path(base).iterdir())
     except OSError as e:
-      log.warning("session_cgroup_sweep_retained", path=str(entry), error=str(e))
+      log.info("session_cgroup_sweep_unavailable", base=base, error=str(e))
+      continue
+    for entry in entries:
+      if entry.name not in owned or not entry.is_dir():
+        continue
+      try:
+        entry.rmdir()
+        removed.append(entry.name)
+      except OSError as e:
+        log.warning("session_cgroup_sweep_retained", path=str(entry), error=str(e))
   if removed:
     log.info("session_cgroup_sweep_removed", count=len(removed), names=sorted(removed))
   return len(removed)
@@ -340,11 +409,11 @@ def log_session_cgroup_startup(memory_max_mb: int, swap_max_mb: int, tasks_max: 
   if memory_max_mb <= 0:
     log.info("session_cgroup_disabled", reason="server.session_memory_max_mb is 0")
     return
-  base = pathlib.Path(CGROUP_V2_APP_SLICE)
-  if not base.is_dir():
-    log.info("session_cgroup_disabled", reason=f"{CGROUP_V2_APP_SLICE} not present on this host")
-    return
-  if not os.access(base, os.W_OK):
-    log.info("session_cgroup_disabled", reason=f"{CGROUP_V2_APP_SLICE} not writable by this user")
-    return
+  for base in (CGROUP_V2_AGENTS_SLICE, CGROUP_V2_REPAIR_SLICE):
+    if not pathlib.Path(base).is_dir():
+      log.warning("session_cgroup_unavailable", reason=f"{base} not present on this host; spawns with a session fail")
+      return
+    if not os.access(base, os.W_OK):
+      log.warning("session_cgroup_unavailable", reason=f"{base} not writable by this user; spawns with a session fail")
+      return
   log.info("session_cgroup_enabled", memory_max_mb=memory_max_mb, swap_max_mb=swap_max_mb, tasks_max=tasks_max)

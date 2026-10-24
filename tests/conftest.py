@@ -274,6 +274,7 @@ from src.runtime import (  # noqa: E402
     triggers,
 )
 from src.runtime import backend_pool  # noqa: E402
+from src.runtime import sidebar_state  # noqa: E402
 from src.runtime import worker as worker_module  # noqa: E402
 from src.runtime.agent_process import base as backend_base  # noqa: E402
 from src.backends.antigravity import antigravity_cli  # noqa: E402
@@ -2434,6 +2435,18 @@ def pidfd_open_available() -> None:
     pytest.skip("pidfd not supported on this host (not even via syscall)")
 
 
+def make_cli_config(tmp_path: pathlib.Path) -> mock.MagicMock:
+  """A config stand-in for a CLI main() call: the server port and base URL it reads, a sessions dir
+  under *tmp_path*, and an empty access key planted so no credentials file is read."""
+  cfg = mock.MagicMock()
+  cfg.server.port = 9443
+  cfg.server_base_url = "http://localhost:9443"
+  stub_credentials({"charliebot": {"access_key": ""}})
+  cfg.sessions_dir = tmp_path / "sessions"
+  cfg.sessions_dir.mkdir(parents=True, exist_ok=True)
+  return cfg
+
+
 def fake_cli_cfg(monkeypatch: pytest.MonkeyPatch, sessions_dir: pathlib.Path) -> None:
   """Point the CLI HTTP layer at a fake config so tests never touch a real server."""
   stub_credentials({"charliebot": {"access_key": ""}})
@@ -2589,6 +2602,31 @@ def reset_config_caches() -> None:
   cron_loader._cron_snapshot = cron_loader._CronSnapshot()
 
 
+def reset_backend_pool_state() -> None:
+  """Clear the pool's rotation position and every cooldown; both live in process memory."""
+  with backend_pool._lock:
+    backend_pool._position = 0
+    backend_pool._cooling_until.clear()
+
+
+def reset_sidebar_state() -> None:
+  """Clear the sidebar's dirty set, snapshot, probe signatures, poll counter and derived maps."""
+  sidebar_state._dirty.clear()
+  sidebar_state._snapshot.clear()
+  sidebar_state._probe_signatures.clear()
+  sidebar_state._poll_count = 0
+  sidebar_state._derived_generation = 0
+  sidebar_state._derived_maps.clear()
+
+
+def reset_claude_account_readings() -> None:
+  """Drop the process-local Claude account readings: rate-limit, panel, auth-failure and login-notified state."""
+  claude_accounts._event_readings.clear()
+  claude_accounts._panel_readings.clear()
+  claude_accounts._auth_failures.clear()
+  claude_accounts._login_notified.clear()
+
+
 def stub_credentials(sections: dict[str, dict[str, str | int]]) -> None:
   """Plant in-memory credentials for get_credentials(): the given sections become the cached
   Credentials, stamped with the current credentials.yaml fingerprint, so the answer comes from
@@ -2612,9 +2650,9 @@ def agent_headers(session_id: str, run_id: str) -> dict[str, str]:
 @pytest.fixture(autouse=True)
 def _reset_backend_pool() -> Iterator[None]:
   """The pool's rotation and cooldowns are process memory; each test starts from a fresh rotation."""
-  backend_pool.reset_for_tests()
+  reset_backend_pool_state()
   yield
-  backend_pool.reset_for_tests()
+  reset_backend_pool_state()
 
 
 def _reset_thinking_state() -> None:
@@ -2671,11 +2709,13 @@ def _disk_headroom_off_host(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture(autouse=True)
 def _session_cgroup_base_off_host(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> None:
-  """The session-cgroup base points at a path that does not exist, so no test creates a cgroup under the host's
-  delegated app.slice. A spawn then degrades to no cgroup, as on a host without delegation; a test that needs a
-  base builds one under its own temp dir."""
-  missing = tmp_path_factory.mktemp("session-cgroup-base") / "app.slice"
-  monkeypatch.setattr("src.infra.process.CGROUP_V2_APP_SLICE", str(missing))
+  """The session-cgroup slices point at paths that do not exist, so no test creates a cgroup under the host's
+  delegated slices. A spawn then fails with SessionCgroupUnavailableError, as on a host whose slices are not
+  installed; a test that needs a slice builds one under its own temp dir."""
+  missing = tmp_path_factory.mktemp("session-cgroup-base")
+  monkeypatch.setattr("src.infra.process.CGROUP_V2_AGENTS_SLICE", str(missing / "charliebot-agents.slice"))
+  monkeypatch.setattr("src.infra.process.CGROUP_V2_REPAIR_SLICE", str(missing / "charliebot-repair.slice"))
+  monkeypatch.setattr("src.infra.process.CGROUP_V2_APP_SLICE", str(missing / "app.slice"))
 
 
 def _guarded_get_config(

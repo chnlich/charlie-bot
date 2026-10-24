@@ -84,7 +84,6 @@ def lifespan_env(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch):
   """
   import server as server_module
   from src.features.cron import scheduler as scheduler_module
-  from src.features.voice import service as voice_service
   from src.infra import config
   from src.runtime.hooks import usage_sources
 
@@ -97,7 +96,6 @@ def lifespan_env(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch):
 
   monkeypatch.setattr(server_module.config, "get_config", lambda: cfg)
   monkeypatch.setattr(server_module, "_run_task_recovery", _AsyncStub())
-  monkeypatch.setattr(voice_service, "_provision_speech_models", lambda cfg: None)
   monkeypatch.setattr(server_module.process, "log_session_cgroup_startup", lambda *a, **k: None)
   monkeypatch.setattr(server_module.process, "sweep_stale_session_cgroups", lambda *a, **k: None)
   monkeypatch.setattr(scheduler_module, "Scheduler", _StubScheduler)
@@ -189,7 +187,6 @@ _SHUTDOWN_TIMING_FIELDS = (
     "discord_ms",
     "host_auth_ms",
     "scheduler_ms",
-    "speech_ms",
     "http_client_ms",
     "ws_close_ms",
     "merge_pool_ms",

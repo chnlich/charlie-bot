@@ -19,6 +19,7 @@ import sys
 import time
 
 import pytest
+import systemd_stubs
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 LAUNCHER = ROOT / "scripts" / "start-server.sh"
@@ -67,6 +68,7 @@ def test_launcher_tee_outlives_sigint_and_records_the_exit_line(tmp_path: pathli
   bin_dir.mkdir()
   (bin_dir / "uv").write_text(FAKE_UV, encoding="utf-8")
   (bin_dir / "uv").chmod(0o755)
+  systemd_stubs.install(bin_dir)
   log_dir = tmp_path / "logs"
 
   env = os.environ.copy()
@@ -174,6 +176,7 @@ def _run_launcher(tmp_path: pathlib.Path,
   uv = bin_dir / "uv"
   uv.write_text(FAKE_UV_RECORDING, encoding="utf-8")
   uv.chmod(0o755)
+  systemd_stubs.install(bin_dir)
   log_dir = tmp_path / "logs"
   env = os.environ.copy()
   env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"

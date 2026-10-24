@@ -71,6 +71,7 @@ class LaunchContext:
   record_account: Callable[[str], Awaitable[None]]  # persist the account label on the session
   context_state: Callable[[], Awaitable[tuple[int | None,
                                               datetime.datetime | None]]]  # (context tokens, last request time)
+  run_id: str | None = None  # the task-tree Run id, when the turn belongs to a Run
 
 
 @dataclasses.dataclass(frozen=True)

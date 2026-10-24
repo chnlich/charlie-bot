@@ -185,6 +185,11 @@ async def _run(
   login = tmp_path / "login"
   _write_transcript(login, "uuid-3", cost_states=cost_states)
   captured = _install_fake_exec(monkeypatch, proc)
+  # These tests exercise the command line, not cgroup placement: cgroup control off keeps the
+  # spawn independent of the host's slices.
+  no_cgroup_cfg = _cfg(tmp_path)
+  no_cgroup_cfg.server.session_memory_max_mb = 0
+  monkeypatch.setattr(config, "get_config", lambda: no_cgroup_cfg)
   events: list[dict] = []
 
   async def persist(event: dict) -> None:

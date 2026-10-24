@@ -2,7 +2,9 @@
 
 use std::fs::File;
 use std::io::{BufWriter, Write};
+use std::num::NonZeroU64;
 use std::path::Path;
+use std::sync::OnceLock;
 
 /// Write `text` to `path` through a uniquely named sibling `.<name>.<uuid hex>.tmp` swapped in by
 /// `rename`, so a reader sees the old content or the new, never a partial write. The sibling is
@@ -51,4 +53,19 @@ pub fn atomic_write_stream<E: From<std::io::Error>>(
     tracing::warn!(path = %temporary.display(), error = %error, "atomic_write_cleanup_failed");
   }
   result
+}
+
+/// The OS page size in bytes: the granularity at which Python's mmap walks fault a file in, so a backward walk that
+/// reads page-aligned spans touches the same pages Python does.
+pub fn page_bytes() -> u64 {
+  static PAGE_BYTES: OnceLock<NonZeroU64> = OnceLock::new();
+  PAGE_BYTES
+    .get_or_init(|| {
+      let page_bytes = nix::unistd::sysconf(nix::unistd::SysconfVar::PAGE_SIZE)
+        .expect("sysconf(_SC_PAGESIZE) must succeed")
+        .expect("sysconf(_SC_PAGESIZE) must report a page size");
+      let page_bytes = u64::try_from(page_bytes).expect("sysconf(_SC_PAGESIZE) must return a positive page size");
+      NonZeroU64::new(page_bytes).expect("sysconf(_SC_PAGESIZE) must return a positive page size")
+    })
+    .get()
 }

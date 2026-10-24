@@ -57,7 +57,7 @@ mod tests {
   use charliebot_registry::backend::Env;
 
   use super::*;
-  use crate::backends::claude_code::GATEWAY_CUSTOM_HEADERS_ENV;
+  use crate::backends::claude_code::{GATEWAY_CUSTOM_HEADERS_ENV, GATEWAY_EXTRA_BODY_ENV};
 
   fn option(type_fields: &str) -> BackendOption {
     BackendOption {
@@ -123,5 +123,26 @@ mod tests {
       .prepare_env(Env::from([(GATEWAY_CUSTOM_HEADERS_ENV.to_string(), "inherited-value".to_string())]))
       .unwrap();
     assert!(!env.contains_key(GATEWAY_CUSTOM_HEADERS_ENV));
+  }
+
+  // Python: tests/test_anthropic_compatible_backend.py::test_factory_routes_extra_body
+  #[test]
+  fn factory_routes_extra_body() {
+    let endpoint = "api_base: http://localhost:8123/api/anthropic-proxy\ncontext_window: 409600\n";
+    let backend = build(&format!("{endpoint}extra_body:\n  cache:\n    no-store: true\n    no-cache: true\n")).unwrap();
+    let env = backend.prepare_env(Env::new()).unwrap();
+    assert_eq!(
+      serde_json::from_str::<serde_json::Value>(&env[GATEWAY_EXTRA_BODY_ENV]).unwrap(),
+      serde_json::json!({"cache": {"no-store": true, "no-cache": true}})
+    );
+  }
+
+  // Python: tests/test_anthropic_compatible_backend.py::test_factory_omits_extra_body_when_option_has_none_and_parent_sets_it
+  #[test]
+  fn factory_omits_extra_body_when_the_option_has_none_and_the_parent_sets_it() {
+    let backend = build("api_base: http://localhost:8123/api/anthropic-proxy\ncontext_window: 409600\n").unwrap();
+    let env =
+      backend.prepare_env(Env::from([(GATEWAY_EXTRA_BODY_ENV.to_string(), "inherited-value".to_string())])).unwrap();
+    assert!(!env.contains_key(GATEWAY_EXTRA_BODY_ENV));
   }
 }

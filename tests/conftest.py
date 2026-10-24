@@ -1104,6 +1104,11 @@ def build_task_tree(cfg: Any, blocks: SessionBlocks) -> task_sessions.TaskTreeMa
   return blocks.tree
 
 
+def child_reports(tree: task_sessions.TaskTreeManager, session_id: str) -> list[dict]:
+  """Every child report on the node, in delivery order."""
+  return [e for e in tree.fact_history(session_id) if e.get("type") == ET.CHILD_REPORT]
+
+
 def build_execution_adapter(
     cfg: Any, blocks: SessionBlocks, tree: task_sessions.TaskTreeManager) -> task_execution.TaskExecutionAdapter:
   """A task execution adapter over *blocks* and *tree*."""

@@ -114,16 +114,44 @@ def systemctl(env: dict[str, str], *args: str) -> subprocess.CompletedProcess[st
   return subprocess.run(["systemctl", "--user", *args], env=env, capture_output=True, text=True, check=False)
 
 
+def own_cgroup() -> pathlib.PurePosixPath:
+  """This process's cgroup, as the unified hierarchy's own /proc/self/cgroup line reports it."""
+  lines = pathlib.Path("/proc/self/cgroup").read_text(encoding="ascii").splitlines()
+  return pathlib.PurePosixPath(next(line for line in lines if line.startswith("0::")).partition("::")[2])
+
+
+def may_move_into(destination: pathlib.Path) -> bool:
+  """Whether cgroup v2 lets this process move a child into *destination*.
+
+  The kernel checks write access on the ``cgroup.procs`` of the source's and the
+  destination's common ancestor. A process in a root-owned cgroup shares only the
+  root with the user manager's slices, and the root's ``cgroup.procs`` is
+  root-owned, so the move there fails with EACCES.
+  """
+  root = pathlib.Path("/sys/fs/cgroup")
+  shared = pathlib.PurePosixPath("/")
+  for source_part, target_part in zip(own_cgroup().relative_to("/").parts, destination.relative_to(root).parts,
+                                      strict=False):
+    if source_part != target_part:
+      break
+    shared /= source_part
+  return os.access(root / shared.relative_to("/") / "cgroup.procs", os.W_OK)
+
+
 @pytest.fixture
 def transient_slices(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> dict[str, pathlib.Path]:
   """Two live ``cbtest-`` slices under the user manager, stopped and removed at teardown.
 
   A host without a reachable user systemd manager skips: the slices are the host-local
-  resource this test needs.
+  resource this test needs. A process running outside that manager's subtree skips too:
+  the slices are useless to it, because cgroup v2 refuses the move out of a root-owned
+  cgroup such as the system-service cgroup a CI job runs in.
   """
   env = systemd_env()
   if env is None or shutil.which("systemd-run") is None:
     pytest.skip("no systemd user manager bus on this host")
+  if not may_move_into(user_service_dir()):
+    pytest.skip("this process's cgroup is outside the user manager's subtree, so cgroup v2 refuses the move")
   token = uuid.uuid4().hex[:8]
   names = (f"cbtest-{token}-agents.slice", f"cbtest-{token}-repair.slice")
   holders: list[subprocess.Popen[str]] = []

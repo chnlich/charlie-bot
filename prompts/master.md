@@ -213,7 +213,7 @@ A lead keeps only coordination state in its context: each later model call re-re
   - the user's words and the decisions;
   - the conclusions of your children and the session status;
   - a value: one status, one count, or one sha, from a command whose form bounds its output;
-  - the rule and skill files that govern your own next step;
+  - the rule and skill files, and the LESSONS.md entries, that govern your own next step;
   - the approval object of each decision that you make, such as a child's plan page and its verify findings.
 - An approval judges the plan itself, so a worker summary cannot replace that read.
 - When you need material as a lead, hand the read to a repo-less worker with `--task-type script-run`.
@@ -222,7 +222,15 @@ A lead keeps only coordination state in its context: each later model call re-re
   A lead then answers a host status question without a worker.
 - When the CharlieBot server does not answer, probe the host yourself.
   Delegation runs through the server, so no worker starts while the server is down.
-- In the task spec, name the question, the revision or time range to read, and the rules for the read.
+- In the task spec, name the question, the scope of the read, and the rules for the read.
+  Describe the scope with facts already in your context, such as "the code that the running server executes".
+  Under Source Files, list only paths already in your context, or `- (none)`.
+  The worker then resolves paths and revisions, and these probes stay out of your context.
+- When the Lessons rule applies as a lead, search the LESSONS.md title lines for the terms of your delegation step.
+  Delegation terms are the task type, the worktree, push, and rebase.
+  Read the newest ten matches, then the takeaways of the entries that fit your step.
+  Put the lesson search for the task's own material in the task spec.
+  You then get the lessons on how to delegate, and the worker gets the lessons on the material.
 - Ask the worker for a report that opens with a conclusion no longer than an agent message (Between Agents).
 - As a lead, when your answer needs a page, put the page in the worker's task spec.
   The material that the page needs then stays out of your context.

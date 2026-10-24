@@ -141,7 +141,7 @@ by the run id its stop request captured (see `rust/parity/README.md`).
 | GET, HEAD | `/static/features/diag` | foundation | ported |  |
 | GET, HEAD | `/static/features/slack` | foundation | ported |  |
 | GET, HEAD | `/static/features/discord` | foundation | ported |  |
-| GET, HEAD | `/static/features/disk_sweep` | foundation | todo | Registered for `src/features/disk_sweep`, which has no `static/` directory at the baseline. |
+| GET, HEAD | `/static/features/disk_sweep` | foundation | ported | `rust/crates/charliebot-server/src/main.rs:276` mounts every registered package, matching Python's empty `disk_sweep/static` mount. |
 | GET, HEAD | `/static/features/web_reply` | foundation | ported |  |
 | GET, HEAD | `/static/features/host_auth` | foundation | ported |  |
 | GET, HEAD | `/static/features/diff_view` | foundation | ported |  |
@@ -626,7 +626,7 @@ Each of the 30 commits in `git rev-list --no-merges 3c4591bad..d1f7e3ba6 -- src 
 
 | Main commit | Change | Class | Note |
 | --- | --- | --- | --- |
-| d5b194146 | add safe cleanup for old task paths | unported | Adds the `disk-sweep` CLI and scheduled handler (`src/features/disk_sweep/cli.py:11-28`, `src/features/disk_sweep/__init__.py:5-6`, `sweep.py:806-812`), plus `paths.scratch_dir` (`src/infra/config.py:97-105`) and the static mount (`src/app/registrations.py:26`). No parity scenario drives the sweep. Rust target: a new `rust/crates/features/disk_sweep` module and `rust/crates/charliebot-sched/src/cron/scheduler.rs`. |
+| d5b194146 | add safe cleanup for old task paths | in Rust | Ports the scheduled `disk_sweep` handler and `paths.scratch_dir`; the Python CLI stays in place. The package mount remains empty like Python's. No parity scenario drives the sweep. Rust implementation: `rust/crates/features/disk_sweep/src/lib.rs:16` and `rust/crates/features/disk_sweep/src/sweep.rs:129`. |
 | b3a121bf0 | drop two module constants nothing reads | no behavior | Removes two unread module constants from `src/features/memory/memory_proposal.py` and `src/infra/pytest_sandbox.py`. |
 | 7fa53b91b | drop the deleted speech service from the preload docstring | no behavior | Changes only the docstring of `src/features/usage/api.py`; the service behavior is tracked by `4c3bd3fda`, owned by `rust/crates/features/voice`. |
 | 8cbc40276 | drop the dead transcription registry setter | no behavior | Removes an unused setter in `src/features/voice/transcription/registry.py`; the local transcription gap is tracked by `4c3bd3fda`, owned by `rust/crates/features/voice`. |

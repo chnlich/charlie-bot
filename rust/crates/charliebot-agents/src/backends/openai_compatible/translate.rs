@@ -14,8 +14,18 @@ use super::pyvalue::{
 /// One Anthropic stream event: its name, and the data object the SSE frame carries after `type`.
 pub type Event = (&'static str, Value);
 
+/// Whether `api_base` names the Google Gemini endpoint that uses Gemini stream rules.
+pub fn gemini_stream_rules(api_base: &str) -> Result<bool, String> {
+  let url = reqwest::Url::parse(api_base).map_err(|error| error.to_string())?;
+  Ok(url.host_str() == Some("generativelanguage.googleapis.com"))
+}
+
 /// `anthropic_to_openai_chat_request(payload, upstream_model)`: the chat completions body for `payload`.
-pub fn anthropic_to_openai_chat_request(payload: &Value, upstream_model: &str) -> PyResult<Value> {
+pub fn anthropic_to_openai_chat_request(
+  payload: &Value,
+  upstream_model: &str,
+  _gemini_stream_rules: bool,
+) -> PyResult<Value> {
   let messages = match get(payload, "messages")? {
     Some(Value::Array(messages)) => messages,
     _ => return value_error("messages must be a list"),
@@ -299,7 +309,7 @@ pub struct OpenAiChatStream {
 }
 
 impl OpenAiChatStream {
-  pub fn new(model: &str) -> Self {
+  pub fn new(model: &str, _gemini_stream_rules: bool) -> Self {
     Self {
       message_id: new_message_id(),
       model: model.to_string(),
@@ -451,7 +461,7 @@ mod tests {
   use crate::backends::openai_compatible::pyvalue::Fault;
 
   fn request(payload: Value) -> PyResult<Value> {
-    anthropic_to_openai_chat_request(&payload, "upstream-model")
+    anthropic_to_openai_chat_request(&payload, "upstream-model", false)
   }
 
   #[test]
@@ -464,7 +474,7 @@ mod tests {
 
   #[test]
   fn an_unhashable_call_index_is_a_type_error() {
-    let mut stream = OpenAiChatStream::new("model");
+    let mut stream = OpenAiChatStream::new("model", false);
     let chunk = json!({"choices": [{"delta": {"tool_calls": [{"index": [0], "id": "c", "function": {"name": "n"}}]}}]});
     assert_eq!(
       stream.events_for_chunk(&chunk).unwrap_err(),
@@ -508,7 +518,7 @@ mod tests {
       "stream": true,
     });
 
-    let converted = anthropic_to_openai_chat_request(&payload, "deepseek-ai/DeepSeek-V4-Pro").unwrap();
+    let converted = anthropic_to_openai_chat_request(&payload, "deepseek-ai/DeepSeek-V4-Pro", false).unwrap();
 
     assert_eq!(converted["model"], "deepseek-ai/DeepSeek-V4-Pro");
     assert_eq!(converted["stream"], true);
@@ -551,7 +561,7 @@ mod tests {
 
   #[test]
   fn the_stream_translator_emits_text_and_tool_events_with_the_stop_reason() {
-    let mut stream = OpenAiChatStream::new("deepseek-v4-pro");
+    let mut stream = OpenAiChatStream::new("deepseek-v4-pro", false);
     let mut events = stream.start_events();
     events.extend(stream.events_for_chunk(&json!({"choices": [{"delta": {"content": "Checking"}}]})).unwrap());
     events.extend(
@@ -601,5 +611,333 @@ mod tests {
     assert_eq!(events[8].1["delta"]["stop_reason"], "tool_use");
     assert_eq!(events[8].1["usage"]["input_tokens"], 8);
     assert_eq!(events[8].1["usage"]["output_tokens"], 3);
+  }
+
+  #[test]
+  fn test_stream_tool_call_without_index_is_rejected() {
+    let mut stream = OpenAiChatStream::new("openai-model", false);
+    let result = stream.events_for_chunk(&json!({
+      "choices": [{"delta": {"tool_calls": [{"id": "call-1", "function": {"name": "Bash", "arguments": "{}"}}]}}],
+    }));
+    assert_eq!(result.unwrap_err(), Fault::Value("streaming tool_call missing index".to_string()));
+  }
+
+  #[test]
+  fn test_stream_tool_call_without_index_uses_zero_for_idless_continuations() {
+    let mut stream = OpenAiChatStream::new("gemini-model", true);
+    let mut events = Vec::new();
+    let first = stream.events_for_chunk(&json!({
+      "choices": [{"delta": {"tool_calls": [{"id": "call-1", "function": {"name": "Bash", "arguments": "{"}}]}}],
+    }));
+    assert!(first.is_ok(), "Gemini's index-less delta should be accepted: {first:?}");
+    events.extend(first.unwrap());
+    let continuation = stream.events_for_chunk(&json!({
+      "choices": [{"delta": {"tool_calls": [{"function": {"arguments": "\"cmd\":\"pwd\"}"}}]}}],
+    }));
+    assert!(continuation.is_ok(), "an id-less delta should continue index 0: {continuation:?}");
+    events.extend(continuation.unwrap());
+    events.extend(stream.finish_events().unwrap());
+
+    let tool_starts: Vec<Value> = events
+      .iter()
+      .filter(|(name, data)| *name == "content_block_start" && data["content_block"]["type"] == "tool_use")
+      .map(|(_, data)| data["content_block"].clone())
+      .collect();
+    let arguments: Vec<Value> = events
+      .iter()
+      .filter(|(name, data)| *name == "content_block_delta" && data["delta"]["type"] == "input_json_delta")
+      .map(|(_, data)| data["delta"]["partial_json"].clone())
+      .collect();
+    assert_eq!(tool_starts, vec![json!({"type": "tool_use", "id": "call-1", "name": "Bash", "input": {}})]);
+    assert_eq!(arguments, vec![json!("{"), json!("\"cmd\":\"pwd\"}")]);
+  }
+
+  #[test]
+  fn test_claude_code_request_shape_uses_inline_system_and_google_schema() {
+    let payload = json!({
+      "model": "gemini-model",
+      "system": [{"type": "text", "text": "Use the available tools."}],
+      "messages": [
+        {"role": "user", "content": [
+          {"type": "text", "text": "Attribution reminder."},
+          {"type": "text", "text": "Run pwd with the Bash tool."},
+        ]},
+        {"role": "system", "content": [{"type": "text", "text": "# Environment\nPrimary working directory: /tmp/run"}]},
+      ],
+      "thinking": {"type": "adaptive"},
+      "output_config": {"effort": "medium"},
+      "tools": [{
+        "name": "Bash",
+        "description": "Run a shell command",
+        "input_schema": {
+          "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "cmd": {"type": "string", "const": "pwd"},
+            "count": {"type": "number", "exclusiveMinimum": 0},
+            "choice": {"type": "string", "allOf": [{"type": "string"}]},
+          },
+          "required": ["cmd"],
+        },
+      }],
+      "stream": true,
+    });
+    let gemini_rules = gemini_stream_rules("https://generativelanguage.googleapis.com/v1beta/openai/").unwrap();
+    assert!(gemini_rules);
+    assert!(!gemini_stream_rules("https://openai.example/v1").unwrap());
+    let converted = anthropic_to_openai_chat_request(&payload, "gemini-model", gemini_rules);
+    assert!(converted.is_ok(), "the Claude Code request should translate: {converted:?}");
+    let converted = converted.unwrap();
+
+    assert_eq!(
+      converted["messages"][0],
+      json!({
+        "role": "system",
+        "content": "Use the available tools.\n\n# Environment\nPrimary working directory: /tmp/run",
+      })
+    );
+    assert_eq!(
+      converted["messages"][1],
+      json!({
+        "role": "user",
+        "content": "Attribution reminder.Run pwd with the Bash tool.",
+      })
+    );
+    assert!(converted.get("thinking").is_none());
+    assert!(converted.get("output_config").is_none());
+    assert_eq!(
+      converted["tools"][0]["function"]["parameters"],
+      json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "cmd": {"type": "string"},
+          "count": {"type": "number"},
+          "choice": {"type": "string"},
+        },
+        "required": ["cmd"],
+      })
+    );
+  }
+
+  #[test]
+  fn test_stream_tool_signatures_round_trip_for_calls_sharing_an_index() {
+    let mut stream = OpenAiChatStream::new("gemini-model", true);
+    let mut events = stream.start_events();
+    events.extend(
+      stream
+        .events_for_chunk(&json!({
+          "choices": [{"delta": {"tool_calls": [{
+            "index": 0,
+            "id": "call-a",
+            "type": "function",
+            "function": {"name": "Bash", "arguments": "{\"cmd\":"},
+          }]}}],
+        }))
+        .unwrap(),
+    );
+    events.extend(
+      stream
+        .events_for_chunk(&json!({
+          "choices": [{"delta": {"tool_calls": [
+            {
+              "index": 0,
+              "extra_content": {"google": {"thought_signature": "SIG-A"}},
+              "function": {"arguments": "\"pwd\"}"},
+            },
+            {
+              "index": 0,
+              "id": "call-b",
+              "type": "function",
+              "extra_content": {"google": {"thought_signature": "SIG-B"}},
+              "function": {"name": "Read", "arguments": "{\"file_path\":\"image.png\"}"},
+            },
+          ]}}],
+        }))
+        .unwrap(),
+    );
+    events.extend(stream.finish_events().unwrap());
+
+    let mut blocks: Vec<(u64, Value, String)> = Vec::new();
+    for (name, data) in events {
+      if name == "content_block_start" && data["content_block"]["type"] == "tool_use" {
+        blocks.push((data["index"].as_u64().unwrap(), data["content_block"].clone(), String::new()));
+      } else if name == "content_block_delta" && data["delta"]["type"] == "input_json_delta" {
+        let block_index = data["index"].as_u64().unwrap();
+        let (_, _, arguments) = blocks.iter_mut().find(|(index, _, _)| *index == block_index).unwrap();
+        arguments.push_str(data["delta"]["partial_json"].as_str().unwrap());
+      }
+    }
+    let ids: Vec<Value> = blocks.iter().map(|(_, block, _)| block["id"].clone()).collect();
+    assert_eq!(ids, vec![json!("call-a"), json!("call-b")]);
+    let tool_blocks: Vec<Value> = blocks
+      .into_iter()
+      .map(|(_, mut block, arguments)| {
+        block["input"] = serde_json::from_str(&arguments).unwrap();
+        block
+      })
+      .collect();
+    let converted = anthropic_to_openai_chat_request(
+      &json!({"messages": [{"role": "assistant", "content": tool_blocks}]}),
+      "gemini-model",
+      true,
+    )
+    .unwrap();
+    let calls = &converted["messages"][0]["tool_calls"];
+    assert_eq!(calls[0]["function"]["name"], "Bash");
+    assert_eq!(calls[0]["function"]["arguments"], "{\"cmd\":\"pwd\"}");
+    assert_eq!(calls[0]["extra_content"]["google"]["thought_signature"], "SIG-A");
+    assert_eq!(calls[1]["function"]["name"], "Read");
+    assert_eq!(calls[1]["function"]["arguments"], "{\"file_path\":\"image.png\"}");
+    assert_eq!(calls[1]["extra_content"]["google"]["thought_signature"], "SIG-B");
+  }
+
+  #[test]
+  fn test_non_stream_tool_signatures_round_trip_to_next_request() {
+    let response = json!({
+      "choices": [{"finish_reason": "tool_calls", "message": {"tool_calls": [{
+        "id": "call-1",
+        "type": "function",
+        "function": {"name": "Bash", "arguments": "{\"cmd\":\"pwd\"}"},
+        "extra_content": {"google": {"thought_signature": "SIG-1"}},
+      }]}}],
+    });
+    let anthropic_response = openai_chat_response_to_anthropic(&response, "gemini-model").unwrap();
+    let converted_request = request(json!({
+      "messages": [{"role": "assistant", "content": anthropic_response["content"]}],
+    }))
+    .unwrap();
+    assert_eq!(
+      converted_request["messages"][0]["tool_calls"][0]["extra_content"],
+      json!({"google": {"thought_signature": "SIG-1"}}),
+    );
+  }
+
+  #[test]
+  fn test_user_and_tool_result_images_convert_to_openai_image_url_parts() {
+    let image_block = json!({
+      "type": "image",
+      "source": {"type": "base64", "media_type": "image/png", "data": "AQID"},
+    });
+    let image_part = json!({
+      "type": "image_url",
+      "image_url": {"url": "data:image/png;base64,AQID"},
+    });
+    let user_request = request(json!({
+      "messages": [{"role": "user", "content": [
+        {"type": "text", "text": "What is in this image?"},
+        image_block.clone(),
+      ]}],
+    }));
+    assert!(user_request.is_ok(), "user image should translate: {user_request:?}");
+    assert_eq!(
+      user_request.unwrap()["messages"][0]["content"],
+      json!([
+        {"type": "text", "text": "What is in this image?"},
+        image_part.clone(),
+      ])
+    );
+
+    let tool_result_request = request(json!({
+      "messages": [{"role": "user", "content": [{
+        "type": "tool_result",
+        "tool_use_id": "call-1",
+        "content": [{"type": "text", "text": "Image loaded."}, image_block],
+      }]}],
+    }));
+    assert!(tool_result_request.is_ok(), "tool result image should translate: {tool_result_request:?}");
+    let tool_result_request = tool_result_request.unwrap();
+    assert_eq!(
+      tool_result_request["messages"][0],
+      json!({
+        "role": "tool",
+        "tool_call_id": "call-1",
+        "content": "Image loaded.",
+      })
+    );
+    assert_eq!(tool_result_request["messages"][1], json!({"role": "user", "content": [image_part]}));
+  }
+
+  #[test]
+  fn test_gemini_stream_index_less_delta_with_signature_yields_one_tool_block() {
+    let mut stream = OpenAiChatStream::new("gemini-model", true);
+    let result = stream.events_for_chunk(&json!({
+      "choices": [{"delta": {"tool_calls": [{
+        "extra_content": {"google": {"thought_signature": "EqMDCqAD..."}},
+        "function": {
+          "arguments": "{\"description\":\"Print working directory\",\"command\":\"pwd\"}",
+          "name": "Bash",
+        },
+        "id": "call_371733",
+        "type": "function",
+      }]}}],
+    }));
+    assert!(result.is_ok(), "Gemini's index-less signed call should translate: {result:?}");
+    let mut events = result.unwrap();
+    events.extend(stream.finish_events().unwrap());
+    let tool_starts: Vec<Value> = events
+      .iter()
+      .filter(|(name, data)| *name == "content_block_start" && data["content_block"]["type"] == "tool_use")
+      .map(|(_, data)| data["content_block"].clone())
+      .collect();
+    let arguments: Vec<Value> = events
+      .iter()
+      .filter(|(name, data)| *name == "content_block_delta" && data["delta"]["type"] == "input_json_delta")
+      .map(|(_, data)| data["delta"]["partial_json"].clone())
+      .collect();
+    assert_eq!(
+      tool_starts,
+      vec![json!({
+        "type": "tool_use",
+        "id": "call_371733",
+        "name": "Bash",
+        "input": {},
+        "extra_content": {"google": {"thought_signature": "EqMDCqAD..."}},
+      })]
+    );
+    assert_eq!(arguments, vec![json!("{\"description\":\"Print working directory\",\"command\":\"pwd\"}")]);
+  }
+
+  #[test]
+  fn test_gemini_stream_two_index_less_calls_split_by_id() {
+    let mut stream = OpenAiChatStream::new("gemini-model", true);
+    let chunks = [
+      json!({"choices": [{"delta": {"tool_calls": [{
+        "id": "call-a",
+        "function": {"name": "Bash", "arguments": "{\"cmd\":"},
+      }]}}]}),
+      json!({"choices": [{"delta": {"tool_calls": [{"function": {"arguments": "\"pwd\"}"}}]}}]}),
+      json!({"choices": [{"delta": {"tool_calls": [{
+        "id": "call-b",
+        "function": {"name": "Read", "arguments": "{\"file_path\":\"image.png\"}"},
+      }]}}]}),
+    ];
+    let mut events = Vec::new();
+    for chunk in chunks {
+      let result = stream.events_for_chunk(&chunk);
+      assert!(result.is_ok(), "Gemini's index-less tool delta should translate: {result:?}");
+      events.extend(result.unwrap());
+    }
+    events.extend(stream.finish_events().unwrap());
+
+    let tool_starts: Vec<Value> = events
+      .iter()
+      .filter(|(name, data)| *name == "content_block_start" && data["content_block"]["type"] == "tool_use")
+      .map(|(_, data)| data["content_block"].clone())
+      .collect();
+    let arguments: Vec<Value> = events
+      .iter()
+      .filter(|(name, data)| *name == "content_block_delta" && data["delta"]["type"] == "input_json_delta")
+      .map(|(_, data)| data["delta"]["partial_json"].clone())
+      .collect();
+    assert_eq!(
+      tool_starts,
+      vec![
+        json!({"type": "tool_use", "id": "call-a", "name": "Bash", "input": {}}),
+        json!({"type": "tool_use", "id": "call-b", "name": "Read", "input": {}}),
+      ]
+    );
+    assert_eq!(arguments, vec![json!("{\"cmd\":"), json!("\"pwd\"}"), json!("{\"file_path\":\"image.png\"}")]);
   }
 }

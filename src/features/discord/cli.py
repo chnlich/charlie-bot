@@ -88,10 +88,7 @@ def _validate_read_limit(limit: int) -> int:
 
 
 def _cmd_reply(args: argparse.Namespace) -> None:
-  session_id = common.resolve_session_id(args.session)
-  text = common.read_reply_text(args.file)
-  result = common.post_internal_api("/api/internal/discord/reply", {"session_id": session_id, "text": text})
-  common.print_json(result, indent=None, file=sys.stdout)
+  common.post_reply("/api/internal/discord/reply", session=args.session, file_arg=args.file)
 
 
 def _cmd_read(args: argparse.Namespace) -> None:

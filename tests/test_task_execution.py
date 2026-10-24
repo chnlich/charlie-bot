@@ -2389,7 +2389,7 @@ async def test_own_subtree_rule_launch_parity_and_edit_boundary(
 
 
 def _read_error_event(events_log: pathlib.Path) -> str:
-  """The run's error-event text from its events log (the leaf view's source)."""
+  """The run's error-event text from its events log (the worker summary card's Events source)."""
   if not events_log.is_file():
     return ""
   for line in events_log.read_text(encoding="utf-8").splitlines():
@@ -2483,7 +2483,7 @@ async def test_worktree_preparation_failure_lands_failed_run_and_reports_to_pare
     run, outcome = wait_for_terminal_run_sync(tree, child_id, run_id)
     assert outcome == "failed"
     assert run.pid is None, "the process never started; the failure is a launch failure"
-    # The leaf card's Events link reads the record's events_ref: the
+    # The worker summary card's Events link reads the record's events_ref: the
     # launch-failed run's evidence must be reachable the same way a
     # process run's is.
     assert run.events_ref is not None and run.events_ref.endswith("events.jsonl"), (

@@ -44,8 +44,8 @@ _TRANSCRIPT_SKIP_TYPES = frozenset({ET.SESSION_ATTACHED})
 # reservation whose durable stop request the dispatch stage honors.
 _SIGNALLABLE_STATES = frozenset({"running", "queued"})
 
-# The states the header reads as a failure (the retired leaf card folded all
-# three into ``failed``): the header then carries the Run's own error text.
+# The states the header reads as a failure: the header then carries the Run's
+# own error text.
 _FAILED_STATES = frozenset({"failed", "interrupted", "attention"})
 
 

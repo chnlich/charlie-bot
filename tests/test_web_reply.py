@@ -101,12 +101,18 @@ def _wake_seams(tasks: list[asyncio.Task]) -> Iterator[mock.AsyncMock]:
     yield trigger
 
 
+async def _reply_step_audit(blocks: conftest.SessionBlocks, sid: str, done: dict) -> None:
+  """The audit's reply step alone: an archived session skips the status reminder."""
+  assert blocks.tree is not None, "a session-creating rig builds the task tree"
+  await audit.audit_turn(
+      sid, done, blocks.store, blocks.events, blocks.lifecycle, blocks.successor, blocks.tree, archived=True)
+
+
 async def _post_nudge(blocks: conftest.SessionBlocks, sid: str, user_event_id: str) -> dict:
   """Audit a turn that answered *user_event_id* without a reply; returns the nudge it persisted."""
   tasks: list[asyncio.Task] = []
   with _wake_seams(tasks):
-    await audit.audit_reply(
-        sid, _done([user_event_id]), blocks.store, blocks.events, blocks.lifecycle, blocks.successor)
+    await _reply_step_audit(blocks, sid, _done([user_event_id]))
     await asyncio.gather(*tasks)
   return _nudges(_events(blocks, sid))[-1]
 
@@ -711,8 +717,8 @@ async def test_a_user_turn_without_a_reply_gets_one_nudge_that_wakes_a_turn(tmp_
   tasks: list[asyncio.Task] = []
 
   with _wake_seams(tasks) as trigger:
-    await audit.audit_reply(sid, done, blocks.store, blocks.events, blocks.lifecycle, blocks.successor)
-    await audit.audit_reply(sid, done, blocks.store, blocks.events, blocks.lifecycle, blocks.successor)
+    await _reply_step_audit(blocks, sid, done)
+    await _reply_step_audit(blocks, sid, done)
     await asyncio.gather(*tasks)
 
   nudges = _nudges(_events(blocks, sid))
@@ -734,8 +740,8 @@ async def test_a_nudge_turn_without_a_reply_posts_one_notice_and_marks_the_sessi
   tasks: list[asyncio.Task] = []
 
   with _wake_seams(tasks) as trigger:
-    await audit.audit_reply(sid, done, blocks.store, blocks.events, blocks.lifecycle, blocks.successor)
-    await audit.audit_reply(sid, done, blocks.store, blocks.events, blocks.lifecycle, blocks.successor)
+    await _reply_step_audit(blocks, sid, done)
+    await _reply_step_audit(blocks, sid, done)
     await asyncio.gather(*tasks)
 
   notices = conftest.events_of_type(_events(blocks, sid), ET.WEB_REPLY_NOTICE)
@@ -757,7 +763,7 @@ async def test_a_reply_in_the_nudge_turn_ends_the_audit_with_no_notice(tmp_path:
 
   with _running_turn(blocks, sid, [nudge["id"]]):
     await _post_reply(blocks, sid, "the answer")
-  await audit.audit_reply(sid, _done([nudge["id"]]), blocks.store, blocks.events, blocks.lifecycle, blocks.successor)
+  await _reply_step_audit(blocks, sid, _done([nudge["id"]]))
 
   events = _events(blocks, sid)
   assert not conftest.events_of_type(events, ET.WEB_REPLY_NOTICE)

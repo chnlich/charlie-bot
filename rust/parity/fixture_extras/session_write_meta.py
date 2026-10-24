@@ -75,7 +75,9 @@ async def build(b: Builder) -> dict:
           "content": "Synthetic child report.",
       },
   )
-  await b.tree.archive_subtree(report_session, caller=b.operator)
+  await b.tree.completion.archive_subtree(
+      report_session, request_id="fixture-archive-report-session", summary="archived by the user", result_refs=[],
+      run_ids=[], caller=b.operator)
 
   agent_session = "write-agent-session"
   agent_run_id = "write-agent-run"

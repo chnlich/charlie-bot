@@ -4,7 +4,7 @@ The server serves CSS and JavaScript files from static mounts. The served static
 
 ## Mounts
 
-The mounts register after every route (`server.py:566` and `server.py:571`). The package mounts come first and in registration order. The `/static` mount is last, so a package mount answers its own prefix first.
+The mounts register after every route (`server.py:569` and `server.py:574`). The package mounts come first and in registration order. The `/static` mount is last, so a package mount answers its own prefix first.
 
 | Mount path | Directory (repository-relative) | Directory at baseline |
 |---|---|---|
@@ -17,6 +17,7 @@ The mounts register after every route (`server.py:566` and `server.py:571`). The
 | `/static/features/diag` | `src/features/diag/static` | present |
 | `/static/features/slack` | `src/features/slack/static` | absent |
 | `/static/features/discord` | `src/features/discord/static` | absent |
+| `/static/features/disk_sweep` | `src/features/disk_sweep/static` | absent |
 | `/static/features/web_reply` | `src/features/web_reply/static` | absent |
 | `/static/features/host_auth` | `src/features/host_auth/static` | absent |
 | `/static/features/diff_view` | `src/features/diff_view/static` | present |
@@ -45,7 +46,7 @@ How the list is built:
 - The package mounts come from `templating.page_package_static()` (`src/runtime/templating.py:74`). That is one mount per page package, in the order of the page-render registry.
 - A package `src.<kind>.<name>` maps to the mount `/static/<kind>/<name>` and the directory `src/<kind>/<name>/static`.
 - The package mounts use `check_dir=False`. The server mounts them even when the directory is absent.
-- The `/static` mount exists only when `web/static` exists at import time (`server.py:570`). Its route name is `static`.
+- The `/static` mount exists only when `web/static` exists at import time (`server.py:573`). Its route name is `static`.
 
 ## Auth
 

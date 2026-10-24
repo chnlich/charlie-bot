@@ -35,15 +35,6 @@ def backend_ids() -> tuple[str, ...]:
   return tuple(_FACTORIES)
 
 
-def register_transcription_backend(backend_id: str, factory: Callable[..., base.TranscriptionBackend]) -> None:
-  """Add one backend to the registry.
-
-  The replay script's variants register here, and tests register fakes the same
-  way, so a consumer driven through the registry needs no code change.
-  """
-  _FACTORIES[backend_id] = factory
-
-
 def build_transcription_backend(
     backend_id: str, cfg: config.CharlieBotConfig, **kwargs: object) -> base.TranscriptionBackend:
   """Instantiate the backend registered under *backend_id*.

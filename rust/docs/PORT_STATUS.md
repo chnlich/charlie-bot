@@ -419,3 +419,241 @@ Each of the 7 commits in `git rev-list --no-merges 24642edf5..3c4591bad -- src s
 | 2d25e4abb | fail over on temporary Claude result errors | in Rust | Python `src/runtime/backend_pool.py:61-90` classifies temporary result errors, and `src/runtime/worker.py:523-527` raises the pool failover error. Rust `rust/crates/charliebot-agents/src/backend_pool.rs:321-328` classifies a Claude `result` by its `api_error_status`, then by its text when the status is null or absent. `rust/crates/charliebot-tasks/src/worker.rs:811-818` raises `QuotaExhaustedError` for an errored RESULT, and a temporary-status result with no `result` field fails the run with an error, as Python's KeyError does. Tests: `claude_result_502_fails_over_on_the_worker_path` and three more, `claude_result_400_reasoning_error_does_not_fail_over` and three more negative cases (`rust/crates/charliebot-tasks/tests/worker_run.rs`). |
 | 064b502ca | route configured Anthropic-compatible request headers | in Rust | Rust `rust/crates/charliebot-agents/src/backends/anthropic_compatible/options.rs:25` accepts `headers` as an ordered name and value list, `factory.rs:48` passes it to `AnthropicEndpointBackend::with_headers` (`claude_code/claude_code.rs:430`), and its `prepare_env` sets `ANTHROPIC_CUSTOM_HEADERS` to newline-separated `name: value` lines (`claude_code/claude_code.rs:454-458`). Python: `src/backends/anthropic_compatible/options.py:17`, `factory.py:23`, `src/backends/claude_code/claude_code.py:404-412`. Tests: `factory_routes_custom_headers`, `factory_routes_multiple_custom_headers`, `factory_omits_custom_headers_when_the_option_has_none_and_the_parent_sets_them` (`anthropic_compatible/factory.rs:101-125`), `claude_model_env_sets_exactly_five_model_variables` (`claude_code/claude_code.rs:807`). |
 | c7fb09d10 | spawn master wakes through one logged-task helper | no behavior | Replaces the repeated `tasks.create_logged_task(trigger_master(...), name=...)` calls in `src/features/chat_threads/thread_entry.py` and `src/features/web_reply/audit.py` with `master_trigger.spawn_master_turn`, which calls the same helper with the same arguments and task name. |
+
+## Catch-up d1f7e3ba6 open steps
+
+Both all-stage Rust debug runs failed the same 176 of 1169 steps, and no step failed in only one of them, so no row is intermittent. The Python-vs-Python run passed all 1109 of its steps. Four main changes account for every row: `4c3bd3fda` (99 rows: speech models at startup and the online-only voice upload), `9b83e3b1f` (63 rows: mid-turn stdin and argv, and the raw-log cursor), `df7920bd7` (29 rows: `resource_class` in session metadata and bodies) and `93b427659` (2 rows: the removed confirm route). 17 rows name two commits.
+
+| Scenario | Step | Stage | Main commit | Difference |
+| --- | --- | --- | --- | --- |
+| manager-turn-cancellation-routes | server startup | agent-orchestration-cancel | 4c3bd3fda | candidate writes `home/models` at startup (R78) |
+| manager-turn-cancellation-routes | wait at the retried manager run cancel gate | agent-orchestration-cancel | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R79) |
+| manager-turn-cancellation-routes | server shutdown and fake-agent cleanup | agent-orchestration-cancel | 9b83e3b1f | manager-turn argv or stdin differs (R80) |
+| agent-orchestration-cold-read | server startup | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R81) |
+| agent-orchestration-cold-read | delegate a cold read of the synthetic page | agent-orchestration | df7920bd7, 9b83e3b1f | `metadata.json` lacks `resource_class`; raw-log cursor differs; replay echo line missing from the raw log (R82) |
+| agent-orchestration-cold-read | let the manager finish the cold-read report | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R83) |
+| agent-orchestration-cold-read | delegate a cold read whose first reader fails and second answers | agent-orchestration | df7920bd7, 9b83e3b1f | `metadata.json` lacks `resource_class`; raw-log cursor differs; replay echo line missing from the raw log (R84) |
+| agent-orchestration-cold-read | let the manager finish the retry report | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R85) |
+| agent-orchestration-cold-read | delegate a cold read whose two readers fail | agent-orchestration | df7920bd7, 9b83e3b1f | `metadata.json` lacks `resource_class`; raw-log cursor differs; replay echo line missing from the raw log (R86) |
+| agent-orchestration-cold-read | let the manager finish the all-failed report | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R87) |
+| agent-orchestration-cold-read | server shutdown and fake-agent cleanup | agent-orchestration | 9b83e3b1f | manager-turn argv or stdin differs (R88) |
+| task-completion-routes | server startup | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R89) |
+| task-completion-routes | cancel the stopped queued worker to deliver its report | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R90) |
+| task-completion-routes | release the active manager run | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R91) |
+| task-completion-routes | cancel the task after its run finishes | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R92) |
+| task-completion-routes | server shutdown and fake-agent cleanup | agent-orchestration | 9b83e3b1f | manager-turn argv or stdin differs (R93) |
+| agent-orchestration-delegate | server startup | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R94) |
+| agent-orchestration-delegate | delegate one repo-less script run | agent-orchestration | df7920bd7, 9b83e3b1f | `metadata.json` lacks `resource_class`; raw-log cursor differs; replay echo line missing from the raw log (R95) |
+| agent-orchestration-delegate | delegate a failing repo-less worker | agent-orchestration | df7920bd7, 9b83e3b1f | `metadata.json` lacks `resource_class`; raw-log cursor differs; replay echo line missing from the raw log (R96) |
+| agent-orchestration-delegate | let the manager finish the failed-script report | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R97) |
+| agent-orchestration-delegate | delegate a failing implement worker on the local repository | agent-orchestration | df7920bd7, 9b83e3b1f | `metadata.json` lacks `resource_class`; raw-log cursor differs; replay echo line missing from the raw log (R98) |
+| agent-orchestration-delegate | let the manager finish the failed-repository report | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R99) |
+| agent-orchestration-delegate | server shutdown and fake-agent cleanup | agent-orchestration | 9b83e3b1f | manager-turn argv or stdin differs (R100) |
+| manager-turn-execution-and-routes | server startup | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R101) |
+| manager-turn-execution-and-routes | wait for the retried manager run to finish | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R102) |
+| manager-turn-execution-and-routes | server shutdown and fake-agent cleanup | agent-orchestration | 9b83e3b1f | manager-turn argv or stdin differs (R103) |
+| manager-turn-opencode | server startup | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R104) |
+| implement-review-chain | server startup | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R105) |
+| implement-review-chain | delegate a repo task whose unchanged branch already landed on origin main | agent-orchestration | df7920bd7, 9b83e3b1f | `metadata.json` lacks `resource_class`; raw-log cursor differs; replay echo line missing from the raw log (R106) |
+| implement-review-chain | delegate a repo-less implement task | agent-orchestration | df7920bd7, 9b83e3b1f | `metadata.json` lacks `resource_class`; raw-log cursor differs; replay echo line missing from the raw log (R107) |
+| implement-review-chain | delegate a task whose reviewer exhausts the configured pool | agent-orchestration | 9b83e3b1f, df7920bd7 | raw-log cursor differs; replay echo line missing from the raw log; `metadata.json` lacks `resource_class` (R108) |
+| implement-review-chain | server shutdown and fake-agent cleanup | agent-orchestration | 9b83e3b1f | manager-turn argv or stdin differs (R109) |
+| agent-orchestration-session-message | server startup | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R110) |
+| agent-orchestration-session-message | a relay to a live session is accepted | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R111) |
+| agent-orchestration-session-message | let the target manager answer the relay | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R112) |
+| agent-orchestration-session-message | server shutdown and fake-agent cleanup | agent-orchestration | 9b83e3b1f | manager-turn argv or stdin differs (R113) |
+| chat-request-id | server startup | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R114) |
+| chat-upload | server startup | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R115) |
+| cron-routes-and-ticks | server startup | triggers-cron-improve | 4c3bd3fda | candidate writes `home/models` at startup (R116) |
+| cron-routes-and-ticks | wait for the manual cron firing report | triggers-cron-improve | df7920bd7, 9b83e3b1f | `metadata.json` lacks `resource_class`; raw-log cursor differs; replay echo line missing from the raw log (R117) |
+| cron-routes-and-ticks | wait for a scheduler tick to fire the same task again | triggers-cron-improve | df7920bd7, 9b83e3b1f | `metadata.json` lacks `resource_class`; raw-log cursor differs; replay echo line missing from the raw log (R118) |
+| cron-routes-and-ticks | server shutdown and fake-agent cleanup | triggers-cron-improve | 9b83e3b1f | manager-turn argv or stdin differs (R119) |
+| features-artifact-view | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R120) |
+| features-artifacts-plan-fork | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R121) |
+| features-artifacts-plan-fork | fork of the plan worker at a null index | features | df7920bd7, 9b83e3b1f | `metadata.json` lacks `resource_class`; raw-log cursor differs; replay echo line missing from the raw log (R122) |
+| features-artifacts-plan-fork | server shutdown and fake-agent cleanup | features | 9b83e3b1f | manager-turn argv or stdin differs (R123) |
+| features-artifacts-plan-present | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R124) |
+| features-artifacts-plan-verbs | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R125) |
+| features-artifacts-plans | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R126) |
+| features-diag | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R127) |
+| features-diff-view | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R128) |
+| features-discord-check-guild | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R129) |
+| features-discord-check-no-token | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R130) |
+| features-discord-check-refused | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R131) |
+| features-discord-routes | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R132) |
+| features-explain | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R133) |
+| features-ext-usage-failing | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R134) |
+| features-ext-usage | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R135) |
+| features-files | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R136) |
+| features-harness-discord | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R137) |
+| features-harness-discord | allowed user mention starts a Discord thread session | features | df7920bd7 | `metadata.json` lacks `resource_class` (R138) |
+| features-harness-discord | release the silent summon result | features | df7920bd7 | `metadata.json` lacks `resource_class` (R139) |
+| features-harness-slack | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R140) |
+| features-harness-slack | allowed app mention starts its Slack thread session | features | df7920bd7 | `metadata.json` lacks `resource_class` (R141) |
+| features-harness-slack | release summon agent after its result | features | df7920bd7 | `metadata.json` lacks `resource_class` (R142) |
+| features-harness-terminal | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R143) |
+| features-harness-trace-merge | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R144) |
+| features-harness-tree | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R145) |
+| features-harness-voice-bodies | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R146) |
+| features-harness-voice-bodies | the removed confirm route answers as an unknown path | features | 93b427659 | removed confirm route still answers (R147) |
+| features-harness-voice | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R148) |
+| features-host-auth-empty | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R149) |
+| features-host-auth | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R150) |
+| features-ncu | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R151) |
+| features-slack-ack | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R152) |
+| features-slack-backfill | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R153) |
+| features-slack-reply-failure | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R154) |
+| features-slack-reply-refusals | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R155) |
+| features-slack-reply-stale | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R156) |
+| features-slack-reply-success | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R157) |
+| features-slack-validation | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R158) |
+| features-terminal | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R159) |
+| features-trace | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R160) |
+| features-usage-page-uncaptured | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R161) |
+| features-usage-page | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R162) |
+| features-voice-handshake | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R163) |
+| features-voice-local | the removed confirm route answers as an unknown path | features | 93b427659 | removed confirm route still answers (R164) |
+| features-voice-local | upload without a backend field goes to the online default, which has no credential here | features | 4c3bd3fda | voice upload backend choice differs; voice transcript written by the candidate only (R165) |
+| features-voice-local | upload with the removed local backend id is refused | features | 4c3bd3fda | voice upload backend choice differs; voice transcript written by the candidate only (R166) |
+| features-voice-local | upload with an unknown backend id is refused | features | 4c3bd3fda | voice upload backend choice differs; voice transcript written by the candidate only (R167) |
+| features-voice-local | upload with the gemini backend id is refused without its credential | features | 4c3bd3fda | voice upload backend choice differs; voice transcript written by the candidate only (R168) |
+| features-voice-provisioning | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R169) |
+| features-voice-refusals | empty backend id | features | 4c3bd3fda | voice refusal message differs (R170) |
+| features-voice-refusals | local backend does not stream live partials | features | 4c3bd3fda | voice refusal message differs (R171) |
+| features-voice-refusals | unknown backend id | features | 4c3bd3fda | voice refusal message differs (R172) |
+| features-voice-relay | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R173) |
+| features-web-reply-audit | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R174) |
+| features-web-reply-audit | wait for the audit nudge | features | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R175) |
+| features-web-reply-audit | server shutdown and fake-agent cleanup | features | 9b83e3b1f | manager-turn argv or stdin differs (R176) |
+| features-web-reply-language | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R177) |
+| features-web-reply-language | wait for the audit nudge | features | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R178) |
+| features-web-reply-language | server shutdown and fake-agent cleanup | features | 9b83e3b1f | manager-turn argv or stdin differs (R179) |
+| features-web-reply | server startup | features | 4c3bd3fda | candidate writes `home/models` at startup (R180) |
+| handover-admitted-input | hand over the live manager run · python-to-candidate | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R181) |
+| handover-admitted-input | server startup · candidate-to-python | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R182) |
+| handover-drain | stop both servers and let the agent exit while none runs · python-to-candidate | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R183) |
+| handover-drain | server startup · candidate-to-python | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R184) |
+| handover-drain | wait for the raw log cursor at the gate · candidate-to-python | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R185) |
+| handover-drain | stop both servers and let the agent exit while none runs · candidate-to-python | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R186) |
+| handover-drain | server shutdown and fake-agent cleanup · candidate-to-python | agent-orchestration | 9b83e3b1f | manager-turn argv or stdin differs (R187) |
+| handover-improve | hand over the loop with its iteration in flight · python-to-candidate | triggers-cron-improve | 4c3bd3fda | candidate writes `home/models` at startup (R188) |
+| handover-improve | release the iteration's second gate so its agent exits · python-to-candidate | triggers-cron-improve | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R189) |
+| handover-improve | server shutdown and fake-agent cleanup · python-to-candidate | triggers-cron-improve | 9b83e3b1f | manager-turn argv or stdin differs (R190) |
+| handover-improve | server startup · candidate-to-python | triggers-cron-improve | 4c3bd3fda | candidate writes `home/models` at startup (R191) |
+| handover-improve | wait for the iteration at its first gate · candidate-to-python | triggers-cron-improve | df7920bd7 | `metadata.json` lacks `resource_class` (R192) |
+| handover-manager-turn | hand over the live manager run · python-to-candidate | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R193) |
+| handover-manager-turn | server startup · candidate-to-python | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R194) |
+| handover-manager-turn | wait for the raw log cursor at the gate · candidate-to-python | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R195) |
+| handover-manager-turn | release the manager agent · candidate-to-python | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R196) |
+| handover-manager-turn | server shutdown and fake-agent cleanup · candidate-to-python | agent-orchestration | 9b83e3b1f | manager-turn argv or stdin differs (R197) |
+| handover-opencode | hand over the terminated OpenCode turn to server B · python-to-candidate | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R198) |
+| handover-opencode | server startup · candidate-to-python | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R199) |
+| handover-review-run | adopt the live review run · python-to-candidate | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R200) |
+| handover-review-run | release the adopted reviewer · python-to-candidate | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R201) |
+| handover-review-run | server shutdown and fake-agent cleanup · python-to-candidate | agent-orchestration | 9b83e3b1f | manager-turn argv or stdin differs (R202) |
+| handover-review-run | server startup · candidate-to-python | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R203) |
+| handover-review-run | delegate an implement task whose reviewer remains alive through handover · candidate-to-python | agent-orchestration | df7920bd7 | `metadata.json` lacks `resource_class` (R204) |
+| handover-stop-request | hand over the durable interrupted outcome · python-to-candidate | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R205) |
+| handover-stop-request | server startup · candidate-to-python | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R206) |
+| handover-stop-request | wait for the stop target at its first gate · candidate-to-python | agent-orchestration | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R207) |
+| handover-stop-request | server shutdown and fake-agent cleanup · candidate-to-python | agent-orchestration | 9b83e3b1f | manager-turn argv or stdin differs (R208) |
+| handover-worker-run | hand over the live worker run · python-to-candidate | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R209) |
+| handover-worker-run | server startup · candidate-to-python | agent-orchestration | 4c3bd3fda | candidate writes `home/models` at startup (R210) |
+| handover-worker-run | wait for the worker agent at its live gate · candidate-to-python | agent-orchestration | df7920bd7 | `metadata.json` lacks `resource_class` (R211) |
+| improve-loop-reports | server startup | triggers-cron-improve | 4c3bd3fda | candidate writes `home/models` at startup (R212) |
+| improve-loop-reports | wait for both iteration reports to reach the busy parent | triggers-cron-improve | df7920bd7 | `metadata.json` lacks `resource_class` (R213) |
+| improve-routes | server startup | triggers-cron-improve | 4c3bd3fda | candidate writes `home/models` at startup (R214) |
+| other-backends-openai-proxy | server startup | other-backends | 4c3bd3fda | candidate writes `home/models` at startup (R215) |
+| skeleton | server startup | server-skeleton | 4c3bd3fda | candidate writes `home/models` at startup (R216) |
+| skeleton | page with a session, bearer key | server-skeleton | 4c3bd3fda | voice page backend list and default differ (R217) |
+| skeleton | page with a session, no key | server-skeleton | 4c3bd3fda | voice page backend list and default differ (R218) |
+| skeleton | page with a worker session, cookie | server-skeleton | 4c3bd3fda | voice page backend list and default differ (R219) |
+| skeleton | page with a missing session | server-skeleton | 4c3bd3fda | voice page backend list and default differ (R220) |
+| skeleton | page with an empty session | server-skeleton | 4c3bd3fda | voice page backend list and default differ (R221) |
+| session-metadata-defaults-backend-display | server startup | session-read-api | 4c3bd3fda | candidate writes `home/models` at startup (R222) |
+| session-detail | server startup | session-read-api | 4c3bd3fda | candidate writes `home/models` at startup (R223) |
+| session-event-ranges | server startup | session-read-api | 4c3bd3fda | candidate writes `home/models` at startup (R224) |
+| session-listings | server startup | session-read-api | 4c3bd3fda | candidate writes `home/models` at startup (R225) |
+| session-runs | server startup | session-read-api | 4c3bd3fda | candidate writes `home/models` at startup (R226) |
+| session-stream | server startup | session-stream | 4c3bd3fda | candidate writes `home/models` at startup (R227) |
+| session-stream | the trigger turns reach the live socket on the session channel | session-stream | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R228) |
+| session-stream | the trigger turns reach the live socket on the sidebar channel | session-stream | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R229) |
+| session-stream | wait for the last live trigger to fire before shutdown | session-stream | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R230) |
+| session-stream | server shutdown and fake-agent cleanup | session-stream | 9b83e3b1f | manager-turn argv or stdin differs (R231) |
+| session-usage-anthropic-compatible | server startup | session-read-api | 4c3bd3fda | candidate writes `home/models` at startup (R232) |
+| session-write-agent | server startup | session-write | 4c3bd3fda | candidate writes `home/models` at startup (R233) |
+| session-write-agent | create under the run's own manager task | session-write | df7920bd7 | `metadata.json` lacks `resource_class` (R234) |
+| session-write-agent | release the agent caller turn | session-write | df7920bd7 | `metadata.json` lacks `resource_class` (R235) |
+| session-write-cron-listing | server startup | session-write | 4c3bd3fda | candidate writes `home/models` at startup (R236) |
+| session-write-fork | server startup | session-write | 4c3bd3fda | candidate writes `home/models` at startup (R237) |
+| session-write-fork | fork of the source at a null index, the whole log | session-write | df7920bd7, 9b83e3b1f | `metadata.json` lacks `resource_class`; raw-log cursor differs; replay echo line missing from the raw log (R238) |
+| session-write-fork | fork of the source at its first line | session-write | df7920bd7, 9b83e3b1f | `metadata.json` lacks `resource_class`; raw-log cursor differs; replay echo line missing from the raw log (R239) |
+| session-write-fork | fork of the source at a middle line | session-write | df7920bd7, 9b83e3b1f | `metadata.json` lacks `resource_class`; raw-log cursor differs; replay echo line missing from the raw log (R240) |
+| session-write-fork | fork of the source at its last line | session-write | df7920bd7, 9b83e3b1f | `metadata.json` lacks `resource_class`; raw-log cursor differs; replay echo line missing from the raw log (R241) |
+| session-write-fork | elone of the source at a middle line takes over and archives the source | session-write | df7920bd7, 9b83e3b1f | `metadata.json` lacks `resource_class`; raw-log cursor differs; replay echo line missing from the raw log (R242) |
+| session-write-fork | server shutdown and fake-agent cleanup | session-write | 9b83e3b1f | manager-turn argv or stdin differs (R243) |
+| session-write-meta | server startup | session-write | 4c3bd3fda | candidate writes `home/models` at startup (R244) |
+| session-write-task | server startup | session-write | 4c3bd3fda | candidate writes `home/models` at startup (R245) |
+| session-write-task | legacy create opens a manager root | session-write | df7920bd7 | `metadata.json` lacks `resource_class` (R246) |
+| session-write-task | v2 create under the manager root | session-write | df7920bd7 | `metadata.json` lacks `resource_class` (R247) |
+| wait-trigger-delay | server startup | triggers-cron-improve | 4c3bd3fda | candidate writes `home/models` at startup (R248) |
+| wait-trigger-delay | wait until the trigger file is fired | triggers-cron-improve | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R249) |
+| wait-trigger-delay | server shutdown and fake-agent cleanup | triggers-cron-improve | 9b83e3b1f | manager-turn argv or stdin differs (R250) |
+| wait-trigger-local-pid | server startup | triggers-cron-improve | 4c3bd3fda | candidate writes `home/models` at startup (R251) |
+| wait-trigger-local-pid | end the synthetic watched process | triggers-cron-improve | 9b83e3b1f | raw-log cursor differs; replay echo line missing from the raw log (R252) |
+| wait-trigger-local-pid | server shutdown and fake-agent cleanup | triggers-cron-improve | 9b83e3b1f | manager-turn argv or stdin differs (R253) |
+
+
+## Catch-up d1f7e3ba6 ignored Cargo tests
+
+Eight Cargo tests fail on a main change, and each carries `#[ignore = "catch-up d1f7e3ba6: <row>"]`. The workspace run
+passes 2138 tests with these eight ignored. The other three ignored tests were ignored before this catch-up.
+
+| Row | Test | Binary | Main commit | Difference |
+| --- | --- | --- | --- | --- |
+| R254 | `account_selection_matrix_matches_python` | `charliebot-agents` `claude_pool_cross_impl` | fa4ac13b9 | The Python reference helper (`crates/charliebot-agents/tests/claude_pool_reference.py`) calls `claude_accounts.reset_for_tests`, which `fa4ac13b9` removed from `src/backends/claude_code/claude_accounts.py`. |
+| R255 | `relay_watch_matrix_matches_python_decisions_and_moves` | `charliebot-agents` `claude_pool_cross_impl` | fa4ac13b9 | The same helper call, on the relay path. |
+| R256 | `python_and_rust_store_operations_write_identical_files_and_read_each_others_output` | `charliebot-store` `cross_implementation` | df7920bd7 | The `metadata.json` bytes differ between the Rust and Python sides in the `resource_class` line. |
+| R257 | `python_and_rust_name_an_unnamed_node_from_a_corrupt_counter_the_same_way` | `charliebot-store` `cross_implementation` | df7920bd7 | The `metadata.json` bytes differ in the `resource_class` line. |
+| R258 | `python_and_rust_delegate_a_task_spec_into_the_same_node_run_and_spec_bytes` | `charliebot-store` `cross_implementation` | df7920bd7 | The `metadata.json` bytes differ in the `resource_class` line. |
+| R259 | `python_and_rust_fork_and_elone_write_the_same_session_files_at_every_index` | `charliebot-store` `cross_implementation` | df7920bd7 | The `metadata.json` bytes differ in the `resource_class` line. |
+| R260 | `python_and_rust_task_trees_share_nodes_gates_and_mutation_bytes` | `charliebot-store` `cross_implementation` | df7920bd7 | The `metadata.json` bytes differ in the `resource_class` line. |
+| R261 | `sherpa_pin_is_the_release_the_python_wheel_locks` | `charliebot-voice` `--lib` (`transcriber::tests`) | 4c3bd3fda | The test reads the sherpa-onnx pin from `uv.lock`, which no longer locks `sherpa-onnx-core`: 23 `sherpa` lines at `3c4591bad`, none now. |
+
+## Catch-up d1f7e3ba6 unported commits
+
+Each of the 30 commits in `git rev-list --no-merges 3c4591bad..d1f7e3ba6 -- src server.py web` has one class.
+`red-list` rows are named by their IDs in the Difference cells above.
+
+| Main commit | Change | Class | Note |
+| --- | --- | --- | --- |
+| d5b194146 | add safe cleanup for old task paths | unported | Adds the `disk-sweep` CLI, the scheduled `disk_sweep` handler, the `/static/features/disk_sweep` mount and the `paths.scratch_dir` config key (`src/features/disk_sweep/`, `src/infra/config.py`, `src/runtime/worktree_trash.py`). Rust has none of them (`rust/crates` has no `disk_sweep` or `scratch_dir`), and no parity scenario drives the sweep. |
+| b3a121bf0 | drop two module constants nothing reads | no behavior | Removes two unread module constants from `src/features/memory/memory_proposal.py` and `src/infra/pytest_sandbox.py`. |
+| 7fa53b91b | drop the deleted speech service from the preload docstring | no behavior | Docstring of `src/features/usage/api.py` only. |
+| 8cbc40276 | drop the dead transcription registry setter | no behavior | Removes an unused setter in `src/features/voice/transcription/registry.py`. The registry's ids change in `4c3bd3fda`. |
+| 224e4e5cf | report a missing session slice as unavailable at startup | unported | Reports a missing session slice as unavailable at startup (`src/infra/process.py`). Rust has no `SessionCgroupUnavailableError` and no `charliebot-agents.slice` placement (`rust/crates` has neither). |
+| 3530285d8 | drop the unused session_cgroup_path helper | no behavior | Removes an unused helper from `src/infra/process.py`. |
+| 8fccbda46 | give the session join script the slice's OOM priority | unported | Gives the opencode session join script the slice's OOM priority (`src/backends/opencode/cgroup_join.sh`). Rust's join script (`rust/crates/charliebot-agents/src/backends/opencode/server.rs`) sets no OOM priority, and no Rust file under `rust/crates` has an OOM setting. No parity step reads the priority. |
+| df7920bd7 | isolate server, agent and repair session shares | red-list | Adds the session `resource_class` metadata field, its PUT route and the cgroup shares of the three slices (`src/runtime/resource_class.py`, `src/runtime/api/sessions.py`). Rust has no `resource_class`. Rows: R82, R84, R86, R95–R96, R98, R106–R108, R117–R118, R122, R138–R139, R141–R142, R192, R204, R211, R213, R234–R235, R238–R242, R246–R247. |
+| 1043df01b | single-home the archive operator refusal | no behavior | Moves the archive operator refusal into `ARCHIVE_OPERATOR_REFUSAL` (`src/runtime/task_sessions.py`). The 403 detail keeps its text. |
+| 4c3bd3fda | transcribe uploads through the online backend | red-list | Deletes the local transcription engine and `voice_setup`, and sends uploads through the online backends (`src/features/voice/`). Rust still provisions `home/models` at startup and still accepts the local backend. Rows: R78, R81, R89, R94, R101, R104–R105, R110, R114–R116, R120–R121, R124–R137, R140, R143–R146, R148–R163, R165–R174, R177, R180–R184, R188, R191, R193–R194, R198–R200, R203, R205–R206, R209–R210, R212, R214–R227, R232–R233, R236–R237, R244–R245, R248, R251. |
+| 93b427659 | drop the browser's confirm probe and local-engine note | red-list | Drops the browser's confirm probe and the local-engine note (`src/features/voice/static/voice-input.js`). The removed confirm route still answers in Rust. Rows: R147, R164. |
+| 2bb5b3057 | stabilize vfork inputs across GIL release | no behavior | Stabilizes the vfork inputs in `src/runtime/agent_process/_vfkspawn.c`. Rust spawns with its own `clone_vfork_exec` (`rust/crates/charliebot-agents/src/transport/spawn.rs:171`), which has no GIL to release. |
+| 127f1e315 | release the GIL across the vfork spawn stub's exec wait | no behavior | Releases the GIL across the vfork stub's exec wait in `src/runtime/agent_process/_vfkspawn.c`. Same as `2bb5b3057`: Rust spawns with its own `clone_vfork_exec`. |
+| 55c59af46 | single-home the pool walk behind backend_pool.iter_members | no behavior | Single-homes the pool walk behind `backend_pool.iter_members` (`src/runtime/backend_pool.py`, `autonamer.py`, `cold_read.py`). Refactor only. |
+| 6356179b7 | run cc-anthropic-compatible one-shots on the gateway | unported | Runs the one-shot of a cc-anthropic-compatible entry on the gateway: an endpoint entry launches with its `_prepare_env` environment and `--effort` (`src/backends/claude_code/claude_code.py`). Rust's endpoint one-shot delegates to `one_shot_env` (`rust/crates/charliebot-agents/src/backends/claude_code/claude_code.rs:394`), which strips the gateway variables for every entry. |
+| 8db76cdc5 | single-home the claimed-batch input composition | no behavior | Single-homes the claimed-batch input composition (`src/runtime/task_execution.py`). Refactor only. |
+| d1a7faccc | use v2 model body overlay | unported | Uses the v2 model body overlay for opencode (`src/backends/opencode/options.py`). Rust's opencode backend has no request-body overlay. |
+| 5d8cbc408 | let an option add fixed fields to every request body | unported | Lets an opencode option add fixed fields to every request body (`src/backends/opencode/opencode.py`, `options.py`, `server.py`). Rust has no such option; `rust/docs/contract/state/config.md` specifies it. |
+| bd29a7b7a | single-home the created-report announce-and-wake | no behavior | Single-homes the created-report announce-and-wake (`src/runtime/session_dispatch.py`, `task_execution.py`). Refactor only. |
+| f39a200a3 | let cc-anthropic-compatible entries send a fixed extra body | unported | Lets a cc-anthropic-compatible entry send a fixed extra body through `CLAUDE_CODE_EXTRA_BODY` (`src/backends/anthropic_compatible/`, `src/backends/claude_code/claude_code.py`). Rust has no `extra_body` field, and `rust/docs/contract/state/config.md` line 5 requires a Rust loader to accept the same keys. |
+| d3ba6657c | single-home the kill-and-reap helper | no behavior | Single-homes the kill-and-reap helper (`src/features/trace/`). Refactor only. |
+| 7b067fe51 | drop the stale derived-value count from the row-memo comment | no behavior | Drops a stale count from a comment in `src/runtime/api/sessions.py`. |
+| 2989c6b9b | single-home the pending-report recovery scan | no behavior | Single-homes the pending-report recovery scan (`src/runtime/session_dispatch.py`). Refactor only. |
+| d0a6ea6a9 | declare the freshness wrappers' returned thread read | no behavior | Rewrites the return annotation of `assert_thread_fresh` in the Slack and Discord listeners. Annotation only. |
+| 1d9169512 | drop two code-construct counts that drift | no behavior | Drops two drifting counts from comments in `server.py` and `src/features/memory/cli.py`. |
+| 72cf7dbf6 | single-home the reply's caller-claims derivation | no behavior | Single-homes the reply's caller-claims derivation (`src/features/chat_threads/thread_entry.py`). Refactor only. |
+| fb4529dc3 | single-home the backend pool's skip check | no behavior | Single-homes the backend pool's skip check (`src/runtime/backend_pool.py`). Refactor only. |
+| fa4ac13b9 | move the remaining test resets out of production modules | no behavior | Moves the remaining test resets out of three production modules (`src/backends/claude_code/claude_accounts.py`, `src/runtime/backend_pool.py`, `src/runtime/sidebar_state.py`). |
+| b03c38579 | scan the echoed raw log off the loop | no behavior | Scans the echoed raw log on a thread (`src/runtime/midturn_delivery.py`). The scan result is unchanged. The mid-turn delivery it serves is `9b83e3b1f`. |
+| 9b83e3b1f | deliver messages during manager turns | red-list | Delivers messages during manager turns through stream-json stdin with the replay echo (`src/runtime/midturn_delivery.py`, `src/backends/claude_code/claude_code.py`). Rust has no mid-turn delivery. Rows: R79–R80, R82–R88, R90–R93, R95–R100, R102–R103, R106–R109, R111–R113, R117–R119, R122–R123, R175–R176, R178–R179, R185–R187, R189–R190, R195–R197, R201–R202, R207–R208, R228–R231, R238–R243, R249–R250, R252–R253. |

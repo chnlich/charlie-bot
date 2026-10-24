@@ -402,7 +402,6 @@ impl PromptScope {
 struct TreeIndex {
   metas: HashMap<String, Arc<SessionMetadata>>,
   children: HashMap<Option<String>, Vec<String>>,
-  task_state_by_id: HashMap<String, String>,
   revision: String,
   derived_archived_ids: Vec<String>,
   archive_by_id: HashMap<String, bool>,
@@ -465,31 +464,6 @@ impl TaskTreeSnapshot {
     let key = parent_id.map(str::to_string);
     self.index.children.get(&key).map_or(&[], Vec::as_slice)
   }
-
-  /// Return every descendant in the snapshot's depth-first order.
-  pub fn descendant_ids(&self, store: &Store, session_id: &str) -> StoreResult<Vec<String>> {
-    descendant_ids(store, &self.index, session_id)
-  }
-
-  /// Return the task lifecycle state recorded in the snapshot.
-  pub fn task_state(&self, session_id: &str) -> StoreResult<&str> {
-    self
-      .index
-      .task_state_by_id
-      .get(session_id)
-      .map(String::as_str)
-      .ok_or_else(|| StoreError::not_found(format!("task {session_id} not found")))
-  }
-
-  /// Return the effective archive state recorded in the snapshot.
-  pub fn archived(&self, session_id: &str) -> StoreResult<bool> {
-    self
-      .index
-      .archive_by_id
-      .get(session_id)
-      .copied()
-      .ok_or_else(|| StoreError::not_found(format!("task {session_id} not found")))
-  }
 }
 
 /// One read pass over task-tree nodes: each node's history identity, lifecycle state and activity, read once.
@@ -537,11 +511,33 @@ impl<'a> NodeReads<'a> {
     Ok(state)
   }
 
+  /// Whether the node is archived, counting an archived ancestor, with this pass's states (Python's `_effective_archived`).
+  fn archived(
+    &mut self,
+    index: &TreeIndex,
+    session_id: &str,
+    memo: &mut HashMap<String, bool>,
+  ) -> StoreResult<bool> {
+    archived_with(index, session_id, memo, &mut |node_id| self.task_state(node_id))
+  }
+
+  /// Every descendant of the node in depth-first order, judged archived with this pass's states.
+  fn descendant_ids(&mut self, index: &TreeIndex, session_id: &str) -> StoreResult<Vec<String>> {
+    let mut never_stop = || false;
+    let mut memo = HashMap::new();
+    let mut is_archived = |node: &str| self.archived(index, node, &mut memo);
+    Ok(
+      descendant_ids_until(index, session_id, &mut is_archived, &mut never_stop)?
+        .expect("the no-stop descendant walk completes"),
+    )
+  }
+
   /// The node's activity (Python's `_NodeReads.activity`). A queued run reads this pass's task state for its gate.
   pub(crate) fn activity(&mut self, session_id: &str) -> StoreResult<TaskTreeActivity> {
     if let Some(activity) = self.activities.get(session_id) {
       return Ok(activity.clone());
     }
+    self.store.task_tree_activity_calls.fetch_add(1, Ordering::Relaxed);
     let identity = self.identity(session_id)?;
     let activity = match self.store.memoized_activity(session_id, identity, self.generation) {
       Some(activity) => activity,
@@ -1123,7 +1119,9 @@ impl Store {
     let Some(index) = self.tree_index_until(should_stop)? else {
       return Ok(None);
     };
-    descendant_ids_until(self, &index, session_id, should_stop)
+    let mut memo = HashMap::new();
+    let mut is_archived = |node: &str| archived_of(self, &index, node, &mut memo);
+    descendant_ids_until(&index, session_id, &mut is_archived, should_stop)
   }
 
   /// Return every task node whose effective archive state is inherited or fact-derived.
@@ -1159,9 +1157,10 @@ impl Store {
         hook();
       }
     }
+    let mut reads = NodeReads::new(self);
     let mut rows = Vec::with_capacity(snapshot.child_ids(parent_id).len());
     for session_id in snapshot.child_ids(parent_id) {
-      let row = self.tree_row(snapshot, session_id)?;
+      let row = self.tree_row(&snapshot.index, &mut reads, session_id)?;
       if !include_archived && row.archived && row.work_state != "running" && row.running_descendant_count == 0 {
         continue;
       }
@@ -1170,25 +1169,25 @@ impl Store {
     Ok(rows)
   }
 
-  fn tree_row(&self, snapshot: &TaskTreeSnapshot, session_id: &str) -> StoreResult<TaskTreeRow> {
-    let descendants = snapshot.descendant_ids(self, session_id)?;
+  fn tree_row(&self, index: &TreeIndex, reads: &mut NodeReads, session_id: &str) -> StoreResult<TaskTreeRow> {
+    let descendants = reads.descendant_ids(index, session_id)?;
     let mut open_descendant_count = 0;
     let mut running_descendant_count = 0;
     for descendant in descendants {
-      if snapshot.task_state(&descendant)? == "open" {
+      if reads.task_state(&descendant)? == "open" {
         open_descendant_count += 1;
       }
-      if self.task_tree_activity(&descendant)?.work_state == "running" {
+      if reads.activity(&descendant)?.work_state == "running" {
         running_descendant_count += 1;
       }
     }
-    let activity = self.task_tree_activity(session_id)?;
+    let activity = reads.activity(session_id)?;
     Ok(TaskTreeRow {
       session_id: session_id.to_string(),
-      task_state: snapshot.task_state(session_id)?.to_string(),
+      task_state: reads.task_state(session_id)?,
       work_state: activity.work_state,
-      archived: snapshot.archived(session_id)?,
-      child_count: snapshot.child_ids(Some(session_id)).len(),
+      archived: reads.archived(index, session_id, &mut HashMap::new())?,
+      child_count: index.children.get(&Some(session_id.to_string())).map_or(0, Vec::len),
       open_descendant_count,
       running_descendant_count,
     })
@@ -1934,7 +1933,6 @@ impl Store {
   /// with runs, on the version of that state. A verdict that judged a process through `/proc` is not stored: a process
   /// exit writes no file that would move the key.
   pub fn task_tree_activity(&self, session_id: &str) -> StoreResult<TaskTreeActivity> {
-    self.task_tree_activity_calls.fetch_add(1, Ordering::Relaxed);
     NodeReads::new(self).activity(session_id)
   }
 
@@ -2002,7 +2000,7 @@ impl Store {
     self.history_fact_walks.load(Ordering::Relaxed)
   }
 
-  /// Count task-tree activity lookups since the store opened.
+  /// Count task-tree activity derivations that read passes started since the store opened.
   pub fn task_tree_activity_call_count(&self) -> u64 {
     self.task_tree_activity_calls.load(Ordering::Relaxed)
   }
@@ -2013,10 +2011,11 @@ impl Store {
     let meta =
       index.metas.get(session_id).ok_or_else(|| StoreError::not_found(format!("task {session_id} not found")))?;
     let mut detail = self.session_metadata_value(meta.as_ref());
+    let mut reads = NodeReads::new(self);
     let object = detail.as_object_mut().expect("session metadata serializes to an object");
-    object.insert("task_state".to_string(), Value::String(self.task_state_fast(session_id)?));
-    object.insert("work_state".to_string(), Value::String(self.task_tree_activity(session_id)?.work_state));
-    object.insert("archived".to_string(), Value::Bool(archived_of(self, &index, session_id, &mut HashMap::new())?));
+    object.insert("task_state".to_string(), Value::String(reads.task_state(session_id)?));
+    object.insert("work_state".to_string(), Value::String(reads.activity(session_id)?.work_state));
+    object.insert("archived".to_string(), Value::Bool(reads.archived(&index, session_id, &mut HashMap::new())?));
 
     let mut ancestors = Vec::new();
     for ancestor_id in ancestor_ids(&index, session_id)? {
@@ -2026,7 +2025,7 @@ impl Store {
     }
     object.insert("ancestors".to_string(), Value::Array(ancestors));
 
-    let descendants = descendant_ids(self, &index, session_id)?.len();
+    let descendants = reads.descendant_ids(&index, session_id)?.len();
     let prompt_rules = json!({
       "subtree": self.prompt_rule_summary(meta.subtree_prompt_ref.as_deref())?,
       "node": self.prompt_rule_summary(meta.node_prompt_ref.as_deref())?,
@@ -2207,7 +2206,6 @@ fn build_tree_index_until(store: &Store, should_stop: &mut impl FnMut() -> bool)
   let mut index = TreeIndex {
     metas,
     children,
-    task_state_by_id: HashMap::new(),
     revision: String::new(),
     derived_archived_ids: Vec::new(),
     archive_by_id: HashMap::new(),
@@ -2221,7 +2219,6 @@ fn build_tree_index_until(store: &Store, should_stop: &mut impl FnMut() -> bool)
     }
     let task_state = store.task_state_for_tree_index(&meta.id)?;
     let archived = archived_of(store, &index, &meta.id, &mut memo)?;
-    index.task_state_by_id.insert(meta.id.clone(), task_state.clone());
     index.archive_by_id.insert(meta.id.clone(), archived);
     if meta.status != SessionStatus::Archived && archived {
       derived_archived_ids.push(meta.id.clone());
@@ -2311,13 +2308,19 @@ fn ancestor_ids(index: &TreeIndex, session_id: &str) -> StoreResult<Vec<String>>
 /// subtree of any size stays walkable.
 fn descendant_ids(store: &Store, index: &TreeIndex, session_id: &str) -> StoreResult<Vec<String>> {
   let mut never_stop = || false;
-  Ok(descendant_ids_until(store, index, session_id, &mut never_stop)?.expect("the no-stop descendant walk completes"))
+  let mut memo = HashMap::new();
+  let mut is_archived = |node: &str| archived_of(store, index, node, &mut memo);
+  Ok(
+    descendant_ids_until(index, session_id, &mut is_archived, &mut never_stop)?
+      .expect("the no-stop descendant walk completes"),
+  )
 }
 
+/// The descendant walk over `index`, asking `is_archived` for each node's archive decision.
 fn descendant_ids_until(
-  store: &Store,
   index: &TreeIndex,
   session_id: &str,
+  is_archived: &mut impl FnMut(&str) -> StoreResult<bool>,
   should_stop: &mut impl FnMut() -> bool,
 ) -> StoreResult<Option<Vec<String>>> {
   if should_stop() {
@@ -2330,7 +2333,6 @@ fn descendant_ids_until(
   let mut output = Vec::new();
   let mut stack = children_of(session_id);
   let mut seen = HashSet::from([session_id.to_string()]);
-  let mut archived = HashMap::new();
   let mut open_count = 0;
   while let Some(next) = stack.pop() {
     if should_stop() {
@@ -2342,7 +2344,7 @@ fn descendant_ids_until(
     output.push(next.clone());
     stack.extend(children_of(&next));
     let meta = index_meta(index, &next)?;
-    if meta.status != SessionStatus::Archived && !archived_of(store, index, &next, &mut archived)? {
+    if meta.status != SessionStatus::Archived && !is_archived(&next)? {
       open_count += 1;
       if open_count > TASK_DESCENDANT_NODE_LIMIT {
         return Err(StoreError::conflict(vec![format!(
@@ -2357,8 +2359,8 @@ fn descendant_ids_until(
   Ok(Some(output))
 }
 
-/// Whether a node is archived, counting an archived ancestor: a node is archived when its own task state or
-/// any ancestor's is not open. The memo keeps each resolved node, so one pass over many nodes stays linear.
+/// Whether a node is archived, counting an archived ancestor. A store-level caller reads the build's verdict when the
+/// index holds it; a tree row reads its pass's states through [`NodeReads::archived`].
 fn archived_of(
   store: &Store,
   index: &TreeIndex,
@@ -2368,6 +2370,17 @@ fn archived_of(
   if let Some(archived) = index.archive_by_id.get(session_id) {
     return Ok(*archived);
   }
+  archived_with(index, session_id, memo, &mut |node_id| store.task_state_fast(node_id))
+}
+
+/// Whether a node is archived, counting an archived ancestor: a node is archived when its own task state or any
+/// ancestor's is not open. The memo keeps each resolved node, so one pass over many nodes stays linear.
+fn archived_with(
+  index: &TreeIndex,
+  session_id: &str,
+  memo: &mut HashMap<String, bool>,
+  task_state: &mut impl FnMut(&str) -> StoreResult<TaskState>,
+) -> StoreResult<bool> {
   let mut chain = Vec::new();
   let mut seen = HashSet::new();
   let mut current_id = session_id;
@@ -2386,7 +2399,7 @@ fn archived_of(
   };
   for node_id in chain.into_iter().rev() {
     if !inherited {
-      inherited = store.task_state_fast(node_id)? != "open";
+      inherited = task_state(node_id)? != "open";
     }
     memo.insert(node_id.to_string(), inherited);
   }

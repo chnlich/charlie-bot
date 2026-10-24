@@ -839,7 +839,7 @@ mod tests {
   }
 
   #[test]
-  fn test_claude_code_request_shape_uses_inline_system_and_google_schema() {
+  fn test_claude_code_request_shape_preserves_input_schema() {
     let payload = json!({
       "model": "gemini-model",
       "system": [{"type": "text", "text": "Use the available tools."}],
@@ -892,19 +892,7 @@ mod tests {
     );
     assert!(converted.get("thinking").is_none());
     assert!(converted.get("output_config").is_none());
-    assert_eq!(
-      converted["tools"][0]["function"]["parameters"],
-      json!({
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "cmd": {"type": "string"},
-          "count": {"type": "number"},
-          "choice": {"type": "string"},
-        },
-        "required": ["cmd"],
-      })
-    );
+    assert_eq!(converted["tools"][0]["function"]["parameters"], payload["tools"][0]["input_schema"]);
   }
 
   #[test]

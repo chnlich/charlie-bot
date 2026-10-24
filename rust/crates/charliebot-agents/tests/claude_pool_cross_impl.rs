@@ -127,7 +127,6 @@ fn selection_matrix() -> Value {
 }
 
 #[test]
-#[ignore = "catch-up d1f7e3ba6: R254"]
 fn account_selection_matrix_matches_python() {
   let temporary = tempfile::tempdir().unwrap();
   let (mut data, _directories) = account_data(temporary.path());
@@ -296,7 +295,6 @@ fn relay_matrix() -> Value {
 }
 
 #[test]
-#[ignore = "catch-up d1f7e3ba6: R255"]
 fn relay_watch_matrix_matches_python_decisions_and_moves() {
   let temporary = tempfile::tempdir().unwrap();
   let (mut data, directories) = account_data(temporary.path());

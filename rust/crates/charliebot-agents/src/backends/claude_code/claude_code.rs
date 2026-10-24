@@ -254,6 +254,22 @@ impl ClaudeCodeBackend {
     Ok(env)
   }
 
+  fn one_shot_env(&self, base_env: &Env) -> Env {
+    without_gateway_env(base_env)
+  }
+
+  /// The model-selection flags of this backend's one-shot: a cc-claude entry names its model with `--model`.
+  fn one_shot_model_args(&self) -> Vec<String> {
+    match self.model.as_deref().filter(|value| !value.is_empty()) {
+      Some(model) => vec!["--model".to_string(), model.to_string()],
+      None => Vec::new(),
+    }
+  }
+
+  fn one_shot_command(&self, system: &str) -> Vec<String> {
+    one_shot_argv(&self.one_shot_model_args(), system)
+  }
+
   async fn run_one_shot(
     &self,
     base_env: &Env,
@@ -261,54 +277,82 @@ impl ClaudeCodeBackend {
     system: &str,
     timeout: Option<Duration>,
   ) -> anyhow::Result<String> {
-    let model =
-      self.model.as_deref().filter(|value| !value.is_empty()).context("cc-claude one-shot requires a model")?;
-    let command = one_shot_command(model, system);
-    let spec = SpawnSpec::new(
-      &command[0],
-      command[1..].iter().map(OsString::from).collect(),
-      None,
-      one_shot_env(base_env)
-        .iter()
-        .map(|(name, value)| (OsString::from(name), OsString::from(value)))
-        .collect::<HashMap<_, _>>(),
-      self.cgroup_session_id.clone(),
-      system_cgroup_base_dir(),
-      self.cgroup_limits.memory_max_mb,
-      self.cgroup_limits.swap_max_mb,
-      self.cgroup_limits.tasks_max,
-    );
-    let mut child = spawn_with_setup(&spec, None, ChildStdin::Piped, SpawnSetup::ChildSideTurnTree).await?.child;
-    let pid = child.id().context("claude CLI did not expose its process id")?;
-    let mut stdin = child.stdin.take().context("claude CLI stdin was not piped")?;
-    let prompt = prompt.as_bytes().to_vec();
-    let stdin_task = tokio::spawn(async move {
-      stdin.write_all(&prompt).await?;
-      stdin.shutdown().await
-    });
-    let output_future = child.wait_with_output();
-    tokio::pin!(output_future);
-    let output = match timeout {
-      Some(limit) => match tokio::time::timeout(limit, &mut output_future).await {
-        Ok(result) => result?,
-        Err(error) => {
-          kill_process_group(pid, nix::sys::signal::Signal::SIGKILL);
-          let _ = output_future.await;
-          stdin_task.abort();
-          let _ = stdin_task.await;
-          return Err(error.into());
-        }
-      },
-      None => output_future.await?,
-    };
-    stdin_task.await.context("waiting for claude CLI stdin writer failed")??;
-    let exit_code = python_exit_code(output.status);
-    if exit_code != 0 {
-      let stderr = String::from_utf8(output.stderr)?;
-      bail!("claude CLI failed (exit {exit_code}): {}", stderr.trim());
-    }
-    Ok(String::from_utf8(output.stdout)?.trim().to_string())
+    let command = self.one_shot_command(system);
+    let env = self.one_shot_env(base_env);
+    run_one_shot_process(&command, &env, prompt, timeout, self.cgroup_session_id.as_deref(), &self.cgroup_limits).await
   }
+}
+
+/// Run a `claude -p` text one-shot to completion and return its trimmed stdout. The process group is killed on
+/// timeout, and a non-zero exit reports the child's stderr.
+async fn run_one_shot_process(
+  command: &[String],
+  env: &Env,
+  prompt: &str,
+  timeout: Option<Duration>,
+  cgroup_session_id: Option<&str>,
+  cgroup_limits: &SessionCgroupLimits,
+) -> anyhow::Result<String> {
+  let spec = SpawnSpec::new(
+    &command[0],
+    command[1..].iter().map(OsString::from).collect(),
+    None,
+    env.iter().map(|(name, value)| (OsString::from(name), OsString::from(value))).collect::<HashMap<_, _>>(),
+    cgroup_session_id.map(str::to_string),
+    system_cgroup_base_dir(),
+    cgroup_limits.memory_max_mb,
+    cgroup_limits.swap_max_mb,
+    cgroup_limits.tasks_max,
+  );
+  let mut child = spawn_with_setup(&spec, None, ChildStdin::Piped, SpawnSetup::ChildSideTurnTree).await?.child;
+  let pid = child.id().context("claude CLI did not expose its process id")?;
+  let mut stdin = child.stdin.take().context("claude CLI stdin was not piped")?;
+  let prompt = prompt.as_bytes().to_vec();
+  let stdin_task = tokio::spawn(async move {
+    stdin.write_all(&prompt).await?;
+    stdin.shutdown().await
+  });
+  let output_future = child.wait_with_output();
+  tokio::pin!(output_future);
+  let output = match timeout {
+    Some(limit) => match tokio::time::timeout(limit, &mut output_future).await {
+      Ok(result) => result?,
+      Err(error) => {
+        kill_process_group(pid, nix::sys::signal::Signal::SIGKILL);
+        let _ = output_future.await;
+        stdin_task.abort();
+        let _ = stdin_task.await;
+        return Err(error.into());
+      }
+    },
+    None => output_future.await?,
+  };
+  stdin_task.await.context("waiting for claude CLI stdin writer failed")??;
+  let exit_code = python_exit_code(output.status);
+  if exit_code != 0 {
+    let stderr = String::from_utf8(output.stderr)?;
+    bail!("claude CLI failed (exit {exit_code}): {}", stderr.trim());
+  }
+  Ok(String::from_utf8(output.stdout)?.trim().to_string())
+}
+
+/// The argv of a `claude -p` text one-shot: no session persistence, tools disabled, and the caller's model flags.
+fn one_shot_argv(model_args: &[String], system: &str) -> Vec<String> {
+  let mut command = vec![
+    "claude".to_string(),
+    "-p".to_string(),
+    "--output-format".to_string(),
+    "text".to_string(),
+    "--no-session-persistence".to_string(),
+  ];
+  command.extend(model_args.iter().cloned());
+  command.extend([
+    "--system-prompt".to_string(),
+    system.to_string(),
+    DISALLOWED_TOOLS_FLAG.to_string(),
+    ONE_SHOT_DISALLOWED_TOOLS.to_string(),
+  ]);
+  command
 }
 
 impl AgentBackend for ClaudeCodeBackend {
@@ -366,6 +410,8 @@ pub const GATEWAY_ENDPOINT_ENV_NAMES: [&str; 8] = [
 pub const GATEWAY_BASE_URL_ENV: &str = GATEWAY_ENDPOINT_ENV_NAMES[0];
 pub const GATEWAY_AUTH_TOKEN_ENV: &str = GATEWAY_ENDPOINT_ENV_NAMES[1];
 pub const GATEWAY_CUSTOM_HEADERS_ENV: &str = GATEWAY_ENDPOINT_ENV_NAMES[2];
+/// The gateway-only variable that merges a fixed body into every request.
+pub const GATEWAY_EXTRA_BODY_ENV: &str = "CLAUDE_CODE_EXTRA_BODY";
 pub const CLAUDE_MODEL_ENV_NAMES: [&str; 5] = [
   GATEWAY_ENDPOINT_ENV_NAMES[3],
   GATEWAY_ENDPOINT_ENV_NAMES[4],
@@ -387,12 +433,6 @@ pub fn without_gateway_env(env: &Env) -> Env {
     .filter(|(name, _)| !GATEWAY_ENDPOINT_ENV_NAMES.contains(&name.as_str()))
     .map(|(name, value)| (name.clone(), value.clone()))
     .collect()
-}
-
-/// The environment a one-shot `claude` spawn runs in: the inherited environment without the gateway variables, which
-/// would otherwise point Claude at an inherited cc-anthropic-compatible endpoint instead of the Anthropic account.
-fn one_shot_env(base_env: &Env) -> Env {
-  without_gateway_env(base_env)
 }
 
 /// Claude Code pointed at an Anthropic-compatible endpoint by environment. The endpoint URL and bearer token ride
@@ -498,22 +538,6 @@ impl Translate for IdentityTranslate {
   fn translate(&mut self, raw: Value) -> anyhow::Result<Vec<Value>> {
     Ok(vec![raw])
   }
-}
-
-fn one_shot_command(model: &str, system: &str) -> Vec<String> {
-  vec![
-    "claude".to_string(),
-    "-p".to_string(),
-    "--output-format".to_string(),
-    "text".to_string(),
-    "--no-session-persistence".to_string(),
-    "--model".to_string(),
-    model.to_string(),
-    "--system-prompt".to_string(),
-    system.to_string(),
-    DISALLOWED_TOOLS_FLAG.to_string(),
-    ONE_SHOT_DISALLOWED_TOOLS.to_string(),
-  ]
 }
 
 /// Detect visible replies authored by a model outside the configured model family.
@@ -755,20 +779,163 @@ mod tests {
   }
 
   // Python: tests/test_claude_code_backend.py::test_one_shot_text_spawns_claude_without_the_gateway_variables
-  #[test]
-  fn one_shot_env_drops_the_gateway_variables_and_keeps_the_rest() {
-    let mut base_env = Env::new();
+  #[tokio::test]
+  async fn one_shot_text_spawns_claude_without_the_gateway_variables() {
+    let root = tempfile::tempdir().unwrap();
+    let (bin, argv, env_file) = stage_fake_claude(root.path());
+    let mut base_env = inherited_env(&bin);
     for name in GATEWAY_ENDPOINT_ENV_NAMES {
       base_env.insert(name.to_string(), "inherited-gateway-value".to_string());
     }
+    base_env.insert("CLAUDE_CODE_EXTRA_BODY".to_string(), "inherited-gateway-value".to_string());
     base_env.insert("UNRELATED_INHERITED_VAR".to_string(), "kept".to_string());
+    let mut backend = ClaudeCodeBackend::from_launch(
+      Some("claude-haiku-5-5".to_string()),
+      None,
+      None,
+      false,
+      None,
+      LaunchArgs::default(),
+      zero_limits(),
+    )
+    .unwrap();
 
-    let env = one_shot_env(&base_env);
+    assert_eq!(backend.one_shot_text(&base_env, "prompt", "system", None).unwrap().await.unwrap(), "ok");
 
+    let args = recorded_lines(&argv);
+    assert_eq!(args[args.iter().position(|value| value == "--model").unwrap() + 1], "claude-haiku-5-5");
+    let env = recorded_env(&env_file);
     for name in GATEWAY_ENDPOINT_ENV_NAMES {
       assert!(!env.contains_key(name), "{name} reached the one-shot spawn");
     }
+    assert!(!env.contains_key("CLAUDE_CODE_EXTRA_BODY"));
     assert_eq!(env["UNRELATED_INHERITED_VAR"], "kept");
+  }
+
+  // Python: tests/test_anthropic_compatible_backend.py::test_one_shot_text_launches_on_the_entry_endpoint_without_a_model_flag
+  #[tokio::test]
+  async fn one_shot_text_launches_on_the_entry_endpoint_without_a_model_flag() {
+    let root = tempfile::tempdir().unwrap();
+    let (bin, argv, env_file) = stage_fake_claude(root.path());
+    let mut backend = endpoint_backend(concat!(
+      "api_base: http://localhost:8123/api/anthropic-proxy\n",
+      "context_window: 409600\n",
+      "effort: high\n",
+      "headers:\n  x-litellm-tags: deepseek\n",
+      "extra_body:\n  cache:\n    no-store: true\n    no-cache: true\n",
+    ));
+    let base_env = inherited_env(&bin);
+
+    assert_eq!(backend.one_shot_text(&base_env, "reply with ok", "system", None).unwrap().await.unwrap(), "ok");
+
+    let args = recorded_lines(&argv);
+    assert!(!args.iter().any(|value| value == "--model"), "{args:?}");
+    assert_eq!(args[args.iter().position(|value| value == "--effort").unwrap() + 1], "high");
+    let env = recorded_env(&env_file);
+    assert_eq!(env[GATEWAY_BASE_URL_ENV], "http://localhost:8123/api/anthropic-proxy");
+    assert_eq!(env[GATEWAY_AUTH_TOKEN_ENV], "no-auth");
+    for name in CLAUDE_MODEL_ENV_NAMES {
+      assert_eq!(env[name], "synthetic/model-1");
+    }
+    assert_eq!(env[GATEWAY_CUSTOM_HEADERS_ENV], "x-litellm-tags: deepseek");
+    assert_eq!(
+      serde_json::from_str::<Value>(&env[GATEWAY_EXTRA_BODY_ENV]).unwrap(),
+      serde_json::json!({"cache": {"no-store": true, "no-cache": true}})
+    );
+    assert_eq!(env[claude_launch::AUTO_COMPACT_WINDOW_ENV], "409600");
+    assert_eq!(env[claude_launch::MAX_CONTEXT_TOKENS_ENV], "409600");
+  }
+
+  // Python: tests/test_anthropic_compatible_backend.py::test_one_shot_text_omits_effort_when_the_entry_has_none
+  #[tokio::test]
+  async fn one_shot_text_omits_effort_when_the_entry_has_none() {
+    let root = tempfile::tempdir().unwrap();
+    let (bin, argv, _env_file) = stage_fake_claude(root.path());
+    let mut backend = endpoint_backend("api_base: http://localhost:8123/api/anthropic-proxy\ncontext_window: 409600\n");
+
+    backend.one_shot_text(&inherited_env(&bin), "reply with ok", "system", None).unwrap().await.unwrap();
+
+    assert!(!recorded_lines(&argv).iter().any(|value| value == "--effort"));
+  }
+
+  fn zero_limits() -> SessionCgroupLimits {
+    SessionCgroupLimits { memory_max_mb: 0, swap_max_mb: 0, tasks_max: 0 }
+  }
+
+  /// The backend the Anthropic-compatible factory builds from these type fields.
+  fn endpoint_backend(type_fields: &str) -> Box<dyn AgentBackend> {
+    use charliebot_core::config::BackendOption;
+    use charliebot_registry::Registry;
+    use charliebot_registry::backend::BackendFactory;
+
+    use crate::backends::anthropic_compatible::factory::AnthropicCompatibleFactory;
+
+    let option = BackendOption {
+      id: "anthropic".to_string(),
+      label: "Anthropic compatible".to_string(),
+      model: "synthetic/model-1".to_string(),
+      prompt_overlay: None,
+      backend_type: "cc-anthropic-compatible".to_string(),
+      type_fields: serde_yaml::from_str(type_fields).unwrap(),
+    };
+    let home = tempfile::tempdir().unwrap();
+    let cfg = Registry::new().load_config(home.path()).unwrap();
+    AnthropicCompatibleFactory.build(Some(&option), &cfg, LaunchArgs::default()).unwrap()
+  }
+
+  /// The inherited process environment a one-shot receives: the fake `claude` directory on `PATH`.
+  fn inherited_env(bin: &std::path::Path) -> Env {
+    Env::from([
+      ("PATH".to_string(), format!("{}:/usr/bin:/bin", bin.display())),
+      ("HOME".to_string(), bin.parent().unwrap().display().to_string()),
+    ])
+  }
+
+  /// The fake-program helper that cargo builds beside this test binary. Unit tests cannot name it with
+  /// `CARGO_BIN_EXE_*`, so the path comes from the target directory.
+  fn fake_program_bin() -> std::path::PathBuf {
+    let exe = std::env::current_exe().expect("the test binary path");
+    exe
+      .ancestors()
+      .skip(1)
+      .map(|directory| directory.join("fake_program"))
+      .find(|candidate| candidate.is_file())
+      .expect("cargo builds the fake-program helper into the target directory that holds the test binary")
+  }
+
+  /// Stages a fake `claude` that records its argv and environment, reads stdin, prints `ok`, and exits 0. Returns the
+  /// bin directory and the recorded argv and environment files.
+  fn stage_fake_claude(root: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
+    let bin = root.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::os::unix::fs::symlink(fake_program_bin(), bin.join("claude")).unwrap();
+    let argv = root.join("argv.txt");
+    let env_file = root.join("env.txt");
+    let stdin = root.join("stdin.txt");
+    std::fs::write(
+      bin.join("probe.json"),
+      serde_json::json!({"claude": [
+        {"record_argv": argv},
+        {"record_env": env_file},
+        {"record_stdin": stdin},
+        {"stdout": "ok"},
+        {"exit": 0},
+      ]})
+      .to_string(),
+    )
+    .unwrap();
+    (bin, argv, env_file)
+  }
+
+  fn recorded_lines(path: &std::path::Path) -> Vec<String> {
+    std::fs::read_to_string(path).unwrap().lines().map(str::to_string).collect()
+  }
+
+  fn recorded_env(path: &std::path::Path) -> HashMap<String, String> {
+    recorded_lines(path)
+      .into_iter()
+      .filter_map(|line| line.split_once('=').map(|(name, value)| (name.to_string(), value.to_string())))
+      .collect()
   }
 
   // Python: tests/test_anthropic_compatible_backend.py::test_endpoint_env_overrides_every_inherited_gateway_variable
@@ -869,7 +1036,7 @@ mod tests {
 
   #[test]
   fn cli_native_one_shot_uses_text_mode_and_no_session_persistence() {
-    let command = one_shot_command("claude-fable-5-1", "system");
+    let command = one_shot_argv(&["--model".to_string(), "claude-fable-5-1".to_string()], "system");
     assert_eq!(
       command,
       [

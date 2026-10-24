@@ -18,7 +18,7 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::sync::watch;
 use uuid::Uuid;
 
-use super::options::{OpenCodeOption, model_context_config};
+use super::options::{OpenCodeOption, model_overrides_config};
 use super::server::{OpenCodeHost, OpenCodeServer, OpenCodeServerPool, Turn, TurnEvent};
 use crate::cli_base::{IMAGE_MIME_BY_EXT, apply_proxy_env};
 use crate::event_builders;
@@ -75,7 +75,7 @@ static UNHANDLED_TYPES: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 pub struct OpenCodeBackend {
   model: String,
   proxy_url: Option<String>,
-  /// The `providers` keys of this option's context limit, which the one-shot config carries.
+  /// The `providers` keys of this option's context limit and request-body fields, which the one-shot config carries.
   one_shot_context: Map<String, Value>,
   host: OpenCodeHost,
   pool: Arc<OpenCodeServerPool>,
@@ -199,7 +199,7 @@ impl BackendFactory for OpenCodeFactory {
     let option = option.context("the opencode backend type needs its backends.options entry")?;
     let model = option_default_model(option, "backend ")?;
     let fields = OpenCodeOption::from_fields(&option.type_fields).map_err(anyhow::Error::msg)?;
-    let one_shot_context = model_context_config(std::slice::from_ref(option))?;
+    let one_shot_context = model_overrides_config(std::slice::from_ref(option))?;
     self.pool.record_options(&cfg.backends.options);
     Ok(Box::new(OpenCodeBackend::new(
       model,

@@ -20,6 +20,14 @@ from src.infra import config, models
 from src.runtime import master_cc_state
 
 
+def reset_claude_account_readings():
+  """Drop the process-local Claude account readings, as tests/conftest.py does at d1f7e3ba6."""
+  claude_accounts._event_readings.clear()
+  claude_accounts._panel_readings.clear()
+  claude_accounts._auth_failures.clear()
+  claude_accounts._login_notified.clear()
+
+
 def make_config(data):
   return config.CharlieBotConfig.model_validate({
       "charliebot_home": data["home"],
@@ -54,7 +62,7 @@ def selection(data):
   cfg = make_config(data)
   output = []
   for case in data["cases"]:
-    claude_accounts.reset_for_tests()
+    reset_claude_account_readings()
     master_cc_state._current_items.clear()
     now = moment(case["now"])
     apply_readings(case, now)
@@ -125,7 +133,7 @@ def relay(data):
   output = []
   root = pathlib.Path(data["root"])
   for index, case in enumerate(data["cases"]):
-    claude_accounts.reset_for_tests()
+    reset_claude_account_readings()
     now = moment(case["now"])
     apply_readings(case, now)
     watch = claude_relay.RelayWatch("a", "claude-fable-5-1", cfg, "alpha", now)

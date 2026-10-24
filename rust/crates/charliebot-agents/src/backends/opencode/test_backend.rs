@@ -1259,7 +1259,7 @@ async fn context_limit_reaches_the_one_shot_and_the_shared_server_configs() {
 
 #[test]
 fn conflicting_context_limits_fail_the_shared_server_start_naming_both_options() {
-  // Python: tests/test_opencode_backend.py::test_model_context_config_rejects_conflicts_naming_both_options
+  // Python: tests/test_opencode_backend.py::test_model_overrides_config_rejects_conflicts_naming_both_options
   let harness = Harness::new(json!({}));
   let factory = OpenCodeFactory::new(harness.host.clone(), Arc::clone(&harness.pool));
   let first = opencode_option("oc-first", MODEL, "context_limit: 420000\n");
@@ -1274,7 +1274,7 @@ fn conflicting_context_limits_fail_the_shared_server_start_naming_both_options()
 
 #[test]
 fn headless_providers_merge_equal_limits_and_keep_distinct_models() {
-  // Python: tests/test_opencode_backend.py::test_model_context_config_merges_equal_limits_and_distinct_models
+  // Python: tests/test_opencode_backend.py::test_model_overrides_config_merges_equal_limits_and_distinct_models
   let harness = Harness::new(json!({}));
   let factory = OpenCodeFactory::new(harness.host.clone(), Arc::clone(&harness.pool));
   let options = vec![

@@ -26,6 +26,8 @@ use serde::Deserialize;
 enum Step {
   /// Writes the arguments after argv[0] to the file, one per line.
   RecordArgv(PathBuf),
+  /// Writes the child environment to the file, one `NAME=VALUE` per line.
+  RecordEnv(PathBuf),
   /// Writes all of stdin to the file.
   RecordStdin(PathBuf),
   /// Appends the text to the file, creating the file when absent.
@@ -58,6 +60,16 @@ fn main() {
           text.push(b'\n');
         }
         fs::write(&path, text).unwrap_or_else(|error| panic!("record argv to {}: {error}", path.display()));
+      }
+      Step::RecordEnv(path) => {
+        let mut text = Vec::new();
+        for (name, value) in env::vars_os() {
+          text.extend_from_slice(name.as_encoded_bytes());
+          text.push(b'=');
+          text.extend_from_slice(value.as_encoded_bytes());
+          text.push(b'\n');
+        }
+        fs::write(&path, text).unwrap_or_else(|error| panic!("record env to {}: {error}", path.display()));
       }
       Step::RecordStdin(path) => {
         let mut text = Vec::new();

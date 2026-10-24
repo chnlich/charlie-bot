@@ -24,9 +24,9 @@ mod backend;
 pub use backend::{
   AnthropicEndpointBackend, ClaudeCodeBackend, DISALLOWED_TOOLS_FLAG, EXCLUDE_DYNAMIC_SECTIONS_FLAG,
   GATEWAY_AUTH_TOKEN_ENV, GATEWAY_BASE_URL_ENV, GATEWAY_CUSTOM_HEADERS_ENV, GATEWAY_ENDPOINT_ENV_NAMES,
-  HEADLESS_DISALLOWED_TOOLS, INSTRUCTIONS_FILE_NAME, INSTRUCTIONS_WRITTEN_EVENT, SKIP_PERMISSIONS_FLAG,
-  claude_child_env, claude_model_env, claude_reading_limits, claude_reading_limits_from, headless_claude_env,
-  out_of_family_served_models, without_gateway_env,
+  GATEWAY_EXTRA_BODY_ENV, HEADLESS_DISALLOWED_TOOLS, INSTRUCTIONS_FILE_NAME, INSTRUCTIONS_WRITTEN_EVENT,
+  SKIP_PERMISSIONS_FLAG, claude_child_env, claude_model_env, claude_reading_limits, claude_reading_limits_from,
+  headless_claude_env, out_of_family_served_models, without_gateway_env,
 };
 
 use std::path::PathBuf;

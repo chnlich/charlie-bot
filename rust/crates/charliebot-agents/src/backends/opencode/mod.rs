@@ -122,6 +122,65 @@ pub(super) mod tests {
   }
 
   #[test]
+  fn config_loads_extra_body_on_an_endpoint_and_an_opencode_option() {
+    use std::fs;
+
+    use charliebot_registry::backend::{BackendFactory, Env, LaunchArgs};
+    use serde_json::{Value as JsonValue, json};
+
+    use crate::backends::anthropic_compatible;
+    use crate::backends::claude_code::GATEWAY_EXTRA_BODY_ENV;
+
+    use super::options::model_overrides_config;
+
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    fs::create_dir_all(&home).unwrap();
+    fs::write(
+      home.join("config.yaml"),
+      concat!(
+        "backends:\n",
+        "  options:\n",
+        "    - id: endpoint\n",
+        "      label: Endpoint\n",
+        "      type: cc-anthropic-compatible\n",
+        "      model: synthetic/model-1\n",
+        "      api_base: http://localhost:8123/api/anthropic-proxy\n",
+        "      context_window: 409600\n",
+        "      extra_body:\n",
+        "        cache:\n",
+        "          no-store: true\n",
+        "          no-cache: true\n",
+        "    - id: oc\n",
+        "      label: Opencode\n",
+        "      type: opencode\n",
+        "      model: fakeprov/fake-model\n",
+        "      extra_body:\n",
+        "        cache:\n",
+        "          no-store: true\n",
+        "          no-cache: true\n",
+      ),
+    )
+    .unwrap();
+    let mut registry = Registry::new();
+    registry.register_package("src.backends.opencode", register_synthetic).unwrap();
+    registry.register_package("src.backends.anthropic_compatible", anthropic_compatible::register).unwrap();
+    let cfg = registry.load_config(&home).unwrap();
+    let extra_body = json!({"cache": {"no-store": true, "no-cache": true}});
+
+    let endpoint = cfg.backends.options.iter().find(|option| option.backend_type == "cc-anthropic-compatible").unwrap();
+    let backend = anthropic_compatible::factory::AnthropicCompatibleFactory
+      .build(Some(endpoint), &cfg, LaunchArgs::default())
+      .unwrap();
+    let env = backend.prepare_env(Env::new()).unwrap();
+    assert_eq!(serde_json::from_str::<JsonValue>(&env[GATEWAY_EXTRA_BODY_ENV]).unwrap(), extra_body);
+
+    let opencode = cfg.backends.options.iter().find(|option| option.backend_type == "opencode").unwrap();
+    let config = model_overrides_config(std::slice::from_ref(opencode)).unwrap();
+    assert_eq!(config["providers"]["fakeprov"]["models"]["fake-model"]["body"], extra_body);
+  }
+
+  #[test]
   fn registration_matches_the_python_usage_source() {
     // tests/test_usage_sources.py: the name, id prefixes and run_logs_only of the opencode source, and the attribution
     // of the opencode backend type (`src/backends/opencode/__init__.py:24-30`).

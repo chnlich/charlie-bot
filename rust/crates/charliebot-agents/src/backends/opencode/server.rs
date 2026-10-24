@@ -24,7 +24,7 @@ use tokio::task::{Id, JoinHandle};
 use uuid::Uuid;
 
 use super::opencode_limits;
-use super::options::model_context_config;
+use super::options::model_overrides_config;
 use crate::cli_base::apply_proxy_env;
 use crate::transport::kill::{kill_process_group, python_exit_code};
 use crate::transport::spawn::{AgentPipeReader, ChildStdin, SpawnSetup, SpawnSpec, SpawnedChild, spawn_with_setup};
@@ -192,7 +192,7 @@ pub fn headless_config(options: &[BackendOption]) -> anyhow::Result<Value> {
     "default_agent": "charliebot",
     "agent": {"charliebot": {"mode": "primary"}}
   });
-  config.as_object_mut().expect("the headless config is a JSON object").extend(model_context_config(options)?);
+  config.as_object_mut().expect("the headless config is a JSON object").extend(model_overrides_config(options)?);
   Ok(config)
 }
 

@@ -1,7 +1,7 @@
 """Platform-neutral shared-thread core.
 
-The shared thread feature exists once per chat platform (Slack and Discord
-today): a summon starts a session bound to one thread, the round answers into
+The shared thread feature exists once per chat platform (Slack and Discord):
+a summon starts a session bound to one thread, the round answers into
 that thread, and the audit keeps summon and reply consistent across restarts.
 This module holds what every platform shares: the platform description
 (``ThreadPlatform``), the pure helpers, the adapter surface both the summon

@@ -305,7 +305,7 @@ def _log_suffix(log: str | None) -> str:
 
 
 def _still_alive_label(target: models.LocalPid | models.RemotePid) -> str:
-  """The timeout-fire label of a target still running: today's bare label plus its log path."""
+  """The timeout-fire label of a target still running: the bare label plus its log path."""
   base = str(target.pid) if isinstance(target, models.LocalPid) else f"{target.host}:{target.pid}"
   return f"{base}{_log_suffix(target.log)}"
 

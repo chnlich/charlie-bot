@@ -842,8 +842,8 @@ def resolve_session_id(arg_session: str | None) -> str:
   explicit ``--session`` must agree with it and a mismatch exits 2 naming both,
   because either value can carry a caller's intent. cwd serves as the fallback
   for an invocation the server did not start (a hand-run shell):
-  with the variable absent, $CHARLIEBOT_HOME/sessions/{session_id} supplies the id
-  exactly as it does today. With the variable present, a cwd sitting in another
+  with the variable absent, $CHARLIEBOT_HOME/sessions/{session_id} supplies the id.
+  With the variable present, a cwd sitting in another
   session's directory routes by the variable and prints a non-fatal warning
   naming both ids, so a stale copied path stays visible while a legitimate cd
   (reading a sibling session's artifacts, entering a worktree) keeps working.

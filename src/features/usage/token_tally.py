@@ -174,7 +174,7 @@ def _thread_row_model(meta: dict, registry: dict) -> str:
   prefix ("codex-gpt-5.6-sol-personal" -> "gpt-5.6-sol-personal"), which only a retired id
   whose thread recorded no model reaches. The recorded model leads because an id names a
   family and keeps its name across version bumps (the id rule on BackendsConfig in
-  src/infra/config.py): the config model is today's version, and reading it first would
+  src/infra/config.py): the config model is the current version, and reading it first would
   move a thread's history onto every later version."""
   model = meta.get("model")
   if model:

@@ -302,8 +302,8 @@ def _format_k_tokens(count: float) -> str:
 
 
 def _context_compacted_msg(ev: dict) -> dict:
-  """The compaction line: both counts when the payload carries them, today's
-  wording otherwise.
+  """The compaction line: both counts when the payload carries them, the
+  single-count wording otherwise.
 
   The counts live in ``compact_metadata`` — the payload the synthesis passes
   through whole, the same place a ``compact_boundary`` event carries them.

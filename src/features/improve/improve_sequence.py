@@ -841,7 +841,7 @@ async def _loop_close_verdict(
       continue
     report_path = loop_dir / f"iter_{position:04d}.md"
     if not await asyncio.to_thread(report_path.is_file):
-      continue  # an iteration the loop never judged has no summary, as today
+      continue  # an iteration the loop never judged has no summary
     text = await asyncio.to_thread(report_path.read_text)
     summaries.append(text.removeprefix(improve_command.RUNNER_FALLBACK_REPORT_MARKER)[:500])
   detail = ("\n\nIteration summaries:\n" + "\n\n".join(summaries)) if summaries else ""

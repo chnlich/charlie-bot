@@ -820,7 +820,7 @@ async def test_a_fully_avoided_route_falls_back_to_todays_reviewer_selection(tmp
   review_run_id = await adapter._maybe_spawn_review(worker.id, run)
   assert review_run_id is not None
   review_run = await tree.runs.get_run(worker.id, review_run_id)
-  assert review_run.backend == "fake2"  # today's pool selection picks the other member
+  assert review_run.backend == "fake2"  # the pool selection picks the other member
 
 
 def test_the_pool_walk_never_starts_the_router(tmp_path, monkeypatch) -> None:

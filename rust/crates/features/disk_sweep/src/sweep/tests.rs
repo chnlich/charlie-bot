@@ -637,3 +637,22 @@ async fn test_cli_without_yes_is_read_only_and_reports_a_total() {
   assert!(!run_dir.join("worktree-changes.tar").exists());
   assert_eq!(snapshot_tree(root.path()), before);
 }
+
+#[test]
+fn test_bare_chat_events_archive_name_does_not_change_close_time() {
+  let root = tempdir().unwrap();
+  let session = root.path().join("sessions").join("sess");
+  let archives = session.join("data").join("archives");
+  fs::create_dir_all(&archives).unwrap();
+  fs::write(
+    archives.join("chat_events.2026-W05.jsonl"),
+    "{\"type\": \"task_closed\", \"timestamp\": \"2026-02-02T00:00:00Z\"}\n",
+  )
+  .unwrap();
+  fs::write(
+    archives.join("chat_events.jsonl"),
+    "{\"type\": \"task_closed\", \"timestamp\": \"2026-02-09T00:00:00Z\"}\n",
+  )
+  .unwrap();
+  assert_eq!(super::latest_closed_at(&session).unwrap(), Some(utc("2026-02-02T00:00:00Z")));
+}

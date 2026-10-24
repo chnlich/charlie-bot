@@ -512,12 +512,7 @@ impl<'a> NodeReads<'a> {
   }
 
   /// Whether the node is archived, counting an archived ancestor, with this pass's states (Python's `_effective_archived`).
-  fn archived(
-    &mut self,
-    index: &TreeIndex,
-    session_id: &str,
-    memo: &mut HashMap<String, bool>,
-  ) -> StoreResult<bool> {
+  fn archived(&mut self, index: &TreeIndex, session_id: &str, memo: &mut HashMap<String, bool>) -> StoreResult<bool> {
     archived_with(index, session_id, memo, &mut |node_id| self.task_state(node_id))
   }
 

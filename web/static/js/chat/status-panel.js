@@ -359,6 +359,9 @@
       return;
     }
     if (gen !== panelFetchGen || sessionId !== panelSessionId) return;
+    if (body.web_status && (!panelStatus || Date.parse(body.web_status.updated_at) >= Date.parse(panelStatus.updated_at))) {
+      panelStatus = body.web_status;
+    }
     panelDescendants = body.descendants;
     panelChildren = body.children;
     renderPanel();

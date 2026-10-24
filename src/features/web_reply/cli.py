@@ -29,6 +29,7 @@ then one line of Now per open child session that holds a Now, newest first.
 """
 
 import argparse
+import json
 import sys
 
 from src.infra import help_formatter
@@ -68,9 +69,8 @@ def _build_parser() -> argparse.ArgumentParser:
       required=True,
       help="JSON object with any of goal, now, waiting; prints cold reads and exits 3 before storing; - reads stdin")
   common.add_session_arg(status_set)
-  status_confirm = status_sub.add_parser(
+  status_sub.add_parser(
       "confirm", help="Confirm that the stored status needs no change", formatter_class=help_formatter.CliHelpFormatter)
-  common.add_session_arg(status_confirm)
   status_show = status_sub.add_parser(
       "show",
       help="Print this session's status and the waiting items of its child sessions",
@@ -133,8 +133,8 @@ def _cmd_status_set(args: argparse.Namespace) -> None:
   sys.exit(3)
 
 
-def _cmd_status_confirm(args: argparse.Namespace) -> None:
-  session_id = common.resolve_session_id(args.session)
+def _cmd_status_confirm() -> None:
+  session_id = common.resolve_session_id(None)
   result = common.post_internal_api("/api/internal/web/status/confirm", {"session_id": session_id})
   common.print_json(result, indent=None, file=sys.stdout)
 
@@ -145,7 +145,7 @@ def _item_line(item: dict) -> str:
 
 def _item_lines(item: dict) -> list[str]:
   """The item line and its context indented below it, when stored."""
-  lines = [_item_line(item)]
+  lines = [_item_line(item), f"  since: {item['since']}", f"  since_exact: {json.dumps(item['since_exact'])}"]
   context = item.get("context")
   if context is not None:
     context_lines = context.splitlines()
@@ -198,7 +198,7 @@ def main() -> None:
   elif args.web_command == "status" and args.status_command == "set":
     _cmd_status_set(args)
   elif args.web_command == "status" and args.status_command == "confirm":
-    _cmd_status_confirm(args)
+    _cmd_status_confirm()
   elif args.web_command == "status" and args.status_command == "show":
     _cmd_status_show(args)
   else:

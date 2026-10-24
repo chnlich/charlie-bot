@@ -13,7 +13,7 @@ import asyncio
 
 from src.features.web_reply import reply
 from src.infra import event_types as ET
-from src.infra import log_once, tasks
+from src.infra import log_once
 from src.runtime import (
     master_trigger,
     session_events,
@@ -212,20 +212,18 @@ async def _post_status_reminder(
   if nudge_of is not None:
     reminder[ET.WEB_REPLY] = {"nudge_of": nudge_of}
   await events.persist_and_broadcast(session_id, reminder)
-  tasks.create_logged_task(
-      master_trigger.trigger_master(
-          session_id,
-          text,
-          store,
-          successor,
-          lifecycle,
-          input_id=reminder["id"],
-          event_type=ET.AGENT_MESSAGE,
-          actor="agent",
-          from_session=session_id,
-          from_session_name=STATUS_REMINDER_SENDER_NAME,
-      ),
-      name=f"web-status-reminder-{session_id}")
+  master_trigger.spawn_master_turn(
+      session_id,
+      text,
+      store,
+      successor,
+      lifecycle,
+      input_id=reminder["id"],
+      event_type=ET.AGENT_MESSAGE,
+      actor="agent",
+      from_session=session_id,
+      from_session_name=STATUS_REMINDER_SENDER_NAME,
+      task_name=f"web-status-reminder-{session_id}")
   logger.info("web_status_reminder", session=session_id, turn_id=turn_id, combined=nudge_of is not None)
 
 
@@ -237,20 +235,18 @@ async def _nudge(
       reply.NUDGE_TEXT, from_session=session_id, from_session_name=reply.NUDGE_SENDER_NAME)
   nudge[ET.WEB_REPLY] = {"nudge_of": user_event_id}
   await events.persist_and_broadcast(session_id, nudge)
-  tasks.create_logged_task(
-      master_trigger.trigger_master(
-          session_id,
-          reply.NUDGE_TEXT,
-          store,
-          successor,
-          lifecycle,
-          input_id=nudge["id"],
-          event_type=ET.AGENT_MESSAGE,
-          actor="agent",
-          from_session=session_id,
-          from_session_name=reply.NUDGE_SENDER_NAME,
-      ),
-      name=f"web-reply-nudge-{session_id}")
+  master_trigger.spawn_master_turn(
+      session_id,
+      reply.NUDGE_TEXT,
+      store,
+      successor,
+      lifecycle,
+      input_id=nudge["id"],
+      event_type=ET.AGENT_MESSAGE,
+      actor="agent",
+      from_session=session_id,
+      from_session_name=reply.NUDGE_SENDER_NAME,
+      task_name=f"web-reply-nudge-{session_id}")
   logger.info("web_reply_nudge", session=session_id, user_event_id=user_event_id, nudge_id=nudge["id"])
 
 

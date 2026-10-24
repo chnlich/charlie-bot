@@ -70,7 +70,7 @@ function panelRig(localStorageItems = {}) {
   root.appendChild(stream);
   const panel = new FakeElement('DIV', {id: 'chat-status-panel', className: 'hidden'});
   const elements = new Map([['messages', root], ['streaming-msg', stream], ['chat-status-panel', panel]]);
-  const page = {descendants: [], children: []};
+  const page = {web_status: null, descendants: [], children: []};
   const statusGets = [];
   const {context, localStorageData} = baseSessionContext({localStorageItems});
   const panelStorageAccesses = [];
@@ -110,7 +110,7 @@ function panelRig(localStorageItems = {}) {
       statusGets.push(url);
       const sessionId = url.slice(url.indexOf('session_id=') + 'session_id='.length);
       return {ok: true, status: 200, json: async () => ({
-        session_id: sessionId, web_status: null, descendants: page.descendants, children: page.children,
+        session_id: sessionId, web_status: page.web_status, descendants: page.descendants, children: page.children,
       })};
     }
     return {ok: true, status: 200, json: async () => []};
@@ -259,6 +259,31 @@ test('waiting items show how long they have waited, own and in child sessions', 
   childToggle(rig.panel).onclick();
   const childAge = childItems(rig.panel)[0].querySelector('[data-waiting-age]');
   assert.equal(childAge.textContent, '至少 3d');
+});
+
+test('the status API supplies the lower-bound age of legacy own items', async () => {
+  const rig = panelRig();
+  const updatedAt = new Date(Date.now() - 5.5 * 60 * 60 * 1000).toISOString();
+  const legacy = {...STATUS, updated_at: updatedAt};
+  rig.page.web_status = {
+    ...legacy,
+    waiting: legacy.waiting.map((item) => ({...item, since: updatedAt, since_exact: false})),
+  };
+
+  await openSession(rig, {web_status: legacy});
+
+  for (const item of waitingItems(rig.panel)) {
+    assert.equal(item.querySelector('[data-waiting-age]').textContent, '至少 5h');
+  }
+});
+
+test('a status API result preserves a newer own status', async () => {
+  const rig = panelRig();
+  rig.page.web_status = OLDER;
+
+  await openSession(rig, {web_status: NEWER});
+
+  assert.equal(waitingItems(rig.panel)[0].textContent.includes('Review the diff'), true);
 });
 
 test('an item whose link is not a web or host-absolute URL gets no link', async () => {

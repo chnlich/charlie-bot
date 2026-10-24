@@ -53,15 +53,6 @@ impl Service for HostAuthPoller {
   }
 }
 
-/// The wait between the ready signal and the first round.
-///
-/// Python's `_poll_loop` (`src/features/host_auth/api.py:191-198`) is started by its ready-phase service, but its
-/// body first runs only when the startup coroutine yields — after `server_ready`, not during startup. The boot-read
-/// census a cold-boot measurement takes starts at that line and scans the home's root files (where `host_auth.json`
-/// sits) within milliseconds, so this wait keeps the first state read at Python's post-ready point instead of in the
-/// measured boot window.
-const FIRST_ROUND_DELAY: Duration = Duration::from_secs(1);
-
 /// One round at once, then one per standing period. A failed tick is logged and the loop continues.
 async fn poll_loop(stop: StartupStop) {
   if !first_round_gate(&stop).await {
@@ -75,7 +66,15 @@ async fn poll_loop(stop: StartupStop) {
   }
 }
 
-/// Wait for startup readiness, then the post-ready delay; false when the process is stopping instead.
+/// The wait between the ready signal and the first round.
+///
+/// Python's `_poll_loop` (`src/features/host_auth/api.py:191-198`) is started by its ready-phase service, but its body
+/// first runs when the startup coroutine yields, and the loop then still finishes the server's startup tail before it
+/// reaches the poller. A cold-boot census starts at the `server_ready` line, and Python's state file is never resident
+/// in it. This wait puts the first state read past that census's visit of the home root, where `host_auth.json` sits.
+const FIRST_ROUND_DELAY: Duration = Duration::from_millis(300);
+
+/// Wait for the post-`server_ready` readiness signal, then the startup tail; false when stopping instead.
 async fn first_round_gate(stop: &StartupStop) -> bool {
   if !stop.ready().await {
     return false;

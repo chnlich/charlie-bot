@@ -128,7 +128,7 @@ class Credentials:
 
 
 def load_credentials() -> Credentials:
-  """Load this profile's ``credentials.yaml``, the secrets file split out of ``config.yaml``.
+  """Load this profile's ``credentials.yaml``.
 
   A missing file loads as empty sections. The document must be a mapping whose
   values are mappings whose values are strings or integers; a ``None`` value

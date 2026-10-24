@@ -321,7 +321,7 @@ class CharlieBotConfig(pydantic.BaseModel):
 
   @property
   def credentials_file(self) -> pathlib.Path:
-    """The profile's credentials.yaml: the secrets split out of config.yaml."""
+    """The profile's credentials.yaml."""
     return self.charliebot_home / credentials.CREDENTIALS_FILENAME
 
   @property

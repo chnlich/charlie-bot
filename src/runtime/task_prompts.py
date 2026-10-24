@@ -82,7 +82,7 @@ SCOPE_NODE = "node"
 DELIVERY_FULL = "full"
 
 # Run kinds whose managed instructions are the manager contract (no worker
-# workflow, no PM body, no project/PM rules — those retired with the old role).
+# workflow, no PM body, no project/PM rules).
 MANAGER_KINDS = frozenset({"manager_turn"})
 # Run kinds mapped to the worker audience for memory selection: workers,
 # reviewers, verify, iteration and scheduled-step execution. A cold-read run

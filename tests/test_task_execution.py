@@ -1775,7 +1775,7 @@ async def test_landing_verification_negative_cases(tmp_path: pathlib.Path) -> No
 
 
 @pytest.mark.asyncio
-async def test_manual_complete_with_forged_landing_ref_stays_open(
+async def test_worker_automatic_close_with_forged_landing_ref_stays_open(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   from src.runtime import task_completion
 
@@ -1828,7 +1828,8 @@ async def test_manual_complete_with_forged_landing_ref_stays_open(
       run_ids=["run-work"],
       review_run_ids=["run-review"])
   with pytest.raises(task_errors.TaskConflictError, match="landing evidence unverified"):
-    await tree.completion.complete_task(worker.id, request_id="manual-1", evidence=evidence, caller="operator")
+    await tree.completion.evaluate_automatic_completion(
+        worker.id, run_id="run-work", request_id="auto-1", evidence=evidence)
   assert tree.task_state(worker.id) == "open"
 
 
@@ -3415,7 +3416,13 @@ async def test_withheld_launch_on_a_completed_task_settles_the_queued_run(
   assert [r.get("outcome") for r in conftest.child_reports(tree, manager.id)] == ["completed", "blocked"]
   # The completed worker's stopped run blocks nothing: the archive passes and
   # archives the open parent (a completed node is left unchanged).
-  assert await tree.archive_subtree(manager.id, caller=conftest.OPERATOR) == [manager.id]
+  assert await tree.completion.archive_subtree(
+      manager.id,
+      request_id="archive-test",
+      summary="archived by the user",
+      result_refs=[],
+      run_ids=[],
+      caller=conftest.OPERATOR) == [manager.id]
 
 
 @pytest.mark.asyncio

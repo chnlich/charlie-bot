@@ -236,7 +236,7 @@ async def test_closed_bound_node_generates_no_new_execution(bound_env, monkeypat
   await tree.runs.register_run_locked(models.RunRecord(id=close_run, session_id=manager.id, kind="manager_turn"))
   await tree.runs.record_launch(manager.id, close_run, pid=424001, pid_start="ps-1")
   await tree.dispatch.finish_run(manager.id, close_run, outcome="success")
-  await tree.completion.complete_task(
+  await tree.completion.archive_task(
       manager.id,
       request_id="close-1",
       caller=conftest.OPERATOR,

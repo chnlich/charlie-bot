@@ -21,6 +21,7 @@ from src.infra import constants, models, text_length
 from src.infra import event_types as ET
 from src.runtime import control_events, run_token
 from src.runtime.api import deps
+from src.runtime.cli import common
 from src.runtime.cli import session
 
 # ---------------------------------------------------------------------------
@@ -49,7 +50,13 @@ async def test_session_message_refuses_an_archived_task_node(tmp_path: pathlib.P
   cfg, session_blocks, tree = conftest.build_env(tmp_path)
   caller = await conftest.create_task(tree, parent=None, request_id="caller", name="Caller")
   target = await conftest.create_task(tree, parent=None, request_id="target", name="Target")
-  await tree.archive_subtree(target.id, caller=conftest.OPERATOR)
+  await tree.completion.archive_subtree(
+      target.id,
+      request_id="archive-test",
+      summary="archived by the user",
+      result_refs=[],
+      run_ids=[],
+      caller=conftest.OPERATOR)
 
   with conftest.make_internal_router_client(cfg, session_blocks, tree) as client:
     response = client.post(
@@ -262,8 +269,9 @@ async def test_session_message_refuses_an_over_limit_ascii_message(tmp_path: pat
 
 
 def test_cli_session_send_maps_a_422_refusal_to_exit_2(
-    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   """The over-limit refusal is a rejection, not a server fault: exit 2, effect none."""
+  monkeypatch.setattr(common, "_maybe_version_skew_hint", lambda _base_url: None)
   detail = (
       f"Message is 2002 weighted characters; the limit is {constants.MAX_AGENT_MESSAGE_WEIGHTED_CHARS}.\n"
       "CJK characters, CJK punctuation, and fullwidth characters count 2.\n"

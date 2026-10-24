@@ -777,9 +777,9 @@ def find_local_task_child(
 
 
 def find_local_task_close(task_id: str, request_id: str) -> dict | None:
-  """The close fact THIS cancel/complete request's own identity binds to.
+  """The close fact THIS cancel/archive request's own identity binds to.
 
-  The sent-but-lost readback for ``session cancel`` / ``session complete``
+  The sent-but-lost readback for ``session cancel`` / ``session archive``
   binds to the operation's request identity, never to a scan: this request's
   closed fact is the event whose id derives from (task id, request id) via
   ``stable_close_event_id``, and its run-token deferral is the
@@ -810,7 +810,7 @@ def find_local_task_close(task_id: str, request_id: str) -> dict | None:
     if event.get("type") == "task_closed" and event.get("id") == closed_id:
       return {
           "session_id": task_id,
-          "task_state": "cancelled" if event.get("outcome") == "cancelled" else "completed",
+          "task_state": str(event.get("outcome") or "completed"),
           "closed_event_id": closed_id,
       }
     if event.get("type") == "task_close_requested" and event.get("request_id") == request_id:

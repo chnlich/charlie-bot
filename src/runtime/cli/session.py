@@ -18,16 +18,16 @@ authorization, while worker children ride the runtime gate; any
 parent other than the caller's own task is refused. ``tree`` pages the task
 tree. ``retry`` creates the request-bound retry run of one recorded run.
 
-``complete`` closes one task: the result file carries the complete request's
-JSON body (summary/result_refs/run_ids); a duplicate request id replays the
-original outcome, and an agent's own active Run may request its own manager's
-closure (202 pending_run_finish; a request already facing blockers is refused
-409 with the blocker list and not saved). ``cancel`` explicitly cancels an open
-task with a reason — an operator cancels any open task, an agent running inside
-a Run cancels only a direct child of its own task. A worker target has its
-running work stopped and its delegation ended. Archiving is the single end
-state (``DELETE /api/sessions/{id}`` on the server): the user's own message to
-an archived node restores it, and unarchiving is the sidebar's restore.
+``archive`` ends a task: operators archive its open subtree, and an agent may
+archive its own manager task through its active Run. The optional result file
+carries the archive request's JSON body (summary/result_refs/run_ids); an agent
+must provide it, and its request closes after the Run succeeds. A duplicate
+request id reuses its original result. ``cancel`` explicitly cancels an
+open task with a reason — an operator cancels any open task, an agent running
+inside a Run cancels only a direct child of its own task. A worker target has
+its running work stopped and its delegation ended. The server route is
+``POST /api/sessions/{id}/archive``. The user's own message to an archived node
+restores it, and unarchiving is the sidebar's restore.
 
 ``acknowledge`` durably resolves exact task inputs the operator handled
 out-of-band (the terminal-driven node's resolution step): operator scope,
@@ -105,14 +105,13 @@ def _build_parser() -> argparse.ArgumentParser:
       default=None,
       help="Request id binding the retry run (defaults to a fresh UUID; replays return the same run)")
 
-  complete = sub.add_parser("complete", help="Complete (close) one task")
-  complete.add_argument("session_id", help="Task id")
-  complete.add_argument(
+  archive = sub.add_parser("archive", help="Archive a task or its subtree")
+  archive.add_argument("session_id", help="Task id")
+  archive.add_argument(
       "--result-file",
-      required=True,
-      help="Path to the complete request's JSON body (summary, result_refs, run_ids; request_id "
-      "optional and defaults to a fresh UUID)")
-  complete.add_argument("--request-id", default=None, help="Request id binding the close (defaults to a fresh UUID)")
+      default=None,
+      help="Path to the archive request's JSON body (summary, result_refs, run_ids; required for an agent)")
+  archive.add_argument("--request-id", default=None, help="Request id binding the archive (defaults to a fresh UUID)")
 
   ack = sub.add_parser(
       "acknowledge",
@@ -208,15 +207,15 @@ def _cmd_retry(args: argparse.Namespace) -> None:
       common.post_internal_api(f"/api/sessions/{args.session_id}/retry", payload), indent=2, file=sys.stdout)
 
 
-def _cmd_complete(args: argparse.Namespace) -> None:
-  body = json.loads(common.read_required_text_file("--result-file", args.result_file))
+def _cmd_archive(args: argparse.Namespace) -> None:
+  body = json.loads(common.read_required_text_file("--result-file", args.result_file)) if args.result_file else {}
   if not isinstance(body, dict):
-    common.exit_usage_error("--result-file must carry the complete request's JSON object")
+    common.exit_usage_error("--result-file must carry the archive request's JSON object")
   body = dict(body)
   request_id = args.request_id or body.get("request_id") or str(uuid.uuid4())
   body["request_id"] = request_id
   result = common.post_internal_api(
-      f"/api/sessions/{args.session_id}/complete",
+      f"/api/sessions/{args.session_id}/archive",
       body,
       readback=lambda: common.find_local_task_close(args.session_id, request_id))
   common.print_json(result, indent=2, file=sys.stdout)
@@ -356,8 +355,8 @@ def main() -> None:
     _cmd_retry(args)
   elif args.session_command == "acknowledge":
     _cmd_acknowledge(args)
-  elif args.session_command == "complete":
-    _cmd_complete(args)
+  elif args.session_command == "archive":
+    _cmd_archive(args)
   elif args.session_command == "cancel":
     _cmd_cancel(args)
   elif args.session_command == "send":

@@ -1165,7 +1165,13 @@ async def test_the_status_read_lists_open_waiting_descendants_newest_first(tmp_p
       (archived, _waiting_set("Archived decision")),
   ]:
     _set_after_reads(client, child.id, text)
-  await tree.archive_subtree(closed.id, caller=conftest.OPERATOR)
+  await tree.completion.archive_subtree(
+      closed.id,
+      request_id="archive-test",
+      summary="archived by the user",
+      result_refs=[],
+      run_ids=[],
+      caller=conftest.OPERATOR)
   await blocks.lifecycle.archive_session(archived.id)
 
   body = client.get(_STATUS_URL, params={"session_id": root_id}).json()
@@ -1218,7 +1224,13 @@ async def test_the_status_read_lists_the_open_direct_children_with_a_now_newest_
       (archived, json.dumps({"now": "Archived step"})),
   ]:
     _set_after_reads(client, child.id, text)
-  await tree.archive_subtree(closed.id, caller=conftest.OPERATOR)
+  await tree.completion.archive_subtree(
+      closed.id,
+      request_id="archive-test",
+      summary="archived by the user",
+      result_refs=[],
+      run_ids=[],
+      caller=conftest.OPERATOR)
   await blocks.lifecycle.archive_session(archived.id)
 
   body = client.get(_STATUS_URL, params={"session_id": root_id}).json()

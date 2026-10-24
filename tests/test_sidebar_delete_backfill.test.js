@@ -28,7 +28,10 @@ function rowStubs(ids) {
 // so a delete-flow refetch cannot pass silently.
 function deleteOkFetch() {
   return async (url, opts = {}) => {
-    if (opts.method === 'DELETE' && /^\/api\/sessions\/[^/]+(\/permanent)?$/.test(url)) {
+    if (opts.method === 'POST' && url.endsWith('/archive')) {
+      return {ok: true, json: async () => ({})};
+    }
+    if (opts.method === 'DELETE' && url.endsWith('/permanent')) {
       return {ok: true, json: async () => ({})};
     }
     throw new Error('unexpected fetch ' + url);
@@ -161,8 +164,8 @@ test('archiving a visible row backfills the preview and resyncs count and toggle
   assert.doesNotMatch(nav.innerHTML, /session-group-limit-toggle/);
   assert.doesNotMatch(nav.innerHTML, /Show all/);
   assert.ok(nav.innerHTML.includes('ml-auto">5</span>'));
-  // No-refetch contract: the whole delete flow issued exactly the DELETE call.
-  assert.deepEqual(fetchCalls.slice(baseline), ['/api/sessions/s2']);
+  // No-refetch contract: the archive flow issued exactly one request.
+  assert.deepEqual(fetchCalls.slice(baseline), ['/api/sessions/s2/archive']);
 });
 
 test('an expanded preview stays expanded across the delete repaint', async () => {
@@ -252,7 +255,7 @@ test('an in-place delete repaint carries the Workspace badges through unchanged'
   assert.ok(nav.innerHTML.includes('ml-auto">5</span>'));
   // The in-place repaint carries the Workspace badges through unchanged.
   assert.ok(nav.innerHTML.includes('1 scheduled tasks failed to load'), nav.innerHTML);
-  assert.deepEqual(fetchCalls.slice(baseline), ['/api/sessions/c2']);
+  assert.deepEqual(fetchCalls.slice(baseline), ['/api/sessions/c2/archive']);
 });
 
 test('deleting from the search overlay removes only the row node', async () => {
@@ -282,7 +285,7 @@ test('deleting from the search overlay removes only the row node', async () => {
   assert.equal(nav.innerHTML, searchHtml);
   assert.ok(nav.innerHTML.includes('search-2'));
   assert.ok(nav.innerHTML.includes('search-3'));
-  assert.deepEqual(fetchCalls.slice(baseline), ['/api/sessions/search-1']);
+  assert.deepEqual(fetchCalls.slice(baseline), ['/api/sessions/search-1/archive']);
 });
 
 test('deleting on the archived tab stays node-only with the forget bookkeeping', async () => {
@@ -353,8 +356,8 @@ test('archiving a legacy parent takes its worker leaves and task descendants wit
   assert.deepEqual(anchorIdsInOrder(nav.innerHTML), ['r1']);
   assert.equal(countRows(nav.innerHTML), 1);
   assert.ok(nav.innerHTML.includes('Session r1'), nav.innerHTML);
-  // No-refetch contract: the whole delete flow issued exactly the DELETE call.
-  assert.deepEqual(fetchCalls.slice(baseline), ['/api/sessions/p1']);
+  // No-refetch contract: the archive flow issued exactly one request.
+  assert.deepEqual(fetchCalls.slice(baseline), ['/api/sessions/p1/archive']);
 });
 
 test('archiving a task-node child removes only that child\'s subtree', async () => {

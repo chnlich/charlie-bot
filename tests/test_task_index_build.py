@@ -136,7 +136,7 @@ async def test_cancellation_succeeds_when_a_write_lands_mid_build(tree, monkeypa
 
 
 @pytest.mark.asyncio
-async def test_manager_close_citing_a_child_run_passes_evidence_when_a_write_lands_mid_build(tree, monkeypatch):
+async def test_manager_archive_revalidates_tree_when_a_write_lands_mid_build(tree, monkeypatch):
   feature = await conftest.create_task(tree, parent=None, request_id="feature")
   worker = await conftest.create_task(tree, parent=feature.id, request_id="w", profile="worker")
   await tree.runs.register_run_locked(models.RunRecord(id="run-w", session_id=worker.id, kind="work"))
@@ -148,10 +148,10 @@ async def test_manager_close_citing_a_child_run_passes_evidence_when_a_write_lan
   await tree.dispatch.finish_run(feature.id, "run-turn", outcome="success")
   _invalidate_during_builds(tree, monkeypatch)
   evidence = task_completion.CompletionEvidence(summary="delivered", result_refs=["run:run-w"], run_ids=["run-w"])
-  status, _payload = await tree.completion.complete_task(
+  status, _payload = await tree.completion.archive_task(
       feature.id, request_id="close", evidence=evidence, caller=conftest.OPERATOR)
   assert status == 200
-  assert tree.task_state(feature.id) == "completed"
+  assert tree.task_state(feature.id) == "archived"
 
 
 @pytest.mark.asyncio

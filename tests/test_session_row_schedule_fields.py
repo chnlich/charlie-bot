@@ -195,12 +195,24 @@ async def test_archived_pages_carry_active_ancestors_as_context_only_rows(tmp_pa
   await tree.runs.register_run_locked(models.RunRecord(id="run-1", session_id=delivered.id, kind="work"))
   await tree.dispatch.finish_run(delivered.id, "run-1", outcome="success")
   assert tree.task_state(delivered.id) == "completed"  # an end state of its own
-  await tree.archive_subtree(hidden.id, caller=conftest.OPERATOR)  # delivered is not open; it stays completed
+  await tree.completion.archive_subtree(
+      hidden.id,
+      request_id="archive-test",
+      summary="archived by the user",
+      result_refs=[],
+      run_ids=[],
+      caller=conftest.OPERATOR)  # delivered is not open; it stays completed
 
   # An archived child directly under the active root.
   archived_child = await conftest.create_task(
       tree, parent=root.id, request_id="archived-child", profile="manager", name="Synthetic archived child")
-  await tree.archive_subtree(archived_child.id, caller=conftest.OPERATOR)
+  await tree.completion.archive_subtree(
+      archived_child.id,
+      request_id="archive-test",
+      summary="archived by the user",
+      result_refs=[],
+      run_ids=[],
+      caller=conftest.OPERATOR)
 
   # Fillers push the archived rows past one small page.
   fillers = []

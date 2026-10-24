@@ -28,7 +28,13 @@ async def test_create_trigger_on_an_archived_task_node_is_refused(
   cfg, session_blocks, tree = conftest.build_env(tmp_path)
   conftest.bind_deps_blocks(monkeypatch, tree, session_blocks)
   node = await conftest.create_task(tree, parent=None, request_id="node")
-  await tree.archive_subtree(node.id, caller=conftest.OPERATOR)
+  await tree.completion.archive_subtree(
+      node.id,
+      request_id="archive-test",
+      summary="archived by the user",
+      result_refs=[],
+      run_ids=[],
+      caller=conftest.OPERATOR)
 
   trigger_mgr = triggers.TriggerManager(cfg, tree)
   with pytest.raises(triggers.ArchivedSessionError, match="target task is archived"):
@@ -49,7 +55,13 @@ async def test_fire_time_backstop_cancels_with_the_archived_reason(
   trigger = _trigger(node.id)
   await trigger_mgr._save_trigger(trigger)
   # The archive lands mid-wait: the fire-time re-check must cancel, not fire.
-  await tree.archive_subtree(node.id, caller=conftest.OPERATOR)
+  await tree.completion.archive_subtree(
+      node.id,
+      request_id="archive-test",
+      summary="archived by the user",
+      result_refs=[],
+      run_ids=[],
+      caller=conftest.OPERATOR)
 
   await trigger_mgr._wait_and_fire(trigger)
 
@@ -66,7 +78,13 @@ async def test_watchdog_reason_carries_into_the_cancel(tmp_path: pathlib.Path, m
   cfg, session_blocks, tree = conftest.build_env(tmp_path)
   conftest.bind_deps_blocks(monkeypatch, tree, session_blocks)
   node = await conftest.create_task(tree, parent=None, request_id="node")
-  await tree.archive_subtree(node.id, caller=conftest.OPERATOR)
+  await tree.completion.archive_subtree(
+      node.id,
+      request_id="archive-test",
+      summary="archived by the user",
+      result_refs=[],
+      run_ids=[],
+      caller=conftest.OPERATOR)
 
   trigger_mgr = triggers.TriggerManager(cfg, tree)
   # The dormancy judgment is the one predicate both racers read.

@@ -78,7 +78,6 @@ _TREE_INDEX_TTL_SECONDS = 2.0
 # pre-check and legacy-shape guard read the first two, the archive route's operator guard the third.
 TASK_CREATE_REQUEST_ID_REQUIRED = "request_id is required for task creation"
 AGENT_CREATE_SCOPE_REFUSAL = "an agent may only create a task directly under its own open manager task"
-ARCHIVE_OPERATOR_REFUSAL = "archiving a task requires operator credentials"
 
 
 def closed_ancestors_blocker(closed_ids: list[str]) -> str:
@@ -1812,41 +1811,6 @@ class TaskTreeManager:
       self._activity_memo.pop(session_id, None)
     return result
 
-  # ------------------------------------------------------------------
-  # Archive: the user's single end state, cascading down the subtree
-  # ------------------------------------------------------------------
-
-  def archived_close_event(
-      self,
-      session_id: str,
-      request_id: str,
-      *,
-      summary: str,
-      archived_with: str | None = None,
-      actor: str = control_events.ACTOR_USER,
-      run_ids: list[str] | None = None,
-  ) -> dict:
-    """One node's archive-format close fact: outcome ``archived``, ``report_to``
-    null — an archive reports to nobody and wakes nobody. ``archived_with``
-    names the node the user archived when this fact closes a descendant.
-    ``actor`` and ``run_ids`` default to the user archive's values; the
-    server's own archive entry names its actor and the run that ended."""
-    return control_events.build_control_event(
-        ET.TASK_CLOSED,
-        actor=actor,
-        source_session_id=session_id,
-        event_id=control_events.stable_close_event_id(session_id, request_id),
-        request_id=request_id,
-        outcome="archived",
-        summary=summary,
-        result_refs=[],
-        run_ids=list(run_ids) if run_ids is not None else [],
-        report_to=None,
-        **({
-            "archived_with": archived_with
-        } if archived_with is not None else {}),
-    )
-
   async def clone_blocker(self, source_id: str) -> str | None:
     """The clone refusal for one source, or None: a manager source's parent
     task must be open — a clone writes nothing under a closed parent."""
@@ -1942,15 +1906,7 @@ class TaskTreeManager:
 
   async def _close_source_archived(self, source_id: str, new_id: str) -> None:
     """Close an open source with the archive format; a closed source keeps its fact."""
-    if self.task_state(source_id) != "open":
-      return
-    event = self.archived_close_event(
-        source_id,
-        f"elone-{uuid.uuid4()}",
-        summary=f"archived by elone successor {new_id}",
-    )
-    await self.events.append(source_id, event)
-    self._invalidate_index()
+    await self.completion.archive_replaced_source_locked(source_id, new_id)
 
   async def _rebind_scheduled_tasks(self, source: models.SessionMetadata, new_meta: models.SessionMetadata) -> None:
     """Move every scheduled task bound to the source onto the new node.
@@ -1970,115 +1926,6 @@ class TaskTreeManager:
     metadata_slots.copy_fields(
         source, fresh_new, "cron", names=("last_scheduled_run", "last_scheduled_cron", "last_run_status"))
     await self._save_meta(fresh_new)
-
-  async def archive_subtree(self, session_id: str, *, caller: object) -> list[str]:
-    """Archive *session_id*'s whole subtree: one archived close fact per open node.
-
-    Operator scope only. The control lock holds for the whole operation: the
-    subtree is collected and every unfinished run is refused before anything
-    is written, so a refused call leaves zero facts and a passed call leaves
-    no window between the facts. Each open node's fact carries outcome
-    "archived", actor "user", and an empty report_to — an archive reports to
-    nobody; each descendant's fact also names the node the user archived in
-    ``archived_with``. Completed and cancelled nodes are left unchanged. Each
-    archived node's sequence binding receives its archive callback. Returns
-    the ids this call archived, in parent-before-child order; an already-archived target returns [].
-    """
-
-    task_errors.require_operator(caller, ARCHIVE_OPERATOR_REFUSAL)
-    tree = self
-    async with tree.control_lock:
-      index = await tree._get_index(force=True)
-      tree._index_meta(index, session_id)
-      if tree.task_state(session_id) != "open":
-        return []  # the target is already archived; the invariant empties its subtree too
-      subtree = [session_id, *tree._descendants(index, session_id)]
-      # Refuse before writing: every node in the subtree must be free of an
-      # unfinished run (terminal facts settle a run; queued and unresolved
-      # ones block like any structural change).
-      blocked: list[str] = []
-      host_boot = tree._host_boot_time()
-      for sid in subtree:
-        for run in tree.runs.list_run_records_sync(sid):
-          blocker = tree.runs.run_blocker(run, tree.runs.load_events_sync(sid), host_boot)
-          if blocker is not None:
-            blocked.append(f"{sid}: {blocker}")
-      if blocked:
-        raise task_errors.TaskConflictError(sorted(blocked))
-      request_id = f"archive-{uuid.uuid4()}"
-      archived: list[str] = []
-      # Parent before child: the fold reads each node's own facts, so the
-      # order is convention, but it keeps every intermediate state valid.
-      for sid in subtree:
-        if tree.task_state(sid) != "open":
-          continue
-        event = tree.archived_close_event(
-            sid,
-            request_id,
-            summary="archived by the user" if sid == session_id else "",
-            archived_with=session_id if sid != session_id else None,
-        )
-        await tree.events.append(sid, event)
-        archived.append(sid)
-      tree._invalidate_index()
-      # The archived nodes' sequence bindings run their archive duties.
-      for sid in archived:
-        binding = sequence_controllers.binding_for(sid)
-        if binding is not None:
-          await binding.on_archive()
-      return archived
-
-  async def archive_unsuccessful_worker(self, session_id: str, *, run_id: str, outcome: str) -> bool:
-    """Archive one worker whose run ended without success; True when this call wrote the fact.
-
-    The failure report's delivery entries call here once the report is
-    delivered: the worker leaves the sidebar, and the parent keeps the one
-    report it already received — an archive delivers no report of its own.
-    The entry writes only when the node provably stopped, every condition
-    re-read from disk under the control lock: the node is a worker, the task
-    is open, ``run_id`` is the node's last-ended run, no run is active,
-    queued or unresolved and no descendant is open, and nothing pauses the
-    node (a pending trigger or an unprocessed input). The last-ended verdict
-    is what keeps the startup replay safe: re-delivering an earlier failed
-    run's report on a node a later run finished never archives it. The
-    request id (``unsuccessful:<run id>``) dedups the fact itself: a repeat
-    call for the same run finds the recorded fact and returns False. The
-    close fact is the archive format's (outcome archived, report_to null)
-    with actor ``system`` and the deciding run in ``run_ids``.
-    """
-    request_id = f"unsuccessful:{run_id}"
-    epoch = await self.session_events.prime_aggregator(session_id)
-    async with self.control_lock:
-      index = await self._get_index()
-      meta = self._index_meta(index, session_id)
-      if meta.profile != "worker":
-        return False
-      if self.task_state(session_id) != "open":
-        return False
-      if self.runs.last_ended_run_id(session_id) != run_id:
-        return False
-      if self.completion._execution_blockers(index, session_id):
-        return False
-      if self.completion.pause_reason(session_id) is not None:
-        return False
-      history = self.fact_history(session_id)
-      if any(event.get("type") == ET.TASK_CLOSED and event.get("request_id") == request_id for event in history):
-        return False
-      event = self.archived_close_event(
-          session_id,
-          request_id,
-          summary=f"run {run_id} ended {outcome}; archived by the server",
-          actor=control_events.ACTOR_SYSTEM,
-          run_ids=[run_id])
-      await self.events.append(session_id, event)
-      self._invalidate_index()
-      # The archived node's sequence binding runs its archive duty, as in
-      # archive_subtree.
-      binding = sequence_controllers.binding_for(session_id)
-      if binding is not None:
-        await binding.on_archive()
-    await self.session_events.announce_appended_event(session_id, event, epoch=epoch)
-    return True
 
 
 # ---------------------------------------------------------------------------

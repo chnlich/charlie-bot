@@ -106,6 +106,7 @@ function baseSessionContext(overrides = {}) {
     // config.js before the chat/sidebar modules createChatSidebarContext fans
     // out to.
     JSON_HEADERS: {'Content-Type': 'application/json'},
+    crypto: {randomUUID: () => 'archive-request-id'},
     PROGRESS_BAR_FILL_CLASS: 'h-full rounded-full transition-all duration-300',
     saveDraftNow: () => {},
   };

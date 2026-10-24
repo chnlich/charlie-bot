@@ -599,7 +599,8 @@ test('comment tray is active when not framed regardless of marker (unchanged)', 
     false
   );
 
-  // No code derives a session id from a URL path anymore, as a primary source or a fallback.
+  // The session id comes from the server-injected global or the #cbsession= fragment;
+  // the URL path is never read for it.
   assert.equal(window.__cbcExtractSessionIdFromPath, undefined);
   assert.equal(typeof window.__cbcResolveSessionId, 'function');
   assert.ok(head.children.length > 0, 'styles are installed');

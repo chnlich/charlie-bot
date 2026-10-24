@@ -106,7 +106,7 @@ async def test_api_request_returns_json_401() -> None:
 @pytest.mark.parametrize("path", ["/perfetto", "/perfetto/merged", "/ncu", "/absolute_filepath/tmp/trace.json"])
 async def test_host_state_readers_are_gated_without_a_credential(path: str) -> None:
   # The file server and the trace/report viewers read the host filesystem, so they
-  # sit behind the access key: no public-path or public-prefix admission anymore.
+  # sit behind the access key: neither is in the middleware's public paths or prefixes.
   mw = _middleware(key="secret")
   sent = await conftest.run_through_asgi_middleware(mw, _scope(path=path, headers={"accept": "application/json"}))
   status, content_type, body = _response(sent)

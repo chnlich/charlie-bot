@@ -559,7 +559,7 @@ impl AgentBackend for AnthropicEndpointBackend {
         prompt,
         timeout,
         self.backend.cgroup_session_id.as_deref(),
-        &self.backend.cgroup_limits,
+        &self.backend.cgroup_config,
       )
       .await
     }))

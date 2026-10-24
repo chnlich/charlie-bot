@@ -1,6 +1,6 @@
 """Run truth on disk for the restart-safe agent runtime.
 
-A worker/master run's ground truth lives in its thread data directory, not in
+A worker/master run's ground truth lives in its per-run directory, not in
 the server process: the agent subprocess writes its NDJSON stdout straight to
 ``agent.raw.ndjson`` and stderr to ``agent.stderr.log`` via inherited file
 descriptors, and the server is a tail-follow consumer that can die and
@@ -51,12 +51,11 @@ CURSOR_NAME = "agent.raw.cursor"
 # never in the worktree the run works in.
 HARNESS_INSTRUCTIONS_NAME = "harness_instructions.md"
 
-# The transport directory every per-run file sits in (a thread's data dir, a
-# master run's <session>/data/master_runs/<started_at> dir) and the
-# master-capture directory name under a session's data dir. Writers (the
-# master turn in src/runtime, the task tree's node creation) and readers
-# (token_tally's corpus walk, the cold-storage transport sweep) must agree on
-# these names.
+# A session's data directory, and the master-capture directory name under it: a
+# task Run's transport sits in data/runs/<run_id>/ and a master run's in
+# data/master_runs/<started_at>/. Writers (the master turn in src/runtime, the
+# task tree's node creation) and readers (token_tally's corpus walk, the
+# cold-storage transport sweep) must agree on these names.
 DATA_DIR_NAME = "data"
 MASTER_RUNS_DIR_NAME = "master_runs"
 

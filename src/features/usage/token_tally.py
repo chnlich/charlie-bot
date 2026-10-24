@@ -237,7 +237,7 @@ def _iter_charliebot_logs(sessions: str) -> Iterator[tuple[str, str, os.stat_res
   ``"thread"``) and master raw captures (kind ``"master"``).
 
   Both file names are pinned by their writers — a thread's event log is always ``events.jsonl``
-  under its ``data/`` (threads.thread_events_log_path) and a run's capture always
+  under its ``data/`` (runs.EVENTS_LOG_NAME) and a run's capture always
   ``agent.raw.ndjson`` (runs.RAW_LOG_NAME) — so the walk lists only the three levels whose
   entries it must discover (the sessions root, each ``threads/``, each ``data/master_runs/``)
   and stats each candidate file directly. A missing sessions root, session subtree or candidate

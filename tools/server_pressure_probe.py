@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import ctypes
 import datetime
 import errno
@@ -72,6 +73,7 @@ VM_SWAP_SAMPLE_INTERVAL_S = 1.0
 PRESSURE_WINDOW_START_TIMEOUT_S = 600.0
 PRESSURE_KILL_OBSERVATION_TIMEOUT_S = 2400.0
 KILL_FILL_MAX_BYTES = 2 * GIB
+KILL_FILL_DIR = pathlib.Path("/dev/shm")
 MAX_KILL_RESTARTS = 64
 MAX_DISK_DELAY_MS = 1.0
 MAX_LIVE_EVENT_GIB = 1.2
@@ -1948,6 +1950,11 @@ class PressureSupervisor:
     self.stop_event.set()
 
 
+def _kill_fill_path(run_name: str) -> pathlib.Path:
+  """Keep the kill fill in tmpfs: kernel-context charges with no writeback IO."""
+  return KILL_FILL_DIR / f"charliebot-pressure-kill-fill-{run_name}.bin"
+
+
 def _start_pressure_worker(
     *,
     layout: str,
@@ -1955,6 +1962,7 @@ def _start_pressure_worker(
     control_dir: pathlib.Path,
     parent_slice_cgroup: pathlib.Path,
     log_path: pathlib.Path,
+    kill_fill_file: pathlib.Path | None = None,
 ) -> PressureWorker:
   worker_id = uuid.uuid4().hex[:8]
   slice_name = PRESSURE_SLICE if layout == "current" else PRESSURE_AGENTS_SLICE
@@ -1974,7 +1982,7 @@ def _start_pressure_worker(
       str(ready_file),
   ]
   if layout == "protected":
-    command.extend(("--kill-fill-file", str(control_dir / "kill_fill.bin"), "--kill-fill-delay-s", "45.0"))
+    command.extend(("--kill-fill-file", str(kill_fill_file), "--kill-fill-delay-s", "45.0"))
   log_path.parent.mkdir(parents=True, exist_ok=True)
   log_fd = log_path.open("w", encoding="utf-8")
   process = _systemd_run_command(
@@ -2257,6 +2265,8 @@ def _run_server_stage(
                 return None
               time.sleep(0.01)
 
+        kill_fill_file = _kill_fill_path(run_name) if layout == "protected" else None
+
         def start_worker() -> PressureWorker:
           return _start_pressure_worker(
               layout=layout,
@@ -2264,6 +2274,7 @@ def _run_server_stage(
               control_dir=control,
               parent_slice_cgroup=slice_cgroup,
               log_path=results_dir / "logs" / f"pressure_{run_name}.log",
+              kill_fill_file=kill_fill_file,
           )
 
         supervisor = PressureSupervisor(start_worker=start_worker, kill_total=kill_total)
@@ -2460,6 +2471,9 @@ def _run_server_stage(
       elif active is not None:
         active.close_log()
     try:
+      if kill_fill_file is not None:
+        with contextlib.suppress(FileNotFoundError):
+          kill_fill_file.unlink()
       for keeper in (repair_keeper,):
         if keeper is not None:
           _stop_keeper_scope(*keeper)

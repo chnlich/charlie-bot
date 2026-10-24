@@ -44,7 +44,22 @@ fake_agent:
               content: [{type: text, text: The delivered task report is recorded.}]
         - emit: {type: result, result: "", usage: {input_tokens: 3, output_tokens: 2}}
       exit_code: 0
-expect_starts: 3
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-status-reminder-hrr-1}
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: Status reviewed at the end of the scenario.}]
+        - emit:
+            type: result
+            result: ""
+            usage: {input_tokens: 2, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+      exit_code: 0
+expect_starts: 4
 steps:
   - name: delegate an implement task whose reviewer remains alive through handover
     method: POST

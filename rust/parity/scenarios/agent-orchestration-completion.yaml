@@ -31,29 +31,50 @@ fake_agent:
             usage: {input_tokens: 2, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
             total_cost_usd: 0.0
       exit_code: 0
-expect_starts: 2
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-status-reminder-after-cancel-report}
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: Status reviewed after the cancellation report.}]
+        - emit:
+            type: result
+            result: ""
+            usage: {input_tokens: 2, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+      exit_code: 0
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-status-reminder-completion-2-1}
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: Status reviewed at the end of the scenario.}]
+        - emit:
+            type: result
+            result: ""
+            usage: {input_tokens: 2, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+      exit_code: 0
+expect_starts: 4
 steps:
-  - name: complete refuses an open descendant
+  - name: archive a task with successful run evidence
     method: POST
-    path: /api/sessions/${sessions.atlas}/complete
-    json:
-      request_id: synthetic-completion-blocked
-      summary: Atlas plan is ready.
-      result_refs: [atlas-plan]
-      run_ids: ["${runs.atlas_t1.run}"]
-    expect_status: 409
-  - name: complete a task with successful run evidence
-    method: POST
-    path: /api/sessions/${sessions.fable}/complete
+    path: /api/sessions/${sessions.fable}/archive
     json:
       request_id: synthetic-completion-success
       summary: Fable roadmap is ready.
       result_refs: [roadmap]
       run_ids: ["${runs.fable_t1.run}"]
     expect_status: 200
-  - name: replay the successful completion request
+  - name: replay the successful archive request
     method: POST
-    path: /api/sessions/${sessions.fable}/complete
+    path: /api/sessions/${sessions.fable}/archive
     json:
       request_id: synthetic-completion-success
       summary: Fable roadmap is ready.
@@ -110,7 +131,7 @@ steps:
     expect_status: 409
   - name: invalid JSON body reports a 422
     method: POST
-    path: /api/sessions/${sessions.cobalt}/complete
+    path: /api/sessions/${sessions.cobalt}/archive
     body_file: malformed.json
     expect_status: 422
     compare: status_and_shape
@@ -124,4 +145,13 @@ steps:
     method: POST
     path: /api/sessions/${sessions.beacon_draft}/unarchive
     json: {}
+    expect_status: 200
+  - name: operator archives an open subtree with its finished runs
+    method: POST
+    path: /api/sessions/${sessions.atlas}/archive
+    json:
+      request_id: synthetic-archive-subtree
+      summary: Atlas plan is ready.
+      result_refs: [atlas-plan]
+      run_ids: ["${runs.atlas_t1.run}"]
     expect_status: 200

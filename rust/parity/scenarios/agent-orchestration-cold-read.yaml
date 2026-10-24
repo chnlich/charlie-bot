@@ -43,6 +43,21 @@ fake_agent:
       exit_code: 0
     - name: claude
       steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-status-reminder-after-cold-read}
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: Status reviewed after the cold-read report.}]
+        - emit:
+            type: result
+            result: ""
+            usage: {input_tokens: 3, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+      exit_code: 0
+    - name: claude
+      steps:
         - emit: {type: system, subtype: init, session_id: synthetic-cold-read-retry-failure}
         - emit: {type: error, message: Synthetic first reader failure., content: Synthetic first reader failure.}
       exit_code: 1
@@ -71,6 +86,21 @@ fake_agent:
               role: assistant
               model: claude-sonnet-5
               content: [{type: text, text: The retry report was received.}]
+        - emit:
+            type: result
+            result: ""
+            usage: {input_tokens: 3, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+      exit_code: 0
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-status-reminder-after-retry-report}
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: Status reviewed after the retry report.}]
         - emit:
             type: result
             result: ""
@@ -108,7 +138,22 @@ fake_agent:
             usage: {input_tokens: 3, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
             total_cost_usd: 0.0
       exit_code: 0
-expect_starts: 9
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-status-reminder-after-failure-report}
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: Status reviewed after the failed cold-read report.}]
+        - emit:
+            type: result
+            result: ""
+            usage: {input_tokens: 3, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+      exit_code: 0
+expect_starts: 12
 steps:
   - name: delegate a cold read of the synthetic page
     method: POST

@@ -3,7 +3,7 @@
 stage: session-stream
 name: session-stream
 fixture_extras: [explain_cases, session_stream_cases]
-expect_starts: 6
+expect_starts: 9
 fake_agent:
   starts:
     - name: claude
@@ -96,6 +96,21 @@ fake_agent:
             usage: {input_tokens: 3, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
             total_cost_usd: 0.0
       exit_code: 0
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-stream-trigger-failed-1}
+        - emit: {type: error, message: Synthetic stream turn failure., content: Synthetic stream turn failure.}
+      exit_code: 1
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-stream-trigger-failed-2}
+        - emit: {type: error, message: Synthetic stream turn failure., content: Synthetic stream turn failure.}
+      exit_code: 1
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-stream-trigger-failed-3}
+        - emit: {type: error, message: Synthetic stream turn failure., content: Synthetic stream turn failure.}
+      exit_code: 1
 steps:
   - kind: ws
     name: catch-up from cursor zero ends with the buffered stream delta

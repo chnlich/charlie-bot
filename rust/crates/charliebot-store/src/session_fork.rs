@@ -414,7 +414,6 @@ mod tests {
   use serde_json::{Map, Value, json};
 
   use super::*;
-  use crate::control_events::build_control_event;
   use crate::metadata::TaskSpec;
   use crate::task_tree::tests::{create_node, make_store, queued_run};
   use crate::{CreateTask, TaskCaller};
@@ -493,26 +492,6 @@ mod tests {
     store.append_control_fact(&guard, session_id, event).await.unwrap();
     drop(guard);
     store.invalidate_tree_index();
-  }
-
-  async fn task_closed(store: &Store, session_id: &str, outcome: &str) {
-    let guard = store.control_lock().await;
-    let event = build_control_event(
-      event_types::TASK_CLOSED,
-      ACTOR_USER,
-      session_id,
-      None,
-      None,
-      [
-        ("request_id".to_string(), json!(format!("close-{outcome}"))),
-        ("outcome".to_string(), json!(outcome)),
-        ("summary".to_string(), json!("")),
-        ("result_refs".to_string(), json!([])),
-        ("run_ids".to_string(), json!([])),
-        ("report_to".to_string(), Value::Null),
-      ],
-    );
-    store.append_control_fact(&guard, session_id, event).await.unwrap();
   }
 
   #[tokio::test]
@@ -861,12 +840,12 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn successor_of_a_completed_source_starts_open() {
+  async fn archived_source_successor_starts_open() {
     let home = tempfile::tempdir().unwrap();
     let store = make_store(home.path());
     let source = create_node(&store, "source", None, TaskProfile::Manager).await;
-    task_closed(&store, &source.id, "completed").await;
-    assert_eq!(store.task_state(&source.id).unwrap(), "completed");
+    archive_task(&store, &source.id).await;
+    assert_eq!(store.task_state(&source.id).unwrap(), "archived");
 
     let new = store.elone_session(&source.id, 0, None, &NoRedelivery).await.unwrap();
 

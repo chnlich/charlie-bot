@@ -417,6 +417,7 @@ mod tests {
 
   use super::*;
   use crate::metadata::TaskSpec;
+  use crate::task_tree::archived_close_event;
   use crate::task_tree::tests::{create_node, make_store, queued_run};
   use crate::{CreateTask, TaskCaller};
 

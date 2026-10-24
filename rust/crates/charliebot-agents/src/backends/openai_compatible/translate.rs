@@ -21,11 +21,7 @@ pub fn gemini_stream_rules(api_base: &str) -> Result<bool, String> {
 }
 
 /// `anthropic_to_openai_chat_request(payload, upstream_model)`: the chat completions body for `payload`.
-pub fn anthropic_to_openai_chat_request(
-  payload: &Value,
-  upstream_model: &str,
-  gemini_stream_rules: bool,
-) -> PyResult<Value> {
+pub fn anthropic_to_openai_chat_request(payload: &Value, upstream_model: &str) -> PyResult<Value> {
   let messages = match get(payload, "messages")? {
     Some(Value::Array(messages)) => messages,
     _ => return value_error("messages must be a list"),
@@ -64,7 +60,7 @@ pub fn anthropic_to_openai_chat_request(
     }
   }
   if let Some(tools) = get(payload, "tools")?.filter(|tools| !tools.is_null()) {
-    converted.insert("tools".to_string(), Value::Array(convert_tools(tools, gemini_stream_rules)?));
+    converted.insert("tools".to_string(), Value::Array(convert_tools(tools)?));
   }
   if let Some(choice) = get(payload, "tool_choice")?.filter(|choice| !choice.is_null()) {
     let choice = require_dict(choice, "tool_choice")?;
@@ -241,54 +237,8 @@ fn convert_assistant_message(message: &Map<String, Value>) -> PyResult<Value> {
   Ok(Value::Object(converted))
 }
 
-fn convert_google_schema(schema: &Value) -> PyResult<Value> {
-  let Value::Object(fields) = schema else {
-    return raised("AttributeError", format!("'{}' object has no attribute 'items'", type_name(schema)));
-  };
-  let mut converted = Map::new();
-  for (keyword, value) in fields {
-    match keyword.as_str() {
-      "$schema" | "allOf" | "const" | "exclusiveMinimum" => continue,
-      "properties" | "$defs" | "definitions" => {
-        if let Value::Object(children) = value {
-          let mut converted_children = Map::new();
-          for (name, child) in children {
-            converted_children.insert(name.clone(), convert_google_schema(child)?);
-          }
-          converted.insert(keyword.clone(), Value::Object(converted_children));
-        } else {
-          converted.insert(keyword.clone(), value.clone());
-        }
-      }
-      "items" | "additionalProperties" | "not" | "if" | "then" | "else" | "contains" => {
-        let converted_value = match value {
-          Value::Object(_) => convert_google_schema(value)?,
-          Value::Array(children) => {
-            Value::Array(children.iter().map(convert_google_schema).collect::<PyResult<Vec<_>>>()?)
-          }
-          _ => value.clone(),
-        };
-        converted.insert(keyword.clone(), converted_value);
-      }
-      "anyOf" | "oneOf" | "prefixItems" => {
-        let converted_value = if let Value::Array(children) = value {
-          Value::Array(children.iter().map(convert_google_schema).collect::<PyResult<Vec<_>>>()?)
-        } else {
-          value.clone()
-        };
-        converted.insert(keyword.clone(), converted_value);
-      }
-      _ => {
-        converted.insert(keyword.clone(), value.clone());
-      }
-    }
-  }
-  Ok(Value::Object(converted))
-}
-
 /// `_convert_tools`: each custom tool becomes a function. A built-in tool type is refused.
-/// `_convert_tools`: each custom tool becomes a function. A built-in tool type is refused.
-fn convert_tools(tools: &Value, gemini_stream_rules: bool) -> PyResult<Vec<Value>> {
+fn convert_tools(tools: &Value) -> PyResult<Vec<Value>> {
   let mut converted = Vec::new();
   for raw in iterate(tools)? {
     let tool = require_dict(&raw, "tool")?;
@@ -300,13 +250,12 @@ fn convert_tools(tools: &Value, gemini_stream_rules: bool) -> PyResult<Vec<Value
     let (Some(name), Some(input_schema)) = (name, input_schema) else {
       return value_error("tool missing name or input_schema");
     };
-    let parameters = if gemini_stream_rules { convert_google_schema(input_schema)? } else { input_schema.clone() };
     converted.push(json!({
       "type": "function",
       "function": {
         "name": name,
         "description": tool.get("description").cloned().unwrap_or_else(|| json!("")),
-        "parameters": parameters,
+        "parameters": input_schema.clone(),
       },
     }));
   }
@@ -647,7 +596,7 @@ mod tests {
   use crate::backends::openai_compatible::pyvalue::Fault;
 
   fn request(payload: Value) -> PyResult<Value> {
-    anthropic_to_openai_chat_request(&payload, "upstream-model", false)
+    anthropic_to_openai_chat_request(&payload, "upstream-model")
   }
 
   #[test]
@@ -704,7 +653,7 @@ mod tests {
       "stream": true,
     });
 
-    let converted = anthropic_to_openai_chat_request(&payload, "deepseek-ai/DeepSeek-V4-Pro", false).unwrap();
+    let converted = anthropic_to_openai_chat_request(&payload, "deepseek-ai/DeepSeek-V4-Pro").unwrap();
 
     assert_eq!(converted["model"], "deepseek-ai/DeepSeek-V4-Pro");
     assert_eq!(converted["stream"], true);
@@ -869,10 +818,7 @@ mod tests {
       }],
       "stream": true,
     });
-    let gemini_rules = gemini_stream_rules("https://generativelanguage.googleapis.com/v1beta/openai/").unwrap();
-    assert!(gemini_rules);
-    assert!(!gemini_stream_rules("https://openai.example/v1").unwrap());
-    let converted = anthropic_to_openai_chat_request(&payload, "gemini-model", gemini_rules);
+    let converted = anthropic_to_openai_chat_request(&payload, "gemini-model");
     assert!(converted.is_ok(), "the Claude Code request should translate: {converted:?}");
     let converted = converted.unwrap();
 
@@ -893,6 +839,12 @@ mod tests {
     assert!(converted.get("thinking").is_none());
     assert!(converted.get("output_config").is_none());
     assert_eq!(converted["tools"][0]["function"]["parameters"], payload["tools"][0]["input_schema"]);
+  }
+
+  #[test]
+  fn gemini_stream_rules_follow_the_google_gemini_host() {
+    assert!(gemini_stream_rules("https://generativelanguage.googleapis.com/v1beta/openai/").unwrap());
+    assert!(!gemini_stream_rules("https://openai.example/v1").unwrap());
   }
 
   #[test]
@@ -952,12 +904,8 @@ mod tests {
         block
       })
       .collect();
-    let converted = anthropic_to_openai_chat_request(
-      &json!({"messages": [{"role": "assistant", "content": tool_blocks}]}),
-      "gemini-model",
-      true,
-    )
-    .unwrap();
+    let request = json!({"messages": [{"role": "assistant", "content": tool_blocks}]});
+    let converted = anthropic_to_openai_chat_request(&request, "gemini-model").unwrap();
     let calls = &converted["messages"][0]["tool_calls"];
     assert_eq!(calls[0]["function"]["name"], "Bash");
     assert_eq!(calls[0]["function"]["arguments"], "{\"cmd\":\"pwd\"}");

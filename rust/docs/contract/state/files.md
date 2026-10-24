@@ -315,6 +315,8 @@ Modules: `src/features/memory/memory.py`, `memory_proposal.py`, `cli.py`, `store
 
 ### 5.11 Speech models: `models/`
 
+Not written by the Python server at `d1f7e3ba6`: the local speech engine and its provisioning were removed (`93b427659`, `4c3bd3fda`). The text below is the baseline before that. The Rust server still provisions these files until the voice port removes it.
+
 - Writer: `src/features/voice/transcriber.py::ensure_models_cached`, run on a thread by the early `speech`
   service. Paths (`voice_model_paths`):
   - `models/silero_vad.onnx`, from
@@ -410,6 +412,7 @@ Modules: `src/features/memory/memory.py`, `memory_proposal.py`, `cli.py`, `store
 ### 6.1 `sessions/<sid>/metadata.json` (session)
 
 - Model: `src/infra/models.py::SessionMetadata`, `extra="allow"`, `schema_version: Literal[2]`.
+- Field `resource_class: "agent" | "repair"`, default `"agent"` (`src/infra/models.py:402`). `PUT /api/sessions/{sid}/resource-class` is its only writer. Every save writes the field, and a file that lacks it reads as `agent` (`src/runtime/resource_class.py`, `meta.get("resource_class", "agent")`).
 - Writer: `src/runtime/session_store.py`. It writes ATOMIC with
   `model_dump_json(indent=2, exclude=TRANSIENT_METADATA_FIELDS)` under a per-session asyncio lock. When a write
   does not own the anchor fields, `cc_session_id` and `native_backend` are re-read from disk first, so a stale

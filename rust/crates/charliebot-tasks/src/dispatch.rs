@@ -47,6 +47,7 @@ pub trait RunFinishedCompletion: Send + Sync {
 /// The task input, run claim, and child report owner over the shared store.
 pub struct Dispatcher {
   store: Arc<Store>,
+  features: Arc<FeatureContext>,
   sequence_completion: Arc<dyn SequenceCompletion>,
   run_completion: Arc<dyn RunFinishedCompletion>,
   executor: RwLock<Option<Arc<dyn DispatchExecutor>>>,
@@ -56,10 +57,11 @@ impl Dispatcher {
   /// Build a dispatcher whose executor can be installed by the execution stage.
   pub fn new(
     store: Arc<Store>,
+    features: Arc<FeatureContext>,
     sequence_completion: Arc<dyn SequenceCompletion>,
     run_completion: Arc<dyn RunFinishedCompletion>,
   ) -> Dispatcher {
-    Dispatcher { store, sequence_completion, run_completion, executor: RwLock::new(None) }
+    Dispatcher { store, features, sequence_completion, run_completion, executor: RwLock::new(None) }
   }
 
   /// Install the execution adapter used by later dispatch decisions.
@@ -308,9 +310,20 @@ impl Dispatcher {
     Ok(batch)
   }
 
+  /// Append the still-pending USER events that this launched manager Run echoed (`claim_echoed_user_inputs`).
+  pub async fn claim_echoed_user_inputs(
+    &self,
+    session_id: &str,
+    run_id: &str,
+    echoed_ids: &HashSet<String>,
+  ) -> StoreResult<Vec<String>> {
+    todo!("the echoed-input claim lands with the feature");
+
+  }
+
   /// Decide whether pending inputs should start a run, and ask the executor when one is available.
   pub async fn dispatch_pending(&self, session_id: &str) -> StoreResult<Value> {
-    self.store.load_task_meta(session_id).await?;
+    let meta = self.store.load_task_meta(session_id).await?;
     let pending = self.pending_inputs(session_id)?;
     let mut decision = Map::from_iter([
       ("session_id".to_string(), Value::String(session_id.to_string())),
@@ -329,6 +342,9 @@ impl Dispatcher {
           continue;
         }
         if run.pid.is_some() {
+          crate::midturn_delivery::offer(&self.features, &meta, &run, &pending)
+            .await
+            .map_err(|error| StoreError::new(error.to_string()))?;
           decision.insert("launch".to_string(), Value::Bool(false));
           decision.insert("reason".to_string(), json!(format!("run {} already consumes this node's inputs", run.id)));
           return Ok(Value::Object(decision));
@@ -837,14 +853,8 @@ pub fn inputs_not_pending_conflict(session_id: &str, unknown: &[String]) -> Stri
   format!("input(s) not pending for {session_id}: {}", unknown.join(", "))
 }
 
-/// Format a child report as the parent's typed turn input.
-pub fn child_report_text(report: &Value, provenance: Option<&str>) -> String {
-  let mut header = format!("[Report from task {}", python_string(report.get("child_session_id")));
-  if let Some(provenance) = provenance {
-    header.push_str(&format!(" ({provenance})"));
-  }
-  format!("{header} | outcome {}] {}", python_string(report.get("outcome")), truthy_string(report.get("summary")))
-}
+/// Format a child report as the parent's typed turn input (`task_input_prompt.child_report_text` owns the format).
+pub use crate::task_input_prompt::child_report_text;
 
 /// Read the dispatcher inserted into typed startup state.
 pub fn dispatcher(features: &FeatureContext) -> Result<Arc<Dispatcher>, StateError> {
@@ -962,7 +972,7 @@ fn close_result_refs(close: &Value) -> Vec<String> {
     .unwrap_or_default()
 }
 
-fn truthy_string(value: Option<&Value>) -> String {
+pub(crate) fn truthy_string(value: Option<&Value>) -> String {
   if python_truthy(value) { python_string(value) } else { String::new() }
 }
 
@@ -977,7 +987,7 @@ fn python_truthy(value: Option<&Value>) -> bool {
   }
 }
 
-fn python_string(value: Option<&Value>) -> String {
+pub(crate) fn python_string(value: Option<&Value>) -> String {
   match value {
     None | Some(Value::Null) => "None".to_string(),
     Some(Value::String(value)) => value.clone(),
@@ -1016,7 +1026,7 @@ mod tests {
     let completion = Arc::new(TaskCompletion::new(Arc::clone(features)));
     let sequence_completion: Arc<dyn SequenceCompletion> = completion.clone();
     let run_completion: Arc<dyn RunFinishedCompletion> = completion;
-    Dispatcher::new(Arc::clone(&features.store), sequence_completion, run_completion)
+    Dispatcher::new(Arc::clone(&features.store), Arc::clone(features), sequence_completion, run_completion)
   }
 
   fn run_record(session_id: &str, run_id: &str) -> RunRecord {

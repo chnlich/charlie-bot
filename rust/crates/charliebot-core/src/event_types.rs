@@ -2,6 +2,7 @@
 
 pub const ASSISTANT: &str = "assistant";
 pub const USER: &str = "user";
+pub const INPUT_DELIVERED: &str = "input_delivered";
 pub const ERROR: &str = "error";
 pub const RESULT: &str = "result";
 pub const SYSTEM: &str = "system";

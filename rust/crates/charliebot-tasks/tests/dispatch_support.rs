@@ -286,7 +286,22 @@ impl Harness {
   pub fn new() -> Harness {
     let home = tempfile::tempdir().expect("temporary CharlieBot home is available");
     let cfg = Arc::new(config(home.path()));
-    let registry = Arc::new(Registry::new());
+    let mut registry = Registry::new();
+    // The origin slots a thread session carries; the tests that name a session kind set them through the store.
+    registry
+      .register_package("dispatch_support_origins", |registry| {
+        for (owner, field) in [("slack", "slack_origin"), ("discord", "discord_origin")] {
+          registry.metadata_slot(charliebot_core::metadata_slot::MetadataSlot {
+            owner,
+            on: charliebot_core::metadata_slot::MetadataFile::Session,
+            after: None,
+            fields: vec![charliebot_core::metadata_slot::SlotField { name: field, default: serde_json::Value::Null }],
+          })?;
+        }
+        Ok(())
+      })
+      .expect("origin slots register");
+    let registry = Arc::new(registry);
     let hooks = Arc::new(TestHooks);
     let store = Arc::new(
       Store::new(
@@ -311,9 +326,6 @@ impl Harness {
     let sequence_completion: Arc<dyn SequenceCompletion> = completion.clone();
     let run_completion: Arc<dyn RunFinishedCompletion> = completion.clone();
     let startup = Arc::new(StartupState::default());
-    startup
-      .insert(Dispatcher::new(Arc::clone(&store), sequence_completion, run_completion))
-      .expect("dispatcher enters startup state once");
     let config_value = Arc::clone(&cfg);
     let config_reload =
       HotReload::new(cfg.config_file(), "test_config_reload_failed", Box::new(move || Ok((*config_value).clone())));
@@ -328,8 +340,11 @@ impl Harness {
       credentials: Arc::new(credentials_reload),
       store: Arc::clone(&store),
       registry: Arc::clone(&registry),
-      startup,
+      startup: Arc::clone(&startup),
     });
+    startup
+      .insert(Dispatcher::new(Arc::clone(&store), Arc::clone(&features), sequence_completion, run_completion))
+      .expect("dispatcher enters startup state once");
     let dispatcher = charliebot_tasks::dispatch::dispatcher(&features).expect("dispatcher is in startup state");
     Harness { _home: home, registry, store, completion, dispatcher, features }
   }

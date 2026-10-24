@@ -11,6 +11,7 @@ use charliebot_registry::backend::Env;
 use charliebot_registry::context::{FeatureContext, StartupState};
 use charliebot_registry::{Registry, store_hooks};
 use charliebot_store::metadata::{SessionMetadata, TaskProfile};
+use charliebot_store::run_records::{RunKind, RunRecord};
 use charliebot_store::{CreateTask, Store, TaskCaller};
 use charliebot_usage::SessionUsage;
 use futures_util::future::BoxFuture;
@@ -126,6 +127,37 @@ pub fn write_transcript(config_dir: &Path, cc_session_id: &str) {
   let path = config_dir.join("projects/synthetic-project").join(format!("{cc_session_id}.jsonl"));
   std::fs::create_dir_all(path.parent().unwrap()).unwrap();
   std::fs::write(path, "{\"type\":\"user\"}\n").unwrap();
+}
+
+/// A run record of `kind` on `session_id`: the shape the delivery and idle tests register.
+pub fn run_record(session_id: &str, run_id: &str, kind: RunKind) -> RunRecord {
+  RunRecord {
+    id: run_id.to_string(),
+    session_id: session_id.to_string(),
+    kind,
+    input_event_ids: Vec::new(),
+    task_spec_hash: None,
+    task_spec_ref: None,
+    prompt_snapshot_ref: None,
+    retry_of_run_id: None,
+    review_of_run_id: None,
+    backend: None,
+    model: None,
+    native_session_id: None,
+    pid: None,
+    pid_start: None,
+    started_at: None,
+    ended_at: None,
+    exit_code: None,
+    repo_path: None,
+    base_branch: None,
+    branch_name: None,
+    worktree_path: None,
+    sequence_ref: None,
+    raw_log_ref: None,
+    events_ref: None,
+    result_ref: None,
+  }
 }
 
 /// A queued work item of `session_meta`: the turn a session holds while it waits for its consumer.

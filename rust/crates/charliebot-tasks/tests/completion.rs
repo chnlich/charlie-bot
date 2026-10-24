@@ -73,7 +73,7 @@ impl CompletionHarness {
     let sequence_completion: Arc<dyn SequenceCompletion> = completion.clone();
     let run_completion: Arc<dyn RunFinishedCompletion> = completion.clone();
     startup
-      .insert(Dispatcher::new(Arc::clone(&features.store), sequence_completion, run_completion))
+      .insert(Dispatcher::new(Arc::clone(&features.store), Arc::clone(&features), sequence_completion, run_completion))
       .expect("dispatcher enters startup state once");
     let dispatcher = startup.require::<Dispatcher>().expect("dispatcher is registered");
     Self { base, features, completion, dispatcher }

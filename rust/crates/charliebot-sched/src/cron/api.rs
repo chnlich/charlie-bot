@@ -595,6 +595,7 @@ mod tests {
       .startup
       .insert(charliebot_tasks::dispatch::Dispatcher::new(
         Arc::clone(&features.store),
+        Arc::clone(&features),
         sequence_completion,
         run_completion,
       ))

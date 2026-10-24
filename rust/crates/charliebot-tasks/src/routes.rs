@@ -1225,7 +1225,10 @@ mod tests {
     let completion = features.startup.require::<crate::completion::TaskCompletion>().unwrap();
     let sequence: Arc<dyn charliebot_registry::sequence::SequenceCompletion> = completion.clone();
     let run: Arc<dyn dispatch::RunFinishedCompletion> = completion;
-    features.startup.insert(dispatch::Dispatcher::new(Arc::clone(&features.store), sequence, run)).unwrap();
+    features
+      .startup
+      .insert(dispatch::Dispatcher::new(Arc::clone(&features.store), Arc::clone(features), sequence, run))
+      .unwrap();
   }
 
   struct FailingExecutor;

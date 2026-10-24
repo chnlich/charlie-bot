@@ -109,7 +109,7 @@ impl Home {
     let sequence: Arc<dyn charliebot_registry::sequence::SequenceCompletion> = completion.clone();
     let run: Arc<dyn charliebot_tasks::dispatch::RunFinishedCompletion> = completion;
     let executor = Arc::new(RecordingExecutor::default());
-    let dispatcher = Dispatcher::new(Arc::clone(&features.store), sequence, run);
+    let dispatcher = Dispatcher::new(Arc::clone(&features.store), Arc::clone(&features), sequence, run);
     let dyn_executor: Arc<dyn DispatchExecutor> = executor.clone();
     dispatcher.set_executor(Some(dyn_executor));
     features.startup.insert(dispatcher).expect("dispatcher inserts once");

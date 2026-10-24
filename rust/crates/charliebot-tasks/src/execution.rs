@@ -48,6 +48,7 @@ use crate::review_text;
 use crate::run_support::visit_events_from_end;
 use crate::session_anchors;
 use crate::spawner_backends;
+use crate::task_input_prompt::compose_input_prompt;
 use crate::worker::{self, Worker, WorkerSpec};
 
 /// The launch result visible to sequence callers.
@@ -582,7 +583,7 @@ impl TaskExecutionAdapter {
       })
     });
     let on_task_finish = self.manager_finish_recorder(
-      session_id,
+      meta,
       run_id,
       option,
       run_dir.join(run_records::RAW_LOG_NAME),
@@ -2083,7 +2084,7 @@ impl TaskExecutionAdapter {
   /// keeps the observed write time.
   pub fn manager_finish_recorder(
     &self,
-    session_id: &str,
+    meta: &SessionMetadata,
     run_id: &str,
     option: &BackendOption,
     raw_log: PathBuf,
@@ -2092,9 +2093,10 @@ impl TaskExecutionAdapter {
   ) -> TaskFinishCallback {
     let features = Arc::clone(&self.features);
     let dispatch = Arc::clone(&self.dispatch);
-    let session_id = session_id.to_string();
+    let session_id = meta.id.clone();
     let run_id = run_id.to_string();
     let option = option.clone();
+    let meta = meta.clone();
     Arc::new(move |native_session_id, exit_code, extras, done_event| {
       let features = Arc::clone(&features);
       let dispatch = Arc::clone(&dispatch);
@@ -2102,49 +2104,68 @@ impl TaskExecutionAdapter {
       let session_id = session_id.clone();
       let run_id = run_id.clone();
       let option = option.clone();
+      let meta = meta.clone();
       let raw_log = raw_log.clone();
       Box::pin(async move {
-        features
-          .store
-          .record_observation(
-            &session_id,
+        let finished: anyhow::Result<bool> = async {
+          // The finish recorder claims only the echoed pending ids, so a queued message the live Run never took
+          // stays pending for the next turn.
+          crate::midturn_delivery::claim_finish_inputs(
+            &dispatch,
+            &meta,
             &run_id,
-            Map::from_iter([
-              ("native_session_id".to_string(), json!(native_session_id)),
-              (
-                "model".to_string(),
-                json!(
-                  extras
-                    .get("model")
-                    .and_then(Value::as_str)
-                    .filter(|model| !model.is_empty())
-                    .unwrap_or(&option.model)
-                ),
-              ),
-              ("raw_log_ref".to_string(), json!(raw_log.to_string_lossy())),
-              ("result_ref".to_string(), json!(raw_log.to_string_lossy())),
-            ]),
+            raw_log.parent().context("the run's raw log has no transport directory")?,
+            exit_code == 0,
           )
           .await?;
+          features
+            .store
+            .record_observation(
+              &session_id,
+              &run_id,
+              Map::from_iter([
+                ("native_session_id".to_string(), json!(native_session_id)),
+                (
+                  "model".to_string(),
+                  json!(
+                    extras
+                      .get("model")
+                      .and_then(Value::as_str)
+                      .filter(|model| !model.is_empty())
+                      .unwrap_or(&option.model)
+                  ),
+                ),
+                ("raw_log_ref".to_string(), json!(raw_log.to_string_lossy())),
+                ("result_ref".to_string(), json!(raw_log.to_string_lossy())),
+              ]),
+            )
+            .await?;
 
-        let guard = features.store.control_lock().await;
-        let facts = features.store.load_all_facts(&session_id)?;
-        let stop_requested = run_records::stop_requested_in_events(&facts, &run_id, None);
-        let kind = if stop_requested {
-          RunOutcomeKind::Interrupted
-        } else if exit_code == 0 {
-          RunOutcomeKind::Success
-        } else {
-          RunOutcomeKind::Failed
-        };
-        let mut outcome = RunOutcome::new(kind);
-        outcome.exit_code = Some(exit_code);
-        outcome.ended_at = ended_at;
-        persist_done(session_id.clone(), done_event).await?;
-        features.store.record_finish_locked(&guard, &session_id, &run_id, outcome.clone()).await?;
-        drop(guard);
+          let guard = features.store.control_lock().await;
+          let facts = features.store.load_all_facts(&session_id)?;
+          let stop_requested = run_records::stop_requested_in_events(&facts, &run_id, None);
+          let kind = if stop_requested {
+            RunOutcomeKind::Interrupted
+          } else if exit_code == 0 {
+            RunOutcomeKind::Success
+          } else {
+            RunOutcomeKind::Failed
+          };
+          let mut outcome = RunOutcome::new(kind);
+          outcome.exit_code = Some(exit_code);
+          outcome.ended_at = ended_at;
+          persist_done(session_id.clone(), done_event).await?;
+          features.store.record_finish_locked(&guard, &session_id, &run_id, outcome.clone()).await?;
+          drop(guard);
 
-        dispatch.finish_run(&session_id, &run_id, outcome).await?;
+          dispatch.finish_run(&session_id, &run_id, outcome).await?;
+          Ok(true)
+        }
+        .await;
+        crate::midturn_delivery::claude_midturn::release_run(&run_id);
+        finished?;
+        // Inputs admitted during this turn waited for the serialized consumer; the turn's finish is what dispatches
+        // their next run.
         dispatch.dispatch_pending(&session_id).await?;
         Ok(true)
       })
@@ -2527,47 +2548,6 @@ pub fn native_continuation_matches(
     && recorded_model == Some(option.model.as_str())
 }
 
-/// Compose the manager input prompt and uploaded-file list from the claimed facts.
-pub fn compose_input_prompt(
-  features: &FeatureContext,
-  meta: &SessionMetadata,
-  events: &[Value],
-  report_provenance: &Map<String, Value>,
-) -> anyhow::Result<(String, Vec<Value>)> {
-  let mut parts = Vec::new();
-  let mut uploads = Vec::new();
-  for event in events {
-    let event_type = event.get("type").and_then(Value::as_str).unwrap_or_default();
-    let content = event.get("content").and_then(Value::as_str).unwrap_or_default();
-    let text = match event_type {
-      event_types::USER => match features.registry.input_preamble(meta, event)? {
-        Some(preamble) => format!("{preamble}\n{content}"),
-        None => content.to_string(),
-      },
-      event_types::AGENT_MESSAGE => {
-        let source = event
-          .get("from_session_name")
-          .and_then(Value::as_str)
-          .filter(|name| !name.is_empty())
-          .or_else(|| event.get("from_session").and_then(Value::as_str).filter(|id| !id.is_empty()))
-          .unwrap_or("unknown");
-        format!("[Message from session {source}] {content}")
-      }
-      event_types::CHILD_REPORT => {
-        let child_id = python_string(event.get("child_session_id"));
-        let provenance = report_provenance.get(&child_id).and_then(Value::as_str);
-        crate::dispatch::child_report_text(event, provenance)
-      }
-      event_types::SCHEDULED_TRIGGER => format!("[Scheduled trigger] {content}"),
-      _ => content.to_string(),
-    };
-    let event_uploads = event.get("uploaded_files").and_then(Value::as_array).cloned().unwrap_or_default();
-    parts.push(charliebot_store::message_events::build_agent_input_content(&text, &event_uploads));
-    uploads.extend(event_uploads);
-  }
-  Ok((parts.into_iter().filter(|part| !part.is_empty()).collect::<Vec<_>>().join("\n\n"), uploads))
-}
-
 /// Whether an error or one of its sources reports ENOSPC or EDQUOT. The store flattens filesystem errors into its
 /// message text (`StoreError::Failure`), so a message that carries the errno's `(os error N)` suffix counts too.
 pub fn is_out_of_space_error(error: &(dyn Error + 'static)) -> bool {
@@ -2838,7 +2818,12 @@ pub fn pre_recovery_step(features: Arc<FeatureContext>) -> BoxFuture<'static, an
     let completion = features.startup.require::<crate::completion::TaskCompletion>()?;
     let sequence_completion: Arc<dyn SequenceCompletion> = completion.clone();
     let run_completion: Arc<dyn RunFinishedCompletion> = completion;
-    features.startup.insert(Dispatcher::new(Arc::clone(&features.store), sequence_completion, run_completion))?;
+    features.startup.insert(Dispatcher::new(
+      Arc::clone(&features.store),
+      Arc::clone(&features),
+      sequence_completion,
+      run_completion,
+    ))?;
     let dispatch = features.startup.require::<Dispatcher>()?;
     let adapter = Arc::new(TaskExecutionAdapter::new(Arc::clone(&features), Arc::clone(&queue), Arc::clone(&dispatch)));
     dispatch.set_executor(Some(adapter.clone()));

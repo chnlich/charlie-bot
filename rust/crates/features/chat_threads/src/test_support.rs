@@ -28,7 +28,7 @@ pub fn install_test_dispatcher(features: &Arc<FeatureContext>) {
   features.startup.insert(Arc::clone(&completion)).expect("the completion owner inserts once");
   let sequence: Arc<dyn charliebot_registry::sequence::SequenceCompletion> = completion.clone();
   let run: Arc<dyn charliebot_tasks::dispatch::RunFinishedCompletion> = completion;
-  let dispatcher = Dispatcher::new(Arc::clone(&features.store), sequence, run);
+  let dispatcher = Dispatcher::new(Arc::clone(&features.store), Arc::clone(features), sequence, run);
   dispatcher.set_executor(Some(Arc::new(NoopExecutor)));
   features.startup.insert(dispatcher).expect("the task dispatcher inserts once");
 }

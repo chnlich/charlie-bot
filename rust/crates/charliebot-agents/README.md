@@ -7,11 +7,12 @@ This crate owns the process transport below the agent backends. Raw-log children
 | Rust item | Python source |
 | --- | --- |
 | `transport` and its `cgroup`, `cursor`, `follow`, `identity`, `kill`, `recovery`, `rotation`, and `spawn` modules | `src/runtime/agent_process/base.py:36`, `:398`, `src/infra/process.py:22`, `src/runtime/runs.py:101` |
-| `cgroup::SessionCgroup`, its fields, and `SessionCgroup::classify_exit` | `src/infra/process.py:226`, `:239` |
-| `cgroup::system_cgroup_base_dir`, `session_cgroup_name`, `session_cgroup_path` | `src/infra/process.py:90`, `:100`, `:105` |
-| `cgroup::ensure_session_cgroup`, `read_memory_events`, `classify_cgroup_exit`, `prepare_session_cgroup` | `src/infra/process.py:110`, `:144`, `:244`, `:272` |
-| `cgroup::move_process_to_cgroup` | `src/runtime/agent_process/base.py:878` |
-| `cgroup::cleanup_session_cgroup`, `sweep_stale_session_cgroups`, `log_session_cgroup_startup` | `src/infra/process.py:288`, `:307`, `:334` |
+| `cgroup::SessionCgroup`, its fields, `SessionCgroup::oom_score_adj`, and `SessionCgroup::classify_exit` | `src/infra/process.py:209`, `:224` |
+| `cgroup::SessionCgroupConfig` and its `from_config` and `disabled` constructors | `src/infra/process.py:322` (the caps `prepare_session_cgroup` takes) |
+| `cgroup::system_cgroup_base_dir`, `session_cgroup_name`, `session_cgroup_path` | `src/infra/process.py:96`, `:105`, `:137` |
+| `cgroup::ensure_session_cgroup`, `read_memory_events`, `classify_cgroup_exit`, `prepare_session_cgroup` (async; the class walk runs on a blocking thread) | `src/infra/process.py:142`, `:183`, `:294`, `:322` |
+| `cgroup::move_process_to_cgroup` (writes `cgroup.procs` and `/proc/<pid>/oom_score_adj`) | `src/runtime/agent_process/base.py:896` |
+| `cgroup::cleanup_session_cgroup`, `sweep_stale_session_cgroups`, `log_session_cgroup_startup` | `src/infra/process.py:348`, `:374`, `:407` |
 | `cursor::read_raw_cursor`, `CURSOR_FIELD_BYTES` | `src/runtime/runs.py:324`, `:332` |
 | `cursor::RawCursorWriter`, `RawCursorWriter::new`, `write`, and `close` | `src/runtime/runs.py:335`, `:347`, `:351`, `:357` |
 | `follow::DEFAULT_BUFFER_LIMIT`, `TAIL_POLL_INTERVAL`, `SilenceCallback`, `FollowSummary`, and its fields | `src/runtime/agent_process/base.py:36`, `:95`, `:398` |

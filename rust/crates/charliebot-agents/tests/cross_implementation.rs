@@ -53,7 +53,7 @@ async fn python_and_rust_share_cursors_follow_offsets_and_pid_start() {
   let python_suffix = parse_json(&run_python(&["follow", path_arg(&rust_raw), path_arg(&rust_cursor), "cursor", "0"]));
   assert_eq!(join_events(rust_prefix, python_suffix), uninterrupted);
 
-  let base = root.path().join("app.slice");
+  let base = root.path().join("user@1001.service");
   fs::create_dir(&base).unwrap();
   let spec = SpawnSpec::new(
     "/bin/sleep",

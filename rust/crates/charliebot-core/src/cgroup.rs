@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 pub const SESSION_CGROUP_PREFIX: &str = "charliebot-sess-";
 const AGENTS_SLICE: &str = "charliebot-agents.slice";
 const REPAIR_SLICE: &str = "charliebot-repair.slice";
+/// The pre-split parent of the session slices. Nothing is created here; a leftover directory is still swept.
+pub const RETIRED_APP_SLICE: &str = "app.slice";
 
 /// The memory share a session's agent processes run in (`models.ResourceClass`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -46,15 +48,24 @@ impl ResourceClass {
   }
 }
 
-/// Return the delegated systemd `app.slice` directory for this user.
+/// Return this user's delegated systemd service directory, which holds the session slices.
 pub fn system_cgroup_base_dir() -> PathBuf {
   let uid = unsafe { libc::getuid() };
-  PathBuf::from(format!("/sys/fs/cgroup/user.slice/user-{uid}.slice/user@{uid}.service/app.slice"))
+  PathBuf::from(format!("/sys/fs/cgroup/user.slice/user-{uid}.slice/user@{uid}.service"))
 }
 
 /// Return the leaf-slice directory of `resource_class` under `base_dir`.
 pub fn session_slice_dir(base_dir: &Path, resource_class: ResourceClass) -> PathBuf {
   base_dir.join(resource_class.slice_name())
+}
+
+/// Return every directory a session cgroup may live under: both leaf slices, and the retired slice.
+pub fn session_slice_dirs(base_dir: &Path) -> [PathBuf; 3] {
+  [
+    session_slice_dir(base_dir, ResourceClass::Agent),
+    session_slice_dir(base_dir, ResourceClass::Repair),
+    base_dir.join(RETIRED_APP_SLICE),
+  ]
 }
 
 /// Return the cgroup directory name for one session.
@@ -68,20 +79,24 @@ pub fn session_cgroup_path(base_dir: &Path, session_id: &str) -> PathBuf {
   base_dir.join(session_cgroup_name(session_id))
 }
 
-/// Remove an empty session cgroup; a populated or unavailable directory stays in place.
+/// Remove the session's empty cgroup from every slice; a populated or unavailable directory stays in place. Returns
+/// whether any directory was removed.
 pub fn cleanup_session_cgroup(base_dir: &Path, session_id: &str) -> bool {
-  let path = session_cgroup_path(base_dir, session_id);
-  match fs::remove_dir(&path) {
-    Ok(()) => {
-      tracing::info!(target: "charliebot_agents", path = %path.display(), "session_cgroup_removed");
-      true
-    }
-    Err(error) if error.kind() == io::ErrorKind::NotFound => false,
-    Err(error) => {
-      tracing::debug!(target: "charliebot_agents", path = %path.display(), error = %error, "session_cgroup_cleanup_retained");
-      false
+  let mut removed = false;
+  for slice in session_slice_dirs(base_dir) {
+    let path = session_cgroup_path(&slice, session_id);
+    match fs::remove_dir(&path) {
+      Ok(()) => {
+        tracing::info!(target: "charliebot_agents", path = %path.display(), "session_cgroup_removed");
+        removed = true;
+      }
+      Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+      Err(error) => {
+        tracing::debug!(target: "charliebot_agents", path = %path.display(), error = %error, "session_cgroup_cleanup_retained");
+      }
     }
   }
+  removed
 }
 
 #[cfg(test)]
@@ -104,7 +119,9 @@ mod tests {
   #[test]
   fn cleanup_removes_only_an_empty_session_group() {
     let base = tempfile::tempdir().unwrap();
-    let path = session_cgroup_path(base.path(), "synthetic-session");
+    let slice = session_slice_dir(base.path(), ResourceClass::Repair);
+    fs::create_dir(&slice).unwrap();
+    let path = session_cgroup_path(&slice, "synthetic-session");
     fs::create_dir(&path).unwrap();
     assert!(cleanup_session_cgroup(base.path(), "synthetic-session"));
     assert!(!path.exists());

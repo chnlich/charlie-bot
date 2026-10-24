@@ -5,6 +5,7 @@ use std::fs;
 use std::sync::{Arc, Mutex};
 
 use charliebot_agents::transport::cgroup::sweep_stale_session_cgroups;
+use charliebot_core::cgroup::RETIRED_APP_SLICE;
 use charliebot_core::test_support::EventSink;
 use tracing::Event;
 use tracing::field::{Field, Visit};
@@ -40,14 +41,14 @@ fn sweep_removes_only_empty_cgroups_of_this_home_across_the_slices() {
   fs::create_dir(&sessions).unwrap();
   fs::create_dir(sessions.join(SESSION_ID)).unwrap();
   fs::create_dir(sessions.join(POPULATED_ID)).unwrap();
-  for slice in ["charliebot-agents.slice", "charliebot-repair.slice", "app.slice"] {
+  for slice in ["charliebot-agents.slice", "charliebot-repair.slice", RETIRED_APP_SLICE] {
     fs::create_dir(base.path().join(slice)).unwrap();
   }
-  // The same home's cgroup in each slice; the pre-split app.slice leftover is cleared too.
+  // The same home's cgroup in each slice; the retired slice's leftover is cleared too.
   let agents_empty = base.path().join("charliebot-agents.slice").join("charliebot-sess-abcd1234");
   let repair_empty = base.path().join("charliebot-repair.slice").join("charliebot-sess-abcd1234");
-  let app_empty = base.path().join("app.slice").join("charliebot-sess-abcd1234");
-  for path in [&agents_empty, &repair_empty, &app_empty] {
+  let retired_empty = base.path().join(RETIRED_APP_SLICE).join("charliebot-sess-abcd1234");
+  for path in [&agents_empty, &repair_empty, &retired_empty] {
     fs::create_dir(path).unwrap();
   }
   let populated = base.path().join("charliebot-agents.slice").join("charliebot-sess-9f8e7d6c");
@@ -65,7 +66,7 @@ fn sweep_removes_only_empty_cgroups_of_this_home_across_the_slices() {
   assert_eq!(removed, 3);
   assert!(!agents_empty.exists());
   assert!(!repair_empty.exists());
-  assert!(!app_empty.exists());
+  assert!(!retired_empty.exists());
   assert!(populated.is_dir());
   assert!(other_home.is_dir());
   assert!(non_session.is_dir());

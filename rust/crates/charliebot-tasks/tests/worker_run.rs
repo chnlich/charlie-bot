@@ -976,7 +976,11 @@ fn make_transcript(config_dir: &Path, session_id: &str) -> anyhow::Result<PathBu
 /// The `config.yaml` of a pooled test: the Claude accounts with their credentials, the pools, and the one `cc-claude`
 /// option, which draws from the first pool when pools are given.
 fn pooled_config(root: &Root, labels: &[&str], pools: &[(&str, &[&str])], token: &str) -> anyhow::Result<String> {
-  let mut text = format!("paths:\n  worktree_dir: {}\n", root.path().join("worktrees").display());
+  // The sessions here have no metadata; a zero cap starts no session cgroup, so no spawn walks the task-parent chain.
+  let mut text = format!(
+    "paths:\n  worktree_dir: {}\nserver:\n  session_memory_max_mb: 0\n",
+    root.path().join("worktrees").display()
+  );
   if !labels.is_empty() {
     text.push_str("accounts:\n  claude:\n");
     for label in labels {

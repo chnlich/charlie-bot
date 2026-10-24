@@ -19,7 +19,7 @@ impl BackendFactory for ClaudeCodeFactory {
     launch: LaunchArgs,
   ) -> anyhow::Result<Box<dyn AgentBackend>> {
     let launch = launch_with_kwargs(launch)?;
-    let cgroup_config = SessionCgroupConfig::from_config(&cfg);
+    let cgroup_config = SessionCgroupConfig::from_config(cfg);
     let backend = match option {
       None => ClaudeCodeBackend::from_launch(None, None, None, false, None, launch, cgroup_config)?,
       Some(option) => {

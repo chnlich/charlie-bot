@@ -367,7 +367,11 @@ fn option_yaml(id: &str, backend_type: &str, token: Option<&str>, account_pool: 
 /// The `config.yaml` of a test: the Claude accounts under the root with their credentials, the pools, and the options.
 /// A test with no Claude account leaves the accounts section out, as its registry does not register it.
 fn config_text(root: &Root, labels: &[&str], pools: &[(&str, &[&str])], options: &[String]) -> anyhow::Result<String> {
-  let mut text = format!("paths:\n  worktree_dir: {}\n", root.path().join("worktrees").display());
+  // The sessions here have no metadata; a zero cap starts no session cgroup, so no spawn walks the task-parent chain.
+  let mut text = format!(
+    "paths:\n  worktree_dir: {}\nserver:\n  session_memory_max_mb: 0\n",
+    root.path().join("worktrees").display()
+  );
   if !labels.is_empty() {
     text.push_str("accounts:\n  claude:\n");
     for label in labels {

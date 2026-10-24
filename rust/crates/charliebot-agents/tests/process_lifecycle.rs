@@ -36,7 +36,7 @@ enum ParentDeathSpawn {
 
 fn assert_pdeath_child_survives_blocking_keep_alive(spawn_kind: ParentDeathSpawn) {
   let root = tempfile::tempdir().unwrap();
-  let base = root.path().join("app.slice");
+  let base = root.path().join("user@1001.service");
   fs::create_dir(&base).unwrap();
   let spec = SpawnSpec::new(
     "/bin/sleep",
@@ -85,7 +85,7 @@ fn one_shot_pdeath_child_survives_blocking_thread_keep_alive() {
 #[tokio::test]
 async fn child_survival_matches_parent_death_policy() {
   let root = tempfile::tempdir().unwrap();
-  let base = root.path().join("app.slice");
+  let base = root.path().join("user@1001.service");
   fs::create_dir(&base).unwrap();
   for mode in ["raw", "piped"] {
     let raw_path = root.path().join(format!("{mode}.raw"));

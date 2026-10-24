@@ -318,9 +318,11 @@ mod tests {
       let sessions = home.path().join("sessions");
       fs::create_dir_all(sessions.join("stale")).unwrap();
       fs::create_dir_all(sessions.join("retained")).unwrap();
-      let stale = base.path().join("charliebot-sess-stale");
+      let slice = base.path().join("charliebot-agents.slice");
+      fs::create_dir(&slice).unwrap();
+      let stale = slice.join("charliebot-sess-stale");
       fs::create_dir(&stale).unwrap();
-      let retained = base.path().join("charliebot-sess-retained");
+      let retained = slice.join("charliebot-sess-retained");
       fs::create_dir(&retained).unwrap();
       fs::write(retained.join("cgroup.procs"), "123").unwrap();
       let server = ServerConfig {

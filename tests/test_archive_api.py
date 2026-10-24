@@ -28,7 +28,7 @@ async def test_archive_route_returns_the_archived_ids_and_409_detail_reaches_the
     archived = client.post(f"/api/sessions/{root.id}/archive", json={"request_id": "archive-root"})
     assert archived.status_code == 200
     assert archived.json() == {"archived": [root.id, mid.id]}
-    assert not [e for e in tree.events.load_events(root.id) if e["type"] == ET.CHILD_REPORT]
+    assert not conftest.child_reports(tree, root.id)
 
     # An already-archived target: 200 with an empty list.
     again = client.post(f"/api/sessions/{root.id}/archive", json={"request_id": "archive-again"})

@@ -178,7 +178,7 @@ async def test_own_run_archive_closes_without_takeoff_and_reports_to_ancestor(
   closes = [e for e in tree.events.load_events(child.id) if e["type"] == ET.TASK_CLOSED]
   assert len(closes) == 1 and closes[0]["outcome"] == "archived"
   assert closes[0]["report_to"] == root.id
-  reports = [e for e in tree.events.load_events(root.id) if e["type"] == ET.CHILD_REPORT]
+  reports = conftest.child_reports(tree, root.id)
   assert len(reports) == 1 and reports[0]["outcome"] == "archived"
 
   # The ancestor holds its own conditions: it stays open after the child closed.

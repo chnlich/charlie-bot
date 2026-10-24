@@ -15,10 +15,9 @@ One run walks the selected scenarios. For each scenario it:
    The harness then checks that both homes match file for file.
 3. Writes the scenario's fake-agent script into both trees before either server starts.
 4. Starts one declared fake-service set per side, then starts the baseline Python server and the candidate. A
-   handover scenario starts its candidate in the named
-   direction and starts the next server after the handover step. Once both servers answer, the harness waits for
-   each side to log `speech_models_ready` or `speech_model_provisioning_failed` (both servers provision speech models
-   in the background), then takes the startup snapshot. A handover waits the same way after its restarted server answers.
+   handover scenario starts its candidate in the named direction and starts the next server after the handover step.
+   Once both servers answer, the harness takes the startup snapshot. A handover takes the same snapshot after its
+   restarted server answers.
 5. Sends HTTP and WebSocket steps to both servers. Fake steps push provider events to both fake services. Wait
    steps observe durable state, and gate steps release fake agents. Handover steps stop and restart servers on
    the same homes.
@@ -78,9 +77,6 @@ uv run python rust/parity/parity.py --python-vs-python --stage features
 - `--stage NAME` (repeatable) runs only the scenarios of that stage. An unknown stage is an error.
 - `--tamper` renames one session in the candidate home after the fixture check. The run must fail; use it to
   see the harness catch a difference.
-- `--voice-models DIR` selects the read-only model source for scenarios with `voice_models: true`. Its default is
-  `~/.charliebot/models`. Before starting any server, the harness checks for the VAD file, sherpa archive and
-  extracted model directory, then links those entries into each synthetic home.
 - `--headless-chrome PATH` selects the headless Chrome binary for scenarios with `headless_chrome: true`. Its
   default is `~/.cache/ms-playwright/chromium_headless_shell-1228/chrome-linux/headless_shell`. A run that selects
   such a scenario exits before starting any server when the file is absent, and the message names this flag.
@@ -314,8 +310,6 @@ Scenario fields:
 - `fixture_extras` is an ordered list of module names under `fixture_extras/`. Each module's `async build(b)`
   returns tree-relative values recorded at `extras.<name>` in the manifest. Sessions created by an extra use
   `Builder.node` and appear under `sessions`.
-- `voice_models: true` links the three sherpa entries from `--voice-models` into `<tree>/home/models/`. The
-  source directory is read only.
 - `headless_chrome: true` links the `--headless-chrome` binary to `<tree>/bin/headless-chrome` on each side. A
   scenario points its server at that link with the config overlay
   `headless_chrome_bin: ${tree.root}/bin/headless-chrome`, so each server starts Chrome through its own sandbox.
@@ -438,9 +432,9 @@ Step fields:
 
   ```yaml
   - kind: log_event
-    name: speech models are provisioned on both sides
-    event: speech_models_ready
-    timeout_seconds: 60
+    name: server startup is logged on both sides
+    event: server_started
+    timeout_seconds: 5
   ```
 - `gate` requires `open`; the harness writes `open-<name>` in both fake-agent directories.
 - `handover` requires `agent_after_stop`: `alive`, `exited` or `terminated`. It checks every scripted start that

@@ -1,8 +1,0 @@
-stage: features
-name: features-harness-models
-voice_models: true
-steps:
-  - name: confirm server remains available with model links
-    method: GET
-    path: /api/auth/status
-    expect_status: 200

@@ -38,8 +38,8 @@ Checks, in order:
    - not JSON: 400 `malformed devices form field: <exception text>`;
    - not an object with exactly the keys `input_device`, `capture_settings`, `output_device`, `communications_output_device` and `device_error`: 400 `devices form field must carry exactly ['input_device', 'capture_settings', 'output_device', 'communications_output_device', 'device_error']`.
 2. Audio format check (400, see above).
-3. Write the recording to `sessions/<session_id>/voice/<stem>.wav` (16 kHz mono PCM16). Create the directory when absent. This runs before the backend is chosen, so a refused backend keeps the WAV.
-4. Backend choice, see below (400).
+3. Write the recording to `sessions/<session_id>/voice/<stem>.wav` (16 kHz mono PCM16). Create the directory when absent. This runs before the backend is chosen, so an unknown or unavailable backend keeps the WAV.
+4. Backend choice, see below (400 with the reason for an unknown or unavailable id).
 5. Transcribe the whole recording through the chosen backend (500 on failure).
 6. Write the text to `sessions/<session_id>/voice/<stem>.txt` (UTF-8) and log `voice_transcribed`.
 

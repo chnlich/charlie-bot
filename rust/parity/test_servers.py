@@ -19,15 +19,14 @@ from rust.parity import servers
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 # One event line as each server writes it: the Python server's console renderer, then the Rust server's JSON.
-PYTHON_EVENT = "2026-10-18 22:38:55 [info     ] speech_models_ready cache_dir=/tmp/synthetic/home/models\n"
+PYTHON_EVENT = "2026-10-18 22:38:55 [info     ] server_started purpose='server startup' ok=True\n"
 RUST_EVENT = (
-    '{"event": "speech_models_ready", "cache_dir": "/tmp/synthetic/home/models", "level": "info", '
+    '{"event": "server_started", "purpose": "server startup", "ok": true, "level": "info", '
     '"timestamp": "2026-10-18T22:38:55.000Z"}\n')
 PYTHON_FIELDS = "2026-10-18 22:38:55 [info     ] server_started purpose='server startup' ok=True\n"
 RUST_FIELDS = (
     '{"event": "server_started", "purpose": "server startup", "ok": true, "level": "info", '
     '"timestamp": "2026-10-18T22:38:55.000Z"}\n')
-PROVISIONING = ("speech_models_ready", "speech_model_provisioning_failed")
 
 
 @pytest.fixture
@@ -77,7 +76,7 @@ def test_concurrent_pick_ports_return_disjoint_ports() -> None:
 def test_log_event_wait_returns_on_the_event_in_either_servers_form(tmp_path: pathlib.Path, line: str) -> None:
   log = tmp_path / "baseline.server-1.log"
   log.write_text("Traceback (most recent call last):\n  File \"synthetic.py\", line 1\n" + line, encoding="utf-8")
-  assert servers.wait_for_log_events({"baseline": log}, PROVISIONING, {}, timeout_seconds=0.2) == []
+  assert servers.wait_for_log_events({"baseline": log}, ("server_started",), {}, timeout_seconds=0.2) == []
 
 
 @pytest.mark.parametrize("line", [PYTHON_FIELDS, RUST_FIELDS], ids=["python-console", "rust-json"])
@@ -99,15 +98,15 @@ def test_log_event_wait_reads_each_side_from_its_own_log(tmp_path: pathlib.Path)
   candidate.write_text("", encoding="utf-8")
   logs = {"baseline": baseline, "candidate": candidate}
   assert servers.wait_for_log_events(
-      logs, ("speech_models_ready",), {},
-      timeout_seconds=0.2) == ["candidate server did not log speech_models_ready within 0.2s"]
+      logs, ("server_started",), {},
+      timeout_seconds=0.2) == ["candidate server did not log server_started within 0.2s"]
 
 
 def test_log_event_wait_names_both_events_when_neither_arrives(tmp_path: pathlib.Path) -> None:
   log = tmp_path / "baseline.server-1.log"
   log.write_text(PYTHON_FIELDS, encoding="utf-8")
-  assert servers.wait_for_log_events({"baseline": log}, PROVISIONING, {}, timeout_seconds=0.2) == [
-      "baseline server did not log speech_models_ready or speech_model_provisioning_failed within 0.2s"
+  assert servers.wait_for_log_events({"baseline": log}, ("synthetic_event_a", "synthetic_event_b"), {}, timeout_seconds=0.2) == [
+      "baseline server did not log synthetic_event_a or synthetic_event_b within 0.2s"
   ]
 
 
@@ -124,7 +123,7 @@ def test_log_event_wait_ignores_a_line_until_its_newline_arrives(tmp_path: pathl
   writer = threading.Thread(target=finish_line)
   writer.start()
   try:
-    assert servers.wait_for_log_events({"baseline": log}, PROVISIONING, {}, timeout_seconds=5) == []
+    assert servers.wait_for_log_events({"baseline": log}, ("server_started",), {}, timeout_seconds=5) == []
   finally:
     writer.join()
 

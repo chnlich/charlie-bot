@@ -2,8 +2,7 @@
 
 `charliebot_core::python_helper` runs Python helper scripts for work only Python can do. It has two modes: a run that
 reads back one JSON value, and a long-lived helper that answers one JSON line per request. The ncu viewer runs the first
-mode to read `.ncu-rep` reports through NVIDIA's `ncu_report` module, which ships only for Python. The voice `qwen3_hf`
-engine runs the second mode, with `rust/helpers/qwen3_hf_helper.py`, to keep its model loaded for the server's life.
+mode to read `.ncu-rep` reports through NVIDIA's `ncu_report` module, which ships only for Python.
 
 ## The contract
 

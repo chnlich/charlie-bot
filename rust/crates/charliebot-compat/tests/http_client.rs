@@ -1,5 +1,5 @@
 //! The outbound clients send https requests through the proxy `HTTPS_PROXY` names and refuse a certificate bundle
-//! with no certificate in it. `client` returns a redirect unfollowed; `urllib_client` follows it.
+//! with no certificate in it. The client returns redirects without following them.
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
@@ -67,40 +67,6 @@ async fn a_redirect_comes_back_unfollowed() {
   assert_eq!(response.status(), 302);
   assert_eq!(response.headers()["location"].to_str().expect("the location is text"), location);
   assert_eq!(server.join().expect("the server thread finishes"), "GET /start HTTP/1.1");
-}
-
-#[tokio::test]
-async fn a_302_is_followed_only_by_the_urllib_client() {
-  let listener = TcpListener::bind("127.0.0.1:0").expect("bind a local port");
-  let base = format!("http://{}", listener.local_addr().expect("the listener has an address"));
-  // Three connections in order: the client's /start, then urllib's /start and the /second its redirect names. Each
-  // answer closes its connection, so no client reuses one.
-  let server = std::thread::spawn(move || {
-    let mut lines = Vec::new();
-    for _ in 0..3 {
-      let (mut stream, _) = listener.accept().expect("the client connects");
-      let line = request_line(&stream);
-      let answer = if line.starts_with("GET /start ") {
-        "HTTP/1.1 302 Found\r\nLocation: /second\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-      } else {
-        "HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\nsecond"
-      };
-      stream.write_all(answer.as_bytes()).expect("answer the request");
-      lines.push(line);
-    }
-    lines
-  });
-  let client = http_client::client(&Settings::default()).expect("the client builds");
-  let response = client.get(format!("{base}/start")).send().await.expect("the 302 comes back as the response");
-  assert_eq!(response.status(), 302);
-  let urllib = http_client::urllib_client(&Settings::default()).expect("the urllib client builds");
-  let response = urllib.get(format!("{base}/start")).send().await.expect("urllib follows the redirect");
-  assert_eq!(response.status(), 200);
-  assert_eq!(response.text().await.expect("the body is text"), "second");
-  assert_eq!(
-    server.join().expect("the server thread finishes"),
-    ["GET /start HTTP/1.1", "GET /start HTTP/1.1", "GET /second HTTP/1.1"]
-  );
 }
 
 #[test]

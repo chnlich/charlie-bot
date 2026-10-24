@@ -400,7 +400,6 @@ fn log_shutdown(shutdown_started: Instant, closes: CloseTimings, during_boot: bo
       merge_pool_ms = round_ms(step_elapsed(&closes.step_closes, "merge_pool")),
       scheduler_ms = round_ms(step_elapsed(&closes.step_closes, "scheduler")),
       slack_ms = round_ms(step_elapsed(&closes.step_closes, "slack")),
-      speech_ms = round_ms(step_elapsed(&closes.step_closes, "speech")),
       // Python stops `usage_tally`; Rust has no `usage_tally` service.
       usage_tally_ms = 0,
       http_client_ms = round_ms(closes.http_client),
@@ -416,7 +415,6 @@ fn log_shutdown(shutdown_started: Instant, closes: CloseTimings, during_boot: bo
       merge_pool_ms = round_ms(step_elapsed(&closes.step_closes, "merge_pool")),
       scheduler_ms = round_ms(step_elapsed(&closes.step_closes, "scheduler")),
       slack_ms = round_ms(step_elapsed(&closes.step_closes, "slack")),
-      speech_ms = round_ms(step_elapsed(&closes.step_closes, "speech")),
       // Python stops `usage_tally`; Rust has no `usage_tally` service.
       usage_tally_ms = 0,
       http_client_ms = round_ms(closes.http_client),
@@ -565,7 +563,7 @@ mod tests {
   fn shutdown_line_has_python_fields_and_each_close_is_numeric() {
     let events = Arc::new(Mutex::new(Vec::new()));
     let _capture = charliebot_core::test_support::install_events(Arc::new(Capture(Arc::clone(&events))));
-    let step_closes = ["discord", "ext_usage", "host_auth", "merge_pool", "scheduler", "slack", "speech"]
+    let step_closes = ["discord", "ext_usage", "host_auth", "merge_pool", "scheduler", "slack"]
       .map(|name| StepTiming { name, elapsed: Duration::ZERO })
       .into();
     let closes =
@@ -589,7 +587,6 @@ mod tests {
         "scheduler_ms",
         "shutdown_ms",
         "slack_ms",
-        "speech_ms",
         "usage_tally_ms",
         "ws_close_ms",
       ]
@@ -602,7 +599,6 @@ mod tests {
       "merge_pool_ms",
       "scheduler_ms",
       "slack_ms",
-      "speech_ms",
       "usage_tally_ms",
       "http_client_ms",
       "ws_close_ms",

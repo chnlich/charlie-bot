@@ -668,7 +668,7 @@ mod tests {
       Ok(Arc::new(value.clone()))
     }
     ConfigSchema {
-      sections: vec![ConfigSection { key: "voice", legacy_keys: &[("voice_engine", "voice.engine")], parse: raw }],
+      sections: vec![ConfigSection { key: "voice", legacy_keys: &[], parse: raw }],
       legacy_keys: Vec::new(),
       backend_types: vec!["cc-claude", "codex"],
     }
@@ -680,7 +680,7 @@ mod tests {
 
   const VALID: &str = "server:\n  host: 127.0.0.1\n  port: 18650\nbackends:\n  pool: [claude-fable]\n  options:\n    - id: \
                        claude-fable\n      label: \"CC · Fable\"\n      type: cc-claude\n      model: claude-fable-5-1\n      \
-                       effort: xhigh\nvoice:\n  engine: sherpa\n";
+                       effort: xhigh\nvoice: {}\n";
 
   #[test]
   fn a_valid_file_parses_into_typed_sections() {
@@ -718,6 +718,16 @@ mod tests {
     let home = home_with("bogus: 1\nserver: {}\nother_key: x\n");
     let error = load(&home).unwrap_err().to_string();
     assert!(error.starts_with("unknown config key(s) 'bogus', 'other_key';"), "{error}");
+  }
+
+  #[test]
+  fn removed_voice_legacy_keys_are_unknown_top_level_keys() {
+    for key in ["voice_engine", "voice_model_id"] {
+      let home = home_with(&format!("{key}: synthetic\n"));
+      let error = load(&home).unwrap_err().to_string();
+      assert!(error.starts_with("unknown config key(s)"), "{error}");
+      assert!(error.contains(key), "{error}");
+    }
   }
 
   #[test]

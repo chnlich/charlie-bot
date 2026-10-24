@@ -20,6 +20,13 @@ use crate::transcription::{self, Backend, TranscriptEvent, TranscriptKind};
 
 type SocketWriter = Arc<Mutex<SplitSink<WebSocket, Message>>>;
 
+struct RelaySettings {
+  config: Arc<CharlieBotConfig>,
+  vocabulary: Vec<String>,
+  languages: Vec<String>,
+  session_id: String,
+}
+
 pub(crate) fn handler(features: Arc<FeatureContext>, request: WebSocketRequest) -> BoxFuture<'static, Response> {
   Box::pin(async move {
     let session_id = request.segments.first().expect("the route captures its session id").clone();
@@ -32,11 +39,7 @@ pub(crate) fn handler(features: Arc<FeatureContext>, request: WebSocketRequest) 
       Err(error) => Some(error.clone()),
       Ok(backend) => backend
         .unavailable_reason()
-        .map(|reason| format!("voice backend {} is unavailable: {reason}", pyfmt::str_repr(backend.id())))
-        .or_else(|| {
-          (!backend.live_partials())
-            .then(|| format!("voice backend {} does not stream live partials", pyfmt::str_repr(backend.id())))
-        }),
+        .map(|reason| format!("voice backend {} is unavailable: {reason}", pyfmt::str_repr(backend.id()))),
     };
     let config = features.config.get();
     request.upgrade.max_message_size(16_777_216).max_frame_size(16_777_216).on_upgrade(move |socket| async move {
@@ -59,7 +62,7 @@ pub(crate) fn handler(features: Arc<FeatureContext>, request: WebSocketRequest) 
       let settings = config.section::<VoiceSettings>("voice");
       let vocabulary = settings.vocabulary.clone();
       let languages = settings.languages.clone();
-      relay_preview(writer, reader, config, vocabulary, languages, session_id, backend).await;
+      relay_preview(writer, reader, RelaySettings { config, vocabulary, languages, session_id }, backend).await;
     })
   })
 }
@@ -67,25 +70,20 @@ pub(crate) fn handler(features: Arc<FeatureContext>, request: WebSocketRequest) 
 async fn relay_preview(
   writer: SocketWriter,
   reader: SplitStream<WebSocket>,
-  config: Arc<CharlieBotConfig>,
-  vocabulary: Vec<String>,
-  languages: Vec<String>,
-  session_id: String,
+  settings: RelaySettings,
   backend: Backend,
 ) {
-  relay_preview_with_queue(writer, reader, config, vocabulary, languages, session_id, backend, AudioQueue::new()).await;
+  relay_preview_with_queue(writer, reader, settings, backend, AudioQueue::new()).await;
 }
 
 async fn relay_preview_with_queue(
   writer: SocketWriter,
   mut reader: SplitStream<WebSocket>,
-  config: Arc<CharlieBotConfig>,
-  vocabulary: Vec<String>,
-  languages: Vec<String>,
-  session_id: String,
+  settings: RelaySettings,
   backend: Backend,
   queue: Arc<AudioQueue>,
 ) {
+  let RelaySettings { config, vocabulary, languages, session_id } = settings;
   let (cancel, _) = watch::channel(false);
   let (events, event_receiver) = mpsc::unbounded_channel::<TranscriptEvent>();
   let backend_id = backend.id().to_string();
@@ -510,10 +508,12 @@ mod tests {
       relay_preview_with_queue(
         Arc::new(Mutex::new(writer)),
         reader,
-        Arc::clone(&state.config),
-        Vec::new(),
-        Vec::new(),
-        "synthetic-session".to_string(),
+        RelaySettings {
+          config: Arc::clone(&state.config),
+          vocabulary: Vec::new(),
+          languages: Vec::new(),
+          session_id: "synthetic-session".to_string(),
+        },
         Backend::gemini_for_test("synthetic-key", &state.endpoint_url),
         AudioQueue::new_with_recording_budget_for_test(state.max_recording_samples * 2),
       )

@@ -57,19 +57,9 @@ TREE_NAMES = {"baseline": "base", "candidate": "cand"}
 # The rename --tamper applies to the candidate home: a deliberate mismatch that shows the harness failing.
 TAMPER_SESSION = "atlas"
 TAMPER_NAME = "Atlas planning (tampered)"
-VOICE_MODEL_ENTRIES = (
-    "silero_vad.onnx",
-    "sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25.tar.bz2",
-    "sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25",
-)
 # The headless Chrome that scenarios with `headless_chrome: true` link into each tree at bin/headless-chrome.
 HEADLESS_CHROME_BIN = (
     pathlib.Path.home() / ".cache/ms-playwright/chromium_headless_shell-1228/chrome-linux/headless_shell")
-# The two events a server logs when its background speech-model provisioning ends, ready or failed.
-PROVISIONING_EVENTS = ("speech_models_ready", "speech_model_provisioning_failed")
-# The sherpa engine downloads two artifacts, and each download is bounded by the 60 s model download timeout on both
-# servers (src/infra/timeouts.py and rust/crates/features/voice/src/provisioning.rs).
-PROVISIONING_TIMEOUT_SECONDS = 120.0
 # A fake agent's process group must be gone this long after its SIGKILL. A zombie member keeps the group alive until
 # its parent reaps it, and the harness reaps only the fake leaders it adopted.
 FAKE_GROUP_EXIT_TIMEOUT_SECONDS = 10.0
@@ -516,23 +506,6 @@ def _server_logs(sides: list[Side]) -> dict[str, pathlib.Path]:
   return {side.label: side.server.log_path for side in sides}
 
 
-def _wait_for_provisioning(sides: list[Side]) -> list[str]:
-  """Wait until each Rust side logs the end of its background speech-model provisioning, ready or failed.
-
-  The Python server builds no local speech engine, so it logs neither event; a side whose server is Python is not
-  waited for.
-  """
-  rust_sides = []
-  for side in sides:
-    if side.server is None:
-      raise RuntimeError(f"{side.label} has no running server")
-    if side.server.argv[0] != str(PYTHON):
-      rust_sides.append(side)
-  if not rust_sides:
-    return []
-  return servers.wait_for_log_events(_server_logs(rust_sides), PROVISIONING_EVENTS, {}, PROVISIONING_TIMEOUT_SECONDS)
-
-
 def _write_fake_agent_script(sides: list[Side], script: dict | None) -> None:
   if script is None:
     return
@@ -924,7 +897,6 @@ def _run_handover_step(
     side.start_server(argv)
   for side in sides:
     side.wait_ready()
-  lines.extend(_wait_for_provisioning(sides))
   after = _settle_sides(sides)
   _prepare_contexts(sides, after, [_event_type_stream_rules(scenario, side, manifest) for side in sides])
   deltas = [compare.delta(old, new) for old, new in zip(before, after, strict=True)]
@@ -1212,24 +1184,6 @@ def _spawns_diff(sides: list[Side], expect_starts: int | None) -> list[str]:
   return lines
 
 
-def _check_voice_models(scenarios: list[scenario_file.Scenario], model_dir: pathlib.Path) -> None:
-  if not any(scenario.voice_models for scenario in scenarios):
-    return
-  for name in VOICE_MODEL_ENTRIES:
-    path = model_dir / name
-    present = path.is_dir() if name == VOICE_MODEL_ENTRIES[2] else path.is_file()
-    if not present:
-      raise SystemExit(f"parity: missing voice model entry {path}; provide it with --voice-models DIR")
-
-
-def _link_voice_models(sides: list[Side], model_dir: pathlib.Path) -> None:
-  for side in sides:
-    target_dir = side.tree.home / "models"
-    target_dir.mkdir()
-    for name in VOICE_MODEL_ENTRIES:
-      (target_dir / name).symlink_to(model_dir / name, target_is_directory=name == VOICE_MODEL_ENTRIES[2])
-
-
 def _check_headless_chrome(scenarios: list[scenario_file.Scenario], chrome: pathlib.Path) -> None:
   if not any(scenario.headless_chrome for scenario in scenarios):
     return
@@ -1259,7 +1213,6 @@ def _run_scenario(
     tamper: bool,
     guard_report: guard.Report,
     certificates: authority.Certificates | None,
-    voice_model_dir: pathlib.Path,
     strace: pathlib.Path,
     tmux: pathlib.Path,
     headless_chrome: pathlib.Path,
@@ -1285,8 +1238,6 @@ def _run_scenario(
   _link_tmux(sides, tmux)
   manifest = _build_fixtures(sides, scenario.fixture_extras)
   scenario_file.check_references(scenario, manifest)
-  if scenario.voice_models:
-    _link_voice_models(sides, voice_model_dir)
   if scenario.headless_chrome:
     _link_headless_chrome(sides, headless_chrome)
   _write_fake_agent_script(sides, scenario.fake_agent)
@@ -1306,7 +1257,7 @@ def _run_scenario(
     sides[1].start_server(candidate_first_argv)
     for side in sides:
       side.wait_ready()
-    startup_lines = _wait_for_provisioning(sides)
+    startup_lines = []
     for side in sides:
       if side.fake_set is not None:
         missing = side.fake_set.wait_ready(tuple(scenario.fakes), fakes.FAKE_READY_TIMEOUT_SECONDS)
@@ -1394,12 +1345,6 @@ def main() -> int:
   mode.add_argument("--rust-bin", type=pathlib.Path, help="the candidate server executable")
   parser.add_argument("--stage", action="append", help="run only scenarios of this stage (repeatable)")
   parser.add_argument(
-      "--voice-models",
-      type=pathlib.Path,
-      default=pathlib.Path.home() / ".charliebot" / "models",
-      help="read-only source directory for the sherpa voice model links",
-  )
-  parser.add_argument(
       "--headless-chrome",
       type=pathlib.Path,
       default=HEADLESS_CHROME_BIN,
@@ -1430,8 +1375,6 @@ def main() -> int:
   servers.become_child_subreaper()
   candidate_argv = [str(rust_bin)] if rust_bin else [str(PYTHON), "server.py"]
   scenarios = scenario_file.load_all(args.stage)
-  voice_model_dir = args.voice_models.expanduser().resolve()
-  _check_voice_models(scenarios, voice_model_dir)
   headless_chrome = args.headless_chrome.expanduser().resolve()
   _check_headless_chrome(scenarios, headless_chrome)
   if any(scenario.fakes for scenario in scenarios) and not authority.OPENSSL.is_file():
@@ -1481,7 +1424,7 @@ def main() -> int:
         with servers.pick_ports(2) as ports:
           scenario_results = _run_scenario(
               scenario, scenario_dir, ports, candidate_first, candidate_handover, direction, args.tamper, guard_report,
-              certificates, voice_model_dir, strace, tmux, headless_chrome, args.python_vs_python)
+              certificates, strace, tmux, headless_chrome, args.python_vs_python)
         for result in scenario_results:
           lines = _format_step(result)
           output.extend(lines)

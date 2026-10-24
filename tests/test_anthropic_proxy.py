@@ -266,56 +266,25 @@ async def test_iter_anthropic_sse_translates_frame_with_raw_splitline_chars() ->
   assert parsed[-1][0] == "message_stop"
 
 
-def test_stream_tool_call_without_index_uses_zero_for_idless_continuations() -> None:
+def test_stream_tool_call_without_index_is_rejected() -> None:
   translator = anthropic_proxy.OpenAIChatStreamToAnthropic("gemini-3.8-flash")
-  events = translator.events_for_chunk(
-      {
-          "choices": [
-              {
-                  "delta": {
-                      "tool_calls": [{
-                          "id": "call-1",
-                          "function": {
-                              "name": "Bash",
-                              "arguments": "{",
-                          },
-                      }],
-                  },
-              }
-          ],
-      })
-  events.extend(
-      translator.events_for_chunk(
-          {
-              "choices": [{
-                  "delta": {
-                      "tool_calls": [{
-                          "function": {
-                              "arguments": '"cmd":"pwd"}',
-                          },
-                      }],
-                  },
-              }],
-          }))
-  events.extend(translator.finish_events())
 
-  tool_starts = [
-      data["content_block"]
-      for event, data in events
-      if event == "content_block_start" and data["content_block"]["type"] == "tool_use"
-  ]
-  argument_fragments = [
-      data["delta"]["partial_json"]
-      for event, data in events
-      if event == "content_block_delta" and data["delta"]["type"] == "input_json_delta"
-  ]
-  assert tool_starts == [{
-      "type": "tool_use",
-      "id": "call-1",
-      "name": "Bash",
-      "input": {},
-  }]
-  assert argument_fragments == ["{", '"cmd":"pwd"}']
+  with pytest.raises(ValueError, match="streaming tool_call missing index"):
+    translator.events_for_chunk(
+        {
+            "choices":
+                [{
+                    "delta": {
+                        "tool_calls": [{
+                            "id": "call-1",
+                            "function": {
+                                "name": "Bash",
+                                "arguments": "{}",
+                            },
+                        }],
+                    },
+                }],
+        })
 
 
 def test_claude_code_request_shape_uses_inline_system_and_google_schema() -> None:

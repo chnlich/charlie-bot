@@ -1959,7 +1959,7 @@ def _start_keeper_scope(*, slice_name: str, log_path: pathlib.Path) -> tuple[sub
 
 
 def _stop_keeper_scope(process: subprocess.Popen[str], unit: str, cgroup: pathlib.Path) -> None:
-  _wait_scope_exit(process, unit, cgroup)
+  _wait_scope_exit(process, unit, cgroup, allow_sigterm=True)
 
 
 def _repair_probe_read_file(copy: dict[str, Any]) -> pathlib.Path:

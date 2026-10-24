@@ -243,7 +243,7 @@ async def test_recovery_redelivery_of_a_fresh_report_wakes_the_parent(tmp_path: 
       "report_to": parent.id,
   }
   await tree.events.append(child.id, close_event)
-  assert [e for e in tree.events.load_events(parent.id) if e.get("type") == ET.CHILD_REPORT] == []
+  assert conftest.child_reports(tree, parent.id) == []
   assert tree.dispatch.undelivered_report_blockers(child.id), "the close fact must owe its report"
 
   wakes: list[str] = []

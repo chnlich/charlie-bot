@@ -144,6 +144,44 @@ def test_adjacent_pair_compares_equal_in_either_order_with_different_ids() -> No
   assert _ordered_diff(_chat_events(True), _chat_events(False), candidate_is_python=True) == []
 
 
+REMINDER = compare.EventSelector(event_type="agent_message", match_fields={"from_session_name": "Session status"})
+
+
+def _reminder_ordered_diff(baseline: list[dict], candidate: list[dict]) -> list[str]:
+  """The diff of two chat logs after each one's reminder pair is ordered."""
+  sides = [compare.order_adjacent_pair(_chat_delta(events), REMINDER, FINISHED) for events in (baseline, candidate)]
+  return compare.delta_diff(sides[0], sides[1], _context(), _context())
+
+
+def test_adjacent_pair_rule_orders_every_pair_of_a_multi_turn_log() -> None:
+  """A multi-turn session's log holds one pair per audited turn, and each side may write each pair its own way."""
+  reminder = {"type": "agent_message", "id": "reminder-id", "from_session_name": "Session status"}
+  finished = {"type": "run_finished", "id": "finished-id", "outcome": "success"}
+  other = {"type": "user", "id": "user-id", "content": "next"}
+  for baseline_order, candidate_order in [(True, False), (False, True)]:
+    baseline = [reminder, finished, other] if baseline_order else [finished, reminder, other]
+    candidate = [reminder, finished, other] if candidate_order else [finished, reminder, other]
+    assert _reminder_ordered_diff(baseline, candidate) == [], (baseline_order, candidate_order)
+
+
+def test_adjacent_pair_rule_orders_two_independent_pairs_of_one_log() -> None:
+  first = {"type": "agent_message", "id": "reminder-1", "from_session_name": "Session status"}
+  second = {"type": "agent_message", "id": "reminder-2", "from_session_name": "Session status"}
+  first_finished = {"type": "run_finished", "id": "finished-1", "outcome": "success"}
+  second_finished = {"type": "run_finished", "id": "finished-2", "outcome": "success"}
+  gap = {"type": "master_done", "id": "done-2"}
+  baseline = [first_finished, first, gap, second, second_finished]
+  candidate = [first, first_finished, gap, second_finished, second]
+  assert _reminder_ordered_diff(baseline, candidate) == []
+
+
+def test_adjacent_pair_rule_keeps_two_seconds_around_one_first_unpaired() -> None:
+  reminder = {"type": "agent_message", "id": "reminder-id", "from_session_name": "Session status"}
+  left = {"type": "run_finished", "id": "finished-1", "outcome": "success"}
+  right = {"type": "run_finished", "id": "finished-2", "outcome": "success"}
+  assert _reminder_ordered_diff([left, reminder, right], [reminder, left, right]) != []
+
+
 def test_adjacent_pair_rule_still_reports_a_difference_outside_the_pair() -> None:
   candidate = _chat_events(False)
   candidate[0]["exit_code"] = 1

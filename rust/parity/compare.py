@@ -406,31 +406,40 @@ def _selected(event: Any, selector: EventSelector) -> bool:
       key in event and not json_diff(event[key], expected) for key, expected in selector.match_fields.items())
 
 
-def _adjacent_pair(events: list[Any], first: EventSelector, second: EventSelector) -> tuple[int, int] | None:
-  """The index of the one *first* event and of its one neighbour that matches *second*, or None without both."""
-  firsts = [index for index, event in enumerate(events) if _selected(event, first)]
-  if len(firsts) != 1:
-    return None
-  neighbours = [
-      index for index in (firsts[0] - 1, firsts[0] + 1)
-      if 0 <= index < len(events) and _selected(events[index], second)
-  ]
-  return (firsts[0], neighbours[0]) if len(neighbours) == 1 else None
+def _adjacent_pairs(events: list[Any], first: EventSelector, second: EventSelector) -> list[tuple[int, int]]:
+  """Each (first, second) neighbour pair of the log, in log order, either adjacency order.
+
+  A *first* event pairs with its one neighbour that matches *second*; one with no or two such neighbours pairs with
+  none, and a *second* event one pair already claimed pairs with no further *first*.
+  """
+  seconds_at = {index for index, event in enumerate(events) if _selected(event, second)}
+  pairs: list[tuple[int, int]] = []
+  claimed: set[int] = set()
+  for index, event in enumerate(events):
+    if not _selected(event, first):
+      continue
+    neighbours = [other for other in (index - 1, index + 1) if other in seconds_at and other not in claimed]
+    if len(neighbours) == 1:
+      claimed.add(neighbours[0])
+      pairs.append((index, neighbours[0]))
+  return pairs
 
 
 def _ordered_chat_log(data: bytes, first: EventSelector, second: EventSelector) -> tuple[bytes, dict[str, str]]:
-  """The log with its pair written as first, then second, and each pair event's raw id mapped to its placeholder."""
+  """The log with each pair written as first, then second, and each pair event's raw id mapped to its placeholder."""
   lines = [line for line in data.splitlines() if line.strip()]
   events = [_jsonl_line_value(line) for line in lines]
-  pair = _adjacent_pair(events, first, second)
-  if pair is None:
+  pairs = _adjacent_pairs(events, first, second)
+  if not pairs:
     return data, {}
-  first_index, second_index = pair
-  lower, upper = sorted(pair)
-  placed = {lower: events[first_index], upper: events[second_index]}
+  placed: dict[int, Any] = {}
+  for first_index, second_index in pairs:
+    lower, upper = sorted((first_index, second_index))
+    placed[lower] = events[first_index]
+    placed[upper] = events[second_index]
   rewritten = list(lines)
   masks: dict[str, str] = {}
-  for position, event in placed.items():
+  for position, event in sorted(placed.items()):
     event.pop("event_index", None)
     if "id" in event:
       placeholder = f"<normalized-{event['type']}-id>"
@@ -443,10 +452,11 @@ def _ordered_chat_log(data: bytes, first: EventSelector, second: EventSelector) 
 def order_adjacent_pair(delta: Delta, first: EventSelector, second: EventSelector) -> Delta:
   """*delta* with each chat log's adjacent (first, second) pair written as first, then second.
 
-  The pair then compares as one order, whichever order the tree wrote it in. A swap moves each event's position, so
-  event_index is dropped from both events. Each event's id is masked wherever the tree names it, in its own line and in
-  every later reference such as input_event_ids, so a run record that names the nudge compares as well. A log without
-  exactly one *first* event and one neighbour that matches *second* keeps its content, and the diff reports it.
+  The pair then compares as one order, whichever order the tree wrote it in, for every pair the log holds: a
+  multi-turn session's log carries one pair per audited turn. A swap moves each event's position, so event_index is
+  dropped from both events. Each event's id is masked wherever the tree names it, in its own line and in every later
+  reference such as input_event_ids, so a run record that names the nudge compares as well. A *first* event with no or
+  two *second* neighbours keeps its content, and the diff reports it.
   """
   masks: dict[str, str] = {}
 

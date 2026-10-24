@@ -469,6 +469,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "charliebot-disk-sweep"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "charliebot-core",
+ "charliebot-registry",
+ "charliebot-store",
+ "charliebot-tasks",
+ "chrono",
+ "futures-util",
+ "serde_json",
+ "tar",
+ "tempfile",
+]
+
+[[package]]
 name = "charliebot-explain"
 version = "0.1.0"
 dependencies = [
@@ -634,6 +650,7 @@ dependencies = [
  "charliebot-diag",
  "charliebot-diff-view",
  "charliebot-discord",
+ "charliebot-disk-sweep",
  "charliebot-explain",
  "charliebot-files",
  "charliebot-host-auth",

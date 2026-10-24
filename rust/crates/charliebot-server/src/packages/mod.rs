@@ -31,6 +31,7 @@ pub const PACKAGES: &[(&str, RegisterFn)] = &[
   ("src.features.diag", charliebot_diag::register),
   ("src.features.slack", charliebot_slack::register),
   ("src.features.discord", charliebot_discord::register),
+  ("src.features.disk_sweep", charliebot_disk_sweep::register),
   ("src.features.web_reply", charliebot_web_reply::register),
   ("src.features.host_auth", charliebot_host_auth::register),
   ("src.features.diff_view", charliebot_diff_view::register),
@@ -87,8 +88,15 @@ mod tests {
     }
     assert!(registry.event_renderer("assistant").is_none());
     assert!(registry.websocket_match("/ws/sessions/synthetic").is_some());
-    for name in ["backup", "usage_ledger", "cool_storage"] {
+    for name in ["backup", "usage_ledger", "cool_storage", "disk_sweep"] {
       assert!(registry.scheduled_handler_named(name).is_some(), "no scheduled handler for {name}");
     }
+  }
+
+  #[test]
+  fn test_feature_registers_cli_and_scheduled_handler() {
+    // Python: tests/test_disk_sweep.py::test_feature_registers_cli_and_scheduled_handler
+    let registry = registry().expect("the listed packages register");
+    assert!(registry.scheduled_handler_named("disk_sweep").is_some());
   }
 }

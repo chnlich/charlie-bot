@@ -9,8 +9,6 @@ use axum::response::Response;
 use charliebot_registry::Registry;
 use charliebot_store::metadata::{SessionMetadata, SessionStatus, TaskProfile, UtcDateTime};
 use charliebot_store::{Store, StoreResult};
-use flate2::Compression;
-use flate2::write::GzEncoder;
 use http::HeaderValue;
 use serde_json::{Map, Value, json};
 
@@ -167,10 +165,7 @@ pub fn sessions_list_response(
         state.gzip.push_back(entry);
         return json_bytes_response(compressed, true);
       }
-      let mut encoder = GzEncoder::new(Vec::new(), Compression::new(1));
-      use std::io::Write;
-      encoder.write_all(&body).expect("writing to a Vec cannot fail");
-      let compressed = encoder.finish().expect("finishing into a Vec cannot fail");
+      let compressed = charliebot_compat::compression::gzip_level_one(&body);
       state.gzip.push_back((body, compressed.clone()));
       while state.gzip.len() > GZIP_MEMO_LIMIT {
         state.gzip.pop_front();

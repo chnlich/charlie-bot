@@ -601,6 +601,34 @@ pub fn yaml_key_repr(key: &Value) -> String {
   }
 }
 
+/// Convert a YAML mapping from an option's type fields to a JSON object. A JSON object key must be a string, and
+/// YAML tags and non-finite floats have no JSON form.
+pub fn yaml_mapping_to_json(mapping: &Mapping) -> Result<serde_json::Map<String, serde_json::Value>, String> {
+  let mut object = serde_json::Map::new();
+  for (key, value) in mapping {
+    let Some(key) = key.as_str() else {
+      return Err(format!("a JSON object key must be a string, not {}", yaml_key_repr(key)));
+    };
+    object.insert(key.to_string(), yaml_to_json(value)?);
+  }
+  Ok(object)
+}
+
+/// Convert one YAML value to its JSON form, under the same key and tag rules as [`yaml_mapping_to_json`].
+pub fn yaml_to_json(value: &Value) -> Result<serde_json::Value, String> {
+  match value {
+    Value::Null => Ok(serde_json::Value::Null),
+    Value::Bool(flag) => Ok(serde_json::Value::Bool(*flag)),
+    Value::Number(number) => serde_json::to_value(number).map_err(|error| error.to_string()),
+    Value::String(text) => Ok(serde_json::Value::String(text.clone())),
+    Value::Sequence(items) => {
+      items.iter().map(yaml_to_json).collect::<Result<Vec<_>, _>>().map(serde_json::Value::Array)
+    }
+    Value::Mapping(mapping) => yaml_mapping_to_json(mapping).map(serde_json::Value::Object),
+    Value::Tagged(_) => Err("a tagged YAML value has no JSON form".to_string()),
+  }
+}
+
 /// The kind of a YAML value, for messages that reject it.
 pub fn yaml_value_kind(value: &Value) -> &'static str {
   match value {

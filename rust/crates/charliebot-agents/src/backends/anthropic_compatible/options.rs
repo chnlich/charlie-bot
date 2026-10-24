@@ -1,6 +1,7 @@
-//! The endpoint, declared context window, optional credential, optional effort and request headers of a
-//! `cc-anthropic-compatible` entry.
+//! The endpoint, declared context window, optional credential, optional effort, request headers and fixed request
+//! body fields of a `cc-anthropic-compatible` entry.
 
+use serde_json::{Map, Value as JsonValue};
 use serde_yaml::{Mapping, Value};
 
 const API_BASE: &str = "api_base";
@@ -8,10 +9,11 @@ const CONTEXT_WINDOW: &str = "context_window";
 const CREDENTIAL: &str = "credential";
 const EFFORT: &str = "effort";
 const HEADERS: &str = "headers";
-const FIELDS: [&str; 5] = [API_BASE, CONTEXT_WINDOW, CREDENTIAL, EFFORT, HEADERS];
+const EXTRA_BODY: &str = "extra_body";
+const FIELDS: [&str; 6] = [API_BASE, CONTEXT_WINDOW, CREDENTIAL, EFFORT, HEADERS, EXTRA_BODY];
 
 /// The type-specific fields of one Anthropic-compatible backend option.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct CcAnthropicCompatibleOption {
   /// The endpoint root Claude Code uses before appending its messages route.
   pub api_base: String,
@@ -23,6 +25,8 @@ pub struct CcAnthropicCompatibleOption {
   pub effort: Option<String>,
   /// The request headers the launch routes to the endpoint, in the entry's order.
   pub headers: Vec<(String, String)>,
+  /// The JSON object Claude Code merges into the body of every request to the endpoint.
+  pub extra_body: Map<String, JsonValue>,
 }
 
 impl CcAnthropicCompatibleOption {
@@ -80,7 +84,13 @@ impl CcAnthropicCompatibleOption {
       }
       Some(_) => return Err("cc-anthropic-compatible option headers must be a mapping of strings".to_string()),
     };
-    Ok(Self { api_base, context_window, credential, effort, headers })
+    let extra_body = match fields.get(EXTRA_BODY) {
+      None => Map::new(),
+      Some(Value::Mapping(mapping)) => charliebot_core::config::yaml_mapping_to_json(mapping)
+        .map_err(|error| format!("cc-anthropic-compatible option extra_body: {error}"))?,
+      Some(_) => return Err("cc-anthropic-compatible option extra_body must be a mapping".to_string()),
+    };
+    Ok(Self { api_base, context_window, credential, effort, headers, extra_body })
   }
 }
 

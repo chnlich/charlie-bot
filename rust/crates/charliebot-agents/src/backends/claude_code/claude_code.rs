@@ -11,7 +11,7 @@ use anyhow::{Context, bail};
 use charliebot_registry::backend::{AgentBackend, ContextLimits, Env, LaunchArgs, Translate, TransportKind};
 use charliebot_store::run_records::RunKind;
 use futures_util::future::BoxFuture;
-use serde_json::Value;
+use serde_json::{Map, Value};
 use tokio::io::AsyncWriteExt;
 
 use crate::transport::cgroup::{SessionCgroupLimits, system_cgroup_base_dir};
@@ -395,12 +395,14 @@ impl AgentBackend for ClaudeCodeBackend {
   }
 }
 
-/// One home for every gateway endpoint and model variable. Endpoint backends write the first two names and may
-/// write the third; `claude_model_env` pins the final five.
-pub const GATEWAY_ENDPOINT_ENV_NAMES: [&str; 8] = [
+/// One home for every gateway endpoint and model variable. Endpoint backends write the first two names, may write the
+/// extra-body and custom-headers names, and `claude_model_env` pins the final five. `CLAUDE_CODE_EXTRA_BODY` is
+/// gateway-only: `without_gateway_env` strips it because the official Anthropic API must never receive it.
+pub const GATEWAY_ENDPOINT_ENV_NAMES: [&str; 9] = [
   "ANTHROPIC_BASE_URL",
   "ANTHROPIC_AUTH_TOKEN",
   "ANTHROPIC_CUSTOM_HEADERS",
+  "CLAUDE_CODE_EXTRA_BODY",
   "ANTHROPIC_MODEL",
   "ANTHROPIC_DEFAULT_OPUS_MODEL",
   "ANTHROPIC_DEFAULT_SONNET_MODEL",
@@ -410,14 +412,13 @@ pub const GATEWAY_ENDPOINT_ENV_NAMES: [&str; 8] = [
 pub const GATEWAY_BASE_URL_ENV: &str = GATEWAY_ENDPOINT_ENV_NAMES[0];
 pub const GATEWAY_AUTH_TOKEN_ENV: &str = GATEWAY_ENDPOINT_ENV_NAMES[1];
 pub const GATEWAY_CUSTOM_HEADERS_ENV: &str = GATEWAY_ENDPOINT_ENV_NAMES[2];
-/// The gateway-only variable that merges a fixed body into every request.
-pub const GATEWAY_EXTRA_BODY_ENV: &str = "CLAUDE_CODE_EXTRA_BODY";
+pub const GATEWAY_EXTRA_BODY_ENV: &str = GATEWAY_ENDPOINT_ENV_NAMES[3];
 pub const CLAUDE_MODEL_ENV_NAMES: [&str; 5] = [
-  GATEWAY_ENDPOINT_ENV_NAMES[3],
   GATEWAY_ENDPOINT_ENV_NAMES[4],
   GATEWAY_ENDPOINT_ENV_NAMES[5],
   GATEWAY_ENDPOINT_ENV_NAMES[6],
   GATEWAY_ENDPOINT_ENV_NAMES[7],
+  GATEWAY_ENDPOINT_ENV_NAMES[8],
 ];
 
 /// Every Claude Code model-selection variable pinned to one model: the main model, the opus, sonnet and haiku slot
@@ -445,6 +446,7 @@ pub struct AnthropicEndpointBackend {
   model: String,
   context_window: Option<u64>,
   headers: Vec<(String, String)>,
+  extra_body: Map<String, Value>,
 }
 
 impl AnthropicEndpointBackend {
@@ -463,13 +465,33 @@ impl AnthropicEndpointBackend {
     cgroup_limits: SessionCgroupLimits,
   ) -> anyhow::Result<Self> {
     let backend = ClaudeCodeBackend::from_launch(None, effort, None, false, claude_config_dir, launch, cgroup_limits)?;
-    Ok(Self { backend, base_url, auth_token, model, context_window, headers: Vec::new() })
+    Ok(Self { backend, base_url, auth_token, model, context_window, headers: Vec::new(), extra_body: Map::new() })
   }
 
   /// Route `headers` as `ANTHROPIC_CUSTOM_HEADERS` lines, in the option's order.
   pub fn with_headers(mut self, headers: Vec<(String, String)>) -> Self {
     self.headers = headers;
     self
+  }
+
+  /// Merge `extra_body` into every request body as `CLAUDE_CODE_EXTRA_BODY`.
+  pub fn with_extra_body(mut self, extra_body: Map<String, Value>) -> Self {
+    self.extra_body = extra_body;
+    self
+  }
+
+  /// The one-shot environment: the environment of this entry's runs, so the one-shot reaches the same endpoint,
+  /// model, headers and request body.
+  fn one_shot_env(&self, base_env: &Env) -> anyhow::Result<Env> {
+    self.prepare_env(base_env.clone())
+  }
+
+  /// No `--model` — the model variables select the model — and the entry's `effort` rides `--effort`.
+  fn one_shot_model_args(&self) -> Vec<String> {
+    match self.backend.effort.as_deref() {
+      Some(effort) => vec!["--effort".to_string(), effort.to_string()],
+      None => Vec::new(),
+    }
   }
 }
 
@@ -496,6 +518,9 @@ impl AgentBackend for AnthropicEndpointBackend {
         GATEWAY_CUSTOM_HEADERS_ENV.to_string(),
         self.headers.iter().map(|(name, value)| format!("{name}: {value}")).collect::<Vec<_>>().join("\n"),
       );
+    }
+    if !self.extra_body.is_empty() {
+      env.insert(GATEWAY_EXTRA_BODY_ENV.to_string(), Value::Object(self.extra_body.clone()).to_string());
     }
     if let Some(context_window) = self.context_window {
       let window = context_window.to_string();
@@ -528,7 +553,19 @@ impl AgentBackend for AnthropicEndpointBackend {
     system: &'a str,
     timeout: Option<Duration>,
   ) -> Option<BoxFuture<'a, anyhow::Result<String>>> {
-    self.backend.one_shot_text(base_env, prompt, system, timeout)
+    Some(Box::pin(async move {
+      let command = one_shot_argv(&self.one_shot_model_args(), system);
+      let env = self.one_shot_env(base_env)?;
+      run_one_shot_process(
+        &command,
+        &env,
+        prompt,
+        timeout,
+        self.backend.cgroup_session_id.as_deref(),
+        &self.backend.cgroup_limits,
+      )
+      .await
+    }))
   }
 }
 

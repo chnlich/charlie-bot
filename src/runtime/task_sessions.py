@@ -261,7 +261,7 @@ class TaskTreeActivity:
   (recorded pid alive, no terminal fact); ``work_state`` is the node's
   fact-derived work verdict (idle | running | waiting) — waiting means a
   queued Run on an open task. Both come from one derivation —
-  :func:`derive_task_tree_activity` — that ``TaskTreeManager.work_state_of``
+  :func:`derive_task_tree_activity` — that ``TaskTreeManager.activity_of``
   and the sidebar's task-tree probe share.
   """
   has_running_tasks: bool
@@ -879,17 +879,6 @@ class TaskTreeManager:
   def task_state_fast(self, session_id: str) -> str:
     """The task's lifecycle state from the history tail (see _task_state_fast)."""
     return self._task_state_fast(session_id)
-
-  def work_state_of(self, session_id: str) -> models.WorkState:
-    """idle | running | waiting, from CURRENT unresolved facts.
-
-    One half of :meth:`activity_of` — the shared derivation's work verdict.
-    Running work (a live launched Run) wins over waiting work (a queued Run on
-    an open task); everything else — a Run with a terminal fact of any
-    outcome, a queued Run on a closed task, or a launched Run whose process is
-    dead — reads idle.
-    """
-    return self.activity_of(session_id).work_state
 
   def activity_of(self, session_id: str) -> TaskTreeActivity:
     """The node's derived sidebar activity: live-Run flag plus work verdict.

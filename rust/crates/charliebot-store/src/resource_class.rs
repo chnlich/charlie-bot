@@ -7,15 +7,55 @@
 //!
 //! The walk reads each `metadata.json` from disk: a spawn must see a mark the operator just cleared.
 
+use std::collections::HashSet;
+use std::fs;
+use std::io;
 use std::path::Path;
 
 use charliebot_core::cgroup::ResourceClass;
+use serde_json::Value;
 
-use crate::StoreResult;
+use crate::{StoreError, StoreResult};
+
+const SESSION_METADATA_NAME: &str = "metadata.json";
 
 /// The class of *session_id*'s spawns, read from the metadata files under *sessions_dir*.
-pub fn resolve(_sessions_dir: &Path, _session_id: &str) -> StoreResult<ResourceClass> {
-  Ok(ResourceClass::Agent)
+pub fn resolve(sessions_dir: &Path, session_id: &str) -> StoreResult<ResourceClass> {
+  let mut seen = HashSet::new();
+  let mut current = session_id.to_string();
+  loop {
+    if !seen.insert(current.clone()) {
+      return Err(StoreError::new(format!(
+        "task-parent cycle while resolving resource class for {session_id}: {current}"
+      )));
+    }
+    let path = sessions_dir.join(&current).join(SESSION_METADATA_NAME);
+    let raw = match fs::read_to_string(&path) {
+      Ok(raw) => raw,
+      Err(error) if error.kind() == io::ErrorKind::NotFound => {
+        return Err(StoreError::new(format!(
+          "session {current} metadata is missing while resolving resource class for {session_id}"
+        )));
+      }
+      Err(error) => return Err(error.into()),
+    };
+    let meta: Value = serde_json::from_str(&raw)?;
+    let mark = match meta.get("resource_class") {
+      Some(value) => serde_json::from_value::<ResourceClass>(value.clone())
+        .map_err(|error| StoreError::new(format!("session {current} has invalid resource_class: {error}")))?,
+      None => ResourceClass::Agent,
+    };
+    if mark == ResourceClass::Repair {
+      return Ok(ResourceClass::Repair);
+    }
+    match meta.get("task_parent_id") {
+      None | Some(Value::Null) => return Ok(ResourceClass::Agent),
+      Some(Value::String(parent)) if !parent.is_empty() => current = parent.clone(),
+      Some(other) => {
+        return Err(StoreError::new(format!("session {current} has invalid task_parent_id {other}")));
+      }
+    }
+  }
 }
 
 #[cfg(test)]

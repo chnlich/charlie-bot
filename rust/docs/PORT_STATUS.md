@@ -606,17 +606,12 @@ Both all-stage Rust debug runs failed the same 176 of 1169 steps, and no step fa
 
 ## Catch-up d1f7e3ba6 ignored Cargo tests
 
-Six Cargo tests fail on a main change, and each carries `#[ignore = "catch-up d1f7e3ba6: <row>"]`. R254 and R255
-are gone: the Python reference helper clears the account readings itself. The other three ignored tests were ignored
-before this catch-up.
+One Cargo test fails on a main change, and it carries `#[ignore = "catch-up d1f7e3ba6: <row>"]`. R254 and R255
+are gone: the Python reference helper clears the account readings itself. R256 to R260 are gone: the Rust
+`metadata.json` writer carries `resource_class`. The other three ignored tests were ignored before this catch-up.
 
 | Row | Test | Binary | Main commit | Difference |
 | --- | --- | --- | --- | --- |
-| R256 | `python_and_rust_store_operations_write_identical_files_and_read_each_others_output` | `charliebot-store` `cross_implementation` | df7920bd7 | The `metadata.json` bytes differ between the Rust and Python sides in the `resource_class` line. |
-| R257 | `python_and_rust_name_an_unnamed_node_from_a_corrupt_counter_the_same_way` | `charliebot-store` `cross_implementation` | df7920bd7 | The `metadata.json` bytes differ in the `resource_class` line. |
-| R258 | `python_and_rust_delegate_a_task_spec_into_the_same_node_run_and_spec_bytes` | `charliebot-store` `cross_implementation` | df7920bd7 | The `metadata.json` bytes differ in the `resource_class` line. |
-| R259 | `python_and_rust_fork_and_elone_write_the_same_session_files_at_every_index` | `charliebot-store` `cross_implementation` | df7920bd7 | The `metadata.json` bytes differ in the `resource_class` line. |
-| R260 | `python_and_rust_task_trees_share_nodes_gates_and_mutation_bytes` | `charliebot-store` `cross_implementation` | df7920bd7 | The `metadata.json` bytes differ in the `resource_class` line. |
 | R261 | `sherpa_pin_is_the_release_the_python_wheel_locks` | `charliebot-voice` `--lib` (`transcriber::tests`) | 4c3bd3fda | The test reads the sherpa-onnx pin from `uv.lock`, which no longer locks `sherpa-onnx-core`: 23 `sherpa` lines at `3c4591bad`, none now. |
 
 ## Catch-up d1f7e3ba6 unported commits

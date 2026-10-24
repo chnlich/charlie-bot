@@ -1265,8 +1265,9 @@ async def run_scenarios(
   await sc.finish(cdp, cs, results, await screenshot(cdp, cs, evidence_dir, "wheel_steps"))
 
   # -- S13: jump to bottom from deep history shows the last turn at once -----
-  # The companion defect: the jump used to write only the scroll position, so
-  # the window stayed up in history and the viewport held blank spacer.
+  # The jump projects the pinned range before it snaps the scroll position, so
+  # the last turn's row is in the DOM and in view with the bottom spacer at
+  # zero height.
   sc = Scenario("jump_to_bottom_from_history_shows_last_turn")
   await scroll_write(cdp, cs, 0)
   await wait_reader_settled(cdp, cs)

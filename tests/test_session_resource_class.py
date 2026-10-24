@@ -11,7 +11,6 @@ import subprocess
 import time
 import types
 import uuid
-from unittest import mock
 
 import conftest
 import fastapi
@@ -320,16 +319,6 @@ async def test_resource_class_route_refuses_an_agent_run_and_accepts_the_operato
 # ---------------------------------------------------------------------------
 
 
-def _mock_cli_config(tmp_path: pathlib.Path) -> mock.MagicMock:
-  cfg = mock.MagicMock()
-  cfg.server.port = 9443
-  cfg.server_base_url = "http://localhost:9443"
-  conftest.stub_credentials({"charliebot": {"access_key": ""}})
-  cfg.sessions_dir = tmp_path / "sessions"
-  cfg.sessions_dir.mkdir(parents=True, exist_ok=True)
-  return cfg
-
-
 @contextlib.contextmanager
 def patched_cli_put(cfg: object, argv: list[str], **transport_kw: object):
   """conftest._patched_cli_transport over the PUT verb, mirroring patched_cli_post."""
@@ -337,7 +326,7 @@ def patched_cli_put(cfg: object, argv: list[str], **transport_kw: object):
 
 
 def test_cli_resource_class_prints_the_response(tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:
-  cfg = _mock_cli_config(tmp_path)
+  cfg = conftest.make_cli_config(tmp_path)
   response = conftest.make_json_response({"id": "sess-1", "resource_class": "repair"})
   with patched_cli_put(cfg, ["session", "resource-class", "sess-1", "repair"], return_value=response) as put_mock:
     session.main()

@@ -21,6 +21,7 @@ use charliebot_store::StoreResult;
 use charliebot_store::control_events::{ACTOR_AGENT, ACTOR_USER};
 use charliebot_store::metadata::SessionMetadata;
 use charliebot_store::session_fork::{ELONE_BOOTSTRAP_OPENER, FORK_BOOTSTRAP_OPENER, HISTORY_LOCATION_NOTE};
+use charliebot_tasks::completion::TaskCompletion;
 use charliebot_tasks::dispatch::{self, Dispatcher};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -132,6 +133,10 @@ async fn elone_session(
     Ok(dispatch) => dispatch,
     Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
   };
+  let completion = match features.startup.require::<TaskCompletion>() {
+    Ok(completion) => completion,
+    Err(error) => return responses::internal_error("RuntimeError", error.to_string()),
+  };
   let fields: EloneFields = match elone_fields(&body) {
     Ok(fields) => fields,
     Err(response) => return *response,
@@ -149,10 +154,12 @@ async fn elone_session(
     Ok(backend) => backend,
     Err(error) => return task_http_error(error),
   };
-  let meta = match features.store.elone_session(&session_id, fields.event_index, Some(&backend), &*dispatch).await {
-    Ok(meta) => meta,
-    Err(error) => return task_http_error(error),
-  };
+  let meta =
+    match features.store.elone_session(&session_id, fields.event_index, Some(&backend), &*dispatch, &*completion).await
+    {
+      Ok(meta) => meta,
+      Err(error) => return task_http_error(error),
+    };
   let prompt_head = format!(
     "{ELONE_BOOTSTRAP_OPENER} The dissatisfaction is usually with the most recent exchange before the takeover point. "
   );

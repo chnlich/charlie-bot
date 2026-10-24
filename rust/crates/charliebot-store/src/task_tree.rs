@@ -2504,6 +2504,7 @@ fn task_spec_hash(task: &TaskSpec) -> StoreResult<String> {
 }
 
 /// One archive-format close fact: outcome `archived` and no report target, so an archive wakes nobody.
+#[cfg(test)]
 pub(crate) fn archived_close_event(
   session_id: &str,
   request_id: &str,

@@ -23,6 +23,7 @@ use charliebot_registry::store_hooks;
 use charliebot_registry::{FeatureContext, Registry, StartupState};
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, UtcDateTime};
 use charliebot_store::{ControlGuard, CreateTask, RunRecord, Store, StoreError, StoreResult, TaskCaller};
+use charliebot_tasks::completion::TaskCompletion;
 use charliebot_tasks::dispatch::{Dispatcher, RunFinishedCompletion};
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value};
@@ -253,6 +254,7 @@ impl RunFinishedCompletion for NoCompletion {
 }
 
 pub(crate) fn install_dispatcher(features: &Arc<FeatureContext>) {
+  features.startup.insert(TaskCompletion::new(Arc::clone(features))).expect("one completion per startup");
   let dispatcher =
     Dispatcher::new(Arc::clone(&features.store), Arc::clone(features), Arc::new(NoCompletion), Arc::new(NoCompletion));
   features.startup.insert(dispatcher).expect("one dispatcher per startup");

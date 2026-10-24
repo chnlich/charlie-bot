@@ -28,7 +28,7 @@ def _user_message(text: str) -> dict:
   }
 
 
-async def _waiting(b: Builder, key: str, parent: str, name: str, text: str) -> str:
+async def _waiting(b: Builder, key: str, parent: str | None, name: str, text: str) -> str:
   """A child session whose status holds one Waiting on you item, written through the tree's slot writer."""
   session = await b.node(key, name, parent=parent)
   status = metadata.WebStatus(
@@ -47,8 +47,14 @@ async def build(b: Builder) -> dict:
   await _waiting(b, "web_open", "web_reply", "Open decisions", "Pick the panel layout")
   archived = await _waiting(b, "web_archived", "web_reply", "Archived decisions", "Confirm the archive policy")
   await b.lifecycle.archive_session(archived)
-  closed = await _waiting(b, "web_closed", "web_reply", "Closed decisions", "Approve the closed plan")
+  # A parentless closed task: an archive reports to the parent, and a pending report would make startup recovery launch
+  # the root, which the fixture's fixed-point check refuses. No web-status read lists an archived task.
+  closed = await _waiting(b, "web_closed", None, "Closed decisions", "Approve the closed plan")
   await b.tree.completion.archive_subtree(
-      closed, request_id="fixture-archive-web-closed", summary="archived by the user", result_refs=[], run_ids=[],
+      closed,
+      request_id="fixture-archive-web-closed",
+      summary="archived by the user",
+      result_refs=[],
+      run_ids=[],
       caller=b.operator)
   return {"root": root}

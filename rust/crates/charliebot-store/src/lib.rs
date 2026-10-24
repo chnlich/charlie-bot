@@ -29,6 +29,7 @@ pub mod trigger_files;
 pub mod write_faults;
 
 pub use aggregator::{MessageAggregator, TOOL_PREVIEW_CHARS};
+pub use compact::CompactValue;
 pub use control::ControlGuard;
 pub use events::{ChatEvent, ChatEventHistory, ChatEventsDelta, SharedChatEvent, SharedChatEventRange};
 pub use hooks::{AfterTurnWork, EmptyRuntimeEventHooks, EventRenderer, RuntimeEventHooks};

@@ -1667,6 +1667,7 @@ mod tests {
       event_history_views: after.event_history_views - before.event_history_views,
       node_state_full_folds: after.node_state_full_folds - before.node_state_full_folds,
       node_state_folded_events: after.node_state_folded_events - before.node_state_folded_events,
+      run_event_bytes_read: after.run_event_bytes_read - before.run_event_bytes_read,
     }
   }
 

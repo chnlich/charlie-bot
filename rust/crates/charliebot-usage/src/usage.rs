@@ -19,7 +19,7 @@ const READING_SNAPSHOT: &str = "snapshot";
 const READING_RESOLVED: &str = "resolved";
 const FACTS_MEMO_CAP: usize = 8;
 
-trait EventData {
+pub trait EventData {
   /// The event as the `Value` form the usage fold reads.
   fn value(&self) -> Value;
 }
@@ -191,9 +191,9 @@ impl SessionUsage {
   }
 
   /// Resolve the event-only tiers for an already-loaded transcript, without a backend resolver or cross-call memo.
-  pub fn resolve_events_usage(
+  pub fn resolve_events_usage<E: EventData>(
     &self,
-    events: &[Value],
+    events: &[E],
     run_kind: RunKind,
     backend_option: Option<&BackendOption>,
   ) -> StoreResult<Option<Value>> {
@@ -309,8 +309,8 @@ fn initialize(features: Arc<FeatureContext>) -> BoxFuture<'static, anyhow::Resul
 }
 
 /// Fold session events through the source tiers, without invoking a registered backend usage resolver.
-pub fn fold_usage(
-  events: &[Value],
+pub fn fold_usage<E: EventData>(
+  events: &[E],
   run_kind: RunKind,
   registry: &Registry,
   backend_option: Option<&BackendOption>,
@@ -916,7 +916,7 @@ sys.stdout.write(json.dumps({"run_kind": run_kind, "usage": usage}, separators=(
 
   #[test]
   fn empty_event_list_has_no_usage_value() {
-    assert!(fold_usage(&[], RunKind::Work, &registry(), None).unwrap().is_none());
+    assert!(fold_usage::<Value>(&[], RunKind::Work, &registry(), None).unwrap().is_none());
   }
 
   #[test]

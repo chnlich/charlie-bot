@@ -407,11 +407,14 @@ def iter_ndjson_events_from_end(
     log_event: str,
     log_fields: dict[str, Any],
     parse_filter: Callable[[bytes], bool] | None = None,
-    max_lines: int | None = None) -> Iterator[dict]:
+    max_lines: int | None = None,
+    end: int | None = None) -> Iterator[dict]:
   """Yield the JSON objects parsed from *path*, newest line first.
 
   With *max_lines*, the walk visits at most that many non-empty lines (kept
-  and filtered lines alike count toward the cap) and stops there.
+  and filtered lines alike count toward the cap) and stops there. With *end*,
+  the walk starts at that byte offset rather than at the file's current end, so
+  a reader holding a stat taken at that size sees exactly the bytes it stat'd.
 
   Same skip contract as :func:`iter_ndjson_events` (an empty or
   whitespace-only line is invisible, a line the parser rejects logs and
@@ -436,7 +439,7 @@ def iter_ndjson_events_from_end(
     if mm is None:
       return
     rfind = mm.rfind
-    pos = size
+    pos = size if end is None else min(end, size)
     visited = 0
     while pos > 0:
       if max_lines is not None and visited >= max_lines:

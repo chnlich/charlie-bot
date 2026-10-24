@@ -14,7 +14,7 @@ import pytest
 
 from src.features.slack import metadata
 from src.infra import event_types as ET
-from src.infra import metadata_slots, models
+from src.infra import metadata_slots, models, ndjson
 from src.runtime import control_events, run_token, runs, task_errors, task_sessions
 
 
@@ -476,3 +476,64 @@ async def test_tree_rows_computed_across_an_append_equal_the_rows_before_or_afte
   assert tree.activity_of(worker.id).work_state == "idle"
   for session_id in (root.id, mid.id, worker.id):
     assert session_id not in tree.session_events.chat_events.events_cache
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("parse_reads_append", [True, False])
+async def test_cold_events_fill_on_a_thread_keeps_an_append_exactly_once(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, parse_reads_append: bool) -> None:
+  """A cold fill on a worker thread and one append race; the events cache then equals the file's events.
+
+  With parse_reads_append the parse reads the appended line, and the fill installs before the append checks
+  the cache. Without it the parse reads before the write, and the fill installs after that check. Either way
+  the appended event is in the cache once, and the cache equals what the file holds.
+  """
+  _cfg, _blocks, tree = conftest.build_env(tmp_path)
+  root = await conftest.create_task(tree, parent=None, request_id="root", name="Root")
+  store = tree.session_events.chat_events
+  store.clear_cache(root.id)
+  path = store.get_chat_events_path(root.id)
+  real_parse = ndjson.parse_ndjson_file
+  real_append = ndjson.append_ndjson
+  appended = threading.Event()
+  parsed = threading.Event()
+  installed = threading.Event()
+  checked = threading.Event()
+
+  def parse(parse_path: pathlib.Path) -> list[dict]:
+    if parse_path != path:
+      return real_parse(parse_path)
+    if parse_reads_append:
+      assert appended.wait(10)
+      return real_parse(parse_path)
+    events = real_parse(parse_path)
+    parsed.set()
+    assert checked.wait(10)
+    return events
+
+  async def append(append_path: pathlib.Path, data: dict) -> None:
+    await real_append(append_path, data)
+    if append_path != path:
+      return
+    appended.set()
+    if parse_reads_append:
+      assert await asyncio.to_thread(installed.wait, 10)
+
+  monkeypatch.setattr(ndjson, "parse_ndjson_file", parse)
+  monkeypatch.setattr(ndjson, "append_ndjson", append)
+  event = {"type": "pressure_probe", "content": "appended during the fill"}
+  fill = asyncio.ensure_future(asyncio.to_thread(store.load_chat_events_sync, root.id))
+  if parse_reads_append:
+    save = asyncio.ensure_future(store.save_chat_event(root.id, event))
+    loaded = await fill
+    installed.set()
+    await save
+  else:
+    assert await asyncio.to_thread(parsed.wait, 10)
+    await store.save_chat_event(root.id, event)
+    checked.set()
+    loaded = await fill
+
+  assert loaded is store.events_cache[root.id]
+  assert loaded == real_parse(path)
+  assert [e["id"] for e in loaded].count(event["id"]) == 1

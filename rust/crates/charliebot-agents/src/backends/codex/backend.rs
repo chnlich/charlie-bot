@@ -20,7 +20,7 @@ use super::text::truthy;
 use super::translate::CodexTranslator;
 use crate::cli_base::prepend_path_dir;
 use crate::one_shot::{assistant_text, frame_system_prompt};
-use crate::transport::cgroup::{SessionCgroupLimits, system_cgroup_base_dir};
+use crate::transport::cgroup::SessionCgroupConfig;
 use crate::transport::kill::{kill_process_group, python_exit_code};
 use crate::transport::spawn::{AgentChild, AgentPipeReader, SpawnSpec, SpawnedChild, spawn_one_shot};
 
@@ -43,7 +43,7 @@ pub struct CodexBackend {
   model_auto_compact_token_limit: Option<i64>,
   user_local_bin: String,
   cgroup_session_id: Option<String>,
-  cgroup_limits: SessionCgroupLimits,
+  cgroup_config: SessionCgroupConfig,
   extra_flags: Vec<String>,
   instructions_content: Option<String>,
   instructions_file: Option<PathBuf>,
@@ -59,7 +59,7 @@ impl CodexBackend {
     model: &str,
     options: &CodexOptions,
     launch: LaunchArgs,
-    cgroup_limits: SessionCgroupLimits,
+    cgroup_config: SessionCgroupConfig,
   ) -> anyhow::Result<Self> {
     let codex_bin = codex_bin
       .into_os_string()
@@ -72,7 +72,7 @@ impl CodexBackend {
       model_auto_compact_token_limit: options.model_auto_compact_token_limit,
       user_local_bin: user_local_bin.to_string_lossy().into_owned(),
       cgroup_session_id: launch.cgroup_session_id,
-      cgroup_limits,
+      cgroup_config,
       extra_flags: launch.extra_flags,
       instructions_content: launch.instructions_content,
       instructions_file: launch.instructions_file,
@@ -172,10 +172,7 @@ impl CodexBackend {
       None,
       env.into_iter().map(|(name, value)| (OsString::from(name), OsString::from(value))).collect::<HashMap<_, _>>(),
       self.cgroup_session_id.clone(),
-      system_cgroup_base_dir(),
-      self.cgroup_limits.memory_max_mb,
-      self.cgroup_limits.swap_max_mb,
-      self.cgroup_limits.tasks_max,
+      self.cgroup_config.clone(),
     );
     let SpawnedChild { mut child, cgroup: _cgroup } =
       spawn_one_shot(&spec, None).await.context("spawning the codex one-shot")?;
@@ -359,7 +356,7 @@ mod tests {
       "gpt-5.5",
       &CodexOptions::default(),
       launch,
-      SessionCgroupLimits { memory_max_mb: 0, swap_max_mb: 0, tasks_max: 0 },
+      SessionCgroupConfig::disabled(),
     )
     .unwrap();
     assert!(backend.build_command("prompt").unwrap().contains(&"developer_instructions=null".to_string()));

@@ -9,26 +9,40 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
+use charliebot_core::cgroup::{ResourceClass, session_cgroup_name, session_cgroup_path};
+use charliebot_core::config::CharlieBotConfig;
 use charliebot_registry::StartupStop;
 
 static DEGRADED_WARNINGS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 
-/// Session cgroup caps copied from the server configuration for one backend launch.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SessionCgroupLimits {
+/// The session cgroup placement of one spawn: the delegated cgroup base, the home's sessions directory that the class
+/// walk reads, and the caps copied from the server configuration.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionCgroupConfig {
+  /// Delegated cgroup directory that holds the session cgroups.
+  pub base_dir: PathBuf,
+  /// The home's sessions directory.
+  pub sessions_dir: PathBuf,
   pub memory_max_mb: i64,
   pub swap_max_mb: i64,
   pub tasks_max: i64,
 }
 
-impl SessionCgroupLimits {
-  /// Copy the caps that the runtime runner uses for the same server configuration.
-  pub fn from_server(server: &charliebot_core::config::ServerConfig) -> Self {
+impl SessionCgroupConfig {
+  /// The caps and directories of the server configuration `cfg`, under this user's delegated cgroup base.
+  pub fn from_config(cfg: &CharlieBotConfig) -> Self {
     Self {
-      memory_max_mb: server.session_memory_max_mb,
-      swap_max_mb: server.session_swap_max_mb,
-      tasks_max: server.session_tasks_max,
+      base_dir: charliebot_core::cgroup::system_cgroup_base_dir(),
+      sessions_dir: cfg.sessions_dir(),
+      memory_max_mb: cfg.server.session_memory_max_mb,
+      swap_max_mb: cfg.server.session_swap_max_mb,
+      tasks_max: cfg.server.session_tasks_max,
     }
+  }
+
+  /// A placement with cgroup control off: a zero memory cap starts no session cgroup, so no directory is read.
+  pub fn disabled() -> Self {
+    Self { base_dir: PathBuf::new(), sessions_dir: PathBuf::new(), memory_max_mb: 0, swap_max_mb: 0, tasks_max: 0 }
   }
 }
 
@@ -50,58 +64,34 @@ impl SessionCgroup {
   }
 }
 
-/// Return the delegated systemd `app.slice` directory for this user.
-pub fn system_cgroup_base_dir() -> PathBuf {
-  charliebot_core::cgroup::system_cgroup_base_dir()
-}
-
-/// Return the session cgroup directory name.
-pub fn session_cgroup_name(session_id: &str) -> String {
-  charliebot_core::cgroup::session_cgroup_name(session_id)
-}
-
-/// Join a session cgroup name to its caller-supplied base directory.
-pub fn session_cgroup_path(base_dir: &Path, session_id: &str) -> PathBuf {
-  charliebot_core::cgroup::session_cgroup_path(base_dir, session_id)
-}
-
-/// Create or refresh cgroup limits, returning `None` with one warning per error string on failure. A negative swap
-/// limit is written as its negative number, which the kernel refuses; the spawn then runs without its cgroup.
+/// Create or refresh cgroup limits under `base_dir`, returning the cgroup directory. The class is logged with the
+/// creation; the directory is not yet placed under the class's slice.
 pub fn ensure_session_cgroup(
   base_dir: &Path,
+  resource_class: ResourceClass,
   session_id: &str,
   memory_max_mb: i64,
   swap_max_mb: i64,
   tasks_max: i64,
-) -> Option<PathBuf> {
+) -> io::Result<PathBuf> {
   let path = session_cgroup_path(base_dir, session_id);
   match fs::create_dir(&path) {
     Ok(()) => tracing::info!(
       target: "charliebot_agents",
       path = %path.display(),
+      resource_class = ?resource_class,
       memory_max_mb,
       swap_max_mb,
       tasks_max,
       "session_cgroup_created"
     ),
     Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
-    Err(error) => {
-      warn_cgroup_unavailable(&path, &error);
-      return None;
-    }
+    Err(error) => return Err(error),
   }
-  let writes = [
-    ("memory.max", (memory_max_mb * 1024 * 1024).to_string()),
-    ("memory.swap.max", (swap_max_mb * 1024 * 1024).to_string()),
-    ("pids.max", if tasks_max > 0 { tasks_max.to_string() } else { "max".to_string() }),
-  ];
-  for (name, value) in writes {
-    if let Err(error) = fs::write(path.join(name), value) {
-      warn_cgroup_unavailable(&path, &error);
-      return None;
-    }
-  }
-  Some(path)
+  fs::write(path.join("memory.max"), (memory_max_mb * 1024 * 1024).to_string())?;
+  fs::write(path.join("memory.swap.max"), (swap_max_mb * 1024 * 1024).to_string())?;
+  fs::write(path.join("pids.max"), if tasks_max > 0 { tasks_max.to_string() } else { "max".to_string() })?;
+  Ok(path)
 }
 
 fn warn_cgroup_unavailable(path: &Path, error: &io::Error) {
@@ -159,18 +149,29 @@ pub fn classify_cgroup_exit(
 /// Ensure a session cgroup and snapshot its counters; disabled or unavailable cgroups return `None`. A memory limit of
 /// zero or below disables the cgroup, and no directory is created.
 pub fn prepare_session_cgroup(
-  base_dir: &Path,
+  config: &SessionCgroupConfig,
   session_id: Option<&str>,
-  memory_max_mb: i64,
-  swap_max_mb: i64,
-  tasks_max: i64,
+  resource_class: ResourceClass,
 ) -> Option<SessionCgroup> {
   let session_id = session_id?;
-  if session_id.is_empty() || memory_max_mb <= 0 {
+  if session_id.is_empty() || config.memory_max_mb <= 0 {
     return None;
   }
-  let path = ensure_session_cgroup(base_dir, session_id, memory_max_mb, swap_max_mb, tasks_max)?;
-  Some(SessionCgroup { events_before: read_memory_events(&path), path, memory_max_mb })
+  let path = match ensure_session_cgroup(
+    &config.base_dir,
+    resource_class,
+    session_id,
+    config.memory_max_mb,
+    config.swap_max_mb,
+    config.tasks_max,
+  ) {
+    Ok(path) => path,
+    Err(error) => {
+      warn_cgroup_unavailable(&config.base_dir, &error);
+      return None;
+    }
+  };
+  Some(SessionCgroup { events_before: read_memory_events(&path), path, memory_max_mb: config.memory_max_mb })
 }
 
 /// Move a spawned process into a cgroup; failures match the Python warning and do not fail spawn.
@@ -294,26 +295,85 @@ pub fn log_session_cgroup_startup(base_dir: &Path, memory_max_mb: i64, swap_max_
 
 #[cfg(test)]
 mod tests {
+  use std::fs::Permissions;
+  use std::os::unix::fs::PermissionsExt;
+
   use super::*;
 
   const SESSION_ID: &str = "abcd1234-ef56-7890-abcd-ef1234567890";
+  const AGENTS_SLICE: &str = "charliebot-agents.slice";
+  const REPAIR_SLICE: &str = "charliebot-repair.slice";
+
+  /// The user service directory with its two leaf slices, standing in for the delegated cgroup base.
+  fn fake_slices() -> tempfile::TempDir {
+    let root = tempfile::tempdir().unwrap();
+    fs::create_dir(root.path().join(AGENTS_SLICE)).unwrap();
+    fs::create_dir(root.path().join(REPAIR_SLICE)).unwrap();
+    root
+  }
+
+  fn cgroup_config(base_dir: &Path, memory_max_mb: i64) -> SessionCgroupConfig {
+    SessionCgroupConfig {
+      base_dir: base_dir.to_path_buf(),
+      sessions_dir: PathBuf::new(),
+      memory_max_mb,
+      swap_max_mb: 32,
+      tasks_max: 4096,
+    }
+  }
 
   #[test]
-  fn ensure_writes_and_refreshes_all_three_limit_files() {
-    let base = tempfile::tempdir().unwrap();
-    let path = ensure_session_cgroup(base.path(), SESSION_ID, 64, 32, 50).unwrap();
-    assert_eq!(path, base.path().join("charliebot-sess-abcd1234"));
+  fn ensure_session_cgroup_creates_with_limit_files_under_the_chosen_slice() {
+    let root = fake_slices();
+    let path = ensure_session_cgroup(root.path(), ResourceClass::Agent, SESSION_ID, 64, 32, 4096).unwrap();
+    assert_eq!(path, root.path().join(AGENTS_SLICE).join("charliebot-sess-abcd1234"));
+    assert!(path.is_dir());
     assert_eq!(fs::read_to_string(path.join("memory.max")).unwrap(), (64 * 1024 * 1024).to_string());
     assert_eq!(fs::read_to_string(path.join("memory.swap.max")).unwrap(), (32 * 1024 * 1024).to_string());
+    assert_eq!(fs::read_to_string(path.join("pids.max")).unwrap(), "4096");
+  }
+
+  #[test]
+  fn ensure_session_cgroup_puts_a_repair_session_under_the_repair_slice() {
+    let root = fake_slices();
+    let path = ensure_session_cgroup(root.path(), ResourceClass::Repair, SESSION_ID, 64, 32, 4096).unwrap();
+    assert_eq!(path, root.path().join(REPAIR_SLICE).join("charliebot-sess-abcd1234"));
+  }
+
+  #[test]
+  fn ensure_session_cgroup_rewrites_task_cap_and_zero_lifts_it() {
+    let root = fake_slices();
+    let path = ensure_session_cgroup(root.path(), ResourceClass::Agent, SESSION_ID, 64, 32, 50).unwrap();
     assert_eq!(fs::read_to_string(path.join("pids.max")).unwrap(), "50");
-    ensure_session_cgroup(base.path(), SESSION_ID, 64, 32, 0).unwrap();
+    assert_eq!(ensure_session_cgroup(root.path(), ResourceClass::Agent, SESSION_ID, 64, 32, 0).unwrap(), path);
     assert_eq!(fs::read_to_string(path.join("pids.max")).unwrap(), "max");
   }
 
   #[test]
-  fn missing_base_degrades_and_memory_events_classify_cap_kills() {
-    let base = tempfile::tempdir().unwrap().path().join("missing");
-    assert!(ensure_session_cgroup(&base, SESSION_ID, 64, 32, 4096).is_none());
+  fn ensure_session_cgroup_names_the_missing_slice() {
+    let root = tempfile::tempdir().unwrap();
+    let result = ensure_session_cgroup(root.path(), ResourceClass::Agent, SESSION_ID, 64, 32, 4096);
+    assert!(
+      matches!(&result, Err(error) if error.to_string().contains(AGENTS_SLICE)),
+      "a missing slice must fail the spawn and name the slice, got {result:?}"
+    );
+  }
+
+  #[test]
+  fn ensure_session_cgroup_names_the_unwritable_slice() {
+    let root = fake_slices();
+    let repair = root.path().join(REPAIR_SLICE);
+    fs::set_permissions(&repair, Permissions::from_mode(0o500)).unwrap();
+    let result = ensure_session_cgroup(root.path(), ResourceClass::Repair, SESSION_ID, 64, 32, 4096);
+    fs::set_permissions(&repair, Permissions::from_mode(0o755)).unwrap();
+    assert!(
+      matches!(&result, Err(error) if error.to_string().contains(REPAIR_SLICE)),
+      "an unwritable slice must fail the spawn and name the slice, got {result:?}"
+    );
+  }
+
+  #[test]
+  fn memory_events_classify_cap_kills() {
     let root = tempfile::tempdir().unwrap();
     fs::write(root.path().join("memory.events"), "low 0\nmax 2\noom_kill 1\n").unwrap();
     assert_eq!(read_memory_events(root.path()), Some((2, 1)));
@@ -325,35 +385,36 @@ mod tests {
 
   #[test]
   fn cleanup_removes_only_an_empty_session_group() {
-    let base = tempfile::tempdir().unwrap();
-    let path = ensure_session_cgroup(base.path(), SESSION_ID, 64, 32, 50).unwrap();
+    let root = fake_slices();
+    let path = ensure_session_cgroup(root.path(), ResourceClass::Agent, SESSION_ID, 64, 32, 50).unwrap();
     for name in ["memory.max", "memory.swap.max", "pids.max"] {
       fs::remove_file(path.join(name)).unwrap();
     }
-    assert!(cleanup_session_cgroup(base.path(), SESSION_ID));
+    assert!(cleanup_session_cgroup(root.path(), SESSION_ID));
     assert!(!path.exists());
   }
 
   #[test]
   fn negative_memory_limit_starts_no_session_cgroup() {
-    let base = tempfile::tempdir().unwrap();
-    assert!(prepare_session_cgroup(base.path(), Some(SESSION_ID), -1, 32, 50).is_none());
-    assert!(!session_cgroup_path(base.path(), SESSION_ID).exists());
+    let root = fake_slices();
+    let config = cgroup_config(root.path(), -1);
+    assert!(prepare_session_cgroup(&config, Some(SESSION_ID), ResourceClass::Agent).is_none());
+    assert!(!session_cgroup_path(root.path(), SESSION_ID).exists());
   }
 
   #[test]
   fn negative_swap_limit_is_written_as_a_negative_number() {
     // The kernel refuses this write, so the spawn runs without its cgroup. The temporary directory accepts any text,
     // so the test checks the bytes that the refusal depends on.
-    let base = tempfile::tempdir().unwrap();
-    let path = ensure_session_cgroup(base.path(), SESSION_ID, 64, -32, 50).unwrap();
+    let root = fake_slices();
+    let path = ensure_session_cgroup(root.path(), ResourceClass::Agent, SESSION_ID, 64, -32, 50).unwrap();
     assert_eq!(fs::read_to_string(path.join("memory.swap.max")).unwrap(), "-33554432");
   }
 
   #[test]
   fn negative_task_limit_writes_no_task_cap() {
-    let base = tempfile::tempdir().unwrap();
-    let path = ensure_session_cgroup(base.path(), SESSION_ID, 64, 32, -1).unwrap();
+    let root = fake_slices();
+    let path = ensure_session_cgroup(root.path(), ResourceClass::Agent, SESSION_ID, 64, 32, -1).unwrap();
     assert_eq!(fs::read_to_string(path.join("pids.max")).unwrap(), "max");
   }
 }

@@ -14,7 +14,7 @@ use futures_util::future::BoxFuture;
 use serde_json::{Map, Value};
 use tokio::io::AsyncWriteExt;
 
-use crate::transport::cgroup::{SessionCgroupLimits, system_cgroup_base_dir};
+use crate::transport::cgroup::SessionCgroupConfig;
 use crate::transport::kill::{kill_process_group, python_exit_code};
 use crate::transport::spawn::{ChildStdin, SpawnSetup, SpawnSpec, spawn_with_setup};
 
@@ -172,7 +172,7 @@ pub struct ClaudeCodeBackend {
   claude_session_id: Option<String>,
   claude_config_dir: Option<String>,
   cgroup_session_id: Option<String>,
-  cgroup_limits: SessionCgroupLimits,
+  cgroup_config: SessionCgroupConfig,
   extra_flags: Vec<String>,
   instructions_file: Option<PathBuf>,
 }
@@ -185,7 +185,7 @@ impl ClaudeCodeBackend {
     fast_mode: bool,
     claude_config_dir: Option<String>,
     launch: LaunchArgs,
-    cgroup_limits: SessionCgroupLimits,
+    cgroup_config: SessionCgroupConfig,
   ) -> anyhow::Result<Self> {
     let run_kind = match launch.backend_kwargs.get("run_kind") {
       None => RunKind::Work,
@@ -209,7 +209,7 @@ impl ClaudeCodeBackend {
       claude_session_id,
       claude_config_dir: claude_config_dir.filter(|value| !value.is_empty()),
       cgroup_session_id: launch.cgroup_session_id,
-      cgroup_limits,
+      cgroup_config,
       extra_flags: launch.extra_flags,
       instructions_file: launch.instructions_file,
     })
@@ -279,7 +279,7 @@ impl ClaudeCodeBackend {
   ) -> anyhow::Result<String> {
     let command = self.one_shot_command(system);
     let env = self.one_shot_env(base_env);
-    run_one_shot_process(&command, &env, prompt, timeout, self.cgroup_session_id.as_deref(), &self.cgroup_limits).await
+    run_one_shot_process(&command, &env, prompt, timeout, self.cgroup_session_id.as_deref(), &self.cgroup_config).await
   }
 }
 
@@ -291,7 +291,7 @@ async fn run_one_shot_process(
   prompt: &str,
   timeout: Option<Duration>,
   cgroup_session_id: Option<&str>,
-  cgroup_limits: &SessionCgroupLimits,
+  cgroup_config: &SessionCgroupConfig,
 ) -> anyhow::Result<String> {
   let spec = SpawnSpec::new(
     &command[0],
@@ -299,10 +299,7 @@ async fn run_one_shot_process(
     None,
     env.iter().map(|(name, value)| (OsString::from(name), OsString::from(value))).collect::<HashMap<_, _>>(),
     cgroup_session_id.map(str::to_string),
-    system_cgroup_base_dir(),
-    cgroup_limits.memory_max_mb,
-    cgroup_limits.swap_max_mb,
-    cgroup_limits.tasks_max,
+    cgroup_config.clone(),
   );
   let mut child = spawn_with_setup(&spec, None, ChildStdin::Piped, SpawnSetup::ChildSideTurnTree).await?.child;
   let pid = child.id().context("claude CLI did not expose its process id")?;
@@ -462,9 +459,9 @@ impl AnthropicEndpointBackend {
     effort: Option<String>,
     claude_config_dir: Option<String>,
     launch: LaunchArgs,
-    cgroup_limits: SessionCgroupLimits,
+    cgroup_config: SessionCgroupConfig,
   ) -> anyhow::Result<Self> {
-    let backend = ClaudeCodeBackend::from_launch(None, effort, None, false, claude_config_dir, launch, cgroup_limits)?;
+    let backend = ClaudeCodeBackend::from_launch(None, effort, None, false, claude_config_dir, launch, cgroup_config)?;
     Ok(Self { backend, base_url, auth_token, model, context_window, headers: Vec::new(), extra_body: Map::new() })
   }
 
@@ -653,7 +650,7 @@ mod tests {
       true,
       None,
       LaunchArgs { extra_flags: vec!["--resume".to_string(), "resume-id".to_string()], ..LaunchArgs::default() },
-      SessionCgroupLimits { memory_max_mb: 0, swap_max_mb: 0, tasks_max: 0 },
+      SessionCgroupConfig::disabled(),
     )
     .unwrap();
     let command = backend.build_command("prompt").unwrap();
@@ -683,7 +680,7 @@ mod tests {
         cgroup_session_id: Some("manager-session".to_string()),
         ..LaunchArgs::default()
       },
-      SessionCgroupLimits { memory_max_mb: 0, swap_max_mb: 0, tasks_max: 0 },
+      SessionCgroupConfig::disabled(),
     )
     .unwrap();
     let command = backend.build_command("hi").unwrap();
@@ -734,7 +731,7 @@ mod tests {
         backend_kwargs: serde_json::json!({"run_kind": "manager_turn"}).as_object().unwrap().clone(),
         ..LaunchArgs::default()
       },
-      SessionCgroupLimits { memory_max_mb: 0, swap_max_mb: 0, tasks_max: 0 },
+      SessionCgroupConfig::disabled(),
     )
     .unwrap();
     let error = backend.build_command("hi").unwrap_err();
@@ -752,7 +749,7 @@ mod tests {
       None,
       None,
       LaunchArgs { extra_flags: vec!["--resume".to_string(), "resume-id".to_string()], ..LaunchArgs::default() },
-      SessionCgroupLimits { memory_max_mb: 0, swap_max_mb: 0, tasks_max: 0 },
+      SessionCgroupConfig::disabled(),
     )
     .unwrap();
     let command = backend.build_command("prompt").unwrap();
@@ -796,7 +793,7 @@ mod tests {
       false,
       None,
       LaunchArgs::default(),
-      SessionCgroupLimits { memory_max_mb: 0, swap_max_mb: 0, tasks_max: 0 },
+      SessionCgroupConfig::disabled(),
     )
     .unwrap();
     let mut inherited = Env::new();
@@ -895,8 +892,8 @@ mod tests {
     assert!(!recorded_lines(&argv).iter().any(|value| value == "--effort"));
   }
 
-  fn zero_limits() -> SessionCgroupLimits {
-    SessionCgroupLimits { memory_max_mb: 0, swap_max_mb: 0, tasks_max: 0 }
+  fn zero_limits() -> SessionCgroupConfig {
+    SessionCgroupConfig::disabled()
   }
 
   /// The backend the Anthropic-compatible factory builds from these type fields.
@@ -986,7 +983,7 @@ mod tests {
       None,
       None,
       LaunchArgs::default(),
-      SessionCgroupLimits { memory_max_mb: 0, swap_max_mb: 0, tasks_max: 0 },
+      SessionCgroupConfig::disabled(),
     )
     .unwrap();
     let mut inherited = Env::new();

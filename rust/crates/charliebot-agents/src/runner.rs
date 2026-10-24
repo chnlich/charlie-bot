@@ -21,7 +21,7 @@ use tokio::sync::watch;
 
 use crate::agent_environment::AgentBaseEnvironment;
 use crate::launch_loop::{self, ChildEnvPolicy};
-use crate::transport::cgroup::SessionCgroup;
+use crate::transport::cgroup::{SessionCgroup, SessionCgroupConfig};
 use crate::transport::follow::{self, FollowSummary};
 use crate::transport::identity::{self, ProcessIdentity};
 use crate::transport::kill::{self, python_exit_code};
@@ -51,10 +51,7 @@ pub struct RunRequest {
   pub environment_overlay: Env,
   pub registry: Arc<Registry>,
   pub session_id: Option<String>,
-  pub cgroup_base: PathBuf,
-  pub memory_max_mb: i64,
-  pub swap_max_mb: i64,
-  pub tasks_max: i64,
+  pub cgroup_config: SessionCgroupConfig,
   pub on_spawn: Option<OnSpawnFn>,
   child_waits_for_spawn_callback: bool,
   pub on_event: EventFn,
@@ -68,7 +65,7 @@ impl RunRequest {
     prompt: String,
     cwd: PathBuf,
     agent_environment: AgentBaseEnvironment,
-    cgroup_base: PathBuf,
+    cgroup_config: SessionCgroupConfig,
     registry: Arc<Registry>,
   ) -> Self {
     Self {
@@ -80,10 +77,7 @@ impl RunRequest {
       environment_overlay: Env::new(),
       registry,
       session_id: None,
-      cgroup_base,
-      memory_max_mb: 0,
-      swap_max_mb: 0,
-      tasks_max: 0,
+      cgroup_config,
       on_spawn: None,
       child_waits_for_spawn_callback: false,
       on_event: Arc::new(|_| Box::pin(async { Ok(()) })),
@@ -97,10 +91,10 @@ impl RunRequest {
     prompt: String,
     cwd: PathBuf,
     features: &FeatureContext,
-    cgroup_base: PathBuf,
+    cgroup_config: SessionCgroupConfig,
   ) -> anyhow::Result<Self> {
     let agent_environment = crate::agent_environment::require_agent_base_environment(&features.startup)?;
-    Ok(Self::new(prompt, cwd, agent_environment.as_ref().clone(), cgroup_base, Arc::clone(&features.registry)))
+    Ok(Self::new(prompt, cwd, agent_environment.as_ref().clone(), cgroup_config, Arc::clone(&features.registry)))
   }
 
   /// Keep the spawned child stopped until `on_spawn` has recorded its process identity.
@@ -233,10 +227,7 @@ impl AgentRunner {
       Some(request.cwd.clone()),
       final_env.into_iter().map(|(key, value)| (key.into(), value.into())).collect::<HashMap<_, _>>(),
       self.launch.cgroup_session_id.clone(),
-      request.cgroup_base.clone(),
-      request.memory_max_mb,
-      request.swap_max_mb,
-      request.tasks_max,
+      request.cgroup_config.clone(),
     );
     if transport == TransportKind::FinalStdout {
       if stdin_prompt.is_some() {
@@ -378,10 +369,7 @@ impl AgentRunner {
       Some(request.cwd.clone()),
       env.clone().into_iter().map(|(key, value)| (key.into(), value.into())).collect::<HashMap<_, _>>(),
       self.launch.cgroup_session_id.clone(),
-      request.cgroup_base.clone(),
-      request.memory_max_mb,
-      request.swap_max_mb,
-      request.tasks_max,
+      request.cgroup_config.clone(),
     );
     let mut spawned = spawn::spawn_piped(&spec).await?;
     let gate = request.child_waits_for_spawn_callback.then(|| SpawnGate::arm(&spawned.child));
@@ -817,7 +805,7 @@ mod tests {
       Env::from([("PATH".to_string(), "/bin".to_string())]),
       root.path().join("cgroups"),
     );
-    request.memory_max_mb = 0;
+    request.cgroup_config.memory_max_mb = 0;
     request.on_event = Arc::new(move |event| {
       let events = Arc::clone(&events);
       Box::pin(async move {
@@ -1228,7 +1216,7 @@ mod tests {
       Env::from([("PATH".to_string(), "/bin".to_string())]),
       cgroup_base,
     );
-    request.memory_max_mb = 64;
+    request.cgroup_config.memory_max_mb = 64;
     let outcome = runner.run(request).await.unwrap();
     assert_eq!(outcome.exit_code, Some(-libc::SIGKILL));
     assert!(outcome.cgroup_exit_report.as_deref().unwrap().contains("session 内存上限触发"));
@@ -1447,7 +1435,7 @@ mod tests {
       "prompt".to_string(),
       root.to_path_buf(),
       AgentBaseEnvironment { values: env },
-      root.join("cgroups"),
+      SessionCgroupConfig { base_dir: root.join("cgroups"), ..SessionCgroupConfig::disabled() },
       registry,
     );
     request.session_id = session_id.map(str::to_string);
@@ -1463,7 +1451,8 @@ mod tests {
   }
 
   fn test_request(prompt: String, cwd: PathBuf, values: Env, cgroup_base: PathBuf) -> RunRequest {
-    RunRequest::new(prompt, cwd, AgentBaseEnvironment { values }, cgroup_base, Arc::new(Registry::new()))
+    let cgroup_config = SessionCgroupConfig { base_dir: cgroup_base, ..SessionCgroupConfig::disabled() };
+    RunRequest::new(prompt, cwd, AgentBaseEnvironment { values }, cgroup_config, Arc::new(Registry::new()))
   }
 
   /// The signal that the blocking pool is full, and the release that empties it.

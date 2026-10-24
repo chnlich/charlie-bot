@@ -4,7 +4,7 @@ use anyhow::{Context, bail};
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_registry::backend::{AgentBackend, BackendFactory, LaunchArgs};
 
-use crate::transport::cgroup::SessionCgroupLimits;
+use crate::transport::cgroup::SessionCgroupConfig;
 
 use super::ClaudeCodeBackend;
 use super::options;
@@ -19,9 +19,9 @@ impl BackendFactory for ClaudeCodeFactory {
     launch: LaunchArgs,
   ) -> anyhow::Result<Box<dyn AgentBackend>> {
     let launch = launch_with_kwargs(launch)?;
-    let cgroup_limits = SessionCgroupLimits::from_server(&cfg.server);
+    let cgroup_config = SessionCgroupConfig::from_config(&cfg);
     let backend = match option {
-      None => ClaudeCodeBackend::from_launch(None, None, None, false, None, launch, cgroup_limits)?,
+      None => ClaudeCodeBackend::from_launch(None, None, None, false, None, launch, cgroup_config)?,
       Some(option) => {
         if option.model.is_empty() {
           bail!("backend '{}' has no default model", option.id);
@@ -37,7 +37,7 @@ impl BackendFactory for ClaudeCodeFactory {
           fast_mode,
           config_dir,
           launch,
-          cgroup_limits,
+          cgroup_config,
         )?
       }
     };

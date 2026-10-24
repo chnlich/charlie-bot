@@ -23,7 +23,7 @@ use super::server::{OpenCodeHost, OpenCodeServer, OpenCodeServerPool, Turn, Turn
 use crate::cli_base::{IMAGE_MIME_BY_EXT, apply_proxy_env};
 use crate::event_builders;
 use crate::runner::EventFn;
-use crate::transport::cgroup::{SessionCgroupLimits, system_cgroup_base_dir};
+use crate::transport::cgroup::SessionCgroupConfig;
 use crate::transport::kill::{kill_process_group, python_exit_code};
 use crate::transport::spawn::{AgentPipeReader, SpawnSpec, spawn_one_shot};
 
@@ -80,7 +80,7 @@ pub struct OpenCodeBackend {
   host: OpenCodeHost,
   pool: Arc<OpenCodeServerPool>,
   launch: LaunchArgs,
-  cgroup_limits: SessionCgroupLimits,
+  cgroup_config: SessionCgroupConfig,
 }
 
 impl OpenCodeBackend {
@@ -91,9 +91,9 @@ impl OpenCodeBackend {
     host: OpenCodeHost,
     pool: Arc<OpenCodeServerPool>,
     launch: LaunchArgs,
-    cgroup_limits: SessionCgroupLimits,
+    cgroup_config: SessionCgroupConfig,
   ) -> Self {
-    Self { model, proxy_url: option.proxy_url, one_shot_context, host, pool, launch, cgroup_limits }
+    Self { model, proxy_url: option.proxy_url, one_shot_context, host, pool, launch, cgroup_config }
   }
 
   fn run_plan(&self) -> Arc<OpenCodeRunPlan> {
@@ -121,7 +121,7 @@ impl OpenCodeBackend {
       proxy_url: self.proxy_url.clone(),
       one_shot_context: self.one_shot_context.clone(),
       cgroup_session_id: self.launch.cgroup_session_id.clone(),
-      cgroup_limits: self.cgroup_limits,
+      cgroup_config: self.cgroup_config.clone(),
       base_env: base_env.clone(),
       prompt: prompt.to_string(),
       system: system.to_string(),
@@ -208,7 +208,7 @@ impl BackendFactory for OpenCodeFactory {
       self.host.clone(),
       Arc::clone(&self.pool),
       launch,
-      SessionCgroupLimits::from_server(&cfg.server),
+      SessionCgroupConfig::from_config(&cfg),
     )))
   }
 }
@@ -835,7 +835,7 @@ struct OpenCodeOneShotRequest {
   proxy_url: Option<String>,
   one_shot_context: Map<String, Value>,
   cgroup_session_id: Option<String>,
-  cgroup_limits: SessionCgroupLimits,
+  cgroup_config: SessionCgroupConfig,
   base_env: Env,
   prompt: String,
   system: String,
@@ -855,7 +855,7 @@ async fn run_one_shot(request: OpenCodeOneShotRequest) -> anyhow::Result<String>
     proxy_url,
     one_shot_context,
     cgroup_session_id,
-    cgroup_limits,
+    cgroup_config,
     base_env,
     prompt,
     system,
@@ -892,10 +892,7 @@ async fn run_one_shot(request: OpenCodeOneShotRequest) -> anyhow::Result<String>
     None,
     env.into_iter().map(|(key, value)| (key.into(), value.into())).collect(),
     cgroup_session_id,
-    system_cgroup_base_dir(),
-    cgroup_limits.memory_max_mb,
-    cgroup_limits.swap_max_mb,
-    cgroup_limits.tasks_max,
+    cgroup_config,
   );
   let mut spawned = spawn_one_shot(&spec, Some(Signal::SIGKILL)).await.context("spawning the opencode one-shot")?;
   let pid = spawned.child.id().context("opencode one-shot did not expose its process id")?;

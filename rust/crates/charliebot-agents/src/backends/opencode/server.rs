@@ -26,6 +26,7 @@ use uuid::Uuid;
 use super::opencode_limits;
 use super::options::model_overrides_config;
 use crate::cli_base::apply_proxy_env;
+use crate::transport::cgroup::SessionCgroupConfig;
 use crate::transport::kill::{kill_process_group, python_exit_code};
 use crate::transport::spawn::{AgentPipeReader, ChildStdin, SpawnSetup, SpawnSpec, SpawnedChild, spawn_with_setup};
 
@@ -793,10 +794,7 @@ impl OpenCodeServer {
       Some(store_dir),
       std::mem::take(&mut env).into_iter().map(|(key, value)| (key.into(), value.into())).collect(),
       None,
-      crate::transport::cgroup::system_cgroup_base_dir(),
-      0,
-      0,
-      0,
+      SessionCgroupConfig::disabled(),
     );
     let SpawnedChild { mut child, .. } =
       spawn_with_setup(&spec, Some(Signal::SIGKILL), ChildStdin::Null, SpawnSetup::None).await?;

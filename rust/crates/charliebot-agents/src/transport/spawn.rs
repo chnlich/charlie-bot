@@ -30,7 +30,9 @@ use tokio::io::unix::AsyncFd;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, Interest, ReadBuf};
 use tokio::sync::{oneshot, watch};
 
-use super::cgroup::{self, SessionCgroup};
+use charliebot_core::cgroup::ResourceClass;
+
+use super::cgroup::{self, SessionCgroup, SessionCgroupConfig};
 use super::identity::{self, ProcessIdentity};
 
 const TURN_TREE_NICE: i32 = 10;
@@ -51,41 +53,25 @@ pub struct SpawnSpec {
   pub env: HashMap<OsString, OsString>,
   /// Session id used for cgroup placement.
   pub session_id: Option<String>,
-  /// Caller-supplied delegated cgroup base.
-  pub cgroup_base: PathBuf,
-  /// Session memory cap in megabytes; zero or below disables cgroups.
-  pub memory_max_mb: i64,
-  /// Session swap cap in megabytes.
-  pub swap_max_mb: i64,
-  /// Session task cap; zero or below writes `max`.
-  pub tasks_max: i64,
+  /// The session cgroup placement and caps of this spawn.
+  pub cgroup: SessionCgroupConfig,
 }
 
 impl SpawnSpec {
   /// Build a spawn request with every environment and cgroup value explicit.
-  #[allow(clippy::too_many_arguments)]
   pub fn new(
     program: impl Into<OsString>,
     args: Vec<OsString>,
     cwd: Option<PathBuf>,
     env: HashMap<OsString, OsString>,
     session_id: Option<String>,
-    cgroup_base: PathBuf,
-    memory_max_mb: i64,
-    swap_max_mb: i64,
-    tasks_max: i64,
+    cgroup: SessionCgroupConfig,
   ) -> Self {
-    Self { program: program.into(), args, cwd, env, session_id, cgroup_base, memory_max_mb, swap_max_mb, tasks_max }
+    Self { program: program.into(), args, cwd, env, session_id, cgroup }
   }
 
   fn prepare_cgroup(&self) -> Option<SessionCgroup> {
-    cgroup::prepare_session_cgroup(
-      &self.cgroup_base,
-      self.session_id.as_deref(),
-      self.memory_max_mb,
-      self.swap_max_mb,
-      self.tasks_max,
-    )
+    cgroup::prepare_session_cgroup(&self.cgroup, self.session_id.as_deref(), ResourceClass::Agent)
   }
 }
 
@@ -1120,10 +1106,7 @@ mod tests {
       None,
       HashMap::new(),
       None,
-      base.to_path_buf(),
-      0,
-      0,
-      0,
+      SessionCgroupConfig { base_dir: base.to_path_buf(), ..SessionCgroupConfig::disabled() },
     )
   }
 
@@ -1204,10 +1187,13 @@ mod tests {
       None,
       HashMap::new(),
       Some("test1234-session".into()),
-      base,
-      64,
-      32,
-      0,
+      SessionCgroupConfig {
+        base_dir: base,
+        sessions_dir: PathBuf::new(),
+        memory_max_mb: 64,
+        swap_max_mb: 32,
+        tasks_max: 0,
+      },
     );
     let mut spawned = spawn_piped(&spec).await.unwrap();
     let pid = spawned.child.id().unwrap();
@@ -1229,10 +1215,13 @@ mod tests {
       None,
       HashMap::new(),
       None,
-      base,
-      0,
-      0,
-      0,
+      SessionCgroupConfig {
+        base_dir: base,
+        sessions_dir: PathBuf::new(),
+        memory_max_mb: 0,
+        swap_max_mb: 0,
+        tasks_max: 0,
+      },
     );
     let mut spawned = spawn_with_setup(&spec, Some(Signal::SIGKILL), ChildStdin::Null, SpawnSetup::None).await.unwrap();
     let pid = spawned.child.id().unwrap();
@@ -1257,10 +1246,13 @@ mod tests {
       None,
       HashMap::new(),
       Some("test1234-session".into()),
-      base,
-      64,
-      0,
-      16,
+      SessionCgroupConfig {
+        base_dir: base,
+        sessions_dir: PathBuf::new(),
+        memory_max_mb: 64,
+        swap_max_mb: 0,
+        tasks_max: 16,
+      },
     );
     let mut spawned = spawn_one_shot(&spec, Some(Signal::SIGKILL)).await.unwrap();
     let pid = spawned.child.id().unwrap();
@@ -1284,10 +1276,13 @@ mod tests {
       None,
       HashMap::new(),
       Some("test1234-session".into()),
-      base,
-      64,
-      0,
-      16,
+      SessionCgroupConfig {
+        base_dir: base,
+        sessions_dir: PathBuf::new(),
+        memory_max_mb: 64,
+        swap_max_mb: 0,
+        tasks_max: 16,
+      },
     );
     let mut spawned = spawn_one_shot(&spec, None).await.unwrap();
     let pid = spawned.child.id().unwrap();
@@ -1318,10 +1313,13 @@ mod tests {
       None,
       env,
       Some("test1234-session".into()),
-      base,
-      64,
-      0,
-      16,
+      SessionCgroupConfig {
+        base_dir: base,
+        sessions_dir: PathBuf::new(),
+        memory_max_mb: 64,
+        swap_max_mb: 0,
+        tasks_max: 16,
+      },
     );
     let mut child =
       spawn_with_setup(&spec, None, ChildStdin::Piped, SpawnSetup::ChildSideTurnTree).await.unwrap().child;
@@ -1360,10 +1358,13 @@ mod tests {
       None,
       env,
       Some("test1234-session".into()),
-      base,
-      64,
-      0,
-      16,
+      SessionCgroupConfig {
+        base_dir: base,
+        sessions_dir: PathBuf::new(),
+        memory_max_mb: 64,
+        swap_max_mb: 0,
+        tasks_max: 16,
+      },
     );
     let mut child = spawn_with_setup(&spec, None, ChildStdin::Piped, SpawnSetup::ChildSideCgroup).await.unwrap().child;
     let pid = child.id().unwrap();

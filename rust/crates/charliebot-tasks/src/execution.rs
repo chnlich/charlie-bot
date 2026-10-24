@@ -1979,9 +1979,9 @@ impl TaskExecutionAdapter {
         self.dispatch.wake_parent(parent_id, &report).await?;
       }
     }
-    let guard = self.features.store.control_lock().await;
     let archive_run = deciding_run.unwrap_or(run);
-    self.features.store.archive_unsuccessful_worker(&guard, session_id, &archive_run.id, outcome).await?;
+    let completion = self.features.startup.require::<crate::completion::TaskCompletion>()?;
+    completion.archive_unsuccessful_worker(session_id, &archive_run.id, outcome).await?;
     Ok(())
   }
 

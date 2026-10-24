@@ -59,7 +59,7 @@ by the run id its stop request captured (see `rust/parity/README.md`).
 | POST | `/api/sessions/{session_id}/backend` | sessions | ported |  |
 | PUT | `/api/sessions/{session_id}/resource-class` | sessions | ported | Operator credentials only. Sets the `resource_class` metadata field that places the session's cgroup (df7920bd7). Rust: `rust/crates/charliebot-session-api/src/writes.rs` `set_resource_class`. |
 | GET | `/api/sessions/{session_id}` | sessions | ported |  |
-| POST | `/api/sessions/{session_id}/archive` | sessions | todo |  |
+| POST | `/api/sessions/{session_id}/archive` | sessions | ported | Operator and agent archive requests share one completion owner (a31877580): `rust/crates/charliebot-tasks/src/completion.rs` `archive_task` `:452`. |
 | DELETE | `/api/sessions/{session_id}/permanent` | sessions | ported |  |
 | POST | `/api/sessions/{session_id}/unarchive` | sessions | ported |  |
 | POST | `/api/sessions/{session_id}/star` | sessions | ported |  |
@@ -476,34 +476,11 @@ Each of the 30 commits in `git rev-list --no-merges 3c4591bad..d1f7e3ba6 -- src 
 
 ## Catch-up d113f2c4d open steps
 
-This catch-up merges main `d113f2c4d` into `rust-backend`. The two all-stage Rust runs (`rust/parity/parity.py --rust-bin rust/target/debug/charliebot-server`) fail the same 75 step lines, and each one is a row below, so `redlist_check.py` passes. The status reminder turn (`a98ee7ad0`) and the web status `since` field (`a2b835107`, `a98ee7ad0`) are ported now, and the scenarios that script reminder starts compare the reminder with the audited turn's `run_finished` in either order, as the web-reply audit scenarios already did. The remaining 15 failing steps of one all-stage run are all the archive route (`a31877580`): POST answers 307 where Python answers its archive result, and the archive events the baseline writes shift the minted ids of the steps after it. No row is intermittent: repeated runs print the same failing lines.
-
-| Scenario | Step | Stage | Main commit | Difference |
-| --- | --- | --- | --- | --- |
-| task-completion-routes | archive a task with successful run evidence | agent-orchestration | a31877580 | R273: Rust serves no archive route and answers 307 where Python answers 200; the route is todo in PORT_STATUS.md. |
-| task-completion-routes | replay the successful archive request | agent-orchestration | a31877580 | R274: Rust serves no archive route and answers 307 where Python answers 200; the route is todo in PORT_STATUS.md. |
-| task-completion-routes | cancel the stopped queued worker to deliver its report | agent-orchestration | a31877580 | R275: minted ids shift after the missing archive or reminder run: file home/sessions/9a3c3ec1-d4c6-51a1-a0e0-db1681aca8bf/data/runs/<spawn-run-d3b312552ca9a7784efc1f09da6006b6e408ec4fdbd0212e939e6e2d13c1f3ad-1>/metad. |
-| task-completion-routes | release the active manager run | agent-orchestration | a31877580 | R276: Rust launches no status reminder turn, so a baseline-only run appears and later scripted starts run out of order: file added by baseline only: home/sessions/9a3c3ec1-d4c6-51a1-a0e0-db1681aca8bf/data/runs/<spawn-run-d3b312552ca9a7784efc1f09da6006b6e408ec4fdbd0212e9. |
-| task-completion-routes | cancel the task after its run finishes | agent-orchestration | a31877580 | R277: Rust launches no status reminder turn, so a baseline-only run appears and later scripted starts run out of order: file added by baseline only: home/sessions/bd403bef-2631-572a-b34f-b5f483b7883a/data/runs/<spawn-run-208f74cc7578689052f7a487b123ff0f13e9100e55413638f. |
-| task-completion-routes | acknowledge the pending Cobalt input | agent-orchestration | a31877580 | R278: minted ids shift after the missing archive or reminder run: body $.acknowledged_event_id: "<minted-32>" != "<minted-16>". |
-| task-completion-routes | replay the input acknowledgement | agent-orchestration | a31877580 | R279: minted ids shift after the missing archive or reminder run: body $.acknowledged_event_id: "<minted-32>" != "<minted-16>". |
-| task-completion-routes | invalid JSON body reports a 422 | agent-orchestration | a31877580 | R280: Rust serves no archive route and answers 307 where Python answers 422; the route is todo in PORT_STATUS.md. |
-| task-completion-routes | operator restores an archived ancestor chain | agent-orchestration | a31877580 | R281: minted ids shift after the missing archive or reminder run: file home/sessions/06739622-6846-5ab5-90cc-c6adee2b3441/data/chat_events.jsonl: $[8].id: "<minted-33>" != "<minted-17>". |
-| task-completion-routes | operator archives an open subtree with its finished runs | agent-orchestration | a31877580 | R282: Rust serves no archive route and answers 307 where Python answers 200; the route is todo in PORT_STATUS.md. |
-| session-write-meta | archive an empty task | session-write | a31877580 | R328: Rust serves no archive route and answers 307 where Python answers 200; the route is todo in PORT_STATUS.md. |
-| session-write-meta | archive a missing task | session-write | a31877580 | R329: Rust serves no archive route and answers 307 where Python answers 404; the route is todo in PORT_STATUS.md. |
-| session-write-meta | archive refuses an unresolved run process | session-write | a31877580 | R330: Rust serves no archive route and answers 307 where Python answers 409; the route is todo in PORT_STATUS.md. |
-| session-write-meta | archive refuses an agent caller whose session is not a task | session-write | a31877580 | R331: Rust serves no archive route and answers 307 where Python answers 404; the route is todo in PORT_STATUS.md. |
-| session-write-meta | permanently delete a missing task | session-write | a31877580 | R332: minted ids shift after the missing archive or reminder run: body $.detail: "task <minted-2> not found" != "task <minted-1> not found". |
+The status reminder, web status `since` fields, and archive behavior from `a98ee7ad0`, `a2b835107`, and `a31877580` are ported. No open parity steps remain for this catch-up.
 
 ## Catch-up d113f2c4d ignored Cargo tests
 
-Two Cargo tests fail on main changes, so each carries `#[ignore = "catch-up d113f2c4d: <row>"]`. Before the ignores, `cargo test --locked --no-fail-fast` fails these two and nothing else. No other Rust change.
-
-| Row | Test | Binary | Main commit | Difference |
-| --- | --- | --- | --- | --- |
-| R338 | python_and_rust_task_trees_share_nodes_gates_and_mutation_bytes | charliebot-store (`tests/cross_implementation.rs`) | a31877580 | The Python helper `tests/python_store_ops.py` calls `TaskTreeManager.archive_unsuccessful_worker`, which main moved to the completion owner (AttributeError). |
-| R339 | python_and_rust_archive_a_subtree_into_the_same_fact_bytes | charliebot-store (`tests/cross_implementation.rs`) | a31877580 | The Python helper calls `TaskTreeManager.archive_subtree`, which main moved to the completion owner (AttributeError). |
+No ignored Cargo tests remain for catch-up `d113f2c4d`: R337 is covered by the Gemini tool-call port, and R338-R339 are covered by the archive port.
 
 ## Catch-up d113f2c4d unported commits
 
@@ -518,8 +495,8 @@ its count tests. The other three are in Rust, so they need no count note.
 | 1322d45a0 | state behavior without a "today" anchor in tests, tools and web | no behavior | Comment and text only. |
 | a2b835107 | close status review gaps | in Rust | The plan-link lookup reads a registry that exists but does not read as a failure (`rust/crates/features/web_reply/src/plan_links.rs:86`), the item's own link field joins the scanned links (`plan_links.rs:235`), and the unread query checks the prospective items' plan links (`rust/crates/features/web_reply/src/status.rs:399`). Python: `src/features/web_reply/plan_links.py:66`, `:136`, `src/features/web_reply/status.py:325`. |
 | a98ee7ad0 | keep Waiting on you items current | in Rust | The status reminder and the combined reminder (`rust/crates/features/web_reply/src/audit.rs:30`, `:36`, posted at `:236`), the `since` and `since_exact` fields and their pairing (`rust/crates/features/web_reply/src/status.rs:71`, `:208`, `:246`), the stale-plan-link refusal (`rust/crates/features/web_reply/src/plan_links.rs:225`, `status.rs:233`), and the confirm route (`rust/crates/features/web_reply/src/api.rs:88`). Python: `src/features/web_reply/audit.py`, `status.py`, `plan_links.py`, `api.py`. Tests: the reminder, plan-link, since and confirm cases of `status.rs`, `audit.rs` and `turn_contribution.rs`. |
-| a1c996ec4 | keep archive run evidence optional | red-list | Archive with run evidence: R273, R274. |
-| a31877580 | make archive the only manual close action | red-list | Archive route rows: R273-R282, R328-R332. The helpers that moved to the completion owner break R338 and R339. |
+| a1c996ec4 | keep archive run evidence optional | in Rust | A run already judged success or failure satisfies the archive evidence rule: `evidence_blockers_with_success` (`rust/crates/charliebot-tasks/src/completion.rs:240`) skips the run-evidence blocker when the close carries a succeeding run id, and `close_now_inner` passes the approved run ids for an archived close. Tests: `own_run_archive_closes_without_takeoff_and_reports_to_ancestor` (`rust/crates/charliebot-tasks/tests/completion.rs`). |
+| a31877580 | make archive the only manual close action | in Rust | The completion owner holds both archive writes: `archive_task` and `archive_subtree` (`rust/crates/charliebot-tasks/src/completion.rs:451,540`) and `archive_unsuccessful_worker` (`:681`). The route is `POST /api/sessions/{session_id}/archive` (`rust/crates/charliebot-tasks/src/routes.rs:53,1019`), `POST /complete` answers 404 and `DELETE /api/sessions/{session_id}` answers 405. The store keeps only the sequence archive hook (`rust/crates/charliebot-store/src/task_tree.rs`). |
 | 20a051cda | deliver a close's parent report through one helper | no behavior | Refactor: `_announce_close_and_wake_parent` keeps the behavior. |
 | 5a3a38f6d | state current behavior instead of "today" in comments | no behavior | Comment only. |
 | 70e150753 | drop change narration from seven comments and docstrings | no behavior | Comment and docstring only. |

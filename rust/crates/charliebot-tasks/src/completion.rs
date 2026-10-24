@@ -17,6 +17,7 @@ use charliebot_store::{ControlGuard, StoreError, StoreResult};
 use futures_util::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use uuid::Uuid;
 
 use crate::dispatch::{self, Dispatcher, RunFinishedCompletion};
 use crate::git;
@@ -29,14 +30,31 @@ const REVIEW_REF_PREFIX: &str = "review:";
 const LANDING_REF_PREFIX: &str = "landed:";
 type DeliveryRunOutcomes = (HashMap<String, RunRecord>, HashMap<String, Option<String>>);
 const RESTORE_CHAIN_HOP_LIMIT: usize = 1000;
+/// The operator-scope refusal an archive request without user credentials gets.
+pub const ARCHIVE_OPERATOR_REFUSAL: &str = "archiving a task requires operator credentials";
 
 struct CloseNowRequest<'a> {
   session_id: &'a str,
   request_id: &'a str,
   evidence: &'a CompletionEvidence,
   actor: &'a str,
+  outcome: &'a str,
   exclude_run_ids: &'a HashSet<String>,
   exclude_input_ids: &'a HashSet<String>,
+}
+
+/// One close fact to append plus the parent delivery its caller owns.
+struct CloseAppend<'a> {
+  session_id: &'a str,
+  request_id: &'a str,
+  outcome: &'a str,
+  summary: &'a str,
+  result_refs: &'a [String],
+  run_ids: &'a [String],
+  actor: &'a str,
+  report_to: Option<&'a str>,
+  archived_with: Option<&'a str>,
+  sequence_outcome: Option<&'a str>,
 }
 
 /// The target branch and commit offered as landing evidence.
@@ -213,14 +231,17 @@ impl TaskCompletion {
   }
 
   fn evidence_blockers(&self, meta: &SessionMetadata, evidence: &CompletionEvidence) -> StoreResult<Vec<String>> {
-    self.evidence_blockers_with_success(meta, evidence, &HashSet::new())
+    self.evidence_blockers_with_success(meta, evidence, None)
   }
 
+  /// Validate one completion claim against this task's own facts. `succeeding_run_ids` names Runs judged as
+  /// successful: an own-run archive request's still-active caller Run, whose request is re-evaluated only after it
+  /// succeeds.
   fn evidence_blockers_with_success(
     &self,
     meta: &SessionMetadata,
     evidence: &CompletionEvidence,
-    succeeding_run_ids: &HashSet<String>,
+    succeeding_run_ids: Option<&HashSet<String>>,
   ) -> StoreResult<Vec<String>> {
     let mut blockers = Vec::new();
     if evidence.summary.trim().is_empty() {
@@ -230,9 +251,10 @@ impl TaskCompletion {
       blockers.push("completion requires result evidence (result_refs)".to_string());
     }
     let (records, mut outcomes) = self.delivery_run_outcomes(meta)?;
-    for run_id in succeeding_run_ids {
+    for run_id in succeeding_run_ids.into_iter().flatten() {
       outcomes.insert(run_id.clone(), Some("success".to_string()));
     }
+    let some_run_judged_success = succeeding_run_ids.is_some_and(|run_ids| !run_ids.is_empty());
     let facts = self.store().node_facts(&meta.id)?;
     let facts = facts.task()?;
     let mut claimed = HashSet::new();
@@ -250,7 +272,7 @@ impl TaskCompletion {
     if !evidence.run_ids.is_empty() && claimed.is_empty() {
       blockers.push("completion evidence names no delivery Run of this task".to_string());
     }
-    if evidence.run_ids.is_empty() {
+    if evidence.run_ids.is_empty() && !some_run_judged_success {
       if outcomes.values().any(|outcome| outcome.as_deref() == Some("success")) {
         blockers.push("completion requires delivery run evidence (run_ids)".to_string());
       } else if outcomes.values().any(|outcome| outcome.as_deref() == Some("failed")) {
@@ -410,18 +432,23 @@ impl TaskCompletion {
     Ok(blockers)
   }
 
-  async fn verified_evidence_blockers(
+  pub async fn verified_evidence_blockers(
     &self,
     meta: &SessionMetadata,
     evidence: &CompletionEvidence,
+    succeeding_run_ids: Option<&HashSet<String>>,
   ) -> StoreResult<Vec<String>> {
-    let mut blockers = self.evidence_blockers(meta, evidence)?;
+    let mut blockers = self.evidence_blockers_with_success(meta, evidence, succeeding_run_ids)?;
     blockers.extend(self.landing_blockers(meta, evidence).await?);
     Ok(blockers)
   }
 
-  /// Complete a task after evidence checks, or save an agent's own-manager close request for run finish.
-  pub async fn complete_task(
+  // ------------------------------------------------------------------
+  // Archive
+  // ------------------------------------------------------------------
+
+  /// Archive one task: an operator closes its subtree; an agent's request waits for its own Run.
+  pub async fn archive_task(
     &self,
     session_id: &str,
     request_id: &str,
@@ -429,43 +456,278 @@ impl TaskCompletion {
     caller: &CallerIdentity,
   ) -> StoreResult<(usize, Value)> {
     if request_id.is_empty() {
-      return Err(StoreError::invalid("request_id is required for completion"));
+      return Err(StoreError::invalid("request_id is required for archive"));
     }
-    if let CallerIdentity::Agent { claims } = caller {
-      if claims.session_id != session_id {
-        return Err(StoreError::forbidden("an agent may only request closure of its own task"));
+    match caller {
+      CallerIdentity::Operator { .. } => {
+        if let Some(replay) = self.replay_close_request(session_id, request_id)? {
+          return Ok(replay);
+        }
+        let summary = if evidence.summary.is_empty() { "archived by the user" } else { &evidence.summary };
+        let archived = self
+          .archive_subtree(session_id, Some(request_id), summary, &evidence.result_refs, &evidence.run_ids, caller)
+          .await?;
+        Ok((200, json!({"archived": archived})))
       }
-      let meta = self.store().load_task_meta(session_id).await?;
-      if meta.profile != TaskProfile::Manager {
-        return Err(StoreError::forbidden("own-run closure requests come from manager tasks only"));
+      CallerIdentity::Agent { claims } => {
+        if claims.session_id != session_id {
+          return Err(StoreError::forbidden("an agent may only archive its own task"));
+        }
+        let meta = self.store().load_task_meta(session_id).await?;
+        if meta.profile != TaskProfile::Manager {
+          return Err(StoreError::forbidden("own-task archive requests come from manager tasks only"));
+        }
+        let run = self
+          .store()
+          .read_run_sync(session_id, &claims.run_id)?
+          .ok_or_else(|| StoreError::invalid(format!("caller run {} not found in task {session_id}", claims.run_id)))?;
+        let events = self.store().load_all_facts(session_id)?;
+        if run_records::terminal_outcome(&events, &run.id)?.is_some()
+          || self.store().run_display_state(session_id, &run.id)? != RunDisplayState::Running
+        {
+          return Err(StoreError::conflict(vec![format!(
+            "caller run {} is not active; it cannot request archive",
+            claims.run_id
+          )]));
+        }
+        if let Some(replay) = self.replay_close_request(session_id, request_id)? {
+          return Ok(replay);
+        }
+        let blockers = self.own_run_close_blockers(session_id, &run, evidence).await?;
+        if !blockers.is_empty() {
+          return Err(StoreError::conflict(sorted_unique(blockers)));
+        }
+        self.save_close_request(session_id, request_id, &claims.run_id, evidence).await
       }
-      let run = self
-        .store()
-        .read_run_sync(session_id, &claims.run_id)?
-        .ok_or_else(|| StoreError::invalid(format!("caller run {} not found in task {session_id}", claims.run_id)))?;
-      let events = self.store().load_all_facts(session_id)?;
-      if run_records::terminal_outcome(&events, &run.id)?.is_some()
-        || self.store().run_display_state(session_id, &run.id)? != RunDisplayState::Running
-      {
-        return Err(StoreError::conflict(vec![format!(
-          "caller run {} is not active; it cannot request closure",
-          claims.run_id
-        )]));
+    }
+  }
+
+  /// Build an archive close fact with its fixed report recipient and subtree owner.
+  #[allow(clippy::too_many_arguments)]
+  pub fn archived_close_event(
+    &self,
+    session_id: &str,
+    request_id: &str,
+    summary: &str,
+    report_to: Option<&str>,
+    archived_with: Option<&str>,
+    actor: &str,
+    result_refs: &[String],
+    run_ids: &[String],
+  ) -> Value {
+    let mut payload = vec![
+      ("request_id".to_string(), json!(request_id)),
+      ("outcome".to_string(), json!("archived")),
+      ("summary".to_string(), json!(summary)),
+      ("result_refs".to_string(), json!(result_refs)),
+      ("run_ids".to_string(), json!(run_ids)),
+      ("report_to".to_string(), report_to.map_or(Value::Null, |parent| json!(parent))),
+    ];
+    if let Some(archived_with) = archived_with {
+      payload.push(("archived_with".to_string(), json!(archived_with)));
+    }
+    control_events::build_control_event(
+      event_types::TASK_CLOSED,
+      actor,
+      session_id,
+      Some(&control_events::stable_close_event_id(session_id, request_id)),
+      None,
+      payload,
+    )
+  }
+
+  /// Archive an open task subtree and report the target close to its parent.
+  pub async fn archive_subtree(
+    &self,
+    session_id: &str,
+    request_id: Option<&str>,
+    summary: &str,
+    result_refs: &[String],
+    run_ids: &[String],
+    caller: &CallerIdentity,
+  ) -> StoreResult<Vec<String>> {
+    if !caller.is_operator() {
+      return Err(StoreError::forbidden(ARCHIVE_OPERATOR_REFUSAL));
+    }
+    let request_id = match request_id {
+      None => format!("archive-{}", Uuid::new_v4()),
+      Some("") => return Err(StoreError::invalid("request_id is required for archive")),
+      Some(request_id) => request_id.to_string(),
+    };
+    let store = self.store();
+    let (mut subtree, mut parent_id) = {
+      let _guard = store.control_lock().await;
+      store.invalidate_tree_index();
+      let meta = store.load_task_meta(session_id).await?;
+      if store.task_state(session_id)? != "open" {
+        return Ok(Vec::new());
       }
-      if let Some(replay) = self.replay_close_request(session_id, request_id)? {
-        return Ok(replay);
-      }
-      let blockers = self.own_run_close_blockers(session_id, &run, evidence).await?;
+      let subtree = self.subtree_ids(session_id)?;
+      let blockers = self.archive_run_blockers(&subtree)?;
       if !blockers.is_empty() {
-        return Err(StoreError::conflict(sorted_unique(blockers)));
+        return Err(StoreError::conflict(blockers));
       }
-      return self.save_close_request(session_id, request_id, &claims.run_id, evidence).await;
+      (subtree, meta.task_parent_id.clone())
+    };
+
+    let mut epochs = HashMap::new();
+    for sid in &subtree {
+      epochs.insert(sid.clone(), store.prime_aggregator(sid).await?);
+    }
+    let mut parent_epoch = match parent_id.as_deref() {
+      Some(parent_id) => Some(store.prime_aggregator(parent_id).await?),
+      None => None,
+    };
+
+    let mut archived: Vec<String> = Vec::new();
+    let mut announcements: Vec<(String, ChatEvent, u64)> = Vec::new();
+    let mut report = ChatEvent::Null;
+    let mut report_created = false;
+    {
+      let guard = store.control_lock().await;
+      store.invalidate_tree_index();
+      let target_meta = store.load_task_meta(session_id).await?;
+      if store.task_state(session_id)? != "open" {
+        return Ok(Vec::new());
+      }
+      subtree = self.subtree_ids(session_id)?;
+      let blockers = self.archive_run_blockers(&subtree)?;
+      if !blockers.is_empty() {
+        return Err(StoreError::conflict(blockers));
+      }
+      parent_id.clone_from(&target_meta.task_parent_id);
+      if let Some(parent) = parent_id.as_deref()
+        && !epochs.contains_key(parent)
+      {
+        parent_epoch = Some(store.prime_aggregator(parent).await?);
+      }
+      for sid in &subtree {
+        if store.task_state(sid)? != "open" {
+          continue;
+        }
+        let is_target = sid == session_id;
+        let epoch = match epochs.get(sid) {
+          Some(epoch) => *epoch,
+          None => {
+            let epoch = store.prime_aggregator(sid).await?;
+            epochs.insert(sid.clone(), epoch);
+            epoch
+          }
+        };
+        let (close_event, delivered_report, created) = self
+          .append_closed(
+            &guard,
+            CloseAppend {
+              session_id: sid,
+              request_id: &request_id,
+              outcome: "archived",
+              summary: if is_target { summary } else { "" },
+              result_refs: if is_target { result_refs } else { &[] },
+              run_ids: if is_target { run_ids } else { &[] },
+              actor: ACTOR_USER,
+              report_to: if is_target { parent_id.as_deref() } else { None },
+              archived_with: if is_target { None } else { Some(session_id) },
+              sequence_outcome: None,
+            },
+          )
+          .await?;
+        archived.push(sid.clone());
+        announcements.push((sid.clone(), close_event, epoch));
+        if is_target {
+          report = delivered_report;
+          report_created = created;
+        }
+      }
+      for sid in &archived {
+        store.sequence_archive_on_archive(sid).await?;
+      }
     }
 
-    if let Some(replay) = self.replay_close_request(session_id, request_id)? {
-      return Ok(replay);
+    for (sid, event, epoch) in announcements {
+      store.announce_appended_event(&sid, &event, epoch).await?;
     }
-    self.close_now(session_id, request_id, evidence, ACTOR_USER, &HashSet::new(), &HashSet::new()).await
+    if report_created && let (Some(parent_id), Some(epoch)) = (parent_id.as_deref(), parent_epoch) {
+      store.announce_appended_event(parent_id, &report, epoch).await?;
+    }
+    if report_created
+      && let Some(parent_id) = parent_id.as_deref()
+      && let Err(error) = self.dispatcher()?.wake_parent(parent_id, &report).await
+    {
+      tracing::warn!(target: "charliebot_tasks", session_id, parent = parent_id, report = ?report.get("id"), error = %error, "archive_parent_wake_failed");
+    }
+    Ok(archived)
+  }
+
+  /// The target and every descendant, parent before child.
+  fn subtree_ids(&self, session_id: &str) -> StoreResult<Vec<String>> {
+    let mut subtree = vec![session_id.to_string()];
+    subtree.extend(self.store().descendant_ids(session_id)?);
+    Ok(subtree)
+  }
+
+  /// Every unfinished Run blocker across a subtree, before any close fact is written.
+  fn archive_run_blockers(&self, subtree: &[String]) -> StoreResult<Vec<String>> {
+    let mut blockers = Vec::new();
+    for sid in subtree {
+      for blocker in self.store().run_blockers(sid)? {
+        blockers.push(format!("{sid}: {}", blocker.reason));
+      }
+    }
+    blockers.sort();
+    Ok(blockers)
+  }
+
+  /// Archive a failed worker after its report lands, when no work remains.
+  pub async fn archive_unsuccessful_worker(&self, session_id: &str, run_id: &str, outcome: &str) -> StoreResult<bool> {
+    let store = self.store();
+    let epoch = store.prime_aggregator(session_id).await?;
+    let request_id = format!("unsuccessful:{run_id}");
+    let close_event;
+    {
+      let guard = store.control_lock().await;
+      let meta = store.load_task_meta(session_id).await?;
+      if meta.profile != TaskProfile::Worker || store.task_state(session_id)? != "open" {
+        return Ok(false);
+      }
+      if store.last_ended_run_id(session_id)?.as_deref() != Some(run_id) {
+        return Ok(false);
+      }
+      if !self.execution_blockers(session_id, &HashSet::new())?.is_empty() {
+        return Ok(false);
+      }
+      if self.pause_reason(session_id)?.is_some() {
+        return Ok(false);
+      }
+      if store.load_all_facts_view_sync(session_id)?.iter().any(|event| {
+        event.get("type").and_then(CompactValue::as_str) == Some(event_types::TASK_CLOSED)
+          && event.get("request_id").and_then(CompactValue::as_str) == Some(request_id.as_str())
+      }) {
+        return Ok(false);
+      }
+      let summary = format!("run {run_id} ended {outcome}; archived by the server");
+      let run_ids = [run_id.to_string()];
+      let (event, _report, _created) = self
+        .append_closed(
+          &guard,
+          CloseAppend {
+            session_id,
+            request_id: &request_id,
+            outcome: "archived",
+            summary: &summary,
+            result_refs: &[],
+            run_ids: &run_ids,
+            actor: ACTOR_SYSTEM,
+            report_to: None,
+            archived_with: None,
+            sequence_outcome: None,
+          },
+        )
+        .await?;
+      close_event = event;
+      store.sequence_archive_on_archive(session_id).await?;
+    }
+    store.announce_appended_event(session_id, &close_event, epoch).await?;
+    Ok(true)
   }
 
   fn replay_close_request(&self, session_id: &str, request_id: &str) -> StoreResult<Option<(usize, Value)>> {
@@ -507,7 +769,7 @@ impl TaskCompletion {
       let excluded_runs = HashSet::from([run.id.clone()]);
       let excluded_inputs = run.input_event_ids.iter().cloned().collect::<HashSet<_>>();
       let mut blockers = self.completion_blockers(session_id, &excluded_runs, &excluded_inputs)?;
-      blockers.extend(self.evidence_blockers_with_success(&meta, evidence, &excluded_runs)?);
+      blockers.extend(self.evidence_blockers_with_success(&meta, evidence, Some(&excluded_runs))?);
       blockers
     };
     let meta = self.store().load_task_meta(session_id).await?;
@@ -547,19 +809,21 @@ impl TaskCompletion {
     Ok((202, json!({"session_id": session_id, "request_id": request_id, "status": "pending_run_finish"})))
   }
 
+  #[allow(clippy::too_many_arguments)]
   async fn close_now(
     &self,
     session_id: &str,
     request_id: &str,
     evidence: &CompletionEvidence,
     actor: &str,
+    outcome: &str,
     exclude_run_ids: &HashSet<String>,
     exclude_input_ids: &HashSet<String>,
   ) -> StoreResult<(usize, Value)> {
     Ok(
       self
         .close_now_inner(
-          CloseNowRequest { session_id, request_id, evidence, actor, exclude_run_ids, exclude_input_ids },
+          CloseNowRequest { session_id, request_id, evidence, actor, outcome, exclude_run_ids, exclude_input_ids },
           None,
         )
         .await?
@@ -580,7 +844,10 @@ impl TaskCompletion {
     request: CloseNowRequest<'_>,
     stop: Option<&StartupStop>,
   ) -> StoreResult<Option<(usize, Value)>> {
-    let CloseNowRequest { session_id, request_id, evidence, actor, exclude_run_ids, exclude_input_ids } = request;
+    let CloseNowRequest { session_id, request_id, evidence, actor, outcome, exclude_run_ids, exclude_input_ids } =
+      request;
+    let succeeding_run_ids = (outcome == "archived").then(|| exclude_run_ids.clone());
+    let succeeding = succeeding_run_ids.as_ref();
     let (meta, blockers) = {
       let _guard = self.store().control_lock().await;
       let meta = self.store().load_task_meta(session_id).await?;
@@ -602,7 +869,7 @@ impl TaskCompletion {
     if stop.is_some_and(StartupStop::is_cancelled) {
       return Ok(None);
     }
-    let evidence_blockers = self.verified_evidence_blockers(&meta, evidence).await?;
+    let evidence_blockers = self.verified_evidence_blockers(&meta, evidence, succeeding).await?;
     if !evidence_blockers.is_empty() {
       return Err(StoreError::conflict(sorted_unique(evidence_blockers)));
     }
@@ -640,7 +907,7 @@ impl TaskCompletion {
         }
         None => self.completion_blockers(session_id, exclude_run_ids, exclude_input_ids)?,
       };
-      blockers.extend(self.evidence_blockers(&fresh_meta, evidence)?);
+      blockers.extend(self.evidence_blockers_with_success(&fresh_meta, evidence, succeeding)?);
       let blockers = sorted_unique(blockers);
       if !blockers.is_empty() {
         return Err(StoreError::conflict(blockers));
@@ -648,15 +915,18 @@ impl TaskCompletion {
       let (close_event, report, report_created) = self
         .append_closed(
           &guard,
-          session_id,
-          &fresh_meta,
-          request_id,
-          "completed",
-          &evidence.summary,
-          &evidence.result_refs,
-          &evidence.run_ids,
-          actor,
-          None,
+          CloseAppend {
+            session_id,
+            request_id,
+            outcome,
+            summary: &evidence.summary,
+            result_refs: &evidence.result_refs,
+            run_ids: &evidence.run_ids,
+            actor,
+            report_to: fresh_meta.task_parent_id.as_deref(),
+            archived_with: None,
+            sequence_outcome: None,
+          },
         )
         .await?;
       (fresh_meta, close_event, report, report_created)
@@ -677,39 +947,58 @@ impl TaskCompletion {
     )))
   }
 
-  #[allow(clippy::too_many_arguments)]
+  /// Append one `task_closed` fact, then deliver its parent report. The caller holds the control lock.
   async fn append_closed(
     &self,
     guard: &ControlGuard,
-    session_id: &str,
-    meta: &SessionMetadata,
-    request_id: &str,
-    outcome: &str,
-    summary: &str,
-    result_refs: &[String],
-    run_ids: &[String],
-    actor: &str,
-    sequence_outcome: Option<&str>,
+    append: CloseAppend<'_>,
   ) -> StoreResult<(ChatEvent, ChatEvent, bool)> {
-    let mut payload = vec![
-      ("request_id".to_string(), json!(request_id)),
-      ("outcome".to_string(), json!(outcome)),
-      ("summary".to_string(), json!(summary)),
-      ("result_refs".to_string(), json!(result_refs)),
-      ("run_ids".to_string(), json!(run_ids)),
-      ("report_to".to_string(), meta.task_parent_id.as_ref().map_or(Value::Null, |parent| json!(parent))),
-    ];
-    if let Some(sequence_outcome) = sequence_outcome {
-      payload.push(("sequence_outcome".to_string(), json!(sequence_outcome)));
-    }
-    let close_event = control_events::build_control_event(
-      event_types::TASK_CLOSED,
-      actor,
+    let CloseAppend {
       session_id,
-      Some(&control_events::stable_close_event_id(session_id, request_id)),
-      None,
-      payload,
-    );
+      request_id,
+      outcome,
+      summary,
+      result_refs,
+      run_ids,
+      actor,
+      report_to,
+      archived_with,
+      sequence_outcome,
+    } = append;
+    let close_event = match outcome {
+      "archived" => self.archived_close_event(
+        session_id,
+        request_id,
+        summary,
+        report_to,
+        archived_with,
+        actor,
+        result_refs,
+        run_ids,
+      ),
+      "completed" | "cancelled" => {
+        let mut payload = vec![
+          ("request_id".to_string(), json!(request_id)),
+          ("outcome".to_string(), json!(outcome)),
+          ("summary".to_string(), json!(summary)),
+          ("result_refs".to_string(), json!(result_refs)),
+          ("run_ids".to_string(), json!(run_ids)),
+          ("report_to".to_string(), report_to.map_or(Value::Null, |parent| json!(parent))),
+        ];
+        if let Some(sequence_outcome) = sequence_outcome {
+          payload.push(("sequence_outcome".to_string(), json!(sequence_outcome)));
+        }
+        control_events::build_control_event(
+          event_types::TASK_CLOSED,
+          actor,
+          session_id,
+          Some(&control_events::stable_close_event_id(session_id, request_id)),
+          None,
+          payload,
+        )
+      }
+      other => return Err(StoreError::new(format!("unknown task close outcome: {other}"))),
+    };
     let close_event = self.store().append_control_fact(guard, session_id, close_event).await?;
     let report_outcome = sequence_outcome.unwrap_or(outcome);
     let (report, report_created) = self
@@ -721,7 +1010,7 @@ impl TaskCompletion {
         report_outcome,
         summary,
         Some(result_refs),
-        meta.task_parent_id.as_deref(),
+        report_to,
         ACTOR_SYSTEM,
       )
       .await?;
@@ -785,7 +1074,21 @@ impl TaskCompletion {
         return Err(StoreError::conflict(blockers));
       }
       let (close_event, report, report_created) = self
-        .append_closed(&guard, session_id, &fresh_meta, request_id, "cancelled", reason, &[], &[], actor, None)
+        .append_closed(
+          &guard,
+          CloseAppend {
+            session_id,
+            request_id,
+            outcome: "cancelled",
+            summary: reason,
+            result_refs: &[],
+            run_ids: &[],
+            actor,
+            report_to: fresh_meta.task_parent_id.as_deref(),
+            archived_with: None,
+            sequence_outcome: None,
+          },
+        )
         .await?;
       (fresh_meta, close_event, report, report_created)
     };
@@ -864,7 +1167,21 @@ impl TaskCompletion {
           return Err(StoreError::conflict(sequence_blockers));
         }
         let (close_event, report, report_created) = self
-          .append_closed(&guard, session_id, &fresh_meta, request_id, "cancelled", reason, &[], &[], actor, None)
+          .append_closed(
+            &guard,
+            CloseAppend {
+              session_id,
+              request_id,
+              outcome: "cancelled",
+              summary: reason,
+              result_refs: &[],
+              run_ids: &[],
+              actor,
+              report_to: fresh_meta.task_parent_id.as_deref(),
+              archived_with: None,
+              sequence_outcome: None,
+            },
+          )
           .await?;
         for run in &stoppable_runs {
           if !self.store().append_stop_request_locked(&guard, session_id, &run.id, &stop_request_id).await? {
@@ -1225,7 +1542,7 @@ impl TaskCompletion {
       return Err(StoreError::conflict(sorted_unique(blockers)));
     }
     if completing {
-      let blockers = self.verified_evidence_blockers(&pre_meta, evidence).await?;
+      let blockers = self.verified_evidence_blockers(&pre_meta, evidence, None).await?;
       if !blockers.is_empty() {
         return Err(StoreError::conflict(sorted_unique(blockers)));
       }
@@ -1256,15 +1573,18 @@ impl TaskCompletion {
       let (close_event, report, report_created) = self
         .append_closed(
           &guard,
-          session_id,
-          &fresh_meta,
-          request_id,
-          lifecycle_outcome,
-          &evidence.summary,
-          &evidence.result_refs,
-          &evidence.run_ids,
-          ACTOR_SYSTEM,
-          Some(sequence_outcome),
+          CloseAppend {
+            session_id,
+            request_id,
+            outcome: lifecycle_outcome,
+            summary: &evidence.summary,
+            result_refs: &evidence.result_refs,
+            run_ids: &evidence.run_ids,
+            actor: ACTOR_SYSTEM,
+            report_to: fresh_meta.task_parent_id.as_deref(),
+            archived_with: None,
+            sequence_outcome: Some(sequence_outcome),
+          },
         )
         .await?;
       (fresh_meta, close_event, report, report_created)
@@ -1346,6 +1666,7 @@ impl TaskCompletion {
               request_id,
               evidence: &evidence,
               actor: ACTOR_SYSTEM,
+              outcome: "archived",
               exclude_run_ids: &exclude_run_ids,
               exclude_input_ids: &claimed,
             },
@@ -1356,7 +1677,9 @@ impl TaskCompletion {
           Some(result) => Ok(result),
           None => return Ok(None),
         },
-        None => self.close_now(session_id, request_id, &evidence, ACTOR_SYSTEM, &exclude_run_ids, &claimed).await,
+        None => {
+          self.close_now(session_id, request_id, &evidence, ACTOR_SYSTEM, "archived", &exclude_run_ids, &claimed).await
+        }
       };
       match result {
         Ok(_) => {}
@@ -1494,7 +1817,15 @@ impl TaskCompletion {
       return Ok(replay);
     }
     self
-      .close_now(session_id, &effective_request_id, &effective_evidence, ACTOR_SYSTEM, &HashSet::new(), &HashSet::new())
+      .close_now(
+        session_id,
+        &effective_request_id,
+        &effective_evidence,
+        ACTOR_SYSTEM,
+        "completed",
+        &HashSet::new(),
+        &HashSet::new(),
+      )
       .await
   }
 }
@@ -1564,6 +1895,15 @@ impl SequenceCompletion for TaskCompletion {
     reason: &'a str,
   ) -> BoxFuture<'a, StoreResult<RestoreOutcome>> {
     Box::pin(async move { TaskCompletion::restore_chain_locked(self, guard, session_id, request_id, reason).await })
+  }
+
+  fn archive_unsuccessful_worker<'a>(
+    &'a self,
+    session_id: &'a str,
+    run_id: &'a str,
+    outcome: &'a str,
+  ) -> BoxFuture<'a, StoreResult<bool>> {
+    Box::pin(async move { TaskCompletion::archive_unsuccessful_worker(self, session_id, run_id, outcome).await })
   }
 }
 

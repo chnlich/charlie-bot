@@ -42,7 +42,7 @@ impl FromRequestParts<Arc<FeatureContext>> for RequiredTaskSession {
   }
 }
 
-/// Build the four task orchestration routes.
+/// Build the task orchestration routes.
 pub fn routes(features: &Arc<FeatureContext>) -> Router {
   Router::new()
     .route("/api/chat/{session_id}/upload", post_only(crate::upload::upload_file))
@@ -50,7 +50,7 @@ pub fn routes(features: &Arc<FeatureContext>) -> Router {
     .route("/api/chat/{session_id}/cancel", post_only(cancel_chat))
     .route("/api/sessions/{session_id}/retry", post_only(retry_run))
     .route("/api/sessions/{session_id}/runs/{run_id}/cancel", post_only(cancel_run))
-    .route("/api/sessions/{session_id}/complete", post_only(complete_task))
+    .route("/api/sessions/{session_id}/archive", post_only(archive_task))
     .route("/api/sessions/{session_id}/cancel", post_only(cancel_task))
     .route("/api/sessions/{session_id}/task-inputs/acknowledge", post_only(acknowledge_task_inputs))
     .route("/api/sessions/{session_id}/unarchive", post_only(unarchive_task))
@@ -66,7 +66,7 @@ pub fn matches(path: &str) -> bool {
     ["", "api", "chat", session_id, "upload" | "message" | "cancel"] => !session_id.is_empty(),
     ["", "api", "sessions", session_id, "retry"] => !session_id.is_empty(),
     ["", "api", "sessions", session_id, "runs", run_id, "cancel"] => !session_id.is_empty() && !run_id.is_empty(),
-    ["", "api", "sessions", session_id, "complete" | "cancel" | "unarchive"] => !session_id.is_empty(),
+    ["", "api", "sessions", session_id, "archive" | "cancel" | "unarchive"] => !session_id.is_empty(),
     ["", "api", "sessions", session_id, "task-inputs", "acknowledge"] => !session_id.is_empty(),
     ["", "api", "internal", "delegate" | "session-message"] => true,
     _ => false,
@@ -949,8 +949,8 @@ async fn cancel_run(
   )
 }
 
-/// The POST /api/sessions/{session_id}/complete body model (`src/infra/models.py::CompleteTaskRequest`).
-const COMPLETE_TASK_BODY: BodyModel = BodyModel::required(&[
+/// The POST /api/sessions/{session_id}/archive body model (`src/infra/models.py::ArchiveTaskRequest`).
+const ARCHIVE_TASK_BODY: BodyModel = BodyModel::required(&[
   Field::required("request_id", FieldType::String),
   Field::optional("summary", FieldType::String),
   Field::optional("result_refs", FieldType::StringList),
@@ -1014,12 +1014,14 @@ fn optional_validated_string_list(fields: &Value, name: &str) -> Vec<String> {
   }
 }
 
-async fn complete_task(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
+/// `POST /api/sessions/{session_id}/archive`: an operator archives the open subtree; an agent's own manager task
+/// archives after its Run succeeds. Both paths reach the one completion owner.
+async fn archive_task(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
   let (meta, caller, body) = match body_session_caller(&features, request).await {
     Ok(parts) => parts,
     Err(response) => return response,
   };
-  let fields = match body.validate(&COMPLETE_TASK_BODY) {
+  let fields = match body.validate(&ARCHIVE_TASK_BODY) {
     Ok(Some(fields)) => fields,
     Ok(None) => unreachable!("a required model body is present after validation"),
     Err(response) => return *response,
@@ -1034,12 +1036,14 @@ async fn complete_task(State(features): State<Arc<FeatureContext>>, request: Req
     ..CompletionEvidence::default()
   };
   let (status, payload) =
-    match completion.complete_task(&meta.id, &validated_string(&fields, "request_id"), &evidence, &caller).await {
+    match completion.archive_task(&meta.id, &validated_string(&fields, "request_id"), &evidence, &caller).await {
       Ok(result) => result,
       Err(error) => return task_http_error(error),
     };
-  if status == 202 {
-    return responses::json(StatusCode::ACCEPTED, &payload);
+  // An operator archive names the ids it archived; every other outcome answers the session detail.
+  if status == 202 || payload.get("archived").is_some() {
+    let status_code = if status == 202 { StatusCode::ACCEPTED } else { StatusCode::OK };
+    return responses::json(status_code, &payload);
   }
   let detail = match features.store.session_detail(&meta.id) {
     Ok(detail) => detail,
@@ -1413,9 +1417,9 @@ mod tests {
         StatusCode::UNAUTHORIZED,
       ),
     ];
-    // The four task-completion routes take the session first, so an unknown session is 404, not 401.
+    // The three task-completion routes take the session first, so an unknown session is 404, not 401.
     let session_first_route_cases = [
-      ("/api/sessions/synthetic-session/complete", r#"{"request_id":"synthetic-request"}"#),
+      ("/api/sessions/synthetic-session/archive", r#"{"request_id":"synthetic-request"}"#),
       ("/api/sessions/synthetic-session/cancel", r#"{"request_id":"synthetic-request","reason":"synthetic"}"#),
       (
         "/api/sessions/synthetic-session/task-inputs/acknowledge",
@@ -1442,6 +1446,11 @@ mod tests {
       let post = send(&router, Method::POST, path, post_body).await;
       assert_eq!(post.status(), expected_status, "POST {path} must reach its handler");
     }
+
+    // The removed close route is absent, as Python's archive-only contract leaves it.
+    let removed =
+      send(&router, Method::POST, "/api/sessions/synthetic-session/complete", r#"{"request_id":"gone"}"#).await;
+    assert_eq!(removed.status(), StatusCode::NOT_FOUND);
 
     for (path, post_body) in session_first_route_cases {
       let head = send(&router, Method::HEAD, path, "").await;

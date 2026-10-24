@@ -218,27 +218,6 @@ async fn rate_round(
   }
 }
 
-pub(crate) async fn archive_session(
-  State(features): State<Arc<FeatureContext>>,
-  AxumPath(session_id): AxumPath<String>,
-  request: Request<Body>,
-) -> Response {
-  let caller = match resolve_request_caller(&request, &features) {
-    Ok(caller) => caller,
-    Err(response) => return response,
-  };
-  if !caller.is_operator() {
-    return responses::json(
-      StatusCode::FORBIDDEN,
-      &json!({"detail": "archiving a task requires operator credentials"}),
-    );
-  }
-  match features.store.archive_subtree(&session_id, TaskCaller::Operator).await {
-    Ok(archived) => responses::fast_json(StatusCode::OK, &json!({"archived": archived})),
-    Err(error) => task_http_error(error),
-  }
-}
-
 async fn delete_session_permanently(
   State(features): State<Arc<FeatureContext>>,
   AxumPath(session_id): AxumPath<String>,
@@ -573,13 +552,11 @@ mod tests {
   }
 
   #[tokio::test(flavor = "current_thread")]
-  async fn task_delete_routes_match_scope_errors_broadcast_and_permanent_guards() {
+  async fn permanent_delete_routes_match_scope_errors_and_guards() {
     let (_home, features) = feature_context();
-    for session_id in ["archive-session", "queued-archive", "permanent-session", "permanent-conflict", "agent-session"]
-    {
+    for session_id in ["permanent-session", "permanent-conflict", "agent-session"] {
       add_task(&features, session_id).await;
     }
-    add_run(&features, "queued-archive", "queued-run", false);
     add_run(&features, "agent-session", "agent-run", true);
     let token = run_token::sign_run_token(
       &RunTokenClaims {
@@ -594,30 +571,6 @@ mod tests {
     let router = crate::routes::routes(&features);
     let messages = Arc::new(StdMutex::new(Vec::new()));
     let _capture = charliebot_core::test_support::install_events(Arc::new(MessageCapture(Arc::clone(&messages))));
-
-    let mut sidebar = features.store.subscribe(charliebot_store::streaming::SIDEBAR_CHANNEL);
-    let (status, body) = send(&router, Method::DELETE, "/api/sessions/archive-session", None, None).await;
-    assert_eq!(status, StatusCode::OK, "archive response: {body}");
-    assert_eq!(body, json!({"archived": ["archive-session"]}));
-    let frame: Value = serde_json::from_str(&sidebar.recv().await.unwrap()).unwrap();
-    assert_eq!(
-      frame,
-      json!({"type": "task_tree_changed", "session_id": "archive-session", "fact_type": "task_closed"})
-    );
-
-    let (status, body) = send(&router, Method::DELETE, "/api/sessions/missing-session", None, None).await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
-    assert_eq!(body, json!({"detail": "task missing-session not found"}));
-    let (status, body) = send(&router, Method::DELETE, "/api/sessions/archive-session", None, Some(&agent_auth)).await;
-    assert_eq!(status, StatusCode::FORBIDDEN);
-    assert_eq!(body, json!({"detail": "archiving a task requires operator credentials"}));
-    let (status, body) =
-      send(&router, Method::DELETE, "/api/sessions/archive-session", None, Some("Bearer broken")).await;
-    assert_eq!(status, StatusCode::UNAUTHORIZED);
-    assert_eq!(body, json!({"detail": "invalid run token: malformed run token"}));
-    let (status, body) = send(&router, Method::DELETE, "/api/sessions/queued-archive", None, None).await;
-    assert_eq!(status, StatusCode::CONFLICT);
-    assert_eq!(body["detail"]["blockers"], json!(["queued-archive: run queued-run is queued (pending dispatch)"]));
 
     let conflict_path = features.store.chat_events_path("permanent-conflict");
     fs::create_dir_all(conflict_path.parent().unwrap()).unwrap();
@@ -642,6 +595,16 @@ mod tests {
     assert_eq!(body, Value::Null);
     assert!(!features.store.session_dir("permanent-session").exists());
     assert!(messages.lock().unwrap().iter().any(|message| message == "session_deleted_permanently"));
+  }
+
+  #[tokio::test(flavor = "current_thread")]
+  async fn the_removed_archive_delete_route_answers_405() {
+    // Python: tests/test_archive_api.py::test_removed_close_routes_are_absent.
+    let (_home, features) = feature_context();
+    add_task(&features, "removed-delete").await;
+    let router = crate::routes::routes(&features);
+    let (status, _) = send(&router, Method::DELETE, "/api/sessions/removed-delete", None, None).await;
+    assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
   }
 
   fn stored_resource_class(features: &FeatureContext, session_id: &str) -> Value {

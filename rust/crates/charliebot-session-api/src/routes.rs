@@ -50,10 +50,7 @@ pub(crate) fn routes(features: &Arc<FeatureContext>) -> Router {
     .merge(crate::detail::routes())
     .route(
       "/api/sessions/{session_id}",
-      refuse_other_methods(
-        get(crate::detail::session_detail).delete(crate::writes::archive_session).patch(write_routes::patch_session),
-        "GET",
-      ),
+      refuse_other_methods(get(crate::detail::session_detail).patch(write_routes::patch_session), "GET"),
     )
     .with_state(Arc::clone(features))
 }

@@ -246,6 +246,14 @@ pub trait SequenceCompletion: Send + Sync {
     request_id: &'a str,
     reason: &'a str,
   ) -> BoxFuture<'a, StoreResult<RestoreOutcome>>;
+
+  /// Archive a failed worker whose report has landed, when the completion owner finds no remaining work.
+  fn archive_unsuccessful_worker<'a>(
+    &'a self,
+    session_id: &'a str,
+    run_id: &'a str,
+    outcome: &'a str,
+  ) -> BoxFuture<'a, StoreResult<bool>>;
 }
 
 /// Session-event aggregation calls exposed to sequence controllers.
@@ -331,14 +339,6 @@ pub trait SequenceTree: Send + Sync {
   fn session_events(&self) -> &dyn SequenceSessionEvents;
 
   fn executor(&self) -> Option<Arc<dyn SequenceExecutor>>;
-
-  fn archive_unsuccessful_worker<'a>(
-    &'a self,
-    guard: &'a ControlGuard,
-    session_id: &'a str,
-    run_id: &'a str,
-    outcome: &'a str,
-  ) -> BoxFuture<'a, StoreResult<bool>>;
 }
 
 /// The task-tree handle backed by one store instance.
@@ -467,16 +467,6 @@ impl SequenceTree for StoreSequenceTree {
 
   fn executor(&self) -> Option<Arc<dyn SequenceExecutor>> {
     self.runtime.executor.as_ref().map(Arc::clone)
-  }
-
-  fn archive_unsuccessful_worker<'a>(
-    &'a self,
-    guard: &'a ControlGuard,
-    session_id: &'a str,
-    run_id: &'a str,
-    outcome: &'a str,
-  ) -> BoxFuture<'a, StoreResult<bool>> {
-    Box::pin(async move { self.store.archive_unsuccessful_worker(guard, session_id, run_id, outcome).await })
   }
 }
 
@@ -641,6 +631,15 @@ mod tests {
       _request_id: &'a str,
       _reason: &'a str,
     ) -> BoxFuture<'a, StoreResult<RestoreOutcome>> {
+      Box::pin(async { Err(StoreError::new("completion test seam was called")) })
+    }
+
+    fn archive_unsuccessful_worker<'a>(
+      &'a self,
+      _session_id: &'a str,
+      _run_id: &'a str,
+      _outcome: &'a str,
+    ) -> BoxFuture<'a, StoreResult<bool>> {
       Box::pin(async { Err(StoreError::new("completion test seam was called")) })
     }
   }

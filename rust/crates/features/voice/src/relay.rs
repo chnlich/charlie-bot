@@ -66,14 +66,26 @@ pub(crate) fn handler(features: Arc<FeatureContext>, request: WebSocketRequest) 
 
 async fn relay_preview(
   writer: SocketWriter,
-  mut reader: SplitStream<WebSocket>,
+  reader: SplitStream<WebSocket>,
   config: Arc<CharlieBotConfig>,
   vocabulary: Vec<String>,
   languages: Vec<String>,
   session_id: String,
   backend: Backend,
 ) {
-  let queue = AudioQueue::new();
+  relay_preview_with_queue(writer, reader, config, vocabulary, languages, session_id, backend, AudioQueue::new()).await;
+}
+
+async fn relay_preview_with_queue(
+  writer: SocketWriter,
+  mut reader: SplitStream<WebSocket>,
+  config: Arc<CharlieBotConfig>,
+  vocabulary: Vec<String>,
+  languages: Vec<String>,
+  session_id: String,
+  backend: Backend,
+  queue: Arc<AudioQueue>,
+) {
   let (cancel, _) = watch::channel(false);
   let (events, event_receiver) = mpsc::unbounded_channel::<TranscriptEvent>();
   let backend_id = backend.id().to_string();
@@ -468,9 +480,12 @@ mod tests {
   use tokio_tungstenite::tungstenite::Message as ServerMessage;
   use tokio_tungstenite::{WebSocketStream, accept_async, connect_async};
 
+  use crate::audio::MAX_RECORDING_SAMPLES;
+
   struct RelayTestState {
     config: Arc<CharlieBotConfig>,
     endpoint_url: String,
+    max_recording_samples: usize,
   }
 
   struct RelayTestServer {
@@ -492,7 +507,7 @@ mod tests {
   async fn relay_test_handler(State(state): State<Arc<RelayTestState>>, upgrade: WebSocketUpgrade) -> Response {
     upgrade.max_message_size(16_777_216).max_frame_size(16_777_216).on_upgrade(move |socket| async move {
       let (writer, reader) = socket.split();
-      relay_preview(
+      relay_preview_with_queue(
         Arc::new(Mutex::new(writer)),
         reader,
         Arc::clone(&state.config),
@@ -500,12 +515,13 @@ mod tests {
         Vec::new(),
         "synthetic-session".to_string(),
         Backend::gemini_for_test("synthetic-key", &state.endpoint_url),
+        AudioQueue::new_with_recording_budget_for_test(state.max_recording_samples * 2),
       )
       .await;
     })
   }
 
-  async fn start_relay_test(mode: FakeMode) -> RelayTestServer {
+  async fn start_relay_test(mode: FakeMode, max_recording_samples: usize) -> RelayTestServer {
     let backend_listener = TcpListener::bind("127.0.0.1:0").await.expect("bind a fake backend listener");
     let endpoint_url = format!("ws://{}", backend_listener.local_addr().expect("read fake backend address"));
     let (provider_connected_tx, provider_connected) = oneshot::channel();
@@ -564,7 +580,7 @@ mod tests {
     let mut registry = charliebot_registry::Registry::new();
     registry.register_package("src.features.voice", crate::register).expect("register the voice config section");
     let config = Arc::new(registry.load_config(home.path()).expect("load synthetic voice config"));
-    let state = Arc::new(RelayTestState { config: Arc::clone(&config), endpoint_url });
+    let state = Arc::new(RelayTestState { config: Arc::clone(&config), endpoint_url, max_recording_samples });
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind the relay test server");
     let address = listener.local_addr().expect("read relay server address");
     let app = Router::new().route("/ws", get(relay_test_handler)).with_state(state);
@@ -598,7 +614,7 @@ mod tests {
 
   #[tokio::test]
   async fn provider_connection_opens_before_browser_audio_arrives() {
-    let mut server = start_relay_test(FakeMode::NeverFinal).await;
+    let mut server = start_relay_test(FakeMode::NeverFinal, MAX_RECORDING_SAMPLES).await;
     let mut browser = browser_socket(server.address).await;
     tokio::time::timeout(Duration::from_secs(3), &mut server.provider_connected)
       .await
@@ -641,7 +657,7 @@ mod tests {
 
   #[tokio::test]
   async fn relay_archives_audio_and_transcript_before_the_final_frame() {
-    let server = start_relay_test(FakeMode::FinalAfterEnd).await;
+    let server = start_relay_test(FakeMode::FinalAfterEnd, MAX_RECORDING_SAMPLES).await;
     let mut browser = browser_socket(server.address).await;
     browser.send(ClientMessage::Binary(vec![1, 2, 3, 4].into())).await.expect("send one audio frame");
     browser
@@ -680,7 +696,7 @@ mod tests {
 
   #[tokio::test]
   async fn overflow_sends_one_error_then_drains_until_browser_close() {
-    let server = start_relay_test(FakeMode::NeverFinal).await;
+    let server = start_relay_test(FakeMode::NeverFinal, MAX_RECORDING_SAMPLES).await;
     let mut browser = browser_socket(server.address).await;
     let oversized = vec![0_u8; PREVIEW_QUEUE_SECONDS * crate::audio::SAMPLE_RATE * 2 + 1];
     browser.send(ClientMessage::Binary(oversized.into())).await.expect("send an overflowing frame");
@@ -698,7 +714,7 @@ mod tests {
 
   #[tokio::test]
   async fn frame_after_end_cancels_the_backend_and_returns_the_protocol_error() {
-    let server = start_relay_test(FakeMode::NeverFinal).await;
+    let server = start_relay_test(FakeMode::NeverFinal, MAX_RECORDING_SAMPLES).await;
     let mut browser = browser_socket(server.address).await;
     browser.send(ClientMessage::Binary(vec![1, 2].into())).await.expect("send audio");
     browser.send(ClientMessage::Text(r#"{"type":"end"}"#.into())).await.expect("seal the recording");
@@ -714,7 +730,7 @@ mod tests {
 
   #[tokio::test]
   async fn backend_final_before_end_is_reported_and_never_archived() {
-    let server = start_relay_test(FakeMode::FinalBeforeEnd).await;
+    let server = start_relay_test(FakeMode::FinalBeforeEnd, MAX_RECORDING_SAMPLES).await;
     let mut browser = browser_socket(server.address).await;
     browser.send(ClientMessage::Binary(vec![1, 2].into())).await.expect("send audio");
     assert_eq!(
@@ -732,13 +748,36 @@ mod tests {
 
   #[tokio::test]
   async fn disconnect_after_end_abandons_without_archiving() {
-    let server = start_relay_test(FakeMode::NeverFinal).await;
+    let server = start_relay_test(FakeMode::NeverFinal, MAX_RECORDING_SAMPLES).await;
     let mut browser = browser_socket(server.address).await;
     browser.send(ClientMessage::Binary(vec![1, 2].into())).await.expect("send audio");
     browser.send(ClientMessage::Text(r#"{"type":"end"}"#.into())).await.expect("seal the recording");
     browser.close(None).await.expect("disconnect before backend final");
     tokio::time::sleep(Duration::from_millis(50)).await;
     assert!(!voice_dir(&server.config).exists(), "an abandoned recording has no archive");
+    stop_relay_test(server).await;
+  }
+
+  #[tokio::test]
+  async fn test_frames_past_the_cap_are_cut_sample_exactly() {
+    let server = start_relay_test(FakeMode::FinalAfterEnd, 3072).await;
+    let mut browser = browser_socket(server.address).await;
+    let frame = vec![0x2a_u8; 2048 * 2];
+    for _ in 0..3 {
+      browser.send(ClientMessage::Binary(frame.clone().into())).await.expect("send one live audio frame");
+    }
+    browser.send(ClientMessage::Text(r#"{"type":"end"}"#.into())).await.expect("seal the recording");
+    assert_eq!(receive_json_frame(&mut browser).await["type"], "partial");
+    assert_eq!(receive_json_frame(&mut browser).await, json!({ "type": "final", "text": "synthetic final" }));
+
+    let wav = std::fs::read_dir(voice_dir(&server.config))
+      .expect("read the archived voice directory")
+      .map(|entry| entry.expect("read archive entry").path())
+      .find(|path| path.extension().is_some_and(|extension| extension == "wav"))
+      .expect("the fake live backend archived one WAV");
+    let wav_bytes = std::fs::read(wav).expect("read the archived WAV");
+    assert_eq!(&wav_bytes[44..], [frame.as_slice(), &frame[..2048]].concat());
+    browser.close(None).await.expect("close browser WebSocket");
     stop_relay_test(server).await;
   }
 }

@@ -12,6 +12,7 @@ import pathlib
 import re
 import signal
 import sys
+import threading
 import time
 import urllib.parse
 
@@ -19,6 +20,9 @@ _ARGV_VALUE = re.compile(r"\$\{argv:(?P<flag>[^}]+)\}")
 _PDEATHSIG_OPTION = 2
 # The SIGTERM dispositions a `sigterm` step names; scenario_file.py accepts the same two words.
 _SIGTERM_DISPOSITIONS = {"ignore": signal.SIG_IGN, "default": signal.SIG_DFL}
+_STDOUT_LOCK = threading.Lock()
+# How long a stream-json run waits for stdin to close after its steps. The server closes stdin on the turn's result.
+STDIN_EOF_TIMEOUT_SECONDS = 5.0
 
 
 class MissingArgvFlag(ValueError):  # noqa: N818
@@ -127,8 +131,55 @@ def _spawn_record(index: int, name: str, scripted: bool, stdin_bytes: bytes) -> 
   }
 
 
-def _read_stdin() -> bytes:
+def _read_stdin_line() -> bytes:
+  return b"" if sys.stdin.isatty() else sys.stdin.buffer.readline()
+
+
+def _read_stdin_rest() -> bytes:
   return b"" if sys.stdin.isatty() else sys.stdin.buffer.read()
+
+
+def _is_stream_json(first_line: bytes) -> bool:
+  """Whether stdin is a stream-json session: its first line is a JSON user message, not a plain prompt."""
+  try:
+    message = json.loads(first_line)
+  except ValueError:
+    return False
+  return isinstance(message, dict) and message.get("type") == "user"
+
+
+def _emit_line(text: str) -> None:
+  """Write one stdout line; the stdin echo thread and the scripted steps share stdout."""
+  with _STDOUT_LOCK:
+    sys.stdout.write(text + "\n")
+    sys.stdout.flush()
+
+
+def _echo_user_line(line: bytes) -> None:
+  """Echo a stdin user message as Claude's replay of it, the line the server matches against its own write."""
+  message = json.loads(line)
+  if message.get("type") != "user":
+    raise ValueError(f"stream-json stdin line is not a user message: {line[:80]!r}")
+  replay = {"type": "user", "isReplay": True, "uuid": message["uuid"], "message": message.get("message")}
+  _emit_line(json.dumps(replay, ensure_ascii=False, separators=(",", ":")))
+
+
+class _StdinEcho:
+  """Echoes each stream-json user line as it arrives, so a turn can take input while its steps run."""
+
+  def __init__(self) -> None:
+    self._thread = threading.Thread(target=self._run, daemon=True)
+
+  def start(self) -> None:
+    self._thread.start()
+
+  def _run(self) -> None:
+    for line in sys.stdin.buffer:
+      _echo_user_line(line)
+
+  def join(self) -> None:
+    # The server closes stdin when the turn's result arrives, so the reader reaches EOF after the steps.
+    self._thread.join(timeout=STDIN_EOF_TIMEOUT_SECONDS)
 
 
 def _start_index(agent_dir: pathlib.Path, name: str, stdin_bytes: bytes) -> tuple[int, bool, dict | None]:
@@ -178,8 +229,7 @@ def _run_steps(entry: dict, agent_dir: pathlib.Path, index: int) -> int:
       event = _substitute(step["emit"])
       if not isinstance(event, dict):
         raise ValueError("emit step must resolve to a JSON object")
-      sys.stdout.write(json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n")
-      sys.stdout.flush()
+      _emit_line(json.dumps(event, ensure_ascii=False, separators=(",", ":")))
     elif "gate" in step:
       gate = step["gate"]
       (agent_dir / f"at-{gate}").write_text(str(index), encoding="utf-8")
@@ -359,7 +409,17 @@ def main() -> int:
   name = sys.argv[1]
   agent_dir = pathlib.Path.home() / "fake-agent"
   agent_dir.mkdir(parents=True, exist_ok=True)
-  stdin_bytes = _read_stdin()
+  # A stream-json stdin stays open until the turn's result, so its lines are read as they arrive; any other stdin is
+  # one prompt that ends at EOF, read whole before the spawn is recorded.
+  stdin_head = _read_stdin_line()
+  stream_json = _is_stream_json(stdin_head)
+  if stream_json:
+    stdin_bytes = stdin_head
+    _echo_user_line(stdin_head)
+    stdin_echo = _StdinEcho()
+    stdin_echo.start()
+  else:
+    stdin_bytes = stdin_head + _read_stdin_rest()
   index, scripted, entry = _start_index(agent_dir, name, stdin_bytes)
   if not scripted:
     print(f"{name}: parity stand-in, not an agent CLI", file=sys.stderr)
@@ -385,6 +445,8 @@ def main() -> int:
     except Exception as error:
       print(f"{name}: {type(error).__name__}: {error}", file=sys.stderr)
       exit_code = 2
+    if stream_json:
+      stdin_echo.join()
   _write_exit(agent_dir, index, exit_code)
   return exit_code
 

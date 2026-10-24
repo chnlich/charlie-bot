@@ -115,12 +115,7 @@ impl CompletionHarness {
   }
 
   async fn finish(&self, session_id: &str, run_id: &str, outcome: RunOutcomeKind) {
-    self
-      .base
-      .dispatcher
-      .finish_run(session_id, run_id, RunOutcome::new(outcome))
-      .await
-      .expect("run finish fact is written");
+    self.dispatcher.finish_run(session_id, run_id, RunOutcome::new(outcome)).await.expect("run finish fact is written");
   }
 
   async fn post(&self, path: &str, payload: Value) -> (StatusCode, Value) {
@@ -167,6 +162,16 @@ fn live_run(session_id: &str, run_id: &str, kind: RunKind) -> RunRecord {
   run.pid = Some(std::process::id());
   run.pid_start = Some(proc_identity::read_pid_stat(std::process::id()).expect("test process exists").pid_start);
   run.started_at = Some(UtcDateTime::now());
+  run
+}
+
+fn iteration_run(session_id: &str, run_id: &str) -> RunRecord {
+  let mut run = live_run(session_id, run_id, RunKind::Iteration);
+  run.sequence_ref = Some(charliebot_store::run_records::SequenceRef {
+    kind: "improve".to_string(),
+    owner_ref: "improve:synthetic".to_string(),
+    position: 0,
+  });
   run
 }
 
@@ -225,8 +230,12 @@ async fn three_level_delivery_closes_workers_and_keeps_project_open() {
   drop(guard);
   assert_eq!(claimed.len(), 1);
   h.finish(&manager.id, "manager-run", RunOutcomeKind::Success).await;
-  h.completion
-    .complete_task(
+
+  // Archiving the feature leaves the project open; the feature's report lands on the project with summary,
+  // evidence refs, outcome archived, and its node id.
+  let (status, payload) = h
+    .completion
+    .archive_task(
       &manager.id,
       "manager-close",
       &evidence("delegation delivered", &["run:manager-run"], &["manager-run"]),
@@ -234,8 +243,220 @@ async fn three_level_delivery_closes_workers_and_keeps_project_open() {
     )
     .await
     .unwrap();
-  assert_eq!(h.base.store.task_state(&manager.id).unwrap(), "completed");
+  assert_eq!(status, 200);
+  assert_eq!(payload, json!({"archived": [manager.id.clone()]}));
+  assert_eq!(h.base.store.task_state(&manager.id).unwrap(), "archived");
   assert_eq!(h.base.store.task_state(&root.id).unwrap(), "open");
+  let root_events = h.base.store.load_all_facts(&root.id).unwrap();
+  let reports = root_events
+    .iter()
+    .filter(|event| {
+      event["type"] == event_types::CHILD_REPORT && event["child_session_id"].as_str() == Some(manager.id.as_str())
+    })
+    .collect::<Vec<_>>();
+  assert_eq!(reports.len(), 1);
+  assert_eq!(reports[0]["outcome"], "archived");
+  assert_eq!(reports[0]["summary"], "delegation delivered");
+  assert_eq!(reports[0]["result_refs"].to_value(), json!(["run:manager-run"]));
+
+  // A repeated archive writes no new facts; the archived target replays its close.
+  let (status_again, payload_again) = h
+    .completion
+    .archive_task(
+      &manager.id,
+      "manager-close",
+      &evidence("delegation delivered", &["run:manager-run"], &["manager-run"]),
+      &CallerIdentity::Operator { session_id: None },
+    )
+    .await
+    .unwrap();
+  assert_eq!(status_again, 200);
+  let closes = h
+    .base
+    .store
+    .load_all_facts(&manager.id)
+    .unwrap()
+    .into_iter()
+    .filter(|event| event["type"] == event_types::TASK_CLOSED)
+    .collect::<Vec<_>>();
+  assert_eq!(payload_again["closed_event_id"], closes[0]["id"].to_value());
+  assert_eq!(closes.len(), 1);
+}
+
+#[tokio::test]
+async fn operator_archive_of_child_delivers_one_report_and_wakes_parent() {
+  // Python: tests/test_archive_unify.py::test_operator_archive_of_child_delivers_one_report_and_wakes_parent.
+  let h = CompletionHarness::new();
+  let root = h.base.create_task("root", None, TaskProfile::Manager, "Root").await;
+  let child = h.base.create_task("child", Some(&root.id), TaskProfile::Manager, "Child").await;
+  let descendant = h.base.create_task("descendant", Some(&child.id), TaskProfile::Worker, "Descendant").await;
+  let wakes = Arc::new(AtomicUsize::new(0));
+  h.dispatcher.set_executor(Some(Arc::new(WakeCountingExecutor(Arc::clone(&wakes)))));
+
+  let archived = h
+    .completion
+    .archive_subtree(
+      &child.id,
+      Some("archive-child"),
+      "archived by the user",
+      &[],
+      &[],
+      &CallerIdentity::Operator { session_id: None },
+    )
+    .await
+    .unwrap();
+
+  assert_eq!(archived, [child.id.clone(), descendant.id.clone()]);
+  let child_close = h
+    .base
+    .store
+    .load_all_facts(&child.id)
+    .unwrap()
+    .into_iter()
+    .find(|event| event["type"] == event_types::TASK_CLOSED)
+    .unwrap();
+  assert_eq!(child_close["report_to"], root.id);
+  let descendant_close = h
+    .base
+    .store
+    .load_all_facts(&descendant.id)
+    .unwrap()
+    .into_iter()
+    .find(|event| event["type"] == event_types::TASK_CLOSED)
+    .unwrap();
+  assert_eq!(descendant_close["report_to"].to_value(), Value::Null);
+  assert_eq!(descendant_close["archived_with"], child.id);
+  let reports = h
+    .base
+    .store
+    .load_all_facts(&root.id)
+    .unwrap()
+    .into_iter()
+    .filter(|event| event["type"] == event_types::CHILD_REPORT)
+    .collect::<Vec<_>>();
+  assert_eq!(reports.len(), 1);
+  assert_eq!(reports[0]["child_session_id"], child.id);
+  assert_eq!(reports[0]["child_event_id"], child_close["id"]);
+  assert_eq!(reports[0]["outcome"], "archived");
+  assert_eq!(reports[0]["summary"], "archived by the user");
+  assert_eq!(wakes.load(Ordering::SeqCst), 1, "the parent is woken once for the one report");
+}
+
+#[tokio::test]
+async fn archived_parent_keeps_child_archive_report_as_history_without_waking() {
+  // Python: tests/test_archive_unify.py::test_archived_parent_keeps_child_archive_report_as_history_without_waking.
+  let h = CompletionHarness::new();
+  let root = h.base.create_task("root", None, TaskProfile::Manager, "Root").await;
+  let child = h.base.create_task("child", Some(&root.id), TaskProfile::Manager, "Child").await;
+  let root_close = h.completion.archived_close_event(
+    &root.id,
+    "archive-root",
+    "archived by the user",
+    None,
+    None,
+    ACTOR_USER,
+    &[],
+    &[],
+  );
+  let guard = h.base.store.control_lock().await;
+  h.base.store.append_control_fact(&guard, &root.id, root_close).await.unwrap();
+  drop(guard);
+  h.base.store.invalidate_tree_index();
+  let wakes = Arc::new(AtomicUsize::new(0));
+  h.dispatcher.set_executor(Some(Arc::new(WakeCountingExecutor(Arc::clone(&wakes)))));
+
+  h.completion
+    .archive_subtree(
+      &child.id,
+      Some("archive-child"),
+      "archived by the user",
+      &[],
+      &[],
+      &CallerIdentity::Operator { session_id: None },
+    )
+    .await
+    .unwrap();
+
+  let reports = h
+    .base
+    .store
+    .load_all_facts(&root.id)
+    .unwrap()
+    .into_iter()
+    .filter(|event| event["type"] == event_types::CHILD_REPORT)
+    .collect::<Vec<_>>();
+  assert_eq!(reports.len(), 1);
+  assert_eq!(reports[0]["outcome"], "archived");
+  let child_close_id = h
+    .base
+    .store
+    .load_all_facts(&child.id)
+    .unwrap()
+    .into_iter()
+    .find(|event| event["type"] == event_types::TASK_CLOSED)
+    .unwrap()["id"]
+    .as_str()
+    .expect("the close fact id is a string")
+    .to_string();
+  assert!(h.base.store.facts_of(&root.id).unwrap().delivered_reports.contains(&(child.id.clone(), child_close_id)));
+  assert_eq!(h.base.store.task_state(&root.id).unwrap(), "archived");
+  assert!(h.dispatcher.pending_inputs(&root.id).unwrap().is_empty());
+  assert_eq!(wakes.load(Ordering::SeqCst), 0, "an archived parent wakes nobody");
+  assert!(
+    h.base.store.load_all_facts(&root.id).unwrap().iter().all(|event| event["type"] != event_types::TASK_REOPENED)
+  );
+}
+
+#[tokio::test]
+async fn preexisting_close_request_closes_as_archived_and_reports_to_parent() {
+  // Python: tests/test_task_completion.py::test_preexisting_close_request_closes_as_archived_and_reports_to_parent.
+  let h = CompletionHarness::new();
+  let root = h.base.create_task("root", None, TaskProfile::Manager, "Root").await;
+  let manager = h.base.create_task("manager", Some(&root.id), TaskProfile::Manager, "Manager").await;
+  h.register_record(live_run(&manager.id, "run-manager", RunKind::ManagerTurn)).await;
+  let request_id = "saved-before-archive-route";
+  let request = control_events::build_control_event(
+    event_types::TASK_CLOSE_REQUESTED,
+    ACTOR_SYSTEM,
+    &manager.id,
+    Some(&control_events::stable_close_request_event_id(&manager.id, request_id)),
+    None,
+    [
+      ("request_id".to_string(), json!(request_id)),
+      ("owner_run_id".to_string(), json!("run-manager")),
+      ("summary".to_string(), json!("finished the task")),
+      ("result_refs".to_string(), json!(["report:finished"])),
+      ("run_ids".to_string(), json!([])),
+    ],
+  );
+  let guard = h.base.store.control_lock().await;
+  h.base.store.append_control_fact(&guard, &manager.id, request).await.unwrap();
+  drop(guard);
+  h.base.store.invalidate_tree_index();
+
+  h.finish(&manager.id, "run-manager", RunOutcomeKind::Success).await;
+
+  let closes = h
+    .base
+    .store
+    .load_all_facts(&manager.id)
+    .unwrap()
+    .into_iter()
+    .filter(|event| event["type"] == event_types::TASK_CLOSED)
+    .collect::<Vec<_>>();
+  assert_eq!(closes.len(), 1);
+  assert_eq!(closes[0]["outcome"], "archived");
+  assert_eq!(closes[0]["report_to"], root.id);
+  let reports = h
+    .base
+    .store
+    .load_all_facts(&root.id)
+    .unwrap()
+    .into_iter()
+    .filter(|event| event["type"] == event_types::CHILD_REPORT)
+    .collect::<Vec<_>>();
+  assert_eq!(reports.len(), 1);
+  assert_eq!(reports[0]["outcome"], "archived");
 }
 
 #[tokio::test]
@@ -266,18 +487,12 @@ async fn implement_completion_requires_review_and_landing_evidence() {
   h.register_record(work).await;
   h.finish(&task.id, "work-run", RunOutcomeKind::Success).await;
 
-  let blocked = h
+  let meta = h.base.store.load_task_meta(&task.id).await.unwrap();
+  let blockers = h
     .completion
-    .complete_task(
-      &task.id,
-      "blocked-implement",
-      &evidence("implementation", &["run:work-run"], &["work-run"]),
-      &CallerIdentity::Operator { session_id: None },
-    )
-    .await;
-  let Err(StoreError::Conflict(blockers)) = blocked else {
-    panic!("implement delivery must require review and landing")
-  };
+    .verified_evidence_blockers(&meta, &evidence("implementation", &["run:work-run"], &["work-run"]), None)
+    .await
+    .unwrap();
   assert!(blockers.contains(&"implement completion requires a successful review run of this task".to_string()));
   assert!(blockers.contains(&"implement completion requires target-branch landing evidence".to_string()));
 
@@ -293,17 +508,18 @@ async fn implement_completion_requires_review_and_landing_evidence() {
     Some(LandingEvidence { branch: "main".into(), commit, repo_path: Some(repo.to_string_lossy().into_owned()) });
   assert_eq!(
     h.completion
-      .complete_task(&task.id, "valid-implement", &complete, &CallerIdentity::Operator { session_id: None })
+      .evaluate_automatic_completion(&task.id, "work-run", None, None, Some("valid-implement"), Some(&complete))
       .await
       .unwrap()
       .0,
     200
   );
+  assert_eq!(h.base.store.task_state(&task.id).unwrap(), "completed");
 }
 
 #[tokio::test]
-async fn forged_landing_ref_keeps_implement_task_open() {
-  // Python: tests/test_task_execution.py::test_manual_complete_with_forged_landing_ref_stays_open.
+async fn worker_automatic_close_with_forged_landing_ref_stays_open() {
+  // Python: tests/test_task_execution.py::test_worker_automatic_close_with_forged_landing_ref_stays_open.
   let h = CompletionHarness::new();
   let temp = tempfile::tempdir().unwrap();
   let repo = temp.path().join("repo");
@@ -347,7 +563,7 @@ async fn forged_landing_ref_keeps_implement_task_open() {
   completion.review_run_ids = vec!["review-run".into()];
   let result = h
     .completion
-    .complete_task(&task.id, "forged-completion", &completion, &CallerIdentity::Operator { session_id: None })
+    .evaluate_automatic_completion(&task.id, "work-run", None, None, Some("forged-auto"), Some(&completion))
     .await;
   assert!(
     matches!(result, Err(StoreError::Conflict(blockers)) if blockers.iter().any(|b| b.starts_with("landing evidence unverified in ")))
@@ -367,7 +583,7 @@ async fn own_run_request_naming_a_foreign_run_is_refused_and_not_saved() {
 
   let result = h
     .completion
-    .complete_task(
+    .archive_task(
       &task.id,
       "foreign-evidence",
       &evidence("manager done", &["run:foreign-run"], &["foreign-run"]),
@@ -389,7 +605,7 @@ async fn own_run_request_with_an_open_child_is_refused_and_not_saved() {
   h.register_record(live_run(&task.id, "owner-run", RunKind::ManagerTurn)).await;
   let result = h
     .completion
-    .complete_task(
+    .archive_task(
       &task.id,
       "open-child",
       &evidence("manager done", &["report:child"], &["owner-run"]),
@@ -411,7 +627,7 @@ async fn saved_request_blocked_after_its_run_wakes_the_requester_once() {
   let own = agent(&task.id, "owner-run");
   assert_eq!(
     h.completion
-      .complete_task(
+      .archive_task(
         &task.id,
         "close-after-finish",
         &evidence("manager done", &["run:owner-run"], &["owner-run"]),
@@ -424,8 +640,6 @@ async fn saved_request_blocked_after_its_run_wakes_the_requester_once() {
   );
   let child = h.base.create_task("late-child", Some(&task.id), TaskProfile::Worker, "Late child").await;
   h.finish(&task.id, "owner-run", RunOutcomeKind::Success).await;
-  h.completion.recheck_close_requests(&task.id, "owner-run").await.unwrap();
-  h.completion.recheck_close_requests(&task.id, "owner-run").await.unwrap();
 
   let notice_id = control_events::stable_close_blocked_notice_id(&task.id, "close-after-finish");
   let notices = h
@@ -525,28 +739,103 @@ async fn cancel_by_the_manager_parent_records_close_and_child_report() {
 }
 
 #[tokio::test]
-async fn own_run_completion_closes_without_takeoff_and_ancestor_stays_open() {
-  // Python: tests/test_task_manager_authorization.py::test_own_run_completion_closes_without_takeoff_and_ancestor_stays_open.
-  let h = CompletionHarness::new();
-  let root = h.base.create_task("root", None, TaskProfile::Manager, "Root").await;
-  let child = h.base.create_task("child", Some(&root.id), TaskProfile::Manager, "Child").await;
-  h.register_record(live_run(&child.id, "child-owner-run", RunKind::ManagerTurn)).await;
-  let pending = h
-    .completion
-    .complete_task(
-      &child.id,
-      "close-1",
-      &evidence("coordination complete", &["report:feature-coordinated"], &["child-owner-run"]),
-      &agent(&child.id, "child-owner-run"),
-    )
-    .await
-    .unwrap();
-  assert_eq!(pending.0, 202);
-  assert_eq!(pending.1["status"], "pending_run_finish");
-  h.finish(&child.id, "child-owner-run", RunOutcomeKind::Success).await;
-  assert!(h.completion.recheck_close_requests(&child.id, "child-owner-run").await.unwrap().is_empty());
-  assert_eq!(h.base.store.task_state(&child.id).unwrap(), "completed");
-  assert_eq!(h.base.store.task_state(&root.id).unwrap(), "open");
+async fn own_run_archive_closes_without_takeoff_and_reports_to_ancestor() {
+  // Python: tests/test_task_manager_authorization.py::test_own_run_archive_closes_without_takeoff_and_reports_to_ancestor.
+  // Its three cases: a task with no earlier run, one whose earlier run succeeded, and one whose earlier run failed.
+  for previous_outcome in [None, Some(RunOutcomeKind::Success), Some(RunOutcomeKind::Failed)] {
+    let h = CompletionHarness::new();
+    let root = h.base.create_task("root", None, TaskProfile::Manager, "Root").await;
+    let child = h.base.create_task("child", Some(&root.id), TaskProfile::Manager, "Child").await;
+    let blocked_manager = h.base.create_task("blocked-manager", Some(&root.id), TaskProfile::Manager, "Blocked").await;
+    h.register_record(live_run(&blocked_manager.id, "blocked-owner-run", RunKind::ManagerTurn)).await;
+    h.base.create_task("open-child", Some(&blocked_manager.id), TaskProfile::Worker, "Open child").await;
+    if let Some(outcome) = previous_outcome {
+      h.register_record(live_run(&child.id, "previous-turn", RunKind::ManagerTurn)).await;
+      h.finish(&child.id, "previous-turn", outcome).await;
+    }
+    h.register_record(live_run(&child.id, "child-owner-run", RunKind::ManagerTurn)).await;
+
+    // An agent may not archive another task.
+    let wrong_task = h
+      .completion
+      .archive_task(
+        &root.id,
+        "wrong-task",
+        &evidence("coordination complete", &["report:feature-coordinated"], &[]),
+        &agent(&child.id, "child-owner-run"),
+      )
+      .await;
+    assert!(
+      matches!(wrong_task, Err(StoreError::Forbidden(message)) if message == "an agent may only archive its own task")
+    );
+
+    // An open descendant refuses the request before it is saved.
+    let blocked = h
+      .completion
+      .archive_task(
+        &blocked_manager.id,
+        "blocked-by-child",
+        &evidence("manager report", &["report:manager-report"], &[]),
+        &agent(&blocked_manager.id, "blocked-owner-run"),
+      )
+      .await;
+    assert!(
+      matches!(blocked, Err(StoreError::Conflict(blockers)) if blockers.iter().any(|b| b.contains("open descendant")))
+    );
+    assert_eq!(
+      h.base
+        .store
+        .load_all_facts(&blocked_manager.id)
+        .unwrap()
+        .iter()
+        .filter(|event| event["type"] == event_types::TASK_CLOSE_REQUESTED)
+        .count(),
+      0
+    );
+
+    // The owner's own active Run may archive its task with no run_ids evidence at all.
+    let pending = h
+      .completion
+      .archive_task(
+        &child.id,
+        "close-1",
+        &evidence("coordination complete", &["report:feature-coordinated"], &[]),
+        &agent(&child.id, "child-owner-run"),
+      )
+      .await
+      .unwrap();
+    assert_eq!(pending.0, 202);
+    assert_eq!(pending.1["status"], "pending_run_finish");
+    assert_eq!(h.base.store.task_state(&child.id).unwrap(), "open");
+
+    // The owner Run finishes successfully: the archive lands and reports to the parent.
+    h.finish(&child.id, "child-owner-run", RunOutcomeKind::Success).await;
+    assert_eq!(h.base.store.task_state(&child.id).unwrap(), "archived");
+    let closes = h
+      .base
+      .store
+      .load_all_facts(&child.id)
+      .unwrap()
+      .into_iter()
+      .filter(|event| event["type"] == event_types::TASK_CLOSED)
+      .collect::<Vec<_>>();
+    assert_eq!(closes.len(), 1);
+    assert_eq!(closes[0]["outcome"], "archived");
+    assert_eq!(closes[0]["report_to"], root.id);
+    let reports = h
+      .base
+      .store
+      .load_all_facts(&root.id)
+      .unwrap()
+      .into_iter()
+      .filter(|event| event["type"] == event_types::CHILD_REPORT)
+      .collect::<Vec<_>>();
+    assert_eq!(reports.len(), 1);
+    assert_eq!(reports[0]["outcome"], "archived");
+
+    // The ancestor holds its own conditions: it stays open after the child archived.
+    assert_eq!(h.base.store.task_state(&root.id).unwrap(), "open");
+  }
 }
 
 #[tokio::test]
@@ -873,7 +1162,7 @@ async fn sequence_completion_requires_proven_run_and_empty_delivery_is_cancelled
   let h = CompletionHarness::new();
   let root = h.base.create_task("root", None, TaskProfile::Manager, "Root").await;
   let proven = h.base.create_task("proven", Some(&root.id), TaskProfile::Worker, "Proven").await;
-  register_run(&h.base, &proven.id, "run-iter-1").await;
+  h.register_record(iteration_run(&proven.id, "run-iter-1")).await;
   h.finish(&proven.id, "run-iter-1", RunOutcomeKind::Success).await;
   let result = h
     .completion
@@ -1009,7 +1298,7 @@ async fn synthetic_sequence_controller_closes_after_its_live_iteration_finishes(
   // Python: tests/test_task_sequences.py::test_improve_stop_mid_iteration_closes_after_the_controller_ends.
   let h = CompletionHarness::new();
   let task = h.base.create_task("sequence-live", None, TaskProfile::Worker, "Sequence").await;
-  h.register_record(live_run(&task.id, "iteration-run", RunKind::Work)).await;
+  h.register_record(iteration_run(&task.id, "iteration-run")).await;
   let sequence_completion: Arc<dyn SequenceCompletion> = h.completion.clone();
   let completion_evidence = evidence("[Improve loop 1] controller failed", &["loop:1"], &["iteration-run"]);
   let evidence_json = serde_json::to_value(&completion_evidence).unwrap();
@@ -1154,7 +1443,17 @@ async fn close_clears_candidates_and_reopen_opens_a_fresh_boundary() {
     .admit_input(&root.id, event_types::USER, "old input", ACTOR_USER, json!({"input_id":"old-input"}))
     .await
     .unwrap();
-  h.base.store.archive_subtree(&root.id, TaskCaller::Operator).await.unwrap();
+  h.completion
+    .archive_subtree(
+      &root.id,
+      Some("archive-test"),
+      "archived by the user",
+      &[],
+      &[],
+      &CallerIdentity::Operator { session_id: None },
+    )
+    .await
+    .unwrap();
   assert!(h.dispatcher.pending_inputs(&root.id).unwrap().is_empty());
   let restored = h
     .completion
@@ -1178,7 +1477,17 @@ async fn restore_brings_archived_ancestor_chain_and_leaves_siblings() {
   let middle = h.base.create_task("middle", Some(&root.id), TaskProfile::Manager, "Middle").await;
   let leaf = h.base.create_task("leaf", Some(&middle.id), TaskProfile::Worker, "Leaf").await;
   let sibling = h.base.create_task("sibling", Some(&middle.id), TaskProfile::Worker, "Sibling").await;
-  h.base.store.archive_subtree(&root.id, TaskCaller::Operator).await.unwrap();
+  h.completion
+    .archive_subtree(
+      &root.id,
+      Some("archive-test"),
+      "archived by the user",
+      &[],
+      &[],
+      &CallerIdentity::Operator { session_id: None },
+    )
+    .await
+    .unwrap();
   let restored = h
     .completion
     .restore_task(&leaf.id, "restore-chain", "sidebar unarchive", &CallerIdentity::Operator { session_id: None })
@@ -1230,7 +1539,17 @@ async fn user_message_restores_archived_chain_and_becomes_its_only_pending_input
     .admit_input(&leaf.id, event_types::USER, "old input", ACTOR_USER, json!({"input_id":"old-input"}))
     .await
     .unwrap();
-  h.base.store.archive_subtree(&root.id, TaskCaller::Operator).await.unwrap();
+  h.completion
+    .archive_subtree(
+      &root.id,
+      Some("archive-test"),
+      "archived by the user",
+      &[],
+      &[],
+      &CallerIdentity::Operator { session_id: None },
+    )
+    .await
+    .unwrap();
   let nodes = [&root.id, &middle.id, &leaf.id];
   let mut subscriptions = nodes.map(|node| h.base.store.subscribe(&charliebot_store::session_channel(node)));
 
@@ -1280,7 +1599,17 @@ async fn user_message_route_restores_the_chain_and_refuses_archived_agent_input(
   let root = h.base.create_task("root", None, TaskProfile::Manager, "Root").await;
   let middle = h.base.create_task("middle", Some(&root.id), TaskProfile::Manager, "Middle").await;
   let leaf = h.base.create_task("leaf", Some(&middle.id), TaskProfile::Worker, "Leaf").await;
-  h.base.store.archive_subtree(&root.id, TaskCaller::Operator).await.unwrap();
+  h.completion
+    .archive_subtree(
+      &root.id,
+      Some("archive-test"),
+      "archived by the user",
+      &[],
+      &[],
+      &CallerIdentity::Operator { session_id: None },
+    )
+    .await
+    .unwrap();
   h.register_record(live_run(&middle.id, "manager-run", RunKind::ManagerTurn)).await;
 
   let token = run_token::sign_run_token(
@@ -1334,109 +1663,101 @@ async fn user_message_route_restores_the_chain_and_refuses_archived_agent_input(
 }
 
 #[tokio::test]
-async fn completion_routes_cover_blockers_replay_ack_cancel_and_unarchive() {
-  // Python: tests/test_session_dispatch.py::test_complete_cancel_reopen_routes_and_scope.
-  // Python: tests/test_archive_api.py::test_unarchive_route_restores_the_chain_and_reports_the_ids.
+async fn archive_cancel_reopen_routes_and_scope() {
+  // Python: tests/test_session_dispatch.py::test_archive_cancel_reopen_routes_and_scope.
   let h = CompletionHarness::new();
+  fs::write(h.base._home.path().join(CREDENTIALS_FILENAME), format!("charliebot:\n  access_key: {ACCESS_KEY}\n"))
+    .expect("synthetic credentials are written to test home");
   let root = h.base.create_task("root", None, TaskProfile::Manager, "Root").await;
   let worker = h.base.create_task("worker", Some(&root.id), TaskProfile::Worker, "Worker").await;
+  let other = h.base.create_task("other", None, TaskProfile::Manager, "Other").await;
+  h.register_record(live_run(&other.id, "agent-run", RunKind::ManagerTurn)).await;
+  let token = run_token::sign_run_token(
+    &RunTokenClaims { session_id: other.id.clone(), run_id: "agent-run".into(), agent: "synthetic".into() },
+    ACCESS_KEY,
+  )
+  .unwrap();
+  let app = routes::routes(&Arc::clone(&h.features));
+  let call = |path: String, auth: Option<String>, body: Option<Value>| {
+    let app = app.clone();
+    async move {
+      let mut builder = Request::builder().method(Method::POST).uri(path);
+      if let Some(auth) = auth {
+        builder = builder.header(header::AUTHORIZATION, format!("Bearer {auth}"));
+      }
+      let request = match body {
+        Some(body) => {
+          builder.header(header::CONTENT_TYPE, "application/json").body(Body::from(body.to_string())).unwrap()
+        }
+        None => builder.body(Body::empty()).unwrap(),
+      };
+      let response = app.oneshot(request).await.unwrap();
+      let status = response.status();
+      let raw = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+      let value = if raw.is_empty() { Value::Null } else { serde_json::from_slice(&raw).unwrap() };
+      (status, value)
+    }
+  };
 
-  let blocked = h
-    .post(
-      &format!("/api/sessions/{}/complete", root.id),
-      json!({"request_id":"close-blocked","summary":"s","result_refs":[],"run_ids":[]}),
-    )
-    .await;
-  assert_eq!(blocked.0, StatusCode::CONFLICT);
-  assert!(
-    blocked.1["detail"]["blockers"].as_array().unwrap().iter().any(|b| b.as_str().unwrap().contains("open descendant"))
-  );
+  // An agent token may not archive a task other than its own.
+  let (status, body) =
+    call(format!("/api/sessions/{}/archive", root.id), Some(token.clone()), Some(json!({"request_id": "wrong-task"})))
+      .await;
+  assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+  assert_eq!(body["detail"], "an agent may only archive its own task");
 
-  register_run(&h.base, &worker.id, "worker-run").await;
-  h.finish(&worker.id, "worker-run", RunOutcomeKind::Success).await;
-  h.completion.after_run_finished(&worker.id, "worker-run").await.unwrap();
-  let pending = h.dispatcher.pending_inputs(&root.id).unwrap();
-  assert_eq!(pending.len(), 1);
-  let blocked_on_report = h
-    .post(
-      &format!("/api/sessions/{}/complete", root.id),
-      json!({"request_id":"close-root","summary":"delivered","result_refs":["run:worker-run"],"run_ids":["worker-run"]}),
-    )
-    .await;
-  assert_eq!(blocked_on_report.0, StatusCode::CONFLICT);
-  assert!(
-    blocked_on_report.1["detail"]["blockers"]
-      .as_array()
-      .unwrap()
-      .iter()
-      .any(|b| b.as_str().unwrap().contains("unprocessed input"))
-  );
+  // The operator archives the open subtree, descendants included.
+  let (status, body) =
+    call(format!("/api/sessions/{}/archive", root.id), None, Some(json!({"request_id": "archive-root"}))).await;
+  assert_eq!(status, StatusCode::OK, "{body}");
+  assert_eq!(body, json!({"archived": [root.id.clone(), worker.id.clone()]}));
+  assert_eq!(h.base.store.task_state(&root.id).unwrap(), "archived");
+  assert_eq!(h.base.store.task_state(&worker.id).unwrap(), "archived");
 
-  let ack = h
-    .post(
-      &format!("/api/sessions/{}/task-inputs/acknowledge", root.id),
-      json!({"request_id":"ack-root-report","input_ids":[pending[0]["id"].to_value()],"note":"read report"}),
-    )
-    .await;
-  assert_eq!(ack.0, StatusCode::OK);
-  let ack_replay = h
-    .post(
-      &format!("/api/sessions/{}/task-inputs/acknowledge", root.id),
-      json!({"request_id":"ack-root-report","input_ids":[pending[0]["id"].to_value()],"note":"changed"}),
-    )
-    .await;
-  assert_eq!(ack_replay.1, ack.1);
-  let ack_unknown = h
-    .post(
-      &format!("/api/sessions/{}/task-inputs/acknowledge", root.id),
-      json!({"request_id":"ack-unknown","input_ids":["missing"]}),
-    )
-    .await;
-  assert_eq!(ack_unknown.0, StatusCode::CONFLICT);
+  // Unarchive is operator action too; an agent token cannot mutate.
+  let (status, _) = call(format!("/api/sessions/{}/unarchive", root.id), Some(token), None).await;
+  assert_eq!(status, StatusCode::FORBIDDEN);
+  let (status, body) = call(format!("/api/sessions/{}/unarchive", root.id), None, Some(json!({}))).await;
+  assert_eq!(status, StatusCode::OK);
+  assert_eq!(body["restored"], json!([root.id.clone()]));
+  assert_eq!(h.base.store.task_state(&root.id).unwrap(), "open");
+  assert_eq!(h.base.store.task_state(&worker.id).unwrap(), "archived");
 
-  let completed = h
-    .post(
-      &format!("/api/sessions/{}/complete", root.id),
-      json!({"request_id":"close-root","summary":"delivered","result_refs":["run:worker-run"],"run_ids":["worker-run"]}),
-    )
-    .await;
-  assert_eq!(completed.0, StatusCode::OK);
-  assert_eq!(completed.1["task_state"], "completed");
-  assert_eq!(
-    h.post(
-      &format!("/api/sessions/{}/complete", root.id),
-      json!({"request_id":"close-root","summary":"changed","result_refs":[],"run_ids":[]}),
-    )
-    .await
-    .0,
-    StatusCode::OK
-  );
-  assert_eq!(
-    h.post(&format!("/api/sessions/{}/cancel", root.id), json!({"request_id":"cancel-closed","reason":"again"}),)
-      .await
-      .0,
-    StatusCode::CONFLICT
-  );
+  // Cancel preserves history and stays visible (an end state like archive).
+  let (status, body) = call(
+    format!("/api/sessions/{}/cancel", root.id),
+    None,
+    Some(json!({"request_id": "route-5", "reason": "not needed"})),
+  )
+  .await;
+  assert_eq!(status, StatusCode::OK, "{body}");
+  assert_eq!(body["task_state"], "cancelled");
+  let (status, _) =
+    call(format!("/api/sessions/{}/cancel", root.id), None, Some(json!({"request_id": "route-6", "reason": "again"})))
+      .await;
+  assert_eq!(status, StatusCode::CONFLICT);
+}
 
-  let cancellable = h.base.create_task("cancellable", None, TaskProfile::Worker, "Cancellable").await;
-  register_run(&h.base, &cancellable.id, "queued-run").await;
-  let cancel_blocked = h
-    .post(&format!("/api/sessions/{}/cancel", cancellable.id), json!({"request_id":"cancel-queued","reason":"stop"}))
-    .await;
-  assert_eq!(cancel_blocked.0, StatusCode::OK);
-  assert_eq!(cancel_blocked.1["stopped_runs"], json!([{"run_id":"queued-run","outcome":"never_launched"}]));
-  let cancelled = h
-    .post(&format!("/api/sessions/{}/cancel", cancellable.id), json!({"request_id":"cancel-queued","reason":"stop"}))
-    .await;
-  assert_eq!(cancelled.0, StatusCode::OK);
-  assert_eq!(cancelled.1["task_state"], "cancelled");
-
+#[tokio::test]
+async fn unarchive_route_restores_the_chain_and_reports_the_ids() {
+  // Python: tests/test_archive_api.py::test_unarchive_route_restores_the_chain_and_reports_the_ids.
+  let h = CompletionHarness::new();
   let archived_root = h.base.create_task("archived-root", None, TaskProfile::Manager, "Archived root").await;
   let archived_branch =
     h.base.create_task("archived-branch", Some(&archived_root.id), TaskProfile::Worker, "Archived branch").await;
   let archived_sibling =
     h.base.create_task("archived-sibling", Some(&archived_root.id), TaskProfile::Worker, "Archived sibling").await;
-  h.base.store.archive_subtree(&archived_root.id, TaskCaller::Operator).await.unwrap();
+  h.completion
+    .archive_subtree(
+      &archived_root.id,
+      Some("archive-test"),
+      "archived by the user",
+      &[],
+      &[],
+      &CallerIdentity::Operator { session_id: None },
+    )
+    .await
+    .unwrap();
   let restored = h.post(&format!("/api/sessions/{}/unarchive", archived_branch.id), json!({})).await;
   assert_eq!(restored, (StatusCode::OK, json!({"restored":[archived_root.id,archived_branch.id]})));
   assert_eq!(h.base.store.task_state(&archived_root.id).unwrap(), "open");
@@ -1459,7 +1780,17 @@ async fn agent_cancel_route_checks_direct_child_scope_and_unarchive_is_operator_
   h.register_record(live_run(&other.id, "other-run", RunKind::ManagerTurn)).await;
   let archived_child =
     h.base.create_task("archived-child", Some(&parent.id), TaskProfile::Worker, "Archived child").await;
-  h.base.store.archive_subtree(&archived_child.id, TaskCaller::Operator).await.unwrap();
+  h.completion
+    .archive_subtree(
+      &archived_child.id,
+      Some("archive-test"),
+      "archived by the user",
+      &[],
+      &[],
+      &CallerIdentity::Operator { session_id: None },
+    )
+    .await
+    .unwrap();
 
   let token = |session_id: &str, run_id: &str| {
     run_token::sign_run_token(

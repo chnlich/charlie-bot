@@ -729,6 +729,29 @@ mod tests {
 
   const VALID_SET: &str = r#"{"now": "Running"}"#;
 
+  /// Write one archived close fact, as the completion owner's operator archive writes a root's fact.
+  async fn archive_task(features: &charliebot_registry::context::FeatureContext, session_id: &str) {
+    let guard = features.store.control_lock().await;
+    let event = charliebot_store::control_events::build_control_event(
+      charliebot_core::event_types::TASK_CLOSED,
+      "user",
+      session_id,
+      None,
+      None,
+      [
+        ("request_id".to_string(), json!("synthetic-status-archive")),
+        ("outcome".to_string(), json!("archived")),
+        ("summary".to_string(), json!("archived by the user")),
+        ("result_refs".to_string(), json!([])),
+        ("run_ids".to_string(), json!([])),
+        ("report_to".to_string(), serde_json::Value::Null),
+      ],
+    );
+    features.store.append_control_fact(&guard, session_id, event).await.expect("the archive fact appends");
+    drop(guard);
+    features.store.invalidate_tree_index();
+  }
+
   /// The status the session's metadata stores, as the session's slot holds it.
   async fn stored(home: &Home, session_id: &str) -> Value {
     home.meta(session_id).await.extra.get(STATUS_FIELD).cloned().unwrap_or(Value::Null)
@@ -991,12 +1014,7 @@ mod tests {
     set_status(&home.features, &closed, &waiting_set("closed decision")).await.expect("the closed child sets");
     check_waiting_item(&home, &archived, "archived decision").await;
     set_status(&home.features, &archived, &waiting_set("archived decision")).await.expect("the archived child sets");
-    home
-      .features
-      .store
-      .archive_subtree(&closed, charliebot_store::TaskCaller::Operator)
-      .await
-      .expect("the task closes");
+    archive_task(&home.features, &closed).await;
     home.features.store.archive_session(&archived).await.expect("the session archives");
 
     let body = read_status(&home.features, &root).await.expect("the read answers");
@@ -1032,12 +1050,7 @@ mod tests {
     set_status(&home.features, &empty, r#"{"goal": "No Now"}"#).await.expect("the empty child sets");
     set_status(&home.features, &closed, r#"{"now": "Closed step"}"#).await.expect("the closed child sets");
     set_status(&home.features, &archived, r#"{"now": "Archived step"}"#).await.expect("the archived child sets");
-    home
-      .features
-      .store
-      .archive_subtree(&closed, charliebot_store::TaskCaller::Operator)
-      .await
-      .expect("the task closes");
+    archive_task(&home.features, &closed).await;
     home.features.store.archive_session(&archived).await.expect("the session archives");
 
     let body = read_status(&home.features, &root).await.expect("the read answers");

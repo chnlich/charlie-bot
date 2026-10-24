@@ -14,6 +14,7 @@ use std::path::Path;
 use axum::http::StatusCode;
 use charliebot_core::event_types;
 use charliebot_core::run_token::{self, RunTokenClaims};
+use charliebot_registry::caller::CallerIdentity;
 use charliebot_store::control_events;
 use charliebot_store::metadata::{ColdReadSpec, SessionMetadata, TaskProfile, TaskSpec, TaskType};
 use charliebot_store::run_records::{self, RunKind, RunOutcomeKind, RunRecord};
@@ -868,7 +869,17 @@ async fn session_message_refuses_an_archived_task_node() -> anyhow::Result<()> {
   let stack = stack_with(&scripts, &[BACKEND_ID], &[BACKEND_ID]).await?;
   let caller = node(&stack, "caller", None, TaskProfile::Manager, BACKEND_ID).await?;
   let target = node(&stack, "target", None, TaskProfile::Manager, BACKEND_ID).await?;
-  stack.store().archive_subtree(&target.id, TaskCaller::Operator).await?;
+  stack
+    .completion
+    .archive_subtree(
+      &target.id,
+      Some("synthetic-delegate-archive"),
+      "archived by the user",
+      &[],
+      &[],
+      &CallerIdentity::Operator { session_id: None },
+    )
+    .await?;
 
   let (status, body) = relay(&stack, &caller.id, &target.id, "status please").await?;
   assert_eq!(status, StatusCode::CONFLICT, "{body}");

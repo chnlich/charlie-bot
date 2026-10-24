@@ -211,6 +211,15 @@ impl SequenceCompletion for ScriptedCompletion {
   ) -> BoxFuture<'a, StoreResult<RestoreOutcome>> {
     self.restore(guard, session_id, request_id, reason)
   }
+
+  fn archive_unsuccessful_worker<'a>(
+    &'a self,
+    _session_id: &'a str,
+    _run_id: &'a str,
+    _outcome: &'a str,
+  ) -> BoxFuture<'a, StoreResult<bool>> {
+    Box::pin(async { Ok(false) })
+  }
 }
 
 impl RunFinishedCompletion for ScriptedCompletion {

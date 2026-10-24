@@ -54,10 +54,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _cmd_reply(args: argparse.Namespace) -> None:
-  session_id = common.resolve_session_id(args.session)
-  text = common.read_reply_text(args.file)
-  result = common.post_internal_api("/api/internal/slack/reply", {"session_id": session_id, "text": text})
-  common.print_json(result, indent=None, file=sys.stdout)
+  common.post_reply("/api/internal/slack/reply", session=args.session, file_arg=args.file)
 
 
 def _cmd_ack(args: argparse.Namespace) -> None:

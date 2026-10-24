@@ -118,7 +118,7 @@ impl Harness {
   ) -> TestRun {
     let backend = OpenCodeBackend::new(
       MODEL.to_string(),
-      OpenCodeOption { proxy_url: proxy_url.clone(), context_limit: None },
+      OpenCodeOption { proxy_url: proxy_url.clone(), context_limit: None, extra_body: Map::new() },
       Map::new(),
       self.host.clone(),
       Arc::clone(&self.pool),

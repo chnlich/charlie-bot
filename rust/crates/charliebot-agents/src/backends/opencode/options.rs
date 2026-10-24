@@ -1,30 +1,34 @@
-//! The opencode option fields and the `providers` block their context limits add to an opencode config
-//! (`src/backends/opencode/options.py`).
+//! The opencode option fields and the `providers` block their context limits and fixed request-body fields add to an
+//! opencode config (`src/backends/opencode/options.py`).
 
 use std::collections::HashMap;
 
 use anyhow::bail;
 use charliebot_core::config::BackendOption;
+use charliebot_core::pyfmt;
 use serde_json::{Map, Value as JsonValue, json};
 use serde_yaml::{Mapping, Value};
 
 const PROXY_URL: &str = "proxy_url";
 const CONTEXT_LIMIT: &str = "context_limit";
+const EXTRA_BODY: &str = "extra_body";
 
 /// The type-specific fields of one opencode backend option.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct OpenCodeOption {
   /// The proxy used by the shared server and its turn shells.
   pub proxy_url: Option<String>,
   /// The context window in tokens that opencode uses for the option's model, instead of the catalog's window.
   pub context_limit: Option<u64>,
+  /// The JSON object opencode adds to the top level of every request body of the option's model.
+  pub extra_body: Map<String, JsonValue>,
 }
 
 impl OpenCodeOption {
   pub fn from_fields(fields: &Mapping) -> Result<Self, String> {
     for key in fields.keys() {
       match key.as_str() {
-        Some(PROXY_URL | CONTEXT_LIMIT) => {}
+        Some(PROXY_URL | CONTEXT_LIMIT | EXTRA_BODY) => {}
         Some(name) => return Err(format!("opencode option field {name:?} is not supported")),
         None => return Err(format!("opencode option key must be a string: {key:?}")),
       }
@@ -42,7 +46,13 @@ impl OpenCodeOption {
       },
       Some(_) => return Err("opencode option context_limit must be an integer greater than 0".to_string()),
     };
-    Ok(Self { proxy_url, context_limit })
+    let extra_body = match fields.get(EXTRA_BODY) {
+      None => Map::new(),
+      Some(Value::Mapping(mapping)) => charliebot_core::config::yaml_mapping_to_json(mapping)
+        .map_err(|error| format!("opencode option extra_body: {error}"))?,
+      Some(_) => return Err("opencode option extra_body must be a mapping".to_string()),
+    };
+    Ok(Self { proxy_url, context_limit, extra_body })
   }
 }
 
@@ -51,39 +61,71 @@ pub fn option_model(fields: &Mapping) -> Result<(), String> {
   OpenCodeOption::from_fields(fields).map(|_| ())
 }
 
-/// The config keys that the options' `context_limit` values add, as Python's `model_overrides_config` builds them:
-/// `{"providers": {provider: {"models": {model: {"limit": {"context": n}}}}}}`, or an empty map when no option sets a
-/// limit. Two options that name one model must declare one limit, or the build fails with both option ids.
+/// The config keys that the options' `context_limit` and `extra_body` values add, as Python's
+/// `model_overrides_config` builds them:
+/// `{"providers": {provider: {"models": {model: {"limit": {"context": n}, "body": {...}}}}}}`, or an empty map when no
+/// option sets either field. Options for one model must agree on each field they both set; a disagreement fails with
+/// both option ids.
 pub fn model_overrides_config(options: &[BackendOption]) -> anyhow::Result<Map<String, JsonValue>> {
   let mut providers = Map::new();
-  let mut declared: HashMap<(String, String), (&str, u64)> = HashMap::new();
+  let mut declared: HashMap<(String, String, String), (String, JsonValue)> = HashMap::new();
   for option in options.iter().filter(|option| option.backend_type == "opencode") {
-    let Some(limit) = OpenCodeOption::from_fields(&option.type_fields).map_err(anyhow::Error::msg)?.context_limit
-    else {
+    let fields = OpenCodeOption::from_fields(&option.type_fields).map_err(anyhow::Error::msg)?;
+    if fields.context_limit.is_none() && fields.extra_body.is_empty() {
       continue;
-    };
+    }
     let Some((provider, model)) = option.model.split_once('/') else {
       bail!("backend '{}' model {:?} must name a provider and a model", option.id, option.model);
     };
-    let key = (provider.to_string(), model.to_string());
-    if let Some((previous_id, previous_limit)) = declared.get(&key)
-      && *previous_limit != limit
-    {
-      bail!(
-        "opencode options '{previous_id}' and '{}' declare conflicting context_limit values for {provider}/{model}: \
-         {previous_limit} and {limit}",
-        option.id
-      );
-    }
-    declared.insert(key, (&option.id, limit));
     let provider_entry = providers.entry(provider.to_string()).or_insert_with(|| json!({"models": {}}));
-    provider_entry["models"][model] = json!({"limit": {"context": limit}});
+    let models = provider_entry
+      .get_mut("models")
+      .and_then(JsonValue::as_object_mut)
+      .expect("a provider entry holds a models object");
+    let entry = models.entry(model.to_string()).or_insert_with(|| JsonValue::Object(Map::new()));
+    let entry = entry.as_object_mut().expect("a model entry is an object");
+    if let Some(limit) = fields.context_limit {
+      declare(&mut declared, &option.id, provider, model, "context_limit", &json!(limit))?;
+      entry.insert("limit".to_string(), json!({"context": limit}));
+    }
+    if !fields.extra_body.is_empty() {
+      let extra_body = JsonValue::Object(fields.extra_body);
+      declare(&mut declared, &option.id, provider, model, "extra_body", &extra_body)?;
+      entry.insert("body".to_string(), extra_body);
+    }
   }
   let mut config = Map::new();
   if !providers.is_empty() {
     config.insert("providers".to_string(), JsonValue::Object(providers));
   }
   Ok(config)
+}
+
+/// Record the first option's value for one field of one model; a later, different value fails naming both options.
+fn declare(
+  declared: &mut HashMap<(String, String, String), (String, JsonValue)>,
+  option_id: &str,
+  provider: &str,
+  model: &str,
+  field: &str,
+  value: &JsonValue,
+) -> anyhow::Result<()> {
+  let key = (provider.to_string(), model.to_string(), field.to_string());
+  match declared.get(&key) {
+    None => {
+      declared.insert(key, (option_id.to_string(), value.clone()));
+    }
+    Some((previous_id, previous_value)) if previous_value != value => {
+      bail!(
+        "opencode options '{previous_id}' and '{option_id}' declare conflicting {field} values for {provider}/{model}: \
+         {} and {}",
+        pyfmt::python_str(previous_value),
+        pyfmt::python_str(value)
+      );
+    }
+    Some(_) => {}
+  }
+  Ok(())
 }
 
 #[cfg(test)]

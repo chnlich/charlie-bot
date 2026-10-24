@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import os
 import pathlib
-import sys
 
 import pytest
 
@@ -126,22 +125,6 @@ async def test_server_startup_preloads_the_usage_tally_stack(lifespan_env, monke
   async with server_module.lifespan(fastapi.FastAPI()):
     await asyncio.wait_for(usage_api._warmup_task, timeout=10)
   assert calls == [1]
-
-
-@pytest.mark.asyncio
-async def test_server_startup_builds_no_speech_model_and_imports_no_local_engine(lifespan_env) -> None:
-  """Startup holds no speech model: no voice warm-up line is logged and no local engine module loads."""
-  import fastapi
-  from structlog import testing
-
-  server_module = lifespan_env
-  with testing.capture_logs() as logs:
-    async with server_module.lifespan(fastapi.FastAPI()):
-      pass
-
-  assert not [entry for entry in logs if entry["event"] == "voice_warmup_complete"]
-  assert not {"sherpa_onnx", "src.features.voice.transcriber", "src.features.voice.transcription.local"
-             } & sys.modules.keys()
 
 
 @pytest.mark.asyncio

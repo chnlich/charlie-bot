@@ -8,6 +8,7 @@ use std::path::{Component, Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::{event_types, paths};
+use charliebot_store::chat_events::is_chat_events_archive;
 use charliebot_store::metadata::TaskSpec;
 use charliebot_store::run_records::{RUN_METADATA_NAME, RUNS_DIR_NAME, RunRecord};
 use chrono::{DateTime, Utc};
@@ -396,10 +397,7 @@ fn latest_closed_at(session_dir: &Path) -> Result<Option<DateTime<Utc>>> {
     git::sorted_entries(&archives_dir)?
       .into_iter()
       .map(|entry| entry.path())
-      .filter(|path| {
-        let name = path.file_name().unwrap_or_default().to_string_lossy();
-        name.starts_with("chat_events.") && name.ends_with(".jsonl")
-      })
+      .filter(|path| is_chat_events_archive(&path.file_name().unwrap_or_default().to_string_lossy()))
       .collect::<Vec<_>>()
   } else {
     Vec::new()

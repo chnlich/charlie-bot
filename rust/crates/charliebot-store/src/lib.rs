@@ -1,6 +1,7 @@
 //! The single writer for session metadata and chat event logs.
 
 pub mod aggregator;
+pub mod chat_events;
 mod control;
 pub mod control_events;
 mod events;

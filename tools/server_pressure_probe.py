@@ -42,7 +42,8 @@ LIVE_LOG = pathlib.Path("/tmp/charliebot-logs/server-latest.log")
 DEFAULT_RESULTS_DIR = pathlib.Path.home() / "scripts" / "20261023_server_protection" / "pressure"
 CGROUP_ROOT = pathlib.Path("/sys/fs/cgroup")
 PRESSURE_SLICE = "charliebot-pressure-test.slice"
-PROTECTED_PRESSURE_SLICE = "charliebot-pressure-test-pressure.slice"
+PRESSURE_AGENTS_SLICE = "charliebot-pressure-test-agents.slice"
+PRESSURE_REPAIR_SLICE = "charliebot-pressure-test-repair.slice"
 LIVE_URL = "http://127.0.0.1:18498/api/internal/version"
 BOOT_MARKER = "2026-10-23T13:09:49.351645+00:00"
 GIB = 1024**3
@@ -60,7 +61,16 @@ MAX_SESSION_COUNT = 64
 MAX_COMPOSITION_SESSION_COUNT = 16
 DEFAULT_COMPOSITION_SESSION_COUNT = 9
 MAX_SAMPLE_COUNT = 8
-MAX_MEMORY_PRESSURE_GIB = 5.5
+MAX_MEMORY_PRESSURE_GIB = 7.0
+MEMORY_PRESSURE_SWAP_EXCESS_BYTES = 384 * MIB
+AGENTS_MEMORY_HIGH = int(3.5 * GIB)
+AGENTS_MEMORY_MAX = 4 * GIB
+REPAIR_MEMORY_MAX = 768 * MIB
+REPAIR_PROBE_BYTES = 256 * MIB
+REPAIR_PROBE_RUNS = 8
+VM_SWAP_SAMPLE_INTERVAL_S = 1.0
+PRESSURE_WORKER_READY_TIMEOUT_S = 240.0
+MAX_KILL_RESTARTS = 64
 MAX_DISK_DELAY_MS = 1.0
 MAX_LIVE_EVENT_GIB = 1.2
 MAX_COPIED_SESSIONS = 128
@@ -520,6 +530,38 @@ def _read_proc_status(pid: int) -> dict[str, int]:
   return values
 
 
+def compute_memory_pressure_target(
+    *,
+    server_rss_anon_bytes: int,
+    slice_memory_max_bytes: int,
+    slice_swap_max_bytes: int,
+    swap_excess_bytes: int,
+    probe_reserve_bytes: int,
+    cap_bytes: int,
+) -> int:
+  """Size the pressure so the slice exceeds MemoryMax by an excess the swap cap can hold.
+
+  The repair probe runs inside the same slice under pressure, so the reserve keeps
+  the slice's peak overshoot at swap_excess_bytes even while a probe is resident.
+  """
+  if server_rss_anon_bytes <= 0:
+    raise RuntimeError(f"server RssAnon reading is not positive: {server_rss_anon_bytes}")
+  if server_rss_anon_bytes >= slice_memory_max_bytes:
+    raise RuntimeError(
+        f"server RssAnon {server_rss_anon_bytes} alone fills the slice MemoryMax {slice_memory_max_bytes}")
+  if not 0 < swap_excess_bytes < slice_swap_max_bytes:
+    raise RuntimeError(f"swap excess {swap_excess_bytes} must stay inside the slice swap cap {slice_swap_max_bytes}")
+  if not 0 < probe_reserve_bytes < swap_excess_bytes:
+    raise RuntimeError(
+        f"probe reserve {probe_reserve_bytes} must leave a steady-state excess below {swap_excess_bytes}")
+  target = slice_memory_max_bytes - server_rss_anon_bytes + swap_excess_bytes - probe_reserve_bytes
+  if target > cap_bytes:
+    raise RuntimeError(
+        f"computed pressure target {target} bytes exceeds the {cap_bytes}-byte cap "
+        f"(server RssAnon {server_rss_anon_bytes}, swap excess {swap_excess_bytes})")
+  return target
+
+
 def _self_cgroup_directory() -> pathlib.Path:
   with pathlib.Path("/proc/self/cgroup").open(encoding="ascii") as stream:
     for line in stream:
@@ -759,16 +801,6 @@ def _wait_for_file(path: pathlib.Path, timeout: float) -> None:
     raise TimeoutError(f"control file did not appear within {timeout:g}s: {path}")
 
 
-def _wait_for_worker_file(path: pathlib.Path, process: subprocess.Popen[str], timeout: float) -> None:
-  deadline = time.monotonic() + timeout
-  while not path.is_file() and time.monotonic() < deadline:
-    if process.poll() is not None:
-      raise RuntimeError(f"worker exited before writing its ready file: {process.returncode}")
-    time.sleep(0.02)
-  if not path.is_file():
-    raise TimeoutError(f"worker did not write its ready file within {timeout:g}s: {path}")
-
-
 def _zero_read_delay_count() -> int:
   return 0
 
@@ -913,10 +945,40 @@ def _pressure_main(argv: list[str]) -> None:
   stopped = threading.Event()
   signal.signal(signal.SIGTERM, lambda _signum, _frame: stopped.set())
   signal.signal(signal.SIGINT, lambda _signum, _frame: stopped.set())
-  while not stopped.wait(1.0):
-    pass
+  # Rewrite every page in a loop so reclaim under the slice limit finds the pressure
+  # pages hot and picks the test server's colder pages instead.
+  while not stopped.is_set():
+    for block in blocks:
+      if stopped.is_set():
+        break
+      for offset in range(0, len(block), 4096):
+        block[offset] = (block[offset] + 1) & 0x7F
   if sum(len(block) for block in blocks) != args.size_bytes:
     raise AssertionError("pressure allocation changed while resident")
+
+
+def _repair_probe_main(argv: list[str]) -> None:
+  """Allocate and touch a fixed block, read one small file of the copy, and exit."""
+  parser = argparse.ArgumentParser()
+  parser.add_argument("--touch-bytes", type=int, required=True)
+  parser.add_argument("--read-file", type=pathlib.Path, required=True)
+  args = parser.parse_args(argv)
+  started = time.perf_counter()
+  block = bytearray(args.touch_bytes)
+  for offset in range(0, len(block), 4096):
+    block[offset] = 1
+  read_bytes = len(args.read_file.read_bytes())
+  if read_bytes == 0:
+    raise RuntimeError(f"repair probe read file is empty: {args.read_file}")
+  elapsed_ms = (time.perf_counter() - started) * 1000
+  print(
+      json.dumps(
+          {
+              "pid": os.getpid(),
+              "probe_ms": round(elapsed_ms, 3),
+              "touched_bytes": args.touch_bytes,
+              "read_bytes": read_bytes,
+          }))
 
 
 def _deep_size(value: object, seen: set[int] | None = None) -> int:
@@ -1095,13 +1157,21 @@ def _parse_measurement_args(argv: list[str] | None) -> argparse.Namespace:
           "a no-pressure baseline on the same copy. Cold measures the first tree request from a fresh server. "
           "Disk adds a fixed delay to each session-file read and is approximate. Endpoints are session status, "
           "one session, the session tree, web reply, and web status.\n\n"
-          "Memory layouts: current caps test-server swap at 512 MiB; server and pressure share the parent "
-          "slice limit. Protected disables server and pressure swap and puts pressure in a child slice with "
-          "MemoryHigh=6 GiB and MemoryMax=7 GiB. Every test server and pressure worker runs under "
-          "charliebot-pressure-test.slice with MemoryMax=8 GiB. Test-server peak RSS must stay at or below "
-          "3 GiB. Composition runs in a separate process scope with MemoryMax=2 GiB. Runs stop below "
-          "12 GiB MemAvailable. A live-server guard probes once per second, freezes the test slice after a "
-          "probe over 1 second, and thaws it after 30 seconds of fast probes."),
+          "Memory layouts: the pressure target is computed per run as the 8 GiB slice MemoryMax minus the "
+          "test server's RssAnon after its warm-up, plus a 384 MiB excess the 512 MiB slice swap cap can "
+          "hold, so the kernel swaps server pages out instead of killing a process. Current: server and "
+          "pressure share the parent slice and the server may use up to 512 MiB of swap. Protected: the "
+          "server scope keeps its 3 GiB bound with MemorySwapMax=0; the pressure worker runs in the agents "
+          "child slice charliebot-pressure-test-agents.slice (MemoryHigh=3.5G, MemoryMax=4G, no swap) and "
+          "is restarted every time the kernel ends it until the measured window ends; a repair child slice "
+          "charliebot-pressure-test-repair.slice (MemoryMax=768M, no swap) holds the repair probe. The "
+          "repair probe allocates and touches 256 MiB, reads one small file of the copy, and exits; it runs "
+          "8 times without pressure and 8 times under pressure in the repair child (protected) or the test "
+          "slice (current). Every test server and pressure worker runs under charliebot-pressure-test.slice "
+          "with MemoryMax=8 GiB. Test-server peak RSS must stay at or below 3 GiB. Composition runs in a "
+          "separate process scope with MemoryMax=2 GiB. Runs stop below 12 GiB MemAvailable. A live-server "
+          "guard probes once per second, freezes the test slice after a probe over 1 second, and thaws it "
+          "after 30 seconds of fast probes."),
       formatter_class=argparse.RawDescriptionHelpFormatter,
   )
   parser.add_argument(
@@ -1147,7 +1217,8 @@ def _parse_measurement_args(argv: list[str] | None) -> argparse.Namespace:
       "--memory-pressure-gib",
       type=float,
       default=MAX_MEMORY_PRESSURE_GIB,
-      help=f"resident allocation target for each memory pressure process (maximum {MAX_MEMORY_PRESSURE_GIB} GiB)",
+      help=f"cap for the computed pressure target (slice MemoryMax minus server RssAnon after warm-up plus the "
+      f"swap excess); maximum {MAX_MEMORY_PRESSURE_GIB} GiB",
   )
   parser.add_argument(
       "--disk-delay-ms",
@@ -1382,20 +1453,35 @@ def _copy_info(copy: dict[str, Any], synthetic_count: int) -> dict[str, Any]:
   }
 
 
-def _base_bounds(layout: str, pressure_bytes: int, disk_delay_ms: float) -> dict[str, Any]:
-  return {
+def _base_bounds(layout: str, disk_delay_ms: float) -> dict[str, Any]:
+  bounds = {
       "user_slice": PRESSURE_SLICE,
       "slice_memory_max_bytes": PARENT_MEMORY_MAX,
       "slice_memory_swap_max_bytes": PARENT_SWAP_MAX,
       "test_server_memory_max_bytes": SERVER_MEMORY_MAX,
       "test_server_memory_swap_max_bytes": 0 if layout == "protected" else PARENT_SWAP_MAX,
-      "memory_pressure_target_bytes": pressure_bytes,
+      "memory_pressure_cap_bytes": int(MAX_MEMORY_PRESSURE_GIB * GIB),
+      "memory_swap_excess_bytes": MEMORY_PRESSURE_SWAP_EXCESS_BYTES,
+      "repair_probe_touch_bytes": REPAIR_PROBE_BYTES,
+      "repair_probe_runs": REPAIR_PROBE_RUNS,
       "disk_read_delay_ms": disk_delay_ms,
       "disk_result_approximate": True,
       "memavailable_stop_bytes": MEMAVAILABLE_FLOOR,
       "server_peak_rss_limit_bytes": SERVER_MEMORY_MAX,
       "lifespan": "off",
   }
+  if layout == "protected":
+    bounds.update(
+        {
+            "agents_child_slice": PRESSURE_AGENTS_SLICE,
+            "agents_child_memory_high_bytes": AGENTS_MEMORY_HIGH,
+            "agents_child_memory_max_bytes": AGENTS_MEMORY_MAX,
+            "agents_child_memory_swap_max_bytes": 0,
+            "repair_child_slice": PRESSURE_REPAIR_SLICE,
+            "repair_child_memory_max_bytes": REPAIR_MEMORY_MAX,
+            "repair_child_memory_swap_max_bytes": 0,
+        })
+  return bounds
 
 
 class LiveLogWindow:
@@ -1524,6 +1610,66 @@ def _read_cgroup_bound(path: pathlib.Path, name: str) -> int | str:
   return "max" if value == "max" else int(value)
 
 
+def _read_cgroup_event_counters(path: pathlib.Path, file_name: str, required: set[str]) -> dict[str, int]:
+  counters = {}
+  for line in (path / file_name).read_text(encoding="ascii").splitlines():
+    key, separator, value = line.partition(" ")
+    if separator:
+      counters[key] = int(value)
+  missing = required - counters.keys()
+  if missing:
+    raise RuntimeError(f"{path / file_name} lacks the counters {sorted(missing)}: {counters}")
+  return counters
+
+
+def _read_memory_events(cgroup: pathlib.Path) -> dict[str, dict[str, int]]:
+  return {
+      "memory_events": _read_cgroup_event_counters(cgroup, "memory.events", {"high", "max", "oom_kill"}),
+      "memory_swap_events": _read_cgroup_event_counters(cgroup, "memory.swap.events", {"high", "max", "fail"}),
+  }
+
+
+class VmSwapSampler:
+  """Sample the test server's VmSwap once per second and keep the peak."""
+
+  def __init__(
+      self,
+      *,
+      pid: int,
+      read_status: Callable[[int], dict[str, int]] = _read_proc_status,
+      interval_s: float = VM_SWAP_SAMPLE_INTERVAL_S,
+      wall_clock: Callable[[], str] = utc_now,
+  ) -> None:
+    self._pid = pid
+    self._read_status = read_status
+    self._interval_s = interval_s
+    self._wall_clock = wall_clock
+    self.stop_event = threading.Event()
+    self.samples: list[dict[str, Any]] = []
+    self.peak_kib = 0
+    self.error: Exception | None = None
+
+  def run(self) -> None:
+    while not self.stop_event.is_set():
+      try:
+        swap_kib = self._read_status(self._pid)["VmSwap"]
+      except (OSError, RuntimeError) as exc:
+        self.error = exc
+        return
+      self.peak_kib = max(self.peak_kib, swap_kib)
+      self.samples.append({"at": self._wall_clock(), "vm_swap_kib": swap_kib})
+      if self.stop_event.wait(self._interval_s):
+        return
+
+  def snapshot(self) -> dict[str, Any]:
+    return {
+        "sample_interval_s": self._interval_s,
+        "sample_count": len(self.samples),
+        "peak_kib": self.peak_kib,
+        "samples": list(self.samples),
+    }
+
+
 def _prepare_home(copy: dict[str, Any], port: int, synthetic_ids: list[str]) -> tuple[list[pathlib.Path], pathlib.Path]:
   home = copy["home"]
   write_minimal_config(home, port)
@@ -1617,6 +1763,268 @@ def _wait_scope_exit(
   return code
 
 
+class PressureWorker:
+  """One systemd scope that allocates the pressure target and rewrites its pages."""
+
+  def __init__(
+      self,
+      *,
+      process: subprocess.Popen[str],
+      unit: str,
+      cgroup: pathlib.Path,
+      log_fd: Any,
+      allocated: bool,
+      scope_bounds: dict[str, Any] | None = None,
+  ) -> None:
+    self.process = process
+    self.unit = unit
+    self.cgroup = cgroup
+    self.log_fd = log_fd
+    self.allocated = allocated
+    self.scope_bounds = scope_bounds
+
+  def is_running(self) -> bool:
+    return self.process.poll() is None
+
+  def exit_code(self) -> int:
+    return self.process.returncode
+
+  def close_log(self) -> None:
+    if not self.log_fd.closed:
+      self.log_fd.close()
+
+  def stop(self) -> int:
+    code = _wait_scope_exit(self.process, self.unit, self.cgroup, allow_sigterm=True)
+    self.close_log()
+    return code
+
+
+class PressureSupervisor:
+  """Restart the pressure worker until the measured window ends, recording kernel kills.
+
+  The measured window starts when a worker reaches its allocation target or when
+  the kernel ends the first worker, whichever comes first; the agents child slice
+  in the protected layout can never hold the full target, so the kill starts it.
+  """
+
+  def __init__(
+      self,
+      *,
+      start_worker: Callable[[], PressureWorker],
+      kill_total: Callable[[], int],
+      wall_clock: Callable[[], str] = utc_now,
+      poll_interval_s: float = 0.05,
+  ) -> None:
+    self._start_worker = start_worker
+    self._kill_total = kill_total
+    self._wall_clock = wall_clock
+    self._poll_interval_s = poll_interval_s
+    self.stop_event = threading.Event()
+    self.first_activity = threading.Event()
+    self.kills: list[dict[str, Any]] = []
+    self.worker_starts: list[str] = []
+    self.worker_exits: list[int] = []
+    self.active: PressureWorker | None = None
+    self.failure: Exception | None = None
+    self._last_kill_total: int | None = None
+
+  def run(self) -> None:
+    try:
+      self._run_loop()
+    except Exception as exc:
+      self.failure = exc
+      self.stop_event.set()
+      self.first_activity.set()
+
+  def _run_loop(self) -> None:
+    while not self.stop_event.is_set():
+      worker = self._start_worker()
+      self.active = worker
+      self.worker_starts.append(worker.unit)
+      if worker.allocated:
+        self.first_activity.set()
+      while worker.is_running() and not self.stop_event.is_set():
+        self.stop_event.wait(self._poll_interval_s)
+      if worker.is_running():
+        return
+      code = worker.exit_code()
+      self.worker_exits.append(code)
+      if code in (0, -signal.SIGTERM):
+        return
+      total = self._kill_total()
+      delta = total if self._last_kill_total is None else total - self._last_kill_total
+      self._last_kill_total = total
+      self.kills.append(
+          {
+              "at": self._wall_clock(),
+              "worker_exit_code": code,
+              "oom_kill_total": total,
+              "oom_kill_delta": delta,
+          })
+      self.first_activity.set()
+      if len(self.kills) > MAX_KILL_RESTARTS:
+        raise RuntimeError(f"the kernel ended the pressure worker more than {MAX_KILL_RESTARTS} times")
+      if self.stop_event.is_set():
+        return
+
+  def stop(self) -> None:
+    self.stop_event.set()
+
+
+def _start_pressure_worker(
+    *,
+    layout: str,
+    target_bytes: int,
+    start_file: pathlib.Path,
+    control_dir: pathlib.Path,
+    log_path: pathlib.Path,
+) -> PressureWorker:
+  worker_id = uuid.uuid4().hex[:8]
+  slice_name = PRESSURE_SLICE if layout == "current" else PRESSURE_AGENTS_SLICE
+  unit = f"charliebot-pressure-memory-{worker_id}.scope"
+  ready_file = control_dir / f"pressure_ready_{worker_id}.json"
+  properties = ["MemorySwapMax=0"] if layout == "protected" else []
+  command = [
+      sys.executable,
+      str(pathlib.Path(__file__).resolve()),
+      "_pressure",
+      "--size-bytes",
+      str(target_bytes),
+      "--start-file",
+      str(start_file),
+      "--ready-file",
+      str(ready_file),
+  ]
+  log_path.parent.mkdir(parents=True, exist_ok=True)
+  log_fd = log_path.open("w", encoding="utf-8")
+  process = _systemd_run_command(
+      unit=unit,
+      slice_name=slice_name,
+      properties=properties,
+      command=command,
+      stdout=log_fd,
+      stderr=subprocess.STDOUT,
+  )
+  cgroup = _wait_for_cgroup(unit, process)
+  scope_bounds = {
+      "unit": unit,
+      "slice": slice_name,
+      "memory_max_bytes": _read_cgroup_bound(cgroup, "memory.max"),
+      "memory_swap_max_bytes": _read_cgroup_bound(cgroup, "memory.swap.max"),
+  }
+  deadline = time.monotonic() + PRESSURE_WORKER_READY_TIMEOUT_S
+  allocated = False
+  while True:
+    if ready_file.is_file():
+      allocation = json.loads(ready_file.read_text(encoding="utf-8"))
+      if int(allocation["allocated_bytes"]) != target_bytes:
+        raise RuntimeError(f"pressure worker allocation did not reach its target: {allocation}")
+      allocated = True
+      break
+    if process.poll() is not None:
+      break
+    if time.monotonic() >= deadline:
+      raise TimeoutError(f"pressure worker {unit} did not allocate within {PRESSURE_WORKER_READY_TIMEOUT_S:g}s")
+    time.sleep(0.02)
+  return PressureWorker(
+      process=process,
+      unit=unit,
+      cgroup=cgroup,
+      log_fd=log_fd,
+      allocated=allocated,
+      scope_bounds=scope_bounds,
+  )
+
+
+def _start_keeper_scope(*, slice_name: str, log_path: pathlib.Path) -> tuple[subprocess.Popen[str], str, pathlib.Path]:
+  """Hold a transient user slice open so its bounds and memory.events stay readable."""
+  sleep = shutil.which("sleep", path=SERVER_PATH)
+  if sleep is None:
+    raise FileNotFoundError("sleep is missing from the restricted test PATH")
+  unit = f"charliebot-pressure-keeper-{uuid.uuid4().hex[:8]}.scope"
+  log_fd = log_path.open("w", encoding="utf-8")
+  process = _systemd_run_command(
+      unit=unit,
+      slice_name=slice_name,
+      properties=[],
+      command=[sleep, "3600"],
+      stdout=log_fd,
+      stderr=subprocess.STDOUT,
+  )
+  cgroup = _wait_for_cgroup(unit, process)
+  return process, unit, cgroup
+
+
+def _stop_keeper_scope(process: subprocess.Popen[str], unit: str, cgroup: pathlib.Path) -> None:
+  _wait_scope_exit(process, unit, cgroup)
+
+
+def _repair_probe_read_file(copy: dict[str, Any]) -> pathlib.Path:
+  for session_id in copy["session_ids"]:
+    path = pathlib.Path(copy["home"]) / "sessions" / session_id / "metadata.json"
+    if path.is_file() and 0 < path.stat().st_size <= MIB:
+      return path
+  raise RuntimeError("the copy holds no small linked metadata file for the repair probe")
+
+
+def _run_repair_probes(
+    *,
+    count: int,
+    slice_name: str,
+    read_file: pathlib.Path,
+    log_dir: pathlib.Path,
+    stage_name: str,
+) -> dict[str, Any]:
+  runs = []
+  for index in range(count):
+    unit = f"charliebot-pressure-repair-{uuid.uuid4().hex[:8]}.scope"
+    log_path = log_dir / f"repair_{stage_name}_{index}.log"
+    with log_path.open("w", encoding="utf-8") as log_fd:
+      started = time.perf_counter()
+      process = _systemd_run_command(
+          unit=unit,
+          slice_name=slice_name,
+          properties=[],
+          command=[
+              sys.executable,
+              str(pathlib.Path(__file__).resolve()),
+              "_repair_probe",
+              "--touch-bytes",
+              str(REPAIR_PROBE_BYTES),
+              "--read-file",
+              str(read_file),
+          ],
+          stdout=log_fd,
+          stderr=subprocess.STDOUT,
+      )
+      stdout, _ = process.communicate()
+      wall_ms = (time.perf_counter() - started) * 1000
+    code = process.returncode
+    if code != 0:
+      raise RuntimeError(f"repair probe {unit} exited with status {code}; see {log_path}")
+    probe = json.loads(stdout)
+    runs.append(
+        {
+            "unit": unit,
+            "wall_ms": round(wall_ms, 3),
+            "probe_ms": probe["probe_ms"],
+            "read_bytes": probe["read_bytes"],
+            "touched_bytes": probe["touched_bytes"],
+            "exit_code": code,
+            "killed": False,
+        })
+  probe_times = [run["probe_ms"] for run in runs]
+  return {
+      "slice": slice_name,
+      "run_count": count,
+      "runs": runs,
+      "probe_p50_ms": round(_quantile(probe_times, 0.50), 3),
+      "probe_p95_ms": round(_quantile(probe_times, 0.95), 3),
+      "longest_probe_ms": round(max(probe_times), 3),
+      "killed_run_count": sum(run["killed"] for run in runs),
+  }
+
+
 def _run_server_stage(
     *,
     copy: dict[str, Any],
@@ -1626,14 +2034,14 @@ def _run_server_stage(
     layout: str,
     sample_count: int,
     guard_callback: Callable[[dict[str, Any]], None],
-    pressure_bytes: int = 0,
+    pressure_cap_bytes: int | None = None,
     disk_delay_ms: float = 0.0,
     cold_concurrent: bool = False,
     cold_without_tree: bool = False,
     cold_baseline: bool = False,
-    unit_memory_high: int | None = None,
-    unit_memory_max: int | None = None,
+    run_repair_probes: bool = False,
 ) -> dict[str, Any]:
+  is_pressure_stage = pressure_cap_bytes is not None
   synthetic_ids = [str(uuid.uuid4()), str(uuid.uuid4())]
   port = _choose_port()
   writable_dirs, control = _prepare_home(copy, port, synthetic_ids)
@@ -1652,11 +2060,14 @@ def _run_server_stage(
   slice_cgroup = server_cgroup.parent
   guard: PressureGuard | None = None
   guard_thread: threading.Thread | None = None
-  pressure_process: subprocess.Popen[str] | None = None
-  pressure_cgroup: pathlib.Path | None = None
-  pressure_unit: str | None = None
-  pressure_scope_bounds: dict[str, int | str] | None = None
-  pressure_layout_bounds: dict[str, int | str] | None = None
+  sampler: VmSwapSampler | None = None
+  sampler_thread: threading.Thread | None = None
+  supervisor: PressureSupervisor | None = None
+  supervisor_thread: threading.Thread | None = None
+  agents_keeper: tuple[subprocess.Popen[str], str, pathlib.Path] | None = None
+  repair_keeper: tuple[subprocess.Popen[str], str, pathlib.Path] | None = None
+  pressure_target_bytes: int | None = None
+  server_rss_anon_kib_after_warmup: int | None = None
   try:
     if slice_cgroup.name != PRESSURE_SLICE:
       raise RuntimeError(f"test server did not enter {PRESSURE_SLICE}: {server_cgroup}")
@@ -1684,6 +2095,42 @@ def _run_server_stage(
     pid = int(ready["pid"])
     if _cgroup_pids(server_cgroup) != {pid}:
       raise RuntimeError(f"test server scope has unexpected processes: {sorted(_cgroup_pids(server_cgroup))}")
+    agents_slice_cgroup: pathlib.Path | None = None
+    repair_slice_cgroup: pathlib.Path | None = None
+    agents_slice_bounds: dict[str, int | str] | None = None
+    repair_slice_bounds: dict[str, int | str] | None = None
+    if layout == "protected":
+      agents_keeper = _start_keeper_scope(
+          slice_name=PRESSURE_AGENTS_SLICE, log_path=results_dir / "logs" / f"agents_keeper_{run_name}.log")
+      agents_slice_cgroup = agents_keeper[2].parent
+      _configure_unit(
+          PRESSURE_AGENTS_SLICE,
+          [f"MemoryHigh={AGENTS_MEMORY_HIGH}", f"MemoryMax={AGENTS_MEMORY_MAX}", "MemorySwapMax=0"],
+      )
+      agents_slice_bounds = {
+          "memory_high_bytes": _read_cgroup_bound(agents_slice_cgroup, "memory.high"),
+          "memory_max_bytes": _read_cgroup_bound(agents_slice_cgroup, "memory.max"),
+          "memory_swap_max_bytes": _read_cgroup_bound(agents_slice_cgroup, "memory.swap.max"),
+      }
+      if agents_slice_bounds != {
+          "memory_high_bytes": AGENTS_MEMORY_HIGH,
+          "memory_max_bytes": AGENTS_MEMORY_MAX,
+          "memory_swap_max_bytes": 0,
+      }:
+        raise RuntimeError(f"agents child slice bounds differ from the requested values: {agents_slice_bounds}")
+      repair_keeper = _start_keeper_scope(
+          slice_name=PRESSURE_REPAIR_SLICE, log_path=results_dir / "logs" / f"repair_keeper_{run_name}.log")
+      repair_slice_cgroup = repair_keeper[2].parent
+      _configure_unit(PRESSURE_REPAIR_SLICE, [f"MemoryMax={REPAIR_MEMORY_MAX}", "MemorySwapMax=0"])
+      repair_slice_bounds = {
+          "memory_max_bytes": _read_cgroup_bound(repair_slice_cgroup, "memory.max"),
+          "memory_swap_max_bytes": _read_cgroup_bound(repair_slice_cgroup, "memory.swap.max"),
+      }
+      if repair_slice_bounds != {"memory_max_bytes": REPAIR_MEMORY_MAX, "memory_swap_max_bytes": 0}:
+        raise RuntimeError(f"repair child slice bounds differ from the requested values: {repair_slice_bounds}")
+    sampler = VmSwapSampler(pid=pid)
+    sampler_thread = threading.Thread(target=sampler.run, name="charliebot-pressure-vm-swap-sampler", daemon=True)
+    sampler_thread.start()
     base_url = f"http://127.0.0.1:{port}"
     if cold_baseline:
       cold_metrics = asyncio.run(
@@ -1705,68 +2152,36 @@ def _run_server_stage(
               raise RuntimeError(f"cache warmup returned {response.status_code}: {response.text[:300]}")
 
         asyncio.run(warm_cache())
-      if pressure_bytes:
-        pressure_start = control / "pressure_start"
-        pressure_ready = control / "pressure_ready.json"
-        pressure_unit = f"charliebot-pressure-memory-{uuid.uuid4().hex[:8]}.scope"
-        pressure_slice = PRESSURE_SLICE if layout == "current" else PROTECTED_PRESSURE_SLICE
-        pressure_properties = []
-        if unit_memory_high is not None:
-          pressure_properties.extend((f"MemoryHigh={unit_memory_high}", f"MemoryMax={unit_memory_max}"))
-        if layout == "protected":
-          pressure_properties.append("MemorySwapMax=0")
-        pressure_command = [
-            sys.executable,
-            str(pathlib.Path(__file__).resolve()),
-            "_pressure",
-            "--size-bytes",
-            str(pressure_bytes),
-            "--start-file",
-            str(pressure_start),
-            "--ready-file",
-            str(pressure_ready),
-        ]
-        pressure_log = (results_dir / "logs" / f"pressure_{run_name}.log").open("w", encoding="utf-8")
-        pressure_process = _systemd_run_command(
-            unit=pressure_unit,
-            slice_name=pressure_slice,
-            properties=pressure_properties,
-            command=pressure_command,
-            stdout=pressure_log,
-            stderr=subprocess.STDOUT,
+      if is_pressure_stage:
+        server_rss_anon_kib_after_warmup = _read_proc_status(pid)["RssAnon"]
+        pressure_target_bytes = compute_memory_pressure_target(
+            server_rss_anon_bytes=server_rss_anon_kib_after_warmup * 1024,
+            slice_memory_max_bytes=PARENT_MEMORY_MAX,
+            slice_swap_max_bytes=PARENT_SWAP_MAX,
+            swap_excess_bytes=MEMORY_PRESSURE_SWAP_EXCESS_BYTES,
+            probe_reserve_bytes=REPAIR_PROBE_BYTES,
+            cap_bytes=pressure_cap_bytes,
         )
-        pressure_cgroup = _wait_for_cgroup(pressure_unit, pressure_process)
-        setattr(pressure_process, "_pressure_log_fd", pressure_log)
-        if layout == "protected":
-          child_slice_cgroup = pressure_cgroup.parent
-          _configure_unit(
-              PROTECTED_PRESSURE_SLICE,
-              [f"MemoryHigh={unit_memory_high}", f"MemoryMax={unit_memory_max}", "MemorySwapMax=0"],
+        kill_cgroup = agents_slice_cgroup if layout == "protected" else slice_cgroup
+
+        def kill_total() -> int:
+          return _read_cgroup_event_counters(kill_cgroup, "memory.events", {"high", "max", "oom_kill"})["oom_kill"]
+
+        def start_worker() -> PressureWorker:
+          return _start_pressure_worker(
+              layout=layout,
+              target_bytes=pressure_target_bytes,
+              start_file=start_file,
+              control_dir=control,
+              log_path=results_dir / "logs" / f"pressure_{run_name}.log",
           )
-          pressure_layout_bounds = {
-              "memory_high_bytes": _read_cgroup_bound(child_slice_cgroup, "memory.high"),
-              "memory_max_bytes": _read_cgroup_bound(child_slice_cgroup, "memory.max"),
-              "memory_swap_max_bytes": _read_cgroup_bound(child_slice_cgroup, "memory.swap.max"),
-          }
-          if pressure_layout_bounds != {
-              "memory_high_bytes": unit_memory_high,
-              "memory_max_bytes": unit_memory_max,
-              "memory_swap_max_bytes": 0,
-          }:
-            raise RuntimeError(
-                f"protected pressure slice bounds differ from requested values: {pressure_layout_bounds}")
-        pressure_pids = _cgroup_pids(pressure_cgroup)
-        if len(pressure_pids) != 1:
-          raise RuntimeError(f"pressure scope process set is not singular: {sorted(pressure_pids)}")
-        pressure_scope_bounds = {
-            "memory_max_bytes": _read_cgroup_bound(pressure_cgroup, "memory.max"),
-            "memory_swap_max_bytes": _read_cgroup_bound(pressure_cgroup, "memory.swap.max"),
-        }
-        pressure_start.touch()
-        _wait_for_worker_file(pressure_ready, pressure_process, timeout=240)
-        allocation = json.loads(pressure_ready.read_text(encoding="utf-8"))
-        if int(allocation["allocated_bytes"]) != pressure_bytes:
-          raise RuntimeError(f"pressure worker allocation did not reach its target: {allocation}")
+
+        supervisor = PressureSupervisor(start_worker=start_worker, kill_total=kill_total)
+        supervisor_thread = threading.Thread(
+            target=supervisor.run, name="charliebot-pressure-worker-supervisor", daemon=True)
+        supervisor_thread.start()
+        if not supervisor.first_activity.wait(timeout=PRESSURE_WORKER_READY_TIMEOUT_S + 60.0):
+          raise TimeoutError("pressure worker never reached its target and was never killed")
       if cold_concurrent:
         cold_metrics = asyncio.run(
             _measure_cold_burst(
@@ -1782,10 +2197,59 @@ def _run_server_stage(
       else:
         metrics = asyncio.run(_measure_warm_batch(base_url, access_key, synthetic_ids, sample_count))
         cold_first_tree_ms = None
+    repair_probe: dict[str, Any] | None = None
+    if run_repair_probes:
+      repair_probe = _run_repair_probes(
+          count=REPAIR_PROBE_RUNS,
+          slice_name=PRESSURE_REPAIR_SLICE if layout == "protected" else PRESSURE_SLICE,
+          read_file=_repair_probe_read_file(copy),
+          log_dir=results_dir / "logs",
+          stage_name=run_name,
+      )
+    memory_event_groups = [(PRESSURE_SLICE, slice_cgroup), ("test_server_scope", server_cgroup)]
+    if layout == "protected":
+      memory_event_groups.extend(
+          (
+              (PRESSURE_AGENTS_SLICE, agents_slice_cgroup),
+              (PRESSURE_REPAIR_SLICE, repair_slice_cgroup),
+          ))
+    if supervisor is not None and supervisor.active is not None and supervisor.active.is_running():
+      memory_event_groups.append((supervisor.active.unit, supervisor.active.cgroup))
+    memory_events_at_end = {name: _read_memory_events(cgroup) for name, cgroup in memory_event_groups}
+    pressure_kills: list[dict[str, Any]] = []
+    pressure_worker_exits: list[int] = []
+    pressure_worker_starts: list[str] = []
+    pressure_scope_bounds: dict[str, Any] | None = None
+    if supervisor is not None:
+      supervisor.stop()
+      supervisor_thread.join(timeout=30)
+      if supervisor_thread.is_alive():
+        raise TimeoutError("pressure worker supervisor did not stop")
+      active = supervisor.active
+      if active is not None:
+        pressure_scope_bounds = active.scope_bounds
+        if active.is_running():
+          active.stop()
+        else:
+          active.close_log()
+      if supervisor.failure is not None:
+        raise RuntimeError("pressure worker supervisor failed") from supervisor.failure
+      pressure_kills = supervisor.kills
+      pressure_worker_exits = supervisor.worker_exits
+      pressure_worker_starts = supervisor.worker_starts
+      if pressure_kills and layout != "protected":
+        raise RuntimeError(f"the current layout recorded pressure worker kills: {pressure_kills}")
     _assert_zero_children(pid)
     process_status = _read_proc_status(pid)
     if process_status["VmHWM"] * 1024 > SERVER_MEMORY_MAX:
       raise RuntimeError(f"test server peak RSS exceeded 3 GiB: {process_status['VmHWM']} KiB")
+    sampler.stop()
+    sampler_thread.join(timeout=5)
+    if sampler_thread.is_alive():
+      raise TimeoutError("VmSwap sampler did not stop")
+    if sampler.error is not None:
+      raise RuntimeError("VmSwap sampler failed while the test server was still running") from sampler.error
+    vm_swap = sampler.snapshot()
     guard.stop()
     guard_thread.join(timeout=5)
     if guard_thread.is_alive():
@@ -1793,10 +2257,6 @@ def _run_server_stage(
     guard.close()
     guard.raise_if_failed()
     guard_snapshot = guard.snapshot()
-    if pressure_process is not None and pressure_unit is not None and pressure_cgroup is not None:
-      _wait_scope_exit(pressure_process, pressure_unit, pressure_cgroup, allow_sigterm=True)
-      pressure_process = None
-      pressure_cgroup = None
     server_code = _wait_scope_exit(
         server_process,
         server_unit,
@@ -1814,8 +2274,6 @@ def _run_server_stage(
         "server_memory_max_bytes": server_bounds["memory_max_bytes"],
         "server_memory_swap_max_bytes": server_bounds["memory_swap_max_bytes"],
     }
-    if pressure_cgroup is not None:
-      raise AssertionError("pressure cgroup remained after scope shutdown")
     return {
         "port": port,
         "server_log": str(server_log),
@@ -1831,11 +2289,21 @@ def _run_server_stage(
                 "rss_file_kib_at_end": process_status["RssFile"],
             },
         "bounds_readback": scope_bounds,
+        "agents_slice_bounds_readback": agents_slice_bounds,
+        "repair_slice_bounds_readback": repair_slice_bounds,
         "pressure_scope_bounds_readback": pressure_scope_bounds,
-        "pressure_layout_bounds_readback": pressure_layout_bounds,
         "endpoints": metrics,
         "cold_first_tree_ms": cold_first_tree_ms,
-        "pressure_allocation_bytes": pressure_bytes,
+        "server_rss_anon_kib_after_warmup": server_rss_anon_kib_after_warmup,
+        "pressure_target_bytes": pressure_target_bytes,
+        "pressure_swap_excess_bytes": MEMORY_PRESSURE_SWAP_EXCESS_BYTES if is_pressure_stage else 0,
+        "pressure_probe_reserve_bytes": REPAIR_PROBE_BYTES if is_pressure_stage else 0,
+        "pressure_kills": pressure_kills,
+        "pressure_worker_starts": pressure_worker_starts,
+        "pressure_worker_exit_codes": pressure_worker_exits,
+        "vm_swap": vm_swap,
+        "memory_events_at_end": memory_events_at_end,
+        "repair_probe": repair_probe,
         "disk_delay_ms": disk_delay_ms,
         "disk_result_approximate": bool(disk_delay_ms),
         "delayed_read_opens": int(read_delay["delayed_read_opens"]),
@@ -1855,9 +2323,24 @@ def _run_server_stage(
         raise TimeoutError("live-server guard did not stop during cleanup")
       guard.close()
       guard_callback(guard.snapshot())
+    if sampler is not None and sampler_thread is not None:
+      sampler.stop()
+      sampler_thread.join(timeout=5)
+    if supervisor is not None:
+      supervisor.stop()
+      if supervisor_thread is not None:
+        supervisor_thread.join(timeout=PRESSURE_WORKER_READY_TIMEOUT_S + 60.0)
+        if supervisor_thread.is_alive():
+          raise TimeoutError("pressure worker supervisor did not stop during cleanup")
+      active = supervisor.active
+      if active is not None and active.is_running():
+        active.stop()
+      elif active is not None:
+        active.close_log()
     try:
-      if pressure_process is not None and pressure_unit is not None and pressure_cgroup is not None:
-        _wait_scope_exit(pressure_process, pressure_unit, pressure_cgroup, allow_sigterm=True)
+      for keeper in (agents_keeper, repair_keeper):
+        if keeper is not None:
+          _stop_keeper_scope(*keeper)
     finally:
       try:
         if server_process.poll() is None:
@@ -2116,18 +2599,8 @@ def _run_public(args: argparse.Namespace) -> None:
         yaml.safe_dump({"charliebot": {
             "access_key": synthetic_key
         }}, sort_keys=True), encoding="utf-8")
-    bounds_current = _base_bounds("current", int(args.memory_pressure_gib * GIB), args.disk_delay_ms)
-    bounds_protected = {
-        **_base_bounds("protected", int(args.memory_pressure_gib * GIB), args.disk_delay_ms),
-        "pressure_child_slice":
-            PROTECTED_PRESSURE_SLICE,
-        "pressure_child_memory_high_bytes":
-            6 * GIB,
-        "pressure_child_memory_max_bytes":
-            7 * GIB,
-        "pressure_child_memory_swap_max_bytes":
-            0,
-    }
+    bounds_current = _base_bounds("current", args.disk_delay_ms)
+    bounds_protected = _base_bounds("protected", args.disk_delay_ms)
     revision = _git_revision()
     result_paths = {
         "memory_current": args.results_dir / "memory_current.json",
@@ -2200,7 +2673,7 @@ def _run_public(args: argparse.Namespace) -> None:
       }
       composition_recorder = ResultRecorder(result_paths["composition"], composition_payload)
     sample_count = args.sample_count
-    pressure_bytes = int(args.memory_pressure_gib * GIB)
+    pressure_cap_bytes = int(args.memory_pressure_gib * GIB)
     if args.case in ("all", "memory"):
       for layout in memory_layouts:
         recorder = recorders[f"memory_{layout}"]
@@ -2212,6 +2685,7 @@ def _run_public(args: argparse.Namespace) -> None:
             layout=layout,
             sample_count=sample_count,
             guard_callback=recorder.record_guard_run,
+            run_repair_probes=True,
         )
         recorder.finish_checkpoint("baseline_no_pressure", {"metrics": baseline})
         stress = _run_server_stage(
@@ -2222,9 +2696,8 @@ def _run_public(args: argparse.Namespace) -> None:
             layout=layout,
             sample_count=sample_count,
             guard_callback=recorder.record_guard_run,
-            pressure_bytes=pressure_bytes,
-            unit_memory_high=6 * GIB if layout == "protected" else None,
-            unit_memory_max=7 * GIB if layout == "protected" else None,
+            pressure_cap_bytes=pressure_cap_bytes,
+            run_repair_probes=True,
         )
         recorder.finish_checkpoint("memory_pressure", {"metrics": stress})
     if wants_disk or wants_cold:
@@ -2336,6 +2809,9 @@ def main(argv: list[str] | None = None) -> None:
     return
   if args and args[0] == "_pressure":
     _pressure_main(args[1:])
+    return
+  if args and args[0] == "_repair_probe":
+    _repair_probe_main(args[1:])
     return
   if args and args[0] == "_composition":
     _composition_main(args[1:])

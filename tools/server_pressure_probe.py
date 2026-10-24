@@ -64,6 +64,8 @@ MAX_MEMORY_PRESSURE_GIB = 5.5
 MAX_DISK_DELAY_MS = 1.0
 MAX_LIVE_EVENT_GIB = 1.2
 MAX_COPIED_SESSIONS = 128
+COLD_STANDARD_P95_RATIO = 2.0
+COLD_STANDARD_LONGEST_SLACK_MS = 5000.0
 SERVER_PATH = "/usr/bin:/bin"
 AGENT_CLI_NAMES = ("antigravity", "charlie-code", "claude", "codex", "gemini", "opencode")
 
@@ -712,6 +714,10 @@ class ResultRecorder:
     self.payload["run_summary"] = result
     self._write()
 
+  def set_reference_verdicts(self, verdicts: dict[str, Any]) -> None:
+    self.payload["reference_verdicts"] = verdicts
+    self._write()
+
   def fail(self, error: Exception) -> None:
     self.payload["failure"] = f"{type(error).__name__}: {error}"
     self._write()
@@ -1114,7 +1120,7 @@ def _parse_measurement_args(argv: list[str] | None) -> argparse.Namespace:
       choices=("all", "memory", "disk", "cold", "composition"),
       default="all",
       help=
-      "memory compares current/protected layouts; disk is approximate; cold measures a fresh first tree; composition records boot and tree cache sizes",
+      "memory compares current/protected layouts; disk is approximate; cold measures a fresh first tree and judges the concurrent burst against the same burst without tree requests; composition records boot and tree cache sizes",
   )
   parser.add_argument(
       "--layout",
@@ -1245,7 +1251,14 @@ async def _measure_warm_batch(base_url: str, access_key: str, session_ids: list[
 
 
 async def _measure_cold_burst(
-    base_url: str, access_key: str, session_ids: list[str], samples: int, *, concurrent: bool) -> dict[str, Any]:
+    base_url: str,
+    access_key: str,
+    session_ids: list[str],
+    samples: int,
+    *,
+    concurrent: bool,
+    include_tree: bool = True,
+) -> dict[str, Any]:
   import httpx
 
   definitions = _request_definitions(session_ids)
@@ -1257,22 +1270,25 @@ async def _measure_cold_burst(
       timeout=180.0,
       limits=httpx.Limits(max_connections=max(samples * len(definitions), 10)),
   ) as client:
-    first_tree = asyncio.create_task(_timed_request(client, tree_method, tree_path, tree_payload))
+    first_tree = (
+        asyncio.create_task(_timed_request(client, tree_method, tree_path, tree_payload)) if include_tree else None)
     if concurrent:
       await asyncio.sleep(0.01)
       other_requests: list[tuple[str, asyncio.Task[dict[str, Any]]]] = []
       for name, (method, path, payload) in definitions.items():
-        count = samples if name != tree_name else max(0, samples - 1)
+        count = samples
+        if name == tree_name:
+          count = max(0, samples - 1) if include_tree else 0
         other_requests.extend(
             (name, asyncio.create_task(_timed_request(client, method, path, payload))) for _ in range(count))
-      first_result = await first_tree
+      first_result = None if first_tree is None else await first_tree
       responses = await asyncio.gather(*(task for _, task in other_requests))
-      values: dict[str, list[float]] = {
-          name: [first_result["duration_ms"]] if name == tree_name else [] for name in definitions
-      }
-      statuses: dict[str, list[int]] = {
-          name: [first_result["status"]] if name == tree_name else [] for name in definitions
-      }
+      measured_names = list(definitions) if include_tree else [name for name in definitions if name != tree_name]
+      values: dict[str, list[float]] = {name: [] for name in measured_names}
+      statuses: dict[str, list[int]] = {name: [] for name in measured_names}
+      if first_result is not None:
+        values[tree_name].append(first_result["duration_ms"])
+        statuses[tree_name].append(first_result["status"])
       for (name, _task), response in zip(other_requests, responses, strict=True):
         values[name].append(response["duration_ms"])
         statuses[name].append(response["status"])
@@ -1286,7 +1302,8 @@ async def _measure_cold_burst(
                   "statuses": statuses[name],
               } for name, durations in values.items()
       }
-      return {"cold_first_tree_ms": round(first_result["duration_ms"], 3), "endpoints": metrics}
+      cold_first_tree_ms = None if first_result is None else round(first_result["duration_ms"], 3)
+      return {"cold_first_tree_ms": cold_first_tree_ms, "endpoints": metrics}
     first_result = await first_tree
   warm_metrics = await _measure_warm_batch(base_url, access_key, session_ids, samples)
   warm_metrics[tree_name] = {
@@ -1297,6 +1314,36 @@ async def _measure_cold_burst(
       "statuses": [first_result["status"]],
   }
   return {"cold_first_tree_ms": round(first_result["duration_ms"], 3), "endpoints": warm_metrics}
+
+
+def _judge_against_reference(concurrent: dict[str, Any], reference: dict[str, Any]) -> dict[str, Any]:
+  """Judge each non-tree endpoint of the cold burst against the same burst without tree requests.
+
+  The plan's standard: p95 at most twice the reference p95, and the longest request at most the
+  reference longest plus 5 s. The tree endpoint is reported by its own time and is not judged here.
+  """
+  tree_name = "GET /api/sessions/tree"
+  verdicts: dict[str, dict[str, Any]] = {}
+  for name, measured in concurrent.items():
+    if name == tree_name:
+      continue
+    base = reference[name]
+    p95_limit = COLD_STANDARD_P95_RATIO * base["p95_ms"]
+    longest_limit = base["longest_ms"] + COLD_STANDARD_LONGEST_SLACK_MS
+    verdicts[name] = {
+        "reference_p95_ms": base["p95_ms"],
+        "concurrent_p95_ms": measured["p95_ms"],
+        "p95_limit_ms": round(p95_limit, 3),
+        "reference_longest_ms": base["longest_ms"],
+        "concurrent_longest_ms": measured["longest_ms"],
+        "longest_limit_ms": round(longest_limit, 3),
+        "passed": measured["p95_ms"] <= p95_limit and measured["longest_ms"] <= longest_limit,
+    }
+  return {
+      "standard": "p95 <= 2 x reference p95 and longest <= reference longest + 5000 ms",
+      "endpoints": verdicts,
+      "passed": all(verdict["passed"] for verdict in verdicts.values()),
+  }
 
 
 def _choose_port() -> int:
@@ -1593,6 +1640,7 @@ def _run_server_stage(
     pressure_bytes: int = 0,
     disk_delay_ms: float = 0.0,
     cold_concurrent: bool = False,
+    cold_without_tree: bool = False,
     cold_baseline: bool = False,
     unit_memory_high: int | None = None,
     unit_memory_max: int | None = None,
@@ -1732,7 +1780,14 @@ def _run_server_stage(
           raise RuntimeError(f"pressure worker allocation did not reach its target: {allocation}")
       if cold_concurrent:
         cold_metrics = asyncio.run(
-            _measure_cold_burst(base_url, access_key, synthetic_ids, sample_count, concurrent=True))
+            _measure_cold_burst(
+                base_url,
+                access_key,
+                synthetic_ids,
+                sample_count,
+                concurrent=True,
+                include_tree=not cold_without_tree,
+            ))
         metrics = cold_metrics["endpoints"]
         cold_first_tree_ms = cold_metrics["cold_first_tree_ms"]
       else:
@@ -2216,6 +2271,20 @@ def _run_public(args: argparse.Namespace) -> None:
         )
         recorders["cold"].finish_checkpoint("baseline_first_tree_alone", {"metrics": cold_alone})
         recorders["cold"].finish_checkpoint("first_tree_with_concurrent_endpoints", {"metrics": concurrent_baseline})
+        reference = _run_server_stage(
+            copy=main_copy,
+            stage_name="cold-concurrent-without-tree-reference",
+            results_dir=args.results_dir,
+            access_key=synthetic_key,
+            layout="current",
+            sample_count=sample_count,
+            guard_callback=recorders["cold"].record_guard_run,
+            cold_concurrent=True,
+            cold_without_tree=True,
+        )
+        recorders["cold"].finish_checkpoint("concurrent_endpoints_without_tree", {"metrics": reference})
+        recorders["cold"].set_reference_verdicts(
+            _judge_against_reference(concurrent_baseline["endpoints"], reference["endpoints"]))
       if wants_disk:
         disk = _run_server_stage(
             copy=main_copy,

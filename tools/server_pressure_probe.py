@@ -69,7 +69,7 @@ REPAIR_MEMORY_MAX = 768 * MIB
 REPAIR_PROBE_BYTES = 256 * MIB
 REPAIR_PROBE_RUNS = 8
 VM_SWAP_SAMPLE_INTERVAL_S = 1.0
-PRESSURE_WORKER_READY_TIMEOUT_S = 240.0
+PRESSURE_WINDOW_START_TIMEOUT_S = 600.0
 MAX_KILL_RESTARTS = 64
 MAX_DISK_DELAY_MS = 1.0
 MAX_LIVE_EVENT_GIB = 1.2
@@ -931,16 +931,21 @@ def _pressure_main(argv: list[str]) -> None:
   parser.add_argument("--ready-file", type=pathlib.Path, required=True)
   args = parser.parse_args(argv)
   _wait_for_file(args.start_file, timeout=120.0)
+  stopped = threading.Event()
+  signal.signal(signal.SIGTERM, lambda _signum, _frame: stopped.set())
+  signal.signal(signal.SIGINT, lambda _signum, _frame: stopped.set())
   blocks: list[bytearray] = []
   remaining = args.size_bytes
   block_size = 64 * MIB
-  while remaining:
+  while remaining and not stopped.is_set():
     size = min(block_size, remaining)
     block = bytearray(size)
     for offset in range(0, size, 4096):
       block[offset] = 1
     blocks.append(block)
     remaining -= size
+  if stopped.is_set():
+    return
   flush_json(args.ready_file, {"pid": os.getpid(), "allocated_bytes": args.size_bytes})
   stopped = threading.Event()
   signal.signal(signal.SIGTERM, lambda _signum, _frame: stopped.set())
@@ -1744,6 +1749,8 @@ def _wait_scope_exit(
     start_file: pathlib.Path | None = None,
     stop_file: pathlib.Path | None = None,
     allow_sigterm: bool = False,
+    allow_sigkill: bool = False,
+    wait_timeout_s: float = 30.0,
 ) -> int:
   if process.poll() is None:
     if start_file is not None and stop_file is not None:
@@ -1752,7 +1759,7 @@ def _wait_scope_exit(
     else:
       subprocess.run(["/usr/bin/systemctl", "--user", "stop", unit], check=True, capture_output=True, text=True)
   try:
-    code = process.wait(timeout=30)
+    code = process.wait(timeout=wait_timeout_s)
   except subprocess.TimeoutExpired:
     raise TimeoutError(f"systemd-run client for {unit} did not exit after stop")
   if cgroup.exists() and _cgroup_pids(cgroup):
@@ -1760,7 +1767,11 @@ def _wait_scope_exit(
   log_fd = getattr(process, "_pressure_log_fd", None)
   if log_fd is not None:
     log_fd.close()
-  accepted_codes = {0, -signal.SIGTERM} if allow_sigterm else {0}
+  accepted_codes = {0}
+  if allow_sigterm:
+    accepted_codes.add(-signal.SIGTERM)
+  if allow_sigkill:
+    accepted_codes.add(-signal.SIGKILL)
   if code not in accepted_codes:
     raise RuntimeError(f"scope {unit} exited with status {code}")
   return code
@@ -1776,14 +1787,17 @@ class PressureWorker:
       unit: str,
       cgroup: pathlib.Path,
       log_fd: Any,
-      allocated: bool,
+      ready_file: pathlib.Path,
+      target_bytes: int,
       scope_bounds: dict[str, Any] | None = None,
   ) -> None:
     self.process = process
     self.unit = unit
     self.cgroup = cgroup
     self.log_fd = log_fd
-    self.allocated = allocated
+    self.ready_file = ready_file
+    self.target_bytes = target_bytes
+    self.allocated = False
     self.scope_bounds = scope_bounds
 
   def is_running(self) -> bool:
@@ -1792,12 +1806,33 @@ class PressureWorker:
   def exit_code(self) -> int:
     return self.process.returncode
 
+  def poll_allocation(self) -> bool:
+    """Check the worker's ready file once; a worker killed mid-allocation never reports it."""
+    if self.allocated:
+      return True
+    if not self.ready_file.is_file():
+      return False
+    allocation = json.loads(self.ready_file.read_text(encoding="utf-8"))
+    if int(allocation["allocated_bytes"]) != self.target_bytes:
+      raise RuntimeError(f"pressure worker allocation did not reach its target: {allocation}")
+    self.allocated = True
+    return True
+
   def close_log(self) -> None:
     if not self.log_fd.closed:
       self.log_fd.close()
 
   def stop(self) -> int:
-    code = _wait_scope_exit(self.process, self.unit, self.cgroup, allow_sigterm=True)
+    # A worker crawling under MemoryHigh reclaim answers SIGTERM slowly, so systemd
+    # escalates to SIGKILL; a scope we stopped ourselves counts as stopped either way.
+    code = _wait_scope_exit(
+        self.process,
+        self.unit,
+        self.cgroup,
+        allow_sigterm=True,
+        allow_sigkill=True,
+        wait_timeout_s=120.0,
+    )
     self.close_log()
     return code
 
@@ -1844,10 +1879,12 @@ class PressureSupervisor:
       worker = self._start_worker()
       self.active = worker
       self.worker_starts.append(worker.unit)
-      if worker.allocated:
-        self.first_activity.set()
       while worker.is_running() and not self.stop_event.is_set():
+        if worker.poll_allocation():
+          self.first_activity.set()
         self.stop_event.wait(self._poll_interval_s)
+      if worker.poll_allocation():
+        self.first_activity.set()
       if worker.is_running():
         return
       code = worker.exit_code()
@@ -1915,26 +1952,16 @@ def _start_pressure_worker(
       "memory_max_bytes": _read_cgroup_bound(cgroup, "memory.max"),
       "memory_swap_max_bytes": _read_cgroup_bound(cgroup, "memory.swap.max"),
   }
-  deadline = time.monotonic() + PRESSURE_WORKER_READY_TIMEOUT_S
-  allocated = False
-  while True:
-    if ready_file.is_file():
-      allocation = json.loads(ready_file.read_text(encoding="utf-8"))
-      if int(allocation["allocated_bytes"]) != target_bytes:
-        raise RuntimeError(f"pressure worker allocation did not reach its target: {allocation}")
-      allocated = True
-      break
-    if process.poll() is not None:
-      break
-    if time.monotonic() >= deadline:
-      raise TimeoutError(f"pressure worker {unit} did not allocate within {PRESSURE_WORKER_READY_TIMEOUT_S:g}s")
-    time.sleep(0.02)
+  # Return without waiting for allocation: in the protected layout the worker
+  # crawls through MemoryHigh reclaim for minutes before the kernel ends it, so
+  # the supervisor polls the ready file instead of blocking here.
   return PressureWorker(
       process=process,
       unit=unit,
       cgroup=cgroup,
       log_fd=log_fd,
-      allocated=allocated,
+      ready_file=ready_file,
+      target_bytes=target_bytes,
       scope_bounds=scope_bounds,
   )
 
@@ -2184,7 +2211,7 @@ def _run_server_stage(
         supervisor_thread = threading.Thread(
             target=supervisor.run, name="charliebot-pressure-worker-supervisor", daemon=True)
         supervisor_thread.start()
-        if not supervisor.first_activity.wait(timeout=PRESSURE_WORKER_READY_TIMEOUT_S + 60.0):
+        if not supervisor.first_activity.wait(timeout=PRESSURE_WINDOW_START_TIMEOUT_S):
           raise TimeoutError("pressure worker never reached its target and was never killed")
       if cold_concurrent:
         cold_metrics = asyncio.run(
@@ -2333,7 +2360,7 @@ def _run_server_stage(
     if supervisor is not None:
       supervisor.stop()
       if supervisor_thread is not None:
-        supervisor_thread.join(timeout=PRESSURE_WORKER_READY_TIMEOUT_S + 60.0)
+        supervisor_thread.join(timeout=30)
         if supervisor_thread.is_alive():
           raise TimeoutError("pressure worker supervisor did not stop during cleanup")
       active = supervisor.active

@@ -61,9 +61,8 @@ async def _tee_stream(
     read: Callable[[int], Awaitable[bytes]], fd: int | None, on_chunk: Callable[[bytes], None] | None = None) -> None:
   """Pump one subprocess stream into the caller's log fd, batching the executor hop.
 
-  The fd is the caller's: opened and closed by the pump's owner (the stderr
-  tee closes in its own finally; the opencode stdout fd serves the startup
-  lines and closes via _close_stdout_log). A flush fires when the buffer
+  The fd is the caller's: opened and closed by the pump's owner (both callers
+  close it in their own finally). A flush fires when the buffer
   fills, at a short read (the StreamReader hands out full chunks while its
   transport buffer holds them, so a short read marks the moment the stream
   drained — every sparse line flushes immediately and `tail -f` stays live),

@@ -9,13 +9,13 @@ use std::sync::Arc;
 use anyhow::{Context, anyhow};
 use charliebot_agents::runner::EventFn;
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
+use charliebot_core::fsutil;
 use charliebot_registry::backend::ResumeStyle;
 use charliebot_registry::context::FeatureContext;
 use serde_json::{Map, Value};
 use tokio::sync::{mpsc, oneshot};
 
 const STDERR_TAIL_BYTES: u64 = 64 * 1024;
-const REVERSE_SCAN_CHUNK_BYTES: usize = 64 * 1024;
 const TYPE_FILTER_HEAD_BYTES: usize = 256;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -75,7 +75,8 @@ fn read_stderr_tail_file(path: &Path) -> anyhow::Result<(String, usize)> {
 
 /// Visit matching NDJSON events newest first, stopping when `visit` returns a value. Only a provable mismatch in the
 /// first 256 bytes is skipped without reading its full line, matching Python's `iter_ndjson_events_from_end` and
-/// `type_line_filter` (`src/infra/ndjson.py:404-547`).
+/// `type_line_filter` (`src/infra/ndjson.py:404-547`). The walk reads one page at a time, the page holding the byte
+/// before its position, so a walk that stops at a line leaves the older pages unread, as Python's mmap walk does.
 pub(crate) fn visit_events_from_end<T>(
   path: &Path,
   keep_types: &[&str],
@@ -87,12 +88,13 @@ pub(crate) fn visit_events_from_end<T>(
     Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok((None, EventScanStats::default())),
     Err(error) => return Err(error).with_context(|| format!("opening event log {}", path.display())),
   };
+  let page_bytes = fsutil::page_bytes();
   let mut pos = file.metadata().with_context(|| format!("stating event log {}", path.display()))?.len();
   let mut line_end = pos;
   let mut stats = EventScanStats::default();
-  let mut chunk = vec![0; REVERSE_SCAN_CHUNK_BYTES];
+  let mut chunk = vec![0; usize::try_from(page_bytes).context("a page does not fit usize")?];
   while pos > 0 {
-    let start = pos.saturating_sub(REVERSE_SCAN_CHUNK_BYTES as u64);
+    let start = (pos - 1) / page_bytes * page_bytes;
     let size = usize::try_from(pos - start).context("event-log scan chunk does not fit usize")?;
     file.seek(SeekFrom::Start(start)).with_context(|| format!("seeking event log {}", path.display()))?;
     file.read_exact(&mut chunk[..size]).with_context(|| format!("reading event log {}", path.display()))?;
@@ -238,6 +240,7 @@ pub(crate) fn extra_flags_of(backend_kwargs: &Map<String, Value>) -> anyhow::Res
 #[cfg(test)]
 mod tests {
   use super::{read_stderr_tail_file, type_line_proves_rejection, visit_events_from_end};
+  use charliebot_core::fsutil;
   use std::fs;
 
   #[test]
@@ -258,6 +261,34 @@ mod tests {
     assert_eq!(summary.as_deref(), Some("done"));
     assert_eq!(stats.events_parsed, 1, "filtered lines are not parsed into Value objects");
     assert_eq!(stats.lines_visited, 257);
+  }
+
+  #[test]
+  fn reverse_event_reader_reads_only_the_pages_from_the_newest_matching_event() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("events.jsonl");
+    let page_bytes = fsutil::page_bytes();
+    let mut raw = String::new();
+    for index in 0..200 {
+      raw.push_str(&format!("{{\"type\":\"user\",\"id\":\"tool-{index}\",\"blob\":\"{}\"}}\n", "x".repeat(1024)));
+    }
+    let result = "{\"type\":\"result\",\"result\":\"done\"}";
+    let result_start = raw.len() as u64;
+    raw.push_str(result);
+    raw.push('\n');
+    fs::write(&path, &raw).unwrap();
+
+    let (summary, stats) = visit_events_from_end(&path, &["result"], None, |event| {
+      event.get("result").and_then(serde_json::Value::as_str).map(str::to_string)
+    })
+    .unwrap();
+    assert_eq!(summary.as_deref(), Some("done"));
+    assert_eq!(stats.lines_visited, 1);
+    // The walk reads the pages from the one holding the newline before the result through EOF, then the result's head
+    // and body once more. The 200 padding lines before it are never read.
+    let span = raw.len() as u64 - (result_start - 1) / page_bytes * page_bytes;
+    let body = result.len() as u64;
+    assert_eq!(stats.bytes_read, span + body.min(256) + body);
   }
 
   #[test]

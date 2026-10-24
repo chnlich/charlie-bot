@@ -558,11 +558,10 @@ This catch-up merges main `d113f2c4d` into `rust-backend`. The two all-stage Rus
 
 ## Catch-up d113f2c4d ignored Cargo tests
 
-Three Cargo tests fail on main changes, so each carries `#[ignore = "catch-up d113f2c4d: <row>"]`. Before the ignores, `cargo test --locked --no-fail-fast` fails these three and nothing else. No other Rust change.
+Two Cargo tests fail on main changes, so each carries `#[ignore = "catch-up d113f2c4d: <row>"]`. Before the ignores, `cargo test --locked --no-fail-fast` fails these two and nothing else. No other Rust change.
 
 | Row | Test | Binary | Main commit | Difference |
 | --- | --- | --- | --- | --- |
-| R337 | the_route_answers_as_the_python_route_does_over_the_matrix | charliebot-agents (`tests/openai_compatible_proxy.rs`) | ee62f6dbb | 8 of 516 matrix cases differ: `thinking:enabled` answers 400 where Python answers 200, and the image-block cases differ in their body. |
 | R338 | python_and_rust_task_trees_share_nodes_gates_and_mutation_bytes | charliebot-store (`tests/cross_implementation.rs`) | a31877580 | The Python helper `tests/python_store_ops.py` calls `TaskTreeManager.archive_unsuccessful_worker`, which main moved to the completion owner (AttributeError). |
 | R339 | python_and_rust_archive_a_subtree_into_the_same_fact_bytes | charliebot-store (`tests/cross_implementation.rs`) | a31877580 | The Python helper calls `TaskTreeManager.archive_subtree`, which main moved to the completion owner (AttributeError). |
 
@@ -592,9 +591,9 @@ its count tests. The other three are in Rust, so they need no count note.
 | fb31d1360 | delete two zero-reference helpers | no behavior | Deletes helpers with no references. |
 | 71e25b4ae | release the GIL inside the tree walks and between rows | in Rust | The Rust tree and event walks hold no GIL (`rust/crates/charliebot-session-api/src/tree.rs:34`). Constraint 2 (chat-event cache). The commit adds no count test. |
 | dd081ea57 | keep an append exactly once when a cold fill runs on a thread | in Rust | The per-session cache lock covers the file write and the cache push (`rust/crates/charliebot-store/src/events.rs:181-200`), and the cold fill takes the same lock (`rust/crates/charliebot-store/src/store.rs:317`). Constraint 2 (chat-event cache). Its count test `test_cold_events_fill_on_a_thread_keeps_an_append_exactly_once` has no Rust test with that name. |
-| 0769b0c85 | slot Gemini's index-less stream tool calls at index 0 | unported | Rust rejects stream tool calls without an index (`rust/crates/charliebot-agents/src/backends/openai_compatible/translate.rs:405-434`), and Rust has no Gemini index-less conversion. No parity step drives it. |
+| 0769b0c85 | slot Gemini's index-less stream tool calls at index 0 | in Rust | `tool_delta` assigns index 0 for Gemini at `rust/crates/charliebot-agents/src/backends/openai_compatible/translate.rs:576` and splits reused indexes by tool id at `:587`. Tests: `test_stream_tool_call_without_index_uses_zero_for_idless_continuations`, `test_gemini_stream_index_less_delta_with_signature_yields_one_tool_block`, `test_gemini_stream_two_index_less_calls_split_by_id`. No parity step drives it. |
 | 0b4e7b337 | preserve tool input schemas | in Rust | Tool schemas pass through (`rust/crates/charliebot-agents/src/backends/openai_compatible/translate.rs:184-193`). |
 | 72f3ed8d2 | reject stream tool calls without an index | in Rust | The stream translator rejects a tool call without an index (`translate.rs:405-434`). |
-| ee62f6dbb | support Gemini Claude Code tool calls | red-list | R337 (the matrix). Rust owner: `rust/crates/charliebot-agents/src/backends/openai_compatible/translate.rs`, which has no Gemini conversion or `extra_content`. |
+| ee62f6dbb | support Gemini Claude Code tool calls | in Rust | Request translation is at `rust/crates/charliebot-agents/src/backends/openai_compatible/translate.rs:24`, non-stream responses at `:358`, and streaming at `:574`. Rust tests named after the Python counterparts pass, and the formerly ignored route matrix now passes all 516 cases. |
 | 36333d884 | compute session-tree rows on a worker thread from bounded reads | unported | Constraint 2 (bounded session-tree reads). Rust `tree_page` calls `task_tree_activity` per row (`rust/crates/charliebot-session-api/src/tree.rs:88,92`), and `node_state_versioned` folds the full history (`rust/crates/charliebot-store/src/task_tree.rs:727`). Count tests this commit adds to `tests/test_task_sessions.py`: `test_tree_rows_computed_across_an_append_equal_the_rows_before_or_after_it` and the "caches no history" and "without reading its history" tests. No Rust test has these names. |
 | 7e66ebb12 | walk typed facts from the end without caching them | in Rust | Rust tail reads seek from the end of the file (`rust/crates/charliebot-store/src/events.rs:348,1161-1188`). Constraint 2 (bounded reads). |

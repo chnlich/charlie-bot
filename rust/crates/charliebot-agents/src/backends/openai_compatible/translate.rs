@@ -106,9 +106,56 @@ fn blocks_to_text(content: &Value, label: &str) -> PyResult<String> {
   }
 }
 
-fn flush_user_text(converted: &mut Vec<Value>, parts: &mut Vec<String>) {
+fn image_block_to_openai_part(block: &Map<String, Value>, label: &str) -> PyResult<Value> {
+  let source_value = block.get("source").cloned().unwrap_or(Value::Null);
+  let source = require_dict(&source_value, &format!("{label} source"))?;
+  if source.get("type").and_then(Value::as_str) != Some("base64") {
+    return value_error(format!("unsupported {label} source type: {}", py_str(source.get("type"), "None")));
+  }
+  let media_type = source.get("media_type").filter(|media_type| truthy(media_type));
+  let data = source.get("data").and_then(Value::as_str);
+  let (Some(media_type), Some(data)) = (media_type, data) else {
+    return value_error(format!("{label} source missing media_type or data"));
+  };
+  Ok(json!({
+    "type": "image_url",
+    "image_url": {"url": format!("data:{};base64,{data}", pyfmt::python_str(media_type))},
+  }))
+}
+
+fn tool_result_to_openai_content(content: &Value) -> PyResult<(String, Vec<Value>)> {
+  match content {
+    Value::String(text) => Ok((text.clone(), Vec::new())),
+    Value::Array(blocks) => {
+      let mut text = String::new();
+      let mut images = Vec::new();
+      for raw in blocks {
+        let block = require_dict(raw, "tool_result content block")?;
+        match block.get("type").and_then(Value::as_str) {
+          Some("text") => text.push_str(&py_str(block.get("text"), "")),
+          Some("image") => images.push(image_block_to_openai_part(block, "tool_result image")?),
+          _ => {
+            return value_error(format!(
+              "unsupported tool_result content block type: {}",
+              py_str(block.get("type"), "None")
+            ));
+          }
+        }
+      }
+      Ok((text, images))
+    }
+    _ => value_error("tool_result content must be a string or content block list"),
+  }
+}
+
+fn flush_user_parts(converted: &mut Vec<Value>, parts: &mut Vec<Value>) {
   if !parts.is_empty() {
-    converted.push(json!({"role": "user", "content": parts.concat()}));
+    let content = if parts.iter().all(|part| part["type"] == "text") {
+      Value::String(parts.iter().map(|part| pyfmt::python_str(&part["text"])).collect())
+    } else {
+      Value::Array(parts.clone())
+    };
+    converted.push(json!({"role": "user", "content": content}));
     parts.clear();
   }
 }
@@ -122,26 +169,30 @@ fn convert_user_message(message: &Map<String, Value>) -> PyResult<Vec<Value>> {
     Some(_) => return value_error("user message content must be a string or content block list"),
   };
   let mut converted = Vec::new();
-  let mut text_parts = Vec::new();
+  let mut user_parts = Vec::new();
+  let mut tool_result_images = Vec::new();
   for raw in blocks {
     let block = require_dict(raw, "user content block")?;
     match block.get("type").and_then(Value::as_str) {
-      Some("text") => text_parts.push(py_str(block.get("text"), "")),
+      Some("text") => user_parts.push(json!({"type": "text", "text": py_str(block.get("text"), "")})),
+      Some("image") => user_parts.push(image_block_to_openai_part(block, "user image")?),
       Some("tool_result") => {
-        flush_user_text(&mut converted, &mut text_parts);
+        flush_user_parts(&mut converted, &mut user_parts);
         let Some(tool_use_id) = block.get("tool_use_id").filter(|id| truthy(id)) else {
           return value_error("tool_result block missing tool_use_id");
         };
-        let content = match block.get("content") {
-          None => String::new(),
-          Some(content) => blocks_to_text(content, "tool_result content")?,
-        };
-        converted.push(json!({"role": "tool", "tool_call_id": tool_use_id, "content": content}));
+        let content = block.get("content").cloned().unwrap_or_else(|| json!(""));
+        let (result_text, result_images) = tool_result_to_openai_content(&content)?;
+        converted.push(json!({"role": "tool", "tool_call_id": tool_use_id, "content": result_text}));
+        tool_result_images.extend(result_images);
       }
       _ => return value_error(format!("unsupported user content block type: {}", py_str(block.get("type"), "None"))),
     }
   }
-  flush_user_text(&mut converted, &mut text_parts);
+  flush_user_parts(&mut converted, &mut user_parts);
+  if !tool_result_images.is_empty() {
+    converted.push(json!({"role": "user", "content": tool_result_images}));
+  }
   Ok(converted)
 }
 
@@ -190,7 +241,6 @@ fn convert_assistant_message(message: &Map<String, Value>) -> PyResult<Value> {
   Ok(Value::Object(converted))
 }
 
-/// `_convert_tools`: each custom tool becomes a function. A built-in tool type is refused.
 fn convert_google_schema(schema: &Value) -> PyResult<Value> {
   let Value::Object(fields) = schema else {
     return raised("AttributeError", format!("'{}' object has no attribute 'items'", type_name(schema)));
@@ -236,6 +286,7 @@ fn convert_google_schema(schema: &Value) -> PyResult<Value> {
   Ok(Value::Object(converted))
 }
 
+/// `_convert_tools`: each custom tool becomes a function. A built-in tool type is refused.
 /// `_convert_tools`: each custom tool becomes a function. A built-in tool type is refused.
 fn convert_tools(tools: &Value, gemini_stream_rules: bool) -> PyResult<Vec<Value>> {
   let mut converted = Vec::new();

@@ -189,7 +189,7 @@ class PressureGuard:
     started = self._clock()
     status_code: int | None = None
     probe_error: str | None = None
-    slow_timer = threading.Timer(self._slow_seconds, self._freeze_if_needed)
+    slow_timer = threading.Timer(self._slow_seconds, self._timer_freeze)
     slow_timer.daemon = True
     slow_timer.start()
     try:
@@ -274,11 +274,22 @@ class PressureGuard:
       self._fast_since = None
       if self._frozen:
         return
-      self._freeze()
-      now = self._clock()
-      self._frozen = True
-      self._freeze_started = now
+      # Record when the freeze was requested: applying it can take tens of
+      # seconds while tasks sit in reclaim or writeback, and the interval must
+      # show the guard's reaction time, not the kernel's completion time.
+      self._freeze_started = self._clock()
       self._freeze_started_at = self._wall_clock()
+      self._freeze()
+      self._frozen = True
+
+  def _timer_freeze(self) -> None:
+    """Freeze from the slow-probe timer; a failure must not die silently."""
+    try:
+      self._freeze_if_needed()
+    except Exception as exc:
+      if self.failure is None:
+        self.failure = exc
+      self.stop_event.set()
 
   def _thaw_if_ready(self, now: float) -> None:
     with self._state_lock:
@@ -698,13 +709,13 @@ def _freeze_cgroup(cgroup: pathlib.Path) -> None:
   if not freeze_path.is_file():
     raise RuntimeError(f"cgroup.freeze is unavailable for {cgroup}")
   freeze_path.write_text("1", encoding="ascii")
-  deadline = time.monotonic() + 10.0
+  deadline = time.monotonic() + 60.0
   while time.monotonic() < deadline:
     events = (cgroup / "cgroup.events").read_text(encoding="ascii")
     if "frozen 1" in events.splitlines():
       return
     time.sleep(0.01)
-  raise TimeoutError(f"cgroup did not freeze within 10 seconds: {cgroup}")
+  raise TimeoutError(f"cgroup did not freeze within 60 seconds: {cgroup}")
 
 
 def _thaw_cgroup(cgroup: pathlib.Path) -> None:
@@ -974,9 +985,10 @@ def _pressure_main(argv: list[str]) -> None:
 
 
 def _kill_fill(kill_fill_file: pathlib.Path, stopped: threading.Event) -> None:
-  # Small chunks keep each write's balance_dirty_pages stall short, so a guard
-  # freeze of the slice does not wait long on a task inside this loop.
-  chunk = b"x" * (16 * MIB)
+  # One large write charges all its pages inside a single syscall, before the
+  # memcg high throttle's return-to-userspace sleep, so a chunk crosses
+  # MemoryMax in one throttle cycle instead of crawling at the fault rate.
+  chunk = b"x" * (768 * MIB)
   written = 0
   with kill_fill_file.open("wb") as stream:
     while not stopped.is_set():

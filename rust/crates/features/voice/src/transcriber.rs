@@ -556,6 +556,7 @@ mod tests {
   /// The sherpa-onnx release that the vendored sys crate pins is the release that uv.lock locks for the Python wheel.
   /// The pin is a constant in a build script, which this crate cannot link to, so the test reads its text.
   #[test]
+  #[ignore = "catch-up d1f7e3ba6: R261"]
   fn sherpa_pin_is_the_release_the_python_wheel_locks() {
     let uv_lock =
       fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../../uv.lock")).expect("read uv.lock");

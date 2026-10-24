@@ -25,6 +25,8 @@ Guarantees the delivery stage pins down:
   and the pending-input blocker hook they answer.
 """
 
+from __future__ import annotations
+
 import asyncio
 import dataclasses
 import datetime
@@ -122,11 +124,10 @@ class _TaskFacts:
   covered: int = 0
 
 
-# The task state read of a closed node walks this many history lines from the
-# end before falling back to the full fold (LIFECYCLE_TAIL_LINES exceed).
-LIFECYCLE_TAIL_LINES = 1000
 # The history facts whose newest one fixes a node's task state.
 _LIFECYCLE_STATE_TYPES = frozenset({ET.CLONE_START, ET.TASK_CLOSED, ET.TASK_REOPENED})
+# The history facts a node's Run verdicts read: terminal outcomes and stop requests.
+_RUN_FACT_TYPES = frozenset({ET.RUN_FINISHED, ET.RUN_STOP_REQUESTED})
 
 
 def _task_state_of_lifecycle(event: dict) -> str:
@@ -266,42 +267,41 @@ class TaskTreeActivity:
 
 def derive_task_tree_activity(
     run_records: list[models.RunRecord],
-    events: list[dict],
+    facts: runs.RunFacts,
     host_boot_time: Callable[[], datetime.datetime],
-    task_open: bool,
-    outcomes: dict[str, str] | None = None,
+    task_open: Callable[[], bool],
 ) -> TaskTreeActivity:
   """The single owner of a task-tree node's activity rules.
 
-  Reads only durable facts (the run records and the session's fact history)
-  plus process liveness for Runs that still lack a terminal fact — /proc is
-  never consulted for a terminal or queued Run, and the host boot time is read
-  lazily, only when some Run needs a liveness judgment. Running work wins over
-  waiting work; every Run with a terminal fact contributes nothing, and so
-  does a launched Run whose process is dead (its recovery is the
-  completion/cancellation blockers' job, not a sidebar verdict).
+  Reads only durable facts (the run records, and the node's folded Run facts:
+  terminal outcomes and stop requests) plus process liveness for Runs that
+  still lack a terminal fact — /proc is never consulted for a terminal or
+  queued Run. A run record with ``ended_at`` is settled without its fact: the
+  finish path writes ``ended_at`` only after the terminal fact lands. The host
+  boot time and the task's openness are read lazily, only when a Run needs
+  them. Running work wins over waiting work; every Run with a terminal fact
+  contributes nothing, and so does a launched Run whose process is dead (its
+  recovery is the completion/cancellation blockers' job, not a sidebar
+  verdict).
 
   Waiting means a queued Run on an open task: ``task_open`` gates the queued
   verdict, because ``execute_run`` withholds every launch on a non-open task,
   so a closed task's queued Run never starts and must not hold the sidebar's
-  clock. The
-  running verdict is not gated: closure is refused while a Run is active, so a
-  closed task cannot hold a live Run.
+  clock. The running verdict is not gated: closure is refused while a Run is
+  active, so a closed task cannot hold a live Run.
   """
   if not run_records:
     return TaskTreeActivity(has_running_tasks=False, work_state="idle")
-  if outcomes is None:
-    outcomes = runs.run_outcomes_in_events(events)
   verdicts: list[str] = []
   has_running = False
   boot: datetime.datetime | None = None
   for run in run_records:
-    if outcomes.get(run.id) is not None:
+    if run.ended_at is not None or facts.outcomes.get(run.id) is not None:
       continue  # a terminal fact of any outcome is a settled Run, not activity
     if run.pid is None:
-      if runs.stop_requested_in_events(events, run.id):
+      if facts.stop_requests.get(run.id):
         continue  # a stopped queued run is resolved-by-request, not waiting work
-      if not task_open:
+      if not task_open():
         continue  # a closed task's queued run never launches, so it is not waiting work
       verdicts.append("waiting")  # queued on an open task: retains its inputs for later dispatch
       continue
@@ -321,6 +321,78 @@ def derive_task_tree_activity(
       work_state = state  # type: ignore[assignment]
       break
   return TaskTreeActivity(has_running_tasks=has_running, work_state=work_state)
+
+
+def _live_end(identity: tuple[int, int, int] | None) -> int:
+  """The live-file byte offset a history identity covers (0 while the file does not exist)."""
+  return 0 if identity is None else identity[1]
+
+
+class _ColdReadError(Exception):
+  """A warm-only read pass met a node whose verdict is not memoized, so the pass must run off the loop."""
+
+
+class _NodeReads:
+  """One read pass over task-tree nodes: each node's lifecycle state and activity, read once.
+
+  A row reads its node from several places: its own state and activity, its
+  parent's open and running counts, and the archive inheritance of its subtree.
+  Every one of those reads takes the verdict this pass holds for the node, so a
+  concurrent append lands wholly before or wholly after the pass. The node's
+  history identity is taken before its first read, and the live-file reads stop
+  at that identity's size, so a verdict is exactly the verdict of the content its
+  identity names.
+
+  A warm-only pass answers from the memos alone: a node whose verdict is not
+  memoized at its current identity raises _ColdReadError, and the caller reruns the
+  pass on a worker thread. The loop serves a warm read with a stat and a dict
+  lookup, and never reads a history file.
+  """
+
+  def __init__(self, tree: TaskTreeManager, *, warm_only: bool = False) -> None:
+    self._tree = tree
+    self._warm_only = warm_only
+    # Read before any run record: the generation keys every activity verdict this pass stores.
+    self._generation = tree.runs.records_generation
+    self._identities: dict[str, tuple[int, int, int] | None] = {}
+    self._states: dict[str, str] = {}
+    self._activity: dict[str, TaskTreeActivity] = {}
+
+  def _identity(self, session_id: str) -> tuple[int, int, int] | None:
+    if session_id not in self._identities:
+      self._identities[session_id] = self._tree._history_identity(session_id)
+    return self._identities[session_id]
+
+  def task_state(self, session_id: str) -> str:
+    """The node's lifecycle state from its history tail (see TaskTreeManager._task_state_fast)."""
+    if session_id not in self._states:
+      identity = self._identity(session_id)
+      if self._warm_only:
+        state = self._tree._memoized_task_state(session_id, identity)
+        if state is None:
+          raise _ColdReadError(session_id)
+      else:
+        state = self._tree._task_state_at(session_id, identity)
+      self._states[session_id] = state
+    return self._states[session_id]
+
+  def activity(self, session_id: str) -> TaskTreeActivity:
+    """The node's activity; a queued Run reads this pass's task state for its gate."""
+    if session_id not in self._activity:
+      identity = self._identity(session_id)
+      if self._warm_only:
+        activity = self._tree._memoized_activity(session_id, identity, self._generation)
+        if activity is None:
+          raise _ColdReadError(session_id)
+      else:
+        activity = self._tree._activity_at(
+            session_id,
+            identity,
+            self._generation,
+            task_open=lambda: self.task_state(session_id) == "open",
+        )
+      self._activity[session_id] = activity
+    return self._activity[session_id]
 
 
 class TaskTreeManager:
@@ -345,6 +417,10 @@ class TaskTreeManager:
     self.session_events = events
     self.session_successor = successor
     self.control_lock = asyncio.Lock()
+    # One tree-row computation at a time: a burst of pages would otherwise run the same
+    # history reads on parallel threads and starve the event loop of the GIL. A page
+    # behind the first finds the memos the first left, so it costs a few stats.
+    self._tree_rows_lock = asyncio.Lock()
     self.events = control_sink.ControlEventSink(self.session_events)
     self.runs = runs.RunStore(cfg.sessions_dir, self.control_lock, self.events)
     # The run owner's terminal/stop/identity reads see the full fact history
@@ -386,19 +462,21 @@ class TaskTreeManager:
     self._index_generation = 0
     self._index_build_task: asyncio.Task[_TreeIndex] | None = None
     self._index_build_generation = -1
+    # The full fold's memo (task_state, facts_of): lifecycle decisions and
+    # the input/completion owners read it, so it stays the list-identity fold.
     self._facts_memo: dict[str, tuple[list[dict], int, _TaskFacts]] = {}
+    # Every memo below the full fold is keyed by the node's history identity
+    # (inode, size, mtime) and holds small verdicts only, never parsed events.
+    # The tree path writes these from its worker thread: a key taken before the
+    # read can only trail the content it stores, so a racing append re-derives.
     self._state_tail_memo: dict[str, tuple[tuple[int, int, int] | None, str]] = {}
-    self._outcomes_memo: dict[str, tuple[list[dict], int, dict[str, str], int]] = {}
-    # Activity cells: (records_generation, live events or None, covered live
-    # length or -1, verdict). A None live list marks a runless node's cell —
-    # its verdict is a constant that only a record write (a generation bump)
-    # can move, so it skips the events load the runs-bearing key needs. The
-    # covered length is in the key because the events cache takes an append in
-    # place: the list identity survives a new fact, and unlike the suffix
-    # folds this memo returns a stored verdict, so the only append a key
-    # check can see is the length move. The archived extent needs no slot —
-    # it rides the identity under the facts memo's contract (see _facts_of).
-    self._activity_memo: dict[str, tuple[int, list[dict] | None, int, TaskTreeActivity]] = {}
+    # Run facts (terminal outcomes and stop requests) folded from the node's
+    # history by identity; a generation bump re-derives the verdict from these
+    # without another history scan.
+    self._outcomes_memo: dict[str, tuple[tuple[int, int, int] | None, runs.RunFacts]] = {}
+    # Activity cells: (records_generation, history identity, verdict). A verdict
+    # that consulted /proc is never stored (see _activity_at).
+    self._activity_memo: dict[str, tuple[int, tuple[int, int, int] | None, TaskTreeActivity]] = {}
     self._prompt_bodies_dir = cfg.charliebot_home / PROMPT_BODIES_DIR_NAME
 
   @property
@@ -539,12 +617,13 @@ class TaskTreeManager:
     # parent's archived status among them, which this loop skips entirely.
     index = _TreeIndex(metas=metas, children=children, revision="", root_sig=root_sig)
     memo: dict[str, bool] = {}
+    reads = _NodeReads(self)
     structural: list[str] = []
     for sid, meta in task_nodes:
-      state = self._task_state_fast(sid)
+      state = reads.task_state(sid)
       structural.append(
           f"{sid}|{meta.task_parent_id or ''}|{meta.profile}|{meta.status.value}"
-          f"|{state}|{self._archived_of_pass(index, meta, memo)}")
+          f"|{state}|{self._archived_of_pass(index, meta, memo, reads)}")
     # The placeholder revision above is an input only to the shared-memo pass,
     # which never reads it; the real one lands before the index is published.
     index.revision = control_events.sha256_hex("\n".join(sorted(structural)))
@@ -559,7 +638,7 @@ class TaskTreeManager:
   def _children_of(self, index: _TreeIndex, session_id: str | None) -> list[str]:
     return list(index.children.get(session_id, []))
 
-  def _descendants(self, index: _TreeIndex, session_id: str) -> list[str]:
+  def _descendants(self, index: _TreeIndex, session_id: str, reads: _NodeReads | None = None) -> list[str]:
     """All transitive descendants, archived ones included, cycle-guarded (a cycle here is corrupted data, not a tree).
 
     The size cap counts only non-archived descendants: an archived node is one the
@@ -571,6 +650,7 @@ class TaskTreeManager:
     stack = list(self._children_of(index, session_id))
     seen = {session_id}
     memo: dict[str, bool] = {}
+    reads = _NodeReads(self) if reads is None else reads
     while stack:
       sid = stack.pop()
       if sid in seen:
@@ -579,7 +659,7 @@ class TaskTreeManager:
       out.append(sid)
       stack.extend(self._children_of(index, sid))
       meta = self._index_meta(index, sid)
-      if meta.status != models.SessionStatus.ARCHIVED and not self._archived_of_pass(index, meta, memo):
+      if meta.status != models.SessionStatus.ARCHIVED and not self._archived_of_pass(index, meta, memo, reads):
         open_count += 1
         if open_count > task_errors.DESCENDANT_NODE_LIMIT:
           raise task_errors.TaskConflictError(
@@ -661,6 +741,18 @@ class TaskTreeManager:
       return live
     return [*self._load_archived_events(session_id, archived_count), *live]
 
+  async def read_fact_history(self, session_id: str) -> list[dict]:
+    """The full fact history, answered on the event loop when memory holds all of it.
+
+    A warm events cache whose archive offset the metadata cache holds at zero is the whole history, so
+    the loop returns it with no I/O. A cold cache or an archived session reads through fact_history on
+    a worker thread.
+    """
+    live = self.session_events.chat_events.peek_cached_events(session_id)
+    if live is not None and self.session_events.chat_events.peek_archive_offset(session_id) == 0:
+      return live
+    return await asyncio.to_thread(self.fact_history, session_id)
+
   def _archived_event_count(self, session_id: str, live: list[dict]) -> int:
     total = self.session_events.get_chat_event_count_sync(session_id)
     return max(0, total - len(live))
@@ -669,43 +761,66 @@ class TaskTreeManager:
     events, _has_more = self.session_events.load_chat_events_range(session_id, 0, count)
     return events
 
-  def _task_state_fast(self, session_id: str) -> str:
-    """The task state from the history's end, without loading the full fold.
+  def _history_identity(self, session_id: str) -> tuple[int, int, int] | None:
+    """The live history file's (inode, size, mtime); None while the file does not exist.
 
-    The boot pass's index and archive decisions ask only for a node's task
-    state; this read walks the live file backwards over at most
-    LIFECYCLE_TAIL_LINES non-empty lines and takes the newest lifecycle fact
-    (clone_start / task_closed / task_reopened) — the same verdict the full
-    fold's last-wins pass gives. A tail without a lifecycle fact falls back
-    to the full fold, because the deciding fact may sit in the archived
-    segments or deeper in the live file. The result is cached by file
-    identity (inode, size, mtime): any lifecycle write appends to the file
-    and moves the key, so a stale verdict cannot survive a mutation.
+    Every history write appends to the file or replaces it, so a memo keyed on this
+    identity cannot outlive the write it describes.
     """
-    path = chat_events.chat_events_path(self._cfg.sessions_dir / session_id)
     try:
-      st = os.stat(path)
-      key: tuple[int, int, int] | None = (st.st_ino, st.st_size, st.st_mtime_ns)
+      st = os.stat(chat_events.chat_events_path(self._cfg.sessions_dir / session_id))
     except OSError:
-      # No history yet: the full fold's missing-file answer (below) rules.
-      key = None
-    cached = self._state_tail_memo.get(session_id)
-    if cached is not None and cached[0] == key:
-      return cached[1]
-    newest: dict | None = None
-    for event in ndjson.iter_ndjson_events_from_end(path, log_event="task_state_tail_parse_skipped",
-                                                    log_fields={"session": session_id},
-                                                    parse_filter=ndjson.type_line_filter(_LIFECYCLE_STATE_TYPES),
-                                                    max_lines=LIFECYCLE_TAIL_LINES):
-      # type_line_filter only skips lines whose head proves a foreign type; a
-      # line with no `type` key (or a foreign leading key) still yields, so
-      # keep walking until a line's parsed type names a lifecycle fact.
-      if event.get("type") in _LIFECYCLE_STATE_TYPES:
-        newest = event
-        break
-    state = self._facts_of(session_id).task_state if newest is None else _task_state_of_lifecycle(newest)
-    self._state_tail_memo[session_id] = (key, state)
+      return None
+    return (st.st_ino, st.st_size, st.st_mtime_ns)
+
+  def _task_state_fast(self, session_id: str) -> str:
+    """The task state read from the history's end, without loading the history.
+
+    See :meth:`_task_state_at`; this reads the node's current history identity.
+    """
+    return self._task_state_at(session_id, self._history_identity(session_id))
+
+  def _task_state_at(self, session_id: str, identity: tuple[int, int, int] | None) -> str:
+    """The task state of the history at *identity*: its newest lifecycle fact, else open.
+
+    The walk streams the live file backwards and then the archive segments, and
+    stops at the first lifecycle fact (clone_start / task_closed / task_reopened).
+    That is the verdict the full fold's last-wins pass gives, and nothing is
+    cached but the verdict: a tail without a lifecycle fact costs a walk, not a
+    history load. The memo is keyed by *identity*, so any lifecycle write moves
+    the key and a stale verdict cannot survive a mutation.
+    """
+    memoized = self._memoized_task_state(session_id, identity)
+    if memoized is not None:
+      return memoized
+    newest = next(
+        self.session_events.chat_events.iter_events_from_end(session_id, _LIFECYCLE_STATE_TYPES, _live_end(identity)),
+        None)
+    state = "open" if newest is None else _task_state_of_lifecycle(newest)
+    self._state_tail_memo[session_id] = (identity, state)
     return state
+
+  def _memoized_task_state(self, session_id: str, identity: tuple[int, int, int] | None) -> str | None:
+    """The memoized task state at *identity*, or None when the walk has not run for it."""
+    cached = self._state_tail_memo.get(session_id)
+    if cached is not None and cached[0] == identity:
+      return cached[1]
+    return None
+
+  def _run_facts_at(self, session_id: str, identity: tuple[int, int, int] | None) -> runs.RunFacts:
+    """The node's folded Run facts at *identity*, read from the history without caching the history.
+
+    The fold runs over the run facts alone, in forward order, so its last-wins
+    rule matches :func:`runs.fold_run_facts`. The result is memoized by identity.
+    """
+    cached = self._outcomes_memo.get(session_id)
+    if cached is not None and cached[0] == identity:
+      return cached[1]
+    newest_first = self.session_events.chat_events.iter_events_from_end(
+        session_id, _RUN_FACT_TYPES, _live_end(identity))
+    facts = runs.fold_run_facts(runs.RunFacts(), list(reversed(list(newest_first))))
+    self._outcomes_memo[session_id] = (identity, facts)
+    return facts
 
   def _facts_of(self, session_id: str) -> _TaskFacts:
     """The session's folded task/run facts over the full history (suffix-memoized).
@@ -746,30 +861,6 @@ class TaskTreeManager:
       self._facts_memo[session_id] = (live, archived_count, facts)
     return facts
 
-  def _run_outcomes_of(self, session_id: str, live: list[dict], archived_count: int) -> dict[str, str]:
-    """The session's run-finished outcome map over the full history (suffix-memoized).
-
-    Rides the facts memo's key (``_facts_of`` owns the extent-through-identity
-    contract) — the live events cache's list identity — with the covered
-    cursor in the cell: an append folds only the new suffix (a run_finished
-    fact never un-happens, so the merge stays last-finish-wins), and a
-    rotation's replaced list re-keys the whole fold.
-    """
-    cached = self._outcomes_memo.get(session_id)
-    if cached is not None and cached[0] is live:
-      outcomes, covered = cached[2], cached[3]
-    else:
-      outcomes = runs.run_outcomes_in_events(self._load_archived_events(session_id,
-                                                                        archived_count)) if archived_count else {}
-      covered = 0
-    suffix = live[covered:]
-    if suffix:
-      for run_id, outcome in runs.run_outcomes_in_events(suffix).items():
-        outcomes[run_id] = outcome
-      covered = len(live)
-    self._outcomes_memo[session_id] = (live, archived_count, outcomes, covered)
-    return outcomes
-
   def facts_of(self, session_id: str) -> _TaskFacts:
     """Public fold entry for the input/completion owners (same memo)."""
     return self._facts_of(session_id)
@@ -796,40 +887,37 @@ class TaskTreeManager:
   def activity_of(self, session_id: str) -> TaskTreeActivity:
     """The node's derived sidebar activity: live-Run flag plus work verdict.
 
-    The one derivation the sidebar's task-tree probe reuses, so a sidebar row
-    and the tree projection can never disagree about the same node.
-
-    Memoized per node on the inputs that can move the verdict: the run
-    records' generation (every record mutation funnels through one
-    :meth:`runs.RunStore.write_record` bump) plus, for a node with runs, the
-    chat-events identity and its covered length. The length is in the key
-    because the events cache takes an append in place — identity survives a
-    new fact, and a fact transition with no record write (a stop request, a
-    close/reopen) moves only the length. The archived extent needs no key
-    slot: it rides the identity under the facts memo's contract (see
-    ``_facts_of``).
-    A verdict that consulted /proc is never stored: a process death moves it
-    with no file write to bump the key, so that node re-derives until its
-    runs settle (the sidebar probe's recheck_liveness contract, unchanged).
+    The one derivation the sidebar's task-tree probe, the tree rows and the
+    session detail share, so their verdicts for one node can never disagree.
+    A caller reading several nodes of one projection holds a :class:`_NodeReads`
+    and asks it instead, so the nodes read at one instant.
     """
-    generation = self.runs.records_generation
-    cached = self._activity_memo.get(session_id)
-    if cached is not None and cached[0] == generation:
-      if cached[1] is None:
-        return cached[3]
-      live = self.session_events.load_chat_events_sync(session_id)
-      if cached[1] is live and cached[2] == len(live):
-        return cached[3]
+    return _NodeReads(self).activity(session_id)
+
+  def _activity_at(
+      self,
+      session_id: str,
+      identity: tuple[int, int, int] | None,
+      generation: int,
+      task_open: Callable[[], bool],
+  ) -> TaskTreeActivity:
+    """The node's activity at one history identity and one records generation.
+
+    Memoized on that pair. Every record mutation funnels through one
+    :meth:`runs.RunStore.write_record` bump, and every history write moves the
+    identity. A run record with ``ended_at`` is settled, so the Run facts are read
+    only when some run is unsettled. A verdict that consulted /proc is never
+    stored: a process death moves it with no file write to bump the key, so that
+    node re-derives until its runs settle (the sidebar probe's recheck_liveness
+    contract, unchanged).
+    """
+    memoized = self._memoized_activity(session_id, identity, generation)
+    if memoized is not None:
+      return memoized
     run_records = self.runs.list_run_records_sync(session_id)
-    if not run_records:
-      # No Run is no activity: the derivation's own guard answers without any
-      # event load, so a listing's per-descendant derivation over a runless
-      # node pays one runs-dir stat, not the node's whole event history.
-      activity = derive_task_tree_activity([], [], self._host_boot_time, task_open=False)
-      self._activity_memo[session_id] = (generation, None, -1, activity)
-      return activity
-    live = self.session_events.load_chat_events_sync(session_id)
-    archived_count = self._archived_event_count(session_id, live)
+    facts = runs.RunFacts()
+    if any(run.ended_at is None for run in run_records):
+      facts = self._run_facts_at(session_id, identity)
     probed = False
 
     def host_boot_time() -> datetime.datetime:
@@ -837,19 +925,18 @@ class TaskTreeManager:
       probed = True
       return self._host_boot_time()
 
-    events = self.runs.load_events_sync(session_id)
-    task_open = self._facts_of(session_id).task_state == "open"
-    activity = derive_task_tree_activity(
-        run_records,
-        events,
-        host_boot_time,
-        task_open,
-        outcomes=self._run_outcomes_of(session_id, live, archived_count))
-    if probed:
-      self._activity_memo.pop(session_id, None)
-    else:
-      self._activity_memo[session_id] = (generation, live, len(live), activity)
+    activity = derive_task_tree_activity(run_records, facts, host_boot_time, task_open)
+    if not probed:
+      self._activity_memo[session_id] = (generation, identity, activity)
     return activity
+
+  def _memoized_activity(
+      self, session_id: str, identity: tuple[int, int, int] | None, generation: int) -> TaskTreeActivity | None:
+    """The memoized activity at *identity* and *generation*, or None when it must be derived."""
+    cached = self._activity_memo.get(session_id)
+    if cached is not None and cached[0] == generation and cached[1] == identity:
+      return cached[2]
+    return None
 
   def activity_pair_of(self, session_id: str) -> tuple[bool, str]:
     """``activity_of`` as the plain pair the sidebar snapshot stores.
@@ -863,17 +950,6 @@ class TaskTreeManager:
   def _host_boot_time(self) -> datetime.datetime:
     return runs.read_host_boot_time()
 
-  def _archived_state_based(self, meta: models.SessionMetadata) -> bool:
-    """One node's OWN archive value from its task state (no inheritance).
-
-    The subtree-inheritance fold around it lives in archived_of. A node is
-    archived exactly when its task state is not open — the close fact is the
-    archive, and a completed child counts at once (no wait for the parent
-    receipt). The state comes from the history-tail read, so a closed node's
-    full fold never loads for an archive or index decision.
-    """
-    return self._task_state_fast(meta.id) != "open"
-
   async def derived_archived_ids(self) -> set[str]:
     """Task nodes the effective archive lists while their stored status stays active.
 
@@ -886,12 +962,19 @@ class TaskTreeManager:
     """
     index = await self._get_index()
     memo: dict[str, bool] = {}
+    reads = _NodeReads(self)
     return {
         session_id for session_id, meta in index.metas.items()
-        if meta.status != models.SessionStatus.ARCHIVED and self._archived_of_pass(index, meta, memo)
+        if meta.status != models.SessionStatus.ARCHIVED and self._archived_of_pass(index, meta, memo, reads)
     }
 
-  def archived_of(self, index: _TreeIndex, meta: models.SessionMetadata, memo: dict[str, bool] | None = None) -> bool:
+  def archived_of(
+      self,
+      index: _TreeIndex,
+      meta: models.SessionMetadata,
+      memo: dict[str, bool] | None = None,
+      reads: _NodeReads | None = None,
+  ) -> bool:
     """Archive visibility with subtree inheritance (the effective archive's single owner).
 
     effective(n) is the node's own state-based value or its parent's inherited
@@ -904,21 +987,23 @@ class TaskTreeManager:
     ancestors); a relation cycle surfaces through the hop guard as
     TaskConflictError, never silently.
     """
-    return self._effective_archived(index, meta.id, {} if memo is None else memo)
+    reads = _NodeReads(self) if reads is None else reads
+    return self._effective_archived(index, meta.id, {} if memo is None else memo, reads)
 
-  def _archived_of_pass(self, index: _TreeIndex, meta: models.SessionMetadata, memo: dict[str, bool]) -> bool:
+  def _archived_of_pass(
+      self, index: _TreeIndex, meta: models.SessionMetadata, memo: dict[str, bool], reads: _NodeReads) -> bool:
     """archived_of inside one caller-owned pass: the memo spans the caller's
     whole node walk, so chains already resolved serve the rest of the pass."""
-    return self._effective_archived(index, meta.id, memo)
+    return self._effective_archived(index, meta.id, memo, reads)
 
-  def _effective_archived(self, index: _TreeIndex, session_id: str, memo: dict[str, bool]) -> bool:
+  def _effective_archived(self, index: _TreeIndex, session_id: str, memo: dict[str, bool], reads: _NodeReads) -> bool:
     """One node's effective archive value with inheritance, memoized per pass.
 
     Walks up the task-parent chain to the first memoized node or a root, then
     folds the effective values back down; every node the walk touches lands in
-    the memo, so a whole-listing pass never recomputes one. The fold reads a
-    node's own archive value from its task state (the tail read), and an
-    inherited True settles the subtree without any node's own read.
+    the memo, so a whole-listing pass never recomputes one. A node's own archive
+    value is its task state from the read pass (the tail read, not the full fold),
+    and an inherited True settles the subtree without any node's own read.
     Inheritance never overrides a node's own open state into visibility: an
     archived ancestor archives the subtree (and the invariant forbids the
     reverse shape — an open node under an archived ancestor).
@@ -941,27 +1026,30 @@ class TaskTreeManager:
         inherited = False  # a root inherits nothing
         break
       current = meta.task_parent_id
-    for sid, node in reversed(chain):
+    for sid, _meta in reversed(chain):
       if not inherited:
-        inherited = self._archived_state_based(node)
+        # A node is archived exactly when its own task state is not open: the
+        # close fact is the archive, and a completed child counts at once.
+        inherited = reads.task_state(sid) != "open"
       memo[sid] = inherited
     return memo[session_id]
 
-  def session_row(self, index: _TreeIndex, session_id: str) -> models.SessionRow:
+  def session_row(self, index: _TreeIndex, session_id: str, reads: _NodeReads | None = None) -> models.SessionRow:
+    """One tree row; *reads* is the caller's read pass, so a page's rows agree with each other."""
+    reads = _NodeReads(self) if reads is None else reads
     meta = self._index_meta(index, session_id)
     child_ids = self._children_of(index, session_id)
-    descendants = self._descendants(index, session_id)
-    descendant_work = [self.work_state_of(d) for d in descendants]
-    open_count = sum(1 for d in descendants if self.task_state(d) == "open")
-    running_count = sum(1 for state in descendant_work if state == "running")
+    descendants = self._descendants(index, session_id, reads)
+    open_count = sum(1 for d in descendants if reads.task_state(d) == "open")
+    running_count = sum(1 for d in descendants if reads.activity(d).work_state == "running")
     return models.SessionRow(
         id=meta.id,
         name=meta.name,
         profile=meta.profile,
         task_parent_id=meta.task_parent_id,
-        task_state=self.task_state(session_id),  # type: ignore[arg-type]
-        work_state=self.work_state_of(session_id),
-        archived=self.archived_of(index, meta),
+        task_state=reads.task_state(session_id),  # type: ignore[arg-type]
+        work_state=reads.activity(session_id).work_state,
+        archived=self.archived_of(index, meta, reads=reads),
         child_count=len(child_ids),
         open_descendant_count=open_count,
         running_descendant_count=running_count,
@@ -1002,7 +1090,7 @@ class TaskTreeManager:
           # would silently do nothing.
           await self.session_anchors.clear_cc_session_anchor(session_id)
 
-  def prompt_rule_summaries(self, meta: models.SessionMetadata, index: _TreeIndex) -> dict:
+  def prompt_rule_summaries(self, meta: models.SessionMetadata, index: _TreeIndex, reads: _NodeReads) -> dict:
     """The scope/source/current-rule facts the Task/Context UI reads from the detail.
 
     Body content stays in the immutable store; this names each scope's ref,
@@ -1022,28 +1110,38 @@ class TaskTreeManager:
     return {
         "subtree": summary(meta.subtree_prompt_ref),
         "node": summary(meta.node_prompt_ref),
-        "affected_descendants": len(self._descendants(index, meta.id)),
+        "affected_descendants": len(self._descendants(index, meta.id, reads)),
     }
 
   async def session_detail(self, session_id: str) -> dict:
-    """The session detail projection: existing metadata plus the derived task fields."""
+    """The session detail projection: existing metadata plus the derived task fields.
+
+    The derived fields are answered from the memos on the event loop when every
+    verdict they need is memoized; otherwise they are derived on a worker thread.
+    """
     await self.load_task_meta(session_id)
     index = await self._get_index()
     # Re-read through the index so the detail and the tree agree on one projection.
     indexed = index.metas.get(session_id)
     if indexed is None:
       raise task_errors.TaskNotFoundError(f"task {session_id} not found")
+    try:
+      derived = self._detail_fields(index, indexed, _NodeReads(self, warm_only=True))
+    except _ColdReadError:
+      derived = await asyncio.to_thread(self._detail_fields, index, indexed, _NodeReads(self))
     ancestors = self._ancestors(index, session_id)
     payload = indexed.model_dump(mode="json")
-    payload.update(
-        {
-            "task_state": self.task_state(session_id),
-            "work_state": self.work_state_of(session_id),
-            "archived": self.archived_of(index, indexed),
-            "ancestors": [models.AncestorRef(id=a.id, name=a.name).model_dump() for a in ancestors],
-            "prompt_rules": self.prompt_rule_summaries(indexed, index),
-        })
+    payload.update({"ancestors": [models.AncestorRef(id=a.id, name=a.name).model_dump() for a in ancestors], **derived})
     return payload
+
+  def _detail_fields(self, index: _TreeIndex, indexed: models.SessionMetadata, reads: _NodeReads) -> dict:
+    """The derived task fields of one node, read through one pass."""
+    return {
+        "task_state": reads.task_state(indexed.id),
+        "work_state": reads.activity(indexed.id).work_state,
+        "archived": self.archived_of(index, indexed, reads=reads),
+        "prompt_rules": self.prompt_rule_summaries(indexed, index, reads),
+    }
 
   # ------------------------------------------------------------------
   # Create
@@ -1582,24 +1680,20 @@ class TaskTreeManager:
   # Tree queries
   # ------------------------------------------------------------------
 
-  def _has_running_work_descendant(self, index: _TreeIndex, session_id: str) -> bool:
+  def _has_running_work_descendant(self, index: _TreeIndex, session_id: str, reads: _NodeReads) -> bool:
     """True when any descendant's current work is running."""
-    return any(self.work_state_of(d) == "running" for d in self._descendants(index, session_id))
+    return any(reads.activity(d).work_state == "running" for d in self._descendants(index, session_id, reads))
 
-  async def tree_page(
-      self,
-      *,
-      parent_id: str | None,
-      include_archived: bool,
-      limit: int,
-      cursor: str | None,
-  ) -> dict:
-    """One revision-bound keyset page of the task tree; stale pagination is a 409."""
-    index = await self._get_index()
-    if parent_id:
-      self._index_meta(index, parent_id)
-    children = self._children_of(index, parent_id or None)
-    rows_all = [self.session_row(index, sid) for sid in children]
+  def _tree_rows_sync(self, index: _TreeIndex, parent_id: str | None,
+                      include_archived: bool) -> list[models.SessionRow]:
+    """The rows of one parent's children, computed from one read pass over the history.
+
+    Runs on a worker thread: every read here is of the index (immutable once
+    built) or of the node's files, and the only memos it writes are keyed by
+    history identity or records generation (see _NodeReads).
+    """
+    reads = _NodeReads(self)
+    rows_all = [self.session_row(index, sid, reads) for sid in self._children_of(index, parent_id)]
     if not include_archived:
       # An archived row stays navigable while running work lives at or below
       # it: dropping it would sever the path to that work in a partial client
@@ -1609,8 +1703,28 @@ class TaskTreeManager:
       # row still reports archived=true.
       rows_all = [
           r for r in rows_all
-          if not r.archived or r.work_state == "running" or self._has_running_work_descendant(index, r.id)
+          if not r.archived or r.work_state == "running" or self._has_running_work_descendant(index, r.id, reads)
       ]
+    return rows_all
+
+  async def tree_page(
+      self,
+      *,
+      parent_id: str | None,
+      include_archived: bool,
+      limit: int,
+      cursor: str | None,
+  ) -> dict:
+    """One revision-bound keyset page of the task tree; stale pagination is a 409.
+
+    The index is read on the event loop; the rows are computed on a worker thread,
+    so the loop keeps answering other requests while the page's histories are read.
+    """
+    index = await self._get_index()
+    if parent_id:
+      self._index_meta(index, parent_id)
+    async with self._tree_rows_lock:
+      rows_all = await asyncio.to_thread(self._tree_rows_sync, index, parent_id or None, include_archived)
     rows_all.sort(key=lambda r: (index.metas[r.id].created_at, r.id))
     after = _decode_tree_cursor(cursor) if cursor else None
     if after is not None:

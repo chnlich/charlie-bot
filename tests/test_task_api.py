@@ -154,13 +154,11 @@ async def test_activity_tracks_a_stop_request_that_lands_after_a_warm_derivation
 
 @pytest.mark.asyncio
 async def test_fold_agrees_with_a_cold_refold_across_a_recycle(task_env) -> None:
-  """The facts and outcome memos key on the events cache's list identity alone;
-  the recycle is archive_offset's only writer and it rewrites the live file and
-  drops the events cache in the same flow, so the replaced list is what re-keys
-  the fold. Warm and cold folds must agree after the move and after a
-  post-recycle append: a writer that bumped the offset without that drop would
-  leave the warm memo folding the suffix at a stale archived base — silently
-  wrong facts on every tree page and sidebar probe."""
+  """The run-facts memo keys on the history identity (inode, size, mtime). The
+  recycle rewrites the live file, so the identity moves and the fold re-keys.
+  Warm and cold folds must agree after the move and after a post-recycle
+  append: a memo that kept the pre-recycle identity would serve facts from a
+  stale file — silently wrong verdicts on every tree page and sidebar probe."""
   _cfg, session_blocks, task_mgr = task_env
   ids = await seed_tree(task_mgr)
   worker = ids["worker"]
@@ -180,14 +178,12 @@ async def test_fold_agrees_with_a_cold_refold_across_a_recycle(task_env) -> None
 
   await task_mgr.runs.register_run_locked(models.RunRecord(id="r2", session_id=worker))
   await task_mgr.runs.record_finish(worker, "r2", "completed")
-  warm = task_mgr._run_outcomes_of(worker, task_mgr.session_events.load_chat_events_sync(worker), meta.archive_offset)
+  identity = task_mgr._history_identity(worker)
+  warm = task_mgr._run_facts_at(worker, identity).outcomes
   assert warm == {"r1": "completed", "r2": "completed"}
 
-  task_mgr._facts_memo.clear()
   task_mgr._outcomes_memo.clear()
-  cold_live = task_mgr.session_events.load_chat_events_sync(worker)
-  cold_count = task_mgr._archived_event_count(worker, cold_live)
-  assert task_mgr._run_outcomes_of(worker, cold_live, cold_count) == warm
+  assert task_mgr._run_facts_at(worker, identity).outcomes == warm
 
 
 @pytest.mark.asyncio

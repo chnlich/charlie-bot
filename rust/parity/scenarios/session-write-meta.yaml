@@ -112,30 +112,36 @@ steps:
     compare: status_and_shape
     expect_status: 404
   - name: archive an empty task
-    method: DELETE
-    path: /api/sessions/${extras.session_write_meta.archive_session}
+    method: POST
+    path: /api/sessions/${extras.session_write_meta.archive_session}/archive
+    json: {request_id: synthetic-write-meta-archive-empty, summary: Empty task archived., result_refs: [], run_ids: []}
     expect_status: 200
   - name: archive a missing task
-    method: DELETE
-    path: /api/sessions/${missing_session}
+    method: POST
+    path: /api/sessions/${missing_session}/archive
+    json: {request_id: synthetic-write-meta-archive-missing, summary: Missing task., result_refs: [], run_ids: []}
     expect_status: 404
   - name: archive refuses an unresolved run process
-    method: DELETE
-    path: /api/sessions/${extras.session_write_meta.queued_archive}
+    method: POST
+    path: /api/sessions/${extras.session_write_meta.queued_archive}/archive
+    json: {request_id: synthetic-write-meta-archive-queued, summary: Queued task., result_refs: [], run_ids: []}
     expect_status: 409
-  - name: archive refuses an agent caller
-    method: DELETE
-    path: /api/sessions/${extras.session_write_meta.agent_session}
+  # The agent's session is not a task, so the archive finds no task to judge and answers 404.
+  - name: archive refuses an agent caller whose session is not a task
+    method: POST
+    path: /api/sessions/${extras.session_write_meta.agent_session}/archive
     auth: none
     headers:
       Authorization: "Bearer ${extras.session_write_meta.agent_token}"
-    expect_status: 403
+    json: {request_id: synthetic-write-meta-archive-agent, summary: Agent task., result_refs: [], run_ids: []}
+    expect_status: 404
   - name: archive refuses an invalid run token
-    method: DELETE
-    path: /api/sessions/${extras.session_write_meta.archive_session}
+    method: POST
+    path: /api/sessions/${extras.session_write_meta.archive_session}/archive
     auth: none
     headers:
       Authorization: Bearer invalid-token
+    json: {request_id: synthetic-write-meta-archive-token, summary: Invalid token., result_refs: [], run_ids: []}
     expect_status: 401
   - name: permanently delete an empty task
     method: DELETE

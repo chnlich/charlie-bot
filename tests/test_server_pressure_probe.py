@@ -231,6 +231,9 @@ class _FakeWorker:
       return False
     return self._runs_until_stopped
 
+  def poll_allocation(self) -> bool:
+    return self.allocated
+
   def exit_code(self) -> int:
     return self._exit_code
 

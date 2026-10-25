@@ -67,6 +67,16 @@ mod tests {
   }
 
   #[test]
+  fn an_empty_chunk_keeps_a_pending_cr_for_the_next_lf() {
+    let mut framer = LineFramer::default();
+    let mut lines = framer.push(b"x\r");
+    lines.extend(framer.push(b""));
+    lines.extend(framer.push(b"\r\n\n"));
+    assert_eq!(lines, vec![b"x".to_vec(), b"".to_vec(), b"".to_vec()]);
+    assert_eq!(framer.finish(), None);
+  }
+
+  #[test]
   fn a_frame_names_its_type_first_and_renders_ascii_escapes() {
     let frame = sse_frame("content_block_delta", &json!({"index": 0, "delta": {"text": "é\u{2028}"}}));
     assert_eq!(

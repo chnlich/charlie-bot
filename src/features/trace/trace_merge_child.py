@@ -2,8 +2,8 @@
 
 The build runs here, in a raw subprocess, because a spawn-context pool worker
 re-imports the parent's ``__main__`` — the full server module, ~0.6 s of the M99
-import floor on every build — and a forkserver child re-imports it too (the
-forked child runs spawn's preparation data, ``_serve_one`` → ``spawn._main``).
+import floor on every build — and a forkserver child re-imports it too (its
+preload imports ``__main__`` through ``spawn.import_main_path``).
 A fresh process per build is still required: a build's freed arenas stay mapped
 in a reused worker's address space and the next build's allocations only
 sometimes reuse them, the retention the merge pool's ``max_tasks_per_child=1``

@@ -6,10 +6,11 @@ use std::io;
 use std::sync::Arc;
 
 use axum::Router;
-use axum::body::{Body, Bytes, to_bytes};
+use axum::body::{Body, to_bytes};
 use axum::extract::{Path, State};
-use axum::http::{StatusCode, header};
-use axum::response::Response;
+use axum::http::{HeaderValue, StatusCode, header};
+use axum::response::sse::{self, Sse};
+use axum::response::{IntoResponse, Response};
 use charliebot_compat::http_client;
 use charliebot_compat::responses;
 use charliebot_compat::routing::post_only;
@@ -20,7 +21,7 @@ use serde_json::{Value, json};
 
 use super::options::CcOpenAiOption;
 use super::pyvalue::{self, Fault};
-use super::sse::{LineFramer, sse_frame};
+use super::sse::{LineFramer, sse_event};
 use super::translate::{self, Event, OpenAiChatStream};
 
 const ROUTE: &str = "/api/anthropic-proxy/openai-compatible/{backend_id}/v1/messages";
@@ -175,11 +176,17 @@ fn stream_response(upstream: reqwest::Response, model: &str, gemini_stream_rules
     done: false,
   };
   relay.queue(relay.translator.start_events());
-  Response::builder()
-    .status(StatusCode::OK)
-    .header(header::CONTENT_TYPE, "text/event-stream; charset=utf-8")
-    .body(Body::from_stream(relay_frames(relay)))
-    .expect("a fixed-header response builds")
+  sse_response(relay_frames(relay))
+}
+
+/// The SSE body of `events`, with the headers the Python answer carries: axum's `text/event-stream` gains a charset,
+/// and its `no-cache` is dropped.
+fn sse_response(events: impl Stream<Item = Result<sse::Event, io::Error>> + Send + 'static) -> Response {
+  let mut response = Sse::new(events).into_response();
+  let headers = response.headers_mut();
+  headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("text/event-stream; charset=utf-8"));
+  headers.remove(header::CACHE_CONTROL);
+  response
 }
 
 /// The state of one streamed answer: the upstream being read, the line framer, the translator, and the frames ready
@@ -188,7 +195,7 @@ struct Relay {
   upstream: reqwest::Response,
   framer: LineFramer,
   translator: OpenAiChatStream,
-  frames: VecDeque<Bytes>,
+  frames: VecDeque<sse::Event>,
   /// The failure that ends the body, sent after the frames queued before it.
   failure: Option<io::Error>,
   /// Whether the upstream still has lines to read. `[DONE]` and the upstream's end both clear it.
@@ -198,7 +205,7 @@ struct Relay {
 
 /// The body's frames: every queued frame, then the failure that ends the body early, then the end. A failure leaves the
 /// body without `message_stop`, as the Python generator's exception does.
-fn relay_frames(state: Relay) -> impl Stream<Item = Result<Bytes, io::Error>> {
+fn relay_frames(state: Relay) -> impl Stream<Item = Result<sse::Event, io::Error>> {
   stream::unfold(state, |mut relay| async move {
     loop {
       if let Some(frame) = relay.frames.pop_front() {
@@ -221,7 +228,7 @@ fn relay_frames(state: Relay) -> impl Stream<Item = Result<Bytes, io::Error>> {
 impl Relay {
   fn queue(&mut self, events: Vec<Event>) {
     for (name, data) in events {
-      self.frames.push_back(Bytes::from(sse_frame(name, &data)));
+      self.frames.push_back(sse_event(name, &data));
     }
   }
 
@@ -358,6 +365,17 @@ mod tests {
   fn python_strip_removes_the_vertical_tab_too() {
     assert_eq!(trim_python_space(b" \x0b{}\r\x0c"), b"{}");
     assert_eq!(trim_python_space(b" \t "), b"");
+  }
+
+  #[tokio::test]
+  async fn a_streamed_answer_carries_the_python_headers_and_frames() {
+    let events = stream::iter([Ok::<_, io::Error>(sse_event("message_stop", &json!({})))]);
+    let response = sse_response(events);
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers().len(), 1);
+    assert_eq!(response.headers()[header::CONTENT_TYPE], "text/event-stream; charset=utf-8");
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(body.as_ref(), b"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n");
   }
 
   #[tokio::test]

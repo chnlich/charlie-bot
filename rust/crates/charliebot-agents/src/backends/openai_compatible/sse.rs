@@ -1,6 +1,7 @@
 //! The byte-level parts of the proxy's stream: the line framing of `src/infra/sse.py` and the frame `_sse_event` writes.
 
 use charliebot_core::pyfmt;
+use memchr::memchr2;
 use serde_json::{Map, Value};
 
 use super::pyvalue::COMPACT_ASCII_JSON;
@@ -16,21 +17,26 @@ pub struct LineFramer {
 impl LineFramer {
   /// The lines that `chunk` completes, without their terminators.
   pub fn push(&mut self, chunk: &[u8]) -> Vec<Vec<u8>> {
+    if chunk.is_empty() {
+      return Vec::new();
+    }
+    let mut body = chunk;
+    if std::mem::take(&mut self.after_cr) && body[0] == b'\n' {
+      body = &body[1..];
+    }
     let mut lines = Vec::new();
-    for &byte in chunk {
-      let follows_cr = std::mem::take(&mut self.after_cr);
-      if follows_cr && byte == b'\n' {
-        continue;
-      }
-      match byte {
-        b'\n' => lines.push(std::mem::take(&mut self.line)),
-        b'\r' => {
-          lines.push(std::mem::take(&mut self.line));
-          self.after_cr = true;
-        }
-        other => self.line.push(other),
+    let mut start = 0;
+    while let Some(offset) = memchr2(b'\r', b'\n', &body[start..]) {
+      let end = start + offset;
+      self.line.extend_from_slice(&body[start..end]);
+      lines.push(std::mem::take(&mut self.line));
+      start = end + 1;
+      if body[end] == b'\r' && body.get(start) == Some(&b'\n') {
+        start += 1;
       }
     }
+    self.line.extend_from_slice(&body[start..]);
+    self.after_cr = body.last() == Some(&b'\r');
     lines
   }
 

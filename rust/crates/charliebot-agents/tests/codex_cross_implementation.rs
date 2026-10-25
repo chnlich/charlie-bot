@@ -523,14 +523,33 @@ fn check_argv(fx: &Fixture, cases: &[Value], python: &Value, failures: &mut Vec<
     let backend = build_backend(fx, &option_of(case), launch_of(case));
     let base = env_map(&fx.env_base());
     let prepared = backend.prepare_env(base.clone()).unwrap();
-    let rust = json!({
+    let mut rust = json!({
       "id": case["id"],
       "argv": backend.build_command(PROMPT).unwrap(),
       "env_delta": env_delta(&prepared, &base),
       "stdin": backend.stdin_prompt(PROMPT),
       "instructions_target": backend.instructions_target().map(|(file, event)| json!([file, event])),
     });
-    expect_eq(failures, &format!("argv {}", text(&case["id"])), &rust, python_case);
+    let mut python_case = python_case.clone();
+    normalize_developer_instructions_arg(rust["argv"].as_array_mut().unwrap());
+    normalize_developer_instructions_arg(python_case["argv"].as_array_mut().unwrap());
+    expect_eq(failures, &format!("argv {}", text(&case["id"])), &rust, &python_case);
+  }
+}
+
+/// Codex parses the `developer_instructions` `-c` value as TOML, so compare the text it reads instead of quoting bytes.
+fn normalize_developer_instructions_arg(argv: &mut [Value]) {
+  for argument in argv {
+    let Some(raw) = argument.as_str().and_then(|arg| arg.strip_prefix("developer_instructions=")) else {
+      continue;
+    };
+    if raw == "null" {
+      continue;
+    }
+    let decoded: toml::Table =
+      toml::from_str(&format!("value = {raw}")).expect("the developer_instructions argument is a TOML value");
+    let decoded = decoded["value"].as_str().expect("developer_instructions is a TOML string");
+    *argument = Value::String(format!("developer_instructions={decoded}"));
   }
 }
 

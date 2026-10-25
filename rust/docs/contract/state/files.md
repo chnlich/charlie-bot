@@ -1,6 +1,6 @@
 # Persisted state: every file the Python server reads or writes
 
-Baseline: the Python tree at `d113f2c4d` on `rust-backend`. A Rust server that shares a `CHARLIEBOT_HOME` with
+Baseline: the Python tree at `085f024a5` on `rust-backend`. A Rust server that shares a `CHARLIEBOT_HOME` with
 this baseline must read every file below as the baseline writes it and must write it so the baseline reads it
 back. Paths use `<home>` for the resolved `CHARLIEBOT_HOME`, `<sid>` for a session id, `<run>` for a run id and
 `/home/<user>` for the operator's home directory. Module paths are repo-relative. A statement marked
@@ -625,8 +625,8 @@ instead.
 
 | Path | Written by | What |
 | --- | --- | --- |
-| `/sys/fs/cgroup/user.slice/user-<uid>.slice/user@<uid>.service/charliebot-agents.slice/charliebot-sess-<sid[:8]>/` | `src/infra/process.py` | agent session cgroups; see `services.md` |
-| `/sys/fs/cgroup/user.slice/user-<uid>.slice/user@<uid>.service/charliebot-repair.slice/charliebot-sess-<sid[:8]>/` | `src/infra/process.py` | repair session cgroups; see `services.md` |
+| `/sys/fs/cgroup/user.slice/user-<uid>.slice/user@<uid>.service/charliebot.slice/charliebot-agents.slice/charliebot-sess-<sid[:8]>/` | `src/infra/process.py` | agent session cgroups; see `services.md` |
+| `/sys/fs/cgroup/user.slice/user-<uid>.slice/user@<uid>.service/charliebot.slice/charliebot-repair.slice/charliebot-sess-<sid[:8]>/` | `src/infra/process.py` | repair session cgroups; see `services.md` |
 | `/sys/fs/cgroup/user.slice/user-<uid>.slice/user@<uid>.service/app.slice/charliebot-sess-<sid[:8]>/` | `src/infra/process.py` | retired session cgroups that the startup sweep may remove; see `services.md` |
 | `<paths.scratch_dir>/<top-level entry>` | `src/features/disk_sweep/sweep.py` | eligible scratch directories are removed after 14 quiet days; paths in use are skipped |
 | `<login dir>/.credentials.json` (`/home/<user>/.claude` or each `accounts.claude[].config_dir`) | `src/backends/claude_code/usage_quota.py` (from the `ext_usage` service) | rewritten ATOMIC-JSON `indent=2, private=True` when an OAuth token refresh succeeds |

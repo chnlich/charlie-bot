@@ -1,6 +1,6 @@
 # Configuration: `config.yaml`, `config.d/`, `credentials.yaml`
 
-Baseline: the Python tree at `d113f2c4d`. This document gives every key the baseline accepts, its type and
+Baseline: the Python tree at `085f024a5`. This document gives every key the baseline accepts, its type and
 default, the validation rule, and the error a bad value raises. Error texts are quoted from source; `<...>` marks
 an interpolated value. A Rust server reading the same files must accept exactly this set and refuse the rest with
 equivalent errors. **UNVERIFIED** marks a statement not confirmed from source, with the reason.

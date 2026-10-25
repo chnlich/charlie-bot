@@ -1,6 +1,6 @@
 # `charliebot-store` API
 
-Baseline: Python tree at `d113f2c4d`. The store owns writes to session `metadata.json`,
+Baseline: Python tree at `085f024a5`. The store owns writes to session `metadata.json`,
 `data/chat_events.jsonl`, task facts, and immutable prompt bodies. It receives the ordered `MetadataSlot` list and all
 six required runtime hooks at construction; absent hooks fail startup. Metadata mutation methods read from disk while
 holding the session lock, save atomically, then return a fresh read-back. No public whole-object save

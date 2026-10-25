@@ -39,7 +39,7 @@ import pathlib
 from typing import TYPE_CHECKING
 
 from src.infra import config, log_once, models
-from src.runtime import runs, task_execution
+from src.runtime import chat_events, runs, task_execution
 from src.runtime.hooks import sequence_controllers
 
 if TYPE_CHECKING:
@@ -124,7 +124,7 @@ def _boot_skip_reason(
   if tree.task_state_fast(session_id) == "open":
     return "state_open"
   marker_ts = marker.timestamp()
-  for path in (session_dir / runs.DATA_DIR_NAME / "chat_events.jsonl", session_dir / runs.METADATA_NAME):
+  for path in (chat_events.chat_events_path(session_dir), session_dir / runs.METADATA_NAME):
     try:
       mtime = path.stat().st_mtime
     except FileNotFoundError:

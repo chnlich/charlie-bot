@@ -526,8 +526,7 @@ class OpenCodeBackend(base.AgentBackend):
     the root is deleted when the call returns. ``--format json`` emits one event per line: a text event
     per completed text part, and an error event that fails the call.
     """
-    if not pathlib.Path(server.OPENCODE_BIN).is_file():
-      raise RuntimeError(f"opencode 2.0 binary not found at {server.OPENCODE_BIN}")
+    server.require_binary()
     framed = self._frame_system_prompt(system_prompt, prompt)
     root = pathlib.Path(tempfile.mkdtemp(prefix="charliebot-opencode-oneshot-"))
     try:

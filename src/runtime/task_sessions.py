@@ -1486,7 +1486,7 @@ class TaskTreeManager:
         raise task_errors.TaskConflictError([f"task {session_id} is {state}; only open tasks accept retries"])
       original = await self.runs.get_run(session_id, original_run_id)
       if original is None:
-        raise task_errors.TaskNotFoundError(f"run {original_run_id} not found in session {session_id}")
+        raise task_errors.TaskNotFoundError(runs.run_not_found_in_task_text(original_run_id, session_id))
       retry_fields: dict = {}
       if original.kind == "manager_turn":
         # A manager-round retry reruns that round's own batch: the retry Run

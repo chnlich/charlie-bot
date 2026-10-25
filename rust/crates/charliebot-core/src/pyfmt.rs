@@ -257,12 +257,11 @@ enum FloatForm {
   Pydantic,
 }
 
-/// `json.dumps(value, ...)` under `style`. Styles that pass non-ASCII through and keep insertion order
-/// serialize through serde_json (see [`serde_style_dumps`]); the `ensure_ascii` forms keep the hand
-/// escaper, whose `\uXXXX` pairs no crate emits, and the `sort_keys` styles the hand walk until their
-/// turn.
+/// `json.dumps(value, ...)` under `style`. Styles that pass non-ASCII through serialize through
+/// serde_json (see [`serde_style_dumps`]); the `ensure_ascii` forms keep the hand escaper, whose
+/// `\uXXXX` pairs no crate emits.
 pub fn json_dumps(value: &Value, style: &JsonStyle) -> String {
-  if style.ensure_ascii || style.sort_keys {
+  if style.ensure_ascii {
     let mut out = String::new();
     write_json(&mut out, value, style, FloatForm::Python, 0);
     out
@@ -273,7 +272,7 @@ pub fn json_dumps(value: &Value, style: &JsonStyle) -> String {
 
 /// `model_dump_json(...)` of a pydantic model under `style`: the `json_dumps` layout with floats in pydantic's form.
 pub fn model_json_dumps(value: &Value, style: &JsonStyle) -> String {
-  if style.ensure_ascii || style.sort_keys {
+  if style.ensure_ascii {
     let mut out = String::new();
     write_json(&mut out, value, style, FloatForm::Pydantic, 0);
     out
@@ -288,13 +287,36 @@ pub fn model_json_dumps(value: &Value, style: &JsonStyle) -> String {
 /// separators, the indent, and the float text.
 fn serde_style_dumps(value: &Value, style: &JsonStyle, floats: FloatForm) -> String {
   let mut buffer = Vec::new();
-  value
-    .serialize(&mut Serializer::with_formatter(
-      &mut buffer,
-      StyleFormatter { style: *style, floats, current_indent: 0, has_value: false },
-    ))
-    .expect("serializing a Value into a buffer cannot fail");
+  let serializer = &mut Serializer::with_formatter(
+    &mut buffer,
+    StyleFormatter { style: *style, floats, current_indent: 0, has_value: false },
+  );
+  // `sort_keys` is not a serde_json option, so only it takes the wrapping walk; the hot styles keep the
+  // direct one.
+  let serialized =
+    if style.sort_keys { SortedValue { value }.serialize(serializer) } else { value.serialize(serializer) };
+  serialized.expect("serializing a Value into a buffer cannot fail");
   String::from_utf8(buffer).expect("serde_json writes UTF-8")
+}
+
+/// Wraps a `Value` for serialization with every object's members in key order: `json.dumps`'s
+/// `sort_keys`, which serde_json does not offer (its maps keep their order).
+struct SortedValue<'a> {
+  value: &'a Value,
+}
+
+impl Serialize for SortedValue<'_> {
+  fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+    match self.value {
+      Value::Array(items) => serializer.collect_seq(items.iter().map(|item| SortedValue { value: item })),
+      Value::Object(members) => {
+        let mut entries: Vec<(&str, &Value)> = members.iter().map(|(key, value)| (key.as_str(), value)).collect();
+        entries.sort_unstable_by(|left, right| left.0.cmp(right.0));
+        serializer.collect_map(entries.into_iter().map(|(key, value)| (key, SortedValue { value })))
+      }
+      other => other.serialize(serializer),
+    }
+  }
 }
 
 fn write_json(out: &mut String, value: &Value, style: &JsonStyle, floats: FloatForm, level: usize) {
@@ -318,13 +340,7 @@ fn write_json(out: &mut String, value: &Value, style: &JsonStyle, floats: FloatF
         out.push_str(&number.to_string());
       }
     }
-    Value::String(text) => {
-      if style.ensure_ascii {
-        write_ascii_json_str(out, text);
-      } else {
-        write_serde_json_str(out, text);
-      }
-    }
+    Value::String(text) => write_ascii_json_str(out, text),
     Value::Array(items) => {
       if items.is_empty() {
         out.push_str("[]");
@@ -350,11 +366,7 @@ fn write_json(out: &mut String, value: &Value, style: &JsonStyle, floats: FloatF
       out.push('{');
       for (index, (key, item)) in entries.into_iter().enumerate() {
         write_separator(out, style, level + 1, index == 0);
-        if style.ensure_ascii {
-          write_ascii_json_str(out, key);
-        } else {
-          write_serde_json_str(out, key);
-        }
+        write_ascii_json_str(out, key);
         out.push_str(style.key_separator);
         write_json(out, item, style, floats, level + 1);
       }
@@ -386,7 +398,7 @@ fn write_closing_indent(out: &mut String, style: &JsonStyle, level: usize) {
 ///
 /// This escaper stays hand-written because no crate emits the `\uXXXX` pairs: serde_json's scan passes
 /// non-ASCII through (its ESCAPE table holds only the control set, quote and backslash), which is exactly
-/// the form the styles that do not set `ensure_ascii` take through [`write_serde_json_str`].
+/// the form the styles that do not set `ensure_ascii` take through [`serde_style_dumps`].
 pub fn write_ascii_json_str(out: &mut String, text: &str) {
   out.push('"');
   for character in text.chars() {
@@ -409,15 +421,6 @@ pub fn write_ascii_json_str(out: &mut String, text: &str) {
     }
   }
   out.push('"');
-}
-
-/// Appends one JSON string literal through serde_json's ESCAPE-table scan: the escape set of
-/// `json.dumps` with non-ASCII passed through. The hand-walked styles that do not set `ensure_ascii`
-/// write their strings here; the serializer styles take it from [`serde_style_dumps`].
-fn write_serde_json_str(out: &mut String, text: &str) {
-  let mut buffer = Vec::new();
-  text.serialize(&mut Serializer::new(&mut buffer)).expect("serializing a string into a buffer cannot fail");
-  out.push_str(std::str::from_utf8(&buffer).expect("serde_json writes UTF-8"));
 }
 
 /// The serde_json `Formatter` of [`serde_style_dumps`]: Python's separators and indent between members,
@@ -678,12 +681,13 @@ mod tests {
   }
 
   #[test]
-  fn serde_json_str_matches_cpython_ensure_ascii_false() {
+  fn starlette_style_matches_cpython_ensure_ascii_false() {
     // The bytes of `json.dumps(text, ensure_ascii=False)` in CPython: the control set escaped, DEL and
     // the non-ASCII characters raw (the shapes the fixture `json_renders.json` pins at large).
-    let mut out = String::new();
-    write_serde_json_str(&mut out, "raw \u{e9} \u{2014} \u{1f600} \u{1} \u{b} del\u{7f}");
-    assert_eq!(out, "\"raw \u{e9} \u{2014} \u{1f600} \\u0001 \\u000b del\u{7f}\"");
+    assert_eq!(
+      json_dumps(&json!("raw \u{e9} \u{2014} \u{1f600} \u{1} \u{b} del\u{7f}"), &STARLETTE_JSON),
+      "\"raw \u{e9} \u{2014} \u{1f600} \\u0001 \\u000b del\u{7f}\""
+    );
   }
 
   #[test]

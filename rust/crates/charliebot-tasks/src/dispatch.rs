@@ -9,7 +9,7 @@ use charliebot_registry::context::{FeatureContext, StateError};
 use charliebot_registry::sequence::{SequenceCompletion, SequenceDispatch};
 use charliebot_store::compact::CompactValue;
 use charliebot_store::metadata::{SessionStatus, TaskProfile, UtcDateTime};
-use charliebot_store::run_records::{RunKind, RunOutcome, RunOutcomeKind, RunRecord};
+use charliebot_store::run_records::{RunKind, RunOutcome, RunOutcomeKind, RunRecord, run_not_found_in_task_text};
 use charliebot_store::session_fork::CloseReportRedelivery;
 use charliebot_store::{
   ChatEvent, ControlGuard, SharedChatEvent, Store, StoreError, StoreHookFuture, StoreResult, StructuralBlockers,
@@ -286,7 +286,7 @@ impl Dispatcher {
     let run = self
       .store
       .read_run_sync(session_id, run_id)?
-      .ok_or_else(|| StoreError::not_found(format!("run {run_id} not found in session {session_id}")))?;
+      .ok_or_else(|| StoreError::not_found(run_not_found_in_task_text(run_id, session_id)))?;
     let state = self.store.node_state(session_id)?;
     if state.runs.terminal_outcome(run_id)?.is_some() {
       return Err(StoreError::conflict(vec![format!("run {run_id} already finished; it claims no new inputs")]));
@@ -327,7 +327,7 @@ impl Dispatcher {
     let run = self
       .store
       .read_run_sync(session_id, run_id)?
-      .ok_or_else(|| StoreError::not_found(format!("run {run_id} not found in session {session_id}")))?;
+      .ok_or_else(|| StoreError::not_found(run_not_found_in_task_text(run_id, session_id)))?;
     if run.kind != RunKind::ManagerTurn {
       return Err(StoreError::invalid(format!("run {run_id} is not a manager turn")));
     }

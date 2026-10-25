@@ -1,7 +1,7 @@
 //! Task run creation helpers (`src/runtime/task_sessions.py`).
 
 use charliebot_core::config::CharlieBotConfig;
-use charliebot_store::run_records::{RetryRunFields, RunKind, RunRecord};
+use charliebot_store::run_records::{RetryRunFields, RunKind, RunRecord, run_not_found_in_task_text};
 use charliebot_store::{Store, StoreError, StoreResult};
 
 /// Create a stable retry record while holding the task tree's control lock.
@@ -22,7 +22,7 @@ pub async fn create_retry(
   }
   let original = store
     .read_run_sync(session_id, original_run_id)?
-    .ok_or_else(|| StoreError::not_found(format!("run {original_run_id} not found in session {session_id}")))?;
+    .ok_or_else(|| StoreError::not_found(run_not_found_in_task_text(original_run_id, session_id)))?;
   let (backend_id, model) = match backend {
     Some(backend) => {
       let option = cfg

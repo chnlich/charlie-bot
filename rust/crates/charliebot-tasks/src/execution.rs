@@ -137,7 +137,7 @@ impl TaskExecutionAdapter {
           .features
           .store
           .read_run_sync(session_id, launch_run_id)?
-          .ok_or_else(|| StoreError::not_found(format!("run {launch_run_id} not found in session {session_id}")))?;
+          .ok_or_else(|| StoreError::not_found(run_records::run_not_found_in_task_text(launch_run_id, session_id)))?;
         if state.runs.terminal_outcome(&run.id)?.is_some()
           || run.pid.is_some()
           || state.runs.stop_requested(&run.id, None)
@@ -244,7 +244,7 @@ impl TaskExecutionAdapter {
         .features
         .store
         .read_run_sync(session_id, run_id)?
-        .ok_or_else(|| StoreError::not_found(format!("run {run_id} not found in session {session_id}")))?;
+        .ok_or_else(|| StoreError::not_found(run_records::run_not_found_in_task_text(run_id, session_id)))?;
       let manager_run = meta.profile == TaskProfile::Manager && run.kind == RunKind::ManagerTurn;
       let worker_run = meta.profile == TaskProfile::Worker && is_worker_kind(run.kind);
       if !manager_run && !worker_run {
@@ -806,7 +806,7 @@ impl TaskExecutionAdapter {
       .features
       .store
       .read_run_sync(session_id, run_id)?
-      .ok_or_else(|| StoreError::not_found(format!("run {run_id} not found in session {session_id}")))?;
+      .ok_or_else(|| StoreError::not_found(run_records::run_not_found_in_task_text(run_id, session_id)))?;
     self.after_worker_run(meta, &fresh, &durable).await
   }
 
@@ -1341,7 +1341,7 @@ impl TaskExecutionAdapter {
       .features
       .store
       .read_run_sync(session_id, run_id)?
-      .ok_or_else(|| anyhow!("run {run_id} not found in session {session_id}"))?;
+      .ok_or_else(|| anyhow!(run_records::run_not_found_in_task_text(run_id, session_id)))?;
     self.after_worker_run(&meta, &run, outcome).await
   }
 
@@ -2068,7 +2068,7 @@ impl TaskExecutionAdapter {
       .features
       .store
       .read_run_sync(session_id, run_id)?
-      .ok_or_else(|| StoreError::not_found(format!("run {run_id} not found in session {session_id}")))?;
+      .ok_or_else(|| StoreError::not_found(run_records::run_not_found_in_task_text(run_id, session_id)))?;
     self.after_worker_run(meta, &fresh, &durable).await
   }
 
@@ -2318,7 +2318,7 @@ impl TaskExecutionAdapter {
           .features
           .store
           .read_run_sync(session_id, run_id)?
-          .ok_or_else(|| StoreError::not_found(format!("run {run_id} not found in session {session_id}")))?;
+          .ok_or_else(|| StoreError::not_found(run_records::run_not_found_in_task_text(run_id, session_id)))?;
         let durable = self.terminal_outcome(session_id, run_id)?.unwrap_or_else(|| "failed".to_string());
         self.after_worker_run(meta, &run, &durable).await?;
       }
@@ -2376,7 +2376,7 @@ impl TaskExecutionAdapter {
       .features
       .store
       .read_run_sync(session_id, run_id)?
-      .ok_or_else(|| StoreError::not_found(format!("run {run_id} not found in session {session_id}")))?;
+      .ok_or_else(|| StoreError::not_found(run_records::run_not_found_in_task_text(run_id, session_id)))?;
     let outcome = if run.pid.is_some() { "Turn failed" } else { "Turn did not start" };
     let namespace = Uuid::new_v5(&Uuid::NAMESPACE_URL, b"charliebot/session-task-tree");
     let event_id = Uuid::new_v5(&namespace, format!("turn-launch:{run_id}:{reason}").as_bytes()).to_string();
@@ -2499,7 +2499,7 @@ impl SequenceExecutor for TaskExecutionAdapter {
         .features
         .store
         .read_run_sync(session_id, run_id)?
-        .ok_or_else(|| StoreError::not_found(format!("run {run_id} not found in session {session_id}")))?;
+        .ok_or_else(|| StoreError::not_found(run_records::run_not_found_in_task_text(run_id, session_id)))?;
       if run.pid.is_some() {
         let outcome = self.await_terminal(session_id, run_id).await?;
         return Ok(SequenceLaunchSettlement { outcome: Some(outcome), withheld: None });

@@ -26,7 +26,9 @@ use charliebot_registry::sequence::{
 };
 use charliebot_store::ChatEvent;
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskType, UtcDateTime};
-use charliebot_store::run_records::{self, RAW_LOG_NAME, RunKind, RunOutcome, RunOutcomeKind, RunRecord};
+use charliebot_store::run_records::{
+  self, RAW_LOG_NAME, RunKind, RunOutcome, RunOutcomeKind, RunRecord, run_not_found_in_task_text,
+};
 use charliebot_store::{PromptScope, Store, StoreError, StoreResult};
 use futures_util::future::BoxFuture;
 use serde_json::Value;
@@ -860,7 +862,7 @@ async fn resume_run_checked(
   let store = &adapter.features.store;
   let run = store
     .read_run_sync(session_id, run_id)?
-    .ok_or_else(|| StoreError::not_found(format!("run {run_id} not found in session {session_id}")))?;
+    .ok_or_else(|| StoreError::not_found(run_not_found_in_task_text(run_id, session_id)))?;
   let (Some(pid), Some(pid_start)) = (run.pid, run.pid_start.clone()) else {
     bail!("run {run_id} records no launched process identity; nothing to re-attach");
   };

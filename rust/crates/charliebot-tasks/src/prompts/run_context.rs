@@ -6,6 +6,7 @@ use std::path::Path;
 
 use charliebot_compat::python_json;
 use charliebot_store::Store;
+use charliebot_store::run_records::run_not_found_in_task_text;
 use serde_json::{Value, json};
 
 use super::PromptSnapshot;
@@ -41,7 +42,7 @@ pub fn read_run_context(store: &Store, session_id: &str, run_id: &str) -> Result
   let run = store
     .read_run_sync(session_id, run_id)
     .map_err(|error| ContextReadError::internal(error.to_string()))?
-    .ok_or_else(|| ContextReadError::not_found(format!("run {run_id} not found in task {session_id}")))?;
+    .ok_or_else(|| ContextReadError::not_found(run_not_found_in_task_text(run_id, session_id)))?;
   let snapshot = match run.prompt_snapshot_ref.as_deref().filter(|reference| !reference.is_empty()) {
     Some(reference) => stored_snapshot(Path::new(reference), reference)?,
     None => Value::Null,

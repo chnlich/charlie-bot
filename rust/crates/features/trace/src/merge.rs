@@ -173,7 +173,7 @@ fn merge_cache_key(paths: &[PathBuf], slim: bool, mode: &str) -> Result<String, 
     }
     let metadata = fs::metadata(path).map_err(io_failure)?;
     payload.push('[');
-    charliebot_core::pyfmt::write_json_str(&mut payload, &path.to_string_lossy(), true);
+    charliebot_core::pyfmt::write_ascii_json_str(&mut payload, &path.to_string_lossy());
     payload.push(',');
     payload.push_str(&metadata.size().to_string());
     payload.push(',');
@@ -181,7 +181,7 @@ fn merge_cache_key(paths: &[PathBuf], slim: bool, mode: &str) -> Result<String, 
     payload.push(']');
   }
   payload.push_str(if slim { "],\"slim\":true,\"mode\":" } else { "],\"slim\":false,\"mode\":" });
-  charliebot_core::pyfmt::write_json_str(&mut payload, mode, true);
+  charliebot_core::pyfmt::write_ascii_json_str(&mut payload, mode);
   payload.push('}');
   Ok(format!("{:x}", Sha256::digest(payload.as_bytes())))
 }

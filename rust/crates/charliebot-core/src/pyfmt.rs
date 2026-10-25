@@ -6,7 +6,10 @@
 //! 3.14 algorithm it names rather than serde_json's own formatting.
 
 use crate::printable_table::NON_PRINTABLE;
-use serde_json::Value;
+use serde::Serialize;
+use serde_json::ser::Formatter as JsonFormatter;
+use serde_json::{Serializer, Value};
+use std::io;
 
 /// One `json.dumps` option set.
 #[derive(Debug, Clone, Copy)]
@@ -254,18 +257,44 @@ enum FloatForm {
   Pydantic,
 }
 
-/// `json.dumps(value, ...)` under `style`. NaN and the infinities print as CPython's `allow_nan` forms.
+/// `json.dumps(value, ...)` under `style`. Styles that pass non-ASCII through and keep insertion order
+/// serialize through serde_json (see [`serde_style_dumps`]); the `ensure_ascii` forms keep the hand
+/// escaper, whose `\uXXXX` pairs no crate emits, and the `sort_keys` styles the hand walk until their
+/// turn.
 pub fn json_dumps(value: &Value, style: &JsonStyle) -> String {
-  let mut out = String::new();
-  write_json(&mut out, value, style, FloatForm::Python, 0);
-  out
+  if style.ensure_ascii || style.sort_keys {
+    let mut out = String::new();
+    write_json(&mut out, value, style, FloatForm::Python, 0);
+    out
+  } else {
+    serde_style_dumps(value, style, FloatForm::Python)
+  }
 }
 
 /// `model_dump_json(...)` of a pydantic model under `style`: the `json_dumps` layout with floats in pydantic's form.
 pub fn model_json_dumps(value: &Value, style: &JsonStyle) -> String {
-  let mut out = String::new();
-  write_json(&mut out, value, style, FloatForm::Pydantic, 0);
-  out
+  if style.ensure_ascii || style.sort_keys {
+    let mut out = String::new();
+    write_json(&mut out, value, style, FloatForm::Pydantic, 0);
+    out
+  } else {
+    serde_style_dumps(value, style, FloatForm::Pydantic)
+  }
+}
+
+/// `json.dumps` under `style` through serde_json's serializer: the crate's ESCAPE-table string scan
+/// gives every string `json.dumps`'s escape set with non-ASCII passed through, and the container walk
+/// is serde_json's. [`StyleFormatter`] supplies the forms serde_json lacks against Python: the
+/// separators, the indent, and the float text.
+fn serde_style_dumps(value: &Value, style: &JsonStyle, floats: FloatForm) -> String {
+  let mut buffer = Vec::new();
+  value
+    .serialize(&mut Serializer::with_formatter(
+      &mut buffer,
+      StyleFormatter { style: *style, floats, current_indent: 0, has_value: false },
+    ))
+    .expect("serializing a Value into a buffer cannot fail");
+  String::from_utf8(buffer).expect("serde_json writes UTF-8")
 }
 
 fn write_json(out: &mut String, value: &Value, style: &JsonStyle, floats: FloatForm, level: usize) {
@@ -289,7 +318,13 @@ fn write_json(out: &mut String, value: &Value, style: &JsonStyle, floats: FloatF
         out.push_str(&number.to_string());
       }
     }
-    Value::String(text) => write_json_str(out, text, style.ensure_ascii),
+    Value::String(text) => {
+      if style.ensure_ascii {
+        write_ascii_json_str(out, text);
+      } else {
+        write_serde_json_str(out, text);
+      }
+    }
     Value::Array(items) => {
       if items.is_empty() {
         out.push_str("[]");
@@ -315,7 +350,11 @@ fn write_json(out: &mut String, value: &Value, style: &JsonStyle, floats: FloatF
       out.push('{');
       for (index, (key, item)) in entries.into_iter().enumerate() {
         write_separator(out, style, level + 1, index == 0);
-        write_json_str(out, key, style.ensure_ascii);
+        if style.ensure_ascii {
+          write_ascii_json_str(out, key);
+        } else {
+          write_serde_json_str(out, key);
+        }
         out.push_str(style.key_separator);
         write_json(out, item, style, floats, level + 1);
       }
@@ -342,99 +381,164 @@ fn write_closing_indent(out: &mut String, style: &JsonStyle, level: usize) {
   }
 }
 
-/// Appends one JSON string literal as `json.dumps` writes it: the same escapes for every renderer, with
-/// characters above `~` as `\uXXXX` pairs when `ensure_ascii`.
-pub fn write_json_str(out: &mut String, text: &str, ensure_ascii: bool) {
+/// Appends one JSON string literal as `json.dumps(ensure_ascii=True)` writes it: the control set and the
+/// two structural characters escaped, and every character above `~` as CPython's `\uXXXX` pairs.
+///
+/// This escaper stays hand-written because no crate emits the `\uXXXX` pairs: serde_json's scan passes
+/// non-ASCII through (its ESCAPE table holds only the control set, quote and backslash), which is exactly
+/// the form the styles that do not set `ensure_ascii` take through [`write_serde_json_str`].
+pub fn write_ascii_json_str(out: &mut String, text: &str) {
   out.push('"');
-  // The hot bodies are megabytes of nearly plain ASCII, so the scan runs eight bytes at a time: a word
-  // whose bytes all pass moves with one push_str, and only a word with a candidate byte falls to the
-  // per-byte path. `word_has_candidate` can over-report (its word trick is inexact), never under-report,
-  // so the per-byte verification below owns every decision. The emitted bytes match a char loop: escapes
-  // exist only for ASCII bytes, and a copied byte run inside `text` is valid UTF-8.
-  out.reserve(text.len() + 2);
-  let bytes = text.as_bytes();
-  let mut plain = 0;
-  let mut index = 0;
-  while index < bytes.len() {
-    if index + WORD_BYTES <= bytes.len() {
-      let mut word = [0u8; WORD_BYTES];
-      word.copy_from_slice(&bytes[index..index + WORD_BYTES]);
-      if !word_has_candidate(u64::from_le_bytes(word), ensure_ascii) {
-        index += WORD_BYTES;
-        continue;
-      }
-    }
-    let byte = bytes[index];
-    if !byte_needs_attention(byte, ensure_ascii) {
-      index += 1;
-      continue;
-    }
-    out.push_str(&text[plain..index]);
-    match byte {
-      b'"' => {
-        out.push_str("\\\"");
-        index += 1;
-      }
-      b'\\' => {
-        out.push_str("\\\\");
-        index += 1;
-      }
-      b'\n' => {
-        out.push_str("\\n");
-        index += 1;
-      }
-      b'\r' => {
-        out.push_str("\\r");
-        index += 1;
-      }
-      b'\t' => {
-        out.push_str("\\t");
-        index += 1;
-      }
-      0x08 => {
-        out.push_str("\\b");
-        index += 1;
-      }
-      0x0c => {
-        out.push_str("\\f");
-        index += 1;
-      }
-      0x00..=0x1f => {
-        out.push_str(&format!("\\u{byte:04x}"));
-        index += 1;
-      }
-      _ => {
-        let character = text[index..].chars().next().expect("a byte index inside `text` opens a character");
+  for character in text.chars() {
+    match character {
+      '"' => out.push_str("\\\""),
+      '\\' => out.push_str("\\\\"),
+      '\n' => out.push_str("\\n"),
+      '\r' => out.push_str("\\r"),
+      '\t' => out.push_str("\\t"),
+      '\u{8}' => out.push_str("\\b"),
+      '\u{c}' => out.push_str("\\f"),
+      c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+      c if (c as u32) <= 0x7e => out.push(c),
+      c => {
         let mut units = [0u16; 2];
-        for unit in character.encode_utf16(&mut units) {
+        for unit in c.encode_utf16(&mut units) {
           out.push_str(&format!("\\u{unit:04x}"));
         }
-        index += character.len_utf8();
       }
     }
-    plain = index;
   }
-  out.push_str(&text[plain..]);
   out.push('"');
 }
 
-const WORD_BYTES: usize = 8;
-
-/// Whether a JSON string escaper must look at some byte of this word.
-///
-/// The has-zero and has-less word tricks from Bit Twiddling Hacks over-report for some inputs, which
-/// only costs a per-byte pass; a clean word always moves eight bytes at once.
-fn word_has_candidate(word: u64, ensure_ascii: bool) -> bool {
-  let has_zero = |value: u64| value.wrapping_sub(0x0101_0101_0101_0101) & !value & 0x8080_8080_8080_8080 != 0;
-  let has_less_0x20 = word.wrapping_sub(0x2020_2020_2020_2020) & !word & 0x8080_8080_8080_8080 != 0;
-  if has_less_0x20 || has_zero(word ^ 0x2222_2222_2222_2222) || has_zero(word ^ 0x5c5c_5c5c_5c5c_5c5c) {
-    return true;
-  }
-  ensure_ascii && (word & 0x8080_8080_8080_8080 != 0 || has_zero(word ^ 0x7f7f_7f7f_7f7f_7f7f))
+/// Appends one JSON string literal through serde_json's ESCAPE-table scan: the escape set of
+/// `json.dumps` with non-ASCII passed through. The hand-walked styles that do not set `ensure_ascii`
+/// write their strings here; the serializer styles take it from [`serde_style_dumps`].
+fn write_serde_json_str(out: &mut String, text: &str) {
+  let mut buffer = Vec::new();
+  text.serialize(&mut Serializer::new(&mut buffer)).expect("serializing a string into a buffer cannot fail");
+  out.push_str(std::str::from_utf8(&buffer).expect("serde_json writes UTF-8"));
 }
 
-fn byte_needs_attention(byte: u8, ensure_ascii: bool) -> bool {
-  byte < 0x20 || byte == b'"' || byte == b'\\' || (ensure_ascii && byte >= 0x7f)
+/// The serde_json `Formatter` of [`serde_style_dumps`]: Python's separators and indent between members,
+/// and Python's or pydantic's float text. The `current_indent`/`has_value` pair tracks the nesting the
+/// trait does not pass: the layout is `json.dumps`'s, with an indented style opening each member on its
+/// own line and closing a non-empty container at its own level.
+struct StyleFormatter {
+  style: JsonStyle,
+  floats: FloatForm,
+  current_indent: usize,
+  has_value: bool,
+}
+
+impl StyleFormatter {
+  /// Before a member: the item separator between members, then the newline and indent of an indented style.
+  fn member_prefix<W: ?Sized + io::Write>(&mut self, writer: &mut W, first: bool) -> io::Result<()> {
+    if !first {
+      writer.write_all(self.style.item_separator.as_bytes())?;
+    }
+    if let Some(indent) = self.style.indent {
+      writer.write_all(b"\n")?;
+      writer.write_all(" ".repeat(indent * self.current_indent).as_bytes())?;
+    }
+    Ok(())
+  }
+
+  /// Before a closing bracket: the container's own newline and indent, which an empty container skips.
+  fn closing_prefix<W: ?Sized + io::Write>(&mut self, writer: &mut W) -> io::Result<()> {
+    self.current_indent -= 1;
+    if self.has_value
+      && let Some(indent) = self.style.indent
+    {
+      writer.write_all(b"\n")?;
+      writer.write_all(" ".repeat(indent * self.current_indent).as_bytes())?;
+    }
+    Ok(())
+  }
+}
+
+impl JsonFormatter for StyleFormatter {
+  fn write_f64<W>(&mut self, writer: &mut W, value: f64) -> io::Result<()>
+  where
+    W: ?Sized + io::Write,
+  {
+    let text = match self.floats {
+      FloatForm::Python => float_repr(value),
+      FloatForm::Pydantic => pydantic_float_repr(value),
+    };
+    writer.write_all(text.as_bytes())
+  }
+
+  fn begin_array<W>(&mut self, writer: &mut W) -> io::Result<()>
+  where
+    W: ?Sized + io::Write,
+  {
+    self.current_indent += 1;
+    self.has_value = false;
+    writer.write_all(b"[")
+  }
+
+  fn end_array<W>(&mut self, writer: &mut W) -> io::Result<()>
+  where
+    W: ?Sized + io::Write,
+  {
+    self.closing_prefix(writer)?;
+    writer.write_all(b"]")
+  }
+
+  fn begin_array_value<W>(&mut self, writer: &mut W, first: bool) -> io::Result<()>
+  where
+    W: ?Sized + io::Write,
+  {
+    self.member_prefix(writer, first)
+  }
+
+  fn end_array_value<W>(&mut self, _writer: &mut W) -> io::Result<()>
+  where
+    W: ?Sized + io::Write,
+  {
+    self.has_value = true;
+    Ok(())
+  }
+
+  fn begin_object<W>(&mut self, writer: &mut W) -> io::Result<()>
+  where
+    W: ?Sized + io::Write,
+  {
+    self.current_indent += 1;
+    self.has_value = false;
+    writer.write_all(b"{")
+  }
+
+  fn end_object<W>(&mut self, writer: &mut W) -> io::Result<()>
+  where
+    W: ?Sized + io::Write,
+  {
+    self.closing_prefix(writer)?;
+    writer.write_all(b"}")
+  }
+
+  fn begin_object_key<W>(&mut self, writer: &mut W, first: bool) -> io::Result<()>
+  where
+    W: ?Sized + io::Write,
+  {
+    self.member_prefix(writer, first)
+  }
+
+  fn begin_object_value<W>(&mut self, writer: &mut W) -> io::Result<()>
+  where
+    W: ?Sized + io::Write,
+  {
+    writer.write_all(self.style.key_separator.as_bytes())
+  }
+
+  fn end_object_value<W>(&mut self, _writer: &mut W) -> io::Result<()>
+  where
+    W: ?Sized + io::Write,
+  {
+    self.has_value = true;
+    Ok(())
+  }
 }
 
 #[cfg(test)]
@@ -517,8 +621,8 @@ mod tests {
     }
   }
 
-  /// The reference escaper: one char at a time, the form `json.dumps` documents.
-  fn reference_json_str(out: &mut String, text: &str, ensure_ascii: bool) {
+  /// The reference escaper: one char at a time, the form `json.dumps(ensure_ascii=True)` documents.
+  fn reference_ascii_json_str(out: &mut String, text: &str) {
     out.push('"');
     for c in text.chars() {
       match c {
@@ -530,22 +634,21 @@ mod tests {
         '\u{8}' => out.push_str("\\b"),
         '\u{c}' => out.push_str("\\f"),
         c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
-        c if ensure_ascii && (c as u32) > 0x7e => {
+        c if (c as u32) <= 0x7e => out.push(c),
+        c => {
           let mut units = [0u16; 2];
           for unit in c.encode_utf16(&mut units) {
             out.push_str(&format!("\\u{unit:04x}"));
           }
         }
-        c => out.push(c),
       }
     }
     out.push('"');
   }
 
   #[test]
-  fn json_str_matches_the_char_reference_over_every_byte_class() {
-    // A deterministic corpus over all byte classes, at lengths that cross the eight-byte scan's word
-    // boundaries: any scan hole changes some output.
+  fn ascii_json_str_matches_the_char_reference_over_every_byte_class() {
+    // A deterministic corpus over all byte classes, at lengths that cross every code-point width.
     let mut state = 0x2545_f491_4f6c_dd1du64;
     let mut next = move || {
       state ^= state << 13;
@@ -559,32 +662,28 @@ mod tests {
       .collect();
     for length in 0..400 {
       let text: String = (0..length).map(|_| alphabet[(next() % alphabet.len() as u64) as usize]).collect();
-      for ensure_ascii in [false, true] {
-        let mut fast = String::new();
-        write_json_str(&mut fast, &text, ensure_ascii);
-        let mut reference = String::new();
-        reference_json_str(&mut reference, &text, ensure_ascii);
-        assert_eq!(fast, reference, "length {length}, ensure_ascii {ensure_ascii}");
-      }
+      let mut fast = String::new();
+      write_ascii_json_str(&mut fast, &text);
+      let mut reference = String::new();
+      reference_ascii_json_str(&mut reference, &text);
+      assert_eq!(fast, reference, "length {length}");
     }
   }
 
   #[test]
-  fn json_str_output_is_the_input_bytes_plus_the_escapes() {
-    // Every byte of a long plain-ASCII body passes through: the quoted output is exactly the two
-    // quote bytes longer, so a per-char transformation would move the count.
-    let plain = "synthetic bulk event text for latency probing. ".repeat(400);
-    let mut out = String::new();
-    write_json_str(&mut out, &plain, false);
-    assert_eq!(out.len(), plain.len() + 2);
-
+  fn ascii_json_str_escapes_everything_above_the_tilde() {
     let mut escaped = String::new();
-    write_json_str(&mut escaped, "quote\" back\\ nl\newline\r tab\t del\u{7f} \u{e9} \u{2014} \u{1f600}", true);
+    write_ascii_json_str(&mut escaped, "quote\" back\\ nl\newline\r tab\t del\u{7f} \u{e9} \u{2014} \u{1f600}");
     assert_eq!(escaped, "\"quote\\\" back\\\\ nl\\newline\\r tab\\t del\\u007f \\u00e9 \\u2014 \\ud83d\\ude00\"");
+  }
 
-    let mut raw = String::new();
-    write_json_str(&mut raw, "raw \u{e9} \u{2014} \u{1f600} \u{1} \u{b}", false);
-    assert_eq!(raw, "\"raw \u{e9} \u{2014} \u{1f600} \\u0001 \\u000b\"");
+  #[test]
+  fn serde_json_str_matches_cpython_ensure_ascii_false() {
+    // The bytes of `json.dumps(text, ensure_ascii=False)` in CPython: the control set escaped, DEL and
+    // the non-ASCII characters raw (the shapes the fixture `json_renders.json` pins at large).
+    let mut out = String::new();
+    write_serde_json_str(&mut out, "raw \u{e9} \u{2014} \u{1f600} \u{1} \u{b} del\u{7f}");
+    assert_eq!(out, "\"raw \u{e9} \u{2014} \u{1f600} \\u0001 \\u000b del\u{7f}\"");
   }
 
   #[test]

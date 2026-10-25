@@ -63,7 +63,7 @@ async def slack_reply(
         run_started_at=run_started_at,
         tree=task_mgr)
   except slack_listener.SlackReplyError as exc:
-    raise fastapi.HTTPException(status_code=exc.status, detail=exc.detail) from exc
+    raise deps.http_refusal(exc) from exc
 
 
 @router.post("/slack/ack")
@@ -87,4 +87,4 @@ async def slack_ack(
   try:
     return await slack_listener.ack_messages(req.session_id, req.message_ids, cfg, store, events)
   except slack_listener.SlackReplyError as exc:
-    raise fastapi.HTTPException(status_code=exc.status, detail=exc.detail) from exc
+    raise deps.http_refusal(exc) from exc

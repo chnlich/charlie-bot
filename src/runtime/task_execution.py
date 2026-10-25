@@ -2501,18 +2501,31 @@ class TaskExecutionAdapter:
       log.warning(
           "cold_read_delivery_close_blocked", session_id=meta.id, run_id=run.id, blockers=getattr(e, "blockers", None))
 
+  async def _failure_text(
+      self,
+      session_id: str,
+      run: models.RunRecord,
+      first: Callable[[pathlib.Path], str | None],
+      second: Callable[[pathlib.Path], str | None],
+  ) -> str:
+    """The failed run's reportable text: the ``first`` reader's text, then the ``second``'s, else the bare fallback.
+
+    Each reader streams the events log from its end and stops at the first settling event, so ``second`` runs only
+    when ``first`` finds nothing.
+    """
+    events_log = self._tree.runs.run_dir(session_id, run.id) / runs.RUN_EVENTS_NAME
+    if events_log.is_file():
+      for read in (first, second):
+        text = await asyncio.to_thread(read, events_log)
+        if text:
+          return text
+    return f"run {run.id} failed without a reportable output"
+
   async def _cold_read_attempt_error(self, session_id: str, run: models.RunRecord) -> str:
     """The failed cold-read run's error for the report's attempt line: the run's error
     event, its closing text when no error event exists, or the bare fallback."""
-    events_log = self._tree.runs.run_dir(session_id, run.id) / runs.RUN_EVENTS_NAME
-    if events_log.is_file():
-      error_text = await asyncio.to_thread(review._worker_error_from_events_log, events_log)
-      if error_text:
-        return error_text
-      text = await asyncio.to_thread(review._worker_summary_from_events_log, events_log)
-      if text:
-        return text
-    return f"run {run.id} failed without a reportable output"
+    return await self._failure_text(
+        session_id, run, review._worker_error_from_events_log, review._worker_summary_from_events_log)
 
   async def _record_cold_read_attempt(self, meta: models.SessionMetadata, run: models.RunRecord, error: str) -> None:
     """Record one failed cold-read attempt on the run's evidence file (the report reads it back)."""
@@ -2609,15 +2622,8 @@ class TaskExecutionAdapter:
         a run that died before its process started carries its error as the
         events log's error event, and that text is the report's evidence.
         """
-    events_log = self._tree.runs.run_dir(session_id, run.id) / runs.RUN_EVENTS_NAME
-    if events_log.is_file():
-      text = await asyncio.to_thread(review._worker_summary_from_events_log, events_log)
-      if text:
-        return text
-      error_text = await asyncio.to_thread(review._worker_error_from_events_log, events_log)
-      if error_text:
-        return error_text
-    return f"run {run.id} failed without a reportable output"
+    return await self._failure_text(
+        session_id, run, review._worker_summary_from_events_log, review._worker_error_from_events_log)
 
 
 # The process owner of the task tree; built on the first ``task_manager()`` call.

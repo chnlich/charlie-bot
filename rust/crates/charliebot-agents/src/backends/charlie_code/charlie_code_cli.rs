@@ -213,10 +213,13 @@ fn is_image_ref(reference: &Value) -> anyhow::Result<bool> {
 /// `pathlib.PurePath(name).name`: the last component of a path, empty when it has none.
 fn path_name(path: &str) -> &str {
   let path = Path::new(path);
+  if let Some(name) = path.file_name().and_then(|name| name.to_str()) {
+    return name;
+  }
   match path.components().next_back() {
     // `file_name` drops a trailing `..`, which PurePath keeps.
     Some(Component::ParentDir) => "..",
-    _ => path.file_name().and_then(|name| name.to_str()).unwrap_or(""),
+    _ => "",
   }
 }
 

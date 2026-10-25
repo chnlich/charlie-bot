@@ -418,11 +418,7 @@ async fn run_loop(
           (member.id.clone(), Some(member.model.clone()))
         }
         None => {
-          progress.blocked = Some((
-            iteration,
-            format!("no backends.pool member is available: {}", pool.recovery_report(cfg)),
-            String::new(),
-          ));
+          progress.blocked = Some((iteration, pool.no_member_message(cfg), String::new()));
           break;
         }
       }

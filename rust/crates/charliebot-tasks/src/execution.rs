@@ -1432,9 +1432,9 @@ impl TaskExecutionAdapter {
         let recovery = backend_pool::backend_pool(&self.features)?;
         let cfg = self.features.config.get()?;
         summary = Some(format!(
-          "{}\n\nNo backends.pool member is available: {}",
+          "{}\n\n{}",
           self.worker_failure_summary(session_id, run).await?,
-          recovery.recovery_report(cfg.as_ref())
+          recovery.no_member_message(cfg.as_ref())
         ));
       }
       self.report_failure_to_parent(session_id, run, durable_outcome, summary.as_deref()).await?;

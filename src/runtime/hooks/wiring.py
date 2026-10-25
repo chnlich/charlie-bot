@@ -20,6 +20,8 @@ if TYPE_CHECKING:
 
   from src.infra import config
 
+from src.runtime.hooks import registration
+
 PHASES = ("early", "ready")
 
 # Registration order is the order of the lists: routers include in it, services start in it.
@@ -62,7 +64,7 @@ def register_router(
 def register_command(name: str, module: str) -> None:
   """`charliebot <name>` imports module and calls its main(). A second registration of one name raises ValueError."""
   if name in _COMMANDS:
-    raise ValueError(f"command {name!r} is already registered by {_COMMANDS[name]}")
+    raise registration.already_registered("command", name, _COMMANDS[name])
   _COMMANDS[name] = module
 
 
@@ -76,7 +78,7 @@ def register_service(name: str, module: str, *, phase: str = "ready") -> None:
   if phase not in PHASES:
     raise ValueError(f"service {name!r} has phase {phase!r}; the phases are {PHASES}")
   if name in _SERVICES:
-    raise ValueError(f"service {name!r} is already registered by {_SERVICES[name][0]}")
+    raise registration.already_registered("service", name, _SERVICES[name][0])
   _SERVICES[name] = (module, phase)
 
 

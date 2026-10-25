@@ -20,6 +20,7 @@ import pathlib
 from typing import TYPE_CHECKING
 
 from src.infra import deferred
+from src.runtime.hooks import registration
 
 if TYPE_CHECKING:
   from src.infra import models
@@ -58,7 +59,7 @@ def register_sidebar_contribution(name: str, contribution: str | SidebarContribu
   """
   global _resolved
   if name in _registered:
-    raise ValueError(f"sidebar contribution {name!r} is already registered by {_registered[name]}")
+    raise registration.already_registered("sidebar contribution", name, _registered[name])
   _registered[name] = contribution
   _resolved = None
 

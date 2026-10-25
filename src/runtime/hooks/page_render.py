@@ -15,6 +15,8 @@ effect without a restart.
 
 from __future__ import annotations
 
+from src.runtime.hooks import registration
+
 # The places a page leaves for package parts. index.html places the first seven, the diff page places
 # diff_toolbar, and the home page places home_notes.
 PAGE_SLOTS = (
@@ -38,7 +40,7 @@ def register_template_global(name: str, module: str, *, attr: str) -> None:
   A second registration of one name raises ValueError.
   """
   if name in _TEMPLATE_GLOBALS:
-    raise ValueError(f"template global {name!r} is already registered by {_TEMPLATE_GLOBALS[name][0]}")
+    raise registration.already_registered("template global", name, _TEMPLATE_GLOBALS[name][0])
   _TEMPLATE_GLOBALS[name] = (module, attr)
 
 

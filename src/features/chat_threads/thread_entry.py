@@ -38,7 +38,7 @@ import zoneinfo
 from collections.abc import Callable
 from typing import Any
 
-from src.infra import config, locks, log_once, metadata_slots, models, tasks
+from src.infra import config, constants, locks, log_once, metadata_slots, models, tasks
 from src.infra import event_types as ET
 from src.runtime import (
     backend_pool,
@@ -576,12 +576,6 @@ def _assert_thread_fresh_messages(
       })
 
 
-# The reply budget the format contract states (prompts/thread_reply_format.md):
-# replies should stay under this many chars, with the depth going to a page.
-# This is the single measurement point for that budget.
-_REPLY_BUDGET_CHARS = 500
-
-
 def _event_created_at(event: dict) -> datetime.datetime:
   """Return the UTC timestamp when an event's request key was born."""
   value = event["timestamp"]
@@ -633,7 +627,7 @@ def _reply_receipt(event: dict, operator_only_links: list[str], *, platform: Thr
       "operator_only_note": operator_only_note(operator_only_links),
       "chars": payload["chars"],
       "chunks": payload["chunks"],
-      "over_budget": payload["chars"] > _REPLY_BUDGET_CHARS,
+      "over_budget": payload["chars"] > constants.REPLY_BUDGET_CHARS,
       "answers": payload["answers"],
   }
 
@@ -763,7 +757,7 @@ async def post_reply(
     await events.announce_appended_event(session_id, event, epoch=epoch)
     if bound is not None:
       ack_clear(adapter, bound[1], session_id)
-    over_budget = len(text) > _REPLY_BUDGET_CHARS
+    over_budget = len(text) > constants.REPLY_BUDGET_CHARS
     logger.info(
         f"{platform.name}_reply_posted",
         session=session_id,
@@ -771,7 +765,7 @@ async def post_reply(
         chars=len(text),
         chunks=len(bodies),
         over_budget=over_budget,
-        budget=_REPLY_BUDGET_CHARS,
+        budget=constants.REPLY_BUDGET_CHARS,
         answers=answers)
     return {
         "posted": True,

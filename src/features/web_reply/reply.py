@@ -7,8 +7,8 @@ messages, the replies and the notices, in log order.
 
 import re
 
+from src.infra import constants, log_once, models
 from src.infra import event_types as ET
-from src.infra import log_once, models
 from src.runtime import (
     control_events,
     file_urls,
@@ -23,9 +23,6 @@ from src.runtime import (
 from src.runtime.api import deps, message_utils
 
 logger = log_once.LazyStructlogLogger()
-
-# The reply budget the readback's over_budget flag measures; an over-budget reply still posts.
-REPLY_BUDGET_CHARS = 500
 
 # The language check holds a reply when the user's last message has at least this many Han characters and the
 # reply's Han share is below the maximum. The Han share is defined in language_check_holds.
@@ -217,7 +214,7 @@ async def post_web_reply(
       )
       if existing is not None:
         stored_reply = existing[ET.WEB_REPLY]
-        over_budget = chars > REPLY_BUDGET_CHARS
+        over_budget = chars > constants.REPLY_BUDGET_CHARS
         return {
             "posted": True,
             "chars": chars,
@@ -238,7 +235,7 @@ async def post_web_reply(
     await task_tree.session_events.save_chat_event(session_id, event)
   await events.announce_appended_event(session_id, event, epoch=epoch)
   await lifecycle.mark_unread(session_id)
-  over_budget = chars > REPLY_BUDGET_CHARS
+  over_budget = chars > constants.REPLY_BUDGET_CHARS
   logger.info("web_reply_posted", session=session_id, chars=chars, over_budget=over_budget, answers=answers)
   return {"posted": True, "chars": chars, "over_budget": over_budget, "answers": answers}
 

@@ -5,20 +5,14 @@ static HTML5_ENTITIES: LazyLock<HashMap<String, String>> = LazyLock::new(|| {
   serde_json::from_str(include_str!("html5_entities.json")).expect("generated HTML5 entity table is valid JSON")
 });
 
-/// Escape ampersands, angle brackets, and optionally both quote characters.
+/// Escape ampersands, angle brackets, and optionally both quote characters, as CPython's `html.escape` does
+/// (`quote` selects between its `quote=True` and `quote=False` entity sets; `/` is never escaped).
 pub fn escape(input: &str, quote: bool) -> String {
-  let mut output = String::with_capacity(input.len());
-  for ch in input.chars() {
-    match ch {
-      '&' => output.push_str("&amp;"),
-      '<' => output.push_str("&lt;"),
-      '>' => output.push_str("&gt;"),
-      '"' if quote => output.push_str("&quot;"),
-      '\'' if quote => output.push_str("&#x27;"),
-      _ => output.push(ch),
-    }
+  if quote {
+    html_escape::encode_quoted_attribute(input).into_owned()
+  } else {
+    html_escape::encode_text(input).into_owned()
   }
-  output
 }
 
 /// Decode the named and numeric character references recognized by CPython's HTML5 table.

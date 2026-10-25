@@ -270,7 +270,7 @@ fn py_equals_count(value: &Value, measured: usize) -> bool {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::prompts::DELIVERY_FULL;
+  use crate::prompts::{DELIVERY_FULL, SCOPE_BASE, SCOPE_SUBTREE};
 
   fn source(scope: &str, source_ref: &str, owner: Option<&str>) -> PromptSource {
     PromptSource {
@@ -312,5 +312,36 @@ mod tests {
     assert_eq!(snapshot.char_count(), "回答\n\né".chars().count());
     let rebuilt = PromptSnapshot::from_json_dict(&snapshot.to_json_dict()).expect("a fresh snapshot round-trips");
     assert_eq!(rebuilt, snapshot);
+  }
+
+  /// The hash is the SHA-256 of the exact canonical bytes and every stored snapshot rechecks it, so the canonical
+  /// text is pinned here byte for byte. The expected values are CPython's
+  /// `json.dumps(payload, sort_keys=True, ensure_ascii=False)` (`src/runtime/task_prompts.py:153-154`), which leaves
+  /// non-ASCII and DEL raw, escapes the control set, and sorts keys at every level.
+  #[test]
+  fn prompt_hash_pins_the_canonical_bytes() {
+    let snapshot = assemble_snapshot(&[
+      segment("Manage the greeter. — ✅\n\nSecond line\u{7f}", vec![source(SCOPE_BASE, "prompts/a.md", None)]),
+      segment(
+        "回答",
+        vec![source(SCOPE_SUBTREE, "prompt_bodies/x.md", Some("root")), source(SCOPE_BASE, "prompts/b.md", None)],
+      ),
+    ]);
+    assert_eq!(
+      json_dumps(&snapshot.to_json_dict(), &HASH_STYLE),
+      concat!(
+        r#"{"blocks": [{"body_ref": "b86e9a446933130a90bce54bb0c257590530f0c85af6f636f2563fecce5853ef", "#,
+        r#""delivery": "full", "sources": [{"scope": "base", "source_ref": "prompts/a.md", "#,
+        r#""source_session_id": null}], "text": "Manage the greeter. — ✅\n\nSecond line"#,
+        "\u{7f}",
+        r#""}, "#,
+        r#"{"body_ref": "f3f512648742020fbd700fa8f0576babd8f7ec8e56d3dcd38e28be5b99287db3", "#,
+        r#""delivery": "full", "sources": [{"scope": "subtree", "source_ref": "prompt_bodies/x.md", "#,
+        r#""source_session_id": "root"}, {"scope": "base", "source_ref": "prompts/b.md", "#,
+        r#""source_session_id": null}], "text": "回答"}], "char_count": 41, "prompt_hash": "#,
+        r#""0184dbde7b1ef7ea17f64a8f3f9e3f2bc79666f3e9c4d212622cab146b6165ad"}"#,
+      )
+    );
+    assert_eq!(snapshot.prompt_hash(), "0184dbde7b1ef7ea17f64a8f3f9e3f2bc79666f3e9c4d212622cab146b6165ad");
   }
 }

@@ -423,7 +423,7 @@ def capture_charliebot(
   written = 0
   for kind, path, st in _iter_charliebot_logs(str(sessions_dir)):
     # The ``p2:`` prefix is the spelling every stored thread and master signature already carries.
-    sig = f"p2:{st.st_mtime_ns}:{st.st_size}"
+    sig = f"p2:{usage_sources.stat_signature(st)}"
     if captured.get(path) == sig:
       continue
     records = _master_records(path, registry) if kind == "master" else _thread_records(path, registry, live)
@@ -574,7 +574,7 @@ def capture_runs(
   live = _LiveSessions()
   written = 0
   for path, st in _iter_run_logs(str(sessions_dir)):
-    sig = f"{st.st_mtime_ns}:{st.st_size}"
+    sig = usage_sources.stat_signature(st)
     if captured.get(path) == sig:
       continue
     objects = ndjson.parse_marker_lines(path, _RUN_MARKERS)
@@ -606,7 +606,7 @@ def _capture_source(
     key = str(path)
     previous = captured.get(key)
     st = os.stat(path)
-    if previous == f"{st.st_mtime_ns}:{st.st_size}":
+    if previous == usage_sources.stat_signature(st):
       continue
     sig, records = implementation.read(path, account, previous)
     if sig == previous and not records:

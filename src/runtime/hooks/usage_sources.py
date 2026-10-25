@@ -39,6 +39,7 @@ import dataclasses
 import datetime
 import enum
 import importlib
+import os
 import pathlib
 import re
 import types
@@ -52,6 +53,15 @@ if TYPE_CHECKING:
   from src.infra import config
 
 log = log_once.LazyStructlogLogger()
+
+
+def stat_signature(st: os.stat_result) -> str:
+  """The ``<mtime_ns>:<size>`` signature a source's ``read`` returns for a file it stats.
+
+  The capture compares the stored signature against this same spelling to skip an unchanged
+  file, so a source that returns anything else makes every capture re-read all its logs.
+  """
+  return f"{st.st_mtime_ns}:{st.st_size}"
 
 
 class RecordKind(enum.StrEnum):

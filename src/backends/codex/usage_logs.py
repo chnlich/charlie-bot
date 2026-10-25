@@ -120,7 +120,7 @@ def read(path: pathlib.Path, account: str, previous: str | None) -> tuple[str, l
         cache_read=cached,
         output=output,
         sessions=(session,))
-  return f"{st.st_mtime_ns}:{st.st_size}", list(records.values())
+  return usage_sources.stat_signature(st), list(records.values())
 
 
 def quota_accounts() -> list[usage_sources.QuotaAccount]:

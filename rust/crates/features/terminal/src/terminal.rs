@@ -1,5 +1,6 @@
 use axum::extract::ws::WebSocket;
 use charliebot_core::home;
+use data_encoding::HEXLOWER;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
@@ -15,8 +16,7 @@ pub(super) fn terminal_session_id() -> Result<String, String> {
     return Ok(TERMINAL_SESSION_ID.to_string());
   }
   let digest = Sha256::digest(profile_home.to_string_lossy().as_bytes());
-  let suffix = digest[..4].iter().map(|byte| format!("{byte:02x}")).collect::<String>();
-  Ok(format!("{TERMINAL_SESSION_ID}-{suffix}"))
+  Ok(format!("{TERMINAL_SESSION_ID}-{}", HEXLOWER.encode(&digest[..4])))
 }
 
 pub(super) fn terminal_tmux_name(session_id: &str) -> String {

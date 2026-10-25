@@ -54,6 +54,11 @@ pub trait ReplacedSourceArchive: Send + Sync {
   ) -> StoreHookFuture<'a, ()>;
 }
 
+struct EloneCallbacks<'a> {
+  redelivery: &'a dyn CloseReportRedelivery,
+  source_archive: &'a dyn ReplacedSourceArchive,
+}
+
 impl Store {
   /// `SessionFork.fork_session`: copy the source's history up to `event_index` (all of it when `None`) into a new
   /// session. A closed parent task refuses the clone of a manager source before anything is written.
@@ -116,8 +121,8 @@ impl Store {
   ) -> StoreResult<SessionMetadata> {
     let guard = self.control_lock().await;
     let mut completed = Vec::new();
-    let result =
-      self.replace_source(&guard, source, event_index, backend, redelivery, source_archive, &mut completed).await;
+    let callbacks = EloneCallbacks { redelivery, source_archive };
+    let result = self.replace_source(&guard, source, event_index, backend, &callbacks, &mut completed).await;
     if let Err(error) = &result {
       tracing::warn!(
         source_id = %source.id,
@@ -135,8 +140,7 @@ impl Store {
     source: &SessionMetadata,
     event_index: i64,
     backend: Option<&str>,
-    redelivery: &dyn CloseReportRedelivery,
-    source_archive: &dyn ReplacedSourceArchive,
+    callbacks: &EloneCallbacks<'_>,
     completed: &mut Vec<&'static str>,
   ) -> StoreResult<SessionMetadata> {
     let blockers = self.elone_blockers(source)?;
@@ -144,13 +148,13 @@ impl Store {
       return Err(StoreError::conflict(blockers));
     }
     completed.push("validated the source");
-    self.redeliver_subtree_close_reports(guard, &source.id, redelivery).await?;
+    self.redeliver_subtree_close_reports(guard, &source.id, callbacks.redelivery).await?;
     completed.push("redelivered the subtree's undelivered close reports");
     let new_meta = self.spawn_with_history(&source.id, Some(event_index), backend, "E").await?;
     completed.push("published the new node");
     self.move_source_children(&source.id, &new_meta.id).await?;
     completed.push("moved the source's child tasks");
-    source_archive.archive_replaced_source_locked(self, guard, &source.id, &new_meta.id).await?;
+    callbacks.source_archive.archive_replaced_source_locked(self, guard, &source.id, &new_meta.id).await?;
     completed.push("closed the source");
     self.archive_source(&source.id, &new_meta.id).await?;
     completed.push("archived the source with its successor pointer");

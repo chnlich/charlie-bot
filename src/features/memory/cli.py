@@ -179,9 +179,6 @@ def _resolve_run_scoped_audience(token: str) -> str:
   """
   root = _sessions_root()
   key = credentials.configured_access_key()
-  if not key:
-    print("error: run token presented but no signing key is configured", file=sys.stderr)
-    sys.exit(1)
   try:
     claims = run_token.verify_run_token(token, key)
   except run_token.RunTokenError as e:

@@ -5,13 +5,15 @@ from __future__ import annotations
 import json
 
 import conftest
+import fastapi
 import pytest
+from fastapi import testclient
 
 from src.features.discord import discord_listener
 from src.features.slack import slack_listener
 from src.infra import event_types as ET
 from src.runtime import run_token, takeoff_gate
-from src.runtime.api import auth
+from src.runtime.api import auth, deps
 
 
 def _scope(headers: dict[str, str] | None = None, cookies: dict[str, str] | None = None) -> dict:
@@ -54,6 +56,20 @@ def test_missing_signing_key_is_an_explicit_error() -> None:
     run_token.sign_run_token(CLAIMS, "")
   with pytest.raises(run_token.RunTokenError, match="no signing key"):
     run_token.verify_run_token("a.b", "")
+
+
+def test_a_run_bearer_with_no_configured_key_is_refused_with_401() -> None:
+  """A presented bearer with no access key configured fails closed at the caller dependency."""
+  conftest.stub_credentials({"charliebot": {"access_key": ""}})
+  app = fastapi.FastAPI()
+  app.dependency_overrides[deps.get_run_store] = lambda: None
+
+  @app.get("/structural")
+  async def structural(caller: run_token.CallerIdentity = fastapi.Depends(deps.require_caller)) -> dict:
+    return {"kind": caller.kind}
+
+  response = testclient.TestClient(app).get("/structural", headers={"Authorization": "Bearer not-the-key"})
+  assert response.status_code == 401
 
 
 # ---------------------------------------------------------------------------

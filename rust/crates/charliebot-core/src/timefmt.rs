@@ -1,11 +1,10 @@
 //! Timestamp renderings the Python server emits.
 
+use std::sync::LazyLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use time::OffsetDateTime;
-
-const WEEKDAYS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+use time::format_description::{self, BorrowedFormatItem};
 
 /// `datetime.now(UTC).isoformat()`: `YYYY-MM-DDTHH:MM:SS.ffffff+00:00`, without the fraction when the
 /// microsecond is zero (CPython's `isoformat` drops a zero fraction).
@@ -48,17 +47,15 @@ pub fn isoformat(moment: OffsetDateTime) -> String {
 ///
 /// `time.gmtime` floors a float timestamp to whole seconds, so callers pass the floored second.
 pub fn http_date(unix_seconds: i64) -> String {
+  static HTTP_DATE: LazyLock<Vec<BorrowedFormatItem<'static>>> = LazyLock::new(|| {
+    format_description::parse_borrowed::<2>(
+      "[weekday repr:short], [day padding:zero] [month repr:short] [year repr:full padding:zero] \
+       [hour padding:zero]:[minute padding:zero]:[second padding:zero] GMT",
+    )
+    .expect("the HTTP date format description is valid")
+  });
   let moment = OffsetDateTime::from_unix_timestamp(unix_seconds).expect("a file mtime is a representable instant");
-  format!(
-    "{}, {:02} {} {:04} {:02}:{:02}:{:02} GMT",
-    WEEKDAYS[moment.weekday().number_days_from_monday() as usize],
-    moment.day(),
-    MONTHS[u8::from(moment.month()) as usize - 1],
-    moment.year(),
-    moment.hour(),
-    moment.minute(),
-    moment.second()
-  )
+  moment.format(HTTP_DATE.as_slice()).expect("an HTTP date formats")
 }
 
 /// The log line timestamp: ISO 8601 UTC with microseconds and a `Z` suffix.

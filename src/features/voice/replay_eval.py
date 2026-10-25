@@ -37,6 +37,7 @@ import numpy as np
 from src.features.voice import turn_contribution
 from src.features.voice.transcription import base, registry
 from src.infra import config, models
+from src.runtime import chat_events
 
 # The file sits at src/features/voice/, so parents[3] is the checkout root; moving it breaks the depth.
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
@@ -118,7 +119,7 @@ def find_ground_truth(session_dir: pathlib.Path, recorded_at: datetime.datetime)
   Reads the session's ``data/chat_events.jsonl``; None means the clip is scored
   for latency only.
   """
-  events_path = session_dir / "data" / "chat_events.jsonl"
+  events_path = chat_events.chat_events_path(session_dir)
   if not events_path.is_file():
     return None
   with events_path.open(encoding="utf-8") as handle:

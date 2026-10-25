@@ -16,7 +16,7 @@ from collections.abc import Callable
 from typing import Any, NamedTuple
 
 from src.infra import config, json_utils, log_once, memo, models, tasks
-from src.runtime import session_store, sidebar_state, thinking_state, trigger_files
+from src.runtime import chat_events, session_store, sidebar_state, thinking_state, trigger_files
 from src.runtime.hooks import sidebar_contributions
 
 log = log_once.LazyStructlogLogger()
@@ -257,7 +257,7 @@ class SidebarProbeSpec(NamedTuple):
   recheck_liveness: bool = False
 
 
-def _task_tree_probe_signature(session_dir_str: str) -> tuple:
+def _task_tree_probe_signature(session_dir: pathlib.Path) -> tuple:
   """Stat-only identity of every file the task-tree activity derivation reads.
 
   The derivation reads the node's fact history (metadata.json's archive offset,
@@ -266,8 +266,9 @@ def _task_tree_probe_signature(session_dir_str: str) -> tuple:
   derivation's inputs unchanged, so a fresh-signature poll never hides a
   changed state — and never pays the derivation's reads either.
   """
+  session_dir_str = os.fspath(session_dir)
   metadata_sig = memo.stat_signature(session_dir_str + "/metadata.json")
-  events_sig = memo.stat_signature(session_dir_str + "/data/chat_events.jsonl")
+  events_sig = memo.stat_signature(chat_events.chat_events_path(session_dir))
   archives_sig = memo.stat_signature(session_dir_str + "/data/archives")
   runs_sig: list[tuple[str, int, int]] = []
   runs_dir_str = session_dir_str + "/data/runs"
@@ -357,7 +358,7 @@ def _sidebar_probe_walk(spec: SidebarProbeSpec, watched_files: tuple[str, ...]) 
   # The task-tree derivation reads its fact history and Run records; the
   # signature covers those files too, so an unchanged signature can never hide
   # a changed state (and a fresh-signature poll skips their reads).
-  task_sig = _task_tree_probe_signature(session_dir_str)
+  task_sig = _task_tree_probe_signature(spec.session_dir)
   signature = (tuple(sorted(trigger_sig)), watched_sig, task_sig)
   return signature, _WalkedProbeInputs(trigger_pairs, trigger_dir_sig)
 

@@ -1394,7 +1394,7 @@ class TaskTreeManager:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
   @staticmethod
-  def _read_metadata_file(path) -> models.SessionMetadata | None:
+  def _read_metadata_file(path: pathlib.Path) -> models.SessionMetadata | None:
     if not path.exists():
       return None
     return models.validate_session_metadata(path.read_text(encoding="utf-8"), str(path))

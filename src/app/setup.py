@@ -21,7 +21,7 @@ from src.runtime import init_seed
 from src.runtime.hooks import wiring
 
 
-def _provision_home(cfg, *, dry: bool) -> None:
+def _provision_home(cfg: config.CharlieBotConfig, *, dry: bool) -> None:
   print("==> Provisioning $CHARLIEBOT_HOME")
   # Per-item created/exists for the home layout. init_charliebot_home() is the
   # single source of truth for this layout and is the same path the server runs at startup;

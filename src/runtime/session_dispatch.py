@@ -292,7 +292,8 @@ class TaskInputDispatcher:
     await tree.session_events.announce_appended_event(session_id, event, epoch=epoch)
     return event
 
-  async def _authorize_agent_message(self, meta, event_type: str, from_session: str | None) -> None:
+  async def _authorize_agent_message(
+      self, meta: models.SessionMetadata, event_type: str, from_session: str | None) -> None:
     """The request-entry gate an agent message to a worker node passes.
 
         The one judgment `_authorize_agent_creation` applies when the worker is

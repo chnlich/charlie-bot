@@ -2,7 +2,7 @@
 //! text reaches the child through `task.md` in the transport directory, passed by `--task-file`, and never rides argv.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, bail};
 use charliebot_core::pyfmt::float_repr;
@@ -210,10 +210,14 @@ fn is_image_ref(reference: &Value) -> anyhow::Result<bool> {
   Ok(IMAGE_MIME_BY_EXT.iter().any(|(known, _)| *known == extension))
 }
 
-/// `pathlib.PurePath(name).name`: the last component of a path, ignoring trailing separators.
+/// `pathlib.PurePath(name).name`: the last component of a path, empty when it has none.
 fn path_name(path: &str) -> &str {
-  let trimmed = path.trim_end_matches('/');
-  trimmed.rsplit_once('/').map_or(trimmed, |(_, name)| name)
+  let path = Path::new(path);
+  match path.components().next_back() {
+    // `file_name` drops a trailing `..`, which PurePath keeps.
+    Some(Component::ParentDir) => "..",
+    _ => path.file_name().and_then(|name| name.to_str()).unwrap_or(""),
+  }
 }
 
 fn path_text(path: &Path) -> anyhow::Result<String> {

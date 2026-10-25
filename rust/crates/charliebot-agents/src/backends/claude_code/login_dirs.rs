@@ -41,7 +41,10 @@ mod tests {
     assert_eq!(expanduser("/abs/.claude", Some("/synthetic/home")).unwrap(), PathBuf::from("/abs/.claude"));
     assert_eq!(expanduser("~user/.claude", Some("/synthetic/home")).unwrap(), PathBuf::from("~user/.claude"));
     assert_eq!(expanduser("~", Some("/synthetic/home")).unwrap(), PathBuf::from("/synthetic/home"));
-    assert_eq!(expanduser("~/.claude-b", Some("/synthetic/home/")).unwrap(), PathBuf::from("/synthetic/home/.claude-b"));
+    assert_eq!(
+      expanduser("~/.claude-b", Some("/synthetic/home/")).unwrap(),
+      PathBuf::from("/synthetic/home/.claude-b")
+    );
     assert!(expanduser("~/.claude-b", None).is_err());
   }
 }

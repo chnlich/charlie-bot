@@ -18,7 +18,7 @@ import fastapi
 from fastapi import responses
 
 from src.features import usage
-from src.infra import log_once, tasks
+from src.infra import constants, log_once, tasks
 from src.runtime import templating
 from src.runtime.hooks import usage_source_registration, usage_sources, wiring
 
@@ -210,7 +210,7 @@ def _as_of(last_capture: dt.datetime | None) -> str:
   """The ledger's age line: the last capture's finish in local time, or that none has run."""
   if last_capture is None:
     return "no capture yet"
-  return f"as of {last_capture.astimezone().strftime('%Y-%m-%d %H:%M %Z')}"
+  return f"as of {last_capture.astimezone().strftime(constants.LOCAL_TIMESTAMP_FORMAT)}"
 
 
 def _token_usage_context(
@@ -296,7 +296,7 @@ def _token_usage_context(
       "window": window,
       "window_str": f"{window[0]} → {window[1]}" if rows else "",
       "cache_share": cache_share,
-      "generated": dt.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M %Z"),
+      "generated": dt.datetime.now().astimezone().strftime(constants.LOCAL_TIMESTAMP_FORMAT),
       "as_of": _as_of(last_capture),
   }
 

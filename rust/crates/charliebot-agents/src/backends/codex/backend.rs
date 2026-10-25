@@ -7,11 +7,12 @@ use std::time::Duration;
 
 use anyhow::{Context, bail};
 use charliebot_core::event_types;
-use charliebot_core::pyfmt::{JsonStyle, json_dumps, python_str};
+use charliebot_core::pyfmt::python_str;
 use charliebot_core::pystr;
 use charliebot_registry::backend::{AgentBackend, Env, LaunchArgs, Translate, TransportKind};
 use futures_util::future::BoxFuture;
 use nix::sys::signal::Signal;
+use serde::Serialize;
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 
@@ -30,10 +31,6 @@ pub const INSTRUCTIONS_WRITTEN_EVENT: &str = "codex_wrote_agents_md";
 
 /// The stderr a one-shot keeps for its error message; later bytes are read and dropped.
 const MAX_ONE_SHOT_STDERR_BYTES: usize = 4 * 1024;
-
-/// `json.dumps(text, ensure_ascii=False)` with Python's separators, which a string value does not use.
-const TOML_STRING_STYLE: JsonStyle =
-  JsonStyle { ensure_ascii: false, sort_keys: false, item_separator: ", ", key_separator: ": ", indent: None };
 
 /// The `codex exec --json` backend of one launch.
 pub struct CodexBackend {
@@ -88,7 +85,7 @@ impl CodexBackend {
     if self.instructions_file.is_none() {
       return Ok(Vec::new());
     }
-    let content = self.instructions_content.as_deref().map(toml_basic_string).unwrap_or_else(|| "null".to_string());
+    let content = self.instructions_content.as_deref().map(toml_string_value).unwrap_or_else(|| "null".to_string());
     Ok(vec![
       "--config".to_string(),
       format!("developer_instructions={content}"),
@@ -259,9 +256,12 @@ impl AgentBackend for CodexBackend {
   }
 }
 
-/// The codex value of a TOML basic string: JSON's escapes, with DEL escaped as TOML requires.
-pub fn toml_basic_string(text: &str) -> String {
-  json_dumps(&Value::String(text.to_string()), &TOML_STRING_STYLE).replace('\u{7f}', "\\u007f")
+/// The codex value of a string: `toml`'s serialization of the text as a TOML value. Codex parses the `-c` value as TOML,
+/// so the text it reads is the decoded string, whatever quoting the serializer chose.
+pub fn toml_string_value(text: &str) -> String {
+  let mut value = String::new();
+  text.serialize(toml::ser::ValueSerializer::new(&mut value)).expect("a string serializes as a TOML value");
+  value
 }
 
 /// Reads the one-shot's stdout to its end. Returns the assistant text, the first structured error and the exit code.
@@ -333,14 +333,9 @@ mod tests {
   use super::*;
 
   #[test]
-  fn toml_string_escapes_del_and_keeps_text_readable() {
-    assert_eq!(toml_basic_string("a\"b\n\u{7f}é"), "\"a\\\"b\\n\\u007fé\"");
-  }
-
-  #[test]
-  fn toml_basic_string_decodes_to_the_same_text() {
+  fn toml_string_value_decodes_to_the_same_text() {
     for text in ["plain", "a\"b\n\u{7f}é", "tab\tcr\rff\u{c}bs\u{8}ctrl\u{1}", "back\\slash", "\nleading\n\nend", "'''\"\"\""] {
-      let decoded: toml::Table = toml::from_str(&format!("developer_instructions = {}", toml_basic_string(text))).unwrap();
+      let decoded: toml::Table = toml::from_str(&format!("developer_instructions = {}", toml_string_value(text))).unwrap();
       assert_eq!(decoded["developer_instructions"].as_str(), Some(text));
     }
   }

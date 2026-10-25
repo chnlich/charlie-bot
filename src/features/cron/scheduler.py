@@ -18,7 +18,14 @@ from src.features.cron import config as cron_config
 from src.features.cron import cron_files, cron_sequence, loader
 from src.infra import config, log_once, models, tasks
 from src.infra import event_types as ET
-from src.runtime import session_events, session_lifecycle, session_listing, session_store, task_execution
+from src.runtime import (
+    session_events,
+    session_lifecycle,
+    session_listing,
+    session_store,
+    task_execution,
+    task_sessions,
+)
 from src.runtime.hooks import scheduled_handlers
 
 log = log_once.LazyStructlogLogger()
@@ -469,7 +476,7 @@ class Scheduler:
   def _resolve_bound_backend_model(
       self,
       task_cfg: cron_config.ScheduledTaskConfig,
-      tree,
+      tree: task_sessions.TaskTreeManager,
   ) -> tuple[str, str | None]:
     return cron_sequence.resolved_backend_model(task_cfg, tree, task_cfg.backend)
 
@@ -477,18 +484,18 @@ class Scheduler:
       self,
       task_cfg: cron_config.ScheduledTaskConfig,
       meta: models.SessionMetadata,
-      tree,
+      tree: task_sessions.TaskTreeManager,
       firing: str,
       *,
       goal: str,
-  ):
+  ) -> models.SessionMetadata:
     return await cron_sequence.ensure_firing_leaf(task_cfg, meta, tree, firing, goal)
 
   async def _launch_bound_round(
       self,
       task_cfg: cron_config.ScheduledTaskConfig,
       meta: models.SessionMetadata,
-      tree,
+      tree: task_sessions.TaskTreeManager,
       firing: str,
       leaf_id: str,
       *,

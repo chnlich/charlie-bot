@@ -452,7 +452,7 @@ async def deliver_boundary_report(
       created=created)
 
 
-async def redrive_firing(leaf_id: str, tree: task_sessions.TaskTreeManager, cfg) -> None:
+async def redrive_firing(leaf_id: str, tree: task_sessions.TaskTreeManager, cfg: config.CharlieBotConfig) -> None:
   """Re-drive one firing's chain or boundary from its leaf's durable facts.
 
   The single re-drive entry the startup recovery pass and every scheduled_step
@@ -508,7 +508,7 @@ def resolved_backend_option(
     task_cfg: cron_config.ScheduledTaskConfig,
     tree: task_sessions.TaskTreeManager,
     backend_id: str | None,
-):
+) -> backend_models.BackendOption:
   """The configured BackendOption one fire's backend id resolves to, strictly."""
   effective = backend_id or effective_backend(task_cfg, tree)
   option = tree._cfg.get_backend_option(effective)

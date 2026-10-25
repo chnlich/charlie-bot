@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import argparse
 import datetime
 import json
 import os
@@ -213,10 +212,8 @@ def _emit_line(
 
 def main() -> None:
   """Print one SessionStart hook output part for the requested CharlieBot session."""
-  parser = argparse.ArgumentParser(
-      description="Restore skills read by a Claude manager session after compaction",
-      formatter_class=help_formatter.CliHelpFormatter,
-  )
+  parser = help_formatter.CliArgumentParser(
+      description="Restore skills read by a Claude manager session after compaction")
   parser.add_argument("--session", required=True, help="CharlieBot session id")
   parser.add_argument(
       "--slot", required=True, type=int, choices=range(1, _MAX_PARTS + 1), help="part number from 1 to 6")

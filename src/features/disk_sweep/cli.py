@@ -1,6 +1,5 @@
 """Command line entry point for listing or applying the disk sweep."""
 
-import argparse
 import asyncio
 import sys
 
@@ -9,9 +8,7 @@ from src.infra import config, help_formatter
 
 
 def main() -> None:
-  parser = argparse.ArgumentParser(
-      description="List or remove old task worktrees and scratch directories",
-      formatter_class=help_formatter.CliHelpFormatter)
+  parser = help_formatter.CliArgumentParser(description="List or remove old task worktrees and scratch directories")
   parser.add_argument(
       "--yes",
       action="store_true",

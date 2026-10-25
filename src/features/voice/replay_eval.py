@@ -36,7 +36,7 @@ import numpy as np
 
 from src.features.voice import turn_contribution
 from src.features.voice.transcription import base, registry
-from src.infra import config, models
+from src.infra import config, help_formatter, models
 from src.runtime import chat_events
 
 # The file sits at src/features/voice/, so parents[3] is the checkout root; moving it breaks the depth.
@@ -343,7 +343,7 @@ def write_outputs(
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-  parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+  parser = help_formatter.CliArgumentParser(description=__doc__.splitlines()[0])
   known_engines = sorted(_variant_engine_ids())
   parser.add_argument(
       "--engines", default=",".join(registry.backend_ids()), help=f"comma list from {', '.join(known_engines)}")

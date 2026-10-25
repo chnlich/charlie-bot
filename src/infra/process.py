@@ -94,8 +94,22 @@ async def wait_or_kill_group(
 # from this process's uid at import — a host whose user is not uid 1000 gets
 # its own slice, not a hardcoded one.
 CGROUP_V2_USER_SERVICE = f"/sys/fs/cgroup/user.slice/user-{os.getuid()}.slice/user@{os.getuid()}.service"
-CGROUP_V2_AGENTS_SLICE = f"{CGROUP_V2_USER_SERVICE}/charliebot-agents.slice"
-CGROUP_V2_REPAIR_SLICE = f"{CGROUP_V2_USER_SERVICE}/charliebot-repair.slice"
+
+
+def user_slice_dir(unit: str) -> str:
+  """The cgroup directory systemd gives user slice *unit*.
+
+  systemd nests a slice inside the slice each dash prefix of its name names
+  (``a-b.slice`` lives in ``a.slice/a-b.slice``), so both leaf slices sit
+  inside charliebot.slice, not beside it.
+  """
+  parts = unit.removesuffix(".slice").split("-")
+  nested = "/".join("-".join(parts[:i]) + ".slice" for i in range(1, len(parts) + 1))
+  return f"{CGROUP_V2_USER_SERVICE}/{nested}"
+
+
+CGROUP_V2_AGENTS_SLICE = user_slice_dir("charliebot-agents.slice")
+CGROUP_V2_REPAIR_SLICE = user_slice_dir("charliebot-repair.slice")
 # The pre-split parent. Nothing is created here any more; the startup sweep
 # still clears this home's empty leftovers, and a process already running in
 # it stays until it exits.
@@ -156,6 +170,13 @@ def ensure_session_cgroup(
     raise SessionCgroupUnavailableError(
         f"session cgroup slice {base.name} ({base}) is missing or not writable; "
         "install and start the slices from scripts/systemd/ with scripts/setup.sh")
+  # systemd enables a slice's controllers for the units inside it only, and a
+  # session cgroup is no unit: without this its limit files would not exist.
+  try:
+    (base / "cgroup.subtree_control").write_text("+memory +pids")
+  except OSError as e:
+    raise SessionCgroupUnavailableError(
+        f"session cgroup slice {base.name} cannot enable memory and pids for its children: {e}") from e
   path = base / session_cgroup_name(session_id)
   try:
     path.mkdir()

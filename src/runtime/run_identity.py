@@ -29,6 +29,15 @@ RUN_IDENTITY_NOT_LAUNCHED_DETAIL = "run token references a run that has not laun
 SESSION_METADATA_NAME = "metadata.json"
 
 
+def unreadable_run_metadata(path: pathlib.Path, error: Exception) -> RuntimeError:
+  """The refusal both run-record readers raise for one record they cannot parse.
+
+  ``RunStore.read_run_sync`` and :func:`read_run_identity_sync` skip and refuse the same
+  files, and the two diagnostics must name the same path and cause.
+  """
+  return RuntimeError(f"run metadata unreadable at {path}: {error}")
+
+
 def run_identity_refusal(run: models.RunRecord | None, events: list[dict]) -> str | None:
   """Why *run* is not an active, launched Run for caller identity, or None.
 
@@ -65,7 +74,7 @@ def read_run_identity_sync(path: pathlib.Path) -> tuple[str, int | None, str | N
     if not isinstance(run_id, str):
       raise ValueError("run id must be a string")
   except (OSError, ValueError, KeyError, TypeError) as e:
-    raise RuntimeError(f"run metadata unreadable at {path}: {e}") from e
+    raise unreadable_run_metadata(path, e) from e
   return run_id, record.get("pid"), record.get("pid_start")
 
 

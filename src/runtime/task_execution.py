@@ -2200,8 +2200,7 @@ class TaskExecutionAdapter:
           if await self._fail_over_quota(meta, run):
             return
           summary = (
-              f"{await self._worker_failure_summary(session_id, run)}\n\n"
-              f"No backends.pool member is available: {backend_pool.recovery_report(self._cfg)}")
+              f"{await self._worker_failure_summary(session_id, run)}\n\n{backend_pool.no_member_message(self._cfg)}")
         await self._report_failure_to_parent(session_id, run, durable_outcome, summary=summary)
     finally:
       # Inputs admitted during this run waited for the serialized

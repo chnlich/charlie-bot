@@ -664,7 +664,7 @@ class RunStore:
     try:
       return models.RunRecord.model_validate_json(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as e:
-      raise RuntimeError(f"run metadata unreadable at {path}: {e}") from e
+      raise run_identity.unreadable_run_metadata(path, e) from e
 
   async def get_run(self, session_id: str, run_id: str) -> models.RunRecord | None:
     import asyncio  # deferred

@@ -1,15 +1,14 @@
 use std::collections::HashSet;
 use std::ffi::OsString;
 use std::fs;
-use std::io::{Read, Write};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::process::{Output, Stdio};
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
+use tokio::io::AsyncWriteExt;
 
 const GIT_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_UNTRACKED_BYTES: u64 = 10 * 1024 * 1024;
@@ -59,58 +58,34 @@ fn git_output(path: &Path, arguments: &[&str], input: Option<Vec<u8>>) -> Result
 }
 
 fn run_git(path: &Path, arguments: &[&str], input: Option<Vec<u8>>) -> Result<Output> {
-  let mut command = Command::new("git");
-  command
-    .args(arguments)
-    .current_dir(path)
-    .env("GIT_OPTIONAL_LOCKS", "0")
-    .stdout(Stdio::piped())
-    .stderr(Stdio::piped());
-  command.stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() });
-  let mut child =
-    command.spawn().with_context(|| format!("spawning git {} in {}", arguments.join(" "), path.display()))?;
-  let stdout = child.stdout.take().expect("git stdout is piped");
-  let stderr = child.stderr.take().expect("git stderr is piped");
-  let stdout_reader = thread::spawn(move || read_pipe(stdout));
-  let stderr_reader = thread::spawn(move || read_pipe(stderr));
-  let stdin_writer = input.map(|bytes| {
-    let mut stdin = child.stdin.take().expect("git stdin is piped when input is present");
-    thread::spawn(move || stdin.write_all(&bytes))
-  });
-  let started = Instant::now();
-  let (status, timed_out) = loop {
-    if let Some(status) = child.try_wait().context("waiting for git subprocess")? {
-      break (status, false);
+  // The sweep handlers already run on the blocking pool of the server runtime, so the async `git` subprocess rides
+  // that runtime; `subprocess.run(..., timeout=60)` in Python owns the pipe pump and the deadline.
+  tokio::runtime::Handle::current().block_on(async {
+    let mut command = tokio::process::Command::new("git");
+    command
+      .args(arguments)
+      .current_dir(path)
+      .env("GIT_OPTIONAL_LOCKS", "0")
+      .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
+      .stdout(Stdio::piped())
+      .stderr(Stdio::piped())
+      .kill_on_drop(true);
+    let mut child =
+      command.spawn().with_context(|| format!("spawning git {} in {}", arguments.join(" "), path.display()))?;
+    if let Some(bytes) = input {
+      let mut stdin = child.stdin.take().expect("git stdin is piped when input is present");
+      // A git that exits before reading its input makes the write fail with a broken pipe; the exit status carries the error.
+      if let Err(error) = stdin.write_all(&bytes).await
+        && error.kind() != std::io::ErrorKind::BrokenPipe
+      {
+        return Err(anyhow::Error::new(error).context("writing git stdin"));
+      }
     }
-    if started.elapsed() >= GIT_TIMEOUT {
-      child.kill().context("stopping timed out git subprocess")?;
-      break (child.wait().context("reaping timed out git subprocess")?, true);
+    match tokio::time::timeout(GIT_TIMEOUT, child.wait_with_output()).await {
+      Ok(output) => Ok(output.context("waiting for git subprocess")?),
+      Err(_) => bail!("git {} timed out in {} after 60 seconds", arguments.join(" "), path.display()),
     }
-    thread::sleep(Duration::from_millis(10));
-  };
-  let stdout = join_reader(stdout_reader, "git stdout")?;
-  let stderr = join_reader(stderr_reader, "git stderr")?;
-  if let Some(writer) = stdin_writer {
-    match writer.join().expect("git stdin writer thread completed") {
-      Ok(()) => {}
-      Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => {}
-      Err(error) => return Err(error).context("writing git stdin"),
-    }
-  }
-  if timed_out {
-    bail!("git {} timed out in {} after 60 seconds", arguments.join(" "), path.display());
-  }
-  Ok(Output { status, stdout, stderr })
-}
-
-fn read_pipe(mut pipe: impl Read) -> std::io::Result<Vec<u8>> {
-  let mut bytes = Vec::new();
-  pipe.read_to_end(&mut bytes)?;
-  Ok(bytes)
-}
-
-fn join_reader(reader: thread::JoinHandle<std::io::Result<Vec<u8>>>, label: &str) -> Result<Vec<u8>> {
-  reader.join().expect("git pipe reader thread completed").with_context(|| format!("reading {label}"))
+  })
 }
 
 fn decode_error(bytes: &[u8]) -> String {

@@ -56,14 +56,22 @@ impl Service for HostAuthPoller {
 
 /// One round at once, then one per standing period. A failed tick is logged and the loop continues.
 async fn poll_loop(stop: StartupStop) {
-  if !first_round(&stop, poller_round).await {
+  poll_loop_with(stop, poller_round).await;
+}
+
+async fn poll_loop_with<F, Fut>(stop: StartupStop, mut round: F)
+where
+  F: FnMut() -> Fut,
+  Fut: Future<Output = anyhow::Result<()>>,
+{
+  if !first_round(&stop, || round()).await {
     return;
   }
   loop {
-    if let Err(error) = poller_round().await {
+    tokio::time::sleep(Duration::from_secs(PROBE_INTERVAL_SEC as u64)).await;
+    if let Err(error) = round().await {
       tracing::error!(error = %format!("{error:#}"), "host_auth_poll_error");
     }
-    tokio::time::sleep(Duration::from_secs(PROBE_INTERVAL_SEC as u64)).await;
   }
 }
 
@@ -147,5 +155,36 @@ mod tests {
     stop.cancel();
 
     assert!(!first_round_gate(&stop).await, "a stopping process starts no round");
+  }
+
+  #[tokio::test(start_paused = true)]
+  async fn the_first_round_sleeps_for_one_interval_before_the_next_round() {
+    let stop = StartupStop::default();
+    stop.mark_ready();
+    let rounds = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let round_count = std::sync::Arc::clone(&rounds);
+    let task = tokio::spawn(poll_loop_with(stop, move || {
+      let round_count = std::sync::Arc::clone(&round_count);
+      async move {
+        round_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Ok::<(), anyhow::Error>(())
+      }
+    }));
+
+    tokio::task::yield_now().await;
+    tokio::time::advance(FIRST_ROUND_DELAY).await;
+    tokio::task::yield_now().await;
+    assert_eq!(rounds.load(std::sync::atomic::Ordering::Relaxed), 1, "startup performs one round");
+
+    let interval = Duration::from_secs(PROBE_INTERVAL_SEC as u64);
+    tokio::time::advance(interval - Duration::from_millis(1)).await;
+    tokio::task::yield_now().await;
+    assert_eq!(rounds.load(std::sync::atomic::Ordering::Relaxed), 1, "the next round waits for its interval");
+    tokio::time::advance(Duration::from_millis(1)).await;
+    tokio::task::yield_now().await;
+    assert_eq!(rounds.load(std::sync::atomic::Ordering::Relaxed), 2, "the next round starts at its interval");
+
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
   }
 }

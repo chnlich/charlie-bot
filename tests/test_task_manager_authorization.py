@@ -29,18 +29,10 @@ from src.runtime import control_events, runs, task_sessions
 from tests import test_task_execution
 
 
-def live_run_identity() -> tuple[int, str]:
-  """A real live process identity (the verified-live precondition of an own-run request)."""
-  pid = os.getpid()
-  pair = runs.read_pid_stat(pid)
-  assert pair is not None
-  return pid, pair[0]
-
-
 async def register_live_manager_run(tree: task_sessions.TaskTreeManager, session_id: str, run_id: str) -> None:
   """Pin one live manager_turn Run: the node's own coordination Run whose
   identity backs its completion credential."""
-  pid, pid_start = live_run_identity()
+  pid, pid_start = conftest.identity_of(os.getpid())
   await tree.runs.register_run_locked(
       models.RunRecord(
           id=run_id,

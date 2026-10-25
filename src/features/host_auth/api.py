@@ -7,7 +7,7 @@ import fastapi
 from fastapi import responses
 
 from src.features.host_auth import host_auth
-from src.infra import log_once, models, tasks
+from src.infra import constants, log_once, models, tasks
 from src.runtime import templating
 from src.runtime.hooks import wiring
 
@@ -77,7 +77,7 @@ def _page_rows(state: dict, now: datetime.datetime) -> list[dict]:
         "detail_lines": detail.split("\n"),
         "renew_cmd": f"ssh {entry['alias']} true",
         "has_url": "http" in detail,
-        "baseline": _local_timestamp(baseline, "%Y-%m-%d %H:%M %Z"),
+        "baseline": _local_timestamp(baseline, constants.LOCAL_TIMESTAMP_FORMAT),
         "last_probe": _local_timestamp(entry.get("last_probe_at"), "%H:%M"),
         "deadline_kind": "not_applicable",
         "remaining": None,
@@ -86,7 +86,7 @@ def _page_rows(state: dict, now: datetime.datetime) -> list[dict]:
     }
     if status == host_auth.STATUS_OK:
       estimate = host_auth.derive_estimate(entry, now)
-      row["expires"] = _local_timestamp(estimate["estimated_expires_at"], "%Y-%m-%d %H:%M %Z")
+      row["expires"] = _local_timestamp(estimate["estimated_expires_at"], constants.LOCAL_TIMESTAMP_FORMAT)
       if baseline is None:
         row["deadline_kind"] = "no_baseline"
       elif estimate["remaining_sec"] <= 0:
@@ -132,7 +132,7 @@ async def host_auth_page(request: fastapi.Request) -> responses.HTMLResponse:
           "probe_running": bool(state.get("probe_running")),
           "hosts": _page_rows(state, now),
           "summary": _summary(state, now),
-          "last_probe": _local_timestamp(state.get("probed_at"), "%Y-%m-%d %H:%M %Z"),
+          "last_probe": _local_timestamp(state.get("probed_at"), constants.LOCAL_TIMESTAMP_FORMAT),
           "interval_label": f"{host_auth.PROBE_INTERVAL_SEC // 60} min",
           "backoff_label": f"{host_auth.BLOCKED_BACKOFF_SEC // 3600} h",
           "ttl_label": f"{host_auth.TRUST_CACHE_TTL_SEC // 86400} days",

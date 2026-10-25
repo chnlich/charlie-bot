@@ -314,4 +314,31 @@ mod tests {
   fn user_event_ref(message_id: &str) -> ChatEvent {
     ChatEvent::from(json!({"id": message_id, "type": event_types::USER, "content": "Please change the answer."}))
   }
+
+  #[test]
+  fn echoed_ids_are_the_complete_non_initial_replays_of_every_raw_leg() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+      dir.path().join(RAW_LOG_NAME),
+      concat!(
+        "{\"type\":\"user\",\"isReplay\":true,\"uuid\":\"in-1\"}\n",
+        "{\"type\":\"user\",\"isReplay\":true,\"uuid\":\"run-1\"}\n",
+        "{\"type\":\"user\",\"isReplay\":false,\"uuid\":\"in-2\"}\n",
+        "{\"type\":\"assistant\",\"isReplay\":true,\"uuid\":\"in-3\"}\n",
+        "not json\n",
+        "{\"type\":\"user\",\"isReplay\":true,\"uuid\":\"\"}\n",
+        "{\"type\":\"user\",\"isReplay\":true,\"uuid\":5}\n",
+        "{\"type\":\"user\",\"isReplay\":true,\"uuid\":\"in-4\"}\r\n",
+        "{\"type\":\"user\",\"isReplay\":true,\"uuid\":\"in-6\"}",
+      ),
+    )
+    .unwrap();
+    std::fs::write(
+      dir.path().join(format!("{RAW_LOG_NAME}.1")),
+      "{\"type\":\"user\",\"isReplay\":true,\"uuid\":\"in-5\"}\n",
+    )
+    .unwrap();
+    let echoed = echoed_input_ids(dir.path(), "run-1").unwrap();
+    assert_eq!(echoed, HashSet::from(["in-1".to_string(), "in-4".to_string(), "in-5".to_string()]));
+  }
 }

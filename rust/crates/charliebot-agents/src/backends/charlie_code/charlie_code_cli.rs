@@ -293,6 +293,16 @@ mod tests {
   }
 
   #[test]
+  fn the_refusal_names_the_basename_of_an_image_path() {
+    assert_eq!(path_name("/synthetic/uploads/error-shot.PNG"), "error-shot.PNG");
+    assert_eq!(path_name("error-shot.PNG"), "error-shot.PNG");
+    assert_eq!(path_name("/synthetic/uploads/error-shot.PNG/"), "error-shot.PNG");
+    assert_eq!(path_name("/synthetic/uploads/.."), "..");
+    assert_eq!(path_name("/"), "");
+    assert_eq!(path_name(""), "");
+  }
+
+  #[test]
   fn an_image_refuses_the_run_on_a_text_only_endpoint_and_becomes_a_flag_otherwise() {
     let root = tempfile::tempdir().unwrap();
     let shot = json!({"filename": "dir/error-shot.PNG", "path": "/synthetic/uploads/error-shot.PNG"});

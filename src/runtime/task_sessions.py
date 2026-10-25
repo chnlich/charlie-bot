@@ -73,9 +73,10 @@ PROMPT_BODIES_DIR_NAME = "prompt_bodies"
 # stay invisible for.
 _TREE_INDEX_TTL_SECONDS = 2.0
 
-# Refusal wording shared by the raises that own the contracts and their routes in
-# src/runtime/api/sessions.py, which carry it as the client-visible detail: the create route's v2
-# pre-check and legacy-shape guard read the first two, the archive route's operator guard the third.
+# The create route (src/runtime/api/sessions.py) reproduces these two refusals
+# verbatim as its client-visible details — the first in the v2 pre-check, the
+# second in the legacy-shape guard; the wording lives beside the raises that own
+# the contracts.
 TASK_CREATE_REQUEST_ID_REQUIRED = "request_id is required for task creation"
 AGENT_CREATE_SCOPE_REFUSAL = "an agent may only create a task directly under its own open manager task"
 

@@ -100,8 +100,7 @@ def _session_profile(cfg: config.CharlieBotConfig, session_id: str) -> str:
   return profile
 
 
-def _delegate_cold_read(
-    args: argparse.Namespace, artifact: pathlib.Path, cfg: config.CharlieBotConfig, session_id: str) -> int:
+def _delegate_cold_read(args: argparse.Namespace, artifact: pathlib.Path, session_id: str) -> int:
   """Delegate the cold read to a cold-read child of this manager session and print the started line.
 
   The request id binds the session, a sha256 prefix of the page, and the UTC
@@ -151,7 +150,7 @@ def _run_check(args: argparse.Namespace) -> int:
     return 0
   session_id = _session_identity(cfg)
   if session_id is not None and _session_profile(cfg, session_id) == "manager":
-    return _delegate_cold_read(args, artifact, cfg, session_id)
+    return _delegate_cold_read(args, artifact, session_id)
   # A worker session, or no session identity: the cold read runs in the foreground.
   try:
     result = artifact_check.run_probe(cfg, artifact, args.trigger)

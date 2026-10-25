@@ -313,3 +313,12 @@ def recovery_report(cfg: config.CharlieBotConfig) -> str:
     else:
       parts.append(f"{member} not cooling")
   return "; ".join(parts) if parts else "backends.pool is empty"
+
+
+def no_member_message(cfg: config.CharlieBotConfig) -> str:
+  """The line a caller reports when :func:`select` found no member.
+
+  Subagent resolution, the improve loop's per-iteration pick and the quota failover all
+  report it, and an operator reads the same wording whichever one refused.
+  """
+  return f"no backends.pool member is available: {recovery_report(cfg)}"

@@ -225,6 +225,25 @@ class Scheduler:
     await self._archive_active_cron_sessions(task_cfg.name, session_cache)
     log.info("scheduled_task_auto_bound", task=task_cfg.name, session=node.id, backend=backend)
 
+  async def _cron_sessions(
+      self,
+      task_name: str,
+      session_cache: dict[str, list[models.SessionMetadata]] | None,
+  ) -> list[models.SessionMetadata]:
+    """The task's cron-stamped sessions.
+
+    The tick's cache serves them when it holds the task; otherwise they come from
+    a fresh listing. The returned list is the cache's own, so a caller's edit
+    reaches the rest of the tick.
+    """
+    cached = session_cache.get(task_name) if session_cache is not None else None
+    if cached is not None:
+      return cached
+    return [
+        s for s in await self._session_listing.list_sessions(scheduled=True, include_running_status=False)
+        if s.scheduled_task == task_name
+    ]
+
   async def _newest_active_cron_session(
       self,
       task_name: str,
@@ -236,12 +255,7 @@ class Scheduler:
     a pulled-back old generation would otherwise rank newest and donate its
     (stale) bookkeeping at the migration.
     """
-    sessions = session_cache.get(task_name) if session_cache is not None else None
-    if sessions is None:
-      sessions = [
-          s for s in await self._session_listing.list_sessions(scheduled=True, include_running_status=False)
-          if s.scheduled_task == task_name
-      ]
+    sessions = await self._cron_sessions(task_name, session_cache)
     active = sorted(
         (s for s in sessions if s.status == models.SessionStatus.ACTIVE), key=lambda s: s.created_at, reverse=True)
     return active[0] if active else None
@@ -257,12 +271,7 @@ class Scheduler:
     write-back and the archive, and any later wake that re-activates one.
     Archiving never touches the task's yaml.
     """
-    sessions = session_cache.get(task_name) if session_cache is not None else None
-    if sessions is None:
-      sessions = [
-          s for s in await self._session_listing.list_sessions(scheduled=True, include_running_status=False)
-          if s.scheduled_task == task_name
-      ]
+    sessions = await self._cron_sessions(task_name, session_cache)
     archived: list[str] = []
     for session in sessions:
       if session.status != models.SessionStatus.ACTIVE:

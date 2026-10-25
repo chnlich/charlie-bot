@@ -9,6 +9,7 @@ publish.workspace = true
 axum.workspace = true
 charliebot-compat.workspace = true
 charliebot-core.workspace = true
+csv.workspace = true
 charliebot-registry.workspace = true
 nix.workspace = true
 percent-encoding.workspace = true

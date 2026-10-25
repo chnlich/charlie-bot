@@ -1773,6 +1773,22 @@ class TaskExecutionAdapter:
       return ""
     return f"**Later Messages:**\n{content}"
 
+  async def _review_inputs(self, session_id: str,
+                           work_run: models.RunRecord) -> tuple[models.SessionMetadata, str, str, pathlib.Path]:
+    """The task record, work report and two log paths every review context reads.
+
+        The task record carries the spec the review judges against. ``extract_review_context`` reads the work
+        report from the work Run's events log; the chat log is the node's, and the same events log goes to the
+        rendered context.
+        """
+    meta = await self._tree.load_meta(session_id)
+    assert meta is not None and meta.task is not None, (
+        f"review of work run {work_run.id} needs its node's task record for the spec")
+    worker_log_path = self._tree.runs.run_dir(session_id, work_run.id) / runs.RUN_EVENTS_NAME
+    worker_summary = await review.extract_review_context(session_id, work_run.id, worker_log_path=worker_log_path)
+    chat_log_path = chat_events.chat_events_path(self._cfg.sessions_dir / session_id)
+    return meta, worker_summary, chat_log_path, worker_log_path
+
   async def _build_review_context(self, session_id: str, work_run: models.RunRecord) -> str:
     """The review Run's task/input context: the work being judged and its git steps.
 
@@ -1789,13 +1805,7 @@ class TaskExecutionAdapter:
     assert (work_run.branch_name and work_run.worktree_path and work_run.repo_path and work_run.base_branch), (
         f"review of work run {work_run.id} needs its exact repo/base/branch/worktree "
         "provenance; an unset base is never silently replaced with main")
-    meta = await self._tree.load_meta(session_id)
-    assert meta is not None and meta.task is not None, (
-        f"review of work run {work_run.id} needs its node's task record for the spec")
-    worker_summary = await review.extract_review_context(
-        session_id,
-        work_run.id,
-        worker_log_path=self._tree.runs.run_dir(session_id, work_run.id) / runs.RUN_EVENTS_NAME)
+    meta, worker_summary, chat_log_path, worker_log_path = await self._review_inputs(session_id, work_run)
     context_lines = review.review_context_lines(
         review.review_spec_text(meta.task), await self._later_messages_section(meta, work_run), worker_summary,
         f"(work run {work_run.id})")
@@ -1803,8 +1813,8 @@ class TaskExecutionAdapter:
         branch_name=work_run.branch_name,
         wt_path=work_run.worktree_path,
         base_branch=work_run.base_branch,
-        chat_log_path=chat_events.chat_events_path(self._cfg.sessions_dir / session_id),
-        worker_log_path=self._tree.runs.run_dir(session_id, work_run.id) / runs.RUN_EVENTS_NAME,
+        chat_log_path=chat_log_path,
+        worker_log_path=worker_log_path,
         context_section="\n".join(context_lines),
     )
 
@@ -1819,16 +1829,10 @@ class TaskExecutionAdapter:
         spec comes from the task record, the same record the work Run's
         prompt reads.
         """
-    meta = await self._tree.load_meta(session_id)
-    assert meta is not None and meta.task is not None, (
-        f"review of work run {work_run.id} needs its node's task record for the spec")
-    worker_summary = await review.extract_review_context(
-        session_id,
-        work_run.id,
-        worker_log_path=self._tree.runs.run_dir(session_id, work_run.id) / runs.RUN_EVENTS_NAME)
+    meta, worker_summary, chat_log_path, worker_log_path = await self._review_inputs(session_id, work_run)
     return task_prompts.repo_less_review_task_context(
-        chat_log_path=chat_events.chat_events_path(self._cfg.sessions_dir / session_id),
-        worker_log_path=self._tree.runs.run_dir(session_id, work_run.id) / runs.RUN_EVENTS_NAME,
+        chat_log_path=chat_log_path,
+        worker_log_path=worker_log_path,
         spec_text=review.review_spec_text(meta.task),
         later_messages=await self._later_messages_section(meta, work_run),
         work_report=worker_summary,

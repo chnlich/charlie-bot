@@ -55,6 +55,12 @@ pub struct ArchivedPage {
 /// How long a memoized listing answers before the next call walks the sessions again (`_LISTINGS_SWEEP_INTERVAL`).
 const LISTINGS_SWEEP_INTERVAL: Duration = Duration::from_secs(10);
 
+/// The sessions directory's entry names at the root signature that produced them (`_dir_names_memo`).
+pub(crate) struct DirNames {
+  pub(crate) signature: (i64, i64),
+  pub(crate) names: std::sync::Arc<Vec<String>>,
+}
+
 /// One status filter's listing and what it was walked at: the listings revision, the time, and the sessions root's
 /// signature.
 pub(crate) struct CachedListing {
@@ -105,21 +111,16 @@ impl Store {
       return Ok((Arc::clone(&hit.rows), hit.generation));
     }
     let revision = self.listings_revision.load(Ordering::Acquire);
-    let entries = match fs::read_dir(&root) {
-      Ok(entries) => entries,
-      Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok((Arc::new(Vec::new()), 0)),
-      Err(error) => return Err(StoreError::new(format!("{}: {error}", root.display()))),
+    let names = match self.session_dir_names(&root, root_signature)? {
+      Some(names) => names,
+      // No readable root: the walk has nothing to list.
+      None => return Ok((Arc::new(Vec::new()), 0)),
     };
     let cached = self.fresh_cached_metas()?;
     let mut rows = Vec::new();
-    for entry in entries {
-      let entry = entry.map_err(|error| StoreError::new(format!("{}: {error}", root.display())))?;
-      if !entry.file_type().map_err(|error| StoreError::new(format!("{}: {error}", entry.path().display())))?.is_dir() {
-        continue;
-      }
-      let session_id = entry.file_name().to_string_lossy().into_owned();
-      let metadata_path = entry.path().join("metadata.json");
-      let meta = match cached.get(&session_id) {
+    for session_id in names.iter() {
+      let metadata_path = root.join(session_id).join("metadata.json");
+      let meta = match cached.get(session_id) {
         Some(meta) => Some(Arc::clone(meta)),
         None => {
           let signature = stat_signature(&metadata_path);
@@ -166,6 +167,46 @@ impl Store {
       self.listings_memo.lock().expect("listings memo mutex is not poisoned").insert(status, listing);
     }
     Ok((rows, generation))
+  }
+
+  /// The sessions directory's entry names, from the memo when the root signature still matches.
+  ///
+  /// The key is the sessions root's `(mtime_ns, size)` and nothing else, as `_session_dir_names` keys
+  /// `session_store.py`'s `_dir_names_memo`: a create or delete moves the signature, so an unchanged signature proves
+  /// the name list unchanged and no time bound is needed. A hit costs one stat instead of a scandir plus one
+  /// `file_type` per entry, which the production copy pays about 6,000 times per listing walk.
+  fn session_dir_names(
+    &self,
+    root: &std::path::Path,
+    signature: Option<(i64, i64)>,
+  ) -> StoreResult<Option<Arc<Vec<String>>>> {
+    if let Some(signature) = signature
+      && let Some(memo) = self.dir_names_memo.lock().expect("dir names memo mutex is not poisoned").as_ref()
+      && memo.signature == signature
+    {
+      return Ok(Some(Arc::clone(&memo.names)));
+    }
+    let entries = match fs::read_dir(root) {
+      Ok(entries) => entries,
+      Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+      Err(error) => return Err(StoreError::new(format!("{}: {error}", root.display()))),
+    };
+    #[cfg(test)]
+    self.directory_scans.fetch_add(1, Ordering::Relaxed);
+    let mut names = Vec::new();
+    for entry in entries {
+      let entry = entry.map_err(|error| StoreError::new(format!("{}: {error}", root.display())))?;
+      if !entry.file_type().map_err(|error| StoreError::new(format!("{}: {error}", entry.path().display())))?.is_dir() {
+        continue;
+      }
+      names.push(entry.file_name().to_string_lossy().into_owned());
+    }
+    let names = Arc::new(names);
+    if let Some(signature) = signature {
+      *self.dir_names_memo.lock().expect("dir names memo mutex is not poisoned") =
+        Some(DirNames { signature, names: Arc::clone(&names) });
+    }
+    Ok(Some(names))
   }
 
   /// List sessions with optional stored-status, star, and sequence ownership filters.
@@ -591,6 +632,34 @@ mod tests {
     // A new session directory moves the sessions root's signature.
     write_metadata(&store, "gamma", SessionStatus::Active, "2025-02-03T00:00:00Z", None);
     assert_eq!(names(&store).len(), 3);
+  }
+
+  /// The sessions directory's name list is memoized on the root's signature, as `session_store.py`'s
+  /// `_dir_names_memo` is: a write that moves the listings revision re-walks the rows but not the directory.
+  #[tokio::test]
+  async fn a_listing_walk_re_reads_the_directory_only_after_the_root_signature_moves() {
+    let home = tempfile::tempdir().unwrap();
+    let store = test_store(home.path());
+    write_metadata(&store, "alpha", SessionStatus::Active, "2025-02-01T00:00:00Z", None);
+    store.load_session_metas(None).unwrap();
+    let scans = store.directory_scans.load(Ordering::Relaxed);
+    assert_eq!(scans, 1, "the first listing walks the directory once");
+
+    // A write through the store moves the listings revision, so the next listing re-walks its rows.
+    let mut alpha = store.get_session("alpha").await.unwrap().unwrap();
+    alpha.group = Some("grouped".to_string());
+    store.save_metadata_locked(&mut alpha, false).unwrap();
+    assert_eq!(store.load_session_metas(None).unwrap().len(), 1);
+    assert_eq!(
+      store.directory_scans.load(Ordering::Relaxed),
+      scans,
+      "an unchanged sessions root reuses the memoized name list"
+    );
+
+    // A new session directory moves the root's signature, so the next walk rescans.
+    write_metadata(&store, "beta", SessionStatus::Active, "2025-02-02T00:00:00Z", None);
+    assert_eq!(store.load_session_metas(None).unwrap().len(), 2);
+    assert_eq!(store.directory_scans.load(Ordering::Relaxed), scans + 1, "a new directory moves the key");
   }
 
   #[test]

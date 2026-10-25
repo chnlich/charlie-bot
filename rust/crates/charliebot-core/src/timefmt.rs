@@ -115,5 +115,11 @@ mod tests {
   #[test]
   fn http_date_matches_formatdate_usegmt() {
     assert_eq!(http_date(1_760_771_740), "Sat, 18 Oct 2025 07:15:40 GMT");
+    assert_eq!(http_date(0), "Thu, 01 Jan 1970 00:00:00 GMT");
+    assert_eq!(http_date(951_782_400), "Tue, 29 Feb 2000 00:00:00 GMT");
+    assert_eq!(http_date(1_699_142_400), "Sun, 05 Nov 2023 00:00:00 GMT");
+    assert_eq!(http_date(1_699_228_799), "Sun, 05 Nov 2023 23:59:59 GMT");
+    assert_eq!(http_date(1_704_067_200), "Mon, 01 Jan 2024 00:00:00 GMT");
+    assert_eq!(http_date(4_102_444_799), "Thu, 31 Dec 2099 23:59:59 GMT");
   }
 }

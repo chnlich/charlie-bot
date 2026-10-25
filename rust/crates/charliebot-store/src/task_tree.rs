@@ -570,7 +570,9 @@ impl<'a> NodeReads<'a> {
       if run.ended_at.is_some() {
         continue;
       }
-      match facts.display_state(run, &mut boot, false)? {
+      // The activity's queued verdict reads the task-open gate below, never a withheld reason, as Python's
+      // derive_task_tree_activity does.
+      match facts.display_state(run, &mut boot, || false)? {
         RunDisplayState::Running => running = true,
         // Queued and withheld runs both wait on an open task. A closed task's queued run never launches.
         RunDisplayState::Queued | RunDisplayState::Withheld => {

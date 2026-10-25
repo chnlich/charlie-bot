@@ -350,7 +350,7 @@ async fn session_transcript(
 
 // Borrow the cached projection through serialization as Python does at src/runtime/api/sessions.py:1158-1170.
 struct TranscriptJson<'a> {
-  messages: &'a [Value],
+  messages: &'a [std::sync::Arc<Value>],
   total: usize,
   pending_draft: Option<&'a Value>,
   revision: &'a str,
@@ -367,7 +367,7 @@ fn transcript_json_body(transcript: TranscriptJson<'_>) -> Vec<u8> {
     if index > 0 {
       body.push(b',');
     }
-    body.extend_from_slice(&charliebot_compat::json::fast_json_bytes(message));
+    body.extend_from_slice(&charliebot_compat::json::fast_json_bytes(message.as_ref()));
   }
   body.extend_from_slice(b"],\"total\":");
   append_fast_json(&mut body, &json!(transcript.total));

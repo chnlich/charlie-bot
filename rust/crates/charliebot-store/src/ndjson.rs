@@ -28,8 +28,8 @@ pub(crate) fn parse_line_compact(raw: &[u8]) -> Option<CompactValue> {
   serde_json::from_str(&text).ok()
 }
 
-/// How many lines this thread's parser attempted, a test-only count that proves a reader parses each
-/// line once. Thread-local because tests run in parallel and the read runs on its caller's thread.
+// How many lines this thread's parser attempted, a test-only count that proves a reader parses each
+// line once. Thread-local because tests run in parallel and the read runs on its caller's thread.
 #[cfg(test)]
 thread_local! {
   static LINE_PARSES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };

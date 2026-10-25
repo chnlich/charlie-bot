@@ -1,5 +1,6 @@
 //! The byte-level parts of the proxy's stream: the line framing of `src/infra/sse.py` and the frame `_sse_event` writes.
 
+use axum::response::sse::Event;
 use charliebot_core::pyfmt;
 use memchr::memchr2;
 use serde_json::{Map, Value};
@@ -46,18 +47,24 @@ impl LineFramer {
   }
 }
 
-/// `_sse_event(event, data)`: `event: <name>` and a compact JSON `data` line whose first member is `type`.
-pub fn sse_frame(event: &str, data: &Value) -> Vec<u8> {
+/// `_sse_event(event, data)`: the event named `event` with a compact JSON data field whose first member is `type`.
+pub fn sse_event(event: &str, data: &Value) -> Event {
   let mut members = Map::new();
   members.insert("type".to_string(), Value::String(event.to_string()));
   if let Value::Object(data) = data {
     members.extend(data.clone());
   }
-  format!("event: {event}\ndata: {}\n\n", pyfmt::json_dumps(&Value::Object(members), &COMPACT_ASCII_JSON)).into_bytes()
+  Event::default().event(event).data(pyfmt::json_dumps(&Value::Object(members), &COMPACT_ASCII_JSON))
 }
 
 #[cfg(test)]
 mod tests {
+  use std::io;
+
+  use axum::body::to_bytes;
+  use axum::response::sse::Sse;
+  use axum::response::IntoResponse;
+  use futures_util::stream;
   use serde_json::json;
 
   use super::*;
@@ -82,11 +89,13 @@ mod tests {
     assert_eq!(framer.finish(), None);
   }
 
-  #[test]
-  fn a_frame_names_its_type_first_and_renders_ascii_escapes() {
-    let frame = sse_frame("content_block_delta", &json!({"index": 0, "delta": {"text": "é\u{2028}"}}));
+  #[tokio::test]
+  async fn a_frame_names_its_type_first_and_renders_ascii_escapes() {
+    let event = sse_event("content_block_delta", &json!({"index": 0, "delta": {"text": "é\u{2028}"}}));
+    let body = Sse::new(stream::iter([Ok::<Event, io::Error>(event)])).into_response().into_body();
+    let frame = to_bytes(body, usize::MAX).await.unwrap();
     assert_eq!(
-      String::from_utf8(frame).unwrap(),
+      String::from_utf8(frame.to_vec()).unwrap(),
       "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"text\":\"\\u00e9\\u2028\"}}\n\n"
     );
   }

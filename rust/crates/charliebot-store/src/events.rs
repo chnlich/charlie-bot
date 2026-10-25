@@ -1865,7 +1865,7 @@ mod tests {
 
       let cached = store.load_chat_events_shared_sync(session_id).unwrap();
       let cache_ids: BTreeSet<String> = cached.iter().map(|event| event["id"].as_str().unwrap().to_string()).collect();
-      let file_events = ndjson::read_file(&path).unwrap();
+      let file_events = ndjson::read_file_compact(&path).unwrap();
       let file_ids: BTreeSet<String> =
         file_events.iter().map(|event| event["id"].as_str().unwrap().to_string()).collect();
       assert_eq!(cached.len(), expected.len(), "iteration {iteration}: cached event count");
@@ -1874,7 +1874,7 @@ mod tests {
       assert_eq!(file_ids, expected, "iteration {iteration}: file ids");
       assert_eq!(
         cached.iter().map(|event| event["id"].to_value()).collect::<Vec<_>>(),
-        file_events.iter().map(|event| event["id"].clone()).collect::<Vec<_>>(),
+        file_events.iter().map(|event| event["id"].to_value()).collect::<Vec<_>>(),
         "iteration {iteration}: cache and file order"
       );
     }

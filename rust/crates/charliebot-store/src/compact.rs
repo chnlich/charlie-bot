@@ -110,6 +110,101 @@ impl From<Value> for CompactValue {
   }
 }
 
+/// Deserializes straight from the parser's bytes: one pass, no `serde_json::Value` intermediate.
+///
+/// The cold event-log read used to parse each line into a `Value` and re-walk it through
+/// [`CompactValue::from_value`], allocating the whole tree twice; the visitor below builds the compact
+/// form as the parser scans, interning each object key once and sizing every container from the
+/// parser's hint. The accepted grammar and the resulting values are serde_json's own, so a document
+/// this impl accepts is exactly one `from_value(serde_json::from_str(..))` would have produced.
+impl<'de> serde::Deserialize<'de> for CompactValue {
+  fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+    struct CompactVisitor;
+
+    impl<'de> serde::de::Visitor<'de> for CompactVisitor {
+      type Value = CompactValue;
+
+      fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("any JSON value")
+      }
+
+      fn visit_bool<E: serde::de::Error>(self, value: bool) -> Result<Self::Value, E> {
+        Ok(Self::Value::Bool(value))
+      }
+
+      fn visit_i64<E: serde::de::Error>(self, value: i64) -> Result<Self::Value, E> {
+        Ok(Self::Value::NegInt(value))
+      }
+
+      fn visit_u64<E: serde::de::Error>(self, value: u64) -> Result<Self::Value, E> {
+        Ok(Self::Value::PosInt(value))
+      }
+
+      fn visit_f64<E: serde::de::Error>(self, value: f64) -> Result<Self::Value, E> {
+        Ok(Self::Value::Float(value))
+      }
+
+      fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<Self::Value, E> {
+        Ok(Self::Value::Str(value.into()))
+      }
+
+      fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+        Ok(Self::Value::Null)
+      }
+
+      fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+        let mut items = Vec::with_capacity(seq.size_hint().unwrap_or(0));
+        while let Some(item) = seq.next_element::<Self::Value>()? {
+          items.push(item);
+        }
+        Ok(Self::Value::Array(items.into_boxed_slice()))
+      }
+
+      fn visit_map<A: serde::de::MapAccess<'de>>(self, mut access: A) -> Result<Self::Value, A::Error> {
+        let mut entries: Vec<ObjectEntry> = Vec::with_capacity(access.size_hint().unwrap_or(0));
+        while let Some(key) = access.next_key_seed(KeySeed)? {
+          let value = access.next_value::<Self::Value>()?;
+          // A repeated key keeps its first position and takes the last value, as serde_json's map
+          // insert (and Python's dict) does.
+          match entries.iter_mut().find(|entry| entry.key == key) {
+            Some(entry) => entry.value = value,
+            None => entries.push(ObjectEntry { key, value }),
+          }
+        }
+        Ok(Self::Value::Object(entries.into_boxed_slice()))
+      }
+    }
+
+    deserializer.deserialize_any(CompactVisitor)
+  }
+}
+
+/// The map key's seed: interns the name as the parser scans, so a repeated key never allocates its
+/// name twice (most keys repeat across a log's events).
+struct KeySeed;
+
+impl<'de> serde::de::DeserializeSeed<'de> for KeySeed {
+  type Value = Key;
+
+  fn deserialize<D: serde::Deserializer<'de>>(self, deserializer: D) -> Result<Self::Value, D::Error> {
+    struct KeyVisitor;
+
+    impl<'de> serde::de::Visitor<'de> for KeyVisitor {
+      type Value = Key;
+
+      fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("an object key")
+      }
+
+      fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<Self::Value, E> {
+        Ok(intern_key(value))
+      }
+    }
+
+    deserializer.deserialize_str(KeyVisitor)
+  }
+}
+
 /// String comparisons mirror `serde_json::Value`'s: any non-string form is unequal.
 impl PartialEq<str> for CompactValue {
   fn eq(&self, other: &str) -> bool {

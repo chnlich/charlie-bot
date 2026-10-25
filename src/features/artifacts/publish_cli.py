@@ -11,7 +11,6 @@ missing artifact, or a program that exits non-zero or does not print exactly one
 JSON error on stderr and exits 1; no URL is printed and none falls back to the server port.
 """
 
-import argparse
 import sys
 
 from src.infra import help_formatter
@@ -19,10 +18,9 @@ from src.runtime.cli import common as cli_common
 
 
 def main() -> None:
-  parser = argparse.ArgumentParser(
+  parser = help_formatter.CliArgumentParser(
       description="Publish an artifact and print the URL readers outside use",
-      epilog="With publish.command set, arguments after -- go unchanged to its program; the directory lane takes none.",
-      formatter_class=help_formatter.CliHelpFormatter)
+      epilog="With publish.command set, arguments after -- go unchanged to its program; the directory lane takes none.")
   parser.add_argument("artifact", help="Path of the artifact file to publish")
   # Everything after the first "--" is a lane option, passed through unparsed.
   argv = sys.argv[1:]

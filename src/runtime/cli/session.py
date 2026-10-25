@@ -67,14 +67,10 @@ EXIT_SEND_REFUSED = 2
 
 
 def _build_parser() -> argparse.ArgumentParser:
-  parser = argparse.ArgumentParser(
-      description="CharlieBot session mutations", formatter_class=help_formatter.CliHelpFormatter)
+  parser = help_formatter.CliArgumentParser(description="CharlieBot session mutations")
   sub = parser.add_subparsers(dest="session_command", required=True)
 
-  create = sub.add_parser(
-      "create",
-      help="Create a session (metadata only, no first message)",
-      formatter_class=help_formatter.CliHelpFormatter)
+  create = sub.add_parser("create", help="Create a session (metadata only, no first message)")
   create.add_argument("--name", default=None, help="Session/task name (optional)")
   create.add_argument("--backend", default=None, help="Backend id (optional)")
   create.add_argument("--group", default=None, help="Group name to assign after creation (optional)")
@@ -134,10 +130,7 @@ def _build_parser() -> argparse.ArgumentParser:
   cancel.add_argument("--reason", required=True, help="Cancellation reason")
   cancel.add_argument("--request-id", default=None, help="Request id binding the cancel (defaults to a fresh UUID)")
 
-  send = sub.add_parser(
-      "send",
-      help="Relay a message to another session as an agent_message",
-      formatter_class=help_formatter.CliHelpFormatter)
+  send = sub.add_parser("send", help="Relay a message to another session as an agent_message")
   send.add_argument("target", help="Target session id")
   source = send.add_mutually_exclusive_group(required=True)
   source.add_argument(
@@ -162,8 +155,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
   repair = sub.add_parser(
       "resource-class",
-      help="Set a session's memory share: repair keeps it working while the agents' share is full (operator only)",
-      formatter_class=help_formatter.CliHelpFormatter)
+      help="Set a session's memory share: repair keeps it working while the agents' share is full (operator only)")
   repair.add_argument("session_id", help="Session id")
   repair.add_argument(
       "resource_class",

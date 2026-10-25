@@ -54,9 +54,14 @@ pub fn system_cgroup_base_dir() -> PathBuf {
   PathBuf::from(format!("/sys/fs/cgroup/user.slice/user-{uid}.slice/user@{uid}.service"))
 }
 
+/// Return the cgroup directory that holds the user slice `unit` under `base_dir`.
+pub fn user_slice_dir(base_dir: &Path, unit: &str) -> PathBuf {
+  base_dir.join(unit)
+}
+
 /// Return the leaf-slice directory of `resource_class` under `base_dir`.
 pub fn session_slice_dir(base_dir: &Path, resource_class: ResourceClass) -> PathBuf {
-  base_dir.join(resource_class.slice_name())
+  user_slice_dir(base_dir, resource_class.slice_name())
 }
 
 /// Return every directory a session cgroup may live under: both leaf slices, and the retired slice.
@@ -64,7 +69,7 @@ pub fn session_slice_dirs(base_dir: &Path) -> [PathBuf; 3] {
   [
     session_slice_dir(base_dir, ResourceClass::Agent),
     session_slice_dir(base_dir, ResourceClass::Repair),
-    base_dir.join(RETIRED_APP_SLICE),
+    user_slice_dir(base_dir, RETIRED_APP_SLICE),
   ]
 }
 
@@ -108,6 +113,21 @@ mod tests {
   #[test]
   fn session_names_use_the_first_eight_id_characters() {
     assert_eq!(session_cgroup_name("12345678-ignored"), "charliebot-sess-12345678");
+  }
+
+  #[test]
+  fn user_slice_dir_nests_under_each_dash_prefix() {
+    let base = Path::new("/sys/fs/cgroup/user.slice/user-1001.slice/user@1001.service");
+    assert_eq!(user_slice_dir(base, "app.slice"), base.join("app.slice"));
+    assert_eq!(
+      user_slice_dir(base, "charliebot-agents.slice"),
+      base.join("charliebot.slice").join("charliebot-agents.slice")
+    );
+    assert_eq!(
+      user_slice_dir(base, "charliebot-repair.slice"),
+      base.join("charliebot.slice").join("charliebot-repair.slice")
+    );
+    assert_eq!(user_slice_dir(base, "a-b-c.slice"), base.join("a.slice").join("a-b.slice").join("a-b-c.slice"));
   }
 
   #[test]

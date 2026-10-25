@@ -1205,6 +1205,20 @@ async fn retry_record_reuses_the_request_and_preserves_the_manager_input_batch()
   assert_eq!(first.input_event_ids, ["synthetic-manager-input"]);
   assert_eq!(first.backend.as_deref(), Some("fake"));
   assert_eq!(first.model.as_deref(), Some("fake-model"));
+  let miss = task_sessions::create_retry(
+    &features.store,
+    &cfg,
+    session_id,
+    "synthetic-retry-request",
+    "synthetic-missing-run",
+    None,
+    None,
+  )
+  .await;
+  assert_eq!(
+    miss.err().expect("retrying an unknown run refuses").to_string(),
+    format!("run synthetic-missing-run not found in task {session_id}")
+  );
   Ok(())
 }
 

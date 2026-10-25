@@ -1774,7 +1774,7 @@ impl Store {
       index.metas.get(session_id).ok_or_else(|| StoreError::not_found(format!("task {session_id} not found")))?;
     let mut detail = self.session_metadata_value(meta.as_ref());
     let object = detail.as_object_mut().expect("session metadata serializes to an object");
-    object.insert("task_state".to_string(), Value::String(self.task_state(session_id)?));
+    object.insert("task_state".to_string(), Value::String(self.task_state_fast(session_id)?));
     object.insert("work_state".to_string(), Value::String(self.task_tree_activity(session_id)?.work_state));
     object.insert("archived".to_string(), Value::Bool(archived_of(self, &index, session_id, &mut HashMap::new())?));
 
@@ -4123,6 +4123,27 @@ pub(crate) mod tests {
       RunDisplayState::Withheld
     );
     assert_eq!(scans, 1, "the queued Run's withheld question scans the history once");
+  }
+
+  #[tokio::test]
+  async fn a_session_detail_reuses_the_tree_indexs_lifecycle_tail_read() {
+    // Python's `session_detail` reads `task_state` through the shared lifecycle-tail memo (`_task_state_at` over
+    // `_state_tail_memo`), whose entries the index build's `_task_state_fast` pass already fills for every node. The
+    // detail must not fall back to a full history fold: on the production copy that fold was the whole tail of the
+    // `GET /api/sessions/{id}` p95.
+    let home = tempfile::tempdir().unwrap();
+    let store = make_store(home.path());
+    let node = create_node(&store, "detail-tail", None, TaskProfile::Manager).await;
+    append(&store, &node.id, json!({"type": "task_closed", "outcome": "completed"})).await;
+    // The index build reads each node's lifecycle tail; the detail answers from that same memo.
+    assert_eq!(store.task_state_for_tree_index(&node.id).unwrap(), "completed");
+
+    let tails = store.task_state_tail_read_count();
+    let reads = history_reads(&store);
+    let detail = store.session_detail(&node.id).unwrap();
+    assert_eq!(detail["task_state"], "completed");
+    assert_eq!(store.task_state_tail_read_count(), tails, "the detail reuses the index build's tail read");
+    assert_eq!(history_reads(&store), reads, "the detail loads no history");
   }
 
   #[tokio::test]

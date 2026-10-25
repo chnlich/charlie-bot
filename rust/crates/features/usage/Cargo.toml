@@ -8,6 +8,7 @@ publish.workspace = true
 [dependencies]
 anyhow.workspace = true
 axum.workspace = true
+caseless.workspace = true
 charliebot-agents.workspace = true
 charliebot-compat.workspace = true
 charliebot-core.workspace = true

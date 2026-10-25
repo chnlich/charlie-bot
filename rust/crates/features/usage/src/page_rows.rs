@@ -208,10 +208,11 @@ pub(crate) fn model_leaf(model: &str) -> &str {
   leaf[..open].trim_end()
 }
 
-/// The name a model's rows group on: `_model_leaf(model).casefold()`. Uppercasing then lowercasing folds the letters a
-/// model name holds (ASCII, `ß`, the final sigma and the long s) as `casefold` does.
+/// The name a model's rows group on: `_model_leaf(model).casefold()`. The full case fold of Unicode's `CaseFolding`
+/// table is what `str.casefold` applies, so names whose letters the upper-then-lower round trip spells differently
+/// (`ı` stays itself, `ẞ` folds to `ss`) group the way the Python page groups them.
 pub(crate) fn canonical_model(model: &str) -> String {
-  model_leaf(model).to_uppercase().to_lowercase()
+  caseless::default_case_fold_str(model_leaf(model))
 }
 
 /// `_compact`: a count in K, M or B with at most two decimals (`1.23M`, `456K`), else the count with comma groups.
@@ -296,6 +297,16 @@ mod tests {
     assert_eq!(group_thousands(Count::Int(999)), "999");
     assert_eq!(group_thousands(Count::Int(-1_234)), "-1,234");
     assert_eq!(group_thousands(Count::Real(-1_500.5)), "-1,500");
+  }
+
+  #[test]
+  fn canonical_model_casefolds_the_leaf_the_way_python_does() {
+    assert_eq!(canonical_model("zai-org/GLM-5.3-Flash"), "glm-5.3-flash");
+    assert_eq!(canonical_model("Kimi-K3 (amd-kimi-k3)"), "kimi-k3");
+    assert_eq!(canonical_model("a/b/ß-Model"), "ss-model");
+    assert_eq!(canonical_model("ẞ-Model"), "ss-model");
+    assert_eq!(canonical_model("ı-Model"), "ı-model");
+    assert_eq!(canonical_model("ST-Model"), canonical_model("ﬅ-Model"));
   }
 
   #[test]

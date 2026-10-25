@@ -236,3 +236,15 @@ fn attribute_reference(input: &str, amp: usize) -> Option<(usize, String)> {
   }
   Some((end, input[amp..end].to_owned()))
 }
+
+#[cfg(test)]
+mod tests {
+  use super::escape;
+
+  #[test]
+  fn escape_leaves_slashes_as_html_escape_does() {
+    // A diff path is full of slashes, and `html.escape` leaves them as they are under either quote setting.
+    assert_eq!(escape("src/app/a.py", true), "src/app/a.py");
+    assert_eq!(escape("src/app/a.py", false), "src/app/a.py");
+  }
+}

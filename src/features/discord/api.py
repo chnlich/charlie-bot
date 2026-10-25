@@ -98,10 +98,7 @@ async def discord_read(
 
 
 @router.post("/discord/check")
-async def discord_check(
-    req: DiscordCheckRequest,
-    cfg: config.CharlieBotConfig = fastapi.Depends(deps.get_config_on_loop),
-) -> dict:
+async def discord_check(req: DiscordCheckRequest) -> dict:
   """Report the Discord bot token's setup: bot user, message-content intent, per-guild permissions.
 
   The boundary behind ``charliebot discord check``: ``ok`` is the
@@ -111,6 +108,6 @@ async def discord_check(
   readback carries no token.
   """
   try:
-    return await discord_commands.check_setup(cfg)
+    return await discord_commands.check_setup()
   except thread_entry.ThreadReplyError as exc:
     raise deps.http_refusal(exc) from exc

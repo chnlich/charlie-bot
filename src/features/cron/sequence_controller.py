@@ -26,8 +26,8 @@ _ROW_SCHEDULE_MEMO: tuple[object, tuple[str, ...], dict[str, dict], datetime.dat
 _ROW_SCHEDULE_NO_FIRE = datetime.datetime.max.replace(tzinfo=datetime.UTC)
 
 
-def next_run_iso(cron_expr: str, timezone: str, now_utc: datetime.datetime) -> str:
-  """ISO next fire time of *cron_expr* in *timezone*, computed on every call."""
+def next_run_iso(cron_expr: str, timezone: str) -> str:
+  """ISO next fire time of *cron_expr* in *timezone*, computed from the wall clock on every call."""
   if "croniter" not in globals():
     scheduler.load_croniter(globals())
   tz = zoneinfo.ZoneInfo(timezone)
@@ -198,7 +198,7 @@ class CronSequenceController(sequence_controllers.SequenceController):
           "schedule_cron": task.cron,
           "schedule_timezone": task.timezone,
           "schedule_enabled": task.enabled,
-          "schedule_next_run": next_run_iso(task.cron, task.timezone, now_utc),
+          "schedule_next_run": next_run_iso(task.cron, task.timezone),
           "schedule_allow_failure": task.allow_failure,
       }
     fires = [

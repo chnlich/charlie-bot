@@ -54,9 +54,18 @@ pub fn system_cgroup_base_dir() -> PathBuf {
   PathBuf::from(format!("/sys/fs/cgroup/user.slice/user-{uid}.slice/user@{uid}.service"))
 }
 
-/// Return the cgroup directory that holds the user slice `unit` under `base_dir`.
+/// Return the cgroup directory systemd gives the user slice `unit` under `base_dir`.
+///
+/// systemd nests a slice inside the slice each dash prefix of its name names (`a-b.slice` lives in
+/// `a.slice/a-b.slice`), so both leaf slices sit inside `charliebot.slice`, not beside it.
 pub fn user_slice_dir(base_dir: &Path, unit: &str) -> PathBuf {
-  base_dir.join(unit)
+  let name = unit.strip_suffix(".slice").unwrap_or(unit);
+  let parts: Vec<&str> = name.split('-').collect();
+  let mut dir = base_dir.to_path_buf();
+  for end in 1..=parts.len() {
+    dir.push(format!("{}.slice", parts[..end].join("-")));
+  }
+  dir
 }
 
 /// Return the leaf-slice directory of `resource_class` under `base_dir`.
@@ -140,7 +149,7 @@ mod tests {
   fn cleanup_removes_only_an_empty_session_group() {
     let base = tempfile::tempdir().unwrap();
     let slice = session_slice_dir(base.path(), ResourceClass::Repair);
-    fs::create_dir(&slice).unwrap();
+    fs::create_dir_all(&slice).unwrap();
     let path = session_cgroup_path(&slice, "synthetic-session");
     fs::create_dir(&path).unwrap();
     assert!(cleanup_session_cgroup(base.path(), "synthetic-session"));

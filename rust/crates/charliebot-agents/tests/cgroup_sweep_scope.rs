@@ -5,7 +5,7 @@ use std::fs;
 use std::sync::{Arc, Mutex};
 
 use charliebot_agents::transport::cgroup::sweep_stale_session_cgroups;
-use charliebot_core::cgroup::RETIRED_APP_SLICE;
+use charliebot_core::cgroup::{RETIRED_APP_SLICE, ResourceClass, session_slice_dir, user_slice_dir};
 use charliebot_core::test_support::EventSink;
 use tracing::Event;
 use tracing::field::{Field, Visit};
@@ -41,22 +41,25 @@ fn sweep_removes_only_empty_cgroups_of_this_home_across_the_slices() {
   fs::create_dir(&sessions).unwrap();
   fs::create_dir(sessions.join(SESSION_ID)).unwrap();
   fs::create_dir(sessions.join(POPULATED_ID)).unwrap();
-  for slice in ["charliebot-agents.slice", "charliebot-repair.slice", RETIRED_APP_SLICE] {
-    fs::create_dir(base.path().join(slice)).unwrap();
+  let agents_slice = session_slice_dir(base.path(), ResourceClass::Agent);
+  let repair_slice = session_slice_dir(base.path(), ResourceClass::Repair);
+  let retired_slice = user_slice_dir(base.path(), RETIRED_APP_SLICE);
+  for slice in [&agents_slice, &repair_slice, &retired_slice] {
+    fs::create_dir_all(slice).unwrap();
   }
   // The same home's cgroup in each slice; the retired slice's leftover is cleared too.
-  let agents_empty = base.path().join("charliebot-agents.slice").join("charliebot-sess-abcd1234");
-  let repair_empty = base.path().join("charliebot-repair.slice").join("charliebot-sess-abcd1234");
-  let retired_empty = base.path().join(RETIRED_APP_SLICE).join("charliebot-sess-abcd1234");
+  let agents_empty = agents_slice.join("charliebot-sess-abcd1234");
+  let repair_empty = repair_slice.join("charliebot-sess-abcd1234");
+  let retired_empty = retired_slice.join("charliebot-sess-abcd1234");
   for path in [&agents_empty, &repair_empty, &retired_empty] {
     fs::create_dir(path).unwrap();
   }
-  let populated = base.path().join("charliebot-agents.slice").join("charliebot-sess-9f8e7d6c");
+  let populated = agents_slice.join("charliebot-sess-9f8e7d6c");
   fs::create_dir(&populated).unwrap();
   fs::write(populated.join("cgroup.procs"), "1").unwrap();
-  let other_home = base.path().join("charliebot-repair.slice").join("charliebot-sess-0badc0de");
+  let other_home = repair_slice.join("charliebot-sess-0badc0de");
   fs::create_dir(&other_home).unwrap();
-  let non_session = base.path().join("charliebot-agents.slice").join("app-other.scope");
+  let non_session = agents_slice.join("app-other.scope");
   fs::create_dir(&non_session).unwrap();
 
   let recorded = RecordedEvents::default();

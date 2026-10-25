@@ -7,11 +7,11 @@ use std::path::{Path, PathBuf};
 
 use charliebot_agents::transport::cgroup::SessionCgroupConfig;
 use charliebot_agents::transport::spawn::{ChildStdin, SpawnSetup, SpawnSpec, spawn_one_shot, spawn_with_setup};
+use charliebot_core::cgroup::{ResourceClass, session_slice_dir};
 
 const PARENT_ID: &str = "11112222-3333-4444-5555-666677778888";
 const CHILD_ID: &str = "99998888-7777-6666-5555-444433332222";
 const AGENTS_SLICE: &str = "charliebot-agents.slice";
-const REPAIR_SLICE: &str = "charliebot-repair.slice";
 const CHILD_CGROUP: &str = "charliebot-sess-99998888";
 
 /// Write the one file the class walk reads: the task parent and the optional repair mark.
@@ -28,8 +28,8 @@ fn write_metadata(sessions: &Path, session_id: &str, parent: Option<&str>, mark:
 /// A delegated base with both leaf slices, and the sessions directory of the same home.
 fn fixture(root: &Path) -> (PathBuf, PathBuf) {
   let base = root.join("user@1001.service");
-  fs::create_dir_all(base.join(AGENTS_SLICE)).unwrap();
-  fs::create_dir_all(base.join(REPAIR_SLICE)).unwrap();
+  fs::create_dir_all(session_slice_dir(&base, ResourceClass::Agent)).unwrap();
+  fs::create_dir_all(session_slice_dir(&base, ResourceClass::Repair)).unwrap();
   (base, root.join("sessions"))
 }
 
@@ -46,8 +46,11 @@ fn cgroup_config(base: &Path, sessions: &Path) -> SessionCgroupConfig {
 /// Empty each place a spawn may put the child session's cgroup, with the `cgroup.procs` the kernel supplies to a real
 /// cgroup. The spawn's pid must land in the one its class selects, and the others stay empty.
 fn reset_session_cgroup_stand_ins(base: &Path) {
-  let directories =
-    [base.join(CHILD_CGROUP), base.join(AGENTS_SLICE).join(CHILD_CGROUP), base.join(REPAIR_SLICE).join(CHILD_CGROUP)];
+  let directories = [
+    base.join(CHILD_CGROUP),
+    session_slice_dir(base, ResourceClass::Agent).join(CHILD_CGROUP),
+    session_slice_dir(base, ResourceClass::Repair).join(CHILD_CGROUP),
+  ];
   for directory in directories {
     fs::create_dir_all(&directory).unwrap();
     fs::write(directory.join("cgroup.procs"), "").unwrap();
@@ -80,8 +83,8 @@ async fn spawn_follows_the_nearest_repair_mark() {
   write_metadata(&sessions, PARENT_ID, None, None);
   write_metadata(&sessions, CHILD_ID, Some(PARENT_ID), None);
   let config = cgroup_config(&base, &sessions);
-  let agents_procs = base.join(AGENTS_SLICE).join(CHILD_CGROUP).join("cgroup.procs");
-  let repair_procs = base.join(REPAIR_SLICE).join(CHILD_CGROUP).join("cgroup.procs");
+  let agents_procs = session_slice_dir(&base, ResourceClass::Agent).join(CHILD_CGROUP).join("cgroup.procs");
+  let repair_procs = session_slice_dir(&base, ResourceClass::Repair).join(CHILD_CGROUP).join("cgroup.procs");
 
   let (agent_pid, oom) = spawn_child_session(&config).await;
   assert_procs_hold(&agents_procs, agent_pid);
@@ -103,7 +106,7 @@ async fn spawn_follows_the_nearest_repair_mark() {
 async fn spawn_fails_with_the_slice_name_when_the_selected_slice_is_missing() {
   let root = tempfile::tempdir().unwrap();
   let base = root.path().join("user@1001.service");
-  fs::create_dir_all(base.join(REPAIR_SLICE)).unwrap();
+  fs::create_dir_all(session_slice_dir(&base, ResourceClass::Repair)).unwrap();
   let sessions = root.path().join("sessions");
   write_metadata(&sessions, PARENT_ID, None, None);
   let spec = SpawnSpec::new(

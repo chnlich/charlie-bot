@@ -1096,7 +1096,7 @@ mod tests {
 
   fn temp_cgroup(root: &Path) -> (PathBuf, PathBuf) {
     let base = root.join("user@1001.service");
-    let slice = base.join("charliebot-agents.slice");
+    let slice = charliebot_core::cgroup::session_slice_dir(&base, charliebot_core::cgroup::ResourceClass::Agent);
     fs::create_dir_all(&slice).unwrap();
     let path = slice.join("charliebot-sess-test1234");
     fs::create_dir(&path).unwrap();
@@ -1196,7 +1196,7 @@ mod tests {
     fs::write(sessions.join("test1234-session").join("metadata.json"), r#"{"name":"synthetic","profile":"manager"}"#)
       .unwrap();
     let base = root.path().join("user@1001.service");
-    let slice = base.join("charliebot-agents.slice");
+    let slice = charliebot_core::cgroup::session_slice_dir(&base, charliebot_core::cgroup::ResourceClass::Agent);
     fs::create_dir_all(&slice).unwrap();
     let cgroup_path = slice.join("charliebot-sess-test1234");
     fs::create_dir(&cgroup_path).unwrap();

@@ -318,8 +318,9 @@ mod tests {
       let sessions = home.path().join("sessions");
       fs::create_dir_all(sessions.join("stale")).unwrap();
       fs::create_dir_all(sessions.join("retained")).unwrap();
-      let slice = base.path().join("charliebot-agents.slice");
-      fs::create_dir(&slice).unwrap();
+      let slice =
+        charliebot_core::cgroup::session_slice_dir(base.path(), charliebot_core::cgroup::ResourceClass::Agent);
+      fs::create_dir_all(&slice).unwrap();
       let stale = slice.join("charliebot-sess-stale");
       fs::create_dir(&stale).unwrap();
       let retained = slice.join("charliebot-sess-retained");

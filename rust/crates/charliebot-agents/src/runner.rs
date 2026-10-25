@@ -1226,7 +1226,8 @@ mod tests {
   async fn outcome_reports_a_session_cgroup_memory_kill_from_the_injected_base() {
     let root = tempfile::tempdir().unwrap();
     let cgroup_base = root.path().join("user@1001.service");
-    let agents_slice = cgroup_base.join("charliebot-agents.slice");
+    let agents_slice =
+      charliebot_core::cgroup::session_slice_dir(&cgroup_base, charliebot_core::cgroup::ResourceClass::Agent);
     fs::create_dir_all(&agents_slice).unwrap();
     let cgroup_dir = agents_slice.join("charliebot-sess-test1234");
     fs::create_dir(&cgroup_dir).unwrap();

@@ -123,6 +123,13 @@ def test_req_chips_fails_when_the_sentence_ends_after_the_chip(tmp_path: pathlib
   assert "no gloss" in outcome.detail
 
 
+def test_req_chips_accepts_a_gloss_in_another_unicode_script(tmp_path: pathlib.Path) -> None:
+  doc = _sitrep_ok_doc().replace(
+      '<span class="req">r1</span> states the first requirement.', '<span class="req">r1</span> 要件の説明です。')
+  (outcome,) = _run("sitrep", _write(tmp_path, doc))["req-chips"]
+  assert outcome.passed
+
+
 # ---------------------------------------------------------------------------
 # run-stated: a numeric table needs a block naming the run's changed and held-fixed factors
 # ---------------------------------------------------------------------------
@@ -145,6 +152,9 @@ def _sitrep_run_doc(variable_block: str = "") -> str:
             '<table><tr><th>role</th><th>value</th></tr>'
             '<tr><td>Changed</td><td>weights randomly initialized; 3,506 columns dropped</td></tr>'
             '<tr><td>Held fixed</td><td>commit e0852cbb; seed 3</td></tr></table>'),
+        (
+            '<table><tr><td>Changed</td><td>learning rate 0.0001</td></tr>'
+            '<tr><td>Held fixed</td><td>seed 3</td></tr></table>'),
         ('<dl><dt>改了什么</dt><dd>权重随机初始化，删掉 3,506 列</dd>'
          '<dt>保持不变</dt><dd>提交 e0852cbb，种子 3</dd></dl>'),
     ],
@@ -161,6 +171,27 @@ def test_run_stated_fails_when_the_numeric_table_has_no_variable_block(tmp_path:
   assert "held-fixed-factor row" in outcome.detail
 
 
+def test_run_stated_requires_a_block_separate_from_the_numeric_table(tmp_path: pathlib.Path) -> None:
+  table_with_inline_factors = _NUMERIC_TABLE.replace(
+      '</tbody></table>', '<tr><td>Changed</td><td>3,506 columns dropped</td></tr>'
+      '<tr><td>Held fixed</td><td>seed 3</td></tr></tbody></table>')
+  doc = _sitrep_ok_doc().replace(
+      '<p>Done. <span class="src">s</span></p>', table_with_inline_factors + '<p>Done. <span class="src">s</span></p>')
+  (outcome,) = _run("sitrep", _write(tmp_path, doc))["run-stated"]
+  assert not outcome.passed
+  assert "changed-factor row" in outcome.detail
+  assert "held-fixed-factor row" in outcome.detail
+
+
+def test_run_stated_requires_both_role_rows_in_one_block(tmp_path: pathlib.Path) -> None:
+  variable_blocks = (
+      '<table><tr><td>Changed</td><td>3,506 columns dropped</td></tr></table>'
+      '<dl><dt>Held fixed</dt><dd>seed 3</dd></dl>')
+  (outcome,) = _run("sitrep", _write(tmp_path, _sitrep_run_doc(variable_blocks)))['run-stated']
+  assert not outcome.passed
+  assert "changed-factor row and held-fixed-factor row in the same block" in outcome.detail
+
+
 def test_run_stated_names_the_one_missing_role_row(tmp_path: pathlib.Path) -> None:
   block = '<table><tr><td>Changed</td><td>3,506 columns dropped</td></tr></table>'
   (outcome,) = _run("sitrep", _write(tmp_path, _sitrep_run_doc(block)))["run-stated"]
@@ -169,8 +200,11 @@ def test_run_stated_names_the_one_missing_role_row(tmp_path: pathlib.Path) -> No
   assert "changed-factor row" not in outcome.detail
 
 
-def test_run_stated_is_inert_without_a_numeric_table_cell(tmp_path: pathlib.Path) -> None:
-  (outcome,) = _run("sitrep", _write(tmp_path, _sitrep_ok_doc()))["run-stated"]
+def test_run_stated_is_inert_without_a_decimal_table_cell(tmp_path: pathlib.Path) -> None:
+  doc = _sitrep_ok_doc().replace(
+      '<p>Done. <span class="src">s</span></p>', '<table><tr><td>checkpoint</td><td>10</td></tr></table>'
+      '<p>Done. <span class="src">s</span></p>')
+  (outcome,) = _run("sitrep", _write(tmp_path, doc))["run-stated"]
   assert outcome.passed
   assert outcome.detail == "no numeric table cell"
 

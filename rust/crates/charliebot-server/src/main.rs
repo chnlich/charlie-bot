@@ -276,13 +276,13 @@ async fn run(venv_bin: VenvBin, repo_root: RepoRoot, agent_base: AgentBaseEnviro
     static_mounts: StaticMount::python_app_mounts(repo_root.path(), registry.page_packages()),
     mime_types: MimeTypes::load(),
   });
-  // The ready line lands before the ready signal: Python logs `server_ready` after starting its ready-phase services
-  // and yields straight after (`server.py:285-291`), so a service whose first round waits for readiness (the host_auth
-  // poller) runs after the line, never before it.
-  tracing::info!(ready_in_ms = round_ms(boot.elapsed()), "server_ready");
   if !startup_stop.mark_ready() {
     return finish_boot_stop(Some(&mut lifespan), Some(&mut writer_fence), signal_receiver).await;
   }
+  // Python logs `server_ready` after starting its ready-phase services and yields straight after (`server.py:285-291`).
+  // The host_auth poller's 300 ms startup tail keeps its first state read after this line while preserving the stop
+  // check: a boot stopped before readiness does not emit `server_ready`.
+  tracing::info!(ready_in_ms = round_ms(boot.elapsed()), "server_ready");
 
   let listener = match bind(&cfg.server.host, cfg.server.port).await {
     Ok(listener) => listener,

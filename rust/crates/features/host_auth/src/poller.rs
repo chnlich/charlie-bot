@@ -90,7 +90,7 @@ where
 /// in it. This wait puts the first state read past that census's visit of the home root, where `host_auth.json` sits.
 const FIRST_ROUND_DELAY: Duration = Duration::from_millis(300);
 
-/// Wait for the post-`server_ready` readiness signal, then the startup tail; false when stopping instead.
+/// Wait for readiness, then the startup tail; false when stopping instead.
 async fn first_round_gate(stop: &StartupStop) -> bool {
   if !stop.ready().await {
     return false;

@@ -764,7 +764,7 @@ mod tests {
     assert!(!page.iter().any(|message| message["content"] == "IN PROGRESS"));
     let (older, _, _) = projection.slice_before(projection.committed().len(), 40);
     assert!(!older.iter().any(|message| message["content"] == "IN PROGRESS"));
-    assert_eq!(projection.history().last(), Some(&draft));
+    assert_eq!(projection.history().last().map(|message| message.as_ref()), Some(&draft));
   }
 
   #[tokio::test]

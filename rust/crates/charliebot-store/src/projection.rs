@@ -39,13 +39,13 @@ impl PageBodyCache {
 pub struct MessageProjection {
   offset: usize,
   aggregator: MessageAggregator,
-  committed_final: Vec<Value>,
+  committed_final: Vec<Arc<Value>>,
   separators_final: Vec<usize>,
   region_events: Vec<SharedChatEvent>,
-  committed: Vec<Value>,
+  committed: Vec<Arc<Value>>,
   separator_ordinals: Vec<usize>,
   pending_draft: Option<Value>,
-  history: Vec<Value>,
+  history: Vec<Arc<Value>>,
   event_count: usize,
   page_bodies: Mutex<PageBodyCache>,
   page_body_gzips: Mutex<PageBodyCache>,
@@ -96,8 +96,9 @@ impl MessageProjection {
     Ok(copied)
   }
 
-  /// Return committed messages.
-  pub fn committed(&self) -> &[Value] {
+  /// Return committed messages. Each message is shared: a page copy is one `Arc` bump per message,
+  /// the structure `message_projection.MessageProjection` keeps on the Python side.
+  pub fn committed(&self) -> &[Arc<Value>] {
     &self.committed
   }
 
@@ -107,7 +108,7 @@ impl MessageProjection {
   }
 
   /// Return committed messages followed by the pending draft, when present.
-  pub fn history(&self) -> &[Value] {
+  pub fn history(&self) -> &[Arc<Value>] {
     &self.history
   }
 
@@ -145,14 +146,14 @@ impl MessageProjection {
   pub fn tail(&self, limit: usize) -> (Vec<Value>, usize, bool) {
     let total = self.committed.len();
     let start = self.snap_to_turn_start(total.saturating_sub(limit));
-    (self.committed[start..].to_vec(), start, start > 0)
+    (self.committed[start..].iter().map(|message| message.as_ref().clone()).collect(), start, start > 0)
   }
 
   /// Return the turn-aligned page before the message ordinal.
   pub fn slice_before(&self, before: usize, limit: usize) -> (Vec<Value>, usize, bool) {
     let before = before.min(self.committed.len());
     let start = self.snap_to_turn_start(before.saturating_sub(limit));
-    (self.committed[start..before].to_vec(), start, start > 0)
+    (self.committed[start..before].iter().map(|message| message.as_ref().clone()).collect(), start, start > 0)
   }
 
   fn ingest(&mut self, events: &[SharedChatEvent]) -> StoreResult<()> {
@@ -166,20 +167,20 @@ impl MessageProjection {
       let (messages, separators) = fold_messages(&mut self.aggregator, &prefix, base)?;
       let committed_len = self.committed_final.len();
       self.separators_final.extend(separators.into_iter().map(|pos| committed_len + pos));
-      self.committed_final.extend(messages);
+      self.committed_final.extend(messages.into_iter().map(Arc::new));
     }
 
     let mut view_aggregator = self.aggregator.clone_state();
     let region_base = self.event_count - self.region_events.len() - self.offset;
     let (region_messages, region_separators) = fold_messages(&mut view_aggregator, &self.region_events, region_base)?;
     self.committed = self.committed_final.clone();
-    self.committed.extend(region_messages);
+    self.committed.extend(region_messages.into_iter().map(Arc::new));
     self.separator_ordinals = self.separators_final.clone();
     self.separator_ordinals.extend(region_separators.into_iter().map(|pos| self.committed_final.len() + pos));
     self.pending_draft = view_aggregator.pending_draft_message();
     self.history.clone_from(&self.committed);
     if let Some(draft) = &self.pending_draft {
-      self.history.push(draft.clone());
+      self.history.push(Arc::new(draft.clone()));
     }
     Ok(())
   }
@@ -291,7 +292,10 @@ mod tests {
       json!({"id": "a2", "type": "assistant", "message": {"content": [{"type": "text", "text": "draft"}]}}),
     ];
     let projection = MessageProjection::new(&shared_events(&events), 0, HashMap::new()).unwrap();
-    assert_eq!(projection.history(), events_to_messages(&compact_events(&events), 0, HashMap::new()).unwrap());
+    assert_eq!(
+      projection.history().iter().map(|message| message.as_ref().clone()).collect::<Vec<_>>(),
+      events_to_messages(&compact_events(&events), 0, HashMap::new()).unwrap()
+    );
     let (tail, _, _) = projection.tail(40);
     assert!(!tail.iter().any(|message| message["content"] == "draft"));
     assert_eq!(projection.pending_draft().unwrap()["content"], "draft");
@@ -346,7 +350,7 @@ mod tests {
     for (name, events) in fixtures {
       let projection = MessageProjection::new(&shared_events(&events), 0, HashMap::new()).unwrap();
       assert_eq!(
-        projection.history(),
+        projection.history().iter().map(|message| message.as_ref().clone()).collect::<Vec<_>>(),
         events_to_messages(&compact_events(&events), 0, HashMap::new()).unwrap(),
         "projection history differs from events_to_messages for {name}"
       );
@@ -439,9 +443,12 @@ mod tests {
       projection = projection.advanced(&shared_events(std::slice::from_ref(&event))).unwrap();
       events.push(event);
       let (committed, pending) = events_to_view(&compact_events(&events), 0, HashMap::new()).unwrap();
-      assert_eq!(projection.committed(), committed);
+      assert_eq!(projection.committed().iter().map(|message| message.as_ref().clone()).collect::<Vec<_>>(), committed);
       assert_eq!(projection.pending_draft(), pending.as_ref());
-      assert_eq!(projection.history(), events_to_messages(&compact_events(&events), 0, HashMap::new()).unwrap());
+      assert_eq!(
+        projection.history().iter().map(|message| message.as_ref().clone()).collect::<Vec<_>>(),
+        events_to_messages(&compact_events(&events), 0, HashMap::new()).unwrap()
+      );
     }
   }
 

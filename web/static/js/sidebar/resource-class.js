@@ -10,7 +10,7 @@ function setRepairShareState(resourceClass) {
   const repair = resourceClass === 'repair';
   button.dataset.resourceClass = repair ? 'repair' : 'agent';
   button.setAttribute('aria-pressed', repair ? 'true' : 'false');
-  button.textContent = '修复会话：' + (repair ? '开' : '关');
+  button.textContent = 'Reserved memory: ' + (repair ? 'on' : 'off');
 }
 
 async function toggleRepairShare() {
@@ -25,7 +25,7 @@ async function toggleRepairShare() {
       body: JSON.stringify({resource_class: next}),
     });
     if (!response.ok) {
-      alert('修复会话设置失败：' + response.status + ' ' + (await response.text()));
+      alert('Reserved memory change failed: ' + response.status + ' ' + (await response.text()));
       return;
     }
     const result = await response.json();

@@ -4,8 +4,8 @@
 //! `charliebot_agents::backends::claude_code::midturn_delivery`; this module offers the pending inputs to the live Run,
 //! records the acknowledgements on the manager item, and claims the echoed inputs at the finish.
 
-use std::borrow::Cow;
 use std::collections::HashSet;
+use std::fmt;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
@@ -19,7 +19,8 @@ use charliebot_store::ChatEvent;
 use charliebot_store::compact::CompactValue;
 use charliebot_store::metadata::SessionMetadata;
 use charliebot_store::run_records::{RAW_LOG_NAME, RunKind, RunRecord};
-use serde::Deserialize;
+use serde::de::{IgnoredAny, MapAccess, Visitor};
+use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value};
 
 use crate::dispatch::{Dispatcher, python_string};
@@ -82,16 +83,49 @@ pub fn record_ack(
   Ok(())
 }
 
-/// The three fields of a raw transport line that the echo scan reads. A line whose field has another JSON type fails
-/// to deserialize and is skipped, which the scan does too, since such a line cannot be a replayed input.
-#[derive(Deserialize)]
-struct ReplayLine<'a> {
-  #[serde(rename = "type", borrow)]
-  kind: Option<Cow<'a, str>>,
-  #[serde(rename = "isReplay")]
-  is_replay: Option<bool>,
-  #[serde(borrow)]
-  uuid: Option<Cow<'a, str>>,
+/// The three fields of a raw transport line that the echo scan reads. The map visitor keeps the last duplicate key,
+/// matching Python's JSON decoder, and ignores unrelated fields without constructing their values.
+struct ReplayLine {
+  kind: Option<Value>,
+  is_replay: Option<Value>,
+  uuid: Option<Value>,
+}
+
+impl<'de> Deserialize<'de> for ReplayLine {
+  fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+  where
+    D: Deserializer<'de>,
+  {
+    struct ReplayLineVisitor;
+
+    impl<'de> Visitor<'de> for ReplayLineVisitor {
+      type Value = ReplayLine;
+
+      fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a JSON object")
+      }
+
+      fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+      where
+        A: MapAccess<'de>,
+      {
+        let mut line = ReplayLine { kind: None, is_replay: None, uuid: None };
+        while let Some(key) = map.next_key::<String>()? {
+          match key.as_str() {
+            "type" => line.kind = Some(map.next_value()?),
+            "isReplay" => line.is_replay = Some(map.next_value()?),
+            "uuid" => line.uuid = Some(map.next_value()?),
+            _ => {
+              let _: IgnoredAny = map.next_value()?;
+            }
+          }
+        }
+        Ok(line)
+      }
+    }
+
+    deserializer.deserialize_map(ReplayLineVisitor)
+  }
 }
 
 /// Read non-initial replay uuids from every raw transport leg of this Run (`_echoed_input_ids`).
@@ -124,13 +158,15 @@ fn echoed_input_ids(transport_dir: &Path, run_id: &str) -> anyhow::Result<HashSe
       let Some(complete) = line.strip_suffix(b"\n") else {
         break;
       };
-      let Ok(event) = serde_json::from_slice::<ReplayLine<'_>>(complete) else {
+      let Ok(event) = serde_json::from_slice::<ReplayLine>(complete) else {
         continue;
       };
-      if event.kind.as_deref() != Some(event_types::USER) || event.is_replay != Some(true) {
+      if event.kind.as_ref().and_then(Value::as_str) != Some(event_types::USER)
+        || event.is_replay.as_ref().and_then(Value::as_bool) != Some(true)
+      {
         continue;
       }
-      if let Some(input_id) = event.uuid.as_deref()
+      if let Some(input_id) = event.uuid.as_ref().and_then(Value::as_str)
         && !input_id.is_empty()
         && input_id != run_id
       {
@@ -348,6 +384,9 @@ mod tests {
         "{\"type\":\"user\",\"isReplay\":true,\"uuid\":\"\"}\n",
         "{\"type\":\"user\",\"isReplay\":true,\"uuid\":5}\n",
         "{\"type\":\"user\",\"isReplay\":true,\"uuid\":\"in-4\"}\r\n",
+        "{\"type\":\"assistant\",\"type\":\"user\",",
+        "\"isReplay\":false,\"isReplay\":true,\"uuid\":\"in-old\",\"uuid\":\"in-duplicate\"}\n",
+        "{\"type\":\"user\",\"isReplay\":true,\"uuid\":\"in-superseded\",\"uuid\":5}\n",
         "{\"type\":\"user\",\"isReplay\":true,\"uuid\":\"in-6\"}",
       ),
     )
@@ -358,6 +397,9 @@ mod tests {
     )
     .unwrap();
     let echoed = echoed_input_ids(dir.path(), "run-1").unwrap();
-    assert_eq!(echoed, HashSet::from(["in-1".to_string(), "in-4".to_string(), "in-5".to_string()]));
+    assert_eq!(
+      echoed,
+      HashSet::from(["in-1".to_string(), "in-4".to_string(), "in-5".to_string(), "in-duplicate".to_string()])
+    );
   }
 }

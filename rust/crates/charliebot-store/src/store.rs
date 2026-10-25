@@ -20,7 +20,7 @@ use crate::aggregator::builtin_event_types;
 use crate::control::ControlLock;
 use crate::events::{EventReadCaches, SharedChatEvent};
 use crate::hooks::{EventRenderer, RuntimeEventHooks};
-use crate::listing::CachedListing;
+use crate::listing::{CachedListing, DirNames};
 use crate::metadata::{RoundRating, SessionMetadata, SessionStatus, UtcDateTime};
 use crate::run_records::RunFactsMemo;
 use crate::session_events::SessionEventState;
@@ -185,6 +185,10 @@ pub struct Store {
   pub(crate) next_listing_generation: AtomicU64,
   /// The last listing walked for each status filter (see [`Store::load_session_metas`]).
   pub(crate) listings_memo: StdMutex<HashMap<Option<SessionStatus>, CachedListing>>,
+  /// The sessions directory's entry names at the root signature that produced them (`_dir_names_memo`).
+  pub(crate) dir_names_memo: StdMutex<Option<DirNames>>,
+  #[cfg(test)]
+  pub(crate) directory_scans: AtomicU64,
   pub(crate) subtree_roots_cache: StdMutex<Option<CachedSubtreeRoots>>,
   pub(crate) metadata_locks: StdMutex<HashMap<String, Arc<Mutex<()>>>>,
   pub(crate) events_cache: StdMutex<HashMap<String, Arc<StdMutex<Option<CachedChatEvents>>>>>,
@@ -264,6 +268,9 @@ impl Store {
       listings_revision: AtomicU64::new(0),
       next_listing_generation: AtomicU64::new(1),
       listings_memo: StdMutex::new(HashMap::new()),
+      dir_names_memo: StdMutex::new(None),
+      #[cfg(test)]
+      directory_scans: AtomicU64::new(0),
       subtree_roots_cache: StdMutex::new(None),
       metadata_locks: StdMutex::new(HashMap::new()),
       events_cache: StdMutex::new(HashMap::new()),

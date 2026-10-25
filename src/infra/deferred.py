@@ -1,13 +1,14 @@
 """The PEP 562 ``__getattr__`` body shared by the deferred-import loaders.
 
-Deferred third-party imports (requests, build_backend, and the scheduler's
-time-schedule parser) bind through a per-consumer loader; the consumer's
-``__getattr__`` is what fires that loader
+Deferred imports (``requests``, ``build_backend``, ``base_one_shot_text`` and the
+``src.infra.backend_models`` re-exports) bind through a per-consumer loader; the
+consumer's ``__getattr__`` is what fires that loader
 on a module-attribute read, so a test's patch target (e.g.
 ``src.runtime.worker.build_backend``) resolves without importing the real symbol
 at module import. The match-or-AttributeError rule lives here, once; the
 globals-first loader the master-turn chain's consumers build theirs from
-lives here too.
+lives here too. A "module:attr" spec is split here as well, so its grammar has
+one home.
 """
 
 import importlib
@@ -57,9 +58,22 @@ def deferred_import_loader(attr: str, module_path: str) -> Callable[[dict[str, A
   return load
 
 
-def import_attr(path: str) -> Any:
-  """The attribute that a "module:attr" string names; the module imports on this call."""
+def split_attr(path: str) -> tuple[str, str] | None:
+  """The module name and attribute that a "module:attr" string names; None when *path* is not one.
+
+  A spec has a non-empty module name and a non-empty attribute on either side of one colon. A caller
+  that refuses a bad spec builds its own sentence, so the refusal names what the caller registers.
+  """
   module_name, separator, attr = path.partition(":")
   if not separator or not module_name or not attr:
+    return None
+  return module_name, attr
+
+
+def import_attr(path: str) -> Any:
+  """The attribute that a "module:attr" string names; the module imports on this call."""
+  spec = split_attr(path)
+  if spec is None:
     raise ValueError(f"{path!r} is not a 'module:attr' string")
+  module_name, attr = spec
   return getattr(importlib.import_module(module_name), attr)

@@ -16,7 +16,7 @@ import importlib
 from collections.abc import Sequence
 
 from src.app import registrations
-from src.infra import config
+from src.infra import config, deferred
 from src.runtime import init_seed
 from src.runtime.hooks import wiring
 
@@ -57,9 +57,10 @@ def main(argv: Sequence[str] | None = None) -> None:
   cfg = config.get_config()
 
   if args.step is not None:
-    module, separator, attr = args.step.partition(":")
-    if not (module and separator and attr):
+    spec = deferred.split_attr(args.step)
+    if spec is None:
       parser.error(f"--step takes MODULE:ATTR, got {args.step!r}")
+    module, attr = spec
     getattr(importlib.import_module(module), attr)(cfg, dry_run=False)
     return
 

@@ -21,7 +21,7 @@ from src.runtime import master_cc_state
 
 
 def reset_claude_account_readings():
-  """Drop the process-local Claude account readings, as tests/conftest.py does at d113f2c4d."""
+  """Drop the process-local Claude account readings, as tests/conftest.py does at 085f024a5."""
   claude_accounts._event_readings.clear()
   claude_accounts._panel_readings.clear()
   claude_accounts._auth_failures.clear()

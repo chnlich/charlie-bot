@@ -1,6 +1,6 @@
 # Environment variables
 
-Baseline: the Python tree at `d113f2c4d`. Section 1 covers what the server reads, section 2 what the
+Baseline: the Python tree at `085f024a5`. Section 1 covers what the server reads, section 2 what the
 `charliebot` CLI reads, and sections 3 to 5 what the server writes into the environment of every process it
 starts, with the module that sets each variable. Found by grepping `src/` and `server.py` for `os.environ`,
 `environ.get`, `getenv` and `env[...] =`. **UNVERIFIED** marks a statement not confirmed from source, with the

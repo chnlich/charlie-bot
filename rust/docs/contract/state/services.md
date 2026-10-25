@@ -1,6 +1,6 @@
 # Server process: startup, lifespan, services, session cgroups
 
-Baseline: the Python tree at `d113f2c4d`. Entry point: `server.py`. Paths use `<home>` and `/home/<user>` as in
+Baseline: the Python tree at `085f024a5`. Entry point: `server.py`. Paths use `<home>` and `/home/<user>` as in
 `files.md`. **UNVERIFIED** marks a statement not confirmed from source, with the reason.
 
 ## 1. Before the event loop (`server.py::main`)
@@ -83,15 +83,16 @@ The liveness rule and stable ids that make this idempotent are in `files.md` sec
 
 ## 4. Session cgroups (`src/infra/process.py`)
 
-- Slices: `charliebot-agents.slice` (the agents' share) and `charliebot-repair.slice` (the repair share), both under `/sys/fs/cgroup/user.slice/user-<uid>.slice/user@<uid>.service/`. It requires cgroup v2 with systemd user delegation. `scripts/systemd/` holds the unit files; `scripts/setup.sh` installs them and starts both slices, and `scripts/start-server.sh` asserts both slices against their unit files before the server starts (`CGROUP_V2_AGENTS_SLICE`, `CGROUP_V2_REPAIR_SLICE`, `process.py:96-98`).
+- Slices: `charliebot-agents.slice` (the agents' share) and `charliebot-repair.slice` (the repair share), both under `/sys/fs/cgroup/user.slice/user-<uid>.slice/user@<uid>.service/charliebot.slice/` — systemd nests `a-b.slice` inside `a.slice`, and `user_slice_dir` spells that nesting (`process.py:99-112`). It requires cgroup v2 with systemd user delegation. `scripts/systemd/` holds the unit files; `scripts/setup.sh` installs them and starts both slices, and `scripts/start-server.sh` asserts both slices against their unit files before the server starts (`CGROUP_V2_AGENTS_SLICE`, `CGROUP_V2_REPAIR_SLICE`, `process.py:111-112`).
 - The retired `app.slice` at the same base gets no new directories. The startup sweep still clears this home's empty leftovers in it.
-- Slice choice: each spawn resolves the session's `resource_class` (`src/runtime/resource_class.py`): the nearest `repair` mark on the task-parent chain, else `agent`. `repair` goes to the repair slice and `agent` to the agents' slice (`session_cgroup_slice`, `process.py:122`).
-- OOM priority: the child writes its slice's `oom_score_adj` to `/proc/self/oom_score_adj` before exec, `agent` 500 and `repair` 100 (`SESSION_CGROUP_OOM_SCORE_ADJ`, `process.py:111`; the write at `process.py:235-253`, the caller at `:343`). The server keeps 0. Opencode tool shells get the value through `CHARLIEBOT_SESSION_OOM_SCORE_ADJ` in `src/backends/opencode/cgroup_join.sh`.
+- Slice choice: each spawn resolves the session's `resource_class` (`src/runtime/resource_class.py`): the nearest `repair` mark on the task-parent chain, else `agent`. `repair` goes to the repair slice and `agent` to the agents' slice (`session_cgroup_slice`, `process.py:136`).
+- OOM priority: the child writes its slice's `oom_score_adj` to `/proc/self/oom_score_adj` before exec, `agent` 500 and `repair` 100 (`SESSION_CGROUP_OOM_SCORE_ADJ`, `process.py:125`; the write at `process.py:255-274`, the caller at `:364`). The server keeps 0. Opencode tool shells get the value through `CHARLIEBOT_SESSION_OOM_SCORE_ADJ` in `src/backends/opencode/cgroup_join.sh`.
 - Directory per session: `charliebot-sess-<first 8 chars of the session id>` under the slice of its class, created lazily by `ensure_session_cgroup(session_id, resource_class, ...)` on the first spawn of that session. Each later spawn rewrites the limits from the current config:
   - `memory.max` = `session_memory_max_mb * 1024 * 1024`
   - `memory.swap.max` = `session_swap_max_mb * 1024 * 1024`
   - `pids.max` = `session_tasks_max`, or `max` when it is 0
 - `session_memory_max_mb: 0` disables the whole feature: no directory, no task cap.
+- Before the first directory, `ensure_session_cgroup` writes `+memory +pids` to the slice's `cgroup.subtree_control` (`process.py:173-179`): systemd enables a slice's controllers for the units inside it only, and a session cgroup is no unit. An `OSError` there raises `SessionCgroupUnavailableError` too.
 - A missing or unwritable slice raises `SessionCgroupUnavailableError` and no longer degrades to "no cgroup" (`ensure_session_cgroup`). UNVERIFIED: that the spawn then fails was read from the code and not probed. Any other `OSError` on create or write raises too. `session_cgroup_created` carries `resource_class`.
 - Joining:
   - raw-log spawns (no preexec, so the vfork fast path holds) write the child pid into `<cgroup>/cgroup.procs` from

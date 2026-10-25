@@ -89,6 +89,13 @@ pub fn ensure_session_cgroup(
       slice.display()
     )));
   }
+  // systemd enables a slice's controllers for the units inside it only, and a session cgroup is no unit: without this
+  // its limit files would not exist.
+  fs::write(slice.join("cgroup.subtree_control"), "+memory +pids").map_err(|error| {
+    io::Error::other(format!(
+      "session cgroup slice {slice_name} cannot enable memory and pids for its children: {error}"
+    ))
+  })?;
   let path = session_cgroup_path(&slice, session_id);
   match fs::create_dir(&path) {
     Ok(()) => tracing::info!(
@@ -336,15 +343,22 @@ mod tests {
   use super::*;
 
   const SESSION_ID: &str = "abcd1234-ef56-7890-abcd-ef1234567890";
+  const CHARLIEBOT_SLICE: &str = "charliebot.slice";
   const AGENTS_SLICE: &str = "charliebot-agents.slice";
   const REPAIR_SLICE: &str = "charliebot-repair.slice";
 
   /// The user service directory with its two leaf slices, standing in for the delegated cgroup base.
   fn fake_slices() -> tempfile::TempDir {
     let root = tempfile::tempdir().unwrap();
-    fs::create_dir(root.path().join(AGENTS_SLICE)).unwrap();
-    fs::create_dir(root.path().join(REPAIR_SLICE)).unwrap();
+    let parent = root.path().join(CHARLIEBOT_SLICE);
+    fs::create_dir(&parent).unwrap();
+    fs::create_dir(parent.join(AGENTS_SLICE)).unwrap();
+    fs::create_dir(parent.join(REPAIR_SLICE)).unwrap();
     root
+  }
+
+  fn leaf_slice(root: &Path, name: &str) -> PathBuf {
+    root.join(CHARLIEBOT_SLICE).join(name)
   }
 
   fn cgroup_config(base_dir: &Path, memory_max_mb: i64) -> SessionCgroupConfig {
@@ -361,10 +375,10 @@ mod tests {
   fn ensure_session_cgroup_creates_with_limit_files_under_the_chosen_slice() {
     let root = fake_slices();
     let path = ensure_session_cgroup(root.path(), ResourceClass::Agent, SESSION_ID, 64, 32, 4096).unwrap();
-    assert_eq!(path, root.path().join(AGENTS_SLICE).join("charliebot-sess-abcd1234"));
+    assert_eq!(path, leaf_slice(root.path(), AGENTS_SLICE).join("charliebot-sess-abcd1234"));
     assert!(path.is_dir());
     assert_eq!(
-      fs::read_to_string(root.path().join(AGENTS_SLICE).join("cgroup.subtree_control")).unwrap(),
+      fs::read_to_string(leaf_slice(root.path(), AGENTS_SLICE).join("cgroup.subtree_control")).unwrap(),
       "+memory +pids"
     );
     assert_eq!(fs::read_to_string(path.join("memory.max")).unwrap(), (64 * 1024 * 1024).to_string());
@@ -376,14 +390,14 @@ mod tests {
   fn ensure_session_cgroup_puts_a_repair_session_under_the_repair_slice() {
     let root = fake_slices();
     let path = ensure_session_cgroup(root.path(), ResourceClass::Repair, SESSION_ID, 64, 32, 4096).unwrap();
-    assert_eq!(path, root.path().join(REPAIR_SLICE).join("charliebot-sess-abcd1234"));
+    assert_eq!(path, leaf_slice(root.path(), REPAIR_SLICE).join("charliebot-sess-abcd1234"));
   }
 
   #[test]
   fn ensure_session_cgroup_names_the_failed_subtree_control_write() {
     // A directory where the control file belongs makes the write fail, as a read-only cgroup file system does.
     let root = fake_slices();
-    fs::create_dir(root.path().join(AGENTS_SLICE).join("cgroup.subtree_control")).unwrap();
+    fs::create_dir(leaf_slice(root.path(), AGENTS_SLICE).join("cgroup.subtree_control")).unwrap();
     let result = ensure_session_cgroup(root.path(), ResourceClass::Agent, SESSION_ID, 64, 32, 4096);
     assert!(
       matches!(
@@ -417,7 +431,7 @@ mod tests {
   #[test]
   fn ensure_session_cgroup_names_the_unwritable_slice() {
     let root = fake_slices();
-    let repair = root.path().join(REPAIR_SLICE);
+    let repair = leaf_slice(root.path(), REPAIR_SLICE);
     fs::set_permissions(&repair, Permissions::from_mode(0o500)).unwrap();
     let result = ensure_session_cgroup(root.path(), ResourceClass::Repair, SESSION_ID, 64, 32, 4096);
     fs::set_permissions(&repair, Permissions::from_mode(0o755)).unwrap();
@@ -454,7 +468,7 @@ mod tests {
     let root = fake_slices();
     let config = cgroup_config(root.path(), -1);
     assert!(prepare_session_cgroup(&config, Some(SESSION_ID)).await.unwrap().is_none());
-    assert!(!session_cgroup_path(&root.path().join(AGENTS_SLICE), SESSION_ID).exists());
+    assert!(!session_cgroup_path(&leaf_slice(root.path(), AGENTS_SLICE), SESSION_ID).exists());
   }
 
   #[test]

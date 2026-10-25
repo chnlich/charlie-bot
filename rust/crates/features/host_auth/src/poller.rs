@@ -1,6 +1,7 @@
 //! The `host_auth` service (`src/features/host_auth/api.py` `_poll_loop`, `_poller_round`, and the `SingleTaskPoller`
 //! that owns the loop): one round at start, then one per standing period.
 
+use std::future::Future;
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -55,7 +56,7 @@ impl Service for HostAuthPoller {
 
 /// One round at once, then one per standing period. A failed tick is logged and the loop continues.
 async fn poll_loop(stop: StartupStop) {
-  if !first_round_gate(&stop).await {
+  if !first_round(&stop, poller_round).await {
     return;
   }
   loop {
@@ -64,6 +65,21 @@ async fn poll_loop(stop: StartupStop) {
     }
     tokio::time::sleep(Duration::from_secs(PROBE_INTERVAL_SEC as u64)).await;
   }
+}
+
+/// Run the startup round after the gate, then let the caller continue its periodic loop.
+async fn first_round<F, Fut>(stop: &StartupStop, round: F) -> bool
+where
+  F: FnOnce() -> Fut,
+  Fut: Future<Output = anyhow::Result<()>>,
+{
+  if !first_round_gate(stop).await {
+    return false;
+  }
+  if let Err(error) = round().await {
+    tracing::error!(error = %format!("{error:#}"), "host_auth_poll_error");
+  }
+  true
 }
 
 /// The wait between the ready signal and the first round.
@@ -100,16 +116,29 @@ mod tests {
   #[tokio::test(start_paused = true)]
   async fn the_first_round_waits_for_startup_readiness() {
     let stop = StartupStop::default();
-    let mut gate = Box::pin(first_round_gate(&stop));
+    let rounds = std::sync::atomic::AtomicUsize::new(0);
+    let mut initial_round = Box::pin(first_round(&stop, || async {
+      rounds.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+      Ok::<(), anyhow::Error>(())
+    }));
 
-    let opened_before_ready = tokio::select! {
-      opened = &mut gate => Some(opened),
+    let completed_before_ready = tokio::select! {
+      completed = &mut initial_round => Some(completed),
       _ = tokio::task::yield_now() => None,
     };
 
-    assert_eq!(opened_before_ready, None, "the first round must not start before startup is ready");
+    assert_eq!(completed_before_ready, None, "the first round stays behind the startup gate");
+    assert_eq!(rounds.load(std::sync::atomic::Ordering::Relaxed), 0, "no state read starts before readiness");
     stop.mark_ready();
-    assert!(gate.await, "the gate opens once startup is ready");
+    let completed_before_delay = tokio::select! {
+      completed = &mut initial_round => Some(completed),
+      _ = tokio::task::yield_now() => None,
+    };
+    assert_eq!(completed_before_delay, None, "the startup tail finishes before the state read");
+    assert_eq!(rounds.load(std::sync::atomic::Ordering::Relaxed), 0, "no state read starts during the delay");
+    tokio::time::advance(FIRST_ROUND_DELAY).await;
+    assert!(initial_round.await, "the first round runs after the startup tail");
+    assert_eq!(rounds.load(std::sync::atomic::Ordering::Relaxed), 1, "one state read starts after readiness");
   }
 
   #[tokio::test(start_paused = true)]

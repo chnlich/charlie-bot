@@ -928,7 +928,7 @@ class ProbeResult:
 
 
 def run_probe(cfg: config.CharlieBotConfig, artifact: pathlib.Path, trigger: str) -> ProbeResult:
-  """Send the page's full text plus the seven-question prompt to the preferred light backends.
+  """Send the page's full text plus the eight-question prompt to the preferred light backends.
 
   The system prompt and the questions read from ``prompts/cold_read.md`` (their only home)
   through :mod:`src.runtime.cold_read`. Backends are tried from backends.pool in rotation order; each failure is

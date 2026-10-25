@@ -1,11 +1,11 @@
 """The cold-read contract: prompt texts, probe inputs, backend rotation and report body.
 
-``prompts/cold_read.md`` is the only home of the cold-reader instructions and the seven
+``prompts/cold_read.md`` is the only home of the cold-reader instructions and the eight
 questions, and this module is their only reader: the artifact check CLI (a foreground cold
 read) and the task execution layer (a cold-read child session's runs) both build from here,
 so the foreground output and the child session's completion report carry identical lines.
 
-A page cold read asks seven fixed questions about one HTML page. An ask cold read asks five fixed questions about one
+A page cold read asks eight fixed questions about one HTML page. An ask cold read asks five fixed questions about one
 Waiting on you item and its linked page when this host serves it. Both use the same light-backend rotation.
 """
 

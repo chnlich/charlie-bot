@@ -82,20 +82,15 @@ pub(crate) fn write_transcript(audio_path: &Path, text: &str) -> io::Result<()> 
   fs::write(audio_path.with_extension("txt"), text.as_bytes())
 }
 
+/// `datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H%M%S.%f")[:-3] + "Z"`: UTC to the millisecond, then `Z`.
+fn voice_stem_format() -> Vec<time::format_description::FormatItem<'static>> {
+  time::macros::format_description!("[year]-[month]-[day]T[hour][minute][second].[subsecond digits:3]Z").to_vec()
+}
+
 fn voice_stem() -> String {
   let now = OffsetDateTime::now_utc();
   let random = Uuid::new_v4().simple().to_string();
-  format!(
-    "{:04}-{:02}-{:02}T{:02}{:02}{:02}.{:03}Z_{}",
-    now.year(),
-    u8::from(now.month()),
-    now.day(),
-    now.hour(),
-    now.minute(),
-    now.second(),
-    now.millisecond(),
-    &random[..8]
-  )
+  format!("{}_{}", now.format(&voice_stem_format()).expect("the stem format renders"), &random[..8])
 }
 
 fn remove_if_exists(path: &Path) -> io::Result<()> {
@@ -123,6 +118,23 @@ mod tests {
     let mut registry = charliebot_registry::Registry::new();
     registry.register_package("src.features.voice", crate::register).expect("register the voice config section");
     registry.load_config(home).expect("load synthetic config")
+  }
+
+  #[test]
+  fn voice_stem_matches_the_python_stem_shape() {
+    let stem = voice_stem();
+    let (stamp, random) = stem.split_once('_').expect("the stem joins the stamp and the random suffix");
+    assert_eq!(random.len(), 8);
+    assert!(random.chars().all(|ch| ch.is_ascii_hexdigit() && !ch.is_ascii_uppercase()), "stem {stem}");
+    // `strftime("%Y-%m-%dT%H%M%S.%f")[:-3] + "Z"`: 4-digit year, dashes, `T`, six digits, millisecond fraction, `Z`.
+    assert_eq!(stamp.len(), 22, "the stamp is YYYY-MM-DDTHHMMSS.mmmZ: {stamp}");
+    let bytes = stamp.as_bytes();
+    for (index, expected) in [(4, b'-'), (7, b'-'), (10, b'T'), (17, b'.'), (21, b'Z')] {
+      assert_eq!(bytes[index], expected, "stamp {stamp}");
+    }
+    for (start, end) in [(0usize, 4), (5, 7), (8, 10), (11, 13), (13, 15), (15, 17), (18, 21)] {
+      assert!(bytes[start..end].iter().all(u8::is_ascii_digit), "stamp {stamp}");
+    }
   }
 
   #[test]

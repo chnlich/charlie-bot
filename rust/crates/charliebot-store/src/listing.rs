@@ -13,8 +13,9 @@ use crate::{Store, StoreError, StoreResult};
 /// One read-only view of session metadata and the sequence fields derived for its rows.
 #[derive(Clone, Debug)]
 pub struct MetadataListing {
-  /// Session rows in newest-first order.
-  pub rows: Vec<SessionMetadata>,
+  /// Session rows in newest-first order. Each row is shared with the memoized corpus: a listing hit
+  /// clones pointers, not metadata, the way Python's `load_session_metas` hands out its cached rows.
+  pub rows: Vec<Arc<SessionMetadata>>,
   /// Sequence-owned fields keyed by session id.
   pub sequence_fields: std::collections::HashMap<String, serde_json::Map<String, Value>>,
 }
@@ -68,7 +69,7 @@ pub(crate) struct CachedListing {
   generation: u64,
   at: Instant,
   root: (i64, i64),
-  rows: Arc<Vec<SessionMetadata>>,
+  rows: Arc<Vec<Arc<SessionMetadata>>>,
 }
 
 impl Store {
@@ -79,16 +80,15 @@ impl Store {
   /// created or removed session directory moves the root's signature, so both walk again on the next call. The sweep
   /// bounds an out-of-band edit to the cache entry's expiry plus one interval.
   pub fn load_session_metas(&self, status: Option<SessionStatus>) -> StoreResult<Vec<SessionMetadata>> {
-    Ok(self.load_session_metas_versioned(status)?.0)
+    Ok(self.load_session_metas_versioned(status)?.0.iter().map(|meta| meta.as_ref().clone()).collect())
   }
 
   /// Read metadata rows with the identity of the memoized corpus that supplied them.
   pub fn load_session_metas_versioned(
     &self,
     status: Option<SessionStatus>,
-  ) -> StoreResult<(Vec<SessionMetadata>, u64)> {
-    let (rows, generation) = self.load_session_metas_snapshot_versioned(status)?;
-    Ok(((*rows).clone(), generation))
+  ) -> StoreResult<(Arc<Vec<Arc<SessionMetadata>>>, u64)> {
+    self.load_session_metas_snapshot_versioned(status)
   }
 
   /// Read the immutable metadata corpus and its generation without cloning its rows.
@@ -98,7 +98,7 @@ impl Store {
   pub fn load_session_metas_snapshot_versioned(
     &self,
     status: Option<SessionStatus>,
-  ) -> StoreResult<(Arc<Vec<SessionMetadata>>, u64)> {
+  ) -> StoreResult<(Arc<Vec<Arc<SessionMetadata>>>, u64)> {
     let root = self.cfg.sessions_dir();
     // The signature is read before the walk, so a directory created during the walk moves it past the memo's.
     let root_signature = stat_signature(&root);
@@ -157,11 +157,11 @@ impl Store {
       };
       let Some(meta) = meta else { continue };
       if status.is_none_or(|status| meta.status == status) {
-        rows.push(meta.as_ref().clone());
+        rows.push(Arc::clone(&meta));
       }
     }
     let generation = self.next_listing_generation.fetch_add(1, Ordering::AcqRel);
-    let rows = Arc::new(rows);
+    let rows: Arc<Vec<Arc<SessionMetadata>>> = Arc::new(rows);
     if let Some(root) = root_signature {
       let listing = CachedListing { revision, generation, at: Instant::now(), root, rows: Arc::clone(&rows) };
       self.listings_memo.lock().expect("listings memo mutex is not poisoned").insert(status, listing);
@@ -216,7 +216,8 @@ impl Store {
     starred: Option<bool>,
     scheduled: Option<bool>,
   ) -> StoreResult<MetadataListing> {
-    let mut rows = self.apply_derived_archive(self.load_session_metas(status)?, status)?;
+    let (snapshot, _) = self.load_session_metas_snapshot_versioned(status)?;
+    let mut rows = self.apply_derived_archive_shared(snapshot.as_slice(), status)?;
     rows.retain(|meta| {
       starred.is_none_or(|value| meta.starred == value)
         && scheduled.is_none_or(|value| self.sequence_listing.owns_session(meta) == value)
@@ -421,6 +422,40 @@ impl Store {
       }
     }
     Ok(out)
+  }
+
+  /// The shared-row form of [`Self::apply_derived_archive`]: rows keep their `Arc` and only a
+  /// derived-archived row is replaced with a modified copy, so a listing hit clones no metadata.
+  fn apply_derived_archive_shared(
+    &self,
+    snapshot: &[Arc<SessionMetadata>],
+    status: Option<SessionStatus>,
+  ) -> StoreResult<Vec<Arc<SessionMetadata>>> {
+    let derived: HashSet<String> = self.derived_archived_ids()?.into_iter().collect();
+    if derived.is_empty() {
+      return Ok(snapshot.iter().map(Arc::clone).collect());
+    }
+    if status == Some(SessionStatus::Active) {
+      return Ok(snapshot.iter().filter(|meta| !derived.contains(&meta.id)).map(Arc::clone).collect());
+    }
+    let mut rows = Vec::with_capacity(snapshot.len() + if status.is_none() { derived.len() } else { 0 });
+    for meta in snapshot {
+      if derived.contains(&meta.id) {
+        let mut copy = meta.as_ref().clone();
+        copy.status = SessionStatus::Archived;
+        rows.push(Arc::new(copy));
+      } else {
+        rows.push(Arc::clone(meta));
+      }
+    }
+    if status == Some(SessionStatus::Archived) {
+      for meta in self.load_session_metas(Some(SessionStatus::Active))? {
+        if derived.contains(&meta.id) {
+          rows.push(Arc::new(meta));
+        }
+      }
+    }
+    Ok(rows)
   }
 
   fn apply_derived_archive(
@@ -660,6 +695,22 @@ mod tests {
     write_metadata(&store, "beta", SessionStatus::Active, "2025-02-02T00:00:00Z", None);
     assert_eq!(store.load_session_metas(None).unwrap().len(), 2);
     assert_eq!(store.directory_scans.load(Ordering::Relaxed), scans + 1, "a new directory moves the key");
+  }
+
+  /// Python's `load_session_metas` serves its memoized rows read-only on a hit
+  /// (`src/runtime/session_store.py:316-330`), so a listing clones no metadata. The Rust corpus must hand out
+  /// the same `Arc` rows on a hit, or every sidebar listing pays a full per-row copy again.
+  #[test]
+  fn a_listing_memo_hit_hands_out_the_memoized_rows_without_copying_them() {
+    let home = tempfile::tempdir().unwrap();
+    let store = test_store(home.path());
+    write_metadata(&store, "alpha", SessionStatus::Active, "2025-02-01T00:00:00Z", None);
+    write_metadata(&store, "beta", SessionStatus::Active, "2025-02-02T00:00:00Z", None);
+
+    let (first, _) = store.load_session_metas_versioned(None).unwrap();
+    let (second, _) = store.load_session_metas_versioned(None).unwrap();
+    assert!(Arc::ptr_eq(&first, &second), "the second read serves the memoized corpus");
+    assert!(Arc::ptr_eq(&first[0], &second[0]), "each row keeps its memoized allocation");
   }
 
   #[test]

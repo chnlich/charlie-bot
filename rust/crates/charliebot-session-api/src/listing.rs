@@ -46,7 +46,7 @@ struct SessionsListMemoState {
 /// and the controller's listing fields. Rows with equal inputs render equal values.
 #[derive(PartialEq)]
 pub(crate) struct RowInputs {
-  meta: SessionMetadata,
+  meta: Arc<SessionMetadata>,
   derived: Option<Map<String, Value>>,
   thinking_since: Value,
   run_backend: Option<String>,
@@ -64,7 +64,7 @@ pub struct SessionsListMemos {
 pub fn active_listing_corpus(
   store: &Arc<Store>,
   registry: &Arc<Registry>,
-) -> StoreResult<(Vec<SessionMetadata>, DerivedSidebarMap)> {
+) -> StoreResult<(Vec<Arc<SessionMetadata>>, DerivedSidebarMap)> {
   let listed = store.list_sessions(Some(SessionStatus::Active), None, Some(false))?;
   let derived = sidebar::resolve_sidebar_state(store, registry, &listed.rows, true, true, true, false)?;
   Ok((listed.rows, derived))
@@ -72,7 +72,7 @@ pub fn active_listing_corpus(
 
 /// The chat page's sidebar corpus: active, unscheduled sessions outside every owned subtree, with their overlays.
 pub struct PageRows {
-  rows: Vec<SessionMetadata>,
+  rows: Vec<Arc<SessionMetadata>>,
   derived: DerivedSidebarMap,
 }
 
@@ -117,7 +117,7 @@ pub fn sessions_list_response(
   request: &Request<Body>,
   store: &Store,
   registry: &Registry,
-  rows: &[SessionMetadata],
+  rows: &[Arc<SessionMetadata>],
   derived: &DerivedSidebarMap,
   memos: &SessionsListMemos,
 ) -> Response {
@@ -212,7 +212,7 @@ fn display_backend(store: &Store, meta: &SessionMetadata) -> StoreResult<Option<
 pub(crate) fn listed_values(
   store: &Store,
   registry: &Registry,
-  rows: &[SessionMetadata],
+  rows: &[Arc<SessionMetadata>],
   derived: &DerivedSidebarMap,
   projection: SidebarProjection,
 ) -> StoreResult<Vec<Value>> {
@@ -223,7 +223,7 @@ pub(crate) fn listed_values(
 fn row_inputs(
   store: &Store,
   registry: &Registry,
-  rows: &[SessionMetadata],
+  rows: &[Arc<SessionMetadata>],
   derived: &DerivedSidebarMap,
   projection: SidebarProjection,
 ) -> StoreResult<Vec<RowInputs>> {
@@ -233,7 +233,7 @@ fn row_inputs(
     .iter()
     .map(|row| {
       Ok(RowInputs {
-        meta: row.clone(),
+        meta: Arc::clone(row),
         derived: derived.get(&row.id).cloned(),
         thinking_since: store.busy_since(&row.id).map_or(Value::Null, |value| json!(value.to_python_string())),
         run_backend: if projection.include_run_backend { run_backend(store, row)? } else { None },
@@ -317,7 +317,7 @@ mod tests {
 
   async fn list_body(
     features: &charliebot_registry::FeatureContext,
-    rows: &[SessionMetadata],
+    rows: &[Arc<SessionMetadata>],
     derived: &DerivedSidebarMap,
     memos: &SessionsListMemos,
   ) -> Value {
@@ -330,7 +330,7 @@ mod tests {
   async fn the_list_body_renders_again_when_a_row_input_moves() {
     let (_home, features) = crate::test_support::feature_context();
     let node = crate::test_support::create_node(&features.store, "memo-row", None, TaskProfile::Manager).await;
-    let mut rows = vec![features.store.get_session(&node.id).await.unwrap().unwrap()];
+    let mut rows = vec![Arc::new(features.store.get_session(&node.id).await.unwrap().unwrap())];
     let memos = SessionsListMemos::default();
     let mut derived = DerivedSidebarMap::new();
     derived
@@ -346,7 +346,8 @@ mod tests {
     assert_eq!(list_body(&features, &rows, &derived, &memos).await[0]["work_state"], "waiting");
     assert_eq!(memos.state.lock().unwrap().render_calls, 2);
 
-    rows[0].name = "renamed".to_string();
+    let renamed = (*rows[0]).clone();
+    rows[0] = Arc::new(SessionMetadata { name: "renamed".to_string(), ..renamed });
     assert_eq!(list_body(&features, &rows, &derived, &memos).await[0]["name"], "renamed");
     assert_eq!(memos.state.lock().unwrap().render_calls, 3);
   }

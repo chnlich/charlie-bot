@@ -248,8 +248,8 @@ mod tests {
       .list_sessions(Some(SessionStatus::Active), None, Some(false))
       .expect("the active rows list")
       .rows
-      .into_iter()
-      .map(|row| row.id)
+      .iter()
+      .map(|row| row.id.clone())
       .collect();
     assert!(workspace_ids.contains(&corpus.plain));
     assert!(workspace_ids.is_disjoint(&thread_ids));

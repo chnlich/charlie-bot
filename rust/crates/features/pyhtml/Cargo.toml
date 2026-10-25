@@ -16,6 +16,7 @@ path = "src/bin/pyhtml-dump.rs"
 [dependencies]
 charliebot-core.workspace = true
 fancy-regex = "0.16"
+html-escape.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 

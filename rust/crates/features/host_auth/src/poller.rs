@@ -64,7 +64,7 @@ where
   F: FnMut() -> Fut,
   Fut: Future<Output = anyhow::Result<()>>,
 {
-  if !first_round(&stop, || round()).await {
+  if !first_round(&stop, &mut round).await {
     return;
   }
   loop {

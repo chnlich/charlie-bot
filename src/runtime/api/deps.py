@@ -108,10 +108,13 @@ def bad_request(exc: Exception) -> fastapi.HTTPException:
 
 
 class RefusalError(Protocol):
-  """A domain refusal that carries the HTTP status and detail its route answers with."""
+  """A domain refusal that carries the HTTP status and detail its route answers with.
+
+  The detail is a plain string, or the structured payload a stale-thread refusal carries.
+  """
 
   status: int
-  detail: str
+  detail: str | dict
 
 
 def http_refusal(exc: RefusalError) -> fastapi.HTTPException:

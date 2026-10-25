@@ -2185,12 +2185,7 @@ class TaskExecutionAdapter:
             # pool without a free member spawns no review: report blocked with
             # each member's recovery time, as an exhausted retry chain does.
             await self._report_failure_to_parent(
-                session_id,
-                run,
-                "blocked",
-                summary=(
-                    f"review of work run {run.id} found no available reviewer backend; "
-                    f"backends.pool: {backend_pool.recovery_report(self._cfg)}"))
+                session_id, run, "blocked", summary=_no_reviewer_summary(run, self._cfg))
         else:
           await self._cleanup_worktree_if_delivered(session_id, run)
         return
@@ -2773,6 +2768,17 @@ async def _reconcile_node(
   await tree.dispatch.dispatch_pending(session_id)
 
 
+def _no_reviewer_summary(run: models.RunRecord, cfg: config.CharlieBotConfig) -> str:
+  """The blocked report a review-less finish sends its parent: the pool's per-member recovery times.
+
+  The live finish path and the startup replay both send this report, and the
+  replay must reproduce the live chain's summary text.
+  """
+  return (
+      f"review of work run {run.id} found no available reviewer backend; "
+      f"backends.pool: {backend_pool.recovery_report(cfg)}")
+
+
 def _replay_owes_review(
     tree: task_sessions.TaskTreeManager,
     session_id: str,
@@ -2902,12 +2908,7 @@ async def _replay_followups(
               # The live finish path's own no-reviewer report, replayed: the pool has no member
               # the reviewer may use, and the report's stable id dedups against the live chain's.
               await adapter._report_failure_to_parent(
-                  session_id,
-                  run,
-                  "blocked",
-                  summary=(
-                      f"review of work run {run.id} found no available reviewer backend; "
-                      f"backends.pool: {backend_pool.recovery_report(cfg)}"))
+                  session_id, run, "blocked", summary=_no_reviewer_summary(run, cfg))
       elif outcome in ("failed", "interrupted", "blocked"):
         await adapter._report_failure_to_parent(session_id, run, outcome)
     elif run.kind == "review":

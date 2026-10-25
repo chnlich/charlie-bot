@@ -39,14 +39,7 @@ def two_backend_env(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> 
   session_blocks = conftest.build_session_blocks(cfg)
   tree = conftest.build_task_tree(cfg, session_blocks)
   conftest.bind_deps_blocks(monkeypatch, tree, session_blocks)
-  launches: list[tuple[str, list[str]]] = []
-
-  async def executor(session_id: str, pending: list[dict], launch_run_id: str | None = None) -> str:
-    launches.append((session_id, [e["content"] for e in pending]))
-    return "run-1"
-
-  tree.dispatch.executor = executor
-  return cfg, session_blocks, launches
+  return cfg, session_blocks, conftest.record_launches(tree)
 
 
 @pytest.mark.asyncio

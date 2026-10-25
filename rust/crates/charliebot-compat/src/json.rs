@@ -7,13 +7,22 @@
 //! the exponent to two digits. Strings, containers and integers render the same in both.
 
 use charliebot_core::pyfmt;
-use serde_json::Value;
+use serde::Serialize;
+use serde_json::ser::Formatter as JsonFormatter;
+use serde_json::{Serializer, Value};
+use std::io;
 
 /// orjson's `dumps(value)`: compact separators, members in insertion order, raw UTF-8.
+///
+/// The bytes come from `serde_json`'s serializer: its ESCAPE-table string scan and container walk are
+/// orjson's own semantics for strings and containers, and [`OrjsonFormatter`] supplies the one form
+/// serde_json lacks, orjson's float text.
 pub fn fast_json_bytes(value: &Value) -> Vec<u8> {
-  let mut out = String::new();
-  write_fast(&mut out, value);
-  out.into_bytes()
+  let mut buffer = Vec::new();
+  value
+    .serialize(&mut Serializer::with_formatter(&mut buffer, OrjsonFormatter))
+    .expect("serializing a Value into a buffer cannot fail");
+  buffer
 }
 
 /// Starlette's `JSONResponse.render(value)`: `json.dumps(value, ensure_ascii=False, separators=(",", ":"))`.
@@ -21,37 +30,15 @@ pub fn starlette_bytes(value: &Value) -> Vec<u8> {
   pyfmt::json_dumps(value, &pyfmt::STARLETTE_JSON).into_bytes()
 }
 
-fn write_fast(out: &mut String, value: &Value) {
-  match value {
-    Value::Null => out.push_str("null"),
-    Value::Bool(flag) => out.push_str(if *flag { "true" } else { "false" }),
-    Value::Number(number) if number.is_f64() => {
-      out.push_str(&orjson_float(number.as_f64().expect("an f64 number reads as f64")))
-    }
-    Value::Number(number) => out.push_str(&number.to_string()),
-    Value::String(text) => pyfmt::write_json_str(out, text, false),
-    Value::Array(items) => {
-      out.push('[');
-      for (index, item) in items.iter().enumerate() {
-        if index > 0 {
-          out.push(',');
-        }
-        write_fast(out, item);
-      }
-      out.push(']');
-    }
-    Value::Object(members) => {
-      out.push('{');
-      for (index, (key, item)) in members.iter().enumerate() {
-        if index > 0 {
-          out.push(',');
-        }
-        pyfmt::write_json_str(out, key, false);
-        out.push(':');
-        write_fast(out, item);
-      }
-      out.push('}');
-    }
+/// The formatter that adds orjson's float text to serde_json's writer.
+struct OrjsonFormatter;
+
+impl JsonFormatter for OrjsonFormatter {
+  fn write_f64<W>(&mut self, writer: &mut W, value: f64) -> io::Result<()>
+  where
+    W: ?Sized + io::Write,
+  {
+    writer.write_all(orjson_float(value).as_bytes())
   }
 }
 

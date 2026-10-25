@@ -113,8 +113,8 @@ fn echoed_input_ids(transport_dir: &Path, run_id: &str) -> anyhow::Result<HashSe
   let mut echoed = HashSet::new();
   let mut line = Vec::new();
   for raw_path in raw_paths {
-    let raw_file = std::fs::File::open(&raw_path)
-      .with_context(|| format!("reading the raw log {}", raw_path.display()))?;
+    let raw_file =
+      std::fs::File::open(&raw_path).with_context(|| format!("reading the raw log {}", raw_path.display()))?;
     let mut raw_lines = BufReader::new(raw_file);
     loop {
       line.clear();

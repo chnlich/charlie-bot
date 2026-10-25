@@ -334,8 +334,11 @@ mod tests {
 
   #[test]
   fn toml_string_value_decodes_to_the_same_text() {
-    for text in ["plain", "a\"b\n\u{7f}é", "tab\tcr\rff\u{c}bs\u{8}ctrl\u{1}", "back\\slash", "\nleading\n\nend", "'''\"\"\""] {
-      let decoded: toml::Table = toml::from_str(&format!("developer_instructions = {}", toml_string_value(text))).unwrap();
+    for text in
+      ["plain", "a\"b\n\u{7f}é", "tab\tcr\rff\u{c}bs\u{8}ctrl\u{1}", "back\\slash", "\nleading\n\nend", "'''\"\"\""]
+    {
+      let decoded: toml::Table =
+        toml::from_str(&format!("developer_instructions = {}", toml_string_value(text))).unwrap();
       assert_eq!(decoded["developer_instructions"].as_str(), Some(text));
     }
   }

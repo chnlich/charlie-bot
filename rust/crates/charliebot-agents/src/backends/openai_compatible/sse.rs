@@ -62,8 +62,8 @@ mod tests {
   use std::io;
 
   use axum::body::to_bytes;
-  use axum::response::sse::Sse;
   use axum::response::IntoResponse;
+  use axum::response::sse::Sse;
   use futures_util::stream;
   use serde_json::json;
 

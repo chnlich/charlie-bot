@@ -360,9 +360,9 @@ Known-alive symbols:
   dispatches through it. The bare `FlowControlMixin` raises `NotImplementedError` without the
   override. Deleting the override, or the parameter the call passes, turns the next
   `proc.stdin.close()` plus `wait_closed()` into that error. The class docstring states the
-  contract. Vulture flags the method as unused (60% confidence) and `stream` as an unused
-  variable (100% confidence). A whole-repo grep finds only the definition. Never delete it on
-  that evidence.
+  contract. A single-file vulture scan of `spawn.py` flags the method as unused (60% confidence)
+  and `stream` as an unused variable (100% confidence). A whole-repo grep finds only the
+  definition. Never delete it on that evidence.
 - `_unprobed_verdict_stays_idle` (`src/runtime/api/sessions.py`, on `SessionDetailResponse`) — pydantic
   `@field_validator` method, registered with pydantic at class-definition time and invoked
   during model validation: it keeps a never-probed row's response `work_state` at the literal

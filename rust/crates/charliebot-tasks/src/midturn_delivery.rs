@@ -4,7 +4,9 @@
 //! `charliebot_agents::backends::claude_code::midturn_delivery`; this module offers the pending inputs to the live Run,
 //! records the acknowledgements on the manager item, and claims the echoed inputs at the finish.
 
+use std::borrow::Cow;
 use std::collections::HashSet;
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
@@ -17,6 +19,7 @@ use charliebot_store::ChatEvent;
 use charliebot_store::compact::CompactValue;
 use charliebot_store::metadata::SessionMetadata;
 use charliebot_store::run_records::{RAW_LOG_NAME, RunKind, RunRecord};
+use serde::Deserialize;
 use serde_json::{Map, Value};
 
 use crate::dispatch::{Dispatcher, python_string};
@@ -79,6 +82,18 @@ pub fn record_ack(
   Ok(())
 }
 
+/// The three fields of a raw transport line that the echo scan reads. A line whose field has another JSON type fails
+/// to deserialize and is skipped, which the scan does too, since such a line cannot be a replayed input.
+#[derive(Deserialize)]
+struct ReplayLine<'a> {
+  #[serde(rename = "type", borrow)]
+  kind: Option<Cow<'a, str>>,
+  #[serde(rename = "isReplay")]
+  is_replay: Option<bool>,
+  #[serde(borrow)]
+  uuid: Option<Cow<'a, str>>,
+}
+
 /// Read non-initial replay uuids from every raw transport leg of this Run (`_echoed_input_ids`).
 fn echoed_input_ids(transport_dir: &Path, run_id: &str) -> anyhow::Result<HashSet<String>> {
   if !transport_dir.is_dir() {
@@ -96,26 +111,30 @@ fn echoed_input_ids(transport_dir: &Path, run_id: &str) -> anyhow::Result<HashSe
     .collect::<Vec<PathBuf>>();
   raw_paths.sort();
   let mut echoed = HashSet::new();
+  let mut line = Vec::new();
   for raw_path in raw_paths {
-    let bytes = std::fs::read(&raw_path).with_context(|| format!("reading the raw log {}", raw_path.display()))?;
-    // Only complete lines count, like the byte-wise read the Python scan does.
-    for line in bytes.split_inclusive(|byte| *byte == b'\n') {
-      let Some(line) = line.strip_suffix(b"\n") else {
+    let raw_file = std::fs::File::open(&raw_path)
+      .with_context(|| format!("reading the raw log {}", raw_path.display()))?;
+    let mut raw_lines = BufReader::new(raw_file);
+    loop {
+      line.clear();
+      raw_lines.read_until(b'\n', &mut line).with_context(|| format!("reading the raw log {}", raw_path.display()))?;
+      // Only complete lines count, like the byte-wise read the Python scan does: a line without its newline ends the
+      // scan of this leg.
+      let Some(complete) = line.strip_suffix(b"\n") else {
         break;
       };
-      let Ok(event) = serde_json::from_slice::<Value>(line) else {
+      let Ok(event) = serde_json::from_slice::<ReplayLine<'_>>(complete) else {
         continue;
       };
-      if event.get("type").and_then(Value::as_str) != Some(event_types::USER)
-        || event.get("isReplay") != Some(&Value::Bool(true))
-      {
+      if event.kind.as_deref() != Some(event_types::USER) || event.is_replay != Some(true) {
         continue;
       }
-      if let Some(Value::String(input_id)) = event.get("uuid")
+      if let Some(input_id) = event.uuid.as_deref()
         && !input_id.is_empty()
         && input_id != run_id
       {
-        echoed.insert(input_id.clone());
+        echoed.insert(input_id.to_string());
       }
     }
   }

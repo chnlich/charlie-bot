@@ -521,11 +521,10 @@ The other two are in Rust without a count note.
 
 ## Catch-up 085f024a5 open steps
 
-Both all-stage Rust runs fail the same single step, so no row is intermittent.
+The port fixes the run-miss row (R340), and the catch-up's other behavior gap, the pool refusal line of `7ce86c7a2`, reaches no parity step. No row remains, so the all-stage Rust parity run is expected to fail no step.
 
 | Scenario | Step | Stage | Main commit | Difference |
 | --- | --- | --- | --- | --- |
-| manager-turn-execution-and-routes | retry an unknown run | agent-orchestration | 269322f70 | Python's retry of a missing run now answers 404 `run <id> not found in task <id>` (the one run-miss sentence of `runs.run_not_found_in_task_text`); Rust still spells the pre-merge sentence at `rust/crates/charliebot-tasks/src/task_sessions.rs:25`. (R340) |
 
 ## Catch-up 085f024a5 ignored Cargo tests
 
@@ -543,7 +542,7 @@ Each of the 28 commits in `git rev-list --no-merges d113f2c4d..085f024a5 -- src 
 | --- | --- | --- | --- |
 | 085f024a5 | give the platform line one owner | no behavior | `ThreadPlatform.platform_line` (`src/features/chat_threads/thread_entry.py:133-137`) renders the same sentence the deleted `_PLATFORM_LINE` constants spelled: both records feed the same `display_name`, `reply_command` and `max_post_chars`. |
 | 596abd578 | give the duplicate-registration refusal one owner | no behavior | `registration.already_registered` (`src/runtime/hooks/registration.py:11-12`) renders the same `"{kind} {name!r} is already registered by {owner}"` sentence every registry spelled inline; a double registration stays a startup-time programmer error no client reads. |
-| 269322f70 | give the run-miss sentence one owner | red-list | R340. The three run-lookup sites that spelled `not found in session` inline (`src/runtime/runs.py:681`, `src/runtime/task_sessions.py:1489`, `src/runtime/session_dispatch.py:422,448`) now raise `runs.run_not_found_in_task_text`, so their 404 details read `not found in task`. Rust owners to change: `rust/crates/charliebot-tasks/src/task_sessions.rs:25`, `rust/crates/charliebot-tasks/src/dispatch.rs:289,330`, `rust/crates/charliebot-store/src/run_records.rs:1238`. |
+| 269322f70 | give the run-miss sentence one owner | in Rust | `run_not_found_in_task_text` (`rust/crates/charliebot-store/src/run_records.rs:1236`) owns `run <run id> not found in task <session id>`; the Python sites (`src/runtime/runs.py:681`, `src/runtime/task_sessions.py:1489`, `src/runtime/session_dispatch.py:422,448`) map to `require_run` (`rust/crates/charliebot-store/src/run_records.rs:1241`), `rust/crates/charliebot-tasks/src/task_sessions.rs:25`, `rust/crates/charliebot-tasks/src/dispatch.rs:289,330`, and the same-owner Rust sites `rust/crates/charliebot-tasks/src/execution.rs:140,247,809,1344,2071,2321,2379,2502`, `rust/crates/charliebot-tasks/src/recovery.rs:863`, `rust/crates/charliebot-tasks/src/completion.rs:1830`, `rust/crates/charliebot-tasks/src/prompts/run_context.rs:45`. The retry route's 404 detail is covered by the parity step `manager-turn-execution-and-routes | retry an unknown run`, which now passes. |
 | 7ce86c7a2 | give the pool and run-record refusal lines one owner | unported | The worker failure report now uses lowercase `no backends.pool member is available` (`src/runtime/task_execution.py:2202-2203`); Rust still reports `No backends.pool member is available` (`rust/crates/charliebot-tasks/src/execution.rs:1435`). No parity step reaches a pool-empty worker failure report. |
 | eb85728c2 | give the reply budget one owner | no behavior | `constants.REPLY_BUDGET_CHARS = 500` (`src/infra/constants.py:59-62`) replaces the two identical module constants; every `over_budget` comparison reads the same 500. |
 | c604edf66 | give the task's session lookup one owner | no behavior | `Scheduler._cron_sessions` (`src/features/cron/scheduler.py:228-244`) returns the same cached-or-fresh list the two callers spelled inline; the cache edit-through semantics carry over unchanged. |

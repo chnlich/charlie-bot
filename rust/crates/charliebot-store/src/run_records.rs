@@ -1232,10 +1232,15 @@ fn require_session_match(session_id: &str, run: &RunRecord) -> StoreResult<()> {
   Ok(())
 }
 
+/// The task-tree run-miss sentence (API: 404 detail).
+pub fn run_not_found_in_task_text(run_id: &str, session_id: &str) -> String {
+  format!("run {run_id} not found in task {session_id}")
+}
+
 fn require_run(store: &Store, session_id: &str, run_id: &str) -> StoreResult<RunRecord> {
   store
     .read_run_sync(session_id, run_id)?
-    .ok_or_else(|| StoreError::not_found(format!("run {run_id} not found in session {session_id}")))
+    .ok_or_else(|| StoreError::not_found(run_not_found_in_task_text(run_id, session_id)))
 }
 
 /// The run's run_finished facts in log order.

@@ -1827,7 +1827,7 @@ impl TaskCompletion {
     let run = self
       .store()
       .read_run_sync(session_id, run_id)?
-      .ok_or_else(|| StoreError::not_found(format!("run {run_id} not found in task {session_id}")))?;
+      .ok_or_else(|| StoreError::not_found(run_records::run_not_found_in_task_text(run_id, session_id)))?;
     let effective_evidence = if let Some(evidence) = evidence {
       evidence.clone()
     } else {

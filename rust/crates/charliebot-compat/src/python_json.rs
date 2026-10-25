@@ -621,4 +621,25 @@ mod tests {
     assert_eq!(loads(b"\xff\xfe{\x00}\x00").unwrap(), serde_json::json!({}));
     assert_eq!(message(b"{\x00\x00\x00}"), "'utf-32-le' codec can't decode byte 0x7d in position 4: truncated data");
   }
+
+  #[test]
+  fn integers_keep_their_64_bit_kind_and_refuse_wider_ones() {
+    assert_eq!(loads(b"18446744073709551615").unwrap(), serde_json::json!(18446744073709551615u64));
+    assert_eq!(loads(b"-9223372036854775808").unwrap(), serde_json::json!(-9223372036854775808i64));
+    assert!(matches!(loads(b"18446744073709551616"), Err(LoadError::Unrepresentable(_))));
+    assert!(matches!(loads(b"-9223372036854775809"), Err(LoadError::Unrepresentable(_))));
+  }
+
+  #[test]
+  fn a_duplicate_key_keeps_the_first_position_and_the_last_value() {
+    assert_eq!(loads(b"{\"b\":1,\"a\":2,\"b\":3}").unwrap().to_string(), "{\"b\":3,\"a\":2}");
+  }
+
+  #[test]
+  fn nesting_is_accepted_to_the_depth_bound_and_refused_past_it() {
+    let at_bound = format!("{}{}", "[".repeat(MAX_DEPTH), "]".repeat(MAX_DEPTH));
+    assert!(loads(at_bound.as_bytes()).is_ok());
+    let past_bound = format!("{}{}", "[".repeat(MAX_DEPTH + 1), "]".repeat(MAX_DEPTH + 1));
+    assert!(matches!(loads(past_bound.as_bytes()), Err(LoadError::Unrepresentable(_))));
+  }
 }

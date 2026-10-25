@@ -137,10 +137,7 @@ mod tests {
       user_slice_dir(&base, "charliebot-repair.slice"),
       base.join("charliebot.slice").join("charliebot-repair.slice")
     );
-    assert_eq!(
-      user_slice_dir(&base, "a-b-c.slice"),
-      base.join("a.slice").join("a-b.slice").join("a-b-c.slice")
-    );
+    assert_eq!(user_slice_dir(&base, "a-b-c.slice"), base.join("a.slice").join("a-b.slice").join("a-b-c.slice"));
   }
 
   #[test]

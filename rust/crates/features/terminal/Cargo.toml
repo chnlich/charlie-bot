@@ -10,6 +10,7 @@ axum.workspace = true
 base64.workspace = true
 charliebot-compat.workspace = true
 charliebot-core.workspace = true
+data-encoding.workspace = true
 charliebot-registry.workspace = true
 futures-util.workspace = true
 libc.workspace = true

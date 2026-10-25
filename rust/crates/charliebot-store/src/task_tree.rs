@@ -2766,7 +2766,7 @@ fn staging_dir_name(task_id: &str) -> String {
 #[cfg(test)]
 pub(crate) mod tests {
   use std::collections::HashMap;
-  use std::sync::Arc;
+  use std::sync::{Arc, Mutex};
 
   use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot, SlotField};
   use serde_json::{Map, Value, json};
@@ -2776,7 +2776,7 @@ pub(crate) mod tests {
 
   use super::*;
   use crate::metadata::{TaskProfile, TaskSpec};
-  use crate::run_records::{RunKind, RunOutcomeKind, RunRecord};
+  use crate::run_records::{RunKind, RunOutcome, RunOutcomeKind, RunRecord};
   use crate::store::{
     AccountLabelKeeper, AnchorFieldReconciler, SequenceArchiveHook, SequenceBindingMover, SequenceListingFields,
     StoreHookFuture, StoreHooks,

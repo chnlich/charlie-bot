@@ -153,11 +153,6 @@ async def require_caller(
     return run_token.CallerIdentity(
         kind="operator", session_id=request.headers.get(constants.CALLER_SESSION_HEADER) or None)
   # Anything else is run-token use: fail closed, never fall back.
-  if not key:
-    raise fastapi.HTTPException(
-        status_code=401,
-        detail=f"run token presented ({constants.RUN_TOKEN_ENV}) but no signing key is configured",
-    )
   try:
     claims = run_token.verify_run_token(bearer, key)
   except run_token.RunTokenError as e:

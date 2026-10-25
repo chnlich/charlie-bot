@@ -521,7 +521,10 @@ fn tree_latest_mtime(path: &Path) -> Result<f64> {
   let mut latest = mtime(&metadata);
   for entry in scratch_walk(path)? {
     let entry = entry?;
-    let metadata = entry.metadata().with_context(|| format!("inspecting scratch path {}", entry.path().display()))?;
+    let metadata = entry
+      .metadata()
+      .map_err(walk_error)
+      .with_context(|| format!("inspecting scratch path {}", entry.path().display()))?;
     latest = latest.max(mtime(&metadata));
   }
   Ok(latest)
@@ -539,8 +542,11 @@ fn nested_repositories(path: &Path) -> Result<Vec<PathBuf>> {
     if !entry.file_type().is_dir() {
       continue;
     }
-    if entry.path().join(".git").symlink_metadata().is_ok() {
-      repositories.push(entry.into_path());
+    let git_dir = entry.path().join(".git");
+    match git_dir.symlink_metadata() {
+      Ok(_) => repositories.push(entry.into_path()),
+      Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+      Err(error) => return Err(error).with_context(|| format!("inspecting scratch path {}", git_dir.display())),
     }
   }
   Ok(repositories)
@@ -554,10 +560,16 @@ fn scratch_walk(path: &Path) -> Result<impl Iterator<Item = Result<DirEntry>>> {
   Ok(walk.map(|entry| entry.map_err(walk_io_error)))
 }
 
+/// The filesystem error behind a walk error: the walk does not follow links, so only the filesystem fails it. The
+/// callers classify it by its `io::Error` kind, as the Python walk's `OSError` is.
+fn walk_error(error: walkdir::Error) -> io::Error {
+  error.into_io_error().expect("a walk that does not follow links only fails on the filesystem")
+}
+
 /// `onerror=_raise_walk_error`: an entry that cannot be listed stops the walk with its filesystem error.
 fn walk_io_error(error: walkdir::Error) -> anyhow::Error {
   let path = error.path().map(|path| format!("reading directory {}", path.display()));
-  let error = error.into_io_error().expect("a walk that does not follow links only fails on the filesystem");
+  let error = walk_error(error);
   match path {
     Some(path) => anyhow::Error::new(error).context(path),
     None => anyhow::Error::new(error),
@@ -603,8 +615,10 @@ fn collect_inodes(
 ) -> Result<()> {
   for entry in scratch_walk(path)? {
     let entry = entry?;
-    let metadata =
-      entry.metadata().with_context(|| format!("inspecting removal candidate {}", entry.path().display()))?;
+    let metadata = entry
+      .metadata()
+      .map_err(walk_error)
+      .with_context(|| format!("inspecting removal candidate {}", entry.path().display()))?;
     let key = (metadata.dev(), metadata.ino());
     match inodes.get_mut(&key) {
       Some(record) => record.2 += 1,

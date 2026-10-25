@@ -605,6 +605,24 @@ async fn test_scratch_tree_with_unreadable_entries_is_reported_as_skipped() {
 }
 
 #[tokio::test]
+async fn test_scratch_child_that_cannot_be_statted_is_reported_as_unreadable() {
+  let root = tempdir().unwrap();
+  let roots = fixture(root.path());
+  let partly_unreadable = roots.scratch_root.join("partly-unreadable");
+  let listable = partly_unreadable.join("listable");
+  fs::create_dir_all(&listable).unwrap();
+  fs::write(listable.join("child"), b"content\n").unwrap();
+  // Readable but not searchable: the names list, and the lstat of each name inside it fails.
+  fs::set_permissions(&listable, Permissions::from_mode(0o600)).unwrap();
+  let _restore_permissions = RestorePermissions(listable.clone());
+
+  let report = run(&roots, false, utc("2026-05-20T00:00:00Z")).await;
+  let row = row_by_path(&report, &partly_unreadable);
+  assert_eq!(row.action, SweepAction::Skip);
+  assert!(row.reason.starts_with("unreadable-path:"), "reason {}", row.reason);
+}
+
+#[tokio::test]
 async fn test_cli_without_yes_is_read_only_and_reports_a_total() {
   let root = tempdir().unwrap();
   let roots = fixture(root.path());

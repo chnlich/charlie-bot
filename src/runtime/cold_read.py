@@ -35,7 +35,7 @@ EVIDENCE_FILENAME = "cold_read.json"
 
 
 def load_texts(repo: pathlib.Path) -> tuple[str, str]:
-  """The (system prompt, seven questions) pair, read fresh from ``prompts/cold_read.md``.
+  """The (system prompt, eight questions) pair, read fresh from ``prompts/cold_read.md``.
 
   The marker section keeps the file's own trailing newline out of both texts,
   so the probe input stays byte-identical to the pre-file constants.

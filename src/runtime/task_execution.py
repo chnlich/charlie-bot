@@ -1663,7 +1663,7 @@ class TaskExecutionAdapter:
         instructions, so their context is the pinned spec and batch alone (no
         worktree, no review artifacts). Repo-less work runs keep the run dir as
         the working directory. A cold-read run's context is the page text and
-        the seven questions alone (no session info, no task-body wrapper).
+        the eight questions alone (no session info, no task-body wrapper).
         """
     if task_type == models.TaskType.COLD_READ:
       return await self._build_cold_read_context(meta, run)
@@ -1700,7 +1700,7 @@ class TaskExecutionAdapter:
     return "\n\n".join(part for part in parts if part)
 
   async def _build_cold_read_context(self, meta: models.SessionMetadata, run: models.RunRecord) -> str:
-    """The cold-read run's whole input: the page text, one blank line, the seven questions.
+    """The cold-read run's whole input: the page text, one blank line, the eight questions.
 
         The reader answers from the page alone, so the context carries no
         session info and no task-body wrapper. The launch reads the page and

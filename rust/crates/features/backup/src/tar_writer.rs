@@ -1,4 +1,5 @@
-//! A minimal ustar/PAX tar writer that mirrors what Python's `tarfile.add` records for one member.
+//! A PAX tar writer that mirrors what Python's `tarfile.add` records for one member, with the ustar header block
+//! built through the `tar` crate.
 //!
 //! Python's `tarfile` writes the PAX format (`tarfile.DEFAULT_FORMAT`): every member carries a ustar
 //! header, and a `././@PaxHeader` extended entry precedes it whenever a field does not fit ustar's
@@ -51,15 +52,6 @@ pub fn python_code_points(name: &[u8]) -> Vec<u32> {
   points
 }
 
-/// One octal number in a ustar field: `digits - 1` zero-padded digits, then NUL, as Python's `tarfile.itn`.
-fn itn(field: &mut [u8], n: u64, digits: usize) {
-  let text = format!("{:0width$o}", n, width = digits - 1);
-  let bytes = text.as_bytes();
-  assert!(bytes.len() < field.len(), "octal field overflow: {n}");
-  field[..bytes.len()].copy_from_slice(bytes);
-  field[bytes.len()] = 0;
-}
-
 /// Whether a number fits an octal field of `digits` characters: `digits - 1` octal digits, then NUL.
 fn fits_ustar(value: i128, digits: u32) -> bool {
   (0..8i128.pow(digits - 1)).contains(&value)
@@ -89,30 +81,27 @@ fn store_text(field: &mut [u8], value: &[u8]) {
 }
 
 fn ustar_header(member: &Member) -> [u8; BLOCK] {
-  let mut header = [0u8; BLOCK];
-  store_text(&mut header[0..NAME_LEN], member.name);
-  // Python's `get_info` keeps the permission and the setuid, setgid and sticky bits only.
-  itn(&mut header[100..108], u64::from(member.mode & 0o7777), 8);
-  itn(&mut header[108..116], ustar_number(i128::from(member.uid), 8), 8);
-  itn(&mut header[116..124], ustar_number(i128::from(member.gid), 8), 8);
-  itn(&mut header[124..136], ustar_number(i128::from(member.size), 12), 12);
-  itn(&mut header[136..148], ustar_number(mtime_ustar(member), 12), 12);
-  header[148..156].fill(b' ');
-  header[156] = member.typeflag;
-  store_text(&mut header[157..157 + LINKNAME_LEN], member.linkname);
-  header[257..263].copy_from_slice(b"ustar\0");
-  header[263..265].copy_from_slice(b"00");
-  store_text(&mut header[265..265 + UNAME_LEN], member.uname);
-  store_text(&mut header[297..297 + GNAME_LEN], member.gname);
+  let mut header = tar::Header::new_ustar();
+  // Python's `get_info` keeps the permission and the setuid, setgid and sticky bits only; a number that does not fit
+  // its octal field stays 0 in the ustar header and rides the PAX record.
+  header.set_mode(member.mode & 0o7777);
+  header.set_uid(ustar_number(i128::from(member.uid), 8));
+  header.set_gid(ustar_number(i128::from(member.gid), 8));
+  header.set_size(ustar_number(i128::from(member.size), 12));
+  header.set_mtime(ustar_number(mtime_ustar(member), 12));
+  let ustar = header.as_ustar_mut().expect("new_ustar is a ustar header");
+  store_text(&mut ustar.name, member.name);
+  ustar.typeflag[0] = member.typeflag;
+  store_text(&mut ustar.linkname, member.linkname);
+  store_text(&mut ustar.uname, member.uname);
+  store_text(&mut ustar.gname, member.gname);
   // Python writes the device numbers of character and block devices only; the other members keep NULs.
   if matches!(member.typeflag, b'3' | b'4') {
-    itn(&mut header[329..337], u64::from(member.devmajor), 8);
-    itn(&mut header[337..345], u64::from(member.devminor), 8);
+    header.set_device_major(member.devmajor).expect("the device number fits its octal field");
+    header.set_device_minor(member.devminor).expect("the device number fits its octal field");
   }
-  let checksum: u32 = header.iter().map(|byte| u32::from(*byte)).sum();
-  itn(&mut header[148..155], u64::from(checksum), 7);
-  header[155] = b' ';
-  header
+  header.set_cksum();
+  *header.as_bytes()
 }
 
 /// One PAX record: `len key=value\n`, with the length found by the same fixed-point
@@ -217,18 +206,8 @@ pub fn write_member<W: Write>(out: &mut W, member: &Member, content: Option<&mut
   out.write_all(&ustar_header(member))?;
   written += BLOCK as u64;
   if let Some(reader) = content {
-    let mut remaining = member.size;
-    let mut buffer = [0u8; 64 * 1024];
-    loop {
-      let read = reader.read(&mut buffer)?;
-      if read == 0 {
-        break;
-      }
-      let take = read.min(remaining as usize);
-      out.write_all(&buffer[..take])?;
-      remaining -= take as u64;
-    }
-    if remaining > 0 {
+    let copied = std::io::copy(&mut reader.take(member.size), out)?;
+    if copied < member.size {
       return Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "file shorter than its header size"));
     }
     let padding = (BLOCK - (member.size as usize % BLOCK)) % BLOCK;

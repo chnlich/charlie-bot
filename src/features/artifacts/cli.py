@@ -15,7 +15,7 @@ runs as a cold-read worker child of the session, and its completion report wakes
 session; in a worker session, or with no session identity (CHARLIEBOT_SESSION_ID absent
 and the cwd not a session directory), the command runs the probe in the foreground and
 prints the report body — the page path, the page bytes' sha256, one line per failed
-attempt, the answering backend and the seven answers verbatim — the same body the child
+attempt, the answering backend and the eight answers verbatim — the same body the child
 session's report carries. A failed assertion or a refused delegation prints the reason
 and exits 1. ``wrap`` assembles a genre page from a content fragment (the fragment fills
 <body>; head and style come from the genre template), pre-rendering math to KaTeX markup

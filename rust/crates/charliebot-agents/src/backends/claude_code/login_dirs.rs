@@ -29,3 +29,16 @@ pub fn expanduser(path: &str, home: Option<&str>) -> anyhow::Result<PathBuf> {
   }
   Ok(PathBuf::from(path))
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn a_leading_tilde_names_the_supplied_home() {
+    assert_eq!(expanduser("~/.claude-b", Some("/synthetic/home")).unwrap(), PathBuf::from("/synthetic/home/.claude-b"));
+    assert_eq!(expanduser("/abs/.claude", Some("/synthetic/home")).unwrap(), PathBuf::from("/abs/.claude"));
+    assert_eq!(expanduser("~user/.claude", Some("/synthetic/home")).unwrap(), PathBuf::from("~user/.claude"));
+    assert!(expanduser("~/.claude-b", None).is_err());
+  }
+}

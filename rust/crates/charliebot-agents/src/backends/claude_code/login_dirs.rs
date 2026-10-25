@@ -25,6 +25,9 @@ pub fn claude_config_dir() -> anyhow::Result<PathBuf> {
 pub fn expanduser(path: &str, home: Option<&str>) -> anyhow::Result<PathBuf> {
   if path == "~" || path.starts_with("~/") {
     let home = home.ok_or_else(|| anyhow::anyhow!("HOME is required to expand {path}"))?;
+    if home == "/" {
+      return Ok(PathBuf::from(if path == "~" { "/" } else { &path[1..] }));
+    }
     let home = home.trim_end_matches('/');
     return Ok(PathBuf::from(shellexpand::tilde_with_context(path, || Some(home)).into_owned()));
   }
@@ -45,6 +48,8 @@ mod tests {
       expanduser("~/.claude-b", Some("/synthetic/home/")).unwrap(),
       PathBuf::from("/synthetic/home/.claude-b")
     );
+    assert_eq!(expanduser("~", Some("/")).unwrap(), PathBuf::from("/"));
+    assert_eq!(expanduser("~/claude", Some("/")).unwrap(), PathBuf::from("/claude"));
     assert!(expanduser("~/.claude-b", None).is_err());
   }
 }

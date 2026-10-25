@@ -82,7 +82,8 @@ time = { version = "0.3", features = ["formatting", "parsing"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "fs", "time", "process", "sync", "io-util"] }
 tokio-rustls = "0.26"
 tokio-tungstenite = { version = "0.29", default-features = false, features = ["handshake"] }
-tower = { version = "0.5", features = ["util"] }
+toml = "1"
+tower ={ version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["catch-panic"] }
 tungstenite = { version = "0.29", default-features = false, features = ["handshake"] }
 tracing = "0.1"

@@ -31,4 +31,5 @@ uuid.workspace = true
 
 [dev-dependencies]
 charliebot-core = { workspace = true, features = ["test-support"] }
+toml.workspace = true
 tower.workspace = true

@@ -77,6 +77,13 @@ def register_service(name: str, module: str, *, phase: str = "ready") -> None:
   _SERVICES[name] = (module, phase)
 
 
+def _register_pair(entries: list[tuple[str, str]], kind: str, module: str, attr: str) -> None:
+  """Append one (module, attr) pair to *entries*; a second registration of one pair raises ValueError."""
+  if (module, attr) in entries:
+    raise ValueError(f"{kind} {module}:{attr} is already registered")
+  entries.append((module, attr))
+
+
 def register_file_view(module: str, *, attr: str) -> None:
   """The file server awaits getattr(import_module(module), attr)(request, path) before it serves a path.
 
@@ -85,9 +92,7 @@ def register_file_view(module: str, *, attr: str) -> None:
   fastapi.HTTPException. Views run in registration order; the first Response answers.
   A second registration of one (module, attr) raises ValueError.
   """
-  if (module, attr) in _FILE_VIEWS:
-    raise ValueError(f"file view {module}:{attr} is already registered")
-  _FILE_VIEWS.append((module, attr))
+  _register_pair(_FILE_VIEWS, "file view", module, attr)
 
 
 def register_startup_check(module: str, *, attr: str) -> None:
@@ -96,9 +101,7 @@ def register_startup_check(module: str, *, attr: str) -> None:
   cfg is the CharlieBotConfig. The function raises ValueError to stop the start. Checks run
   in registration order. A second registration of one (module, attr) raises ValueError.
   """
-  if (module, attr) in _STARTUP_CHECKS:
-    raise ValueError(f"startup check {module}:{attr} is already registered")
-  _STARTUP_CHECKS.append((module, attr))
+  _register_pair(_STARTUP_CHECKS, "startup check", module, attr)
 
 
 def register_setup_step(module: str, *, attr: str) -> None:
@@ -109,9 +112,7 @@ def register_setup_step(module: str, *, attr: str) -> None:
   Steps run in registration order. An exception from a step stops setup with a non-zero exit.
   A second registration of one (module, attr) raises ValueError.
   """
-  if (module, attr) in _SETUP_STEPS:
-    raise ValueError(f"setup step {module}:{attr} is already registered")
-  _SETUP_STEPS.append((module, attr))
+  _register_pair(_SETUP_STEPS, "setup step", module, attr)
 
 
 def register_diff_root(module: str, *, attr: str) -> None:
@@ -120,9 +121,7 @@ def register_diff_root(module: str, *, attr: str) -> None:
   cfg is the CharlieBotConfig. The roots join the paths.workspace_dirs roots in registration order.
   A second registration of one (module, attr) raises ValueError.
   """
-  if (module, attr) in _DIFF_ROOTS:
-    raise ValueError(f"diff root {module}:{attr} is already registered")
-  _DIFF_ROOTS.append((module, attr))
+  _register_pair(_DIFF_ROOTS, "diff root", module, attr)
 
 
 def routers(*, before_runtime: bool = False) -> tuple[tuple[str, str, tuple[str, ...], str], ...]:

@@ -1773,8 +1773,9 @@ class TaskExecutionAdapter:
       return ""
     return f"**Later Messages:**\n{content}"
 
-  async def _review_inputs(self, session_id: str,
-                           work_run: models.RunRecord) -> tuple[models.SessionMetadata, str, str, pathlib.Path]:
+  async def _review_inputs(
+      self, session_id: str,
+      work_run: models.RunRecord) -> tuple[models.SessionMetadata, str | None, pathlib.Path, pathlib.Path]:
     """The task record, work report and two log paths every review context reads.
 
         The task record carries the spec the review judges against. ``extract_review_context`` reads the work

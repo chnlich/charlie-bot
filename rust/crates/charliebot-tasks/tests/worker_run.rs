@@ -1804,6 +1804,13 @@ async fn failover_with_every_member_cooling_reports_each_recovery_time() -> anyh
   let summary = reports[0]["summary"].as_str().expect("the report names the recovery times");
   assert!(summary.contains("fake2 cooling until 2030-01-02T02:00"), "{summary}");
   assert!(summary.contains("fake3 cooling until 2030-01-02T03:04"), "{summary}");
+  assert!(
+    summary.contains(
+      "\n\nno backends.pool member is available: \
+       fake2 cooling until 2030-01-02T02:00+00:00; fake3 cooling until 2030-01-02T03:04+00:00"
+    ),
+    "{summary}"
+  );
   settle_until(|| Ok(stack.run_ids_of_kind(&manager.id, RunKind::ManagerTurn)?.len() == 1)).await?;
   settle_node(&stack, &manager.id).await?;
   assert_eq!(stack.run_ids_of_kind(&manager.id, RunKind::ManagerTurn)?.len(), 1);

@@ -68,7 +68,7 @@ async def discord_reply(
         run_started_at=run_started_at,
         tree=task_mgr)
   except thread_entry.ThreadReplyError as exc:
-    raise fastapi.HTTPException(status_code=exc.status, detail=exc.detail) from exc
+    raise deps.http_refusal(exc) from exc
 
 
 @router.post("/discord/read")
@@ -94,7 +94,7 @@ async def discord_read(
   try:
     return await discord_commands.read_thread(req.session_id, req.url, req.limit, cfg, store, events)
   except thread_entry.ThreadReplyError as exc:
-    raise fastapi.HTTPException(status_code=exc.status, detail=exc.detail) from exc
+    raise deps.http_refusal(exc) from exc
 
 
 @router.post("/discord/check")
@@ -113,4 +113,4 @@ async def discord_check(
   try:
     return await discord_commands.check_setup(cfg)
   except thread_entry.ThreadReplyError as exc:
-    raise fastapi.HTTPException(status_code=exc.status, detail=exc.detail) from exc
+    raise deps.http_refusal(exc) from exc

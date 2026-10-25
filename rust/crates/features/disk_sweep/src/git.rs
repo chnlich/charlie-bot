@@ -72,17 +72,28 @@ fn run_git(path: &Path, arguments: &[&str], input: Option<Vec<u8>>) -> Result<Ou
       .kill_on_drop(true);
     let mut child =
       command.spawn().with_context(|| format!("spawning git {} in {}", arguments.join(" "), path.display()))?;
-    if let Some(bytes) = input {
-      let mut stdin = child.stdin.take().expect("git stdin is piped when input is present");
-      // A git that exits before reading its input makes the write fail with a broken pipe; the exit status carries the error.
-      if let Err(error) = stdin.write_all(&bytes).await
-        && error.kind() != std::io::ErrorKind::BrokenPipe
-      {
-        return Err(anyhow::Error::new(error).context("writing git stdin"));
+    let stdin = child.stdin.take();
+    // The input is written while the output is drained: a git that fills its stdout before it reads all of its stdin
+    // would otherwise block both pipes. A git that exits before reading its input makes the write fail with a broken
+    // pipe; the exit status carries the error.
+    let write = async move {
+      let Some(bytes) = input else {
+        return Ok(());
+      };
+      let mut stdin = stdin.expect("git stdin is piped when input is present");
+      match stdin.write_all(&bytes).await {
+        Err(error) if error.kind() != std::io::ErrorKind::BrokenPipe => {
+          Err(anyhow::Error::new(error).context("writing git stdin"))
+        }
+        _ => Ok(()),
       }
-    }
-    match tokio::time::timeout(GIT_TIMEOUT, child.wait_with_output()).await {
-      Ok(output) => Ok(output.context("waiting for git subprocess")?),
+    };
+    let finished = async { tokio::join!(write, child.wait_with_output()) };
+    match tokio::time::timeout(GIT_TIMEOUT, finished).await {
+      Ok((written, output)) => {
+        written?;
+        output.context("waiting for git subprocess")
+      }
       Err(_) => bail!("git {} timed out in {} after 60 seconds", arguments.join(" "), path.display()),
     }
   })
@@ -189,4 +200,40 @@ pub(crate) fn sorted_entries(path: &Path) -> Result<Vec<fs::DirEntry>> {
     .with_context(|| format!("reading directory entry in {}", path.display()))?;
   entries.sort_by_key(|entry| entry.file_name());
   Ok(entries)
+}
+
+#[cfg(test)]
+mod tests {
+  use std::fs;
+  use std::path::Path;
+  use std::process::Command;
+
+  use tempfile::tempdir;
+
+  use super::expanded_untracked_paths;
+
+  fn git_init(path: &Path) {
+    assert!(Command::new("git").args(["init", "-q"]).current_dir(path).status().unwrap().success());
+  }
+
+  /// Every leaf of the nested repository is ignored by the outer one, so `check-ignore` answers 10,000 paths on its
+  /// stdout while it still reads them on stdin: both pipes fill, and the answers must be drained as the paths go in.
+  #[tokio::test]
+  async fn check_ignore_answers_a_large_ignored_nested_repository_without_blocking() {
+    let root = tempdir().unwrap();
+    let repo = root.path().join("outer");
+    let nested = repo.join("sub");
+    fs::create_dir_all(&nested).unwrap();
+    fs::write(repo.join(".gitignore"), "*.o\n").unwrap();
+    git_init(&repo);
+    git_init(&nested);
+    for index in 0..10_000 {
+      fs::write(nested.join(format!("f{index}.o")), b"").unwrap();
+    }
+
+    let gitignore = repo.join(".gitignore");
+    let kept = tokio::task::spawn_blocking(move || expanded_untracked_paths(&repo)).await.unwrap().unwrap();
+    // The outer `.gitignore` is untracked and not ignored, so it is the one candidate that survives.
+    assert_eq!(kept, vec![gitignore]);
+  }
 }

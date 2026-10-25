@@ -1116,6 +1116,18 @@ def build_execution_adapter(
       cfg, blocks.successor, blocks.events, blocks.lifecycle, blocks.anchors, blocks.sidebar, tree)
 
 
+def record_launches(tree: task_sessions.TaskTreeManager) -> list[tuple[str, list[str]]]:
+  """Install a dispatch executor that records (session id, pending input contents) per launch."""
+  launches: list[tuple[str, list[str]]] = []
+
+  async def executor(session_id: str, pending: list[dict], launch_run_id: str | None = None) -> str:
+    launches.append((session_id, [e["content"] for e in pending]))
+    return "run-1"
+
+  tree.dispatch.executor = executor
+  return launches
+
+
 def thread_blocks(
     blocks: Any
 ) -> tuple[session_store.SessionStore, session_lifecycle.SessionLifecycle, session_events.SessionEvents,

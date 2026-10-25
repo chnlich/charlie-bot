@@ -27,10 +27,10 @@ shellexpand.workspace = true
 tempfile.workspace = true
 time.workspace = true
 tokio.workspace = true
+toml.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
 charliebot-core = { workspace = true, features = ["test-support"] }
-toml.workspace = true
 tower.workspace = true

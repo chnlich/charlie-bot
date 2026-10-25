@@ -363,6 +363,10 @@ mod tests {
     let path = ensure_session_cgroup(root.path(), ResourceClass::Agent, SESSION_ID, 64, 32, 4096).unwrap();
     assert_eq!(path, root.path().join(AGENTS_SLICE).join("charliebot-sess-abcd1234"));
     assert!(path.is_dir());
+    assert_eq!(
+      fs::read_to_string(root.path().join(AGENTS_SLICE).join("cgroup.subtree_control")).unwrap(),
+      "+memory +pids"
+    );
     assert_eq!(fs::read_to_string(path.join("memory.max")).unwrap(), (64 * 1024 * 1024).to_string());
     assert_eq!(fs::read_to_string(path.join("memory.swap.max")).unwrap(), (32 * 1024 * 1024).to_string());
     assert_eq!(fs::read_to_string(path.join("pids.max")).unwrap(), "4096");
@@ -373,6 +377,22 @@ mod tests {
     let root = fake_slices();
     let path = ensure_session_cgroup(root.path(), ResourceClass::Repair, SESSION_ID, 64, 32, 4096).unwrap();
     assert_eq!(path, root.path().join(REPAIR_SLICE).join("charliebot-sess-abcd1234"));
+  }
+
+  #[test]
+  fn ensure_session_cgroup_names_the_failed_subtree_control_write() {
+    // A directory where the control file belongs makes the write fail, as a read-only cgroup file system does.
+    let root = fake_slices();
+    fs::create_dir(root.path().join(AGENTS_SLICE).join("cgroup.subtree_control")).unwrap();
+    let result = ensure_session_cgroup(root.path(), ResourceClass::Agent, SESSION_ID, 64, 32, 4096);
+    assert!(
+      matches!(
+        &result,
+        Err(error) if error.to_string().contains(AGENTS_SLICE)
+          && error.to_string().contains("cannot enable memory and pids for its children")
+      ),
+      "a refused controller enablement must fail the spawn and name the slice, got {result:?}"
+    );
   }
 
   #[test]

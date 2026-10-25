@@ -25,6 +25,8 @@ from typing import TYPE_CHECKING, Protocol, TypeVar
 if TYPE_CHECKING:
   from src.infra import config, models
 
+from src.runtime.hooks import registration
+
 DEFAULT_WORKFLOW_RULES_FILE = "manager_workflows.md"
 
 _Answer = TypeVar("_Answer")
@@ -95,7 +97,7 @@ def register_turn_contribution(name: str, contribution: str) -> None:
   A second registration of one name raises ValueError.
   """
   if name in _registered:
-    raise ValueError(f"turn contribution {name!r} is already registered by {_registered[name]}")
+    raise registration.already_registered("turn contribution", name, _registered[name])
   _registered[name] = contribution
 
 

@@ -1,40 +1,31 @@
 //! The bounded LRU memo of the diff view (`src/infra/memo.py` `BoundedMemo`): a hit refreshes the key's recency, and a
 //! store evicts the least recently used entries past the limit.
 
-use std::collections::VecDeque;
+use std::num::NonZeroUsize;
 use std::sync::Mutex;
 
+use lru::LruCache;
+
 pub(crate) struct BoundedMemo<K, V> {
-  limit: usize,
-  /// The entries, least recently used first.
-  entries: Mutex<VecDeque<(K, V)>>,
+  entries: Mutex<LruCache<K, V>>,
 }
 
-impl<K: PartialEq, V: Clone> BoundedMemo<K, V> {
+impl<K: Eq + std::hash::Hash, V: Clone> BoundedMemo<K, V> {
   pub(crate) fn new(limit: usize) -> Self {
-    Self { limit, entries: Mutex::new(VecDeque::new()) }
+    let limit = NonZeroUsize::new(limit).expect("the memo limit is positive");
+    Self { entries: Mutex::new(LruCache::new(limit)) }
   }
 
   /// The value stored under `key`; a hit moves the key to the most recent end.
   pub(crate) fn get(&self, key: &K) -> Option<V> {
     let mut entries = self.entries.lock().expect("the memo lock is never poisoned");
-    let index = entries.iter().position(|(stored, _)| stored == key)?;
-    let entry = entries.remove(index).expect("the position is in range");
-    let value = entry.1.clone();
-    entries.push_back(entry);
-    Some(value)
+    entries.get(key).cloned()
   }
 
   /// Stores `value` under `key` as the most recent entry, then evicts past the limit.
   pub(crate) fn store(&self, key: K, value: V) {
     let mut entries = self.entries.lock().expect("the memo lock is never poisoned");
-    if let Some(index) = entries.iter().position(|(stored, _)| *stored == key) {
-      entries.remove(index);
-    }
-    entries.push_back((key, value));
-    while entries.len() > self.limit {
-      entries.pop_front();
-    }
+    entries.put(key, value);
   }
 
   #[cfg(test)]

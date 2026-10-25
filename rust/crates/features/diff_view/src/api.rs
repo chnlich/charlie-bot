@@ -38,7 +38,7 @@ const MODES: &[&str] = &["three-dot", "two-dot"];
 const DEFAULT_MODE: &str = "three-dot";
 
 /// `_ManifestKey`: the repo, both resolved SHAs, the range mode and the `.gitattributes` signature.
-#[derive(PartialEq)]
+#[derive(Eq, Hash, PartialEq)]
 pub(crate) struct ManifestKey {
   pub(crate) repo: String,
   pub(crate) base_sha: String,
@@ -48,7 +48,7 @@ pub(crate) struct ManifestKey {
 }
 
 /// `_BranchListKey`: the repo and its ref-state signature.
-#[derive(PartialEq)]
+#[derive(Eq, Hash, PartialEq)]
 pub(crate) struct BranchKey {
   pub(crate) repo: String,
   pub(crate) signature: Signature,

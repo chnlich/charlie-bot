@@ -301,6 +301,14 @@ impl BackendPool {
       .collect::<Vec<_>>();
     if parts.is_empty() { "backends.pool is empty".to_string() } else { parts.join("; ") }
   }
+
+  /// The line a caller reports when `select` found no member.
+  ///
+  /// Subagent resolution, the improve loop's per-iteration pick and the quota failover all report it, and an
+  /// operator reads the same wording whichever one refused.
+  pub fn no_member_message(&self, cfg: &CharlieBotConfig) -> String {
+    format!("no backends.pool member is available: {}", self.recovery_report(cfg))
+  }
 }
 
 /// Return whether an error string contains a known quota error substring.
@@ -628,6 +636,17 @@ mod tests {
   #[test]
   fn empty_pool_recovery_report_names_the_empty_pool() {
     assert_eq!(BackendPool::default().recovery_report(&config(&[])), "backends.pool is empty");
+  }
+
+  #[test]
+  fn no_member_message_joins_the_refusal_and_the_recovery_report() {
+    let cfg = config(&["a"]);
+    let pool = BackendPool::default();
+    pool.cool("a", Some(UtcDateTime::parse("2030-01-02T03:04:00Z").unwrap()));
+    assert_eq!(
+      pool.no_member_message(&cfg),
+      "no backends.pool member is available: a cooling until 2030-01-02T03:04+00:00"
+    );
   }
 
   #[test]

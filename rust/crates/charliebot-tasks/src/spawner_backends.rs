@@ -142,9 +142,7 @@ pub async fn resolve_requested_subagent_backend_model(
   if !cfg.backends.pool.is_empty()
     && let Some(caller) = role.pool_caller()
   {
-    let option = pool
-      .select(cfg, caller, &[])?
-      .ok_or_else(|| value_error(format!("no backends.pool member is available: {}", pool.recovery_report(cfg))))?;
+    let option = pool.select(cfg, caller, &[])?.ok_or_else(|| value_error(pool.no_member_message(cfg)))?;
     return Ok((option.id.clone(), Some(required_model(&option.model, "pool member ", &option.id)?), true));
   }
   let (backend_id, model) = resolve_session_default_backend_model(cfg, &meta)?;

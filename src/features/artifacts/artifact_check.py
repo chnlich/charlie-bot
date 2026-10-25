@@ -13,7 +13,7 @@ half of the genre's GRAMMAR; rules needing judgment stay with the reader and the
 line — never stopping at the first failure. Structure parsing uses the standard library's
 ``html.parser``; only ``page-height`` shells out to headless chrome, so every other
 assertion runs on a host without a renderer. ``run_probe`` sends the page text plus the
-cold-read seven questions (``prompts/cold_read.md``, their only home) to CharlieBot's
+cold-read eight questions (``prompts/cold_read.md``, their only home) to CharlieBot's
 backends.pool members in rotation order and returns the attempts, the
 answering backend, and its verbatim answer; every genre's delivery gate routes through it
 after the assertions pass.
@@ -25,6 +25,10 @@ plan registration gate (src/features/artifacts/plans.py) enforces exactly the se
 
 ``ordinal-named`` is the lexical check for the master prompt's Naming rule: a label pointing
 off the page carries a content name at first use.
+
+``run-stated`` makes a page that shows a decimal in a table cell state what its run changed and
+what it held fixed, each with a value, in a table or dl. ``req-chips`` requires each span.req
+chip's own sentence to carry readable text after the chip: its gloss.
 """
 
 from __future__ import annotations
@@ -58,6 +62,7 @@ FORK_OPEN_SHAPE = "fork-open-shape"
 FORK_EXPLAINER = "fork-explainer"
 FACT_ANCHORED = "fact-anchored"
 REQ_CHIPS = "req-chips"
+RUN_STATED = "run-stated"
 BYTE_INTEGRITY = "byte-integrity"
 RENDER_PATH = "render-path"
 GOAL_BUDGET = "goal-budget"
@@ -374,6 +379,150 @@ def _check_fact_anchored(ctx: _Context) -> list[AssertionOutcome]:
   return failures or [_ok(name)]
 
 
+# ---------------------------------------------------------------------------
+# req-chips and run-stated — the requirement gloss and the run's variable block
+# ---------------------------------------------------------------------------
+
+# Readable text carries a letter or a digit (CJK included); punctuation alone is not a gloss or a value.
+_READABLE_TEXT_RE = re.compile(r"[A-Za-z0-9\u4e00-\u9fff]")
+
+# A requirement chip glosses in the block that holds it: the chip is fenced so the text after it
+# can be read without guessing which occurrence of the chip's name came first.
+_REQ_BLOCK_TAGS = frozenset({"p", "li", "td", "th", "dt", "dd", "blockquote", "h1", "h2", "h3", "h4"})
+_REQ_START = "\x03"
+_REQ_END = "\x04"
+_SENTENCE_END_RE = re.compile(r"[.。!?！？]")
+
+# run-stated reads a page that shows measured numbers: a table cell holding a decimal marks a
+# reported run, and the page must then say which factors the run changed and which it held fixed.
+# Role words match in English and Chinese on every page; the check never reads the page's lang.
+_RUN_DECIMAL_RE = re.compile(r"\d+\.\d+")
+_RUN_HELD_RE = re.compile(
+    r"\b(?:held|kept|stayed|stays|remained|remains)\s+(?:the\s+)?(?:fixed|constant|unchanged|same)\b"
+    r"|\b(?:fixed|constant|unchanged|retained|controlled|same)\b"
+    r"|保持不变|固定不变|保持一致|不变|未变|没变|未改动|没改动|未改|没改|恒定|固定|控制变量", re.IGNORECASE)
+_RUN_CHANGED_RE = re.compile(
+    r"\b(?:changed?|changing|changes?|varied|varying|modified|altered|variable|tweaked)\b"
+    r"|改(?:动|变|了|成|为)|更改|修改|变更|变量|变化", re.IGNORECASE)
+
+
+def _marked_element_text(el: _Element, target: _Element) -> str:
+  """Element text with *target* fenced by the request sentinels, so the text after it is unambiguous."""
+  parts: list[str] = []
+
+  def walk(node: _Element) -> None:
+    for child in node.children:
+      if child is target:
+        parts.extend((_REQ_START, _text(child), _REQ_END))
+      elif isinstance(child, str):
+        parts.append(child)
+      else:
+        walk(child)
+
+  walk(el)
+  return "".join(parts)
+
+
+def _check_req_chips(ctx: _Context) -> list[AssertionOutcome]:
+  """Each span.req chip carries a gloss: readable text after the chip in the sentence that holds it.
+
+  The gloss sits in the chip's own block and before that sentence's terminator, so a later
+  sentence or a separate list or table does not gloss a chip left bare at the end of its sentence.
+  """
+  name = REQ_CHIPS
+  chips = _find(ctx.root, "span", ("req",))
+  if not chips:
+    return [_fail(name, "no span.req requirement chips on the page")]
+  failures: list[AssertionOutcome] = []
+  for index, chip in enumerate(chips, 1):
+    block = chip.parent
+    while block is not None and block.tag not in _REQ_BLOCK_TAGS:
+      block = block.parent
+    heading = _section_heading(chip)
+    chip_text = " ".join(_text(chip).split())
+    if block is None:
+      failures.append(
+          _fail(
+              name, f"requirement chip #{index} {chip_text!r} (section {heading!r}) has no "
+              "p/li/td/blockquote ancestor to hold a gloss"))
+      continue
+    after = _marked_element_text(block, chip).split(_REQ_END, 1)[1]
+    tail = _SENTENCE_END_RE.split(after, 1)[0]
+    if not _READABLE_TEXT_RE.search(tail):
+      failures.append(
+          _fail(
+              name, f"requirement chip #{index} {chip_text!r} (section {heading!r}) carries no gloss "
+              "after it in its sentence"))
+  return failures or [_ok(name, f"{len(chips)} requirement chips carry a gloss")]
+
+
+def _table_rows(block: _Element) -> Iterator[list[str]]:
+  """Text chunks per table row, one chunk per td/th cell; the role label and its value are among them."""
+  for row in _find(block, "tr"):
+    cells = [child for child in row.children if isinstance(child, _Element) and child.tag in ("td", "th")]
+    if cells:
+      yield [_text(cell) for cell in cells]
+
+
+def _dl_rows(block: _Element) -> Iterator[list[str]]:
+  """Text chunks per dl entry: the dt text followed by the dd texts that belong to it."""
+  chunks: list[str] | None = None
+  for el in _descendants(block):
+    if el.tag == "dt":
+      if chunks is not None:
+        yield chunks
+      chunks = [_text(el)]
+    elif el.tag == "dd" and chunks is not None:
+      chunks.append(_text(el))
+  if chunks is not None:
+    yield chunks
+
+
+def _run_row_role(chunks: list[str]) -> str | None:
+  """``changed`` or ``held`` when the row names that role and carries readable text besides it."""
+  for role, pattern in (("held", _RUN_HELD_RE), ("changed", _RUN_CHANGED_RE)):
+    for index, chunk in enumerate(chunks):
+      match = pattern.search(chunk)
+      if match is None:
+        continue
+      value = " ".join([chunk[:match.start()] + chunk[match.end():], *chunks[:index], *chunks[index + 1:]])
+      if _READABLE_TEXT_RE.search(value):
+        return role
+  return None
+
+
+def _check_run_stated(ctx: _Context) -> list[AssertionOutcome]:
+  """A page that shows a decimal in a table cell states its run's changed and held-fixed factors.
+
+  Every table and dl on the page is a candidate variable block. A block satisfies the assertion
+  when one row names the changed role and another names the held-fixed role, each row carrying
+  readable text besides the role word. The failure detail names the role row that no block states.
+  """
+  name = RUN_STATED
+  cells = _find(ctx.root, "td") + _find(ctx.root, "th")
+  if not any(_RUN_DECIMAL_RE.search(_text(cell)) for cell in cells):
+    return [_ok(name, "no numeric table cell")]
+  best: set[str] = set()
+  for block in _descendants(ctx.root):
+    if block.tag not in ("table", "dl"):
+      continue
+    rows = _table_rows(block) if block.tag == "table" else _dl_rows(block)
+    roles = {role for role in (_run_row_role(chunks) for chunks in rows) if role is not None}
+    if {"changed", "held"} <= roles:
+      return [_ok(name, "a table or dl states the changed and held-fixed factors")]
+    if len(roles) > len(best):
+      best = roles
+  missing = [
+      label for role, label in (("changed", "changed-factor row"), ("held", "held-fixed-factor row"))
+      if role not in best
+  ]
+  return [
+      _fail(
+          name, "a table cell holds a decimal number, but no table or dl states the "
+          f"{' and the '.join(missing)} with a value")
+  ]
+
+
 def _check_goal_budget(ctx: _Context) -> list[AssertionOutcome]:
   name = GOAL_BUDGET
   try:
@@ -680,7 +829,8 @@ _ASSERTION_RUNNERS = {
     FORK_OPEN_SHAPE: _check_fork_open_shape,
     FORK_EXPLAINER: _check_fork_explainer,
     FACT_ANCHORED: _check_fact_anchored,
-    REQ_CHIPS: _presence_check(REQ_CHIPS, "span", ("req",), "no span.req requirement chips on the page"),
+    REQ_CHIPS: _check_req_chips,
+    RUN_STATED: _check_run_stated,
     GOAL_BUDGET: _check_goal_budget,
     PAGE_HEIGHT: _check_page_height,
     ORDINAL_NAMED: _check_ordinal_named,
@@ -702,7 +852,7 @@ _ASSERTION_SETS: dict[str, tuple[str, ...]] = {
     "sitrep":
         (
             BYTE_INTEGRITY, STYLE_VERBATIM, SECTIONS_NUMBERED, FORK_OPEN_SHAPE, FORK_EXPLAINER, FACT_ANCHORED,
-            REQ_CHIPS, ORDINAL_NAMED),
+            REQ_CHIPS, RUN_STATED, ORDINAL_NAMED),
     "debug": (BYTE_INTEGRITY, STYLE_VERBATIM, SECTIONS_NUMBERED, FORK_OPEN_SHAPE, FACT_ANCHORED, ORDINAL_NAMED),
     "explain":
         (BYTE_INTEGRITY, STYLE_VERBATIM, RENDER_PATH, SECTIONS_NUMBERED, EXPLAIN_TRIAD, FORK_OPEN_SHAPE, ORDINAL_NAMED),

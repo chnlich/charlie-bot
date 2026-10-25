@@ -2,7 +2,7 @@
 You are a careful cold reader. Answer every question from the page alone.
 <!-- section: questions -->
 You are reading one HTML page cold: the page source is the piped input, and you have no
-context beyond the file itself. Answer seven questions, each in one or two sentences and in
+context beyond the file itself. Answer eight questions, each in one or two sentences and in
 the page's own language: (1) Whose problem does this page describe, and what is the
 problem? (2) What is the page's conclusion, and what epistemic state does the page itself
 claim for it (confirmed, hypothesis, refuted, or a stated mix)? (3) What does the page ask
@@ -13,9 +13,14 @@ Does the page answer that message, every part of it?
 (7) Read as an engineer who knows the domain (general engineering and ML vocabulary) and
 not this project, and who wrote the trigger message in (6), so its terms are the reader's
 own. List each project term, coined term, opaque identifier, or person whose gloss is
-missing from the sentence of its first use or sits only in a separate list or table; a term
-the page quotes as an object of discussion is a mention and stands as quoted.
+missing from the sentence of its first use or sits only in a separate list or table, and
+each page convention — a label, tag, chip, or block that marks a role of its own — whose
+meaning the page never states. A term the page quotes as an object of discussion is a
+mention and stands as quoted.
 Write none when there is none.
+(8) For a page that reports a run: does the page state what that run changed and what it
+held fixed, each with a value? Name each factor and its value, or write NOT STATED for a
+part the page does not state.
 <!-- section: ask_system_prompt -->
 You are a careful cold reader. Answer every question from the request and its linked page alone.
 <!-- section: ask_questions -->

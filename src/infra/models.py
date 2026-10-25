@@ -131,7 +131,7 @@ RunOutcomeValue = Literal["success", "failed", "interrupted"]
 
 class ColdReadSpec(pydantic.BaseModel):
   # The cold-read task's persisted payload: the page to read, its genre, and
-  # the trigger message (question 6 of the seven, filled verbatim).
+  # the trigger message (question 6 of the eight, filled verbatim).
   model_config = pydantic.ConfigDict(extra="forbid")
 
   page_path: str

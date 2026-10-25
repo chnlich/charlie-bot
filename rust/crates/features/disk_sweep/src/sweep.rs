@@ -13,6 +13,7 @@ use charliebot_store::metadata::TaskSpec;
 use charliebot_store::run_records::{RUN_METADATA_NAME, RUNS_DIR_NAME, RunRecord};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
+use walkdir::{DirEntry, WalkDir};
 
 use crate::{archive, git, process};
 
@@ -518,47 +519,49 @@ fn scratch_rows(scratch_root: &Path, now: DateTime<Utc>) -> Result<Vec<SweepRow>
 fn tree_latest_mtime(path: &Path) -> Result<f64> {
   let metadata = fs::symlink_metadata(path).with_context(|| format!("inspecting {}", path.display()))?;
   let mut latest = mtime(&metadata);
-  walk_tree(path, &mut |_entry, metadata| {
-    latest = latest.max(mtime(metadata));
-    Ok(())
-  })?;
+  for entry in scratch_walk(path)? {
+    let entry = entry?;
+    let metadata = entry.metadata().with_context(|| format!("inspecting scratch path {}", entry.path().display()))?;
+    latest = latest.max(mtime(&metadata));
+  }
   Ok(latest)
 }
 
 fn nested_repositories(path: &Path) -> Result<Vec<PathBuf>> {
-  fn visit(path: &Path, repositories: &mut Vec<PathBuf>) -> Result<()> {
-    let entries = git::sorted_entries(path)?;
-    if entries.iter().any(|entry| entry.file_name() == ".git") {
-      repositories.push(path.to_path_buf());
+  let mut repositories = Vec::new();
+  // `_nested_repositories` reports the candidate itself when it holds `.git`, and never walks into one.
+  let walk = WalkDir::new(path)
+    .sort_by_file_name()
+    .into_iter()
+    .filter_entry(|entry| entry.depth() == 0 || entry.file_name() != ".git");
+  for entry in walk {
+    let entry = entry.map_err(walk_io_error)?;
+    if !entry.file_type().is_dir() {
+      continue;
     }
-    for entry in entries {
-      if entry.file_name() == ".git" {
-        continue;
-      }
-      let metadata = fs::symlink_metadata(entry.path())
-        .with_context(|| format!("inspecting scratch path {}", entry.path().display()))?;
-      if metadata.is_dir() && !metadata.file_type().is_symlink() {
-        visit(&entry.path(), repositories)?;
-      }
+    if entry.path().join(".git").symlink_metadata().is_ok() {
+      repositories.push(entry.into_path());
     }
-    Ok(())
   }
-  let mut result = Vec::new();
-  visit(path, &mut result)?;
-  Ok(result)
+  Ok(repositories)
 }
 
-fn walk_tree(path: &Path, visit: &mut impl FnMut(&Path, &fs::Metadata) -> Result<()>) -> Result<()> {
-  for entry in git::sorted_entries(path)? {
-    let entry_path = entry.path();
-    let metadata =
-      fs::symlink_metadata(&entry_path).with_context(|| format!("inspecting scratch path {}", entry_path.display()))?;
-    visit(&entry_path, &metadata)?;
-    if metadata.is_dir() && !metadata.file_type().is_symlink() {
-      walk_tree(&entry_path, visit)?;
-    }
+/// `os.walk(path, followlinks=False, onerror=_raise_walk_error)` over the scratch trees: every entry below `path`
+/// (never the root, which the caller lstats itself), symlinked directories listed but not descended, in sorted
+/// order, with inspection errors raised.
+fn scratch_walk(path: &Path) -> Result<impl Iterator<Item = Result<DirEntry>>> {
+  let walk = WalkDir::new(path).min_depth(1).sort_by_file_name().into_iter();
+  Ok(walk.map(|entry| entry.map_err(walk_io_error)))
+}
+
+/// `onerror=_raise_walk_error`: an entry that cannot be listed stops the walk with its filesystem error.
+fn walk_io_error(error: walkdir::Error) -> anyhow::Error {
+  let path = error.path().map(|path| format!("reading directory {}", path.display()));
+  let error = error.into_io_error().expect("a walk that does not follow links only fails on the filesystem");
+  match path {
+    Some(path) => anyhow::Error::new(error).context(path),
+    None => anyhow::Error::new(error),
   }
-  Ok(())
 }
 
 fn mtime(metadata: &fs::Metadata) -> f64 {
@@ -598,19 +601,16 @@ fn collect_inodes(
   candidate: &Path,
   inodes: &mut HashMap<(u64, u64), (u64, u64, u64, PathBuf)>,
 ) -> Result<()> {
-  for entry in git::sorted_entries(path)? {
-    let entry_path = entry.path();
-    let metadata = fs::symlink_metadata(&entry_path)
-      .with_context(|| format!("inspecting removal candidate {}", entry_path.display()))?;
+  for entry in scratch_walk(path)? {
+    let entry = entry?;
+    let metadata =
+      entry.metadata().with_context(|| format!("inspecting removal candidate {}", entry.path().display()))?;
     let key = (metadata.dev(), metadata.ino());
     match inodes.get_mut(&key) {
       Some(record) => record.2 += 1,
       None => {
         inodes.insert(key, (metadata.nlink(), metadata.blocks() * 512, 1, candidate.to_path_buf()));
       }
-    }
-    if metadata.is_dir() && !metadata.file_type().is_symlink() {
-      collect_inodes(&entry_path, candidate, inodes)?;
     }
   }
   Ok(())

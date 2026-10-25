@@ -82,7 +82,10 @@ import yaml
 
 home = pathlib.Path(sys.argv[1])
 mode = sys.argv[2]
-# Backends whose runs cannot be followed after a restart: restart_reattach=False in src/backends/*/__init__.py.
+# Owner: ServerConfig.port in src/infra/config.py.
+DEFAULT_SERVER_PORT = 18498
+# Owner: the restart_reattach trait in src/runtime/hooks/backend_type_registration.py,
+# set by register() in src/backends/*/__init__.py.
 NO_REATTACH = {"opencode", "antigravity"}
 
 
@@ -117,17 +120,25 @@ def run_alive(run, boot):
 if mode == "config":
   config = yaml.safe_load((home / "config.yaml").read_text(encoding="utf-8"))
   credentials = yaml.safe_load((home / "credentials.yaml").read_text(encoding="utf-8"))
-  print(config["server"]["port"])
+  print(config.get("server", {}).get("port", DEFAULT_SERVER_PORT))
   print(credentials["charliebot"].get("access_key") or "")
 elif mode == "scan":
+  config = yaml.safe_load((home / "config.yaml").read_text(encoding="utf-8"))
+  types = {option["id"]: option["type"] for option in config["backends"]["options"]}
   boot = boot_time()
   for path in sorted((home / "sessions").glob("*/data/runs/*/metadata.json")):
     run = json.loads(path.read_text(encoding="utf-8"))
     if run.get("ended_at") is not None or not run_alive(run, boot):
       continue
     print(f"live\t{run['session_id']}\t{run['id']}\t{run.get('backend')}\t{run['pid']}")
-    if run.get("backend") in NO_REATTACH:
-      print(f"block\t{run['backend']} run {run['id']} (pid {run['pid']}) cannot be re-attached after a restart")
+    backend = run.get("backend")
+    backend_type = types.get(backend)
+    if backend_type is None:
+      print(f"block\tbackend {backend!r} of run {run['id']} (pid {run['pid']}) is not in backends.options; "
+            "restart re-attachment is unknown")
+    elif backend_type in NO_REATTACH:
+      print(f"block\t{backend} run {run['id']} (type {backend_type}, pid {run['pid']}) "
+            "cannot be re-attached after a restart")
   # A loop's controller runs inside the server process; a restart never resumes it (src/runtime/task_recovery.py).
   for path in sorted((home / "sessions").glob("*/loops/*/state.json")):
     state = json.loads(path.read_text(encoding="utf-8"))

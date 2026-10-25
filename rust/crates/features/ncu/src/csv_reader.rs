@@ -93,9 +93,9 @@ fn parse_checks(text: &str) -> Result<(), CsvError> {
   for line in text.split_inclusive('\n') {
     for ch in line.chars() {
       match state {
-        // At record start a terminator only ends the blank record; Python stays in `START_RECORD`.
+        // A terminator at record start moves to `EAT_CRNL`: only more terminators may follow it on the line.
         StartRecord => match ch {
-          '\n' | '\r' => {}
+          '\n' | '\r' => state = EatCrnl,
           '"' => {
             field_len = 0;
             state = InQuoted;
@@ -211,6 +211,13 @@ mod tests {
   #[test]
   fn a_carriage_return_inside_an_unquoted_field_is_an_error() {
     assert!(excel_records("a\rb\n").is_err());
+  }
+
+  #[test]
+  fn a_carriage_return_that_starts_a_record_is_an_error() {
+    assert!(excel_records("a\n\rx\n").is_err());
+    assert!(excel_records("\rx\n").is_err());
+    assert_eq!(names("a\n\r\nb\n"), vec![vec!["a"], vec!["b"]]);
   }
 
   #[test]

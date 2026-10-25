@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import importlib
 
+from src.runtime.hooks import registration
+
 _HANDLERS: dict[str, tuple[str, str]] = {}  # name -> (module, attr)
 
 
@@ -17,7 +19,7 @@ def register_handler(name: str, module: str, *, attr: str) -> None:
   The coroutine returns the fire's summary string. A second registration of one name raises ValueError.
   """
   if name in _HANDLERS:
-    raise ValueError(f"handler {name!r} is already registered by {_HANDLERS[name][0]}")
+    raise registration.already_registered("handler", name, _HANDLERS[name][0])
   _HANDLERS[name] = (module, attr)
 
 

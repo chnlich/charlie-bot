@@ -643,7 +643,7 @@ sys.stdout.write(json.dumps({"run_kind": run_kind, "usage": usage}, separators=(
       json!({"type": "result", "modelUsage": {"model-a": {"contextWindow": 100}}, "total_cost_usd": 0.25}),
       json!({"type": "system", "subtype": "compact_boundary", "compact_metadata": {"post_tokens": 12345}}),
     ];
-    let compact = events.iter().map(|event| ChatEvent::from_value(event)).collect::<Vec<_>>();
+    let compact = events.iter().map(ChatEvent::from_value).collect::<Vec<_>>();
     let value_refs = event_refs(&events);
     let compact_refs = compact.iter().collect::<Vec<_>>();
     let from_values = fold_usage(&value_refs, RunKind::Work, &registry(), None).unwrap().unwrap();

@@ -250,13 +250,19 @@ impl NodeState {
     run: &crate::run_records::RunRecord,
     boot: &mut HostBoot,
   ) -> StoreResult<RunDisplayState> {
-    let withheld = match (self.facts.task.as_ref(), self.malformed_task_events.as_deref()) {
-      (Ok(task), None) => has_withheld_reason(task.events_by_id.values().map(|event| event.as_ref()), &run.id),
-      (Err(_), Some(events)) => has_withheld_reason(events.iter().map(|event| event.as_ref()), &run.id),
+    self.runs.display_state(run, boot, || self.withheld_reason(&run.id))
+  }
+
+  /// Whether the node's history records a `run_launch_withheld` reason for `run_id`, the question Python's
+  /// `withheld_reason_in_events` answers for a queued run. The scan runs only when [`Self::display_state`]'s closure
+  /// asks it, so a settled run never walks the history.
+  fn withheld_reason(&self, run_id: &str) -> bool {
+    match (self.facts.task.as_ref(), self.malformed_task_events.as_deref()) {
+      (Ok(task), None) => has_withheld_reason(task.events_by_id.values().map(|event| event.as_ref()), run_id),
+      (Err(_), Some(events)) => has_withheld_reason(events.iter().map(|event| event.as_ref()), run_id),
       (Err(_), None) => unreachable!("an invalid task fold retains the source events for Run display-state reads"),
       (Ok(_), Some(_)) => unreachable!("valid task facts do not retain a fallback event view"),
-    };
-    self.runs.display_state(run, boot, withheld)
+    }
   }
 }
 
@@ -4066,6 +4072,57 @@ pub(crate) mod tests {
     let before = history_reads(&store);
     assert_eq!(store.task_tree_activity(&node.id).unwrap().work_state, "idle");
     assert_eq!(history_reads(&store) - before, 1);
+  }
+
+  #[test]
+  fn a_settled_run_never_scans_the_history_for_a_withheld_reason() {
+    // Python's `runs.run_display_state` asks `withheld_reason` only on the queued branch, after the outcome and
+    // stop-request maps decline the Run. The closure is that question; a settled Run must not ask it, or a node's
+    // display-state pass walks its whole history once per Run (912 Runs over a 15 MB log on the production copy).
+    let mut facts = crate::run_records::RunFacts::default();
+    for event in [
+      json!({"type": "run_finished", "run_id": "done", "outcome": "success"}),
+      json!({"type": "run_stop_requested", "run_id": "stopped"}),
+      json!({"type": "run_launch_withheld", "run_id": "queued", "reason": "task closed"}),
+    ] {
+      facts.observe(&ChatEvent::from_value(&event));
+    }
+    let mut boot = crate::run_records::HostBoot::default();
+    let mut scans = 0;
+
+    let terminal = queued_run("session-a", "done");
+    assert_eq!(
+      facts
+        .display_state(&terminal, &mut boot, || {
+          scans += 1;
+          false
+        })
+        .unwrap(),
+      RunDisplayState::Success
+    );
+    let stopped = queued_run("session-a", "stopped");
+    assert_eq!(
+      facts
+        .display_state(&stopped, &mut boot, || {
+          scans += 1;
+          false
+        })
+        .unwrap(),
+      RunDisplayState::Stopped
+    );
+    assert_eq!(scans, 0, "settled Runs answer from the fact maps without a history scan");
+
+    let queued = queued_run("session-a", "queued");
+    assert_eq!(
+      facts
+        .display_state(&queued, &mut boot, || {
+          scans += 1;
+          true
+        })
+        .unwrap(),
+      RunDisplayState::Withheld
+    );
+    assert_eq!(scans, 1, "the queued Run's withheld question scans the history once");
   }
 
   #[tokio::test]

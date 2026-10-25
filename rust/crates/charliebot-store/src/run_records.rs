@@ -287,7 +287,17 @@ impl RunFacts {
   }
 
   /// One run's display state, as [`Store::run_display_state`] derives it from the history these facts fold.
-  pub fn display_state(&self, run: &RunRecord, boot: &mut HostBoot, withheld: bool) -> StoreResult<RunDisplayState> {
+  ///
+  /// `withheld` answers whether the history records a `run_launch_withheld` reason for this run. Only a queued run
+  /// that no stop request settled asks it, as `runs.run_display_state` asks `withheld_reason` only on that branch;
+  /// every settled run answers from the outcome and stop-request maps, so a node's display-state pass never walks
+  /// its history once per run.
+  pub fn display_state(
+    &self,
+    run: &RunRecord,
+    boot: &mut HostBoot,
+    withheld: impl FnOnce() -> bool,
+  ) -> StoreResult<RunDisplayState> {
     if let Some(outcome) = self.terminal_outcome(&run.id)? {
       return Ok(match outcome {
         RunOutcomeKind::Success => RunDisplayState::Success,
@@ -299,7 +309,7 @@ impl RunFacts {
       if self.stop_requested(&run.id, None) {
         return Ok(RunDisplayState::Stopped);
       }
-      if withheld {
+      if withheld() {
         return Ok(RunDisplayState::Withheld);
       }
       return Ok(RunDisplayState::Queued);

@@ -861,8 +861,6 @@ _NO_REPLY_CONTENT = "This {platform} mention got no reply from its round or the 
 async def audit_round(
     adapter: ThreadAdapter,
     session_id: str,
-    chat_events: list[dict],
-    target: dict,
     input_event_id: str,
     cfg: config.CharlieBotConfig,
     store: session_store.SessionStore,
@@ -1007,9 +1005,8 @@ async def deliver_done(
   bound = newest_thread_input(platform, chat_events, input_event_ids)
   if bound is None:
     return False
-  input_event_id, target = bound
-  return await audit_round(
-      adapter, session_id, chat_events, target, input_event_id, cfg, store, lifecycle, events, successor, tree)
+  input_event_id, _ = bound
+  return await audit_round(adapter, session_id, input_event_id, cfg, store, lifecycle, events, successor, tree)
 
 
 _LOST_SUMMON_NOTICE = "上一次召唤在服务重启时丢失了，没有被处理。需要的话请重新 @ 我一次。"
@@ -1093,9 +1090,8 @@ async def backfill_lost_summons(
       bound = newest_thread_input(platform, chat_events, message_utils.master_done_input_event_ids(done))
       if bound is None:
         continue
-      done_input_id, target = bound
-      if await audit_round(adapter, meta.id, chat_events, target, done_input_id, cfg, store, lifecycle, events,
-                           successor, task_tree):
+      done_input_id, _ = bound
+      if await audit_round(adapter, meta.id, done_input_id, cfg, store, lifecycle, events, successor, task_tree):
         reported += 1
         # The action appended an event the next done's predicates must see.
         chat_events = await asyncio.to_thread(events.load_chat_events_sync, meta.id)

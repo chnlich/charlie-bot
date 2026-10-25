@@ -100,7 +100,7 @@ async def web_reply(
         tree=task_mgr,
         scan_context=_file_link_scan_context(cfg, store, req.session_id))
   except reply.WebReplyError as exc:
-    raise fastapi.HTTPException(status_code=exc.status, detail=exc.detail) from exc
+    raise deps.http_refusal(exc) from exc
 
 
 @router.get("/web/dialog")
@@ -113,7 +113,7 @@ async def web_dialog(
   try:
     await reply.require_web_session(store, session_id)
   except reply.WebReplyError as exc:
-    raise fastapi.HTTPException(status_code=exc.status, detail=exc.detail) from exc
+    raise deps.http_refusal(exc) from exc
   loaded = await asyncio.to_thread(events.load_chat_events_sync, session_id)
   return {"session_id": session_id, "entries": reply.for_you_entries(loaded)}
 
@@ -136,7 +136,7 @@ async def web_status_set(
     return await status.set_status(
         req.session_id, req.text, store, events, tree, scan_context=_file_link_scan_context(cfg, store, req.session_id))
   except reply.WebReplyError as exc:
-    raise fastapi.HTTPException(status_code=exc.status, detail=exc.detail) from exc
+    raise deps.http_refusal(exc) from exc
 
 
 @router.post("/web/status/confirm")
@@ -155,7 +155,7 @@ async def web_status_confirm(
     return await status.confirm_status(
         req.session_id, store, events, scan_context=_file_link_scan_context(cfg, store, req.session_id))
   except reply.WebReplyError as exc:
-    raise fastapi.HTTPException(status_code=exc.status, detail=exc.detail) from exc
+    raise deps.http_refusal(exc) from exc
 
 
 @router.post("/web/status/unread")
@@ -174,7 +174,7 @@ async def web_status_unread(
     return await status.unread_waiting(
         req.session_id, req.text, store, events, scan_context=_file_link_scan_context(cfg, store, req.session_id))
   except reply.WebReplyError as exc:
-    raise fastapi.HTTPException(status_code=exc.status, detail=exc.detail) from exc
+    raise deps.http_refusal(exc) from exc
 
 
 @router.post("/web/ask-check")
@@ -191,7 +191,7 @@ async def web_ask_check(
   try:
     return await status.record_ask_check(req.session_id, req.item, req.backend, req.answer, store, events)
   except reply.WebReplyError as exc:
-    raise fastapi.HTTPException(status_code=exc.status, detail=exc.detail) from exc
+    raise deps.http_refusal(exc) from exc
 
 
 @router.get("/web/status")
@@ -204,4 +204,4 @@ async def web_status_read(
   try:
     return await status.read_status(session_id, store, tree)
   except reply.WebReplyError as exc:
-    raise fastapi.HTTPException(status_code=exc.status, detail=exc.detail) from exc
+    raise deps.http_refusal(exc) from exc

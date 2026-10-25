@@ -12,21 +12,16 @@ so callers can substitute ``$(charliebot config get some_key)`` into commands;
 all diagnostics go to stderr.
 """
 
-import argparse
 import sys
 
 from src.infra import help_formatter
 
 
 def main() -> None:
-  parser = argparse.ArgumentParser(
-      description="Read a CharlieBot config key through the loader", formatter_class=help_formatter.CliHelpFormatter)
+  parser = help_formatter.CliArgumentParser(description="Read a CharlieBot config key through the loader")
   sub = parser.add_subparsers(dest="command", required=True)
 
-  p_get = sub.add_parser(
-      "get",
-      help="Print a config key's value to stdout (nothing else)",
-      formatter_class=help_formatter.CliHelpFormatter)
+  p_get = sub.add_parser("get", help="Print a config key's value to stdout (nothing else)")
   p_get.add_argument("key", help="Top-level CharlieBotConfig field or registered section name")
 
   args = parser.parse_args()

@@ -8,7 +8,6 @@ The answer is the only thing printed on stdout. Every failure — a broken
 writes its message on stderr and exits 1; the command never prints a fallback answer.
 """
 
-import argparse
 import sys
 
 from src.features.router import routing
@@ -17,9 +16,8 @@ from src.runtime.cli import common
 
 
 def main() -> None:
-  parser = argparse.ArgumentParser(
-      description="Choose backends for one CharlieBot task: ask Jev whether the work is routine or design work",
-      formatter_class=help_formatter.CliHelpFormatter)
+  parser = help_formatter.CliArgumentParser(
+      description="Choose backends for one CharlieBot task: ask Jev whether the work is routine or design work")
   parser.parse_args()
   try:
     answer = routing.route(sys.stdin.read())

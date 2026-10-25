@@ -51,19 +51,14 @@ _READ_LIMIT_DEFAULT = 50
 
 
 def _build_parser() -> argparse.ArgumentParser:
-  parser = argparse.ArgumentParser(
-      description="CharlieBot Discord thread verbs", formatter_class=help_formatter.CliHelpFormatter)
+  parser = help_formatter.CliArgumentParser(description="CharlieBot Discord thread verbs")
   sub = parser.add_subparsers(dest="discord_command", required=True)
 
-  reply = sub.add_parser(
-      "reply", help="Post a reply to this session's Discord thread", formatter_class=help_formatter.CliHelpFormatter)
+  reply = sub.add_parser("reply", help="Post a reply to this session's Discord thread")
   common.add_reply_file_arg(reply)
   common.add_session_arg(reply)
 
-  read = sub.add_parser(
-      "read",
-      help="Read thread messages, marking the returned unread ones read",
-      formatter_class=help_formatter.CliHelpFormatter)
+  read = sub.add_parser("read", help="Read thread messages, marking the returned unread ones read")
   read.add_argument(
       "--url", default=None, help="Discord link to read instead of this session's own thread; marks nothing read")
   read.add_argument(
@@ -74,10 +69,7 @@ def _build_parser() -> argparse.ArgumentParser:
       help=f"Messages per page, {_READ_LIMIT_MIN}..{_READ_LIMIT_MAX} (default {_READ_LIMIT_DEFAULT})")
   common.add_session_arg(read)
 
-  sub.add_parser(
-      "check",
-      help="Verify the Discord bot setup; exits 1 when ok is false",
-      formatter_class=help_formatter.CliHelpFormatter)
+  sub.add_parser("check", help="Verify the Discord bot setup; exits 1 when ok is false")
   return parser
 
 

@@ -38,7 +38,7 @@ import zoneinfo
 from collections.abc import Callable
 from typing import Any
 
-from src.infra import config, locks, log_once, metadata_slots, models, tasks
+from src.infra import config, constants, locks, log_once, metadata_slots, models, tasks
 from src.infra import event_types as ET
 from src.runtime import (
     backend_pool,
@@ -129,6 +129,13 @@ class ThreadPlatform:
   def ack_event_type(self) -> str:
     """Wire type of the platform's persisted ack audit record."""
     return f"{self.name}_ack"
+
+  @property
+  def platform_line(self) -> str:
+    """The platform line a thread reply contract opens with: the reply command and the post limit."""
+    return (
+        f"Platform: {self.display_name}. Reply command: `{self.reply_command} --file <path>`. "
+        f"Per-message limit: {self.max_post_chars} characters. {LINKED_PAGES_LINE}")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -576,12 +583,6 @@ def _assert_thread_fresh_messages(
       })
 
 
-# The reply budget the format contract states (prompts/thread_reply_format.md):
-# replies should stay under this many chars, with the depth going to a page.
-# This is the single measurement point for that budget.
-_REPLY_BUDGET_CHARS = 500
-
-
 def _event_created_at(event: dict) -> datetime.datetime:
   """Return the UTC timestamp when an event's request key was born."""
   value = event["timestamp"]
@@ -633,7 +634,7 @@ def _reply_receipt(event: dict, operator_only_links: list[str], *, platform: Thr
       "operator_only_note": operator_only_note(operator_only_links),
       "chars": payload["chars"],
       "chunks": payload["chunks"],
-      "over_budget": payload["chars"] > _REPLY_BUDGET_CHARS,
+      "over_budget": payload["chars"] > constants.REPLY_BUDGET_CHARS,
       "answers": payload["answers"],
   }
 
@@ -763,7 +764,7 @@ async def post_reply(
     await events.announce_appended_event(session_id, event, epoch=epoch)
     if bound is not None:
       ack_clear(adapter, bound[1], session_id)
-    over_budget = len(text) > _REPLY_BUDGET_CHARS
+    over_budget = len(text) > constants.REPLY_BUDGET_CHARS
     logger.info(
         f"{platform.name}_reply_posted",
         session=session_id,
@@ -771,7 +772,7 @@ async def post_reply(
         chars=len(text),
         chunks=len(bodies),
         over_budget=over_budget,
-        budget=_REPLY_BUDGET_CHARS,
+        budget=constants.REPLY_BUDGET_CHARS,
         answers=answers)
     return {
         "posted": True,
@@ -861,8 +862,6 @@ _NO_REPLY_CONTENT = "This {platform} mention got no reply from its round or the 
 async def audit_round(
     adapter: ThreadAdapter,
     session_id: str,
-    chat_events: list[dict],
-    target: dict,
     input_event_id: str,
     cfg: config.CharlieBotConfig,
     store: session_store.SessionStore,
@@ -1007,9 +1006,8 @@ async def deliver_done(
   bound = newest_thread_input(platform, chat_events, input_event_ids)
   if bound is None:
     return False
-  input_event_id, target = bound
-  return await audit_round(
-      adapter, session_id, chat_events, target, input_event_id, cfg, store, lifecycle, events, successor, tree)
+  input_event_id, _ = bound
+  return await audit_round(adapter, session_id, input_event_id, cfg, store, lifecycle, events, successor, tree)
 
 
 _LOST_SUMMON_NOTICE = "上一次召唤在服务重启时丢失了，没有被处理。需要的话请重新 @ 我一次。"
@@ -1093,9 +1091,8 @@ async def backfill_lost_summons(
       bound = newest_thread_input(platform, chat_events, message_utils.master_done_input_event_ids(done))
       if bound is None:
         continue
-      done_input_id, target = bound
-      if await audit_round(adapter, meta.id, chat_events, target, done_input_id, cfg, store, lifecycle, events,
-                           successor, task_tree):
+      done_input_id, _ = bound
+      if await audit_round(adapter, meta.id, done_input_id, cfg, store, lifecycle, events, successor, task_tree):
         reported += 1
         # The action appended an event the next done's predicates must see.
         chat_events = await asyncio.to_thread(events.load_chat_events_sync, meta.id)

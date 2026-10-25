@@ -501,10 +501,9 @@ class RunNotFoundError(LookupError):
   """The requested run record does not exist (API: 404)."""
 
 
-# The task-tree execution and completion paths raise this sentence inside
-# their own miss types, and the run-status route (src/runtime/api/sessions.py)
-# restates it verbatim as the client-visible 404 detail; one home keeps the
-# layers from drifting apart on the wording.
+# Several run-lookup paths raise this sentence inside their own miss types,
+# and a route restates it as the client-visible 404 detail, so one home keeps
+# the layers from drifting apart on the wording.
 def run_not_found_in_task_text(run_id: str, session_id: str) -> str:
   """The task-tree run-miss sentence (API: 404 detail)."""
   return f"run {run_id} not found in task {session_id}"
@@ -664,7 +663,7 @@ class RunStore:
     try:
       return models.RunRecord.model_validate_json(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as e:
-      raise RuntimeError(f"run metadata unreadable at {path}: {e}") from e
+      raise run_identity.unreadable_run_metadata(path, e) from e
 
   async def get_run(self, session_id: str, run_id: str) -> models.RunRecord | None:
     import asyncio  # deferred
@@ -679,7 +678,7 @@ class RunStore:
     """
     run = self.read_run_sync(session_id, run_id)
     if run is None:
-      raise RunNotFoundError(f"run {run_id} not found in session {session_id}")
+      raise RunNotFoundError(run_not_found_in_task_text(run_id, session_id))
     return run
 
   def list_run_records_sync(self, session_id: str) -> list[models.RunRecord]:

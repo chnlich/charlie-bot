@@ -334,14 +334,14 @@ async def test_recovery_reports_blocked_when_the_pool_has_no_reviewer_member(
   await task_recovery.reconcile_task_tree(cfg, tree)
 
   assert [r for r in tree.runs.list_run_records_sync(worker.id) if r.kind == "review"] == []
-  reports = [e for e in tree.events.load_events(manager.id) if e["type"] == ET.CHILD_REPORT]
+  reports = conftest.child_reports(tree, manager.id)
   assert len(reports) == 1 and reports[0]["outcome"] == "blocked"
   assert "found no available reviewer backend" in reports[0]["summary"]
   await test_task_execution.poll_until(
       lambda: tree.task_state(worker.id) == "archived", timeout=15.0, what="the blocked worker's archive")
   # A repeated pass lands nothing twice.
   await task_recovery.reconcile_task_tree(cfg, tree)
-  assert [e for e in tree.events.load_events(manager.id) if e["type"] == ET.CHILD_REPORT] == reports
+  assert conftest.child_reports(tree, manager.id) == reports
 
 
 @pytest.mark.asyncio
@@ -538,7 +538,7 @@ async def test_recovery_open_task_landing_unchanged(tmp_path: pathlib.Path, monk
   assert counts["git_verify_commit_landed"] >= 1, counts
   assert counts["git_fetch"] >= 1, counts
   assert tree.task_state(worker.id) == "completed"
-  reports = [e for e in tree.fact_history(manager.id) if e.get("type") == ET.CHILD_REPORT]
+  reports = conftest.child_reports(tree, manager.id)
   assert reports and reports[-1]["outcome"] == "completed"
   await conftest._settle_parent(tree, manager, timeout=5.0, poll=0.02)
 
@@ -932,7 +932,7 @@ async def test_reconcile_replays_an_already_delivered_blocked_report_without_dup
 
   deadline = asyncio.get_event_loop().time() + 15
   while asyncio.get_event_loop().time() < deadline:
-    reports = [e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]
+    reports = conftest.child_reports(tree, manager.id)
     if reports:
       break
     await asyncio.sleep(0.05)
@@ -978,7 +978,7 @@ async def test_reconcile_replays_an_already_delivered_blocked_report_without_dup
   # The work run plus both review runs replayed, plus the settled manager
   # turn's owner-close recheck.
   assert counters["followups"] == 4
-  reports = [e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]
+  reports = conftest.child_reports(tree, manager.id)
   assert len(reports) == 1
 
 

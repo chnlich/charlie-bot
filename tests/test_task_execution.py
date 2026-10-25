@@ -1173,7 +1173,7 @@ async def test_first_terminal_fact_wins_governs_followups(
   )
   assert tree.runs.terminal_outcome(tree.runs.load_events_sync(worker.id), "run-w") == "failed"
   assert tree.task_state(worker.id) == "open"
-  assert [e for e in tree.events.load_events(root.id) if e["type"] == ET.CHILD_REPORT] == []
+  assert conftest.child_reports(tree, root.id) == []
 
 
 # ---------------------------------------------------------------------------
@@ -1268,7 +1268,7 @@ async def test_bare_branch_base_behind_starts_from_origin_tip(
   reports: list[dict] = []
   deadline = asyncio.get_event_loop().time() + 15
   while asyncio.get_event_loop().time() < deadline:
-    reports = [e for e in tree.events.load_events(manager.id) if e["type"] == ET.CHILD_REPORT]
+    reports = conftest.child_reports(tree, manager.id)
     if reports and reports[-1]["outcome"] == "completed":
       break
     await asyncio.sleep(0.05)
@@ -1418,7 +1418,7 @@ async def test_repo_less_implement_delivers_after_review_passes(
   # append, so the report gets the same bounded wait the review did.
   deadline = asyncio.get_event_loop().time() + 10
   while asyncio.get_event_loop().time() < deadline:
-    reports = [e for e in tree.events.load_events(manager.id) if e["type"] == ET.CHILD_REPORT]
+    reports = conftest.child_reports(tree, manager.id)
     if reports:
       break
     await asyncio.sleep(0.1)
@@ -1459,7 +1459,7 @@ async def test_repo_less_implement_review_failure_takes_the_failure_report(
   await wait_for_terminal_run(tree, worker.id, "run-work")
   deadline = asyncio.get_event_loop().time() + 15
   while asyncio.get_event_loop().time() < deadline:
-    reports = [e for e in tree.events.load_events(manager.id) if e["type"] == ET.CHILD_REPORT]
+    reports = conftest.child_reports(tree, manager.id)
     if reports and reports[-1]["outcome"] == "blocked" and tree.task_state(worker.id) == "archived":
       break
     await asyncio.sleep(0.1)
@@ -2389,7 +2389,7 @@ async def test_own_subtree_rule_launch_parity_and_edit_boundary(
 
 
 def _read_error_event(events_log: pathlib.Path) -> str:
-  """The run's error-event text from its events log (the leaf view's source)."""
+  """The run's error-event text from its events log (the worker summary card's Events source)."""
   if not events_log.is_file():
     return ""
   for line in events_log.read_text(encoding="utf-8").splitlines():
@@ -2428,7 +2428,7 @@ async def _wait_for_parent_report(tree: task_sessions.TaskTreeManager, parent_id
   """Poll the parent's fact history until a delivered child_report lands."""
   deadline = asyncio.get_event_loop().time() + timeout
   while asyncio.get_event_loop().time() < deadline:
-    reports = [e for e in tree.events.load_events(parent_id) if e.get("type") == ET.CHILD_REPORT]
+    reports = conftest.child_reports(tree, parent_id)
     if reports:
       return reports[-1]
     await asyncio.sleep(0.1)
@@ -2483,7 +2483,7 @@ async def test_worktree_preparation_failure_lands_failed_run_and_reports_to_pare
     run, outcome = wait_for_terminal_run_sync(tree, child_id, run_id)
     assert outcome == "failed"
     assert run.pid is None, "the process never started; the failure is a launch failure"
-    # The leaf card's Events link reads the record's events_ref: the
+    # The worker summary card's Events link reads the record's events_ref: the
     # launch-failed run's evidence must be reachable the same way a
     # process run's is.
     assert run.events_ref is not None and run.events_ref.endswith("events.jsonl"), (

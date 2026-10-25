@@ -73,9 +73,10 @@ PROMPT_BODIES_DIR_NAME = "prompt_bodies"
 # stay invisible for.
 _TREE_INDEX_TTL_SECONDS = 2.0
 
-# Refusal wording shared by the raises that own the contracts and their routes in
-# src/runtime/api/sessions.py, which carry it as the client-visible detail: the create route's v2
-# pre-check and legacy-shape guard read the first two, the archive route's operator guard the third.
+# The create route (src/runtime/api/sessions.py) reproduces these two refusals
+# verbatim as its client-visible details — the first in the v2 pre-check, the
+# second in the legacy-shape guard; the wording lives beside the raises that own
+# the contracts.
 TASK_CREATE_REQUEST_ID_REQUIRED = "request_id is required for task creation"
 AGENT_CREATE_SCOPE_REFUSAL = "an agent may only create a task directly under its own open manager task"
 
@@ -1393,7 +1394,7 @@ class TaskTreeManager:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
   @staticmethod
-  def _read_metadata_file(path) -> models.SessionMetadata | None:
+  def _read_metadata_file(path: pathlib.Path) -> models.SessionMetadata | None:
     if not path.exists():
       return None
     return models.validate_session_metadata(path.read_text(encoding="utf-8"), str(path))
@@ -1485,7 +1486,7 @@ class TaskTreeManager:
         raise task_errors.TaskConflictError([f"task {session_id} is {state}; only open tasks accept retries"])
       original = await self.runs.get_run(session_id, original_run_id)
       if original is None:
-        raise task_errors.TaskNotFoundError(f"run {original_run_id} not found in session {session_id}")
+        raise task_errors.TaskNotFoundError(runs.run_not_found_in_task_text(original_run_id, session_id))
       retry_fields: dict = {}
       if original.kind == "manager_turn":
         # A manager-round retry reruns that round's own batch: the retry Run
@@ -1825,8 +1826,6 @@ class TaskTreeManager:
   async def run_elone_replacement(
       self,
       source: models.SessionMetadata,
-      event_index: int,
-      backend: str | None,
       publish: Callable[[], Awaitable[models.SessionMetadata]],
       archive: Callable[[str], Awaitable[None]],
   ) -> models.SessionMetadata:

@@ -32,10 +32,10 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 from src.infra import event_types as ET
 from src.infra import log_once, models
-from src.runtime import control_events, midturn_delivery, run_token, takeoff_gate, task_errors
+from src.runtime import control_events, midturn_delivery, run_token, runs, takeoff_gate, task_errors
 
 if TYPE_CHECKING:
-  from src.runtime import control_sink, runs, session_anchors, session_events, session_store
+  from src.runtime import control_sink, session_anchors, session_events, session_store
 
 log = log_once.LazyStructlogLogger()
 
@@ -292,7 +292,8 @@ class TaskInputDispatcher:
     await tree.session_events.announce_appended_event(session_id, event, epoch=epoch)
     return event
 
-  async def _authorize_agent_message(self, meta, event_type: str, from_session: str | None) -> None:
+  async def _authorize_agent_message(
+      self, meta: models.SessionMetadata, event_type: str, from_session: str | None) -> None:
     """The request-entry gate an agent message to a worker node passes.
 
         The one judgment `_authorize_agent_creation` applies when the worker is
@@ -418,7 +419,7 @@ class TaskInputDispatcher:
     tree = self._tree
     run = await tree.runs.get_run(session_id, run_id)
     if run is None:
-      raise task_errors.TaskNotFoundError(f"run {run_id} not found in session {session_id}")
+      raise task_errors.TaskNotFoundError(runs.run_not_found_in_task_text(run_id, session_id))
     events = tree.runs.load_events_sync(session_id)
     if tree.runs.run_has_terminal_fact(run, events):
       raise task_errors.TaskConflictError([f"run {run_id} already finished; it claims no new inputs"])
@@ -444,7 +445,7 @@ class TaskInputDispatcher:
     async with tree.control_lock:
       run = await tree.runs.get_run(session_id, run_id)
       if run is None:
-        raise task_errors.TaskNotFoundError(f"run {run_id} not found in session {session_id}")
+        raise task_errors.TaskNotFoundError(runs.run_not_found_in_task_text(run_id, session_id))
       if run.kind != "manager_turn":
         raise task_errors.TaskInvalidError(f"run {run_id} is not a manager turn")
       events = tree.runs.load_events_sync(session_id)

@@ -490,6 +490,24 @@ def read_reply_text(file_arg: str) -> str:
   return read_required_text_file("--file", file_arg)
 
 
+def post_reply(
+    endpoint: str,
+    *,
+    session: str | None,
+    file_arg: str,
+    extra: dict[str, Any] | None = None,
+) -> None:
+  """Resolve the session, read the reply's ``--file`` text, POST it to *endpoint*, and print the readback.
+
+  Every platform's reply verb sends the same body -- the resolved ``session_id`` beside the ``text`` -- and prints
+  the server's readback as one JSON line. *extra* rides in the body next to those two keys; None adds no key.
+  """
+  payload: dict[str, Any] = {"session_id": resolve_session_id(session), "text": read_reply_text(file_arg)}
+  if extra is not None:
+    payload.update(extra)
+  print_json(post_internal_api(endpoint, payload), indent=None, file=sys.stdout)
+
+
 def validate_repo_path(parser: argparse.ArgumentParser, value: str) -> None:
   """Reject a --repo value that is not an absolute path or does not exist as a directory.
 

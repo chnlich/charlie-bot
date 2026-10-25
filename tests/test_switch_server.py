@@ -14,6 +14,7 @@ servers under a shell that plays the pane, so they need no tmux either.
 
 from __future__ import annotations
 
+import ast
 import contextlib
 import dataclasses
 import datetime
@@ -36,6 +37,10 @@ from collections.abc import Callable, Iterator
 
 import pytest
 import systemd_stubs
+import yaml
+
+from src.infra import config
+from src.runtime.hooks import backend_type_registration
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SWITCH = ROOT / "scripts" / "switch-server.sh"
@@ -303,7 +308,33 @@ def _build_world(root: pathlib.Path) -> World:
   # The launcher's slice preflight and its systemd-run scope, without the host's user manager.
   systemd_stubs.install(bin_dir)
   port = _free_port()
-  (home / "config.yaml").write_text(f"server:\n  host: 127.0.0.1\n  port: {port}\n", encoding="utf-8")
+  (home / "config.yaml").write_text(
+      yaml.safe_dump(
+          {
+              "server": {
+                  "host": "127.0.0.1",
+                  "port": port
+              },
+              "backends":
+                  {
+                      "options":
+                          [
+                              {
+                                  "id": "oc-deepseek-flash",
+                                  "type": "opencode"
+                              },
+                              {
+                                  "id": "agy-gemini-flash",
+                                  "type": "antigravity"
+                              },
+                              {
+                                  "id": "claude-opus",
+                                  "type": "cc-claude"
+                              },
+                          ]
+                  },
+          }),
+      encoding="utf-8")
   (home / "credentials.yaml").write_text(f"charliebot:\n  access_key: {ACCESS_KEY}\n", encoding="utf-8")
 
   env = {
@@ -372,19 +403,20 @@ def _pid_start(pid: int) -> str:
   return stat.rsplit(")", 1)[1].split()[19]
 
 
-def _seed_live_run(world: World, run_id: str, backend: str) -> None:
+def _seed_live_run(world: World, run_id: str, backend: str | None) -> None:
   """A Run record whose process is alive, as the server left it before a restart."""
   proc = _spawn_live(world)
   record = {
       "id": run_id,
       "session_id": SESSION,
       "kind": "work",
-      "backend": backend,
       "pid": proc.pid,
       "pid_start": _pid_start(proc.pid),
       "started_at": datetime.datetime.now(datetime.UTC).isoformat(),
       "ended_at": None,
   }
+  if backend is not None:
+    record["backend"] = backend
   run_dir = world.home / "sessions" / SESSION / "data" / "runs" / run_id
   run_dir.mkdir(parents=True)
   (run_dir / "metadata.json").write_text(json.dumps(record), encoding="utf-8")
@@ -474,7 +506,49 @@ def _assert_untouched(world: World) -> None:
   assert _version_status(world.port) == 200
 
 
-@pytest.mark.parametrize("case", ["checksum", "check-config", "opencode-run", "improve-loop", "dirty-clone"])
+def _home_helper(home: pathlib.Path, mode: str) -> subprocess.CompletedProcess[str]:
+  return subprocess.run(
+      ["bash", "-c", 'source "$1" python && home_helper "$2"', "bash",
+       str(SWITCH), mode],
+      env={
+          **os.environ, "CHARLIEBOT_HOME": str(home)
+      },
+      capture_output=True,
+      text=True,
+      timeout=5,
+      check=True)
+
+
+@pytest.mark.parametrize("server", [{"host": "127.0.0.1"}, None], ids=["host-only", "absent"])
+def test_home_helper_config_uses_server_default(world: World, server: dict[str, str] | None) -> None:
+  (world.home / "config.yaml").write_text(
+      yaml.safe_dump({"server": server} if server is not None else {}), encoding="utf-8")
+
+  proc = _home_helper(world.home, "config")
+
+  assert int(proc.stdout.splitlines()[0]) == config.ServerConfig().port
+
+
+def test_home_helper_config_uses_explicit_port(world: World) -> None:
+  proc = _home_helper(world.home, "config")
+
+  assert int(proc.stdout.splitlines()[0]) == world.port
+
+
+def test_home_helper_no_reattach_matches_registered_traits() -> None:
+  declaration = re.search(r"^NO_REATTACH = (.+)$", SWITCH.read_text(encoding="utf-8"), re.MULTILINE)
+  assert declaration is not None
+  assert ast.literal_eval(declaration[1]) == {
+      backend_type for backend_type, registration in backend_type_registration.registrations().items()
+      if not registration.traits.restart_reattach
+  }
+
+
+@pytest.mark.parametrize(
+    "case", [
+        "checksum", "check-config", "opencode-run", "antigravity-run", "unknown-backend-run", "missing-backend-run",
+        "improve-loop", "dirty-clone"
+    ])
 def test_preflight_refusal_exits_1_and_changes_nothing(world: World, case: str) -> None:
   """Each preflight check refuses before the switch stops anything: exit 1 and no change."""
   release = world.releases / RUST_SHA
@@ -482,18 +556,42 @@ def test_preflight_refusal_exits_1_and_changes_nothing(world: World, case: str) 
     (release / "charliebot-server").write_text(FAKE_SERVER + "# tampered\n", encoding="utf-8")
   elif case == "check-config":
     _write_behavior(release, check_config="fail")
-  elif case == "opencode-run":
-    _seed_live_run(world, "run-opencode", "opencode")
+  elif case in {"opencode-run", "antigravity-run", "unknown-backend-run", "missing-backend-run"}:
+    backend = {
+        "opencode-run": "oc-deepseek-flash",
+        "antigravity-run": "agy-gemini-flash",
+        "unknown-backend-run": "oc-retired",
+        "missing-backend-run": None,
+    }[case]
+    _seed_live_run(world, "run-blocked", backend)
   elif case == "improve-loop":
     _seed_improve_loop(world, _spawn_live(world).pid)
   elif case == "dirty-clone":
     (world.clone / "server.py").write_text("# local edit\n", encoding="utf-8")
+
+  home_before = {path.relative_to(world.home): path.read_bytes() for path in world.home.rglob("*") if path.is_file()}
 
   proc = _switch(world, "rust", RUST_SHA)
 
   assert proc.returncode == 1, _report(world, proc)
   assert not (world.releases / "current").is_symlink()
   assert _git(world.clone, "rev-parse", "HEAD") == world.base_head
+  assert {
+      path.relative_to(world.home): path.read_bytes() for path in world.home.rglob("*") if path.is_file()
+  } == home_before
+  assert all(live.poll() is None for live in world.live)
+  if case.endswith("-run"):
+    assert "a restart would lose live work:" in proc.stdout, _report(world, proc)
+    lines = _home_helper(world.home, "scan").stdout.splitlines()
+    assert [line for line in lines if line.startswith("live\t")
+           ] == [f"live\t{SESSION}\trun-blocked\t{backend}\t{world.live[0].pid}"]
+    blocks = [line for line in lines if line.startswith("block\t")]
+    assert len(blocks) == 1
+    assert "run-blocked" in blocks[0]
+    assert str(backend) in blocks[0]
+    if case in {"opencode-run", "antigravity-run"}:
+      assert case.removesuffix("-run") in blocks[0]
+      assert str(world.live[0].pid) in blocks[0]
 
 
 ProbeRun = Callable[..., tuple[subprocess.CompletedProcess[str], list[str]]]
@@ -774,7 +872,7 @@ def test_switch_on_a_real_pane_restores_then_round_trips_then_exits_3(world: Wor
   world.env["CHARLIEBOT_SWITCH_STOP_WAIT_S"] = "1"
   pane = _start_pane(world)
   _start_server(world, pane)
-  _seed_live_run(world, "run-live", "claude")
+  _seed_live_run(world, "run-live", "claude-opus")
 
   # The Rust readback cannot adopt the live run: the switch fails after it stopped Python and restores Python.
   _write_behavior(world.releases / RUST_SHA, adopt=False)

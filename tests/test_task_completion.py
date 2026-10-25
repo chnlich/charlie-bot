@@ -347,7 +347,7 @@ async def test_preexisting_close_request_closes_as_archived_and_reports_to_paren
   await tree.dispatch.finish_run(manager.id, "run-manager", outcome="success")
 
   close = [e for e in tree.events.load_events(manager.id) if e["type"] == ET.TASK_CLOSED]
-  reports = [e for e in tree.events.load_events(root.id) if e["type"] == ET.CHILD_REPORT]
+  reports = conftest.child_reports(tree, root.id)
   assert len(close) == 1 and close[0]["outcome"] == "archived"
   assert close[0]["report_to"] == root.id
   assert len(reports) == 1 and reports[0]["outcome"] == "archived"
@@ -510,7 +510,7 @@ async def test_failure_report_reaching_lock_after_cancel_is_skipped(tmp_path: pa
   await tree.runs.record_finish(worker.id, "run-failed", "failed")
   await tree.completion.cancel_task(
       worker.id, request_id="cancel-before-report", reason="stop", caller=conftest.OPERATOR)
-  report_count = len([e for e in tree.events.load_events(parent.id) if e.get("type") == ET.CHILD_REPORT])
+  report_count = len(conftest.child_reports(tree, parent.id))
   archive_calls: list[str] = []
 
   async def record_archive(session_id: str, *, run_id: str, outcome: str) -> bool:
@@ -523,7 +523,7 @@ async def test_failure_report_reaching_lock_after_cancel_is_skipped(tmp_path: pa
   assert run is not None
   await adapter._report_failure_to_parent(worker.id, run, "failed", summary="late failure")
 
-  reports = [e for e in tree.events.load_events(parent.id) if e.get("type") == ET.CHILD_REPORT]
+  reports = conftest.child_reports(tree, parent.id)
   assert len(reports) == report_count == 1
   assert archive_calls == []
 
@@ -549,7 +549,7 @@ async def test_successful_work_on_closed_worker_does_not_register_review(tmp_pat
   await adapter._after_worker_run(meta, run, "success")
 
   run_records = tree.runs.list_run_records_sync(worker.id)
-  reports = [e for e in tree.events.load_events(parent.id) if e.get("type") == ET.CHILD_REPORT]
+  reports = conftest.child_reports(tree, parent.id)
   assert [record.id for record in run_records] == ["run-work"]
   assert len(reports) == 1
 
@@ -594,9 +594,7 @@ def _sequence_close_and_reports(tree: task_sessions.TaskTreeManager, root_id: st
                                 child_id: str) -> tuple[list[dict], list[dict]]:
   """The child's task_closed facts and the parent's child_reports from it."""
   closes = [e for e in tree.events.load_events(child_id) if e["type"] == ET.TASK_CLOSED]
-  reports = [
-      e for e in tree.events.load_events(root_id) if e["type"] == ET.CHILD_REPORT and e["child_session_id"] == child_id
-  ]
+  reports = [e for e in conftest.child_reports(tree, root_id) if e["child_session_id"] == child_id]
   return closes, reports
 
 

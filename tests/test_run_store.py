@@ -386,6 +386,17 @@ async def test_readonly_store_reads_without_a_control_lock(tmp_path: pathlib.Pat
   assert run_identity.run_scoped_refusal(
       store._sessions_dir, session_id, run_id) == "run token does not reference an active run"
 
+  # An unparseable record refuses in both readers with one diagnostic frame: the
+  # run-scoped CLI path shows the operator what the full reader would.
+  path.write_text("{not a record", encoding="utf-8")
+  with pytest.raises(RuntimeError) as full_read:
+    store.read_run_sync(session_id, run_id)
+  with pytest.raises(RuntimeError) as light_read:
+    run_identity.read_run_identity_sync(path)
+  frame = f"run metadata unreadable at {path}: "
+  assert str(full_read.value).startswith(frame)
+  assert str(light_read.value).startswith(frame)
+
   # The lockless store is read-only by contract: a write path fails loud on the missing lock.
   with pytest.raises(TypeError):
     await store.record_launch(session_id, "r2", pid=424242, pid_start="1-424242")

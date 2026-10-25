@@ -68,7 +68,7 @@ async def discord_reply(
         run_started_at=run_started_at,
         tree=task_mgr)
   except thread_entry.ThreadReplyError as exc:
-    raise fastapi.HTTPException(status_code=exc.status, detail=exc.detail) from exc
+    raise deps.http_refusal(exc) from exc
 
 
 @router.post("/discord/read")
@@ -94,14 +94,11 @@ async def discord_read(
   try:
     return await discord_commands.read_thread(req.session_id, req.url, req.limit, cfg, store, events)
   except thread_entry.ThreadReplyError as exc:
-    raise fastapi.HTTPException(status_code=exc.status, detail=exc.detail) from exc
+    raise deps.http_refusal(exc) from exc
 
 
 @router.post("/discord/check")
-async def discord_check(
-    req: DiscordCheckRequest,
-    cfg: config.CharlieBotConfig = fastapi.Depends(deps.get_config_on_loop),
-) -> dict:
+async def discord_check(req: DiscordCheckRequest) -> dict:
   """Report the Discord bot token's setup: bot user, message-content intent, per-guild permissions.
 
   The boundary behind ``charliebot discord check``: ``ok`` is the
@@ -111,6 +108,6 @@ async def discord_check(
   readback carries no token.
   """
   try:
-    return await discord_commands.check_setup(cfg)
+    return await discord_commands.check_setup()
   except thread_entry.ThreadReplyError as exc:
-    raise fastapi.HTTPException(status_code=exc.status, detail=exc.detail) from exc
+    raise deps.http_refusal(exc) from exc

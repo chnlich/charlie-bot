@@ -333,14 +333,9 @@ async def test_improve_without_authorization_is_forbidden_not_a_server_error(
 # ---------------------------------------------------------------------------
 
 
-def _child_reports(tree, manager_id: str) -> list[dict]:
-  """Every child report on the manager, in delivery order."""
-  return [e for e in tree.events.load_events(manager_id) if e.get("type") == ET.CHILD_REPORT]
-
-
 def _iteration_reports(tree, manager_id: str) -> list[dict]:
   """The per-iteration child reports: their header names the iteration."""
-  return [e for e in _child_reports(tree, manager_id) if "· iteration" in str(e.get("summary"))]
+  return [e for e in conftest.child_reports(tree, manager_id) if "· iteration" in str(e.get("summary"))]
 
 
 def _final_reports(tree, manager_id: str) -> list[dict]:
@@ -349,7 +344,7 @@ def _final_reports(tree, manager_id: str) -> list[dict]:
   Run has no adapter failure report: the adapter's delivery chain skips
   iteration Runs, so the loop's reports are the only ones on the manager)."""
   return [
-      e for e in _child_reports(tree, manager_id)
+      e for e in conftest.child_reports(tree, manager_id)
       if str(e.get("summary")).startswith("[Improve loop") and "· iteration" not in str(e.get("summary"))
   ]
 
@@ -374,7 +369,7 @@ async def _wait_for_final_report(tree, manager_id: str, timeout: float = 30.0) -
     if final:
       return final[0]
     await asyncio.sleep(0.1)
-  pytest.fail(f"the final sequence result was never delivered: {_child_reports(tree, manager_id)}")
+  pytest.fail(f"the final sequence result was never delivered: {conftest.child_reports(tree, manager_id)}")
 
 
 def _count_manager_wakes(monkeypatch: pytest.MonkeyPatch, tree, manager_id: str) -> list[str]:

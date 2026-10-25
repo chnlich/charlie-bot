@@ -15,7 +15,7 @@ runs as a cold-read worker child of the session, and its completion report wakes
 session; in a worker session, or with no session identity (CHARLIEBOT_SESSION_ID absent
 and the cwd not a session directory), the command runs the probe in the foreground and
 prints the report body — the page path, the page bytes' sha256, one line per failed
-attempt, the answering backend and the seven answers verbatim — the same body the child
+attempt, the answering backend and the eight answers verbatim — the same body the child
 session's report carries. A failed assertion or a refused delegation prints the reason
 and exits 1. ``wrap`` assembles a genre page from a content fragment (the fragment fills
 <body>; head and style come from the genre template), pre-rendering math to KaTeX markup
@@ -100,8 +100,7 @@ def _session_profile(cfg: config.CharlieBotConfig, session_id: str) -> str:
   return profile
 
 
-def _delegate_cold_read(
-    args: argparse.Namespace, artifact: pathlib.Path, cfg: config.CharlieBotConfig, session_id: str) -> int:
+def _delegate_cold_read(args: argparse.Namespace, artifact: pathlib.Path, session_id: str) -> int:
   """Delegate the cold read to a cold-read child of this manager session and print the started line.
 
   The request id binds the session, a sha256 prefix of the page, and the UTC
@@ -151,7 +150,7 @@ def _run_check(args: argparse.Namespace) -> int:
     return 0
   session_id = _session_identity(cfg)
   if session_id is not None and _session_profile(cfg, session_id) == "manager":
-    return _delegate_cold_read(args, artifact, cfg, session_id)
+    return _delegate_cold_read(args, artifact, session_id)
   # A worker session, or no session identity: the cold read runs in the foreground.
   try:
     result = artifact_check.run_probe(cfg, artifact, args.trigger)

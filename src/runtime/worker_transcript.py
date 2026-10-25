@@ -24,10 +24,15 @@ import datetime
 import hashlib
 import json
 import pathlib
+from typing import TYPE_CHECKING
 
 from src.infra import event_types as ET
 from src.infra import memo, models
 from src.runtime import message_aggregator, message_projection, runs, task_completion, task_prompts
+
+if TYPE_CHECKING:
+  from src.infra import config
+  from src.runtime import task_sessions
 
 # One entry per open worker page, bounded like the other read-path memos.
 _WORKER_PROJECTION_MEMO_LIMIT = 32
@@ -44,8 +49,8 @@ _TRANSCRIPT_SKIP_TYPES = frozenset({ET.SESSION_ATTACHED})
 # reservation whose durable stop request the dispatch stage honors.
 _SIGNALLABLE_STATES = frozenset({"running", "queued"})
 
-# The states the header reads as a failure (the retired leaf card folded all
-# three into ``failed``): the header then carries the Run's own error text.
+# The states the header reads as a failure: the header then carries the Run's
+# own error text.
 _FAILED_STATES = frozenset({"failed", "interrupted", "attention"})
 
 
@@ -72,7 +77,7 @@ class TranscriptEntry:
   states: dict[str, str] = dataclasses.field(default_factory=dict)
 
 
-def _backend_label(cfg, backend: str | None) -> str:
+def _backend_label(cfg: config.CharlieBotConfig, backend: str | None) -> str:
   """The configured display label for *backend*, or the raw id."""
   if not backend:
     return ""
@@ -230,7 +235,7 @@ def _read_events(path: pathlib.Path) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 
-def worker_signature_sync(tree, session_id: str) -> tuple:
+def worker_signature_sync(tree: task_sessions.TaskTreeManager, session_id: str) -> tuple:
   """Stat-only identity of every file the worker transcript reads."""
   root = tree.runs.runs_root(session_id)
   parts: list[tuple] = []
@@ -264,7 +269,7 @@ _SUMMARY_DELIVERY_FIELDS = (
     "run_id", "raw_log_ref", "events_ref", "result_ref", "repo_path", "base_branch", "branch_name")
 
 
-def _summary_links(tree, session_id: str, run: models.RunRecord | None) -> dict:
+def _summary_links(tree: task_sessions.TaskTreeManager, session_id: str, run: models.RunRecord | None) -> dict:
   """The newest Run's evidence refs, the header link row's source."""
   launch_prompt_path = tree.runs.run_dir(session_id, run.id) / task_prompts.LAUNCH_TEXT_FILENAME
   return {
@@ -279,7 +284,7 @@ def _summary_links(tree, session_id: str, run: models.RunRecord | None) -> dict:
 
 def _build_summary(
     *,
-    tree,
+    tree: task_sessions.TaskTreeManager,
     session_id: str,
     task_state: str,
     close: dict | None,
@@ -366,7 +371,7 @@ def _build_summary(
   }
 
 
-def build_worker_transcript_sync(tree, session_id: str) -> TranscriptEntry:
+def build_worker_transcript_sync(tree: task_sessions.TaskTreeManager, session_id: str) -> TranscriptEntry:
   """Build the worker transcript: one header per Run, its events, the close,
   and one summary for the page's For-you card.
 
@@ -499,7 +504,7 @@ def _client_revision(
   return hashlib.sha256(payload.encode()).hexdigest()[:24]
 
 
-def load_worker_transcript(tree, session_id: str) -> TranscriptEntry:
+def load_worker_transcript(tree: task_sessions.TaskTreeManager, session_id: str) -> TranscriptEntry:
   """The memoized worker transcript; a moved signature or state rebuilds.
 
   The rebuild check folds the CURRENT task state, not the cached one — a task

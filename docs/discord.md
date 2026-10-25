@@ -57,7 +57,7 @@ The checklist below is the whole Discord-side setup; run it once per application
 
 ## Verify
 
-Verification has two layers: the setup check reads what the Discord application grants today, and the server log shows the listener actually running.
+Verification has two layers: the setup check reads what the Discord application grants, and the server log shows the listener actually running.
 
 `charliebot discord check` (from a host that reaches the server) posts to the internal check endpoint and prints one JSON readback:
 

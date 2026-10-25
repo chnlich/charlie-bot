@@ -105,17 +105,18 @@
       GRAMMAR — canonical sitrep page grammar and the only definition of its section semantics.
       The header's p.sub carries the bottom line: where things stand plus the immediate risk, in
       one or two sentences, so the reader can stop after the header. Then come five sections in a
-      fixed order and numbering; any section may shrink to one sentence.
+      fixed order and numbering; any section may shrink to one sentence. The page tells its own
+      reader what every one of its labels marks.
 
       1. "What waits on you?" — the decisions or actions pending on the reader, each rendered
          as a div.fork block whose folded explainer carries the material needed to judge it
          (fork grammar: plan_template.html's block kit, section 5). "Nothing waits on you."
          is a valid one-line body.
       2. "What is this and why?" — the problem from scratch for a cold reader, ending with a short
-         list of named requirements: self-describing slugs the rest of the page references,
-         rendered as span.req chips.
-      3. "What was verified?" — deliverables and acceptance evidence; every claim carries a
-         span.src anchor.
+         list of the named requirements the page answers, rendered as span.req chips; each
+         requirement's name carries its meaning for the reader in the reader's own words.
+      3. "What was verified?" — deliverables and acceptance evidence, and, for a reported run,
+         what that run changed and what it held fixed; every claim carries a span.src anchor.
       4. "Risks & open questions" — one h3 per topic, the whole story of a topic told in one
          place. Epistemic status is an inline label, not a section: a fact label (span.tag.fact)
          requires a source anchor; an open-hypothesis label (span.tag.hyp) carries a confidence

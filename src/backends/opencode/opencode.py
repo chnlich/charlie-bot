@@ -24,13 +24,6 @@ log = log_once.LazyStructlogLogger()
 
 T = TypeVar("T")
 
-# opencode's compaction output-reserve default ($d = 20000 in the opencode binary,
-# applied as `compaction.reserved ?? min($d, maxOutputTokens)`; checkable via
-# `grep -ao "compaction?\.reserved.\{0,140\}" <opencode binary>`) single-homes in
-# src.infra.constants, whose only reader is the usage chain's compact-point math
-# (src.runtime.session_usage) — importing it here would drag this module onto the
-# usage chain (the M99 server import floor).
-
 # Session events a turn does not translate. Any other type unknown to this module is logged once.
 _IGNORED_SESSION_EVENT_TYPES = {
     "permission.replied",

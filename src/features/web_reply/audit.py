@@ -60,8 +60,9 @@ async def audit_turn(
   """Audit one finished turn of a web session for its status and its web reply.
 
   The status reminder needs a session that is not archived, an open task, no pending close request, a turn without a
-  status event and a turn that no status reminder woke. The reply step is :func:`audit_reply`'s. A turn that needs
-  both gets one combined reminder and one wake.
+  status event and a turn that no status reminder woke. The reply step nudges a turn that answered a user message
+  without a web reply, and posts the notice that closes a nudge turn still without one. A turn that needs both gets
+  one combined reminder and one wake.
   """
   input_ids = message_utils.master_done_input_event_ids(done)
   loaded = await asyncio.to_thread(events.load_chat_events_sync, session_id)
@@ -93,27 +94,6 @@ async def audit_turn(
       assert user_event_id is not None, "a reply notice names the user message it answers"
       await _notice(session_id, user_event_id, events, lifecycle)
   elif action == "nudge":
-    assert user_event_id is not None, "a reply nudge names the user message it answers"
-    await _nudge(session_id, user_event_id, events, store, successor, lifecycle)
-  elif action == "notice":
-    assert user_event_id is not None, "a reply notice names the user message it answers"
-    await _notice(session_id, user_event_id, events, lifecycle)
-
-
-async def audit_reply(
-    session_id: str, done: dict, store: session_store.SessionStore, events: session_events.SessionEvents,
-    lifecycle: session_lifecycle.SessionLifecycle, successor: session_successor.SessionSuccessor) -> None:
-  """Audit one finished turn's web reply alone: a nudge for an unanswered user message, then a notice.
-
-  The turn's newest user message or nudge decides the step. A user message that the log shows neither answered nor
-  nudged gets the nudge, which wakes a new turn. A nudge whose user message the log still shows unanswered and
-  unnoticed gets the notice, which marks the session unread. A turn with neither input, a background turn, gets
-  nothing.
-  """
-  input_ids = message_utils.master_done_input_event_ids(done)
-  loaded = await asyncio.to_thread(events.load_chat_events_sync, session_id)
-  action, user_event_id = _reply_action(loaded, input_ids)
-  if action == "nudge":
     assert user_event_id is not None, "a reply nudge names the user message it answers"
     await _nudge(session_id, user_event_id, events, store, successor, lifecycle)
   elif action == "notice":

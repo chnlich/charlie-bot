@@ -18,17 +18,6 @@ from src.infra import models
 from src.runtime import task_errors, task_sessions
 
 
-async def create(tree: task_sessions.TaskTreeManager, *, parent: str | None, request_id: str, profile: str = "manager"):
-  return await tree.create_task(
-      request_id=request_id,
-      task_parent_id=parent,
-      profile=profile,
-      task=None,
-      name=None,
-      backend=None,
-      caller=conftest.OPERATOR)
-
-
 async def deliver(tree: task_sessions.TaskTreeManager, worker_id: str, run_id: str) -> None:
   """One successful work run: the automatic completion and receipt path."""
   await tree.runs.register_run_locked(models.RunRecord(id=run_id, session_id=worker_id, kind="work"))
@@ -47,8 +36,8 @@ async def archived_by_id(session_blocks: conftest.SessionBlocks) -> dict:
 @pytest.mark.asyncio
 async def test_delivered_worker_moves_from_the_active_list_to_the_archived_list(tmp_path: pathlib.Path) -> None:
   _cfg, session_blocks, tree = conftest.build_env(tmp_path)
-  root = await create(tree, parent=None, request_id="root")
-  worker = await create(tree, parent=root.id, request_id="w1", profile="worker")
+  root = await conftest.create_task(tree, parent=None, request_id="root")
+  worker = await conftest.create_task(tree, parent=root.id, request_id="w1", profile="worker")
   assert await active_ids(session_blocks) == {root.id, worker.id}
   assert await archived_by_id(session_blocks) == {}
 
@@ -70,8 +59,8 @@ async def test_delivered_worker_moves_from_the_active_list_to_the_archived_list(
 @pytest.mark.asyncio
 async def test_failed_worker_stays_in_the_active_list(tmp_path: pathlib.Path) -> None:
   _cfg, session_blocks, tree = conftest.build_env(tmp_path)
-  root = await create(tree, parent=None, request_id="root")
-  worker = await create(tree, parent=root.id, request_id="w1", profile="worker")
+  root = await conftest.create_task(tree, parent=None, request_id="root")
+  worker = await conftest.create_task(tree, parent=root.id, request_id="w1", profile="worker")
   await tree.runs.register_run_locked(models.RunRecord(id="run-f", session_id=worker.id, kind="work"))
   await tree.dispatch.finish_run(worker.id, "run-f", outcome="failed")
   await tree.dispatch.deliver_child_report(
@@ -89,8 +78,8 @@ async def test_failed_worker_stays_in_the_active_list(tmp_path: pathlib.Path) ->
 @pytest.mark.asyncio
 async def test_archiving_a_parent_archives_its_open_subtree_and_restore_brings_it_back(tmp_path: pathlib.Path) -> None:
   cfg, session_blocks, tree = conftest.build_env(tmp_path)
-  root = await create(tree, parent=None, request_id="root")
-  worker = await create(tree, parent=root.id, request_id="w1", profile="worker")
+  root = await conftest.create_task(tree, parent=None, request_id="root")
+  worker = await conftest.create_task(tree, parent=root.id, request_id="w1", profile="worker")
   assert await active_ids(session_blocks) == {root.id, worker.id}
   assert await archived_by_id(session_blocks) == {}
 

@@ -1843,7 +1843,7 @@ async def cancel_session_run(
     session_id: str,
     run_id: str,
     req: models.CancelRunRequest,
-    run_store=fastapi.Depends(deps.get_run_store),
+    run_store: runs.RunStore = fastapi.Depends(deps.get_run_store),
     caller: run_token.CallerIdentity = fastapi.Depends(deps.require_caller),
 ) -> models.RunCancelResponse:
   """Request one stop: durable fact first, then identity-checked signal and exit observation."""

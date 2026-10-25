@@ -345,7 +345,7 @@ async def run_improve_sequence(
       if state.backend_from_pool:
         member = backend_pool.select(cfg, caller="improve")
         if member is None:
-          blocked = (i, f"no backends.pool member is available: {backend_pool.recovery_report(cfg)}", "")
+          blocked = (i, backend_pool.no_member_message(cfg), "")
           break
         iteration_backend = member.id
         iteration_model = models.option_default_model(member, subject="pool member ")

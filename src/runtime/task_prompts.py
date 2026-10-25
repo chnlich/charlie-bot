@@ -57,7 +57,7 @@ contract above: its managed instructions are the cold-reader instructions of
 (the ``WORKER_KINDS`` memory-audience mapping never runs for it: a cold-read
 run selects no memory), and no subtree or node rules. Its ``prompt_hash``
 covers exactly that one block's text and provenance; the page text and the
-seven questions ride the launch text, which the hash excludes by construction.
+eight questions ride the launch text, which the hash excludes by construction.
 """
 
 from __future__ import annotations

@@ -52,6 +52,7 @@ def test_ensure_session_cgroup_creates_with_limit_files_under_the_chosen_slice(
   path = process.ensure_session_cgroup(SESSION_ID, "agent", 64, 32, config.ServerConfig().session_tasks_max)
   assert path == fake_slices["agent"] / "charliebot-sess-abcd1234"
   assert path.is_dir()
+  assert (fake_slices["agent"] / "cgroup.subtree_control").read_text() == "+memory +pids"
   assert (path / "memory.max").read_text() == str(64 * 1024 * 1024)
   assert (path / "memory.swap.max").read_text() == str(32 * 1024 * 1024)
   assert (path / "pids.max").read_text() == "4096"
@@ -68,6 +69,15 @@ def test_ensure_session_cgroup_rewrites_task_cap_and_zero_lifts_it(fake_slices: 
   assert (path / "pids.max").read_text() == "50"
   assert process.ensure_session_cgroup(SESSION_ID, "agent", 64, 32, 0) == path
   assert (path / "pids.max").read_text() == "max"
+
+
+def test_user_slice_dir_nests_under_each_dash_prefix() -> None:
+  """systemd places a-b.slice inside a.slice, so charliebot-agents.slice lives in charliebot.slice."""
+  base = process.CGROUP_V2_USER_SERVICE
+  assert process.user_slice_dir("app.slice") == f"{base}/app.slice"
+  assert process.user_slice_dir("charliebot-agents.slice") == f"{base}/charliebot.slice/charliebot-agents.slice"
+  assert process.user_slice_dir("charliebot-repair.slice") == f"{base}/charliebot.slice/charliebot-repair.slice"
+  assert process.user_slice_dir("a-b-c.slice") == f"{base}/a.slice/a-b.slice/a-b-c.slice"
 
 
 def test_ensure_session_cgroup_names_the_missing_slice(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:

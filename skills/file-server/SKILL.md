@@ -114,7 +114,7 @@ The page-height assertion passes at any height.
 When a gloss puts the page over the target, keep the gloss.
 
 The cold read is one model pass without context. The model reads the page file alone.
-It answers seven questions about these items:
+It answers eight questions about these items:
 
 1. the problem;
 2. the conclusion and its epistemic state;
@@ -122,7 +122,9 @@ It answers seven questions about these items:
 4. the section where the problem first became clear;
 5. at most five re-read points;
 6. whether the page answers the trigger;
-7. the project terms without a gloss at first use, for the reader of the Vocabulary rule (prompts/master.md).
+7. the project terms and page conventions whose meaning the page never states, for the reader of
+   the Vocabulary rule (prompts/master.md);
+8. what the run changed and what it held fixed, each with a value.
 
 The trigger is the chat message that asked for the page.
 For a plan, the trigger is the goal sentence of its understanding page, verbatim.
@@ -141,7 +143,7 @@ In a manager session, the command delegates the cold read to a cold-read child o
 After the command prints its result, end the turn.
 The child's report wakes your session.
 The report states the page path and the sha256 of the page bytes that the cold read read.
-Then the report lists each failed model attempt, the answering model, and the seven answers verbatim.
+Then the report lists each failed model attempt, the answering model, and the eight answers verbatim.
 In a worker session, the command runs the cold read in the foreground and prints the same lines.
 
 When the cold read fails, state in the reply that the cold read failed.
@@ -153,8 +155,10 @@ Each item below is a signal to revise the page:
 - Answer 4 names a section other than the first content section.
 - Answer 6 is no for one part of the trigger.
 - Answer 7 lists one or more terms.
+- Answer 8 is NOT STATED, in whole or in part, on a page that reports a run.
 - On a plan or understanding page, answer 3 omits a decision that the page asks for.
 - A re-read point in answer 5 names a decision fork (a div.fork block) in section 1, or a jump between a fork and another section.
+- A re-read point in answer 5 names the run, its variables, or the difference between the compared legs.
 
 Judge the answers on these signals alone.
 For each signal, revise the page in place.
@@ -163,7 +167,7 @@ When a verify round runs, fold the cold-read revisions and the verify findings i
 In the reply, state the count of terms that answer 7 listed and the count that you glossed.
 A revision from cold-read findings closes the gate. That revision gets no cold read.
 
-The cold-reader instructions and the seven questions live in `prompts/cold_read.md`.
+The cold-reader instructions and the eight questions live in `prompts/cold_read.md`.
 
 ### Source Check
 

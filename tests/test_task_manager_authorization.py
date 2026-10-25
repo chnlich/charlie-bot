@@ -29,18 +29,10 @@ from src.runtime import control_events, runs, task_sessions
 from tests import test_task_execution
 
 
-def live_run_identity() -> tuple[int, str]:
-  """A real live process identity (the verified-live precondition of an own-run request)."""
-  pid = os.getpid()
-  pair = runs.read_pid_stat(pid)
-  assert pair is not None
-  return pid, pair[0]
-
-
 async def register_live_manager_run(tree: task_sessions.TaskTreeManager, session_id: str, run_id: str) -> None:
   """Pin one live manager_turn Run: the node's own coordination Run whose
   identity backs its completion credential."""
-  pid, pid_start = live_run_identity()
+  pid, pid_start = conftest.identity_of(os.getpid())
   await tree.runs.register_run_locked(
       models.RunRecord(
           id=run_id,
@@ -178,7 +170,7 @@ async def test_own_run_archive_closes_without_takeoff_and_reports_to_ancestor(
   closes = [e for e in tree.events.load_events(child.id) if e["type"] == ET.TASK_CLOSED]
   assert len(closes) == 1 and closes[0]["outcome"] == "archived"
   assert closes[0]["report_to"] == root.id
-  reports = [e for e in tree.events.load_events(root.id) if e["type"] == ET.CHILD_REPORT]
+  reports = conftest.child_reports(tree, root.id)
   assert len(reports) == 1 and reports[0]["outcome"] == "archived"
 
   # The ancestor holds its own conditions: it stays open after the child closed.

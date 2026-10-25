@@ -380,7 +380,7 @@ async def test_review_with_pending_trigger_pauses_merge_and_continues_the_review
   # The pause: no merge — main is unmoved, the task stays open, nothing reports.
   assert conftest.run_git(repo, "rev-parse", "origin/main") == main_before
   assert tree.task_state(worker.id) == "open"
-  reports = [e for e in tree.events.load_events(manager.id) if e["type"] == ET.CHILD_REPORT]
+  reports = conftest.child_reports(tree, manager.id)
   assert not reports, f"the paused review reported before its continuation: {reports}"
 
   # The wake's next run is a review continuation of the same work run,
@@ -398,7 +398,7 @@ async def test_review_with_pending_trigger_pauses_merge_and_continues_the_review
   # The continuation delivers by the standing rules: merge, close, cleanup, report.
   await _wait_for_delivery_cleanup(tree, worker.id, work_wt)
   assert conftest.run_git(repo, "rev-parse", "origin/main") != main_before
-  reports = [e for e in tree.events.load_events(manager.id) if e["type"] == ET.CHILD_REPORT]
+  reports = conftest.child_reports(tree, manager.id)
   assert reports and reports[-1]["outcome"] == "completed"
 
 
@@ -447,7 +447,7 @@ async def test_failed_review_continuation_reports_failure_to_the_parent(
   deadline = asyncio.get_event_loop().time() + 10
   reports: list[dict] = []
   while asyncio.get_event_loop().time() < deadline:
-    reports = [e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]
+    reports = conftest.child_reports(tree, manager.id)
     if reports:
       break
     await asyncio.sleep(0.1)
@@ -474,7 +474,7 @@ async def test_failed_run_with_pending_trigger_still_reports_failure(
   deadline = asyncio.get_event_loop().time() + 10
   reports: list[dict] = []
   while asyncio.get_event_loop().time() < deadline:
-    reports = [e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]
+    reports = conftest.child_reports(tree, manager.id)
     if reports:
       break
     await asyncio.sleep(0.1)
@@ -574,7 +574,7 @@ async def test_delivery_without_pending_wake_runs_the_full_chain(
   assert outcome_r == "success"
   assert builds[1]["kwargs"].get("resume_session_id") is None
   await _wait_for_delivery_cleanup(tree, worker.id, work_wt)
-  reports = [e for e in tree.events.load_events(manager.id) if e["type"] == ET.CHILD_REPORT]
+  reports = conftest.child_reports(tree, manager.id)
   assert reports and reports[-1]["outcome"] == "completed"
 
 

@@ -163,7 +163,7 @@ async def test_cascade_archive_writes_one_fact_per_open_node_with_archived_with(
   # A root archive has no parent report, and its descendants do not report separately.
   archive_close_ids = {close_facts(tree, n)[0]["id"] for n in (root.id, mid.id, leaf.id)}
   for node in (root.id, mid.id, leaf.id, completed.id):
-    reports = [e for e in tree.events.load_events(node) if e["type"] == ET.CHILD_REPORT]
+    reports = conftest.child_reports(tree, node)
     assert not [r for r in reports if r.get("child_event_id") in archive_close_ids]
   # The whole subtree reads as archived through the one derivation.
   index = await tree._get_index()
@@ -204,7 +204,7 @@ async def test_operator_archive_of_child_delivers_one_report_and_wakes_parent(tm
   descendant_close = close_facts(tree, descendant.id)[0]
   assert descendant_close["report_to"] is None
   assert descendant_close["archived_with"] == child.id
-  reports = [e for e in tree.events.load_events(root.id) if e["type"] == ET.CHILD_REPORT]
+  reports = conftest.child_reports(tree, root.id)
   assert len(reports) == 1
   assert reports[0]["child_session_id"] == child.id
   assert reports[0]["child_event_id"] == close["id"]
@@ -240,7 +240,7 @@ async def test_archived_parent_keeps_child_archive_report_as_history_without_wak
       run_ids=[],
       caller=conftest.OPERATOR)
 
-  reports = [e for e in tree.events.load_events(root.id) if e["type"] == ET.CHILD_REPORT]
+  reports = conftest.child_reports(tree, root.id)
   assert len(reports) == 1 and reports[0]["outcome"] == "archived"
   assert (child.id, close_facts(tree, child.id)[0]["id"]) in tree.facts_of(root.id).delivered_reports
   assert tree.task_state(root.id) == "archived"
@@ -510,7 +510,7 @@ async def test_archive_unsuccessful_worker_writes_the_system_archive_fact(tmp_pa
   assert fact["run_ids"] == ["run-1"]
   assert fact["summary"] == "run run-1 ended failed; archived by the server"
   # The archive delivered no report of its own to the parent.
-  assert [e for e in tree.events.load_events(manager.id) if e["type"] == ET.CHILD_REPORT] == []
+  assert conftest.child_reports(tree, manager.id) == []
   # A repeat call for the same run finds the recorded fact and writes nothing.
   assert await tree.completion.archive_unsuccessful_worker(worker.id, run_id="run-1", outcome="failed") is False
   assert len(close_facts(tree, worker.id)) == 1

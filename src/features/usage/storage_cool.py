@@ -54,12 +54,11 @@ log = log_once.LazyStructlogLogger()
 ORPHAN_IDLE_DAYS = 2
 
 # The five transport names a run's managed directories reserve, plus the numbered
-# variants a re-spawn rotates them to (src/runtime/agent_process/base.py
-# _rotate_stale_transport). Matching stays scoped to the managed directories.
-# The three agent-pipe names come from runs.py, the module that owns the
-# transport contract; the two tee names stay literals because their writers are
-# backend modules (opencode.py, antigravity_cli.py) and core must not import
-# backends.
+# ``<name>.<N>`` variants a fresh spawn gives the agent-pipe logs
+# (src/runtime/agent_process/base.py _rotate_stale_transport). Matching stays
+# scoped to the managed directories. The three agent-pipe names come from runs.py,
+# the module that owns the transport contract; the two tee names stay literals
+# because antigravity_cli.py writes them and a feature must not import a backend.
 RAW_TRANSPORT_NAMES = frozenset(
     {
         runs.RAW_LOG_NAME,

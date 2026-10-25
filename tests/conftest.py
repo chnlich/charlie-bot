@@ -1105,7 +1105,7 @@ def build_task_tree(cfg: Any, blocks: SessionBlocks) -> task_sessions.TaskTreeMa
 
 
 def child_reports(tree: task_sessions.TaskTreeManager, session_id: str) -> list[dict]:
-  """Every child report on the node, in delivery order."""
+  """Every child report on the node, in delivery order, archived segments included."""
   return [e for e in tree.fact_history(session_id) if e.get("type") == ET.CHILD_REPORT]
 
 
@@ -1114,6 +1114,18 @@ def build_execution_adapter(
   """A task execution adapter over *blocks* and *tree*."""
   return task_execution.TaskExecutionAdapter(
       cfg, blocks.successor, blocks.events, blocks.lifecycle, blocks.anchors, blocks.sidebar, tree)
+
+
+def record_launches(tree: task_sessions.TaskTreeManager) -> list[tuple[str, list[str]]]:
+  """Install a dispatch executor that records (session id, pending input contents) per launch."""
+  launches: list[tuple[str, list[str]]] = []
+
+  async def executor(session_id: str, pending: list[dict], launch_run_id: str | None = None) -> str:
+    launches.append((session_id, [e["content"] for e in pending]))
+    return "run-1"
+
+  tree.dispatch.executor = executor
+  return launches
 
 
 def thread_blocks(

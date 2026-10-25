@@ -13,9 +13,14 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+  import asyncio
   import pathlib
 
+  import fastapi
+
   from src.infra import config
+
+from src.runtime.hooks import registration
 
 PHASES = ("early", "ready")
 
@@ -33,8 +38,8 @@ class ServiceContext:
   """What the server hands each service's start_service."""
   __slots__ = ("app", "cfg", "recovery_task")
 
-  def __init__(self, app, cfg, recovery_task) -> None:
-    # app: the FastAPI app; cfg: CharlieBotConfig; recovery_task: the lifespan's crash-recovery asyncio.Task.
+  def __init__(self, app: fastapi.FastAPI, cfg: config.CharlieBotConfig, recovery_task: asyncio.Task[None]) -> None:
+    # recovery_task is the lifespan's crash-recovery task.
     self.app = app
     self.cfg = cfg
     self.recovery_task = recovery_task
@@ -59,7 +64,7 @@ def register_router(
 def register_command(name: str, module: str) -> None:
   """`charliebot <name>` imports module and calls its main(). A second registration of one name raises ValueError."""
   if name in _COMMANDS:
-    raise ValueError(f"command {name!r} is already registered by {_COMMANDS[name]}")
+    raise registration.already_registered("command", name, _COMMANDS[name])
   _COMMANDS[name] = module
 
 
@@ -73,8 +78,15 @@ def register_service(name: str, module: str, *, phase: str = "ready") -> None:
   if phase not in PHASES:
     raise ValueError(f"service {name!r} has phase {phase!r}; the phases are {PHASES}")
   if name in _SERVICES:
-    raise ValueError(f"service {name!r} is already registered by {_SERVICES[name][0]}")
+    raise registration.already_registered("service", name, _SERVICES[name][0])
   _SERVICES[name] = (module, phase)
+
+
+def _register_pair(entries: list[tuple[str, str]], kind: str, module: str, attr: str) -> None:
+  """Append one (module, attr) pair to *entries*; a second registration of one pair raises ValueError."""
+  if (module, attr) in entries:
+    raise ValueError(f"{kind} {module}:{attr} is already registered")
+  entries.append((module, attr))
 
 
 def register_file_view(module: str, *, attr: str) -> None:
@@ -85,9 +97,7 @@ def register_file_view(module: str, *, attr: str) -> None:
   fastapi.HTTPException. Views run in registration order; the first Response answers.
   A second registration of one (module, attr) raises ValueError.
   """
-  if (module, attr) in _FILE_VIEWS:
-    raise ValueError(f"file view {module}:{attr} is already registered")
-  _FILE_VIEWS.append((module, attr))
+  _register_pair(_FILE_VIEWS, "file view", module, attr)
 
 
 def register_startup_check(module: str, *, attr: str) -> None:
@@ -96,9 +106,7 @@ def register_startup_check(module: str, *, attr: str) -> None:
   cfg is the CharlieBotConfig. The function raises ValueError to stop the start. Checks run
   in registration order. A second registration of one (module, attr) raises ValueError.
   """
-  if (module, attr) in _STARTUP_CHECKS:
-    raise ValueError(f"startup check {module}:{attr} is already registered")
-  _STARTUP_CHECKS.append((module, attr))
+  _register_pair(_STARTUP_CHECKS, "startup check", module, attr)
 
 
 def register_setup_step(module: str, *, attr: str) -> None:
@@ -109,9 +117,7 @@ def register_setup_step(module: str, *, attr: str) -> None:
   Steps run in registration order. An exception from a step stops setup with a non-zero exit.
   A second registration of one (module, attr) raises ValueError.
   """
-  if (module, attr) in _SETUP_STEPS:
-    raise ValueError(f"setup step {module}:{attr} is already registered")
-  _SETUP_STEPS.append((module, attr))
+  _register_pair(_SETUP_STEPS, "setup step", module, attr)
 
 
 def register_diff_root(module: str, *, attr: str) -> None:
@@ -120,9 +126,7 @@ def register_diff_root(module: str, *, attr: str) -> None:
   cfg is the CharlieBotConfig. The roots join the paths.workspace_dirs roots in registration order.
   A second registration of one (module, attr) raises ValueError.
   """
-  if (module, attr) in _DIFF_ROOTS:
-    raise ValueError(f"diff root {module}:{attr} is already registered")
-  _DIFF_ROOTS.append((module, attr))
+  _register_pair(_DIFF_ROOTS, "diff root", module, attr)
 
 
 def routers(*, before_runtime: bool = False) -> tuple[tuple[str, str, tuple[str, ...], str], ...]:

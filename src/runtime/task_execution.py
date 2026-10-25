@@ -893,8 +893,8 @@ class TaskExecutionAdapter:
     """Land one post-admission launch exception as the Run's durable failure.
 
         The admitted run's evidence trail: the error text rides the run's
-        events log (where the leaf card's event view and the failure-summary
-        reader already look), the terminal ``run_finished`` fact carries
+        events log (where the worker summary card's Events link and the
+        failure-summary reader already look), the terminal ``run_finished`` fact carries
         outcome ``failed``, and the failed run then walks the same after-run
         path a failed process takes — the worker's failure report to its
         parent and the node's pending-input dispatch.
@@ -968,7 +968,7 @@ class TaskExecutionAdapter:
       self, session_id: str, run_id: str, error_text: str, *, quota_exhausted: bool | None) -> None:
     """Write the launch error into the run's events log as durable evidence.
 
-        The events log is where the leaf card's event view already reads and
+        The events log is what the worker summary card's Events link opens and
         where ``_worker_failure_summary`` looks for the run's closing words, so
         the error is reachable without any new evidence channel.
         ``quota_exhausted`` is the ``LaunchRefused`` flag of a refused launch and
@@ -985,7 +985,7 @@ class TaskExecutionAdapter:
     if quota_exhausted is not None:
       event[ET.QUOTA_EXHAUSTED] = quota_exhausted
     await ndjson.append_ndjson(events_log, event)
-    # The leaf card's Events link reads the record's events_ref: the
+    # The worker summary card's Events link reads the record's events_ref: the
     # launch-failed run's evidence is reachable exactly the way a process
     # run's is (record_observation writes only the provided fields).
     await self._tree.runs.record_observation(session_id, run_id, events_ref=str(events_log))
@@ -1663,7 +1663,7 @@ class TaskExecutionAdapter:
         instructions, so their context is the pinned spec and batch alone (no
         worktree, no review artifacts). Repo-less work runs keep the run dir as
         the working directory. A cold-read run's context is the page text and
-        the seven questions alone (no session info, no task-body wrapper).
+        the eight questions alone (no session info, no task-body wrapper).
         """
     if task_type == models.TaskType.COLD_READ:
       return await self._build_cold_read_context(meta, run)
@@ -1700,7 +1700,7 @@ class TaskExecutionAdapter:
     return "\n\n".join(part for part in parts if part)
 
   async def _build_cold_read_context(self, meta: models.SessionMetadata, run: models.RunRecord) -> str:
-    """The cold-read run's whole input: the page text, one blank line, the seven questions.
+    """The cold-read run's whole input: the page text, one blank line, the eight questions.
 
         The reader answers from the page alone, so the context carries no
         session info and no task-body wrapper. The launch reads the page and
@@ -1773,6 +1773,23 @@ class TaskExecutionAdapter:
       return ""
     return f"**Later Messages:**\n{content}"
 
+  async def _review_inputs(
+      self, session_id: str,
+      work_run: models.RunRecord) -> tuple[models.SessionMetadata, str | None, pathlib.Path, pathlib.Path]:
+    """The task record, work report and two log paths every review context reads.
+
+        The task record carries the spec the review judges against. ``extract_review_context`` reads the work
+        report from the work Run's events log; the chat log is the node's, and the same events log goes to the
+        rendered context.
+        """
+    meta = await self._tree.load_meta(session_id)
+    assert meta is not None and meta.task is not None, (
+        f"review of work run {work_run.id} needs its node's task record for the spec")
+    worker_log_path = self._tree.runs.run_dir(session_id, work_run.id) / runs.RUN_EVENTS_NAME
+    worker_summary = await review.extract_review_context(session_id, work_run.id, worker_log_path=worker_log_path)
+    chat_log_path = chat_events.chat_events_path(self._cfg.sessions_dir / session_id)
+    return meta, worker_summary, chat_log_path, worker_log_path
+
   async def _build_review_context(self, session_id: str, work_run: models.RunRecord) -> str:
     """The review Run's task/input context: the work being judged and its git steps.
 
@@ -1789,13 +1806,7 @@ class TaskExecutionAdapter:
     assert (work_run.branch_name and work_run.worktree_path and work_run.repo_path and work_run.base_branch), (
         f"review of work run {work_run.id} needs its exact repo/base/branch/worktree "
         "provenance; an unset base is never silently replaced with main")
-    meta = await self._tree.load_meta(session_id)
-    assert meta is not None and meta.task is not None, (
-        f"review of work run {work_run.id} needs its node's task record for the spec")
-    worker_summary = await review.extract_review_context(
-        session_id,
-        work_run.id,
-        worker_log_path=self._tree.runs.run_dir(session_id, work_run.id) / runs.RUN_EVENTS_NAME)
+    meta, worker_summary, chat_log_path, worker_log_path = await self._review_inputs(session_id, work_run)
     context_lines = review.review_context_lines(
         review.review_spec_text(meta.task), await self._later_messages_section(meta, work_run), worker_summary,
         f"(work run {work_run.id})")
@@ -1803,8 +1814,8 @@ class TaskExecutionAdapter:
         branch_name=work_run.branch_name,
         wt_path=work_run.worktree_path,
         base_branch=work_run.base_branch,
-        chat_log_path=chat_events.chat_events_path(self._cfg.sessions_dir / session_id),
-        worker_log_path=self._tree.runs.run_dir(session_id, work_run.id) / runs.RUN_EVENTS_NAME,
+        chat_log_path=chat_log_path,
+        worker_log_path=worker_log_path,
         context_section="\n".join(context_lines),
     )
 
@@ -1819,16 +1830,10 @@ class TaskExecutionAdapter:
         spec comes from the task record, the same record the work Run's
         prompt reads.
         """
-    meta = await self._tree.load_meta(session_id)
-    assert meta is not None and meta.task is not None, (
-        f"review of work run {work_run.id} needs its node's task record for the spec")
-    worker_summary = await review.extract_review_context(
-        session_id,
-        work_run.id,
-        worker_log_path=self._tree.runs.run_dir(session_id, work_run.id) / runs.RUN_EVENTS_NAME)
+    meta, worker_summary, chat_log_path, worker_log_path = await self._review_inputs(session_id, work_run)
     return task_prompts.repo_less_review_task_context(
-        chat_log_path=chat_events.chat_events_path(self._cfg.sessions_dir / session_id),
-        worker_log_path=self._tree.runs.run_dir(session_id, work_run.id) / runs.RUN_EVENTS_NAME,
+        chat_log_path=chat_log_path,
+        worker_log_path=worker_log_path,
         spec_text=review.review_spec_text(meta.task),
         later_messages=await self._later_messages_section(meta, work_run),
         work_report=worker_summary,
@@ -2185,12 +2190,7 @@ class TaskExecutionAdapter:
             # pool without a free member spawns no review: report blocked with
             # each member's recovery time, as an exhausted retry chain does.
             await self._report_failure_to_parent(
-                session_id,
-                run,
-                "blocked",
-                summary=(
-                    f"review of work run {run.id} found no available reviewer backend; "
-                    f"backends.pool: {backend_pool.recovery_report(self._cfg)}"))
+                session_id, run, "blocked", summary=_no_reviewer_summary(run, self._cfg))
         else:
           await self._cleanup_worktree_if_delivered(session_id, run)
         return
@@ -2200,8 +2200,7 @@ class TaskExecutionAdapter:
           if await self._fail_over_quota(meta, run):
             return
           summary = (
-              f"{await self._worker_failure_summary(session_id, run)}\n\n"
-              f"No backends.pool member is available: {backend_pool.recovery_report(self._cfg)}")
+              f"{await self._worker_failure_summary(session_id, run)}\n\n{backend_pool.no_member_message(self._cfg)}")
         await self._report_failure_to_parent(session_id, run, durable_outcome, summary=summary)
     finally:
       # Inputs admitted during this run waited for the serialized
@@ -2501,18 +2500,31 @@ class TaskExecutionAdapter:
       log.warning(
           "cold_read_delivery_close_blocked", session_id=meta.id, run_id=run.id, blockers=getattr(e, "blockers", None))
 
+  async def _failure_text(
+      self,
+      session_id: str,
+      run: models.RunRecord,
+      first: Callable[[pathlib.Path], str | None],
+      second: Callable[[pathlib.Path], str | None],
+  ) -> str:
+    """The failed run's reportable text: the ``first`` reader's text, then the ``second``'s, else the bare fallback.
+
+    Each reader streams the events log from its end and stops at the first settling event, so ``second`` runs only
+    when ``first`` finds nothing.
+    """
+    events_log = self._tree.runs.run_dir(session_id, run.id) / runs.RUN_EVENTS_NAME
+    if events_log.is_file():
+      for read in (first, second):
+        text = await asyncio.to_thread(read, events_log)
+        if text:
+          return text
+    return f"run {run.id} failed without a reportable output"
+
   async def _cold_read_attempt_error(self, session_id: str, run: models.RunRecord) -> str:
     """The failed cold-read run's error for the report's attempt line: the run's error
     event, its closing text when no error event exists, or the bare fallback."""
-    events_log = self._tree.runs.run_dir(session_id, run.id) / runs.RUN_EVENTS_NAME
-    if events_log.is_file():
-      error_text = await asyncio.to_thread(review._worker_error_from_events_log, events_log)
-      if error_text:
-        return error_text
-      text = await asyncio.to_thread(review._worker_summary_from_events_log, events_log)
-      if text:
-        return text
-    return f"run {run.id} failed without a reportable output"
+    return await self._failure_text(
+        session_id, run, review._worker_error_from_events_log, review._worker_summary_from_events_log)
 
   async def _record_cold_read_attempt(self, meta: models.SessionMetadata, run: models.RunRecord, error: str) -> None:
     """Record one failed cold-read attempt on the run's evidence file (the report reads it back)."""
@@ -2609,15 +2621,8 @@ class TaskExecutionAdapter:
         a run that died before its process started carries its error as the
         events log's error event, and that text is the report's evidence.
         """
-    events_log = self._tree.runs.run_dir(session_id, run.id) / runs.RUN_EVENTS_NAME
-    if events_log.is_file():
-      text = await asyncio.to_thread(review._worker_summary_from_events_log, events_log)
-      if text:
-        return text
-      error_text = await asyncio.to_thread(review._worker_error_from_events_log, events_log)
-      if error_text:
-        return error_text
-    return f"run {run.id} failed without a reportable output"
+    return await self._failure_text(
+        session_id, run, review._worker_summary_from_events_log, review._worker_error_from_events_log)
 
 
 # The process owner of the task tree; built on the first ``task_manager()`` call.
@@ -2773,6 +2778,17 @@ async def _reconcile_node(
   await tree.dispatch.dispatch_pending(session_id)
 
 
+def _no_reviewer_summary(run: models.RunRecord, cfg: config.CharlieBotConfig) -> str:
+  """The blocked report a review-less finish sends its parent: the pool's per-member recovery times.
+
+  The live finish path and the startup replay both send this report, and the
+  replay must reproduce the live chain's summary text.
+  """
+  return (
+      f"review of work run {run.id} found no available reviewer backend; "
+      f"backends.pool: {backend_pool.recovery_report(cfg)}")
+
+
 def _replay_owes_review(
     tree: task_sessions.TaskTreeManager,
     session_id: str,
@@ -2902,12 +2918,7 @@ async def _replay_followups(
               # The live finish path's own no-reviewer report, replayed: the pool has no member
               # the reviewer may use, and the report's stable id dedups against the live chain's.
               await adapter._report_failure_to_parent(
-                  session_id,
-                  run,
-                  "blocked",
-                  summary=(
-                      f"review of work run {run.id} found no available reviewer backend; "
-                      f"backends.pool: {backend_pool.recovery_report(cfg)}"))
+                  session_id, run, "blocked", summary=_no_reviewer_summary(run, cfg))
       elif outcome in ("failed", "interrupted", "blocked"):
         await adapter._report_failure_to_parent(session_id, run, outcome)
     elif run.kind == "review":

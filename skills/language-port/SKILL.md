@@ -38,6 +38,16 @@ Each rule below keeps work off the serial tail, or keeps a failure out of it.
   In the same case, add a test that counts the reads.
   Parity compares results only: a dropped cache keeps parity green and shows only at production scale.
 
+## Libraries
+
+- When a maintained library of the new language does a job, call that library.
+- When a client reads an exact old-version format that no library produces, hand-write only the format layer.
+  Leave its inner loops, such as scanning, escaping and compression, to a library.
+- In each port spec, name the new language's library for each library that the old code calls.
+
+A hand-written replacement passes parity and can run far slower than a tuned library.
+These rules keep the speed of the libraries that the old version calls.
+
 ## The old main line during the port
 
 - During the parallel phase, merge the old main line into the port branch once a day.

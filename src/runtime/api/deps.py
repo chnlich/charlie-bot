@@ -1,4 +1,6 @@
-"""FastAPI dependency injection helpers."""
+"""FastAPI dependency injection helpers and the HTTP spelling of a route's expected failures."""
+
+from typing import Protocol
 
 import fastapi
 
@@ -103,6 +105,25 @@ def bad_request(exc: Exception) -> fastapi.HTTPException:
   keeps the ``from e`` chain intact.
   """
   return fastapi.HTTPException(status_code=400, detail=str(exc))
+
+
+class RefusalError(Protocol):
+  """A domain refusal that carries the HTTP status and detail its route answers with.
+
+  The detail is a plain string, or the structured payload a stale-thread refusal carries.
+  """
+
+  status: int
+  detail: str | dict
+
+
+def http_refusal(exc: RefusalError) -> fastapi.HTTPException:
+  """Build the refusal spelling: the HTTP status and detail the domain error already carries.
+
+  Route handlers raise this from the except clause that catches a refusal error
+  (``ThreadReplyError``, ``WebReplyError``); raising keeps the ``from exc`` chain intact.
+  """
+  return fastapi.HTTPException(status_code=exc.status, detail=exc.detail)
 
 
 async def require_caller(

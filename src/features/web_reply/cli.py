@@ -80,13 +80,8 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _cmd_reply(args: argparse.Namespace) -> None:
-  session_id = common.resolve_session_id(args.session)
-  text = common.read_reply_text(args.file)
-  payload = {"session_id": session_id, "text": text}
-  if args.keep_language is not None:
-    payload["keep_language"] = args.keep_language
-  result = common.post_internal_api("/api/internal/web/reply", payload)
-  common.print_json(result, indent=None, file=sys.stdout)
+  extra = None if args.keep_language is None else {"keep_language": args.keep_language}
+  common.post_reply("/api/internal/web/reply", session=args.session, file_arg=args.file, extra=extra)
 
 
 def _cmd_dialog(args: argparse.Namespace) -> None:

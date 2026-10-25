@@ -173,7 +173,8 @@ RUN_LAUNCHED = "run_launched"
 
 # -- Task tree control events (schema_version=2) -----------------------------
 # Durable task facts appended to a session's chat_events.jsonl through the
-# task-tree owner (src/runtime/task_sessions.py) and the run owner (src/runtime/runs.py).
+# task-tree owner (src/runtime/task_sessions.py), the completion owner
+# (src/runtime/task_completion.py), and the run owner (src/runtime/runs.py).
 # Every event carries the common header id/type/timestamp/actor/source_session_id;
 # request_id fields give duplicate requests a stable, dedup-able identity.
 TASK_CREATED = "task_created"

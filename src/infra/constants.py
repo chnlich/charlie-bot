@@ -55,6 +55,11 @@ MAX_TRIGGER_MESSAGE_CHARS = 200
 # share this constant.
 MAX_AGENT_MESSAGE_WEIGHTED_CHARS = 2000
 
+# Upper bound on one posted reply, in characters. prompts/thread_reply_format.md
+# states it, and the thread-reply and web-reply readbacks both set their
+# ``over_budget`` flag from it. An over-budget reply still posts.
+REPLY_BUDGET_CHARS = 500
+
 # Cold-session idle threshold (days): the storage sweep's default judgment and
 # the CLI parser's --min-idle-days default and --help text share one number.
 MIN_IDLE_DAYS = 14

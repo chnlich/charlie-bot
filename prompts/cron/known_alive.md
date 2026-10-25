@@ -230,8 +230,7 @@ Known-alive symbols:
   — the real `_render_once(self, probe_uri)` (src/features/artifacts/headless_render.py) is called with one
   positional argument from `render_height`, so the stub's replaced two-parameter signature fixes
   the arity and `uri` must stay; deleting it makes the stub raise TypeError. Vulture flags it at
-  100% confidence as an unused variable. Same arity-fixed stub-parameter class as the
-  `dir_path` entry above.
+  100% confidence as an unused variable.
 - `_isolate_profile` (`tests/conftest.py`) — `@pytest.fixture(autouse=True)` in conftest,
   so pytest applies it to every test in the tree with no in-file reference: it pins
   `CHARLIEBOT_HOME` at a fresh temp profile and resets the config caches around each
@@ -278,7 +277,7 @@ Known-alive symbols:
   and `_serve_socket_mode` parameters are annotated `client.ClientConnection`, and that
   import is what resolves the forward reference for type checkers and IDEs. No type checker
   runs in CI, so a deletion stays suite-green while leaving the annotations unresolved.
-  Current vulture reads the annotations as a use and no longer flags the import; the
+  Vulture reads the annotations as a use and does not flag the import; the
   no-type-checker fact is what keeps a deletion suite-green, so the guard stays.
 - `__getattr__` (`src/features/artifacts/artifact_wrap.py`) — the PEP 562 lazy-`requests` hook, a one-line
   delegate to the shared `deferred_module_getattr` (`src/infra/deferred.py`), which serves
@@ -353,16 +352,17 @@ Known-alive symbols:
   src-only vulture scan flags it as an unused property; a whole-repo grep finds only the definition,
   the class docstring's definitional sentence, those tests, and the perf doc. Same
   deliberately-retained-oracle class as the `search_sessions` entry above.
-- `_get_close_waiter` (and its `stream` parameter) (`src/runtime/agent_process/spawn.py`) — reached by
-  the stdlib's duck-typed close contract: `asyncio.StreamWriter.wait_closed()` resolves
-  `self._protocol._get_close_waiter(self)` (CPython 3.12.3 `asyncio.streams`), and
-  `_StdinPipeProtocol` is the protocol `_wire_writer` hands `connect_write_pipe` for every piped
-  backend stdin. The bare `FlowControlMixin` fallback raises `NotImplementedError`, so deleting
-  the override — or the parameter the call passes — turns the next `proc.stdin.close()` +
-  `wait_closed()` on a piped stdin into that error; the class docstring states the contract.
-  Vulture flags the method as an unused method (60% confidence) and `stream` as an
-  unused variable (100% confidence); a whole-repo grep finds only the definition. Never delete
-  it on that evidence.
+- `_get_close_waiter` (and its `stream` parameter) (`src/runtime/agent_process/spawn.py`) — the
+  stdlib's duck-typed close contract: `asyncio.StreamWriter.wait_closed()` awaits
+  `self._protocol._get_close_waiter(self)` in `asyncio.streams`. `_StdinPipeProtocol` is the
+  protocol `_wire_writer` gives `connect_write_pipe` for every piped backend stdin, so the
+  subprocess-stdin close path (`src/runtime/agent_process/base.py` awaits `stdin.wait_closed()`)
+  dispatches through it. The bare `FlowControlMixin` raises `NotImplementedError` without the
+  override. Deleting the override, or the parameter the call passes, turns the next
+  `proc.stdin.close()` plus `wait_closed()` into that error. The class docstring states the
+  contract. A single-file vulture scan of `spawn.py` flags the method as unused (60% confidence)
+  and `stream` as an unused variable (100% confidence). A whole-repo grep finds only the
+  definition. Never delete it on that evidence.
 - `_unprobed_verdict_stays_idle` (`src/runtime/api/sessions.py`, on `SessionDetailResponse`) — pydantic
   `@field_validator` method, registered with pydantic at class-definition time and invoked
   during model validation: it keeps a never-probed row's response `work_state` at the literal
@@ -403,12 +403,6 @@ Known-alive symbols:
   other CharlieBot homes that still hold v1 sessions. This host's primary home holds none in the old format,
   but the trial home `~/.charliebot-session-task-tree` still held two v1 sessions when counted in 2026-10, so
   the migration-code kind of Step 1 does not match them. Never delete either file or its tests.
-- `_get_close_waiter` (`_StdinPipeProtocol` in `src/runtime/agent_process/spawn.py`) — reached by
-  attribute name from the stdlib: `asyncio.StreamWriter.wait_closed()` awaits
-  `self._protocol._get_close_waiter(self)`, and the bare `asyncio.FlowControlMixin` raises
-  NotImplementedError without the override. The subprocess-stdin close path
-  (`src/runtime/agent_process/base.py` awaits `stdin.wait_closed()`) dispatches through it.
-  A whole-repo grep finds only the definition, so vulture flags it as an unused method.
 - `run_scheduled_backup` (`src/features/backup/backup.py`), `run_scheduled_usage_ledger`
   (`src/features/usage/usage_ledger.py`), `run_scheduled_cool_storage`
   (`src/features/usage/storage_cool.py`) and `run_scheduled`
@@ -434,7 +428,7 @@ Known-alive symbols:
   `DiscordSessionFields` (`src/features/discord/metadata.py`) and the claude_code pair
   (`ClaudeSessionFields`, `ClaudeThreadFields` in `src/backends/claude_code/claude_metadata.py`)
   register through the same call; a direct reference (`cast` in `discord_commands.py`, the
-  module's own `isinstance` checks) keeps vulture silent on them today.
+  module's own `isinstance` checks) keeps vulture silent on them.
 - `last_run_status` (`CronMetadata` in `src/features/cron/metadata.py`) and `slack_watermark_ts`
   (`SlackSessionFields` in `src/features/slack/metadata.py`) — fields of string-registered slot
   models, set by keyword and read by string. The scheduler writes `last_run_status` through
@@ -603,7 +597,7 @@ Known-alive symbols:
 - `prompt_rules` (`SessionDetailResponse` in `src/runtime/api/sessions.py`) — kept
   deliberately: the detail builder writes `prompt_rule_summaries` into every session-detail
   payload, and the field's comment names its reader, the later Task/Context UI. Nothing reads
-  the attribute today, so vulture flags the declaration as an unused variable at 60%
+  the attribute, so vulture flags the declaration as an unused variable at 60%
   confidence.
 - `stray` (`tests/test_metadata_slots.py`) and `unregistered_key`
   (`tests/test_sessions_status_scope.py`) — attribute writes of keys no owner registers on an

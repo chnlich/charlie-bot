@@ -113,7 +113,7 @@ async def resolve_requested_subagent_backend_model(
   if role in _POOL_ROLES and cfg.backends.pool:
     option = backend_pool.select(cfg, caller=role.value)
     if option is None:
-      raise ValueError(f"no backends.pool member is available: {backend_pool.recovery_report(cfg)}")
+      raise ValueError(backend_pool.no_member_message(cfg))
     return option.id, models.option_default_model(option, subject="pool member "), True
   backend_id, model = _resolve_session_default_backend_model(cfg, session_meta)
   return backend_id, model, False

@@ -231,7 +231,7 @@ async def read_thread(
   return await _read_own_thread(session_id, limit, cfg, store, events)
 
 
-async def check_setup(cfg: config.CharlieBotConfig) -> dict:
+async def check_setup() -> dict:
   """Report the Discord bot token's setup: identity, intent, and per-guild permissions.
 
   Refuses with 409 when ``credentials.discord.bot_token`` is unset — there is

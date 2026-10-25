@@ -79,7 +79,7 @@ async def _reviewed_delivery(
 
   deadline = asyncio.get_event_loop().time() + 20
   while asyncio.get_event_loop().time() < deadline:
-    if [e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]:
+    if conftest.child_reports(tree, manager.id):
       break
     await asyncio.sleep(0.05)
   else:
@@ -88,10 +88,6 @@ async def _reviewed_delivery(
   assert len(reviews) == 1
   assert tree.runs.terminal_outcome(tree.runs.load_events_sync(worker.id), reviews[0].id) == "success"
   return tree, manager.id, worker.id, repo
-
-
-def _reports(tree: task_sessions.TaskTreeManager, manager_id: str) -> list[dict]:
-  return [e for e in tree.events.load_events(manager_id) if e.get("type") == ET.CHILD_REPORT]
 
 
 @pytest.mark.asyncio
@@ -110,7 +106,7 @@ async def test_commit_published_only_on_origin_base_closes_the_reviewed_task(
   deadline = asyncio.get_event_loop().time() + 10
   while asyncio.get_event_loop().time() < deadline and tree.task_state(worker_id) != "completed":
     await asyncio.sleep(0.05)
-  reports = _reports(tree, manager_id)
+  reports = conftest.child_reports(tree, manager_id)
   assert tree.task_state(worker_id) == "completed", reports
   assert [r["outcome"] for r in reports] == ["completed"]
   # The recorded landing names the published target, so the close's
@@ -124,7 +120,7 @@ async def test_commit_on_neither_base_ref_reports_blocked_with_the_git_reason(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   tree, manager_id, worker_id, _repo = await _reviewed_delivery(tmp_path, monkeypatch, reviewer_pushes=False)
 
-  reports = _reports(tree, manager_id)
+  reports = conftest.child_reports(tree, manager_id)
   assert [r["outcome"] for r in reports] == ["blocked"]
   summary = reports[0]["summary"]
   review = next(r for r in tree.runs.list_run_records_sync(worker_id) if r.kind == "review")
@@ -145,7 +141,7 @@ async def test_review_without_closing_words_reports_its_verdict_unknown(
   tree, manager_id, _worker_id, _repo = await _reviewed_delivery(
       tmp_path, monkeypatch, reviewer_pushes=False, review_text="")
 
-  reports = _reports(tree, manager_id)
+  reports = conftest.child_reports(tree, manager_id)
   assert [r["outcome"] for r in reports] == ["blocked"]
   assert reports[0]["summary"].splitlines()[-1] == "The review run left no closing words, so its verdict is unknown."
 

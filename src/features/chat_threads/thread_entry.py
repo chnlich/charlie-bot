@@ -130,6 +130,13 @@ class ThreadPlatform:
     """Wire type of the platform's persisted ack audit record."""
     return f"{self.name}_ack"
 
+  @property
+  def platform_line(self) -> str:
+    """The platform line a thread reply contract opens with: the reply command and the post limit."""
+    return (
+        f"Platform: {self.display_name}. Reply command: `{self.reply_command} --file <path>`. "
+        f"Per-message limit: {self.max_post_chars} characters. {LINKED_PAGES_LINE}")
+
 
 @dataclasses.dataclass(frozen=True)
 class ThreadMessage:

@@ -169,10 +169,6 @@ def summon_session_id(guild_id: str, thread_id: str) -> str:
 # Prompt texts
 # ---------------------------------------------------------------------------
 
-_PLATFORM_LINE = (
-    f"Platform: Discord. Reply command: `{_REPLY_COMMAND} --file <path>`. "
-    f"Per-message limit: {_MAX_POST_CHARS} characters. {thread_entry.LINKED_PAGES_LINE}")
-
 
 def thread_contract_part() -> str:
   """The Discord part of the thread reply contract: the platform line and the read sentences.
@@ -184,7 +180,7 @@ def thread_contract_part() -> str:
   round answers.
   """
   return (
-      f"{_PLATFORM_LINE}\n"
+      f"{DISCORD.platform_line}\n"
       f"用 `{_READ_COMMAND}` 读这条线程（服务端代读，返回 bot 在这条线程里能看到的消息，未读的随之记为已读）。"
       "读回里 `summon: true` 的消息就是本轮要回答的召唤。\n"
       f"跟帖唤醒（`{_FOLLOW_TRIGGER_PREFIX} floor=<id>`）：用 `{_READ_COMMAND}` 读线程里的新消息"

@@ -63,7 +63,7 @@ def _sitrep_ok_doc() -> str:
   return _genre_doc(
       "sitrep", '<section><h2><span class="n">1</span> What waits on you?</h2><p>Nothing.</p></section>'
       '<section><h2><span class="n">2</span> What is this and why?</h2>'
-      '<p>Why. <span class="req">r1</span></p></section>'
+      '<p>Why. <span class="req">r1</span> states the first requirement.</p></section>'
       '<section><h2><span class="n">3</span> What was verified?</h2><p>Done. <span class="src">s</span></p></section>'
       '<section><h2><span class="n">4</span> Risks</h2>'
       '<p><span class="tag fact">Fact</span> The reading holds. <span class="src">s</span></p></section>'
@@ -101,6 +101,78 @@ def test_shipped_template_passes_its_own_genre(tmp_path: pathlib.Path, genre: st
   cfg = _chrome_cfg(tmp_path)
   outcomes = artifact_check.run_assertions(genre, conftest.ROOT / "prompts" / template, cfg)
   assert [o for o in outcomes if not o.passed] == []
+
+
+# ---------------------------------------------------------------------------
+# req-chips: a requirement chip needs its gloss in the sentence that holds it
+# ---------------------------------------------------------------------------
+
+
+def test_req_chips_passes_when_the_chip_is_glossed_in_its_sentence(tmp_path: pathlib.Path) -> None:
+  (outcome,) = _run("sitrep", _write(tmp_path, _sitrep_ok_doc()))["req-chips"]
+  assert outcome.passed
+
+
+def test_req_chips_fails_when_the_sentence_ends_after_the_chip(tmp_path: pathlib.Path) -> None:
+  doc = _sitrep_ok_doc().replace(
+      '<span class="req">r1</span> states the first requirement.',
+      '<span class="req">r1</span>. A later sentence names the requirement.')
+  (outcome,) = _run("sitrep", _write(tmp_path, doc))["req-chips"]
+  assert not outcome.passed
+  assert "'r1'" in outcome.detail
+  assert "no gloss" in outcome.detail
+
+
+# ---------------------------------------------------------------------------
+# run-stated: a numeric table needs a block naming the run's changed and held-fixed factors
+# ---------------------------------------------------------------------------
+
+_NUMERIC_TABLE = (
+    '<table><thead><tr><th>checkpoint</th><th>score</th></tr></thead>'
+    '<tbody><tr><td>10</td><td>0.002378</td></tr></tbody></table>')
+
+
+def _sitrep_run_doc(variable_block: str = "") -> str:
+  return _sitrep_ok_doc().replace(
+      '<p>Done. <span class="src">s</span></p>',
+      _NUMERIC_TABLE + variable_block + '<p>Done. <span class="src">s</span></p>')
+
+
+@pytest.mark.parametrize(
+    "variable_block",
+    [
+        (
+            '<table><tr><th>role</th><th>value</th></tr>'
+            '<tr><td>Changed</td><td>weights randomly initialized; 3,506 columns dropped</td></tr>'
+            '<tr><td>Held fixed</td><td>commit e0852cbb; seed 3</td></tr></table>'),
+        ('<dl><dt>改了什么</dt><dd>权重随机初始化，删掉 3,506 列</dd>'
+         '<dt>保持不变</dt><dd>提交 e0852cbb，种子 3</dd></dl>'),
+    ],
+)
+def test_run_stated_passes_when_a_table_or_dl_states_both_roles(tmp_path: pathlib.Path, variable_block: str) -> None:
+  (outcome,) = _run("sitrep", _write(tmp_path, _sitrep_run_doc(variable_block)))["run-stated"]
+  assert outcome.passed
+
+
+def test_run_stated_fails_when_the_numeric_table_has_no_variable_block(tmp_path: pathlib.Path) -> None:
+  (outcome,) = _run("sitrep", _write(tmp_path, _sitrep_run_doc()))["run-stated"]
+  assert not outcome.passed
+  assert "changed-factor row" in outcome.detail
+  assert "held-fixed-factor row" in outcome.detail
+
+
+def test_run_stated_names_the_one_missing_role_row(tmp_path: pathlib.Path) -> None:
+  block = '<table><tr><td>Changed</td><td>3,506 columns dropped</td></tr></table>'
+  (outcome,) = _run("sitrep", _write(tmp_path, _sitrep_run_doc(block)))["run-stated"]
+  assert not outcome.passed
+  assert "held-fixed-factor row" in outcome.detail
+  assert "changed-factor row" not in outcome.detail
+
+
+def test_run_stated_is_inert_without_a_numeric_table_cell(tmp_path: pathlib.Path) -> None:
+  (outcome,) = _run("sitrep", _write(tmp_path, _sitrep_ok_doc()))["run-stated"]
+  assert outcome.passed
+  assert outcome.detail == "no numeric table cell"
 
 
 # ---------------------------------------------------------------------------

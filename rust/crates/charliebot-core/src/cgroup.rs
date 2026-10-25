@@ -126,17 +126,21 @@ mod tests {
 
   #[test]
   fn user_slice_dir_nests_under_each_dash_prefix() {
-    let base = Path::new("/sys/fs/cgroup/user.slice/user-1001.slice/user@1001.service");
-    assert_eq!(user_slice_dir(base, "app.slice"), base.join("app.slice"));
+    let root = tempfile::tempdir().unwrap();
+    let base = root.path().join("user.slice/user-1001.slice/user@1001.service");
+    assert_eq!(user_slice_dir(&base, "app.slice"), base.join("app.slice"));
     assert_eq!(
-      user_slice_dir(base, "charliebot-agents.slice"),
+      user_slice_dir(&base, "charliebot-agents.slice"),
       base.join("charliebot.slice").join("charliebot-agents.slice")
     );
     assert_eq!(
-      user_slice_dir(base, "charliebot-repair.slice"),
+      user_slice_dir(&base, "charliebot-repair.slice"),
       base.join("charliebot.slice").join("charliebot-repair.slice")
     );
-    assert_eq!(user_slice_dir(base, "a-b-c.slice"), base.join("a.slice").join("a-b.slice").join("a-b-c.slice"));
+    assert_eq!(
+      user_slice_dir(&base, "a-b-c.slice"),
+      base.join("a.slice").join("a-b.slice").join("a-b-c.slice")
+    );
   }
 
   #[test]

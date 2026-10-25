@@ -8,6 +8,8 @@ costs no import. ``metadata_slots`` imports the models and checks them on its fi
 
 from typing import NamedTuple
 
+from src.infra import deferred
+
 ON_SESSION = "session"
 ON_THREAD = "thread"
 FILES = (ON_SESSION, ON_THREAD)
@@ -37,8 +39,7 @@ def register_metadata_fields(owner: str, model: str, *, on: str = ON_SESSION, af
   """
   if on not in FILES:
     raise ValueError(f"on must be one of {FILES}, got {on!r}")
-  module_name, separator, attr = model.partition(":")
-  if not separator or not module_name or not attr:
+  if deferred.split_attr(model) is None:
     raise ValueError(f"{model!r} is not a 'module:Class' string")
   if any(registration.owner == owner and registration.on == on for registration in _registered):
     raise ValueError(f"{owner!r} already registered fields on {on} metadata")

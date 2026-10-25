@@ -13,7 +13,10 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+  import asyncio
   import pathlib
+
+  import fastapi
 
   from src.infra import config
 
@@ -33,8 +36,8 @@ class ServiceContext:
   """What the server hands each service's start_service."""
   __slots__ = ("app", "cfg", "recovery_task")
 
-  def __init__(self, app, cfg, recovery_task) -> None:
-    # app: the FastAPI app; cfg: CharlieBotConfig; recovery_task: the lifespan's crash-recovery asyncio.Task.
+  def __init__(self, app: fastapi.FastAPI, cfg: config.CharlieBotConfig, recovery_task: asyncio.Task[None]) -> None:
+    # recovery_task is the lifespan's crash-recovery task.
     self.app = app
     self.cfg = cfg
     self.recovery_task = recovery_task

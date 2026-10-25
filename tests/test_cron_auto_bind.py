@@ -646,6 +646,16 @@ async def test_bound_node_wake_on_a_live_anchor_carries_no_prefix(tick_env, monk
   assert outcome1 == "success"
   assert builds[0]["backend"].prompt.startswith(sequence_controller.scheduled_report_prefix("nightly"))
 
+  # The status reminder that turn 1 wakes carries its own Run: the second report
+  # must find that Run finished, or it consumes the node and no fresh turn launches.
+  reminder = [r for r in tree.runs.list_run_records_sync(node_id) if r.id != decision["run_id"]]
+  deadline = asyncio.get_event_loop().time() + 15
+  while not reminder and asyncio.get_event_loop().time() < deadline:
+    await asyncio.sleep(0.05)
+    reminder = [r for r in tree.runs.list_run_records_sync(node_id) if r.id != decision["run_id"]]
+  assert len(reminder) == 1, reminder
+  await test_task_execution.wait_for_terminal_run(tree, node_id, reminder[0].id)
+
   # A now-valid anchor on the same native identity: the conversation continues.
   await session_blocks.anchors.persist_cc_session_id(node_id, "cc-live")
   disk = await session_blocks.store.read_metadata_fresh(node_id)

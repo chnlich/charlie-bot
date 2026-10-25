@@ -27,7 +27,7 @@ plan registration gate (src/features/artifacts/plans.py) enforces exactly the se
 off the page carries a content name at first use.
 
 ``run-stated`` makes a page that shows a decimal in a table cell state what its run changed and
-what it held fixed, each with a value, in a table or dl. ``req-chips`` requires each span.req
+what it held fixed, each with a value, in another table or dl. ``req-chips`` requires each span.req
 chip's own sentence to carry readable text after the chip: its gloss.
 """
 
@@ -383,8 +383,13 @@ def _check_fact_anchored(ctx: _Context) -> list[AssertionOutcome]:
 # req-chips and run-stated — the requirement gloss and the run's variable block
 # ---------------------------------------------------------------------------
 
-# Readable text carries a letter or a digit (CJK included); punctuation alone is not a gloss or a value.
-_READABLE_TEXT_RE = re.compile(r"[A-Za-z0-9\u4e00-\u9fff]")
+# Readable text carries a Unicode letter or digit; punctuation alone is not a gloss or a value.
+
+
+def _has_readable_text(value: str) -> bool:
+  """Return whether *value* contains a Unicode letter or digit."""
+  return any(char.isalnum() for char in value)
+
 
 # A requirement chip glosses in the block that holds it: the chip is fenced so the text after it
 # can be read without guessing which occurrence of the chip's name came first.
@@ -448,7 +453,7 @@ def _check_req_chips(ctx: _Context) -> list[AssertionOutcome]:
       continue
     after = _marked_element_text(block, chip).split(_REQ_END, 1)[1]
     tail = _SENTENCE_END_RE.split(after, 1)[0]
-    if not _READABLE_TEXT_RE.search(tail):
+    if not _has_readable_text(tail):
       failures.append(
           _fail(
               name, f"requirement chip #{index} {chip_text!r} (section {heading!r}) carries no gloss "
@@ -486,7 +491,7 @@ def _run_row_role(chunks: list[str]) -> str | None:
       if match is None:
         continue
       value = " ".join([chunk[:match.start()] + chunk[match.end():], *chunks[:index], *chunks[index + 1:]])
-      if _READABLE_TEXT_RE.search(value):
+      if _has_readable_text(value):
         return role
   return None
 
@@ -494,31 +499,51 @@ def _run_row_role(chunks: list[str]) -> str | None:
 def _check_run_stated(ctx: _Context) -> list[AssertionOutcome]:
   """A page that shows a decimal in a table cell states its run's changed and held-fixed factors.
 
-  Every table and dl on the page is a candidate variable block. A block satisfies the assertion
-  when one row names the changed role and another names the held-fixed role, each row carrying
-  readable text besides the role word. The failure detail names the role row that no block states.
+  A dl is separate from the measured table. A table can state the factors when another
+  decimal-bearing table is present, so numeric factor values remain valid. A block satisfies the
+  assertion when one row names the changed role and another names the held-fixed role, each row
+  carrying readable text besides the role word. The failure detail names the role row or same-block
+  pairing that is missing.
   """
   name = RUN_STATED
   cells = _find(ctx.root, "td") + _find(ctx.root, "th")
-  if not any(_RUN_DECIMAL_RE.search(_text(cell)) for cell in cells):
+  numeric_cells = [cell for cell in cells if _RUN_DECIMAL_RE.search(_text(cell))]
+  if not numeric_cells:
     return [_ok(name, "no numeric table cell")]
-  best: set[str] = set()
+
+  numeric_table_ids: set[int] = set()
+  for cell in numeric_cells:
+    table = cell.parent
+    while table is not None and table.tag != "table":
+      table = table.parent
+    if table is not None:
+      numeric_table_ids.add(id(table))
+
+  observed_roles: set[str] = set()
+  complete_block = False
   for block in _descendants(ctx.root):
     if block.tag not in ("table", "dl"):
+      continue
+    if id(block) in numeric_table_ids and len(numeric_table_ids) == 1:
       continue
     rows = _table_rows(block) if block.tag == "table" else _dl_rows(block)
     roles = {role for role in (_run_row_role(chunks) for chunks in rows) if role is not None}
     if {"changed", "held"} <= roles:
-      return [_ok(name, "a table or dl states the changed and held-fixed factors")]
-    if len(roles) > len(best):
-      best = roles
+      complete_block = True
+      break
+    observed_roles.update(roles)
+  if complete_block:
+    return [_ok(name, "another table or dl states the changed and held-fixed factors")]
+
   missing = [
       label for role, label in (("changed", "changed-factor row"), ("held", "held-fixed-factor row"))
-      if role not in best
+      if role not in observed_roles
   ]
+  if not missing:
+    missing = ["changed-factor row and held-fixed-factor row in the same block"]
   return [
       _fail(
-          name, "a table cell holds a decimal number, but no table or dl states the "
+          name, "a table cell holds a decimal number, but no other table or dl states the "
           f"{' and the '.join(missing)} with a value")
   ]
 

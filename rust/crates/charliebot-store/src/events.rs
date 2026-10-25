@@ -1,4 +1,4 @@
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
@@ -33,7 +33,6 @@ const TAIL_WINDOW_SIZE: usize = 512 * 1024;
 const LIVE_RANGE_WALK_BYTE_BUDGET: usize = 32 * 1024 * 1024;
 // The head a type walk reads before it parses a line: a type string within it is proven without the rest of the line.
 const TYPE_HEAD_PROOF_BYTES: usize = 256;
-const REVERSE_WALK_CHUNK_BYTES: usize = 1 << 16;
 
 #[derive(Clone)]
 struct LiveRangeMemo {
@@ -1218,76 +1217,130 @@ fn file_signature(path: &Path) -> StoreResult<Option<(fs::Metadata, FileSignatur
 }
 
 /// Visit one NDJSON file's lines whose type is in `types`, newest first, from byte `end` back to the file's start.
+///
+/// The mapped walk follows Python's mmap/rfind mechanism in src/infra/ndjson.py:405-470, keeping its line order and
+/// early stop while letting the kernel fault the pages it crosses instead of issuing one read per chunk.
 fn visit_file_facts_from_end<T>(
   path: &Path,
   end: u64,
   types: &[&str],
   visit: &mut impl FnMut(ChatEvent) -> Option<T>,
 ) -> StoreResult<Option<T>> {
-  let mut file = match File::open(path) {
-    Ok(file) => file,
-    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-    Err(error) => return Err(StoreError::new(format!("{}: {error}", path.display()))),
-  };
-  let mut pos = end;
-  let mut line_end = end;
-  let mut chunk = vec![0_u8; REVERSE_WALK_CHUNK_BYTES];
-  while pos > 0 {
-    let start = pos.saturating_sub(REVERSE_WALK_CHUNK_BYTES as u64);
-    let size = usize::try_from(pos - start).expect("a walk chunk fits in memory");
-    read_exact_at(&mut file, path, start, &mut chunk[..size])?;
-    for index in (0..size).rev() {
-      if chunk[index] != b'\n' {
+  let Some(map) = open_fact_file(path)? else { return Ok(None) };
+  let mut walk = ReverseFactLines::new(map.bytes(), end);
+  Ok(visit_reverse_fact_lines(&mut walk, types, visit))
+}
+
+fn open_fact_file(path: &Path) -> StoreResult<Option<fsutil::FileMap>> {
+  match fsutil::FileMap::open(path) {
+    Ok(map) => Ok(map),
+    Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+    Err(error) => Err(StoreError::new(format!("{}: {error}", path.display()))),
+  }
+}
+
+struct ReverseFactLines<'a> {
+  bytes: &'a [u8],
+  pos: usize,
+  #[cfg(test)]
+  lowest: usize,
+  #[cfg(test)]
+  scan_end: usize,
+}
+
+impl<'a> ReverseFactLines<'a> {
+  fn new(bytes: &'a [u8], end: u64) -> Self {
+    let pos = usize::try_from(end.min(bytes.len() as u64)).expect("a mapped file offset fits in usize");
+    Self {
+      bytes,
+      pos,
+      #[cfg(test)]
+      lowest: bytes.len(),
+      #[cfg(test)]
+      scan_end: pos,
+    }
+  }
+
+  fn next_line(&mut self) -> Option<&'a [u8]> {
+    while self.pos > 0 {
+      let pos = self.pos;
+      let newline = self.bytes[..pos].iter().rposition(|byte| *byte == b'\n');
+      let start = newline.map_or(0, |index| index + 1);
+      if start == pos {
+        // A trailing or doubled newline leaves an empty segment, which Python's reader also skips.
+        let newline = newline.unwrap_or(0);
+        #[cfg(test)]
+        {
+          self.lowest = self.lowest.min(newline);
+        }
+        self.pos = newline;
         continue;
       }
-      let newline = start + index as u64;
-      if newline + 1 < line_end
-        && let Some(value) = visit_line_facts(&mut file, path, newline + 1..line_end, types, visit)?
+      #[cfg(test)]
       {
-        return Ok(Some(value));
+        self.lowest = self.lowest.min(newline.unwrap_or(0));
       }
-      line_end = newline;
+      self.pos = newline.unwrap_or(0);
+      return Some(&self.bytes[start..pos]);
     }
-    pos = start;
+    None
   }
-  if line_end > 0 {
-    return visit_line_facts(&mut file, path, 0..line_end, types, visit);
+
+  #[cfg(test)]
+  fn mapped_span(&self) -> usize {
+    mapped_span(self.bytes.len(), self.lowest, self.scan_end)
   }
-  Ok(None)
+}
+
+fn visit_reverse_fact_lines<T>(
+  walk: &mut ReverseFactLines<'_>,
+  types: &[&str],
+  visit: &mut impl FnMut(ChatEvent) -> Option<T>,
+) -> Option<T> {
+  while let Some(line) = walk.next_line() {
+    if let Some(value) = visit_line_facts(line, types, visit) {
+      return Some(value);
+    }
+  }
+  None
+}
+
+#[cfg(test)]
+fn visit_file_facts_from_end_with_span<T>(
+  path: &Path,
+  end: u64,
+  types: &[&str],
+  visit: &mut impl FnMut(ChatEvent) -> Option<T>,
+) -> StoreResult<(Option<T>, usize)> {
+  let Some(map) = open_fact_file(path)? else { return Ok((None, 0)) };
+  let mut walk = ReverseFactLines::new(map.bytes(), end);
+  let value = visit_reverse_fact_lines(&mut walk, types, visit);
+  Ok((value, walk.mapped_span()))
 }
 
 /// Visit one line when its type is in `types`; a line whose first bytes prove another type is skipped unparsed.
-fn visit_line_facts<T>(
-  file: &mut File,
-  path: &Path,
-  line: std::ops::Range<u64>,
-  types: &[&str],
-  visit: &mut impl FnMut(ChatEvent) -> Option<T>,
-) -> StoreResult<Option<T>> {
-  let len = usize::try_from(line.end - line.start).expect("one event line fits in memory");
-  let mut head = vec![0; len.min(TYPE_HEAD_PROOF_BYTES)];
-  read_exact_at(file, path, line.start, &mut head)?;
-  if type_head_verdict(&head, types) == Some(false) {
-    return Ok(None);
+fn visit_line_facts<T>(line: &[u8], types: &[&str], visit: &mut impl FnMut(ChatEvent) -> Option<T>) -> Option<T> {
+  let head = &line[..line.len().min(TYPE_HEAD_PROOF_BYTES)];
+  if type_head_verdict(head, types) == Some(false) {
+    return None;
   }
-  let raw = if head.len() == len {
-    head
-  } else {
-    let mut raw = vec![0; len];
-    read_exact_at(file, path, line.start, &mut raw)?;
-    raw
-  };
-  let Some(event) = ndjson::parse_line_compact(&raw) else { return Ok(None) };
-  let Some(event_type) = event.get("type").and_then(CompactValue::as_str) else { return Ok(None) };
+  let event = ndjson::parse_line_compact(line)?;
+  let event_type = event.get("type").and_then(CompactValue::as_str)?;
   if !types.contains(&event_type) {
-    return Ok(None);
+    return None;
   }
-  Ok(visit(event))
+  visit(event)
 }
 
-fn read_exact_at(file: &mut File, path: &Path, start: u64, buffer: &mut [u8]) -> StoreResult<()> {
-  file.seek(SeekFrom::Start(start)).map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
-  file.read_exact(buffer).map_err(|error| StoreError::new(format!("{}: {error}", path.display())))
+#[cfg(test)]
+fn mapped_span(file_len: usize, lowest: usize, scan_end: usize) -> usize {
+  if scan_end == 0 || lowest == file_len {
+    return 0;
+  }
+  let page_bytes = usize::try_from(fsutil::page_bytes()).expect("a page size fits in usize");
+  let page_start = (lowest / page_bytes) * page_bytes;
+  let page_end = (((scan_end - 1) / page_bytes) + 1) * page_bytes;
+  page_end.min(file_len) - page_start
 }
 
 /// `Some(false)` when the `type` string that the head's first bytes serialize is not one of `types`; `None` when the
@@ -1574,6 +1627,62 @@ mod tests {
     let value = UtcDateTime::parse("2021-01-01T12:00:00Z").unwrap();
     let (year, week, _) = value.into_inner().date().to_iso_week_date();
     assert_eq!((year, week), (2020, 53));
+  }
+
+  #[test]
+  fn reverse_fact_walk_counts_only_the_mapped_span_through_the_newest_fact() {
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().join("chat_events.jsonl");
+    let mut raw = String::new();
+    for index in 0..2000 {
+      raw.push_str(&format!("{{\"type\":\"user\",\"content\":\"synthetic padding {index}\"}}\n"));
+    }
+    let fact_start = raw.len();
+    raw.push_str("{\"type\":\"task_closed\",\"outcome\":\"completed\"}\n");
+    std::fs::write(&path, &raw).unwrap();
+    let mut visits = 0;
+
+    let (state, mapped_bytes) =
+      visit_file_facts_from_end_with_span(&path, raw.len() as u64, &["task_closed"], &mut |event| {
+        visits += 1;
+        event.get("outcome").and_then(CompactValue::as_str).map(str::to_string)
+      })
+      .unwrap();
+
+    assert_eq!(state.as_deref(), Some("completed"));
+    assert_eq!(visits, 1, "the newest lifecycle fact ends the walk");
+    assert_eq!(mapped_bytes, mapped_span(raw.len(), fact_start - 1, raw.len()));
+    assert!(mapped_bytes <= fsutil::page_bytes() as usize);
+    assert!(mapped_bytes * 20 < raw.len(), "older padding stays outside the mapped span");
+  }
+
+  #[test]
+  fn reverse_fact_walk_counts_pages_crossed_by_a_long_trailing_line() {
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().join("chat_events.jsonl");
+    let page_bytes = fsutil::page_bytes() as usize;
+    let mut raw = String::new();
+    for index in 0..2000 {
+      raw.push_str(&format!("{{\"type\":\"user\",\"content\":\"synthetic padding {index}\"}}\n"));
+    }
+    let fact_start = raw.len();
+    raw.push_str("{\"type\":\"task_closed\",\"outcome\":\"cancelled\"}\n");
+    raw.push_str(&format!("{{\"type\":\"user\",\"content\":\"{}\"}}\n", "x".repeat(3 * page_bytes)));
+    std::fs::write(&path, &raw).unwrap();
+    let mut visits = 0;
+
+    let (state, mapped_bytes) =
+      visit_file_facts_from_end_with_span(&path, raw.len() as u64, &["task_closed"], &mut |event| {
+        visits += 1;
+        event.get("outcome").and_then(CompactValue::as_str).map(str::to_string)
+      })
+      .unwrap();
+
+    assert_eq!(state.as_deref(), Some("cancelled"));
+    assert_eq!(visits, 1, "the walk stops after finding the older lifecycle fact");
+    assert_eq!(mapped_bytes, mapped_span(raw.len(), fact_start - 1, raw.len()));
+    assert!(mapped_bytes > 3 * page_bytes, "the entire long line's pages are touched");
+    assert!(mapped_bytes * 4 < raw.len(), "older padding stays outside the mapped span");
   }
 
   #[tokio::test]

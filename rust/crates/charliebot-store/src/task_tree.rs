@@ -3184,8 +3184,8 @@ pub(crate) mod tests {
       .list_sessions(Some(SessionStatus::Active), None, None)
       .unwrap()
       .rows
-      .into_iter()
-      .map(|meta| meta.id)
+      .iter()
+      .map(|meta| meta.id.clone())
       .collect();
     assert!(!active.contains(&leaf.id));
     let archived_page = store.list_archived_page(None, 10, None, None).unwrap();

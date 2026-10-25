@@ -131,10 +131,10 @@ fn archived_page_body(
   merged.sort_by(|left, right| right.1.updated_at.cmp(&left.1.updated_at).then_with(|| right.1.id.cmp(&left.1.id)));
   let ids: Vec<String> = merged.iter().map(|(_, row)| row.id.clone()).collect();
   let listing_fields = features.registry.sequence_listing_fields(&ids, UtcDateTime::now());
-  let page_rows: Vec<SessionMetadata> = merged
+  let page_rows: Vec<Arc<SessionMetadata>> = merged
     .iter()
     .filter(|(context_only, row)| !context_only && page_ids.contains(&row.id))
-    .map(|(_, row)| row.clone())
+    .map(|(_, row)| Arc::new(row.clone()))
     .collect();
   let status =
     sidebar::resolve_sidebar_state(&features.store, &features.registry, &page_rows, true, true, false, false)?;
@@ -407,11 +407,11 @@ fn apply_derived_fields(
 fn fresh_sessions(
   features: &FeatureContext,
   ids: &[String],
-) -> Result<Vec<SessionMetadata>, charliebot_store::StoreError> {
+) -> Result<Vec<Arc<SessionMetadata>>, charliebot_store::StoreError> {
   let mut rows = Vec::new();
   for id in ids {
     if let Some(meta) = features.store.get_session_cached_or_read_sync(id)? {
-      rows.push(meta);
+      rows.push(Arc::new(meta));
     }
   }
   Ok(rows)

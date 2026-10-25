@@ -103,7 +103,7 @@ impl SearchMemos {
 static SEARCH_MEMOS: LazyLock<Mutex<SearchMemos>> = LazyLock::new(|| Mutex::new(SearchMemos::default()));
 
 /// Search every session name and active-session chat content, newest first.
-pub(crate) fn search_sessions(store: &Store, query: &str) -> StoreResult<Vec<SessionMetadata>> {
+pub(crate) fn search_sessions(store: &Store, query: &str) -> StoreResult<Vec<Arc<SessionMetadata>>> {
   search_sessions_with_memos(store, query, &SEARCH_MEMOS)
 }
 
@@ -111,7 +111,7 @@ fn search_sessions_with_memos(
   store: &Store,
   query: &str,
   memos: &Mutex<SearchMemos>,
-) -> StoreResult<Vec<SessionMetadata>> {
+) -> StoreResult<Vec<Arc<SessionMetadata>>> {
   if query.trim().is_empty() {
     return Ok(store.list_sessions(Some(SessionStatus::Active), None, None)?.rows);
   }
@@ -139,7 +139,7 @@ fn search_sessions_with_memos(
       content_candidates.push((meta, store.chat_events_path(&meta.id)));
     }
   }
-  names.sort_by_key(|left: &&SessionMetadata| Reverse(left.updated_at));
+  names.sort_by_key(|left| Reverse(left.updated_at));
   names.truncate(SEARCH_RESULT_LIMIT);
   let files: Vec<(String, PathBuf)> =
     content_candidates.iter().map(|(meta, path)| (meta.id.clone(), path.clone())).collect();
@@ -186,16 +186,16 @@ fn search_sessions_with_memos(
       SearchMatch { revision, files, signatures, row_ids: names.iter().map(|meta| meta.id.clone()).collect() },
     );
   }
-  Ok(names.into_iter().cloned().collect())
+  Ok(names.into_iter().map(Arc::clone).collect())
 }
 
-fn rows_for_ids(all: &[SessionMetadata], row_ids: &[String]) -> Vec<SessionMetadata> {
+fn rows_for_ids(all: &[Arc<SessionMetadata>], row_ids: &[String]) -> Vec<Arc<SessionMetadata>> {
   if row_ids.is_empty() {
     return Vec::new();
   }
-  let by_id: std::collections::HashMap<&str, &SessionMetadata> =
+  let by_id: std::collections::HashMap<&str, &Arc<SessionMetadata>> =
     all.iter().map(|meta| (meta.id.as_str(), meta)).collect();
-  row_ids.iter().map(|id| by_id[id.as_str()].clone()).collect()
+  row_ids.iter().map(|id| Arc::clone(by_id[id.as_str()])).collect()
 }
 
 fn file_signature(path: &Path, session_id: &str, memos: &Mutex<SearchMemos>) -> Option<FileSignature> {

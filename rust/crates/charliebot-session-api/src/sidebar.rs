@@ -28,7 +28,7 @@ impl Drop for SidebarSweepFlight {
 pub(crate) fn resolve_sidebar_state(
   store: &Arc<Store>,
   registry: &Arc<Registry>,
-  sessions: &[SessionMetadata],
+  sessions: &[Arc<SessionMetadata>],
   include_running: bool,
   include_trigger: bool,
   include_plan: bool,
@@ -67,7 +67,7 @@ pub(crate) fn resolve_sidebar_state(
       }
       derived.insert(meta.id.clone(), entry);
     } else {
-      active.push(meta);
+      active.push(Arc::clone(meta));
     }
   }
 
@@ -156,7 +156,7 @@ fn should_probe_synchronously(force_full: bool, force: bool, dirty: bool, has_sn
 fn schedule_sidebar_sweep(
   store: Arc<Store>,
   registry: Arc<Registry>,
-  sessions: Vec<SessionMetadata>,
+  sessions: Vec<Arc<SessionMetadata>>,
 ) -> StoreResult<()> {
   if SIDEBAR_SWEEP_RUNNING.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() {
     return Ok(());
@@ -173,7 +173,7 @@ fn schedule_sidebar_sweep(
       let recheck_liveness =
         charliebot_store::sidebar_state::snapshot_task_activity(&meta.id).is_some_and(|(_, work)| work == "running");
       if changed || recheck_liveness {
-        selected.push((meta.id, signature));
+        selected.push((meta.id.clone(), signature));
       }
     }
     let selected_ids: Vec<String> = selected.iter().map(|(session_id, _)| session_id.clone()).collect();
@@ -204,7 +204,6 @@ fn probe_session(store: &Store, registry: &Registry, session_id: &str) -> StoreR
   let session_dir = store.session_dir(session_id);
   let triggers_dir = session_dir.join("triggers");
   let (pending_count, next_trigger) = charliebot_store::trigger_files::pending_trigger_state(&triggers_dir);
-
   let mut pending_plan_approval = false;
   for contribution in registry.sidebar_contributions() {
     for (name, value) in contribution.row_flags(&session_dir, session_id) {

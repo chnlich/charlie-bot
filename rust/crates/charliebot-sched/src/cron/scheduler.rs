@@ -56,7 +56,7 @@ impl CronScheduler {
       return Ok(());
     }
     let old_sessions = self.features.store.list_sessions(Some(SessionStatus::Active), None, Some(true))?.rows;
-    let mut old_by_task: HashMap<String, Vec<SessionMetadata>> = HashMap::new();
+    let mut old_by_task: HashMap<String, Vec<Arc<SessionMetadata>>> = HashMap::new();
     for session in old_sessions {
       if let Some(name) = session.extra.get("scheduled_task").and_then(Value::as_str) {
         old_by_task.entry(name.to_string()).or_default().push(session);
@@ -97,7 +97,7 @@ impl CronScheduler {
     &self,
     task: &mut ScheduledTaskConfig,
     cfg: &CharlieBotConfig,
-    old_by_task: &HashMap<String, Vec<SessionMetadata>>,
+    old_by_task: &HashMap<String, Vec<Arc<SessionMetadata>>>,
   ) -> anyhow::Result<()> {
     let backend = effective_backend(task, cfg)?;
     let node = self
@@ -163,7 +163,7 @@ impl CronScheduler {
   async fn archive_legacy(
     &self,
     task_name: &str,
-    old_by_task: &HashMap<String, Vec<SessionMetadata>>,
+    old_by_task: &HashMap<String, Vec<Arc<SessionMetadata>>>,
   ) -> anyhow::Result<()> {
     if let Some(sessions) = old_by_task.get(task_name) {
       for session in sessions {
@@ -274,7 +274,7 @@ impl CronScheduler {
   ) -> anyhow::Result<TaskRunResult> {
     if task.session_id.is_none() {
       let sessions = self.features.store.list_sessions(Some(SessionStatus::Active), None, Some(true))?.rows;
-      let mut old_by_task: HashMap<String, Vec<SessionMetadata>> = HashMap::new();
+      let mut old_by_task: HashMap<String, Vec<Arc<SessionMetadata>>> = HashMap::new();
       for session in sessions {
         if let Some(name) = session.extra.get("scheduled_task").and_then(Value::as_str) {
           old_by_task.entry(name.to_string()).or_default().push(session);
@@ -591,7 +591,7 @@ impl Service for SchedulerService {
   }
 }
 
-fn newest_session(sessions: &[SessionMetadata]) -> Option<&SessionMetadata> {
+fn newest_session(sessions: &[Arc<SessionMetadata>]) -> Option<&Arc<SessionMetadata>> {
   sessions.iter().max_by_key(|session| session.created_at)
 }
 
@@ -1114,7 +1114,7 @@ mod tests {
       steps: None,
     };
     let scheduler = CronScheduler::new(Arc::clone(&features));
-    let old_by_task = HashMap::from([(task_name.to_string(), vec![legacy.clone()])]);
+    let old_by_task = HashMap::from([(task_name.to_string(), vec![Arc::new(legacy.clone())])]);
     scheduler.auto_bind(&mut task, &features.config.get().unwrap(), &old_by_task).await.unwrap();
 
     let node_id = task.session_id.as_deref().unwrap();

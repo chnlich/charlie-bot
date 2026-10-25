@@ -1214,11 +1214,9 @@ async fn retry_record_reuses_the_request_and_preserves_the_manager_input_batch()
     None,
     None,
   )
-  .await;
-  assert_eq!(
-    miss.err().expect("retrying an unknown run refuses").to_string(),
-    format!("run synthetic-missing-run not found in task {session_id}")
-  );
+  .await
+  .expect_err("retrying an unknown run refuses");
+  assert_eq!(miss.to_string(), format!("run synthetic-missing-run not found in task {session_id}"));
   Ok(())
 }
 

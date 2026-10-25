@@ -476,7 +476,13 @@ Each of the 30 commits in `git rev-list --no-merges 3c4591bad..d1f7e3ba6 -- src 
 
 ## Catch-up d113f2c4d open steps
 
-The status reminder, web status `since` fields, and archive behavior from `a98ee7ad0`, `a2b835107`, and `a31877580` are ported. No open parity steps remain for this catch-up.
+The status reminder (`a98ee7ad0`), web status `since` fields (`a2b835107`, `a98ee7ad0`), and archive behavior (`a31877580`, `a1c996ec4`) are ported. Three task-completion steps still differ because the status reminder is ordered differently around a manager run and child report, shifting later input event ids. These remaining lines belong to the status reminder port (`a98ee7ad0`). No row is intermittent: repeated runs print the same failing lines.
+
+| Scenario | Step | Stage | Main commit | Difference |
+| --- | --- | --- | --- | --- |
+| task-completion-routes | release the active manager run | agent-orchestration | a98ee7ad0 | R276: the status reminder is ordered differently around the manager run and child report, shifting the later run's input event id. |
+| task-completion-routes | cancel the task after its run finishes | agent-orchestration | a98ee7ad0 | R277: the status reminder is ordered differently around the manager run and child report, shifting the later run's input event id. |
+| task-completion-routes | operator archives an open subtree with its finished runs | agent-orchestration | a98ee7ad0 | R282: the recorded status reminder is ordered differently around the manager run and child report. |
 
 ## Catch-up d113f2c4d ignored Cargo tests
 

@@ -82,10 +82,6 @@ _MAX_POST_CHARS = 40000
 
 _REPLY_COMMAND = "charliebot slack reply"
 
-_PLATFORM_LINE = (
-    f"Platform: Slack. Reply command: `{_REPLY_COMMAND} --file <path>`. "
-    f"Per-message limit: {_MAX_POST_CHARS} characters. {thread_entry.LINKED_PAGES_LINE}")
-
 # Trigger-label prefix identifying a session's armed thread-follow record.
 _FOLLOW_TRIGGER_PREFIX = "slack-thread-follow"
 
@@ -247,7 +243,7 @@ def thread_contract_part(origin: metadata.SlackOrigin) -> str:
   summon this round answers.
   """
   return (
-      f"{_PLATFORM_LINE}\n"
+      f"{SLACK.platform_line}\n"
       f"本线程：channel `{origin.channel_id}`、thread_ts `{origin.thread_ts}`；"
       "用 slack 技能读线程（conversations.replies，channel 与 thread_ts 取上面的值）。"
       "本次召唤是线程里最新一条 @ 机器人的消息。\n"

@@ -1265,7 +1265,7 @@ impl<'a> ReverseFactLines<'a> {
   fn next_line(&mut self) -> Option<&'a [u8]> {
     while self.pos > 0 {
       let pos = self.pos;
-      let newline = self.bytes[..pos].iter().rposition(|byte| *byte == b'\n');
+      let newline = memchr::memrchr(b'\n', &self.bytes[..pos]);
       let start = newline.map_or(0, |index| index + 1);
       if start == pos {
         // A trailing or doubled newline leaves an empty segment, which Python's reader also skips.

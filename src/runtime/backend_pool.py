@@ -322,3 +322,13 @@ def no_member_message(cfg: config.CharlieBotConfig) -> str:
   report it, and an operator reads the same wording whichever one refused.
   """
   return f"no backends.pool member is available: {recovery_report(cfg)}"
+
+
+def router_failure_line(error: RouterError) -> str:
+  """The line a caller reports when :func:`route` raised.
+
+  The delegation route's 502 detail and the thread round's posted error both carry this
+  wording under the router error's own sentence, so one operator reading either sees the
+  same prefix.
+  """
+  return f"backend router failed: {error}"

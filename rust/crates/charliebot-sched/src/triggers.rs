@@ -1600,6 +1600,25 @@ mod tests {
 
   use super::*;
 
+  #[test]
+  fn matches_claims_the_trigger_routes_and_refuses_empty_or_extra_segments() {
+    let claimed = ["/api/internal/schedule-trigger", "/api/internal/triggers/s/t/cancel"];
+    let refused = [
+      "/api/internal/schedule-trigger/",
+      "/api/internal/triggers//t/cancel",
+      "/api/internal/triggers/s//cancel",
+      "/api/internal/triggers/s/t",
+      "/api/internal/triggers/s/t/cancel/",
+      "/api/internal/triggers/s/t/cancelx",
+    ];
+    for path in claimed {
+      assert!(matches(path), "{path} should be claimed");
+    }
+    for path in refused {
+      assert!(!matches(path), "{path} should not be claimed");
+    }
+  }
+
   const SESSION_ID: &str = "synthetic-trigger-session";
 
   #[test]

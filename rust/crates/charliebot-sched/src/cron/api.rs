@@ -352,7 +352,26 @@ mod tests {
   use serde_json::{Value, json};
   use tower::ServiceExt;
 
-  use super::routes;
+  use super::{matches, routes};
+
+  #[test]
+  fn matches_claims_the_task_routes_and_refuses_empty_or_extra_segments() {
+    let claimed = ["/api/cron/tasks", "/api/cron/tasks/n", "/api/cron/tasks/n/run"];
+    let refused = [
+      "/api/cron/tasks/",
+      "/api/cron/tasks//run",
+      "/api/cron/tasks/n/",
+      "/api/cron/tasks/n/run/",
+      "/api/cron/tasks/n/other",
+      "/api/cron/tasks/n/run/x",
+    ];
+    for path in claimed {
+      assert!(matches(path), "{path} should be claimed");
+    }
+    for path in refused {
+      assert!(!matches(path), "{path} should not be claimed");
+    }
+  }
   use crate::cron::scheduler::CronScheduler;
   use crate::cron::test_support::{feature_context, feature_context_with_extra_backends, manager};
 

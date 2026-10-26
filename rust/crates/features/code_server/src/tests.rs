@@ -164,12 +164,12 @@ fn the_bin_setting_names_the_executable_and_an_unset_one_searches_the_path() {
   write_executable(&bin, "#!/bin/sh\nexit 0\n");
   let cfg = load_config(&dir.path().join("home"), json!({"bin": bin.to_str().unwrap()}), dir.path());
   let section = cfg.section::<CodeServerConfig>("code_server");
-  assert_eq!(executable(section), Some(bin.to_str().unwrap().to_string()));
+  assert_eq!(executable(section).unwrap(), Some(bin.to_str().unwrap().to_string()));
 
   let missing = load_config(
     &dir.path().join("other-home"),
     json!({"bin": dir.path().join("absent").to_str().unwrap()}),
     dir.path(),
   );
-  assert_eq!(executable(missing.section::<CodeServerConfig>("code_server")), None);
+  assert_eq!(executable(missing.section::<CodeServerConfig>("code_server")).unwrap(), None);
 }

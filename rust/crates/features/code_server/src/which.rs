@@ -1,42 +1,16 @@
-//! `shutil.which`: the executable a command names. A name with a directory part is checked as it stands; a bare name is
-//! searched for along `PATH`.
-
-use std::path::Path;
-
-use nix::unistd::{AccessFlags, access};
+//! `shutil.which`: the executable a command names.
 
 /// `os.confstr("CS_PATH")` on glibc, the search path `shutil.which` uses when `PATH` is unset.
 const CS_PATH: &str = "/bin:/usr/bin";
 
 /// The path of the executable `command` names, or `None`. `search_path` is `PATH`'s value.
-pub(crate) fn which(command: &str, search_path: Option<&str>) -> Option<String> {
-  if command.contains('/') {
-    return usable(command).then(|| command.to_string());
-  }
+pub(crate) fn which(command: &str, search_path: Option<&str>) -> anyhow::Result<Option<String>> {
   let search_path = search_path.unwrap_or(CS_PATH);
-  if search_path.is_empty() {
-    return None;
-  }
-  search_path.split(':').map(|dir| join(dir, command)).find(|candidate| usable(candidate))
-}
-
-/// `os.path.join(dir, name)` for a bare name.
-fn join(dir: &str, name: &str) -> String {
-  if dir.is_empty() {
-    name.to_string()
-  } else if dir.ends_with('/') {
-    format!("{dir}{name}")
-  } else {
-    format!("{dir}/{name}")
-  }
-}
-
-/// `shutil._access_check`: the path exists, is not a directory, and this process may execute it.
-fn usable(path: &str) -> bool {
-  let path = Path::new(path);
-  match std::fs::metadata(path) {
-    Ok(metadata) => !metadata.is_dir() && access(path, AccessFlags::X_OK).is_ok(),
-    Err(_) => false,
+  let cwd = std::env::current_dir()?;
+  match which::which_in(command, Some(search_path), cwd) {
+    Ok(path) => Ok(Some(path.to_string_lossy().into_owned())),
+    Err(which::Error::CannotFindBinaryPath | which::Error::CannotGetCurrentDirAndPathListEmpty) => Ok(None),
+    Err(error) => Err(error.into()),
   }
 }
 
@@ -57,8 +31,8 @@ mod tests {
     let dir = tempfile::tempdir().expect("a temp dir");
     let binary = dir.path().join("code-server");
     executable(&binary);
-    assert_eq!(which(binary.to_str().unwrap(), None), binary.to_str().map(str::to_string));
-    assert_eq!(which(dir.path().join("missing").to_str().unwrap(), None), None);
+    assert_eq!(which(binary.to_str().unwrap(), None).unwrap(), binary.to_str().map(str::to_string));
+    assert_eq!(which(dir.path().join("missing").to_str().unwrap(), None).unwrap(), None);
   }
 
   #[test]
@@ -70,13 +44,13 @@ mod tests {
     fs::create_dir(&second).expect("the directory exists");
     fs::write(second.join("code-server"), "not executable\n").expect("the file writes");
     let search = format!("{}:{}", first.display(), second.display());
-    assert_eq!(which("code-server", Some(&search)), None);
+    assert_eq!(which("code-server", Some(&search)).unwrap(), None);
     executable(&second.join("code-server"));
-    assert_eq!(which("code-server", Some(&search)), Some(format!("{}/code-server", second.display())));
+    assert_eq!(which("code-server", Some(&search)).unwrap(), Some(format!("{}/code-server", second.display())));
   }
 
   #[test]
   fn an_empty_path_searches_nothing() {
-    assert_eq!(which("code-server", Some("")), None);
+    assert_eq!(which("code-server", Some("")).unwrap(), None);
   }
 }

@@ -123,4 +123,3 @@ The For-you view shows your web replies and hides the rest of your turn output.
 - After a context reset, read the session status with `charliebot web status show`.
 - The command also prints the Waiting on you items of each open descendant session.
 - The command also prints the **Now** of each open child session.
-- Then read the For-you view with `charliebot web dialog`.

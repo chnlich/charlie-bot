@@ -236,9 +236,16 @@ A lead keeps only coordination state in its context: each later model call re-re
   Read the newest ten matches, then the takeaways of the entries that fit your step.
   Put the lesson search for the task's own material in the task spec.
   You then get the lessons on how to delegate, and the worker gets the lessons on the material.
+- As a lead, run the Skills Discovery check on the skill list in your context.
+  Read each matching SKILL.md by its path.
+  The list names every skill, so a listing of the skill directories adds only material.
+  When no listed skill fits your next step, put the skill search in the task spec.
 - Ask the worker for a report that opens with a conclusion no longer than an agent message (Between Agents).
-- As a lead, when your answer needs a page, put the page in the worker's task spec.
-  The material that the page needs then stays out of your context.
+- When a question needs material as a lead, ask the worker for a conclusion report without a page.
+  As soon as the report arrives, write your answer reply from its conclusion.
+  The user then gets the answer within minutes, and the page and its checks follow.
+- When the answer needs a page, delegate the page in a second task after that reply.
+  Put the page in that task spec, so the material of the page stays out of your context.
 - Read the conclusion first. Then read only the sections that the current decision needs.
 - When another rule tells you to read, search, measure, or check evidence as a lead, have your worker do it.
 

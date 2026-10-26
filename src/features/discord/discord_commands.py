@@ -85,24 +85,15 @@ def _pending_summon_mention_ids(events: list[dict]) -> set[str]:
 
 
 async def _read_thread_messages(client: discord_client.DiscordClient, thread_id: str) -> list[dict]:
-  """Every message of the thread *thread_id*, oldest first, paged 100 at a time from id "0".
+  """Every message of the thread *thread_id*, oldest first.
 
-  Discord caps one read at 100 messages, so each page continues after the
-  previous page's last id until one comes back short. A failed page raises
-  ``ThreadReplyError`` 502 — the API error's text names the call, never the
+  A failed page raises ``ThreadReplyError`` 502 — the API error's text names the call, never the
   token.
   """
-  messages: list[dict] = []
-  after = "0"
-  while True:
-    try:
-      page = await client.get_messages(thread_id, after=after, limit=100)
-    except discord_client.DiscordAPIError as e:
-      raise thread_entry.ThreadReplyError(502, str(e)) from e
-    messages.extend(page)
-    if len(page) < 100:
-      return messages
-    after = page[-1]["id"]
+  try:
+    return await discord_client.read_all_messages(client, thread_id)
+  except discord_client.DiscordAPIError as e:
+    raise thread_entry.ThreadReplyError(502, str(e)) from e
 
 
 async def _read_own_thread(

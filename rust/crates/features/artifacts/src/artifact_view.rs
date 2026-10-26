@@ -7,6 +7,7 @@ use axum::http::request::Parts;
 use axum::response::Response;
 use charliebot_compat::responses;
 use charliebot_core::paths;
+use charliebot_core::pyfmt;
 use charliebot_registry::templating::Templating;
 use charliebot_registry::wiring::FileView;
 use charliebot_registry::{FeatureContext, StateError};
@@ -166,35 +167,16 @@ fn asset_versions(features: &FeatureContext) -> ViewResult<(String, String)> {
 }
 
 fn inject_artifact_ui(html: &str, session_id: &str, comment_version: &str, artifact_version: &str) -> String {
+  let mut encoded_session_id = String::with_capacity(session_id.len() + 2);
+  pyfmt::write_ascii_json_str(&mut encoded_session_id, session_id);
   let tags = format!(
     "<script>window.__cbcServerSessionId={};</script>\n<script src=/static/js/comment_post.js?v={comment_version}></script>\n<script src=/static/features/artifacts/artifact-comments.js?v={artifact_version}></script>",
-    python_json_string(session_id)
+    encoded_session_id
   );
   match html.rfind("</body>") {
     Some(index) => format!("{}{}\n{}", &html[..index], tags, &html[index..]),
     None => format!("{html}\n{tags}\n"),
   }
-}
-
-fn python_json_string(value: &str) -> String {
-  let encoded = serde_json::to_string(value).expect("a string is serializable as JSON");
-  let mut result = String::with_capacity(encoded.len());
-  for character in encoded.chars() {
-    if character.is_ascii() {
-      result.push(character);
-      continue;
-    }
-    let code = character as u32;
-    if code <= 0xffff {
-      result.push_str(&format!("\\u{code:04x}"));
-    } else {
-      let code = code - 0x10000;
-      let high = 0xd800 + (code >> 10);
-      let low = 0xdc00 + (code & 0x3ff);
-      result.push_str(&format!("\\u{high:04x}\\u{low:04x}"));
-    }
-  }
-  result
 }
 
 fn internal_error(error_type: &str, detail: String) -> ViewError {
@@ -259,11 +241,6 @@ mod tests {
     let html = inject_artifact_ui("<body>page</body>", "计划😀", "v1", "v2");
 
     assert!(html.contains(r#"window.__cbcServerSessionId="\u8ba1\u5212\ud83d\ude00";"#));
-  }
-
-  #[test]
-  fn session_ids_use_python_json_ascii_escaping() {
-    assert_eq!(python_json_string("计划😀"), r#""\u8ba1\u5212\ud83d\ude00""#);
   }
 
   #[test]

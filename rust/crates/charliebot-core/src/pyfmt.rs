@@ -400,6 +400,12 @@ fn write_closing_indent(out: &mut String, style: &JsonStyle, level: usize) {
 /// non-ASCII through (its ESCAPE table holds only the control set, quote and backslash), which is exactly
 /// the form the styles that do not set `ensure_ascii` take through [`serde_style_dumps`].
 pub fn write_ascii_json_str(out: &mut String, text: &str) {
+  if text.bytes().all(|byte| (b' '..=b'~').contains(&byte) && byte != b'"' && byte != b'\\') {
+    out.push('"');
+    out.push_str(text);
+    out.push('"');
+    return;
+  }
   out.push('"');
   for character in text.chars() {
     match character {

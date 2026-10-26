@@ -225,7 +225,8 @@ mod tests {
   }
 
   #[test]
-  fn prepend_adds_the_dir_once() {    let mut env = Env::from([("PATH".to_string(), "/usr/bin".to_string())]);
+  fn prepend_adds_the_dir_once() {
+    let mut env = Env::from([("PATH".to_string(), "/usr/bin".to_string())]);
     prepend_path_dir(&mut env, "/home/a/.local/bin");
     assert_eq!(env["PATH"], "/home/a/.local/bin:/usr/bin");
     prepend_path_dir(&mut env, "/home/a/.local/bin");

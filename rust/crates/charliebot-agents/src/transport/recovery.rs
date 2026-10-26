@@ -5,6 +5,7 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
+use serde_json::value::RawValue;
 use time::OffsetDateTime;
 
 /// A filter whose rejected type is provable from the raw line's first JSON key.
@@ -28,14 +29,18 @@ impl TypeLineFilter {
       return false;
     };
     let rest = trim_horizontal_space(after_colon);
-    let Some(quoted) = rest.strip_prefix(b"\"") else {
+    if !rest.starts_with(b"\"") {
+      return false;
+    }
+    // `RawValue` finds the end of the quoted token without decoding it, as Python's first-quote scan does.
+    let text = String::from_utf8_lossy(rest);
+    let Some(Ok(token)) = serde_json::Deserializer::from_str(&text).into_iter::<Box<RawValue>>().next() else {
       return false;
     };
-    let Some(end) = quoted.iter().position(|byte| *byte == b'"') else {
+    let Some(event_type) = token.get().strip_prefix('"').and_then(|value| value.strip_suffix('"')) else {
       return false;
     };
-    let event_type = String::from_utf8_lossy(&quoted[..end]);
-    !self.keep_types.iter().any(|kind| kind == event_type.as_ref())
+    !self.keep_types.iter().any(|kind| kind == event_type)
   }
 }
 

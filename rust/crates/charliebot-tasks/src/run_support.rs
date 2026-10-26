@@ -77,10 +77,10 @@ fn read_stderr_tail_file(path: &Path) -> anyhow::Result<(String, usize)> {
 pub(crate) fn visit_events_from_end<T>(
   path: &Path,
   keep_types: &[&str],
-  mut visit: impl FnMut(Value) -> Option<T>,
+  visit: impl FnMut(Value) -> Option<T>,
 ) -> anyhow::Result<(Option<T>, EventScanStats)> {
   let mut events = NewestFirstEvents::open(path, keep_types)?;
-  let value = events.by_ref().find_map(|event| visit(event));
+  let value = events.by_ref().find_map(visit);
   Ok((value, events.stats))
 }
 

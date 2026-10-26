@@ -10,7 +10,7 @@ import datetime
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from src.infra import config, models
+from src.infra import config, constants, models
 from src.runtime import scheduled_sessions, session_sidebar, session_store, thinking_state
 from src.runtime.hooks import sequence_controllers
 
@@ -167,14 +167,15 @@ class SessionListing:
       self,
       *,
       group: str | None = None,
-      limit: int = 100,
+      limit: int = constants.SESSION_PAGE_LIMIT_DEFAULT,
       before: str | None = None,
       before_id: str | None = None,
   ) -> dict:
     """One page of archived sessions, newest first, plus group aggregates.
 
     ``group`` picks membership: None = every archived session, "" = the
-    ungrouped ones, a name = that group. ``limit`` clamps to 1..500. The
+    ungrouped ones, a name = that group. ``limit`` clamps to the session page
+    bounds the endpoints and the CLI share. The
     keyset cursor ``(before, before_id)`` names the previous page's last row;
     rows strictly after it in ``(updated_at, id)``-descending order form the
     next page, so a row archived or deleted between fetches never shifts the
@@ -188,7 +189,7 @@ class SessionListing:
     Sequence-subtree rows are excluded before aggregation and pagination; the
     owned sessions themselves keep their rows.
     """
-    limit = max(1, min(500, limit))
+    limit = max(constants.SESSION_PAGE_LIMIT_MIN, min(constants.SESSION_PAGE_LIMIT_MAX, limit))
     metas = await self._with_derived_archive(
         await self._store.load_session_metas(status=models.SessionStatus.ARCHIVED), models.SessionStatus.ARCHIVED)
     # Sequence-subtree rows stay out of the Archived list; the owned sessions

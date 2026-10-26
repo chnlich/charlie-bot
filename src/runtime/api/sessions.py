@@ -13,7 +13,7 @@ import fastapi
 import pydantic
 from starlette import responses
 
-from src.infra import compression, config, log_once, memo, models
+from src.infra import compression, config, constants, log_once, memo, models
 from src.infra import event_types as ET
 from src.infra import responses as infra_responses
 from src.runtime import (
@@ -473,7 +473,7 @@ class ArchivedSessionsPage(pydantic.BaseModel):
 @router.get("/archived", response_model=ArchivedSessionsPage)
 async def list_archived_sessions(
     group: str | None = None,
-    limit: int = 100,
+    limit: int = constants.SESSION_PAGE_LIMIT_DEFAULT,
     before: str | None = None,
     before_id: str | None = None,
     listing: session_listing.SessionListing = fastapi.Depends(deps.get_session_listing),
@@ -844,7 +844,10 @@ def _task_http_error(e: Exception) -> fastapi.HTTPException:
 async def get_session_tree(
     parent_id: str | None = fastapi.Query(default=None),
     include_archived: bool = fastapi.Query(default=False),
-    limit: int = fastapi.Query(default=100, ge=1, le=500),
+    limit: int = fastapi.Query(
+        default=constants.SESSION_PAGE_LIMIT_DEFAULT,
+        ge=constants.SESSION_PAGE_LIMIT_MIN,
+        le=constants.SESSION_PAGE_LIMIT_MAX),
     cursor: str | None = fastapi.Query(default=None),
     task_mgr: task_sessions.TaskTreeManager = fastapi.Depends(deps.get_task_manager),
 ) -> dict:
@@ -1544,7 +1547,10 @@ async def get_events_jsonl(session_id: str, request: fastapi.Request) -> respons
 @router.get("/{session_id}/runs", response_model=models.RunPage)
 async def list_session_runs(
     session_id: str,
-    limit: int = fastapi.Query(default=100, ge=1, le=500),
+    limit: int = fastapi.Query(
+        default=constants.SESSION_PAGE_LIMIT_DEFAULT,
+        ge=constants.SESSION_PAGE_LIMIT_MIN,
+        le=constants.SESSION_PAGE_LIMIT_MAX),
     cursor: str | None = fastapi.Query(default=None),
     order: str = fastapi.Query(default="asc"),
     _meta: models.SessionMetadata = fastapi.Depends(deps.require_session),

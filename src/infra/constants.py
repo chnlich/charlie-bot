@@ -71,6 +71,13 @@ DISCORD_READ_LIMIT_MIN = 1
 DISCORD_READ_LIMIT_MAX = 100
 DISCORD_READ_LIMIT_DEFAULT = 50
 
+# Page size, in rows, of one session listing page: the tree and runs query bounds, the archived
+# listing's default and clamp, and the ``charliebot session tree`` parser share them, so a page
+# size the CLI sends is one the endpoint serves.
+SESSION_PAGE_LIMIT_MIN = 1
+SESSION_PAGE_LIMIT_MAX = 500
+SESSION_PAGE_LIMIT_DEFAULT = 100
+
 AUTH_STATUS_PATH = "/api/auth/status"
 
 # The operator-facing local-timestamp spelling: the usage page's "as of" and "generated"

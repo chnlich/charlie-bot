@@ -27,7 +27,7 @@ is not in the map), ``timestamp``, ``content``, ``attachments`` and ``unread``),
 ``watermark_id`` and ``more_unread``. Without ``--url`` it reads
 the session's own thread and marks the unread messages it returned as read; with
 ``--url`` it reads the linked channel or thread and marks nothing. ``--limit`` is
-the page size, 1..100, default 50.
+the page size; the parser and the endpoint share its bounds and default.
 
 ``check`` posts an empty body to the internal discord/check endpoint and prints
 the readback (``ok``, ``bot_user``, ``application_id``, ``message_content_intent``,
@@ -42,12 +42,8 @@ the reply-format contract is prompts/thread_reply_format.md.
 import argparse
 import sys
 
-from src.infra import help_formatter
+from src.infra import constants, help_formatter
 from src.runtime.cli import common
-
-_READ_LIMIT_MIN = 1
-_READ_LIMIT_MAX = 100
-_READ_LIMIT_DEFAULT = 50
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -64,9 +60,11 @@ def _build_parser() -> argparse.ArgumentParser:
   read.add_argument(
       "--limit",
       type=int,
-      default=_READ_LIMIT_DEFAULT,
+      default=constants.DISCORD_READ_LIMIT_DEFAULT,
       metavar="N",
-      help=f"Messages per page, {_READ_LIMIT_MIN}..{_READ_LIMIT_MAX} (default {_READ_LIMIT_DEFAULT})")
+      help=(
+          f"Messages per page, {constants.DISCORD_READ_LIMIT_MIN}..{constants.DISCORD_READ_LIMIT_MAX} "
+          f"(default {constants.DISCORD_READ_LIMIT_DEFAULT})"))
   common.add_session_arg(read)
 
   sub.add_parser("check", help="Verify the Discord bot setup; exits 1 when ok is false")
@@ -74,8 +72,10 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _validate_read_limit(limit: int) -> int:
-  if not _READ_LIMIT_MIN <= limit <= _READ_LIMIT_MAX:
-    common.exit_usage_error(f"--limit must be between {_READ_LIMIT_MIN} and {_READ_LIMIT_MAX}, got: {limit}")
+  if not constants.DISCORD_READ_LIMIT_MIN <= limit <= constants.DISCORD_READ_LIMIT_MAX:
+    common.exit_usage_error(
+        f"--limit must be between {constants.DISCORD_READ_LIMIT_MIN} and {constants.DISCORD_READ_LIMIT_MAX}, "
+        f"got: {limit}")
   return limit
 
 

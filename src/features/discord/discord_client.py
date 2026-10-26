@@ -6,10 +6,9 @@ type (``DiscordAPIError``) that names the failing call instead of leaking the
 token. The 429 policy lives in one place (``_request``): sleep the
 ``retry_after`` the API reports and retry, at most twice, then raise.
 
-Nothing calls this module yet — a later step wires the Discord listener and
-the CLI onto it. The module-level helpers (snowflake comparison, message
-links, the message-content intent check, the permission bit table) are pure,
-so the listener can reason about ids and permissions without an HTTP client.
+The module-level helpers (snowflake comparison, message links, the
+message-content intent check, the permission bit table) are pure, so the
+listener can reason about ids and permissions without an HTTP client.
 """
 
 from __future__ import annotations

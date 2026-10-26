@@ -38,7 +38,7 @@ from typing import TYPE_CHECKING
 from src.features.artifacts import artifact_check, artifact_wrap, constants
 from src.infra import constants as infra_constants
 from src.infra import help_formatter, home
-from src.runtime import cold_read
+from src.runtime import cold_read, run_identity
 from src.runtime.cli import common as cli_common
 
 if TYPE_CHECKING:
@@ -87,7 +87,7 @@ def _session_identity(cfg: config.CharlieBotConfig) -> str | None:
 
 def _session_profile(cfg: config.CharlieBotConfig, session_id: str) -> str:
   """The requesting session's profile (``manager`` or ``worker``) from its session metadata."""
-  meta_path = cfg.sessions_dir / session_id / "metadata.json"
+  meta_path = cfg.sessions_dir / session_id / run_identity.SESSION_METADATA_NAME
   try:
     profile = json.loads(meta_path.read_text(encoding="utf-8"))["profile"]
   except (OSError, ValueError, KeyError) as e:

@@ -1,6 +1,7 @@
 //! Timestamp text of the usage sources, in the form Python's `datetime` writes it.
 
 use anyhow::Context;
+use charliebot_core::timefmt;
 use time::{Duration, OffsetDateTime};
 
 /// `datetime.fromtimestamp(seconds, tz=UTC).isoformat()`.
@@ -13,16 +14,10 @@ pub(crate) fn utc_isoformat(seconds: f64) -> anyhow::Result<String> {
     instant += Duration::seconds(1);
     micros = 0;
   }
-  let fraction = if micros == 0 { String::new() } else { format!(".{micros:06}") };
-  Ok(format!(
-    "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}{fraction}+00:00",
-    instant.year(),
-    u8::from(instant.month()),
-    instant.day(),
-    instant.hour(),
-    instant.minute(),
-    instant.second(),
-  ))
+  let instant = instant
+    .replace_nanosecond(u32::try_from(micros * 1_000).expect("a microsecond is below one second"))
+    .context("the usage timestamp fraction is in range")?;
+  Ok(timefmt::isoformat(instant))
 }
 
 #[cfg(test)]

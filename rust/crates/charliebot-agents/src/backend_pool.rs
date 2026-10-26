@@ -388,30 +388,14 @@ fn validate_backend_pool_fields(values: &mut Map<String, Value>) -> Option<Strin
 }
 
 fn format_minutes(datetime: OffsetDateTime) -> String {
-  let value = datetime.to_offset(UtcOffset::UTC);
-  format!(
-    "{:04}-{:02}-{:02}T{:02}:{:02}+00:00",
-    value.year(),
-    u8::from(value.month()),
-    value.day(),
-    value.hour(),
-    value.minute()
-  )
+  const MINUTES: &[time::format_description::FormatItem<'static>] = time::macros::format_description!(
+    "[year]-[month]-[day]T[hour]:[minute][offset_hour sign:mandatory]:[offset_minute]"
+  );
+  datetime.to_offset(UtcOffset::UTC).format(MINUTES).expect("a UTC timestamp formats")
 }
 
 fn format_isoformat(datetime: OffsetDateTime) -> String {
-  let value = datetime.to_offset(UtcOffset::UTC);
-  let base = format!(
-    "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}",
-    value.year(),
-    u8::from(value.month()),
-    value.day(),
-    value.hour(),
-    value.minute(),
-    value.second()
-  );
-  let microseconds = value.microsecond();
-  if microseconds == 0 { format!("{base}+00:00") } else { format!("{base}.{microseconds:06}+00:00") }
+  charliebot_core::timefmt::isoformat(datetime.to_offset(UtcOffset::UTC))
 }
 
 struct RouterOutput {

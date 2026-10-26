@@ -88,7 +88,7 @@ pub(crate) fn visit_events_from_end<T>(
 /// first 256 bytes skips a line without parsing it, matching Python's `iter_ndjson_events_from_end` and
 /// `type_line_filter` (`src/infra/ndjson.py:404-547`). Each line's start is one backward `memrchr` from the previous
 /// line's start, so a walk that stops at a line leaves the older bytes unscanned, as Python's mmap walk does.
-pub(crate) struct NewestFirstEvents<'k> {
+pub struct NewestFirstEvents<'k> {
   map: Option<Mmap>,
   end: usize,
   keep_types: &'k [&'k str],
@@ -97,7 +97,8 @@ pub(crate) struct NewestFirstEvents<'k> {
 }
 
 impl<'k> NewestFirstEvents<'k> {
-  fn open(path: &Path, keep_types: &'k [&'k str]) -> anyhow::Result<Self> {
+  /// Map `path` for a walk of the events `keep_types` names; a missing file has no events.
+  pub fn open(path: &Path, keep_types: &'k [&'k str]) -> anyhow::Result<Self> {
     let map = match fsutil::map_file(path) {
       Ok(map) => map,
       Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,

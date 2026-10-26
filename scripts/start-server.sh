@@ -3,9 +3,9 @@
 # Start/stop stays manual: runs in the foreground, Ctrl-C to stop.
 # A current link in the release root selects the Rust release; without it the Python server runs.
 #
-# The server runs inside the charliebot-server scope under charliebot.slice, so its memory never
-# enters swap. Before it starts, the launcher checks both leaf slices against their unit files;
-# a missing slice or a different limit stops the start here, visibly.
+# Each server start has a timestamp-and-PID scope so earlier runs can keep their processes.
+# Before starting, the launcher checks both leaf slices against their unit files; a missing slice or different limit
+# stops the start visibly. --preflight checks the slices and creates a trial scope without writing a server log.
 set -uo pipefail
 
 # Resolve repo root from the script location — no absolute paths (shared repo).
@@ -13,9 +13,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 UNIT_DIR="$SCRIPT_DIR/systemd"
 
-# The systemd server scope: one scope per run, inside the hierarchy slice, with swap off.
-SERVER_SCOPE=(systemd-run --user --scope --unit=charliebot-server --slice=charliebot.slice
-              -p MemorySwapMax=0 --)
+# Server and trial scopes use the same slice and swap limit so both starts test the server's resource settings.
+run_in_scope() {
+  local unit_name="$1"
+  shift
+  systemd-run --user --scope --unit="$unit_name" --slice=charliebot.slice -p MemorySwapMax=0 -- "$@"
+}
 
 # One setting's value from a unit file: the last assignment wins in systemd, so the last
 # assignment printed here is the effective one; a missing key reads as infinity, the value
@@ -106,6 +109,20 @@ preflight_slices() {
 }
 
 main() {
+  TS="$(date +%Y%m%d_%H%M%S)"
+
+  if [ "${1:-}" = "--preflight" ]; then
+    if ! preflight_slices; then
+      exit 1
+    fi
+    PREFLIGHT_SCOPE_NAME="charliebot-preflight-${TS}-$$"
+    if ! run_in_scope "$PREFLIGHT_SCOPE_NAME" true; then
+      echo "launcher: systemd scope preflight failed for $PREFLIGHT_SCOPE_NAME" >&2
+      exit 1
+    fi
+    exit 0
+  fi
+
   cd "$REPO_ROOT"
 
   # Tests drive the real launcher through these variables; the defaults stay the
@@ -114,8 +131,8 @@ main() {
   RELEASES_DIR="${CHARLIEBOT_RELEASES_DIR:-$HOME/charliebot-releases}"
   CURRENT="$RELEASES_DIR/current"
   mkdir -p "$LOG_DIR"
-  TS="$(date +%Y%m%d_%H%M%S)"
   LOG="$LOG_DIR/server_${TS}.log"
+  SERVER_SCOPE_NAME="charliebot-server-${TS}-$$"
   ln -sfn "$LOG" "$LOG_DIR/server-latest.log"   # stable pointer to the newest log
 
   # -e or -L: a dangling current still selects Rust, so a broken release fails here instead of
@@ -131,6 +148,7 @@ main() {
   echo "CharlieBot server starting (repo: $REPO_ROOT)"
   echo "  log    -> $LOG"
   echo "  latest -> $LOG_DIR/server-latest.log"
+  echo "  scope  -> $SERVER_SCOPE_NAME"
 
   if ! preflight_slices; then
     echo "launcher: the memory slices do not match scripts/systemd/; not starting the server" >&2
@@ -151,10 +169,10 @@ main() {
       echo "launcher: --check-config failed (rc=${CHECK_RC}); roll back with: scripts/switch-server.sh python"
       exit "$CHECK_RC"
     fi
-    "${SERVER_SCOPE[@]}" "$CURRENT/charliebot-server" 2>&1 | tee -i -a "$LOG"
+    run_in_scope "$SERVER_SCOPE_NAME" "$CURRENT/charliebot-server" 2>&1 | tee -i -a "$LOG"
   else
     # PYTHONUNBUFFERED: avoid block buffering when piped, so log lines flush promptly.
-    PYTHONUNBUFFERED=1 "${SERVER_SCOPE[@]}" uv run python3 server.py 2>&1 | tee -i -a "$LOG"
+    PYTHONUNBUFFERED=1 run_in_scope "$SERVER_SCOPE_NAME" uv run python3 server.py 2>&1 | tee -i -a "$LOG"
   fi
   SERVER_RC="${PIPESTATUS[0]}"
   EXIT_LINE="$(date '+%Y-%m-%d %H:%M:%S.%3N') launcher: server exited rc=${SERVER_RC}"
@@ -165,5 +183,18 @@ main() {
 
 # Sourcing the script exposes preflight_slices to the tests without starting anything.
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
-  main
+  case "$#" in
+    0) main ;;
+    1)
+      [ "$1" = "--preflight" ] || {
+        echo "usage: start-server.sh [--preflight]" >&2
+        exit 1
+      }
+      main "$1"
+      ;;
+    *)
+      echo "usage: start-server.sh [--preflight]" >&2
+      exit 1
+      ;;
+  esac
 fi

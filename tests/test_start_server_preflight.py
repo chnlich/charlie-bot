@@ -1,8 +1,8 @@
-"""The launcher's slice preflight: it reads the limits from the unit files and stops the start on any
-difference, and both shell entry points parse."""
+"""The launcher checks its slices and trial scope before start, and both shell entry points parse."""
 
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 
@@ -36,6 +36,17 @@ def run_preflight(launcher: pathlib.Path, bin_dir: pathlib.Path) -> subprocess.C
       capture_output=True,
       text=True,
       check=False)
+
+
+def run_launcher_preflight(launcher: pathlib.Path, bin_dir: pathlib.Path, log_dir: pathlib.Path,
+                           **extra_env: str) -> subprocess.CompletedProcess[str]:
+  env = {
+      **os.environ,
+      "PATH": f"{bin_dir}:{os.environ['PATH']}",
+      "CHARLIEBOT_LOG_DIR": str(log_dir),
+  }
+  env.update(extra_env)
+  return subprocess.run(["bash", str(launcher), "--preflight"], env=env, capture_output=True, text=True, check=False)
 
 
 def test_preflight_accepts_limits_that_match_the_unit_files(tmp_path: pathlib.Path) -> None:
@@ -87,6 +98,74 @@ def test_preflight_rejects_an_inactive_slice(tmp_path: pathlib.Path) -> None:
   assert result.returncode != 0
   assert "charliebot-agents.slice" in result.stderr
   assert "inactive" in result.stderr
+
+
+def test_launcher_preflight_checks_slices_and_records_a_trial_scope(tmp_path: pathlib.Path) -> None:
+  launcher, bin_dir = stash_launcher(tmp_path)
+  systemd_stubs.write_systemctl(bin_dir)
+  systemd_stubs.write_systemd_run(bin_dir)
+  log_dir = tmp_path / "logs"
+
+  result = run_launcher_preflight(launcher, bin_dir, log_dir)
+
+  assert result.returncode == 0, result.stdout + result.stderr
+  records = systemd_stubs.read_systemd_run_records(bin_dir)
+  assert len(records) == 1
+  record = records[0]
+  unit_name = str(record["unit_name"])
+  assert re.fullmatch(r"charliebot-preflight-\d{8}_\d{6}-\d+", unit_name)
+  assert record["arguments"] == [
+      "--user", "--scope", f"--unit={unit_name}", "--slice=charliebot.slice", "-p", "MemorySwapMax=0", "--", "true"
+  ]
+  assert not log_dir.exists()
+
+
+def test_launcher_preflight_exits_1_when_systemd_refuses_the_trial_scope(tmp_path: pathlib.Path) -> None:
+  launcher, bin_dir = stash_launcher(tmp_path)
+  systemd_stubs.write_systemctl(bin_dir)
+  systemd_stubs.write_systemd_run(bin_dir)
+  log_dir = tmp_path / "logs"
+
+  result = run_launcher_preflight(launcher, bin_dir, log_dir, SYSTEMD_RUN_REFUSE_ALL="1")
+
+  assert result.returncode == 1
+  assert "start refused by test" in result.stderr
+  assert systemd_stubs.read_systemd_run_records(bin_dir) == []
+  assert not log_dir.exists()
+
+
+def test_launcher_preflight_exits_1_when_a_slice_limit_differs(tmp_path: pathlib.Path) -> None:
+  launcher, bin_dir = stash_launcher(tmp_path)
+  systemd_stubs.write_systemctl(bin_dir, agents_memory_max=systemd_stubs.AGENTS_MEMORY_MAX + 1)
+  systemd_stubs.write_systemd_run(bin_dir)
+  log_dir = tmp_path / "logs"
+
+  result = run_launcher_preflight(launcher, bin_dir, log_dir)
+
+  assert result.returncode == 1
+  assert "charliebot-agents.slice MemoryMax" in result.stderr
+  assert systemd_stubs.read_systemd_run_records(bin_dir) == []
+  assert not log_dir.exists()
+
+
+def test_launcher_rejects_an_unknown_argument_before_writing_a_server_log(tmp_path: pathlib.Path) -> None:
+  launcher, bin_dir = stash_launcher(tmp_path)
+  log_dir = tmp_path / "logs"
+
+  result = subprocess.run(
+      ["bash", str(launcher), "--unknown"],
+      env={
+          **os.environ,
+          "PATH": f"{bin_dir}:{os.environ['PATH']}",
+          "CHARLIEBOT_LOG_DIR": str(log_dir),
+      },
+      capture_output=True,
+      text=True,
+      check=False)
+
+  assert result.returncode == 1
+  assert "usage: start-server.sh [--preflight]" in result.stderr
+  assert not log_dir.exists()
 
 
 @pytest.mark.parametrize("script", ["start-server.sh", "setup.sh"])

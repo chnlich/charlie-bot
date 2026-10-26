@@ -348,6 +348,7 @@ def _build_world(root: pathlib.Path) -> World:
       "CHARLIEBOT_SWITCH_READY_WAIT_S": "30",
   }
   env.pop("TMUX", None)
+  env.pop("SYSTEMD_RUN_REFUSE_ALL", None)
   return World(
       root=root,
       clone=clone,
@@ -506,6 +507,22 @@ def _assert_untouched(world: World) -> None:
   assert _version_status(world.port) == 200
 
 
+def _assert_server_scope_records(world: World, expected_count: int) -> None:
+  records = systemd_stubs.read_systemd_run_records(world.root / "bin")
+  server_records = [record for record in records if str(record["unit_name"]).startswith("charliebot-server-")]
+  names = [str(record["unit_name"]) for record in server_records]
+  assert len(names) == expected_count
+  assert len(set(names)) == len(names)
+  for record in server_records:
+    name = str(record["unit_name"])
+    assert re.fullmatch(r"charliebot-server-\d{8}_\d{6}-\d+", name)
+    arguments = record["arguments"]
+    assert isinstance(arguments, list)
+    assert f"--unit={name}" in arguments
+    assert "--slice=charliebot.slice" in arguments
+    assert arguments[arguments.index("-p") + 1] == "MemorySwapMax=0"
+
+
 def _home_helper(home: pathlib.Path, mode: str) -> subprocess.CompletedProcess[str]:
   return subprocess.run(
       ["bash", "-c", 'source "$1" python && home_helper "$2"', "bash",
@@ -547,7 +564,7 @@ def test_home_helper_no_reattach_matches_registered_traits() -> None:
 @pytest.mark.parametrize(
     "case", [
         "checksum", "check-config", "opencode-run", "antigravity-run", "unknown-backend-run", "missing-backend-run",
-        "improve-loop", "dirty-clone"
+        "improve-loop", "dirty-clone", "launcher-preflight"
     ])
 def test_preflight_refusal_exits_1_and_changes_nothing(world: World, case: str) -> None:
   """Each preflight check refuses before the switch stops anything: exit 1 and no change."""
@@ -568,18 +585,25 @@ def test_preflight_refusal_exits_1_and_changes_nothing(world: World, case: str) 
     _seed_improve_loop(world, _spawn_live(world).pid)
   elif case == "dirty-clone":
     (world.clone / "server.py").write_text("# local edit\n", encoding="utf-8")
+  elif case == "launcher-preflight":
+    world.env["SYSTEMD_RUN_REFUSE_ALL"] = "1"
 
   home_before = {path.relative_to(world.home): path.read_bytes() for path in world.home.rglob("*") if path.is_file()}
+  current = world.releases / "current"
+  current_before = os.readlink(current) if current.is_symlink() else None
 
   proc = _switch(world, "rust", RUST_SHA)
 
   assert proc.returncode == 1, _report(world, proc)
   assert not (world.releases / "current").is_symlink()
+  assert (os.readlink(current) if current.is_symlink() else None) == current_before
   assert _git(world.clone, "rev-parse", "HEAD") == world.base_head
   assert {
       path.relative_to(world.home): path.read_bytes() for path in world.home.rglob("*") if path.is_file()
   } == home_before
   assert all(live.poll() is None for live in world.live)
+  if case == "launcher-preflight":
+    assert "launcher preflight" in proc.stdout + proc.stderr, _report(world, proc)
   if case.endswith("-run"):
     assert "a restart would lose live work:" in proc.stdout, _report(world, proc)
     lines = _home_helper(world.home, "scan").stdout.splitlines()
@@ -878,12 +902,14 @@ def test_switch_on_a_real_pane_restores_then_round_trips_then_exits_3(world: Wor
   _write_behavior(world.releases / RUST_SHA, adopt=False)
   proc = _switch(world, "rust", RUST_SHA)
   assert proc.returncode == 2, _report(world, proc)
+  _assert_server_scope_records(world, 3)
   _assert_untouched(world)
 
   # With a passing readback the live run is adopted, and the clone fast-forwards to the PORT_BASELINE commit.
   _write_behavior(world.releases / RUST_SHA)
   proc = _switch(world, "rust", RUST_SHA)
   assert proc.returncode == 0, _report(world, proc)
+  _assert_server_scope_records(world, 4)
   assert os.readlink(world.releases / "current") == RUST_SHA
   assert _git(world.clone, "rev-parse", "HEAD") == world.baseline
   assert _serves_release(world, RUST_SHA)
@@ -895,6 +921,7 @@ def test_switch_on_a_real_pane_restores_then_round_trips_then_exits_3(world: Wor
   _write_behavior(world.clone, ignore_sigterm=True)
   proc = _switch(world, "python")
   assert proc.returncode == 0, _report(world, proc)
+  _assert_server_scope_records(world, 5)
   assert not (world.releases / "current").is_symlink()
   assert _git(world.clone, "rev-parse", "HEAD") == world.baseline
   assert _serves_python(world)
@@ -903,4 +930,5 @@ def test_switch_on_a_real_pane_restores_then_round_trips_then_exits_3(world: Wor
   (world.clone / "fail-sync").write_text("", encoding="utf-8")
   proc = _switch(world, "rust", RUST_SHA)
   assert proc.returncode == 3, _report(world, proc)
+  _assert_server_scope_records(world, 5)
   assert _listener_pids(world.port) == set()

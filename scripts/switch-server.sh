@@ -4,8 +4,9 @@
 #   scripts/switch-server.sh rust <full rust-backend sha> [--pane PANE]
 #   scripts/switch-server.sh python [--pane PANE]
 #
-# The preflight changes nothing and exits 1 with the reason when a check fails. The switch then runs detached under
-# setsid, because stopping the old server ends the master turn that started this command. The command prints the log
+# The preflight checks release, clone, runs and config, then asks start-server.sh to test its slices and scope.
+# A refusal changes nothing and exits 1. The switch then runs detached under setsid, because stopping the old server
+# ends the master turn that started this command. The command prints the log
 # path, waits for the verdict and exits with it: 0 when the readback and the probe turn passed; 2 when the switch
 # failed and the previous implementation serves again; 3 when the restore failed too, and the log ends with the state
 # the server is in. When the pane stays busy after Ctrl-C, the restore sends SIGTERM, then SIGKILL, to the server
@@ -661,6 +662,7 @@ preflight() {
   PORT="$(sed -n 1p <<<"$CONFIG")"
   KEY="$(sed -n 2p <<<"$CONFIG")"
   [ -n "$KEY" ] || fail "no charliebot.access_key in $HOME_DIR/credentials.yaml"
+  "$REPO_ROOT/scripts/start-server.sh" --preflight || fail "launcher preflight failed"
   [ "$(listener_pids | grep -c .)" -eq 1 ] || fail "expected one server listening on port $PORT"
   LISTENER="$(listener_pids)"
   OLD_IMPL="$(impl_of_pid "$LISTENER")"

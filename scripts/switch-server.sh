@@ -60,7 +60,7 @@ case "$MODE" in
 esac
 PANE=""
 DETACHED_LOG=""
-DIED_RUNS=0   # the recorded runs that the readback found dead during the switch; any makes the switch exit 4
+DIED_RUNS=0   # no restore can recover an ended run, so keep count until the switch exits 4
 while [ $# -gt 0 ]; do
   case "$1" in
     --pane) [ $# -ge 2 ] || usage; PANE=$2; shift 2 ;;
@@ -74,13 +74,15 @@ fail() { log "preflight failed: $*"; exit 1; }
 
 # The home is read, never written, by this helper. `config` prints the port and the access key (one per line);
 # `scan` prints one line per live Run (live) and one per refusal (block); `alive` prints alive or ended for a recorded
-# (pid, pid start); `outcome` prints a Run's recorded run_finished outcome, or nothing while none is recorded.
+# (pid, pid start); `outcome` reads the terminal fact so readback can distinguish a completed run from one the stop
+# killed.
 home_helper() {
   python3 -I - "$HOME_DIR" "$@" <<'PY'
 import datetime
 import json
 import pathlib
 import sys
+import time
 
 import yaml
 
@@ -159,21 +161,64 @@ elif mode == "alive":
   pid, pid_start = sys.argv[3], sys.argv[4]
   print("alive" if process_instance(pid, pid_start) else "ended")
 elif mode == "outcome":
-  # Owner: RUN_FINISHED in src/infra/event_types.py, written to the session's live chat_events.jsonl
-  # (chat_events_path in src/runtime/chat_events.py). A segment rotated out of the live file is not read.
+  # The run store's fact history includes rotated segments, so read its archive files before the live event log.
   session_id, run_id = sys.argv[3], sys.argv[4]
-  events = home / "sessions" / session_id / "data" / "chat_events.jsonl"
-  text = events.read_text(encoding="utf-8") if events.is_file() else ""
+  session = home / "sessions" / session_id
+  run = json.loads((session / "data" / "runs" / run_id / "metadata.json").read_text(encoding="utf-8"))
+  data = session / "data"
+  archives = sorted((data / "archives").glob("chat_events.*.jsonl"))
+  events = session / "data" / "chat_events.jsonl"
   outcome = None
-  for number, line in enumerate(text.splitlines(), 1):
+  outcome_recorded = False
+
+  def read_outcome(line, number, path):
     try:
       event = json.loads(line)
     except json.JSONDecodeError:
       # The live log's own reader skips a line it cannot parse, so such a line is not a fact; the skip is logged.
-      print(f"skipped line {number} of {events}: not JSON", file=sys.stderr)
-      continue
+      print(f"skipped line {number} of {path}: not JSON", file=sys.stderr)
+      return False, None
     if event.get("type") == "run_finished" and event.get("run_id") == run_id:
-      outcome = event.get("outcome")
+      return True, event.get("outcome")
+    return False, None
+
+  for archive in archives:
+    with archive.open(encoding="utf-8") as stream:
+      for number, line in enumerate(stream, 1):
+        found, recorded = read_outcome(line, number, archive)
+        if found:
+          outcome_recorded = True
+          outcome = recorded
+  if events.is_file():
+    with events.open(encoding="utf-8") as stream:
+      line_number = 0
+      remainder = ""
+      for line in stream:
+        if not line.endswith("\n"):
+          remainder = line
+          break
+        line_number += 1
+        found, recorded = read_outcome(line, line_number, events)
+        if found:
+          outcome_recorded = True
+          outcome = recorded
+      if run.get("kind") == "manager_turn" and not outcome_recorded:
+        # Startup queues manager-turn recovery in the background, so give its finish callback time to persist the fact.
+        deadline = time.monotonic() + 10
+        while not outcome_recorded and time.monotonic() < deadline:
+          line = stream.readline()
+          if not line:
+            time.sleep(0.1)
+            continue
+          if not line.endswith("\n"):
+            remainder += line
+            continue
+          line_number += 1
+          found, recorded = read_outcome(remainder + line, line_number, events)
+          remainder = ""
+          if found:
+            outcome_recorded = True
+            outcome = recorded
   print(outcome or "")
 else:
   raise SystemExit(f"unknown home_helper mode {mode}")

@@ -11,6 +11,9 @@ use std::path::PathBuf;
 use charliebot_core::pyfmt;
 use minijinja::value::ValueKind;
 use minijinja::{AutoEscape, Environment, Error, ErrorKind, Output, State, Value};
+use percent_encoding::{AsciiSet, utf8_percent_encode};
+
+use crate::urlquote::quote_set;
 
 /// A loader that serves each name from the first of `directories` that holds it, as Jinja2's
 /// `FileSystemLoader` does.
@@ -148,7 +151,7 @@ fn urlencode(value: Value) -> Result<String, Error> {
       }
       Ok(pairs.join("&"))
     }
-    _ => Ok(quote(&python_text(&value)?, b"/")),
+    _ => Ok(quote(&python_text(&value)?, &URLENCODE_QUOTE)),
   }
 }
 
@@ -159,7 +162,7 @@ fn query_pair(key: &Value, value: &Value) -> Result<String, Error> {
 
 /// Jinja2's `url_quote(text, for_qs=True)`: `urllib.parse.quote` with no safe characters, then `%20` as `+`.
 fn query_quote(text: &str) -> String {
-  quote(text, b"").replace("%20", "+")
+  quote(text, &QUERY_QUOTE).replace("%20", "+")
 }
 
 /// Jinja2's `format` filter (`do_format`): `soft_str(value) % (kwargs or args)` with the one positional argument the
@@ -251,17 +254,14 @@ fn format_error(detail: String) -> Error {
   Error::new(ErrorKind::InvalidOperation, detail)
 }
 
+/// `urllib.parse.quote(text, "/")`, Jinja2's `do_urlencode` for a scalar.
+static URLENCODE_QUOTE: AsciiSet = quote_set(b"/");
+/// `urllib.parse.quote(text, "")`, the key and value sides of `url_quote(for_qs=True)`.
+static QUERY_QUOTE: AsciiSet = quote_set(b"");
+
 /// `urllib.parse.quote(text, safe)`: the unreserved characters and `safe` pass, every other byte is `%XX`.
-fn quote(text: &str, safe: &[u8]) -> String {
-  let mut out = String::with_capacity(text.len());
-  for byte in text.bytes() {
-    if byte.is_ascii_alphanumeric() || b"_.-~".contains(&byte) || safe.contains(&byte) {
-      out.push(byte as char);
-    } else {
-      out.push_str(&format!("%{byte:02X}"));
-    }
-  }
-  out
+fn quote(text: &str, safe: &'static AsciiSet) -> String {
+  utf8_percent_encode(text, safe).to_string()
 }
 
 #[cfg(test)]
@@ -306,10 +306,10 @@ mod tests {
 
   #[test]
   fn quote_and_query_quote_match_urllib_quote_for_their_safe_sets() {
-    assert_eq!(quote("a:b@c=d&e/f_g.h-i~j", b"/"), "a%3Ab%40c%3Dd%26e/f_g.h-i~j");
-    assert_eq!(quote("[]!$&'()*+,;:%#?=@", b""), "%5B%5D%21%24%26%27%28%29%2A%2B%2C%3B%3A%25%23%3F%3D%40");
+    assert_eq!(quote("a:b@c=d&e/f_g.h-i~j", &URLENCODE_QUOTE), "a%3Ab%40c%3Dd%26e/f_g.h-i~j");
+    assert_eq!(quote("[]!$&'()*+,;:%#?=@", &QUERY_QUOTE), "%5B%5D%21%24%26%27%28%29%2A%2B%2C%3B%3A%25%23%3F%3D%40");
     assert_eq!(query_quote("a b+c/\u{e9}"), "a+b%2Bc%2F%C3%A9");
-    assert_eq!(quote("\u{7f}\n", b""), "%7F%0A");
+    assert_eq!(quote("\u{7f}\n", &QUERY_QUOTE), "%7F%0A");
   }
 
   #[test]

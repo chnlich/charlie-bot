@@ -5,9 +5,11 @@ use axum::body::Body;
 use axum::response::Response;
 use bytes::Bytes;
 use http::{HeaderValue, StatusCode, header};
+use percent_encoding::{AsciiSet, utf8_percent_encode};
 use serde_json::{Value, json};
 
 use crate::json;
+use crate::urlquote::quote_set;
 
 /// The failure behind a 500: the name the `http_request` log line carries in `error` (the Python
 /// exception class the same failure raises there) and the detail logged beside it.
@@ -79,17 +81,10 @@ fn bytes_response(status: StatusCode, content_type: &'static str, body: Bytes) -
 }
 
 /// `urllib.parse.quote(url, safe=":/%#?=@[]!$&'()*+,;")`, starlette's `RedirectResponse` quoting.
+static REDIRECT_QUOTE: AsciiSet = quote_set(b":/%#?=@[]!$&'()*+,;");
+
 fn quote_redirect_url(url: &str) -> String {
-  const SAFE: &[u8] = b":/%#?=@[]!$&'()*+,;_.-~";
-  let mut out = String::with_capacity(url.len());
-  for byte in url.bytes() {
-    if byte.is_ascii_alphanumeric() || SAFE.contains(&byte) {
-      out.push(byte as char);
-    } else {
-      out.push_str(&format!("%{byte:02X}"));
-    }
-  }
-  out
+  utf8_percent_encode(url, &REDIRECT_QUOTE).to_string()
 }
 
 #[cfg(test)]

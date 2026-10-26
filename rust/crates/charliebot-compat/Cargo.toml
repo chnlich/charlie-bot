@@ -18,6 +18,7 @@ md-5.workspace = true
 minijinja.workspace = true
 minijinja-contrib.workspace = true
 multer.workspace = true
+percent-encoding.workspace = true
 reqwest.workspace = true
 regex.workspace = true
 rustls.workspace = true
@@ -33,7 +34,6 @@ tokio-tungstenite.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
-percent-encoding.workspace = true
 sha1.workspace = true
 tower.workspace = true
 rcgen = "0.13"

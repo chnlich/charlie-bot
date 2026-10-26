@@ -57,7 +57,8 @@ if [ "${SYSTEMD_RUN_REFUSE_ALL:-0}" = "1" ]; then
   echo "stub systemd-run: start refused by test" >&2
   exit 1
 fi
-SYSTEMD_RUN_RECORDS="${BASH_SOURCE[0]%/*}/systemd-run.records" python3 - "$@" <<'PY'
+# The program is a variable, not stdin: the command after -- keeps the caller's stdin, as under systemd-run.
+read -r -d '' RECORD_PY <<'PY'
 import json
 import os
 import pathlib
@@ -81,6 +82,7 @@ with records_path.open("a", encoding="utf-8") as records_file:
   records_file.write(json.dumps(record) + "\\n")
 os.execvp(command[0], command)
 PY
+SYSTEMD_RUN_RECORDS="${BASH_SOURCE[0]%/*}/systemd-run.records" python3 -c "$RECORD_PY" "$@"
 """,
       encoding="utf-8")
   stub.chmod(0o755)

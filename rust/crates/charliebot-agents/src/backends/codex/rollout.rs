@@ -157,7 +157,7 @@ pub fn walk_files(root: &Path, keep: impl Fn(&str) -> bool) -> io::Result<Vec<Pa
   let mut found = Vec::new();
   for entry in WalkDir::new(root).follow_links(false) {
     let entry = entry.map_err(walk_error)?;
-    if entry.depth() == 0 || entry.path().is_dir() {
+    if entry.depth() == 0 || entry.file_type().is_dir() {
       continue;
     }
     if keep(&entry.file_name().to_string_lossy()) {

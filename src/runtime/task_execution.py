@@ -1946,7 +1946,7 @@ class TaskExecutionAdapter:
       is_alive = runs.run_alive_probe(run.pid, run.pid_start, run.started_at, runs.read_host_boot_time())
     meta = await tree.load_meta(session_id)
     if meta is None:
-      raise task_errors.TaskNotFoundError(f"task {session_id} not found")
+      raise task_errors.task_not_found(session_id)
     alive_on_entry = is_alive()
     ended_at: datetime.datetime | None = None
     if alive_on_entry:

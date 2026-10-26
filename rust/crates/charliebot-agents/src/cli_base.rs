@@ -74,9 +74,13 @@ fn is_executable_file(path: &Path) -> bool {
 /// Prepends `dir` to the child PATH unless one of its entries is `dir` already (`base.prepend_path_dir`).
 pub fn prepend_path_dir(env: &mut Env, dir: &str) {
   let current = env.get("PATH").cloned().unwrap_or_default();
-  if !current.split(':').any(|entry| entry == dir) {
-    env.insert("PATH".to_string(), format!("{dir}:{current}"));
+  let mut entries: Vec<PathBuf> = std::env::split_paths(&current).collect();
+  if entries.iter().any(|entry| entry == Path::new(dir)) {
+    return;
   }
+  entries.insert(0, PathBuf::from(dir));
+  let joined = std::env::join_paths(entries).expect("a child PATH entry holds no path separator");
+  env.insert("PATH".to_string(), joined.into_string().expect("a child PATH entry is valid Unicode"));
 }
 
 /// Merges `LOCAL_NO_PROXY_ENTRIES` into a NO_PROXY value, deduplicated and order-stable (`base.merge_local_no_proxy`).

@@ -6,7 +6,7 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
-use anyhow::bail;
+use anyhow::{Context, bail};
 use charliebot_core::config::ServerConfig;
 use charliebot_core::repo_root::RepoRoot;
 use charliebot_core::venv::VenvBin;
@@ -40,15 +40,18 @@ pub fn agent_environment(inherited: &Env, venv_bin: &Path, repo_root: &Path) -> 
     values.remove(name);
   }
   let mut path_entries = Vec::new();
-  for entry in path.split(':') {
-    if realpath(Path::new(entry))? != real_venv_bin {
+  for entry in env::split_paths(path) {
+    if realpath(&entry)? != real_venv_bin {
       path_entries.push(entry);
     }
   }
-  let entry_point_dir = repo_root.join(ENTRY_POINT_RELATIVE).to_string_lossy().into_owned();
-  let mut rewritten_path = path_entries.join(":");
-  if !path_entries.contains(&entry_point_dir.as_str()) {
-    rewritten_path = format!("{entry_point_dir}:{rewritten_path}");
+  let entry_point_dir = repo_root.join(ENTRY_POINT_RELATIVE);
+  let mut rewritten_path = env::join_paths(&path_entries)
+    .context("the agent PATH entries join with the path separator")?
+    .into_string()
+    .map_err(|_| anyhow::anyhow!("the agent PATH is not valid Unicode"))?;
+  if !path_entries.iter().any(|entry| entry == &entry_point_dir) {
+    rewritten_path = format!("{}:{rewritten_path}", entry_point_dir.to_string_lossy());
   }
   values.insert("PATH".to_string(), rewritten_path);
   values.insert(VENV_BIN_ENV.to_string(), venv_bin.to_string_lossy().into_owned());

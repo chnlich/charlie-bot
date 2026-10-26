@@ -107,6 +107,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["registry"] }
 url = "2"
 uuid = { version = "1", features = ["v4", "v5"] }
+wait-timeout = "0.2"
 walkdir = "2"
 which = "8"
 

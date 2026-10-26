@@ -26,6 +26,7 @@ time.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
+wait-timeout.workspace = true
 
 [features]
 # The shared test log capture in `test_support`. Only test dev-dependencies turn it on, so server and library builds

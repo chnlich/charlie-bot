@@ -1,8 +1,11 @@
 use std::fs::{self, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
+use std::io::Write;
 use std::path::Path;
 
+use charliebot_core::fsutil;
 use charliebot_core::pyfmt::{self, JsonStyle};
+use memchr::memchr_iter;
+use memmap2::Mmap;
 use serde_json::Value;
 
 use crate::compact::CompactValue;
@@ -36,18 +39,16 @@ thread_local! {
 }
 
 /// Parse every physical line into the compact event form, including a final line without `\n`.
+///
+/// The file maps once and memchr supplies the line boundaries, the mechanism
+/// `src/infra/ndjson.py:237-271 parse_ndjson_events` runs (an mmap plus zero-copy line slices); no
+/// per-line buffer is allocated.
 pub(crate) fn read_file_compact(path: &Path) -> StoreResult<Vec<CompactValue>> {
-  let file = match fs::File::open(path) {
-    Ok(file) => file,
-    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-    Err(error) => return Err(StoreError::new(format!("{}: {error}", path.display()))),
+  let map = match open_log_map(path)? {
+    Some(map) => map,
+    None => return Ok(Vec::new()),
   };
-  let mut events = Vec::new();
-  for line in BufReader::new(file).split(b'\n') {
-    let raw = line.map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
-    events.extend(parse_line_compact(&raw));
-  }
-  Ok(events)
+  Ok(parse_mapped_lines(&map, &mut || false).expect("the never-stop closure cannot cancel a read"))
 }
 
 /// Parse every physical line unless `should_stop` requests cancellation between lines.
@@ -60,23 +61,45 @@ pub(crate) fn read_file_compact_until(
   if should_stop() {
     return Ok(None);
   }
-  let file = match fs::File::open(path) {
-    Ok(file) => file,
-    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Some(Vec::new())),
-    Err(error) => return Err(StoreError::new(format!("{}: {error}", path.display()))),
+  let map = match open_log_map(path)? {
+    Some(map) => map,
+    None => return Ok(Some(Vec::new())),
   };
+  Ok(parse_mapped_lines(&map, should_stop))
+}
+
+/// Map one event log read-only; `None` covers a missing file and a file with no bytes.
+fn open_log_map(path: &Path) -> StoreResult<Option<Mmap>> {
+  match fsutil::map_file(path) {
+    Ok(map) => Ok(map),
+    Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+    Err(error) => Err(StoreError::new(format!("{}: {error}", path.display()))),
+  }
+}
+
+/// Parse every `\n`-bounded slice plus the final fragment, checking `should_stop` before each parse and once
+/// after the last one, which is the check order `BufReader::split` had. A blank or malformed line skips.
+/// `None` marks a cancelled read.
+fn parse_mapped_lines(bytes: &[u8], should_stop: &mut impl FnMut() -> bool) -> Option<Vec<CompactValue>> {
   let mut events = Vec::new();
-  for line in BufReader::new(file).split(b'\n') {
+  let mut start = 0;
+  for boundary in memchr_iter(b'\n', bytes) {
     if should_stop() {
-      return Ok(None);
+      return None;
     }
-    let raw = line.map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
-    events.extend(parse_line_compact(&raw));
+    events.extend(parse_line_compact(&bytes[start..boundary]));
+    start = boundary + 1;
+  }
+  if start < bytes.len() {
+    if should_stop() {
+      return None;
+    }
+    events.extend(parse_line_compact(&bytes[start..]));
   }
   if should_stop() {
-    return Ok(None);
+    return None;
   }
-  Ok(Some(events))
+  Some(events)
 }
 
 /// One event as an NDJSON line: Python `json.dumps(..., ensure_ascii=False)` and the newline.

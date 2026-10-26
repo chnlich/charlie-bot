@@ -77,8 +77,8 @@ class LaunchContext:
 def unknown_launch_kind(kind: str) -> ValueError:
   """The refusal for a launch kind outside :attr:`LaunchContext.kind`'s two shapes.
 
-  Every path that dispatches on the kind handles ``turn`` and ``task`` and ends here, so an
-  unexpected shape reads the same whichever path met it.
+  The paths that refuse an unexpected shape raise this, so the sentence reads the same wherever
+  it is raised.
   """
   return ValueError(f"unknown launch kind {kind!r}")
 

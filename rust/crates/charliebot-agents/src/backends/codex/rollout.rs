@@ -168,7 +168,8 @@ pub fn walk_files(root: &Path, keep: impl Fn(&str) -> bool) -> io::Result<Vec<Pa
 }
 
 fn walk_error(error: walkdir::Error) -> io::Error {
-  error.into_io_error().unwrap_or_else(|| io::Error::other(error))
+  let message = error.to_string();
+  error.into_io_error().unwrap_or_else(|| io::Error::other(message))
 }
 
 /// The file's modification time in nanoseconds (`st_mtime_ns`).

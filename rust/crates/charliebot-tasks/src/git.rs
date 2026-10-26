@@ -769,14 +769,19 @@ fn assert_safe_worktree_cleanup_target(
 /// True when *path* contains any `.git` marker without following symlinks (`src/infra/git.py:464`). An entry that
 /// cannot be read is not a marker.
 fn contains_git_marker(path: &Path) -> bool {
-  let mut walker = WalkBuilder::new(path);
-  walker.min_depth(Some(1)).follow_links(false).hidden(false).standard_filters(false);
-  walker.build().flatten().any(|entry| entry.file_name() == ".git")
+  worktree_walk(path).build().flatten().any(|entry| entry.file_name() == ".git")
 }
 
 /// Whether `name` is one of the cache, env and build directories a worktree sheds before removal.
 fn is_local_artifact_name(name: &OsStr) -> bool {
   WORKTREE_LOCAL_ARTIFACT_NAMES.contains(&name.to_string_lossy().as_ref())
+}
+
+/// Build a serial, unfiltered worktree walk that does not follow symlinks.
+fn worktree_walk(path: &Path) -> WalkBuilder {
+  let mut walker = WalkBuilder::new(path);
+  walker.min_depth(Some(1)).follow_links(false).hidden(false).standard_filters(false).parents(true);
+  walker
 }
 
 /// Yields paths of known cache/env/build artifact dirs inside the worktree (`src/infra/git.py:472`).
@@ -786,8 +791,8 @@ fn collect_local_worktree_artifacts(wt_path: &Path, artifacts: &mut Vec<PathBuf>
   let root = wt_path.to_path_buf();
   let found_artifacts = Arc::new(Mutex::new(Vec::new()));
   let captured_artifacts = Arc::clone(&found_artifacts);
-  let mut walker = WalkBuilder::new(wt_path);
-  walker.min_depth(Some(1)).follow_links(false).hidden(false).standard_filters(false).filter_entry(move |entry| {
+  let mut walker = worktree_walk(wt_path);
+  walker.filter_entry(move |entry| {
     if entry.file_name() == ".git" {
       return false;
     }
@@ -1099,6 +1104,7 @@ mod tests {
     {
       fs::create_dir_all(root.join(dir)).unwrap();
     }
+    fs::write(root.join(".gitignore"), ".venv\nbuild\n").unwrap();
     fs::write(root.join("nested-wt").join(".git"), "gitdir: synthetic").unwrap();
     fs::write(root.join("deep").join("nested").join(".git"), "gitdir: synthetic").unwrap();
     std::os::unix::fs::symlink(root.join(".venv"), root.join("link-to-venv")).unwrap();

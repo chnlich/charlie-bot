@@ -231,7 +231,7 @@ fn is_not_found(error: &ignore::Error) -> bool {
 /// Build a recursive walk that applies no hidden-file or ignore-file filters.
 fn filesystem_walk(directory: &Path, follow_links: bool) -> WalkBuilder {
   let mut builder = WalkBuilder::new(directory);
-  builder.min_depth(Some(1)).follow_links(follow_links).hidden(false).standard_filters(false);
+  builder.min_depth(Some(1)).follow_links(follow_links).hidden(false).standard_filters(false).parents(true);
   builder
 }
 
@@ -364,7 +364,10 @@ mod tests {
     let root = tempfile::tempdir().unwrap();
     let static_root = root.path().join("web").join("static");
     fs::create_dir_all(static_root.join("sub")).unwrap();
+    fs::write(static_root.join(".gitignore"), "excluded.js\n").unwrap();
+    fs::write(static_root.join(".hidden.js"), "hidden").unwrap();
     fs::write(static_root.join("a.js"), "alpha").unwrap();
+    fs::write(static_root.join("excluded.js"), "excluded").unwrap();
     fs::write(static_root.join("sub").join("b.css"), "beta").unwrap();
     std::os::unix::fs::symlink(static_root.join("sub"), static_root.join("linked")).unwrap();
     std::os::unix::fs::symlink(static_root.join("missing"), static_root.join("dangling")).unwrap();
@@ -373,11 +376,17 @@ mod tests {
     fs::write(package_static.join("x.txt"), "gamma").unwrap();
     let templating = Templating::new(root.path(), &["src.features.notes"]);
     // Each file contributes its URL path and its content's sha1, in path order; a dangling link contributes nothing
-    // and a symlinked directory's files count under the link's name.
+    // and a symlinked directory's files count under the link's name. Hidden and git-ignored files still count.
     let mut combined = Sha1::new();
-    for (rel, content) in
-      [("a.js", "alpha"), ("features/notes/x.txt", "gamma"), ("linked/b.css", "beta"), ("sub/b.css", "beta")]
-    {
+    for (rel, content) in [
+      (".gitignore", "excluded.js\n"),
+      (".hidden.js", "hidden"),
+      ("a.js", "alpha"),
+      ("excluded.js", "excluded"),
+      ("features/notes/x.txt", "gamma"),
+      ("linked/b.css", "beta"),
+      ("sub/b.css", "beta"),
+    ] {
       combined.update(rel.as_bytes());
       combined.update(b"\0");
       combined.update(Sha1::digest(content));
@@ -392,14 +401,17 @@ mod tests {
     let root = tempfile::tempdir().unwrap();
     let pages = root.path().join("templates");
     fs::create_dir_all(pages.join("nested")).unwrap();
+    fs::write(pages.join(".gitignore"), "*.html\n").unwrap();
     fs::create_dir(pages.join("dir.html")).unwrap();
+    fs::write(pages.join(".hidden.html"), "").unwrap();
     fs::write(pages.join("index.html"), "").unwrap();
+    fs::write(pages.join("ignored.html"), "").unwrap();
     fs::write(pages.join("nested").join("deep.html"), "").unwrap();
     fs::write(pages.join("notes.txt"), "").unwrap();
     std::os::unix::fs::symlink(pages.join("nested"), pages.join("linked")).unwrap();
     let mut names = Vec::new();
     collect_html_names(&pages, &mut names);
     names.sort();
-    assert_eq!(names, ["dir.html", "index.html", "nested/deep.html"]);
+    assert_eq!(names, [".hidden.html", "dir.html", "ignored.html", "index.html", "nested/deep.html"]);
   }
 }

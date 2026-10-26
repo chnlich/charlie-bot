@@ -2,11 +2,9 @@
 
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
-use std::ffi::CString;
 use std::fs;
 use std::fs::OpenOptions;
 use std::io::{BufRead, Write};
-use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -2584,14 +2582,9 @@ pub fn is_out_of_space_error(error: &(dyn Error + 'static)) -> bool {
 /// Free GiB on the filesystem containing `path`, probing its nearest existing ancestor.
 pub fn free_disk_gib(path: &Path) -> anyhow::Result<f64> {
   let probe = nearest_existing_ancestor(path)?;
-  let path_c = CString::new(probe.as_os_str().as_bytes())?;
-  let mut stat = std::mem::MaybeUninit::<libc::statvfs>::uninit();
-  // `probe` is an existing path and `path_c` is NUL terminated.
-  if unsafe { libc::statvfs(path_c.as_ptr(), stat.as_mut_ptr()) } != 0 {
-    return Err(std::io::Error::last_os_error()).with_context(|| format!("reading disk space at {}", probe.display()));
-  }
-  let stat = unsafe { stat.assume_init() };
-  Ok(free_disk_gib_from_statvfs(stat.f_bavail, stat.f_frsize))
+  let stat = nix::sys::statvfs::statvfs(probe.as_os_str())
+    .with_context(|| format!("reading disk space at {}", probe.display()))?;
+  Ok(free_disk_gib_from_statvfs(stat.blocks_available(), stat.fragment_size()))
 }
 
 /// The worker launch's free-space check for the data and worktree filesystems (`_disk_headroom_withhold_reason`).

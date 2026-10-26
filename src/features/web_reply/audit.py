@@ -26,18 +26,18 @@ from src.runtime.api import message_utils
 
 logger = log_once.LazyStructlogLogger()
 
-# The reminder a turn gets when it recorded no status set or confirm.
-STATUS_REMINDER_TEXT = (
-    "Session status reminder: your last turn ended without a status set or confirm. "
+# The ask every status reminder ends with, so the status reminder and the combined reminder cannot drift: the
+# two status commands and the panel's reading.
+STATUS_ASK_TEXT = (
     "Run `charliebot web status set` when Goal, Now or Waiting on you differs from the state that turn read back. "
     "Otherwise run `charliebot web status confirm`. The panel then shows the state the last turn read back.")
+# The reminder a turn gets when it recorded no status set or confirm.
+STATUS_REMINDER_TEXT = (
+    f"Session status reminder: your last turn ended without a status set or confirm. {STATUS_ASK_TEXT}")
 # The one reminder a turn gets when it missed both its web reply and its status.
 COMBINED_REMINDER_TEXT = (
     "Web reply and session status reminder: your last turn woke on a user message and ended without a web reply and "
-    "without a status set or confirm. Post your answer as the web reply now. For an answer over 500 characters, write "
-    "the whole answer on a page first. Then post the conclusion and the page link as the web reply. "
-    "Run `charliebot web status set` when Goal, Now or Waiting on you differs from the state that turn read back. "
-    "Otherwise run `charliebot web status confirm`. The panel then shows the state the last turn read back.")
+    f"without a status set or confirm. {reply.REPLY_ASK_TEXT} {STATUS_ASK_TEXT}")
 # The sender name a status reminder carries in the chat log.
 STATUS_REMINDER_SENDER_NAME = "Session status"
 

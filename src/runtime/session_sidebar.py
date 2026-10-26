@@ -16,7 +16,7 @@ from collections.abc import Callable
 from typing import Any, NamedTuple
 
 from src.infra import config, json_utils, log_once, memo, models, tasks
-from src.runtime import session_store, sidebar_state, thinking_state, trigger_files
+from src.runtime import chat_events, run_identity, runs, session_store, sidebar_state, thinking_state, trigger_files
 from src.runtime.hooks import sidebar_contributions
 
 log = log_once.LazyStructlogLogger()
@@ -257,7 +257,7 @@ class SidebarProbeSpec(NamedTuple):
   recheck_liveness: bool = False
 
 
-def _task_tree_probe_signature(session_dir_str: str) -> tuple:
+def _task_tree_probe_signature(session_dir: pathlib.Path) -> tuple:
   """Stat-only identity of every file the task-tree activity derivation reads.
 
   The derivation reads the node's fact history (metadata.json's archive offset,
@@ -266,17 +266,18 @@ def _task_tree_probe_signature(session_dir_str: str) -> tuple:
   derivation's inputs unchanged, so a fresh-signature poll never hides a
   changed state — and never pays the derivation's reads either.
   """
-  metadata_sig = memo.stat_signature(session_dir_str + "/metadata.json")
-  events_sig = memo.stat_signature(session_dir_str + "/data/chat_events.jsonl")
-  archives_sig = memo.stat_signature(session_dir_str + "/data/archives")
+  session_dir_str = os.fspath(session_dir)
+  metadata_sig = memo.stat_signature(f"{session_dir_str}/{run_identity.SESSION_METADATA_NAME}")
+  events_sig = memo.stat_signature(chat_events.chat_events_path(session_dir))
+  archives_sig = memo.stat_signature(os.fspath(chat_events.chat_event_archives_dir(session_dir)))
   runs_sig: list[tuple[str, int, int]] = []
-  runs_dir_str = session_dir_str + "/data/runs"
+  runs_dir_str = f"{session_dir_str}/{runs.DATA_DIR_NAME}/{runs.RUNS_DIR_NAME}"
   try:
     run_names = sorted(os.listdir(runs_dir_str))
   except OSError:
     run_names = []
   for name in run_names:
-    run_meta = memo.stat_signature(runs_dir_str + "/" + name + "/metadata.json")
+    run_meta = memo.stat_signature(f"{runs_dir_str}/{name}/{runs.RUN_METADATA_NAME}")
     if run_meta is not None:
       runs_sig.append((name, run_meta[0], run_meta[1]))
   return (metadata_sig, events_sig, archives_sig, tuple(runs_sig))
@@ -357,7 +358,7 @@ def _sidebar_probe_walk(spec: SidebarProbeSpec, watched_files: tuple[str, ...]) 
   # The task-tree derivation reads its fact history and Run records; the
   # signature covers those files too, so an unchanged signature can never hide
   # a changed state (and a fresh-signature poll skips their reads).
-  task_sig = _task_tree_probe_signature(session_dir_str)
+  task_sig = _task_tree_probe_signature(spec.session_dir)
   signature = (tuple(sorted(trigger_sig)), watched_sig, task_sig)
   return signature, _WalkedProbeInputs(trigger_pairs, trigger_dir_sig)
 

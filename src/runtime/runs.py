@@ -509,6 +509,11 @@ def run_not_found_in_task_text(run_id: str, session_id: str) -> str:
   return f"run {run_id} not found in task {session_id}"
 
 
+def run_already_finished_text(run_id: str) -> str:
+  """The refusal sentence for a Run whose terminal fact is already recorded (API: 409 detail)."""
+  return f"run {run_id} already finished; it claims no new inputs"
+
+
 class RunIdentityConflictError(Exception):
   """The recorded (pid, pid_start) pair no longer names one process instance (API: 409).
 
@@ -820,7 +825,7 @@ class RunStore:
     """The input ids the run's recorded run_finished fact carries ([] without one)."""
     for event in events:
       if event.get("type") == ET.RUN_FINISHED and event.get("run_id") == run_id:
-        payload = event.get("input_event_ids")
+        payload = event.get(ET.INPUT_EVENT_IDS)
         return list(payload) if isinstance(payload, list) else []
     return []
 
@@ -1045,7 +1050,7 @@ class RunStore:
       for event in events:
         if event.get("type") != ET.RUN_FINISHED or event.get("run_id") == run.id:
           continue
-        payload = event.get("input_event_ids")
+        payload = event.get(ET.INPUT_EVENT_IDS)
         if isinstance(payload, list):
           foreign.update(str(i) for i in payload)
       for other in self.list_run_records_sync(run.session_id):

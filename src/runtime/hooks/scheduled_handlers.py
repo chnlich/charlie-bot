@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import importlib
 
-from src.runtime.hooks import registration
+from src.infra import registration
 
 _HANDLERS: dict[str, tuple[str, str]] = {}  # name -> (module, attr)
 

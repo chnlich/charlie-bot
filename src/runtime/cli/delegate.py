@@ -23,49 +23,48 @@ from src.infra import help_formatter
 from src.runtime.cli import common
 
 DELEGATE_EPILOG = """\
-Task spec format (--task-spec-file):
+Task spec (--task-spec-file), six sections:
 
-  ## Goal
-  One concise deliverable.
-  ## Source Files
-  - <absolute-source-path>
-  ## Required Behavior
-  Executable contract, state-machine semantics, and boundary rules.
-  ## Acceptance Tests
-  Focused tests or verification commands.
-  ## Reviewer Checklist
-  Concrete checks beyond "tests passed".
-  ## Out of Scope
-  Things the worker must not change.
+  ## Goal - one concise deliverable.
+  ## Source Files - absolute paths, or `- (none)`.
+  ## Required Behavior - the executable contract, state-machine semantics, and boundary rules.
+  ## Acceptance Tests - focused tests or verification commands.
+  ## Reviewer Checklist - concrete checks beyond "tests passed".
+  ## Out of Scope - things the worker must not change.
 
-  Spec precision follows the task kind. An exploratory or
-  judgment-heavy task (a cleanup whose extent is a judgment call, a
-  review, a comment or doc rewrite) states the goal, the reason it
-  matters in the requester's own words, the standard the result is
-  judged against, the invariants to keep, and what is out of scope,
-  and stops there: an enumerated change list becomes the worker's
-  whole scope and caps the result at what the master already found.
-  A task with a fixed mechanical contract keeps its executable
-  contract and acceptance assertions: there the precision is the
+  Specs must not forbid test edits: tests asserting removed behavior get updated or deleted with it.
+
+  Spec precision follows the task kind: an exploratory or judgment-heavy task (a cleanup whose
+  extent is a judgment call, a review, a comment or doc rewrite) states the goal, the reason in
+  the requester's words, the judging standard, the invariants, and the scope, and stops there -
+  an enumerated change list caps the result at what the master already found. A fixed mechanical
+  contract keeps its executable contract and acceptance assertions: there the precision is the
   deliverable.
 
-  Source Files entries: absolute paths or `- (none)`.
-  Task specs must not forbid test edits: updating affected tests is
-  part of the change — tests asserting removed behavior get updated
-  or deleted with it.
-  Runtime authorization is derived from the task tree and the chat event log;
-  see skills/plan-approval/SKILL.md for the full contract.
+  --repo and --base-branch: give both, or omit both for a repo-less implement, quick-edit, or
+  script-run task. verify forbids both.
+  --keep-worktree 1 keeps the worktree after the worker exits and the reviewer merges; pass it when
+  the worker launches a long-running process, e.g. a SLURM job, whose WorkDir lives in the
+  worktree. 0 cleans up.
+  --request-id: replay id; the same id returns the original child. Default: derived from the
+  request content, so an identical spec re-delegated from the same session returns the existing
+  child; pass an explicit id for intentional same-spec siblings.
+
+Task types (--task-type):
+
+  implement (default): worker commits; a reviewer rebases, ff-merges, pushes to the remote base branch.
+  quick-edit: worker commits; no reviewer; the master merges and pushes; for trivial repo ops (cherry-picks, branch pushes, single-line or doc-only edits).
+  script-run: the worktree (repo-less: the Run directory) is a sandbox to run scripts, submit jobs, or query state; the worker must not modify tracked files or commit; no reviewer, no merge.
+  verify: a repo-less read-only plan verifier; no worktree, reviewer, or merge.
 
 Backend selection (--backend):
 
-  Pass --backend only when the user or the line's goal names a backend. Omitted:
-  implement / quick-edit / script-run take the next backends.pool member that is not
-  cooling, or inherit the session backend when the pool is empty. A worker whose
-  member runs out of quota continues on the next member in the same worktree.
-  Verify is routed to the next backends.pool member that differs from the session
-  backend. An explicit --backend replaces that routing for every task type, verify
-  included, and is never failed over. The resolved backend runs every work Run of
-  the worker session.
+  Pass --backend only when the user or the line's goal names a backend. Omitted: implement,
+  quick-edit, and script-run take the next backends.pool member that is not cooling, or inherit
+  the session backend when the pool is empty; a worker out of quota continues on the next member
+  in the same worktree. Verify routes to the next member that differs from the session backend.
+  An explicit --backend replaces that routing for every task type, verify included, and is never
+  failed over. The resolved backend runs every work Run of the worker session.
 """
 
 
@@ -76,60 +75,26 @@ def main() -> None:
       formatter_class=help_formatter.CliRawDescriptionHelpFormatter,
   )
   common.add_session_arg(parser)
+  parser.add_argument("--repo", required=False, help="Git repo path (rules in the epilog)")
   parser.add_argument(
-      "--repo",
-      required=False,
-      help=(
-          "Path to the git repo; optional for implement/quick-edit/script-run (omit together "
-          "with --base-branch for a repo-less task), forbidden for verify"))
+      "--task-spec-file", dest="task_spec_file", required=True, help="Markdown task spec (format in the epilog)")
+  parser.add_argument("--base-branch", required=False, help="Worktree base branch (rules in the epilog)")
   parser.add_argument(
-      "--task-spec-file", dest="task_spec_file", required=True, help="Path to a structured Markdown task spec file")
-  parser.add_argument(
-      "--base-branch",
-      required=False,
-      help=(
-          "Base branch for the worktree; optional for implement/quick-edit/script-run (omit together "
-          "with --repo for a repo-less task), forbidden for verify"))
-  parser.add_argument(
-      "--backend",
-      default=None,
-      help=(
-          "Configured backend option id from $CHARLIEBOT_HOME/config.yaml; pass only when the user "
-          "or the line's goal names a backend (see epilog)"))
+      "--backend", default=None, help="Backend option id from $CHARLIEBOT_HOME/config.yaml (rules in the epilog)")
   parser.add_argument(
       "--keep-worktree",
       required=True,
       type=int,
       choices=[0, 1],
-      help=(
-          "1 = keep worktree on disk after worker exits AND after reviewer merges "
-          "(use when the worker launches an external long-running process, e.g. a SLURM job, "
-          "whose WorkDir lives in the worktree); "
-          "0 = default cleanup behavior."),
+      help="0 or 1 (rule in the epilog)",
   )
   parser.add_argument(
-      "--request-id",
-      dest="request_id",
-      default=None,
-      help=(
-          "Stable operation id for the delegation (v2 task-tree sessions). A replayed "
-          "create/delegate with the same request-id returns the original child instead of a "
-          "second process. Omitted: a stable id is derived from the request content, so an "
-          "identical spec re-delegated from the same session returns the existing child — "
-          "pass an explicit id for intentional same-spec siblings."))
+      "--request-id", dest="request_id", default=None, help="Replay id (v2 task-tree sessions; rule in the epilog)")
   parser.add_argument(
       "--task-type",
       choices=["implement", "quick-edit", "script-run", "verify"],
       default="implement",
-      help=(
-          "Worker task profile. "
-          "'implement' (default) = worker commits, reviewer rebases + ff-merges and pushes to the remote base branch. "
-          "'quick-edit' = worker commits, no reviewer (use for trivial repo ops: cherry-picks, "
-          "branch pushes, single-line/doc-only edits); master handles push/merge manually. "
-          "'script-run' = worker uses the worktree (or, repo-less, the Run directory) as an isolated "
-          "sandbox to run scripts / submit jobs / query state; worker must NOT modify tracked files and "
-          "must NOT commit. No reviewer, no merge. "
-          "'verify' = repo-less read-only plan verifier; no worktree, reviewer, or merge."),
+      help="Task profile (rules in the epilog)",
   )
   args, unknown_args = parser.parse_known_args()
   # The removed reviewer context file option gets an error that names its replacement; every other

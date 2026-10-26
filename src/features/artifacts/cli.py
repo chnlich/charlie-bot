@@ -38,7 +38,7 @@ from typing import TYPE_CHECKING
 from src.features.artifacts import artifact_check, artifact_wrap, constants
 from src.infra import constants as infra_constants
 from src.infra import help_formatter, home
-from src.runtime import cold_read
+from src.runtime import cold_read, run_identity
 from src.runtime.cli import common as cli_common
 
 if TYPE_CHECKING:
@@ -46,13 +46,9 @@ if TYPE_CHECKING:
 
 
 def _build_parser() -> argparse.ArgumentParser:
-  parser = argparse.ArgumentParser(
-      prog="charliebot artifact", description="Artifact checks", formatter_class=help_formatter.CliHelpFormatter)
+  parser = help_formatter.CliArgumentParser(prog="charliebot artifact", description="Artifact checks")
   sub = parser.add_subparsers(dest="verb", required=True)
-  check = sub.add_parser(
-      "check",
-      help="Run a genre's assertions (and cold read) on a local file",
-      formatter_class=help_formatter.CliHelpFormatter)
+  check = sub.add_parser("check", help="Run a genre's assertions (and cold read) on a local file")
   check.add_argument("file", help="Artifact path as an ordinary filesystem path (absolute or cwd-relative)")
   check.add_argument(
       "--genre", required=True, choices=constants.ARTIFACT_GENRES, help="Genre the page claims to follow")
@@ -62,8 +58,7 @@ def _build_parser() -> argparse.ArgumentParser:
       help="Chat message that triggered the page (question 6 verbatim); required for every genre "
       "unless --assertions-only is given")
   check.add_argument("--assertions-only", action="store_true", help="Run the assertions alone, skipping the cold read")
-  wrap = sub.add_parser(
-      "wrap", help="Assemble a genre page from a content fragment", formatter_class=help_formatter.CliHelpFormatter)
+  wrap = sub.add_parser("wrap", help="Assemble a genre page from a content fragment")
   wrap.add_argument("fragment", help="Content fragment path: the page's <body> content")
   wrap.add_argument(
       "--genre", required=True, choices=constants.ARTIFACT_GENRES, help="Genre whose template shells the page")
@@ -92,7 +87,7 @@ def _session_identity(cfg: config.CharlieBotConfig) -> str | None:
 
 def _session_profile(cfg: config.CharlieBotConfig, session_id: str) -> str:
   """The requesting session's profile (``manager`` or ``worker``) from its session metadata."""
-  meta_path = cfg.sessions_dir / session_id / "metadata.json"
+  meta_path = cfg.sessions_dir / session_id / run_identity.SESSION_METADATA_NAME
   try:
     profile = json.loads(meta_path.read_text(encoding="utf-8"))["profile"]
   except (OSError, ValueError, KeyError) as e:

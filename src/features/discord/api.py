@@ -5,7 +5,7 @@ import pydantic
 
 from src.features.chat_threads import thread_entry
 from src.features.discord import discord_commands, discord_listener
-from src.infra import config
+from src.infra import config, constants
 from src.runtime import run_token, session_events, session_store, task_sessions
 from src.runtime.api import deps
 
@@ -26,7 +26,8 @@ class DiscordReadRequest(pydantic.BaseModel):
 
   session_id: str
   url: str | None = None
-  limit: int = pydantic.Field(50, ge=1, le=100)
+  limit: int = pydantic.Field(
+      constants.DISCORD_READ_LIMIT_DEFAULT, ge=constants.DISCORD_READ_LIMIT_MIN, le=constants.DISCORD_READ_LIMIT_MAX)
 
 
 class DiscordCheckRequest(pydantic.BaseModel):

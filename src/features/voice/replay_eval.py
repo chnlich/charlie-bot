@@ -36,7 +36,8 @@ import numpy as np
 
 from src.features.voice import turn_contribution
 from src.features.voice.transcription import base, registry
-from src.infra import config, models
+from src.infra import config, event_types, help_formatter, models
+from src.runtime import chat_events
 
 # The file sits at src/features/voice/, so parents[3] is the checkout root; moving it breaks the depth.
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
@@ -118,7 +119,7 @@ def find_ground_truth(session_dir: pathlib.Path, recorded_at: datetime.datetime)
   Reads the session's ``data/chat_events.jsonl``; None means the clip is scored
   for latency only.
   """
-  events_path = session_dir / "data" / "chat_events.jsonl"
+  events_path = chat_events.chat_events_path(session_dir)
   if not events_path.is_file():
     return None
   with events_path.open(encoding="utf-8") as handle:
@@ -129,7 +130,7 @@ def find_ground_truth(session_dir: pathlib.Path, recorded_at: datetime.datetime)
         raise ValueError(f"malformed JSON at {events_path}:{line_number}: {exc}") from exc
       # A stored event carries ``input_mode``, or ``is_voice`` when it was written under the earlier flag.
       dictated = event.get("input_mode") == turn_contribution.VOICE_INPUT_MODE or event.get("is_voice") is True
-      if event.get("type") != "user" or not dictated:
+      if event.get("type") != event_types.USER or not dictated:
         continue
       content = event.get("content")
       if not isinstance(content, str):
@@ -342,7 +343,7 @@ def write_outputs(
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-  parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+  parser = help_formatter.CliArgumentParser(description=__doc__.splitlines()[0])
   known_engines = sorted(_variant_engine_ids())
   parser.add_argument(
       "--engines", default=",".join(registry.backend_ids()), help=f"comma list from {', '.join(known_engines)}")

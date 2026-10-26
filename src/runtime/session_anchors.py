@@ -20,17 +20,29 @@ from src.runtime import session_events, session_fork, session_store, session_usa
 from src.runtime.hooks import backend_types
 
 # The clone-style instruction context-reset notes append after the
-# history note: the fresh native conversation must read the chat log first and
-# state where things stand and the conventions in force, instead of silently
-# losing every convention the earlier turns set. Those sentences follow the
-# status block, so the reply's first line stays the Goal item; a thread post
-# keeps the format of prompts/thread_reply_format.md.
+# history note: the fresh native conversation must read the last two turns of
+# the chat log first — those turns hold the actions the session just took, so
+# the fresh context continues them without repeating them — and state where
+# things stand and the conventions in force, instead of silently losing every
+# convention the earlier turns set. The bounded read keeps the reset turn's
+# first model call from paying for the whole log; a larger --turns value
+# reaches earlier turns. Those sentences follow the status block, so the
+# reply's first line stays the Goal item; a thread post keeps the format of
+# prompts/thread_reply_format.md.
 CONTEXT_RESET_INSTRUCTION = (
-    "Get oriented from that log before you respond. Then write two or three "
-    "sentences on where things stand and the conventions in force. When your "
-    "rules open the reply with a status block, put these sentences after the "
-    "block. Then respond to what follows. A Slack or Discord thread post "
-    "carries only the answer that `prompts/thread_reply_format.md` defines.")
+    "Get oriented from the last two turns of that log: run "
+    "`charliebot session dialog --turns 2` before you respond. Those turns "
+    "show the actions the session just took, so you continue the work without "
+    "repeating them. A larger `--turns` value reads earlier turns. Then write "
+    "two or three sentences on where things stand and the conventions in "
+    "force. When your rules open the reply with a status block, put these "
+    "sentences after the block. Then respond to what follows. A Slack or "
+    "Discord thread post carries only the answer that "
+    "`prompts/thread_reply_format.md` defines.")
+
+# The opener every reset note starts with: the bracketed label marks the note as a context reset before the
+# reason names what left the previous conversation, so a session turn and a continued worker node open alike.
+CONTEXT_RESET_OPENER = "[Context reset: "
 
 
 def backend_switch_reset_reason(native_backend: str | None, option_id: str) -> str:
@@ -54,7 +66,7 @@ def context_reset_note(reason: str, task_goal: str | None = None) -> str:
   """
   task_part = "" if task_goal is None else f" The task is: {task_goal}."
   return (
-      f"[Context reset: {reason}.{task_part} {session_fork.HISTORY_LOCATION_NOTE} "
+      f"{CONTEXT_RESET_OPENER}{reason}.{task_part} {session_fork.HISTORY_LOCATION_NOTE} "
       f"{CONTEXT_RESET_INSTRUCTION}]")
 
 

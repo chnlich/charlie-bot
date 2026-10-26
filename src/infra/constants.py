@@ -64,7 +64,26 @@ REPLY_BUDGET_CHARS = 500
 # the CLI parser's --min-idle-days default and --help text share one number.
 MIN_IDLE_DAYS = 14
 
+# Page size, in messages, of one Discord thread read: the ``charliebot discord read --limit``
+# parser, its --help text and the discord/read request model share them, so the CLI precheck
+# cannot admit a page the endpoint refuses.
+DISCORD_READ_LIMIT_MIN = 1
+DISCORD_READ_LIMIT_MAX = 100
+DISCORD_READ_LIMIT_DEFAULT = 50
+
+# Page size, in rows, of one session listing page: the tree and runs query bounds, the archived
+# listing's default and clamp, and the ``charliebot session tree`` parser share them, so a page
+# size the CLI sends is one the endpoint serves.
+SESSION_PAGE_LIMIT_MIN = 1
+SESSION_PAGE_LIMIT_MAX = 500
+SESSION_PAGE_LIMIT_DEFAULT = 100
+
 AUTH_STATUS_PATH = "/api/auth/status"
+
+# The operator-facing local-timestamp spelling: the usage page's "as of" and "generated"
+# stamps and the host-auth page's baseline, expiry and probe stamps render it, so the two
+# pages show one time format.
+LOCAL_TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M %Z"
 
 # The one loop= value for both service launchers and the spawn regression test: uvloop closes a pipe fd
 # twice, and the second close kills an unrelated file that reused the number (EBADF); stdlib closes once.

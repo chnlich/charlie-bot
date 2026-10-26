@@ -240,8 +240,10 @@ async function createScheduledTaskInGroup(group) {
 // ---------------------------------------------------------------------------
 // The Workspace error badge rides each Workspace fetch.
 registerWorkspaceBadge(() => fetchBrokenCronTasks().then(renderCronErrorBadge));
-// Cron owns the listing marker, so its package excludes bound roots here.
-registerGroupPreviewExclusion((s) => !!s.schedule_task);
+// Cron owns the listing marker, so its package exempts bound roots from the
+// group preview limit here: a bound root always shows in place and takes no
+// rank against the 5-row cap.
+registerGroupPreviewLimitExemption((s) => !!s.schedule_task);
 // A bound node's row carries the clock badge and the schedule lines, in every
 // view.
 registerSessionRowBadge((s) => (s.schedule_task ? renderScheduledBadge(s) : ''));

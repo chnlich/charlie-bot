@@ -216,7 +216,7 @@ def _fold_task_events(facts: _TaskFacts, events: list[dict], index_offset: int) 
         if run_id not in facts.run_finish_positions:
           facts.run_finish_positions[run_id] = absolute
         if event.get("outcome") == "success":
-          ids = event.get("input_event_ids")
+          ids = event.get(ET.INPUT_EVENT_IDS)
           if isinstance(ids, list):
             facts.confirmed_input_ids.update(str(i) for i in ids)
     elif etype == ET.TASK_INPUT_ACKNOWLEDGED:
@@ -501,7 +501,13 @@ class TaskTreeManager:
 
   def _require_task(self, meta: models.SessionMetadata | None, session_id: str) -> models.SessionMetadata:
     if meta is None:
-      raise task_errors.TaskNotFoundError(f"task {session_id} not found")
+      raise task_errors.task_not_found(session_id)
+    return meta
+
+  def _require_session(self, meta: models.SessionMetadata | None, session_id: str) -> models.SessionMetadata:
+    """The metadata of any session, required to exist; its refusal names a session rather than a task node."""
+    if meta is None:
+      raise task_errors.TaskNotFoundError(f"session {session_id} not found")
     return meta
 
   async def load_task_meta(self, session_id: str) -> models.SessionMetadata:
@@ -633,10 +639,7 @@ class TaskTreeManager:
     return index
 
   def _index_meta(self, index: _TreeIndex, session_id: str) -> models.SessionMetadata:
-    meta = index.metas.get(session_id)
-    if meta is None:
-      raise task_errors.TaskNotFoundError(f"task {session_id} not found")
-    return meta
+    return self._require_task(index.metas.get(session_id), session_id)
 
   def _children_of(self, index: _TreeIndex, session_id: str | None) -> list[str]:
     return list(index.children.get(session_id, []))
@@ -657,7 +660,7 @@ class TaskTreeManager:
     while stack:
       sid = stack.pop()
       if sid in seen:
-        raise task_errors.TaskConflictError([f"task relation cycle through {sid}"])
+        raise task_errors.task_relation_cycle(sid)
       seen.add(sid)
       out.append(sid)
       stack.extend(self._children_of(index, sid))
@@ -676,13 +679,12 @@ class TaskTreeManager:
     current = self._index_meta(index, session_id)
     while current.task_parent_id is not None:
       if current.task_parent_id in seen:
-        raise task_errors.TaskConflictError([f"task relation cycle through {current.task_parent_id}"])
+        raise task_errors.task_relation_cycle(current.task_parent_id)
       seen.add(current.task_parent_id)
       current = self._index_meta(index, current.task_parent_id)
       chain.append(current)
       if len(chain) > task_errors.ANCESTOR_HOP_LIMIT:
-        raise task_errors.TaskConflictError(
-            [f"ancestor chain of {session_id} exceeds {task_errors.ANCESTOR_HOP_LIMIT} hops"])
+        raise task_errors.ancestor_chain_too_long(session_id, task_errors.ANCESTOR_HOP_LIMIT)
     return chain
 
   async def ancestor_ids(self, session_id: str) -> list[str]:
@@ -1014,7 +1016,7 @@ class TaskTreeManager:
         inherited = known
         break
       if current in seen or len(chain) > task_errors.ANCESTOR_HOP_LIMIT:
-        raise task_errors.TaskConflictError([f"task relation cycle through {current}"])
+        raise task_errors.task_relation_cycle(current)
       seen.add(current)
       meta = self._index_meta(index, current)
       chain.append((current, meta))
@@ -1118,9 +1120,7 @@ class TaskTreeManager:
     await self.load_task_meta(session_id)
     index = await self._get_index()
     # Re-read through the index so the detail and the tree agree on one projection.
-    indexed = index.metas.get(session_id)
-    if indexed is None:
-      raise task_errors.TaskNotFoundError(f"task {session_id} not found")
+    indexed = self._require_task(index.metas.get(session_id), session_id)
     try:
       derived = self._detail_fields(index, indexed, _NodeReads(self, warm_only=True))
     except _ColdReadError:
@@ -1153,9 +1153,7 @@ class TaskTreeManager:
   ) -> models.SessionMetadata:
     """Copy selected fields from *owner* on *old* onto this node."""
     async with self.control_lock:
-      meta = await self.load_meta(session_id)
-      if meta is None:
-        raise task_errors.TaskNotFoundError(f"session {session_id} not found")
+      meta = self._require_session(await self.load_meta(session_id), session_id)
       metadata_slots.copy_fields(old, meta, owner, names=fields)
       meta.updated_at = models.utc_now()
       await self._save_meta(meta)
@@ -1214,9 +1212,7 @@ class TaskTreeManager:
           parent_meta = await self.load_meta(task_parent_id)
         await self._authorize_agent_creation(caller, profile, task, task_parent_id, parent_meta)
       if task_parent_id is not None:
-        parent_meta = await self.load_meta(task_parent_id)
-        if parent_meta is None:
-          raise task_errors.TaskNotFoundError(f"task {task_parent_id} not found")
+        parent_meta = self._require_task(await self.load_meta(task_parent_id), task_parent_id)
         if parent_meta.profile == "worker":
           raise task_errors.TaskInvalidError(f"parent task {task_parent_id} is not a manager")
         index = await self._get_index()
@@ -1439,9 +1435,7 @@ class TaskTreeManager:
     if not values:
       raise task_errors.TaskInvalidError("update_slot_fields requires at least one field")
     async with self.control_lock:
-      meta = await self.load_meta(session_id)
-      if meta is None:
-        raise task_errors.TaskNotFoundError(f"session {session_id} not found")
+      meta = self._require_session(await self.load_meta(session_id), session_id)
       metadata_slots.set_fields(meta, owner, **values)
       await self.session_store.save_metadata(meta)
       self._invalidate_index()
@@ -1453,9 +1447,7 @@ class TaskTreeManager:
     The write runs under the control lock and leaves the sidebar sort key alone, as update_slot_fields does.
     """
     async with self.control_lock:
-      meta = await self.load_meta(session_id)
-      if meta is None:
-        raise task_errors.TaskNotFoundError(f"session {session_id} not found")
+      meta = self._require_session(await self.load_meta(session_id), session_id)
       meta.backend = backend
       await self.session_store.save_metadata(meta)
       self._invalidate_index()

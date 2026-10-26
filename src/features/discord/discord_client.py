@@ -6,10 +6,9 @@ type (``DiscordAPIError``) that names the failing call instead of leaking the
 token. The 429 policy lives in one place (``_request``): sleep the
 ``retry_after`` the API reports and retry, at most twice, then raise.
 
-Nothing calls this module yet — a later step wires the Discord listener and
-the CLI onto it. The module-level helpers (snowflake comparison, message
-links, the message-content intent check, the permission bit table) are pure,
-so the listener can reason about ids and permissions without an HTTP client.
+The module-level helpers (snowflake comparison, message links, the
+message-content intent check, the permission bit table) are pure, so the
+listener can reason about ids and permissions without an HTTP client.
 """
 
 from __future__ import annotations
@@ -53,6 +52,10 @@ _MESSAGE_LINK_RE = re.compile(r"^https://discord\.com/channels/(\d+)/(\d+)(?:/(\
 
 # Discord's hard cap on a thread name; longer names are truncated, not refused.
 _THREAD_NAME_MAX_CHARS = 100
+
+# Discord's cap on one message page: get_messages returns at most this many, so a
+# whole-thread read continues after each page's last id until a page comes back short.
+MESSAGE_PAGE_LIMIT = 100
 
 # Retries of one call after a 429; a third rate-limit answer gives up.
 _MAX_429_RETRIES = 2
@@ -249,12 +252,33 @@ class DiscordClient:
     """GET /channels/{channel_id}/messages/{message_id}; returns the one message object."""
     return await self._request("GET", f"/channels/{channel_id}/messages/{message_id}")
 
-  async def get_messages(self, channel_id: str, *, after: str | None = None, limit: int = 100) -> list[dict]:
+  async def get_messages(self,
+                         channel_id: str,
+                         *,
+                         after: str | None = None,
+                         limit: int = MESSAGE_PAGE_LIMIT) -> list[dict]:
     """GET /channels/{channel_id}/messages with optional ``after`` and
-    ``limit`` (1 to 100); returned oldest first by integer id, though Discord
-    hands them back newest first."""
+    ``limit`` (1 to ``MESSAGE_PAGE_LIMIT``); returned oldest first by integer
+    id, though Discord hands them back newest first."""
     params: dict[str, Any] = {"limit": limit}
     if after is not None:
       params["after"] = after
     messages = await self._request("GET", f"/channels/{channel_id}/messages", params=params)
     return sorted(messages, key=lambda message: snowflake_key(message["id"]))
+
+
+async def read_all_messages(client: DiscordClient, channel_id: str) -> list[dict]:
+  """Every message of *channel_id*, oldest first, one ``MESSAGE_PAGE_LIMIT`` page at a time.
+
+  The read starts at id ``"0"`` (before every snowflake) and continues after the
+  page's last id until a page comes back shorter than ``MESSAGE_PAGE_LIMIT``, which
+  is how a caller learns the thread ends.
+  """
+  messages: list[dict] = []
+  after = "0"
+  while True:
+    page = await client.get_messages(channel_id, after=after, limit=MESSAGE_PAGE_LIMIT)
+    messages.extend(page)
+    if len(page) < MESSAGE_PAGE_LIMIT:
+      return messages
+    after = page[-1]["id"]

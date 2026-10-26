@@ -32,7 +32,7 @@ if TYPE_CHECKING:
 
   from src.infra import config
 
-from src.infra import constants, credentials, home, json_utils, timeouts
+from src.infra import constants, credentials, event_types, home, json_utils, timeouts
 from src.runtime import run_token
 
 TASK_SPEC_REQUIRED_HEADINGS = (
@@ -722,16 +722,6 @@ def post_internal_api(
   )
 
 
-def put_internal_api(endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
-  """PUT to a CharlieBot API endpoint and return the parsed JSON response.
-
-  Same error contract as ``post_internal_api``. The verbs that PUT use it for
-  (the repair mark) set one value, so a sent-but-lost call reports effect
-  ``none`` and needs no readback.
-  """
-  return _request_with_contract("PUT", endpoint, payload=payload, unknown_effect="none")
-
-
 def get_api(endpoint: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
   """GET a CharlieBot API endpoint and return the parsed JSON response.
 
@@ -825,13 +815,13 @@ def find_local_task_close(task_id: str, request_id: str) -> dict | None:
       return None
     if not isinstance(event, dict):
       return None
-    if event.get("type") == "task_closed" and event.get("id") == closed_id:
+    if event.get("type") == event_types.TASK_CLOSED and event.get("id") == closed_id:
       return {
           "session_id": task_id,
           "task_state": str(event.get("outcome") or "completed"),
           "closed_event_id": closed_id,
       }
-    if event.get("type") == "task_close_requested" and event.get("request_id") == request_id:
+    if event.get("type") == event_types.TASK_CLOSE_REQUESTED and event.get("request_id") == request_id:
       deferred = {"session_id": task_id, "request_id": request_id, "status": "pending_run_finish"}
   return deferred
 

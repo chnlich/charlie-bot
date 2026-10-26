@@ -24,6 +24,8 @@ function loadWebsocketContext(extraContext) {
     reconnectDelay: 1000,
     thinkingStart: null,
     sessionUnread: {},
+    document: {getElementById: () => null},
+    Chat: {activeTurnEngineFor: () => null},
     localStorage: {getItem: () => null},
     // No stored key: mirrors page-load order config.js → websocket.js on the no-key path.
     wsUrlWithToken: (path) => path,

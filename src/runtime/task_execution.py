@@ -149,7 +149,7 @@ def worker_continuation_reset_note(reason: str, previous_log_path: pathlib.Path)
   to recover what the earlier conversation already did.
   """
   return (
-      f"[Context reset: {reason}. The task continues on the same branch and worktree; "
+      f"{session_anchors.CONTEXT_RESET_OPENER}{reason}. The task continues on the same branch and worktree; "
       f"its spec and the new input follow. The previous run's log is at {previous_log_path} — "
       "read it before acting, so finished work is not repeated.]")
 
@@ -1946,7 +1946,7 @@ class TaskExecutionAdapter:
       is_alive = runs.run_alive_probe(run.pid, run.pid_start, run.started_at, runs.read_host_boot_time())
     meta = await tree.load_meta(session_id)
     if meta is None:
-      raise task_errors.TaskNotFoundError(f"task {session_id} not found")
+      raise task_errors.task_not_found(session_id)
     alive_on_entry = is_alive()
     ended_at: datetime.datetime | None = None
     if alive_on_entry:

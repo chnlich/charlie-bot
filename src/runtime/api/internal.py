@@ -131,7 +131,7 @@ async def _route_unpinned_task(
         text=f"Task type: {req.task_type.value}\n\n{req.description}",
         candidates=candidates)
   except backend_pool.RouterError as e:
-    raise fastapi.HTTPException(status_code=502, detail=f"backend router failed: {e}") from e
+    raise fastapi.HTTPException(status_code=502, detail=backend_pool.router_failure_line(e)) from e
 
 
 def delegate_request_id(req: models.DelegateRequest) -> str:

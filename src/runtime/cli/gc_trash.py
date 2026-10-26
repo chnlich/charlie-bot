@@ -10,16 +10,13 @@ to run) and never escalated automatically.
   charliebot gc-trash --yes    # hard-delete every entry
 """
 
-import argparse
 import sys
 
 from src.infra import help_formatter, human_size
 
 
 def main() -> None:
-  parser = argparse.ArgumentParser(
-      description="List or purge the CharlieBot worktree quarantine trash",
-      formatter_class=help_formatter.CliHelpFormatter)
+  parser = help_formatter.CliArgumentParser(description="List or purge the CharlieBot worktree quarantine trash")
   parser.add_argument(
       "--yes",
       action="store_true",

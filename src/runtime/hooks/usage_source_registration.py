@@ -8,6 +8,8 @@ a source's implementation module and the records it returns.
 
 from typing import NamedTuple
 
+from src.infra import registration
+
 
 class UsageSource(NamedTuple):
   """One place usage is logged.
@@ -32,7 +34,7 @@ _type_sources: dict[str, str] = {}
 def register_source(source: UsageSource) -> None:
   """Add *source* after the sources already registered; a repeated name or prefix raises."""
   if source.name in _sources:
-    raise ValueError(f"usage source {source.name!r} is already registered")
+    raise registration.already_registered("usage source", source.name)
   for prefix in source.id_prefixes:
     owner = next((s.name for s in _sources.values() if prefix in s.id_prefixes), None)
     if owner is not None:

@@ -178,6 +178,14 @@ mod tests {
   use super::*;
   use crate::test_support::{Install, fake_install, feature_context, module_report, repo_root, write_report};
 
+  #[test]
+  fn repeated_file_values_match_starlette_query_decoding() {
+    assert_eq!(
+      query_values(Some("file=%2Ftmp%2Fa+b&file=%2Ftmp%2Fsecond%20file&file&other=x"), "file"),
+      ["/tmp/a b", "/tmp/second file", ""]
+    );
+  }
+
   /// A checkout whose interpreter is a file that cannot run: a helper start fails with a 500.
   fn checkout_without_a_runnable_interpreter() -> tempfile::TempDir {
     let checkout = tempfile::tempdir().unwrap();

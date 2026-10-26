@@ -292,6 +292,35 @@ mod tests {
   }
 
   #[test]
+  fn reverse_event_reader_visits_each_nonblank_line_newest_first_across_pages() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("events.jsonl");
+    let mut raw = String::new();
+    let mut forward = Vec::new();
+    for index in 0..120 {
+      let blob = "x".repeat(index * 97 % 9000);
+      raw.push_str(&format!("{{\"type\":\"user\",\"id\":\"line-{index}\",\"blob\":\"{blob}\"}}\n"));
+      forward.push(format!("line-{index}"));
+      if index % 5 == 0 {
+        raw.push('\n');
+      }
+    }
+    raw.push_str("{\"type\":\"result\",\"id\":\"last\"}");
+    forward.push("last".to_string());
+    fs::write(&path, &raw).unwrap();
+
+    let mut newest_first = Vec::new();
+    let (_, stats) = visit_events_from_end(&path, &["user", "result"], None, |event| {
+      newest_first.push(event["id"].as_str().unwrap().to_string());
+      None::<()>
+    })
+    .unwrap();
+    forward.reverse();
+    assert_eq!(newest_first, forward);
+    assert_eq!(stats.lines_visited, forward.len() as u64);
+  }
+
+  #[test]
   fn stderr_tail_reads_at_most_sixty_four_kibibytes() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("stderr.log");

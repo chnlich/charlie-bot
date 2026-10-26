@@ -122,7 +122,7 @@ def _run_git(repo_path: pathlib.Path, *args: str, input_bytes: bytes | None = No
 
 def _read_lifecycle(session_dir: pathlib.Path) -> dict | None:
   """Read the latest lifecycle event across archived and live chat events."""
-  event_paths = sorted((session_dir / "data" / "archives").glob(chat_events.ARCHIVE_FILE_GLOB))
+  event_paths = sorted(chat_events.chat_event_archives_dir(session_dir).glob(chat_events.ARCHIVE_FILE_GLOB))
   live_path = chat_events.chat_events_path(session_dir)
   if live_path.is_file():
     event_paths.append(live_path)
@@ -161,7 +161,8 @@ def _load_run_groups(cfg: config.CharlieBotConfig) -> dict[pathlib.Path, dict[st
   """Group recorded worktree Runs by canonical path and session owner."""
   groups: dict[pathlib.Path,
                dict[str, list[models.RunRecord]]] = collections.defaultdict(lambda: collections.defaultdict(list))
-  for metadata_path in sorted(cfg.sessions_dir.glob(f"*/data/{runs.RUNS_DIR_NAME}/*/{runs.RUN_METADATA_NAME}")):
+  for metadata_path in sorted(
+      cfg.sessions_dir.glob(f"*/{runs.DATA_DIR_NAME}/{runs.RUNS_DIR_NAME}/*/{runs.RUN_METADATA_NAME}")):
     try:
       record = models.RunRecord.model_validate_json(metadata_path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:
@@ -261,7 +262,7 @@ def _worktree_rows(cfg: config.CharlieBotConfig, now: datetime.datetime) -> list
     row.owner_session_id = owner_session_id
     row.repo_path = run.repo_path
     row.branch_name = run.branch_name
-    row.archive_path = cfg.sessions_dir / owner_session_id / "data" / runs.RUNS_DIR_NAME / run.id / (
+    row.archive_path = cfg.sessions_dir / owner_session_id / runs.DATA_DIR_NAME / runs.RUNS_DIR_NAME / run.id / (
         "worktree-changes.tar")
     row.action = "delete"
     row.reason = "closed-task"

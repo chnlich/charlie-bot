@@ -11,7 +11,9 @@ const DEFAULT_SEARCH_PATH: &str = "/bin:/usr/bin";
 /// `None` when neither holds an `ncu_report.py`.
 pub fn discover_python_dir(path_env: Option<&OsStr>, nsight_root: &Path) -> anyhow::Result<Option<PathBuf>> {
   if let Some(ncu) = which("ncu", path_env)? {
-    for parent in ncu.ancestors().skip(1) {
+    // Python resolves the binary non-strictly: a target that cannot be resolved keeps its unresolved path.
+    let resolved = fs::canonicalize(&ncu).unwrap_or(ncu);
+    for parent in resolved.ancestors().skip(1) {
       let candidate = parent.join("extras").join("python");
       if candidate.join("ncu_report.py").is_file() {
         return Ok(Some(candidate));
@@ -72,6 +74,22 @@ mod tests {
     let empty_root = tempfile::tempdir().unwrap();
 
     let found = discover_python_dir(Some(install.join("bin").as_os_str()), empty_root.path()).unwrap();
+
+    assert_eq!(found, Some(install.join("extras").join("python")));
+  }
+
+  #[test]
+  fn a_symlinked_ncu_names_the_install_of_its_target() {
+    let root = tempfile::tempdir().unwrap();
+    let install = root.path().join("nsight");
+    write_executable(&install.join("bin").join("ncu"));
+    write_module(&install.join("extras").join("python"));
+    let tools = root.path().join("tools");
+    fs::create_dir_all(&tools).unwrap();
+    std::os::unix::fs::symlink(install.join("bin").join("ncu"), tools.join("ncu")).unwrap();
+    let empty_root = tempfile::tempdir().unwrap();
+
+    let found = discover_python_dir(Some(tools.as_os_str()), empty_root.path()).unwrap();
 
     assert_eq!(found, Some(install.join("extras").join("python")));
   }

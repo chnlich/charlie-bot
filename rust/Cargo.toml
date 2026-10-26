@@ -77,7 +77,7 @@ minijinja-contrib = { version = "2", features = ["pycompat"] }
 multer = "3.1"
 nix = { version = "0.30", features = ["fs", "process", "hostname", "user", "signal", "term", "ioctl"] }
 percent-encoding = "2"
-procfs = "0.18"
+procfs = { version = "0.18", default-features = false }
 regex = "1"
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
 rusqlite = { version = "0.40", features = ["bundled"] }

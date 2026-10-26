@@ -1,8 +1,9 @@
 //! Process identity reads shared by run stores and task-tree liveness checks.
 
-use std::fs;
 use std::io;
 
+use procfs::process::Process;
+use procfs::{CurrentSI, KernelStats};
 use time::OffsetDateTime;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -11,28 +12,17 @@ pub struct ProcessStat {
   pub state: String,
 }
 
-/// Read field 22 and field 3 of `/proc/<pid>/stat`; return `None` when the process cannot be read.
+/// Field 22 (start tick) and field 3 (state) of `/proc/<pid>/stat`; `None` when the process cannot be read.
 pub fn read_pid_stat(pid: u32) -> Option<ProcessStat> {
-  let contents = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-  let (_, rest) = contents.rsplit_once(')')?;
-  let fields: Vec<&str> = rest.split_whitespace().collect();
-  if fields.len() < 20 {
-    return None;
-  }
-  Some(ProcessStat { pid_start: fields[19].to_string(), state: fields[0].to_string() })
+  let stat = Process::new(i32::try_from(pid).ok()?).ok()?.stat().ok()?;
+  Some(ProcessStat { pid_start: stat.starttime.to_string(), state: stat.state.to_string() })
 }
 
 /// Read the host boot time from `/proc/stat`'s `btime` line.
 pub fn read_host_boot_time() -> io::Result<OffsetDateTime> {
-  let contents = fs::read_to_string("/proc/stat")?;
-  for line in contents.lines() {
-    if let Some(value) = line.strip_prefix("btime ") {
-      let seconds = value.parse::<i64>().map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-      return OffsetDateTime::from_unix_timestamp(seconds)
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error));
-    }
-  }
-  Err(io::Error::new(io::ErrorKind::InvalidData, "/proc/stat missing btime line"))
+  let seconds = i64::try_from(KernelStats::current().map_err(io::Error::other)?.btime)
+    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+  OffsetDateTime::from_unix_timestamp(seconds).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
 }
 
 /// Check the recorded process id, start tick, non-zombie state, and current boot interval.
@@ -53,6 +43,8 @@ pub fn is_run_alive(
 
 #[cfg(test)]
 mod tests {
+  use std::fs;
+
   use super::*;
 
   #[test]

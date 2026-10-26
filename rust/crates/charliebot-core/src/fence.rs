@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use nix::fcntl::{Flock, FlockArg, OFlag};
 use serde_json::{Map, Value, json};
 
-use crate::{fsutil, paths, pyfmt, timefmt};
+use crate::{fsutil, paths, proc_identity, pyfmt, timefmt};
 
 pub const STATE_DIR_NAME: &str = "state";
 pub const FENCE_LOCK_NAME: &str = "home_writer.lock";
@@ -147,7 +147,7 @@ pub fn acquire_home_writer_fence(home: &Path, purpose: &str) -> Result<HomeWrite
   let pid = i64::from(std::process::id());
   let holder = FenceHolder {
     pid,
-    pid_start: pid_start_of(pid),
+    pid_start: proc_identity::read_pid_stat(std::process::id()).map(|stat| stat.pid_start),
     started_at: timefmt::utc_now_iso(),
     purpose: purpose.to_string(),
     argv: std::env::args().collect::<Vec<_>>().join(" "),
@@ -195,14 +195,6 @@ pub fn read_fence_holder(home: &Path) -> Option<FenceHolder> {
     argv: text_field(&raw, "argv"),
     home: text_field(&raw, "home"),
   })
-}
-
-/// Field 22 (start time in clock ticks) of `/proc/<pid>/stat`, kept as its raw text.
-pub fn pid_start_of(pid: i64) -> Option<String> {
-  let content = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-  // The comm field may hold spaces and parentheses, so fields count from after the last ')'.
-  let rest: Vec<&str> = content.rsplit_once(')')?.1.split_whitespace().collect();
-  rest.get(19).map(|field| field.to_string())
 }
 
 /// Refuse fence paths that would place or read the exclusion outside the home.

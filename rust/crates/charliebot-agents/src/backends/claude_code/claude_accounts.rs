@@ -541,16 +541,14 @@ fn to_utc_datetime(value: OffsetDateTime) -> UtcDateTime {
   UtcDateTime::parse(&text).expect("RFC3339 timestamps parse")
 }
 
+/// The transcripts a config directory holds for `session_id`: `projects/<slug>/<session_id>.jsonl`. The config root is
+/// a literal path, and the session id joins the pattern as Python's `Path.glob` interpolates it.
 pub fn transcript_matches(config_dir: &Path, session_id: &str) -> anyhow::Result<Vec<PathBuf>> {
   let root = expand_account_path(&config_dir.to_string_lossy())?.join("projects");
+  let pattern = format!("{}/*/{session_id}.jsonl", glob::Pattern::escape(&root.to_string_lossy()));
   let mut matches = Vec::new();
-  let entries = match fs::read_dir(&root) {
-    Ok(entries) => entries,
-    Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(matches),
-    Err(error) => return Err(error).with_context(|| format!("reading transcript projects {}", root.display())),
-  };
-  for entry in entries {
-    let path = entry?.path().join(format!("{session_id}.jsonl"));
+  for entry in glob::glob(&pattern).with_context(|| format!("reading transcript projects {}", root.display()))? {
+    let path = entry.with_context(|| format!("reading transcript projects {}", root.display()))?;
     if path.is_file() {
       matches.push(path);
     }

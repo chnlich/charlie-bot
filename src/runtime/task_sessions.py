@@ -504,6 +504,12 @@ class TaskTreeManager:
       raise task_errors.TaskNotFoundError(f"task {session_id} not found")
     return meta
 
+  def _require_session(self, meta: models.SessionMetadata | None, session_id: str) -> models.SessionMetadata:
+    """The metadata of any session, required to exist; its refusal names a session rather than a task node."""
+    if meta is None:
+      raise task_errors.TaskNotFoundError(f"session {session_id} not found")
+    return meta
+
   async def load_task_meta(self, session_id: str) -> models.SessionMetadata:
     """The session's metadata, required to be a task-tree node.
 
@@ -633,10 +639,7 @@ class TaskTreeManager:
     return index
 
   def _index_meta(self, index: _TreeIndex, session_id: str) -> models.SessionMetadata:
-    meta = index.metas.get(session_id)
-    if meta is None:
-      raise task_errors.TaskNotFoundError(f"task {session_id} not found")
-    return meta
+    return self._require_task(index.metas.get(session_id), session_id)
 
   def _children_of(self, index: _TreeIndex, session_id: str | None) -> list[str]:
     return list(index.children.get(session_id, []))
@@ -1118,9 +1121,7 @@ class TaskTreeManager:
     await self.load_task_meta(session_id)
     index = await self._get_index()
     # Re-read through the index so the detail and the tree agree on one projection.
-    indexed = index.metas.get(session_id)
-    if indexed is None:
-      raise task_errors.TaskNotFoundError(f"task {session_id} not found")
+    indexed = self._require_task(index.metas.get(session_id), session_id)
     try:
       derived = self._detail_fields(index, indexed, _NodeReads(self, warm_only=True))
     except _ColdReadError:
@@ -1153,9 +1154,7 @@ class TaskTreeManager:
   ) -> models.SessionMetadata:
     """Copy selected fields from *owner* on *old* onto this node."""
     async with self.control_lock:
-      meta = await self.load_meta(session_id)
-      if meta is None:
-        raise task_errors.TaskNotFoundError(f"session {session_id} not found")
+      meta = self._require_session(await self.load_meta(session_id), session_id)
       metadata_slots.copy_fields(old, meta, owner, names=fields)
       meta.updated_at = models.utc_now()
       await self._save_meta(meta)
@@ -1214,9 +1213,7 @@ class TaskTreeManager:
           parent_meta = await self.load_meta(task_parent_id)
         await self._authorize_agent_creation(caller, profile, task, task_parent_id, parent_meta)
       if task_parent_id is not None:
-        parent_meta = await self.load_meta(task_parent_id)
-        if parent_meta is None:
-          raise task_errors.TaskNotFoundError(f"task {task_parent_id} not found")
+        parent_meta = self._require_task(await self.load_meta(task_parent_id), task_parent_id)
         if parent_meta.profile == "worker":
           raise task_errors.TaskInvalidError(f"parent task {task_parent_id} is not a manager")
         index = await self._get_index()
@@ -1439,9 +1436,7 @@ class TaskTreeManager:
     if not values:
       raise task_errors.TaskInvalidError("update_slot_fields requires at least one field")
     async with self.control_lock:
-      meta = await self.load_meta(session_id)
-      if meta is None:
-        raise task_errors.TaskNotFoundError(f"session {session_id} not found")
+      meta = self._require_session(await self.load_meta(session_id), session_id)
       metadata_slots.set_fields(meta, owner, **values)
       await self.session_store.save_metadata(meta)
       self._invalidate_index()
@@ -1453,9 +1448,7 @@ class TaskTreeManager:
     The write runs under the control lock and leaves the sidebar sort key alone, as update_slot_fields does.
     """
     async with self.control_lock:
-      meta = await self.load_meta(session_id)
-      if meta is None:
-        raise task_errors.TaskNotFoundError(f"session {session_id} not found")
+      meta = self._require_session(await self.load_meta(session_id), session_id)
       meta.backend = backend
       await self.session_store.save_metadata(meta)
       self._invalidate_index()

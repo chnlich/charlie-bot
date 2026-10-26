@@ -149,6 +149,14 @@ fn create_backup_names_the_archive_by_local_time() {
 }
 
 #[test]
+fn backup_name_and_date_parser_match_python_timestamp_bytes() {
+  let name = archive_name(2026, 10, 26, 9, 7, 5);
+  assert_eq!(name, "charliebot-20261026-090705.tar.gz");
+  assert_eq!(parse_backup_date(&name), Some((2026, 10, 26, 9, 7, 5)));
+  assert_eq!(parse_backup_date("charliebot-00000101-000000.tar.gz"), None);
+}
+
+#[test]
 fn create_backup_records_the_permission_bits_and_directory_slashes() {
   let (_root, home) = temp_home();
   let config = home.join("config.yaml");

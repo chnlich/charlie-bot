@@ -12,6 +12,9 @@ use std::time::SystemTime;
 use charliebot_compat::json::fast_json_bytes;
 use charliebot_core::venv::VenvBin;
 use charliebot_registry::FeatureContext;
+use memchr::{memchr, memchr_iter, memchr2, memrchr};
+use serde::Serialize;
+use serde_json::ser::Formatter;
 use serde_json::{Map, Number, Value};
 use sha2::{Digest, Sha256};
 use tempfile::Builder;
@@ -166,24 +169,50 @@ fn build_cached(plan: &BuildPlan) -> FlightResult {
 }
 
 fn merge_cache_key(paths: &[PathBuf], slim: bool, mode: &str) -> Result<String, BuildFailure> {
-  let mut payload = String::from("{\"paths\":[");
-  for (index, path) in paths.iter().enumerate() {
-    if index > 0 {
-      payload.push(',');
-    }
-    let metadata = fs::metadata(path).map_err(io_failure)?;
-    payload.push('[');
-    charliebot_core::pyfmt::write_ascii_json_str(&mut payload, &path.to_string_lossy());
-    payload.push(',');
-    payload.push_str(&metadata.size().to_string());
-    payload.push(',');
-    payload.push_str(&(metadata.mtime() * 1_000_000_000 + metadata.mtime_nsec()).to_string());
-    payload.push(']');
+  #[derive(Serialize)]
+  struct CacheKeyPayload<'a> {
+    paths: Vec<(String, u64, i64)>,
+    slim: bool,
+    mode: &'a str,
   }
-  payload.push_str(if slim { "],\"slim\":true,\"mode\":" } else { "],\"slim\":false,\"mode\":" });
-  charliebot_core::pyfmt::write_ascii_json_str(&mut payload, mode);
-  payload.push('}');
-  Ok(format!("{:x}", Sha256::digest(payload.as_bytes())))
+
+  let mut path_rows = Vec::with_capacity(paths.len());
+  for path in paths {
+    let metadata = fs::metadata(path).map_err(io_failure)?;
+    path_rows.push((
+      path.to_string_lossy().into_owned(),
+      metadata.size(),
+      metadata.mtime() * 1_000_000_000 + metadata.mtime_nsec(),
+    ));
+  }
+  let payload = CacheKeyPayload { paths: path_rows, slim, mode };
+  let mut encoded = Vec::new();
+  let mut serializer = serde_json::Serializer::with_formatter(&mut encoded, PythonAsciiFormatter);
+  payload.serialize(&mut serializer).map_err(|error| BuildFailure::Failed(error.to_string()))?;
+  Ok(format!("{:x}", Sha256::digest(encoded)))
+}
+
+struct PythonAsciiFormatter;
+
+impl Formatter for PythonAsciiFormatter {
+  fn write_string_fragment<W>(&mut self, writer: &mut W, fragment: &str) -> std::io::Result<()>
+  where
+    W: ?Sized + Write,
+  {
+    let mut start = 0;
+    for (index, character) in fragment.char_indices().filter(|(_, character)| !character.is_ascii()) {
+      writer.write_all(&fragment.as_bytes()[start..index])?;
+      let code = character as u32;
+      if code <= 0xffff {
+        write!(writer, "\\u{code:04x}")?;
+      } else {
+        let code = code - 0x10000;
+        write!(writer, "\\u{:04x}\\u{:04x}", 0xd800 + (code >> 10), 0xdc00 + (code & 0x3ff))?;
+      }
+      start = index + character.len_utf8();
+    }
+    writer.write_all(&fragment.as_bytes()[start..])
+  }
 }
 
 fn touch(path: &Path) -> Result<(), BuildFailure> {
@@ -688,10 +717,14 @@ fn orjson_error_text(source: &[u8], error: &serde_json::Error) -> String {
 }
 
 fn string_escape_start(source: &[u8], end: usize) -> usize {
+  let end = end.min(source.len());
   let mut in_string = false;
   let mut escaped = false;
   let mut escape_start = None;
-  for (index, byte) in source.iter().copied().enumerate().take(end.min(source.len())) {
+  let mut index = 0;
+  while let Some(offset) = memchr2(b'"', b'\\', &source[index..end]) {
+    index += offset;
+    let byte = source[index];
     if !in_string {
       if byte == b'"' {
         in_string = true;
@@ -704,51 +737,76 @@ fn string_escape_start(source: &[u8], end: usize) -> usize {
     } else if byte == b'"' {
       in_string = false;
     }
+    index += 1;
   }
   escape_start.unwrap_or_else(|| end.saturating_sub(1))
 }
 
 fn string_control_offset(source: &[u8], end: usize) -> usize {
+  let end = end.min(source.len());
   let mut in_string = false;
   let mut escaped = false;
-  for (index, byte) in source.iter().copied().enumerate().take(end.min(source.len())) {
+  let mut index = 0;
+  while index < end {
     if !in_string {
-      if byte == b'"' {
-        in_string = true;
-      }
-    } else if escaped {
+      let Some(offset) = memchr(b'"', &source[index..end]) else {
+        break;
+      };
+      index += offset + 1;
+      in_string = true;
+      continue;
+    }
+    if escaped {
       escaped = false;
-    } else if byte == b'\\' {
-      escaped = true;
-    } else if byte == b'"' {
-      in_string = false;
-    } else if byte < 0x20 {
-      return index;
+      index += 1;
+      continue;
+    }
+    let remaining = &source[index..end];
+    let event = [memchr2(b'"', b'\\', remaining), first_control_offset(remaining)].into_iter().flatten().min();
+    let Some(offset) = event else {
+      break;
+    };
+    index += offset;
+    match source[index] {
+      b'\\' => {
+        escaped = true;
+        index += 1;
+      }
+      b'"' => {
+        in_string = false;
+        index += 1;
+      }
+      _ => return index,
     }
   }
   end
 }
 
+fn first_control_offset(source: &[u8]) -> Option<usize> {
+  (0..0x20).filter_map(|byte| memchr(byte, source)).min()
+}
+
 fn number_start(source: &[u8], end: usize) -> usize {
-  let mut start = end.min(source.len());
-  while start > 0 && matches!(source[start - 1], b'0'..=b'9' | b'-' | b'+' | b'.' | b'e' | b'E') {
-    start -= 1;
-  }
-  start
+  let prefix = &source[..end.min(source.len())];
+  [
+    memrchr(b',', prefix),
+    memrchr(b'[', prefix),
+    memrchr(b'{', prefix),
+    memrchr(b':', prefix),
+    memrchr(b' ', prefix),
+    memrchr(b'\t', prefix),
+    memrchr(b'\n', prefix),
+    memrchr(b'\r', prefix),
+  ]
+  .into_iter()
+  .flatten()
+  .max()
+  .map_or(0, |delimiter| delimiter + 1)
 }
 
 fn byte_offset(source: &[u8], line: usize, column: usize) -> usize {
-  let mut current_line = 1;
-  let mut line_start = 0;
-  for (index, byte) in source.iter().enumerate() {
-    if current_line == line {
-      break;
-    }
-    if *byte == b'\n' {
-      current_line += 1;
-      line_start = index + 1;
-    }
-  }
+  let line_start =
+    if line <= 1 { 0 } else { memchr_iter(b'\n', source).nth(line - 2).map_or(source.len(), |offset| offset + 1) };
   (line_start + column.saturating_sub(1)).min(source.len())
 }
 

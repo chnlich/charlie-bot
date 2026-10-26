@@ -13,7 +13,7 @@ use charliebot_compat::routing::get_only;
 use charliebot_compat::{responses, static_files, validation};
 use charliebot_registry::FeatureContext;
 use charliebot_registry::templating::Templating;
-use percent_encoding::percent_decode_str;
+use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 use serde_json::{Value, json};
 
 use crate::merge::{self, BuildFailure, BuildMode};
@@ -22,6 +22,7 @@ const VIEWER_PATH: &str = "/perfetto";
 const MERGED_PATH: &str = "/perfetto/merged";
 const FILE_SERVER_MOUNT: &str = "/absolute_filepath";
 const DEFAULT_PATTERN: &str = "*.json";
+const QUOTE_SET: &AsciiSet = &NON_ALPHANUMERIC.remove(b'_').remove(b'.').remove(b'-').remove(b'~');
 
 static MIME_TYPES: OnceLock<MimeTypes> = OnceLock::new();
 
@@ -273,20 +274,9 @@ fn all_local_json_traces(inputs: &[(String, Option<PathBuf>)]) -> Result<bool, B
 }
 
 fn query_pairs(query: Option<&str>) -> Vec<(String, String)> {
-  query
-    .unwrap_or_default()
-    .split('&')
-    .filter(|pair| !pair.is_empty())
-    .map(|pair| {
-      let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
-      (decode_component(key), decode_component(value))
-    })
+  form_urlencoded::parse(query.unwrap_or_default().as_bytes())
+    .map(|(key, value)| (key.into_owned(), value.into_owned()))
     .collect()
-}
-
-fn decode_component(value: &str) -> String {
-  let spaced = value.replace('+', " ");
-  percent_decode_str(&spaced).decode_utf8_lossy().into_owned()
 }
 
 fn last_value<'a>(pairs: &'a [(String, String)], key: &str) -> Option<&'a str> {
@@ -298,17 +288,7 @@ fn urlencode(pairs: &[(String, String)]) -> String {
 }
 
 fn quote_plus(value: &str) -> String {
-  let mut out = String::with_capacity(value.len());
-  for byte in value.bytes() {
-    if byte.is_ascii_alphanumeric() || b"_.-~".contains(&byte) {
-      out.push(byte as char);
-    } else if byte == b' ' {
-      out.push('+');
-    } else {
-      out.push_str(&format!("%{byte:02X}"));
-    }
-  }
-  out
+  value.split(' ').map(|part| utf8_percent_encode(part, QUOTE_SET).to_string()).collect::<Vec<_>>().join("+")
 }
 
 enum GlobToken {

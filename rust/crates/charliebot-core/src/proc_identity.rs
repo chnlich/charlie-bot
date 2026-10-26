@@ -65,8 +65,8 @@ mod tests {
     let comparison = (|| -> Result<_, String> {
       loop {
         let text = fs::read_to_string(format!("/proc/{pid}/stat")).map_err(|error| error.to_string())?;
-        let fields: Vec<&str> = text.rsplit_once(')').ok_or("proc stat has no command delimiter")?.1
-          .split_whitespace().collect();
+        let fields: Vec<&str> =
+          text.rsplit_once(')').ok_or("proc stat has no command delimiter")?.1.split_whitespace().collect();
         if fields.first() == Some(&"S") {
           let stat = read_pid_stat(pid).ok_or("procfs did not read the sleeping child")?;
           return Ok((fields[19].to_owned(), fields[0].to_owned(), stat));

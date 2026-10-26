@@ -270,7 +270,7 @@ fn clamp_event_timestamp(event: &mut Value, mtime: Option<SystemTime>) {
     return;
   }
   let now = OffsetDateTime::now_utc();
-  let mtime = mtime.and_then(system_time_to_datetime).unwrap_or(now);
+  let mtime = mtime.map(OffsetDateTime::from).unwrap_or(now);
   let clamped = if now < mtime { now } else { mtime };
   let value = python_isoformat(clamped);
   event
@@ -290,26 +290,8 @@ fn is_truthy(value: &Value) -> bool {
   }
 }
 
-fn system_time_to_datetime(value: SystemTime) -> Option<OffsetDateTime> {
-  let nanos = match value.duration_since(SystemTime::UNIX_EPOCH) {
-    Ok(duration) => duration.as_nanos() as i128,
-    Err(error) => -(error.duration().as_nanos() as i128),
-  };
-  OffsetDateTime::from_unix_timestamp_nanos(nanos).ok()
-}
-
 fn python_isoformat(value: OffsetDateTime) -> String {
-  let base = format!(
-    "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}",
-    value.year(),
-    u8::from(value.month()),
-    value.day(),
-    value.hour(),
-    value.minute(),
-    value.second(),
-  );
-  let micros = value.nanosecond() / 1000;
-  if micros == 0 { format!("{base}+00:00") } else { format!("{base}.{micros:06}+00:00") }
+  charliebot_core::timefmt::isoformat(value)
 }
 
 #[cfg(test)]
@@ -346,9 +328,16 @@ mod tests {
     )
   }
 
+  #[test]
+  fn a_clamped_timestamp_is_python_isoformat_in_utc() {
+    let mtime = SystemTime::UNIX_EPOCH + Duration::from_micros(1_792_000_000_500_000);
+    let mut event = serde_json::json!({"type": "assistant"});
+    clamp_event_timestamp(&mut event, Some(mtime));
+    assert_eq!(event["timestamp"], "2026-10-14T17:46:40.500000+00:00");
+  }
+
   #[tokio::test]
-  async fn keeps_partial_lines_and_drops_a_torn_final_line() {
-    let root = tempfile::tempdir().unwrap();
+  async fn keeps_partial_lines_and_drops_a_torn_final_line() {    let root = tempfile::tempdir().unwrap();
     let raw = root.path().join("agent.raw.ndjson");
     fs::write(&raw, b"{\"type\":\"assistant\",\"seq\":1}\n{\"type\":\"assistant\",\"seq\":2").unwrap();
     let mut events = Vec::new();

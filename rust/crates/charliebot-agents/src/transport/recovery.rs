@@ -2,7 +2,6 @@
 
 use std::fs;
 use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
 use serde_json::value::RawValue;
@@ -110,15 +109,7 @@ where
 /// Return the raw log's final modification time in UTC.
 pub fn raw_completion_time(raw_path: &Path) -> Option<OffsetDateTime> {
   let modified = fs::metadata(raw_path).ok()?.modified().ok()?;
-  system_time_to_datetime(modified)
-}
-
-fn system_time_to_datetime(value: SystemTime) -> Option<OffsetDateTime> {
-  let nanos = match value.duration_since(UNIX_EPOCH) {
-    Ok(duration) => duration.as_nanos() as i128,
-    Err(error) => -(error.duration().as_nanos() as i128),
-  };
-  OffsetDateTime::from_unix_timestamp_nanos(nanos).ok()
+  Some(OffsetDateTime::from(modified))
 }
 
 /// Return zero for a successful last result and minus one when it is absent or failed.

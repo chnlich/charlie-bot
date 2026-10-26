@@ -20,7 +20,7 @@ use uuid::Uuid;
 
 use super::options::{OpenCodeOption, model_overrides_config};
 use super::server::{OpenCodeHost, OpenCodeServer, OpenCodeServerPool, Turn, TurnEvent};
-use crate::cli_base::{IMAGE_MIME_BY_EXT, apply_proxy_env};
+use crate::cli_base::{apply_proxy_env, image_mime};
 use crate::event_builders;
 use crate::runner::EventFn;
 use crate::transport::cgroup::{SessionCgroup, SessionCgroupConfig};
@@ -613,8 +613,8 @@ pub(super) fn image_file_attachments(uploaded_files: &[Value]) -> Vec<Value> {
   let mut attachments = Vec::new();
   for reference in uploaded_files {
     let filename = reference.get("filename").map(python_str).unwrap_or_default();
-    let extension = filename.rsplit('.').next().unwrap_or_default().to_lowercase();
-    let Some(mime) = IMAGE_MIME_BY_EXT.iter().find(|(known, _)| *known == extension).map(|(_, mime)| *mime) else {
+    let extension = filename.rsplit('.').next().unwrap_or_default();
+    let Some(mime) = image_mime(extension) else {
       continue;
     };
     let path = reference.get("path").map(python_str).unwrap_or_default();

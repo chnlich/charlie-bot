@@ -11,7 +11,7 @@ use serde_json::Value;
 
 use super::options::CharlieCodeOption;
 use super::translate::CharlieCodeTranslator;
-use crate::cli_base::{CliHost, IMAGE_MIME_BY_EXT, apply_proxy_env, prepend_path_dir, str_field};
+use crate::cli_base::{CliHost, apply_proxy_env, image_mime, prepend_path_dir, str_field};
 
 /// The child env name that carries the configured API key.
 pub const API_KEY_ENV: &str = "CHARLIE_CODE_API_KEY";
@@ -203,11 +203,11 @@ fn ref_text<'a>(reference: &'a Value, key: &str) -> anyhow::Result<&'a str> {
   str_field(fields, key, "")
 }
 
-/// Whether the ref's extension names an image: the text after the last dot, lowercased, is an `IMAGE_MIME_BY_EXT` key.
+/// Whether the ref's extension names an image: the text after the last dot is an accepted image extension.
 fn is_image_ref(reference: &Value) -> anyhow::Result<bool> {
   let filename = ref_text(reference, "filename")?;
-  let extension = filename.rsplit_once('.').map_or(filename, |(_, extension)| extension).to_lowercase();
-  Ok(IMAGE_MIME_BY_EXT.iter().any(|(known, _)| *known == extension))
+  let extension = filename.rsplit_once('.').map_or(filename, |(_, extension)| extension);
+  Ok(image_mime(extension).is_some())
 }
 
 /// `pathlib.PurePath(name).name`: the last component of a path, empty when it has none.

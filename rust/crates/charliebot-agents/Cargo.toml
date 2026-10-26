@@ -16,6 +16,7 @@ charliebot-store.workspace = true
 futures-util.workspace = true
 libc.workspace = true
 memchr = "2"
+mime_guess.workspace = true
 nix.workspace = true
 regex.workspace = true
 reqwest = { workspace = true, features = ["json", "query", "stream"] }

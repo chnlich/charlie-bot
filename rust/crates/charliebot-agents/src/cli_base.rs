@@ -15,9 +15,19 @@ pub const LOCAL_NO_PROXY_ENTRIES: [&str; 3] = ["localhost", "127.0.0.1", "::1"];
 /// The Google API-key variables a Google CLI must not inherit (`base.strip_google_api_keys`).
 const GOOGLE_API_KEY_VARS: [&str; 2] = ["GEMINI_API_KEY", "GOOGLE_API_KEY"];
 
-/// The image extensions a backend passes as image input, with their MIME types (`base.IMAGE_MIME_BY_EXT`).
-pub const IMAGE_MIME_BY_EXT: [(&str, &str); 5] =
-  [("png", "image/png"), ("jpg", "image/jpeg"), ("jpeg", "image/jpeg"), ("gif", "image/gif"), ("webp", "image/webp")];
+/// The image extensions a backend passes as image input (`base.IMAGE_MIME_BY_EXT`).
+const IMAGE_EXTENSIONS: [&str; 5] = ["png", "jpg", "jpeg", "gif", "webp"];
+
+/// The MIME type of an upload filename's extension, or `None` when the backend does not pass it as an image. The
+/// extension is the text after the last dot, lowercased, as the Python map's lookup is.
+pub fn image_mime(extension: &str) -> Option<String> {
+  let extension = extension.to_ascii_lowercase();
+  if !IMAGE_EXTENSIONS.contains(&extension.as_str()) {
+    return None;
+  }
+  let mime = mime_guess::from_ext(&extension).first().expect("every accepted image extension has a MIME type");
+  Some(mime.to_string())
+}
 
 /// The process environment the CLI backend types read at registration: PATH to find a CLI binary, and HOME for the
 /// user-local bin directory the vendor installers target.
@@ -204,8 +214,18 @@ mod tests {
   }
 
   #[test]
-  fn prepend_adds_the_dir_once() {
-    let mut env = Env::from([("PATH".to_string(), "/usr/bin".to_string())]);
+  fn image_extensions_map_to_the_client_facing_mime_strings() {
+    assert_eq!(image_mime("png").as_deref(), Some("image/png"));
+    assert_eq!(image_mime("JPG").as_deref(), Some("image/jpeg"));
+    assert_eq!(image_mime("jpeg").as_deref(), Some("image/jpeg"));
+    assert_eq!(image_mime("gif").as_deref(), Some("image/gif"));
+    assert_eq!(image_mime("webp").as_deref(), Some("image/webp"));
+    assert_eq!(image_mime("txt"), None);
+    assert_eq!(image_mime(""), None);
+  }
+
+  #[test]
+  fn prepend_adds_the_dir_once() {    let mut env = Env::from([("PATH".to_string(), "/usr/bin".to_string())]);
     prepend_path_dir(&mut env, "/home/a/.local/bin");
     assert_eq!(env["PATH"], "/home/a/.local/bin:/usr/bin");
     prepend_path_dir(&mut env, "/home/a/.local/bin");

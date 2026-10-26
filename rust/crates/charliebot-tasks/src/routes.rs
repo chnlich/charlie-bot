@@ -1150,6 +1150,44 @@ mod tests {
 
   use super::*;
 
+  #[test]
+  fn matches_claims_each_route_and_refuses_empty_or_extra_segments() {
+    let claimed = [
+      "/api/chat/s/upload",
+      "/api/chat/s/message",
+      "/api/chat/s/cancel",
+      "/api/sessions/s/retry",
+      "/api/sessions/s/runs/r/cancel",
+      "/api/sessions/s/archive",
+      "/api/sessions/s/cancel",
+      "/api/sessions/s/task-inputs/acknowledge",
+      "/api/sessions/s/unarchive",
+      "/api/internal/delegate",
+      "/api/internal/session-message",
+    ];
+    let refused = [
+      "/api/chat//upload",
+      "/api/chat/s",
+      "/api/chat/s/other",
+      "/api/chat/s/upload/",
+      "/api/sessions//retry",
+      "/api/sessions/s/runs//cancel",
+      "/api/sessions/s/runs/r/cancel/",
+      "/api/sessions//task-inputs/acknowledge",
+      "/api/sessions/s/retry/",
+      "/api/internal/delegate/",
+      "/api/internal/delegate/x",
+      "/",
+      "",
+    ];
+    for path in claimed {
+      assert!(matches(path), "{path} should be claimed");
+    }
+    for path in refused {
+      assert!(!matches(path), "{path} should not be claimed");
+    }
+  }
+
   const INVALID_RUN_TOKEN: &str = "invalid-synthetic-run-token";
 
   fn feature_context() -> (tempfile::TempDir, Arc<FeatureContext>) {

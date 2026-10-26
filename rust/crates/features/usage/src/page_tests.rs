@@ -2,6 +2,7 @@
 //! synthetic rows with no ledger behind them. The page never captures, so no test reads a real home or log.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::CStr;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -519,6 +520,31 @@ async fn page_says_when_the_ledger_was_last_captured() {
   let body = page_body(&features, &read_page_ledger(&features)).await;
   assert!(body.contains("no capture yet"));
   assert!(!body.contains("as of 20"));
+}
+
+#[test]
+fn local_stamp_matches_python_strftime_in_the_system_zone() {
+  let moment = OffsetDateTime::from_unix_timestamp(1_800_000_000).expect("the instant is in range");
+  let unix_seconds = moment.unix_timestamp() as libc::time_t;
+  // SAFETY: `tm` contains integer and pointer fields, and `localtime_r` initializes them for this instant.
+  let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+  // SAFETY: `unix_seconds` and `tm` remain valid for the call.
+  let result = unsafe { libc::localtime_r(&unix_seconds, &mut tm) };
+  assert!(!result.is_null());
+  // SAFETY: a successful `localtime_r` returns a NUL-terminated zone name owned by libc.
+  let zone = unsafe { CStr::from_ptr(tm.tm_zone) }.to_string_lossy();
+  let local = moment
+    .to_offset(time::UtcOffset::from_whole_seconds(tm.tm_gmtoff as i32).expect("the local offset is in range"));
+  let expected = format!(
+    "{:04}-{:02}-{:02} {:02}:{:02} {zone}",
+    local.year(),
+    u8::from(local.month()),
+    local.day(),
+    local.hour(),
+    local.minute()
+  );
+
+  assert_eq!(local_stamp(moment), expected);
 }
 
 #[test]

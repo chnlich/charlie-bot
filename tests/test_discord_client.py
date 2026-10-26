@@ -163,6 +163,27 @@ async def test_get_messages_sorts_oldest_first_by_integer_id():
 
 
 @pytest.mark.asyncio
+async def test_read_all_messages_pages_until_a_short_page():
+  """A thread longer than one page reads in full, each page asking after the previous page's last id."""
+  limit = discord_client.MESSAGE_PAGE_LIMIT
+  ids = [str(100000000000000000 + n) for n in range(limit * 2 + 3)]
+  thread = [{"id": message_id, "content": message_id} for message_id in ids]
+  seen: list = []
+
+  def handler(request: httpx.Request) -> httpx.Response:
+    params = dict(request.url.params)
+    seen.append(params)
+    page = [message for message in thread if int(message["id"]) > int(params["after"])][:int(params["limit"])]
+    # Discord hands a page back newest first, and the client sorts it.
+    return httpx.Response(200, json=list(reversed(page)))
+
+  messages = await discord_client.read_all_messages(_client(handler), "666666666666666666")
+  assert [message["id"] for message in messages] == ids
+  assert [params["limit"] for params in seen] == [str(limit)] * 3
+  assert [params["after"] for params in seen] == ["0", ids[limit - 1], ids[2 * limit - 1]]
+
+
+@pytest.mark.asyncio
 async def test_thread_name_truncated_to_100_chars():
   """start_thread_from_message truncates a too-long name instead of posting it."""
 

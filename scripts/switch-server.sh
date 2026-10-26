@@ -9,8 +9,9 @@
 # ends the master turn that started this command. The command prints the log
 # path, waits for the verdict and exits with it: 0 when the readback and the probe turn passed; 2 when the switch
 # failed and the previous implementation serves again; 3 when the restore failed too, and the log ends with the state
-# the server is in. When the pane stays busy after Ctrl-C, the restore sends SIGTERM, then SIGKILL, to the server
-# processes under the pane.
+# the server is in; 4 when the switch completed but a recorded run died during it: the new server keeps serving, nothing
+# is restored, and the log names the run and its outcome. When the pane stays busy after Ctrl-C, the restore sends
+# SIGTERM, then SIGKILL, to the server processes under the pane.
 #
 # The probe turn runs last, in a session of its own. It passes once the run records its first assistant output (a
 # message or a tool call) or ends success. The archive then stops every run of the session that has not ended, and
@@ -59,6 +60,7 @@ case "$MODE" in
 esac
 PANE=""
 DETACHED_LOG=""
+DIED_RUNS=0   # the recorded runs that the readback found dead during the switch; any makes the switch exit 4
 while [ $# -gt 0 ]; do
   case "$1" in
     --pane) [ $# -ge 2 ] || usage; PANE=$2; shift 2 ;;
@@ -72,7 +74,7 @@ fail() { log "preflight failed: $*"; exit 1; }
 
 # The home is read, never written, by this helper. `config` prints the port and the access key (one per line);
 # `scan` prints one line per live Run (live) and one per refusal (block); `alive` prints alive or ended for a recorded
-# (pid, pid start).
+# (pid, pid start); `outcome` prints a Run's recorded run_finished outcome, or nothing while none is recorded.
 home_helper() {
   python3 -I - "$HOME_DIR" "$@" <<'PY'
 import datetime
@@ -156,6 +158,23 @@ elif mode == "scan":
 elif mode == "alive":
   pid, pid_start = sys.argv[3], sys.argv[4]
   print("alive" if process_instance(pid, pid_start) else "ended")
+elif mode == "outcome":
+  # Owner: RUN_FINISHED in src/infra/event_types.py, written to the session's live chat_events.jsonl
+  # (chat_events_path in src/runtime/chat_events.py). A segment rotated out of the live file is not read.
+  session_id, run_id = sys.argv[3], sys.argv[4]
+  events = home / "sessions" / session_id / "data" / "chat_events.jsonl"
+  text = events.read_text(encoding="utf-8") if events.is_file() else ""
+  outcome = None
+  for number, line in enumerate(text.splitlines(), 1):
+    try:
+      event = json.loads(line)
+    except json.JSONDecodeError:
+      # The live log's own reader skips a line it cannot parse, so such a line is not a fact; the skip is logged.
+      print(f"skipped line {number} of {events}: not JSON", file=sys.stderr)
+      continue
+    if event.get("type") == "run_finished" and event.get("run_id") == run_id:
+      outcome = event.get("outcome")
+  print(outcome or "")
 else:
   raise SystemExit(f"unknown home_helper mode {mode}")
 PY
@@ -378,16 +397,27 @@ run_process_ended() {
 }
 
 # adopted: every live run recorded before the stop is accounted for by this launch's recovery. A run whose process still
-# runs must have a task_recovery_resume line; a run whose process has ended needs none, because a run's process survives
-# a server stop by design, so a run whose process is gone was not lost by the switch and no restore could adopt it.
+# runs must have a task_recovery_resume line. A run whose process has ended needs its recorded outcome: a run's process
+# survives a server stop by design, so an ended run died during the switch unless it completed on its own. A death is
+# logged and counted in DIED_RUNS without failing the readback: no restore can adopt an ended run, so switch_forward
+# keeps the new server and exits 4.
 adopted() {
-  local run_id pid pid_start
-  while IFS=$'\t' read -r _ _ run_id _ pid pid_start; do
+  local run_id pid pid_start session_id outcome
+  while IFS=$'\t' read -r _ session_id run_id _ pid pid_start; do
     if launch_has task_recovery_resume "run_id=$run_id"; then
       continue
     fi
     if run_process_ended "$pid" "$pid_start"; then
-      log "readback: run $run_id ended during the switch; nothing to adopt"
+      outcome="$(home_helper outcome "$session_id" "$run_id")" || {
+        log "readback: cannot read the outcome of run $run_id"
+        return 1
+      }
+      if [ "$outcome" = success ]; then
+        log "readback: run $run_id ended during the switch: outcome success"
+      else
+        log "readback: run $run_id died during the switch: outcome ${outcome:-none recorded}"
+        DIED_RUNS=$((DIED_RUNS + 1))
+      fi
       continue
     fi
     log "readback: run $run_id was not adopted"
@@ -820,7 +850,13 @@ switch_forward() {
   serving "$WANT" || die "the new server failed its readback"
   adopted || die "a live run was not adopted"
   probe_turn || die "the probe turn failed"
-  log "SWITCH COMPLETE: $WANT serves port $PORT; clone at $(git -C "$REPO_ROOT" rev-parse --short HEAD)"
+  local head
+  head="$(git -C "$REPO_ROOT" rev-parse --short HEAD)"
+  if [ "$DIED_RUNS" -gt 0 ]; then
+    log "SWITCH COMPLETE, BUT A RECORDED RUN DIED DURING THE SWITCH: $WANT serves port $PORT; clone at $head"
+    exit 4
+  fi
+  log "SWITCH COMPLETE: $WANT serves port $PORT; clone at $head"
   exit 0
 }
 

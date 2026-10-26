@@ -11,7 +11,8 @@ share one test. The probe turn's cases run its functions in a shell against a fa
 waits, so each stays under the unit budget. The escalation cases run escalate_pane the same way, against stand-in
 servers under a shell that plays the pane, so they need no tmux either. The adoption check's cases run adopted the same
 way, against a staged runs file and launch output, for the same reason: no integration slot is left for another
-pane-driven switch.
+pane-driven switch. The exit cases run switch_forward the same way, with its stop, pane, server and probe steps
+stubbed out.
 """
 
 from __future__ import annotations
@@ -639,6 +640,20 @@ def _scanned_runs_file(world: World) -> pathlib.Path:
   return _runs_file(world, *(line for line in scan if line.startswith("live\t")))
 
 
+def _record_outcome(world: World, run_id: str, outcome: str) -> None:
+  """The run_finished fact that the new server's recovery lands for a run whose process had ended."""
+  event = {
+      "id": str(uuid.uuid4()),
+      "type": "run_finished",
+      "actor": "system",
+      "source_session_id": SESSION,
+      "run_id": run_id,
+      "outcome": outcome,
+  }
+  with (world.home / "sessions" / SESSION / "data" / "chat_events.jsonl").open("a", encoding="utf-8") as events:
+    events.write(json.dumps(event) + "\n")
+
+
 def _adopted(world: World, runs_file: pathlib.Path, launch_output: str) -> subprocess.CompletedProcess[str]:
   """The switch's adoption check against RUNS_FILE and one launch's output, through a shell that sources the switch."""
   launch_log = world.root / "server.log"
@@ -663,16 +678,17 @@ def _adopted(world: World, runs_file: pathlib.Path, launch_output: str) -> subpr
 
 
 def test_adoption_passes_when_the_recorded_run_ended_during_the_switch(world: World) -> None:
-  """A run whose process has ended needs no resume line: the check passes and logs the run that ended."""
+  """A run whose process has ended and whose recorded outcome is a completion needs no resume line: the check passes."""
   _seed_live_run(world, "run-ended", "claude-opus")
   runs_file = _scanned_runs_file(world)  # recorded while the process still ran, as the preflight scan does
   world.live[0].kill()
   world.live[0].wait()
+  _record_outcome(world, "run-ended", "success")
 
   proc = _adopted(world, runs_file, DRAIN_LINE.format(session=SESSION, run_id="run-ended"))
 
   assert proc.returncode == 0, proc.stdout + proc.stderr
-  assert "readback: run run-ended ended during the switch" in proc.stdout
+  assert "readback: run run-ended ended during the switch: outcome success" in proc.stdout
   assert "was not adopted" not in proc.stdout
 
 
@@ -687,11 +703,12 @@ def test_adoption_fails_only_for_a_recorded_run_that_still_runs(world: World) ->
       f"live\t{SESSION}\trun-live\tclaude-opus\t{live.pid}\t{_pid_start(live.pid)}")
   ended.kill()
   ended.wait()
+  _record_outcome(world, "run-ended", "success")
 
   proc = _adopted(world, runs_file, "")
 
   assert proc.returncode == 1, proc.stdout + proc.stderr
-  assert "readback: run run-ended ended during the switch" in proc.stdout
+  assert "readback: run run-ended ended during the switch: outcome success" in proc.stdout
   assert "readback: run run-live was not adopted" in proc.stdout
 
 
@@ -700,11 +717,76 @@ def test_adoption_treats_a_reused_pid_as_an_ended_run(world: World) -> None:
   _seed_live_run(world, "run-reused", "claude-opus")
   pid = world.live[0].pid
   runs_file = _runs_file(world, f"live\t{SESSION}\trun-reused\tclaude-opus\t{pid}\t{int(_pid_start(pid)) + 1}")
+  _record_outcome(world, "run-reused", "success")
 
   proc = _adopted(world, runs_file, "")
 
   assert proc.returncode == 0, proc.stdout + proc.stderr
-  assert "readback: run run-reused ended during the switch" in proc.stdout
+  assert "readback: run run-reused ended during the switch: outcome success" in proc.stdout
+
+
+def _switch_forward(world: World, run_pid: int, launch_output: str) -> subprocess.CompletedProcess[str]:
+  """The switch's forward path, from the scan through the readback to the exit, with its stop, pane, server and probe
+  steps stubbed out.
+
+  The scan records the live run, and the stub stop kills its process, as a stop that does not spare a run would. A
+  restore touches a marker file and exits 2, so a test tells a restore from the switch's own exit.
+  """
+  launch_log = world.root / "server.log"
+  launch_log.write_text(launch_output, encoding="utf-8")
+  work = world.root / "work"
+  work.mkdir(exist_ok=True)
+  env = {
+      **world.env,
+      "CLONE": str(world.clone),
+      "RUN_PID": str(run_pid),
+      "RESTORED": str(world.root / "restored"),
+      "RUNS_FILE": str(world.root / "switch.runs"),
+      "WANT": "python",
+      "PORT": str(world.port),
+      "NEW_LOG": str(launch_log),
+      "NEW_OFFSET": "0",
+      "WORK": str(work),
+  }
+  script = """
+source "$1" python
+REPO_ROOT="$CLONE"
+stop_old() { kill -KILL "$RUN_PID"; }
+start_in_pane() { :; }
+wait_ready() { :; }
+serving() { :; }
+probe_turn() { :; }
+restore() { touch "$RESTORED"; exit 2; }
+switch_forward
+"""
+  return subprocess.run(
+      ["bash", "-c", script, "bash", str(SWITCH)], env=env, capture_output=True, text=True, timeout=30, check=False)
+
+
+@pytest.mark.parametrize(
+    "outcome", ["success", "interrupted", "failed", None], ids=["completed", "interrupted", "failed", "no-outcome"])
+def test_switch_exits_by_the_recorded_outcome_of_a_run_the_stop_ended(world: World, outcome: str | None) -> None:
+  """A run the stop ended passes the switch only on a recorded completion. Any other outcome keeps the new server,
+  exits 4 and restores nothing; a run with no outcome counts as not completed."""
+  _seed_live_run(world, "run-stopped", "claude-opus")
+  if outcome is not None:
+    _record_outcome(world, "run-stopped", outcome)
+  home_before = {path.relative_to(world.home): path.read_bytes() for path in world.home.rglob("*") if path.is_file()}
+
+  proc = _switch_forward(world, world.live[0].pid, DRAIN_LINE.format(session=SESSION, run_id="run-stopped"))
+
+  assert not (world.root / "restored").exists(), _report(world, proc)
+  assert {
+      path.relative_to(world.home): path.read_bytes() for path in world.home.rglob("*") if path.is_file()
+  } == home_before, _report(world, proc)
+  if outcome == "success":
+    assert proc.returncode == 0, _report(world, proc)
+    assert "readback: run run-stopped ended during the switch: outcome success" in proc.stdout
+    assert "SWITCH COMPLETE:" in proc.stdout
+  else:
+    assert proc.returncode == 4, _report(world, proc)
+    assert f"readback: run run-stopped died during the switch: outcome {outcome or 'none recorded'}" in proc.stdout
+    assert "SWITCH COMPLETE, BUT A RECORDED RUN DIED DURING THE SWITCH" in proc.stdout
 
 
 ProbeRun = Callable[..., tuple[subprocess.CompletedProcess[str], list[str]]]

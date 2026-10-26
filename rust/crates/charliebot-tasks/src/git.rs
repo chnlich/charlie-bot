@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use charliebot_core::pyfmt;
-use jwalk::{Parallelism, WalkDir};
+use ignore::WalkBuilder;
 use tokio::process::Command;
 use tokio::time::timeout;
 
@@ -769,14 +769,9 @@ fn assert_safe_worktree_cleanup_target(
 /// True when *path* contains any `.git` marker without following symlinks (`src/infra/git.py:464`). An entry that
 /// cannot be read is not a marker.
 fn contains_git_marker(path: &Path) -> bool {
-  WalkDir::new(path)
-    .min_depth(1)
-    .follow_links(false)
-    .skip_hidden(false)
-    .parallelism(Parallelism::Serial)
-    .into_iter()
-    .flatten()
-    .any(|entry| entry.file_name() == ".git")
+  let mut walker = WalkBuilder::new(path);
+  walker.min_depth(Some(1)).follow_links(false).hidden(false).standard_filters(false);
+  walker.build().flatten().any(|entry| entry.file_name() == ".git")
 }
 
 /// Whether `name` is one of the cache, env and build directories a worktree sheds before removal.
@@ -789,37 +784,25 @@ fn is_local_artifact_name(name: &OsStr) -> bool {
 /// the root that holds a `.git` marker) is neither yielded nor read.
 fn collect_local_worktree_artifacts(wt_path: &Path, artifacts: &mut Vec<PathBuf>) {
   let root = wt_path.to_path_buf();
-  let walk = WalkDir::new(wt_path)
-    .min_depth(1)
-    .follow_links(false)
-    .skip_hidden(false)
-    .parallelism(Parallelism::Serial)
-    .process_read_dir(move |depth, dir, _state, children| {
-      // jwalk also calls this for the root entry itself, with no depth and the root's parent as `dir`. Only the
-      // contents of the root and of its subdirectories are filtered.
-      if depth.is_none() {
-        return;
-      }
-      children.retain_mut(|child| {
-        let Ok(entry) = child else { return true };
-        if entry.file_name() == ".git" {
-          return false;
-        }
-        if !entry.file_type().is_dir() {
-          return true;
-        }
-        if is_local_artifact_name(entry.file_name()) {
-          entry.read_children = None;
-          return true;
-        }
-        !(dir != root && entry.path().join(".git").symlink_metadata().is_ok())
-      });
-    });
-  for entry in walk.into_iter().flatten() {
-    if entry.file_type().is_dir() && is_local_artifact_name(entry.file_name()) {
-      artifacts.push(entry.path());
+  let found_artifacts = Arc::new(Mutex::new(Vec::new()));
+  let captured_artifacts = Arc::clone(&found_artifacts);
+  let mut walker = WalkBuilder::new(wt_path);
+  walker.min_depth(Some(1)).follow_links(false).hidden(false).standard_filters(false).filter_entry(move |entry| {
+    if entry.file_name() == ".git" {
+      return false;
     }
-  }
+    if !entry.file_type().is_some_and(|kind| kind.is_dir()) {
+      return true;
+    }
+    if is_local_artifact_name(entry.file_name()) {
+      captured_artifacts.lock().expect("artifact-walk capture is not poisoned").push(entry.path().to_path_buf());
+      return false;
+    }
+    !(entry.path().parent() != Some(root.as_path()) && entry.path().join(".git").symlink_metadata().is_ok())
+  });
+  for _entry in walker.build().flatten() {}
+  let mut found_artifacts = found_artifacts.lock().expect("artifact-walk capture is not poisoned");
+  artifacts.extend(std::mem::take(&mut *found_artifacts));
 }
 
 /// Pre-clean known local cache/env/build artifacts inside the worktree (`src/infra/git.py:489`).

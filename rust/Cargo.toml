@@ -71,7 +71,7 @@ http = "1"
 http-body = "1"
 http-body-util = "0.1"
 hyper-util = { version = "0.1", features = ["client-proxy"] }
-jwalk = "0.9"
+ignore = "0.4"
 matchit = "0.8"
 md-5 = "0.10"
 minijinja = { version = "2", features = ["loader", "json"] }

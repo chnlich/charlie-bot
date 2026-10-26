@@ -36,7 +36,7 @@ import numpy as np
 
 from src.features.voice import turn_contribution
 from src.features.voice.transcription import base, registry
-from src.infra import config, help_formatter, models
+from src.infra import config, event_types, help_formatter, models
 from src.runtime import chat_events
 
 # The file sits at src/features/voice/, so parents[3] is the checkout root; moving it breaks the depth.
@@ -130,7 +130,7 @@ def find_ground_truth(session_dir: pathlib.Path, recorded_at: datetime.datetime)
         raise ValueError(f"malformed JSON at {events_path}:{line_number}: {exc}") from exc
       # A stored event carries ``input_mode``, or ``is_voice`` when it was written under the earlier flag.
       dictated = event.get("input_mode") == turn_contribution.VOICE_INPUT_MODE or event.get("is_voice") is True
-      if event.get("type") != "user" or not dictated:
+      if event.get("type") != event_types.USER or not dictated:
         continue
       content = event.get("content")
       if not isinstance(content, str):

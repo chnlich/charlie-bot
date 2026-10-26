@@ -825,7 +825,7 @@ class RunStore:
     """The input ids the run's recorded run_finished fact carries ([] without one)."""
     for event in events:
       if event.get("type") == ET.RUN_FINISHED and event.get("run_id") == run_id:
-        payload = event.get("input_event_ids")
+        payload = event.get(ET.INPUT_EVENT_IDS)
         return list(payload) if isinstance(payload, list) else []
     return []
 
@@ -1050,7 +1050,7 @@ class RunStore:
       for event in events:
         if event.get("type") != ET.RUN_FINISHED or event.get("run_id") == run.id:
           continue
-        payload = event.get("input_event_ids")
+        payload = event.get(ET.INPUT_EVENT_IDS)
         if isinstance(payload, list):
           foreign.update(str(i) for i in payload)
       for other in self.list_run_records_sync(run.session_id):

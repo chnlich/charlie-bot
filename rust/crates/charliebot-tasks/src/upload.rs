@@ -12,7 +12,7 @@ use charliebot_compat::fastapi_form::{self, Field, FormModel};
 use charliebot_compat::responses;
 use charliebot_registry::FeatureContext;
 use charliebot_registry::task_errors::task_http_error;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncWriteExt, BufReader};
 
 const UPLOAD_FIELDS: &[Field] = &[Field::file("file")];
 const UPLOAD_FORM: FormModel = FormModel::new(UPLOAD_FIELDS);
@@ -80,20 +80,14 @@ pub async fn upload_file(State(features): State<Arc<FeatureContext>>, request: a
   )
 }
 
+/// The copy's read buffer: 1 MiB, the chunk size the upload path has always copied with.
+const COPY_BUFFER_BYTES: usize = 1024 * 1024;
+
 async fn save_file(source: &Path, destination: &Path) -> std::io::Result<u64> {
-  let mut source_file = tokio::fs::File::open(source).await?;
+  let mut source_file = BufReader::with_capacity(COPY_BUFFER_BYTES, tokio::fs::File::open(source).await?);
   let mut destination_file =
     tokio::fs::OpenOptions::new().create(true).truncate(true).write(true).open(destination).await?;
-  let mut buffer = vec![0; 1024 * 1024];
-  let mut size = 0_u64;
-  loop {
-    let length = source_file.read(&mut buffer).await?;
-    if length == 0 {
-      break;
-    }
-    destination_file.write_all(&buffer[..length]).await?;
-    size += length as u64;
-  }
+  let size = tokio::io::copy_buf(&mut source_file, &mut destination_file).await?;
   destination_file.flush().await?;
   Ok(size)
 }

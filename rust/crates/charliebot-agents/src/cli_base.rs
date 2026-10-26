@@ -1,8 +1,6 @@
 //! The module-level helpers of `src/runtime/agent_process/base.py` that the CLI backend types share: the binary lookup,
 //! the child PATH and proxy edits, the Google key strip, and the Python value semantics of their translators.
 
-use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
@@ -54,21 +52,17 @@ impl CliHost {
 
 /// The first executable `name` on `path`, else `fallback_dir/name` when that exists (`base.resolve_binary`).
 pub fn resolve_binary(name: &str, path: &str, fallback_dir: &Path) -> anyhow::Result<PathBuf> {
-  for dir in path.split(':') {
-    let candidate = Path::new(dir).join(name);
-    if is_executable_file(&candidate) {
-      return Ok(candidate);
-    }
+  let cwd = std::env::current_dir().context("the current directory resolves for the binary search")?;
+  match which::which_in(name, Some(path), cwd) {
+    Ok(found) => return Ok(found),
+    Err(which::Error::CannotFindBinaryPath) => {}
+    Err(error) => return Err(error).with_context(|| format!("searching PATH for {name}")),
   }
   let fallback = fallback_dir.join(name);
   if fallback.exists() {
     return Ok(fallback);
   }
   bail!("{name} binary not found on PATH or at {}", fallback.display())
-}
-
-fn is_executable_file(path: &Path) -> bool {
-  fs::metadata(path).is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
 }
 
 /// Prepends `dir` to the child PATH unless one of its entries is `dir` already (`base.prepend_path_dir`).

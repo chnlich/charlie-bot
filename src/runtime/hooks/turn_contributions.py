@@ -105,7 +105,7 @@ def register_turn_contribution(name: str, contribution: str) -> None:
 def _import_contribution(name: str, path: str) -> TurnContribution:
   spec = deferred.split_attr(path)
   if spec is None:
-    raise ValueError(f"turn contribution {name!r}: {path!r} is not a 'module:attr' string")
+    raise deferred.not_a_spec(path, f"turn contribution {name!r}")
   module_name, attr = spec
   instance = getattr(importlib.import_module(module_name), attr)
   if not isinstance(instance, TurnContribution):

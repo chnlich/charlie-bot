@@ -7,8 +7,8 @@ on a module-attribute read, so a test's patch target (e.g.
 ``src.runtime.worker.build_backend``) resolves without importing the real symbol
 at module import. The match-or-AttributeError rule lives here, once; the
 globals-first loader the master-turn chain's consumers build theirs from
-lives here too. A "module:attr" spec is split here as well, so its grammar has
-one home.
+lives here too. A "module:attr" spec is split here as well, so its grammar and
+the refusal for a path that is not one have one home.
 """
 
 import importlib
@@ -62,7 +62,7 @@ def split_attr(path: str) -> tuple[str, str] | None:
   """The module name and attribute that a "module:attr" string names; None when *path* is not one.
 
   A spec has a non-empty module name and a non-empty attribute on either side of one colon. A caller
-  that refuses a bad spec builds its own sentence, so the refusal names what the caller registers.
+  that refuses a bad spec raises :func:`not_a_spec`, whose sentence names the caller's subject.
   """
   module_name, separator, attr = path.partition(":")
   if not separator or not module_name or not attr:
@@ -70,10 +70,16 @@ def split_attr(path: str) -> tuple[str, str] | None:
   return module_name, attr
 
 
+def not_a_spec(path: str, subject: str | None = None) -> ValueError:
+  """The ValueError for *path*, which is not a "module:attr" spec; *subject* names what the caller registers."""
+  prefix = f"{subject}: " if subject else ""
+  return ValueError(f"{prefix}{path!r} is not a 'module:attr' string")
+
+
 def import_attr(path: str) -> Any:
   """The attribute that a "module:attr" string names; the module imports on this call."""
   spec = split_attr(path)
   if spec is None:
-    raise ValueError(f"{path!r} is not a 'module:attr' string")
+    raise not_a_spec(path)
   module_name, attr = spec
   return getattr(importlib.import_module(module_name), attr)

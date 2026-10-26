@@ -154,7 +154,7 @@ class _SessionWebSocket:
     raise AssertionError("session WebSocket must not wait for a cursor frame")
 
 
-@pytest.mark.parametrize("raw_cursor", [None, "-1", "abc"])
+@pytest.mark.parametrize("raw_cursor", [None, "-1", "abc", pytest.param("9" * 20, id="too-long")])
 @pytest.mark.asyncio
 async def test_invalid_handshake_cursor_closes_before_subscription(
     monkeypatch: pytest.MonkeyPatch,

@@ -5,7 +5,6 @@ import contextlib
 import importlib
 import inspect
 import io
-import json
 import logging
 import os
 import sys
@@ -369,7 +368,9 @@ async def session_websocket(websocket: fastapi.WebSocket, session_id: str) -> No
   log.info("session_ws_connected", session_id=session_id)
 
   raw_cursor = websocket.query_params.get("cursor")
-  if raw_cursor is None or not raw_cursor.isascii() or not raw_cursor.isdecimal():
+  # More digits than an int64 event count can hold (19) also exceeds int()'s own
+  # digit limit, so reject it here rather than raising out of the handler.
+  if (raw_cursor is None or len(raw_cursor) > 19 or not raw_cursor.isascii() or not raw_cursor.isdecimal()):
     log.warning("session_ws_cursor_invalid", session_id=session_id, raw_cursor=raw_cursor)
     await websocket.close(code=4400)
     return

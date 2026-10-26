@@ -14,6 +14,7 @@ use anyhow::Context;
 use charliebot_core::config::CREDENTIALS_FILENAME;
 use charliebot_core::home::OPENCODE_DIR_NAME;
 use charliebot_store::run_records::THREADS_DIR_NAME;
+use chrono::{Datelike, Local, NaiveDateTime, Weekday};
 use flate2::Compression;
 use flate2::write::GzEncoder;
 
@@ -62,73 +63,28 @@ pub fn should_exclude(arcname: &[u8]) -> bool {
   parts.len() >= 3 && parts[0] == b"sessions" && parts[2] == THREADS_DIR_NAME.as_bytes()
 }
 
-/// The local wall-clock time as its `struct tm` fields, through `localtime_r` as `datetime.now()` reads it.
-pub(crate) fn local_now() -> libc::tm {
-  let now = unsafe { libc::time(std::ptr::null_mut()) };
-  let mut tm: libc::tm = unsafe { std::mem::zeroed() };
-  let ok = unsafe { libc::localtime_r(&now, &mut tm) };
-  assert!(!ok.is_null(), "localtime_r failed");
-  tm
-}
-
-pub(crate) fn naive_epoch_from_tm(tm: &libc::tm) -> i64 {
-  days_from_civil(i64::from(1900 + tm.tm_year), i64::from(tm.tm_mon) + 1, i64::from(tm.tm_mday)) * 86_400
-    + i64::from(tm.tm_hour) * 3_600
-    + i64::from(tm.tm_min) * 60
-    + i64::from(tm.tm_sec)
-}
-
-/// Days since 1970-01-01 of a civil date (Howard Hinnant's `days_from_civil`).
-pub(crate) fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
-  let y = year - if month <= 2 { 1 } else { 0 };
-  let era = y.div_euclid(400);
-  let yoe = y - era * 400;
-  let doy = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day - 1;
-  let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-  era * 146_097 + doe - 719_468
-}
-
-/// The Python `weekday()` (Monday 0) of a day count since 1970-01-01, a Thursday (weekday 3).
-pub(crate) fn weekday(days: i64) -> i64 {
-  (days + 3).rem_euclid(7)
-}
-
-/// The `charliebot-<YYYYMMDD-HHMMSS>.tar.gz` name for a naive local time given as its parts.
-pub(crate) fn archive_name(year: i64, month: i64, day: i64, hour: i64, minute: i64, second: i64) -> String {
-  format!("{BACKUP_PREFIX}{year:04}{month:02}{day:02}-{hour:02}{minute:02}{second:02}{BACKUP_SUFFIX}")
+/// The archive name of a naive local time.
+pub(crate) fn archive_name(moment: NaiveDateTime) -> String {
+  format!("{BACKUP_PREFIX}{}{BACKUP_SUFFIX}", moment.format("%Y%m%d-%H%M%S"))
 }
 
 /// Parses the naive local datetime of a backup filename like `charliebot-20260101-120000.tar.gz`
 /// (`_parse_backup_date`), validating each field as `strptime` does.
-pub(crate) fn parse_backup_date(name: &str) -> Option<(i64, i64, i64, i64, i64, i64)> {
+pub(crate) fn parse_backup_date(name: &str) -> Option<NaiveDateTime> {
   let ts = name.strip_prefix(BACKUP_PREFIX).and_then(|ts| ts.strip_suffix(BACKUP_SUFFIX))?;
   let bytes = ts.as_bytes();
   if bytes.len() != 15 || bytes[8] != b'-' {
     return None;
   }
-  let digits = |range: std::ops::Range<usize>| -> Option<i64> {
-    let slice = &ts[range];
-    if !slice.bytes().all(|byte| byte.is_ascii_digit()) {
-      return None;
-    }
-    slice.parse::<i64>().ok()
-  };
-  let year = digits(0..4)?;
-  let month = digits(4..6)?;
-  let day = digits(6..8)?;
-  let hour = digits(9..11)?;
-  let minute = digits(11..13)?;
-  let second = digits(13..15)?;
-  // `datetime` has no year 0, so strptime rejects `0000` as it rejects any other out-of-range field.
-  if year < 1 || !(1..=12).contains(&month) || hour > 23 || minute > 59 || second > 59 || day < 1 {
+  if !bytes.iter().enumerate().all(|(index, byte)| index == 8 || byte.is_ascii_digit()) {
     return None;
   }
-  let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
-  let month_days = [31, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][(month - 1) as usize];
-  if day > month_days {
+  let parsed = NaiveDateTime::parse_from_str(ts, "%Y%m%d-%H%M%S").ok()?;
+  // Python datetime rejects year 0, which chrono accepts.
+  if parsed.year() < 1 {
     return None;
   }
-  Some((year, month, day, hour, minute, second))
+  Some(parsed)
 }
 
 /// The user's login name for a uid, or "" when no passwd entry exists (`KeyError`), as Python's `tarfile` does.
@@ -169,15 +125,7 @@ pub fn create_backup() -> anyhow::Result<PathBuf> {
 pub fn create_backup_in(home: &Path) -> anyhow::Result<PathBuf> {
   let target_dir = backup_dir(home)?;
   fs::create_dir_all(&target_dir).with_context(|| format!("creating the backup directory {}", target_dir.display()))?;
-  let tm = local_now();
-  let archive_name = archive_name(
-    i64::from(1900 + tm.tm_year),
-    i64::from(tm.tm_mon) + 1,
-    i64::from(tm.tm_mday),
-    i64::from(tm.tm_hour),
-    i64::from(tm.tm_min),
-    i64::from(tm.tm_sec),
-  );
+  let archive_name = archive_name(Local::now().naive_local());
   let archive_path = target_dir.join(archive_name);
 
   let raw_out =
@@ -330,8 +278,7 @@ pub fn apply_retention() -> anyhow::Result<()> {
 
 /// [`apply_retention`] against an explicit home, so tests pin the home without the process environment.
 pub fn apply_retention_in(home: &Path) -> anyhow::Result<()> {
-  let tm = local_now();
-  apply_retention_in_with_now(home, naive_epoch_from_tm(&tm));
+  apply_retention_in_with_now(home, Local::now().naive_local().and_utc().timestamp());
   Ok(())
 }
 
@@ -372,14 +319,13 @@ pub fn apply_retention_in_with_now(home: &Path, now: i64) {
       tracing::debug!(name, "backup_retention_skip_unparseable");
       continue;
     };
-    let (year, month, day, hour, minute, second) = parsed;
-    let backup_naive = days_from_civil(year, month, day) * 86_400 + hour * 3_600 + minute * 60 + second;
+    let backup_naive = parsed.and_utc().timestamp();
     // Python's `timedelta.days` floors toward negative infinity.
     let age = (now - backup_naive).div_euclid(86_400);
     let keep = if age < DAILY_THRESHOLD {
       true
     } else if age < WEEKLY_THRESHOLD {
-      weekday(days_from_civil(year, month, day)) == 6 // Sunday
+      parsed.weekday() == Weekday::Sun
     } else {
       false
     };

@@ -806,6 +806,15 @@ class TaskCompletionManager:
     log.info("task_close_requested", session_id=session_id, request_id=request_id, owner_run_id=owner_run_id)
     return 202, {"session_id": session_id, "request_id": request_id, "status": "pending_run_finish"}
 
+  def _require_open_for_close(self, session_id: str) -> None:
+    """Refuse a close of a task that is not open.
+
+    Automatic completion and the sequence close both answer this rule under the control lock, so
+    one definition keeps the two paths from drifting apart on the sentence.
+    """
+    if self._tree.task_state(session_id) != "open":
+      raise task_errors.TaskConflictError([f"task {session_id} is no longer open"])
+
   async def _close_now(
       self,
       session_id: str,
@@ -853,8 +862,7 @@ class TaskCompletionManager:
     async with tree.control_lock:
       fresh_index = await tree._get_index()
       tree._index_meta(fresh_index, session_id)
-      if tree.task_state(session_id) != "open":
-        raise task_errors.TaskConflictError([f"task {session_id} is no longer open"])
+      self._require_open_for_close(session_id)
       fresh_blockers = self.completion_blockers(
           fresh_index, session_id, exclude_run_ids=exclude_run_ids, exclude_input_ids=exclude_input_ids)
       fresh_meta = await tree.load_meta(session_id)
@@ -1031,8 +1039,7 @@ class TaskCompletionManager:
     async with tree.control_lock:
       index = await tree._get_index()
       tree._index_meta(index, session_id)
-      if tree.task_state(session_id) != "open":
-        raise task_errors.TaskConflictError([f"task {session_id} is no longer open"])
+      self._require_open_for_close(session_id)
       blockers = self.cancellation_blockers(index, session_id)
     if blockers:
       raise task_errors.TaskConflictError(sorted(set(blockers)))
@@ -1056,8 +1063,7 @@ class TaskCompletionManager:
       replay = self._replay_close_request(session_id, request_id)
       if replay is not None:
         return replay
-      if tree.task_state(session_id) != "open":
-        raise task_errors.TaskConflictError([f"task {session_id} is no longer open"])
+      self._require_open_for_close(session_id)
       fresh_meta = await tree.load_meta(session_id)
       assert fresh_meta is not None
       fresh_blockers = self.cancellation_blockers(index, session_id)

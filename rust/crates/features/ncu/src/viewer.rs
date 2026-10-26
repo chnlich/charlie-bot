@@ -91,11 +91,15 @@ impl Viewer {
     let state = *self.module.lock().expect("the module lock is not poisoned");
     match state {
       ModuleState::Unavailable => self.parse_csv(abspath),
-      ModuleState::Undecided if discover_python_dir(self.path_env.as_deref(), &self.nsight_root).is_none() => {
-        self.set_module(ModuleState::Unavailable);
-        self.parse_csv(abspath)
-      }
-      ModuleState::Undecided | ModuleState::Available => self.parse_with_helper(repo_root, abspath),
+      ModuleState::Undecided => match discover_python_dir(self.path_env.as_deref(), &self.nsight_root) {
+        Ok(Some(_)) => self.parse_with_helper(repo_root, abspath),
+        Ok(None) => {
+          self.set_module(ModuleState::Unavailable);
+          self.parse_csv(abspath)
+        }
+        Err(error) => Err(ParseError::Internal { kind: "OSError", detail: error.to_string() }),
+      },
+      ModuleState::Available => self.parse_with_helper(repo_root, abspath),
     }
   }
 

@@ -1,37 +1,35 @@
 //! `_discover_ncu_python_dir`: the Nsight Compute `extras/python` directory that holds `ncu_report.py`.
 
-use std::env;
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
-
-use nix::unistd::{AccessFlags, access};
 
 /// `shutil.which`'s search path when `PATH` is unset: `os.confstr("CS_PATH")` on glibc.
 const DEFAULT_SEARCH_PATH: &str = "/bin:/usr/bin";
 
 /// The `extras/python` next to the `ncu` that `path_env` finds, else the newest install under `nsight_root`.
 /// `None` when neither holds an `ncu_report.py`.
-pub fn discover_python_dir(path_env: Option<&OsStr>, nsight_root: &Path) -> Option<PathBuf> {
-  if let Some(ncu) = which("ncu", path_env) {
-    // Python resolves the binary non-strictly: a target that cannot be resolved keeps its unresolved path.
-    let resolved = fs::canonicalize(&ncu).unwrap_or(ncu);
-    for parent in resolved.ancestors().skip(1) {
+pub fn discover_python_dir(path_env: Option<&OsStr>, nsight_root: &Path) -> anyhow::Result<Option<PathBuf>> {
+  if let Some(ncu) = which("ncu", path_env)? {
+    for parent in ncu.ancestors().skip(1) {
       let candidate = parent.join("extras").join("python");
       if candidate.join("ncu_report.py").is_file() {
-        return Some(candidate);
+        return Ok(Some(candidate));
       }
     }
   }
-  newest_install(nsight_root)
+  Ok(newest_install(nsight_root))
 }
 
 /// `shutil.which(name)`: the first executable regular file called `name` in the search path's directories.
-fn which(name: &str, path_env: Option<&OsStr>) -> Option<PathBuf> {
+fn which(name: &str, path_env: Option<&OsStr>) -> anyhow::Result<Option<PathBuf>> {
   let search_path = path_env.unwrap_or(OsStr::new(DEFAULT_SEARCH_PATH));
-  env::split_paths(search_path)
-    .map(|dir| dir.join(name))
-    .find(|candidate| candidate.is_file() && access(candidate, AccessFlags::X_OK).is_ok())
+  let cwd = std::env::current_dir()?;
+  match which::which_in(name, Some(search_path), cwd) {
+    Ok(path) => Ok(Some(path)),
+    Err(which::Error::CannotFindBinaryPath | which::Error::CannotGetCurrentDirAndPathListEmpty) => Ok(None),
+    Err(error) => Err(error.into()),
+  }
 }
 
 /// The glob fallback: `glob("<root>/*/extras/python")`, newest name first, takes the first that holds the module.
@@ -73,7 +71,7 @@ mod tests {
     write_module(&install.join("extras").join("python"));
     let empty_root = tempfile::tempdir().unwrap();
 
-    let found = discover_python_dir(Some(install.join("bin").as_os_str()), empty_root.path());
+    let found = discover_python_dir(Some(install.join("bin").as_os_str()), empty_root.path()).unwrap();
 
     assert_eq!(found, Some(install.join("extras").join("python")));
   }
@@ -86,7 +84,7 @@ mod tests {
     fs::create_dir_all(root.path().join("2026.1").join("extras").join("python")).unwrap();
     let empty_path = tempfile::tempdir().unwrap();
 
-    let found = discover_python_dir(Some(empty_path.path().as_os_str()), root.path());
+    let found = discover_python_dir(Some(empty_path.path().as_os_str()), root.path()).unwrap();
 
     assert_eq!(found, Some(root.path().join("2025.3").join("extras").join("python")));
   }
@@ -96,6 +94,6 @@ mod tests {
     let root = tempfile::tempdir().unwrap();
     let empty_path = tempfile::tempdir().unwrap();
 
-    assert_eq!(discover_python_dir(Some(empty_path.path().as_os_str()), root.path()), None);
+    assert_eq!(discover_python_dir(Some(empty_path.path().as_os_str()), root.path()).unwrap(), None);
   }
 }

@@ -8,7 +8,7 @@
 use std::fs;
 use std::io;
 use std::os::unix::fs::MetadataExt;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::LazyLock;
 use std::time::Duration;
 
@@ -216,9 +216,17 @@ fn count(value: Option<&Value>) -> anyhow::Result<i64> {
 }
 
 /// The final component of a POSIX path as `pathlib.PurePosixPath(path).name` reads it: empty parts and `.` are not
-/// components.
+/// components, and a trailing `..` is a component.
 fn path_name(path: &str) -> &str {
-  path.split('/').rfind(|part| !part.is_empty() && *part != ".").unwrap_or("")
+  let path = Path::new(path);
+  if let Some(name) = path.file_name().and_then(|name| name.to_str()) {
+    return name;
+  }
+  match path.components().next_back() {
+    // `file_name` drops a trailing `..`, which PurePath keeps.
+    Some(Component::ParentDir) => "..",
+    _ => "",
+  }
 }
 
 #[cfg(test)]
@@ -254,6 +262,17 @@ mod tests {
 
   fn touch_path(db: &Path, step: u64) {
     touch(db, 1_900_000_000 + step);
+  }
+
+  #[test]
+  fn model_path_names_follow_pure_posix_path_semantics() {
+    assert_eq!(path_name("/models/claude-opus-5-5"), "claude-opus-5-5");
+    assert_eq!(path_name("/models/anthropic/"), "anthropic");
+    assert_eq!(path_name("/models/a//b"), "b");
+    assert_eq!(path_name("/models/.."), "..");
+    assert_eq!(path_name("/"), "");
+    assert_eq!(path_name("."), "");
+    assert_eq!(path_name(""), "");
   }
 
   #[test]

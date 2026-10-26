@@ -5,7 +5,7 @@
 //! source only archives.
 
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::io::{BufWriter, Write};
 use std::path::Path;
 
 use charliebot_core::{event_types, fsutil, timefmt};
@@ -357,42 +357,53 @@ impl Store {
 
 /// `SessionFork._stream_reference_file`: copy the non-blank lines among the first `take` raw lines of `source` into
 /// `out`. Returns `(raw, appended)`: the raw lines spent against the budget, blank lines included, and the lines
-/// written. The whole file must decode as UTF-8, including the lines past the budget, so each line is checked as it
-/// is read. A non-blank line that is not wrapped in `{}` fails the copy. A CR before the newline is dropped.
+/// written. The whole file must decode as UTF-8, including the lines past the budget, as
+/// `src/runtime/session_fork.py:117-180` checks while it walks its mapped bytes with `find`; here the file maps once
+/// and memchr supplies the same line boundaries. A non-blank line that is not wrapped in `{}` fails the copy. A CR
+/// before the newline is dropped.
 fn copy_reference_file(out: &mut impl Write, source: &Path, take: usize) -> StoreResult<(usize, usize)> {
-  let file = File::open(source).map_err(|error| StoreError::new(format!("{}: {error}", source.display())))?;
-  let mut reader = BufReader::new(file);
-  let mut line = Vec::new();
+  let map = match fsutil::map_file(source) {
+    Ok(map) => map,
+    Err(error) => return Err(StoreError::new(format!("{}: {error}", source.display()))),
+  };
+  let Some(map) = map else { return Ok((0, 0)) };
+  let bytes: &[u8] = &map;
+  std::str::from_utf8(bytes).map_err(|error| StoreError::invalid(format!("{}: {error}", source.display())))?;
   let mut raw = 0;
   let mut appended = 0;
-  loop {
-    line.clear();
-    let read =
-      reader.read_until(b'\n', &mut line).map_err(|error| StoreError::new(format!("{}: {error}", source.display())))?;
-    if read == 0 {
+  let mut start = 0;
+  for boundary in memchr::memchr_iter(b'\n', bytes) {
+    if raw >= take {
       break;
     }
-    std::str::from_utf8(&line).map_err(|error| StoreError::invalid(format!("{}: {error}", source.display())))?;
-    if raw >= take {
-      continue;
-    }
+    let line = &bytes[start..boundary];
+    start = boundary + 1;
     raw += 1;
-    let content = line.strip_suffix(b"\n").unwrap_or(&line);
-    let Some(first) = content.iter().position(|byte| !REFERENCE_LINE_WS.contains(byte)) else { continue };
-    let last = content
-      .iter()
-      .rposition(|byte| !REFERENCE_LINE_WS.contains(byte))
-      .expect("a line with a non-blank byte has a last one");
-    if content[first] != b'{' || content[last] != b'}' {
-      let snippet: String = String::from_utf8_lossy(content).trim().chars().take(80).collect();
-      return Err(StoreError::invalid(format!("parent event line is not a serialized event object: {snippet:?}")));
-    }
-    let write_end = if content.last() == Some(&b'\r') { content.len() - 1 } else { content.len() };
-    out.write_all(&content[..write_end])?;
-    out.write_all(b"\n")?;
-    appended += 1;
+    appended += usize::from(copy_reference_line(out, line)?);
+  }
+  // An unterminated final frame is a frame like any other, as Python's `find` loop reads it.
+  if raw < take && start < bytes.len() {
+    raw += 1;
+    appended += usize::from(copy_reference_line(out, &bytes[start..])?);
   }
   Ok((raw, appended))
+}
+
+/// Copy one raw frame when its content is a non-blank `{}` object, folding a CR before the write.
+fn copy_reference_line(out: &mut impl Write, line: &[u8]) -> StoreResult<bool> {
+  let content = line.strip_suffix(b"\r").unwrap_or(line);
+  let Some(first) = content.iter().position(|byte| !REFERENCE_LINE_WS.contains(byte)) else { return Ok(false) };
+  let last = content
+    .iter()
+    .rposition(|byte| !REFERENCE_LINE_WS.contains(byte))
+    .expect("a line with a non-blank byte has a last one");
+  if content[first] != b'{' || content[last] != b'}' {
+    let snippet: String = String::from_utf8_lossy(content).trim().chars().take(80).collect();
+    return Err(StoreError::invalid(format!("parent event line is not a serialized event object: {snippet:?}")));
+  }
+  out.write_all(content)?;
+  out.write_all(b"\n")?;
+  Ok(true)
 }
 
 fn session_not_found() -> StoreError {

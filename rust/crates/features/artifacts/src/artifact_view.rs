@@ -255,6 +255,13 @@ mod tests {
   }
 
   #[test]
+  fn injected_script_keeps_python_json_ascii_escapes_for_unicode_session_ids() {
+    let html = inject_artifact_ui("<body>page</body>", "计划😀", "v1", "v2");
+
+    assert!(html.contains(r#"window.__cbcServerSessionId="\u8ba1\u5212\ud83d\ude00";"#));
+  }
+
+  #[test]
   fn session_ids_use_python_json_ascii_escaping() {
     assert_eq!(python_json_string("计划😀"), r#""\u8ba1\u5212\ud83d\ude00""#);
   }

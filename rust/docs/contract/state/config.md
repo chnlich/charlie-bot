@@ -1,6 +1,6 @@
 # Configuration: `config.yaml`, `config.d/`, `credentials.yaml`
 
-Baseline: the Python tree at `085f024a5`. This document gives every key the baseline accepts, its type and
+Baseline: the Python tree at `4521a51b2`. This document gives every key the baseline accepts, its type and
 default, the validation rule, and the error a bad value raises. Error texts are quoted from source; `<...>` marks
 an interpolated value. A Rust server reading the same files must accept exactly this set and refuse the rest with
 equivalent errors. **UNVERIFIED** marks a statement not confirmed from source, with the reason.
@@ -88,7 +88,7 @@ Every core section model sets `extra='forbid'`.
 | `server.host` | str | `127.0.0.1` | uvicorn bind address |
 | `server.port` | int | `18498` | uvicorn port; also `server_base_url = http://localhost:<port>` for CLI-to-server and server-to-self calls |
 | `server.subprocess_buffer_limit_mb` | int | `1024` | asyncio stream buffer limit for agent stdout, in MB |
-| `server.session_memory_max_mb` | int | `12288` | per-session cgroup `memory.max`, in MB; `0` disables session cgroups entirely. A value above 0 places the session under its resource-class slice, and a missing slice raises `SessionCgroupUnavailableError` instead of running the session unbounded (`src/infra/process.py`, `ensure_session_cgroup`) |
+| `server.session_memory_max_mb` | int | `12288` | per-session cgroup `memory.max`, in MB; `0` disables session cgroups entirely. A value above 0 places the session under the agents' slice (`charliebot-agents.slice`), and a missing slice raises `SessionCgroupUnavailableError` instead of running the session unbounded (`src/infra/process.py`, `ensure_session_cgroup`) |
 | `server.session_swap_max_mb` | int | `0` | per-session cgroup `memory.swap.max`, in MB |
 | `server.session_tasks_max` | int | `4096` | per-session cgroup `pids.max`; `0` writes `max` |
 | `server.min_free_disk_gib` | int | `10` | worker-class launch precheck on the filesystems of the home and `paths.worktree_dir`; `0` disables it. A failing check keeps the run queued and reports blocked to the parent. Manager turns skip it. |

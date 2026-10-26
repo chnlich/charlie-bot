@@ -1,6 +1,6 @@
 # The `charliebot` CLI
 
-Baseline: the Python tree at `085f024a5`. Entry point: `[project.scripts] charliebot = "src.app.main:main"`.
+Baseline: the Python tree at `4521a51b2`. Entry point: `[project.scripts] charliebot = "src.app.main:main"`.
 Agents reach it through the shim `src/runtime/agent_entry_points/charliebot` (`env.md` section 3). Per
 subcommand, this document gives the HTTP routes it calls, the files it reads or writes itself, and its exit codes.
 Route payloads belong to the parallel HTTP contract and are not repeated here. **UNVERIFIED** marks a statement
@@ -92,8 +92,7 @@ below.
 | `session acknowledge <sid> --input-ids IDS [--note]` | `POST /api/sessions/<sid>/task-inputs/acknowledge` | none | 0; 1; 2 |
 | `session cancel <sid> --reason R [--request-id]` | `POST /api/sessions/<sid>/cancel`; `GET /api/sessions/<sid>/runs` when a stopped run has no outcome | Reads run rows only for unresolved stops; prints each unresolved run id and pid to stderr. | 0; 1 when a stopped run is still running; 2 usage or refusal |
 | `session send (--message M \| --file F) ...` | `POST /api/internal/session-message` (422 maps to exit 2) | Reads `F` | 0; 2 refused (`EXIT_SEND_REFUSED`) or usage; 1 |
-| `session dialog [--session]` | `GET /api/sessions/<sid>/bootstrap`, then pages of `GET /api/sessions/<sid>/events?before=<cursor>&limit=200` | none | 0; 1; 2 |
-| `session resource-class <sid> {repair,agent}` | `PUT /api/sessions/<sid>/resource-class` | none | Prints the route's JSON answer with two-space indent (`src/runtime/cli/session.py`). UNVERIFIED: exit codes follow `common.put_internal_api`, which was not traced. |
+| `session dialog [--session] [--turns N]` | `GET /api/sessions/<sid>/bootstrap`, then pages of `GET /api/sessions/<sid>/events?before=<cursor>&limit=200`; with `--turns` the pages stop once N+1 separator messages are fetched | none. With `--turns N` (N of at least 1) the output is the last N turns plus the turn in progress, under the header `last N turns · from event E · K earlier messages`, or `events` when the bootstrap's `archive_offset` is above 0; a bootstrap without `archive_offset` exits 1 | 0; 1; 2 |
 | `slack reply --file F [--session]` | `POST /api/internal/slack/reply` | Reads `F` | 0; 1; 2 |
 | `slack ack --message-id TS [TS ...] [--session]` | `POST /api/internal/slack/ack` | none | 0; 1; 2 |
 | `storage cool [--dry-run] [--min-idle-days N] [--session ID] [--vacuum] [--force]` | none | Runs `storage_cool.run_cool_sweep` in-process (`files.md` sections 5.8, 5.14 and 7). A real run first captures usage into `<home>/usage/ledger.sqlite3` and aborts on failure. It deletes raw transport files of cold sessions under `data/master_runs/*/` and `threads/*/data/`, and backend transcripts under the Claude login and `/home/<user>/.codex/sessions`. `--vacuum` runs `VACUUM` on `opencode.db` and refuses while an `opencode serve` writer lives, unless `--force`. | 0 prints the sweep table; 1 `ValueError`; 2 |

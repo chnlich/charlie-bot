@@ -6,6 +6,7 @@ use std::sync::LazyLock;
 use anyhow::{Context as AnyhowContext, anyhow, bail};
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::pyfmt;
+use charliebot_core::pyregex::compile_python_regex;
 use charliebot_core::pystr;
 use charliebot_pyhtml::{EventKind, parse_with, unescape};
 use fancy_regex::Regex;
@@ -49,10 +50,6 @@ const PAGE_PROBE_TEMPLATE: &str = r##"<!doctype html>
 </script>
 </body></html>
 "##;
-
-const PYTHON_WHITESPACE: &str = r"[\x{0009}-\x{000d}\x{001c}-\x{0020}\x{0085}\x{00a0}\x{1680}\x{2000}-\x{200a}\x{2028}\x{2029}\x{202f}\x{205f}\x{3000}]";
-const PYTHON_NON_WHITESPACE: &str = r"[^\x{0009}-\x{000d}\x{001c}-\x{0020}\x{0085}\x{00a0}\x{1680}\x{2000}-\x{200a}\x{2028}\x{2029}\x{202f}\x{205f}\x{3000}]";
-const PYTHON_WORD_BOUNDARY: &str = r"(?:(?<![\p{L}\p{N}_])(?=[\p{L}\p{N}_])|(?<=[\p{L}\p{N}_])(?![\p{L}\p{N}_]))";
 
 const ORDINAL_PATTERN: &str = r"(?<![A-Za-z0-9_.])(?:(?:Trade-offs?|sections?|Section|fork|Fork|round|Round|divergence|Divergence|question|Question|item|Item|plan|Plan)(?:\s+\(|\s*)(\d+)\)?(?![\p{L}\p{N}_])|第\s*([0-9一二三四五六七八九十]+)\s*(?:节|章|题|轮|条|项|问)|分歧\s*([0-9一二三四五六七八九十]+)|(?:(?<=§)|(?<=section )|(?<=Section ))\s*([1-9])\.(\d)(?![\d.%])|(?<![\d.])([1-9])\.(\d)(?=\s*(?:节|Schema|Design Details|reading note)))";
 const INTERNAL_UNLESS_QUALIFIED_PATTERN: &str = r"round|Round|question|Question|item|Item|轮|条|项|题|问";
@@ -175,14 +172,6 @@ pub(crate) fn run_assertions_sync(
     outcomes.extend(check(&context)?);
   }
   Ok(outcomes)
-}
-
-fn compile_python_regex(pattern: &str) -> Regex {
-  let pattern = pattern
-    .replace(r"\s", PYTHON_WHITESPACE)
-    .replace(r"\S", PYTHON_NON_WHITESPACE)
-    .replace(r"\b", PYTHON_WORD_BOUNDARY);
-  Regex::new(&pattern).expect("the Python-compatible assertion expression is valid")
 }
 
 fn parse_dom(source: &str) -> anyhow::Result<Vec<Element>> {

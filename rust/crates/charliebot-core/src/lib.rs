@@ -16,6 +16,7 @@ pub mod paths;
 mod printable_table;
 pub mod proc_identity;
 pub mod pyfmt;
+pub mod pyregex;
 pub mod pystr;
 pub mod python_helper;
 pub mod repo_root;

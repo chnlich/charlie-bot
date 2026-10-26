@@ -305,6 +305,14 @@ mod tests {
   }
 
   #[test]
+  fn quote_and_query_quote_match_urllib_quote_for_their_safe_sets() {
+    assert_eq!(quote("a:b@c=d&e/f_g.h-i~j", b"/"), "a%3Ab%40c%3Dd%26e/f_g.h-i~j");
+    assert_eq!(quote("[]!$&'()*+,;:%#?=@", b""), "%5B%5D%21%24%26%27%28%29%2A%2B%2C%3B%3A%25%23%3F%3D%40");
+    assert_eq!(query_quote("a b+c/\u{e9}"), "a+b%2Bc%2F%C3%A9");
+    assert_eq!(quote("\u{7f}\n", b""), "%7F%0A");
+  }
+
+  #[test]
   fn datetime_isoformat_returns_the_serialized_timestamp() {
     let timestamp = "2026-10-18T12:30:00+00:00";
     assert_eq!(render_str("{{ timestamp.isoformat() }}", json!({"timestamp": timestamp})), timestamp);

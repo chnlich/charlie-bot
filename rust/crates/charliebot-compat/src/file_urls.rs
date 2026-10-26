@@ -583,6 +583,22 @@ mod tests {
   }
 
   #[test]
+  fn percent_decoding_matches_urllib_unquote_with_replacement() {
+    assert_eq!(percent_decode_lossy("a%20b%41%42"), "a bAB");
+    assert_eq!(percent_decode_lossy("%25%2F%e9x"), "%/\u{fffd}x");
+    assert_eq!(percent_decode_lossy("%C3%A9%FF"), "\u{e9}\u{fffd}");
+    assert_eq!(percent_decode_lossy("100%"), "100%");
+    assert_eq!(percent_decode_lossy("%zz%4"), "%zz%4");
+  }
+
+  #[test]
+  fn mount_url_quotes_the_path_with_urllib_quote_and_the_mount_safe_set() {
+    assert_eq!(mount_url(Path::new("/tmp/a b/\u{e9}.txt")), "/absolute_filepath/tmp/a%20b/%C3%A9.txt");
+    assert_eq!(mount_url(Path::new("//x+y:z@w~_.-")), "/absolute_filepath/x%2By:z@w~_.-");
+    assert_eq!(mount_url(Path::new("/a?b#c")), "/absolute_filepath/a%3Fb%23c");
+  }
+
+  #[test]
   fn malformed_bracketed_authorities_fail_and_ipv6_hosts_pass() {
     for link in ["https://[not-ipv6]/page.html", "https://[::1]suffix/page.html", "https://host]/page.html"] {
       assert_eq!(host_file(Some(link)).unwrap_err(), "Invalid IPv6 URL", "link {link}");

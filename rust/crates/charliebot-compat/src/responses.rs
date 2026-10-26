@@ -100,4 +100,11 @@ mod tests {
   fn redirect_quoting_keeps_url_syntax_and_escapes_the_rest() {
     assert_eq!(quote_redirect_url("http://h:1/a b/é?x=1&y=%41"), "http://h:1/a%20b/%C3%A9?x=1&y=%41");
   }
+
+  #[test]
+  fn redirect_quoting_keeps_the_safe_set_and_unreserved_bytes_and_escapes_controls() {
+    assert_eq!(quote_redirect_url("[]!$&'()*+,;:/%#?=@"), "[]!$&'()*+,;:/%#?=@");
+    assert_eq!(quote_redirect_url("a~b_c.d-e"), "a~b_c.d-e");
+    assert_eq!(quote_redirect_url("\"<>{}|\\^`\n\u{7f}"), "%22%3C%3E%7B%7D%7C%5C%5E%60%0A%7F");
+  }
 }

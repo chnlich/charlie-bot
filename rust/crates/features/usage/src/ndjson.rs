@@ -3,6 +3,7 @@ use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 use anyhow::Context;
+use memchr::memmem;
 use serde_json::Value;
 
 pub fn parse_marker_lines(path: &Path, markers: &[&[u8]]) -> anyhow::Result<Vec<Value>> {
@@ -10,12 +11,13 @@ pub fn parse_marker_lines(path: &Path, markers: &[&[u8]]) -> anyhow::Result<Vec<
   let mut reader = BufReader::new(file);
   let mut line = Vec::new();
   let mut objects = Vec::new();
+  let finders = markers.iter().filter(|marker| !marker.is_empty()).map(memmem::Finder::new).collect::<Vec<_>>();
   loop {
     line.clear();
     if reader.read_until(b'\n', &mut line).with_context(|| format!("reading {}", path.display()))? == 0 {
       break;
     }
-    if line.last() != Some(&b'\n') || !markers.iter().any(|marker| contains(&line, marker)) {
+    if line.last() != Some(&b'\n') || !finders.iter().any(|finder| finder.find(&line).is_some()) {
       continue;
     }
     let parsed = serde_json::from_slice(&line).or_else(|_| serde_json::from_str(&String::from_utf8_lossy(&line)));
@@ -24,10 +26,6 @@ pub fn parse_marker_lines(path: &Path, markers: &[&[u8]]) -> anyhow::Result<Vec<
     }
   }
   Ok(objects)
-}
-
-fn contains(line: &[u8], marker: &[u8]) -> bool {
-  !marker.is_empty() && line.windows(marker.len()).any(|window| window == marker)
 }
 
 #[cfg(test)]

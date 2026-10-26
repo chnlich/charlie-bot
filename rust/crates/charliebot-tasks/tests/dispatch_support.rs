@@ -29,15 +29,17 @@ use tempfile::TempDir;
 
 const BACKEND_ID: &str = "synthetic";
 
+/// Observes one metadata write with the metadata being saved, before it lands.
+pub type SessionSaveObserver = dyn Fn(&SessionMetadata) + Send + Sync;
+
 #[derive(Default)]
 pub struct TestHooks {
-  /// Observes every metadata save with the metadata being written, before it lands.
-  on_session_save: Mutex<Option<Arc<dyn Fn(&SessionMetadata) + Send + Sync>>>,
+  on_session_save: Mutex<Option<Arc<SessionSaveObserver>>>,
 }
 
 impl TestHooks {
   /// Arm the observer a test uses to see one metadata write and the history it lands beside.
-  pub fn set_session_save_observer(&self, observer: Option<Arc<dyn Fn(&SessionMetadata) + Send + Sync>>) {
+  pub fn set_session_save_observer(&self, observer: Option<Arc<SessionSaveObserver>>) {
     *self.on_session_save.lock().expect("session-save observer lock is not poisoned") = observer;
   }
 }

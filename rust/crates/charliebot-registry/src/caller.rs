@@ -234,12 +234,14 @@ mod tests {
     assert!(resolve_caller(&bearer_headers(next_key, None), &features).unwrap().is_operator());
   }
 
+  /// Python: `tests/test_run_token.py::test_a_run_bearer_with_no_configured_key_is_refused_with_401`. Every
+  /// presented bearer reaches the verifier, whose own refusal becomes the 401 detail.
   #[tokio::test]
-  async fn a_run_token_without_a_configured_key_is_rejected() {
+  async fn a_run_bearer_with_no_configured_key_is_refused_with_401() {
     let (_home, features) = feature_context(None);
     let token = run_token::sign_run_token(&claims(), KEY).unwrap();
     let response = resolve_caller(&bearer_headers(&token, None), &features).unwrap_err();
-    assert_unauthorized(response, "run token presented (CHARLIEBOT_RUN_TOKEN) but no signing key is configured").await;
+    assert_unauthorized(response, "invalid run token: run token presented but no signing key is configured").await;
   }
 
   #[tokio::test]

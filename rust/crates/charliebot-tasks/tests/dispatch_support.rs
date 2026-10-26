@@ -30,7 +30,17 @@ use tempfile::TempDir;
 const BACKEND_ID: &str = "synthetic";
 
 #[derive(Default)]
-pub struct TestHooks;
+pub struct TestHooks {
+  /// Observes every metadata save with the metadata being written, before it lands.
+  on_session_save: Mutex<Option<Arc<dyn Fn(&SessionMetadata) + Send + Sync>>>,
+}
+
+impl TestHooks {
+  /// Arm the observer a test uses to see one metadata write and the history it lands beside.
+  pub fn set_session_save_observer(&self, observer: Option<Arc<dyn Fn(&SessionMetadata) + Send + Sync>>) {
+    *self.on_session_save.lock().expect("session-save observer lock is not poisoned") = observer;
+  }
+}
 
 impl AccountLabelKeeper for TestHooks {
   fn record_account_label(&self, _meta: &mut SessionMetadata, _label: Option<&str>) -> StoreResult<bool> {
@@ -47,6 +57,9 @@ impl AnchorFieldReconciler for TestHooks {
     attempted.cc_session_id = disk.cc_session_id.clone();
     attempted.cc_session_started_at = disk.cc_session_started_at;
     attempted.native_backend = disk.native_backend.clone();
+    if let Some(observer) = self.on_session_save.lock().expect("session-save observer lock is not poisoned").as_ref() {
+      observer(attempted);
+    }
     Ok(())
   }
 }
@@ -297,6 +310,7 @@ pub struct Harness {
   pub completion: Arc<ScriptedCompletion>,
   pub dispatcher: Arc<Dispatcher>,
   pub features: Arc<FeatureContext>,
+  pub hooks: Arc<TestHooks>,
 }
 
 impl Harness {
@@ -319,7 +333,7 @@ impl Harness {
       })
       .expect("origin slots register");
     let registry = Arc::new(registry);
-    let hooks = Arc::new(TestHooks);
+    let hooks = Arc::new(TestHooks::default());
     let store = Arc::new(
       Store::new(
         (*cfg).clone(),
@@ -329,7 +343,7 @@ impl Harness {
           anchor_reconciler: Some(hooks.clone()),
           sequence_listing: Some(hooks.clone()),
           sequence_archive: Some(hooks.clone()),
-          sequence_binding_mover: Some(hooks),
+          sequence_binding_mover: Some(hooks.clone()),
           runtime_events: Some(Arc::new(EmptyRuntimeEventHooks)),
         },
       )
@@ -363,7 +377,7 @@ impl Harness {
       .insert(Dispatcher::new(Arc::clone(&store), Arc::clone(&features), sequence_completion, run_completion))
       .expect("dispatcher enters startup state once");
     let dispatcher = charliebot_tasks::dispatch::dispatcher(&features).expect("dispatcher is in startup state");
-    Harness { _home: home, registry, store, completion, dispatcher, features }
+    Harness { _home: home, registry, store, completion, dispatcher, features, hooks }
   }
 
   pub async fn create_task(

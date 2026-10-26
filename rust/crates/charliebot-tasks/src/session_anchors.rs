@@ -33,6 +33,13 @@ mod tests {
     assert!(note.ends_with("`prompts/thread_reply_format.md` defines.]"));
   }
 
+  /// `tests/test_task_execution.py::test_manager_native_continuation_gates_on_instruction_hash`: the reset note
+  /// points the fresh context at the last two turns with `charliebot session dialog --turns 2`.
+  #[test]
+  fn manager_native_continuation_reset_note_reads_the_last_two_turns() {
+    assert!(context_reset_note("synthetic reason", "synthetic goal").contains("charliebot session dialog --turns 2"));
+  }
+
   #[test]
   fn backend_switch_reason_names_both_backends() {
     assert_eq!(

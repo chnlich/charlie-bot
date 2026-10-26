@@ -7,8 +7,11 @@ use charliebot_agents::backend_pool::BackendPool;
 use charliebot_agents::event_builders::make_master_done_event;
 use charliebot_core::config::BackendOption;
 use charliebot_core::event_types;
+use charliebot_registry::caller::CallerIdentity;
 use charliebot_registry::context::{FeatureContext, StartupState};
-use charliebot_store::metadata::{ColdReadSpec, SessionMetadata, TaskProfile, TaskSpec, TaskType};
+use charliebot_store::metadata::{
+  ColdReadSpec, SessionMetadata, SessionStatus, TaskProfile, TaskSpec, TaskType, UtcDateTime,
+};
 use charliebot_store::run_records::{self, RunKind, RunOutcome, RunOutcomeKind, RunRecord, SequenceRef};
 use charliebot_store::{ChatEvent, CreateTask, StoreError, StoreResult, TaskCaller};
 use charliebot_tasks::completion::TaskCompletion;
@@ -579,79 +582,179 @@ async fn machine_input_to_a_closed_node_is_archived_and_does_not_dispatch() {
   assert!(harness.dispatcher.pending_inputs(&worker.id).unwrap().is_empty());
 }
 
+/// Parse one synthetic timestamp.
+fn ts(value: &str) -> UtcDateTime {
+  UtcDateTime::parse(value).expect("synthetic timestamp parses")
+}
+
+/// The one node's current sidebar sort key.
+async fn updated_at_of(harness: &Harness, session_id: &str) -> UtcDateTime {
+  harness.store.get_session(session_id).await.unwrap().expect("session exists").updated_at
+}
+
+/// The listing's session ids, newest first.
+fn listing_ids(rows: &[SessionMetadata]) -> Vec<String> {
+  rows.iter().map(|row| row.id.clone()).collect()
+}
+
+/// `tests/test_session_dispatch.py::test_user_admission_lifts_only_the_target_node`: a real user message lifts the
+/// node it was sent to, forward only; its ancestors keep their places, and a message to an archived node reopens
+/// the chain and lifts only the reopened target.
 #[tokio::test]
-async fn user_admission_lifts_unarchived_ancestors_and_stops_before_archived_ones() {
+async fn user_admission_lifts_only_the_target_node() {
   let harness = Harness::new();
   let root = harness.create_task("root", None, TaskProfile::Manager, "Root").await;
-  let middle = harness.create_task("middle", Some(&root.id), TaskProfile::Manager, "Middle").await;
+  let middle = harness.create_task("mid", Some(&root.id), TaskProfile::Manager, "Mid").await;
   let child = harness.create_task("child", Some(&middle.id), TaskProfile::Manager, "Child").await;
-  let first = charliebot_store::metadata::UtcDateTime::parse("2030-01-01T00:00:00Z").unwrap();
-  let second = charliebot_store::metadata::UtcDateTime::parse("2030-01-02T00:00:00Z").unwrap();
+  let root_at = updated_at_of(&harness, &root.id).await;
+  let middle_at = updated_at_of(&harness, &middle.id).await;
+  let first = ts("2030-01-01T01:00:00Z");
+  let second = ts("2030-01-01T02:00:00Z");
 
-  harness
-    .dispatcher
-    .admit_input(
-      &child.id,
-      event_types::USER,
-      "first",
-      "user",
-      json!({"input_id":"lift-1","timestamp":first.to_python_isoformat()}),
-    )
+  let admit = |event_type: &'static str, actor: &'static str, content: &'static str, fields: Value| {
+    let dispatcher = Arc::clone(&harness.dispatcher);
+    let session_id = child.id.clone();
+    async move { dispatcher.admit_input(&session_id, event_type, content, actor, fields).await }
+  };
+  admit(event_types::USER, "user", "my turn", json!({"input_id":"m1","timestamp":first.to_python_isoformat()}))
     .await
     .unwrap();
-  assert_eq!(harness.store.get_session(&child.id).await.unwrap().unwrap().updated_at, first);
-  assert_eq!(harness.store.get_session(&middle.id).await.unwrap().unwrap().updated_at, first);
-  assert_eq!(harness.store.get_session(&root.id).await.unwrap().unwrap().updated_at, first);
-  harness
-    .dispatcher
-    .admit_input(
-      &child.id,
-      event_types::USER,
-      "replay",
-      "user",
-      json!({"input_id":"lift-1","timestamp":second.to_python_isoformat()}),
-    )
+  assert_eq!(updated_at_of(&harness, &child.id).await, first);
+  assert_eq!(updated_at_of(&harness, &middle.id).await, middle_at);
+  assert_eq!(updated_at_of(&harness, &root.id).await, root_at);
+
+  // A replayed input_id returns the original event and lifts nothing; a new message lifts the target again.
+  admit(event_types::USER, "user", "my turn", json!({"input_id":"m1","timestamp":second.to_python_isoformat()}))
     .await
     .unwrap();
-  assert_eq!(harness.store.get_session(&child.id).await.unwrap().unwrap().updated_at, first);
+  assert_eq!(updated_at_of(&harness, &child.id).await, first);
+  admit(event_types::USER, "user", "again", json!({"input_id":"m2","timestamp":second.to_python_isoformat()}))
+    .await
+    .unwrap();
+  assert_eq!(updated_at_of(&harness, &child.id).await, second);
+  assert_eq!(updated_at_of(&harness, &middle.id).await, middle_at);
+  assert_eq!(updated_at_of(&harness, &root.id).await, root_at);
+
+  // Agent relays, scheduled triggers and child reports are machine traffic: none of them lifts, however fresh.
   for (event_type, actor) in [
     (event_types::AGENT_MESSAGE, "agent"),
     (event_types::SCHEDULED_TRIGGER, "system"),
     (event_types::CHILD_REPORT, "system"),
   ] {
-    harness
-      .dispatcher
-      .admit_input(&child.id, event_type, "machine traffic", actor, json!({"timestamp":"2030-01-03T00:00:00Z"}))
-      .await
-      .unwrap();
+    admit(event_type, actor, "machine traffic", json!({"timestamp":"2030-01-01T03:00:00Z"})).await.unwrap();
   }
-  assert_eq!(harness.store.get_session(&child.id).await.unwrap().unwrap().updated_at, first);
-  assert_eq!(harness.store.get_session(&middle.id).await.unwrap().unwrap().updated_at, first);
-  assert_eq!(harness.store.get_session(&root.id).await.unwrap().unwrap().updated_at, first);
+  assert_eq!(updated_at_of(&harness, &child.id).await, second);
+  assert_eq!(updated_at_of(&harness, &middle.id).await, middle_at);
+  assert_eq!(updated_at_of(&harness, &root.id).await, root_at);
 
+  // A message to the root lifts the root and nothing below it.
+  harness
+    .dispatcher
+    .admit_input(&root.id, event_types::USER, "to the root", "user", json!({"timestamp":"2030-01-01T05:00:00Z"}))
+    .await
+    .unwrap();
+  assert_eq!(updated_at_of(&harness, &root.id).await, ts("2030-01-01T05:00:00Z"));
+  assert_eq!(updated_at_of(&harness, &middle.id).await, middle_at);
+  assert_eq!(updated_at_of(&harness, &child.id).await, second);
+
+  // Archiving the middle node archives the leaf beneath it. A message to the leaf reopens the archived ancestor
+  // and the leaf, and lifts only the leaf.
   let archived_root = harness.create_task("archived-root", None, TaskProfile::Manager, "Archived root").await;
   let archived_middle =
     harness.create_task("archived-middle", Some(&archived_root.id), TaskProfile::Manager, "Archived middle").await;
   let archived_child =
     harness.create_task("archived-child", Some(&archived_middle.id), TaskProfile::Manager, "Archived child").await;
-  harness.archive_task(&archived_middle.id).await;
-  let archived_middle_time = harness.store.get_session(&archived_middle.id).await.unwrap().unwrap().updated_at;
-  let archived_root_time = harness.store.get_session(&archived_root.id).await.unwrap().unwrap().updated_at;
-  let lifted = charliebot_store::metadata::UtcDateTime::parse("2031-01-01T00:00:00Z").unwrap();
+  let archived = TaskCompletion::new(Arc::clone(&harness.features))
+    .archive_subtree(
+      &archived_middle.id,
+      Some("archive-amid"),
+      "archived",
+      &[],
+      &[],
+      &CallerIdentity::Operator { session_id: None },
+    )
+    .await
+    .unwrap();
+  assert_eq!(archived, [archived_middle.id.clone(), archived_child.id.clone()]);
+  assert_eq!(harness.store.task_state(&archived_child.id).unwrap(), "archived");
+  let archived_middle_at = updated_at_of(&harness, &archived_middle.id).await;
+  let archived_root_at = updated_at_of(&harness, &archived_root.id).await;
+  let later = ts("2031-01-01T03:00:00Z");
   harness
     .dispatcher
     .admit_input(
       &archived_child.id,
       event_types::USER,
-      "branch message",
+      "to the archived branch",
       "user",
-      json!({"timestamp":lifted.to_python_isoformat()}),
+      json!({"timestamp":later.to_python_isoformat()}),
     )
     .await
     .unwrap();
-  assert_eq!(harness.store.get_session(&archived_child.id).await.unwrap().unwrap().updated_at, lifted);
-  assert_eq!(harness.store.get_session(&archived_middle.id).await.unwrap().unwrap().updated_at, archived_middle_time);
-  assert_eq!(harness.store.get_session(&archived_root.id).await.unwrap().unwrap().updated_at, archived_root_time);
+  assert_eq!(harness.store.task_state(&archived_child.id).unwrap(), "open");
+  assert_eq!(updated_at_of(&harness, &archived_child.id).await, later);
+  assert_eq!(updated_at_of(&harness, &archived_middle.id).await, archived_middle_at);
+  assert_eq!(updated_at_of(&harness, &archived_root.id).await, archived_root_at);
+}
+
+/// `tests/test_session_dispatch.py::test_a_user_message_lift_is_stored_before_its_tree_changed_broadcast`: the
+/// append broadcasts `task_tree_changed`, so the lift must be durable by the time that append runs. The harness's
+/// anchor reconciler observes the metadata save itself: at that point the user event is still absent from the log.
+#[tokio::test]
+async fn a_user_message_lift_is_stored_before_its_tree_changed_broadcast() {
+  let harness = Harness::new();
+  let root = harness.create_task("root", None, TaskProfile::Manager, "Root").await;
+  let child = harness.create_task("child", Some(&root.id), TaskProfile::Manager, "Child").await;
+  let when = ts("2030-02-02T02:00:00Z");
+  let store = Arc::clone(&harness.store);
+  let observed: Arc<Mutex<Vec<(UtcDateTime, bool)>>> = Arc::new(Mutex::new(Vec::new()));
+  let sink = Arc::clone(&observed);
+  harness.hooks.set_session_save_observer(Some(Arc::new(move |meta: &SessionMetadata| {
+    let appended = store
+      .load_all_facts(&meta.id)
+      .expect("the session's facts read")
+      .iter()
+      .any(|event| event["type"] == event_types::USER);
+    sink.lock().expect("the observation lock is not poisoned").push((meta.updated_at, appended));
+  })));
+
+  harness
+    .dispatcher
+    .admit_input(&child.id, event_types::USER, "my turn", "user", json!({"timestamp":when.to_python_isoformat()}))
+    .await
+    .unwrap();
+
+  assert_eq!(
+    *observed.lock().expect("the observation lock is not poisoned"),
+    vec![(when, false)],
+    "the lift must be stored before the message is appended, so the append's refetch reads it"
+  );
+}
+
+/// `tests/test_session_dispatch.py::test_a_messaged_child_lists_ahead_of_its_siblings_and_roots_keep_their_order`:
+/// a user message moves only the row it was sent to; the siblings and the root rows keep their relative order.
+#[tokio::test]
+async fn a_messaged_child_lists_ahead_of_its_siblings_and_roots_keep_their_order() {
+  let harness = Harness::new();
+  let r1 = harness.create_task("r1", None, TaskProfile::Manager, "R1").await;
+  let r2 = harness.create_task("r2", None, TaskProfile::Manager, "R2").await;
+  let c1 = harness.create_task("c1", Some(&r1.id), TaskProfile::Manager, "C1").await;
+  let c2 = harness.create_task("c2", Some(&r1.id), TaskProfile::Manager, "C2").await;
+  let c3 = harness.create_task("c3", Some(&r1.id), TaskProfile::Manager, "C3").await;
+  // Pin each sort key, oldest first, so the order comes from the test's times.
+  for (seconds, node) in [(1, &c1), (2, &c2), (3, &c3), (4, &r1), (5, &r2)] {
+    harness.store.update_thinking_state(&node.id, ts(&format!("2032-05-01T00:00:0{seconds}Z"))).await.unwrap();
+  }
+  let listing = harness.store.list_sessions_readonly(SessionStatus::Active).unwrap();
+  assert_eq!(listing_ids(&listing), [r2.id.clone(), r1.id.clone(), c3.id.clone(), c2.id.clone(), c1.id.clone()]);
+
+  harness
+    .dispatcher
+    .admit_input(&c1.id, event_types::USER, "my turn", "user", json!({"timestamp":"2032-05-01T00:00:10Z"}))
+    .await
+    .unwrap();
+  let listing = harness.store.list_sessions_readonly(SessionStatus::Active).unwrap();
+  assert_eq!(listing_ids(&listing), [c1.id.clone(), r2.id.clone(), r1.id.clone(), c3.id.clone(), c2.id.clone()]);
 }
 
 #[tokio::test]

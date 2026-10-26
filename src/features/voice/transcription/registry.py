@@ -43,11 +43,11 @@ def build_transcription_backend(
   by ``unavailable_reason()``.
 
   Raises:
-    ValueError: If the id is unknown, naming the known ids.
+    base.BackendSelectionError: If the id is unknown, naming the known ids.
   """
   factory = _FACTORIES.get(backend_id)
   if factory is None:
-    raise ValueError(f"unknown transcription backend {backend_id!r}; known: {', '.join(_FACTORIES)}")
+    raise base.BackendSelectionError(f"unknown transcription backend {backend_id!r}; known: {', '.join(_FACTORIES)}")
   return factory(cfg, **kwargs)
 
 

@@ -109,7 +109,7 @@ async def _transcribe_upload(
   """The shared online transcription with its failures mapped to the endpoint's statuses."""
   try:
     return await recording.transcribe_recording(pcm_bytes, backend_id, cfg)
-  except recording.BackendSelectionError as exc:
+  except base.BackendSelectionError as exc:
     raise _VoiceRequestError(400, str(exc)) from exc
   except recording.TranscriptionFailedError as exc:
     log.exception("voice_transcribe_failed", session_id=session_id, selected_backend=backend_id)

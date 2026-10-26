@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::sync::{Arc, Mutex};
 
-use charliebot_agents::transport::cgroup::sweep_stale_session_cgroups;
+use charliebot_agents::transport::cgroup::{sweep_stale_session_cgroups, use_fake_cgroup_hierarchy};
 use charliebot_core::cgroup::{RETIRED_APP_SLICE, ResourceClass, session_slice_dir, user_slice_dir};
 use charliebot_core::test_support::EventSink;
 use tracing::Event;
@@ -35,6 +35,7 @@ impl Visit for FieldText<'_> {
 
 #[test]
 fn sweep_removes_only_empty_cgroups_of_this_home_across_the_slices() {
+  use_fake_cgroup_hierarchy();
   let base = tempfile::tempdir().unwrap();
   let home = tempfile::tempdir().unwrap();
   let sessions = home.path().join("sessions");

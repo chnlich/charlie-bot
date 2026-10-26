@@ -1098,10 +1098,15 @@ mod tests {
     let base = root.join("user@1001.service");
     let slice = charliebot_core::cgroup::session_slice_dir(&base, charliebot_core::cgroup::ResourceClass::Agent);
     fs::create_dir_all(&slice).unwrap();
+    fs::write(slice.join("cgroup.subtree_control"), "").unwrap();
     let path = slice.join("charliebot-sess-test1234");
     fs::create_dir(&path).unwrap();
+    // The control files the kernel publishes for a cgroup, which the fake tree must carry.
+    for name in ["cgroup.procs", "cgroup.threads", "cgroup.subtree_control", "memory.max", "memory.swap.max", "pids.max"]
+    {
+      fs::write(path.join(name), "").unwrap();
+    }
     let procs = path.join("cgroup.procs");
-    fs::write(&procs, "").unwrap();
     let session = root.join("sessions").join("test1234-session");
     fs::create_dir_all(&session).unwrap();
     fs::write(session.join("metadata.json"), r#"{"name":"synthetic","profile":"manager"}"#).unwrap();
@@ -1191,27 +1196,24 @@ mod tests {
   #[tokio::test]
   async fn spawn_applies_nice_and_moves_into_the_session_cgroup_parent_side() {
     let root = tempfile::tempdir().unwrap();
-    let sessions = root.path().join("sessions");
-    fs::create_dir_all(sessions.join("test1234-session")).unwrap();
-    fs::write(sessions.join("test1234-session").join("metadata.json"), r#"{"name":"synthetic","profile":"manager"}"#)
-      .unwrap();
-    let base = root.path().join("user@1001.service");
-    let slice = charliebot_core::cgroup::session_slice_dir(&base, charliebot_core::cgroup::ResourceClass::Agent);
-    fs::create_dir_all(&slice).unwrap();
-    let cgroup_path = slice.join("charliebot-sess-test1234");
-    fs::create_dir(&cgroup_path).unwrap();
-    fs::write(cgroup_path.join("cgroup.procs"), "").unwrap();
+    let (base, procs) = temp_cgroup(root.path());
     let spec = SpawnSpec::new(
       "/bin/sleep",
       ["30"].into_iter().map(OsString::from).collect(),
       None,
       HashMap::new(),
       Some("test1234-session".into()),
-      SessionCgroupConfig { base_dir: base, sessions_dir: sessions, memory_max_mb: 64, swap_max_mb: 32, tasks_max: 0 },
+      SessionCgroupConfig {
+        base_dir: base,
+        sessions_dir: root.path().join("sessions"),
+        memory_max_mb: 64,
+        swap_max_mb: 32,
+        tasks_max: 0,
+      },
     );
     let mut spawned = spawn_piped(&spec).await.unwrap();
     let pid = spawned.child.id().unwrap();
-    assert_eq!(fs::read_to_string(cgroup_path.join("cgroup.procs")).unwrap(), pid.to_string());
+    assert_eq!(fs::read_to_string(procs).unwrap(), format!("{pid}\n"));
     assert!(spawned.cgroup.is_some());
     let nice = unsafe { libc::getpriority(libc::PRIO_PROCESS, pid) };
     spawned.child.kill().await.unwrap();
@@ -1274,7 +1276,7 @@ mod tests {
     let child_nice = unsafe { libc::getpriority(libc::PRIO_PROCESS, pid) };
     let child_session = unsafe { libc::getsid(pid as i32) };
     let cgroup_procs = fs::read_to_string(procs).unwrap();
-    assert_eq!(cgroup_procs, pid.to_string());
+    assert_eq!(cgroup_procs, format!("{pid}\n"));
     assert_eq!(child_nice, 10);
     assert_eq!(child_session, pid as i32);
     stop_child(&mut spawned.child, &mut guard).await;
@@ -1304,7 +1306,7 @@ mod tests {
     let child_nice = unsafe { libc::getpriority(libc::PRIO_PROCESS, pid) };
     let child_session = unsafe { libc::getsid(pid as i32) };
     let cgroup_procs = fs::read_to_string(procs).unwrap();
-    assert_eq!(cgroup_procs, pid.to_string());
+    assert_eq!(cgroup_procs, format!("{pid}\n"));
     assert_eq!(child_nice, 10);
     assert_eq!(child_session, pid as i32);
     stop_child(&mut spawned.child, &mut guard).await;
@@ -1351,6 +1353,7 @@ mod tests {
     assert_eq!(recorded_cgroup.trim(), pid.to_string());
     assert_eq!(child_nice, expected_nice);
     assert_eq!(child_session, pid as i32);
+    // The child side writes its own pid, without the newline a control-file write carries.
     assert_eq!(cgroup_procs, pid.to_string());
     stop_child(&mut child, &mut guard).await;
   }
@@ -1395,6 +1398,7 @@ mod tests {
     assert_eq!(recorded_cgroup.trim(), pid.to_string());
     assert_eq!(child_nice, own_nice);
     assert_eq!(child_session, pid as i32);
+    // The child side writes its own pid, without the newline a control-file write carries.
     assert_eq!(cgroup_procs, pid.to_string());
     stop_child(&mut child, &mut guard).await;
   }

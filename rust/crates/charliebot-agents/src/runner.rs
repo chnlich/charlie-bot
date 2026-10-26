@@ -1229,8 +1229,14 @@ mod tests {
     let agents_slice =
       charliebot_core::cgroup::session_slice_dir(&cgroup_base, charliebot_core::cgroup::ResourceClass::Agent);
     fs::create_dir_all(&agents_slice).unwrap();
+    fs::write(agents_slice.join("cgroup.subtree_control"), "").unwrap();
     let cgroup_dir = agents_slice.join("charliebot-sess-test1234");
     fs::create_dir(&cgroup_dir).unwrap();
+    // The control files the kernel publishes for a cgroup, which the fake tree must carry.
+    for name in ["cgroup.procs", "cgroup.threads", "cgroup.subtree_control", "memory.max", "memory.swap.max", "pids.max"]
+    {
+      fs::write(cgroup_dir.join(name), "").unwrap();
+    }
     let session = root.path().join("sessions").join("test1234-session");
     fs::create_dir_all(&session).unwrap();
     fs::write(session.join("metadata.json"), r#"{"name":"synthetic","profile":"manager"}"#).unwrap();

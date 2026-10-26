@@ -638,6 +638,48 @@ def _masked_plan_registry(registry: dict) -> dict:
   return normalize.normalize_json(registry, normalize.file_rules(PLAN_REGISTRY), _context())
 
 
+def test_the_session_list_updated_time_is_masked_and_the_row_order_still_compares() -> None:
+  route = "GET /api/sessions/"
+
+  def listing(child_stamp: str) -> list[dict]:
+    return [
+        {
+            "id": "synthetic-child",
+            "name": "Atlas survey",
+            "created_at": "2026-01-05T09:00:07Z",
+            "updated_at": child_stamp,
+            "cc_session_started_at": child_stamp,
+        },
+        {
+            "id": "synthetic-root",
+            "name": "Atlas planning",
+            "created_at": "2026-01-05T09:00:00Z",
+            "updated_at": "2026-01-05T09:00:00Z",
+            "cc_session_started_at": None,
+        },
+    ]
+
+  earlier = normalize.normalize_json(
+      listing("2026-10-26T20:32:28.473956Z"), normalize.response_rules(route), _context())
+  later = normalize.normalize_json(
+      listing("2026-10-26T20:32:28.528709Z"), normalize.response_rules(route), _context())
+  assert earlier == later
+  assert later[0]["updated_at"] == "<session-list-updated-time>"
+  assert later[0]["cc_session_started_at"] == "<session-list-conversation-start-time>"
+  assert later[1]["updated_at"] == "2026-01-05T09:00:00Z"
+  assert later[1]["cc_session_started_at"] is None
+  reordered = normalize.normalize_json(
+      list(reversed(listing("2026-10-26T20:32:28.528709Z"))), normalize.response_rules(route), _context())
+  assert reordered != later
+  other_root_time = listing("2026-10-26T20:32:28.528709Z")
+  other_root_time[1]["updated_at"] = "2026-01-05T10:00:00Z"
+  assert normalize.normalize_json(
+      other_root_time, normalize.response_rules(route), _context()) != later
+  reordered = normalize.normalize_json(
+      list(reversed(listing("2026-10-26T20:32:28.528709Z"))), normalize.response_rules(route), _context())
+  assert reordered != later
+
+
 def test_plan_takeoff_time_masks_only_the_stamp_and_its_version_still_differs() -> None:
   earlier = _plan_registry({"v": 1, "at": "2026-10-19T09:41:00+00:00"}, None)
   later = _plan_registry({"v": 1, "at": "2026-10-19T09:42:07.512904+00:00"}, None)

@@ -208,6 +208,20 @@ RESPONSE_RULES: tuple[FieldRule, ...] = (
             "POST /api/sessions/{session_write_meta.write_session}/group",
             "POST /api/sessions/{session_write_meta.write_session}/rounds/write-round/rate",
         )),
+    FieldRule(
+        name="session-list-updated-time",
+        target="GET /api/sessions/",
+        field="[*].updated_at",
+        when=(("name", "Atlas survey"),),
+        reason="wall-clock time: a user message lifts its row to the time each server read the event",
+    ),
+    FieldRule(
+        name="session-list-conversation-start-time",
+        target="GET /api/sessions/",
+        field="[*].cc_session_started_at",
+        when=(("name", "Atlas survey"),),
+        reason="wall-clock time: each server records its own native conversation start",
+    ),
     *(
         FieldRule(
             name="delivery-read-time",

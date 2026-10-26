@@ -63,7 +63,7 @@ def task_relation_cycle(session_id: str) -> TaskConflictError:
 
 
 def ancestor_chain_too_long(session_id: str, limit: int) -> TaskConflictError:
-  """The refusal for a task-parent chain that outruns its walk bound; the API reports its sentence as the 409 detail."""
+  """The refusal for a task-parent chain that outruns its walk bound; the API reports it among the 409 blockers."""
   return TaskConflictError([f"ancestor chain of {session_id} exceeds {limit} hops"])
 
 

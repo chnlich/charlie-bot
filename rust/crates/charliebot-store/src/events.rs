@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use charliebot_core::{fsutil, pystr};
+use memchr::{memchr_iter, memchr2, memchr2_iter};
 use memmap2::Mmap;
 use serde_json::Value;
 
@@ -892,7 +893,7 @@ impl Store {
         bytes_read += read;
       }
       let bytes = &chunk[..read];
-      total += bytes.iter().filter(|byte| **byte == b'\n').count();
+      total += memchr_iter(b'\n', bytes).count();
       last_byte = bytes.last().copied();
     }
     if last_byte.is_some_and(|byte| byte != b'\n') {
@@ -1430,30 +1431,26 @@ fn read_live_range_suffix(path: &Path, start: usize, size: usize) -> std::io::Re
   Ok(bytes)
 }
 
+/// Split decoded log bytes on universal newlines and parse each segment, as
+/// `src/runtime/chat_events.py:52-68` `_universal_newline_segments` does with its decode/replace/split.
+///
+/// `\n` and `\r` never occur inside a UTF-8 multibyte sequence, so the byte-boundary split yields the same
+/// segments a per-character walk would; the file still must decode strictly, and the error keeps its path.
 fn parse_universal_newline_lines(path: &Path, bytes: &[u8]) -> StoreResult<Vec<Option<Arc<ChatEvent>>>> {
-  let text =
-    String::from_utf8(bytes.to_vec()).map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
+  std::str::from_utf8(bytes).map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
   let mut lines = Vec::new();
-  let mut segment = String::new();
-  let mut chars = text.chars().peekable();
-  while let Some(character) = chars.next() {
-    match character {
-      '\n' => {
-        lines.push(ndjson::parse_line_compact(segment.as_bytes()).map(Arc::new));
-        segment.clear();
-      }
-      '\r' => {
-        if chars.peek() == Some(&'\n') {
-          chars.next();
-        }
-        lines.push(ndjson::parse_line_compact(segment.as_bytes()).map(Arc::new));
-        segment.clear();
-      }
-      _ => segment.push(character),
-    }
+  let mut start = 0;
+  let mut pos = 0;
+  while let Some(offset) = memchr2(b'\n', b'\r', &bytes[pos..]) {
+    let index = pos + offset;
+    let segment = &bytes[start..index];
+    // A `\r` immediately before the `\n` folds into one terminator, as `replace("\r\n", "\n")` does.
+    pos = if bytes[index] == b'\r' && bytes.get(index + 1) == Some(&b'\n') { index + 2 } else { index + 1 };
+    lines.push(ndjson::parse_line_compact(segment).map(Arc::new));
+    start = pos;
   }
-  if !segment.is_empty() || (!text.is_empty() && !text.ends_with('\n') && !text.ends_with('\r')) {
-    lines.push(ndjson::parse_line_compact(segment.as_bytes()).map(Arc::new));
+  if start < bytes.len() {
+    lines.push(ndjson::parse_line_compact(&bytes[start..]).map(Arc::new));
   }
   Ok(lines)
 }
@@ -1503,7 +1500,7 @@ fn walk_tail_line_texts(path: &Path, size: usize, count: usize) -> StoreResult<O
     file.seek(SeekFrom::Start(pos as u64)).map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
     let mut chunk = vec![0; step];
     file.read_exact(&mut chunk).map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
-    bound += chunk.iter().filter(|byte| **byte == b'\n' || **byte == b'\r').count();
+    bound += memchr2_iter(b'\n', b'\r', &chunk).count();
     accumulated += step;
     parts.push(chunk);
   };
@@ -1521,27 +1518,18 @@ fn raw_line_spans(bytes: &[u8]) -> (Vec<(usize, usize)>, bool) {
   let mut spans = Vec::new();
   let mut start = 0;
   let mut pos = 0;
-  while pos < bytes.len() {
-    let newline = bytes[pos..].iter().position(|byte| *byte == b'\n').map(|offset| pos + offset);
-    let carriage = bytes[pos..].iter().position(|byte| *byte == b'\r').map(|offset| pos + offset);
-    match (newline, carriage) {
-      (None, None) => break,
-      (Some(index), Some(carriage)) if carriage < index => {
-        spans.push((start, carriage));
-        pos = if bytes.get(carriage + 1) == Some(&b'\n') { carriage + 2 } else { carriage + 1 };
-        start = pos;
-      }
-      (None, Some(carriage)) => {
-        spans.push((start, carriage));
-        pos = if bytes.get(carriage + 1) == Some(&b'\n') { carriage + 2 } else { carriage + 1 };
-        start = pos;
-      }
-      (Some(index), _) => {
-        spans.push((start, index));
-        pos = index + 1;
-        start = pos;
-      }
+  while let Some(offset) = memchr2(b'\n', b'\r', &bytes[pos..]) {
+    let index = pos + offset;
+    if bytes[index] == b'\n' {
+      // A `\n` terminator: the first of either byte is the newline, so the CR scan could not have ended earlier.
+      spans.push((start, index));
+      pos = index + 1;
+    } else {
+      // A `\r` terminator: a following `\n` folds into the same break, as the universal-newline rule does.
+      spans.push((start, index));
+      pos = if bytes.get(index + 1) == Some(&b'\n') { index + 2 } else { index + 1 };
     }
+    start = pos;
   }
   let ends_on_boundary = start == bytes.len();
   if !ends_on_boundary {
@@ -1628,6 +1616,41 @@ mod tests {
     let value = UtcDateTime::parse("2021-01-01T12:00:00Z").unwrap();
     let (year, week, _) = value.into_inner().date().to_iso_week_date();
     assert_eq!((year, week), (2020, 53));
+  }
+
+  #[test]
+  fn raw_line_spans_split_on_newlines_and_lone_carriage_returns() {
+    assert_eq!(raw_line_spans(b"a\nb\rc\r\nd"), (vec![(0, 1), (2, 3), (4, 5), (7, 8)], false));
+    assert_eq!(raw_line_spans(b"a\nb\n"), (vec![(0, 1), (2, 3)], true));
+    assert_eq!(raw_line_spans(b"a\r\nb\r"), (vec![(0, 1), (3, 4)], true), "a trailing CR is a boundary");
+    assert_eq!(raw_line_spans(b"a\r\nb\rc"), (vec![(0, 1), (3, 4), (5, 6)], false));
+    assert_eq!(raw_line_spans(b""), (Vec::<(usize, usize)>::new(), true));
+  }
+
+  #[test]
+  fn universal_newline_lines_fold_crlf_and_a_lone_cr() {
+    let path = Path::new("synthetic-events.jsonl");
+    let contents = |bytes: &[u8]| -> Vec<String> {
+      parse_universal_newline_lines(path, bytes)
+        .unwrap()
+        .into_iter()
+        .map(|event| {
+          event
+            .map(|event| event.to_value()["content"].as_str().expect("every segment parses an object").to_string())
+            .unwrap_or_default()
+        })
+        .collect()
+    };
+    assert_eq!(contents(b"{\"content\":\"a\"}\r\n{\"content\":\"b\"}\n{\"content\":\"c\"}"), ["a", "b", "c"]);
+    assert_eq!(contents(b"{\"content\":\"a\"}\r{\"content\":\"b\"}"), ["a", "b"], "a lone CR terminates a line");
+    assert_eq!(contents(b"\n\n{\"content\":\"x\"}\n"), ["", "", "x"], "blank lines stay as skipped slots");
+    assert_eq!(contents(b"{\"content\":\"a\"}\n"), ["a"], "a trailing terminator opens no extra line");
+  }
+
+  #[test]
+  fn universal_newline_lines_reject_invalid_utf8() {
+    let path = Path::new("synthetic-events.jsonl");
+    assert!(parse_universal_newline_lines(path, b"{\"content\": \"\xff\"}").is_err());
   }
 
   #[test]

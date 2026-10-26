@@ -2833,8 +2833,8 @@ pub fn pre_recovery_step(features: Arc<FeatureContext>) -> BoxFuture<'static, an
 #[cfg(test)]
 mod tests {
   use super::{
-    free_disk_gib_from_statvfs, is_out_of_space_error, native_continuation_matches, nearest_existing_ancestor,
-    pre_recovery_step,
+    free_disk_gib, free_disk_gib_from_statvfs, is_out_of_space_error, native_continuation_matches,
+    nearest_existing_ancestor, pre_recovery_step,
   };
   use charliebot_core::config::BackendOption;
 
@@ -2872,6 +2872,13 @@ mod tests {
   #[test]
   fn free_disk_gib_arithmetic_uses_available_blocks_and_fragment_size() {
     assert_eq!(free_disk_gib_from_statvfs(4, 1024 * 1024 * 1024), 4.0);
+  }
+
+  #[test]
+  fn free_disk_gib_probes_the_nearest_existing_ancestor_of_a_missing_path() {
+    let root = tempfile::tempdir().unwrap();
+    assert!(free_disk_gib(root.path()).unwrap() > 0.0);
+    assert!(free_disk_gib(&root.path().join("missing").join("child")).unwrap() > 0.0);
   }
 
   #[test]

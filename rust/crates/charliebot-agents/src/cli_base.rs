@@ -20,13 +20,12 @@ const IMAGE_EXTENSIONS: [&str; 5] = ["png", "jpg", "jpeg", "gif", "webp"];
 
 /// The MIME type of an upload filename's extension, or `None` when the backend does not pass it as an image. The
 /// extension is the text after the last dot, lowercased, as the Python map's lookup is.
-pub fn image_mime(extension: &str) -> Option<String> {
+pub fn image_mime(extension: &str) -> Option<&'static str> {
   let extension = extension.to_ascii_lowercase();
   if !IMAGE_EXTENSIONS.contains(&extension.as_str()) {
     return None;
   }
-  let mime = mime_guess::from_ext(&extension).first().expect("every accepted image extension has a MIME type");
-  Some(mime.to_string())
+  Some(mime_db::lookup(&extension).expect("every accepted image extension has a MIME type"))
 }
 
 /// The process environment the CLI backend types read at registration: PATH to find a CLI binary, and HOME for the
@@ -215,11 +214,11 @@ mod tests {
 
   #[test]
   fn image_extensions_map_to_the_client_facing_mime_strings() {
-    assert_eq!(image_mime("png").as_deref(), Some("image/png"));
-    assert_eq!(image_mime("JPG").as_deref(), Some("image/jpeg"));
-    assert_eq!(image_mime("jpeg").as_deref(), Some("image/jpeg"));
-    assert_eq!(image_mime("gif").as_deref(), Some("image/gif"));
-    assert_eq!(image_mime("webp").as_deref(), Some("image/webp"));
+    assert_eq!(image_mime("png"), Some("image/png"));
+    assert_eq!(image_mime("JPG"), Some("image/jpeg"));
+    assert_eq!(image_mime("jpeg"), Some("image/jpeg"));
+    assert_eq!(image_mime("gif"), Some("image/gif"));
+    assert_eq!(image_mime("webp"), Some("image/webp"));
     assert_eq!(image_mime("txt"), None);
     assert_eq!(image_mime(""), None);
   }

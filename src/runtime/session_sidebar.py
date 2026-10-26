@@ -16,7 +16,7 @@ from collections.abc import Callable
 from typing import Any, NamedTuple
 
 from src.infra import config, json_utils, log_once, memo, models, tasks
-from src.runtime import chat_events, session_store, sidebar_state, thinking_state, trigger_files
+from src.runtime import chat_events, run_identity, runs, session_store, sidebar_state, thinking_state, trigger_files
 from src.runtime.hooks import sidebar_contributions
 
 log = log_once.LazyStructlogLogger()
@@ -267,17 +267,17 @@ def _task_tree_probe_signature(session_dir: pathlib.Path) -> tuple:
   changed state — and never pays the derivation's reads either.
   """
   session_dir_str = os.fspath(session_dir)
-  metadata_sig = memo.stat_signature(session_dir_str + "/metadata.json")
+  metadata_sig = memo.stat_signature(f"{session_dir_str}/{run_identity.SESSION_METADATA_NAME}")
   events_sig = memo.stat_signature(chat_events.chat_events_path(session_dir))
-  archives_sig = memo.stat_signature(session_dir_str + "/data/archives")
+  archives_sig = memo.stat_signature(os.fspath(chat_events.chat_event_archives_dir(session_dir)))
   runs_sig: list[tuple[str, int, int]] = []
-  runs_dir_str = session_dir_str + "/data/runs"
+  runs_dir_str = f"{session_dir_str}/{runs.DATA_DIR_NAME}/{runs.RUNS_DIR_NAME}"
   try:
     run_names = sorted(os.listdir(runs_dir_str))
   except OSError:
     run_names = []
   for name in run_names:
-    run_meta = memo.stat_signature(runs_dir_str + "/" + name + "/metadata.json")
+    run_meta = memo.stat_signature(f"{runs_dir_str}/{name}/{runs.RUN_METADATA_NAME}")
     if run_meta is not None:
       runs_sig.append((name, run_meta[0], run_meta[1]))
   return (metadata_sig, events_sig, archives_sig, tuple(runs_sig))

@@ -149,7 +149,7 @@ def worker_continuation_reset_note(reason: str, previous_log_path: pathlib.Path)
   to recover what the earlier conversation already did.
   """
   return (
-      f"[Context reset: {reason}. The task continues on the same branch and worktree; "
+      f"{session_anchors.CONTEXT_RESET_OPENER}{reason}. The task continues on the same branch and worktree; "
       f"its spec and the new input follow. The previous run's log is at {previous_log_path} — "
       "read it before acting, so finished work is not repeated.]")
 

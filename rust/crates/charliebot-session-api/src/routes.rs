@@ -72,10 +72,7 @@ async fn list_active(State(features): State<Arc<FeatureContext>>, request: Reque
 }
 
 async fn list_archived(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
-  let query = match Query::new(&request) {
-    Ok(query) => query,
-    Err(response) => return *response,
-  };
+  let query = Query::new(&request);
   let group = query.get("group").map(str::to_string);
   let limit = match query.parse_int("limit", Some(100), None, None) {
     Ok(limit) => limit.clamp(1, 500) as usize,
@@ -219,10 +216,7 @@ async fn session_status(State(features): State<Arc<FeatureContext>>, request: Re
 }
 
 fn session_status_response(features: &FeatureContext, request: &Request<Body>) -> Response {
-  let query = match Query::new(request) {
-    Ok(query) => query,
-    Err(response) => return *response,
-  };
+  let query = Query::new(request);
   let Some(raw_ids) = query.get("ids") else {
     return validation::response(&[validation::missing(validation::Source::Query, "ids")]);
   };
@@ -303,10 +297,7 @@ fn session_status_response(features: &FeatureContext, request: &Request<Body>) -
 }
 
 async fn session_tree(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
-  let query = match Query::new(&request) {
-    Ok(query) => query,
-    Err(response) => return *response,
-  };
+  let query = Query::new(&request);
   let parent_id = query.get("parent_id").filter(|value| !value.is_empty());
   let include_archived = match query.parse_bool("include_archived", false) {
     Ok(value) => value,
@@ -329,10 +320,7 @@ async fn session_tree(State(features): State<Arc<FeatureContext>>, request: Requ
 }
 
 async fn session_search(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
-  let query = match Query::new(&request) {
-    Ok(query) => query,
-    Err(response) => return *response,
-  };
+  let query = Query::new(&request);
   let q = query.get("q").unwrap_or_default().trim().to_string();
   let store = Arc::clone(&features.store);
   let registry = Arc::clone(&features.registry);
@@ -507,20 +495,14 @@ pub(crate) struct Query {
 }
 
 impl Query {
-  pub(crate) fn new(request: &Request<Body>) -> Result<Self, Box<Response>> {
-    let mut values = Vec::new();
-    for part in request.uri().query().unwrap_or_default().split('&').filter(|part| !part.is_empty()) {
-      let (key, value) = part.split_once('=').unwrap_or((part, ""));
-      let key = decode_query_component(key);
-      let value = decode_query_component(value);
-      match (key, value) {
-        (Ok(key), Ok(value)) => values.push((key, value)),
-        _ => {
-          return Err(Box::new(responses::json(StatusCode::BAD_REQUEST, &json!({"detail": "Invalid query string"}))));
-        }
-      }
-    }
-    Ok(Query { values })
+  /// The query string's pairs, in order, decoded the way Starlette's `parse_qsl(keep_blank_values=True)`
+  /// decodes them behind FastAPI's `Query` (`form_urlencoded::parse` has those semantics): `+` reads as a
+  /// space, `%XX` escapes decode with replacement, and a part without a value keeps its blank value.
+  pub(crate) fn new(request: &Request<Body>) -> Self {
+    let values = form_urlencoded::parse(request.uri().query().unwrap_or_default().as_bytes())
+      .map(|(key, value)| (key.into_owned(), value.into_owned()))
+      .collect();
+    Query { values }
   }
 
   pub(crate) fn get(&self, key: &str) -> Option<&str> {
@@ -552,11 +534,6 @@ impl Query {
   }
 }
 
-fn decode_query_component(value: &str) -> Result<String, ()> {
-  let value = value.replace('+', " ");
-  percent_encoding::percent_decode_str(&value).decode_utf8().map(|value| value.into_owned()).map_err(|_| ())
-}
-
 #[cfg(test)]
 mod tests {
   use std::sync::Arc;
@@ -577,8 +554,27 @@ mod tests {
   }
 
   #[test]
-  fn query_components_decode_plus_and_percent_escapes() {
-    assert_eq!(decode_query_component("Atlas+%C3%A9").unwrap(), "Atlas é");
+  fn query_pairs_decode_plus_and_percent_escapes_and_keep_blanks_in_order() {
+    let request =
+      Request::builder().uri("/api/sessions/?a=Atlas+%C3%A9&flag=&a=second&plain").body(Body::empty()).unwrap();
+    let query = Query::new(&request);
+    assert_eq!(
+      query.values,
+      vec![
+        ("a".to_string(), "Atlas é".to_string()),
+        ("flag".to_string(), String::new()),
+        ("a".to_string(), "second".to_string()),
+        ("plain".to_string(), String::new()),
+      ]
+    );
+    assert_eq!(query.get("a"), Some("Atlas é"), "the first occurrence answers");
+    assert_eq!(query.get("plain"), Some(""), "a part without `=` keeps its blank value");
+  }
+
+  #[test]
+  fn a_request_without_a_query_parses_no_pairs() {
+    let request = Request::builder().uri("/api/sessions/").body(Body::empty()).unwrap();
+    assert_eq!(Query::new(&request).values, Vec::<(String, String)>::new());
   }
 
   #[tokio::test]

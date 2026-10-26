@@ -90,6 +90,7 @@ const NO_REPLY_NOTICE: &str = "No reply was posted for this mention; the details
   Mention me again for a thread answer.";
 /// The follow-trigger floor the label carries (`_FOLLOW_FLOOR_RE`).
 static FOLLOW_FLOOR_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"floor=([0-9.]+)").expect("valid pattern"));
+static PARAGRAPH_SEPARATOR_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\n{2,}").expect("valid pattern"));
 static SESSION_LOCKS: LazyLock<StdMutex<HashMap<String, Weak<tokio::sync::Mutex<()>>>>> =
   LazyLock::new(|| StdMutex::new(HashMap::new()));
 
@@ -436,19 +437,9 @@ pub fn chunk_text(text: &str, limit: usize) -> Vec<String> {
 fn paragraph_units(text: &str) -> Vec<&str> {
   let mut units = Vec::new();
   let mut unit_start = 0;
-  let mut index = 0;
-  let bytes = text.as_bytes();
-  while index < bytes.len() {
-    if bytes[index] == b'\n' {
-      let run_end = index + bytes[index..].iter().take_while(|byte| **byte == b'\n').count();
-      if run_end - index >= 2 {
-        units.push(&text[unit_start..run_end]);
-        unit_start = run_end;
-      }
-      index = run_end;
-    } else {
-      index += 1;
-    }
+  for separator in PARAGRAPH_SEPARATOR_RE.find_iter(text) {
+    units.push(&text[unit_start..separator.end()]);
+    unit_start = separator.end();
   }
   units.push(&text[unit_start..]);
   units

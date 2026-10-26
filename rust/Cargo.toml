@@ -41,6 +41,7 @@ publish = false
 [workspace.dependencies]
 anyhow = "1"
 axum = { version = "0.8", features = ["ws"] }
+backon = "1"
 base64 = "0.22"
 bstr = "1"
 bytes = "1"

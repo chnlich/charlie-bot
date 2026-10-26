@@ -627,11 +627,13 @@ impl TriggerManager {
     let path = self.trigger_path(&trigger.session_id, &trigger.id);
     let parent = path.parent().expect("trigger file path has a parent");
     tokio::fs::create_dir_all(parent).await.with_context(|| format!("create {}", parent.display()))?;
-    let mut body = serde_json::to_vec_pretty(trigger).context("serialize trigger")?;
-    body.push(b'\n');
-    let temp = parent.join(format!(".{}.{}.tmp", trigger.id, Uuid::new_v4().simple()));
-    tokio::fs::write(&temp, body).await.with_context(|| format!("write {}", temp.display()))?;
-    tokio::fs::rename(&temp, &path).await.with_context(|| format!("publish {}", path.display()))?;
+    // Python writes `model_dump_json(indent=2)` as it is, with no trailing newline.
+    let text = serde_json::to_string_pretty(trigger).context("serialize trigger")?;
+    let publish_path = path.clone();
+    tokio::task::spawn_blocking(move || charliebot_core::fsutil::atomic_write_text(&publish_path, &text))
+      .await
+      .expect("trigger publish task completes")
+      .with_context(|| format!("publish {}", path.display()))?;
     charliebot_store::sidebar_state::mark_sidebar_dirty(&trigger.session_id);
     Ok(())
   }
@@ -1788,6 +1790,18 @@ mod tests {
       watch_targets: targets,
       fire_reason: None,
     }
+  }
+
+  #[tokio::test]
+  async fn saved_trigger_file_holds_pretty_json_without_a_trailing_newline() {
+    let (_home, features) = feature_context();
+    let manager = Arc::new(TriggerManager::new(features));
+    let trigger = pending_trigger("synthetic-bytes-trigger", SESSION_ID, near_future(3600), Vec::new());
+    manager.save_trigger(&trigger).await.expect("save trigger");
+    let bytes = std::fs::read(manager.trigger_path(SESSION_ID, &trigger.id)).expect("read trigger file");
+    assert_eq!(bytes, serde_json::to_string_pretty(&trigger).expect("serialize trigger").into_bytes());
+    let loaded = manager.load_trigger(SESSION_ID, &trigger.id).await.expect("load trigger file");
+    assert_eq!(serde_json::to_value(loaded).unwrap(), serde_json::to_value(&trigger).unwrap());
   }
 
   #[tokio::test]

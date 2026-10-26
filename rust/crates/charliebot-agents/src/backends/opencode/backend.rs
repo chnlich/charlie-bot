@@ -26,6 +26,7 @@ use crate::runner::EventFn;
 use crate::transport::cgroup::{SessionCgroup, SessionCgroupConfig};
 use crate::transport::kill::{kill_process_group, python_exit_code};
 use crate::transport::spawn::{AgentPipeReader, SpawnSpec, spawn_one_shot};
+use charliebot_core::cgroup::SESSION_CGROUP_OOM_SCORE_ADJ;
 
 /// The turn's own process carries the run identity; OpenCode serves its events over HTTP.
 pub const TURN_PROCESS_CMD: [&str; 2] = ["/usr/bin/sleep", "infinity"];
@@ -550,7 +551,7 @@ async fn put_environment(
   if let Some(cgroup) = cgroup {
     variables.insert("BASH_ENV".to_string(), join_script.display().to_string());
     variables.insert("CHARLIEBOT_SESSION_CGROUP".to_string(), cgroup.path.display().to_string());
-    variables.insert("CHARLIEBOT_SESSION_OOM_SCORE_ADJ".to_string(), cgroup.oom_score_adj().to_string());
+    variables.insert("CHARLIEBOT_SESSION_OOM_SCORE_ADJ".to_string(), SESSION_CGROUP_OOM_SCORE_ADJ.to_string());
   }
   let response = server
     .client_request(reqwest::Method::PUT, &format!("/api/session/{session_id}/environment"))?

@@ -41,6 +41,38 @@ struct StatusKey {
   generation: u64,
 }
 
+/// The route patterns `routes` mounts, the merged writes, fork and detail routers included. The trailing-slash redirect
+/// matches a path against them.
+pub(crate) const ROUTE_PATTERNS: &[&str] = &[
+  "/api/sessions/",
+  "/api/sessions/{session_id}/backend",
+  "/api/sessions/archived",
+  "/api/sessions/starred",
+  "/api/sessions/groups",
+  "/api/sessions/status",
+  "/api/sessions/tree",
+  "/api/sessions/search",
+  "/api/sessions/groups/rename",
+  "/api/sessions/groups/delete",
+  "/api/sessions/{session_id}/read",
+  "/api/sessions/{session_id}/star",
+  "/api/sessions/{session_id}/unstar",
+  "/api/sessions/{session_id}/group",
+  "/api/sessions/{session_id}/rounds/{round_id}/rate",
+  "/api/sessions/{session_id}/permanent",
+  "/api/sessions/{session_id}/fork",
+  "/api/sessions/{session_id}/elone",
+  "/api/sessions/{session_id}/pending-triggers",
+  "/api/sessions/{session_id}/bootstrap",
+  "/api/sessions/{session_id}/usage",
+  "/api/sessions/{session_id}/events",
+  "/api/sessions/{session_id}/transcript",
+  "/api/sessions/{session_id}/events.jsonl",
+  "/api/sessions/{session_id}/runs",
+  "/api/sessions/{session_id}/task-inputs/pending",
+  "/api/sessions/{session_id}",
+];
+
 /// Register every supported listing route below `/api/sessions`.
 pub(crate) fn routes(features: &Arc<FeatureContext>) -> Router {
   Router::new()
@@ -60,11 +92,6 @@ pub(crate) fn routes(features: &Arc<FeatureContext>) -> Router {
       refuse_other_methods(get(crate::detail::session_detail).patch(write_routes::patch_session), "GET"),
     )
     .with_state(Arc::clone(features))
-}
-
-/// Match the route family for the server's bare-path slash redirect.
-pub(crate) fn matches(path: &str) -> bool {
-  path == "/api/sessions" || path.strip_prefix("/api/sessions/").is_some()
 }
 
 async fn list_active(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
@@ -536,11 +563,24 @@ mod tests {
   use axum::http::StatusCode;
   use base64::Engine;
   use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+  use charliebot_registry::route_claims::RouteClaims;
   use charliebot_registry::{Registry, store_hooks};
   use charliebot_store::Store;
   use charliebot_store::metadata::{SessionMetadata, SessionStatus, TaskProfile};
 
   use super::*;
+
+  #[test]
+  fn route_claims_follow_the_mounted_patterns_and_refuse_an_unrouted_sub_path() {
+    // Starlette redirects a slash-toggled path only when a route matches it, so an unrouted sub-path answers 404.
+    let claims = RouteClaims::new(ROUTE_PATTERNS).expect("the session route patterns are distinct");
+    for path in ["/api/sessions/", "/api/sessions/groups/rename", "/api/sessions/s1", "/api/sessions/s1/read"] {
+      assert!(claims.claims(path), "{path} should be claimed");
+    }
+    for path in ["/api/sessions/s1/resource-class", "/api/sessions/s1/unknown"] {
+      assert!(!claims.claims(path), "{path} should not be claimed");
+    }
+  }
 
   #[test]
   fn session_ids_trim_drop_empty_and_keep_first_occurrence() {

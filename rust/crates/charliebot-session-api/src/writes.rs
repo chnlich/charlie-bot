@@ -10,8 +10,7 @@ use axum::response::Response;
 use axum::routing::delete;
 use charliebot_compat::fastapi_body::{self, BodyModel, Field, FieldType, RequestBody};
 use charliebot_compat::responses;
-use charliebot_compat::routing::{post_only, put_only, refuse_other_methods};
-use charliebot_core::cgroup::ResourceClass;
+use charliebot_compat::routing::{post_only, refuse_other_methods};
 use charliebot_registry::FeatureContext;
 use charliebot_registry::caller::{self, CallerIdentity};
 use charliebot_registry::task_errors::task_http_error;
@@ -29,8 +28,6 @@ const RATE_ROUND_FIELDS: &[Field] =
 const RATE_ROUND_BODY: BodyModel = BodyModel::required(RATE_ROUND_FIELDS);
 const SET_GROUP_FIELDS: &[Field] = &[Field::optional("group", FieldType::NullableString)];
 const SET_GROUP_BODY: BodyModel = BodyModel::required(SET_GROUP_FIELDS);
-const RESOURCE_CLASS_FIELDS: &[Field] = &[Field::required("resource_class", FieldType::Literal(&["agent", "repair"]))];
-const RESOURCE_CLASS_BODY: BodyModel = BodyModel::required(RESOURCE_CLASS_FIELDS).forbid_extra();
 
 /// Register fixed group routes before the routes whose first segment is a session id.
 pub(crate) fn routes() -> Router<Arc<FeatureContext>> {
@@ -43,47 +40,6 @@ pub(crate) fn routes() -> Router<Arc<FeatureContext>> {
     .route("/api/sessions/{session_id}/group", post_only(set_session_group))
     .route("/api/sessions/{session_id}/rounds/{round_id}/rate", post_only(rate_round))
     .route("/api/sessions/{session_id}/permanent", refuse_other_methods(delete(delete_session_permanently), "DELETE"))
-    .route("/api/sessions/{session_id}/resource-class", put_only(set_resource_class))
-}
-
-/// `PUT /api/sessions/{session_id}/resource-class`: the operator's repair mark. The body is validated before the
-/// caller's scope is checked, and the session is looked up last, as in `set_session_resource_class`.
-async fn set_resource_class(
-  State(features): State<Arc<FeatureContext>>,
-  AxumPath(session_id): AxumPath<String>,
-  request: Request<Body>,
-) -> Response {
-  let caller = match resolve_request_caller(&request, &features) {
-    Ok(caller) => caller,
-    Err(response) => return response,
-  };
-  let body = match read_body(request).await {
-    Ok(body) => body,
-    Err(response) => return response,
-  };
-  let payload = match body.validate(&RESOURCE_CLASS_BODY) {
-    Ok(Some(payload)) => payload,
-    Ok(None) => unreachable!("a required request body validates to an object"),
-    Err(response) => return *response,
-  };
-  if !caller.is_operator() {
-    return responses::json(
-      StatusCode::FORBIDDEN,
-      &json!({"detail": "setting a session's resource class requires operator credentials"}),
-    );
-  }
-  let resource_class = match payload["resource_class"].as_str().expect("validated literal field") {
-    "agent" => ResourceClass::Agent,
-    "repair" => ResourceClass::Repair,
-    other => unreachable!("validated literal field, got {other:?}"),
-  };
-  match features.store.set_resource_class(&session_id, resource_class).await {
-    Ok(Some(meta)) => {
-      responses::fast_json(StatusCode::OK, &json!({"id": meta.id, "resource_class": meta.resource_class}))
-    }
-    Ok(None) => session_not_found(),
-    Err(error) => task_http_error(error),
-  }
 }
 
 async fn rename_group(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {

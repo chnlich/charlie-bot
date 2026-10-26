@@ -764,31 +764,36 @@ async def updated_at_of(session_blocks: conftest.SessionBlocks, session_id: str)
 
 
 @pytest.mark.asyncio
-async def test_user_admission_lifts_the_branch_and_stops_at_an_archived_ancestor(tmp_path: pathlib.Path) -> None:
-  """A real user message lifts the target and its unarchived ancestors to the
-  event's time; an archived ancestor and everything above it keep their
-  updated_at; a replayed input_id lifts nothing; agent messages, child
+async def test_user_admission_lifts_only_the_target_node(tmp_path: pathlib.Path) -> None:
+  """A real user message lifts only the node it is sent to: that node's
+  updated_at moves to the event's time, forward only, and its parent and
+  ancestors keep their values. A user message to a root lifts the root alone.
+  A message to an archived node reopens it and its archived ancestors and lifts
+  the node alone. A replayed input_id lifts nothing; agent messages, child
   reports, and scheduled triggers never lift."""
   _, session_blocks, tree = conftest.build_env(tmp_path)
   root = await conftest.create_task(tree, parent=None, request_id="root", name="Root")
   mid = await conftest.create_task(tree, parent=root.id, request_id="mid", name="Mid")
   child = await conftest.create_task(tree, parent=mid.id, request_id="child", name="Child")
-  first = (await updated_at_of(session_blocks, child.id) + datetime.timedelta(hours=1)).isoformat()
-  second = (await updated_at_of(session_blocks, child.id) + datetime.timedelta(hours=2)).isoformat()
+  root_at = await updated_at_of(session_blocks, root.id)
+  mid_at = await updated_at_of(session_blocks, mid.id)
+  child_at = await updated_at_of(session_blocks, child.id)
+  first = (child_at + datetime.timedelta(hours=1)).isoformat()
+  second = (child_at + datetime.timedelta(hours=2)).isoformat()
 
   await admit(tree, child.id, "my turn", input_id="m1", timestamp=first)
   assert await updated_at_of(session_blocks, child.id) == models.ensure_utc(first)
-  assert await updated_at_of(session_blocks, mid.id) == models.ensure_utc(first)
-  assert await updated_at_of(session_blocks, root.id) == models.ensure_utc(first)
+  assert await updated_at_of(session_blocks, mid.id) == mid_at
+  assert await updated_at_of(session_blocks, root.id) == root_at
 
   # A replayed input_id returns the original event and lifts nothing; a new
-  # message moves the whole branch forward again.
+  # message lifts the leaf again and still leaves its ancestors in place.
   await admit(tree, child.id, "my turn", input_id="m1", timestamp=second)
   assert await updated_at_of(session_blocks, child.id) == models.ensure_utc(first)
   await admit(tree, child.id, "again", input_id="m2", timestamp=second)
   assert await updated_at_of(session_blocks, child.id) == models.ensure_utc(second)
-  assert await updated_at_of(session_blocks, mid.id) == models.ensure_utc(second)
-  assert await updated_at_of(session_blocks, root.id) == models.ensure_utc(second)
+  assert await updated_at_of(session_blocks, mid.id) == mid_at
+  assert await updated_at_of(session_blocks, root.id) == root_at
 
   # Agent relays, scheduled triggers, and child reports are server/agent
   # traffic: none of them lifts, however fresh.
@@ -798,22 +803,77 @@ async def test_user_admission_lifts_the_branch_and_stops_at_an_archived_ancestor
       tree, child.id, "cron woke this node", event_type=ET.SCHEDULED_TRIGGER, actor="system", timestamp=agent_at)
   await admit(tree, child.id, "child finished", event_type=ET.CHILD_REPORT, actor="system", timestamp=agent_at)
   assert await updated_at_of(session_blocks, child.id) == models.ensure_utc(second)
-  assert await updated_at_of(session_blocks, mid.id) == models.ensure_utc(second)
-  assert await updated_at_of(session_blocks, root.id) == models.ensure_utc(second)
+  assert await updated_at_of(session_blocks, mid.id) == mid_at
+  assert await updated_at_of(session_blocks, root.id) == root_at
 
-  # An archived ancestor stops the climb: the archived row and everything
-  # above it keep their updated_at even though the message is fresher.
+  # A message to the root lifts the root and nothing below it.
+  root_msg = (root_at + datetime.timedelta(hours=4)).isoformat()
+  await admit(tree, root.id, "to the root", timestamp=root_msg)
+  assert await updated_at_of(session_blocks, root.id) == models.ensure_utc(root_msg)
+  assert await updated_at_of(session_blocks, mid.id) == mid_at
+  assert await updated_at_of(session_blocks, child.id) == models.ensure_utc(second)
+
+  # Archiving the middle node archives the leaf beneath it. A message to the
+  # leaf reopens the archived ancestor and the leaf, and lifts only the leaf.
   aroot = await conftest.create_task(tree, parent=None, request_id="aroot", name="ARoot")
   amid = await conftest.create_task(tree, parent=aroot.id, request_id="amid", name="AMid")
   achild = await conftest.create_task(tree, parent=amid.id, request_id="achild", name="AChild")
-  await session_blocks.lifecycle.archive_session(amid.id)
-  archived_at = await updated_at_of(session_blocks, amid.id)
-  root_at = await updated_at_of(session_blocks, aroot.id)
+  await tree.completion.archive_subtree(
+      amid.id, request_id="archive-amid", summary="archived", result_refs=[], run_ids=[], caller=conftest.OPERATOR)
+  assert tree.task_state(achild.id) == "archived"
+  amid_at = await updated_at_of(session_blocks, amid.id)
+  aroot_at = await updated_at_of(session_blocks, aroot.id)
   later = (await updated_at_of(session_blocks, achild.id) + datetime.timedelta(hours=3)).isoformat()
   await admit(tree, achild.id, "to the archived branch", timestamp=later)
+  assert tree.task_state(achild.id) == "open"
   assert await updated_at_of(session_blocks, achild.id) == models.ensure_utc(later)
-  assert await updated_at_of(session_blocks, amid.id) == archived_at
-  assert await updated_at_of(session_blocks, aroot.id) == root_at
+  assert await updated_at_of(session_blocks, amid.id) == amid_at
+  assert await updated_at_of(session_blocks, aroot.id) == aroot_at
+
+
+@pytest.mark.asyncio
+async def test_a_user_message_lift_is_stored_before_its_tree_changed_broadcast(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The browser refetches the sidebar on a message's task_tree_changed broadcast,
+  so the target's stored updated_at is already the message time when it fires."""
+  _, session_blocks, tree = conftest.build_env(tmp_path)
+  root = await conftest.create_task(tree, parent=None, request_id="root", name="Root")
+  child = await conftest.create_task(tree, parent=root.id, request_id="child", name="Child")
+  when = (await updated_at_of(session_blocks, child.id) + datetime.timedelta(hours=1)).isoformat()
+  broadcasts: list[tuple[str, str | None, datetime.datetime]] = []
+
+  async def record_broadcast(session_id: str, event_type: str | None) -> None:
+    # Record only: the sink logs and swallows a broadcast failure, so an
+    # assertion here would never fail the test.
+    meta = await session_blocks.store.get_session(session_id)
+    broadcasts.append((session_id, event_type, meta.updated_at))
+
+  monkeypatch.setattr(session_blocks.events, "broadcast_task_tree_changed", record_broadcast)
+  await admit(tree, child.id, "my turn", timestamp=when)
+  assert broadcasts == [(child.id, ET.USER, models.ensure_utc(when))]
+
+
+@pytest.mark.asyncio
+async def test_a_messaged_child_lists_ahead_of_its_siblings_and_roots_keep_their_order(tmp_path: pathlib.Path) -> None:
+  """A user message moves only the row it was sent to: in the listing the
+  messaged child lists ahead of its sibling children, and the root rows keep
+  their relative order."""
+  _, session_blocks, tree = conftest.build_env(tmp_path)
+  r1 = await conftest.create_task(tree, parent=None, request_id="r1", name="R1")
+  r2 = await conftest.create_task(tree, parent=None, request_id="r2", name="R2")
+  c1 = await conftest.create_task(tree, parent=r1.id, request_id="c1", name="C1")
+  c2 = await conftest.create_task(tree, parent=r1.id, request_id="c2", name="C2")
+  c3 = await conftest.create_task(tree, parent=r1.id, request_id="c3", name="C3")
+  # Pin each sort key, oldest first, so the order comes from the test's times.
+  base = datetime.datetime(2026, 10, 1, tzinfo=datetime.timezone.utc)
+  for hours, node in enumerate([c1, c2, c3, r1, r2]):
+    await session_blocks.anchors.update_thinking_state(node.id, base + datetime.timedelta(hours=hours))
+  listing = await session_blocks.listing.list_sessions(status=models.SessionStatus.ACTIVE)
+  assert [r.id for r in listing] == [r2.id, r1.id, c3.id, c2.id, c1.id]
+
+  await admit(tree, c1.id, "my turn", timestamp=(base + datetime.timedelta(hours=10)).isoformat())
+  listing = await session_blocks.listing.list_sessions(status=models.SessionStatus.ACTIVE)
+  assert [r.id for r in listing] == [c1.id, r2.id, r1.id, c3.id, c2.id]
 
 
 @pytest.mark.asyncio

@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::io;
-use std::os::fd::{FromRawFd, OwnedFd};
+use std::os::fd::OwnedFd;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -1296,12 +1296,13 @@ fn pidfd_available() -> bool {
 fn open_pidfd(pid: i64) -> io::Result<OwnedFd> {
   #[cfg(target_os = "linux")]
   {
-    let pid = libc::pid_t::try_from(pid).map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
-    let raw_fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) as i32 };
-    if raw_fd < 0 {
-      return Err(io::Error::last_os_error());
+    let raw = libc::pid_t::try_from(pid).map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
+    if raw < 1 {
+      // The kernel answers EINVAL for a pid below 1. rustix's `Pid` asserts on a negative pid, so the check comes first.
+      return Err(io::Error::from_raw_os_error(libc::EINVAL));
     }
-    Ok(unsafe { OwnedFd::from_raw_fd(raw_fd) })
+    let pid = rustix::process::Pid::from_raw(raw).expect("a positive pid is a valid Pid");
+    rustix::process::pidfd_open(pid, rustix::process::PidfdFlags::empty()).map_err(io::Error::from)
   }
   #[cfg(not(target_os = "linux"))]
   {

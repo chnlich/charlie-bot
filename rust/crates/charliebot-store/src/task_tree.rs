@@ -2785,6 +2785,18 @@ pub(crate) mod tests {
   };
   use crate::streaming::{SIDEBAR_CHANNEL, Subscription};
 
+  /// `_MD_HEADING_RE = ^\s{0,3}#{1,6}(\s|$)` (`src/runtime/task_sessions.py:1973-1990`): up to three
+  /// leading spaces, one to six marks, then whitespace or the line's end.
+  #[test]
+  fn markdown_heading_lines_match_the_python_pattern() {
+    for line in ["# Title", "## Sub", "###### six", "#", "  ## indented", "   # three"] {
+      assert!(is_markdown_heading(line), "{line:?} is a heading");
+    }
+    for line in ["####### seven", "    # four spaces", "#no space", "  #x", "plain content", ""] {
+      assert!(!is_markdown_heading(line), "{line:?} is not a heading");
+    }
+  }
+
   struct TestAccountLabels;
 
   impl AccountLabelKeeper for TestAccountLabels {

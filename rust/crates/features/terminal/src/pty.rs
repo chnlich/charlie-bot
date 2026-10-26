@@ -1,6 +1,6 @@
 use std::ffi::{CString, OsStr, OsString};
 use std::io::{self, Read, Seek, SeekFrom};
-use std::os::fd::{AsRawFd, RawFd};
+use std::os::fd::{AsRawFd, BorrowedFd, IntoRawFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -10,10 +10,18 @@ use std::time::Duration;
 use axum::extract::ws::{Message, WebSocket};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
+use nix::errno::Errno;
+use nix::fcntl::{FcntlArg, OFlag, fcntl};
+use nix::pty::{ForkptyResult, Winsize, forkpty};
+use nix::sys::signal::{Signal, kill};
+use nix::sys::wait::waitpid;
+use nix::unistd::{Pid, close};
 use serde_json::{Value, json};
 use tokio::io::unix::AsyncFd;
 use tokio::process::Command;
 use tokio::sync::mpsc::{self, UnboundedSender};
+
+nix::ioctl_write_ptr_bad!(pty_set_winsize, libc::TIOCSWINSZ, Winsize);
 
 pub(super) const PTY_EXIT: &str = "pty_exit";
 
@@ -173,7 +181,7 @@ enum ResizeFailure {
 
 pub(super) struct PtyAttachment {
   session_id: String,
-  pid: libc::pid_t,
+  pid: Option<Pid>,
   fd: RawFd,
   closed: bool,
 }
@@ -203,32 +211,28 @@ impl PtyAttachment {
     let argv_ptrs = argv.iter().map(|arg| arg.as_ptr()).chain(std::iter::once(std::ptr::null())).collect::<Vec<_>>();
     let env_ptrs = env.iter().map(|item| item.as_ptr()).chain(std::iter::once(std::ptr::null())).collect::<Vec<_>>();
 
-    let mut attachment = PtyAttachment { session_id: session_id.to_string(), pid: -1, fd: -1, closed: false };
-    let pid = unsafe { libc::forkpty(&mut attachment.fd, std::ptr::null_mut(), std::ptr::null(), std::ptr::null()) };
-    if pid < 0 {
-      return Err(python_os_error(&io::Error::last_os_error(), None));
-    }
-    if pid == 0 {
-      unsafe {
+    let mut attachment = PtyAttachment { session_id: session_id.to_string(), pid: None, fd: -1, closed: false };
+    match unsafe { forkpty(None, None) }.map_err(|error| python_os_error(&io::Error::from(error), None))? {
+      ForkptyResult::Child => unsafe {
         libc::execve(path.as_ptr(), argv_ptrs.as_ptr(), env_ptrs.as_ptr());
         let error_number = *libc::__errno_location();
         let description = std::ffi::CStr::from_ptr(libc::strerror(error_number)).to_string_lossy();
         let error = format!("tmux exec failed: [Errno {error_number}] {description}: '{}'\n", binary.display());
         libc::write(libc::STDERR_FILENO, error.as_ptr().cast(), error.len());
         libc::_exit(1);
+      },
+      ForkptyResult::Parent { child, master } => {
+        attachment.pid = Some(child);
+        attachment.fd = master.into_raw_fd();
       }
     }
-
-    attachment.pid = pid;
     attachment.set_winsize(INITIAL_ROWS, INITIAL_COLS).map_err(resize_failure_text)?;
-    let flags = unsafe { libc::fcntl(attachment.fd, libc::F_GETFL) };
-    if flags < 0 {
-      return Err(python_os_error(&io::Error::last_os_error(), None));
-    }
-    if unsafe { libc::fcntl(attachment.fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
-      return Err(python_os_error(&io::Error::last_os_error(), None));
-    }
-    tracing::info!(session_id = %attachment.session_id, pid = attachment.pid, fd = attachment.fd, "tui_pty_spawned");
+    let fd = unsafe { BorrowedFd::borrow_raw(attachment.fd) };
+    let flags = fcntl(fd, FcntlArg::F_GETFL).map_err(|error| python_os_error(&io::Error::from(error), None))?;
+    let flags = OFlag::from_bits_truncate(flags) | OFlag::O_NONBLOCK;
+    fcntl(fd, FcntlArg::F_SETFL(flags)).map_err(|error| python_os_error(&io::Error::from(error), None))?;
+    let pid = attachment.pid.expect("the parent PTY holds its child pid");
+    tracing::info!(session_id = %attachment.session_id, pid = pid.as_raw(), fd = attachment.fd, "tui_pty_spawned");
     Ok(attachment)
   }
 
@@ -255,10 +259,8 @@ impl PtyAttachment {
   fn set_winsize(&self, rows: i128, cols: i128) -> Result<(), ResizeFailure> {
     let rows = u16::try_from(rows).map_err(|_| ResizeFailure::PackedValue)?;
     let cols = u16::try_from(cols).map_err(|_| ResizeFailure::PackedValue)?;
-    let size = libc::winsize { ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0 };
-    if unsafe { libc::ioctl(self.fd, libc::TIOCSWINSZ, &size) } < 0 {
-      return Err(ResizeFailure::Io(io::Error::last_os_error()));
-    }
+    let size = Winsize { ws_row: rows, ws_col: cols, ws_xpixel: 0, ws_ypixel: 0 };
+    unsafe { pty_set_winsize(self.fd, &size) }.map_err(|error| ResizeFailure::Io(io::Error::from(error)))?;
     Ok(())
   }
 
@@ -269,34 +271,27 @@ impl PtyAttachment {
     self.closed = true;
     let mut first_error = None;
     if self.fd >= 0 {
-      if unsafe { libc::close(self.fd) } < 0 {
-        first_error = Some(io::Error::last_os_error());
+      if let Err(error) = close(self.fd) {
+        first_error = Some(io::Error::from(error));
       }
       self.fd = -1;
     }
-    if self.pid > 0 {
-      if unsafe { libc::kill(self.pid, libc::SIGTERM) } < 0 {
-        let error = io::Error::last_os_error();
-        if error.raw_os_error() != Some(libc::ESRCH) {
-          first_error.get_or_insert(error);
-        }
+    if let Some(pid) = self.pid.take() {
+      if let Err(error) = kill(pid, Signal::SIGTERM)
+        && error != Errno::ESRCH
+      {
+        first_error.get_or_insert_with(|| io::Error::from(error));
       }
-      let mut status = 0;
       loop {
-        let waited = unsafe { libc::waitpid(self.pid, &mut status, 0) };
-        if waited == self.pid {
-          break;
+        match waitpid(pid, None) {
+          Ok(_) | Err(Errno::ECHILD) => break,
+          Err(Errno::EINTR) => continue,
+          Err(error) => {
+            first_error.get_or_insert_with(|| io::Error::from(error));
+            break;
+          }
         }
-        let error = io::Error::last_os_error();
-        if error.raw_os_error() == Some(libc::EINTR) {
-          continue;
-        }
-        if error.raw_os_error() != Some(libc::ECHILD) {
-          first_error.get_or_insert(error);
-        }
-        break;
       }
-      self.pid = -1;
     }
     match first_error {
       Some(error) => Err(error),

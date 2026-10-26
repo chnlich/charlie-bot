@@ -44,6 +44,9 @@ pub fn is_run_alive(
 #[cfg(test)]
 mod tests {
   use std::fs;
+  use std::process::Command;
+  use std::thread;
+  use std::time::{Duration, Instant};
 
   use super::*;
 
@@ -56,12 +59,29 @@ mod tests {
 
   #[test]
   fn pid_stat_fields_match_the_proc_file_text() {
-    let pid = std::process::id();
-    let text = fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
-    let fields: Vec<&str> = text.rsplit_once(')').unwrap().1.split_whitespace().collect();
-    let stat = read_pid_stat(pid).unwrap();
-    assert_eq!(stat.pid_start, fields[19]);
-    assert_eq!(stat.state, fields[0]);
+    let mut child = Command::new("sleep").arg("30").spawn().unwrap();
+    let pid = child.id();
+    let deadline = Instant::now() + Duration::from_secs(1);
+    let comparison = (|| -> Result<_, String> {
+      loop {
+        let text = fs::read_to_string(format!("/proc/{pid}/stat")).map_err(|error| error.to_string())?;
+        let fields: Vec<&str> = text.rsplit_once(')').ok_or("proc stat has no command delimiter")?.1
+          .split_whitespace().collect();
+        if fields.first() == Some(&"S") {
+          let stat = read_pid_stat(pid).ok_or("procfs did not read the sleeping child")?;
+          return Ok((fields[19].to_owned(), fields[0].to_owned(), stat));
+        }
+        if Instant::now() >= deadline {
+          return Err("sleep child did not enter the sleeping state".to_owned());
+        }
+        thread::sleep(Duration::from_millis(1));
+      }
+    })();
+    child.kill().unwrap();
+    child.wait().unwrap();
+    let (pid_start, state, stat) = comparison.unwrap();
+    assert_eq!(stat.pid_start, pid_start);
+    assert_eq!(stat.state, state);
   }
 
   #[test]

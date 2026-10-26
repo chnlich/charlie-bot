@@ -660,7 +660,7 @@ class TaskTreeManager:
     while stack:
       sid = stack.pop()
       if sid in seen:
-        raise task_errors.TaskConflictError([f"task relation cycle through {sid}"])
+        raise task_errors.task_relation_cycle(sid)
       seen.add(sid)
       out.append(sid)
       stack.extend(self._children_of(index, sid))
@@ -679,7 +679,7 @@ class TaskTreeManager:
     current = self._index_meta(index, session_id)
     while current.task_parent_id is not None:
       if current.task_parent_id in seen:
-        raise task_errors.TaskConflictError([f"task relation cycle through {current.task_parent_id}"])
+        raise task_errors.task_relation_cycle(current.task_parent_id)
       seen.add(current.task_parent_id)
       current = self._index_meta(index, current.task_parent_id)
       chain.append(current)
@@ -1017,7 +1017,7 @@ class TaskTreeManager:
         inherited = known
         break
       if current in seen or len(chain) > task_errors.ANCESTOR_HOP_LIMIT:
-        raise task_errors.TaskConflictError([f"task relation cycle through {current}"])
+        raise task_errors.task_relation_cycle(current)
       seen.add(current)
       meta = self._index_meta(index, current)
       chain.append((current, meta))

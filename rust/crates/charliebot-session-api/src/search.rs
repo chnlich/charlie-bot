@@ -258,10 +258,12 @@ fn scan_content(path: &Path, needle: &str, start: u64) -> io::Result<bool> {
 
 fn scan_ascii(file: &mut File, needle: &[u8]) -> io::Result<bool> {
   let overlap = needle.len().saturating_sub(1);
+  // memchr's memmem is the two-way search behind Python's `needle in window`
+  // (src/runtime/session_search.py:188-194), built once per scan over the folded windows.
+  let finder = memchr::memmem::Finder::new(needle);
   let mut tail = Vec::with_capacity(overlap);
   let mut chunk = vec![0_u8; SEARCH_CHUNK_SIZE];
   let mut window = Vec::with_capacity(SEARCH_CHUNK_SIZE + overlap);
-  let skip = ascii_skip_table(needle);
   loop {
     let count = file.read(&mut chunk)?;
     if count == 0 {
@@ -271,43 +273,12 @@ fn scan_ascii(file: &mut File, needle: &[u8]) -> io::Result<bool> {
     window.clear();
     window.extend_from_slice(&tail);
     window.extend_from_slice(&chunk[..count]);
-    if contains_ascii(&window, needle, &skip) {
+    if finder.find(&window).is_some() {
       return Ok(true);
     }
     tail.clear();
     tail.extend_from_slice(&window[window.len().saturating_sub(overlap)..]);
   }
-}
-
-fn ascii_skip_table(needle: &[u8]) -> [usize; 256] {
-  let mut skip = [needle.len(); 256];
-  for (index, byte) in needle.iter().take(needle.len().saturating_sub(1)).enumerate() {
-    skip[usize::from(*byte)] = needle.len() - index - 1;
-  }
-  skip
-}
-
-/// Boyer–Moore–Horspool search over already folded ASCII bytes, as Python's `needle in window` does in
-/// `src/runtime/session_search.py:188-194`.
-fn contains_ascii(haystack: &[u8], needle: &[u8], skip: &[usize; 256]) -> bool {
-  if needle.is_empty() {
-    return true;
-  }
-  let Some(last_start) = haystack.len().checked_sub(needle.len()) else {
-    return false;
-  };
-  let mut start = 0;
-  while start <= last_start {
-    let mut offset = needle.len();
-    while offset > 0 && haystack[start + offset - 1] == needle[offset - 1] {
-      offset -= 1;
-    }
-    if offset == 0 {
-      return true;
-    }
-    start += skip[usize::from(haystack[start + needle.len() - 1])];
-  }
-  false
 }
 
 fn scan_unicode(file: &mut File, needle: &str, replace_invalid: bool) -> io::Result<bool> {
@@ -390,9 +361,16 @@ mod tests {
     file.seek(SeekFrom::Start(0)).unwrap();
 
     assert!(super::scan_ascii(&mut file, b"boundary-needle").unwrap());
-    let skip = super::ascii_skip_table(b"ababaca");
-    assert!(super::contains_ascii(b"abcababacaa", b"ababaca", &skip));
-    assert!(!super::contains_ascii(b"ababab", b"ababaca", &skip));
+  }
+
+  #[test]
+  fn ascii_scan_reports_absence_and_a_match_at_the_first_byte() {
+    let mut file = tempfile::tempfile().unwrap();
+    file.write_all(b"needle at the start, then synthetic filler").unwrap();
+    file.seek(SeekFrom::Start(0)).unwrap();
+    assert!(super::scan_ascii(&mut file, b"needle at").unwrap());
+    file.seek(SeekFrom::Start(0)).unwrap();
+    assert!(!super::scan_ascii(&mut file, b"absent-needle").unwrap());
   }
 
   struct TestLabels;

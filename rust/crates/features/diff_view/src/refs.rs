@@ -7,6 +7,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use charliebot_core::paths;
+use walkdir::WalkDir;
 
 /// `(mtime_ns, size)` of one file. Python compares the nanosecond clock; a pair of seconds and nanoseconds compares
 /// the same way.
@@ -89,18 +90,17 @@ fn stat_or_skip(path: &Path, sig: &mut Signature) {
 /// `_walk_refs_dirs`: records `root` and every directory under it. Git publishes each ref by renaming a lockfile into
 /// its directory, which moves that directory's own stamp, so the directories carry every ref change.
 fn walk_refs_dirs(root: &Path, sig: &mut Signature) {
-  let mut stack = vec![root.to_path_buf()];
-  while let Some(current) = stack.pop() {
-    let Ok(metadata) = std::fs::metadata(&current) else {
+  for entry in WalkDir::new(root) {
+    let Ok(entry) = entry else {
       continue;
     };
-    sig.push((paths::display(&current), stamp(&metadata)));
-    let Ok(entries) = std::fs::read_dir(&current).and_then(|entries| entries.collect::<io::Result<Vec<_>>>()) else {
+    if !entry.file_type().is_dir() {
+      continue;
+    }
+    let Ok(metadata) = entry.metadata() else {
       continue;
     };
-    stack.extend(
-      entries.into_iter().filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir())).map(|entry| entry.path()),
-    );
+    sig.push((paths::display(entry.path()), stamp(&metadata)));
   }
 }
 

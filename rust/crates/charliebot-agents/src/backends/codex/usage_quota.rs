@@ -3,9 +3,10 @@
 //! credits, and the 24-hour and 7-day spend is priced from every recent rollout's per-request token counts. Nothing is
 //! written, and no network call is made.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fs::{self, File, Metadata};
 use std::io::{Read, Seek, SeekFrom};
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
 
@@ -15,6 +16,7 @@ use charliebot_core::timefmt::utc_now_iso;
 use charliebot_registry::usage::{PANEL_EXPIRED, PANEL_WINDOWS, QuotaAccount};
 use charliebot_store::metadata::UtcDateTime;
 use futures_util::future::BoxFuture;
+use lru::LruCache;
 use memchr::memchr;
 use serde_json::{Map, Value, json};
 use time::format_description::well_known::Rfc3339;
@@ -675,46 +677,38 @@ fn integer_field(map: &Map<String, Value>, key: &str) -> anyhow::Result<i64> {
 
 /// A bounded memo of per-file spend events, keyed by path and valid while the file's (mtime, size) stands.
 struct SpendMemo {
-  limit: usize,
-  tick: u64,
-  entries: HashMap<PathBuf, MemoEntry>,
+  entries: LruCache<PathBuf, MemoEntry>,
 }
 
 struct MemoEntry {
   signature: (i128, u64),
   events: Arc<Vec<SpendEvent>>,
-  used: u64,
 }
 
 impl SpendMemo {
   fn new(limit: usize) -> Self {
-    Self { limit, tick: 0, entries: HashMap::new() }
+    let capacity = NonZeroUsize::new(limit).expect("the spend memo limit is positive");
+    Self { entries: LruCache::new(capacity) }
   }
 
   /// The events stored for `path` under `signature`. A hit refreshes the entry's recency, as the Python memo does.
   fn fresh(&mut self, path: &Path, signature: (i128, u64)) -> Option<Arc<Vec<SpendEvent>>> {
-    self.tick += 1;
-    let tick = self.tick;
-    let entry = self.entries.get_mut(path)?;
-    entry.used = tick;
+    let entry = self.entries.get(path)?;
     (entry.signature == signature).then(|| Arc::clone(&entry.events))
   }
 
-  /// Stores `events` for `path` under `signature`, evicting the least recently used entries past the limit.
+  /// Stores `events` for `path` under `signature`; the cache evicts the least recently used entry past its limit.
   fn record(&mut self, path: PathBuf, signature: (i128, u64), events: Arc<Vec<SpendEvent>>) {
-    self.tick += 1;
-    self.entries.insert(path, MemoEntry { signature, events, used: self.tick });
-    while self.entries.len() > self.limit {
-      let Some(oldest) = self.entries.iter().min_by_key(|(_, entry)| entry.used).map(|(path, _)| path.clone()) else {
-        break;
-      };
-      self.entries.remove(&oldest);
-    }
+    self.entries.put(path, MemoEntry { signature, events });
   }
 
   /// Drops every entry whose path is not in `live`.
   fn retain(&mut self, live: &HashSet<PathBuf>) {
-    self.entries.retain(|path, _| live.contains(path));
+    let stale: Vec<PathBuf> =
+      self.entries.iter().filter(|(path, _)| !live.contains(*path)).map(|(path, _)| path.clone()).collect();
+    for path in stale {
+      self.entries.pop(&path);
+    }
   }
 }
 
@@ -744,5 +738,18 @@ mod tests {
     assert!(memo.fresh(Path::new("a"), (2, 1)).is_none());
     memo.record(PathBuf::from("b"), (1, 1), Arc::new(Vec::new()));
     assert!(memo.fresh(Path::new("a"), (1, 1)).is_none());
+  }
+
+  #[test]
+  fn a_spend_memo_hit_makes_its_entry_the_last_to_evict() {
+    let mut memo = SpendMemo::new(2);
+    memo.record(PathBuf::from("a"), (1, 1), Arc::new(Vec::new()));
+    memo.record(PathBuf::from("b"), (1, 1), Arc::new(Vec::new()));
+    assert!(memo.fresh(Path::new("a"), (1, 1)).is_some());
+
+    memo.record(PathBuf::from("c"), (1, 1), Arc::new(Vec::new()));
+
+    assert!(memo.fresh(Path::new("a"), (1, 1)).is_some());
+    assert!(memo.fresh(Path::new("b"), (1, 1)).is_none());
   }
 }

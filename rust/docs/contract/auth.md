@@ -116,22 +116,22 @@ Point 1 means: on a `require_caller` route, a cookie-authenticated browser reque
 
 | Route | Handler line |
 |---|---|
-| `POST /api/sessions/` | `src/runtime/api/sessions.py:407` |
-| `POST /api/sessions/{session_id}/fork` | `src/runtime/api/sessions.py:1215` |
-| `POST /api/sessions/{session_id}/elone` | `src/runtime/api/sessions.py:1256` |
-| `POST /api/sessions/{session_id}/archive` | `src/runtime/api/sessions.py:1396` |
-| `DELETE /api/sessions/{session_id}/permanent` | `src/runtime/api/sessions.py:1422` |
-| `POST /api/sessions/{session_id}/unarchive` | `src/runtime/api/sessions.py:1439` |
-| `PATCH /api/sessions/{session_id}` | `src/runtime/api/sessions.py:1496` |
-| `POST /api/sessions/{session_id}/retry` | `src/runtime/api/sessions.py:1715` |
-| `POST /api/sessions/{session_id}/task-inputs/acknowledge` | `src/runtime/api/sessions.py:1773` |
-| `POST /api/sessions/{session_id}/cancel` | `src/runtime/api/sessions.py:1804` |
-| `POST /api/sessions/{session_id}/runs/{run_id}/cancel` | `src/runtime/api/sessions.py:1841` |
+| `POST /api/sessions/` | `src/runtime/api/sessions.py:409` |
+| `POST /api/sessions/{session_id}/fork` | `src/runtime/api/sessions.py:1237` |
+| `POST /api/sessions/{session_id}/elone` | `src/runtime/api/sessions.py:1272` |
+| `POST /api/sessions/{session_id}/archive` | `src/runtime/api/sessions.py:1380` |
+| `DELETE /api/sessions/{session_id}/permanent` | `src/runtime/api/sessions.py:1406` |
+| `POST /api/sessions/{session_id}/unarchive` | `src/runtime/api/sessions.py:1423` |
+| `PATCH /api/sessions/{session_id}` | `src/runtime/api/sessions.py:1480` |
+| `POST /api/sessions/{session_id}/retry` | `src/runtime/api/sessions.py:1702` |
+| `POST /api/sessions/{session_id}/task-inputs/acknowledge` | `src/runtime/api/sessions.py:1760` |
+| `POST /api/sessions/{session_id}/cancel` | `src/runtime/api/sessions.py:1791` |
+| `POST /api/sessions/{session_id}/runs/{run_id}/cancel` | `src/runtime/api/sessions.py:1828` |
 | `POST /api/chat/{session_id}/message` | `src/runtime/api/chat.py:48` |
 | `POST /api/internal/delegate` | `src/runtime/api/internal.py:266` |
 | `POST /api/internal/session-message` | `src/runtime/api/internal.py:371` |
 | `POST /api/internal/slack/reply` | `src/features/slack/api.py:31` |
-| `POST /api/internal/discord/reply` | `src/features/discord/api.py:37` |
+| `POST /api/internal/discord/reply` | `src/features/discord/api.py:38` |
 | `POST /api/internal/web/reply` | `src/features/web_reply/api.py:72` |
 
 The per-route rules after identity resolution are in [sessions.md](sessions.md), [chat.md](chat.md) and [internal.md](internal.md).

@@ -1,4 +1,7 @@
+use std::num::NonZeroUsize;
 use std::sync::{Arc, LazyLock, Mutex, OnceLock};
+
+use lru::LruCache;
 
 use axum::Router;
 use axum::body::Body;
@@ -19,14 +22,20 @@ use crate::listing::{self, SessionsListMemos};
 use crate::{blocking_store, search, sidebar, tree, write_routes};
 
 static ACTIVE_MEMOS: LazyLock<SessionsListMemos> = LazyLock::new(SessionsListMemos::default);
-type StatusBodyCache = Mutex<Vec<(StatusKey, Vec<u8>)>>;
-type GzipBodyCache = Mutex<Vec<(Vec<u8>, Vec<u8>)>>;
+const STATUS_BODY_MEMO_LIMIT: usize = 4;
+
+type StatusBodyCache = Mutex<LruCache<StatusKey, Vec<u8>>>;
+type GzipBodyCache = Mutex<LruCache<Vec<u8>, Vec<u8>>>;
+
+fn gzip_body_memo(limit: usize) -> GzipBodyCache {
+  Mutex::new(LruCache::new(NonZeroUsize::new(limit).expect("the gzip memo limit is nonzero")))
+}
 
 static STATUS_BODY_MEMO: OnceLock<StatusBodyCache> = OnceLock::new();
-static STATUS_GZIP_MEMO: OnceLock<GzipBodyCache> = OnceLock::new();
-static SEARCH_GZIP_MEMO: OnceLock<GzipBodyCache> = OnceLock::new();
+static STATUS_GZIP_MEMO: LazyLock<GzipBodyCache> = LazyLock::new(|| gzip_body_memo(16));
+static SEARCH_GZIP_MEMO: LazyLock<GzipBodyCache> = LazyLock::new(|| gzip_body_memo(2));
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 struct StatusKey {
   ids: Vec<String>,
   generation: u64,
@@ -240,14 +249,14 @@ fn session_status_response(features: &FeatureContext, request: &Request<Body>) -
     } else {
       Vec::new()
     };
-    return gzip_response(request, body, &STATUS_GZIP_MEMO, 16);
+    return gzip_response(request, body, &STATUS_GZIP_MEMO);
   }
   let sessions = match fresh_sessions(features, &ids) {
     Ok(sessions) => sessions,
     Err(error) => return store_error(error),
   };
   if sessions.is_empty() {
-    return gzip_response(request, b"{}".to_vec(), &STATUS_GZIP_MEMO, 16);
+    return gzip_response(request, b"{}".to_vec(), &STATUS_GZIP_MEMO);
   }
   let derived =
     match sidebar::resolve_sidebar_state(&features.store, &features.registry, &sessions, true, true, true, force) {
@@ -293,7 +302,7 @@ fn session_status_response(features: &FeatureContext, request: &Request<Body>) -
   }
   let body = charliebot_compat::json::fast_json_bytes(&Value::Object(result));
   store_status_body(key, body.clone());
-  gzip_response(request, body, &STATUS_GZIP_MEMO, 16)
+  gzip_response(request, body, &STATUS_GZIP_MEMO)
 }
 
 async fn session_tree(State(features): State<Arc<FeatureContext>>, request: Request<Body>) -> Response {
@@ -344,7 +353,7 @@ async fn session_search(State(features): State<Arc<FeatureContext>>, request: Re
     values.push(value);
   }
   let body = charliebot_compat::json::fast_json_bytes(&Value::Array(values));
-  gzip_response(&request, body, &SEARCH_GZIP_MEMO, 2)
+  gzip_response(&request, body, &SEARCH_GZIP_MEMO)
 }
 
 fn apply_derived_fields(
@@ -424,31 +433,22 @@ pub(crate) fn store_error(error: charliebot_store::StoreError) -> Response {
 }
 
 fn get_status_body(key: &StatusKey) -> Option<Vec<u8>> {
-  let memo = STATUS_BODY_MEMO.get_or_init(|| Mutex::new(Vec::new()));
+  let memo = STATUS_BODY_MEMO.get_or_init(|| {
+    Mutex::new(LruCache::new(NonZeroUsize::new(STATUS_BODY_MEMO_LIMIT).expect("the status memo limit is nonzero")))
+  });
   let mut memo = memo.lock().expect("status body memo mutex is not poisoned");
-  let index = memo.iter().position(|(stored, _)| stored == key)?;
-  let entry = memo.remove(index);
-  let body = entry.1.clone();
-  memo.push(entry);
-  Some(body)
+  memo.get(key).cloned()
 }
 
 fn store_status_body(key: StatusKey, body: Vec<u8>) {
-  let memo = STATUS_BODY_MEMO.get_or_init(|| Mutex::new(Vec::new()));
+  let memo = STATUS_BODY_MEMO.get_or_init(|| {
+    Mutex::new(LruCache::new(NonZeroUsize::new(STATUS_BODY_MEMO_LIMIT).expect("the status memo limit is nonzero")))
+  });
   let mut memo = memo.lock().expect("status body memo mutex is not poisoned");
-  memo.retain(|(stored, _)| *stored != key);
-  memo.push((key, body));
-  while memo.len() > 4 {
-    memo.remove(0);
-  }
+  memo.put(key, body);
 }
 
-fn gzip_response(
-  request: &Request<Body>,
-  body: Vec<u8>,
-  memo: &'static OnceLock<GzipBodyCache>,
-  limit: usize,
-) -> Response {
+fn gzip_response(request: &Request<Body>, body: Vec<u8>, memo: &'static GzipBodyCache) -> Response {
   let wants_gzip = request
     .headers()
     .get(header::ACCEPT_ENCODING)
@@ -457,21 +457,15 @@ fn gzip_response(
   if !wants_gzip {
     return json_bytes_response(body, None);
   }
-  let cache = memo.get_or_init(|| Mutex::new(Vec::new()));
   let compressed = {
-    let mut cache = cache.lock().expect("gzip body memo mutex is not poisoned");
-    if let Some(index) = cache.iter().position(|(plain, _)| *plain == body) {
-      let entry = cache.remove(index);
-      let compressed = entry.1.clone();
-      cache.push(entry);
-      compressed
-    } else {
-      let compressed = charliebot_compat::compression::gzip_level_one(&body);
-      cache.push((body, compressed.clone()));
-      while cache.len() > limit {
-        cache.remove(0);
+    let mut cache = memo.lock().expect("gzip body memo mutex is not poisoned");
+    match cache.get(&body).cloned() {
+      Some(compressed) => compressed,
+      None => {
+        let compressed = charliebot_compat::compression::gzip_level_one(&body);
+        cache.put(body, compressed.clone());
+        compressed
       }
-      compressed
     }
   };
   json_bytes_response(compressed, Some("gzip"))

@@ -1,6 +1,6 @@
 //! Session listing projections shared by sidebar routes.
 
-use std::collections::VecDeque;
+use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 
 use axum::body::Body;
@@ -10,6 +10,7 @@ use charliebot_registry::Registry;
 use charliebot_store::metadata::{SessionMetadata, SessionStatus, TaskProfile, UtcDateTime};
 use charliebot_store::{Store, StoreResult};
 use http::HeaderValue;
+use lru::LruCache;
 use serde_json::{Map, Value, json};
 
 use crate::sidebar;
@@ -34,12 +35,22 @@ pub(crate) struct SidebarProjection {
   pub(crate) include_run_backend: bool,
 }
 
-#[derive(Default)]
 struct SessionsListMemoState {
   whole_body: Option<(Vec<RowInputs>, Vec<u8>)>,
-  gzip: VecDeque<(Vec<u8>, Vec<u8>)>,
+  gzip: LruCache<Vec<u8>, Vec<u8>>,
   #[cfg(test)]
   render_calls: usize,
+}
+
+impl Default for SessionsListMemoState {
+  fn default() -> Self {
+    Self {
+      whole_body: None,
+      gzip: LruCache::new(NonZeroUsize::new(GZIP_MEMO_LIMIT).expect("the gzip memo limit is nonzero")),
+      #[cfg(test)]
+      render_calls: 0,
+    }
+  }
 }
 
 /// What one sidebar row renders from: its metadata, its derived overlay, its busy mark, its run and display backends,
@@ -159,17 +170,11 @@ pub fn sessions_list_response(
       .and_then(|value| value.to_str().ok())
       .is_some_and(|value| value.contains("gzip"));
     if wants_gzip {
-      if let Some(index) = state.gzip.iter().position(|(plain, _)| *plain == body) {
-        let entry = state.gzip.remove(index).expect("the gzip memo position names an entry");
-        let compressed = entry.1.clone();
-        state.gzip.push_back(entry);
+      if let Some(compressed) = state.gzip.get(&body).cloned() {
         return json_bytes_response(compressed, true);
       }
       let compressed = charliebot_compat::compression::gzip_level_one(&body);
-      state.gzip.push_back((body, compressed.clone()));
-      while state.gzip.len() > GZIP_MEMO_LIMIT {
-        state.gzip.pop_front();
-      }
+      state.gzip.put(body, compressed.clone());
       return json_bytes_response(compressed, true);
     }
     body

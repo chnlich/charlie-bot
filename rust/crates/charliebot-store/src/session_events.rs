@@ -1,6 +1,8 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex as StdMutex};
 
+use lru::LruCache;
 use serde_json::{Map, Value, json};
 use tokio::sync::{Mutex, OwnedMutexGuard};
 
@@ -51,33 +53,27 @@ impl Default for SessionEventState {
   }
 }
 
-#[derive(Default)]
 struct ProjectionCache {
-  values: HashMap<String, Arc<MessageProjection>>,
-  order: VecDeque<String>,
+  values: LruCache<String, Arc<MessageProjection>>,
+}
+
+impl Default for ProjectionCache {
+  fn default() -> Self {
+    Self { values: LruCache::new(NonZeroUsize::new(PROJECTION_LRU_LIMIT).expect("the memo limit is nonzero")) }
+  }
 }
 
 impl ProjectionCache {
   fn get(&mut self, session_id: &str) -> Option<Arc<MessageProjection>> {
-    let value = self.values.get(session_id).cloned()?;
-    self.order.retain(|id| id != session_id);
-    self.order.push_back(session_id.to_string());
-    Some(value)
+    self.values.get(session_id).cloned()
   }
 
   fn store(&mut self, session_id: &str, projection: Arc<MessageProjection>) {
-    self.order.retain(|id| id != session_id);
-    self.order.push_back(session_id.to_string());
-    self.values.insert(session_id.to_string(), projection);
-    while self.order.len() > PROJECTION_LRU_LIMIT {
-      let oldest = self.order.pop_front().expect("projection cache order is non-empty");
-      self.values.remove(&oldest);
-    }
+    self.values.put(session_id.to_string(), projection);
   }
 
   fn remove(&mut self, session_id: &str) {
-    self.values.remove(session_id);
-    self.order.retain(|id| id != session_id);
+    self.values.pop(session_id);
   }
 }
 

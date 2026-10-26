@@ -1,7 +1,8 @@
 //! Read-only worker transcript projection over task-run event logs.
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
+use std::num::NonZeroUsize;
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::sync::{Arc, LazyLock, Mutex};
@@ -16,6 +17,7 @@ use charliebot_store::metadata::UtcDateTime;
 use charliebot_store::projection::MessageProjection;
 use charliebot_store::run_records::{HostBoot, RunKind, RunRecord};
 use charliebot_store::{SharedChatEvent, Store, StoreError, StoreResult};
+use lru::LruCache;
 use serde_json::{Value, json};
 
 const WORKER_PROJECTION_MEMO_LIMIT: usize = 32;
@@ -23,9 +25,13 @@ const FAILED_STATES: [&str; 3] = ["failed", "interrupted", "attention"];
 const SIGNALLABLE_STATES: [&str; 2] = ["running", "queued"];
 
 type Signature = Vec<Value>;
-type TranscriptMemo = Mutex<VecDeque<(String, Signature, Arc<TranscriptEntry>)>>;
+type TranscriptMemo = Mutex<LruCache<String, (Signature, Arc<TranscriptEntry>)>>;
 
-static WORKER_MEMO: LazyLock<TranscriptMemo> = LazyLock::new(|| Mutex::new(VecDeque::new()));
+static WORKER_MEMO: LazyLock<TranscriptMemo> = LazyLock::new(|| {
+  Mutex::new(LruCache::new(
+    NonZeroUsize::new(WORKER_PROJECTION_MEMO_LIMIT).expect("the worker transcript memo limit is nonzero"),
+  ))
+});
 
 /// The synthesized worker history and the values shared by transcript readers.
 pub struct TranscriptEntry {
@@ -44,22 +50,17 @@ pub fn load_worker_transcript(store: &Store, session_id: &str) -> StoreResult<Ar
   let task_state = store.task_state(session_id)?;
   {
     let mut memo = WORKER_MEMO.lock().expect("worker transcript memo mutex is not poisoned");
-    if let Some(index) = memo.iter().position(|(id, _, _)| id == session_id) {
-      let (id, cached_signature, cached) = memo.remove(index).expect("memo index names an entry");
+    if let Some((cached_signature, cached)) = memo.pop(session_id) {
+      // An entry whose run files changed stays memoized: only the rebuild below replaces it.
+      memo.put(session_id.to_string(), (cached_signature, Arc::clone(&cached)));
       if cached.rebuild_key == revision(&signature, &cached.states, &task_state)? {
-        memo.push_back((id, cached_signature, Arc::clone(&cached)));
         return Ok(cached);
       }
-      memo.push_back((id, cached_signature, cached));
     }
   }
   let entry = Arc::new(build_worker_transcript(store, session_id, signature)?);
   let mut memo = WORKER_MEMO.lock().expect("worker transcript memo mutex is not poisoned");
-  memo.retain(|(id, _, _)| id != session_id);
-  memo.push_back((session_id.to_string(), worker_signature(store, session_id)?, Arc::clone(&entry)));
-  while memo.len() > WORKER_PROJECTION_MEMO_LIMIT {
-    memo.pop_front();
-  }
+  memo.put(session_id.to_string(), (worker_signature(store, session_id)?, Arc::clone(&entry)));
   Ok(entry)
 }
 

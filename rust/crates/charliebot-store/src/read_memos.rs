@@ -1,8 +1,10 @@
 //! Bounded stat-signature memos for the store's disk read paths.
 
-use std::collections::{HashMap, VecDeque};
 use std::hash::Hash;
+use std::num::NonZeroUsize;
 use std::os::unix::fs::MetadataExt;
+
+use lru::LruCache;
 
 /// The Python memo signature shared by the NDJSON, archive, and trigger readers.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -20,53 +22,32 @@ impl FileSignature {
   }
 }
 
-/// A locked-caller LRU map with the same get-touch/store-evict rule as `src/infra/memo.py`.
+/// A locked-caller LRU map with the same get-touch/store-evict rule as `src/infra/memo.py`, which wraps
+/// `collections.OrderedDict`. `lru::LruCache` is that primitive in Rust.
 pub(crate) struct BoundedMemo<K, V> {
-  limit: usize,
-  entries: HashMap<K, (u64, V)>,
-  order: VecDeque<(K, u64)>,
-  next_order: u64,
+  entries: LruCache<K, V>,
 }
 
 impl<K, V> BoundedMemo<K, V>
 where
-  K: Clone + Eq + Hash,
+  K: Eq + Hash,
   V: Clone,
 {
   pub(crate) fn new(limit: usize) -> Self {
-    Self { limit, entries: HashMap::new(), order: VecDeque::new(), next_order: 0 }
+    Self { entries: LruCache::new(NonZeroUsize::new(limit).expect("a memo limit is nonzero")) }
   }
 
   pub(crate) fn get(&mut self, key: &K) -> Option<V> {
-    let order = self.next_order;
-    self.next_order = self.next_order.checked_add(1).expect("memo LRU order counter is exhausted");
-    let (stored_order, value) = self.entries.get_mut(key)?;
-    *stored_order = order;
-    let value = value.clone();
-    self.order.push_back((key.clone(), order));
-    self.compact_if_needed();
-    Some(value)
+    self.entries.get(key).cloned()
   }
 
   pub(crate) fn store(&mut self, key: K, value: V) {
-    let order = self.next_order;
-    self.next_order = self.next_order.checked_add(1).expect("memo LRU order counter is exhausted");
-    self.entries.insert(key.clone(), (order, value));
-    self.order.push_back((key, order));
-    while self.entries.len() > self.limit {
-      let (oldest, oldest_order) = self.order.pop_front().expect("bounded memo order is non-empty");
-      if self.entries.get(&oldest).is_some_and(|(order, _)| *order == oldest_order) {
-        self.entries.remove(&oldest);
-      }
-    }
-    self.compact_if_needed();
+    self.entries.put(key, value);
   }
 
-  fn compact_if_needed(&mut self) {
-    let threshold = self.limit.saturating_mul(4).max(64);
-    if self.order.len() > threshold {
-      self.order.retain(|(key, order)| self.entries.get(key).is_some_and(|(stored, _)| stored == order));
-    }
+  #[cfg(test)]
+  pub(crate) fn len(&self) -> usize {
+    self.entries.len()
   }
 }
 
@@ -113,7 +94,7 @@ mod tests {
       assert_eq!(memo.get(&"a"), Some(1));
       memo.store("c", 3);
     }
-    assert_eq!(memo.entries.len(), 2);
+    assert_eq!(memo.len(), 2);
     assert_eq!(memo.get(&"a"), Some(1));
   }
 }

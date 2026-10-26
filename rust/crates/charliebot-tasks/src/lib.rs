@@ -16,7 +16,7 @@ pub mod recovery;
 pub mod review;
 pub mod review_text;
 pub mod routes;
-mod run_support;
+pub mod run_support;
 pub mod session_anchors;
 pub mod spawner_backends;
 pub mod spawner_prompt;

@@ -64,6 +64,13 @@ REPLY_BUDGET_CHARS = 500
 # the CLI parser's --min-idle-days default and --help text share one number.
 MIN_IDLE_DAYS = 14
 
+# Page size, in messages, of one Discord thread read: the ``charliebot discord read --limit``
+# parser, its --help text and the discord/read request model share them, so the CLI precheck
+# cannot admit a page the endpoint refuses.
+DISCORD_READ_LIMIT_MIN = 1
+DISCORD_READ_LIMIT_MAX = 100
+DISCORD_READ_LIMIT_DEFAULT = 50
+
 AUTH_STATUS_PATH = "/api/auth/status"
 
 # The operator-facing local-timestamp spelling: the usage page's "as of" and "generated"

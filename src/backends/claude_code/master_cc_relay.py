@@ -320,7 +320,7 @@ async def prepare_relay(
         to_account=nxt.label,
         relays=relays)
   else:
-    raise ValueError(f"unknown launch kind {ctx.kind!r}")
+    raise backend_lifecycle.unknown_launch_kind(ctx.kind)
   context_tokens, _last = await ctx.context_state()
   if (ctx.kind == "turn" and claude_compaction.relay_compaction_wanted(cfg, option.model, context_tokens)):
     assert cc_session_id is not None

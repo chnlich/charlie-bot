@@ -76,7 +76,7 @@ def _launch_args(ctx: backend_lifecycle.LaunchContext, *, first_process: bool) -
     if first_process and ctx.preassigned_native_id and ctx.held_native_id is None:
       return {**args, "claude_session_id": ctx.preassigned_native_id}
     return args
-  raise ValueError(f"unknown launch kind {ctx.kind!r}")
+  raise backend_lifecycle.unknown_launch_kind(ctx.kind)
 
 
 class ClaudeCliLifecycle(backend_lifecycle.BackendLifecycle):
@@ -158,7 +158,7 @@ class ClaudeCodeLifecycle(ClaudeCliLifecycle):
       return await self._place_turn(ctx)
     if ctx.kind == "task":
       return self._place_task(ctx)
-    raise ValueError(f"unknown launch kind {ctx.kind!r}")
+    raise backend_lifecycle.unknown_launch_kind(ctx.kind)
 
   async def _place_turn(self, ctx: backend_lifecycle.LaunchContext) -> backend_lifecycle.Launch:
     await claude_idle_compaction.settle_for_turn(ctx.session_meta.id)

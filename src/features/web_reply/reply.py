@@ -50,7 +50,7 @@ _LATIN = re.compile(r"[A-Za-z]")
 # The rule file under prompts/ that a web session's manager turn carries.
 RULES_FILE = "web_reply.md"
 
-# The ask every reply reminder ends with, so the nudge and the combined reminder cannot drift: post the reply
+# The ask every reply reminder carries, so the nudge and the combined reminder cannot drift: post the reply
 # now, and keep an answer past ``REPLY_BUDGET_CHARS`` on a page first.
 REPLY_ASK_TEXT = (
     f"Post your answer as the web reply now. For an answer over {constants.REPLY_BUDGET_CHARS} characters, "

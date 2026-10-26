@@ -16,6 +16,7 @@ charliebot-store.workspace = true
 futures-util.workspace = true
 libc.workspace = true
 memchr = "2"
+memmap2.workspace = true
 mime_guess.workspace = true
 nix.workspace = true
 regex.workspace = true

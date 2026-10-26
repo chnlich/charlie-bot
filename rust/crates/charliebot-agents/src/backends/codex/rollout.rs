@@ -2,12 +2,13 @@
 //! per record into `<codex home>/sessions/**/rollout-*.jsonl`.
 
 use std::fs::{self, Metadata};
-use std::io::{self, Read, Seek, SeekFrom};
+use std::io;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
 use memchr::memrchr;
+use memmap2::Mmap;
 use serde_json::{Map, Value, json};
 
 use super::text::object_or_empty;
@@ -18,7 +19,6 @@ pub const SESSION_META: &str = "session_meta";
 pub const TURN_CONTEXT: &str = "turn_context";
 pub const EVENT_MSG: &str = "event_msg";
 pub const TOKEN_COUNT: &str = "token_count";
-const INITIAL_ROLLOUT_TAIL_BYTES: usize = 4096;
 
 /// The latest usage of one rollout: the context reading and the cumulative totals that price the session.
 #[derive(Clone, Debug)]
@@ -44,56 +44,33 @@ type UsageParts = (Value, Value, Option<Map<String, Value>>);
 
 /// The newest usage in one rollout, read backwards from its last line. `None` when no line carries a token count.
 pub fn extract_latest_rollout_usage(path: &Path) -> anyhow::Result<Option<RolloutUsage>> {
-  let mut file = fs::File::open(path).with_context(|| format!("opening rollout {}", path.display()))?;
-  extract_latest_rollout_usage_from(&mut file, path)
-}
-
-/// Scan backward in growing byte windows, as `src/infra/ndjson.py:404-468` does with an mmap and `rfind`.
-fn extract_latest_rollout_usage_from<R: Read + Seek>(
-  file: &mut R,
-  path: &Path,
-) -> anyhow::Result<Option<RolloutUsage>> {
-  let mut start = file.seek(SeekFrom::End(0)).with_context(|| format!("seeking rollout {}", path.display()))?;
-  let mut window = Vec::new();
-  let mut window_bytes = INITIAL_ROLLOUT_TAIL_BYTES;
+  let file = fs::File::open(path).with_context(|| format!("opening rollout {}", path.display()))?;
+  let size = file.metadata().with_context(|| format!("statting rollout {}", path.display()))?.len();
+  // An empty file has no mapping, and no line either, as Python's reader finds.
+  if size == 0 {
+    return Ok(None);
+  }
+  // SAFETY: Codex only appends to the rollout it writes, the same ground Python's read-only mapping of this file
+  // stands on; a truncating writer would fault this read as it faults that mapping.
+  let mapping = unsafe { Mmap::map(&file) }.with_context(|| format!("mapping rollout {}", path.display()))?;
   let mut usage: Option<UsageParts> = None;
   let mut model: Option<String> = None;
-  loop {
-    if start > 0 {
-      let next_start = start.saturating_sub(window_bytes as u64);
-      file.seek(SeekFrom::Start(next_start)).with_context(|| format!("seeking rollout {}", path.display()))?;
-      let mut preceding = vec![0; usize::try_from(start - next_start).expect("tail window fits usize")];
-      file.read_exact(&mut preceding).with_context(|| format!("reading rollout {}", path.display()))?;
-      preceding.extend_from_slice(&window);
-      window = preceding;
-      start = next_start;
-    }
-
-    let mut end = window.len();
-    while end > 0 {
-      let Some(newline) = memrchr(b'\n', &window[..end]) else {
-        if start == 0 {
-          inspect_rollout_line(&window[..end], path, &mut usage, &mut model)?;
-        }
+  let mut end = mapping.len();
+  while end > 0 {
+    let start = memrchr(b'\n', &mapping[..end]).map_or(0, |newline| newline + 1);
+    if start < end {
+      inspect_rollout_line(&mapping[start..end], path, &mut usage, &mut model)?;
+      if usage.is_some() && model.is_some() {
         break;
-      };
-      if newline + 1 < end {
-        inspect_rollout_line(&window[newline + 1..end], path, &mut usage, &mut model)?;
-        if usage.is_some() && model.is_some() {
-          return Ok(rollout_usage(usage, model));
-        }
       }
-      end = newline;
-    }
-    if usage.is_some() && model.is_some() {
-      return Ok(rollout_usage(usage, model));
     }
     if start == 0 {
-      return Ok(rollout_usage(usage, model));
+      break;
     }
-    window.truncate(if end < window.len() { end + 1 } else { end });
-    window_bytes = window_bytes.saturating_mul(2).max(INITIAL_ROLLOUT_TAIL_BYTES);
+    // The newline before this line ends the segment that precedes it.
+    end = start - 1;
   }
+  Ok(rollout_usage(usage, model))
 }
 
 fn inspect_rollout_line(
@@ -214,26 +191,6 @@ pub fn rollout_stem(name: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use std::io::Cursor;
-
-  struct CountingReader {
-    cursor: Cursor<Vec<u8>>,
-    bytes_read: usize,
-  }
-
-  impl Read for CountingReader {
-    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-      let count = self.cursor.read(buffer)?;
-      self.bytes_read += count;
-      Ok(count)
-    }
-  }
-
-  impl Seek for CountingReader {
-    fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
-      self.cursor.seek(position)
-    }
-  }
 
   #[test]
   fn latest_usage_reads_the_last_count_and_the_model_in_force() {
@@ -259,21 +216,32 @@ mod tests {
   }
 
   #[test]
-  fn latest_usage_reads_only_the_tail_needed_for_the_model_and_count() {
-    let filler = b"{}\n".repeat(1024 * 1024);
-    let tail = concat!(
-      "{\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-5.5\"}}\n",
-      "{\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"last_token_usage\":{\"input_tokens\":10},\"model_context_window\":1000}}}\n"
+  fn the_backward_walk_visits_the_newest_lines_and_stops_at_the_first_pair() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("rollout.jsonl");
+    let filler = "{\"type\":\"event_msg\"}\n".repeat(1000);
+    let text = format!(
+      "{filler}{}\n{}\n{}",
+      json!({"type": "turn_context", "payload": {"model": "gpt-5.5"}}),
+      json!({"type": "event_msg", "payload": {"type": "token_count", "info": {
+        "last_token_usage": {"input_tokens": 10}, "model_context_window": 1000}}}),
+      // A trailing fragment is one more line read backwards; this one is not JSON, so it is skipped.
+      "{\"type\":\"turn_context\",\"payload\":{\"model\":\"unfinished\""
     );
-    let mut contents = filler;
-    contents.extend_from_slice(tail.as_bytes());
-    let mut reader = CountingReader { cursor: Cursor::new(contents), bytes_read: 0 };
+    fs::write(&path, text).unwrap();
 
-    let usage = extract_latest_rollout_usage_from(&mut reader, Path::new("rollout.jsonl")).unwrap().unwrap();
+    let usage = extract_latest_rollout_usage(&path).unwrap().unwrap();
 
     assert_eq!(usage.context_tokens, json!(10));
     assert_eq!(usage.model, "gpt-5.5");
-    assert_eq!(reader.bytes_read, INITIAL_ROLLOUT_TAIL_BYTES);
+  }
+
+  #[test]
+  fn an_empty_rollout_has_no_usage() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("rollout.jsonl");
+    fs::write(&path, "").unwrap();
+    assert!(extract_latest_rollout_usage(&path).unwrap().is_none());
   }
 
   #[test]

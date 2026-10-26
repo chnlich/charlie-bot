@@ -251,29 +251,22 @@ class DiscordThreadAdapter(thread_entry.ThreadAdapter):
 
   async def read_thread(self, origin: metadata.DiscordOrigin,
                         cfg: config.CharlieBotConfig) -> list[thread_entry.ThreadMessage]:
-    """The thread's messages, paged oldest-first through the REST readback.
+    """The thread's messages, oldest-first through the REST readback.
 
-    Discord returns at most 100 messages per call, so the read pages from id
-    ``"0"`` (before every snowflake), continuing after the page's last id,
-    until a page comes back shorter than the limit. Discord reads return no
-    nonce, so keyed recovery uses bot authorship, content, and snowflake time.
+    Discord reads return no nonce, so keyed recovery uses bot authorship,
+    content, and snowflake time.
     """
     client = self._ensure_client()
-    messages: list[thread_entry.ThreadMessage] = []
-    after = "0"
-    while True:
-      page = await client.get_messages(origin.thread_id, after=after, limit=100)
-      messages.extend(
-          thread_entry.ThreadMessage(
-              m["id"],
-              m["author"]["id"],
-              m.get("content") or "",
-              created_at=discord_client.snowflake_datetime(m["id"]),
-              is_bot=bool(m["author"].get("bot")),
-              eligible=eligible_message(m, cfg.discord.allowed_users)) for m in page)
-      if len(page) < 100:
-        return messages
-      after = page[-1]["id"]
+    return [
+        thread_entry.ThreadMessage(
+            m["id"],
+            m["author"]["id"],
+            m.get("content") or "",
+            created_at=discord_client.snowflake_datetime(m["id"]),
+            is_bot=bool(m["author"].get("bot")),
+            eligible=eligible_message(m, cfg.discord.allowed_users))
+        for m in await discord_client.read_all_messages(client, origin.thread_id)
+    ]
 
   async def find_own_post_by_key(
       self,

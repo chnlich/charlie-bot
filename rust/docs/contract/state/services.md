@@ -1,6 +1,6 @@
 # Server process: startup, lifespan, services, session cgroups
 
-Baseline: the Python tree at `085f024a5`. Entry point: `server.py`. Paths use `<home>` and `/home/<user>` as in
+Baseline: the Python tree at `4521a51b2`. Entry point: `server.py`. Paths use `<home>` and `/home/<user>` as in
 `files.md`. **UNVERIFIED** marks a statement not confirmed from source, with the reason.
 
 ## 1. Before the event loop (`server.py::main`)
@@ -32,7 +32,7 @@ Logs go to stdout and stderr only; the server writes no log file. `scripts/start
 | 2 | Home writer fence: `home_writer_fence.acquire_home_writer_fence(home, purpose="server startup")` | creates `<home>/state/home_writer.lock` (flock `LOCK_EX\|LOCK_NB`) and writes `<home>/state/writer_identity.json` | `HomeWriterActiveError` logs `server_startup_refused_home_writer_fence` and re-raises; startup fails |
 | 3 | `buildinfo.init_build_info()` | runs `git rev-parse --short HEAD` in the repo root (sha `"unknown"` on failure) and records the UTC start time; served by `GET /api/internal/version` | never raises |
 | 4 | `await init_seed.init_charliebot_home()` | mkdirs `<home>`, `sessions/`, `config.d/`; seeds `config.yaml` and `credentials.yaml` when missing (`files.md` 5.1); logs `charliebot_home_ready` | raises |
-| 5 | `process.log_session_cgroup_startup(memory, swap, tasks)` then `process.sweep_stale_session_cgroups(cfg.sessions_dir)` | logs whether session cgroups are on; removes every **empty** `charliebot-sess-*` directory for this home's sessions from the agents, repair and retired app slices (section 4) | an unavailable slice is logged; a failure to read this home's `sessions/` directory raises |
+| 5 | `process.log_session_cgroup_startup(memory, swap, tasks)` then `process.sweep_stale_session_cgroups(cfg.sessions_dir)` | logs whether session cgroups are on; removes every **empty** `charliebot-sess-*` directory for this home's sessions from the agents' and retired app slices (section 4) | an unavailable slice is logged; a failure to read this home's `sessions/` directory raises |
 | 6 | `app.state.recovery_task = create_task(_run_task_recovery(cfg, task_manager))` | crash recovery (section 3), concurrent with step 7 | logged as `task_tree_recovery_failed`; startup continues |
 | 7 | Start `early` services in registration order (`usage_tally`) | section 5 | an exception from `start_service` fails startup |
 | 8 | `await app.state.recovery_task` | waits until recovery ends, so no scheduler fire or recovered trigger races a recorded run | |
@@ -83,17 +83,17 @@ The liveness rule and stable ids that make this idempotent are in `files.md` sec
 
 ## 4. Session cgroups (`src/infra/process.py`)
 
-- Slices: `charliebot-agents.slice` (the agents' share) and `charliebot-repair.slice` (the repair share), both under `/sys/fs/cgroup/user.slice/user-<uid>.slice/user@<uid>.service/charliebot.slice/` — systemd nests `a-b.slice` inside `a.slice`, and `user_slice_dir` spells that nesting (`process.py:99-112`). It requires cgroup v2 with systemd user delegation. `scripts/systemd/` holds the unit files; `scripts/setup.sh` installs them and starts both slices, and `scripts/start-server.sh` asserts both slices against their unit files before the server starts (`CGROUP_V2_AGENTS_SLICE`, `CGROUP_V2_REPAIR_SLICE`, `process.py:111-112`).
+- Slice: `charliebot-agents.slice`, the one agents' share, under `/sys/fs/cgroup/user.slice/user-<uid>.slice/user@<uid>.service/charliebot.slice/` — systemd nests `a-b.slice` inside `a.slice`, and `user_slice_dir` spells that nesting (`process.py:97`). It requires cgroup v2 with systemd user delegation. Its unit `scripts/systemd/charliebot-agents.slice` sets `MemoryMax=80%` of host memory and `MemorySwapMax=0`, with no `MemoryHigh`. `scripts/systemd/` holds the unit files; `scripts/setup.sh` installs the agents' slice and starts it, and retires a stale `charliebot-repair.slice` unit by disable and removal, never by stop. `scripts/start-server.sh --preflight` and every start assert the agents' slice against its unit file before the server starts: `MemoryMax` as bytes (a percentage rounds down to whole 4096-byte pages, `_percent_bytes`) and `MemorySwapMax` 0 (`CGROUP_V2_AGENTS_SLICE`, `process.py:109`).
 - The retired `app.slice` at the same base gets no new directories. The startup sweep still clears this home's empty leftovers in it.
-- Slice choice: each spawn resolves the session's `resource_class` (`src/runtime/resource_class.py`): the nearest `repair` mark on the task-parent chain, else `agent`. `repair` goes to the repair slice and `agent` to the agents' slice (`session_cgroup_slice`, `process.py:136`).
-- OOM priority: the child writes its slice's `oom_score_adj` to `/proc/self/oom_score_adj` before exec, `agent` 500 and `repair` 100 (`SESSION_CGROUP_OOM_SCORE_ADJ`, `process.py:125`; the write at `process.py:255-274`, the caller at `:364`). The server keeps 0. Opencode tool shells get the value through `CHARLIEBOT_SESSION_OOM_SCORE_ADJ` in `src/backends/opencode/cgroup_join.sh`.
-- Directory per session: `charliebot-sess-<first 8 chars of the session id>` under the slice of its class, created lazily by `ensure_session_cgroup(session_id, resource_class, ...)` on the first spawn of that session. Each later spawn rewrites the limits from the current config:
+- No slice choice: every session cgroup sits under the agents' slice (`ensure_session_cgroup`, `process.py:142`). The repair mark and its resolver (`src/runtime/resource_class.py`) are gone, so no spawn resolves a class. `session_cgroup_slices()` (`process.py:132`) lists the agents' slice and the retired `app.slice` only.
+- OOM priority: the child writes `SESSION_CGROUP_OOM_SCORE_ADJ`, a constant 500 for every agent process (`process.py:121`), to `/proc/self/oom_score_adj` before exec (the write at `process.py:246-256`, the caller at `:345`). The server keeps 0. Opencode tool shells get the value through `CHARLIEBOT_SESSION_OOM_SCORE_ADJ` in `src/backends/opencode/cgroup_join.sh`.
+- Directory per session: `charliebot-sess-<first 8 chars of the session id>` under the agents' slice, created lazily by `ensure_session_cgroup(session_id, memory_max_mb, swap_max_mb, tasks_max)` on the first spawn of that session. Each later spawn rewrites the limits from the current config:
   - `memory.max` = `session_memory_max_mb * 1024 * 1024`
   - `memory.swap.max` = `session_swap_max_mb * 1024 * 1024`
   - `pids.max` = `session_tasks_max`, or `max` when it is 0
 - `session_memory_max_mb: 0` disables the whole feature: no directory, no task cap.
 - Before the first directory, `ensure_session_cgroup` writes `+memory +pids` to the slice's `cgroup.subtree_control` (`process.py:173-179`): systemd enables a slice's controllers for the units inside it only, and a session cgroup is no unit. An `OSError` there raises `SessionCgroupUnavailableError` too.
-- A missing or unwritable slice raises `SessionCgroupUnavailableError` and no longer degrades to "no cgroup" (`ensure_session_cgroup`). UNVERIFIED: that the spawn then fails was read from the code and not probed. Any other `OSError` on create or write raises too. `session_cgroup_created` carries `resource_class`.
+- A missing or unwritable slice raises `SessionCgroupUnavailableError` and no longer degrades to "no cgroup" (`ensure_session_cgroup`). UNVERIFIED: that the spawn then fails was read from the code and not probed. Any other `OSError` on create or write raises too. `session_cgroup_created` carries the path and the three limits.
 - Joining:
   - raw-log spawns (no preexec, so the vfork fast path holds) write the child pid into `<cgroup>/cgroup.procs` from
     the parent right after exec (`AgentBackend._apply_turn_tree_limits`), together with a nice raise of 10;

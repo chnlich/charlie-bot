@@ -1,6 +1,6 @@
 # Persisted state: every file the Python server reads or writes
 
-Baseline: the Python tree at `085f024a5` on `rust-backend`. A Rust server that shares a `CHARLIEBOT_HOME` with
+Baseline: the Python tree at `4521a51b2` on `rust-backend`. A Rust server that shares a `CHARLIEBOT_HOME` with
 this baseline must read every file below as the baseline writes it and must write it so the baseline reads it
 back. Paths use `<home>` for the resolved `CHARLIEBOT_HOME`, `<sid>` for a session id, `<run>` for a run id and
 `/home/<user>` for the operator's home directory. Module paths are repo-relative. A statement marked
@@ -398,7 +398,7 @@ The server does not create a speech-model directory. Python removed the local sp
 ### 6.1 `sessions/<sid>/metadata.json` (session)
 
 - Model: `src/infra/models.py::SessionMetadata`, `extra="allow"`, `schema_version: Literal[2]`.
-- Field `resource_class: "agent" | "repair"`, default `"agent"` (`src/infra/models.py:402`). `PUT /api/sessions/{sid}/resource-class` is its only writer. Every save writes the field, and a file that lacks it reads as `agent` (`src/runtime/resource_class.py`, `meta.get("resource_class", "agent")`).
+- No `resource_class` field. The repair mark and its `PUT /api/sessions/{sid}/resource-class` writer are removed (`637df0572`), so no save writes the key. A file written before the removal keeps its `resource_class` key as an extra, because `SessionMetadata` allows extra keys (`src/infra/models.py:356`); nothing reads it.
 - Writer: `src/runtime/session_store.py`. It writes ATOMIC with
   `model_dump_json(indent=2, exclude=TRANSIENT_METADATA_FIELDS)` under a per-session asyncio lock. When a write
   does not own the anchor fields, `cc_session_id` and `native_backend` are re-read from disk first, so a stale
@@ -626,7 +626,6 @@ instead.
 | Path | Written by | What |
 | --- | --- | --- |
 | `/sys/fs/cgroup/user.slice/user-<uid>.slice/user@<uid>.service/charliebot.slice/charliebot-agents.slice/charliebot-sess-<sid[:8]>/` | `src/infra/process.py` | agent session cgroups; see `services.md` |
-| `/sys/fs/cgroup/user.slice/user-<uid>.slice/user@<uid>.service/charliebot.slice/charliebot-repair.slice/charliebot-sess-<sid[:8]>/` | `src/infra/process.py` | repair session cgroups; see `services.md` |
 | `/sys/fs/cgroup/user.slice/user-<uid>.slice/user@<uid>.service/app.slice/charliebot-sess-<sid[:8]>/` | `src/infra/process.py` | retired session cgroups that the startup sweep may remove; see `services.md` |
 | `<paths.scratch_dir>/<top-level entry>` | `src/features/disk_sweep/sweep.py` | eligible scratch directories are removed after 14 quiet days; paths in use are skipped |
 | `<login dir>/.credentials.json` (`/home/<user>/.claude` or each `accounts.claude[].config_dir`) | `src/backends/claude_code/usage_quota.py` (from the `ext_usage` service) | rewritten ATOMIC-JSON `indent=2, private=True` when an OAuth token refresh succeeds |

@@ -13,13 +13,32 @@ use memmap2::Mmap;
 /// `rename`, so a reader sees the old content or the new, never a partial write. The sibling is
 /// removed when any step before the swap fails.
 pub fn atomic_write_text(path: &Path, text: &str) -> std::io::Result<()> {
+  write_sibling_then_rename(path, text, false)
+}
+
+/// [`atomic_write_text`] with an fsync of the sibling before the swap. A rename over a fresh file does not force its
+/// data to disk on ext4 (auto_da_alloc covers only a rename that replaces an existing file), so the file can read back
+/// empty after a power loss unless the sync comes first.
+pub fn atomic_write_text_synced(path: &Path, text: &str) -> std::io::Result<()> {
+  write_sibling_then_rename(path, text, true)
+}
+
+fn write_sibling_then_rename(path: &Path, text: &str, sync: bool) -> std::io::Result<()> {
   let name = path.file_name().expect("an atomic write target names a file").to_string_lossy();
   let temporary = path.with_file_name(format!(".{name}.{}.tmp", uuid::Uuid::new_v4().simple()));
   let result = (|| {
     let mut file = std::fs::File::create(&temporary)?;
     file.write_all(text.as_bytes())?;
+    if sync {
+      file.sync_all()?;
+      synced_write_step("sync");
+    }
     drop(file);
-    std::fs::rename(&temporary, path)
+    std::fs::rename(&temporary, path)?;
+    if sync {
+      synced_write_step("rename");
+    }
+    Ok(())
   })();
   if result.is_err() {
     // The write already failed; a leftover sibling only matters if it exists.
@@ -31,6 +50,21 @@ pub fn atomic_write_text(path: &Path, text: &str) -> std::io::Result<()> {
   }
   result
 }
+
+#[cfg(feature = "test-support")]
+thread_local! {
+  /// The steps of this thread's synced writes, in order: `sync` for the sibling's fsync, `rename` for the swap. A test
+  /// reads it to check that the fsync comes before the swap.
+  pub static SYNCED_WRITE_STEPS: std::cell::RefCell<Vec<&'static str>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+#[cfg(feature = "test-support")]
+fn synced_write_step(step: &'static str) {
+  SYNCED_WRITE_STEPS.with(|steps| steps.borrow_mut().push(step));
+}
+
+#[cfg(not(feature = "test-support"))]
+fn synced_write_step(_step: &'static str) {}
 
 /// Stream `write`'s bytes into `path` through a uniquely named sibling, swapped in by `rename` as
 /// [`atomic_write_text`] does. The payload never has to exist as one buffer, and a failing `write` leaves the old

@@ -684,8 +684,7 @@ class TaskTreeManager:
       current = self._index_meta(index, current.task_parent_id)
       chain.append(current)
       if len(chain) > task_errors.ANCESTOR_HOP_LIMIT:
-        raise task_errors.TaskConflictError(
-            [f"ancestor chain of {session_id} exceeds {task_errors.ANCESTOR_HOP_LIMIT} hops"])
+        raise task_errors.ancestor_chain_too_long(session_id, task_errors.ANCESTOR_HOP_LIMIT)
     return chain
 
   async def ancestor_ids(self, session_id: str) -> list[str]:

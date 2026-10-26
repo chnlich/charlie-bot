@@ -1675,8 +1675,7 @@ class TaskCompletionManager:
       seen.add(current)
       current = meta.task_parent_id
       if len(chain) > task_errors.RESTORE_CHAIN_HOP_LIMIT:
-        raise task_errors.TaskConflictError(
-            [f"ancestor chain of {session_id} exceeds {task_errors.RESTORE_CHAIN_HOP_LIMIT} hops"])
+        raise task_errors.ancestor_chain_too_long(session_id, task_errors.RESTORE_CHAIN_HOP_LIMIT)
     if not chain:
       return [], []
     restored: list[str] = []

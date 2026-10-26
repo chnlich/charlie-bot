@@ -19,6 +19,7 @@ use axum::http::request::Parts;
 use axum::response::Response;
 use charliebot_compat::{jinja, responses};
 use charliebot_core::{git, pyfmt};
+use jwalk::{Parallelism, WalkDir};
 use minijinja::{Environment, Error, ErrorKind, Value};
 use serde_json::json;
 use sha1::{Digest, Sha1};
@@ -222,6 +223,15 @@ fn request_context(request: &Parts) -> serde_json::Value {
   json!({"method": request.method.as_str(), "path": request.uri.path(), "query": request.uri.query().unwrap_or("")})
 }
 
+/// A walk error for a symlink that does not resolve. Python's `os.DirEntry.is_dir` and `is_file` follow symlinks and
+/// answer False for a dangling one, so the static walk skips it.
+fn is_dangling_link(error: &jwalk::Error) -> bool {
+  error.io_error().is_some_and(|error| error.kind() == io::ErrorKind::NotFound)
+    && error.path().is_some_and(Path::is_symlink)
+}
+
+/// The static trees under `directory`, following symlinked directories, with each file's `(rel, mtime, size)` and
+/// path. `rel` is `prefix` plus the file's path under `directory`.
 fn walk_static_tree(
   directory: &Path,
   prefix: &str,
@@ -229,21 +239,24 @@ fn walk_static_tree(
   paths: &mut HashMap<String, PathBuf>,
 ) -> io::Result<()> {
   use std::os::unix::fs::MetadataExt;
-  for entry in std::fs::read_dir(directory)? {
-    let entry = entry?;
-    let name = entry.file_name().into_string().map_err(|name| {
-      io::Error::new(io::ErrorKind::InvalidData, format!("static file name is not UTF-8: {}", name.to_string_lossy()))
-    })?;
-    let rel = format!("{prefix}{name}");
-    // os.DirEntry.is_dir/is_file follow symlinks and answer False for a dangling one.
-    let metadata = match std::fs::metadata(entry.path()) {
-      Ok(metadata) => metadata,
-      Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
-      Err(error) => return Err(error),
+  for entry in
+    WalkDir::new(directory).min_depth(1).follow_links(true).skip_hidden(false).parallelism(Parallelism::Serial)
+  {
+    let entry = match entry {
+      Ok(entry) => entry,
+      Err(error) if is_dangling_link(&error) => continue,
+      Err(error) => return Err(error.into()),
     };
-    if metadata.is_dir() {
-      walk_static_tree(&entry.path(), &format!("{rel}/"), pairs, paths)?;
-    } else if metadata.is_file() {
+    let relative = entry.path().strip_prefix(directory).expect("a walk yields paths under its root").to_path_buf();
+    let rel = relative.to_str().ok_or_else(|| {
+      io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!("static file name is not UTF-8: {}", relative.to_string_lossy()),
+      )
+    })?;
+    let rel = format!("{prefix}{rel}");
+    let metadata = entry.metadata()?;
+    if metadata.is_file() {
       let mtime_ns = metadata.mtime() * 1_000_000_000 + metadata.mtime_nsec();
       pairs.push((rel.clone(), mtime_ns, metadata.size()));
       paths.insert(rel, entry.path());
@@ -257,7 +270,7 @@ fn assert_unique_template_names(directories: &[PathBuf]) -> Result<(), String> {
   let mut holder: HashMap<String, &Path> = HashMap::new();
   for directory in directories {
     let mut names = Vec::new();
-    collect_html_names(directory, "", &mut names);
+    collect_html_names(directory, &mut names);
     names.sort();
     for name in names {
       if let Some(first) = holder.get(&name) {
@@ -274,19 +287,23 @@ fn assert_unique_template_names(directories: &[PathBuf]) -> Result<(), String> {
   Ok(())
 }
 
-/// The `*.html` names under `directory` as `Path.rglob` finds them: symlinked directories are not entered.
-fn collect_html_names(directory: &Path, prefix: &str, names: &mut Vec<String>) {
-  let Ok(entries) = std::fs::read_dir(directory) else {
-    return;
-  };
-  for entry in entries.flatten() {
-    let name = entry.file_name().to_string_lossy().into_owned();
-    let rel = format!("{prefix}{name}");
+/// The `*.html` names under `directory` as `Path.rglob` finds them: symlinked directories are not entered, and an
+/// unreadable entry is skipped as `rglob` skips it.
+fn collect_html_names(directory: &Path, names: &mut Vec<String>) {
+  for entry in
+    WalkDir::new(directory).min_depth(1).follow_links(false).skip_hidden(false).parallelism(Parallelism::Serial)
+  {
+    let entry = match entry {
+      Ok(entry) => entry,
+      Err(error) => {
+        tracing::debug!(error = %error, "template_name_walk_skipped");
+        continue;
+      }
+    };
+    let relative = entry.path().strip_prefix(directory).expect("a walk yields paths under its root").to_path_buf();
+    let rel = relative.to_string_lossy().into_owned();
     if rel.ends_with(".html") {
-      names.push(rel.clone());
-    }
-    if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
-      collect_html_names(&entry.path(), &format!("{rel}/"), names);
+      names.push(rel);
     }
   }
 }
@@ -376,7 +393,7 @@ mod tests {
     fs::write(pages.join("notes.txt"), "").unwrap();
     std::os::unix::fs::symlink(pages.join("nested"), pages.join("linked")).unwrap();
     let mut names = Vec::new();
-    collect_html_names(&pages, "", &mut names);
+    collect_html_names(&pages, &mut names);
     names.sort();
     assert_eq!(names, ["dir.html", "index.html", "nested/deep.html"]);
   }

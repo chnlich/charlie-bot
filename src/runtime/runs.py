@@ -509,6 +509,11 @@ def run_not_found_in_task_text(run_id: str, session_id: str) -> str:
   return f"run {run_id} not found in task {session_id}"
 
 
+def run_already_finished_text(run_id: str) -> str:
+  """The refusal sentence for a Run whose terminal fact is already recorded (API: 409 detail)."""
+  return f"run {run_id} already finished; it claims no new inputs"
+
+
 class RunIdentityConflictError(Exception):
   """The recorded (pid, pid_start) pair no longer names one process instance (API: 409).
 

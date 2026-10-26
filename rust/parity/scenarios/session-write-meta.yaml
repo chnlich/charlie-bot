@@ -56,6 +56,12 @@ steps:
     method: PUT
     path: /api/sessions/${extras.session_write_meta.write_session}/read
     expect_status: 405
+  # 637df0572 removed this route; the operator key gets the answer of an unknown path.
+  - name: PUT to the removed resource-class route
+    method: PUT
+    path: /api/sessions/${extras.session_write_meta.write_session}/resource-class
+    json: {resource_class: repair}
+    expect_status: 404
   - name: set the group on a missing session before validating the body
     method: POST
     path: /api/sessions/${missing_session}/group

@@ -133,17 +133,12 @@ mod tests {
       user_slice_dir(&base, "charliebot-agents.slice"),
       base.join("charliebot.slice").join("charliebot-agents.slice")
     );
-    assert_eq!(
-      user_slice_dir(&base, "charliebot-repair.slice"),
-      base.join("charliebot.slice").join("charliebot-repair.slice")
-    );
     assert_eq!(user_slice_dir(&base, "a-b-c.slice"), base.join("a.slice").join("a-b.slice").join("a-b-c.slice"));
   }
 
   #[test]
-  fn session_cgroup_oom_priorities() {
+  fn session_cgroup_oom_priority_is_the_same_for_every_agent_process() {
     assert_eq!(ResourceClass::Agent.oom_score_adj(), 500);
-    assert_eq!(ResourceClass::Repair.oom_score_adj(), 100);
   }
 
   #[test]

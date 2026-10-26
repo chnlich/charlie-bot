@@ -217,6 +217,23 @@ async fn python_and_rust_store_operations_write_identical_files_and_read_each_ot
 }
 
 #[tokio::test]
+async fn python_and_rust_keep_a_resource_class_key_from_an_older_session_file() {
+  // A session file written before 637df0572 keeps its resource_class key as an unknown key, after the declared
+  // fields. Rust reads it into the unknown keys and writes the same bytes back.
+  let root = tempfile::tempdir().unwrap();
+  run_python_helper("prepare_old_resource_class", root.path(), &[]);
+  let python_bytes =
+    fs::read(root.path().join("python-home").join("sessions").join(SESSION_ID).join("metadata.json")).unwrap();
+  let rust_store = make_store(&root.path().join("rust-home"));
+  fs::create_dir_all(rust_store.session_dir(SESSION_ID)).unwrap();
+  fs::write(rust_store.metadata_path(SESSION_ID), &python_bytes).unwrap();
+
+  let metadata = rust_store.read_metadata_fresh(SESSION_ID).unwrap().unwrap();
+  assert_eq!(metadata.extra("resource_class"), Some(&json!("repair")));
+  assert_eq!(metadata.to_json_string(&slots(), true).as_bytes(), python_bytes.as_slice());
+}
+
+#[tokio::test]
 async fn archive_updates_global_indexes_and_control_appends_require_the_store_guard() {
   let root = tempfile::tempdir().unwrap();
   let home = root.path().join("archive-home");

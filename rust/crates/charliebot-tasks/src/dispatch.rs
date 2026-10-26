@@ -8,7 +8,7 @@ use charliebot_registry::caller::CallerIdentity;
 use charliebot_registry::context::{FeatureContext, StateError};
 use charliebot_registry::sequence::{SequenceCompletion, SequenceDispatch};
 use charliebot_store::compact::CompactValue;
-use charliebot_store::metadata::{SessionStatus, TaskProfile, UtcDateTime};
+use charliebot_store::metadata::{TaskProfile, UtcDateTime};
 use charliebot_store::run_records::{RunKind, RunOutcome, RunOutcomeKind, RunRecord, run_not_found_in_task_text};
 use charliebot_store::session_fork::CloseReportRedelivery;
 use charliebot_store::{
@@ -176,11 +176,15 @@ impl Dispatcher {
           self.sequence_completion.restore_chain_locked(&guard, session_id, request_id, "user message").await?;
         restore_announcements = announcements;
       }
-      let event = self.store.append_control_fact(&guard, session_id, event).await?;
+      // A real user message is the one input that reorders the sidebar. It lifts only the node it was sent to, to
+      // the event's time, and never backward: rows order by updated_at, so that node moves to the front of its
+      // siblings while its parent and ancestors keep their places. The lift stays after the archived-chain restore
+      // above, so a message to an archived node lifts the reopened node, and before the append below, whose
+      // task_tree_changed broadcast makes the browser refetch the list that must read the lifted value.
       if event_type == event_types::USER {
-        self.lift_user_message_branch(session_id, &event).await?;
+        self.lift_user_message_node(session_id, &event).await?;
       }
-      event
+      self.store.append_control_fact(&guard, session_id, event).await?
     };
     for (node_id, reopened, reopen_epoch) in restore_announcements {
       self.store.announce_appended_event(&node_id, &reopened, reopen_epoch).await?;
@@ -213,29 +217,21 @@ impl Dispatcher {
     Ok(())
   }
 
-  async fn lift_user_message_branch(&self, session_id: &str, event: &ChatEvent) -> StoreResult<()> {
+  /// Lift only the node a real user message was sent to, forward only, so its parent and ancestors keep their
+  /// sidebar places. The caller runs this before the append that broadcasts the change.
+  async fn lift_user_message_node(&self, session_id: &str, event: &Value) -> StoreResult<()> {
     let timestamp = event
       .get("timestamp")
-      .and_then(CompactValue::as_str)
+      .and_then(Value::as_str)
       .ok_or_else(|| StoreError::new("user input event has no timestamp"))?;
     let when = UtcDateTime::parse(timestamp).map_err(|error| StoreError::new(error.to_string()))?;
-    let mut chain = vec![session_id.to_string()];
-    for ancestor_id in self.store.ancestor_ids(session_id)? {
-      let ancestor = self.store.load_task_meta(&ancestor_id).await?;
-      if ancestor.status == SessionStatus::Archived || self.store.archived_of(&ancestor_id)? {
-        break;
-      }
-      chain.push(ancestor_id);
-    }
-    for node_id in chain {
-      let current = self
-        .store
-        .get_session(&node_id)
-        .await?
-        .ok_or_else(|| StoreError::not_found(format!("task {node_id} not found")))?;
-      if when > current.updated_at {
-        self.store.update_thinking_state(&node_id, when).await?;
-      }
+    let current = self
+      .store
+      .get_session(session_id)
+      .await?
+      .ok_or_else(|| StoreError::not_found(format!("task {session_id} not found")))?;
+    if when > current.updated_at {
+      self.store.update_thinking_state(session_id, when).await?;
     }
     self.store.invalidate_tree_index();
     Ok(())

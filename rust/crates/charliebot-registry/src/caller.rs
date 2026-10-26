@@ -13,7 +13,6 @@ use charliebot_core::run_token::{self, RunTokenClaims};
 use crate::FeatureContext;
 
 const CALLER_SESSION_HEADER: &str = "x-charliebot-caller-session";
-const RUN_TOKEN_ENV: &str = "CHARLIEBOT_RUN_TOKEN";
 
 /// The caller of a structural route: an operator or an agent bound to a verified run.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,9 +58,9 @@ pub fn resolve_caller(headers: &HeaderMap, features: &FeatureContext) -> Result<
     return Ok(operator_identity(headers));
   }
 
-  let Some(key) = key else {
-    return Err(unauthorized(&format!("run token presented ({RUN_TOKEN_ENV}) but no signing key is configured")));
-  };
+  // Anything else is run-token use: hand the verifier the configured key (empty when none is set) and fail closed
+  // through its own refusal, so the missing-key sentence has one owner and one 401 detail.
+  let key = key.unwrap_or_default();
   let claims =
     run_token::verify_run_token(bearer, &key).map_err(|error| unauthorized(&format!("invalid run token: {error}")))?;
   let refusal = features

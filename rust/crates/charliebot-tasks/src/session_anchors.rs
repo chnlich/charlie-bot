@@ -2,11 +2,16 @@
 
 use charliebot_store::session_fork::HISTORY_LOCATION_NOTE;
 
-/// The instruction a fresh native conversation follows before it responds (`src/runtime/session_anchors.py:28`).
+/// The instruction a fresh native conversation follows before it responds (`src/runtime/session_anchors.py:32`).
 const CONTEXT_RESET_INSTRUCTION: &str = concat!(
-  "Get oriented from that log before you respond. Then write two or three sentences on where things stand and ",
-  "the conventions in force. When your rules open the reply with a status block, put these sentences after the ",
-  "block. Then respond to what follows. A Slack or Discord thread post carries only the answer that ",
+  "Get oriented from the last two turns of that log: run ",
+  "`charliebot session dialog --turns 2` before you respond. Those turns ",
+  "show the actions the session just took, so you continue the work without ",
+  "repeating them. A larger `--turns` value reads earlier turns. Then write ",
+  "two or three sentences on where things stand and the conventions in ",
+  "force. When your rules open the reply with a status block, put these ",
+  "sentences after the block. Then respond to what follows. A Slack or ",
+  "Discord thread post carries only the answer that ",
   "`prompts/thread_reply_format.md` defines."
 );
 

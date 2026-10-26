@@ -315,6 +315,16 @@ async def run_result_text(tree: task_sessions.TaskTreeManager, leaf_id: str, run
   return await asyncio.to_thread(review._worker_summary_from_events_log, events_path)
 
 
+def step_result_block(name: str, backend: str, result: str) -> str:
+  """One step's block in a chain's boundary report: its name, backend and closing words."""
+  return f"**{name} result ({backend}):**\n{result or '(no result)'}"
+
+
+def completed_prefix(task_cfg: cron_config.ScheduledTaskConfig, step_count: int) -> str:
+  """The opening sentence of a completed chain's boundary report."""
+  return f"Scheduled task '{task_cfg.name}' completed all {step_count} step(s)."
+
+
 # ---------------------------------------------------------------------------
 # Steps sequence (the existing controller's semantics over durable facts)
 # ---------------------------------------------------------------------------
@@ -380,12 +390,10 @@ async def run_firing_steps(
       failed_at = position
       break
 
-  blocks = [
-      f"**{name} result ({backend}):**\n{result or '(no result)'}" for _pos, _rid, name, backend, result in executed
-  ]
+  blocks = [step_result_block(name, backend, result) for _pos, _rid, name, backend, result in executed]
   if failed_at is None:
     last_run_id = executed[-1][1]
-    summary = f"Scheduled task '{task_cfg.name}' completed all {len(executed)} step(s).\n\n" + "\n\n".join(blocks)
+    summary = completed_prefix(task_cfg, len(executed)) + "\n\n" + "\n\n".join(blocks)
     try:
       await tree.completion.evaluate_automatic_completion(
           leaf_id,
@@ -746,9 +754,8 @@ async def run_firing_steps_boundary_report(
     position = run.sequence_ref.position if run.sequence_ref else 0
     steps = task_cfg.steps or []
     name = steps[position].name if position < len(steps) else f"step {position}"
-    blocks.append(
-        f"**{name} result ({run.backend}):**\n{await run_result_text(tree, leaf_id, run.id) or '(no result)'}")
-  summary = f"Scheduled task '{task_cfg.name}' completed all {len(chain)} step(s).\n\n" + "\n\n".join(blocks)
+    blocks.append(step_result_block(name, run.backend, await run_result_text(tree, leaf_id, run.id)))
+  summary = completed_prefix(task_cfg, len(chain)) + "\n\n" + "\n\n".join(blocks)
 
   async def _deliver_blocked_close(e: Exception) -> None:
     # The blocked close keeps the leaf open with its evidence/worktree intact
@@ -757,7 +764,7 @@ async def run_firing_steps_boundary_report(
     # completion/report policy (the stable report id dedups).
     log.warning("cron_sequence_close_blocked", task=task_cfg.name, leaf=leaf_id, error=str(e))
     blocked_summary = (
-        f"Scheduled task '{task_cfg.name}' completed all {len(chain)} step(s) but the leaf's "
+        completed_prefix(task_cfg, len(chain)) + " but the leaf's "
         f"automatic close is blocked ({e}); the task stays open with its evidence.\n\n" + "\n\n".join(blocks))
     await deliver_boundary_report(tree, leaf_id, meta.id, task_cfg, firing, "blocked", blocked_summary)
 

@@ -398,7 +398,7 @@ class TaskInputDispatcher:
       raise task_errors.TaskNotFoundError(runs.run_not_found_in_task_text(run_id, session_id))
     events = tree.runs.load_events_sync(session_id)
     if tree.runs.run_has_terminal_fact(run, events):
-      raise task_errors.TaskConflictError([f"run {run_id} already finished; it claims no new inputs"])
+      raise task_errors.TaskConflictError([runs.run_already_finished_text(run_id)])
     if run.pid is not None:
       raise task_errors.TaskConflictError([f"run {run_id} already launched; it owns its bound batch"])
     if tree.runs.stop_requested(events, run_id):
@@ -426,7 +426,7 @@ class TaskInputDispatcher:
         raise task_errors.TaskInvalidError(f"run {run_id} is not a manager turn")
       events = tree.runs.load_events_sync(session_id)
       if tree.runs.run_has_terminal_fact(run, events):
-        raise task_errors.TaskConflictError([f"run {run_id} already finished; it claims no new inputs"])
+        raise task_errors.TaskConflictError([runs.run_already_finished_text(run_id)])
       if run.pid is None:
         raise task_errors.TaskConflictError([f"run {run_id} has no launched process to echo inputs"])
       if tree.runs.stop_requested(events, run_id):

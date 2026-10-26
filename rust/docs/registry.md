@@ -53,8 +53,8 @@ receiver is `Registry`, and every method returns `Result<(), RegistryError>` unl
 
 - Python: `src/runtime/hooks/wiring.py:43` `register_router`
 - Rust: `router_patterns(build: RouterBuilder, patterns: &[&str])`, where `RouterBuilder = fn(&Arc<FeatureContext>) -> axum::Router`
-  and the patterns are the route patterns the router mounts, in axum's syntax. The claim matches them with matchit and
-  refuses an empty captured segment. `router(build, matches: PathMatch)` takes a `PathMatch = fn(&str) -> bool` for a
+  and the patterns are the route patterns the router mounts, in axum's syntax. matchit matches these patterns and
+  rejects empty parameter captures. `router(build, matches: PathMatch)` takes a `PathMatch = fn(&str) -> bool` for a
   router whose claims are not route patterns. The server merges the routers in registration order, after its own route
   families. The redirect for a trailing slash asks each router's claim.
 - Example: `registry.router_patterns(notes_routes, &["/api/notes/{note_id}"])?;`

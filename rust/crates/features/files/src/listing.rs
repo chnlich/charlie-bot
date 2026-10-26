@@ -257,6 +257,12 @@ mod tests {
   }
 
   #[test]
+  fn html_and_file_url_escaping_match_python_bytes() {
+    assert_eq!(escape("&<>\"'/"), "&amp;&lt;&gt;&quot;&#x27;/");
+    assert_eq!(quote("a b/#?é~"), "a%20b%2F%23%3F%C3%A9~");
+  }
+
+  #[test]
   fn a_missing_directory_is_missing() {
     let dir = tempfile::tempdir().expect("a temp dir");
     let gone = dir.path().join("gone");

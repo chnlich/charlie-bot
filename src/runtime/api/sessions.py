@@ -1,10 +1,12 @@
 """Session management API routes."""
 
 import asyncio
+import contextlib
 import datetime
 import json
 import pathlib
 import uuid
+from collections.abc import Iterator
 from typing import Literal, get_args
 
 import fastapi
@@ -1212,6 +1214,23 @@ async def _start_successor_run(
   await task_mgr.dispatch.dispatch_pending(meta.id)
 
 
+@contextlib.contextmanager
+def _fork_refusal_as_http() -> Iterator[None]:
+  """Translate a fork or elone service refusal into the HTTP shape both routes serve.
+
+  A missing source session is 404 with the shared detail, a task-tree conflict takes
+  ``_task_http_error``'s shape, and any other ``ValueError`` is a bad request.
+  """
+  try:
+    yield
+  except FileNotFoundError as e:
+    raise fastapi.HTTPException(status_code=404, detail=deps.SESSION_NOT_FOUND_DETAIL) from e
+  except task_errors.TaskConflictError as e:
+    raise _task_http_error(e) from e
+  except ValueError as e:
+    raise deps.bad_request(e) from e
+
+
 @router.post('/{session_id}/fork', response_model=models.SessionMetadata)
 async def fork_session(
     session_id: str,
@@ -1228,18 +1247,12 @@ async def fork_session(
       cfg,
       fallback_backend=parent.backend,
   )
-  try:
+  with _fork_refusal_as_http():
     meta = await fork.fork_session(
         session_id,
         event_index=body.event_index if body else None,
         backend=backend,
     )
-  except FileNotFoundError as e:
-    raise fastapi.HTTPException(status_code=404, detail=deps.SESSION_NOT_FOUND_DETAIL) from e
-  except task_errors.TaskConflictError as e:
-    raise _task_http_error(e) from e
-  except ValueError as e:
-    raise deps.bad_request(e) from e
 
   await _start_successor_run(
       task_mgr,
@@ -1265,14 +1278,8 @@ async def elone_session(
 ) -> models.SessionMetadata:
   """Create an Elon-e session: fresh start with a bootstrap prompt that reads the parent."""
   backend = _resolve_requested_backend(body.backend, cfg, fallback_backend=parent.backend)
-  try:
+  with _fork_refusal_as_http():
     meta = await fork.elone_session(session_id, body.event_index, backend=backend)
-  except FileNotFoundError as e:
-    raise fastapi.HTTPException(status_code=404, detail=deps.SESSION_NOT_FOUND_DETAIL) from e
-  except task_errors.TaskConflictError as e:
-    raise _task_http_error(e) from e
-  except ValueError as e:
-    raise deps.bad_request(e) from e
 
   await _start_successor_run(
       task_mgr,

@@ -9,6 +9,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use charliebot_core::home::CHARLIEBOT_HOME_ENV;
+use chrono::{Duration as ChronoDuration, NaiveDate};
 use tempfile::{TempDir, tempdir};
 
 use crate::backup::*;
@@ -150,9 +151,10 @@ fn create_backup_names_the_archive_by_local_time() {
 
 #[test]
 fn backup_name_and_date_parser_match_python_timestamp_bytes() {
-  let name = archive_name(2026, 10, 26, 9, 7, 5);
+  let moment = NaiveDate::from_ymd_opt(2026, 10, 26).unwrap().and_hms_opt(9, 7, 5).unwrap();
+  let name = archive_name(moment);
   assert_eq!(name, "charliebot-20261026-090705.tar.gz");
-  assert_eq!(parse_backup_date(&name), Some((2026, 10, 26, 9, 7, 5)));
+  assert_eq!(parse_backup_date(&name), Some(moment));
   assert_eq!(parse_backup_date("charliebot-00000101-000000.tar.gz"), None);
 }
 
@@ -228,27 +230,11 @@ fn write_archive(dir: &Path, name: &str) {
 
 /// Noon of a local calendar date, in the naive-local seconds the retention pass compares against.
 fn noon(year: i64, month: i64, day: i64) -> i64 {
-  days_from_civil(year, month, day) * 86_400 + 12 * 3_600
+  naive_epoch(year as i32, month as u32, day as u32, 12, 0, 0)
 }
 
-/// The civil date of a day count since 1970-01-01 (Howard Hinnant's `civil_from_days`).
-fn civil_from_days(days: i64) -> (i64, i64, i64) {
-  let shifted = days + 719_468;
-  let era = shifted.div_euclid(146_097);
-  let day_of_era = shifted - era * 146_097;
-  let year_of_era = (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
-  let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-  let month_index = (5 * day_of_year + 2) / 153;
-  let day = day_of_year - (153 * month_index + 2) / 5 + 1;
-  let month = if month_index < 10 { month_index + 3 } else { month_index - 9 };
-  (year_of_era + era * 400 + i64::from(month <= 2), month, day)
-}
-
-#[test]
-fn civil_from_days_inverts_days_from_civil() {
-  for (year, month, day) in [(2026, 10, 18), (2026, 11, 1), (2028, 2, 29), (1999, 12, 31)] {
-    assert_eq!(civil_from_days(days_from_civil(year, month, day)), (year, month, day));
-  }
+fn naive_epoch(year: i32, month: u32, day: u32, hour: u32, minute: u32, second: u32) -> i64 {
+  NaiveDate::from_ymd_opt(year, month, day).unwrap().and_hms_opt(hour, minute, second).unwrap().and_utc().timestamp()
 }
 
 #[test]
@@ -300,7 +286,7 @@ fn retention_keeps_the_last_three_days_and_recent_sundays() {
   // The scheduled run stamps each day's archive at 04:45 and applies retention at 04:50 on Wednesday 2026-11-04.
   // Of forty daily archives, the three days before the run stay, and so do the Sundays 11-01 (age 3) and 10-25
   // (age 10). The rest go.
-  let now = days_from_civil(2026, 11, 4) * 86_400 + 4 * 3_600 + 50 * 60;
+  let now = naive_epoch(2026, 11, 4, 4, 50, 0);
   let names: Vec<String> = (0..40).map(scheduled_archive).collect();
   let names: Vec<&str> = names.iter().map(String::as_str).collect();
   let kept = [
@@ -315,8 +301,8 @@ fn retention_keeps_the_last_three_days_and_recent_sundays() {
 
 /// The archive the scheduled run writes at 04:45 on the civil day `days_ago` before 2026-11-04.
 fn scheduled_archive(days_ago: i64) -> String {
-  let (year, month, day) = civil_from_days(days_from_civil(2026, 11, 4) - days_ago);
-  format!("charliebot-{year:04}{month:02}{day:02}-044500.tar.gz")
+  let date = NaiveDate::from_ymd_opt(2026, 11, 4).unwrap() - ChronoDuration::days(days_ago);
+  format!("charliebot-{}-044500.tar.gz", date.format("%Y%m%d"))
 }
 
 #[test]

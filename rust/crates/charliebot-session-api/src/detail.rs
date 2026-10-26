@@ -225,10 +225,7 @@ async fn session_events(
     Ok(meta) => meta,
     Err(error) => return store_error(error),
   };
-  let query = match Query::new(&request) {
-    Ok(query) => query,
-    Err(response) => return *response,
-  };
+  let query = Query::new(&request);
   let before = match query.parse_int("before", None, None, None) {
     Ok(before) => before,
     Err(response) => return *response,
@@ -303,10 +300,7 @@ async fn session_transcript(
   AxumPath(session_id): AxumPath<String>,
   request: Request<Body>,
 ) -> Response {
-  let query = match Query::new(&request) {
-    Ok(query) => query,
-    Err(response) => return *response,
-  };
+  let query = Query::new(&request);
   let after = match query.parse_int("after", Some(0), Some(0), None) {
     Ok(after) => after,
     Err(response) => return *response,
@@ -423,10 +417,7 @@ async fn session_runs(
   AxumPath(session_id): AxumPath<String>,
   request: Request<Body>,
 ) -> Response {
-  let query = match Query::new(&request) {
-    Ok(query) => query,
-    Err(response) => return *response,
-  };
+  let query = Query::new(&request);
   let limit = match query.parse_int("limit", Some(100), Some(1), Some(500)) {
     Ok(limit) => limit as usize,
     Err(response) => return *response,

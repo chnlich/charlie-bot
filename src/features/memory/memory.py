@@ -112,6 +112,11 @@ class Entry:
   def id(self) -> str:
     return f"{self.topic}/{self.slug}"
 
+  @property
+  def index_line(self) -> str:
+    """The entry's index line: its ``<topic>/<slug>`` id and its title."""
+    return f"{self.id} · {self.title}"
+
 
 @dataclasses.dataclass
 class Store:
@@ -377,7 +382,7 @@ def full_text(entry: Entry) -> str:
 
 def _index_lines(index_entries: list[Entry]) -> str:
   """The INDEX_HEADER line followed by sorted ``<topic>/<slug> · <title>`` lines."""
-  return "\n".join([INDEX_HEADER] + [f"{e.topic}/{e.slug} · {e.title}" for e in index_entries])
+  return "\n".join([INDEX_HEADER] + [e.index_line for e in index_entries])
 
 
 def audience_allows(entry: Entry, audience: str) -> bool:
@@ -457,8 +462,7 @@ def _selection_from_parts(
             "index",
             _index_lines(index_entries),
             tuple(
-                MemoryEntrySource(
-                    source_ref=f"memory:{e.id}", delivery="index", text=f"{e.topic}/{e.slug} · {e.title}")
+                MemoryEntrySource(source_ref=f"memory:{e.id}", delivery="index", text=e.index_line)
                 for e in index_entries),
         ))
   if usage_line is not None:

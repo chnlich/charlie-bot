@@ -2123,6 +2123,7 @@ async def test_manager_native_continuation_gates_on_instruction_hash(
       "[Context reset: this task's managed instructions or sources changed since the "
       "previous turn, so this turn starts a fresh native conversation. "
       f"The task is: {meta3.name}. {session_fork.HISTORY_LOCATION_NOTE} {session_anchors.CONTEXT_RESET_INSTRUCTION}]")
+  assert "charliebot session dialog --turns 2" in note
   assert "turn three" in tail
 
 

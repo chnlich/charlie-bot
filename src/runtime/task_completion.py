@@ -1405,6 +1405,16 @@ class TaskCompletionManager:
   # Cancel and reopen
   # ------------------------------------------------------------------
 
+  def _require_open_for_cancel(self, session_id: str) -> None:
+    """Refuse a cancel of a task that is not open, naming the state it is in.
+
+    A cancel applies to an open task only, on both the manager and the worker path. The state is
+    read once so the refusal sentence and the test that produced it name the same value.
+    """
+    state = self._tree.task_state(session_id)
+    if state != "open":
+      raise task_errors.TaskConflictError([f"task {session_id} is {state}; only an open task can be cancelled"])
+
   async def cancel_task(
       self,
       session_id: str,
@@ -1459,10 +1469,7 @@ class TaskCompletionManager:
     async with tree.control_lock:
       index = await tree._get_index()
       meta = tree._index_meta(index, session_id)
-      if tree.task_state(session_id) != "open":
-        raise task_errors.TaskConflictError(
-            [(f"task {session_id} is {tree.task_state(session_id)}; "
-              "only an open task can be cancelled")])
+      self._require_open_for_cancel(session_id)
       replay = self._replay_close_request(session_id, request_id)
       if replay is not None:
         return replay[1]
@@ -1512,9 +1519,7 @@ class TaskCompletionManager:
       meta = tree._index_meta(index, session_id)
       replay = self._replay_close_request(session_id, request_id)
       if replay is None:
-        state = tree.task_state(session_id)
-        if state != "open":
-          raise task_errors.TaskConflictError([(f"task {session_id} is {state}; only an open task can be cancelled")])
+        self._require_open_for_cancel(session_id)
         open_descendants = [
             descendant for descendant in tree._descendants(index, session_id) if tree.task_state(descendant) == "open"
         ]

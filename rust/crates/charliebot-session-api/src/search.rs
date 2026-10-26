@@ -1,15 +1,17 @@
 //! Read-only session name and chat-content search.
 
 use std::cmp::Reverse;
-use std::collections::{HashSet, VecDeque};
+use std::collections::HashSet;
 use std::fs::{self, File};
 use std::io::{self, Read, Seek, SeekFrom};
+use std::num::NonZeroUsize;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
 
 use charliebot_store::metadata::{SessionMetadata, SessionStatus};
 use charliebot_store::{Store, StoreResult};
+use lru::LruCache;
 
 const SEARCH_RESULT_LIMIT: usize = 200;
 const SEARCH_FILE_MEMO_LIMIT: usize = 4096;
@@ -24,12 +26,19 @@ struct FileSignature {
   inode: u64,
 }
 
-type SearchRoots = VecDeque<(String, FileSignature)>;
+/// One file's needle roots, newest needles kept: the same bounded per-needle list Python's per-file memo holds.
+type RootMemo = LruCache<String, FileSignature>;
 
 struct SearchFileRoots {
-  path: PathBuf,
-  misses: SearchRoots,
-  hits: SearchRoots,
+  misses: RootMemo,
+  hits: RootMemo,
+}
+
+impl SearchFileRoots {
+  fn new() -> Self {
+    let limit = || NonZeroUsize::new(SEARCH_ROOTS_PER_FILE).expect("the per-file root limit is nonzero");
+    Self { misses: LruCache::new(limit()), hits: LruCache::new(limit()) }
+  }
 }
 
 #[derive(Clone)]
@@ -40,63 +49,57 @@ struct SearchMatch {
   row_ids: Vec<String>,
 }
 
-#[derive(Default)]
 struct SearchMemos {
-  files: VecDeque<SearchFileRoots>,
-  matches: VecDeque<(String, Arc<SearchMatch>)>,
+  files: LruCache<PathBuf, SearchFileRoots>,
+  matches: LruCache<String, Arc<SearchMatch>>,
   read_failures: HashSet<(String, String)>,
   #[cfg(test)]
   scan_calls: usize,
 }
 
+impl Default for SearchMemos {
+  fn default() -> Self {
+    let files = LruCache::new(NonZeroUsize::new(SEARCH_FILE_MEMO_LIMIT).expect("the file memo limit is nonzero"));
+    let matches = LruCache::new(NonZeroUsize::new(SEARCH_MATCH_MEMO_LIMIT).expect("the match memo limit is nonzero"));
+    Self {
+      files,
+      matches,
+      read_failures: HashSet::new(),
+      #[cfg(test)]
+      scan_calls: 0,
+    }
+  }
+}
+
+/// One verdict helper's root list: needle-and-signature pairs whose order the helpers do not care about.
+type RootList = Vec<(String, FileSignature)>;
+
 impl SearchMemos {
-  fn roots(&mut self, path: &Path) -> (SearchRoots, SearchRoots) {
-    let Some(index) = self.files.iter().position(|entry| entry.path == path) else {
-      return (SearchRoots::new(), SearchRoots::new());
-    };
-    let entry = self.files.remove(index).expect("memo index names a search file");
-    let roots = (entry.misses.clone(), entry.hits.clone());
-    self.files.push_back(entry);
-    roots
+  /// The miss and hit roots of one file. Their order is irrelevant: the verdict helpers only scan them.
+  fn roots(&mut self, path: &Path) -> (RootList, RootList) {
+    let Some(entry) = self.files.get_mut(path) else { return (Vec::new(), Vec::new()) };
+    let collect = |roots: &RootMemo| roots.iter().map(|(needle, signature)| (needle.clone(), *signature)).collect();
+    (collect(&entry.misses), collect(&entry.hits))
   }
 
   fn remember_root(&mut self, path: &Path, needle: &str, signature: FileSignature, hit: bool) {
-    let index = self.files.iter().position(|entry| entry.path == path);
-    let mut entry = index.and_then(|index| self.files.remove(index)).unwrap_or_else(|| SearchFileRoots {
-      path: path.to_path_buf(),
-      misses: SearchRoots::new(),
-      hits: SearchRoots::new(),
-    });
+    let entry = match self.files.get_mut(path) {
+      Some(entry) => entry,
+      None => {
+        self.files.put(path.to_path_buf(), SearchFileRoots::new());
+        self.files.get_mut(path).expect("the entry was just inserted")
+      }
+    };
     let roots = if hit { &mut entry.hits } else { &mut entry.misses };
-    if let Some(index) = roots.iter().position(|(stored, _)| stored == needle) {
-      roots.remove(index);
-    }
-    roots.push_back((needle.to_string(), signature));
-    while roots.len() > SEARCH_ROOTS_PER_FILE {
-      roots.pop_front();
-    }
-    self.files.push_back(entry);
-    while self.files.len() > SEARCH_FILE_MEMO_LIMIT {
-      self.files.pop_front();
-    }
+    roots.put(needle.to_string(), signature);
   }
 
   fn cached_match(&mut self, query: &str) -> Option<Arc<SearchMatch>> {
-    let index = self.matches.iter().position(|(needle, _)| needle == query)?;
-    let entry = self.matches.remove(index).expect("memo index names a search query");
-    let answer = Arc::clone(&entry.1);
-    self.matches.push_back(entry);
-    Some(answer)
+    self.matches.get(query).cloned()
   }
 
   fn remember_match(&mut self, query: &str, entry: SearchMatch) {
-    if let Some(index) = self.matches.iter().position(|(needle, _)| needle == query) {
-      self.matches.remove(index);
-    }
-    self.matches.push_back((query.to_string(), Arc::new(entry)));
-    while self.matches.len() > SEARCH_MATCH_MEMO_LIMIT {
-      self.matches.pop_front();
-    }
+    self.matches.put(query.to_string(), Arc::new(entry));
   }
 }
 
@@ -224,14 +227,14 @@ fn log_search_read_failed_once(memos: &Mutex<SearchMemos>, session_id: &str, err
   }
 }
 
-fn hit_root_covers(roots: &SearchRoots, signature: FileSignature, needle: &str) -> bool {
+fn hit_root_covers(roots: &[(String, FileSignature)], signature: FileSignature, needle: &str) -> bool {
   roots.iter().any(|(root, root_signature)| {
     root.contains(needle) && root_signature.inode == signature.inode && signature.size >= root_signature.size
   })
 }
 
 /// `None` means a stored absence already proves this query; otherwise return the byte offset to re-scan.
-fn absence_rescan_start(roots: &SearchRoots, signature: FileSignature, needle: &str) -> Option<u64> {
+fn absence_rescan_start(roots: &[(String, FileSignature)], signature: FileSignature, needle: &str) -> Option<u64> {
   for (root, root_signature) in roots {
     if needle.starts_with(root) && *root_signature == signature {
       return None;

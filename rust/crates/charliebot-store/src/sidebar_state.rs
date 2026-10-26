@@ -1,8 +1,10 @@
 //! Process-memory sidebar snapshots and invalidation state.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
+use std::num::NonZeroUsize;
 use std::sync::{Mutex, OnceLock};
 
+use lru::LruCache;
 use serde_json::{Map, Value};
 
 pub const PENDING_TRIGGER_COUNT: &str = "pending_trigger_count";
@@ -24,14 +26,26 @@ pub struct DerivedMapKey {
   pub generation: u64,
 }
 
-#[derive(Default)]
 struct State {
   dirty: HashSet<String>,
   snapshot: std::collections::HashMap<String, Map<String, Value>>,
   probe_signatures: std::collections::HashMap<String, Vec<Value>>,
   poll_count: u64,
   derived_generation: u64,
-  derived_maps: VecDeque<(DerivedMapKey, DerivedSidebarMap)>,
+  derived_maps: LruCache<DerivedMapKey, DerivedSidebarMap>,
+}
+
+impl Default for State {
+  fn default() -> Self {
+    Self {
+      dirty: HashSet::new(),
+      snapshot: HashMap::new(),
+      probe_signatures: HashMap::new(),
+      poll_count: 0,
+      derived_generation: 0,
+      derived_maps: LruCache::new(NonZeroUsize::new(DERIVED_MAP_MEMO_LIMIT).expect("the memo limit is nonzero")),
+    }
+  }
 }
 
 static STATE: OnceLock<Mutex<State>> = OnceLock::new();
@@ -90,24 +104,12 @@ pub fn derived_generation() -> u64 {
 
 /// Read a memoized derived map and mark it most recently used.
 pub fn peek_derived_map(key: &DerivedMapKey) -> Option<DerivedSidebarMap> {
-  let mut state = state().lock().expect("sidebar state mutex is not poisoned");
-  let position = state.derived_maps.iter().position(|(stored, _)| stored == key)?;
-  let entry = state.derived_maps.remove(position).expect("the position names a memo entry");
-  let value = entry.1.clone();
-  state.derived_maps.push_back(entry);
-  Some(value)
+  state().lock().expect("sidebar state mutex is not poisoned").derived_maps.get(key).cloned()
 }
 
 /// Store one derived map in the four-entry memo.
 pub fn store_derived_map(key: DerivedMapKey, value: DerivedSidebarMap) {
-  let mut state = state().lock().expect("sidebar state mutex is not poisoned");
-  if let Some(position) = state.derived_maps.iter().position(|(stored, _)| stored == &key) {
-    state.derived_maps.remove(position);
-  }
-  state.derived_maps.push_back((key, value));
-  while state.derived_maps.len() > DERIVED_MAP_MEMO_LIMIT {
-    state.derived_maps.pop_front();
-  }
+  state().lock().expect("sidebar state mutex is not poisoned").derived_maps.put(key, value);
 }
 
 /// Return the task-activity pair in a session snapshot, when present.

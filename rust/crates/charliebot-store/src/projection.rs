@@ -1,6 +1,8 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 
+use lru::LruCache;
 use serde_json::Value;
 
 use crate::aggregator::MessageAggregator;
@@ -10,28 +12,23 @@ use crate::{ChatEvent, SharedChatEvent, StoreError, StoreResult};
 
 const PAGE_BODY_CACHE_LIMIT: usize = 4;
 
-#[derive(Default)]
 struct PageBodyCache {
-  values: HashMap<(usize, usize), Vec<u8>>,
-  order: VecDeque<(usize, usize)>,
+  values: LruCache<(usize, usize), Vec<u8>>,
+}
+
+impl Default for PageBodyCache {
+  fn default() -> Self {
+    Self { values: LruCache::new(NonZeroUsize::new(PAGE_BODY_CACHE_LIMIT).expect("the cache limit is nonzero")) }
+  }
 }
 
 impl PageBodyCache {
   fn get(&mut self, key: (usize, usize)) -> Option<Vec<u8>> {
-    let body = self.values.get(&key)?.clone();
-    self.order.retain(|existing| *existing != key);
-    self.order.push_back(key);
-    Some(body)
+    self.values.get(&key).cloned()
   }
 
   fn store(&mut self, key: (usize, usize), body: Vec<u8>) {
-    self.order.retain(|existing| *existing != key);
-    self.order.push_back(key);
-    self.values.insert(key, body);
-    while self.order.len() > PAGE_BODY_CACHE_LIMIT {
-      let oldest = self.order.pop_front().expect("page body cache has an oldest key");
-      self.values.remove(&oldest);
-    }
+    self.values.put(key, body);
   }
 }
 

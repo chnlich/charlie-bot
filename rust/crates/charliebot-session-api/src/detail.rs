@@ -1,7 +1,8 @@
 //! Per-session read routes used by the chat view.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::HashSet;
 use std::fs;
+use std::num::NonZeroUsize;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
@@ -22,6 +23,7 @@ use charliebot_store::metadata::{SessionMetadata, TaskProfile, UtcDateTime};
 use charliebot_store::run_records::{HostBoot, RunFacts, RunOrder, RunRecord};
 use charliebot_store::{Store, StoreError, StoreResult, TaskFacts};
 use http::header::HeaderValue;
+use lru::LruCache;
 use serde_json::{Map, Value, json};
 
 use crate::routes::Query;
@@ -31,11 +33,17 @@ const BOOTSTRAP_MESSAGE_LIMIT: usize = 40;
 const FILE_GZIP_MEMO_LIMIT: usize = 2;
 const BOOTSTRAP_GZIP_MEMO_LIMIT: usize = 16;
 
-type BodyGzipMemo = Mutex<VecDeque<(Vec<u8>, Vec<u8>)>>;
-type FileGzipMemo = Mutex<VecDeque<(PathBuf, i64, u64, Vec<u8>)>>;
+type BodyGzipMemo = Mutex<LruCache<Vec<u8>, Vec<u8>>>;
+type FileGzipMemo = Mutex<LruCache<(PathBuf, i64, u64), Vec<u8>>>;
 
-static BOOTSTRAP_GZIP_MEMO: LazyLock<BodyGzipMemo> = LazyLock::new(|| Mutex::new(VecDeque::new()));
-static EVENTS_FILE_GZIP_MEMO: LazyLock<FileGzipMemo> = LazyLock::new(|| Mutex::new(VecDeque::new()));
+fn body_gzip_memo(limit: usize) -> BodyGzipMemo {
+  Mutex::new(LruCache::new(NonZeroUsize::new(limit).expect("the gzip memo limit is nonzero")))
+}
+
+static BOOTSTRAP_GZIP_MEMO: LazyLock<BodyGzipMemo> = LazyLock::new(|| body_gzip_memo(BOOTSTRAP_GZIP_MEMO_LIMIT));
+static EVENTS_FILE_GZIP_MEMO: LazyLock<FileGzipMemo> = LazyLock::new(|| {
+  Mutex::new(LruCache::new(NonZeroUsize::new(FILE_GZIP_MEMO_LIMIT).expect("the gzip memo limit is nonzero")))
+});
 
 /// Register the session detail, transcript, usage, events, and task-read routes.
 pub(crate) fn routes() -> Router<Arc<FeatureContext>> {
@@ -649,21 +657,15 @@ fn gzip_json_body(request: &Request<Body>, body: Vec<u8>) -> Response {
   if !request_wants_gzip(request) {
     return json_bytes_response(body, None);
   }
-  let memo = &BOOTSTRAP_GZIP_MEMO;
   let compressed = {
-    let mut memo = memo.lock().expect("bootstrap gzip memo mutex is not poisoned");
-    if let Some(index) = memo.iter().position(|(plain, _)| *plain == body) {
-      let entry = memo.remove(index).expect("gzip memo index names an entry");
-      let compressed = entry.1.clone();
-      memo.push_back(entry);
-      compressed
-    } else {
-      let compressed = gzip_level_one(&body);
-      memo.push_back((body, compressed.clone()));
-      while memo.len() > BOOTSTRAP_GZIP_MEMO_LIMIT {
-        memo.pop_front();
+    let mut memo = BOOTSTRAP_GZIP_MEMO.lock().expect("bootstrap gzip memo mutex is not poisoned");
+    match memo.get(&body).cloned() {
+      Some(compressed) => compressed,
+      None => {
+        let compressed = gzip_level_one(&body);
+        memo.put(body, compressed.clone());
+        compressed
       }
-      compressed
     }
   };
   json_bytes_response(compressed, Some("gzip"))
@@ -672,25 +674,17 @@ fn gzip_json_body(request: &Request<Body>, body: Vec<u8>) -> Response {
 fn gzip_file(path: &Path, metadata: fs::Metadata) -> StoreResult<Vec<u8>> {
   let mtime_ns = metadata.mtime_nsec() + metadata.mtime() * 1_000_000_000;
   let size = metadata.size();
+  let key = (path.to_path_buf(), mtime_ns, size);
   {
     let mut memo = EVENTS_FILE_GZIP_MEMO.lock().expect("events-file gzip memo mutex is not poisoned");
-    if let Some(index) = memo.iter().position(|(cached_path, cached_mtime, cached_size, _)| {
-      cached_path == path && *cached_mtime == mtime_ns && *cached_size == size
-    }) {
-      let entry = memo.remove(index).expect("gzip memo index names an entry");
-      let body = entry.3.clone();
-      memo.push_back(entry);
+    if let Some(body) = memo.get(&key).cloned() {
       return Ok(body);
     }
   }
   let bytes = fs::read(path).map_err(|error| path_error(path, error))?;
   let compressed = gzip_level_one(&bytes);
   let mut memo = EVENTS_FILE_GZIP_MEMO.lock().expect("events-file gzip memo mutex is not poisoned");
-  memo.retain(|(cached_path, _, _, _)| cached_path != path);
-  memo.push_back((path.to_path_buf(), mtime_ns, size, compressed.clone()));
-  while memo.len() > FILE_GZIP_MEMO_LIMIT {
-    memo.pop_front();
-  }
+  memo.put(key, compressed.clone());
   Ok(compressed)
 }
 

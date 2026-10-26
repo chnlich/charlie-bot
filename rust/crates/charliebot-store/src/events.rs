@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use charliebot_core::{fsutil, pystr};
+use memmap2::Mmap;
 use serde_json::Value;
 
 use crate::chat_events::is_chat_events_archive;
@@ -1227,12 +1228,12 @@ fn visit_file_facts_from_end<T>(
   visit: &mut impl FnMut(ChatEvent) -> Option<T>,
 ) -> StoreResult<Option<T>> {
   let Some(map) = open_fact_file(path)? else { return Ok(None) };
-  let mut walk = ReverseFactLines::new(map.bytes(), end);
+  let mut walk = ReverseFactLines::new(&map, end);
   Ok(visit_reverse_fact_lines(&mut walk, types, visit))
 }
 
-fn open_fact_file(path: &Path) -> StoreResult<Option<fsutil::FileMap>> {
-  match fsutil::FileMap::open(path) {
+fn open_fact_file(path: &Path) -> StoreResult<Option<Mmap>> {
+  match fsutil::map_file(path) {
     Ok(map) => Ok(map),
     Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
     Err(error) => Err(StoreError::new(format!("{}: {error}", path.display()))),
@@ -1313,7 +1314,7 @@ fn visit_file_facts_from_end_with_span<T>(
   visit: &mut impl FnMut(ChatEvent) -> Option<T>,
 ) -> StoreResult<(Option<T>, usize)> {
   let Some(map) = open_fact_file(path)? else { return Ok((None, 0)) };
-  let mut walk = ReverseFactLines::new(map.bytes(), end);
+  let mut walk = ReverseFactLines::new(&map, end);
   let value = visit_reverse_fact_lines(&mut walk, types, visit);
   Ok((value, walk.mapped_span()))
 }

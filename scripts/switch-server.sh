@@ -71,9 +71,10 @@ log() { echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') switch: $*"; }
 fail() { log "preflight failed: $*"; exit 1; }
 
 # The home is read, never written, by this helper. `config` prints the port and the access key (one per line);
-# `scan` prints one line per live Run (live) and one per refusal (block).
+# `scan` prints one line per live Run (live) and one per refusal (block); `alive` prints alive or ended for a recorded
+# (pid, pid start).
 home_helper() {
-  python3 -I - "$HOME_DIR" "$1" <<'PY'
+  python3 -I - "$HOME_DIR" "$@" <<'PY'
 import datetime
 import json
 import pathlib
@@ -107,13 +108,19 @@ def boot_time():
   raise RuntimeError("/proc/stat has no btime line")
 
 
+def process_instance(pid, pid_start):
+  """(pid, pid_start) still names one live process instance; field 22 of /proc/<pid>/stat pins that instance, so a
+  recycled pid never counts. A zombie has ended: its argv is gone and nothing can follow it."""
+  stat = proc_stat(pid)
+  return stat is not None and stat[0] == pid_start and stat[1] != "Z"
+
+
 def run_alive(run, boot):
   """The run's recorded (pid, pid_start) still names a live process that started after this boot."""
   pid, pid_start, started_at = run.get("pid"), run.get("pid_start"), run.get("started_at")
   if pid is None or pid_start is None or started_at is None:
     return False
-  stat = proc_stat(pid)
-  if stat is None or stat[0] != pid_start or stat[1] == "Z":
+  if not process_instance(pid, pid_start):
     return False
   return datetime.datetime.fromisoformat(started_at).timestamp() > boot
 
@@ -131,7 +138,7 @@ elif mode == "scan":
     run = json.loads(path.read_text(encoding="utf-8"))
     if run.get("ended_at") is not None or not run_alive(run, boot):
       continue
-    print(f"live\t{run['session_id']}\t{run['id']}\t{run.get('backend')}\t{run['pid']}")
+    print(f"live\t{run['session_id']}\t{run['id']}\t{run.get('backend')}\t{run['pid']}\t{run['pid_start']}")
     backend = run.get("backend")
     backend_type = types.get(backend)
     if backend_type is None:
@@ -146,12 +153,16 @@ elif mode == "scan":
     controller = state.get("server_pid")
     if state.get("status") == "running" and controller is not None and pathlib.Path(f"/proc/{controller}").exists():
       print(f"block\timprove loop {path.parent.name} is running under pid {controller}")
+elif mode == "alive":
+  pid, pid_start = sys.argv[3], sys.argv[4]
+  print("alive" if process_instance(pid, pid_start) else "ended")
 else:
   raise SystemExit(f"unknown home_helper mode {mode}")
 PY
 }
 
-# scan_home writes the live runs to $RUNS_FILE and leaves the refusals in BLOCKERS.
+# scan_home writes the live runs to $RUNS_FILE and leaves the refusals in BLOCKERS. A live line is the session, the run,
+# its backend, its pid and that pid's start time.
 scan_home() {
   local scan
   scan="$(home_helper scan)" || return 1
@@ -360,14 +371,27 @@ wait_ready() {
   done
 }
 
-# adopted: every live run recorded before the stop has a recovery line in this launch's output.
+# run_process_ended PID PID_START: the process instance the run recorded has ended, so its pid may be free or belong to
+# another process now.
+run_process_ended() {
+  [ "$(home_helper alive "$1" "$2")" = ended ]
+}
+
+# adopted: every live run recorded before the stop is accounted for by this launch's recovery. A run whose process still
+# runs must have a task_recovery_resume line; a run whose process has ended needs none, because a run's process survives
+# a server stop by design, so a run whose process is gone was not lost by the switch and no restore could adopt it.
 adopted() {
-  local run_id
-  while IFS=$'\t' read -r _ _ run_id _ _; do
-    if ! launch_has task_recovery_resume "run_id=$run_id"; then
-      log "readback: run $run_id was not adopted"
-      return 1
+  local run_id pid pid_start
+  while IFS=$'\t' read -r _ _ run_id _ pid pid_start; do
+    if launch_has task_recovery_resume "run_id=$run_id"; then
+      continue
     fi
+    if run_process_ended "$pid" "$pid_start"; then
+      log "readback: run $run_id ended during the switch; nothing to adopt"
+      continue
+    fi
+    log "readback: run $run_id was not adopted"
+    return 1
   done < "$RUNS_FILE"
 }
 

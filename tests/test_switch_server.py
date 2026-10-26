@@ -9,7 +9,9 @@ The preflight refusals stop before any pane is looked up, so they need no tmux. 
 pane on a private tmux server (tmux -L). The repo caps integration tests at 50 and already uses all 50, so those steps
 share one test. The probe turn's cases run its functions in a shell against a fake server of their own, with one-second
 waits, so each stays under the unit budget. The escalation cases run escalate_pane the same way, against stand-in
-servers under a shell that plays the pane, so they need no tmux either.
+servers under a shell that plays the pane, so they need no tmux either. The adoption check's cases run adopted the same
+way, against a staged runs file and launch output, for the same reason: no integration slot is left for another
+pane-driven switch.
 """
 
 from __future__ import annotations
@@ -607,8 +609,9 @@ def test_preflight_refusal_exits_1_and_changes_nothing(world: World, case: str) 
   if case.endswith("-run"):
     assert "a restart would lose live work:" in proc.stdout, _report(world, proc)
     lines = _home_helper(world.home, "scan").stdout.splitlines()
+    live_pid = world.live[0].pid
     assert [line for line in lines if line.startswith("live\t")
-           ] == [f"live\t{SESSION}\trun-blocked\t{backend}\t{world.live[0].pid}"]
+           ] == [f"live\t{SESSION}\trun-blocked\t{backend}\t{live_pid}\t{_pid_start(live_pid)}"]
     blocks = [line for line in lines if line.startswith("block\t")]
     assert len(blocks) == 1
     assert "run-blocked" in blocks[0]
@@ -616,6 +619,92 @@ def test_preflight_refusal_exits_1_and_changes_nothing(world: World, case: str) 
     if case in {"opencode-run", "antigravity-run"}:
       assert case.removesuffix("-run") in blocks[0]
       assert str(world.live[0].pid) in blocks[0]
+
+
+# The launch output the adoption check reads: the drain line the new server writes for a run whose process had ended.
+# Its resume line is the one the check wants instead for a run whose process still runs.
+DRAIN_LINE = "2026-10-26 02:15:04.200 [warning  ] task_recovery_drain session={session} run_id={run_id}"
+
+
+def _runs_file(world: World, *lines: str) -> pathlib.Path:
+  """The file the scan writes: one live line per recorded run, as session, run, backend, pid and pid start."""
+  path = world.root / "switch.runs"
+  path.write_text("".join(f"{line}\n" for line in lines), encoding="utf-8")
+  return path
+
+
+def _scanned_runs_file(world: World) -> pathlib.Path:
+  """The live lines of a real scan of the home, recorded while the run's process still ran."""
+  scan = _home_helper(world.home, "scan").stdout.splitlines()
+  return _runs_file(world, *(line for line in scan if line.startswith("live\t")))
+
+
+def _adopted(world: World, runs_file: pathlib.Path, launch_output: str) -> subprocess.CompletedProcess[str]:
+  """The switch's adoption check against RUNS_FILE and one launch's output, through a shell that sources the switch."""
+  launch_log = world.root / "server.log"
+  launch_log.write_text(launch_output, encoding="utf-8")
+  work = world.root / "work"
+  work.mkdir(exist_ok=True)
+  env = {
+      **world.env,
+      "RUNS_FILE": str(runs_file),
+      "NEW_LOG": str(launch_log),
+      "NEW_OFFSET": "0",
+      "WORK": str(work),
+  }
+  return subprocess.run(
+      ["bash", "-c", 'source "$1" python && adopted', "bash",
+       str(SWITCH)],
+      env=env,
+      capture_output=True,
+      text=True,
+      timeout=30,
+      check=False)
+
+
+def test_adoption_passes_when_the_recorded_run_ended_during_the_switch(world: World) -> None:
+  """A run whose process has ended needs no resume line: the check passes and logs the run that ended."""
+  _seed_live_run(world, "run-ended", "claude-opus")
+  runs_file = _scanned_runs_file(world)  # recorded while the process still ran, as the preflight scan does
+  world.live[0].kill()
+  world.live[0].wait()
+
+  proc = _adopted(world, runs_file, DRAIN_LINE.format(session=SESSION, run_id="run-ended"))
+
+  assert proc.returncode == 0, proc.stdout + proc.stderr
+  assert "readback: run run-ended ended during the switch" in proc.stdout
+  assert "was not adopted" not in proc.stdout
+
+
+def test_adoption_fails_only_for_a_recorded_run_that_still_runs(world: World) -> None:
+  """Two recorded runs: the one whose process ended passes, and the one still running with no resume line fails."""
+  _seed_live_run(world, "run-ended", "claude-opus")
+  ended = world.live[0]
+  _seed_live_run(world, "run-live", "claude-opus")
+  live = world.live[1]
+  runs_file = _runs_file(
+      world, f"live\t{SESSION}\trun-ended\tclaude-opus\t{ended.pid}\t{_pid_start(ended.pid)}",
+      f"live\t{SESSION}\trun-live\tclaude-opus\t{live.pid}\t{_pid_start(live.pid)}")
+  ended.kill()
+  ended.wait()
+
+  proc = _adopted(world, runs_file, "")
+
+  assert proc.returncode == 1, proc.stdout + proc.stderr
+  assert "readback: run run-ended ended during the switch" in proc.stdout
+  assert "readback: run run-live was not adopted" in proc.stdout
+
+
+def test_adoption_treats_a_reused_pid_as_an_ended_run(world: World) -> None:
+  """The record pins a process instance: this pid now belongs to a process with another start time, so the run ended."""
+  _seed_live_run(world, "run-reused", "claude-opus")
+  pid = world.live[0].pid
+  runs_file = _runs_file(world, f"live\t{SESSION}\trun-reused\tclaude-opus\t{pid}\t{int(_pid_start(pid)) + 1}")
+
+  proc = _adopted(world, runs_file, "")
+
+  assert proc.returncode == 0, proc.stdout + proc.stderr
+  assert "readback: run run-reused ended during the switch" in proc.stdout
 
 
 ProbeRun = Callable[..., tuple[subprocess.CompletedProcess[str], list[str]]]

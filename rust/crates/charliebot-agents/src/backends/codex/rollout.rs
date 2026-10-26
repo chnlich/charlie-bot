@@ -10,6 +10,7 @@ use anyhow::{Context, bail};
 use memchr::memrchr;
 use memmap2::Mmap;
 use serde_json::{Map, Value, json};
+use walkdir::WalkDir;
 
 use super::text::object_or_empty;
 
@@ -150,23 +151,24 @@ pub fn parse_event_line(line: &[u8], path: &Path, log_event: &str) -> anyhow::Re
   }
 }
 
-/// The records of every file under `root` whose name `keep` accepts, in the order the Python walk yields them: a
-/// directory's own files before its subdirectories'. A symlinked directory is not entered.
+/// The records of every file under `root` whose name `keep` accepts. A directory is not a record, and a symlinked
+/// directory is not entered.
 pub fn walk_files(root: &Path, keep: impl Fn(&str) -> bool) -> io::Result<Vec<PathBuf>> {
   let mut found = Vec::new();
-  let mut stack = vec![root.to_path_buf()];
-  while let Some(dir) = stack.pop() {
-    for entry in fs::read_dir(&dir)? {
-      let entry = entry?;
-      let path = entry.path();
-      if entry.file_type()?.is_dir() {
-        stack.push(path);
-      } else if keep(&entry.file_name().to_string_lossy()) {
-        found.push(path);
-      }
+  for entry in WalkDir::new(root).follow_links(false) {
+    let entry = entry.map_err(walk_error)?;
+    if entry.depth() == 0 || entry.path().is_dir() {
+      continue;
+    }
+    if keep(&entry.file_name().to_string_lossy()) {
+      found.push(entry.into_path());
     }
   }
   Ok(found)
+}
+
+fn walk_error(error: walkdir::Error) -> io::Error {
+  error.into_io_error().unwrap_or_else(|| io::Error::other(error))
 }
 
 /// The file's modification time in nanoseconds (`st_mtime_ns`).
@@ -242,6 +244,26 @@ mod tests {
     let path = root.path().join("rollout.jsonl");
     fs::write(&path, "").unwrap();
     assert!(extract_latest_rollout_usage(&path).unwrap().is_none());
+  }
+
+  #[test]
+  fn walk_files_lists_matching_files_at_every_depth_without_entering_a_linked_directory() {
+    let root = tempfile::tempdir().unwrap();
+    let nested = root.path().join("2026/10/18");
+    fs::create_dir_all(&nested).unwrap();
+    fs::write(root.path().join("rollout-a.jsonl"), "").unwrap();
+    fs::write(nested.join("rollout-b.jsonl"), "").unwrap();
+    fs::write(nested.join("notes.txt"), "").unwrap();
+    let elsewhere = tempfile::tempdir().unwrap();
+    fs::write(elsewhere.path().join("rollout-c.jsonl"), "").unwrap();
+    std::os::unix::fs::symlink(elsewhere.path(), root.path().join("linked")).unwrap();
+
+    let mut found = walk_files(root.path(), |name| name.ends_with(".jsonl")).unwrap();
+    found.sort();
+
+    let mut expected = vec![root.path().join("rollout-a.jsonl"), nested.join("rollout-b.jsonl")];
+    expected.sort();
+    assert_eq!(found, expected);
   }
 
   #[test]

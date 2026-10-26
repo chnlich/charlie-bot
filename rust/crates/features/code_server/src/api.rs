@@ -49,7 +49,8 @@ pub(crate) fn matches(path: &str) -> bool {
 pub(crate) fn code_server_enabled(features: &FeatureContext) -> Result<TemplateValue, String> {
   let cfg = features.config.get().map_err(|error| error.to_string())?;
   let section = cfg.section::<CodeServerConfig>("code_server");
-  Ok(TemplateValue::from(executable(section).is_some()))
+  let executable = executable(section).map_err(|error| error.to_string())?;
+  Ok(TemplateValue::from(executable.is_some()))
 }
 
 /// `open_code_server`: the port and the resolved folder, after the code-server on that port is listening.
@@ -115,7 +116,8 @@ fn prepare_open(
   repo_root: &Path,
   folder: &str,
 ) -> Result<OpenSetup, Response> {
-  let Some(binary) = executable(section) else {
+  let Some(binary) = executable(section).map_err(|error| responses::internal_error("OSError", error.to_string()))?
+  else {
     return Err(http_error(StatusCode::NOT_FOUND, NOT_AVAILABLE_DETAIL));
   };
   let folder_path = resolve_folder(folder, paths)?;
@@ -182,7 +184,7 @@ fn spawn(binary: &str, config_path: &Path) -> io::Result<Child> {
 }
 
 /// `_resolve_code_server_executable`: `code_server.bin` (with `~` expanded) when set, else `code-server`.
-pub(crate) fn executable(section: &CodeServerConfig) -> Option<String> {
+pub(crate) fn executable(section: &CodeServerConfig) -> anyhow::Result<Option<String>> {
   let search_path = std::env::var_os("PATH").map(|path| path.to_string_lossy().into_owned());
   match section.bin.as_deref().filter(|bin| !bin.is_empty()) {
     Some(bin) => which(&paths::expanduser(&config::pathlib_text(bin)), search_path.as_deref()),

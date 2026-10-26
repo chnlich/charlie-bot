@@ -6,11 +6,13 @@
 //! timeout policy and error text.
 
 use std::collections::HashMap;
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use charliebot_core::pyfmt;
+use jwalk::{Parallelism, WalkDir};
 use tokio::process::Command;
 use tokio::time::timeout;
 
@@ -764,56 +766,59 @@ fn assert_safe_worktree_cleanup_target(
   Ok(resolved_wt)
 }
 
-/// True when *path* contains any `.git` marker without following symlinks (`src/infra/git.py:464`).
+/// True when *path* contains any `.git` marker without following symlinks (`src/infra/git.py:464`). An entry that
+/// cannot be read is not a marker.
 fn contains_git_marker(path: &Path) -> bool {
-  let entries = match std::fs::read_dir(path) {
-    Ok(entries) => entries,
-    Err(_) => return false,
-  };
-  for entry in entries.flatten() {
-    let file_type = match entry.file_type() {
-      Ok(file_type) => file_type,
-      Err(_) => continue,
-    };
-    if entry.file_name() == ".git" {
-      return true;
-    }
-    if file_type.is_dir() && contains_git_marker(&entry.path()) {
-      return true;
-    }
-  }
-  false
+  WalkDir::new(path)
+    .min_depth(1)
+    .follow_links(false)
+    .skip_hidden(false)
+    .parallelism(Parallelism::Serial)
+    .into_iter()
+    .flatten()
+    .any(|entry| entry.file_name() == ".git")
+}
+
+/// Whether `name` is one of the cache, env and build directories a worktree sheds before removal.
+fn is_local_artifact_name(name: &OsStr) -> bool {
+  WORKTREE_LOCAL_ARTIFACT_NAMES.contains(&name.to_string_lossy().as_ref())
 }
 
 /// Yields paths of known cache/env/build artifact dirs inside the worktree (`src/infra/git.py:472`).
-/// Walks top-down without following symlinks and never descends into a nested git worktree
-/// (a non-root dir holding a `.git` marker) or into an artifact dir.
-fn collect_local_worktree_artifacts(wt_path: &Path, dir: &Path, artifacts: &mut Vec<PathBuf>) {
-  let entries = match std::fs::read_dir(dir) {
-    Ok(entries) => entries,
-    Err(_) => return,
-  };
-  for entry in entries.flatten() {
-    let name = entry.file_name();
-    let file_type = match entry.file_type() {
-      Ok(file_type) => file_type,
-      Err(_) => continue,
-    };
-    if !file_type.is_dir() {
-      continue;
-    }
-    if name == ".git" {
-      continue;
-    }
-    if WORKTREE_LOCAL_ARTIFACT_NAMES.contains(&name.to_string_lossy().as_ref()) {
+/// Walks without following symlinks. An artifact dir is yielded but not read, and a nested git worktree (a dir below
+/// the root that holds a `.git` marker) is neither yielded nor read.
+fn collect_local_worktree_artifacts(wt_path: &Path, artifacts: &mut Vec<PathBuf>) {
+  let root = wt_path.to_path_buf();
+  let walk = WalkDir::new(wt_path)
+    .min_depth(1)
+    .follow_links(false)
+    .skip_hidden(false)
+    .parallelism(Parallelism::Serial)
+    .process_read_dir(move |depth, dir, _state, children| {
+      // jwalk also calls this for the root entry itself, with no depth and the root's parent as `dir`. Only the
+      // contents of the root and of its subdirectories are filtered.
+      if depth.is_none() {
+        return;
+      }
+      children.retain_mut(|child| {
+        let Ok(entry) = child else { return true };
+        if entry.file_name() == ".git" {
+          return false;
+        }
+        if !entry.file_type().is_dir() {
+          return true;
+        }
+        if is_local_artifact_name(entry.file_name()) {
+          entry.read_children = None;
+          return true;
+        }
+        !(dir != root && entry.path().join(".git").symlink_metadata().is_ok())
+      });
+    });
+  for entry in walk.into_iter().flatten() {
+    if entry.file_type().is_dir() && is_local_artifact_name(entry.file_name()) {
       artifacts.push(entry.path());
-      continue;
     }
-    if dir != wt_path && entry.path().join(".git").symlink_metadata().is_ok() {
-      // A nested git worktree (or submodule): never descend.
-      continue;
-    }
-    collect_local_worktree_artifacts(wt_path, &entry.path(), artifacts);
   }
 }
 
@@ -822,7 +827,7 @@ fn collect_local_worktree_artifacts(wt_path: &Path, dir: &Path, artifacts: &mut 
 /// touches its target, and `git worktree remove --force` removes the entry on its own.
 async fn remove_local_worktree_artifacts(wt_path: &Path, thread_id: &str) {
   let mut artifacts = Vec::new();
-  collect_local_worktree_artifacts(wt_path, wt_path, &mut artifacts);
+  collect_local_worktree_artifacts(wt_path, &mut artifacts);
   for artifact_path in artifacts {
     if artifact_path.is_symlink() {
       tracing::warn!(
@@ -1116,7 +1121,7 @@ mod tests {
     std::os::unix::fs::symlink(root.join(".venv"), root.join("link-to-venv")).unwrap();
 
     let mut artifacts = Vec::new();
-    collect_local_worktree_artifacts(root, root, &mut artifacts);
+    collect_local_worktree_artifacts(root, &mut artifacts);
     let mut found: Vec<PathBuf> = artifacts.iter().map(|path| path.strip_prefix(root).unwrap().to_path_buf()).collect();
     found.sort();
     // A nested worktree directly under the root is still descended; one deeper down is pruned with its artifacts.

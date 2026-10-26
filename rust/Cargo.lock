@@ -832,6 +832,7 @@ dependencies = [
  "charliebot-usage",
  "charliebot-web-reply",
  "futures-util",
+ "jwalk",
  "libc",
  "memchr",
  "memmap2",

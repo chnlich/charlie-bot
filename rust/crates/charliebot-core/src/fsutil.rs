@@ -1,11 +1,13 @@
-//! Atomic file publication (`src/infra/json_utils.py` `atomic_write_text` and `atomic_write_stream`).
+//! Atomic file publication (`src/infra/json_utils.py` `atomic_write_text` and `atomic_write_stream`) and the read-only
+//! mapping that the log walkers scan backward.
 
 use std::fs::File;
 use std::io::{self, BufWriter, Write};
 use std::num::NonZeroU64;
-use std::os::fd::AsRawFd;
 use std::path::Path;
 use std::sync::OnceLock;
+
+use memmap2::Mmap;
 
 /// Write `text` to `path` through a uniquely named sibling `.<name>.<uuid hex>.tmp` swapped in by
 /// `rename`, so a reader sees the old content or the new, never a partial write. The sibling is
@@ -71,7 +73,7 @@ pub fn page_bytes() -> u64 {
     .get()
 }
 
-/// A read-only mapping of one file's bytes, the walker Python's `ndjson.iter_ndjson_events_from_end` builds.
+/// Map `path` read-only, or return `None` when the file holds no bytes (an empty mapping is invalid).
 ///
 /// A backward walk over a mapped log faults the pages it crosses, while a `read` per page pays one syscall per page
 /// and gets none of the kernel's readahead. On a cold copy of a large log that is the difference between seconds and
@@ -79,46 +81,12 @@ pub fn page_bytes() -> u64 {
 ///
 /// The mapping is safe against the writers these readers meet because they only append; a rotated log publishes
 /// through `rename` onto a new inode, and a truncating writer is no more allowed here than under Python's mapping.
-pub struct FileMap {
-  base: *mut libc::c_void,
-  len: usize,
-}
-
-impl FileMap {
-  /// Map `path` read-only, or `None` when the file holds no bytes (an empty mapping is invalid).
-  pub fn open(path: &Path) -> io::Result<Option<FileMap>> {
-    let file = std::fs::File::open(path)?;
-    let len = usize::try_from(file.metadata()?.len()).expect("a file length fits in usize on a 64-bit host");
-    if len == 0 {
-      return Ok(None);
-    }
-    // SAFETY: the descriptor stays open for the call, and `len` is the file's own length. The pointer is paired with
-    // `len` in `FileMap::drop`, and the mapping is read-only.
-    let base =
-      unsafe { libc::mmap(std::ptr::null_mut(), len, libc::PROT_READ, libc::MAP_PRIVATE, file.as_raw_fd(), 0) };
-    if base == libc::MAP_FAILED {
-      return Err(io::Error::last_os_error());
-    }
-    Ok(Some(FileMap { base, len }))
+pub fn map_file(path: &Path) -> io::Result<Option<Mmap>> {
+  let file = File::open(path)?;
+  if file.metadata()?.len() == 0 {
+    return Ok(None);
   }
-
-  /// The mapped bytes.
-  #[must_use]
-  pub fn bytes(&self) -> &[u8] {
-    // SAFETY: `base`/`len` name a live read-only mapping, and the borrow keeps it alive for the slice's lifetime.
-    unsafe { std::slice::from_raw_parts(self.base.cast(), self.len) }
-  }
+  // SAFETY: the log is append-only while mapped, as the doc comment above requires; no writer truncates it in place.
+  let map = unsafe { Mmap::map(&file)? };
+  Ok(Some(map))
 }
-
-impl Drop for FileMap {
-  fn drop(&mut self) {
-    // SAFETY: `base`/`len` are the pair returned by the one `mmap` in `open`.
-    unsafe {
-      libc::munmap(self.base, self.len);
-    }
-  }
-}
-
-// SAFETY: the mapping is read-only and owned; sharing it only shares immutable bytes.
-unsafe impl Send for FileMap {}
-unsafe impl Sync for FileMap {}

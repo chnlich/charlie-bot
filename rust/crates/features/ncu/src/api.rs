@@ -15,7 +15,6 @@ use charliebot_core::RepoRoot;
 use charliebot_registry::FeatureContext;
 use charliebot_registry::templating::Templating;
 use nix::errno::Errno;
-use percent_encoding::percent_decode_str;
 use serde_json::{Value, json};
 
 use crate::error::ParseError;
@@ -149,19 +148,10 @@ fn is_regular_file(path: &Path) -> io::Result<bool> {
 /// `request.query_params.getlist(name)`: every value of a repeated name, decoded as Starlette decodes it. `+` is a
 /// space, and a pair without `=` has an empty value.
 fn query_values(query: Option<&str>, name: &str) -> Vec<String> {
-  query
-    .unwrap_or_default()
-    .split('&')
-    .filter(|pair| !pair.is_empty())
-    .filter_map(|pair| {
-      let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
-      (decode(key) == name).then(|| decode(value))
-    })
+  form_urlencoded::parse(query.unwrap_or_default().as_bytes())
+    .filter(|(key, _)| key == name)
+    .map(|(_, value)| value.into_owned())
     .collect()
-}
-
-fn decode(text: &str) -> String {
-  percent_decode_str(&text.replace('+', " ")).decode_utf8_lossy().into_owned()
 }
 
 #[cfg(test)]

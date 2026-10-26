@@ -16,6 +16,11 @@ use charliebot_registry::context::{FeatureContext, StartupState};
 use charliebot_registry::{Registry, RegistryError};
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskSpec};
 use charliebot_store::{CreateTask, Store, TaskCaller};
+use nix::errno::Errno;
+use nix::sys::prctl::set_child_subreaper;
+use nix::sys::signal::{Signal, killpg};
+use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
+use nix::unistd::{Pid, getpgid};
 use serde_json::Map;
 use serde_json::Value;
 
@@ -199,26 +204,22 @@ fn git(dir: &Path, args: &[&str]) -> anyhow::Result<()> {
 }
 
 pub struct ProcessGroupGuard {
-  groups: Vec<libc::pid_t>,
+  groups: Vec<Pid>,
 }
 
 impl ProcessGroupGuard {
   pub fn new() -> Self {
-    if unsafe { libc::prctl(36, 1, 0, 0, 0) } != 0 {
-      panic!("cron test process guard could not become a child subreaper: {}", std::io::Error::last_os_error());
+    if let Err(error) = set_child_subreaper(true) {
+      panic!("cron test process guard could not become a child subreaper: {error}");
     }
     Self { groups: Vec::new() }
   }
 
   pub fn track(&mut self, pid: u32) {
-    let group = unsafe { libc::getpgid(pid as libc::pid_t) };
-    if group >= 0 {
-      self.groups.push(group);
-      return;
-    }
-    let error = std::io::Error::last_os_error();
-    if error.raw_os_error() != Some(libc::ESRCH) {
-      panic!("cron test process guard could not inspect process {pid}: {error}");
+    match getpgid(Some(Pid::from_raw(pid as i32))) {
+      Ok(group) => self.groups.push(group),
+      Err(Errno::ESRCH) => {}
+      Err(error) => panic!("cron test process guard could not inspect process {pid}: {error}"),
     }
   }
 }
@@ -226,20 +227,27 @@ impl ProcessGroupGuard {
 impl Drop for ProcessGroupGuard {
   fn drop(&mut self) {
     for group in &self.groups {
-      unsafe { libc::kill(-*group, libc::SIGKILL) };
+      let _ = killpg(*group, Signal::SIGKILL);
     }
     for _ in 0..100 {
-      let mut status = 0;
       for group in &self.groups {
-        while unsafe { libc::waitpid(-*group, &mut status, libc::WNOHANG) } > 0 {}
+        while matches!(
+          waitpid(Pid::from_raw(-group.as_raw()), Some(WaitPidFlag::WNOHANG)),
+          Ok(status) if status != WaitStatus::StillAlive
+        ) {}
       }
-      if self.groups.iter().all(|group| unsafe { libc::kill(-*group, 0) } < 0) {
+      if self.groups.iter().all(|group| killpg(*group, None::<Signal>).is_err()) {
         return;
       }
       std::thread::sleep(std::time::Duration::from_millis(20));
     }
-    let remaining =
-      self.groups.iter().copied().filter(|group| unsafe { libc::kill(-*group, 0) } == 0).collect::<Vec<_>>();
+    let remaining = self
+      .groups
+      .iter()
+      .copied()
+      .filter(|group| killpg(*group, None::<Signal>).is_ok())
+      .map(Pid::as_raw)
+      .collect::<Vec<_>>();
     if !remaining.is_empty() {
       let message = format!("cron test process guard could not reap process groups {remaining:?}");
       if std::thread::panicking() {

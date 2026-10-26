@@ -129,11 +129,6 @@ SSH_LAUNCH_TIMEOUT = 30  # seconds
 # Session websocket (browser push channel)
 # ---------------------------------------------------------------------------
 
-# First message of cursor negotiation on /ws/sessions: the browser must send its
-# {"type": "cursor"} replay point within this window or the subscription starts
-# from event 0. Expiry is logged as a parse failure, not fatal.
-SESSION_WS_CURSOR_TIMEOUT = 5.0  # seconds
-
 # Receive wait on the same websocket; expiry sends the client a {"type": "ping"}
 # keepalive instead of closing, and the next receive wait starts fresh.
 WS_KEEPALIVE_TIMEOUT = 30.0  # seconds

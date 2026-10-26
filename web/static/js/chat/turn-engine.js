@@ -170,7 +170,8 @@
       // the front, a live message at the back. attach derives the segments from
       // it, so every projection reads the same order.
       this.entries = [];
-      this.knownIds = new Set();
+      // Event ids can identify distinct message rows, so records include the display fields.
+      this.messageRecords = new Set();
       this.segments = [];
       this.registry = new Map();
       this.measuredFolded = new Map();
@@ -343,8 +344,26 @@
     // A new entry for one message. The caller places it in `this.entries`.
     makeEntry(msg) {
       const entry = {msg, node: null, ready: false};
-      if (isStable(msg)) this.knownIds.add(String(msg.id));
+      const key = this.messageKey(msg);
+      if (key !== null) this.messageRecords.add(key);
       return entry;
+    }
+
+    messageKey(msg) {
+      if (msg.id == null || msg.id === '') return null;
+      return JSON.stringify([msg.role, msg.id, typeof msg.content, msg.content]);
+    }
+
+    hasMessage(msg) {
+      const key = this.messageKey(msg);
+      return key !== null && this.messageRecords.has(key);
+    }
+
+    rekeyMessage(previous, current) {
+      const previousKey = this.messageKey(previous);
+      const currentKey = this.messageKey(current);
+      if (previousKey === null || currentKey === null || !this.messageRecords.delete(previousKey)) return;
+      this.messageRecords.add(currentKey);
     }
 
     // ---- height model -------------------------------------------------------
@@ -1116,7 +1135,7 @@
       this.resizeRafHandle = null;
       this.resizeRafScheduled = false;
       this.entries = [];
-      this.knownIds.clear();
+      this.messageRecords.clear();
       this.segments = [];
       this.readingAnchor = null;
       this.pendingAnchor = null;
@@ -1422,10 +1441,13 @@
     // turn wrappers are not re-derived, and the return value is the pixel
     // shift the existing content moved down by.
     prependMessages(messages) {
+      const pageRecords = new Set();
       const fresh = messages.filter((msg) => {
-        if (!isStable(msg)) return true;
-        const id = String(msg.id);
-        return !this.knownIds.has(id);
+        const key = this.messageKey(msg);
+        if (key === null) return true;
+        if (this.messageRecords.has(key) || pageRecords.has(key)) return false;
+        pageRecords.add(key);
+        return true;
       }).map((msg) => this.makeEntry(msg));
       if (!fresh.length) return 0;
       // The older page sits in front of every stored message.
@@ -1493,10 +1515,9 @@
         });
       }
       const wasPinned = this.shouldFollow();
-      const entry = {msg, node: null, ready: false};
+      const entry = this.makeEntry(msg);
       this.renderAtom(entry, true);
       this.entries.push(entry);
-      if (isStable(msg)) this.knownIds.add(String(msg.id));
 
       const tail = this.segments[this.segments.length - 1];
       if (!tail || !(tail.kind === 'flat' && tail.pending)) {

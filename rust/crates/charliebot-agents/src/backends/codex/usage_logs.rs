@@ -15,6 +15,7 @@ use charliebot_core::pyfmt::python_str;
 use charliebot_registry::usage::{
   QuotaAccount, RecordKind, SourceSweep, SweepScope, UsageOps, UsageRecord, UsageSourceImpl,
 };
+use memchr::{memmem, memrchr};
 use serde_json::{Map, Value};
 
 use super::rollout::{self, SESSION_META, TURN_CONTEXT, mtime_ns, token_count_payload, walk_files};
@@ -175,13 +176,13 @@ fn read_rollout(codex_home: &Path, path: &Path, account: &str) -> anyhow::Result
 /// The complete lines of `bytes` that carry a marker, parsed. A trailing fragment without its newline waits for a
 /// later read. A line that does not parse is dropped; a valid JSON value that is not an object fails when read.
 fn marker_lines(bytes: &[u8]) -> anyhow::Result<Vec<Map<String, Value>>> {
-  let Some(last_newline) = bytes.iter().rposition(|byte| *byte == b'\n') else {
+  let Some(last_newline) = memrchr(b'\n', bytes) else {
     return Ok(Vec::new());
   };
   let mut records = Vec::new();
   for line in bytes[..=last_newline]
     .split(|byte| *byte == b'\n')
-    .filter(|line| MARKERS.iter().any(|marker| line.windows(marker.len()).any(|window| window == *marker)))
+    .filter(|line| MARKERS.iter().any(|marker| memmem::find(line, marker).is_some()))
   {
     match serde_json::from_slice::<Value>(line) {
       Ok(Value::Object(record)) => records.push(record),

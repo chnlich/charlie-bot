@@ -780,6 +780,21 @@ mod tests {
   }
 
   #[test]
+  fn json_parse_errors_keep_python_message_and_character_positions() {
+    let cases: [(&[u8], &str); 5] = [
+      (br#"{"x":"\q"}"#, "invalid escaped sequence in string: line 1 column 7 (char 6)"),
+      (b"{\"x\":\"a\nb\"}", "unexpected control character in string: line 1 column 8 (char 7)"),
+      (br#"{"x":01}"#, "number with leading zero is not allowed: line 1 column 6 (char 5)"),
+      (br#"{"x":1e9999}"#, "number is infinity when parsed as double: line 1 column 6 (char 5)"),
+      ("{\"é\": }".as_bytes(), "unexpected character, expected a JSON value: line 1 column 7 (char 6)"),
+    ];
+    for (source, expected) in cases {
+      let error = serde_json::from_slice::<Value>(source).expect_err("the input is invalid JSON");
+      assert_eq!(orjson_error_text(source, &error), expected, "source {source:?}");
+    }
+  }
+
+  #[test]
   fn direct_pass_compresses_original_bytes_and_rejects_non_traces() {
     let directory = tempdir().unwrap();
     let trace = directory.path().join("trace.json");

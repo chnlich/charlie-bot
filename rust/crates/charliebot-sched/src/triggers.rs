@@ -1804,6 +1804,16 @@ mod tests {
     assert_eq!(serde_json::to_value(loaded).unwrap(), serde_json::to_value(&trigger).unwrap());
   }
 
+  #[test]
+  fn open_pidfd_opens_a_live_process_and_reports_a_reaped_one_as_esrch() {
+    assert!(open_pidfd(i64::from(std::process::id())).is_ok());
+    let mut child = std::process::Command::new("true").spawn().expect("true starts");
+    let pid = i64::from(child.id());
+    child.wait().expect("true exits");
+    let error = open_pidfd(pid).expect_err("a reaped process has no pidfd");
+    assert_eq!(error.raw_os_error(), Some(libc::ESRCH));
+  }
+
   #[tokio::test]
   // Python: tests/test_trigger_pending_limit.py::test_sixth_registration_raises_with_exact_detail
   async fn sixth_registration_returns_python_limit_detail() {

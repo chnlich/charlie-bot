@@ -16,6 +16,7 @@ use anyhow::Context;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_registry::usage::{CategoryResult, SourceSweep, SweepScope};
 use regex::Regex;
+use walkdir::WalkDir;
 
 use super::ClaudeHost;
 use super::claude_config::AccountsConfig;
@@ -87,41 +88,33 @@ fn live_worktree_dir_names(cfg: &CharlieBotConfig) -> anyhow::Result<HashSet<Str
 /// directory is not entered, as `os.walk` does not enter it. A listing or stat failure skips its entry.
 fn newest_mtime(root: &Path) -> Option<f64> {
   let mut newest: Option<f64> = None;
-  let mut stack = vec![root.to_path_buf()];
-  while let Some(dir) = stack.pop() {
-    let entries = match fs::read_dir(&dir) {
-      Ok(entries) => entries,
+  for entry in WalkDir::new(root).follow_links(false) {
+    let entry = match entry {
+      Ok(entry) => entry,
       Err(error) => {
-        tracing::debug!(target: "charliebot_agents", path = %dir.display(), error = %error, "storage_cool_mtime_skip");
+        tracing::debug!(target: "charliebot_agents", path = %error_path(&error), error = %error, "storage_cool_mtime_skip");
         continue;
       }
     };
-    for entry in entries {
-      let path = match entry {
-        Ok(entry) => entry.path(),
-        Err(error) => {
-          tracing::debug!(target: "charliebot_agents", path = %dir.display(), error = %error, "storage_cool_mtime_skip");
-          continue;
-        }
-      };
-      if path.is_dir() {
-        if !path.is_symlink() {
-          stack.push(path);
-        }
-        continue;
+    if entry.depth() == 0 || entry.path().is_dir() {
+      continue;
+    }
+    match fs::metadata(entry.path()) {
+      Ok(metadata) => {
+        let mtime = mtime_secs(&metadata);
+        newest = Some(newest.map_or(mtime, |best| best.max(mtime)));
       }
-      match fs::metadata(&path) {
-        Ok(metadata) => {
-          let mtime = mtime_secs(&metadata);
-          newest = Some(newest.map_or(mtime, |best| best.max(mtime)));
-        }
-        Err(error) => {
-          tracing::debug!(target: "charliebot_agents", path = %path.display(), error = %error, "storage_cool_mtime_skip");
-        }
+      Err(error) => {
+        tracing::debug!(target: "charliebot_agents", path = %entry.path().display(), error = %error, "storage_cool_mtime_skip");
       }
     }
   }
   newest.or_else(|| fs::metadata(root).ok().map(|metadata| mtime_secs(&metadata)))
+}
+
+/// The path a walk error names, for the skip log line.
+fn error_path(error: &walkdir::Error) -> String {
+  error.path().map(|path| path.display().to_string()).unwrap_or_default()
 }
 
 /// The newest-mtime form of the idle judgment for a transcript directory. A probe that finds no time is logged and
@@ -139,30 +132,19 @@ fn idle_past_window(path: &Path, scope: &SweepScope) -> bool {
 /// The files under a transcript directory, sorted. Like `rglob`, the walk does not enter a symlinked directory.
 fn project_files(root: &Path) -> Vec<PathBuf> {
   let mut files = Vec::new();
-  let mut stack = vec![root.to_path_buf()];
-  while let Some(dir) = stack.pop() {
-    let entries = match fs::read_dir(&dir) {
-      Ok(entries) => entries,
+  for entry in WalkDir::new(root).follow_links(false) {
+    let entry = match entry {
+      Ok(entry) => entry,
       Err(error) => {
-        tracing::warn!(target: "charliebot_agents", dir = %dir.display(), error = %error, "storage_cool_dir_scan_failed");
+        tracing::warn!(target: "charliebot_agents", path = %error_path(&error), error = %error, "storage_cool_dir_scan_failed");
         continue;
       }
     };
-    for entry in entries {
-      let path = match entry {
-        Ok(entry) => entry.path(),
-        Err(error) => {
-          tracing::warn!(target: "charliebot_agents", dir = %dir.display(), error = %error, "storage_cool_dir_scan_failed");
-          continue;
-        }
-      };
-      if path.is_dir() {
-        if !path.is_symlink() {
-          stack.push(path);
-        }
-      } else if path.is_file() {
-        files.push(path);
-      }
+    if entry.depth() == 0 || entry.path().is_dir() {
+      continue;
+    }
+    if entry.path().is_file() {
+      files.push(entry.into_path());
     }
   }
   files.sort();

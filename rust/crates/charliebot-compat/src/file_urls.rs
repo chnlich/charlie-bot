@@ -9,7 +9,10 @@ use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 use charliebot_core::paths;
+use percent_encoding::{AsciiSet, percent_decode_str, percent_encode};
 use regex::Regex;
+
+use crate::urlquote::quote_set;
 
 /// The first file-server mount, without its trailing slash.
 pub const FILE_SERVER_MOUNT: &str = "/absolute_filepath";
@@ -199,32 +202,7 @@ fn valid_bracketed_host(hostname: &str) -> bool {
 
 /// Decode `%XX` bytes and replace invalid UTF-8 as `urllib.parse.unquote` does.
 fn percent_decode_lossy(value: &str) -> String {
-  let bytes = value.as_bytes();
-  let mut decoded = Vec::with_capacity(bytes.len());
-  let mut index = 0;
-  while index < bytes.len() {
-    if bytes[index] == b'%'
-      && index + 2 < bytes.len()
-      && let (Some(high), Some(low)) = (hex_value(bytes[index + 1]), hex_value(bytes[index + 2]))
-    {
-      decoded.push(high * 16 + low);
-      index += 3;
-      continue;
-    }
-    decoded.push(bytes[index]);
-    index += 1;
-  }
-  String::from_utf8_lossy(&decoded).into_owned()
-}
-
-/// One ASCII hexadecimal digit's value.
-fn hex_value(byte: u8) -> Option<u8> {
-  match byte {
-    b'0'..=b'9' => Some(byte - b'0'),
-    b'a'..=b'f' => Some(byte - b'a' + 10),
-    b'A'..=b'F' => Some(byte - b'A' + 10),
-    _ => None,
-  }
+  percent_decode_str(value).decode_utf8_lossy().into_owned()
 }
 
 /// A Unicode decimal digit's numeric value, as Python's `int` reads it.
@@ -411,20 +389,15 @@ fn retired_path(
   Ok((Some(absolute), None))
 }
 
+/// The file-server URL path's safe set: `urllib.parse.quote(path, safe="/:@")`.
+static MOUNT_QUOTE: AsciiSet = quote_set(b"/:@");
+
 /// The file-server URL path that names an absolute host path, quoted as `urllib.parse.quote(path, safe="/:@")` does
 /// (`_encoded_file_server_url_for_parts`).
 fn mount_url(path: &Path) -> String {
   let bytes = path.as_os_str().as_bytes();
   let relative = &bytes[bytes.iter().take_while(|byte| **byte == b'/').count()..];
-  let mut url = format!("{FILE_SERVER_MOUNT}/");
-  for &byte in relative {
-    if byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-' | b'~' | b'/' | b':' | b'@') {
-      url.push(char::from(byte));
-    } else {
-      url.push_str(&format!("%{byte:02X}"));
-    }
-  }
-  url
+  format!("{FILE_SERVER_MOUNT}/{}", percent_encode(relative, &MOUNT_QUOTE))
 }
 
 /// `urllib.parse.urlunsplit` of a link's scheme, network location, query and fragment around the absolute `path`.

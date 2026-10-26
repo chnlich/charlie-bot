@@ -18,5 +18,6 @@ pub mod responses;
 pub mod routing;
 pub mod static_files;
 mod transport;
+mod urlquote;
 pub mod validation;
 pub mod ws_client;

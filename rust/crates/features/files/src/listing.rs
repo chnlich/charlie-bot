@@ -9,10 +9,13 @@ use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
 use charliebot_core::timefmt;
+use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 use time::OffsetDateTime;
 
 use crate::MOUNT;
 use crate::human_size;
+
+const FILENAME_SET: &AsciiSet = &NON_ALPHANUMERIC.remove(b'_').remove(b'.').remove(b'-').remove(b'~');
 
 /// The ways the walk ends without a page. Each one is an answer of the route.
 #[derive(Debug)]
@@ -140,21 +143,12 @@ fn modified_minute(seconds: f64) -> Result<String, ListingError> {
 
 /// `html.escape(text)` with `quote=True`: the five characters that end an attribute value or a text node.
 fn escape(text: &str) -> String {
-  text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&#x27;")
+  html_escape::encode_quoted_attribute(text).into_owned()
 }
 
 /// `urllib.parse.quote(name, safe='')`: every byte but ASCII letters, digits and `_.-~` becomes `%XX`.
 fn quote(name: &str) -> String {
-  name
-    .bytes()
-    .map(|byte| {
-      if byte.is_ascii_alphanumeric() || b"_.-~".contains(&byte) {
-        (byte as char).to_string()
-      } else {
-        format!("%{byte:02X}")
-      }
-    })
-    .collect()
+  utf8_percent_encode(name, FILENAME_SET).to_string()
 }
 
 fn failed(kind: &'static str, detail: String) -> ListingError {

@@ -32,6 +32,10 @@ CONTEXT_RESET_INSTRUCTION = (
     "block. Then respond to what follows. A Slack or Discord thread post "
     "carries only the answer that `prompts/thread_reply_format.md` defines.")
 
+# The opener every reset note starts with: the bracketed label marks the note as a context reset before the
+# reason names what left the previous conversation, so a session turn and a continued worker node open alike.
+CONTEXT_RESET_OPENER = "[Context reset: "
+
 
 def backend_switch_reset_reason(native_backend: str | None, option_id: str) -> str:
   """The reset note's reason when the backend change itself forces the fresh conversation.
@@ -54,7 +58,7 @@ def context_reset_note(reason: str, task_goal: str | None = None) -> str:
   """
   task_part = "" if task_goal is None else f" The task is: {task_goal}."
   return (
-      f"[Context reset: {reason}.{task_part} {session_fork.HISTORY_LOCATION_NOTE} "
+      f"{CONTEXT_RESET_OPENER}{reason}.{task_part} {session_fork.HISTORY_LOCATION_NOTE} "
       f"{CONTEXT_RESET_INSTRUCTION}]")
 
 

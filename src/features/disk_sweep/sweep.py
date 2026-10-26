@@ -22,7 +22,7 @@ import tempfile
 from collections.abc import Iterable
 
 from src.infra import config, event_types, git, log_once, models
-from src.runtime import chat_events, runs
+from src.runtime import chat_events, run_identity, runs
 
 log = log_once.LazyStructlogLogger()
 
@@ -143,7 +143,7 @@ def _read_lifecycle(session_dir: pathlib.Path) -> dict | None:
 
 def _task_keep_worktree(cfg: config.CharlieBotConfig, session_id: str) -> bool | None:
   """Return a task's keep-worktree setting, or None when its owner is unknown."""
-  metadata_path = cfg.sessions_dir / session_id / "metadata.json"
+  metadata_path = cfg.sessions_dir / session_id / run_identity.SESSION_METADATA_NAME
   if not metadata_path.is_file():
     return None
   try:

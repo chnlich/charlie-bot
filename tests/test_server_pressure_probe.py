@@ -164,22 +164,19 @@ def test_pressure_target_exceeds_slice_max_inside_the_swap_cap() -> None:
   rss_anon = int(1.75 * server_pressure_probe.GIB)
   swap_cap = server_pressure_probe.PARENT_SWAP_MAX
   excess = server_pressure_probe.MEMORY_PRESSURE_SWAP_EXCESS_BYTES
-  reserve = server_pressure_probe.REPAIR_PROBE_BYTES
 
   target = server_pressure_probe.compute_memory_pressure_target(
       server_rss_anon_bytes=rss_anon,
       slice_memory_max_bytes=slice_max,
       slice_swap_max_bytes=swap_cap,
       swap_excess_bytes=excess,
-      probe_reserve_bytes=reserve,
       cap_bytes=int(server_pressure_probe.MAX_MEMORY_PRESSURE_GIB * server_pressure_probe.GIB),
   )
 
-  assert target == slice_max - rss_anon + excess - reserve
-  assert rss_anon + target > slice_max
-  # The repair probe runs beside the worker in the same slice, so the peak
-  # overshoot is the full excess and must stay inside the swap cap.
-  assert rss_anon + target + reserve - slice_max < swap_cap
+  assert target == slice_max - rss_anon + excess
+  overshoot = rss_anon + target - slice_max
+  assert overshoot == excess
+  assert overshoot < swap_cap
 
 
 def test_pressure_target_fails_fast_outside_its_bounds() -> None:
@@ -188,7 +185,6 @@ def test_pressure_target_fails_fast_outside_its_bounds() -> None:
       "slice_memory_max_bytes": 8 * gib,
       "slice_swap_max_bytes": server_pressure_probe.PARENT_SWAP_MAX,
       "swap_excess_bytes": server_pressure_probe.MEMORY_PRESSURE_SWAP_EXCESS_BYTES,
-      "probe_reserve_bytes": server_pressure_probe.REPAIR_PROBE_BYTES,
       "cap_bytes": int(server_pressure_probe.MAX_MEMORY_PRESSURE_GIB * gib),
   }
   with pytest.raises(RuntimeError, match=r"exceeds the .*-byte cap"):
@@ -201,16 +197,6 @@ def test_pressure_target_fails_fast_outside_its_bounds() -> None:
         slice_memory_max_bytes=8 * gib,
         slice_swap_max_bytes=server_pressure_probe.PARENT_SWAP_MAX,
         swap_excess_bytes=server_pressure_probe.PARENT_SWAP_MAX,
-        probe_reserve_bytes=common["probe_reserve_bytes"],
-        cap_bytes=common["cap_bytes"],
-    )
-  with pytest.raises(RuntimeError, match="steady-state excess"):
-    server_pressure_probe.compute_memory_pressure_target(
-        server_rss_anon_bytes=int(1.75 * gib),
-        slice_memory_max_bytes=8 * gib,
-        slice_swap_max_bytes=server_pressure_probe.PARENT_SWAP_MAX,
-        swap_excess_bytes=common["probe_reserve_bytes"],
-        probe_reserve_bytes=common["probe_reserve_bytes"],
         cap_bytes=common["cap_bytes"],
     )
 

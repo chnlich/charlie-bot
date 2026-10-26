@@ -10,7 +10,7 @@ import pytest
 import systemd_stubs
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-UNIT_FILES = ("charliebot.slice", "charliebot-agents.slice", "charliebot-repair.slice")
+UNIT_FILES = ("charliebot.slice", "charliebot-agents.slice")
 
 
 def stash_launcher(tmp_path: pathlib.Path) -> tuple[pathlib.Path, pathlib.Path]:
@@ -57,34 +57,57 @@ def test_preflight_accepts_limits_that_match_the_unit_files(tmp_path: pathlib.Pa
   assert result.stderr == ""
 
 
+def test_preflight_rejects_a_nonzero_swap_limit(tmp_path: pathlib.Path) -> None:
+  launcher, bin_dir = stash_launcher(tmp_path)
+  unit_file = launcher.parent / "systemd" / "charliebot-agents.slice"
+  unit_file.write_text(unit_file.read_text().replace("MemorySwapMax=0", "MemorySwapMax=1G"), encoding="utf-8")
+  systemd_stubs.write_systemctl(bin_dir, agents_memory_swap_max=1024**3)
+  result = run_preflight(launcher, bin_dir)
+  assert result.returncode != 0
+  assert "MemorySwapMax='1G', expected 0" in result.stderr
+
+
 def test_preflight_reads_a_unit_file_whose_last_line_has_no_newline(tmp_path: pathlib.Path) -> None:
   launcher, bin_dir = stash_launcher(tmp_path)
-  # The repair unit's last assignment is the swap limit; bash's read drops an unterminated last line.
-  unit_file = launcher.parent / "systemd" / "charliebot-repair.slice"
-  unit_file.write_text("[Slice]\nMemoryMax=8G\nMemorySwapMax=0", encoding="utf-8")
+  # The agents unit's last assignment is the swap limit; bash's read drops an unterminated last line.
+  unit_file = launcher.parent / "systemd" / "charliebot-agents.slice"
+  unit_file.write_text("[Slice]\nMemoryMax=80%\nMemorySwapMax=0", encoding="utf-8")
   systemd_stubs.write_systemctl(bin_dir)
   result = run_preflight(launcher, bin_dir)
   assert result.returncode == 0, result.stderr
 
 
+def test_percentage_limit_rounds_down_to_whole_pages() -> None:
+  """systemd's percentage is floor(MemTotal pages * percent / 100) * 4096; 80% of this host's MemTotal
+  produced 52,779,601,920 bytes in a live run."""
+  result = subprocess.run(
+      ["bash", "-c", 'source "$1"; _percent_bytes 80 64428228', "_",
+       str(ROOT / "scripts" / "start-server.sh")],
+      capture_output=True,
+      text=True,
+      check=False)
+  assert result.returncode == 0, result.stderr
+  assert result.stdout == "52779601920"
+
+
 def test_preflight_rejects_a_slice_limit_that_differs_from_its_unit_file(tmp_path: pathlib.Path) -> None:
   launcher, bin_dir = stash_launcher(tmp_path)
-  # The unit file is the single home: reading 36G from systemd against a 40G unit file stops the start.
+  # The unit file is the single home: reading 80% from systemd against a 40% unit file stops the start.
   unit_file = launcher.parent / "systemd" / "charliebot-agents.slice"
-  unit_file.write_text(unit_file.read_text().replace("MemoryMax=36G", "MemoryMax=40G"), encoding="utf-8")
+  unit_file.write_text(unit_file.read_text().replace("MemoryMax=80%", "MemoryMax=40%"), encoding="utf-8")
   systemd_stubs.write_systemctl(bin_dir)
   result = run_preflight(launcher, bin_dir)
   assert result.returncode != 0
   assert "charliebot-agents.slice" in result.stderr
   assert "MemoryMax" in result.stderr
   assert str(systemd_stubs.AGENTS_MEMORY_MAX) in result.stderr
-  assert str(40 * 1024**3) in result.stderr
+  assert str(systemd_stubs._memtotal_percent_bytes(40)) in result.stderr
 
 
 def test_preflight_rejects_a_missing_required_unit_limit(tmp_path: pathlib.Path) -> None:
   launcher, bin_dir = stash_launcher(tmp_path)
   unit_file = launcher.parent / "systemd" / "charliebot-agents.slice"
-  unit_file.write_text(unit_file.read_text().replace("MemoryMax=36G\n", ""), encoding="utf-8")
+  unit_file.write_text(unit_file.read_text().replace("MemoryMax=80%\n", ""), encoding="utf-8")
   systemd_stubs.write_systemctl(bin_dir, agents_memory_max="infinity")
   result = run_preflight(launcher, bin_dir)
   assert result.returncode != 0

@@ -1,12 +1,12 @@
 [Unit]
 Description=CharlieBot agent processes
 
-# The agents' memory share. At MemoryHigh the kernel slows the share down and reclaims its page
-# cache; at MemoryMax it kills the share's largest process. Swap stays off so a full share never
-# pushes the host into swap. A session's own 12 GiB cgroup stays inside this share.
+# The agents' share: every agent process a session spawns runs here, so the share covers all of them
+# together and holds all host memory except what the server and the system need. A full share ends
+# its largest process while the server, outside it, keeps answering. Swap stays off so a full share
+# never pushes the host into swap. A session's own 12 GiB cgroup stays inside this share.
 [Slice]
-MemoryHigh=34G
-MemoryMax=36G
+MemoryMax=80%
 MemorySwapMax=0
 
 [Install]

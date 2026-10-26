@@ -10,33 +10,38 @@ scopes may still own live processes.
 import json
 import pathlib
 
+
+def _memtotal_percent_bytes(percent: int) -> int:
+  """A percentage of host memory in bytes, by the launcher's rounding rule.
+
+  systemd rounds down to a whole 4096-byte page: floor(MemTotal pages * percent / 100) * 4096,
+  where a page is MemTotal kB / 4.
+  """
+  for line in pathlib.Path("/proc/meminfo").read_text(encoding="ascii").splitlines():
+    if line.startswith("MemTotal:"):
+      return ((int(line.split()[1]) // 4) * percent // 100) * 4096
+  raise RuntimeError("/proc/meminfo has no MemTotal line")
+
+
 # The values the committed unit files declare, in the bytes `systemctl show` reports.
-AGENTS_MEMORY_HIGH = 34 * 1024**3
-AGENTS_MEMORY_MAX = 36 * 1024**3
-REPAIR_MEMORY_MAX = 8 * 1024**3
+AGENTS_MEMORY_MAX = _memtotal_percent_bytes(80)  # charliebot-agents.slice's MemoryMax=80%
 
 
 def write_systemctl(
     bin_dir: pathlib.Path,
     *,
     agents_memory_max: int | str = AGENTS_MEMORY_MAX,
+    agents_memory_swap_max: int | str = 0,
     agents_active_state: str = "active") -> pathlib.Path:
-  """A ``systemctl --user show`` stand-in reporting the slices' committed values."""
+  """A ``systemctl --user show`` stand-in reporting the agents' slice's committed values."""
   stub = bin_dir / "systemctl"
   stub.write_text(
       f"""#!/usr/bin/env bash
 case "$*" in
   *charliebot-agents.slice*)
     echo ActiveState={agents_active_state}
-    echo MemoryHigh={AGENTS_MEMORY_HIGH}
     echo MemoryMax={agents_memory_max}
-    echo MemorySwapMax=0
-    ;;
-  *charliebot-repair.slice*)
-    echo ActiveState=active
-    echo MemoryHigh=infinity
-    echo MemoryMax={REPAIR_MEMORY_MAX}
-    echo MemorySwapMax=0
+    echo MemorySwapMax={agents_memory_swap_max}
     ;;
   *)
     exit 1

@@ -44,7 +44,7 @@ from collections.abc import Awaitable, Callable
 from src.backends.claude_code import claude_accounts, claude_code, claude_launch
 from src.infra import config, log_once, models, process
 from src.infra import event_types as ET
-from src.runtime import model_family, resource_class
+from src.runtime import model_family
 from src.runtime.agent_process import base
 
 log = log_once.LazyStructlogLogger()
@@ -329,10 +329,8 @@ async def run_compaction(
   cfg = config.get_config()
   session_cgroup = None
   if cgroup_session_id is not None and cfg.server.session_memory_max_mb > 0:
-    spawn_class = await resource_class.resolve(cgroup_session_id)
     session_cgroup = process.prepare_session_cgroup(
         cgroup_session_id,
-        spawn_class,
         memory_max_mb=cfg.server.session_memory_max_mb,
         swap_max_mb=cfg.server.session_swap_max_mb,
         tasks_max=cfg.server.session_tasks_max,

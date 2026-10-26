@@ -501,7 +501,7 @@ class TaskTreeManager:
 
   def _require_task(self, meta: models.SessionMetadata | None, session_id: str) -> models.SessionMetadata:
     if meta is None:
-      raise task_errors.TaskNotFoundError(f"task {session_id} not found")
+      raise task_errors.task_not_found(session_id)
     return meta
 
   def _require_session(self, meta: models.SessionMetadata | None, session_id: str) -> models.SessionMetadata:

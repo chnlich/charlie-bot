@@ -1653,7 +1653,7 @@ class TaskCompletionManager:
     tree = self._tree
     index = await tree._get_index()
     if index.metas.get(session_id) is None:
-      raise task_errors.TaskNotFoundError(f"task {session_id} not found")
+      raise task_errors.task_not_found(session_id)
     # The archived chain above the target, nearest first; the target joins
     # when it is itself archived. The walk stops at the first open node.
     chain: list[str] = []

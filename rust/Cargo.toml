@@ -97,8 +97,9 @@ tungstenite = { version = "0.29", default-features = false, features = ["handsha
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["registry"] }
 url = "2"
-walkdir = "2"
 uuid = { version = "1", features = ["v4", "v5"] }
+walkdir = "2"
+which = "8"
 
 charliebot-artifacts = { path = "crates/features/artifacts" }
 charliebot-agents = { path = "crates/charliebot-agents" }

@@ -1257,7 +1257,7 @@ async def _route_thread_session(
   try:
     route = await backend_pool.route(cfg, role="thread", text=text, candidates=candidates)
   except backend_pool.RouterError as e:
-    await _post_thread_error(adapter, origin, f"backend router failed: {e}")
+    await _post_thread_error(adapter, origin, backend_pool.router_failure_line(e))
     raise
   option = None
   if route.backends:

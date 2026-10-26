@@ -49,7 +49,7 @@ pub fn agent_environment(inherited: &Env, venv_bin: &Path, repo_root: &Path) -> 
     .context("the agent PATH entries join with the path separator")?
     .into_string()
     .map_err(|_| anyhow::anyhow!("the agent PATH is not valid Unicode"))?;
-  if !path_entries.iter().any(|entry| entry == &entry_point_dir) {
+  if !path_entries.iter().any(|entry| entry.as_os_str() == entry_point_dir.as_os_str()) {
     rewritten_path = format!("{}:{rewritten_path}", entry_point_dir.to_string_lossy());
   }
   values.insert("PATH".to_string(), rewritten_path);

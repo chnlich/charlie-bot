@@ -1,6 +1,7 @@
 //! The module-level helpers of `src/runtime/agent_process/base.py` that the CLI backend types share: the binary lookup,
 //! the child PATH and proxy edits, the Google key strip, and the Python value semantics of their translators.
 
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
@@ -78,7 +79,7 @@ pub fn resolve_binary(name: &str, path: &str, fallback_dir: &Path) -> anyhow::Re
 pub fn prepend_path_dir(env: &mut Env, dir: &str) {
   let current = env.get("PATH").cloned().unwrap_or_default();
   let mut entries: Vec<PathBuf> = std::env::split_paths(&current).collect();
-  if entries.iter().any(|entry| entry == Path::new(dir)) {
+  if entries.iter().any(|entry| entry.as_os_str() == OsStr::new(dir)) {
     return;
   }
   entries.insert(0, PathBuf::from(dir));
@@ -230,5 +231,13 @@ mod tests {
     assert_eq!(env["PATH"], "/home/a/.local/bin:/usr/bin");
     prepend_path_dir(&mut env, "/home/a/.local/bin");
     assert_eq!(env["PATH"], "/home/a/.local/bin:/usr/bin");
+  }
+
+  #[test]
+  fn prepend_matches_entries_as_exact_strings() {
+    // `base.prepend_path_dir` tests list membership, so a trailing slash names another entry.
+    let mut env = Env::from([("PATH".to_string(), "/home/a/.local/bin/:/usr/bin".to_string())]);
+    prepend_path_dir(&mut env, "/home/a/.local/bin");
+    assert_eq!(env["PATH"], "/home/a/.local/bin:/home/a/.local/bin/:/usr/bin");
   }
 }

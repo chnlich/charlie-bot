@@ -1,14 +1,14 @@
 //! Codex rollout records and the readers they share (`src/backends/codex/codex_usage.py`). Codex writes one JSON line
 //! per record into `<codex home>/sessions/**/rollout-*.jsonl`.
 
-use std::fs::{self, Metadata};
+use std::fs::Metadata;
 use std::io;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
+use charliebot_core::fsutil;
 use memchr::memrchr;
-use memmap2::Mmap;
 use serde_json::{Map, Value, json};
 use walkdir::WalkDir;
 
@@ -45,15 +45,10 @@ type UsageParts = (Value, Value, Option<Map<String, Value>>);
 
 /// The newest usage in one rollout, read backwards from its last line. `None` when no line carries a token count.
 pub fn extract_latest_rollout_usage(path: &Path) -> anyhow::Result<Option<RolloutUsage>> {
-  let file = fs::File::open(path).with_context(|| format!("opening rollout {}", path.display()))?;
-  let size = file.metadata().with_context(|| format!("statting rollout {}", path.display()))?.len();
   // An empty file has no mapping, and no line either, as Python's reader finds.
-  if size == 0 {
+  let Some(mapping) = fsutil::map_file(path).with_context(|| format!("mapping rollout {}", path.display()))? else {
     return Ok(None);
-  }
-  // SAFETY: Codex only appends to the rollout it writes, the same ground Python's read-only mapping of this file
-  // stands on; a truncating writer would fault this read as it faults that mapping.
-  let mapping = unsafe { Mmap::map(&file) }.with_context(|| format!("mapping rollout {}", path.display()))?;
+  };
   let mut usage: Option<UsageParts> = None;
   let mut model: Option<String> = None;
   let mut end = mapping.len();
@@ -193,6 +188,8 @@ pub fn rollout_stem(name: &str) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
+  use std::fs;
+
   use super::*;
 
   #[test]

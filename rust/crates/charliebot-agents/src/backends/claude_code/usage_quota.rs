@@ -17,6 +17,7 @@ use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, bail};
+use backon::{BackoffBuilder, ExponentialBuilder};
 use charliebot_compat::http_client::{self, Settings};
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::timefmt::utc_now_iso;
@@ -49,7 +50,7 @@ const USER_AGENT_FALLBACK: &str = "claude-code/2.1.219";
 const HTTP_OAUTH_TIMEOUT: Duration = Duration::from_secs(30);
 const EXT_USAGE_VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 /// The backoff ladder after a failed round: 60 seconds first, doubling, capped at 30 minutes.
-const BACKOFF_BASE_SECONDS: f64 = 30.0;
+const BACKOFF_MIN_DELAY: Duration = Duration::from_secs(60);
 const BACKOFF_CAP_SECONDS: f64 = 30.0 * 60.0;
 
 const PROVIDER: &str = "claude";
@@ -842,10 +843,20 @@ fn mark_expired_windows(
   marked
 }
 
-/// The next backoff: `min((previous or 30) * 2, 1800)`, so 60 seconds first, doubling, capped at 30 minutes.
+/// The next backoff: the ladder's first delay above `previous`, so 60 seconds first, doubling, capped at 30 minutes.
 fn next_backoff_seconds(previous: f64) -> f64 {
-  let base = if previous == 0.0 { BACKOFF_BASE_SECONDS } else { previous };
-  (base * 2.0).min(BACKOFF_CAP_SECONDS)
+  if previous >= BACKOFF_CAP_SECONDS {
+    return BACKOFF_CAP_SECONDS;
+  }
+  ExponentialBuilder::default()
+    .with_min_delay(BACKOFF_MIN_DELAY)
+    .with_max_delay(Duration::from_secs_f64(BACKOFF_CAP_SECONDS))
+    .with_factor(2.0)
+    .without_max_times()
+    .build()
+    .map(|delay| delay.as_secs_f64())
+    .find(|delay| *delay > previous)
+    .expect("the delay ladder has a step above any earlier delay below its cap")
 }
 
 fn now_seconds() -> f64 {

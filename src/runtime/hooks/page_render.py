@@ -15,7 +15,7 @@ effect without a restart.
 
 from __future__ import annotations
 
-from src.runtime.hooks import registration
+from src.infra import registration
 
 # The places a page leaves for package parts. index.html places the first seven, the diff page places
 # diff_toolbar, and the home page places home_notes.

@@ -3,7 +3,6 @@
 //! sources whose usage lives only in CharlieBot's own run logs.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::ffi::CStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -20,7 +19,7 @@ use charliebot_registry::templating::Templating;
 use charliebot_registry::usage::UsageSource;
 use http::request::Parts;
 use serde_json::{Map, Value, json};
-use time::{OffsetDateTime, UtcOffset};
+use time::OffsetDateTime;
 
 use crate::capture::{CHARLIE_BOT_SOURCE, host_name};
 use crate::count::Count;
@@ -263,30 +262,11 @@ fn as_of(last_capture: Option<OffsetDateTime>) -> String {
 /// `strftime('%Y-%m-%d %H:%M %Z')` of an instant in the server's zone (`astimezone()`). The zone abbreviation is
 /// `localtime_r`'s, which `%Z` prints (host_auth's `timestamps.rs` reads the same fields).
 pub(crate) fn local_stamp(moment: OffsetDateTime) -> String {
-  let (offset, zone) = local_zone(moment.unix_timestamp());
-  let local = moment.to_offset(UtcOffset::from_whole_seconds(offset).expect("a zone offset is within a day"));
-  format!(
-    "{:04}-{:02}-{:02} {:02}:{:02} {zone}",
-    local.year(),
-    u8::from(local.month()),
-    local.day(),
-    local.hour(),
-    local.minute()
-  )
-}
-
-/// The server zone's offset in seconds and abbreviation at `unix_seconds`, as `localtime_r` gives them.
-fn local_zone(unix_seconds: i64) -> (i32, String) {
-  let time = unix_seconds as libc::time_t;
-  // SAFETY: `tm` holds integers and pointers only, so the zeroed value is valid, and `localtime_r` fills the whole of
-  // it. The call reads `time` for its duration only.
-  let mut tm: libc::tm = unsafe { std::mem::zeroed() };
-  let filled = unsafe { libc::localtime_r(&time, &mut tm) };
-  assert!(!filled.is_null(), "localtime_r converts every instant the page renders");
-  // SAFETY: a successful `localtime_r` points `tm_zone` at a NUL-terminated name in the C library's zone table, which
-  // lives for the process.
-  let zone = unsafe { CStr::from_ptr(tm.tm_zone) }.to_string_lossy().into_owned();
-  (tm.tm_gmtoff as i32, zone)
+  jiff::Timestamp::from_second(moment.unix_timestamp())
+    .expect("the usage timestamp fits Jiff's range")
+    .to_zoned(jiff::tz::TimeZone::system())
+    .strftime("%Y-%m-%d %H:%M %Z")
+    .to_string()
 }
 
 #[cfg(test)]

@@ -288,16 +288,20 @@ mod tests {
     let projection = MessageProjection::new(&events, 0, HashMap::new()).unwrap();
 
     assert!(!projection.committed_final.is_empty());
-    assert!(projection
-      .committed_final
-      .iter()
-      .zip(&projection.committed)
-      .all(|(final_message, message)| Arc::ptr_eq(final_message, message)));
-    assert!(projection
-      .committed
-      .iter()
-      .zip(&projection.history)
-      .all(|(message, history_message)| Arc::ptr_eq(message, history_message)));
+    assert!(
+      projection
+        .committed_final
+        .iter()
+        .zip(&projection.committed)
+        .all(|(final_message, message)| Arc::ptr_eq(final_message, message))
+    );
+    assert!(
+      projection
+        .committed
+        .iter()
+        .zip(&projection.history)
+        .all(|(message, history_message)| Arc::ptr_eq(message, history_message))
+    );
   }
 
   #[test]

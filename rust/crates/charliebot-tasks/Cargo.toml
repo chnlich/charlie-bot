@@ -24,6 +24,7 @@ jwalk.workspace = true
 libc.workspace = true
 memchr.workspace = true
 memmap2.workspace = true
+nix.workspace = true
 regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true

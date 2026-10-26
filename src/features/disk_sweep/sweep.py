@@ -122,7 +122,7 @@ def _run_git(repo_path: pathlib.Path, *args: str, input_bytes: bytes | None = No
 
 def _read_lifecycle(session_dir: pathlib.Path) -> dict | None:
   """Read the latest lifecycle event across archived and live chat events."""
-  event_paths = sorted((session_dir / "data" / "archives").glob(chat_events.ARCHIVE_FILE_GLOB))
+  event_paths = sorted(chat_events.chat_event_archives_dir(session_dir).glob(chat_events.ARCHIVE_FILE_GLOB))
   live_path = chat_events.chat_events_path(session_dir)
   if live_path.is_file():
     event_paths.append(live_path)
@@ -261,7 +261,7 @@ def _worktree_rows(cfg: config.CharlieBotConfig, now: datetime.datetime) -> list
     row.owner_session_id = owner_session_id
     row.repo_path = run.repo_path
     row.branch_name = run.branch_name
-    row.archive_path = cfg.sessions_dir / owner_session_id / "data" / runs.RUNS_DIR_NAME / run.id / (
+    row.archive_path = cfg.sessions_dir / owner_session_id / runs.DATA_DIR_NAME / runs.RUNS_DIR_NAME / run.id / (
         "worktree-changes.tar")
     row.action = "delete"
     row.reason = "closed-task"

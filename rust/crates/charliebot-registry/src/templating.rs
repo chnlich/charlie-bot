@@ -336,4 +336,48 @@ mod tests {
     let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
     assert_eq!(body, "synthetic-label GET /notes?page=2");
   }
+
+  #[test]
+  fn asset_digest_hashes_each_static_file_by_url_path_in_path_order() {
+    let root = tempfile::tempdir().unwrap();
+    let static_root = root.path().join("web").join("static");
+    fs::create_dir_all(static_root.join("sub")).unwrap();
+    fs::write(static_root.join("a.js"), "alpha").unwrap();
+    fs::write(static_root.join("sub").join("b.css"), "beta").unwrap();
+    std::os::unix::fs::symlink(static_root.join("sub"), static_root.join("linked")).unwrap();
+    std::os::unix::fs::symlink(static_root.join("missing"), static_root.join("dangling")).unwrap();
+    let package_static = package_directory(root.path(), "src.features.notes").join("static");
+    fs::create_dir_all(&package_static).unwrap();
+    fs::write(package_static.join("x.txt"), "gamma").unwrap();
+    let templating = Templating::new(root.path(), &["src.features.notes"]);
+    // Each file contributes its URL path and its content's sha1, in path order; a dangling link contributes nothing
+    // and a symlinked directory's files count under the link's name.
+    let mut combined = Sha1::new();
+    for (rel, content) in
+      [("a.js", "alpha"), ("features/notes/x.txt", "gamma"), ("linked/b.css", "beta"), ("sub/b.css", "beta")]
+    {
+      combined.update(rel.as_bytes());
+      combined.update(b"\0");
+      combined.update(Sha1::digest(content));
+    }
+    let expected: String = combined.finalize()[..6].iter().map(|byte| format!("{byte:02x}")).collect();
+    let version = templating.static_asset_version().unwrap();
+    assert_eq!(version.rsplit_once('-').unwrap().1, expected);
+  }
+
+  #[test]
+  fn html_names_match_rglob_and_do_not_enter_symlinked_directories() {
+    let root = tempfile::tempdir().unwrap();
+    let pages = root.path().join("templates");
+    fs::create_dir_all(pages.join("nested")).unwrap();
+    fs::create_dir(pages.join("dir.html")).unwrap();
+    fs::write(pages.join("index.html"), "").unwrap();
+    fs::write(pages.join("nested").join("deep.html"), "").unwrap();
+    fs::write(pages.join("notes.txt"), "").unwrap();
+    std::os::unix::fs::symlink(pages.join("nested"), pages.join("linked")).unwrap();
+    let mut names = Vec::new();
+    collect_html_names(&pages, "", &mut names);
+    names.sort();
+    assert_eq!(names, ["dir.html", "index.html", "nested/deep.html"]);
+  }
 }

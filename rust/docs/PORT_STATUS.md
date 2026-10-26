@@ -570,185 +570,16 @@ Each of the 28 commits in `git rev-list --no-merges d113f2c4d..085f024a5 -- src 
 
 ## Catch-up 4521a51b2 open steps
 
-Both all-stage Rust debug runs failed the same 168 of 1167 steps. The four WebSocket cursor rows of `b3dc9a015` are removed because `b3dc9a015` and `a8781f62e` are now in Rust. The sidebar-channel trigger row R477 is removed because at this head the step passes in three consecutive runs: the socket no longer waits five seconds for a cursor frame, so it subscribes at once and the step's file window ends before the turn's `resource_class` write. Every remaining row fails because Rust still writes and serves `resource_class` (`637df0572`). Every failing step failed in both runs, so no row is intermittent. The Python-vs-Python run passed all 1107 of its steps.
+The `resource_class` rows of `637df0572` and the WebSocket cursor rows of `b3dc9a015` are in Rust at this head
+(`9b403a5ae`), so the table below is empty. The all-stage Rust debug run of this head fails no step, and
+`redlist_check.py` on its log against this file exits 0.
 
-| Scenario | Step | Stage | Main commit | Difference |
-| --- | --- | --- | --- | --- |
-| manager-turn-cancellation-routes | wait at the chat cancel gate | agent-orchestration-cancel | 637df0572 | R341. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| manager-turn-cancellation-routes | wait for the chat-cancelled run to finish | agent-orchestration-cancel | 637df0572 | R342. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| manager-turn-cancellation-routes | wait at the retried manager run cancel gate | agent-orchestration-cancel | 637df0572 | R343. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| manager-turn-cancellation-routes | wait for the run-cancelled manager retry to finish | agent-orchestration-cancel | 637df0572 | R344. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| agent-orchestration-cold-read | delegate a cold read of the synthetic page | agent-orchestration | 637df0572 | R345. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| agent-orchestration-cold-read | let the manager finish the cold-read report | agent-orchestration | 637df0572 | R346. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| agent-orchestration-cold-read | delegate a cold read whose first reader fails and second answers | agent-orchestration | 637df0572 | R347. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| agent-orchestration-cold-read | delegate a cold read whose two readers fail | agent-orchestration | 637df0572 | R348. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| task-completion-routes | replay the successful archive request | agent-orchestration | 637df0572 | R349. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| task-completion-routes | cancel the stopped queued worker to deliver its report | agent-orchestration | 637df0572 | R350. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| task-completion-routes | cancel the task after its run finishes | agent-orchestration | 637df0572 | R351. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| agent-orchestration-delegate | delegate one repo-less script run | agent-orchestration | 637df0572 | R352. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| agent-orchestration-delegate | delegate a failing repo-less worker | agent-orchestration | 637df0572 | R353. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| agent-orchestration-delegate | delegate a failing implement worker on the local repository | agent-orchestration | 637df0572 | R354. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| manager-turn-execution-and-routes | wait for the manager turn to finish | agent-orchestration | 637df0572 | R355. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| manager-turn-execution-and-routes | wait at the first manager gate | agent-orchestration | 637df0572 | R356. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| manager-turn-execution-and-routes | release the first manager turn | agent-orchestration | 637df0572 | R357. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| manager-turn-execution-and-routes | wait for the retried manager run to finish | agent-orchestration | 637df0572 | R358. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| manager-turn-opencode | wait for the OpenCode manager run to finish | agent-orchestration | 637df0572 | R359. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| implement-review-chain | delegate a repo task whose unchanged branch already landed on origin main | agent-orchestration | 637df0572 | R360. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| implement-review-chain | delegate a repo-less implement task | agent-orchestration | 637df0572 | R361. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| implement-review-chain | delegate a task whose reviewer exhausts the configured pool | agent-orchestration | 637df0572 | R362. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| agent-orchestration-session-message | a relay to a live session is accepted | agent-orchestration | 637df0572 | R363. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| agent-orchestration-session-message | let the target manager answer the relay | agent-orchestration | 637df0572 | R364. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| cron-routes-and-ticks | wait for the manual cron firing report | triggers-cron-improve | 637df0572 | R365. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| cron-routes-and-ticks | wait for a scheduler tick to fire the same task again | triggers-cron-improve | 637df0572 | R366. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| features-artifacts-plan-fork | fork of the plan worker at a null index | features | 637df0572 | R367. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| features-artifacts-plan-present | session listing after the presentation | features | 637df0572 | R368. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| features-artifacts-plan-verbs | session listing before the approval shows the pending plan | features | 637df0572 | R369. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| features-artifacts-plan-verbs | session listing after the approval clears the pending plan | features | 637df0572 | R370. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| features-artifacts-plans | session listing, pending plan approval flags | features | 637df0572 | R371. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| features-discord-routes | read marks the thread's unread messages | features | 637df0572 | R372. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| features-harness-discord | server startup | features | 637df0572 | R373. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| features-harness-discord | allowed user mention starts a Discord thread session | features | 637df0572 | R374. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| features-harness-discord | release the silent summon result | features | 637df0572 | R375. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| features-harness-slack | allowed app mention starts its Slack thread session | features | 637df0572 | R376. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| features-harness-slack | release summon agent after its result | features | 637df0572 | R377. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| features-slack-ack | acknowledge every eligible follow message | features | 637df0572 | R378. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| features-slack-backfill | server startup | features | 637df0572 | R379. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| features-web-reply-audit | wait for the audit nudge | features | 637df0572 | R380. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| features-web-reply-language | wait for the audit nudge | features | 637df0572 | R381. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| features-web-reply | a reply to a web session with no running turn | features | 637df0572 | R382. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| features-web-reply | a status set of now alone | features | 637df0572 | R383. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| features-web-reply | a status set with a null goal | features | 637df0572 | R384. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| features-web-reply | a status set stores a waiting item after its cold read | features | 637df0572 | R385. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| handover-admitted-input | release the first manager turn · python-to-candidate | agent-orchestration | 637df0572 | R386. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| handover-admitted-input | wait for the first turn at the gate · candidate-to-python | agent-orchestration | 637df0572 | R387. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| handover-admitted-input | hand over the live manager run · candidate-to-python | agent-orchestration | 637df0572 | R388. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| handover-admitted-input | release the first manager turn · candidate-to-python | agent-orchestration | 637df0572 | R389. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| handover-drain | stop both servers and let the agent exit while none runs · python-to-candidate | agent-orchestration | 637df0572 | R390. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| handover-drain | wait for the raw log cursor at the gate · candidate-to-python | agent-orchestration | 637df0572 | R391. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| handover-drain | stop both servers and let the agent exit while none runs · candidate-to-python | agent-orchestration | 637df0572 | R392. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| handover-improve | release the iteration's second gate so its agent exits · python-to-candidate | triggers-cron-improve | 637df0572 | R393. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| handover-improve | wait for the iteration at its first gate · candidate-to-python | triggers-cron-improve | 637df0572 | R394. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| handover-manager-turn | release the manager agent · python-to-candidate | agent-orchestration | 637df0572 | R395. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| handover-manager-turn | wait for the raw log cursor at the gate · candidate-to-python | agent-orchestration | 637df0572 | R396. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| handover-manager-turn | release the manager agent · candidate-to-python | agent-orchestration | 637df0572 | R397. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| handover-opencode | hand over the terminated OpenCode turn to server B · python-to-candidate | agent-orchestration | 637df0572 | R398. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| handover-opencode | wait until the OpenCode API fake reaches its turn gate · candidate-to-python | agent-orchestration | 637df0572 | R399. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| handover-opencode | hand over the terminated OpenCode turn to server B · candidate-to-python | agent-orchestration | 637df0572 | R400. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| handover-review-run | release the adopted reviewer · python-to-candidate | agent-orchestration | 637df0572 | R401. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| handover-review-run | delegate an implement task whose reviewer remains alive through handover · candidate-to-python | agent-orchestration | 637df0572 | R402. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| handover-stop-request | wait for the stop target at its first gate · candidate-to-python | agent-orchestration | 637df0572 | R403. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| handover-stop-request | hand over the durable interrupted outcome · candidate-to-python | agent-orchestration | 637df0572 | R404. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| handover-worker-run | wait for the worker agent at its live gate · candidate-to-python | agent-orchestration | 637df0572 | R405. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| improve-loop-reports | wait for the parent manager at its gate | triggers-cron-improve | 637df0572 | R406. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| improve-loop-reports | wait for both iteration reports to reach the busy parent | triggers-cron-improve | 637df0572 | R407. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| improve-loop-reports | release the parent manager after all three reports arrive | triggers-cron-improve | 637df0572 | R408. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| skeleton | page with a session, bearer key | server-skeleton | 637df0572 | R409. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| skeleton | page with a session, no key | server-skeleton | 637df0572 | R410. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| skeleton | page with a worker session, cookie | server-skeleton | 637df0572 | R411. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| skeleton | page with a missing session | server-skeleton | 637df0572 | R412. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| skeleton | page with an empty session | server-skeleton | 637df0572 | R413. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-metadata-defaults-backend-display | detail fills defaults for absent legacy metadata slots | session-read-api | 637df0572 | R414. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-metadata-defaults-backend-display | bootstrap fills defaults for absent legacy metadata slots | session-read-api | 637df0572 | R415. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-metadata-defaults-backend-display | usage fills defaults for absent legacy metadata slots | session-read-api | 637df0572 | R416. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-metadata-defaults-backend-display | active listing fills defaults for absent legacy metadata slots | session-read-api | 637df0572 | R417. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-metadata-defaults-backend-display | starred listing fills defaults for absent legacy metadata slots | session-read-api | 637df0572 | R418. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-metadata-defaults-backend-display | chat-thread listing fills defaults for absent legacy metadata slots | session-read-api | 637df0572 | R419. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-metadata-defaults-backend-display | manager ignores a retired newest-run backend after restart | session-read-api | 637df0572 | R420. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-metadata-defaults-backend-display | manager usage ignores a retired newest-run backend after restart | session-read-api | 637df0572 | R421. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-metadata-defaults-backend-display | worker displays its retired newest-run backend after restart | session-read-api | 637df0572 | R422. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-metadata-defaults-backend-display | worker usage displays its retired newest-run backend after restart | session-read-api | 637df0572 | R423. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-detail | detail, manager root, starred, grouped | session-read-api | 637df0572 | R424. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-detail | bootstrap, manager root, starred, grouped | session-read-api | 637df0572 | R425. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-detail | usage, manager root, starred, grouped | session-read-api | 637df0572 | R426. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-detail | detail, manager child with child reports | session-read-api | 637df0572 | R427. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-detail | bootstrap, manager child with child reports | session-read-api | 637df0572 | R428. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-detail | usage, manager child with child reports | session-read-api | 637df0572 | R429. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-detail | detail, worker, retried, closed | session-read-api | 637df0572 | R430. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-detail | bootstrap, worker, retried, closed | session-read-api | 637df0572 | R431. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-detail | usage, worker, retried, closed | session-read-api | 637df0572 | R432. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-detail | detail, worker, interrupted, archived | session-read-api | 637df0572 | R433. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-detail | bootstrap, worker, interrupted, archived | session-read-api | 637df0572 | R434. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-detail | usage, worker, interrupted, archived | session-read-api | 637df0572 | R435. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-detail | detail, worker, queued run stopped | session-read-api | 637df0572 | R436. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-detail | bootstrap, worker, queued run stopped | session-read-api | 637df0572 | R437. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-detail | usage, worker, queued run stopped | session-read-api | 637df0572 | R438. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-detail | detail, archived root, starred | session-read-api | 637df0572 | R439. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-detail | bootstrap, archived root, starred | session-read-api | 637df0572 | R440. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-detail | usage, archived root, starred | session-read-api | 637df0572 | R441. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-detail | detail, archived child | session-read-api | 637df0572 | R442. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-detail | bootstrap, archived child | session-read-api | 637df0572 | R443. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-detail | usage, archived child | session-read-api | 637df0572 | R444. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-detail | detail, retired backend, pending input, unread | session-read-api | 637df0572 | R445. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-detail | bootstrap, retired backend, pending input, unread | session-read-api | 637df0572 | R446. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-detail | usage, retired backend, pending input, unread | session-read-api | 637df0572 | R447. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-detail | detail, chat-thread session | session-read-api | 637df0572 | R448. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-detail | bootstrap, chat-thread session | session-read-api | 637df0572 | R449. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-detail | usage, chat-thread session | session-read-api | 637df0572 | R450. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-detail | detail, recycled history, restored | session-read-api | 637df0572 | R451. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-detail | bootstrap, recycled history, restored | session-read-api | 637df0572 | R452. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-detail | usage, recycled history, restored | session-read-api | 637df0572 | R453. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-detail | detail, plans and triggers, unread | session-read-api | 637df0572 | R454. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-detail | bootstrap, plans and triggers, unread | session-read-api | 637df0572 | R455. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-detail | usage, plans and triggers, unread | session-read-api | 637df0572 | R456. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-detail | detail, fork of atlas | session-read-api | 637df0572 | R457. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-detail | bootstrap, fork of atlas | session-read-api | 637df0572 | R458. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-detail | usage, fork of atlas | session-read-api | 637df0572 | R459. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-listings | active list | session-read-api | 637df0572 | R460. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-listings | active list, gzip accepted | session-read-api | 637df0572 | R461. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-listings | archived, every group | session-read-api | 637df0572 | R462. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-listings | archived, group Writing | session-read-api | 637df0572 | R463. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-listings | archived, first page of one | session-read-api | 637df0572 | R464. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-listings | archived, second page of one | session-read-api | 637df0572 | R465. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-listings | starred | session-read-api | 637df0572 | R466. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-listings | search, a name | session-read-api | 637df0572 | R467. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-listings | search, chat content | session-read-api | 637df0572 | R468. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-listings | search, blank query | session-read-api | 637df0572 | R469. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-listings | search, no query | session-read-api | 637df0572 | R470. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-listings | chat threads | session-read-api | 637df0572 | R471. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-stream | the trigger turns reach the live socket on the session channel | session-stream | 637df0572 | R476. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| session-stream | wait for the last live trigger to fire before shutdown | session-stream | 637df0572 | R478. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| session-usage-anthropic-compatible | usage, manager on Anthropic-compatible option | session-read-api | 637df0572 | R479. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-usage-anthropic-compatible | usage, worker on Anthropic-compatible option | session-read-api | 637df0572 | R480. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-write-agent | wait at the agent caller gate | session-write | 637df0572 | R481. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| session-write-agent | create under the run's own manager task | session-write | 637df0572 | R482. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-write-agent | release the agent caller turn | session-write | 637df0572 | R483. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| session-write-cron-listing | read a bound row with cron listing fields | session-write | 637df0572 | R484. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-write-cron-listing | read the session listing with cron fields | session-write | 637df0572 | R485. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-write-fork | fork of the source at a null index, the whole log | session-write | 637df0572 | R486. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| session-write-fork | fork of the source at its first line | session-write | 637df0572 | R487. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| session-write-fork | fork of the source at a middle line | session-write | 637df0572 | R488. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| session-write-fork | fork of the source at its last line | session-write | 637df0572 | R489. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| session-write-fork | elone of the source at a middle line takes over and archives the source | session-write | 637df0572 | R490. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| session-write-meta | mark unread Cobalt read | session-write | 637df0572 | R491. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| session-write-meta | star a session | session-write | 637df0572 | R492. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| session-write-meta | unstar a session | session-write | 637df0572 | R493. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| session-write-meta | set a session group | session-write | 637df0572 | R494. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| session-write-meta | clear a session group with the Python default | session-write | 637df0572 | R495. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| session-write-meta | rename a group across both sessions | session-write | 637df0572 | R496. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| session-write-meta | delete a group across both sessions | session-write | 637df0572 | R497. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| session-write-meta | rate a round thumbs up | session-write | 637df0572 | R498. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| session-write-meta | clear a round rating | session-write | 637df0572 | R499. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| session-write-task | legacy create opens a manager root | session-write | 637df0572 | R500. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| session-write-task | v2 create under the manager root | session-write | 637df0572 | R501. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| session-write-task | switch to the held backend | session-write | 637df0572 | R502. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
-| session-write-task | switch to a second option of the same continuation domain | session-write | 637df0572 | R503. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| session-write-task | rename a session | session-write | 637df0572 | R504. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| session-write-task | set a worker's prompt rule | session-write | 637df0572 | R505. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| session-write-task | clear that prompt rule | session-write | 637df0572 | R506. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| wait-trigger-delay | wait until the trigger file is fired | triggers-cron-improve | 637df0572 | R507. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| wait-trigger-local-pid | end the synthetic watched process | triggers-cron-improve | 637df0572 | R508. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
 
 ## Catch-up 4521a51b2 ignored Cargo tests
 
-Five tests in `rust/crates/charliebot-store/tests/cross_implementation.rs` fail for the same reason as the `resource_class` rows. Each compares Rust's file bytes with Python's and differs only in that key. Each is ignored with its row ID, and `cargo-slot.sh test -- --ignored` fails each of them.
-
-| Row | Test | Binary | Main commit | Difference |
-| --- | --- | --- | --- | --- |
-| R509 | python_and_rust_store_operations_write_identical_files_and_read_each_others_output | `charliebot-store` `cross_implementation` | 637df0572 | Rust writes `resource_class` into the session's `metadata.json`; `main` drops the key. |
-| R510 | python_and_rust_task_trees_share_nodes_gates_and_mutation_bytes | `charliebot-store` `cross_implementation` | 637df0572 | Rust writes `resource_class` into the session's `metadata.json`; `main` drops the key. |
-| R511 | python_and_rust_name_an_unnamed_node_from_a_corrupt_counter_the_same_way | `charliebot-store` `cross_implementation` | 637df0572 | Rust writes `resource_class` into the session's `metadata.json`; `main` drops the key. |
-| R512 | python_and_rust_fork_and_elone_write_the_same_session_files_at_every_index | `charliebot-store` `cross_implementation` | 637df0572 | Rust writes `resource_class` into the session's `metadata.json`; `main` drops the key. |
-| R513 | python_and_rust_delegate_a_task_spec_into_the_same_node_run_and_spec_bytes | `charliebot-store` `cross_implementation` | 637df0572 | Rust writes `resource_class` into the session's `metadata.json`; `main` drops the key. |
+No Cargo test is ignored for a behavior introduced by this catch-up. The five `cross_implementation` tests of
+R509-R513 compared Rust's `metadata.json` bytes with Python's and pass once Rust stops writing `resource_class`
+(`637df0572`).
 
 ## Catch-up 4521a51b2 unported commits
 
@@ -771,7 +602,7 @@ Each of the 43 commits in `git rev-list --no-merges 085f024a5..4521a51b2 -- src 
 | 49c49b9a7 | name the session-layout path segments through their owners (#3356) | no behavior | The named constants equal the spelled segments: SESSION_METADATA_NAME "metadata.json" (run_identity.py:29), DATA_DIR_NAME "data" (runs.py:59), RUNS_DIR_NAME "runs", RUN_METADATA_NAME "metadata.json" (runs.py:374-375); the session-sidebar signature keys are the same strings. |
 | baad23744 | give the module:attr refusal one definition (#3355) | no behavior | deferred.not_a_spec renders "{subject}: {path!r} is not a 'module:attr' string"; the turn-contribution subject spells the same prefix (src/infra/deferred.py, src/runtime/hooks/turn_contributions.py:107). |
 | 882c34c80 | give the ancestor-chain overrun refusal one definition (#3354) | no behavior | task_errors.ancestor_chain_too_long renders "ancestor chain of {id} exceeds {limit} hops" with the same limit at both sites (src/runtime/task_errors.py, task_completion.py, task_sessions.py). |
-| 637df0572 | size one agents' slice from host memory and drop the repair share | red-list | Causes R341–R471 and R476–R508 and the ignored tests R509–R513. Rust still writes `resource_class` into session metadata (`rust/crates/charliebot-store/src/metadata.rs:429,594,763,815`), still answers the removed PUT route (`rust/crates/charliebot-session-api/src/writes.rs:46,51-82`), and keeps the AGENTS and REPAIR slice pair with the old OOM sentence (`rust/crates/charliebot-agents/src/transport/cgroup.rs`, `transport/spawn.rs`). Rust owners: `charliebot-store` (`resource_class.rs`, `metadata.rs`) and `charliebot-agents` (`runner.rs`, `transport/spawn.rs`). |
+| 637df0572 | size one agents' slice from host memory and drop the repair share | in Rust | One slice serves every agent: `charliebot-core/src/cgroup.rs:9-14,37-42` (`AGENTS_SLICE`, `SESSION_CGROUP_OOM_SCORE_ADJ` = 500, `agents_slice_dir`, and `session_slice_dirs` over the agents' slice and the retired `app.slice` only); `charliebot-agents/src/transport/cgroup.rs:66` (`ensure_session_cgroup`, the missing-slice refusal), `:181-198` (`classify_cgroup_exit`, the `oom_kill` text), `:206` (`prepare_session_cgroup`), `:336` (`log_session_cgroup_startup`, the agents' slice only); `transport/spawn.rs:141,192,322`, `runner.rs`, `agent_environment.rs` spawn into it. The repair mark and `resource_class.rs` are gone: `charliebot-store/src/metadata.rs` keeps an old `resource_class` key as an unknown key, and `charliebot-session-api/src/writes.rs` no longer routes `PUT /api/sessions/{id}/resource-class`, which answers 404 as Python does (`session-write-meta`). |
 | 53f2c6728 | list rows in server order so a mid-turn input stays above later replies | in Rust | web/static/js/chat/for-you.js and turn-engine.js are served unchanged by the /static mount (server.py:569; static_mounts.rs:40). The server order they read is the store's order, which the server already returns. |
 | 0b92bfe43 | give the entry index line one definition (#3353) | no behavior | MemoryEntry.index_line renders "{id} · {title}", and Entry.id is f"{topic}/{slug}" (src/features/memory/memory.py:112), so the index and the CLI print the same line. |
 | 7d1f3b2cb | give the router-failure line one definition (#3352) | no behavior | backend_pool.router_failure_line (src/runtime/backend_pool.py) renders "backend router failed: {error}", the sentence the 502 detail (src/runtime/api/internal.py) and the thread error (src/features/chat_threads/thread_entry.py) spelled inline. |

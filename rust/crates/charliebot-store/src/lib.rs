@@ -14,7 +14,6 @@ pub mod metadata;
 mod ndjson;
 pub mod projection;
 mod read_memos;
-pub mod resource_class;
 pub mod run_identity;
 pub mod run_records;
 mod session_events;

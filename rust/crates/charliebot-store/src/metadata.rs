@@ -2,7 +2,6 @@
 
 use std::fmt;
 
-use charliebot_core::cgroup::ResourceClass;
 use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot};
 use charliebot_core::pyfmt::{self, JsonStyle};
 use serde::de::{MapAccess, Visitor};
@@ -424,9 +423,6 @@ pub struct SessionMetadata {
   pub schedule_project: Option<String>,
   #[serde(default)]
   pub schedule_allow_failure: Option<bool>,
-  /// The operator's repair mark. It is never copied to descendants; `resource_class.rs` walks the chain at spawn time.
-  #[serde(default)]
-  pub resource_class: ResourceClass,
   #[serde(default)]
   pub parent_session_id: Option<String>,
   #[serde(default)]
@@ -498,7 +494,6 @@ impl SessionMetadata {
       schedule_timezone: None,
       schedule_project: None,
       schedule_allow_failure: None,
-      resource_class: ResourceClass::Agent,
       parent_session_id: None,
       successor_session_id: None,
       schema_version: 2,
@@ -591,7 +586,6 @@ impl SessionMetadata {
       push(&mut declared, "schedule_project", &self.schedule_project);
       push(&mut declared, "schedule_allow_failure", &self.schedule_allow_failure);
     }
-    push(&mut declared, "resource_class", &self.resource_class);
     push(&mut declared, "parent_session_id", &self.parent_session_id);
     push(&mut declared, "successor_session_id", &self.successor_session_id);
     push(&mut declared, "schema_version", &self.schema_version);

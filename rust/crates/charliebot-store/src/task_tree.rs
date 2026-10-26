@@ -6,11 +6,12 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::ops::Deref;
 use std::ops::Index;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 
 use charliebot_core::{event_types, fsutil};
+use regex::Regex;
 use serde_json::{Map, Value, json};
 
 use crate::ChatEvent;
@@ -2722,14 +2723,14 @@ fn default_task_name(task: &TaskSpec, profile: TaskProfile) -> Option<String> {
   Some(selected.chars().take(80).collect())
 }
 
+/// The heading rule `_MD_HEADING_RE` compiles once in `src/runtime/task_sessions.py:1973-1990`:
+/// up to three leading whitespace characters, one to six marks, then whitespace or the line's end.
+/// Rust's regex `\s` is Unicode-aware exactly like Python's, so the same pattern decides each line.
+static MARKDOWN_HEADING: LazyLock<Regex> =
+  LazyLock::new(|| Regex::new(r"^\s{0,3}#{1,6}(\s|$)").expect("the markdown heading pattern compiles"));
+
 fn is_markdown_heading(line: &str) -> bool {
-  let leading_spaces = line.chars().take_while(|value| *value == ' ').count();
-  if leading_spaces > 3 {
-    return false;
-  }
-  let suffix = &line[leading_spaces..];
-  let marks = suffix.chars().take_while(|value| *value == '#').count();
-  (1..=6).contains(&marks) && suffix[marks..].chars().next().is_none_or(char::is_whitespace)
+  MARKDOWN_HEADING.is_match(line)
 }
 
 fn strip_heading(line: &str) -> &str {
@@ -2789,7 +2790,7 @@ pub(crate) mod tests {
   /// leading spaces, one to six marks, then whitespace or the line's end.
   #[test]
   fn markdown_heading_lines_match_the_python_pattern() {
-    for line in ["# Title", "## Sub", "###### six", "#", "  ## indented", "   # three"] {
+    for line in ["# Title", "## Sub", "###### six", "#", "  ## indented", "   # three", "\t# tabbed"] {
       assert!(is_markdown_heading(line), "{line:?} is a heading");
     }
     for line in ["####### seven", "    # four spaces", "#no space", "  #x", "plain content", ""] {

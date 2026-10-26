@@ -10,6 +10,7 @@ charliebot-core.workspace = true
 memchr.workspace = true
 memmap2.workspace = true
 nix.workspace = true
+regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
@@ -26,6 +27,5 @@ write-faults = []
 # The cross-implementation task-tree tests drive the completion owner that now writes archive facts.
 charliebot-registry.workspace = true
 charliebot-tasks.workspace = true
-regex.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }

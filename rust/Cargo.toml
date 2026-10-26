@@ -54,7 +54,7 @@ data-encoding = "2"
 libc = "0.2"
 memchr = "2"
 memmap2 = "0.9"
-mime_guess = "2"
+mime-db = "1"
 # The zlib-rs backend is the request path's deflate: Python's isal level-1 is several times faster than
 # miniz_oxide's, and the wire bytes are the same gzip container either way.
 flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import conftest
 import pytest
 
@@ -117,3 +119,142 @@ async def test_replay_stops_at_first_send_failure_with_match_count() -> None:
   assert total >= 2
   assert len(ws.sent) == 1
   assert sent == 1
+
+
+class _QueryParams:
+
+  def __init__(self, cursor: str | None) -> None:
+    self.cursor = cursor
+
+  def get(self, key: str) -> str | None:
+    assert key == "cursor"
+    return self.cursor
+
+
+class _SessionWebSocket:
+
+  def __init__(self, cursor: str | None) -> None:
+    self.query_params = _QueryParams(cursor)
+    self.accepted = False
+    self.close_code = None
+    self.sent: list[dict] = []
+    self.receive_calls = 0
+
+  async def accept(self) -> None:
+    self.accepted = True
+
+  async def close(self, code: int) -> None:
+    self.close_code = code
+
+  async def send_json(self, payload: dict) -> None:
+    self.sent.append(payload)
+
+  async def receive_text(self) -> str:
+    self.receive_calls += 1
+    raise AssertionError("session WebSocket must not wait for a cursor frame")
+
+
+@pytest.mark.parametrize("raw_cursor", [None, "-1", "abc"])
+@pytest.mark.asyncio
+async def test_invalid_handshake_cursor_closes_before_subscription(
+    monkeypatch: pytest.MonkeyPatch,
+    raw_cursor: str | None,
+) -> None:
+  websocket = _SessionWebSocket(raw_cursor)
+  warnings: list[tuple[str, dict[str, object]]] = []
+  subscriptions: list[tuple[object, ...]] = []
+  replays: list[tuple[object, ...]] = []
+
+  async def check_auth(_websocket: _SessionWebSocket) -> bool:
+    return True
+
+  def warn(event: str, **fields: object) -> None:
+    warnings.append((event, fields))
+
+  async def subscribe(*args: object) -> None:
+    subscriptions.append(args)
+
+  async def replay(*args: object) -> tuple[int, int]:
+    replays.append(args)
+    return 0, 0
+
+  monkeypatch.setattr(server.auth, "check_ws_auth", check_auth)
+  monkeypatch.setattr(server.log, "warning", warn)
+  monkeypatch.setattr(server.streaming.streaming_manager, "subscribe", subscribe)
+  monkeypatch.setattr(server, "_send_session_catchup", replay)
+
+  await server.session_websocket(websocket, "session-a")
+
+  assert websocket.accepted
+  assert websocket.close_code == 4400
+  assert websocket.sent == []
+  assert websocket.receive_calls == 0
+  assert subscriptions == []
+  assert replays == []
+  assert warnings == [("session_ws_cursor_invalid", {"session_id": "session-a", "raw_cursor": raw_cursor})]
+
+
+@pytest.mark.asyncio
+async def test_handshake_cursor_controls_replay_after_delayed_accept(monkeypatch: pytest.MonkeyPatch) -> None:
+  websocket = _SessionWebSocket("9")
+  calls: list[tuple[object, ...]] = []
+  accept_started = asyncio.Event()
+  accept_gate = asyncio.Event()
+
+  async def check_auth(_websocket: _SessionWebSocket) -> bool:
+    return True
+
+  async def delayed_accept() -> None:
+    accept_started.set()
+    await accept_gate.wait()
+    websocket.accepted = True
+
+  async def subscribe(channel: str, _websocket: _SessionWebSocket) -> None:
+    calls.append(("subscribe", channel))
+
+  async def unsubscribe(channel: str, _websocket: _SessionWebSocket) -> None:
+    calls.append(("unsubscribe", channel))
+
+  async def send_catchup(
+      _websocket: _SessionWebSocket,
+      _events: object,
+      session_id: str,
+      cursor: int,
+      _meta: object,
+  ) -> tuple[int, int]:
+    calls.append(("replay", session_id, cursor))
+    return 0, 9
+
+  async def keepalive(*_args: object, **_kwargs: object) -> None:
+    calls.append(("keepalive",))
+
+  class SessionStore:
+
+    async def get_session(self, _session_id: str) -> None:
+      return None
+
+  monkeypatch.setattr(server.auth, "check_ws_auth", check_auth)
+  monkeypatch.setattr(websocket, "accept", delayed_accept)
+  monkeypatch.setattr(server.streaming, "session_channel", lambda session_id: f"session:{session_id}")
+  monkeypatch.setattr(server.streaming.streaming_manager, "subscribe", subscribe)
+  monkeypatch.setattr(server.streaming.streaming_manager, "unsubscribe", unsubscribe)
+  monkeypatch.setattr(server.session_store, "store", lambda: SessionStore())
+  monkeypatch.setattr(server.session_events, "events", lambda: object())
+  monkeypatch.setattr(server, "_send_session_catchup", send_catchup)
+  monkeypatch.setattr(server, "_ws_keepalive", keepalive)
+
+  task = asyncio.create_task(server.session_websocket(websocket, "session-a"))
+  await accept_started.wait()
+  assert not task.done()
+  accept_gate.set()
+  await task
+
+  assert websocket.close_code is None
+  assert websocket.receive_calls == 0
+  assert websocket.sent == [{"type": "catchup_complete"}]
+  assert calls[:3] == [
+      ("subscribe", "session:session-a"),
+      ("subscribe", server.streaming.SIDEBAR_CHANNEL),
+      ("replay", "session-a", 9),
+  ]
+  assert calls[3] == ("keepalive",)

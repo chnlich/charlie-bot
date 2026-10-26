@@ -14,14 +14,13 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus, Output, Stdio};
 use std::sync::Mutex;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde_json::Value;
+use wait_timeout::ChildExt;
 
 /// The interpreter's path under the repo root.
 const INTERPRETER: &str = ".venv/bin/python";
-/// How often a timed wait checks whether the child has exited.
-const POLL_INTERVAL: Duration = Duration::from_millis(5);
 
 /// Starts helper scripts under the interpreter of one checkout.
 pub struct PythonHelper {
@@ -289,7 +288,7 @@ pub fn capture(mut child: Child, stdin: Option<&[u8]>, timeout: Option<Duration>
 
   let (status, killed_after) = match timeout {
     None => (child.wait()?, None),
-    Some(limit) => match wait_within(&mut child, limit)? {
+    Some(limit) => match child.wait_timeout(limit)? {
       Some(status) => (status, None),
       None => {
         kill_timed_out(&mut child)?;
@@ -334,20 +333,6 @@ fn kill_group(pgid: libc::pid_t) -> io::Result<()> {
 fn log_failure(label: &'static str, step: &'static str, result: io::Result<()>) {
   if let Err(error) = result {
     tracing::error!(helper = label, step, error = %error, "python_helper_failed");
-  }
-}
-
-/// Poll `child` until it exits or `limit` passes. `None` means it is still running at the limit.
-fn wait_within(child: &mut Child, limit: Duration) -> io::Result<Option<ExitStatus>> {
-  let deadline = Instant::now() + limit;
-  loop {
-    if let Some(status) = child.try_wait()? {
-      return Ok(Some(status));
-    }
-    if Instant::now() >= deadline {
-      return Ok(None);
-    }
-    thread::sleep(POLL_INTERVAL);
   }
 }
 
@@ -439,10 +424,14 @@ fn stderr_suffix(stderr: &str) -> String {
 mod tests {
   use std::fs;
   use std::os::unix::fs::PermissionsExt;
+  use std::time::Instant;
 
   use serde_json::json;
 
   use super::*;
+
+  /// How often a test polls for a process to be gone.
+  const POLL_INTERVAL: Duration = Duration::from_millis(5);
 
   /// The checkout that holds this crate; its `.venv` is the interpreter the helper tests start.
   fn repo_root() -> PathBuf {

@@ -2,7 +2,9 @@
 
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use wait_timeout::ChildExt;
 
 /// `git rev-parse --short HEAD` timeout at startup (`timeouts.SUBPROCESS_GIT_SHA_TIMEOUT`).
 pub const SHA_TIMEOUT: Duration = Duration::from_secs(2);
@@ -20,17 +22,13 @@ pub fn run(repo_root: &Path, args: &[&str], timeout: Duration) -> Option<String>
     .stderr(Stdio::piped())
     .spawn()
     .ok()?;
-  let deadline = Instant::now() + timeout;
-  let status = loop {
-    match child.try_wait() {
-      Ok(Some(status)) => break status,
-      Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(5)),
-      Ok(None) | Err(_) => {
-        // The git process is abandoned either way; a failed kill leaves nothing to report beyond None.
-        let _ = child.kill();
-        let _ = child.wait();
-        return None;
-      }
+  let status = match child.wait_timeout(timeout) {
+    Ok(Some(status)) => status,
+    Ok(None) | Err(_) => {
+      // The git process is abandoned either way; a failed kill leaves nothing to report beyond None.
+      let _ = child.kill();
+      let _ = child.wait();
+      return None;
     }
   };
   if !status.success() {

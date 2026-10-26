@@ -130,14 +130,14 @@ pub fn select_reviewer_backend(
 }
 
 pub(crate) fn read_worker_summary_file(worker_log_path: &Path) -> anyhow::Result<Option<String>> {
-  let (summary, _) = visit_events_from_end(worker_log_path, &["result", "assistant"], None, |event| {
+  let (summary, _) = visit_events_from_end(worker_log_path, &["result", "assistant"], |event| {
     worker_summary_from_events_log(std::slice::from_ref(&event))
   })?;
   Ok(summary)
 }
 
 pub(crate) fn read_worker_error_file(worker_log_path: &Path) -> anyhow::Result<Option<String>> {
-  let (error, _) = visit_events_from_end(worker_log_path, &["error"], None, |event| {
+  let (error, _) = visit_events_from_end(worker_log_path, &["error"], |event| {
     worker_error_from_events_log(std::slice::from_ref(&event))
   })?;
   Ok(error)

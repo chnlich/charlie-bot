@@ -1102,7 +1102,8 @@ mod tests {
     let path = slice.join("charliebot-sess-test1234");
     fs::create_dir(&path).unwrap();
     // The control files the kernel publishes for a cgroup, which the fake tree must carry.
-    for name in ["cgroup.procs", "cgroup.threads", "cgroup.subtree_control", "memory.max", "memory.swap.max", "pids.max"]
+    for name in
+      ["cgroup.procs", "cgroup.threads", "cgroup.subtree_control", "memory.max", "memory.swap.max", "pids.max"]
     {
       fs::write(path.join(name), "").unwrap();
     }

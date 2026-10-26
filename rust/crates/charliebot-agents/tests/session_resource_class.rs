@@ -57,7 +57,8 @@ fn reset_session_cgroup_stand_ins(base: &Path) {
   for directory in directories {
     fs::create_dir_all(&directory).unwrap();
     // The control files the kernel publishes for a cgroup, which the fake tree must carry.
-    for name in ["cgroup.procs", "cgroup.threads", "cgroup.subtree_control", "memory.max", "memory.swap.max", "pids.max"]
+    for name in
+      ["cgroup.procs", "cgroup.threads", "cgroup.subtree_control", "memory.max", "memory.swap.max", "pids.max"]
     {
       fs::write(directory.join(name), "").unwrap();
     }

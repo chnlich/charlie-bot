@@ -155,9 +155,10 @@ pub fn use_fake_cgroup_hierarchy() {
 
 /// The path of `path` relative to the hierarchy root `base_dir`, which is what a cgroup handle names.
 fn relative(base_dir: &Path, path: &Path) -> io::Result<PathBuf> {
-  path.strip_prefix(base_dir).map(Path::to_path_buf).map_err(|_| {
-    io::Error::other(format!("{} is outside the cgroup base {}", path.display(), base_dir.display()))
-  })
+  path
+    .strip_prefix(base_dir)
+    .map(Path::to_path_buf)
+    .map_err(|_| io::Error::other(format!("{} is outside the cgroup base {}", path.display(), base_dir.display())))
 }
 
 /// Create the leaf cgroup, keeping an existing one, as `mkdir` with `exist_ok` does.
@@ -423,7 +424,8 @@ mod tests {
   fn fake_leaf(root: &Path, slice: &str) -> PathBuf {
     let leaf = leaf_path(root, slice);
     fs::create_dir_all(&leaf).unwrap();
-    for name in ["cgroup.procs", "cgroup.threads", "cgroup.subtree_control", "memory.max", "memory.swap.max", "pids.max"]
+    for name in
+      ["cgroup.procs", "cgroup.threads", "cgroup.subtree_control", "memory.max", "memory.swap.max", "pids.max"]
     {
       fs::write(leaf.join(name), "").unwrap();
     }

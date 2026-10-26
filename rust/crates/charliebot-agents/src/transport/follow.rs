@@ -337,7 +337,8 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn keeps_partial_lines_and_drops_a_torn_final_line() {    let root = tempfile::tempdir().unwrap();
+  async fn keeps_partial_lines_and_drops_a_torn_final_line() {
+    let root = tempfile::tempdir().unwrap();
     let raw = root.path().join("agent.raw.ndjson");
     fs::write(&raw, b"{\"type\":\"assistant\",\"seq\":1}\n{\"type\":\"assistant\",\"seq\":2").unwrap();
     let mut events = Vec::new();

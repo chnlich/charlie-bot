@@ -1078,13 +1078,50 @@ pub(crate) fn run_git(repo: &Path, args: &[&str]) -> std::process::Output {
 #[cfg(test)]
 mod tests {
   use std::fs;
-  use std::path::Path;
+  use std::path::{Path, PathBuf};
   use std::process::Command;
 
-  use super::{git_verify_commit_landed, run_git};
+  use super::{collect_local_worktree_artifacts, contains_git_marker, git_verify_commit_landed, run_git};
 
   fn git(repo: &Path, args: &[&str]) -> std::process::Output {
     run_git(repo, args)
+  }
+
+  #[test]
+  fn git_marker_search_finds_a_dot_git_entry_and_does_not_follow_links() {
+    let tree = tempfile::tempdir().unwrap();
+    fs::create_dir_all(tree.path().join("a").join("b")).unwrap();
+    fs::write(tree.path().join("a").join("b").join(".git"), "gitdir: synthetic").unwrap();
+    assert!(contains_git_marker(tree.path()));
+
+    let outside = tempfile::tempdir().unwrap();
+    fs::write(outside.path().join(".git"), "").unwrap();
+    let inside = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(outside.path(), inside.path().join("linked")).unwrap();
+    assert!(!contains_git_marker(inside.path()));
+    assert!(!contains_git_marker(&inside.path().join("missing")));
+  }
+
+  #[test]
+  fn artifact_walk_prunes_artifacts_and_nested_worktrees_and_skips_links() {
+    let tree = tempfile::tempdir().unwrap();
+    let root = tree.path();
+    for dir in
+      [".venv/lib", ".git", "build", "nested-wt", "nested-wt/build", "deep/cache/.uv-cache", "deep/nested/build", "src"]
+    {
+      fs::create_dir_all(root.join(dir)).unwrap();
+    }
+    fs::write(root.join("nested-wt").join(".git"), "gitdir: synthetic").unwrap();
+    fs::write(root.join("deep").join("nested").join(".git"), "gitdir: synthetic").unwrap();
+    std::os::unix::fs::symlink(root.join(".venv"), root.join("link-to-venv")).unwrap();
+
+    let mut artifacts = Vec::new();
+    collect_local_worktree_artifacts(root, root, &mut artifacts);
+    let mut found: Vec<PathBuf> = artifacts.iter().map(|path| path.strip_prefix(root).unwrap().to_path_buf()).collect();
+    found.sort();
+    // A nested worktree directly under the root is still descended; one deeper down is pruned with its artifacts.
+    let expected = [".venv", "build", "deep/cache/.uv-cache", "nested-wt/build"].map(PathBuf::from);
+    assert_eq!(found, expected);
   }
 
   #[tokio::test]

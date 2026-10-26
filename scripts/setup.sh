@@ -39,7 +39,7 @@ else
   "$SCRIPT_DIR/sync-skills.sh"
 fi
 
-# Install the systemd user units and start the two leaf slices. The unit files are the single
+# Install the systemd user units and start the agents' slice. The unit files are the single
 # home of the memory limits: the launcher's preflight reads its expected values from them.
 echo "==> Installing systemd user units"
 UNIT_DIR="$HOME/.config/systemd/user"
@@ -47,13 +47,29 @@ if (( DRY_RUN )); then
   echo "install -d $UNIT_DIR"
   echo "install -m 0644 $SCRIPT_DIR/systemd/*.slice $UNIT_DIR/"
   echo "systemctl --user daemon-reload"
-  echo "systemctl --user enable --now charliebot-agents.slice charliebot-repair.slice"
+  echo "systemctl --user enable --now charliebot-agents.slice"
 else
   install -d "$UNIT_DIR"
   install -m 0644 "$SCRIPT_DIR/systemd/"*.slice "$UNIT_DIR/"
   systemctl --user daemon-reload
-  systemctl --user enable --now charliebot-agents.slice charliebot-repair.slice
+  systemctl --user enable --now charliebot-agents.slice
 fi
+
+# Retire the repair slice unit file an earlier setup installed: `disable` plus removing the file ends
+# its use without `stop`, because stopping a slice ends the processes still running inside it. The
+# retired name is matched by pattern so the tree holds no reference to it.
+for stale in "$UNIT_DIR"/charliebot-[r]epair.slice; do
+  [ -f "$stale" ] || continue
+  if (( DRY_RUN )); then
+    echo "systemctl --user disable $(basename "$stale")"
+    echo "rm -f $stale"
+    echo "systemctl --user daemon-reload"
+  else
+    systemctl --user disable "$(basename "$stale")"
+    rm -f "$stale"
+    systemctl --user daemon-reload
+  fi
+done
 
 # Run the setup steps: the $CHARLIEBOT_HOME home layout, then each step a package registers
 # (register_setup_step in src/runtime/hooks/wiring.py), in registration order.

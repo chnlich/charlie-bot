@@ -4,8 +4,8 @@
 # A current link in the release root selects the Rust release; without it the Python server runs.
 #
 # Each server start has a timestamp-and-PID scope so earlier runs can keep their processes.
-# Before starting, the launcher checks both leaf slices against their unit files; a missing slice or different limit
-# stops the start visibly. --preflight checks the slices and creates a trial scope without writing a server log.
+# Before starting, the launcher checks the agents' slice against its unit file; a missing slice or different limit
+# stops the start visibly. --preflight checks the slice and creates a trial scope without writing a server log.
 set -uo pipefail
 
 # Resolve repo root from the script location — no absolute paths (shared repo).
@@ -33,12 +33,32 @@ _unit_setting() {
   printf '%s' "${value:-infinity}"
 }
 
-# A systemd size (34G, 8M, 0, infinity) in bytes, the form `systemctl show` reports.
+# Host memory in kB, as /proc/meminfo reports it.
+_memtotal_kb() {
+  awk '/^MemTotal:/ { print $2; found = 1; exit } END { exit !found }' /proc/meminfo
+}
+
+# A systemd percentage of host memory in bytes. systemd rounds down to a whole 4096-byte page:
+# floor(MemTotal pages * percent / 100) * 4096, where a page is MemTotal kB / 4.
+_percent_bytes() {
+  local percent="$1" memtotal_kb="$2"
+  printf '%s' "$(( (memtotal_kb / 4) * percent / 100 * 4096 ))"
+}
+
+# A systemd size (34G, 8M, 80%, 0, infinity) in bytes, the form `systemctl show` reports.
 _systemd_bytes() {
   local value="$1" number unit
   case "$value" in
     infinity|max)
       printf 'infinity'
+      return 0
+      ;;
+    *%)
+      if ! number="$(_memtotal_kb)"; then
+        echo "preflight: cannot read MemTotal from /proc/meminfo for '$value'" >&2
+        return 1
+      fi
+      _percent_bytes "${value%\%}" "$number"
       return 0
       ;;
   esac
@@ -60,18 +80,18 @@ _systemd_bytes() {
   printf '%s' "$number"
 }
 
-# Assert both leaf slices are active and carry exactly their unit files' limits. Prints every
+# Assert the agents' slice is active and carries exactly its unit file's limits. Prints every
 # difference and returns non-zero on any; a missing limit must stop the start, not be inferred.
 preflight_slices() {
   local rc=0 unit file shown active key expected actual raw
-  for unit in charliebot-agents.slice charliebot-repair.slice; do
+  for unit in charliebot-agents.slice; do
     file="$UNIT_DIR/$unit"
     if [ ! -f "$file" ]; then
       echo "preflight: $unit has no unit file at $file" >&2
       rc=1
       continue
     fi
-    if ! shown="$(systemctl --user show "$unit" -p ActiveState -p MemoryHigh -p MemoryMax -p MemorySwapMax)"; then
+    if ! shown="$(systemctl --user show "$unit" -p ActiveState -p MemoryMax -p MemorySwapMax)"; then
       echo "preflight: systemctl --user show $unit failed" >&2
       rc=1
       continue
@@ -81,19 +101,18 @@ preflight_slices() {
       echo "preflight: $unit is '${active:-unknown}', expected 'active' (run scripts/setup.sh)" >&2
       rc=1
     fi
-    for key in MemoryHigh MemoryMax MemorySwapMax; do
+    for key in MemoryMax MemorySwapMax; do
       raw="$(_unit_setting "$file" "$key")"
-      case "$unit:$key:$raw" in
-        charliebot-agents.slice:MemoryHigh:infinity|\
-        charliebot-agents.slice:MemoryMax:infinity|\
-        charliebot-agents.slice:MemorySwapMax:infinity|\
-        charliebot-repair.slice:MemoryMax:infinity|\
-        charliebot-repair.slice:MemorySwapMax:infinity)
-          echo "preflight: $unit unit file has no finite $key" >&2
-          rc=1
-          continue
-          ;;
-      esac
+      if [ "$raw" = infinity ]; then
+        echo "preflight: $unit unit file has no finite $key" >&2
+        rc=1
+        continue
+      fi
+      if [ "$key" = MemorySwapMax ] && [ "$raw" != 0 ]; then
+        echo "preflight: $unit unit file has $key='$raw', expected 0" >&2
+        rc=1
+        continue
+      fi
       if ! expected="$(_systemd_bytes "$raw")"; then
         rc=1
         continue
@@ -151,7 +170,7 @@ main() {
   echo "  scope  -> $SERVER_SCOPE_NAME"
 
   if ! preflight_slices; then
-    echo "launcher: the memory slices do not match scripts/systemd/; not starting the server" >&2
+    echo "launcher: the agents' memory slice does not match scripts/systemd/; not starting the server" >&2
     exit 1
   fi
 

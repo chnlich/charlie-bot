@@ -350,11 +350,6 @@ class MasterRunRecord(pydantic.BaseModel):
   user_event_ids: list[str] = pydantic.Field(default_factory=list)
 
 
-# The memory share a session's agent processes run in. "agent" is everyone's default; "repair" is
-# the operator's mark for a session that must keep working while the agents' share is full.
-ResourceClass = Literal["agent", "repair"]
-
-
 class SessionMetadata(pydantic.BaseModel):
   # Keys a package registers (src/infra/metadata_slots.py) and keys no package registers live beside the
   # declared fields and are written back unchanged.
@@ -396,10 +391,6 @@ class SessionMetadata(pydantic.BaseModel):
   schedule_timezone: str | None = None
   schedule_project: str | None = None
   schedule_allow_failure: bool | None = None
-  # The operator's repair mark. A descendant takes the class of its nearest marked ancestor at
-  # each spawn, so this field is never copied down: clearing it moves descendants' next
-  # processes back to the agents' share.
-  resource_class: ResourceClass = "agent"
   # Parent session for clone/elone-derived sessions
   parent_session_id: str | None = None
   # Elone successor pointer: id of the session that took over from this one via
@@ -521,21 +512,6 @@ class PatchSessionTaskRequest(pydantic.BaseModel):
   # and swaps the reference atomically, recording prompt_changed.
   subtree_prompt: str | None = None
   node_prompt: str | None = None
-
-
-class ResourceClassRequest(pydantic.BaseModel):
-  """PUT /api/sessions/{id}/resource-class body: the operator's repair mark."""
-  model_config = pydantic.ConfigDict(extra="forbid")
-
-  resource_class: ResourceClass
-
-
-class ResourceClassResponse(pydantic.BaseModel):
-  """The acknowledged mark: the session id and the class now in effect for its spawns."""
-  model_config = pydantic.ConfigDict(extra="forbid")
-
-  id: str
-  resource_class: ResourceClass
 
 
 class AncestorRef(pydantic.BaseModel):

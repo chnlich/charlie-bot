@@ -722,16 +722,6 @@ def post_internal_api(
   )
 
 
-def put_internal_api(endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
-  """PUT to a CharlieBot API endpoint and return the parsed JSON response.
-
-  Same error contract as ``post_internal_api``. The verbs that PUT use it for
-  (the repair mark) set one value, so a sent-but-lost call reports effect
-  ``none`` and needs no readback.
-  """
-  return _request_with_contract("PUT", endpoint, payload=payload, unknown_effect="none")
-
-
 def get_api(endpoint: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
   """GET a CharlieBot API endpoint and return the parsed JSON response.
 

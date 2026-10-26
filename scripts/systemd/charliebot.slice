@@ -1,6 +1,6 @@
 [Unit]
 Description=CharlieBot resource hierarchy
 
-# The parent of timestamped server scopes and both leaf slices. It carries no limit of its own, so the leaves hold
-# the memory split and each server scope adds only MemorySwapMax=0.
+# The parent of timestamped server scopes and the agents' leaf slice. It carries no limit of its own, so the leaf
+# holds the memory share and each server scope adds only MemorySwapMax=0.
 [Slice]

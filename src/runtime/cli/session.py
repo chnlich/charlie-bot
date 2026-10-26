@@ -6,7 +6,6 @@
   charliebot session retry ID --run RUN_ID [--request-id ID]
   charliebot session send <target-id> (--message T | --file P)
   charliebot session dialog [--session ID]
-  charliebot session resource-class ID {repair,agent}
 
 ``create`` builds session metadata only (no first message); with ``--parent``
 it becomes the v2 task create: the task-file carries the ``task`` object
@@ -152,15 +151,6 @@ def _build_parser() -> argparse.ArgumentParser:
 
   dialog = sub.add_parser("dialog", help="Print one session's chat messages as plain text, oldest first (for rg)")
   common.add_session_arg(dialog)
-
-  repair = sub.add_parser(
-      "resource-class",
-      help="Set a session's memory share: repair keeps it working while the agents' share is full (operator only)")
-  repair.add_argument("session_id", help="Session id")
-  repair.add_argument(
-      "resource_class",
-      choices=["repair", "agent"],
-      help="repair moves this session and its descendants to the repair share; agent removes the mark")
   return parser
 
 
@@ -311,12 +301,6 @@ def _format_message_block(msg: dict) -> str | None:
   return "\n".join(lines)
 
 
-def _cmd_resource_class(args: argparse.Namespace) -> None:
-  result = common.put_internal_api(
-      f"/api/sessions/{args.session_id}/resource-class", {"resource_class": args.resource_class})
-  common.print_json(result, indent=2, file=sys.stdout)
-
-
 def _cmd_dialog(args: argparse.Namespace) -> None:
   session_id = common.resolve_session_id(args.session)
   # The bootstrap payload is the newest page the chat UI opens with; its
@@ -356,8 +340,6 @@ def main() -> None:
     _cmd_send(args)
   elif args.session_command == "dialog":
     _cmd_dialog(args)
-  elif args.session_command == "resource-class":
-    _cmd_resource_class(args)
   else:
     parser.error(f"unknown session command: {args.session_command}")
 

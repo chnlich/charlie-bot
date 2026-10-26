@@ -11,6 +11,7 @@ use axum::extract::{Path, State};
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::sse::{self, Sse};
 use axum::response::{IntoResponse, Response};
+use bstr::ByteSlice;
 use charliebot_compat::http_client;
 use charliebot_compat::responses;
 use charliebot_compat::routing::post_only;
@@ -297,10 +298,7 @@ fn fault_failure(fault: Fault) -> (String, String) {
 
 /// `bytes.strip()`: the ASCII whitespace of a Python bytes value, which includes the vertical tab.
 fn trim_python_space(raw: &[u8]) -> &[u8] {
-  let is_space = |byte: &u8| matches!(byte, b' ' | b'\t' | b'\n' | b'\r' | 0x0b | 0x0c);
-  let start = raw.iter().position(|byte| !is_space(byte)).unwrap_or(raw.len());
-  let end = raw.iter().rposition(|byte| !is_space(byte)).map_or(start, |last| last + 1);
-  &raw[start..end]
+  raw.trim_with(|character| matches!(character, ' ' | '\t' | '\n' | '\r' | '\u{b}' | '\u{c}'))
 }
 
 #[cfg(test)]

@@ -9,6 +9,7 @@ publish.workspace = true
 anyhow.workspace = true
 axum.workspace = true
 base64.workspace = true
+bstr.workspace = true
 charliebot-compat.workspace = true
 charliebot-core.workspace = true
 charliebot-registry.workspace = true

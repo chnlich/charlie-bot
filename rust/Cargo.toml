@@ -42,6 +42,7 @@ publish = false
 anyhow = "1"
 axum = { version = "0.8", features = ["ws"] }
 base64 = "0.22"
+bstr = "1"
 bytes = "1"
 caseless = "0.2"
 chrono = "0.4"

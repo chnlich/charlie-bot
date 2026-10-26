@@ -533,8 +533,8 @@ fn local_stamp_matches_python_strftime_in_the_system_zone() {
   assert!(!result.is_null());
   // SAFETY: a successful `localtime_r` returns a NUL-terminated zone name owned by libc.
   let zone = unsafe { CStr::from_ptr(tm.tm_zone) }.to_string_lossy();
-  let local = moment
-    .to_offset(time::UtcOffset::from_whole_seconds(tm.tm_gmtoff as i32).expect("the local offset is in range"));
+  let local =
+    moment.to_offset(time::UtcOffset::from_whole_seconds(tm.tm_gmtoff as i32).expect("the local offset is in range"));
   let expected = format!(
     "{:04}-{:02}-{:02} {:02}:{:02} {zone}",
     local.year(),

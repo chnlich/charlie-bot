@@ -140,7 +140,7 @@ def _cmd_query(args: argparse.Namespace) -> None:
   matched.sort(key=memory.entry_order_key)
   if args.index:
     for e in matched:
-      print(f"{e.topic}/{e.slug} · {e.title}")
+      print(e.index_line)
     return
   if not matched:
     return

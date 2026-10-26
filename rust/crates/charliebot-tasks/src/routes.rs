@@ -59,19 +59,20 @@ pub fn routes(features: &Arc<FeatureContext>) -> Router {
     .with_state(Arc::clone(features))
 }
 
-/// Whether `path` belongs to one of the registered routes.
-pub fn matches(path: &str) -> bool {
-  let parts = path.split('/').collect::<Vec<_>>();
-  match parts.as_slice() {
-    ["", "api", "chat", session_id, "upload" | "message" | "cancel"] => !session_id.is_empty(),
-    ["", "api", "sessions", session_id, "retry"] => !session_id.is_empty(),
-    ["", "api", "sessions", session_id, "runs", run_id, "cancel"] => !session_id.is_empty() && !run_id.is_empty(),
-    ["", "api", "sessions", session_id, "archive" | "cancel" | "unarchive"] => !session_id.is_empty(),
-    ["", "api", "sessions", session_id, "task-inputs", "acknowledge"] => !session_id.is_empty(),
-    ["", "api", "internal", "delegate" | "session-message"] => true,
-    _ => false,
-  }
-}
+/// The route patterns `routes` mounts. The registry's trailing-slash redirect matches a path against them.
+pub const ROUTE_PATTERNS: &[&str] = &[
+  "/api/chat/{session_id}/upload",
+  "/api/chat/{session_id}/message",
+  "/api/chat/{session_id}/cancel",
+  "/api/sessions/{session_id}/retry",
+  "/api/sessions/{session_id}/runs/{run_id}/cancel",
+  "/api/sessions/{session_id}/archive",
+  "/api/sessions/{session_id}/cancel",
+  "/api/sessions/{session_id}/task-inputs/acknowledge",
+  "/api/sessions/{session_id}/unarchive",
+  "/api/internal/delegate",
+  "/api/internal/session-message",
+];
 
 struct UploadedFileRef {
   filename: String,
@@ -1140,6 +1141,7 @@ mod tests {
   use charliebot_core::hot_reload::HotReload;
   use charliebot_core::run_token::{self, RunTokenClaims};
   use charliebot_registry::context::StartupState;
+  use charliebot_registry::route_claims::RouteClaims;
   use charliebot_registry::store_hooks;
   use charliebot_registry::{FeatureContext, Registry};
   use charliebot_store::metadata::{SessionMetadata, TaskProfile};
@@ -1180,11 +1182,12 @@ mod tests {
       "/",
       "",
     ];
+    let route_claims = RouteClaims::new(ROUTE_PATTERNS).expect("the route patterns are distinct");
     for path in claimed {
-      assert!(matches(path), "{path} should be claimed");
+      assert!(route_claims.claims(path), "{path} should be claimed");
     }
     for path in refused {
-      assert!(!matches(path), "{path} should not be claimed");
+      assert!(!route_claims.claims(path), "{path} should not be claimed");
     }
   }
 

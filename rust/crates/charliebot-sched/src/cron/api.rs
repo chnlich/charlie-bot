@@ -26,15 +26,8 @@ pub fn routes(features: &Arc<FeatureContext>) -> Router {
     .with_state(Arc::clone(features))
 }
 
-/// Whether a path belongs to one of the scheduled-task routes.
-pub fn matches(path: &str) -> bool {
-  match path.split('/').collect::<Vec<_>>().as_slice() {
-    ["", "api", "cron", "tasks"] => true,
-    ["", "api", "cron", "tasks", name] => !name.is_empty(),
-    ["", "api", "cron", "tasks", name, "run"] => !name.is_empty(),
-    _ => false,
-  }
-}
+/// The route patterns `routes` mounts. The registry's trailing-slash redirect matches a path against them.
+pub const ROUTE_PATTERNS: &[&str] = &["/api/cron/tasks", "/api/cron/tasks/{name}", "/api/cron/tasks/{name}/run"];
 
 async fn list_tasks(State(features): State<Arc<FeatureContext>>) -> Response {
   let cfg = match features.config.get() {
@@ -349,10 +342,11 @@ mod tests {
   use axum::body::{Body, to_bytes};
   use axum::http::{Request, StatusCode, header};
   use charliebot_core::event_types;
+  use charliebot_registry::route_claims::RouteClaims;
   use serde_json::{Value, json};
   use tower::ServiceExt;
 
-  use super::{matches, routes};
+  use super::{ROUTE_PATTERNS, routes};
 
   #[test]
   fn matches_claims_the_task_routes_and_refuses_empty_or_extra_segments() {
@@ -365,11 +359,12 @@ mod tests {
       "/api/cron/tasks/n/other",
       "/api/cron/tasks/n/run/x",
     ];
+    let route_claims = RouteClaims::new(ROUTE_PATTERNS).expect("the route patterns are distinct");
     for path in claimed {
-      assert!(matches(path), "{path} should be claimed");
+      assert!(route_claims.claims(path), "{path} should be claimed");
     }
     for path in refused {
-      assert!(!matches(path), "{path} should not be claimed");
+      assert!(!route_claims.claims(path), "{path} should not be claimed");
     }
   }
   use crate::cron::scheduler::CronScheduler;

@@ -59,10 +59,10 @@ mod tests {
 
     let routers = registry.routers();
     assert_eq!(routers.len(), 1);
-    assert!((routers[0].matches)("/api/sessions/s/explain"));
-    assert!((routers[0].matches)("/api/sessions/s/explain/status"));
-    assert!(!(routers[0].matches)("/api/sessions/s"));
-    assert!(!(routers[0].matches)("/api/sessions//explain"));
-    assert!(!(routers[0].matches)("/api/sessions/s/explain/other"));
+    assert!(routers[0].claims("/api/sessions/s/explain"));
+    assert!(routers[0].claims("/api/sessions/s/explain/status"));
+    assert!(!routers[0].claims("/api/sessions/s"));
+    assert!(!routers[0].claims("/api/sessions//explain"));
+    assert!(!routers[0].claims("/api/sessions/s/explain/other"));
   }
 }

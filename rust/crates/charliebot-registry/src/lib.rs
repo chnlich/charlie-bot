@@ -12,6 +12,7 @@ pub mod context;
 pub mod lifespan;
 pub mod pages;
 pub mod registry;
+pub mod route_claims;
 pub mod sequence;
 pub mod sidebar;
 pub mod store_hooks;

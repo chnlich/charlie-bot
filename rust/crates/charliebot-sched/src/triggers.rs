@@ -1361,17 +1361,9 @@ pub fn routes(features: &Arc<FeatureContext>) -> Router {
     .with_state(Arc::clone(features))
 }
 
-/// Whether this package owns one of its internal trigger routes.
-pub fn matches(path: &str) -> bool {
-  let parts = path.split('/').collect::<Vec<_>>();
-  match parts.as_slice() {
-    ["", "api", "internal", "schedule-trigger"] => true,
-    ["", "api", "internal", "triggers", session_id, trigger_id, "cancel"] => {
-      !session_id.is_empty() && !trigger_id.is_empty()
-    }
-    _ => false,
-  }
-}
+/// The route patterns `routes` mounts. The registry's trailing-slash redirect matches a path against them.
+pub const ROUTE_PATTERNS: &[&str] =
+  &["/api/internal/schedule-trigger", "/api/internal/triggers/{session_id}/{trigger_id}/cancel"];
 
 /// Build one manager after recovery, then recover its durable pending triggers.
 pub fn trigger_step(features: Arc<FeatureContext>) -> futures_util::future::BoxFuture<'static, anyhow::Result<()>> {
@@ -1587,6 +1579,7 @@ mod tests {
   use charliebot_core::hot_reload::HotReload;
   use charliebot_registry::caller::CallerIdentity;
   use charliebot_registry::context::StartupState;
+  use charliebot_registry::route_claims::RouteClaims;
   use charliebot_registry::sequence::{RestoreOutcome, SequenceCompletion};
   use charliebot_registry::store_hooks;
   use charliebot_registry::{FeatureContext, Registry};
@@ -1611,11 +1604,12 @@ mod tests {
       "/api/internal/triggers/s/t/cancel/",
       "/api/internal/triggers/s/t/cancelx",
     ];
+    let route_claims = RouteClaims::new(ROUTE_PATTERNS).expect("the route patterns are distinct");
     for path in claimed {
-      assert!(matches(path), "{path} should be claimed");
+      assert!(route_claims.claims(path), "{path} should be claimed");
     }
     for path in refused {
-      assert!(!matches(path), "{path} should not be claimed");
+      assert!(!route_claims.claims(path), "{path} should not be claimed");
     }
   }
 

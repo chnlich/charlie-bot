@@ -645,6 +645,7 @@ dependencies = [
  "charliebot-store",
  "futures-util",
  "jwalk",
+ "matchit",
  "minijinja",
  "serde_json",
  "serde_yaml",

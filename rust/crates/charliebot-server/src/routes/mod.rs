@@ -45,7 +45,7 @@ pub async fn not_found(State(state): State<Arc<AppState>>, request: Request) -> 
   if path != "/" {
     let toggled = if path.ends_with('/') { path.trim_end_matches('/').to_string() } else { format!("{path}/") };
     let family_matches = FAMILIES.iter().any(|family| (family.matches)(&state, &toggled));
-    let router_matches = state.features.registry.routers().iter().any(|route| (route.matches)(&toggled));
+    let router_matches = state.features.registry.routers().iter().any(|route| route.claims(&toggled));
     if family_matches || router_matches {
       return responses::redirect(&redirect_url(&request, &toggled));
     }

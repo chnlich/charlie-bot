@@ -650,11 +650,16 @@ mod tests {
     (address, server)
   }
 
-  async fn connect(address: SocketAddr, session_id: &str) -> BufReader<TcpStream> {
+  async fn connect(address: SocketAddr, session_id: &str, query: &str) -> BufReader<TcpStream> {
     let stream = TcpStream::connect(address).await.unwrap();
     let mut reader = BufReader::new(stream);
+    let target = if query.is_empty() {
+      format!("/ws/sessions/{session_id}")
+    } else {
+      format!("/ws/sessions/{session_id}?{query}")
+    };
     let request = format!(
-      "GET /ws/sessions/{session_id} HTTP/1.1\r\nHost: {address}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\
+      "GET {target} HTTP/1.1\r\nHost: {address}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\
        Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"
     );
     reader.get_mut().write_all(request.as_bytes()).await.unwrap();
@@ -684,6 +689,7 @@ mod tests {
     send_client_frame(reader, 1, format!(r#"{{"type":"cursor","index":{cursor}}}"#).as_bytes()).await;
   }
 
+  #[derive(Debug)]
   enum ServerFrame {
     Text(String),
     Close(Option<u16>),
@@ -736,7 +742,7 @@ mod tests {
     let (_home, features) = test_context();
     write_session(&features, "synthetic", TaskProfile::Manager, 0);
     let (address, server) = start_server(Arc::clone(&features)).await;
-    let mut client = connect(address, "synthetic").await;
+    let mut client = connect(address, "synthetic", "").await;
     send_cursor(&mut client, 0).await;
     receive_catchup_complete(&mut client).await;
     tokio::task::yield_now().await;
@@ -764,7 +770,7 @@ mod tests {
     let (_home, features) = test_context();
     write_session(&features, "synthetic", TaskProfile::Manager, 0);
     let (address, server) = start_server(Arc::clone(&features)).await;
-    let mut client = connect(address, "synthetic").await;
+    let mut client = connect(address, "synthetic", "").await;
     send_cursor(&mut client, 999999).await;
     receive_catchup_complete(&mut client).await;
     let store = Arc::clone(&features.store);
@@ -827,7 +833,7 @@ mod tests {
     let (_home, features) = test_context();
     write_session(&features, "synthetic", TaskProfile::Manager, 0);
     let (address, server) = start_server(Arc::clone(&features)).await;
-    let mut client = connect(address, "synthetic").await;
+    let mut client = connect(address, "synthetic", "").await;
     send_cursor(&mut client, 999999).await;
     receive_catchup_complete(&mut client).await;
     features
@@ -852,10 +858,10 @@ mod tests {
     write_session(&features, "synthetic", TaskProfile::Manager, 0);
     write_session(&features, "synthetic-second", TaskProfile::Manager, 0);
     let (address, server) = start_server(Arc::clone(&features)).await;
-    let mut first = connect(address, "synthetic").await;
+    let mut first = connect(address, "synthetic", "").await;
     send_cursor(&mut first, 0).await;
     receive_catchup_complete(&mut first).await;
-    let mut second = connect(address, "synthetic-second").await;
+    let mut second = connect(address, "synthetic-second", "").await;
     send_cursor(&mut second, 0).await;
     receive_catchup_complete(&mut second).await;
     let channel = streaming::session_channel("synthetic");
@@ -870,6 +876,49 @@ mod tests {
         ServerFrame::Text(text) => panic!("shutdown sent unexpected frame {text}"),
       }
     }
+    server.abort();
+    let _ = server.await;
+  }
+
+  /// Port of `tests/test_session_ws_catchup.py` `test_invalid_handshake_cursor_closes_before_subscription`
+  /// (main `4521a51b2`): every cursor value that test parametrizes, sent in the handshake query. The close
+  /// code 4400 is the first and only frame, so no catch-up replay or subscription frame preceded it.
+  #[tokio::test]
+  async fn invalid_handshake_cursor_closes_before_subscription() {
+    let invalid_queries =
+      ["", "cursor=-1", "cursor=abc", &format!("cursor={}", "9".repeat(20))];
+    for query in invalid_queries {
+      let (_home, features) = test_context();
+      seed_manager_session(&features, "synthetic", 0).await;
+      let (address, server) = start_server(Arc::clone(&features)).await;
+      let mut client = connect(address, "synthetic", query).await;
+      match time::timeout(Duration::from_secs(1), receive_frame(&mut client)).await.unwrap().unwrap() {
+        ServerFrame::Close(Some(4400)) => {}
+        other => panic!("the {query:?} handshake ended with {other:?} instead of the 4400 close"),
+      }
+      server.abort();
+      let _ = server.await;
+    }
+  }
+
+  /// Port of `tests/test_session_ws_catchup.py` `test_handshake_cursor_controls_replay_after_delayed_accept`
+  /// (main `4521a51b2`): the client sends no frame at all, so the replay the query cursor controls must start
+  /// without waiting for one. Cursor 9 lies past the seeded session's three events, so the replay sends
+  /// nothing and `catchup_complete` is the first frame.
+  #[tokio::test]
+  async fn handshake_cursor_controls_replay_after_delayed_accept() {
+    let (_home, features) = test_context();
+    seed_manager_session(&features, "synthetic", 0).await;
+    let (address, server) = start_server(Arc::clone(&features)).await;
+    let mut client = connect(address, "synthetic", "cursor=9").await;
+    assert_eq!(receive_json(&mut client).await["type"], "catchup_complete");
+    // The subscription precedes the replay, so a live event reaches the same socket afterwards.
+    features
+      .store
+      .broadcast(&streaming::session_channel("synthetic"), json!({"type": "stream", "sequence": 1}))
+      .await
+      .unwrap();
+    assert_eq!(receive_json(&mut client).await["sequence"], 1);
     server.abort();
     let _ = server.await;
   }

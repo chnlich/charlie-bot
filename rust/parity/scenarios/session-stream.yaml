@@ -197,6 +197,18 @@ steps:
     until: {close: true}
     timeout_seconds: 10
   - kind: ws
+    name: a 20-digit cursor closes the socket with 4400
+    path: /ws/sessions/${missing_session}
+    query: {cursor: "99999999999999999999"}
+    until: {close: true}
+    timeout_seconds: 10
+  - kind: ws
+    name: a 19-digit cursor above int64 sends only catchup_complete
+    path: /ws/sessions/${sessions.explain}
+    query: {cursor: "9999999999999999999"}
+    until: {frames: 1}
+    timeout_seconds: 10
+  - kind: ws
     name: missing token rejects the upgrade
     path: /ws/sessions/${sessions.explain}
     auth: none

@@ -81,9 +81,14 @@ The For-you view shows your web replies and hides the rest of your turn output.
 - Then run `charliebot web reply --file <path>`.
 - The command records the web reply in the session. It prints a readback with the character count.
 - The readback sets `over_budget` for a reply over 500 characters.
-- Write the changed session status items to a JSON file.
+- Write the changed session status fields to a JSON file.
+  Each field that the file leaves out keeps its stored value.
 - The JSON object takes any of the keys `goal`, `now` and `waiting`.
 - `waiting` is a list of objects with the keys `text`, `context` and `link`. Set `link` to null when the place has no link.
+- When the file holds `waiting`, run `charliebot web status show` right before you write the file.
+  Start from your own Waiting on you list in that output.
+  Write the whole list: each item that stays, and each new or changed item.
+  Each set replaces the whole list, so a list from a fresh `show` keeps every item that still waits on the user.
 - Then run `charliebot web status set --file <path>`.
 - The command refuses a link to an older version of a plan, or to a closed plan, and names the newest file. The
   panel then shows the version that the user decides on.
@@ -99,12 +104,11 @@ The For-you view shows your web replies and hides the rest of your turn output.
     The list then holds only what the next milestone needs from the user.
 - Then run the command again.
 - The command stores the status when the reader has read every item as it stands.
-- The command replaces the items that the file names and keeps the other items. It prints the stored session status.
+- The command prints the stored session status.
 - The printout also holds `now_chars` and `now_over_budget`.
 - When `now_over_budget` is true, shorten **Now** and set it again.
-- When no item differs, run `charliebot web status confirm`.
-- The command records the confirmation and cold reads nothing. It refuses a stale stored plan link and names the
-  newest file.
+- `charliebot web status confirm` records the confirmation and cold reads nothing. It refuses a stale stored plan
+  link and names the newest file.
 - After a context reset, read the session status with `charliebot web status show`.
 - The command also prints the Waiting on you items of each open descendant session.
 - The command also prints the **Now** of each open child session.

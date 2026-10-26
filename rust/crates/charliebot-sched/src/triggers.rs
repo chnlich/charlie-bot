@@ -743,7 +743,13 @@ impl TriggerManager {
   }
 
   async fn remote_read_exit_code(&self, target: &RemotePid) -> Option<String> {
-    let remote = format!("cat {} 2>/dev/null", shell_quote(target.exit_file.as_deref()?));
+    let remote = match remote_exit_read_command(target.exit_file.as_deref()?) {
+      Ok(remote) => remote,
+      Err(error) => {
+        tracing::debug!(target: "charliebot_sched", host = %target.host, error = %error, "ssh_exit_read_failed");
+        return None;
+      }
+    };
     let command = match self.ssh_argv(&target.host, &remote) {
       Ok(command) => command,
       Err(error) => {
@@ -1341,11 +1347,10 @@ fn format_suffix(reason: &str, finished: &[String], still_alive: &[String]) -> S
   }
 }
 
-fn shell_quote(value: &str) -> String {
-  if !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_alphanumeric() || b"_@%+=:,./-".contains(&byte)) {
-    return value.to_string();
-  }
-  format!("'{}'", value.replace('\'', "'\"'\"'"))
+/// The remote command that prints an exit file, with the path quoted for the remote shell. A path with a NUL byte has
+/// no shell quoting.
+fn remote_exit_read_command(exit_file: &str) -> Result<String, shlex::QuoteError> {
+  Ok(format!("cat {} 2>/dev/null", shlex::try_quote(exit_file)?))
 }
 
 /// Register delayed trigger routes under the internal API paths.
@@ -1803,6 +1808,19 @@ mod tests {
     assert_eq!(bytes, serde_json::to_string_pretty(&trigger).expect("serialize trigger").into_bytes());
     let loaded = manager.load_trigger(SESSION_ID, &trigger.id).await.expect("load trigger file");
     assert_eq!(serde_json::to_value(loaded).unwrap(), serde_json::to_value(&trigger).unwrap());
+  }
+
+  #[test]
+  fn remote_exit_read_command_hands_the_remote_shell_the_same_path() {
+    let dir = tempfile::tempdir().expect("temporary directory");
+    for name in ["exit code.txt", "it's done", "quote\"d", "dollar$HOME", "semi;colon"] {
+      let path = dir.path().join(name);
+      std::fs::write(&path, format!("{name}-status")).expect("write exit file");
+      let command = remote_exit_read_command(path.to_str().expect("UTF-8 path")).expect("path has no NUL byte");
+      let output = std::process::Command::new("sh").arg("-c").arg(&command).output().expect("sh runs");
+      assert_eq!(String::from_utf8_lossy(&output.stdout), format!("{name}-status"), "command: {command}");
+    }
+    assert!(remote_exit_read_command("bad\0path").is_err());
   }
 
   #[test]

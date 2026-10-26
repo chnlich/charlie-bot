@@ -216,7 +216,7 @@ def _fold_task_events(facts: _TaskFacts, events: list[dict], index_offset: int) 
         if run_id not in facts.run_finish_positions:
           facts.run_finish_positions[run_id] = absolute
         if event.get("outcome") == "success":
-          ids = event.get("input_event_ids")
+          ids = event.get(ET.INPUT_EVENT_IDS)
           if isinstance(ids, list):
             facts.confirmed_input_ids.update(str(i) for i in ids)
     elif etype == ET.TASK_INPUT_ACKNOWLEDGED:

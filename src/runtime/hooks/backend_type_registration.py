@@ -9,7 +9,7 @@ reads the table.
 from collections.abc import Mapping
 from typing import NamedTuple
 
-from src.infra import config_registry
+from src.infra import config_registry, registration
 
 RESUME_CLI_FLAG = "cli_flag"
 RESUME_NATIVE_ID = "native_id"
@@ -66,10 +66,10 @@ def register_backend_type(
   raises ValueError, and so does a resume style other than ``RESUME_CLI_FLAG`` and ``RESUME_NATIVE_ID``.
   """
   if backend_type in _registry:
-    raise ValueError(f"backend type {backend_type!r} is already registered")
+    raise registration.already_registered("backend type", backend_type)
   if traits.resume not in _RESUME_STYLES:
     raise ValueError(f"resume style {traits.resume!r} is not one of {_RESUME_STYLES}")
-  if translate_fallback and any(registration.translate_fallback for registration in _registry.values()):
+  if translate_fallback and any(entry.translate_fallback for entry in _registry.values()):
     raise ValueError(f"backend type {backend_type!r} cannot serve the translate fallback: another type does")
   config_registry.register_option_model(backend_type, options)
   _registry[backend_type] = Registration(
@@ -78,10 +78,10 @@ def register_backend_type(
 
 def registration_of(backend_type: str) -> Registration:
   """The registration of ``backend_type``; ValueError when the type is unregistered."""
-  registration = _registry.get(backend_type)
-  if registration is None:
+  registered = _registry.get(backend_type)
+  if registered is None:
     raise ValueError(f"Unknown backend type: {backend_type}")
-  return registration
+  return registered
 
 
 def registrations() -> Mapping[str, Registration]:

@@ -19,8 +19,7 @@ from __future__ import annotations
 import pathlib
 from typing import TYPE_CHECKING
 
-from src.infra import deferred
-from src.runtime.hooks import registration
+from src.infra import deferred, registration
 
 if TYPE_CHECKING:
   from src.infra import models

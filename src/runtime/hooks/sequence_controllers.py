@@ -17,7 +17,7 @@ from __future__ import annotations
 import datetime
 from typing import TYPE_CHECKING, Protocol
 
-from src.infra import deferred
+from src.infra import deferred, registration
 
 if TYPE_CHECKING:
   import asyncio
@@ -237,7 +237,7 @@ _loaded: dict[str, SequenceController] = {}
 def register_sequence_controller(name: str, controller: str) -> None:
   """Register a controller's ``module:attr`` path for lazy import on first use."""
   if name in _registered:
-    raise ValueError(f"sequence controller {name!r} is already registered")
+    raise registration.already_registered("sequence controller", name)
   _registered[name] = controller
 
 

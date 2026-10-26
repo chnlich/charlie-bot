@@ -190,7 +190,7 @@ def translate_replay(run_id: str | None, event: dict) -> list[dict]:
   return [
       {
           "type": ET.INPUT_DELIVERED,
-          "input_event_id": input_id,
+          ET.INPUT_EVENT_ID: input_id,
           "run_id": run_id,
           "timestamp": models.utc_now_iso(),
       }
@@ -221,7 +221,7 @@ async def record_ack(item: _WorkItem | None, event: dict) -> None:
   run_id = str(event["run_id"])
   if run_id != item.task_run.run_id:
     raise RuntimeError(f"input delivery for Run {run_id} reached manager Run {item.task_run.run_id}")
-  input_id = str(event["input_event_id"])
+  input_id = str(event[ET.INPUT_EVENT_ID])
   if input_id not in item.user_event_ids:
     item.user_event_ids.append(input_id)
 

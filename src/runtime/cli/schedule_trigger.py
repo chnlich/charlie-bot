@@ -121,9 +121,7 @@ def _validate_message(value: str) -> str:
 
 
 def _build_parser() -> argparse.ArgumentParser:
-  parser = argparse.ArgumentParser(
-      description="Schedule a delayed trigger for a CharlieBot session",
-      formatter_class=help_formatter.CliHelpFormatter)
+  parser = help_formatter.CliArgumentParser(description="Schedule a delayed trigger for a CharlieBot session")
   cli_common.add_session_arg(parser)
   parser.add_argument(
       "--max-wait",

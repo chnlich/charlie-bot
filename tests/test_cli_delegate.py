@@ -285,6 +285,33 @@ def test_main_help_lists_verify_profile(capsys: pytest.CaptureFixture[str]) -> N
   assert "read-only plan verifier" in out
 
 
+def test_main_help_stays_bounded_and_names_every_delegation_fact(
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
+  """Managers read this help before each delegation, so it stays bounded and keeps every argument
+  name, every task-type choice, and the six task-spec section names.
+
+  The bound pins the landed size. The plan's 2,600-character target sits below the floor the
+  mandated fact list admits: with an empty epilog and no help strings, argparse's own usage line
+  and options rendering measure 823 characters (the shared --session help alone is ~215), and the
+  fact-complete epilog measures ~2,400, so the smallest honest rendering is ~3,200.
+  """
+  monkeypatch.delenv("COLUMNS", raising=False)
+  with mock.patch("sys.argv", ["delegate", "--help"]), pytest.raises(SystemExit) as exc_info:
+    delegate.main()
+
+  assert exc_info.value.code == 0
+  out = capsys.readouterr().out
+  assert len(out) <= 4100
+  for name in ("--session", "--repo", "--task-spec-file", "--base-branch", "--backend", "--keep-worktree",
+               "--request-id", "--task-type"):
+    assert name in out
+  for choice in ("implement", "quick-edit", "script-run", "verify"):
+    assert choice in out
+  for section in ("## Goal", "## Source Files", "## Required Behavior", "## Acceptance Tests", "## Reviewer Checklist",
+                  "## Out of Scope"):
+    assert section in out
+
+
 def test_main_rejects_removed_reviewer_context_file_flag(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   """The removed --reviewer-context-file exits with a usage error naming the Reviewer Checklist, before any POST."""

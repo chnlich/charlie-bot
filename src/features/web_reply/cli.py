@@ -40,41 +40,29 @@ _LABELS = {"user": "You", "web_reply": "Reply", "web_reply_notice": "Notice"}
 
 
 def _build_parser() -> argparse.ArgumentParser:
-  parser = argparse.ArgumentParser(
-      description="CharlieBot web session verbs", formatter_class=help_formatter.CliHelpFormatter)
+  parser = help_formatter.CliArgumentParser(description="CharlieBot web session verbs")
   sub = parser.add_subparsers(dest="web_command", required=True)
 
-  reply = sub.add_parser(
-      "reply", help="Record a web reply for this session", formatter_class=help_formatter.CliHelpFormatter)
+  reply = sub.add_parser("reply", help="Record a web reply for this session")
   common.add_reply_file_arg(reply)
   reply.add_argument(
       "--keep-language", metavar="REASON", help="Post the reply as written and record REASON; skips the language check")
   common.add_session_arg(reply)
 
-  dialog = sub.add_parser(
-      "dialog",
-      help="Print this session's For-you layer as plain text",
-      formatter_class=help_formatter.CliHelpFormatter)
+  dialog = sub.add_parser("dialog", help="Print this session's For-you layer as plain text")
   common.add_session_arg(dialog)
 
-  status = sub.add_parser(
-      "status", help="Set or show this session's status", formatter_class=help_formatter.CliHelpFormatter)
+  status = sub.add_parser("status", help="Set or show this session's status")
   status_sub = status.add_subparsers(dest="status_command", required=True)
-  status_set = status_sub.add_parser(
-      "set",
-      help="Cold read Waiting on you items before storing the status",
-      formatter_class=help_formatter.CliHelpFormatter)
+  status_set = status_sub.add_parser("set", help="Cold read Waiting on you items before storing the status")
   status_set.add_argument(
       "--file",
       required=True,
       help="JSON object with any of goal, now, waiting; prints cold reads and exits 3 before storing; - reads stdin")
   common.add_session_arg(status_set)
-  status_sub.add_parser(
-      "confirm", help="Confirm that the stored status needs no change", formatter_class=help_formatter.CliHelpFormatter)
+  status_sub.add_parser("confirm", help="Confirm that the stored status needs no change")
   status_show = status_sub.add_parser(
-      "show",
-      help="Print this session's status and the waiting items of its child sessions",
-      formatter_class=help_formatter.CliHelpFormatter)
+      "show", help="Print this session's status and the waiting items of its child sessions")
   common.add_session_arg(status_show)
   return parser
 

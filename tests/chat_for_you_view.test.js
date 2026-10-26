@@ -317,8 +317,14 @@ function userIdsIn(el) {
   return ids;
 }
 
-// The full message stream and visible user rows must read in server order.
-// Everything shows messages inside turns, so every turn opens before that read.
+// The message ids the list shows, in document order.
+function shownIds(el) {
+  return el.querySelectorAll('[data-message-id]').map((node) => node.dataset.messageId);
+}
+
+// The rendered user rows must read in server order. Everything shows messages
+// inside turns, so every turn opens before that read; For you renders the rows
+// it shows directly.
 function assertTimeOrder(rig, expected) {
   if (rig.engine.view === 'everything') {
     rig.engine.segments.forEach((seg) => {
@@ -326,12 +332,8 @@ function assertTimeOrder(rig, expected) {
     });
     settle(rig.timers);
   }
-  // The engine's arrays come from the vm context; the spread makes this realm's
-  // array, which strict deepEqual compares against.
-  const displayOrder = [...rig.engine.displayEntries()].map((entry) => entry.msg.id);
   const expectedUsers = expected.filter((id) => id.endsWith('-u'));
-  assert.deepEqual(displayOrder, expected, `displayEntries reads ${rig.engine.view} in time order`);
-  assert.deepEqual(userIdsIn(rig.root), expectedUsers, `the ${rig.engine.view} rows read in time order`);
+  assert.deepEqual(userIdsIn(rig.root), expectedUsers, `the ${rig.engine.view} rows read in server order`);
 }
 
 function turnMessageIds(tags) {
@@ -386,6 +388,49 @@ test('a live turn appended after the view switches lands last in both views', ()
   rig.engine.setView('everything');
   settle(rig.timers);
   assertTimeOrder(rig, order);
+});
+
+// A turn whose user message arrives after the turn's first assistant message
+// and before a later web reply. The shared span rule carries that input into
+// the next turn, but the server sent it above the reply; For you reads the
+// store's server order, so the reply never rises above it.
+function midTurnMessages() {
+  return [
+    eMsg('user', 'u1', 'first question'),
+    eMsg('assistant', 'a1', 'looking into it'),
+    eMsg('user', 'mid', 'also check the logs'),
+    eMsg('web_reply', 'r1', 'Found the cause.'),
+    eMsg('assistant', 'a2', 'writing the fix'),
+  ];
+}
+
+function midTurnSeparator() {
+  return eMsg('separator', 's1', '', {thinking_seconds: 30, event_index: 101});
+}
+
+// Server order: the mid-turn input sits above the web reply that followed it.
+const MID_TURN_ROWS = ['u1', 'mid', 'r1'];
+
+test('a mid-turn input shows above the later web reply after mount', () => {
+  const rig = forYouRig([...midTurnMessages(), midTurnSeparator()]);
+  assert.deepEqual(shownIds(rig.root), MID_TURN_ROWS);
+});
+
+test('a mid-turn input stays above the later web reply when the running turn closes live', () => {
+  const rig = forYouRig(midTurnMessages());
+  assert.deepEqual(shownIds(rig.root), MID_TURN_ROWS, 'the pending turn shows server order');
+  rig.engine.appendMessage(midTurnSeparator(), false);
+  settle(rig.timers);
+  assert.deepEqual(shownIds(rig.root), MID_TURN_ROWS, 'closing the turn keeps server order');
+});
+
+test('a mid-turn input stays above the later web reply when a later turn closes behind it', () => {
+  const rig = forYouRig([...midTurnMessages(), midTurnSeparator()]);
+  rig.engine.appendMessage(eMsg('assistant', 'a3', 'handling it'), false);
+  rig.engine.appendMessage(eMsg('assistant', 'a4', 'handled'), false);
+  rig.engine.appendMessage(eMsg('separator', 's2', '', {thinking_seconds: 5, event_index: 102}), false);
+  settle(rig.timers);
+  assert.deepEqual(shownIds(rig.root), MID_TURN_ROWS);
 });
 
 // The subtree's tags, classes, data attributes, text and spacer heights in order:

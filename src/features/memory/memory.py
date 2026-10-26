@@ -79,6 +79,11 @@ class MemoryFormatError(Exception):
   """
 
 
+def _line_error(path: pathlib.Path, lineno: int, detail: str) -> MemoryFormatError:
+  """The refusal for one bad line of a store file: the file path, the line number, then *detail*."""
+  return MemoryFormatError(f"{path}: line {lineno}: {detail}")
+
+
 @dataclasses.dataclass
 class Topic:
   """One vocabulary line: the topic name and whether it is resident."""
@@ -106,6 +111,11 @@ class Entry:
   @property
   def id(self) -> str:
     return f"{self.topic}/{self.slug}"
+
+  @property
+  def index_line(self) -> str:
+    """The entry's index line: its ``<topic>/<slug>`` id and its title."""
+    return f"{self.id} · {self.title}"
 
 
 @dataclasses.dataclass
@@ -145,27 +155,27 @@ def parse_entry_text(text: str, *, entry_path: pathlib.Path) -> Entry:
   """
   lines = text.split("\n")
   if not lines or lines[0] != "---":
-    raise MemoryFormatError(f"{entry_path}: line 1: expected '---' front matter opener")
+    raise _line_error(entry_path, 1, "expected '---' front matter opener")
   header: dict[str, str] = {}
   i = 1
   while i < len(lines) and lines[i] != "---":
     m = _HEADER_RE.match(lines[i])
     if m is None:
-      raise MemoryFormatError(f"{entry_path}: line {i + 1}: malformed header line: {lines[i]!r}")
+      raise _line_error(entry_path, i + 1, f"malformed header line: {lines[i]!r}")
     key, value = m.group(1), m.group(2)
     if key not in _KNOWN_FIELDS:
-      raise MemoryFormatError(f"{entry_path}: line {i + 1}: unknown header field {key!r}")
+      raise _line_error(entry_path, i + 1, f"unknown header field {key!r}")
     if key in header:
-      raise MemoryFormatError(f"{entry_path}: line {i + 1}: duplicate header field {key!r}")
+      raise _line_error(entry_path, i + 1, f"duplicate header field {key!r}")
     if key == "title":
       value = value.strip()
       if not value:
-        raise MemoryFormatError(f"{entry_path}: line {i + 1}: empty 'title' header value")
+        raise _line_error(entry_path, i + 1, "empty 'title' header value")
     elif key == "audience":
       if not _AUDIENCE_VALUE_RE.match(value):
-        raise MemoryFormatError(f"{entry_path}: line {i + 1}: malformed header line: {lines[i]!r}")
+        raise _line_error(entry_path, i + 1, f"malformed header line: {lines[i]!r}")
     elif not _SLUG_RE.match(value):
-      raise MemoryFormatError(f"{entry_path}: line {i + 1}: malformed header line: {lines[i]!r}")
+      raise _line_error(entry_path, i + 1, f"malformed header line: {lines[i]!r}")
     header[key] = value
     i += 1
   if i >= len(lines):
@@ -173,7 +183,7 @@ def parse_entry_text(text: str, *, entry_path: pathlib.Path) -> Entry:
   # lines[i] == "---" is the closer; the body is everything after it.
   body_lines = lines[i + 1:]
   if not body_lines or (len(body_lines) == 1 and body_lines[0] == ""):
-    raise MemoryFormatError(f"{entry_path}: line {i + 2}: empty body")
+    raise _line_error(entry_path, i + 2, "empty body")
   body = "\n".join(body_lines)
   if "title" not in header:
     raise MemoryFormatError(f"{entry_path}: missing header field 'title'")
@@ -200,11 +210,11 @@ def _load_topics(memory_dir: pathlib.Path) -> dict[str, Topic]:
       continue
     m = _TOPIC_LINE_RE.match(raw)
     if m is None:
-      raise MemoryFormatError(f"{topics_path}: line {lineno}: malformed topic line: {raw!r}")
+      raise _line_error(topics_path, lineno, f"malformed topic line: {raw!r}")
     name = m.group(1)
     resident = m.group(2) is not None
     if name in topics:
-      raise MemoryFormatError(f"{topics_path}: line {lineno}: duplicate topic {name!r}")
+      raise _line_error(topics_path, lineno, f"duplicate topic {name!r}")
     topics[name] = Topic(name=name, resident=resident)
   return topics
 
@@ -372,7 +382,7 @@ def full_text(entry: Entry) -> str:
 
 def _index_lines(index_entries: list[Entry]) -> str:
   """The INDEX_HEADER line followed by sorted ``<topic>/<slug> · <title>`` lines."""
-  return "\n".join([INDEX_HEADER] + [f"{e.topic}/{e.slug} · {e.title}" for e in index_entries])
+  return "\n".join([INDEX_HEADER] + [e.index_line for e in index_entries])
 
 
 def audience_allows(entry: Entry, audience: str) -> bool:
@@ -452,8 +462,7 @@ def _selection_from_parts(
             "index",
             _index_lines(index_entries),
             tuple(
-                MemoryEntrySource(
-                    source_ref=f"memory:{e.id}", delivery="index", text=f"{e.topic}/{e.slug} · {e.title}")
+                MemoryEntrySource(source_ref=f"memory:{e.id}", delivery="index", text=e.index_line)
                 for e in index_entries),
         ))
   if usage_line is not None:

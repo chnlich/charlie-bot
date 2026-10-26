@@ -23,7 +23,7 @@ from src.infra import event_types as ET
 if TYPE_CHECKING:
   import numpy as np
 from src.infra import config, json_utils, log_once, models
-from src.runtime import chat_events, control_events, session_events, session_store, sidebar_state, task_errors
+from src.runtime import chat_events, control_events, runs, session_events, session_store, sidebar_state, task_errors
 from src.runtime.hooks import sidebar_contributions
 
 log = log_once.LazyStructlogLogger()
@@ -492,7 +492,7 @@ class SessionFork:
 
   @staticmethod
   def _create_session_dirs(session_dir: pathlib.Path) -> None:
-    (session_dir / "data").mkdir(parents=True, exist_ok=True)
+    (session_dir / runs.DATA_DIR_NAME).mkdir(parents=True, exist_ok=True)
 
   @staticmethod
   def _log_spawn(event: str, meta: models.SessionMetadata, parent_id: str, event_index: int | None) -> None:

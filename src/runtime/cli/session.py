@@ -5,8 +5,7 @@
   charliebot session tree [--root ID] [--include-archived] [--limit N] [--cursor C]
   charliebot session retry ID --run RUN_ID [--request-id ID]
   charliebot session send <target-id> (--message T | --file P)
-  charliebot session dialog [--session ID]
-  charliebot session resource-class ID {repair,agent}
+  charliebot session dialog [--session ID] [--turns N]
 
 ``create`` builds session metadata only (no first message); with ``--parent``
 it becomes the v2 task create: the task-file carries the ``task`` object
@@ -46,7 +45,11 @@ first, for piping into ``rg`` — the post-compaction search path the master
 rules point at. It is read-only: it walks the same events pages the chat UI
 does, starting from the bootstrap cursor, so an archived session (whose older
 weeks live in ``data/archives/``) prints its complete history too. Tool
-outputs and thinking stay out; each tool call renders one ``$`` line.
+outputs and thinking stay out; each tool call renders one ``$`` line. With
+``--turns N`` it pages back only until N+1 separator messages are fetched and
+prints the last N complete turns plus the turn in progress, headed by one
+line that says how much earlier history exists — the bounded read a fresh
+context after a reset uses to orient without paying for the whole log.
 
 Authentication: with CHARLIEBOT_RUN_TOKEN set (an agent running inside a Run)
 every request carries that token and nothing else — a rejection surfaces the
@@ -67,14 +70,10 @@ EXIT_SEND_REFUSED = 2
 
 
 def _build_parser() -> argparse.ArgumentParser:
-  parser = argparse.ArgumentParser(
-      description="CharlieBot session mutations", formatter_class=help_formatter.CliHelpFormatter)
+  parser = help_formatter.CliArgumentParser(description="CharlieBot session mutations")
   sub = parser.add_subparsers(dest="session_command", required=True)
 
-  create = sub.add_parser(
-      "create",
-      help="Create a session (metadata only, no first message)",
-      formatter_class=help_formatter.CliHelpFormatter)
+  create = sub.add_parser("create", help="Create a session (metadata only, no first message)")
   create.add_argument("--name", default=None, help="Session/task name (optional)")
   create.add_argument("--backend", default=None, help="Backend id (optional)")
   create.add_argument("--group", default=None, help="Group name to assign after creation (optional)")
@@ -94,7 +93,13 @@ def _build_parser() -> argparse.ArgumentParser:
   tree = sub.add_parser("tree", help="Page the task tree")
   tree.add_argument("--root", default=None, help="Parent task id (default: the roots)")
   tree.add_argument("--include-archived", action="store_true", help="Include archived/collapsed rows")
-  tree.add_argument("--limit", type=int, default=100, help="Page size (default 100)")
+  tree.add_argument(
+      "--limit",
+      type=int,
+      default=constants.SESSION_PAGE_LIMIT_DEFAULT,
+      help=(
+          f"Page size, {constants.SESSION_PAGE_LIMIT_MIN}..{constants.SESSION_PAGE_LIMIT_MAX} "
+          f"(default {constants.SESSION_PAGE_LIMIT_DEFAULT})"))
   tree.add_argument("--cursor", default=None, help="next_cursor from the previous page")
 
   retry = sub.add_parser("retry", help="Create the retry run of one recorded run")
@@ -134,10 +139,7 @@ def _build_parser() -> argparse.ArgumentParser:
   cancel.add_argument("--reason", required=True, help="Cancellation reason")
   cancel.add_argument("--request-id", default=None, help="Request id binding the cancel (defaults to a fresh UUID)")
 
-  send = sub.add_parser(
-      "send",
-      help="Relay a message to another session as an agent_message",
-      formatter_class=help_formatter.CliHelpFormatter)
+  send = sub.add_parser("send", help="Relay a message to another session as an agent_message")
   send.add_argument("target", help="Target session id")
   source = send.add_mutually_exclusive_group(required=True)
   source.add_argument(
@@ -159,16 +161,13 @@ def _build_parser() -> argparse.ArgumentParser:
 
   dialog = sub.add_parser("dialog", help="Print one session's chat messages as plain text, oldest first (for rg)")
   common.add_session_arg(dialog)
-
-  repair = sub.add_parser(
-      "resource-class",
-      help="Set a session's memory share: repair keeps it working while the agents' share is full (operator only)",
-      formatter_class=help_formatter.CliHelpFormatter)
-  repair.add_argument("session_id", help="Session id")
-  repair.add_argument(
-      "resource_class",
-      choices=["repair", "agent"],
-      help="repair moves this session and its descendants to the repair share; agent removes the mark")
+  dialog.add_argument(
+      "--turns",
+      type=int,
+      default=None,
+      metavar="N",
+      help="Print only the last N complete turns plus the turn in progress; a turn ends at a separator "
+      "message. Omit it to print the whole history, which keeps the full-log search working.")
   return parser
 
 
@@ -254,7 +253,7 @@ def _cmd_cancel(args: argparse.Namespace) -> None:
     run_rows: dict[str, dict] = {}
     cursor = None
     while run_ids - run_rows.keys():
-      params = {"limit": 500}
+      params = {"limit": constants.SESSION_PAGE_LIMIT_MAX}
       if cursor is not None:
         params["cursor"] = cursor
       page = common.get_api(f"/api/sessions/{args.session_id}/runs", params)
@@ -319,29 +318,81 @@ def _format_message_block(msg: dict) -> str | None:
   return "\n".join(lines)
 
 
-def _cmd_resource_class(args: argparse.Namespace) -> None:
-  result = common.put_internal_api(
-      f"/api/sessions/{args.session_id}/resource-class", {"resource_class": args.resource_class})
-  common.print_json(result, indent=2, file=sys.stdout)
+def _earlier_unit(boot: dict) -> str:
+  """The unit word for the header's earlier-history count: the bootstrap session object's
+  ``archive_offset`` says which cursor space the pages use. Without it the unit is a guess,
+  so the command stops instead of printing one."""
+  session = boot.get("session")
+  offset = session.get("archive_offset") if isinstance(session, dict) else None
+  if not isinstance(offset, int):
+    common.exit_error(
+        "bootstrap payload lacks the session's archive_offset; refusing to guess "
+        "whether --turns counts messages or events")
+  return "events" if offset > 0 else "messages"
 
 
 def _cmd_dialog(args: argparse.Namespace) -> None:
+  if args.turns is not None and args.turns < 1:
+    common.exit_usage_error("--turns must be an integer of at least 1")
   session_id = common.resolve_session_id(args.session)
   # The bootstrap payload is the newest page the chat UI opens with; its
   # oldest_message_ordinal is the cursor backward paging starts from, in the
   # events endpoint's own cursor space (message ordinals for an ordinary
   # session, legacy event indices for an archived one).
   boot = common.get_api(f"/api/sessions/{session_id}/bootstrap")
+  page_starts: list[int] = [boot["oldest_message_ordinal"]]  # the cursor each page starts at
   pages: list[list[dict]] = [boot["messages"]]
   cursor = boot["oldest_message_ordinal"]
   has_more = boot["has_more"]
-  while has_more:
-    page = common.get_api(f"/api/sessions/{session_id}/events", {"before": cursor, "limit": _DIALOG_PAGE_LIMIT})
-    pages.append(page["messages"])
-    cursor = page["next_before"]
-    has_more = page["has_more"]
-  blocks = [block for page in reversed(pages) for msg in page if (block := _format_message_block(msg)) is not None]
+  separators = sum(1 for msg in boot["messages"] if msg.get("role") == "separator")
+  if args.turns is None:
+    while has_more:
+      page = common.get_api(f"/api/sessions/{session_id}/events", {"before": cursor, "limit": _DIALOG_PAGE_LIMIT})
+      pages.append(page["messages"])
+      page_starts.append(page["next_before"])
+      cursor = page["next_before"]
+      has_more = page["has_more"]
+  else:
+    # --turns: stop once the fetched pages hold one separator more than the
+    # requested turn count — everything after the (N+1)-th last separator is
+    # then the last N complete turns plus the turn in progress. Most sessions
+    # fit the bootstrap page alone, so the reset read costs one request.
+    while has_more and separators < args.turns + 1:
+      page = common.get_api(f"/api/sessions/{session_id}/events", {"before": cursor, "limit": _DIALOG_PAGE_LIMIT})
+      pages.append(page["messages"])
+      page_starts.append(page["next_before"])
+      separators += sum(1 for msg in page["messages"] if msg.get("role") == "separator")
+      cursor = page["next_before"]
+      has_more = page["has_more"]
+  cut = 0
+  if args.turns is not None:
+    ascending = [msg for page in reversed(pages) for msg in page]
+    separator_positions = [i for i, msg in enumerate(ascending) if msg.get("role") == "separator"]
+    # Fewer than N+1 separators means the whole fetched history is N turns or
+    # less: print all of it, cut 0 included.
+    if len(separator_positions) >= args.turns + 1:
+      cut = separator_positions[-(args.turns + 1)] + 1
+  printed = 0
+  blocks: list[str] = []
+  first_page_start = first_pos = first_event_index = None
+  for page_start, page in zip(reversed(page_starts), reversed(pages), strict=True):
+    for pos, msg in enumerate(page):
+      if printed < cut:
+        printed += 1
+        continue
+      block = _format_message_block(msg)
+      if block is None:
+        continue
+      if first_event_index is None:
+        first_page_start, first_pos, first_event_index = page_start, pos, msg.get("event_index")
+      blocks.append(block)
+      printed += 1
   if blocks:
+    if args.turns is not None:
+      unit = _earlier_unit(boot)
+      blocks.insert(
+          0, f"last {args.turns} turns · from event {first_event_index} · "
+          f"{first_page_start + first_pos} earlier {unit}")
     print("\n\n".join(blocks))
 
 
@@ -364,8 +415,6 @@ def main() -> None:
     _cmd_send(args)
   elif args.session_command == "dialog":
     _cmd_dialog(args)
-  elif args.session_command == "resource-class":
-    _cmd_resource_class(args)
   else:
     parser.error(f"unknown session command: {args.session_command}")
 

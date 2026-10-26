@@ -3,9 +3,9 @@
 # Start/stop stays manual: runs in the foreground, Ctrl-C to stop.
 # A current link in the release root selects the Rust release; without it the Python server runs.
 #
-# The server runs inside the charliebot-server scope under charliebot.slice, so its memory never
-# enters swap. Before it starts, the launcher checks both leaf slices against their unit files;
-# a missing slice or a different limit stops the start here, visibly.
+# Each server start has a timestamp-and-PID scope so earlier runs can keep their processes.
+# Before starting, the launcher checks the agents' slice against its unit file; a missing slice or different limit
+# stops the start visibly. --preflight checks the slice and creates a trial scope without writing a server log.
 set -uo pipefail
 
 # Resolve repo root from the script location — no absolute paths (shared repo).
@@ -13,9 +13,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 UNIT_DIR="$SCRIPT_DIR/systemd"
 
-# The systemd server scope: one scope per run, inside the hierarchy slice, with swap off.
-SERVER_SCOPE=(systemd-run --user --scope --unit=charliebot-server --slice=charliebot.slice
-              -p MemorySwapMax=0 --)
+# Server and trial scopes use the same slice and swap limit so both starts test the server's resource settings.
+run_in_scope() {
+  local unit_name="$1"
+  shift
+  systemd-run --user --scope --unit="$unit_name" --slice=charliebot.slice -p MemorySwapMax=0 -- "$@"
+}
 
 # One setting's value from a unit file: the last assignment wins in systemd, so the last
 # assignment printed here is the effective one; a missing key reads as infinity, the value
@@ -30,12 +33,32 @@ _unit_setting() {
   printf '%s' "${value:-infinity}"
 }
 
-# A systemd size (34G, 8M, 0, infinity) in bytes, the form `systemctl show` reports.
+# Host memory in kB, as /proc/meminfo reports it.
+_memtotal_kb() {
+  awk '/^MemTotal:/ { print $2; found = 1; exit } END { exit !found }' /proc/meminfo
+}
+
+# A systemd percentage of host memory in bytes. systemd rounds down to a whole 4096-byte page:
+# floor(MemTotal pages * percent / 100) * 4096, where a page is MemTotal kB / 4.
+_percent_bytes() {
+  local percent="$1" memtotal_kb="$2"
+  printf '%s' "$(( (memtotal_kb / 4) * percent / 100 * 4096 ))"
+}
+
+# A systemd size (34G, 8M, 80%, 0, infinity) in bytes, the form `systemctl show` reports.
 _systemd_bytes() {
   local value="$1" number unit
   case "$value" in
     infinity|max)
       printf 'infinity'
+      return 0
+      ;;
+    *%)
+      if ! number="$(_memtotal_kb)"; then
+        echo "preflight: cannot read MemTotal from /proc/meminfo for '$value'" >&2
+        return 1
+      fi
+      _percent_bytes "${value%\%}" "$number"
       return 0
       ;;
   esac
@@ -57,18 +80,18 @@ _systemd_bytes() {
   printf '%s' "$number"
 }
 
-# Assert both leaf slices are active and carry exactly their unit files' limits. Prints every
+# Assert the agents' slice is active and carries exactly its unit file's limits. Prints every
 # difference and returns non-zero on any; a missing limit must stop the start, not be inferred.
 preflight_slices() {
   local rc=0 unit file shown active key expected actual raw
-  for unit in charliebot-agents.slice charliebot-repair.slice; do
+  for unit in charliebot-agents.slice; do
     file="$UNIT_DIR/$unit"
     if [ ! -f "$file" ]; then
       echo "preflight: $unit has no unit file at $file" >&2
       rc=1
       continue
     fi
-    if ! shown="$(systemctl --user show "$unit" -p ActiveState -p MemoryHigh -p MemoryMax -p MemorySwapMax)"; then
+    if ! shown="$(systemctl --user show "$unit" -p ActiveState -p MemoryMax -p MemorySwapMax)"; then
       echo "preflight: systemctl --user show $unit failed" >&2
       rc=1
       continue
@@ -78,19 +101,18 @@ preflight_slices() {
       echo "preflight: $unit is '${active:-unknown}', expected 'active' (run scripts/setup.sh)" >&2
       rc=1
     fi
-    for key in MemoryHigh MemoryMax MemorySwapMax; do
+    for key in MemoryMax MemorySwapMax; do
       raw="$(_unit_setting "$file" "$key")"
-      case "$unit:$key:$raw" in
-        charliebot-agents.slice:MemoryHigh:infinity|\
-        charliebot-agents.slice:MemoryMax:infinity|\
-        charliebot-agents.slice:MemorySwapMax:infinity|\
-        charliebot-repair.slice:MemoryMax:infinity|\
-        charliebot-repair.slice:MemorySwapMax:infinity)
-          echo "preflight: $unit unit file has no finite $key" >&2
-          rc=1
-          continue
-          ;;
-      esac
+      if [ "$raw" = infinity ]; then
+        echo "preflight: $unit unit file has no finite $key" >&2
+        rc=1
+        continue
+      fi
+      if [ "$key" = MemorySwapMax ] && [ "$raw" != 0 ]; then
+        echo "preflight: $unit unit file has $key='$raw', expected 0" >&2
+        rc=1
+        continue
+      fi
       if ! expected="$(_systemd_bytes "$raw")"; then
         rc=1
         continue
@@ -106,6 +128,20 @@ preflight_slices() {
 }
 
 main() {
+  TS="$(date +%Y%m%d_%H%M%S)"
+
+  if [ "${1:-}" = "--preflight" ]; then
+    if ! preflight_slices; then
+      exit 1
+    fi
+    PREFLIGHT_SCOPE_NAME="charliebot-preflight-${TS}-$$"
+    if ! run_in_scope "$PREFLIGHT_SCOPE_NAME" true; then
+      echo "launcher: systemd scope preflight failed for $PREFLIGHT_SCOPE_NAME" >&2
+      exit 1
+    fi
+    exit 0
+  fi
+
   cd "$REPO_ROOT"
 
   # Tests drive the real launcher through these variables; the defaults stay the
@@ -114,8 +150,8 @@ main() {
   RELEASES_DIR="${CHARLIEBOT_RELEASES_DIR:-$HOME/charliebot-releases}"
   CURRENT="$RELEASES_DIR/current"
   mkdir -p "$LOG_DIR"
-  TS="$(date +%Y%m%d_%H%M%S)"
   LOG="$LOG_DIR/server_${TS}.log"
+  SERVER_SCOPE_NAME="charliebot-server-${TS}-$$"
   ln -sfn "$LOG" "$LOG_DIR/server-latest.log"   # stable pointer to the newest log
 
   # -e or -L: a dangling current still selects Rust, so a broken release fails here instead of
@@ -131,9 +167,10 @@ main() {
   echo "CharlieBot server starting (repo: $REPO_ROOT)"
   echo "  log    -> $LOG"
   echo "  latest -> $LOG_DIR/server-latest.log"
+  echo "  scope  -> $SERVER_SCOPE_NAME"
 
   if ! preflight_slices; then
-    echo "launcher: the memory slices do not match scripts/systemd/; not starting the server" >&2
+    echo "launcher: the agents' memory slice does not match scripts/systemd/; not starting the server" >&2
     exit 1
   fi
 
@@ -151,10 +188,10 @@ main() {
       echo "launcher: --check-config failed (rc=${CHECK_RC}); roll back with: scripts/switch-server.sh python"
       exit "$CHECK_RC"
     fi
-    "${SERVER_SCOPE[@]}" "$CURRENT/charliebot-server" 2>&1 | tee -i -a "$LOG"
+    run_in_scope "$SERVER_SCOPE_NAME" "$CURRENT/charliebot-server" 2>&1 | tee -i -a "$LOG"
   else
     # PYTHONUNBUFFERED: avoid block buffering when piped, so log lines flush promptly.
-    PYTHONUNBUFFERED=1 "${SERVER_SCOPE[@]}" uv run python3 server.py 2>&1 | tee -i -a "$LOG"
+    PYTHONUNBUFFERED=1 run_in_scope "$SERVER_SCOPE_NAME" uv run python3 server.py 2>&1 | tee -i -a "$LOG"
   fi
   SERVER_RC="${PIPESTATUS[0]}"
   EXIT_LINE="$(date '+%Y-%m-%d %H:%M:%S.%3N') launcher: server exited rc=${SERVER_RC}"
@@ -165,5 +202,18 @@ main() {
 
 # Sourcing the script exposes preflight_slices to the tests without starting anything.
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
-  main
+  case "$#" in
+    0) main ;;
+    1)
+      [ "$1" = "--preflight" ] || {
+        echo "usage: start-server.sh [--preflight]" >&2
+        exit 1
+      }
+      main "$1"
+      ;;
+    *)
+      echo "usage: start-server.sh [--preflight]" >&2
+      exit 1
+      ;;
+  esac
 fi

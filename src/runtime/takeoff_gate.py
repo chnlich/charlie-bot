@@ -24,6 +24,7 @@ start.
 from collections.abc import Callable
 
 from src.infra import event_types, memo, models
+from src.runtime import task_errors
 
 # session_id -> (events list, covered length, holds_user_request). Pinning the
 # list keeps id() stable, so an identity match can never be an id-reuse
@@ -85,9 +86,6 @@ def _holds_user_request(session_id: str, events: list[dict]) -> bool:
   return held
 
 
-_TASK_ANCESTOR_HOP_LIMIT = 1000
-
-
 def check_takeoff_gate_for_task(
     start_session_id: str,
     *,
@@ -107,7 +105,7 @@ def check_takeoff_gate_for_task(
   """
   request_node: str | None = None
   current = start_session_id
-  for _ in range(_TASK_ANCESTOR_HOP_LIMIT):
+  for _ in range(task_errors.ANCESTOR_HOP_LIMIT):
     task_parent_id, profile = task_meta_of(current)
     is_start = current == start_session_id
     if is_start and profile != "manager":
@@ -124,7 +122,7 @@ def check_takeoff_gate_for_task(
   else:
     raise DelegationBlockedError(
         f"Delegation blocked: the task chain from task {start_session_id} exceeds "
-        f"{_TASK_ANCESTOR_HOP_LIMIT} hops without reaching a root")
+        f"{task_errors.ANCESTOR_HOP_LIMIT} hops without reaching a root")
   if request_node is None:
     raise DelegationBlockedError(
         f"Delegation blocked: no user request on the task chain from task {start_session_id} to its root. "

@@ -5,7 +5,6 @@ import contextlib
 import importlib
 import inspect
 import io
-import json
 import logging
 import os
 import sys
@@ -362,24 +361,20 @@ with gc_control.gc_off(collect=False):
 @app.websocket("/ws/sessions/{session_id}")
 async def session_websocket(websocket: fastapi.WebSocket, session_id: str) -> None:
   """Push session-level events (master CC output, worker summaries) to the browser."""
-  # Auth + accept happen inline here because cursor negotiation (unique to this
-  # endpoint) must read a message from the accepted socket before subscribing.
+  # Auth + accept happen inline because this endpoint reads its replay cursor from the handshake query.
   if not await auth.check_ws_auth(websocket):
     return
   await websocket.accept()
   log.info("session_ws_connected", session_id=session_id)
 
-  cursor = 0
-  try:
-    raw = await asyncio.wait_for(websocket.receive_text(), timeout=timeouts.SESSION_WS_CURSOR_TIMEOUT)
-    msg = json.loads(raw)
-    if msg.get("type") == "cursor":
-      cursor = int(msg.get("index", 0))
-  except fastapi.WebSocketDisconnect:
-    log.debug("session_ws_early_disconnect", session_id=session_id)
+  raw_cursor = websocket.query_params.get("cursor")
+  # More digits than an int64 event count can hold (19) also exceeds int()'s own
+  # digit limit, so reject it here rather than raising out of the handler.
+  if (raw_cursor is None or len(raw_cursor) > 19 or not raw_cursor.isascii() or not raw_cursor.isdecimal()):
+    log.warning("session_ws_cursor_invalid", session_id=session_id, raw_cursor=raw_cursor)
+    await websocket.close(code=4400)
     return
-  except (TimeoutError, json.JSONDecodeError, ValueError, TypeError) as e:
-    log.debug("session_ws_cursor_parse_failed", session_id=session_id, error=str(e))
+  cursor = int(raw_cursor)
 
   # Subscribe BEFORE catchup so no events are lost between catchup and subscribe.
   channel = streaming.session_channel(session_id)

@@ -2780,7 +2780,6 @@ def _session_cgroup_base_off_host(tmp_path_factory: pytest.TempPathFactory, monk
   installed; a test that needs a slice builds one under its own temp dir."""
   missing = tmp_path_factory.mktemp("session-cgroup-base")
   monkeypatch.setattr("src.infra.process.CGROUP_V2_AGENTS_SLICE", str(missing / "charliebot-agents.slice"))
-  monkeypatch.setattr("src.infra.process.CGROUP_V2_REPAIR_SLICE", str(missing / "charliebot-repair.slice"))
   monkeypatch.setattr("src.infra.process.CGROUP_V2_APP_SLICE", str(missing / "app.slice"))
 
 

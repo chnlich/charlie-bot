@@ -57,6 +57,16 @@ def process_rss_mb(pid: int) -> float:
   return int(match.group(1)) / 1024
 
 
+def require_binary() -> None:
+  """Refuse when no opencode 2.0 binary sits at ``OPENCODE_BIN``.
+
+  Both the shared server and a one-shot run execute that path, so each asks
+  here before its own work starts.
+  """
+  if not pathlib.Path(OPENCODE_BIN).is_file():
+    raise RuntimeError(f"opencode 2.0 binary not found at {OPENCODE_BIN}")
+
+
 def headless_config() -> dict:
   """The server's config: broad auto-approval, minus the three tools a CharlieBot turn must not use.
 
@@ -267,8 +277,7 @@ class OpenCodeServer:
     return self._client
 
   async def _start(self) -> None:
-    if not pathlib.Path(OPENCODE_BIN).is_file():
-      raise RuntimeError(f"opencode 2.0 binary not found at {OPENCODE_BIN}")
+    require_binary()
     if self._proc is not None:
       # The previous process exited; release what it left behind before starting again.
       await self._shutdown()

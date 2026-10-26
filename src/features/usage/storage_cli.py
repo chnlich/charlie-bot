@@ -33,14 +33,12 @@ def _cmd_cool(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
-  parser = argparse.ArgumentParser(
-      description="CharlieBot storage reclamation", formatter_class=help_formatter.CliHelpFormatter)
+  parser = help_formatter.CliArgumentParser(description="CharlieBot storage reclamation")
   sub = parser.add_subparsers(dest="command", required=True)
 
   cool = sub.add_parser(
       "cool",
       help="Delete transport logs and backend records of cold sessions",
-      formatter_class=help_formatter.CliHelpFormatter,
       description="Delete the bytes no reader can reach again: cold sessions' raw transport files and backend "
       "conversation stores of cold or orphaned sessions.")
   cool.add_argument("--dry-run", action="store_true", help="Report what would be freed; write nothing, delete nothing.")

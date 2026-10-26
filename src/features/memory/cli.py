@@ -55,15 +55,10 @@ def _sessions_root() -> pathlib.Path:
 
 
 def main() -> None:
-  parser = argparse.ArgumentParser(
-      description="Labeled-entry memory store: query, add captures, and lint",
-      formatter_class=help_formatter.CliHelpFormatter)
+  parser = help_formatter.CliArgumentParser(description="Labeled-entry memory store: query, add captures, and lint")
   sub = parser.add_subparsers(dest="command", required=True)
 
-  p_query = sub.add_parser(
-      "query",
-      help="Print matched entries' full text (or index lines with --index)",
-      formatter_class=help_formatter.CliHelpFormatter)
+  p_query = sub.add_parser("query", help="Print matched entries' full text (or index lines with --index)")
   p_query.add_argument(
       "--topic", action="append", required=True, help="Topic to match (repeatable); must exist in the vocabulary")
   p_query.add_argument(
@@ -77,29 +72,18 @@ def main() -> None:
       "Store root to read (default: the live store at $CHARLIEBOT_HOME/memory); pass the PR worktree's path to read its drafted entries",
   )
 
-  p_add = sub.add_parser(
-      "add", help="Stage a free-form capture (never touches entries/)", formatter_class=help_formatter.CliHelpFormatter)
+  p_add = sub.add_parser("add", help="Stage a free-form capture (never touches entries/)")
   p_add.add_argument("--file", default=None, help="Read body from file (default: stdin)")
 
-  p_lint = sub.add_parser(
-      "lint", help="Validate the store; exit nonzero on violations", formatter_class=help_formatter.CliHelpFormatter)
+  p_lint = sub.add_parser("lint", help="Validate the store; exit nonzero on violations")
   p_lint.add_argument("--dir", default=None, help="Store root to validate (default: the live store)")
 
   p_proposal = sub.add_parser(
-      "proposal",
-      help="Drive the store's PR flow: open, status, commit one path, land one version",
-      formatter_class=help_formatter.CliHelpFormatter)
+      "proposal", help="Drive the store's PR flow: open, status, commit one path, land one version")
   proposal_sub = p_proposal.add_subparsers(dest="proposal_command", required=True)
-  proposal_sub.add_parser(
-      "open",
-      help="Ensure the proposal branch and worktree exist, aligned with the base branch",
-      formatter_class=help_formatter.CliHelpFormatter)
-  proposal_sub.add_parser(
-      "status", help="Print the PR state (read-only)", formatter_class=help_formatter.CliHelpFormatter)
-  p_pcommit = proposal_sub.add_parser(
-      "commit",
-      help="Commit exactly one store-relative path on the proposal branch",
-      formatter_class=help_formatter.CliHelpFormatter)
+  proposal_sub.add_parser("open", help="Ensure the proposal branch and worktree exist, aligned with the base branch")
+  proposal_sub.add_parser("status", help="Print the PR state (read-only)")
+  p_pcommit = proposal_sub.add_parser("commit", help="Commit exactly one store-relative path on the proposal branch")
   p_pcommit.add_argument("path", help="Store-relative path: an entry file or topics")
   p_pcommit.add_argument("--message-file", required=True, help="File holding the commit message")
   p_pcommit.add_argument(
@@ -107,10 +91,7 @@ def main() -> None:
       action="store_true",
       help="Commit even when lines the PR already added are rewritten or gone; the commit "
       "message lists each replaced line under 'Replaced PR lines:'")
-  p_pland = proposal_sub.add_parser(
-      "land",
-      help="Fast-forward the live checkout to one reviewed proposal commit",
-      formatter_class=help_formatter.CliHelpFormatter)
+  p_pland = proposal_sub.add_parser("land", help="Fast-forward the live checkout to one reviewed proposal commit")
   p_pland.add_argument("sha", help="The reviewed proposal commit SHA")
 
   args = parser.parse_args()
@@ -159,7 +140,7 @@ def _cmd_query(args: argparse.Namespace) -> None:
   matched.sort(key=memory.entry_order_key)
   if args.index:
     for e in matched:
-      print(f"{e.topic}/{e.slug} · {e.title}")
+      print(e.index_line)
     return
   if not matched:
     return
@@ -179,9 +160,6 @@ def _resolve_run_scoped_audience(token: str) -> str:
   """
   root = _sessions_root()
   key = credentials.configured_access_key()
-  if not key:
-    print("error: run token presented but no signing key is configured", file=sys.stderr)
-    sys.exit(1)
   try:
     claims = run_token.verify_run_token(token, key)
   except run_token.RunTokenError as e:

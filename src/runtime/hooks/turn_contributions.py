@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING, Protocol, TypeVar
 if TYPE_CHECKING:
   from src.infra import config, models
 
-from src.runtime.hooks import registration
+from src.infra import deferred, registration
 
 DEFAULT_WORKFLOW_RULES_FILE = "manager_workflows.md"
 
@@ -102,9 +102,10 @@ def register_turn_contribution(name: str, contribution: str) -> None:
 
 
 def _import_contribution(name: str, path: str) -> TurnContribution:
-  module_name, separator, attr = path.partition(":")
-  if not separator or not module_name or not attr:
-    raise ValueError(f"turn contribution {name!r}: {path!r} is not a 'module:attr' string")
+  spec = deferred.split_attr(path)
+  if spec is None:
+    raise deferred.not_a_spec(path, f"turn contribution {name!r}")
+  module_name, attr = spec
   instance = getattr(importlib.import_module(module_name), attr)
   if not isinstance(instance, TurnContribution):
     raise ValueError(f"turn contribution {name!r}: {path} is a {type(instance).__name__}, not a TurnContribution")

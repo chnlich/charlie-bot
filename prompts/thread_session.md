@@ -22,9 +22,9 @@ Before you start work of one of these kinds, read `prompts/manager_workflows.md`
 - In this thread session, open your last session message of each turn with the status block:
   - Put the turn's one-line result into **Now**.
   - Write the labels **Goal**, **Now** and **Waiting on you** in English in every chat language.
-  - The status block is a three-item markdown list of the session status.
-  - Make the **Goal** item the first line of the message.
-  - Start each item's line with `- `.
+  - The status block is a markdown list with one line for each field of the session status.
+  - Make the **Goal** line the first line of the message.
+  - Start each field's line with `- `.
   - The chat renderer and the acceptance checks find the block by its labels.
   - Put an optional offer or a non-blocking approval in the body, after the status block.
   - When another rule asks for opening sentences, write them after the status block.

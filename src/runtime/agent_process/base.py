@@ -24,7 +24,7 @@ from typing import BinaryIO
 
 from src.infra import config, log_once, models, ndjson, process, timeouts
 from src.infra import event_types as ET
-from src.runtime import message_aggregator, resource_class, runs
+from src.runtime import message_aggregator, runs
 from src.runtime.agent_process import spawn
 
 log = log_once.LazyStructlogLogger()
@@ -848,26 +848,21 @@ class AgentBackend(abc.ABC):
   async def _prepare_session_cgroup(self) -> process.SessionCgroup | None:
     """Ensure this backend's session cgroup exists and snapshot its counters; None when off.
 
-    Every spawn point calls this once, parent-side, before its spawn. The
-    repair decision is taken here, from the task tree at spawn time (see
-    :mod:`src.runtime.resource_class`), so a mark cleared on a parent reaches
-    the next spawn of each descendant without anything written on them. The
-    move itself rides the child-side preexec composition for spawns that keep
-    one (:meth:`_spawn_preexec`), and :meth:`_apply_turn_tree_limits` for the
-    rest. The cgroup is keyed by the session id the caller pinned at
-    construction (master turn, worker task, session-scoped one-shot); a backend
-    constructed with cgroup_session_id=None (a spawn with no session home)
-    never enters one.
+    Every spawn point calls this once, parent-side, before its spawn. The cgroup
+    sits under the agents' slice. The move itself rides the child-side preexec
+    composition for spawns that keep one (:meth:`_spawn_preexec`), and
+    :meth:`_apply_turn_tree_limits` for the rest. The cgroup is keyed by the
+    session id the caller pinned at construction (master turn, worker task,
+    session-scoped one-shot); a backend constructed with cgroup_session_id=None
+    (a spawn with no session home) never enters one.
     """
     if self._cgroup_session_id is None:
       return None
     cfg = config.get_config()
     if cfg.server.session_memory_max_mb <= 0:
       return None
-    spawn_class = await resource_class.resolve(self._cgroup_session_id)
     return process.prepare_session_cgroup(
         self._cgroup_session_id,
-        spawn_class,
         memory_max_mb=cfg.server.session_memory_max_mb,
         swap_max_mb=cfg.server.session_swap_max_mb,
         tasks_max=cfg.server.session_tasks_max,

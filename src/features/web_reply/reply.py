@@ -50,11 +50,15 @@ _LATIN = re.compile(r"[A-Za-z]")
 # The rule file under prompts/ that a web session's manager turn carries.
 RULES_FILE = "web_reply.md"
 
+# The ask every reply reminder carries, so the nudge and the combined reminder cannot drift: post the reply
+# now, and keep an answer past ``REPLY_BUDGET_CHARS`` on a page first.
+REPLY_ASK_TEXT = (
+    f"Post your answer as the web reply now. For an answer over {constants.REPLY_BUDGET_CHARS} characters, "
+    "write the whole answer on a page first. Then post the conclusion and the page link as the web reply.")
 # The audit's nudge: the agent's input when a user message woke a turn that ended without a reply.
 NUDGE_TEXT = (
     "Web reply nudge: your last turn woke on a user message and ended without a web reply. The For-you view "
-    "hides your turn output. Post your answer as the web reply now. For an answer over 500 characters, write "
-    "the whole answer on a page first. Then post the conclusion and the page link as the web reply.")
+    f"hides your turn output. {REPLY_ASK_TEXT}")
 # The notice the user reads when the nudge turn also ended without a reply.
 NOTICE_TEXT = "No reply was posted for this message. The Everything view shows this turn's output."
 # The sender name the nudge carries in the chat log.

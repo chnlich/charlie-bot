@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import re
 import signal
 import subprocess
 import sys
@@ -58,6 +59,20 @@ def _read_log(log_dir: pathlib.Path) -> str:
   if not latest.exists():
     return ""
   return latest.read_text(encoding="utf-8", errors="replace")
+
+
+def _assert_server_scope(proc: subprocess.CompletedProcess[str], bin_dir: pathlib.Path) -> None:
+  records = systemd_stubs.read_systemd_run_records(bin_dir)
+  assert len(records) == 1
+  record = records[0]
+  unit_name = str(record["unit_name"])
+  assert re.fullmatch(r"charliebot-server-\d{8}_\d{6}-\d+", unit_name)
+  assert f"  scope  -> {unit_name}" in proc.stdout.splitlines()
+  arguments = record["arguments"]
+  assert isinstance(arguments, list)
+  assert f"--unit={unit_name}" in arguments
+  assert "--slice=charliebot.slice" in arguments
+  assert arguments[arguments.index("-p") + 1] == "MemorySwapMax=0"
 
 
 @pytest.mark.integration
@@ -201,6 +216,7 @@ def test_launcher_without_current_runs_the_python_server_as_before(tmp_path: pat
   proc, log_dir = _run_launcher(tmp_path, releases)
 
   assert proc.returncode == 0, proc.stderr
+  _assert_server_scope(proc, tmp_path / "bin")
   record = json.loads((tmp_path / "uv-record.json").read_text(encoding="utf-8"))
   assert record == {"argv": ["run", "python3", "server.py"], "PYTHONUNBUFFERED": "1"}
   assert proc.stdout.splitlines()[0] == f"CharlieBot server starting (repo: {ROOT})"
@@ -217,6 +233,7 @@ def test_launcher_with_current_runs_the_release_binary_with_both_variables(tmp_p
 
   assert (release / "run.json").exists(), proc.stderr
   assert proc.returncode == 0, proc.stderr
+  _assert_server_scope(proc, tmp_path / "bin")
   assert json.loads((release / "run.json").read_text(encoding="utf-8")) == {
       "CHARLIEBOT_REPO_ROOT": str(ROOT),
       "CHARLIEBOT_VENV_BIN": str(ROOT / ".venv" / "bin"),

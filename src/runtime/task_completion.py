@@ -806,6 +806,15 @@ class TaskCompletionManager:
     log.info("task_close_requested", session_id=session_id, request_id=request_id, owner_run_id=owner_run_id)
     return 202, {"session_id": session_id, "request_id": request_id, "status": "pending_run_finish"}
 
+  def _require_open_for_close(self, session_id: str) -> None:
+    """Refuse a close of a task that is not open.
+
+    Automatic completion and the sequence close both answer this rule under the control lock, so
+    one definition keeps the two paths from drifting apart on the sentence.
+    """
+    if self._tree.task_state(session_id) != "open":
+      raise task_errors.TaskConflictError([f"task {session_id} is no longer open"])
+
   async def _close_now(
       self,
       session_id: str,
@@ -853,8 +862,7 @@ class TaskCompletionManager:
     async with tree.control_lock:
       fresh_index = await tree._get_index()
       tree._index_meta(fresh_index, session_id)
-      if tree.task_state(session_id) != "open":
-        raise task_errors.TaskConflictError([f"task {session_id} is no longer open"])
+      self._require_open_for_close(session_id)
       fresh_blockers = self.completion_blockers(
           fresh_index, session_id, exclude_run_ids=exclude_run_ids, exclude_input_ids=exclude_input_ids)
       fresh_meta = await tree.load_meta(session_id)
@@ -1031,8 +1039,7 @@ class TaskCompletionManager:
     async with tree.control_lock:
       index = await tree._get_index()
       tree._index_meta(index, session_id)
-      if tree.task_state(session_id) != "open":
-        raise task_errors.TaskConflictError([f"task {session_id} is no longer open"])
+      self._require_open_for_close(session_id)
       blockers = self.cancellation_blockers(index, session_id)
     if blockers:
       raise task_errors.TaskConflictError(sorted(set(blockers)))
@@ -1056,8 +1063,7 @@ class TaskCompletionManager:
       replay = self._replay_close_request(session_id, request_id)
       if replay is not None:
         return replay
-      if tree.task_state(session_id) != "open":
-        raise task_errors.TaskConflictError([f"task {session_id} is no longer open"])
+      self._require_open_for_close(session_id)
       fresh_meta = await tree.load_meta(session_id)
       assert fresh_meta is not None
       fresh_blockers = self.cancellation_blockers(index, session_id)
@@ -1405,6 +1411,16 @@ class TaskCompletionManager:
   # Cancel and reopen
   # ------------------------------------------------------------------
 
+  def _require_open_for_cancel(self, session_id: str) -> None:
+    """Refuse a cancel of a task that is not open, naming the state it is in.
+
+    A cancel applies to an open task only, on both the manager and the worker path. The state is
+    read once so the refusal sentence and the test that produced it name the same value.
+    """
+    state = self._tree.task_state(session_id)
+    if state != "open":
+      raise task_errors.TaskConflictError([f"task {session_id} is {state}; only an open task can be cancelled"])
+
   async def cancel_task(
       self,
       session_id: str,
@@ -1459,10 +1475,7 @@ class TaskCompletionManager:
     async with tree.control_lock:
       index = await tree._get_index()
       meta = tree._index_meta(index, session_id)
-      if tree.task_state(session_id) != "open":
-        raise task_errors.TaskConflictError(
-            [(f"task {session_id} is {tree.task_state(session_id)}; "
-              "only an open task can be cancelled")])
+      self._require_open_for_cancel(session_id)
       replay = self._replay_close_request(session_id, request_id)
       if replay is not None:
         return replay[1]
@@ -1512,9 +1525,7 @@ class TaskCompletionManager:
       meta = tree._index_meta(index, session_id)
       replay = self._replay_close_request(session_id, request_id)
       if replay is None:
-        state = tree.task_state(session_id)
-        if state != "open":
-          raise task_errors.TaskConflictError([(f"task {session_id} is {state}; only an open task can be cancelled")])
+        self._require_open_for_cancel(session_id)
         open_descendants = [
             descendant for descendant in tree._descendants(index, session_id) if tree.task_state(descendant) == "open"
         ]
@@ -1648,7 +1659,7 @@ class TaskCompletionManager:
     tree = self._tree
     index = await tree._get_index()
     if index.metas.get(session_id) is None:
-      raise task_errors.TaskNotFoundError(f"task {session_id} not found")
+      raise task_errors.task_not_found(session_id)
     # The archived chain above the target, nearest first; the target joins
     # when it is itself archived. The walk stops at the first open node.
     chain: list[str] = []
@@ -1664,8 +1675,7 @@ class TaskCompletionManager:
       seen.add(current)
       current = meta.task_parent_id
       if len(chain) > task_errors.RESTORE_CHAIN_HOP_LIMIT:
-        raise task_errors.TaskConflictError(
-            [f"ancestor chain of {session_id} exceeds {task_errors.RESTORE_CHAIN_HOP_LIMIT} hops"])
+        raise task_errors.ancestor_chain_too_long(session_id, task_errors.RESTORE_CHAIN_HOP_LIMIT)
     if not chain:
       return [], []
     restored: list[str] = []

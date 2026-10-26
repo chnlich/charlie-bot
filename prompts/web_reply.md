@@ -24,15 +24,22 @@ The For-you view shows your web replies and hides the rest of your turn output.
 - When your steps change later in the turn, continue without a new opening reply.
 - Post exactly one answer reply for each user message of this turn, the messages that arrived during it included.
 - When the web reply nudge woke this turn, post the answer reply that the last turn missed.
-- When another input woke this turn, post one web reply for the results of this turn:
-  - a page for the user;
-  - the approval of your plan;
-  - a new or changed item in **Waiting on you**;
-  - a landed change;
-  - the completion of your task or of a request that the user made in this session;
-  - a result that the user asked you to report.
+- When another input woke this turn, post one web reply only when this turn did an action from this list:
+  - wrote a page for the user;
+  - approved your plan, or received the approval of your plan;
+  - added or changed an item in **Waiting on you**;
+  - landed a change;
+  - completed your task;
+  - completed a request that a user message in this session made.
+- When this turn did no action from the list, end the turn without a web reply.
+  The For-you view then holds only results that the user reads or acts on.
+- Before you post, name in your reasoning the action from the list that the reply reports.
+  This check keeps progress reports out of the For-you view.
+- When a child reports progress, a correction or a retraction, handle it with the **Now** rule of the next section.
+  The status panel then carries the progress of each line.
+- When you correct a web reply of a turn that another input woke, record the correction in **Now**.
+  The For-you view then shows one reply for each such turn.
 - Leave each child's results to the child's own web replies, the completion of work that you handed to it included.
-- When a turn has none of these results, post no web reply.
 
 ## When to set the session status
 
@@ -78,12 +85,21 @@ The For-you view shows your web replies and hides the rest of your turn output.
 ## Delivery
 
 - Write the web reply text to a file.
+- Before you run the command, count the characters of the file.
+  The reply then fits the budget on its first post.
 - Then run `charliebot web reply --file <path>`.
 - The command records the web reply in the session. It prints a readback with the character count.
 - The readback sets `over_budget` for a reply over 500 characters.
-- Write the changed session status items to a JSON file.
+- When the readback sets `over_budget`, keep the posted reply as the answer of this turn.
+  The For-you view then shows each answer once.
+- Write the changed session status fields to a JSON file.
+  Each field that the file leaves out keeps its stored value.
 - The JSON object takes any of the keys `goal`, `now` and `waiting`.
 - `waiting` is a list of objects with the keys `text`, `context` and `link`. Set `link` to null when the place has no link.
+- When the file holds `waiting`, run `charliebot web status show` right before you write the file.
+  Start from your own Waiting on you list in that output.
+  Write the whole list: each item that stays, and each new or changed item.
+  Each set replaces the whole list, so a list from a fresh `show` keeps every item that still waits on the user.
 - Then run `charliebot web status set --file <path>`.
 - The command refuses a link to an older version of a plan, or to a closed plan, and names the newest file. The
   panel then shows the version that the user decides on.
@@ -99,13 +115,11 @@ The For-you view shows your web replies and hides the rest of your turn output.
     The list then holds only what the next milestone needs from the user.
 - Then run the command again.
 - The command stores the status when the reader has read every item as it stands.
-- The command replaces the items that the file names and keeps the other items. It prints the stored session status.
+- The command prints the stored session status.
 - The printout also holds `now_chars` and `now_over_budget`.
 - When `now_over_budget` is true, shorten **Now** and set it again.
-- When no item differs, run `charliebot web status confirm`.
-- The command records the confirmation and cold reads nothing. It refuses a stale stored plan link and names the
-  newest file.
+- `charliebot web status confirm` records the confirmation and cold reads nothing. It refuses a stale stored plan
+  link and names the newest file.
 - After a context reset, read the session status with `charliebot web status show`.
 - The command also prints the Waiting on you items of each open descendant session.
 - The command also prints the **Now** of each open child session.
-- Then read the For-you view with `charliebot web dialog`.

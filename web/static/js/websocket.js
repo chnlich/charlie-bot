@@ -29,9 +29,8 @@ function registerWsMessageHandler(type, handler, {advancesCursor = true} = {}) {
   wsMessageHandlers.set(type, {handler, advancesCursor});
 }
 
-// Handlers that run on every (re)connect of this session's socket, after the
-// cursor is sent, so a package re-syncs the state it derives from the event
-// stream. A package registers its handler when its script loads.
+// Handlers that run on every (re)connect of this session's socket, after it
+// opens, so a package re-syncs state derived from the event stream.
 const wsConnectHandlers = [];
 
 function registerWsConnectHandler(handler) {
@@ -74,7 +73,7 @@ function connectWS() {
   cancelReconnect();
   const targetSession = SESSION_ID;
   const generation = ++wsGeneration;
-  const wsUrl = wsUrlWithToken(`/ws/sessions/${SESSION_ID}`);
+  const wsUrl = wsUrlWithToken(`/ws/sessions/${SESSION_ID}?cursor=${encodeURIComponent(eventCursor)}`);
   const socket = new WebSocket(wsUrl);
   ws = socket;
 
@@ -86,8 +85,6 @@ function connectWS() {
     }
     console.log('WS connected');
     reconnectDelay = 1000;
-    // Send cursor so the server only replays events beyond this index.
-    socket.send(JSON.stringify({type: 'cursor', index: eventCursor}));
     wsConnectHandlers.forEach((handler) => handler());
   };
 

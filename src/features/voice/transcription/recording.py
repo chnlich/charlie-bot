@@ -19,10 +19,6 @@ if TYPE_CHECKING:
   from src.infra import config
 
 
-class BackendSelectionError(ValueError):
-  """The named backend is unknown or cannot run now; nothing was sent to a backend."""
-
-
 class TranscriptionFailedError(RuntimeError):
   """The selected backend raised, or ended its session without a final event."""
 
@@ -38,17 +34,14 @@ class RecordingTranscript:
 def select_backend(backend_id: str | None, cfg: config.CharlieBotConfig) -> base.TranscriptionBackend:
   """The backend a recording goes to: the named one, or ``voice.default_backend`` when no id is named.
 
-  Raises BackendSelectionError for an id the registry does not know and for a
+  Raises base.BackendSelectionError for an id the registry does not know and for a
   backend whose unavailable_reason is set.
   """
   chosen = cfg.voice.default_backend if backend_id is None else backend_id
-  known = registry.backend_ids()
-  if chosen not in known:
-    raise BackendSelectionError(f"unknown transcription backend {chosen!r}; known: {', '.join(known)}")
   backend = registry.build_transcription_backend(chosen, cfg)
   reason = backend.unavailable_reason()
   if reason is not None:
-    raise BackendSelectionError(f"{chosen} is unavailable: {reason}")
+    raise base.BackendSelectionError(f"{chosen} is unavailable: {reason}")
   return backend
 
 
@@ -56,7 +49,7 @@ async def transcribe_recording(
     pcm_bytes: bytes, backend_id: str | None, cfg: config.CharlieBotConfig) -> RecordingTranscript:
   """Transcribe the whole recording (16 kHz mono PCM16) through the selected backend.
 
-  Raises BackendSelectionError before any audio is sent, and TranscriptionFailedError
+  Raises base.BackendSelectionError before any audio is sent, and TranscriptionFailedError
   when the backend fails during the recording.
   """
   backend = select_backend(backend_id, cfg)

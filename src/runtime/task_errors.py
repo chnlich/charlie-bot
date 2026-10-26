@@ -1,4 +1,5 @@
-"""The task tree's error types, the operator check and the ancestor walk bounds.
+"""The task tree's error types, the not-found, relation-cycle and overrun refusals, the operator check and the walk
+bounds.
 
 The task-tree modules (``task_sessions``, ``session_dispatch``, ``task_completion``)
 and the routes that translate their refusals share these names, so they live below
@@ -49,6 +50,21 @@ class TaskArchivedError(TaskConflictError):
   def __init__(self, session_id: str) -> None:
     self.session_id = session_id
     super().__init__([f"task {session_id} is archived"])
+
+
+def task_not_found(session_id: str) -> TaskNotFoundError:
+  """The refusal for a task-tree node that does not exist; the API reports its sentence as the 404 detail."""
+  return TaskNotFoundError(f"task {session_id} not found")
+
+
+def task_relation_cycle(session_id: str) -> TaskConflictError:
+  """The refusal for a task-parent relation that loops; the API reports its sentence among the 409 blockers."""
+  return TaskConflictError([f"task relation cycle through {session_id}"])
+
+
+def ancestor_chain_too_long(session_id: str, limit: int) -> TaskConflictError:
+  """The refusal for a task-parent chain that outruns its walk bound; the API reports it among the 409 blockers."""
+  return TaskConflictError([f"ancestor chain of {session_id} exceeds {limit} hops"])
 
 
 def require_operator(caller: object, message: str) -> None:

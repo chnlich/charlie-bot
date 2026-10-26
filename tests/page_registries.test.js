@@ -117,16 +117,19 @@ test('a registered message handler runs for its event type after the event curso
   assert.throws(() => context.registerWsMessageHandler('', () => {}), /Invalid WebSocket message handler/);
 });
 
-test('registered connect handlers run on every socket open, after the cursor is sent', () => {
-  const {context, FakeWebSocket} = loadWebsocketContext({SESSION_ID: 'session-a'});
+test('registered connect handlers run after opening without sending a cursor frame', () => {
+  const {context, FakeWebSocket} = loadWebsocketContext({SESSION_ID: 'session-a', eventCursor: 12});
   const sentBeforeHandler = [];
   const handler = () => sentBeforeHandler.push(FakeWebSocket.instances.at(-1).sent.length);
   context.registerWsConnectHandler(handler);
 
   context.connectWS();
-  FakeWebSocket.instances.at(-1).emitOpen();
+  const socket = FakeWebSocket.instances.at(-1);
+  assert.equal(socket.url, '/ws/sessions/session-a?cursor=12');
+  socket.emitOpen();
 
-  assert.deepEqual(sentBeforeHandler, [1]);
+  assert.deepEqual(sentBeforeHandler, [0]);
+  assert.deepEqual(socket.sent, []);
   assert.throws(() => context.registerWsConnectHandler(handler), /Duplicate WebSocket connect handler/);
   assert.throws(() => context.registerWsConnectHandler(null), /Invalid WebSocket connect handler/);
 });

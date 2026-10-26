@@ -34,14 +34,12 @@ def _cmd_capture(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
-  parser = argparse.ArgumentParser(
-      description="CharlieBot usage ledger", formatter_class=help_formatter.CliHelpFormatter)
+  parser = help_formatter.CliArgumentParser(description="CharlieBot usage ledger")
   sub = parser.add_subparsers(dest="command", required=True)
 
   capture = sub.add_parser(
       "capture",
       help="Capture this host's own CLI logs into the ledger",
-      formatter_class=help_formatter.CliHelpFormatter,
       description="Capture this host's own CLI logs into the ledger with their host defaults: every registered "
       "usage source's logs and the charlie-bot session tree.")
   capture.add_argument(

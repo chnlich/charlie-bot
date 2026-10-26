@@ -9,7 +9,10 @@ The preflight refusals stop before any pane is looked up, so they need no tmux. 
 pane on a private tmux server (tmux -L). The repo caps integration tests at 50 and already uses all 50, so those steps
 share one test. The probe turn's cases run its functions in a shell against a fake server of their own, with one-second
 waits, so each stays under the unit budget. The escalation cases run escalate_pane the same way, against stand-in
-servers under a shell that plays the pane, so they need no tmux either.
+servers under a shell that plays the pane, so they need no tmux either. The adoption check's cases run adopted the same
+way, against a staged runs file and launch output, for the same reason: no integration slot is left for another
+pane-driven switch. The exit cases run switch_forward the same way, with its stop, pane, server and probe steps
+stubbed out.
 """
 
 from __future__ import annotations
@@ -29,6 +32,7 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -348,6 +352,7 @@ def _build_world(root: pathlib.Path) -> World:
       "CHARLIEBOT_SWITCH_READY_WAIT_S": "30",
   }
   env.pop("TMUX", None)
+  env.pop("SYSTEMD_RUN_REFUSE_ALL", None)
   return World(
       root=root,
       clone=clone,
@@ -506,6 +511,22 @@ def _assert_untouched(world: World) -> None:
   assert _version_status(world.port) == 200
 
 
+def _assert_server_scope_records(world: World, expected_count: int) -> None:
+  records = systemd_stubs.read_systemd_run_records(world.root / "bin")
+  server_records = [record for record in records if str(record["unit_name"]).startswith("charliebot-server-")]
+  names = [str(record["unit_name"]) for record in server_records]
+  assert len(names) == expected_count
+  assert len(set(names)) == len(names)
+  for record in server_records:
+    name = str(record["unit_name"])
+    assert re.fullmatch(r"charliebot-server-\d{8}_\d{6}-\d+", name)
+    arguments = record["arguments"]
+    assert isinstance(arguments, list)
+    assert f"--unit={name}" in arguments
+    assert "--slice=charliebot.slice" in arguments
+    assert arguments[arguments.index("-p") + 1] == "MemorySwapMax=0"
+
+
 def _home_helper(home: pathlib.Path, mode: str) -> subprocess.CompletedProcess[str]:
   return subprocess.run(
       ["bash", "-c", 'source "$1" python && home_helper "$2"', "bash",
@@ -547,7 +568,7 @@ def test_home_helper_no_reattach_matches_registered_traits() -> None:
 @pytest.mark.parametrize(
     "case", [
         "checksum", "check-config", "opencode-run", "antigravity-run", "unknown-backend-run", "missing-backend-run",
-        "improve-loop", "dirty-clone"
+        "improve-loop", "dirty-clone", "launcher-preflight"
     ])
 def test_preflight_refusal_exits_1_and_changes_nothing(world: World, case: str) -> None:
   """Each preflight check refuses before the switch stops anything: exit 1 and no change."""
@@ -568,23 +589,31 @@ def test_preflight_refusal_exits_1_and_changes_nothing(world: World, case: str) 
     _seed_improve_loop(world, _spawn_live(world).pid)
   elif case == "dirty-clone":
     (world.clone / "server.py").write_text("# local edit\n", encoding="utf-8")
+  elif case == "launcher-preflight":
+    world.env["SYSTEMD_RUN_REFUSE_ALL"] = "1"
 
   home_before = {path.relative_to(world.home): path.read_bytes() for path in world.home.rglob("*") if path.is_file()}
+  current = world.releases / "current"
+  current_before = os.readlink(current) if current.is_symlink() else None
 
   proc = _switch(world, "rust", RUST_SHA)
 
   assert proc.returncode == 1, _report(world, proc)
   assert not (world.releases / "current").is_symlink()
+  assert (os.readlink(current) if current.is_symlink() else None) == current_before
   assert _git(world.clone, "rev-parse", "HEAD") == world.base_head
   assert {
       path.relative_to(world.home): path.read_bytes() for path in world.home.rglob("*") if path.is_file()
   } == home_before
   assert all(live.poll() is None for live in world.live)
+  if case == "launcher-preflight":
+    assert "launcher preflight" in proc.stdout + proc.stderr, _report(world, proc)
   if case.endswith("-run"):
     assert "a restart would lose live work:" in proc.stdout, _report(world, proc)
     lines = _home_helper(world.home, "scan").stdout.splitlines()
+    live_pid = world.live[0].pid
     assert [line for line in lines if line.startswith("live\t")
-           ] == [f"live\t{SESSION}\trun-blocked\t{backend}\t{world.live[0].pid}"]
+           ] == [f"live\t{SESSION}\trun-blocked\t{backend}\t{live_pid}\t{_pid_start(live_pid)}"]
     blocks = [line for line in lines if line.startswith("block\t")]
     assert len(blocks) == 1
     assert "run-blocked" in blocks[0]
@@ -592,6 +621,186 @@ def test_preflight_refusal_exits_1_and_changes_nothing(world: World, case: str) 
     if case in {"opencode-run", "antigravity-run"}:
       assert case.removesuffix("-run") in blocks[0]
       assert str(world.live[0].pid) in blocks[0]
+
+
+# The launch output the adoption check reads: the drain line the new server writes for a run whose process had ended.
+# Its resume line is the one the check wants instead for a run whose process still runs.
+DRAIN_LINE = "2026-10-26 02:15:04.200 [warning  ] task_recovery_drain session={session} run_id={run_id}"
+
+
+def _runs_file(world: World, *lines: str) -> pathlib.Path:
+  """The file the scan writes: one live line per recorded run, as session, run, backend, pid and pid start."""
+  path = world.root / "switch.runs"
+  path.write_text("".join(f"{line}\n" for line in lines), encoding="utf-8")
+  return path
+
+
+def _scanned_runs_file(world: World) -> pathlib.Path:
+  """The live lines of a real scan of the home, recorded while the run's process still ran."""
+  scan = _home_helper(world.home, "scan").stdout.splitlines()
+  return _runs_file(world, *(line for line in scan if line.startswith("live\t")))
+
+
+def _record_outcome(world: World, run_id: str, outcome: str) -> None:
+  """The run_finished fact that the new server's recovery lands for a run whose process had ended."""
+  event = {
+      "id": str(uuid.uuid4()),
+      "type": "run_finished",
+      "actor": "system",
+      "source_session_id": SESSION,
+      "run_id": run_id,
+      "outcome": outcome,
+  }
+  with (world.home / "sessions" / SESSION / "data" / "chat_events.jsonl").open("a", encoding="utf-8") as events:
+    events.write(json.dumps(event) + "\n")
+
+
+def _adopted(world: World, runs_file: pathlib.Path, launch_output: str) -> subprocess.CompletedProcess[str]:
+  """The switch's adoption check against RUNS_FILE and one launch's output, through a shell that sources the switch."""
+  launch_log = world.root / "server.log"
+  launch_log.write_text(launch_output, encoding="utf-8")
+  work = world.root / "work"
+  work.mkdir(exist_ok=True)
+  env = {
+      **world.env,
+      "RUNS_FILE": str(runs_file),
+      "NEW_LOG": str(launch_log),
+      "NEW_OFFSET": "0",
+      "WORK": str(work),
+  }
+  return subprocess.run(
+      ["bash", "-c", 'source "$1" python && adopted', "bash",
+       str(SWITCH)],
+      env=env,
+      capture_output=True,
+      text=True,
+      timeout=30,
+      check=False)
+
+
+def test_adoption_passes_when_the_recorded_run_ended_during_the_switch(world: World) -> None:
+  """Manager-turn recovery is queued after startup, so readback waits for its successful finish fact."""
+  run_id = "run-ended"
+  _seed_live_run(world, run_id, "claude-opus")
+  run_path = world.home / "sessions" / SESSION / "data" / "runs" / run_id / "metadata.json"
+  run = json.loads(run_path.read_text(encoding="utf-8"))
+  run["kind"] = "manager_turn"
+  run_path.write_text(json.dumps(run), encoding="utf-8")
+  events_path = world.home / "sessions" / SESSION / "data" / "chat_events.jsonl"
+  events_path.touch()
+  runs_file = _scanned_runs_file(world)  # recorded while the process still ran, as the preflight scan does
+  world.live[0].kill()
+  world.live[0].wait()
+  writer = threading.Thread(target=lambda: (time.sleep(0.2), _record_outcome(world, run_id, "success")))
+  writer.start()
+
+  proc = _adopted(world, runs_file, DRAIN_LINE.format(session=SESSION, run_id=run_id))
+  writer.join(timeout=1)
+
+  assert not writer.is_alive()
+  assert proc.returncode == 0, proc.stdout + proc.stderr
+  assert "readback: run run-ended ended during the switch: outcome success" in proc.stdout
+  assert "was not adopted" not in proc.stdout
+
+
+def test_adoption_fails_only_for_a_recorded_run_that_still_runs(world: World) -> None:
+  """Two recorded runs: the one whose process ended passes, and the one still running with no resume line fails."""
+  _seed_live_run(world, "run-ended", "claude-opus")
+  ended = world.live[0]
+  _seed_live_run(world, "run-live", "claude-opus")
+  live = world.live[1]
+  runs_file = _runs_file(
+      world, f"live\t{SESSION}\trun-ended\tclaude-opus\t{ended.pid}\t{_pid_start(ended.pid)}",
+      f"live\t{SESSION}\trun-live\tclaude-opus\t{live.pid}\t{_pid_start(live.pid)}")
+  ended.kill()
+  ended.wait()
+  _record_outcome(world, "run-ended", "success")
+  archive = world.home / "sessions" / SESSION / "data" / "archives" / "chat_events.2026-W01.jsonl"
+  archive.parent.mkdir(parents=True)
+  (world.home / "sessions" / SESSION / "data" / "chat_events.jsonl").rename(archive)
+
+  proc = _adopted(world, runs_file, "")
+
+  assert proc.returncode == 1, proc.stdout + proc.stderr
+  assert "readback: run run-ended ended during the switch: outcome success" in proc.stdout
+  assert "readback: run run-live was not adopted" in proc.stdout
+
+
+def test_adoption_treats_a_reused_pid_as_an_ended_run(world: World) -> None:
+  """The record pins a process instance: this pid now belongs to a process with another start time, so the run ended."""
+  _seed_live_run(world, "run-reused", "claude-opus")
+  pid = world.live[0].pid
+  runs_file = _runs_file(world, f"live\t{SESSION}\trun-reused\tclaude-opus\t{pid}\t{int(_pid_start(pid)) + 1}")
+  _record_outcome(world, "run-reused", "success")
+
+  proc = _adopted(world, runs_file, "")
+
+  assert proc.returncode == 0, proc.stdout + proc.stderr
+  assert "readback: run run-reused ended during the switch: outcome success" in proc.stdout
+
+
+def _switch_forward(world: World, run_pid: int, launch_output: str) -> subprocess.CompletedProcess[str]:
+  """The switch's forward path, from the scan through the readback to the exit, with its stop, pane, server and probe
+  steps stubbed out.
+
+  The scan records the live run, and the stub stop kills its process, as a stop that does not spare a run would. A
+  restore touches a marker file and exits 2, so a test tells a restore from the switch's own exit.
+  """
+  launch_log = world.root / "server.log"
+  launch_log.write_text(launch_output, encoding="utf-8")
+  work = world.root / "work"
+  work.mkdir(exist_ok=True)
+  env = {
+      **world.env,
+      "CLONE": str(world.clone),
+      "RUN_PID": str(run_pid),
+      "RESTORED": str(world.root / "restored"),
+      "RUNS_FILE": str(world.root / "switch.runs"),
+      "WANT": "python",
+      "PORT": str(world.port),
+      "NEW_LOG": str(launch_log),
+      "NEW_OFFSET": "0",
+      "WORK": str(work),
+  }
+  script = """
+source "$1" python
+REPO_ROOT="$CLONE"
+stop_old() { kill -KILL "$RUN_PID"; }
+start_in_pane() { :; }
+wait_ready() { :; }
+serving() { :; }
+probe_turn() { :; }
+restore() { touch "$RESTORED"; exit 2; }
+switch_forward
+"""
+  return subprocess.run(
+      ["bash", "-c", script, "bash", str(SWITCH)], env=env, capture_output=True, text=True, timeout=30, check=False)
+
+
+@pytest.mark.parametrize(
+    "outcome", ["success", "interrupted", "failed", None], ids=["completed", "interrupted", "failed", "no-outcome"])
+def test_switch_exits_by_the_recorded_outcome_of_a_run_the_stop_ended(world: World, outcome: str | None) -> None:
+  """A run the stop ended passes the switch only on a recorded completion. Any other outcome keeps the new server,
+  exits 4 and restores nothing; a run with no outcome counts as not completed."""
+  _seed_live_run(world, "run-stopped", "claude-opus")
+  if outcome is not None:
+    _record_outcome(world, "run-stopped", outcome)
+  home_before = {path.relative_to(world.home): path.read_bytes() for path in world.home.rglob("*") if path.is_file()}
+
+  proc = _switch_forward(world, world.live[0].pid, DRAIN_LINE.format(session=SESSION, run_id="run-stopped"))
+
+  assert not (world.root / "restored").exists(), _report(world, proc)
+  assert {
+      path.relative_to(world.home): path.read_bytes() for path in world.home.rglob("*") if path.is_file()
+  } == home_before, _report(world, proc)
+  if outcome == "success":
+    assert proc.returncode == 0, _report(world, proc)
+    assert "readback: run run-stopped ended during the switch: outcome success" in proc.stdout
+    assert "SWITCH COMPLETE:" in proc.stdout
+  else:
+    assert proc.returncode == 4, _report(world, proc)
+    assert f"readback: run run-stopped died during the switch: outcome {outcome or 'none recorded'}" in proc.stdout
+    assert "SWITCH COMPLETE, BUT A RECORDED RUN DIED DURING THE SWITCH" in proc.stdout
 
 
 ProbeRun = Callable[..., tuple[subprocess.CompletedProcess[str], list[str]]]
@@ -878,12 +1087,14 @@ def test_switch_on_a_real_pane_restores_then_round_trips_then_exits_3(world: Wor
   _write_behavior(world.releases / RUST_SHA, adopt=False)
   proc = _switch(world, "rust", RUST_SHA)
   assert proc.returncode == 2, _report(world, proc)
+  _assert_server_scope_records(world, 3)
   _assert_untouched(world)
 
   # With a passing readback the live run is adopted, and the clone fast-forwards to the PORT_BASELINE commit.
   _write_behavior(world.releases / RUST_SHA)
   proc = _switch(world, "rust", RUST_SHA)
   assert proc.returncode == 0, _report(world, proc)
+  _assert_server_scope_records(world, 4)
   assert os.readlink(world.releases / "current") == RUST_SHA
   assert _git(world.clone, "rev-parse", "HEAD") == world.baseline
   assert _serves_release(world, RUST_SHA)
@@ -895,6 +1106,7 @@ def test_switch_on_a_real_pane_restores_then_round_trips_then_exits_3(world: Wor
   _write_behavior(world.clone, ignore_sigterm=True)
   proc = _switch(world, "python")
   assert proc.returncode == 0, _report(world, proc)
+  _assert_server_scope_records(world, 5)
   assert not (world.releases / "current").is_symlink()
   assert _git(world.clone, "rev-parse", "HEAD") == world.baseline
   assert _serves_python(world)
@@ -903,4 +1115,5 @@ def test_switch_on_a_real_pane_restores_then_round_trips_then_exits_3(world: Wor
   (world.clone / "fail-sync").write_text("", encoding="utf-8")
   proc = _switch(world, "rust", RUST_SHA)
   assert proc.returncode == 3, _report(world, proc)
+  _assert_server_scope_records(world, 5)
   assert _listener_pids(world.port) == set()

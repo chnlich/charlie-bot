@@ -9,7 +9,7 @@ import time
 from collections.abc import Callable, Coroutine
 from typing import Any, TypeVar
 
-from src.infra import log_once, models, tasks, timeouts
+from src.infra import log_once, tasks, timeouts
 
 log = log_once.LazyStructlogLogger()
 
@@ -72,7 +72,7 @@ async def wait_or_kill_group(
 # Session cgroups: memory cap and task cap
 #
 # systemd delegates the user's subtree, so an unprivileged server can create
-# one cgroup per session under either leaf slice, hold every agent process the
+# one cgroup per session under the agents' leaf slice, hold every agent process the
 # session spawns to hard memory.max / memory.swap.max limits, and let the
 # kernel kill only the cgroup's largest process on a breach. pids.max caps the
 # session's task count, so a runaway fork loop gets EAGAIN inside its own
@@ -82,11 +82,9 @@ async def wait_or_kill_group(
 # under asyncio.create_subprocess_exec with start_new_session=True — keep both
 # the flag and the preexec hook on every session spawn path.
 #
-# The two leaf slices carry the host-level split, and their limits live in the
-# unit files under scripts/systemd/. A session goes to the repair slice when it
-# or its nearest marked task ancestor carries the operator's repair mark; every
-# other session goes to the agents' slice. The per-session caps below are
-# unchanged by the choice.
+# The agents' leaf slice carries the host-level share, and its limit lives in
+# the unit file under scripts/systemd/. Every session's cgroup sits inside it;
+# the per-session caps below are unchanged.
 # ---------------------------------------------------------------------------
 
 # The user-delegated cgroup v2 subtree. systemd names each user's delegated
@@ -100,7 +98,7 @@ def user_slice_dir(unit: str) -> str:
   """The cgroup directory systemd gives user slice *unit*.
 
   systemd nests a slice inside the slice each dash prefix of its name names
-  (``a-b.slice`` lives in ``a.slice/a-b.slice``), so both leaf slices sit
+  (``a-b.slice`` lives in ``a.slice/a-b.slice``), so the agents' leaf slice sits
   inside charliebot.slice, not beside it.
   """
   parts = unit.removesuffix(".slice").split("-")
@@ -109,7 +107,6 @@ def user_slice_dir(unit: str) -> str:
 
 
 CGROUP_V2_AGENTS_SLICE = user_slice_dir("charliebot-agents.slice")
-CGROUP_V2_REPAIR_SLICE = user_slice_dir("charliebot-repair.slice")
 # The pre-split parent. Nothing is created here any more; the startup sweep
 # still clears this home's empty leftovers, and a process already running in
 # it stays until it exits.
@@ -118,34 +115,23 @@ CGROUP_V2_APP_SLICE = f"{CGROUP_V2_USER_SERVICE}/app.slice"
 # human can match cgroup directories against the session list.
 SESSION_CGROUP_PREFIX = "charliebot-sess-"
 
-# The operator mark selects one of two slices, and the slice fixes the OOM
-# priority: a host-wide OOM picks an agent process before a repair one, and
-# never the server, which keeps the default 0. Both values are positive, which
-# an unprivileged writer may set.
-SESSION_CGROUP_OOM_SCORE_ADJ: dict[models.ResourceClass, int] = {"agent": 500, "repair": 100}
+# Every agent process carries this OOM priority, so a host-wide OOM picks an
+# agent process before the server, which keeps the default 0. The value is
+# positive, which an unprivileged writer may set.
+SESSION_CGROUP_OOM_SCORE_ADJ = 500
 
 
 class SessionCgroupUnavailableError(RuntimeError):
   """The session's slice is missing or not writable, so the spawn has no memory guard.
 
-  The launcher's preflight and setup.sh install and start both slices; a host
-  that lost one must stop the spawn visibly instead of running it unbounded.
+  The launcher's preflight and setup.sh install and start the slice; a host
+  that lost it must stop the spawn visibly instead of running it unbounded.
   """
-
-
-def session_cgroup_slice(resource_class: models.ResourceClass) -> str:
-  """The leaf-slice directory for *resource_class*."""
-  match resource_class:
-    case "agent":
-      return CGROUP_V2_AGENTS_SLICE
-    case "repair":
-      return CGROUP_V2_REPAIR_SLICE
-  raise ValueError(f"resource_class is 'agent' or 'repair', got {resource_class!r}")
 
 
 def session_cgroup_slices() -> tuple[str, ...]:
   """Every directory a session cgroup may live under, the retired app.slice included."""
-  return (CGROUP_V2_AGENTS_SLICE, CGROUP_V2_REPAIR_SLICE, CGROUP_V2_APP_SLICE)
+  return (CGROUP_V2_AGENTS_SLICE, CGROUP_V2_APP_SLICE)
 
 
 def session_cgroup_name(session_id: str) -> str:
@@ -153,10 +139,8 @@ def session_cgroup_name(session_id: str) -> str:
   return f"{SESSION_CGROUP_PREFIX}{session_id[:8]}"
 
 
-def ensure_session_cgroup(
-    session_id: str, resource_class: models.ResourceClass, memory_max_mb: int, swap_max_mb: int,
-    tasks_max: int) -> pathlib.Path:
-  """Create or refresh the session's cgroup under its slice; raise when the slice cannot hold it.
+def ensure_session_cgroup(session_id: str, memory_max_mb: int, swap_max_mb: int, tasks_max: int) -> pathlib.Path:
+  """Create or refresh the session's cgroup under the agents' slice; raise when the slice cannot hold it.
 
   Lazy per-session creation: the directory is made with the configured
   ``memory.max`` / ``memory.swap.max`` / ``pids.max``; an existing directory
@@ -165,11 +149,11 @@ def ensure_session_cgroup(
   or unwritable slice, and any other OSError, raises instead of degrading: an
   unbounded spawn is the failure this guard exists to prevent.
   """
-  base = pathlib.Path(session_cgroup_slice(resource_class))
+  base = pathlib.Path(CGROUP_V2_AGENTS_SLICE)
   if not base.is_dir() or not os.access(base, os.W_OK):
     raise SessionCgroupUnavailableError(
         f"session cgroup slice {base.name} ({base}) is missing or not writable; "
-        "install and start the slices from scripts/systemd/ with scripts/setup.sh")
+        "install and start the slice from scripts/systemd/ with scripts/setup.sh")
   # systemd enables a slice's controllers for the units inside it only, and a
   # session cgroup is no unit: without this its limit files would not exist.
   try:
@@ -183,7 +167,6 @@ def ensure_session_cgroup(
     log.info(
         "session_cgroup_created",
         path=str(path),
-        resource_class=resource_class,
         memory_max_mb=memory_max_mb,
         swap_max_mb=swap_max_mb,
         tasks_max=tasks_max)
@@ -230,14 +213,13 @@ def read_memory_events(cgroup_dir: pathlib.Path) -> tuple[int, int] | None:
 class SessionCgroup:
   """One spawn's handle on the session cgroup.
 
-  Carries the cgroup directory, the class that chose its slice, the slice's
-  OOM priority, the configured cap (for the report text), and the
-  ``memory.events`` counters captured before the spawn — the baseline the exit
-  attribution compares against.
+  Carries the cgroup directory, the OOM priority of every agent process, the
+  configured cap (for the report text), and the ``memory.events`` counters
+  captured before the spawn — the baseline the exit attribution compares
+  against.
   """
 
   path: pathlib.Path
-  resource_class: models.ResourceClass
   oom_score_adj: int
   memory_max_mb: int
   events_before: tuple[int, int] | None
@@ -252,7 +234,7 @@ def make_session_cgroup_preexec(session_cgroup: SessionCgroup | None) -> Callabl
 
   Runs in the child between fork and exec: opens ``<cgroup>/cgroup.procs`` and
   writes ``0`` — the kernel convention that moves the calling process itself
-  into the cgroup — then writes the slice's positive ``oom_score_adj`` to
+  into the cgroup — then writes the session's positive ``oom_score_adj`` to
   ``/proc/self/oom_score_adj``. A failure here raises and fails the spawn
   loudly: the directory was just created and verified writable by the parent,
   so an error is a system-level anomaly, not a degraded mode. None means
@@ -322,9 +304,10 @@ def classify_cgroup_exit(
 
   A SIGKILL exit whose ``memory.events`` ``max`` count grew over the spawn is a
   session-cap kill (the report routes heavy work to the remote cluster); a
-  SIGKILL where only ``oom_kill`` grew means the host-wide OOM picked a cgroup
-  member (reported as-is, no routing implication). Any other exit — clean exit,
-  SIGTERM, or our own escalation kill with static counters — attributes nothing.
+  SIGKILL where only ``oom_kill`` grew means the agents' share or the whole host
+  ran out of memory (reported as-is, no routing implication). Any other exit —
+  clean exit, SIGTERM, or our own escalation kill with static counters —
+  attributes nothing.
   """
   if returncode != -signal.SIGKILL:
     return None
@@ -336,19 +319,18 @@ def classify_cgroup_exit(
         "gpuq＝集群任务队列提交，ssh gate＝用 ssh 在远端跑把关测试，"
         "远端启动＝charliebot 在远端启动长任务的命令")
   if after[1] > before[1]:
-    return "进程被宿主机全局 OOM 终止（session 内存上限未触发）"
+    return f"进程因内存不足被内核结束（agent 组或整机内存用满；session 内存上限 {memory_max_mb} MB 未触发）"
   return None
 
 
 def prepare_session_cgroup(
     session_id: str | None,
-    resource_class: models.ResourceClass,
     *,
     memory_max_mb: int,
     swap_max_mb: int,
     tasks_max: int,
 ) -> SessionCgroup | None:
-  """Ensure the session's cgroup under *resource_class*'s slice and snapshot its ``memory.events``.
+  """Ensure the session's cgroup under the agents' slice and snapshot its ``memory.events``.
 
   Returns None only when cgroup control is off for this spawn: *session_id* is
   None (a spawn with no session home) or the configured memory cap is 0 — the
@@ -357,11 +339,10 @@ def prepare_session_cgroup(
   """
   if not session_id or memory_max_mb <= 0:
     return None
-  path = ensure_session_cgroup(session_id, resource_class, memory_max_mb, swap_max_mb, tasks_max)
+  path = ensure_session_cgroup(session_id, memory_max_mb, swap_max_mb, tasks_max)
   return SessionCgroup(
       path=path,
-      resource_class=resource_class,
-      oom_score_adj=SESSION_CGROUP_OOM_SCORE_ADJ[resource_class],
+      oom_score_adj=SESSION_CGROUP_OOM_SCORE_ADJ,
       memory_max_mb=memory_max_mb,
       events_before=read_memory_events(path))
 
@@ -430,11 +411,11 @@ def log_session_cgroup_startup(memory_max_mb: int, swap_max_mb: int, tasks_max: 
   if memory_max_mb <= 0:
     log.info("session_cgroup_disabled", reason="server.session_memory_max_mb is 0")
     return
-  for base in (CGROUP_V2_AGENTS_SLICE, CGROUP_V2_REPAIR_SLICE):
-    if not pathlib.Path(base).is_dir():
-      log.warning("session_cgroup_unavailable", reason=f"{base} not present on this host; spawns with a session fail")
-      return
-    if not os.access(base, os.W_OK):
-      log.warning("session_cgroup_unavailable", reason=f"{base} not writable by this user; spawns with a session fail")
-      return
+  base = CGROUP_V2_AGENTS_SLICE
+  if not pathlib.Path(base).is_dir():
+    log.warning("session_cgroup_unavailable", reason=f"{base} not present on this host; spawns with a session fail")
+    return
+  if not os.access(base, os.W_OK):
+    log.warning("session_cgroup_unavailable", reason=f"{base} not writable by this user; spawns with a session fail")
+    return
   log.info("session_cgroup_enabled", memory_max_mb=memory_max_mb, swap_max_mb=swap_max_mb, tasks_max=tasks_max)

@@ -1,17 +1,19 @@
 """Session management API routes."""
 
 import asyncio
+import contextlib
 import datetime
 import json
 import pathlib
 import uuid
+from collections.abc import Iterator
 from typing import Literal, get_args
 
 import fastapi
 import pydantic
 from starlette import responses
 
-from src.infra import compression, config, log_once, memo, models
+from src.infra import compression, config, constants, log_once, memo, models
 from src.infra import event_types as ET
 from src.infra import responses as infra_responses
 from src.runtime import (
@@ -471,7 +473,7 @@ class ArchivedSessionsPage(pydantic.BaseModel):
 @router.get("/archived", response_model=ArchivedSessionsPage)
 async def list_archived_sessions(
     group: str | None = None,
-    limit: int = 100,
+    limit: int = constants.SESSION_PAGE_LIMIT_DEFAULT,
     before: str | None = None,
     before_id: str | None = None,
     listing: session_listing.SessionListing = fastapi.Depends(deps.get_session_listing),
@@ -842,7 +844,10 @@ def _task_http_error(e: Exception) -> fastapi.HTTPException:
 async def get_session_tree(
     parent_id: str | None = fastapi.Query(default=None),
     include_archived: bool = fastapi.Query(default=False),
-    limit: int = fastapi.Query(default=100, ge=1, le=500),
+    limit: int = fastapi.Query(
+        default=constants.SESSION_PAGE_LIMIT_DEFAULT,
+        ge=constants.SESSION_PAGE_LIMIT_MIN,
+        le=constants.SESSION_PAGE_LIMIT_MAX),
     cursor: str | None = fastapi.Query(default=None),
     task_mgr: task_sessions.TaskTreeManager = fastapi.Depends(deps.get_task_manager),
 ) -> dict:
@@ -1212,6 +1217,23 @@ async def _start_successor_run(
   await task_mgr.dispatch.dispatch_pending(meta.id)
 
 
+@contextlib.contextmanager
+def _fork_refusal_as_http() -> Iterator[None]:
+  """Translate a fork or elone service refusal into the HTTP shape both routes serve.
+
+  A missing source session is 404 with the shared detail, a task-tree conflict takes
+  ``_task_http_error``'s shape, and any other ``ValueError`` is a bad request.
+  """
+  try:
+    yield
+  except FileNotFoundError as e:
+    raise fastapi.HTTPException(status_code=404, detail=deps.SESSION_NOT_FOUND_DETAIL) from e
+  except task_errors.TaskConflictError as e:
+    raise _task_http_error(e) from e
+  except ValueError as e:
+    raise deps.bad_request(e) from e
+
+
 @router.post('/{session_id}/fork', response_model=models.SessionMetadata)
 async def fork_session(
     session_id: str,
@@ -1228,18 +1250,12 @@ async def fork_session(
       cfg,
       fallback_backend=parent.backend,
   )
-  try:
+  with _fork_refusal_as_http():
     meta = await fork.fork_session(
         session_id,
         event_index=body.event_index if body else None,
         backend=backend,
     )
-  except FileNotFoundError as e:
-    raise fastapi.HTTPException(status_code=404, detail=deps.SESSION_NOT_FOUND_DETAIL) from e
-  except task_errors.TaskConflictError as e:
-    raise _task_http_error(e) from e
-  except ValueError as e:
-    raise deps.bad_request(e) from e
 
   await _start_successor_run(
       task_mgr,
@@ -1265,14 +1281,8 @@ async def elone_session(
 ) -> models.SessionMetadata:
   """Create an Elon-e session: fresh start with a bootstrap prompt that reads the parent."""
   backend = _resolve_requested_backend(body.backend, cfg, fallback_backend=parent.backend)
-  try:
+  with _fork_refusal_as_http():
     meta = await fork.elone_session(session_id, body.event_index, backend=backend)
-  except FileNotFoundError as e:
-    raise fastapi.HTTPException(status_code=404, detail=deps.SESSION_NOT_FOUND_DETAIL) from e
-  except task_errors.TaskConflictError as e:
-    raise _task_http_error(e) from e
-  except ValueError as e:
-    raise deps.bad_request(e) from e
 
   await _start_successor_run(
       task_mgr,
@@ -1352,32 +1362,6 @@ async def switch_session_backend(
   }
   await events.persist_and_broadcast(session_id, audit_event)
   return meta
-
-
-@router.put("/{session_id}/resource-class", response_model=models.ResourceClassResponse)
-async def set_session_resource_class(
-    session_id: str,
-    body: models.ResourceClassRequest,
-    caller: run_token.CallerIdentity = fastapi.Depends(deps.require_caller),
-    store: session_store.SessionStore = fastapi.Depends(deps.get_session_store),
-) -> models.ResourceClassResponse:
-  """Set the operator's repair mark; the next spawn of this session and its descendants follows it.
-
-  Operator scope only: an agent's run credential cannot move a session (or itself) out of
-  the agents' share, which would make the share unenforceable. The mark is persisted on this
-  session alone; descendants resolve it through their nearest marked ancestor at spawn time.
-  """
-  if not caller.is_operator:
-    raise fastapi.HTTPException(
-        status_code=403, detail="setting a session's resource class requires operator credentials")
-  meta = deps.require_found(
-      await store.update_field(
-          session_id,
-          "resource_class",
-          body.resource_class,
-          "session_resource_class_set",
-          resource_class=body.resource_class))
-  return models.ResourceClassResponse(id=meta.id, resource_class=meta.resource_class)
 
 
 @router.get("/{session_id}", response_model=SessionDetailResponse)
@@ -1563,7 +1547,10 @@ async def get_events_jsonl(session_id: str, request: fastapi.Request) -> respons
 @router.get("/{session_id}/runs", response_model=models.RunPage)
 async def list_session_runs(
     session_id: str,
-    limit: int = fastapi.Query(default=100, ge=1, le=500),
+    limit: int = fastapi.Query(
+        default=constants.SESSION_PAGE_LIMIT_DEFAULT,
+        ge=constants.SESSION_PAGE_LIMIT_MIN,
+        le=constants.SESSION_PAGE_LIMIT_MAX),
     cursor: str | None = fastapi.Query(default=None),
     order: str = fastapi.Query(default="asc"),
     _meta: models.SessionMetadata = fastapi.Depends(deps.require_session),

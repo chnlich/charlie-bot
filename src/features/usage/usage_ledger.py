@@ -261,6 +261,9 @@ _AGG_TRIGGER_SQLS = {
     for name, statement in zip(_AGG_SUM_TRIGGER_NAMES, _AGG_TRIGGER_STATEMENTS, strict=False)
 }
 
+# The stored trigger bodies the open compares against ``_AGG_TRIGGER_SQLS``.
+_STORED_TRIGGERS_SQL = "SELECT name, sql FROM sqlite_master WHERE type = 'trigger'"
+
 # The usage row is upserted whole on a repeated record_id (the same API call seen again
 # from another file or host): the latest capture wins on every non-key column but ts,
 # which keeps the earlier non-empty value. The aggregate's update trigger sees the kept ts
@@ -350,6 +353,11 @@ FROM usage u
 {_COUNTED_WHERE_SQL}
 GROUP BY source, model, account, kind, day
 """
+
+# The ledger_meta stamp the one-time aggregate backfill writes: a row under this key means
+# ``usage_agg`` is complete, and the page read serves the aggregate instead of the table.
+_AGG_BACKFILLED_KEY = "agg_backfilled"
+_AGG_READY_SQL = f"SELECT value FROM ledger_meta WHERE key = '{_AGG_BACKFILLED_KEY}'"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -516,6 +524,15 @@ class UsageLedger:
     # mark_capture_finished leave the commit to the batch (see batch()).
     self._batch_savepoint: str | None = None
 
+  def _stored_trigger_bodies_match(self) -> bool:
+    """True when every aggregate trigger's stored sqlite_master body is this module's.
+
+    A ledger written by an older release fails it. The read takes no lock of its own: the
+    caller places it inside the transaction whose consistency it needs.
+    """
+    stored = {row["name"]: row["sql"] for row in self._conn.execute(_STORED_TRIGGERS_SQL)}
+    return all(stored.get(name) == expected for name, expected in _AGG_TRIGGER_SQLS.items())
+
   def _refresh_agg_triggers(self) -> None:
     """Swap this module's aggregate trigger bodies in when a stored one differs, then
     re-price a backfilled aggregate from the table -- one transaction.
@@ -535,26 +552,18 @@ class UsageLedger:
     # commits: the matched case -- every open of a current-release ledger -- takes no
     # write lock at all, so an open never queues behind another process's live write
     # transaction. The unmatched case takes BEGIN IMMEDIATE and re-checks under it.
-    stored = {
-        row["name"]: row["sql"]
-        for row in self._conn.execute("SELECT name, sql FROM sqlite_master WHERE type = 'trigger'")
-    }
-    if all(stored.get(name) == expected for name, expected in _AGG_TRIGGER_SQLS.items()):
+    if self._stored_trigger_bodies_match():
       return
     self._conn.execute("BEGIN IMMEDIATE")
     try:
-      stored = {
-          row["name"]: row["sql"]
-          for row in self._conn.execute("SELECT name, sql FROM sqlite_master WHERE type = 'trigger'")
-      }
-      if all(stored.get(name) == expected for name, expected in _AGG_TRIGGER_SQLS.items()):
+      if self._stored_trigger_bodies_match():
         self._conn.rollback()  # another process swapped while this one waited on the lock
         return
       for name in _AGG_SUM_TRIGGER_NAMES:
         self._conn.execute(f"DROP TRIGGER IF EXISTS {name}")
       for statement in _AGG_TRIGGER_STATEMENTS:
         self._conn.execute(statement)
-      if self._conn.execute("SELECT 1 FROM ledger_meta WHERE key = 'agg_backfilled'").fetchone() is not None:
+      if self._conn.execute(_AGG_READY_SQL).fetchone() is not None:
         self._conn.execute(_AGG_WIPE_SQL)  # re-price the served aggregate under the fresh bodies
         self._conn.execute(_AGG_BACKFILL_SQL)
       self._conn.commit()
@@ -690,7 +699,7 @@ class UsageLedger:
     own statements never drop) shows up as a ready flag over an empty aggregate while the
     table holds rows, and the backfill below re-prices it.
     """
-    ready = self._conn.execute("SELECT value FROM ledger_meta WHERE key = 'agg_backfilled'").fetchone()
+    ready = self._conn.execute(_AGG_READY_SQL).fetchone()
     empty = self._conn.execute("SELECT 1 FROM usage_agg LIMIT 1").fetchone() is None
     if ready is not None and not (empty and self._conn.execute("SELECT 1 FROM usage LIMIT 1").fetchone()):
       accs: dict[tuple[str, str], _ModelSum] = {}
@@ -712,12 +721,12 @@ class UsageLedger:
     """
     self._conn.execute("BEGIN IMMEDIATE")
     try:
-      ready = self._conn.execute("SELECT value FROM ledger_meta WHERE key = 'agg_backfilled'").fetchone()
+      ready = self._conn.execute(_AGG_READY_SQL).fetchone()
       if ready is None:
         self._conn.execute(_AGG_WIPE_SQL)
         self._conn.execute(_AGG_BACKFILL_SQL)
         self._conn.execute(
-            "INSERT INTO ledger_meta (key, value) VALUES ('agg_backfilled', '1')"
+            f"INSERT INTO ledger_meta (key, value) VALUES ('{_AGG_BACKFILLED_KEY}', '1')"
             " ON CONFLICT(key) DO UPDATE SET value = '1'")
       self._conn.commit()
     except BaseException:

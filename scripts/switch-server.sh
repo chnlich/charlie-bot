@@ -4,12 +4,14 @@
 #   scripts/switch-server.sh rust <full rust-backend sha> [--pane PANE]
 #   scripts/switch-server.sh python [--pane PANE]
 #
-# The preflight changes nothing and exits 1 with the reason when a check fails. The switch then runs detached under
-# setsid, because stopping the old server ends the master turn that started this command. The command prints the log
+# The preflight checks release, clone, runs and config, then asks start-server.sh to test its slices and scope.
+# A refusal changes nothing and exits 1. The switch then runs detached under setsid, because stopping the old server
+# ends the master turn that started this command. The command prints the log
 # path, waits for the verdict and exits with it: 0 when the readback and the probe turn passed; 2 when the switch
 # failed and the previous implementation serves again; 3 when the restore failed too, and the log ends with the state
-# the server is in. When the pane stays busy after Ctrl-C, the restore sends SIGTERM, then SIGKILL, to the server
-# processes under the pane.
+# the server is in; 4 when the switch completed but a recorded run died during it: the new server keeps serving, nothing
+# is restored, and the log names the run and its outcome. When the pane stays busy after Ctrl-C, the restore sends
+# SIGTERM, then SIGKILL, to the server processes under the pane.
 #
 # The probe turn runs last, in a session of its own. It passes once the run records its first assistant output (a
 # message or a tool call) or ends success. The archive then stops every run of the session that has not ended, and
@@ -58,6 +60,7 @@ case "$MODE" in
 esac
 PANE=""
 DETACHED_LOG=""
+DIED_RUNS=0   # no restore can recover an ended run, so keep count until the switch exits 4
 while [ $# -gt 0 ]; do
   case "$1" in
     --pane) [ $# -ge 2 ] || usage; PANE=$2; shift 2 ;;
@@ -70,13 +73,16 @@ log() { echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') switch: $*"; }
 fail() { log "preflight failed: $*"; exit 1; }
 
 # The home is read, never written, by this helper. `config` prints the port and the access key (one per line);
-# `scan` prints one line per live Run (live) and one per refusal (block).
+# `scan` prints one line per live Run (live) and one per refusal (block); `alive` prints alive or ended for a recorded
+# (pid, pid start); `outcome` reads the terminal fact so readback can distinguish a completed run from one the stop
+# killed.
 home_helper() {
-  python3 -I - "$HOME_DIR" "$1" <<'PY'
+  python3 -I - "$HOME_DIR" "$@" <<'PY'
 import datetime
 import json
 import pathlib
 import sys
+import time
 
 import yaml
 
@@ -106,13 +112,19 @@ def boot_time():
   raise RuntimeError("/proc/stat has no btime line")
 
 
+def process_instance(pid, pid_start):
+  """(pid, pid_start) still names one live process instance; field 22 of /proc/<pid>/stat pins that instance, so a
+  recycled pid never counts. A zombie has ended: its argv is gone and nothing can follow it."""
+  stat = proc_stat(pid)
+  return stat is not None and stat[0] == pid_start and stat[1] != "Z"
+
+
 def run_alive(run, boot):
   """The run's recorded (pid, pid_start) still names a live process that started after this boot."""
   pid, pid_start, started_at = run.get("pid"), run.get("pid_start"), run.get("started_at")
   if pid is None or pid_start is None or started_at is None:
     return False
-  stat = proc_stat(pid)
-  if stat is None or stat[0] != pid_start or stat[1] == "Z":
+  if not process_instance(pid, pid_start):
     return False
   return datetime.datetime.fromisoformat(started_at).timestamp() > boot
 
@@ -130,7 +142,7 @@ elif mode == "scan":
     run = json.loads(path.read_text(encoding="utf-8"))
     if run.get("ended_at") is not None or not run_alive(run, boot):
       continue
-    print(f"live\t{run['session_id']}\t{run['id']}\t{run.get('backend')}\t{run['pid']}")
+    print(f"live\t{run['session_id']}\t{run['id']}\t{run.get('backend')}\t{run['pid']}\t{run['pid_start']}")
     backend = run.get("backend")
     backend_type = types.get(backend)
     if backend_type is None:
@@ -145,12 +157,76 @@ elif mode == "scan":
     controller = state.get("server_pid")
     if state.get("status") == "running" and controller is not None and pathlib.Path(f"/proc/{controller}").exists():
       print(f"block\timprove loop {path.parent.name} is running under pid {controller}")
+elif mode == "alive":
+  pid, pid_start = sys.argv[3], sys.argv[4]
+  print("alive" if process_instance(pid, pid_start) else "ended")
+elif mode == "outcome":
+  # The run store's fact history includes rotated segments, so read its archive files before the live event log.
+  session_id, run_id = sys.argv[3], sys.argv[4]
+  session = home / "sessions" / session_id
+  run = json.loads((session / "data" / "runs" / run_id / "metadata.json").read_text(encoding="utf-8"))
+  data = session / "data"
+  archives = sorted((data / "archives").glob("chat_events.*.jsonl"))
+  events = session / "data" / "chat_events.jsonl"
+  outcome = None
+  outcome_recorded = False
+
+  def read_outcome(line, number, path):
+    try:
+      event = json.loads(line)
+    except json.JSONDecodeError:
+      # The live log's own reader skips a line it cannot parse, so such a line is not a fact; the skip is logged.
+      print(f"skipped line {number} of {path}: not JSON", file=sys.stderr)
+      return False, None
+    if event.get("type") == "run_finished" and event.get("run_id") == run_id:
+      return True, event.get("outcome")
+    return False, None
+
+  for archive in archives:
+    with archive.open(encoding="utf-8") as stream:
+      for number, line in enumerate(stream, 1):
+        found, recorded = read_outcome(line, number, archive)
+        if found:
+          outcome_recorded = True
+          outcome = recorded
+  if events.is_file():
+    with events.open(encoding="utf-8") as stream:
+      line_number = 0
+      remainder = ""
+      for line in stream:
+        if not line.endswith("\n"):
+          remainder = line
+          break
+        line_number += 1
+        found, recorded = read_outcome(line, line_number, events)
+        if found:
+          outcome_recorded = True
+          outcome = recorded
+      if run.get("kind") == "manager_turn" and not outcome_recorded:
+        # Startup queues manager-turn recovery in the background, so give its finish callback time to persist the fact.
+        deadline = time.monotonic() + 10
+        while not outcome_recorded and time.monotonic() < deadline:
+          line = stream.readline()
+          if not line:
+            time.sleep(0.1)
+            continue
+          if not line.endswith("\n"):
+            remainder += line
+            continue
+          line_number += 1
+          found, recorded = read_outcome(remainder + line, line_number, events)
+          remainder = ""
+          if found:
+            outcome_recorded = True
+            outcome = recorded
+  print(outcome or "")
 else:
   raise SystemExit(f"unknown home_helper mode {mode}")
 PY
 }
 
-# scan_home writes the live runs to $RUNS_FILE and leaves the refusals in BLOCKERS.
+# scan_home writes the live runs to $RUNS_FILE and leaves the refusals in BLOCKERS. A live line is the session, the run,
+# its backend, its pid and that pid's start time.
 scan_home() {
   local scan
   scan="$(home_helper scan)" || return 1
@@ -359,14 +435,38 @@ wait_ready() {
   done
 }
 
-# adopted: every live run recorded before the stop has a recovery line in this launch's output.
+# run_process_ended PID PID_START: the process instance the run recorded has ended, so its pid may be free or belong to
+# another process now.
+run_process_ended() {
+  [ "$(home_helper alive "$1" "$2")" = ended ]
+}
+
+# adopted: every live run recorded before the stop is accounted for by this launch's recovery. A run whose process still
+# runs must have a task_recovery_resume line. A run whose process has ended needs its recorded outcome: a run's process
+# survives a server stop by design, so an ended run died during the switch unless it completed on its own. A death is
+# logged and counted in DIED_RUNS without failing the readback: no restore can adopt an ended run, so switch_forward
+# keeps the new server and exits 4.
 adopted() {
-  local run_id
-  while IFS=$'\t' read -r _ _ run_id _ _; do
-    if ! launch_has task_recovery_resume "run_id=$run_id"; then
-      log "readback: run $run_id was not adopted"
-      return 1
+  local run_id pid pid_start session_id outcome
+  while IFS=$'\t' read -r _ session_id run_id _ pid pid_start; do
+    if launch_has task_recovery_resume "run_id=$run_id"; then
+      continue
     fi
+    if run_process_ended "$pid" "$pid_start"; then
+      outcome="$(home_helper outcome "$session_id" "$run_id")" || {
+        log "readback: cannot read the outcome of run $run_id"
+        return 1
+      }
+      if [ "$outcome" = success ]; then
+        log "readback: run $run_id ended during the switch: outcome success"
+      else
+        log "readback: run $run_id died during the switch: outcome ${outcome:-none recorded}"
+        DIED_RUNS=$((DIED_RUNS + 1))
+      fi
+      continue
+    fi
+    log "readback: run $run_id was not adopted"
+    return 1
   done < "$RUNS_FILE"
 }
 
@@ -661,6 +761,7 @@ preflight() {
   PORT="$(sed -n 1p <<<"$CONFIG")"
   KEY="$(sed -n 2p <<<"$CONFIG")"
   [ -n "$KEY" ] || fail "no charliebot.access_key in $HOME_DIR/credentials.yaml"
+  "$REPO_ROOT/scripts/start-server.sh" --preflight || fail "launcher preflight failed"
   [ "$(listener_pids | grep -c .)" -eq 1 ] || fail "expected one server listening on port $PORT"
   LISTENER="$(listener_pids)"
   OLD_IMPL="$(impl_of_pid "$LISTENER")"
@@ -794,7 +895,13 @@ switch_forward() {
   serving "$WANT" || die "the new server failed its readback"
   adopted || die "a live run was not adopted"
   probe_turn || die "the probe turn failed"
-  log "SWITCH COMPLETE: $WANT serves port $PORT; clone at $(git -C "$REPO_ROOT" rev-parse --short HEAD)"
+  local head
+  head="$(git -C "$REPO_ROOT" rev-parse --short HEAD)"
+  if [ "$DIED_RUNS" -gt 0 ]; then
+    log "SWITCH COMPLETE, BUT A RECORDED RUN DIED DURING THE SWITCH: $WANT serves port $PORT; clone at $head"
+    exit 4
+  fi
+  log "SWITCH COMPLETE: $WANT serves port $PORT; clone at $head"
   exit 0
 }
 

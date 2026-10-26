@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import argparse
 import datetime
 import json
 import os
@@ -213,10 +212,8 @@ def _emit_line(
 
 def main() -> None:
   """Print one SessionStart hook output part for the requested CharlieBot session."""
-  parser = argparse.ArgumentParser(
-      description="Restore skills read by a Claude manager session after compaction",
-      formatter_class=help_formatter.CliHelpFormatter,
-  )
+  parser = help_formatter.CliArgumentParser(
+      description="Restore skills read by a Claude manager session after compaction")
   parser.add_argument("--session", required=True, help="CharlieBot session id")
   parser.add_argument(
       "--slot", required=True, type=int, choices=range(1, _MAX_PARTS + 1), help="part number from 1 to 6")
@@ -224,9 +221,10 @@ def main() -> None:
 
   try:
     from src.infra import config  # deferred: charliebot compaction-context --help
+    from src.runtime import chat_events  # deferred: charliebot compaction-context --help
 
     cfg = config.get_config()
-    events_path = cfg.sessions_dir / args.session / "data" / "chat_events.jsonl"
+    events_path = chat_events.chat_events_path(cfg.sessions_dir / args.session)
     skills, unresolved = _load_skill_texts(events_path, cfg)
     parts, included, omitted = _context_parts(skills)
     part = parts[args.slot - 1] if args.slot <= len(parts) else ""

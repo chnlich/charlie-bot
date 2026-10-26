@@ -18,6 +18,12 @@ decision), and the no-color arm installs the empty theme without importing —
 the stock no-color theme is every style field set to ``""``, so any attribute
 read renders empty in both. See ``_can_colorize`` for the one mirror whose
 drift is possible and what it costs.
+
+``CliArgumentParser`` is the parser a CLI verb builds. argparse hands a
+subparser the parent's class (its ``parser_class`` default) but not the
+parent's ``formatter_class``, so a verb that set the formatter per parser
+repeated it on every ``add_parser`` call and a new subparser could miss it.
+The class defaults the formatter once, at every depth.
 """
 
 from __future__ import annotations
@@ -25,6 +31,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from typing import Any
 
 
 def _terminal_columns() -> int:
@@ -100,3 +107,11 @@ class CliHelpFormatter(argparse.HelpFormatter):
 
 class CliRawDescriptionHelpFormatter(CliHelpFormatter, argparse.RawDescriptionHelpFormatter):
   """The RawDescriptionHelpFormatter shape (epilogs render verbatim) on the shutil-free width."""
+
+
+class CliArgumentParser(argparse.ArgumentParser):
+  """An argparse parser whose help, and whose every subparser's help, renders through ``CliHelpFormatter``."""
+
+  def __init__(self, *args: Any, **kwargs: Any) -> None:
+    kwargs.setdefault("formatter_class", CliHelpFormatter)
+    super().__init__(*args, **kwargs)

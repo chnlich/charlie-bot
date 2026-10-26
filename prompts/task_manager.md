@@ -84,7 +84,8 @@ CJK characters, CJK punctuation, and fullwidth characters count 2; other charact
   names.
 - Run one verify round on each design before you send it. Fold its findings
   into the design without a second round.
-- When another node's message changes no item of the session status, end the turn with a minimal last message.
+- When another node's message changes no field of the session status, end the turn with a minimal last message.
+  The user then reads only new facts in the session.
 - A minimal last message is one line, or the status block alone in a session that carries the block.
 
 ### Your Subtree

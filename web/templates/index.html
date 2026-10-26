@@ -161,14 +161,6 @@
                 onclick="compactContext()"
                 class="ml-2 text-xs px-2 py-1 rounded border border-slate-600 text-slate-300 hover:bg-slate-700 transition-colors whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed"
                 {% set compact = backend_compact.get(active_backend_type) %}{% if not (compact and compact.manual) %}disabled{% endif %}>Compact</button>
-        <!-- The operator's repair mark: this session and its descendants keep working in their own
-             8 GiB share while the agents' share is full. -->
-        <button id="resource-class-toggle"
-                onclick="toggleRepairShare()"
-                data-resource-class="{{ active_session.resource_class }}"
-                aria-pressed="{{ 'true' if active_session.resource_class == 'repair' else 'false' }}"
-                class="ml-2 text-xs px-2 py-1 rounded border border-slate-600 text-slate-300 hover:bg-slate-700 transition-colors whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed"
-                title="修复会话：开启后，此会话及其子会话的进程进入修复内存份额，agent 份额满时仍可工作">修复会话：{{ '开' if active_session.resource_class == 'repair' else '关' }}</button>
         <a href="/sessions/{{ active_session.id }}/events"
            class="text-slate-500 hover:text-slate-300 transition-colors ml-2 mr-2" title="View JSONL events">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -348,7 +340,6 @@
   <script src="/static/js/sidebar/groups.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/sidebar/archived.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/sidebar/filters.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/sidebar/resource-class.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/sidebar/session-view.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/sidebar/modals.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/sidebar/session-actions.js?v={{ static_asset_version|urlencode }}"></script>

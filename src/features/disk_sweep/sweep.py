@@ -22,7 +22,7 @@ import tempfile
 from collections.abc import Iterable
 
 from src.infra import config, event_types, git, log_once, models
-from src.runtime import chat_events, runs
+from src.runtime import chat_events, run_identity, runs
 
 log = log_once.LazyStructlogLogger()
 
@@ -59,6 +59,17 @@ class SweepRow:
     """Return the row in the command's tab-separated output format."""
     fields = (self.kind, str(self.path), str(self.freed_bytes), self.action, self.reason)
     return "\t".join(_tsv_field(field) for field in fields)
+
+  def skip(self, reason: str) -> None:
+    """Keep the row out of the sweep, recording *reason* and freeing no bytes.
+
+    A row can hold bytes counted when it was selected for deletion and then be
+    skipped by a later preflight, so a skip clears them; the report's total
+    counts only deleted rows.
+    """
+    self.action = "skip"
+    self.reason = reason
+    self.freed_bytes = 0
 
 
 @dataclasses.dataclass(frozen=True)
@@ -111,7 +122,7 @@ def _run_git(repo_path: pathlib.Path, *args: str, input_bytes: bytes | None = No
 
 def _read_lifecycle(session_dir: pathlib.Path) -> dict | None:
   """Read the latest lifecycle event across archived and live chat events."""
-  event_paths = sorted((session_dir / "data" / "archives").glob(chat_events.ARCHIVE_FILE_GLOB))
+  event_paths = sorted(chat_events.chat_event_archives_dir(session_dir).glob(chat_events.ARCHIVE_FILE_GLOB))
   live_path = chat_events.chat_events_path(session_dir)
   if live_path.is_file():
     event_paths.append(live_path)
@@ -132,7 +143,7 @@ def _read_lifecycle(session_dir: pathlib.Path) -> dict | None:
 
 def _task_keep_worktree(cfg: config.CharlieBotConfig, session_id: str) -> bool | None:
   """Return a task's keep-worktree setting, or None when its owner is unknown."""
-  metadata_path = cfg.sessions_dir / session_id / "metadata.json"
+  metadata_path = cfg.sessions_dir / session_id / run_identity.SESSION_METADATA_NAME
   if not metadata_path.is_file():
     return None
   try:
@@ -150,7 +161,8 @@ def _load_run_groups(cfg: config.CharlieBotConfig) -> dict[pathlib.Path, dict[st
   """Group recorded worktree Runs by canonical path and session owner."""
   groups: dict[pathlib.Path,
                dict[str, list[models.RunRecord]]] = collections.defaultdict(lambda: collections.defaultdict(list))
-  for metadata_path in sorted(cfg.sessions_dir.glob(f"*/data/{runs.RUNS_DIR_NAME}/*/{runs.RUN_METADATA_NAME}")):
+  for metadata_path in sorted(
+      cfg.sessions_dir.glob(f"*/{runs.DATA_DIR_NAME}/{runs.RUNS_DIR_NAME}/*/{runs.RUN_METADATA_NAME}")):
     try:
       record = models.RunRecord.model_validate_json(metadata_path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:
@@ -250,7 +262,7 @@ def _worktree_rows(cfg: config.CharlieBotConfig, now: datetime.datetime) -> list
     row.owner_session_id = owner_session_id
     row.repo_path = run.repo_path
     row.branch_name = run.branch_name
-    row.archive_path = cfg.sessions_dir / owner_session_id / "data" / runs.RUNS_DIR_NAME / run.id / (
+    row.archive_path = cfg.sessions_dir / owner_session_id / runs.DATA_DIR_NAME / runs.RUNS_DIR_NAME / run.id / (
         "worktree-changes.tar")
     row.action = "delete"
     row.reason = "closed-task"
@@ -555,9 +567,7 @@ def _worktree_preflight(row: SweepRow) -> None:
   """Set the worktree action after checking submodules and large untracked files."""
   status, _untracked, skip_reason = _inspect_worktree(row)
   if skip_reason is not None:
-    row.action = "skip"
-    row.reason = skip_reason
-    row.freed_bytes = 0
+    row.skip(skip_reason)
     return
   if status:
     row.action = "archive+delete"
@@ -570,14 +580,10 @@ def _worktree_preflight(row: SweepRow) -> None:
 def _scratch_preflight(row: SweepRow, now: datetime.datetime) -> None:
   """Recheck scratch age and nested repository state immediately before deletion."""
   if _tree_latest_mtime(row.path) >= now.timestamp() - SCRATCH_DAYS * 24 * 60 * 60:
-    row.action = "skip"
-    row.reason = "too-young"
-    row.freed_bytes = 0
+    row.skip("too-young")
     return
   if any(_repo_has_unsaved_changes(repo_path) for repo_path in _nested_repositories(row.path)):
-    row.action = "skip"
-    row.reason = "has-unsaved-repo"
-    row.freed_bytes = 0
+    row.skip("has-unsaved-repo")
 
 
 def _archive_worktree(row: SweepRow, untracked: list[pathlib.Path]) -> pathlib.Path:
@@ -633,9 +639,7 @@ def _mark_in_use(rows: list[SweepRow], proc_root: pathlib.Path) -> set[int]:
   processes, unreadable = _process_paths(proc_root)
   for path in _in_use_paths(rows, processes):
     row = next(row for row in rows if row.path == path)
-    row.action = "skip"
-    row.reason = "in-use"
-    row.freed_bytes = 0
+    row.skip("in-use")
   return unreadable
 
 
@@ -650,9 +654,7 @@ def _fresh_worktree_action(row: SweepRow) -> tuple[bytes, list[pathlib.Path]]:
   """Refresh worktree status and action before archive or removal."""
   status, untracked, skip_reason = _inspect_worktree(row)
   if skip_reason is not None:
-    row.action = "skip"
-    row.reason = skip_reason
-    row.freed_bytes = 0
+    row.skip(skip_reason)
     return status, untracked
   if status:
     row.action = "archive+delete"
@@ -699,9 +701,7 @@ async def _apply_rows(
     used, unreadable_now = _process_uses_path(row.path, proc_root)
     unreadable.update(unreadable_now)
     if used:
-      row.action = "skip"
-      row.reason = "in-use"
-      row.freed_bytes = 0
+      row.skip("in-use")
       continue
     try:
       if row.kind == "worktree":
@@ -714,9 +714,7 @@ async def _apply_rows(
           used_after_archive, unreadable_now = _process_uses_path(row.path, proc_root)
           unreadable.update(unreadable_now)
           if used_after_archive:
-            row.action = "skip"
-            row.reason = "in-use"
-            row.freed_bytes = 0
+            row.skip("in-use")
             continue
         remove_error = await _remove_worktree(row, cfg)
         if remove_error is not None:
@@ -728,9 +726,7 @@ async def _apply_rows(
         used, unreadable_now = _process_uses_path(row.path, proc_root)
         unreadable.update(unreadable_now)
         if used:
-          row.action = "skip"
-          row.reason = "in-use"
-          row.freed_bytes = 0
+          row.skip("in-use")
           continue
         archive_path = None
         shutil.rmtree(row.path)
@@ -743,9 +739,7 @@ async def _apply_rows(
           archive=str(archive_path) if archive_path is not None else None)
       freed_bytes += row.freed_bytes
     except Exception as error:
-      row.action = "skip"
-      row.reason = "apply-failed"
-      row.freed_bytes = 0
+      row.skip("apply-failed")
       failures.append(SweepFailure(path=row.path, reason=str(error)))
   return deleted_count, freed_bytes, failures, unreadable
 
@@ -769,11 +763,9 @@ async def run_sweep(
   for row in rows:
     if row.action != "skip":
       if row.kind == "worktree" and row.path == worktree_root:
-        row.action = "skip"
-        row.reason = "unsafe-root"
+        row.skip("unsafe-root")
       elif row.kind == "scratch" and row.path == scratch_root:
-        row.action = "skip"
-        row.reason = "unsafe-root"
+        row.skip("unsafe-root")
   unreadable = _mark_in_use(rows, proc_root)
   for row in rows:
     if row.action == "skip" or row.reason == "in-use":

@@ -85,6 +85,8 @@ class TestRegistration:
   @pytest.mark.parametrize(
       ("model", "on", "message"), [
           ("not-a-module-class-string", "session", "not a 'module:Class' string"),
+          (":ProbeSessionFields", "session", "not a 'module:Class' string"),
+          ("tests.test_metadata_slots:", "session", "not a 'module:Class' string"),
           ("tests.test_metadata_slots:ProbeSessionFields", "elsewhere", "on must be one of"),
       ])
   def test_a_malformed_model_string_or_an_unknown_file_raises_at_registration(

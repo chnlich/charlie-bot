@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable, Iterator
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from src.infra import event_types as ET
 from src.infra import log_once, models
@@ -62,11 +62,7 @@ class DispatchCompletion(Protocol):
 
 
 class DispatchTree(Protocol):
-  """The task tree members the dispatcher calls; ``TaskTreeManager`` implements them.
-
-  ``index`` is the tree's rebuildable index: the dispatcher hands it back to the
-  tree and never reads it, so its type is ``Any``.
-  """
+  """The task tree members the dispatcher calls; ``TaskTreeManager`` implements them."""
 
   control_lock: asyncio.Lock
   events: control_sink.ControlEventSink
@@ -89,18 +85,6 @@ class DispatchTree(Protocol):
     ...
 
   def facts_of(self, session_id: str) -> DispatchFacts:
-    ...
-
-  async def _get_index(self) -> Any:
-    ...
-
-  def _index_meta(self, index: Any, session_id: str) -> models.SessionMetadata:
-    ...
-
-  def _ancestors(self, index: Any, session_id: str) -> list[models.SessionMetadata]:
-    ...
-
-  def archived_of(self, index: Any, meta: models.SessionMetadata) -> bool:
     ...
 
   def invalidate_tree_index(self) -> None:
@@ -260,30 +244,22 @@ class TaskInputDispatcher:
         # same restore facts instead of duplicating them.
         _restored, restore_announcements = await tree.completion.restore_chain_locked(
             session_id, request_id=str(event["id"]), reason="user message")
-      await tree.events.append(session_id, event)
       if event_type == ET.USER:
-        # A real user message is the one input that reorders the
-        # sidebar: it lifts the node and its unarchived ancestors to
-        # the event's time (the replay return above lifts nothing, and
-        # the other input types are agent/server traffic). The climb
-        # stops before the first archived ancestor — the archived row
-        # and everything above it keep their places, since above an
-        # archived parent the node is already Workspace's own root.
-        # Each write rides update_thinking_state's one-field fresh
-        # mutate, so a concurrent edit survives and the listing
-        # revision advances; the lift only ever moves forward.
-        index = await tree._get_index()
+        # A real user message is the one input that reorders the sidebar. It
+        # lifts only the node it was sent to, to the event's time, and never
+        # backward: the sidebar orders rows by updated_at, so that node moves to
+        # the front of its siblings while its parent and ancestors keep their
+        # places. Keep this lift before the append: the append notifies the
+        # browser, which refetches the list and must read the lifted value.
+        # Keep it after the archived-chain restore above, so a message to an
+        # archived node lifts the reopened node. The replay returns above never
+        # get here, and the other input types are agent or server traffic.
         when = models.ensure_utc(event["timestamp"])
-        chain = [tree._index_meta(index, session_id)]
-        for ancestor in tree._ancestors(index, session_id):
-          if ancestor.status == models.SessionStatus.ARCHIVED or tree.archived_of(index, ancestor):
-            break
-          chain.append(ancestor)
-        for node in chain:
-          current = await tree.session_store.get_session(node.id)
-          if when > current.updated_at:
-            await tree.session_anchors.update_thinking_state(node.id, when)
+        current = await tree.session_store.get_session(session_id)
+        if when > current.updated_at:
+          await tree.session_anchors.update_thinking_state(session_id, when)
         tree.invalidate_tree_index()
+      await tree.events.append(session_id, event)
     # The restore's per-node announcements ride the same after-lock window as
     # restore_chain's: each reopened fact reaches the page from its own node
     # (the rows leave the archived list), then the message itself.
@@ -422,7 +398,7 @@ class TaskInputDispatcher:
       raise task_errors.TaskNotFoundError(runs.run_not_found_in_task_text(run_id, session_id))
     events = tree.runs.load_events_sync(session_id)
     if tree.runs.run_has_terminal_fact(run, events):
-      raise task_errors.TaskConflictError([f"run {run_id} already finished; it claims no new inputs"])
+      raise task_errors.TaskConflictError([runs.run_already_finished_text(run_id)])
     if run.pid is not None:
       raise task_errors.TaskConflictError([f"run {run_id} already launched; it owns its bound batch"])
     if tree.runs.stop_requested(events, run_id):
@@ -450,7 +426,7 @@ class TaskInputDispatcher:
         raise task_errors.TaskInvalidError(f"run {run_id} is not a manager turn")
       events = tree.runs.load_events_sync(session_id)
       if tree.runs.run_has_terminal_fact(run, events):
-        raise task_errors.TaskConflictError([f"run {run_id} already finished; it claims no new inputs"])
+        raise task_errors.TaskConflictError([runs.run_already_finished_text(run_id)])
       if run.pid is None:
         raise task_errors.TaskConflictError([f"run {run_id} has no launched process to echo inputs"])
       if tree.runs.stop_requested(events, run_id):

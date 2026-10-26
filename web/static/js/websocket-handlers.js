@@ -8,15 +8,18 @@
 // chat and sidebar files whose functions the handlers call.
 
 function _commitMessage(msg) {
-  // Catchup frames are rendered exactly like live frames: the cursor the client
-  // reports is the snapshot the first paint was built from, so every frame the
-  // server replays is one the client does not already have. There is no
-  // connection-phase state to gate rendering on.
+  const engine = Chat.activeTurnEngineFor(document.getElementById('messages'));
   if (msg.role === 'user' && pendingUserRequestIds.has(msg.request_id)) {
     // The matching local send already rendered this message optimistically.
     pendingUserRequestIds.delete(msg.request_id);
+    if (engine) {
+      engine.rekeyMessage(
+          {role: msg.role, id: msg.request_id, content: msg.content},
+          msg);
+    }
     return;
   }
+  if (engine && engine.hasMessage(msg)) return;
   // A committed bubble supersedes the streaming preview: the draft it carries is
   // the same text the preview holds. The message arrived over the wire — the
   // local tab did not produce it — so it never forces the follow; a reader

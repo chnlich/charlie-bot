@@ -1308,17 +1308,11 @@ fn append_tail(tail: &Mutex<VecDeque<u8>>, data: &[u8]) {
 }
 
 fn process_rss_mb(pid: u32) -> anyhow::Result<f64> {
-  let status = fs::read_to_string(format!("/proc/{pid}/status"))
+  let process = procfs::process::Process::new(i32::try_from(pid).context("the process id fits a pid_t")?)
     .with_context(|| format!("reading resident memory for opencode process {pid}"))?;
-  let value_kb = status
-    .lines()
-    .find_map(|line| line.strip_prefix("VmRSS:").map(str::trim))
-    .context("opencode process status has no VmRSS field")?
-    .split_whitespace()
-    .next()
-    .context("opencode process VmRSS field has no value")?
-    .parse::<u64>()
-    .context("opencode process VmRSS field is not an integer")?;
+  let status = process.status().with_context(|| format!("reading resident memory for opencode process {pid}"))?;
+  let value_kb = status.vmrss.context("opencode process status has no VmRSS field")?;
+  // `VmRSS` counts kilobytes.
   Ok(value_kb as f64 / 1024.0)
 }
 

@@ -570,7 +570,7 @@ Each of the 28 commits in `git rev-list --no-merges d113f2c4d..085f024a5 -- src 
 
 ## Catch-up 4521a51b2 open steps
 
-Both all-stage Rust debug runs failed the same 168 of 1167 steps. The four WebSocket cursor rows of `b3dc9a015` are removed because `b3dc9a015` and `a8781f62e` are now in Rust; every remaining row fails because Rust still writes and serves `resource_class` (`637df0572`). Every failing step failed in both runs, so no row is intermittent. The Python-vs-Python run passed all 1107 of its steps.
+Both all-stage Rust debug runs failed the same 168 of 1167 steps. The four WebSocket cursor rows of `b3dc9a015` are removed because `b3dc9a015` and `a8781f62e` are now in Rust. The sidebar-channel trigger row R477 is removed because at this head the step passes in three consecutive runs: the socket no longer waits five seconds for a cursor frame, so it subscribes at once and the step's file window ends before the turn's `resource_class` write. Every remaining row fails because Rust still writes and serves `resource_class` (`637df0572`). Every failing step failed in both runs, so no row is intermittent. The Python-vs-Python run passed all 1107 of its steps.
 
 | Scenario | Step | Stage | Main commit | Difference |
 | --- | --- | --- | --- | --- |
@@ -706,7 +706,6 @@ Both all-stage Rust debug runs failed the same 168 of 1167 steps. The four WebSo
 | session-listings | search, no query | session-read-api | 637df0572 | R470. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
 | session-listings | chat threads | session-read-api | 637df0572 | R471. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
 | session-stream | the trigger turns reach the live socket on the session channel | session-stream | 637df0572 | R476. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
-| session-stream | the trigger turns reach the live socket on the sidebar channel | session-stream | 637df0572 | R477. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
 | session-stream | wait for the last live trigger to fire before shutdown | session-stream | 637df0572 | R478. Rust writes `resource_class: "agent"` into the session's `metadata.json`; `main` no longer has the key. |
 | session-usage-anthropic-compatible | usage, manager on Anthropic-compatible option | session-read-api | 637df0572 | R479. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |
 | session-usage-anthropic-compatible | usage, worker on Anthropic-compatible option | session-read-api | 637df0572 | R480. Rust's response carries `resource_class: "agent"`; `main` no longer has the key. |

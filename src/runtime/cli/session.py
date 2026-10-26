@@ -93,7 +93,13 @@ def _build_parser() -> argparse.ArgumentParser:
   tree = sub.add_parser("tree", help="Page the task tree")
   tree.add_argument("--root", default=None, help="Parent task id (default: the roots)")
   tree.add_argument("--include-archived", action="store_true", help="Include archived/collapsed rows")
-  tree.add_argument("--limit", type=int, default=100, help="Page size (default 100)")
+  tree.add_argument(
+      "--limit",
+      type=int,
+      default=constants.SESSION_PAGE_LIMIT_DEFAULT,
+      help=(
+          f"Page size, {constants.SESSION_PAGE_LIMIT_MIN}..{constants.SESSION_PAGE_LIMIT_MAX} "
+          f"(default {constants.SESSION_PAGE_LIMIT_DEFAULT})"))
   tree.add_argument("--cursor", default=None, help="next_cursor from the previous page")
 
   retry = sub.add_parser("retry", help="Create the retry run of one recorded run")
@@ -247,7 +253,7 @@ def _cmd_cancel(args: argparse.Namespace) -> None:
     run_rows: dict[str, dict] = {}
     cursor = None
     while run_ids - run_rows.keys():
-      params = {"limit": 500}
+      params = {"limit": constants.SESSION_PAGE_LIMIT_MAX}
       if cursor is not None:
         params["cursor"] = cursor
       page = common.get_api(f"/api/sessions/{args.session_id}/runs", params)

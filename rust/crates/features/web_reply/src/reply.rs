@@ -7,7 +7,7 @@
 
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use anyhow::Context;
 use axum::http::StatusCode;
@@ -15,12 +15,14 @@ use charliebot_compat::file_urls;
 use charliebot_core::event_types::EventFields;
 use charliebot_core::event_types::{AGENT_MESSAGE, INPUT_EVENT_ID, USER, WEB_REPLY, WEB_REPLY_NOTICE};
 use charliebot_core::paths;
+use charliebot_core::pyregex::compile_python_automata_regex;
 use charliebot_core::pystr;
 use charliebot_registry::{FeatureContext, RunningTurnInputs, StateError};
 use charliebot_store::ChatEvent;
 use charliebot_store::compact::CompactValue;
 use charliebot_store::metadata::SessionMetadata;
 use charliebot_store::{SESSION_NOT_FOUND_DETAIL, SharedChatEvent, Store, StoreError};
+use regex::{Captures, Regex};
 use serde_json::{Value, json};
 
 /// The web reply rules file under `prompts/` (`reply.RULES_FILE`).
@@ -56,6 +58,14 @@ const LANGUAGE_HOLD_DETAIL: &str = concat!(
   "Then post the reply again.\n",
   "To post the reply as written, add --keep-language \"<reason>\" to the command."
 );
+
+static CODE_FENCE_RE: LazyLock<Regex> = LazyLock::new(|| compile_python_automata_regex(r"(?s)```.*?```"));
+static INLINE_CODE_RE: LazyLock<Regex> = LazyLock::new(|| compile_python_automata_regex(r"`[^`]*`"));
+static URL_RE: LazyLock<Regex> = LazyLock::new(|| compile_python_automata_regex(r"\(?https?://\S+\)?"));
+static PATH_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(^|[^\p{L}\p{N}_])([~/][\p{L}\p{N}_./-]+)").unwrap());
+static MARKDOWN_LINK_RE: LazyLock<Regex> = LazyLock::new(|| compile_python_automata_regex(r"\[([^\]]*)\]\([^)]*\)"));
+static HAN_RE: LazyLock<Regex> = LazyLock::new(|| compile_python_automata_regex(r"[㐀-䶿一-鿿]"));
+static LATIN_RE: LazyLock<Regex> = LazyLock::new(|| compile_python_automata_regex(r"[A-Za-z]"));
 
 /// The roles the For-you layer shows: the user's messages, the replies and the notices (`reply._FOR_YOU_ROLES`).
 const FOR_YOU_ROLES: [&str; 3] = [USER, WEB_REPLY, WEB_REPLY_NOTICE];
@@ -202,104 +212,36 @@ pub fn noticed(events: &[SharedChatEvent], user_event_id: &str) -> bool {
   })
 }
 
-/// Whether `character` is in Python's `\w` class: an alphanumeric character or `_`.
-fn is_word(character: char) -> bool {
-  pystr::is_python_alphanumeric(character) || character == '_'
-}
-
-/// A CJK ideograph: the ranges of `reply._HAN`, U+3400-U+4DBF and U+4E00-U+9FFF.
-fn is_han(character: char) -> bool {
-  matches!(character, '\u{3400}'..='\u{4dbf}' | '\u{4e00}'..='\u{9fff}')
-}
-
-/// Whether the characters from `at` spell `text`.
-fn starts_with_at(chars: &[char], at: usize, text: &str) -> bool {
-  text.chars().enumerate().all(|(offset, character)| chars.get(at + offset) == Some(&character))
-}
-
-/// The end of a fenced code block that opens at `at`: the first "```" after the opening (`_CODE_FENCE`).
-fn fenced_code_end(chars: &[char], at: usize) -> Option<usize> {
-  if !starts_with_at(chars, at, "```") {
-    return None;
-  }
-  (at + 3..chars.len()).find(|&close| starts_with_at(chars, close, "```")).map(|close| close + 3)
-}
-
-/// The end of an inline code span that opens at `at`: the next backtick (`_INLINE_CODE`).
-fn inline_code_end(chars: &[char], at: usize) -> Option<usize> {
-  if chars[at] != '`' {
-    return None;
-  }
-  chars[at + 1..].iter().position(|&character| character == '`').map(|offset| at + 1 + offset + 1)
-}
-
-/// The end of a URL that starts at `at`, with its opening parenthesis when it has one (`_URL`, `\(?https?://\S+\)?`).
-/// The closing parenthesis is part of the `\S+` run, so the match ends at the next whitespace.
-fn url_end(chars: &[char], at: usize) -> Option<usize> {
-  let start = if chars[at] == '(' { at + 1 } else { at };
-  let body = if starts_with_at(chars, start, "https://") {
-    start + 8
-  } else if starts_with_at(chars, start, "http://") {
-    start + 7
-  } else {
-    return None;
-  };
-  if body >= chars.len() || pystr::is_python_whitespace(chars[body]) {
-    return None;
-  }
-  let end = chars[body..].iter().position(|&character| pystr::is_python_whitespace(character));
-  Some(end.map_or(chars.len(), |offset| body + offset))
-}
-
-/// The end of a path that starts at `at` (`_PATH`, `(?<![\w])[~/][\w.\-/]+`).
-fn path_end(chars: &[char], at: usize) -> Option<usize> {
-  if !matches!(chars[at], '~' | '/') || (at > 0 && is_word(chars[at - 1])) {
-    return None;
-  }
-  let run = chars[at + 1..].iter().position(|&character| !(is_word(character) || matches!(character, '.' | '-' | '/')));
-  let end = run.map_or(chars.len(), |offset| at + 1 + offset);
-  (end > at + 1).then_some(end)
-}
-
-/// One stripping pattern: the end of its match that starts at the given index, or None when none starts there.
-type SpanEnd = fn(&[char], usize) -> Option<usize>;
-
-/// One `re.sub(pattern, " ", text)` over `chars`: each match that `span_at` finds from its start becomes one space,
-/// and the scan resumes after it. `span_at` reads the characters before the match, as a lookbehind does.
-fn blank_spans(chars: &[char], span_at: SpanEnd) -> Vec<char> {
-  let mut out = Vec::with_capacity(chars.len());
-  let mut at = 0;
-  while at < chars.len() {
-    match span_at(chars, at) {
-      Some(end) => {
-        out.push(' ');
-        at = end;
-      }
-      None => {
-        out.push(chars[at]);
-        at += 1;
-      }
-    }
-  }
-  out
-}
-
 /// The Han and Latin-letter counts of `text`, with fenced code, inline code, URLs and paths left out (`_han_and_latin`).
-fn han_and_latin(text: &str) -> (usize, usize) {
-  let passes: [SpanEnd; 4] = [fenced_code_end, inline_code_end, url_end, path_end];
-  let body = passes.into_iter().fold(text.chars().collect::<Vec<char>>(), |body, span_at| blank_spans(&body, span_at));
-  (body.iter().filter(|&&character| is_han(character)).count(), body.iter().filter(|c| c.is_ascii_alphabetic()).count())
+fn han_and_latin(text: &str) -> anyhow::Result<(usize, usize)> {
+  let mut body = text.to_owned();
+  for pattern in [&*CODE_FENCE_RE, &*INLINE_CODE_RE, &*URL_RE] {
+    body = pattern.replace_all(&body, " ").into_owned();
+  }
+  body = PATH_RE
+    .replace_all(&body, |captures: &Captures<'_>| {
+      format!("{} ", captures.get(1).expect("the path regex captures its preceding character").as_str())
+    })
+    .into_owned();
+  Ok((count_matches(&HAN_RE, &body), count_matches(&LATIN_RE, &body)))
+}
+
+fn count_matches(pattern: &Regex, text: &str) -> usize {
+  pattern.find_iter(text).count()
 }
 
 /// Whether the language check holds `reply` after the user message `user_text`, where None means no user message
 /// (`language_check_holds`). A reply with no Han and no Latin letters is not held.
-fn language_check_holds(user_text: Option<&str>, reply: &str) -> bool {
-  if user_text.is_none_or(|text| han_and_latin(text).0 < LANGUAGE_CHECK_MIN_USER_HAN) {
-    return false;
+fn language_check_holds(user_text: Option<&str>, reply: &str) -> anyhow::Result<bool> {
+  let Some(user_text) = user_text else {
+    return Ok(false);
+  };
+  if han_and_latin(user_text)?.0 < LANGUAGE_CHECK_MIN_USER_HAN {
+    return Ok(false);
   }
-  let (reply_han, reply_latin) = han_and_latin(reply);
+  let (reply_han, reply_latin) = han_and_latin(reply)?;
   let letters = reply_han + reply_latin;
-  letters > 0 && (reply_han as f64) / (letters as f64) < LANGUAGE_CHECK_MAX_REPLY_HAN_SHARE
+  Ok(letters > 0 && (reply_han as f64) / (letters as f64) < LANGUAGE_CHECK_MAX_REPLY_HAN_SHARE)
 }
 
 fn newest_user_text_shared(events: &[SharedChatEvent]) -> Option<&str> {
@@ -345,37 +287,9 @@ pub fn refuse_dead_links<'a>(
 }
 
 /// The characters the reader counts in `text`: each inline markdown link counts as its label (`visible_reply_chars`).
-fn visible_reply_chars(text: &str) -> usize {
-  let chars = text.chars().collect::<Vec<char>>();
-  let mut count = 0;
-  let mut at = 0;
-  while at < chars.len() {
-    match markdown_link_at(&chars, at) {
-      Some((label, end)) => {
-        count += label.len();
-        at = end;
-      }
-      None => {
-        count += 1;
-        at += 1;
-      }
-    }
-  }
-  count
-}
-
-/// The inline link `[label](url)` that starts at `at`, as the label's characters and the index after its `)`. Python's
-/// `_MARKDOWN_LINK` (`\[([^\]]*)\]\([^)]*\)`) takes the first `]` as the label's end and the first `)` as the link's.
-fn markdown_link_at(chars: &[char], at: usize) -> Option<(&[char], usize)> {
-  if chars.get(at) != Some(&'[') {
-    return None;
-  }
-  let close = at + 1 + chars[at + 1..].iter().position(|&character| character == ']')?;
-  if chars.get(close + 1) != Some(&'(') {
-    return None;
-  }
-  let end = close + 2 + chars[close + 2..].iter().position(|&character| character == ')')?;
-  Some((&chars[at + 1..close], end + 1))
+fn visible_reply_chars(text: &str) -> anyhow::Result<usize> {
+  let visible = MARKDOWN_LINK_RE.replace_all(text, "$1");
+  Ok(visible.chars().count())
 }
 
 /// Record `text` as the session's web reply and return the readback the CLI prints (`reply.post_web_reply`).
@@ -410,7 +324,7 @@ pub async fn post_web_reply_with_request_id(
   if keep_language.is_some_and(|reason| pystr::strip(reason).is_empty()) {
     return Err(WebReplyError::refused(StatusCode::UNPROCESSABLE_ENTITY, "Keep-language reason is empty"));
   }
-  let chars = visible_reply_chars(text);
+  let chars = visible_reply_chars(text)?;
   let epoch = features.store.prime_aggregator(session_id).await?;
   let event = {
     let guard = features.store.control_lock().await;
@@ -429,7 +343,7 @@ pub async fn post_web_reply_with_request_id(
       }
     }
     let running = features.startup.require::<RunningTurnInputs>()?.user_event_ids(session_id);
-    if keep_language.is_none() && language_check_holds(newest_user_text_shared(&events), text) {
+    if keep_language.is_none() && language_check_holds(newest_user_text_shared(&events), text)? {
       tracing::info!(session = %session_id, chars, "web_reply_held");
       return Err(WebReplyError::refused(StatusCode::CONFLICT, LANGUAGE_HOLD_DETAIL));
     }

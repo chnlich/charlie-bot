@@ -48,6 +48,12 @@ _TEMP_DIR_SUFFIX = re.compile(r"\bcharliebot-(?:explain|oneshot|run)-(?P<value>[
 _TASK_BRANCH_TIMESTAMP = re.compile(r"\b(?P<prefix>charliebot(?:/|-)task-)(?P<value>\d{10})(?P<suffix>-[0-9a-f]{8})\b")
 _OPENCODE_DEBUG_PORT = re.compile(r"(?P<prefix>http://127\.0\.0\.1:)(?P<value>\d+)(?P<suffix>/api/debug/location)")
 _PIPE_INODE = re.compile(r"pipe:\[(?P<value>\d+)\]")
+# The fixture clock stamps values on EPOCH's date (fixture.py EPOCH), and those compare exactly. A stamp on any other
+# date is a server's own wall-clock read, which the session-list rules mask.
+_FIXTURE_CLOCK_DATE = "2026-01-05"
+_SESSION_LIST_WALL_CLOCK = (
+    rf"(?!{_FIXTURE_CLOCK_DATE}T)"
+    r"(?P<value>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -213,6 +219,7 @@ RESPONSE_RULES: tuple[FieldRule, ...] = (
         target="GET /api/sessions/",
         field="[*].updated_at",
         when=(("name", "Atlas survey"),),
+        pattern=re.compile(_SESSION_LIST_WALL_CLOCK),
         reason="wall-clock time: a user message lifts its row to the time each server read the event",
     ),
     FieldRule(
@@ -220,6 +227,7 @@ RESPONSE_RULES: tuple[FieldRule, ...] = (
         target="GET /api/sessions/",
         field="[*].cc_session_started_at",
         when=(("name", "Atlas survey"),),
+        pattern=re.compile(_SESSION_LIST_WALL_CLOCK),
         reason="wall-clock time: each server records its own native conversation start",
     ),
     *(

@@ -40,7 +40,7 @@ If execution is blocked, report the blocker and the next step needed to continue
 ## Status Block
 
 The user returns to each session after a gap.
-The session status lets the user resume at a glance. It has three items:
+The session status lets the user resume at a glance. It has three fields:
 
 - **Goal**: the session's current overall goal, in one sentence.
 - **Now**: the latest state read back, what remains before the next milestone, and the job or trigger it waits on.
@@ -59,7 +59,8 @@ The session status lets the user resume at a glance. It has three items:
 - When the session repeats one scheduled routine, its next run is the next milestone.
 - In **Now**, apply the Evidence rule on instructions to an asynchronous system.
 - When nothing will report the next change, write that in **Now** in place of a time estimate.
-- When the turn shares a sitrep, take each item from the matching part of the page.
+- When the turn shares a sitrep, take each field from the matching part of the page.
+  The panel and the page then state the same facts.
 - When your rules include `prompts/web_reply.md`, keep the session status in the status panel as that file says.
 
 ## Concise Expression
@@ -91,7 +92,8 @@ A model reads prompts, skills, task specs, memory entries, and messages to other
 Each word in this text must carry one meaning. Write this text with the writing rules of ASD-STE100
 Issue 9 (Simplified Technical English):
 
-- Name things with plain words and the established terms of the field.
+- Name things with plain words and the established terms of the domain.
+  The reader then knows each name without a definition.
 - Give each concept one name, and use that name every time. Each word keeps one meaning.
 - Before you name a new concept, find the name that the existing text uses.
 - Write one fact or one instruction in each sentence.

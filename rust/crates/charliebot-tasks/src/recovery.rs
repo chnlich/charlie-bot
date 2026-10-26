@@ -8,7 +8,7 @@
 
 use std::collections::{BTreeMap, HashSet};
 use std::future::Future;
-use std::io::{self, Write};
+use std::io;
 use std::path::PathBuf;
 #[cfg(feature = "test-hooks")]
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -90,31 +90,14 @@ fn parse_boot_recovery_marker(raw: &[u8]) -> Result<UtcDateTime, &'static str> {
   }
 }
 
-#[cfg(feature = "test-hooks")]
-thread_local! {
-  /// The steps of this thread's marker writes, in order: `sync` for the temporary file's fsync, `rename` for the swap.
-  static MARKER_WRITE_STEPS: std::cell::RefCell<Vec<&'static str>> = const { std::cell::RefCell::new(Vec::new()) };
-}
-
 fn write_boot_recovery_marker(home: &std::path::Path, pass_started_at: UtcDateTime) -> anyhow::Result<()> {
   let path = boot_recovery_marker_path(home);
   let parent = path.parent().context("boot-recovery marker has no parent directory")?;
   std::fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
-  let temporary = path.with_extension("json.tmp");
   let payload = serde_json::json!({"pass_started_at": pass_started_at.to_python_isoformat()});
   let text = charliebot_core::pyfmt::json_dumps(&payload, &charliebot_core::pyfmt::PYTHON_JSON_DEFAULT);
-  let mut file = std::fs::File::create(&temporary).with_context(|| format!("creating {}", temporary.display()))?;
-  file.write_all(text.as_bytes()).with_context(|| format!("writing {}", temporary.display()))?;
-  // ext4 forces a file's data to disk before a rename only when the rename replaces an existing file
-  // (auto_da_alloc), so a fresh marker can read back empty after a power loss.
-  file.sync_all().with_context(|| format!("syncing {}", temporary.display()))?;
-  #[cfg(feature = "test-hooks")]
-  MARKER_WRITE_STEPS.with(|steps| steps.borrow_mut().push("sync"));
-  drop(file);
-  std::fs::rename(&temporary, &path)
-    .with_context(|| format!("renaming {} to {}", temporary.display(), path.display()))?;
-  #[cfg(feature = "test-hooks")]
-  MARKER_WRITE_STEPS.with(|steps| steps.borrow_mut().push("rename"));
+  charliebot_core::fsutil::atomic_write_text_synced(&path, &text)
+    .with_context(|| format!("writing {}", path.display()))?;
   Ok(())
 }
 
@@ -1697,11 +1680,11 @@ mod tests {
   fn the_marker_write_syncs_the_temporary_file_once_before_the_rename() {
     let home = tempfile::tempdir().expect("temporary directory exists");
     let pass_started_at = UtcDateTime::parse("2026-10-21T03:00:00.123456+00:00").expect("the synthetic time parses");
-    MARKER_WRITE_STEPS.with(|steps| steps.borrow_mut().clear());
+    charliebot_core::fsutil::SYNCED_WRITE_STEPS.with(|steps| steps.borrow_mut().clear());
 
     write_boot_recovery_marker(home.path(), pass_started_at).expect("the marker writes");
 
-    let steps = MARKER_WRITE_STEPS.with(|steps| steps.borrow().clone());
+    let steps = charliebot_core::fsutil::SYNCED_WRITE_STEPS.with(|steps| steps.borrow().clone());
     assert_eq!(steps, ["sync", "rename"], "the temporary file syncs once, then the rename replaces the marker");
     let marker_path = home.path().join("state").join("boot_recovery.json");
     let marker: Value =

@@ -1,6 +1,6 @@
 # Agent processes (summary depth)
 
-Baseline: the Python tree at `085f024a5`. For each backend package under `src/backends/`, this document gives the
+Baseline: the Python tree at `4521a51b2`. For each backend package under `src/backends/`, this document gives the
 executable, the module and function that build argv, env, cwd and stdin, and the output format the server parses.
 Environment details are in `env.md` and transport files in `files.md` section 6.4. **UNVERIFIED** marks a
 statement not confirmed from source, with the reason.

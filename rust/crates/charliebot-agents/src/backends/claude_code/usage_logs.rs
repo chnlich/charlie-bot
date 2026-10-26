@@ -28,6 +28,7 @@ use charliebot_registry::usage::{
   QuotaAccount, RecordKind, SourceSweep, SweepScope, UsageOps, UsageRecord, UsageSourceImpl,
 };
 use serde_json::{Map, Value};
+use walkdir::WalkDir;
 
 use super::claude_accounts::{ClaudeAccountState, json_truthy};
 use super::claude_config::AccountsConfig;
@@ -110,28 +111,18 @@ fn labeled_login_dirs(dirs: &[PathBuf]) -> Vec<(String, PathBuf)> {
   labeled
 }
 
-/// Every `.jsonl` file under `root`, the files of a directory before its subdirectories'. A symlinked directory is not
-/// entered, and a symlinked file is listed (`ndjson.iter_jsonl_files`).
+/// Every `.jsonl` file under `root`. A directory is not a transcript, and a symlinked directory is not entered
+/// (`ndjson.iter_jsonl_files`).
 fn walk_jsonl(root: &Path) -> anyhow::Result<Vec<PathBuf>> {
   let mut found = Vec::new();
-  let mut stack = vec![root.to_path_buf()];
-  while let Some(dir) = stack.pop() {
-    let mut subdirs = Vec::new();
-    let mut files = Vec::new();
-    for entry in fs::read_dir(&dir).with_context(|| format!("listing {}", dir.display()))? {
-      let entry = entry.with_context(|| format!("listing {}", dir.display()))?;
-      let path = entry.path();
-      let is_symlink = entry.file_type()?.is_symlink();
-      if path.is_dir() {
-        if !is_symlink {
-          subdirs.push(path);
-        }
-      } else if entry.file_name().to_string_lossy().ends_with(".jsonl") {
-        files.push(path);
-      }
+  for entry in WalkDir::new(root).follow_links(false) {
+    let entry = entry.with_context(|| format!("listing {}", root.display()))?;
+    if entry.depth() == 0 || entry.path().is_dir() {
+      continue;
     }
-    stack.extend(subdirs);
-    found.extend(files);
+    if entry.file_name().to_string_lossy().ends_with(".jsonl") {
+      found.push(entry.into_path());
+    }
   }
   Ok(found)
 }

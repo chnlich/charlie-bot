@@ -35,24 +35,28 @@ thread_local! {
   static LINE_PARSES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
-/// Read every physical line of an NDJSON file, including a final line without `\n`.
-pub(crate) fn read_lines(path: &Path) -> StoreResult<Vec<Vec<u8>>> {
+/// Parse every physical line into the compact event form, including a final line without `\n`.
+pub(crate) fn read_file_compact(path: &Path) -> StoreResult<Vec<CompactValue>> {
   let file = match fs::File::open(path) {
     Ok(file) => file,
     Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
     Err(error) => return Err(StoreError::new(format!("{}: {error}", path.display()))),
   };
-  BufReader::new(file)
-    .split(b'\n')
-    .collect::<Result<Vec<_>, _>>()
-    .map_err(|error| StoreError::new(format!("{}: {error}", path.display())))
+  let mut events = Vec::new();
+  for line in BufReader::new(file).split(b'\n') {
+    let raw = line.map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
+    events.extend(parse_line_compact(&raw));
+  }
+  Ok(events)
 }
 
-/// Read every physical line unless `should_stop` requests cancellation between lines.
-pub(crate) fn read_lines_until(
+/// Parse every physical line unless `should_stop` requests cancellation between lines.
+///
+/// A cancelled read returns no events so callers cannot publish a partial event cache.
+pub(crate) fn read_file_compact_until(
   path: &Path,
   should_stop: &mut impl FnMut() -> bool,
-) -> StoreResult<Option<Vec<Vec<u8>>>> {
+) -> StoreResult<Option<Vec<CompactValue>>> {
   if should_stop() {
     return Ok(None);
   }
@@ -61,34 +65,18 @@ pub(crate) fn read_lines_until(
     Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Some(Vec::new())),
     Err(error) => return Err(StoreError::new(format!("{}: {error}", path.display()))),
   };
-  let mut lines = Vec::new();
+  let mut events = Vec::new();
   for line in BufReader::new(file).split(b'\n') {
     if should_stop() {
       return Ok(None);
     }
-    lines.push(line.map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?);
+    let raw = line.map_err(|error| StoreError::new(format!("{}: {error}", path.display())))?;
+    events.extend(parse_line_compact(&raw));
   }
   if should_stop() {
     return Ok(None);
   }
-  Ok(Some(lines))
-}
-
-/// Parse every physical line unless `should_stop` requests cancellation between lines.
-///
-/// A cancelled read returns no values so callers cannot publish a partial event cache.
-/// Parse every physical line into the compact event form, including a final line without `\n`.
-pub(crate) fn read_file_compact(path: &Path) -> StoreResult<Vec<CompactValue>> {
-  Ok(read_lines(path)?.iter().filter_map(|raw| parse_line_compact(raw)).collect())
-}
-
-/// Parse every physical line into the compact event form unless `should_stop` requests
-/// cancellation between lines. A cancelled read returns no events.
-pub(crate) fn read_file_compact_until(
-  path: &Path,
-  should_stop: &mut impl FnMut() -> bool,
-) -> StoreResult<Option<Vec<CompactValue>>> {
-  Ok(read_lines_until(path, should_stop)?.map(|lines| lines.iter().filter_map(|raw| parse_line_compact(raw)).collect()))
+  Ok(Some(events))
 }
 
 /// One event as an NDJSON line: Python `json.dumps(..., ensure_ascii=False)` and the newline.
@@ -233,6 +221,7 @@ mod tests {
   fn cancelled_read_checks_each_line_and_returns_no_partial_values() {
     let path = tempfile::NamedTempFile::new().unwrap();
     std::fs::write(path.path(), b"{\"id\":1}\n{\"id\":2}\n{\"id\":3}\n").unwrap();
+    LINE_PARSES.with(|count| count.set(0));
     let mut checks = 0;
     let events = read_file_compact_until(path.path(), &mut || {
       checks += 1;
@@ -242,5 +231,23 @@ mod tests {
 
     assert_eq!(checks, 4, "the read checked once before opening and before each parsed line");
     assert!(events.is_none(), "cancellation discards the parsed prefix");
+    LINE_PARSES.with(|count| assert_eq!(count.get(), 2, "the first two lines were parsed before cancellation"));
+  }
+
+  #[test]
+  fn cancellation_after_the_last_line_discards_the_fully_parsed_file() {
+    let path = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(path.path(), b"{\"id\":1}\n{\"id\":2}\n{\"id\":3}\n").unwrap();
+    LINE_PARSES.with(|count| count.set(0));
+    let mut checks = 0;
+    let events = read_file_compact_until(path.path(), &mut || {
+      checks += 1;
+      checks == 5
+    })
+    .unwrap();
+
+    assert_eq!(checks, 5, "the read checks for cancellation after the final line");
+    assert!(events.is_none(), "a stop after parsing the final line discards the event cache");
+    LINE_PARSES.with(|count| assert_eq!(count.get(), 3, "all three lines were parsed before the final check"));
   }
 }

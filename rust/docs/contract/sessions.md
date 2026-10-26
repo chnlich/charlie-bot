@@ -13,7 +13,7 @@ Every route in this file returns JSON unless it says otherwise. A missing sessio
 ### `GET /api/sessions/`
 
 - Auth: access key.
-- Handler: `src/runtime/api/sessions.py:387`.
+- Handler: `src/runtime/api/sessions.py:389`.
 - Parameters: none.
 - A request to `/api/sessions` (no slash) gets 307 to `http://<host>/api/sessions/`.
 
@@ -42,7 +42,7 @@ Side effects: none on disk. The server caches the rendered body in memory.
 ### `GET /api/sessions/archived`
 
 - Auth: access key.
-- Handler: `src/runtime/api/sessions.py:471`.
+- Handler: `src/runtime/api/sessions.py:473`.
 
 | Name | In | Type | Required | Default |
 |---|---|---|---|---|
@@ -86,20 +86,20 @@ Responses:
 ### `GET /api/sessions/starred`
 
 - Auth: access key.
-- Handler: `src/runtime/api/sessions.py:513`.
+- Handler: `src/runtime/api/sessions.py:515`.
 - Parameters: none.
 - 200: a list of listing rows for the starred sessions, archived ones included, newest first. `task.goal` is removed. No sidebar overlay.
 
 ### `GET /api/sessions/groups`
 
 - Auth: access key.
-- Handler: `src/runtime/api/sessions.py:535`.
+- Handler: `src/runtime/api/sessions.py:537`.
 - 200: a sorted list of the distinct group names over all sessions, for example `["Synthetic group"]`.
 
 ### `GET /api/sessions/status`
 
 - Auth: access key.
-- Handler: `src/runtime/api/sessions.py:586`.
+- Handler: `src/runtime/api/sessions.py:588`.
 
 | Name | In | Type | Required | Default |
 |---|---|---|---|---|
@@ -143,7 +143,7 @@ Side effects:
 ### `GET /api/sessions/tree`
 
 - Auth: access key.
-- Handler: `src/runtime/api/sessions.py:841`.
+- Handler: `src/runtime/api/sessions.py:843`.
 
 | Name | In | Type | Required | Default | Validation |
 |---|---|---|---|---|---|
@@ -173,7 +173,7 @@ Errors (task mapping):
 ### `GET /api/sessions/search`
 
 - Auth: access key.
-- Handler: `src/runtime/api/sessions.py:861`.
+- Handler: `src/runtime/api/sessions.py:866`.
 
 | Name | In | Type | Required | Default |
 |---|---|---|---|---|
@@ -191,7 +191,7 @@ UNVERIFIED: the search ranking and the result cap live in `src/runtime/session_s
 ### `GET /api/sessions/{session_id}`
 
 - Auth: access key.
-- Handler: `src/runtime/api/sessions.py:1383`.
+- Handler: `src/runtime/api/sessions.py:1367`.
 - Dependency: `require_session`.
 - 200: the detail form (see [shapes.md](shapes.md#detail-form)).
 - Errors: 404 `Session not found`; task mapping errors from `session_detail`.
@@ -199,7 +199,7 @@ UNVERIFIED: the search ranking and the result cap live in `src/runtime/session_s
 ### `GET /api/sessions/{session_id}/bootstrap`
 
 - Auth: access key.
-- Handler: `src/runtime/api/sessions.py:1014`.
+- Handler: `src/runtime/api/sessions.py:1019`.
 - Dependency: `require_session`.
 - 200 (pre-compressed):
 
@@ -232,7 +232,7 @@ Side effects: none. The route does not mark the session read.
 ### `GET /api/sessions/{session_id}/usage`
 
 - Auth: access key.
-- Handler: `src/runtime/api/sessions.py:1047`.
+- Handler: `src/runtime/api/sessions.py:1052`.
 - Dependency: `require_session`.
 - 200:
 
@@ -255,7 +255,7 @@ Side effects: none. The route does not mark the session read.
 ### `GET /api/sessions/{session_id}/events`
 
 - Auth: access key.
-- Handler: `src/runtime/api/sessions.py:1076`.
+- Handler: `src/runtime/api/sessions.py:1081`.
 - Dependency: `require_session` (it runs before the query check).
 
 | Name | In | Type | Required | Default |
@@ -274,7 +274,7 @@ Errors: 404 `Session not found`; 422 when `before` is missing or not an int.
 ### `GET /api/sessions/{session_id}/transcript`
 
 - Auth: access key.
-- Handler: `src/runtime/api/sessions.py:1138`.
+- Handler: `src/runtime/api/sessions.py:1143`.
 - Dependency: `require_session`.
 
 | Name | In | Type | Required | Default | Validation |
@@ -299,14 +299,14 @@ Errors: 404 `Session not found`; 422 when `before` is missing or not an int.
 ### `GET /api/sessions/{session_id}/pending-triggers`
 
 - Auth: access key.
-- Handler: `src/runtime/api/sessions.py:992`.
+- Handler: `src/runtime/api/sessions.py:997`.
 - Dependency: `require_session`.
 - 200: a list of pending triggers (see [shapes.md](shapes.md#pending-trigger)), `fire_at` ascending. Fired and cancelled triggers are left out.
 
 ### `GET /api/sessions/{session_id}/events.jsonl`
 
 - Auth: access key.
-- Handler: `src/runtime/api/sessions.py:1541`.
+- Handler: `src/runtime/api/sessions.py:1525`.
 - No `require_session`. The route checks the file only.
 
 | Status | Case | Body |
@@ -320,7 +320,7 @@ The server memoizes the gzip form per file (mtime, size).
 ### `GET /api/sessions/{session_id}/runs`
 
 - Auth: access key.
-- Handler: `src/runtime/api/sessions.py:1563`.
+- Handler: `src/runtime/api/sessions.py:1547`.
 - Dependency: `require_session`.
 
 | Name | In | Type | Required | Default | Validation |
@@ -342,7 +342,7 @@ The server memoizes the gzip form per file (mtime, size).
 ### `GET /api/sessions/{session_id}/effective-prompt`
 
 - Auth: access key.
-- Handler: `src/runtime/api/sessions.py:1606`.
+- Handler: `src/runtime/api/sessions.py:1593`.
 - Dependency: `require_session`.
 
 | Name | In | Type | Required | Default |
@@ -376,7 +376,7 @@ The server memoizes the gzip form per file (mtime, size).
 ### `GET /api/sessions/{session_id}/runs/{run_id}/context`
 
 - Auth: access key.
-- Handler: `src/runtime/api/sessions.py:1666`.
+- Handler: `src/runtime/api/sessions.py:1653`.
 - Dependency: `require_session`.
 
 | Status | Case | `detail` |
@@ -406,7 +406,7 @@ The server memoizes the gzip form per file (mtime, size).
 ### `GET /api/sessions/{session_id}/task-inputs/pending`
 
 - Auth: access key.
-- Handler: `src/runtime/api/sessions.py:1743`.
+- Handler: `src/runtime/api/sessions.py:1730`.
 - Dependency: `require_session`.
 - 200: `{"items":[{"id","type","timestamp","actor","source_session_id","from_session_name","text"}]}`. `timestamp` is a pydantic datetime (`Z`). `text` is the event `content`, else `summary`, else `""`.
 - Errors: task mapping (400, 404).
@@ -416,7 +416,7 @@ The server memoizes the gzip form per file (mtime, size).
 ### `POST /api/sessions/`
 
 - Auth: access key + caller.
-- Handler: `src/runtime/api/sessions.py:407`.
+- Handler: `src/runtime/api/sessions.py:409`.
 - Body: `CreateSessionRequest` (JSON object, required).
 
 | Field | Type | Required |
@@ -459,7 +459,7 @@ Side effects:
 ### `POST /api/sessions/groups/rename`
 
 - Auth: access key.
-- Handler: `src/runtime/api/sessions.py:541`.
+- Handler: `src/runtime/api/sessions.py:543`.
 - Body: `{"old_name": string, "new_name": string}`, both required.
 - 200: `{"updated": <number of sessions changed>}`.
 - Side effects: rewrites the `group` field of each session in the old group.
@@ -467,7 +467,7 @@ Side effects:
 ### `POST /api/sessions/groups/delete`
 
 - Auth: access key.
-- Handler: `src/runtime/api/sessions.py:551`.
+- Handler: `src/runtime/api/sessions.py:553`.
 - Body: `{"group": string}`, required.
 - 200: `{"updated": <count>}`.
 - Side effects: sets `group` to null on each session in the group.
@@ -475,7 +475,7 @@ Side effects:
 ### `POST /api/sessions/{session_id}/read`
 
 - Auth: access key.
-- Handler: `src/runtime/api/sessions.py:1030`.
+- Handler: `src/runtime/api/sessions.py:1035`.
 - Dependency: `require_session`.
 - Body: none.
 - 200: `{"session_id": "<id>", "has_unread": false}`.
@@ -484,7 +484,7 @@ Side effects:
 ### `POST /api/sessions/{session_id}/backend`
 
 - Auth: access key.
-- Handler: `src/runtime/api/sessions.py:1291`.
+- Handler: `src/runtime/api/sessions.py:1301`.
 - Dependency: `require_session`.
 - Body: `{"backend": string}`, required.
 
@@ -501,25 +501,10 @@ Side effects of a switch:
 2. It writes the new `backend` to the metadata, and sends a sidebar `backend_switched` frame.
 3. It appends a `backend_switched` chat event `{"type","from","to","previous_native_backend","previous_native_session_id"}` and broadcasts it.
 
-### `PUT /api/sessions/{session_id}/resource-class`
-
-- Auth: access key + caller, operator only.
-- Handler: `src/runtime/api/sessions.py:1357`.
-- Dependency: `require_caller`. No `require_session`; the store lookup gives 404 when the session is absent.
-- Body: `{"resource_class": "agent" | "repair"}`, extra keys refused (`ResourceClassRequest`, `src/infra/models.py:526`). UNVERIFIED: another value gives 422 `literal_error`, and whether an agent caller with an invalid body gets 403 or 422; neither was probed.
-
-| Status | Case | Body |
-|---|---|---|
-| 403 | Agent caller | `{"detail":"setting a session's resource class requires operator credentials"}` |
-| 404 | Session absent | `{"detail":"Session not found"}` |
-| 200 | | `{"id": <session id>, "resource_class": "agent" \| "repair"}` (`ResourceClassResponse`) |
-
-Side effects: writes `resource_class` and `updated_at` on this session's `metadata.json`, and logs `session_resource_class_set` with the class. Descendants are not written: each spawn resolves the nearest `repair` mark on the task-parent chain (`src/runtime/resource_class.py`). Session cgroup placement that follows the mark is not ported (see `PORT_STATUS.md`, `todo`).
-
 ### `POST /api/sessions/{session_id}/archive`
 
 - Auth: access key + caller.
-- Handler: `src/runtime/api/sessions.py:1396`.
+- Handler: `src/runtime/api/sessions.py:1380`.
 - Dependency: `require_session`, then `require_caller`.
 - Body: `{"request_id": string, "summary": string = "", "result_refs": [string], "run_ids": [string]}`. Unknown keys give 422.
 
@@ -535,7 +520,7 @@ Side effects: an operator archive writes one `task_closed` event with outcome `a
 ### `DELETE /api/sessions/{session_id}/permanent`
 
 - Auth: access key + caller.
-- Handler: `src/runtime/api/sessions.py:1422`.
+- Handler: `src/runtime/api/sessions.py:1406`.
 
 | Status | Case | Body |
 |---|---|---|
@@ -548,7 +533,7 @@ Side effects: removes the session directory under the control lock.
 ### `POST /api/sessions/{session_id}/unarchive`
 
 - Auth: access key + caller, operator only.
-- Handler: `src/runtime/api/sessions.py:1439`.
+- Handler: `src/runtime/api/sessions.py:1423`.
 - Dependency: `require_session`, then `require_caller`.
 
 | Status | Case | Body |
@@ -571,7 +556,7 @@ Side effects: one `task_reopened` event (reason `sidebar unarchive`) for the tar
 ### `POST /api/sessions/{session_id}/rounds/{round_id}/rate`
 
 - Auth: access key.
-- Handler: `src/runtime/api/sessions.py:1478`.
+- Handler: `src/runtime/api/sessions.py:1462`.
 - Dependency: `require_session`.
 - Body: `{"rating": "thumbs_up" | "thumbs_down" | null}`. The key is required. Another value gives 422 `literal_error`.
 - 200: the model form.
@@ -580,7 +565,7 @@ Side effects: one `task_reopened` event (reason `sidebar unarchive`) for the tar
 ### `PATCH /api/sessions/{session_id}`
 
 - Auth: access key + caller.
-- Handler: `src/runtime/api/sessions.py:1496`.
+- Handler: `src/runtime/api/sessions.py:1480`.
 - Body: `PatchSessionTaskRequest`. Unknown keys give 422 `extra_forbidden`.
 
 | Field | Type |
@@ -609,7 +594,7 @@ Any other body goes to `task_mgr.patch_task` with the caller. 200 is the full de
 ### `POST /api/sessions/{session_id}/group`
 
 - Auth: access key.
-- Handler: `src/runtime/api/sessions.py:1524`.
+- Handler: `src/runtime/api/sessions.py:1508`.
 - Body: `{"group": string | null}` (the key may be absent; then null).
 - 200: the model form. 404 `Session not found` when absent.
 - Side effects: writes `group` verbatim, sends a sidebar `session_group_changed` frame.
@@ -617,7 +602,7 @@ Any other body goes to `task_mgr.patch_task` with the caller. 200 is the full de
 ### `POST /api/sessions/{session_id}/task-inputs/acknowledge`
 
 - Auth: access key + caller.
-- Handler: `src/runtime/api/sessions.py:1773`.
+- Handler: `src/runtime/api/sessions.py:1760`.
 - Dependency: `require_session`.
 - Body: `{"request_id": string, "input_ids": [string], "note": string = ""}`. Unknown keys give 422.
 - 200: `{"session_id","acknowledged_event_id","input_ids","already_acknowledged"}`.
@@ -627,7 +612,7 @@ Any other body goes to `task_mgr.patch_task` with the caller. 200 is the full de
 ### `POST /api/sessions/{session_id}/cancel`
 
 - Auth: access key + caller.
-- Handler: `src/runtime/api/sessions.py:1804`.
+- Handler: `src/runtime/api/sessions.py:1791`.
 - Dependency: `require_session`.
 - Body: `{"request_id": string, "reason": string}`, both required.
 - 200: the detail form plus `stopped_runs`, one row per stopped Run: `{"run_id": string, "outcome": "interrupted" | "never_launched" | null}`.
@@ -639,7 +624,7 @@ Any other body goes to `task_mgr.patch_task` with the caller. 200 is the full de
 ### `POST /api/sessions/{session_id}/fork`
 
 - Auth: access key + caller.
-- Handler: `src/runtime/api/sessions.py:1215`.
+- Handler: `src/runtime/api/sessions.py:1237`.
 - Dependency: `require_session`, then `require_caller`.
 - Body: optional `{"event_index": int | null, "backend": string | null}`.
 
@@ -660,14 +645,14 @@ Side effects:
 ### `POST /api/sessions/{session_id}/elone`
 
 - Auth: access key + caller.
-- Handler: `src/runtime/api/sessions.py:1256`.
+- Handler: `src/runtime/api/sessions.py:1272`.
 - Body: `{"event_index": int, "backend": string | null}`. `event_index` is required.
 - Responses and side effects: as fork. The new session starts fresh and its bootstrap prompt (`ELONE_BOOTSTRAP_OPENER`) asks the agent to read the parent's log up to the takeover point.
 
 ### `POST /api/sessions/{session_id}/retry`
 
 - Auth: access key + caller, operator only.
-- Handler: `src/runtime/api/sessions.py:1715`.
+- Handler: `src/runtime/api/sessions.py:1702`.
 - Dependency: `require_session`.
 - Body: `{"request_id": string, "run_id": string}`. Unknown keys give 422.
 
@@ -682,7 +667,7 @@ Side effects: creates a queued retry run with a stable id per (session, `request
 ### `POST /api/sessions/{session_id}/runs/{run_id}/cancel`
 
 - Auth: access key + caller, own run.
-- Handler: `src/runtime/api/sessions.py:1841`.
+- Handler: `src/runtime/api/sessions.py:1828`.
 - No `require_session`.
 - Body: `{"request_id": string}`. Unknown keys give 422.
 

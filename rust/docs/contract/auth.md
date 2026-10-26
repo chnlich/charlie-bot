@@ -97,11 +97,11 @@ The server passes the token to an agent process in the environment variable `CHA
 
 ## Caller identity (`require_caller`)
 
-Source: `src/runtime/api/deps.py:108`. The result is an operator identity or an agent identity.
+Source: `src/runtime/api/deps.py:129`. The result is an operator identity or an agent identity.
 
 1. No bearer: operator. The operator's session is the `X-CharlieBot-Caller-Session` header value, or none when the header is absent or empty.
 2. Bearer equal to the access key: operator, with the same header rule.
-3. Any other bearer, with no access key configured: 401 `run token presented (CHARLIEBOT_RUN_TOKEN) but no signing key is configured`.
+3. Any other bearer, with no access key configured: verification fails with `run token presented but no signing key is configured`, so 401 `invalid run token: run token presented but no signing key is configured`.
 4. A bearer that fails verification: 401 `invalid run token: <reason>`.
 5. A verified token whose run fails the active-run check (`src/runtime/run_identity.py:32`):
    - no run record for (`session_id`, `run_id`), or a `run_finished` event for the run: 401 `run token does not reference an active run`;

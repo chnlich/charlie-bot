@@ -43,18 +43,19 @@ When a handler raises after `accept`, uvicorn closes the socket with code 1011. 
 
 ## `/ws/sessions/{session_id}`
 
-Handler: `server.py:358`.
+Handler: `server.py:361`.
 
 ### Connect
 
 - Path parameter `session_id`: any string. The handler does not check that the session exists.
 - Query parameter `token`: the access key, when one is configured.
+- Query parameter `cursor`: the number of chat events the client already has. Required; see the cursor section below.
 
 ### Sequence
 
 1. Auth, then `accept`.
 2. Log `session_ws_connected`.
-3. Wait up to 5 s (`SESSION_WS_CURSOR_TIMEOUT`, `src/infra/timeouts.py:119`) for one client text frame.
+3. Read the `cursor` query parameter. A missing value, a value with a non-digit or non-ASCII character, or a value longer than 19 characters closes the socket with code 4400 (the `session_ws_cursor_invalid` warning) before any subscription. No frame is awaited.
 4. Subscribe the socket to the channels `session:<session_id>` and `sidebar`.
 5. Send the catch-up frames.
 6. Send `{"type":"catchup_complete"}`.
@@ -63,22 +64,14 @@ Handler: `server.py:358`.
 
 The subscription happens before the catch-up read. Thus no event falls between the catch-up and the live stream. An event can arrive twice: once in catch-up and once live.
 
-### Cursor frame (client to server, first frame only)
+### Cursor query parameter
 
-```json
-{"type": "cursor", "index": 42}
-```
+`GET /ws/sessions/{session_id}?cursor=42`. The value is decimal digits only, at most 19 characters, and `int()` converts it, so a leading zero is accepted.
 
-- `index` is the number of chat events the client already has. The handler applies `int()` to it, so `2.7` becomes `2`.
-- A missing `index` means 0.
-- These cases leave the cursor at 0 and continue:
-  - no frame within 5 s;
-  - a frame that is not valid JSON;
-  - a JSON object whose `type` is not `cursor`;
-  - an `index` that `int()` rejects.
-- A JSON frame that is not an object (for example `[]` or `1`) raises `AttributeError` in the handler. The socket closes before the catch-up. This is a defect of the Python server; the probe saw the exception.
-- The Rust handler logs `session_ws_cursor_parse_failed` and continues from cursor 0 when the JSON value is not an object.
-- A client disconnect during the wait ends the handler with no further frames.
+- `cursor` is the number of chat events the client already has. It is read from the handshake URL, not from a client frame.
+- A missing `cursor`, a non-decimal or non-ASCII value and a value longer than 19 characters close the socket with code 4400 before the subscription. The server sends no frame first.
+- UNVERIFIED: a value above the signed 64-bit maximum (19 digits) was not probed. Python's `int()` holds it, and the catch-up then treats the cursor as at or past the total.
+- The Rust handler still reads the first client text frame, not the query (`rust/crates/charliebot-session-api/src/websocket.rs`, `receive_cursor`); its port is tracked in `PORT_STATUS.md`.
 
 ### Catch-up
 
@@ -131,9 +124,9 @@ The `message` and `stream` delta shapes are in [shapes.md](shapes.md#chat-messag
 
 ### Keepalive
 
-- The server waits for client text frames with a 30 s timeout (`WS_KEEPALIVE_TIMEOUT`, `src/infra/timeouts.py:123`).
+- The server waits for client text frames with a 30 s timeout (`WS_KEEPALIVE_TIMEOUT`, `src/infra/timeouts.py:134`).
 - After 30 s with no client text frame, the server sends `{"type":"ping"}`.
-- The server ignores the content of client text frames after the cursor frame.
+- The server ignores the content of client text frames.
 - A client binary frame raises inside `receive_text`. The handler logs `session_ws_closed` and ends.
 
 ### Live frames on the session channel

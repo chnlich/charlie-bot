@@ -117,7 +117,7 @@ Ids at or below the watermark are acked again with no change.
 
 ### `POST /api/internal/discord/read`
 
-- Handler: `src/features/discord/api.py:74`.
+- Handler: `src/features/discord/api.py:75`.
 - Body: `{"session_id": string, "url": string or null, "limit": int}`. `limit` defaults to 50 and must be 1..100 (422 otherwise).
 
 Without `url` (the session's own thread):
@@ -151,7 +151,7 @@ Any other Discord API failure gives 502 with the error text.
 
 ### `POST /api/internal/discord/check`
 
-- Handler: `src/features/discord/api.py:100`.
+- Handler: `src/features/discord/api.py:101`.
 - Body: `{}`. Any key gives 422.
 
 | Status | Case | Body |

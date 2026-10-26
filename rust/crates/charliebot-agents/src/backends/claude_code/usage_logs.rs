@@ -27,6 +27,7 @@ use charliebot_core::pyfmt::python_str;
 use charliebot_registry::usage::{
   QuotaAccount, RecordKind, SourceSweep, SweepScope, UsageOps, UsageRecord, UsageSourceImpl,
 };
+use memchr::memmem;
 use serde_json::{Map, Value};
 use walkdir::WalkDir;
 
@@ -145,7 +146,7 @@ pub fn read_transcript(path: &Path, account: &str) -> anyhow::Result<(String, Ve
     if read == 0 || raw.last() != Some(&b'\n') {
       break;
     }
-    if !raw.windows(MARKER.len()).any(|window| window == MARKER) {
+    if memmem::find(&raw, MARKER).is_none() {
       continue;
     }
     let Some(line) = parse_marker_line(&raw, path)? else {

@@ -15,6 +15,7 @@ use charliebot_core::timefmt::utc_now_iso;
 use charliebot_registry::usage::{PANEL_EXPIRED, PANEL_WINDOWS, QuotaAccount};
 use charliebot_store::metadata::UtcDateTime;
 use futures_util::future::BoxFuture;
+use memchr::memchr;
 use serde_json::{Map, Value, json};
 use time::format_description::well_known::Rfc3339;
 use time::{Duration, OffsetDateTime, UtcOffset};
@@ -288,7 +289,7 @@ fn read_latest_token_count(
   let mut blob = Vec::new();
   file.read_to_end(&mut blob)?;
   if offset > 0 {
-    blob = match blob.iter().position(|byte| *byte == b'\n') {
+    blob = match memchr(b'\n', &blob) {
       Some(newline) => blob[newline + 1..].to_vec(),
       None => Vec::new(),
     };

@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use anyhow::{Context, bail};
 use charliebot_registry::usage::{FreelistResult, SourceSweep, SweepScope};
+use memchr::memmem;
 use rusqlite::Connection;
 
 use super::usage_logs::open_read_only;
@@ -119,7 +120,7 @@ fn count_writers(proc_root: &Path) -> anyhow::Result<usize> {
 /// Whether a command line holds `opencode serve`, with its NUL separators read as spaces.
 fn contains_serve(cmdline: &[u8]) -> bool {
   let spaced: Vec<u8> = cmdline.iter().map(|&byte| if byte == 0 { b' ' } else { byte }).collect();
-  spaced.windows(SERVE_CMDLINE.len()).any(|window| window == SERVE_CMDLINE)
+  memmem::find(&spaced, SERVE_CMDLINE).is_some()
 }
 
 /// The store's free pages in bytes, which a manual vacuum hands back (`_opencode_freelist_bytes`). A failed read is

@@ -53,6 +53,10 @@ class TranscriptionRejected(Exception):  # noqa: N818
   rejection — it propagates as the transport's own error."""
 
 
+class BackendSelectionError(ValueError):
+  """The named backend is unknown or cannot run now; nothing was sent to a backend."""
+
+
 class TranscriptionBackend(abc.ABC):
   """One speech-to-text engine the voice input can select by id.
 

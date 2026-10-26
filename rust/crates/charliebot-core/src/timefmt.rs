@@ -5,6 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use time::OffsetDateTime;
 use time::format_description::{self, BorrowedFormatItem};
+use time::macros::format_description;
 
 /// `datetime.now(UTC).isoformat()`: `YYYY-MM-DDTHH:MM:SS.ffffff+00:00`, without the fraction when the
 /// microsecond is zero (CPython's `isoformat` drops a zero fraction).
@@ -17,30 +18,30 @@ pub fn iso_from_system_time(instant: SystemTime) -> String {
   isoformat(OffsetDateTime::from(instant))
 }
 
-/// Render a datetime with Python `datetime.isoformat()`'s local clock, microsecond and UTC-offset form.
+const ISO_WHOLE: &[BorrowedFormatItem<'static>] =
+  format_description!("[year]-[month]-[day]T[hour]:[minute]:[second][offset_hour sign:mandatory]:[offset_minute]");
+const ISO_FRACTION: &[BorrowedFormatItem<'static>] = format_description!(
+  "[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:6]\
+   [offset_hour sign:mandatory]:[offset_minute]"
+);
+const ISO_OFFSET_SECONDS: &[BorrowedFormatItem<'static>] = format_description!(
+  "[year]-[month]-[day]T[hour]:[minute]:[second][offset_hour sign:mandatory]:[offset_minute]:[offset_second]"
+);
+const ISO_FRACTION_OFFSET_SECONDS: &[BorrowedFormatItem<'static>] = format_description!(
+  "[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:6]\
+   [offset_hour sign:mandatory]:[offset_minute]:[offset_second]"
+);
+
+/// Render a datetime with Python `datetime.isoformat()`'s local clock, microsecond and UTC-offset form. The fraction
+/// appears only when the microsecond is non-zero, and the offset's seconds only when they are non-zero.
 pub fn isoformat(moment: OffsetDateTime) -> String {
-  let micros = moment.microsecond();
-  let base = format!(
-    "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}",
-    moment.year(),
-    u8::from(moment.month()),
-    moment.day(),
-    moment.hour(),
-    moment.minute(),
-    moment.second()
-  );
-  let offset_seconds = moment.offset().whole_seconds();
-  let sign = if offset_seconds < 0 { '-' } else { '+' };
-  let offset_seconds = offset_seconds.abs();
-  let hours = offset_seconds / 3_600;
-  let minutes = offset_seconds % 3_600 / 60;
-  let seconds = offset_seconds % 60;
-  let offset = if seconds == 0 {
-    format!("{sign}{hours:02}:{minutes:02}")
-  } else {
-    format!("{sign}{hours:02}:{minutes:02}:{seconds:02}")
+  let format = match (moment.microsecond() != 0, moment.offset().seconds_past_minute() != 0) {
+    (false, false) => ISO_WHOLE,
+    (true, false) => ISO_FRACTION,
+    (false, true) => ISO_OFFSET_SECONDS,
+    (true, true) => ISO_FRACTION_OFFSET_SECONDS,
   };
-  if micros == 0 { format!("{base}{offset}") } else { format!("{base}.{micros:06}{offset}") }
+  moment.format(format).expect("a datetime formats as isoformat")
 }
 
 /// `email.utils.formatdate(seconds, usegmt=True)`: `Sun, 18 Oct 2026 07:15:40 GMT`.
@@ -107,6 +108,15 @@ mod tests {
     assert_eq!(isoformat(local), "2025-10-18T00:15:40-07:00");
     let fractional = local.replace_microsecond(685_829).unwrap();
     assert_eq!(isoformat(fractional), "2025-10-18T00:15:40.685829-07:00");
+  }
+
+  #[test]
+  fn isoformat_writes_offset_seconds_only_when_they_are_present() {
+    let utc = OffsetDateTime::from_unix_timestamp(1_760_771_740).unwrap();
+    let local = utc.to_offset(time::UtcOffset::from_hms(5, 30, 15).unwrap());
+    assert_eq!(isoformat(local), "2025-10-18T12:45:55+05:30:15");
+    let fractional = local.replace_microsecond(685_829).unwrap();
+    assert_eq!(isoformat(fractional), "2025-10-18T12:45:55.685829+05:30:15");
   }
 
   #[test]

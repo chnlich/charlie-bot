@@ -21,6 +21,7 @@ memchr = "2"
 memmap2.workspace = true
 mime_guess.workspace = true
 nix.workspace = true
+procfs.workspace = true
 regex.workspace = true
 reqwest = { workspace = true, features = ["json", "query", "stream"] }
 rusqlite.workspace = true

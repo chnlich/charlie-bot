@@ -8,9 +8,9 @@
 //! too, and marks its cached entry with `login_required` and the expired windows.
 
 use std::collections::{HashMap, HashSet};
-use std::fs::{self, OpenOptions};
+use std::fs;
 use std::io::Write;
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, LazyLock, Mutex};
@@ -638,22 +638,18 @@ fn write_renewed_credentials(
 /// Writes `text` to `path` through a uniquely named sibling that is created 0600 and swapped in by `rename`, so the token
 /// never appears at its final path readable by anyone but the owner. The sibling is removed when a step fails.
 fn write_private_atomically(path: &Path, text: &str) -> anyhow::Result<()> {
-  let name = path.file_name().context("a credentials path names a file")?.to_string_lossy().into_owned();
-  let temporary = path.with_file_name(format!(".{name}.{}.tmp", uuid::Uuid::new_v4().simple()));
-  let result = (|| -> std::io::Result<()> {
-    let mut file = OpenOptions::new().write(true).create_new(true).mode(0o600).open(&temporary)?;
-    file.write_all(text.as_bytes())?;
-    drop(file);
-    fs::rename(&temporary, path)
-  })();
-  if let Err(error) = result {
-    if let Err(cleanup) = fs::remove_file(&temporary)
-      && cleanup.kind() != std::io::ErrorKind::NotFound
-    {
-      tracing::warn!(target: "charliebot_agents", path = %temporary.display(), error = %cleanup, "atomic_write_cleanup_failed");
-    }
-    bail!("writing {}: {error}", path.display());
-  }
+  let name = path.file_name().context("a credentials path names a file")?.to_string_lossy();
+  let directory = path.parent().context("a credentials path names a file in a directory")?;
+  let mut temporary = tempfile::Builder::new()
+    .prefix(&format!(".{name}."))
+    .suffix(".tmp")
+    .permissions(std::fs::Permissions::from_mode(0o600))
+    .tempfile_in(directory)
+    .with_context(|| format!("creating a temporary credentials file beside {}", path.display()))?;
+  temporary
+    .write_all(text.as_bytes())
+    .with_context(|| format!("writing the temporary credentials for {}", path.display()))?;
+  temporary.persist(path).map_err(|error| anyhow::anyhow!("writing {}: {}", path.display(), error.error))?;
   Ok(())
 }
 
@@ -870,6 +866,25 @@ mod tests {
       ladder.push(seconds);
     }
     assert_eq!(ladder, [60.0, 120.0, 240.0, 480.0, 960.0, 1800.0, 1800.0]);
+  }
+
+  #[test]
+  fn renewed_credentials_publish_privately_in_one_step() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join(".credentials.json");
+    fs::write(&path, r#"{"claudeAiOauth":{"accessToken":"old","refreshToken":"r","expiresAt":1},"kept":true}"#)
+      .unwrap();
+
+    write_renewed_credentials(&path, "new-access", Value::String("new-refresh".to_string()), Some(42)).unwrap();
+
+    let published: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(published["claudeAiOauth"]["accessToken"], "new-access");
+    assert_eq!(published["claudeAiOauth"]["refreshToken"], "new-refresh");
+    assert_eq!(published["claudeAiOauth"]["expiresAt"], 42);
+    assert_eq!(published["kept"], true);
+    assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+    // No staged sibling survives the swap.
+    assert_eq!(fs::read_dir(root.path()).unwrap().count(), 1);
   }
 
   #[test]

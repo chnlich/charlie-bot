@@ -27,7 +27,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from src.infra import deferred
+from src.infra import deferred, registration
 
 CREDENTIALS_PREFIX = "credentials: "
 
@@ -46,7 +46,7 @@ def register_option_model(backend_type: str, model: str) -> None:
   first config parse. A second registration of one type raises ValueError.
   """
   if backend_type in _option_models:
-    raise ValueError(f"backend type {backend_type!r} is already registered")
+    raise registration.already_registered("backend type", backend_type)
   _option_models[backend_type] = model
 
 
@@ -71,7 +71,7 @@ def register_legacy_keys(legacy_keys: Mapping[str, str]) -> None:
   """Add ``legacy_keys`` to the map of retired top-level keys; a key that is already present raises ValueError."""
   for key in legacy_keys:
     if key in _legacy_keys:
-      raise ValueError(f"legacy key {key!r} is already registered")
+      raise registration.already_registered("legacy key", key)
   _legacy_keys.update(legacy_keys)
 
 
@@ -88,7 +88,7 @@ def register_config_section(key: str, model: str, *, legacy_keys: Mapping[str, s
   registration of one key raises ValueError.
   """
   if key in _section_models:
-    raise ValueError(f"config section {key!r} is already registered")
+    raise registration.already_registered("config section", key)
   register_legacy_keys(legacy_keys)
   _section_models[key] = model
 
@@ -108,7 +108,7 @@ def register_config_check(fn: str) -> None:
   keeps the previous config. A second registration of one function raises ValueError.
   """
   if fn in _checks:
-    raise ValueError(f"config check {fn!r} is already registered")
+    raise registration.already_registered("config check", fn)
   _checks.append(fn)
 
 

@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 
   from src.infra import config
 
-from src.runtime.hooks import registration
+from src.infra import registration
 
 PHASES = ("early", "ready")
 
@@ -85,7 +85,7 @@ def register_service(name: str, module: str, *, phase: str = "ready") -> None:
 def _register_pair(entries: list[tuple[str, str]], kind: str, module: str, attr: str) -> None:
   """Append one (module, attr) pair to *entries*; a second registration of one pair raises ValueError."""
   if (module, attr) in entries:
-    raise ValueError(f"{kind} {module}:{attr} is already registered")
+    raise registration.already_registered(kind, f"{module}:{attr}")
   entries.append((module, attr))
 
 

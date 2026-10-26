@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from src.infra import deferred
+from src.infra import deferred, registration
 
 if TYPE_CHECKING:
   from src.infra import models
@@ -30,7 +30,7 @@ def register_child_env(fn: str) -> None:
   every agent child process.
   """
   if fn in _child_env_fns:
-    raise ValueError(f"child env function {fn!r} is already registered")
+    raise registration.already_registered("child env function", fn)
   _child_env_fns.append(fn)
 
 
@@ -100,7 +100,7 @@ def register_usage_resolver(backend_type: str, cls: str) -> None:
   which returns a usage dict or None.
   """
   if backend_type in _usage_resolver_classes:
-    raise ValueError(f"usage resolver for {backend_type!r} is already registered")
+    raise registration.already_registered("usage resolver for", backend_type)
   _usage_resolver_classes[backend_type] = cls
 
 

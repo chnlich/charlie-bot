@@ -25,8 +25,7 @@ from typing import TYPE_CHECKING, Protocol, TypeVar
 if TYPE_CHECKING:
   from src.infra import config, models
 
-from src.infra import deferred
-from src.runtime.hooks import registration
+from src.infra import deferred, registration
 
 DEFAULT_WORKFLOW_RULES_FILE = "manager_workflows.md"
 

@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use charliebot_agents::transport::cgroup::SessionCgroupConfig;
+use charliebot_agents::transport::cgroup::{SessionCgroupConfig, use_fake_cgroup_hierarchy};
 use charliebot_agents::transport::spawn::{ChildStdin, SpawnSetup, SpawnSpec, spawn_one_shot, spawn_with_setup};
 use charliebot_core::cgroup::{ResourceClass, session_slice_dir};
 
@@ -28,8 +28,11 @@ fn write_metadata(sessions: &Path, session_id: &str, parent: Option<&str>, mark:
 /// A delegated base with both leaf slices, and the sessions directory of the same home.
 fn fixture(root: &Path) -> (PathBuf, PathBuf) {
   let base = root.join("user@1001.service");
-  fs::create_dir_all(session_slice_dir(&base, ResourceClass::Agent)).unwrap();
-  fs::create_dir_all(session_slice_dir(&base, ResourceClass::Repair)).unwrap();
+  for class in [ResourceClass::Agent, ResourceClass::Repair] {
+    let slice = session_slice_dir(&base, class);
+    fs::create_dir_all(&slice).unwrap();
+    fs::write(slice.join("cgroup.subtree_control"), "").unwrap();
+  }
   (base, root.join("sessions"))
 }
 
@@ -53,7 +56,11 @@ fn reset_session_cgroup_stand_ins(base: &Path) {
   ];
   for directory in directories {
     fs::create_dir_all(&directory).unwrap();
-    fs::write(directory.join("cgroup.procs"), "").unwrap();
+    // The control files the kernel publishes for a cgroup, which the fake tree must carry.
+    for name in ["cgroup.procs", "cgroup.threads", "cgroup.subtree_control", "memory.max", "memory.swap.max", "pids.max"]
+    {
+      fs::write(directory.join(name), "").unwrap();
+    }
   }
 }
 
@@ -78,6 +85,7 @@ fn assert_procs_hold(procs: &Path, pid: u32) {
 
 #[tokio::test]
 async fn spawn_follows_the_nearest_repair_mark() {
+  use_fake_cgroup_hierarchy();
   let root = tempfile::tempdir().unwrap();
   let (base, sessions) = fixture(root.path());
   write_metadata(&sessions, PARENT_ID, None, None);

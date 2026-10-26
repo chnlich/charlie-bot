@@ -1,13 +1,13 @@
 //! Session cgroups: one delegated directory per session, under the leaf slice of the session's resource class.
 
 use std::collections::HashSet;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fs;
-use std::fs::OpenOptions;
 use std::io;
-use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
+use cgfs::{Cgroup, EntryKind, Hierarchy, LeafSpec};
 use charliebot_core::cgroup::{
   ResourceClass, session_cgroup_name, session_cgroup_path, session_slice_dir, session_slice_dirs,
 };
@@ -89,16 +89,37 @@ pub fn ensure_session_cgroup(
       slice.display()
     )));
   }
+  let hierarchy = open_hierarchy(base_dir)
+    .map_err(|error| io::Error::other(format!("session cgroup slice {slice_name} cannot be opened: {error}")))?;
+  let slice_cgroup = hierarchy.at_path(relative(base_dir, &slice)?)?;
   // systemd enables a slice's controllers for the units inside it only, and a session cgroup is no unit: without this
   // its limit files would not exist.
-  fs::write(slice.join("cgroup.subtree_control"), "+memory +pids").map_err(|error| {
+  slice_cgroup.enable_subtree_control(&["memory".to_string(), "pids".to_string()]).map_err(|error| {
     io::Error::other(format!(
       "session cgroup slice {slice_name} cannot enable memory and pids for its children: {error}"
     ))
   })?;
   let path = session_cgroup_path(&slice, session_id);
-  match fs::create_dir(&path) {
-    Ok(()) => tracing::info!(
+  let leaf = slice_cgroup.child(OsStr::new(&session_cgroup_name(session_id)))?;
+  let created = !path.exists();
+  create_leaf(&leaf).map_err(|error| {
+    io::Error::other(format!("session cgroup slice {slice_name} cannot hold {}: {error}", path.display()))
+  })?;
+  let limits = [
+    ("memory.max", (memory_max_mb * 1024 * 1024).to_string()),
+    ("memory.swap.max", (swap_max_mb * 1024 * 1024).to_string()),
+    ("pids.max", if tasks_max > 0 { tasks_max.to_string() } else { "max".to_string() }),
+  ];
+  for (file, value) in limits {
+    leaf.control(file)?.write(value).map_err(|error| {
+      io::Error::other(format!(
+        "session cgroup slice {slice_name} cannot take the limit files in {}: {error}",
+        path.display()
+      ))
+    })?;
+  }
+  if created {
+    tracing::info!(
       target: "charliebot_agents",
       path = %path.display(),
       resource_class = resource_class.as_str(),
@@ -106,29 +127,42 @@ pub fn ensure_session_cgroup(
       swap_max_mb,
       tasks_max,
       "session_cgroup_created"
-    ),
-    Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
-    Err(error) => {
-      return Err(io::Error::other(format!(
-        "session cgroup slice {slice_name} cannot hold {}: {error}",
-        path.display()
-      )));
-    }
-  }
-  let limits = [
-    ("memory.max", (memory_max_mb * 1024 * 1024).to_string()),
-    ("memory.swap.max", (swap_max_mb * 1024 * 1024).to_string()),
-    ("pids.max", if tasks_max > 0 { tasks_max.to_string() } else { "max".to_string() }),
-  ];
-  for (file, value) in limits {
-    fs::write(path.join(file), value).map_err(|error| {
-      io::Error::other(format!(
-        "session cgroup slice {slice_name} cannot take the limit files in {}: {error}",
-        path.display()
-      ))
-    })?;
+    );
   }
   Ok(path)
+}
+
+/// Open `path` as a cgroup hierarchy root, which a delegated subtree is.
+fn open_hierarchy(path: &Path) -> io::Result<Hierarchy> {
+  if cfg!(test) || FAKE_HIERARCHY.load(Ordering::Relaxed) {
+    // SAFETY: unit tests and the tests that call `use_fake_cgroup_hierarchy` pass a private temporary directory that
+    // stands in for cgroupfs; the server never turns the flag on.
+    unsafe { Hierarchy::open_for_test(path) }
+  } else {
+    Hierarchy::open(path)
+  }
+}
+
+/// Whether the cgroup handles name a test tree. The tests' temporary directories hold the control files a cgroupfs
+/// would publish, but they are not cgroup2.
+static FAKE_HIERARCHY: AtomicBool = AtomicBool::new(false);
+
+/// Mark this process's cgroup bases as fake test trees. Integration tests call this before their first cgroup call.
+#[doc(hidden)]
+pub fn use_fake_cgroup_hierarchy() {
+  FAKE_HIERARCHY.store(true, Ordering::Relaxed);
+}
+
+/// The path of `path` relative to the hierarchy root `base_dir`, which is what a cgroup handle names.
+fn relative(base_dir: &Path, path: &Path) -> io::Result<PathBuf> {
+  path.strip_prefix(base_dir).map(Path::to_path_buf).map_err(|_| {
+    io::Error::other(format!("{} is outside the cgroup base {}", path.display(), base_dir.display()))
+  })
+}
+
+/// Create the leaf cgroup, keeping an existing one, as `mkdir` with `exist_ok` does.
+fn create_leaf(leaf: &Cgroup) -> io::Result<()> {
+  leaf.apply(&LeafSpec::new(), None)
 }
 
 /// Whether this user may write to `path`, by the `access(2)` check that the startup log also makes.
@@ -139,19 +173,16 @@ fn is_writable(path: &Path) -> bool {
 
 /// Read `(max, oom_kill)` from `memory.events`, or `None` when either counter is unavailable.
 pub fn read_memory_events(cgroup_dir: &Path) -> Option<(u64, u64)> {
-  let contents = fs::read_to_string(cgroup_dir.join("memory.events")).ok()?;
+  let hierarchy = open_hierarchy(cgroup_dir).ok()?;
+  let cgroup = hierarchy.root();
+  let events = cgroup.control("memory.events").ok()?.read_kv().ok()?;
   let mut max = None;
   let mut oom_kill = None;
-  for line in contents.lines() {
-    let (key, raw) = match line.split_once(' ') {
-      Some((key, raw)) => (key, raw),
-      None if line == "max" || line == "oom_kill" => return None,
-      None => continue,
-    };
+  for (key, value) in events {
     if key == "max" {
-      max = Some(raw.trim().parse().ok()?);
+      max = Some(value.parse().ok()?);
     } else if key == "oom_kill" {
-      oom_kill = Some(raw.trim().parse().ok()?);
+      oom_kill = Some(value.parse().ok()?);
     }
   }
   Some((max?, oom_kill?))
@@ -223,7 +254,7 @@ async fn resolve_resource_class(sessions_dir: &Path, session_id: &str) -> io::Re
 /// the spawn.
 pub fn move_process_to_cgroup(pid: u32, cgroup: &SessionCgroup) {
   let path = cgroup.path.join("cgroup.procs");
-  if let Err(error) = write_process_to_cgroup(pid, &path) {
+  if let Err(error) = attach_pid(&cgroup.path, pid) {
     tracing::warn!(target: "charliebot_agents", pid, path = %path.display(), error = %error, "session_cgroup_move_failed");
   }
   let oom_path = PathBuf::from(format!("/proc/{pid}/oom_score_adj"));
@@ -238,8 +269,9 @@ pub fn move_process_to_cgroup(pid: u32, cgroup: &SessionCgroup) {
   }
 }
 
-fn write_process_to_cgroup(pid: u32, path: &Path) -> io::Result<()> {
-  OpenOptions::new().write(true).open(path).and_then(|mut file| write!(file, "{pid}"))
+/// Attach `pid` by writing the leaf's `cgroup.procs` control file.
+fn attach_pid(cgroup_dir: &Path, pid: u32) -> io::Result<()> {
+  open_hierarchy(cgroup_dir)?.root().attach(pid)
 }
 
 /// Remove an empty session cgroup; a populated or unavailable directory is retained.
@@ -263,9 +295,23 @@ pub fn sweep_stale_session_cgroups_until_stopped(
   let Some(owned) = home_session_cgroup_names(sessions_dir, &is_stopped)? else {
     return Ok(0);
   };
+  let hierarchy = match open_hierarchy(base_dir) {
+    Ok(hierarchy) => hierarchy,
+    Err(error) => {
+      tracing::info!(target: "charliebot_agents", base = %base_dir.display(), error = %error, "session_cgroup_sweep_unavailable");
+      return Ok(0);
+    }
+  };
   let mut removed = Vec::new();
   'slices: for slice in session_slice_dirs(base_dir) {
-    let entries = match fs::read_dir(&slice).and_then(|directory| directory.collect::<io::Result<Vec<_>>>()) {
+    let slice_cgroup = match relative(base_dir, &slice).and_then(|path| hierarchy.at_path(path)) {
+      Ok(cgroup) => cgroup,
+      Err(error) => {
+        tracing::info!(target: "charliebot_agents", base = %slice.display(), error = %error, "session_cgroup_sweep_unavailable");
+        continue;
+      }
+    };
+    let entries = match slice_cgroup.entries() {
       Ok(entries) => entries,
       Err(error) => {
         tracing::info!(target: "charliebot_agents", base = %slice.display(), error = %error, "session_cgroup_sweep_unavailable");
@@ -276,15 +322,20 @@ pub fn sweep_stale_session_cgroups_until_stopped(
       if is_stopped() {
         break 'slices;
       }
-      let path = entry.path();
-      let name = entry.file_name();
-      if !owned.contains(&name) || !path.is_dir() {
+      if entry.kind != EntryKind::Directory || !owned.contains(&entry.name) {
         continue;
       }
-      match fs::remove_dir(&path) {
-        Ok(()) => removed.push(name.to_string_lossy().into_owned()),
+      let leaf = match slice_cgroup.child(&entry.name) {
+        Ok(leaf) => leaf,
         Err(error) => {
-          tracing::warn!(target: "charliebot_agents", path = %path.display(), error = %error, "session_cgroup_sweep_retained")
+          tracing::warn!(target: "charliebot_agents", path = %slice.join(&entry.name).display(), error = %error, "session_cgroup_sweep_retained");
+          continue;
+        }
+      };
+      match leaf.delete_leaf() {
+        Ok(()) => removed.push(entry.name.to_string_lossy().into_owned()),
+        Err(error) => {
+          tracing::warn!(target: "charliebot_agents", path = %slice.join(&entry.name).display(), error = %error, "session_cgroup_sweep_retained")
         }
       }
     }
@@ -352,13 +403,31 @@ mod tests {
     let root = tempfile::tempdir().unwrap();
     let parent = root.path().join(CHARLIEBOT_SLICE);
     fs::create_dir(&parent).unwrap();
-    fs::create_dir(parent.join(AGENTS_SLICE)).unwrap();
-    fs::create_dir(parent.join(REPAIR_SLICE)).unwrap();
+    for name in [AGENTS_SLICE, REPAIR_SLICE] {
+      let slice = parent.join(name);
+      fs::create_dir(&slice).unwrap();
+      fs::write(slice.join("cgroup.subtree_control"), "").unwrap();
+    }
     root
   }
 
   fn leaf_slice(root: &Path, name: &str) -> PathBuf {
     root.join(CHARLIEBOT_SLICE).join(name)
+  }
+
+  fn leaf_path(root: &Path, slice: &str) -> PathBuf {
+    leaf_slice(root, slice).join(session_cgroup_name(SESSION_ID))
+  }
+
+  /// A leaf as the kernel publishes one: the core control files and the limit files the spawn writes.
+  fn fake_leaf(root: &Path, slice: &str) -> PathBuf {
+    let leaf = leaf_path(root, slice);
+    fs::create_dir_all(&leaf).unwrap();
+    for name in ["cgroup.procs", "cgroup.threads", "cgroup.subtree_control", "memory.max", "memory.swap.max", "pids.max"]
+    {
+      fs::write(leaf.join(name), "").unwrap();
+    }
+    leaf
   }
 
   fn cgroup_config(base_dir: &Path, memory_max_mb: i64) -> SessionCgroupConfig {
@@ -372,32 +441,49 @@ mod tests {
   }
 
   #[test]
-  fn ensure_session_cgroup_creates_with_limit_files_under_the_chosen_slice() {
+  fn the_leaf_is_created_under_the_chosen_slice() {
     let root = fake_slices();
-    let path = ensure_session_cgroup(root.path(), ResourceClass::Agent, SESSION_ID, 64, 32, 4096).unwrap();
-    assert_eq!(path, leaf_slice(root.path(), AGENTS_SLICE).join("charliebot-sess-abcd1234"));
+    let hierarchy = open_hierarchy(root.path()).unwrap();
+    let slice = hierarchy.at_path(format!("{CHARLIEBOT_SLICE}/{AGENTS_SLICE}")).unwrap();
+    let leaf = slice.child(OsStr::new(&session_cgroup_name(SESSION_ID))).unwrap();
+
+    create_leaf(&leaf).unwrap();
+
+    let path = leaf_path(root.path(), AGENTS_SLICE);
     assert!(path.is_dir());
+    assert!(path.join("cgroup.procs").is_file());
+  }
+
+  #[test]
+  fn ensure_session_cgroup_writes_the_limits_under_the_chosen_slice() {
+    let root = fake_slices();
+    fake_leaf(root.path(), AGENTS_SLICE);
+    let path = ensure_session_cgroup(root.path(), ResourceClass::Agent, SESSION_ID, 64, 32, 4096).unwrap();
+    assert_eq!(path, leaf_path(root.path(), AGENTS_SLICE));
     assert_eq!(
       fs::read_to_string(leaf_slice(root.path(), AGENTS_SLICE).join("cgroup.subtree_control")).unwrap(),
-      "+memory +pids"
+      "+memory +pids\n"
     );
-    assert_eq!(fs::read_to_string(path.join("memory.max")).unwrap(), (64 * 1024 * 1024).to_string());
-    assert_eq!(fs::read_to_string(path.join("memory.swap.max")).unwrap(), (32 * 1024 * 1024).to_string());
-    assert_eq!(fs::read_to_string(path.join("pids.max")).unwrap(), "4096");
+    assert_eq!(fs::read_to_string(path.join("memory.max")).unwrap(), format!("{}\n", 64 * 1024 * 1024));
+    assert_eq!(fs::read_to_string(path.join("memory.swap.max")).unwrap(), format!("{}\n", 32 * 1024 * 1024));
+    assert_eq!(fs::read_to_string(path.join("pids.max")).unwrap(), "4096\n");
   }
 
   #[test]
   fn ensure_session_cgroup_puts_a_repair_session_under_the_repair_slice() {
     let root = fake_slices();
+    fake_leaf(root.path(), REPAIR_SLICE);
     let path = ensure_session_cgroup(root.path(), ResourceClass::Repair, SESSION_ID, 64, 32, 4096).unwrap();
-    assert_eq!(path, leaf_slice(root.path(), REPAIR_SLICE).join("charliebot-sess-abcd1234"));
+    assert_eq!(path, leaf_path(root.path(), REPAIR_SLICE));
   }
 
   #[test]
   fn ensure_session_cgroup_names_the_failed_subtree_control_write() {
     // A directory where the control file belongs makes the write fail, as a read-only cgroup file system does.
     let root = fake_slices();
-    fs::create_dir(leaf_slice(root.path(), AGENTS_SLICE).join("cgroup.subtree_control")).unwrap();
+    let control = leaf_slice(root.path(), AGENTS_SLICE).join("cgroup.subtree_control");
+    fs::remove_file(&control).unwrap();
+    fs::create_dir(&control).unwrap();
     let result = ensure_session_cgroup(root.path(), ResourceClass::Agent, SESSION_ID, 64, 32, 4096);
     assert!(
       matches!(
@@ -412,10 +498,11 @@ mod tests {
   #[test]
   fn ensure_session_cgroup_rewrites_task_cap_and_zero_lifts_it() {
     let root = fake_slices();
+    fake_leaf(root.path(), AGENTS_SLICE);
     let path = ensure_session_cgroup(root.path(), ResourceClass::Agent, SESSION_ID, 64, 32, 50).unwrap();
-    assert_eq!(fs::read_to_string(path.join("pids.max")).unwrap(), "50");
+    assert_eq!(fs::read_to_string(path.join("pids.max")).unwrap(), "50\n");
     assert_eq!(ensure_session_cgroup(root.path(), ResourceClass::Agent, SESSION_ID, 64, 32, 0).unwrap(), path);
-    assert_eq!(fs::read_to_string(path.join("pids.max")).unwrap(), "max");
+    assert_eq!(fs::read_to_string(path.join("pids.max")).unwrap(), "max\n");
   }
 
   #[test]
@@ -455,8 +542,12 @@ mod tests {
   #[test]
   fn cleanup_removes_only_an_empty_session_group() {
     let root = fake_slices();
-    let path = ensure_session_cgroup(root.path(), ResourceClass::Agent, SESSION_ID, 64, 32, 50).unwrap();
-    for name in ["memory.max", "memory.swap.max", "pids.max"] {
+    let path = fake_leaf(root.path(), AGENTS_SLICE);
+    ensure_session_cgroup(root.path(), ResourceClass::Agent, SESSION_ID, 64, 32, 50).unwrap();
+    // The kernel drops a cgroup's control files with the directory; the fake tree must lose them first.
+    for name in
+      ["cgroup.procs", "cgroup.threads", "cgroup.subtree_control", "memory.max", "memory.swap.max", "pids.max"]
+    {
       fs::remove_file(path.join(name)).unwrap();
     }
     assert!(cleanup_session_cgroup(root.path(), SESSION_ID));
@@ -476,14 +567,16 @@ mod tests {
     // The kernel refuses this write, so the spawn runs without its cgroup. The temporary directory accepts any text,
     // so the test checks the bytes that the refusal depends on.
     let root = fake_slices();
+    fake_leaf(root.path(), AGENTS_SLICE);
     let path = ensure_session_cgroup(root.path(), ResourceClass::Agent, SESSION_ID, 64, -32, 50).unwrap();
-    assert_eq!(fs::read_to_string(path.join("memory.swap.max")).unwrap(), "-33554432");
+    assert_eq!(fs::read_to_string(path.join("memory.swap.max")).unwrap(), "-33554432\n");
   }
 
   #[test]
   fn negative_task_limit_writes_no_task_cap() {
     let root = fake_slices();
+    fake_leaf(root.path(), AGENTS_SLICE);
     let path = ensure_session_cgroup(root.path(), ResourceClass::Agent, SESSION_ID, 64, 32, -1).unwrap();
-    assert_eq!(fs::read_to_string(path.join("pids.max")).unwrap(), "max");
+    assert_eq!(fs::read_to_string(path.join("pids.max")).unwrap(), "max\n");
   }
 }

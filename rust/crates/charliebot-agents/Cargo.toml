@@ -11,6 +11,8 @@ axum.workspace = true
 backon.workspace = true
 base64.workspace = true
 bstr.workspace = true
+# `test-utils` gives the tests' fake cgroup trees a hierarchy constructor; the server never calls it.
+cgfs = { workspace = true, features = ["test-utils"] }
 charliebot-compat.workspace = true
 charliebot-core.workspace = true
 charliebot-registry.workspace = true

@@ -238,6 +238,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f079e83a288787bcd14a6aea84cee5c87a67c5a3e660c30f557a3d24761b3527"
 
 [[package]]
+name = "cgfs"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e9ee241342614af55701aac17cb662b1bc41abed41c019a5f99562f8e2e7b0b8"
+dependencies = [
+ "rustix",
+]
+
+[[package]]
 name = "charliebot-agents"
 version = "0.1.0"
 dependencies = [
@@ -246,6 +255,7 @@ dependencies = [
  "backon",
  "base64 0.22.1",
  "bstr",
+ "cgfs",
  "charliebot-compat",
  "charliebot-core",
  "charliebot-registry",

@@ -65,7 +65,7 @@ function loadGroups() {
 function loadCron(fetch) {
   const elements = {};
   const registered = {
-    workspaceBadges: [], rowBadges: [], rowLines: [], menuItems: [], groupMenuItems: [], previewExclusions: [],
+    workspaceBadges: [], rowBadges: [], rowLines: [], menuItems: [], groupMenuItems: [], previewLimitExemptions: [],
   };
   const context = {
     Sidebar: {wire(globals, sidebarOnly) { Object.assign(this, globals, sidebarOnly || {}); }},
@@ -82,7 +82,7 @@ function loadCron(fetch) {
     registerSessionRowLine: (render) => registered.rowLines.push(render),
     registerSessionMenuItems: (source) => registered.menuItems.push(source),
     registerGroupMenuItem: (item) => registered.groupMenuItems.push(item),
-    registerGroupPreviewExclusion: (predicate) => registered.previewExclusions.push(predicate),
+    registerGroupPreviewLimitExemption: (predicate) => registered.previewLimitExemptions.push(predicate),
   };
   context.globalThis = context;
   vm.createContext(context);
@@ -123,13 +123,13 @@ test('the cron loader resolves to no badge when nothing is broken', async () => 
   assert.equal(await registered.workspaceBadges[0](), '');
 });
 
-test('the cron preview exclusion reads schedule_task for bound rows', () => {
+test('the cron preview limit exemption reads schedule_task for bound rows', () => {
   const {registered} = loadCron();
-  const [exclude] = registered.previewExclusions;
+  const [exempts] = registered.previewLimitExemptions;
 
-  assert.equal(registered.previewExclusions.length, 1);
-  assert.equal(exclude({schedule_task: 'nightly'}), true);
-  assert.equal(exclude({schedule_task: null, schedule_cron: '0 9 * * *'}), false);
+  assert.equal(registered.previewLimitExemptions.length, 1);
+  assert.equal(exempts({schedule_task: 'nightly'}), true);
+  assert.equal(exempts({schedule_task: null, schedule_cron: '0 9 * * *'}), false);
 });
 
 test('no badge when nothing is broken', () => {

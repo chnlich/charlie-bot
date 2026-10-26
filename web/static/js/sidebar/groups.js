@@ -99,14 +99,15 @@ const sessionRowBadges = [];
 const sessionRowLines = [];
 const sessionMenuItemSources = [];
 const groupMenuItems = [];
-const groupPreviewExclusions = [];
+const groupPreviewLimitExemptions = [];
 
-// A preview exclusion returns true for a root that does not use a preview
-// rank, so feature packages can own row facts without adding them to the core.
-function registerGroupPreviewExclusion(predicate) {
-  if (typeof predicate !== 'function') throw new Error('Invalid group preview exclusion registration');
-  if (groupPreviewExclusions.includes(predicate)) throw new Error('Duplicate group preview exclusion');
-  groupPreviewExclusions.push(predicate);
+// A preview limit exemption: predicate(s) answers true for a root row that
+// stays outside the 5-row preview limit — it always shows and takes no rank —
+// so feature packages own row facts without adding them to the core.
+function registerGroupPreviewLimitExemption(predicate) {
+  if (typeof predicate !== 'function') throw new Error('Invalid group preview limit exemption registration');
+  if (groupPreviewLimitExemptions.includes(predicate)) throw new Error('Duplicate group preview limit exemption');
+  groupPreviewLimitExemptions.push(predicate);
 }
 
 // A row badge: render(s) returns the badge HTML for the row, or ''. The
@@ -343,13 +344,16 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
     let previewRank = 0;
     let hasExtraRows = false;
     const groupRows = groupSessions.map((s) => {
-      const excluded = groupPreviewExclusions.some((predicate) => predicate(s));
-      const inPreview = !excluded && previewRank < GROUP_SESSION_PREVIEW_LIMIT;
-      if (!excluded) previewRank += 1;
-      const isExtra = !inPreview;
-      if (isExtra) hasExtraRows = true;
+      // An exempt root always shows and takes no rank, so the limit counts
+      // only the other roots; those past it are the extra rows.
+      const exempt = groupPreviewLimitExemptions.some((predicate) => predicate(s));
+      const inPreview = !exempt && previewRank < GROUP_SESSION_PREVIEW_LIMIT;
+      if (!exempt) previewRank += 1;
       // The open session's root never hides, since a hidden root hides its subtree.
-      const isHideable = isExtra && s.id !== activeRootId;
+      const isHideable = !exempt && !inPreview && s.id !== activeRootId;
+      // Show all draws only when the group hides a root, so a lone visible
+      // extra row never renders an empty toggle.
+      if (isHideable) hasExtraRows = true;
       return {
         session: s,
         options: groupLimitItemOptions(key, isHideable, isLimitExpanded),
@@ -759,7 +763,7 @@ function removeSessionFromRenderedList(sessionId) {
 
 
 const GLOBALS = {
-  registerGroupPreviewExclusion,
+  registerGroupPreviewLimitExemption,
   registerSessionRowBadge,
   registerSessionRowLine,
   registerSessionMenuItems,

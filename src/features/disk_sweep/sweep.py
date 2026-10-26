@@ -161,7 +161,8 @@ def _load_run_groups(cfg: config.CharlieBotConfig) -> dict[pathlib.Path, dict[st
   """Group recorded worktree Runs by canonical path and session owner."""
   groups: dict[pathlib.Path,
                dict[str, list[models.RunRecord]]] = collections.defaultdict(lambda: collections.defaultdict(list))
-  for metadata_path in sorted(cfg.sessions_dir.glob(f"*/data/{runs.RUNS_DIR_NAME}/*/{runs.RUN_METADATA_NAME}")):
+  for metadata_path in sorted(
+      cfg.sessions_dir.glob(f"*/{runs.DATA_DIR_NAME}/{runs.RUNS_DIR_NAME}/*/{runs.RUN_METADATA_NAME}")):
     try:
       record = models.RunRecord.model_validate_json(metadata_path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:

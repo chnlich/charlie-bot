@@ -1560,6 +1560,28 @@ mod tests {
   }
 
   #[tokio::test]
+  async fn chat_upload_copies_a_payload_across_the_copy_buffer_boundary() {
+    let (_home, features) = feature_context();
+    const SESSION_ID: &str = "synthetic-large-upload-session";
+    create_upload_session(&features, SESSION_ID).await;
+    let router = routes(&features);
+    let config = features.config.get().unwrap();
+    // Two and a half 1 MiB copy buffers plus three bytes: the copy crosses buffer boundaries and ends mid-buffer.
+    let payload: Vec<u8> = (0..2_621_443_u32).map(|index| (index % 251) as u8).collect();
+
+    let response = router
+      .oneshot(multipart_upload(&format!("/api/chat/{SESSION_ID}/upload"), "synthetic-large.bin", &payload))
+      .await
+      .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let body: Value = serde_json::from_slice(&body).unwrap();
+    let saved_path = config.sessions_dir().join(SESSION_ID).join("uploads").join("synthetic-large.bin");
+    assert_eq!(body["size"], payload.len());
+    assert_eq!(std::fs::read(saved_path).unwrap(), payload);
+  }
+
+  #[tokio::test]
   async fn chat_upload_checks_session_after_multipart_parsing() {
     let (_home, features) = feature_context();
     let response = routes(&features)

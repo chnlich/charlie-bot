@@ -6,8 +6,12 @@
 // The For-you view: the session page's reading layer for web and worker sessions.
 //
 // For you shows the user's messages, the agent's web replies (web_reply), the
-// web reply notices (web_reply_notice) and error rows, in order, and nothing
-// else. When none of them is in the store, one row offers Everything. Everything
+// web reply notices (web_reply_notice) and error rows, and nothing else. It
+// reads the store's server order, never the segment order Everything shows:
+// the shared span rule (shared.js splitTurnSpan) carries an input that arrives
+// after a turn's first assistant message into the next turn, so the segment
+// order would put that input below the web replies that followed it. When none
+// of them is in the store, one row offers Everything. Everything
 // shows the whole record, as the page always has. A web session (a manager
 // session that is not a Slack or Discord thread), root or child, and a worker
 // session open in For you; a thread session opens in Everything. A worker's For

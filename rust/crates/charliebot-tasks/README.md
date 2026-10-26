@@ -56,7 +56,7 @@ shutdown and re-attachment into server lifespan.
 | `execution::native_continuation_matches` | `src/runtime/task_execution.py:111-129` |
 | `execution::compose_input_prompt` | `src/runtime/task_execution.py:237-280` |
 | `execution::is_out_of_space_error`, `free_disk_gib` | `src/runtime/task_execution.py:193-234` |
-| `routes::routes`, `routes::matches`, and `register` | `src/runtime/api/chat.py:48-131`; `src/runtime/api/sessions.py:1689-1715`, `:1829-1857` |
+| `routes::routes`, `routes::ROUTE_PATTERNS`, and `register` | `src/runtime/api/chat.py:48-131`; `src/runtime/api/sessions.py:1689-1715`, `:1829-1857` |
 | `dispatch::input_event_type_for_caller`, `agent_provenance` | `src/runtime/session_dispatch.py:812-850` |
 | `Dispatcher::pending_inputs` input-id deduplication | `src/runtime/session_dispatch.py:374-379` |
 | `Dispatcher::deliver_child_report_locked_as_actor` | `src/runtime/task_completion.py:752` |

@@ -27,7 +27,7 @@ landing, and the sequence controller that runs and closes each loop.
 | `TriggerManager::cancel_trigger` | `src/runtime/triggers.py:662-672` |
 | `TriggerManager::recover_pending` | `src/runtime/triggers.py:674-694` |
 | `triggers::routes` | `src/runtime/api/internal.py:258-317` |
-| `triggers::matches` | `src/runtime/api/internal.py:258-317` |
+| `triggers::ROUTE_PATTERNS` | `src/runtime/api/internal.py:258-317` |
 | `triggers::trigger_step` | `server.py:275-285` |
 | `cron::register` | `src/features/cron/__init__.py:5-14` |
 | `cron::config::DEFAULT_TIMEZONE` | `src/features/cron/config.py:14` |

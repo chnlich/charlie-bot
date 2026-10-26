@@ -13,6 +13,7 @@ use futures_util::future::{BoxFuture, Shared};
 
 use crate::context::FeatureContext;
 use crate::registry::{Registry, RegistryError};
+use crate::route_claims::RouteClaims;
 
 /// Builds a package's routes with their full paths, with the feature context applied as the router's state. The
 /// server merges the routers in registration order.
@@ -45,12 +46,29 @@ pub struct WebSocketMatch {
   pub segments: Vec<String>,
 }
 
+/// Which request paths a router claims, whatever the method. The trailing-slash redirect asks every router.
+pub enum PathClaim {
+  /// The route patterns the router mounts.
+  Patterns(RouteClaims),
+  /// A predicate over the decoded path, for a router whose claims are not route patterns.
+  Predicate(PathMatch),
+}
+
 /// One registered router.
-#[derive(Clone, Copy)]
 pub struct RouterRegistration {
   pub package: &'static str,
   pub build: RouterBuilder,
-  pub matches: PathMatch,
+  pub claim: PathClaim,
+}
+
+impl RouterRegistration {
+  /// Whether the router claims a decoded request path.
+  pub fn claims(&self, path: &str) -> bool {
+    match &self.claim {
+      PathClaim::Patterns(routes) => routes.claims(path),
+      PathClaim::Predicate(matches) => matches(path),
+    }
+  }
 }
 
 /// When a service starts: `Early` right after the crash-recovery step starts, `Ready` after the trigger step.
@@ -106,7 +124,16 @@ impl Registry {
   /// Register a router (`wiring.register_router`). Routers merge in registration order.
   pub fn router(&mut self, build: RouterBuilder, matches: PathMatch) -> Result<(), RegistryError> {
     let package = self.owner()?;
-    self.routers.push(RouterRegistration { package, build, matches });
+    self.routers.push(RouterRegistration { package, build, claim: PathClaim::Predicate(matches) });
+    Ok(())
+  }
+
+  /// Register a router by the route patterns it mounts, in axum's syntax (`wiring.register_router`). Routers merge
+  /// in registration order.
+  pub fn router_patterns(&mut self, build: RouterBuilder, patterns: &[&str]) -> Result<(), RegistryError> {
+    let package = self.owner()?;
+    let claims = RouteClaims::new(patterns).map_err(|error| RegistryError { package, message: error.to_string() })?;
+    self.routers.push(RouterRegistration { package, build, claim: PathClaim::Patterns(claims) });
     Ok(())
   }
 

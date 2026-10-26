@@ -151,14 +151,14 @@ mod tests {
 
     let routers = registry.routers();
     assert_eq!(routers.len(), 1);
-    assert!((routers[0].matches)("/api/internal/web/reply"));
-    assert!((routers[0].matches)("/api/internal/web/dialog"));
-    assert!((routers[0].matches)("/api/internal/web/status"));
-    assert!((routers[0].matches)("/api/internal/web/status/confirm"));
-    assert!((routers[0].matches)("/api/internal/web/status/unread"));
-    assert!((routers[0].matches)("/api/internal/web/ask-check"));
-    assert!(!(routers[0].matches)("/api/internal/web"));
-    assert!(!(routers[0].matches)("/api/internal/web/status/extra"));
+    assert!(routers[0].claims("/api/internal/web/reply"));
+    assert!(routers[0].claims("/api/internal/web/dialog"));
+    assert!(routers[0].claims("/api/internal/web/status"));
+    assert!(routers[0].claims("/api/internal/web/status/confirm"));
+    assert!(routers[0].claims("/api/internal/web/status/unread"));
+    assert!(routers[0].claims("/api/internal/web/ask-check"));
+    assert!(!routers[0].claims("/api/internal/web"));
+    assert!(!routers[0].claims("/api/internal/web/status/extra"));
   }
 
   #[tokio::test]

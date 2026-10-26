@@ -35,7 +35,7 @@ impl TurnContribution for CronTurnContribution {
 
 /// Register scheduled-task routes, metadata, the scheduler service and sequence owner.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
-  registry.router(api::routes, api::matches)?;
+  registry.router_patterns(api::routes, api::ROUTE_PATTERNS)?;
   registry.turn_contribution("cron", Arc::new(CronTurnContribution))?;
   registry.metadata_slot_with_validator(
     MetadataSlot {

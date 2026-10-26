@@ -168,7 +168,9 @@
       this.workerSentinel = null;
       // Every message entry in server (time) order: a prepended page lands at
       // the front, a live message at the back. attach derives the segments from
-      // it, so every projection reads the same order.
+      // it; Everything projects their order, while For you projects this store
+      // directly, so its rows stay in server order where the shared span rule
+      // carries an input out of the turn that shows it.
       this.entries = [];
       // Event ids can identify distinct message rows, so records include the display fields.
       this.messageRecords = new Set();
@@ -1228,7 +1230,7 @@
       const children = [];
       const sentinel = forYouRules.isWorker() ? null : document.getElementById('load-more-sentinel');
       if (sentinel) children.push(sentinel);
-      const shown = forYouRules.items(this.displayEntries());
+      const shown = forYouRules.items(this.entries);
       if (!shown.length) {
         if (forYouRules.isWorker()) children.push(forYouRules.summaryCard());
         else children.push(this.forYouEmptyNode());
@@ -1236,14 +1238,6 @@
       for (const entry of shown) children.push(this.forYouEntryNode(entry));
       children.push(this.forYouHolderNode());
       setChildren(this.container, children);
-    }
-
-    // Every entry in the order the segments show it. `entries` is server order;
-    // the two differ only where a carried input moves to the next turn.
-    displayEntries() {
-      const out = [];
-      this.segments.forEach((seg) => seg.entries.forEach((entry) => out.push(entry)));
-      return out;
     }
 
     forYouEntryNode(entry) {

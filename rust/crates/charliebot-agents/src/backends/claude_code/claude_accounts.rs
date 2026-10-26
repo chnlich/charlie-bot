@@ -16,6 +16,7 @@ use charliebot_store::metadata::UtcDateTime;
 use serde_json::Value;
 use time::format_description::well_known::Rfc3339;
 use time::{Duration, OffsetDateTime};
+use walkdir::WalkDir;
 
 use super::usage_quota::QuotaState;
 use super::{claude_config, login_dirs};
@@ -621,16 +622,14 @@ fn is_staging_name(name: &std::ffi::OsStr) -> bool {
 }
 
 fn walk_files(root: &Path) -> anyhow::Result<Vec<PathBuf>> {
-  let mut pending = vec![root.to_path_buf()];
   let mut files = Vec::new();
-  while let Some(directory) = pending.pop() {
-    for entry in fs::read_dir(&directory).with_context(|| format!("reading sidecar {}", directory.display()))? {
-      let path = entry?.path();
-      if path.is_dir() {
-        pending.push(path);
-      } else if path.is_file() {
-        files.push(path);
-      }
+  for entry in WalkDir::new(root).follow_links(false) {
+    let entry = entry.with_context(|| format!("reading sidecar {}", root.display()))?;
+    if entry.depth() == 0 || entry.path().is_dir() {
+      continue;
+    }
+    if entry.path().is_file() {
+      files.push(entry.into_path());
     }
   }
   files.sort();

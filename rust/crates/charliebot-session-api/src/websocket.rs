@@ -16,7 +16,6 @@ use tokio::time;
 
 use crate::blocking_store;
 
-const CURSOR_TIMEOUT: Duration = Duration::from_secs(5);
 const KEEPALIVE_TIMEOUT: Duration = Duration::from_secs(30);
 const CATCHUP_SLICE_EVENTS: usize = 400;
 
@@ -24,31 +23,28 @@ pub(crate) fn session_websocket(
   features: Arc<FeatureContext>,
   request: WebSocketRequest,
 ) -> BoxFuture<'static, Response> {
-  let WebSocketRequest { segments, upgrade, .. } = request;
+  let WebSocketRequest { segments, query, upgrade, .. } = request;
   let session_id = segments.into_iter().next().expect("the session WebSocket route captures its session id");
   Box::pin(async move {
-    upgrade.on_upgrade(move |socket| async move { serve_session_socket(features, session_id, socket).await })
+    upgrade.on_upgrade(move |socket| async move { serve_session_socket(features, session_id, query, socket).await })
   })
 }
 
-async fn serve_session_socket(features: Arc<FeatureContext>, session_id: String, socket: WebSocket) {
+async fn serve_session_socket(features: Arc<FeatureContext>, session_id: String, query: String, socket: WebSocket) {
   let (mut sender, mut receiver) = socket.split();
   tracing::info!(session_id, "session_ws_connected");
 
-  let cursor = match receive_cursor(&mut receiver).await {
-    CursorRead::Disconnected => {
-      tracing::debug!(session_id, "session_ws_early_disconnect");
+  // The replay cursor rides the handshake query (`server.py` `session_websocket`): an absent, overlong or
+  // non-decimal value closes with 4400 before the subscription starts.
+  let raw_cursor = raw_cursor(&query);
+  let cursor = match parse_handshake_cursor(raw_cursor.as_deref()) {
+    Some(cursor) => cursor,
+    None => {
+      tracing::warn!(session_id, raw_cursor = ?raw_cursor, "session_ws_cursor_invalid");
+      if let Err(close_error) = close_with_code(&mut sender, 4400, "").await {
+        tracing::info!(session_id, reason = %close_error, "session_ws_closed");
+      }
       return;
-    }
-    CursorRead::Timeout => {
-      tracing::debug!(session_id, error = "cursor wait timed out", "session_ws_cursor_parse_failed");
-      0
-    }
-    CursorRead::Frame(Ok(Some(cursor))) => cursor,
-    CursorRead::Frame(Ok(None)) => 0,
-    CursorRead::Frame(Err(error)) => {
-      tracing::debug!(session_id, error = %error, "session_ws_cursor_parse_failed");
-      0
     }
   };
 
@@ -104,87 +100,21 @@ where
   (session_subscription, sidebar_subscription, loaded)
 }
 
-enum CursorRead {
-  Disconnected,
-  Timeout,
-  Frame(Result<Option<i128>, String>),
+/// The raw `cursor` value of the handshake query, or `None` when the query has no `cursor`. Repeated keys
+/// read the first value, the way Starlette's `query_params.get` does.
+fn raw_cursor(query: &str) -> Option<String> {
+  form_urlencoded::parse(query.as_bytes()).find(|(key, _)| key == "cursor").map(|(_, value)| value.into_owned())
 }
 
-async fn receive_cursor<S>(receiver: &mut S) -> CursorRead
-where
-  S: futures_util::Stream<Item = Result<Message, axum::Error>> + Unpin,
-{
-  match time::timeout(CURSOR_TIMEOUT, async {
-    loop {
-      match receiver.next().await {
-        None | Some(Ok(Message::Close(_))) => return CursorRead::Disconnected,
-        Some(Ok(Message::Text(text))) => return CursorRead::Frame(parse_cursor(text.as_str())),
-        Some(Ok(Message::Ping(_) | Message::Pong(_))) => {}
-        Some(Ok(Message::Binary(_))) => {
-          return CursorRead::Frame(Err("cursor frame must be a JSON text frame".to_string()));
-        }
-        Some(Err(error)) => return CursorRead::Frame(Err(error.to_string())),
-      }
-    }
-  })
-  .await
-  {
-    Err(_) => CursorRead::Timeout,
-    Ok(result) => result,
+/// The replay cursor the handshake check accepts (`server.py` `session_websocket`): the value is present,
+/// at most 19 characters, ASCII and decimal. `int` then parses it without a digit-limit error, and a
+/// 19-digit value above `i64::MAX` stays valid and lies past every event total.
+fn parse_handshake_cursor(raw: Option<&str>) -> Option<i128> {
+  let raw = raw?;
+  if raw.is_empty() || raw.len() > 19 || !raw.is_ascii() || !raw.bytes().all(|byte| byte.is_ascii_digit()) {
+    return None;
   }
-}
-
-fn parse_cursor(text: &str) -> Result<Option<i128>, String> {
-  let value: Value = serde_json::from_str(text).map_err(|error| error.to_string())?;
-  let object = value.as_object().ok_or_else(|| "cursor frame must be a JSON object".to_string())?;
-  if object.get("type").and_then(Value::as_str) != Some("cursor") {
-    return Ok(None);
-  }
-  match object.get("index") {
-    None => Ok(Some(0)),
-    Some(value) => python_integer(value).map(Some),
-  }
-}
-
-fn python_integer(value: &Value) -> Result<i128, String> {
-  match value {
-    Value::Bool(value) => Ok(if *value { 1 } else { 0 }),
-    Value::Number(number) => {
-      if let Some(value) = number.as_i64() {
-        return Ok(i128::from(value));
-      }
-      if let Some(value) = number.as_u64() {
-        return Ok(i128::from(value));
-      }
-      let value = number.as_f64().ok_or_else(|| "cursor index is not an integer".to_string())?;
-      let truncated = value.trunc();
-      if !value.is_finite() || truncated < i128::MIN as f64 || truncated >= -(i128::MIN as f64) {
-        return Err("cursor index is outside the supported range".to_string());
-      }
-      Ok(truncated as i128)
-    }
-    Value::String(value) => parse_decimal_integer(value),
-    _ => Err("cursor index is not an integer".to_string()),
-  }
-}
-
-fn parse_decimal_integer(value: &str) -> Result<i128, String> {
-  let value = value.trim();
-  let bytes = value.as_bytes();
-  let digit_start = usize::from(matches!(bytes.first(), Some(b'+') | Some(b'-')));
-  if digit_start == bytes.len() || bytes.is_empty() {
-    return Err("cursor index is not an integer".to_string());
-  }
-  if bytes.iter().enumerate().any(|(index, byte)| {
-    *byte == b'_'
-      && (index <= digit_start
-        || index + 1 == bytes.len()
-        || !bytes[index - 1].is_ascii_digit()
-        || !bytes[index + 1].is_ascii_digit())
-  }) {
-    return Err("cursor index is not an integer".to_string());
-  }
-  value.replace('_', "").parse::<i128>().map_err(|_| "cursor index is outside the supported range".to_string())
+  Some(raw.parse().expect("at most 19 ASCII decimal digits fit i128"))
 }
 
 struct Catchup {
@@ -409,7 +339,7 @@ mod tests {
 
   use axum::Router;
   use axum::extract::ws::WebSocketUpgrade;
-  use axum::extract::{Path, State};
+  use axum::extract::{Path, RawQuery, State};
   use axum::routing::get;
   use charliebot_core::config::CREDENTIALS_FILENAME;
   use charliebot_core::credentials::load_credentials;
@@ -480,31 +410,25 @@ mod tests {
   }
 
   #[test]
-  fn cursor_cases_follow_python_integer_conversion() {
-    assert_eq!(parse_cursor(r#"{"type":"cursor","index":8}"#).unwrap(), Some(8));
-    assert_eq!(parse_cursor(r#"{"type":"cursor","index":2.7}"#).unwrap(), Some(2));
-    assert_eq!(parse_cursor(r#"{"type":"cursor"}"#).unwrap(), Some(0));
-    assert_eq!(parse_cursor(r#"{"type":"notice","index":8}"#).unwrap(), None);
-    assert!(parse_cursor("{").is_err());
-    assert!(parse_cursor("[]").is_err());
-    assert!(parse_cursor(r#"{"type":"cursor","index":[]}"#).is_err());
+  fn handshake_cursor_query_cases_follow_python() {
+    // Python accepts a non-empty run of at most 19 ASCII decimal digits (`server.py` `session_websocket`),
+    // so leading zeros stay valid and a 19-digit value above i64::MAX parses.
+    assert_eq!(parse_handshake_cursor(Some("9")), Some(9));
+    assert_eq!(parse_handshake_cursor(Some("007")), Some(7));
+    assert_eq!(parse_handshake_cursor(Some("9999999999999999999")), Some(9_999_999_999_999_999_999));
+    assert_eq!(parse_handshake_cursor(None), None);
+    assert_eq!(parse_handshake_cursor(Some("")), None);
+    assert_eq!(parse_handshake_cursor(Some("-1")), None);
+    assert_eq!(parse_handshake_cursor(Some("abc")), None);
+    assert_eq!(parse_handshake_cursor(Some("9".repeat(20).as_str())), None);
   }
 
-  #[tokio::test(start_paused = true)]
-  async fn cursor_wait_expires_after_five_seconds_without_a_frame() {
-    let read = tokio::spawn(async {
-      let mut incoming = futures_util::stream::pending::<Result<Message, axum::Error>>();
-      receive_cursor(&mut incoming).await
-    });
-    tokio::task::yield_now().await;
-    time::advance(CURSOR_TIMEOUT).await;
-    assert!(matches!(read.await.unwrap(), CursorRead::Timeout));
-  }
-
-  #[tokio::test]
-  async fn disconnect_during_cursor_wait_ends_before_subscribing() {
-    let mut incoming = futures_util::stream::iter([Ok::<_, axum::Error>(Message::Close(None))]);
-    assert!(matches!(receive_cursor(&mut incoming).await, CursorRead::Disconnected));
+  #[test]
+  fn raw_cursor_reads_the_first_cursor_pair_of_the_query() {
+    assert_eq!(raw_cursor("cursor=9").as_deref(), Some("9"));
+    assert_eq!(raw_cursor("token=k-1&cursor=12").as_deref(), Some("12"));
+    assert_eq!(raw_cursor("cursor=4&cursor=12").as_deref(), Some("4"));
+    assert_eq!(raw_cursor(""), None);
   }
 
   #[tokio::test]
@@ -626,6 +550,7 @@ mod tests {
   async fn test_route(
     State(features): State<Arc<FeatureContext>>,
     Path(session_id): Path<String>,
+    RawQuery(query): RawQuery,
     upgrade: WebSocketUpgrade,
   ) -> Response {
     session_websocket(
@@ -633,7 +558,7 @@ mod tests {
       WebSocketRequest {
         path: format!("/ws/sessions/{session_id}"),
         segments: vec![session_id],
-        query: String::new(),
+        query: query.unwrap_or_default(),
         upgrade,
       },
     )
@@ -683,10 +608,6 @@ mod tests {
     frame.extend_from_slice(&mask);
     frame.extend(payload.iter().enumerate().map(|(index, byte)| byte ^ mask[index % mask.len()]));
     reader.get_mut().write_all(&frame).await.unwrap();
-  }
-
-  async fn send_cursor(reader: &mut BufReader<TcpStream>, cursor: usize) {
-    send_client_frame(reader, 1, format!(r#"{{"type":"cursor","index":{cursor}}}"#).as_bytes()).await;
   }
 
   #[derive(Debug)]
@@ -742,8 +663,7 @@ mod tests {
     let (_home, features) = test_context();
     write_session(&features, "synthetic", TaskProfile::Manager, 0);
     let (address, server) = start_server(Arc::clone(&features)).await;
-    let mut client = connect(address, "synthetic", "").await;
-    send_cursor(&mut client, 0).await;
+    let mut client = connect(address, "synthetic", "cursor=0").await;
     receive_catchup_complete(&mut client).await;
     tokio::task::yield_now().await;
     time::advance(KEEPALIVE_TIMEOUT).await;
@@ -770,8 +690,7 @@ mod tests {
     let (_home, features) = test_context();
     write_session(&features, "synthetic", TaskProfile::Manager, 0);
     let (address, server) = start_server(Arc::clone(&features)).await;
-    let mut client = connect(address, "synthetic", "").await;
-    send_cursor(&mut client, 999999).await;
+    let mut client = connect(address, "synthetic", "cursor=999999").await;
     receive_catchup_complete(&mut client).await;
     let store = Arc::clone(&features.store);
     let turn = tokio::spawn(async move {
@@ -833,8 +752,7 @@ mod tests {
     let (_home, features) = test_context();
     write_session(&features, "synthetic", TaskProfile::Manager, 0);
     let (address, server) = start_server(Arc::clone(&features)).await;
-    let mut client = connect(address, "synthetic", "").await;
-    send_cursor(&mut client, 999999).await;
+    let mut client = connect(address, "synthetic", "cursor=999999").await;
     receive_catchup_complete(&mut client).await;
     features
       .store
@@ -858,11 +776,9 @@ mod tests {
     write_session(&features, "synthetic", TaskProfile::Manager, 0);
     write_session(&features, "synthetic-second", TaskProfile::Manager, 0);
     let (address, server) = start_server(Arc::clone(&features)).await;
-    let mut first = connect(address, "synthetic", "").await;
-    send_cursor(&mut first, 0).await;
+    let mut first = connect(address, "synthetic", "cursor=0").await;
     receive_catchup_complete(&mut first).await;
-    let mut second = connect(address, "synthetic-second", "").await;
-    send_cursor(&mut second, 0).await;
+    let mut second = connect(address, "synthetic-second", "cursor=0").await;
     receive_catchup_complete(&mut second).await;
     let channel = streaming::session_channel("synthetic");
     features.store.broadcast(&channel, json!({"type": "stream", "sequence": 1})).await.unwrap();
@@ -885,8 +801,7 @@ mod tests {
   /// code 4400 is the first and only frame, so no catch-up replay or subscription frame preceded it.
   #[tokio::test]
   async fn invalid_handshake_cursor_closes_before_subscription() {
-    let invalid_queries =
-      ["", "cursor=-1", "cursor=abc", &format!("cursor={}", "9".repeat(20))];
+    let invalid_queries = ["", "cursor=-1", "cursor=abc", &format!("cursor={}", "9".repeat(20))];
     for query in invalid_queries {
       let (_home, features) = test_context();
       seed_manager_session(&features, "synthetic", 0).await;

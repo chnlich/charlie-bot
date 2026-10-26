@@ -560,6 +560,11 @@ fn chunk_text_respects_the_limit_and_keeps_the_content() {
 }
 
 #[test]
+fn paragraph_units_keep_captured_newline_runs_with_their_paragraphs() {
+  assert_eq!(paragraph_units("first\n\nsecond\n\n\nthird"), ["first\n\n", "second\n\n\n", "third"]);
+}
+
+#[test]
 fn no_file_server_links_refuses_the_first_link_and_names_the_publish_command() {
   let link = "http://localhost:18498/absolute_filepath/home/u/caf%C3%A9/page.html";
   let later = "https://charliebot.example/absolute_filepath/home/u/other.html";

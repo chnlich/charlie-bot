@@ -63,6 +63,28 @@ mod tests {
   }
 
   #[test]
+  fn pid_stat_fields_match_the_proc_file_text() {
+    let pid = std::process::id();
+    let text = fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
+    let fields: Vec<&str> = text.rsplit_once(')').unwrap().1.split_whitespace().collect();
+    let stat = read_pid_stat(pid).unwrap();
+    assert_eq!(stat.pid_start, fields[19]);
+    assert_eq!(stat.state, fields[0]);
+  }
+
+  #[test]
+  fn a_missing_pid_has_no_stat() {
+    assert!(read_pid_stat(u32::MAX).is_none());
+  }
+
+  #[test]
+  fn boot_time_is_the_btime_line_of_proc_stat() {
+    let text = fs::read_to_string("/proc/stat").unwrap();
+    let btime: i64 = text.lines().find_map(|line| line.strip_prefix("btime ")).unwrap().parse().unwrap();
+    assert_eq!(read_host_boot_time().unwrap().unix_timestamp(), btime);
+  }
+
+  #[test]
   fn a_missing_identity_is_not_alive() {
     let boot = read_host_boot_time().unwrap();
     assert!(!is_run_alive(None, Some("1"), Some(boot), boot));

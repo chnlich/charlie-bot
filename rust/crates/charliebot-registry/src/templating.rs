@@ -248,7 +248,7 @@ fn walk_static_tree(
     let entry = match entry {
       Ok(entry) => entry,
       Err(error) if is_not_found(&error) => continue,
-      Err(error) => return Err(io::Error::new(io::ErrorKind::Other, error)),
+      Err(error) => return Err(io::Error::other(error)),
     };
     let relative = entry.path().strip_prefix(directory).expect("a walk yields paths under its root").to_path_buf();
     let rel = relative.to_str().ok_or_else(|| {
@@ -261,7 +261,7 @@ fn walk_static_tree(
     let metadata = match entry.metadata() {
       Ok(metadata) => metadata,
       Err(error) if error.io_error().is_some_and(|error| error.kind() == io::ErrorKind::NotFound) => continue,
-      Err(error) => return Err(io::Error::new(io::ErrorKind::Other, error)),
+      Err(error) => return Err(io::Error::other(error)),
     };
     if metadata.is_file() {
       let mtime_ns = metadata.mtime() * 1_000_000_000 + metadata.mtime_nsec();

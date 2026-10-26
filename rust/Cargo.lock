@@ -741,6 +741,7 @@ dependencies = [
  "charliebot-core",
  "charliebot-registry",
  "charliebot-tasks",
+ "memchr",
  "memmap2",
  "nix",
  "regex",

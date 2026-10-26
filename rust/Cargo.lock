@@ -771,6 +771,8 @@ dependencies = [
  "charliebot-web-reply",
  "futures-util",
  "libc",
+ "memchr",
+ "memmap2",
  "regex",
  "serde",
  "serde_json",

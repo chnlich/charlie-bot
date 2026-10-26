@@ -2718,7 +2718,7 @@ fn result_success(event: &Value) -> bool {
 }
 
 fn events_log_result_success(path: &Path) -> anyhow::Result<bool> {
-  let (success, _) = visit_events_from_end(path, &[event_types::RESULT], None, |event| Some(result_success(&event)))?;
+  let (success, _) = visit_events_from_end(path, &[event_types::RESULT], |event| Some(result_success(&event)))?;
   Ok(success.unwrap_or(false))
 }
 

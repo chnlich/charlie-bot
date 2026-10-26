@@ -5,7 +5,7 @@ use std::fs;
 use std::sync::{Arc, Mutex};
 
 use charliebot_agents::transport::cgroup::{sweep_stale_session_cgroups, use_fake_cgroup_hierarchy};
-use charliebot_core::cgroup::{RETIRED_APP_SLICE, ResourceClass, session_slice_dir, user_slice_dir};
+use charliebot_core::cgroup::{RETIRED_APP_SLICE, user_slice_dir};
 use charliebot_core::test_support::EventSink;
 use tracing::Event;
 use tracing::field::{Field, Visit};
@@ -35,6 +35,7 @@ impl Visit for FieldText<'_> {
 
 #[test]
 fn sweep_removes_only_empty_cgroups_of_this_home_across_the_slices() {
+  // Python: tests/test_session_cgroup.py::test_sweep_removes_only_empty_cgroups_of_this_home_across_the_slices.
   use_fake_cgroup_hierarchy();
   let base = tempfile::tempdir().unwrap();
   let home = tempfile::tempdir().unwrap();
@@ -42,13 +43,14 @@ fn sweep_removes_only_empty_cgroups_of_this_home_across_the_slices() {
   fs::create_dir(&sessions).unwrap();
   fs::create_dir(sessions.join(SESSION_ID)).unwrap();
   fs::create_dir(sessions.join(POPULATED_ID)).unwrap();
-  let agents_slice = session_slice_dir(base.path(), ResourceClass::Agent);
-  let repair_slice = session_slice_dir(base.path(), ResourceClass::Repair);
+  let agents_slice = user_slice_dir(base.path(), "charliebot-agents.slice");
+  let repair_slice = user_slice_dir(base.path(), "charliebot-repair.slice");
   let retired_slice = user_slice_dir(base.path(), RETIRED_APP_SLICE);
   for slice in [&agents_slice, &repair_slice, &retired_slice] {
     fs::create_dir_all(slice).unwrap();
   }
-  // The same home's cgroup in each slice; the retired slice's leftover is cleared too.
+  // The same home's cgroup in the agents' slice and in the retired slice: both empty, both cleared. The repair slice
+  // is no longer swept, so its empty cgroup of this home stays.
   let agents_empty = agents_slice.join("charliebot-sess-abcd1234");
   let repair_empty = repair_slice.join("charliebot-sess-abcd1234");
   let retired_empty = retired_slice.join("charliebot-sess-abcd1234");
@@ -67,9 +69,9 @@ fn sweep_removes_only_empty_cgroups_of_this_home_across_the_slices() {
   let _capture = charliebot_core::test_support::install_events(Arc::new(recorded.clone()));
   let removed = sweep_stale_session_cgroups(base.path(), &sessions).expect("the home sessions directory can be read");
 
-  assert_eq!(removed, 3);
+  assert_eq!(removed, 2);
   assert!(!agents_empty.exists());
-  assert!(!repair_empty.exists());
+  assert!(repair_empty.is_dir());
   assert!(!retired_empty.exists());
   assert!(populated.is_dir());
   assert!(other_home.is_dir());
@@ -80,11 +82,8 @@ fn sweep_removes_only_empty_cgroups_of_this_home_across_the_slices() {
     .filter(|fields| fields.get("message").is_some_and(|text| text == "session_cgroup_sweep_removed"))
     .collect();
   assert_eq!(sweeps.len(), 1);
-  assert_eq!(sweeps[0]["count"], "3");
-  assert_eq!(
-    sweeps[0]["names"],
-    r#"["charliebot-sess-abcd1234", "charliebot-sess-abcd1234", "charliebot-sess-abcd1234"]"#
-  );
+  assert_eq!(sweeps[0]["count"], "2");
+  assert_eq!(sweeps[0]["names"], r#"["charliebot-sess-abcd1234", "charliebot-sess-abcd1234"]"#);
 }
 
 #[test]

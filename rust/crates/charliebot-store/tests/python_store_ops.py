@@ -201,6 +201,28 @@ def _prepare(root: pathlib.Path) -> None:
     asyncio.run(_seed_one(root, operation))
 
 
+async def _seed_old_resource_class(root: pathlib.Path) -> None:
+  # A session file of a server before 637df0572: the repair mark is an unknown key that the model keeps.
+  python_home = root / "python-home"
+  os.environ["CHARLIEBOT_HOME"] = str(python_home)
+  store = session_store.SessionStore(config.load_config())
+  (python_home / "sessions" / SESSION_ID).mkdir(parents=True, exist_ok=True)
+  meta = models.SessionMetadata(
+      id=SESSION_ID,
+      name="old resource class session",
+      created_at=FIXED,
+      updated_at=FIXED,
+      profile="manager",
+  )
+  meta.resource_class = "repair"
+  await store.save_metadata(meta)
+
+
+def _prepare_old_resource_class(root: pathlib.Path) -> None:
+  _registered()
+  asyncio.run(_seed_old_resource_class(root))
+
+
 def _verify(root: pathlib.Path) -> None:
   _registered()
   for operation in (*OPS, "event_append"):
@@ -997,6 +1019,8 @@ if __name__ == "__main__":
   os.environ["CHARLIEBOT_HOME"] = str(root / "bootstrap-home")
   if mode == "prepare":
     _prepare(root)
+  elif mode == "prepare_old_resource_class":
+    _prepare_old_resource_class(root)
   elif mode == "verify":
     _verify(root)
   elif mode == "prepare_runs":

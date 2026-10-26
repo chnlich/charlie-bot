@@ -457,7 +457,7 @@ mod tests {
   }
 
   #[test]
-  fn ensure_session_cgroup_writes_the_limits_under_the_chosen_slice() {
+  fn ensure_session_cgroup_creates_with_limit_files_under_the_agents_slice() {
     let root = fake_slices();
     fake_leaf(root.path(), AGENTS_SLICE);
     let path = ensure_session_cgroup(root.path(), ResourceClass::Agent, SESSION_ID, 64, 32, 4096).unwrap();
@@ -469,14 +469,6 @@ mod tests {
     assert_eq!(fs::read_to_string(path.join("memory.max")).unwrap(), format!("{}\n", 64 * 1024 * 1024));
     assert_eq!(fs::read_to_string(path.join("memory.swap.max")).unwrap(), format!("{}\n", 32 * 1024 * 1024));
     assert_eq!(fs::read_to_string(path.join("pids.max")).unwrap(), "4096\n");
-  }
-
-  #[test]
-  fn ensure_session_cgroup_puts_a_repair_session_under_the_repair_slice() {
-    let root = fake_slices();
-    fake_leaf(root.path(), REPAIR_SLICE);
-    let path = ensure_session_cgroup(root.path(), ResourceClass::Repair, SESSION_ID, 64, 32, 4096).unwrap();
-    assert_eq!(path, leaf_path(root.path(), REPAIR_SLICE));
   }
 
   #[test]
@@ -520,25 +512,40 @@ mod tests {
   #[test]
   fn ensure_session_cgroup_names_the_unwritable_slice() {
     let root = fake_slices();
-    let repair = leaf_slice(root.path(), REPAIR_SLICE);
-    fs::set_permissions(&repair, Permissions::from_mode(0o500)).unwrap();
-    let result = ensure_session_cgroup(root.path(), ResourceClass::Repair, SESSION_ID, 64, 32, 4096);
-    fs::set_permissions(&repair, Permissions::from_mode(0o755)).unwrap();
+    let agents = leaf_slice(root.path(), AGENTS_SLICE);
+    fs::set_permissions(&agents, Permissions::from_mode(0o500)).unwrap();
+    let result = ensure_session_cgroup(root.path(), ResourceClass::Agent, SESSION_ID, 64, 32, 4096);
+    fs::set_permissions(&agents, Permissions::from_mode(0o755)).unwrap();
     assert!(
-      matches!(&result, Err(error) if error.to_string().contains(REPAIR_SLICE)),
+      matches!(&result, Err(error) if error.to_string().contains(AGENTS_SLICE)),
       "an unwritable slice must fail the spawn and name the slice, got {result:?}"
     );
   }
 
   #[test]
-  fn memory_events_classify_cap_kills() {
+  fn memory_events_are_read_from_the_cgroup_directory() {
     let root = tempfile::tempdir().unwrap();
     fs::write(root.path().join("memory.events"), "low 0\nmax 2\noom_kill 1\n").unwrap();
     assert_eq!(read_memory_events(root.path()), Some((2, 1)));
-    let message = classify_cgroup_exit(Some(-9), Some((1, 0)), Some((2, 0)), 12288).unwrap();
+  }
+
+  #[test]
+  fn classify_cap_kill_on_max_growth() {
+    // Python: tests/test_session_cgroup.py::test_classify_cap_kill_on_max_growth.
+    let message = classify_cgroup_exit(Some(-9), Some((0, 0)), Some((1, 0)), 12288).unwrap();
     assert!(message.contains("session 内存上限触发"));
     assert!(message.contains("12288"));
     assert!(message.contains("gpuq"));
+  }
+
+  #[test]
+  fn classify_group_limit_kill_on_oom_kill_growth_with_a_flat_max() {
+    // Python: tests/test_session_cgroup.py::test_classify_group_limit_kill_on_oom_kill_growth_with_a_flat_max.
+    let message = classify_cgroup_exit(Some(-9), Some((0, 0)), Some((0, 1)), 12288);
+    assert_eq!(
+      message.as_deref(),
+      Some("进程因内存不足被内核结束（agent 组或整机内存用满；session 内存上限 12288 MB 未触发）")
+    );
   }
 
   #[test]

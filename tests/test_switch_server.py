@@ -32,6 +32,7 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -678,15 +679,25 @@ def _adopted(world: World, runs_file: pathlib.Path, launch_output: str) -> subpr
 
 
 def test_adoption_passes_when_the_recorded_run_ended_during_the_switch(world: World) -> None:
-  """A run whose process has ended and whose recorded outcome is a completion needs no resume line: the check passes."""
-  _seed_live_run(world, "run-ended", "claude-opus")
+  """Manager-turn recovery is queued after startup, so readback waits for its successful finish fact."""
+  run_id = "run-ended"
+  _seed_live_run(world, run_id, "claude-opus")
+  run_path = world.home / "sessions" / SESSION / "data" / "runs" / run_id / "metadata.json"
+  run = json.loads(run_path.read_text(encoding="utf-8"))
+  run["kind"] = "manager_turn"
+  run_path.write_text(json.dumps(run), encoding="utf-8")
+  events_path = world.home / "sessions" / SESSION / "data" / "chat_events.jsonl"
+  events_path.touch()
   runs_file = _scanned_runs_file(world)  # recorded while the process still ran, as the preflight scan does
   world.live[0].kill()
   world.live[0].wait()
-  _record_outcome(world, "run-ended", "success")
+  writer = threading.Thread(target=lambda: (time.sleep(0.2), _record_outcome(world, run_id, "success")))
+  writer.start()
 
-  proc = _adopted(world, runs_file, DRAIN_LINE.format(session=SESSION, run_id="run-ended"))
+  proc = _adopted(world, runs_file, DRAIN_LINE.format(session=SESSION, run_id=run_id))
+  writer.join(timeout=1)
 
+  assert not writer.is_alive()
   assert proc.returncode == 0, proc.stdout + proc.stderr
   assert "readback: run run-ended ended during the switch: outcome success" in proc.stdout
   assert "was not adopted" not in proc.stdout
@@ -704,6 +715,9 @@ def test_adoption_fails_only_for_a_recorded_run_that_still_runs(world: World) ->
   ended.kill()
   ended.wait()
   _record_outcome(world, "run-ended", "success")
+  archive = world.home / "sessions" / SESSION / "data" / "archives" / "chat_events.2026-W01.jsonl"
+  archive.parent.mkdir(parents=True)
+  (world.home / "sessions" / SESSION / "data" / "chat_events.jsonl").rename(archive)
 
   proc = _adopted(world, runs_file, "")
 

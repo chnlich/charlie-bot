@@ -19,7 +19,7 @@ use axum::http::request::Parts;
 use axum::response::Response;
 use charliebot_compat::{jinja, responses};
 use charliebot_core::{git, pyfmt};
-use jwalk::{Parallelism, WalkDir};
+use ignore::WalkBuilder;
 use minijinja::{Environment, Error, ErrorKind, Value};
 use serde_json::json;
 use sha1::{Digest, Sha1};
@@ -223,11 +223,16 @@ fn request_context(request: &Parts) -> serde_json::Value {
   json!({"method": request.method.as_str(), "path": request.uri.path(), "query": request.uri.query().unwrap_or("")})
 }
 
-/// A walk error for a symlink that does not resolve. Python's `os.DirEntry.is_dir` and `is_file` follow symlinks and
-/// answer False for a dangling one, so the static walk skips it.
-fn is_dangling_link(error: &jwalk::Error) -> bool {
+/// Python's `os.DirEntry.is_dir` and `is_file` answer False for a dangling symlink, so the static walk skips it.
+fn is_not_found(error: &ignore::Error) -> bool {
   error.io_error().is_some_and(|error| error.kind() == io::ErrorKind::NotFound)
-    && error.path().is_some_and(Path::is_symlink)
+}
+
+/// Build a recursive walk that applies no hidden-file or ignore-file filters.
+fn filesystem_walk(directory: &Path, follow_links: bool) -> WalkBuilder {
+  let mut builder = WalkBuilder::new(directory);
+  builder.min_depth(Some(1)).follow_links(follow_links).hidden(false).standard_filters(false);
+  builder
 }
 
 /// The static trees under `directory`, following symlinked directories, with each file's `(rel, mtime, size)` and
@@ -239,13 +244,11 @@ fn walk_static_tree(
   paths: &mut HashMap<String, PathBuf>,
 ) -> io::Result<()> {
   use std::os::unix::fs::MetadataExt;
-  for entry in
-    WalkDir::new(directory).min_depth(1).follow_links(true).skip_hidden(false).parallelism(Parallelism::Serial)
-  {
+  for entry in filesystem_walk(directory, true).build() {
     let entry = match entry {
       Ok(entry) => entry,
-      Err(error) if is_dangling_link(&error) => continue,
-      Err(error) => return Err(error.into()),
+      Err(error) if is_not_found(&error) => continue,
+      Err(error) => return Err(io::Error::new(io::ErrorKind::Other, error)),
     };
     let relative = entry.path().strip_prefix(directory).expect("a walk yields paths under its root").to_path_buf();
     let rel = relative.to_str().ok_or_else(|| {
@@ -255,11 +258,15 @@ fn walk_static_tree(
       )
     })?;
     let rel = format!("{prefix}{rel}");
-    let metadata = entry.metadata()?;
+    let metadata = match entry.metadata() {
+      Ok(metadata) => metadata,
+      Err(error) if error.io_error().is_some_and(|error| error.kind() == io::ErrorKind::NotFound) => continue,
+      Err(error) => return Err(io::Error::new(io::ErrorKind::Other, error)),
+    };
     if metadata.is_file() {
       let mtime_ns = metadata.mtime() * 1_000_000_000 + metadata.mtime_nsec();
       pairs.push((rel.clone(), mtime_ns, metadata.size()));
-      paths.insert(rel, entry.path());
+      paths.insert(rel, entry.path().to_path_buf());
     }
   }
   Ok(())
@@ -290,9 +297,7 @@ fn assert_unique_template_names(directories: &[PathBuf]) -> Result<(), String> {
 /// The `*.html` names under `directory` as `Path.rglob` finds them: symlinked directories are not entered, and an
 /// unreadable entry is skipped as `rglob` skips it.
 fn collect_html_names(directory: &Path, names: &mut Vec<String>) {
-  for entry in
-    WalkDir::new(directory).min_depth(1).follow_links(false).skip_hidden(false).parallelism(Parallelism::Serial)
-  {
+  for entry in filesystem_walk(directory, false).build() {
     let entry = match entry {
       Ok(entry) => entry,
       Err(error) => {

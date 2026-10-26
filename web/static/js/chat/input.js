@@ -46,25 +46,6 @@
 // ---------------------------------------------------------------------------
 // Send message
 // ---------------------------------------------------------------------------
-function bumpCurrentSessionToTop() {
-  const nav = document.getElementById('session-list');
-  const el = document.getElementById('session-' + SESSION_ID);
-  if (!nav || !el) return;
-
-  const groupItems = el.closest('.session-group-items');
-  const parent = groupItems || nav;
-  if (parent.firstElementChild && parent.firstElementChild !== el) {
-    parent.insertBefore(el, parent.firstElementChild);
-  }
-
-  const timeEl = el.querySelector('.session-time');
-  if (timeEl) {
-    const now = new Date().toISOString();
-    timeEl.dataset.time = now;
-    timeEl.textContent = relativeTime(now);
-  }
-}
-
 function postChatMessage(sessionId, content, extra, requestId) {
   return fetch(`/api/chat/${sessionId}/message`, {
     method: 'POST',
@@ -133,10 +114,9 @@ async function sendMessage() {
   const sessionId = SESSION_ID;
   const requestId = crypto.randomUUID();
 
-  // Optimistic UI: append user message and bump session to top
+  // Optimistic UI: append the user message. The sidebar row moves only when the refetched list repaints.
   pendingUserRequestIds.add(requestId);
   const optimisticMessage = appendMessage('user', content, inputMode, new Date().toISOString(), payloadFiles, requestId);
-  bumpCurrentSessionToTop();
   input.value = '';
   input.style.height = 'auto';
   if (DRAFT_KEY) localStorage.removeItem(DRAFT_KEY);
@@ -173,7 +153,6 @@ async function compactContext() {
 }
 
 const GLOBALS = {
-  bumpCurrentSessionToTop,
   sendMessage,
   compactContext,
 };

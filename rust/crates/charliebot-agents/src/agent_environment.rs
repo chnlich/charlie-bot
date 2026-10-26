@@ -2,8 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::env;
-use std::fs;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, bail};
@@ -135,53 +134,15 @@ fn process_environment() -> anyhow::Result<Env> {
 }
 
 fn realpath(path: &Path) -> anyhow::Result<PathBuf> {
-  let absolute = if path.as_os_str().is_empty() {
-    env::current_dir()?
-  } else if path.is_absolute() {
-    path.to_path_buf()
-  } else {
-    env::current_dir()?.join(path)
-  };
-  if let Ok(canonical) = fs::canonicalize(&absolute) {
-    return Ok(canonical);
+  if path.as_os_str().is_empty() {
+    return Ok(env::current_dir()?);
   }
-  let mut existing = absolute.clone();
-  let mut suffix = Vec::new();
-  while !existing.exists() {
-    let Some(name) = existing.file_name() else {
-      bail!("cannot resolve path {}", absolute.display());
-    };
-    suffix.push(name.to_os_string());
-    if !existing.pop() {
-      bail!("cannot resolve path {}", absolute.display());
-    }
-  }
-  let mut resolved = fs::canonicalize(existing)?;
-  for name in suffix.into_iter().rev() {
-    if name == "." {
-      continue;
-    }
-    if name == ".." {
-      resolved.pop();
-    } else {
-      resolved.push(name);
-    }
-  }
-  let mut normalized = PathBuf::new();
-  for component in resolved.components() {
-    match component {
-      Component::CurDir => {}
-      Component::ParentDir => {
-        normalized.pop();
-      }
-      other => normalized.push(other.as_os_str()),
-    }
-  }
-  Ok(normalized)
+  soft_canonicalize::soft_canonicalize(path).with_context(|| format!("cannot resolve path {}", path.display()))
 }
 
 #[cfg(test)]
 mod tests {
+  use std::fs;
   use std::process::Command;
 
   use super::*;
@@ -196,6 +157,8 @@ mod tests {
     std::os::unix::fs::symlink(root.path().join("venv"), root.path().join("venv-link")).unwrap();
     let tools = root.path().join("tools");
     let system = root.path().join("system");
+    // A path whose final components do not exist resolves lexically and stays on PATH.
+    let missing = root.path().join("missing/bin");
     let inherited = Env::from([
       ("VIRTUAL_ENV".to_string(), root.path().join("venv").display().to_string()),
       ("UV_RUN_RECURSION_DEPTH".to_string(), "1".to_string()),
@@ -205,6 +168,7 @@ mod tests {
           venv_bin.display().to_string(),
           tools.display().to_string(),
           root.path().join("venv-link/bin").display().to_string(),
+          missing.display().to_string(),
           system.display().to_string(),
         ]
         .join(":"),
@@ -218,7 +182,13 @@ mod tests {
     assert!(!rewritten.values.contains_key("UV_RUN_RECURSION_DEPTH"));
     assert_eq!(
       rewritten.values["PATH"],
-      format!("{}:{}:{}", root.path().join(ENTRY_POINT_RELATIVE).display(), tools.display(), system.display())
+      format!(
+        "{}:{}:{}:{}",
+        root.path().join(ENTRY_POINT_RELATIVE).display(),
+        tools.display(),
+        missing.display(),
+        system.display()
+      )
     );
     assert_eq!(rewritten.values[VENV_BIN_ENV], venv_bin.display().to_string());
     assert_eq!(rewritten.values["PYDANTIC_DISABLE_PLUGINS"], "__all__");

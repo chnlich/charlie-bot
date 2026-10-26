@@ -126,8 +126,7 @@ steps:
   - kind: ws
     name: catch-up from cursor zero ends with the buffered stream delta
     path: /ws/sessions/${sessions.stream_case}
-    send:
-      - json: {type: cursor, index: 0}
+    query: {cursor: 0}
     collect:
       where: {type: stream}
       field: message.content
@@ -138,8 +137,7 @@ steps:
   - kind: ws
     name: catch-up from cursor zero carries the committed user message
     path: /ws/sessions/${sessions.delta}
-    send:
-      - json: {type: cursor, index: 0}
+    query: {cursor: 0}
     collect:
       where: {type: message}
       field: message.content
@@ -150,8 +148,7 @@ steps:
   - kind: ws
     name: catch-up from cursor zero replays raw events and completes
     path: /ws/sessions/${sessions.explain}
-    send:
-      - json: {type: cursor, index: 0}
+    query: {cursor: 0}
     collect:
       where: {}
       field: type
@@ -162,8 +159,7 @@ steps:
   - kind: ws
     name: catch-up from a middle cursor replays only the events at and after it
     path: /ws/sessions/${sessions.explain}
-    send:
-      - json: {type: cursor, index: 4}
+    query: {cursor: 4}
     collect:
       where: {}
       field: type
@@ -174,30 +170,31 @@ steps:
   - kind: ws
     name: cursor at the total sends only catchup_complete
     path: /ws/sessions/${sessions.explain}
-    send:
-      - json: {type: cursor, index: 10}
+    query: {cursor: 10}
     until: {frames: 1}
     timeout_seconds: 10
   - kind: ws
     name: cursor past the total sends only catchup_complete
     path: /ws/sessions/${sessions.explain}
-    send:
-      - json: {type: cursor, index: 999999}
+    query: {cursor: 999999}
     until: {frames: 1}
     timeout_seconds: 10
   - kind: ws
     name: worker session catch-up replays the runs transcript
     path: /ws/sessions/${sessions.atlas_notes}
-    send:
-      - json: {type: cursor, index: 0}
+    query: {cursor: 0}
     until: {frames: 2}
     timeout_seconds: 10
   - kind: ws
-    name: an invalid-JSON cursor continues from zero
+    name: a missing cursor closes the socket with 4400
     path: /ws/sessions/${missing_session}
-    send:
-      - text: "{"
-    until: {frames: 1}
+    until: {close: true}
+    timeout_seconds: 10
+  - kind: ws
+    name: a cursor that is not decimal closes the socket with 4400
+    path: /ws/sessions/${missing_session}
+    query: {cursor: "{"}
+    until: {close: true}
     timeout_seconds: 10
   - kind: ws
     name: missing token rejects the upgrade
@@ -270,8 +267,7 @@ steps:
   - kind: ws
     name: the trigger turns reach the live socket on the session channel
     path: /ws/sessions/${sessions.atlas}
-    send:
-      - json: {type: cursor, index: 999999}
+    query: {cursor: 999999}
     collect:
       where: {type: message}
       field: message.content
@@ -282,8 +278,7 @@ steps:
   - kind: ws
     name: the trigger turns reach the live socket on the sidebar channel
     path: /ws/sessions/${sessions.atlas}
-    send:
-      - json: {type: cursor, index: 999999}
+    query: {cursor: 999999}
     collect:
       where: {type: running_changed}
       field: type

@@ -321,8 +321,8 @@ def step_result_block(name: str, backend: str, result: str) -> str:
 
 
 def completed_prefix(task_cfg: cron_config.ScheduledTaskConfig, step_count: int) -> str:
-  """The opening sentence of a completed chain's boundary report."""
-  return f"Scheduled task '{task_cfg.name}' completed all {step_count} step(s)."
+  """The opening clause of a completed chain's boundary report, without its ending."""
+  return f"Scheduled task '{task_cfg.name}' completed all {step_count} step(s)"
 
 
 # ---------------------------------------------------------------------------
@@ -393,7 +393,7 @@ async def run_firing_steps(
   blocks = [step_result_block(name, backend, result) for _pos, _rid, name, backend, result in executed]
   if failed_at is None:
     last_run_id = executed[-1][1]
-    summary = completed_prefix(task_cfg, len(executed)) + "\n\n" + "\n\n".join(blocks)
+    summary = completed_prefix(task_cfg, len(executed)) + ".\n\n" + "\n\n".join(blocks)
     try:
       await tree.completion.evaluate_automatic_completion(
           leaf_id,
@@ -755,7 +755,7 @@ async def run_firing_steps_boundary_report(
     steps = task_cfg.steps or []
     name = steps[position].name if position < len(steps) else f"step {position}"
     blocks.append(step_result_block(name, run.backend, await run_result_text(tree, leaf_id, run.id)))
-  summary = completed_prefix(task_cfg, len(chain)) + "\n\n" + "\n\n".join(blocks)
+  summary = completed_prefix(task_cfg, len(chain)) + ".\n\n" + "\n\n".join(blocks)
 
   async def _deliver_blocked_close(e: Exception) -> None:
     # The blocked close keeps the leaf open with its evidence/worktree intact

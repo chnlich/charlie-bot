@@ -10,16 +10,16 @@ not confirmed from source, with the reason.
 
 The Rust CLI lives in `rust/crates/app/cli` (binary `charliebot`) with the shared client contract in
 `rust/crates/infra/cli-common`. The `session`, `delegate`, `plan`, `artifact check`, `schedule-trigger`,
-`compaction-context` and `gc-trash` rows and the `memory query`, `memory add` and `memory lint` rows in
-section 3 marked *ported to Rust* run on the Rust binary; every other
-subcommand prints `{"error": "<name> is not ported to the Rust CLI yet"}` and exits 1, and the six caller-less Python
-names (`config`, `disk-sweep`, `router`, `storage`, `usage-ledger`, `voice-replay-eval`) are unknown subcommands (exit
-2). `artifact wrap` prints `{"error": "artifact wrap is not ported to the Rust CLI yet"}` and exits 1, and `artifact
-publish` keeps the not-ported error of the `artifact` row in the port to come. Golden cases record the Python CLI and
-replay it against the Rust binary; the record and replay commands are in `rust/crates/app/cli/README.md`. Rust
-deviations: no port cache — the port comes from `<home>/config.yaml`'s `server` section on every call; argument-parser
-help and usage text may differ from argparse (the exit codes match); the dispatcher's vocabulary is the 14
-caller-bearing names, so its help text and unknown-subcommand line differ from the Python CLI's; the Python CLI's
+`compaction-context`, `gc-trash`, `memory query`, `memory add`, `memory lint`, `web`, `slack` and `discord` rows in
+section 3 marked *ported to Rust* run on the Rust binary; every other subcommand prints
+`{"error": "<name> is not ported to the Rust CLI yet"}` and exits 1, and the six caller-less Python names
+(`config`, `disk-sweep`, `router`, `storage`, `usage-ledger`, `voice-replay-eval`) are unknown subcommands (exit 2).
+`artifact wrap` prints `{"error": "artifact wrap is not ported to the Rust CLI yet"}` and exits 1, and `artifact publish`
+keeps the not-ported error of the `artifact` row in the port to come. Golden cases record the Python CLI and replay it
+against the Rust binary; the record and replay commands are in `rust/crates/app/cli/README.md`. Rust deviations: no port
+cache — the port comes from `<home>/config.yaml`'s `server` section on every call; argument-parser help and usage text
+may differ from argparse (the exit codes match); the dispatcher's vocabulary is the 14 caller-bearing names, so its
+help text and unknown-subcommand line differ from the Python CLI's; the Python CLI's
 structlog console lines on stdout (a wall-clock stamp and a pid per line) are not reproduced — the golden harness drops
 them from both sides.
 The memory verbs read `<home>/memory` without `config.yaml`; `memory proposal` remains unported.
@@ -88,9 +88,9 @@ below.
 | `compaction-context --session SID --slot N` | none | Reads `sessions/<sid>/data/chat_events.jsonl` and current skill files from `<home>/skills/` or the repository's `skills/` directory. A named path in a Read or Bash event is tried first. Non-plain path patterns and unresolved skills are skipped and reported. Writes nothing. | 0 prints the SessionStart hook JSON for a non-empty slot; 1 on an unreadable log, invalid event JSON or unreadable skill; 2 usage | *ported to Rust* — the repository's `skills/` root comes from `CHARLIEBOT_REPO_ROOT` (Python derives it from the package location); week-date and ordinal-date timestamps CPython's `fromisoformat` accepts are refused; `config.yaml` is not loaded (Python loads it and can fail on an unreadable one before reading any skill) |
 | `config get <key>` | none | Reads `config.yaml` | 0 prints the value; 1 the value is null; 2 unknown key |  |
 | `delegate --task-spec-file F --keep-worktree {0,1} [--session] [--repo] [--base-branch] [--backend] [--request-id] [--task-type]` | `POST /api/internal/delegate`, with a readback | Reads `F`; requires all six headings and at least one `Source Files` bullet. Each bullet must be `- (none)` or an existing absolute path. Non-verify tasks give `--repo` and `--base-branch` together or omit both; a supplied `--repo` must be an existing absolute directory. Verify forbids both flags. These checks run before the POST. Without `--request-id`, the server derives `delegate-<sha256[:24]>` (`files.md` section 3), and the readback uses the same derivation. | 0 prints `{"session_id", "run_id"}` as indented JSON (`src/runtime/cli/delegate.py:199`), not the server's whole answer; 1 client contract; 2 usage | *ported to Rust*; Clap help and parser-generated usage text may differ in layout and wording |
-| `discord reply --file F [--session]` | `POST /api/internal/discord/reply` | Reads `F` | 0; 1; 2 |  |
-| `discord read [--url] [--limit N] [--session]` | `POST /api/internal/discord/read` | none | 0; 1; 2 (`--limit` out of range) |  |
-| `discord check` | `POST /api/internal/discord/check` | none | 0 when the result's `ok` is true; 1 otherwise or on error |  |
+| `discord reply --file F [--session]` | `POST /api/internal/discord/reply` | Reads `F` | 0; 1; 2 | *ported to Rust* |
+| `discord read [--url] [--limit N] [--session]` | `POST /api/internal/discord/read` | none | 0; 1; 2 (`--limit` out of range) | *ported to Rust* |
+| `discord check` | `POST /api/internal/discord/check` | none | 0 when the result's `ok` is true; 1 otherwise or on error | *ported to Rust* |
 | `disk-sweep [--yes]` | none | Reads Run metadata, lifecycle events, `paths.worktree_dir`, `paths.scratch_dir` and `/proc` to select old paths and skip paths in use (`src/features/disk_sweep/sweep.py`). Without `--yes` it prints candidate rows only. With it, it archives changed worktrees to the owner Run, removes worktrees through git and scratch directories with `rmtree`. Prints one row per candidate and a totals line | 0; 1 when a path fails to remove |  |
 | `gc-trash [--yes]` | none | Lists `<paths.worktree_dir>/.trash/` with sizes; `--yes` deletes every entry (`rmtree`) | 0; 1 when a deletion fails | *ported to Rust* — only the `paths:` section of `config.yaml` is read and validated (Python loads and validates the whole file); a failed deletion's message names the entry, where Python's `rmtree` may name an inner file; a top-level trash entry that is a file or a symlink is removed, where Python's `rmtree` refuses it (exit 1) |
 | `improve --repo R --goal-file G --base-branch B [--iterations N] [--plan-file P] [--backend] [--work-branch] [--merge-back] [--session]` | `POST /api/internal/improve`, with a readback | Reads `G` and `P` | 0; 1; 2 |  |
@@ -112,16 +112,16 @@ below.
 | `session cancel <sid> --reason R [--request-id]` | `POST /api/sessions/<sid>/cancel`; `GET /api/sessions/<sid>/runs` when a stopped run has no outcome | Reads run rows only for unresolved stops; prints each unresolved run id and pid to stderr. | 0; 1 when a stopped run is still running; 2 usage or refusal | *ported to Rust*
 | `session send (--message M \| --file F) ...` | `POST /api/internal/session-message` (422 maps to exit 2) | Reads `F` | 0; 2 refused (`EXIT_SEND_REFUSED`) or usage; 1 | *ported to Rust*
 | `session dialog [--session] [--turns N]` | `GET /api/sessions/<sid>/bootstrap`, then pages of `GET /api/sessions/<sid>/events?before=<cursor>&limit=200`; with `--turns` the pages stop once N+1 separator messages are fetched | none. With `--turns N` (N of at least 1) the output is the last N turns plus the turn in progress, under the header `last N turns · from event E · K earlier messages`, or `events` when the bootstrap's `archive_offset` is above 0; a bootstrap without `archive_offset` exits 1 | 0; 1; 2 | *ported to Rust*
-| `slack reply --file F [--session]` | `POST /api/internal/slack/reply` | Reads `F` | 0; 1; 2 |  |
-| `slack ack --message-id TS [TS ...] [--session]` | `POST /api/internal/slack/ack` | none | 0; 1; 2 |  |
+| `slack reply --file F [--session]` | `POST /api/internal/slack/reply` | Reads `F` | 0; 1; 2 | *ported to Rust* |
+| `slack ack --message-id TS [TS ...] [--session]` | `POST /api/internal/slack/ack` | none | 0; 1; 2 | *ported to Rust* |
 | `storage cool [--dry-run] [--min-idle-days N] [--session ID] [--vacuum] [--force]` | none | Runs `storage_cool.run_cool_sweep` in-process (`files.md` sections 5.8, 5.14 and 7). A real run first captures usage into `<home>/usage/ledger.sqlite3` and aborts on failure. It deletes raw transport files of cold sessions under `data/master_runs/*/` and `threads/*/data/`, and backend transcripts under the Claude login and `/home/<user>/.codex/sessions`. `--vacuum` runs `VACUUM` on `opencode.db` and refuses while an `opencode serve` writer lives, unless `--force`. | 0 prints the sweep table; 1 `ValueError`; 2 |  |
 | `usage-ledger capture [--ledger PATH]` | none | Opens the ledger (default `<home>/usage/ledger.sqlite3`) and captures this host's usage logs: Claude login `projects/`, `/home/<user>/.codex/sessions`, `opencode.db`, and this home's run logs | 0 prints `<source>: <n> records written` lines; 1 on an uncaught error |  |
 | `voice-replay-eval [--engines] [--terms] [--only] [--limit] [--out DIR] [--dry-run] ...` | none | Reads `<home>/sessions/*/voice/*.wav`, `.txt` and the chat events that hold the sent messages; runs the transcription backends in-process (cloud ones call their APIs). Writes `<out>/results.json` and `<out>/summary.md`, default `<home>/voice_eval/<UTC timestamp>/`. It refuses an `--out` inside the repo. | 0; 1 (`SystemExit` with a message); 2 usage |  |
-| `web reply --file F [--keep-language REASON] [--session]` | `POST /api/internal/web/reply` | Reads `F` | 0; 1; 2 |  |
-| `web dialog [--session]` | `GET /api/internal/web/dialog` | none | 0; 1; 2 |  |
-| `web status set --file F [--session]` | `POST /api/internal/web/status/unread`, then `POST /api/internal/web/ask-check` for each unread item, then `POST /api/internal/web/status` after every item has a current read | Reads `F`; for a linked item, reads the host-served file and runs a light backend one-shot. The server refuses a stale plan link with 409 before any cold read. | 0 stored; 3 after recording cold reads without storing; 1; 2 |  |
-| `web status confirm` | `POST /api/internal/web/status/confirm` | none. Prints the route's JSON answer on one line. | 0; 1; 2 |  |
-| `web status show [--session]` | `GET /api/internal/web/status` | none. Each waiting item prints its `since` and `since_exact` lines under the item. | 0; 1; 2 |  |
+| `web reply --file F [--keep-language REASON] [--session]` | `POST /api/internal/web/reply` | Reads `F` | 0; 1; 2 | *ported to Rust* |
+| `web dialog [--session]` | `GET /api/internal/web/dialog` | none | 0; 1; 2 | *ported to Rust* |
+| `web status set --file F [--session]` | `POST /api/internal/web/status/unread`, then `POST /api/internal/web/ask-check` for each unread item, then `POST /api/internal/web/status` after every item has a current read | Reads `F`; for a linked item, reads the host-served file and runs a light backend one-shot. The server refuses a stale plan link with 409 before any cold read. | 0 stored; 3 after recording cold reads without storing; 1; 2 | *ported to Rust*. Deviations: the Rust CLI writes no `backend_pool_*` log lines to stdout (Python writes them there with wall-clock timestamps), and a failed attempt's stderr line has no exception class prefix (Python's `RuntimeError: `). |
+| `web status confirm` | `POST /api/internal/web/status/confirm` | none. Prints the route's JSON answer on one line. | 0; 1; 2 | *ported to Rust* |
+| `web status show [--session]` | `GET /api/internal/web/status` | none. Each waiting item prints its `since` and `since_exact` lines under the item. | 0; 1; 2 | *ported to Rust* |
 
 ## 4. Acceptance check
 

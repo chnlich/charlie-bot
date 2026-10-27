@@ -85,10 +85,11 @@ import yaml
 
 home = pathlib.Path(sys.argv[1])
 mode = sys.argv[2]
-# Owner: ServerConfig.port in src/infra/config.py.
+# Owner: ServerConfig.port in rust/crates/infra/core/src/config.rs.
 DEFAULT_SERVER_PORT = 18498
-# Owner: the restart_reattach trait in src/runtime/hooks/backend_type_registration.py,
-# set by register() in src/backends/*/__init__.py.
+# Owner: the restart_reattach field of the backend registration (BackendTypeRegistration in
+# rust/crates/runtime/registry/src/registry.rs), set by each backend's register() in
+# rust/crates/runtime/agents/src/backends/*/mod.rs.
 NO_REATTACH = {"opencode", "antigravity"}
 
 

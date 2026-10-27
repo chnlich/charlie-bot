@@ -158,13 +158,26 @@ async fn wait_for_run(
           .map(|stat| stat.rsplit(") ").next().unwrap_or("").chars().next().unwrap_or('?').to_string())
           .unwrap_or_else(|error| format!("gone({error})"))
       });
+      let proc_details = run.pid.map(|pid| {
+        let read = |file: &str| match std::fs::read_to_string(format!("/proc/{pid}/{file}")) {
+          Ok(value) => value.trim().replace('\0', " "),
+          Err(error) => format!("read failed: {error}"),
+        };
+        format!(
+          "cmdline={:?} wchan={:?} status={:?} children={:?}",
+          read("cmdline"),
+          read("wchan"),
+          read("status"),
+          read(&format!("task/{pid}/children"))
+        )
+      });
       let mine: Vec<String> = events
         .iter()
         .filter(|event| event.to_value().to_string().contains(run_id))
         .map(|event| event.to_value().get("type").and_then(Value::as_str).unwrap_or("?").to_string())
         .collect();
       let dir = stack.store().run_dir(session_id, run_id);
-      eprintln!("DIAG run={run:?} proc_state={proc_state:?} run_events={mine:?}");
+      eprintln!("DIAG run={run:?} proc_state={proc_state:?} proc_details={proc_details:?} run_events={mine:?}");
       for entry in std::fs::read_dir(&dir)? {
         let entry = entry?;
         let meta = entry.metadata()?;
@@ -896,6 +909,14 @@ async fn failed_review_with_a_queued_retry_reports_nothing_and_stays_open() -> a
   assert!(child_reports(&stack, &manager.id)?.is_empty());
   assert_eq!(stack.store().task_state(&worker.id)?, "open");
   fs::write(control.path().join("release-1"), "release")?;
+  let control_entries: Vec<String> = fs::read_dir(control.path())?
+    .map(|entry| entry.map(|entry| entry.file_name().to_string_lossy().into_owned()))
+    .collect::<Result<_, _>>()?;
+  eprintln!(
+    "DIAG control={} count={:?} entries={control_entries:?}",
+    control.path().display(),
+    fs::read_to_string(control.path().join("count"))
+  );
   assert_eq!(wait_for_run(&stack, &guard, &worker.id, &retry.id).await?, RunOutcomeKind::Success);
   wait_for_task_state(&stack, &worker.id, "completed").await?;
   Ok(())

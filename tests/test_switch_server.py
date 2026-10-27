@@ -305,6 +305,7 @@ class World:
   socket: str
   env: dict[str, str]
   initial_head: str  # the runtime clone's HEAD before any switch
+  pre_sha: str  # the build before the crate grouping: the agents crate layout
   old_sha: str  # the release current names: the runtime/agents layout, OpenCode and agy cannot re-attach
   rust_sha: str  # the target release: one crate per backend, OpenCode and agy can re-attach
   new_sha: str  # the release commit used by the forward and back switch test: agy cannot re-attach
@@ -338,16 +339,14 @@ def _install_release(releases: pathlib.Path, sha: str) -> None:
   _write_behavior(release)
 
 
-def _write_backend_registration(clone: pathlib.Path,
-                                module: str,
-                                backend_type: str,
-                                *,
-                                enabled: bool,
-                                layout: str = "old") -> None:
-  """Write one backend's registration in the layout that build has: `old` keeps the runtime/agents module, `new` has
-  the backend's own crate."""
+def _write_backend_registration(
+    clone: pathlib.Path, module: str, backend_type: str, *, enabled: bool, layout: str = "old") -> None:
+  """Write one backend's registration in the layout that build has: `pre` keeps it in the agents crate, `old` in the
+  runtime/agents crate, `new` in the backend's own crate."""
   if layout == "new":
     path = clone / "rust/crates/backends" / module / "src/lib.rs"
+  elif layout == "pre":
+    path = clone / "rust/crates/charliebot-agents/src/backends" / module / "mod.rs"
   else:
     path = clone / "rust/crates/runtime/agents/src/backends" / module / "mod.rs"
   path.parent.mkdir(parents=True, exist_ok=True)
@@ -382,13 +381,22 @@ def _build_world(root: pathlib.Path) -> World:
   shutil.copy2(SWITCH, clone / "scripts" / "switch-server.sh")
   # The launcher's preflight reads its expected limits from this directory.
   shutil.copytree(ROOT / "scripts" / "systemd", clone / "scripts" / "systemd")
-  # The first build predates the backend crate split: one module per backend under the runtime/agents crate.
-  _write_backend_registration(clone, "opencode", "opencode", enabled=False)
-  _write_backend_registration(clone, "antigravity", "antigravity", enabled=False)
-  _write_backend_registration(clone, "claude_code", "cc-claude", enabled=True)
+  # The first build predates the crate grouping: one module per backend under the agents crate.
+  for module, backend_type, enabled in (("opencode", "opencode", False), ("antigravity", "antigravity", False),
+                                        ("claude_code", "cc-claude", True)):
+    _write_backend_registration(clone, module, backend_type, enabled=enabled, layout="pre")
   _git(clone, "init", "-q", "-b", "main")
   _git(clone, "add", "scripts", "rust")
   _git(clone, "commit", "-q", "-m", "fake runtime clone")
+  pre_sha = _git(clone, "rev-parse", "HEAD")
+  # The grouping moves the agents crate under runtime/; the registrations keep their module layout.
+  for module in ("opencode", "antigravity", "claude_code"):
+    (clone / "rust/crates/charliebot-agents/src/backends" / module / "mod.rs").unlink()
+  _write_backend_registration(clone, "opencode", "opencode", enabled=False)
+  _write_backend_registration(clone, "antigravity", "antigravity", enabled=False)
+  _write_backend_registration(clone, "claude_code", "cc-claude", enabled=True)
+  _git(clone, "add", "rust")
+  _git(clone, "commit", "-q", "-m", "move the crates into group directories")
   old_sha = _git(clone, "rev-parse", "HEAD")
   # The split moves each registration into its own crate, and OpenCode and agy start re-attaching.
   for module in ("opencode", "antigravity", "claude_code"):
@@ -409,6 +417,7 @@ def _build_world(root: pathlib.Path) -> World:
   _git(clone, "remote", "add", "origin", str(root / "origin.git"))
   _git(clone, "checkout", "-q", old_sha)
   _install_release(releases, old_sha)
+  _install_release(releases, pre_sha)
   _install_release(releases, rust_sha)
   _install_release(releases, new_sha)
   (releases / "current").symlink_to(old_sha)
@@ -470,6 +479,7 @@ def _build_world(root: pathlib.Path) -> World:
       socket=env["CHARLIEBOT_TMUX_SOCKET"],
       env=env,
       initial_head=old_sha,
+      pre_sha=pre_sha,
       old_sha=old_sha,
       rust_sha=rust_sha,
       new_sha=new_sha,
@@ -738,18 +748,23 @@ def test_live_backend_switch_directions(world: World, running: str, target: str,
 
 
 @pytest.mark.parametrize(
-    "running,target,reported,detail",
-    [
+    "running,target,reported,detail", [
         ("old", "rust", "running", "rust/crates/runtime/agents/src/backends/antigravity/mod.rs"),
         ("rust", "new", "target", "rust/crates/backends/antigravity/src/lib.rs"),
         ("new", "old", "target", "rust/crates/runtime/agents/src/backends/antigravity/mod.rs"),
+        ("pre", "rust", "running", "rust/crates/charliebot-agents/src/backends/antigravity/mod.rs"),
+        ("rust", "pre", "target", "rust/crates/charliebot-agents/src/backends/antigravity/mod.rs"),
     ],
-    ids=["old-layout-to-new-layout", "new-layout-to-new-layout", "new-layout-back-to-old-layout"])
-def test_backend_registration_reads_the_layout_of_each_build(world: World, running: str, target: str, reported: str,
-                                                             detail: str) -> None:
+    ids=[
+        "old-layout-to-new-layout", "new-layout-to-new-layout", "new-layout-back-to-old-layout",
+        "pre-grouping-to-split", "split-back-to-pre-grouping"
+    ])
+def test_backend_registration_reads_the_layout_of_each_build(
+    world: World, running: str, target: str, reported: str, detail: str) -> None:
   """A switch between builds reads each build's registration where that build's tree keeps it: the backend's own crate
-  after the split, the runtime/agents module before it. The two directions of a switch across the split both read."""
-  builds = {"old": world.old_sha, "rust": world.rust_sha, "new": world.new_sha}
+  after the split, the runtime/agents module before it, the agents crate before the grouping. Every direction of a
+  switch across those moves reads."""
+  builds = {"pre": world.pre_sha, "old": world.old_sha, "rust": world.rust_sha, "new": world.new_sha}
   _seed_live_run(world, "run-layout", "agy-gemini-flash")
 
   proc = _stubbed_preflight(world, f"rust {builds[running]}", "rust", builds[target])
@@ -757,6 +772,19 @@ def test_backend_registration_reads_the_layout_of_each_build(world: World, runni
   assert proc.returncode == 1, _report(world, proc)
   sha = builds[running] if reported == "running" else builds[target]
   assert f"{reported} build {sha} marks restart_reattach = false ({detail})" in proc.stdout, _report(world, proc)
+  assert all(live.poll() is None for live in world.live)
+
+
+def test_pre_grouping_build_passes_the_preflight_with_a_live_run(world: World) -> None:
+  """A live switch from the build before the grouping to a grouped build passes: the preflight finds the live run's
+  re-attachable backend type in the agents crate registration, then in the grouped build's own."""
+  _seed_live_run(world, "run-pre-grouping", "claude-opus")
+
+  proc = _stubbed_preflight(world, f"rust {world.pre_sha}", "rust", world.rust_sha)
+
+  assert proc.returncode == 0, _report(world, proc)
+  assert f"preflight passed: rust {world.pre_sha}" in proc.stdout, _report(world, proc)
+  assert "run-pre-grouping" in (world.root / "preflight.runs").read_text(encoding="utf-8"), _report(world, proc)
   assert all(live.poll() is None for live in world.live)
 
 

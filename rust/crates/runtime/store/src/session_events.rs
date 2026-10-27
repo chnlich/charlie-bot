@@ -581,6 +581,32 @@ mod tests {
   }
 
   #[tokio::test]
+  async fn mark_unread_notifies_once_when_the_flag_flips() {
+    let (_home, store) = make_test_store();
+    write_test_session(&store, "synthetic");
+    let mut subscription = store.subscribe(streaming::SIDEBAR_CHANNEL);
+
+    let marked = store.mark_unread("synthetic").await.unwrap().unwrap();
+
+    assert!(marked.has_unread);
+    assert_eq!(
+      drain_frames(&mut subscription).await,
+      vec![json!({
+        "type": "unread_changed",
+        "session_id": "synthetic",
+        "has_unread": true,
+      })]
+    );
+
+    let already_unread = store.mark_unread("synthetic").await.unwrap().unwrap();
+
+    assert!(already_unread.has_unread);
+    assert!(drain_frames(&mut subscription).await.is_empty());
+    assert!(store.mark_unread("missing").await.unwrap().is_none());
+    assert!(drain_frames(&mut subscription).await.is_empty());
+  }
+
+  #[tokio::test]
   async fn after_turn_contribution_starts_for_master_done_after_persistence() {
     let (sender, receiver) = tokio::sync::oneshot::channel();
     let hook = Arc::new(AfterTurnHook { sender: StdMutex::new(Some(sender)) });

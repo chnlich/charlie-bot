@@ -105,18 +105,7 @@ impl MasterQueue {
     let mark_unread = Arc::new(move |session_id: String| {
       let features = Arc::clone(&unread_features);
       Box::pin(async move {
-        let was_unread = features.store.get_session(&session_id).await?.is_some_and(|meta| meta.has_unread);
-        let saved = features.store.mark_unread(&session_id).await?;
-        if !was_unread && saved.is_some() {
-          features
-            .store
-            .broadcast_sidebar(
-              &session_id,
-              event_types::UNREAD_CHANGED,
-              Map::from_iter([("has_unread".to_string(), json!(true))]),
-            )
-            .await?;
-        }
+        features.store.mark_unread(&session_id).await?;
         Ok(())
       }) as BoxFuture<'static, anyhow::Result<()>>
     });
@@ -841,6 +830,7 @@ async fn broadcast_running_changed(
 #[cfg(test)]
 mod tests {
   use std::path::{Path, PathBuf};
+  use std::time::Duration;
 
   use charliebot_agents::backends::claude_code::EXCLUDE_DYNAMIC_SECTIONS_FLAG;
   use charliebot_agents::backends::claude_code::claude_compaction;
@@ -857,7 +847,7 @@ mod tests {
   use charliebot_registry::store_hooks;
   use charliebot_registry::{Registry, RegistryError};
   use charliebot_store::metadata::TaskProfile;
-  use charliebot_store::{SharedChatEvent, Store};
+  use charliebot_store::{CreateTask, SIDEBAR_CHANNEL, SharedChatEvent, Store, TaskCaller};
   use serde_json::Map;
 
   use super::*;
@@ -1081,6 +1071,73 @@ mod tests {
         .await
         .unwrap();
     assert_eq!(context_tokens, None);
+  }
+
+  #[tokio::test]
+  async fn queue_mark_unread_emits_one_sidebar_frame_for_a_flag_flip() {
+    let home = tempfile::tempdir().unwrap();
+    let features = context_features(home.path());
+    let queue = Arc::new(MasterQueue::new(Arc::new(BackendPool::default())));
+    let callbacks = queue.session_callbacks(Arc::clone(&features), Arc::new(|_| Ok((false, String::new()))));
+    let session_id = "queue-unread";
+    features
+      .store
+      .create_task(
+        CreateTask {
+          request_id: "root-queue-unread".to_string(),
+          task_parent_id: None,
+          profile: TaskProfile::Manager,
+          task: None,
+          name: Some("Queue unread".to_string()),
+          backend: Some("synthetic-resolver".to_string()),
+          group: None,
+          session_id: Some(session_id.to_string()),
+        },
+        TaskCaller::System,
+        Map::new(),
+      )
+      .await
+      .unwrap();
+    let mut sidebar = features.store.subscribe(SIDEBAR_CHANNEL);
+
+    let marked_unread = features.store.mark_unread(session_id).await.unwrap().unwrap();
+
+    assert!(marked_unread.has_unread);
+    let frame = tokio::time::timeout(Duration::from_secs(1), sidebar.recv()).await.unwrap().unwrap();
+    assert_eq!(
+      serde_json::from_str::<Value>(&frame).unwrap(),
+      json!({
+        "type": "unread_changed",
+        "session_id": session_id,
+        "has_unread": true,
+      })
+    );
+
+    let marked_read = features.store.mark_read(session_id).await.unwrap().unwrap();
+
+    assert!(!marked_read.has_unread);
+    let frame = tokio::time::timeout(Duration::from_secs(1), sidebar.recv()).await.unwrap().unwrap();
+    assert_eq!(
+      serde_json::from_str::<Value>(&frame).unwrap(),
+      json!({
+        "type": "unread_changed",
+        "session_id": session_id,
+        "has_unread": false,
+      })
+    );
+
+    (callbacks.mark_unread)(session_id.to_string()).await.unwrap();
+
+    let frame = tokio::time::timeout(Duration::from_secs(1), sidebar.recv()).await.unwrap().unwrap();
+    assert_eq!(
+      serde_json::from_str::<Value>(&frame).unwrap(),
+      json!({
+        "type": "unread_changed",
+        "session_id": session_id,
+        "has_unread": true,
+      })
+    );
+    assert!(tokio::time::timeout(Duration::from_millis(10), sidebar.recv()).await.is_err());
   }
 
   /// A manager turn that starts no agent: its session pins no backend, so the queue refuses it.

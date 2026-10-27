@@ -327,7 +327,7 @@ pub async fn post_web_reply_with_request_id(
   let chars = visible_reply_chars(text)?;
   let epoch = features.store.prime_aggregator(session_id).await?;
   let event = {
-    let guard = features.store.control_lock().await;
+    let _guard = features.store.control_lock().await;
     let events = features.store.load_all_facts_shared_sync(session_id)?;
     if let Some(request_id) = request_id {
       let event_id = charliebot_store::control_events::stable_request_event_id(session_id, request_id);
@@ -360,7 +360,7 @@ pub async fn post_web_reply_with_request_id(
     // Release the shared snapshot before append; Python appends into the cached list (`chat_events.py:221-224`).
     // Keeping this Arc alive would make Store::append_chat_event deep-clone the entire event vector through Arc::make_mut.
     drop(events);
-    features.store.append_control_fact(&guard, session_id, event).await?
+    features.store.append_chat_event(session_id, event).await?
   };
   features.store.announce_appended_event(session_id, &event, epoch).await?;
   features.store.mark_unread(session_id).await?;
@@ -411,9 +411,11 @@ pub fn for_you_entries_shared(store: &Store, events: &[SharedChatEvent]) -> Resu
 #[cfg(test)]
 mod tests {
   use std::fs;
+  use std::time::Duration;
 
   use axum::http::Method;
   use charliebot_store::metadata::TaskProfile;
+  use charliebot_store::{SIDEBAR_CHANNEL, Subscription};
 
   use super::*;
   use crate::test_support::{Home, id_of, user_event};
@@ -440,6 +442,14 @@ mod tests {
       .collect()
   }
 
+  async fn sidebar_frames(subscription: &mut Subscription) -> Vec<Value> {
+    let mut frames = Vec::new();
+    while let Ok(Some(frame)) = tokio::time::timeout(Duration::from_millis(1), subscription.recv()).await {
+      frames.push(serde_json::from_str(&frame).expect("a sidebar frame is JSON"));
+    }
+    frames
+  }
+
   #[tokio::test]
   async fn a_web_reply_records_the_text_and_reads_back_the_outcome() {
     let home = Home::new();
@@ -450,6 +460,38 @@ mod tests {
     assert_eq!(readback, json!({"posted": true, "chars": 10, "over_budget": false, "answers": null}));
     assert_eq!(replies(&home, &sid), vec![(json!("the answer"), json!({"answers": null, "chars": 10}))]);
     assert!(home.meta(&sid).await.has_unread);
+  }
+
+  #[tokio::test]
+  async fn a_web_reply_broadcasts_only_the_unread_change_to_the_sidebar() {
+    let home = Home::new();
+    let sid = home.manager("session", None).await;
+    let mut sidebar = home.features.store.subscribe(SIDEBAR_CHANNEL);
+
+    post_web_reply(&home.features, &sid, "the answer", None).await.expect("the reply posts");
+
+    assert_eq!(
+      sidebar_frames(&mut sidebar).await,
+      vec![json!({
+        "type": "unread_changed",
+        "session_id": sid,
+        "has_unread": true,
+      })]
+    );
+    assert_eq!(replies(&home, &sid).len(), 1);
+  }
+
+  #[tokio::test]
+  async fn a_second_web_reply_while_unread_sends_no_sidebar_frame() {
+    let home = Home::new();
+    let sid = home.manager("session", None).await;
+    post_web_reply(&home.features, &sid, "first answer", None).await.expect("the first reply posts");
+    let mut sidebar = home.features.store.subscribe(SIDEBAR_CHANNEL);
+
+    post_web_reply(&home.features, &sid, "second answer", None).await.expect("the second reply posts");
+
+    assert!(sidebar_frames(&mut sidebar).await.is_empty());
+    assert_eq!(replies(&home, &sid).len(), 2);
   }
 
   // Python: tests/test_web_reply.py::test_markdown_link_labels_set_the_reply_count_and_replay_readback

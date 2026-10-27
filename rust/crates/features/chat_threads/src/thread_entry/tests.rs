@@ -102,6 +102,58 @@ async fn concurrent_thread_reply_reuses_one_keyed_delivery_and_receipt() {
   assert_eq!(replies[0]["request_id"], "reply-run");
 }
 
+#[tokio::test]
+async fn thread_replies_and_assistant_errors_do_not_notify_task_tree_changes() {
+  let home = Home::new();
+  home.thread_session("reply-session", origin()).await;
+  let adapter = FakeAdapter::with_thread(&[]);
+  let dyn_adapter: Arc<dyn ThreadAdapter> = adapter.clone();
+  let mut reply_sidebar = home.features.store.subscribe(SIDEBAR_CHANNEL);
+
+  post_reply_with_request_id(&dyn_adapter, &home.features, "reply-session", "the answer", Some("reply-run"))
+    .await
+    .expect("the thread reply posts");
+
+  let reply_frames = Home::sidebar_frames(&mut reply_sidebar).await;
+  assert!(reply_frames.iter().all(|frame| frame["type"] != "task_tree_changed"), "{reply_frames:?}");
+  let replies: Vec<_> =
+    home.events("reply-session").into_iter().filter(|event| event["type"] == FAKECHAT.reply_event_type).collect();
+  assert_eq!(replies.len(), 1);
+
+  home.thread_session("error-session", origin()).await;
+  let summon = home
+    .append(
+      "error-session",
+      json!({
+        "type": event_types::AGENT_MESSAGE,
+        "content": FAKECHAT.summon_line,
+        "fakechat": {"channel_id": "c1", "thread_ts": "t1", "mention_id": "m1"},
+      }),
+    )
+    .await;
+  let nudge = home
+    .append(
+      "error-session",
+      json!({
+        "type": event_types::AGENT_MESSAGE,
+        "content": "the nudge",
+        "fakechat": {"nudge_of": summon["id"]},
+      }),
+    )
+    .await;
+  let mut error_sidebar = home.features.store.subscribe(SIDEBAR_CHANNEL);
+
+  audit_round(&dyn_adapter, &home.features, "error-session", nudge["id"].as_str().unwrap())
+    .await
+    .expect("the no-reply audit posts its assistant error");
+
+  let error_frames = Home::sidebar_frames(&mut error_sidebar).await;
+  assert!(error_frames.iter().all(|frame| frame["type"] != "task_tree_changed"), "{error_frames:?}");
+  let errors: Vec<_> =
+    home.events("error-session").into_iter().filter(|event| event["type"] == event_types::ASSISTANT_ERROR).collect();
+  assert_eq!(errors.len(), 1);
+}
+
 /// The chat-event type of a fakechat reply event, as the platform writes it.
 fn reply_type() -> &'static str {
   FAKECHAT.reply_event_type

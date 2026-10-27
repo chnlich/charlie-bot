@@ -378,7 +378,7 @@ The server does not create a speech-model directory. Python removed the local sp
 ### 5.19 `state/boot_recovery.json`
 
 - Writers: Python `src/runtime/task_recovery.py::write_boot_recovery_marker` (line 77) and Rust
-  `charliebot-tasks/src/recovery.rs::write_boot_recovery_marker`, each called after a task-tree recovery pass in
+  `runtime/tasks/src/recovery.rs::write_boot_recovery_marker`, each called after a task-tree recovery pass in
   which no node failed. The write is atomic: `boot_recovery.json.tmp`, then a rename. Python fsyncs the tmp file
   before the rename (`task_recovery.py:87`); the Rust write does not sync it (`recovery.rs:70-81`), so a power loss
   can leave an empty marker that Python reads as absent.
@@ -388,7 +388,7 @@ The server does not create a speech-model directory. Python removed the local sp
   pass. A missing file reads as no marker. Python also reads a file that is not UTF-8, is not JSON, is not an object,
   has no string `pass_started_at`, or has a timestamp that does not parse as no marker: it logs
   `boot_recovery_marker_unreadable` and the pass checks every node in full (`task_recovery.py:58-75`). Any other read
-  error still raises. Rust's reader returns that error for every such file (`charliebot-tasks/src/recovery.rs:53-68`),
+  error still raises. Rust's reader returns that error for every such file (`runtime/tasks/src/recovery.rs:53-68`),
   so a corrupt marker stops the boot there; `rust/docs/PORT_STATUS.md` lists the gap. The next pass skips a closed node that the marker proves unchanged
   (`services.md` section 3). Python keeps a node when either durable file has an mtime within one second before the
   marker; this slack covers coarse filesystem timestamps.

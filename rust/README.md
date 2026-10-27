@@ -96,7 +96,7 @@ rust/
   scripts/gen_mimetypes.py        regenerates mimetypes_table.rs from CPython's mimetypes
   scripts/gen_compat_fixtures.py  writes fixtures/python/ from the Python baseline
   fixtures/python/                the expected outputs the compat and ssh tests compare with
-  crates/charliebot-core/src/
+  crates/infra/core/src/
     config.rs                     config.yaml: typed sections, legacy and unknown key refusals
     credentials.rs                credentials.yaml
     hot_reload.rs                 reload a file when its (mtime, size) moves
@@ -106,7 +106,7 @@ rust/
     logging.rs, timefmt.rs        JSON log lines, Python time formats
     pyfmt.rs                      CPython repr, str and json.dumps renderings
     ssh.rs                        the batch-mode ssh argv and its 0700 control directory
-  crates/charliebot-compat/src/   the Python-compatibility pieces the server and later crates share
+  crates/infra/compat/src/   the Python-compatibility pieces the server and later crates share
     json.rs                       orjson and Starlette JSON bytes, floats included
     validation.rs                 FastAPI's 422 bodies and pydantic's lax parsing of query and path values
     jinja.rs                      minijinja environment with Jinja2's tojson and urlencode, autoescape on
@@ -115,7 +115,7 @@ rust/
     responses.rs, headers.rs      response builders and the latin-1 header text
     routing.rs                    method refusals: GET-only, GET and HEAD, POST-only, and Starlette's `allow` list
     http_client.rs                outbound client: HTTPS_PROXY, NO_PROXY and SSL_CERT_FILE over rustls
-  crates/charliebot-registry/src/
+  crates/runtime/registry/src/
     registry.rs                   the Registry: one ledger per hook kind, duplicate refusals, package order
     wiring.rs, pages.rs, turn.rs, sidebar.rs, usage.rs, sequence.rs
                                   the typed registration methods of each hook kind
@@ -124,7 +124,7 @@ rust/
     context.rs                    FeatureContext and the typed startup state
     store_hooks.rs                the store's hook traits, answered by the registered lifecycles and controllers
     templating.rs                 the page engine: Jinja2-compatible rendering with minijinja and `render_page`
-  crates/charliebot-server/src/
+  crates/app/server/src/
     main.rs                       startup, lifespan, bind, graceful shutdown
     app.rs                        the middleware stack and the feature routers
     packages/                     the composition root: the package list, with a stub for each unported package

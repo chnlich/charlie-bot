@@ -50,7 +50,7 @@ Agent processes are not stopped by the lifespan:
 - `restart_reattach=False` types (antigravity, opencode) use piped children spawned with `PR_SET_PDEATHSIG`; they
   are terminated with the turn.
 
-## 3. Crash recovery (`src/runtime/task_recovery.py::reconcile_task_tree`, `charliebot-tasks/src/recovery.rs`)
+## 3. Crash recovery (`src/runtime/task_recovery.py::reconcile_task_tree`, `runtime/tasks/src/recovery.rs`)
 
 Scope: only directories under this home's `sessions/` that hold a `metadata.json`, and only this home's records.
 

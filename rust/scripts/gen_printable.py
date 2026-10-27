@@ -1,10 +1,10 @@
-"""Print crates/charliebot-core/src/printable_table.rs: the code points that CPython's str.isprintable() rejects.
+"""Print crates/infra/core/src/printable_table.rs: the code points that CPython's str.isprintable() rejects.
 
 pyfmt::str_repr escapes every character that str.isprintable() rejects, as CPython's repr does. That set comes
 from the Unicode database of the interpreter, so regenerate the table with the interpreter of the Python baseline
 when that baseline moves:
 
-    uv run python rust/scripts/gen_printable.py > rust/crates/charliebot-core/src/printable_table.rs
+    uv run python rust/scripts/gen_printable.py > rust/crates/infra/core/src/printable_table.rs
     (cd rust && cargo fmt)
 """
 

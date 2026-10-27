@@ -1,12 +1,12 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/charliebot-agents",
-    "crates/charliebot-core",
-    "crates/charliebot-compat",
-    "crates/charliebot-server",
-    "crates/charliebot-tasks",
-    "crates/features/pyhtml",
+    "crates/runtime/agents",
+    "crates/infra/core",
+    "crates/infra/compat",
+    "crates/app/server",
+    "crates/runtime/tasks",
+    "crates/infra/pyhtml",
     "crates/features/artifacts",
     "crates/features/backup",
     "crates/features/chat_threads",
@@ -26,11 +26,11 @@ members = [
     "crates/features/usage",
     "crates/features/voice",
     "crates/features/web_reply",
-    "crates/charliebot-store",
-    "crates/charliebot-registry",
-    "crates/charliebot-session-api",
-    "crates/charliebot-sched",
-    "crates/charliebot-usage",
+    "crates/runtime/store",
+    "crates/runtime/registry",
+    "crates/runtime/session-api",
+    "crates/runtime/sched",
+    "crates/runtime/usage",
 ]
 
 [workspace.package]
@@ -116,12 +116,12 @@ walkdir = "2"
 which = "8"
 
 charliebot-artifacts = { path = "crates/features/artifacts" }
-charliebot-agents = { path = "crates/charliebot-agents" }
+charliebot-agents = { path = "crates/runtime/agents" }
 charliebot-backup = { path = "crates/features/backup" }
 charliebot-chat-threads = { path = "crates/features/chat_threads" }
 charliebot-code-server = { path = "crates/features/code_server" }
-charliebot-compat = { path = "crates/charliebot-compat" }
-charliebot-core = { path = "crates/charliebot-core" }
+charliebot-compat = { path = "crates/infra/compat" }
+charliebot-core = { path = "crates/infra/core" }
 charliebot-diag = { path = "crates/features/diag" }
 charliebot-disk-sweep = { path = "crates/features/disk_sweep" }
 charliebot-diff-view = { path = "crates/features/diff_view" }
@@ -131,16 +131,16 @@ charliebot-files = { path = "crates/features/files" }
 charliebot-host-auth = { path = "crates/features/host_auth" }
 charliebot-memory = { path = "crates/features/memory" }
 charliebot-ncu = { path = "crates/features/ncu" }
-charliebot-pyhtml = { path = "crates/features/pyhtml" }
-charliebot-registry = { path = "crates/charliebot-registry" }
+charliebot-pyhtml = { path = "crates/infra/pyhtml" }
+charliebot-registry = { path = "crates/runtime/registry" }
 charliebot-slack = { path = "crates/features/slack" }
-charliebot-store = { path = "crates/charliebot-store" }
-charliebot-session-api = { path = "crates/charliebot-session-api" }
-charliebot-sched = { path = "crates/charliebot-sched" }
-charliebot-tasks = { path = "crates/charliebot-tasks" }
+charliebot-store = { path = "crates/runtime/store" }
+charliebot-session-api = { path = "crates/runtime/session-api" }
+charliebot-sched = { path = "crates/runtime/sched" }
+charliebot-tasks = { path = "crates/runtime/tasks" }
 charliebot-terminal = { path = "crates/features/terminal" }
 charliebot-trace = { path = "crates/features/trace" }
-charliebot-usage = { path = "crates/charliebot-usage" }
+charliebot-usage = { path = "crates/runtime/usage" }
 charliebot-usage-page = { path = "crates/features/usage" }
 charliebot-voice = { path = "crates/features/voice" }
 charliebot-web-reply = { path = "crates/features/web_reply" }

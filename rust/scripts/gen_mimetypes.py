@@ -1,10 +1,10 @@
-"""Print crates/charliebot-compat/src/mimetypes_table.rs from this interpreter's mimetypes defaults.
+"""Print crates/infra/compat/src/mimetypes_table.rs from this interpreter's mimetypes defaults.
 
 The Rust static-file server guesses content types the way CPython's mimetypes module does: these
 built-in tables first, then the system mime.types files, read at startup. Regenerate the table with
 the interpreter of the Python baseline when that baseline moves:
 
-    uv run python rust/scripts/gen_mimetypes.py > rust/crates/charliebot-compat/src/mimetypes_table.rs
+    uv run python rust/scripts/gen_mimetypes.py > rust/crates/infra/compat/src/mimetypes_table.rs
     (cd rust && cargo fmt)
 """
 

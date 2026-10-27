@@ -3,8 +3,8 @@
 use charliebot_core::git;
 use charliebot_core::repo_root;
 
-use crate::client::{TransportError, WireRequest, WireResponse};
 use crate::timeouts;
+use crate::wire::{Method, TransportError, WireRequest, WireResponse};
 
 /// `compose_version_skew_hint`: a hint when the server and the repo sit at different SHAs, `None`
 /// when either SHA is missing (a best-effort fetch failed) or when they match.
@@ -46,7 +46,7 @@ fn best_effort_server_version(
   transport: &mut dyn FnMut(&WireRequest) -> Result<WireResponse, TransportError>,
 ) -> (Option<String>, Option<String>) {
   let request = WireRequest {
-    method: crate::client::Method::Get,
+    method: Method::Get,
     url: format!("{base_url}/api/internal/version"),
     headers: headers.to_vec(),
     body: None,

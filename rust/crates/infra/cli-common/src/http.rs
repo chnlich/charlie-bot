@@ -5,7 +5,7 @@ use std::sync::OnceLock;
 
 use tokio::runtime::{Builder, Runtime};
 
-use crate::client::{Method, TransportError, WireRequest, WireResponse};
+use crate::wire::{Method, TransportError, WireRequest, WireResponse};
 
 /// reqwest's workspace feature set ships no default rustls crypto provider; the CLI's
 /// `http://localhost` base URLs never negotiate TLS, but the client builder refuses to build
@@ -99,10 +99,7 @@ fn source_chain_contains(error: &reqwest::Error, needle: &str) -> bool {
 mod tests {
   use super::*;
   use std::io::{Read, Write};
-  use std::net::{TcpListener, TcpStream};
-
-  use crate::client::{ApiCall, CallContext, WallClock, call_api};
-  use serde_json::json;
+  use std::net::TcpListener;
 
   fn free_port() -> u16 {
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
@@ -172,72 +169,5 @@ mod tests {
     assert_eq!(response.status, 200);
     assert_eq!(response.reason, "OK");
     assert_eq!(response.body, br#"{"ok": true}"#.to_vec());
-  }
-
-  /// The head and body one client sent: read until the head ends, then the body its Content-Length names.
-  fn read_post(stream: &mut TcpStream) -> String {
-    let mut buffer = Vec::new();
-    let mut chunk = [0u8; 1024];
-    loop {
-      let read = stream.read(&mut chunk).expect("the request arrives within the read timeout");
-      assert!(read > 0, "the client closed before the request ended");
-      buffer.extend_from_slice(&chunk[..read]);
-      let Some(head_end) = buffer.windows(4).position(|window| window == b"\r\n\r\n") else { continue };
-      let head = String::from_utf8_lossy(&buffer[..head_end]).to_ascii_lowercase();
-      let length = head
-        .lines()
-        .find_map(|line| line.strip_prefix("content-length:"))
-        .and_then(|value| value.trim().parse::<usize>().ok())
-        .unwrap_or(0);
-      if buffer.len() >= head_end + 4 + length {
-        return String::from_utf8_lossy(&buffer[..head_end + 4 + length]).into_owned();
-      }
-    }
-  }
-
-  #[test]
-  fn test_post_sends_json_body_content_type_and_auth_header_over_the_real_client() {
-    // Python: tests/test_cli_restart_contract.py. One POST with a query and a JSON body over the real
-    // transport: the wire carries the query string, the Content-Type and the body, and no Authorization
-    // header when the call carries no credential.
-    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-    let port = listener.local_addr().unwrap().port();
-    let server = std::thread::spawn(move || {
-      let (mut stream, _) = listener.accept().unwrap();
-      stream.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
-      let request = read_post(&mut stream);
-      let body = br#"{"ok": true}"#;
-      let head = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-        body.len()
-      );
-      stream.write_all(head.as_bytes()).unwrap();
-      stream.write_all(body).unwrap();
-      request
-    });
-    let ctx = CallContext {
-      base_url: format!("http://localhost:{port}"),
-      headers: Vec::new(),
-      request_timeout: 5.0,
-      connect_total_timeout: 2.0,
-    };
-    let call = ApiCall {
-      method: Method::Post,
-      endpoint: "/api/internal/x".to_string(),
-      payload: Some(json!({ "a": 1 })),
-      params: Some(vec![("k".to_string(), "v".to_string())]),
-      readback: None,
-      rejection_exit_codes: &[],
-    };
-
-    let value = call_api(call, &ctx, &mut send_http, &mut WallClock::default()).unwrap();
-
-    assert_eq!(value, json!({ "ok": true }));
-    let request = server.join().unwrap();
-    let lowered = request.to_ascii_lowercase();
-    assert!(request.starts_with("POST /api/internal/x?k=v HTTP/1.1\r\n"), "{request}");
-    assert!(lowered.contains("\r\ncontent-type: application/json\r\n"), "{request}");
-    assert!(!lowered.contains("\r\nauthorization:"), "{request}");
-    assert!(request.ends_with(r#"{"a": 1}"#), "{request}");
   }
 }

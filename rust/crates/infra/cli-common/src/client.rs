@@ -13,48 +13,7 @@ use crate::exit::CliExit;
 use crate::json_out;
 use crate::skew;
 use crate::urlencode::urlencode;
-
-/// One internal-API method; no CLI path uses another.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Method {
-  Get,
-  Post,
-}
-
-/// One HTTP request on the wire, as the contract's transport sees it.
-#[derive(Debug, Clone)]
-pub struct WireRequest {
-  pub method: Method,
-  pub url: String,
-  pub headers: Vec<(String, String)>,
-  pub body: Option<Vec<u8>>,
-  pub timeout: Duration,
-}
-
-/// One HTTP response: the status the contract's rejection check reads, plus the body.
-#[derive(Debug, Clone)]
-pub struct WireResponse {
-  pub status: u16,
-  pub reason: String,
-  pub body: Vec<u8>,
-}
-
-/// A transport failure, split by the phase it failed in: a connect that never established
-/// (`ConnectPhase`, retry is safe) and everything after the first byte left (`SentButLost`).
-#[derive(Debug, Clone, PartialEq)]
-pub enum TransportError {
-  ConnectPhase(String),
-  SentButLost(String),
-}
-
-impl TransportError {
-  /// The error message the CLI's JSON object carries.
-  pub fn message(&self) -> &str {
-    match self {
-      TransportError::ConnectPhase(message) | TransportError::SentButLost(message) => message,
-    }
-  }
-}
+use crate::wire::{Method, TransportError, WireRequest, WireResponse};
 
 /// The clock the retry loop reads. Injected, so a test covers the backoff without waiting.
 pub trait Clock {
@@ -255,6 +214,9 @@ fn run_call(call: ApiCall<'_>) -> Result<Value, CliExit> {
 
 #[cfg(test)]
 mod tests {
+  use std::io::{Read, Write};
+  use std::net::{TcpListener, TcpStream};
+
   use super::*;
   use serde_json::json;
 
@@ -420,5 +382,72 @@ mod tests {
     let error = call_api(call(Method::Get), &ctx(), &mut transport, &mut clock).unwrap_err();
 
     assert_eq!(error.body["error"], json!("HTTP 404 Not Found"));
+  }
+
+  /// The head and body one client sent: read until the head ends, then the body its Content-Length names.
+  fn read_post(stream: &mut TcpStream) -> String {
+    let mut buffer = Vec::new();
+    let mut chunk = [0u8; 1024];
+    loop {
+      let read = stream.read(&mut chunk).expect("the request arrives within the read timeout");
+      assert!(read > 0, "the client closed before the request ended");
+      buffer.extend_from_slice(&chunk[..read]);
+      let Some(head_end) = buffer.windows(4).position(|window| window == b"\r\n\r\n") else { continue };
+      let head = String::from_utf8_lossy(&buffer[..head_end]).to_ascii_lowercase();
+      let length = head
+        .lines()
+        .find_map(|line| line.strip_prefix("content-length:"))
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .unwrap_or(0);
+      if buffer.len() >= head_end + 4 + length {
+        return String::from_utf8_lossy(&buffer[..head_end + 4 + length]).into_owned();
+      }
+    }
+  }
+
+  #[test]
+  fn test_post_sends_json_body_content_type_and_auth_header_over_the_real_client() {
+    // Python: tests/test_cli_restart_contract.py. One POST with a query and a JSON body over the real
+    // transport: the wire carries the query string, the Content-Type and the body, and no Authorization
+    // header when the call carries no credential.
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = std::thread::spawn(move || {
+      let (mut stream, _) = listener.accept().unwrap();
+      stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+      let request = read_post(&mut stream);
+      let body = br#"{"ok": true}"#;
+      let head = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+      );
+      stream.write_all(head.as_bytes()).unwrap();
+      stream.write_all(body).unwrap();
+      request
+    });
+    let ctx = CallContext {
+      base_url: format!("http://localhost:{port}"),
+      headers: Vec::new(),
+      request_timeout: 5.0,
+      connect_total_timeout: 2.0,
+    };
+    let call = ApiCall {
+      method: Method::Post,
+      endpoint: "/api/internal/x".to_string(),
+      payload: Some(json!({ "a": 1 })),
+      params: Some(vec![("k".to_string(), "v".to_string())]),
+      readback: None,
+      rejection_exit_codes: &[],
+    };
+
+    let value = call_api(call, &ctx, &mut crate::http::send_http, &mut WallClock::default()).unwrap();
+
+    assert_eq!(value, json!({ "ok": true }));
+    let request = server.join().unwrap();
+    let lowered = request.to_ascii_lowercase();
+    assert!(request.starts_with("POST /api/internal/x?k=v HTTP/1.1\r\n"), "{request}");
+    assert!(lowered.contains("\r\ncontent-type: application/json\r\n"), "{request}");
+    assert!(!lowered.contains("\r\nauthorization:"), "{request}");
+    assert!(request.ends_with(r#"{"a": 1}"#), "{request}");
   }
 }

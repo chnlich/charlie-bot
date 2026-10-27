@@ -3,6 +3,7 @@
 
 mod backend;
 pub mod factory;
+mod host;
 mod options;
 pub mod pricing;
 pub mod resolver;
@@ -13,15 +14,14 @@ pub mod usage_logs;
 pub mod usage_quota;
 mod usage_sweep;
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::Context;
 use charliebot_registry::backend::{BackendTraits, BackendTypeRegistration, ResumeStyle};
 use charliebot_registry::usage::UsageSource;
 use charliebot_registry::{Registry, RegistryError};
 
 pub use backend::CodexBackend;
+pub use host::CodexHost;
 pub use resolver::{CodexSessionHost, CodexUsageResolver};
 pub use translate::FILE_WRITE;
 pub use usage_logs::session_id;
@@ -30,37 +30,6 @@ use factory::CodexFactory;
 
 /// The usage source's name: the ledger's source value and the usage page's card title.
 pub const USAGE_SOURCE: &str = "Codex";
-
-/// The process environment the codex package reads: PATH to find the codex binary, and HOME for `~/.local/bin` and
-/// `~/.codex`.
-#[derive(Clone, Debug)]
-pub struct CodexHost {
-  pub path: String,
-  pub home: PathBuf,
-}
-
-impl CodexHost {
-  /// The host of the running server. PATH defaults to Python's `os.defpath` when unset; HOME must be set.
-  pub fn from_process() -> anyhow::Result<Self> {
-    let home = std::env::var("HOME").context("HOME must be set for the codex package")?;
-    let path = match std::env::var("PATH") {
-      Ok(path) => path,
-      Err(std::env::VarError::NotPresent) => "/bin:/usr/bin".to_string(),
-      Err(error) => return Err(error).context("PATH must be valid Unicode for the codex package"),
-    };
-    Ok(Self { path, home: PathBuf::from(home) })
-  }
-
-  /// `Path.home() / ".local" / "bin"`: the directory the child PATH gains, and the binary's fallback.
-  pub fn user_local_bin(&self) -> PathBuf {
-    self.home.join(".local").join("bin")
-  }
-
-  /// `Path.home() / ".codex"`: the default codex home that holds the rollouts.
-  pub fn codex_home(&self) -> PathBuf {
-    self.home.join(".codex")
-  }
-}
 
 /// Registers the codex backend type, its usage resolver, its usage source, and the source's attribution.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
@@ -102,6 +71,7 @@ pub fn register_with_host(registry: &mut Registry, host: &CodexHost) -> Result<(
 #[cfg(test)]
 mod tests {
   use super::*;
+  use std::path::PathBuf;
   use std::sync::OnceLock;
 
   use charliebot_core::hot_reload::HotReload;

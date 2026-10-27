@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install the server binary that CI built for one commit on main.
+# Install the server and CLI binaries that CI built for one commit on main.
 #
 #   scripts/release.sh <full main commit>
 #
@@ -11,14 +11,14 @@
 #   0  the release is installed; the switch command is printed.
 #
 # The stages run in order:
-#   download   gh downloads the charliebot-server-<commit> artifact, and sha256sum -c passes on it;
+#   download   gh downloads the charliebot-server-<commit> artifact, and sha256sum -c passes on both binaries;
 #   trial      scripts/release/trial.sh runs the trial on the downloaded binary;
 #   rehearsal  scripts/release/switch-rehearsal.sh switches an isolated checkout from the release that current
 #              selects to this one and back;
 #   install    the release directory is built under a temporary name and renamed to <commit>.
 #
-# The release directory holds charliebot-server, release.log with each stage's verdict, and sha256sums.txt over every
-# file. It has no PORT_BASELINE, and the current link is not changed.
+# The release directory holds charliebot-server and charliebot from the same CI build, release.log with each stage's
+# verdict, and sha256sums.txt over both binaries and the log. It has no PORT_BASELINE, and the current link is not changed.
 #
 # Environment: CHARLIEBOT_RELEASES_DIR (default $HOME/charliebot-releases); CHARLIEBOT_RELEASE_LOG_DIR (default
 # $HOME/charliebot-release-logs; stage logs and evidence live here, outside the repository and the release directory,
@@ -131,7 +131,8 @@ stage_install() {
   local tmp="$RELEASES_DIR/.$COMMIT.$$" line
   rm -rf "$tmp"
   mkdir -m 700 "$tmp" || return 1
-  if ! cp "$ARTIFACT_DIR/charliebot-server" "$tmp/charliebot-server" || ! chmod 755 "$tmp/charliebot-server"; then
+  if ! cp "$ARTIFACT_DIR/charliebot-server" "$ARTIFACT_DIR/charliebot" "$tmp/" \
+    || ! chmod 755 "$tmp/charliebot-server" "$tmp/charliebot"; then
     rm -rf "$tmp"
     return 1
   fi
@@ -145,7 +146,7 @@ stage_install() {
     rm -rf "$tmp"
     return 1
   }
-  if ! (cd "$tmp" && sha256sum charliebot-server release.log > sha256sums.txt); then
+  if ! (cd "$tmp" && sha256sum charliebot charliebot-server release.log > sha256sums.txt); then
     rm -rf "$tmp"
     return 1
   fi

@@ -6,7 +6,7 @@
 #   scripts/release/switch-rehearsal.sh <new commit> <new release dir>
 #
 # The old release is the one `$CHARLIEBOT_RELEASES_DIR/current` selects (default ~/charliebot-releases). <new release
-# dir> holds the new release's charliebot-server and sha256sums.txt, as scripts/release.sh downloaded them.
+# dir> holds the new release's charliebot-server, charliebot and sha256sums.txt, as scripts/release.sh downloaded them.
 #
 # The rehearsal checkout is a clone of a bare origin that holds this repository's origin/main, checked out at the old
 # release's commit. The switch copy runs from .cutover-switch/ beside it, so the switch moves the rehearsal checkout

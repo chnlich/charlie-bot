@@ -1,5 +1,6 @@
 use std::fmt::Write;
 use std::io::{self, BufRead, BufReader};
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
@@ -37,9 +38,29 @@ fn prepare_home(root: &Path) -> PathBuf {
   home
 }
 
+fn test_server_binary(root: &Path) -> PathBuf {
+  let directory = root.join("server-bin");
+  std::fs::create_dir_all(&directory).expect("the synthetic server directory is created");
+  let server = directory.join("charliebot-server");
+  if !server.exists() {
+    std::fs::copy(env!("CARGO_BIN_EXE_charliebot-server"), &server).expect("the server binary is copied");
+    let mut permissions = std::fs::metadata(&server).expect("the copied server metadata is read").permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&server, permissions).expect("the copied server is executable");
+  }
+  let cli = directory.join("charliebot");
+  if !cli.exists() {
+    std::fs::write(&cli, "test fixture; this file is not run\n").expect("the fake CLI file is written");
+    let mut permissions = std::fs::metadata(&cli).expect("the fake CLI metadata is read").permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&cli, permissions).expect("the fake CLI is executable");
+  }
+  server
+}
+
 fn start_server(root: &Path, home: &Path, gate_recovery: bool) -> (ServerChild, Receiver<io::Result<String>>) {
   let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../..");
-  let mut command = Command::new(env!("CARGO_BIN_EXE_charliebot-server"));
+  let mut command = Command::new(test_server_binary(root));
   command
     .current_dir(&repo_root)
     .env_clear()

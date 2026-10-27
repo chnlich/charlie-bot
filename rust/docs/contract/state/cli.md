@@ -1,7 +1,7 @@
 # The `charliebot` CLI
 
 Baseline: the Python tree at `4521a51b2`. Entry point: `[project.scripts] charliebot = "src.app.main:main"`.
-Agents reach it through the shim `src/runtime/agent_entry_points/charliebot` (`env.md` section 3). Per
+Agents reach the Rust binary through the running server binary's directory, which is first on their `PATH`. Per
 subcommand, this document gives the HTTP routes it calls, the files it reads or writes itself, and its exit codes.
 Route payloads belong to the parallel HTTP contract and are not repeated here. **UNVERIFIED** marks a statement
 not confirmed from source, with the reason.

@@ -35,7 +35,16 @@ fn gate_script(control_dir: &Path, summary: &str) -> String {
   let result = serde_json::to_string(&json!({"type": "result", "subtype": "success", "result": summary}))
     .expect("JSON event serializes");
   format!(
-    "counter=0; if [ -f '{control}/count' ]; then counter=$(/bin/cat '{control}/count'); fi; counter=$((counter + 1)); printf '%s' \"$counter\" > '{control}/count'; touch '{control}/started-'\"$counter\"; while [ ! -e '{control}/release-'\"$counter\" ]; do /bin/sleep 0.01; done; touch '{control}/passed-gate-'\"$counter\"; printf '%s\\n' '{result}'"
+    "counter=0; if [ -f '{control}/count' ]; then counter=$(/bin/cat '{control}/count'); fi; counter=$((counter + 1)); printf '%s' \"$counter\" > '{control}/count'; touch '{control}/started-'\"$counter\"; while [ ! -e '{control}/release-'\"$counter\" ]; do /bin/sleep 0.01; done; printf '%s\\n' '{result}'"
+  )
+}
+
+fn shared_gate_script(control_dir: &Path, summary: &str) -> String {
+  let control = control_dir.display();
+  let result = serde_json::to_string(&json!({"type": "result", "subtype": "success", "result": summary}))
+    .expect("JSON event serializes");
+  format!(
+    "touch '{control}/started'; while [ ! -e '{control}/release' ]; do /bin/sleep 0.01; done; printf '%s\\n' '{result}'"
   )
 }
 
@@ -148,41 +157,8 @@ async fn wait_for_run(
       guard.track(pid);
       tracked = true;
     }
-    let events = stack.run_events(session_id)?;
-    if let Some(outcome) = run_records::terminal_outcome(&events, run_id)? {
+    if let Some(outcome) = run_records::terminal_outcome(&stack.run_events(session_id)?, run_id)? {
       return Ok(outcome);
-    }
-    if Instant::now() >= deadline {
-      let proc_state = run.pid.map(|pid| {
-        std::fs::read_to_string(format!("/proc/{pid}/stat"))
-          .map(|stat| stat.rsplit(") ").next().unwrap_or("").chars().next().unwrap_or('?').to_string())
-          .unwrap_or_else(|error| format!("gone({error})"))
-      });
-      let proc_details = run.pid.map(|pid| {
-        let read = |file: &str| match std::fs::read_to_string(format!("/proc/{pid}/{file}")) {
-          Ok(value) => value.trim().replace('\0', " "),
-          Err(error) => format!("read failed: {error}"),
-        };
-        format!(
-          "cmdline={:?} wchan={:?} status={:?} children={:?}",
-          read("cmdline"),
-          read("wchan"),
-          read("status"),
-          read(&format!("task/{pid}/children"))
-        )
-      });
-      let mine: Vec<String> = events
-        .iter()
-        .filter(|event| event.to_value().to_string().contains(run_id))
-        .map(|event| event.to_value().get("type").and_then(Value::as_str).unwrap_or("?").to_string())
-        .collect();
-      let dir = stack.store().run_dir(session_id, run_id);
-      eprintln!("DIAG run={run:?} proc_state={proc_state:?} proc_details={proc_details:?} run_events={mine:?}");
-      for entry in std::fs::read_dir(&dir)? {
-        let entry = entry?;
-        let meta = entry.metadata()?;
-        eprintln!("DIAG file {:?} len={} modified={:?}", entry.file_name(), meta.len(), meta.modified()?);
-      }
     }
     anyhow::ensure!(Instant::now() < deadline, "run {run_id} did not finish before the test deadline");
     tokio::time::sleep(Duration::from_millis(20)).await;
@@ -873,7 +849,7 @@ async fn failed_review_with_a_queued_retry_reports_nothing_and_stays_open() -> a
     vec![
       script_option("fake", &result_script("implemented")),
       script_option("fake2", "exit 1"),
-      script_option("fake3", &gate_script(control.path(), "review retry ok")),
+      script_option("fake3", &shared_gate_script(control.path(), "review retry ok")),
     ],
     vec!["fake".to_string(), "fake2".to_string(), "fake3".to_string()],
   )
@@ -898,7 +874,7 @@ async fn failed_review_with_a_queued_retry_reports_nothing_and_stays_open() -> a
     tokio::time::sleep(Duration::from_millis(20)).await;
   };
   tokio::time::timeout(Duration::from_secs(10), async {
-    while !control.path().join("started-1").exists() {
+    while !control.path().join("started").exists() {
       tokio::time::sleep(Duration::from_millis(10)).await;
     }
   })
@@ -908,19 +884,8 @@ async fn failed_review_with_a_queued_retry_reports_nothing_and_stays_open() -> a
   }
   assert!(child_reports(&stack, &manager.id)?.is_empty());
   assert_eq!(stack.store().task_state(&worker.id)?, "open");
-  fs::write(control.path().join("release-1"), "release")?;
-  let retry_outcome = wait_for_run(&stack, &guard, &worker.id, &retry.id).await;
-  if retry_outcome.is_err() {
-    let control_entries: Vec<String> = fs::read_dir(control.path())?
-      .map(|entry| entry.map(|entry| entry.file_name().to_string_lossy().into_owned()))
-      .collect::<Result<_, _>>()?;
-    eprintln!(
-      "DIAG control={} count={:?} entries={control_entries:?}",
-      control.path().display(),
-      fs::read_to_string(control.path().join("count"))
-    );
-  }
-  assert_eq!(retry_outcome?, RunOutcomeKind::Success);
+  fs::write(control.path().join("release"), "release")?;
+  assert_eq!(wait_for_run(&stack, &guard, &worker.id, &retry.id).await?, RunOutcomeKind::Success);
   wait_for_task_state(&stack, &worker.id, "completed").await?;
   Ok(())
 }

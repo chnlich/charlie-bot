@@ -1,0 +1,59 @@
+{
+  "argv": [
+    "delegate",
+    "--session",
+    "s1",
+    "--task-spec-file",
+    "{root}/task_spec.md",
+    "--keep-worktree",
+    "0",
+    "--request-id",
+    "delegate-missing",
+    "--task-type",
+    "quick-edit"
+  ],
+  "cwd": "{root}",
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n",
+    "home/sessions/6bfc9146-a6a8-5cf8-893e-193d353340a8/metadata.json": "{\"id\":\"6bfc9146-a6a8-5cf8-893e-193d353340a8\",\"name\":\"other\",\"profile\":\"worker\",\"task_parent_id\":\"s1\",\"task\":{\"goal\":\"a different spec entirely\",\"task_type\":\"quick-edit\"}}",
+    "task_spec.md": "## Goal\nA delegation that never landed\n\n## Source Files\n- (none)\n\n## Required Behavior\nDo work.\n\n## Acceptance Tests\nCheck it.\n\n## Reviewer Checklist\nReview it.\n\n## Out of Scope\nNone.\n"
+  },
+  "responses": [
+    {
+      "drop_after_request": true
+    }
+  ],
+  "expect": {
+    "stdout": "",
+    "stderr": "{\"error\": \"missing or oversized status line\", \"code\": \"outcome_unknown\", \"effect\": \"unknown\"}\n",
+    "exit": 1,
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/api/internal/delegate",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "session_id": "s1",
+          "description": "## Goal\nA delegation that never landed\n\n## Source Files\n- (none)\n\n## Required Behavior\nDo work.\n\n## Acceptance Tests\nCheck it.\n\n## Reviewer Checklist\nReview it.\n\n## Out of Scope\nNone.\n",
+          "keep_worktree": false,
+          "task_type": "quick-edit",
+          "delegate_invocation": {
+            "task_type": "quick-edit",
+            "repo_path": null,
+            "base_branch": null,
+            "task_spec_file": "{root}/task_spec.md",
+            "reviewer_context_file": null,
+            "keep_worktree": false,
+            "backend": null
+          },
+          "request_id": "delegate-missing"
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,65 @@
+{
+  "argv": [
+    "delegate",
+    "--repo",
+    "{root}/repo",
+    "--base-branch",
+    "main",
+    "--task-spec-file",
+    "{root}/task_spec.md",
+    "--keep-worktree",
+    "0"
+  ],
+  "cwd": "{root}/home/sessions/archived-session",
+  "env": {
+    "CHARLIEBOT_SESSION_ID": "live-session"
+  },
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n",
+    "repo/": "",
+    "task_spec.md": "## Goal\nDo work.\n\n## Source Files\n- (none)\n\n## Required Behavior\nImplement the requested behavior.\n\n## Acceptance Tests\nRun focused tests.\n\n## Reviewer Checklist\nCheck the contract.\n\n## Out of Scope\nDo not change unrelated files.\n"
+  },
+  "responses": [
+    {
+      "status": 200,
+      "body": {
+        "session_id": "worker-1",
+        "run_id": "run-1"
+      }
+    }
+  ],
+  "expect": {
+    "stdout": "{\n  \"session_id\": \"worker-1\",\n  \"run_id\": \"run-1\"\n}\n",
+    "stderr": "{\"note\": \"cwd is session dir of archived-session; using CHARLIEBOT_SESSION_ID=live-session\"}\nWorker spawned in the background; the completion summary arrives as an async wake-up.\n",
+    "exit": 0,
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/api/internal/delegate",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "session_id": "live-session",
+          "description": "## Goal\nDo work.\n\n## Source Files\n- (none)\n\n## Required Behavior\nImplement the requested behavior.\n\n## Acceptance Tests\nRun focused tests.\n\n## Reviewer Checklist\nCheck the contract.\n\n## Out of Scope\nDo not change unrelated files.\n",
+          "keep_worktree": false,
+          "task_type": "implement",
+          "delegate_invocation": {
+            "task_type": "implement",
+            "repo_path": "{root}/repo",
+            "base_branch": "main",
+            "task_spec_file": "{root}/task_spec.md",
+            "reviewer_context_file": null,
+            "keep_worktree": false,
+            "backend": null
+          },
+          "base_branch": "main",
+          "repo_path": "{root}/repo"
+        }
+      }
+    ]
+  }
+}

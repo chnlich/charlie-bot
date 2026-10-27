@@ -54,6 +54,7 @@ fn main() {
 
   let result = match subcommand.as_str() {
     "artifact" => charliebot_artifacts::cli::artifact::main(&args[1..]),
+    "delegate" => commands::delegate::main(&args[1..]),
     "plan" => charliebot_artifacts::cli::plan::main(&args[1..]),
     "session" => commands::session::main(&args[1..]),
     _ => {

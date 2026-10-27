@@ -1,0 +1,54 @@
+{
+  "argv": [
+    "delegate",
+    "--session",
+    "s1",
+    "--task-spec-file",
+    "{root}/task_spec.md",
+    "--keep-worktree",
+    "0"
+  ],
+  "cwd": "{root}",
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n",
+    "home/sessions/ed36ecfa-7dd4-540f-b8e1-b75a2b385ecd/metadata.json": "{\"id\":\"ed36ecfa-7dd4-540f-b8e1-b75a2b385ecd\",\"name\":\"worker\",\"profile\":\"worker\",\"task_parent_id\":\"s1\",\"task\":{\"goal\":\"## Goal\\nDo work.\\n\\n## Source Files\\n- (none)\\n\\n## Required Behavior\\nImplement the requested behavior.\\n\\n## Acceptance Tests\\nRun focused tests.\\n\\n## Reviewer Checklist\\nCheck the contract.\\n\\n## Out of Scope\\nDo not change unrelated files.\\n\",\"task_type\":\"implement\"}}",
+    "task_spec.md": "## Goal\nDo work.\n\n## Source Files\n- (none)\n\n## Required Behavior\nImplement the requested behavior.\n\n## Acceptance Tests\nRun focused tests.\n\n## Reviewer Checklist\nCheck the contract.\n\n## Out of Scope\nDo not change unrelated files.\n"
+  },
+  "responses": [
+    {
+      "drop_after_request": true
+    }
+  ],
+  "expect": {
+    "stdout": "{\n  \"session_id\": \"ed36ecfa-7dd4-540f-b8e1-b75a2b385ecd\",\n  \"run_id\": null\n}\n",
+    "stderr": "Worker spawned in the background; the completion summary arrives as an async wake-up.\n",
+    "exit": 0,
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/api/internal/delegate",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "session_id": "s1",
+          "description": "## Goal\nDo work.\n\n## Source Files\n- (none)\n\n## Required Behavior\nImplement the requested behavior.\n\n## Acceptance Tests\nRun focused tests.\n\n## Reviewer Checklist\nCheck the contract.\n\n## Out of Scope\nDo not change unrelated files.\n",
+          "keep_worktree": false,
+          "task_type": "implement",
+          "delegate_invocation": {
+            "task_type": "implement",
+            "repo_path": null,
+            "base_branch": null,
+            "task_spec_file": "{root}/task_spec.md",
+            "reviewer_context_file": null,
+            "keep_worktree": false,
+            "backend": null
+          }
+        }
+      }
+    ]
+  }
+}

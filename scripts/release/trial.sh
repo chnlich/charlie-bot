@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run the release trial on one server binary.
+# Run the release trial on a server binary with its paired CLI in the same directory.
 #
 #   scripts/release/trial.sh <full main commit> <server binary>
 #   scripts/release/trial.sh --self-test

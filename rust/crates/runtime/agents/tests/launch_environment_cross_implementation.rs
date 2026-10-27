@@ -1,6 +1,6 @@
 use std::fs;
 use std::io::Write;
-use std::os::unix::fs::symlink;
+use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -27,6 +27,7 @@ struct Case {
   backend_type: &'static str,
   process_env: Env,
   venv_bin: PathBuf,
+  server_bin_dir: PathBuf,
 }
 
 #[test]
@@ -34,12 +35,19 @@ fn complete_agent_child_environments_match_python_for_each_launch_kind() {
   let root = tempfile::tempdir().unwrap();
   let venv_bin = root.path().join("venv/bin");
   let system_bin = root.path().join("system-bin");
+  let server_bin_dir = root.path().join("release");
   fs::create_dir_all(&venv_bin).unwrap();
   fs::create_dir_all(&system_bin).unwrap();
+  fs::create_dir_all(&server_bin_dir).unwrap();
+  let cli = server_bin_dir.join("charliebot");
+  fs::write(&cli, "test fixture; this file is not run\n").unwrap();
+  let mut permissions = fs::metadata(&cli).unwrap().permissions();
+  permissions.set_mode(0o755);
+  fs::set_permissions(&cli, permissions).unwrap();
   symlink(env!("CARGO_BIN_EXE_fake_program"), system_bin.join("codex")).unwrap();
   fs::write(system_bin.join("probe.json"), json!({"codex": [{"exit": 0}]}).to_string()).unwrap();
   let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR")).ancestors().nth(4).unwrap().to_path_buf();
-  let cases = cases(&venv_bin, &system_bin);
+  let cases = cases(&venv_bin, &system_bin, &server_bin_dir);
   let python = run_python_reference(&repository, &cases);
   let python_cases = python.as_array().expect("Python reference returns a case array");
   assert_eq!(cases.len(), 14);
@@ -52,7 +60,8 @@ fn complete_agent_child_environments_match_python_for_each_launch_kind() {
   let mut rust_cases = Vec::new();
 
   for case in &cases {
-    let rewritten = agent_environment::agent_environment(&case.process_env, &case.venv_bin, &repository).unwrap();
+    let rewritten =
+      agent_environment::agent_environment(&case.process_env, &case.venv_bin, &case.server_bin_dir).unwrap();
     let startup = StartupState::default();
     startup.insert(rewritten).unwrap();
     let base = agent_environment::require_agent_base_environment(&startup).unwrap();
@@ -107,7 +116,7 @@ fn complete_agent_child_environments_match_python_for_each_launch_kind() {
   assert_eq!(Value::Array(rust_cases), Value::Array(python_cases.clone()));
 }
 
-fn cases(venv_bin: &Path, system_bin: &Path) -> Vec<Case> {
+fn cases(venv_bin: &Path, system_bin: &Path, server_bin_dir: &Path) -> Vec<Case> {
   let combinations = [
     ("tool-capable-one-shot", "cc-claude"),
     ("tool-capable-one-shot", "codex"),
@@ -139,6 +148,7 @@ fn cases(venv_bin: &Path, system_bin: &Path) -> Vec<Case> {
         backend_type,
         process_env,
         venv_bin: venv_bin.to_path_buf(),
+        server_bin_dir: server_bin_dir.to_path_buf(),
       });
     }
   }
@@ -157,6 +167,7 @@ fn run_python_reference(repository: &Path, cases: &[Case]) -> Value {
         "backend_type": case.backend_type,
         "process_env": case.process_env,
         "venv_bin": case.venv_bin,
+        "server_bin_dir": case.server_bin_dir,
       })
     })
     .collect::<Vec<_>>();

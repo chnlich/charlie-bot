@@ -428,6 +428,7 @@ def _build_world(root: pathlib.Path) -> World:
       "CHARLIEBOT_HOME": str(home),
       "CHARLIEBOT_RELEASES_DIR": str(releases),
       "CHARLIEBOT_LOG_DIR": str(logs),
+      "TMUX_TMPDIR": "/tmp",
       "CHARLIEBOT_TMUX_SOCKET": f"switch-test-{uuid.uuid4().hex[:8]}",
       "CHARLIEBOT_SWITCH_STOP_WAIT_S": "3",
       "CHARLIEBOT_SWITCH_READY_WAIT_S": "30",

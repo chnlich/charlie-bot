@@ -66,7 +66,7 @@ if args[:2] == ["run", "download"]:
     sys.exit(1)
   destination = pathlib.Path(value("--dir"))
   destination.mkdir(parents=True, exist_ok=True)
-  for name in ("charliebot-server", "sha256sums.txt"):
+  for name in ("charliebot", "charliebot-server", "sha256sums.txt"):
     shutil.copy2(pathlib.Path(BEHAVIOR["artifact_dir"]) / name, destination / name)
   sys.exit(0)
 sys.exit(2)
@@ -141,10 +141,16 @@ def _build_world(root: pathlib.Path) -> World:
   _git(repo, "commit", "-q", "--allow-empty", "-m", "a commit off origin/main")
   off_main = _git(repo, "rev-parse", "HEAD")
 
-  binary = artifact / "charliebot-server"
-  binary.write_text("fake server binary\n", encoding="utf-8")
-  sums = hashlib.sha256(binary.read_bytes()).hexdigest()
-  (artifact / "sha256sums.txt").write_text(f"{sums}  charliebot-server\n", encoding="utf-8")
+  binaries = {
+      "charliebot": "fake CLI binary\n",
+      "charliebot-server": "fake server binary\n",
+  }
+  checksum_lines = []
+  for name, contents in binaries.items():
+    binary = artifact / name
+    binary.write_text(contents, encoding="utf-8")
+    checksum_lines.append(f"{hashlib.sha256(binary.read_bytes()).hexdigest()}  {name}")
+  (artifact / "sha256sums.txt").write_text("\n".join(checksum_lines) + "\n", encoding="utf-8")
 
   (bin_dir / "gh").write_text(GH_STUB, encoding="utf-8")
   (bin_dir / "gh").chmod(0o755)
@@ -299,11 +305,16 @@ def test_a_failed_download_stage_exits_1_and_installs_nothing(world: World) -> N
   assert not (world.releases / world.on_main).exists()
 
 
-def test_a_passing_run_installs_the_three_files_and_leaves_current(world: World) -> None:
+def test_a_passing_run_installs_both_binaries_and_leaves_current(world: World) -> None:
   proc = _release(world, world.on_main)
   assert proc.returncode == 0, proc.stdout + proc.stderr
   release = world.releases / world.on_main
-  assert sorted(path.name for path in release.iterdir()) == ["charliebot-server", "release.log", "sha256sums.txt"]
+  assert sorted(
+      path.name for path in release.iterdir()) == ["charliebot", "charliebot-server", "release.log", "sha256sums.txt"]
+  assert (release / "charliebot").stat().st_mode & 0o777 == 0o755
+  checksums = (release / "sha256sums.txt").read_text(encoding="utf-8")
+  assert "  charliebot\n" in checksums
+  assert "  charliebot-server\n" in checksums
   subprocess.run(["sha256sum", "-c", "sha256sums.txt"], cwd=release, capture_output=True, text=True, check=True)
   release_log = (release / "release.log").read_text(encoding="utf-8")
   for stage in ("download", "trial", "rehearsal", "install"):

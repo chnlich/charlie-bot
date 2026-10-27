@@ -461,8 +461,13 @@ struct StateParts {
 fn replace_environment() -> Result<(VenvBin, RepoRoot, AgentBaseEnvironment), String> {
   let venv_bin = VenvBin::new(std::env::var_os("CHARLIEBOT_VENV_BIN")).map_err(|error| error.to_string())?;
   let repo_root = RepoRoot::new(std::env::var_os(REPO_ROOT_ENV)).map_err(|error| error.to_string())?;
+  let server_executable =
+    std::env::current_exe().map_err(|error| format!("cannot resolve charliebot-server path: {error}"))?;
+  let server_bin_dir = server_executable
+    .parent()
+    .ok_or_else(|| format!("charliebot-server path has no parent: {}", server_executable.display()))?;
   let agent_base =
-    agent_environment::replace_process_environment(&venv_bin, &repo_root).map_err(|error| format!("{error:#}"))?;
+    agent_environment::replace_process_environment(&venv_bin, server_bin_dir).map_err(|error| format!("{error:#}"))?;
   Ok((venv_bin, repo_root, agent_base))
 }
 

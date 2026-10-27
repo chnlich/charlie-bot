@@ -156,7 +156,9 @@ fn decode_hex(value: &str) -> Vec<u8> {
   assert_eq!(value.len() % 2, 0, "hex fixture has an even number of digits");
   value
     .as_bytes()
-    .chunks_exact(2)
+    .as_chunks::<2>()
+    .0
+    .iter()
     .map(|digits| u8::from_str_radix(std::str::from_utf8(digits).unwrap(), 16).unwrap())
     .collect()
 }

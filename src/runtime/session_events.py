@@ -44,7 +44,7 @@ log = log_once.LazyStructlogLogger()
 # cache's profile.
 _PROJECTION_LRU_LIMIT = 64
 # The aggregator init feeds the caught-up corpus in on-loop slices of this
-# many events, one yield between slices (the _CatchupWalk shape, rust/crates/charliebot-session-api/src/websocket.rs):
+# many events, one yield between slices (the _CatchupWalk shape, rust/crates/runtime/session-api/src/websocket.rs):
 # the per-event feed cost is ~1 us (20534-event worst live corpus), so a
 # slice's hold stays near the poll cadences' 5 ms resolution, while a
 # whole-corpus single-span feed parks the loop behind GIL handoffs for its

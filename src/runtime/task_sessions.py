@@ -73,7 +73,7 @@ PROMPT_BODIES_DIR_NAME = "prompt_bodies"
 # stay invisible for.
 _TREE_INDEX_TTL_SECONDS = 2.0
 
-# The create route (rust/crates/charliebot-session-api/src/routes.rs) reproduces these two refusals
+# The create route (rust/crates/runtime/session-api/src/routes.rs) reproduces these two refusals
 # verbatim as its client-visible details — the first in the v2 pre-check, the
 # second in the legacy-shape guard; the wording lives beside the raises that own
 # the contracts.

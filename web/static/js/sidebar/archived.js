@@ -6,7 +6,7 @@
 // strip — the same tree format the Workspace view builds. Pages merge into one
 // row list (first delivery wins; the server re-delivers a context ancestor a
 // previous page already carried); ordering, membership, and group aggregates
-// come from GET /api/sessions/archived (rust/crates/charliebot-session-api/src/routes.rs), and in-list
+// come from GET /api/sessions/archived (rust/crates/runtime/session-api/src/routes.rs), and in-list
 // operations (unarchive / delete / set group) update the merged list and the
 // strip counts in place with no refetch. A task-tree broadcast refreshes the
 // loaded range in place: the strip filter, the loaded pages and the scroll

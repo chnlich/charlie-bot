@@ -1,6 +1,6 @@
 """Page-render registry: packages register their page parts, template globals and home-page cards.
 
-Each registration holds strings. `rust/crates/charliebot-registry/src/templating.rs` builds the template engine from them on the
+Each registration holds strings. `rust/crates/runtime/registry/src/templating.rs` builds the template engine from them on the
 first page render, so this module imports nothing heavy.
 
 A page package keeps its page parts at fixed paths inside its directory src/<kind>/<name>/:

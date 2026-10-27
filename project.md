@@ -75,7 +75,7 @@ charlie-bot/
 ├── src/                # Python backend (infra/, runtime/, backends/, features/, app/)
 ├── web/                # Web UI (templates/ + static/)
 ├── configs/            # Default templates and examples
-├── rust/               # Rust server; its entry point is crates/charliebot-server
+├── rust/               # Rust server; its entry point is crates/app/server
 └── project.md          # This specification
 ```
 
@@ -121,7 +121,7 @@ The Master Agent delegates coding tasks to Workers via the CLI delegate command:
    - User submits request via Web UI chat
    - Master Agent (Claude Code session) decides to delegate a coding task
    - Master calls `charliebot delegate --repo /path --base-branch main --task-spec-file <file>` (`src/runtime/cli/delegate.py`); session identity comes from the `CHARLIEBOT_SESSION_ID` the server writes into the master process, with cwd as the fallback when it is absent
-   - The CLI POSTs to `/api/internal/delegate`, which creates the worker task-tree child and registers its first work Run (`delegate_task_tree` in `rust/crates/charliebot-tasks/src/routes.rs`); the tree's executor launches it (`execute_run` in `rust/crates/charliebot-tasks/src/execution.rs`)
+   - The CLI POSTs to `/api/internal/delegate`, which creates the worker task-tree child and registers its first work Run (`delegate_task_tree` in `rust/crates/runtime/tasks/src/routes.rs`); the tree's executor launches it (`execute_run` in `rust/crates/runtime/tasks/src/execution.rs`)
 
 2. **Worker Execution** (Phase 1 — Implement):
    - Spawner creates an isolated git worktree on a new branch (`charliebot/task-{ts}-{id}`)
@@ -278,8 +278,8 @@ for the other backends) and passes no flag.
 ### 11.1 Completed (MVP)
 
 **Backend**
-- Rust server (`rust/crates/charliebot-server/src/main.rs`)
-- All API routes: `/api/sessions`, `/api/chat`, `/api/internal/delegate` (full list: the route tables in `rust/crates/charliebot-server/src/routes` and the packages in `rust/crates/charliebot-server/src/packages/mod.rs`)
+- Rust server (`rust/crates/app/server/src/main.rs`)
+- All API routes: `/api/sessions`, `/api/chat`, `/api/internal/delegate` (full list: the route tables in `rust/crates/app/server/src/routes` and the packages in `rust/crates/app/server/src/packages/mod.rs`)
 - Master Agent as Claude Code session (`src/runtime/master_cc_run.py`) with `--resume` support for persistent conversations. Supports any configured backend via the pluggable `AgentBackend` interface
 - Delegation CLI (`src/runtime/cli/delegate.py`) — called by the master to spawn workers via `POST /api/internal/delegate`
 - Worker spawner (`src/runtime/task_execution.py`, `src/runtime/spawner_prompt.py`, `src/runtime/spawner_backends.py`) — creates isolated git worktrees, builds enriched prompts, spawns workers, and orchestrates the two-phase worker+reviewer pipeline
@@ -313,4 +313,4 @@ recording for the browser's retry.
 **Configuration**
 - `$CHARLIEBOT_HOME/config.yaml` holds structure in sections (`server`, `paths`, `backends`, `accounts`, `voice`, `code_server`, `ui`, `slack`, `publish`, `telegram`); `$CHARLIEBOT_HOME/credentials.yaml` holds every secret as section → key and is the single source of truth for API keys — no environment variables
 - `backends.options`: configurable list of LLM backends (see that file for the current list); an option id names the model family, never a version, and starts with a prefix its type's usage source registers (the id rule: the `BackendsConfig` comment in `src/infra/config.py`; usage's startup check, `rust/crates/features/usage/src/backend_ids.rs`, refuses an id outside them)
-- `backends.pool`: ordered list of backend IDs in rotation order (`rust/crates/charliebot-agents/src/backend_pool.rs`); server startup refuses a pool entry (the pool field validation in that file) or a cron task or step backend (cron's startup check, `backend_refs_check` in `rust/crates/charliebot-sched/src/cron/loader.rs`) that names no option id
+- `backends.pool`: ordered list of backend IDs in rotation order (`rust/crates/runtime/agents/src/backend_pool.rs`); server startup refuses a pool entry (the pool field validation in that file) or a cron task or step backend (cron's startup check, `backend_refs_check` in `rust/crates/runtime/sched/src/cron/loader.rs`) that names no option id

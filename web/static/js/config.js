@@ -4,7 +4,7 @@
 // The access key's one browser name: the localStorage key the fetch wrapper and
 // the WS token read, and the cookie name a top-level navigation authenticates
 // with. The server middleware reads the cookie by the same name
-// (rust/crates/charliebot-server/src/auth.rs); the served login page keeps its own
+// (rust/crates/app/server/src/auth.rs); the served login page keeps its own
 // literal because it is HTML, not this file.
 const ACCESS_KEY_NAME = 'charliebot_access_key';
 

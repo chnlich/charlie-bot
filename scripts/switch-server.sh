@@ -148,7 +148,7 @@ elif mode == "scan":
     elif backend_type in NO_REATTACH:
       print(f"block\t{backend} run {run['id']} (type {backend_type}, pid {run['pid']}) "
             "cannot be re-attached after a restart")
-  # A loop's controller runs inside the server process; a restart never resumes it (rust/crates/charliebot-tasks/src/recovery.rs).
+  # A loop's controller runs inside the server process; a restart never resumes it (rust/crates/runtime/tasks/src/recovery.rs).
   for path in sorted((home / "sessions").glob("*/loops/*/state.json")):
     state = json.loads(path.read_text(encoding="utf-8"))
     controller = state.get("server_pid")

@@ -7,4 +7,3 @@ cycle charliebot-store: events, listing, projection, run_records, session_events
 cycle charliebot-tasks: dispatch, master_queue, master_run, master_state, midturn_delivery, task_input_prompt
 cycle charliebot-tasks: execution, recovery
 cycle charliebot-usage-page: cool_storage, crate
-cycle charliebot-web-reply: plan_links, status

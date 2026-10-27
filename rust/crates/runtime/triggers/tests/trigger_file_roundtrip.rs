@@ -1,4 +1,5 @@
 use std::fs;
+use std::path::Path;
 
 use charliebot_store::trigger_files;
 use charliebot_triggers::triggers::PendingTrigger;
@@ -20,14 +21,8 @@ fn python_and_rust_read_and_write_equal_trigger_records() {
   let rust_dir = root.path().join("rust");
   fs::create_dir_all(&python_dir).expect("recorded Python trigger directory");
   fs::create_dir_all(&rust_dir).expect("Rust record directory");
+  write_recorded_files(&python_dir, &fixture["python_written_files"]);
 
-  for record in &python_records {
-    fs::write(
-      python_dir.join(format!("{}.json", record["id"].as_str().unwrap())),
-      serde_json::to_vec_pretty(record).unwrap(),
-    )
-    .unwrap();
-  }
   let mut rust_records = trigger_files::iter_trigger_file_stats(&python_dir).expect("walk Python trigger files");
   rust_records.sort_by(|left, right| left.0.cmp(&right.0));
   let loaded = rust_records
@@ -47,6 +42,11 @@ fn python_and_rust_read_and_write_equal_trigger_records() {
     body.push(b'\n');
     fs::write(path, body).expect("write Rust trigger file");
   }
+  // The recorded Python read below holds for exactly these bytes, so Rust must still write them.
+  for (name, text) in fixture["rust_written_files"].as_object().unwrap() {
+    let written = fs::read_to_string(rust_dir.join(name)).expect("read Rust trigger file");
+    assert_eq!(written, text.as_str().unwrap(), "Rust trigger file {name} differs from the recorded bytes");
+  }
   let mut from_rust = trigger_files::iter_trigger_file_stats(&rust_dir)
     .expect("walk Rust trigger files")
     .into_iter()
@@ -57,7 +57,8 @@ fn python_and_rust_read_and_write_equal_trigger_records() {
     })
     .collect::<Vec<_>>();
   from_rust.sort_by(|left, right| left["id"].as_str().cmp(&right["id"].as_str()));
-  assert_eq!(loaded, from_rust, "Python must read Rust trigger records without changing their fields");
+  let python_read = fixture["python_read_of_rust_files"].as_array().unwrap();
+  assert_eq!(python_read, &from_rust, "Python must read Rust trigger records without changing their fields");
 
   assert_eq!(loaded.len(), 7);
   assert!(loaded.iter().any(|record| record["status"] == "pending"));
@@ -71,6 +72,12 @@ fn python_and_rust_read_and_write_equal_trigger_records() {
       .iter()
       .any(|record| record["watch_targets"][0]["kind"] == "slurm_job" && record["watch_targets"][0]["host"].is_null())
   );
+}
+
+fn write_recorded_files(directory: &Path, files: &Value) {
+  for (name, text) in files.as_object().unwrap() {
+    fs::write(directory.join(name), text.as_str().unwrap()).expect("write recorded Python trigger file");
+  }
 }
 
 fn materialize_fixture_values(records: &mut [Value]) {

@@ -819,7 +819,7 @@ pub async fn post_reply_with_caller_context(
     });
     let epoch = features.store.prime_aggregator(session_id).await?;
     let event = {
-      let guard = features.store.control_lock().await;
+      let _guard = features.store.control_lock().await;
       let events = features.store.load_all_facts_view_sync(session_id)?;
       if let Some(existing) = charliebot_store::control_events::replay_request_event(
         events.iter(),
@@ -831,7 +831,7 @@ pub async fn post_reply_with_caller_context(
       )? {
         return Ok(reply_receipt(&existing, &operator_only_links, platform));
       }
-      features.store.append_control_fact(&guard, session_id, event).await?
+      features.store.append_chat_event(session_id, event).await?
     };
     features.store.announce_appended_event(session_id, &event, epoch).await?;
     event
@@ -912,7 +912,7 @@ async fn persist_request_event(
   let event_id = charliebot_store::control_events::stable_request_event_id(session_id, request_id);
   let epoch = features.store.prime_aggregator(session_id).await?;
   let event = {
-    let guard = features.store.control_lock().await;
+    let _guard = features.store.control_lock().await;
     let events = features.store.load_all_facts_view_sync(session_id)?;
     let request_fields = Value::Object(fields.clone());
     if let Some(existing) = charliebot_store::control_events::replay_request_event(
@@ -929,7 +929,7 @@ async fn persist_request_event(
     for (key, value) in fields {
       event[key] = value;
     }
-    features.store.append_control_fact(&guard, session_id, event).await?
+    features.store.append_chat_event(session_id, event).await?
   };
   features.store.announce_appended_event(session_id, &event, epoch).await?;
   Ok(event)

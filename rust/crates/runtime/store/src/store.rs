@@ -1016,17 +1016,23 @@ impl Store {
       .await
   }
 
-  /// Mark a session unread without changing its activity timestamp.
+  /// Mark a session unread without changing its activity timestamp, and notify the sidebar only when the flag flips.
   pub async fn mark_unread(&self, session_id: &str) -> StoreResult<Option<SessionMetadata>> {
-    self
-      .mutate_fresh(session_id, false, false, |meta| {
-        if meta.has_unread {
-          return Ok(false);
-        }
-        meta.has_unread = true;
-        Ok(true)
-      })
-      .await
+    let meta = {
+      let _guard = self.lock_for(session_id).await;
+      let Some(mut meta) = self.read_metadata_fresh(session_id)? else { return Ok(None) };
+      if meta.has_unread {
+        return Ok(Some(meta));
+      }
+      meta.has_unread = true;
+      self.save_metadata_locked(&mut meta, false)?;
+      self.read_metadata_fresh(session_id)?
+    };
+    let Some(meta) = meta else { return Ok(None) };
+    let mut fields = Map::new();
+    fields.insert("has_unread".to_string(), Value::Bool(true));
+    self.broadcast_sidebar(session_id, charliebot_core::event_types::UNREAD_CHANGED, fields).await?;
+    Ok(Some(meta))
   }
 
   /// Acquire the process-wide, non-reentrant task-tree control lock.

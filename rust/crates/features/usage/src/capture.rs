@@ -12,7 +12,7 @@ use rusqlite::types::Value as SqlValue;
 use serde_json::{Map, Value};
 
 use crate::count::Count;
-use crate::ledger::{StoredRecord, UsageLedger};
+use crate::ledger::{StoredRecord, UsageLedger, default_ledger_path};
 use crate::ndjson;
 
 pub(crate) const CHARLIE_BOT_SOURCE: &str = "charlie-bot";
@@ -90,6 +90,18 @@ pub fn capture_local(
   registry: &Registry,
 ) -> anyhow::Result<Vec<(String, usize)>> {
   capture_usage(ledger, &host_name()?, &config.sessions_dir(), config, registry)
+}
+
+/// The capture both scheduled handlers run: this host's sources into the default ledger. The cold-storage sweep runs it
+/// before any deletion, so a failure here stops the sweep.
+pub(crate) fn capture_into_default_ledger(
+  config: &CharlieBotConfig,
+  registry: &Registry,
+) -> anyhow::Result<Vec<(String, usize)>> {
+  let mut ledger = UsageLedger::open(default_ledger_path(&config.charliebot_home))?;
+  let written = capture_local(&mut ledger, config, registry)?;
+  ledger.close()?;
+  Ok(written)
 }
 
 /// This host's name, as the ledger keys its capture times (`socket.gethostname()` in the Python ledger).

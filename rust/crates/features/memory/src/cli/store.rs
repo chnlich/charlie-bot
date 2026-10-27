@@ -206,3 +206,23 @@ pub(super) fn read_text(path: &Path) -> Result<String, CliExit> {
 pub(super) fn normalize_newlines(text: &str) -> String {
   text.replace("\r\n", "\n").replace('\r', "\n")
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn test_lint_reports_a_missing_topics_file_without_creating_the_scaffold() {
+    // `tests/test_memory_store.py::test_lint_reports_a_missing_topics_file_without_creating_the_scaffold`.
+    let directory = tempfile::tempdir().unwrap();
+    let memory_dir = directory.path().join("bare");
+    fs::create_dir(&memory_dir).unwrap();
+
+    let (violations, warnings) = lint_store(&memory_dir).unwrap();
+
+    assert!(violations.iter().any(|violation| violation.contains("topics")), "{violations:?}");
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert!(!memory_dir.join(TOPICS_FILENAME).exists());
+    assert!(!memory_dir.join(".git").exists());
+  }
+}

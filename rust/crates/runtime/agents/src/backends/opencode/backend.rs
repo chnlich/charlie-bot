@@ -86,6 +86,7 @@ pub struct OpenCodeBackend {
   pool: Arc<OpenCodeServerPool>,
   launch: LaunchArgs,
   cgroup_config: SessionCgroupConfig,
+  recovered_model: Option<String>,
   recovered_model_limit: Option<Map<String, Value>>,
 }
 
@@ -107,6 +108,7 @@ impl OpenCodeBackend {
       pool,
       launch,
       cgroup_config,
+      recovered_model: None,
       recovered_model_limit: None,
     }
   }
@@ -175,7 +177,10 @@ impl AgentBackend for OpenCodeBackend {
   }
 
   fn translator(&self) -> Box<dyn Translate> {
-    Box::new(OpenCodeTranslator::with_model_limit(self.model.clone(), self.recovered_model_limit.clone()))
+    Box::new(OpenCodeTranslator::with_model_limit(
+      self.recovered_model.clone().unwrap_or_else(|| self.model.clone()),
+      self.recovered_model_limit.clone(),
+    ))
   }
 
   fn transport(&self) -> TransportKind {
@@ -218,8 +223,8 @@ impl BackendFactory for OpenCodeFactory {
     let one_shot_context = model_overrides_config(std::slice::from_ref(option))?;
     self.pool.record_options(&cfg.backends.options);
     self.pool.adopt_existing()?;
-    let recovered_model_limit = match launch.log_dir.as_deref() {
-      Some(directory) => relay::read_turn_record(directory)?.and_then(|record| record.model_limit),
+    let recovered_turn = match launch.log_dir.as_deref() {
+      Some(directory) => relay::read_turn_record(directory)?,
       None => None,
     };
     let mut backend = OpenCodeBackend::new(
@@ -231,7 +236,10 @@ impl BackendFactory for OpenCodeFactory {
       launch,
       SessionCgroupConfig::from_config(cfg),
     );
-    backend.recovered_model_limit = recovered_model_limit;
+    if let Some(turn) = recovered_turn {
+      backend.recovered_model = Some(turn.model);
+      backend.recovered_model_limit = turn.model_limit;
+    }
     Ok(Box::new(backend))
   }
 }
@@ -295,6 +303,11 @@ struct OpenCodeTurn {
 
 impl ServeTurn for OpenCodeTurn {
   fn identity_process(&self, command: &[String], run_directory: &Path) -> anyhow::Result<Option<ServeProcessSpec>> {
+    match fs::remove_file(run_directory.join(relay::TURN_RECORD_NAME)) {
+      Ok(()) => {}
+      Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+      Err(error) => return Err(error.into()),
+    }
     let program = command.first().context("OpenCode relay command has no executable")?;
     let parent = relay::parent_identity()?;
     let parent_start = parent.pid_start.context("OpenCode relay parent pid has no start time")?;
@@ -425,6 +438,7 @@ async fn run_turn_body(
       server_record: record_name,
       session_id: session_id.clone(),
       prompt_request,
+      model: plan.model.clone(),
       model_limit: model_limit.clone(),
     },
   )
@@ -449,18 +463,8 @@ async fn run_turn_body(
   let follow_result = follow::tail_follow_events(
     &args.raw_log,
     move |event| {
-      if event.get("type").and_then(Value::as_str) == Some("permission.asked") {
-        let data = object_or_empty(event.get("data"))?;
-        let permission = data.get("permission").map(python_str).unwrap_or_else(|| "None".to_string());
-        let patterns = data.get("patterns").map(python_str).unwrap_or_else(|| "None".to_string());
-        return Err(anyhow::anyhow!(
-          "OpenCode requested interactive permission '{permission}' (patterns={patterns}) but CharlieBot runs headless with no approval path; aborting run."
-        ));
-      }
-      translate_state
-        .lock()
-        .expect("OpenCode translator mutex is not poisoned")
-        .translate_event(&event)
+      reject_permission(&event)?;
+      translate_state.lock().expect("OpenCode translator mutex is not poisoned").translate_event(&event)
     },
     move |event| {
       let handler = handler.clone();
@@ -523,6 +527,19 @@ async fn run_turn_body(
     (_, Some(TurnTerminal::Failed | TurnTerminal::Interrupted | TurnTerminal::RelayEnded)) => Ok(false),
     _ => Err(RunError::Backend(anyhow::anyhow!("OpenCode relay exited without a terminal event"))),
   }
+}
+
+/// Reject interactive permission requests, including during raw-log recovery.
+pub fn reject_permission(event: &Value) -> anyhow::Result<()> {
+  if event.get("type").and_then(Value::as_str) == Some("permission.asked") {
+    let data = object_or_empty(event.get("data"))?;
+    let permission = data.get("permission").map(python_str).unwrap_or_else(|| "None".to_string());
+    let patterns = data.get("patterns").map(python_str).unwrap_or_else(|| "None".to_string());
+    bail!(
+      "OpenCode requested interactive permission '{permission}' (patterns={patterns}) but CharlieBot runs headless with no approval path; aborting run."
+    );
+  }
+  Ok(())
 }
 
 #[derive(Debug)]

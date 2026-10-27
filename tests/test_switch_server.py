@@ -732,9 +732,11 @@ def test_preflight_fails_when_a_build_is_not_in_the_clone(world: World, missing:
   proc = _stubbed_preflight(world, running_impl, "rust", target_sha)
 
   assert proc.returncode == 1, _report(world, proc)
-  build_label = "running build" if missing == "running" else "target build"
-  assert f"{build_label} {absent}" in proc.stdout, _report(world, proc)
-  assert "cannot inspect build" in proc.stdout, _report(world, proc)
+  if missing == "target":
+    assert f"target commit {absent} is not in the runtime clone" in proc.stdout, _report(world, proc)
+  else:
+    assert f"running build {absent}" in proc.stdout, _report(world, proc)
+    assert "cannot inspect build" in proc.stdout, _report(world, proc)
 
 
 @pytest.mark.parametrize(

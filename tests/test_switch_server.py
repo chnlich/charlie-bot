@@ -49,8 +49,8 @@ from src.runtime.hooks import backend_type_registration
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SWITCH = ROOT / "scripts" / "switch-server.sh"
 LAUNCHER = ROOT / "scripts" / "start-server.sh"
-RUST_SHA = hashlib.sha1(b"rust-backend release under test").hexdigest()
-OLD_SHA = hashlib.sha1(b"previous rust release under test").hexdigest()
+# A target sha for a shell that runs one switch step: the step parses it, and no git check resolves it.
+STEP_TARGET_SHA = hashlib.sha1(b"step target under test").hexdigest()
 ACCESS_KEY = "switch-test-key"
 SESSION = "11111111-2222-3333-4444-555555555555"
 # The fake server's probe run: run_state is its state before a stop; output is none, message (a committed assistant
@@ -237,6 +237,8 @@ class World:
   env: dict[str, str]
   base_head: str  # the runtime clone's HEAD before any switch; the PORT_BASELINE commit is one ahead
   baseline: str
+  old_sha: str  # the release current names: a build from before the agy adoption commit
+  rust_sha: str  # the release the tests switch to: a build after it
   port: int
   live: list[subprocess.Popen[bytes]] = dataclasses.field(default_factory=list)
 
@@ -289,14 +291,26 @@ def _build_world(root: pathlib.Path) -> World:
   _git(clone, "init", "-q", "-b", "main")
   _git(clone, "add", "scripts")
   _git(clone, "commit", "-q", "-m", "fake runtime clone")
+  old_sha = _git(clone, "rev-parse", "HEAD")
+  _git(clone, "commit", "-q", "--allow-empty", "-m", "adopt a live agy run across a restart")
+  adoption = _git(clone, "rev-parse", "HEAD")
+  # The switch names one commit as what made agy survive a restart. Tests cannot create that commit, so this clone
+  # stands in with a commit of its own and its copy of the switch names it.
+  switch_copy = clone / "scripts" / "switch-server.sh"
+  text, declared = re.subn(
+      r"(?m)^AGY_ADOPTION_COMMIT=\S+$", f"AGY_ADOPTION_COMMIT={adoption}", switch_copy.read_text(encoding="utf-8"))
+  assert declared == 1, "the switch declares AGY_ADOPTION_COMMIT once"
+  switch_copy.write_text(text, encoding="utf-8")
+  _git(clone, "add", "scripts")
+  _git(clone, "commit", "-q", "-m", "test: name this clone's adoption commit")
   base_head = _git(clone, "rev-parse", "HEAD")
   _git(clone, "checkout", "-q", "-b", "baseline")
   _git(clone, "commit", "-q", "--allow-empty", "-m", "baseline")
   baseline = _git(clone, "rev-parse", "HEAD")
   _git(clone, "checkout", "-q", "main")
-  _install_release(releases, OLD_SHA, baseline)
-  _install_release(releases, RUST_SHA, baseline)
-  (releases / "current").symlink_to(OLD_SHA)
+  _install_release(releases, old_sha, baseline)
+  _install_release(releases, base_head, baseline)
+  (releases / "current").symlink_to(old_sha)
 
   (bin_dir / "uv").write_text(FAKE_UV, encoding="utf-8")
   (bin_dir / "uv").chmod(0o755)
@@ -354,6 +368,8 @@ def _build_world(root: pathlib.Path) -> World:
       env=env,
       base_head=base_head,
       baseline=baseline,
+      old_sha=old_sha,
+      rust_sha=base_head,
       port=port)
 
 
@@ -492,9 +508,9 @@ def _version_status(port: int) -> int:
 
 def _assert_untouched(world: World) -> None:
   """Nothing changed: current names the old release, the clone is where it was, and the old server answers."""
-  assert os.readlink(world.releases / "current") == OLD_SHA
+  assert os.readlink(world.releases / "current") == world.old_sha
   assert _git(world.clone, "rev-parse", "HEAD") == world.base_head
-  assert _serves_release(world, OLD_SHA)
+  assert _serves_release(world, world.old_sha)
   assert _version_status(world.port) == 200
 
 
@@ -514,12 +530,12 @@ def _assert_server_scope_records(world: World, expected_count: int) -> None:
     assert arguments[arguments.index("-p") + 1] == "MemorySwapMax=0"
 
 
-def _home_helper(home: pathlib.Path, mode: str) -> subprocess.CompletedProcess[str]:
+def _home_helper(world: World, mode: str) -> subprocess.CompletedProcess[str]:
   return subprocess.run(
-      ["bash", "-c", f'source "$1" rust {RUST_SHA} && home_helper "$2"', "bash",
+      ["bash", "-c", f'source "$1" rust {world.rust_sha} && home_helper "$2"', "bash",
        str(SWITCH), mode],
       env={
-          **os.environ, "CHARLIEBOT_HOME": str(home)
+          **os.environ, "CHARLIEBOT_HOME": str(world.home)
       },
       capture_output=True,
       text=True,
@@ -532,13 +548,13 @@ def test_home_helper_config_uses_server_default(world: World, server: dict[str, 
   (world.home / "config.yaml").write_text(
       yaml.safe_dump({"server": server} if server is not None else {}), encoding="utf-8")
 
-  proc = _home_helper(world.home, "config")
+  proc = _home_helper(world, "config")
 
   assert int(proc.stdout.splitlines()[0]) == config.ServerConfig().port
 
 
 def test_home_helper_config_uses_explicit_port(world: World) -> None:
-  proc = _home_helper(world.home, "config")
+  proc = _home_helper(world, "config")
 
   assert int(proc.stdout.splitlines()[0]) == world.port
 
@@ -560,11 +576,12 @@ def test_home_helper_no_reattach_matches_registered_traits() -> None:
   assert ast.literal_eval(rust_declaration[1]) == rust_types
 
 
-@pytest.mark.parametrize("source,target", [("rust release", "rust"), ("rust release", "python"), ("python", "rust")])
-@pytest.mark.parametrize("backend", ["agy-gemini-flash", "oc-deepseek-flash"])
-def test_live_backend_switch_directions(world: World, source: str, target: str, backend: str) -> None:
-  _seed_live_run(world, "run-direction", backend)
-  proc = subprocess.run(
+def _stubbed_preflight(world: World, running_impl: str, mode: str, target_sha: str) -> subprocess.CompletedProcess[str]:
+  """The clone's switch preflight, with the steps after the scan stubbed out.
+
+  The stubs report the given running implementation as the listener, and give the script the given mode and target sha.
+  """
+  return subprocess.run(
       [
           "bash", "-c", '''source "$1" "$2" ${3:+"$3"}
 OLD_SOURCE="$4"
@@ -576,22 +593,62 @@ pane_of_pid() { echo '%1'; }
 tm() { echo 999999; }
 preflight
 ''', "bash",
-          str(world.clone / "scripts/switch-server.sh"), target, RUST_SHA if target == "rust" else "", source,
-          str(world.root / "direction.runs")
+          str(world.clone / "scripts/switch-server.sh"), mode, target_sha, running_impl,
+          str(world.root / "preflight.runs")
       ],
       env=world.env,
       capture_output=True,
       text=True,
       timeout=5,
       check=False)
-  allowed = source.startswith("rust ") and target == "rust" and backend.startswith("agy-")
+
+
+@pytest.mark.parametrize(
+    "running,target",
+    [("carries", "carries"), ("lacks", "carries"), ("carries", "lacks"), ("python", "carries"), ("carries", "python")],
+    ids=["both-carry", "running-lacks", "target-lacks", "python-running", "python-target"])
+@pytest.mark.parametrize("backend", ["agy-gemini-flash", "oc-deepseek-flash"])
+def test_live_backend_switch_directions(world: World, running: str, target: str, backend: str) -> None:
+  """A live run passes only where a restart can keep it: an agy run in a Rust-to-Rust switch whose two builds both
+  carry the adoption commit. Every other live run refuses before the old server stops."""
+  _seed_live_run(world, "run-direction", backend)
+  build = {"carries": world.rust_sha, "lacks": world.old_sha, "python": ""}
+  running_impl = f"rust {build[running]}" if running != "python" else "python"
+  mode = "rust" if target != "python" else "python"
+
+  proc = _stubbed_preflight(world, running_impl, mode, build[target])
+
+  allowed = running == "carries" and target == "carries" and backend.startswith("agy-")
   assert proc.returncode == (0 if allowed else 1), _report(world, proc)
   if target == "python":
     assert "usage: switch-server.sh rust" in proc.stderr
   elif not allowed:
     assert backend in proc.stdout
     assert "run-direction" in proc.stdout
+    assert "cannot be re-attached after a restart" in proc.stdout
+  if not allowed and backend.startswith("agy-") and running != "python" and target != "python":
+    lacking = "running" if running == "lacks" else "target"
+    assert f"the {lacking} build {world.old_sha} lacks " in proc.stdout, _report(world, proc)
+  if not allowed and backend.startswith("oc-") and target != "python":
+    # The OpenCode refusal is the same line in every direction, with no adoption-commit reason.
+    assert "lacks " not in proc.stdout, _report(world, proc)
   assert all(live.poll() is None for live in world.live)
+
+
+@pytest.mark.parametrize("missing", ["running", "target"])
+def test_preflight_fails_when_a_build_is_not_in_the_clone(world: World, missing: str) -> None:
+  """The switch reads each build's history from the clone: an absent build fails the preflight instead of guessing."""
+  absent = hashlib.sha1(b"a build no clone has").hexdigest()
+  if missing == "target":
+    _install_release(world.releases, absent, world.baseline)
+    running_impl, target_sha = f"rust {world.rust_sha}", absent
+  else:
+    running_impl, target_sha = f"rust {absent}", world.rust_sha
+
+  proc = _stubbed_preflight(world, running_impl, "rust", target_sha)
+
+  assert proc.returncode == 1, _report(world, proc)
+  assert f"commit {absent} is not in the runtime clone" in proc.stdout, _report(world, proc)
 
 
 @pytest.mark.parametrize(
@@ -601,7 +658,7 @@ preflight
     ])
 def test_preflight_refusal_exits_1_and_changes_nothing(world: World, case: str) -> None:
   """Each preflight check refuses before the switch stops anything: exit 1 and no change."""
-  release = world.releases / RUST_SHA
+  release = world.releases / world.rust_sha
   if case == "checksum":
     (release / "charliebot-server").write_text(FAKE_SERVER + "# tampered\n", encoding="utf-8")
   elif case == "check-config":
@@ -625,7 +682,7 @@ def test_preflight_refusal_exits_1_and_changes_nothing(world: World, case: str) 
   current = world.releases / "current"
   current_before = os.readlink(current) if current.is_symlink() else None
 
-  proc = _switch(world, "rust", RUST_SHA)
+  proc = _switch(world, "rust", world.rust_sha)
 
   assert proc.returncode == 1, _report(world, proc)
   assert (os.readlink(current) if current.is_symlink() else None) == current_before
@@ -638,7 +695,7 @@ def test_preflight_refusal_exits_1_and_changes_nothing(world: World, case: str) 
     assert "launcher preflight" in proc.stdout + proc.stderr, _report(world, proc)
   if case.endswith("-run"):
     assert "a restart would lose live work:" in proc.stdout, _report(world, proc)
-    lines = _home_helper(world.home, "scan").stdout.splitlines()
+    lines = _home_helper(world, "scan").stdout.splitlines()
     live_pid = world.live[0].pid
     assert [line for line in lines if line.startswith("live\t")
            ] == [f"live\t{SESSION}\trun-blocked\t{backend}\t{live_pid}\t{_pid_start(live_pid)}"]
@@ -665,7 +722,7 @@ def _runs_file(world: World, *lines: str) -> pathlib.Path:
 
 def _scanned_runs_file(world: World) -> pathlib.Path:
   """The live lines of a real scan of the home, recorded while the run's process still ran."""
-  scan = _home_helper(world.home, "scan").stdout.splitlines()
+  scan = _home_helper(world, "scan").stdout.splitlines()
   return _runs_file(world, *(line for line in scan if line.startswith("live\t")))
 
 
@@ -697,7 +754,7 @@ def _adopted(world: World, runs_file: pathlib.Path, launch_output: str) -> subpr
       "WORK": str(work),
   }
   return subprocess.run(
-      ["bash", "-c", f'source "$1" rust {RUST_SHA} && adopted', "bash",
+      ["bash", "-c", f'source "$1" rust {world.rust_sha} && adopted', "bash",
        str(SWITCH)],
       env=env,
       capture_output=True,
@@ -784,7 +841,7 @@ def _switch_forward(world: World, run_pid: int, launch_output: str) -> subproces
       "RUN_PID": str(run_pid),
       "RESTORED": str(world.root / "restored"),
       "RUNS_FILE": str(world.root / "switch.runs"),
-      "WANT": f"rust {RUST_SHA}",
+      "WANT": f"rust {world.rust_sha}",
       "PORT": str(world.port),
       "NEW_LOG": str(launch_log),
       "NEW_OFFSET": "0",
@@ -803,7 +860,7 @@ restore() { touch "$RESTORED"; exit 2; }
 switch_forward
 """
   return subprocess.run(
-      ["bash", "-c", script, "bash", str(SWITCH), RUST_SHA],
+      ["bash", "-c", script, "bash", str(SWITCH), world.rust_sha],
       env=env,
       capture_output=True,
       text=True,
@@ -884,7 +941,7 @@ def probe(tmp_path: pathlib.Path) -> Iterator[ProbeRun]:
     work = tmp_path / "work"
     work.mkdir()
     probe_env = {**env, "PORT": str(port), "KEY": ACCESS_KEY, "WORK": str(work)}
-    probe_cmd = ["bash", "-c", f'source "$1" rust {RUST_SHA} && probe_turn', "bash", str(SWITCH)]
+    probe_cmd = ["bash", "-c", f'source "$1" rust {STEP_TARGET_SHA} && probe_turn', "bash", str(SWITCH)]
     proc = subprocess.run(probe_cmd, env=probe_env, capture_output=True, text=True, timeout=30, check=False)
     calls_log = server_dir / "calls.log"
     calls = calls_log.read_text(encoding="utf-8").splitlines() if calls_log.exists() else []
@@ -1054,7 +1111,7 @@ def _escalate(tmp_path: pathlib.Path, shell_pid: int) -> subprocess.CompletedPro
       "CHARLIEBOT_SWITCH_STOP_WAIT_S": "1",
   }
   return subprocess.run(
-      ["bash", "-c", f'source "$1" rust {RUST_SHA} && escalate_pane', "bash",
+      ["bash", "-c", f'source "$1" rust {STEP_TARGET_SHA} && escalate_pane', "bash",
        str(SWITCH)],
       env=env,
       capture_output=True,
@@ -1116,35 +1173,35 @@ def test_switch_on_a_real_pane_restores_then_round_trips_then_exits_3(world: Wor
   _seed_live_run(world, "run-live", "claude-opus")
 
   # The Rust readback cannot adopt the live run: the switch fails after it stopped the old release and restores it.
-  _write_behavior(world.releases / RUST_SHA, adopt=False)
-  proc = _switch(world, "rust", RUST_SHA)
+  _write_behavior(world.releases / world.rust_sha, adopt=False)
+  proc = _switch(world, "rust", world.rust_sha)
   assert proc.returncode == 2, _report(world, proc)
   _assert_server_scope_records(world, 3)
   _assert_untouched(world)
 
   # With a passing readback the live run is adopted, and the clone fast-forwards to the PORT_BASELINE commit. This
   # release ignores SIGTERM, so the switch back has to SIGKILL it.
-  _write_behavior(world.releases / RUST_SHA, ignore_sigterm=True)
-  proc = _switch(world, "rust", RUST_SHA)
+  _write_behavior(world.releases / world.rust_sha, ignore_sigterm=True)
+  proc = _switch(world, "rust", world.rust_sha)
   assert proc.returncode == 0, _report(world, proc)
   _assert_server_scope_records(world, 4)
-  assert os.readlink(world.releases / "current") == RUST_SHA
+  assert os.readlink(world.releases / "current") == world.rust_sha
   assert _git(world.clone, "rev-parse", "HEAD") == world.baseline
-  assert _serves_release(world, RUST_SHA)
+  assert _serves_release(world, world.rust_sha)
   assert _version_status(world.port) == 200
   assert '"run_id":"run-live"' in _latest_log(world)
 
   # The way back to the old release: current names it again, and the clone stays at the baseline.
-  proc = _switch(world, "rust", OLD_SHA)
+  proc = _switch(world, "rust", world.old_sha)
   assert proc.returncode == 0, _report(world, proc)
   _assert_server_scope_records(world, 5)
-  assert os.readlink(world.releases / "current") == OLD_SHA
+  assert os.readlink(world.releases / "current") == world.old_sha
   assert _git(world.clone, "rev-parse", "HEAD") == world.baseline
-  assert _serves_release(world, OLD_SHA)
+  assert _serves_release(world, world.old_sha)
 
   # A sync that fails again during the restore leaves the server down, which is exit 3.
   (world.clone / "fail-sync").write_text("", encoding="utf-8")
-  proc = _switch(world, "rust", RUST_SHA)
+  proc = _switch(world, "rust", world.rust_sha)
   assert proc.returncode == 3, _report(world, proc)
   _assert_server_scope_records(world, 5)
   assert _listener_pids(world.port) == set()

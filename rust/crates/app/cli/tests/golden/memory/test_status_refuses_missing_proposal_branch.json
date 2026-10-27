@@ -1,0 +1,18 @@
+{
+  "argv": [
+    "memory",
+    "proposal",
+    "status"
+  ],
+  "env": {
+    "GIT_CONFIG_NOSYSTEM": "1",
+    "HOME": "{root}/git-home",
+    "PATH": "/usr/bin:/bin"
+  },
+  "expect": {
+    "stdout": "",
+    "stderr": "error: no 'proposal' branch in {root}/home/memory; run 'charliebot memory proposal open' first\n",
+    "exit": 1,
+    "requests": []
+  }
+}

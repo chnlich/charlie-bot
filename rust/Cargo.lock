@@ -770,6 +770,7 @@ dependencies = [
  "charliebot-store",
  "clap",
  "serde_json",
+ "tar",
  "tempfile",
  "time",
  "unicode-width",

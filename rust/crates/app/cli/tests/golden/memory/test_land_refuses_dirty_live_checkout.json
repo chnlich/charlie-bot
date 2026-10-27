@@ -1,0 +1,19 @@
+{
+  "argv": [
+    "memory",
+    "proposal",
+    "land",
+    "reviewed-commit"
+  ],
+  "env": {
+    "GIT_CONFIG_NOSYSTEM": "1",
+    "HOME": "{root}/git-home",
+    "PATH": "/usr/bin:/bin"
+  },
+  "expect": {
+    "stdout": "",
+    "stderr": "error: the live memory checkout is not clean; land needs it clean:\n?? .gitignore\n?? topics\n",
+    "exit": 1,
+    "requests": []
+  }
+}

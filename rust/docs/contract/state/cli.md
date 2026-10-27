@@ -22,7 +22,7 @@ may differ from argparse (the exit codes match); the dispatcher's vocabulary is 
 help text and unknown-subcommand line differ from the Python CLI's; the Python CLI's
 structlog console lines on stdout (a wall-clock stamp and a pid per line) are not reproduced — the golden harness drops
 them from both sides.
-The memory verbs read `<home>/memory` without `config.yaml`; `memory proposal` remains unported.
+The memory verbs read `<home>/memory` without `config.yaml`; proposal `open`, `status` and `land` are ported, and `commit` remains unported.
 
 
 ## 1. Dispatcher (`src/app/main.py`)
@@ -98,7 +98,7 @@ below.
 | `memory query --topic T [--audience master\|worker]` | none | Reads `<home>/memory/` (creates the store scaffold on first use, `files.md` 5.10). With `CHARLIEBOT_RUN_TOKEN` set, it verifies the token against `credentials.charliebot.access_key` and reads `sessions/<sid>/metadata.json`, `data/runs/<run>/metadata.json` and `data/chat_events.jsonl` to fix the audience from the run's session profile. | 0; 1 (unknown topic, invalid token, inactive run, store error); 2 usage | *ported to Rust*
 | `memory add [--file F]` | none | Writes `<home>/memory/staging/<ts>-<sess8>-<slug>.md` and prints its path | 0; 1; 2 | *ported to Rust*
 | `memory lint [--dir D]` | none | Reads the store or `D` | 0, including warnings; 1 on violations; 2 | *ported to Rust*
-| `memory proposal open\|status\|commit\|land` | none | Local git only, in `<home>/memory` and `<home>/memory-proposal` (branch `proposal`, worktree add, commit of one store path, fast-forward land). `status` prints `worktree`, `base`, `head`, `ahead`, `opened`, `dirty` and `diff_path` (`/diff?repo=<memory dir>&base=<base>&head=<head>`). `land` prints one `key: value` line per field of its result, and the result includes `diff_path`, the diff link of the landed range (`src/features/memory/memory_proposal.py:508`, `src/features/memory/cli.py:268-273`). | 0; 1 refusal; 2 |  |
+| `memory proposal open\|status\|commit\|land` | none | Local git only, in `<home>/memory` and `<home>/memory-proposal` (branch `proposal`, worktree add, fast-forward land). `status` prints `worktree`, `base`, `head`, `ahead`, `opened`, `dirty` and `diff_path` (`/diff?repo=<memory dir>&base=<base>&head=<head>`). `land` prints one `key: value` line per field, including the landed range's `diff_path` (`src/features/memory/memory_proposal.py:508`, `src/features/memory/cli.py:268-273`). `commit` is not ported. | 0; 1 refusal; 2 | *ported to Rust: open, status, land* |
 | `plan present --file F [--session]`, `plan amend --file F --note N`, `plan approve [--plan]`, `plan close --plan P` | `GET /api/sessions/<sid>/plans`, then `POST /api/internal/plan/<verb>` | none (the server validates and writes `plans.json`) | 0; 1; 2 | *ported to Rust* |
 | `plan diff [--plan] [--v]`, `plan list` | `GET /api/sessions/<sid>/plans` | `plan diff` takes the registry from the route and reads the two version files straight from the session directory (`_read_version_file`), then diffs them locally | 0; 1; 2 | *ported to Rust*: `plan_diff::diff_text`, the Rust differ's text form |
 | `publish <artifact> [-- lane options]` | none | With `publish.command`: runs it with the artifact's absolute path plus the lane options; success is exit 0 and exactly one `http(s)://` line on stdout. Otherwise: needs `<publish.dir>/index.html`, creates `<publish.dir>/<token_urlsafe(16)>/` (0755), copies the file in (0644), and prints `<public_base_url>/<token>/<basename>`. | 0 prints the URL; 1 any failure (JSON on stderr); 2 usage |  |

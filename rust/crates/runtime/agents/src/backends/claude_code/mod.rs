@@ -30,6 +30,7 @@ pub use backend::{
   headless_claude_env, out_of_family_served_models, without_gateway_env,
 };
 pub use login_dirs::ClaudeHost;
+pub use usage_logs::USAGE_SOURCE;
 
 use std::sync::Arc;
 
@@ -44,9 +45,6 @@ use self::factory::ClaudeCodeFactory;
 use self::options::option_model;
 use self::usage_logs::ClaudeLogs;
 use self::usage_quota::QuotaHttp;
-
-/// The usage source's name: the ledger's source value and the usage page's card title.
-pub const USAGE_SOURCE: &str = "Claude Code";
 
 const PACKAGE: &str = "src.backends.claude_code";
 

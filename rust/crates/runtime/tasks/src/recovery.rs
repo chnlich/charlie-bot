@@ -6,13 +6,15 @@
 //! are recovered; pending inputs dispatch. A replay step whose owning task has not landed fails the pass with an error
 //! that names the owner; the call sites are listed in `README.md`.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
+#[cfg(feature = "test-hooks")]
+use std::collections::HashSet;
 use std::future::Future;
 use std::io;
 use std::path::PathBuf;
+use std::sync::Arc;
 #[cfg(feature = "test-hooks")]
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, anyhow, bail};

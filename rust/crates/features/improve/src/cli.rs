@@ -113,9 +113,8 @@ pub fn improve_main(args: &[OsString]) -> Result<(), CliExit> {
   let readback_goal = goal.clone();
   let readback_plan = plan.clone();
   let iterations = cli.iterations;
-  let readback = move || {
-    Ok(readback_launch(&home, &readback_session, &readback_goal, readback_plan.as_deref(), iterations))
-  };
+  let readback =
+    move || Ok(readback_launch(&home, &readback_session, &readback_goal, readback_plan.as_deref(), iterations));
   let result = client::post("/api/internal/improve", Value::Object(payload), Some(Box::new(readback)), &[])?;
 
   print!("{}", json_out::render(&result, Some(2)));

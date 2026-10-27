@@ -80,8 +80,6 @@ cargo build --release
 cargo test --locked
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
-cd ..
-uv run python rust/parity/parity.py --rust-bin rust/target/release/charliebot-server --stage server-skeleton
 ```
 
 `cargo test` runs five Python helpers through `uv run python`: the FastAPI form and body apps, the YAML dump check,
@@ -89,8 +87,8 @@ the JSON reader check and the boot-recovery marker. None of them imports Charlie
 `uv sync` environment and no CharlieBot Python. The other Python-derived expectations are recorded beside the tests
 that read them, and each recorded file names its Python helper and base commit. The pyhtml differential and the WAV
 fixture generator are run by hand. The compatibility and SSH outputs under `rust/fixtures/python/` are recorded data.
-The skeleton parity check runs the Rust server against the Python reference through `rust/parity/`, with synthetic
-homes, temporary ports and a Landlock write fence.
+The parity harness (`rust/parity/`) that compared the Rust server against the Python reference on synthetic homes was
+removed on 2026-10-27; `main` has no Python server to compare against.
 
 ## Layout
 
@@ -100,7 +98,6 @@ rust/
   PORT_BASELINE                   the Python commit the port reproduces
   docs/PORT_STATUS.md             every Python route: method, path, stage, and status (`ported`, `todo` or `not ported`)
   docs/registry.md                the plug-in seam: each hook kind, its Rust signature and Python source
-  parity/parity.py                skeleton check: `uv run python rust/parity/parity.py --rust-bin rust/target/debug/charliebot-server --stage server-skeleton`
   scripts/gen_mimetypes.py        regenerates mimetypes_table.rs from CPython's mimetypes
   fixtures/python/                the expected outputs the compat and ssh tests compare with
   crates/infra/core/src/

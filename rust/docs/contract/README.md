@@ -1,6 +1,6 @@
 # Python server contract
 
-These files state the HTTP, WebSocket and page contract of the Python CharlieBot server at the baseline commit below. The Rust server under `rust/crates/` now serves this contract; these files stay frozen as the baseline the parity harness compares against. The parity harness uses `routes.tsv` to track route coverage.
+These files state the HTTP, WebSocket and page contract of the Python CharlieBot server at the baseline commit below. The Rust server under `rust/crates/` now serves this contract; these files stay frozen as history. The parity harness that compared the Rust server against this baseline was removed on 2026-10-27, after the Python server left the repository; `routes.tsv` stays as the route table it tracked coverage with.
 
 The contract does not cover persisted file formats, the config schema, background services, environment variables or the CLI command map. A separate contract under `state/` covers them.
 

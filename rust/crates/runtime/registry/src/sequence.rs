@@ -16,8 +16,7 @@ use serde_json::{Map, Value};
 
 use charliebot_store::compact::CompactValue;
 
-use crate::context::StartupStop;
-use crate::registry::{Registry, RegistryError};
+use crate::startup_stop::StartupStop;
 
 /// A node's binding to a sequence (`sequence_controllers.SequenceBinding`). A scheduled task's binding is the loaded
 /// task whose session id names the node.
@@ -85,61 +84,6 @@ pub trait SequenceController: Send + Sync {
   /// Moves every binding of `source` onto `new`, the node that replaced it. `true` when a binding moved.
   fn move_bindings<'a>(&'a self, _source: &'a str, _new: &'a str) -> BoxFuture<'a, anyhow::Result<bool>> {
     Box::pin(async { Ok(false) })
-  }
-}
-
-impl Registry {
-  /// Register a sequence controller (`sequence_controllers.register_sequence_controller`). A repeated name fails.
-  pub fn sequence_controller(
-    &mut self,
-    name: &'static str,
-    controller: Arc<dyn SequenceController>,
-  ) -> Result<(), RegistryError> {
-    let package = self.owner()?;
-    self.sequence_controllers.insert(package, name, controller)
-  }
-
-  /// The registered controllers in registration order.
-  pub fn sequence_controllers(&self) -> impl Iterator<Item = &Arc<dyn SequenceController>> {
-    self.sequence_controllers.values()
-  }
-
-  /// Whether a registered controller owns `meta`.
-  pub fn sequence_owns_session(&self, meta: &SessionMetadata) -> bool {
-    self.sequence_controllers().any(|controller| controller.owns_session(meta))
-  }
-
-  /// The binding of `session_id`. Two controllers that both bind one session fail.
-  pub fn binding_for(&self, session_id: &str) -> anyhow::Result<Option<Arc<dyn SequenceBinding>>> {
-    let mut found: Option<Arc<dyn SequenceBinding>> = None;
-    for controller in self.sequence_controllers() {
-      let Some(binding) = controller.binding(session_id) else {
-        continue;
-      };
-      if found.is_some() {
-        anyhow::bail!("multiple sequence controllers bind session {session_id:?}");
-      }
-      found = Some(binding);
-    }
-    Ok(found)
-  }
-
-  /// Merges every controller's listing fields into one row map. Every requested id has an entry, possibly empty.
-  pub fn sequence_listing_fields(
-    &self,
-    session_ids: &[String],
-    now: UtcDateTime,
-  ) -> HashMap<String, Map<String, Value>> {
-    let mut ids = session_ids.to_vec();
-    ids.sort();
-    ids.dedup();
-    let mut fields: HashMap<String, Map<String, Value>> = ids.iter().map(|id| (id.clone(), Map::new())).collect();
-    for controller in self.sequence_controllers() {
-      for (session_id, controller_fields) in controller.listing_fields(&ids, now) {
-        fields.entry(session_id).or_default().extend(controller_fields);
-      }
-    }
-    fields
   }
 }
 
@@ -741,24 +685,16 @@ mod tests {
     }
   }
 
-  fn register_controller(registry: &mut Registry) -> Result<(), RegistryError> {
-    registry.sequence_controller(
-      "synthetic-sequence",
-      Arc::new(TestController { session_id: "sequence-node".to_string(), calls: controller_calls() }),
-    )
-  }
-
   fn controller_calls() -> Arc<Mutex<Vec<&'static str>>> {
     static CALLS: OnceLock<Arc<Mutex<Vec<&'static str>>>> = OnceLock::new();
     Arc::clone(CALLS.get_or_init(|| Arc::new(Mutex::new(Vec::new()))))
   }
 
   #[tokio::test]
-  async fn registered_controller_drives_every_run_method_over_store_sequence_tree() {
+  async fn controller_drives_every_run_method_over_store_sequence_tree() {
     controller_calls().lock().unwrap().clear();
-    let mut registry = Registry::new();
-    registry.register_package("synthetic", register_controller).unwrap();
-    let controller = Arc::clone(registry.sequence_controllers().next().unwrap());
+    let controller: Arc<dyn SequenceController> =
+      Arc::new(TestController { session_id: "sequence-node".to_string(), calls: controller_calls() });
 
     let home = tempfile::tempdir().unwrap();
     let cfg =

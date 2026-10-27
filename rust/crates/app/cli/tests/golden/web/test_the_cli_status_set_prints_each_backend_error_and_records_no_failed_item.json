@@ -1,0 +1,58 @@
+{
+  "argv": [
+    "web",
+    "status",
+    "set",
+    "--file",
+    "{root}/status.json",
+    "--session",
+    "abc"
+  ],
+  "cwd": "{root}",
+  "expect_from": "rust",
+  "env": {
+    "PATH": "{root}/bin",
+    "HOME": "{root}/user",
+    "CHARLIEBOT_REPO_ROOT": "{repo}"
+  },
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\nbackends:\n  pool:\n    - claude-a\n    - claude-b\n  options:\n    - id: claude-a\n      label: CC A\n      type: cc-claude\n      model: claude-a-test\n    - id: claude-b\n      label: CC B\n      type: cc-claude\n      model: claude-b-test\n",
+    "bin/claude": "#!/bin/sh\n/bin/cat > /dev/null\necho boom >&2\nexit 1\n",
+    "status.json": "{\"waiting\": [{\"text\": \"Approve the deploy\", \"context\": \"The release is ready now. Options are deploy or wait; deploy is recommended.\", \"link\": null}]}"
+  },
+  "responses": [
+    {
+      "status": 200,
+      "body": {
+        "unread": [
+          {
+            "text": "Approve the deploy",
+            "context": "The release is ready now. Options are deploy or wait; deploy is recommended.",
+            "link": null
+          }
+        ]
+      }
+    }
+  ],
+  "expect": {
+    "stdout": "",
+    "stderr": "attempt claude-a failed: claude CLI failed (exit 1): boom\nattempt claude-b failed: claude CLI failed (exit 1): boom\n",
+    "exit": 1,
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/api/internal/web/status/unread",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "session_id": "abc",
+          "text": "{\"waiting\": [{\"text\": \"Approve the deploy\", \"context\": \"The release is ready now. Options are deploy or wait; deploy is recommended.\", \"link\": null}]}"
+        }
+      }
+    ]
+  }
+}

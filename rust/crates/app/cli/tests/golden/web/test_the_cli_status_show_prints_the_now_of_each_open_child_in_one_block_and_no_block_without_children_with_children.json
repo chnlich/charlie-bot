@@ -1,0 +1,49 @@
+{
+  "argv": [
+    "web",
+    "status",
+    "show",
+    "--session",
+    "abc"
+  ],
+  "cwd": "{root}",
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n"
+  },
+  "responses": [
+    {
+      "status": 200,
+      "body": {
+        "session_id": "abc",
+        "web_status": null,
+        "descendants": [],
+        "children": [
+          {
+            "session_id": "d7645e8f-0000-4000-8000-000000000000",
+            "name": "Now child",
+            "now": "Running the sweep",
+            "updated_at": "2026-10-16T21:05:00+00:00"
+          }
+        ]
+      }
+    }
+  ],
+  "expect": {
+    "stdout": "No status yet\n\nChild sessions' Now:\nNow child (d7645e8f): Running the sweep (updated 2026-10-16T21:05:00+00:00)\n",
+    "stderr": "",
+    "exit": 0,
+    "requests": [
+      {
+        "method": "GET",
+        "path": "/api/internal/web/status",
+        "query": "session_id=abc",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": null
+        },
+        "body": null
+      }
+    ]
+  }
+}

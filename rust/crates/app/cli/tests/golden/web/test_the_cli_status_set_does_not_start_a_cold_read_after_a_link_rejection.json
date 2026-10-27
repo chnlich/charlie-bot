@@ -1,0 +1,62 @@
+{
+  "argv": [
+    "web",
+    "status",
+    "set",
+    "--file",
+    "{root}/status.json",
+    "--session",
+    "abc"
+  ],
+  "cwd": "{root}",
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n",
+    "status.json": "{\"waiting\": [{\"text\": \"Review the page\", \"context\": \"The page is missing. Options are retry or stop; retry is recommended.\", \"link\": \"http://localhost:{port}/absolute_filepath/tmp/missing-status-page.html\"}]}"
+  },
+  "responses": [
+    {
+      "status": 422,
+      "body": {
+        "detail": "Dead file links; nothing was recorded.\n- http://localhost:9443/absolute_filepath/tmp/missing-status-page.html: no file exists at /tmp/missing-status-page.html."
+      }
+    },
+    {
+      "status": 404,
+      "body": {
+        "detail": "Not Found"
+      }
+    }
+  ],
+  "expect": {
+    "stdout": "",
+    "stderr": "{\"error\": \"Dead file links; nothing was recorded.\\n- http://localhost:9443/absolute_filepath/tmp/missing-status-page.html: no file exists at /tmp/missing-status-page.html.\", \"code\": \"server_error\", \"effect\": \"none\"}\n",
+    "exit": 1,
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/api/internal/web/status/unread",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "session_id": "abc",
+          "text": "{\"waiting\": [{\"text\": \"Review the page\", \"context\": \"The page is missing. Options are retry or stop; retry is recommended.\", \"link\": \"http://localhost:{port}/absolute_filepath/tmp/missing-status-page.html\"}]}"
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/api/internal/version",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": null
+        },
+        "body": null
+      }
+    ]
+  }
+}

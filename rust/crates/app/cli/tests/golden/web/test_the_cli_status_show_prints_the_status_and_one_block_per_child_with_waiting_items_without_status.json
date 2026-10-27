@@ -1,0 +1,57 @@
+{
+  "argv": [
+    "web",
+    "status",
+    "show",
+    "--session",
+    "abc"
+  ],
+  "cwd": "{root}",
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n"
+  },
+  "responses": [
+    {
+      "status": 200,
+      "body": {
+        "session_id": "abc",
+        "web_status": null,
+        "descendants": [
+          {
+            "session_id": "d7645e8f-0000-4000-8000-000000000000",
+            "name": "Panel child",
+            "updated_at": "2026-10-16T21:05:00+00:00",
+            "waiting": [
+              {
+                "text": "Answer plan 5",
+                "context": "The plan needs review. Options are approve or revise; revise is recommended.",
+                "link": "/x",
+                "since": "2026-10-16T18:00:00Z",
+                "since_exact": false
+              }
+            ]
+          }
+        ],
+        "children": []
+      }
+    }
+  ],
+  "expect": {
+    "stdout": "No status yet\n\nPanel child (d7645e8f)\n- Answer plan 5 (/x)\n  since: 2026-10-16T18:00:00Z\n  since_exact: false\n  context: The plan needs review. Options are approve or revise; revise is recommended.\n",
+    "stderr": "",
+    "exit": 0,
+    "requests": [
+      {
+        "method": "GET",
+        "path": "/api/internal/web/status",
+        "query": "session_id=abc",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": null
+        },
+        "body": null
+      }
+    ]
+  }
+}

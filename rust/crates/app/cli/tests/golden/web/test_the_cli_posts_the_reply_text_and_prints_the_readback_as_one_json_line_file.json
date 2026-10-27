@@ -1,0 +1,47 @@
+{
+  "argv": [
+    "web",
+    "reply",
+    "--file",
+    "{root}/reply.md",
+    "--session",
+    "abc"
+  ],
+  "cwd": "{root}",
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n",
+    "reply.md": "the answer"
+  },
+  "responses": [
+    {
+      "status": 200,
+      "body": {
+        "posted": true,
+        "chars": 10,
+        "over_budget": false,
+        "answers": "u1"
+      }
+    }
+  ],
+  "expect": {
+    "stdout": "{\"posted\": true, \"chars\": 10, \"over_budget\": false, \"answers\": \"u1\"}\n",
+    "stderr": "",
+    "exit": 0,
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/api/internal/web/reply",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "session_id": "abc",
+          "text": "the answer"
+        }
+      }
+    ]
+  }
+}

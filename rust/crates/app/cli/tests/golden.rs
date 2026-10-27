@@ -141,6 +141,28 @@ const PORTED_PYTHON_TESTS: &[&str] = &[
   "test_active_run_token_fixes_the_audience",
   "test_unlaunched_run_token_refuses",
   "test_ended_run_token_refuses",
+  "test_the_cli_posts_the_reply_text_and_prints_the_readback_as_one_json_line",
+  "test_the_cli_exits_non_zero_with_a_json_error_on_a_refusal",
+  "test_the_cli_sends_the_keep_language_reason_with_the_reply",
+  "test_the_cli_dialog_prints_the_for_you_layer_in_log_order",
+  "test_the_cli_status_set_posts_the_file_and_prints_the_stored_status_as_one_json_line",
+  "test_the_cli_status_set_does_not_start_a_cold_read_after_a_link_rejection",
+  "test_the_cli_status_set_stops_on_missing_context_before_calling_a_light_backend",
+  "test_the_cli_status_set_reads_and_records_each_unread_item_then_exits_three_before_storing",
+  "test_the_cli_status_set_prints_each_backend_error_and_records_no_failed_item",
+  "test_the_cli_status_confirm_posts_the_session_and_prints_the_stored_status",
+  "test_the_cli_status_show_prints_the_status_and_one_block_per_child_with_waiting_items",
+  "test_the_cli_status_show_prints_the_now_of_each_open_child_in_one_block_and_no_block_without_children",
+  "test_reply_posts_the_file_text_for_the_cwd_session_and_prints_the_readback",
+  "test_reply_reads_stdin_when_the_file_is_a_dash",
+  "test_server_refusal_exits_non_zero_with_the_detail_on_stderr",
+  "test_stale_thread_refusal_exits_non_zero_with_the_detail_on_stderr",
+  "test_read_defaults_to_the_session_thread_with_url_null_and_limit_50",
+  "test_read_passes_the_url_and_limit_through",
+  "test_limit_out_of_range_is_a_usage_error",
+  "test_check_posts_an_empty_body_prints_the_readback_and_exits_zero_when_ok",
+  "test_check_exits_one_after_printing_when_ok_is_false",
+  "test_help_lists_discord",
 ];
 
 #[test]
@@ -383,9 +405,25 @@ fn run_case(case_path: &Path, record_command: Option<&str>) -> Result<(), String
   // Python record would bake the Python-only output in.
   let expect_from_rust = case.get("expect_from").and_then(Value::as_str) == Some("rust");
   let recording = record_command.is_some();
-  let responses = case.get("responses").and_then(Value::as_array).cloned().unwrap_or_default();
+  // A scripted body may name the run's temp root (a host-served link points into it), so `{root}` substitutes there too.
+  let responses: Vec<Value> = case
+    .get("responses")
+    .and_then(Value::as_array)
+    .map(|responses| {
+      responses
+        .iter()
+        .map(|response| {
+          let text = serde_json::to_string(response).expect("a scripted response serializes").replace("{root}", &root);
+          serde_json::from_str(&text).expect("a substituted response is valid JSON")
+        })
+        .collect()
+    })
+    .unwrap_or_default();
   let stub = start_stub(&responses);
-  let substitute = |text: &str| text.replace("{root}", &root).replace("{port}", &stub.port.to_string());
+  let repo =
+    std::fs::canonicalize(REPO_ROOT).map_err(|error| format!("{REPO_ROOT}: {error}"))?.to_string_lossy().into_owned();
+  let substitute =
+    |text: &str| text.replace("{root}", &root).replace("{port}", &stub.port.to_string()).replace("{repo}", &repo);
 
   if let Some(files) = case.get("files").and_then(Value::as_object) {
     for (relative, content) in files {
@@ -399,6 +437,11 @@ fn run_case(case_path: &Path, record_command: Option<&str>) -> Result<(), String
         std::fs::create_dir_all(parent).map_err(|error| format!("{}: {error}", parent.display()))?;
       }
       std::fs::write(&path, text).map_err(|error| format!("{}: {error}", path.display()))?;
+      if relative.starts_with("bin/") {
+        // A stub agent CLI under `bin/` runs as a program on the case's PATH.
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+          .map_err(|error| format!("{}: {error}", path.display()))?;
+      }
     }
   }
 

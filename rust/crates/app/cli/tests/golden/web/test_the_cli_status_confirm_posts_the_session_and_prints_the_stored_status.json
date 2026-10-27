@@ -1,0 +1,53 @@
+{
+  "argv": [
+    "web",
+    "status",
+    "confirm"
+  ],
+  "cwd": "{root}",
+  "env": {
+    "CHARLIEBOT_SESSION_ID": "abc"
+  },
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n"
+  },
+  "responses": [
+    {
+      "status": 200,
+      "body": {
+        "goal": "g",
+        "now": "n",
+        "waiting": [
+          {
+            "text": "Decide",
+            "context": "The line is active.",
+            "link": null,
+            "since": "2026-10-24T00:00:00+00:00",
+            "since_exact": false
+          }
+        ],
+        "updated_at": "2026-10-24T05:00:00+00:00"
+      }
+    }
+  ],
+  "expect": {
+    "stdout": "{\"goal\": \"g\", \"now\": \"n\", \"waiting\": [{\"text\": \"Decide\", \"context\": \"The line is active.\", \"link\": null, \"since\": \"2026-10-24T00:00:00+00:00\", \"since_exact\": false}], \"updated_at\": \"2026-10-24T05:00:00+00:00\"}\n",
+    "stderr": "",
+    "exit": 0,
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/api/internal/web/status/confirm",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "session_id": "abc"
+        }
+      }
+    ]
+  }
+}

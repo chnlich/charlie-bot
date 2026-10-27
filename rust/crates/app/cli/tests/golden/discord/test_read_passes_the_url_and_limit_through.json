@@ -1,0 +1,58 @@
+{
+  "argv": [
+    "discord",
+    "read",
+    "--url",
+    "https://discord.com/channels/1/2/3",
+    "--limit",
+    "5",
+    "--session",
+    "abc"
+  ],
+  "cwd": "{root}",
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n"
+  },
+  "responses": [
+    {
+      "status": 200,
+      "body": {
+        "messages": [
+          {
+            "id": "m1",
+            "author_id": "u1",
+            "author": "someone",
+            "timestamp": "2026-01-01T00:00:00+00:00",
+            "content": "hello",
+            "attachments": [],
+            "unread": false
+          }
+        ],
+        "watermark_id": "m1",
+        "more_unread": false
+      }
+    }
+  ],
+  "expect": {
+    "stdout": "{\"messages\": [{\"id\": \"m1\", \"author_id\": \"u1\", \"author\": \"someone\", \"timestamp\": \"2026-01-01T00:00:00+00:00\", \"content\": \"hello\", \"attachments\": [], \"unread\": false}], \"watermark_id\": \"m1\", \"more_unread\": false}\n",
+    "stderr": "",
+    "exit": 0,
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/api/internal/discord/read",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "session_id": "abc",
+          "url": "https://discord.com/channels/1/2/3",
+          "limit": 5
+        }
+      }
+    ]
+  }
+}

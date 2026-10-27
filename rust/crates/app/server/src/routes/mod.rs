@@ -5,8 +5,8 @@
 //! starlette's router tries the slash-toggled path against every route. WebSocket upgrades never reach
 //! these routes: [`websockets::gate`] answers them first.
 
+pub mod family;
 pub mod pages;
-pub mod static_mounts;
 pub mod system;
 pub mod websockets;
 
@@ -15,23 +15,47 @@ use std::sync::Arc;
 use axum::Router;
 use axum::extract::{Request, State};
 use axum::response::Response;
+use axum::routing::any;
 use charliebot_compat::responses;
+use charliebot_compat::static_files;
 use http::{StatusCode, header};
 
-use crate::app::ConnectionInfo;
+use crate::connection::ConnectionInfo;
 use crate::request_path;
 use crate::state::AppState;
-
-/// One route family.
-pub struct Family {
-  /// The family's routes.
-  pub routes: fn() -> Router<Arc<AppState>>,
-  /// Whether a decoded HTTP path falls under one of the family's routes, whatever the method.
-  pub matches: fn(&AppState, &str) -> bool,
-}
+use family::Family;
 
 /// Every route family, in the Python app's route order.
-pub const FAMILIES: &[Family] = &[pages::FAMILY, system::FAMILY, static_mounts::FAMILY];
+pub const FAMILIES: &[Family] = &[pages::FAMILY, system::FAMILY, STATIC_FAMILY];
+
+/// The `/static` family: each page package's `static/`, then `web/static` (`app.mount` in Python). Its serving falls
+/// through to this module's not-found answer, so the family lives here beside it.
+pub(crate) const STATIC_FAMILY: Family = Family {
+  routes: static_routes,
+  matches: |state, path| state.static_mounts.iter().any(|mount| mount.route_path(path).is_some()),
+};
+
+fn static_routes() -> Router<Arc<AppState>> {
+  Router::new().route("/static/", any(serve)).route("/static/{*rest}", any(serve))
+}
+
+/// The first mount whose prefix holds the path serves it; a path under no mount (no `web/static` at
+/// startup) takes the router's not-found answer.
+async fn serve(State(state): State<Arc<AppState>>, request: Request) -> Response {
+  let path = request_path::of(&request).to_string();
+  let Some(index) = state.static_mounts.iter().position(|mount| mount.route_path(&path).is_some()) else {
+    return not_found(State(state), request).await;
+  };
+  let method = request.method().clone();
+  let headers = request.headers().clone();
+  tokio::task::spawn_blocking(move || {
+    let mount = &state.static_mounts[index];
+    let below = mount.route_path(&path).expect("the mount matched this path above");
+    static_files::serve(&mount.directory, &state.mime_types, below, &method, &headers)
+  })
+  .await
+  .expect("serving a static file does not panic")
+}
 
 /// The HTTP router: every family's routes, then the not-found answer.
 pub fn router() -> Router<Arc<AppState>> {

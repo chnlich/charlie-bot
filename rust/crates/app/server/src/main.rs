@@ -19,6 +19,7 @@
 mod app;
 mod auth;
 mod buildinfo;
+mod connection;
 mod cookies;
 mod gzip;
 mod home_init;
@@ -47,10 +48,10 @@ use nix::sys::signal::{SigHandler, Signal};
 use tokio::net::TcpListener;
 use tokio::signal::unix::{SignalKind, signal};
 
-use crate::app::ConnectionInfo;
 use crate::buildinfo::BuildInfo;
-use crate::routes::static_mounts::StaticMount;
+use crate::connection::ConnectionInfo;
 use crate::state::AppState;
+use crate::state::StaticMount;
 
 /// `timeouts.SERVER_GRACEFUL_SHUTDOWN_TIMEOUT`: how long in-flight requests get after a stop signal.
 const GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);

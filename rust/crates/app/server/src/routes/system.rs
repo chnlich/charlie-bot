@@ -10,7 +10,7 @@ use charliebot_compat::routing::get_only;
 use http::StatusCode;
 use serde_json::json;
 
-use super::Family;
+use super::family::Family;
 use crate::auth::AUTH_STATUS_PATH;
 use crate::state::AppState;
 

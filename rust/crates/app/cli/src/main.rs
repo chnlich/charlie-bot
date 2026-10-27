@@ -87,6 +87,7 @@ fn run_subcommand(
     "improve-stop" => charliebot_improve::cli::stop_main(args),
     "memory" => charliebot_memory::cli::main(args),
     "plan" => charliebot_artifacts::cli::plan::main(args, host),
+    "publish" => charliebot_artifacts::cli::publish::main(args, host),
     "schedule-trigger" => commands::schedule_trigger::main(args),
     "session" => commands::session::main(args),
     "slack" => charliebot_slack::cli::main(args),

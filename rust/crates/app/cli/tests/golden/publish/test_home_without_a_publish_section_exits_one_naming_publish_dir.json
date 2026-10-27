@@ -1,0 +1,17 @@
+{
+  "argv": [
+    "publish",
+    "{root}/page.html"
+  ],
+  "cwd": ".",
+  "files": {
+    "home/config.yaml": "server:\n  port: 2001\n",
+    "page.html": "<p>hello</p>"
+  },
+  "expect": {
+    "stdout": "",
+    "stderr": "{\"error\": \"publish.dir is not configured; the publish lane is unavailable\"}\n",
+    "exit": 1,
+    "requests": []
+  }
+}

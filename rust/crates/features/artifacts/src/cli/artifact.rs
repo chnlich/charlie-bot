@@ -3,7 +3,8 @@
 //! `check` runs a genre's mechanical assertions, prints one line per outcome, and — once every assertion passed and
 //! `--assertions-only` was not given — runs the cold read. The cold read follows the session's profile: a manager
 //! session delegates a cold-read child over `/api/internal/delegate` and prints the started line; a worker session or
-//! one with no session identity runs the probe in the foreground and prints the report body. `wrap` is not ported yet.
+//! one with no session identity runs the probe in the foreground and prints the report body. `wrap` assembles a genre
+//! page and can pre-render its math.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -14,9 +15,7 @@ use charliebot_cli_common::client;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::paths;
-use charliebot_store::control_events;
 use charliebot_store::run_identity::SESSION_METADATA_NAME;
-use charliebot_store::run_records::{DATA_DIR_NAME, RUN_METADATA_NAME, RUNS_DIR_NAME};
 use charliebot_tasks::cold_read;
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 use serde_json::{Value, json};
@@ -39,6 +38,8 @@ struct ArtifactCli {
 enum ArtifactCommand {
   /// Run a genre's assertions (and cold read) on a local file
   Check(CheckArgs),
+  /// Assemble a genre page from a content fragment
+  Wrap(super::wrap::WrapArgs),
 }
 
 #[derive(Args)]
@@ -80,9 +81,6 @@ enum CheckOutcome {
 /// Parse the artifact arguments and run one verb. Parser errors print and exit on their own (argparse-compatible:
 /// help 0, usage error 2).
 pub fn main(args: &[OsString], host: &LazyHost) -> Result<(), CliExit> {
-  if args.first().is_some_and(|argument| argument == "wrap") {
-    return Err(CliExit::error("artifact wrap is not ported to the Rust CLI yet"));
-  }
   let command = with_infer_long_args(ArtifactCli::command());
   let argv = std::iter::once(OsString::from("charliebot artifact")).chain(args.iter().cloned());
   let matches = match command.try_get_matches_from(argv) {
@@ -104,6 +102,10 @@ pub fn main(args: &[OsString], host: &LazyHost) -> Result<(), CliExit> {
         std::process::exit(output.exit);
       }
     },
+    ArtifactCommand::Wrap(wrap_args) => {
+      print!("{}", super::wrap::run(&wrap_args, args)?);
+      flush_stdout()
+    }
   }
 }
 
@@ -277,8 +279,15 @@ fn delegate_cold_read(
   let parent = session_id.to_string();
   let readback_description = description.clone();
   let readback_request_id = request_id.clone();
-  let readback =
-    move || Ok(find_local_task_child(&home, &parent, &readback_description, COLD_READ_TASK_TYPE, &readback_request_id));
+  let readback = move || {
+    Ok(charliebot_store::task_child::find_local_task_child(
+      &home,
+      &parent,
+      &readback_description,
+      Some(COLD_READ_TASK_TYPE),
+      Some(&readback_request_id),
+    ))
+  };
   let result = client::post("/api/internal/delegate", payload, Some(Box::new(readback)), &[])?;
   let child = result
     .get("session_id")
@@ -289,47 +298,6 @@ fn delegate_cold_read(
     .and_then(Value::as_str)
     .ok_or_else(|| CliExit::error("the delegate response carries no run_id"))?;
   Ok(format!("cold read started: session {child} run {run}\n"))
-}
-
-/// `find_local_task_child`: the v2 (parent, request id) child this delegation's own identity binds to.
-fn find_local_task_child(
-  home: &Path,
-  session_id: &str,
-  description: &str,
-  task_type: &str,
-  request_id: &str,
-) -> Option<Value> {
-  let child_id = control_events::stable_task_id(Some(session_id), request_id);
-  let session_dir = home.join("sessions").join(&child_id);
-  let metadata: Value =
-    serde_json::from_str(&std::fs::read_to_string(session_dir.join(SESSION_METADATA_NAME)).ok()?).ok()?;
-  if metadata.get("id").and_then(Value::as_str) != Some(child_id.as_str())
-    || metadata.get("task_parent_id").and_then(Value::as_str) != Some(session_id)
-    || metadata.get("profile").and_then(Value::as_str) != Some("worker")
-  {
-    return None;
-  }
-  let task = metadata.get("task")?;
-  if task.get("goal").and_then(Value::as_str) != Some(description)
-    || task.get("task_type").and_then(Value::as_str) != Some(task_type)
-  {
-    return None;
-  }
-  let mut run_id = Some(control_events::stable_run_id(&child_id, &format!("{request_id}:work")));
-  let run_metadata = session_dir
-    .join(DATA_DIR_NAME)
-    .join(RUNS_DIR_NAME)
-    .join(run_id.as_deref().expect("the run id is set"))
-    .join(RUN_METADATA_NAME);
-  if !run_metadata.is_file() {
-    run_id = None;
-  }
-  Some(json!({
-    "session_id": child_id,
-    "parent_session_id": session_id,
-    "run_id": run_id,
-    "thread_id": run_id,
-  }))
 }
 
 /// The probe's outcome, the page bytes' sha256 included.

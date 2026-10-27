@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use tokio::signal::unix::{SignalKind, signal};
 
+use crate::transport::follow::SilenceCallback;
 use crate::transport::identity::{ProcessIdentity, pin_process_identity, read_pid_stat};
 
 pub const RELAY_ARG: &str = "--opencode-relay";
@@ -46,6 +47,7 @@ pub struct TurnRecord {
   pub server_record: String,
   pub session_id: String,
   pub prompt_request: Value,
+  pub model: String,
   #[serde(default)]
   pub model_limit: Option<Map<String, Value>>,
 }
@@ -112,6 +114,18 @@ pub fn read_turn_record(directory: &Path) -> anyhow::Result<Option<TurnRecord>> 
     Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
     Err(error) => Err(error.into()),
   }
+}
+
+/// Apply the OpenCode progress deadline when following a recovered turn.
+pub fn recovery_silence(directory: &Path) -> anyhow::Result<Option<(SilenceCallback, Duration)>> {
+  let Some(turn) = read_turn_record(directory)? else { return Ok(None) };
+  let timeout = super::opencode_limits::OPENCODE_SSE_PROGRESS_TIMEOUT;
+  let message = format!("OpenCode session {} produced no event for {} s", turn.session_id, timeout.as_secs_f64());
+  let callback: SilenceCallback = Box::new(move || {
+    let message = message.clone();
+    Box::pin(async move { Err(std::io::Error::new(std::io::ErrorKind::TimedOut, message)) })
+  });
+  Ok(Some((callback, timeout)))
 }
 
 /// The connection record directory under the CharlieBot profile home.
@@ -196,31 +210,41 @@ async fn run_inner(directory: &Path, parent_pid: u32, parent_start: &str, raw_pa
   )?;
   let client = Client::builder().no_proxy().build()?;
   let event_url = format!("{}/api/event", record.base_url);
-  let response = client
-    .get(event_url)
-    .basic_auth("opencode", Some(&record.password))
-    .send()
-    .await
-    .and_then(reqwest::Response::error_for_status)
-    .context("opening OpenCode event stream")?;
+  let response = tokio::select! {
+    response = client.get(event_url).basic_auth("opencode", Some(&record.password)).send() => {
+      response.and_then(reqwest::Response::error_for_status).context("opening OpenCode event stream")?
+    }
+    _ = terminate.recv() => {
+      interrupt_before_streaming(&client, &record, &turn, raw_path).await?;
+      return Ok(true);
+    }
+  };
   let mut stream = response.bytes_stream();
   let mut pending = Vec::new();
   let mut search_from = 0;
   loop {
-    let chunk = stream.next().await.context("OpenCode event stream ended before server.connected")??;
+    let chunk = tokio::select! {
+      chunk = stream.next() => chunk.context("OpenCode event stream ended before server.connected")??,
+      _ = terminate.recv() => {
+        interrupt_before_streaming(&client, &record, &turn, raw_path).await?;
+        return Ok(true);
+      }
+    };
     pending.extend_from_slice(&chunk);
     if visit_complete_lines(&mut pending, &mut search_from, is_connected_event)? {
       break;
     }
   }
   let prompt_url = format!("{}/api/session/{}/prompt", record.base_url, turn.session_id);
-  let prompt_response = client
-    .post(prompt_url)
-    .basic_auth("opencode", Some(&record.password))
-    .json(&turn.prompt_request)
-    .send()
-    .await
-    .context("sending OpenCode prompt")?;
+  let prompt_response = tokio::select! {
+    response = client.post(prompt_url).basic_auth("opencode", Some(&record.password)).json(&turn.prompt_request).send() => {
+      response.context("sending OpenCode prompt")?
+    }
+    _ = terminate.recv() => {
+      interrupt_before_streaming(&client, &record, &turn, raw_path).await?;
+      return Ok(true);
+    }
+  };
   if prompt_response.status() != StatusCode::OK {
     let status = prompt_response.status();
     let text = prompt_response.text().await?;
@@ -273,6 +297,17 @@ async fn run_inner(directory: &Path, parent_pid: u32, parent_start: &str, raw_pa
       }
     }
   }
+}
+
+async fn interrupt_before_streaming(
+  client: &Client,
+  record: &ServerRecord,
+  turn: &TurnRecord,
+  raw_path: &Path,
+) -> anyhow::Result<()> {
+  let url = format!("{}/api/session/{}/interrupt", record.base_url, turn.session_id);
+  client.post(url).basic_auth("opencode", Some(&record.password)).send().await?.error_for_status()?;
+  append_end_record(raw_path, "OpenCode relay stopped before streaming events")
 }
 
 fn is_connected_event(line: &[u8]) -> anyhow::Result<bool> {

@@ -282,9 +282,21 @@ impl Worker {
     let follow_sink = Arc::clone(&sink);
     let follow_failure = Arc::clone(&failure);
     let alive = Arc::clone(&is_alive);
+    let is_opencode = self.backend_option.as_ref().is_some_and(|option| option.backend_type == "opencode");
+    let opencode_silence =
+      if is_opencode { charliebot_agents::backends::opencode::relay::recovery_silence(&self.data_dir)? } else { None };
+    let (on_silence, silence_threshold) = match opencode_silence {
+      Some((callback, threshold)) => (Some(callback), threshold),
+      None => (on_silence, NO_OUTPUT_REPORT_THRESHOLD),
+    };
     let followed = follow::tail_follow_events(
       &raw_path,
-      move |raw| translator.translate(raw),
+      move |raw| {
+        if is_opencode {
+          charliebot_agents::backends::opencode::reject_permission(&raw)?;
+        }
+        translator.translate(raw)
+      },
       move |event| {
         let sink = Arc::clone(&follow_sink);
         let failure = Arc::clone(&follow_failure);
@@ -303,7 +315,7 @@ impl Worker {
       buffer_limit,
       follow::TAIL_POLL_INTERVAL,
       on_silence,
-      NO_OUTPUT_REPORT_THRESHOLD,
+      silence_threshold,
     )
     .await;
     // The event's own error outranks the follow's wrapper of it, so a quota error keeps its type.
@@ -311,7 +323,20 @@ impl Worker {
     if let Some(error) = stored {
       return Err(error);
     }
-    followed?;
+    let follow_failed = match followed {
+      Ok(_) => false,
+      Err(error) if is_opencode => {
+        let message = format!("OpenCode backend failed: {error}");
+        handle_event(&sink, event_builders::make_error_event(&message), None::<&mut dyn LaunchWatch>, None).await?;
+        let pid = self.thread.lock().expect("thread metadata mutex is not poisoned").pid;
+        let pid = pid.context("a failed resumed run has no recorded pid")?;
+        if is_alive() {
+          kill::kill_group_escalating(pid, || is_alive()).await;
+        }
+        true
+      }
+      Err(error) => return Err(error),
+    };
 
     if let Some(outcome) = charliebot_agents::transport::final_stdout::read_outcome(&self.data_dir)?
       && let Some(error) = outcome.guard_error
@@ -319,8 +344,13 @@ impl Worker {
       return Err(charliebot_agents::transport::final_stdout::GuardError(error).into());
     }
 
-    let mut scanned = self.build_backend(None, false)?.backend.translator();
-    let (_, _, exit_code) = recovery::scan_result_exit(&raw_path, move |raw| scanned.translate(raw))?;
+    let exit_code = if follow_failed {
+      -1
+    } else {
+      let mut scanned = self.build_backend(None, false)?.backend.translator();
+      let (_, _, exit_code) = recovery::scan_result_exit(&raw_path, move |raw| scanned.translate(raw))?;
+      exit_code
+    };
     // The follow ends with a live process only on the post-result timeout, so a live process here outlived its result.
     // Its diagnostics are captured before its group is killed (`worker.py` `resume`).
     let hang_diagnostics = if is_alive() {

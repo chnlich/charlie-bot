@@ -689,6 +689,25 @@ impl OpenCodeServer {
     let process = self.process().expect("adopted process was registered before its reader");
     self.start_event_reader(process);
     self.start_exit_watcher();
+    let turns = self
+      .state
+      .lock()
+      .expect("opencode server state mutex is not poisoned")
+      .turns
+      .values()
+      .cloned()
+      .collect::<Vec<_>>();
+    for turn in turns {
+      self.track(tokio::spawn(async move {
+        let start = turn.process_start.as_deref().expect("an adopted turn has a pinned relay process");
+        while relay::same_process(turn.process_id, start) {
+          tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        if let Err(error) = turn.finish().await {
+          tracing::error!(target: "charliebot_agents", session_id = %turn.session_id, error = %error, "opencode_adopted_turn_end_failed");
+        }
+      }));
+    }
     if self.state.lock().expect("opencode server state mutex is not poisoned").turns.is_empty() {
       let server = Arc::clone(self);
       self.track(tokio::spawn(async move {
@@ -1321,24 +1340,7 @@ impl OpenCodeServer {
     }
     let turn = self.state.lock().expect("opencode server state mutex is not poisoned").turns.get(&session_id).cloned();
     if let Some(turn) = turn {
-      if turn.relay_only {
-        if turn.adopted
-          && matches!(
-            event_type,
-            "session.execution.succeeded" | "session.execution.failed" | "session.execution.interrupted"
-          )
-        {
-          let process_start = turn.process_start.clone().expect("an adopted turn has a pinned relay process");
-          self.track(tokio::spawn(async move {
-            while relay::same_process(turn.process_id, &process_start) {
-              tokio::time::sleep(Duration::from_millis(25)).await;
-            }
-            if let Err(error) = turn.finish().await {
-              tracing::error!(target: "charliebot_agents", session_id = %turn.session_id, error = %error, "opencode_adopted_turn_end_failed");
-            }
-          }));
-        }
-      } else {
+      if !turn.relay_only {
         #[cfg(test)]
         turn.push(TurnEvent::Event(event));
       }

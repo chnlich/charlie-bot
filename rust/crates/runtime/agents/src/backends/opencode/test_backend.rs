@@ -69,6 +69,118 @@ fn relay_subprocess() {
   super::relay::run_args(&args).expect("OpenCode relay subprocess completed");
 }
 
+#[tokio::test]
+#[ignore = "server-side process for the OpenCode restart test"]
+async fn restart_owner_subprocess() {
+  let harness = Harness::new(json!({"prompts": {"paused": {"events": [usage_event(5, 2)], "hold": true}}}));
+  let (_, _, _task) = harness.start_run("paused", LaunchArgs::default(), None, vec![], Env::new());
+  harness
+    .wait_for_log(|logs| logs.iter().any(|entry| entry.get("prompt_text").and_then(Value::as_str) == Some("paused")))
+    .await;
+  let directory = run_directory(&harness);
+  harness.wait_for_raw_cursor(&directory).await;
+  fs::write(std::env::var_os("TEST_OWNER_READY").unwrap(), directory.to_string_lossy().as_bytes()).unwrap();
+  std::future::pending::<()>().await;
+}
+
+struct RestartProcessGuard {
+  owner: std::process::Child,
+  processes: Vec<ProcessIdentity>,
+}
+
+impl Drop for RestartProcessGuard {
+  fn drop(&mut self) {
+    let _ = self.owner.kill();
+    let _ = self.owner.wait();
+    for process in &self.processes {
+      if process.pid_start.as_deref().is_some_and(|start| super::relay::same_process(process.pid, start)) {
+        kill_process_group(process.pid, Signal::SIGKILL);
+      }
+    }
+  }
+}
+
+#[tokio::test]
+async fn killed_server_process_leaves_relay_and_serve_for_adoption() {
+  let scratch = tempfile::tempdir().unwrap();
+  let ready = scratch.path().join("ready");
+  let owner = Command::new(std::env::current_exe().unwrap())
+    .args(["--exact", "backends::opencode::test_backend::restart_owner_subprocess", "--ignored"])
+    .env("TMPDIR", scratch.path())
+    .env("TEST_OWNER_READY", &ready)
+    .spawn()
+    .unwrap();
+  let mut guard = RestartProcessGuard { owner, processes: Vec::new() };
+  tokio::time::timeout(Duration::from_secs(5), async {
+    while !ready.exists() {
+      assert!(guard.owner.try_wait().unwrap().is_none(), "server-side process exited before its turn started");
+      tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+  })
+  .await
+  .expect("the server-side process started its turn");
+  let directory = PathBuf::from(fs::read_to_string(&ready).unwrap());
+  let profile = directory.ancestors().nth(5).unwrap().to_path_buf();
+  let turn = super::relay::read_turn_record(&directory).unwrap().unwrap();
+  let record_path = profile.join("opencode/servers").join(&turn.server_record);
+  let record: super::relay::ServerRecord = serde_json::from_slice(&fs::read(record_path).unwrap()).unwrap();
+  let run: charliebot_store::run_records::RunRecord =
+    serde_json::from_slice(&fs::read(directory.join(charliebot_store::run_records::RUN_METADATA_NAME)).unwrap())
+      .unwrap();
+  guard.processes.push(ProcessIdentity { pid: record.pid, pid_start: Some(record.pid_start.clone()) });
+  guard.processes.push(ProcessIdentity { pid: run.pid.unwrap(), pid_start: run.pid_start.clone() });
+  guard.owner.kill().unwrap();
+  guard.owner.wait().unwrap();
+
+  let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../..");
+  let host = OpenCodeHost::with_program(
+    "/usr/bin/python3".into(),
+    vec!["-I".into(), root.join("tests/fake_opencode_serve.py").into_os_string()],
+    "/usr/bin/python3".into(),
+    root,
+    profile,
+    Env::new(),
+  );
+  let pool = OpenCodeServerPool::new(host, ServerTimeouts::default());
+  pool.record_options(&[adoption_option()]);
+  pool.adopt_existing().unwrap();
+  assert_eq!(pool.adopted_servers_test().len(), 1);
+  let (translator, cursor) = replay_translator_prefix(&directory);
+  let delivered = Arc::new(Mutex::new(Vec::new()));
+  let pid = run.pid.unwrap();
+  let start = run.pid_start.unwrap();
+  let output = Arc::clone(&delivered);
+  let follow_dir = directory.clone();
+  let follow = tokio::spawn(async move {
+    follow_from_cursor(&follow_dir, cursor, translator, move || super::relay::same_process(pid, &start), output).await
+  });
+  let client = reqwest::Client::builder().no_proxy().build().unwrap();
+  for mut event in
+    [text_event("answer after restart"), usage_event(3, 1), json!({"type": "session.execution.succeeded", "data": {}})]
+  {
+    event["data"]["sessionID"] = json!(turn.session_id);
+    client
+      .post(format!("{}/__control", record.base_url))
+      .basic_auth("opencode", Some(&record.password))
+      .json(&json!({"emit": event}))
+      .send()
+      .await
+      .unwrap()
+      .error_for_status()
+      .unwrap();
+  }
+  assert!(tokio::time::timeout(Duration::from_secs(5), follow).await.unwrap().unwrap().unwrap().saw_result);
+  let events = collected_events(&delivered);
+  assert!(
+    events.iter().any(|event| event["type"] == event_types::ASSISTANT
+      && event["message"]["content"][0]["text"] == "answer after restart")
+  );
+  let result = events.iter().find(|event| event["type"] == event_types::RESULT).unwrap();
+  assert_eq!(result["usage"]["input_tokens"], 8);
+  assert_eq!(result["usage"]["output_tokens"], 3);
+  pool.stop_all().await.unwrap();
+}
+
 struct TestNotifyGuard {
   notify: Arc<tokio::sync::Notify>,
   released: bool,
@@ -1276,6 +1388,55 @@ async fn stopping_an_adopted_turn_interrupts_through_its_connection_record_and_e
   harness.clear_finished_turn_pids();
 }
 
+#[tokio::test]
+async fn adopted_serve_stops_when_relay_exits_without_a_terminal_event() {
+  let harness = Harness::new(json!({"prompts": {"paused": {"events": [], "hold": true}}}));
+  let (runner, _, task) = harness.start_run("paused", LaunchArgs::default(), None, vec![], Env::new());
+  harness
+    .wait_for_log(|logs| logs.iter().any(|entry| entry.get("prompt_text").and_then(Value::as_str) == Some("paused")))
+    .await;
+  let identity =
+    harness.turn_processes.lock().unwrap().iter().find(|(prompt, _)| prompt == "paused").unwrap().1.clone();
+  runner.detach();
+  task.abort();
+  assert!(task.await.unwrap_err().is_cancelled());
+  harness.pool.abandon_for_restart_test().await;
+  let pool = harness.adopt_pool();
+  let adopted = pool.adopted_servers_test();
+  assert_eq!(adopted.len(), 1);
+  crate::transport::kill::kill_process_group(identity.pid, nix::sys::signal::Signal::SIGKILL);
+  tokio::time::timeout(Duration::from_secs(5), async {
+    while adopted[0].process_alive() {
+      tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+  })
+  .await
+  .expect("the adopted serve stops when its last relay exits without a terminal event");
+  harness.stop().await.unwrap();
+  harness.clear_finished_turn_pids();
+}
+
+#[tokio::test]
+async fn reused_run_directory_sends_only_the_new_prompt() {
+  let harness = Harness::new(json!({"prompts": {
+    "first": {"events": [text_event("first answer")]},
+    "second": {"events": [text_event("second answer")]}
+  }}));
+  let directory = harness.run_logs_directory().join("reused");
+  let launch = LaunchArgs { log_dir: Some(directory), ..LaunchArgs::default() };
+  let (_, _, first) = harness.start_run("first", launch.clone(), None, vec![], Env::new());
+  assert_eq!(first.await.unwrap().unwrap().exit_code, Some(0));
+  let (_, events, second) = harness.start_run("second", launch, None, vec![], Env::new());
+  assert_eq!(second.await.unwrap().unwrap().exit_code, Some(0));
+  assert!(collected_events(&events).iter().any(|event| {
+    event["type"] == event_types::ASSISTANT && event["message"]["content"][0]["text"] == "second answer"
+  }));
+  let prompts = harness.logs().into_iter().filter_map(|entry| entry.get("prompt_text").cloned()).collect::<Vec<_>>();
+  assert_eq!(prompts, vec![json!("first"), json!("second")]);
+  harness.stop().await.unwrap();
+  harness.clear_finished_turn_pids();
+}
+
 // Python: tests/test_opencode_backend.py:666.
 #[tokio::test]
 async fn turn_end_steps_run_in_order_and_remove_the_session_shells() {
@@ -1807,6 +1968,30 @@ fn headless_content(harness: &Harness) -> String {
 /// The `OPENCODE_CONFIG_CONTENT` of the newest one-shot run that the fake opencode logged.
 fn last_one_shot_config(harness: &Harness) -> Value {
   harness.logs().into_iter().rev().find(|entry| entry.get("run_args").is_some()).unwrap()["config"].clone()
+}
+
+#[tokio::test]
+async fn recovered_translator_keeps_the_original_model_after_settings_change() {
+  let harness = Harness::new(json!({}));
+  let directory = harness.root.path().join("old-run");
+  let turn = super::relay::TurnRecord {
+    server_record: "server.json".to_string(),
+    session_id: "old-session".to_string(),
+    prompt_request: json!({"text": "old prompt"}),
+    model: MODEL.to_string(),
+    model_limit: Some(Map::from_iter([("context".to_string(), json!(123_000))])),
+  };
+  super::relay::write_turn_record(&directory.join(super::relay::TURN_RECORD_NAME), &turn).unwrap();
+  let option = opencode_option("changed", "other/new-model", "{}");
+  let cfg = config_with(harness.root.path(), vec![option.clone()]);
+  let factory = OpenCodeFactory::new(harness.host.clone(), Arc::clone(&harness.pool));
+  let launch = LaunchArgs { log_dir: Some(directory), ..LaunchArgs::default() };
+  let backend = factory.build(Some(&option), &cfg, launch).unwrap();
+  let mut translator = backend.translator();
+  translator.translate(usage_event(10, 4)).unwrap();
+  let result = translator.translate(json!({"type": "session.execution.succeeded", "data": {}})).unwrap();
+  assert_eq!(result[0]["context_snapshot"]["model"], MODEL);
+  assert_eq!(result[0]["context_snapshot"]["limit"]["context"], 123_000);
 }
 
 #[tokio::test]

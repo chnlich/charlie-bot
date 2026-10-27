@@ -934,9 +934,23 @@ pub(crate) async fn resume_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkIte
   let stream_events = Arc::new(Mutex::new(Vec::<Value>::new()));
   let persisted_events = Arc::clone(&stream_events);
   let stream_ack_ids = Arc::clone(&ack_ids);
+  let is_opencode = option.as_ref().is_some_and(|option| option.backend_type == "opencode");
+  let (on_silence, silence_threshold) = if is_opencode {
+    match charliebot_agents::backends::opencode::relay::recovery_silence(&log_dir)? {
+      Some((callback, threshold)) => (Some(callback), threshold),
+      None => (None, Duration::ZERO),
+    }
+  } else {
+    (None, Duration::ZERO)
+  };
   let follow_result = follow::tail_follow_events(
     &raw_path,
-    translate_stream,
+    move |raw| {
+      if is_opencode {
+        charliebot_agents::backends::opencode::reject_permission(&raw)?;
+      }
+      translate_stream(raw)
+    },
     {
       move |event| {
         let tracker = Arc::clone(&stream_tracker);
@@ -974,8 +988,8 @@ pub(crate) async fn resume_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkIte
     POST_RESULT_TIMEOUT,
     buffer_limit,
     follow::TAIL_POLL_INTERVAL,
-    None,
-    Duration::ZERO,
+    on_silence,
+    silence_threshold,
   )
   .await;
   if let Err(error) = follow_result {

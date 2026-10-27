@@ -16,6 +16,7 @@ charliebot-artifacts.workspace = true
 charliebot-cli-common.workspace = true
 charliebot-core.workspace = true
 charliebot-discord.workspace = true
+charliebot-improve.workspace = true
 charliebot-memory.workspace = true
 charliebot-packages.workspace = true
 charliebot-slack.workspace = true

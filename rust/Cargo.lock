@@ -431,6 +431,7 @@ dependencies = [
  "charliebot-cli-common",
  "charliebot-core",
  "charliebot-discord",
+ "charliebot-improve",
  "charliebot-memory",
  "charliebot-packages",
  "charliebot-slack",

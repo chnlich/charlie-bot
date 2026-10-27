@@ -6,7 +6,8 @@ use std::fs;
 use std::fs::OpenOptions;
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+#[cfg(feature = "test-hooks")]
+use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 

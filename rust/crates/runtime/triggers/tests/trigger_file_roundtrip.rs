@@ -93,11 +93,11 @@ fn materialize_fixture_values(records: &mut [Value]) {
       Value::Array(values) => values.iter_mut().for_each(materialize),
       Value::Object(fields) => {
         for (key, value) in fields.iter_mut() {
-          if key == "pid" {
-            if let Some(number) = value.as_str().and_then(|text| text.strip_prefix("$PID_")) {
-              *value = Value::from(number.parse::<u64>().unwrap());
-              continue;
-            }
+          if key == "pid"
+            && let Some(number) = value.as_str().and_then(|text| text.strip_prefix("$PID_"))
+          {
+            *value = Value::from(number.parse::<u64>().unwrap());
+            continue;
           }
           materialize(value);
         }

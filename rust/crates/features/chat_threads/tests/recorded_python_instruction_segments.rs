@@ -7,12 +7,9 @@ use charliebot_core::RepoRoot;
 use charliebot_core::config::{
   BackendsConfig, CharlieBotConfig, PathsConfig, Sections, ServerConfig, TelegramConfig, UiConfig,
 };
-use charliebot_discord;
 use charliebot_registry::turn::RuleSegment;
 use charliebot_registry::{RegisterFn, Registry};
-use charliebot_slack;
 use charliebot_store::metadata::{SessionMetadata, TaskProfile};
-use charliebot_web_reply;
 use flate2::read::GzDecoder;
 use serde_json::{Value, json};
 

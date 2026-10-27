@@ -1,7 +1,9 @@
-//! Claude Code's default login directory and environment variable.
+//! Claude Code's login directories, and the process environment they resolve against.
 
 use std::env;
 use std::path::PathBuf;
+
+use anyhow::Context;
 
 pub const CLAUDE_CONFIG_DIR_ENV: &str = "CLAUDE_CONFIG_DIR";
 pub const CREDENTIALS_FILE: &str = ".credentials.json";
@@ -32,6 +34,39 @@ pub fn expanduser(path: &str, home: Option<&str>) -> anyhow::Result<PathBuf> {
     return Ok(PathBuf::from(shellexpand::tilde_with_context(path, || Some(home)).into_owned()));
   }
   Ok(PathBuf::from(path))
+}
+
+/// The process environment the Claude usage source reads: the home directory for the default login directory and the
+/// pool's `~`, and `CLAUDE_CONFIG_DIR` for the sweep's second transcript root.
+#[derive(Clone, Debug)]
+pub struct ClaudeHost {
+  pub home: PathBuf,
+  pub claude_config_dir: PathBuf,
+}
+
+impl ClaudeHost {
+  /// The host of the running server. HOME must be set, as `Path.home()` needs it.
+  pub fn from_process() -> anyhow::Result<Self> {
+    let home = std::env::var_os("HOME").context("HOME must be set for the Claude Code usage source")?;
+    Ok(Self { home: PathBuf::from(home), claude_config_dir: claude_config_dir()? })
+  }
+
+  /// `Path.home() / ".claude"`: the default login directory.
+  pub fn default_dir(&self) -> PathBuf {
+    self.home.join(".claude")
+  }
+
+  /// `Path(raw).expanduser()` against this host's home: a leading `~` or `~/` names the home.
+  pub fn expand(&self, raw: &str) -> PathBuf {
+    match raw.strip_prefix('~') {
+      Some("") => self.home.clone(),
+      Some(rest) => match rest.strip_prefix('/') {
+        Some(under_home) => self.home.join(under_home),
+        None => PathBuf::from(raw),
+      },
+      None => PathBuf::from(raw),
+    }
+  }
 }
 
 #[cfg(test)]

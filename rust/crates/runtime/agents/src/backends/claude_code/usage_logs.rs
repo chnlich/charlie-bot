@@ -33,8 +33,9 @@ use walkdir::WalkDir;
 
 use super::claude_accounts::{ClaudeAccountState, json_truthy};
 use super::claude_config::AccountsConfig;
+use super::login_dirs::ClaudeHost;
 use super::usage_quota::{QuotaAccounts, QuotaHttp};
-use super::{ClaudeHost, USAGE_SOURCE, usage_sweep};
+use super::{USAGE_SOURCE, usage_sweep};
 
 /// The byte marker of the lines this reader parses. A line without it is never parsed.
 const MARKER: &[u8] = b"\"usage\"";

@@ -29,11 +29,10 @@ pub use backend::{
   SKIP_PERMISSIONS_FLAG, claude_child_env, claude_model_env, claude_reading_limits, claude_reading_limits_from,
   headless_claude_env, out_of_family_served_models, without_gateway_env,
 };
+pub use login_dirs::ClaudeHost;
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::Context;
 use charliebot_registry::Registry;
 use charliebot_registry::RegistryError;
 use charliebot_registry::backend::{BackendLifecycle, BackendTraits, BackendTypeRegistration, ResumeStyle};
@@ -50,39 +49,6 @@ use self::usage_quota::QuotaHttp;
 pub const USAGE_SOURCE: &str = "Claude Code";
 
 const PACKAGE: &str = "src.backends.claude_code";
-
-/// The process environment the Claude usage source reads: the home directory for the default login directory and the
-/// pool's `~`, and `CLAUDE_CONFIG_DIR` for the sweep's second transcript root.
-#[derive(Clone, Debug)]
-pub struct ClaudeHost {
-  pub home: PathBuf,
-  pub claude_config_dir: PathBuf,
-}
-
-impl ClaudeHost {
-  /// The host of the running server. HOME must be set, as `Path.home()` needs it.
-  pub fn from_process() -> anyhow::Result<Self> {
-    let home = std::env::var_os("HOME").context("HOME must be set for the Claude Code usage source")?;
-    Ok(Self { home: PathBuf::from(home), claude_config_dir: login_dirs::claude_config_dir()? })
-  }
-
-  /// `Path.home() / ".claude"`: the default login directory.
-  pub fn default_dir(&self) -> PathBuf {
-    self.home.join(".claude")
-  }
-
-  /// `Path(raw).expanduser()` against this host's home: a leading `~` or `~/` names the home.
-  pub fn expand(&self, raw: &str) -> PathBuf {
-    match raw.strip_prefix('~') {
-      Some("") => self.home.clone(),
-      Some(rest) => match rest.strip_prefix('/') {
-        Some(under_home) => self.home.join(under_home),
-        None => PathBuf::from(raw),
-      },
-      None => PathBuf::from(raw),
-    }
-  }
-}
 
 /// Register cc-claude, its Claude Code usage source, config section, metadata fields, child environment edit, and
 /// reading limits.
@@ -164,7 +130,7 @@ fn validate_claude_session_fields(values: &mut Map<String, Value>) -> Option<Str
 #[cfg(test)]
 pub(crate) mod test_support {
   use std::fs;
-  use std::path::Path;
+  use std::path::{Path, PathBuf};
 
   use charliebot_compat::http_client::{self, Settings};
   use charliebot_core::config::CharlieBotConfig;
@@ -207,6 +173,8 @@ pub(crate) mod test_support {
 
 #[cfg(test)]
 mod tests {
+  use std::path::PathBuf;
+
   use charliebot_registry::usage::UsageOps;
 
   use super::test_support::{register_synthetic, synthetic_host};

@@ -8,7 +8,7 @@ packages through this crate, so a package added here reaches both and the two li
 
 | Rust item | Python source |
 | --- | --- |
-| `RUNTIME` | `server.py:262-273` |
+| `RUNTIME` | no Python line: the server's runtime registrations, which run before the package list |
 | `PACKAGES` | `src/app/registrations.py:16-46` |
 | `registry` | the server's composition root |
 | `cli_registry` | the CLI's composition root: `PACKAGES` without the Python-only stubs |

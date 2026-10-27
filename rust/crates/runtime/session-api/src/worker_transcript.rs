@@ -953,9 +953,11 @@ mod tests {
     let entry = load_worker_transcript(store, &session_id).unwrap();
     assert_eq!(delivery_timestamp(&entry), "2026-10-17T09:00:14Z");
 
-    WORKER_MEMO.lock().expect("worker transcript memo mutex is not poisoned").clear();
-    let entry = load_worker_transcript(store, &session_id).unwrap();
-    assert_eq!(delivery_timestamp(&entry), "2026-10-17T09:00:14Z");
+    // A fresh build of the same run files, bypassing the memo: the memo is process-wide, and clearing it would
+    // drop the entries of the tests that run beside this one.
+    let signature = worker_signature(store, &session_id).unwrap();
+    let rebuilt = build_worker_transcript(store, &session_id, signature).unwrap();
+    assert_eq!(delivery_timestamp(&rebuilt), "2026-10-17T09:00:14Z");
 
     store
       .append_chat_event(
@@ -966,7 +968,7 @@ mod tests {
       .unwrap();
     append_task_closed(store, &session_id, "2026-10-17T09:05:00Z").await;
 
-    WORKER_MEMO.lock().expect("worker transcript memo mutex is not poisoned").clear();
+    // The appended events grow the chat log, so this load rebuilds.
     let entry = load_worker_transcript(store, &session_id).unwrap();
     assert_eq!(delivery_timestamp(&entry), "2026-10-17T09:05:00Z");
   }

@@ -1,6 +1,7 @@
 //! `src/features/slack`: the Socket Mode summon listener, thread reply routes, service, session fields, and turn hooks.
 
 mod api;
+pub mod cli;
 mod config;
 mod event_types;
 pub mod metadata;

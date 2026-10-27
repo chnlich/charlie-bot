@@ -6,7 +6,9 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
-use charliebot_registry::backend::{BackendLifecycle, Launch, LaunchContext, LaunchKind, LaunchRefused, LaunchWatch};
+use charliebot_registry::backend::{
+  BackendLifecycle, IdleArmContext, Launch, LaunchContext, LaunchKind, LaunchRefused, LaunchWatch,
+};
 use charliebot_store::metadata::{SessionMetadata, ThreadMetadata};
 use charliebot_store::run_records::RunKind;
 use futures_util::future::BoxFuture;
@@ -95,6 +97,14 @@ impl BackendLifecycle for ClaudeCliLifecycle {
 
   fn has_round_notices(&self) -> bool {
     true
+  }
+
+  fn disarm_idle_compaction(&self, session_id: &str) {
+    claude_idle_compaction::IdleCompaction::shared().disarm(session_id);
+  }
+
+  fn settle_idle_compaction<'a>(&'a self, session_id: &'a str) -> BoxFuture<'a, anyhow::Result<()>> {
+    Box::pin(async move { claude_idle_compaction::IdleCompaction::shared().settle_for_turn(session_id).await })
   }
 }
 
@@ -311,6 +321,18 @@ impl BackendLifecycle for ClaudeCodeLifecycle {
     run_id: Option<&str>,
   ) -> anyhow::Result<Map<String, Value>> {
     midturn_delivery::launch_kwargs(meta, turn, run_kind, run_id)
+  }
+
+  fn arm_idle_compaction<'a>(&'a self, ctx: IdleArmContext<'a>) -> BoxFuture<'a, anyhow::Result<()>> {
+    claude_idle_compaction::arm_for_round(ctx)
+  }
+
+  fn disarm_idle_compaction(&self, session_id: &str) {
+    claude_idle_compaction::IdleCompaction::shared().disarm(session_id);
+  }
+
+  fn settle_idle_compaction<'a>(&'a self, session_id: &'a str) -> BoxFuture<'a, anyhow::Result<()>> {
+    Box::pin(async move { claude_idle_compaction::IdleCompaction::shared().settle_for_turn(session_id).await })
   }
 
   fn watch(&self, ctx: &LaunchContext, launch: &Launch) -> Option<Box<dyn LaunchWatch>> {

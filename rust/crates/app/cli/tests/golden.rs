@@ -53,6 +53,47 @@ fn golden_cases() {
   assert!(failures.is_empty(), "{} golden case(s) failed:\n{}", failures.len(), failures.join("\n"));
 }
 
+/// The Python tests this task ports through golden cases, each pinned by a case file whose name
+/// starts with it. `test_connect_never_established_retries_with_backoff_then_exhausts` and
+/// `test_post_sends_json_body_content_type_and_auth_header_over_the_real_client` are Rust tests in
+/// `charliebot-cli-common`, and `test_port_cache_hit_serves_the_cached_port_in_a_fresh_process` has
+/// no Rust counterpart — no port cache, so `changed_server_port_takes_effect_on_the_next_call`
+/// replaces it.
+const PORTED_PYTHON_TESTS: &[&str] = &[
+  "test_resolve_session_id_sources_without_env",
+  "test_resolve_session_id_rejects_mismatches_without_env",
+  "test_resolve_session_id_env_outranks_cwd",
+  "test_post_internal_api_bearer_header",
+  "test_print_json_keeps_non_ascii_characters",
+  "test_print_json_writes_utf8_under_c_locale",
+  "test_session_help_lists_archive_without_complete",
+  "test_session_archive_rejects_an_explicit_empty_result_file",
+  "test_session_archive_readback_resolves_to_own_archived_fact_on_sent_but_lost",
+  "test_session_cancel_readback_resolves_to_own_task_closed_fact_on_sent_but_lost",
+  "test_cli_session_send_relays_message",
+  "test_cli_session_send_maps_a_422_refusal_to_exit_2",
+  "test_dialog_formats_blocks_and_skips_empty_messages",
+  "test_dialog_joins_pages_ascending",
+  "test_dialog_ordinary_session_prints_history_without_events_call",
+  "test_cancel_with_unobserved_run_prints_pid_and_exits_nonzero",
+  "test_dialog_archived_session_starts_from_bootstrap_cursor",
+  "test_dialog_turns_prints_last_complete_turns_and_the_turn_in_progress",
+  "test_dialog_turns_prints_whole_history_when_it_holds_fewer_turns",
+  "test_dialog_turns_rejects_values_below_one",
+  "test_dialog_turns_archived_session_header_counts_events",
+];
+
+#[test]
+fn every_ported_python_test_has_a_golden_case() {
+  let stems: Vec<String> = case_files()
+    .iter()
+    .map(|path| path.file_stem().expect("a case file has a stem").to_string_lossy().into_owned())
+    .collect();
+  for name in PORTED_PYTHON_TESTS {
+    assert!(stems.iter().any(|stem| stem.starts_with(name)), "{name} has no golden case file");
+  }
+}
+
 fn case_files() -> Vec<PathBuf> {
   let mut files = Vec::new();
   let directories = std::fs::read_dir(CASES_DIR).expect("tests/golden exists");

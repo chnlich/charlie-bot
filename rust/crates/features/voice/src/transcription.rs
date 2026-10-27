@@ -1174,6 +1174,8 @@ mod tests {
           let activity_start = next_text(&mut socket).await;
           assert!(activity_start.contains("activityStart"));
         }
+        let audio = socket.next().await.expect("client sends audio").expect("audio frame is valid");
+        assert!(matches!(audio, ServerMessage::Text(_) | ServerMessage::Binary(_)));
         ready.send(()).expect("notify the test that the session is open");
         std::future::pending::<()>().await;
       });
@@ -1181,7 +1183,9 @@ mod tests {
         BackendKind::Gemini => Backend::gemini_for_test("synthetic-key", &endpoint),
         BackendKind::Muse => Backend::muse_for_test("synthetic-token", &endpoint, Arc::new(EventLoopClock)),
       };
-      let (task, _events, cancel) = start_transcription(backend, AudioQueue::new());
+      let audio = AudioQueue::new();
+      assert!(audio.put(vec![0, 0]).await);
+      let (task, _events, cancel) = start_transcription(backend, audio);
       tokio::time::timeout(Duration::from_secs(3), wait_until_open)
         .await
         .expect("backend connection opens")

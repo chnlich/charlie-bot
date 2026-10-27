@@ -7,7 +7,6 @@ cycle charliebot-agents: transport::kill, transport::spawn
 cycle charliebot-files: crate, listing
 cycle charliebot-host-auth: host_auth, probe
 cycle charliebot-registry: backend, context, lifespan, pages, registry, sequence, sidebar, store_hooks, turn, usage, wiring
-cycle charliebot-sched: cron::scheduler, cron::sequence_controller
 cycle charliebot-server: app, auth, request_log, routes, routes::pages, routes::static_mounts, routes::system, routes::websockets, state
 cycle charliebot-session-api: crate, detail, fork_routes, prompt_routes, routes, websocket, write_routes
 cycle charliebot-store: events, listing, projection, run_records, session_events, store, task_tree, thinking, write_faults

@@ -345,18 +345,18 @@ impl CronScheduler {
       let task_name = task.name.clone();
       let owner_ref = firing_ref(&task, &firing);
       let step_count = task.steps.as_ref().map_or(0, Vec::len);
-      let boundary = super::sequence_controller::subscribe_boundary(&leaf_id, &owner_ref);
+      let boundary = super::boundary::subscribe_boundary(&leaf_id, &owner_ref);
       let prompt = prompt.clone();
       let handle = tokio::spawn(async move {
         match executor.launch_and_settle(&leaf_id, &run_id, Some(&prompt)).await {
           Ok(settlement) if settlement.withheld.is_none() && step_count > 0 => {
             // Python keeps the firing task alive through the sequence chain (`src/features/cron/scheduler.py:413-434`).
             wait_for_steps_boundary(boundary).await;
-            super::sequence_controller::remove_boundary(&leaf_id, &owner_ref);
+            super::boundary::remove_boundary(&leaf_id, &owner_ref);
           }
-          Ok(_) => super::sequence_controller::remove_boundary(&leaf_id, &owner_ref),
+          Ok(_) => super::boundary::remove_boundary(&leaf_id, &owner_ref),
           Err(error) => {
-            super::sequence_controller::remove_boundary(&leaf_id, &owner_ref);
+            super::boundary::remove_boundary(&leaf_id, &owner_ref);
             tracing::error!(task = %task_name, error = %error, "scheduled_round_failed");
           }
         }
@@ -624,9 +624,7 @@ fn firing_ref(task: &ScheduledTaskConfig, firing: &str) -> String {
   format!("cron:{}:{firing}", task.name)
 }
 
-async fn wait_for_steps_boundary(
-  mut boundary: tokio::sync::watch::Receiver<super::sequence_controller::BoundaryNotice>,
-) {
+async fn wait_for_steps_boundary(mut boundary: tokio::sync::watch::Receiver<super::boundary::BoundaryNotice>) {
   loop {
     let notice = *boundary.borrow_and_update();
     if notice.done || notice.failed {

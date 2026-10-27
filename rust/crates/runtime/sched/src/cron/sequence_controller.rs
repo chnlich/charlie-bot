@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock, Weak};
+use std::sync::{Arc, Mutex, Weak};
 
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types;
@@ -136,46 +136,6 @@ struct RowScheduleMemo {
   earliest_next_fire: Option<UtcDateTime>,
   #[cfg(test)]
   builds: usize,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(super) struct BoundaryNotice {
-  pub generation: u64,
-  pub done: bool,
-  pub failed: bool,
-}
-
-type BoundaryKey = (String, String);
-static BOUNDARY_WAITERS: OnceLock<Mutex<HashMap<BoundaryKey, watch::Sender<BoundaryNotice>>>> = OnceLock::new();
-
-pub(super) fn subscribe_boundary(leaf_id: &str, owner_ref: &str) -> watch::Receiver<BoundaryNotice> {
-  let waiters = BOUNDARY_WAITERS.get_or_init(|| Mutex::new(HashMap::new()));
-  let mut waiters = waiters.lock().expect("cron boundary waiter mutex is not poisoned");
-  waiters
-    .entry((leaf_id.to_string(), owner_ref.to_string()))
-    .or_insert_with(|| watch::channel(BoundaryNotice::default()).0)
-    .subscribe()
-}
-
-pub(super) fn notify_boundary(leaf_id: &str, owner_ref: &str, done: bool, failed: bool) {
-  let Some(waiters) = BOUNDARY_WAITERS.get() else { return };
-  let waiters = waiters.lock().expect("cron boundary waiter mutex is not poisoned");
-  let Some(sender) = waiters.get(&(leaf_id.to_string(), owner_ref.to_string())) else { return };
-  let previous = *sender.borrow();
-  sender.send_replace(BoundaryNotice {
-    generation: previous.generation + 1,
-    done: previous.done || done,
-    failed: previous.failed || failed,
-  });
-}
-
-pub(super) fn remove_boundary(leaf_id: &str, owner_ref: &str) {
-  if let Some(waiters) = BOUNDARY_WAITERS.get() {
-    waiters
-      .lock()
-      .expect("cron boundary waiter mutex is not poisoned")
-      .remove(&(leaf_id.to_string(), owner_ref.to_string()));
-  }
 }
 
 impl CronSequenceController {
@@ -356,8 +316,8 @@ impl SequenceController for CronSequenceController {
       let result = redrive_firing(session_id, tree).await;
       if let Some(owner_ref) = owner_ref {
         match &result {
-          Ok(done) => notify_boundary(session_id, &owner_ref, *done, false),
-          Err(_) => notify_boundary(session_id, &owner_ref, false, true),
+          Ok(done) => super::boundary::notify_boundary(session_id, &owner_ref, *done, false),
+          Err(_) => super::boundary::notify_boundary(session_id, &owner_ref, false, true),
         }
       }
       result.map(|_| ())
@@ -869,18 +829,18 @@ mod tests {
   async fn boundary_receiver_wakes_for_progress_and_terminal_notice() {
     let leaf_id = "synthetic-boundary-leaf";
     let owner_ref = "cron:synthetic-task:synthetic-firing";
-    let mut receiver = super::subscribe_boundary(leaf_id, owner_ref);
+    let mut receiver = crate::cron::boundary::subscribe_boundary(leaf_id, owner_ref);
 
-    super::notify_boundary(leaf_id, owner_ref, false, false);
+    crate::cron::boundary::notify_boundary(leaf_id, owner_ref, false, false);
     receiver.changed().await.unwrap();
     assert_eq!(receiver.borrow_and_update().generation, 1);
     assert!(!receiver.borrow().done);
 
-    super::notify_boundary(leaf_id, owner_ref, true, false);
+    crate::cron::boundary::notify_boundary(leaf_id, owner_ref, true, false);
     receiver.changed().await.unwrap();
     assert_eq!(receiver.borrow_and_update().generation, 2);
     assert!(receiver.borrow().done);
-    super::remove_boundary(leaf_id, owner_ref);
+    crate::cron::boundary::remove_boundary(leaf_id, owner_ref);
   }
 
   #[test]

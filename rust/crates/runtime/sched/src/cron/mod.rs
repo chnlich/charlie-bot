@@ -1,6 +1,7 @@
 //! Scheduled tasks in `config.d/cron.d`: routes, file loading, scheduling and sequence recovery.
 
 mod api;
+mod boundary;
 pub mod config;
 mod loader;
 mod scheduler;

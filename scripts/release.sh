@@ -18,7 +18,8 @@
 #   install    the release directory is built under a temporary name and renamed to <commit>.
 #
 # The release directory holds charliebot-server and charliebot from the same CI build, release.log with each stage's
-# verdict, and sha256sums.txt over both binaries and the log. It has no PORT_BASELINE, and the current link is not changed.
+# verdict, and sha256sums.txt over both binaries and the log. It has no PORT_BASELINE, and the current link is not
+# changed.
 #
 # Environment: CHARLIEBOT_RELEASES_DIR (default $HOME/charliebot-releases); CHARLIEBOT_RELEASE_LOG_DIR (default
 # $HOME/charliebot-release-logs; stage logs and evidence live here, outside the repository and the release directory,

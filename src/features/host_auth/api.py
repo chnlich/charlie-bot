@@ -1,4 +1,4 @@
-"""The host-auth panel: the standing probe poller and its page, status, and probe routes."""
+"""The host-auth panel: the standing probe poller, its page, status, and probe routes, and the browser-login page."""
 
 import asyncio
 import datetime
@@ -6,9 +6,11 @@ import datetime
 import fastapi
 from fastapi import responses
 
-from src.features.host_auth import host_auth
-from src.infra import constants, log_once, models, tasks
+from src.features.host_auth import browser_login, host_auth
+from src.features.host_auth import config as host_auth_config
+from src.infra import config, constants, log_once, models, tasks
 from src.runtime import templating
+from src.runtime.api import deps
 from src.runtime.hooks import wiring
 
 log = log_once.LazyStructlogLogger()
@@ -18,6 +20,9 @@ router = fastapi.APIRouter()
 # synchronously on the event loop, so a second probe request that arrives while
 # a round runs reuses it instead of starting a second one.
 _round_running = False
+
+# The page shows at most this many characters of a readback run at page load.
+_READBACK_SHOWN_CHARS = 300
 
 _STATUS_LABELS = {
     host_auth.STATUS_OK: "Direct",
@@ -165,6 +170,92 @@ async def host_auth_probe() -> responses.RedirectResponse:
   return responses.RedirectResponse("/host-auth", status_code=303)
 
 
+def _login_named(cfg: config.CharlieBotConfig, name: str) -> host_auth_config.BrowserLoginConfig:
+  for login in cfg.host_auth.browser_logins:
+    if login.name == name:
+      return login
+  raise fastapi.HTTPException(status_code=404, detail=f"no browser login named {name!r}")
+
+
+def _live_view(attempt: browser_login.Attempt) -> dict:
+  return {
+      "user_code": attempt.user_code,
+      "approval_url": attempt.approval_url,
+      "started_at": _local_timestamp(attempt.started_at.isoformat(), constants.LOCAL_TIMESTAMP_FORMAT),
+      "phase": attempt.phase.label,
+  }
+
+
+def _last_view(attempt: browser_login.Attempt) -> dict:
+  """The last ended attempt; only the two outcomes that ran a readback carry its output."""
+  shows_readback = attempt.outcome in (browser_login.Outcome.APPROVED, browser_login.Outcome.READBACK_FAILED)
+  return {
+      "outcome": attempt.outcome.label,
+      "finished_at": _local_timestamp(attempt.finished_at.isoformat(), constants.LOCAL_TIMESTAMP_FORMAT),
+      "last_line": next((line for line in reversed(attempt.output) if line.strip()), ""),
+      "readback_exit": attempt.readback_exit if shows_readback else None,
+      "readback_output": attempt.readback_output.strip() if shows_readback else None,
+  }
+
+
+def _readback_view(result: tuple[int, str]) -> dict:
+  exit_code, output = result
+  return {"exit": exit_code, "output": output.strip()[:_READBACK_SHOWN_CHARS]}
+
+
+def _login_rows(logins: list[host_auth_config.BrowserLoginConfig], readbacks: dict[str, tuple[int, str]]) -> list[dict]:
+  """One template row per login: its attempt in progress, else its last ended attempt and this load's readback."""
+  rows = []
+  for login in logins:
+    live = browser_login.live_attempt(login.name)
+    last = browser_login.last_attempt(login.name)
+    readback = readbacks.get(login.name) if live is None else None
+    rows.append(
+        {
+            "name": login.name,
+            "label": login.label,
+            "live": _live_view(live) if live is not None else None,
+            "last": _last_view(last) if last is not None else None,
+            "readback": _readback_view(readback) if readback is not None else None,
+        })
+  return rows
+
+
+@router.get("/host-auth/logins", response_class=responses.HTMLResponse)
+async def browser_logins_page(
+    request: fastapi.Request,
+    cfg: config.CharlieBotConfig = fastapi.Depends(deps.get_config_on_loop),
+) -> responses.HTMLResponse:
+  """The browser-login page. Only idle logins run their readback here; no page view starts a login."""
+  logins = cfg.host_auth.browser_logins
+  idle = [login for login in logins if browser_login.live_attempt(login.name) is None]
+  results = await asyncio.gather(*(browser_login.page_readback(login) for login in idle))
+  readbacks = {login.name: result for login, result in zip(idle, results, strict=True)}
+  rows = _login_rows(logins, readbacks)
+  return templating.templates().TemplateResponse(
+      request,
+      "browser_login.html",
+      context={
+          "logins": rows,
+          "any_live": any(row["live"] is not None for row in rows)
+      },
+  )
+
+
+@router.post("/api/host-auth/logins/{name}/start")
+async def browser_login_start(
+    name: str,
+    cfg: config.CharlieBotConfig = fastapi.Depends(deps.get_config_on_loop),
+) -> responses.Response:
+  """Start an attempt of the named login and redirect to its approval link; 502 when the login gives none."""
+  login = _login_named(cfg, name)
+  try:
+    link = await browser_login.start_login(login)
+  except browser_login.StartFailedError as exc:
+    return responses.PlainTextResponse(str(exc), status_code=502)
+  return responses.RedirectResponse(link, status_code=303)
+
+
 async def _manual_round() -> None:
   """The manual probe round: force, one at a time, failures logged and absorbed."""
   global _round_running
@@ -209,5 +300,6 @@ async def start_service(ctx: wiring.ServiceContext) -> None:
 
 
 async def stop_service() -> None:
-  """Stop the poller; stopping a poller that never started does nothing."""
+  """Stop the poller and end every live browser login; stopping a poller that never started does nothing."""
   await stop_poller()
+  await browser_login.stop_all()

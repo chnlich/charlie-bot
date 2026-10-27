@@ -1,0 +1,73 @@
+{% include 'partials/prologue.html' %}
+{% if any_live %}<meta http-equiv="refresh" content="5">{% endif %}
+<title>Browser logins</title>
+<style>
+  {% include 'partials/standalone_base_styles.html' %}
+  .sub { color:var(--mut); margin:0 0 16px; font-size:13.5px; max-width:82ch }
+  .login { background:var(--panel); border:1px solid var(--bd); border-radius:12px; padding:14px 18px; margin:0 0 16px }
+  .login h2 { margin:0 0 10px; padding-bottom:0; border-bottom:0 }
+  .btn { font:inherit; font-size:13px; background:var(--acc); color:#fff; border:0; border-radius:8px;
+    padding:8px 15px; cursor:pointer }
+  .state { font-size:13px; margin:14px 0 0; padding-top:12px; border-top:1px solid var(--bd) }
+  .k { color:var(--mut); font-size:11.5px; font-weight:620; text-transform:uppercase; letter-spacing:.4px }
+  .at { color:var(--mut2); font-size:12px; font-variant-numeric:tabular-nums }
+  pre { font-family:var(--mono); font-size:11.5px; color:var(--mut); white-space:pre-wrap; word-break:break-all;
+    margin:6px 0 0 }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Browser logins</h1>
+  <p class="sub">Each button starts one login and opens its approval page in a new tab, so the device code is created
+  when it can be approved. The page shows the attempt in progress, or the last attempt that ended.</p>
+
+  {% if not logins %}
+  <p class="sub">No browser logins are configured. Add entries under <code>host_auth.browser_logins</code> in
+  config.yaml.</p>
+  {% endif %}
+
+  {% for login in logins %}
+  <section class="login">
+    <h2>{{ login.label }}</h2>
+    <form method="post" action="/api/host-auth/logins/{{ login.name }}/start" target="_blank">
+      <button class="btn" type="submit">Start login</button>
+    </form>
+
+    {% if login.live %}
+    <div class="state">
+      <div class="k">In progress &middot; {{ login.live.phase }}</div>
+      <div>User code <code>{{ login.live.user_code or "not in the link" }}</code></div>
+      <div>Approval link
+        {% if login.live.approval_url %}<a href="{{ login.live.approval_url }}" target="_blank" rel="noopener">{{ login.live.approval_url }}</a>{% else %}not printed yet{% endif %}</div>
+      <div class="at">Started {{ login.live.started_at }}</div>
+    </div>
+    {% endif %}
+
+    {% if login.last %}
+    <div class="state">
+      <div class="k">Last attempt &middot; {{ login.last.outcome }}</div>
+      <div class="at">Finished {{ login.last.finished_at }}</div>
+      {% if login.last.last_line %}<pre>{{ login.last.last_line }}</pre>{% endif %}
+      {% if login.last.readback_output is not none %}
+      <div class="k">Readback &middot; exit {% if login.last.readback_exit is not none %}{{ login.last.readback_exit }}{% else %}none{% endif %}</div>
+      <pre>{{ login.last.readback_output }}</pre>
+      {% endif %}
+    </div>
+    {% endif %}
+
+    {% if login.readback %}
+    <div class="state">
+      <div class="k">Readback at page load &middot; exit {{ login.readback.exit }}</div>
+      <pre>{{ login.readback.output }}</pre>
+    </div>
+    {% endif %}
+  </section>
+  {% endfor %}
+</div>
+<script>
+  for (const form of document.querySelectorAll('form[target="_blank"]')) {
+    form.addEventListener("submit", () => setTimeout(() => location.reload(), 2000));
+  }
+</script>
+</body>
+</html>

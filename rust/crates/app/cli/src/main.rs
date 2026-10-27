@@ -5,6 +5,7 @@
 //! the not-ported JSON error and exits 1 — it never calls the Python CLI.
 
 mod commands;
+mod launcher;
 
 use std::ffi::OsString;
 use std::path::Path;
@@ -56,6 +57,7 @@ fn main() {
     "artifact" => charliebot_artifacts::cli::artifact::main(&args[1..]),
     "delegate" => commands::delegate::main(&args[1..]),
     "plan" => charliebot_artifacts::cli::plan::main(&args[1..]),
+    "schedule-trigger" => commands::schedule_trigger::main(&args[1..]),
     "session" => commands::session::main(&args[1..]),
     _ => {
       eprint!(

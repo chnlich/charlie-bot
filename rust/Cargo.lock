@@ -430,9 +430,12 @@ dependencies = [
  "charliebot-core",
  "charliebot-store",
  "clap",
+ "getrandom 0.3.4",
+ "nix",
  "regex",
  "serde_json",
  "tempfile",
+ "time",
 ]
 
 [[package]]

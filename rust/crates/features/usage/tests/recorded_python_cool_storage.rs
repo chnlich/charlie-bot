@@ -1,11 +1,20 @@
 use std::collections::BTreeSet;
+use std::env;
 use std::ffi::CStr;
 use std::fs::{self, File};
 use std::os::unix::fs::symlink;
 use std::path::Path;
-use std::process::Command;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
+use charliebot_agents::backends::claude_code::{self, ClaudeHost};
+use charliebot_agents::backends::codex::{self, CodexHost};
+use charliebot_agents::backends::opencode;
+use charliebot_core::home;
+use charliebot_core::paths::realpath;
+use charliebot_registry::Registry;
+use charliebot_store::metadata::UtcDateTime;
+use charliebot_usage_page::cool_storage::{format_sweep_line, run_cool_sweep};
 use flate2::read::GzDecoder;
 use rusqlite::types::ValueRef;
 use rusqlite::{Connection, Row};
@@ -32,7 +41,7 @@ fn recorded_python_cold_storage_outputs_match_all_tree_and_ledger_fields() {
   let temp = tempdir().unwrap();
   let run = temp.path().join("run");
   materialize(&fixture, &run);
-  let summary = sweep(&run);
+  let summary = sweep(&run).unwrap();
   let actual = state(&run, &summary, &hostname);
   assert_state_matches_recorded_origin(
     &fixture["rust_state"],
@@ -45,7 +54,7 @@ fn recorded_python_cold_storage_outputs_match_all_tree_and_ledger_fields() {
 
   let control = temp.path().join("control");
   materialize(&fixture, &control);
-  let control_summary = sweep(&control);
+  let control_summary = sweep(&control).unwrap();
   let control_baseline = state(&control, &control_summary, &hostname);
   let control_baseline_differences = state_difference_count(&fixture["python_state"], &control_baseline);
   assert!(control_baseline_differences <= 1, "only the recorded duplicate transcript path may differ");
@@ -66,10 +75,8 @@ fn recorded_python_cold_storage_outputs_match_all_tree_and_ledger_fields() {
   let refusal = temp.path().join("refusal");
   materialize_refusal(&fixture, &refusal);
   let before = file_tree(&refusal, &hostname);
-  let output = sweep_output(&refusal);
-  assert!(!output.status.success());
-  let stderr = String::from_utf8_lossy(&output.stderr);
-  assert_eq!(stderr.lines().last().unwrap(), fixture["refusal_rust_error"].as_str().unwrap());
+  let error = sweep(&refusal).unwrap_err();
+  assert_eq!(error, fixture["refusal_rust_error"].as_str().unwrap());
   assert_eq!(file_tree(&refusal, &hostname), before, "refusal leaves all files untouched");
 }
 
@@ -126,24 +133,43 @@ fn encoded_path(path: &Path) -> String {
   path.to_string_lossy().replace(['/', '.', '_'], "-")
 }
 
-fn sweep(root: &Path) -> String {
-  let output = sweep_output(root);
-  assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-  let stdout = String::from_utf8(output.stdout).unwrap();
-  let summary = stdout.lines().last().unwrap().to_string();
-  assert!(summary.starts_with("total "), "{stdout}");
-  summary
-}
-
-fn sweep_output(root: &Path) -> std::process::Output {
-  Command::new(env!("CARGO_BIN_EXE_cool-storage-sweep"))
-    .arg(root)
-    .arg(NOW)
-    .env("HOME", root.join("home"))
-    .env("CHARLIEBOT_HOME", root.join("charlie"))
-    .env("CLAUDE_CONFIG_DIR", root.join("claude-config"))
-    .output()
-    .unwrap()
+/// One sweep over the tree, run in this process as the retired `cool-storage-sweep` binary ran it: the environment names
+/// the tree's home, CharlieBot home and Claude config, and the registry reads the same stores. Returns the summary
+/// line, or the `Error:` line that the binary printed when the sweep refused.
+fn sweep(root: &Path) -> Result<String, String> {
+  let charlie = root.join("charlie");
+  let home = root.join("home");
+  let claude_config = root.join("claude-config");
+  // SAFETY: this file has one test, so no other thread reads or writes the environment while a sweep runs.
+  unsafe {
+    env::set_var("HOME", &home);
+    env::set_var("CHARLIEBOT_HOME", &charlie);
+    env::set_var("CLAUDE_CONFIG_DIR", &claude_config);
+  }
+  let mut registry = Registry::new();
+  registry.register_package("src.backends.claude_code", claude_code::register).unwrap();
+  registry.register_package("src.backends.codex", codex::register).unwrap();
+  registry.register_package("src.backends.opencode", opencode::register_usage_source).unwrap();
+  let cfg = Arc::new(registry.load_config(&charlie).unwrap());
+  // The sandbox guard: every store the sweep reaches resolves inside the tree, checked before the first deletion.
+  let claude = ClaudeHost::from_process().unwrap();
+  let codex_host = CodexHost::from_process().unwrap();
+  let stores = [
+    cfg.charliebot_home.clone(),
+    claude.home,
+    claude.claude_config_dir,
+    codex_host.codex_home(),
+    home::opencode_db().unwrap(),
+  ];
+  for path in stores {
+    assert!(realpath(&path).starts_with(realpath(root)), "{} resolves outside the synthetic tree", path.display());
+  }
+  let registry = Arc::new(registry);
+  let summary = run_cool_sweep(cfg, &registry, UtcDateTime::parse(NOW).unwrap())
+    .map(|categories| format_sweep_line(&categories))
+    .map_err(|error| format!("Error: {error:?}"))?;
+  assert!(summary.starts_with("total "), "{summary}");
+  Ok(summary)
 }
 
 fn state(root: &Path, summary: &str, hostname: &str) -> Value {

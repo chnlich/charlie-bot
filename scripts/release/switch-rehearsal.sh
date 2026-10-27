@@ -8,9 +8,11 @@
 # The old release is the one `$CHARLIEBOT_RELEASES_DIR/current` selects (default ~/charliebot-releases). <new release
 # dir> holds the new release's charliebot-server and sha256sums.txt, as scripts/release.sh downloaded them.
 #
-# The rehearsal checkout is a clone whose origin is this repository, checked out at the old release's commit. The
-# switch copy runs from .cutover-switch/ beside it, so the switch moves the rehearsal checkout and never this
-# repository. Every server starts from the rehearsal home's own config, credentials and releases.
+# The rehearsal checkout is a clone of a bare origin that holds this repository's origin/main, checked out at the old
+# release's commit. The switch copy runs from .cutover-switch/ beside it, so the switch moves the rehearsal checkout
+# and never this repository. The delegation check of each switch delegates its task on that checkout, so the task's
+# repository and worktrees lie in the rehearsal tree. Every server starts from the rehearsal home's own config,
+# credentials and releases.
 #
 # Exit: 0 every step passed; 1 a step failed; 2 the preflight failed, nothing started.
 # Evidence goes to $CHARLIEBOT_RELEASE_RUN_DIR/rehearsal-<UTC>/ (or under $CHARLIEBOT_RELEASE_LOG_DIR) and is kept
@@ -139,6 +141,7 @@ mkdir -m 700 "$TREE" || preflight_fail "create the rehearsal tree $TREE"
 readonly TRIAL_HOME="$TREE/home"
 readonly CB_HOME="$TRIAL_HOME/.charliebot"
 readonly REPO="$TREE/repo"
+readonly ORIGIN_REPO="$TREE/origin.git"
 readonly RELEASES="$TREE/releases"
 readonly LOGS="$TREE/logs"
 readonly HTTP="$TREE/http"
@@ -351,22 +354,26 @@ trap 'exit 143' TERM
 
 log "REHEARSAL old $OLD_COMMIT -> new $NEW_COMMIT -> old $OLD_COMMIT; port $PORT; evidence $EVIDENCE"
 
-# The rehearsal tree: a clone of this repository at the old release's commit. The switch's own fetch reads this
-# repository as origin, so the release commits are present without network access.
+# The rehearsal tree: a clone of a bare origin at the old release's commit. The origin holds the origin/main that this
+# repository last fetched, so the release commits are present without network access, and the switch's base-branch
+# resolution sees the same origin tip as on the runtime clone. This repository's local main is not the origin: it can
+# lag the remote, and the switch refuses a local main ahead of origin.
 export GIT_CONFIG_NOSYSTEM=1
 export GIT_CONFIG_GLOBAL="$TREE/gitconfig"
 printf '[user]\n  name = Switch rehearsal\n  email = rehearsal@example.invalid\n[init]\n  defaultBranch = main\n' \
   > "$GIT_CONFIG_GLOBAL"
 mkdir -m 700 -p "$CB_HOME" "$REPO" "$RELEASES" "$LOGS" "$HTTP" "$WORKSPACE" "$TMUX_ROOT" "$TMP_ROOT" \
   || preflight_fail "create the rehearsal directories inside $TREE"
+git init -q --bare "$ORIGIN_REPO" || preflight_fail "initialize the rehearsal origin $ORIGIN_REPO"
+git -C "$ORIGIN_REPO" fetch -q --no-tags "$SOURCE_REPO" "+refs/remotes/origin/main:refs/heads/main" \
+  || preflight_fail "fetch origin/main of $SOURCE_REPO into the rehearsal origin"
 git init -q -b main "$REPO" || preflight_fail "initialize the rehearsal checkout"
-git -C "$REPO" remote add origin "$SOURCE_REPO" || preflight_fail "set the rehearsal checkout's origin"
+git -C "$REPO" remote add origin "$ORIGIN_REPO" || preflight_fail "set the rehearsal checkout's origin"
 git -C "$REPO" fetch -q --no-tags origin "+refs/heads/main:refs/remotes/origin/main" \
   || preflight_fail "fetch main into the rehearsal checkout"
-git -C "$REPO" fetch -q --no-tags origin "+refs/remotes/origin/main:refs/remotes/origin/main" || true
 for commit in "$OLD_COMMIT" "$NEW_COMMIT"; do
   git -C "$REPO" cat-file -e "$commit^{commit}" 2> /dev/null \
-    || preflight_fail "commit $commit is not in $SOURCE_REPO; fetch it first"
+    || preflight_fail "commit $commit is not in origin/main of $SOURCE_REPO; fetch origin first"
 done
 git -C "$REPO" checkout -q -B main "$OLD_COMMIT" || preflight_fail "check out the old release's commit"
 
@@ -514,15 +521,20 @@ check_head() {
   [ "$head" = "$commit" ] || fail_step "$label: the checkout HEAD is $head, want $commit"
 }
 
-# run_switch LABEL ARGS...: runs the switch copy, records its exit status and log, and keeps the output as evidence.
+# run_switch LABEL ARGS...: runs the switch copy, records its exit status and log, and keeps the output as evidence. The
+# delegation check's lines from the switch log go to the report, passed or failed.
 run_switch() {
-  local label=$1 rc start_ms end_ms
+  local label=$1 rc start_ms end_ms switch_log
   shift
   start_ms=$(date +%s%3N)
   "$SWITCH_SCRIPT" "$@" > "$EVIDENCE/$label.out" 2>&1
   rc=$?
   end_ms=$(date +%s%3N)
-  log "SWITCH $label: switch-server.sh $* exit $rc; wall $((end_ms - start_ms)) ms; log $(sed -n 's/^switch log: //p' "$EVIDENCE/$label.out" | head -1)"
+  switch_log=$(sed -n 's/^switch log: //p' "$EVIDENCE/$label.out" | head -1)
+  log "SWITCH $label: switch-server.sh $* exit $rc; wall $((end_ms - start_ms)) ms; log $switch_log"
+  grep -F 'switch: delegation: ' "$switch_log" | while IFS= read -r line; do
+    log "DELEGATION $label: ${line#*switch: }"
+  done
   return "$rc"
 }
 

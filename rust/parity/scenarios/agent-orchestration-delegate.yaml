@@ -1,0 +1,289 @@
+stage: agent-orchestration
+name: agent-orchestration-delegate
+fixture_extras: [worker_repo]
+fake_agent:
+  starts:
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-delegate-success}
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: Synthetic delegated worker completed.}]
+        - emit:
+            type: result
+            result: Synthetic delegated worker completed.
+            usage: {input_tokens: 3, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+      exit_code: 0
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-parent-after-success}
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: The successful child report was received.}]
+        - emit:
+            type: result
+            result: ""
+            usage: {input_tokens: 3, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+      exit_code: 0
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-status-reminder-after-success}
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: Status reviewed after the successful child report.}]
+        - emit:
+            type: result
+            result: ""
+            usage: {input_tokens: 3, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+      exit_code: 0
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-delegate-failure}
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: Synthetic worker stopped with an error.}]
+      exit_code: 1
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-parent-after-script-failure}
+        - gate: manager-after-script-failure
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: The failed child report was received.}]
+        - emit:
+            type: result
+            result: ""
+            usage: {input_tokens: 3, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+      exit_code: 0
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-status-reminder-after-script-failure}
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: Status reviewed after the failed script report.}]
+        - emit:
+            type: result
+            result: ""
+            usage: {input_tokens: 3, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+      exit_code: 0
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-delegate-implement-failure}
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: Synthetic repository worker stopped with an error.}]
+      exit_code: 1
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-parent-after-implement-failure}
+        - gate: manager-after-implement-failure
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: The failed repository child report was received.}]
+        - emit:
+            type: result
+            result: ""
+            usage: {input_tokens: 3, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+      exit_code: 0
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-status-reminder-after-implement-failure}
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: Status reviewed after the failed repository report.}]
+        - emit:
+            type: result
+            result: ""
+            usage: {input_tokens: 3, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+      exit_code: 0
+expect_starts: 9
+comparison_rules:
+  # The status reminder and the run_finished of the audited turn, in either order: that turn's after_turn runs as its
+  # own task (src/runtime/session_events.py:156-161), and its finish callback writes run_finished after the master_done
+  # broadcast (src/runtime/master_cc_queue.py:304-309), as features-web-reply-audit compares them.
+  - either_order_of_adjacent_events:
+      first:
+        type: agent_message
+        match_fields: {from_session_name: "Session status"}
+      second:
+        type: run_finished
+        match_fields: {outcome: success}
+steps:
+  - name: delegate one repo-less script run
+    method: POST
+    path: /api/internal/delegate
+    json:
+      session_id: ${sessions.atlas}
+      description: Run the synthetic script task.
+      task_type: script-run
+      request_id: synthetic-delegate-success
+    capture: {success_child: session_id, success_run: run_id}
+    expect_status: 200
+  - kind: wait
+    name: wait for the repo-less worker result
+    timeout_seconds: 30
+    until:
+      event:
+        session: ${capture.success_child}
+        type: run_finished
+        fields: {run_id: "${capture.success_run}", outcome: success}
+  - kind: wait
+    name: wait for the delegated-task card in the manager chat
+    timeout_seconds: 10
+    until:
+      event:
+        session: ${sessions.atlas}
+        type: task_delegated
+        fields: {child_session_id: "${capture.success_child}", thread_id: "${capture.success_run}"}
+  - name: a cold-read delegation without its cold_read field is refused
+    method: POST
+    path: /api/internal/delegate
+    json:
+      session_id: ${sessions.atlas}
+      description: Missing cold-read details.
+      task_type: cold-read
+      request_id: synthetic-delegate-missing-cold-read
+    expect_status: 400
+  - name: a repository delegation without base_branch is refused
+    method: POST
+    path: /api/internal/delegate
+    json:
+      session_id: ${sessions.atlas}
+      description: Missing repository base.
+      task_type: implement
+      repo_path: /synthetic/repository
+      request_id: synthetic-delegate-incomplete-repository
+    expect_status: 400
+  - name: an unknown delegation session returns not found
+    method: POST
+    path: /api/internal/delegate
+    json:
+      session_id: ${missing_session}
+      description: Unknown session.
+      task_type: script-run
+      request_id: synthetic-delegate-unknown-session
+    expect_status: 404
+  - name: delegate a failing repo-less worker
+    method: POST
+    path: /api/internal/delegate
+    json:
+      session_id: ${sessions.atlas}
+      description: Fail the synthetic script task.
+      task_type: script-run
+      request_id: synthetic-delegate-failure
+    capture: {failed_child: session_id, failed_run: run_id}
+    expect_status: 200
+  - kind: wait
+    name: wait for the manager after the failed script child
+    timeout_seconds: 30
+    until: {at_gate: manager-after-script-failure}
+  - kind: gate
+    name: let the manager finish the failed-script report
+    open: manager-after-script-failure
+  - kind: wait
+    name: wait for the manager's child-report turn to finish
+    timeout_seconds: 30
+    until:
+      event:
+        session: ${sessions.atlas}
+        type: run_finished
+        fields: {outcome: success}
+        count: 3
+  - kind: wait
+    name: the manager receives the failed repo-less child report
+    timeout_seconds: 30
+    until:
+      event:
+        session: ${sessions.atlas}
+        type: child_report
+        fields: {child_session_id: "${capture.failed_child}", outcome: failed}
+  - kind: wait
+    name: the failed repo-less worker is archived
+    timeout_seconds: 30
+    until:
+      event:
+        session: ${capture.failed_child}
+        type: task_closed
+        fields: {outcome: archived}
+  - name: delegate a failing implement worker on the local repository
+    method: POST
+    path: /api/internal/delegate
+    json:
+      session_id: ${sessions.atlas}
+      description: Fail the synthetic repository task.
+      task_type: implement
+      repo_path: ${tree.root}/${extras.worker_repo.repo}
+      base_branch: main
+      request_id: synthetic-delegate-implement-failure
+    capture: {repo_child: session_id, repo_run: run_id, session_id: session_id}
+    expect_status: 200
+  - kind: wait
+    name: wait for the manager after the failed repository child
+    timeout_seconds: 30
+    until: {at_gate: manager-after-implement-failure}
+  - kind: gate
+    name: let the manager finish the failed-repository report
+    open: manager-after-implement-failure
+  - kind: wait
+    name: wait for the manager's repository child-report turn to finish
+    timeout_seconds: 30
+    until:
+      event:
+        session: ${sessions.atlas}
+        type: run_finished
+        fields: {outcome: success}
+        count: 4
+  - kind: wait
+    name: the manager receives the failed repository child report
+    timeout_seconds: 30
+    until:
+      event:
+        session: ${sessions.atlas}
+        type: child_report
+        fields: {child_session_id: "${capture.repo_child}", outcome: failed}
+  - kind: wait
+    name: the failed repository worker is archived
+    timeout_seconds: 30
+    until:
+      event:
+        session: ${capture.repo_child}
+        type: task_closed
+        fields: {outcome: archived}
+  - name: read the failed run with its recorded worktree
+    method: GET
+    path: /api/sessions/${capture.session_id}/runs
+    expect_status: 200

@@ -1,0 +1,85 @@
+# The trigger waits for a process started and stopped by this scenario.
+stage: triggers-cron-improve
+name: wait-trigger-local-pid
+fake_agent:
+  starts:
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-trigger-session}
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: The watched trigger was handled.}]
+        - emit:
+            type: result
+            result: ""
+            usage: {input_tokens: 8, output_tokens: 3, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+      exit_code: 0
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-status-reminder-wait-pid-1}
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: Status reviewed at the end of the scenario.}]
+        - emit:
+            type: result
+            result: ""
+            usage: {input_tokens: 2, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+      exit_code: 0
+expect_starts: 2
+comparison_rules:
+  # The status reminder and the run_finished of the audited turn, in either order: that turn's after_turn runs as its
+  # own task (src/runtime/session_events.py:156-161), and its finish callback writes run_finished after the master_done
+  # broadcast (src/runtime/master_cc_queue.py:304-309), as features-web-reply-audit compares them.
+  - either_order_of_adjacent_events:
+      first:
+        type: agent_message
+        match_fields: {from_session_name: "Session status"}
+      second:
+        type: run_finished
+        match_fields: {outcome: success}
+steps:
+  - kind: process
+    name: start the synthetic watched process
+    action: start
+    process_id: watched-process
+    capture: {watched_pid: pid}
+  - name: schedule a watched-process trigger
+    method: POST
+    path: /api/internal/schedule-trigger
+    json:
+      session_id: ${sessions.atlas}
+      delay_seconds: 120
+      message: Continue the synthetic Atlas plan after the process exits.
+      watch_targets: [{kind: local_pid, pid: "${capture.watched_pid}"}]
+    capture: {trigger_id: trigger_id}
+    expect_status: 200
+    defer_files: true
+  - kind: process
+    name: end the synthetic watched process
+    action: stop
+    process_id: watched-process
+    delay_seconds: 1
+  - kind: wait
+    name: wait until the watched trigger is fired
+    timeout_seconds: 20
+    until:
+      file_field:
+        path: sessions/${sessions.atlas}/triggers/${capture.trigger_id}.json
+        field: status
+        equals: fired
+  - kind: wait
+    name: wait for the fired turn to finish
+    timeout_seconds: 30
+    until:
+      event:
+        session: ${sessions.atlas}
+        type: run_finished
+        fields: {input_event_ids: ["${capture.trigger_id}"]}

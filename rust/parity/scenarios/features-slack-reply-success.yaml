@@ -1,0 +1,19 @@
+stage: features
+name: features-slack-reply-success
+config:
+  slack:
+    allowed_user_ids: [U0PARITY]
+credentials:
+  slack:
+    bot_token: xoxb-parity-synthetic-token
+    app_token: xapp-parity-synthetic-token
+fakes:
+  slack: {}
+steps:
+  - name: reply to the fixture Slack thread
+    method: POST
+    path: /api/internal/slack/reply
+    json:
+      session_id: ${sessions.delta}
+      text: Synthetic Slack parity reply.
+    expect_status: 200

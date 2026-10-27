@@ -1,0 +1,11 @@
+stage: features
+name: features-harness-trace-merge
+fixture_extras: [trace_files]
+steps:
+  - name: merge two synthetic Chrome traces
+    method: GET
+    path: /perfetto/merged
+    query:
+      dir: "${tree.root}/workspace/traces"
+      slim: "true"
+    expect_status: 200

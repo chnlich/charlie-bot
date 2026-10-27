@@ -1,0 +1,15 @@
+stage: features
+name: features-ext-usage
+steps:
+  - name: ext-usage snapshot
+    method: GET
+    path: /api/ext-usage
+    expect_status: 200
+  - name: ext-usage head is not allowed
+    method: HEAD
+    path: /api/ext-usage
+    expect_status: 405
+  - name: ext-usage post is not allowed
+    method: POST
+    path: /api/ext-usage
+    expect_status: 405

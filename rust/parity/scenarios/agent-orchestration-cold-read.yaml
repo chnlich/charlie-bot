@@ -1,0 +1,303 @@
+stage: agent-orchestration
+name: agent-orchestration-cold-read
+# The manager uses Sonnet; the cold reader rotates through Opus and Haiku, then falls back to Sonnet.
+config:
+  backends:
+    pool: [claude-opus, claude-haiku]
+    options:
+      - {id: claude-sonnet, label: Synthetic Sonnet, type: cc-claude, model: claude-sonnet-5}
+      - {id: claude-opus, label: Synthetic Opus, type: cc-claude, model: claude-opus-5-5}
+      - {id: claude-haiku, label: Synthetic Haiku, type: cc-claude, model: claude-haiku-4-5}
+fake_agent:
+  starts:
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-cold-read-answer}
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-opus-5-5
+              content: [{type: text, text: Synthetic cold-read answer.}]
+        - emit:
+            type: result
+            result: Synthetic cold-read answer.
+            usage: {input_tokens: 3, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+      exit_code: 0
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-parent-after-cold-read}
+        - gate: manager-after-cold-read
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: The cold-read report was received.}]
+        - emit:
+            type: result
+            result: ""
+            usage: {input_tokens: 3, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+      exit_code: 0
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-status-reminder-after-cold-read}
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: Status reviewed after the cold-read report.}]
+        - emit:
+            type: result
+            result: ""
+            usage: {input_tokens: 3, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+      exit_code: 0
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-cold-read-retry-failure}
+        - emit: {type: error, message: Synthetic first reader failure., content: Synthetic first reader failure.}
+      exit_code: 1
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-cold-read-retry-answer}
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-haiku-4-5
+              content: [{type: text, text: Synthetic retry answer.}]
+        - emit:
+            type: result
+            result: Synthetic retry answer.
+            usage: {input_tokens: 3, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+      exit_code: 0
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-parent-after-cold-read-retry}
+        - gate: manager-after-cold-read-retry
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: The retry report was received.}]
+        - emit:
+            type: result
+            result: ""
+            usage: {input_tokens: 3, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+      exit_code: 0
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-status-reminder-after-retry-report}
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: Status reviewed after the retry report.}]
+        - emit:
+            type: result
+            result: ""
+            usage: {input_tokens: 3, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+      exit_code: 0
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-cold-read-all-failed-haiku}
+        - emit: {type: error, message: Synthetic Haiku failure., content: Synthetic Haiku failure.}
+      exit_code: 1
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-cold-read-all-failed-opus}
+        - emit: {type: error, message: Synthetic Opus failure., content: Synthetic Opus failure.}
+      exit_code: 1
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-cold-read-all-failed-sonnet}
+        - emit: {type: error, message: Synthetic Sonnet failure., content: Synthetic Sonnet failure.}
+      exit_code: 1
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-parent-after-cold-read-failure}
+        - gate: manager-after-cold-read-failure
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: The failed cold-read report was received.}]
+        - emit:
+            type: result
+            result: ""
+            usage: {input_tokens: 3, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+      exit_code: 0
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-status-reminder-after-failure-report}
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: Status reviewed after the failed cold-read report.}]
+        - emit:
+            type: result
+            result: ""
+            usage: {input_tokens: 3, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+      exit_code: 0
+expect_starts: 12
+comparison_rules:
+  # The status reminder and the run_finished of the audited turn, in either order: that turn's after_turn runs as its
+  # own task (src/runtime/session_events.py:156-161), and its finish callback writes run_finished after the master_done
+  # broadcast (src/runtime/master_cc_queue.py:304-309), as features-web-reply-audit compares them.
+  - either_order_of_adjacent_events:
+      first:
+        type: agent_message
+        match_fields: {from_session_name: "Session status"}
+      second:
+        type: run_finished
+        match_fields: {outcome: success}
+steps:
+  - name: delegate a cold read of the synthetic page
+    method: POST
+    path: /api/internal/delegate
+    json:
+      session_id: ${sessions.atlas}
+      description: Read the synthetic sitrep.
+      task_type: cold-read
+      cold_read:
+        page_path: rust/parity/data/cold-read-sitrep.html
+        genre: sitrep
+        trigger: where are we?
+      request_id: synthetic-cold-read-success
+    capture: {success_child: session_id, success_run: run_id}
+    expect_status: 200
+  - kind: wait
+    name: wait for the cold-read worker's answer
+    timeout_seconds: 30
+    until:
+      event:
+        session: ${capture.success_child}
+        type: run_finished
+        fields: {run_id: "${capture.success_run}", outcome: success}
+  - kind: wait
+    name: the parent receives the cold-read page hash and answer
+    timeout_seconds: 30
+    until:
+      event:
+        session: ${sessions.atlas}
+        type: child_report
+        fields:
+          child_session_id: "${capture.success_child}"
+          outcome: completed
+          summary: |-
+            cold read of rust/parity/data/cold-read-sitrep.html
+            page sha256 6d8877b679b04694b9c28b870f77e67463853c235ff0c7bacfb4b00b5a237b80
+            backend claude-opus
+            Synthetic cold-read answer.
+  - kind: wait
+    name: wait for the manager after the cold-read report
+    timeout_seconds: 30
+    until: {at_gate: manager-after-cold-read}
+  - kind: gate
+    name: let the manager finish the cold-read report
+    open: manager-after-cold-read
+  - name: delegate a cold read whose first reader fails and second answers
+    method: POST
+    path: /api/internal/delegate
+    json:
+      session_id: ${sessions.atlas}
+      description: Read the synthetic sitrep with one failed attempt.
+      task_type: cold-read
+      cold_read:
+        page_path: rust/parity/data/cold-read-sitrep.html
+        genre: sitrep
+        trigger: where are we again?
+      request_id: synthetic-cold-read-retry
+    capture: {retry_child: session_id, retry_run: run_id}
+    expect_status: 200
+  - kind: wait
+    name: the next pool member answers the cold-read retry
+    timeout_seconds: 30
+    until:
+      event:
+        session: ${capture.retry_child}
+        type: run_finished
+        fields: {outcome: success}
+  - kind: wait
+    name: the retry report carries its failed attempt and answer
+    timeout_seconds: 30
+    until:
+      event:
+        session: ${sessions.atlas}
+        type: child_report
+        fields:
+          child_session_id: "${capture.retry_child}"
+          outcome: completed
+          summary: |-
+            cold read of rust/parity/data/cold-read-sitrep.html
+            page sha256 6d8877b679b04694b9c28b870f77e67463853c235ff0c7bacfb4b00b5a237b80
+            attempt claude-haiku failed: Synthetic first reader failure.
+            backend claude-opus
+            Synthetic retry answer.
+  - kind: wait
+    name: wait for the manager after the retry report
+    timeout_seconds: 30
+    until: {at_gate: manager-after-cold-read-retry}
+  - kind: gate
+    name: let the manager finish the retry report
+    open: manager-after-cold-read-retry
+  - name: delegate a cold read whose two readers fail
+    method: POST
+    path: /api/internal/delegate
+    json:
+      session_id: ${sessions.atlas}
+      description: Read the synthetic sitrep with failed readers.
+      task_type: cold-read
+      cold_read:
+        page_path: rust/parity/data/cold-read-sitrep.html
+        genre: sitrep
+        trigger: where are we a third time?
+      request_id: synthetic-cold-read-all-failed
+    capture: {failed_child: session_id, failed_run: run_id}
+    expect_status: 200
+  - kind: wait
+    name: the parent receives both failed attempts
+    timeout_seconds: 30
+    until:
+      event:
+        session: ${sessions.atlas}
+        type: child_report
+        fields:
+          child_session_id: "${capture.failed_child}"
+          outcome: failed
+          summary: |-
+            cold read of rust/parity/data/cold-read-sitrep.html
+            page sha256 6d8877b679b04694b9c28b870f77e67463853c235ff0c7bacfb4b00b5a237b80
+            attempt claude-haiku failed: Synthetic Haiku failure.
+            attempt claude-opus failed: Synthetic Opus failure.
+            attempt claude-sonnet failed: Synthetic Sonnet failure.
+            every model failed (3 tried)
+  - kind: wait
+    name: wait for the manager after the all-failed cold-read report
+    timeout_seconds: 30
+    until: {at_gate: manager-after-cold-read-failure}
+  - kind: gate
+    name: let the manager finish the all-failed report
+    open: manager-after-cold-read-failure
+  - kind: wait
+    name: the failed cold-read worker is archived
+    timeout_seconds: 30
+    until:
+      event:
+        session: ${capture.failed_child}
+        type: task_closed
+        fields: {outcome: archived}

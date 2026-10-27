@@ -1,0 +1,397 @@
+# One session's reads over every fixture kind and a missing id: the detail, the bootstrap, the usage roll-up,
+# the rendered event pages and the raw event log.
+stage: session-read-api
+name: session-detail
+steps:
+  - name: events viewer page
+    method: GET
+    path: /sessions/${sessions.atlas}/events
+    expect_status: 200
+  - name: events viewer page with a missing session
+    method: GET
+    path: /sessions/${missing_session}/events
+    expect_status: 404
+  - name: detail, manager root, starred, grouped
+    method: GET
+    path: /api/sessions/${sessions.atlas}
+    expect_status: 200
+  - name: HEAD, detail, manager root, starred, grouped
+    method: HEAD
+    path: /api/sessions/${sessions.atlas}
+    expect_status: 405
+  - name: bootstrap, manager root, starred, grouped
+    method: GET
+    path: /api/sessions/${sessions.atlas}/bootstrap
+    expect_status: 200
+  - name: usage, manager root, starred, grouped
+    method: GET
+    path: /api/sessions/${sessions.atlas}/usage
+    expect_status: 200
+  - name: PUT, usage, manager root, starred, grouped
+    method: PUT
+    path: /api/sessions/${sessions.atlas}/usage
+    expect_status: 405
+  - name: events, newest page, manager root, starred, grouped
+    method: GET
+    path: /api/sessions/${sessions.atlas}/events
+    query: {before: 100000}
+    expect_status: 200
+  - name: events.jsonl, manager root, starred, grouped
+    method: GET
+    path: /api/sessions/${sessions.atlas}/events.jsonl
+    expect_status: 200
+  - name: events.jsonl, gzip accepted, manager root, starred, grouped
+    method: GET
+    path: /api/sessions/${sessions.atlas}/events.jsonl
+    headers:
+      Accept-Encoding: gzip
+    expect_status: 200
+  - name: detail, manager child with child reports
+    method: GET
+    path: /api/sessions/${sessions.atlas_survey}
+    expect_status: 200
+  - name: bootstrap, manager child with child reports
+    method: GET
+    path: /api/sessions/${sessions.atlas_survey}/bootstrap
+    expect_status: 200
+  - name: usage, manager child with child reports
+    method: GET
+    path: /api/sessions/${sessions.atlas_survey}/usage
+    expect_status: 200
+  - name: events, newest page, manager child with child reports
+    method: GET
+    path: /api/sessions/${sessions.atlas_survey}/events
+    query: {before: 100000}
+    expect_status: 200
+  - name: events.jsonl, manager child with child reports
+    method: GET
+    path: /api/sessions/${sessions.atlas_survey}/events.jsonl
+    expect_status: 200
+  - name: events.jsonl, gzip accepted, manager child with child reports
+    method: GET
+    path: /api/sessions/${sessions.atlas_survey}/events.jsonl
+    headers:
+      Accept-Encoding: gzip
+    expect_status: 200
+  - name: detail, worker, retried, closed
+    method: GET
+    path: /api/sessions/${sessions.atlas_notes}
+    expect_status: 200
+  - name: bootstrap, worker, retried, closed
+    method: GET
+    path: /api/sessions/${sessions.atlas_notes}/bootstrap
+    expect_status: 200
+  - name: usage, worker, retried, closed
+    method: GET
+    path: /api/sessions/${sessions.atlas_notes}/usage
+    expect_status: 200
+  - name: events, newest page, worker, retried, closed
+    method: GET
+    path: /api/sessions/${sessions.atlas_notes}/events
+    query: {before: 100000}
+    expect_status: 200
+  - name: events.jsonl, worker, retried, closed
+    method: GET
+    path: /api/sessions/${sessions.atlas_notes}/events.jsonl
+    expect_status: 200
+  - name: events.jsonl, gzip accepted, worker, retried, closed
+    method: GET
+    path: /api/sessions/${sessions.atlas_notes}/events.jsonl
+    headers:
+      Accept-Encoding: gzip
+    expect_status: 200
+  - name: detail, worker, interrupted, archived
+    method: GET
+    path: /api/sessions/${sessions.atlas_probe}
+    expect_status: 200
+  - name: bootstrap, worker, interrupted, archived
+    method: GET
+    path: /api/sessions/${sessions.atlas_probe}/bootstrap
+    expect_status: 200
+  - name: usage, worker, interrupted, archived
+    method: GET
+    path: /api/sessions/${sessions.atlas_probe}/usage
+    expect_status: 200
+  - name: events, newest page, worker, interrupted, archived
+    method: GET
+    path: /api/sessions/${sessions.atlas_probe}/events
+    query: {before: 100000}
+    expect_status: 200
+  - name: events.jsonl, worker, interrupted, archived
+    method: GET
+    path: /api/sessions/${sessions.atlas_probe}/events.jsonl
+    expect_status: 200
+  - name: events.jsonl, gzip accepted, worker, interrupted, archived
+    method: GET
+    path: /api/sessions/${sessions.atlas_probe}/events.jsonl
+    headers:
+      Accept-Encoding: gzip
+    expect_status: 200
+  - name: detail, worker, queued run stopped
+    method: GET
+    path: /api/sessions/${sessions.atlas_scout}
+    expect_status: 200
+  - name: bootstrap, worker, queued run stopped
+    method: GET
+    path: /api/sessions/${sessions.atlas_scout}/bootstrap
+    expect_status: 200
+  - name: usage, worker, queued run stopped
+    method: GET
+    path: /api/sessions/${sessions.atlas_scout}/usage
+    expect_status: 200
+  - name: events, newest page, worker, queued run stopped
+    method: GET
+    path: /api/sessions/${sessions.atlas_scout}/events
+    query: {before: 100000}
+    expect_status: 200
+  - name: events.jsonl, worker, queued run stopped
+    method: GET
+    path: /api/sessions/${sessions.atlas_scout}/events.jsonl
+    expect_status: 200
+  - name: events.jsonl, gzip accepted, worker, queued run stopped
+    method: GET
+    path: /api/sessions/${sessions.atlas_scout}/events.jsonl
+    headers:
+      Accept-Encoding: gzip
+    expect_status: 200
+  - name: detail, archived root, starred
+    method: GET
+    path: /api/sessions/${sessions.beacon}
+    expect_status: 200
+  - name: bootstrap, archived root, starred
+    method: GET
+    path: /api/sessions/${sessions.beacon}/bootstrap
+    expect_status: 200
+  - name: usage, archived root, starred
+    method: GET
+    path: /api/sessions/${sessions.beacon}/usage
+    expect_status: 200
+  - name: events, newest page, archived root, starred
+    method: GET
+    path: /api/sessions/${sessions.beacon}/events
+    query: {before: 100000}
+    expect_status: 200
+  - name: events.jsonl, archived root, starred
+    method: GET
+    path: /api/sessions/${sessions.beacon}/events.jsonl
+    expect_status: 200
+  - name: events.jsonl, gzip accepted, archived root, starred
+    method: GET
+    path: /api/sessions/${sessions.beacon}/events.jsonl
+    headers:
+      Accept-Encoding: gzip
+    expect_status: 200
+  - name: detail, archived child
+    method: GET
+    path: /api/sessions/${sessions.beacon_draft}
+    expect_status: 200
+  - name: bootstrap, archived child
+    method: GET
+    path: /api/sessions/${sessions.beacon_draft}/bootstrap
+    expect_status: 200
+  - name: usage, archived child
+    method: GET
+    path: /api/sessions/${sessions.beacon_draft}/usage
+    expect_status: 200
+  - name: events, newest page, archived child
+    method: GET
+    path: /api/sessions/${sessions.beacon_draft}/events
+    query: {before: 100000}
+    expect_status: 200
+  - name: events.jsonl, archived child
+    method: GET
+    path: /api/sessions/${sessions.beacon_draft}/events.jsonl
+    expect_status: 200
+  - name: events.jsonl, gzip accepted, archived child
+    method: GET
+    path: /api/sessions/${sessions.beacon_draft}/events.jsonl
+    headers:
+      Accept-Encoding: gzip
+    expect_status: 200
+  - name: detail, retired backend, pending input, unread
+    method: GET
+    path: /api/sessions/${sessions.cobalt}
+    expect_status: 200
+  - name: bootstrap, retired backend, pending input, unread
+    method: GET
+    path: /api/sessions/${sessions.cobalt}/bootstrap
+    expect_status: 200
+  - name: usage, retired backend, pending input, unread
+    method: GET
+    path: /api/sessions/${sessions.cobalt}/usage
+    expect_status: 200
+  - name: events, newest page, retired backend, pending input, unread
+    method: GET
+    path: /api/sessions/${sessions.cobalt}/events
+    query: {before: 100000}
+    expect_status: 200
+  - name: events.jsonl, retired backend, pending input, unread
+    method: GET
+    path: /api/sessions/${sessions.cobalt}/events.jsonl
+    expect_status: 200
+  - name: events.jsonl, gzip accepted, retired backend, pending input, unread
+    method: GET
+    path: /api/sessions/${sessions.cobalt}/events.jsonl
+    headers:
+      Accept-Encoding: gzip
+    expect_status: 200
+  - name: detail, chat-thread session
+    method: GET
+    path: /api/sessions/${sessions.delta}
+    expect_status: 200
+  - name: bootstrap, chat-thread session
+    method: GET
+    path: /api/sessions/${sessions.delta}/bootstrap
+    expect_status: 200
+  - name: usage, chat-thread session
+    method: GET
+    path: /api/sessions/${sessions.delta}/usage
+    expect_status: 200
+  - name: events, newest page, chat-thread session
+    method: GET
+    path: /api/sessions/${sessions.delta}/events
+    query: {before: 100000}
+    expect_status: 200
+  - name: events.jsonl, chat-thread session
+    method: GET
+    path: /api/sessions/${sessions.delta}/events.jsonl
+    expect_status: 200
+  - name: events.jsonl, gzip accepted, chat-thread session
+    method: GET
+    path: /api/sessions/${sessions.delta}/events.jsonl
+    headers:
+      Accept-Encoding: gzip
+    expect_status: 200
+  - name: detail, recycled history, restored
+    method: GET
+    path: /api/sessions/${sessions.ember}
+    expect_status: 200
+  - name: bootstrap, recycled history, restored
+    method: GET
+    path: /api/sessions/${sessions.ember}/bootstrap
+    expect_status: 200
+  - name: usage, recycled history, restored
+    method: GET
+    path: /api/sessions/${sessions.ember}/usage
+    expect_status: 200
+  - name: events, newest page, recycled history, restored
+    method: GET
+    path: /api/sessions/${sessions.ember}/events
+    query: {before: 100000}
+    expect_status: 200
+  - name: events.jsonl, recycled history, restored
+    method: GET
+    path: /api/sessions/${sessions.ember}/events.jsonl
+    expect_status: 200
+  - name: events.jsonl, gzip accepted, recycled history, restored
+    method: GET
+    path: /api/sessions/${sessions.ember}/events.jsonl
+    headers:
+      Accept-Encoding: gzip
+    expect_status: 200
+  - name: detail, plans and triggers, unread
+    method: GET
+    path: /api/sessions/${sessions.fable}
+    expect_status: 200
+  - name: bootstrap, plans and triggers, unread
+    method: GET
+    path: /api/sessions/${sessions.fable}/bootstrap
+    expect_status: 200
+  - name: usage, plans and triggers, unread
+    method: GET
+    path: /api/sessions/${sessions.fable}/usage
+    expect_status: 200
+  - name: events, newest page, plans and triggers, unread
+    method: GET
+    path: /api/sessions/${sessions.fable}/events
+    query: {before: 100000}
+    expect_status: 200
+  - name: events.jsonl, plans and triggers, unread
+    method: GET
+    path: /api/sessions/${sessions.fable}/events.jsonl
+    expect_status: 200
+  - name: events.jsonl, gzip accepted, plans and triggers, unread
+    method: GET
+    path: /api/sessions/${sessions.fable}/events.jsonl
+    headers:
+      Accept-Encoding: gzip
+    expect_status: 200
+  - name: detail, fork of atlas
+    method: GET
+    path: /api/sessions/${sessions.garnet}
+    expect_status: 200
+  - name: bootstrap, fork of atlas
+    method: GET
+    path: /api/sessions/${sessions.garnet}/bootstrap
+    expect_status: 200
+  - name: usage, fork of atlas
+    method: GET
+    path: /api/sessions/${sessions.garnet}/usage
+    expect_status: 200
+  - name: events, newest page, fork of atlas
+    method: GET
+    path: /api/sessions/${sessions.garnet}/events
+    query: {before: 100000}
+    expect_status: 200
+  - name: events.jsonl, fork of atlas
+    method: GET
+    path: /api/sessions/${sessions.garnet}/events.jsonl
+    expect_status: 200
+  - name: events.jsonl, gzip accepted, fork of atlas
+    method: GET
+    path: /api/sessions/${sessions.garnet}/events.jsonl
+    headers:
+      Accept-Encoding: gzip
+    expect_status: 200
+  - name: detail, missing id
+    method: GET
+    path: /api/sessions/${missing_session}
+    expect_status: 404
+  - name: bootstrap, missing id
+    method: GET
+    path: /api/sessions/${missing_session}/bootstrap
+    expect_status: 404
+  - name: usage, missing id
+    method: GET
+    path: /api/sessions/${missing_session}/usage
+    expect_status: 404
+  - name: events, newest page, missing id
+    method: GET
+    path: /api/sessions/${missing_session}/events
+    query: {before: 100000}
+    expect_status: 404
+  - name: events.jsonl, missing id
+    method: GET
+    path: /api/sessions/${missing_session}/events.jsonl
+    expect_status: 404
+  - name: events.jsonl, gzip accepted, missing id
+    method: GET
+    path: /api/sessions/${missing_session}/events.jsonl
+    headers:
+      Accept-Encoding: gzip
+    expect_status: 404
+  - name: events, a middle page of five, manager root
+    method: GET
+    path: /api/sessions/${sessions.atlas}/events
+    query: {before: 20, limit: 5}
+    expect_status: 200
+  - name: events, before the first event, manager root
+    method: GET
+    path: /api/sessions/${sessions.atlas}/events
+    query: {before: 0}
+    expect_status: 200
+  - name: events, no before, manager root
+    method: GET
+    path: /api/sessions/${sessions.atlas}/events
+    expect_status: 422
+    compare: status_and_shape
+  - name: events, recycled history below the archive offset
+    method: GET
+    path: /api/sessions/${sessions.ember}/events
+    query: {before: 14, limit: 5}
+    expect_status: 200
+  - name: events, fork history page
+    method: GET
+    path: /api/sessions/${sessions.garnet}/events
+    query: {before: 10, limit: 10}
+    expect_status: 200

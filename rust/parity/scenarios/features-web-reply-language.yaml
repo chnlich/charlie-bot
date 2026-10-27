@@ -1,0 +1,106 @@
+# The language check on the web reply route: an English reply after a Chinese user message is held with a 409 and records
+# nothing, and the same reply posted with a keep_language reason is recorded with that reason. The Chinese message runs
+# one manager turn that ends without a reply, so the round-end audit posts its nudge and notice, as in
+# features-web-reply-audit. The reply steps wait for the notice, so the audit cannot answer the kept reply.
+stage: features
+name: features-web-reply-language
+fixture_extras: [web_reply_cases]
+fake_agent:
+  starts:
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-web-language-session}
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: The first web turn ended without a reply.}]
+        - emit:
+            type: result
+            result: ""
+            usage: {input_tokens: 10, output_tokens: 4, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+      exit_code: 0
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-web-language-session}
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: The nudged web turn ended without a reply.}]
+        - emit:
+            type: result
+            result: ""
+            usage: {input_tokens: 12, output_tokens: 4, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+      exit_code: 0
+expect_starts: 2
+comparison_rules:
+  # The nudge and the run_finished of the turn it audits, in either order, as features-web-reply-audit compares them.
+  - either_order_of_adjacent_events:
+      first:
+        type: agent_message
+        match_fields: {from_session_name: "Session status"}
+      second:
+        type: run_finished
+        match_fields: {outcome: success}
+  # The no-reply notice and the run_finished of the nudged turn, in either order, as features-web-reply-audit compares them.
+  - either_order_of_adjacent_events:
+      first:
+        type: web_reply_notice
+        match_fields:
+          content: "No reply was posted for this message. The Everything view shows this turn's output."
+      second:
+        type: run_finished
+        match_fields: {outcome: success}
+steps:
+  - name: a Chinese user message that no reply answers
+    method: POST
+    path: /api/chat/${sessions.web_reply}/message
+    json: {content: "这个改动先别合入，我想再看一下状态面板的折叠逻辑。", request_id: synthetic-chat-web-reply-language}
+    expect_status: 202
+    defer_files: true
+  - kind: wait
+    name: wait for the audit nudge
+    timeout_seconds: 30
+    until:
+      event:
+        session: ${sessions.web_reply}
+        type: agent_message
+        fields: {from_session_name: "Session status"}
+  - kind: wait
+    name: wait for the nudged turn to finish
+    timeout_seconds: 30
+    until:
+      event:
+        session: ${sessions.web_reply}
+        type: run_finished
+        count: 2
+  - kind: wait
+    name: wait for the no-reply notice
+    timeout_seconds: 30
+    until:
+      event:
+        session: ${sessions.web_reply}
+        type: web_reply_notice
+  - name: an English reply to the Chinese message is held
+    method: POST
+    path: /api/internal/web/reply
+    json: {session_id: "${sessions.web_reply}", text: "I will hold the merge until the review is done."}
+    expect_status: 409
+  - name: the held reply posts with a keep_language reason
+    method: POST
+    path: /api/internal/web/reply
+    json:
+      session_id: "${sessions.web_reply}"
+      text: "I will hold the merge until the review is done."
+      keep_language: "The reply quotes an English term."
+    expect_status: 200
+  - name: the dialog lists the kept reply after the held attempt
+    method: GET
+    path: /api/internal/web/dialog
+    query: {session_id: "${sessions.web_reply}"}
+    expect_status: 200

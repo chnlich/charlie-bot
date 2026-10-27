@@ -1,0 +1,197 @@
+stage: features
+name: features-discord-routes
+description: The Discord reply, read and check routes against a fake Discord REST server.
+config:
+  discord:
+    allowed_users:
+      "900000000000000099": Synthetic user
+credentials:
+  discord:
+    bot_token: discord-parity-synthetic-token
+fakes:
+  discord:
+    messages:
+      "900000000000000030":
+        - id: "900000000000000041"
+          channel_id: "900000000000000030"
+          type: 0
+          author: {id: "900000000000000099", username: synthetic-user, global_name: null, bot: false}
+          content: Synthetic first follow up.
+          timestamp: "2026-08-26T00:00:01+00:00"
+          attachments: []
+        - id: "900000000000000042"
+          channel_id: "900000000000000030"
+          type: 0
+          author: {id: "900000000000000099", username: synthetic-user, global_name: null, bot: false}
+          content: Synthetic second follow up.
+          timestamp: "2026-08-26T00:00:02+00:00"
+          attachments: []
+        - id: "900000000000000043"
+          channel_id: "900000000000000030"
+          type: 0
+          author: {id: "900000000000000098", username: synthetic-bot, global_name: null, bot: true}
+          content: Synthetic bot note.
+          timestamp: "2026-08-26T00:00:03+00:00"
+          attachments: []
+      "900000000000000050":
+        - id: "900000000000000051"
+          channel_id: "900000000000000050"
+          type: 0
+          author: {id: "900000000000000099", username: synthetic-user, global_name: null, bot: false}
+          content: Synthetic linked message.
+          timestamp: "2026-08-26T00:00:01+00:00"
+          attachments: []
+        - id: "900000000000000052"
+          channel_id: "900000000000000050"
+          type: 0
+          author: {id: "900000000000000099", username: synthetic-user, global_name: null, bot: false}
+          content: Synthetic linked reply.
+          timestamp: "2026-08-26T00:00:02+00:00"
+          attachments: []
+    failures:
+      "/api/v10/channels/900000000000000020/messages/900000000000000030": 404
+      "/api/v10/channels/900000000000000060/messages": 403
+fixture_extras: [discord_thread]
+steps:
+  - name: reply to a session without a Discord thread answers 409
+    method: POST
+    path: /api/internal/discord/reply
+    json:
+      session_id: ${extras.discord_thread.no_thread_session}
+      text: Synthetic Discord parity reply.
+    expect_status: 409
+  - name: reply refuses while the thread has unread messages
+    method: POST
+    path: /api/internal/discord/reply
+    json:
+      session_id: ${extras.discord_thread.session}
+      text: Synthetic Discord parity reply.
+    expect_status: 412
+  - name: read marks the thread's unread messages
+    method: POST
+    path: /api/internal/discord/read
+    json:
+      session_id: ${extras.discord_thread.session}
+    expect_status: 200
+  - name: read the own thread with no unread messages
+    method: POST
+    path: /api/internal/discord/read
+    json:
+      session_id: ${extras.discord_thread.session}
+      limit: 2
+    expect_status: 200
+  - name: reply with blank text answers 422
+    method: POST
+    path: /api/internal/discord/reply
+    json:
+      session_id: ${extras.discord_thread.session}
+      text: "  "
+    expect_status: 422
+  - name: reply with a file-server link answers 422
+    method: POST
+    path: /api/internal/discord/reply
+    json:
+      session_id: ${extras.discord_thread.session}
+      text: "Synthetic report: https://example.test/absolute_filepath/tmp/synthetic-report.md"
+    expect_status: 422
+  - name: reply posts once the thread is read
+    method: POST
+    path: /api/internal/discord/reply
+    json:
+      session_id: ${extras.discord_thread.session}
+      text: Synthetic Discord parity reply.
+    expect_status: 200
+  - name: Discord effective prompt carries the reply segment
+    method: GET
+    path: /api/sessions/${extras.discord_thread.session}/effective-prompt
+    expect_status: 200
+  - name: read a linked channel without marking it
+    method: POST
+    path: /api/internal/discord/read
+    json:
+      session_id: ${extras.discord_thread.session}
+      url: https://discord.com/channels/900000000000000010/900000000000000050
+      limit: 2
+    expect_status: 200
+  - name: read a channel the bot cannot see answers 404
+    method: POST
+    path: /api/internal/discord/read
+    json:
+      session_id: ${extras.discord_thread.session}
+      url: https://discord.com/channels/900000000000000010/900000000000000060
+    expect_status: 404
+  - name: read a link that is not discord.com answers 422
+    method: POST
+    path: /api/internal/discord/read
+    json:
+      session_id: ${extras.discord_thread.session}
+      url: https://example.com/not-discord
+    expect_status: 422
+    compare: status_and_shape
+  - name: read with limit 0 answers 422
+    method: POST
+    path: /api/internal/discord/read
+    json:
+      session_id: ${extras.discord_thread.session}
+      limit: 0
+    expect_status: 422
+    compare: status_and_shape
+  - name: read with limit 101 answers 422
+    method: POST
+    path: /api/internal/discord/read
+    json:
+      session_id: ${extras.discord_thread.session}
+      limit: 101
+    expect_status: 422
+    compare: status_and_shape
+  - name: read with an extra key answers 422
+    method: POST
+    path: /api/internal/discord/read
+    json:
+      session_id: ${extras.discord_thread.session}
+      unexpected: true
+    expect_status: 422
+    compare: status_and_shape
+  - name: read with a string limit answers 422
+    method: POST
+    path: /api/internal/discord/read
+    json:
+      session_id: ${extras.discord_thread.session}
+      limit: ten
+    expect_status: 422
+    compare: status_and_shape
+  - name: reply with an extra key answers 422
+    method: POST
+    path: /api/internal/discord/reply
+    json:
+      session_id: ${extras.discord_thread.session}
+      text: Synthetic Discord parity reply.
+      unexpected: true
+    expect_status: 422
+    compare: status_and_shape
+  - name: reply with a number for text answers 422
+    method: POST
+    path: /api/internal/discord/reply
+    json:
+      session_id: ${extras.discord_thread.session}
+      text: 5
+    expect_status: 422
+    compare: status_and_shape
+  - name: check with an extra key answers 422
+    method: POST
+    path: /api/internal/discord/check
+    json:
+      unexpected: true
+    expect_status: 422
+    compare: status_and_shape
+  - name: check with a list body answers 422
+    method: POST
+    path: /api/internal/discord/check
+    json: []
+    expect_status: 422
+    compare: status_and_shape
+  - name: check reports the synthetic bot's setup
+    method: POST
+    path: /api/internal/discord/check
+    json: {}
+    expect_status: 200

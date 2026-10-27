@@ -1,0 +1,39 @@
+stage: features
+name: features-voice-local
+steps:
+  - name: the removed confirm route answers as an unknown path
+    method: POST
+    path: /api/voice/${sessions.atlas}/confirm
+    body_file: audio/silence.wav
+    expect_status: 404
+  - name: upload without a backend field goes to the online default, which has no credential here
+    method: POST
+    path: /api/voice/${sessions.atlas}
+    multipart:
+      audio: {file: audio/silence.wav, content_type: audio/wav}
+      devices: &devices '{"input_device": "Synthetic microphone", "capture_settings": {"echoCancellation": true, "noiseSuppression": false, "autoGainControl": true, "sampleRate": 16000}, "output_device": "Synthetic speakers", "communications_output_device": "Synthetic headset", "device_error": null}'
+    expect_status: 400
+  - name: upload with the removed backend id is unknown
+    method: POST
+    path: /api/voice/${sessions.atlas}
+    multipart:
+      audio: {file: audio/silence.wav, content_type: audio/wav}
+      backend: local
+      devices: *devices
+    expect_status: 400
+  - name: upload with an unknown backend id is refused
+    method: POST
+    path: /api/voice/${sessions.atlas}
+    multipart:
+      audio: {file: audio/silence.wav, content_type: audio/wav}
+      backend: no-such-backend
+      devices: *devices
+    expect_status: 400
+  - name: upload with the gemini backend id is refused without its credential
+    method: POST
+    path: /api/voice/${sessions.atlas}
+    multipart:
+      audio: {file: audio/silence.wav, content_type: audio/wav}
+      backend: gemini
+      devices: *devices
+    expect_status: 400

@@ -1,0 +1,112 @@
+# The round-end audit of a web session: a user message that no reply answers wakes one nudge turn, and the nudge turn that
+# also answers nothing posts the no-reply notice and marks the session unread. Both scripted manager turns end clean
+# with no web reply. The session is the web manager of the web_reply_cases fixture extra.
+stage: features
+name: features-web-reply-audit
+fixture_extras: [web_reply_cases]
+fake_agent:
+  starts:
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-web-audit-session}
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: The first web turn ended without a reply.}]
+        - emit:
+            type: result
+            result: ""
+            usage: {input_tokens: 10, output_tokens: 4, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+      exit_code: 0
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-web-audit-session}
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: The nudged web turn ended without a reply.}]
+        - emit:
+            type: result
+            result: ""
+            usage: {input_tokens: 12, output_tokens: 4, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+      exit_code: 0
+expect_starts: 2
+comparison_rules:
+  # The combined status reminder that carries the nudge (agent_message from "Session status") and the run_finished of
+  # the turn it audits. Python does not order them: that turn's after_turn runs as its own task
+  # (src/runtime/session_events.py:156-161), and its finish callback writes run_finished after the master_done
+  # broadcast (src/runtime/master_cc_queue.py:304-309). The after_turn is src/features/web_reply/turn_contribution.py:27-31;
+  # the reminder is written by src/features/web_reply/audit.py:68-81.
+  - either_order_of_adjacent_events:
+      first:
+        type: agent_message
+        match_fields: {from_session_name: "Session status"}
+      second:
+        type: run_finished
+        match_fields: {outcome: success}
+  # The no-reply notice and the run_finished of the nudged turn. Python does not order them, for the same reasons:
+  # that turn's after_turn runs as its own task (src/runtime/session_events.py:156-161), and its finish callback writes
+  # run_finished after the master_done broadcast (src/runtime/master_cc_queue.py:304-309). The after_turn is
+  # src/features/web_reply/turn_contribution.py:27-31; the notice is written by src/features/web_reply/audit.py:69-77.
+  - either_order_of_adjacent_events:
+      first:
+        type: web_reply_notice
+        match_fields:
+          content: "No reply was posted for this message. The Everything view shows this turn's output."
+      second:
+        type: run_finished
+        match_fields: {outcome: success}
+steps:
+  - name: a user message that no reply answers
+    method: POST
+    path: /api/chat/${sessions.web_reply}/message
+    json: {content: "Which layout should the dashboard use?", request_id: synthetic-chat-web-reply-audit}
+    expect_status: 202
+    defer_files: true
+  - kind: wait
+    name: wait for the audit nudge
+    timeout_seconds: 30
+    until:
+      event:
+        session: ${sessions.web_reply}
+        type: agent_message
+        fields: {from_session_name: "Session status"}
+  - kind: wait
+    name: wait for the nudged turn to finish
+    timeout_seconds: 30
+    until:
+      event:
+        session: ${sessions.web_reply}
+        type: run_finished
+        count: 2
+  - kind: wait
+    name: wait for the no-reply notice
+    timeout_seconds: 30
+    until:
+      event:
+        session: ${sessions.web_reply}
+        type: web_reply_notice
+  - kind: wait
+    name: wait for the session to be marked unread
+    timeout_seconds: 30
+    until:
+      file_field:
+        path: sessions/${sessions.web_reply}/metadata.json
+        field: has_unread
+        equals: true
+  - name: the dialog lists the user messages and the notice in log order
+    method: GET
+    path: /api/internal/web/dialog
+    query: {session_id: "${sessions.web_reply}"}
+    expect_status: 200
+  - name: the session status reads as unread after the notice
+    method: GET
+    path: /api/sessions/status
+    query: {ids: "${sessions.web_reply}"}
+    expect_status: 200

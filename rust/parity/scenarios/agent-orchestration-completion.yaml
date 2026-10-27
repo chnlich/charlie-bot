@@ -1,0 +1,168 @@
+stage: agent-orchestration
+name: task-completion-routes
+fake_agent:
+  starts:
+    - name: claude
+      steps:
+        - gate: completion-cancel-run
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: The synthetic cancellation run finished.}]
+        - emit:
+            type: result
+            result: ""
+            usage: {input_tokens: 2, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+      exit_code: 0
+    - name: claude
+      steps:
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: The cancellation report was received.}]
+        - emit:
+            type: result
+            result: ""
+            usage: {input_tokens: 2, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+      exit_code: 0
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-status-reminder-after-cancel-report}
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: Status reviewed after the cancellation report.}]
+        - emit:
+            type: result
+            result: ""
+            usage: {input_tokens: 2, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+      exit_code: 0
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-status-reminder-completion-2-1}
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: Status reviewed at the end of the scenario.}]
+        - emit:
+            type: result
+            result: ""
+            usage: {input_tokens: 2, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+      exit_code: 0
+expect_starts: 4
+comparison_rules:
+  # The status reminder and the run_finished of the audited turn, in either order: that turn's after_turn runs as its
+  # own task (src/runtime/session_events.py:156-161), and its finish callback writes run_finished after the master_done
+  # broadcast (src/runtime/master_cc_queue.py:304-309), as features-web-reply-audit compares them.
+  - either_order_of_adjacent_events:
+      first:
+        type: agent_message
+        match_fields: {from_session_name: "Session status"}
+      second:
+        type: run_finished
+        match_fields: {outcome: success}
+steps:
+  - name: archive a task with successful run evidence
+    method: POST
+    path: /api/sessions/${sessions.fable}/archive
+    json:
+      request_id: synthetic-completion-success
+      summary: Fable roadmap is ready.
+      result_refs: [roadmap]
+      run_ids: ["${runs.fable_t1.run}"]
+    expect_status: 200
+  - name: replay the successful archive request
+    method: POST
+    path: /api/sessions/${sessions.fable}/archive
+    json:
+      request_id: synthetic-completion-success
+      summary: Fable roadmap is ready.
+      result_refs: [roadmap]
+      run_ids: ["${runs.fable_t1.run}"]
+    expect_status: 200
+  - name: cancel the stopped queued worker to deliver its report
+    method: POST
+    path: /api/sessions/${sessions.atlas_scout}/cancel
+    json: {request_id: synthetic-scout-cancel, reason: Stop the queued scout run.}
+    expect_status: 200
+  - name: cancellation waits for the active manager run
+    method: POST
+    path: /api/sessions/${sessions.atlas_survey}/cancel
+    json: {request_id: synthetic-cancel-active, reason: Stop after the active run.}
+    expect_status: 409
+  - kind: gate
+    name: release the active manager run
+    open: completion-cancel-run
+  - kind: wait
+    name: wait for the manager run to finish
+    timeout_seconds: 30
+    until:
+      event:
+        session: ${sessions.atlas_survey}
+        type: run_finished
+        fields: {outcome: success}
+        count: 3
+  - name: cancel the task after its run finishes
+    method: POST
+    path: /api/sessions/${sessions.atlas_survey}/cancel
+    json: {request_id: synthetic-cancel-active, reason: Stop after the active run.}
+    expect_status: 200
+  - name: acknowledge the pending Cobalt input
+    method: POST
+    path: /api/sessions/${sessions.cobalt}/task-inputs/acknowledge
+    json:
+      request_id: synthetic-cobalt-ack
+      input_ids: ["${inputs.cobalt_u1}"]
+      note: The supplier request was handled.
+    expect_status: 200
+  - name: replay the input acknowledgement
+    method: POST
+    path: /api/sessions/${sessions.cobalt}/task-inputs/acknowledge
+    json:
+      request_id: synthetic-cobalt-ack
+      input_ids: ["${inputs.cobalt_u1}"]
+      note: The supplier request was handled.
+    expect_status: 200
+  - name: reject an unknown input id
+    method: POST
+    path: /api/sessions/${sessions.cobalt}/task-inputs/acknowledge
+    json: {request_id: synthetic-cobalt-unknown-ack, input_ids: [synthetic-missing-input]}
+    expect_status: 409
+  - name: invalid JSON body reports a 422
+    method: POST
+    path: /api/sessions/${sessions.cobalt}/archive
+    body_file: malformed.json
+    expect_status: 422
+    compare: status_and_shape
+  - name: malformed acknowledgement reports a 422 field location
+    method: POST
+    path: /api/sessions/${sessions.cobalt}/task-inputs/acknowledge
+    json: {request_id: synthetic-cobalt-malformed-ack, input_ids: synthetic-not-a-list}
+    expect_status: 422
+    compare: status_and_shape
+  - name: operator restores an archived ancestor chain
+    method: POST
+    path: /api/sessions/${sessions.beacon_draft}/unarchive
+    json: {}
+    expect_status: 200
+  - name: operator archives an open subtree with its finished runs
+    method: POST
+    path: /api/sessions/${sessions.atlas}/archive
+    json:
+      request_id: synthetic-archive-subtree
+      summary: Atlas plan is ready.
+      result_refs: [atlas-plan]
+      run_ids: ["${runs.atlas_t1.run}"]
+    expect_status: 200

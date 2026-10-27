@@ -1,0 +1,136 @@
+stage: features
+name: features-diag
+steps:
+  - name: a completed point with every field set
+    method: POST
+    path: /api/diag/switch-events
+    json:
+      phase: completed
+      from_session: session-a
+      to_session: session-b
+      generation: 3
+      winner_generation: 2
+      elapsed_ms: 1500
+      error: null
+      client_ts: "2026-02-13T10:00:00Z"
+    expect_status: 200
+  - kind: log_event
+    name: the point is one diag_switch line
+    event: diag_switch
+    fields: {phase: completed, to_session: session-b, generation: "3"}
+    timeout_seconds: 30
+  - name: unsigned 64-bit values above i64 max stay valid
+    method: POST
+    path: /api/diag/switch-events
+    json:
+      phase: completed
+      from_session: null
+      to_session: session-b
+      generation: 9223372036854775808
+      winner_generation: 18446744073709551615
+      elapsed_ms: 9223372036854775808
+      error: null
+      client_ts: "2026-02-13T10:00:00Z"
+    expect_status: 200
+  - kind: log_event
+    name: unsigned 64-bit values are logged without narrowing
+    event: diag_switch
+    fields:
+      phase: completed
+      generation: "9223372036854775808"
+      winner_generation: "18446744073709551615"
+      elapsed_ms: "9223372036854775808"
+    timeout_seconds: 30
+  - name: an error longer than 300 code points is cut to its first 300
+    method: POST
+    path: /api/diag/switch-events
+    json:
+      phase: failed
+      from_session: null
+      to_session: session-b
+      generation: 4
+      winner_generation: null
+      elapsed_ms: 20
+      error: ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+      client_ts: "2026-02-13T10:00:01Z"
+    expect_status: 200
+  - kind: log_event
+    name: the logged error holds the first 300 code points
+    event: diag_switch
+    fields:
+      phase: failed
+      error: ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+    timeout_seconds: 30
+  - name: a point that omits elapsed_ms
+    method: POST
+    path: /api/diag/switch-events
+    json:
+      phase: started
+      from_session: null
+      to_session: session-b
+      generation: 5
+      winner_generation: null
+      error: null
+      client_ts: "2026-02-13T10:00:02Z"
+    expect_status: 200
+  - name: a negative elapsed_ms is refused
+    method: POST
+    path: /api/diag/switch-events
+    json:
+      phase: completed
+      from_session: null
+      to_session: session-b
+      generation: 6
+      winner_generation: null
+      elapsed_ms: -1
+      error: null
+      client_ts: "2026-02-13T10:00:03Z"
+    expect_status: 422
+    compare: status_and_shape
+  - name: an unknown phase is refused
+    method: POST
+    path: /api/diag/switch-events
+    json:
+      phase: cancelled
+      from_session: null
+      to_session: session-b
+      generation: 7
+      winner_generation: null
+      error: null
+      client_ts: "2026-02-13T10:00:04Z"
+    expect_status: 422
+    compare: status_and_shape
+  - name: an extra key is refused
+    method: POST
+    path: /api/diag/switch-events
+    json:
+      phase: completed
+      from_session: null
+      to_session: session-b
+      generation: 8
+      winner_generation: null
+      error: null
+      client_ts: "2026-02-13T10:00:05Z"
+      stale: true
+    expect_status: 422
+    compare: status_and_shape
+  - name: a missing field, a wrong type and an extra key together
+    method: POST
+    path: /api/diag/switch-events
+    json:
+      phase: completed
+      from_session: null
+      generation: seven
+      winner_generation: null
+      error: null
+      client_ts: "2026-02-13T10:00:06Z"
+      stale: true
+    expect_status: 422
+    compare: status_and_shape
+  - name: invalid JSON is refused
+    method: POST
+    path: /api/diag/switch-events
+    body_file: diag-malformed.json
+    headers: {Content-Type: application/json}
+    expect_status: 422
+    compare: status_and_shape

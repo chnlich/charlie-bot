@@ -1,0 +1,20 @@
+stage: features
+name: features-discord-check-refused
+description: The check route answers 502 when Discord refuses the bot token.
+config:
+  discord:
+    allowed_users:
+      "900000000000000099": Synthetic user
+credentials:
+  discord:
+    bot_token: discord-parity-synthetic-token
+fakes:
+  discord:
+    failures:
+      "/api/v10/users/@me": 401
+steps:
+  - name: check answers 502 for a refused token
+    method: POST
+    path: /api/internal/discord/check
+    json: {}
+    expect_status: 502

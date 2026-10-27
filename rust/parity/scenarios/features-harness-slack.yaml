@@ -1,0 +1,153 @@
+stage: features
+name: features-harness-slack
+config:
+  slack:
+    allowed_user_ids: [U0PARITY]
+credentials:
+  slack:
+    bot_token: xoxb-parity-synthetic-token
+    app_token: xapp-parity-synthetic-token
+fakes:
+  slack: {}
+fake_agent:
+  starts:
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-slack-summon}
+        - gate: slack-summon-start
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: Synthetic Slack summon round ended silently.}]
+        - emit:
+            type: result
+            result: ""
+            usage: {input_tokens: 2, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+        - gate: slack-summon-result
+      exit_code: 0
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-slack-nudge}
+        - emit:
+            type: result
+            result: ""
+            usage: {input_tokens: 2, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+      exit_code: 0
+expect_starts: 2
+comparison_rules:
+  # Python does not order the round-end audit's nudge (agent_message, written at
+  # src/features/chat_threads/thread_entry.py:700-704) against the turn's run_finished. The Slack after_turn calls
+  # slack_listener.deliver_done (src/features/slack/turn_contribution.py:24-25) in its own task
+  # (src/runtime/session_events.py:156-161), while the finish callback writes run_finished after the master_done
+  # broadcast (src/runtime/master_cc_queue.py:304-309). The rule accepts either order for this pair only: the nudge is
+  # the one agent_message with the nudge's content.
+  - either_order_of_adjacent_events:
+      first:
+        type: agent_message
+        match_fields:
+          content: |-
+            Slack thread: the round answering this mention ended without posting a reply. Decide now:
+            when the thread should hear something, post a reply; when there is nothing to say, end this
+            round and the thread gets a one-line notice pointing to this session.
+      second:
+        type: run_finished
+        match_fields: {outcome: success}
+  # Python does not order the Slack no-reply notice (assistant_error) and run_finished: audit_round persists it at
+  # src/features/chat_threads/thread_entry.py:669, 732-739 through after_turn (src/features/slack/turn_contribution.py:24-25).
+  # Each after_turn runs as its own task (src/runtime/session_events.py:156-161), while the finish callback writes
+  # run_finished after master_done (src/runtime/master_cc_queue.py:304-309).
+  - either_order_of_adjacent_events:
+      first:
+        type: assistant_error
+        match_fields:
+          content: This Slack mention got no reply from its round or the nudge round; the thread was told so.
+      second:
+        type: run_finished
+        match_fields: {outcome: success}
+steps:
+  - kind: fake
+    name: allowed app mention starts its Slack thread session
+    fake: slack
+    action: socket_event
+    payload:
+      type: app_mention
+      team: T0PARITY
+      channel: C_SUMMON
+      user: U0PARITY
+      ts: "1767600000.000100"
+  - kind: wait
+    name: summon event is stored in the deterministic session
+    timeout_seconds: 30
+    until:
+      event:
+        session: 99321c63-7e39-5a53-b87a-c369370b035d
+        type: agent_message
+        fields:
+          content: Slack 线程召唤
+          slack: {channel_id: C_SUMMON, thread_ts: "1767600000.000100", mention_ts: "1767600000.000100"}
+  - kind: wait
+    name: summon agent reaches its start gate
+    timeout_seconds: 30
+    until: {at_gate: slack-summon-start}
+  - kind: gate
+    name: release summon agent to finish its round
+    open: slack-summon-start
+  - kind: fake
+    name: app mention from another user is dropped
+    fake: slack
+    action: socket_event
+    payload:
+      type: app_mention
+      team: T0PARITY
+      channel: C_OTHER
+      user: U_OTHER
+      ts: "1767600000.000300"
+  - kind: fake
+    name: eligible follow message arms the thread trigger
+    fake: slack
+    action: socket_event
+    payload:
+      type: message
+      team: T0PARITY
+      channel: C_SUMMON
+      user: U0PARITY
+      ts: "1767600000.000200"
+      thread_ts: "1767600000.000100"
+  - kind: log_event
+    name: follow trigger stores its message floor
+    event: slack_follow_trigger_armed
+    fields:
+      session: 99321c63-7e39-5a53-b87a-c369370b035d
+    timeout_seconds: 30
+  - kind: wait
+    name: summon agent emits its silent result
+    timeout_seconds: 30
+    until: {at_gate: slack-summon-result}
+  - kind: gate
+    name: release summon agent after its result
+    open: slack-summon-result
+  - kind: wait
+    name: the silent summon round records its nudge
+    timeout_seconds: 30
+    until:
+      event:
+        session: 99321c63-7e39-5a53-b87a-c369370b035d
+        type: agent_message
+        count: 2
+  - kind: log_event
+    name: the silent nudge round posts its thread notice
+    event: slack_reply_notice
+    fields:
+      session: 99321c63-7e39-5a53-b87a-c369370b035d
+    timeout_seconds: 30
+  - kind: wait
+    name: the no-reply notice is persisted
+    timeout_seconds: 30
+    until:
+      event:
+        session: 99321c63-7e39-5a53-b87a-c369370b035d
+        type: assistant_error

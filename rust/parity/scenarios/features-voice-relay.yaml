@@ -1,0 +1,88 @@
+stage: features
+name: features-voice-relay
+credentials:
+  gemini:
+    api_key: gemini-parity-synthetic-key
+  meta:
+    model_api_key: muse-parity-synthetic-key
+fakes:
+  gemini:
+    transcript: Synthetic Gemini relay transcript.
+  muse:
+    transcript: Synthetic Muse relay transcript.
+steps:
+  - kind: ws
+    name: Gemini relay with a bare end frame
+    path: /ws/voice/${sessions.atlas}
+    query: {backend: gemini}
+    send:
+      - binary_file: audio/silence.pcm
+      - json: {type: end}
+    until: {close: true}
+    timeout_seconds: 15
+  - kind: ws
+    name: Muse relay with a bare end frame
+    path: /ws/voice/${sessions.atlas}
+    query: {backend: muse}
+    send:
+      - binary_file: audio/silence.pcm
+      - json: {type: end}
+    until: {close: true}
+    timeout_seconds: 15
+  - kind: ws
+    name: end frame carries recording devices
+    path: /ws/voice/${sessions.atlas}
+    query: {backend: gemini}
+    send:
+      - binary_file: audio/silence.pcm
+      - json:
+          type: end
+          devices:
+            input_device: Synthetic microphone
+            capture_settings: {sampleRate: 16000}
+            output_device: Synthetic speakers
+            communications_output_device: null
+            device_error: null
+    until: {close: true}
+    timeout_seconds: 15
+  - kind: ws
+    name: malformed control frame
+    path: /ws/voice/${sessions.atlas}
+    query: {backend: gemini}
+    wait_for_fake_handshake: gemini
+    send:
+      - text: "{bad"
+    until: {frames: 1}
+    timeout_seconds: 15
+  - kind: ws
+    name: unsupported control frame
+    path: /ws/voice/${sessions.atlas}
+    query: {backend: muse}
+    wait_for_fake_handshake: muse
+    send:
+      - json: {type: continue}
+    until: {frames: 1}
+    timeout_seconds: 15
+  - kind: ws
+    name: end frame devices omit a key
+    path: /ws/voice/${sessions.atlas}
+    query: {backend: gemini}
+    wait_for_fake_handshake: gemini
+    send:
+      - json:
+          type: end
+          devices:
+            input_device: Synthetic microphone
+            capture_settings: {sampleRate: 16000}
+            output_device: Synthetic speakers
+            communications_output_device: null
+    until: {frames: 1}
+    timeout_seconds: 15
+  - kind: ws
+    name: reject a voice websocket without its token
+    path: /ws/voice/${sessions.atlas}
+    auth: none
+    send: []
+    until: {frames: 0}
+    timeout_seconds: 5
+    expect_reject: 403

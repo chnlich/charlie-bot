@@ -1,0 +1,27 @@
+stage: features
+name: features-host-auth-empty
+steps:
+  - name: host-auth page with no ssh config
+    method: GET
+    path: /host-auth
+    expect_status: 200
+  - name: host-auth status with no ssh config
+    method: GET
+    path: /api/host-auth/status
+    expect_status: 200
+  - name: manual probe with no ssh config
+    method: POST
+    path: /api/host-auth/probe
+    expect_status: 303
+  - kind: wait
+    name: wait until the manual round releases the probe claim
+    timeout_seconds: 20
+    until:
+      file_field:
+        path: host_auth.json
+        field: probe_running
+        equals: false
+  - name: host-auth status after the manual round
+    method: GET
+    path: /api/host-auth/status
+    expect_status: 200

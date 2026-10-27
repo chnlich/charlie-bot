@@ -1,0 +1,120 @@
+stage: triggers-cron-improve
+name: improve-loop-reports
+fixture_extras: [worker_repo]
+fake_agent:
+  starts:
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-improve-parent-before-loop}
+        - gate: improve-reports-queued
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: The synthetic parent turn is complete.}]
+        - emit: {type: result, subtype: success, result: Synthetic parent turn complete., usage: {input_tokens: 2, output_tokens: 1}}
+      exit_code: 0
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-improve-agent}
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: The synthetic improve iteration is complete.}]
+        - emit: {type: result, subtype: success, result: Synthetic iteration complete., usage: {input_tokens: 2, output_tokens: 1}}
+      exit_code: 0
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-improve-agent}
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: The synthetic improve iteration is complete.}]
+        - emit: {type: result, subtype: success, result: Synthetic iteration complete., usage: {input_tokens: 2, output_tokens: 1}}
+      exit_code: 0
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-improve-parent-after-loop}
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: The three synthetic improve reports were received.}]
+        - emit: {type: result, subtype: success, result: Synthetic improve reports received., usage: {input_tokens: 2, output_tokens: 1}}
+      exit_code: 0
+expect_starts: 4
+steps:
+  - name: start the parent manager before the improve loop
+    method: POST
+    path: /api/chat/${sessions.delta}/message
+    json: {content: Start the parent manager before the improve loop., request_id: synthetic-chat-improve-parent}
+    capture: {pre_loop_input: input_event_id}
+    expect_status: 202
+    defer_files: true
+  - kind: wait
+    name: wait for the parent manager at its gate
+    timeout_seconds: 30
+    until: {at_gate: improve-reports-queued}
+  - name: start a two-iteration improve loop on the worker repository
+    method: POST
+    path: /api/internal/improve
+    json:
+      session_id: ${sessions.delta}
+      repo_path: ${tree.root}/${extras.worker_repo.repo}
+      base_branch: main
+      goal: Improve the synthetic worker.
+      work_branch: improve/two-iteration
+      iterations: 2
+    capture: {child: child_session_id}
+    expect_status: 200
+    defer_files: true
+  - kind: wait
+    name: wait for both iteration reports to reach the busy parent
+    timeout_seconds: 60
+    until:
+      event:
+        session: ${sessions.delta}
+        type: child_report
+        fields: {child_session_id: "${capture.child}"}
+        count: 2
+  - kind: wait
+    name: wait for the improve child to close
+    timeout_seconds: 60
+    until:
+      event:
+        session: ${capture.child}
+        type: task_closed
+  - kind: wait
+    name: wait for the close report to reach the busy parent
+    timeout_seconds: 60
+    until:
+      event:
+        session: ${sessions.delta}
+        type: child_report
+        fields: {child_session_id: "${capture.child}"}
+        count: 3
+  - kind: gate
+    name: release the parent manager after all three reports arrive
+    open: improve-reports-queued
+  - kind: wait
+    name: wait for both parent manager turns to finish
+    timeout_seconds: 60
+    until:
+      event:
+        session: ${sessions.delta}
+        type: master_done
+        count: 3
+  - kind: wait
+    name: wait for the loop files to record the exhausted run
+    timeout_seconds: 60
+    until:
+      file_field:
+        path: sessions/${sessions.delta}/loops/1/state.json
+        field: status
+        equals: blocked

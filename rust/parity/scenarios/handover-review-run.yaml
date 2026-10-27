@@ -1,0 +1,121 @@
+stage: agent-orchestration
+name: handover-review-run
+fixture_extras: [worker_repo]
+directions: [python-to-candidate, candidate-to-python]
+config:
+  backends:
+    pool: [claude-sonnet, claude-opus]
+    options:
+      - {id: claude-sonnet, label: Synthetic Sonnet, type: cc-claude, model: claude-sonnet-5}
+      - {id: claude-opus, label: Synthetic Opus, type: cc-claude, model: claude-opus-5-5}
+fake_agent:
+  starts:
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-review-handover-worker}
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: The handover worker completed without changes.}]
+        - emit: {type: result, result: Work is complete., usage: {input_tokens: 3, output_tokens: 2}}
+      exit_code: 0
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-review-handover-reviewer}
+        - gate: handover-review-agent
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-opus-5-5
+              content: [{type: text, text: The adopted review passed.}]
+        - emit: {type: result, result: Review passed., usage: {input_tokens: 3, output_tokens: 2}}
+      exit_code: 0
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-review-handover-parent}
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: The delivered task report is recorded.}]
+        - emit: {type: result, result: "", usage: {input_tokens: 3, output_tokens: 2}}
+      exit_code: 0
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-status-reminder-hrr-1}
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: Status reviewed at the end of the scenario.}]
+        - emit:
+            type: result
+            result: ""
+            usage: {input_tokens: 2, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+      exit_code: 0
+expect_starts: 4
+comparison_rules:
+  # The status reminder and the run_finished of the audited turn, in either order: that turn's after_turn runs as its
+  # own task (src/runtime/session_events.py:156-161), and its finish callback writes run_finished after the master_done
+  # broadcast (src/runtime/master_cc_queue.py:304-309), as features-web-reply-audit compares them.
+  - either_order_of_adjacent_events:
+      first:
+        type: agent_message
+        match_fields: {from_session_name: "Session status"}
+      second:
+        type: run_finished
+        match_fields: {outcome: success}
+steps:
+  - name: delegate an implement task whose reviewer remains alive through handover
+    method: POST
+    path: /api/internal/delegate
+    json:
+      session_id: ${sessions.atlas}
+      description: Review and deliver the synthetic branch after server handover.
+      task_type: implement
+      repo_path: ${tree.root}/${extras.worker_repo.repo}
+      base_branch: main
+      backend: claude-sonnet
+      request_id: synthetic-delegate-implement-failure
+    capture: {child: session_id, work: run_id}
+    expect_status: 200
+  - kind: wait
+    name: wait for successful worker run
+    timeout_seconds: 30
+    until:
+      event:
+        session: ${capture.child}
+        type: run_finished
+        fields: {run_id: "${capture.work}", outcome: success}
+  - kind: wait
+    name: wait for reviewer agent at its live gate
+    timeout_seconds: 30
+    until: {at_gate: handover-review-agent}
+  - kind: handover
+    name: adopt the live review run
+    agent_after_stop: alive
+  - kind: gate
+    name: release the adopted reviewer
+    open: handover-review-agent
+  - kind: wait
+    name: adopted review proves delivery and closes the child
+    timeout_seconds: 30
+    until:
+      event:
+        session: ${capture.child}
+        type: task_closed
+        fields: {outcome: completed}
+  - kind: wait
+    name: parent receives the adopted review completion report
+    timeout_seconds: 30
+    until:
+      event:
+        session: ${sessions.atlas}
+        type: child_report
+        fields: {child_session_id: "${capture.child}", outcome: completed}

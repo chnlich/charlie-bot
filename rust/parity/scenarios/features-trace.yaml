@@ -1,0 +1,151 @@
+stage: features
+name: features-trace
+fixture_extras: [trace_cases]
+steps:
+  - name: viewer with one trace
+    method: GET
+    path: /perfetto
+    query:
+      trace: https://example.invalid/one-trace.json
+    expect_status: 200
+  - name: viewer with two traces
+    method: GET
+    path: /perfetto
+    query:
+      trace: https://example.invalid/first-trace.json
+      dir: "${tree.root}/${extras.trace_cases.directory}"
+      pattern: rank1.json
+      title: Two synthetic traces
+    expect_status: 200
+  - name: viewer directory discovery with pattern
+    method: GET
+    path: /perfetto
+    query:
+      trace: https://example.invalid/first-trace.json
+      dir: "${tree.root}/${extras.trace_cases.directory}"
+      pattern: rank*.json
+      title: Discovered synthetic traces
+    expect_status: 200
+  - name: viewer with remote URL
+    method: GET
+    path: /perfetto
+    query:
+      trace: https://example.invalid/trace.json
+    expect_status: 200
+  - name: viewer title override
+    method: GET
+    path: /perfetto
+    query:
+      trace: https://example.invalid/title-trace.json
+      title: Synthetic title
+    expect_status: 200
+  - name: viewer slim option
+    method: GET
+    path: /perfetto
+    query:
+      trace: https://example.invalid/first-trace.json
+      dir: "${tree.root}/${extras.trace_cases.directory}"
+      pattern: rank0.json
+      slim: "true"
+      title: Slim option
+    expect_status: 200
+  - name: viewer invalid slim query
+    method: GET
+    path: /perfetto
+    query:
+      trace: https://example.invalid/one-trace.json
+      slim: "invalid"
+    expect_status: 422
+    compare: status_and_shape
+  - name: viewer without inputs
+    method: GET
+    path: /perfetto
+    expect_status: 400
+  - name: merged direct pass
+    method: GET
+    path: /perfetto/merged
+    query:
+      trace: "${tree.root}/${extras.trace_cases.rank0}"
+    expect_status: 200
+  - name: merged single trace in slim mode
+    method: GET
+    path: /perfetto/merged
+    query:
+      trace: "${tree.root}/${extras.trace_cases.slim}"
+      slim: "true"
+    expect_status: 200
+  - name: merged two traces
+    method: GET
+    path: /perfetto/merged
+    query:
+      trace: "${tree.root}/${extras.trace_cases.rank0}"
+      dir: "${tree.root}/${extras.trace_cases.directory}"
+      pattern: rank1.json
+    expect_status: 200
+  - name: merged directory discovery
+    method: GET
+    path: /perfetto/merged
+    query:
+      dir: "${tree.root}/${extras.trace_cases.directory}"
+      pattern: rank*.json
+    expect_status: 200
+  - name: merged direct pass cache miss
+    method: GET
+    path: /perfetto/merged
+    query:
+      trace: "${tree.root}/${extras.trace_cases.rank1}"
+    expect_status: 200
+  - name: merged direct pass cache hit
+    method: GET
+    path: /perfetto/merged
+    query:
+      trace: "${tree.root}/${extras.trace_cases.rank1}"
+    expect_status: 200
+  - name: missing trace path
+    method: GET
+    path: /perfetto/merged
+    query:
+      trace: "${tree.root}/workspace/trace-cases/missing.json"
+    expect_status: 404
+  - name: non-JSON trace file
+    method: GET
+    path: /perfetto/merged
+    query:
+      trace: "${tree.root}/${extras.trace_cases.not_json}"
+    expect_status: 400
+  - name: JSON without trace events
+    method: GET
+    path: /perfetto/merged
+    query:
+      trace: "${tree.root}/${extras.trace_cases.non_trace}"
+    expect_status: 500
+  - name: malformed JSON trace
+    method: GET
+    path: /perfetto/merged
+    query:
+      trace: "${tree.root}/${extras.trace_cases.malformed}"
+    expect_status: 500
+  - name: merged route without inputs
+    method: GET
+    path: /perfetto/merged
+    expect_status: 400
+  - name: merged invalid slim query
+    method: GET
+    path: /perfetto/merged
+    query:
+      trace: "${tree.root}/${extras.trace_cases.rank0}"
+      slim: "invalid"
+    expect_status: 422
+    compare: status_and_shape
+  - name: HEAD, viewer with one trace
+    method: HEAD
+    path: /perfetto
+    query:
+      trace: https://example.invalid/one-trace.json
+    expect_status: 405
+  - name: HEAD, merged direct pass
+    method: HEAD
+    path: /perfetto/merged
+    query:
+      trace: "${tree.root}/${extras.trace_cases.rank0}"
+    expect_status: 405

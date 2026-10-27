@@ -1,0 +1,244 @@
+stage: features
+name: features-harness-discord
+config:
+  discord:
+    allowed_users:
+      "900000000000000099": Synthetic user
+credentials:
+  discord:
+    bot_token: discord-parity-synthetic-token
+fakes:
+  discord:
+    channels:
+      "900000000000000020":
+        id: "900000000000000020"
+        type: 0
+        name: parity-room
+    messages:
+      "900000000000000070":
+        - id: "900000000000000081"
+          channel_id: "900000000000000070"
+          type: 0
+          author: {id: "900000000000000099", username: synthetic-user, bot: false}
+          content: Synthetic message at startup.
+          timestamp: "2026-08-26T00:00:01Z"
+fixture_extras: [discord_thread, discord_backfill]
+fake_agent:
+  starts:
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-discord-summon}
+        - gate: discord-summon-start
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: Synthetic Discord summon round ended silently.}]
+        - emit:
+            type: result
+            result: ""
+            usage: {input_tokens: 2, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+        - gate: discord-summon-result
+      exit_code: 0
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-discord-nudge}
+        - emit:
+            type: result
+            result: ""
+            usage: {input_tokens: 2, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+      exit_code: 0
+expect_starts: 2
+comparison_rules:
+  # Python does not order the round-end audit's nudge (agent_message, written at
+  # src/features/chat_threads/thread_entry.py:700-704) against the turn's run_finished. The Discord after_turn calls
+  # discord_listener.deliver_done (src/features/discord/turn_contribution.py:24-27) in its own task
+  # (src/runtime/session_events.py:156-161), while the finish callback writes run_finished after the master_done
+  # broadcast (src/runtime/master_cc_queue.py:304-309). The rule accepts either order for this pair only: the nudge is
+  # the one agent_message with the nudge's content.
+  - either_order_of_adjacent_events:
+      first:
+        type: agent_message
+        match_fields:
+          content: |-
+            Discord thread: the round answering this mention ended without posting a reply. Decide now:
+            when the thread should hear something, post a reply; when there is nothing to say, end this
+            round and the thread gets a one-line notice pointing to this session.
+      second:
+        type: run_finished
+        match_fields: {outcome: success}
+  # Python does not order the no-reply notice (assistant_error, written at
+  # src/features/chat_threads/thread_entry.py:732-739) against run_finished either. It comes from the same Discord
+  # after_turn (src/features/discord/turn_contribution.py:24-27) in its own task
+  # (src/runtime/session_events.py:156-161), while run_finished follows the master_done broadcast
+  # (src/runtime/master_cc_queue.py:304-309). The rule accepts either order for this pair only: the notice is the one
+  # assistant_error with the notice's content.
+  - either_order_of_adjacent_events:
+      first:
+        type: assistant_error
+        match_fields:
+          content: This Discord mention got no reply from its round or the nudge round; the thread was told so.
+      second:
+        type: run_finished
+        match_fields: {outcome: success}
+steps:
+  - kind: log_event
+    name: boot backfill reports the lost Discord summon
+    event: discord_backfill_lost_summon
+    fields:
+      input_event_id: synthetic-discord-lost-summon
+    timeout_seconds: 30
+  - kind: fake
+    name: allowed user mention starts a Discord thread session
+    fake: discord
+    action: dispatch
+    payload:
+      t: MESSAGE_CREATE
+      d:
+        id: "900000000000000090"
+        type: 0
+        channel_id: "900000000000000020"
+        guild_id: "900000000000000010"
+        author:
+          id: "900000000000000099"
+          username: synthetic-user
+          bot: false
+        content: "<@900000000000000001> plan the release"
+        mentions: [{id: "900000000000000001", username: parity-bot, bot: true}]
+  - kind: wait
+    name: summon event is stored in its deterministic thread session
+    timeout_seconds: 30
+    until:
+      event:
+        session: 886851b2-971c-5a81-a7b6-d76be2405b8e
+        type: agent_message
+        fields:
+          content: Discord 线程召唤
+          discord:
+            guild_id: "900000000000000010"
+            channel_id: "900000000000000020"
+            thread_id: "900000000000000102"
+            mention_id: "900000000000000090"
+  - kind: wait
+    name: summon agent reaches its start gate
+    timeout_seconds: 30
+    until: {at_gate: discord-summon-start}
+  - kind: gate
+    name: release the summon agent to run
+    open: discord-summon-start
+  - kind: fake
+    name: message from a disallowed user is dropped
+    fake: discord
+    action: dispatch
+    payload:
+      t: MESSAGE_CREATE
+      d:
+        id: "900000000000000040"
+        type: 0
+        channel_id: "900000000000000020"
+        guild_id: "900000000000000010"
+        author:
+          id: "900000000000000098"
+          username: synthetic-outsider
+          bot: false
+  - kind: fake
+    name: bot-authored mention is dropped
+    fake: discord
+    action: dispatch
+    payload:
+      t: MESSAGE_CREATE
+      d:
+        id: "900000000000000091"
+        type: 0
+        channel_id: "900000000000000020"
+        guild_id: "900000000000000010"
+        author:
+          id: "900000000000000099"
+          username: Synthetic user
+          bot: true
+        content: "<@900000000000000001> ignore the bot"
+        mentions: [{id: "900000000000000001"}]
+  - kind: fake
+    name: direct message mention gets a notice
+    fake: discord
+    action: dispatch
+    payload:
+      t: MESSAGE_CREATE
+      d:
+        id: "900000000000000092"
+        type: 0
+        channel_id: "900000000000000093"
+        author:
+          id: "900000000000000099"
+          username: synthetic-user
+          bot: false
+        content: "<@900000000000000001> hello"
+        mentions: [{id: "900000000000000001"}]
+  - kind: log_event
+    name: direct message notice is posted
+    event: discord_dm_notice_posted
+    fields:
+      channel: "900000000000000093"
+      user: "900000000000000099"
+    timeout_seconds: 30
+  - kind: fake
+    name: eligible thread follow arms its trigger
+    fake: discord
+    action: dispatch
+    payload:
+      t: MESSAGE_CREATE
+      d:
+        id: "900000000000000094"
+        type: 0
+        channel_id: "900000000000000102"
+        guild_id: "900000000000000010"
+        author:
+          id: "900000000000000099"
+          username: synthetic-user
+          bot: false
+        content: Synthetic follow-up message.
+        mentions: []
+  - kind: log_event
+    name: follow trigger stores its floor
+    event: discord_follow_trigger_armed
+    fields:
+      session: 886851b2-971c-5a81-a7b6-d76be2405b8e
+    timeout_seconds: 30
+  - kind: wait
+    name: summon agent reaches its silent result
+    timeout_seconds: 30
+    until: {at_gate: discord-summon-result}
+  - kind: gate
+    name: release the silent summon result
+    open: discord-summon-result
+  - kind: wait
+    name: the silent round records its nudge
+    timeout_seconds: 30
+    until:
+      event:
+        session: 886851b2-971c-5a81-a7b6-d76be2405b8e
+        type: agent_message
+        count: 2
+  - kind: log_event
+    name: the nudge round posts the Discord notice
+    event: discord_reply_notice
+    fields:
+      session: 886851b2-971c-5a81-a7b6-d76be2405b8e
+    timeout_seconds: 30
+  - kind: wait
+    name: the Discord no-reply notice is persisted
+    timeout_seconds: 30
+    until:
+      event:
+        session: 886851b2-971c-5a81-a7b6-d76be2405b8e
+        type: assistant_error
+  - name: reply to the fixture Discord thread
+    method: POST
+    path: /api/internal/discord/reply
+    json:
+      session_id: ${extras.discord_thread.session}
+      text: Synthetic Discord parity reply.
+    expect_status: 200

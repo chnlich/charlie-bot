@@ -1,0 +1,60 @@
+# The first server starts a one-iteration improve loop and stops with the iteration in flight: its agent stays alive
+# behind a gate. The second server's startup marks the loop interrupted, so the loop's state file records it.
+stage: triggers-cron-improve
+name: handover-improve
+fixture_extras: [worker_repo]
+fake_agent:
+  starts:
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-improve-iteration}
+        - sigterm: ignore
+        - gate: iteration-first
+        - sigterm: default
+        - gate: iteration-second
+        - emit: {type: result, result: "", usage: {input_tokens: 1, output_tokens: 1}}
+      exit_code: 0
+expect_starts: 2  # The iteration's agent, and the manager turn that the loop's final report wakes.
+directions: [python-to-candidate, candidate-to-python]
+steps:
+  - name: start a one-iteration loop on the worker repository
+    method: POST
+    path: /api/internal/improve
+    json:
+      session_id: ${sessions.atlas}
+      repo_path: ${tree.root}/${extras.worker_repo.repo}
+      base_branch: main
+      goal: Optimize the synthetic loop.
+      work_branch: improve/handover
+      iterations: 1
+    capture: {child: child_session_id}
+    expect_status: 200
+    defer_files: true
+  - kind: wait
+    name: wait for the iteration at its first gate
+    timeout_seconds: 60
+    until: {at_gate: iteration-first}
+  - kind: handover
+    name: hand over the loop with its iteration in flight
+    agent_after_stop: alive
+    open_while_stopped: iteration-first
+    timeout_seconds: 60
+  - kind: wait
+    name: wait for the second server to mark the loop interrupted
+    timeout_seconds: 60
+    until:
+      file_field:
+        path: sessions/${sessions.atlas}/loops/1/state.json
+        field: status
+        equals: interrupted
+  - kind: gate
+    name: release the iteration's second gate so its agent exits
+    open: iteration-second
+  - kind: wait
+    name: wait for the iteration run to finish after its agent exits
+    timeout_seconds: 60
+    until:
+      event:
+        session: ${capture.child}
+        type: run_finished
+        count: 1

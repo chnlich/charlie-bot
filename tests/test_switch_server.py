@@ -1067,9 +1067,8 @@ def test_switch_on_a_real_pane_restores_then_round_trips_then_exits_3(world: Wor
   The steps share one test because the integration cap leaves a single slot. Each step builds on the state the
   previous one leaves, so the order is the test.
   """
-  # Stops wait 1 s here: the switch back stops a release that ignores SIGTERM, which exercises the SIGKILL escalation
-  # within the budget.
-  world.env["CHARLIEBOT_SWITCH_STOP_WAIT_S"] = "1"
+  # This release ignores SIGTERM, so a zero stop wait reaches the SIGKILL path at once.
+  world.env["CHARLIEBOT_SWITCH_STOP_WAIT_S"] = "0"
   pane = _start_pane(world)
   _start_server(world, pane)
   _seed_live_run(world, "run-live", "claude-opus")

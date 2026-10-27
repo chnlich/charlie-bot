@@ -513,14 +513,14 @@ serving() {
   }
 }
 
-# probe_clock: the wall clock in microseconds. The probe's waits use it, because SECONDS is too coarse for the
+# check_clock: the wall clock in microseconds. The waits use it, because SECONDS is too coarse for the
 # one-second waits the tests use.
-probe_clock() { echo "${EPOCHREALTIME/[.,]/}"; }
+check_clock() { echo "${EPOCHREALTIME/[.,]/}"; }
 
-# probe_api END METHOD PATH BODY: makes an archive-step request with the time left before END as its curl timeout.
-probe_api() {
+# check_api END METHOD PATH BODY: makes an archive-step request with the time left before END as its curl timeout.
+check_api() {
   local end=$1 method=$2 path=$3 body=$4 remaining_us timeout_s
-  remaining_us=$((end - $(probe_clock)))
+  remaining_us=$((end - $(check_clock)))
   if [ "$remaining_us" -le 0 ]; then
     API_STATUS=000
     return 0
@@ -530,10 +530,10 @@ probe_api() {
   api "$method" "$path" "$body" "$timeout_s"
 }
 
-# probe_sleep END: sleeps for one poll interval, shortened to the time left before END.
-probe_sleep() {
+# check_sleep END: sleeps for one poll interval, shortened to the time left before END.
+check_sleep() {
   local end=$1 remaining_us sleep_s
-  remaining_us=$((end - $(probe_clock)))
+  remaining_us=$((end - $(check_clock)))
   [ "$remaining_us" -gt 0 ] || return 0
   if [ "$remaining_us" -gt 200000 ]; then
     sleep 0.2
@@ -543,21 +543,22 @@ probe_sleep() {
   fi
 }
 
-# probe_log STAGE: one line for a probe stage, with the session, the run ("-" until one exists) and the elapsed
-# seconds.
-probe_log() {
-  log "probe: $1 session=$PROBE_SESSION run=${PROBE_RUN:--} elapsed=$((($(probe_clock) - PROBE_START) / 1000000))s"
+# check_log STAGE: one line for a stage of the check named by CHECK_LABEL, with the session, the run ("-" until one
+# exists) and the elapsed seconds.
+check_log() {
+  log "$CHECK_LABEL: $1 session=$CHECK_SESSION run=${CHECK_RUN:--}" \
+    "elapsed=$((($(check_clock) - CHECK_START) / 1000000))s"
 }
 
-# probe_read_run: the session's newest Run into PROBE_RUN and PROBE_STATE; both are empty while the session has no run.
-probe_read_run() {
-  api GET "/api/sessions/$PROBE_SESSION/runs?order=desc&limit=1"
+# check_read_run: the session's newest Run into CHECK_RUN and CHECK_STATE; both are empty while the session has no run.
+check_read_run() {
+  api GET "/api/sessions/$CHECK_SESSION/runs?order=desc&limit=1"
   [ "$API_STATUS" = 200 ] || {
-    log "probe: listing the runs answered $API_STATUS"
+    log "$CHECK_LABEL: listing the runs answered $API_STATUS"
     return 1
   }
-  PROBE_RUN="$(newest_run_field id)" || return 1
-  PROBE_STATE="$(newest_run_field state)" || return 1
+  CHECK_RUN="$(newest_run_field id)" || return 1
+  CHECK_STATE="$(newest_run_field state)" || return 1
 }
 
 # run_ended STATE: the run has ended. A stopped run never launched, so it never will.
@@ -585,38 +586,38 @@ PY
 # ends without output, or when PROBE_WAIT_S passes first. The run is read before the messages, so output recorded
 # before a failure still counts.
 probe_wait_output() {
-  local end=$(($(probe_clock) + PROBE_WAIT_S * 1000000)) outputs
+  local end=$(($(check_clock) + PROBE_WAIT_S * 1000000)) outputs
   while :; do
-    probe_read_run || return 1
-    if [ "$PROBE_STATE" = success ]; then
-      probe_log "run ended success"
+    check_read_run || return 1
+    if [ "$CHECK_STATE" = success ]; then
+      check_log "run ended success"
       return 0
     fi
-    api GET "/api/sessions/$PROBE_SESSION/bootstrap"
+    api GET "/api/sessions/$CHECK_SESSION/bootstrap"
     [ "$API_STATUS" = 200 ] || {
       log "probe: the bootstrap answered $API_STATUS"
       return 1
     }
     outputs="$(assistant_messages)" || return 1
     if [ "$outputs" -gt 0 ]; then
-      probe_log "first output"
+      check_log "first output"
       return 0
     fi
-    if run_ended "$PROBE_STATE"; then
-      probe_log "run ended $PROBE_STATE before its first output"
+    if run_ended "$CHECK_STATE"; then
+      check_log "run ended $CHECK_STATE before its first output"
       return 1
     fi
-    if [ "$(probe_clock)" -ge "$end" ]; then
-      probe_log "no output within ${PROBE_WAIT_S}s"
+    if [ "$(check_clock)" -ge "$end" ]; then
+      check_log "no output within ${PROBE_WAIT_S}s"
       return 1
     fi
     sleep 0.2
   done
 }
 
-# probe_run_stages: sends the message and waits for the run's first output. probe_archive stops the run if it is open.
+# probe_run_stages: sends the message and waits for the run's first output. check_archive stops the run if it is open.
 probe_run_stages() {
-  api POST "/api/chat/$PROBE_SESSION/message" "{\"content\":\"Reply with the single word HELLO.\",\"request_id\":\"switch-server-probe:$PROBE_SESSION\"}"
+  api POST "/api/chat/$CHECK_SESSION/message" "{\"content\":\"Reply with the single word HELLO.\",\"request_id\":\"switch-server-probe:$CHECK_SESSION\"}"
   [ "$API_STATUS" = 202 ] || {
     log "probe: the message answered $API_STATUS"
     return 1
@@ -633,47 +634,47 @@ import sys
 
 page = json.load(open(sys.argv[1]))
 if page["next_cursor"] is not None:
-  raise SystemExit("probe: the session has more than 500 runs")
+  raise SystemExit("the session has more than 500 runs")
 for run in page["items"]:
   print(run["id"], run["state"])
 PY
 }
 
-# probe_cancel RUN END: asks RUN to stop. The request id names the run, so a repeated request is the same request.
-probe_cancel() {
-  PROBE_RUN=$1
-  probe_api "$2" POST "/api/sessions/$PROBE_SESSION/runs/$PROBE_RUN/cancel" \
-    "{\"request_id\":\"switch-probe-$PROBE_RUN\"}"
+# check_cancel RUN END: asks RUN to stop. The request id names the run, so a repeated request is the same request.
+check_cancel() {
+  CHECK_RUN=$1
+  check_api "$2" POST "/api/sessions/$CHECK_SESSION/runs/$CHECK_RUN/cancel" \
+    "{\"request_id\":\"switch-stop-$CHECK_RUN\"}"
   [ "$API_STATUS" = 200 ] || {
-    log "probe: the cancel answered $API_STATUS"
+    log "$CHECK_LABEL: the cancel answered $API_STATUS"
     return 1
   }
-  probe_log "stop requested"
+  check_log "stop requested"
 }
 
-# probe_clear_runs END: stops each run of the probe session that has not ended, then waits until none is left or the
+# check_clear_runs END: stops each run of CHECK_SESSION that has not ended, then waits until none is left or the
 # clock passes END. A run that starts meanwhile is stopped the same way.
-probe_clear_runs() {
+check_clear_runs() {
   local end=$1 requested=" " runs run_id state stuck="" issued
   while :; do
-    if [ "$(probe_clock)" -ge "$end" ]; then
+    if [ "$(check_clock)" -ge "$end" ]; then
       if [ -n "$stuck" ]; then
-        PROBE_RUN=$stuck
-        probe_log "run did not settle within ${PROBE_CANCEL_WAIT_S}s"
+        CHECK_RUN=$stuck
+        check_log "run did not settle within ${PROBE_CANCEL_WAIT_S}s"
       else
-        probe_log "archive did not finish within ${PROBE_CANCEL_WAIT_S}s"
+        check_log "archive did not finish within ${PROBE_CANCEL_WAIT_S}s"
       fi
       return 1
     fi
-    probe_api "$end" GET "/api/sessions/$PROBE_SESSION/runs?limit=500" ""
+    check_api "$end" GET "/api/sessions/$CHECK_SESSION/runs?limit=500" ""
     [ "$API_STATUS" = 200 ] || {
-      log "probe: listing the runs answered $API_STATUS"
+      log "$CHECK_LABEL: listing the runs answered $API_STATUS"
       return 1
     }
     runs="$(run_states)" || return 1
     if [ -z "$runs" ]; then
-      if [ "$(probe_clock)" -ge "$end" ]; then
-        probe_log "archive did not finish within ${PROBE_CANCEL_WAIT_S}s"
+      if [ "$(check_clock)" -ge "$end" ]; then
+        check_log "archive did not finish within ${PROBE_CANCEL_WAIT_S}s"
         return 1
       fi
       return 0
@@ -688,38 +689,38 @@ probe_clear_runs() {
         *)
           requested+="$run_id "
           issued=1
-          probe_cancel "$run_id" "$end" || return 1
+          check_cancel "$run_id" "$end" || return 1
           ;;
       esac
     done <<<"$runs"
     [ -n "$stuck" ] || return 0
-    if [ "$(probe_clock)" -ge "$end" ]; then
-      PROBE_RUN=$stuck
-      probe_log "run did not settle within ${PROBE_CANCEL_WAIT_S}s"
+    if [ "$(check_clock)" -ge "$end" ]; then
+      CHECK_RUN=$stuck
+      check_log "run did not settle within ${PROBE_CANCEL_WAIT_S}s"
       return 1
     fi
     # A pass that just requested a stop reads the runs again at once; a pass that only waits sleeps one poll interval.
-    [ "$issued" = 1 ] || probe_sleep "$end"
+    [ "$issued" = 1 ] || check_sleep "$end"
   done
 }
 
-# probe_archive: archives the probe session. Each attempt first stops the session's open runs, because the server
+# check_archive: archives CHECK_SESSION. Each attempt first stops the session's open runs, because the server
 # refuses an archive while a run is unfinished. A 409 means a run started after that stop, so the stop and the archive
 # repeat until PROBE_CANCEL_WAIT_S passes.
-probe_archive() {
-  local end=$(($(probe_clock) + PROBE_CANCEL_WAIT_S * 1000000))
+check_archive() {
+  local end=$(($(check_clock) + PROBE_CANCEL_WAIT_S * 1000000))
   while :; do
-    probe_clear_runs "$end" || return 1
-    probe_api "$end" POST "/api/sessions/$PROBE_SESSION/archive" \
-      "{\"request_id\":\"switch-probe-archive:$PROBE_SESSION\"}"
+    check_clear_runs "$end" || return 1
+    check_api "$end" POST "/api/sessions/$CHECK_SESSION/archive" \
+      "{\"request_id\":\"switch-archive:$CHECK_SESSION\"}"
     if [ "$API_STATUS" = 200 ]; then
-      probe_log "archived"
+      check_log "archived"
       return 0
     fi
-    probe_log "archive answered $API_STATUS"
+    check_log "archive answered $API_STATUS"
     [ "$API_STATUS" = 409 ] || return 1
-    [ "$(probe_clock)" -lt "$end" ] || return 1
-    probe_sleep "$end"
+    [ "$(check_clock)" -lt "$end" ] || return 1
+    check_sleep "$end"
   done
 }
 
@@ -727,19 +728,20 @@ probe_archive() {
 # home keeps no open probe session.
 probe_turn() {
   local verdict=0
-  PROBE_START="$(probe_clock)"
-  PROBE_SESSION=""
-  PROBE_RUN=""
-  PROBE_STATE=""
+  CHECK_LABEL=probe
+  CHECK_START="$(check_clock)"
+  CHECK_SESSION=""
+  CHECK_RUN=""
+  CHECK_STATE=""
   api POST /api/sessions/ '{"name":"switch probe"}'
   [ "$API_STATUS" = 200 ] || {
     log "probe: creating a session answered $API_STATUS"
     return 1
   }
-  PROBE_SESSION="$(json_field id)" || return 1
-  probe_log "created"
+  CHECK_SESSION="$(json_field id)" || return 1
+  check_log "created"
   probe_run_stages || verdict=1
-  probe_archive || verdict=1
+  check_archive || verdict=1
   return "$verdict"
 }
 

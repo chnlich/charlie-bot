@@ -43,9 +43,7 @@ use crate::master_queue::{MasterQueue, SessionCallbacks};
 use crate::master_run;
 use crate::master_state::{MasterResumeRecord, MasterResumeRequest, ResumeLiveness, TaskRunBinding, TaskSpawnCallback};
 
-/// The end-landing retry's cadence: the first round runs at once and later rounds every interval, with no round limit
-/// (`task_execution.py`, `RUN_END_LANDING_RETRY_INTERVAL_SECONDS`).
-pub const RUN_END_LANDING_RETRY_INTERVAL: Duration = Duration::from_secs(30);
+pub use crate::execution::{RUN_END_LANDING_RETRY_INTERVAL, closed_task_stop_request_id};
 const DRIVEN_RUN_RELEASE_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const BOOT_RECOVERY_MARKER_PATH: &str = "state/boot_recovery.json";
 /// A durable file whose mtime is no earlier than the marker minus this slack keeps its node
@@ -181,32 +179,6 @@ pub struct PassCounters {
   pub keep_reasons: BTreeMap<String, u64>,
 }
 
-/// The process-local state of the recovery: the resume follows this process drives, and the nodes that run an
-/// end-landing retry. Nothing here is durable; every round re-derives its work from the facts on disk.
-#[derive(Default)]
-pub(crate) struct RecoveryState {
-  pub(crate) resume_follows: Mutex<HashSet<(String, String)>>,
-  landing_retries: Mutex<HashSet<String>>,
-  #[cfg(feature = "test-hooks")]
-  reconcile_node_calls: AtomicUsize,
-  #[cfg(feature = "test-hooks")]
-  landing_retry_interval: Mutex<Option<Duration>>,
-}
-
-impl RecoveryState {
-  /// The end-landing retry's interval: the production constant unless a test hook replaced it.
-  fn landing_retry_interval(&self) -> Duration {
-    #[cfg(feature = "test-hooks")]
-    {
-      let replaced = *self.landing_retry_interval.lock().expect("landing retry interval is not poisoned");
-      if let Some(interval) = replaced {
-        return interval;
-      }
-    }
-    RUN_END_LANDING_RETRY_INTERVAL
-  }
-}
-
 /// Test hooks over the recovery state (feature `test-hooks`): a shorter end-landing retry interval, and read access to
 /// the nodes with a live retry task and to the resume follows this process holds.
 #[cfg(feature = "test-hooks")]
@@ -234,6 +206,49 @@ impl TaskExecutionAdapter {
   /// The (session, run) pairs whose resume follow this process holds.
   pub fn resume_follows(&self) -> HashSet<(String, String)> {
     self.recovery.resume_follows.lock().expect("resume follow set is not poisoned").clone()
+  }
+}
+
+/// The adapter operations the recovery owns, as instance accessors: the launch and after-run paths reach them through
+/// the adapter they hold, without naming this module.
+impl TaskExecutionAdapter {
+  /// Re-attach one launched run, or drain it when its process is dead. A manager turn re-enters the per-session queue;
+  /// the follow is tracked and this call returns before it ends.
+  pub async fn resume_run(
+    &self,
+    session_id: &str,
+    run_id: &str,
+    is_alive: Option<ResumeLiveness>,
+  ) -> anyhow::Result<()> {
+    let key = (session_id.to_string(), run_id.to_string());
+    self.recovery.resume_follows.lock().expect("resume follow set is not poisoned").insert(key.clone());
+    let result = resume_run_checked(self, session_id, run_id, is_alive).await;
+    // Ownership passes to the manager follow's tracker only on success; every other exit releases the pair here.
+    if !matches!(result, Ok(true)) {
+      self.recovery.resume_follows.lock().expect("resume follow set is not poisoned").remove(&key);
+    }
+    result.map(|_| ())
+  }
+
+  /// Start the node's end-landing retry task; a second request for the node is a no-op.
+  pub(crate) fn start_run_end_landing_retry(&self, session_id: &str, run_id: Option<&str>) {
+    start_end_landing_retry(self.clone(), session_id, run_id)
+  }
+
+  /// The registered controller that owns a sequence kind, or `None` when no registered controller claims it (its
+  /// package was deleted). A kind in `UNLANDED_SEQUENCE_KINDS` fails by name instead: its controller has not landed.
+  pub(crate) fn owning_controller(
+    &self,
+    kind: &str,
+    step: &str,
+  ) -> anyhow::Result<Option<Arc<dyn SequenceController>>> {
+    owning_controller(&self.features, kind, step)
+  }
+
+  /// The task-tree handle the sequence controllers use: the dispatcher, the completion owner, the store's session
+  /// events, and this adapter as the launch executor.
+  pub(crate) fn sequence_tree(&self) -> anyhow::Result<StoreSequenceTree> {
+    sequence_tree(&self.features, self)
   }
 }
 
@@ -512,7 +527,7 @@ async fn reconcile_node_inner(
       counters.drained += 1;
       tracing::warn!(target: "charliebot_tasks", session_id, run_id = %run.id, "task_recovery_drain");
       let ended = Arc::new(|| false) as ResumeLiveness;
-      resume_run(adapter, session_id, &run.id, Some(ended)).await?;
+      adapter.resume_run(session_id, &run.id, Some(ended)).await?;
       run_records_changed = true;
     }
   }
@@ -809,30 +824,6 @@ fn replay_review_facts_until<'a>(
     return None;
   }
   Some(facts)
-}
-
-/// The stop-request id settling a never-launched run on a closed node (`closed_task_stop_request_id`). The launch path
-/// and the startup pass derive the same id, so a run both settle carries one `run_stop_requested` fact.
-pub fn closed_task_stop_request_id(run_id: &str) -> String {
-  format!("closed-task:{run_id}")
-}
-
-/// Re-attach one launched run, or drain it when its process is dead (`resume_run`). A manager turn re-enters the
-/// per-session queue; the follow is tracked and this call returns before it ends.
-pub async fn resume_run(
-  adapter: &TaskExecutionAdapter,
-  session_id: &str,
-  run_id: &str,
-  is_alive: Option<ResumeLiveness>,
-) -> anyhow::Result<()> {
-  let key = (session_id.to_string(), run_id.to_string());
-  adapter.recovery.resume_follows.lock().expect("resume follow set is not poisoned").insert(key.clone());
-  let result = resume_run_checked(adapter, session_id, run_id, is_alive).await;
-  // Ownership passes to the manager follow's tracker only on success; every other exit releases the pair here.
-  if !matches!(result, Ok(true)) {
-    adapter.recovery.resume_follows.lock().expect("resume follow set is not poisoned").remove(&key);
-  }
-  result.map(|_| ())
 }
 
 /// `resume_run`'s checks and enqueue. True when the manager follow's tracker took over the registered pair.

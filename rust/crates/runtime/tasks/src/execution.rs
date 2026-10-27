@@ -6,6 +6,7 @@ use std::fs;
 use std::fs::OpenOptions;
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -42,7 +43,6 @@ use crate::master_queue::{MasterQueue, PersistAndBroadcastFn, SessionCallbacks, 
 use crate::master_run;
 use crate::master_state::{MasterTurnRequest, TaskFinishCallback, TaskRunBinding, TaskSpawnCallback};
 use crate::prompts::{self, PromptSnapshot, TaskPromptError};
-use crate::recovery::{self, RecoveryState};
 use crate::review;
 use crate::review_text;
 use crate::run_support::visit_events_from_end;
@@ -83,6 +83,42 @@ pub(crate) struct LaunchState {
   tasks: HashMap<LaunchKey, JoinHandle<()>>,
   /// Set when the let-go step begins: a launch scheduled after it starts no task.
   let_go: bool,
+}
+
+/// The end-landing retry's cadence: the first round runs at once and later rounds every interval, with no round limit
+/// (`task_execution.py`, `RUN_END_LANDING_RETRY_INTERVAL_SECONDS`).
+pub const RUN_END_LANDING_RETRY_INTERVAL: Duration = Duration::from_secs(30);
+
+/// The process-local state of the recovery: the resume follows this process drives, and the nodes that run an
+/// end-landing retry. Nothing here is durable; every round re-derives its work from the facts on disk.
+#[derive(Default)]
+pub(crate) struct RecoveryState {
+  pub(crate) resume_follows: Mutex<HashSet<(String, String)>>,
+  pub(crate) landing_retries: Mutex<HashSet<String>>,
+  #[cfg(feature = "test-hooks")]
+  pub(crate) reconcile_node_calls: AtomicUsize,
+  #[cfg(feature = "test-hooks")]
+  pub(crate) landing_retry_interval: Mutex<Option<Duration>>,
+}
+
+impl RecoveryState {
+  /// The end-landing retry's interval: the production constant unless a test hook replaced it.
+  pub(crate) fn landing_retry_interval(&self) -> Duration {
+    #[cfg(feature = "test-hooks")]
+    {
+      let replaced = *self.landing_retry_interval.lock().expect("landing retry interval is not poisoned");
+      if let Some(interval) = replaced {
+        return interval;
+      }
+    }
+    RUN_END_LANDING_RETRY_INTERVAL
+  }
+}
+
+/// The stop-request id settling a never-launched run on a closed node. The launch path and the startup pass derive the
+/// same id, so a run both settle carries one `run_stop_requested` fact.
+pub fn closed_task_stop_request_id(run_id: &str) -> String {
+  format!("closed-task:{run_id}")
 }
 
 /// The manager execution adapter for durable task runs.
@@ -289,7 +325,7 @@ impl TaskExecutionAdapter {
     if let Some((reason, settle_closed)) = withheld {
       self.record_launch_withheld(&meta, &run, &reason).await?;
       if settle_closed {
-        self.features.store.request_stop(session_id, run_id, &recovery::closed_task_stop_request_id(run_id)).await?;
+        self.features.store.request_stop(session_id, run_id, &closed_task_stop_request_id(run_id)).await?;
       }
       return Ok(LaunchSettlement { outcome: None, withheld: Some(format!("withheld: {reason}")) });
     }
@@ -651,7 +687,7 @@ impl TaskExecutionAdapter {
       }
     } else if let Some(sequence_ref) = &run.sequence_ref {
       let step = format!("the launch context of run {run_id}");
-      let Some(controller) = recovery::owning_controller(&self.features, &sequence_ref.kind, &step)? else {
+      let Some(controller) = self.owning_controller(&sequence_ref.kind, &step)? else {
         // Python raises TaskInvalidError here (`task_execution.py:1390-1394`), before any process starts.
         return Err(
           SequenceRunWithoutControllerError {
@@ -1361,7 +1397,7 @@ impl TaskExecutionAdapter {
     let session_id = meta.id.as_str();
     if let Some(sequence_ref) = &run.sequence_ref {
       let step = format!("the after-run duty for run {}", run.id);
-      let Some(controller) = recovery::owning_controller(&self.features, &sequence_ref.kind, &step)? else {
+      let Some(controller) = self.owning_controller(&sequence_ref.kind, &step)? else {
         // A Run whose owning package is gone only logs its finish (`task_execution.py:2168-2176`).
         tracing::warn!(
           target: "charliebot_tasks",
@@ -1372,7 +1408,7 @@ impl TaskExecutionAdapter {
         );
         return Ok(());
       };
-      let tree = recovery::sequence_tree(&self.features, self)?;
+      let tree = self.sequence_tree()?;
       controller.after_run(session_id, run, &tree).await?;
       return Ok(());
     }
@@ -2427,11 +2463,6 @@ impl TaskExecutionAdapter {
     self.start_run_end_landing_retry(session_id, Some(run_id));
   }
 
-  /// Start the node's end-landing retry task; a second request for the node is a no-op.
-  pub(crate) fn start_run_end_landing_retry(&self, session_id: &str, run_id: Option<&str>) {
-    recovery::start_end_landing_retry(self.clone(), session_id, run_id);
-  }
-
   /// Follow a live worker run without holding the startup reconcile pass open.
   pub(crate) fn follow_run_in_background(&self, session_id: &str, run_id: &str) {
     let key = (session_id.to_string(), run_id.to_string());
@@ -2440,7 +2471,7 @@ impl TaskExecutionAdapter {
     let session_id = session_id.to_string();
     let run_id = run_id.to_string();
     tokio::spawn(async move {
-      if let Err(error) = recovery::resume_run(&adapter, &session_id, &run_id, None).await {
+      if let Err(error) = adapter.resume_run(&session_id, &run_id, None).await {
         if is_out_of_space_error(error.as_ref()) {
           adapter.start_run_end_landing_retry(&session_id, Some(&run_id));
         }

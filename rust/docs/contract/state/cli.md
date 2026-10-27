@@ -9,18 +9,18 @@ not confirmed from source, with the reason.
 ## 0. The Rust port
 
 The Rust CLI lives in `rust/crates/app/cli` (binary `charliebot`) with the shared client contract in
-`rust/crates/infra/cli-common`. The `session`, `delegate`, `plan`, `artifact check`, `schedule-trigger`, `compaction-context` and
-`gc-trash` rows in section 3 marked *ported to Rust* run on the Rust binary; every other subcommand prints
-`{"error": "<name> is not ported to the Rust CLI yet"}` and exits 1, and the six caller-less Python names
-(`config`, `disk-sweep`, `router`, `storage`, `usage-ledger`, `voice-replay-eval`) are unknown subcommands
-(exit 2). `artifact wrap` prints `{"error": "artifact wrap is not ported to the Rust CLI yet"}` and exits 1, and
-`artifact publish` keeps the not-ported error of the `artifact` row in the port to come. Golden cases record the
-Python CLI and replay it against the Rust binary; the record and replay commands are in
-`rust/crates/app/cli/README.md`. Rust deviations: no port cache — the port comes from `<home>/config.yaml`'s
-`server` section on every call; argument-parser help and usage text may differ from argparse (the exit codes
-match); the dispatcher's vocabulary is the 14 caller-bearing names, so its help text and
-unknown-subcommand line differ from the Python CLI's; the Python CLI's structlog console lines on stdout (a
-wall-clock stamp and a pid per line) are not reproduced — the golden harness drops them from both sides.
+`rust/crates/infra/cli-common`. The `session`, `delegate`, `plan`, `artifact check`, `schedule-trigger`,
+`compaction-context` and `gc-trash` rows in section 3 marked *ported to Rust* run on the Rust binary; every other
+subcommand prints `{"error": "<name> is not ported to the Rust CLI yet"}` and exits 1, and the six caller-less Python
+names (`config`, `disk-sweep`, `router`, `storage`, `usage-ledger`, `voice-replay-eval`) are unknown subcommands (exit
+2). `artifact wrap` prints `{"error": "artifact wrap is not ported to the Rust CLI yet"}` and exits 1, and `artifact
+publish` keeps the not-ported error of the `artifact` row in the port to come. Golden cases record the Python CLI and
+replay it against the Rust binary; the record and replay commands are in `rust/crates/app/cli/README.md`. Rust
+deviations: no port cache — the port comes from `<home>/config.yaml`'s `server` section on every call; argument-parser
+help and usage text may differ from argparse (the exit codes match); the dispatcher's vocabulary is the 14
+caller-bearing names, so its help text and unknown-subcommand line differ from the Python CLI's; the Python CLI's
+structlog console lines on stdout (a wall-clock stamp and a pid per line) are not reproduced — the golden harness drops
+them from both sides.
 
 ## 1. Dispatcher (`src/app/main.py`)
 

@@ -148,8 +148,28 @@ async fn wait_for_run(
       guard.track(pid);
       tracked = true;
     }
-    if let Some(outcome) = run_records::terminal_outcome(&stack.run_events(session_id)?, run_id)? {
+    let events = stack.run_events(session_id)?;
+    if let Some(outcome) = run_records::terminal_outcome(&events, run_id)? {
       return Ok(outcome);
+    }
+    if Instant::now() >= deadline {
+      let proc_state = run.pid.map(|pid| {
+        std::fs::read_to_string(format!("/proc/{pid}/stat"))
+          .map(|stat| stat.rsplit(") ").next().unwrap_or("").chars().next().unwrap_or('?').to_string())
+          .unwrap_or_else(|error| format!("gone({error})"))
+      });
+      let mine: Vec<String> = events
+        .iter()
+        .filter(|event| event.to_value().to_string().contains(run_id))
+        .map(|event| event.to_value().get("type").and_then(Value::as_str).unwrap_or("?").to_string())
+        .collect();
+      let dir = stack.store().run_dir(session_id, run_id);
+      eprintln!("DIAG run={run:?} proc_state={proc_state:?} run_events={mine:?}");
+      for entry in std::fs::read_dir(&dir)? {
+        let entry = entry?;
+        let meta = entry.metadata()?;
+        eprintln!("DIAG file {:?} len={} modified={:?}", entry.file_name(), meta.len(), meta.modified()?);
+      }
     }
     anyhow::ensure!(Instant::now() < deadline, "run {run_id} did not finish before the test deadline");
     tokio::time::sleep(Duration::from_millis(20)).await;

@@ -161,7 +161,7 @@ pub trait Translate: Send {
 }
 
 /// Whether the spawned child has exited, read by the mid-turn delivery path before it writes.
-pub type ExitedProbe = Arc<dyn Fn() -> bool + Send + Sync>;
+pub use crate::midturn_delivery::ExitedProbe;
 
 /// The per-process pieces of the backend template method. The runner in `charliebot-agents` drives them.
 pub trait AgentBackend: Send {

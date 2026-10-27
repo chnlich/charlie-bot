@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_registry::backend::{BackendLifecycle, Launch, LaunchContext, LaunchKind, LaunchRefused, LaunchWatch};
 use charliebot_store::metadata::{SessionMetadata, ThreadMetadata};
+use charliebot_store::run_records::RunKind;
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
 
@@ -67,6 +68,16 @@ impl BackendLifecycle for ClaudeCliLifecycle {
       let resume_id = self.checked_resume_id(ctx).map_err(|error| refused(error, false, None))?;
       self.launch(ctx, resume_id).map_err(|error| refused(error, false, None))
     })
+  }
+
+  fn midturn_launch_kwargs(
+    &self,
+    meta: &SessionMetadata,
+    turn: bool,
+    run_kind: RunKind,
+    run_id: Option<&str>,
+  ) -> anyhow::Result<Map<String, Value>> {
+    midturn_delivery::launch_kwargs(meta, turn, run_kind, run_id)
   }
 
   fn round_notices(&self, option: &BackendOption, events: &[Value]) -> Vec<Value> {
@@ -290,6 +301,16 @@ impl BackendLifecycle for ClaudeCodeLifecycle {
         LaunchKind::Task => self.place_task(ctx).await,
       }
     })
+  }
+
+  fn midturn_launch_kwargs(
+    &self,
+    meta: &SessionMetadata,
+    turn: bool,
+    run_kind: RunKind,
+    run_id: Option<&str>,
+  ) -> anyhow::Result<Map<String, Value>> {
+    midturn_delivery::launch_kwargs(meta, turn, run_kind, run_id)
   }
 
   fn watch(&self, ctx: &LaunchContext, launch: &Launch) -> Option<Box<dyn LaunchWatch>> {

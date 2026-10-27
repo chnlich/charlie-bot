@@ -106,7 +106,7 @@ impl From<anyhow::Error> for WebReplyError {
 
 /// True for a manager session that no Slack or Discord thread owns (`reply.is_web_session`).
 pub fn is_web_session(meta: &SessionMetadata) -> bool {
-  charliebot_agents::backends::claude_code::midturn_delivery::is_web_session(meta)
+  charliebot_tasks::midturn_delivery::is_web_session(meta)
 }
 
 /// The web session named by `session_id` (`reply.require_web_session`): 404 for an unknown session, 409 for a thread

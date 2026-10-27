@@ -514,11 +514,8 @@ impl RunProcess for TurnProcess<'_> {
       let built =
         backend_types::build_backend(Arc::clone(&self.features.registry), &self.option, &self.item.cfg, launch_args)?;
       if launch.backend_kwargs.get("midturn_delivery").and_then(Value::as_bool).unwrap_or(false) {
-        crate::midturn_delivery::claude_midturn::bind_process(
-          &self.item.task_run.run_id,
-          built.backend.midturn_run_id(),
-        )
-        .await?;
+        charliebot_registry::midturn_delivery::bind_process(&self.item.task_run.run_id, built.backend.midturn_run_id())
+          .await?;
       }
       let runner = Arc::new(AgentRunner::new(built.backend, built.launch.clone()));
       self.was_built = true;

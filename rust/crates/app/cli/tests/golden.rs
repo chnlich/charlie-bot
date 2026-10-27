@@ -13,7 +13,7 @@ use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -383,19 +383,7 @@ fn run_case(case_path: &Path, record_command: Option<&str>) -> Result<(), String
   }
   let mut child = command.spawn().map_err(|error| format!("spawn failed: {error}"))?;
 
-  let started = Instant::now();
-  let status = loop {
-    match child.try_wait().map_err(|error| error.to_string())? {
-      Some(status) => break Some(status),
-      None if started.elapsed() > PROCESS_TIMEOUT => {
-        let _ = child.kill();
-        let _ = child.wait();
-        break None;
-      }
-      None => std::thread::sleep(Duration::from_millis(10)),
-    }
-  };
-  let Some(status) = status else {
+  let Some(status) = wait_bounded(&mut child)? else {
     stub.stop();
     return Err(format!("the CLI process exceeded {} s and was killed", PROCESS_TIMEOUT.as_secs()));
   };
@@ -421,6 +409,22 @@ fn run_case(case_path: &Path, record_command: Option<&str>) -> Result<(), String
     record_case(case_path, &case, &stdout, &stderr, exit, &requests)
   } else {
     replay_case(temp.path(), &case, &stdout, &stderr, exit, &requests)
+  }
+}
+
+/// Wait for one CLI process. Past `PROCESS_TIMEOUT` it is killed and `None` answers.
+fn wait_bounded(child: &mut Child) -> Result<Option<ExitStatus>, String> {
+  let started = Instant::now();
+  loop {
+    match child.try_wait().map_err(|error| error.to_string())? {
+      Some(status) => return Ok(Some(status)),
+      None if started.elapsed() > PROCESS_TIMEOUT => {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Ok(None);
+      }
+      None => std::thread::sleep(Duration::from_millis(10)),
+    }
   }
 }
 
@@ -581,17 +585,20 @@ fn changed_server_port_takes_effect_on_the_next_call() {
   let run = |stub: &StubServer| {
     std::fs::create_dir_all(config_path.parent().unwrap()).unwrap();
     std::fs::write(&config_path, format!("server:\n  port: {}\n", stub.port)).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_charliebot"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_charliebot"))
       .args(["session", "tree"])
       .current_dir(temp.path())
       .env_clear()
       .env("CHARLIEBOT_HOME", temp.path().join("home"))
       .stdin(Stdio::null())
-      .stdout(Stdio::piped())
+      .stdout(Stdio::null())
       .stderr(Stdio::piped())
-      .output()
+      .spawn()
       .unwrap();
-    assert_eq!(output.status.code(), Some(0), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+    let status = wait_bounded(&mut child).unwrap().expect("the CLI finishes within the process timeout");
+    let mut stderr = String::new();
+    child.stderr.take().unwrap().read_to_string(&mut stderr).unwrap();
+    assert_eq!(status.code(), Some(0), "stderr: {stderr}");
     assert_eq!(stub.requests.lock().unwrap().len(), 1);
   };
 

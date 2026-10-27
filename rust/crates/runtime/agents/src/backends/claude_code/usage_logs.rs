@@ -35,7 +35,10 @@ use super::claude_accounts::{ClaudeAccountState, json_truthy};
 use super::claude_config::AccountsConfig;
 use super::login_dirs::ClaudeHost;
 use super::usage_quota::{QuotaAccounts, QuotaHttp};
-use super::{USAGE_SOURCE, usage_sweep};
+use super::usage_sweep;
+
+/// The usage source's name: the ledger's source value and the usage page's card title.
+pub const USAGE_SOURCE: &str = "Claude Code";
 
 /// The byte marker of the lines this reader parses. A line without it is never parsed.
 const MARKER: &[u8] = b"\"usage\"";

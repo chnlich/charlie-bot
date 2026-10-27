@@ -1,5 +1,4 @@
 # Rows record the module cycles that predate the structure test. Rows only leave this table.
-cycle charliebot-agents: backends::claude_code, backends::claude_code::claude_accounts, backends::claude_code::claude_compaction, backends::claude_code::claude_idle_compaction, backends::claude_code::claude_lifecycle, backends::claude_code::claude_relay, backends::claude_code::master_cc_relay, backends::claude_code::usage_logs, backends::claude_code::usage_quota, backends::claude_code::usage_sweep
 cycle charliebot-agents: backends::codex, backends::codex::factory, backends::codex::usage_logs
 cycle charliebot-agents: backends::opencode, backends::opencode::usage_logs, backends::opencode::usage_sweep
 cycle charliebot-agents: backends::opencode::backend, backends::opencode::server, cli_base, one_shot, runner

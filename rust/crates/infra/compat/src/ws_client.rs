@@ -18,7 +18,7 @@
 //! Rust transport error text.
 //!
 //! The handshake omits the `User-Agent` header and doesn't offer `permessage-deflate`. The Python client sends both
-//! by default; the parity harness ignores them on these fakes.
+//! by default, and the parity harness that ignored them on its fakes was removed on 2026-10-27.
 
 use std::fmt;
 use std::future::pending;

@@ -1,0 +1,292 @@
+# The diff viewer: the /api/git routes the page calls, the page itself, and the code-server open route its button calls.
+# The code-server stand-in exits at once, so an open reaches the 503 start failure.
+stage: features
+name: features-diff-view
+fixture_extras: [diff_view_repo]
+config:
+  code_server:
+    bin: ${tree.root}/bin/code-server
+    config: ${tree.root}/code-server.yaml
+steps:
+  - name: list the branches of a repo
+    method: GET
+    path: /api/git/branches
+    query:
+      repo: ${tree.root}/${extras.diff_view_repo.repo}
+    expect_status: 200
+  - name: list the branches through the git dir
+    method: GET
+    path: /api/git/branches
+    query:
+      repo: ${tree.root}/${extras.diff_view_repo.git_dir}
+    expect_status: 200
+  - name: list the branches of a stray repo outside the workspace
+    method: GET
+    path: /api/git/branches
+    query:
+      repo: ${tree.root}/${extras.diff_view_repo.stray_repo}
+    expect_status: 200
+  - name: refuse the branches of a plain directory
+    method: GET
+    path: /api/git/branches
+    query:
+      repo: ${tree.root}/${extras.diff_view_repo.plain_dir}
+    expect_status: 400
+  - name: refuse a branch listing without a repo
+    method: GET
+    path: /api/git/branches
+    expect_status: 422
+    compare: status_and_shape
+  - name: list the repos under the workspace
+    method: GET
+    path: /api/git/repos
+    expect_status: 200
+  - name: manifest of a three-dot range
+    method: GET
+    path: /api/git/diff/files
+    query:
+      repo: ${tree.root}/${extras.diff_view_repo.repo}
+      base: main
+      head: feature
+    expect_status: 200
+  - name: manifest of a two-dot range
+    method: GET
+    path: /api/git/diff/files
+    query:
+      repo: ${tree.root}/${extras.diff_view_repo.repo}
+      base: main
+      head: feature
+      mode: two-dot
+    expect_status: 200
+  - name: manifest of the same three-dot range from the memo
+    method: GET
+    path: /api/git/diff/files
+    query:
+      repo: ${tree.root}/${extras.diff_view_repo.repo}
+      base: main
+      head: feature
+    expect_status: 200
+  - name: refuse an unknown diff mode
+    method: GET
+    path: /api/git/diff/files
+    query:
+      repo: ${tree.root}/${extras.diff_view_repo.repo}
+      base: main
+      head: feature
+      mode: sideways
+    expect_status: 422
+    compare: status_and_shape
+  - name: refuse a manifest of a stray repo outside the workspace
+    method: GET
+    path: /api/git/diff/files
+    query:
+      repo: ${tree.root}/${extras.diff_view_repo.stray_repo}
+      base: main
+      head: feature
+    expect_status: 400
+  - name: refuse a manifest of a plain directory
+    method: GET
+    path: /api/git/diff/files
+    query:
+      repo: ${tree.root}/${extras.diff_view_repo.plain_dir}
+      base: main
+      head: feature
+    expect_status: 400
+  - name: fail a manifest on an unknown ref
+    method: GET
+    path: /api/git/diff/files
+    query:
+      repo: ${tree.root}/${extras.diff_view_repo.repo}
+      base: no-such-ref
+      head: feature
+    expect_status: 500
+  - name: diff one modified file
+    method: GET
+    path: /api/git/diff/file
+    query:
+      repo: ${tree.root}/${extras.diff_view_repo.repo}
+      base: main
+      head: feature
+      path: keep.txt
+    expect_status: 200
+  - name: diff one modified file as a two-dot range
+    method: GET
+    path: /api/git/diff/file
+    query:
+      repo: ${tree.root}/${extras.diff_view_repo.repo}
+      base: main
+      head: feature
+      mode: two-dot
+      path: keep.txt
+    expect_status: 200
+  - name: diff one added file
+    method: GET
+    path: /api/git/diff/file
+    query:
+      repo: ${tree.root}/${extras.diff_view_repo.repo}
+      base: main
+      head: feature
+      path: added.txt
+    expect_status: 200
+  - name: diff one deleted file
+    method: GET
+    path: /api/git/diff/file
+    query:
+      repo: ${tree.root}/${extras.diff_view_repo.repo}
+      base: main
+      head: feature
+      path: todelete.txt
+    expect_status: 200
+  - name: diff one renamed file with its old path
+    method: GET
+    path: /api/git/diff/file
+    query:
+      repo: ${tree.root}/${extras.diff_view_repo.repo}
+      base: main
+      head: feature
+      path: renamed.txt
+      old_path: torename.txt
+    expect_status: 200
+  - name: diff one binary file
+    method: GET
+    path: /api/git/diff/file
+    query:
+      repo: ${tree.root}/${extras.diff_view_repo.repo}
+      base: main
+      head: feature
+      path: blob.bin
+    expect_status: 200
+  - name: diff one CRLF file
+    method: GET
+    path: /api/git/diff/file
+    query:
+      repo: ${tree.root}/${extras.diff_view_repo.repo}
+      base: main
+      head: feature
+      path: crlf.txt
+    expect_status: 200
+  - name: diff a file only main changed
+    method: GET
+    path: /api/git/diff/file
+    query:
+      repo: ${tree.root}/${extras.diff_view_repo.repo}
+      base: main
+      head: feature
+      path: main-only.txt
+    expect_status: 200
+  - name: refuse a non-boolean force
+    method: GET
+    path: /api/git/diff/file
+    query:
+      repo: ${tree.root}/${extras.diff_view_repo.repo}
+      base: main
+      head: feature
+      path: keep.txt
+      force: maybe
+    expect_status: 422
+    compare: status_and_shape
+  - name: refuse a diff file without a path
+    method: GET
+    path: /api/git/diff/file
+    query:
+      repo: ${tree.root}/${extras.diff_view_repo.repo}
+      base: main
+      head: feature
+    expect_status: 422
+    compare: status_and_shape
+  - name: render the diff page
+    method: GET
+    path: /diff
+    expect_status: 200
+  - name: open a repo in code-server whose start fails
+    method: GET
+    path: /api/code-server/open
+    query:
+      folder: ${tree.root}/${extras.diff_view_repo.repo}
+    expect_status: 503
+  - name: refuse to open a folder outside the configured roots
+    method: GET
+    path: /api/code-server/open
+    query:
+      folder: ${tree.root}/${extras.diff_view_repo.stray_repo}
+    expect_status: 400
+  - name: refuse to open a missing folder
+    method: GET
+    path: /api/code-server/open
+    query:
+      folder: ${tree.root}/${extras.diff_view_repo.missing_dir}
+    expect_status: 400
+  - name: head the branches route
+    method: HEAD
+    path: /api/git/branches
+    query:
+      repo: ${tree.root}/${extras.diff_view_repo.repo}
+    expect_status: 405
+  - name: put to the branches route
+    method: PUT
+    path: /api/git/branches
+    query:
+      repo: ${tree.root}/${extras.diff_view_repo.repo}
+    expect_status: 405
+  - name: head the repos route
+    method: HEAD
+    path: /api/git/repos
+    expect_status: 405
+  - name: put to the repos route
+    method: PUT
+    path: /api/git/repos
+    expect_status: 405
+  - name: head the manifest route
+    method: HEAD
+    path: /api/git/diff/files
+    query:
+      repo: ${tree.root}/${extras.diff_view_repo.repo}
+      base: main
+      head: feature
+    expect_status: 405
+  - name: put to the manifest route
+    method: PUT
+    path: /api/git/diff/files
+    query:
+      repo: ${tree.root}/${extras.diff_view_repo.repo}
+      base: main
+      head: feature
+    expect_status: 405
+  - name: head the file diff route
+    method: HEAD
+    path: /api/git/diff/file
+    query:
+      repo: ${tree.root}/${extras.diff_view_repo.repo}
+      base: main
+      head: feature
+      path: keep.txt
+    expect_status: 405
+  - name: put to the file diff route
+    method: PUT
+    path: /api/git/diff/file
+    query:
+      repo: ${tree.root}/${extras.diff_view_repo.repo}
+      base: main
+      head: feature
+      path: keep.txt
+    expect_status: 405
+  - name: head the diff page
+    method: HEAD
+    path: /diff
+    expect_status: 405
+  - name: put to the diff page
+    method: PUT
+    path: /diff
+    expect_status: 405
+  - name: head the code-server open route
+    method: HEAD
+    path: /api/code-server/open
+    query:
+      folder: ${tree.root}/${extras.diff_view_repo.repo}
+    expect_status: 405
+  - name: put to the code-server open route
+    method: PUT
+    path: /api/code-server/open
+    query:
+      folder: ${tree.root}/${extras.diff_view_repo.repo}
+    expect_status: 405

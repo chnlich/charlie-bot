@@ -1,0 +1,25 @@
+# Compare cold event pages over the same physical log lines in Python and Rust.
+stage: session-read-api
+name: session-event-ranges
+fixture_extras: [session_events_bad_lines]
+steps:
+  - name: cold range before four, limit two
+    method: GET
+    path: /api/sessions/${sessions.range_a}/events
+    query: {before: 4, limit: 2}
+    expect_status: 200
+  - name: cold range before eight, limit three
+    method: GET
+    path: /api/sessions/${sessions.range_b}/events
+    query: {before: 8, limit: 3}
+    expect_status: 200
+  - name: cold range before ten, limit four
+    method: GET
+    path: /api/sessions/${sessions.range_c}/events
+    query: {before: 10, limit: 4}
+    expect_status: 200
+  - name: cold range before three, limit five
+    method: GET
+    path: /api/sessions/${sessions.range_d}/events
+    query: {before: 3, limit: 5}
+    expect_status: 200

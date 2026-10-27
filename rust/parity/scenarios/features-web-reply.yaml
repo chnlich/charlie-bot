@@ -1,0 +1,356 @@
+# The web reply routes: replies and status changes are recorded; unread checks list items until an ask-check event names
+# them, then the status set accepts them; the status read lists waiting descendants and direct child Now values.
+# A body that fails validation answers 422 before the handler's session check, even for a missing session.
+stage: features
+name: features-web-reply
+fixture_extras: [web_reply_cases, sample_files]
+steps:
+  - name: a reply to a web session with no running turn
+    method: POST
+    path: /api/internal/web/reply
+    json: {session_id: "${sessions.web_reply}", text: "The panel uses the two-column layout."}
+    expect_status: 200
+  - name: a reply over the 500-character budget still posts
+    method: POST
+    path: /api/internal/web/reply
+    json: {session_id: "${sessions.web_reply}", text: "abcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijx"}
+    expect_status: 200
+  - name: a reply to a worker session is refused
+    method: POST
+    path: /api/internal/web/reply
+    json: {session_id: "${sessions.atlas_notes}", text: "Not for a worker."}
+    expect_status: 409
+  - name: a reply to an unknown session is refused
+    method: POST
+    path: /api/internal/web/reply
+    json: {session_id: "${missing_session}", text: "No such session."}
+    expect_status: 404
+  - name: a reply of blank text is refused
+    method: POST
+    path: /api/internal/web/reply
+    json: {session_id: "${sessions.web_reply}", text: " \n\t"}
+    expect_status: 422
+  - name: a reply with an empty keep_language reason is refused
+    method: POST
+    path: /api/internal/web/reply
+    json: {session_id: "${sessions.web_reply}", text: "The panel uses the two-column layout.", keep_language: ""}
+    expect_status: 422
+  - name: a reply with a blank keep_language reason is refused
+    method: POST
+    path: /api/internal/web/reply
+    json: {session_id: "${sessions.web_reply}", text: "The panel uses the two-column layout.", keep_language: " \n\t"}
+    expect_status: 422
+  - name: a reply with a null keep_language posts without a reason
+    method: POST
+    path: /api/internal/web/reply
+    json: {session_id: "${sessions.web_reply}", text: "The panel uses the two-column layout.", keep_language: null}
+    expect_status: 200
+  - name: a wrong field type for keep_language on the reply path is refused
+    method: POST
+    path: /api/internal/web/reply
+    json: {session_id: "${sessions.web_reply}", text: "The panel uses the two-column layout.", keep_language: 5}
+    expect_status: 422
+    compare: status_and_shape
+  - name: malformed JSON on the reply path is refused
+    method: POST
+    path: /api/internal/web/reply
+    headers: {Content-Type: application/json}
+    body_file: web_reply-malformed.json
+    expect_status: 422
+    compare: status_and_shape
+  - name: a wrong field type on the reply path is refused
+    method: POST
+    path: /api/internal/web/reply
+    json: {session_id: "${sessions.web_reply}", text: 5}
+    expect_status: 422
+    compare: status_and_shape
+  - name: a missing field on the reply path is refused
+    method: POST
+    path: /api/internal/web/reply
+    json: {text: "The panel uses the two-column layout."}
+    expect_status: 422
+    compare: status_and_shape
+  - name: an extra field on the reply path is refused
+    method: POST
+    path: /api/internal/web/reply
+    json: {session_id: "${sessions.web_reply}", text: "The panel uses the two-column layout.", colour: red}
+    expect_status: 422
+    compare: status_and_shape
+  - name: a wrong field type and an extra field on the reply path are both refused
+    method: POST
+    path: /api/internal/web/reply
+    json: {session_id: "${sessions.web_reply}", text: 5, colour: red}
+    expect_status: 422
+    compare: status_and_shape
+  - name: a wrong field type for a missing session is refused before the session check
+    method: POST
+    path: /api/internal/web/reply
+    json: {session_id: "${missing_session}", text: 5}
+    expect_status: 422
+    compare: status_and_shape
+  - name: the dialog lists the user messages and the replies in log order
+    method: GET
+    path: /api/internal/web/dialog
+    query: {session_id: "${sessions.web_reply}"}
+    expect_status: 200
+  - name: a status set of now alone
+    method: POST
+    path: /api/internal/web/status
+    json: {session_id: "${sessions.web_reply}", text: "{\"now\": \"Checking the gauges\"}"}
+    expect_status: 200
+  - name: a status set with a null goal
+    method: POST
+    path: /api/internal/web/status
+    json: {session_id: "${sessions.web_reply}", text: "{\"goal\": null}"}
+    expect_status: 200
+  - name: an unread query lists a waiting item before its cold read
+    method: POST
+    path: /api/internal/web/status/unread
+    json:
+      session_id: "${sessions.web_reply}"
+      text: '{"waiting": [{"text": "Pick the layout", "context": "The panel is ready. Options are grid or list; grid is recommended.", "link": null}]}'
+    expect_status: 200
+  - name: an unread query refuses an unknown session
+    method: POST
+    path: /api/internal/web/status/unread
+    json:
+      session_id: "${missing_session}"
+      text: '{"now": "Checking"}'
+    expect_status: 404
+  - name: an unread query refuses a thread session
+    method: POST
+    path: /api/internal/web/status/unread
+    json:
+      session_id: "${sessions.delta}"
+      text: '{"now": "Checking"}'
+    expect_status: 409
+  - name: an unread query refuses a worker session
+    method: POST
+    path: /api/internal/web/status/unread
+    json:
+      session_id: "${sessions.atlas_notes}"
+      text: '{"now": "Checking"}'
+    expect_status: 409
+  - name: an unread query refuses invalid status text
+    method: POST
+    path: /api/internal/web/status/unread
+    json:
+      session_id: "${sessions.web_reply}"
+      text: "not json"
+    expect_status: 422
+  - name: an unread query refuses a waiting item without context
+    method: POST
+    path: /api/internal/web/status/unread
+    json:
+      session_id: "${sessions.web_reply}"
+      text: '{"waiting": [{"text": "Pick the layout"}]}'
+    expect_status: 422
+  - name: an unread query refuses a wrong request field type
+    method: POST
+    path: /api/internal/web/status/unread
+    json: {session_id: "${sessions.web_reply}", text: 5}
+    expect_status: 422
+    compare: status_and_shape
+  - name: a status set refuses a waiting item without context
+    method: POST
+    path: /api/internal/web/status
+    json:
+      session_id: "${sessions.web_reply}"
+      text: '{"waiting": [{"text": "Pick the layout"}]}'
+    expect_status: 422
+  - name: a status set refuses a waiting item before its cold read
+    method: POST
+    path: /api/internal/web/status
+    json:
+      session_id: "${sessions.web_reply}"
+      text: '{"waiting": [{"text": "Pick the layout", "context": "The panel is ready. Options are grid or list; grid is recommended.", "link": null}]}'
+    expect_status: 409
+  - name: an ask-check records a cold read of one waiting item
+    method: POST
+    path: /api/internal/web/ask-check
+    json:
+      session_id: "${sessions.web_reply}"
+      item: {text: "Pick the layout", context: "The panel is ready. Options are grid or list; grid is recommended.", link: null}
+      backend: synthetic-haiku
+      answer: "(1) Grid fits the panel. (2) NOT STATED."
+    expect_status: 200
+  - name: an unread query omits the item after its cold read
+    method: POST
+    path: /api/internal/web/status/unread
+    json:
+      session_id: "${sessions.web_reply}"
+      text: '{"waiting": [{"text": "Pick the layout", "context": "The panel is ready. Options are grid or list; grid is recommended.", "link": null}]}'
+    expect_status: 200
+  - name: a status set stores a waiting item after its cold read
+    method: POST
+    path: /api/internal/web/status
+    json:
+      session_id: "${sessions.web_reply}"
+      text: '{"waiting": [{"text": "Pick the layout", "context": "The panel is ready. Options are grid or list; grid is recommended.", "link": null}]}'
+    expect_status: 200
+  - name: an ask-check refuses an unknown session
+    method: POST
+    path: /api/internal/web/ask-check
+    json:
+      session_id: "${missing_session}"
+      item: {text: "Decide"}
+      backend: synthetic-haiku
+      answer: "NOT STATED."
+    expect_status: 404
+  - name: an ask-check refuses a worker session
+    method: POST
+    path: /api/internal/web/ask-check
+    json:
+      session_id: "${sessions.atlas_notes}"
+      item: {text: "Decide"}
+      backend: synthetic-haiku
+      answer: "NOT STATED."
+    expect_status: 409
+  - name: an ask-check refuses a thread session
+    method: POST
+    path: /api/internal/web/ask-check
+    json:
+      session_id: "${sessions.delta}"
+      item: {text: "Decide"}
+      backend: synthetic-haiku
+      answer: "NOT STATED."
+    expect_status: 409
+  - name: an ask-check refuses an invalid waiting item
+    method: POST
+    path: /api/internal/web/ask-check
+    json:
+      session_id: "${sessions.web_reply}"
+      item: {text: " "}
+      backend: synthetic-haiku
+      answer: "NOT STATED."
+    expect_status: 422
+  - name: an ask-check refuses a wrong request field type
+    method: POST
+    path: /api/internal/web/ask-check
+    json: {session_id: "${sessions.web_reply}", item: 5, backend: synthetic-haiku, answer: "NOT STATED."}
+    expect_status: 422
+    compare: status_and_shape
+  - name: a status file that is not JSON is refused with its detail
+    method: POST
+    path: /api/internal/web/status
+    json: {session_id: "${sessions.web_reply}", text: "not json"}
+    expect_status: 422
+  - name: a status file that is not an object is refused with its detail
+    method: POST
+    path: /api/internal/web/status
+    json: {session_id: "${sessions.web_reply}", text: "[1, 2]"}
+    expect_status: 422
+  - name: a status file with an unknown key is refused with its detail
+    method: POST
+    path: /api/internal/web/status
+    json: {session_id: "${sessions.web_reply}", text: "{\"colour\": \"red\"}"}
+    expect_status: 422
+  - name: a status file that names no item is refused with its detail
+    method: POST
+    path: /api/internal/web/status
+    json: {session_id: "${sessions.web_reply}", text: "{}"}
+    expect_status: 422
+  - name: malformed JSON on the status path is refused
+    method: POST
+    path: /api/internal/web/status
+    headers: {Content-Type: application/json}
+    body_file: web_reply-malformed.json
+    expect_status: 422
+    compare: status_and_shape
+  - name: a wrong field type on the status path is refused
+    method: POST
+    path: /api/internal/web/status
+    json: {session_id: "${sessions.web_reply}", text: 5}
+    expect_status: 422
+    compare: status_and_shape
+  - name: a missing field on the status path is refused
+    method: POST
+    path: /api/internal/web/status
+    json: {text: "{\"now\": \"Checking the gauges\"}"}
+    expect_status: 422
+    compare: status_and_shape
+  - name: an extra field on the status path is refused
+    method: POST
+    path: /api/internal/web/status
+    json: {session_id: "${sessions.web_reply}", text: "{\"now\": \"Checking the gauges\"}", colour: red}
+    expect_status: 422
+    compare: status_and_shape
+  - name: a wrong field type and an extra field on the status path are both refused
+    method: POST
+    path: /api/internal/web/status
+    json: {session_id: "${sessions.web_reply}", text: 5, colour: red}
+    expect_status: 422
+    compare: status_and_shape
+  - name: a wrong field type for a missing session is refused before the session check
+    method: POST
+    path: /api/internal/web/status
+    json: {session_id: "${missing_session}", text: 5}
+    expect_status: 422
+    compare: status_and_shape
+  - name: the status read lists the open waiting descendant only
+    method: GET
+    path: /api/internal/web/status
+    query: {session_id: "${sessions.web_reply}"}
+    expect_status: 200
+  - name: HEAD on the reply path
+    method: HEAD
+    path: /api/internal/web/reply
+    expect_status: 405
+  - name: PUT on the reply path
+    method: PUT
+    path: /api/internal/web/reply
+    json: {session_id: "${sessions.web_reply}", text: "Wrong method."}
+    expect_status: 405
+  - name: HEAD on the dialog path
+    method: HEAD
+    path: /api/internal/web/dialog
+    query: {session_id: "${sessions.web_reply}"}
+    expect_status: 405
+  - name: PUT on the dialog path
+    method: PUT
+    path: /api/internal/web/dialog
+    query: {session_id: "${sessions.web_reply}"}
+    expect_status: 405
+  - name: HEAD on the status path
+    method: HEAD
+    path: /api/internal/web/status
+    query: {session_id: "${sessions.web_reply}"}
+    expect_status: 405
+  - name: PUT on the status path
+    method: PUT
+    path: /api/internal/web/status
+    json: {session_id: "${sessions.web_reply}", text: "{\"now\": \"Wrong method.\"}"}
+    expect_status: 405
+  - name: HEAD on the status unread path
+    method: HEAD
+    path: /api/internal/web/status/unread
+    expect_status: 405
+  - name: PUT on the status unread path
+    method: PUT
+    path: /api/internal/web/status/unread
+    json: {session_id: "${sessions.web_reply}", text: '{"now":"Wrong method"}'}
+    expect_status: 405
+  - name: HEAD on the ask-check path
+    method: HEAD
+    path: /api/internal/web/ask-check
+    expect_status: 405
+  - name: PUT on the ask-check path
+    method: PUT
+    path: /api/internal/web/ask-check
+    json: {session_id: "${sessions.web_reply}", item: {text: Wrong method}, backend: synthetic-haiku, answer: "x"}
+    expect_status: 405
+  - name: a reply that links a dead local file is refused and records nothing
+    method: POST
+    path: /api/internal/web/reply
+    json: {session_id: "${sessions.web_reply}", text: "See [the plan](artifacts/missing-plan.html)."}
+    expect_status: 422
+  - name: a status set that links a dead file is refused and stores nothing
+    method: POST
+    path: /api/internal/web/status
+    json: {session_id: "${sessions.web_reply}", text: "{\"now\": \"Review http://localhost/absolute_filepath/synthetic-missing/page.html\"}"}
+    expect_status: 422
+  - name: a reply that links a live file records
+    method: POST
+    path: /api/internal/web/reply
+    json: {session_id: "${sessions.web_reply}", text: "The page is at http://localhost/absolute_filepath${tree.root}/${extras.sample_files.file}."}
+    expect_status: 200

@@ -1,0 +1,81 @@
+# An input admitted while the first manager turn runs is dispatched after the handover as its own run: two starts.
+# The session is the Ember node, whose turns the Python reference never follows with a web-reply nudge; the Atlas node's
+# admitted run would add a third start that the round-end audit posts and the port does not run yet.
+stage: agent-orchestration
+name: handover-admitted-input
+fake_agent:
+  starts:
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-admitted-first}
+        - gate: admitted-turn
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: The first admitted turn finished after adoption.}]
+        - emit:
+            type: result
+            result: ""
+            usage: {input_tokens: 10, output_tokens: 4, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+      exit_code: 0
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-admitted-second}
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: The admitted input ran as its own turn.}]
+        - emit:
+            type: result
+            result: ""
+            usage: {input_tokens: 10, output_tokens: 4, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+      exit_code: 0
+expect_starts: 2  # The first turn is adopted by the second server; the admitted input is the second start.
+directions: [python-to-candidate, candidate-to-python]
+steps:
+  - name: send the first manager message
+    method: POST
+    path: /api/chat/${sessions.delta}/message
+    json: {content: Start the gated synthetic task., request_id: synthetic-chat-admitted-first}
+    capture: {first_input: input_event_id}
+    expect_status: 202
+    defer_files: true
+  - kind: wait
+    name: wait for the first turn at the gate
+    timeout_seconds: 30
+    until: {at_gate: admitted-turn}
+  - name: admit a second manager message during the turn
+    method: POST
+    path: /api/chat/${sessions.delta}/message
+    json: {content: Queue this while the first turn runs., request_id: synthetic-chat-admitted-second}
+    capture: {second_input: input_event_id}
+    expect_status: 202
+    defer_files: true
+  - kind: handover
+    name: hand over the live manager run
+    agent_after_stop: alive
+  - kind: gate
+    name: release the first manager turn
+    open: admitted-turn
+  - kind: wait
+    name: wait for the first turn to finish
+    timeout_seconds: 30
+    until:
+      event:
+        session: ${sessions.delta}
+        type: run_finished
+        fields: {input_event_ids: ["${capture.first_input}"], outcome: success}
+  - kind: wait
+    name: wait for the admitted input to finish as its own run
+    timeout_seconds: 30
+    until:
+      event:
+        session: ${sessions.delta}
+        type: run_finished
+        fields: {input_event_ids: ["${capture.second_input}"]}

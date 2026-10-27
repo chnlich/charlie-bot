@@ -1,0 +1,75 @@
+# The Python reference starts one manager agent; the second server must adopt that same process.
+stage: agent-orchestration
+name: handover-manager-turn
+fake_agent:
+  starts:
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-manager-session}
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: The manager turn finished after adoption.}]
+        - gate: manager-turn
+        - emit:
+            type: result
+            result: ""
+            usage: {input_tokens: 10, output_tokens: 4, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+      exit_code: 0
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-status-reminder-hmt-1}
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: Status reviewed at the end of the scenario.}]
+        - emit:
+            type: result
+            result: ""
+            usage: {input_tokens: 2, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+      exit_code: 0
+expect_starts: 2  # The manager turn, then the status reminder that its audit wakes; the second server adopts the turn's process.
+directions: [python-to-candidate, candidate-to-python]
+comparison_rules:
+  # The status reminder and the run_finished of the audited turn, in either order: that turn's after_turn runs as its
+  # own task (src/runtime/session_events.py:156-161), and its finish callback writes run_finished after the master_done
+  # broadcast (src/runtime/master_cc_queue.py:304-309), as features-web-reply-audit compares them.
+  - either_order_of_adjacent_events:
+      first:
+        type: agent_message
+        match_fields: {from_session_name: "Session status"}
+      second:
+        type: run_finished
+        match_fields: {outcome: success}
+steps:
+  - name: send a manager message
+    method: POST
+    path: /api/chat/${sessions.atlas}/message
+    json: {content: Continue the synthetic Atlas plan., request_id: synthetic-chat-handover-manager}
+    capture: {input_id: input_event_id}
+    expect_status: 202
+    defer_files: true
+  - kind: wait
+    name: wait for the raw log cursor at the gate
+    timeout_seconds: 30
+    until: {at_gate: manager-turn}
+  - kind: handover
+    name: hand over the live manager run
+    agent_after_stop: alive
+  - kind: gate
+    name: release the manager agent
+    open: manager-turn
+  - kind: wait
+    name: wait for the manager run to finish
+    timeout_seconds: 30
+    until:
+      event:
+        session: ${sessions.atlas}
+        type: run_finished
+        fields: {input_event_ids: ["${capture.input_id}"]}

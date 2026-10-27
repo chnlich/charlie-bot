@@ -1,0 +1,44 @@
+stage: features
+name: features-slack-validation
+config:
+  slack:
+    allowed_user_ids: [U0PARITY]
+credentials:
+  slack:
+    bot_token: xoxb-parity-synthetic-token
+    app_token: xapp-parity-synthetic-token
+fakes:
+  slack: {}
+steps:
+  - name: reply body forbids an extra key
+    method: POST
+    path: /api/internal/slack/reply
+    json:
+      session_id: ${sessions.delta}
+      text: valid
+      extra: true
+    expect_status: 422
+    compare: status_and_shape
+  - name: reply body rejects a wrong field type
+    method: POST
+    path: /api/internal/slack/reply
+    json: {session_id: 5, text: valid}
+    expect_status: 422
+    compare: status_and_shape
+  - name: ack body forbids an extra key
+    method: POST
+    path: /api/internal/slack/ack
+    json:
+      session_id: ${sessions.delta}
+      message_ids: []
+      extra: true
+    expect_status: 422
+    compare: status_and_shape
+  - name: ack body rejects a wrong field type
+    method: POST
+    path: /api/internal/slack/ack
+    json:
+      session_id: ${sessions.delta}
+      message_ids: "not-a-list"
+    expect_status: 422
+    compare: status_and_shape

@@ -1,0 +1,109 @@
+stage: agent-orchestration-cancel
+name: manager-turn-cancellation-routes
+fake_agent:
+  starts:
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-chat-cancel}
+        - gate: chat-cancel-turn
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: This line is not reached after cancellation.}]
+        - emit: {type: result, result: "", usage: {input_tokens: 1, output_tokens: 1}}
+      exit_code: 0
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-run-cancel}
+        - gate: run-cancel-turn
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: This line is not reached after cancellation.}]
+        - emit: {type: result, result: "", usage: {input_tokens: 1, output_tokens: 1}}
+      exit_code: 0
+expect_starts: 2
+# Python leaves this outcome undefined: chat.py:106 and runs.py:1148-1149 can record interrupted while
+# master_cc_queue.py:298 writes master_done before task_execution.py:1224-1229 finishes exit -15 as failed.
+comparison_rules:
+  - allowed_baseline_values_for_one_event_field:
+      event:
+        type: run_finished
+        match_fields:
+          input_event_ids: ["${capture.chat_cancel_input}"]
+      field: outcome
+      allowed_baseline_values: [failed, interrupted]
+      required_candidate_value: interrupted
+  - allowed_baseline_values_for_one_event_field:
+      event:
+        type: run_finished
+        match_fields:
+          run_id: "${capture.retry_run_id}"
+      field: outcome
+      allowed_baseline_values: [failed, interrupted]
+      required_candidate_value: interrupted
+steps:
+  - name: cancel when there is no active manager run
+    method: POST
+    path: /api/chat/${sessions.delta}/cancel
+    expect_status: 404
+  - kind: wait
+    name: observe the no-active-run error event
+    timeout_seconds: 10
+    until:
+      event:
+        session: ${sessions.delta}
+        type: assistant_error
+  - name: start a gated manager turn for chat cancel
+    method: POST
+    path: /api/chat/${sessions.delta}/message
+    json: {content: Hold this manager turn for cancellation., request_id: synthetic-chat-cancel}
+    capture: {chat_cancel_input: input_event_id}
+    expect_status: 202
+    defer_files: true
+  - kind: wait
+    name: wait at the chat cancel gate
+    timeout_seconds: 30
+    until: {at_gate: chat-cancel-turn}
+  - name: cancel the active manager turn
+    method: POST
+    path: /api/chat/${sessions.delta}/cancel
+    expect_status: 200
+    defer_files: true
+  - kind: wait
+    name: wait for the chat-cancelled run to finish
+    timeout_seconds: 30
+    until:
+      event:
+        session: ${sessions.delta}
+        type: run_finished
+        fields: {input_event_ids: ["${capture.chat_cancel_input}"]}
+  - name: retry a failed manager run for run cancellation
+    method: POST
+    path: /api/sessions/${sessions.atlas}/retry
+    json: {request_id: synthetic-manager-run-cancel, run_id: "${runs.atlas_t3.run}"}
+    capture: {retry_run_id: run_id}
+    expect_status: 200
+    defer_files: true
+  - kind: wait
+    name: wait at the retried manager run cancel gate
+    timeout_seconds: 30
+    until: {at_gate: run-cancel-turn}
+  - name: cancel the gated manager retry by id
+    method: POST
+    path: /api/sessions/${sessions.atlas}/runs/${capture.retry_run_id}/cancel
+    json: {request_id: synthetic-manager-run-cancel}
+    expect_status: 200
+    defer_files: true
+  - kind: wait
+    name: wait for the run-cancelled manager retry to finish
+    timeout_seconds: 30
+    until:
+      event:
+        session: ${sessions.atlas}
+        type: run_finished
+        fields: {run_id: "${capture.retry_run_id}"}

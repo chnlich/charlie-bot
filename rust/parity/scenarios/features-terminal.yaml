@@ -1,0 +1,89 @@
+stage: features
+name: features-terminal
+steps:
+  - kind: ws
+    name: echo through terminal PTY
+    path: /ws/terminal
+    send:
+      - json: {type: pty_input, data: dG11eCBzZXQtb3B0aW9uIHN0YXR1cyBvZmY7IGVjaG8gdGVybWluYWwtZWNoby0kKCg2KjcpKQo=}
+    collect:
+      where: {type: pty_output}
+      field: data
+      decode: base64
+    until: {collected_contains: terminal-echo-42}
+    timeout_seconds: 10
+    compare: {collected_contains: [terminal-echo-42]}
+  - kind: ws
+    name: resize terminal before stty size
+    path: /ws/terminal
+    send:
+      - json: {type: pty_resize, cols: 100, rows: 30}
+      - json: {type: pty_input, data: c2xlZXAgMC4zOyBzdHR5IHNpemUK}
+    collect:
+      where: {type: pty_output}
+      field: data
+      decode: base64
+    until: {collected_contains: 30 100}
+    timeout_seconds: 10
+    compare: {collected_contains: [30 100]}
+  - kind: ws
+    name: malformed frames leave the terminal relay active
+    path: /ws/terminal
+    send:
+      - text: not json
+      - json: {type: unknown}
+      - json: {type: pty_input, data: A}
+      - json: {type: pty_resize, cols: invalid, rows: 30}
+      - json: {type: pty_input, data: ZWNobyB0ZXJtaW5hbC1yZWNvdmVyZWQtJCgoNCozKSkK}
+    collect:
+      where: {type: pty_output}
+      field: data
+      decode: base64
+    until: {collected_contains: terminal-recovered-12}
+    timeout_seconds: 10
+    compare: {collected_contains: [terminal-recovered-12]}
+  - kind: ws
+    name: non-object JSON ends the terminal relay
+    path: /ws/terminal
+    send:
+      - json: []
+    until: {close: true}
+    timeout_seconds: 5
+  - kind: ws
+    name: resize outside the packed range ends the terminal relay
+    path: /ws/terminal
+    send:
+      - json: {type: pty_resize, cols: 70000, rows: 30}
+    until: {close: true}
+    timeout_seconds: 5
+  - kind: ws
+    name: write scrollback for the next terminal attachment
+    path: /ws/terminal
+    send:
+      - json: {type: pty_input, data: ZWNobyB0ZXJtaW5hbC1zY3JvbGxiYWNrLSQoKDkqOCkpCg==}
+    collect:
+      where: {type: pty_output}
+      field: data
+      decode: base64
+    until: {collected_contains: terminal-scrollback-72}
+    timeout_seconds: 10
+    compare: {collected_contains: [terminal-scrollback-72]}
+  - kind: ws
+    name: attach again and read terminal scrollback
+    path: /ws/terminal
+    send: []
+    collect:
+      where: {type: pty_output}
+      field: data
+      decode: base64
+    until: {collected_contains: terminal-scrollback-72}
+    timeout_seconds: 10
+    compare: {collected_contains: [terminal-scrollback-72]}
+  - kind: ws
+    name: reject terminal without an access token
+    path: /ws/terminal
+    auth: none
+    send: []
+    until: {frames: 0}
+    timeout_seconds: 5
+    expect_reject: 403

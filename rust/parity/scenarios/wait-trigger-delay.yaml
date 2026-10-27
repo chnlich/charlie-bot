@@ -1,0 +1,207 @@
+# The trigger fires through the server's delay task and dispatches one manager run.
+stage: triggers-cron-improve
+name: wait-trigger-delay
+fake_agent:
+  starts:
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-trigger-session}
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: The delayed trigger was handled.}]
+        - emit:
+            type: result
+            result: ""
+            usage: {input_tokens: 8, output_tokens: 3, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+      exit_code: 0
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-status-reminder-wait-delay-1}
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: Status reviewed at the end of the scenario.}]
+        - emit:
+            type: result
+            result: ""
+            usage: {input_tokens: 2, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+      exit_code: 0
+expect_starts: 2
+comparison_rules:
+  # The status reminder and the run_finished of the audited turn, in either order: that turn's after_turn runs as its
+  # own task (src/runtime/session_events.py:156-161), and its finish callback writes run_finished after the master_done
+  # broadcast (src/runtime/master_cc_queue.py:304-309), as features-web-reply-audit compares them.
+  - either_order_of_adjacent_events:
+      first:
+        type: agent_message
+        match_fields: {from_session_name: "Session status"}
+      second:
+        type: run_finished
+        match_fields: {outcome: success}
+steps:
+  - name: missing schedule target returns 404
+    method: POST
+    path: /api/internal/schedule-trigger
+    json:
+      session_id: synthetic-missing-trigger-session
+      delay_seconds: 2
+      message: Wake a missing synthetic target.
+    expect_status: 404
+  - name: empty watch list returns 400
+    method: POST
+    path: /api/internal/schedule-trigger
+    json:
+      session_id: ${sessions.atlas}
+      delay_seconds: 2
+      message: Reject an empty synthetic watch list.
+      watch_targets: []
+    expect_status: 400
+  - name: nonpositive pid returns 400
+    method: POST
+    path: /api/internal/schedule-trigger
+    json:
+      session_id: ${sessions.atlas}
+      delay_seconds: 2
+      message: Reject a nonpositive synthetic pid.
+      watch_targets: [{kind: local_pid, pid: 0}]
+    expect_status: 400
+  - name: nonpositive remote pid returns 400
+    method: POST
+    path: /api/internal/schedule-trigger
+    json:
+      session_id: ${sessions.atlas}
+      delay_seconds: 2
+      message: Reject a nonpositive synthetic remote pid.
+      watch_targets: [{kind: remote_pid, host: synthetic-host, pid: 0}]
+    expect_status: 400
+  - name: nonpositive job id returns 400
+    method: POST
+    path: /api/internal/schedule-trigger
+    json:
+      session_id: ${sessions.atlas}
+      delay_seconds: 2
+      message: Reject a nonpositive synthetic job id.
+      watch_targets: [{kind: slurm_job, job_id: 0}]
+    expect_status: 400
+  - name: malformed delay returns 422 with validation identity
+    method: POST
+    path: /api/internal/schedule-trigger
+    json:
+      session_id: ${sessions.atlas}
+      delay_seconds: invalid
+      message: Reject malformed synthetic delay.
+    expect_status: 422
+  - name: missing trigger cancellation returns 404
+    method: POST
+    path: /api/internal/triggers/${sessions.atlas}/synthetic-missing-trigger/cancel
+    json: {}
+    expect_status: 404
+  - name: schedule a two-second trigger
+    method: POST
+    path: /api/internal/schedule-trigger
+    json:
+      session_id: ${sessions.atlas}
+      delay_seconds: 2
+      message: Continue the synthetic Atlas plan after the delay.
+    capture: {trigger_id: trigger_id}
+    expect_status: 200
+    defer_files: true
+  - kind: wait
+    name: wait until the trigger file is fired
+    timeout_seconds: 20
+    until:
+      file_field:
+        path: sessions/${sessions.atlas}/triggers/${capture.trigger_id}.json
+        field: status
+        equals: fired
+  - kind: wait
+    name: wait for the fired turn to finish
+    timeout_seconds: 30
+    until:
+      event:
+        session: ${sessions.atlas}
+        type: run_finished
+        fields: {input_event_ids: ["${capture.trigger_id}"]}
+  - name: malformed schedule JSON returns FastAPI json_invalid shape
+    method: POST
+    path: /api/internal/schedule-trigger
+    headers: {content-type: application/json}
+    body_file: generate_silence.py
+    expect_status: 422
+    compare: status_and_shape
+  - name: schedule delay_seconds uses the Python integer field
+    method: POST
+    path: /api/internal/schedule-trigger
+    json:
+      session_id: "${sessions.atlas}"
+      delay_seconds: soon
+      message: Reject malformed delay.
+    expect_status: 422
+    compare: status_and_shape
+  - name: schedule message is required by the Python model
+    method: POST
+    path: /api/internal/schedule-trigger
+    json:
+      session_id: "${sessions.atlas}"
+      delay_seconds: 2
+    expect_status: 422
+    compare: status_and_shape
+  - name: schedule session_id is required before target lookup
+    method: POST
+    path: /api/internal/schedule-trigger
+    json: {delay_seconds: 2, message: Reject missing session id.}
+    expect_status: 422
+    compare: status_and_shape
+  - name: malformed schedule JSON cannot become a missing-session 404
+    method: POST
+    path: /api/internal/schedule-trigger
+    headers: {content-type: application/json}
+    body_file: generate_silence.py
+    expect_status: 422
+    compare: status_and_shape
+  - name: a bad message and a kindless member report both errors in pydantic order
+    method: POST
+    path: /api/internal/schedule-trigger
+    json:
+      session_id: "${sessions.atlas}"
+      delay_seconds: 2
+      message: 123
+      watch_targets: [{}]
+    expect_status: 422
+    compare: status_and_shape
+  - name: a member integer field names its variant
+    method: POST
+    path: /api/internal/schedule-trigger
+    json:
+      session_id: "${sessions.atlas}"
+      delay_seconds: 2
+      message: Reject a malformed synthetic member pid.
+      watch_targets: [{kind: local_pid, pid: x}]
+    expect_status: 422
+    compare: status_and_shape
+  - name: an unknown member tag is refused
+    method: POST
+    path: /api/internal/schedule-trigger
+    json:
+      session_id: "${sessions.atlas}"
+      delay_seconds: 2
+      message: Reject an unknown synthetic member tag.
+      watch_targets: [{kind: synthetic-unknown}]
+    expect_status: 422
+    compare: status_and_shape
+  - name: an undeclared member key is dropped and the nonpositive pid is still rejected
+    method: POST
+    path: /api/internal/schedule-trigger
+    json:
+      session_id: "${sessions.atlas}"
+      delay_seconds: 2
+      message: Reject a nonpositive synthetic pid with an extra member key.
+      watch_targets: [{kind: local_pid, pid: 0, synthetic_extra: 1}]
+    expect_status: 400

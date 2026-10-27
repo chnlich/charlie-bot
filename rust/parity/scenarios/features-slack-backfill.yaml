@@ -1,0 +1,21 @@
+stage: features
+name: features-slack-backfill
+fixture_extras: [slack_backfill]
+config:
+  slack:
+    allowed_user_ids: [U0PARITY]
+credentials:
+  slack:
+    bot_token: xoxb-parity-synthetic-token
+    app_token: xapp-parity-synthetic-token
+fakes:
+  slack:
+    thread_messages:
+      - {user: U0PARITY, ts: "1767600000.002100", text: "message found on reconnect"}
+steps:
+  - kind: log_event
+    name: startup backfill reports the lost Slack summon
+    event: slack_backfill_lost_summon
+    fields:
+      input_event_id: synthetic-slack-lost-summon
+    timeout_seconds: 30

@@ -1,0 +1,308 @@
+# The session WebSocket: catch-up at several cursors, the worker transcript projection, the cursor
+# failure fallbacks, and live frames a scheduled trigger produces while the socket is subscribed.
+stage: session-stream
+name: session-stream
+fixture_extras: [explain_cases, session_stream_cases]
+expect_starts: 9
+fake_agent:
+  starts:
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-stream-trigger}
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: The synthetic stream trigger was handled.}]
+        - emit:
+            type: result
+            result: ""
+            usage: {input_tokens: 3, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+      exit_code: 0
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-stream-trigger}
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: The synthetic stream trigger was handled.}]
+        - emit:
+            type: result
+            result: ""
+            usage: {input_tokens: 3, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+      exit_code: 0
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-stream-trigger}
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: The synthetic stream trigger was handled.}]
+        - emit:
+            type: result
+            result: ""
+            usage: {input_tokens: 3, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+      exit_code: 0
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-stream-trigger}
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: The synthetic stream trigger was handled.}]
+        - emit:
+            type: result
+            result: ""
+            usage: {input_tokens: 3, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+      exit_code: 0
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-stream-trigger}
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: The synthetic stream trigger was handled.}]
+        - emit:
+            type: result
+            result: ""
+            usage: {input_tokens: 3, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+      exit_code: 0
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-stream-trigger}
+        - emit:
+            type: assistant
+            message:
+              role: assistant
+              model: claude-sonnet-5
+              content: [{type: text, text: The synthetic stream trigger was handled.}]
+        - emit:
+            type: result
+            result: ""
+            usage: {input_tokens: 3, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0}
+            total_cost_usd: 0.0
+      exit_code: 0
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-stream-trigger-failed-1}
+        - emit: {type: error, message: Synthetic stream turn failure., content: Synthetic stream turn failure.}
+      exit_code: 1
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-stream-trigger-failed-2}
+        - emit: {type: error, message: Synthetic stream turn failure., content: Synthetic stream turn failure.}
+      exit_code: 1
+    - name: claude
+      steps:
+        - emit: {type: system, subtype: init, session_id: synthetic-stream-trigger-failed-3}
+        - emit: {type: error, message: Synthetic stream turn failure., content: Synthetic stream turn failure.}
+      exit_code: 1
+comparison_rules:
+  # The status reminder and the run_finished of the audited turn, in either order: that turn's after_turn runs as its
+  # own task (src/runtime/session_events.py:156-161), and its finish callback writes run_finished after the master_done
+  # broadcast (src/runtime/master_cc_queue.py:304-309), as features-web-reply-audit compares them.
+  - either_order_of_adjacent_events:
+      first:
+        type: agent_message
+        match_fields: {from_session_name: "Session status"}
+      second:
+        type: run_finished
+        match_fields: {outcome: success}
+steps:
+  - kind: ws
+    name: catch-up from cursor zero ends with the buffered stream delta
+    path: /ws/sessions/${sessions.stream_case}
+    query: {cursor: 0}
+    collect:
+      where: {type: stream}
+      field: message.content
+      decode: none
+    until: {collected_contains: "An unfinished synthetic draft."}
+    timeout_seconds: 10
+    compare: {collected_contains: ["An unfinished synthetic draft."]}
+  - kind: ws
+    name: catch-up from cursor zero carries the committed user message
+    path: /ws/sessions/${sessions.delta}
+    query: {cursor: 0}
+    collect:
+      where: {type: message}
+      field: message.content
+      decode: none
+    until: {collected_contains: "What changed in the delta release notes?"}
+    timeout_seconds: 10
+    compare: {collected_contains: ["What changed in the delta release notes?"]}
+  - kind: ws
+    name: catch-up from cursor zero replays raw events and completes
+    path: /ws/sessions/${sessions.explain}
+    query: {cursor: 0}
+    collect:
+      where: {}
+      field: type
+      decode: none
+    until: {collected_contains: "catchup_complete"}
+    timeout_seconds: 10
+    compare: {collected_contains: ["master_done", "catchup_complete"]}
+  - kind: ws
+    name: catch-up from a middle cursor replays only the events at and after it
+    path: /ws/sessions/${sessions.explain}
+    query: {cursor: 4}
+    collect:
+      where: {}
+      field: type
+      decode: none
+    until: {collected_contains: "catchup_complete"}
+    timeout_seconds: 10
+    compare: {collected_contains: ["master_done", "catchup_complete"]}
+  - kind: ws
+    name: cursor at the total sends only catchup_complete
+    path: /ws/sessions/${sessions.explain}
+    query: {cursor: 10}
+    until: {frames: 1}
+    timeout_seconds: 10
+  - kind: ws
+    name: cursor past the total sends only catchup_complete
+    path: /ws/sessions/${sessions.explain}
+    query: {cursor: 999999}
+    until: {frames: 1}
+    timeout_seconds: 10
+  - kind: ws
+    name: worker session catch-up replays the runs transcript
+    path: /ws/sessions/${sessions.atlas_notes}
+    query: {cursor: 0}
+    until: {frames: 2}
+    timeout_seconds: 10
+  - kind: ws
+    name: a missing cursor closes the socket with 4400
+    path: /ws/sessions/${missing_session}
+    until: {close: true}
+    timeout_seconds: 10
+  - kind: ws
+    name: a cursor that is not decimal closes the socket with 4400
+    path: /ws/sessions/${missing_session}
+    query: {cursor: "{"}
+    until: {close: true}
+    timeout_seconds: 10
+  - kind: ws
+    name: a 20-digit cursor closes the socket with 4400
+    path: /ws/sessions/${missing_session}
+    query: {cursor: "99999999999999999999"}
+    until: {close: true}
+    timeout_seconds: 10
+  - kind: ws
+    name: a 19-digit cursor above int64 sends only catchup_complete
+    path: /ws/sessions/${sessions.explain}
+    query: {cursor: "9999999999999999999"}
+    until: {frames: 1}
+    timeout_seconds: 10
+  - kind: ws
+    name: missing token rejects the upgrade
+    path: /ws/sessions/${sessions.explain}
+    auth: none
+    send: []
+    until: {frames: 0}
+    timeout_seconds: 5
+    expect_reject: 403
+  - name: schedule the first live session-channel trigger
+    method: POST
+    path: /api/internal/schedule-trigger
+    json:
+      session_id: ${sessions.atlas}
+      delay_seconds: 4
+      message: Wake the synthetic session socket.
+    capture: {trigger_a1: trigger_id}
+    expect_status: 200
+    defer_files: true
+  - name: schedule the second live session-channel trigger
+    method: POST
+    path: /api/internal/schedule-trigger
+    json:
+      session_id: ${sessions.atlas}
+      delay_seconds: 9
+      message: Wake the synthetic session socket again.
+    capture: {trigger_a2: trigger_id}
+    expect_status: 200
+    defer_files: true
+  - name: schedule the first live sidebar trigger
+    method: POST
+    path: /api/internal/schedule-trigger
+    json:
+      session_id: ${sessions.fable}
+      delay_seconds: 12
+      message: Wake the synthetic sidebar socket.
+    capture: {trigger_b1: trigger_id}
+    expect_status: 200
+    defer_files: true
+  - name: schedule the second live sidebar trigger
+    method: POST
+    path: /api/internal/schedule-trigger
+    json:
+      session_id: ${sessions.garnet}
+      delay_seconds: 17
+      message: Wake the synthetic sidebar socket again.
+    capture: {trigger_b2: trigger_id}
+    expect_status: 200
+    defer_files: true
+  - name: schedule the third live sidebar trigger
+    method: POST
+    path: /api/internal/schedule-trigger
+    json:
+      session_id: ${sessions.ember}
+      delay_seconds: 22
+      message: Wake the synthetic sidebar socket a third time.
+    capture: {trigger_b3: trigger_id}
+    expect_status: 200
+    defer_files: true
+  - name: schedule the fourth live sidebar trigger
+    method: POST
+    path: /api/internal/schedule-trigger
+    json:
+      session_id: ${sessions.atlas_survey}
+      delay_seconds: 27
+      message: Wake the synthetic sidebar socket a fourth time.
+    capture: {trigger_b4: trigger_id}
+    expect_status: 200
+    defer_files: true
+  - kind: ws
+    name: the trigger turns reach the live socket on the session channel
+    path: /ws/sessions/${sessions.atlas}
+    query: {cursor: 999999}
+    collect:
+      where: {type: message}
+      field: message.content
+      decode: none
+    until: {collected_contains: "The synthetic stream trigger was handled."}
+    timeout_seconds: 30
+    compare: {collected_contains: ["The synthetic stream trigger was handled."]}
+  - kind: ws
+    name: the trigger turns reach the live socket on the sidebar channel
+    path: /ws/sessions/${sessions.atlas}
+    query: {cursor: 999999}
+    collect:
+      where: {type: running_changed}
+      field: type
+      decode: none
+    until: {collected_contains: "running_changed"}
+    timeout_seconds: 30
+    compare: {collected_contains: ["running_changed"]}
+  - kind: wait
+    name: wait for the last live trigger to fire before shutdown
+    timeout_seconds: 60
+    until:
+      file_field:
+        path: sessions/${sessions.atlas_survey}/triggers/${capture.trigger_b4}.json
+        field: status
+        equals: fired

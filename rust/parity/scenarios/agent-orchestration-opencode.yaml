@@ -1,0 +1,35 @@
+stage: agent-orchestration
+name: manager-turn-opencode
+config:
+  backends:
+    options:
+      - id: opencode-synthetic
+        label: Synthetic OpenCode
+        type: opencode
+        model: fakeprov/fake-model
+        proxy_url: null
+fake_agent:
+  starts:
+    - name: opencode
+      steps:
+        - emit:
+            type: session.text.delta
+            data: {assistantMessageID: synthetic-assistant, ordinal: 0, delta: The synthetic OpenCode turn finished.}
+      exit_code: 0
+expect_starts: 1
+steps:
+  - name: send a manager message to OpenCode
+    method: POST
+    path: /api/chat/${sessions.delta}/message
+    json: {content: Start the synthetic OpenCode manager turn., request_id: synthetic-chat-manager-opencode}
+    capture: {input_id: input_event_id}
+    expect_status: 202
+    defer_files: true
+  - kind: wait
+    name: wait for the OpenCode manager run to finish
+    timeout_seconds: 30
+    until:
+      event:
+        session: ${sessions.delta}
+        type: run_finished
+        fields: {input_event_ids: ["${capture.input_id}"]}

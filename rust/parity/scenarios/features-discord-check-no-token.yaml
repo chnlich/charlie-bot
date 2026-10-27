@@ -1,0 +1,9 @@
+stage: features
+name: features-discord-check-no-token
+description: The check route answers 409 before any Discord call when no bot token is set.
+steps:
+  - name: check without a bot token answers 409
+    method: POST
+    path: /api/internal/discord/check
+    json: {}
+    expect_status: 409

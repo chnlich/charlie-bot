@@ -5,13 +5,17 @@ use std::path::Path;
 
 use crate::exit::CliExit;
 
-/// `read_required_text_file`: a required text file, a usage error on a missing or empty one.
+/// `read_required_text_file`: a required text file, a usage error on a missing or empty one. The text
+/// carries Python's text-mode line endings: `Path.read_text` turns `\r\n` and a lone `\r` into `\n`.
 pub fn read_required_text_file(flag_name: &str, file_path: &str) -> Result<String, CliExit> {
   let path = Path::new(file_path);
   if !path.is_file() {
     return Err(CliExit::usage(format!("{flag_name} not found: {file_path}")));
   }
-  let content = std::fs::read_to_string(path).map_err(|error| CliExit::error(error.to_string()))?;
+  let content = std::fs::read_to_string(path)
+    .map_err(|error| CliExit::error(error.to_string()))?
+    .replace("\r\n", "\n")
+    .replace('\r', "\n");
   if content.trim().is_empty() {
     return Err(CliExit::usage(format!("{flag_name} is empty: {file_path}")));
   }
@@ -29,4 +33,20 @@ pub fn read_reply_text(file_arg: &str) -> Result<String, CliExit> {
     return Ok(text);
   }
   read_required_text_file("--file", file_arg)
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn a_text_file_reads_with_python_text_mode_line_endings() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("message.txt");
+    std::fs::write(&path, "first\r\nsecond\rthird\n").unwrap();
+
+    let text = read_required_text_file("--file", path.to_str().unwrap()).unwrap();
+
+    assert_eq!(text, "first\nsecond\nthird\n");
+  }
 }

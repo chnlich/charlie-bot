@@ -22,6 +22,7 @@ PACKAGES = (
     "src.features.discord",
     "src.features.disk_sweep",
     "src.features.web_reply",
+    "src.features.host_auth",
     "src.features.improve",
     "src.features.memory",
     "src.features.router",

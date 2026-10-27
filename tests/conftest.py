@@ -3,13 +3,10 @@ import atexit
 import contextlib
 import dataclasses
 import datetime
-import importlib
-import io
 import itertools
 import json
 import os
 import pathlib
-import re
 import shutil
 import subprocess
 import sys
@@ -889,15 +886,6 @@ def queued_user_reorder_events() -> list[dict]:
   ]
 
 
-def make_json_response(payload: dict[str, Any], status_code: int = 200) -> mock.MagicMock:
-  """A transport-response stand-in for patched CLI transport calls: `.status_code` is 200 (or the
-  given code) and `.json()` returns payload, so the CLI's success path runs straight through."""
-  resp = mock.MagicMock()
-  resp.status_code = status_code
-  resp.json.return_value = payload
-  return resp
-
-
 def archive_cutoff_events() -> tuple[datetime.datetime, list[dict]]:
   """(cutoff, events) where five `e{i}` events predate and three `f{i}` events follow the cutoff."""
   base = datetime.datetime(2026, 5, 10, 0, 0, 0, tzinfo=datetime.UTC)
@@ -962,52 +950,6 @@ async def make_parent(mgr: SessionBlocks, *, name: str = "Parent") -> str:
       ],
   )
   return parent.id
-
-
-def make_sessions_dir_config(tmp_path: pathlib.Path) -> mock.MagicMock:
-  """A MagicMock config for patched CLI ``get_config`` calls: ``sessions_dir`` points at a created
-  dir under tmp_path. Callers rely on the sessions root existing while the test's cwd (tmp_path
-  itself) sits outside it, so session resolution reads the cwd as sessionless. The dir name is
-  arbitrary and no test reads it back."""
-  cfg = mock.MagicMock()
-  cfg.sessions_dir = tmp_path / "fake_sessions"
-  cfg.sessions_dir.mkdir(parents=True, exist_ok=True)
-  return cfg
-
-
-def setup_session_cwd(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, sid: str) -> mock.MagicMock:
-  """Build a session dir tree at <tmp_path>/sessions/<sid> and chdir into it; the returned mock cfg is
-  what the tests patch into src.runtime.cli.common.get_config (the readback/diff readers). The sessions
-  root itself rides the light seam resolve_session_id reads, so the cwd derivation answers from
-  the built tree."""
-  cfg = mock.MagicMock()
-  cfg.server.port = 9443
-  cfg.sessions_dir = tmp_path / "sessions"
-  session_dir = cfg.sessions_dir / sid
-  session_dir.mkdir(parents=True, exist_ok=True)
-  monkeypatch.chdir(session_dir)
-  monkeypatch.setattr(CLI_COMMON_SESSIONS_DIR_PATCH_TARGET, lambda: cfg.sessions_dir)
-  return cfg
-
-
-def _assert_stderr_fragments(capsys: pytest.CaptureFixture[str], *fragments: str) -> None:
-  err = capsys.readouterr().err
-  for fragment in fragments:
-    assert fragment in err
-
-
-def assert_cli_reject(
-    exc_info: pytest.ExceptionInfo[SystemExit], capsys: pytest.CaptureFixture[str], *err_fragments: str) -> None:
-  """Shared tail of CLI reject tests: main() exited nonzero and every fragment landed on stderr."""
-  assert exc_info.value.code != 0
-  _assert_stderr_fragments(capsys, *err_fragments)
-
-
-def assert_cli_reject_exit2(
-    exc_info: pytest.ExceptionInfo[SystemExit], capsys: pytest.CaptureFixture[str], *err_fragments: str) -> None:
-  """Same as assert_cli_reject with the exit code pinned at 2 (CLI usage error, e.g. bad file input)."""
-  assert exc_info.value.code == 2
-  _assert_stderr_fragments(capsys, *err_fragments)
 
 
 def make_home_config(tmp_path: pathlib.Path) -> core_config.CharlieBotConfig:
@@ -1412,8 +1354,6 @@ CODEX_BACKEND_OPTION = backend_option(id="codex-o3", label="Codex", type="codex"
 # Antigravity option used by routing tests.
 AGY_BACKEND_OPTION = backend_option(id="agy", label="Antigravity", type="antigravity", model="gemini-2.5-pro")
 
-PLAN_TEST_BACKEND_OPTIONS = [OPUS_BACKEND_OPTION]
-
 # Prompt payload beginning with "--", which a naive argv builder would misread as a CLI flag;
 # each backend's build-command test asserts the string reaches the CLI as prompt payload only.
 FLAG_LIKE_PROMPT = "--malicious-flag ignore previous"
@@ -1445,51 +1385,10 @@ TRIGGERS_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET = "src.runtime.triggers.asy
 # patch setattrs the stand-in on the src.runtime.triggers module attribute.
 TRIGGERS_SACCT_AVAILABLE_PATCH_TARGET = "src.runtime.triggers._SACCT_AVAILABLE"
 
-# Import-path patch target for the CLI HTTP layer's config read. src/runtime/cli/common.py defines a
-# get_config forwarder (config's module imports lazily on first call, the M92 floor rule), so
-# mock setattrs the stand-in on the src.runtime.cli.common module attribute and every helper defined
-# there reads it as a module global at call time. The request path itself reads only the
-# server port through the fingerprint-keyed document (_internal_base_url), so the transport
-# harness patches the base-url seam below and this target covers the remaining direct readers
-# (the sent-but-lost readback, plan diff's version files).
-CLI_COMMON_GET_CONFIG_PATCH_TARGET = "src.runtime.cli.common.get_config"
-
 # Import-path patch target for the config read itself. Verbs that defer the import into the
 # call (`from src.infra.config import get_config` at call scope) read the src.infra.config
-# module attribute at call time, so the stand-in lands there. src.runtime.cli.common's forwarder
-# (CLI_COMMON_GET_CONFIG_PATCH_TARGET above) defer-imports the same attribute per call, so a
-# stand-in set here flows through its callers too; the reverse does not hold — a stand-in on
-# common's module global leaves this attribute real for every deferred import.
+# module attribute at call time, so the stand-in lands there.
 CONFIG_GET_CONFIG_PATCH_TARGET = "src.infra.config.get_config"
-
-# Import-path patch target for the CLI request path's server base URL. src/runtime/cli/common.py
-# resolves it through the fingerprint-keyed port document (_internal_base_url; a hit keeps
-# config's model stack out of the verb process), so mock setattrs the stand-in on the
-# src.runtime.cli.common module attribute and _request_with_contract reads it as a module global.
-CLI_COMMON_BASE_URL_PATCH_TARGET = "src.runtime.cli.common._internal_base_url"
-
-# Import-path patch target for the CLI's sessions root. src/runtime/cli/common.py derives it from the
-# env-resolved home (_sessions_dir, the M102 wrap-verb light path), so mock setattrs the
-# stand-in on the src.runtime.cli.common module attribute and resolve_session_id reads it as a module
-# global at call time.
-CLI_COMMON_SESSIONS_DIR_PATCH_TARGET = "src.runtime.cli.common._sessions_dir"
-
-# Import-path patch target for the version-skew hint the CLI error paths append. src/runtime/cli/common.py
-# defines _maybe_version_skew_hint and _exit_server_rejection reads it as a module global at call
-# time, so mock setattrs the stand-in on the src.runtime.cli.common module attribute.
-CLI_COMMON_MAYBE_VERSION_SKEW_HINT_PATCH_TARGET = "src.runtime.cli.common._maybe_version_skew_hint"
-
-# Import-path patch target for the CLI's internal POST helper. Each verb module binds
-# src/runtime/cli/common as a module (`from src.runtime.cli import common as cli_common`) and
-# reads post_internal_api off it at call time, so mock setattrs the stand-in on the
-# src.runtime.cli.common module attribute and intercepts every verb's POST.
-CLI_COMMON_POST_INTERNAL_API_PATCH_TARGET = "src.runtime.cli.common.post_internal_api"
-
-# Import-path patch target for the CLI connect-retry budget. src/runtime/cli/common.py reads the
-# budget through the timeouts module at call time (`timeouts.CLI_CONNECT_TOTAL_TIMEOUT`), so mock
-# setattrs the test budget on the src.infra.timeouts module attribute and post_internal_api's retry
-# loop picks it up from there.
-CLI_COMMON_CONNECT_TOTAL_TIMEOUT_PATCH_TARGET = "src.infra.timeouts.CLI_CONNECT_TOTAL_TIMEOUT"
 
 # Import-path patch target for the logged-task spawner: every producer resolves
 # `tasks.create_logged_task` on the src.infra.tasks module attribute at call time, so mock
@@ -1550,19 +1449,6 @@ def registered_cron_handler(name: str, handler: Callable[[], Awaitable[str]]) ->
     scheduled_handlers.register_handler(name, __name__, attr=attr)
     yield
 
-
-# Import-path patch targets for the CLI HTTP layer's transport. src/runtime/cli/common.py exposes one
-# adapter per verb (`_request_post`/`_request_get`, both over the phase-separated client
-# `_send_request`), and `_request_with_contract` reads the adapter as a module global at
-# call time, so mock and monkeypatch.setattr land the stand-in on the src.runtime.cli.common module
-# attribute and every helper defined there picks it up at call time.
-CLI_COMMON_TRANSPORT_POST_PATCH_TARGET = "src.runtime.cli.common._request_post"
-CLI_COMMON_TRANSPORT_GET_PATCH_TARGET = "src.runtime.cli.common._request_get"
-
-# Import-path patch target for the memory CLI's home read. monkeypatch.setattr resolves it to
-# src/infra/home.py's charliebot_home_dir and swaps that attribute, so the CLI's
-# home.charliebot_home_dir() reads pick the stand-in up at call time.
-CLI_MEMORY_HOME_PATCH_TARGET = "src.infra.home.charliebot_home_dir"
 
 # Import-path patch target for the shared httpx client factory. Every production caller binds
 # the module (`from src.infra import http`) and reads http.get_http_client() at call time, so
@@ -1712,39 +1598,6 @@ def stub_subprocess_spawn(monkeypatch: pytest.MonkeyPatch, patch_target: str, pi
   process.stdin.wait_closed = mock.AsyncMock()
   monkeypatch.setattr(patch_target, mock.AsyncMock(return_value=process))
   return process
-
-
-def plan_page_html(goal_body: str = "Ship the fix.") -> str:
-  """Minimal plan page passing the plan assertion set: the shipped template's <style> block
-  verbatim (style-verbatim compares after whitespace collapse), six numbered sections, and a footer,
-  with *goal_body* as the Problem / Goal section's body."""
-  template = (ROOT / "prompts" / "plan_template.html").read_text(encoding="utf-8")
-  style = re.search(r"<style>.*?</style>", template, re.DOTALL).group(0)
-  titles = ["Problem / Goal", "Context", "High Level Solution", "Detailed Design", "Trade-offs", "Other Details"]
-  sections = "".join(
-      f'<section class="plan-section"><h2><span class="n">{i}</span> {title}</h2>'
-      f"<p>{goal_body if i == 1 else title}</p></section>" for i, title in enumerate(titles, 1))
-  return (f"<html><head>{style}</head><body>{sections}"
-          '<div class="foot"><p>How to respond.</p></div></body></html>')
-
-
-def write_stub_chrome(tmp_path: pathlib.Path, height: int) -> str:
-  """Write a fake headless-chrome binary printing a wrapper-shaped DOM with the chosen measured height."""
-  stub = tmp_path / f"stub-chrome-{height}.sh"
-  stub.write_text(f"#!/bin/sh\necho 'probe output <pre id=\"page-height\">{height}</pre>'\n", encoding="utf-8")
-  stub.chmod(0o755)
-  return str(stub)
-
-
-def build_plan_cfg(tmp_path: pathlib.Path) -> core_config.CharlieBotConfig:
-  """CharlieBotConfig for plan tests: the 800px stub chrome answers the page-height measurement, and the
-  sessions/worktrees dirs live under tmp_path so each test owns its own tree."""
-  return core_config.CharlieBotConfig(
-      charliebot_home=tmp_path / "charliebot-home",
-      paths={"worktree_dir": str(tmp_path / "worktrees")},
-      backends={"options": PLAN_TEST_BACKEND_OPTIONS},
-      headless_chrome_bin=write_stub_chrome(tmp_path, 800),
-  )
 
 
 def build_scheduler_cfg(tmp_path: pathlib.Path) -> core_config.CharlieBotConfig:
@@ -2010,80 +1863,7 @@ def cfg_with_repo(repo_root: pathlib.Path) -> core_config.CharlieBotConfig:
   return _Cfg()  # type: ignore[return-value]
 
 
-def build_worktree_cfg(tmp_path: pathlib.Path) -> core_config.CharlieBotConfig:
-  """CharlieBotConfig for tests that create and remove worktree dirs: both the charliebot-home and the
-  worktrees dirs live under tmp_path so each test owns its own tree — the default (~/worktrees) would
-  touch real host worktrees. One cc-claude backend registered so a root created without a backend
-  resolves its default (cfg.backends.options[0])."""
-  return core_config.CharlieBotConfig(
-      charliebot_home=tmp_path / "home",
-      paths={"worktree_dir": str(tmp_path / "worktrees")},
-      backends=fake_backends(),
-  )
-
-
 PUBLISH_BASE_URL = "https://pub.example.test/charliebot_pub"
-PUBLISH_READER_URL = "https://reader.example.com/s/abc123/"
-
-
-def deploy_publish_lane(tmp_path: pathlib.Path) -> pathlib.Path:
-  """Create ``tmp_path / "publish"`` the way the host's deployment step leaves it (the directory
-  plus its blank index.html) and return it."""
-  publish_dir = tmp_path / "publish"
-  publish_dir.mkdir(parents=True, exist_ok=True)
-  (publish_dir / "index.html").write_text("", encoding="utf-8")
-  return publish_dir
-
-
-def build_publish_cfg(tmp_path: pathlib.Path) -> core_config.CharlieBotConfig:
-  """CharlieBotConfig with the publish lane deployed under tmp_path (``deploy_publish_lane``) and
-  ``PUBLISH_BASE_URL`` set."""
-  return core_config.CharlieBotConfig(
-      charliebot_home=tmp_path / "home",
-      publish={
-          "dir": deploy_publish_lane(tmp_path),
-          "public_base_url": PUBLISH_BASE_URL
-      },
-  )
-
-
-PUBLISH_RECORD_ARGV_PROGRAM = f"""\
-import json
-import pathlib
-import sys
-
-pathlib.Path(__file__).with_name("argv.json").write_text(json.dumps(sys.argv[1:]), encoding="utf-8")
-print({PUBLISH_READER_URL!r})
-"""
-
-
-def write_publish_program(tmp_path: pathlib.Path, body: str) -> list[str]:
-  """Write *body* as the external publish program under tmp_path and return the command that runs it; the
-  command lane runs a program this repository does not ship."""
-  script = tmp_path / "program.py"
-  script.write_text(body, encoding="utf-8")
-  return [sys.executable, str(script)]
-
-
-def write_artifact(tmp_path: pathlib.Path, name: str = "page.html", body: str = "<p>hello</p>") -> pathlib.Path:
-  """Write one fake artifact source file under tmp_path/artifacts and return its path; publish and
-  slack publish-lane tests stage here the file a published URL points at."""
-  path = tmp_path / "artifacts" / name
-  path.parent.mkdir(parents=True, exist_ok=True)
-  path.write_text(body, encoding="utf-8")
-  return path
-
-
-def write_plan_artifact(
-    cfg: core_config.CharlieBotConfig, session_id: str, name: str, content: str | None = None) -> str:
-  """Write one plan artifact under cfg's sessions dir and return its plan-relative path; the default content
-  passes the plan assertion set so tests can present/approve directly."""
-  if content is None:
-    content = plan_page_html()
-  artifacts_dir = cfg.sessions_dir / session_id / "artifacts"
-  artifacts_dir.mkdir(parents=True, exist_ok=True)
-  (artifacts_dir / name).write_text(content, encoding="utf-8")
-  return f"artifacts/{name}"
 
 
 def write_thread_meta(cfg: core_config.CharlieBotConfig, session_id: str, meta: dict) -> pathlib.Path:
@@ -2093,37 +1873,6 @@ def write_thread_meta(cfg: core_config.CharlieBotConfig, session_id: str, meta: 
   path = thread_dir / "metadata.json"
   path.write_text(json.dumps(meta), encoding="utf-8")
   return path
-
-
-def plan_version_v1(file: str = "artifacts/plan_01.html") -> dict:
-  """One plan-registry version in the current schema: v1, initial trigger, no base, no note
-  (present has no predecessor), fixed timestamp."""
-  return {
-      "v": 1,
-      "file": file,
-      "created_at": "2026-07-20T00:00:00+00:00",
-      "trigger": "initial",
-      "base": None,
-      "note": None,
-  }
-
-
-def plan_doc(
-    plan_id: int,
-    versions: list[dict],
-    *,
-    title: str = "Plan",
-    takeoff: dict | None = None,
-    closed: dict | None = None,
-) -> dict:
-  """One plan-registry document wrapping *versions* in the registry schema."""
-  return {
-      "id": plan_id,
-      "title": title,
-      "versions": versions,
-      "takeoff": takeoff,
-      "closed": closed,
-  }
 
 
 def build_scheduler(cfg: Any, blocks: SessionBlocks) -> scheduler.Scheduler:
@@ -2161,122 +1910,6 @@ def pidfd_open_available() -> None:
   """Skip when the production pidfd helpers are not supported on this host."""
   if not triggers._PIDFD_SUPPORTED:
     pytest.skip("pidfd not supported on this host (not even via syscall)")
-
-
-def make_cli_config(tmp_path: pathlib.Path) -> mock.MagicMock:
-  """A config stand-in for a CLI main() call: the server port and base URL it reads, a sessions dir
-  under *tmp_path*, and an empty access key planted so no credentials file is read."""
-  cfg = mock.MagicMock()
-  cfg.server.port = 9443
-  cfg.server_base_url = "http://localhost:9443"
-  stub_credentials({"charliebot": {"access_key": ""}})
-  cfg.sessions_dir = tmp_path / "sessions"
-  cfg.sessions_dir.mkdir(parents=True, exist_ok=True)
-  return cfg
-
-
-def fake_cli_cfg(monkeypatch: pytest.MonkeyPatch, sessions_dir: pathlib.Path) -> None:
-  """Point the CLI HTTP layer at a fake config so tests never touch a real server."""
-  stub_credentials({"charliebot": {"access_key": ""}})
-  monkeypatch.setattr(
-      CLI_COMMON_GET_CONFIG_PATCH_TARGET,
-      lambda: types.SimpleNamespace(server_base_url="https://server", sessions_dir=sessions_dir))
-  monkeypatch.setattr(CLI_COMMON_BASE_URL_PATCH_TARGET, lambda: "https://server")
-
-
-def _patched_cli_transport(transport_target: str, cfg: object, argv: list[str],
-                           **transport_kw: object) -> Iterator[mock.MagicMock]:
-  """The externals a CLI main() call touches: sys.argv becomes argv, get_config returns cfg (the
-  readback/diff paths still read it), the request path's base URL derives from cfg's
-  server_base_url when it is a plain attribute (MagicMock auto-attrs stringify harmlessly — the
-  transport verb is patched, nothing dials), and the transport verb at transport_target is a
-  MagicMock built from transport_kw (a default 200/{} success response when no return_value is
-  given, so the CLI's success path runs; a test can set the response after entering). The mock is
-  yielded for that and for call assertions."""
-  base_url = str(getattr(cfg, "server_base_url", "http://localhost:18498"))
-  with mock.patch("sys.argv", argv),\
-       mock.patch(CLI_COMMON_GET_CONFIG_PATCH_TARGET, return_value=cfg),\
-       mock.patch(CLI_COMMON_BASE_URL_PATCH_TARGET, return_value=base_url),\
-       mock.patch(transport_target, **transport_kw) as transport_mock:
-    if "return_value" not in transport_kw:
-      transport_mock.return_value = make_json_response({})
-    yield transport_mock
-
-
-@contextlib.contextmanager
-def patched_cli_post(cfg: object, argv: list[str], **post_kw: object) -> Iterator[mock.MagicMock]:
-  """_patched_cli_transport with _request_post as the patched verb (the POST path every CLI command
-  shares)."""
-  yield from _patched_cli_transport(CLI_COMMON_TRANSPORT_POST_PATCH_TARGET, cfg, argv, **post_kw)
-
-
-def schedule_trigger_argv(message: str, *extra: str) -> list[str]:
-  """The schedule_trigger CLI argv the CLI tests share: session s1, --max-wait 60, --message."""
-  return ["schedule_trigger", "--session", "s1", "--max-wait", "60", "--message", message, *extra]
-
-
-def registering_post(cfg: types.SimpleNamespace, session_id: str, calls: list[dict]) -> Callable:
-  """post_internal_api stand-in: persists the trigger the way the server would, then answers."""
-
-  def post(endpoint: str, payload: dict, *, readback: object = None, rejection_exit_codes: object = None) -> dict:
-    calls.append({"endpoint": endpoint, "payload": payload})
-    triggers_dir = cfg.sessions_dir / session_id / "triggers"
-    triggers_dir.mkdir(parents=True, exist_ok=True)
-    stored = {
-        "id": "trig-1",
-        "status": "pending",
-        "message": payload["message"],
-        "watch_targets": payload["watch_targets"],
-        "created_at": "2026-10-08T00:00:00+00:00",
-        "fire_at": "2026-10-08T00:11:00+00:00",
-    }
-    (triggers_dir / "trig-1.json").write_text(json.dumps(stored), encoding="utf-8")
-    return {"trigger_id": "trig-1", "fire_at": "2026-10-08T00:11:00+00:00"}
-
-  return post
-
-
-def run_reply_stdin_case(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str], verb: str,
-    readback: dict[str, Any]) -> None:
-  """Drive one platform reply CLI's ``--file -`` arm with the reply piped on stdin.
-
-  The reply mains share their transport (src.runtime.cli.common's read_reply_text and
-  post_internal_api, the one-JSON-line readback print), so the stdin contract
-  is asserted once here per verb: the piped text is the body's ``text``, the
-  readback prints unmodified, and the post names the platform's endpoint.
-  """
-  cfg = setup_session_cwd(tmp_path, monkeypatch, "abc")
-  monkeypatch.setattr("sys.stdin", io.StringIO("piped reply\n"))
-  with patched_cli_post(cfg, [verb, "reply", "--file", "-"], return_value=make_json_response(readback)) as post_mock:
-    importlib.import_module(f"src.features.{verb}.cli").main()
-  assert post_mock.call_args.args[0].endswith(f"/api/internal/{verb}/reply")
-  assert post_mock.call_args.kwargs["json"]["text"] == "piped reply\n"
-  assert json.loads(capsys.readouterr().out) == readback
-
-
-def run_reply_file_case(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str], verb: str,
-    readback: dict[str, Any]) -> None:
-  """Drive one platform reply CLI's ``--file <path>`` arm with the reply text on disk.
-
-  The reply mains share their transport (src.runtime.cli.common's read_reply_text and
-  post_internal_api, the one-JSON-line readback print), so the file contract
-  is asserted once here per verb: the file's text rides the body's ``text``
-  beside the resolved session id, the readback prints as one JSON line, and
-  the post names the platform's endpoint.
-  """
-  cfg = setup_session_cwd(tmp_path, monkeypatch, "abc")
-  reply_file = tmp_path / "reply.md"
-  reply_file.write_text("the answer", encoding="utf-8")
-  with patched_cli_post(cfg, [verb, "reply", "--file", str(reply_file)],
-                        return_value=make_json_response(readback)) as post_mock:
-    importlib.import_module(f"src.features.{verb}.cli").main()
-  assert post_mock.call_args.args[0].endswith(f"/api/internal/{verb}/reply")
-  assert post_mock.call_args.kwargs["json"] == {"session_id": "abc", "text": "the answer"}
-  out = capsys.readouterr().out
-  assert out.count("\n") == 1
-  assert json.loads(out) == readback
 
 
 def make_task_spawner(tasks: list[asyncio.Task]) -> Callable[..., asyncio.Task]:
@@ -3024,21 +2657,6 @@ async def _async_wait_for(predicate: Callable[[], bool], timeout: float, what: s
       return
     await asyncio.sleep(poll)
   raise TimeoutError(what)
-
-
-def reap_child(pid: int, timeout: float = 5) -> None:
-  """Reap this process's child with waitpid(WNOHANG): a dead child stays a zombie, and kill -0 keeps
-  answering, until reaped."""
-  deadline = time.monotonic() + timeout
-  while time.monotonic() < deadline:
-    try:
-      reaped, _status = os.waitpid(pid, os.WNOHANG)
-    except ChildProcessError:
-      return
-    if reaped == pid:
-      return
-    time.sleep(0.05)
-  raise TimeoutError(f"pid {pid} not reaped after {timeout}s")
 
 
 async def _settle_parent(

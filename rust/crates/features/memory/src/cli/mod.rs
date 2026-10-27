@@ -1,6 +1,6 @@
 //! The `memory` CLI verbs (`src/features/memory/cli.py`).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::fs;
 use std::io::{self, Read};
@@ -9,7 +9,6 @@ use std::process;
 
 use charliebot_cli_common::args::with_infer_long_args;
 use charliebot_cli_common::exit::CliExit;
-use charliebot_core::pyfmt::str_repr;
 use charliebot_core::{credentials, home, pystr, run_token};
 use charliebot_store::run_identity;
 use charliebot_store::run_records::RunRecord;
@@ -18,15 +17,12 @@ use serde_json::{Value, json};
 use time::format_description::well_known::Rfc3339;
 use time::macros::format_description;
 use time::{OffsetDateTime, UtcOffset};
-use unicode_width::UnicodeWidthChar;
+
+mod proposal;
+mod store;
 
 const RUN_TOKEN_ENV: &str = "CHARLIEBOT_RUN_TOKEN";
 const TEST_NOW_ENV: &str = "CHARLIEBOT_MEMORY_CLI_TEST_NOW";
-const TOPICS_FILENAME: &str = "topics";
-const ENTRIES_DIRNAME: &str = "entries";
-const STAGING_DIRNAME: &str = "staging";
-const BODY_LINE_COLUMN_LIMIT: usize = 120;
-
 #[derive(Parser)]
 #[command(name = "memory", about = "Labeled-entry memory store: query, add captures, and lint")]
 struct MemoryCli {
@@ -80,7 +76,10 @@ struct LintArgs {
 /// Parse the memory arguments and run one local store verb.
 pub fn main(args: &[OsString]) -> Result<(), CliExit> {
   if args.first().and_then(|arg| arg.to_str()) == Some("proposal") {
-    return Err(CliExit::error("memory proposal is not ported to the Rust CLI yet"));
+    if args.get(1).and_then(|arg| arg.to_str()) == Some("commit") {
+      return Err(CliExit::error("memory proposal is not ported to the Rust CLI yet"));
+    }
+    return proposal::main(&args[1..]);
   }
   let command = with_infer_long_args(MemoryCli::command());
   let argv = std::iter::once(OsString::from("charliebot memory")).chain(args.iter().cloned());
@@ -218,11 +217,11 @@ fn load_json_metadata(path: &Path) -> Result<Option<Value>, CliExit> {
 
 fn add(args: &AddArgs) -> Result<(), CliExit> {
   let body = match &args.file {
-    Some(path) => read_text(path)?,
+    Some(path) => store::read_text(path)?,
     None => {
       let mut body = String::new();
       io::stdin().read_to_string(&mut body).map_err(|error| CliExit::error(error.to_string()))?;
-      normalize_newlines(&body)
+      store::normalize_newlines(&body)
     }
   };
   let first_line = body.split('\n').next().unwrap_or_default();
@@ -258,7 +257,7 @@ fn write_capture(
   let slug = slugify(title);
   let slug = if slug.is_empty() { "capture" } else { &slug };
   let filename = format!("{timestamp}-{session_slug}-{slug}.md");
-  let target = memory_dir.join(STAGING_DIRNAME).join(filename);
+  let target = memory_dir.join(store::STAGING_DIRNAME).join(filename);
   fs::write(&target, body).map_err(|error| CliExit::error(format!("write {}: {error}", target.display())))?;
   Ok(target)
 }
@@ -307,7 +306,7 @@ fn lint(args: &LintArgs) -> Result<(), CliExit> {
     Some(path) => PathBuf::from(charliebot_core::paths::expanduser(&path.to_string_lossy())),
     None => home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))?.join("memory"),
   };
-  let (violations, warnings) = lint_store(&root)?;
+  let (violations, warnings) = store::lint_store(&root)?;
   for warning in warnings {
     eprintln!("warning: {warning}");
   }
@@ -320,201 +319,6 @@ fn lint(args: &LintArgs) -> Result<(), CliExit> {
     process::exit(1);
   }
   Ok(())
-}
-
-fn lint_store(root: &Path) -> Result<(Vec<String>, Vec<String>), CliExit> {
-  let topics_path = root.join(TOPICS_FILENAME);
-  let mut violations = Vec::new();
-  let topics = if !topics_path.is_file() {
-    violations.push(format!("{}: topics vocabulary file not found", topics_path.display()));
-    BTreeMap::new()
-  } else {
-    match load_topics_for_lint(&topics_path)? {
-      Ok(topics) => topics,
-      Err(violation) => {
-        violations.push(violation);
-        BTreeMap::new()
-      }
-    }
-  };
-  let entry_files = entry_files(root)?;
-  for path in &entry_files {
-    match crate::memory::parse_entry(path) {
-      Ok(entry) => violations.extend(validate_entry(&entry, &topics)),
-      Err(error) if error.downcast_ref::<crate::memory::MemoryFormatError>().is_some() => {
-        violations.push(error.to_string());
-      }
-      Err(error) => return Err(CliExit::error(error.to_string())),
-    }
-  }
-  let warnings = width_warnings(root, &entry_files)?;
-  let staging_dir = root.join(STAGING_DIRNAME);
-  if staging_dir.is_dir() {
-    for path in sorted_markdown_files(&staging_dir)? {
-      let text = read_text(&path)?;
-      let first_line = text.split('\n').next().unwrap_or_default();
-      if text.is_empty() {
-        violations.push(format!("{}: empty capture file", path.display()));
-      } else if !first_line.starts_with("# ") {
-        violations.push(format!("{}: line 1: capture must start with '# <title>'", path.display()));
-      } else if pystr::strip(&first_line[2..]).is_empty() {
-        violations.push(format!("{}: line 1: empty title after '# '", path.display()));
-      }
-    }
-  }
-  Ok((violations, warnings))
-}
-
-fn load_topics_for_lint(path: &Path) -> Result<Result<BTreeMap<String, bool>, String>, CliExit> {
-  let text = read_text(path)?;
-  let mut topics = BTreeMap::new();
-  for (index, raw) in text.split('\n').enumerate() {
-    if raw.is_empty() {
-      continue;
-    }
-    let line_number = index + 1;
-    let Some((name, resident)) = parse_topic_line(raw) else {
-      return Ok(Err(format!("{}: line {line_number}: malformed topic line: {}", path.display(), str_repr(raw))));
-    };
-    if topics.contains_key(name) {
-      return Ok(Err(format!("{}: line {line_number}: duplicate topic {}", path.display(), str_repr(name))));
-    }
-    topics.insert(name.to_string(), resident);
-  }
-  Ok(Ok(topics))
-}
-
-fn parse_topic_line(raw: &str) -> Option<(&str, bool)> {
-  let (name, resident) = match raw.strip_suffix(" resident") {
-    Some(name) => (name, true),
-    None => (raw, false),
-  };
-  let mut chars = name.chars();
-  chars.next().filter(|character| character.is_ascii_lowercase() || character.is_ascii_digit())?;
-  chars
-    .all(|character| character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-')
-    .then_some((name, resident))
-}
-
-fn validate_entry(entry: &crate::memory::Entry, topics: &BTreeMap<String, bool>) -> Vec<String> {
-  let topic_label = entry.topic.as_deref().unwrap_or("?");
-  let violation = |message: String| format!("entries/{topic_label}/{}.md: {message}", entry.slug);
-  let mut violations = Vec::new();
-  if !is_slug(&entry.slug) {
-    violations
-      .push(violation(format!("filename slug {} does not match slug charset [A-Za-z0-9._-]", str_repr(&entry.slug))));
-  }
-  match entry.topic.as_deref() {
-    None => violations.push(violation("missing required header field 'topic'".to_string())),
-    Some(topic) if !is_topic_name(topic) => {
-      violations.push(violation(format!("topic {} is not a valid topic name", str_repr(topic))));
-    }
-    Some(_) => {}
-  }
-  if let Some(topic) = entry.topic.as_deref().filter(|topic| !topics.contains_key(*topic)) {
-    violations.push(violation(format!("topic {} not in topics vocabulary", str_repr(topic))));
-  }
-  let parent_name = entry.path.parent().and_then(Path::file_name).unwrap_or_default().to_string_lossy();
-  if let Some(topic) = entry.topic.as_deref().filter(|topic| *topic != parent_name) {
-    violations.push(violation(format!("directory name {} != topic {}", str_repr(&parent_name), str_repr(topic))));
-  }
-  if entry.scope.is_none() {
-    violations.push(violation("missing required header field 'scope'".to_string()));
-  }
-  if entry.audience.is_none() {
-    violations.push(violation("missing required header field 'audience'".to_string()));
-  }
-  if let Some(scope) = entry.scope.as_deref().filter(|scope| !["user", "host"].contains(scope)) {
-    violations.push(violation(format!("scope {} not in {{user, host}}", str_repr(scope))));
-  }
-  for element in entry.audience.iter().flatten().filter(|element| !["master", "worker"].contains(&element.as_str())) {
-    violations.push(violation(format!("audience element {} not in {{master, worker}}", str_repr(element))));
-  }
-  violations
-}
-
-fn entry_files(root: &Path) -> Result<Vec<PathBuf>, CliExit> {
-  let entries_dir = root.join(ENTRIES_DIRNAME);
-  if !entries_dir.is_dir() {
-    return Ok(Vec::new());
-  }
-  let mut files = Vec::new();
-  for topic_dir in sorted_children(&entries_dir)? {
-    if topic_dir.is_dir() {
-      files.extend(sorted_markdown_files(&topic_dir)?);
-    }
-  }
-  Ok(files)
-}
-
-fn sorted_markdown_files(directory: &Path) -> Result<Vec<PathBuf>, CliExit> {
-  Ok(
-    sorted_children(directory)?
-      .into_iter()
-      .filter(|path| path.file_name().is_some_and(|name| name.to_string_lossy().ends_with(".md")))
-      .collect(),
-  )
-}
-
-fn sorted_children(directory: &Path) -> Result<Vec<PathBuf>, CliExit> {
-  let mut paths = fs::read_dir(directory)
-    .map_err(|error| CliExit::error(format!("list {}: {error}", directory.display())))?
-    .map(|entry| entry.map(|entry| entry.path()).map_err(|error| CliExit::error(error.to_string())))
-    .collect::<Result<Vec<_>, _>>()?;
-  paths.sort();
-  Ok(paths)
-}
-
-fn width_warnings(root: &Path, files: &[PathBuf]) -> Result<Vec<String>, CliExit> {
-  let mut warnings = Vec::new();
-  for path in files {
-    let text = read_text(path)?;
-    let relative = path.strip_prefix(root).expect("entry files are under their store root").to_string_lossy();
-    for line in entry_body(&text) {
-      let width = display_width(line);
-      if width > BODY_LINE_COLUMN_LIMIT {
-        let preview: String = line.chars().take(60).collect();
-        warnings.push(format!("{relative}: body line over {BODY_LINE_COLUMN_LIMIT} columns ({width}): {preview}"));
-      }
-    }
-  }
-  Ok(warnings)
-}
-
-fn entry_body(text: &str) -> Vec<&str> {
-  let lines: Vec<&str> = text.split('\n').collect();
-  if pystr::strip(lines[0]) != "---" {
-    return lines.into_iter().filter(|line| !pystr::strip(line).is_empty()).collect();
-  }
-  for (index, line) in lines.iter().enumerate().skip(1) {
-    if pystr::strip(line) == "---" {
-      return lines[index + 1..].iter().copied().filter(|line| !pystr::strip(line).is_empty()).collect();
-    }
-  }
-  Vec::new()
-}
-
-fn display_width(line: &str) -> usize {
-  line.chars().map(|character| UnicodeWidthChar::width(character).unwrap_or(1).max(1)).sum()
-}
-
-fn is_slug(value: &str) -> bool {
-  !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
-}
-
-fn is_topic_name(value: &str) -> bool {
-  let mut chars = value.chars();
-  chars.next().is_some_and(|character| character.is_ascii_lowercase() || character.is_ascii_digit())
-    && chars.all(|character| character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-')
-}
-
-fn read_text(path: &Path) -> Result<String, CliExit> {
-  let text = fs::read_to_string(path).map_err(|error| CliExit::error(format!("read {}: {error}", path.display())))?;
-  Ok(normalize_newlines(&text))
-}
-
-fn normalize_newlines(text: &str) -> String {
-  text.replace("\r\n", "\n").replace('\r', "\n")
 }
 
 fn python_error(message: &str) -> ! {
@@ -568,15 +372,15 @@ mod tests {
       let cwd = sessions_root.join("12345678-session-id");
       fs::create_dir_all(&cwd).unwrap();
       fs::create_dir_all(&memory_dir).unwrap();
-      fs::write(memory_dir.join(TOPICS_FILENAME), "profile resident\n").unwrap();
+      fs::write(memory_dir.join(store::TOPICS_FILENAME), "profile resident\n").unwrap();
       let body = "# Prefers Dark Mode\n\nThe user prefers dark themes across all UIs.\n";
       let target =
         write_capture(&memory_dir, &sessions_root, &cwd, "Prefers Dark Mode", body, || Ok(fixed_clock())).unwrap();
-      let files = sorted_markdown_files(&memory_dir.join(STAGING_DIRNAME)).unwrap();
+      let files = store::sorted_markdown_files(&memory_dir.join(store::STAGING_DIRNAME)).unwrap();
       assert_eq!(files.len(), 1);
       assert_eq!(target.file_name().unwrap(), "20261027T123456Z-12345678-prefers-dark-mode.md");
       assert_eq!(fs::read_to_string(&target).unwrap(), body);
-      assert!(entry_files(&memory_dir).unwrap().is_empty());
+      assert!(store::entry_files(&memory_dir).unwrap().is_empty());
     });
   }
 
@@ -595,9 +399,12 @@ mod tests {
       for name in [".git", "topics", ".gitignore", "entries", "staging"] {
         assert!(memory_dir.join(name).exists(), "{name}");
       }
-      assert_eq!(fs::read_to_string(memory_dir.join(TOPICS_FILENAME)).unwrap(), crate::memory::DEFAULT_MEMORY_TOPICS);
+      assert_eq!(
+        fs::read_to_string(memory_dir.join(store::TOPICS_FILENAME)).unwrap(),
+        crate::memory::DEFAULT_MEMORY_TOPICS
+      );
       assert_eq!(fs::read_to_string(memory_dir.join(".gitignore")).unwrap(), crate::memory::DEFAULT_MEMORY_GITIGNORE);
-      let files = sorted_markdown_files(&memory_dir.join(STAGING_DIRNAME)).unwrap();
+      let files = store::sorted_markdown_files(&memory_dir.join(store::STAGING_DIRNAME)).unwrap();
       assert_eq!(files.as_slice(), std::slice::from_ref(&target));
       assert_eq!(fs::read_to_string(target).unwrap(), body);
     });

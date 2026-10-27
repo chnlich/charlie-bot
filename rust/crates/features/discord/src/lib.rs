@@ -2,6 +2,7 @@
 //! contribution for the Discord thread entrypoint.
 
 mod api;
+pub mod cli;
 mod config;
 pub mod discord_client;
 mod discord_commands;

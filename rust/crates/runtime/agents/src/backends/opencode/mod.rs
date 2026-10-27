@@ -5,6 +5,7 @@ pub(crate) mod backend;
 mod opencode_limits;
 mod options;
 pub(crate) mod server;
+mod sqlite;
 pub mod usage_logs;
 pub mod usage_sweep;
 

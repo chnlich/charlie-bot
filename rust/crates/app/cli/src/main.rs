@@ -6,6 +6,7 @@
 
 mod commands;
 mod launcher;
+mod host;
 
 use std::ffi::OsString;
 use std::path::Path;
@@ -52,15 +53,19 @@ fn main() {
     exit(2);
   }
 
+  charliebot_agents::cli_host::install(host::compose);
   let result = match subcommand.as_str() {
     "artifact" => charliebot_artifacts::cli::artifact::main(&args[1..]),
     "compaction-context" => commands::compaction_context::main(&args[1..]),
     "delegate" => commands::delegate::main(&args[1..]),
+    "discord" => charliebot_discord::cli::main(&args[1..]),
     "gc-trash" => commands::gc_trash::main(&args[1..]),
     "memory" => charliebot_memory::cli::main(&args[1..]),
     "plan" => charliebot_artifacts::cli::plan::main(&args[1..]),
     "schedule-trigger" => commands::schedule_trigger::main(&args[1..]),
     "session" => commands::session::main(&args[1..]),
+    "slack" => charliebot_slack::cli::main(&args[1..]),
+    "web" => charliebot_web_reply::cli::main(&args[1..]),
     name => Err(charliebot_cli_common::exit::CliExit::error(format!("{name} is not ported to the Rust CLI yet"))),
   };
   if let Err(failure) = result {

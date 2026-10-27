@@ -1,0 +1,17 @@
+{
+  "argv": [
+    "gc-trash",
+    "--yes"
+  ],
+  "cwd": "{root}",
+  "files": {
+    "home/config.yaml": "paths:\n  worktree_dir: {root}/wt\n"
+  },
+  "responses": [],
+  "expect": {
+    "stdout": "Quarantine trash is empty: {root}/wt/.trash\n",
+    "stderr": "",
+    "exit": 0,
+    "requests": []
+  }
+}

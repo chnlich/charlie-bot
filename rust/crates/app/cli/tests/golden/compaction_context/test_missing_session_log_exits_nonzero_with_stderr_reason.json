@@ -1,0 +1,18 @@
+{
+  "argv": [
+    "compaction-context",
+    "--session",
+    "missing-session",
+    "--slot",
+    "1"
+  ],
+  "cwd": "{root}",
+  "files": {},
+  "responses": [],
+  "expect": {
+    "stdout": "",
+    "stderr": "session=missing-session slot=1 characters=0 skills=- error=[Errno 2] No such file or directory: '{root}/home/sessions/missing-session/data/chat_events.jsonl'\n",
+    "exit": 1,
+    "requests": []
+  }
+}

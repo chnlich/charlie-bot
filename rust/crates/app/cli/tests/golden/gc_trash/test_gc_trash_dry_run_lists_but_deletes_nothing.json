@@ -1,0 +1,22 @@
+{
+  "argv": [
+    "gc-trash"
+  ],
+  "cwd": "{root}",
+  "files": {
+    "home/config.yaml": "paths:\n  worktree_dir: {root}/wt\n",
+    "wt/.trash/charliebot-task-a/diff.txt": "content",
+    "wt/.trash/charliebot-task-b/diff.txt": "content"
+  },
+  "responses": [],
+  "expect": {
+    "files": {
+      "wt/.trash/charliebot-task-a/diff.txt": "content",
+      "wt/.trash/charliebot-task-b/diff.txt": "content"
+    },
+    "stdout": "{root}/wt/.trash/charliebot-task-a  age=0.0d  size=7 B\n{root}/wt/.trash/charliebot-task-b  age=0.0d  size=7 B\n\n2 entries, 14 B total in {root}/wt/.trash\nDry run — nothing deleted. Re-run with --yes to hard-delete.\n",
+    "stderr": "",
+    "exit": 0,
+    "requests": []
+  }
+}

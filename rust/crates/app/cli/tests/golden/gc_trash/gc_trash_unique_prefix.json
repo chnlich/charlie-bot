@@ -1,0 +1,18 @@
+{
+  "argv": [
+    "gc-trash",
+    "--ye"
+  ],
+  "cwd": "{root}",
+  "files": {
+    "home/config.yaml": "paths:\n  worktree_dir: {root}/wt\n",
+    "wt/.trash/charliebot-task-a/diff.txt": "content"
+  },
+  "responses": [],
+  "expect": {
+    "stdout": "{root}/wt/.trash/charliebot-task-a  age=0.0d  size=7 B\n\n1 entry, 7 B total in {root}/wt/.trash\ndeleted {root}/wt/.trash/charliebot-task-a\n",
+    "stderr": "",
+    "exit": 0,
+    "requests": []
+  }
+}

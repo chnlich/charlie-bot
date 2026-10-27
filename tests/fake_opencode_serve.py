@@ -173,6 +173,7 @@ class FakeServer:
 
   async def stream(self, writer: asyncio.StreamWriter) -> None:
     writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n")
+    await asyncio.sleep(SCRIPT.get("event_subscribe_delay", 0))
     queue: asyncio.Queue = asyncio.Queue()
     self.subscribers.append(queue)
     queue.put_nowait({"type": "server.connected", "data": {}})

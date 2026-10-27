@@ -703,7 +703,8 @@ fn project_fresh_raw(
   raw_path: &Path,
   notices_only: bool,
 ) -> anyhow::Result<Vec<Value>> {
-  let translator = crate::midturn_delivery::fresh_translate(features, cfg, Some(option), meta, run_id)?;
+  let translator =
+    crate::midturn_delivery::fresh_translate(features, cfg, Some(option), meta, run_id, raw_path.parent())?;
   let filter = notices_only.then(|| recovery::TypeLineFilter::new([event_types::ASSISTANT]));
   recovery::project_raw_file(raw_path, translator, filter.as_ref())
 }
@@ -870,8 +871,9 @@ pub(crate) fn build_fresh_translate(
   option: Option<&BackendOption>,
   meta: &SessionMetadata,
   run_id: &str,
+  log_dir: &Path,
 ) -> anyhow::Result<crate::midturn_delivery::FreshTranslate> {
-  crate::midturn_delivery::fresh_translate(features, cfg, option, meta, run_id)
+  crate::midturn_delivery::fresh_translate(features, cfg, option, meta, run_id, Some(log_dir))
 }
 
 pub(crate) async fn resume_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkItem) -> anyhow::Result<MasterRunOutcome> {
@@ -908,9 +910,18 @@ pub(crate) async fn resume_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkIte
     follow::TAIL_POLL_INTERVAL,
   )
   .await?;
-  let translate = build_fresh_translate(&features, &cfg, option.as_ref(), &resume_meta, &resume_run_id)?;
-  let translate_stream = translate;
   let cursor_read = cursor::read_raw_cursor(&cursor_path);
+  let mut translate_stream =
+    build_fresh_translate(&features, &cfg, option.as_ref(), &resume_meta, &resume_run_id, &log_dir)?;
+  let replay_path = raw_path.clone();
+  let prefix = tokio::task::spawn_blocking(move || {
+    charliebot_agents::transport::recovery::raw_events_before_cursor(&replay_path, cursor_read)
+  })
+  .await
+  .context("joining manager translator prefix replay")??;
+  for raw in prefix {
+    translate_stream(raw)?;
+  }
   let cancel = item.cancel.clone();
   // The resume follow's acknowledgements join the item's web-reply binding like a fresh turn's do. The item keeps its
   // own ids so a failing follow leaves the binding as Python's in-place mutation does.
@@ -1009,7 +1020,8 @@ pub(crate) async fn resume_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkIte
   } else {
     let mut events = stream_events.lock().expect("resume event mutex is not poisoned").clone();
     // Replay from the start of the stored stream to preserve completion and manual-compaction evidence.
-    let translate_scan = build_fresh_translate(&features, &cfg, option.as_ref(), &resume_meta, &resume_run_id)?;
+    let translate_scan =
+      build_fresh_translate(&features, &cfg, option.as_ref(), &resume_meta, &resume_run_id, &log_dir)?;
     let scanned = recovery::scan_result_exit(&raw_path, translate_scan);
     match scanned {
       Ok((projected, _, code)) => {

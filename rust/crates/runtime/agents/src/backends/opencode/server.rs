@@ -1,8 +1,11 @@
 //! The shared opencode server and its turn ownership (`src/backends/opencode/server.py`).
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
+#[cfg(test)]
+use std::collections::VecDeque;
 use std::ffi::OsString;
-use std::fs;
+use std::fs::{self, File};
+use std::io::{Read, Seek, SeekFrom};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
@@ -18,23 +21,25 @@ use nix::sys::signal::Signal;
 use regex::Regex;
 use reqwest::{Client, Method, RequestBuilder};
 use serde_json::{Value, json};
-use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, BufReader};
 use tokio::sync::{Notify, watch};
 use tokio::task::{Id, JoinHandle};
 use uuid::Uuid;
 
 use super::opencode_limits;
 use super::options::model_overrides_config;
+use super::relay::{self, ServerRecord, TurnRecord};
 use crate::cli_base::apply_proxy_env;
 use crate::transport::cgroup::SessionCgroupConfig;
+use crate::transport::identity::read_pid_stat;
 use crate::transport::kill::{kill_process_group, python_exit_code};
-use crate::transport::spawn::{AgentPipeReader, ChildStdin, SpawnSetup, SpawnSpec, SpawnedChild, spawn_with_setup};
+use crate::transport::spawn::{SpawnSetup, SpawnSpec, SpawnedChild, spawn_detached_files};
 
 const OUTPUT_TAIL_BYTES: usize = 64 * 1024;
-const READ_CHUNK_BYTES: usize = 64 * 1024;
-
 static LISTEN_RE: OnceLock<Regex> = OnceLock::new();
 static ACTIVE_TURNS: OnceLock<Mutex<HashMap<u32, Weak<Turn>>>> = OnceLock::new();
+
+type AdoptedRun = (charliebot_store::run_records::RunRecord, PathBuf, TurnRecord);
+type AdoptionGroup = (ServerRecord, PathBuf, Vec<AdoptedRun>);
 
 /// The executable and fixed arguments that start the opencode 2.0 binary.
 #[derive(Clone, Debug)]
@@ -142,13 +147,24 @@ pub struct OpenCodeServerPool {
   host: OpenCodeHost,
   timeouts: ServerTimeouts,
   servers: Mutex<HashMap<Option<String>, Arc<OpenCodeServer>>>,
+  adopted: Mutex<HashMap<String, Arc<OpenCodeServer>>>,
+  adoption_lock: Mutex<()>,
+  adoption_complete: AtomicBool,
   /// The backend options of the config the latest launch was built from. A shared server reads them when it starts.
   options: Mutex<Vec<BackendOption>>,
 }
 
 impl OpenCodeServerPool {
   pub fn new(host: OpenCodeHost, timeouts: ServerTimeouts) -> Arc<Self> {
-    Arc::new(Self { host, timeouts, servers: Mutex::new(HashMap::new()), options: Mutex::new(Vec::new()) })
+    Arc::new(Self {
+      host,
+      timeouts,
+      servers: Mutex::new(HashMap::new()),
+      adopted: Mutex::new(HashMap::new()),
+      adoption_lock: Mutex::new(()),
+      adoption_complete: AtomicBool::new(false),
+      options: Mutex::new(Vec::new()),
+    })
   }
 
   /// Record the backend options of the config that a launch was built from, for the next start of a shared server.
@@ -170,10 +186,149 @@ impl OpenCodeServerPool {
 
   /// Stop every server in this pool after its owner finishes the test or process.
   pub async fn stop_all(&self) -> anyhow::Result<()> {
+    let mut servers =
+      self.servers.lock().expect("opencode server pool mutex is not poisoned").values().cloned().collect::<Vec<_>>();
+    servers.extend(self.adopted.lock().expect("opencode adopted server mutex is not poisoned").values().cloned());
+    for server in servers {
+      server.stop().await?;
+    }
+    Ok(())
+  }
+
+  #[cfg(test)]
+  pub(crate) fn adopted_servers_test(&self) -> Vec<Arc<OpenCodeServer>> {
+    self.adopted.lock().expect("opencode adopted server mutex is not poisoned").values().cloned().collect()
+  }
+
+  #[cfg(test)]
+  pub(crate) async fn abandon_for_restart_test(&self) {
     let servers =
       self.servers.lock().expect("opencode server pool mutex is not poisoned").values().cloned().collect::<Vec<_>>();
     for server in servers {
-      server.stop().await?;
+      let (tasks, idle) = {
+        let mut state = server.state.lock().expect("opencode server state mutex is not poisoned");
+        state.stopping = true;
+        (std::mem::take(&mut state.tasks), state.idle.take())
+      };
+      if let Some(idle) = idle {
+        abort_and_join(idle, tokio::task::try_id()).await;
+      }
+      for task in tasks {
+        abort_and_join(task, tokio::task::try_id()).await;
+      }
+    }
+  }
+
+  /// Register every live relay on its original serve before opening that process's control event stream.
+  pub fn adopt_existing(self: &Arc<Self>) -> anyhow::Result<()> {
+    if self.adoption_complete.load(Ordering::Acquire) {
+      return Ok(());
+    }
+    let _guard = self.adoption_lock.lock().expect("opencode adoption mutex is not poisoned");
+    if self.adoption_complete.load(Ordering::Acquire) {
+      return Ok(());
+    }
+    self.adopt_live_servers()?;
+    self.adoption_complete.store(true, Ordering::Release);
+    Ok(())
+  }
+
+  fn adopt_live_servers(self: &Arc<Self>) -> anyhow::Result<()> {
+    let profile_home = &self.host.profile_home;
+    let server_directory = profile_home.join(home::OPENCODE_DIR_NAME).join(relay::SERVER_DIRECTORY_NAME);
+    let sessions_directory = profile_home.join("sessions");
+    let opencode_backend_ids = self
+      .recorded_options()
+      .into_iter()
+      .filter(|option| option.backend_type == "opencode")
+      .map(|option| option.id)
+      .collect::<std::collections::HashSet<_>>();
+    if !sessions_directory.exists() {
+      return Ok(());
+    }
+    let mut live_runs = Vec::new();
+    for session in fs::read_dir(&sessions_directory)? {
+      let session = session?;
+      let runs_directory = session.path().join("data/runs");
+      if !runs_directory.is_dir() {
+        continue;
+      }
+      for run in fs::read_dir(runs_directory)? {
+        let run = run?;
+        let metadata_path = run.path().join(charliebot_store::run_records::RUN_METADATA_NAME);
+        if !metadata_path.is_file() {
+          continue;
+        }
+        let record: charliebot_store::run_records::RunRecord = serde_json::from_slice(
+          &fs::read(&metadata_path).with_context(|| format!("reading {}", metadata_path.display()))?,
+        )
+        .with_context(|| format!("decoding {}", metadata_path.display()))?;
+        if record.ended_at.is_some()
+          || !record.backend.as_ref().is_some_and(|backend| opencode_backend_ids.contains(backend))
+          || !record.pid.zip(record.pid_start.as_deref()).is_some_and(|(pid, start)| relay::same_process(pid, start))
+        {
+          continue;
+        }
+        live_runs.push((record, run.path()));
+      }
+    }
+
+    let mut groups: HashMap<String, AdoptionGroup> = HashMap::new();
+    for (run, run_directory) in live_runs {
+      let Some(turn) = relay::read_turn_record(&run_directory)? else {
+        if let Some(pid) = run.pid {
+          kill_process_group(pid, Signal::SIGTERM);
+        }
+        continue;
+      };
+      relay::validate_server_record_name(&turn.server_record)?;
+      let record_path = server_directory.join(&turn.server_record);
+      let record: ServerRecord = serde_json::from_slice(
+        &fs::read(&record_path).with_context(|| format!("reading OpenCode server record {}", record_path.display()))?,
+      )
+      .with_context(|| format!("decoding OpenCode server record {}", record_path.display()))?;
+      if !relay::same_process(record.pid, &record.pid_start) {
+        continue;
+      }
+      groups.entry(turn.server_record.clone()).or_insert_with(|| (record, record_path, Vec::new())).2.push((
+        run,
+        run_directory,
+        turn,
+      ));
+    }
+
+    let active_records = groups.keys().cloned().collect::<std::collections::HashSet<_>>();
+    for (record_name, (record, record_path, turns)) in groups {
+      let server = Arc::new(OpenCodeServer::new(Arc::clone(self), record.proxy_url.clone()));
+      server.adopt_process(record.clone(), record_path, turns)?;
+      self
+        .adopted
+        .lock()
+        .expect("opencode adopted server mutex is not poisoned")
+        .insert(record_name, Arc::clone(&server));
+      server.start_adopted_reader();
+    }
+    if server_directory.is_dir() {
+      for entry in fs::read_dir(&server_directory)? {
+        let entry = entry?;
+        if entry.path().extension().and_then(|extension| extension.to_str()) != Some("json") {
+          continue;
+        }
+        let record_name = entry.file_name().to_string_lossy().into_owned();
+        if active_records.contains(&record_name) {
+          continue;
+        }
+        let record: ServerRecord = serde_json::from_slice(&fs::read(entry.path())?)
+          .with_context(|| format!("decoding OpenCode server record {}", entry.path().display()))?;
+        if relay::same_process(record.pid, &record.pid_start) {
+          kill_process_group(record.pid, Signal::SIGTERM);
+        }
+        match fs::remove_file(entry.path()) {
+          Ok(()) => {}
+          Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+          Err(error) => return Err(error).with_context(|| format!("removing {}", entry.path().display())),
+        }
+      }
     }
     Ok(())
   }
@@ -202,33 +357,40 @@ pub struct Turn {
   pub session_id: String,
   pub directory: String,
   process_id: u32,
+  process_start: Option<String>,
   server: Weak<OpenCodeServer>,
   claim_held: bool,
+  relay_only: bool,
+  adopted: bool,
+  cleanup_shells: bool,
+  #[cfg(test)]
   events: Mutex<VecDeque<TurnEvent>>,
+  #[cfg(test)]
   ready: Notify,
   finished: AtomicBool,
 }
 
+struct TurnRegistration {
+  claim_held: bool,
+  relay_only: bool,
+  adopted: bool,
+  process_start: Option<String>,
+}
+
 #[derive(Debug)]
+#[cfg(test)]
 pub(crate) enum TurnEvent {
   Event(Value),
-  ServerLost(String),
 }
 
 impl Turn {
+  #[cfg(test)]
   fn push(&self, event: TurnEvent) {
     self.events.lock().expect("opencode turn queue is not poisoned").push_back(event);
     self.ready.notify_one();
   }
 
-  /// Drop interruptions sent before this turn's prompt.
-  pub fn drop_earlier_interrupts(&self) {
-    self.events
-      .lock()
-      .expect("opencode turn queue is not poisoned")
-      .retain(|item| !matches!(item, TurnEvent::Event(event) if event.get("type").and_then(Value::as_str) == Some("session.execution.interrupted")));
-  }
-
+  #[cfg(test)]
   pub(crate) async fn next_event(&self) -> TurnEvent {
     loop {
       let notified = self.ready.notified();
@@ -239,8 +401,16 @@ impl Turn {
     }
   }
 
-  /// Unregister, interrupt the session and delete its shells in that order.
+  /// Unregister this turn and run its session cleanup.
   pub async fn finish(&self) -> anyhow::Result<()> {
+    self.finish_inner(!self.adopted).await
+  }
+
+  async fn finish_for_stop(&self) -> anyhow::Result<()> {
+    self.finish_inner(false).await
+  }
+
+  async fn finish_inner(&self, interrupt: bool) -> anyhow::Result<()> {
     if self.finished.swap(true, Ordering::AcqRel) {
       return Ok(());
     }
@@ -249,17 +419,22 @@ impl Turn {
     let Some(server) = self.server.upgrade() else {
       return Ok(());
     };
-    server.unregister(self);
     let turn_steps = if !server.process_alive() {
       tracing::info!(target: "charliebot_agents", session_id = %self.session_id, "opencode_turn_end_steps_skipped");
       Ok(())
     } else {
       async {
-        server.interrupt(&self.session_id).await?;
-        server.delete_shells(&self.session_id, &self.directory).await
+        if interrupt {
+          server.interrupt(&self.session_id).await?;
+        }
+        if self.cleanup_shells {
+          server.delete_shells(&self.session_id, &self.directory).await?;
+        }
+        Ok(())
       }
       .await
     };
+    server.unregister(self);
     let release = if self.claim_held { server.release_claim(&self.directory).await } else { Ok(()) };
     match (turn_steps, release) {
       (Err(error), Err(release_error)) => {
@@ -279,11 +454,14 @@ impl Turn {
 
 struct ServerProcess {
   pid: u32,
+  pid_start: String,
   exit: watch::Receiver<Option<Result<i32, String>>>,
   base_url: Mutex<Option<String>>,
   client: Mutex<Option<Client>>,
   password: String,
-  tail: Arc<Mutex<VecDeque<u8>>>,
+  record_path: PathBuf,
+  log_path: PathBuf,
+  adopted: bool,
 }
 
 impl ServerProcess {
@@ -298,11 +476,31 @@ impl ServerProcess {
   }
 
   fn tail_text(&self) -> String {
-    String::from_utf8_lossy(
-      &self.tail.lock().expect("opencode output tail is not poisoned").iter().copied().collect::<Vec<_>>(),
-    )
-    .trim()
-    .to_string()
+    let mut file = match File::open(&self.log_path) {
+      Ok(file) => file,
+      Err(error) => {
+        tracing::debug!(target: "charliebot_agents", path = %self.log_path.display(), error = %error, "opencode_log_tail_unavailable");
+        return String::new();
+      }
+    };
+    let length = match file.metadata() {
+      Ok(metadata) => metadata.len(),
+      Err(error) => {
+        tracing::debug!(target: "charliebot_agents", path = %self.log_path.display(), error = %error, "opencode_log_tail_unavailable");
+        return String::new();
+      }
+    };
+    let start = length.saturating_sub(OUTPUT_TAIL_BYTES as u64);
+    if file.seek(SeekFrom::Start(start)).is_err() {
+      tracing::debug!(target: "charliebot_agents", path = %self.log_path.display(), "opencode_log_tail_seek_failed");
+      return String::new();
+    }
+    let mut bytes = Vec::with_capacity((length - start) as usize);
+    if file.read_to_end(&mut bytes).is_err() {
+      tracing::debug!(target: "charliebot_agents", path = %self.log_path.display(), "opencode_log_tail_read_failed");
+      return String::new();
+    }
+    String::from_utf8_lossy(&bytes).trim().to_string()
   }
 }
 
@@ -327,6 +525,7 @@ struct ServerState {
   reader_done_tx: Option<watch::Sender<Option<String>>>,
   version: Option<String>,
   stopping: bool,
+  adopted: bool,
   tasks: Vec<JoinHandle<()>>,
   idle: Option<JoinHandle<()>>,
   #[cfg(test)]
@@ -360,6 +559,7 @@ impl OpenCodeServer {
         reader_done_tx: None,
         version: None,
         stopping: false,
+        adopted: false,
         tasks: Vec::new(),
         idle: None,
         #[cfg(test)]
@@ -392,6 +592,144 @@ impl OpenCodeServer {
 
   pub fn version(&self) -> Option<String> {
     self.state.lock().expect("opencode server state mutex is not poisoned").version.clone()
+  }
+
+  pub(crate) fn record_name(&self) -> anyhow::Result<String> {
+    let process = self.process()?;
+    relay::server_record_name(&process.record_path)
+  }
+
+  pub(crate) fn failure_reason(&self) -> Option<String> {
+    let (process, stream_reason) = {
+      let state = self.state.lock().expect("opencode server state mutex is not poisoned");
+      (state.process.clone(), state.reader_done.as_ref().and_then(|done| done.borrow().clone()))
+    };
+    let process = process?;
+    match process.exit.borrow().clone() {
+      Some(Ok(code)) => Some(format!("opencode serve exited with code {code}: {}", process.tail_text())),
+      Some(Err(error)) => Some(format!("opencode serve wait failed: {error}")),
+      None => stream_reason,
+    }
+  }
+
+  pub(crate) async fn failure_reason_after_stream_end(&self) -> Option<String> {
+    let process = self.state.lock().expect("opencode server state mutex is not poisoned").process.clone()?;
+    if !relay::same_process(process.pid, &process.pid_start) {
+      return match wait_exit(&process).await {
+        Ok(_) => self.failure_reason(),
+        Err(error) => Some(format!("opencode serve wait failed: {error}")),
+      };
+    }
+    let reader_done = self.state.lock().expect("opencode server state mutex is not poisoned").reader_done.clone();
+    if let Some(mut reader_done) = reader_done
+      && reader_done.borrow().is_none()
+    {
+      match tokio::time::timeout(Duration::from_secs(1), reader_done.changed()).await {
+        Ok(Ok(())) | Err(_) => {}
+        Ok(Err(error)) => {
+          tracing::warn!(target: "charliebot_agents", error = %error, "opencode_reader_done_wait_failed");
+        }
+      }
+    }
+    self.failure_reason()
+  }
+
+  fn adopt_process(
+    self: &Arc<Self>,
+    record: ServerRecord,
+    record_path: PathBuf,
+    turns: Vec<(charliebot_store::run_records::RunRecord, PathBuf, TurnRecord)>,
+  ) -> anyhow::Result<()> {
+    relay::ensure_crypto_provider()?;
+    let client = Client::builder().no_proxy().build()?;
+    let (exit_tx, exit) = watch::channel(None);
+    let process = Arc::new(ServerProcess {
+      pid: record.pid,
+      pid_start: record.pid_start.clone(),
+      exit,
+      base_url: Mutex::new(Some(record.base_url.clone())),
+      client: Mutex::new(Some(client)),
+      password: record.password.clone(),
+      record_path,
+      log_path: PathBuf::from(&record.log_path),
+      adopted: true,
+    });
+    let (connected_tx, connected) = watch::channel(false);
+    let (reader_done_tx, reader_done) = watch::channel(None);
+    {
+      let mut state = self.state.lock().expect("opencode server state mutex is not poisoned");
+      state.process = Some(Arc::clone(&process));
+      state.version = Some(record.version);
+      state.connected = Some(connected);
+      state.connected_tx = Some(connected_tx);
+      state.reader_done = Some(reader_done);
+      state.reader_done_tx = Some(reader_done_tx);
+      state.adopted = true;
+    }
+    for (run, run_directory, turn) in turns {
+      let process_id = run.pid.context("live adopted OpenCode run has no process id")?;
+      let process_start = run.pid_start.context("live adopted OpenCode run has no process start time")?;
+      self.register_adopted(&turn.session_id, &run_directory.display().to_string(), process_id, process_start)?;
+    }
+    let pid = record.pid;
+    let pid_start = record.pid_start;
+    self.track(tokio::spawn(async move {
+      loop {
+        if !relay::same_process(pid, &pid_start) {
+          let _ = exit_tx.send(Some(Ok(0)));
+          return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+      }
+    }));
+    Ok(())
+  }
+
+  fn start_adopted_reader(self: &Arc<Self>) {
+    let process = self.process().expect("adopted process was registered before its reader");
+    self.start_event_reader(process);
+    self.start_exit_watcher();
+    if self.state.lock().expect("opencode server state mutex is not poisoned").turns.is_empty() {
+      let server = Arc::clone(self);
+      self.track(tokio::spawn(async move {
+        if let Err(error) = server.stop().await {
+          tracing::error!(target: "charliebot_agents", error = %error, "opencode_orphan_server_stop_failed");
+        }
+      }));
+    }
+  }
+
+  fn start_event_reader(self: &Arc<Self>, process: Arc<ServerProcess>) {
+    let weak = Arc::downgrade(self);
+    let (connected_tx, reader_done_tx) = {
+      let state = self.state.lock().expect("opencode server state mutex is not poisoned");
+      (
+        state.connected_tx.as_ref().expect("connected channel was registered").clone(),
+        state.reader_done_tx.as_ref().expect("reader channel was registered").clone(),
+      )
+    };
+    self.track(tokio::spawn(async move {
+      let reason = read_events(Arc::clone(&process), connected_tx, weak.clone()).await;
+      let _ = reader_done_tx.send(Some(reason.clone()));
+      if let Some(server) = weak.upgrade() {
+        server.lose(reason).await;
+      }
+    }));
+  }
+
+  fn start_exit_watcher(self: &Arc<Self>) {
+    let process = self.process().expect("server process was registered before its watcher");
+    let weak = Arc::downgrade(self);
+    self.track(tokio::spawn(async move {
+      let code = wait_exit(&process).await;
+      if let Some(server) = weak.upgrade() {
+        let reason = match code {
+          Ok(code) => format!("opencode serve exited with code {code}: {}", process.tail_text()),
+          Err(error) => format!("opencode serve wait failed: {error}"),
+        };
+        server.lose(reason).await;
+      }
+    }));
   }
 
   /// Build the server environment from CharlieBot's environment and the profile store paths.
@@ -535,12 +873,12 @@ impl OpenCodeServer {
       return Ok(());
     }
     if self.state.lock().expect("opencode server state mutex is not poisoned").process.is_some() {
-      self.shutdown_locked().await?;
+      self.shutdown_locked(false).await?;
     }
     #[cfg(test)]
     self.observe_start_claims_test();
     if let Err(error) = self.start_locked().await {
-      if let Err(cleanup_error) = self.shutdown_locked().await {
+      if let Err(cleanup_error) = self.shutdown_locked(false).await {
         tracing::error!(target: "charliebot_agents", error = %cleanup_error, "opencode_start_cleanup_failed");
       }
       return Err(error);
@@ -551,7 +889,7 @@ impl OpenCodeServer {
   /// Stop the server process. A later turn starts a new process.
   pub async fn stop(&self) -> anyhow::Result<()> {
     let _guard = self.start_lock.lock().await;
-    self.shutdown_locked().await
+    self.shutdown_locked(false).await
   }
 
   /// Hold a directory until this turn finishes.
@@ -575,7 +913,8 @@ impl OpenCodeServer {
       let process_ready = !state.stopping
         && state.process.as_ref().is_some_and(|process| process.alive())
         && state.version.is_some()
-        && state.connected.as_ref().is_some_and(|connected| *connected.borrow());
+        && state.connected.as_ref().is_some_and(|connected| *connected.borrow())
+        && state.reader_done.as_ref().is_some_and(|reader_done| reader_done.borrow().is_none());
       let should_arm_idle = no_claims_or_turns && process_ready;
       (should_arm_idle, process_ready)
     };
@@ -609,19 +948,45 @@ impl OpenCodeServer {
     Ok(())
   }
 
-  /// Claim a session for a turn that already holds its directory claim.
-  pub(crate) fn register_claimed(
+  /// Register a run whose event ownership belongs to its raw-log relay.
+  pub(crate) fn register_relay_claimed(
     self: &Arc<Self>,
     session_id: &str,
     directory: &str,
     process_id: u32,
   ) -> anyhow::Result<Arc<Turn>> {
-    self.register_inner(session_id, directory, process_id, true)
+    self.register_inner(
+      session_id,
+      directory,
+      process_id,
+      TurnRegistration { claim_held: true, relay_only: true, adopted: false, process_start: None },
+    )
   }
 
-  /// Claim a session for a turn without a directory claim, for internal event routing.
+  fn register_adopted(
+    self: &Arc<Self>,
+    session_id: &str,
+    directory: &str,
+    process_id: u32,
+    process_start: String,
+  ) -> anyhow::Result<Arc<Turn>> {
+    self.register_inner(
+      session_id,
+      directory,
+      process_id,
+      TurnRegistration { claim_held: false, relay_only: true, adopted: true, process_start: Some(process_start) },
+    )
+  }
+
+  /// Register a control-stream turn for dispatch tests.
+  #[cfg(test)]
   pub fn register(self: &Arc<Self>, session_id: &str, directory: &str, process_id: u32) -> anyhow::Result<Arc<Turn>> {
-    self.register_inner(session_id, directory, process_id, false)
+    self.register_inner(
+      session_id,
+      directory,
+      process_id,
+      TurnRegistration { claim_held: false, relay_only: false, adopted: false, process_start: None },
+    )
   }
 
   fn register_inner(
@@ -629,7 +994,7 @@ impl OpenCodeServer {
     session_id: &str,
     directory: &str,
     process_id: u32,
-    claim_held: bool,
+    registration: TurnRegistration,
   ) -> anyhow::Result<Arc<Turn>> {
     let mut state = self.state.lock().expect("opencode server state mutex is not poisoned");
     if state.turns.contains_key(session_id) {
@@ -639,9 +1004,15 @@ impl OpenCodeServer {
       session_id: session_id.to_string(),
       directory: directory.to_string(),
       process_id,
+      process_start: registration.process_start,
       server: Arc::downgrade(self),
-      claim_held,
+      claim_held: registration.claim_held,
+      relay_only: registration.relay_only,
+      adopted: registration.adopted,
+      cleanup_shells: true,
+      #[cfg(test)]
       events: Mutex::new(VecDeque::new()),
+      #[cfg(test)]
       ready: Notify::new(),
       finished: AtomicBool::new(false),
     });
@@ -658,18 +1029,31 @@ impl OpenCodeServer {
   }
 
   fn unregister(self: &Arc<Self>, turn: &Turn) {
-    let should_idle = {
+    let (should_idle, stop_adopted) = {
       let mut state = self.state.lock().expect("opencode server state mutex is not poisoned");
       if state.turns.get(&turn.session_id).is_some_and(|found| std::ptr::eq(found.as_ref(), turn)) {
         state.turns.remove(&turn.session_id);
       }
-      state.turns.is_empty()
+      let no_turns = state.turns.is_empty() && state.claims.is_empty();
+      let should_idle = no_turns
         && state.claims.is_empty()
         && !state.stopping
         && state.process.as_ref().is_some_and(|process| process.alive())
+        && !state.adopted;
+      let stop_adopted =
+        no_turns && !state.stopping && state.process.as_ref().is_some_and(|process| process.alive() && process.adopted);
+      (should_idle, stop_adopted)
     };
     if should_idle {
       self.arm_idle();
+    }
+    if stop_adopted {
+      let server = Arc::clone(self);
+      self.track(tokio::spawn(async move {
+        if let Err(error) = server.stop().await {
+          tracing::error!(target: "charliebot_agents", error = %error, "opencode_adopted_server_stop_failed");
+        }
+      }));
     }
   }
 
@@ -786,6 +1170,7 @@ impl OpenCodeServer {
     let password = Uuid::new_v4().simple().to_string();
     let mut env = self.server_env(&password)?;
     let store_dir = pool.host.store_dir();
+    let log_path = store_dir.join("logs").join(format!("server-{}.log", Uuid::new_v4().simple()));
     let mut args = program.args.clone();
     args.extend(["serve".into(), "--port".into(), "0".into()]);
     let spec = SpawnSpec::new(
@@ -796,20 +1181,22 @@ impl OpenCodeServer {
       None,
       SessionCgroupConfig::disabled(),
     );
-    let SpawnedChild { mut child, .. } =
-      spawn_with_setup(&spec, Some(Signal::SIGKILL), ChildStdin::Null, SpawnSetup::None).await?;
+    let SpawnedChild { mut child, .. } = spawn_detached_files(&spec, &log_path, &log_path, SpawnSetup::None).await?;
     let pid = child.id().context("opencode serve did not expose its process id")?;
-    let stdout = child.stdout.take().context("opencode serve stdout was not piped")?;
-    let stderr = child.stderr.take().context("opencode serve stderr was not piped")?;
+    let pid_start = read_pid_stat(pid).context("reading opencode serve process start time")?.pid_start;
+    let record_directory = pool.host.profile_home.join(home::OPENCODE_DIR_NAME).join(relay::SERVER_DIRECTORY_NAME);
+    let record_path = record_directory.join(format!("server-{pid}-{pid_start}.json"));
     let (exit_tx, exit_rx) = watch::channel(None);
-    let tail = Arc::new(Mutex::new(VecDeque::new()));
     let process = Arc::new(ServerProcess {
       pid,
+      pid_start,
       exit: exit_rx,
       base_url: Mutex::new(None),
       client: Mutex::new(None),
       password,
-      tail: Arc::clone(&tail),
+      record_path,
+      log_path: log_path.clone(),
+      adopted: false,
     });
     {
       let mut state = self.state.lock().expect("opencode server state mutex is not poisoned");
@@ -826,7 +1213,6 @@ impl OpenCodeServer {
       state.reader_done = Some(reader_done_rx);
       state.reader_done_tx = Some(reader_done_tx);
     }
-    let reaper_tail = Arc::clone(&tail);
     tokio::spawn(async move {
       let code = match child.wait().await {
         Ok(status) => Ok(python_exit_code(status)),
@@ -835,79 +1221,61 @@ impl OpenCodeServer {
       if exit_tx.send(Some(code)).is_err() {
         tracing::debug!(target: "charliebot_agents", pid, "opencode_exit_receiver_dropped");
       }
-      drop(reaper_tail);
     });
-    self.track(tokio::spawn(drain_stream(stderr, Arc::clone(&tail))));
-    let mut stdout = BufReader::new(stdout);
-    let url = self.read_listening_url(&mut stdout, &process).await?;
+    let url = self.read_listening_url(&process).await?;
     *process.base_url.lock().expect("opencode server URL mutex is not poisoned") = Some(url.clone());
     let client = charliebot_compat::http_client::client(&charliebot_compat::http_client::Settings::from_env())
       .context("building the opencode HTTP client")?;
     *process.client.lock().expect("opencode HTTP client mutex is not poisoned") = Some(client);
-    self.track(tokio::spawn(drain_stream(stdout, Arc::clone(&tail))));
     let info = self.client_request(Method::GET, "/api/info")?.send().await?.error_for_status()?.json::<Value>().await?;
     let version = info.get("version").and_then(Value::as_str).context("opencode /api/info has no string version")?;
     if version.split('.').next() != Some("2") {
       bail!("{} reports opencode {version}; CharlieBot needs the 2.x server", program.display.display());
     }
     self.state.lock().expect("opencode server state mutex is not poisoned").version = Some(version.to_string());
-    let weak = Arc::downgrade(self);
-    let process_for_reader = Arc::clone(&process);
-    let (connected_tx, reader_done_tx) = {
-      let state = self.state.lock().expect("opencode server state mutex is not poisoned");
-      (state.connected_tx.as_ref().unwrap().clone(), state.reader_done_tx.as_ref().unwrap().clone())
-    };
-    self.track(tokio::spawn(async move {
-      let reason = read_events(Arc::clone(&process_for_reader), connected_tx, weak.clone()).await;
-      let _ = reader_done_tx.send(Some(reason.clone()));
-      if let Some(server) = weak.upgrade() {
-        server.lose(reason).await;
-      }
-    }));
-    let weak = Arc::downgrade(self);
-    let process_for_watcher = Arc::clone(&process);
-    self.track(tokio::spawn(async move {
-      let code = wait_exit(&process_for_watcher).await;
-      if let Some(server) = weak.upgrade() {
-        let reason = match code {
-          Ok(code) => format!("opencode serve exited with code {code}: {}", process_for_watcher.tail_text()),
-          Err(error) => format!("opencode serve wait failed: {error}"),
-        };
-        server.lose(reason).await;
-      }
-    }));
+    relay::write_server_record(
+      &process.record_path,
+      &ServerRecord {
+        pid,
+        pid_start: process.pid_start.clone(),
+        base_url: url.clone(),
+        password: process.password.clone(),
+        proxy_url: self.proxy_url.clone(),
+        version: version.to_string(),
+        started_at: charliebot_core::timefmt::utc_now_iso(),
+        log_path: process.log_path.display().to_string(),
+        exit_reason: None,
+      },
+    )?;
+    self.start_event_reader(Arc::clone(&process));
+    self.start_exit_watcher();
     self.await_connected().await?;
     self.arm_idle();
     tracing::info!(target: "charliebot_agents", pid, url, version, "opencode_server_started");
     Ok(())
   }
 
-  async fn read_listening_url(
-    &self,
-    stdout: &mut BufReader<AgentPipeReader>,
-    process: &ServerProcess,
-  ) -> anyhow::Result<String> {
+  async fn read_listening_url(&self, process: &ServerProcess) -> anyhow::Result<String> {
     let deadline = tokio::time::Instant::now() + self.timeouts()?.start;
     let display_path = self.pool()?.host.program.display.display().to_string();
     let timeout_seconds = self.timeouts()?.start.as_secs_f64();
     let listen_re = LISTEN_RE.get_or_init(|| Regex::new(r"server listening on (http://\S+)").unwrap());
     loop {
-      let mut line = Vec::new();
-      let count = tokio::time::timeout_at(deadline, stdout.read_until(b'\n', &mut line)).await.map_err(|_| {
+      let bytes = tokio::time::timeout_at(deadline, tokio::fs::read(&process.log_path)).await.map_err(|_| {
         anyhow::anyhow!("{display_path} serve did not print its listening address within {timeout_seconds} s")
       })??;
-      if count == 0 {
+      let text = String::from_utf8_lossy(&bytes);
+      if let Some(capture) = listen_re.captures(&text) {
+        return Ok(capture[1].to_string());
+      }
+      if !process.alive() {
         bail!(
           "{} serve exited before printing its listening address: {}",
           self.pool()?.host.program.display.display(),
           process.tail_text()
         );
       }
-      append_tail(&process.tail, &line);
-      let text = String::from_utf8_lossy(&line);
-      if let Some(capture) = listen_re.captures(&text) {
-        return Ok(capture[1].to_string());
-      }
+      tokio::time::sleep(Duration::from_millis(10)).await;
     }
   }
 
@@ -953,7 +1321,27 @@ impl OpenCodeServer {
     }
     let turn = self.state.lock().expect("opencode server state mutex is not poisoned").turns.get(&session_id).cloned();
     if let Some(turn) = turn {
-      turn.push(TurnEvent::Event(event));
+      if turn.relay_only {
+        if turn.adopted
+          && matches!(
+            event_type,
+            "session.execution.succeeded" | "session.execution.failed" | "session.execution.interrupted"
+          )
+        {
+          let process_start = turn.process_start.clone().expect("an adopted turn has a pinned relay process");
+          self.track(tokio::spawn(async move {
+            while relay::same_process(turn.process_id, &process_start) {
+              tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+            if let Err(error) = turn.finish().await {
+              tracing::error!(target: "charliebot_agents", session_id = %turn.session_id, error = %error, "opencode_adopted_turn_end_failed");
+            }
+          }));
+        }
+      } else {
+        #[cfg(test)]
+        turn.push(TurnEvent::Event(event));
+      }
     } else if event_type == "session.execution.started" {
       tracing::warn!(target: "charliebot_agents", session_id, "opencode_unclaimed_execution_interrupted");
       let server = Arc::clone(self);
@@ -967,6 +1355,12 @@ impl OpenCodeServer {
 
   async fn lose(self: &Arc<Self>, reason: String) {
     let _guard = self.start_lock.lock().await;
+    let process = self.state.lock().expect("opencode server state mutex is not poisoned").process.clone();
+    if let Some(process) = process
+      && let Err(error) = relay::write_server_exit_reason(&process.record_path, reason.clone())
+    {
+      tracing::error!(target: "charliebot_agents", path = %process.record_path.display(), error = %error, "opencode_server_exit_record_failed");
+    }
     let turns = {
       let mut state = self.state.lock().expect("opencode server state mutex is not poisoned");
       if state.process.is_none() || state.stopping {
@@ -980,11 +1374,8 @@ impl OpenCodeServer {
         tracing::error!(target: "charliebot_agents", session_id = %turn.session_id, error = %error, "opencode_turn_end_failed");
       }
     }
-    if let Err(error) = self.shutdown_locked().await {
+    if let Err(error) = self.shutdown_locked(true).await {
       tracing::error!(target: "charliebot_agents", error = %error, "opencode_server_shutdown_failed");
-    }
-    for turn in &turns {
-      turn.push(TurnEvent::ServerLost(reason.clone()));
     }
     tracing::error!(target: "charliebot_agents", reason, turns = turns.len(), "opencode_server_lost");
   }
@@ -1053,7 +1444,7 @@ impl OpenCodeServer {
       tracing::info!(target: "charliebot_agents", pid, rss_mb = round_rss(rss_mb), "opencode_server_heavy_exit");
       #[cfg(test)]
       self.wait_heavy_shutdown_gate_test().await;
-      self.shutdown_locked().await?;
+      self.shutdown_locked(false).await?;
       return Ok(());
     }
     drop(_guard);
@@ -1077,13 +1468,13 @@ impl OpenCodeServer {
     if let Some(pid) = idle {
       tracing::info!(target: "charliebot_agents", pid, "opencode_server_idle_exit");
     }
-    if let Err(error) = self.shutdown_locked().await {
+    if let Err(error) = self.shutdown_locked(false).await {
       tracing::error!(target: "charliebot_agents", error = %error, "opencode_server_idle_shutdown_failed");
     }
     Ok(())
   }
 
-  async fn shutdown_locked(&self) -> anyhow::Result<()> {
+  async fn shutdown_locked(&self, preserve_record: bool) -> anyhow::Result<()> {
     let (process, tasks, idle) = {
       let mut state = self.state.lock().expect("opencode server state mutex is not poisoned");
       state.stopping = true;
@@ -1106,6 +1497,15 @@ impl OpenCodeServer {
     for task in tasks {
       abort_and_join(task, current).await;
     }
+    if let Some(process) = &process
+      && !preserve_record
+    {
+      match fs::remove_file(&process.record_path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error).with_context(|| format!("removing {}", process.record_path.display())),
+      }
+    }
     let mut state = self.state.lock().expect("opencode server state mutex is not poisoned");
     state.process = None;
     state.connected = None;
@@ -1113,6 +1513,7 @@ impl OpenCodeServer {
     state.reader_done = None;
     state.reader_done_tx = None;
     state.version = None;
+    state.adopted = false;
     state.pending.clear();
     state.settled.clear();
     Ok(())
@@ -1179,7 +1580,15 @@ pub(crate) async fn finish_active_turn(pid: u32) -> anyhow::Result<()> {
     .get(&pid)
     .and_then(Weak::upgrade);
   if let Some(turn) = turn {
-    turn.finish().await?;
+    if turn.adopted {
+      if let Some(server) = turn.server.upgrade() {
+        server.interrupt(&turn.session_id).await?;
+      }
+    } else if turn.relay_only {
+      turn.finish_for_stop().await?;
+    } else {
+      turn.finish().await?;
+    }
   }
   Ok(())
 }
@@ -1258,23 +1667,6 @@ fn visit_complete_lines(
   Ok(())
 }
 
-async fn drain_stream<R>(mut stream: R, tail: Arc<Mutex<VecDeque<u8>>>)
-where
-  R: AsyncRead + Unpin,
-{
-  let mut chunk = vec![0; READ_CHUNK_BYTES];
-  loop {
-    match stream.read(&mut chunk).await {
-      Ok(0) => return,
-      Ok(count) => append_tail(&tail, &chunk[..count]),
-      Err(error) => {
-        tracing::debug!(target: "charliebot_agents", error = %error, "opencode_output_drain_failed");
-        return;
-      }
-    }
-  }
-}
-
 async fn wait_exit(process: &ServerProcess) -> anyhow::Result<i32> {
   let mut exit = process.exit.clone();
   loop {
@@ -1296,14 +1688,6 @@ async fn abort_and_join(task: JoinHandle<()>, current: Option<Id>) {
     && !error.is_cancelled()
   {
     tracing::warn!(target: "charliebot_agents", error = %error, "opencode_server_task_join_failed");
-  }
-}
-
-fn append_tail(tail: &Mutex<VecDeque<u8>>, data: &[u8]) {
-  let mut tail = tail.lock().expect("opencode output tail is not poisoned");
-  tail.extend(data);
-  while tail.len() > OUTPUT_TAIL_BYTES {
-    tail.pop_front();
   }
 }
 

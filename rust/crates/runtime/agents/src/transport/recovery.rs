@@ -3,6 +3,7 @@
 use std::fs;
 use std::path::Path;
 
+use anyhow::Context;
 use serde_json::Value;
 use serde_json::value::RawValue;
 use time::OffsetDateTime;
@@ -53,6 +54,22 @@ fn trim_horizontal_space(mut bytes: &[u8]) -> &[u8] {
 /// Parse raw NDJSON lines, skipping blank and malformed lines.
 pub fn parse_raw_lines(raw_bytes: &[u8]) -> Vec<Value> {
   raw_bytes.split(|byte| *byte == b'\n').filter_map(parse_line).collect()
+}
+
+/// Parse the raw-log prefix ending at a cursor byte offset.
+pub fn raw_events_before_cursor(raw_path: &Path, cursor: u64) -> anyhow::Result<Vec<Value>> {
+  if cursor == 0 {
+    return Ok(Vec::new());
+  }
+  let raw_bytes = fs::read(raw_path)?;
+  let cursor = usize::try_from(cursor).context("raw-log cursor does not fit in memory")?;
+  anyhow::ensure!(cursor <= raw_bytes.len(), "raw-log cursor is beyond the end of {}", raw_path.display());
+  anyhow::ensure!(
+    cursor == 0 || raw_bytes[cursor - 1] == b'\n',
+    "raw-log cursor does not end at a line boundary in {}",
+    raw_path.display()
+  );
+  Ok(parse_raw_lines(&raw_bytes[..cursor]))
 }
 
 fn parse_line(line: &[u8]) -> Option<Value> {

@@ -1004,7 +1004,8 @@ pub async fn repair_end_metadata(
       .get_session(session_id)
       .await?
       .with_context(|| format!("run {} repairs end metadata but session {session_id} has no metadata", run.id))?;
-    let translate = master_run::build_fresh_translate(&adapter.features, &cfg, Some(&option), &meta, &run.id)?;
+    let log_dir = raw_path.parent().context("run raw log has no parent directory")?;
+    let translate = master_run::build_fresh_translate(&adapter.features, &cfg, Some(&option), &meta, &run.id, log_dir)?;
     let (_, _, scanned) = transport_recovery::scan_result_exit(&raw_path, translate)?;
     exit_code = scanned;
   }

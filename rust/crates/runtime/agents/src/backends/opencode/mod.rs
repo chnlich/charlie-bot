@@ -4,6 +4,7 @@
 pub(crate) mod backend;
 mod opencode_limits;
 mod options;
+pub mod relay;
 pub(crate) mod server;
 mod sqlite;
 pub mod usage_logs;
@@ -64,7 +65,7 @@ fn register_backend_type(
     type_name: "opencode",
     traits: BackendTraits {
       resume: ResumeStyle::NativeId,
-      restart_reattach: false,
+      restart_reattach: true,
       preassigned_session_id: false,
       family_prefix: None,
       manual_compact: false,

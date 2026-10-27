@@ -214,6 +214,41 @@ pub async fn spawn_with_setup(
   Ok(SpawnedChild { child, cgroup })
 }
 
+/// Spawn a process in its own session without a parent-death signal and send its output to files.
+pub async fn spawn_detached_files(
+  spec: &SpawnSpec,
+  stdout_path: &Path,
+  stderr_path: &Path,
+  setup: SpawnSetup,
+) -> io::Result<SpawnedChild> {
+  if let Some(parent) = stdout_path.parent() {
+    fs::create_dir_all(parent)?;
+  }
+  if let Some(parent) = stderr_path.parent() {
+    fs::create_dir_all(parent)?;
+  }
+  let stdout = OpenOptions::new().create(true).append(true).mode(0o644).open(stdout_path)?;
+  let stderr = OpenOptions::new().create(true).append(true).mode(0o644).open(stderr_path)?;
+  let cgroup = match setup {
+    SpawnSetup::None => None,
+    SpawnSetup::ParentSideTurnTree | SpawnSetup::ChildSideTurnTree | SpawnSetup::ChildSideCgroup => {
+      spec.prepare_cgroup()?
+    }
+  };
+  let fds = ChildFds {
+    stdin: devnull_fd()?,
+    stdout: ensure_fd_above_stdio(unsafe { OwnedFd::from_raw_fd(stdout.into_raw_fd()) })?,
+    stderr: ensure_fd_above_stdio(unsafe { OwnedFd::from_raw_fd(stderr.into_raw_fd()) })?,
+  };
+  let prepared = PreparedSpawn::new(spec, None, setup, cgroup.clone(), fds)?;
+  let (outcome, status) = spawn_prepared(prepared).await?;
+  let child = AgentChild::new(outcome, ParentIo { stdin: None, stdout: None, stderr: None }, status)?;
+  if setup == SpawnSetup::ParentSideTurnTree {
+    apply_turn_tree_limits(child.id().expect("spawned child has a process id"), cgroup.as_ref());
+  }
+  Ok(SpawnedChild { child, cgroup })
+}
+
 async fn spawn_prepared(
   prepared: PreparedSpawn,
 ) -> io::Result<(VforkOutcome, Option<watch::Receiver<Option<Result<libc::c_int, libc::c_int>>>>)> {

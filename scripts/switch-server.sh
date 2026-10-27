@@ -50,14 +50,6 @@ PROBE_CANCEL_WAIT_S="${CHARLIEBOT_SWITCH_PROBE_CANCEL_WAIT_S:-60}"
 # The delegation check's wait for its run. A release rehearsal of 2026-10-27 on a clone of this repository passed the
 # check in 14 s and 16 s; 300 s leaves room for a slower host.
 DELEGATION_WAIT_S="${CHARLIEBOT_SWITCH_DELEGATION_WAIT_S:-300}"
-# The commit that made a live agy run survive a Rust restart: a build with it hands the running agy process to its
-# successor, so the run continues. A build without it lets agy die with the server, and a target build without it has no
-# adoption path, so a Rust-to-Rust switch keeps the run only when both builds carry it.
-AGY_ADOPTION_COMMIT=5c80d0204a48a6ad5c4c606b4ccb0d438bb7294b
-# The preflight sets this to why a live agy run cannot survive this switch; empty means it can. The scan reads it from
-# the environment.
-export AGY_REATTACH_BLOCK=""
-
 usage() {
   echo "usage: switch-server.sh rust <full main commit> [--pane PANE]" >&2
   exit 1
@@ -95,34 +87,83 @@ fail() { log "preflight failed: $*"; exit 1; }
 # (pid, pid start); `outcome` reads the terminal fact so readback can distinguish a completed run from one the stop
 # killed.
 home_helper() {
-  python3 -I - "$HOME_DIR" "$@" "${OLD_IMPL:-python}" "$MODE" <<'PY'
+  python3 -I - "$HOME_DIR" "$REPO_ROOT" "$@" "$TARGET_SHA" "${OLD_IMPL:-python}" "$MODE" <<'PY'
 import datetime
 import json
 import os
 import pathlib
+import re
+import subprocess
 import sys
 import time
 
 import yaml
 
 home = pathlib.Path(sys.argv[1])
-mode = sys.argv[2]
+repo_root = pathlib.Path(sys.argv[2])
+mode = sys.argv[3]
+helper_args = sys.argv[4:-3]
+target_sha, source_impl, target_impl = sys.argv[-3:]
 # Owner: ServerConfig.port in rust/crates/infra/core/src/config.rs.
 DEFAULT_SERVER_PORT = 18498
 # Owner: the restart_reattach field of the backend registration (BackendTypeRegistration in
 # rust/crates/runtime/registry/src/registry.rs), set by each backend's register() in
 # rust/crates/runtime/agents/src/backends/*/mod.rs.
 NO_REATTACH = {"opencode", "antigravity"}
-# Owner: BackendTraits.restart_reattach in rust/crates/runtime/agents/src/backends/*/mod.rs.
-RUST_NO_REATTACH = {"opencode"}
-# Why the preflight found a live agy run unable to survive this switch: the running build, the target build, or both
-# lack the adoption commit. Empty when both carry it.
-AGY_REATTACH_BLOCK = os.environ.get("AGY_REATTACH_BLOCK", "")
-source_impl, target_impl = sys.argv[-2:]
 rust_to_rust = source_impl.startswith("rust ") and target_impl == "rust"
-no_reattach = RUST_NO_REATTACH if rust_to_rust else NO_REATTACH
-if rust_to_rust and AGY_REATTACH_BLOCK:
-  no_reattach = no_reattach | {"antigravity"}
+reattach_cache = {}
+
+
+def rust_registration(sha, backend_type):
+  """Read one build's backend registration without checking out or changing its source tree."""
+  key = (sha, backend_type)
+  if key in reattach_cache:
+    return reattach_cache[key]
+  prefix = "rust/crates/runtime/agents/src/backends"
+  listed = subprocess.run(
+    ["git", "-C", str(repo_root), "ls-tree", "-r", "--name-only", sha, prefix],
+    capture_output=True, text=True, check=False,
+  )
+  if listed.returncode:
+    result = (None, f"cannot inspect build {sha}: {listed.stderr.strip()}")
+    reattach_cache[key] = result
+    return result
+  for path in listed.stdout.splitlines():
+    if not path.endswith("/mod.rs"):
+      continue
+    shown = subprocess.run(
+      ["git", "-C", str(repo_root), "show", f"{sha}:{path}"],
+      capture_output=True, text=True, check=False,
+    )
+    if shown.returncode:
+      result = (None, f"cannot read {path} from build {sha}: {shown.stderr.strip()}")
+      reattach_cache[key] = result
+      return result
+    for registration in re.finditer(
+      r"type_name:\s*(?P<name>\"[^\"]+\"|[A-Z_]+)\s*,\s*traits:\s*BackendTraits\s*\{(?P<body>.*?)\}",
+      shown.stdout,
+      re.DOTALL,
+    ):
+      name = registration.group("name")
+      if name.startswith('"'):
+        declared = name[1:-1]
+      else:
+        constant = re.search(rf"const\s+{re.escape(name)}\s*:\s*&str\s*=\s*\"([^\"]+)\"", shown.stdout)
+        if constant is None:
+          continue
+        declared = constant.group(1)
+      if declared != backend_type:
+        continue
+      enabled = re.search(r"^\s*restart_reattach:\s*(true|false)\s*,?\s*$", registration.group("body"), re.MULTILINE)
+      if enabled is None:
+        result = (None, f"{path} in build {sha} has no restart_reattach value")
+      else:
+        result = (enabled.group(1) == "true", path)
+      reattach_cache[key] = result
+      return result
+  result = (None, f"build {sha} has no registration for backend type {backend_type}")
+  reattach_cache[key] = result
+  return result
 
 
 def proc_stat(pid):
@@ -178,10 +219,17 @@ elif mode == "scan":
     if backend_type is None:
       print(f"block\tbackend {backend!r} of run {run['id']} (pid {run['pid']}) is not in backends.options; "
             "restart re-attachment is unknown")
-    elif backend_type in no_reattach:
-      reason = f": {AGY_REATTACH_BLOCK}" if backend_type == "antigravity" and rust_to_rust else ""
+    elif rust_to_rust:
+      source_sha = source_impl.removeprefix("rust ")
+      for build_label, sha in (("running build", source_sha), ("target build", target_sha)):
+        enabled, detail = rust_registration(sha, backend_type)
+        if enabled is not True:
+          state = "false" if enabled is False else "unknown"
+          print(f"block\t{backend} run {run['id']} (type {backend_type}, pid {run['pid']}) cannot be re-attached after a restart: "
+                f"{build_label} {sha} marks restart_reattach = {state} ({detail})")
+    elif backend_type in NO_REATTACH:
       print(f"block\t{backend} run {run['id']} (type {backend_type}, pid {run['pid']}) "
-            f"cannot be re-attached after a restart{reason}")
+            "cannot be re-attached after a restart")
   # A loop's controller runs inside the server process; a restart never resumes it (rust/crates/runtime/tasks/src/recovery.rs).
   for path in sorted((home / "sessions").glob("*/loops/*/state.json")):
     state = json.loads(path.read_text(encoding="utf-8"))
@@ -189,11 +237,11 @@ elif mode == "scan":
     if state.get("status") == "running" and controller is not None and pathlib.Path(f"/proc/{controller}").exists():
       print(f"block\timprove loop {path.parent.name} is running under pid {controller}")
 elif mode == "alive":
-  pid, pid_start = sys.argv[3], sys.argv[4]
+  pid, pid_start = helper_args
   print("alive" if process_instance(pid, pid_start) else "ended")
 elif mode == "outcome":
   # The run store's fact history includes rotated segments, so read its archive files before the live event log.
-  session_id, run_id = sys.argv[3], sys.argv[4]
+  session_id, run_id = helper_args
   session = home / "sessions" / session_id
   run = json.loads((session / "data" / "runs" / run_id / "metadata.json").read_text(encoding="utf-8"))
   data = session / "data"
@@ -338,29 +386,6 @@ listener_impl() {
 }
 
 listener_is() { [ "$(listener_impl)" = "$1" ]; }
-
-# agy_reattach_block IMPL: prints why a live agy run cannot survive this switch, empty when it can. A Rust-to-Rust
-# switch keeps such a run only when the running release and TARGET_SHA both carry AGY_ADOPTION_COMMIT; any other
-# direction is the home helper's own refusal. Fails with the error when a needed commit is not in the runtime clone, so
-# the switch refuses rather than guesses.
-agy_reattach_block() {
-  local running sha missing_running=0 missing_target=0 suffix="which made a live agy run survive a restart"
-  [[ "$1" == rust\ * ]] || return 0
-  running="${1#rust }"
-  for sha in "$running" "$TARGET_SHA" "$AGY_ADOPTION_COMMIT"; do
-    git -C "$REPO_ROOT" cat-file -e "$sha^{commit}" 2> /dev/null \
-      || { echo "commit $sha is not in the runtime clone $REPO_ROOT; fetch origin first"; return 1; }
-  done
-  git -C "$REPO_ROOT" merge-base --is-ancestor "$AGY_ADOPTION_COMMIT" "$running" || missing_running=1
-  git -C "$REPO_ROOT" merge-base --is-ancestor "$AGY_ADOPTION_COMMIT" "$TARGET_SHA" || missing_target=1
-  if [ "$missing_running" = 1 ] && [ "$missing_target" = 1 ]; then
-    echo "the running build $running and the target build $TARGET_SHA lack $AGY_ADOPTION_COMMIT, $suffix"
-  elif [ "$missing_running" = 1 ]; then
-    echo "the running build $running lacks $AGY_ADOPTION_COMMIT, $suffix"
-  elif [ "$missing_target" = 1 ]; then
-    echo "the target build $TARGET_SHA lacks $AGY_ADOPTION_COMMIT, $suffix"
-  fi
-}
 
 # api METHOD PATH [JSON] [TIMEOUT_S]: the body lands in $WORK/body, the HTTP status in API_STATUS. The key reaches
 # curl through a file descriptor, so it stays out of argv.
@@ -970,9 +995,6 @@ preflight() {
   PORT="$(sed -n 1p <<<"$CONFIG")"
   KEY="$(sed -n 2p <<<"$CONFIG")"
   OLD_IMPL="$(listener_impl)"
-  # A live agy run survives only when both this build and the target carry the adoption commit; a sha that the clone
-  # cannot resolve fails the preflight here.
-  AGY_REATTACH_BLOCK="$(agy_reattach_block "$OLD_IMPL")" || fail "$AGY_REATTACH_BLOCK"
   scan_home || fail "cannot read the run records in $HOME_DIR"
   [ -z "$BLOCKERS" ] || fail "a restart would lose live work: ${BLOCKERS//$'\n'/; }"
   [ -n "$KEY" ] || fail "no charliebot.access_key in $HOME_DIR/credentials.yaml"

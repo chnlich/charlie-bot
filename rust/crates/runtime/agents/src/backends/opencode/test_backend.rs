@@ -1,6 +1,9 @@
+use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fs;
-use std::path::PathBuf;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -24,10 +27,47 @@ use crate::runner::{AgentRunner, RunOutcome, RunRequest};
 use crate::transport::cgroup::SessionCgroupConfig;
 use crate::transport::identity::{ProcessIdentity, read_pid_stat};
 use crate::transport::kill::kill_process_group;
+use crate::transport::{cursor, follow, recovery};
 
 type TestRun = (Arc<AgentRunner>, Arc<Mutex<Vec<Value>>>, JoinHandle<anyhow::Result<RunOutcome>>);
 
+struct TestRunConfig<'a> {
+  prompt: &'a str,
+  launch: LaunchArgs,
+  proxy_url: Option<String>,
+  uploaded_files: Vec<Value>,
+  additions: Env,
+  option: OpenCodeOption,
+}
+
 const MODEL: &str = "fakeprov/fake-model";
+
+fn adoption_option() -> BackendOption {
+  BackendOption {
+    id: "opencode-test".to_string(),
+    label: "OpenCode test".to_string(),
+    model: MODEL.to_string(),
+    prompt_overlay: None,
+    backend_type: "opencode".to_string(),
+    type_fields: serde_yaml::Mapping::new(),
+  }
+}
+
+fn adoption_option_with_context_limit(context_limit: u64) -> BackendOption {
+  let mut option = adoption_option();
+  option.type_fields =
+    serde_yaml::from_str(&format!("context_limit: {context_limit}\n")).expect("test option context limit is valid");
+  option
+}
+
+#[test]
+#[ignore = "launched as the OpenCode run identity process by the relay tests"]
+fn relay_subprocess() {
+  let args =
+    ["CHARLIEBOT_OPENCODE_RELAY_DIRECTORY", "CHARLIEBOT_OPENCODE_PARENT_PID", "CHARLIEBOT_OPENCODE_PARENT_START"]
+      .map(|key| std::env::var_os(key).expect("relay process environment contains its identity"));
+  super::relay::run_args(&args).expect("OpenCode relay subprocess completed");
+}
 
 struct TestNotifyGuard {
   notify: Arc<tokio::sync::Notify>,
@@ -57,6 +97,7 @@ struct Harness {
   root: tempfile::TempDir,
   host: OpenCodeHost,
   pool: Arc<OpenCodeServerPool>,
+  adopted_pools: Mutex<Vec<Arc<OpenCodeServerPool>>>,
   server: Arc<OpenCodeServer>,
   servers: Arc<Mutex<Vec<Arc<OpenCodeServer>>>>,
   turn_processes: Arc<Mutex<Vec<(String, ProcessIdentity)>>>,
@@ -95,11 +136,13 @@ impl Harness {
       extra_env,
     );
     let pool = OpenCodeServerPool::new(host.clone(), timeouts);
+    pool.record_options(&[adoption_option()]);
     let server = pool.server_for(None);
     Self {
       root,
       host,
       pool,
+      adopted_pools: Mutex::new(Vec::new()),
       servers: Arc::new(Mutex::new(vec![Arc::clone(&server)])),
       server,
       turn_processes: Arc::new(Mutex::new(Vec::new())),
@@ -116,21 +159,34 @@ impl Harness {
     uploaded_files: Vec<Value>,
     additions: Env,
   ) -> TestRun {
+    let option = OpenCodeOption { proxy_url: proxy_url.clone(), context_limit: None, extra_body: Map::new() };
+    self.start_run_in_pool(&self.pool, TestRunConfig { prompt, launch, proxy_url, uploaded_files, additions, option })
+  }
+
+  fn start_run_in_pool(&self, pool: &Arc<OpenCodeServerPool>, config: TestRunConfig<'_>) -> TestRun {
+    let TestRunConfig { prompt, mut launch, proxy_url, uploaded_files, additions, option } = config;
+    if launch.log_dir.is_none() {
+      launch.log_dir = Some(
+        self.host.profile_home.join("sessions/synthetic-session/data/runs").join(uuid::Uuid::new_v4().to_string()),
+      );
+    }
+    fs::create_dir_all(launch.log_dir.as_ref().unwrap()).unwrap();
     let backend = OpenCodeBackend::new(
       MODEL.to_string(),
-      OpenCodeOption { proxy_url: proxy_url.clone(), context_limit: None, extra_body: Map::new() },
+      option,
       Map::new(),
       self.host.clone(),
-      Arc::clone(&self.pool),
+      Arc::clone(pool),
       launch.clone(),
       SessionCgroupConfig::disabled(),
     );
-    let server = self.pool.server_for(proxy_url);
+    let server = pool.server_for(proxy_url);
     let mut servers = self.servers.lock().expect("test server list is not poisoned");
     if !servers.iter().any(|known| Arc::ptr_eq(known, &server)) {
       servers.push(server);
     }
     drop(servers);
+    let run_directory = launch.log_dir.clone().expect("the run log directory was assigned");
     let runner = Arc::new(AgentRunner::new("opencode", Box::new(backend), launch));
     let mut values = Env::from([("PATH".to_string(), std::env::var("PATH").expect("PATH is set for Rust tests"))]);
     values.extend(additions);
@@ -160,6 +216,7 @@ impl Harness {
     let process_prompt = prompt.to_string();
     request.on_spawn = Some(Arc::new(move |identity| {
       let turn_processes = Arc::clone(&turn_processes);
+      let run_directory = run_directory.clone();
       let process_prompt = process_prompt.clone();
       Box::pin(async move {
         let current = read_pid_stat(identity.pid).context("reading the turn process stat at spawn notification")?;
@@ -167,7 +224,19 @@ impl Harness {
           identity.pid_start.as_deref() == Some(current.pid_start.as_str()),
           "pid_start changed before callback"
         );
-        turn_processes.lock().expect("test turn process list is not poisoned").push((process_prompt, identity));
+        turn_processes.lock().expect("test turn process list is not poisoned").push((process_prompt, identity.clone()));
+        let run_id = run_directory.file_name().expect("the run directory has a name").to_string_lossy();
+        let metadata = json!({
+          "id": run_id,
+          "session_id": "synthetic-session",
+          "backend": "opencode-test",
+          "pid": identity.pid,
+          "pid_start": identity.pid_start,
+        });
+        fs::write(
+          run_directory.join(charliebot_store::run_records::RUN_METADATA_NAME),
+          serde_json::to_vec(&metadata)?,
+        )?;
         Ok(())
       }) as BoxFuture<'static, anyhow::Result<()>>
     }));
@@ -183,6 +252,10 @@ impl Harness {
     fs::read_to_string(&self.log_path).unwrap().lines().map(|line| serde_json::from_str(line).unwrap()).collect()
   }
 
+  fn run_logs_directory(&self) -> PathBuf {
+    self.host.profile_home.join("sessions/synthetic-session/data/runs")
+  }
+
   async fn wait_for_log(&self, matches: impl Fn(&[Value]) -> bool) {
     tokio::time::timeout(Duration::from_secs(5), async {
       loop {
@@ -193,7 +266,36 @@ impl Harness {
       }
     })
     .await
-    .expect("fake opencode request was not recorded");
+    .unwrap_or_else(|_| {
+      let runs = fs::read_dir(self.run_logs_directory())
+        .unwrap()
+        .map(|entry| {
+          let path = entry.unwrap().path();
+          let raw = fs::read_to_string(path.join("agent.raw.ndjson")).unwrap_or_default();
+          let stderr = fs::read_to_string(path.join("agent.stderr.log")).unwrap_or_default();
+          format!("{} raw={raw:?} stderr={stderr:?}", path.display())
+        })
+        .collect::<Vec<_>>();
+      panic!("fake opencode request was not recorded; runs={runs:?}")
+    });
+  }
+
+  async fn wait_for_raw_cursor(&self, run_directory: &Path) {
+    let raw_path = run_directory.join(charliebot_store::run_records::RAW_LOG_NAME);
+    let cursor_path = run_directory.join(charliebot_store::run_records::CURSOR_NAME);
+    tokio::time::timeout(Duration::from_secs(5), async {
+      loop {
+        if let Ok(metadata) = fs::metadata(&raw_path)
+          && metadata.len() > 0
+          && cursor::read_raw_cursor(&cursor_path) == metadata.len()
+        {
+          return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+      }
+    })
+    .await
+    .expect("the raw cursor reaches the end of the delivered prefix");
   }
 
   async fn control(&self, body: Value) -> anyhow::Result<()> {
@@ -202,12 +304,78 @@ impl Harness {
   }
 
   async fn stop(&self) -> anyhow::Result<()> {
-    self.pool.stop_all().await
+    self.pool.stop_all().await?;
+    let pools = self.adopted_pools.lock().expect("test adopted pool list is not poisoned").clone();
+    for pool in pools {
+      pool.stop_all().await?;
+    }
+    Ok(())
+  }
+
+  fn adopt_pool(&self) -> Arc<OpenCodeServerPool> {
+    self.adopt_pool_with_options(&[adoption_option()])
+  }
+
+  fn adopt_pool_with_options(&self, options: &[BackendOption]) -> Arc<OpenCodeServerPool> {
+    let pool = OpenCodeServerPool::new(self.host.clone(), ServerTimeouts::default());
+    pool.record_options(options);
+    pool.adopt_existing().unwrap();
+    self.servers.lock().expect("test server list is not poisoned").extend(pool.adopted_servers_test());
+    self.adopted_pools.lock().expect("test adopted pool list is not poisoned").push(Arc::clone(&pool));
+    pool
   }
 
   fn clear_finished_turn_pids(&self) {
     self.turn_processes.lock().expect("test turn process list is not poisoned").clear();
   }
+}
+
+fn run_directory(harness: &Harness) -> PathBuf {
+  fs::read_dir(harness.run_logs_directory()).unwrap().next().expect("the run has a persisted directory").unwrap().path()
+}
+
+fn replay_translator_prefix(run_directory: &Path) -> (OpenCodeTranslator, u64) {
+  let turn = super::relay::read_turn_record(run_directory).unwrap().expect("the turn has a durable prompt record");
+  let raw_path = run_directory.join(charliebot_store::run_records::RAW_LOG_NAME);
+  let cursor_path = run_directory.join(charliebot_store::run_records::CURSOR_NAME);
+  let cursor = cursor::read_raw_cursor(&cursor_path);
+  let prefix = recovery::raw_events_before_cursor(&raw_path, cursor).unwrap();
+  let mut translator = OpenCodeTranslator::with_model_limit(MODEL.to_string(), turn.model_limit);
+  for event in prefix {
+    translator.translate_event(&event).unwrap();
+  }
+  (translator, cursor)
+}
+
+async fn follow_from_cursor(
+  run_directory: &Path,
+  cursor: u64,
+  mut translator: OpenCodeTranslator,
+  is_alive: impl Fn() -> bool,
+  delivered: Arc<Mutex<Vec<Value>>>,
+) -> anyhow::Result<follow::FollowSummary> {
+  let raw_path = run_directory.join(charliebot_store::run_records::RAW_LOG_NAME);
+  let cursor_path = run_directory.join(charliebot_store::run_records::CURSOR_NAME);
+  follow::tail_follow_events(
+    &raw_path,
+    move |event| translator.translate_event(&event),
+    move |event| {
+      let delivered = Arc::clone(&delivered);
+      async move {
+        delivered.lock().expect("recovered event list is not poisoned").push(event);
+        Ok::<(), std::io::Error>(())
+      }
+    },
+    is_alive,
+    Some(&cursor_path),
+    cursor,
+    Duration::from_secs(1),
+    follow::DEFAULT_BUFFER_LIMIT,
+    follow::TAIL_POLL_INTERVAL,
+    None,
+    Duration::ZERO,
+  )
+  .await
 }
 
 impl Drop for Harness {
@@ -668,6 +836,7 @@ async fn turn_translates_events_sets_the_environment_and_ends_with_result() {
   // Python: tests/test_backend_pid_start_contract.py::test_every_backend_subclass_has_a_harness
   // Python: tests/test_backend_pid_start_contract.py::test_pid_start_pinned_at_spawn_notification
   let script = json!({
+    "event_subscribe_delay": 0.05,
     "prompts": {
       "hello": {"events": [
         {"type": "session.step.started", "data": {"started": 777}},
@@ -688,8 +857,20 @@ async fn turn_translates_events_sets_the_environment_and_ends_with_result() {
     harness.start_run("hello", LaunchArgs::default(), Some("http://proxy.test:8080".into()), vec![], additions.clone());
   let outcome = task.await.unwrap().unwrap();
   let events = collected_events(&events);
+  let raw_dump = fs::read_dir(harness.run_logs_directory())
+    .unwrap()
+    .map(|entry| {
+      let path = entry.unwrap().path();
+      format!(
+        "raw={:?} stdout={:?} stderr={:?}",
+        fs::read_to_string(path.join("agent.raw.ndjson")).unwrap_or_default(),
+        fs::read_to_string(path.join("agent.stdout.log")).unwrap_or_default(),
+        fs::read_to_string(path.join("agent.stderr.log")).unwrap_or_default()
+      )
+    })
+    .collect::<Vec<_>>();
   assert_eq!(events[0]["type"], event_types::SESSION_ATTACHED);
-  assert_eq!(events[1]["message"]["content"][0]["text"], "hi");
+  assert_eq!(events[1]["message"]["content"][0]["text"], "hi", "events={events:?} raw={raw_dump:?}");
   assert_eq!(events[2]["message"]["content"][0]["name"], "shell");
   assert_eq!(events[3]["tool_use_id"], "c1");
   assert_eq!(events.last().unwrap()["type"], event_types::RESULT);
@@ -699,6 +880,12 @@ async fn turn_translates_events_sets_the_environment_and_ends_with_result() {
   assert_eq!(outcome.exit_code, Some(0));
   assert_eq!(runner.exit_code(), Some(0));
   let logs = harness.logs();
+  let relay_stream = logs.iter().rposition(|entry| entry["method"] == "GET" && entry["path"] == "/api/event").unwrap();
+  let prompt_request = logs
+    .iter()
+    .position(|entry| entry["method"] == "POST" && entry["path"].as_str().is_some_and(|path| path.ends_with("/prompt")))
+    .unwrap();
+  assert!(relay_stream < prompt_request);
   let put = logs.iter().find(|entry| entry["method"] == "PUT").unwrap();
   assert_eq!(put["body"]["variables"]["CHARLIEBOT_RUN_TOKEN"], "turn-token");
   assert_eq!(put["body"]["variables"]["HTTP_PROXY"], "http://proxy.test:8080");
@@ -708,6 +895,383 @@ async fn turn_translates_events_sets_the_environment_and_ends_with_result() {
   assert_eq!(additions["NO_PROXY"], "internal.test,localhost,127.0.0.1");
   let create = logs.iter().find(|entry| entry["method"] == "POST" && entry["path"] == "/api/session").unwrap();
   assert_eq!(create["body"]["model"], json!({"id": "fake-model", "providerID": "fakeprov"}));
+  harness.stop().await.unwrap();
+  harness.clear_finished_turn_pids();
+}
+
+#[tokio::test]
+async fn a_turn_survives_a_server_restart_and_replays_translator_state() {
+  let prefix = vec![
+    json!({"type": "session.step.started", "data": {"started": 777}}),
+    json!({"type": "session.text.delta", "data": {"assistantMessageID": "m1", "ordinal": 0, "delta": "before"}}),
+    text_event("before"),
+    json!({"type": "session.tool.input.started", "data": {"id": "cmd1", "name": "shell"}}),
+    json!({"type": "session.tool.called", "data": {"id": "cmd1", "input": {"command": "true"}}}),
+    usage_event(5, 2),
+  ];
+  let suffix = vec![
+    json!({"type": "session.tool.success", "data": {"id": "cmd1", "content": [{"type": "text", "text": "command result"}]}}),
+    usage_event(3, 1),
+  ];
+  let baseline_events_script = prefix.iter().chain(&suffix).cloned().collect::<Vec<_>>();
+  let script = json!({"prompts": {
+    "baseline": {"events": baseline_events_script},
+    "paused": {"events": prefix, "hold": true}
+  }});
+
+  let baseline = Harness::new(script.clone());
+  let (_, expected_events, baseline_task) =
+    baseline.start_run("baseline", LaunchArgs::default(), None, vec![], Env::new());
+  assert_eq!(baseline_task.await.unwrap().unwrap().exit_code, Some(0));
+  let expected_events = collected_events(&expected_events);
+  baseline.stop().await.unwrap();
+
+  let harness = Harness::new(script);
+  let (runner, initial_events, task) = harness.start_run("paused", LaunchArgs::default(), None, vec![], Env::new());
+  harness
+    .wait_for_log(|logs| logs.iter().any(|entry| entry.get("prompt_text").and_then(Value::as_str) == Some("paused")))
+    .await;
+  let run_directory = run_directory(&harness);
+  harness.wait_for_raw_cursor(&run_directory).await;
+  let turn = super::relay::read_turn_record(&run_directory).unwrap().expect("the turn opened a session");
+  let server_record_path = harness.host.profile_home.join("opencode/servers").join(&turn.server_record);
+  assert_eq!(fs::metadata(&server_record_path).unwrap().permissions().mode() & 0o777, 0o600);
+  let prefix_cursor = cursor::read_raw_cursor(&run_directory.join(charliebot_store::run_records::CURSOR_NAME));
+  assert!(prefix_cursor > 0);
+
+  let identity = harness
+    .turn_processes
+    .lock()
+    .expect("test turn process list is not poisoned")
+    .iter()
+    .find_map(|(prompt, identity)| (prompt == "paused").then(|| identity.clone()))
+    .expect("the paused turn has a relay process");
+  runner.detach();
+  task.abort();
+  assert!(task.await.unwrap_err().is_cancelled());
+  harness.pool.abandon_for_restart_test().await;
+  let pool = harness.adopt_pool();
+  let adopted = pool.adopted_servers_test();
+  assert_eq!(adopted.len(), 1);
+  assert_eq!(adopted[0].pid(), Some(harness.server.pid().unwrap()));
+  harness
+    .wait_for_log(|logs| {
+      logs.iter().filter(|entry| entry["method"] == "GET" && entry["path"] == "/api/event").count() == 3
+    })
+    .await;
+  assert!(!harness.logs().iter().any(|entry| entry["path"].as_str().is_some_and(|path| path.ends_with("/interrupt"))));
+
+  let (translator, cursor) = replay_translator_prefix(&run_directory);
+  assert_eq!(cursor, prefix_cursor);
+  let recovered_events = Arc::new(Mutex::new(Vec::new()));
+  let recovered_sink = Arc::clone(&recovered_events);
+  let follow_directory = run_directory.clone();
+  let relay_pid = identity.pid;
+  let relay_start = identity.pid_start.clone().expect("relay identity has a start time");
+  let follow = tokio::spawn(async move {
+    follow_from_cursor(
+      &follow_directory,
+      cursor,
+      translator,
+      move || super::relay::same_process(relay_pid, &relay_start),
+      recovered_sink,
+    )
+    .await
+  });
+  for mut event in suffix {
+    event["data"]["sessionID"] = json!(turn.session_id);
+    harness.control(json!({"emit": event})).await.unwrap();
+  }
+  harness
+    .control(json!({"emit": {"type": "session.execution.succeeded", "data": {"sessionID": turn.session_id}}}))
+    .await
+    .unwrap();
+  let summary = tokio::time::timeout(Duration::from_secs(5), follow).await.unwrap().unwrap().unwrap();
+  assert!(summary.saw_result);
+  let recovered_events = collected_events(&recovered_events);
+  let mut combined = collected_events(&initial_events);
+  combined.extend(recovered_events.clone());
+  let normalize = |events: Vec<Value>| {
+    events
+      .into_iter()
+      .filter(|event| event.get("type").and_then(Value::as_str) != Some(event_types::SESSION_ATTACHED))
+      .map(|mut event| {
+        event.as_object_mut().unwrap().remove("timestamp");
+        event
+      })
+      .collect::<Vec<_>>()
+  };
+  assert_eq!(normalize(combined), normalize(expected_events.clone()));
+  assert!(recovered_events.iter().any(|event| {
+    event["type"] == event_types::TOOL_RESULT && event["tool_use_id"] == "cmd1" && event["content"] == "command result"
+  }));
+  let raw_path = run_directory.join(charliebot_store::run_records::RAW_LOG_NAME);
+  let mut scan_translator = OpenCodeTranslator::with_model_limit(MODEL.to_string(), turn.model_limit.clone());
+  let (_, recovered_result, exit_code) =
+    recovery::scan_result_exit(&raw_path, move |raw| scan_translator.translate_event(&raw)).unwrap();
+  let expected_result = expected_events.iter().find(|event| event["type"] == event_types::RESULT).unwrap();
+  let recovered_result = recovered_result.expect("the recovered raw log has a result");
+  assert_eq!(exit_code, 0);
+  assert_eq!(recovered_result["usage"], expected_result["usage"]);
+  assert_eq!(recovered_result["usage"]["input_tokens"], 8);
+  assert_eq!(recovered_result["usage"]["output_tokens"], 3);
+  tokio::time::timeout(Duration::from_secs(5), async {
+    while adopted[0].process_alive() {
+      tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+  })
+  .await
+  .expect("the adopted serve stops after its last turn ends");
+  harness.stop().await.unwrap();
+  harness.clear_finished_turn_pids();
+}
+
+#[test]
+fn a_restart_before_the_turn_record_exists_fails_with_a_specific_error_event() {
+  let harness = Harness::new(json!({"prompts": {}}));
+  let run_directory = harness.root.path().join("run-without-turn-record");
+  fs::create_dir_all(&run_directory).unwrap();
+  let raw_path = run_directory.join(charliebot_store::run_records::RAW_LOG_NAME);
+  fs::write(&raw_path, []).unwrap();
+  let executable = std::env::current_exe().unwrap();
+  let status = Command::new(executable)
+    .args(["--exact", "backends::opencode::test_backend::relay_subprocess", "--ignored"])
+    .env("CHARLIEBOT_OPENCODE_RELAY_DIRECTORY", &run_directory)
+    .env("CHARLIEBOT_OPENCODE_PARENT_PID", "2147483647")
+    .env("CHARLIEBOT_OPENCODE_PARENT_START", "no-such-process")
+    .env("CHARLIEBOT_OPENCODE_SERVER_DIRECTORY", harness.host.profile_home.join("opencode/servers"))
+    .status()
+    .unwrap();
+  assert!(status.success());
+  assert!(!run_directory.join(super::relay::TURN_RECORD_NAME).exists());
+  let raw = fs::read(&raw_path).unwrap();
+  let event: Value = serde_json::from_slice(raw.strip_suffix(b"\n").unwrap()).unwrap();
+  let translated = OpenCodeTranslator::new(MODEL.to_string()).translate_event(&event).unwrap();
+  assert_eq!(translated[0]["type"], event_types::ERROR);
+  assert!(translated[0]["message"].as_str().unwrap().contains("server restarted before the turn started"));
+}
+
+#[tokio::test]
+async fn a_new_settings_snapshot_starts_a_new_serve_while_an_adopted_turn_finishes_on_the_old_one() {
+  let harness = Harness::new(json!({
+    "prompts": {
+      "old held turn": {"events": [text_event("old prefix")], "hold": true},
+      "new settings turn": {"events": [text_event("new server answer")]}
+    }
+  }));
+  let (runner, _, task) = harness.start_run("old held turn", LaunchArgs::default(), None, vec![], Env::new());
+  harness
+    .wait_for_log(|logs| {
+      logs.iter().any(|entry| entry.get("prompt_text").and_then(Value::as_str) == Some("old held turn"))
+    })
+    .await;
+  let run_directory = run_directory(&harness);
+  harness.wait_for_raw_cursor(&run_directory).await;
+  let turn = super::relay::read_turn_record(&run_directory).unwrap().expect("the old turn has a durable record");
+  let old_pid = harness.server.pid().unwrap();
+  let identity = harness
+    .turn_processes
+    .lock()
+    .expect("test turn process list is not poisoned")
+    .iter()
+    .find_map(|(prompt, identity)| (prompt == "old held turn").then(|| identity.clone()))
+    .expect("the old turn has a relay process");
+  let relay_start = identity.pid_start.clone().expect("relay identity has a start time");
+  runner.detach();
+  task.abort();
+  assert!(task.await.unwrap_err().is_cancelled());
+  harness.pool.abandon_for_restart_test().await;
+
+  let changed_option = adoption_option_with_context_limit(420_000);
+  let pool = harness.adopt_pool_with_options(std::slice::from_ref(&changed_option));
+  let adopted = pool.adopted_servers_test();
+  assert_eq!(adopted.len(), 1);
+  assert_eq!(adopted[0].pid(), Some(old_pid));
+  assert!(adopted[0].process_alive());
+  let new_fields = super::options::OpenCodeOption::from_fields(&changed_option.type_fields).unwrap();
+  let (_, new_events, new_task) = harness.start_run_in_pool(
+    &pool,
+    TestRunConfig {
+      prompt: "new settings turn",
+      launch: LaunchArgs::default(),
+      proxy_url: None,
+      uploaded_files: vec![],
+      additions: Env::new(),
+      option: new_fields,
+    },
+  );
+  assert_eq!(new_task.await.unwrap().unwrap().exit_code, Some(0));
+  assert_eq!(collected_events(&new_events).last().unwrap()["type"], event_types::RESULT);
+  let new_server = pool.server_for(None);
+  let new_pid = new_server.pid().unwrap();
+  assert_ne!(new_pid, old_pid);
+  let environment = fs::read(format!("/proc/{new_pid}/environ")).unwrap();
+  let config = environment
+    .split(|byte| *byte == 0)
+    .find_map(|entry| entry.strip_prefix(b"OPENCODE_CONFIG_CONTENT="))
+    .expect("the new serve receives its settings snapshot");
+  let config: Value = serde_json::from_slice(config).unwrap();
+  assert_eq!(config["providers"]["fakeprov"]["models"]["fake-model"]["limit"]["context"], 420_000);
+  let prompt_pids = harness
+    .logs()
+    .into_iter()
+    .filter(|entry| entry["method"] == "POST" && entry["path"].as_str().is_some_and(|path| path.ends_with("/prompt")))
+    .map(|entry| (entry["body"]["text"].as_str().unwrap().to_string(), entry["pid"].as_u64().unwrap() as u32))
+    .collect::<HashMap<_, _>>();
+  assert_eq!(prompt_pids["old held turn"], old_pid);
+  assert_eq!(prompt_pids["new settings turn"], new_pid);
+
+  let mut answer = text_event("old answer after restart");
+  answer["data"]["sessionID"] = json!(turn.session_id);
+  harness.control(json!({"emit": answer})).await.unwrap();
+  harness
+    .control(json!({
+      "emit": {"type": "session.execution.succeeded", "data": {"sessionID": turn.session_id}}
+    }))
+    .await
+    .unwrap();
+  tokio::time::timeout(Duration::from_secs(5), async {
+    while super::relay::same_process(identity.pid, &relay_start) {
+      tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+  })
+  .await
+  .expect("the old turn relay ends after its original serve completes");
+  tokio::time::timeout(Duration::from_secs(5), async {
+    while adopted[0].process_alive() {
+      tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+  })
+  .await
+  .expect("the old adopted serve stops after its last turn ends");
+  let (translator, cursor) = replay_translator_prefix(&run_directory);
+  let recovered = Arc::new(Mutex::new(Vec::new()));
+  let summary = follow_from_cursor(&run_directory, cursor, translator, || false, Arc::clone(&recovered)).await.unwrap();
+  assert!(summary.saw_result);
+  assert!(collected_events(&recovered).iter().any(|event| {
+    event["type"] == event_types::ASSISTANT && event["message"]["content"][0]["text"] == "old answer after restart"
+  }));
+  harness.stop().await.unwrap();
+  harness.clear_finished_turn_pids();
+}
+
+#[tokio::test]
+async fn a_turn_ending_during_downtime_delivers_its_answer_by_the_dead_process_rule() {
+  let harness = Harness::new(json!({"prompts": {
+    "paused": {"events": [text_event("before downtime")], "hold": true}
+  }}));
+  let (runner, initial_events, task) = harness.start_run("paused", LaunchArgs::default(), None, vec![], Env::new());
+  harness
+    .wait_for_log(|logs| logs.iter().any(|entry| entry.get("prompt_text").and_then(Value::as_str) == Some("paused")))
+    .await;
+  let run_directory = run_directory(&harness);
+  harness.wait_for_raw_cursor(&run_directory).await;
+  let turn = super::relay::read_turn_record(&run_directory).unwrap().expect("the turn opened a session");
+  let identity = harness
+    .turn_processes
+    .lock()
+    .expect("test turn process list is not poisoned")
+    .iter()
+    .find_map(|(prompt, identity)| (prompt == "paused").then(|| identity.clone()))
+    .expect("the paused turn has a relay process");
+  runner.detach();
+  task.abort();
+  assert!(task.await.unwrap_err().is_cancelled());
+  harness.pool.abandon_for_restart_test().await;
+
+  let answer = json!({
+    "type": "session.text.delta",
+    "data": {"assistantMessageID": "m2", "ordinal": 0, "delta": "answer during downtime", "sessionID": turn.session_id}
+  });
+  harness.control(json!({"emit": answer})).await.unwrap();
+  harness
+    .control(json!({"emit": {"type": "session.execution.succeeded", "data": {"sessionID": turn.session_id}}}))
+    .await
+    .unwrap();
+  let relay_start = identity.pid_start.clone().expect("relay identity has a start time");
+  tokio::time::timeout(Duration::from_secs(5), async {
+    while super::relay::same_process(identity.pid, &relay_start) {
+      tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+  })
+  .await
+  .expect("the relay ended while the server was down");
+
+  let pool = harness.adopt_pool();
+  assert!(pool.adopted_servers_test().is_empty());
+  let (translator, cursor) = replay_translator_prefix(&run_directory);
+  let recovered_events = Arc::new(Mutex::new(Vec::new()));
+  let summary =
+    follow_from_cursor(&run_directory, cursor, translator, || false, Arc::clone(&recovered_events)).await.unwrap();
+  assert!(summary.saw_result);
+  let recovered_events = collected_events(&recovered_events);
+  assert!(recovered_events.iter().any(|event| {
+    event["type"] == event_types::ASSISTANT && event["message"]["content"][0]["text"] == "answer during downtime"
+  }));
+  let raw_path = run_directory.join(charliebot_store::run_records::RAW_LOG_NAME);
+  let mut translator = OpenCodeTranslator::with_model_limit(MODEL.to_string(), turn.model_limit);
+  let (_, result, exit_code) =
+    recovery::scan_result_exit(&raw_path, move |raw| translator.translate_event(&raw)).unwrap();
+  assert_eq!(exit_code, 0);
+  assert_eq!(result.unwrap()["type"], event_types::RESULT);
+  assert_eq!(collected_events(&initial_events).last().unwrap()["message"]["content"][0]["text"], "before downtime");
+  harness.stop().await.unwrap();
+  harness.clear_finished_turn_pids();
+}
+
+#[tokio::test]
+async fn stopping_an_adopted_turn_interrupts_through_its_connection_record_and_ends_the_relay() {
+  let harness = Harness::new(json!({"prompts": {"paused": {"events": [], "hold": true}}}));
+  let (runner, _, task) = harness.start_run("paused", LaunchArgs::default(), None, vec![], Env::new());
+  harness
+    .wait_for_log(|logs| logs.iter().any(|entry| entry.get("prompt_text").and_then(Value::as_str) == Some("paused")))
+    .await;
+  let run_directory = run_directory(&harness);
+  let turn = super::relay::read_turn_record(&run_directory).unwrap().expect("the turn opened a session");
+  let identity = harness
+    .turn_processes
+    .lock()
+    .expect("test turn process list is not poisoned")
+    .iter()
+    .find_map(|(prompt, identity)| (prompt == "paused").then(|| identity.clone()))
+    .expect("the paused turn has a relay process");
+  let relay_start = identity.pid_start.clone().expect("relay identity has a start time");
+  runner.detach();
+  task.abort();
+  assert!(task.await.unwrap_err().is_cancelled());
+  harness.pool.abandon_for_restart_test().await;
+  let pool = harness.adopt_pool();
+  let adopted = pool.adopted_servers_test();
+  assert_eq!(adopted.len(), 1);
+  harness
+    .wait_for_log(|logs| {
+      logs.iter().filter(|entry| entry["method"] == "GET" && entry["path"] == "/api/event").count() == 3
+    })
+    .await;
+
+  server::finish_active_turn(identity.pid).await.unwrap();
+  tokio::time::timeout(Duration::from_secs(5), async {
+    while super::relay::same_process(identity.pid, &relay_start) {
+      tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+  })
+  .await
+  .expect("the adopted relay exits after the OpenCode interrupt");
+  assert!(harness.logs().iter().any(|entry| {
+    entry["method"] == "POST" && entry["path"] == format!("/api/session/{}/interrupt", turn.session_id)
+  }));
+  let raw = fs::read_to_string(run_directory.join(charliebot_store::run_records::RAW_LOG_NAME)).unwrap();
+  assert!(raw.lines().any(|line| {
+    serde_json::from_str::<Value>(line).unwrap().get("type").and_then(Value::as_str)
+      == Some("session.execution.interrupted")
+  }));
+  tokio::time::timeout(Duration::from_secs(5), async {
+    while adopted[0].process_alive() {
+      tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+  })
+  .await
+  .expect("the adopted serve stops after its interrupted turn ends");
   harness.stop().await.unwrap();
   harness.clear_finished_turn_pids();
 }
@@ -960,6 +1524,13 @@ async fn stream_loss_ends_running_turns_before_the_server_stops() {
   assert_eq!(result.exit_code, Some(1));
   assert!(!errors.is_empty());
   assert!(errors[0]["message"].as_str().unwrap().contains("event stream"));
+  tokio::time::timeout(Duration::from_secs(5), async {
+    while harness.server.process_alive() {
+      tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+  })
+  .await
+  .expect("the server shuts down after its event stream is lost");
   assert!(!harness.server.process_alive());
   let deletes = harness.logs().into_iter().filter(|entry| entry["method"] == "DELETE").collect::<Vec<_>>();
   assert_eq!(deletes.len(), 1);
@@ -987,7 +1558,15 @@ async fn server_crash_fails_the_turn_with_its_exit_code_and_the_next_turn_restar
   let outcome = tokio::time::timeout(Duration::from_secs(5), task).await.unwrap().unwrap().unwrap();
   assert_eq!(outcome.exit_code, Some(1));
   let error = collected_events(&output).into_iter().find(|event| event["type"] == event_types::ERROR).unwrap();
-  assert!(error["message"].as_str().unwrap().contains("exited with code 7"));
+  let raw = fs::read_dir(harness.run_logs_directory())
+    .unwrap()
+    .map(|entry| fs::read_to_string(entry.unwrap().path().join(charliebot_store::run_records::RAW_LOG_NAME)).unwrap())
+    .collect::<Vec<_>>();
+  assert!(
+    error["message"].as_str().unwrap().contains("exited with code 7"),
+    "error={error:?}; raw={raw:?}; requests={:?}",
+    harness.logs()
+  );
   let (_, second_events, second_task) = harness.start_run("after", LaunchArgs::default(), None, vec![], Env::new());
   assert_eq!(second_task.await.unwrap().unwrap().exit_code, Some(0));
   assert_eq!(collected_events(&second_events).last().unwrap()["type"], event_types::RESULT);
@@ -1456,7 +2035,7 @@ fn registration_keeps_traits_attribution_and_snapshot_limits() {
   registry.register_package("src.backends.opencode", super::tests::register_synthetic).unwrap();
   let backend_type = registry.backend_type_of("opencode").unwrap();
   assert_eq!(backend_type.traits.resume, charliebot_registry::backend::ResumeStyle::NativeId);
-  assert!(!backend_type.traits.restart_reattach);
+  assert!(backend_type.traits.restart_reattach);
   assert!(!backend_type.traits.preassigned_session_id);
   assert!(!backend_type.traits.manual_compact);
   assert!(!backend_type.translate_fallback);

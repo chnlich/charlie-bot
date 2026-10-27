@@ -8,8 +8,8 @@ pub use crate::registry::{
   ChildEnvFn, CompactionOutcome, CompactionRun, CompactionRunFn, ContextLimits, ContextStateFn, EmitFn, Env,
   ExitedProbe, FinalStdoutOutcome, IdleArmContext, IdleStartGate, Launch, LaunchArgs, LaunchContext, LaunchKind,
   LaunchRefused, LaunchWatch, OptionModel, ReadingLimitsFn, RecordAccountFn, Registry, ResumeStyle, RunningTurnsFn,
-  ServeTransport, ServeTurn, ServeTurnArgs, ServeTurnResult, SessionContextStateFn, Translate, TransportKind,
-  UsageResolver, UsageResolverConstructor, UsageResolverHost,
+  ServeProcessSpec, ServeTransport, ServeTurn, ServeTurnArgs, ServeTurnResult, SessionContextStateFn, Translate,
+  TransportKind, UsageResolver, UsageResolverConstructor, UsageResolverHost,
 };
 
 /// The lifecycle of a backend type that registered none.

@@ -11,6 +11,7 @@ pub mod launch_loop;
 pub mod runner;
 pub mod runs;
 pub mod transport;
+pub(crate) mod usage_time;
 
 use charliebot_registry::{Registry, RegistryError};
 

@@ -131,15 +131,18 @@ impl Harness {
       servers.push(server);
     }
     drop(servers);
-    let runner = Arc::new(AgentRunner::new(Box::new(backend), launch));
+    let runner = Arc::new(AgentRunner::new("opencode", Box::new(backend), launch));
     let mut values = Env::from([("PATH".to_string(), std::env::var("PATH").expect("PATH is set for Rust tests"))]);
     values.extend(additions);
+    // The runner finds the serve transport through the registry, so the run's registry holds the opencode type.
+    let mut registry = Registry::new();
+    registry.register_package("src.backends.opencode", super::tests::register_synthetic).unwrap();
     let mut request = RunRequest::new(
       prompt.to_string(),
       self.root.path().join("work"),
       AgentBaseEnvironment { values },
       SessionCgroupConfig::disabled(),
-      Arc::new(Registry::new()),
+      Arc::new(registry),
     );
     fs::create_dir_all(&request.cwd).unwrap();
     request.uploaded_files = uploaded_files;

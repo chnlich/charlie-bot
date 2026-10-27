@@ -1,8 +1,6 @@
 use std::fs;
-use std::io::Write;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::sync::Arc;
 
 use charliebot_agents::agent_environment;
@@ -20,6 +18,8 @@ use charliebot_registry::context::StartupState;
 use charliebot_store::run_records::RunKind;
 use serde_json::{Value, json};
 use serde_yaml::Mapping;
+
+const PYTHON_FIXTURE: &str = include_str!("fixtures/launch_environment_reference.json");
 
 struct Case {
   id: String,
@@ -156,33 +156,34 @@ fn cases(venv_bin: &Path, system_bin: &Path, server_bin_dir: &Path) -> Vec<Case>
 }
 
 fn run_python_reference(repository: &Path, cases: &[Case]) -> Value {
-  let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-  let helper = manifest.join("tests/launch_environment_reference.py");
-  let request = cases
-    .iter()
-    .map(|case| {
-      json!({
-        "id": case.id.clone(),
-        "launch_kind": case.launch_kind,
-        "backend_type": case.backend_type,
-        "process_env": case.process_env,
-        "venv_bin": case.venv_bin,
-        "server_bin_dir": case.server_bin_dir,
-      })
-    })
-    .collect::<Vec<_>>();
-  let mut child = Command::new("uv")
-    .args(["run", "python", helper.to_str().unwrap()])
-    .current_dir(repository)
-    .stdin(Stdio::piped())
-    .stdout(Stdio::piped())
-    .stderr(Stdio::piped())
-    .spawn()
-    .unwrap();
-  child.stdin.take().unwrap().write_all(&serde_json::to_vec(&request).unwrap()).unwrap();
-  let output = child.wait_with_output().unwrap();
-  assert!(output.status.success(), "Python environment reference failed: {}", String::from_utf8_lossy(&output.stderr));
-  serde_json::from_slice(&output.stdout).unwrap()
+  let fixture: Value = serde_json::from_str(PYTHON_FIXTURE).unwrap();
+  assert_eq!(fixture["source"], "rust/crates/runtime/agents/tests/launch_environment_reference.py");
+  assert_eq!(fixture["base_commit"], "2b212ebd8549c0d3bc86885ae9c30ac648039a0d");
+  let temporary = cases.first().unwrap().venv_bin.parent().unwrap().parent().unwrap();
+  let mut expected = fixture["expected"].clone();
+  replace_fixture_paths(
+    &mut expected,
+    &[
+      ("$REPO", &repository.to_string_lossy()),
+      ("$TMPROOT", &temporary.to_string_lossy()),
+      ("$HOME", "/synthetic/home"),
+    ],
+  );
+  assert_eq!(expected.as_array().unwrap().len(), cases.len());
+  expected
+}
+
+fn replace_fixture_paths(value: &mut Value, replacements: &[(&str, &str)]) {
+  match value {
+    Value::String(text) => {
+      for (placeholder, path) in replacements {
+        *text = text.replace(placeholder, path);
+      }
+    }
+    Value::Array(values) => values.iter_mut().for_each(|value| replace_fixture_paths(value, replacements)),
+    Value::Object(fields) => fields.values_mut().for_each(|value| replace_fixture_paths(value, replacements)),
+    _ => {}
+  }
 }
 
 fn backend_option(backend_type: &str) -> BackendOption {

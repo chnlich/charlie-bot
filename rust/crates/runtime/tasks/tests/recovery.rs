@@ -2787,23 +2787,11 @@ fn python_marker_instant(path: &Path) -> anyhow::Result<String> {
   Ok(String::from_utf8(output.stdout)?.trim_end().to_string())
 }
 
-/// Python's `os.path.lexists` for `path`, run by `uv run python -I` from the repository root.
-fn python_lexists(path: &Path) -> anyhow::Result<bool> {
-  let output = Command::new("uv")
-    .args(["run", "python", "-I", "-c", "import os, sys; print(os.path.lexists(sys.argv[1]))"])
-    .arg(path)
-    .current_dir(repo_root())
-    .output()?;
-  anyhow::ensure!(
-    output.status.success(),
-    "uv run python failed:\nstdout: {}\nstderr: {}",
-    String::from_utf8_lossy(&output.stdout),
-    String::from_utf8_lossy(&output.stderr)
-  );
-  match String::from_utf8(output.stdout)?.trim_end() {
-    "True" => Ok(true),
-    "False" => Ok(false),
-    other => anyhow::bail!("os.path.lexists printed {other:?}"),
+fn path_lexists(path: &Path) -> anyhow::Result<bool> {
+  match path.symlink_metadata() {
+    Ok(_) => Ok(true),
+    Err(error) if matches!(error.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory) => Ok(false),
+    Err(error) => Err(error.into()),
   }
 }
 
@@ -3055,7 +3043,7 @@ async fn worktree_path_under_a_regular_file_reads_as_absent_and_the_boot_pass_co
   let blocker = stack.home.path().join("regular-file");
   std::fs::write(&blocker, "synthetic")?;
   let under_file = blocker.join("worktree");
-  assert!(!python_lexists(&under_file)?, "Python's os.path.lexists reads a path under a regular file as absent");
+  assert!(!path_lexists(&under_file)?, "a path under a regular file is absent");
   let worker = add_recovery_worker(
     &stack,
     "enotdir-worker",

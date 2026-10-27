@@ -1,6 +1,4 @@
-use std::io::Write;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
 use std::sync::Arc;
 
 use charliebot_agents::backend_types;
@@ -12,6 +10,8 @@ use charliebot_registry::Registry;
 use charliebot_registry::backend::{Env, LaunchArgs};
 use serde_json::{Map, Value, json};
 use serde_yaml::{Mapping, Value as YamlValue};
+
+const PYTHON_FIXTURE: &str = include_str!("fixtures/claude_backend_golden.json");
 
 fn main_module() -> CharlieBotConfig {
   CharlieBotConfig {
@@ -123,6 +123,20 @@ fn rust_result(case: &Value, cfg: &CharlieBotConfig, registry: &Arc<Registry>) -
   json!({"argv":argv,"env_delta":env_delta,"stdin":stdin,"instructions_target":instructions_target})
 }
 
+fn materialize_paths(value: &mut Value) {
+  match value {
+    Value::String(text) => {
+      for (placeholder, path) in [("$HOME", "/synthetic/home"), ("$BIN", "/synthetic/bin"), ("$RUN", "/synthetic/run")]
+      {
+        *text = text.replace(placeholder, path);
+      }
+    }
+    Value::Array(values) => values.iter_mut().for_each(materialize_paths),
+    Value::Object(values) => values.values_mut().for_each(materialize_paths),
+    _ => {}
+  }
+}
+
 #[test]
 fn registered_claude_factory_matches_the_python_argv_and_env_matrix() {
   let cases = cases();
@@ -131,21 +145,11 @@ fn registered_claude_factory_matches_the_python_argv_and_env_matrix() {
   registry.register_package("src.backends.claude_code", claude_code::register).unwrap();
   let registry = Arc::new(registry);
   let expected_rust = cases.iter().map(|case| rust_result(case, &cfg, &registry)).collect::<Vec<_>>();
-  let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-  let repository = manifest.ancestors().nth(4).unwrap();
-  let helper = manifest.join("tests/claude_backend_golden.py");
-  let mut child = Command::new("uv")
-    .args(["run", "python", helper.to_str().unwrap()])
-    .current_dir(repository)
-    .stdin(Stdio::piped())
-    .stdout(Stdio::piped())
-    .stderr(Stdio::piped())
-    .spawn()
-    .unwrap();
-  child.stdin.take().unwrap().write_all(serde_json::to_string(&cases).unwrap().as_bytes()).unwrap();
-  let output = child.wait_with_output().unwrap();
-  assert!(output.status.success(), "Python golden helper failed: {}", String::from_utf8_lossy(&output.stderr));
-  let expected_python: Value = serde_json::from_slice(&output.stdout).unwrap();
+  let fixture: Value = serde_json::from_str(PYTHON_FIXTURE).unwrap();
+  assert_eq!(fixture["source"], "rust/crates/runtime/agents/tests/claude_backend_golden.py");
+  assert_eq!(fixture["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
+  let mut expected_python = fixture["expected"].clone();
+  materialize_paths(&mut expected_python);
   assert_eq!(serde_json::to_value(expected_rust).unwrap(), expected_python);
   assert_eq!(cases.len(), 5);
 }

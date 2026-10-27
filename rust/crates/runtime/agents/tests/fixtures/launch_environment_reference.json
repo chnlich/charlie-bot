@@ -1,0 +1,338 @@
+{
+  "source": "rust/crates/runtime/agents/tests/launch_environment_reference.py",
+  "base_commit": "2b212ebd8549c0d3bc86885ae9c30ac648039a0d",
+  "expected": [
+    {
+      "id": "tool-capable-one-shot-cc-claude-pydantic-unset",
+      "base_env": {
+        "CHARLIEBOT_SESSION_ID": "parent-session",
+        "CHARLIEBOT_VENV_BIN": "$TMPROOT/venv/bin",
+        "CLAUDECODE": "1",
+        "HOME": "$HOME",
+        "PATH": "$TMPROOT/release:$TMPROOT/system-bin",
+        "PYDANTIC_DISABLE_PLUGINS": "__all__",
+        "SYNTHETIC_SERVER_VALUE": "retained"
+      },
+      "child_env": {
+        "BASH_DEFAULT_TIMEOUT_MS": "900000",
+        "BASH_MAX_TIMEOUT_MS": "900000",
+        "CHARLIEBOT_SESSION_ID": "parent-session",
+        "CHARLIEBOT_VENV_BIN": "$TMPROOT/venv/bin",
+        "CLAUDECODE": "1",
+        "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "433000",
+        "CLAUDE_CODE_DISABLE_ADVISOR_TOOL": "1",
+        "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
+        "HOME": "$HOME",
+        "PATH": "$TMPROOT/release:$TMPROOT/system-bin",
+        "PYDANTIC_DISABLE_PLUGINS": "__all__",
+        "SYNTHETIC_SERVER_VALUE": "retained"
+      }
+    },
+    {
+      "id": "tool-capable-one-shot-cc-claude-pydantic-custom",
+      "base_env": {
+        "CHARLIEBOT_SESSION_ID": "parent-session",
+        "CHARLIEBOT_VENV_BIN": "$TMPROOT/venv/bin",
+        "CLAUDECODE": "1",
+        "HOME": "$HOME",
+        "PATH": "$TMPROOT/release:$TMPROOT/system-bin",
+        "PYDANTIC_DISABLE_PLUGINS": "custom-policy",
+        "SYNTHETIC_SERVER_VALUE": "retained"
+      },
+      "child_env": {
+        "BASH_DEFAULT_TIMEOUT_MS": "900000",
+        "BASH_MAX_TIMEOUT_MS": "900000",
+        "CHARLIEBOT_SESSION_ID": "parent-session",
+        "CHARLIEBOT_VENV_BIN": "$TMPROOT/venv/bin",
+        "CLAUDECODE": "1",
+        "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "433000",
+        "CLAUDE_CODE_DISABLE_ADVISOR_TOOL": "1",
+        "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
+        "HOME": "$HOME",
+        "PATH": "$TMPROOT/release:$TMPROOT/system-bin",
+        "PYDANTIC_DISABLE_PLUGINS": "custom-policy",
+        "SYNTHETIC_SERVER_VALUE": "retained"
+      }
+    },
+    {
+      "id": "tool-capable-one-shot-codex-pydantic-unset",
+      "base_env": {
+        "CHARLIEBOT_SESSION_ID": "parent-session",
+        "CHARLIEBOT_VENV_BIN": "$TMPROOT/venv/bin",
+        "CLAUDECODE": "1",
+        "HOME": "$HOME",
+        "PATH": "$TMPROOT/release:$TMPROOT/system-bin",
+        "PYDANTIC_DISABLE_PLUGINS": "__all__",
+        "SYNTHETIC_SERVER_VALUE": "retained"
+      },
+      "child_env": {
+        "CHARLIEBOT_SESSION_ID": "parent-session",
+        "CHARLIEBOT_VENV_BIN": "$TMPROOT/venv/bin",
+        "CLAUDECODE": "1",
+        "HOME": "$HOME",
+        "PATH": "$HOME/.local/bin:$TMPROOT/release:$TMPROOT/system-bin",
+        "PYDANTIC_DISABLE_PLUGINS": "__all__",
+        "SYNTHETIC_SERVER_VALUE": "retained"
+      }
+    },
+    {
+      "id": "tool-capable-one-shot-codex-pydantic-custom",
+      "base_env": {
+        "CHARLIEBOT_SESSION_ID": "parent-session",
+        "CHARLIEBOT_VENV_BIN": "$TMPROOT/venv/bin",
+        "CLAUDECODE": "1",
+        "HOME": "$HOME",
+        "PATH": "$TMPROOT/release:$TMPROOT/system-bin",
+        "PYDANTIC_DISABLE_PLUGINS": "custom-policy",
+        "SYNTHETIC_SERVER_VALUE": "retained"
+      },
+      "child_env": {
+        "CHARLIEBOT_SESSION_ID": "parent-session",
+        "CHARLIEBOT_VENV_BIN": "$TMPROOT/venv/bin",
+        "CLAUDECODE": "1",
+        "HOME": "$HOME",
+        "PATH": "$HOME/.local/bin:$TMPROOT/release:$TMPROOT/system-bin",
+        "PYDANTIC_DISABLE_PLUGINS": "custom-policy",
+        "SYNTHETIC_SERVER_VALUE": "retained"
+      }
+    },
+    {
+      "id": "cli-native-one-shot-cc-claude-pydantic-unset",
+      "base_env": {
+        "CHARLIEBOT_SESSION_ID": "parent-session",
+        "CHARLIEBOT_VENV_BIN": "$TMPROOT/venv/bin",
+        "CLAUDECODE": "1",
+        "HOME": "$HOME",
+        "PATH": "$TMPROOT/release:$TMPROOT/system-bin",
+        "PYDANTIC_DISABLE_PLUGINS": "__all__",
+        "SYNTHETIC_SERVER_VALUE": "retained"
+      },
+      "child_env": {
+        "CHARLIEBOT_SESSION_ID": "parent-session",
+        "CHARLIEBOT_VENV_BIN": "$TMPROOT/venv/bin",
+        "CLAUDECODE": "1",
+        "HOME": "$HOME",
+        "PATH": "$TMPROOT/release:$TMPROOT/system-bin",
+        "PYDANTIC_DISABLE_PLUGINS": "__all__",
+        "SYNTHETIC_SERVER_VALUE": "retained"
+      }
+    },
+    {
+      "id": "cli-native-one-shot-cc-claude-pydantic-custom",
+      "base_env": {
+        "CHARLIEBOT_SESSION_ID": "parent-session",
+        "CHARLIEBOT_VENV_BIN": "$TMPROOT/venv/bin",
+        "CLAUDECODE": "1",
+        "HOME": "$HOME",
+        "PATH": "$TMPROOT/release:$TMPROOT/system-bin",
+        "PYDANTIC_DISABLE_PLUGINS": "custom-policy",
+        "SYNTHETIC_SERVER_VALUE": "retained"
+      },
+      "child_env": {
+        "CHARLIEBOT_SESSION_ID": "parent-session",
+        "CHARLIEBOT_VENV_BIN": "$TMPROOT/venv/bin",
+        "CLAUDECODE": "1",
+        "HOME": "$HOME",
+        "PATH": "$TMPROOT/release:$TMPROOT/system-bin",
+        "PYDANTIC_DISABLE_PLUGINS": "custom-policy",
+        "SYNTHETIC_SERVER_VALUE": "retained"
+      }
+    },
+    {
+      "id": "cli-native-one-shot-codex-pydantic-unset",
+      "base_env": {
+        "CHARLIEBOT_SESSION_ID": "parent-session",
+        "CHARLIEBOT_VENV_BIN": "$TMPROOT/venv/bin",
+        "CLAUDECODE": "1",
+        "HOME": "$HOME",
+        "PATH": "$TMPROOT/release:$TMPROOT/system-bin",
+        "PYDANTIC_DISABLE_PLUGINS": "__all__",
+        "SYNTHETIC_SERVER_VALUE": "retained"
+      },
+      "child_env": {
+        "CHARLIEBOT_SESSION_ID": "parent-session",
+        "CHARLIEBOT_VENV_BIN": "$TMPROOT/venv/bin",
+        "CLAUDECODE": "1",
+        "HOME": "$HOME",
+        "PATH": "$HOME/.local/bin:$TMPROOT/release:$TMPROOT/system-bin",
+        "PYDANTIC_DISABLE_PLUGINS": "__all__",
+        "SYNTHETIC_SERVER_VALUE": "retained"
+      }
+    },
+    {
+      "id": "cli-native-one-shot-codex-pydantic-custom",
+      "base_env": {
+        "CHARLIEBOT_SESSION_ID": "parent-session",
+        "CHARLIEBOT_VENV_BIN": "$TMPROOT/venv/bin",
+        "CLAUDECODE": "1",
+        "HOME": "$HOME",
+        "PATH": "$TMPROOT/release:$TMPROOT/system-bin",
+        "PYDANTIC_DISABLE_PLUGINS": "custom-policy",
+        "SYNTHETIC_SERVER_VALUE": "retained"
+      },
+      "child_env": {
+        "CHARLIEBOT_SESSION_ID": "parent-session",
+        "CHARLIEBOT_VENV_BIN": "$TMPROOT/venv/bin",
+        "CLAUDECODE": "1",
+        "HOME": "$HOME",
+        "PATH": "$HOME/.local/bin:$TMPROOT/release:$TMPROOT/system-bin",
+        "PYDANTIC_DISABLE_PLUGINS": "custom-policy",
+        "SYNTHETIC_SERVER_VALUE": "retained"
+      }
+    },
+    {
+      "id": "manager-turn-cc-claude-pydantic-unset",
+      "base_env": {
+        "CHARLIEBOT_SESSION_ID": "parent-session",
+        "CHARLIEBOT_VENV_BIN": "$TMPROOT/venv/bin",
+        "CLAUDECODE": "1",
+        "HOME": "$HOME",
+        "PATH": "$TMPROOT/release:$TMPROOT/system-bin",
+        "PYDANTIC_DISABLE_PLUGINS": "__all__",
+        "SYNTHETIC_SERVER_VALUE": "retained"
+      },
+      "child_env": {
+        "BASH_DEFAULT_TIMEOUT_MS": "900000",
+        "BASH_MAX_TIMEOUT_MS": "900000",
+        "CHARLIEBOT_SESSION_ID": "current-session",
+        "CHARLIEBOT_VENV_BIN": "$TMPROOT/venv/bin",
+        "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "433000",
+        "CLAUDE_CODE_DISABLE_ADVISOR_TOOL": "1",
+        "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
+        "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
+        "GIT_CEILING_DIRECTORIES": "$HOME",
+        "HOME": "$HOME",
+        "PATH": "$TMPROOT/release:$TMPROOT/system-bin",
+        "PYDANTIC_DISABLE_PLUGINS": "__all__",
+        "RUN_ADDITION": "manager-turn",
+        "SYNTHETIC_SERVER_VALUE": "retained"
+      }
+    },
+    {
+      "id": "manager-turn-cc-claude-pydantic-custom",
+      "base_env": {
+        "CHARLIEBOT_SESSION_ID": "parent-session",
+        "CHARLIEBOT_VENV_BIN": "$TMPROOT/venv/bin",
+        "CLAUDECODE": "1",
+        "HOME": "$HOME",
+        "PATH": "$TMPROOT/release:$TMPROOT/system-bin",
+        "PYDANTIC_DISABLE_PLUGINS": "custom-policy",
+        "SYNTHETIC_SERVER_VALUE": "retained"
+      },
+      "child_env": {
+        "BASH_DEFAULT_TIMEOUT_MS": "900000",
+        "BASH_MAX_TIMEOUT_MS": "900000",
+        "CHARLIEBOT_SESSION_ID": "current-session",
+        "CHARLIEBOT_VENV_BIN": "$TMPROOT/venv/bin",
+        "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "433000",
+        "CLAUDE_CODE_DISABLE_ADVISOR_TOOL": "1",
+        "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
+        "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
+        "GIT_CEILING_DIRECTORIES": "$HOME",
+        "HOME": "$HOME",
+        "PATH": "$TMPROOT/release:$TMPROOT/system-bin",
+        "PYDANTIC_DISABLE_PLUGINS": "custom-policy",
+        "RUN_ADDITION": "manager-turn",
+        "SYNTHETIC_SERVER_VALUE": "retained"
+      }
+    },
+    {
+      "id": "manager-turn-codex-pydantic-unset",
+      "base_env": {
+        "CHARLIEBOT_SESSION_ID": "parent-session",
+        "CHARLIEBOT_VENV_BIN": "$TMPROOT/venv/bin",
+        "CLAUDECODE": "1",
+        "HOME": "$HOME",
+        "PATH": "$TMPROOT/release:$TMPROOT/system-bin",
+        "PYDANTIC_DISABLE_PLUGINS": "__all__",
+        "SYNTHETIC_SERVER_VALUE": "retained"
+      },
+      "child_env": {
+        "CHARLIEBOT_SESSION_ID": "current-session",
+        "CHARLIEBOT_VENV_BIN": "$TMPROOT/venv/bin",
+        "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
+        "GIT_CEILING_DIRECTORIES": "$HOME",
+        "HOME": "$HOME",
+        "PATH": "$HOME/.local/bin:$TMPROOT/release:$TMPROOT/system-bin",
+        "PYDANTIC_DISABLE_PLUGINS": "__all__",
+        "RUN_ADDITION": "manager-turn",
+        "SYNTHETIC_SERVER_VALUE": "retained"
+      }
+    },
+    {
+      "id": "manager-turn-codex-pydantic-custom",
+      "base_env": {
+        "CHARLIEBOT_SESSION_ID": "parent-session",
+        "CHARLIEBOT_VENV_BIN": "$TMPROOT/venv/bin",
+        "CLAUDECODE": "1",
+        "HOME": "$HOME",
+        "PATH": "$TMPROOT/release:$TMPROOT/system-bin",
+        "PYDANTIC_DISABLE_PLUGINS": "custom-policy",
+        "SYNTHETIC_SERVER_VALUE": "retained"
+      },
+      "child_env": {
+        "CHARLIEBOT_SESSION_ID": "current-session",
+        "CHARLIEBOT_VENV_BIN": "$TMPROOT/venv/bin",
+        "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
+        "GIT_CEILING_DIRECTORIES": "$HOME",
+        "HOME": "$HOME",
+        "PATH": "$HOME/.local/bin:$TMPROOT/release:$TMPROOT/system-bin",
+        "PYDANTIC_DISABLE_PLUGINS": "custom-policy",
+        "RUN_ADDITION": "manager-turn",
+        "SYNTHETIC_SERVER_VALUE": "retained"
+      }
+    },
+    {
+      "id": "compaction-cc-claude-pydantic-unset",
+      "base_env": {
+        "CHARLIEBOT_SESSION_ID": "parent-session",
+        "CHARLIEBOT_VENV_BIN": "$TMPROOT/venv/bin",
+        "CLAUDECODE": "1",
+        "HOME": "$HOME",
+        "PATH": "$TMPROOT/release:$TMPROOT/system-bin",
+        "PYDANTIC_DISABLE_PLUGINS": "__all__",
+        "SYNTHETIC_SERVER_VALUE": "retained"
+      },
+      "child_env": {
+        "BASH_DEFAULT_TIMEOUT_MS": "900000",
+        "BASH_MAX_TIMEOUT_MS": "900000",
+        "CHARLIEBOT_VENV_BIN": "$TMPROOT/venv/bin",
+        "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "433000",
+        "CLAUDE_CODE_DISABLE_ADVISOR_TOOL": "1",
+        "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
+        "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
+        "CLAUDE_CONFIG_DIR": "$HOME/accounts/claude-one",
+        "HOME": "$HOME",
+        "PATH": "$TMPROOT/release:$TMPROOT/system-bin",
+        "PYDANTIC_DISABLE_PLUGINS": "__all__",
+        "SYNTHETIC_SERVER_VALUE": "retained"
+      }
+    },
+    {
+      "id": "compaction-cc-claude-pydantic-custom",
+      "base_env": {
+        "CHARLIEBOT_SESSION_ID": "parent-session",
+        "CHARLIEBOT_VENV_BIN": "$TMPROOT/venv/bin",
+        "CLAUDECODE": "1",
+        "HOME": "$HOME",
+        "PATH": "$TMPROOT/release:$TMPROOT/system-bin",
+        "PYDANTIC_DISABLE_PLUGINS": "custom-policy",
+        "SYNTHETIC_SERVER_VALUE": "retained"
+      },
+      "child_env": {
+        "BASH_DEFAULT_TIMEOUT_MS": "900000",
+        "BASH_MAX_TIMEOUT_MS": "900000",
+        "CHARLIEBOT_VENV_BIN": "$TMPROOT/venv/bin",
+        "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "433000",
+        "CLAUDE_CODE_DISABLE_ADVISOR_TOOL": "1",
+        "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
+        "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
+        "CLAUDE_CONFIG_DIR": "$HOME/accounts/claude-one",
+        "HOME": "$HOME",
+        "PATH": "$TMPROOT/release:$TMPROOT/system-bin",
+        "PYDANTIC_DISABLE_PLUGINS": "custom-policy",
+        "SYNTHETIC_SERVER_VALUE": "retained"
+      }
+    }
+  ]
+}

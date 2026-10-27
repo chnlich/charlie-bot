@@ -1,0 +1,271 @@
+{
+  "source": "rust/crates/infra/compat/tests/file_links_python.py",
+  "base_commit": "a572e7ca71858d9ba52f0abc2726fa44213210ac",
+  "expected": [
+    {
+      "findings": [
+        {
+          "link": "http://$LOCALHOST:$PORT/absolute_filepath$TMPROOT/live/page.html",
+          "form": "canonical",
+          "path": "$TMPROOT/live/page.html",
+          "live": true,
+          "correct_link": null
+        }
+      ],
+      "detail": "Dead file links; nothing was recorded."
+    },
+    {
+      "findings": [
+        {
+          "link": "http://$LOCALHOST:$PORT/absolute_filepath$TMPROOT/live",
+          "form": "canonical",
+          "path": "$TMPROOT/live",
+          "live": true,
+          "correct_link": null
+        }
+      ],
+      "detail": "Dead file links; nothing was recorded."
+    },
+    {
+      "findings": [
+        {
+          "link": "http://$LOCALHOST:$PORT/absolute_filepath$TMPROOT/missing/page.html",
+          "form": "canonical",
+          "path": "$TMPROOT/missing/page.html",
+          "live": false,
+          "correct_link": null
+        }
+      ],
+      "detail": "Dead file links; nothing was recorded.\n- http://$LOCALHOST:$PORT/absolute_filepath$TMPROOT/missing/page.html: no file exists at $TMPROOT/missing/page.html."
+    },
+    {
+      "findings": [
+        {
+          "link": "https://$HOST/absolute_filepath$TMPROOT/missing/page.html",
+          "form": "canonical",
+          "path": "$TMPROOT/missing/page.html",
+          "live": null,
+          "correct_link": null
+        }
+      ],
+      "detail": "Dead file links; nothing was recorded."
+    },
+    {
+      "findings": [
+        {
+          "link": "http://$LOCALHOST:$PORT/absolute_filepath$TMPROOT/missing/page.html",
+          "form": "canonical",
+          "path": "$TMPROOT/missing/page.html",
+          "live": false,
+          "correct_link": null
+        }
+      ],
+      "detail": "Dead file links; nothing was recorded.\n- http://$LOCALHOST:$PORT/absolute_filepath$TMPROOT/missing/page.html: no file exists at $TMPROOT/missing/page.html."
+    },
+    {
+      "findings": [
+        {
+          "link": "http://$LOCALHOST:$PORT/absolute_filepath$TMPROOT/live/page.html",
+          "form": "canonical",
+          "path": "$TMPROOT/live/page.html",
+          "live": true,
+          "correct_link": null
+        },
+        {
+          "link": "http://$LOCALHOST:$PORT/absolute_filepath$TMPROOT/live/page.html",
+          "form": "canonical",
+          "path": "$TMPROOT/live/page.html",
+          "live": true,
+          "correct_link": null
+        },
+        {
+          "link": "http://$LOCALHOST:$PORT/absolute_filepath$TMPROOT/missing/page.html",
+          "form": "canonical",
+          "path": "$TMPROOT/missing/page.html",
+          "live": false,
+          "correct_link": null
+        },
+        {
+          "link": "http://$LOCALHOST:$PORT/absolute_filepath$TMPROOT/live/page.html",
+          "form": "canonical",
+          "path": "$TMPROOT/live/page.html",
+          "live": true,
+          "correct_link": null
+        }
+      ],
+      "detail": "Dead file links; nothing was recorded.\n- http://$LOCALHOST:$PORT/absolute_filepath$TMPROOT/missing/page.html: no file exists at $TMPROOT/missing/page.html."
+    },
+    {
+      "findings": [
+        {
+          "link": "http://$LOCALHOST:$PORT/absolute_filepath$TMPROOT/live/page.html",
+          "form": "canonical",
+          "path": "$TMPROOT/live/page.html",
+          "live": true,
+          "correct_link": null
+        }
+      ],
+      "detail": "Dead file links; nothing was recorded."
+    },
+    {
+      "findings": [
+        {
+          "link": "http://$LOCALHOST:$PORT/absolute_filepath$TMPROOT/missing/page.html",
+          "form": "canonical",
+          "path": "$TMPROOT/missing/page.html",
+          "live": false,
+          "correct_link": null
+        }
+      ],
+      "detail": "Dead file links; nothing was recorded.\n- http://$LOCALHOST:$PORT/absolute_filepath$TMPROOT/missing/page.html: no file exists at $TMPROOT/missing/page.html."
+    },
+    {
+      "findings": [
+        {
+          "link": "http://$LOCALHOST:\u0661\u0668\u0664\u0669\u0668/absolute_filepath$TMPROOT/missing/page.html",
+          "form": "canonical",
+          "path": "$TMPROOT/missing/page.html",
+          "live": false,
+          "correct_link": null
+        }
+      ],
+      "detail": "Dead file links; nothing was recorded.\n- http://$LOCALHOST:\u0661\u0668\u0664\u0669\u0668/absolute_filepath$TMPROOT/missing/page.html: no file exists at $TMPROOT/missing/page.html."
+    },
+    {
+      "findings": [
+        {
+          "link": "https://$HOST:$PORT/files/sessions/synthetic-session/plan.html",
+          "form": "retired_prefix",
+          "path": "$TMPROOT/charliebot-home/sessions/synthetic-session/plan.html",
+          "live": false,
+          "correct_link": "https://$HOST:$PORT/absolute_filepath$TMPROOT/charliebot-home/sessions/synthetic-session/plan.html"
+        }
+      ],
+      "detail": "Dead file links; nothing was recorded.\n- https://$HOST:$PORT/files/sessions/synthetic-session/plan.html: /files/ is a retired prefix. Correct link: https://$HOST:$PORT/absolute_filepath$TMPROOT/charliebot-home/sessions/synthetic-session/plan.html"
+    },
+    {
+      "findings": [
+        {
+          "link": "https://$HOST:$PORT/files/sessions/synthetic-session/missing.html",
+          "form": "retired_prefix",
+          "path": "/sessions/synthetic-session/missing.html",
+          "live": false,
+          "correct_link": null
+        }
+      ],
+      "detail": "Dead file links; nothing was recorded.\n- https://$HOST:$PORT/files/sessions/synthetic-session/missing.html: /files/ is a retired prefix."
+    },
+    {
+      "findings": [],
+      "detail": "Dead file links; nothing was recorded."
+    },
+    {
+      "findings": [
+        {
+          "link": "https://$HOST:$PORT/files/sessions/synthetic-session/plan.html",
+          "form": "retired_prefix",
+          "path": null,
+          "live": false,
+          "correct_link": null
+        }
+      ],
+      "detail": "Dead file links; nothing was recorded.\n- https://$HOST:$PORT/files/sessions/synthetic-session/plan.html: /files/ is a retired prefix."
+    },
+    {
+      "findings": [
+        {
+          "link": "/files/home/$USER/source.rs",
+          "form": "retired_prefix",
+          "path": "$HOME/$USER/source.rs",
+          "live": false,
+          "correct_link": null
+        }
+      ],
+      "detail": "Dead file links; nothing was recorded.\n- /files/home/$USER/source.rs: /files/ is a retired prefix."
+    },
+    {
+      "findings": [
+        {
+          "link": "artifacts/plan.html",
+          "form": "local_path",
+          "path": "$TMPROOT/sessions/synthetic-session/artifacts/plan.html",
+          "live": false,
+          "correct_link": "/absolute_filepath$TMPROOT/sessions/synthetic-session/artifacts/plan.html"
+        }
+      ],
+      "detail": "Dead file links; nothing was recorded.\n- artifacts/plan.html: a local path opens nothing on the web page. Correct link: /absolute_filepath$TMPROOT/sessions/synthetic-session/artifacts/plan.html"
+    },
+    {
+      "findings": [
+        {
+          "link": "~/scripts/x.sh",
+          "form": "local_path",
+          "path": "$TMPROOT/user-home/scripts/x.sh",
+          "live": false,
+          "correct_link": "/absolute_filepath$TMPROOT/user-home/scripts/x.sh"
+        }
+      ],
+      "detail": "Dead file links; nothing was recorded.\n- ~/scripts/x.sh: a local path opens nothing on the web page. Correct link: /absolute_filepath$TMPROOT/user-home/scripts/x.sh"
+    },
+    {
+      "findings": [
+        {
+          "link": "$TMPROOT//missing/./page.md",
+          "form": "local_path",
+          "path": "$TMPROOT/missing/page.md",
+          "live": false,
+          "correct_link": "/absolute_filepath$TMPROOT/missing/page.md"
+        }
+      ],
+      "detail": "Dead file links; nothing was recorded.\n- $TMPROOT//missing/./page.md: a local path opens nothing on the web page. Correct link: /absolute_filepath$TMPROOT/missing/page.md"
+    },
+    {
+      "findings": [],
+      "detail": "Dead file links; nothing was recorded."
+    },
+    {
+      "findings": [],
+      "detail": "Dead file links; nothing was recorded."
+    },
+    {
+      "findings": [],
+      "detail": "Dead file links; nothing was recorded."
+    },
+    {
+      "findings": [],
+      "detail": "Dead file links; nothing was recorded."
+    },
+    {
+      "findings": [
+        {
+          "link": "artifacts/plan.html",
+          "form": "local_path",
+          "path": "$TMPROOT/sessions/synthetic-session/artifacts/plan.html",
+          "live": false,
+          "correct_link": "/absolute_filepath$TMPROOT/sessions/synthetic-session/artifacts/plan.html"
+        }
+      ],
+      "detail": "Dead file links; nothing was recorded.\n- artifacts/plan.html: a local path opens nothing on the web page. Correct link: /absolute_filepath$TMPROOT/sessions/synthetic-session/artifacts/plan.html"
+    },
+    {
+      "findings": [
+        {
+          "link": "artifacts/plan.html",
+          "form": "local_path",
+          "path": "$TMPROOT/sessions/synthetic-session/artifacts/plan.html",
+          "live": false,
+          "correct_link": "/absolute_filepath$TMPROOT/sessions/synthetic-session/artifacts/plan.html"
+        }
+      ],
+      "detail": "Dead file links; nothing was recorded.\n- artifacts/plan.html: a local path opens nothing on the web page. Correct link: /absolute_filepath$TMPROOT/sessions/synthetic-session/artifacts/plan.html"
+    },
+    {
+      "findings": [],
+      "detail": "Dead file links; nothing was recorded."
+    },
+    {
+      "findings": [],
+      "detail": "Dead file links; nothing was recorded."
+    }
+  ]
+}

@@ -4,11 +4,8 @@
 
 The tokenizer records handler arguments, Unicode line and column, UTF-8 byte offset, and raw start-tag text. Its `convert_charrefs` argument selects the same reference event behavior as `html.parser.HTMLParser`. The entity table is generated from `html.entities.html5` by `tests/fixtures/generate_fixtures.py` and stored in `src/html5_entities.json`.
 
-The committed gzip-compressed JSON fixture corpus and expected results come from CPython 3.14.7. Regenerate them from the repository root with:
-
-```sh
-PYTHONPATH=$PWD uv run python rust/crates/infra/pyhtml/tests/fixtures/generate_fixtures.py
-```
+The committed gzip fixture corpus and expected results record CPython 3.14.7 output. Rust tests read these files.
+`tests/fixtures/source.json` names the Python helper and base commit that produced the fixtures.
 
 Run the extended seeded parser comparison after building `pyhtml-dump` with:
 

@@ -1,0 +1,125 @@
+{
+  "source": "rust/crates/runtime/triggers/tests/trigger_file_roundtrip.py",
+  "base_commit": "a572e7ca71858d9ba52f0abc2726fa44213210ac",
+  "expected": [
+    {
+      "id": "synthetic-delay-pending",
+      "session_id": "synthetic-session",
+      "fire_at": "$TIME",
+      "message": "delay",
+      "created_at": "$TIME",
+      "status": "pending",
+      "fired_at": null,
+      "watch_targets": [],
+      "fire_reason": null
+    },
+    {
+      "id": "synthetic-local-fired",
+      "session_id": "synthetic-session",
+      "fire_at": "$TIME",
+      "message": "local",
+      "created_at": "$TIME",
+      "status": "fired",
+      "fired_at": "$TIME",
+      "watch_targets": [
+        {
+          "kind": "local_pid",
+          "pid": "$PID_123",
+          "exit_file": "$EXIT_FILE",
+          "log": "$LOG_FILE"
+        }
+      ],
+      "fire_reason": "completed"
+    },
+    {
+      "id": "synthetic-local-pending",
+      "session_id": "synthetic-session",
+      "fire_at": "$TIME",
+      "message": "local pending",
+      "created_at": "$TIME",
+      "status": "pending",
+      "fired_at": null,
+      "watch_targets": [
+        {
+          "kind": "local_pid",
+          "pid": "$PID_124",
+          "exit_file": null,
+          "log": null
+        }
+      ],
+      "fire_reason": null
+    },
+    {
+      "id": "synthetic-local-slurm-pending",
+      "session_id": "synthetic-session",
+      "fire_at": "$TIME",
+      "message": "local slurm pending",
+      "created_at": "$TIME",
+      "status": "pending",
+      "fired_at": null,
+      "watch_targets": [
+        {
+          "kind": "slurm_job",
+          "host": null,
+          "job_id": 790
+        }
+      ],
+      "fire_reason": null
+    },
+    {
+      "id": "synthetic-remote-cancelled",
+      "session_id": "synthetic-session",
+      "fire_at": "$TIME",
+      "message": "remote",
+      "created_at": "$TIME",
+      "status": "cancelled",
+      "fired_at": null,
+      "watch_targets": [
+        {
+          "kind": "remote_pid",
+          "host": "$HOST",
+          "pid": "$PID_456",
+          "exit_file": null,
+          "log": null
+        }
+      ],
+      "fire_reason": "target task is archived"
+    },
+    {
+      "id": "synthetic-remote-pending",
+      "session_id": "synthetic-session",
+      "fire_at": "$TIME",
+      "message": "remote pending",
+      "created_at": "$TIME",
+      "status": "pending",
+      "fired_at": null,
+      "watch_targets": [
+        {
+          "kind": "remote_pid",
+          "host": "$HOST",
+          "pid": "$PID_457",
+          "exit_file": null,
+          "log": null
+        }
+      ],
+      "fire_reason": null
+    },
+    {
+      "id": "synthetic-slurm-pending",
+      "session_id": "synthetic-session",
+      "fire_at": "$TIME",
+      "message": "slurm pending",
+      "created_at": "$TIME",
+      "status": "pending",
+      "fired_at": null,
+      "watch_targets": [
+        {
+          "kind": "slurm_job",
+          "host": "$HOST",
+          "job_id": 789
+        }
+      ],
+      "fire_reason": null
+    }
+  ]
+}

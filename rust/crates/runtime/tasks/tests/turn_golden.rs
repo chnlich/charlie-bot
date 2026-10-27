@@ -1,10 +1,9 @@
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use anyhow::{Context, bail};
+use anyhow::Context;
 use axum::body::{Body, to_bytes};
 use axum::http::{HeaderMap, HeaderValue, Request, StatusCode, header};
 use charliebot_agents::agent_environment::AgentBaseEnvironment;
@@ -51,6 +50,7 @@ use tokio::sync::oneshot;
 use tower::ServiceExt;
 
 const CASE_COUNT: usize = 12;
+const PYTHON_FIXTURE: &str = include_str!("fixtures/python_turn_golden.json");
 
 mod process_guard;
 use process_guard::ProcessGroupGuard;
@@ -635,29 +635,21 @@ async fn run_turn_with_spawn(
 }
 
 fn python_golden_cases() -> anyhow::Result<Vec<GoldenCase>> {
-  let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-  let helper = manifest.join("tests/python_turn_golden.py");
-  let root = manifest
-    .parent()
-    .context("tasks crate has no runtime directory")?
-    .parent()
-    .context("crates directory is missing")?
-    .parent()
-    .context("Rust directory is missing")?
-    .parent()
-    .context("repository root is missing")?;
-  let output = Command::new("uv").args(["run", "python"]).arg(helper).current_dir(root).output()?;
-  if !output.status.success() {
-    bail!("Python golden helper failed with {}: {}", output.status, String::from_utf8_lossy(&output.stderr));
+  let fixture: Value = serde_json::from_str(PYTHON_FIXTURE)?;
+  anyhow::ensure!(fixture["source"] == "rust/crates/runtime/tasks/tests/python_turn_golden.py");
+  anyhow::ensure!(fixture["base_commit"] == "a572e7ca71858d9ba52f0abc2726fa44213210ac");
+  let mut expected = fixture["expected"].clone();
+  replace_fixture_times(&mut expected);
+  Ok(serde_json::from_value(expected)?)
+}
+
+fn replace_fixture_times(value: &mut Value) {
+  match value {
+    Value::String(text) => *text = text.replace("$TIME", "2026-01-01T00:00:00Z"),
+    Value::Array(values) => values.iter_mut().for_each(replace_fixture_times),
+    Value::Object(fields) => fields.values_mut().for_each(replace_fixture_times),
+    _ => {}
   }
-  let json_line = output
-    .stdout
-    .split(|byte| *byte == b'\n')
-    .rev()
-    .find(|line| line.starts_with(b"["))
-    .context("Python golden helper printed no JSON array")?;
-  let cases = serde_json::from_slice(json_line).context("Python golden helper printed invalid JSON")?;
-  Ok(cases)
 }
 
 #[tokio::test]

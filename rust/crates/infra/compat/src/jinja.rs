@@ -266,10 +266,7 @@ fn quote(text: &str, safe: &'static AsciiSet) -> String {
 
 #[cfg(test)]
 mod tests {
-  use std::io::Write;
-  use std::path::Path;
-  use std::process::{Command, Stdio};
-
+  use serde_json::Value as JsonValue;
   use serde_json::json;
 
   use super::*;
@@ -318,33 +315,15 @@ mod tests {
     assert_eq!(render_str("{{ timestamp.isoformat() }}", json!({"timestamp": timestamp})), timestamp);
   }
 
-  /// Jinja2 renders every `[template, context]` pair of stdin in the worktree's Python, and prints the outputs as JSON.
-  const JINJA2_RENDER: &str = "\
-import json, sys
-import jinja2
-cases = json.load(sys.stdin)
-environment = jinja2.Environment()
-print(json.dumps([environment.from_string(template).render(context) for template, context in cases]))";
+  const JINJA2_FIXTURE: &str = include_str!("../tests/fixtures/jinja2_format_reference.json");
 
   fn jinja2_renders(cases: &[(String, serde_json::Value)]) -> Vec<String> {
-    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(4).expect("the crate lies under the repo");
-    let mut child = Command::new("uv")
-      .args(["run", "python", "-c", JINJA2_RENDER])
-      .current_dir(repo_root)
-      .stdin(Stdio::piped())
-      .stdout(Stdio::piped())
-      .stderr(Stdio::piped())
-      .spawn()
-      .expect("uv runs the worktree Python");
-    child
-      .stdin
-      .take()
-      .expect("stdin is piped")
-      .write_all(&serde_json::to_vec(cases).expect("the cases serialize"))
-      .expect("the cases reach Python");
-    let output = child.wait_with_output().expect("Python finishes");
-    assert!(output.status.success(), "Jinja2 failed:\n{}", String::from_utf8_lossy(&output.stderr));
-    serde_json::from_slice(&output.stdout).expect("Jinja2 prints a JSON list of outputs")
+    let fixture: JsonValue = serde_json::from_str(JINJA2_FIXTURE).unwrap();
+    assert_eq!(fixture["source"], "rust/crates/infra/compat/src/jinja.rs::JINJA2_RENDER");
+    assert_eq!(fixture["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
+    let recorded_cases: Vec<(String, serde_json::Value)> = serde_json::from_value(fixture["cases"].clone()).unwrap();
+    assert_eq!(recorded_cases, cases);
+    serde_json::from_value(fixture["expected"].clone()).unwrap()
   }
 
   #[test]

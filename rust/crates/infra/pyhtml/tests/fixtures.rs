@@ -13,6 +13,13 @@ struct Corpus {
 }
 
 #[derive(Deserialize)]
+struct FixtureProvenance {
+  source: String,
+  base_commit: String,
+  fixtures: Vec<String>,
+}
+
+#[derive(Deserialize)]
 struct CorpusDocument {
   id: String,
   source: String,
@@ -70,6 +77,18 @@ struct ExpectedOpcode {
 }
 
 fn fixtures() -> (Corpus, Expected) {
+  let provenance: FixtureProvenance =
+    serde_json::from_str(include_str!("fixtures/source.json")).expect("fixture provenance is valid");
+  assert_eq!(provenance.source, "rust/crates/infra/pyhtml/tests/fixtures/generate_fixtures.py");
+  assert_eq!(provenance.base_commit, "a572e7ca71858d9ba52f0abc2726fa44213210ac");
+  assert_eq!(
+    provenance.fixtures,
+    vec![
+      "corpus.json.gz".to_string(),
+      "expected.json.gz".to_string(),
+      "rust/crates/infra/pyhtml/src/html5_entities.json".to_string(),
+    ]
+  );
   (
     read_gzip_json(include_bytes!("fixtures/corpus.json.gz")),
     read_gzip_json(include_bytes!("fixtures/expected.json.gz")),

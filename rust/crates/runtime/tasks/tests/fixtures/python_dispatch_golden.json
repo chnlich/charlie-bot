@@ -1,0 +1,335 @@
+{
+  "source": "rust/crates/runtime/tasks/tests/python_dispatch_golden.py",
+  "base_commit": "a572e7ca71858d9ba52f0abc2726fa44213210ac",
+  "expected": {
+    "nodes": [
+      {
+        "node": "root",
+        "events": [
+          "{\"id\": \"$ID_0\", \"type\": \"task_created\", \"timestamp\": \"$TIME\", \"actor\": \"user\", \"source_session_id\": \"$ID_1\", \"request_id\": \"root\", \"task_parent_id\": null, \"task_spec_hash\": null}",
+          "{\"id\": \"root-input\", \"type\": \"user\", \"timestamp\": \"$TIME\", \"actor\": \"user\", \"source_session_id\": \"$ID_1\", \"content\": \"root message\"}",
+          "{\"id\": \"$ID_2\", \"type\": \"scheduled_trigger\", \"timestamp\": \"$TIME\", \"actor\": \"system\", \"source_session_id\": \"$ID_1\", \"content\": \"cron fire\"}",
+          "{\"id\": \"$ID_3\", \"type\": \"run_finished\", \"timestamp\": \"$TIME\", \"actor\": \"system\", \"source_session_id\": \"$ID_1\", \"run_id\": \"run-1\", \"input_event_ids\": [\"root-input\", \"$ID_2\"], \"outcome\": \"success\"}",
+          "{\"id\": \"$ID_4\", \"type\": \"child_report\", \"timestamp\": \"$TIME\", \"actor\": \"agent\", \"source_session_id\": \"$ID_5\", \"child_session_id\": \"$ID_5\", \"child_event_id\": \"$ID_6\", \"outcome\": \"completed\", \"summary\": \"synthetic close\", \"result_refs\": []}",
+          "{\"id\": \"failed-input\", \"type\": \"user\", \"timestamp\": \"$TIME\", \"actor\": \"user\", \"source_session_id\": \"$ID_1\", \"content\": \"failed round\"}",
+          "{\"id\": \"$ID_7\", \"type\": \"run_finished\", \"timestamp\": \"$TIME\", \"actor\": \"system\", \"source_session_id\": \"$ID_1\", \"run_id\": \"run-3\", \"input_event_ids\": [\"$ID_4\", \"failed-input\"], \"outcome\": \"failed\"}",
+          "{\"id\": \"foreign-input\", \"type\": \"user\", \"timestamp\": \"$TIME\", \"actor\": \"user\", \"source_session_id\": \"$ID_1\", \"content\": \"foreign batch\"}",
+          "{\"id\": \"$ID_8\", \"type\": \"run_finished\", \"timestamp\": \"$TIME\", \"actor\": \"system\", \"source_session_id\": \"$ID_1\", \"run_id\": \"run-owner\", \"input_event_ids\": [\"foreign-input\"], \"outcome\": \"success\"}",
+          "{\"id\": \"stopped-input\", \"type\": \"user\", \"timestamp\": \"$TIME\", \"actor\": \"user\", \"source_session_id\": \"$ID_1\", \"content\": \"stopped queue\"}",
+          "{\"id\": \"$ID_9\", \"type\": \"run_stop_requested\", \"timestamp\": \"$TIME\", \"actor\": \"system\", \"source_session_id\": \"$ID_1\", \"request_id\": \"stop-stopped\", \"run_id\": \"run-stopped\"}",
+          "{\"id\": \"$ID_10\", \"type\": \"run_finished\", \"timestamp\": \"$TIME\", \"actor\": \"system\", \"source_session_id\": \"$ID_1\", \"run_id\": \"run-foreign\", \"input_event_ids\": [\"stopped-input\"], \"outcome\": \"success\"}",
+          "{\"id\": \"report-followup\", \"type\": \"user\", \"timestamp\": \"$TIME\", \"actor\": \"user\", \"source_session_id\": \"$ID_1\", \"content\": \"report followup\"}",
+          "{\"id\": \"$ID_11\", \"type\": \"child_report\", \"timestamp\": \"$TIME\", \"actor\": \"system\", \"source_session_id\": \"$ID_12\", \"child_session_id\": \"$ID_12\", \"child_event_id\": \"$ID_13\", \"outcome\": \"completed\", \"summary\": \"synthetic close\", \"result_refs\": []}",
+          "{\"id\": \"$ID_14\", \"type\": \"run_finished\", \"timestamp\": \"$TIME\", \"actor\": \"system\", \"source_session_id\": \"$ID_1\", \"run_id\": \"run-4\", \"input_event_ids\": [\"report-followup\", \"$ID_11\"], \"outcome\": \"success\"}"
+        ],
+        "runs": [
+          {
+            "id": "run-1",
+            "session_id": "$ID_1",
+            "kind": "work",
+            "input_event_ids": [
+              "root-input",
+              "$ID_2"
+            ],
+            "task_spec_hash": null,
+            "task_spec_ref": null,
+            "prompt_snapshot_ref": null,
+            "retry_of_run_id": null,
+            "review_of_run_id": null,
+            "backend": null,
+            "model": null,
+            "native_session_id": null,
+            "pid": null,
+            "pid_start": null,
+            "started_at": null,
+            "ended_at": "$TIME",
+            "exit_code": null,
+            "repo_path": null,
+            "base_branch": null,
+            "branch_name": null,
+            "worktree_path": null,
+            "sequence_ref": null,
+            "raw_log_ref": null,
+            "events_ref": null,
+            "result_ref": null
+          },
+          {
+            "id": "run-3",
+            "session_id": "$ID_1",
+            "kind": "work",
+            "input_event_ids": [
+              "$ID_4",
+              "failed-input"
+            ],
+            "task_spec_hash": null,
+            "task_spec_ref": null,
+            "prompt_snapshot_ref": null,
+            "retry_of_run_id": null,
+            "review_of_run_id": null,
+            "backend": null,
+            "model": null,
+            "native_session_id": null,
+            "pid": null,
+            "pid_start": null,
+            "started_at": null,
+            "ended_at": "$TIME",
+            "exit_code": null,
+            "repo_path": null,
+            "base_branch": null,
+            "branch_name": null,
+            "worktree_path": null,
+            "sequence_ref": null,
+            "raw_log_ref": null,
+            "events_ref": null,
+            "result_ref": null
+          },
+          {
+            "id": "run-4",
+            "session_id": "$ID_1",
+            "kind": "work",
+            "input_event_ids": [
+              "report-followup",
+              "$ID_11"
+            ],
+            "task_spec_hash": null,
+            "task_spec_ref": null,
+            "prompt_snapshot_ref": null,
+            "retry_of_run_id": null,
+            "review_of_run_id": null,
+            "backend": null,
+            "model": null,
+            "native_session_id": null,
+            "pid": null,
+            "pid_start": null,
+            "started_at": null,
+            "ended_at": "$TIME",
+            "exit_code": null,
+            "repo_path": null,
+            "base_branch": null,
+            "branch_name": null,
+            "worktree_path": null,
+            "sequence_ref": null,
+            "raw_log_ref": null,
+            "events_ref": null,
+            "result_ref": null
+          },
+          {
+            "id": "run-foreign",
+            "session_id": "$ID_1",
+            "kind": "work",
+            "input_event_ids": [
+              "stopped-input"
+            ],
+            "task_spec_hash": null,
+            "task_spec_ref": null,
+            "prompt_snapshot_ref": null,
+            "retry_of_run_id": null,
+            "review_of_run_id": null,
+            "backend": null,
+            "model": null,
+            "native_session_id": null,
+            "pid": null,
+            "pid_start": null,
+            "started_at": null,
+            "ended_at": "$TIME",
+            "exit_code": null,
+            "repo_path": null,
+            "base_branch": null,
+            "branch_name": null,
+            "worktree_path": null,
+            "sequence_ref": null,
+            "raw_log_ref": null,
+            "events_ref": null,
+            "result_ref": null
+          },
+          {
+            "id": "run-owner",
+            "session_id": "$ID_1",
+            "kind": "work",
+            "input_event_ids": [
+              "foreign-input"
+            ],
+            "task_spec_hash": null,
+            "task_spec_ref": null,
+            "prompt_snapshot_ref": null,
+            "retry_of_run_id": null,
+            "review_of_run_id": null,
+            "backend": null,
+            "model": null,
+            "native_session_id": null,
+            "pid": null,
+            "pid_start": null,
+            "started_at": null,
+            "ended_at": "$TIME",
+            "exit_code": null,
+            "repo_path": null,
+            "base_branch": null,
+            "branch_name": null,
+            "worktree_path": null,
+            "sequence_ref": null,
+            "raw_log_ref": null,
+            "events_ref": null,
+            "result_ref": null
+          },
+          {
+            "id": "run-stopped",
+            "session_id": "$ID_1",
+            "kind": "work",
+            "input_event_ids": [
+              "stopped-input"
+            ],
+            "task_spec_hash": null,
+            "task_spec_ref": null,
+            "prompt_snapshot_ref": null,
+            "retry_of_run_id": null,
+            "review_of_run_id": null,
+            "backend": null,
+            "model": null,
+            "native_session_id": null,
+            "pid": null,
+            "pid_start": null,
+            "started_at": null,
+            "ended_at": null,
+            "exit_code": null,
+            "repo_path": null,
+            "base_branch": null,
+            "branch_name": null,
+            "worktree_path": null,
+            "sequence_ref": null,
+            "raw_log_ref": null,
+            "events_ref": null,
+            "result_ref": null
+          }
+        ]
+      },
+      {
+        "node": "worker",
+        "events": [
+          "{\"id\": \"$ID_15\", \"type\": \"task_created\", \"timestamp\": \"$TIME\", \"actor\": \"user\", \"source_session_id\": \"$ID_5\", \"request_id\": \"worker\", \"task_parent_id\": \"$ID_1\", \"task_spec_hash\": null}",
+          "{\"id\": \"$ID_16\", \"type\": \"agent_message\", \"timestamp\": \"$TIME\", \"actor\": \"agent\", \"source_session_id\": \"$ID_5\", \"content\": \"parent instruction\", \"from_session\": \"$ID_1\", \"from_session_name\": \"Root\"}",
+          "{\"id\": \"$ID_6\", \"type\": \"task_closed\", \"timestamp\": \"$TIME\", \"actor\": \"agent\", \"source_session_id\": \"$ID_5\", \"request_id\": \"worker-close\", \"outcome\": \"completed\", \"summary\": \"synthetic close\", \"result_refs\": [], \"run_ids\": [], \"report_to\": \"$ID_1\"}",
+          "{\"id\": \"$ID_17\", \"type\": \"task_reopened\", \"timestamp\": \"$TIME\", \"actor\": \"user\", \"source_session_id\": \"$ID_5\", \"request_id\": \"worker-input\", \"closed_event_id\": \"$ID_6\", \"reason\": \"user message\"}",
+          "{\"id\": \"worker-input\", \"type\": \"user\", \"timestamp\": \"$TIME\", \"actor\": \"user\", \"source_session_id\": \"$ID_5\", \"content\": \"restore worker\"}",
+          "{\"id\": \"$ID_18\", \"type\": \"run_finished\", \"timestamp\": \"$TIME\", \"actor\": \"system\", \"source_session_id\": \"$ID_5\", \"run_id\": \"run-2\", \"input_event_ids\": [\"worker-input\"], \"outcome\": \"success\"}"
+        ],
+        "runs": [
+          {
+            "id": "run-2",
+            "session_id": "$ID_5",
+            "kind": "work",
+            "input_event_ids": [
+              "worker-input"
+            ],
+            "task_spec_hash": null,
+            "task_spec_ref": null,
+            "prompt_snapshot_ref": null,
+            "retry_of_run_id": null,
+            "review_of_run_id": null,
+            "backend": null,
+            "model": null,
+            "native_session_id": null,
+            "pid": null,
+            "pid_start": null,
+            "started_at": null,
+            "ended_at": "$TIME",
+            "exit_code": null,
+            "repo_path": null,
+            "base_branch": null,
+            "branch_name": null,
+            "worktree_path": null,
+            "sequence_ref": null,
+            "raw_log_ref": null,
+            "events_ref": null,
+            "result_ref": null
+          }
+        ]
+      },
+      {
+        "node": "lost",
+        "events": [
+          "{\"id\": \"$ID_19\", \"type\": \"task_created\", \"timestamp\": \"$TIME\", \"actor\": \"user\", \"source_session_id\": \"$ID_12\", \"request_id\": \"lost\", \"task_parent_id\": \"$ID_1\", \"task_spec_hash\": null}",
+          "{\"id\": \"$ID_13\", \"type\": \"task_closed\", \"timestamp\": \"$TIME\", \"actor\": \"agent\", \"source_session_id\": \"$ID_12\", \"request_id\": \"lost-close\", \"outcome\": \"completed\", \"summary\": \"synthetic close\", \"result_refs\": [], \"run_ids\": [], \"report_to\": \"$ID_1\"}"
+        ],
+        "runs": []
+      },
+      {
+        "node": "successor",
+        "events": [
+          "{\"id\": \"$ID_20\", \"type\": \"task_created\", \"timestamp\": \"$TIME\", \"actor\": \"user\", \"source_session_id\": \"$ID_21\", \"request_id\": \"successor\", \"task_parent_id\": null, \"task_spec_hash\": null}",
+          "{\"id\": \"successor-input\", \"type\": \"agent_message\", \"timestamp\": \"$TIME\", \"actor\": \"agent\", \"source_session_id\": \"$ID_21\", \"content\": \"wake successor\", \"from_session\": \"$ID_1\", \"from_session_name\": \"Root\"}",
+          "{\"id\": \"$ID_22\", \"type\": \"run_finished\", \"timestamp\": \"$TIME\", \"actor\": \"system\", \"source_session_id\": \"$ID_21\", \"run_id\": \"run-5\", \"input_event_ids\": [\"successor-input\"], \"outcome\": \"success\"}"
+        ],
+        "runs": [
+          {
+            "id": "run-5",
+            "session_id": "$ID_21",
+            "kind": "work",
+            "input_event_ids": [
+              "successor-input"
+            ],
+            "task_spec_hash": null,
+            "task_spec_ref": null,
+            "prompt_snapshot_ref": null,
+            "retry_of_run_id": null,
+            "review_of_run_id": null,
+            "backend": null,
+            "model": null,
+            "native_session_id": null,
+            "pid": null,
+            "pid_start": null,
+            "started_at": null,
+            "ended_at": "$TIME",
+            "exit_code": null,
+            "repo_path": null,
+            "base_branch": null,
+            "branch_name": null,
+            "worktree_path": null,
+            "sequence_ref": null,
+            "raw_log_ref": null,
+            "events_ref": null,
+            "result_ref": null
+          }
+        ]
+      },
+      {
+        "node": "archived",
+        "events": [
+          "{\"id\": \"$ID_23\", \"type\": \"task_created\", \"timestamp\": \"$TIME\", \"actor\": \"user\", \"source_session_id\": \"$ID_24\", \"request_id\": \"archived\", \"task_parent_id\": null, \"task_spec_hash\": null}",
+          "{\"id\": \"archived-input\", \"type\": \"agent_message\", \"timestamp\": \"$TIME\", \"actor\": \"agent\", \"source_session_id\": \"$ID_24\", \"content\": \"pull back\"}",
+          "{\"id\": \"$ID_25\", \"type\": \"run_finished\", \"timestamp\": \"$TIME\", \"actor\": \"system\", \"source_session_id\": \"$ID_24\", \"run_id\": \"run-6\", \"input_event_ids\": [\"archived-input\"], \"outcome\": \"success\"}"
+        ],
+        "runs": [
+          {
+            "id": "run-6",
+            "session_id": "$ID_24",
+            "kind": "work",
+            "input_event_ids": [
+              "archived-input"
+            ],
+            "task_spec_hash": null,
+            "task_spec_ref": null,
+            "prompt_snapshot_ref": null,
+            "retry_of_run_id": null,
+            "review_of_run_id": null,
+            "backend": null,
+            "model": null,
+            "native_session_id": null,
+            "pid": null,
+            "pid_start": null,
+            "started_at": null,
+            "ended_at": "$TIME",
+            "exit_code": null,
+            "repo_path": null,
+            "base_branch": null,
+            "branch_name": null,
+            "worktree_path": null,
+            "sequence_ref": null,
+            "raw_log_ref": null,
+            "events_ref": null,
+            "result_ref": null
+          }
+        ]
+      }
+    ]
+  }
+}

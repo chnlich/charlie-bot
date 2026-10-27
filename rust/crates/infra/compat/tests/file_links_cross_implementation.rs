@@ -8,13 +8,14 @@
 //! Run with `cargo test -p charliebot-compat --test file_links_cross_implementation`.
 
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::Path;
 
 use charliebot_compat::file_urls::{
   FILE_SERVER_MOUNT, FileLink, FileLinkForm, ScanContext, dead_links_detail, scan_file_links,
 };
 use serde_json::{Value, json};
+
+const PYTHON_FIXTURE: &str = include_str!("fixtures/file_links_python.json");
 
 /// The finding shapes the matrix must reach: the form, its liveness, and whether it has a correct link.
 const COVERED: [(FileLinkForm, Option<bool>, bool); 6] = [
@@ -95,19 +96,6 @@ fn cases(root: &Path, context: &ScanContext) -> Vec<Case> {
   ]
 }
 
-fn context_json(context: &ScanContext) -> Value {
-  json!({
-    "server_port": context.server_port,
-    "charliebot_home": context.charliebot_home,
-    "session_dir": context.session_dir,
-    "user_home": context.user_home,
-  })
-}
-
-fn case_json(case: &Case) -> Value {
-  json!({"text": case.text, "context": case.context.as_ref().map(context_json)})
-}
-
 fn form_name(form: FileLinkForm) -> &'static str {
   match form {
     FileLinkForm::Canonical => "canonical",
@@ -126,32 +114,16 @@ fn finding_json(finding: &FileLink) -> Value {
   })
 }
 
-/// Runs `file_links_python.py` on the cases file; it writes the answers to `answers`.
-fn run_python(cases: &Path, answers: &Path) {
-  let repo = Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(4).expect("the crate sits in the repository");
-  let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/file_links_python.py");
-  let output = Command::new("uv")
-    .args(["run", "python"])
-    .arg(&script)
-    .arg(cases)
-    .arg(answers)
-    .current_dir(repo)
-    .output()
-    .expect("running uv for the Python scanner");
-  assert!(output.status.success(), "file_links_python.py failed:\n{}", String::from_utf8_lossy(&output.stderr));
-}
-
 #[test]
 fn the_file_link_scanner_matches_python_on_the_case_matrix() {
+  let fixture: Value = serde_json::from_str(PYTHON_FIXTURE).unwrap();
+  assert_eq!(fixture["source"], "rust/crates/infra/compat/tests/file_links_python.py");
+  assert_eq!(fixture["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
   let root = tempfile::tempdir().unwrap();
   let context = build_tree(root.path());
   let cases = cases(root.path(), &context);
-  let cases_path: PathBuf = root.path().join("cases.json");
-  let answers_path: PathBuf = root.path().join("python-answers.json");
-  let cases_json: Vec<Value> = cases.iter().map(case_json).collect();
-  fs::write(&cases_path, serde_json::to_string_pretty(&cases_json).unwrap()).unwrap();
-  run_python(&cases_path, &answers_path);
-  let python: Vec<Value> = serde_json::from_slice(&fs::read(&answers_path).unwrap()).unwrap();
+  let mut python: Vec<Value> = fixture["expected"].as_array().unwrap().clone();
+  materialize_fixture_paths(&mut python, root.path());
   assert_eq!(python.len(), cases.len(), "file_links_python.py answered a different number of cases");
 
   let mut rust = Vec::new();
@@ -175,4 +147,24 @@ fn the_file_link_scanner_matches_python_on_the_case_matrix() {
   for shape in COVERED {
     assert!(reached.contains(&shape), "the matrix never reaches {shape:?}");
   }
+}
+
+fn materialize_fixture_paths(expected: &mut [Value], root: &Path) {
+  fn materialize(value: &mut Value, root: &Path) {
+    match value {
+      Value::String(text) => {
+        *text = text
+          .replace("$TMPROOT", &root.to_string_lossy())
+          .replace("$HOST", "charliebot.example")
+          .replace("$LOCALHOST", "localhost")
+          .replace("$PORT", "18498")
+          .replace("$HOME", "/home")
+          .replace("$USER", "synthetic-user");
+      }
+      Value::Array(values) => values.iter_mut().for_each(|value| materialize(value, root)),
+      Value::Object(fields) => fields.values_mut().for_each(|value| materialize(value, root)),
+      _ => {}
+    }
+  }
+  expected.iter_mut().for_each(|value| materialize(value, root));
 }

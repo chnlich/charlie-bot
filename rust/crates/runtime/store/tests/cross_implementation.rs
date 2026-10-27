@@ -46,6 +46,8 @@ const RUN_OPS: &[&str] = &[
 ];
 const RUN_RETRY_OPS: &[&str] = &["retry", "retry_spec", "retry_manager_turn"];
 const RETRY_TASK_SPEC: &str = "synthetic retry task spec";
+const PYTHON_STORE_FIXTURE: &str = include_str!("fixtures/python_store_ops.json");
+const PYTHON_MESSAGE_FIXTURE: &str = include_str!("fixtures/python_message_aggregator.json");
 const OPS: &[&str] = &[
   "persist_cc_session_id",
   "persist_native_backend",
@@ -461,7 +463,16 @@ async fn python_and_rust_run_operations_share_record_and_fact_bytes() {
       _ if is_retry => charliebot_store::control_events::stable_run_id(RUN_SESSION_ID, "retry-request"),
       _ => "run-a".to_string(),
     };
-    let python_run = python_store.read_run_sync(RUN_SESSION_ID, &run_id).unwrap().unwrap();
+    let python_run = python_store.read_run_sync(RUN_SESSION_ID, &run_id).unwrap().unwrap_or_else(|| {
+      panic!(
+        "recorded Python run {run_id} is absent at {}; files: {:?}",
+        operation_root.display(),
+        fs::read_dir(operation_root.join("python-result/sessions").join(RUN_SESSION_ID).join("data/runs"))
+          .unwrap()
+          .map(|entry| entry.unwrap().file_name())
+          .collect::<Vec<_>>()
+      )
+    });
     assert_eq!(python_store.list_run_records_sync(RUN_SESSION_ID).unwrap().len(), if is_retry { 2 } else { 1 });
 
     let shared_home = operation_root.join("shared-home");
@@ -934,7 +945,23 @@ async fn python_and_rust_delegate_a_task_spec_into_the_same_node_run_and_spec_by
     .find(|event| event["type"].as_str() == Some("task_created"))
     .unwrap();
   assert!(created["task_spec_hash"].is_string());
-  assert_eq!(normalized_files(&python_home), normalized_files(&shared_home));
+  let base_sessions = session_names(&base);
+  let python_files = normalized_home(&python_home, &base_sessions);
+  let rust_files = normalized_home(&shared_home, &base_sessions);
+  if python_files != rust_files {
+    for (path, python_bytes) in &python_files {
+      if rust_files.get(path) != Some(python_bytes) {
+        let rust_bytes = rust_files.get(path).map(Vec::as_slice).unwrap_or_default();
+        let index = python_bytes.iter().zip(rust_bytes).position(|(python, rust)| python != rust).unwrap_or(0);
+        eprintln!(
+          "first differing file {path:?}, offset {index}: python {:?}; rust {:?}",
+          String::from_utf8_lossy(&python_bytes[index.saturating_sub(80)..(index + 160).min(python_bytes.len())]),
+          String::from_utf8_lossy(&rust_bytes[index.saturating_sub(80)..(index + 160).min(rust_bytes.len())]),
+        );
+      }
+    }
+  }
+  assert!(python_files == rust_files, "Python and Rust delegate files differ");
 }
 
 #[tokio::test]
@@ -1733,41 +1760,140 @@ impl SequenceListingFields for TestSequenceListing {
 }
 
 fn run_python_helper(mode: &str, root: &Path, extra: &[&str]) {
-  let root = root.to_string_lossy();
-  let mut args = vec![mode, root.as_ref()];
+  let mut args = vec![mode];
   args.extend_from_slice(extra);
-  let _ = run_python_helper_args(&args);
+  let _ = run_python_helper_args(root, &args);
 }
 
 fn run_python_message_aggregator(events: &Value) -> Value {
-  let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).ancestors().nth(4).unwrap().to_path_buf();
-  let dir = tempfile::tempdir().unwrap();
-  let events_path = dir.path().join("events.json");
-  fs::write(&events_path, serde_json::to_vec(events).unwrap()).unwrap();
-  let helper = "rust/crates/runtime/store/tests/python_message_aggregator.py";
-  let output =
-    Command::new("uv").args(["run", "python", helper]).arg(&events_path).current_dir(repo_root).output().unwrap();
-  assert!(
-    output.status.success(),
-    "python message aggregator helper failed:\nstdout:\n{}\nstderr:\n{}",
-    String::from_utf8_lossy(&output.stdout),
-    String::from_utf8_lossy(&output.stderr),
-  );
-  serde_json::from_slice(&output.stdout).unwrap()
+  let fixture: Value = serde_json::from_str(PYTHON_MESSAGE_FIXTURE).unwrap();
+  assert_eq!(fixture["source"], "rust/crates/runtime/store/tests/python_message_aggregator.py");
+  assert_eq!(fixture["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
+  assert_eq!(&fixture["request"], events);
+  fixture["expected"].clone()
 }
 
-fn run_python_helper_args(args: &[&str]) -> String {
-  let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).ancestors().nth(4).unwrap().to_path_buf();
-  let helper = "rust/crates/runtime/store/tests/python_store_ops.py";
-  let output = Command::new("uv").args(["run", "python", helper]).args(args).current_dir(repo_root).output().unwrap();
-  assert!(
-    output.status.success(),
-    "uv helper {} failed:\nstdout:\n{}\nstderr:\n{}",
-    args[0],
-    String::from_utf8_lossy(&output.stdout),
-    String::from_utf8_lossy(&output.stderr),
-  );
-  String::from_utf8(output.stdout).unwrap()
+fn run_python_helper_args(root: &Path, args: &[&str]) -> String {
+  let fixture: Value = serde_json::from_str(PYTHON_STORE_FIXTURE).unwrap();
+  assert_eq!(fixture["source"], "rust/crates/runtime/store/tests/python_store_ops.py");
+  assert_eq!(fixture["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
+  let calls = fixture["calls"].as_array().unwrap();
+  let matching = calls
+    .iter()
+    .filter(|call| {
+      call["mode"] == args[0]
+        && call["extra_args"].as_array().unwrap().iter().map(Value::as_str).collect::<Option<Vec<_>>>().unwrap()
+          == args[1..]
+    })
+    .collect::<Vec<_>>();
+  assert_eq!(matching.len(), 1, "one recorded output for {} {args:?}", args[0]);
+  let call = matching[0];
+  let expected_files = call["files"].as_array().unwrap();
+  let stdout = materialize_fixture_text(call["stdout"].as_str().unwrap(), root);
+  if args[0].starts_with("verify") {
+    assert_recorded_tree(root, expected_files);
+  } else if args[0] != "read_runs" {
+    fs::remove_dir_all(root).unwrap();
+    fs::create_dir_all(root).unwrap();
+    for file in expected_files {
+      let path = root.join(materialize_fixture_text(file["path"].as_str().unwrap(), root));
+      fs::create_dir_all(path.parent().unwrap()).unwrap();
+      let bytes = if let Some(hex) = file["content"]["hex"].as_str() {
+        decode_hex(hex)
+      } else {
+        materialize_fixture_text(file["content"].as_str().unwrap(), root).into_bytes()
+      };
+      fs::write(&path, bytes).unwrap();
+      assert!(path.is_file(), "recorded helper output file {} was not written", path.display());
+    }
+  }
+  stdout
+}
+
+fn materialize_fixture_text(text: &str, root: &Path) -> String {
+  let now = "2026-10-27T14:00:00Z";
+  let mut value = text
+    .replace("$TMPROOT", &root.to_string_lossy())
+    .replace("$SYNTHETIC_ROOT/repo", "/home/synthetic/repo")
+    .replace("$SYNTHETIC_ROOT", &root.join("synthetic-root").to_string_lossy())
+    .replace("$REPO", &PathBuf::from(env!("CARGO_MANIFEST_DIR")).ancestors().nth(4).unwrap().to_string_lossy())
+    .replace("$HOME", &root.join("home").to_string_lossy())
+    .replace("$TIME_LOG", "2026-10-27 14:00:00")
+    .replace("$RUN_LOG", "/tmp/run.raw")
+    .replace("$PID", "424242");
+  static TIME_TOKEN: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+  static ID_TOKEN: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+  let times = TIME_TOKEN.get_or_init(|| Regex::new(r"\$TIME_\d+").unwrap());
+  value = times.replace_all(&value, now).to_string();
+  let ids = ID_TOKEN.get_or_init(|| Regex::new(r"\$ID_(\d+)").unwrap());
+  ids
+    .replace_all(&value, |captures: &regex::Captures<'_>| {
+      let index = captures[1].parse::<u64>().unwrap() + 500_000;
+      format!("00000000-0000-4000-8000-{index:012}")
+    })
+    .to_string()
+}
+
+fn decode_hex(value: &str) -> Vec<u8> {
+  value
+    .as_bytes()
+    .chunks_exact(2)
+    .map(|digits| {
+      let text = std::str::from_utf8(digits).unwrap();
+      u8::from_str_radix(text, 16).unwrap()
+    })
+    .collect()
+}
+
+fn assert_recorded_tree(root: &Path, expected_files: &[Value]) {
+  fn normalize_content(text: &str) -> Vec<u8> {
+    let uuid = Regex::new(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}").unwrap();
+    let timestamp = Regex::new(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})").unwrap();
+    let mut ids = HashMap::<String, String>::new();
+    let normalized = uuid.replace_all(text, |captures: &regex::Captures<'_>| {
+      let value = captures.get(0).unwrap().as_str();
+      let next = ids.len();
+      ids.entry(value.to_string()).or_insert_with(|| format!("generated-id-{next}")).clone()
+    });
+    timestamp.replace_all(&normalized, "<wall-clock>").as_bytes().to_vec()
+  }
+  fn normalize_path(path: &str) -> String {
+    Regex::new(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+      .unwrap()
+      .replace_all(path, "<uuid>")
+      .to_string()
+  }
+
+  let actual_files = normalized_files(root);
+  let mut actual = actual_files
+    .into_iter()
+    .map(|(path, content)| (normalize_path(path.to_str().unwrap()), content))
+    .collect::<Vec<_>>();
+  let mut expected = expected_files
+    .iter()
+    .map(|file| {
+      let path = materialize_fixture_text(file["path"].as_str().unwrap(), root);
+      let content = if let Some(hex) = file["content"]["hex"].as_str() {
+        decode_hex(hex)
+      } else {
+        normalize_content(&materialize_fixture_text(file["content"].as_str().unwrap(), root))
+      };
+      (normalize_path(&path), content)
+    })
+    .collect::<Vec<_>>();
+  actual.sort();
+  expected.sort();
+  if actual != expected {
+    let mismatch = actual.iter().zip(&expected).position(|(actual, expected)| actual != expected);
+    let index = mismatch.unwrap_or_else(|| actual.len().min(expected.len()));
+    let actual_entry = actual.get(index).map(|(path, bytes)| (path, String::from_utf8_lossy(bytes)));
+    let expected_entry = expected.get(index).map(|(path, bytes)| (path, String::from_utf8_lossy(bytes)));
+    panic!(
+      "Rust store tree differs from the recorded Python helper output: files {}/{}, first mismatch at {index}; actual={actual_entry:?}, expected={expected_entry:?}",
+      actual.len(),
+      expected.len(),
+    );
+  }
 }
 
 /// Copy one seeded home to a Python copy and a Rust copy, then read each copy through its own implementation.
@@ -1775,7 +1901,7 @@ fn read_on_copies(root: &Path, seed_home: &Path, case: &str, rust_read: fn(&Stor
   let case_root = root.join(case);
   copy_tree(seed_home, &case_root.join("python-home"));
   copy_tree(seed_home, &case_root.join("rust-home"));
-  let python = serde_json::from_str(&run_python_helper_args(&["read_runs", &root.to_string_lossy(), case])).unwrap();
+  let python = serde_json::from_str(&run_python_helper_args(root, &["read_runs", case])).unwrap();
   (python, rust_read(&make_store(&case_root.join("rust-home"))))
 }
 

@@ -1233,6 +1233,7 @@ fn check_render_path(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOutco
 #[cfg(test)]
 mod tests {
   use std::fs;
+  use std::io::Read;
   use std::path::{Path, PathBuf};
 
   use serde_json::{Value, json};
@@ -1268,6 +1269,102 @@ mod tests {
 
   fn outcome_value(outcome: &AssertionOutcome) -> Value {
     serde_json::to_value(outcome).unwrap()
+  }
+
+  #[test]
+  fn recorded_python_cases_match_every_plan_assertion_and_control_difference() {
+    let mut decoder =
+      flate2::read::GzDecoder::new(include_bytes!("../tests/data/artifact_check_golden.json.gz").as_slice());
+    let mut json = String::new();
+    decoder.read_to_string(&mut json).expect("the recorded fixture decompresses");
+    let fixture: Value = serde_json::from_str(&json).expect("the recorded fixture is valid JSON");
+    assert_eq!(fixture["source"], "rust/crates/features/artifacts/tests/check_differential.py");
+    assert_eq!(fixture["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
+    let cases = fixture["cases"].as_array().expect("the fixture holds the plan cases");
+    assert_eq!(cases.len(), 23);
+    let root = tempfile::tempdir().unwrap();
+    let mut recorded_outputs = Vec::with_capacity(cases.len());
+    let mut rust_outputs = Vec::with_capacity(cases.len());
+
+    for case in cases {
+      let name = case["name"].as_str().expect("each case has a name");
+      let directory = root.path().join(name);
+      fs::create_dir(&directory).unwrap();
+      let page = write_page(&directory, &format!("{name}.html"), case["page"].as_str().expect("each case has a page"));
+      let chrome_mode = case["chrome_mode"].as_str().expect("each case names its Chrome mode");
+      let chrome = match chrome_mode {
+        "system" => {
+          let expected: Vec<Value> = serde_json::from_value(case["outcomes"].clone()).unwrap();
+          let height = expected
+            .iter()
+            .find(|outcome| outcome["name"] == PAGE_HEIGHT)
+            .and_then(|outcome| outcome["detail"].as_str())
+            .and_then(|detail| detail.split_once(" px").map(|(value, _)| value))
+            .expect("the recorded page-height detail starts with a pixel count")
+            .parse::<i32>()
+            .expect("the recorded page height is an integer");
+          let chrome = directory.join("recorded-chrome");
+          fs::write(&chrome, "").unwrap();
+          headless_render::set_test_height(&chrome, height);
+          chrome
+        }
+        "missing" => directory.join("missing-chrome"),
+        "failing" => {
+          let path = directory.join("chrome-fails.sh");
+          fs::write(&path, "#!/bin/sh\necho 'synthetic renderer failure' >&2\nexit 1\n").unwrap();
+          let mut permissions = fs::metadata(&path).unwrap().permissions();
+          use std::os::unix::fs::PermissionsExt;
+          permissions.set_mode(0o755);
+          fs::set_permissions(&path, permissions).unwrap();
+          path
+        }
+        "empty" => PathBuf::from(""),
+        other => panic!("unknown recorded Chrome mode {other:?}"),
+      };
+      let chrome_text = chrome.to_string_lossy().into_owned();
+      let outcomes = run_assertions_sync("plan", &page, &chrome_text, &repo_root()).unwrap();
+      let actual = outcomes.iter().map(outcome_value).collect::<Vec<_>>();
+      let mut expected: Vec<Value> = serde_json::from_value(case["outcomes"].clone()).unwrap();
+      for outcome in &mut expected {
+        let detail = outcome["detail"].as_str().expect("each outcome has detail");
+        outcome["detail"] =
+          detail.replace("$TMPROOT", &directory.to_string_lossy()).replace("$CHROME", &chrome_text).into();
+      }
+      assert_eq!(actual, expected, "recorded Python plan case {name}");
+      assert!(
+        fs::read_dir(&directory).unwrap().all(|entry| !entry
+          .unwrap()
+          .file_name()
+          .to_string_lossy()
+          .starts_with(".page-height-probe-")),
+        "page-height probes remain beside {name}"
+      );
+      if name == "warm-renderer-real-page-height" {
+        let height = expected
+          .iter()
+          .find(|outcome| outcome["name"] == PAGE_HEIGHT)
+          .and_then(|outcome| outcome["detail"].as_str())
+          .and_then(|detail| detail.split_once(" px").map(|(value, _)| value))
+          .expect("the recorded real Chrome height is present")
+          .parse::<u32>()
+          .expect("the recorded real Chrome height is positive");
+        assert!(height > 0);
+        assert!(expected.iter().any(|outcome| outcome["name"] == PAGE_HEIGHT && outcome["passed"] == true));
+      }
+      recorded_outputs.push(expected);
+      rust_outputs.push(actual);
+    }
+
+    let differences = rust_outputs
+      .iter()
+      .zip(&recorded_outputs)
+      .map(|(actual, expected)| actual.iter().zip(expected).filter(|(left, right)| left != right).count())
+      .sum::<usize>();
+    assert_eq!(differences, 0);
+    let mut control = rust_outputs[2].clone();
+    control[0]["detail"] = "intentional control change".into();
+    let control_differences = control.iter().zip(&recorded_outputs[2]).filter(|(left, right)| left != right).count();
+    assert_eq!(control_differences, 1);
   }
 
   #[test]

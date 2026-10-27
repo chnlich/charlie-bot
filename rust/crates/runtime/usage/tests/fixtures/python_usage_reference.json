@@ -1,0 +1,124 @@
+{
+  "source": "rust/crates/runtime/usage/src/usage.rs::PYTHON_USAGE_REFERENCE",
+  "base_commit": "a572e7ca71858d9ba52f0abc2726fa44213210ac",
+  "cases": [
+    {
+      "request": {
+        "profile": "manager",
+        "events": [
+          {
+            "type": "assistant",
+            "message": {
+              "model": "synthetic-model",
+              "usage": {
+                "input_tokens": 1200,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0
+              }
+            }
+          },
+          {
+            "type": "result",
+            "modelUsage": {
+              "synthetic-model": {
+                "contextWindow": 1000000
+              }
+            }
+          }
+        ],
+        "backend_option": {
+          "id": "anthro",
+          "label": "Anthropic compatible",
+          "type": "cc-anthropic-compatible",
+          "model": "synthetic-model",
+          "api_base": "https://api.$HOST",
+          "context_window": 409600
+        }
+      },
+      "expected": {
+        "run_kind": "manager_turn",
+        "usage": {
+          "context_tokens": 1200,
+          "context_full": 409600,
+          "context_compact_at": 376600,
+          "total_cost_usd": null,
+          "model": "synthetic-model"
+        }
+      }
+    },
+    {
+      "request": {
+        "profile": "manager",
+        "events": [
+          {
+            "type": "assistant",
+            "message": {
+              "model": "claude-synthetic-5",
+              "usage": {
+                "input_tokens": 120000,
+                "cache_creation_input_tokens": 10000,
+                "cache_read_input_tokens": 20000
+              }
+            }
+          },
+          {
+            "type": "result",
+            "modelUsage": {
+              "claude-synthetic-5": {
+                "contextWindow": 500000
+              }
+            },
+            "total_cost_usd": 0.125
+          }
+        ]
+      },
+      "expected": {
+        "run_kind": "manager_turn",
+        "usage": {
+          "context_tokens": 150000,
+          "context_full": 433000,
+          "context_compact_at": 400000,
+          "total_cost_usd": 0.125,
+          "model": "claude-synthetic-5"
+        }
+      }
+    },
+    {
+      "request": {
+        "profile": "worker",
+        "events": [
+          {
+            "type": "assistant",
+            "message": {
+              "model": "claude-synthetic-5",
+              "usage": {
+                "input_tokens": 120000,
+                "cache_creation_input_tokens": 10000,
+                "cache_read_input_tokens": 20000
+              }
+            }
+          },
+          {
+            "type": "result",
+            "modelUsage": {
+              "claude-synthetic-5": {
+                "contextWindow": 500000
+              }
+            },
+            "total_cost_usd": 0.125
+          }
+        ]
+      },
+      "expected": {
+        "run_kind": "work",
+        "usage": {
+          "context_tokens": 150000,
+          "context_full": 433000,
+          "context_compact_at": 400000,
+          "total_cost_usd": 0.125,
+          "model": "claude-synthetic-5"
+        }
+      }
+    }
+  ]
+}

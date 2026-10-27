@@ -1,0 +1,1115 @@
+{
+  "source": "rust/crates/runtime/agents/tests/cli_backends_reference.py",
+  "base_commit": "a572e7ca71858d9ba52f0abc2726fa44213210ac",
+  "expected": {
+    "argv": [
+      {
+        "id": "gemini_plain",
+        "argv": [
+          "$TMPROOT/bin/gemini",
+          "-m",
+          "gemini-synthetic-pro",
+          "-p",
+          "Review \"the\" synthetic\nprompt \\ with \u00fcn\u00efcode\tand a tab",
+          "-o",
+          "stream-json",
+          "-y",
+          "--sandbox=false"
+        ],
+        "env": {
+          "HOME": "$TMPROOT/home",
+          "PATH": "/usr/bin:/bin",
+          "NO_PROXY": "$HOST",
+          "OTHER_VAR": "keep",
+          "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "250000",
+          "CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT": "1",
+          "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "345000",
+          "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "0.8",
+          "CLAUDE_CODE_THINKING_DISPLAY_UPDATES": "1",
+          "ANTHROPIC_API_KEY": "inherited-value",
+          "CLAUDE_CODE_OAUTH_TOKEN": "inherited-value"
+        },
+        "stdin": null,
+        "instructions_target": null
+      },
+      {
+        "id": "gemini_flags_resume",
+        "argv": [
+          "$TMPROOT/bin/gemini",
+          "-m",
+          "gemini-synthetic-pro",
+          "-p",
+          "Review \"the\" synthetic\nprompt \\ with \u00fcn\u00efcode\tand a tab",
+          "-o",
+          "stream-json",
+          "-y",
+          "--sandbox=false",
+          "--resume",
+          "gem-sess-1",
+          "--include-dirs",
+          "$SYNTHETIC_ROOT/extra"
+        ],
+        "env": {
+          "HOME": "$TMPROOT/home",
+          "PATH": "/usr/bin:/bin",
+          "NO_PROXY": "$HOST",
+          "OTHER_VAR": "keep",
+          "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "250000",
+          "CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT": "1",
+          "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "345000",
+          "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "0.8",
+          "CLAUDE_CODE_THINKING_DISPLAY_UPDATES": "1",
+          "ANTHROPIC_API_KEY": "inherited-value",
+          "CLAUDE_CODE_OAUTH_TOKEN": "inherited-value"
+        },
+        "stdin": null,
+        "instructions_target": null
+      },
+      {
+        "id": "gemini_content",
+        "argv": [
+          "$TMPROOT/bin/gemini",
+          "-m",
+          "gemini-synthetic-pro",
+          "-p",
+          "<system-instructions>\nRules: \"quoted\" ]\n[section] \\ \u007f \u00fcn\u00ef\n</system-instructions>\n\nReview \"the\" synthetic\nprompt \\ with \u00fcn\u00efcode\tand a tab",
+          "-o",
+          "stream-json",
+          "-y",
+          "--sandbox=false"
+        ],
+        "env": {
+          "HOME": "$TMPROOT/home",
+          "PATH": "/usr/bin:/bin",
+          "NO_PROXY": "$HOST",
+          "OTHER_VAR": "keep",
+          "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "250000",
+          "CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT": "1",
+          "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "345000",
+          "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "0.8",
+          "CLAUDE_CODE_THINKING_DISPLAY_UPDATES": "1",
+          "ANTHROPIC_API_KEY": "inherited-value",
+          "CLAUDE_CODE_OAUTH_TOKEN": "inherited-value"
+        },
+        "stdin": null,
+        "instructions_target": null
+      },
+      {
+        "id": "gemini_file_and_content",
+        "argv": [
+          "$TMPROOT/bin/gemini",
+          "-m",
+          "gemini-synthetic-pro",
+          "-p",
+          "<system-instructions>\nRules: \"quoted\" ]\n[section] \\ \u007f \u00fcn\u00ef\n</system-instructions>\n\nReview \"the\" synthetic\nprompt \\ with \u00fcn\u00efcode\tand a tab",
+          "-o",
+          "stream-json",
+          "-y",
+          "--sandbox=false"
+        ],
+        "env": {
+          "HOME": "$TMPROOT/home",
+          "PATH": "/usr/bin:/bin",
+          "NO_PROXY": "$HOST",
+          "OTHER_VAR": "keep",
+          "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "250000",
+          "CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT": "1",
+          "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "345000",
+          "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "0.8",
+          "CLAUDE_CODE_THINKING_DISPLAY_UPDATES": "1",
+          "ANTHROPIC_API_KEY": "inherited-value",
+          "CLAUDE_CODE_OAUTH_TOKEN": "inherited-value"
+        },
+        "stdin": null,
+        "instructions_target": null
+      },
+      {
+        "id": "clc_minimal",
+        "argv": [
+          "$TMPROOT/bin/charlie-code",
+          "--json",
+          "--model",
+          "clc-synthetic-model",
+          "--api-base",
+          "https://$HOST/v1",
+          "--task-file",
+          "$TMPROOT/transport/task.md"
+        ],
+        "env": {
+          "HOME": "$TMPROOT/home",
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin",
+          "GEMINI_API_KEY": "synthetic-gemini-key",
+          "GOOGLE_API_KEY": "synthetic-google-key",
+          "NO_PROXY": "$HOST",
+          "OTHER_VAR": "keep",
+          "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "250000",
+          "CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT": "1",
+          "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "345000",
+          "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "0.8",
+          "CLAUDE_CODE_THINKING_DISPLAY_UPDATES": "1",
+          "ANTHROPIC_API_KEY": "inherited-value",
+          "CLAUDE_CODE_OAUTH_TOKEN": "inherited-value"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "charlie_code_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "clc_full",
+        "argv": [
+          "$TMPROOT/bin/charlie-code",
+          "--json",
+          "--model",
+          "clc-synthetic-model",
+          "--api-base",
+          "https://$HOST/v1",
+          "--context-window",
+          "128000",
+          "--timeout-seconds",
+          "600",
+          "--top-p",
+          "0.9",
+          "--temperature",
+          "0.2",
+          "--resume",
+          "clc-sess-1",
+          "--instructions-file",
+          "$SYNTHETIC_ROOT/instructions/worker.md",
+          "--verbose",
+          "--task-file",
+          "$TMPROOT/transport/task.md"
+        ],
+        "env": {
+          "HOME": "$TMPROOT/home",
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin",
+          "GEMINI_API_KEY": "synthetic-gemini-key",
+          "GOOGLE_API_KEY": "synthetic-google-key",
+          "NO_PROXY": "$HOST,$LOCALHOST,127.0.0.1,::1",
+          "OTHER_VAR": "keep",
+          "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "250000",
+          "CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT": "1",
+          "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "345000",
+          "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "0.8",
+          "CLAUDE_CODE_THINKING_DISPLAY_UPDATES": "1",
+          "ANTHROPIC_API_KEY": "inherited-value",
+          "CLAUDE_CODE_OAUTH_TOKEN": "inherited-value",
+          "CHARLIE_CODE_API_KEY": "synthetic-clc-key",
+          "HTTP_PROXY": "http://proxy.synthetic:3128",
+          "HTTPS_PROXY": "http://proxy.synthetic:3128"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "charlie_code_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "clc_no_stream_no_images",
+        "argv": [
+          "$TMPROOT/bin/charlie-code",
+          "--json",
+          "--model",
+          "clc-synthetic-model",
+          "--api-base",
+          "https://$HOST/v1",
+          "--no-stream",
+          "--task-file",
+          "$TMPROOT/transport/task.md"
+        ],
+        "env": {
+          "HOME": "$TMPROOT/home",
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin",
+          "GEMINI_API_KEY": "synthetic-gemini-key",
+          "GOOGLE_API_KEY": "synthetic-google-key",
+          "NO_PROXY": "$HOST",
+          "OTHER_VAR": "keep",
+          "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "250000",
+          "CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT": "1",
+          "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "345000",
+          "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "0.8",
+          "CLAUDE_CODE_THINKING_DISPLAY_UPDATES": "1",
+          "ANTHROPIC_API_KEY": "inherited-value",
+          "CLAUDE_CODE_OAUTH_TOKEN": "inherited-value"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "charlie_code_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "clc_content_only",
+        "argv": [
+          "$TMPROOT/bin/charlie-code",
+          "--json",
+          "--model",
+          "clc-synthetic-model",
+          "--api-base",
+          "https://$HOST/v1",
+          "--context-window",
+          "4096",
+          "--task-file",
+          "$TMPROOT/transport/task.md"
+        ],
+        "env": {
+          "HOME": "$TMPROOT/home",
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin",
+          "GEMINI_API_KEY": "synthetic-gemini-key",
+          "GOOGLE_API_KEY": "synthetic-google-key",
+          "NO_PROXY": "$HOST",
+          "OTHER_VAR": "keep",
+          "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "250000",
+          "CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT": "1",
+          "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "345000",
+          "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "0.8",
+          "CLAUDE_CODE_THINKING_DISPLAY_UPDATES": "1",
+          "ANTHROPIC_API_KEY": "inherited-value",
+          "CLAUDE_CODE_OAUTH_TOKEN": "inherited-value"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "charlie_code_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "clc_unit_sampling",
+        "argv": [
+          "$TMPROOT/bin/charlie-code",
+          "--json",
+          "--model",
+          "clc-synthetic-model",
+          "--api-base",
+          "https://$HOST/v1",
+          "--timeout-seconds",
+          "30",
+          "--top-p",
+          "1.0",
+          "--temperature",
+          "1.0",
+          "--task-file",
+          "$TMPROOT/transport/task.md"
+        ],
+        "env": {
+          "HOME": "$TMPROOT/home",
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin",
+          "GEMINI_API_KEY": "synthetic-gemini-key",
+          "GOOGLE_API_KEY": "synthetic-google-key",
+          "NO_PROXY": "$HOST",
+          "OTHER_VAR": "keep",
+          "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "250000",
+          "CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT": "1",
+          "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "345000",
+          "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "0.8",
+          "CLAUDE_CODE_THINKING_DISPLAY_UPDATES": "1",
+          "ANTHROPIC_API_KEY": "inherited-value",
+          "CLAUDE_CODE_OAUTH_TOKEN": "inherited-value",
+          "CHARLIE_CODE_API_KEY": "synthetic-clc-key"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "charlie_code_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "clc_proxy",
+        "argv": [
+          "$TMPROOT/bin/charlie-code",
+          "--json",
+          "--model",
+          "clc-synthetic-model",
+          "--api-base",
+          "https://$HOST/v1",
+          "--task-file",
+          "$TMPROOT/transport/task.md"
+        ],
+        "env": {
+          "HOME": "$TMPROOT/home",
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin",
+          "GEMINI_API_KEY": "synthetic-gemini-key",
+          "GOOGLE_API_KEY": "synthetic-google-key",
+          "NO_PROXY": "$HOST,$LOCALHOST,127.0.0.1,::1",
+          "OTHER_VAR": "keep",
+          "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "250000",
+          "CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT": "1",
+          "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "345000",
+          "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "0.8",
+          "CLAUDE_CODE_THINKING_DISPLAY_UPDATES": "1",
+          "ANTHROPIC_API_KEY": "inherited-value",
+          "CLAUDE_CODE_OAUTH_TOKEN": "inherited-value",
+          "HTTP_PROXY": "http://proxy.synthetic:3128",
+          "HTTPS_PROXY": "http://proxy.synthetic:3128"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "charlie_code_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "agy_plain",
+        "argv": [
+          "$TMPROOT/bin/agy",
+          "--print=Review \"the\" synthetic\nprompt \\ with \u00fcn\u00efcode\tand a tab",
+          "--print-timeout",
+          "1h",
+          "--dangerously-skip-permissions",
+          "--output-format",
+          "json",
+          "--model",
+          "agy-synthetic-model"
+        ],
+        "env": {
+          "HOME": "$TMPROOT/home",
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin",
+          "NO_PROXY": "$HOST",
+          "OTHER_VAR": "keep",
+          "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "250000",
+          "CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT": "1",
+          "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "345000",
+          "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "0.8",
+          "CLAUDE_CODE_THINKING_DISPLAY_UPDATES": "1",
+          "ANTHROPIC_API_KEY": "inherited-value",
+          "CLAUDE_CODE_OAUTH_TOKEN": "inherited-value"
+        },
+        "stdin": null,
+        "instructions_target": null
+      },
+      {
+        "id": "agy_print_timeout_flags",
+        "argv": [
+          "$TMPROOT/bin/agy",
+          "--print=Review \"the\" synthetic\nprompt \\ with \u00fcn\u00efcode\tand a tab",
+          "--print-timeout",
+          "30m",
+          "--dangerously-skip-permissions",
+          "--output-format",
+          "json",
+          "--model",
+          "agy-synthetic-model",
+          "--verbose"
+        ],
+        "env": {
+          "HOME": "$TMPROOT/home",
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin",
+          "NO_PROXY": "$HOST",
+          "OTHER_VAR": "keep",
+          "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "250000",
+          "CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT": "1",
+          "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "345000",
+          "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "0.8",
+          "CLAUDE_CODE_THINKING_DISPLAY_UPDATES": "1",
+          "ANTHROPIC_API_KEY": "inherited-value",
+          "CLAUDE_CODE_OAUTH_TOKEN": "inherited-value"
+        },
+        "stdin": null,
+        "instructions_target": null
+      },
+      {
+        "id": "agy_resume",
+        "argv": [
+          "$TMPROOT/bin/agy",
+          "--print=Review \"the\" synthetic\nprompt \\ with \u00fcn\u00efcode\tand a tab",
+          "--print-timeout",
+          "1h",
+          "--dangerously-skip-permissions",
+          "--output-format",
+          "json",
+          "--model",
+          "agy-synthetic-model",
+          "--conversation",
+          "conv-synth-7"
+        ],
+        "env": {
+          "HOME": "$TMPROOT/home",
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin",
+          "NO_PROXY": "$HOST",
+          "OTHER_VAR": "keep",
+          "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "250000",
+          "CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT": "1",
+          "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "345000",
+          "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "0.8",
+          "CLAUDE_CODE_THINKING_DISPLAY_UPDATES": "1",
+          "ANTHROPIC_API_KEY": "inherited-value",
+          "CLAUDE_CODE_OAUTH_TOKEN": "inherited-value"
+        },
+        "stdin": null,
+        "instructions_target": null
+      },
+      {
+        "id": "agy_content",
+        "argv": [
+          "$TMPROOT/bin/agy",
+          "--print=<system-instructions>\nRules: \"quoted\" ]\n[section] \\ \u007f \u00fcn\u00ef\n</system-instructions>\n\nReview \"the\" synthetic\nprompt \\ with \u00fcn\u00efcode\tand a tab",
+          "--print-timeout",
+          "1h",
+          "--dangerously-skip-permissions",
+          "--output-format",
+          "json",
+          "--model",
+          "agy-synthetic-model"
+        ],
+        "env": {
+          "HOME": "$TMPROOT/home",
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin",
+          "NO_PROXY": "$HOST",
+          "OTHER_VAR": "keep",
+          "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "250000",
+          "CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT": "1",
+          "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "345000",
+          "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "0.8",
+          "CLAUDE_CODE_THINKING_DISPLAY_UPDATES": "1",
+          "ANTHROPIC_API_KEY": "inherited-value",
+          "CLAUDE_CODE_OAUTH_TOKEN": "inherited-value"
+        },
+        "stdin": null,
+        "instructions_target": null
+      },
+      {
+        "id": "agy_file_and_content",
+        "argv": [
+          "$TMPROOT/bin/agy",
+          "--print=<system-instructions>\nRules: \"quoted\" ]\n[section] \\ \u007f \u00fcn\u00ef\n</system-instructions>\n\nReview \"the\" synthetic\nprompt \\ with \u00fcn\u00efcode\tand a tab",
+          "--print-timeout",
+          "5m",
+          "--dangerously-skip-permissions",
+          "--output-format",
+          "json",
+          "--model",
+          "agy-synthetic-model"
+        ],
+        "env": {
+          "HOME": "$TMPROOT/home",
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin",
+          "NO_PROXY": "$HOST",
+          "OTHER_VAR": "keep",
+          "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "250000",
+          "CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT": "1",
+          "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "345000",
+          "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "0.8",
+          "CLAUDE_CODE_THINKING_DISPLAY_UPDATES": "1",
+          "ANTHROPIC_API_KEY": "inherited-value",
+          "CLAUDE_CODE_OAUTH_TOKEN": "inherited-value"
+        },
+        "stdin": null,
+        "instructions_target": null
+      },
+      {
+        "id": "anthropic_compatible_plain",
+        "argv": [
+          "claude",
+          "-p",
+          "--output-format",
+          "stream-json",
+          "--verbose",
+          "--dangerously-skip-permissions",
+          "--disallowed-tools",
+          "Monitor,ScheduleWakeup,CronCreate,CronDelete,CronList,Agent,Workflow,TaskCreate,TaskGet,TaskUpdate,TaskList,TaskStop,TaskOutput,SendMessage,ListAgents,ShareOnboardingGuide,ReportFindings",
+          "--settings",
+          "{\"disableClaudeAiConnectors\":true,\"syncClaudeAiSkills\":false,\"disableBundledSkills\":true}"
+        ],
+        "env": {
+          "HOME": "$TMPROOT/home",
+          "PATH": "/usr/bin:/bin",
+          "GEMINI_API_KEY": "synthetic-gemini-key",
+          "GOOGLE_API_KEY": "synthetic-google-key",
+          "NO_PROXY": "$HOST",
+          "OTHER_VAR": "keep",
+          "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "409600",
+          "CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT": "1",
+          "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "409600",
+          "CLAUDE_CODE_THINKING_DISPLAY_UPDATES": "0",
+          "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
+          "BASH_DEFAULT_TIMEOUT_MS": "900000",
+          "BASH_MAX_TIMEOUT_MS": "900000",
+          "CLAUDE_CODE_DISABLE_ADVISOR_TOOL": "1",
+          "ANTHROPIC_BASE_URL": "https://anthropic-compatible.$HOST",
+          "ANTHROPIC_AUTH_TOKEN": "no-auth",
+          "ANTHROPIC_MODEL": "anthropic-compatible-synthetic-model",
+          "ANTHROPIC_DEFAULT_OPUS_MODEL": "anthropic-compatible-synthetic-model",
+          "ANTHROPIC_DEFAULT_SONNET_MODEL": "anthropic-compatible-synthetic-model",
+          "ANTHROPIC_DEFAULT_HAIKU_MODEL": "anthropic-compatible-synthetic-model",
+          "CLAUDE_CODE_SUBAGENT_MODEL": "anthropic-compatible-synthetic-model"
+        },
+        "stdin": "Review \"the\" synthetic\nprompt \\ with \u00fcn\u00efcode\tand a tab",
+        "instructions_target": [
+          "CLAUDE.md",
+          "claude_code_wrote_claude_md"
+        ]
+      },
+      {
+        "id": "anthropic_compatible_flags",
+        "argv": [
+          "claude",
+          "-p",
+          "--output-format",
+          "stream-json",
+          "--verbose",
+          "--dangerously-skip-permissions",
+          "--disallowed-tools",
+          "Monitor,ScheduleWakeup,CronCreate,CronDelete,CronList,Agent,Workflow,TaskCreate,TaskGet,TaskUpdate,TaskList,TaskStop,TaskOutput,SendMessage,ListAgents,ShareOnboardingGuide,ReportFindings",
+          "--settings",
+          "{\"disableClaudeAiConnectors\":true,\"syncClaudeAiSkills\":false,\"disableBundledSkills\":true}",
+          "--max-turns",
+          "3"
+        ],
+        "env": {
+          "HOME": "$TMPROOT/home",
+          "PATH": "/usr/bin:/bin",
+          "GEMINI_API_KEY": "synthetic-gemini-key",
+          "GOOGLE_API_KEY": "synthetic-google-key",
+          "NO_PROXY": "$HOST",
+          "OTHER_VAR": "keep",
+          "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "409600",
+          "CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT": "1",
+          "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "409600",
+          "CLAUDE_CODE_THINKING_DISPLAY_UPDATES": "0",
+          "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
+          "BASH_DEFAULT_TIMEOUT_MS": "900000",
+          "BASH_MAX_TIMEOUT_MS": "900000",
+          "CLAUDE_CODE_DISABLE_ADVISOR_TOOL": "1",
+          "ANTHROPIC_BASE_URL": "https://anthropic-compatible.$HOST",
+          "ANTHROPIC_AUTH_TOKEN": "synthetic-anthropic-key",
+          "ANTHROPIC_MODEL": "anthropic-compatible-synthetic-model",
+          "ANTHROPIC_DEFAULT_OPUS_MODEL": "anthropic-compatible-synthetic-model",
+          "ANTHROPIC_DEFAULT_SONNET_MODEL": "anthropic-compatible-synthetic-model",
+          "ANTHROPIC_DEFAULT_HAIKU_MODEL": "anthropic-compatible-synthetic-model",
+          "CLAUDE_CODE_SUBAGENT_MODEL": "anthropic-compatible-synthetic-model"
+        },
+        "stdin": "Review \"the\" synthetic\nprompt \\ with \u00fcn\u00efcode\tand a tab",
+        "instructions_target": [
+          "CLAUDE.md",
+          "claude_code_wrote_claude_md"
+        ]
+      },
+      {
+        "id": "anthropic_compatible_resume",
+        "argv": [
+          "claude",
+          "-p",
+          "--output-format",
+          "stream-json",
+          "--verbose",
+          "--dangerously-skip-permissions",
+          "--disallowed-tools",
+          "Monitor,ScheduleWakeup,CronCreate,CronDelete,CronList,Agent,Workflow,TaskCreate,TaskGet,TaskUpdate,TaskList,TaskStop,TaskOutput,SendMessage,ListAgents,ShareOnboardingGuide,ReportFindings",
+          "--settings",
+          "{\"disableClaudeAiConnectors\":true,\"syncClaudeAiSkills\":false,\"disableBundledSkills\":true}"
+        ],
+        "env": {
+          "HOME": "$TMPROOT/home",
+          "PATH": "/usr/bin:/bin",
+          "GEMINI_API_KEY": "synthetic-gemini-key",
+          "GOOGLE_API_KEY": "synthetic-google-key",
+          "NO_PROXY": "$HOST",
+          "OTHER_VAR": "keep",
+          "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "409600",
+          "CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT": "1",
+          "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "409600",
+          "CLAUDE_CODE_THINKING_DISPLAY_UPDATES": "0",
+          "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
+          "BASH_DEFAULT_TIMEOUT_MS": "900000",
+          "BASH_MAX_TIMEOUT_MS": "900000",
+          "CLAUDE_CODE_DISABLE_ADVISOR_TOOL": "1",
+          "ANTHROPIC_BASE_URL": "https://anthropic-compatible.$HOST",
+          "ANTHROPIC_AUTH_TOKEN": "synthetic-anthropic-key",
+          "ANTHROPIC_MODEL": "anthropic-compatible-synthetic-model",
+          "ANTHROPIC_DEFAULT_OPUS_MODEL": "anthropic-compatible-synthetic-model",
+          "ANTHROPIC_DEFAULT_SONNET_MODEL": "anthropic-compatible-synthetic-model",
+          "ANTHROPIC_DEFAULT_HAIKU_MODEL": "anthropic-compatible-synthetic-model",
+          "CLAUDE_CODE_SUBAGENT_MODEL": "anthropic-compatible-synthetic-model"
+        },
+        "stdin": "Review \"the\" synthetic\nprompt \\ with \u00fcn\u00efcode\tand a tab",
+        "instructions_target": [
+          "CLAUDE.md",
+          "claude_code_wrote_claude_md"
+        ]
+      },
+      {
+        "id": "anthropic_compatible_file_and_content",
+        "argv": [
+          "claude",
+          "-p",
+          "--output-format",
+          "stream-json",
+          "--verbose",
+          "--dangerously-skip-permissions",
+          "--disallowed-tools",
+          "Monitor,ScheduleWakeup,CronCreate,CronDelete,CronList,Agent,Workflow,TaskCreate,TaskGet,TaskUpdate,TaskList,TaskStop,TaskOutput,SendMessage,ListAgents,ShareOnboardingGuide,ReportFindings",
+          "--settings",
+          "{\"disableClaudeAiConnectors\":true,\"syncClaudeAiSkills\":false,\"disableBundledSkills\":true}",
+          "--append-system-prompt-file",
+          "$SYNTHETIC_ROOT/instructions/worker.md"
+        ],
+        "env": {
+          "HOME": "$TMPROOT/home",
+          "PATH": "/usr/bin:/bin",
+          "GEMINI_API_KEY": "synthetic-gemini-key",
+          "GOOGLE_API_KEY": "synthetic-google-key",
+          "NO_PROXY": "$HOST",
+          "OTHER_VAR": "keep",
+          "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "409600",
+          "CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT": "1",
+          "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "409600",
+          "CLAUDE_CODE_THINKING_DISPLAY_UPDATES": "0",
+          "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
+          "BASH_DEFAULT_TIMEOUT_MS": "900000",
+          "BASH_MAX_TIMEOUT_MS": "900000",
+          "CLAUDE_CODE_DISABLE_ADVISOR_TOOL": "1",
+          "ANTHROPIC_BASE_URL": "https://anthropic-compatible.$HOST",
+          "ANTHROPIC_AUTH_TOKEN": "synthetic-anthropic-key",
+          "ANTHROPIC_MODEL": "anthropic-compatible-synthetic-model",
+          "ANTHROPIC_DEFAULT_OPUS_MODEL": "anthropic-compatible-synthetic-model",
+          "ANTHROPIC_DEFAULT_SONNET_MODEL": "anthropic-compatible-synthetic-model",
+          "ANTHROPIC_DEFAULT_HAIKU_MODEL": "anthropic-compatible-synthetic-model",
+          "CLAUDE_CODE_SUBAGENT_MODEL": "anthropic-compatible-synthetic-model"
+        },
+        "stdin": "Review \"the\" synthetic\nprompt \\ with \u00fcn\u00efcode\tand a tab",
+        "instructions_target": [
+          "CLAUDE.md",
+          "claude_code_wrote_claude_md"
+        ]
+      }
+    ],
+    "translate": {
+      "gemini": [
+        [
+          {
+            "type": "session_attached",
+            "session_id": "gem-sess-9"
+          }
+        ],
+        [],
+        [],
+        [],
+        [
+          {
+            "type": "assistant",
+            "message": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Hello"
+                }
+              ]
+            }
+          },
+          {
+            "type": "tool_use",
+            "name": "read_file",
+            "input": {
+              "path": "$SYNTHETIC_ROOT/a.txt"
+            }
+          }
+        ],
+        [
+          {
+            "type": "tool_result",
+            "tool_name": "t1",
+            "content": "file body"
+          }
+        ],
+        [
+          {
+            "type": "assistant",
+            "message": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Done."
+                }
+              ]
+            }
+          }
+        ],
+        [
+          {
+            "type": "tool_result",
+            "tool_name": "t2",
+            "content": "no such file"
+          }
+        ],
+        [
+          {
+            "type": "tool_result",
+            "tool_name": "t3",
+            "content": "plain text error"
+          }
+        ],
+        [],
+        [],
+        [
+          {
+            "type": "assistant",
+            "message": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "tail"
+                }
+              ]
+            }
+          },
+          {
+            "type": "error",
+            "message": "quota reached",
+            "content": "quota reached"
+          }
+        ],
+        [],
+        [
+          {
+            "type": "assistant",
+            "message": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "buffered end"
+                }
+              ]
+            }
+          }
+        ],
+        [],
+        [
+          {
+            "type": "result",
+            "result": "",
+            "usage": {
+              "input_tokens": 11,
+              "output_tokens": 7,
+              "cache_read_input_tokens": 3,
+              "cache_creation_input_tokens": 0
+            },
+            "total_cost_usd": 0
+          }
+        ],
+        [
+          {
+            "type": "result",
+            "result": "",
+            "usage": {
+              "input_tokens": 0,
+              "output_tokens": 0,
+              "cache_read_input_tokens": 0,
+              "cache_creation_input_tokens": 0
+            },
+            "total_cost_usd": 0
+          }
+        ]
+      ],
+      "charlie-code": [
+        [
+          {
+            "type": "session_attached",
+            "session_id": "clc-sess-1"
+          }
+        ],
+        [
+          {
+            "type": "assistant",
+            "message": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Planning the synthetic change"
+                }
+              ]
+            }
+          }
+        ],
+        [
+          {
+            "type": "tool_use",
+            "name": "Bash",
+            "input": {
+              "command": "ls   -la\n  $SYNTHETIC_ROOT"
+            },
+            "id": "c1"
+          }
+        ],
+        [
+          {
+            "type": "system",
+            "subtype": "command_progress",
+            "content": "Command still running after 1.09167 min (pid $PID): ls -la $SYNTHETIC_ROOT"
+          }
+        ],
+        [
+          {
+            "type": "tool_result",
+            "tool_name": "Bash",
+            "content": "listing",
+            "tool_use_id": "c1"
+          }
+        ],
+        [
+          {
+            "type": "tool_use",
+            "name": "Bash",
+            "input": {
+              "command": "python3 -m pytest   tests/unit/test_synthetic_module_with_a_long_name.py   -k 'alpha or beta or gamma or delta'"
+            },
+            "id": "c2"
+          }
+        ],
+        [
+          {
+            "type": "system",
+            "subtype": "command_progress",
+            "content": "Command terminated after 60 min (pid 7): python3 -m pytest tests/unit/test_synthetic_module_with_a_long_name.py -k 'alpha"
+          }
+        ],
+        [
+          {
+            "type": "system",
+            "subtype": "command_progress",
+            "content": "Command still running after 1 s (pid 9)"
+          }
+        ],
+        [
+          {
+            "type": "tool_result",
+            "tool_name": "Bash",
+            "content": "killed",
+            "tool_use_id": "c2"
+          }
+        ],
+        [
+          {
+            "type": "result",
+            "result": "",
+            "usage": {
+              "input_tokens": 120,
+              "output_tokens": 30,
+              "cache_read_input_tokens": 0,
+              "cache_creation_input_tokens": 0
+            },
+            "total_cost_usd": null
+          }
+        ],
+        [
+          {
+            "type": "error",
+            "message": "synthetic failure",
+            "content": "synthetic failure"
+          }
+        ],
+        [
+          {
+            "type": "system",
+            "subtype": "compact_boundary",
+            "compact_metadata": {
+              "trigger": "auto",
+              "pre_tokens": 90000
+            }
+          }
+        ],
+        [
+          {
+            "type": "system",
+            "subtype": "context_reading",
+            "context_reading": {
+              "model": "clc-synthetic-model",
+              "context_tokens": 1200,
+              "context_full": 128000,
+              "context_compact_at": 100000
+            }
+          }
+        ],
+        [
+          {
+            "type": "system",
+            "subtype": "context_reading",
+            "context_reading": {
+              "model": "",
+              "context_tokens": null,
+              "context_full": 1,
+              "context_compact_at": 2
+            }
+          }
+        ],
+        []
+      ]
+    },
+    "finish": [
+      {
+        "id": "success",
+        "events": [
+          {
+            "type": "session_attached",
+            "session_id": "conv-1"
+          },
+          {
+            "type": "assistant",
+            "message": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Answer body"
+                }
+              ]
+            }
+          },
+          {
+            "type": "result",
+            "result": "",
+            "usage": {
+              "input_tokens": 10,
+              "output_tokens": 6,
+              "cache_read_input_tokens": 6,
+              "cache_creation_input_tokens": 0
+            },
+            "total_cost_usd": 0
+          }
+        ],
+        "exit_code": 0,
+        "guard": null
+      },
+      {
+        "id": "exit_with_envelope_error",
+        "events": [
+          {
+            "type": "error",
+            "message": "agy exited 3: quota",
+            "content": "agy exited 3: quota"
+          }
+        ],
+        "exit_code": 3,
+        "guard": null
+      },
+      {
+        "id": "exit_with_plain_stdout",
+        "events": [
+          {
+            "type": "error",
+            "message": "plain crash text",
+            "content": "plain crash text"
+          }
+        ],
+        "exit_code": 2,
+        "guard": null
+      },
+      {
+        "id": "exit_with_empty_stdout",
+        "events": [
+          {
+            "type": "error",
+            "message": "Antigravity CLI exited with code 5",
+            "content": "Antigravity CLI exited with code 5"
+          }
+        ],
+        "exit_code": 5,
+        "guard": null
+      },
+      {
+        "id": "exit_zero_non_envelope",
+        "events": [
+          {
+            "type": "error",
+            "message": "agy exited 0 with non-envelope stdout: not json at all",
+            "content": "agy exited 0 with non-envelope stdout: not json at all"
+          }
+        ],
+        "exit_code": 0,
+        "guard": "antigravity envelope guard: non-json stdout (exit 0): not json at all"
+      },
+      {
+        "id": "print_timeout",
+        "events": [
+          {
+            "type": "error",
+            "message": "agy print timeout after 30m: the turn was still running; agy returned partial output",
+            "content": "agy print timeout after 30m: the turn was still running; agy returned partial output"
+          }
+        ],
+        "exit_code": 1,
+        "guard": null
+      },
+      {
+        "id": "failed_with_response",
+        "events": [
+          {
+            "type": "error",
+            "message": "partial answer",
+            "content": "partial answer"
+          }
+        ],
+        "exit_code": 1,
+        "guard": null
+      },
+      {
+        "id": "failed_bare",
+        "events": [
+          {
+            "type": "error",
+            "message": "Antigravity status FAILED",
+            "content": "Antigravity status FAILED"
+          }
+        ],
+        "exit_code": 1,
+        "guard": null
+      },
+      {
+        "id": "success_without_conversation",
+        "events": [
+          {
+            "type": "error",
+            "message": "agy SUCCESS envelope missing conversation_id",
+            "content": "agy SUCCESS envelope missing conversation_id"
+          }
+        ],
+        "exit_code": 0,
+        "guard": "antigravity envelope guard: SUCCESS envelope missing conversation_id"
+      },
+      {
+        "id": "resume_mismatch",
+        "events": [
+          {
+            "type": "error",
+            "message": "agy resume envelope id conv-other does not match anchor conv-anchor",
+            "content": "agy resume envelope id conv-other does not match anchor conv-anchor"
+          }
+        ],
+        "exit_code": 0,
+        "guard": "antigravity envelope guard: resume envelope id conv-other does not match anchor conv-anchor"
+      },
+      {
+        "id": "resume_match",
+        "events": [
+          {
+            "type": "session_attached",
+            "session_id": "conv-1"
+          },
+          {
+            "type": "assistant",
+            "message": {
+              "content": [
+                {
+                  "type": "text",
+                  "text": "again"
+                }
+              ]
+            }
+          },
+          {
+            "type": "result",
+            "result": "",
+            "usage": {
+              "input_tokens": 3,
+              "output_tokens": 0,
+              "cache_read_input_tokens": 0,
+              "cache_creation_input_tokens": 0
+            },
+            "total_cost_usd": 0
+          }
+        ],
+        "exit_code": 0,
+        "guard": null
+      }
+    ]
+  }
+}

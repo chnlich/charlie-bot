@@ -1,8 +1,6 @@
 mod dispatch_support;
 
 use std::collections::HashMap;
-use std::path::PathBuf;
-use std::process::Command;
 use std::sync::Arc;
 
 use charliebot_core::event_types;
@@ -13,17 +11,15 @@ use serde_json::{Value, json};
 
 use dispatch_support::{Harness, ScriptedExecutor, register_run};
 
+const PYTHON_FIXTURE: &str = include_str!("fixtures/python_dispatch_golden.json");
+
 #[tokio::test]
 async fn python_and_rust_write_the_same_dispatch_facts() {
-  let python = Command::new("uv")
-    .args(["run", "python", "rust/crates/runtime/tasks/tests/python_dispatch_golden.py"])
-    .current_dir(repo_root())
-    .output()
-    .expect("the Python golden helper starts through uv");
-  assert!(python.status.success(), "Python golden helper failed: {}", String::from_utf8_lossy(&python.stderr));
-  let python_output = String::from_utf8(python.stdout).expect("Python golden output is UTF-8");
-  let python_json = python_output.lines().rev().find(|line| line.starts_with('{')).expect("Python prints JSON output");
-  let mut python_value: Value = serde_json::from_str(python_json).expect("Python golden JSON parses");
+  let fixture: Value = serde_json::from_str(PYTHON_FIXTURE).unwrap();
+  assert_eq!(fixture["source"], "rust/crates/runtime/tasks/tests/python_dispatch_golden.py");
+  assert_eq!(fixture["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
+  let mut python_value = fixture["expected"].clone();
+  replace_fixture_values(&mut python_value);
   parse_event_lines(&mut python_value);
 
   let harness = Harness::new();
@@ -193,8 +189,13 @@ async fn python_and_rust_write_the_same_dispatch_facts() {
   );
 }
 
-fn repo_root() -> PathBuf {
-  PathBuf::from(env!("CARGO_MANIFEST_DIR")).ancestors().nth(4).expect("repo root is an ancestor").to_path_buf()
+fn replace_fixture_values(value: &mut Value) {
+  match value {
+    Value::String(text) => *text = text.replace("$TIME", "2026-01-01T00:00:00Z"),
+    Value::Array(values) => values.iter_mut().for_each(replace_fixture_values),
+    Value::Object(fields) => fields.values_mut().for_each(replace_fixture_values),
+    _ => {}
+  }
 }
 
 fn normalize_output(output: &mut Value) {

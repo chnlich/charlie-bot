@@ -1,0 +1,8 @@
+{
+  "source": "rust/crates/features/artifacts/tests/plans_fork_fixture.py",
+  "base_commit": "a572e7ca71858d9ba52f0abc2726fa44213210ac",
+  "fixtures": [
+    "fork_parent_plans.json",
+    "fork_child_plans.json"
+  ]
+}

@@ -96,8 +96,8 @@ RUNTIME_LAYERS = (
             "takeoff_gate")),
     Layer(
         4, "agent processes", (
-            "agent_environment", "agent_process.base", "agent_process.deferred_build", "agent_process.spawn",
-            "master_cc_state", "session_events", "streaming", "worker")),
+            "agent_process.base", "agent_process.deferred_build", "agent_process.spawn", "master_cc_state",
+            "session_events", "streaming", "worker")),
     Layer(
         3, "records and events", (
             "backend_pool", "cold_read", "control_events", "home_writer_fence", "launch_loop", "message_aggregator",

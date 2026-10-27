@@ -11,6 +11,7 @@ Python commit the port reproduces.
 ## Build
 
 ```sh
+uv sync
 cd rust
 cargo build --release        # target/release/charliebot-server
 ```
@@ -75,19 +76,18 @@ with `method`, `path`, `status`, `duration_ms` and `client`. A failed request ad
 
 ```sh
 cd rust
-/home/user/scripts/20261018_rustport/cargo-slot.sh build --release && /home/user/scripts/20261018_rustport/cargo-slot.sh test && /home/user/scripts/20261018_rustport/cargo-slot.sh clippy --all-targets -- -D warnings && /home/user/scripts/20261018_rustport/cargo-slot.sh fmt --check
+cargo build --release
+cargo test
+cargo clippy --all-targets -- -D warnings
+cargo fmt --check
 cd ..
 uv run python rust/parity/parity.py --rust-bin rust/target/release/charliebot-server --stage server-skeleton
-uv run python rust/scripts/fence_interop.py  # the fence excludes in both directions
-uv run python rust/scripts/gen_compat_fixtures.py  # rewrites rust/fixtures/python/ from the Python baseline
 ```
 
-The compat and ssh tests compare with the committed `rust/fixtures/python/` files. After the Python code
-they mirror changes, regenerate the fixtures and commit them with that change.
-
-The skeleton parity check runs both servers through `rust/parity/` with synthetic homes, temporary
-ports and a Landlock write fence. Run it with
-`uv run python rust/parity/parity.py --rust-bin rust/target/release/charliebot-server --stage server-skeleton`.
+`cargo test` also runs the seven fixture helpers that use only third-party Python libraries. The
+compatibility and SSH fixtures under `rust/fixtures/python/` are committed expected outputs. The
+skeleton parity check runs the Rust server against the Python reference through `rust/parity/`, with
+synthetic homes, temporary ports and a Landlock write fence.
 
 ## Layout
 
@@ -98,9 +98,7 @@ rust/
   docs/PORT_STATUS.md             every Python route: method, path, stage, and status (`ported`, `todo` or `not ported`)
   docs/registry.md                the plug-in seam: each hook kind, its Rust signature and Python source
   parity/parity.py                skeleton check: `uv run python rust/parity/parity.py --rust-bin rust/target/debug/charliebot-server --stage server-skeleton`
-  scripts/fence_interop.py        cross-language fence exclusion check
   scripts/gen_mimetypes.py        regenerates mimetypes_table.rs from CPython's mimetypes
-  scripts/gen_compat_fixtures.py  writes fixtures/python/ from the Python baseline
   fixtures/python/                the expected outputs the compat and ssh tests compare with
   crates/infra/core/src/
     config.rs                     config.yaml: typed sections, legacy and unknown key refusals

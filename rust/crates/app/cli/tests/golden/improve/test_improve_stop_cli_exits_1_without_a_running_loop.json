@@ -1,0 +1,55 @@
+{
+  "python_test": "test_improve_stop_cli_exits_1_without_a_running_loop",
+  "argv": [
+    "improve-stop",
+    "--session",
+    "s1"
+  ],
+  "cwd": "{root}",
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n"
+  },
+  "responses": [
+    {
+      "status": 409,
+      "body": {
+        "detail": "No active improve loop in this session"
+      }
+    },
+    {
+      "status": 200,
+      "body": {}
+    }
+  ],
+  "expect": {
+    "stdout": "",
+    "stderr": "{\"error\": \"No active improve loop in this session\", \"code\": \"server_error\", \"effect\": \"none\"}\n",
+    "exit": 1,
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/api/internal/improve/stop",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "session_id": "s1"
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/api/internal/version",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": null
+        },
+        "body": null
+      }
+    ]
+  }
+}

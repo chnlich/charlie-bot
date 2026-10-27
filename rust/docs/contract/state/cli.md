@@ -10,7 +10,8 @@ not confirmed from source, with the reason.
 
 The Rust CLI lives in `rust/crates/app/cli` (binary `charliebot`) with the shared client contract in
 `rust/crates/infra/cli-common`. The `session`, `delegate`, `plan`, `artifact check`, `schedule-trigger`,
-`compaction-context`, `gc-trash`, `memory query`, `memory add`, `memory lint`, `web`, `slack` and `discord` rows in
+`compaction-context`, `gc-trash`, `improve`, `improve-stop`, `memory query`, `memory add`, `memory lint`, `web`,
+`slack` and `discord` rows in
 section 3 marked *ported to Rust* run on the Rust binary; every other subcommand prints
 `{"error": "<name> is not ported to the Rust CLI yet"}` and exits 1, and the six caller-less Python names
 (`config`, `disk-sweep`, `router`, `storage`, `usage-ledger`, `voice-replay-eval`) are unknown subcommands (exit 2).
@@ -93,8 +94,8 @@ below.
 | `discord check` | `POST /api/internal/discord/check` | none | 0 when the result's `ok` is true; 1 otherwise or on error | *ported to Rust* |
 | `disk-sweep [--yes]` | none | Reads Run metadata, lifecycle events, `paths.worktree_dir`, `paths.scratch_dir` and `/proc` to select old paths and skip paths in use (`src/features/disk_sweep/sweep.py`). Without `--yes` it prints candidate rows only. With it, it archives changed worktrees to the owner Run, removes worktrees through git and scratch directories with `rmtree`. Prints one row per candidate and a totals line | 0; 1 when a path fails to remove |  |
 | `gc-trash [--yes]` | none | Lists `<paths.worktree_dir>/.trash/` with sizes; `--yes` deletes every entry (`rmtree`) | 0; 1 when a deletion fails | *ported to Rust* — the composed host loads and validates the whole `config.yaml` as Python does, and needs `CHARLIEBOT_REPO_ROOT` set (Python reads no checkout path); a failed deletion's message names the entry, where Python's `rmtree` may name an inner file; a top-level trash entry that is a file or a symlink is removed, where Python's `rmtree` refuses it (exit 1) |
-| `improve --repo R --goal-file G --base-branch B [--iterations N] [--plan-file P] [--backend] [--work-branch] [--merge-back] [--session]` | `POST /api/internal/improve`, with a readback | Reads `G` and `P` | 0; 1; 2 |  |
-| `improve-stop [--session]` | `POST /api/internal/improve/stop` | none | 0 prints `stopped`; 1; 2 |  |
+| `improve --repo R --goal-file G --base-branch B [--iterations N] [--plan-file P] [--backend] [--work-branch] [--merge-back] [--session]` | `POST /api/internal/improve`, with a readback | Reads `G` and `P` | 0; 1; 2 | *ported to Rust* |
+| `improve-stop [--session]` | `POST /api/internal/improve/stop` | none | 0 prints `stopped`; 1; 2 | *ported to Rust* |
 | `memory query --topic T [--audience master\|worker]` | none | Reads `<home>/memory/` (creates the store scaffold on first use, `files.md` 5.10). With `CHARLIEBOT_RUN_TOKEN` set, it verifies the token against `credentials.charliebot.access_key` and reads `sessions/<sid>/metadata.json`, `data/runs/<run>/metadata.json` and `data/chat_events.jsonl` to fix the audience from the run's session profile. | 0; 1 (unknown topic, invalid token, inactive run, store error); 2 usage | *ported to Rust*
 | `memory add [--file F]` | none | Writes `<home>/memory/staging/<ts>-<sess8>-<slug>.md` and prints its path | 0; 1; 2 | *ported to Rust*
 | `memory lint [--dir D]` | none | Reads the store or `D` | 0, including warnings; 1 on violations; 2 | *ported to Rust*

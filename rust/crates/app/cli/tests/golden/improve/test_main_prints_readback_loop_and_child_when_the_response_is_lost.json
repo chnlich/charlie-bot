@@ -1,0 +1,54 @@
+{
+  "argv": [
+    "improve",
+    "--session",
+    "s1",
+    "--repo",
+    "{root}",
+    "--base-branch",
+    "main",
+    "--goal-file",
+    "{root}/goal.md"
+  ],
+  "cwd": "{root}",
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n",
+    "goal.md": "optimize",
+    "home/sessions/s1/metadata.json": "{\"id\":\"s1\",\"name\":\"manager\",\"profile\":\"manager\"}",
+    "home/sessions/s1/loops/3/goal.md": "a different goal",
+    "home/sessions/s1/loops/7/goal.md": "optimize",
+    "home/sessions/530758f0-0695-5e00-bdc5-befa3f1fdc6a/metadata.json": "{\"id\":\"530758f0-0695-5e00-bdc5-befa3f1fdc6a\",\"name\":\"Improve loop 7\",\"profile\":\"worker\",\"task_parent_id\":\"s1\",\"task\":{\"goal\":\"optimize\"}}"
+  },
+  "responses": [
+    {
+      "drop_after_request": true
+    }
+  ],
+  "expect": {
+    "stdout": "{\n  \"status\": \"started\",\n  \"session_id\": \"s1\",\n  \"iterations\": 3,\n  \"loop_id\": 7,\n  \"goal_path\": \"{root}/home/sessions/s1/loops/7/goal.md\",\n  \"child_session_id\": \"530758f0-0695-5e00-bdc5-befa3f1fdc6a\"\n}\n",
+    "stderr": "",
+    "exit": 0,
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/api/internal/improve",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "session_id": "s1",
+          "repo_path": "{root}",
+          "base_branch": "main",
+          "backend": null,
+          "iterations": 3,
+          "goal": "optimize",
+          "work_branch": null,
+          "merge_back": false
+        }
+      }
+    ]
+  }
+}

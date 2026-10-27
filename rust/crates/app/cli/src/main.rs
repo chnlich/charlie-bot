@@ -83,6 +83,8 @@ fn run_subcommand(
     "delegate" => commands::delegate::main(args),
     "discord" => charliebot_discord::cli::main(args),
     "gc-trash" => commands::gc_trash::main(args, host),
+    "improve" => charliebot_improve::cli::improve_main(args),
+    "improve-stop" => charliebot_improve::cli::stop_main(args),
     "memory" => charliebot_memory::cli::main(args),
     "plan" => charliebot_artifacts::cli::plan::main(args, host),
     "schedule-trigger" => commands::schedule_trigger::main(args),

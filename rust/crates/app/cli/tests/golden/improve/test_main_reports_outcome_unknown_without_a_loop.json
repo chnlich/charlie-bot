@@ -1,0 +1,50 @@
+{
+  "argv": [
+    "improve",
+    "--session",
+    "s1",
+    "--repo",
+    "{root}",
+    "--base-branch",
+    "main",
+    "--goal-file",
+    "{root}/goal.md"
+  ],
+  "cwd": "{root}",
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n",
+    "goal.md": "optimize"
+  },
+  "responses": [
+    {
+      "drop_after_request": true
+    }
+  ],
+  "expect": {
+    "stdout": "",
+    "stderr": "{\"error\": \"missing or oversized status line\", \"code\": \"outcome_unknown\", \"effect\": \"unknown\"}\n",
+    "exit": 1,
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/api/internal/improve",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "session_id": "s1",
+          "repo_path": "{root}",
+          "base_branch": "main",
+          "backend": null,
+          "iterations": 3,
+          "goal": "optimize",
+          "work_branch": null,
+          "merge_back": false
+        }
+      }
+    ]
+  }
+}

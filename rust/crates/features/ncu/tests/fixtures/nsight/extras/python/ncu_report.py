@@ -1,8 +1,8 @@
-"""A synthetic stand-in for NVIDIA's ncu_report module, for the parity harness and the Rust ncu tests.
+"""A synthetic stand-in for NVIDIA's ncu_report module, for the Rust ncu tests.
 
-A report is the JSON that fixture_extras/ncu_reports.py writes. The shape of each object follows the calls that
-src/features/ncu/ncu_parsing.py makes on the real module, and the values are the ones the report holds. A report with a
-"refuse" message fails to load, as a report the real module rejects does.
+A report is the JSON the crate's tests write with `write_report` and `module_report` (src/test_support.rs). The shape
+of each object follows the calls that src/features/ncu/ncu_parsing.py makes on the real module, and the values are the
+ones the report holds. A report with a "refuse" message fails to load, as a report the real module rejects does.
 """
 
 import json

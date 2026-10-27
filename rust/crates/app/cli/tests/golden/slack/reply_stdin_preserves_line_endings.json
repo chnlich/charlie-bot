@@ -1,0 +1,45 @@
+{
+  "argv": [
+    "slack",
+    "reply",
+    "--file",
+    "-",
+    "--session",
+    "abc"
+  ],
+  "cwd": "{root}",
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n"
+  },
+  "stdin": "first\r\nsecond\rthird\n",
+  "responses": [
+    {
+      "status": 200,
+      "body": {
+        "posted": true,
+        "text": "first\nsecond\nthird\n"
+      }
+    }
+  ],
+  "expect": {
+    "stdout": "{\"posted\": true, \"text\": \"first\\nsecond\\nthird\\n\"}\n",
+    "stderr": "",
+    "exit": 0,
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/api/internal/slack/reply",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "session_id": "abc",
+          "text": "first\r\nsecond\rthird\n"
+        }
+      }
+    ]
+  }
+}

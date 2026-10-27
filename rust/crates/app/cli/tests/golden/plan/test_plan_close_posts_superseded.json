@@ -1,0 +1,46 @@
+{
+  "argv": [
+    "plan",
+    "close",
+    "--plan",
+    "1",
+    "--as",
+    "superseded"
+  ],
+  "cwd": "home/sessions/abc",
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n",
+    "home/sessions/abc/": ""
+  },
+  "responses": [
+    {
+      "status": 200,
+      "body": {
+        "plan": 1,
+        "state": "superseded"
+      }
+    }
+  ],
+  "expect": {
+    "stdout": "{\n  \"plan\": 1,\n  \"state\": \"superseded\"\n}\n",
+    "stderr": "",
+    "exit": 0,
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/api/internal/plan/close",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "session_id": "abc",
+          "plan_id": 1,
+          "close_as": "superseded"
+        }
+      }
+    ]
+  }
+}

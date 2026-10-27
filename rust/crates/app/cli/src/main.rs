@@ -52,15 +52,19 @@ fn main() {
     exit(2);
   }
 
-  if subcommand != "session" {
-    eprint!(
-      "{}",
-      json_out::render(&json!({ "error": format!("{subcommand} is not ported to the Rust CLI yet") }), None)
-    );
-    exit(1);
-  }
-
-  if let Err(failure) = commands::session::main(&args[1..]) {
+  let result = match subcommand.as_str() {
+    "artifact" => charliebot_artifacts::cli::artifact::main(&args[1..]),
+    "plan" => charliebot_artifacts::cli::plan::main(&args[1..]),
+    "session" => commands::session::main(&args[1..]),
+    _ => {
+      eprint!(
+        "{}",
+        json_out::render(&json!({ "error": format!("{subcommand} is not ported to the Rust CLI yet") }), None)
+      );
+      exit(1);
+    }
+  };
+  if let Err(failure) = result {
     eprint!("{}", json_out::render(&failure.body, None));
     exit(failure.code);
   }

@@ -1,0 +1,35 @@
+{
+  "argv": [
+    "artifact",
+    "check",
+    "{root}/page.html",
+    "--genre",
+    "sitrep",
+    "--trigger",
+    "where are we?"
+  ],
+  "cwd": "{root}",
+  "env": {
+    "CHARLIEBOT_SESSION_ID": "sess-worker-1",
+    "PATH": "{root}/bin:/usr/bin:/bin",
+    "HOME": "{root}/user"
+  },
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\nbackends:\n  pool: [alpha]\n  options:\n    - id: alpha\n      label: alpha\n      type: codex\n      model: synthetic-model\n",
+    "home/sessions/sess-worker-1/metadata.json": "{\"id\": \"sess-worker-1\", \"name\": \"S\", \"profile\": \"worker\"}",
+    "page.html": "{file:prompts/sitrep_template.html}",
+    "repo/prompts/sitrep_template.html": "{file:prompts/sitrep_template.html}",
+    "repo/prompts/cold_read.md": "{file:prompts/cold_read.md}",
+    "user/": ""
+  },
+  "executables": {
+    "bin/codex": "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"(1) answered.\"}}'\n"
+  },
+  "responses": [],
+  "expect": {
+    "stdout": "ok byte-integrity\nok style-verbatim\nok sections-numbered\nok fork-open-shape\nok fork-explainer\nok fact-anchored\nok req-chips 6 requirement chips carry a gloss\nok run-stated no numeric table cell\nok ordinal-named 0 external labels named in reach\ncold read of {root}/page.html\npage sha256 418107106ce33dd7ee54bbc959255734682eac141458e098c9375532c38b6250\nbackend alpha\n(1) answered.\n",
+    "stderr": "",
+    "exit": 0,
+    "requests": []
+  }
+}

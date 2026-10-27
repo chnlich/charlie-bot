@@ -1,0 +1,64 @@
+{
+  "argv": [
+    "plan",
+    "diff"
+  ],
+  "cwd": "home/sessions/abc",
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n",
+    "home/sessions/abc/artifacts/plan_01.html": "<html><body><section><h2><span class=\"n\">1</span> Problem / Goal</h2><p>Ship the executor fix.</p></section></body></html>",
+    "home/sessions/abc/artifacts/plan_02.html": "<html><body><section><h2><span class=\"n\">1</span> Problem / Goal</h2><p>Ship the executor fix behind a flag.</p></section></body></html>"
+  },
+  "responses": [
+    {
+      "status": 200,
+      "body": {
+        "plans": [
+          {
+            "id": 1,
+            "title": "Plan",
+            "versions": [
+              {
+                "v": 1,
+                "file": "artifacts/plan_01.html",
+                "created_at": "2026-07-20T00:00:00+00:00",
+                "trigger": "initial",
+                "base": null,
+                "note": null
+              },
+              {
+                "v": 2,
+                "file": "artifacts/plan_02.html",
+                "created_at": "2026-07-20T01:00:00+00:00",
+                "trigger": "feedback",
+                "base": null,
+                "note": "narrowed the goal"
+              }
+            ],
+            "takeoff": null,
+            "closed": null
+          }
+        ],
+        "errors": []
+      }
+    }
+  ],
+  "expect": {
+    "stdout": "{\n  \"plan\": 1,\n  \"from\": 1,\n  \"to\": 2,\n  \"note\": \"narrowed the goal\",\n  \"text\": \"[Problem / Goal]\\n- Ship the executor fix.\\n+ Ship the executor fix behind a flag.\"\n}\n",
+    "stderr": "",
+    "exit": 0,
+    "requests": [
+      {
+        "method": "GET",
+        "path": "/api/sessions/abc/plans",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": null
+        },
+        "body": null
+      }
+    ]
+  }
+}

@@ -1,0 +1,62 @@
+{
+  "argv": [
+    "artifact",
+    "check",
+    "{root}/page.html",
+    "--genre",
+    "sitrep",
+    "--trigger",
+    "where are we?"
+  ],
+  "cwd": "{root}",
+  "env": {
+    "CHARLIEBOT_SESSION_ID": "sess-manager-1"
+  },
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n",
+    "home/sessions/sess-manager-1/metadata.json": "{\"id\": \"sess-manager-1\", \"name\": \"S\", \"profile\": \"manager\"}",
+    "page.html": "{file:prompts/sitrep_template.html}",
+    "repo/prompts/sitrep_template.html": "{file:prompts/sitrep_template.html}",
+    "repo/prompts/cold_read.md": "{file:prompts/cold_read.md}"
+  },
+  "responses": [
+    {
+      "status": 200,
+      "body": {
+        "session_id": "child-1",
+        "parent_session_id": "sess-manager-1",
+        "run_id": "run-1",
+        "thread_id": "run-1",
+        "description": "cold read of {root}/page.html"
+      }
+    }
+  ],
+  "expect": {
+    "stdout": "ok byte-integrity\nok style-verbatim\nok sections-numbered\nok fork-open-shape\nok fork-explainer\nok fact-anchored\nok req-chips 6 requirement chips carry a gloss\nok run-stated no numeric table cell\nok ordinal-named 0 external labels named in reach\ncold read started: session child-1 run run-1\n",
+    "stderr": "",
+    "exit": 0,
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/api/internal/delegate",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "session_id": "sess-manager-1",
+          "description": "cold read of {root}/page.html",
+          "task_type": "cold-read",
+          "cold_read": {
+            "page_path": "{root}/page.html",
+            "genre": "sitrep",
+            "trigger": "where are we?"
+          },
+          "request_id": "cold-read:sess-manager-1:418107106ce3:{timestamp}"
+        }
+      }
+    ]
+  }
+}

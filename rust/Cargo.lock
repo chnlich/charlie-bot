@@ -344,11 +344,15 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "charliebot-agents",
+ "charliebot-cli-common",
  "charliebot-compat",
  "charliebot-core",
  "charliebot-pyhtml",
  "charliebot-registry",
  "charliebot-store",
+ "charliebot-tasks",
+ "clap",
  "fancy-regex",
  "futures-util",
  "http 1.5.0",
@@ -358,7 +362,9 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "sha2",
  "tempfile",
+ "time",
  "tokio",
  "tower",
  "tracing",
@@ -419,6 +425,7 @@ dependencies = [
 name = "charliebot-cli"
 version = "0.1.0"
 dependencies = [
+ "charliebot-artifacts",
  "charliebot-cli-common",
  "charliebot-core",
  "charliebot-store",

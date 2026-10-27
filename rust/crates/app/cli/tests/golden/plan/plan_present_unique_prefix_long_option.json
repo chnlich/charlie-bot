@@ -1,0 +1,52 @@
+{
+  "argv": [
+    "plan",
+    "present",
+    "--fi",
+    "artifacts/plan_01.html",
+    "--tit",
+    "P1",
+    "--base-r",
+    "example/repo"
+  ],
+  "cwd": "home/sessions/abc",
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n",
+    "home/sessions/abc/": ""
+  },
+  "responses": [
+    {
+      "status": 200,
+      "body": {
+        "plan": 1,
+        "v": 1,
+        "state": "awaiting approval"
+      }
+    }
+  ],
+  "expect": {
+    "stdout": "{\n  \"plan\": 1,\n  \"v\": 1,\n  \"state\": \"awaiting approval\",\n  \"reminder\": \"Run one Improve round on this version, then verify and the cold read. The parent node or the root line approves the plan after both. Contract: the plan-approval skill.\"\n}\n",
+    "stderr": "",
+    "exit": 0,
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/api/internal/plan/present",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "session_id": "abc",
+          "file": "artifacts/plan_01.html",
+          "title": "P1",
+          "base_repo": "example/repo",
+          "base_branch": null,
+          "base_sha": null
+        }
+      }
+    ]
+  }
+}

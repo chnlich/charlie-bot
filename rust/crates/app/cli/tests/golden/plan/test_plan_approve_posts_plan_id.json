@@ -1,0 +1,44 @@
+{
+  "argv": [
+    "plan",
+    "approve",
+    "--plan",
+    "1"
+  ],
+  "cwd": "home/sessions/abc",
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n",
+    "home/sessions/abc/": ""
+  },
+  "responses": [
+    {
+      "status": 200,
+      "body": {
+        "plan": 1,
+        "v": 1,
+        "state": "approved"
+      }
+    }
+  ],
+  "expect": {
+    "stdout": "{\n  \"plan\": 1,\n  \"v\": 1,\n  \"state\": \"approved\"\n}\n",
+    "stderr": "",
+    "exit": 0,
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/api/internal/plan/approve",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "session_id": "abc",
+          "plan_id": 1
+        }
+      }
+    ]
+  }
+}

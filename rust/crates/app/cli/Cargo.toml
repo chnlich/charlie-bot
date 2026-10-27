@@ -10,6 +10,7 @@ name = "charliebot"
 path = "src/main.rs"
 
 [dependencies]
+charliebot-artifacts.workspace = true
 charliebot-cli-common.workspace = true
 charliebot-core.workspace = true
 charliebot-store.workspace = true

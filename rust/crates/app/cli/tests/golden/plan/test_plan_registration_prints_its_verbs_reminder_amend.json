@@ -1,0 +1,52 @@
+{
+  "argv": [
+    "plan",
+    "amend",
+    "--file",
+    "artifacts/plan_02.html",
+    "--note",
+    "n"
+  ],
+  "cwd": "home/sessions/abc",
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n",
+    "home/sessions/abc/": ""
+  },
+  "responses": [
+    {
+      "status": 200,
+      "body": {
+        "plan": 1,
+        "v": 2,
+        "state": "awaiting approval"
+      }
+    }
+  ],
+  "expect": {
+    "stdout": "{\n  \"plan\": 1,\n  \"v\": 2,\n  \"state\": \"awaiting approval\",\n  \"reminder\": \"A verify round and the cold read check this version before approval. Contract: the plan-approval skill.\"\n}\n",
+    "stderr": "",
+    "exit": 0,
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/api/internal/plan/amend",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "session_id": "abc",
+          "file": "artifacts/plan_02.html",
+          "plan_id": null,
+          "trigger": "feedback",
+          "note": "n",
+          "base_repo": null,
+          "base_branch": null,
+          "base_sha": null
+        }
+      }
+    ]
+  }
+}

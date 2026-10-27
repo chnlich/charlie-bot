@@ -1,0 +1,37 @@
+{
+  "argv": [
+    "plan",
+    "list"
+  ],
+  "cwd": "home/sessions/abc",
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n",
+    "home/sessions/abc/": ""
+  },
+  "responses": [
+    {
+      "status": 200,
+      "body": {
+        "plans": []
+      }
+    }
+  ],
+  "expect": {
+    "stdout": "{\n  \"plans\": []\n}\n",
+    "stderr": "",
+    "exit": 0,
+    "requests": [
+      {
+        "method": "GET",
+        "path": "/api/sessions/abc/plans",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": null
+        },
+        "body": null
+      }
+    ]
+  }
+}

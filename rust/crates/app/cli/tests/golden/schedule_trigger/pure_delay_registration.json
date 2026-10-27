@@ -1,0 +1,46 @@
+{
+  "argv": [
+    "schedule-trigger",
+    "--session",
+    "s1",
+    "--max-wait",
+    "60",
+    "--message",
+    "m"
+  ],
+  "cwd": "{root}",
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n"
+  },
+  "responses": [
+    {
+      "status": 200,
+      "body": {
+        "trigger_id": "trig-1",
+        "fire_at": "2026-10-08T00:11:00+00:00"
+      }
+    }
+  ],
+  "expect": {
+    "stdout": "{\n  \"trigger_id\": \"trig-1\",\n  \"fire_at\": \"2026-10-08T00:11:00+00:00\"\n}\n",
+    "stderr": "",
+    "exit": 0,
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/api/internal/schedule-trigger",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "session_id": "s1",
+          "delay_seconds": 60,
+          "message": "m"
+        }
+      }
+    ]
+  }
+}

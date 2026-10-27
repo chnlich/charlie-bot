@@ -1,0 +1,22 @@
+{
+  "argv": [
+    "schedule-trigger",
+    "--session",
+    "s1",
+    "--max-wait",
+    "60",
+    "--message",
+    "m",
+    "--cmd",
+    "true",
+    "--watch",
+    "1234"
+  ],
+  "cwd": "{root}",
+  "expect": {
+    "stdout": "",
+    "stderr": "{\"error\": \"--cmd and --watch are mutually exclusive: the trigger watches the one process --cmd starts\"}\n",
+    "exit": 2,
+    "requests": []
+  }
+}

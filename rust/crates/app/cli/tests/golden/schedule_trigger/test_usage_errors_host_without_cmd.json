@@ -1,0 +1,20 @@
+{
+  "argv": [
+    "schedule-trigger",
+    "--session",
+    "s1",
+    "--max-wait",
+    "60",
+    "--message",
+    "m",
+    "--host",
+    "neptune"
+  ],
+  "cwd": "{root}",
+  "expect": {
+    "stdout": "",
+    "stderr": "{\"error\": \"--host requires --cmd: it names the host the started command runs on\"}\n",
+    "exit": 2,
+    "requests": []
+  }
+}

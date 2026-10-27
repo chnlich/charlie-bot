@@ -116,6 +116,7 @@ const PORTED_PYTHON_TESTS: &[&str] = &[
   "test_cli_in_a_worker_session_runs_the_cold_read_in_the_foreground",
   "test_cli_with_no_session_identity_runs_the_cold_read_in_the_foreground",
   "test_cli_foreground_prints_every_model_failed_and_exits_1",
+  "test_usage_errors",
 ];
 
 #[test]

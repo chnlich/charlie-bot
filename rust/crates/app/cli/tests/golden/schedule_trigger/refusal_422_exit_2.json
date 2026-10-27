@@ -1,0 +1,63 @@
+{
+  "argv": [
+    "schedule-trigger",
+    "--session",
+    "s1",
+    "--max-wait",
+    "60",
+    "--message",
+    "m"
+  ],
+  "cwd": "{root}",
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n"
+  },
+  "responses": [
+    {
+      "status": 422,
+      "body": {
+        "detail": "session s1 has 5 pending triggers (limit 5); trigger rejected"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "sha": "cafe567",
+        "started_at": "2026-01-02T03:04:05+00:00"
+      }
+    }
+  ],
+  "expect": {
+    "stdout": "",
+    "stderr": "{\"error\": \"session s1 has 5 pending triggers (limit 5); trigger rejected\", \"code\": \"server_error\", \"effect\": \"none\"}\n",
+    "exit": 2,
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/api/internal/schedule-trigger",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "session_id": "s1",
+          "delay_seconds": 60,
+          "message": "m"
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/api/internal/version",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": null
+        },
+        "body": null
+      }
+    ]
+  }
+}

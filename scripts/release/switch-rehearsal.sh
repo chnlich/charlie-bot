@@ -14,6 +14,10 @@
 # repository and worktrees lie in the rehearsal tree. Every server starts from the rehearsal home's own config,
 # credentials and releases.
 #
+# Before each switch the rehearsal seeds one live run, because a live switch always has one: the manager turn that
+# requested it. The seed is a manager-turn record whose process is a sleep the new server re-attaches by its recorded
+# pid, so the preflight reads a real live run's backend registration from both builds and records it for the readback.
+#
 # Exit: 0 every step passed; 1 a step failed; 2 the preflight failed, nothing started.
 # Evidence goes to $CHARLIEBOT_RELEASE_RUN_DIR/rehearsal-<UTC>/ (or under $CHARLIEBOT_RELEASE_LOG_DIR) and is kept
 # after a failure.
@@ -33,6 +37,9 @@ readonly READY_WAIT_S=300
 readonly STOP_WAIT_S=60
 readonly ORIGINAL_PATH=$PATH
 readonly STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+# The rehearsal backend entry: the config gives it the backend type charlie-code, which re-attaches after a restart.
+readonly REHEARSAL_BACKEND="charlie-code-release-rehearsal"
+readonly SEED_RUN_ID="rehearsal-live-run"
 
 TREE=
 SOCK=
@@ -43,6 +50,7 @@ SESSIONS_DIR=
 HELPER=
 EVIDENCE=
 REPORT=
+SEED_PIDS=()
 
 usage() {
   echo "usage: switch-rehearsal.sh <new commit> <new release dir>" >&2
@@ -295,6 +303,10 @@ cleanup() {
     [ "$pid" = "$PORT_PID" ] || stop_pid "$pid"
   fi
   [ -n "$SOCK" ] && tmux -L "$SOCK" kill-server 2> /dev/null
+  if [ "${#SEED_PIDS[@]}" -gt 0 ]; then
+    kill -KILL "${SEED_PIDS[@]}" 2> /dev/null
+    log "CLEANUP stopped the seeded live run process(es) ${SEED_PIDS[*]}"
+  fi
   if [ -f "$HELPER" ] && [ -d "$SESSIONS_DIR" ]; then
     for dir in "$SESSIONS_DIR"/*/; do
       [ -d "$dir" ] || continue
@@ -415,9 +427,9 @@ paths:
   worktree_dir: $TREE/worktrees
 backends:
   pool:
-    - charlie-code-release-rehearsal
+    - $REHEARSAL_BACKEND
   options:
-    - id: charlie-code-release-rehearsal
+    - id: $REHEARSAL_BACKEND
       label: Release rehearsal
       type: charlie-code
       model: openai/glm-5.3-flash
@@ -455,9 +467,65 @@ http_get() {  # http_get PATH OUTPUT: prints the status
   printf '%s' "$status"
 }
 
+http_post() {  # http_post PATH BODY OUTPUT: prints the status
+  local status
+  status="$(curl --config "$AUTH_CONFIG" --silent --show-error --connect-timeout 2 --max-time 10 \
+    --request POST --header 'Content-Type: application/json' --data-binary "$2" --output "$3" \
+    --write-out '%{http_code}' "http://127.0.0.1:$PORT$1")" || status=000
+  printf '%s' "$status"
+}
+
 fail_step() {
   log "FAILED: $*"
   exit 1
+}
+
+# seed_live_run: opens a session on the running server and records one live manager-turn run in it. The run's process
+# is a sleep of the rehearsal's own: the preflight reads the run's backend type from both builds, and the server that
+# starts re-attaches by the recorded pid. The seeded run stays live across the switch until the cleanup stops it.
+seed_live_run() {
+  local status session pid pid_start
+  status="$(http_post /api/sessions/ '{"name":"switch rehearsal live run"}' "$HTTP/seed-session.json")"
+  [ "$status" = 200 ] || fail_step "seeding a live run: creating a session answered $status"
+  session="$(python3 -I - "$HTTP/seed-session.json" <<'PY'
+import json
+import sys
+
+print(json.load(open(sys.argv[1]))["id"])
+PY
+)" || fail_step "seeding a live run: the session response has no id"
+  sleep 1800 &
+  pid=$!
+  SEED_PIDS+=("$pid")
+  disown "$pid"   # the cleanup kills it by pid; the shell keeps no job that would report the kill
+  pid_start="$(python3 -I - "$pid" <<'PY'
+import sys
+
+print(open(f"/proc/{sys.argv[1]}/stat", encoding="utf-8").read().rsplit(")", 1)[1].split()[19])
+PY
+)" || fail_step "seeding a live run: cannot read the start time of pid $pid"
+  python3 -I - "$CB_HOME" "$session" "$pid" "$pid_start" "$REHEARSAL_BACKEND" "$SEED_RUN_ID" <<'PY'
+import datetime
+import json
+import pathlib
+import sys
+
+home, session, pid, pid_start, backend, run_id = sys.argv[1:]
+run_dir = pathlib.Path(home) / "sessions" / session / "data" / "runs" / run_id
+run_dir.mkdir(parents=True)
+record = {
+    "id": run_id,
+    "session_id": session,
+    "kind": "manager_turn",
+    "backend": backend,
+    "pid": int(pid),
+    "pid_start": pid_start,
+    "started_at": datetime.datetime.now(datetime.UTC).isoformat(),
+    "ended_at": None,
+}
+(run_dir / "metadata.json").write_text(json.dumps(record), encoding="utf-8")
+PY
+  log "SEED live run $session/$SEED_RUN_ID on pid $pid"
 }
 
 # start_old: types the launcher into the pane and waits for server_ready in the new launch's log.
@@ -522,7 +590,8 @@ check_head() {
 }
 
 # run_switch LABEL ARGS...: runs the switch copy, records its exit status and log, and keeps the output as evidence. The
-# delegation check's lines from the switch log go to the report, passed or failed.
+# delegation check's lines from the switch log go to the report, passed or failed. A switch that passes must have
+# recorded the seeded live run, so a rehearsal that lost its seed cannot pass through the preflight's live-run check.
 run_switch() {
   local label=$1 rc start_ms end_ms switch_log
   shift
@@ -535,6 +604,10 @@ run_switch() {
   grep -F 'switch: delegation: ' "$switch_log" | while IFS= read -r line; do
     log "DELEGATION $label: ${line#*switch: }"
   done
+  if [ "$rc" -eq 0 ] && ! grep -q "recorded [1-9][0-9]* live run(s)" "$switch_log"; then
+    log "SWITCH $label: the preflight recorded no live run"
+    return 1
+  fi
   return "$rc"
 }
 
@@ -545,6 +618,7 @@ PORT_PID="$(helper listener-pid "$PORT" "$TREE")"
 expect_version start "$OLD_COMMIT"
 log "STEP start: $(serving_impl) serves $PORT"
 
+seed_live_run
 run_switch step1-new rust "$NEW_COMMIT" || fail_step "step 1: the switch to $NEW_COMMIT exited $?"
 check_head step1 "$NEW_COMMIT"
 [ "$(readlink "$RELEASES/current")" = "$NEW_COMMIT" ] || fail_step "step 1: current is not $NEW_COMMIT"
@@ -553,6 +627,7 @@ expect_version step1 "$NEW_COMMIT"
 PORT_PID="$(helper listener-pid "$PORT" "$TREE")"
 log "STEP 1: new release serves $PORT; checkout HEAD $(git -C "$REPO" rev-parse --short HEAD)"
 
+seed_live_run
 run_switch step2-old rust "$OLD_COMMIT" || fail_step "step 2: the switch back to $OLD_COMMIT exited $?"
 check_head step2 "$OLD_COMMIT"
 [ "$(readlink "$RELEASES/current")" = "$OLD_COMMIT" ] || fail_step "step 2: current is not $OLD_COMMIT"

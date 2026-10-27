@@ -4,7 +4,7 @@ A terminal Ctrl-C delivers SIGINT to the whole foreground process group, where
 the launcher's tee sits. With the plain tee, tee dies on the first signal and
 the server's next log write raises BrokenPipeError, so the shutdown lines after
 it — up to and including charliebot_shutdown — never reach the log. The fake
-`uv` here reproduces a real uvicorn stop: it prints a ready line, then on SIGINT
+release binary here reproduces the server's stop: it prints a ready line, then on SIGINT
 prints a shutdown marker and exits 0.
 """
 
@@ -30,16 +30,18 @@ READY_LINE = "fake_server_ready"
 MARKER_LINE = "fake_server_shutdown_marker"
 EXIT_LINE = "launcher: server exited rc=0"
 
-# A `uv` stand-in: ready line, then a uvicorn-shaped stop on SIGINT (print the
-# shutdown marker, exit 0). Like uvicorn, it handles the signal itself and exits
+# A release binary stand-in: --check-config passes, then the server prints a ready line and, on SIGINT, a
+# stop (print the shutdown marker, exit 0). It handles the signal itself and exits
 # normally — the launcher's trailing lines only run when the pipeline's members
 # exit normally.
-FAKE_UV = f"""\
+FAKE_SERVER = f"""\
 #!/usr/bin/env python3
 import signal
 import sys
 import time
 
+if sys.argv[1:] == ["--check-config"]:
+    sys.exit(0)
 print({READY_LINE!r}, flush=True)
 
 
@@ -81,14 +83,16 @@ def test_launcher_tee_outlives_sigint_and_records_the_exit_line(tmp_path: pathli
   shutdown marker followed by the launcher's exit line."""
   bin_dir = tmp_path / "bin"
   bin_dir.mkdir()
-  (bin_dir / "uv").write_text(FAKE_UV, encoding="utf-8")
-  (bin_dir / "uv").chmod(0o755)
   systemd_stubs.install(bin_dir)
+  releases = tmp_path / "releases"
+  release = _install_release(releases)
+  (release / "charliebot-server").write_text(FAKE_SERVER, encoding="utf-8")
   log_dir = tmp_path / "logs"
 
   env = os.environ.copy()
   env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
   env["CHARLIEBOT_LOG_DIR"] = str(log_dir)
+  env["CHARLIEBOT_RELEASES_DIR"] = str(releases)
 
   # A background child of a non-interactive shell inherits SIGINT ignored, while
   # the terminal's launcher has it at default; restore SIG_DFL before exec so
@@ -138,8 +142,7 @@ def test_launcher_tee_outlives_sigint_and_records_the_exit_line(tmp_path: pathli
     proc.wait()
 
 
-# A `uv` stand-in for the Python branch: it records its argv and PYTHONUNBUFFERED, prints the ready line and exits
-# 0, so the launcher finishes without a signal.
+# A `uv` stand-in that records each call. The release path runs no uv, so a record file means the launcher regressed.
 FAKE_UV_RECORDING = f"""\
 #!/usr/bin/env python3
 import json
@@ -209,20 +212,16 @@ def _run_launcher(tmp_path: pathlib.Path,
   return proc, log_dir
 
 
-def test_launcher_without_current_runs_the_python_server_as_before(tmp_path: pathlib.Path) -> None:
-  """No current release: the same uv command, the same console and log lines, no release binary involved."""
+def test_launcher_without_current_refuses_to_start_and_names_the_missing_release(tmp_path: pathlib.Path) -> None:
+  """No current release: the launcher exits nonzero before it creates a log, runs no server, and names the release."""
   releases = tmp_path / "releases"
   releases.mkdir()
   proc, log_dir = _run_launcher(tmp_path, releases)
 
-  assert proc.returncode == 0, proc.stderr
-  _assert_server_scope(proc, tmp_path / "bin")
-  record = json.loads((tmp_path / "uv-record.json").read_text(encoding="utf-8"))
-  assert record == {"argv": ["run", "python3", "server.py"], "PYTHONUNBUFFERED": "1"}
-  assert proc.stdout.splitlines()[0] == f"CharlieBot server starting (repo: {ROOT})"
-  log_lines = _read_log(log_dir).splitlines()
-  assert log_lines[0] == READY_LINE
-  assert EXIT_LINE in log_lines[-1]
+  assert proc.returncode == 1, proc.stdout + proc.stderr
+  assert str(releases / "current") in proc.stderr
+  assert not log_dir.exists()
+  assert not (tmp_path / "uv-record.json").exists()
 
 
 def test_launcher_with_current_runs_the_release_binary_with_both_variables(tmp_path: pathlib.Path) -> None:
@@ -238,7 +237,7 @@ def test_launcher_with_current_runs_the_release_binary_with_both_variables(tmp_p
       "CHARLIEBOT_REPO_ROOT": str(ROOT),
       "CHARLIEBOT_VENV_BIN": str(ROOT / ".venv" / "bin"),
   }
-  assert not (tmp_path / "uv-record.json").exists(), "the Python branch must not run for a current release"
+  assert not (tmp_path / "uv-record.json").exists(), "no uv command runs for a current release"
   log_lines = _read_log(log_dir).splitlines()
   assert "rust" in log_lines[0] and RELEASE_SHA in log_lines[0]
   assert "fake_release_ready" in log_lines
@@ -253,6 +252,6 @@ def test_launcher_with_current_stops_when_check_config_fails_and_names_the_rollb
 
   assert proc.returncode == 3, proc.stdout + proc.stderr
   assert "config error" in proc.stderr
-  assert "scripts/switch-server.sh python" in proc.stdout
+  assert "scripts/switch-server.sh rust" in proc.stdout
   assert not (release / "run.json").exists()
   assert not (tmp_path / "uv-record.json").exists()

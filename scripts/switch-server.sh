@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-# Switch the live CharlieBot server between the Python server and a verified Rust release.
+# Switch the live CharlieBot server to a verified Rust release.
 #
 #   scripts/switch-server.sh rust <full rust-backend sha> [--pane PANE]
-#   scripts/switch-server.sh python [--pane PANE]
 #
 # The preflight checks release, clone, runs and config, then asks start-server.sh to test its slices and scope.
 # A refusal changes nothing and exits 1. The switch then runs detached under setsid, because stopping the old server
@@ -40,7 +39,6 @@ PROBE_CANCEL_WAIT_S="${CHARLIEBOT_SWITCH_PROBE_CANCEL_WAIT_S:-60}"
 
 usage() {
   echo "usage: switch-server.sh rust <full rust-backend sha> [--pane PANE]" >&2
-  echo "       switch-server.sh python [--pane PANE]" >&2
   exit 1
 }
 
@@ -55,7 +53,6 @@ case "$MODE" in
     shift
     [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]] || usage
     ;;
-  python) TARGET_SHA="" ;;
   *) usage ;;
 esac
 PANE=""
@@ -151,7 +148,7 @@ elif mode == "scan":
     elif backend_type in NO_REATTACH:
       print(f"block\t{backend} run {run['id']} (type {backend_type}, pid {run['pid']}) "
             "cannot be re-attached after a restart")
-  # A loop's controller runs inside the server process; a restart never resumes it (src/runtime/task_recovery.py).
+  # A loop's controller runs inside the server process; a restart never resumes it (rust/crates/charliebot-tasks/src/recovery.rs).
   for path in sorted((home / "sessions").glob("*/loops/*/state.json")):
     state = json.loads(path.read_text(encoding="utf-8"))
     controller = state.get("server_pid")
@@ -274,15 +271,11 @@ pane_of_pid() {
   return 1
 }
 
-# impl_of_pid PID: python, rust <sha>, or unknown, from the argv of the process. A release binary is named by its
+# impl_of_pid PID: rust <sha> or unknown, from the argv of the process. A release binary is named by its
 # real path under the release root, so the current link resolves to the sha directory.
 impl_of_pid() {
   local arg real
   while IFS= read -r -d '' arg; do
-    if [ "$(basename "$arg")" = server.py ]; then
-      echo python
-      return 0
-    fi
     real="$(readlink -f "$arg")"
     case "$real" in
       "$RELEASES_REAL"/*/charliebot-server)
@@ -297,7 +290,7 @@ impl_of_pid() {
 
 listener_pids() { ss -Hltnp "sport = :$PORT" | grep -o 'pid=[0-9]*' | cut -d= -f2 | sort -u; }
 
-# listener_impl: what serves the port: python, rust <sha>, unknown, several, or none.
+# listener_impl: what serves the port: rust <sha>, unknown, several, or none.
 listener_impl() {
   local pids
   pids="$(listener_pids)"
@@ -376,28 +369,21 @@ start_in_pane() {
 new_output() { tail -c "+$((NEW_OFFSET + 1))" "$NEW_LOG"; }
 
 # launch_has EVENT [KEY=VALUE...]: this launch's output has an EVENT line whose fields include each KEY=VALUE. It reads
-# the Python console format and the Rust JSON-lines format; a line of another event never matches.
+# the Rust server's JSON-lines log; a line of another event never matches.
 launch_has() {
   new_output > "$WORK/launch.log"
   python3 -I - "$WORK/launch.log" "$@" <<'PY'
 import json
 import pathlib
-import re
 import sys
 
-CONSOLE = re.compile(r"\S+ \S+ \[\w+ *\] (\S+)(.*)")
 path, event, *pairs = sys.argv[1:]
 wanted = dict(pair.split("=", 1) for pair in pairs)
 # Only complete lines: a line the server is still writing has no newline yet.
 for line in pathlib.Path(path).read_text(encoding="utf-8", errors="replace").split("\n")[:-1]:
-  if line.startswith('{"'):
-    record = {key: str(value) for key, value in json.loads(line).items()}
-  else:
-    match = CONSOLE.match(line)
-    if match is None:
-      continue
-    record = dict(part.split("=", 1) for part in match[2].split() if "=" in part)
-    record["event"] = match[1]
+  if not line.startswith('{"'):
+    continue
+  record = {key: str(value) for key, value in json.loads(line).items()}
   if record.get("event") == event and all(record.get(key) == value for key, value in wanted.items()):
     sys.exit(0)
 sys.exit(1)
@@ -736,25 +722,21 @@ stop_old() {
 
 preflight() {
   PREV_CURRENT="$(readlink "$CURRENT" 2> /dev/null || true)"
-  if [ "$MODE" = rust ]; then
-    RELEASE_DIR="$RELEASES_DIR/$TARGET_SHA"
-    [ -d "$RELEASE_DIR" ] || fail "no release $TARGET_SHA in $RELEASES_DIR"
-    (cd "$RELEASE_DIR" && sha256sum -c sha256sums.txt) || fail "$RELEASE_DIR does not match its sha256sums.txt"
-    BASE="$(tr -d '[:space:]' < "$RELEASE_DIR/PORT_BASELINE")"
-    [[ "$BASE" =~ ^[0-9a-f]{40}$ ]] || fail "PORT_BASELINE of $TARGET_SHA is not a full commit sha"
-  fi
+  RELEASE_DIR="$RELEASES_DIR/$TARGET_SHA"
+  [ -d "$RELEASE_DIR" ] || fail "no release $TARGET_SHA in $RELEASES_DIR"
+  (cd "$RELEASE_DIR" && sha256sum -c sha256sums.txt) || fail "$RELEASE_DIR does not match its sha256sums.txt"
+  BASE="$(tr -d '[:space:]' < "$RELEASE_DIR/PORT_BASELINE")"
+  [[ "$BASE" =~ ^[0-9a-f]{40}$ ]] || fail "PORT_BASELINE of $TARGET_SHA is not a full commit sha"
   OLD_SHA="$(git -C "$REPO_ROOT" rev-parse HEAD)"
   [ -z "$(git -C "$REPO_ROOT" status --porcelain --untracked-files=no)" ] \
     || fail "runtime clone $REPO_ROOT has local changes"
-  if [ "$MODE" = rust ]; then
-    git -C "$REPO_ROOT" cat-file -e "$BASE^{commit}" 2> /dev/null \
-      || fail "baseline $BASE is not in the runtime clone; fetch origin first"
-    git -C "$REPO_ROOT" merge-base --is-ancestor "$OLD_SHA" "$BASE" \
-      || fail "runtime clone HEAD $OLD_SHA is not an ancestor of baseline $BASE"
-    CHARLIEBOT_HOME="$HOME_DIR" CHARLIEBOT_REPO_ROOT="$REPO_ROOT" CHARLIEBOT_VENV_BIN="$REPO_ROOT/.venv/bin" \
-      "$RELEASE_DIR/charliebot-server" --check-config \
-      || fail "--check-config of $TARGET_SHA rejects the home $HOME_DIR"
-  fi
+  git -C "$REPO_ROOT" cat-file -e "$BASE^{commit}" 2> /dev/null \
+    || fail "baseline $BASE is not in the runtime clone; fetch origin first"
+  git -C "$REPO_ROOT" merge-base --is-ancestor "$OLD_SHA" "$BASE" \
+    || fail "runtime clone HEAD $OLD_SHA is not an ancestor of baseline $BASE"
+  CHARLIEBOT_HOME="$HOME_DIR" CHARLIEBOT_REPO_ROOT="$REPO_ROOT" CHARLIEBOT_VENV_BIN="$REPO_ROOT/.venv/bin" \
+    "$RELEASE_DIR/charliebot-server" --check-config \
+    || fail "--check-config of $TARGET_SHA rejects the home $HOME_DIR"
   scan_home || fail "cannot read the run records in $HOME_DIR"
   [ -z "$BLOCKERS" ] || fail "a restart would lose live work: ${BLOCKERS//$'\n'/; }"
   CONFIG="$(home_helper config)" || fail "cannot read $HOME_DIR/config.yaml and credentials.yaml"
@@ -765,16 +747,12 @@ preflight() {
   [ "$(listener_pids | grep -c .)" -eq 1 ] || fail "expected one server listening on port $PORT"
   LISTENER="$(listener_pids)"
   OLD_IMPL="$(impl_of_pid "$LISTENER")"
-  [ "$OLD_IMPL" != unknown ] || fail "pid $LISTENER on port $PORT is neither the Python server nor a release binary"
+  [ "$OLD_IMPL" != unknown ] || fail "pid $LISTENER on port $PORT is not a release binary"
   if [ -z "$PANE" ]; then
     PANE="$(pane_of_pid "$LISTENER")" || fail "no tmux pane runs the server on port $PORT; pass --pane"
   fi
   PANE_PID="$(tm display-message -p -t "$PANE" '#{pane_pid}' 2> /dev/null)" || fail "no tmux pane $PANE"
-  if [ "$MODE" = rust ]; then
-    WANT="rust $TARGET_SHA"
-  else
-    WANT=python
-  fi
+  WANT="rust $TARGET_SHA"
   log "preflight passed: $OLD_IMPL -> $WANT; clone at $OLD_SHA; pane $PANE; port $PORT"
 }
 
@@ -782,7 +760,7 @@ preflight() {
 server_running() {
   local impl
   impl="$(impl_of_pid "$1")"
-  [ "$impl" = python ] || [[ "$impl" == rust* ]]
+  [[ "$impl" == rust* ]]
 }
 
 # servers_gone PID...: succeeds once no PID runs a server.
@@ -885,9 +863,7 @@ switch_forward() {
   [ -z "$BLOCKERS" ] || die "live work appeared after the preflight: ${BLOCKERS//$'\n'/; }"
   log "recorded $(wc -l < "$RUNS_FILE") live run(s) in $RUNS_FILE"
   stop_old || die "the old server did not stop"
-  if [ "$MODE" = rust ]; then
-    git -C "$REPO_ROOT" merge --ff-only -q "$BASE" || die "fast-forward to $BASE failed"
-  fi
+  git -C "$REPO_ROOT" merge --ff-only -q "$BASE" || die "fast-forward to $BASE failed"
   (cd "$REPO_ROOT" && uv sync --frozen) || die "uv sync failed"
   set_current "$TARGET_SHA" || die "could not point current at $TARGET_SHA"
   start_in_pane || die "could not type the launcher into pane $PANE"

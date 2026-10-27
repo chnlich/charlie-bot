@@ -2,8 +2,8 @@
 
 Each test builds its own runtime clone, home, release root and log directory under tmp_path, so nothing touches
 ~/.charliebot, ~/charliebot-releases, the default tmux server or the live port. FAKE_SERVER is one program that stands
-in for both implementations: as the clone's server.py it is the Python server, as a release's charliebot-server it is
-the Rust binary, and the switch tells them apart by argv. Its behavior comes from a behavior.json beside it.
+in for the Rust release binary: the switch reads the server's argv to tell a release from any other process. Its
+behavior comes from a behavior.json beside it.
 
 The preflight refusals stop before any pane is looked up, so they need no tmux. The steps after the preflight drive a
 pane on a private tmux server (tmux -L). The repo caps integration tests at 50 and already uses all 50, so those steps
@@ -50,6 +50,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 SWITCH = ROOT / "scripts" / "switch-server.sh"
 LAUNCHER = ROOT / "scripts" / "start-server.sh"
 RUST_SHA = hashlib.sha1(b"rust-backend release under test").hexdigest()
+OLD_SHA = hashlib.sha1(b"previous rust release under test").hexdigest()
 ACCESS_KEY = "switch-test-key"
 SESSION = "11111111-2222-3333-4444-555555555555"
 # The fake server's probe run: run_state is its state before a stop; output is none, message (a committed assistant
@@ -77,10 +78,9 @@ GIT_ENV = {
 }
 DIRECT_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
-# One program for both implementations. Its routes answer the switch's readback and probe; at startup it logs a recovery
-# line for every live Run record (when it adopts) and server_ready, in the format of the implementation it stands in
-# for: console lines for server.py, JSON lines for the charliebot-server binary. Each request past the version probe is
-# appended to calls.log beside the program, as "METHOD PATH".
+# The stand-in release binary. Its routes answer the switch's readback and probe; at startup it logs a recovery line for
+# every live Run record (when it adopts) and server_ready, as JSON lines like the Rust server. Each request past the
+# version probe is appended to calls.log beside the program, as "METHOD PATH".
 FAKE_SERVER = r'''#!/usr/bin/env python3
 """Stand-in CharlieBot server: the routes and log lines the switch reads, behavior from behavior.json."""
 import datetime
@@ -95,7 +95,6 @@ import time
 
 HERE = pathlib.Path(__file__).resolve().parent
 BEHAVIOR = json.loads((HERE / "behavior.json").read_text(encoding="utf-8"))
-RUST_LOGS = pathlib.Path(__file__).name == "charliebot-server"
 HOME = pathlib.Path(os.environ["CHARLIEBOT_HOME"])
 CONFIG = (HOME / "config.yaml").read_text(encoding="utf-8")
 PORT = int(re.search(r"^\s*port:\s*(\d+)", CONFIG, re.MULTILINE).group(1))
@@ -109,14 +108,9 @@ READS = {"bootstrap": 0}
 
 
 def log(event, **fields):
-  if RUST_LOGS:
-    stamp = datetime.datetime.now(datetime.UTC).isoformat()
-    record = {"event": event, **fields, "level": "info", "timestamp": stamp}
-    print(json.dumps(record, separators=(",", ":")), flush=True)
-  else:
-    stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    detail = "".join(f" {key}={value}" for key, value in fields.items())
-    print(f"{stamp} [info     ] {event}{detail}", flush=True)
+  stamp = datetime.datetime.now(datetime.UTC).isoformat()
+  record = {"event": event, **fields, "level": "info", "timestamp": stamp}
+  print(json.dumps(record, separators=(",", ":")), flush=True)
 
 
 if "--check-config" in sys.argv:
@@ -218,17 +212,14 @@ log("server_ready", ready_in_ms=1)
 server.serve_forever()
 '''
 
-# A uv stand-in: `uv sync` fails while the clone holds a fail-sync marker; `uv run CMD` runs CMD in place.
+# A uv stand-in: `uv sync` fails while the clone holds a fail-sync marker.
 FAKE_UV = """\
 #!/usr/bin/env python3
-import os
 import pathlib
 import sys
 
 if sys.argv[1] == "sync":
   sys.exit(1 if pathlib.Path("fail-sync").exists() else 0)
-if sys.argv[1] == "run":
-  os.execvp(sys.argv[2], sys.argv[2:])
 sys.exit(2)
 """
 
@@ -263,9 +254,9 @@ def _sha256(path: pathlib.Path) -> str:
   return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _install_release(releases: pathlib.Path, baseline: str) -> None:
+def _install_release(releases: pathlib.Path, sha: str, baseline: str) -> None:
   """A release directory in the shape the host's build job leaves: binary, library, sums and PORT_BASELINE."""
-  release = releases / RUST_SHA
+  release = releases / sha
   release.mkdir(parents=True)
   binary = release / "charliebot-server"
   binary.write_text(FAKE_SERVER, encoding="utf-8")
@@ -295,17 +286,17 @@ def _build_world(root: pathlib.Path) -> World:
   shutil.copy2(SWITCH, clone / "scripts" / "switch-server.sh")
   # The launcher's preflight reads its expected limits from this directory.
   shutil.copytree(ROOT / "scripts" / "systemd", clone / "scripts" / "systemd")
-  (clone / "server.py").write_text(FAKE_SERVER, encoding="utf-8")
   _git(clone, "init", "-q", "-b", "main")
-  _git(clone, "add", "scripts", "server.py")
-  _git(clone, "commit", "-q", "-m", "fake server")
+  _git(clone, "add", "scripts")
+  _git(clone, "commit", "-q", "-m", "fake runtime clone")
   base_head = _git(clone, "rev-parse", "HEAD")
   _git(clone, "checkout", "-q", "-b", "baseline")
   _git(clone, "commit", "-q", "--allow-empty", "-m", "baseline")
   baseline = _git(clone, "rev-parse", "HEAD")
   _git(clone, "checkout", "-q", "main")
-  _write_behavior(clone)
-  _install_release(releases, baseline)
+  _install_release(releases, OLD_SHA, baseline)
+  _install_release(releases, RUST_SHA, baseline)
+  (releases / "current").symlink_to(OLD_SHA)
 
   (bin_dir / "uv").write_text(FAKE_UV, encoding="utf-8")
   (bin_dir / "uv").chmod(0o755)
@@ -484,10 +475,6 @@ def _listener_argv(world: World) -> list[pathlib.Path]:
   return [pathlib.Path(arg.decode()) for arg in raw.split(b"\0") if arg]
 
 
-def _serves_python(world: World) -> bool:
-  return any(arg.name == "server.py" for arg in _listener_argv(world))
-
-
 def _serves_release(world: World, sha: str) -> bool:
   binary = (world.releases / sha / "charliebot-server").resolve()
   return any(arg.resolve() == binary for arg in _listener_argv(world))
@@ -504,10 +491,10 @@ def _version_status(port: int) -> int:
 
 
 def _assert_untouched(world: World) -> None:
-  """Nothing changed: no current link, the clone where it was, and the Python server still answering."""
-  assert not (world.releases / "current").is_symlink()
+  """Nothing changed: current names the old release, the clone is where it was, and the old server answers."""
+  assert os.readlink(world.releases / "current") == OLD_SHA
   assert _git(world.clone, "rev-parse", "HEAD") == world.base_head
-  assert _serves_python(world)
+  assert _serves_release(world, OLD_SHA)
   assert _version_status(world.port) == 200
 
 
@@ -529,7 +516,7 @@ def _assert_server_scope_records(world: World, expected_count: int) -> None:
 
 def _home_helper(home: pathlib.Path, mode: str) -> subprocess.CompletedProcess[str]:
   return subprocess.run(
-      ["bash", "-c", 'source "$1" python && home_helper "$2"', "bash",
+      ["bash", "-c", f'source "$1" rust {RUST_SHA} && home_helper "$2"', "bash",
        str(SWITCH), mode],
       env={
           **os.environ, "CHARLIEBOT_HOME": str(home)
@@ -588,7 +575,7 @@ def test_preflight_refusal_exits_1_and_changes_nothing(world: World, case: str) 
   elif case == "improve-loop":
     _seed_improve_loop(world, _spawn_live(world).pid)
   elif case == "dirty-clone":
-    (world.clone / "server.py").write_text("# local edit\n", encoding="utf-8")
+    (world.clone / "scripts" / "start-server.sh").write_text("# local edit\n", encoding="utf-8")
   elif case == "launcher-preflight":
     world.env["SYSTEMD_RUN_REFUSE_ALL"] = "1"
 
@@ -599,7 +586,6 @@ def test_preflight_refusal_exits_1_and_changes_nothing(world: World, case: str) 
   proc = _switch(world, "rust", RUST_SHA)
 
   assert proc.returncode == 1, _report(world, proc)
-  assert not (world.releases / "current").is_symlink()
   assert (os.readlink(current) if current.is_symlink() else None) == current_before
   assert _git(world.clone, "rev-parse", "HEAD") == world.base_head
   assert {
@@ -669,7 +655,7 @@ def _adopted(world: World, runs_file: pathlib.Path, launch_output: str) -> subpr
       "WORK": str(work),
   }
   return subprocess.run(
-      ["bash", "-c", 'source "$1" python && adopted', "bash",
+      ["bash", "-c", f'source "$1" rust {RUST_SHA} && adopted', "bash",
        str(SWITCH)],
       env=env,
       capture_output=True,
@@ -756,15 +742,16 @@ def _switch_forward(world: World, run_pid: int, launch_output: str) -> subproces
       "RUN_PID": str(run_pid),
       "RESTORED": str(world.root / "restored"),
       "RUNS_FILE": str(world.root / "switch.runs"),
-      "WANT": "python",
+      "WANT": f"rust {RUST_SHA}",
       "PORT": str(world.port),
       "NEW_LOG": str(launch_log),
       "NEW_OFFSET": "0",
       "WORK": str(work),
   }
   script = """
-source "$1" python
+source "$1" rust "$2"
 REPO_ROOT="$CLONE"
+BASE="$(git -C "$CLONE" rev-parse HEAD)"
 stop_old() { kill -KILL "$RUN_PID"; }
 start_in_pane() { :; }
 wait_ready() { :; }
@@ -774,7 +761,12 @@ restore() { touch "$RESTORED"; exit 2; }
 switch_forward
 """
   return subprocess.run(
-      ["bash", "-c", script, "bash", str(SWITCH)], env=env, capture_output=True, text=True, timeout=30, check=False)
+      ["bash", "-c", script, "bash", str(SWITCH), RUST_SHA],
+      env=env,
+      capture_output=True,
+      text=True,
+      timeout=30,
+      check=False)
 
 
 @pytest.mark.parametrize(
@@ -833,7 +825,9 @@ def probe(tmp_path: pathlib.Path) -> Iterator[ProbeRun]:
   def run(**behavior: object) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     server_dir = tmp_path / "server"
     server_dir.mkdir()
-    (server_dir / "server.py").write_text(FAKE_SERVER, encoding="utf-8")
+    binary = server_dir / "charliebot-server"
+    binary.write_text(FAKE_SERVER, encoding="utf-8")
+    binary.chmod(0o755)
     _write_behavior(server_dir, **behavior)
     env = {
         **os.environ,
@@ -843,15 +837,12 @@ def probe(tmp_path: pathlib.Path) -> Iterator[ProbeRun]:
     }
     servers.append(
         subprocess.Popen(
-            [sys.executable, str(server_dir / "server.py")],
-            env=env,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL))
+            [str(server_dir / "charliebot-server")], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
     _wait_until(lambda: _answers_version(port), 10)
     work = tmp_path / "work"
     work.mkdir()
     probe_env = {**env, "PORT": str(port), "KEY": ACCESS_KEY, "WORK": str(work)}
-    probe_cmd = ["bash", "-c", 'source "$1" python && probe_turn', "bash", str(SWITCH)]
+    probe_cmd = ["bash", "-c", f'source "$1" rust {RUST_SHA} && probe_turn', "bash", str(SWITCH)]
     proc = subprocess.run(probe_cmd, env=probe_env, capture_output=True, text=True, timeout=30, check=False)
     calls_log = server_dir / "calls.log"
     calls = calls_log.read_text(encoding="utf-8").splitlines() if calls_log.exists() else []
@@ -958,7 +949,7 @@ def test_probe_archive_bounds_a_slow_run_list_by_its_wait(probe: ProbeRun) -> No
   _assert_stage_lines(proc)
 
 
-# A stand-in for a server under a pane. The escalation finds it by its argv, which names server.py; stubborn mode
+# A stand-in for a server under a pane. The escalation finds it by its argv, which names a release binary; stubborn mode
 # ignores SIGTERM.
 STAND_IN_SERVER = """\
 import signal
@@ -977,10 +968,10 @@ def _children(pid: int) -> list[int]:
 
 
 def _server_under(pid: int) -> int:
-  """The stand-in server forked under the pane shell, once exec has run and its argv names server.py."""
+  """The stand-in server forked under the pane shell, once exec has run and its argv names charliebot-server."""
 
   def exec_done() -> bool:
-    return any(b"server.py" in pathlib.Path(f"/proc/{child}/cmdline").read_bytes() for child in _children(pid))
+    return any(b"charliebot-server" in pathlib.Path(f"/proc/{child}/cmdline").read_bytes() for child in _children(pid))
 
   _wait_until(exec_done, 10)
   return _children(pid)[0]
@@ -992,12 +983,12 @@ def pane(tmp_path: pathlib.Path) -> Iterator[Callable[[str], subprocess.Popen[by
   shells: list[subprocess.Popen[bytes]] = []
 
   def start(mode: str) -> subprocess.Popen[bytes]:
-    directory = tmp_path / f"pane{len(shells)}"
-    directory.mkdir()
-    (directory / "server.py").write_text(STAND_IN_SERVER, encoding="utf-8")
+    directory = tmp_path / "releases" / f"pane{len(shells)}"
+    directory.mkdir(parents=True)
+    (directory / "charliebot-server").write_text(STAND_IN_SERVER, encoding="utf-8")
     shell = subprocess.Popen(
         ["bash", "-c", '"$1" "$2" "$3"; true', "bash", sys.executable,
-         str(directory / "server.py"), mode])
+         str(directory / "charliebot-server"), mode])
     shells.append(shell)
     return shell
 
@@ -1021,7 +1012,7 @@ def _escalate(tmp_path: pathlib.Path, shell_pid: int) -> subprocess.CompletedPro
       "CHARLIEBOT_SWITCH_STOP_WAIT_S": "1",
   }
   return subprocess.run(
-      ["bash", "-c", 'source "$1" python && escalate_pane', "bash",
+      ["bash", "-c", f'source "$1" rust {RUST_SHA} && escalate_pane', "bash",
        str(SWITCH)],
       env=env,
       capture_output=True,
@@ -1054,8 +1045,8 @@ def test_escalation_sigkills_a_survivor_and_spares_a_server_outside_the_pane(
   server = _server_under(shell.pid)
   outside = tmp_path / "outside"
   outside.mkdir()
-  (outside / "server.py").write_text(STAND_IN_SERVER, encoding="utf-8")
-  bystander = subprocess.Popen([sys.executable, str(outside / "server.py"), "honest"])
+  (outside / "charliebot-server").write_text(STAND_IN_SERVER, encoding="utf-8")
+  bystander = subprocess.Popen([sys.executable, str(outside / "charliebot-server"), "honest"])
   try:
     proc = _escalate(tmp_path, shell.pid)
     assert bystander.poll() is None, "a server outside the pane was signaled"
@@ -1071,27 +1062,28 @@ def test_escalation_sigkills_a_survivor_and_spares_a_server_outside_the_pane(
 @pytest.mark.integration
 def test_switch_on_a_real_pane_restores_then_round_trips_then_exits_3(world: World) -> None:
   """Every pane-driven exit in one tmux server: exit 2 after a failed readback, exit 0 each way, exit 3 on sync failure,
-  with a SIGKILL escalation on the last stop.
+  with a SIGKILL escalation on the switch back.
 
   The steps share one test because the integration cap leaves a single slot. Each step builds on the state the
   previous one leaves, so the order is the test.
   """
-  # Stops wait 1 s here: the final switch stops a Python server that ignores SIGTERM, which exercises the SIGKILL
-  # escalation within the budget.
+  # Stops wait 1 s here: the switch back stops a release that ignores SIGTERM, which exercises the SIGKILL escalation
+  # within the budget.
   world.env["CHARLIEBOT_SWITCH_STOP_WAIT_S"] = "1"
   pane = _start_pane(world)
   _start_server(world, pane)
   _seed_live_run(world, "run-live", "claude-opus")
 
-  # The Rust readback cannot adopt the live run: the switch fails after it stopped Python and restores Python.
+  # The Rust readback cannot adopt the live run: the switch fails after it stopped the old release and restores it.
   _write_behavior(world.releases / RUST_SHA, adopt=False)
   proc = _switch(world, "rust", RUST_SHA)
   assert proc.returncode == 2, _report(world, proc)
   _assert_server_scope_records(world, 3)
   _assert_untouched(world)
 
-  # With a passing readback the live run is adopted, and the clone fast-forwards to the PORT_BASELINE commit.
-  _write_behavior(world.releases / RUST_SHA)
+  # With a passing readback the live run is adopted, and the clone fast-forwards to the PORT_BASELINE commit. This
+  # release ignores SIGTERM, so the switch back has to SIGKILL it.
+  _write_behavior(world.releases / RUST_SHA, ignore_sigterm=True)
   proc = _switch(world, "rust", RUST_SHA)
   assert proc.returncode == 0, _report(world, proc)
   _assert_server_scope_records(world, 4)
@@ -1101,15 +1093,13 @@ def test_switch_on_a_real_pane_restores_then_round_trips_then_exits_3(world: Wor
   assert _version_status(world.port) == 200
   assert '"run_id":"run-live"' in _latest_log(world)
 
-  # The way back needs no fast-forward: the clone stays at the baseline and current is removed. The Python server it
-  # starts ignores SIGTERM, so the next switch has to SIGKILL it.
-  _write_behavior(world.clone, ignore_sigterm=True)
-  proc = _switch(world, "python")
+  # The way back to the old release: current names it again, and the clone stays at the baseline.
+  proc = _switch(world, "rust", OLD_SHA)
   assert proc.returncode == 0, _report(world, proc)
   _assert_server_scope_records(world, 5)
-  assert not (world.releases / "current").is_symlink()
+  assert os.readlink(world.releases / "current") == OLD_SHA
   assert _git(world.clone, "rev-parse", "HEAD") == world.baseline
-  assert _serves_python(world)
+  assert _serves_release(world, OLD_SHA)
 
   # A sync that fails again during the restore leaves the server down, which is exit 3.
   (world.clone / "fail-sync").write_text("", encoding="utf-8")

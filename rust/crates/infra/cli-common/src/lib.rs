@@ -18,3 +18,4 @@ pub mod resolve;
 pub mod skew;
 pub mod timeouts;
 pub mod urlencode;
+pub mod wire;

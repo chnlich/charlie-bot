@@ -5,5 +5,4 @@ cycle charliebot-server: app, auth, request_log, routes, routes::pages, routes::
 cycle charliebot-session-api: crate, detail, fork_routes, prompt_routes, routes, websocket, write_routes
 cycle charliebot-store: events, listing, projection, run_records, session_events, store, task_tree, thinking, write_faults
 cycle charliebot-tasks: dispatch, master_queue, master_run, master_state, midturn_delivery, task_input_prompt
-cycle charliebot-tasks: execution, recovery
 cycle charliebot-usage-page: cool_storage, crate

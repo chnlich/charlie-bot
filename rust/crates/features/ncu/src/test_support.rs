@@ -23,9 +23,9 @@ pub fn repo_root() -> PathBuf {
   Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../..").canonicalize().unwrap()
 }
 
-/// The parity harness's fake Nsight install: `bin/ncu` and `extras/python/ncu_report.py`.
+/// This crate's fake Nsight install: `bin/ncu` and `extras/python/ncu_report.py`.
 pub fn fake_install() -> PathBuf {
-  repo_root().join("rust/parity/fakes/nsight")
+  repo_root().join("rust/crates/features/ncu/tests/fixtures/nsight")
 }
 
 /// A synthetic install under a temporary directory, with an `ncu` that prints the two-kernel CSV.

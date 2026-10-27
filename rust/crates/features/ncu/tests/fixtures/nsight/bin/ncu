@@ -1,5 +1,5 @@
 #!/usr/bin/python3 -I
-"""A synthetic `ncu` for the parity harness: `ncu --import <file> --csv --page details` prints the report's CSV."""
+"""A synthetic `ncu` for the ncu crate's tests: `ncu --import <file> --csv --page details` prints the report's CSV."""
 
 import json
 import sys

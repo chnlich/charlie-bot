@@ -10,10 +10,13 @@ switch task lands.
 ## Golden cases
 
 `tests/golden/<subcommand>/<case>.json` records one invocation: `argv`, `env`, `cwd`, `files`
-(written under a temp root before the run), `responses` (the stub server's scripted answers:
-`status` + `body`, or `refuse_connect`, or `drop_after_request`), and `expect` (`requests`,
+(written under a temp root before the run), `executables` (scripts written with mode 0755, for a
+stub renderer or agent CLI — no case starts the real one), `responses` (the stub server's scripted
+answers: `status` + `body`, or `refuse_connect`, or `drop_after_request`), and `expect` (`requests`,
 `stdout`, `stderr`, `exit`, `files`). `{root}` and `{port}` in the case's strings become the run's
-temp root and stub port; `{uuid4}` in `expect` matches any UUID4 text. Cases with
+temp root and stub port; a file's content of the form `{file:<checkout-relative path>}` reads that
+file from the checkout, so a case uses the shipped prompt or genre template instead of embedding a
+copy; `{uuid4}` and `{timestamp}` in `expect` match any text of their shape. Cases with
 `parser_generated: true` compare the exit code only, and cases with `expect_from: "rust"` record
 from the Rust binary (their contract is the dispatcher spec itself, which differs from the Python
 CLI's vocabulary by design).

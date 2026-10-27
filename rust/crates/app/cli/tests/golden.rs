@@ -12,6 +12,7 @@
 use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -32,6 +33,12 @@ const CASES_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/golden");
 fn uuid4_regex() -> &'static Regex {
   static UUID4: OnceLock<Regex> = OnceLock::new();
   UUID4.get_or_init(|| Regex::new(r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}").unwrap())
+}
+
+/// A UTC `%Y%m%dT%H%M%SZ` stamp, the shape the cold-read request id carries.
+fn timestamp_regex() -> &'static Regex {
+  static TIMESTAMP: OnceLock<Regex> = OnceLock::new();
+  TIMESTAMP.get_or_init(|| Regex::new(r"[0-9]{8}T[0-9]{6}Z").unwrap())
 }
 
 #[test]
@@ -81,6 +88,22 @@ const PORTED_PYTHON_TESTS: &[&str] = &[
   "test_dialog_turns_prints_whole_history_when_it_holds_fewer_turns",
   "test_dialog_turns_rejects_values_below_one",
   "test_dialog_turns_archived_session_header_counts_events",
+  "test_plan_present_posts_to_present_endpoint",
+  "test_plan_registration_prints_its_verbs_reminder",
+  "test_plan_approve_posts_plan_id",
+  "test_plan_close_posts",
+  "test_plan_server_rejection_exits_nonzero_with_detail_on_stderr",
+  "test_plan_session_auto_derived_from_cwd",
+  "test_plan_diff_prints_five_keys_computed_locally",
+  "test_cli_unknown_genre_is_usage_error",
+  "test_background_flag_is_a_usage_error",
+  "test_cli_assertions_only_fails_when_the_height_cannot_be_measured",
+  "test_cli_probe_runs_after_assertions_pass_and_prints_backend_and_answers",
+  "test_cli_in_a_manager_session_delegates_the_cold_read",
+  "test_cli_in_a_manager_session_exits_1_when_the_server_refuses",
+  "test_cli_in_a_worker_session_runs_the_cold_read_in_the_foreground",
+  "test_cli_with_no_session_identity_runs_the_cold_read_in_the_foreground",
+  "test_cli_foreground_prints_every_model_failed_and_exits_1",
 ];
 
 #[test]
@@ -334,11 +357,27 @@ fn run_case(case_path: &Path, record_command: Option<&str>) -> Result<(), String
         std::fs::create_dir_all(&path).map_err(|error| format!("{}: {error}", path.display()))?;
         continue;
       }
-      let text = substitute(content.as_str().ok_or("file contents must be strings")?);
+      let text = checkout_file(&substitute(content.as_str().ok_or("file contents must be strings")?))?;
       if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|error| format!("{}: {error}", parent.display()))?;
       }
       std::fs::write(&path, text).map_err(|error| format!("{}: {error}", path.display()))?;
+    }
+  }
+
+  // A case's executable files: the stub renderer and stub agent CLIs a check launches. The bytes are a script, and
+  // the mode makes it runnable; `files` alone cannot, and the tests must start no real browser or agent CLI.
+  if let Some(executables) = case.get("executables").and_then(Value::as_object) {
+    for (relative, content) in executables {
+      let path = temp.path().join(substitute(relative));
+      let text = checkout_file(&substitute(content.as_str().ok_or("executable contents must be strings")?))?;
+      if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| format!("{}: {error}", parent.display()))?;
+      }
+      std::fs::write(&path, text).map_err(|error| format!("{}: {error}", path.display()))?;
+      let mut permissions = std::fs::metadata(&path).map_err(|error| error.to_string())?.permissions();
+      permissions.set_mode(0o755);
+      std::fs::set_permissions(&path, permissions).map_err(|error| format!("{}: {error}", path.display()))?;
     }
   }
 
@@ -406,10 +445,20 @@ fn run_case(case_path: &Path, record_command: Option<&str>) -> Result<(), String
   let exit = status.code().ok_or("the CLI process exited from a signal")?;
 
   if recording {
-    record_case(case_path, &case, &stdout, &stderr, exit, &requests)
+    record_case(case_path, &case, &root, &stdout, &stderr, exit, &requests)
   } else {
     replay_case(temp.path(), &case, &stdout, &stderr, exit, &requests)
   }
+}
+
+/// A case's file content: `{file:<checkout-relative path>}` reads the checkout's own file, so a case can use the
+/// shipped prompt or genre template without embedding a copy that drifts.
+fn checkout_file(content: &str) -> Result<String, String> {
+  let Some(relative) = content.strip_prefix("{file:").and_then(|rest| rest.strip_suffix('}')) else {
+    return Ok(content.to_string());
+  };
+  let path = Path::new(REPO_ROOT).join(relative);
+  std::fs::read_to_string(&path).map_err(|error| format!("{}: {error}", path.display()))
 }
 
 /// Wait for one CLI process. Past `PROCESS_TIMEOUT` it is killed and `None` answers.
@@ -432,6 +481,7 @@ fn wait_bounded(child: &mut Child) -> Result<Option<ExitStatus>, String> {
 fn record_case(
   case_path: &Path,
   case: &Value,
+  root: &str,
   stdout: &str,
   stderr: &str,
   exit: i32,
@@ -449,7 +499,10 @@ fn record_case(
   expect.insert("stdout".to_string(), Value::String(replace_uuid4(stdout)));
   expect.insert("stderr".to_string(), Value::String(replace_uuid4(stderr)));
   expect.insert("exit".to_string(), json!(exit));
-  expect.insert("requests".to_string(), Value::Array(requests.iter().map(uuid4_in_value).collect()));
+  expect.insert(
+    "requests".to_string(),
+    Value::Array(requests.iter().map(|request| recorded_value(request, root)).collect()),
+  );
   updated["expect"] = Value::Object(expect);
 
   let style = charliebot_core::pyfmt::JsonStyle {
@@ -490,12 +543,14 @@ fn replay_case(
   if requests.len() != expected_requests.len() {
     return Err(format!("the stub received {} request(s), expected {}", requests.len(), expected_requests.len()));
   }
+  let root_text = root.to_str().ok_or("the temp root is not Unicode")?;
   for (index, (expected, actual)) in expected_requests.iter().zip(requests).enumerate() {
-    if !value_matches(expected, actual) {
+    let actual = root_placed_value(actual, root_text);
+    if !value_matches(expected, &actual) {
       return Err(format!(
         "request {index} differs:\nexpected: {}\nactual:   {}",
         charliebot_core::pyfmt::json_dumps(expected, &indent_two_style()),
-        charliebot_core::pyfmt::json_dumps(actual, &indent_two_style())
+        charliebot_core::pyfmt::json_dumps(&actual, &indent_two_style())
       ));
     }
   }
@@ -522,33 +577,34 @@ fn indent_two_style() -> charliebot_core::pyfmt::JsonStyle {
 }
 
 /// The run's temp root reads as `{root}` so a case file does not bake one run's path in.
+///
+/// The Python CLI's structlog console lines carry a wall-clock stamp and a pid, so they can never replay; they are
+/// the Python process's own chatter, not the command's answer, and the Rust CLI prints none.
 fn normalize(text: &str, root: &str) -> String {
-  text.replace(root, "{root}")
+  static LOG_LINE: OnceLock<Regex> = OnceLock::new();
+  let log_line = LOG_LINE.get_or_init(|| {
+    Regex::new(r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d \[(?:debug|info|warning|error|critical)\s*\]")
+      .expect("the structlog console prefix is a valid regex")
+  });
+  text.replace(root, "{root}").split_inclusive('\n').filter(|line| !log_line.is_match(line)).collect()
 }
 
 fn replace_uuid4(text: &str) -> String {
-  uuid4_regex().replace_all(text, "{uuid4}").into_owned()
+  timestamp_regex().replace_all(&uuid4_regex().replace_all(text, "{uuid4}"), "{timestamp}").into_owned()
 }
 
-/// Expected text with `{uuid4}` placeholders against actual text.
+/// Expected text with `{uuid4}` / `{timestamp}` placeholders against actual text.
+///
+/// The placeholders become their patterns after `regex::escape`, so the rest of the expected text still compares
+/// byte for byte.
 fn text_matches(expected: &str, actual: &str) -> bool {
-  let mut rest = actual;
-  let parts: Vec<&str> = expected.split("{uuid4}").collect();
-  for (index, part) in parts.iter().enumerate() {
-    if index + 1 == parts.len() {
-      return rest == *part;
-    }
-    let Some(after) = rest.strip_prefix(part) else { return false };
-    let Some(uuid) = uuid4_regex().find(after) else { return false };
-    if uuid.start() != 0 {
-      return false;
-    }
-    rest = &after[uuid.end()..];
-  }
-  true
+  let pattern = regex::escape(expected)
+    .replace(r"\{uuid4\}", r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}")
+    .replace(r"\{timestamp\}", r"[0-9]{8}T[0-9]{6}Z");
+  Regex::new(&format!("^{pattern}$")).is_ok_and(|regex| regex.is_match(actual))
 }
 
-/// Expected request values against actual ones; `{uuid4}` matches any UUID4 text.
+/// Expected request values against actual ones; `{uuid4}` and `{timestamp}` match any value of their shape.
 fn value_matches(expected: &Value, actual: &Value) -> bool {
   match (expected, actual) {
     (Value::String(expected), Value::String(actual)) => text_matches(expected, actual),
@@ -564,12 +620,24 @@ fn value_matches(expected: &Value, actual: &Value) -> bool {
   }
 }
 
-fn uuid4_in_value(value: &Value) -> Value {
+fn recorded_value(value: &Value, root: &str) -> Value {
   match value {
-    Value::String(text) => Value::String(replace_uuid4(text)),
-    Value::Array(items) => Value::Array(items.iter().map(uuid4_in_value).collect()),
+    Value::String(text) => Value::String(replace_uuid4(&text.replace(root, "{root}"))),
+    Value::Array(items) => Value::Array(items.iter().map(|item| recorded_value(item, root)).collect()),
     Value::Object(members) => {
-      Value::Object(members.iter().map(|(key, value)| (key.clone(), uuid4_in_value(value))).collect())
+      Value::Object(members.iter().map(|(key, value)| (key.clone(), recorded_value(value, root))).collect())
+    }
+    other => other.clone(),
+  }
+}
+
+/// Actual request values with the run's temp root replaced by `{root}`, matching how the case recorded them.
+fn root_placed_value(value: &Value, root: &str) -> Value {
+  match value {
+    Value::String(text) => Value::String(text.replace(root, "{root}")),
+    Value::Array(items) => Value::Array(items.iter().map(|item| root_placed_value(item, root)).collect()),
+    Value::Object(members) => {
+      Value::Object(members.iter().map(|(key, value)| (key.clone(), root_placed_value(value, root))).collect())
     }
     other => other.clone(),
   }

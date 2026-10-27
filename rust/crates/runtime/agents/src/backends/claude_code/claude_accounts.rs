@@ -18,7 +18,6 @@ use time::format_description::well_known::Rfc3339;
 use time::{Duration, OffsetDateTime};
 use walkdir::WalkDir;
 
-use super::usage_quota::QuotaState;
 use super::{claude_config, login_dirs};
 
 pub const POOL_DOMAIN: &str = "pool";
@@ -53,6 +52,22 @@ struct Readings {
   panel: HashMap<String, PanelReading>,
   auth_failures: HashMap<String, UtcDateTime>,
   login_notified: HashSet<String>,
+}
+
+/// The process-wide state of the quota accounts, kept on the shared [`ClaudeAccountState`]: the User-Agent the probe
+/// resolved, and the warnings already logged.
+#[derive(Default)]
+pub struct QuotaState {
+  pub(super) user_agent: tokio::sync::OnceCell<String>,
+  pub(super) warned: std::sync::Mutex<Warned>,
+}
+
+#[derive(Default)]
+pub(super) struct Warned {
+  /// `(event, credentials path)` pairs. A read of a path that returns a token forgets its pairs.
+  pub(super) credentials: HashSet<(&'static str, PathBuf)>,
+  /// `(account, slot, reason)` triples of unrecognized limit shapes, logged once per process.
+  pub(super) limit_shapes: HashSet<(String, String, String)>,
 }
 
 /// One server's mutable observations for every Claude account. The quota accounts of the usage panel keep their

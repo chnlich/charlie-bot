@@ -31,8 +31,8 @@ use regex::Regex;
 use reqwest::StatusCode;
 use reqwest::header::{AUTHORIZATION, USER_AGENT};
 use serde_json::{Map, Value, json};
-use tokio::sync::OnceCell;
 
+pub use super::claude_accounts::QuotaState;
 use super::claude_accounts::{self, ClaudeAccountState, json_truthy};
 use super::claude_config::{AccountsConfig, ClaudeAccount};
 use super::login_dirs::{CREDENTIALS_FILE, ClaudeHost};
@@ -83,22 +83,6 @@ impl QuotaHttp {
   pub fn with_endpoints(client: reqwest::Client, usage_url: &str, token_url: &str) -> Self {
     Self { client, usage_url: usage_url.to_string(), token_url: token_url.to_string() }
   }
-}
-
-/// The process-wide state of the quota accounts, kept on the shared [`ClaudeAccountState`]: the User-Agent the probe
-/// resolved, and the warnings already logged.
-#[derive(Default)]
-pub struct QuotaState {
-  user_agent: OnceCell<String>,
-  warned: Mutex<Warned>,
-}
-
-#[derive(Default)]
-struct Warned {
-  /// `(event, credentials path)` pairs. A read of a path that returns a token forgets its pairs.
-  credentials: HashSet<(&'static str, PathBuf)>,
-  /// `(account, slot, reason)` triples of unrecognized limit shapes, logged once per process.
-  limit_shapes: HashSet<(String, String, String)>,
 }
 
 /// What one account carries between rounds: why its last fetch returned nothing, and its backoff.

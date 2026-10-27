@@ -20,10 +20,12 @@ use regex::Regex;
 use rusqlite::{Connection, OpenFlags};
 use serde_json::{Map, Value};
 
-use super::USAGE_SOURCE;
 use super::usage_sweep;
 use crate::backends::usage_time::utc_isoformat;
 use crate::cli_base::truthy;
+
+/// The usage source's name: the ledger's source value and the usage page's card title.
+pub const USAGE_SOURCE: &str = "opencode";
 
 /// The one account of the opencode database (`_ACCOUNT`).
 const ACCOUNT: &str = "default";

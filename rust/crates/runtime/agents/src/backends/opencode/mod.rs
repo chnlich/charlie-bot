@@ -29,9 +29,7 @@ pub use options::OpenCodeOption;
 pub use server::{
   OpenCodeHost, OpenCodeProgram, OpenCodeServer, OpenCodeServerPool, ServerTimeouts, Turn, headless_config,
 };
-
-/// The usage source's name: the ledger's source value and the usage page's card title.
-pub const USAGE_SOURCE: &str = "opencode";
+pub use usage_logs::USAGE_SOURCE;
 
 /// Register the backend type, shared server factory, usage source and snapshot reading limits.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {

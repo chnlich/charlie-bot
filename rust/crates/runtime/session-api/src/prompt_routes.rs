@@ -17,7 +17,7 @@ use charliebot_store::metadata::TaskProfile;
 use charliebot_tasks::prompts::{self, PromptEnv, TaskPromptError};
 use serde_json::{Value, json};
 
-use crate::routes::store_error;
+use crate::route_support::store_error;
 
 /// `EMPTY_BACKENDS_OPTIONS_REFUSAL` (`src/runtime/spawner_backends.py:46`): a preview refuses a config with no backend.
 const EMPTY_BACKENDS_OPTIONS_REFUSAL: &str = "session backend resolution requires a configured backends.options entry";

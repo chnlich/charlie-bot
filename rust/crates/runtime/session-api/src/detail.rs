@@ -26,8 +26,8 @@ use http::header::HeaderValue;
 use lru::LruCache;
 use serde_json::{Map, Value, json};
 
-use crate::routes::Query;
-use crate::{blocking_store, listing, worker_transcript};
+use crate::route_support::{Query, blocking_store};
+use crate::{listing, worker_transcript};
 
 const BOOTSTRAP_MESSAGE_LIMIT: usize = 40;
 const FILE_GZIP_MEMO_LIMIT: usize = 2;
@@ -641,7 +641,7 @@ pub(crate) fn response_metadata(store: &Store, meta: &SessionMetadata) -> StoreR
 }
 
 fn store_error(error: StoreError) -> Response {
-  crate::routes::store_error(error)
+  crate::route_support::store_error(error)
 }
 
 fn is_bad_run_cursor(error: &StoreError) -> bool {

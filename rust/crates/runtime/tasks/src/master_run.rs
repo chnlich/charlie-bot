@@ -516,7 +516,7 @@ impl RunProcess for TurnProcess<'_> {
         charliebot_registry::midturn_delivery::bind_process(&self.item.task_run.run_id, built.backend.midturn_run_id())
           .await?;
       }
-      let runner = Arc::new(AgentRunner::new(built.backend, built.launch.clone()));
+      let runner = Arc::new(AgentRunner::new(&built.backend_type, built.backend, built.launch.clone()));
       self.was_built = true;
       let session_id = metadata.id.clone();
       let (on_event, mut receiver) =

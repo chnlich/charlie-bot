@@ -11,7 +11,9 @@ use std::time::Duration;
 
 use anyhow::{Context, bail};
 use charliebot_registry::Registry;
-use charliebot_registry::backend::{AgentBackend, Env, ExitedProbe, LaunchArgs, TransportKind};
+use charliebot_registry::backend::{
+  AgentBackend, Env, ExitedProbe, LaunchArgs, ServeTransport, ServeTurnArgs, TransportKind,
+};
 use charliebot_registry::context::FeatureContext;
 use charliebot_store::run_records::{RAW_LOG_NAME, STDERR_LOG_NAME};
 use futures_util::future::BoxFuture;
@@ -138,10 +140,13 @@ struct ActiveProcess {
   pid: u32,
   exit: watch::Receiver<Option<Result<i32, String>>>,
   detached: AtomicBool,
+  /// The serve transport of a serve run, which finishes the turn on terminate. `None` for the other transports.
+  serve: Option<Arc<dyn ServeTransport>>,
 }
 
 /// One registered backend instance and its single raw-log launch.
 pub struct AgentRunner {
+  backend_type: String,
   backend: tokio::sync::Mutex<Box<dyn AgentBackend>>,
   launch: LaunchArgs,
   active: Mutex<Option<Arc<ActiveProcess>>>,
@@ -151,9 +156,10 @@ pub struct AgentRunner {
 }
 
 impl AgentRunner {
-  /// Create a runner from the backend built by `Registry`.
-  pub fn new(backend: Box<dyn AgentBackend>, launch: LaunchArgs) -> Self {
+  /// Create a runner from the backend built by `Registry`, of the registered backend type `backend_type`.
+  pub fn new(backend_type: &str, backend: Box<dyn AgentBackend>, launch: LaunchArgs) -> Self {
     Self {
+      backend_type: backend_type.to_string(),
       backend: tokio::sync::Mutex::new(backend),
       launch,
       active: Mutex::new(None),
@@ -203,9 +209,11 @@ impl AgentRunner {
       &request.environment_overlay,
     );
     let final_env = backend.prepare_env(child_environment)?;
-    if transport == TransportKind::Serve {
+    if transport == TransportKind::Serve
+      && let Some(serve) = request.registry.serve_transport(&self.backend_type)
+    {
       drop(backend);
-      return self.run_serve(request, &command, final_env).await;
+      return self.run_serve(request, serve, &command, final_env).await;
     }
     let raw_path = log_dir.join(RAW_LOG_NAME);
     let stderr_path = log_dir.join(STDERR_LOG_NAME);
@@ -283,7 +291,7 @@ impl AgentRunner {
     let pid = identity.pid;
     let (sender, receiver) = watch::channel(None);
     tokio::spawn(reap_child(child, sender));
-    let active = Arc::new(ActiveProcess { pid, exit: receiver, detached: AtomicBool::new(false) });
+    let active = Arc::new(ActiveProcess { pid, exit: receiver, detached: AtomicBool::new(false), serve: None });
     *self.active.lock().expect("active process lock poisoned") = Some(Arc::clone(&active));
 
     if let Some(prompt) = midturn_prompt {
@@ -383,8 +391,14 @@ impl AgentRunner {
 
   /// The final-stdout transport (`antigravity_cli.py` `run`): stdout is piped and teed to `stdout.log`, stderr streams
   /// to `stderr.log`, and once the process exits the backend turns the whole output into events.
-  async fn run_serve(&self, request: RunRequest, command: &[String], env: Env) -> anyhow::Result<RunOutcome> {
-    let plan = crate::backends::opencode::backend::take_run_plan(command)?;
+  async fn run_serve(
+    &self,
+    request: RunRequest,
+    serve: Arc<dyn ServeTransport>,
+    command: &[String],
+    env: Env,
+  ) -> anyhow::Result<RunOutcome> {
+    let serve_turn = serve.take_turn(command)?;
     let original_program = command.first().context("serve backend command is empty")?.clone();
     let (program, args): (std::ffi::OsString, Vec<std::ffi::OsString>) = if request.child_waits_for_spawn_callback {
       let mut args =
@@ -422,23 +436,26 @@ impl AgentRunner {
     let cgroup = spawned.cgroup.take();
     let (sender, receiver) = watch::channel(None);
     tokio::spawn(reap_child(spawned.child, sender));
-    let active = Arc::new(ActiveProcess { pid: identity.pid, exit: receiver, detached: AtomicBool::new(false) });
+    let active = Arc::new(ActiveProcess {
+      pid: identity.pid,
+      exit: receiver,
+      detached: AtomicBool::new(false),
+      serve: Some(serve),
+    });
     *self.active.lock().expect("active process lock poisoned") = Some(Arc::clone(&active));
 
-    let run_result = crate::backends::opencode::backend::run_turn(
-      plan,
-      crate::backends::opencode::backend::OpenCodeRunArgs {
+    let run_result = serve_turn
+      .run(ServeTurnArgs {
         prompt: request.prompt,
         cwd: request.cwd,
         env,
         uploaded_files: request.uploaded_files,
         process_id: identity.pid,
-        cgroup: cgroup.clone(),
+        cgroup_path: cgroup.as_ref().map(|state| state.path.clone()),
         exit: active.exit.clone(),
         on_event: request.on_event.clone(),
-      },
-    )
-    .await;
+      })
+      .await;
 
     if wait_for_exit(&active, Duration::ZERO).await?.is_none() {
       self.graceful_shutdown(&active, request.cleanup_timeout, "backend_terminate_timeout").await?;
@@ -496,7 +513,7 @@ impl AgentRunner {
     }
     let (sender, receiver) = watch::channel(None);
     tokio::spawn(reap_child(spawned.child, sender));
-    let active = Arc::new(ActiveProcess { pid, exit: receiver, detached: AtomicBool::new(false) });
+    let active = Arc::new(ActiveProcess { pid, exit: receiver, detached: AtomicBool::new(false), serve: None });
     *self.active.lock().expect("active process lock poisoned") = Some(Arc::clone(&active));
 
     let stderr_path = log_dir.join(STDERR_LOG_NAME);
@@ -563,7 +580,10 @@ impl AgentRunner {
     self.terminated.store(true, Ordering::Release);
     let active = self.active.lock().expect("active process lock poisoned").clone();
     if let Some(active) = active {
-      let finish = crate::backends::opencode::server::finish_active_turn(active.pid).await;
+      let finish = match &active.serve {
+        Some(serve) => serve.finish_active_turn(active.pid).await,
+        None => Ok(()),
+      };
       let shutdown = self.graceful_shutdown(&active, kill::KILL_ESCALATION_GRACE, "backend_terminate_timeout").await;
       finish?;
       shutdown?;
@@ -827,7 +847,7 @@ mod tests {
     // This test uses a tiny AgentBackend so the child is an explicit /bin/sh process.
     let backend: Box<dyn AgentBackend> =
       Box::new(ShellBackend::new("printf '%s\\n' '{\"type\":\"result\"}'; printf 'synthetic stderr' >&2"));
-    let runner = AgentRunner::new(backend, launch);
+    let runner = AgentRunner::new("shell", backend, launch);
     let seen = Arc::new(Mutex::new(Vec::new()));
     let events = Arc::clone(&seen);
     let mut request = test_request(
@@ -859,6 +879,7 @@ mod tests {
     let root = tempfile::tempdir().unwrap();
     let marker = root.path().join("backend-started");
     let runner = AgentRunner::new(
+      "shell",
       Box::new(ShellBackend::new("touch \"$MARKER\"; printf '%s\\n' '{\"type\":\"result\"}'")),
       LaunchArgs { log_dir: Some(root.path().join("logs")), ..LaunchArgs::default() },
     );
@@ -936,6 +957,7 @@ mod tests {
     let root = tempfile::tempdir().unwrap();
     let marker = root.path().join("backend-started");
     let runner = AgentRunner::new(
+      "shell",
       Box::new(ShellBackend::new("touch \"$MARKER\"; printf '%s\\n' '{\"type\":\"result\"}'")),
       LaunchArgs { log_dir: Some(root.path().join("logs")), ..LaunchArgs::default() },
     );
@@ -995,6 +1017,7 @@ mod tests {
       let (pool_filled, pool_filled_rx) = oneshot::channel();
       let (release_pool, pool_released) = std::sync::mpsc::channel();
       let runner = AgentRunner::new(
+        "shell",
         Box::new(ShellBackend::filling_the_blocking_pool("touch \"$MARKER\"", pool_filled, pool_released)),
         LaunchArgs { log_dir: Some(log_dir.clone()), ..LaunchArgs::default() },
       );
@@ -1053,6 +1076,7 @@ mod tests {
     let root = tempfile::tempdir().unwrap();
     let marker = root.path().join("final-stdout-started");
     let runner = AgentRunner::new(
+      "shell",
       Box::new(FinalStdoutShell::new("touch \"$MARKER\"; printf 'answer'", None, None)),
       LaunchArgs { log_dir: Some(root.path().join("logs")), ..LaunchArgs::default() },
     );
@@ -1111,6 +1135,7 @@ mod tests {
     fs::create_dir(&logs).unwrap();
     let instructions = logs.join("harness_instructions.md");
     let runner = AgentRunner::new(
+      "shell",
       Box::new(ShellBackend::new("printf '%s\\n' '{\"type\":\"result\"}'")),
       LaunchArgs {
         instructions_content: Some("synthetic harness rules".to_string()),
@@ -1139,6 +1164,7 @@ mod tests {
     let root = tempfile::tempdir().unwrap();
     let logs = root.path().join("logs");
     let runner = AgentRunner::new(
+      "shell",
       Box::new(ShellBackend::new(r#"head -c 70000 /dev/zero | tr '\000' x >&2; printf '%s\n' '{"type":"result"}'"#)),
       LaunchArgs { log_dir: Some(logs.clone()), ..LaunchArgs::default() },
     );
@@ -1161,6 +1187,7 @@ mod tests {
     let root = tempfile::tempdir().unwrap();
     let logs = root.path().join("logs");
     let runner = AgentRunner::new(
+      "shell",
       Box::new(ShellBackend::new(r#"printf '%s\n' '{"type":"result"}'; kill -STOP $$"#)),
       LaunchArgs { log_dir: Some(logs.clone()), ..LaunchArgs::default() },
     );
@@ -1242,6 +1269,7 @@ mod tests {
     let script =
       format!("printf 'max 1\\noom_kill 0\\n' > {}; kill -KILL $$", cgroup_dir.join("memory.events").display());
     let runner = AgentRunner::new(
+      "shell",
       Box::new(ShellBackend::new(script)),
       LaunchArgs {
         log_dir: Some(root.path().join("logs")),
@@ -1274,6 +1302,7 @@ mod tests {
   async fn terminate_signals_the_child_group_and_waits_for_exit() {
     let root = tempfile::tempdir().unwrap();
     let runner = Arc::new(AgentRunner::new(
+      "shell",
       Box::new(ShellBackend::new("exec /bin/sleep 30")),
       LaunchArgs { log_dir: Some(root.path().join("logs")), ..LaunchArgs::default() },
     ));
@@ -1300,6 +1329,7 @@ mod tests {
     let root = tempfile::tempdir().unwrap();
     let spawned = root.path().join("spawned");
     let runner = AgentRunner::new(
+      "shell",
       Box::new(ShellBackend::refusing_uploads(format!("touch {}", spawned.display()), "image refused")),
       LaunchArgs { log_dir: Some(root.path().join("logs")), ..LaunchArgs::default() },
     );
@@ -1338,6 +1368,7 @@ mod tests {
       finished.display()
     );
     let runner = Arc::new(AgentRunner::new(
+      "shell",
       Box::new(ShellBackend::new(script)),
       LaunchArgs { log_dir: Some(root.path().join("logs")), ..LaunchArgs::default() },
     ));
@@ -1376,6 +1407,7 @@ mod tests {
     fs::create_dir(&logs).unwrap();
     fs::write(logs.join(FINAL_STDOUT_LOG_NAME), "stale").unwrap();
     let runner = AgentRunner::new(
+      "shell",
       Box::new(FinalStdoutShell::new("printf 'answer'; printf 'warned' >&2; exit 0", Some("envelope guard"), None)),
       LaunchArgs { log_dir: Some(logs.clone()), ..LaunchArgs::default() },
     );
@@ -1411,6 +1443,7 @@ mod tests {
   async fn final_stdout_run_records_the_exit_code_its_backend_chose() {
     let root = tempfile::tempdir().unwrap();
     let runner = AgentRunner::new(
+      "shell",
       Box::new(FinalStdoutShell::new("exit 3", None, Some(1))),
       LaunchArgs { log_dir: Some(root.path().join("logs")), ..LaunchArgs::default() },
     );
@@ -1467,6 +1500,7 @@ mod tests {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let events = Arc::clone(&seen);
     let runner = AgentRunner::new(
+      "shell",
       Box::new(ShellBackend::new(script.to_string())),
       LaunchArgs { log_dir: Some(log_dir), ..LaunchArgs::default() },
     );

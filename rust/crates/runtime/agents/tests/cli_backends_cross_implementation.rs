@@ -559,7 +559,7 @@ async fn run_finish(fx: &Fixture, case: &Value) -> Value {
   let host = CliHost { path: path_text(&dir), home: fx.home.clone() };
   let launch = LaunchArgs { resume_session_id: opt_text(&case["resume"]), ..LaunchArgs::default() };
   let backend = AntigravityFactory::new(host).build(Some(&option_of(case)), &fx.config(), launch).unwrap();
-  let runner = AgentRunner::new(backend, LaunchArgs::default());
+  let runner = AgentRunner::new("antigravity", backend, LaunchArgs::default());
   let environment =
     AgentBaseEnvironment { values: env_map(&json!({"PATH": format!("{}:/usr/bin:/bin", path_text(&dir))})) };
   let mut request = RunRequest::new(

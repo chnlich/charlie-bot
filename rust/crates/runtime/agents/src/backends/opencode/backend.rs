@@ -10,7 +10,10 @@ use anyhow::{Context, bail};
 use charliebot_core::event_types;
 use charliebot_core::pyfmt::python_str;
 use charliebot_core::pystr;
-use charliebot_registry::backend::{AgentBackend, BackendFactory, Env, LaunchArgs, Translate, TransportKind};
+use charliebot_registry::backend::{
+  AgentBackend, BackendFactory, BackendLifecycle, Env, LaunchArgs, ServeTransport, ServeTurn, ServeTurnArgs,
+  ServeTurnResult, Translate, TransportKind,
+};
 use futures_util::future::BoxFuture;
 use nix::sys::signal::Signal;
 use serde_json::{Map, Value, json};
@@ -23,7 +26,7 @@ use super::server::{OpenCodeHost, OpenCodeServer, OpenCodeServerPool, Turn, Turn
 use crate::cli_base::{apply_proxy_env, image_mime};
 use crate::event_builders;
 use crate::runner::EventFn;
-use crate::transport::cgroup::{SessionCgroup, SessionCgroupConfig};
+use crate::transport::cgroup::SessionCgroupConfig;
 use crate::transport::kill::{kill_process_group, python_exit_code};
 use crate::transport::spawn::{AgentPipeReader, SpawnSpec, spawn_one_shot};
 use charliebot_core::cgroup::SESSION_CGROUP_OOM_SCORE_ADJ;
@@ -233,17 +236,6 @@ pub(crate) struct OpenCodeRunPlan {
   resume_session_id: Option<String>,
 }
 
-pub(crate) struct OpenCodeRunArgs {
-  pub prompt: String,
-  pub cwd: PathBuf,
-  pub env: Env,
-  pub uploaded_files: Vec<Value>,
-  pub process_id: u32,
-  pub cgroup: Option<SessionCgroup>,
-  pub exit: watch::Receiver<Option<Result<i32, String>>>,
-  pub on_event: EventFn,
-}
-
 pub(crate) fn take_run_plan(command: &[String]) -> anyhow::Result<Arc<OpenCodeRunPlan>> {
   let marker = command.get(2).context("the opencode serve command has no run plan")?;
   let id = marker.strip_prefix(RUN_PLAN_MARKER).context("the opencode serve command has an invalid run plan")?;
@@ -255,14 +247,40 @@ pub(crate) fn take_run_plan(command: &[String]) -> anyhow::Result<Arc<OpenCodeRu
     .context("the opencode serve run plan was not registered")
 }
 
-pub(crate) struct OpenCodeRunResult {
-  pub exit_code: Option<i32>,
+/// The opencode lifecycle: each of its processes serves one turn over the shared server (`TransportKind::Serve`).
+pub(crate) struct OpenCodeLifecycle;
+
+impl BackendLifecycle for OpenCodeLifecycle {
+  fn serve_transport(&self) -> Option<Arc<dyn ServeTransport>> {
+    Some(Arc::new(OpenCodeServe))
+  }
 }
 
-pub(crate) async fn run_turn(
+/// The opencode serve transport: the run plan that `build_command` registered, and the server's table of live turns.
+struct OpenCodeServe;
+
+impl ServeTransport for OpenCodeServe {
+  fn take_turn(&self, command: &[String]) -> anyhow::Result<Box<dyn ServeTurn>> {
+    Ok(Box::new(OpenCodeTurn { plan: take_run_plan(command)? }))
+  }
+
+  fn finish_active_turn(&self, pid: u32) -> BoxFuture<'static, anyhow::Result<()>> {
+    Box::pin(super::server::finish_active_turn(pid))
+  }
+}
+
+/// One opencode turn, with the run plan that `take_turn` took before its process spawned.
+struct OpenCodeTurn {
   plan: Arc<OpenCodeRunPlan>,
-  mut args: OpenCodeRunArgs,
-) -> anyhow::Result<OpenCodeRunResult> {
+}
+
+impl ServeTurn for OpenCodeTurn {
+  fn run(self: Box<Self>, args: ServeTurnArgs) -> BoxFuture<'static, anyhow::Result<ServeTurnResult>> {
+    Box::pin(run_turn(self.plan, args))
+  }
+}
+
+pub(crate) async fn run_turn(plan: Arc<OpenCodeRunPlan>, mut args: ServeTurnArgs) -> anyhow::Result<ServeTurnResult> {
   let server = plan.pool.server_for(plan.proxy_url.clone());
   let mut translator = OpenCodeTranslator::new(plan.model.clone());
   let mut model_limit = None;
@@ -313,13 +331,13 @@ pub(crate) async fn run_turn(
   } else {
     process_exit_code(&args.exit)
   };
-  Ok(OpenCodeRunResult { exit_code })
+  Ok(ServeTurnResult { exit_code })
 }
 
 async fn run_turn_body(
   plan: &OpenCodeRunPlan,
   server: &Arc<OpenCodeServer>,
-  args: &mut OpenCodeRunArgs,
+  args: &mut ServeTurnArgs,
   translator: &mut OpenCodeTranslator,
   model_limit: &mut Option<Map<String, Value>>,
   turn: &mut Option<Arc<Turn>>,
@@ -344,7 +362,7 @@ async fn run_turn_body(
   };
   await_or_exit(server.wait_interrupts_settled(&session_id), &mut args.exit).await?.map_err(RunError::Backend)?;
   current.drop_earlier_interrupts();
-  await_or_exit(put_environment(plan, server, &session_id, &args.env, args.cgroup.as_ref()), &mut args.exit)
+  await_or_exit(put_environment(plan, server, &session_id, &args.env, args.cgroup_path.as_deref()), &mut args.exit)
     .await?
     .map_err(RunError::Backend)?;
   if plan.instructions_file.is_none() && plan.instructions_content.as_ref().is_some_and(|content| !content.is_empty()) {
@@ -538,7 +556,7 @@ async fn put_environment(
   server: &OpenCodeServer,
   session_id: &str,
   env: &Env,
-  cgroup: Option<&SessionCgroup>,
+  cgroup: Option<&Path>,
 ) -> anyhow::Result<()> {
   let join_script = plan.host.join_script();
   if !join_script.is_file() {
@@ -550,7 +568,7 @@ async fn put_environment(
   }
   if let Some(cgroup) = cgroup {
     variables.insert("BASH_ENV".to_string(), join_script.display().to_string());
-    variables.insert("CHARLIEBOT_SESSION_CGROUP".to_string(), cgroup.path.display().to_string());
+    variables.insert("CHARLIEBOT_SESSION_CGROUP".to_string(), cgroup.display().to_string());
     variables.insert("CHARLIEBOT_SESSION_OOM_SCORE_ADJ".to_string(), SESSION_CGROUP_OOM_SCORE_ADJ.to_string());
   }
   let response = server

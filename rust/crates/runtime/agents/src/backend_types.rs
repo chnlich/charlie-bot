@@ -7,6 +7,8 @@ use charliebot_registry::backend::{AgentBackend, LaunchArgs};
 /// A backend instance and the launch arguments used to construct it.
 pub struct BuiltBackend {
   pub backend: Box<dyn AgentBackend>,
+  /// The registered backend type that built `backend`.
+  pub backend_type: String,
   pub launch: LaunchArgs,
   pub registry: std::sync::Arc<Registry>,
 }
@@ -19,7 +21,7 @@ pub fn build_backend(
   launch: LaunchArgs,
 ) -> anyhow::Result<BuiltBackend> {
   let backend = registry.build_backend(option, cfg, launch.clone())?;
-  Ok(BuiltBackend { backend, launch, registry })
+  Ok(BuiltBackend { backend, backend_type: option.backend_type.clone(), launch, registry })
 }
 
 /// Build the registered translate fallback without a backend option.
@@ -30,5 +32,5 @@ pub fn build_translate_fallback(
 ) -> anyhow::Result<BuiltBackend> {
   let registration = registry.translate_fallback()?;
   let backend = registration.factory.build(None, cfg, launch.clone())?;
-  Ok(BuiltBackend { backend, launch, registry })
+  Ok(BuiltBackend { backend, backend_type: registration.type_name.to_string(), launch, registry })
 }

@@ -1,2 +1,1 @@
 # Rows record the module cycles that predate the structure test. Rows only leave this table.
-cycle charliebot-agents: backends::opencode::backend, backends::opencode::server, cli_base, one_shot, runner

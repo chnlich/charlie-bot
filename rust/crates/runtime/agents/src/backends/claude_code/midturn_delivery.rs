@@ -158,6 +158,7 @@ mod tests {
       })
     });
     let runner = Arc::new(AgentRunner::new(
+      "cc-claude",
       Box::new(backend),
       LaunchArgs { log_dir: Some(root.path().join("run")), ..LaunchArgs::default() },
     ));

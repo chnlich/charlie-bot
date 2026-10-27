@@ -481,7 +481,7 @@ impl Worker {
   ) -> anyhow::Result<ProcessResult> {
     self.relays.store(relays, Ordering::Release);
     let built = self.build_backend(Some(launch), true)?;
-    let runner = Arc::new(AgentRunner::new(built.backend, built.launch));
+    let runner = Arc::new(AgentRunner::new(&built.backend_type, built.backend, built.launch));
     tracing::info!(
       target: "charliebot_tasks",
       thread = %self.thread_id,

@@ -19,12 +19,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use charliebot_core::home;
-use charliebot_registry::backend::{BackendTraits, BackendTypeRegistration, ResumeStyle};
+use charliebot_registry::backend::{BackendLifecycle, BackendTraits, BackendTypeRegistration, ResumeStyle};
 use charliebot_registry::usage::UsageSource;
 use charliebot_registry::{Registry, RegistryError};
 use usage_logs::OpencodeLogs;
 
-use self::backend::OpenCodeFactory;
+use self::backend::{OpenCodeFactory, OpenCodeLifecycle};
 pub use backend::{OpenCodeBackend, OpenCodeTranslator, option_default_model};
 pub use options::OpenCodeOption;
 pub use server::{
@@ -72,7 +72,7 @@ fn register_backend_type(
     },
     option_model: options::option_model,
     factory: Arc::new(OpenCodeFactory::new(host, pool)),
-    lifecycle: None,
+    lifecycle: Some(Arc::new(OpenCodeLifecycle) as Arc<dyn BackendLifecycle>),
     translate_fallback: false,
   })
 }

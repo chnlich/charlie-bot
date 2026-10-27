@@ -41,7 +41,7 @@ pub async fn agent_one_shot_text(
     })
   });
 
-  let runner = AgentRunner::new(built.backend, built.launch.clone());
+  let runner = AgentRunner::new(&built.backend_type, built.backend, built.launch.clone());
   let mut request = RunRequest::new(
     frame_system_prompt(system_prompt, prompt),
     cwd.path().to_path_buf(),
@@ -206,6 +206,7 @@ mod tests {
         instructions_file: Some(instructions_file.clone()),
         ..LaunchArgs::default()
       },
+      backend_type: "scripted".to_string(),
       registry: Arc::new(Registry::new()),
     };
 
@@ -247,6 +248,7 @@ mod tests {
         seen_log_dir: Arc::new(Mutex::new(None)),
       }),
       launch: LaunchArgs::default(),
+      backend_type: "scripted".to_string(),
       registry: Arc::new(Registry::new()),
     };
     assert_eq!(one_shot_text(native, &base_env, "prompt", "system", None).await.unwrap(), "native");
@@ -259,6 +261,7 @@ mod tests {
         seen_log_dir: Arc::new(Mutex::new(None)),
       }),
       launch: LaunchArgs::default(),
+      backend_type: "scripted".to_string(),
       registry: Arc::new(Registry::new()),
     };
     assert_eq!(one_shot_text(tool_capable, &base_env, "prompt", "system", None).await.unwrap(), "tool-capable");

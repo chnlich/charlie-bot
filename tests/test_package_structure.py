@@ -95,14 +95,14 @@ RUNTIME_LAYERS = (
             "takeoff_gate")),
     Layer(
         4, "agent processes", (
-            "agent_process.base", "agent_process.deferred_build", "agent_process.spawn", "master_cc_state",
-            "session_events", "streaming", "worker")),
+            "agent_environment", "agent_process.base", "agent_process.deferred_build", "agent_process.spawn",
+            "master_cc_state", "session_events", "streaming", "worker")),
     Layer(
         3, "records and events", (
             "backend_pool", "cold_read", "control_events", "home_writer_fence", "launch_loop", "message_aggregator",
             "message_projection", "review", "runs", "session_store", "session_usage", "spawner_prompt",
             "trigger_files")),
-    Layer(2, "hooks", ("hooks",)),
+    Layer(2, "hooks", ("hooks", "templating")),
     Layer(
         1, "foundation", (
             "chat_events", "file_urls", "init_seed", "message_events", "model_family", "run_identity", "run_token",

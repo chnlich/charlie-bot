@@ -131,6 +131,16 @@ const PORTED_PYTHON_TESTS: &[&str] = &[
   "test_gc_trash_dry_run_lists_but_deletes_nothing",
   "test_gc_trash_yes_hard_deletes",
   "test_gc_trash_empty_reports_and_returns",
+  "test_cli_add_creates_one_staging_file",
+  "test_cli_add_on_a_fresh_home_creates_the_scaffold_and_the_capture",
+  "test_cli_query_index_on_a_fresh_home_runs",
+  "test_cli_query_audience_filter_is_membership",
+  "test_cli_lint_dir_reads_given_root",
+  "test_cli_lint_warns_on_an_overwide_body_line_without_failing",
+  "test_cli_query_dir_reads_given_root",
+  "test_active_run_token_fixes_the_audience",
+  "test_unlaunched_run_token_refuses",
+  "test_ended_run_token_refuses",
 ];
 
 #[test]
@@ -433,13 +443,14 @@ fn run_case(case_path: &Path, record_command: Option<&str>) -> Result<(), String
     }
     _ => Command::new(env!("CARGO_BIN_EXE_charliebot")),
   };
+  let stdin = case.get("stdin").and_then(Value::as_str).map(substitute);
   command
     .args(&argv)
     .current_dir(&cwd)
     .env_clear()
     .env("CHARLIEBOT_HOME", temp.path().join("home"))
     .env("CHARLIEBOT_REPO_ROOT", temp.path().join("repo"))
-    .stdin(Stdio::null())
+    .stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() })
     .stdout(Stdio::piped())
     .stderr(Stdio::piped());
   if let Some(env) = case.get("env").and_then(Value::as_object) {
@@ -448,6 +459,14 @@ fn run_case(case_path: &Path, record_command: Option<&str>) -> Result<(), String
     }
   }
   let mut child = command.spawn().map_err(|error| format!("spawn failed: {error}"))?;
+  if let Some(stdin) = stdin {
+    child
+      .stdin
+      .take()
+      .expect("stdin is piped for a case with stdin")
+      .write_all(stdin.as_bytes())
+      .map_err(|error| format!("write CLI stdin: {error}"))?;
+  }
 
   let Some(status) = wait_bounded(&mut child)? else {
     stub.stop();

@@ -10,7 +10,8 @@ not confirmed from source, with the reason.
 
 The Rust CLI lives in `rust/crates/app/cli` (binary `charliebot`) with the shared client contract in
 `rust/crates/infra/cli-common`. The `session`, `delegate`, `plan`, `artifact check`, `schedule-trigger`,
-`compaction-context` and `gc-trash` rows in section 3 marked *ported to Rust* run on the Rust binary; every other
+`compaction-context` and `gc-trash` rows and the `memory query`, `memory add` and `memory lint` rows in
+section 3 marked *ported to Rust* run on the Rust binary; every other
 subcommand prints `{"error": "<name> is not ported to the Rust CLI yet"}` and exits 1, and the six caller-less Python
 names (`config`, `disk-sweep`, `router`, `storage`, `usage-ledger`, `voice-replay-eval`) are unknown subcommands (exit
 2). `artifact wrap` prints `{"error": "artifact wrap is not ported to the Rust CLI yet"}` and exits 1, and `artifact
@@ -21,6 +22,8 @@ help and usage text may differ from argparse (the exit codes match); the dispatc
 caller-bearing names, so its help text and unknown-subcommand line differ from the Python CLI's; the Python CLI's
 structlog console lines on stdout (a wall-clock stamp and a pid per line) are not reproduced — the golden harness drops
 them from both sides.
+The memory verbs read `<home>/memory` without `config.yaml`; `memory proposal` remains unported.
+
 
 ## 1. Dispatcher (`src/app/main.py`)
 
@@ -92,9 +95,9 @@ below.
 | `gc-trash [--yes]` | none | Lists `<paths.worktree_dir>/.trash/` with sizes; `--yes` deletes every entry (`rmtree`) | 0; 1 when a deletion fails | *ported to Rust* — only the `paths:` section of `config.yaml` is read and validated (Python loads and validates the whole file); a failed deletion's message names the entry, where Python's `rmtree` may name an inner file; a top-level trash entry that is a file or a symlink is removed, where Python's `rmtree` refuses it (exit 1) |
 | `improve --repo R --goal-file G --base-branch B [--iterations N] [--plan-file P] [--backend] [--work-branch] [--merge-back] [--session]` | `POST /api/internal/improve`, with a readback | Reads `G` and `P` | 0; 1; 2 |  |
 | `improve-stop [--session]` | `POST /api/internal/improve/stop` | none | 0 prints `stopped`; 1; 2 |  |
-| `memory query --topic T [--audience master\|worker]` | none | Reads `<home>/memory/` (creates the store scaffold on first use, `files.md` 5.10). With `CHARLIEBOT_RUN_TOKEN` set, it verifies the token against `credentials.charliebot.access_key` and reads `sessions/<sid>/metadata.json`, `data/runs/<run>/metadata.json` and `data/chat_events.jsonl` to fix the audience from the run's session profile. | 0; 1 (unknown topic, invalid token, inactive run, store error); 2 usage |  |
-| `memory add [--file F]` | none | Writes `<home>/memory/staging/<ts>-<sess8>-<slug>.md` and prints its path | 0; 1; 2 |  |
-| `memory lint [--dir D]` | none | Reads the store or `D` | 0, including warnings; 1 on violations; 2 |  |
+| `memory query --topic T [--audience master\|worker]` | none | Reads `<home>/memory/` (creates the store scaffold on first use, `files.md` 5.10). With `CHARLIEBOT_RUN_TOKEN` set, it verifies the token against `credentials.charliebot.access_key` and reads `sessions/<sid>/metadata.json`, `data/runs/<run>/metadata.json` and `data/chat_events.jsonl` to fix the audience from the run's session profile. | 0; 1 (unknown topic, invalid token, inactive run, store error); 2 usage | *ported to Rust*
+| `memory add [--file F]` | none | Writes `<home>/memory/staging/<ts>-<sess8>-<slug>.md` and prints its path | 0; 1; 2 | *ported to Rust*
+| `memory lint [--dir D]` | none | Reads the store or `D` | 0, including warnings; 1 on violations; 2 | *ported to Rust*
 | `memory proposal open\|status\|commit\|land` | none | Local git only, in `<home>/memory` and `<home>/memory-proposal` (branch `proposal`, worktree add, commit of one store path, fast-forward land). `status` prints `worktree`, `base`, `head`, `ahead`, `opened`, `dirty` and `diff_path` (`/diff?repo=<memory dir>&base=<base>&head=<head>`). `land` prints one `key: value` line per field of its result, and the result includes `diff_path`, the diff link of the landed range (`src/features/memory/memory_proposal.py:508`, `src/features/memory/cli.py:268-273`). | 0; 1 refusal; 2 |  |
 | `plan present --file F [--session]`, `plan amend --file F --note N`, `plan approve [--plan]`, `plan close --plan P` | `GET /api/sessions/<sid>/plans`, then `POST /api/internal/plan/<verb>` | none (the server validates and writes `plans.json`) | 0; 1; 2 | *ported to Rust* |
 | `plan diff [--plan] [--v]`, `plan list` | `GET /api/sessions/<sid>/plans` | `plan diff` takes the registry from the route and reads the two version files straight from the session directory (`_read_version_file`), then diffs them locally | 0; 1; 2 | *ported to Rust*: `plan_diff::diff_text`, the Rust differ's text form |

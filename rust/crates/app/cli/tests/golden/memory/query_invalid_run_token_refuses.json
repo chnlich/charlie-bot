@@ -1,0 +1,20 @@
+{
+  "argv": [
+    "memory",
+    "query",
+    "--topic",
+    "beta"
+  ],
+  "env": {
+    "CHARLIEBOT_RUN_TOKEN": "invalid"
+  },
+  "files": {
+    "home/credentials.yaml": "charliebot:\n  access_key: query-op-key\n"
+  },
+  "expect": {
+    "stdout": "",
+    "stderr": "error: invalid run token: malformed run token\n",
+    "exit": 1,
+    "requests": []
+  }
+}

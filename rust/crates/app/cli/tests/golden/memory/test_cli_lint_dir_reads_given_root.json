@@ -1,0 +1,18 @@
+{
+  "argv": [
+    "memory",
+    "lint",
+    "--dir",
+    "{root}/proposal"
+  ],
+  "files": {
+    "proposal/topics": "profile resident\n",
+    "proposal/entries/profile/retired.md": "---\ncreated: 2026-07-28\nscope: user\ntopic: profile\naudience: master\ntitle: Retired\n---\nbody\n"
+  },
+  "expect": {
+    "stdout": "{root}/proposal/entries/profile/retired.md: line 2: unknown header field 'created'\n",
+    "stderr": "",
+    "exit": 1,
+    "requests": []
+  }
+}

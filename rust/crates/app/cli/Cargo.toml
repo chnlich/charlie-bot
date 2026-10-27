@@ -13,6 +13,7 @@ path = "src/main.rs"
 charliebot-artifacts.workspace = true
 charliebot-cli-common.workspace = true
 charliebot-core.workspace = true
+charliebot-memory.workspace = true
 charliebot-store.workspace = true
 clap.workspace = true
 fancy-regex.workspace = true

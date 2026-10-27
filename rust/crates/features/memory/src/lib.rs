@@ -2,6 +2,7 @@
 //! memory each run's instructions take, and exposes the store root to the diff view. The `memory` CLI and
 //! `memory_proposal.py` stay in Python.
 
+pub mod cli;
 pub mod memory;
 mod store_root;
 mod turn_contribution;

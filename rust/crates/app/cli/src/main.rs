@@ -12,7 +12,6 @@ use std::path::Path;
 use std::process::exit;
 
 use charliebot_cli_common::json_out;
-use serde_json::json;
 
 /// The subcommand vocabulary, sorted — `_RUNTIME_COMMANDS` plus every registered command with a
 /// caller; the six caller-less names the Python CLI lists are unknown names here.
@@ -58,16 +57,11 @@ fn main() {
     "compaction-context" => commands::compaction_context::main(&args[1..]),
     "delegate" => commands::delegate::main(&args[1..]),
     "gc-trash" => commands::gc_trash::main(&args[1..]),
+    "memory" => charliebot_memory::cli::main(&args[1..]),
     "plan" => charliebot_artifacts::cli::plan::main(&args[1..]),
     "schedule-trigger" => commands::schedule_trigger::main(&args[1..]),
     "session" => commands::session::main(&args[1..]),
-    _ => {
-      eprint!(
-        "{}",
-        json_out::render(&json!({ "error": format!("{subcommand} is not ported to the Rust CLI yet") }), None)
-      );
-      exit(1);
-    }
+    name => Err(charliebot_cli_common::exit::CliExit::error(format!("{name} is not ported to the Rust CLI yet"))),
   };
   if let Err(failure) = result {
     eprint!("{}", json_out::render(&failure.body, None));

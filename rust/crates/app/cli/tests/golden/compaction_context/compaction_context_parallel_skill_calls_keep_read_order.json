@@ -1,0 +1,22 @@
+{
+  "argv": [
+    "compaction-context",
+    "--session",
+    "session-parallel",
+    "--slot",
+    "1"
+  ],
+  "cwd": "{root}",
+  "files": {
+    "home/skills/beta/SKILL.md": "Beta skill text.\n",
+    "home/skills/alpha/SKILL.md": "Alpha skill text.\n",
+    "home/sessions/session-parallel/data/chat_events.jsonl": "{\"type\": \"assistant\", \"timestamp\": \"2026-01-01T00:00:00Z\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Skill\", \"input\": {\"skill\": \"beta\"}}, {\"type\": \"tool_use\", \"name\": \"Skill\", \"input\": {\"skill\": \"alpha\"}}]}}\n"
+  },
+  "responses": [],
+  "expect": {
+    "stdout": "{\"hookSpecificOutput\": {\"hookEventName\": \"SessionStart\", \"additionalContext\": \"Re-attached skills: beta ({root}/home/skills/beta/SKILL.md), alpha ({root}/home/skills/alpha/SKILL.md)\\nSkill beta ({root}/home/skills/beta/SKILL.md), re-attached after compaction:\\nBeta skill text.\\nSkill alpha ({root}/home/skills/alpha/SKILL.md), re-attached after compaction:\\nAlpha skill text.\\n\"}}\n",
+    "stderr": "session=session-parallel slot=1 characters=446 skills=beta,alpha omitted=- unresolved=-\n",
+    "exit": 0,
+    "requests": []
+  }
+}

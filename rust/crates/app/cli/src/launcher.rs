@@ -228,23 +228,23 @@ mod tests {
   use std::path::PathBuf;
 
   use nix::sys::signal::kill;
+  use nix::sys::wait::{WaitPidFlag, WaitStatus};
 
   use super::*;
 
-  /// Poll until `path` exists: the wrapper writes it just before it exits.
-  fn wait_for_path(path: &Path) {
+  /// Wait until the wrapper has exited and been reaped, so its PID stops answering `kill 0`. The wrapper writes the exit
+  /// file just before it exits: the file's existence alone does not mean its content is written. ECHILD means it is
+  /// already reaped.
+  fn wait_for_exit(launch: &Launch) {
     let started = Instant::now();
-    while !path.exists() {
-      assert!(started.elapsed() < Duration::from_secs(5), "{} never appeared", path.display());
+    loop {
+      match waitpid(Pid::from_raw(launch.pid), Some(WaitPidFlag::WNOHANG)) {
+        Ok(WaitStatus::StillAlive) => {}
+        Ok(_) | Err(Errno::ECHILD) => return,
+        Err(error) => panic!("waiting for the wrapper failed: {error}"),
+      }
+      assert!(started.elapsed() < Duration::from_secs(5), "the wrapper {} never exited", launch.pid);
       thread::sleep(Duration::from_millis(10));
-    }
-  }
-
-  /// The wrapper is this test's child: reap it, so its PID stops answering `kill 0`. ECHILD means it is already reaped.
-  fn reap(launch: &Launch) {
-    match waitpid(Pid::from_raw(launch.pid), None) {
-      Ok(_) | Err(Errno::ECHILD) => {}
-      Err(error) => panic!("waiting for the wrapper failed: {error}"),
     }
   }
 
@@ -262,10 +262,8 @@ mod tests {
     let dir = tempfile::tempdir().expect("a temp dir");
     let launch = local(dir.path(), "exit 3");
     let exit_file = PathBuf::from(&launch.exit_file);
-    wait_for_path(&exit_file);
+    wait_for_exit(&launch);
     assert_eq!(std::fs::read_to_string(&exit_file).expect("the exit file reads").trim(), "3");
-    // The wrapper exits only after the exit file is written.
-    reap(&launch);
     assert_gone(launch.pid);
     kill_launch(&launch).expect("the cleanup kill runs");
   }
@@ -275,12 +273,11 @@ mod tests {
     let dir = tempfile::tempdir().expect("a temp dir");
     let launch = launch_local("pwd; echo hello", dir.path(), &dir.path().join("log"), &dir.path().join("exit"))
       .expect("the wrapper starts");
-    wait_for_path(Path::new(&launch.exit_file));
+    wait_for_exit(&launch);
     let out = std::fs::read_to_string(&launch.log).expect("the log reads");
     assert!(out.contains(&dir.path().display().to_string()), "{out}");
     assert!(out.contains("hello"), "{out}");
     assert_eq!(std::fs::read_to_string(&launch.exit_file).expect("the exit file reads").trim(), "0");
-    reap(&launch);
     kill_launch(&launch).expect("the cleanup kill runs");
   }
 
@@ -290,10 +287,9 @@ mod tests {
     let launch =
       launch_local("echo hi # trailing comment", dir.path(), &dir.path().join("log"), &dir.path().join("exit"))
         .expect("the wrapper starts");
-    wait_for_path(Path::new(&launch.exit_file));
+    wait_for_exit(&launch);
     assert_eq!(std::fs::read_to_string(&launch.exit_file).expect("the exit file reads").trim(), "0");
     assert_eq!(std::fs::read_to_string(&launch.log).expect("the log reads").trim(), "hi");
-    reap(&launch);
     kill_launch(&launch).expect("the cleanup kill runs");
   }
 

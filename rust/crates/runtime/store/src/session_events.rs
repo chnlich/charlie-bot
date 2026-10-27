@@ -1,8 +1,6 @@
 use std::collections::HashMap;
-use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex as StdMutex};
 
-use lru::LruCache;
 use serde_json::{Map, Value, json};
 use tokio::sync::{Mutex, OwnedMutexGuard};
 
@@ -10,11 +8,11 @@ use charliebot_core::event_types;
 
 use crate::aggregator::MessageAggregator;
 use crate::compact::CompactValue;
+use crate::event_types::ChatEvent;
 use crate::projection::MessageProjection;
 use crate::streaming::{self, SocketHandle, Subscription};
-use crate::{ChatEvent, Store, StoreError, StoreResult};
+use crate::{Store, StoreError, StoreResult};
 
-const PROJECTION_LRU_LIMIT: usize = 64;
 const AGGREGATOR_INIT_SLICE_EVENTS: usize = 256;
 
 /// Raw event types whose rendered content is carried by message or stream deltas.
@@ -31,51 +29,6 @@ pub const RAW_EVENTS_REPLACED_BY_DELTAS: &[&str] = &[
   "web_status_confirmed",
   "web_ask_check",
 ];
-
-/// Per-session aggregator and message-projection state.
-pub(crate) struct SessionEventState {
-  aggregators: StdMutex<HashMap<String, Arc<Mutex<MessageAggregator>>>>,
-  init_locks: StdMutex<HashMap<String, Arc<Mutex<()>>>>,
-  event_locks: StdMutex<HashMap<String, Arc<Mutex<()>>>>,
-  epochs: StdMutex<HashMap<String, u64>>,
-  projections: StdMutex<ProjectionCache>,
-}
-
-impl Default for SessionEventState {
-  fn default() -> Self {
-    Self {
-      aggregators: StdMutex::new(HashMap::new()),
-      init_locks: StdMutex::new(HashMap::new()),
-      event_locks: StdMutex::new(HashMap::new()),
-      epochs: StdMutex::new(HashMap::new()),
-      projections: StdMutex::new(ProjectionCache::default()),
-    }
-  }
-}
-
-struct ProjectionCache {
-  values: LruCache<String, Arc<MessageProjection>>,
-}
-
-impl Default for ProjectionCache {
-  fn default() -> Self {
-    Self { values: LruCache::new(NonZeroUsize::new(PROJECTION_LRU_LIMIT).expect("the memo limit is nonzero")) }
-  }
-}
-
-impl ProjectionCache {
-  fn get(&mut self, session_id: &str) -> Option<Arc<MessageProjection>> {
-    self.values.get(session_id).cloned()
-  }
-
-  fn store(&mut self, session_id: &str, projection: Arc<MessageProjection>) {
-    self.values.put(session_id.to_string(), projection);
-  }
-
-  fn remove(&mut self, session_id: &str) {
-    self.values.pop(session_id);
-  }
-}
 
 impl Store {
   /// Append an event, aggregate its message frames, then broadcast raw side-effect events.

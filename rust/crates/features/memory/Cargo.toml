@@ -9,10 +9,6 @@ publish.workspace = true
 name = "charliebot_memory"
 path = "src/lib.rs"
 
-[[bin]]
-name = "memory-select"
-path = "src/bin/memory-select.rs"
-
 [dependencies]
 anyhow.workspace = true
 charliebot-cli-common.workspace = true

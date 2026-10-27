@@ -1,16 +1,10 @@
-//! Page hooks (`src/runtime/hooks/page_render.py`): page packages and their page parts, template globals and the
-//! home-page cards.
-//!
-//! A page package keeps its page parts at fixed paths inside its directory `src/<kind>/<name>/`:
-//! `static/` serves at `/static/<kind>/<name>/`, `templates/` joins the template search path, and
-//! `templates/<name>/page_<slot>.html` is included where a page places the slot.
+//! Page package paths and template parts.
 
 use std::path::{Path, PathBuf};
 
 use charliebot_core::pyfmt;
 
-use crate::context::FeatureContext;
-use crate::registry::{Registry, RegistryError};
+pub use crate::registry::{HomeCard, TemplateGlobalFn};
 
 /// The places a page leaves for package parts (`page_render.PAGE_SLOTS`).
 pub const PAGE_SLOTS: &[&str] = &[
@@ -24,18 +18,6 @@ pub const PAGE_SLOTS: &[&str] = &[
   "diff_toolbar",
   "home_notes",
 ];
-
-/// A zero-argument callable a template calls at render (`page_render.register_template_global`). The function sees
-/// the live config and credentials through the feature context. An `Err` fails the render with its message.
-pub type TemplateGlobalFn = fn(&FeatureContext) -> Result<minijinja::Value, String>;
-
-/// One `/home` page card (`page_render.register_home_card`). Cards list in registration order.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct HomeCard {
-  pub name: &'static str,
-  pub url: &'static str,
-  pub description: &'static str,
-}
 
 /// `src/<kind>/<name>` for the package `src.<kind>.<name>`, under the checkout at `repo_root`.
 pub fn package_directory(repo_root: &Path, package: &str) -> PathBuf {
@@ -62,32 +44,22 @@ pub fn page_parts(repo_root: &Path, packages: &[&str], slot: &str) -> Result<Vec
   )
 }
 
-impl Registry {
-  /// Register a template global (`page_render.register_template_global`).
-  pub fn template_global(&mut self, name: &'static str, global: TemplateGlobalFn) -> Result<(), RegistryError> {
-    let package = self.owner()?;
-    self.template_globals.insert(package, name, global)
-  }
+#[cfg(test)]
+mod tests {
+  use super::*;
 
-  /// Register a home-page card (`page_render.register_home_card`).
-  pub fn home_card(&mut self, card: HomeCard) -> Result<(), RegistryError> {
-    self.owner()?;
-    self.home_cards.push(card);
-    Ok(())
-  }
+  #[test]
+  fn page_parts_follow_the_package_registration_order() {
+    let root = tempfile::tempdir().unwrap();
+    let packages = ["src.features.zeta", "src.features.alpha"];
+    for package in packages {
+      let templates = package_directory(root.path(), package).join("templates");
+      let part = package.rsplit('.').next().unwrap();
+      std::fs::create_dir_all(templates.join(part)).unwrap();
+      std::fs::write(templates.join(part).join("page_head.html"), "").unwrap();
+    }
 
-  /// The registered packages in registration order: the template search path and the static mounts follow it.
-  pub fn page_packages(&self) -> &[&'static str] {
-    &self.page_packages
-  }
-
-  /// The template globals with their names, in registration order.
-  pub fn template_globals(&self) -> impl Iterator<Item = (&'static str, TemplateGlobalFn)> + '_ {
-    self.template_globals.pairs().map(|(name, global)| (name, *global))
-  }
-
-  /// The home-page cards in registration order.
-  pub fn home_cards(&self) -> &[HomeCard] {
-    &self.home_cards
+    let parts = page_parts(root.path(), &packages, "head").unwrap();
+    assert_eq!(parts, ["zeta/page_head.html", "alpha/page_head.html"]);
   }
 }

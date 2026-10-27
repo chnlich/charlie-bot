@@ -4,11 +4,8 @@
 //! dropped session calls `drop_runtime_state`, and the sidebar listings call `view_member`.
 
 use std::path::Path;
-use std::sync::Arc;
 
 use charliebot_store::metadata::SessionMetadata;
-
-use crate::registry::{Registry, RegistryError};
 
 /// One feature's sidebar contribution. Every method defaults to adding nothing.
 pub trait SidebarContribution: Send + Sync {
@@ -34,22 +31,5 @@ pub trait SidebarContribution: Send + Sync {
   /// The key of the sidebar view whose root `meta` is, or `None`. A view lists its roots and every row below them.
   fn view_member(&self, _meta: &SessionMetadata) -> Option<&'static str> {
     None
-  }
-}
-
-impl Registry {
-  /// Register a sidebar contribution (`sidebar_contributions.register_sidebar_contribution`).
-  pub fn sidebar_contribution(
-    &mut self,
-    name: &'static str,
-    contribution: Arc<dyn SidebarContribution>,
-  ) -> Result<(), RegistryError> {
-    let package = self.owner()?;
-    self.sidebar_contributions.insert(package, name, contribution)
-  }
-
-  /// The sidebar contributions in registration order.
-  pub fn sidebar_contributions(&self) -> impl Iterator<Item = &Arc<dyn SidebarContribution>> {
-    self.sidebar_contributions.values()
   }
 }

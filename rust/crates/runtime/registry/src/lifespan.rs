@@ -22,39 +22,10 @@ use anyhow::Context;
 use futures_util::FutureExt;
 use futures_util::future::{BoxFuture, Shared};
 
-use crate::context::{FeatureContext, StartupStop};
-use crate::registry::{Registry, RegistryError};
+use crate::context::FeatureContext;
+pub use crate::registry::StepFn;
+use crate::startup_stop::StartupStop;
 use crate::wiring::{Phase, Service, ServiceContext};
-
-/// One lifespan step: it runs with the feature context and resolves when the step is done. A failure stops startup or
-/// is returned by the step runner.
-pub type StepFn = fn(Arc<FeatureContext>) -> BoxFuture<'static, anyhow::Result<()>>;
-
-impl Registry {
-  /// Register a pre-recovery step (for example the session cgroup sweep). Steps run in registration order.
-  pub fn pre_recovery_step(&mut self, name: &'static str, step: StepFn) -> Result<(), RegistryError> {
-    let package = self.owner()?;
-    self.pre_recovery_steps.insert(package, name, step)
-  }
-
-  /// Register the recovery step. At most one package registers it.
-  pub fn recovery_step(&mut self, name: &'static str, step: StepFn) -> Result<(), RegistryError> {
-    let package = self.owner()?;
-    self.recovery_step.insert_single(package, name, step)
-  }
-
-  /// Register the trigger step, which runs after recovery and before the ready services. At most one registers it.
-  pub fn trigger_step(&mut self, name: &'static str, step: StepFn) -> Result<(), RegistryError> {
-    let package = self.owner()?;
-    self.trigger_step.insert_single(package, name, step)
-  }
-
-  /// Register a let-go step. Normal stops run it after the shutdown log; failed startup runs it during cleanup.
-  pub fn let_go_step(&mut self, name: &'static str, step: StepFn) -> Result<(), RegistryError> {
-    let package = self.owner()?;
-    self.let_go_steps.insert(package, name, step)
-  }
-}
 
 /// The lifespan of one running server: its started services and registered let-go steps.
 pub struct Lifespan {
@@ -244,28 +215,6 @@ impl Lifespan {
   }
 }
 
-impl Registry {
-  /// The pre-recovery steps in registration order.
-  pub(crate) fn pre_recovery_steps(&self) -> Vec<(&'static str, StepFn)> {
-    self.pre_recovery_steps.pairs().map(|(name, step)| (name, *step)).collect()
-  }
-
-  /// The recovery step, if one is registered.
-  pub(crate) fn recovery_entry(&self) -> Option<(&'static str, StepFn)> {
-    self.recovery_step.pairs().next().map(|(name, step)| (name, *step))
-  }
-
-  /// The trigger step, if one is registered.
-  pub(crate) fn trigger_entry(&self) -> Option<(&'static str, StepFn)> {
-    self.trigger_step.pairs().next().map(|(name, step)| (name, *step))
-  }
-
-  /// The let-go steps in registration order.
-  pub(crate) fn let_go_steps(&self) -> Vec<(&'static str, StepFn)> {
-    self.let_go_steps.pairs().map(|(name, step)| (name, *step)).collect()
-  }
-}
-
 #[cfg(test)]
 mod tests {
   use std::sync::Mutex;
@@ -273,6 +222,7 @@ mod tests {
 
   use super::*;
   use crate::context::features_over;
+  use crate::registry::{Registry, RegistryError};
 
   /// What the steps and services of these tests logged, in order.
   static TRACE: Mutex<Vec<String>> = Mutex::new(Vec::new());

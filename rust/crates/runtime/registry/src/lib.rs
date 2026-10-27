@@ -16,6 +16,7 @@ pub mod registry;
 pub mod route_claims;
 pub mod sequence;
 pub mod sidebar;
+mod startup_stop;
 pub mod store_hooks;
 pub mod task_errors;
 pub mod templating;

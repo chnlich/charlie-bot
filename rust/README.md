@@ -11,7 +11,6 @@ Python commit the port reproduces.
 ## Build
 
 ```sh
-uv sync
 cd rust
 cargo build --release        # target/release/charliebot-server
 ```
@@ -75,19 +74,23 @@ with `method`, `path`, `status`, `duration_ms` and `client`. A failed request ad
 ## Test
 
 ```sh
+uv sync --locked
 cd rust
 cargo build --release
-cargo test
+cargo test --locked
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 cd ..
 uv run python rust/parity/parity.py --rust-bin rust/target/release/charliebot-server --stage server-skeleton
 ```
 
-`cargo test` also runs the seven fixture helpers that use only third-party Python libraries. The
-compatibility and SSH fixtures under `rust/fixtures/python/` are committed expected outputs. The
-skeleton parity check runs the Rust server against the Python reference through `rust/parity/`, with
-synthetic homes, temporary ports and a Landlock write fence.
+`cargo test` runs five Python helpers through `uv run python`: the FastAPI form and body apps, the YAML dump check,
+the JSON reader check and the boot-recovery marker. None of them imports CharlieBot code, so these tests need the
+`uv sync` environment and no CharlieBot Python. The other Python-derived expectations are recorded beside the tests
+that read them, and each recorded file names its Python helper and base commit. The pyhtml differential and the WAV
+fixture generator are run by hand. The compatibility and SSH outputs under `rust/fixtures/python/` are recorded data.
+The skeleton parity check runs the Rust server against the Python reference through `rust/parity/`, with synthetic
+homes, temporary ports and a Landlock write fence.
 
 ## Layout
 

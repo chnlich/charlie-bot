@@ -33,10 +33,9 @@ use reqwest::header::{AUTHORIZATION, USER_AGENT};
 use serde_json::{Map, Value, json};
 use tokio::sync::OnceCell;
 
-use super::ClaudeHost;
 use super::claude_accounts::{self, ClaudeAccountState, json_truthy};
 use super::claude_config::{AccountsConfig, ClaudeAccount};
-use super::login_dirs::CREDENTIALS_FILE;
+use super::login_dirs::{CREDENTIALS_FILE, ClaudeHost};
 
 /// The OAuth usage endpoint.
 pub const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";

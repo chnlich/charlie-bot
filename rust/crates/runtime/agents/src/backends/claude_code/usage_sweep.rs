@@ -18,8 +18,8 @@ use charliebot_registry::usage::{CategoryResult, SourceSweep, SweepScope};
 use regex::Regex;
 use walkdir::WalkDir;
 
-use super::ClaudeHost;
 use super::claude_config::AccountsConfig;
+use super::login_dirs::ClaudeHost;
 
 /// The on-disk name of the worktree quarantine directory (`src/runtime/worktree_trash.py:18`). The live-worktree list
 /// skips it.

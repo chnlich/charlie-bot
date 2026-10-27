@@ -1,1 +1,0 @@
-# Rows record the module cycles that predate the structure test. Rows only leave this table.

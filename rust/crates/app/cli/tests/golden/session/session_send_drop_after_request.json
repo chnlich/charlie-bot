@@ -1,0 +1,42 @@
+{
+  "argv": [
+    "session",
+    "send",
+    "target-id",
+    "--message",
+    "hi",
+    "--session",
+    "caller-id"
+  ],
+  "cwd": "{root}",
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n"
+  },
+  "responses": [
+    {
+      "drop_after_request": true
+    }
+  ],
+  "expect": {
+    "stdout": "",
+    "stderr": "{\"error\": \"missing or oversized status line\", \"code\": \"outcome_unknown\", \"effect\": \"unknown\"}\n",
+    "exit": 1,
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/api/internal/session-message",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "session_id": "caller-id",
+          "target_session_id": "target-id",
+          "content": "hi"
+        }
+      }
+    ]
+  }
+}

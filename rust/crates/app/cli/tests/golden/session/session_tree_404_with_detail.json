@@ -1,0 +1,54 @@
+{
+  "argv": [
+    "session",
+    "tree"
+  ],
+  "cwd": "{root}",
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n"
+  },
+  "responses": [
+    {
+      "status": 404,
+      "body": {
+        "detail": "session tree refused"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "sha": "cafe567",
+        "started_at": "2026-01-02T03:04:05+00:00"
+      }
+    }
+  ],
+  "expect": {
+    "stdout": "",
+    "stderr": "{\"error\": \"session tree refused\", \"code\": \"server_error\", \"effect\": \"none\"}\n",
+    "exit": 1,
+    "requests": [
+      {
+        "method": "GET",
+        "path": "/api/sessions/tree",
+        "query": "limit=100&include_archived=false",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": null
+        },
+        "body": null
+      },
+      {
+        "method": "GET",
+        "path": "/api/internal/version",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": null
+        },
+        "body": null
+      }
+    ]
+  }
+}

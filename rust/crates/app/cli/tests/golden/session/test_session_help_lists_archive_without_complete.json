@@ -1,0 +1,13 @@
+{
+  "argv": [
+    "session",
+    "--help"
+  ],
+  "parser_generated": true,
+  "expect": {
+    "stdout": "usage: charliebot session [-h]\n                          {create,tree,retry,archive,acknowledge,cancel,send,dialog} ...\n\nCharlieBot session mutations\n\npositional arguments:\n  {create,tree,retry,archive,acknowledge,cancel,send,dialog}\n    create              Create a session (metadata only, no first message)\n    tree                Page the task tree\n    retry               Create the retry run of one recorded run\n    archive             Archive a task or its subtree\n    acknowledge         Acknowledge exact task inputs the operator handled\n                        out-of-band (the terminal-driven node's resolution\n                        step)\n    cancel              Cancel a task; stop runs and end delegation for\n                        workers\n    send                Relay a message to another session as an agent_message\n    dialog              Print one session's chat messages as plain text,\n                        oldest first (for rg)\n\noptions:\n  -h, --help            show this help message and exit\n",
+    "stderr": "",
+    "exit": 0,
+    "requests": []
+  }
+}

@@ -1,0 +1,19 @@
+[package]
+name = "charliebot-cli-common"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+charliebot-core.workspace = true
+clap.workspace = true
+reqwest.workspace = true
+rustls.workspace = true
+serde_json.workspace = true
+serde_path_to_error.workspace = true
+serde_yaml.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

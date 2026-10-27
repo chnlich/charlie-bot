@@ -1,0 +1,73 @@
+{
+  "argv": [
+    "session",
+    "cancel",
+    "worker-1",
+    "--reason",
+    "stop",
+    "--request-id",
+    "cancel-1"
+  ],
+  "cwd": "{root}",
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n"
+  },
+  "responses": [
+    {
+      "status": 200,
+      "body": {
+        "id": "worker-1",
+        "stopped_runs": [
+          {
+            "run_id": "run-1",
+            "outcome": null
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "items": [
+          {
+            "id": "run-1",
+            "pid": 12345
+          }
+        ],
+        "next_cursor": null
+      }
+    }
+  ],
+  "expect": {
+    "stdout": "{\n  \"id\": \"worker-1\",\n  \"stopped_runs\": [\n    {\n      \"run_id\": \"run-1\",\n      \"outcome\": null\n    }\n  ]\n}\n",
+    "stderr": "run run-1 pid 12345 did not exit\n",
+    "exit": 1,
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/api/sessions/worker-1/cancel",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "request_id": "cancel-1",
+          "reason": "stop"
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/api/sessions/worker-1/runs",
+        "query": "limit=500",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": null
+        },
+        "body": null
+      }
+    ]
+  }
+}

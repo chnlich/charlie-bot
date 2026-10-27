@@ -1,0 +1,20 @@
+{
+  "argv": [
+    "session",
+    "archive",
+    "sess-archive",
+    "--result-file",
+    ""
+  ],
+  "cwd": "{root}",
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n"
+  },
+  "responses": [],
+  "expect": {
+    "stdout": "",
+    "stderr": "{\"error\": \"--result-file not found: \"}\n",
+    "exit": 2,
+    "requests": []
+  }
+}

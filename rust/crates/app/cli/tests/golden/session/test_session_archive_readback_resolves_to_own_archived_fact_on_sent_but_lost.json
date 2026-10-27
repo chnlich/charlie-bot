@@ -1,0 +1,39 @@
+{
+  "argv": [
+    "session",
+    "archive",
+    "sess-archive",
+    "--request-id",
+    "req-archive-1"
+  ],
+  "cwd": "{root}",
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n",
+    "home/sessions/sess-archive/data/chat_events.jsonl": "{\"id\": \"d467e277-a0ef-5fea-a98d-8e92d11da29c\", \"type\": \"task_closed\", \"request_id\": \"req-archive-1\", \"outcome\": \"archived\"}\n"
+  },
+  "responses": [
+    {
+      "drop_after_request": true
+    }
+  ],
+  "expect": {
+    "stdout": "{\n  \"session_id\": \"sess-archive\",\n  \"task_state\": \"archived\",\n  \"closed_event_id\": \"d467e277-a0ef-5fea-a98d-8e92d11da29c\"\n}\n",
+    "stderr": "",
+    "exit": 0,
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/api/sessions/sess-archive/archive",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "request_id": "req-archive-1"
+        }
+      }
+    ]
+  }
+}

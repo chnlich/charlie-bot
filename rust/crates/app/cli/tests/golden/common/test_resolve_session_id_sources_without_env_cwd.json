@@ -1,0 +1,29 @@
+{
+  "argv": [
+    "session",
+    "send",
+    "target-id",
+    "--message",
+    "x",
+    "--session",
+    "caller-id"
+  ],
+  "cwd": "{root}/home/sessions/cwd-session",
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n"
+  },
+  "responses": [
+    {
+      "status": 200,
+      "body": {
+        "status": "accepted"
+      }
+    }
+  ],
+  "expect": {
+    "stdout": "",
+    "stderr": "{\"error\": \"session id mismatch: --session=caller-id cwd=cwd-session; refusing to use an ambiguous session\"}\n",
+    "exit": 2,
+    "requests": []
+  }
+}

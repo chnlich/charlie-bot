@@ -1,0 +1,42 @@
+{
+  "argv": [
+    "session",
+    "cancel",
+    "sess-cancel",
+    "--reason",
+    "superseded",
+    "--request-id",
+    "req-cancel-1"
+  ],
+  "cwd": "{root}",
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n",
+    "home/sessions/sess-cancel/data/chat_events.jsonl": "{\"id\": \"338235ae-5c36-568d-b5c5-f4037a924fc6\", \"type\": \"task_closed\", \"request_id\": \"req-earlier\", \"outcome\": \"cancelled\"}\n{\"id\": \"c42cb464-5a01-5314-9fbd-876ef6f73267\", \"type\": \"task_closed\", \"request_id\": \"req-cancel-1\", \"outcome\": \"cancelled\"}\n"
+  },
+  "responses": [
+    {
+      "drop_after_request": true
+    }
+  ],
+  "expect": {
+    "stdout": "{\n  \"session_id\": \"sess-cancel\",\n  \"task_state\": \"cancelled\",\n  \"closed_event_id\": \"c42cb464-5a01-5314-9fbd-876ef6f73267\"\n}\n",
+    "stderr": "",
+    "exit": 0,
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/api/sessions/sess-cancel/cancel",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "request_id": "req-cancel-1",
+          "reason": "superseded"
+        }
+      }
+    ]
+  }
+}

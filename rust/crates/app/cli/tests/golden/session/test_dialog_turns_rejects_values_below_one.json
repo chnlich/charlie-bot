@@ -1,0 +1,19 @@
+{
+  "argv": [
+    "session",
+    "dialog",
+    "--turns",
+    "0"
+  ],
+  "cwd": "{root}",
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n"
+  },
+  "responses": [],
+  "expect": {
+    "stdout": "",
+    "stderr": "{\"error\": \"--turns must be an integer of at least 1\"}\n",
+    "exit": 2,
+    "requests": []
+  }
+}

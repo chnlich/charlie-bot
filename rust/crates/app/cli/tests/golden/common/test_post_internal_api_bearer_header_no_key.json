@@ -1,0 +1,45 @@
+{
+  "argv": [
+    "session",
+    "send",
+    "target-id",
+    "--message",
+    "relay this",
+    "--session",
+    "caller-id"
+  ],
+  "cwd": "{root}",
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n"
+  },
+  "responses": [
+    {
+      "status": 200,
+      "body": {
+        "status": "accepted"
+      }
+    }
+  ],
+  "expect": {
+    "stdout": "{\n  \"status\": \"accepted\"\n}\n",
+    "stderr": "",
+    "exit": 0,
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/api/internal/session-message",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "session_id": "caller-id",
+          "target_session_id": "target-id",
+          "content": "relay this"
+        }
+      }
+    ]
+  }
+}

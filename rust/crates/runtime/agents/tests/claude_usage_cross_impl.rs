@@ -4,9 +4,8 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
-use std::io::Write;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::time::{Duration, UNIX_EPOCH};
 
@@ -21,6 +20,8 @@ use charliebot_registry::usage::{RecordKind, SessionFacts, SourceSweep, SweepSco
 use charliebot_store::metadata::UtcDateTime;
 use serde_json::{Map, Value, json};
 use tempfile::TempDir;
+
+const PYTHON_FIXTURE: &str = include_str!("fixtures/claude_usage_reference.json");
 
 const ACCOUNT: &str = "work (default)";
 
@@ -47,28 +48,24 @@ const SID_FRESH: &str = "33333333-4444-4555-8666-777777777777";
 const TID: &str = "f0e1d2c3-a4b5-4c6d-8e7f-0a1b2c3d4e5f";
 
 fn python_reference(mode: &str, data: &Value) -> Value {
-  let helper = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/claude_usage_reference.py");
-  let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(4).unwrap();
-  let mut child = Command::new("uv")
-    .args(["run", "python"])
-    .arg(helper)
-    .arg(mode)
-    .current_dir(repo_root)
-    .stdin(Stdio::piped())
-    .stdout(Stdio::piped())
-    .stderr(Stdio::piped())
-    .spawn()
-    .unwrap();
-  child.stdin.as_mut().unwrap().write_all(data.to_string().as_bytes()).unwrap();
-  let result = child.wait_with_output().unwrap();
-  assert!(result.status.success(), "Python {mode} reference failed: {}", String::from_utf8_lossy(&result.stderr));
-  serde_json::from_slice(&result.stdout).unwrap_or_else(|error| {
-    panic!(
-      "Python {mode} reference returned invalid JSON: {error}; stdout={} stderr={}",
-      String::from_utf8_lossy(&result.stdout),
-      String::from_utf8_lossy(&result.stderr)
-    )
-  })
+  let fixture: Value = serde_json::from_str(PYTHON_FIXTURE).unwrap();
+  assert_eq!(fixture["source"], "rust/crates/runtime/agents/tests/claude_usage_reference.py");
+  assert_eq!(fixture["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
+  let mut expected = fixture["expected_by_mode"][mode].clone();
+  if mode == "read" {
+    for (index, case) in data["cases"].as_array().unwrap().iter().enumerate() {
+      let path = Path::new(case["path"].as_str().unwrap());
+      let metadata = fs::metadata(path).unwrap();
+      let modified_ns = i128::from(metadata.mtime()) * 1_000_000_000 + i128::from(metadata.mtime_nsec());
+      expected["cases"][index]["signature"] = json!(format!("{modified_ns}:{}", metadata.len()));
+    }
+  }
+  if mode == "transform" {
+    for case in expected["cases"].as_array_mut().unwrap() {
+      case["fetched_at"] = json!("2026-01-01T00:00:00+00:00");
+    }
+  }
+  expected
 }
 
 fn quota_http() -> QuotaHttp {

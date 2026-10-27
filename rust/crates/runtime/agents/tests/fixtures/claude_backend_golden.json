@@ -1,0 +1,156 @@
+{
+  "source": "rust/crates/runtime/agents/tests/claude_backend_golden.py",
+  "base_commit": "a572e7ca71858d9ba52f0abc2726fa44213210ac",
+  "expected": [
+    {
+      "argv": [
+        "claude",
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--dangerously-skip-permissions",
+        "--disallowed-tools",
+        "Monitor,ScheduleWakeup,CronCreate,CronDelete,CronList,Agent,Workflow,TaskCreate,TaskGet,TaskUpdate,TaskList,TaskStop,TaskOutput,SendMessage,ListAgents,ShareOnboardingGuide,ReportFindings",
+        "--model",
+        "claude-fable-5-1",
+        "--settings",
+        "{\"disableClaudeAiConnectors\":true,\"syncClaudeAiSkills\":false,\"disableBundledSkills\":true}"
+      ],
+      "env_delta": {
+        "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
+        "BASH_DEFAULT_TIMEOUT_MS": "900000",
+        "BASH_MAX_TIMEOUT_MS": "900000",
+        "CLAUDE_CODE_DISABLE_ADVISOR_TOOL": "1",
+        "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "433000"
+      },
+      "stdin": "fresh prompt",
+      "instructions_target": [
+        "CLAUDE.md",
+        "claude_code_wrote_claude_md"
+      ]
+    },
+    {
+      "argv": [
+        "claude",
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--dangerously-skip-permissions",
+        "--disallowed-tools",
+        "Monitor,ScheduleWakeup,CronCreate,CronDelete,CronList,Agent,Workflow,TaskCreate,TaskGet,TaskUpdate,TaskList,TaskStop,TaskOutput,SendMessage,ListAgents,ShareOnboardingGuide,ReportFindings",
+        "--model",
+        "claude-opus-4-8",
+        "--settings",
+        "{\"disableClaudeAiConnectors\":true,\"syncClaudeAiSkills\":false,\"disableBundledSkills\":true,\"fastMode\":true}",
+        "--resume",
+        "session-001"
+      ],
+      "env_delta": {
+        "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
+        "BASH_DEFAULT_TIMEOUT_MS": "900000",
+        "BASH_MAX_TIMEOUT_MS": "900000",
+        "CLAUDE_CODE_DISABLE_ADVISOR_TOOL": "1",
+        "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "433000"
+      },
+      "stdin": "resume prompt",
+      "instructions_target": [
+        "CLAUDE.md",
+        "claude_code_wrote_claude_md"
+      ]
+    },
+    {
+      "argv": [
+        "claude",
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--dangerously-skip-permissions",
+        "--disallowed-tools",
+        "Monitor,ScheduleWakeup,CronCreate,CronDelete,CronList,Agent,Workflow,TaskCreate,TaskGet,TaskUpdate,TaskList,TaskStop,TaskOutput,SendMessage,ListAgents,ShareOnboardingGuide,ReportFindings",
+        "--session-id",
+        "preassigned-001",
+        "--model",
+        "claude-sonnet-4-5",
+        "--settings",
+        "{\"disableClaudeAiConnectors\":true,\"syncClaudeAiSkills\":false,\"disableBundledSkills\":true}",
+        "--append-system-prompt-file",
+        "$RUN/harness_instructions.md"
+      ],
+      "env_delta": {
+        "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
+        "BASH_DEFAULT_TIMEOUT_MS": "900000",
+        "BASH_MAX_TIMEOUT_MS": "900000",
+        "CLAUDE_CODE_DISABLE_ADVISOR_TOOL": "1",
+        "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "433000"
+      },
+      "stdin": "task prompt",
+      "instructions_target": [
+        "CLAUDE.md",
+        "claude_code_wrote_claude_md"
+      ]
+    },
+    {
+      "argv": [
+        "$BIN/claude",
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--dangerously-skip-permissions",
+        "--disallowed-tools",
+        "Monitor,ScheduleWakeup,CronCreate,CronDelete,CronList,Agent,Workflow,TaskCreate,TaskGet,TaskUpdate,TaskList,TaskStop,TaskOutput,SendMessage,ListAgents,ShareOnboardingGuide,ReportFindings",
+        "--model",
+        "claude-haiku-4-5",
+        "--effort",
+        "high",
+        "--settings",
+        "{\"disableClaudeAiConnectors\":true,\"syncClaudeAiSkills\":false,\"disableBundledSkills\":true}",
+        "--extra-option",
+        "value with spaces"
+      ],
+      "env_delta": {
+        "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
+        "BASH_DEFAULT_TIMEOUT_MS": "900000",
+        "BASH_MAX_TIMEOUT_MS": "900000",
+        "CLAUDE_CODE_DISABLE_ADVISOR_TOOL": "1",
+        "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "433000",
+        "CLAUDE_CONFIG_DIR": "$HOME/accounts/one"
+      },
+      "stdin": "flags prompt",
+      "instructions_target": [
+        "CLAUDE.md",
+        "claude_code_wrote_claude_md"
+      ]
+    },
+    {
+      "argv": [
+        "claude",
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--dangerously-skip-permissions",
+        "--disallowed-tools",
+        "Monitor,ScheduleWakeup,CronCreate,CronDelete,CronList,Agent,Workflow,TaskCreate,TaskGet,TaskUpdate,TaskList,TaskStop,TaskOutput,SendMessage,ListAgents,ShareOnboardingGuide,ReportFindings",
+        "--model",
+        "claude-fable-5-1",
+        "--settings",
+        "{\"disableClaudeAiConnectors\":true,\"syncClaudeAiSkills\":false,\"disableBundledSkills\":true}"
+      ],
+      "env_delta": {
+        "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
+        "BASH_DEFAULT_TIMEOUT_MS": "900000",
+        "BASH_MAX_TIMEOUT_MS": "900000",
+        "CLAUDE_CODE_DISABLE_ADVISOR_TOOL": "1"
+      },
+      "stdin": "host env prompt",
+      "instructions_target": [
+        "CLAUDE.md",
+        "claude_code_wrote_claude_md"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,57 @@
+{
+  "source": "rust/crates/runtime/agents/tests/python_transport.py",
+  "base_commit": "a572e7ca71858d9ba52f0abc2726fa44213210ac",
+  "expected": {
+    "cursor_write": {
+      "cursor": "12345"
+    },
+    "cursor_read": "67890",
+    "python_prefix": [
+      {
+        "type": "assistant",
+        "seq": 1,
+        "timestamp": "2026-01-01T00:00:00Z"
+      },
+      {
+        "type": "tool_use",
+        "id": "tool-1",
+        "timestamp": "2026-01-01T00:00:01Z"
+      }
+    ],
+    "complete_stream": [
+      {
+        "type": "assistant",
+        "seq": 1,
+        "timestamp": "2026-01-01T00:00:00Z"
+      },
+      {
+        "type": "tool_use",
+        "id": "tool-1",
+        "timestamp": "2026-01-01T00:00:01Z"
+      },
+      {
+        "type": "tool_result",
+        "tool_use_id": "tool-1",
+        "timestamp": "2026-01-01T00:00:02Z"
+      },
+      {
+        "type": "result",
+        "subtype": "success",
+        "timestamp": "2026-01-01T00:00:03Z"
+      }
+    ],
+    "rust_prefix_python_suffix": [
+      {
+        "type": "tool_result",
+        "tool_use_id": "tool-1",
+        "timestamp": "2026-01-01T00:00:02Z"
+      },
+      {
+        "type": "result",
+        "subtype": "success",
+        "timestamp": "2026-01-01T00:00:03Z"
+      }
+    ],
+    "pid_start": "$PID_START"
+  }
+}

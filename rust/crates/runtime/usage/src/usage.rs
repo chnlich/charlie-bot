@@ -515,9 +515,7 @@ mod tests {
     events.iter().collect()
   }
 
-  use std::io::Write;
   use std::path::Path;
-  use std::process::{Command, Stdio};
   use std::sync::OnceLock;
 
   use charliebot_agents::backends::anthropic_compatible;
@@ -531,35 +529,7 @@ mod tests {
 
   use super::*;
 
-  const PYTHON_USAGE_REFERENCE: &str = r#"
-import json
-import os
-import sys
-
-request = json.load(sys.stdin)
-for name in (
-    "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE",
-    "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
-    "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
-    "CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT",
-):
-  os.environ.pop(name, None)
-
-from src.backends import anthropic_compatible, claude_code
-from src.infra import models
-from src.runtime import session_usage
-
-claude_code.register()
-backend_option = None
-if "backend_option" in request:
-  anthropic_compatible.register()
-  from src.backends.anthropic_compatible.options import CcAnthropicCompatibleBackend
-  backend_option = CcAnthropicCompatibleBackend.model_validate(request["backend_option"])
-meta = models.SessionMetadata(profile=request["profile"], id="synthetic-usage", name="Synthetic usage")
-run_kind = session_usage.usage_run_kind(meta)
-usage = session_usage.resolve_events_usage(request["events"], run_kind, backend_option=backend_option)
-sys.stdout.write(json.dumps({"run_kind": run_kind, "usage": usage}, separators=(",", ":")) + "\n")
-"#;
+  const PYTHON_FIXTURE: &str = include_str!("../tests/fixtures/python_usage_reference.json");
 
   fn registry() -> Registry {
     Registry::default()
@@ -582,34 +552,32 @@ sys.stdout.write(json.dumps({"run_kind": run_kind, "usage": usage}, separators=(
   }
 
   fn python_usage_reference(profile: &str, events: &[Value], backend_option: Option<Value>) -> Value {
-    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(4).unwrap();
-    let mut child = Command::new("uv")
-      .args(["run", "python", "-c", PYTHON_USAGE_REFERENCE])
-      .current_dir(repo_root)
-      .stdin(Stdio::piped())
-      .stdout(Stdio::piped())
-      .stderr(Stdio::piped())
-      .spawn()
-      .unwrap();
     let mut request = json!({"profile": profile, "events": events});
     if let Some(backend_option) = backend_option {
       request["backend_option"] = backend_option;
     }
-    child.stdin.take().unwrap().write_all(request.to_string().as_bytes()).unwrap();
-    let output = child.wait_with_output().unwrap();
-    assert!(
-      output.status.success(),
-      "Python session usage reference failed:\nstdout:\n{}\nstderr:\n{}",
-      String::from_utf8_lossy(&output.stdout),
-      String::from_utf8_lossy(&output.stderr),
-    );
-    serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
-      panic!(
-        "Python session usage reference returned invalid JSON: {error}; stdout={} stderr={}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-      )
-    })
+    let fixture: Value = serde_json::from_str(PYTHON_FIXTURE).unwrap();
+    assert_eq!(fixture["source"], "rust/crates/runtime/usage/src/usage.rs::PYTHON_USAGE_REFERENCE");
+    assert_eq!(fixture["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
+    for case in fixture["cases"].as_array().unwrap() {
+      let mut recorded_request = case["request"].clone();
+      replace_fixture_hosts(&mut recorded_request);
+      if recorded_request == request {
+        return case["expected"].clone();
+      }
+    }
+    panic!("no recorded Python usage result matches request {request}");
+  }
+
+  fn replace_fixture_hosts(value: &mut Value) {
+    match value {
+      Value::String(text) => {
+        *text = text.replace("api.$HOST", "api.synthetic.example").replace("$HOST", "synthetic.example");
+      }
+      Value::Array(values) => values.iter_mut().for_each(replace_fixture_hosts),
+      Value::Object(fields) => fields.values_mut().for_each(replace_fixture_hosts),
+      _ => {}
+    }
   }
 
   fn owner_over(home: &Path, registry: Arc<Registry>) -> (SessionUsage, Arc<Store>) {

@@ -1,0 +1,3768 @@
+{
+  "source": "rust/crates/runtime/agents/tests/codex_python_reference.py",
+  "base_commit": "a572e7ca71858d9ba52f0abc2726fa44213210ac",
+  "expected": {
+    "argv": [
+      {
+        "id": "argv-000",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.5",
+          "--config",
+          "model_reasoning_effort=\"xhigh\"",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-001",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.5",
+          "--config",
+          "model_reasoning_effort=\"xhigh\"",
+          "--synthetic-flag",
+          "value with spaces",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-002",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.5",
+          "--config",
+          "model_reasoning_effort=\"xhigh\"",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-003",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.5",
+          "--config",
+          "model_reasoning_effort=\"xhigh\"",
+          "--synthetic-flag",
+          "value with spaces",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-004",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.5",
+          "--config",
+          "model_reasoning_effort=\"xhigh\"",
+          "--config",
+          "developer_instructions=\"Rules: \\\"quoted\\\" ]\\n[section] \\\\ \\u007f ünï\"",
+          "--config",
+          "project_doc_fallback_filenames=[\"CLAUDE.md\"]",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-005",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.5",
+          "--config",
+          "model_reasoning_effort=\"xhigh\"",
+          "--config",
+          "developer_instructions=\"Rules: \\\"quoted\\\" ]\\n[section] \\\\ \\u007f ünï\"",
+          "--config",
+          "project_doc_fallback_filenames=[\"CLAUDE.md\"]",
+          "--synthetic-flag",
+          "value with spaces",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-006",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "resume",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.5",
+          "--config",
+          "model_reasoning_effort=\"xhigh\"",
+          "synthetic-thread-0001",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-007",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "resume",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.5",
+          "--config",
+          "model_reasoning_effort=\"xhigh\"",
+          "synthetic-thread-0001",
+          "--synthetic-flag",
+          "value with spaces",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-008",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "resume",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.5",
+          "--config",
+          "model_reasoning_effort=\"xhigh\"",
+          "synthetic-thread-0001",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-009",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "resume",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.5",
+          "--config",
+          "model_reasoning_effort=\"xhigh\"",
+          "synthetic-thread-0001",
+          "--synthetic-flag",
+          "value with spaces",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-010",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "resume",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.5",
+          "--config",
+          "model_reasoning_effort=\"xhigh\"",
+          "--config",
+          "developer_instructions=\"Rules: \\\"quoted\\\" ]\\n[section] \\\\ \\u007f ünï\"",
+          "--config",
+          "project_doc_fallback_filenames=[\"CLAUDE.md\"]",
+          "synthetic-thread-0001",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-011",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "resume",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.5",
+          "--config",
+          "model_reasoning_effort=\"xhigh\"",
+          "--config",
+          "developer_instructions=\"Rules: \\\"quoted\\\" ]\\n[section] \\\\ \\u007f ünï\"",
+          "--config",
+          "project_doc_fallback_filenames=[\"CLAUDE.md\"]",
+          "synthetic-thread-0001",
+          "--synthetic-flag",
+          "value with spaces",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-012",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.4-mini",
+          "--config",
+          "model_reasoning_effort=\"xhigh\"",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-013",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.4-mini",
+          "--config",
+          "model_reasoning_effort=\"xhigh\"",
+          "--synthetic-flag",
+          "value with spaces",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-014",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.4-mini",
+          "--config",
+          "model_reasoning_effort=\"xhigh\"",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-015",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.4-mini",
+          "--config",
+          "model_reasoning_effort=\"xhigh\"",
+          "--synthetic-flag",
+          "value with spaces",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-016",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.4-mini",
+          "--config",
+          "model_reasoning_effort=\"xhigh\"",
+          "--config",
+          "developer_instructions=\"Rules: \\\"quoted\\\" ]\\n[section] \\\\ \\u007f ünï\"",
+          "--config",
+          "project_doc_fallback_filenames=[\"CLAUDE.md\"]",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-017",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.4-mini",
+          "--config",
+          "model_reasoning_effort=\"xhigh\"",
+          "--config",
+          "developer_instructions=\"Rules: \\\"quoted\\\" ]\\n[section] \\\\ \\u007f ünï\"",
+          "--config",
+          "project_doc_fallback_filenames=[\"CLAUDE.md\"]",
+          "--synthetic-flag",
+          "value with spaces",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-018",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "resume",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.4-mini",
+          "--config",
+          "model_reasoning_effort=\"xhigh\"",
+          "synthetic-thread-0001",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-019",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "resume",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.4-mini",
+          "--config",
+          "model_reasoning_effort=\"xhigh\"",
+          "synthetic-thread-0001",
+          "--synthetic-flag",
+          "value with spaces",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-020",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "resume",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.4-mini",
+          "--config",
+          "model_reasoning_effort=\"xhigh\"",
+          "synthetic-thread-0001",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-021",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "resume",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.4-mini",
+          "--config",
+          "model_reasoning_effort=\"xhigh\"",
+          "synthetic-thread-0001",
+          "--synthetic-flag",
+          "value with spaces",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-022",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "resume",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.4-mini",
+          "--config",
+          "model_reasoning_effort=\"xhigh\"",
+          "--config",
+          "developer_instructions=\"Rules: \\\"quoted\\\" ]\\n[section] \\\\ \\u007f ünï\"",
+          "--config",
+          "project_doc_fallback_filenames=[\"CLAUDE.md\"]",
+          "synthetic-thread-0001",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-023",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "resume",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.4-mini",
+          "--config",
+          "model_reasoning_effort=\"xhigh\"",
+          "--config",
+          "developer_instructions=\"Rules: \\\"quoted\\\" ]\\n[section] \\\\ \\u007f ünï\"",
+          "--config",
+          "project_doc_fallback_filenames=[\"CLAUDE.md\"]",
+          "synthetic-thread-0001",
+          "--synthetic-flag",
+          "value with spaces",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-024",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.5",
+          "--config",
+          "model_reasoning_effort=\"xhigh\"",
+          "--config",
+          "model_auto_compact_token_limit=150000",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-025",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.5",
+          "--config",
+          "model_reasoning_effort=\"xhigh\"",
+          "--config",
+          "model_auto_compact_token_limit=150000",
+          "--synthetic-flag",
+          "value with spaces",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-026",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.5",
+          "--config",
+          "model_reasoning_effort=\"xhigh\"",
+          "--config",
+          "model_auto_compact_token_limit=150000",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-027",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.5",
+          "--config",
+          "model_reasoning_effort=\"xhigh\"",
+          "--config",
+          "model_auto_compact_token_limit=150000",
+          "--synthetic-flag",
+          "value with spaces",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-028",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.5",
+          "--config",
+          "model_reasoning_effort=\"xhigh\"",
+          "--config",
+          "model_auto_compact_token_limit=150000",
+          "--config",
+          "developer_instructions=\"Rules: \\\"quoted\\\" ]\\n[section] \\\\ \\u007f ünï\"",
+          "--config",
+          "project_doc_fallback_filenames=[\"CLAUDE.md\"]",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-029",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.5",
+          "--config",
+          "model_reasoning_effort=\"xhigh\"",
+          "--config",
+          "model_auto_compact_token_limit=150000",
+          "--config",
+          "developer_instructions=\"Rules: \\\"quoted\\\" ]\\n[section] \\\\ \\u007f ünï\"",
+          "--config",
+          "project_doc_fallback_filenames=[\"CLAUDE.md\"]",
+          "--synthetic-flag",
+          "value with spaces",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-030",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "resume",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.5",
+          "--config",
+          "model_reasoning_effort=\"xhigh\"",
+          "--config",
+          "model_auto_compact_token_limit=150000",
+          "synthetic-thread-0001",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-031",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "resume",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.5",
+          "--config",
+          "model_reasoning_effort=\"xhigh\"",
+          "--config",
+          "model_auto_compact_token_limit=150000",
+          "synthetic-thread-0001",
+          "--synthetic-flag",
+          "value with spaces",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-032",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "resume",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.5",
+          "--config",
+          "model_reasoning_effort=\"xhigh\"",
+          "--config",
+          "model_auto_compact_token_limit=150000",
+          "synthetic-thread-0001",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-033",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "resume",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.5",
+          "--config",
+          "model_reasoning_effort=\"xhigh\"",
+          "--config",
+          "model_auto_compact_token_limit=150000",
+          "synthetic-thread-0001",
+          "--synthetic-flag",
+          "value with spaces",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-034",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "resume",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.5",
+          "--config",
+          "model_reasoning_effort=\"xhigh\"",
+          "--config",
+          "model_auto_compact_token_limit=150000",
+          "--config",
+          "developer_instructions=\"Rules: \\\"quoted\\\" ]\\n[section] \\\\ \\u007f ünï\"",
+          "--config",
+          "project_doc_fallback_filenames=[\"CLAUDE.md\"]",
+          "synthetic-thread-0001",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-035",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "resume",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.5",
+          "--config",
+          "model_reasoning_effort=\"xhigh\"",
+          "--config",
+          "model_auto_compact_token_limit=150000",
+          "--config",
+          "developer_instructions=\"Rules: \\\"quoted\\\" ]\\n[section] \\\\ \\u007f ünï\"",
+          "--config",
+          "project_doc_fallback_filenames=[\"CLAUDE.md\"]",
+          "synthetic-thread-0001",
+          "--synthetic-flag",
+          "value with spaces",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-036",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.4-mini",
+          "--config",
+          "model_reasoning_effort=\"xhigh\"",
+          "--config",
+          "model_auto_compact_token_limit=150000",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-037",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.4-mini",
+          "--config",
+          "model_reasoning_effort=\"xhigh\"",
+          "--config",
+          "model_auto_compact_token_limit=150000",
+          "--synthetic-flag",
+          "value with spaces",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-038",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.4-mini",
+          "--config",
+          "model_reasoning_effort=\"xhigh\"",
+          "--config",
+          "model_auto_compact_token_limit=150000",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-039",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.4-mini",
+          "--config",
+          "model_reasoning_effort=\"xhigh\"",
+          "--config",
+          "model_auto_compact_token_limit=150000",
+          "--synthetic-flag",
+          "value with spaces",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-040",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.4-mini",
+          "--config",
+          "model_reasoning_effort=\"xhigh\"",
+          "--config",
+          "model_auto_compact_token_limit=150000",
+          "--config",
+          "developer_instructions=\"Rules: \\\"quoted\\\" ]\\n[section] \\\\ \\u007f ünï\"",
+          "--config",
+          "project_doc_fallback_filenames=[\"CLAUDE.md\"]",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-041",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.4-mini",
+          "--config",
+          "model_reasoning_effort=\"xhigh\"",
+          "--config",
+          "model_auto_compact_token_limit=150000",
+          "--config",
+          "developer_instructions=\"Rules: \\\"quoted\\\" ]\\n[section] \\\\ \\u007f ünï\"",
+          "--config",
+          "project_doc_fallback_filenames=[\"CLAUDE.md\"]",
+          "--synthetic-flag",
+          "value with spaces",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-042",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "resume",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.4-mini",
+          "--config",
+          "model_reasoning_effort=\"xhigh\"",
+          "--config",
+          "model_auto_compact_token_limit=150000",
+          "synthetic-thread-0001",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-043",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "resume",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.4-mini",
+          "--config",
+          "model_reasoning_effort=\"xhigh\"",
+          "--config",
+          "model_auto_compact_token_limit=150000",
+          "synthetic-thread-0001",
+          "--synthetic-flag",
+          "value with spaces",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-044",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "resume",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.4-mini",
+          "--config",
+          "model_reasoning_effort=\"xhigh\"",
+          "--config",
+          "model_auto_compact_token_limit=150000",
+          "synthetic-thread-0001",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-045",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "resume",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.4-mini",
+          "--config",
+          "model_reasoning_effort=\"xhigh\"",
+          "--config",
+          "model_auto_compact_token_limit=150000",
+          "synthetic-thread-0001",
+          "--synthetic-flag",
+          "value with spaces",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-046",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "resume",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.4-mini",
+          "--config",
+          "model_reasoning_effort=\"xhigh\"",
+          "--config",
+          "model_auto_compact_token_limit=150000",
+          "--config",
+          "developer_instructions=\"Rules: \\\"quoted\\\" ]\\n[section] \\\\ \\u007f ünï\"",
+          "--config",
+          "project_doc_fallback_filenames=[\"CLAUDE.md\"]",
+          "synthetic-thread-0001",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-047",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "resume",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.4-mini",
+          "--config",
+          "model_reasoning_effort=\"xhigh\"",
+          "--config",
+          "model_auto_compact_token_limit=150000",
+          "--config",
+          "developer_instructions=\"Rules: \\\"quoted\\\" ]\\n[section] \\\\ \\u007f ünï\"",
+          "--config",
+          "project_doc_fallback_filenames=[\"CLAUDE.md\"]",
+          "synthetic-thread-0001",
+          "--synthetic-flag",
+          "value with spaces",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-048",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.5",
+          "--config",
+          "model_reasoning_effort=\"ultra\"",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-049",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.5",
+          "--config",
+          "model_reasoning_effort=\"ultra\"",
+          "--synthetic-flag",
+          "value with spaces",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-050",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.5",
+          "--config",
+          "model_reasoning_effort=\"ultra\"",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-051",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.5",
+          "--config",
+          "model_reasoning_effort=\"ultra\"",
+          "--synthetic-flag",
+          "value with spaces",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-052",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.5",
+          "--config",
+          "model_reasoning_effort=\"ultra\"",
+          "--config",
+          "developer_instructions=\"Rules: \\\"quoted\\\" ]\\n[section] \\\\ \\u007f ünï\"",
+          "--config",
+          "project_doc_fallback_filenames=[\"CLAUDE.md\"]",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-053",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.5",
+          "--config",
+          "model_reasoning_effort=\"ultra\"",
+          "--config",
+          "developer_instructions=\"Rules: \\\"quoted\\\" ]\\n[section] \\\\ \\u007f ünï\"",
+          "--config",
+          "project_doc_fallback_filenames=[\"CLAUDE.md\"]",
+          "--synthetic-flag",
+          "value with spaces",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-054",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "resume",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.5",
+          "--config",
+          "model_reasoning_effort=\"ultra\"",
+          "synthetic-thread-0001",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-055",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "resume",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.5",
+          "--config",
+          "model_reasoning_effort=\"ultra\"",
+          "synthetic-thread-0001",
+          "--synthetic-flag",
+          "value with spaces",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-056",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "resume",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.5",
+          "--config",
+          "model_reasoning_effort=\"ultra\"",
+          "synthetic-thread-0001",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-057",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "resume",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.5",
+          "--config",
+          "model_reasoning_effort=\"ultra\"",
+          "synthetic-thread-0001",
+          "--synthetic-flag",
+          "value with spaces",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-058",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "resume",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.5",
+          "--config",
+          "model_reasoning_effort=\"ultra\"",
+          "--config",
+          "developer_instructions=\"Rules: \\\"quoted\\\" ]\\n[section] \\\\ \\u007f ünï\"",
+          "--config",
+          "project_doc_fallback_filenames=[\"CLAUDE.md\"]",
+          "synthetic-thread-0001",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-059",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "resume",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.5",
+          "--config",
+          "model_reasoning_effort=\"ultra\"",
+          "--config",
+          "developer_instructions=\"Rules: \\\"quoted\\\" ]\\n[section] \\\\ \\u007f ünï\"",
+          "--config",
+          "project_doc_fallback_filenames=[\"CLAUDE.md\"]",
+          "synthetic-thread-0001",
+          "--synthetic-flag",
+          "value with spaces",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-060",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.4-mini",
+          "--config",
+          "model_reasoning_effort=\"ultra\"",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-061",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.4-mini",
+          "--config",
+          "model_reasoning_effort=\"ultra\"",
+          "--synthetic-flag",
+          "value with spaces",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-062",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.4-mini",
+          "--config",
+          "model_reasoning_effort=\"ultra\"",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-063",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.4-mini",
+          "--config",
+          "model_reasoning_effort=\"ultra\"",
+          "--synthetic-flag",
+          "value with spaces",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-064",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.4-mini",
+          "--config",
+          "model_reasoning_effort=\"ultra\"",
+          "--config",
+          "developer_instructions=\"Rules: \\\"quoted\\\" ]\\n[section] \\\\ \\u007f ünï\"",
+          "--config",
+          "project_doc_fallback_filenames=[\"CLAUDE.md\"]",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-065",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.4-mini",
+          "--config",
+          "model_reasoning_effort=\"ultra\"",
+          "--config",
+          "developer_instructions=\"Rules: \\\"quoted\\\" ]\\n[section] \\\\ \\u007f ünï\"",
+          "--config",
+          "project_doc_fallback_filenames=[\"CLAUDE.md\"]",
+          "--synthetic-flag",
+          "value with spaces",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-066",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "resume",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.4-mini",
+          "--config",
+          "model_reasoning_effort=\"ultra\"",
+          "synthetic-thread-0001",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-067",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "resume",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.4-mini",
+          "--config",
+          "model_reasoning_effort=\"ultra\"",
+          "synthetic-thread-0001",
+          "--synthetic-flag",
+          "value with spaces",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-068",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "resume",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.4-mini",
+          "--config",
+          "model_reasoning_effort=\"ultra\"",
+          "synthetic-thread-0001",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-069",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "resume",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.4-mini",
+          "--config",
+          "model_reasoning_effort=\"ultra\"",
+          "synthetic-thread-0001",
+          "--synthetic-flag",
+          "value with spaces",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-070",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "resume",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.4-mini",
+          "--config",
+          "model_reasoning_effort=\"ultra\"",
+          "--config",
+          "developer_instructions=\"Rules: \\\"quoted\\\" ]\\n[section] \\\\ \\u007f ünï\"",
+          "--config",
+          "project_doc_fallback_filenames=[\"CLAUDE.md\"]",
+          "synthetic-thread-0001",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-071",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "resume",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.4-mini",
+          "--config",
+          "model_reasoning_effort=\"ultra\"",
+          "--config",
+          "developer_instructions=\"Rules: \\\"quoted\\\" ]\\n[section] \\\\ \\u007f ünï\"",
+          "--config",
+          "project_doc_fallback_filenames=[\"CLAUDE.md\"]",
+          "synthetic-thread-0001",
+          "--synthetic-flag",
+          "value with spaces",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-072",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.5",
+          "--config",
+          "model_reasoning_effort=\"ultra\"",
+          "--config",
+          "model_auto_compact_token_limit=150000",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-073",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.5",
+          "--config",
+          "model_reasoning_effort=\"ultra\"",
+          "--config",
+          "model_auto_compact_token_limit=150000",
+          "--synthetic-flag",
+          "value with spaces",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-074",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.5",
+          "--config",
+          "model_reasoning_effort=\"ultra\"",
+          "--config",
+          "model_auto_compact_token_limit=150000",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-075",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.5",
+          "--config",
+          "model_reasoning_effort=\"ultra\"",
+          "--config",
+          "model_auto_compact_token_limit=150000",
+          "--synthetic-flag",
+          "value with spaces",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-076",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.5",
+          "--config",
+          "model_reasoning_effort=\"ultra\"",
+          "--config",
+          "model_auto_compact_token_limit=150000",
+          "--config",
+          "developer_instructions=\"Rules: \\\"quoted\\\" ]\\n[section] \\\\ \\u007f ünï\"",
+          "--config",
+          "project_doc_fallback_filenames=[\"CLAUDE.md\"]",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-077",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.5",
+          "--config",
+          "model_reasoning_effort=\"ultra\"",
+          "--config",
+          "model_auto_compact_token_limit=150000",
+          "--config",
+          "developer_instructions=\"Rules: \\\"quoted\\\" ]\\n[section] \\\\ \\u007f ünï\"",
+          "--config",
+          "project_doc_fallback_filenames=[\"CLAUDE.md\"]",
+          "--synthetic-flag",
+          "value with spaces",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-078",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "resume",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.5",
+          "--config",
+          "model_reasoning_effort=\"ultra\"",
+          "--config",
+          "model_auto_compact_token_limit=150000",
+          "synthetic-thread-0001",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-079",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "resume",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.5",
+          "--config",
+          "model_reasoning_effort=\"ultra\"",
+          "--config",
+          "model_auto_compact_token_limit=150000",
+          "synthetic-thread-0001",
+          "--synthetic-flag",
+          "value with spaces",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-080",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "resume",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.5",
+          "--config",
+          "model_reasoning_effort=\"ultra\"",
+          "--config",
+          "model_auto_compact_token_limit=150000",
+          "synthetic-thread-0001",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-081",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "resume",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.5",
+          "--config",
+          "model_reasoning_effort=\"ultra\"",
+          "--config",
+          "model_auto_compact_token_limit=150000",
+          "synthetic-thread-0001",
+          "--synthetic-flag",
+          "value with spaces",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-082",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "resume",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.5",
+          "--config",
+          "model_reasoning_effort=\"ultra\"",
+          "--config",
+          "model_auto_compact_token_limit=150000",
+          "--config",
+          "developer_instructions=\"Rules: \\\"quoted\\\" ]\\n[section] \\\\ \\u007f ünï\"",
+          "--config",
+          "project_doc_fallback_filenames=[\"CLAUDE.md\"]",
+          "synthetic-thread-0001",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-083",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "resume",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.5",
+          "--config",
+          "model_reasoning_effort=\"ultra\"",
+          "--config",
+          "model_auto_compact_token_limit=150000",
+          "--config",
+          "developer_instructions=\"Rules: \\\"quoted\\\" ]\\n[section] \\\\ \\u007f ünï\"",
+          "--config",
+          "project_doc_fallback_filenames=[\"CLAUDE.md\"]",
+          "synthetic-thread-0001",
+          "--synthetic-flag",
+          "value with spaces",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-084",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.4-mini",
+          "--config",
+          "model_reasoning_effort=\"ultra\"",
+          "--config",
+          "model_auto_compact_token_limit=150000",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-085",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.4-mini",
+          "--config",
+          "model_reasoning_effort=\"ultra\"",
+          "--config",
+          "model_auto_compact_token_limit=150000",
+          "--synthetic-flag",
+          "value with spaces",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-086",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.4-mini",
+          "--config",
+          "model_reasoning_effort=\"ultra\"",
+          "--config",
+          "model_auto_compact_token_limit=150000",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-087",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.4-mini",
+          "--config",
+          "model_reasoning_effort=\"ultra\"",
+          "--config",
+          "model_auto_compact_token_limit=150000",
+          "--synthetic-flag",
+          "value with spaces",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-088",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.4-mini",
+          "--config",
+          "model_reasoning_effort=\"ultra\"",
+          "--config",
+          "model_auto_compact_token_limit=150000",
+          "--config",
+          "developer_instructions=\"Rules: \\\"quoted\\\" ]\\n[section] \\\\ \\u007f ünï\"",
+          "--config",
+          "project_doc_fallback_filenames=[\"CLAUDE.md\"]",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-089",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.4-mini",
+          "--config",
+          "model_reasoning_effort=\"ultra\"",
+          "--config",
+          "model_auto_compact_token_limit=150000",
+          "--config",
+          "developer_instructions=\"Rules: \\\"quoted\\\" ]\\n[section] \\\\ \\u007f ünï\"",
+          "--config",
+          "project_doc_fallback_filenames=[\"CLAUDE.md\"]",
+          "--synthetic-flag",
+          "value with spaces",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-090",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "resume",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.4-mini",
+          "--config",
+          "model_reasoning_effort=\"ultra\"",
+          "--config",
+          "model_auto_compact_token_limit=150000",
+          "synthetic-thread-0001",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-091",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "resume",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.4-mini",
+          "--config",
+          "model_reasoning_effort=\"ultra\"",
+          "--config",
+          "model_auto_compact_token_limit=150000",
+          "synthetic-thread-0001",
+          "--synthetic-flag",
+          "value with spaces",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-092",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "resume",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.4-mini",
+          "--config",
+          "model_reasoning_effort=\"ultra\"",
+          "--config",
+          "model_auto_compact_token_limit=150000",
+          "synthetic-thread-0001",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-093",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "resume",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.4-mini",
+          "--config",
+          "model_reasoning_effort=\"ultra\"",
+          "--config",
+          "model_auto_compact_token_limit=150000",
+          "synthetic-thread-0001",
+          "--synthetic-flag",
+          "value with spaces",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-094",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "resume",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.4-mini",
+          "--config",
+          "model_reasoning_effort=\"ultra\"",
+          "--config",
+          "model_auto_compact_token_limit=150000",
+          "--config",
+          "developer_instructions=\"Rules: \\\"quoted\\\" ]\\n[section] \\\\ \\u007f ünï\"",
+          "--config",
+          "project_doc_fallback_filenames=[\"CLAUDE.md\"]",
+          "synthetic-thread-0001",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      },
+      {
+        "id": "argv-095",
+        "argv": [
+          "$TMPROOT/bin/codex",
+          "exec",
+          "resume",
+          "--json",
+          "--skip-git-repo-check",
+          "--dangerously-bypass-approvals-and-sandbox",
+          "--disable",
+          "multi_agent",
+          "--model",
+          "gpt-5.4-mini",
+          "--config",
+          "model_reasoning_effort=\"ultra\"",
+          "--config",
+          "model_auto_compact_token_limit=150000",
+          "--config",
+          "developer_instructions=\"Rules: \\\"quoted\\\" ]\\n[section] \\\\ \\u007f ünï\"",
+          "--config",
+          "project_doc_fallback_filenames=[\"CLAUDE.md\"]",
+          "synthetic-thread-0001",
+          "--synthetic-flag",
+          "value with spaces",
+          "--",
+          "Review \"the\" synthetic\nprompt \\ with ünïcode\tand a tab"
+        ],
+        "env_delta": {
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        },
+        "stdin": null,
+        "instructions_target": [
+          "AGENTS.md",
+          "codex_wrote_agents_md"
+        ]
+      }
+    ],
+    "env": [
+      {
+        "id": "path_without_user_bin",
+        "env": {
+          "HOME": "$TMPROOT/home",
+          "PATH": "$TMPROOT/home/.local/bin:/usr/bin:/bin"
+        }
+      },
+      {
+        "id": "path_with_user_bin",
+        "env": {
+          "HOME": "$TMPROOT/home",
+          "PATH": "/usr/bin:$TMPROOT/home/.local/bin:/bin"
+        }
+      },
+      {
+        "id": "path_unset",
+        "env": {
+          "HOME": "$TMPROOT/home",
+          "PATH": "$TMPROOT/home/.local/bin:"
+        }
+      },
+      {
+        "id": "path_user_bin_is_a_prefix_only",
+        "env": {
+          "HOME": "$TMPROOT/home",
+          "PATH": "$TMPROOT/home/.local/bin:$TMPROOT/home/.local/bin-extra:/usr/bin"
+        }
+      }
+    ],
+    "translate": [
+      [
+        {
+          "type": "session_attached",
+          "session_id": "synthetic-thread-0001"
+        }
+      ],
+      [],
+      [
+        {
+          "type": "assistant",
+          "message": {
+            "content": [
+              {
+                "type": "text",
+                "text": "Hello"
+              }
+            ]
+          }
+        }
+      ],
+      [
+        {
+          "type": "assistant",
+          "message": {
+            "content": [
+              {
+                "type": "text",
+                "text": ", world"
+              }
+            ]
+          }
+        }
+      ],
+      [
+        {
+          "type": "assistant",
+          "message": {
+            "content": [
+              {
+                "type": "text",
+                "text": "!"
+              }
+            ]
+          }
+        }
+      ],
+      [
+        {
+          "type": "assistant",
+          "message": {
+            "content": [
+              {
+                "type": "text",
+                "text": "From content"
+              }
+            ]
+          }
+        }
+      ],
+      [],
+      [
+        {
+          "type": "thinking",
+          "content": "Think"
+        }
+      ],
+      [
+        {
+          "type": "thinking",
+          "content": "ing"
+        }
+      ],
+      [
+        {
+          "type": "thinking",
+          "content": "Summary"
+        }
+      ],
+      [
+        {
+          "type": "tool_use",
+          "name": "Bash",
+          "input": {
+            "command": "ls -la"
+          }
+        }
+      ],
+      [
+        {
+          "type": "tool_result",
+          "tool_name": "Bash",
+          "content": "total 0\n"
+        }
+      ],
+      [
+        {
+          "type": "tool_result",
+          "tool_name": "Bash",
+          "content": "fallback"
+        }
+      ],
+      [
+        {
+          "type": "tool_result",
+          "tool_name": "Bash",
+          "content": ""
+        }
+      ],
+      [
+        {
+          "type": "tool_use",
+          "name": "WebSearch",
+          "input": {
+            "query": "synthetic query"
+          }
+        }
+      ],
+      [
+        {
+          "type": "tool_result",
+          "tool_name": "WebSearch",
+          "content": "42"
+        }
+      ],
+      [
+        {
+          "type": "file_write",
+          "path": "$SYNTHETIC_ROOT/a.txt"
+        },
+        {
+          "type": "file_write",
+          "path": "$SYNTHETIC_ROOT/b.txt"
+        }
+      ],
+      [
+        {
+          "type": "tool_use",
+          "name": "mcp:synthetic/lookup",
+          "input": {
+            "q": 1
+          }
+        }
+      ],
+      [
+        {
+          "type": "tool_use",
+          "name": "mcp:raw",
+          "input": {
+            "raw": "{not json"
+          }
+        }
+      ],
+      [
+        {
+          "type": "tool_use",
+          "name": "mcp:s/obj",
+          "input": {
+            "k": [
+              "v"
+            ]
+          }
+        }
+      ],
+      [
+        {
+          "type": "tool_result",
+          "tool_name": "mcp:synthetic/lookup",
+          "content": "{'ok': True}"
+        }
+      ],
+      [
+        {
+          "type": "tool_result",
+          "tool_name": "mcp:raw",
+          "content": "boom"
+        }
+      ],
+      [
+        {
+          "type": "assistant",
+          "message": {
+            "content": [
+              {
+                "type": "text",
+                "text": "- [x] first\n- [~] second\n- [x] third\n- [ ] fourth\n- [ ] fallback"
+              }
+            ]
+          }
+        }
+      ],
+      [],
+      [],
+      [
+        {
+          "type": "assistant",
+          "message": {
+            "content": [
+              {
+                "type": "text",
+                "text": "- [ ] solo"
+              }
+            ]
+          }
+        }
+      ],
+      [
+        {
+          "type": "error",
+          "message": "item failed",
+          "content": "item failed"
+        }
+      ],
+      [
+        {
+          "type": "error",
+          "message": "Codex item error with no message. Full event: {\"type\": \"item.completed\", \"item\": {\"id\": \"err-2\", \"type\": \"error\"}}",
+          "content": "Codex item error with no message. Full event: {\"type\": \"item.completed\", \"item\": {\"id\": \"err-2\", \"type\": \"error\"}}"
+        }
+      ],
+      [],
+      [
+        {
+          "type": "error",
+          "message": "turn exploded",
+          "content": "turn exploded"
+        }
+      ],
+      [
+        {
+          "type": "error",
+          "message": "plain string error",
+          "content": "plain string error"
+        }
+      ],
+      [
+        {
+          "type": "error",
+          "message": "Codex error with no message. Full event: {\"type\": \"error\"}",
+          "content": "Codex error with no message. Full event: {\"type\": \"error\"}"
+        }
+      ],
+      [
+        {
+          "type": "result",
+          "result": "",
+          "usage": {
+            "input_tokens": 1000,
+            "output_tokens": 20,
+            "cache_read_input_tokens": 400,
+            "cache_creation_input_tokens": 0
+          },
+          "total_cost_usd": 0.0038
+        }
+      ],
+      []
+    ],
+    "read": {
+      "signature": "$READ_MTIME_NS:1946",
+      "records": [
+        {
+          "record_id": "codex-total:eeeeeeee-1111-4222-8333-888888888888:1000:400:20",
+          "kind": "native",
+          "source": "Codex",
+          "model": "gpt-5.5",
+          "account": "work (default)",
+          "ts": "2026-10-18T09:00:03Z",
+          "in_fresh": 600,
+          "cache_write": 0,
+          "cache_read": 400,
+          "output": 20,
+          "in_unsplit": 0,
+          "sessions": [
+            "dddddddd-1111-4222-8333-777777777777"
+          ]
+        },
+        {
+          "record_id": "codex-total:eeeeeeee-1111-4222-8333-888888888888:6000:400:320",
+          "kind": "native",
+          "source": "Codex",
+          "model": "gpt-5.6-terra",
+          "account": "work (default)",
+          "ts": "2026-10-18T09:00:05Z",
+          "in_fresh": 5000,
+          "cache_write": 0,
+          "cache_read": 0,
+          "output": 300,
+          "in_unsplit": 0,
+          "sessions": [
+            "dddddddd-1111-4222-8333-777777777777"
+          ]
+        }
+      ]
+    },
+    "resolve": [
+      {
+        "id": "persisted_thread",
+        "usage": {
+          "context_tokens": 500,
+          "context_full": 258400,
+          "context_compact_at": 150000,
+          "total_cost_usd": 1.38,
+          "model": "gpt-5.5"
+        }
+      },
+      {
+        "id": "event_thread",
+        "usage": {
+          "context_tokens": 500,
+          "context_full": 258400,
+          "context_compact_at": 150000,
+          "total_cost_usd": 1.38,
+          "model": "gpt-5.5"
+        }
+      },
+      {
+        "id": "chat_file_thread",
+        "usage": {
+          "context_tokens": 500,
+          "context_full": 258400,
+          "context_compact_at": 150000,
+          "total_cost_usd": 1.38,
+          "model": "gpt-5.5"
+        }
+      },
+      {
+        "id": "no_thread",
+        "usage": null
+      },
+      {
+        "id": "no_backend",
+        "usage": {
+          "context_tokens": 500,
+          "context_full": 258400,
+          "context_compact_at": null,
+          "total_cost_usd": 1.38,
+          "model": "gpt-5.5"
+        }
+      },
+      {
+        "id": "unlimited_backend",
+        "usage": {
+          "context_tokens": 500,
+          "context_full": 258400,
+          "context_compact_at": null,
+          "total_cost_usd": 1.38,
+          "model": "gpt-5.5"
+        }
+      },
+      {
+        "id": "unpriced_model",
+        "usage": {
+          "context_tokens": 10,
+          "context_full": 258400,
+          "context_compact_at": 150000,
+          "total_cost_usd": null,
+          "model": "unknown-model"
+        }
+      },
+      {
+        "id": "missing_rollout",
+        "usage": null
+      },
+      {
+        "id": "empty_persisted",
+        "usage": {
+          "context_tokens": 500,
+          "context_full": 258400,
+          "context_compact_at": 150000,
+          "total_cost_usd": 1.38,
+          "model": "gpt-5.5"
+        }
+      }
+    ],
+    "quota": [
+      {
+        "id": "plan_and_spend",
+        "fetch": {
+          "windows": [
+            {
+              "window_minutes": 300,
+              "utilization": 42.5,
+              "resets_at": "$NOW_MINUS_1H"
+            },
+            {
+              "window_minutes": 10080,
+              "utilization": 10.0,
+              "resets_at": "$NOW_PLUS_2D"
+            }
+          ],
+          "provider": "codex",
+          "token_count_observed_at": "$NOW_MINUS_2H",
+          "credits": {
+            "unlimited": false,
+            "balance": 12.5
+          },
+          "spend": {
+            "last_24h_usd": 0.0385,
+            "last_7d_usd": 8.0385
+          }
+        },
+        "marked": {
+          "windows": [
+            {
+              "window_minutes": 300,
+              "utilization": 42.5,
+              "resets_at": "$NOW_MINUS_1H",
+              "expired": true
+            },
+            {
+              "window_minutes": 10080,
+              "utilization": 10.0,
+              "resets_at": "$NOW_PLUS_2D"
+            }
+          ],
+          "provider": "codex",
+          "token_count_observed_at": "$NOW_MINUS_2H",
+          "credits": {
+            "unlimited": false,
+            "balance": 12.5
+          },
+          "spend": {
+            "last_24h_usd": 0.0385,
+            "last_7d_usd": 8.0385
+          }
+        },
+        "last_error": "no sessions found"
+      },
+      {
+        "id": "no_plan_reading",
+        "fetch": null,
+        "marked": null,
+        "last_error": "no plan-quota reading in 6h"
+      },
+      {
+        "id": "no_sessions",
+        "fetch": null,
+        "marked": null,
+        "last_error": "no sessions found"
+      }
+    ],
+    "cost": [
+      {
+        "model": "gpt-5.6-sol",
+        "usage": {
+          "input_tokens": 1000,
+          "cached_input_tokens": 400,
+          "output_tokens": 20
+        },
+        "cost": 0.0038
+      },
+      {
+        "model": "gpt-5.6-sol",
+        "usage": {
+          "input_tokens": 0,
+          "cached_input_tokens": 0,
+          "output_tokens": 0
+        },
+        "cost": 0.0
+      },
+      {
+        "model": "gpt-5.6-sol",
+        "usage": {},
+        "cost": 0.0
+      },
+      {
+        "model": "gpt-5.6-sol",
+        "usage": {
+          "input_tokens": 10,
+          "cached_input_tokens": 10,
+          "output_tokens": 0
+        },
+        "cost": 5e-06
+      },
+      {
+        "model": "gpt-5.6-sol",
+        "usage": {
+          "input_tokens": 123456789,
+          "cached_input_tokens": 1,
+          "output_tokens": 987654
+        },
+        "cost": 646.9135605
+      },
+      {
+        "model": "gpt-5.6-terra",
+        "usage": {
+          "input_tokens": 1000,
+          "cached_input_tokens": 400,
+          "output_tokens": 20
+        },
+        "cost": 0.0019
+      },
+      {
+        "model": "gpt-5.6-terra",
+        "usage": {
+          "input_tokens": 0,
+          "cached_input_tokens": 0,
+          "output_tokens": 0
+        },
+        "cost": 0.0
+      },
+      {
+        "model": "gpt-5.6-terra",
+        "usage": {},
+        "cost": 0.0
+      },
+      {
+        "model": "gpt-5.6-terra",
+        "usage": {
+          "input_tokens": 10,
+          "cached_input_tokens": 10,
+          "output_tokens": 0
+        },
+        "cost": 2.5e-06
+      },
+      {
+        "model": "gpt-5.6-terra",
+        "usage": {
+          "input_tokens": 123456789,
+          "cached_input_tokens": 1,
+          "output_tokens": 987654
+        },
+        "cost": 323.45678025
+      },
+      {
+        "model": "gpt-5.6-luna",
+        "usage": {
+          "input_tokens": 1000,
+          "cached_input_tokens": 400,
+          "output_tokens": 20
+        },
+        "cost": 0.00076
+      },
+      {
+        "model": "gpt-5.6-luna",
+        "usage": {
+          "input_tokens": 0,
+          "cached_input_tokens": 0,
+          "output_tokens": 0
+        },
+        "cost": 0.0
+      },
+      {
+        "model": "gpt-5.6-luna",
+        "usage": {},
+        "cost": 0.0
+      },
+      {
+        "model": "gpt-5.6-luna",
+        "usage": {
+          "input_tokens": 10,
+          "cached_input_tokens": 10,
+          "output_tokens": 0
+        },
+        "cost": 1e-06
+      },
+      {
+        "model": "gpt-5.6-luna",
+        "usage": {
+          "input_tokens": 123456789,
+          "cached_input_tokens": 1,
+          "output_tokens": 987654
+        },
+        "cost": 129.3827121
+      },
+      {
+        "model": "gpt-5.5",
+        "usage": {
+          "input_tokens": 1000,
+          "cached_input_tokens": 400,
+          "output_tokens": 20
+        },
+        "cost": 0.0038
+      },
+      {
+        "model": "gpt-5.5",
+        "usage": {
+          "input_tokens": 0,
+          "cached_input_tokens": 0,
+          "output_tokens": 0
+        },
+        "cost": 0.0
+      },
+      {
+        "model": "gpt-5.5",
+        "usage": {},
+        "cost": 0.0
+      },
+      {
+        "model": "gpt-5.5",
+        "usage": {
+          "input_tokens": 10,
+          "cached_input_tokens": 10,
+          "output_tokens": 0
+        },
+        "cost": 5e-06
+      },
+      {
+        "model": "gpt-5.5",
+        "usage": {
+          "input_tokens": 123456789,
+          "cached_input_tokens": 1,
+          "output_tokens": 987654
+        },
+        "cost": 646.9135605
+      },
+      {
+        "model": "gpt-5.4",
+        "usage": {
+          "input_tokens": 1000,
+          "cached_input_tokens": 400,
+          "output_tokens": 20
+        },
+        "cost": 0.0019
+      },
+      {
+        "model": "gpt-5.4",
+        "usage": {
+          "input_tokens": 0,
+          "cached_input_tokens": 0,
+          "output_tokens": 0
+        },
+        "cost": 0.0
+      },
+      {
+        "model": "gpt-5.4",
+        "usage": {},
+        "cost": 0.0
+      },
+      {
+        "model": "gpt-5.4",
+        "usage": {
+          "input_tokens": 10,
+          "cached_input_tokens": 10,
+          "output_tokens": 0
+        },
+        "cost": 2.5e-06
+      },
+      {
+        "model": "gpt-5.4",
+        "usage": {
+          "input_tokens": 123456789,
+          "cached_input_tokens": 1,
+          "output_tokens": 987654
+        },
+        "cost": 323.45678025
+      },
+      {
+        "model": "gpt-5.4-mini",
+        "usage": {
+          "input_tokens": 1000,
+          "cached_input_tokens": 400,
+          "output_tokens": 20
+        },
+        "cost": 0.00057
+      },
+      {
+        "model": "gpt-5.4-mini",
+        "usage": {
+          "input_tokens": 0,
+          "cached_input_tokens": 0,
+          "output_tokens": 0
+        },
+        "cost": 0.0
+      },
+      {
+        "model": "gpt-5.4-mini",
+        "usage": {},
+        "cost": 0.0
+      },
+      {
+        "model": "gpt-5.4-mini",
+        "usage": {
+          "input_tokens": 10,
+          "cached_input_tokens": 10,
+          "output_tokens": 0
+        },
+        "cost": 7.5e-07
+      },
+      {
+        "model": "gpt-5.4-mini",
+        "usage": {
+          "input_tokens": 123456789,
+          "cached_input_tokens": 1,
+          "output_tokens": 987654
+        },
+        "cost": 97.03703407500001
+      },
+      {
+        "model": "gpt-5.3-codex",
+        "usage": {
+          "input_tokens": 1000,
+          "cached_input_tokens": 400,
+          "output_tokens": 20
+        },
+        "cost": 0.0014
+      },
+      {
+        "model": "gpt-5.3-codex",
+        "usage": {
+          "input_tokens": 0,
+          "cached_input_tokens": 0,
+          "output_tokens": 0
+        },
+        "cost": 0.0
+      },
+      {
+        "model": "gpt-5.3-codex",
+        "usage": {},
+        "cost": 0.0
+      },
+      {
+        "model": "gpt-5.3-codex",
+        "usage": {
+          "input_tokens": 10,
+          "cached_input_tokens": 10,
+          "output_tokens": 0
+        },
+        "cost": 1.75e-06
+      },
+      {
+        "model": "gpt-5.3-codex",
+        "usage": {
+          "input_tokens": 123456789,
+          "cached_input_tokens": 1,
+          "output_tokens": 987654
+        },
+        "cost": 229.87653517500001
+      },
+      {
+        "model": "unknown-model",
+        "usage": {
+          "input_tokens": 1000,
+          "cached_input_tokens": 400,
+          "output_tokens": 20
+        },
+        "cost": null
+      },
+      {
+        "model": "unknown-model",
+        "usage": {
+          "input_tokens": 0,
+          "cached_input_tokens": 0,
+          "output_tokens": 0
+        },
+        "cost": null
+      },
+      {
+        "model": "unknown-model",
+        "usage": {},
+        "cost": null
+      },
+      {
+        "model": "unknown-model",
+        "usage": {
+          "input_tokens": 10,
+          "cached_input_tokens": 10,
+          "output_tokens": 0
+        },
+        "cost": null
+      },
+      {
+        "model": "unknown-model",
+        "usage": {
+          "input_tokens": 123456789,
+          "cached_input_tokens": 1,
+          "output_tokens": 987654
+        },
+        "cost": null
+      },
+      {
+        "model": "",
+        "usage": {
+          "input_tokens": 1000,
+          "cached_input_tokens": 400,
+          "output_tokens": 20
+        },
+        "cost": null
+      },
+      {
+        "model": "",
+        "usage": {
+          "input_tokens": 0,
+          "cached_input_tokens": 0,
+          "output_tokens": 0
+        },
+        "cost": null
+      },
+      {
+        "model": "",
+        "usage": {},
+        "cost": null
+      },
+      {
+        "model": "",
+        "usage": {
+          "input_tokens": 10,
+          "cached_input_tokens": 10,
+          "output_tokens": 0
+        },
+        "cost": null
+      },
+      {
+        "model": "",
+        "usage": {
+          "input_tokens": 123456789,
+          "cached_input_tokens": 1,
+          "output_tokens": 987654
+        },
+        "cost": null
+      }
+    ]
+  },
+  "placeholders": {
+    "read_mtime_ns": "$READ_MTIME_NS",
+    "quota_observed_at": "$NOW_MINUS_2H",
+    "primary_reset": "$NOW_MINUS_1H",
+    "secondary_reset": "$NOW_PLUS_2D"
+  }
+}

@@ -1,0 +1,372 @@
+{
+  "source": "rust/crates/runtime/store/tests/python_message_aggregator.py",
+  "base_commit": "a572e7ca71858d9ba52f0abc2726fa44213210ac",
+  "request": [
+    {
+      "type": "assistant",
+      "message": {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "draft"
+          }
+        ]
+      }
+    },
+    {
+      "type": "user",
+      "message": {
+        "role": "user",
+        "content": "synthetic native prompt"
+      },
+      "parentUuid": null,
+      "sessionId": "synthetic-session",
+      "uuid": "synthetic-native-event",
+      "timestamp": "2026-01-01T00:00:00Z"
+    },
+    {
+      "type": "user",
+      "message": {
+        "role": "user",
+        "content": {
+          "nested": true
+        }
+      }
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "role": "assistant",
+        "content": "plain string content"
+      }
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "role": "assistant",
+        "content": {
+          "nested": "object"
+        }
+      }
+    },
+    {
+      "type": "assistant",
+      "message": {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool_use",
+            "name": "ExitPlanMode",
+            "input": {
+              "plan": {
+                "steps": [
+                  "one"
+                ]
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "model_fallback_notice",
+      "served_models": "abc",
+      "configured_model": "synthetic-model"
+    },
+    {
+      "type": "task_input_acknowledged",
+      "input_ids": "xy",
+      "note": "synthetic note"
+    },
+    {
+      "type": "run_header",
+      "kind": "work",
+      "launched": 1,
+      "launch_failed": 0,
+      "tool_calls": "2",
+      "task_spec_ref": "synthetic-spec",
+      "launch_prompt_ref": "synthetic-prompt",
+      "state": "done"
+    },
+    {
+      "type": "run_header",
+      "kind": "work",
+      "launched": true,
+      "launch_failed": false,
+      "tool_calls": "1_000",
+      "task_spec_ref": "synthetic-spec",
+      "launch_prompt_ref": "synthetic-prompt",
+      "state": "done"
+    },
+    {
+      "type": "run_header",
+      "kind": "work",
+      "launched": true,
+      "launch_failed": false,
+      "tool_calls": -0.75,
+      "task_spec_ref": "synthetic-spec",
+      "launch_prompt_ref": "synthetic-prompt",
+      "state": "done"
+    },
+    {
+      "type": "run_header",
+      "kind": "work",
+      "launched": true,
+      "launch_failed": false,
+      "tool_calls": "9223372036854775808",
+      "task_spec_ref": "synthetic-spec",
+      "launch_prompt_ref": "synthetic-prompt",
+      "state": "done"
+    },
+    {
+      "type": "run_header",
+      "kind": "work",
+      "launched": true,
+      "launch_failed": false,
+      "tool_calls": 2.75,
+      "task_spec_ref": "synthetic-spec",
+      "launch_prompt_ref": "synthetic-prompt",
+      "state": "done"
+    },
+    {
+      "type": "run_header",
+      "kind": "work",
+      "launched": true,
+      "launch_failed": false,
+      "tool_calls": true,
+      "task_spec_ref": "synthetic-spec",
+      "launch_prompt_ref": "synthetic-prompt",
+      "state": "done"
+    },
+    {
+      "type": "context_compacted",
+      "trigger": "auto",
+      "compact_metadata": {
+        "pre_tokens": true,
+        "post_tokens": 1000
+      }
+    }
+  ],
+  "expected": [
+    {
+      "type": "stream",
+      "message": {
+        "role": "assistant",
+        "content": "draft",
+        "event_index": 0,
+        "id": "legacy:0",
+        "timestamp": null
+      }
+    },
+    {
+      "type": "stream",
+      "message": {
+        "role": "assistant",
+        "content": "draft",
+        "event_index": 0,
+        "id": "legacy:0",
+        "timestamp": null
+      }
+    },
+    {
+      "type": "stream",
+      "message": {
+        "role": "assistant",
+        "content": "draft",
+        "event_index": 0,
+        "id": "legacy:0",
+        "timestamp": null
+      }
+    },
+    {
+      "type": "stream",
+      "message": {
+        "role": "assistant",
+        "content": "draft",
+        "event_index": 3,
+        "id": "legacy:3",
+        "timestamp": null
+      }
+    },
+    {
+      "type": "stream",
+      "message": {
+        "role": "assistant",
+        "content": "draft",
+        "event_index": 4,
+        "id": "legacy:4",
+        "timestamp": null
+      }
+    },
+    {
+      "type": "message",
+      "message": {
+        "role": "assistant",
+        "content": "draft",
+        "event_index": 5,
+        "id": "legacy:4",
+        "timestamp": null
+      }
+    },
+    {
+      "type": "message",
+      "message": {
+        "role": "plan",
+        "content": {
+          "steps": [
+            "one"
+          ]
+        },
+        "event_index": 5,
+        "id": "legacy:5",
+        "timestamp": null
+      }
+    },
+    {
+      "type": "message",
+      "message": {
+        "role": "system",
+        "content": "Served by a, b, c (configured synthetic-model)",
+        "timestamp": null,
+        "event_index": 6,
+        "id": "legacy:6"
+      }
+    },
+    {
+      "type": "message",
+      "message": {
+        "role": "system",
+        "content": "Task input(s) acknowledged as handled: x, y \u2014 synthetic note",
+        "timestamp": null,
+        "event_index": 7,
+        "id": "legacy:7"
+      }
+    },
+    {
+      "type": "message",
+      "message": {
+        "role": "system",
+        "kind": "run_header",
+        "content": "Run work \u00b7 done \u00b7 2 tool calls",
+        "run_id": "",
+        "state": "done",
+        "error": "",
+        "tool_calls": "2",
+        "launched": 1,
+        "launch_failed": 0,
+        "task_spec_ref": "synthetic-spec",
+        "launch_prompt_ref": "synthetic-prompt",
+        "timestamp": null,
+        "event_index": 8,
+        "id": "legacy:8"
+      }
+    },
+    {
+      "type": "message",
+      "message": {
+        "role": "system",
+        "kind": "run_header",
+        "content": "Run work \u00b7 done \u00b7 1000 tool calls",
+        "run_id": "",
+        "state": "done",
+        "error": "",
+        "tool_calls": "1_000",
+        "launched": true,
+        "launch_failed": false,
+        "task_spec_ref": "synthetic-spec",
+        "launch_prompt_ref": "synthetic-prompt",
+        "timestamp": null,
+        "event_index": 9,
+        "id": "legacy:9"
+      }
+    },
+    {
+      "type": "message",
+      "message": {
+        "role": "system",
+        "kind": "run_header",
+        "content": "Run work \u00b7 done \u00b7 0 tool calls",
+        "run_id": "",
+        "state": "done",
+        "error": "",
+        "tool_calls": -0.75,
+        "launched": true,
+        "launch_failed": false,
+        "task_spec_ref": "synthetic-spec",
+        "launch_prompt_ref": "synthetic-prompt",
+        "timestamp": null,
+        "event_index": 10,
+        "id": "legacy:10"
+      }
+    },
+    {
+      "type": "message",
+      "message": {
+        "role": "system",
+        "kind": "run_header",
+        "content": "Run work \u00b7 done \u00b7 9223372036854775808 tool calls",
+        "run_id": "",
+        "state": "done",
+        "error": "",
+        "tool_calls": "9223372036854775808",
+        "launched": true,
+        "launch_failed": false,
+        "task_spec_ref": "synthetic-spec",
+        "launch_prompt_ref": "synthetic-prompt",
+        "timestamp": null,
+        "event_index": 11,
+        "id": "legacy:11"
+      }
+    },
+    {
+      "type": "message",
+      "message": {
+        "role": "system",
+        "kind": "run_header",
+        "content": "Run work \u00b7 done \u00b7 2 tool calls",
+        "run_id": "",
+        "state": "done",
+        "error": "",
+        "tool_calls": 2.75,
+        "launched": true,
+        "launch_failed": false,
+        "task_spec_ref": "synthetic-spec",
+        "launch_prompt_ref": "synthetic-prompt",
+        "timestamp": null,
+        "event_index": 12,
+        "id": "legacy:12"
+      }
+    },
+    {
+      "type": "message",
+      "message": {
+        "role": "system",
+        "kind": "run_header",
+        "content": "Run work \u00b7 done \u00b7 1 tool call",
+        "run_id": "",
+        "state": "done",
+        "error": "",
+        "tool_calls": true,
+        "launched": true,
+        "launch_failed": false,
+        "task_spec_ref": "synthetic-spec",
+        "launch_prompt_ref": "synthetic-prompt",
+        "timestamp": null,
+        "event_index": 13,
+        "id": "legacy:13"
+      }
+    },
+    {
+      "type": "message",
+      "message": {
+        "role": "system",
+        "content": "Context compacted (auto) \u2014 0.0k \u2192 1.0k tokens",
+        "kind": "context_compacted",
+        "timestamp": null,
+        "event_index": 14,
+        "id": "legacy:14"
+      }
+    }
+  ]
+}

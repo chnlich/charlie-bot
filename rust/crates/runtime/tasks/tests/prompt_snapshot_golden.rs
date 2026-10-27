@@ -1,13 +1,7 @@
-//! The managed-instruction snapshots of the golden matrix match the Python server byte for byte.
-//!
-//! The matrix is defined here. Each case gets its own temporary home with its host supplement and its `prompt_bodies/`
-//! files, and the case list goes to `python_prompt_snapshot_golden.py` through `uv run python`. That helper runs the
-//! Python `build_segments` and `assemble_snapshot` on the same homes. No agent CLI and no server starts.
+//! The managed-instruction snapshots of the recorded Python golden matrix match byte for byte.
 
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::sync::Arc;
 
 use charliebot_core::RepoRoot;
@@ -30,8 +24,11 @@ use tempfile::TempDir;
 /// `json.dumps(value, ensure_ascii=False)` with the default separators and insertion order.
 const PYTHON_STYLE: JsonStyle =
   JsonStyle { ensure_ascii: false, sort_keys: false, item_separator: ", ", key_separator: ": ", indent: None };
+const HASH_STYLE: JsonStyle =
+  JsonStyle { ensure_ascii: false, sort_keys: true, item_separator: ", ", key_separator: ": ", indent: None };
 
 const DAMAGED_CASE: &str = "non_ascii_rules";
+const PYTHON_FIXTURE: &str = include_str!("fixtures/python_prompt_snapshot_golden.json");
 
 /// One manager or worker session of the matrix.
 #[derive(Clone, Copy)]
@@ -343,10 +340,9 @@ fn config(home: &Path) -> CharlieBotConfig {
   }
 }
 
-/// One case's home and its request for the Python helper. The home lives as long as the returned guard.
+/// One case's home. The home lives as long as the returned guard.
 struct Prepared {
   home: TempDir,
-  request: Value,
 }
 
 fn prepare(case: &Case) -> Prepared {
@@ -356,40 +352,11 @@ fn prepare(case: &Case) -> Prepared {
   }
   let bodies_dir = home.path().join("prompt_bodies");
   fs::create_dir_all(&bodies_dir).expect("prompt_bodies");
-  let mut refs = Vec::new();
-  for (name, text) in case.bodies {
+  for (_name, text) in case.bodies {
     let reference = sha256_hex(text);
     fs::write(bodies_dir.join(format!("{reference}.md")), text).expect("rule body");
-    refs.push((*name, reference));
   }
-  let body_ref = |name: &str| refs.iter().find(|(known, _)| *known == name).map(|(_, reference)| reference.clone());
-  let chain: Vec<Value> = case
-    .chain
-    .iter()
-    .map(|(session_id, body)| {
-      let subtree_ref = body.map(|name| body_ref(name).expect("chain body is declared"));
-      json!({"session_id": session_id, "subtree_ref": subtree_ref})
-    })
-    .collect();
-  let node_ref = case.node_body.map(|name| body_ref(name).expect("node body is declared"));
-  let task = case.meta.task.map(|task| {
-    json!({
-      "goal": task.goal,
-      "repo_path": task.repo_path,
-      "task_type": task.task_type,
-      "cold_read": cold_read_json(task.task_type),
-    })
-  });
-  let request = json!({
-    "name": case.name,
-    "home": home.path().display().to_string(),
-    "kind": case.kind,
-    "meta": {"id": case.meta.id, "name": case.meta.name, "profile": case.meta.profile, "task": task},
-    "overlay": case.overlay,
-    "chain": chain,
-    "node_ref": node_ref,
-  });
-  Prepared { home, request }
+  Prepared { home }
 }
 
 /// The Rust side of one case: the snapshot the same inputs assemble to, and its `to_json_dict` entry.
@@ -444,13 +411,6 @@ fn cold_read_spec(task_type: Option<&str>) -> Option<ColdReadSpec> {
   })
 }
 
-fn cold_read_json(task_type: Option<&str>) -> Value {
-  match cold_read_spec(task_type) {
-    None => Value::Null,
-    Some(spec) => json!({"page_path": spec.page_path, "genre": spec.genre, "trigger": spec.trigger}),
-  }
-}
-
 fn profile(name: &str) -> TaskProfile {
   serde_json::from_value(json!(name)).expect("known profile")
 }
@@ -483,37 +443,38 @@ fn damaged_errors(snapshot: &PromptSnapshot) -> Value {
   })
 }
 
-fn python_output(request: &Value) -> String {
-  let helper = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/python_prompt_snapshot_golden.py");
-  let mut child = Command::new("uv")
-    .args(["run", "python"])
-    .arg(&helper)
-    .current_dir(repo_root())
-    .stdin(Stdio::piped())
-    .stdout(Stdio::piped())
-    .stderr(Stdio::piped())
-    .spawn()
-    .expect("uv run python starts");
-  child
-    .stdin
-    .take()
-    .expect("stdin is piped")
-    .write_all(request.to_string().as_bytes())
-    .expect("the request reaches the helper");
-  let output = child.wait_with_output().expect("the helper finishes");
-  assert!(output.status.success(), "helper failed: {}", String::from_utf8_lossy(&output.stderr));
-  String::from_utf8(output.stdout).expect("helper output is UTF-8")
-}
-
 #[test]
-fn snapshots_match_the_python_server_byte_for_byte() {
+fn snapshots_match_the_recorded_python_server_output_byte_for_byte() {
   let cases = matrix();
   let prepared: Vec<Prepared> = cases.iter().map(prepare).collect();
-  let request = json!({
-    "cases": prepared.iter().map(|prepared| prepared.request.clone()).collect::<Vec<Value>>(),
-    "damaged_case": DAMAGED_CASE,
-  });
-  let python = python_output(&request);
+  let fixture: Value = serde_json::from_str(PYTHON_FIXTURE).unwrap();
+  assert_eq!(fixture["source"], "rust/crates/runtime/tasks/tests/python_prompt_snapshot_golden.py");
+  assert_eq!(fixture["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
+  assert_eq!(fixture["placeholders"]["temp_root"], "$TMPROOT");
+  assert_eq!(fixture["placeholders"]["repo_root"], "$REPO");
+  assert_eq!(fixture["placeholders"]["prompt_hash"], "$PROMPT_HASH");
+  assert_eq!(fixture["placeholders"]["damaged_hash"], "$DAMAGED_HASH");
+  let checkout_root = repo_root();
+  let mut expected = fixture["expected"].clone();
+  for (expected_case, prepared_case) in expected["cases"].as_array_mut().unwrap().iter_mut().zip(&prepared) {
+    materialize_paths(expected_case, prepared_case.home.path(), &checkout_root);
+    if expected_case["snapshot"]["prompt_hash"] == "$PROMPT_HASH" {
+      let hash = recorded_prompt_hash(&expected_case["snapshot"]["blocks"]);
+      expected_case["snapshot"]["prompt_hash"] = json!(hash);
+    }
+  }
+  let damaged_hash = expected["cases"]
+    .as_array()
+    .unwrap()
+    .iter()
+    .find(|case| case["name"] == DAMAGED_CASE)
+    .unwrap()["snapshot"]["prompt_hash"]
+    .as_str()
+    .unwrap();
+  let hash_error = expected["from_json_errors"]["hash"].as_str().unwrap().replace("$DAMAGED_HASH", damaged_hash);
+  expected["from_json_errors"]["hash"] = json!(hash_error);
+  assert_eq!(expected["cases"].as_array().unwrap().len(), cases.len());
+  assert!(expected["from_json_errors"]["body_ref"].is_string());
 
   let registry = registry();
   let checkout = RepoRoot::new(Some(repo_root().into_os_string())).expect("repo root is valid");
@@ -530,5 +491,21 @@ fn snapshots_match_the_python_server_byte_for_byte() {
   let damaged = damaged.expect("the damaged case is in the matrix");
   let rust = json!({"cases": results, "from_json_errors": damaged_errors(&damaged)});
 
-  assert_eq!(json_dumps(&rust, &PYTHON_STYLE), python.trim_end_matches('\n'));
+  assert_eq!(json_dumps(&rust, &PYTHON_STYLE), json_dumps(&expected, &PYTHON_STYLE));
+}
+
+fn materialize_paths(value: &mut Value, root: &Path, checkout_root: &Path) {
+  match value {
+    Value::String(text) => {
+      *text = text.replace("$TMPROOT", &root.to_string_lossy()).replace("$REPO", &checkout_root.to_string_lossy());
+    }
+    Value::Array(values) => values.iter_mut().for_each(|value| materialize_paths(value, root, checkout_root)),
+    Value::Object(fields) => fields.values_mut().for_each(|value| materialize_paths(value, root, checkout_root)),
+    _ => {}
+  }
+}
+
+fn recorded_prompt_hash(blocks: &Value) -> String {
+  let payload = json!({"blocks": blocks});
+  sha256_hex(&json_dumps(&payload, &HASH_STYLE))
 }

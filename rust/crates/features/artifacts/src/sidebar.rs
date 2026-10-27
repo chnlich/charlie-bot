@@ -319,6 +319,11 @@ mod tests {
 
   #[test]
   fn a_fork_with_an_outside_parent_artifact_writes_the_registry_bytes_python_writes() {
+    let provenance: Value = serde_json::from_str(include_str!("../tests/data/fork_fixture_source.json"))
+      .expect("fixture provenance is valid");
+    assert_eq!(provenance["source"], "rust/crates/features/artifacts/tests/plans_fork_fixture.py");
+    assert_eq!(provenance["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
+    assert_eq!(provenance["fixtures"], json!(["fork_parent_plans.json", "fork_child_plans.json"]));
     let sessions = Sessions::new();
     let parent_registry: &[u8] = include_bytes!("../tests/data/fork_parent_plans.json");
     fs::write(sessions.parent.join(PLANS_FILE), parent_registry).expect("the registry is written");

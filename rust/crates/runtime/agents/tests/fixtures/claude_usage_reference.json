@@ -1,0 +1,343 @@
+{
+  "source": "rust/crates/runtime/agents/tests/claude_usage_reference.py",
+  "base_commit": "a572e7ca71858d9ba52f0abc2726fa44213210ac",
+  "expected_by_mode": {
+    "transform": {
+      "cases": [
+        {
+          "windows": [
+            {
+              "window_minutes": 300,
+              "utilization": 12.5,
+              "resets_at": "2026-10-18T15:00:00Z"
+            },
+            {
+              "window_minutes": 10080,
+              "utilization": 40.0,
+              "resets_at": "2026-10-20T00:00:00Z"
+            }
+          ],
+          "fetched_at": "$CURRENT_TIME",
+          "provider": "claude"
+        },
+        {
+          "windows": [
+            {
+              "window_minutes": 300,
+              "utilization": 3.0,
+              "resets_at": "2026-10-18T14:00:00Z"
+            },
+            {
+              "window_minutes": 10080,
+              "utilization": 0.5,
+              "resets_at": ""
+            }
+          ],
+          "fetched_at": "$CURRENT_TIME",
+          "provider": "claude"
+        },
+        {
+          "windows": [
+            {
+              "window_minutes": 300,
+              "utilization": null,
+              "resets_at": ""
+            },
+            {
+              "window_minutes": 10080,
+              "utilization": null,
+              "resets_at": ""
+            }
+          ],
+          "fetched_at": "$CURRENT_TIME",
+          "provider": "claude"
+        },
+        {
+          "windows": [
+            {
+              "window_minutes": 300,
+              "utilization": 9.0,
+              "resets_at": null
+            },
+            {
+              "window_minutes": 10080,
+              "utilization": null,
+              "resets_at": ""
+            }
+          ],
+          "fetched_at": "$CURRENT_TIME",
+          "provider": "claude"
+        },
+        {
+          "windows": [
+            {
+              "window_minutes": 300,
+              "utilization": 1.0,
+              "resets_at": ""
+            },
+            {
+              "window_minutes": 300,
+              "scope_label": "Haiku",
+              "utilization": null,
+              "resets_at": ""
+            },
+            {
+              "window_minutes": 300,
+              "scope_label": "Opus",
+              "utilization": 30.0,
+              "resets_at": "2026-10-18T15:00:00Z"
+            },
+            {
+              "window_minutes": 300,
+              "scope_label": "Opus",
+              "utilization": 7.0,
+              "resets_at": ""
+            },
+            {
+              "window_minutes": 10080,
+              "utilization": null,
+              "resets_at": ""
+            },
+            {
+              "window_minutes": 10080,
+              "scope_label": "Sonnet",
+              "utilization": 5.0,
+              "resets_at": "2026-10-20T00:00:00Z"
+            }
+          ],
+          "fetched_at": "$CURRENT_TIME",
+          "provider": "claude"
+        },
+        {
+          "windows": [
+            {
+              "window_minutes": 300,
+              "utilization": null,
+              "resets_at": ""
+            },
+            {
+              "window_minutes": 10080,
+              "utilization": null,
+              "resets_at": ""
+            }
+          ],
+          "fetched_at": "$CURRENT_TIME",
+          "provider": "claude"
+        },
+        {
+          "windows": [
+            {
+              "window_minutes": 300,
+              "utilization": 1.0,
+              "resets_at": ""
+            },
+            {
+              "window_minutes": 10080,
+              "utilization": null,
+              "resets_at": ""
+            }
+          ],
+          "fetched_at": "$CURRENT_TIME",
+          "provider": "claude"
+        },
+        {
+          "windows": [
+            {
+              "window_minutes": 300,
+              "utilization": 1.0,
+              "resets_at": ""
+            },
+            {
+              "window_minutes": 10080,
+              "utilization": null,
+              "resets_at": ""
+            }
+          ],
+          "fetched_at": "$CURRENT_TIME",
+          "provider": "claude"
+        }
+      ]
+    },
+    "read": {
+      "cases": [
+        {
+          "signature": "$PLAIN_SIGNATURE",
+          "records": [
+            {
+              "record_id": "claude:msg_a",
+              "kind": "native",
+              "source": "Claude Code",
+              "model": "claude-fable-5-1",
+              "account": "work (default)",
+              "ts": "2026-10-01T00:00:01Z",
+              "in_fresh": 10,
+              "cache_write": 5,
+              "cache_read": 100,
+              "output": 7,
+              "in_unsplit": 0,
+              "sessions": [
+                "plain"
+              ]
+            },
+            {
+              "record_id": "claude:req_d",
+              "kind": "native",
+              "source": "Claude Code",
+              "model": "claude-fable-5-1",
+              "account": "work (default)",
+              "ts": "2026-10-01T00:00:03Z",
+              "in_fresh": 2,
+              "cache_write": 0,
+              "cache_read": 0,
+              "output": 1,
+              "in_unsplit": 0,
+              "sessions": [
+                "plain"
+              ]
+            },
+            {
+              "record_id": "claude:u6",
+              "kind": "native",
+              "source": "Claude Code",
+              "model": "claude-fable-5-1",
+              "account": "work (default)",
+              "ts": "",
+              "in_fresh": 0,
+              "cache_write": 0,
+              "cache_read": 0,
+              "output": 4,
+              "in_unsplit": 0,
+              "sessions": [
+                "plain"
+              ]
+            },
+            {
+              "record_id": "claude:None",
+              "kind": "native",
+              "source": "Claude Code",
+              "model": "claude-fable-5-1",
+              "account": "work (default)",
+              "ts": "",
+              "in_fresh": 0,
+              "cache_write": 0,
+              "cache_read": 0,
+              "output": 9,
+              "in_unsplit": 0,
+              "sessions": [
+                "plain"
+              ]
+            }
+          ]
+        },
+        {
+          "signature": "$EMPTY_SIGNATURE",
+          "records": []
+        },
+        {
+          "signature": "$RESUMED_SIGNATURE",
+          "records": [
+            {
+              "record_id": "claude:msg_a",
+              "kind": "native",
+              "source": "Claude Code",
+              "model": "claude-fable-5-1",
+              "account": "work (default)",
+              "ts": "2026-10-01T00:00:01Z",
+              "in_fresh": 10,
+              "cache_write": 5,
+              "cache_read": 100,
+              "output": 7,
+              "in_unsplit": 0,
+              "sessions": [
+                "resumed"
+              ]
+            },
+            {
+              "record_id": "claude:req_d",
+              "kind": "native",
+              "source": "Claude Code",
+              "model": "claude-fable-5-1",
+              "account": "work (default)",
+              "ts": "2026-10-01T00:00:03Z",
+              "in_fresh": 2,
+              "cache_write": 0,
+              "cache_read": 0,
+              "output": 1,
+              "in_unsplit": 0,
+              "sessions": [
+                "resumed"
+              ]
+            },
+            {
+              "record_id": "claude:msg_f",
+              "kind": "native",
+              "source": "Claude Code",
+              "model": "claude-fable-5-1",
+              "account": "work (default)",
+              "ts": "2026-10-01T00:00:09Z",
+              "in_fresh": 6,
+              "cache_write": 0,
+              "cache_read": 0,
+              "output": 2,
+              "in_unsplit": 0,
+              "sessions": [
+                "resumed"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "sweep": {
+      "dry_untouched": true,
+      "dry": {
+        "categories": [
+          {
+            "name": "claude-transcripts",
+            "unit": "dirs",
+            "count": 5,
+            "bytes": 105
+          }
+        ],
+        "exists": {
+          "cold": true,
+          "cold-thread": true,
+          "live": true,
+          "orphan-idle": true,
+          "orphan-fresh": true,
+          "no-metadata": true,
+          "worktree-live": true,
+          "worktree-gone": true,
+          "worktree-gone-fresh": true,
+          "trash": true,
+          "user-cwd": true,
+          "user-cwd-sessions-suffix": true
+        }
+      },
+      "real": {
+        "categories": [
+          {
+            "name": "claude-transcripts",
+            "unit": "dirs",
+            "count": 5,
+            "bytes": 105
+          }
+        ],
+        "exists": {
+          "cold": false,
+          "cold-thread": false,
+          "live": true,
+          "orphan-idle": false,
+          "orphan-fresh": true,
+          "no-metadata": true,
+          "worktree-live": true,
+          "worktree-gone": false,
+          "worktree-gone-fresh": true,
+          "trash": false,
+          "user-cwd": true,
+          "user-cwd-sessions-suffix": true
+        }
+      }
+    }
+  }
+}

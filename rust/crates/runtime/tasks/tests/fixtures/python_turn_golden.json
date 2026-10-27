@@ -1,0 +1,651 @@
+{
+  "source": "rust/crates/runtime/tasks/tests/python_turn_golden.py",
+  "base_commit": "a572e7ca71858d9ba52f0abc2726fa44213210ac",
+  "expected": [
+    {
+      "name": "assistant_text_then_result",
+      "mode": "fresh",
+      "session_kind": "web",
+      "events": [
+        {
+          "type": "assistant",
+          "message": {
+            "content": [
+              {
+                "type": "text",
+                "text": "answer"
+              }
+            ]
+          }
+        },
+        {
+          "type": "result",
+          "result": "",
+          "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0
+          },
+          "total_cost_usd": 0
+        }
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "session_id": "golden-1",
+      "persisted": [
+        {
+          "type": "assistant",
+          "message": {
+            "content": [
+              {
+                "type": "text",
+                "text": "answer"
+              }
+            ]
+          }
+        },
+        {
+          "type": "result",
+          "result": "",
+          "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0
+          },
+          "total_cost_usd": 0
+        },
+        {
+          "type": "master_done",
+          "exit_code": 0,
+          "still_thinking": false,
+          "thinking_seconds": 0,
+          "backend": "codex",
+          "model": "fake-model",
+          "total_ms": 0,
+          "spawn_to_first_event_ms": 0,
+          "first_assistant_ms": 0,
+          "native_backend": "fake"
+        }
+      ],
+      "mark_unread": []
+    },
+    {
+      "name": "zero_usage_result",
+      "mode": "fresh",
+      "session_kind": "web",
+      "events": [
+        {
+          "type": "result",
+          "result": "",
+          "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0
+          },
+          "total_cost_usd": 0
+        }
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "session_id": "golden-2",
+      "persisted": [
+        {
+          "type": "result",
+          "result": "",
+          "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0
+          },
+          "total_cost_usd": 0
+        },
+        {
+          "type": "error",
+          "message": "Master run produced zero model output (cc_session_id=fresh session): the turn settled with an all-zero usage result and no assistant text, thinking, tool use, or manual compaction. The triggering message was left unread. One known cause: opencode message-ID wraparound (LESSONS.md, 2026-08-14).",
+          "content": "Master run produced zero model output (cc_session_id=fresh session): the turn settled with an all-zero usage result and no assistant text, thinking, tool use, or manual compaction. The triggering message was left unread. One known cause: opencode message-ID wraparound (LESSONS.md, 2026-08-14)."
+        },
+        {
+          "type": "master_done",
+          "exit_code": 1,
+          "still_thinking": false,
+          "thinking_seconds": 0,
+          "backend": "codex",
+          "model": "fake-model",
+          "total_ms": 0,
+          "zero_output": true,
+          "spawn_to_first_event_ms": 0,
+          "native_backend": "fake"
+        }
+      ],
+      "mark_unread": [
+        "golden-2"
+      ]
+    },
+    {
+      "name": "thinking_text_salvage",
+      "mode": "fresh",
+      "session_kind": "web",
+      "events": [
+        {
+          "type": "thinking",
+          "content": "considered answer"
+        },
+        {
+          "type": "result",
+          "result": "",
+          "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0
+          },
+          "total_cost_usd": 0
+        }
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "session_id": "golden-3",
+      "persisted": [
+        {
+          "type": "thinking",
+          "content": "considered answer"
+        },
+        {
+          "type": "result",
+          "result": "",
+          "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0
+          },
+          "total_cost_usd": 0
+        },
+        {
+          "type": "assistant",
+          "message": {
+            "content": [
+              {
+                "type": "text",
+                "text": "[\u6a21\u578b\u672a\u8f93\u51fa\u6b63\u6587\uff0c\u4ee5\u4e0b\u4e3a\u5176\u601d\u8003\u5185\u5bb9]\n\nconsidered answer"
+              }
+            ]
+          }
+        },
+        {
+          "type": "master_done",
+          "exit_code": 0,
+          "still_thinking": false,
+          "thinking_seconds": 0,
+          "backend": "codex",
+          "model": "fake-model",
+          "total_ms": 0,
+          "spawn_to_first_event_ms": 0,
+          "native_backend": "fake"
+        }
+      ],
+      "mark_unread": []
+    },
+    {
+      "name": "error_event_exit_one_without_result",
+      "mode": "fresh",
+      "session_kind": "web",
+      "events": [
+        {
+          "type": "error",
+          "message": "synthetic backend error",
+          "content": "synthetic backend error"
+        }
+      ],
+      "exit_code": 1,
+      "stderr": "",
+      "session_id": "golden-4",
+      "persisted": [
+        {
+          "type": "error",
+          "message": "synthetic backend error",
+          "content": "synthetic backend error"
+        },
+        {
+          "type": "assistant_error",
+          "content": "Agent error: synthetic backend error"
+        },
+        {
+          "type": "master_done",
+          "exit_code": 1,
+          "still_thinking": false,
+          "thinking_seconds": 0,
+          "backend": "codex",
+          "model": "fake-model",
+          "total_ms": 0,
+          "spawn_to_first_event_ms": 0,
+          "native_backend": "fake"
+        }
+      ],
+      "mark_unread": [
+        "golden-4"
+      ]
+    },
+    {
+      "name": "pending_tool_call_before_result",
+      "mode": "fresh",
+      "session_kind": "web",
+      "events": [
+        {
+          "type": "assistant",
+          "message": {
+            "content": [
+              {
+                "type": "tool_use",
+                "id": "tool-synthetic",
+                "name": "Read",
+                "input": {
+                  "path": "$SYNTHETIC_ROOT/file"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "type": "result",
+          "result": "",
+          "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0
+          },
+          "total_cost_usd": 0
+        }
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "session_id": "golden-5",
+      "persisted": [
+        {
+          "type": "assistant",
+          "message": {
+            "content": [
+              {
+                "type": "tool_use",
+                "id": "tool-synthetic",
+                "name": "Read",
+                "input": {
+                  "path": "$SYNTHETIC_ROOT/file"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "type": "result",
+          "result": "",
+          "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0
+          },
+          "total_cost_usd": 0
+        },
+        {
+          "type": "master_done",
+          "exit_code": 0,
+          "still_thinking": false,
+          "thinking_seconds": 0,
+          "backend": "codex",
+          "model": "fake-model",
+          "total_ms": 0,
+          "spawn_to_first_event_ms": 0,
+          "native_backend": "fake"
+        }
+      ],
+      "mark_unread": []
+    },
+    {
+      "name": "nonzero_exit_only_stderr",
+      "mode": "fresh",
+      "session_kind": "web",
+      "events": [],
+      "exit_code": 3,
+      "stderr": "synthetic stderr failure",
+      "session_id": "golden-6",
+      "persisted": [
+        {
+          "type": "assistant_error",
+          "content": "Agent error: synthetic stderr failure"
+        },
+        {
+          "type": "master_done",
+          "exit_code": 3,
+          "still_thinking": false,
+          "thinking_seconds": 0,
+          "backend": "codex",
+          "model": "fake-model",
+          "total_ms": 0,
+          "native_backend": "fake"
+        }
+      ],
+      "mark_unread": [
+        "golden-6"
+      ]
+    },
+    {
+      "name": "manual_compaction_boundary",
+      "mode": "fresh",
+      "session_kind": "web",
+      "events": [
+        {
+          "type": "system",
+          "subtype": "compact_boundary",
+          "compact_metadata": {
+            "trigger": "manual",
+            "pre_tokens": 120
+          }
+        },
+        {
+          "type": "result",
+          "result": "",
+          "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0
+          },
+          "total_cost_usd": 0
+        }
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "session_id": "golden-7",
+      "persisted": [
+        {
+          "type": "system",
+          "subtype": "compact_boundary",
+          "compact_metadata": {
+            "trigger": "manual",
+            "pre_tokens": 120
+          }
+        },
+        {
+          "type": "context_compacted",
+          "trigger": "manual",
+          "compact_metadata": {
+            "trigger": "manual",
+            "pre_tokens": 120
+          }
+        },
+        {
+          "type": "result",
+          "result": "",
+          "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0
+          },
+          "total_cost_usd": 0
+        },
+        {
+          "type": "master_done",
+          "exit_code": 0,
+          "still_thinking": false,
+          "thinking_seconds": 0,
+          "backend": "codex",
+          "model": "fake-model",
+          "total_ms": 0,
+          "spawn_to_first_event_ms": 0,
+          "native_backend": "fake"
+        }
+      ],
+      "mark_unread": []
+    },
+    {
+      "name": "resume_path",
+      "mode": "resume",
+      "session_kind": "web",
+      "events": [
+        {
+          "type": "assistant",
+          "message": {
+            "content": [
+              {
+                "type": "text",
+                "text": "resumed answer"
+              }
+            ]
+          }
+        },
+        {
+          "type": "result",
+          "result": "",
+          "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0
+          },
+          "total_cost_usd": 0
+        }
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "session_id": "golden-8",
+      "persisted": [
+        {
+          "type": "assistant",
+          "message": {
+            "content": [
+              {
+                "type": "text",
+                "text": "resumed answer"
+              }
+            ]
+          },
+          "timestamp": "$TIME"
+        },
+        {
+          "type": "result",
+          "result": "",
+          "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0
+          },
+          "total_cost_usd": 0,
+          "timestamp": "$TIME"
+        },
+        {
+          "type": "master_done",
+          "exit_code": 0,
+          "still_thinking": false,
+          "thinking_seconds": 0,
+          "backend": "codex",
+          "model": "fake-model",
+          "total_ms": 1,
+          "spawn_to_first_event_ms": 0,
+          "first_assistant_ms": 0
+        }
+      ],
+      "mark_unread": []
+    },
+    {
+      "name": "resume_zero_output_guard",
+      "mode": "resume",
+      "session_kind": "web",
+      "events": [
+        {
+          "type": "result",
+          "result": "",
+          "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0
+          },
+          "total_cost_usd": 0
+        }
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "session_id": "golden-9",
+      "persisted": [
+        {
+          "type": "result",
+          "result": "",
+          "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0
+          },
+          "total_cost_usd": 0,
+          "timestamp": "$TIME"
+        },
+        {
+          "type": "error",
+          "message": "Master run produced zero model output (cc_session_id=fresh session): the turn settled with an all-zero usage result and no assistant text, thinking, tool use, or manual compaction. The triggering message was left unread. One known cause: opencode message-ID wraparound (LESSONS.md, 2026-08-14).",
+          "content": "Master run produced zero model output (cc_session_id=fresh session): the turn settled with an all-zero usage result and no assistant text, thinking, tool use, or manual compaction. The triggering message was left unread. One known cause: opencode message-ID wraparound (LESSONS.md, 2026-08-14)."
+        },
+        {
+          "type": "master_done",
+          "exit_code": 1,
+          "still_thinking": false,
+          "thinking_seconds": 0,
+          "backend": "codex",
+          "model": "fake-model",
+          "total_ms": 1,
+          "zero_output": true,
+          "spawn_to_first_event_ms": 0
+        }
+      ],
+      "mark_unread": [
+        "golden-9"
+      ]
+    },
+    {
+      "name": "refused_turn",
+      "mode": "refused",
+      "session_kind": "web",
+      "events": [],
+      "exit_code": 0,
+      "stderr": "",
+      "session_id": "golden-10",
+      "persisted": [
+        {
+          "type": "assistant_error",
+          "content": "Agent error: no backend option was given and this session pins none \u2014 refusing to fall back to backends.options[0]; this run did not execute."
+        },
+        {
+          "type": "master_done",
+          "exit_code": 1,
+          "still_thinking": false,
+          "thinking_seconds": 0
+        }
+      ],
+      "mark_unread": [
+        "golden-10"
+      ]
+    },
+    {
+      "name": "unknown_backend_pin_refusal",
+      "mode": "unknown_pin",
+      "session_kind": "web",
+      "events": [],
+      "exit_code": 0,
+      "stderr": "",
+      "session_id": "golden-11",
+      "persisted": [
+        {
+          "type": "assistant_error",
+          "content": "Agent error: backend 'deleted-id' is not in config.yaml backends.options \u2014 refusing to substitute 'fake'; this run did not execute."
+        },
+        {
+          "type": "master_done",
+          "exit_code": 1,
+          "still_thinking": false,
+          "thinking_seconds": 0
+        }
+      ],
+      "mark_unread": [
+        "golden-11"
+      ]
+    },
+    {
+      "name": "thread_session_unread",
+      "mode": "fresh",
+      "session_kind": "thread",
+      "events": [
+        {
+          "type": "assistant",
+          "message": {
+            "content": [
+              {
+                "type": "text",
+                "text": "thread answer"
+              }
+            ]
+          }
+        },
+        {
+          "type": "result",
+          "result": "",
+          "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0
+          },
+          "total_cost_usd": 0
+        }
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "session_id": "golden-12",
+      "persisted": [
+        {
+          "type": "assistant",
+          "message": {
+            "content": [
+              {
+                "type": "text",
+                "text": "thread answer"
+              }
+            ]
+          }
+        },
+        {
+          "type": "result",
+          "result": "",
+          "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0
+          },
+          "total_cost_usd": 0
+        },
+        {
+          "type": "master_done",
+          "exit_code": 0,
+          "still_thinking": false,
+          "thinking_seconds": 0,
+          "backend": "codex",
+          "model": "fake-model",
+          "total_ms": 0,
+          "spawn_to_first_event_ms": 0,
+          "first_assistant_ms": 0,
+          "native_backend": "fake"
+        }
+      ],
+      "mark_unread": [
+        "golden-12"
+      ]
+    }
+  ]
+}

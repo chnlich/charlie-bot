@@ -1,0 +1,178 @@
+{
+  "source": "rust/crates/runtime/agents/tests/claude_pool_reference.py",
+  "base_commit": "a572e7ca71858d9ba52f0abc2726fa44213210ac",
+  "expected_by_mode": {
+    "selection": [
+      {
+        "chosen": "a",
+        "cold": false,
+        "unavailable": ""
+      },
+      {
+        "chosen": "a",
+        "cold": false,
+        "unavailable": ""
+      },
+      {
+        "chosen": "b",
+        "cold": false,
+        "unavailable": ""
+      },
+      {
+        "chosen": "b",
+        "cold": false,
+        "unavailable": ""
+      },
+      {
+        "chosen": "b",
+        "cold": false,
+        "unavailable": "a: zero headroom"
+      },
+      {
+        "chosen": "a",
+        "cold": true,
+        "unavailable": ""
+      },
+      {
+        "chosen": "c",
+        "cold": false,
+        "unavailable": ""
+      },
+      {
+        "chosen": null,
+        "cold": true,
+        "unavailable": "a: zero headroom; b: auth-failure cooldown until 20:15 UTC"
+      }
+    ],
+    "relay": [
+      {
+        "decision": "rejected",
+        "move": {
+          "account": "b",
+          "error": null,
+          "pool_exhausted": false,
+          "refused_holder": null
+        },
+        "stop": [
+          false
+        ]
+      },
+      {
+        "decision": "warning",
+        "move": {
+          "account": "b",
+          "error": null,
+          "pool_exhausted": false,
+          "refused_holder": null
+        },
+        "stop": [
+          false,
+          true
+        ]
+      },
+      {
+        "decision": null,
+        "move": null,
+        "stop": [
+          false,
+          false
+        ]
+      },
+      {
+        "decision": "login_failed",
+        "move": {
+          "account": null,
+          "error": "Claude account relay impossible: the run produced no session id to resume.",
+          "pool_exhausted": false,
+          "refused_holder": null
+        },
+        "stop": [
+          false
+        ]
+      },
+      {
+        "decision": null,
+        "move": null,
+        "stop": [
+          false
+        ]
+      },
+      {
+        "decision": null,
+        "move": null,
+        "stop": [
+          false
+        ]
+      },
+      {
+        "decision": null,
+        "move": null,
+        "stop": [
+          false,
+          false
+        ]
+      },
+      {
+        "decision": "rejected",
+        "move": {
+          "account": "b",
+          "error": null,
+          "pool_exhausted": false,
+          "refused_holder": null
+        },
+        "stop": [
+          false,
+          false
+        ]
+      },
+      {
+        "decision": "rejected",
+        "move": {
+          "account": null,
+          "error": "Claude account pool has no available account (pool 'alpha'; earliest reset 00:00 UTC); this run did not complete.",
+          "pool_exhausted": true,
+          "refused_holder": null
+        },
+        "stop": [
+          false
+        ]
+      }
+    ],
+    "renderer": {
+      "content": "One account in the Claude pool needs a new login; see the usage panel.",
+      "kind": "claude_account_login_required",
+      "role": "system"
+    },
+    "moves": [
+      {
+        "error": null,
+        "files": {
+          "a/projects/work/forward.jsonl": "first row\n",
+          "a/projects/work/forward/tool-results/result.txt": "tool payload",
+          "b/projects/work/forward.jsonl": "first row\n",
+          "b/projects/work/forward/tool-results/result.txt": "tool payload"
+        }
+      },
+      {
+        "error": null,
+        "files": {
+          "a/projects/work/reverse.jsonl": "second row\n",
+          "a/projects/work/reverse/tool-results/result.txt": "reverse payload",
+          "b/projects/work/reverse.jsonl": "second row\n",
+          "b/projects/work/reverse/tool-results/result.txt": "reverse payload"
+        }
+      },
+      {
+        "error": "refusing to overwrite newer transcript: dst <root>/b/projects/work/newer.jsonl (mtime 2023-11-14T22:13:20+00:00, size 10) vs src <root>/a/projects/work/newer.jsonl (mtime 2020-09-13T12:26:40+00:00, size 3)",
+        "files": {
+          "a/projects/work/newer.jsonl": "old",
+          "b/projects/work/newer.jsonl": "newer copy"
+        }
+      },
+      {
+        "error": "no transcript missing.jsonl under <root>/a/projects",
+        "files": {}
+      }
+    ]
+  }
+}

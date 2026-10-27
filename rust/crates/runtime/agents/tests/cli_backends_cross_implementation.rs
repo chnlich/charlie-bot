@@ -7,10 +7,8 @@
 //! final-stdout path over a fake `agy` (11 cases).
 
 use std::fs;
-use std::io::Write;
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 
 use charliebot_agents::agent_environment::AgentBaseEnvironment;
@@ -30,6 +28,8 @@ use charliebot_registry::backend::{AgentBackend, BackendFactory, Env, LaunchArgs
 use charliebot_registry::usage::UsageSource;
 use serde_json::{Value, json};
 use serde_yaml::Mapping;
+
+const PYTHON_FIXTURE: &str = include_str!("fixtures/cli_backends_reference.json");
 
 const PROMPT: &str = "Review \"the\" synthetic\nprompt \\ with \u{fc}n\u{ef}code\tand a tab";
 const INSTRUCTIONS: &str = "Rules: \"quoted\" ]\n[section] \\ \u{7f} \u{fc}n\u{ef}";
@@ -115,7 +115,7 @@ fn cli_backends_match_the_python_package_on_synthetic_inputs() {
   let root = tempfile::tempdir().unwrap();
   let fx = write_fixtures(root.path());
   let request = request(&fx);
-  let python = run_reference(&request);
+  let python = run_reference(&request, root.path());
 
   let argv = request["argv_cases"].as_array().unwrap();
   let streams = request["translate_streams"].as_array().unwrap();
@@ -489,28 +489,40 @@ fn finish_cases(fx: &Fixture) -> Vec<Value> {
     .collect()
 }
 
-fn run_reference(request: &Value) -> Value {
-  let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).ancestors().nth(4).unwrap().to_path_buf();
-  let helper = "rust/crates/runtime/agents/tests/cli_backends_reference.py";
-  let mut child = Command::new("uv")
-    .args(["run", "python", helper])
-    .current_dir(repo_root)
-    .stdin(Stdio::piped())
-    .stdout(Stdio::piped())
-    .stderr(Stdio::piped())
-    .spawn()
-    .unwrap();
-  child.stdin.take().unwrap().write_all(request.to_string().as_bytes()).unwrap();
-  let output = child.wait_with_output().unwrap();
-  assert!(
-    output.status.success(),
-    "Python CLI backend reference failed:\nstdout:\n{}\nstderr:\n{}",
-    String::from_utf8_lossy(&output.stdout),
-    String::from_utf8_lossy(&output.stderr),
+fn run_reference(request: &Value, temporary: &Path) -> Value {
+  let fixture: Value = serde_json::from_str(PYTHON_FIXTURE).unwrap();
+  assert_eq!(fixture["source"], "rust/crates/runtime/agents/tests/cli_backends_reference.py");
+  assert_eq!(fixture["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
+  let mut expected = fixture["expected"].clone();
+  replace_fixture_paths(
+    &mut expected,
+    &[
+      ("$TMPROOT", &temporary.to_string_lossy()),
+      ("$SYNTHETIC_ROOT", "/synthetic"),
+      ("anthropic-compatible.$HOST", "anthropic-compatible.synthetic.example"),
+      ("https://$HOST/v1", "https://synthetic.example/v1"),
+      ("$HOST,$LOCALHOST", "internal.synthetic.example,localhost"),
+      ("$HOST", "internal.synthetic.example"),
+      ("$LOCALHOST", "localhost"),
+      ("$PID", "4242"),
+    ],
   );
-  let stdout = String::from_utf8(output.stdout).unwrap();
-  let last = stdout.lines().last().expect("the Python CLI backend reference printed nothing");
-  serde_json::from_str(last).unwrap()
+  let expected_argv = expected["argv"].as_array().unwrap();
+  assert_eq!(expected_argv.len(), request["argv_cases"].as_array().unwrap().len());
+  expected
+}
+
+fn replace_fixture_paths(value: &mut Value, replacements: &[(&str, &str)]) {
+  match value {
+    Value::String(text) => {
+      for (placeholder, path) in replacements {
+        *text = text.replace(placeholder, path);
+      }
+    }
+    Value::Array(values) => values.iter_mut().for_each(|value| replace_fixture_paths(value, replacements)),
+    Value::Object(fields) => fields.values_mut().for_each(|value| replace_fixture_paths(value, replacements)),
+    _ => {}
+  }
 }
 
 fn check_argv(fx: &Fixture, cases: &[Value], python: &Value, failures: &mut Vec<String>) {

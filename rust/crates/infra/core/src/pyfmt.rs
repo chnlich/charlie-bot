@@ -552,9 +552,6 @@ impl JsonFormatter for StyleFormatter {
 
 #[cfg(test)]
 mod tests {
-  use std::path::Path;
-  use std::process::Command;
-
   use super::*;
   use serde_json::json;
 
@@ -722,29 +719,18 @@ mod tests {
     assert_eq!(str_repr("a'b\"c"), "'a\\'b\"c'");
   }
 
-  /// Prints `repr` of every code point that `char` holds, one per line. The surrogates are not `char`s, so
-  /// both sides skip them.
-  const CPYTHON_REPRS: &str = r#"
-import sys
-for code_point in range(0x110000):
-    if 0xD800 <= code_point <= 0xDFFF:
-        continue
-    sys.stdout.buffer.write((repr(chr(code_point)) + "\n").encode("utf-8"))
-"#;
+  const CPYTHON_REPRS: &str = include_str!("../tests/fixtures/cpython_repr.txt");
+  const CPYTHON_REPRS_METADATA: &str = include_str!("../tests/fixtures/cpython_repr_metadata.json");
 
   #[test]
   fn str_repr_matches_cpython_for_every_code_point() {
-    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(4).expect("the crate lies under the repo");
-    let output = Command::new("uv")
-      .args(["run", "python", "-c", CPYTHON_REPRS])
-      .current_dir(repo_root)
-      .output()
-      .expect("uv runs the worktree Python");
-    assert!(output.status.success(), "CPython repr failed:\n{}", String::from_utf8_lossy(&output.stderr));
-    let reprs = String::from_utf8(output.stdout).expect("CPython prints UTF-8");
-    let reprs: Vec<&str> = reprs.split_terminator('\n').collect();
+    let metadata: Value = serde_json::from_str(CPYTHON_REPRS_METADATA).unwrap();
+    assert_eq!(metadata["source"], "rust/crates/infra/core/src/pyfmt.rs::CPYTHON_REPRS");
+    assert_eq!(metadata["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
+    let reprs: Vec<&str> = CPYTHON_REPRS.split_terminator('\n').collect();
     let code_points: Vec<char> = (0..=0x10_ffff_u32).filter_map(char::from_u32).collect();
-    assert_eq!(reprs.len(), code_points.len(), "CPython prints one repr per code point");
+    assert_eq!(reprs.len(), metadata["code_point_count"].as_u64().unwrap() as usize);
+    assert_eq!(reprs.len(), code_points.len(), "CPython records one repr per code point");
     let mismatches: Vec<String> = code_points
       .iter()
       .zip(&reprs)

@@ -907,14 +907,19 @@ mod tests {
 #[cfg(test)]
 mod differential_tests {
   use std::fs;
+  use std::fs::File;
   use std::io::Read;
   use std::path::{Path, PathBuf};
+  use std::time::{Duration, SystemTime};
 
   use flate2::read::GzDecoder;
+  use serde::Serialize;
   use serde_json::Value;
   use tempfile::tempdir;
 
   use super::*;
+
+  const FIXED_MTIME_NS: u64 = 1_700_000_000_123_456_789;
 
   fn venv_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).ancestors().nth(4).unwrap().join(".venv/bin")
@@ -942,17 +947,47 @@ mod differential_tests {
     output
   }
 
+  #[derive(Serialize)]
+  struct PythonCacheKey<'a> {
+    paths: Vec<(String, u64, i64)>,
+    slim: bool,
+    mode: &'a str,
+  }
+
   #[test]
-  #[ignore = "requires the Python reference corpus from differential.py"]
-  fn python_and_rust_trace_builders_match_seeded_corpus() {
-    let root = PathBuf::from(std::env::var("TRACE_DIFFERENTIAL_DIR").unwrap());
-    let cases: Value = serde_json::from_slice(&fs::read(root.join("manifest.json")).unwrap()).unwrap();
+  fn recorded_python_trace_builders_match_seeded_corpus() {
+    let bytes = include_bytes!("../tests/fixtures/python_trace_differential.json.gz");
+    let mut decoder = GzDecoder::new(bytes.as_slice());
+    let mut contents = Vec::new();
+    decoder.read_to_end(&mut contents).unwrap();
+    let fixture: Value = serde_json::from_slice(&contents).unwrap();
+    assert_eq!(fixture["source"]["helper"], "rust/crates/features/trace/tests/differential.py");
+    assert_eq!(fixture["source"]["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
+    assert_eq!(fixture["source"]["mtime_ns"], "$FIXED_MTIME_NS");
+
+    let root = tempdir().unwrap();
+    for (relative, encoded) in fixture["corpus"].as_object().unwrap() {
+      let path = root.path().join(relative);
+      fs::create_dir_all(path.parent().unwrap()).unwrap();
+      fs::write(&path, decode_hex(encoded.as_str().unwrap())).unwrap();
+      let modified =
+        SystemTime::UNIX_EPOCH + Duration::new(FIXED_MTIME_NS / 1_000_000_000, (FIXED_MTIME_NS % 1_000_000_000) as u32);
+      File::options()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_times(std::fs::FileTimes::new().set_modified(modified))
+        .unwrap();
+    }
+
+    let cases = fixture["cases"].as_array().unwrap();
+    assert_eq!(cases.len(), 29);
     let mut comparisons = 0;
     let mut differences = Vec::new();
-    for case in cases.as_array().unwrap() {
+    for case in cases {
       let name = case["name"].as_str().unwrap();
       let paths: Vec<PathBuf> =
-        case["paths"].as_array().unwrap().iter().map(|path| PathBuf::from(path.as_str().unwrap())).collect();
+        case["paths"].as_array().unwrap().iter().map(|path| root.path().join(path.as_str().unwrap())).collect();
       let slim = case["slim"].as_bool().unwrap();
       for builder in ["merge", "multi", "direct"] {
         let reference = &case["references"][builder];
@@ -961,21 +996,22 @@ mod differential_tests {
         let actual = actual_artifact(builder, &paths, slim, &artifact);
         if let Some(expected_error) = reference.get("error") {
           match actual {
-            Err(actual_error) if actual_error == expected_error.as_str().unwrap() => {}
+            Err(actual_error) if normalize_root(&actual_error, root.path()) == expected_error.as_str().unwrap() => {}
             Err(actual_error) => differences.push(format!(
-              "error text differs for {name}/{builder}: {actual_error:?} != {:?}",
+              "error text differs for {name}/{builder}: {:?} != {:?}",
+              normalize_root(&actual_error, root.path()),
               expected_error.as_str().unwrap()
             )),
             Ok(_) => differences.push(format!("Rust succeeded for failing Python case {name}/{builder}")),
           }
         } else {
-          let expected = fs::read(reference["gzip"].as_str().unwrap()).unwrap();
+          let expected = decode_hex(reference["gzip_hex"].as_str().unwrap());
           match actual {
             Ok(actual) => {
               if actual != expected {
                 differences.push(format!("gzip bytes differ for {name}/{builder}"));
               }
-              if decompress(&actual) != decompress(&expected) {
+              if decompress(&actual) != decode_hex(reference["json_hex"].as_str().unwrap()) {
                 differences.push(format!("JSON bytes differ for {name}/{builder}"));
               }
             }
@@ -985,7 +1021,9 @@ mod differential_tests {
         comparisons += 1;
       }
       for mode in ["gzip", "merge"] {
-        let expected = case["cache_keys"][mode].as_str().unwrap();
+        let key = &case["cache_keys"][mode];
+        assert_eq!(key["recorded_python_key"], "$SHA256(paths, slim, mode)");
+        let expected = python_cache_key(key, root.path(), slim, mode);
         match merge_cache_key(&paths, slim, mode) {
           Ok(actual) if actual == expected => {}
           Ok(actual) => differences.push(format!("cache key differs for {name}/{mode}: {actual} != {expected}")),
@@ -993,7 +1031,38 @@ mod differential_tests {
         }
       }
     }
-    println!("matched {comparisons} builder results and {} cache keys", cases.as_array().unwrap().len() * 2);
+    println!("matched {comparisons} builder results and {} cache keys", cases.len() * 2);
     assert!(differences.is_empty(), "{} differential mismatches:\n{}", differences.len(), differences.join("\n"));
+  }
+
+  fn python_cache_key(reference: &Value, root: &Path, slim: bool, mode: &str) -> String {
+    let paths = reference["paths"]
+      .as_array()
+      .unwrap()
+      .iter()
+      .map(|entry| {
+        assert_eq!(entry["mtime_ns"], "$FIXED_MTIME_NS");
+        let path = root.join(entry["path"].as_str().unwrap());
+        (path.to_string_lossy().into_owned(), entry["size"].as_u64().unwrap(), FIXED_MTIME_NS as i64)
+      })
+      .collect();
+    let payload = PythonCacheKey { paths, slim, mode };
+    format!("{:x}", Sha256::digest(serde_json::to_vec(&payload).unwrap()))
+  }
+
+  fn normalize_root(value: &str, root: &Path) -> String {
+    value.replace(root.to_str().unwrap(), "$TMPROOT")
+  }
+
+  fn decode_hex(value: &str) -> Vec<u8> {
+    value
+      .as_bytes()
+      .chunks_exact(2)
+      .map(|pair| {
+        let high = (pair[0] as char).to_digit(16).unwrap();
+        let low = (pair[1] as char).to_digit(16).unwrap();
+        ((high << 4) | low) as u8
+      })
+      .collect()
   }
 }

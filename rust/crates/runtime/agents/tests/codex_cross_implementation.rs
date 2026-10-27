@@ -1,6 +1,5 @@
-//! Cross-implementation checks of the codex package. `codex_python_reference.py` runs every Python section in one
-//! `uv run python` process over the synthetic inputs built here. The Rust port runs the same inputs, and the test fails
-//! with every section that differs.
+//! Cross-implementation checks of the codex package against the recorded output of `codex_python_reference.py`. The
+//! Rust port runs the same synthetic inputs, and the test fails with every section that differs.
 //!
 //! Sections: the argv/env/stdin/instructions matrix, built through the registry factory (96 cases); the environment
 //! cases (4); one stream of translated events that reaches every item handler; the usage records of one synthetic
@@ -9,11 +8,10 @@
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::Write;
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::sync::Arc;
+use std::time::{Duration as StdDuration, SystemTime};
 
 use charliebot_agents::backends::codex::CodexHost;
 use charliebot_agents::backends::codex::factory::CodexFactory;
@@ -32,6 +30,8 @@ use serde_yaml::Mapping;
 use time::format_description::well_known::Rfc3339;
 use time::{Duration, OffsetDateTime};
 
+const PYTHON_FIXTURE: &str = include_str!("fixtures/codex_python_reference.json");
+
 const PROMPT: &str = "Review \"the\" synthetic\nprompt \\ with \u{fc}n\u{ef}code\tand a tab";
 const INSTRUCTIONS: &str = "Rules: \"quoted\" ]\n[section] \\ \u{7f} \u{fc}n\u{ef}";
 const WORKER_FILE: &str = "/synthetic/instructions/worker.md";
@@ -44,6 +44,7 @@ const THREAD_B: &str = "bbbbbbbb-1111-4222-8333-555555555555";
 const THREAD_C: &str = "cccccccc-1111-4222-8333-666666666666";
 const QUOTA_THREAD: &str = "ffffffff-1111-4222-8333-999999999999";
 const IDLE_QUOTA_THREAD: &str = "a1a1a1a1-1111-4222-8333-000000000000";
+const READ_MTIME_NS: u64 = 1_793_111_373_476_095_818;
 
 /// The synthetic homes and files of one run, written under one temporary root.
 struct Fixture {
@@ -90,8 +91,9 @@ fn codex_matches_the_python_package_on_synthetic_inputs() {
   let root = tempfile::tempdir().unwrap();
   let now = OffsetDateTime::from_unix_timestamp(OffsetDateTime::now_utc().unix_timestamp()).unwrap();
   let fx = write_fixtures(root.path(), now);
+  set_mtime_ns(&fx.read_path, READ_MTIME_NS);
   let request = request(&fx);
-  let python = run_reference(&request);
+  let python = run_reference(&request, root.path());
 
   let argv = request["argv_cases"].as_array().unwrap();
   let env = request["env_cases"].as_array().unwrap();
@@ -492,28 +494,49 @@ fn write_text(path: &Path, text: &str) {
   fs::write(path, text).unwrap();
 }
 
-fn run_reference(request: &Value) -> Value {
-  let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).ancestors().nth(4).unwrap().to_path_buf();
-  let helper = "rust/crates/runtime/agents/tests/codex_python_reference.py";
-  let mut child = Command::new("uv")
-    .args(["run", "python", helper])
-    .current_dir(repo_root)
-    .stdin(Stdio::piped())
-    .stdout(Stdio::piped())
-    .stderr(Stdio::piped())
-    .spawn()
-    .unwrap();
-  child.stdin.take().unwrap().write_all(request.to_string().as_bytes()).unwrap();
-  let output = child.wait_with_output().unwrap();
-  assert!(
-    output.status.success(),
-    "Python codex reference failed:\nstdout:\n{}\nstderr:\n{}",
-    String::from_utf8_lossy(&output.stdout),
-    String::from_utf8_lossy(&output.stderr),
+fn run_reference(request: &Value, temporary: &Path) -> Value {
+  let fixture: Value = serde_json::from_str(PYTHON_FIXTURE).unwrap();
+  assert_eq!(fixture["source"], "rust/crates/runtime/agents/tests/codex_python_reference.py");
+  assert_eq!(fixture["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
+  assert_eq!(fixture["placeholders"]["read_mtime_ns"], "$READ_MTIME_NS");
+  assert_eq!(fixture["placeholders"]["quota_observed_at"], "$NOW_MINUS_2H");
+  assert_eq!(fixture["placeholders"]["primary_reset"], "$NOW_MINUS_1H");
+  assert_eq!(fixture["placeholders"]["secondary_reset"], "$NOW_PLUS_2D");
+  let now = OffsetDateTime::from_unix_timestamp(request["quota_now_unix"].as_i64().unwrap()).unwrap();
+  let read_mtime_ns = READ_MTIME_NS.to_string();
+  let quota_observed_at = rfc3339(now - Duration::hours(2));
+  let primary_reset = rfc3339_offset(now - Duration::hours(1));
+  let secondary_reset = rfc3339_offset(now + Duration::days(2));
+  let mut expected = fixture["expected"].clone();
+  replace_fixture_paths(
+    &mut expected,
+    &[
+      ("$TMPROOT", &temporary.to_string_lossy()),
+      ("$SYNTHETIC_ROOT", "/synthetic"),
+      ("$PID", "4242"),
+      ("$USER", "synthetic-user"),
+      ("$HOST", "synthetic-host"),
+      ("$READ_MTIME_NS", &read_mtime_ns),
+      ("$NOW_MINUS_2H", &quota_observed_at),
+      ("$NOW_MINUS_1H", &primary_reset),
+      ("$NOW_PLUS_2D", &secondary_reset),
+    ],
   );
-  let stdout = String::from_utf8(output.stdout).unwrap();
-  let last = stdout.lines().last().expect("the Python codex reference printed nothing");
-  serde_json::from_str(last).unwrap()
+  assert_eq!(expected["argv"].as_array().unwrap().len(), request["argv_cases"].as_array().unwrap().len());
+  expected
+}
+
+fn replace_fixture_paths(value: &mut Value, replacements: &[(&str, &str)]) {
+  match value {
+    Value::String(text) => {
+      for (placeholder, path) in replacements {
+        *text = text.replace(placeholder, path);
+      }
+    }
+    Value::Array(values) => values.iter_mut().for_each(|value| replace_fixture_paths(value, replacements)),
+    Value::Object(fields) => fields.values_mut().for_each(|value| replace_fixture_paths(value, replacements)),
+    _ => {}
+  }
 }
 
 fn check_argv(fx: &Fixture, cases: &[Value], python: &Value, failures: &mut Vec<String>) {
@@ -718,6 +741,15 @@ fn path_text(path: &Path) -> String {
   path.to_string_lossy().into_owned()
 }
 
+fn set_mtime_ns(path: &Path, mtime_ns: u64) {
+  let modified = SystemTime::UNIX_EPOCH + StdDuration::from_nanos(mtime_ns);
+  fs::File::options().write(true).open(path).unwrap().set_times(fs::FileTimes::new().set_modified(modified)).unwrap();
+}
+
 fn rfc3339(at: OffsetDateTime) -> String {
   at.format(&Rfc3339).unwrap()
+}
+
+fn rfc3339_offset(at: OffsetDateTime) -> String {
+  rfc3339(at).replace('Z', "+00:00")
 }

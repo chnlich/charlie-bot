@@ -11,8 +11,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::net::SocketAddr;
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use anyhow::bail;
@@ -42,6 +41,7 @@ const PACKAGE: &str = "src.backends.openai_compatible";
 const ACCESS_KEY: &str = "synthetic-access-key";
 const DONE_FRAME: &[u8] = b"data: [DONE]\n\n";
 const MESSAGE_STOP_FRAME: &[u8] = b"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
+const PYTHON_FIXTURE: &str = include_str!("fixtures/openai_compatible_reference.json");
 
 /// One case of the matrix, as the Python reference printed it.
 struct Case {
@@ -89,29 +89,12 @@ fn hex(text: &str) -> Vec<u8> {
   (0..text.len()).step_by(2).map(|at| u8::from_str_radix(&text[at..at + 2], 16).unwrap()).collect()
 }
 
-fn repo_root() -> &'static Path {
-  Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(4).unwrap()
-}
-
 /// The matrix the Python route answered, one record per case.
 fn python_reference() -> Vec<Case> {
-  let helper = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/openai_compatible_reference.py");
-  let output = Command::new("uv")
-    .args(["run", "python"])
-    .arg(&helper)
-    .current_dir(repo_root())
-    .output()
-    .expect("uv runs the Python reference");
-  assert!(
-    output.status.success(),
-    "openai_compatible_reference.py failed: {}",
-    String::from_utf8_lossy(&output.stderr)
-  );
-  String::from_utf8(output.stdout)
-    .expect("the reference prints UTF-8")
-    .lines()
-    .map(|line| Case::from_record(&serde_json::from_str(line).expect("each reference line is JSON")))
-    .collect()
+  let fixture: Value = serde_json::from_str(PYTHON_FIXTURE).unwrap();
+  assert_eq!(fixture["source"], "rust/crates/runtime/agents/tests/openai_compatible_reference.py");
+  assert_eq!(fixture["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
+  fixture["expected"].as_array().unwrap().iter().map(Case::from_record).collect()
 }
 
 /// A type the server does not register, so a test can give a backend a type that is not the proxy's.

@@ -28,3 +28,4 @@ time.workspace = true
 unicode-width = "0.2"
 
 [dev-dependencies]
+flate2.workspace = true

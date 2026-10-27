@@ -1169,9 +1169,47 @@ fn section_label(parser: &Parser, leaf: &Leaf) -> String {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use std::io::Read;
 
   const BASE: &str = include_str!("../../../../../tests/data/plan_move2-direct-kill_v10.html");
   const NEW: &str = include_str!("../../../../../tests/data/plan_move2-direct-kill_v11.html");
+
+  #[test]
+  fn seeded_plan_annotations_match_the_recorded_python_outputs() {
+    let mut decoder = flate2::read::GzDecoder::new(include_bytes!("../tests/data/plan_diff_golden.json.gz").as_slice());
+    let mut json = String::new();
+    decoder.read_to_string(&mut json).expect("the recorded fixture decompresses");
+    let fixture: serde_json::Value = serde_json::from_str(&json).expect("the recorded fixture is valid JSON");
+    assert_eq!(fixture["source"], "rust/crates/features/artifacts/tests/differential.py");
+    assert_eq!(fixture["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
+    assert_eq!(fixture["seed"], 20261018);
+    let pairs = fixture["pairs"].as_array().expect("the fixture holds the seeded pairs");
+    assert_eq!(pairs.len(), 200);
+
+    let expected = pairs
+      .iter()
+      .map(|pair| pair["expected"].as_str().expect("each pair has recorded output").to_string())
+      .collect::<Vec<_>>();
+    let actual = pairs
+      .iter()
+      .map(|pair| {
+        annotate(
+          pair["base"].as_str().expect("each pair has a base page"),
+          pair["new"].as_str().expect("each pair has a new page"),
+        )
+        .expect("the seeded pages parse")
+      })
+      .collect::<Vec<_>>();
+    assert_eq!(actual, expected, "recorded Python outputs differ for at least one pair");
+
+    let mut control = actual.clone();
+    control[0].push_str("planted differential control");
+    assert_eq!(
+      control.iter().zip(&expected).filter(|(actual, expected)| actual != expected).count(),
+      1,
+      "the planted control difference must produce one mismatch"
+    );
+  }
 
   #[test]
   fn void_tags_match_the_python_differ_set() {

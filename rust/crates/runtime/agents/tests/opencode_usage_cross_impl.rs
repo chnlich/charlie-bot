@@ -5,9 +5,8 @@
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::Write;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::time::SystemTime;
 
 use charliebot_agents::backends::opencode::usage_logs::read;
@@ -15,6 +14,8 @@ use charliebot_registry::usage::{RecordKind, UsageRecord};
 use rusqlite::{Connection, params};
 use serde_json::{Value, json};
 use tempfile::TempDir;
+
+const PYTHON_FIXTURE: &str = include_str!("fixtures/opencode_usage_reference.json");
 
 const ACCOUNT: &str = "default";
 
@@ -213,27 +214,25 @@ fn insert_rows(connection: &mut Connection, rows: &[Row]) {
 }
 
 fn python_reference(request: &Value) -> Value {
-  let helper = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/opencode_usage_reference.py");
-  let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(4).unwrap();
-  let mut child = Command::new("uv")
-    .args(["run", "python"])
-    .arg(helper)
-    .current_dir(repo_root)
-    .stdin(Stdio::piped())
-    .stdout(Stdio::piped())
-    .stderr(Stdio::piped())
-    .spawn()
-    .unwrap();
-  child.stdin.as_mut().unwrap().write_all(request.to_string().as_bytes()).unwrap();
-  let result = child.wait_with_output().unwrap();
-  assert!(result.status.success(), "Python reference failed: {}", String::from_utf8_lossy(&result.stderr));
-  serde_json::from_slice(&result.stdout).unwrap_or_else(|error| {
-    panic!(
-      "Python reference returned invalid JSON: {error}; stdout={} stderr={}",
-      String::from_utf8_lossy(&result.stdout),
-      String::from_utf8_lossy(&result.stderr)
-    )
-  })
+  let fixture: Value = serde_json::from_str(PYTHON_FIXTURE).unwrap();
+  assert_eq!(fixture["source"], "rust/crates/runtime/agents/tests/opencode_usage_reference.py");
+  assert_eq!(fixture["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
+  let mut expected = fixture["expected"].clone();
+  for (index, step) in request["steps"].as_array().unwrap().iter().enumerate() {
+    let database = Path::new(step["path"].as_str().unwrap());
+    let mut fields =
+      expected["steps"][index]["signature"].as_str().unwrap().split(':').map(str::to_string).collect::<Vec<_>>();
+    let db = fs::metadata(database).unwrap();
+    let db_mtime_ns = i128::from(db.mtime()) * 1_000_000_000 + i128::from(db.mtime_nsec());
+    fields[1] = db_mtime_ns.to_string();
+    if fields[3] != "0" {
+      let wal_path = PathBuf::from(format!("{}-wal", database.display()));
+      let wal = fs::metadata(wal_path).unwrap();
+      fields[3] = (i128::from(wal.mtime()) * 1_000_000_000 + i128::from(wal.mtime_nsec())).to_string();
+    }
+    expected["steps"][index]["signature"] = json!(fields.join(":"));
+  }
+  expected
 }
 
 fn record_json(record: &UsageRecord) -> Value {

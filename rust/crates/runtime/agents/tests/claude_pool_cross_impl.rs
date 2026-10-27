@@ -1,7 +1,5 @@
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 
 use charliebot_agents::backends::claude_code::{
@@ -12,6 +10,8 @@ use charliebot_registry::backend::LaunchWatch;
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, UtcDateTime};
 use serde_json::{Value, json};
 use tempfile::TempDir;
+
+const PYTHON_FIXTURE: &str = include_str!("fixtures/claude_pool_reference.json");
 
 const NOW: &str = "2026-09-06T20:00:00Z";
 const ONE_HOUR_AGO: &str = "2026-09-06T18:30:00Z";
@@ -67,29 +67,11 @@ fn rust_config(data: &Value) -> charliebot_core::config::CharlieBotConfig {
   registry.load_config(home).unwrap()
 }
 
-fn python_reference(mode: &str, data: &Value, _temporary: &TempDir) -> Value {
-  let helper = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/claude_pool_reference.py");
-  let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(4).unwrap();
-  let mut child = Command::new("uv")
-    .args(["run", "python"])
-    .arg(helper)
-    .arg(mode)
-    .current_dir(repo_root)
-    .stdin(Stdio::piped())
-    .stdout(Stdio::piped())
-    .stderr(Stdio::piped())
-    .spawn()
-    .unwrap();
-  child.stdin.as_mut().unwrap().write_all(data.to_string().as_bytes()).unwrap();
-  let result = child.wait_with_output().unwrap();
-  assert!(result.status.success(), "Python {mode} helper failed: {}", String::from_utf8_lossy(&result.stderr));
-  serde_json::from_slice(&result.stdout).unwrap_or_else(|error| {
-    panic!(
-      "Python {mode} helper returned invalid JSON: {error}; stdout={} stderr={}",
-      String::from_utf8_lossy(&result.stdout),
-      String::from_utf8_lossy(&result.stderr)
-    )
-  })
+fn python_reference(mode: &str, _data: &Value, _temporary: &TempDir) -> Value {
+  let fixture: Value = serde_json::from_str(PYTHON_FIXTURE).unwrap();
+  assert_eq!(fixture["source"], "rust/crates/runtime/agents/tests/claude_pool_reference.py");
+  assert_eq!(fixture["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
+  fixture["expected_by_mode"][mode].clone()
 }
 
 fn timestamp(value: &str) -> UtcDateTime {

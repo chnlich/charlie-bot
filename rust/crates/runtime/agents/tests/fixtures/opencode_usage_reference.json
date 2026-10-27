@@ -1,0 +1,1073 @@
+{
+  "source": "rust/crates/runtime/agents/tests/opencode_usage_reference.py",
+  "base_commit": "a572e7ca71858d9ba52f0abc2726fa44213210ac",
+  "expected": {
+    "steps": [
+      {
+        "signature": "20480:$DB_MTIME_NS:0:0:130",
+        "records": [
+          {
+            "record_id": "opencode:basic",
+            "kind": "native",
+            "source": "opencode",
+            "model": "model-a",
+            "account": "provider-a",
+            "ts": "2026-10-14T17:46:40.123000+00:00",
+            "in_fresh": 100,
+            "cache_write": 7,
+            "cache_read": 5,
+            "output": 30,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-a"
+            ]
+          },
+          {
+            "record_id": "opencode:whole",
+            "kind": "native",
+            "source": "opencode",
+            "model": "model-b",
+            "account": "provider-b",
+            "ts": "2026-10-14T17:46:40+00:00",
+            "in_fresh": 50,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 5,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-b"
+            ]
+          },
+          {
+            "record_id": "opencode:float-ms",
+            "kind": "native",
+            "source": "opencode",
+            "model": "model-a",
+            "account": "provider-a",
+            "ts": "2026-10-14T17:46:40.123500+00:00",
+            "in_fresh": 1,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 1,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-a"
+            ]
+          },
+          {
+            "record_id": "opencode:bool-created",
+            "kind": "native",
+            "source": "opencode",
+            "model": "model-d",
+            "account": "provider-d",
+            "ts": "1970-01-01T00:00:00.001000+00:00",
+            "in_fresh": 2,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 2,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-a"
+            ]
+          },
+          {
+            "record_id": "opencode:negative-created",
+            "kind": "native",
+            "source": "opencode",
+            "model": "model-a",
+            "account": "provider-a",
+            "ts": "1969-12-31T23:59:59.999000+00:00",
+            "in_fresh": 2,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 2,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-a"
+            ]
+          },
+          {
+            "record_id": "opencode:string-created",
+            "kind": "native",
+            "source": "opencode",
+            "model": "model-a",
+            "account": "provider-a",
+            "ts": "",
+            "in_fresh": 2,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 2,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-a"
+            ]
+          },
+          {
+            "record_id": "opencode:null-created",
+            "kind": "native",
+            "source": "opencode",
+            "model": "model-a",
+            "account": "provider-a",
+            "ts": "",
+            "in_fresh": 2,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 2,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-a"
+            ]
+          },
+          {
+            "record_id": "opencode:no-time",
+            "kind": "native",
+            "source": "opencode",
+            "model": "model-a",
+            "account": "provider-a",
+            "ts": "",
+            "in_fresh": 3,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 3,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-a"
+            ]
+          },
+          {
+            "record_id": "opencode:time-not-object",
+            "kind": "native",
+            "source": "opencode",
+            "model": "model-a",
+            "account": "provider-a",
+            "ts": "",
+            "in_fresh": 3,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 3,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-a"
+            ]
+          },
+          {
+            "record_id": "opencode:escaped-key",
+            "kind": "native",
+            "source": "opencode",
+            "model": "unknown",
+            "account": "unknown",
+            "ts": "",
+            "in_fresh": 5,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 1,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-a"
+            ]
+          },
+          {
+            "record_id": "opencode:cache-string",
+            "kind": "native",
+            "source": "opencode",
+            "model": "model-a",
+            "account": "provider-a",
+            "ts": "2026-10-14T17:46:40+00:00",
+            "in_fresh": 8,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 2,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-a"
+            ]
+          },
+          {
+            "record_id": "opencode:zero-input",
+            "kind": "native",
+            "source": "opencode",
+            "model": "model-a",
+            "account": "provider-a",
+            "ts": "2026-10-14T17:46:40+00:00",
+            "in_fresh": 0,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 4,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-a"
+            ]
+          },
+          {
+            "record_id": "opencode:empty-model",
+            "kind": "native",
+            "source": "opencode",
+            "model": "unknown",
+            "account": "unknown",
+            "ts": "2026-10-14T17:46:40+00:00",
+            "in_fresh": 3,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 0,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-a"
+            ]
+          },
+          {
+            "record_id": "opencode:absent-model",
+            "kind": "native",
+            "source": "opencode",
+            "model": "unknown",
+            "account": "unknown",
+            "ts": "2026-10-14T17:46:40+00:00",
+            "in_fresh": 3,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 0,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-a"
+            ]
+          },
+          {
+            "record_id": "opencode:slash-model",
+            "kind": "native",
+            "source": "opencode",
+            "model": "gpt-5 (openai)",
+            "account": "openai",
+            "ts": "2026-10-14T17:46:40+00:00",
+            "in_fresh": 6,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 6,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-a"
+            ]
+          },
+          {
+            "record_id": "opencode:slash-only",
+            "kind": "native",
+            "source": "opencode",
+            "model": " (p)",
+            "account": "p",
+            "ts": "2026-10-14T17:46:40+00:00",
+            "in_fresh": 7,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 7,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-a"
+            ]
+          },
+          {
+            "record_id": "opencode:slash-dots",
+            "kind": "native",
+            "source": "opencode",
+            "model": ".. ()",
+            "account": "unknown",
+            "ts": "2026-10-14T17:46:40+00:00",
+            "in_fresh": 8,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 8,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-a"
+            ]
+          },
+          {
+            "record_id": "opencode:unicode-model",
+            "kind": "native",
+            "source": "opencode",
+            "model": "\u6a21\u578b (\u4ee3\u7406)",
+            "account": "\u4ee3\u7406",
+            "ts": "2026-10-14T17:46:40+00:00",
+            "in_fresh": 9,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 9,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-a"
+            ]
+          },
+          {
+            "record_id": "opencode:cache-falsy",
+            "kind": "native",
+            "source": "opencode",
+            "model": "model-a",
+            "account": "provider-a",
+            "ts": "2026-10-14T17:46:40+00:00",
+            "in_fresh": 10,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 10,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-a"
+            ]
+          },
+          {
+            "record_id": "opencode:duplicate-key",
+            "kind": "native",
+            "source": "opencode",
+            "model": "unknown",
+            "account": "unknown",
+            "ts": "",
+            "in_fresh": 9,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 2,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-a"
+            ]
+          }
+        ]
+      },
+      {
+        "signature": "20480:$DB_MTIME_NS:0:0:130",
+        "records": []
+      },
+      {
+        "signature": "12288:$DB_MTIME_NS:0:0:150",
+        "records": [
+          {
+            "record_id": "opencode:boundary",
+            "kind": "native",
+            "source": "opencode",
+            "model": "model-a",
+            "account": "provider-a",
+            "ts": "2026-10-14T17:46:40+00:00",
+            "in_fresh": 13,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 13,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-a"
+            ]
+          },
+          {
+            "record_id": "opencode:float-ms",
+            "kind": "native",
+            "source": "opencode",
+            "model": "model-a",
+            "account": "provider-a",
+            "ts": "2026-10-14T17:46:40+00:00",
+            "in_fresh": 14,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 14,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-a"
+            ]
+          },
+          {
+            "record_id": "opencode:new-row",
+            "kind": "native",
+            "source": "opencode",
+            "model": "model-b",
+            "account": "provider-b",
+            "ts": "2026-10-14T17:46:40+00:00",
+            "in_fresh": 15,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 15,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-b"
+            ]
+          }
+        ]
+      },
+      {
+        "signature": "12288:$DB_MTIME_NS:0:0:150",
+        "records": []
+      },
+      {
+        "signature": "20480:$DB_MTIME_NS:0:0:130",
+        "records": [
+          {
+            "record_id": "opencode:basic",
+            "kind": "native",
+            "source": "opencode",
+            "model": "model-a",
+            "account": "provider-a",
+            "ts": "2026-10-14T17:46:40.123000+00:00",
+            "in_fresh": 100,
+            "cache_write": 7,
+            "cache_read": 5,
+            "output": 30,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-a"
+            ]
+          },
+          {
+            "record_id": "opencode:whole",
+            "kind": "native",
+            "source": "opencode",
+            "model": "model-b",
+            "account": "provider-b",
+            "ts": "2026-10-14T17:46:40+00:00",
+            "in_fresh": 50,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 5,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-b"
+            ]
+          },
+          {
+            "record_id": "opencode:float-ms",
+            "kind": "native",
+            "source": "opencode",
+            "model": "model-a",
+            "account": "provider-a",
+            "ts": "2026-10-14T17:46:40.123500+00:00",
+            "in_fresh": 1,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 1,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-a"
+            ]
+          },
+          {
+            "record_id": "opencode:bool-created",
+            "kind": "native",
+            "source": "opencode",
+            "model": "model-d",
+            "account": "provider-d",
+            "ts": "1970-01-01T00:00:00.001000+00:00",
+            "in_fresh": 2,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 2,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-a"
+            ]
+          },
+          {
+            "record_id": "opencode:negative-created",
+            "kind": "native",
+            "source": "opencode",
+            "model": "model-a",
+            "account": "provider-a",
+            "ts": "1969-12-31T23:59:59.999000+00:00",
+            "in_fresh": 2,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 2,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-a"
+            ]
+          },
+          {
+            "record_id": "opencode:string-created",
+            "kind": "native",
+            "source": "opencode",
+            "model": "model-a",
+            "account": "provider-a",
+            "ts": "",
+            "in_fresh": 2,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 2,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-a"
+            ]
+          },
+          {
+            "record_id": "opencode:null-created",
+            "kind": "native",
+            "source": "opencode",
+            "model": "model-a",
+            "account": "provider-a",
+            "ts": "",
+            "in_fresh": 2,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 2,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-a"
+            ]
+          },
+          {
+            "record_id": "opencode:no-time",
+            "kind": "native",
+            "source": "opencode",
+            "model": "model-a",
+            "account": "provider-a",
+            "ts": "",
+            "in_fresh": 3,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 3,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-a"
+            ]
+          },
+          {
+            "record_id": "opencode:time-not-object",
+            "kind": "native",
+            "source": "opencode",
+            "model": "model-a",
+            "account": "provider-a",
+            "ts": "",
+            "in_fresh": 3,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 3,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-a"
+            ]
+          },
+          {
+            "record_id": "opencode:escaped-key",
+            "kind": "native",
+            "source": "opencode",
+            "model": "unknown",
+            "account": "unknown",
+            "ts": "",
+            "in_fresh": 5,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 1,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-a"
+            ]
+          },
+          {
+            "record_id": "opencode:cache-string",
+            "kind": "native",
+            "source": "opencode",
+            "model": "model-a",
+            "account": "provider-a",
+            "ts": "2026-10-14T17:46:40+00:00",
+            "in_fresh": 8,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 2,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-a"
+            ]
+          },
+          {
+            "record_id": "opencode:zero-input",
+            "kind": "native",
+            "source": "opencode",
+            "model": "model-a",
+            "account": "provider-a",
+            "ts": "2026-10-14T17:46:40+00:00",
+            "in_fresh": 0,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 4,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-a"
+            ]
+          },
+          {
+            "record_id": "opencode:empty-model",
+            "kind": "native",
+            "source": "opencode",
+            "model": "unknown",
+            "account": "unknown",
+            "ts": "2026-10-14T17:46:40+00:00",
+            "in_fresh": 3,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 0,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-a"
+            ]
+          },
+          {
+            "record_id": "opencode:absent-model",
+            "kind": "native",
+            "source": "opencode",
+            "model": "unknown",
+            "account": "unknown",
+            "ts": "2026-10-14T17:46:40+00:00",
+            "in_fresh": 3,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 0,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-a"
+            ]
+          },
+          {
+            "record_id": "opencode:slash-model",
+            "kind": "native",
+            "source": "opencode",
+            "model": "gpt-5 (openai)",
+            "account": "openai",
+            "ts": "2026-10-14T17:46:40+00:00",
+            "in_fresh": 6,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 6,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-a"
+            ]
+          },
+          {
+            "record_id": "opencode:slash-only",
+            "kind": "native",
+            "source": "opencode",
+            "model": " (p)",
+            "account": "p",
+            "ts": "2026-10-14T17:46:40+00:00",
+            "in_fresh": 7,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 7,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-a"
+            ]
+          },
+          {
+            "record_id": "opencode:slash-dots",
+            "kind": "native",
+            "source": "opencode",
+            "model": ".. ()",
+            "account": "unknown",
+            "ts": "2026-10-14T17:46:40+00:00",
+            "in_fresh": 8,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 8,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-a"
+            ]
+          },
+          {
+            "record_id": "opencode:unicode-model",
+            "kind": "native",
+            "source": "opencode",
+            "model": "\u6a21\u578b (\u4ee3\u7406)",
+            "account": "\u4ee3\u7406",
+            "ts": "2026-10-14T17:46:40+00:00",
+            "in_fresh": 9,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 9,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-a"
+            ]
+          },
+          {
+            "record_id": "opencode:cache-falsy",
+            "kind": "native",
+            "source": "opencode",
+            "model": "model-a",
+            "account": "provider-a",
+            "ts": "2026-10-14T17:46:40+00:00",
+            "in_fresh": 10,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 10,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-a"
+            ]
+          },
+          {
+            "record_id": "opencode:duplicate-key",
+            "kind": "native",
+            "source": "opencode",
+            "model": "unknown",
+            "account": "unknown",
+            "ts": "",
+            "in_fresh": 9,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 2,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-a"
+            ]
+          }
+        ]
+      },
+      {
+        "signature": "20480:$DB_MTIME_NS:0:0:130",
+        "records": [
+          {
+            "record_id": "opencode:basic",
+            "kind": "native",
+            "source": "opencode",
+            "model": "model-a",
+            "account": "provider-a",
+            "ts": "2026-10-14T17:46:40.123000+00:00",
+            "in_fresh": 100,
+            "cache_write": 7,
+            "cache_read": 5,
+            "output": 30,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-a"
+            ]
+          },
+          {
+            "record_id": "opencode:whole",
+            "kind": "native",
+            "source": "opencode",
+            "model": "model-b",
+            "account": "provider-b",
+            "ts": "2026-10-14T17:46:40+00:00",
+            "in_fresh": 50,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 5,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-b"
+            ]
+          },
+          {
+            "record_id": "opencode:float-ms",
+            "kind": "native",
+            "source": "opencode",
+            "model": "model-a",
+            "account": "provider-a",
+            "ts": "2026-10-14T17:46:40.123500+00:00",
+            "in_fresh": 1,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 1,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-a"
+            ]
+          },
+          {
+            "record_id": "opencode:bool-created",
+            "kind": "native",
+            "source": "opencode",
+            "model": "model-d",
+            "account": "provider-d",
+            "ts": "1970-01-01T00:00:00.001000+00:00",
+            "in_fresh": 2,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 2,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-a"
+            ]
+          },
+          {
+            "record_id": "opencode:negative-created",
+            "kind": "native",
+            "source": "opencode",
+            "model": "model-a",
+            "account": "provider-a",
+            "ts": "1969-12-31T23:59:59.999000+00:00",
+            "in_fresh": 2,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 2,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-a"
+            ]
+          },
+          {
+            "record_id": "opencode:string-created",
+            "kind": "native",
+            "source": "opencode",
+            "model": "model-a",
+            "account": "provider-a",
+            "ts": "",
+            "in_fresh": 2,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 2,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-a"
+            ]
+          },
+          {
+            "record_id": "opencode:null-created",
+            "kind": "native",
+            "source": "opencode",
+            "model": "model-a",
+            "account": "provider-a",
+            "ts": "",
+            "in_fresh": 2,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 2,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-a"
+            ]
+          },
+          {
+            "record_id": "opencode:no-time",
+            "kind": "native",
+            "source": "opencode",
+            "model": "model-a",
+            "account": "provider-a",
+            "ts": "",
+            "in_fresh": 3,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 3,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-a"
+            ]
+          },
+          {
+            "record_id": "opencode:time-not-object",
+            "kind": "native",
+            "source": "opencode",
+            "model": "model-a",
+            "account": "provider-a",
+            "ts": "",
+            "in_fresh": 3,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 3,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-a"
+            ]
+          },
+          {
+            "record_id": "opencode:escaped-key",
+            "kind": "native",
+            "source": "opencode",
+            "model": "unknown",
+            "account": "unknown",
+            "ts": "",
+            "in_fresh": 5,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 1,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-a"
+            ]
+          },
+          {
+            "record_id": "opencode:cache-string",
+            "kind": "native",
+            "source": "opencode",
+            "model": "model-a",
+            "account": "provider-a",
+            "ts": "2026-10-14T17:46:40+00:00",
+            "in_fresh": 8,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 2,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-a"
+            ]
+          },
+          {
+            "record_id": "opencode:zero-input",
+            "kind": "native",
+            "source": "opencode",
+            "model": "model-a",
+            "account": "provider-a",
+            "ts": "2026-10-14T17:46:40+00:00",
+            "in_fresh": 0,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 4,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-a"
+            ]
+          },
+          {
+            "record_id": "opencode:empty-model",
+            "kind": "native",
+            "source": "opencode",
+            "model": "unknown",
+            "account": "unknown",
+            "ts": "2026-10-14T17:46:40+00:00",
+            "in_fresh": 3,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 0,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-a"
+            ]
+          },
+          {
+            "record_id": "opencode:absent-model",
+            "kind": "native",
+            "source": "opencode",
+            "model": "unknown",
+            "account": "unknown",
+            "ts": "2026-10-14T17:46:40+00:00",
+            "in_fresh": 3,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 0,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-a"
+            ]
+          },
+          {
+            "record_id": "opencode:slash-model",
+            "kind": "native",
+            "source": "opencode",
+            "model": "gpt-5 (openai)",
+            "account": "openai",
+            "ts": "2026-10-14T17:46:40+00:00",
+            "in_fresh": 6,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 6,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-a"
+            ]
+          },
+          {
+            "record_id": "opencode:slash-only",
+            "kind": "native",
+            "source": "opencode",
+            "model": " (p)",
+            "account": "p",
+            "ts": "2026-10-14T17:46:40+00:00",
+            "in_fresh": 7,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 7,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-a"
+            ]
+          },
+          {
+            "record_id": "opencode:slash-dots",
+            "kind": "native",
+            "source": "opencode",
+            "model": ".. ()",
+            "account": "unknown",
+            "ts": "2026-10-14T17:46:40+00:00",
+            "in_fresh": 8,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 8,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-a"
+            ]
+          },
+          {
+            "record_id": "opencode:unicode-model",
+            "kind": "native",
+            "source": "opencode",
+            "model": "\u6a21\u578b (\u4ee3\u7406)",
+            "account": "\u4ee3\u7406",
+            "ts": "2026-10-14T17:46:40+00:00",
+            "in_fresh": 9,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 9,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-a"
+            ]
+          },
+          {
+            "record_id": "opencode:cache-falsy",
+            "kind": "native",
+            "source": "opencode",
+            "model": "model-a",
+            "account": "provider-a",
+            "ts": "2026-10-14T17:46:40+00:00",
+            "in_fresh": 10,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 10,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-a"
+            ]
+          },
+          {
+            "record_id": "opencode:duplicate-key",
+            "kind": "native",
+            "source": "opencode",
+            "model": "unknown",
+            "account": "unknown",
+            "ts": "",
+            "in_fresh": 9,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 2,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-a"
+            ]
+          }
+        ]
+      },
+      {
+        "signature": "12288:$DB_MTIME_NS:0:0:0",
+        "records": []
+      },
+      {
+        "signature": "4096:$DB_MTIME_NS:20632:$WAL_MTIME_NS:100",
+        "records": [
+          {
+            "record_id": "opencode:wal-row",
+            "kind": "native",
+            "source": "opencode",
+            "model": "model-a",
+            "account": "provider-a",
+            "ts": "2026-10-14T17:46:40+00:00",
+            "in_fresh": 11,
+            "cache_write": 0,
+            "cache_read": 0,
+            "output": 12,
+            "in_unsplit": 0,
+            "sessions": [
+              "sess-a"
+            ]
+          }
+        ]
+      },
+      {
+        "signature": "4096:$DB_MTIME_NS:20632:$WAL_MTIME_NS:100",
+        "records": []
+      }
+    ]
+  }
+}

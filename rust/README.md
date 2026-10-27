@@ -130,10 +130,13 @@ rust/
     context.rs                    FeatureContext and the typed startup state
     store_hooks.rs                the store's hook traits, answered by the registered lifecycles and controllers
     templating.rs                 the page engine: Jinja2-compatible rendering with minijinja and `render_page`
+  crates/app/packages/src/lib.rs
+                                  the composition root both binaries share: the runtime and package lists, with a
+                                  stub for each unported package
   crates/app/server/src/
     main.rs                       startup, lifespan, bind, graceful shutdown
     app.rs                        the middleware stack and the feature routers
-    packages/                     the composition root: the package list, with a stub for each unported package
+    packages/                     the server's registry, re-exported from `charliebot-packages`, and its tests
     routes/mod.rs                 the one list of route families, 405 and 404/307 answers
     routes/{pages,system,static_mounts,websockets}.rs
     auth.rs, cookies.rs           the access-key gate

@@ -444,7 +444,7 @@ dependencies = [
  "charliebot-improve",
  "charliebot-memory",
  "charliebot-ncu",
- "charliebot-registry",
+ "charliebot-packages",
  "charliebot-session-api",
  "charliebot-slack",
  "charliebot-store",
@@ -798,6 +798,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "charliebot-packages"
+version = "0.1.0"
+dependencies = [
+ "charliebot-agents",
+ "charliebot-artifacts",
+ "charliebot-backup",
+ "charliebot-chat-threads",
+ "charliebot-code-server",
+ "charliebot-cron",
+ "charliebot-diag",
+ "charliebot-diff-view",
+ "charliebot-discord",
+ "charliebot-disk-sweep",
+ "charliebot-explain",
+ "charliebot-files",
+ "charliebot-host-auth",
+ "charliebot-improve",
+ "charliebot-memory",
+ "charliebot-ncu",
+ "charliebot-registry",
+ "charliebot-session-api",
+ "charliebot-slack",
+ "charliebot-tasks",
+ "charliebot-terminal",
+ "charliebot-trace",
+ "charliebot-triggers",
+ "charliebot-usage",
+ "charliebot-usage-page",
+ "charliebot-voice",
+ "charliebot-web-reply",
+]
+
+[[package]]
 name = "charliebot-pyhtml"
 version = "0.1.0"
 dependencies = [
@@ -856,6 +889,7 @@ dependencies = [
  "charliebot-improve",
  "charliebot-memory",
  "charliebot-ncu",
+ "charliebot-packages",
  "charliebot-registry",
  "charliebot-session-api",
  "charliebot-slack",

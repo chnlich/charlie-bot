@@ -21,6 +21,9 @@
     let DRAFT_KEY = SESSION_ID ? 'charliebot-draft-' + SESSION_ID : null;
     let THINKING_SINCE = {{ (active_session.thinking_since.isoformat()|tojson) if active_session and active_session.thinking_since else 'null' }};
     let eventCursor = {{ event_count }};
+    // The same value the ?v= script URLs below carry: the session WebSocket handshake sends it as
+    // asset_version, and a stale value gets the 4409 close that reloads the page (websocket.js).
+    const STATIC_ASSET_VERSION = {{ static_asset_version|tojson }};
     const SESSION_BOOTSTRAP = {{ session_bootstrap|tojson }};
     const INITIAL_SESSIONS = {{ initial_sessions|tojson }};
     const INITIAL_LOAD_ERRORS = {{ load_errors|tojson }};

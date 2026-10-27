@@ -15,6 +15,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
+use axum::http::HeaderValue;
+use axum::http::header;
 use axum::http::request::Parts;
 use axum::response::Response;
 use charliebot_compat::{jinja, responses};
@@ -150,7 +152,11 @@ impl Templating {
       .expect("a page context is a JSON object")
       .insert("request".to_string(), request_context(request));
     let html = self.render(name, &context, globals)?;
-    Ok(responses::html(html))
+    // `no-store` sends every back navigation and tab restore to the server, so the page never runs
+    // JavaScript from a cached copy that references an older static asset version.
+    let mut response = responses::html(html);
+    response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(response)
   }
 
   /// Render template `name` with `context` and the zero-argument `globals`.
@@ -355,6 +361,7 @@ mod tests {
 
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(response.headers()[CONTENT_TYPE], "text/html; charset=utf-8");
+    assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
     let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
     assert_eq!(body, "synthetic-label GET /notes?page=2");
   }

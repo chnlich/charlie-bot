@@ -17,6 +17,9 @@ function buildPage(initialMessages = [], sessionId = 'session-a') {
   const context = {
     SESSION_ID: sessionId,
     eventCursor: 0,
+    // The page global index.html renders next to the ?v= script URLs; websocket.js
+    // sends it as the handshake's asset_version.
+    STATIC_ASSET_VERSION: 'stub-asset-version',
     document: {
       createElement: (tag) => createElement({tagName: tag}),
       createTreeWalker: () => ({}),

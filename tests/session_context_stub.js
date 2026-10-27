@@ -20,6 +20,9 @@ function baseSessionContext(overrides = {}) {
   const sessionStorageData = new Map();
   const context = {
     SESSION_ID: 'session-a',
+    // The page global index.html renders next to the ?v= script URLs; websocket.js
+    // sends it as the handshake's asset_version.
+    STATIC_ASSET_VERSION: 'stub-asset-version',
     // The server-embedded initial render payload (index.html); the sidebar's
     // restore path reads it to detect a v2 task-node deep link.
     SESSION_BOOTSTRAP: overrides.SESSION_BOOTSTRAP !== undefined ? overrides.SESSION_BOOTSTRAP : null,

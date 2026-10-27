@@ -706,6 +706,11 @@ IGNORED_HEADERS: dict[str, str] = {
     "transfer-encoding": "framing: chunked or sized delivery of the same body",
     "connection": "framing: connection reuse",
     "keep-alive": "framing: connection reuse",
+    # The port's templated pages carry `Cache-Control: no-store` (Templating::render_page) so a back
+    # navigation never runs a cached page's older JavaScript; the Python pages send no cache header.
+    # The artifact and file pages set no-store on both sides, so dropping the header loses only a
+    # comparison that already passed.
+    "cache-control": "the port's pages send no-store; Python's templated pages send no cache header",
 }
 
 

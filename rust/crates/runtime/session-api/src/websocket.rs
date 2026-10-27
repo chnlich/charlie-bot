@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use axum::extract::ws::{CloseFrame, Message, WebSocket};
 use axum::response::Response;
+use charliebot_registry::templating::Templating;
 use charliebot_registry::{FeatureContext, WebSocketRequest};
 use charliebot_store::aggregator::MessageAggregator;
 use charliebot_store::metadata::{SessionMetadata, TaskProfile};
@@ -47,6 +48,35 @@ async fn serve_session_socket(features: Arc<FeatureContext>, session_id: String,
       return;
     }
   };
+
+  // The page's static asset version rides the handshake too (`web/static/js/websocket.js`): a tab that
+  // stays open across a deploy keeps its old JavaScript, and that JavaScript would keep calling retired
+  // routes. A present value that differs from the server's current version closes with 4409 before the
+  // subscription starts, so the page reloads to the current code.
+  if let Some(page_version) = raw_query_value(&query, "asset_version") {
+    match current_asset_version(&features).await {
+      Ok(server_version) if server_version == page_version => {}
+      Ok(server_version) => {
+        tracing::warn!(
+          session_id,
+          page_version = %page_version,
+          server_version = %server_version,
+          "session_ws_asset_version_stale"
+        );
+        if let Err(close_error) = close_with_code(&mut sender, 4409, "").await {
+          tracing::info!(session_id, reason = %close_error, "session_ws_closed");
+        }
+        return;
+      }
+      Err(error) => {
+        tracing::error!(session_id, error = %error, "session_ws_asset_version_failed");
+        if let Err(close_error) = close_with_code(&mut sender, 1011, "").await {
+          tracing::info!(session_id, reason = %close_error, "session_ws_closed");
+        }
+        return;
+      }
+    }
+  }
 
   let mut socket = features.store.register_socket();
   let store = Arc::clone(&features.store);
@@ -100,10 +130,27 @@ where
   (session_subscription, sidebar_subscription, loaded)
 }
 
-/// The raw `cursor` value of the handshake query, or `None` when the query has no `cursor`. Repeated keys
-/// read the first value, the way Starlette's `query_params.get` does.
+/// The raw value of one key of the handshake query, or `None` when the query has no such key. Repeated
+/// keys read the first value, the way Starlette's `query_params.get` does.
+fn raw_query_value(query: &str, key: &str) -> Option<String> {
+  form_urlencoded::parse(query.as_bytes()).find(|(name, _)| name == key).map(|(_, value)| value.into_owned())
+}
+
+/// The raw `cursor` value of the handshake query, or `None` when the query has no `cursor`.
 fn raw_cursor(query: &str) -> Option<String> {
-  form_urlencoded::parse(query.as_bytes()).find(|(key, _)| key == "cursor").map(|(_, value)| value.into_owned())
+  raw_query_value(query, "cursor")
+}
+
+/// The server's current static asset version. Reading it walks the served static trees, so it runs on
+/// the blocking pool (`Templating::static_asset_version`); a missing `Templating` startup state and a
+/// failing walk both come back as the error text.
+async fn current_asset_version(features: &FeatureContext) -> Result<String, String> {
+  let templating = features.startup.require::<Templating>().map_err(|error| error.to_string())?;
+  let version =
+    blocking_store(move || templating.static_asset_version().map_err(|error| StoreError::new(error.to_string())))
+      .await
+      .map_err(|error| error.to_string())?;
+  Ok(version)
 }
 
 /// The replay cursor the handshake check accepts (`server.py` `session_websocket`): the value is present,
@@ -835,6 +882,42 @@ mod tests {
       .await
       .unwrap();
     assert_eq!(receive_json(&mut client).await["sequence"], 1);
+    server.abort();
+    let _ = server.await;
+  }
+
+  /// A handshake whose `asset_version` differs from the server's current static asset version closes
+  /// with 4409 before the subscription starts, so the close frame is the first and only frame.
+  #[tokio::test]
+  async fn a_stale_asset_version_closes_with_4409_before_any_frame() {
+    let (_home, features) = test_context();
+    seed_manager_session(&features, "synthetic", 0).await;
+    let repo_root = tempfile::tempdir().expect("temporary repo root");
+    features.startup.insert(Templating::new(repo_root.path(), &[])).expect("no other Templating was inserted");
+    let (address, server) = start_server(Arc::clone(&features)).await;
+    let mut client = connect(address, "synthetic", "cursor=0&asset_version=stale-page-version").await;
+    match time::timeout(Duration::from_secs(1), receive_frame(&mut client)).await.unwrap().unwrap() {
+      ServerFrame::Close(Some(4409)) => {}
+      other => panic!("the stale-asset_version handshake ended with {other:?} instead of the 4409 close"),
+    }
+    server.abort();
+    let _ = server.await;
+  }
+
+  /// A matching `asset_version` and an absent one both serve the catch-up as before; the matching value
+  /// is the one the same `Templating` renders into the page's `?v=` script URLs.
+  #[tokio::test]
+  async fn a_matching_or_absent_asset_version_reaches_the_catchup() {
+    let (_home, features) = test_context();
+    seed_manager_session(&features, "synthetic", 0).await;
+    let repo_root = tempfile::tempdir().expect("temporary repo root");
+    features.startup.insert(Templating::new(repo_root.path(), &[])).expect("no other Templating was inserted");
+    let current = features.startup.require::<Templating>().unwrap().static_asset_version().unwrap();
+    let (address, server) = start_server(Arc::clone(&features)).await;
+    let mut client = connect(address, "synthetic", &format!("cursor=0&asset_version={current}")).await;
+    receive_catchup_complete(&mut client).await;
+    let mut client = connect(address, "synthetic", "cursor=9").await;
+    assert_eq!(receive_json(&mut client).await["type"], "catchup_complete");
     server.abort();
     let _ = server.await;
   }

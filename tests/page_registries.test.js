@@ -125,7 +125,7 @@ test('registered connect handlers run after opening without sending a cursor fra
 
   context.connectWS();
   const socket = FakeWebSocket.instances.at(-1);
-  assert.equal(socket.url, '/ws/sessions/session-a?cursor=12');
+  assert.equal(socket.url, '/ws/sessions/session-a?cursor=12&asset_version=stub-asset-version');
   socket.emitOpen();
 
   assert.deepEqual(sentBeforeHandler, [0]);

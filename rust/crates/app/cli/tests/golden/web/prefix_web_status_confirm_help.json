@@ -1,0 +1,20 @@
+{
+  "argv": [
+    "web",
+    "status",
+    "confirm",
+    "--h"
+  ],
+  "cwd": "{root}",
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n"
+  },
+  "parser_generated": true,
+  "responses": [],
+  "expect": {
+    "stdout": "usage: charliebot web status confirm [-h]\n\noptions:\n  -h, --help  show this help message and exit\n",
+    "stderr": "",
+    "exit": 0,
+    "requests": []
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "argv": [
+    "discord",
+    "check",
+    "--h"
+  ],
+  "cwd": "{root}",
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n"
+  },
+  "parser_generated": true,
+  "responses": [],
+  "expect": {
+    "stdout": "usage: charliebot discord check [-h]\n\noptions:\n  -h, --help  show this help message and exit\n",
+    "stderr": "",
+    "exit": 0,
+    "requests": []
+  }
+}

@@ -22,7 +22,6 @@ pub const LOOP_FAILURE_ERROR_PREFIX: &str = "Improve loop failed: ";
 
 /// The event types the newest-first judgments read: every other type is skipped unparsed.
 const CANDIDATE_TYPES: [&str; 5] = [RESULT, ASSISTANT, ASSISTANT_ERROR, ERROR, RATE_LIMIT_EVENT];
-const SUMMARY_TYPES: [&str; 2] = [RESULT, ASSISTANT];
 
 /// Whether the report's `### Commits` section lists `none` as its first entry.
 pub fn commits_section_first_none(text: &str) -> bool {
@@ -256,16 +255,6 @@ pub fn newest_first_events(events_path: &Path) -> anyhow::Result<Vec<Value>> {
 /// (`src/infra/ndjson.py:404-468` and `src/features/improve/improve_command.py:575-587`).
 pub fn newest_first_event_iter(events_path: &Path) -> anyhow::Result<impl Iterator<Item = Value>> {
   newest_first_judgment_inputs(events_path, &CANDIDATE_TYPES)
-}
-
-/// Return the newest worker summary directly from the log, parsing only result and assistant events.
-pub fn worker_summary_from_events_log(events_path: &Path) -> anyhow::Result<Option<String>> {
-  for event in newest_first_judgment_inputs(events_path, &SUMMARY_TYPES)? {
-    if let Some(summary) = charliebot_tasks::review::worker_summary_from_events_log(std::slice::from_ref(&event)) {
-      return Ok(Some(summary));
-    }
-  }
-  Ok(None)
 }
 
 /// The newest-first events of one walk that the judgments read: the candidate types, and events whose `type` is

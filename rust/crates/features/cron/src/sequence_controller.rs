@@ -20,8 +20,8 @@ use futures_util::future::BoxFuture;
 use serde_json::{Map, Value};
 use tokio::sync::watch;
 
-use super::config::{ScheduledTaskConfig, StepConfig};
-use super::{loader, scheduler};
+use crate::config::{ScheduledTaskConfig, StepConfig};
+use crate::{loader, scheduler};
 
 /// A set of task configs bound to the same manager node.
 pub struct CronBinding {
@@ -316,8 +316,8 @@ impl SequenceController for CronSequenceController {
       let result = redrive_firing(session_id, tree).await;
       if let Some(owner_ref) = owner_ref {
         match &result {
-          Ok(done) => super::boundary::notify_boundary(session_id, &owner_ref, *done, false),
-          Err(_) => super::boundary::notify_boundary(session_id, &owner_ref, false, true),
+          Ok(done) => crate::boundary::notify_boundary(session_id, &owner_ref, *done, false),
+          Err(_) => crate::boundary::notify_boundary(session_id, &owner_ref, false, true),
         }
       }
       result.map(|_| ())
@@ -743,7 +743,7 @@ fn step_prompt(
 
 fn run_result_text(tree: &dyn SequenceTree, session_id: &str, run_id: &str) -> anyhow::Result<String> {
   let path = tree.run_dir(session_id, run_id).join(run_records::RUN_EVENTS_NAME);
-  Ok(crate::improve::judgment::worker_summary_from_events_log(&path)?.unwrap_or_default())
+  Ok(charliebot_tasks::review::read_worker_summary_file(&path)?.unwrap_or_default())
 }
 
 fn parse_firing_ref(owner_ref: &str) -> Option<(String, String)> {
@@ -822,25 +822,25 @@ mod tests {
   use tokio::sync::watch;
 
   use super::{CronBinding, register_step_run, row_schedule_fields};
-  use crate::cron::config::{ScheduledTaskConfig, StepConfig};
-  use crate::cron::test_support::{feature_context, manager};
+  use crate::config::{ScheduledTaskConfig, StepConfig};
+  use crate::test_support::{feature_context, manager};
 
   #[tokio::test]
   async fn boundary_receiver_wakes_for_progress_and_terminal_notice() {
     let leaf_id = "synthetic-boundary-leaf";
     let owner_ref = "cron:synthetic-task:synthetic-firing";
-    let mut receiver = crate::cron::boundary::subscribe_boundary(leaf_id, owner_ref);
+    let mut receiver = crate::boundary::subscribe_boundary(leaf_id, owner_ref);
 
-    crate::cron::boundary::notify_boundary(leaf_id, owner_ref, false, false);
+    crate::boundary::notify_boundary(leaf_id, owner_ref, false, false);
     receiver.changed().await.unwrap();
     assert_eq!(receiver.borrow_and_update().generation, 1);
     assert!(!receiver.borrow().done);
 
-    crate::cron::boundary::notify_boundary(leaf_id, owner_ref, true, false);
+    crate::boundary::notify_boundary(leaf_id, owner_ref, true, false);
     receiver.changed().await.unwrap();
     assert_eq!(receiver.borrow_and_update().generation, 2);
     assert!(receiver.borrow().done);
-    crate::cron::boundary::remove_boundary(leaf_id, owner_ref);
+    crate::boundary::remove_boundary(leaf_id, owner_ref);
   }
 
   #[test]

@@ -80,7 +80,7 @@ mod tests {
   use charliebot_registry::context::FeatureContext;
   use futures_util::future::BoxFuture;
 
-  use super::register;
+  use crate::register;
 
   static HANDLER_POLLS: AtomicUsize = AtomicUsize::new(0);
 

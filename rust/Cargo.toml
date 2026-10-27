@@ -11,6 +11,7 @@ members = [
     "crates/features/artifacts",
     "crates/features/backup",
     "crates/features/chat_threads",
+    "crates/features/cron",
     "crates/features/code_server",
     "crates/features/diag",
     "crates/features/disk_sweep",
@@ -124,6 +125,7 @@ charliebot-agents = { path = "crates/runtime/agents" }
 charliebot-backup = { path = "crates/features/backup" }
 charliebot-chat-threads = { path = "crates/features/chat_threads" }
 charliebot-code-server = { path = "crates/features/code_server" }
+charliebot-cron = { path = "crates/features/cron" }
 charliebot-compat = { path = "crates/infra/compat" }
 charliebot-core = { path = "crates/infra/core" }
 charliebot-diag = { path = "crates/features/diag" }

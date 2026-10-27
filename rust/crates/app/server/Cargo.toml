@@ -18,6 +18,7 @@ charliebot-backup.workspace = true
 charliebot-chat-threads.workspace = true
 charliebot-code-server.workspace = true
 charliebot-compat.workspace = true
+charliebot-cron.workspace = true
 charliebot-agents = { path = "../../runtime/agents" }
 charliebot-core.workspace = true
 charliebot-diag.workspace = true

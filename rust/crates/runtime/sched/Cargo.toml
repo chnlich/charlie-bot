@@ -9,8 +9,6 @@ publish.workspace = true
 anyhow.workspace = true
 axum.workspace = true
 charliebot-agents.workspace = true
-chrono.workspace = true
-chrono-tz.workspace = true
 charliebot-compat.workspace = true
 charliebot-core.workspace = true
 charliebot-registry.workspace = true
@@ -21,16 +19,13 @@ regex.workspace = true
 futures-util.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-time.workspace = true
-uuid.workspace = true
-serde_yaml.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+serde_yaml.workspace = true
 charliebot-agents.workspace = true
 charliebot-tasks = { workspace = true, features = ["test-hooks"] }
 nix.workspace = true
-serde_yaml.workspace = true
 tempfile.workspace = true
 tower.workspace = true

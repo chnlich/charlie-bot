@@ -108,24 +108,6 @@ HTTP_VERSION_SKEW_TIMEOUT = 2.0  # seconds
 SUBPROCESS_GIT_SHA_TIMEOUT = 2.0  # seconds
 
 # ---------------------------------------------------------------------------
-# Router's Jev choice (src/features/router/routing.py)
-# ---------------------------------------------------------------------------
-
-# One HTTP attempt to Jev. The caller bounds a whole routing call at 25 s, so one
-# attempt, the rate-limit wait and one retry (5 + 10 + 5) must fit inside it.
-ROUTER_JEV_REQUEST_TIMEOUT = 5.0  # seconds — one attempt
-ROUTER_JEV_RATE_LIMIT_WAIT = 10.0  # seconds — pause before the single retry after HTTP 429
-
-# ---------------------------------------------------------------------------
-# CLI detached-launch ssh start and kill (ssh + setsid), src/runtime/cli/launcher.py
-# ---------------------------------------------------------------------------
-
-# Whole ssh wrapper run: connect (ssh's own ConnectTimeout applies inside) plus
-# the remote mkdir/setsid/pid-print sequence. The failure message prints this
-# value, so budget and message cannot drift.
-SSH_LAUNCH_TIMEOUT = 30  # seconds
-
-# ---------------------------------------------------------------------------
 # Session websocket (browser push channel)
 # ---------------------------------------------------------------------------
 

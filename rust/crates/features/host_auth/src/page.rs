@@ -9,10 +9,8 @@ use http::request::Parts;
 use serde_json::{Map, Value, json};
 use time::OffsetDateTime;
 
-use crate::host_auth::{
-  self, BLOCKED_BACKOFF_SEC, PROBE_INTERVAL_SEC, STATUS_NEEDS_INTERACTIVE_AUTH, STATUS_NEEDS_OKTA, STATUS_OK,
-  STATUS_UNREACHABLE, State, TRUST_CACHE_TTL_SEC,
-};
+use crate::host_auth::{self, BLOCKED_BACKOFF_SEC, PROBE_INTERVAL_SEC, State, TRUST_CACHE_TTL_SEC};
+use crate::probe::{STATUS_NEEDS_INTERACTIVE_AUTH, STATUS_NEEDS_OKTA, STATUS_OK, STATUS_UNREACHABLE};
 use crate::timestamps::{self, LocalFormat};
 
 const TEMPLATE: &str = "host_auth.html";
@@ -175,7 +173,7 @@ fn truthy(value: Option<&Value>) -> bool {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::host_auth::{STATUS_NEEDS_OKTA, empty_state};
+  use crate::host_auth::empty_state;
 
   fn state_with(hosts: Value) -> State {
     let mut state = empty_state();

@@ -11,10 +11,16 @@ use charliebot_core::ssh;
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
-use crate::host_auth::{
-  DETAIL_MAX_CHARS, PROBE_TIMEOUT, STATUS_NEEDS_INTERACTIVE_AUTH, STATUS_NEEDS_OKTA, STATUS_OK, STATUS_UNREACHABLE,
-};
 use crate::pytext;
+
+/// The overall wait on one ssh subprocess; the kill it ends is what the classifier reads past.
+pub const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+pub const DETAIL_MAX_CHARS: usize = 200;
+
+pub const STATUS_OK: &str = "ok";
+pub const STATUS_NEEDS_OKTA: &str = "needs-okta";
+pub const STATUS_NEEDS_INTERACTIVE_AUTH: &str = "needs-interactive-auth";
+pub const STATUS_UNREACHABLE: &str = "unreachable";
 
 /// Output markers that name a hold. They are matched before any return code: a held host's prompt waits until the
 /// probe timeout kills it, so the return code of a held probe says nothing.

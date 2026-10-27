@@ -1,6 +1,5 @@
 # Rows record the module cycles that predate the structure test. Rows only leave this table.
 cycle charliebot-agents: backends::opencode::backend, backends::opencode::server, cli_base, one_shot, runner
-cycle charliebot-host-auth: host_auth, probe
 cycle charliebot-registry: backend, context, lifespan, pages, registry, sequence, sidebar, store_hooks, turn, usage, wiring
 cycle charliebot-server: app, auth, request_log, routes, routes::pages, routes::static_mounts, routes::system, routes::websockets, state
 cycle charliebot-session-api: crate, detail, fork_routes, prompt_routes, routes, websocket, write_routes

@@ -17,7 +17,7 @@ use futures_util::future::join_all;
 use serde_json::{Map, Value, json};
 use time::{Duration, OffsetDateTime};
 
-use crate::probe::{build_detail, classify, probe_host};
+use crate::probe::{STATUS_NEEDS_OKTA, STATUS_OK, build_detail, classify, probe_host};
 use crate::ssh_config;
 use crate::timestamps::{self, isoformat};
 
@@ -26,16 +26,8 @@ pub const PROBE_INTERVAL_SEC: i64 = 1800;
 pub const BLOCKED_BACKOFF_SEC: i64 = 12 * PROBE_INTERVAL_SEC;
 /// The trust-cache lifetime the estimate counts from a renewal.
 pub const TRUST_CACHE_TTL_SEC: i64 = 7 * 86400;
-/// The overall wait on one ssh subprocess; the kill it ends is what the classifier reads past.
-pub const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 
 pub const STATE_FILENAME: &str = "host_auth.json";
-pub const DETAIL_MAX_CHARS: usize = 200;
-
-pub const STATUS_OK: &str = "ok";
-pub const STATUS_NEEDS_OKTA: &str = "needs-okta";
-pub const STATUS_NEEDS_INTERACTIVE_AUTH: &str = "needs-interactive-auth";
-pub const STATUS_UNREACHABLE: &str = "unreachable";
 
 /// The state file's object, with its keys in file order.
 pub type State = Map<String, Value>;
@@ -338,6 +330,7 @@ impl Drop for RoundSlot {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::probe::STATUS_UNREACHABLE;
 
   fn entry(alias: &str, hostname: &str, overrides: &[(&str, Value)]) -> Map<String, Value> {
     let mut entry = new_entry(alias, hostname);

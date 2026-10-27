@@ -8,11 +8,11 @@ use std::io::{self, ErrorKind};
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
+use charliebot_compat::file_urls::FILE_SERVER_MOUNT;
 use charliebot_core::timefmt;
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 use time::OffsetDateTime;
 
-use crate::MOUNT;
 use crate::human_size;
 
 const FILENAME_SET: &AsciiSet = &NON_ALPHANUMERIC.remove(b'_').remove(b'.').remove(b'-').remove(b'~');
@@ -67,7 +67,7 @@ pub fn dir_listing_page(dir_path: &Path, url_prefix: &str) -> Result<Option<Stri
 
   let mut rows = String::new();
   let base = url_prefix.trim_end_matches('/');
-  if base != MOUNT {
+  if base != FILE_SERVER_MOUNT {
     let (parent, _) = base.rsplit_once('/').expect("a listed URL runs under the mount, so it holds a slash");
     rows.push_str(&format!(r#"<tr><td>📁</td><td><a href="{}">..</a></td><td></td><td></td></tr>"#, escape(parent)));
     rows.push('\n');

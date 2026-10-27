@@ -21,7 +21,7 @@ def test_a_second_registration_of_one_name_raises() -> None:
   with pytest.raises(ValueError, match="setup_step"):
     wiring.register_setup_step("src.features.cron.seed", attr="setup_step")
   with pytest.raises(ValueError, match="phase"):
-    wiring.register_service("not_registered", "src.features.cron.service", phase="late")
+    wiring.register_service("not_registered", "not_imported", phase="late")
 
   assert wiring.commands() == commands_before
   assert wiring.setup_steps() == steps_before

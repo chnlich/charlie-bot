@@ -1,0 +1,17 @@
+{
+  "argv": [
+    "publish",
+    "{root}/artifacts/page.html"
+  ],
+  "cwd": ".",
+  "files": {
+    "home/config.yaml": "publish:\n  command:\n    - {root}/bin/no-such-program\n",
+    "artifacts/page.html": "<p>hello</p>"
+  },
+  "expect": {
+    "stdout": "",
+    "stderr": "{\"error\": \"publish.command could not start {root}/bin/no-such-program: [Errno 2] No such file or directory: '{root}/bin/no-such-program'\"}\n",
+    "exit": 1,
+    "requests": []
+  }
+}

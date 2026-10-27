@@ -1,0 +1,18 @@
+{
+  "argv": [
+    "publish",
+    "{root}/artifacts/page.html"
+  ],
+  "cwd": ".",
+  "files": {
+    "home/config.yaml": "publish:\n  command:\n    - {root}/bin/publisher\n",
+    "artifacts/page.html": "<p>hello</p>",
+    "bin/publisher": "#!/bin/sh\nexit 0\n"
+  },
+  "expect": {
+    "stdout": "",
+    "stderr": "{\"error\": \"publish.command exited 0 without exactly one http(s) URL line on stdout; stderr: \"}\n",
+    "exit": 1,
+    "requests": []
+  }
+}

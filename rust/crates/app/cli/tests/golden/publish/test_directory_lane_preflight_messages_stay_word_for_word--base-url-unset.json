@@ -1,0 +1,18 @@
+{
+  "argv": [
+    "publish",
+    "{root}/artifacts/page.html"
+  ],
+  "cwd": ".",
+  "files": {
+    "home/config.yaml": "publish:\n  dir: {root}/publish\n",
+    "artifacts/page.html": "<p>hello</p>",
+    "publish/index.html": "index"
+  },
+  "expect": {
+    "stdout": "",
+    "stderr": "{\"error\": \"publish.public_base_url is not configured; the publish lane is unavailable\"}\n",
+    "exit": 1,
+    "requests": []
+  }
+}

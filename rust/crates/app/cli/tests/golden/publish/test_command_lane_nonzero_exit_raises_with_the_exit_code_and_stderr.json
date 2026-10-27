@@ -1,0 +1,18 @@
+{
+  "argv": [
+    "publish",
+    "{root}/artifacts/page.html"
+  ],
+  "cwd": ".",
+  "files": {
+    "home/config.yaml": "publish:\n  command:\n    - {root}/bin/publisher\n",
+    "artifacts/page.html": "<p>hello</p>",
+    "bin/publisher": "#!/bin/sh\nprintf '%s\\n' 'https://reader.example/page.html'\nprintf '%s\\n' 'reader list is locked' >&2\nexit 4\n"
+  },
+  "expect": {
+    "stdout": "",
+    "stderr": "{\"error\": \"publish.command exited 4; stderr: reader list is locked\"}\n",
+    "exit": 1,
+    "requests": []
+  }
+}

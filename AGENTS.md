@@ -40,14 +40,11 @@
 
 ### Live Verification
 
-- Verify changes on a synthetic `CHARLIEBOT_HOME` with `tools/live_smoke_task_tree.py`.
-- The harness skips `server.py` lifespan startup. It does not run crash recovery, scheduler, or trigger scans.
-- Use a trial home with `server.py` to test real delayed triggers.
+- Verify changes on a synthetic `CHARLIEBOT_HOME`.
+- Use a trial home with `charliebot-server` to test real delayed triggers.
 - Copy a session directory with its CLI continuity files when staging it in another home.
 - Child agents inherit `CHARLIEBOT_HOME` through `task_execution._child_env`.
 - Assign a fresh path to a scratch home. Delete only that path.
-- Use `httpx.ASGITransport(app=server.app)` to measure routes against copied sessions.
-- This transport skips lifespan startup, which can start real agents in real worktrees.
 - Remove agent CLIs from `PATH` and assert that a probe launches zero child processes.
 
 ### Model-Based Checks

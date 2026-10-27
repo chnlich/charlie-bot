@@ -13,24 +13,6 @@ Known-alive symbols:
   `_handle_mcp_tool_call`, `_handle_todo_list`, `_handle_error` — Codex backend
   item-event handlers in `src/backends/codex/codex.py`, reached by string via the `_ITEM_HANDLERS`
   name list and `getattr(self, handler_name)` dispatch in `_translate_item_event`.
-- `openai_compatible_messages` — FastAPI route handler in `src/backends/openai_compatible/anthropic_proxy.py`
-  (`POST /api/anthropic-proxy/openai-compatible/{backend_id}/v1/messages`), reached by string: the
-  `cc-openai-compatible` backend registry builds that URL by f-string in
-  `src/backends/openai_compatible/factory.py`. The Python name has exactly zero whole-repo matches outside
-  its own definition, so static dead-code tools (vulture) flag it as an unused function.
-- Every FastAPI route handler in `src/runtime/api/*.py` and the feature `api.py` modules (functions under `@router.get/post/patch/put/
-  delete/websocket` decorators, e.g. `list_cron_tasks`,
-  `rate_round`, `get_events_jsonl`) — reached by URL string: `server.py` includes
-  each router with `include_router(prefix=...)` (the package routers through the wiring registry,
-  `src/app/registrations.py`) and `web/static/js/` fetches the composed paths
-  (e.g. `/rounds/{id}/rate` from `chat/ratings.js`). The Python function names have exactly zero whole-repo matches outside
-  their definitions, so vulture flags each one as an unused function; they must never be deleted on
-  that evidence alone. `openai_compatible_messages` above is the same class, kept as its own entry
-  because its URL is built inside the Python registry rather than `web/`. The class also extends
-  past the `api.py` file name: `src/app/pages.py` (`events_viewer`, `home_page`), the feature
-  `page.py` modules (`diff_viewer` in `src/features/diff_view/page.py`) and
-  `src/features/usage/ext_usage.py` (`get_ext_usage`) hold routers the same inclusion paths
-  serve, and vulture flags those handlers on the same evidence.
 - `_fresh_credential_read_warning_registry`, `_fresh_unknown_limit_shape_registry`, `_fresh_usage_cache`,
   `_fresh_user_agent_cache`, `_fresh_claude_accounts`, `_fresh_codex_account` (`tests/test_ext_usage.py`),
   `_fresh_pool_state` (`tests/test_claude_accounts.py`),
@@ -61,39 +43,17 @@ Known-alive symbols:
   fixture, reached by fixture-name discovery like the block above. It resets the registry by
   calling the registry's own `clear()` (the seam `WarnOnceRegistry` documents for tests); a
   word-match grep finds only the definition.
-- `session_websocket` — `@app.websocket` handler in `server.py` (`/ws/sessions/{session_id}`),
-  reached by URL string: `web/static/js/websocket.js` dials `/ws/sessions/${SESSION_ID}`. The
-  Python name has exactly zero whole-repo matches outside its definition, so vulture flags it as
-  an unused function. Same class as the route handlers above, kept as its own entry
-  because these live in `server.py` itself.
-  (`terminal_websocket`, in `src/features/terminal/api.py`, needs no entry: `tests/test_terminal_backend.py`
-  imports it by name, so the Step 3 grep finds it.)
-- `voice_preview_websocket` — `@ws_router.websocket` handler in `src/features/voice/api.py` (`/ws/voice/{session_id}`),
-  reached by URL string: `src/features/voice/static/voice-input.js` dials `/ws/voice/${sessionId}` with the
-  transcription backend named in the `?backend=` query, and `tests/voice_input_run.test.js`
-  asserts the composed URL. The Python name has exactly zero whole-repo matches outside its
-  definition, so vulture flags it as an unused function. Same class as the `session_websocket`
-  entry above. The recording and upload endpoints are `router` handlers in the same file, covered by
-  the route-handler entry.
-- `register` (the `__init__.py` of each package listed in `src/app/registrations.py`), `start_service`
-  and `stop_service` (each module named in a `wiring.register_service` call), `ws_router` and
-  `mounted_router` (the router attributes named in a `wiring.register_router` call), and
-  `serve_artifact_path` (the view attribute named in a `wiring.register_file_view` call), and
-  `check_backend_refs` (`src/features/cron/backend_refs.py`) and `check_backend_ids`
-  (`src/features/usage/backend_ids.py`) (the attributes named in `wiring.register_startup_check`
-  calls), and
+- `register` (the `__init__.py` of each package listed in `src/app/registrations.py`) and
   `setup_step` (the attribute named in a `wiring.register_setup_step` call) — reached by
-  string: `register_all()`, `wiring.service_starts()`, `wiring.service_stops()`, `wiring.file_views()`,
-  `wiring.startup_checks()`, `wiring.setup_steps()` and the router loop in `server.py` import the module from its
-  path string and read the attribute by name. The names have zero whole-repo matches outside their definitions (`check_backend_ids`
-  also rides a descriptive mention in `src/infra/config.py`), so vulture flags them as
-  unused.
+  string: `register_all()` and `wiring.setup_steps()` import the module from its path string
+  and read the attribute by name. The names have zero whole-repo matches outside their
+  definitions, so vulture flags them as unused.
 - `check_sources_and_mode` — pydantic `@model_validator` method on `ScheduledTaskConfig`
   in `src/features/cron/config.py`, registered with pydantic at class-definition time and invoked during
   model validation (it enforces the prompt-source and mode rules). The method name has
   exactly zero whole-repo matches outside its definition, so vulture flags it as an unused
   method.
-- `setup_step` (`src/features/cron/seed.py`) — production-scope vulture (`src/`, `server.py`) flags it
+- `setup_step` (`src/features/cron/seed.py`) — production-scope vulture (`src/`) flags it
   as an unused function; it is reached by string: `src/features/cron/__init__.py` registers it through
   `wiring.register_setup_step("src.features.cron.seed", attr="setup_step")`, and `scripts/setup.sh`
   runs the registered steps through `src.app.setup`. Its callee `seed_default_cron_tasks` rides along.
@@ -132,14 +92,10 @@ Known-alive symbols:
 - `model_config` (the pydantic v2 `ConfigDict` class attribute, assigned on the pydantic
   `BaseModel` classes of `src/infra/backend_models.py`, `src/infra/config.py`, `src/infra/models.py`,
   `src/backends/claude_code/claude_config.py`, `src/features/artifacts/config.py`,
-  `src/features/code_server/config.py`,
-  `src/features/diag/api.py`, `src/features/discord/config.py`, `src/features/slack/config.py`,
-  `src/features/voice/config.py`, `src/features/cron/config.py`, and `src/features/cron/api.py`) — `ModelMetaclass`
-  consumes it by attribute name at class-definition time. Every assignment pins
+  `src/features/code_server/config.py`, `src/features/discord/config.py`,
+  `src/features/slack/config.py`, `src/features/voice/config.py`, and `src/features/cron/config.py`) —
+  `ModelMetaclass` consumes it by attribute name at class-definition time. Every assignment pins
   `extra='forbid'`, which turns an unknown config or request key into a validation error, except
-  `TaskCreate` in `src/features/cron/api.py`, which pins
-  `extra='ignore'` (the pydantic default) so the create-request body stays looser than the
-  loader's forbid task model, as the comment above the assignment states, and
   `CharlieBotConfig` in `src/infra/config.py`, which pins `extra='allow'` so the sections that
   packages register ride as extras (`_parse_package_sections` refuses every other unknown key).
   Vulture flags each production assignment as an unused variable.
@@ -195,12 +151,11 @@ Known-alive symbols:
 - `postCommentMessage` (`web/static/js/comment_post.js`) — cross-file browser global:
   `diff_comments.js` and `artifact-comments.js` call it as a bare identifier resolved
   through the page's script-tag global scope, each page loading the file before the
-  widget (`src/features/diff_view/templates/diff.html`, and the `_inject_artifact_ui` tags in
-  `src/features/artifacts/artifact_view.py` for artifact pages). A per-file dead-function scan finds only the
+  widget (`src/features/diff_view/templates/diff.html`). A per-file dead-function scan finds only the
   definition, so it flags the function as unused.
 - `render` (`FastJsonResponse` in `src/infra/responses.py`) — template-method override of
   starlette `JSONResponse.render`: the base `Response.__init__` calls `self.render(content)`
-  by that name when FastAPI serializes a response. As a Python identifier the name has zero
+  by that name when a response is built. As a Python identifier the name has zero
   matches outside its definition, so a Python-scoped dead-method scan (vulture) flags it as
   an unused method; a whole-repo grep is noisier — `render` is also ordinary web-JS DOM code
   (`plan-panel.js` `function render()`)
@@ -216,11 +171,6 @@ Known-alive symbols:
   must address raw source spans. Therefore `_Parser`'s `handle_entityref` and `handle_charref`,
   the only overrides of that pair, fire there. `_TreeBuilder` pins `convert_charrefs=True`, and
   under that setting the stdlib folds references into `handle_data`.
-- `isolated_config` (`tests/test_absolute_filepath_prefix.py`) — pytest fixture (owns the config
-  and credentials the file router reads: sessions root under tmp_path, empty access key so the
-  gate is a no-op), requested by name in one test's parameter list; the body never references
-  the parameter, so vulture flags it as an unused variable at that request site. Same
-  fixture-name-discovery class as the autouse block above.
 - `cli_katex` (`tests/core/test_artifact_wrap.py`) — pytest fixture (monkeypatches
   `src.features.artifacts.cli.home.charliebot_home_dir` so the wrap verb's home resolution lands
   under the pytest tmp tree instead of the host profile), requested by name in three tests' parameter lists; the bodies
@@ -264,14 +214,11 @@ Known-alive symbols:
   reader is the runtime attribute access on the double, which static analysis cannot tie
   back to this write site.
 - `search_sessions` (the `SessionSearch` method in `src/runtime/session_search.py`) — deliberately
-  retained two-tier search API, not an orphan. The `/api/sessions/search` route serves
-  `search_sessions_readonly` (the cap before per-row work, shared cache references), so the
-  wrapper's owned-copy + sidebar-state-fold form has zero production callers since that
-  switch — but the same change added a cross-check test pinning that the wrapper serves the
-  same rows, and the archived-pagination tests plus `docs/perf_baseline.md@5175adf09`'s search benchmark
-  drive the wrapper as the semantics reference. A src-only vulture scan flags it as an unused
-  method; a whole-repo grep finds only that test file, one docstring cross-reference, the
-  same-named route handler in `src/runtime/api/sessions.py`, and the perf doc.
+  retained two-tier search API, not an orphan. No Python route calls it now that the
+  `/api/sessions/search` route is served by the Rust server, but the archived-pagination tests
+  (`tests/test_archived_pagination.py`) drive the wrapper as the semantics reference. A src-only
+  vulture scan flags it as an unused method; a whole-repo grep finds only those tests and one
+  docstring cross-reference in `src/runtime/session_store.py`.
 - `client` (`src/features/slack/slack_listener.py`, the `TYPE_CHECKING`-guarded
   `from websockets.asyncio import client` import) — reached by string: the `_expect_hello`
   and `_serve_socket_mode` parameters are annotated `client.ClientConnection`, and that
@@ -287,12 +234,6 @@ Known-alive symbols:
   Reached by string: the patch target `src.features.artifacts.artifact_wrap.requests.get`
   (`tests/core/test_artifact_wrap.py`) resolves the module attribute through the hook.
   Vulture flags it as an unused function at 60% confidence.
-- `split_sse_lines` (`src/infra/sse.py`) — kept deliberately as the SSE framing oracle. The
-  tests in `tests/test_sse.py` drive it directly (the trailing-CR hold, the CRLF straddle, the
-  final flush) and pin the production reader's byte mode against its str mode on every two-way
-  split; the byte framer's docstring (`_ChunkedFramer`, same module) names it the semantics
-  home. No production code calls it, so a production-scope vulture scan flags it as an unused
-  function.
 - `__getattr__` (`src/runtime/worker.py`, `src/runtime/autonamer.py`) — the PEP 562 lazy-import
   hooks; same class as the `src/features/artifacts/artifact_wrap.py` hook entry above. Each is a
   one-line delegate to the shared `deferred_module_getattr` (`src/infra/deferred.py`) serving the
@@ -313,12 +254,6 @@ Known-alive symbols:
   what the listener paths may call"), so a missing method fails with an AttributeError by
   construction, never silently. Vulture flags each method as unused (60% confidence); the names
   match only the double and the real `SlackClient` in `src/features/slack/slack_listener.py`.
-- `raise_for_status`, `aclose`, `aiter_bytes` (the httpx response doubles: `FakeChunkedResponse`
-  in `tests/conftest.py` and `_FakeResponse` in `tests/test_ext_usage.py`) — production reads
-  each through the duck-typed response surface: the SSE consumers iterate
-  `response.aiter_bytes()` (`src/infra/sse.py`), the fetch and Web-API paths call
-  `response.raise_for_status()`, and the proxy paths await `response.aclose()`. Each double name
-  matches only its own definition, so vulture flags the methods as unused.
 - `_proc`, `_ws` (the fake `_launch` in `tests/core/test_headless_render.py`) —
   `_WarmRenderer._render_once`/`close` read `self._proc`/`self._ws`
   (`src/features/artifacts/headless_render.py`); the fake installs them by attribute write, which vulture
@@ -333,24 +268,15 @@ Known-alive symbols:
   write inside test setup (`cron_loader._cron_snapshot = cron_loader._CronSnapshot()` in
   `tests/conftest.py`). The read lives in `src/features/cron/loader.py`, so vulture flags the write as an
   unused attribute. Same class as the registry-reset fixtures above, minus the named-fixture wrapper.
-- `_reset_api_round_state` (`tests/test_host_auth.py`) — `@pytest.fixture(autouse=True)`
-  fixture; pytest invokes it around every test in its module with no in-file reference,
-  resetting `api._round_running` and `api._poller.task` before and after each test.
-  Vulture flags it as an unused function (60% confidence). Same autouse class as
-  `_codex_home_under_tmp` above.
-- `_round_running` (the reset writes in `tests/test_host_auth.py`'s `_reset_api_round_state`) —
-  a production module-global write from test setup, read in `src/features/host_auth/api.py`. A tests-only
-  vulture scan flags the write as an unused attribute; the combined src+tests scan sees the read
-  and stays silent. Same class as the `_cron_snapshot` entry above.
 - `history` (the `MessageProjection` property in `src/runtime/message_projection.py`) — kept
   deliberately as the projection's semantics oracle, not an orphan. No production reader consumes
   it: the pagination paths read `tail`/`slice_before`/`cached_page_body`/`pending_draft` and the
   gzip body memos instead. Its consumer is the definitional pin in `tests/test_message_projection.py`
   (`test_projection_history_equals_events_to_messages`, parametrized): `history` must equal
   `events_to_messages(all_events)` because it feeds the same reference path, and that module's
-  page-walk and draft-identity tests read it as that reference. `docs/perf_baseline.md@5175adf09`'s projection-parity collector digests it. A
+  page-walk and draft-identity tests read it as that reference. A
   src-only vulture scan flags it as an unused property; a whole-repo grep finds only the definition,
-  the class docstring's definitional sentence, those tests, and the perf doc. Same
+  the class docstring's definitional sentence, and those tests. Same
   deliberately-retained-oracle class as the `search_sessions` entry above.
 - `_get_close_waiter` (and its `stream` parameter) (`src/runtime/agent_process/spawn.py`) — the
   stdlib's duck-typed close contract: `asyncio.StreamWriter.wait_closed()` awaits
@@ -363,12 +289,6 @@ Known-alive symbols:
   contract. A single-file vulture scan of `spawn.py` flags the method as unused (60% confidence)
   and `stream` as an unused variable (100% confidence). A whole-repo grep finds only the
   definition. Never delete it on that evidence.
-- `_unprobed_verdict_stays_idle` (`src/runtime/api/sessions.py`, on `SessionDetailResponse`) — pydantic
-  `@field_validator` method, registered with pydantic at class-definition time and invoked
-  during model validation: it keeps a never-probed row's response `work_state` at the literal
-  `'idle'` instead of `null`. The name has exactly zero whole-repo matches outside its
-  definition, so vulture flags it as an unused method. Same framework-registered class as the
-  `check_sources_and_mode` entry above.
 - `check_default_backend` (`src/features/voice/config_check.py`), `check_claude_pools`
   (`src/backends/claude_code/claude_config.py`), `AccountsConfig` (same file),
   each option model class in
@@ -398,11 +318,10 @@ Known-alive symbols:
   (`DiscordConfig` sets `extra='forbid'`, so the retired key dies as an unknown
   field), but the error would no longer name `allowed_users`, the successor the
   operator must move each id into.
-- `src/runtime/v1_sessions.py` (the start refusal for a home that holds v1 sessions) and
-  `scripts/v1_session_conversion.py` (the converter that the refusal names) — kept on purpose for
+- `scripts/v1_session_conversion.py` (the converter for v1 sessions) — kept on purpose for
   other CharlieBot homes that still hold v1 sessions. This host's primary home holds none in the old format,
   but the trial home `~/.charliebot-session-task-tree` still held two v1 sessions when counted in 2026-10, so
-  the migration-code kind of Step 1 does not match them. Never delete either file or its tests.
+  the migration-code kind of Step 1 does not match them. Never delete this file or its tests.
 - `run_scheduled_backup` (`src/features/backup/backup.py`), `run_scheduled_usage_ledger`
   (`src/features/usage/usage_ledger.py`), `run_scheduled_cool_storage`
   (`src/features/usage/storage_cool.py`) and `run_scheduled`
@@ -413,10 +332,6 @@ Known-alive symbols:
   registered task with `handler: <name>` awaits `getattr(import_module(module), attr)()`
   (`src/runtime/hooks/scheduled_handlers.py`). Vulture flags each of the four as an unused
   function at 60% confidence.
-- `set_task_manager` (`src/runtime/task_execution.py`) — kept deliberately as the test
-  injection seam for the task-tree owner singleton: `tests/test_chat_cancel.py` imports it to
-  swap in a controlled tree and passes None to restore lazy construction. A whole-repo grep
-  finds only the definition and that test file, so vulture flags it as an unused function.
 - `PoolNodeMetadata` (`src/runtime/backend_pool.py`), `CronMetadata`
   (`src/features/cron/metadata.py`), `SlackSessionFields` (`src/features/slack/metadata.py`) and
   `WebReplyMetadata` (`src/features/web_reply/metadata.py`) — reached by string: each owning
@@ -438,10 +353,9 @@ Known-alive symbols:
   (`src/features/slack/slack_listener.py`), and `thread_entry.py` reads and writes it through
   `getattr(fields, platform.watermark_field)`. Vulture sees neither keyword nor string reach, so
   it flags each declaration as an unused variable.
-- `__getattr__` (`src/features/explain/explain.py`, `src/infra/constants.py`,
+- `__getattr__` (`src/infra/constants.py`,
   `src/infra/models.py`) — the PEP 562 lazy-attribute hooks, same class as the
-  worker/autonamer entry above. The explain hook serves the deferred `base_one_shot_text` and
-  `build_backend` loaders; the constants hook builds `REPO_ROOT` on first read so the CLI
+  worker/autonamer entry above. The constants hook builds `REPO_ROOT` on first read so the CLI
   import floor pays no pathlib chain; the models hook binds the `_BACKEND_REEXPORTS` names
   (`BackendOption`, `option_default_model`) from `src.infra.backend_models` on first read,
   keeping the backend stack off the session-model import path. Vulture flags each hook as an
@@ -462,13 +376,6 @@ Known-alive symbols:
   `backend_lifecycle_registration.register_usage_resolver`; each registry resolves the class from
   its string, the lifecycle at backend launch and the resolver at a usage read. Vulture flags
   each class as unused at 60% confidence.
-- `code_server_enabled` (`src/features/code_server/api.py`), `voice_backends` and
-  `voice_default_backend` (`src/features/voice/page_globals.py`) — reached by string: each
-  package's `register()` passes the module path plus `attr=` to
-  `page_render.register_template_global` (`src/features/code_server/__init__.py`,
-  `src/features/voice/__init__.py`), and the page render binds the template global as
-  `getattr(import_module(module), attr)`. Vulture flags each function as an unused function at
-  60% confidence.
 - `_one_lane` (`PublishConfig` in `src/features/artifacts/config.py`), `_run_package_checks`
   (`CharlieBotConfig` in `src/infra/config.py`), `_cold_read_matches_task_type` (`TaskSpec` in
   `src/infra/models.py`), `_registered_keys_only` (`CreateSessionRequest` in `src/infra/models.py`)
@@ -484,16 +391,12 @@ Known-alive symbols:
   It refuses an `api_base` that ends in `/v1`, because Claude Code appends `/v1/messages` to the
   base. The name has exactly zero whole-repo matches outside its definition, so vulture flags it
   as an unused method.
-- `content_type_is_excluded` (the `_IsalGZipResponder` write in `server.py`), `row_factory` (the
-  `UsageLedger` connection write in `src/features/usage/usage_ledger.py`), `should_exit` (the
-  uvicorn `Server` writes in `tools/chat_scroll_regression.py` and
-  `tools/live_smoke_task_tree.py`) and `longrepr` (the pytest `TestReport` writes in
-  `tests/conftest.py`) — attribute writes on library objects the library itself reads back:
-  starlette's `GZipResponder.send_with_compression` branches on the exclusion flag for body
-  messages, sqlite3 applies the connection's row factory to every cursor it creates, uvicorn's
-  serve loop polls `should_exit`, and pytest renders `longrepr` when a test fails. Nothing in the
-  repo reads the attributes back, so vulture flags each write as an unused attribute. Same
-  library-attribute class as the `_theme`/`_decolor` entry above.
+- `row_factory` (the `UsageLedger` connection write in `src/features/usage/usage_ledger.py`) and
+  `longrepr` (the pytest `TestReport` writes in `tests/conftest.py`) — attribute writes on library
+  objects the library itself reads back: sqlite3 applies the connection's row factory to every
+  cursor it creates, and pytest renders `longrepr` when a test fails. Nothing in the repo reads
+  the attributes back, so vulture flags each write as an unused attribute. Same library-attribute
+  class as the `_theme`/`_decolor` entry above.
 - `exc_type`, `tb` (the `UsageLedger.__exit__` signature in
   `src/features/usage/usage_ledger.py`) and `exitstatus` (`pytest_terminal_summary` in
   `tests/conftest.py`) — protocol-mandated parameters the body does not read: the `with`
@@ -561,46 +464,29 @@ Known-alive symbols:
   string-registration class as the `AccountsConfig` entry above; `DiscordConfig` is the class the
   `_reject_legacy_allow_list` entry's validator lives on.
 - `context_refs` (`TaskSpec` in `src/infra/models.py`), `reviewer_context_file`
-  (`DelegateInvocationMetadata` in `src/infra/models.py`), `next_before_id`
-  (`ArchivedSessionsPage` in `src/runtime/api/sessions.py`), `stopped_runs`
-  (`CancelSessionResponse` in `src/runtime/api/sessions.py`), `tree_revision`
-  (`TreePageResponse` in `src/runtime/api/sessions.py`), `child_count` and
-  `open_descendant_count` (`SessionRow` in `src/infra/models.py`), `to_session`,
-  `winner_generation` and `client_ts` (`SwitchEventRequest` in `src/features/diag/api.py`), and
+  (`DelegateInvocationMetadata` in `src/infra/models.py`), `child_count` and
+  `open_descendant_count` (`SessionRow` in `src/infra/models.py`), and
   `pending_trigger_count` (`SessionMetadata` in `src/infra/models.py`, written by the sidebar
   probe in `src/runtime/session_sidebar.py`) — pydantic model fields nothing in Python
   attribute-reads; every consumer reads the serialized key.
   `web/static/js/sidebar/modals.js` renders `t.context_refs`,
-  `web/static/js/chat/rendering.js` reads `invocation.reviewer_context_file`,
-  `web/static/js/sidebar/archived.js` passes `page.next_before_id` into the next archive
-  request, the session CLI reads `result.get("stopped_runs")`
-  (`src/runtime/cli/session.py`), `web/static/js/sidebar/session-view.js` fills the
-  switch-event body the diag handler logs whole through `req.model_dump()`, and
+  `web/static/js/chat/rendering.js` reads `invocation.reviewer_context_file`, and
   `web/static/js/sidebar/status.js` with `web/static/js/chat/triggers-tray.js` read
   `pending_trigger_count` off status payloads. `child_count`/`open_descendant_count` ride every
-  tree-page row and the tree-changed signal, `tree_revision` rides every tree page, and the
-  tree and archive tests read those keys off the decoded bodies. Vulture flags each field
-  declaration (plus the sidebar probe's attribute write) as an unused variable or attribute.
+  tree-page row and the tree-changed signal. Vulture flags each field declaration (plus the
+  sidebar probe's attribute write) as an unused variable or attribute.
 - `has_pending_trigger` and `has_pending_plan_approval` (`SessionMetadata` in
   `src/infra/models.py`, written by the sidebar probe in `src/runtime/session_sidebar.py`
   through the `sidebar_state.HAS_PENDING_*` string constants) — the same wire-read class as the
-  `pending_trigger_count` entry above: the status scope reads `dump["has_pending_trigger"]`
-  (`src/runtime/api/sessions.py`), `web/static/js/sidebar/status.js` reads
-  `session.has_pending_trigger` and `session.has_pending_plan_approval` off status payloads, and
-  the status-scope tests assert `row.has_pending_plan_approval`. Vulture flags each declaration
-  (plus the probe's attribute writes) as an unused variable or attribute.
+  `pending_trigger_count` entry above: `web/static/js/sidebar/status.js` reads
+  `session.has_pending_trigger` and `session.has_pending_plan_approval` off status payloads. Vulture
+  flags each declaration (plus the probe's attribute writes) as an unused variable or attribute.
 - `subtree_prompt` and `node_prompt` (`PatchSessionTaskRequest` in `src/infra/models.py`) —
   read by string: `task_sessions.patch_task` tests `req.model_fields_set` for the two field
   names and reads each value through `getattr(req, f"{scope}_prompt")`, and the task-prompt
   tests construct the request with each keyword. Vulture flags each field as an unused variable
   at 60% confidence.
-- `prompt_rules` (`SessionDetailResponse` in `src/runtime/api/sessions.py`) — kept
-  deliberately: the detail builder writes `prompt_rule_summaries` into every session-detail
-  payload, and the field's comment names its reader, the later Task/Context UI. Nothing reads
-  the attribute, so vulture flags the declaration as an unused variable at 60%
-  confidence.
-- `stray` (`tests/test_metadata_slots.py`) and `unregistered_key`
-  (`tests/test_sessions_status_scope.py`) — attribute writes of keys no owner registers on an
-  `extra="allow"` metadata model; the same tests read each key back through `model_dump_json()`
-  key order and `model_extra` when asserting the copy and ordering rules. Vulture flags each
-  write as an unused attribute at 60% confidence.
+- `stray` (`tests/test_metadata_slots.py`) — attribute write of a key no owner registers on an
+  `extra="allow"` metadata model; the same test reads it back through `model_dump_json()` key
+  order and `model_extra` when asserting the copy and ordering rules. Vulture flags the write as
+  an unused attribute at 60% confidence.

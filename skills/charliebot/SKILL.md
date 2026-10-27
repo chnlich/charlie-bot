@@ -399,6 +399,7 @@ The fired message is prefixed with the reason; per-target detail is in the suffi
 | Sessions | `runtime/session_events.py` and the other `runtime/session_*.py` blocks |
 | Config | `infra/config.py` |
 
-**A one-shot call dispatches to the per-backend CLI-native overrides.** `backend.one_shot_text` resolves to the claude/codex/opencode overrides, which run tool-less — claude's override even disallows Read — so any one-shot that needs file or tool access must bind the base `AgentBackend.one_shot_text` explicitly for every backend, as `src/features/explain/explain.py` does (the `base_one_shot_text` binding).
+**A one-shot call dispatches to the per-backend CLI-native overrides.** `backend.one_shot_text` resolves to the claude, codex, and opencode overrides. These overrides run tool-less, and the claude override also disallows Read.
+In a one-shot that needs file or tool access, bind the base `AgentBackend.one_shot_text` explicitly for every backend. This keeps the tool access that the overrides lack. `rust/crates/features/explain/src/explain.rs` binds it through `agent_one_shot_text`.
 
 Never guess how CharlieBot works — the source code is always available.

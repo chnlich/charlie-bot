@@ -72,7 +72,9 @@ CharlieBot is a self-hosted multi-agent orchestration system: a master agent dri
 ./scripts/start-server.sh
 ```
 
-`scripts/switch-server.sh rust <full rust-backend sha>` moves the live server onto a verified Rust release and `scripts/switch-server.sh python` moves it back. The switch ends with a probe turn in a session of its own: it passes once the new server records the run's first assistant output (or the run ends success), then archives the session after stopping every run the session still has open, including a follow-up run the server starts in it. The script header lists the preflight and the exit codes.
+`start-server.sh` runs the release that `$RELEASES_DIR/current` names and refuses to start when there is none.
+
+`scripts/switch-server.sh rust <full rust-backend sha>` moves the live server onto a verified Rust release. Rolling back to the Python server is a checkout, not a switch: reset the runtime clone to `8fe3e5bee`, the last commit that carries the Python server, and run that commit's `scripts/switch-server.sh python`. The switch ends with a probe turn in a session of its own: it passes once the new server records the run's first assistant output (or the run ends success), then archives the session after stopping every run the session still has open, including a follow-up run the server starts in it. The script header lists the preflight and the exit codes.
 
 `setup.sh` provisions `$CHARLIEBOT_HOME/` (home layout, `config.yaml` from `configs/config.example.yaml`, `credentials.yaml` from `configs/credentials.example.yaml`) and seeds repo-default cron tasks into `$CHARLIEBOT_HOME/config.d/cron.d/<name>.yaml` (one file per job). Server startup never writes cron config — only `setup.sh` does — so re-run `setup.sh` after pulling to pick up new repo-default cron tasks and skills.
 
@@ -104,7 +106,7 @@ CharlieBot is a self-hosted multi-agent orchestration system: a master agent dri
 - `src/infra/` — config, models, logging, process, git and HTTP helpers; imports nothing else from `src`
 - `src/runtime/` — sessions, task tree, master and worker runs, agent processes, core API routers and CLI commands
 - `src/backends/` — one package per agent backend (`claude_code`, `codex`, `opencode`, ...)
-- `src/features/` — one package per feature (`cron`, `improve`, `slack`, `usage`, ...) with its logic, `api.py` and `cli.py`
+- `src/features/` — one package per feature (`cron`, `improve`, `slack`, `usage`, ...) with its logic and `cli.py`
 - `src/app/` — composition root: page routes and the `charliebot` command table
 - `web/` — Jinja2 templates + vanilla JS static assets
 - `skills/` — repo-shared agent skills

@@ -4,8 +4,6 @@ from __future__ import annotations
 import asyncio
 import json
 import pathlib
-import sys
-from collections.abc import Callable
 from typing import Any
 from unittest import mock
 
@@ -14,7 +12,6 @@ import pytest
 
 from src.infra import models
 from src.runtime import triggers
-from src.runtime.cli import schedule_trigger as cli_module
 
 # ---------------------------------------------------------------------------
 # Mock helpers
@@ -99,58 +96,6 @@ async def test_remote_create_dead_rejects(tmp_path: pathlib.Path) -> None:
   # Nothing was persisted.
   triggers_dir = cfg.sessions_dir / session_id / "triggers"
   assert not triggers_dir.exists() or not list(triggers_dir.glob("*.json"))
-
-
-# ---------------------------------------------------------------------------
-# CLI parsing — self-describing --watch specs (local / remote / slurm)
-# ---------------------------------------------------------------------------
-
-
-def _fake_200_post(captured: dict) -> Callable[..., Any]:
-
-  class _FakeResp:
-    status_code = 200
-
-    def json(self) -> dict:
-      return {"trigger_id": "t1", "fire_at": "2030-01-01T00:00:00+00:00"}
-
-  def _fake_post(
-      url: str,
-      json: dict | None = None,
-      params: dict | None = None,
-      headers: dict | None = None,
-      timeout: float | None = None) -> _FakeResp:
-    captured["url"] = url
-    captured["payload"] = json
-    return _FakeResp()
-
-  return _fake_post
-
-
-def test_cli_accepts_mixed_kinds(monkeypatch: pytest.MonkeyPatch) -> None:
-  argv = conftest.schedule_trigger_argv("m", "--watch", "1234", "neptune:5678", "slurm:99")
-  captured: dict = {}
-  conftest.fake_cli_cfg(monkeypatch, pathlib.Path("/nonexistent-sessions"))
-
-  monkeypatch.setattr(conftest.CLI_COMMON_TRANSPORT_POST_PATCH_TARGET, _fake_200_post(captured))
-  with mock.patch.object(sys, "argv", argv):
-    cli_module.main()
-
-  assert captured["payload"]["watch_targets"] == [
-      {
-          "kind": "local_pid",
-          "pid": 1234
-      },
-      {
-          "kind": "remote_pid",
-          "host": "neptune",
-          "pid": 5678
-      },
-      {
-          "kind": "slurm_job",
-          "job_id": 99
-      },
-  ]
 
 
 # ---------------------------------------------------------------------------

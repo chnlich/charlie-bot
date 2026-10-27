@@ -38,7 +38,6 @@ from src.backends.antigravity import antigravity_cli
 from src.backends.charlie_code import charlie_code
 from src.backends.claude_code import claude_code
 from src.backends.codex import codex
-from src.backends.gemini import gemini_cli
 from src.backends.openai_compatible import openai_compatible_claude
 from src.backends.opencode import opencode
 from src.backends.opencode import server as opencode_server
@@ -64,9 +63,6 @@ _BASE_CTOR_KWARGS: dict[type[base.AgentBackend], dict] = {
         "api_base": "https://contract.invalid"
     },
     codex.CodexBackend: {
-        "model": "contract-model"
-    },
-    gemini_cli.GeminiCliBackend: {
         "model": "contract-model"
     },
     openai_compatible_claude.OpenAICompatibleClaudeBackend:
@@ -118,9 +114,9 @@ async def _drive_base_path(cls, monkeypatch: pytest.MonkeyPatch, tmp_path: pathl
   module = sys.modules[cls.__module__]
   if "resolve_binary" in vars(module):  # some constructors resolve their CLI eagerly
     monkeypatch.setattr(f"{cls.__module__}.resolve_binary", lambda name, fallback: "/usr/bin/true")
-  elif cls in (charlie_code.CharlieCodeBackend, gemini_cli.GeminiCliBackend, codex.CodexBackend):
+  elif cls in (charlie_code.CharlieCodeBackend, codex.CodexBackend):
     # their eager resolve reads the helper through the base module (module-style import)
-    monkeypatch.setattr(conftest.GEMINI_RESOLVE_BINARY_PATCH_TARGET, lambda name, fallback: "/usr/bin/true")
+    monkeypatch.setattr(conftest.BASE_RESOLVE_BINARY_PATCH_TARGET, lambda name, fallback: "/usr/bin/true")
   observed: list[tuple[int, str | None]] = []
   backend: base.AgentBackend
 

@@ -23,8 +23,8 @@ from src.runtime import runs, worker
 from src.runtime.hooks import backend_lifecycle
 
 # The types that resolve a CLI binary in __init__ (via resolve_binary); the
-# other four never do and therefore never raise FileNotFoundError on build.
-BINARY_RESOLVING_TYPES = ["antigravity", "codex", "gemini", "charlie-code"]
+# other three never do and therefore never raise FileNotFoundError on build.
+BINARY_RESOLVING_TYPES = ["antigravity", "codex", "charlie-code"]
 
 
 def _hide_all_binaries(monkeypatch: pytest.MonkeyPatch) -> None:

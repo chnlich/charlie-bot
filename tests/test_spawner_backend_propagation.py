@@ -56,7 +56,6 @@ def test_resolve_backend_option_requires_valid_backend_and_model() -> None:
         }),
         ("codex", {}),
         ("charlie-code", {}),
-        ("gemini", {}),
         ("opencode", {}),
         ("antigravity", {}),
     ],

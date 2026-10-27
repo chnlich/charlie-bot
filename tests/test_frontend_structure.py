@@ -142,6 +142,8 @@ def page_graphs() -> dict[str, dict]:
   node = shutil.which("node")
   if node is None:
     pytest.skip("node is required for the frontend structure test")
+  if shutil.which("npm") is None:
+    pytest.skip("npm is required for the frontend structure test")
   run_checked(["npm", "install", "--no-audit", "--no-fund"])
   result = run_checked([node, str(GRAPH_SCRIPT), str(conftest.ROOT)])
   return json.loads(result.stdout)["pages"]

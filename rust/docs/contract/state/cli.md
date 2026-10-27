@@ -6,18 +6,17 @@ subcommand, this document gives the HTTP routes it calls, the files it reads or 
 Route payloads belong to the parallel HTTP contract and are not repeated here. **UNVERIFIED** marks a statement
 not confirmed from source, with the reason.
 
+Sections 1-3 are the Python baseline as history: the Python CLI, its entry point and its modules are deleted, and
+`src/`, `tests/` and `[project.scripts]` no longer carry them. The Rust binary is the only CLI.
+
 ## 0. The Rust port
 
 The Rust CLI lives in `rust/crates/app/cli` (binary `charliebot`) with the shared client contract in
-`rust/crates/infra/cli-common`. The `session`, `delegate`, `plan`, `artifact check`, `schedule-trigger`,
-`compaction-context`, `gc-trash`, `improve`, `improve-stop`, `artifact wrap`, `publish`, `memory query`,
-`memory add`, `memory lint`, `web`,
-`slack` and `discord` rows in
-section 3 marked *ported to Rust* run on the Rust binary; every other subcommand prints
-`{"error": "<name> is not ported to the Rust CLI yet"}` and exits 1, and the six caller-less Python names
-(`config`, `disk-sweep`, `router`, `storage`, `usage-ledger`, `voice-replay-eval`) are unknown subcommands (exit 2).
-Golden cases record the Python CLI and replay it against the Rust binary; the record and replay commands are in
-`rust/crates/app/cli/README.md`. Rust deviations: no port
+`rust/crates/infra/cli-common`. Every row in section 3 marked *ported to Rust* runs on the Rust binary, and the
+dispatcher's vocabulary is the 14 caller-bearing names; the six caller-less Python names (`config`, `disk-sweep`,
+`router`, `storage`, `usage-ledger`, `voice-replay-eval`) are unknown subcommands (exit 2). The golden cases under
+`rust/crates/app/cli/tests/golden/` were recorded from the Python CLI while it existed and now replay against the Rust
+binary; the replay command is in `rust/crates/app/cli/README.md`. Rust deviations: no port
 cache — the port comes from `<home>/config.yaml`'s `server` section on every call; argument-parser help and usage text
 may differ from argparse (the exit codes match); the dispatcher's vocabulary is the 14 caller-bearing names, so its
 help text and unknown-subcommand line differ from the Python CLI's; the Python CLI's
@@ -26,7 +25,7 @@ them from both sides.
 The memory verbs read `<home>/memory` without `config.yaml`; proposal `open`, `status`, `commit` and `land` are ported.
 
 
-## 1. Dispatcher (`src/app/main.py`)
+## 1. Dispatcher (`src/app/main.py`, history)
 
 - The vocabulary is `_RUNTIME_COMMANDS` (`config`, `delegate`, `schedule-trigger`, `gc-trash`, `session`) plus every
   `wiring.register_command(name, module)`:
@@ -126,7 +125,12 @@ below.
 
 ## 4. Acceptance check
 
+At the Python baseline this read the subcommand list from the Python CLI:
+
 ```
 uv run python -m src.app.main --help | sed -n '/Available subcommands:/,$p' | tail -n +2 | awk '{print $1}' \
   | while read c; do grep -q "\`$c" rust/docs/contract/state/cli.md && echo "ok $c" || echo "MISSING $c"; done
 ```
+
+The Python CLI is deleted; the Rust binary now answers the same question via its dispatcher help, which names the 14
+caller-bearing subcommands.

@@ -110,8 +110,10 @@ def test_own_processes_are_signalable() -> None:
 
 def test_tmux_servers_are_isolated(tmp_path: pathlib.Path) -> None:
   """A run cannot reach a tmux server started outside it and cleans its own socket dir."""
-  marker = f"sbx-tmux-{uuid.uuid4().hex}"
-  other = f"sbx-other-{uuid.uuid4().hex}"
+  # Eight hex digits keep the socket path under the kernel's 108-byte limit even when the run's
+  # TMPDIR is a deep build-host directory.
+  marker = f"sbx-tmux-{uuid.uuid4().hex[:8]}"
+  other = f"sbx-other-{uuid.uuid4().hex[:8]}"
   sentinel = subprocess.Popen(
       ["tmux", "-L", marker, "-f", "/dev/null", "new-session", "-d", "-s", "s"],
       stdout=subprocess.DEVNULL,

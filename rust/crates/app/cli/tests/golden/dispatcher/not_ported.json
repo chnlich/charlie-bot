@@ -7,6 +7,5 @@
     "stderr": "error: the following required arguments were not provided:\n  <ARTIFACT>\n\nUsage: charliebot publish <ARTIFACT>\n\nFor more information, try '--help'.\n",
     "exit": 2,
     "requests": []
-  },
-  "expect_from": "rust"
+  }
 }

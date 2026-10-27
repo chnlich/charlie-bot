@@ -9,7 +9,6 @@
     "abc"
   ],
   "cwd": "{root}",
-  "expect_from": "rust",
   "env": {
     "PATH": "{root}/bin",
     "HOME": "{root}/user",

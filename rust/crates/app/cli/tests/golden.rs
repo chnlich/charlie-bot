@@ -1,10 +1,8 @@
 //! The golden-case harness: replay the recorded Python CLI behavior against the built Rust binary.
 //!
-//! Every case under `tests/golden/<subcommand>/<case>.json` runs once per test binary invocation.
-//! Without `CHARLIEBOT_CLI_GOLDEN_RECORD` (the default) the case replays against the built
-//! `charliebot` binary and every `expect` field is checked. With the variable set to the Python
-//! CLI's entry point, the case records: the command runs instead and the case file's `expect`
-//! fields are rewritten from what it produced. `README.md` documents both commands.
+//! Every case under `tests/golden/<subcommand>/<case>.json` runs once per test binary invocation and
+//! replays against the built `charliebot` binary; every `expect` field is checked. `README.md`
+//! documents the replay command.
 //!
 //! Each CLI process gets a cleared environment, a temp `CHARLIEBOT_HOME`, and a 20 s timeout; the
 //! stub HTTP server binds `127.0.0.1` port 0, so no case can reach the live server or home.
@@ -20,43 +18,28 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use regex::Regex;
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 
 /// How long one CLI process may run before the test kills it and fails the case.
 const PROCESS_TIMEOUT: Duration = Duration::from_secs(20);
 
-/// The checkout root, for `{repo}` in the record command: the crate sits at `rust/crates/app/cli`.
+/// The checkout root, for `{repo}` and `{file:<checkout-relative path>}` in a case: the crate sits at
+/// `rust/crates/app/cli`.
 const REPO_ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../../..");
 
 const CASES_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/golden");
 
-fn uuid4_regex() -> &'static Regex {
-  static UUID4: OnceLock<Regex> = OnceLock::new();
-  UUID4.get_or_init(|| Regex::new(r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}").unwrap())
-}
-
-/// A UTC `%Y%m%dT%H%M%SZ` stamp, the shape the cold-read request id carries.
-fn timestamp_regex() -> &'static Regex {
-  static TIMESTAMP: OnceLock<Regex> = OnceLock::new();
-  TIMESTAMP.get_or_init(|| Regex::new(r"[0-9]{8}T[0-9]{6}Z").unwrap())
-}
-
 #[test]
 fn golden_cases() {
-  let record_command = std::env::var("CHARLIEBOT_CLI_GOLDEN_RECORD").ok();
   let mut failures = Vec::new();
   let mut cases = 0;
   for path in case_files() {
     cases += 1;
-    if let Err(message) = run_case(&path, record_command.as_deref()) {
+    if let Err(message) = run_case(&path) {
       failures.push(format!("{}: {message}", path.display()));
     }
   }
-  if record_command.is_some() {
-    println!("recorded {cases} golden case(s)");
-  } else {
-    println!("replayed {cases} golden case(s)");
-  }
+  println!("replayed {cases} golden case(s)");
   assert!(failures.is_empty(), "{} golden case(s) failed:\n{}", failures.len(), failures.join("\n"));
 }
 
@@ -413,17 +396,12 @@ fn reason_phrase(status: u16) -> &'static str {
 // The case runner
 // ---------------------------------------------------------------------------
 
-fn run_case(case_path: &Path, record_command: Option<&str>) -> Result<(), String> {
+fn run_case(case_path: &Path) -> Result<(), String> {
   let case_text = std::fs::read_to_string(case_path).map_err(|error| error.to_string())?;
   let case: Value = serde_json::from_str(&case_text).map_err(|error| format!("invalid case JSON: {error}"))?;
   let temp = case_tempdir().map_err(|error| error.to_string())?;
   let root = temp.path().to_str().ok_or("the temp root is not Unicode")?.to_string();
 
-  // A case with `expect_from: "rust"` records from the Rust binary: its contract is the task
-  // text's own spec (the dispatcher vocabulary differs from the Python CLI's by design), so a
-  // Python record would bake the Python-only output in.
-  let expect_from_rust = case.get("expect_from").and_then(Value::as_str) == Some("rust");
-  let recording = record_command.is_some();
   // A scripted body may name the run's temp root (a host-served link points into it), so `{root}` substitutes there too.
   let responses: Vec<Value> = case
     .get("responses")
@@ -495,16 +473,7 @@ fn run_case(case_path: &Path, record_command: Option<&str>) -> Result<(), String
     .map(|item| substitute(item))
     .collect();
 
-  let mut command = match (recording, expect_from_rust) {
-    (true, false) => {
-      // A relative record command resolves against the checkout root, so the invocation does not
-      // bake one host's tree path in; the child's cwd is the case's cwd.
-      let record = record_command.expect("recording").replace("{repo}", REPO_ROOT);
-      let program = if Path::new(&record).is_absolute() { record } else { format!("{REPO_ROOT}/{record}") };
-      Command::new(program)
-    }
-    _ => Command::new(env!("CARGO_BIN_EXE_charliebot")),
-  };
+  let mut command = Command::new(env!("CARGO_BIN_EXE_charliebot"));
   let stdin = case.get("stdin").and_then(Value::as_str).map(substitute);
   command
     .args(&argv)
@@ -559,11 +528,7 @@ fn run_case(case_path: &Path, record_command: Option<&str>) -> Result<(), String
   let stderr = normalize(&String::from_utf8_lossy(&stderr_bytes), &root);
   let exit = status.code().ok_or("the CLI process exited from a signal")?;
 
-  if recording {
-    record_case(case_path, &case, &root, &stdout, &stderr, exit, &requests)
-  } else {
-    replay_case(temp.path(), &case, &stdout, &stderr, exit, &requests)
-  }
+  replay_case(temp.path(), &case, &stdout, &stderr, exit, &requests)
 }
 
 /// A case's file content: `{file:<checkout-relative path>}` reads the checkout's own file, so a case can use the
@@ -600,45 +565,6 @@ fn wait_bounded(child: &mut Child) -> Result<Option<ExitStatus>, String> {
       None => std::thread::sleep(Duration::from_millis(10)),
     }
   }
-}
-
-/// Rewrite the case's `expect` fields from what the recorded command produced.
-fn record_case(
-  case_path: &Path,
-  case: &Value,
-  root: &str,
-  stdout: &str,
-  stderr: &str,
-  exit: i32,
-  requests: &[Value],
-) -> Result<(), String> {
-  let mut updated = case.clone();
-  let mut expect = Map::new();
-  if let Some(existing) = case.get("expect").and_then(Value::as_object) {
-    for (key, value) in existing {
-      if !matches!(key.as_str(), "stdout" | "stderr" | "exit" | "requests") {
-        expect.insert(key.clone(), value.clone());
-      }
-    }
-  }
-  expect.insert("stdout".to_string(), Value::String(replace_uuid4(stdout)));
-  expect.insert("stderr".to_string(), Value::String(replace_uuid4(stderr)));
-  expect.insert("exit".to_string(), json!(exit));
-  expect.insert(
-    "requests".to_string(),
-    Value::Array(requests.iter().map(|request| recorded_value(request, root)).collect()),
-  );
-  updated["expect"] = Value::Object(expect);
-
-  let style = charliebot_core::pyfmt::JsonStyle {
-    ensure_ascii: false,
-    sort_keys: false,
-    item_separator: ",",
-    key_separator: ": ",
-    indent: Some(2),
-  };
-  let text = format!("{}\n", charliebot_core::pyfmt::json_dumps(&updated, &style));
-  std::fs::write(case_path, text).map_err(|error| format!("{}: {error}", case_path.display()))
 }
 
 fn replay_case(
@@ -728,10 +654,6 @@ fn normalize_value(value: &Value, root: &str, port: u16) -> Value {
   }
 }
 
-fn replace_uuid4(text: &str) -> String {
-  timestamp_regex().replace_all(&uuid4_regex().replace_all(text, "{uuid4}"), "{timestamp}").into_owned()
-}
-
 /// Expected text with `{uuid4}` / `{timestamp}` placeholders against actual text.
 ///
 /// The placeholders become their patterns after `regex::escape`, so the rest of the expected text still compares
@@ -756,17 +678,6 @@ fn value_matches(expected: &Value, actual: &Value) -> bool {
         && expected.iter().all(|(key, value)| actual.get(key).is_some_and(|actual| value_matches(value, actual)))
     }
     (expected, actual) => expected == actual,
-  }
-}
-
-fn recorded_value(value: &Value, root: &str) -> Value {
-  match value {
-    Value::String(text) => Value::String(replace_uuid4(&text.replace(root, "{root}"))),
-    Value::Array(items) => Value::Array(items.iter().map(|item| recorded_value(item, root)).collect()),
-    Value::Object(members) => {
-      Value::Object(members.iter().map(|(key, value)| (key.clone(), recorded_value(value, root))).collect())
-    }
-    other => other.clone(),
   }
 }
 

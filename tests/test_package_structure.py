@@ -80,10 +80,10 @@ class Layer(NamedTuple):
 
 # The highest layer comes first. A module imports modules of its own layer or a lower layer.
 RUNTIME_LAYERS = (
-    Layer(8, "entry points", ("api", "cli")),
+    Layer(8, "entry points", ("api",)),
     Layer(
-        7, "execution", (
-            "autonamer", "master_cc_queue", "master_cc_run", "master_trigger", "task_execution", "triggers")),
+        7, "execution",
+        ("autonamer", "master_cc_queue", "master_cc_run", "master_trigger", "task_execution", "triggers")),
     Layer(
         6, "task tree", (
             "midturn_delivery", "session_dispatch", "task_completion", "task_input_prompt", "task_prompts",
@@ -102,7 +102,7 @@ RUNTIME_LAYERS = (
             "backend_pool", "cold_read", "control_events", "home_writer_fence", "launch_loop", "message_aggregator",
             "message_projection", "review", "runs", "session_store", "session_usage", "spawner_prompt",
             "trigger_files")),
-    Layer(2, "hooks", ("hooks", "templating")),
+    Layer(2, "hooks", ("hooks",)),
     Layer(
         1, "foundation", (
             "chat_events", "file_urls", "init_seed", "message_events", "model_family", "run_identity", "run_token",

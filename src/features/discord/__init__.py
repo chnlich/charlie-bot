@@ -1,11 +1,10 @@
 from src.infra import config_registry, metadata_slot_registration
-from src.runtime.hooks import turn_contributions, wiring
+from src.runtime.hooks import turn_contributions
 
 OWNER = "discord"
 
 
 def register() -> None:
-  wiring.register_command("discord", "src.features.discord.cli")
   config_registry.register_config_section("discord", "src.features.discord.config:DiscordConfig")
   metadata_slot_registration.register_metadata_fields(
       OWNER,

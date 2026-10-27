@@ -19,9 +19,7 @@
 //! calls. A `mod` declaration is no edge, and a `pub use` that only re-exports a name is no edge until the module's own
 //! code uses that name. A cycle is a strongly connected component of two or more modules.
 //!
-//! `exceptions.txt` records one row per module cycle that predates this test. A cycle passes when all its members lie
-//! in one row of its package. A row with no cycle inside it is stale. There are no direction or layer rows: a break is
-//! fixed in the code.
+//! Every module cycle fails: a cycle is a defect of the code, not a recorded exception.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -46,8 +44,6 @@ const DEPEND_ON_THE_RUNTIME: &str = "Depend on the registry: the imported crate 
 const FIX_THE_UPWARD_IMPORT: &str = "Fix it in one of four ways. Give the lower module a narrow protocol that the \
                                      higher module satisfies. Give the owning module an instance accessor. Move the \
                                      shared code to the lower module. Delete the forwarder.";
-const EXCEPTIONS_HEADER: &str =
-  "# Rows record the module cycles that predate the structure test. Rows only leave this table.";
 
 // ---------------------------------------------------------------------------------------------------------------------
 // The workspace, read from `cargo metadata`.
@@ -737,57 +733,8 @@ fn strongly_connected(graph: &BTreeMap<String, Vec<String>>) -> Vec<Vec<String>>
   state.components
 }
 
-// ---------------------------------------------------------------------------------------------------------------------
-// `exceptions.txt`.
-
-struct Row {
-  package: String,
-  members: BTreeSet<String>,
-  line: usize,
-}
-
-fn read_rows(path: &Path) -> Vec<Row> {
-  let text = fs::read_to_string(path).unwrap_or_else(|error| panic!("cannot read {}: {error}", path.display()));
-  let mut rows = Vec::new();
-  for (index, line) in text.lines().enumerate() {
-    let trimmed = line.trim();
-    if trimmed.is_empty() || trimmed.starts_with('#') {
-      continue;
-    }
-    let line_number = index + 1;
-    let rest = trimmed
-      .strip_prefix("cycle ")
-      .unwrap_or_else(|| panic!("{}:{line_number}: a row starts with \"cycle <package>:\"", path.display()));
-    let (package, modules) = rest
-      .split_once(':')
-      .unwrap_or_else(|| panic!("{}:{line_number}: a row holds \"cycle <package>: <module>, ...\"", path.display()));
-    let members = modules.split(',').map(str::trim).filter(|member| !member.is_empty()).map(str::to_string).collect();
-    rows.push(Row { package: package.trim().to_string(), members, line: line_number });
-  }
-  rows
-}
-
-fn cycle_failures(workspace: &Workspace, exceptions: &Path) -> Vec<String> {
-  let rows = read_rows(exceptions);
-  let cycles = detect_cycles(workspace);
-  let mut failures = Vec::new();
-  for cycle in &cycles {
-    let recorded = rows
-      .iter()
-      .any(|row| row.package == cycle.package && cycle.members.iter().all(|member| row.members.contains(member)));
-    if !recorded {
-      failures.push(cycle.message());
-    }
-  }
-  for row in &rows {
-    let live = cycles
-      .iter()
-      .any(|cycle| cycle.package == row.package && cycle.members.iter().all(|member| row.members.contains(member)));
-    if !live {
-      failures.push(format!("exceptions.txt:{}: no module cycle lies inside this row; remove it.", row.line));
-    }
-  }
-  failures
+fn cycle_failures(workspace: &Workspace) -> Vec<String> {
+  detect_cycles(workspace).iter().map(Cycle::message).collect()
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -829,9 +776,8 @@ fn every_layer_names_a_runtime_crate() {
 }
 
 #[test]
-fn no_crate_has_an_unrecorded_module_cycle() {
-  let exceptions = Path::new(env!("CARGO_MANIFEST_DIR")).join("exceptions.txt");
-  let failures = cycle_failures(real_workspace(), &exceptions);
+fn no_crate_has_a_module_cycle() {
+  let failures = cycle_failures(real_workspace());
   assert!(failures.is_empty(), "{}", failures.join("\n\n"));
 }
 
@@ -1084,41 +1030,6 @@ fn the_checks_find_each_break() {
   assert!(
     !direction_failures(&modules).iter().any(|failure| failure.contains("crates/features/dev_dep/Cargo.toml")),
     "case 11: a dev-dependency across groups passes"
-  );
-
-  let rows_dir = tempfile::tempdir().expect("create a temporary directory");
-  let rows_root = rows_dir.path();
-  write_tree(
-    rows_root,
-    &[
-      ("Cargo.toml", workspace_manifest(&["crates/infra/file_cycle"])),
-      ("crates/infra/file_cycle/Cargo.toml", crate_manifest("file-cycle", &[], &[])),
-      ("crates/infra/file_cycle/src/lib.rs", "mod a;\nmod b;\n".to_string()),
-      ("crates/infra/file_cycle/src/a.rs", "use crate::b::B;\n\npub struct A;\n\npub fn touch(_: B) {}\n".to_string()),
-      ("crates/infra/file_cycle/src/b.rs", "use crate::a::A;\n\npub struct B;\n\npub fn touch(_: A) {}\n".to_string()),
-    ],
-  );
-  let rows = load_workspace(rows_root);
-  let exceptions = rows_root.join("exceptions.txt");
-
-  fs::write(&exceptions, format!("{EXCEPTIONS_HEADER}\ncycle file-cycle: a, b, c\n")).expect("write exceptions");
-  assert!(
-    cycle_failures(&rows, &exceptions).is_empty(),
-    "case 12: a cycle that shrank to fewer members than its row passes"
-  );
-
-  fs::write(&exceptions, format!("{EXCEPTIONS_HEADER}\ncycle file-cycle: a\n")).expect("write exceptions");
-  let failures = cycle_failures(&rows, &exceptions);
-  assert!(
-    failures.iter().any(|failure| failure.starts_with("module cycle in file-cycle among 2 modules: a, b")),
-    "case 13: a cycle that gained a member outside its row fails"
-  );
-
-  fs::write(&exceptions, format!("{EXCEPTIONS_HEADER}\ncycle file-cycle: x, y\n")).expect("write exceptions");
-  let failures = cycle_failures(&rows, &exceptions);
-  assert!(
-    failures.contains(&"exceptions.txt:2: no module cycle lies inside this row; remove it.".to_string()),
-    "case 14: a row inside which no cycle lies is stale"
   );
 }
 

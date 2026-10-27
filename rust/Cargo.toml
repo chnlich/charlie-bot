@@ -6,6 +6,7 @@ members = [
     "crates/infra/compat",
     "crates/infra/cli-common",
     "crates/app/cli",
+    "crates/app/packages",
     "crates/app/server",
     "crates/app/structure",
     "crates/runtime/tasks",
@@ -145,6 +146,7 @@ charliebot-improve = { path = "crates/features/improve" }
 charliebot-host-auth = { path = "crates/features/host_auth" }
 charliebot-memory = { path = "crates/features/memory" }
 charliebot-ncu = { path = "crates/features/ncu" }
+charliebot-packages = { path = "crates/app/packages" }
 charliebot-pyhtml = { path = "crates/infra/pyhtml" }
 charliebot-registry = { path = "crates/runtime/registry" }
 charliebot-slack = { path = "crates/features/slack" }

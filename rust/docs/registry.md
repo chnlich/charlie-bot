@@ -17,7 +17,7 @@ Rules that hold for every hook kind:
 
 ## Composition root
 
-`rust/crates/app/server/src/packages/mod.rs` lists the packages in the order of
+`rust/crates/app/packages/src/lib.rs` lists the packages in the order of
 `src/app/registrations.py:16-46`, one entry per package:
 
 ```rust

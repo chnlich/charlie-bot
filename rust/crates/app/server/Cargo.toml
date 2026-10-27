@@ -31,6 +31,7 @@ charliebot-files.workspace = true
 charliebot-host-auth.workspace = true
 charliebot-memory.workspace = true
 charliebot-ncu.workspace = true
+charliebot-packages.workspace = true
 charliebot-registry.workspace = true
 charliebot-triggers.workspace = true
 charliebot-slack.workspace = true

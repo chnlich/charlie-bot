@@ -5,14 +5,10 @@ runs a fresh interpreter that drops one package line from PACKAGES: the session 
 without the Threads view.
 """
 
-import json
-import os
 import pathlib
-import subprocess
 import sys
 import types
 
-import conftest
 import pytest
 
 from src.infra import models
@@ -105,70 +101,3 @@ def test_every_view_a_contribution_answers_maps_its_own_subtree(monkeypatch: pyt
 @pytest.mark.usefixtures("empty_registry")
 def test_a_view_no_session_roots_has_no_entry() -> None:
   assert scheduled_sessions.view_subtree_roots([models.SessionMetadata(profile="manager", name="plain")]) == {}
-
-
-# The probe process drops one package line, registers, imports the server, then asks for the views over a
-# Slack thread session.
-PROBE = """
-import asyncio
-import json
-import sys
-from fastapi.testclient import TestClient
-from src.app import registrations
-registrations.PACKAGES = tuple(p for p in registrations.PACKAGES if p != {deleted!r})
-registrations.register_all()
-import server
-sys.path.insert(0, {tests!r})
-import conftest
-from pathlib import Path
-from src.features.slack.metadata import SlackOrigin
-from src.infra import backend_models, models
-from src.infra.config import CharlieBotConfig
-from src.runtime.api.deps import get_config_on_loop, get_session_listing, get_session_store
-
-
-async def main():
-  option = backend_models.parse_option({{"id": "b", "label": "B", "type": "cc-claude", "model": "m"}})
-  cfg = CharlieBotConfig(charliebot_home=Path({home!r}), backends={{"options": [option]}})
-  mgr = conftest.build_session_blocks(cfg)
-  thread = await conftest.create_root_session(
-      mgr,
-      models.CreateSessionRequest(
-          name="thread", slack_origin=SlackOrigin(team_id="T", channel_id="C", thread_ts="1.0")),
-      backend="b")
-  views = await mgr.listing.view_subtree_roots()
-  server.app.dependency_overrides[get_config_on_loop] = lambda: cfg
-  server.app.dependency_overrides[get_session_listing] = lambda: mgr.listing
-  server.app.dependency_overrides[get_session_store] = lambda: mgr.store
-  workspace = TestClient(server.app).get("/api/sessions/").json()
-  print(json.dumps({{"thread": thread.id, "views": views, "workspace_ids": [row["id"] for row in workspace]}}))
-
-
-asyncio.run(main())
-"""
-
-
-def probe_without(package: str, home: pathlib.Path) -> dict:
-  probe = subprocess.run(
-      [
-          sys.executable, "-c",
-          PROBE.format(deleted=package, home=str(home / "profile"), tests=str(conftest.ROOT / "tests"))
-      ],
-      cwd=conftest.ROOT,
-      capture_output=True,
-      text=True,
-      timeout=60,
-      check=False,
-      env={
-          **os.environ, "HOME": str(home),
-          "CHARLIEBOT_HOME": str(home / "profile")
-      })
-  assert probe.returncode == 0, probe.stderr
-  return json.loads(probe.stdout.splitlines()[-1])
-
-
-def test_a_thread_session_roots_no_view_without_the_chat_threads_package(tmp_path: pathlib.Path) -> None:
-  found = probe_without("src.features.chat_threads", tmp_path)
-
-  assert found["views"] == {}
-  assert found["thread"] in found["workspace_ids"]

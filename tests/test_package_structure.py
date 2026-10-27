@@ -1,12 +1,12 @@
 """Package structure check: the groups of ``src`` and the direction each group may import.
 
-Every ``.py`` file under ``src``, and ``server.py``, belongs to one group:
+Every ``.py`` file under ``src`` belongs to one group:
 
     infra         src/infra, plus src/__init__.py and the markers of src/backends and src/features
     runtime       src/runtime and its subpackages
     backends.<x>  src/backends/<x>
     features.<x>  src/features/<x> and its subpackages
-    app           src/app and server.py
+    app           src/app
 
 Directions: infra imports infra only. runtime imports runtime and infra. A backend or a feature imports itself,
 runtime and infra. The backends in ``BACKEND_VARIANTS`` may also import backends.claude_code, and the features in
@@ -82,9 +82,8 @@ class Layer(NamedTuple):
 RUNTIME_LAYERS = (
     Layer(8, "entry points", ("api", "cli")),
     Layer(
-        7, "execution", (
-            "autonamer", "master_cc_queue", "master_cc_run", "master_trigger", "task_execution", "task_recovery",
-            "triggers")),
+        7, "execution",
+        ("autonamer", "master_cc_queue", "master_cc_run", "master_trigger", "task_execution", "triggers")),
     Layer(
         6, "task tree", (
             "midturn_delivery", "session_dispatch", "task_completion", "task_input_prompt", "task_prompts",
@@ -96,19 +95,18 @@ RUNTIME_LAYERS = (
             "takeoff_gate")),
     Layer(
         4, "agent processes", (
-            "agent_environment", "agent_process.base", "agent_process.deferred_build", "agent_process.spawn",
-            "master_cc_state", "session_events", "streaming", "worker")),
+            "agent_process.base", "agent_process.deferred_build", "agent_process.spawn", "master_cc_state",
+            "session_events", "streaming", "worker")),
     Layer(
         3, "records and events", (
             "backend_pool", "cold_read", "control_events", "home_writer_fence", "launch_loop", "message_aggregator",
             "message_projection", "review", "runs", "session_store", "session_usage", "spawner_prompt",
             "trigger_files")),
-    Layer(2, "hooks", ("hooks", "templating")),
+    Layer(2, "hooks", ("hooks",)),
     Layer(
         1, "foundation", (
-            "agent_process.pty_common", "chat_events", "file_urls", "init_seed", "message_events", "model_family",
-            "run_identity", "run_token", "sidebar_state", "task_errors", "thinking_state", "v1_sessions",
-            "verify_trailer", "worktree_trash")),
+            "chat_events", "file_urls", "init_seed", "message_events", "model_family", "run_identity", "run_token",
+            "sidebar_state", "task_errors", "thinking_state", "verify_trailer", "worktree_trash")),
 )
 
 
@@ -133,8 +131,6 @@ class Structure(NamedTuple):
 def group_of(rel: str) -> str | None:
   """The group of a repo-relative ``.py`` path: infra, runtime, app, ``backends.<x>`` or ``features.<x>``."""
   parts = rel.split("/")
-  if rel == "server.py":
-    return "app"
   if rel in CONTAINER_MARKERS:
     return "infra"
   if parts[0] != "src" or len(parts) < 3:
@@ -163,8 +159,8 @@ def allowed_groups(group: str) -> set[str] | None:
 
 
 def module_index(root: pathlib.Path) -> dict[str, str]:
-  """Dotted module name -> repo-relative path, for every ``.py`` file under src and for server.py."""
-  index = {"server": "server.py"}
+  """Dotted module name -> repo-relative path, for every ``.py`` file under src."""
+  index = {}
   for path in sorted((root / "src").rglob("*.py")):
     rel = path.relative_to(root)
     index[".".join(rel.with_suffix("").parts).removesuffix(".__init__")] = rel.as_posix()
@@ -449,8 +445,8 @@ def deferral_breaks(root: pathlib.Path) -> list[str]:
 # module paths (the "src.features." prefixes still name the features marker). The docstring of `documented` names
 # the module too, and counts nothing.
 EMPTY_MODULES = (
-    "server.py", "src/__init__.py", "src/runtime/__init__.py", "src/features/__init__.py",
-    "src/features/alpha/__init__.py", "src/features/alpha/impl.py")
+    "src/__init__.py", "src/runtime/__init__.py", "src/features/__init__.py", "src/features/alpha/__init__.py",
+    "src/features/alpha/impl.py")
 FORMS_SOURCE = textwrap.dedent(
     """\
     from typing import TYPE_CHECKING
@@ -487,7 +483,6 @@ SMALL_LAYERS = (
     Layer(1, "bottom", ("bottom", "gone")),
 )
 LAYERED_MODULES = {
-    "server.py": "",
     "src/__init__.py": "",
     "src/runtime/__init__.py": "",
     "src/runtime/unlisted.py": "",
@@ -521,7 +516,6 @@ BOTTOM_SOURCE = textwrap.dedent(
 # The packages alpha (src/features) and beta (src/backends) each hold an unmarked.py, and each scope of the check
 # must report its own.
 DEFERRAL_MODULES = {
-    "server.py": "",
     "src/__init__.py": "",
     "src/infra/__init__.py": "",
     "src/infra/models.py": "",

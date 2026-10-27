@@ -6,10 +6,8 @@ Every frontend file the checked pages load belongs to one group:
     features.<x>    src/features/<x>/static/** and src/features/<x>/templates/<x>/page_*.html
     backends.<x>    src/backends/<x>/static/** and src/backends/<x>/templates/<x>/page_*.html
 
-The chat page is web/templates/index.html plus every package's page part templates. The diff page
-is src/features/diff_view/templates/diff.html plus the packages' page_diff_toolbar.html parts. The
-artifact page's script list is the <script src=...> strings in
-src/features/artifacts/artifact_view.py. Each page loads its files in layers, and the load order is
+The chat page is web/templates/index.html plus every package's page part templates. The page loads its
+files in layers, and the load order is
 the layer order: the inline <script> bodies of a template are its lowest node (bootstrap), each
 script its <script src="/static/..."> tags load is one node, and its inline handler attributes
 (onclick="..." and the like) are its highest node (markup). Package parts load after core, in
@@ -92,7 +90,7 @@ import pytest
 import test_package_structure
 
 GRAPH_SCRIPT = pathlib.Path(__file__).with_name("frontend_structure_graph.js")
-PAGE_NAMES = ("chat", "diff", "artifact")
+PAGE_NAMES = ("chat",)
 
 FIX_THE_UPWARD_USE = (
     "Fix it in one of three ways. Move the shared constant or function to the lower file. The higher file "

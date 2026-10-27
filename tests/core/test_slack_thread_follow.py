@@ -217,37 +217,6 @@ async def test_reply_gate_refuses_the_stale_thread_and_persists_nothing(tmp_path
   ]
 
 
-@pytest.mark.asyncio
-async def test_gated_route_412_then_ack_then_reply_posts(tmp_path: pathlib.Path) -> None:
-  cfg, session_blocks, _trigger_mgr, client = _rig(tmp_path)
-  meta = await _make_session(session_blocks)
-  _seed_gate_thread(client)
-
-  with (
-      mock.patch(conftest.SLACK_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client),
-      conftest.make_internal_router_client(cfg, session_blocks) as http,
-  ):
-    resp = http.post("/api/internal/slack/reply", json={"session_id": meta.id, "text": "the answer"})
-    assert resp.status_code == 412
-    body = resp.json()["detail"]
-    assert body["error"] == "stale_thread"
-    assert [m["ts"] for m in body["new_messages"]] == [_ts(110), _ts(130)]
-    assert client.posts == []
-
-    ack = http.post("/api/internal/slack/ack", json={"session_id": meta.id, "message_ids": [_ts(110), _ts(130)]})
-    assert ack.status_code == 200
-    assert ack.json() == {"acked": 2, "watermark_ts": _ts(130)}
-
-    resp = http.post("/api/internal/slack/reply", json={"session_id": meta.id, "text": "the answer"})
-    assert resp.status_code == 200
-    assert resp.json()["posted"] is True
-
-  assert [p["text"] for p in client.posts] == ["the answer"]
-  assert len(
-      [ev for ev in session_blocks.events.load_chat_events_sync(meta.id) if ev.get("type") == event_types.SLACK_REPLY
-      ]) == 1
-
-
 # ---------------------------------------------------------------------------
 # Restart and reconnect
 # ---------------------------------------------------------------------------

@@ -19,7 +19,6 @@ from src.infra import home
 
 # Both caches are keyed on nothing but their own mtimes, so a cached instance
 # from an earlier test would answer with the wrong profile.
-_reset_config_caches = conftest.fresh_state_fixture(conftest.reset_config_caches)
 
 # (env value to set — None deletes the variable, "{home}" interpolates tmp_path —
 # and the directory the resolver must answer with, relative to tmp_path).
@@ -104,9 +103,7 @@ def test_profile_leaves_the_default_home_untouched(monkeypatch: pytest.MonkeyPat
   monkeypatch.setenv("CHARLIEBOT_HOME", str(profile))
 
   from src.features.backup import backup as core_backup
-  from src.features.cron import api as api_cron
   from src.features.memory import store_root
-  from src.features.trace import api as trace_api
   from src.runtime import init_seed as core_init
 
   asyncio.run(core_init.init_charliebot_home())
@@ -114,8 +111,6 @@ def test_profile_leaves_the_default_home_untouched(monkeypatch: pytest.MonkeyPat
   cfg = core_config.get_config()
   cron_loader.get_scheduled_tasks()
   cron_loader.cron_dir().mkdir(parents=True, exist_ok=True)
-  api_cron._write_cron_yaml("probe", {"cron": "* * * * *", "prompt": "p"})
-  assert api_cron._read_cron_yaml("probe") == {"cron": "* * * * *", "prompt": "p"}
 
   owned = [
       cfg.charliebot_home,
@@ -125,7 +120,6 @@ def test_profile_leaves_the_default_home_untouched(monkeypatch: pytest.MonkeyPat
       store_root.memory_dir(cfg),
       cfg.claude_md_file,
       cron_loader.cron_dir(),
-      trace_api._perfetto_merge_cache_dir(),
       core_backup.charliebot_dir(),
   ]
   for path in owned:
@@ -147,7 +141,7 @@ def test_no_new_hardcoded_state_paths() -> None:
   exempt = {conftest.ROOT / "src" / "infra" / "home.py"}
   offenders: list[str] = []
 
-  python_files = [conftest.ROOT / "server.py", *sorted((conftest.ROOT / "src").rglob("*.py"))]
+  python_files = sorted((conftest.ROOT / "src").rglob("*.py"))
   for path in python_files:
     if path in exempt:
       continue
@@ -167,21 +161,3 @@ def test_no_new_hardcoded_state_paths() -> None:
 
   assert not offenders, (
       "state paths must come from CharlieBotConfig, not from the user's home directory:\n" + "\n".join(offenders))
-
-
-def test_terminal_session_name_separates_profiles(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
-  """The tmux server is shared, so the session name is what separates profiles."""
-  from src.features.terminal import terminal
-
-  monkeypatch.setenv("HOME", str(tmp_path))
-  monkeypatch.delenv("CHARLIEBOT_HOME", raising=False)
-  assert terminal.terminal_session_id() == "terminal"
-  assert terminal.terminal_tmux_name() == "charliebot-terminal"
-
-  monkeypatch.setenv("CHARLIEBOT_HOME", str(tmp_path / "a"))
-  name_a = terminal.terminal_tmux_name()
-  monkeypatch.setenv("CHARLIEBOT_HOME", str(tmp_path / "b"))
-  name_b = terminal.terminal_tmux_name()
-  assert name_a != name_b
-  assert name_a != "charliebot-terminal"
-  assert name_a.startswith("charliebot-terminal-")

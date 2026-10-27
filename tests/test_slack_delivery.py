@@ -7,12 +7,10 @@ import contextlib
 import dataclasses
 import datetime
 import pathlib
-import types
 from collections.abc import Iterator
 from unittest import mock
 
 import conftest
-import httpx
 import pytest
 from structlog import testing
 
@@ -20,9 +18,8 @@ from src.features.chat_threads import thread_entry
 from src.features.slack import event_types, metadata, slack_listener, turn_contribution
 from src.infra import config, models
 from src.infra import event_types as ET
-from src.runtime import control_events, master_cc_state, message_aggregator, run_token, triggers
+from src.runtime import master_cc_state, message_aggregator, triggers
 from src.runtime.agent_process import base
-from src.runtime.api import deps
 
 _CHANNEL = "C_TEST"
 _THREAD = "1700000000.000100"
@@ -248,73 +245,6 @@ async def test_duplicate_slack_app_mention_starts_one_summon_and_one_ack(
   assert summons[0]["request_id"] == f"slack-mention:{event['ts']}"
   trigger.assert_awaited_once()
   assert len([call for method, call in client.calls if method == "add_reaction"]) == 1
-
-
-@pytest.mark.asyncio
-async def test_concurrent_slack_reply_route_reuses_the_post_and_stored_receipt(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg, session_blocks, client = _rig(tmp_path)
-  sid = await _slack_session(session_blocks)
-  tree = session_blocks.tree
-  assert tree is not None
-  started_at = datetime.datetime.now(datetime.UTC)
-  monkeypatch.setattr(tree.runs, "get_run", mock.AsyncMock(return_value=types.SimpleNamespace(started_at=started_at)))
-  route_client = conftest.make_internal_router_client(cfg, session_blocks, tree)
-  claims = run_token.RunTokenClaims(session_id=sid, run_id="slack-run", agent="slack manager")
-  route_client.app.dependency_overrides[deps.require_caller] = lambda: run_token.CallerIdentity(
-      kind="agent", claims=claims)
-  post_entered = asyncio.Event()
-  allow_post = asyncio.Event()
-  original_post = client.post_message
-
-  async def delayed_post(channel: str, text: str, thread_ts: str, *, post_key: str) -> dict:
-    post_entered.set()
-    await allow_post.wait()
-    return await original_post(channel, text, thread_ts, post_key=post_key)
-
-  monkeypatch.setattr(client, "post_message", delayed_post)
-  with _listener_seam(client):
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=route_client.app), base_url="http://test") as http:
-      first_task = asyncio.create_task(
-          http.post("/api/internal/slack/reply", json={
-              "session_id": sid,
-              "text": "one reply"
-          }))
-      await asyncio.wait_for(post_entered.wait(), timeout=1)
-      second_task = asyncio.create_task(
-          http.post("/api/internal/slack/reply", json={
-              "session_id": sid,
-              "text": "one reply"
-          }))
-      await asyncio.sleep(0)
-      allow_post.set()
-      first, second = await asyncio.gather(first_task, second_task)
-
-      # A replay also returns before the freshness read, even after a new human
-      # message arrives above the thread watermark.
-      client.thread.append(
-          {
-              "ts": "1700000000.999999",
-              "user": cfg.slack.allowed_user_ids[0],
-              "text": "new message after the reply",
-          })
-      third = await http.post("/api/internal/slack/reply", json={"session_id": sid, "text": "one reply"})
-
-  assert first.status_code == second.status_code == third.status_code == 200
-  assert first.json() == second.json() == third.json()
-  assert len(client.posts) == 1
-  reply_events = conftest.events_of_type(tree.fact_history(sid), event_types.SLACK_REPLY)
-  assert len(reply_events) == 1
-  request_id = control_events.derived_agent_send_request_id("slack-run", "slack reply", sid, "one reply")
-  assert reply_events[0]["request_id"] == request_id
-  post_calls = [kwargs for method, kwargs in client.calls if method == "post_message"]
-  assert len(post_calls) == 1
-  assert post_calls[0]["metadata"] == {
-      "event_type": "charliebot_post",
-      "event_payload": {
-          "key": f"{request_id}#1"
-      },
-  }
 
 
 @pytest.mark.asyncio

@@ -1,8 +1,6 @@
-import asyncio
 import datetime
 import json
 import pathlib
-import types
 from collections.abc import Callable
 from typing import Any
 
@@ -12,20 +10,10 @@ import pytest
 from src.backends.claude_code import claude_config
 from src.backends.claude_code import usage_quota as claude_quota
 from src.backends.codex import usage_quota as codex_quota
-from src.features.usage import api as usage_api
-from src.features.usage import ext_usage as ext_usage_mod
 from src.infra import config
-from src.runtime.hooks import usage_sources, wiring
+from src.runtime.hooks import usage_sources
 
-_fresh_unknown_limit_shape_registry = conftest.fresh_state_fixture(usage_sources._UNKNOWN_LIMIT_SHAPES_SEEN.clear)
-_fresh_credential_read_warning_registry = conftest.fresh_state_fixture(
-    claude_quota._CREDENTIAL_READ_WARNINGS_SEEN.clear)
-_fresh_usage_cache = conftest.fresh_state_fixture(ext_usage_mod._cached_usage.clear)
 # Seed the cache with the fallback so no test probes the real binary.
-_fresh_user_agent_cache = conftest.fresh_state_fixture(
-    lambda: setattr(claude_quota, "_user_agent_cache", claude_quota.USER_AGENT_FALLBACK))
-_fresh_claude_accounts = conftest.fresh_state_fixture(claude_quota._accounts.clear)
-_fresh_codex_account = conftest.fresh_state_fixture(lambda: setattr(codex_quota, "_account", None))
 
 
 def _build_token_count_event(
@@ -278,188 +266,6 @@ def test_claude_account_marks_login_and_expired_windows(
 # placeholder, drop-on-removal. Drives the real _poll_loop for N cycles with
 # fake accounts and a sleep that stops the loop.
 # ---------------------------------------------------------------------------
-
-
-class _StopAfter(BaseException):
-  """Control-flow signal that pierces the poller's broad ``except Exception``.
-
-  The round-robin loop sleeps inside its ``try`` block, so a plain ``Exception``
-  stop signal would be swallowed by the loop's error handler and the test would
-  hang. ``BaseException`` (like ``asyncio.CancelledError``) propagates out.
-  """
-
-
-class _FakeAccount(usage_sources.QuotaAccount):
-
-  def __init__(self, provider: str, label: str, get_value: Callable[[], Any], error: str = "no data") -> None:
-    self.provider = provider
-    self.provider_label = provider.title()
-    self.label = label
-    self._get_value = get_value
-    self.last_error = error
-
-  async def fetch(self) -> dict | None:
-    value = self._get_value()
-    if isinstance(value, Exception):
-      raise value
-    return value
-
-
-def _run_poll_cycles(
-    monkeypatch: pytest.MonkeyPatch,
-    *,
-    accounts_fn: Callable[[], list[usage_sources.QuotaAccount]],
-    n: int,
-) -> dict:
-  """Drive the real ``_poll_loop`` for ``n`` round-gap sleeps, then return counters.
-
-  Under round-robin scheduling one sleep == one single-account fetch, so a full
-  round of N accounts takes N sleeps (plus one sleep per empty round).
-  """
-  state: dict = {"sleeps": 0, "broadcasts": 0, "payloads": []}
-
-  async def _fake_sleep(delay: float) -> None:
-    state["sleeps"] += 1
-    if state["sleeps"] >= n:
-      raise _StopAfter
-
-  async def _track_broadcast(thread_id: str, event: dict[str, Any]) -> None:
-    state["broadcasts"] += 1
-    state["payloads"].append(event)
-
-  monkeypatch.setattr(asyncio, "sleep", _fake_sleep)
-  monkeypatch.setattr("src.runtime.streaming.streaming_manager", types.SimpleNamespace(broadcast=_track_broadcast))
-  monkeypatch.setattr(usage_sources, "quota_accounts", accounts_fn)
-  ext_usage_mod._cached_usage.clear()
-
-  with pytest.raises(_StopAfter):
-    asyncio.run(ext_usage_mod._poll_loop())
-
-  return state
-
-
-def _claude_fetch_value(utilization: float) -> dict:
-  """A claude poll fetch result: one 300-minute window at the given utilization plus
-  fetched_at/provider metadata. Fresh dict per call, so no two tests share a windows list."""
-  return {
-      "windows": [{
-          "window_minutes": 300,
-          "utilization": utilization,
-          "resets_at": ""
-      }],
-      "fetched_at": "2026-01-01T00:00:00+00:00",
-      "provider": "claude",
-  }
-
-
-def test_poll_stale_keep_on_fetch_failure(monkeypatch: pytest.MonkeyPatch) -> None:
-  fetch_no = {"i": 0}
-  original = _claude_fetch_value(42.0)
-
-  def get_value() -> dict | None:
-    fetch_no["i"] += 1
-    return original if fetch_no["i"] == 1 else None
-
-  accounts = [_FakeAccount("claude", "main", get_value, error="rate limited")]
-  # 1 account per round, so 2 sleeps == 2 rounds == 2 fetches of the same account.
-  state = _run_poll_cycles(monkeypatch, accounts_fn=lambda: accounts, n=2)
-
-  kept = ext_usage_mod._cached_usage["claude:main"]
-  assert kept["windows"][0]["utilization"] == 42.0
-  assert kept["fetched_at"] == "2026-01-01T00:00:00+00:00"
-  assert "error" not in kept
-  assert state["broadcasts"] == 2
-
-
-def test_poll_panel_keys_order_pending_markers_and_error_entries(monkeypatch: pytest.MonkeyPatch) -> None:
-  """The panel's wire contract: one ``<provider>:<label>`` entry per account in registration order, a pending
-  marker for every account not yet read, an error entry carrying the account's last error, and the provider's
-  display label on every entry."""
-  codex_reading = {"windows": [], "fetched_at": "2026-01-01T00:00:00+00:00", "provider": "codex"}
-  accounts = [
-      _FakeAccount("claude", "main", lambda: _claude_fetch_value(1.0)),
-      _FakeAccount("claude", "ext-1", lambda: None, error="credentials not found"),
-      _FakeAccount("codex", "main", lambda: codex_reading),
-  ]
-
-  state = _run_poll_cycles(monkeypatch, accounts_fn=lambda: accounts, n=3)
-
-  first, second, third = (payload["providers"] for payload in state["payloads"])
-  assert list(first) == ["claude:main", "claude:ext-1", "codex:main"]
-  assert first["claude:main"]["account"] == "main" and "windows" in first["claude:main"]
-  assert first["claude:ext-1"] == {
-      "provider": "claude",
-      "provider_label": "Claude",
-      "account": "ext-1",
-      "pending": True
-  }
-  assert first["codex:main"] == {"provider": "codex", "provider_label": "Codex", "account": "main", "pending": True}
-  assert second["claude:ext-1"] == {
-      "provider": "claude",
-      "provider_label": "Claude",
-      "account": "ext-1",
-      "error": "credentials not found"
-  }
-  assert third["codex:main"] == {**codex_reading, "provider_label": "Codex", "account": "main"}
-
-
-def test_poll_drops_an_account_the_next_round_no_longer_lists(monkeypatch: pytest.MonkeyPatch) -> None:
-  rounds = iter([
-      [_FakeAccount("claude", "main", lambda: _claude_fetch_value(1.0)),
-       _FakeAccount("claude", "gone", lambda: _claude_fetch_value(2.0))],
-      [_FakeAccount("claude", "main", lambda: _claude_fetch_value(3.0))],
-  ])  # yapf: disable
-
-  _run_poll_cycles(monkeypatch, accounts_fn=lambda: next(rounds), n=3)
-
-  assert list(ext_usage_mod._cached_usage) == ["claude:main"]
-
-
-# ---------------------------------------------------------------------------
-# Services: the poller and the tally warmup start and stop through the wiring registry
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-def usage_services_only(monkeypatch: pytest.MonkeyPatch) -> None:
-  """The wiring registry holding only the usage package's own services, so starting a phase
-  imports no other package's service module."""
-  services = {name: entry for name, entry in wiring._SERVICES.items() if name in ("usage_tally", "ext_usage")}
-  assert list(services) == ["usage_tally", "ext_usage"]
-  monkeypatch.setattr(wiring, "_SERVICES", services)
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("usage_services_only")
-async def test_the_poller_and_the_warmup_start_and_stop_through_the_wiring_registry(
-    monkeypatch: pytest.MonkeyPatch) -> None:
-  monkeypatch.setattr(usage_sources, "quota_accounts", list)
-  monkeypatch.setattr(usage_api, "preload_usage_tally_stack", lambda: None)
-  ctx = wiring.ServiceContext(None, None, None)
-
-  early = dict(wiring.service_starts("early"))
-  ready = dict(wiring.service_starts("ready"))
-  assert (list(early), list(ready)) == (["usage_tally"], ["ext_usage"])
-  await early["usage_tally"](ctx)
-  await ready["ext_usage"](ctx)
-  warmup, poller = usage_api._warmup_task, ext_usage_mod._poller.task
-  assert warmup is not None and poller is not None
-  await asyncio.wait_for(warmup, timeout=10)
-  assert not poller.done()
-
-  stops = wiring.service_stops()
-  assert [name for name, _ in stops] == ["ext_usage", "usage_tally"]
-  for _, stop in stops:
-    await stop()
-  assert poller.done() and usage_api._warmup_task is None and ext_usage_mod._poller.task is None
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("usage_services_only")
-async def test_a_usage_service_that_never_started_stops_at_once() -> None:
-  for _, stop in wiring.service_stops():
-    await asyncio.wait_for(stop(), timeout=1)
-
 
 # ---------------------------------------------------------------------------
 # ClaudeQuotaAccount: 401-triggered renewal. The provider owns no clock; the

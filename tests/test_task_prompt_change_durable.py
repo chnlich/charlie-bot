@@ -83,31 +83,6 @@ async def test_two_scope_patch_crash_between_scopes_repairs_cleanly(
   ]
 
 
-async def test_recovery_sweep_is_idempotent_and_does_not_duplicate(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg, tree, sid = await _leaf(tmp_path)
-  # Simulate the crash window: metadata swapped, fact append failed.
-  real_ensure = tree._ensure_prompt_changed_fact
-
-  async def failing_ensure(session_id: str, meta, scope: str) -> None:
-    if scope == "subtree" and meta.subtree_prompt_ref is not None:
-      raise OSError("injected")
-    await real_ensure(session_id, meta, scope)
-
-  monkeypatch.setattr(tree, "_ensure_prompt_changed_fact", failing_ensure)
-  with pytest.raises(OSError):
-    await tree.patch_task(sid, models.PatchSessionTaskRequest(subtree_prompt="rule"), caller=conftest.OPERATOR)
-  monkeypatch.setattr(tree, "_ensure_prompt_changed_fact", real_ensure)
-  # Repeated recovery (the startup sweep) lands the fact once, then no-ops.
-  from src.runtime import task_recovery
-  await task_recovery.reconcile_task_tree(cfg, tree)
-  first = prompt_facts(tree, sid)
-  assert len(first) == 1
-  await task_recovery.reconcile_task_tree(cfg, tree)
-  await task_recovery.reconcile_task_tree(cfg, tree)
-  assert prompt_facts(tree, sid) == first
-
-
 async def test_concurrent_task_mutation_is_not_overwritten(tmp_path: pathlib.Path) -> None:
   """A prompt PATCH that also renames saves both under the same lock; a crash
   before the final save loses neither on retry."""

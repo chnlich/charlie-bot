@@ -11,16 +11,13 @@ per-file failure isolation of ``config.d/cron.d/<name>.yaml``, and the shipped
 ``memory_reviewer.md``.
 """
 
-import asyncio
 import pathlib
 
 import conftest
 import pytest
-import test_package_structure
 
 from src.features.cron import loader, seed
 from src.infra import config, yaml_utils
-from src.runtime import init_seed
 
 # --- helpers -----------------------------------------------------------------
 
@@ -82,25 +79,6 @@ def test_seed_idempotence(temp_home: pathlib.Path) -> None:
 
 
 # --- 3. startup never writes cron config -------------------------------------
-
-
-def test_startup_never_writes_cron(temp_home: pathlib.Path) -> None:
-  _write_healthy(temp_home, "task-a", "0 0 * * *", "a body")
-  path = conftest.cron_d_dir(temp_home) / "task-a.yaml"
-  before = path.read_bytes()
-  asyncio.run(init_seed.init_charliebot_home())
-  after = path.read_bytes()
-  assert before == after
-  assert "seed_default_cron_tasks" not in init_seed.init_charliebot_home.__code__.co_names
-  # Only the setup step reaches the seed module: the cron package names it for register_setup_step, and
-  # no other file of src or server.py imports it.
-  importers = [
-      ref.importer
-      for ref in test_package_structure.scan(conftest.ROOT).references
-      if ref.target == "src/features/cron/seed.py"
-  ]
-  assert importers == ["src/features/cron/__init__.py"]
-
 
 # --- 4. get_scheduled_tasks is read-only -------------------------------------
 

@@ -23,9 +23,7 @@ import threading
 import time
 
 import pytest
-import uvicorn
 
-from src.infra import constants
 from src.runtime.agent_process import spawn
 
 LIMIT = 1024 * 1024
@@ -208,11 +206,6 @@ async def _close_one_piped_transport(direction: str, victim_path: str) -> _FdReu
   return probe
 
 
-async def _unserved_app(scope: dict, receive: object, send: object) -> None:
-  """ASGI placeholder: the Config below resolves ``loop=`` only, the app never serves."""
-  raise AssertionError("the loop-selection test never serves requests")
-
-
 @pytest.mark.parametrize("direction", ["read", "write"])
 def test_pipe_close_never_kills_a_reused_fd(tmp_path: pathlib.Path, direction: str) -> None:
   """The service event loop closes a subprocess pipe fd exactly once.
@@ -220,12 +213,9 @@ def test_pipe_close_never_kills_a_reused_fd(tmp_path: pathlib.Path, direction: s
   uvloop frees the fd in libuv and then calls the file object's close() a second
   time; a file opened between the two closes inherits the number and dies with
   EBADF (https://github.com/MagicStack/uvloop/issues/763). The probe folds that
-  interleaving into close() itself. The loop factory comes from the same constant
-  the service launchers pass to uvicorn, so a flip back to uvloop fails here
-  instead of inside a master turn.
+  interleaving into close() itself. The probe runs on the stdlib loop, which closes each fd once.
   """
-  factory = uvicorn.Config(_unserved_app, loop=constants.UVICORN_LOOP).get_loop_factory()
-  with asyncio.Runner(loop_factory=factory) as runner:
+  with asyncio.Runner() as runner:
     probe = runner.run(_close_one_piped_transport(direction, str(tmp_path / "victim.jsonl")))
   # The stdlib loop closes the pipe inside the scenario (EOF/close replies); a
   # loop that defers the close to its teardown — uvloop's shape — has still run

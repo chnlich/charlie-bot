@@ -8,7 +8,6 @@ import hashlib
 import json
 import pathlib
 import time
-import types
 from unittest import mock
 
 import conftest
@@ -19,8 +18,7 @@ from src.features.chat_threads import thread_entry
 from src.features.discord import discord_client, discord_listener, event_types, metadata, turn_contribution
 from src.infra import config, metadata_slots, models
 from src.infra import event_types as ET
-from src.runtime import control_events, run_token, triggers
-from src.runtime.api import deps
+from src.runtime import triggers
 
 _GUILD = "900000000000000001"
 _PARENT = "900000000000000002"
@@ -634,60 +632,6 @@ async def test_post_reply_posts_a_published_url_byte_identical(tmp_path: pathlib
   assert body["enforce_nonce"] is True
   assert readback["text"] == text
   assert readback["operator_only_note"] is None
-
-
-@pytest.mark.asyncio
-async def test_discord_reply_route_reuses_one_post_for_same_run_concurrently(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg, session_blocks, _trigger_mgr, client = _rig(tmp_path)
-  sid = (await _discord_session(session_blocks)).id
-  tree = session_blocks.tree
-  assert tree is not None
-  started_at = datetime.datetime.now(datetime.UTC)
-  monkeypatch.setattr(tree.runs, "get_run", mock.AsyncMock(return_value=types.SimpleNamespace(started_at=started_at)))
-  route_client = conftest.make_internal_router_client(cfg, session_blocks, tree)
-  claims = run_token.RunTokenClaims(session_id=sid, run_id="discord-run", agent="discord manager")
-  route_client.app.dependency_overrides[deps.require_caller] = lambda: run_token.CallerIdentity(
-      kind="agent", claims=claims)
-  post_entered = asyncio.Event()
-  allow_post = asyncio.Event()
-  original_post = client.create_message
-
-  async def delayed_post(channel_id: str, content: str, *, post_key: str) -> dict:
-    post_entered.set()
-    await allow_post.wait()
-    return await original_post(channel_id, content, post_key=post_key)
-
-  client.create_message = delayed_post
-  with mock.patch(conftest.DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=route_client.app), base_url="http://test") as http:
-      first_task = asyncio.create_task(
-          http.post("/api/internal/discord/reply", json={
-              "session_id": sid,
-              "text": "one discord reply"
-          }))
-      await asyncio.wait_for(post_entered.wait(), timeout=1)
-      second_task = asyncio.create_task(
-          http.post("/api/internal/discord/reply", json={
-              "session_id": sid,
-              "text": "one discord reply"
-          }))
-      await asyncio.sleep(0)
-      allow_post.set()
-      first, second = await asyncio.gather(first_task, second_task)
-
-  assert first.status_code == second.status_code == 200
-  assert first.json() == second.json()
-  assert len(client.posts) == 1
-  reply_events = [ev for ev in tree.fact_history(sid) if ev.get("type") == event_types.DISCORD_REPLY]
-  assert len(reply_events) == 1
-  request_id = control_events.derived_agent_send_request_id("discord-run", "discord reply", sid, "one discord reply")
-  assert reply_events[0]["request_id"] == request_id
-  create_calls = [body for method, body in client.calls if method == "create_message"]
-  assert len(create_calls) == 1
-  assert create_calls[0]["nonce"] == hashlib.sha256(f"{request_id}#1".encode()).hexdigest()[:25]
-  assert create_calls[0]["enforce_nonce"] is True
-  assert all("nonce" not in message for message in client.thread)
 
 
 @pytest.mark.asyncio

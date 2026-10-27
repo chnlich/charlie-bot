@@ -21,7 +21,7 @@ from src.features.cron import cron_files, cron_sequence
 from src.features.cron import loader as cron_loader
 from src.infra import event_types as ET
 from src.infra import metadata_slots, models
-from src.runtime import takeoff_gate, task_completion
+from src.runtime import takeoff_gate
 from tests import test_task_execution
 
 
@@ -236,91 +236,9 @@ async def test_elone_rebinds_scheduled_task_and_copies_bookkeeping(
 # (f) (j) The bootstrap is the new node's first and only input
 # ---------------------------------------------------------------------------
 
-
-@pytest.mark.asyncio
-async def test_clone_bootstrap_is_the_only_pending_input(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """(f) Copied unprocessed inputs stay off the new node; the clone's first
-  round's only input is the route's bootstrap prompt."""
-  cfg, blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
-  conftest.stub_credentials({"charliebot": {"access_key": "op-secret"}})
-  monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
-  root = await manager_child(tree, None, "root", name="Root")
-  source = await manager_child(tree, root.id, "source", name="Feature")
-  copied_input = await tree.dispatch.admit_input(
-      source.id, event_type=ET.USER, content="unhandled user instruction", actor="user")
-
-  with test_task_execution.make_api_client(cfg, blocks, tree) as client:
-    response = client.post(f"/api/sessions/{source.id}/fork", headers=test_task_execution.OP_HEADERS)
-    assert response.status_code == 200, response.text
-    clone_id = response.json()["id"]
-
-    pending = tree.dispatch.pending_inputs(clone_id)
-    assert len(pending) == 1
-    bootstrap = pending[0]
-    assert bootstrap.get("id") != str(copied_input.get("id"))
-    assert "continues a prior conversation" in str(bootstrap.get("content"))
-
-
-@pytest.mark.asyncio
-async def test_bootstrap_names_the_tree_sentences(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """(j) The first message of a clone and of an elone carries the two
-  ``session tree`` sentences with the new node's id."""
-  cfg, blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
-  conftest.stub_credentials({"charliebot": {"access_key": "op-secret"}})
-  monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
-  root = await manager_child(tree, None, "root", name="Root")
-  source = await manager_child(tree, root.id, "source", name="Feature")
-
-  with test_task_execution.make_api_client(cfg, blocks, tree) as client:
-    forked = client.post(f"/api/sessions/{source.id}/fork", headers=test_task_execution.OP_HEADERS)
-    assert forked.status_code == 200, forked.text
-    clone_id = forked.json()["id"]
-    eloned = client.post(
-        f"/api/sessions/{source.id}/elone", json={"event_index": 0}, headers=test_task_execution.OP_HEADERS)
-    assert eloned.status_code == 200, eloned.text
-    new_id = eloned.json()["id"]
-
-    clone_bootstrap = " ".join(str(e.get("content")) for e in tree.dispatch.pending_inputs(clone_id))
-    assert f"Run `charliebot session tree --root {clone_id}` to list your current child tasks." in clone_bootstrap
-    assert "Child tasks in the copied history can belong to the source session." in clone_bootstrap
-    elone_bootstrap = " ".join(str(e.get("content")) for e in tree.dispatch.pending_inputs(new_id))
-    assert f"Run `charliebot session tree --root {new_id}` to list your current child tasks." in elone_bootstrap
-    assert "Child tasks in the copied history can belong to the source session." in elone_bootstrap
-
-
 # ---------------------------------------------------------------------------
 # (g) An unfinished run refuses the elone with nothing written
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_elone_with_unfinished_run_refuses_and_writes_nothing(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """(g) A queued run on the source refuses the elone with HTTP 409, and no
-  node, fact or status change lands."""
-  cfg, blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
-  conftest.stub_credentials({"charliebot": {"access_key": "op-secret"}})
-  monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
-  root = await manager_child(tree, None, "root", name="Root")
-  source = await manager_child(tree, root.id, "source", name="Feature")
-  await tree.runs.register_run_locked(models.RunRecord(id="run-queued", session_id=source.id))
-  sessions_before = {p.name for p in cfg.sessions_dir.iterdir()}
-  events_before = event_ids(tree, source.id)
-
-  with test_task_execution.make_api_client(cfg, blocks, tree) as client:
-    response = client.post(
-        f"/api/sessions/{source.id}/elone", json={"event_index": 0}, headers=test_task_execution.OP_HEADERS)
-    assert response.status_code == 409
-    assert "run-queued" in str(response.json()["detail"])
-
-  assert {p.name for p in cfg.sessions_dir.iterdir()} == sessions_before
-  assert event_ids(tree, source.id) == events_before
-  fresh_source = await blocks.store.read_metadata_fresh(source.id)
-  assert fresh_source is not None
-  assert fresh_source.status == models.SessionStatus.ACTIVE
-  assert fresh_source.successor_session_id is None
-
 
 # ---------------------------------------------------------------------------
 # (h) A worker source keeps the ordinary fork shape
@@ -448,45 +366,6 @@ async def test_report_header_shows_elone_provenance(tmp_path: pathlib.Path, monk
 # (l) A closed parent refuses both with nothing written
 # ---------------------------------------------------------------------------
 
-
-@pytest.mark.asyncio
-async def test_closed_parent_refuses_clone_and_elone(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """(l) A closed parent task returns 409 for clone and elone, and nothing is
-  written."""
-  cfg, blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
-  conftest.stub_credentials({"charliebot": {"access_key": "op-secret"}})
-  monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
-  root = await manager_child(tree, None, "root", name="Root")
-  source = await manager_child(tree, root.id, "source", name="Feature")
-  event = tree.completion.archived_close_event(
-      root.id,
-      "close-root",
-      summary="archived by the user",
-      report_to=None,
-      archived_with=None,
-      actor="user",
-      result_refs=[],
-      run_ids=[])
-  await tree.events.append(root.id, event)
-  assert tree.task_state(root.id) == "archived"
-  sessions_before = {p.name for p in cfg.sessions_dir.iterdir()}
-  events_before = event_ids(tree, source.id)
-
-  with test_task_execution.make_api_client(cfg, blocks, tree) as client:
-    fork_response = client.post(f"/api/sessions/{source.id}/fork", headers=test_task_execution.OP_HEADERS)
-    assert fork_response.status_code == 409
-    assert f"parent task {root.id} is archived" in str(fork_response.json()["detail"])
-    elone_response = client.post(
-        f"/api/sessions/{source.id}/elone", json={"event_index": 0}, headers=test_task_execution.OP_HEADERS)
-    assert elone_response.status_code == 409
-    assert f"parent task {root.id} is archived" in str(elone_response.json()["detail"])
-
-  assert {p.name for p in cfg.sessions_dir.iterdir()} == sessions_before
-  assert event_ids(tree, source.id) == events_before
-  fresh_source = await blocks.store.read_metadata_fresh(source.id)
-  assert fresh_source is not None and fresh_source.successor_session_id is None
-
-
 # ---------------------------------------------------------------------------
 # (n) Copied user messages authorize nobody on the new node
 # ---------------------------------------------------------------------------
@@ -559,63 +438,3 @@ async def test_elone_redelivers_subtree_close_report_before_the_close(tmp_path: 
 # ---------------------------------------------------------------------------
 # (p) An archived source's successor starts open and recovers to nothing
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_archived_source_successor_starts_open_and_recovers_to_nothing(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """(p) Clone and elone of an archived node: both successors are open, the
-  bootstrap starts the elone successor's first round, and a recovery scan
-  leaves the parent with no new line and no report from the new node."""
-  cfg, blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
-  conftest.stub_credentials({"charliebot": {"access_key": "op-secret"}})
-  monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
-  root = await manager_child(tree, None, "root", name="Root")
-  source = await manager_child(tree, root.id, "source", name="Feature")
-  await tree.completion.archive_task(
-      source.id,
-      request_id="complete-1",
-      evidence=task_completion.CompletionEvidence(summary="done", result_refs=["ref-1"], run_ids=[]),
-      caller=conftest.OPERATOR)
-  assert tree.task_state(source.id) == "archived"
-  assert len(close_facts(tree, source.id)) == 1
-  root_events_before = event_ids(tree, root.id)
-  tree.dispatch.executor = test_task_execution._adapter_with_silent_broadcast(cfg, blocks, tree, monkeypatch)
-  # The manager-turn build path takes one SpawningScriptedBackend per round.
-  conftest.install_scripted_backends(
-      monkeypatch, [
-          test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("clone round")]),
-          test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("elone round")])
-      ], conftest.BUILD_BACKEND_PATCH_TARGET)
-
-  # The run executes on the API loop that scheduled it: the wait stays inside
-  # the client context (the same rule the execution tests pin).
-  with test_task_execution.make_api_client(cfg, blocks, tree) as client:
-    fork_response = client.post(f"/api/sessions/{source.id}/fork", headers=test_task_execution.OP_HEADERS)
-    assert fork_response.status_code == 200, fork_response.text
-    clone_id = fork_response.json()["id"]
-    clone_runs = tree.runs.list_run_records_sync(clone_id)
-    assert len(clone_runs) == 1  # the bootstrap started the clone's first round
-    await test_task_execution.wait_for_terminal_run(tree, clone_id, clone_runs[0].id)
-
-    elone_response = client.post(
-        f"/api/sessions/{source.id}/elone", json={"event_index": 0}, headers=test_task_execution.OP_HEADERS)
-    assert elone_response.status_code == 200, elone_response.text
-    new_id = elone_response.json()["id"]
-    runs = tree.runs.list_run_records_sync(new_id)
-    assert len(runs) == 1
-    await test_task_execution.wait_for_terminal_run(tree, new_id, runs[0].id)
-
-  clone = await blocks.store.get_session(clone_id)
-  assert clone is not None
-  assert tree.task_state(clone.id) == "open"
-  # The copied close belongs to the source: the fold resets it at clone_start.
-  assert tree.facts_of(clone.id).close_events == []
-  assert tree.task_state(new_id) == "open"
-  # The completed close fact is kept, not written twice.
-  assert len(tree.facts_of(source.id).close_events) == 1
-
-  # The startup recovery scan over the new node repairs nothing and writes
-  # nothing into the parent's log.
-  assert await tree.dispatch.recover_pending_reports(new_id) == []
-  assert event_ids(tree, root.id) == root_events_before

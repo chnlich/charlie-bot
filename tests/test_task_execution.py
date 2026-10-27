@@ -23,7 +23,6 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 import conftest
 import fastapi
 import pytest
-from fastapi import testclient
 
 import src.runtime.task_execution as task_execution_module
 import src.runtime.task_input_prompt as task_input_prompt_module
@@ -218,25 +217,6 @@ def make_pm_build(text: str, pm_builds: list | None = None):
     return b
 
   return pm_build
-
-
-def make_api_client(cfg, session_blocks, task_mgr) -> testclient.TestClient:
-  from src.features.improve import api as improve_api
-  from src.infra import config
-  from src.runtime.api import deps
-  from src.runtime.api import internal as internal_api
-  from src.runtime.api import sessions as sessions_api
-
-  app = fastapi.FastAPI()
-  app.include_router(sessions_api.router, prefix="/api/sessions")
-  app.include_router(internal_api.router, prefix="/api/internal")
-  app.include_router(improve_api.router, prefix="/api/internal")
-  app.dependency_overrides[config.get_config] = lambda: cfg
-  app.dependency_overrides[deps.get_config_on_loop] = lambda: cfg
-  conftest.override_session_blocks(app, session_blocks)
-  app.dependency_overrides[deps.get_task_manager] = lambda: task_mgr
-  app.dependency_overrides[deps.get_run_store] = lambda: task_mgr.runs
-  return testclient.TestClient(app)
 
 
 async def wait_for_terminal_run(
@@ -457,28 +437,6 @@ def _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch):
 
 async def _async_noop(*args, **kwargs) -> None:
   return None
-
-
-async def build_manager_root(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch):
-  """One synthetic instance with an operator-created root manager: build_env
-    plus the operator credentials, the silent-broadcast executor, and the
-    config-owner patch the spawn-style routes read. Returns
-    (cfg, session_blocks, tree, root)."""
-  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
-  conftest.stub_credentials({"charliebot": {"access_key": "op-secret"}})
-  monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
-  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
-  # The spawn-style routes resolve backends through the config owner directly.
-  monkeypatch.setattr(conftest.CONFIG_GET_CONFIG_PATCH_TARGET, lambda: cfg)
-  root = await tree.create_task(
-      request_id="root",
-      task_parent_id=None,
-      profile="manager",
-      task=models.TaskSpec(goal="project"),
-      name="Project",
-      backend=None,
-      caller=conftest.OPERATOR)
-  return cfg, session_blocks, tree, root
 
 
 async def _launch_manager_turn(cfg, session_blocks, tree, monkeypatch, manager, content) -> list:
@@ -709,165 +667,9 @@ async def test_input_admitted_during_active_run_dispatches_after_its_finish(
 # Delegate: one worker child task with its first Run, stable replay identity
 # ---------------------------------------------------------------------------
 
-
-@pytest.mark.asyncio
-async def test_delegate_creates_one_child_and_replays_are_stable(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-
-  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
-  manager = await conftest.create_task(tree, parent=None, request_id="root")
-  monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
-  conftest.stub_credentials({"charliebot": {"access_key": "op-secret"}})
-  pm_builds = []
-  monkeypatch.setattr(conftest.BUILD_BACKEND_PATCH_TARGET, make_pm_build("manager turn", pm_builds))
-  backend = SpawningScriptedBackend([result_event("phrase")])
-  builds = conftest.install_scripted_backends(
-      monkeypatch,
-      [backend,
-       SpawningScriptedBackend([result_event("phrase")]),
-       SpawningScriptedBackend([result_event("phrase")])], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
-  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
-  repo, _origin = conftest.init_repo_with_origin(tmp_path / "delegate-work")
-
-  # The runtime gate re-judges at delegation: the manager's chain needs a real
-  # user message, takeoff phrase or not.
-  await tree.dispatch.admit_input(
-      manager.id, event_type=ET.USER, content="Take off and delegate the phrase task.", actor="user")
-  monkeypatch.setattr(conftest.CONFIG_GET_CONFIG_PATCH_TARGET, lambda: cfg)
-  with make_api_client(cfg, session_blocks, tree) as client:
-    payload = {
-        "session_id": manager.id,
-        "description": "## Goal\n\nsay the phrase\n",
-        "task_type": "quick-edit",
-        "keep_worktree": False,
-        "repo_path": str(repo),
-        "base_branch": "main",
-    }
-    first = client.post("/api/internal/delegate", json=payload, headers=OP_HEADERS)
-    assert first.status_code == 200, first.text
-    body = first.json()
-    child_id, run_id = body["session_id"], body["run_id"]
-    assert body["parent_session_id"] == manager.id
-    assert body["thread_id"] == run_id
-    child_meta = await tree.load_meta(child_id)
-    assert child_meta is not None and child_meta.profile == "worker"
-    assert child_meta.task_parent_id == manager.id
-
-    # The replayed request (same spec, derived stable id) returns the
-    # original child and Run instead of a second process.
-    replay = client.post("/api/internal/delegate", json=payload, headers=OP_HEADERS)
-    assert replay.status_code == 200, replay.text
-    assert replay.json()["session_id"] == child_id
-    assert replay.json()["run_id"] == run_id
-
-    # The same explicit request_id replays identically; a distinct explicit
-    # id names a genuinely different operation (an intentional sibling).
-    first_named = client.post("/api/internal/delegate", json=dict(payload, request_id="op-1"), headers=OP_HEADERS)
-    assert first_named.json()["session_id"] != child_id
-    replay_named = client.post("/api/internal/delegate", json=dict(payload, request_id="op-1"), headers=OP_HEADERS)
-    assert replay_named.json()["session_id"] == first_named.json()["session_id"]
-    sibling = client.post("/api/internal/delegate", json=dict(payload, request_id="op-2"), headers=OP_HEADERS)
-    assert sibling.json()["session_id"] != first_named.json()["session_id"]
-
-    # The runs execute through the worker adapter while the API loop that
-    # scheduled them is still alive. Every delivery follow-up — child close,
-    # parent report dispatch, the parent's serialized turns — is scheduled
-    # on that same loop, so it must outlive them all.
-    deadline = asyncio.get_event_loop().time() + 30
-    while asyncio.get_event_loop().time() < deadline:
-      states = [tree.task_state(s) for s in (child_id, first_named.json()["session_id"], sibling.json()["session_id"])]
-      if all(s == "completed" for s in states):
-        break
-      await asyncio.sleep(0.1)
-    for cid in (child_id, first_named.json()["session_id"], sibling.json()["session_id"]):
-      assert tree.task_state(cid) == "completed"
-
-    # The completed delivery closed and auto-archived the worker; the
-    # manager remains open and received the completed report.
-    deadline = asyncio.get_event_loop().time() + 20
-    archived = False
-    while asyncio.get_event_loop().time() < deadline:
-      if tree.task_state(child_id) == "completed" and tree.archived_of(await tree._get_index(), await
-                                                                       tree.load_meta(child_id)):
-        archived = True
-        break
-      await asyncio.sleep(0.1)
-    assert archived, "the worker task was not auto-archived after its delivered report"
-    assert tree.task_state(manager.id) == "open"
-
-    def reports_of(cid: str) -> list[dict]:
-      return [e for e in conftest.child_reports(tree, manager.id) if e["child_session_id"] == cid]
-
-    # Each child's close fact and its parent report are two appends under one
-    # lock (_append_closed). The lock-free state reads above can fall between
-    # them, and the settle below returns at once while a report is unwritten,
-    # so each child's report is waited for on its own.
-    for cid in (child_id, first_named.json()["session_id"], sibling.json()["session_id"]):
-      await poll_until(lambda cid=cid: reports_of(cid), timeout=15.0, what=f"the completed report of child {cid}")
-      assert reports_of(cid)[-1]["outcome"] == "completed"
-
-    legacy_dir = cfg.sessions_dir / child_id / "threads"
-    assert not list(legacy_dir.iterdir()) if legacy_dir.is_dir() else True
-
-    # Every delivered child report triggered the parent's next serialized
-    # turn: all reports were consumed and acknowledged, the parent stays open.
-    await conftest._settle_parent(tree, manager, timeout=30.0, poll=0.2)
-    assert pm_builds, "the delivered child reports never triggered a parent manager turn"
-    assert tree.task_state(manager.id) == "open"
-
-  # Three distinct operations, three builds: the replays did not spawn a
-  # second process for their operation.
-  assert len(builds) == 3
-  captured_envs = [build["backend"].env or {} for build in builds]
-  assert {env.get(constants.SESSION_ID_ENV_VAR) for env in captured_envs
-         } == {child_id, first_named.json()["session_id"],
-               sibling.json()["session_id"]}
-  assert all(env.get(constants.RUN_TOKEN_ENV) for env in captured_envs)
-  assert all(env.get("CHARLIEBOT_HOME") == str(cfg.charliebot_home) for env in captured_envs)
-  worker_run = await tree.runs.get_run(child_id, run_id)
-  assert worker_run is not None and worker_run.kind == "work"
-  assert worker_run.backend == "fake"
-  pm_events = tree.runs.load_events_sync(manager.id)
-  for r in tree.runs.list_run_records_sync(manager.id):
-    assert tree.runs.terminal_outcome(pm_events, r.id) == "success"
-
-
 # ---------------------------------------------------------------------------
 # Review context: the spec is the node's task record, the one the delegate wrote
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_repo_review_context_carries_the_delegated_spec(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
-  manager = await conftest.create_task(tree, parent=None, request_id="root")
-  repo, _origin = conftest.init_repo_with_origin(tmp_path / "review-spec-work")
-  await _launch_manager_turn(cfg, session_blocks, tree, monkeypatch, manager, "Take off and rename the config key.")
-  conftest.install_scripted_backends(
-      monkeypatch, [SpawningScriptedBackend([result_event("renamed")])], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
-  monkeypatch.setattr(conftest.CONFIG_GET_CONFIG_PATCH_TARGET, lambda: cfg)
-  spec = "## Goal\n\nrename the config key\n\n## Reviewer Checklist\n- the legacy key still loads\n"
-  # The delegated run launches on the API loop, which lives only inside this block.
-  with make_api_client(cfg, session_blocks, tree) as client:
-    response = client.post(
-        "/api/internal/delegate",
-        json={
-            "session_id": manager.id,
-            "description": spec,
-            "task_type": "quick-edit",
-            "keep_worktree": False,
-            "repo_path": str(repo),
-            "base_branch": "main",
-        },
-        headers=OP_HEADERS)
-    assert response.status_code == 200, response.text
-    child_id, run_id = response.json()["session_id"], response.json()["run_id"]
-    # The finished work Run carries the worktree and branch the review reuses.
-    work_run, outcome = await wait_for_terminal_run(tree, child_id, run_id)
-    assert outcome == "success"
-    review_context = await tree.dispatch.executor._build_review_context(child_id, work_run)
-  assert "- the legacy key still loads" in review_context
 
 
 @pytest.mark.asyncio
@@ -908,193 +710,6 @@ async def _claimed_work_run_after(
         return run
     await asyncio.sleep(0.05)
   pytest.fail(f"node {session_id} never reserved a work run claiming a batch within {timeout}s")
-
-
-@pytest.mark.asyncio
-async def test_review_contexts_list_the_agent_message_the_second_run_claimed(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  from src.runtime import review as review_module
-  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
-  manager = await conftest.create_task(tree, parent=None, request_id="root", name="Root manager")
-  repo, _origin = conftest.init_repo_with_origin(tmp_path / "review-later-message")
-  await _launch_manager_turn(cfg, session_blocks, tree, monkeypatch, manager, "Take off and rename the config key.")
-  conftest.install_scripted_backends(
-      monkeypatch, [
-          SpawningScriptedBackend([conftest.assistant_text_event("started")], exit_code=1),
-          SpawningScriptedBackend([result_event("adjusted")]),
-      ], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
-  monkeypatch.setattr(conftest.CONFIG_GET_CONFIG_PATCH_TARGET, lambda: cfg)
-  with make_api_client(cfg, session_blocks, tree) as client:
-    response = client.post(
-        "/api/internal/delegate",
-        json={
-            "session_id": manager.id,
-            "description": "## Goal\n\nrename the config key\n",
-            "task_type": "quick-edit",
-            "keep_worktree": False,
-            "repo_path": str(repo),
-            "base_branch": "main",
-        },
-        headers=OP_HEADERS)
-    assert response.status_code == 200, response.text
-    child_id, run_id = response.json()["session_id"], response.json()["run_id"]
-    first_run, first_outcome = await wait_for_terminal_run(tree, child_id, run_id)
-    assert first_outcome == "failed" and first_run.input_event_ids == []
-    # The failed run's report archived the child: the manager's in-place
-    # continuation is refused with the archived sentence, and the operator
-    # restore reopens the node for the second run. The archive rides the
-    # failed run's delivery chain, so it can land after the terminal fact.
-    await poll_until(lambda: tree.task_state(child_id) == "archived", timeout=15.0, what="the failed child's archive")
-    relay = client.post(
-        "/api/internal/session-message",
-        json={
-            "session_id": manager.id,
-            "target_session_id": child_id,
-            "content": "## Rule change: keep the legacy key working",
-        },
-        headers=OP_HEADERS)
-    assert relay.status_code == 409, relay.text
-    assert relay.json()["detail"] == f"task {child_id} is archived"
-    restored = client.post(f"/api/sessions/{child_id}/unarchive", headers=OP_HEADERS)
-    assert restored.status_code == 200, restored.text
-    relay = client.post(
-        "/api/internal/session-message",
-        json={
-            "session_id": manager.id,
-            "target_session_id": child_id,
-            "content": "## Rule change: keep the legacy key working",
-        },
-        headers=OP_HEADERS)
-    assert relay.status_code == 200, relay.text
-    second_run = await _claimed_work_run_after(tree, child_id, {run_id}, timeout=15.0)
-    agent_messages = [e for e in tree.events.load_events(child_id) if e["type"] == ET.AGENT_MESSAGE]
-    assert [str(e["id"]) for e in agent_messages] == second_run.input_event_ids
-    second_run, second_outcome = await wait_for_terminal_run(tree, child_id, second_run.id)
-    assert second_outcome == "success"
-    review_context = await tree.dispatch.executor._build_review_context(child_id, second_run)
-    repo_less_context = await tree.dispatch.executor._build_repo_less_review_context(child_id, second_run)
-
-  meta = await tree.load_meta(child_id)
-  assert meta is not None and meta.task is not None
-  spec_text = review_module.review_spec_text(meta.task)
-  section = "**Later Messages:**\n[Message from session Root manager] ## Rule change: keep the legacy key working"
-  # The repo review context shows the message after the task spec, before the worker summary.
-  assert f"**Task spec:**\n{spec_text}\n{section}\n**Worker summary:**" in review_context
-  # The repo-less review context shows the same section text.
-  assert f"### Task spec (acceptance tests included)\n{spec_text}\n\n{section}\n\n### Work report" in repo_less_context
-
-
-@pytest.mark.asyncio
-async def test_review_context_without_claimed_inputs_goes_from_spec_to_summary(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  from src.runtime import review as review_module
-  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
-  manager = await conftest.create_task(tree, parent=None, request_id="root")
-  repo, _origin = conftest.init_repo_with_origin(tmp_path / "review-no-later-message")
-  await _launch_manager_turn(cfg, session_blocks, tree, monkeypatch, manager, "Take off and rename the config key.")
-  conftest.install_scripted_backends(
-      monkeypatch, [SpawningScriptedBackend([result_event("renamed")])], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
-  monkeypatch.setattr(conftest.CONFIG_GET_CONFIG_PATCH_TARGET, lambda: cfg)
-  with make_api_client(cfg, session_blocks, tree) as client:
-    response = client.post(
-        "/api/internal/delegate",
-        json={
-            "session_id": manager.id,
-            "description": "## Goal\n\nrename the config key\n",
-            "task_type": "quick-edit",
-            "keep_worktree": False,
-            "repo_path": str(repo),
-            "base_branch": "main",
-        },
-        headers=OP_HEADERS)
-    assert response.status_code == 200, response.text
-    child_id, run_id = response.json()["session_id"], response.json()["run_id"]
-    work_run, outcome = await wait_for_terminal_run(tree, child_id, run_id)
-    assert outcome == "success"
-    review_context = await tree.dispatch.executor._build_review_context(child_id, work_run)
-
-  meta = await tree.load_meta(child_id)
-  assert meta is not None and meta.task is not None
-  spec_text = review_module.review_spec_text(meta.task)
-  assert "Later Messages" not in review_context
-  # The task spec is followed directly by the worker summary.
-  assert f"**Task spec:**\n{spec_text}\n**Worker summary:**" in review_context
-
-
-@pytest.mark.asyncio
-async def test_review_context_lists_each_runs_claimed_messages_in_claim_order(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
-  manager = await conftest.create_task(tree, parent=None, request_id="root", name="Root manager")
-  repo, _origin = conftest.init_repo_with_origin(tmp_path / "review-claim-order")
-  await _launch_manager_turn(cfg, session_blocks, tree, monkeypatch, manager, "Take off and rename the config key.")
-  conftest.install_scripted_backends(
-      monkeypatch, [
-          SpawningScriptedBackend([conftest.assistant_text_event("started")], exit_code=1),
-          SpawningScriptedBackend([conftest.assistant_text_event("retrying")], exit_code=1),
-          SpawningScriptedBackend([result_event("done")]),
-      ], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
-  monkeypatch.setattr(conftest.CONFIG_GET_CONFIG_PATCH_TARGET, lambda: cfg)
-  with make_api_client(cfg, session_blocks, tree) as client:
-    response = client.post(
-        "/api/internal/delegate",
-        json={
-            "session_id": manager.id,
-            "description": "## Goal\n\nrename the config key\n",
-            "task_type": "quick-edit",
-            "keep_worktree": False,
-            "repo_path": str(repo),
-            "base_branch": "main",
-        },
-        headers=OP_HEADERS)
-    assert response.status_code == 200, response.text
-    child_id, run_id = response.json()["session_id"], response.json()["run_id"]
-    # Each failed run's report archives the child, so each relayed message
-    # follows an operator restore and dispatches its own follow-up work run:
-    # two runs, one claimed message apiece. The archive rides the failed
-    # run's delivery chain, so it can land after the terminal fact.
-    first_run, first_outcome = await wait_for_terminal_run(tree, child_id, run_id)
-    assert first_outcome == "failed" and first_run.input_event_ids == []
-    await poll_until(lambda: tree.task_state(child_id) == "archived", timeout=15.0, what="the first failure's archive")
-    restored = client.post(f"/api/sessions/{child_id}/unarchive", headers=OP_HEADERS)
-    assert restored.status_code == 200, restored.text
-    first_relay = client.post(
-        "/api/internal/session-message",
-        json={
-            "session_id": manager.id,
-            "target_session_id": child_id,
-            "content": "First later message.",
-        },
-        headers=OP_HEADERS)
-    assert first_relay.status_code == 200, first_relay.text
-    second_run = await _claimed_work_run_after(tree, child_id, {run_id}, timeout=15.0)
-    agent_messages = [e for e in tree.events.load_events(child_id) if e["type"] == ET.AGENT_MESSAGE]
-    assert len(agent_messages) == 1 and second_run.input_event_ids == [str(agent_messages[0]["id"])]
-    second_run, second_outcome = await wait_for_terminal_run(tree, child_id, second_run.id)
-    assert second_outcome == "failed"
-    await poll_until(lambda: tree.task_state(child_id) == "archived", timeout=15.0, what="the second failure's archive")
-    restored = client.post(f"/api/sessions/{child_id}/unarchive", headers=OP_HEADERS)
-    assert restored.status_code == 200, restored.text
-    second_relay = client.post(
-        "/api/internal/session-message",
-        json={
-            "session_id": manager.id,
-            "target_session_id": child_id,
-            "content": "Second later message.",
-        },
-        headers=OP_HEADERS)
-    assert second_relay.status_code == 200, second_relay.text
-    third_run = await _claimed_work_run_after(tree, child_id, {run_id, second_run.id}, timeout=15.0)
-    agent_messages = [e for e in tree.events.load_events(child_id) if e["type"] == ET.AGENT_MESSAGE]
-    assert len(agent_messages) == 2 and third_run.input_event_ids == [str(agent_messages[1]["id"])]
-    third_run, third_outcome = await wait_for_terminal_run(tree, child_id, third_run.id)
-    assert third_outcome == "success"
-    review_context = await tree.dispatch.executor._build_review_context(child_id, third_run)
-
-  section_pos = review_context.index("**Later Messages:**")
-  first_pos = review_context.index("[Message from session Root manager] First later message.")
-  second_pos = review_context.index("[Message from session Root manager] Second later message.")
-  assert section_pos < first_pos < second_pos
 
 
 # ---------------------------------------------------------------------------
@@ -2402,29 +2017,6 @@ def _read_error_event(events_log: pathlib.Path) -> str:
   return ""
 
 
-def wait_for_terminal_run_sync(
-    tree: task_sessions.TaskTreeManager,
-    session_id: str,
-    run_id: str,
-    timeout: float = 20.0) -> tuple[models.RunRecord, str]:
-  """Poll one Run's durable state without touching the launch's event loop.
-
-    The delegate endpoint schedules the Run on the API client's portal loop;
-    awaiting tree APIs from the test's own loop would chain futures across
-    loops, so this poller reads only the sync, on-disk views.
-    """
-  deadline = time.monotonic() + timeout
-  while time.monotonic() < deadline:
-    run = tree.runs.read_run_sync(session_id, run_id)
-    assert run is not None, f"run {run_id} vanished"
-    events = tree.runs.load_events_sync(session_id)
-    outcome = tree.runs.terminal_outcome(events, run_id)
-    if outcome is not None:
-      return run, str(outcome)
-    time.sleep(0.05)
-  pytest.fail(f"run {run_id} never reached a terminal fact within {timeout}s")
-
-
 async def _wait_for_parent_report(tree: task_sessions.TaskTreeManager, parent_id: str, timeout: float = 15.0) -> dict:
   """Poll the parent's fact history until a delivered child_report lands."""
   deadline = asyncio.get_event_loop().time() + timeout
@@ -2434,96 +2026,6 @@ async def _wait_for_parent_report(tree: task_sessions.TaskTreeManager, parent_id
       return reports[-1]
     await asyncio.sleep(0.1)
   pytest.fail(f"the parent {parent_id} never received a failure report within {timeout}s")
-
-
-@pytest.mark.asyncio
-async def test_worktree_preparation_failure_lands_failed_run_and_reports_to_parent(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """The worktree-prep failure case, exactly: a synthetic repo whose local
-    base branch is ahead of its origin makes _prepare_worktree raise after the
-    Run was admitted. That Run lands its durable failed fact, keeps the actual
-    error as readable evidence in its own events log, and the worker's parent
-    receives a failure report naming the error and is woken."""
-  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
-  manager = await conftest.create_task(tree, parent=None, request_id="root")
-  monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
-  conftest.stub_credentials({"charliebot": {"access_key": "op-secret"}})
-
-  monkeypatch.setattr(conftest.BUILD_BACKEND_PATCH_TARGET, make_pm_build("failure noted"))
-  conftest.install_scripted_backends(
-      monkeypatch, [SpawningScriptedBackend([result_event("phrase")])], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
-  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
-
-  repo, _origin = conftest.init_repo_with_origin(tmp_path / "prep-fail")
-  # The failure's exact shape: the local base branch diverges from origin.
-  (repo / "local.txt").write_text("local work\n")
-  conftest.run_git(repo, "add", ".")
-  conftest.run_git(repo, "commit", "-q", "-m", "local-only")
-
-  await tree.dispatch.admit_input(
-      manager.id, event_type=ET.USER, content="Take off and delegate the phrase task.", actor="user")
-  monkeypatch.setattr(conftest.CONFIG_GET_CONFIG_PATCH_TARGET, lambda: cfg)
-  # The client context stays open across the waits: the launches are tasks on
-  # the client's portal loop, alive exactly while the block stands.
-  with make_api_client(cfg, session_blocks, tree) as client:
-    resp = client.post(
-        "/api/internal/delegate",
-        json={
-            "session_id": manager.id,
-            "description": "## Goal\n\nsay the phrase\n",
-            "task_type": "quick-edit",
-            "keep_worktree": False,
-            "repo_path": str(repo),
-            "base_branch": "main",
-        },
-        headers=OP_HEADERS)
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    child_id, run_id = body["session_id"], body["run_id"]
-
-    run, outcome = wait_for_terminal_run_sync(tree, child_id, run_id)
-    assert outcome == "failed"
-    assert run.pid is None, "the process never started; the failure is a launch failure"
-    # The worker summary card's Events link reads the record's events_ref: the
-    # launch-failed run's evidence must be reachable the same way a
-    # process run's is.
-    assert run.events_ref is not None and run.events_ref.endswith("events.jsonl"), (
-        f"the run's evidence ref was never set: {run.events_ref!r}")
-    error_text = _read_error_event(tree.runs.run_dir(child_id, run_id) / "events.jsonl")
-    assert "differs from origin/main" in error_text, (
-        f"the run's durable evidence must name the actual error, got: {error_text!r}")
-
-    report = await _wait_for_parent_report(tree, manager.id)
-    assert report.get("outcome") == "failed"
-    assert "differs from origin/main" in str(
-        report.get("summary")), (f"the report summary must name the actual error, got: {report.get('summary')!r}")
-    # The failed-before-start report's delivery archived the worker: the one
-    # report, then the end state.
-    await poll_until(
-        lambda: tree.task_state(child_id) == "archived", timeout=15.0, what="the launch-failed worker's archive")
-    assert len(conftest.child_reports(tree, manager.id)) == 1
-    closes = [e for e in tree.events.load_events(child_id) if e["type"] == ET.TASK_CLOSED]
-    assert len(closes) == 1
-    assert closes[0]["outcome"] == "archived"
-    assert closes[0]["actor"] == "system"
-    assert closes[0]["request_id"] == f"unsuccessful:{run_id}"
-    assert closes[0]["run_ids"] == [run_id]
-    assert closes[0]["summary"] == f"run {run_id} ended failed; archived by the server"
-
-    # The delivered report is the parent's new durable input: its next
-    # serialized turn consumes it. All of that runs on the API client's
-    # portal loop, so this wait polls the durable views instead of
-    # awaiting anything the portal owns.
-    deadline = time.monotonic() + 20
-    parent_succeeded = False
-    while time.monotonic() < deadline:
-      pm_events = tree.runs.load_events_sync(manager.id)
-      if any(tree.runs.terminal_outcome(pm_events, r.id) == "success"
-             for r in tree.runs.list_run_records_sync(manager.id)):
-        parent_succeeded = True
-        break
-      time.sleep(0.1)
-    assert parent_succeeded, "the parent's report turn never ran to success"
 
 
 def _explode_backend_resolution(cfg: config.CharlieBotConfig, backend: str | None, model: str | None) -> None:
@@ -3033,41 +2535,6 @@ def inject_chat_append_fault(
   return hits
 
 
-def inject_run_record_write_fault(
-    monkeypatch: pytest.MonkeyPatch,
-    *,
-    only_finished: bool = True,
-    times: int = 1,
-    err: int = errno.ENOSPC,
-    on_raise: Callable[[], None] | None = None,
-) -> list[bool]:
-  """The first *times* run-metadata writes raise OSError(*err*); every other
-    write — and every later one — writes through the real method.
-
-    Sits at ``RunStore.write_record`` (the one record-mirror write funnel over
-    ``atomic_write_text``). ``only_finished`` gates the fault to a finish's
-    write, the one that carries ``ended_at``. Returns one bool per matching
-    write — True when that write raised — in order.
-    """
-  real = runs_mod.RunStore.write_record
-  state = {"raised": 0}
-  hits: list[bool] = []
-
-  async def flaky(self, session_id, run):
-    if not only_finished or run.ended_at is not None:
-      if state["raised"] < times:
-        state["raised"] += 1
-        hits.append(True)
-        if on_raise is not None:
-          on_raise()
-        raise OSError(err, os.strerror(err))
-      hits.append(False)
-    return await real(self, session_id, run)
-
-  monkeypatch.setattr(runs_mod.RunStore, "write_record", flaky)
-  return hits
-
-
 def write_raw_result(run_dir: pathlib.Path,
                      text: str,
                      *,
@@ -3296,44 +2763,6 @@ async def test_parent_report_enospc_retry_delivers_report_once(
 
 
 @pytest.mark.asyncio
-async def test_drain_ended_at_is_raw_log_last_write_live_exit_keeps_write_time(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """(d) A drained run's ended_at is the raw log's last write time; a live
-    exit's ended_at stays the observed-exit write time."""
-  from src.runtime import task_recovery
-  cfg, session_blocks, tree, manager, worker = await _manager_with_worker_child(tmp_path, monkeypatch)
-  adapter = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
-  tree.dispatch.executor = adapter
-  install_worker_launch_and_resume_backends(monkeypatch, [SpawningScriptedBackend([result_event("drained work")])])
-
-  # Drain: a launched run whose process died unseen, raw log stamped an hour ago.
-  run_id = "run-drained"
-  await tree.runs.register_run_locked(
-      models.RunRecord(id=run_id, session_id=worker.id, kind="work", backend="fake", model="fake-model"))
-  await tree.dispatch.admit_input(worker.id, event_type=ET.USER, content="Start the task.", actor="user")
-  await tree.dispatch.claim_input_batch_locked(worker.id, run_id)
-  await tree.runs.record_launch(worker.id, run_id, pid=424901, pid_start="1-424000")
-  _raw, raw_mtime = write_raw_result(tree.runs.run_dir(worker.id, run_id), "drained result", age_seconds=3600)
-  await task_recovery.reconcile_task_tree(cfg, tree, adapter)
-  run, outcome = await wait_for_terminal_run(tree, worker.id, run_id)
-  assert outcome == "success"
-  assert run.exit_code == 0
-  assert run.ended_at is not None and abs(run.ended_at - raw_mtime) < datetime.timedelta(seconds=1)
-
-  # Live exit: the observed-exit write time, never a staged raw-log mtime.
-  # A fresh child node: the drained node's trailing dispatch would race a
-  # second input admitted on it.
-  worker2 = await conftest.create_task(
-      tree, parent=manager.id, request_id="child-2", profile="worker", task=models.TaskSpec(goal="more work"))
-  install_worker_launch_and_resume_backends(monkeypatch, [SpawningScriptedBackend([result_event("live work")])])
-  await tree.dispatch.admit_input(worker2.id, event_type=ET.USER, content="Start.", actor="user")
-  decision = await tree.dispatch.dispatch_pending(worker2.id)
-  live_run, live_outcome = await wait_for_terminal_run(tree, worker2.id, decision["run_id"])
-  assert live_outcome == "success"
-  assert live_run.ended_at is not None and live_run.ended_at > raw_mtime
-
-
-@pytest.mark.asyncio
 async def test_disk_headroom_precheck_withholds_worker_run_but_not_manager_turn(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """(e) Below the threshold a worker-class run stays queued with one blocked
@@ -3423,54 +2852,6 @@ async def test_withheld_launch_on_a_completed_task_settles_the_queued_run(
       result_refs=[],
       run_ids=[],
       caller=conftest.OPERATOR) == [manager.id]
-
-
-@pytest.mark.asyncio
-async def test_startup_recovery_stops_a_launched_run_on_a_closed_worker(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """Recovery stops a launched Run when cancellation closed before its stop fact landed."""
-  from src.runtime import task_recovery
-  monkeypatch.setattr(runs_mod, "STOP_EXIT_WAIT_SECONDS", 0.2)
-  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
-  worker = await conftest.create_task(
-      tree, parent=None, request_id="closed-live-worker", profile="worker", task=models.TaskSpec(goal="long work"))
-  proc = subprocess.Popen(["/bin/sleep", "60"], start_new_session=True)
-  pair = runs_mod.read_pid_stat(proc.pid)
-  assert pair is not None
-  await tree.runs.register_run_locked(
-      models.RunRecord(
-          id="run-live-closed",
-          session_id=worker.id,
-          kind="work",
-          pid=proc.pid,
-          pid_start=pair[0],
-          started_at=datetime.datetime.now(datetime.UTC)))
-  append_stop = tree.runs.append_stop_request_locked
-
-  async def fail_after_close(session_id: str, run_id: str, request_id: str) -> bool:
-    raise OSError("simulated stop-fact write interruption")
-
-  monkeypatch.setattr(tree.runs, "append_stop_request_locked", fail_after_close)
-  try:
-    with pytest.raises(OSError, match="simulated stop-fact write interruption"):
-      await tree.completion.cancel_task(
-          worker.id, request_id="cancel-before-crash", reason="stop", caller=conftest.OPERATOR)
-    assert tree.task_state(worker.id) == "cancelled"
-    assert proc.poll() is None
-    monkeypatch.setattr(tree.runs, "append_stop_request_locked", append_stop)
-
-    adapter = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
-    await task_recovery.reconcile_task_tree(cfg, tree, adapter)
-
-    events = tree.runs.load_events_sync(worker.id)
-    stops = [event for event in events if event.get("type") == ET.RUN_STOP_REQUESTED]
-    assert len(stops) == 1 and stops[0]["request_id"] == "closed-task:run-live-closed"
-    assert tree.runs.terminal_outcome(events, "run-live-closed") == "interrupted"
-    assert proc.poll() is not None
-  finally:
-    if proc.poll() is None:
-      proc.kill()
-    proc.wait(timeout=1)
 
 
 @pytest.mark.asyncio

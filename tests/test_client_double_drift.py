@@ -11,7 +11,7 @@ import inspect
 
 import conftest
 import pytest
-from core import test_discord_commands, test_discord_gateway, test_discord_listener
+from core import test_discord_gateway, test_discord_listener
 
 from src.features.discord import discord_client
 from src.features.slack import slack_listener
@@ -21,9 +21,6 @@ DOUBLE_PAIRS = [
     ("conftest.FakeSlackClient", conftest.FakeSlackClient, slack_listener.SlackClient),
     (
         "core.test_discord_listener.FakeDiscordClient", test_discord_listener.FakeDiscordClient,
-        discord_client.DiscordClient),
-    (
-        "core.test_discord_commands.FakeDiscordClient", test_discord_commands.FakeDiscordClient,
         discord_client.DiscordClient),
     ("core.test_discord_gateway.FakeDiscordREST", test_discord_gateway.FakeDiscordREST, discord_client.DiscordClient),
 ]

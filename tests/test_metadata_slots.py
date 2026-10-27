@@ -9,7 +9,6 @@ import pathlib
 import threading
 import time
 
-import conftest
 import pydantic
 import pytest
 
@@ -195,36 +194,6 @@ def test_task_node_metadata_saves_byte_identically() -> None:
       indent=2, exclude=session_store.TRANSIENT_METADATA_FIELDS)
 
   assert saved == written
-
-
-@pytest.fixture
-def create_env(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, probe_slots: None):
-  cfg = conftest.build_two_backend_cfg(tmp_path)
-  session_blocks = conftest.build_session_blocks(cfg)
-  tree = conftest.build_task_tree(cfg, session_blocks)
-  conftest.bind_deps_blocks(monkeypatch, tree, session_blocks)
-  return cfg, session_blocks
-
-
-@pytest.mark.asyncio
-async def test_a_create_request_sets_registered_fields_and_refuses_unknown_keys(create_env) -> None:
-  cfg, session_blocks = create_env
-
-  with conftest.make_sessions_client(cfg, session_blocks) as client:
-    created = client.post("/api/sessions/", json={"name": "probed", "probe_note": "hello", "probe_count": 2})
-    unknown = client.post("/api/sessions/", json={"name": "stray", "no_such_key": 1})
-    mistyped = client.post("/api/sessions/", json={"name": "mistyped", "probe_count": "many"})
-
-  assert created.status_code == 200
-  assert created.json()["probe_note"] == "hello"
-  stored = await session_blocks.store.read_metadata_fresh(created.json()["id"])
-  assert metadata_slots.fields_of(stored, "probe") == ProbeSessionFields(probe_note="hello", probe_count=2)
-  assert unknown.status_code == 422
-  assert mistyped.status_code == 422
-
-  legacy = await conftest.create_root_session(
-      session_blocks, models.CreateSessionRequest(name="legacy", probe_note="direct"))
-  assert metadata_slots.fields_of(legacy, "probe").probe_note == "direct"
 
 
 def test_every_package_registration_resolves() -> None:

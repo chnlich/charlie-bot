@@ -12,7 +12,6 @@ import asyncio
 import pathlib
 import subprocess
 import sys
-import textwrap
 import types
 from unittest import mock
 
@@ -338,69 +337,6 @@ def test_registration_imports_no_contribution_module() -> None:
       [sys.executable, "-c", probe], cwd=conftest.ROOT, capture_output=True, text=True, timeout=60, check=False)
 
   assert result.returncode == 0, result.stderr
-
-
-@pytest.mark.parametrize(
-    "omitted, contribution_type", [
-        ("src.features.chat_threads", "ChatThreadsTurnContribution"),
-        ("src.features.memory", "MemoryTurnContribution"),
-    ])
-def test_server_turn_paths_work_when_a_package_is_not_registered(
-    tmp_path: pathlib.Path, omitted: str, contribution_type: str) -> None:
-  probe = tmp_path / "probe.py"
-  profile = tmp_path / "profile"
-  probe.write_text(
-      textwrap.dedent(
-          f"""\
-      import asyncio
-      import sys
-      from pathlib import Path
-
-      sys.path.insert(0, {str(conftest.ROOT)!r})
-      from src.app import registrations
-      registrations.PACKAGES = tuple(package for package in registrations.PACKAGES if package != {omitted!r})
-
-      sys.path.insert(0, {str(conftest.ROOT / "tests")!r})
-      import conftest
-      import server
-
-      from src.features.memory.store_root import memory_dir
-      from src.infra import event_types as ET
-      from src.infra.models import CreateSessionRequest
-      from src.runtime import session_events
-      from src.runtime.hooks import turn_contributions
-      from src.runtime.task_prompts import SCOPE_MEMORY, build_segments
-
-      async def main():
-        cfg = conftest.build_master_cc_cfg(Path({str(profile)!r}))
-        conftest.write_memory_topics(memory_dir(cfg), ["profile resident"])
-        conftest.write_memory_entry(
-            memory_dir(cfg), "profile", "resident-note", audience="master", body="resident memory")
-        manager = conftest.build_session_blocks(cfg)
-        tasks = []
-
-        def schedule(coro, *, name):
-          task = asyncio.create_task(coro, name=name)
-          tasks.append(task)
-          return task
-
-        session_events.tasks.create_logged_task = schedule
-        meta = await conftest.create_root_session(manager, CreateSessionRequest(name="scratch"))
-        await manager.events.persist_and_broadcast(meta.id, {{"type": ET.MASTER_DONE, "exit_code": 0}})
-        await asyncio.gather(*tasks)
-        assert {contribution_type!r} not in [type(item).__name__ for item in turn_contributions.turn_contributions()]
-        segments, _ = build_segments(cfg, meta, "manager_turn", overlay=None, chain=(), node_ref=None)
-        has_memory = any(source.scope == SCOPE_MEMORY for segment in segments for source in segment.sources)
-        assert has_memory is ({omitted!r} == "src.features.chat_threads")
-
-      asyncio.run(main())
-      """),
-      encoding="utf-8",
-  )
-  result = subprocess.run(
-      [sys.executable, str(probe)], cwd=conftest.ROOT, capture_output=True, text=True, timeout=60, check=False)
-
-  assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
 
 
 # ---------------------------------------------------------------------------

@@ -822,6 +822,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "charliebot-structure"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "serde_json",
+ "syn 2.0.119",
+ "tempfile",
+]
+
+[[package]]
 name = "charliebot-tasks"
 version = "0.1.0"
 dependencies = [

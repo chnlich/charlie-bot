@@ -1,0 +1,17 @@
+# Rows record the module cycles that predate the structure test. Rows only leave this table.
+cycle charliebot-agents: backends::claude_code, backends::claude_code::claude_accounts, backends::claude_code::claude_compaction, backends::claude_code::claude_idle_compaction, backends::claude_code::claude_lifecycle, backends::claude_code::claude_relay, backends::claude_code::master_cc_relay, backends::claude_code::usage_logs, backends::claude_code::usage_quota, backends::claude_code::usage_sweep
+cycle charliebot-agents: backends::codex, backends::codex::factory, backends::codex::usage_logs
+cycle charliebot-agents: backends::opencode, backends::opencode::usage_logs, backends::opencode::usage_sweep
+cycle charliebot-agents: backends::opencode::backend, backends::opencode::server, cli_base, one_shot, runner
+cycle charliebot-agents: transport::kill, transport::spawn
+cycle charliebot-files: crate, listing
+cycle charliebot-host-auth: host_auth, probe
+cycle charliebot-registry: backend, context, lifespan, pages, registry, sequence, sidebar, store_hooks, turn, usage, wiring
+cycle charliebot-sched: cron::scheduler, cron::sequence_controller
+cycle charliebot-server: app, auth, request_log, routes, routes::pages, routes::static_mounts, routes::system, routes::websockets, state
+cycle charliebot-session-api: crate, detail, fork_routes, prompt_routes, routes, websocket, write_routes
+cycle charliebot-store: events, listing, projection, run_records, session_events, store, task_tree, thinking, write_faults
+cycle charliebot-tasks: dispatch, master_queue, master_run, master_state, midturn_delivery, task_input_prompt
+cycle charliebot-tasks: execution, recovery
+cycle charliebot-usage-page: cool_storage, crate
+cycle charliebot-web-reply: plan_links, status

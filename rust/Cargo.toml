@@ -5,6 +5,7 @@ members = [
     "crates/infra/core",
     "crates/infra/compat",
     "crates/app/server",
+    "crates/app/structure",
     "crates/runtime/tasks",
     "crates/infra/pyhtml",
     "crates/features/artifacts",
@@ -79,6 +80,7 @@ minijinja-contrib = { version = "2", features = ["pycompat"] }
 multer = "3.1"
 nix = { version = "0.30", features = ["fs", "process", "hostname", "user", "signal", "term", "ioctl"] }
 percent-encoding = "2"
+proc-macro2 = { version = "1", features = ["span-locations"] }
 procfs = { version = "0.18", default-features = false }
 regex = "1"
 rustix = { version = "1", features = ["process"] }
@@ -97,6 +99,7 @@ sha2 = "0.10"
 shellexpand = { version = "3", default-features = false, features = ["base-0"] }
 soft-canonicalize = "0.5"
 subtle = "2"
+syn = { version = "2", features = ["full", "visit"] }
 tar = "0.4"
 tempfile = "3"
 time = { version = "0.3", features = ["formatting", "parsing", "macros"] }

@@ -12,8 +12,9 @@ use charliebot_registry::backend::{AgentBackend, Env, FinalStdoutOutcome, Launch
 use regex::Regex;
 use serde_json::{Map, Value, json};
 
-use crate::backends::claude_code::SKIP_PERMISSIONS_FLAG;
-use crate::cli_base::{framed_prompt, int_field, prepend_path_dir, strip_google_api_keys, truthy};
+use crate::cli_base::{
+  SKIP_PERMISSIONS_FLAG, framed_prompt, int_field, prepend_path_dir, strip_google_api_keys, truthy,
+};
 use crate::event_builders::{make_error_event, make_result_event, make_text_event};
 
 /// The stderr line that `agy` prints when its turn outlives `--print-timeout`.

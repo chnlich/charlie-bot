@@ -1,10 +1,10 @@
 {
   "argv": [
-    "discord"
+    "publish"
   ],
   "expect": {
     "stdout": "",
-    "stderr": "{\"error\": \"discord is not ported to the Rust CLI yet\"}\n",
+    "stderr": "{\"error\": \"publish is not ported to the Rust CLI yet\"}\n",
     "exit": 1,
     "requests": []
   },

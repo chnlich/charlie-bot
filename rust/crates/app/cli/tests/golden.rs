@@ -527,7 +527,7 @@ fn run_case(case_path: &Path, record_command: Option<&str>) -> Result<(), String
     .expect("the stub lock")
     .iter()
     .map(RecordedRequest::to_value)
-    .map(|request| normalize_value(&request, &root))
+    .map(|request| normalize_value(&request, &root, stub.port))
     .collect();
   let scripted =
     if responses.iter().any(|response| response.get("refuse_connect").is_some()) { 0 } else { responses.len() };
@@ -694,13 +694,15 @@ fn normalize(text: &str, root: &str) -> String {
   text.replace(root, "{root}").split_inclusive('\n').filter(|line| !log_line.is_match(line)).collect()
 }
 
-/// Normalize temporary paths in the captured request so a recorded case can replay in a new temp root.
-fn normalize_value(value: &Value, root: &str) -> Value {
+/// Normalize temporary paths and the stub's dynamic port so a recorded case can replay in another run.
+fn normalize_value(value: &Value, root: &str, port: u16) -> Value {
   match value {
-    Value::String(text) => Value::String(normalize(text, root)),
-    Value::Array(items) => Value::Array(items.iter().map(|item| normalize_value(item, root)).collect()),
+    Value::String(text) => {
+      Value::String(normalize(text, root).replace(&format!("localhost:{port}"), "localhost:{port}"))
+    }
+    Value::Array(items) => Value::Array(items.iter().map(|item| normalize_value(item, root, port)).collect()),
     Value::Object(members) => {
-      Value::Object(members.iter().map(|(key, item)| (key.clone(), normalize_value(item, root))).collect())
+      Value::Object(members.iter().map(|(key, item)| (key.clone(), normalize_value(item, root, port))).collect())
     }
     other => other.clone(),
   }

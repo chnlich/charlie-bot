@@ -110,9 +110,15 @@ DEFAULT_SERVER_PORT = 18498
 # rust/crates/runtime/registry/src/registry.rs), set by each backend's register() in
 # rust/crates/backends/*/src/lib.rs.
 NO_REATTACH = {"opencode", "antigravity"}
-# Each backend is its own crate under rust/crates/backends from the crate split on; before it, all of them lived in
-# rust/crates/runtime/agents/src/backends. A build's tree says which layout it has, so each sha is read in its own.
-BACKEND_LAYOUTS = (("rust/crates/backends", "/src/lib.rs"), ("rust/crates/runtime/agents/src/backends", "/mod.rs"))
+# Each backend's registration has moved twice: rust/crates/charliebot-agents/src/backends/<backend>/mod.rs held it from
+# 7b680fcbb until the crate grouping at 03459e0ca, rust/crates/runtime/agents/src/backends/<backend>/mod.rs from
+# 03459e0ca until each backend's own crate at d1a07436f, and rust/crates/backends/<backend>/src/lib.rs from d1a07436f
+# on. A build's tree says which layout it has, so each sha is read in its own.
+BACKEND_LAYOUTS = (
+    ("rust/crates/charliebot-agents/src/backends", "/mod.rs"),
+    ("rust/crates/runtime/agents/src/backends", "/mod.rs"),
+    ("rust/crates/backends", "/src/lib.rs"),
+)
 rust_to_rust = source_impl.startswith("rust ") and target_impl == "rust"
 reattach_cache = {}
 

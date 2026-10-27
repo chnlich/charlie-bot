@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # CharlieBot server launcher — tees server logs to /tmp so they persist on disk.
 # Start/stop stays manual: runs in the foreground, Ctrl-C to stop.
-# A current link in the release root selects the Rust release; without it the Python server runs.
+# The current link in the release root selects the Rust release; without it the launcher refuses to start.
 #
 # Each server start has a timestamp-and-PID scope so earlier runs can keep their processes.
 # Before starting, the launcher checks the agents' slice against its unit file; a missing slice or different limit
@@ -149,20 +149,18 @@ main() {
   LOG_DIR="${CHARLIEBOT_LOG_DIR:-/tmp/charliebot-logs}"
   RELEASES_DIR="${CHARLIEBOT_RELEASES_DIR:-$HOME/charliebot-releases}"
   CURRENT="$RELEASES_DIR/current"
+
+  # -e or -L: a dangling current still counts as a release, so a broken release fails at --check-config.
+  if [ ! -e "$CURRENT" ] && [ ! -L "$CURRENT" ]; then
+    echo "launcher: no release at $CURRENT; select a verified release with scripts/switch-server.sh rust <sha>" >&2
+    exit 1
+  fi
   mkdir -p "$LOG_DIR"
   LOG="$LOG_DIR/server_${TS}.log"
   SERVER_SCOPE_NAME="charliebot-server-${TS}-$$"
   ln -sfn "$LOG" "$LOG_DIR/server-latest.log"   # stable pointer to the newest log
-
-  # -e or -L: a dangling current still selects Rust, so a broken release fails here instead of
-  # starting Python.
-  if [ -e "$CURRENT" ] || [ -L "$CURRENT" ]; then
-    IMPL=rust
-    RELEASE_SHA="$(basename "$(readlink -f "$CURRENT")")"
-    echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') launcher: implementation=rust release=${RELEASE_SHA}" | tee -a "$LOG"
-  else
-    IMPL=python
-  fi
+  RELEASE_SHA="$(basename "$(readlink -f "$CURRENT")")"
+  echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') launcher: implementation=rust release=${RELEASE_SHA}" | tee -a "$LOG"
 
   echo "CharlieBot server starting (repo: $REPO_ROOT)"
   echo "  log    -> $LOG"
@@ -178,21 +176,16 @@ main() {
   # -i makes tee ignore SIGINT: Ctrl-C reaches the whole foreground process group, and
   # tee must outlive it to record the server's shutdown lines, then ends on EOF when
   # the server exits.
-  if [ "$IMPL" = rust ]; then
-    # The release reads its configuration and venv from these two variables. --check-config validates the home without
-    # taking its writer lock or starting the server; a failure stops here with the binary's error and the rollback.
-    export CHARLIEBOT_REPO_ROOT="$REPO_ROOT" CHARLIEBOT_VENV_BIN="$REPO_ROOT/.venv/bin"
-    "$CURRENT/charliebot-server" --check-config
-    CHECK_RC=$?
-    if [ "$CHECK_RC" -ne 0 ]; then
-      echo "launcher: --check-config failed (rc=${CHECK_RC}); roll back with: scripts/switch-server.sh python"
-      exit "$CHECK_RC"
-    fi
-    run_in_scope "$SERVER_SCOPE_NAME" "$CURRENT/charliebot-server" 2>&1 | tee -i -a "$LOG"
-  else
-    # PYTHONUNBUFFERED: avoid block buffering when piped, so log lines flush promptly.
-    PYTHONUNBUFFERED=1 run_in_scope "$SERVER_SCOPE_NAME" uv run python3 server.py 2>&1 | tee -i -a "$LOG"
+  # The release reads its configuration and venv from these two variables. --check-config validates the home without
+  # taking its writer lock or starting the server; a failure stops here with the binary's error and the rollback.
+  export CHARLIEBOT_REPO_ROOT="$REPO_ROOT" CHARLIEBOT_VENV_BIN="$REPO_ROOT/.venv/bin"
+  "$CURRENT/charliebot-server" --check-config
+  CHECK_RC=$?
+  if [ "$CHECK_RC" -ne 0 ]; then
+    echo "launcher: --check-config failed (rc=${CHECK_RC}); roll back with: scripts/switch-server.sh rust <previous-sha>"
+    exit "$CHECK_RC"
   fi
+  run_in_scope "$SERVER_SCOPE_NAME" "$CURRENT/charliebot-server" 2>&1 | tee -i -a "$LOG"
   SERVER_RC="${PIPESTATUS[0]}"
   EXIT_LINE="$(date '+%Y-%m-%d %H:%M:%S.%3N') launcher: server exited rc=${SERVER_RC}"
   echo "$EXIT_LINE" >> "$LOG"

@@ -1,0 +1,31 @@
+{
+  "argv": [
+    "delegate",
+    "--session",
+    "archived-session",
+    "--repo",
+    "{root}/repo",
+    "--base-branch",
+    "main",
+    "--task-spec-file",
+    "{root}/task_spec.md",
+    "--keep-worktree",
+    "0"
+  ],
+  "cwd": "{root}/home/sessions/live-session",
+  "env": {
+    "CHARLIEBOT_SESSION_ID": "live-session"
+  },
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n",
+    "repo/": "",
+    "task_spec.md": "## Goal\nDo work.\n\n## Source Files\n- (none)\n\n## Required Behavior\nImplement the requested behavior.\n\n## Acceptance Tests\nRun focused tests.\n\n## Reviewer Checklist\nCheck the contract.\n\n## Out of Scope\nDo not change unrelated files.\n"
+  },
+  "responses": [],
+  "expect": {
+    "stdout": "",
+    "stderr": "{\"error\": \"session id mismatch: --session=archived-session CHARLIEBOT_SESSION_ID=live-session; refusing to use an ambiguous session\"}\n",
+    "exit": 2,
+    "requests": []
+  }
+}

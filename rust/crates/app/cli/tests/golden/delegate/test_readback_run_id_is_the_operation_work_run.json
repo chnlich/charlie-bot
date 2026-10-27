@@ -1,0 +1,61 @@
+{
+  "argv": [
+    "delegate",
+    "--session",
+    "s1",
+    "--task-spec-file",
+    "{root}/task_spec.md",
+    "--keep-worktree",
+    "0",
+    "--request-id",
+    "delegate-runcheck",
+    "--task-type",
+    "quick-edit"
+  ],
+  "cwd": "{root}",
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n",
+    "home/sessions/e2ead721-e43a-59c0-83d2-59a39bebb363/metadata.json": "{\"id\":\"e2ead721-e43a-59c0-83d2-59a39bebb363\",\"name\":\"worker\",\"profile\":\"worker\",\"task_parent_id\":\"s1\",\"task\":{\"goal\":\"## Goal\\nThe spec.\\n\\n## Source Files\\n- (none)\\n\\n## Required Behavior\\nDo work.\\n\\n## Acceptance Tests\\nCheck it.\\n\\n## Reviewer Checklist\\nReview it.\\n\\n## Out of Scope\\nNone.\\n\",\"task_type\":\"quick-edit\"}}",
+    "home/sessions/e2ead721-e43a-59c0-83d2-59a39bebb363/data/runs/cd411e3f-6ca6-54a7-8afa-47c32c2267b4/metadata.json": "{}",
+    "home/sessions/e2ead721-e43a-59c0-83d2-59a39bebb363/data/runs/ad4e21a1-c02a-5af7-82d6-64214de17714/metadata.json": "{}",
+    "task_spec.md": "## Goal\nThe spec.\n\n## Source Files\n- (none)\n\n## Required Behavior\nDo work.\n\n## Acceptance Tests\nCheck it.\n\n## Reviewer Checklist\nReview it.\n\n## Out of Scope\nNone.\n"
+  },
+  "responses": [
+    {
+      "drop_after_request": true
+    }
+  ],
+  "expect": {
+    "stdout": "{\n  \"session_id\": \"e2ead721-e43a-59c0-83d2-59a39bebb363\",\n  \"run_id\": \"cd411e3f-6ca6-54a7-8afa-47c32c2267b4\"\n}\n",
+    "stderr": "Worker spawned in the background; the completion summary arrives as an async wake-up.\n",
+    "exit": 0,
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/api/internal/delegate",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "session_id": "s1",
+          "description": "## Goal\nThe spec.\n\n## Source Files\n- (none)\n\n## Required Behavior\nDo work.\n\n## Acceptance Tests\nCheck it.\n\n## Reviewer Checklist\nReview it.\n\n## Out of Scope\nNone.\n",
+          "keep_worktree": false,
+          "task_type": "quick-edit",
+          "delegate_invocation": {
+            "task_type": "quick-edit",
+            "repo_path": null,
+            "base_branch": null,
+            "task_spec_file": "{root}/task_spec.md",
+            "reviewer_context_file": null,
+            "keep_worktree": false,
+            "backend": null
+          },
+          "request_id": "delegate-runcheck"
+        }
+      }
+    ]
+  }
+}

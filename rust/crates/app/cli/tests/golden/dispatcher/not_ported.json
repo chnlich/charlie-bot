@@ -1,11 +1,10 @@
 {
   "argv": [
-    "delegate",
-    "--help"
+    "discord"
   ],
   "expect": {
     "stdout": "",
-    "stderr": "{\"error\": \"delegate is not ported to the Rust CLI yet\"}\n",
+    "stderr": "{\"error\": \"discord is not ported to the Rust CLI yet\"}\n",
     "exit": 1,
     "requests": []
   },

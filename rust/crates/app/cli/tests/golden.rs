@@ -60,13 +60,25 @@ fn golden_cases() {
   assert!(failures.is_empty(), "{} golden case(s) failed:\n{}", failures.len(), failures.join("\n"));
 }
 
-/// The Python tests this task ports through golden cases, each pinned by a case file whose name
-/// starts with it. `test_connect_never_established_retries_with_backoff_then_exhausts` and
+/// Python test names backed by golden cases, each pinned by a case file whose name starts with it.
+/// `test_connect_never_established_retries_with_backoff_then_exhausts` and
 /// `test_post_sends_json_body_content_type_and_auth_header_over_the_real_client` are Rust tests in
 /// `charliebot-cli-common`, and `test_port_cache_hit_serves_the_cached_port_in_a_fresh_process` has
 /// no Rust counterpart — no port cache, so `changed_server_port_takes_effect_on_the_next_call`
 /// replaces it.
 const PORTED_PYTHON_TESTS: &[&str] = &[
+  "test_main_routes_by_session_env_from_another_session_dir",
+  "test_main_rejects_explicit_session_against_session_env",
+  "test_main_prints_only_session_and_run_id_from_server_result",
+  "test_main_prints_readback_ids_when_the_response_is_lost",
+  "test_main_posts_task_spec_file_to_delegate_endpoint",
+  "test_main_verify_posts_repoless_payload",
+  "test_main_repo_less_delegation_posts_no_repo_fields",
+  "test_main_uses_error_detail_from_response",
+  "test_session_id_reaches_payload_from_cwd_or_flag",
+  "test_two_same_spec_siblings_readback_binds_to_request_identity",
+  "test_readback_returns_none_without_the_bound_child",
+  "test_readback_run_id_is_the_operation_work_run",
   "test_resolve_session_id_sources_without_env",
   "test_resolve_session_id_rejects_mismatches_without_env",
   "test_resolve_session_id_env_outranks_cwd",
@@ -432,8 +444,14 @@ fn run_case(case_path: &Path, record_command: Option<&str>) -> Result<(), String
   let _ = child.stderr.take().expect("stderr piped").read_to_end(&mut stderr_bytes);
   stub.stop();
 
-  let requests: Vec<Value> =
-    stub.requests.lock().expect("the stub lock").iter().map(RecordedRequest::to_value).collect();
+  let requests: Vec<Value> = stub
+    .requests
+    .lock()
+    .expect("the stub lock")
+    .iter()
+    .map(RecordedRequest::to_value)
+    .map(|request| normalize_value(&request, &root))
+    .collect();
   let scripted =
     if responses.iter().any(|response| response.get("refuse_connect").is_some()) { 0 } else { responses.len() };
   if requests.len() > scripted {
@@ -587,6 +605,18 @@ fn normalize(text: &str, root: &str) -> String {
       .expect("the structlog console prefix is a valid regex")
   });
   text.replace(root, "{root}").split_inclusive('\n').filter(|line| !log_line.is_match(line)).collect()
+}
+
+/// Normalize temporary paths in the captured request so a recorded case can replay in a new temp root.
+fn normalize_value(value: &Value, root: &str) -> Value {
+  match value {
+    Value::String(text) => Value::String(normalize(text, root)),
+    Value::Array(items) => Value::Array(items.iter().map(|item| normalize_value(item, root)).collect()),
+    Value::Object(members) => {
+      Value::Object(members.iter().map(|(key, item)| (key.clone(), normalize_value(item, root))).collect())
+    }
+    other => other.clone(),
+  }
 }
 
 fn replace_uuid4(text: &str) -> String {

@@ -9,7 +9,7 @@ not confirmed from source, with the reason.
 ## 0. The Rust port
 
 The Rust CLI lives in `rust/crates/app/cli` (binary `charliebot`) with the shared client contract in
-`rust/crates/infra/cli-common`. The `session` rows and the `plan` / `artifact check` rows in section 3 marked
+`rust/crates/infra/cli-common`. The `session`, `delegate`, `plan` and `artifact check` rows in section 3 marked
 *ported to Rust* run on the Rust binary; every other subcommand prints
 `{"error": "<name> is not ported to the Rust CLI yet"}` and exits 1, and the six caller-less Python names
 (`config`, `disk-sweep`, `router`, `storage`, `usage-ledger`, `voice-replay-eval`) are unknown subcommands
@@ -84,7 +84,7 @@ below.
 | `artifact wrap <fragment> --genre G --output OUT [--math\|--no-math]` | none | Reads the fragment and the genre template; writes `OUT`; with math on, may fetch `<home>/vendor/katex/katex.min.js` (`files.md` 5.12) and runs `node` | 0; 1 a failed assembly or byte self-check; 2 usage (missing fragment) | not ported (task cli-wrap-publish) |
 | `compaction-context --session SID --slot N` | none | Reads `sessions/<sid>/data/chat_events.jsonl` and current skill files from `<home>/skills/` or the repository's `skills/` directory. A named path in a Read or Bash event is tried first. Non-plain path patterns and unresolved skills are skipped and reported. Writes nothing. | 0 prints the SessionStart hook JSON for a non-empty slot; 1 on an unreadable log, invalid event JSON or unreadable skill; 2 usage |  |
 | `config get <key>` | none | Reads `config.yaml` | 0 prints the value; 1 the value is null; 2 unknown key |  |
-| `delegate --task-spec-file F --keep-worktree {0,1} [--session] [--repo] [--base-branch] [--backend] [--request-id] [--task-type]` | `POST /api/internal/delegate`, with a readback | Reads `F`. Without `--request-id`, the server derives `delegate-<sha256[:24]>` (`files.md` section 3), and the readback uses the same derivation. | 0 prints `{"session_id", "run_id"}` as indented JSON (`src/runtime/cli/delegate.py:199`), not the server's whole answer; 1 client contract; 2 usage |  |
+| `delegate --task-spec-file F --keep-worktree {0,1} [--session] [--repo] [--base-branch] [--backend] [--request-id] [--task-type]` | `POST /api/internal/delegate`, with a readback | Reads `F`. Without `--request-id`, the server derives `delegate-<sha256[:24]>` (`files.md` section 3), and the readback uses the same derivation. | 0 prints `{"session_id", "run_id"}` as indented JSON (`src/runtime/cli/delegate.py:199`), not the server's whole answer; 1 client contract; 2 usage | *ported to Rust*; Clap help and parser-generated usage text may differ in layout and wording |
 | `discord reply --file F [--session]` | `POST /api/internal/discord/reply` | Reads `F` | 0; 1; 2 |  |
 | `discord read [--url] [--limit N] [--session]` | `POST /api/internal/discord/read` | none | 0; 1; 2 (`--limit` out of range) |  |
 | `discord check` | `POST /api/internal/discord/check` | none | 0 when the result's `ok` is true; 1 otherwise or on error |  |

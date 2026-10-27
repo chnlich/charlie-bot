@@ -19,11 +19,12 @@ mod utc_datetime;
 
 use std::sync::Arc;
 
-use charliebot_core::config::CharlieBotConfig;
 use charliebot_registry::context::FeatureContext;
 use charliebot_registry::pages::HomeCard;
 use charliebot_registry::{Registry, RegistryError};
 use futures_util::FutureExt;
+
+use crate::capture::capture_into_default_ledger;
 
 pub use capture::{capture_charliebot, capture_local, capture_runs, capture_usage};
 pub use count::Count;
@@ -44,18 +45,6 @@ pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.scheduled_handler("usage_ledger", run_usage_ledger)?;
   registry.scheduled_handler("cool_storage", cool_storage::run_handler)?;
   registry.startup_check("backend_ids", backend_ids::check_backend_ids)
-}
-
-/// The capture both scheduled handlers run: this host's sources into the default ledger. The cold-storage sweep runs it
-/// before any deletion, so a failure here stops the sweep.
-pub(crate) fn capture_into_default_ledger(
-  config: &CharlieBotConfig,
-  registry: &Registry,
-) -> anyhow::Result<Vec<(String, usize)>> {
-  let mut ledger = UsageLedger::open(default_ledger_path(&config.charliebot_home))?;
-  let written = capture_local(&mut ledger, config, registry)?;
-  ledger.close()?;
-  Ok(written)
 }
 
 fn run_usage_ledger(context: Arc<FeatureContext>) -> futures_util::future::BoxFuture<'static, anyhow::Result<String>> {

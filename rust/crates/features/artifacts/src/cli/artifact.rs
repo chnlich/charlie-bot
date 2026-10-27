@@ -381,10 +381,10 @@ mod tests {
 
   #[test]
   fn test_cli_assertions_only_passes_a_page_over_the_height_target() {
-    // Python: tests/core/test_artifact_check.py, with the renderer's measured height injected so no browser starts.
+    // Python: tests/core/test_artifact_check.py. The fake Chrome is the chrome-stub helper; its measured height is
+    // injected, as `test_support::plan_session` does, so no renderer runs.
     let home = tempfile::tempdir().unwrap();
-    let chrome = home.path().join("stub-chrome-2600.sh");
-    std::fs::write(&chrome, "#!/bin/sh\nexit 0\n").unwrap();
+    let chrome = crate::test_support::chrome_program(home.path(), json!([{"exit": 0}]));
     crate::headless_render::set_test_height(&chrome, 2600);
     std::fs::write(home.path().join("config.yaml"), format!("headless_chrome_bin: {}\n", chrome.display())).unwrap();
     let artifact = home.path().join("page.html");

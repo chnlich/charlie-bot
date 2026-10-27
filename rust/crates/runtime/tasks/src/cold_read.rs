@@ -6,7 +6,15 @@
 //! same lines.
 
 use std::path::Path;
+use std::sync::Arc;
 
+use anyhow::bail;
+use charliebot_agents::backend_pool::is_quota_error;
+use charliebot_agents::cli_host::CliHost;
+use charliebot_agents::{backend_types, one_shot_text};
+use charliebot_core::pyfmt::{self, JsonStyle};
+use charliebot_registry::backend::LaunchArgs;
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::spawner_prompt;
@@ -15,6 +23,11 @@ use crate::spawner_prompt;
 pub const PROMPT_FILENAME: &str = "cold_read.md";
 const SYSTEM_SECTION: &str = "system_prompt";
 const QUESTIONS_SECTION: &str = "questions";
+const ASK_SYSTEM_SECTION: &str = "ask_system_prompt";
+const ASK_QUESTIONS_SECTION: &str = "ask_questions";
+/// `json.dumps(item, ensure_ascii=False, indent=2)`: the item JSON an ask probe carries.
+const ITEM_JSON: JsonStyle =
+  JsonStyle { ensure_ascii: false, sort_keys: false, item_separator: ",", key_separator: ": ", indent: Some(2) };
 /// The placeholder in the questions that the trigger message replaces.
 pub const TRIGGER_PLACEHOLDER: &str = "<trigger message verbatim>";
 
@@ -50,6 +63,70 @@ pub fn load_texts(repo: &Path) -> anyhow::Result<(String, String)> {
 /// The cold-read run's whole input: the page text, one blank line, then the questions with the trigger filled in.
 pub fn probe_input(page_text: &str, questions: &str, trigger: &str) -> String {
   format!("{page_text}\n\n{}", questions.replace(TRIGGER_PLACEHOLDER, trigger))
+}
+
+/// The system prompt and the five questions one Waiting on you item is cold-read with, read fresh from
+/// `prompts/cold_read.md` (`load_ask_texts`).
+pub fn load_ask_texts(repo: &Path) -> anyhow::Result<(String, String)> {
+  let sections = spawner_prompt::load_marker_sections(
+    &repo.join("prompts").join(PROMPT_FILENAME),
+    &[ASK_SYSTEM_SECTION, ASK_QUESTIONS_SECTION],
+    "cold-read",
+  )?;
+  Ok((
+    sections[ASK_SYSTEM_SECTION].trim_end_matches('\n').to_string(),
+    sections[ASK_QUESTIONS_SECTION].trim_end_matches('\n').to_string(),
+  ))
+}
+
+/// The ask probe's whole input: the item JSON, the host-served page text when there is one, then the questions
+/// (`ask_probe_input`), joined by blank lines.
+pub fn ask_probe_input(item: &Value, linked_page: Option<&str>, questions: &str) -> String {
+  let mut pieces = vec![pyfmt::json_dumps(item, &ITEM_JSON)];
+  if let Some(page) = linked_page {
+    pieces.push(page.to_string());
+  }
+  pieces.push(questions.to_string());
+  pieces.join("\n\n")
+}
+
+/// The outcome of one light-backend probe: the failed attempts in order, then the answering backend and its verbatim
+/// answer when one answers.
+pub struct LightProbe {
+  pub attempts: Vec<(String, String)>,
+  pub backend_id: Option<String>,
+  pub answer: Option<String>,
+}
+
+/// `run_light_probe`: sends `prompt` to each light backend in pool rotation with no timeout. A backend that fails is
+/// recorded and the next member tried; a quota failure cools that member. Fails when `backends.pool` is empty.
+pub async fn run_light_probe(host: &CliHost, prompt: &str, system_prompt: &str) -> anyhow::Result<LightProbe> {
+  if host.cfg.backends.pool.is_empty() {
+    bail!("no light backends resolvable: backends.pool is empty");
+  }
+  let mut attempts = Vec::new();
+  let mut tried: Vec<String> = Vec::new();
+  while let Some(option) = host.pool.select(&host.cfg, "light_oneshot", &tried)? {
+    tried.push(option.id.clone());
+    let outcome =
+      match backend_types::build_backend(Arc::clone(&host.registry), &option, &host.cfg, LaunchArgs::default()) {
+        Ok(built) => one_shot_text(built, &host.base_env.values, prompt, system_prompt, None).await,
+        Err(error) => Err(error),
+      };
+    match outcome {
+      Ok(answer) => {
+        return Ok(LightProbe { attempts, backend_id: Some(option.id), answer: Some(answer) });
+      }
+      Err(error) => {
+        let message = format!("{error:#}");
+        if is_quota_error(&message) {
+          host.pool.cool(&option.id, None);
+        }
+        attempts.push((option.id, message));
+      }
+    }
+  }
+  Ok(LightProbe { attempts, backend_id: None, answer: None })
 }
 
 /// The cold-read report body: the page and its sha256, one `attempt` line per failed run in order, then the answering

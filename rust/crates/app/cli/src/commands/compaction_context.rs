@@ -12,7 +12,6 @@
 //! The repository's `skills/` directory comes from `CHARLIEBOT_REPO_ROOT`, the Rust stand-in for
 //! Python's package-location-derived `constants.REPO_ROOT`.
 
-use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -126,7 +125,10 @@ fn latest_skill_reads(events_path: &Path) -> Result<Vec<SkillRead>, String> {
   let text = decode_utf8(&bytes)?;
   // Python's file iteration hands json.loads each physical line with its terminator, so the JSON
   // error positions see the same string here (`split_inclusive` keeps it).
-  let mut latest: HashMap<String, SkillRead> = HashMap::new();
+  // Python's `latest` dict keeps a name's first position and overwrites its value on a later read.
+  // Reads from one event share a key, and the stable sort keeps dict order for them, so a `Vec`
+  // in first-seen order is the same answer; a `HashMap` would reorder them from run to run.
+  let mut latest: Vec<SkillRead> = Vec::new();
   for (order, line) in text.split_inclusive('\n').enumerate() {
     let event = serde_json::from_str::<Value>(line).map_err(|error| python_json_error(line, &error))?;
     let Some(message) = assistant_message(&event) else { continue };
@@ -138,18 +140,19 @@ fn latest_skill_reads(events_path: &Path) -> Result<Vec<SkillRead>, String> {
       }
       for (name, named_path, command_cwd) in reads_from_tool(block) {
         let read = SkillRead { read_at: timestamp(&event)?, order, name, named_path, command_cwd };
-        match latest.get(&read.name) {
-          Some(previous) if (previous.read_at, previous.order) >= (read.read_at, read.order) => {}
-          _ => {
-            latest.insert(read.name.clone(), read);
+        match latest.iter_mut().find(|previous| previous.name == read.name) {
+          Some(previous) => {
+            if (read.read_at, read.order) > (previous.read_at, previous.order) {
+              *previous = read;
+            }
           }
+          None => latest.push(read),
         }
       }
     }
   }
-  let mut reads: Vec<SkillRead> = latest.into_values().collect();
-  reads.sort_by_key(|read| std::cmp::Reverse((read.read_at, read.order)));
-  Ok(reads)
+  latest.sort_by_key(|read| std::cmp::Reverse((read.read_at, read.order)));
+  Ok(latest)
 }
 
 /// The event's `message` when the event is an assistant message with a mapping payload.

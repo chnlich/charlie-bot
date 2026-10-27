@@ -61,7 +61,7 @@ CharlieBot is a self-hosted multi-agent orchestration system: a master agent dri
 
 ## Prerequisites
 
-- Python 3.14 (uv installs it) and git (worker tasks run in git worktrees)
+- Python 3.14 (uv installs it; the `charliebot` CLI runs on it) and git (worker tasks run in git worktrees)
 - Node.js is only needed for frontend development
 
 ## Quick start
@@ -103,12 +103,9 @@ CharlieBot is a self-hosted multi-agent orchestration system: a master agent dri
 
 ## Repository layout
 
-- `src/infra/` — config, models, logging, process, git and HTTP helpers; imports nothing else from `src`
-- `src/runtime/` — sessions, task tree, master and worker runs, agent processes, core API routers and CLI commands
-- `src/backends/` — one package per agent backend (`claude_code`, `codex`, `opencode`, ...)
-- `src/features/` — one package per feature (`cron`, `improve`, `slack`, `usage`, ...) with its logic and `cli.py`
-- `src/app/` — composition root: page routes and the `charliebot` command table
-- `web/` — Jinja2 templates + vanilla JS static assets
+- `rust/crates/` — the server that runs: `app/server` is the `charliebot-server` entry point, `app/cli` holds the Rust CLI commands, `runtime/` carries the task tree, agent processes and the session store, `features/` one crate per feature, `infra/` the shared foundations
+- `src/` — the Python `charliebot` CLI (the "CLI at a glance" commands still run here) plus the modules the Rust test oracles and the parity harness still import; later tasks delete these as the CLI ports
+- `web/` — Jinja2 templates + vanilla JS static assets, served by the Rust server
 - `skills/` — repo-shared agent skills
 - `prompts/` — agent prompt definitions
 - `scripts/` — operator scripts: setup, server launcher, skill sync, charlie-code preflight

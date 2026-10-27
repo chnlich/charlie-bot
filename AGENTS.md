@@ -43,7 +43,7 @@
 - Verify changes on a synthetic `CHARLIEBOT_HOME`.
 - Use a trial home with `charliebot-server` to test real delayed triggers.
 - Copy a session directory with its CLI continuity files when staging it in another home.
-- Child agents inherit `CHARLIEBOT_HOME` through `task_execution._child_env`.
+- Child agents inherit the server's environment, `CHARLIEBOT_HOME` included, through `agent_environment` (`rust/crates/runtime/agents/src/agent_environment.rs`).
 - Assign a fresh path to a scratch home. Delete only that path.
 - Remove agent CLIs from `PATH` and assert that a probe launches zero child processes.
 

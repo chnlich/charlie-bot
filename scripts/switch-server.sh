@@ -74,7 +74,7 @@ fail() { log "preflight failed: $*"; exit 1; }
 # (pid, pid start); `outcome` reads the terminal fact so readback can distinguish a completed run from one the stop
 # killed.
 home_helper() {
-  python3 -I - "$HOME_DIR" "$@" <<'PY'
+  python3 -I - "$HOME_DIR" "$@" "${OLD_IMPL:-python}" "$MODE" <<'PY'
 import datetime
 import json
 import pathlib
@@ -91,6 +91,10 @@ DEFAULT_SERVER_PORT = 18498
 # rust/crates/runtime/registry/src/registry.rs), set by each backend's register() in
 # rust/crates/runtime/agents/src/backends/*/mod.rs.
 NO_REATTACH = {"opencode", "antigravity"}
+# Owner: BackendTraits.restart_reattach in rust/crates/runtime/agents/src/backends/*/mod.rs.
+RUST_NO_REATTACH = {"opencode"}
+source_impl, target_impl = sys.argv[-2:]
+no_reattach = RUST_NO_REATTACH if source_impl.startswith("rust ") and target_impl == "rust" else NO_REATTACH
 
 
 def proc_stat(pid):
@@ -146,7 +150,7 @@ elif mode == "scan":
     if backend_type is None:
       print(f"block\tbackend {backend!r} of run {run['id']} (pid {run['pid']}) is not in backends.options; "
             "restart re-attachment is unknown")
-    elif backend_type in NO_REATTACH:
+    elif backend_type in no_reattach:
       print(f"block\t{backend} run {run['id']} (type {backend_type}, pid {run['pid']}) "
             "cannot be re-attached after a restart")
   # A loop's controller runs inside the server process; a restart never resumes it (rust/crates/runtime/tasks/src/recovery.rs).
@@ -731,18 +735,21 @@ preflight() {
   OLD_SHA="$(git -C "$REPO_ROOT" rev-parse HEAD)"
   [ -z "$(git -C "$REPO_ROOT" status --porcelain --untracked-files=no)" ] \
     || fail "runtime clone $REPO_ROOT has local changes"
-  git -C "$REPO_ROOT" cat-file -e "$BASE^{commit}" 2> /dev/null \
-    || fail "baseline $BASE is not in the runtime clone; fetch origin first"
-  git -C "$REPO_ROOT" merge-base --is-ancestor "$OLD_SHA" "$BASE" \
-    || fail "runtime clone HEAD $OLD_SHA is not an ancestor of baseline $BASE"
-  CHARLIEBOT_HOME="$HOME_DIR" CHARLIEBOT_REPO_ROOT="$REPO_ROOT" CHARLIEBOT_VENV_BIN="$REPO_ROOT/.venv/bin" \
-    "$RELEASE_DIR/charliebot-server" --check-config \
-    || fail "--check-config of $TARGET_SHA rejects the home $HOME_DIR"
-  scan_home || fail "cannot read the run records in $HOME_DIR"
-  [ -z "$BLOCKERS" ] || fail "a restart would lose live work: ${BLOCKERS//$'\n'/; }"
+  if [ "$MODE" = rust ]; then
+    git -C "$REPO_ROOT" cat-file -e "$BASE^{commit}" 2> /dev/null \
+      || fail "baseline $BASE is not in the runtime clone; fetch origin first"
+    git -C "$REPO_ROOT" merge-base --is-ancestor "$OLD_SHA" "$BASE" \
+      || fail "runtime clone HEAD $OLD_SHA is not an ancestor of baseline $BASE"
+    CHARLIEBOT_HOME="$HOME_DIR" CHARLIEBOT_REPO_ROOT="$REPO_ROOT" CHARLIEBOT_VENV_BIN="$REPO_ROOT/.venv/bin" \
+      "$RELEASE_DIR/charliebot-server" --check-config \
+      || fail "--check-config of $TARGET_SHA rejects the home $HOME_DIR"
+  fi
   CONFIG="$(home_helper config)" || fail "cannot read $HOME_DIR/config.yaml and credentials.yaml"
   PORT="$(sed -n 1p <<<"$CONFIG")"
   KEY="$(sed -n 2p <<<"$CONFIG")"
+  OLD_IMPL="$(listener_impl)"
+  scan_home || fail "cannot read the run records in $HOME_DIR"
+  [ -z "$BLOCKERS" ] || fail "a restart would lose live work: ${BLOCKERS//$'\n'/; }"
   [ -n "$KEY" ] || fail "no charliebot.access_key in $HOME_DIR/credentials.yaml"
   "$REPO_ROOT/scripts/start-server.sh" --preflight || fail "launcher preflight failed"
   [ "$(listener_pids | grep -c .)" -eq 1 ] || fail "expected one server listening on port $PORT"

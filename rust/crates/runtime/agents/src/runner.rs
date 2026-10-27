@@ -1,8 +1,6 @@
 //! The raw-log `AgentBackend.run` template method.
 
 use std::collections::HashMap;
-use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -24,17 +22,17 @@ use tokio::sync::watch;
 use crate::agent_environment::AgentBaseEnvironment;
 use crate::launch_loop::{self, ChildEnvPolicy};
 use crate::transport::cgroup::{SessionCgroup, SessionCgroupConfig};
+use crate::transport::final_stdout;
 use crate::transport::follow::{self, FollowSummary};
 use crate::transport::identity::{self, ProcessIdentity};
 use crate::transport::kill::{self, python_exit_code};
 use crate::transport::rotation::rotate_stale_transport;
-use crate::transport::spawn::{self, AgentChild, RawStdin, SpawnSpec};
+use crate::transport::spawn::{self, AgentChild, RawStdin, SpawnSpec, read_stderr_tail};
 
 pub const DEFAULT_POST_RESULT_TIMEOUT: Duration = Duration::from_secs(90);
 pub const DEFAULT_CLEANUP_TIMEOUT: Duration = Duration::from_secs(30);
-const STDERR_TAIL_BYTES: u64 = 64 * 1024;
-/// The file a final-stdout process's whole output is teed into (`antigravity_cli.py` `run`).
-const FINAL_STDOUT_LOG_NAME: &str = "stdout.log";
+#[cfg(test)]
+const FINAL_STDOUT_LOG_NAME: &str = final_stdout::STDOUT_LOG_NAME;
 const DIAGNOSTIC_CAPTURE_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Callback invoked after the child identity is pinned and before tail-follow begins.
@@ -55,6 +53,8 @@ pub struct RunRequest {
   pub session_id: Option<String>,
   pub cgroup_config: SessionCgroupConfig,
   pub on_spawn: Option<OnSpawnFn>,
+  /// Executable that implements the capture supervisor entry point; None uses the running server executable.
+  pub final_stdout_supervisor: Option<PathBuf>,
   child_waits_for_spawn_callback: bool,
   pub on_event: EventFn,
   pub post_result_timeout: Duration,
@@ -81,6 +81,7 @@ impl RunRequest {
       session_id: None,
       cgroup_config,
       on_spawn: None,
+      final_stdout_supervisor: None,
       child_waits_for_spawn_callback: false,
       on_event: Arc::new(|_| Box::pin(async { Ok(()) })),
       post_result_timeout: DEFAULT_POST_RESULT_TIMEOUT,
@@ -222,14 +223,15 @@ impl AgentRunner {
     rotate_stale_transport(&log_dir, &raw_path, &stderr_path, &cursor_path)?;
     let buffer_limit = self.launch.buffer_limit.unwrap_or(follow::DEFAULT_BUFFER_LIMIT);
     let original_program = command.first().context("backend command is empty")?.clone();
-    let (program, args): (std::ffi::OsString, Vec<std::ffi::OsString>) = if request.child_waits_for_spawn_callback {
-      let mut args =
-        vec!["-c".into(), "kill -STOP $$; exec \"$@\"".into(), "charliebot-run-gate".into(), original_program.into()];
-      args.extend(command.iter().skip(1).cloned().map(Into::into));
-      ("/bin/sh".into(), args)
-    } else {
-      (original_program.into(), command.iter().skip(1).cloned().map(Into::into).collect())
-    };
+    let (program, args): (std::ffi::OsString, Vec<std::ffi::OsString>) =
+      if request.child_waits_for_spawn_callback && transport != TransportKind::FinalStdout {
+        let mut args =
+          vec!["-c".into(), "kill -STOP $$; exec \"$@\"".into(), "charliebot-run-gate".into(), original_program.into()];
+        args.extend(command.iter().skip(1).cloned().map(Into::into));
+        ("/bin/sh".into(), args)
+      } else {
+        (original_program.into(), command.iter().skip(1).cloned().map(Into::into).collect())
+      };
     let spec = SpawnSpec::new(
       program,
       args,
@@ -484,85 +486,93 @@ impl AgentRunner {
     })
   }
 
-  /// The final-stdout transport (`antigravity_cli.py` `run`): stdout is piped and teed to `stdout.log`, stderr streams
-  /// to `stderr.log`, and once the process exits the backend turns the whole output into events.
   async fn run_final_stdout(
     &self,
     request: RunRequest,
     spec: &SpawnSpec,
     log_dir: &Path,
   ) -> anyhow::Result<RunOutcome> {
-    let mut spawned = spawn::spawn_piped(spec).await?;
-    let gate = request.child_waits_for_spawn_callback.then(|| SpawnGate::arm(&spawned.child));
+    let mut spec = final_stdout::prepare(spec, log_dir, &self.launch, request.final_stdout_supervisor.as_deref())?;
+    if request.child_waits_for_spawn_callback {
+      let mut args = vec!["-c".into(), "kill -STOP $$; exec \"$@\"".into(), "charliebot-run-gate".into(), spec.program];
+      args.extend(spec.args);
+      spec.program = "/bin/sh".into();
+      spec.args = args;
+    }
+    let gated = request.child_waits_for_spawn_callback;
+    let (mut spawned, gate) = spawn::spawn_raw_log(
+      &spec,
+      Path::new("/dev/null"),
+      &log_dir.join(STDERR_LOG_NAME),
+      RawStdin::Null,
+      move |child| gated.then(|| SpawnGate::arm(child)),
+    )
+    .await?;
     if gate.is_some() {
       wait_until_stopped_or_terminate(&mut spawned.child).await?;
     }
-    let mut stdout = spawned.child.stdout.take().context("agent stdout was not piped")?;
-    let mut stderr = spawned.child.stderr.take().context("agent stderr was not piped")?;
-    let cgroup = spawned.cgroup.take();
     let on_spawn = request.on_spawn.clone();
-    let (spawned, identity) = spawn::pin_identity_and_on_spawn(spawned, move |identity| async move {
+    let (mut spawned, identity) = spawn::pin_identity_and_on_spawn(spawned, move |identity| async move {
       match on_spawn {
         Some(callback) => callback(identity).await,
         None => Ok(()),
       }
     })
     .await?;
-    let pid = identity.pid;
     if let Some(gate) = gate {
       gate.open()?;
     }
+    let cgroup = spawned.cgroup.take();
     let (sender, receiver) = watch::channel(None);
     tokio::spawn(reap_child(spawned.child, sender));
-    let active = Arc::new(ActiveProcess { pid, exit: receiver, detached: AtomicBool::new(false), serve: None });
+    let active =
+      Arc::new(ActiveProcess { pid: identity.pid, exit: receiver, detached: AtomicBool::new(false), serve: None });
     *self.active.lock().expect("active process lock poisoned") = Some(Arc::clone(&active));
-
-    let stderr_path = log_dir.join(STDERR_LOG_NAME);
-    let stderr_log = stderr_path.clone();
-    let mut stderr_task =
-      tokio::spawn(async move { spawn::tee_stream(&mut stderr, Some(&stderr_log), |_| {}).await.map(|_| ()) });
-    let stdout_path = log_dir.join(FINAL_STDOUT_LOG_NAME);
-    let mut stdout_bytes = Vec::new();
-    spawn::tee_stream(&mut stdout, Some(&stdout_path), |chunk| stdout_bytes.extend_from_slice(chunk)).await?;
-
-    // The stderr stream ends with the process; a stream still open at the cleanup timeout is cancelled after the exit.
-    let stderr_joined = match tokio::time::timeout(request.cleanup_timeout, &mut stderr_task).await {
-      Ok(joined) => Some(joined),
-      Err(_) => {
-        tracing::debug!(target: "charliebot_agents", pid, "backend_stderr_stream_timeout");
-        None
-      }
-    };
-    let mut hang_diagnostics = None;
-    let exit_code = match wait_for_exit(&active, request.cleanup_timeout).await? {
-      Some(code) => code,
-      None => {
-        tracing::warn!(target: "charliebot_agents", pid, "backend_wait_timeout_after_result");
-        hang_diagnostics = Some(capture_process_diagnostics(pid).await);
-        self.graceful_shutdown(&active, request.cleanup_timeout, "backend_sigkill_after_result").await?;
-        wait_for_exit(&active, request.cleanup_timeout).await?.context("agent process did not exit after SIGKILL")?
-      }
-    };
-    if let Some(joined) = stderr_joined {
-      joined.context("waiting for the agent stderr stream failed")??;
+    while active.exit.borrow().is_none() && !active.detached.load(Ordering::Acquire) {
+      tokio::time::sleep(follow::TAIL_POLL_INTERVAL).await;
     }
-    if !stderr_task.is_finished() {
-      stderr_task.abort();
+    if active.detached.load(Ordering::Acquire) {
+      self.clear_active(&active);
+      return Ok(RunOutcome {
+        exit_code: None,
+        stderr_text: String::new(),
+        cgroup_exit_report: None,
+        hang_diagnostics: None,
+        identity: Some(identity),
+        follow: None,
+      });
     }
-    let stderr_text = read_stderr_tail(&stderr_path)?;
+    let observed_exit = wait_for_exit(&active, request.cleanup_timeout).await?;
+    let outcome = final_stdout::materialize(self.backend.lock().await.as_mut(), log_dir, observed_exit)?;
+    let process_exit_code = final_stdout::process_exit_code(log_dir, observed_exit)?;
+    self.record_exit_code(outcome.exit_code);
+    let raw_path = log_dir.join(RAW_LOG_NAME);
+    let cursor_path = log_dir.join(charliebot_store::run_records::CURSOR_NAME);
+    let handler = request.on_event;
+    follow::tail_follow_events(
+      &raw_path,
+      |event| Ok(vec![event]),
+      move |event| {
+        let handler = handler.clone();
+        async move { handler(event).await.map_err(|error| std::io::Error::other(error.to_string())) }
+      },
+      || false,
+      Some(&cursor_path),
+      0,
+      request.post_result_timeout,
+      usize::MAX,
+      follow::TAIL_POLL_INTERVAL,
+      None,
+      Duration::ZERO,
+    )
+    .await?;
+    let stderr_text = read_stderr_tail(&log_dir.join(STDERR_LOG_NAME))?;
     let cgroup_exit_report = if self.terminated.load(Ordering::Acquire) {
       None
     } else {
-      cgroup.and_then(|state: SessionCgroup| state.classify_exit(Some(exit_code)))
+      cgroup.and_then(|state| state.classify_exit(Some(process_exit_code)))
     };
     self.clear_active(&active);
-
-    let stdout_text = String::from_utf8_lossy(&stdout_bytes).into_owned();
-    let outcome = self.backend.lock().await.finish_final_stdout(&stdout_text, &stderr_text, exit_code);
-    self.record_exit_code(outcome.exit_code);
-    for event in outcome.events {
-      (request.on_event)(event).await?;
-    }
     if let Some(guard_error) = outcome.guard_error {
       bail!(guard_error);
     }
@@ -570,7 +580,7 @@ impl AgentRunner {
       exit_code: Some(outcome.exit_code),
       stderr_text,
       cgroup_exit_report,
-      hang_diagnostics,
+      hang_diagnostics: None,
       identity: Some(identity),
       follow: None,
     })
@@ -813,16 +823,6 @@ async fn prepare_cwd(
     tracing::debug!(target: "charliebot_agents", path = %path.display(), "{event}");
   }
   Ok(())
-}
-
-fn read_stderr_tail(path: &Path) -> anyhow::Result<String> {
-  let mut file = File::open(path).with_context(|| format!("opening stderr log {}", path.display()))?;
-  let length = file.metadata()?.len();
-  let start = length.saturating_sub(STDERR_TAIL_BYTES);
-  file.seek(SeekFrom::Start(start))?;
-  let mut bytes = Vec::with_capacity((length - start) as usize);
-  file.read_to_end(&mut bytes)?;
-  Ok(String::from_utf8_lossy(&bytes).trim().to_string())
 }
 
 #[cfg(test)]
@@ -1461,6 +1461,51 @@ mod tests {
 
     assert_eq!(outcome.exit_code, Some(1));
     assert_eq!(runner.exit_code(), Some(1));
+  }
+
+  #[tokio::test]
+  async fn final_stdout_capture_preserves_normal_and_signal_exit_codes() {
+    for (script, code) in [("exit 3", 3), ("exit 137", 137), ("kill -TERM $$", -15)] {
+      let root = tempfile::tempdir().unwrap();
+      let runner = AgentRunner::new(
+        "shell",
+        Box::new(FinalStdoutShell::new(script, None, None)),
+        LaunchArgs { log_dir: Some(root.path().join("logs")), ..LaunchArgs::default() },
+      );
+      let outcome = runner
+        .run(test_request("test".into(), root.path().to_path_buf(), Env::new(), root.path().join("cgroups")))
+        .await
+        .unwrap();
+      assert_eq!(outcome.exit_code, Some(code));
+    }
+  }
+
+  #[tokio::test]
+  async fn final_stdout_stop_preserves_the_signal_exit_code() {
+    let root = tempfile::tempdir().unwrap();
+    let marker = root.path().join("started");
+    let runner = Arc::new(AgentRunner::new(
+      "shell",
+      Box::new(FinalStdoutShell::new("touch \"$MARKER\"; exec sleep 300", None, None)),
+      LaunchArgs { log_dir: Some(root.path().join("logs")), ..LaunchArgs::default() },
+    ));
+    let request = test_request(
+      "test".into(),
+      root.path().to_path_buf(),
+      Env::from([("PATH".into(), "/bin:/usr/bin".into()), ("MARKER".into(), marker.to_string_lossy().into_owned())]),
+      root.path().join("cgroups"),
+    );
+    let active = runner.clone();
+    let run = tokio::spawn(async move { active.run(request).await });
+    tokio::time::timeout(Duration::from_secs(5), async {
+      while !marker.exists() {
+        tokio::time::sleep(follow::TAIL_POLL_INTERVAL).await;
+      }
+    })
+    .await
+    .unwrap();
+    runner.terminate().await.unwrap();
+    assert_eq!(run.await.unwrap().unwrap().exit_code, Some(-15));
   }
 
   #[tokio::test]

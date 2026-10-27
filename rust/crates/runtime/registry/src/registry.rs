@@ -518,6 +518,7 @@ pub enum TransportKind {
 
 /// What a final-stdout backend makes of its finished process (`antigravity_cli.py` `run`). The runner emits `events`,
 /// records `exit_code`, and then fails the run with `guard_error` when it is set.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct FinalStdoutOutcome {
   pub events: Vec<Value>,
   pub exit_code: i32,

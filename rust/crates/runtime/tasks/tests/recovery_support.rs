@@ -199,7 +199,12 @@ impl BackendFactory for ScriptFactory {
     let prompt = Arc::new(Mutex::new(None));
     if let Some(script) = option.type_fields.get(YamlValue::String(SCRIPT_FIELD.to_string())) {
       let script = script.as_str().context("scripted option has a non-string script")?.to_string();
-      return Ok(Box::new(ScriptBackend { script: Script::Fixed(script), launch, prompt }));
+      return Ok(Box::new(ScriptBackend {
+        script: Script::Fixed(script),
+        launch,
+        prompt,
+        final_stdout: option.type_fields.get("final_stdout").and_then(YamlValue::as_bool).unwrap_or(false),
+      }));
     }
     let token = option
       .type_fields
@@ -212,7 +217,7 @@ impl BackendFactory for ScriptFactory {
       .get(token)
       .cloned()
       .with_context(|| format!("no scripts registered for token {token}"))?;
-    Ok(Box::new(ScriptBackend { script: Script::Queue(run), launch, prompt }))
+    Ok(Box::new(ScriptBackend { script: Script::Queue(run), launch, prompt, final_stdout: false }))
   }
 }
 
@@ -227,6 +232,7 @@ struct ScriptBackend {
   script: Script,
   launch: LaunchArgs,
   prompt: Arc<Mutex<Option<String>>>,
+  final_stdout: bool,
 }
 
 impl AgentBackend for ScriptBackend {
@@ -269,7 +275,17 @@ impl AgentBackend for ScriptBackend {
   }
 
   fn transport(&self) -> TransportKind {
-    TransportKind::RawLog
+    if self.final_stdout { TransportKind::FinalStdout } else { TransportKind::RawLog }
+  }
+
+  fn finish_final_stdout(
+    &mut self,
+    stdout: &str,
+    _stderr: &str,
+    exit_code: i32,
+  ) -> charliebot_registry::backend::FinalStdoutOutcome {
+    let events = if exit_code == 0 { serde_json::from_str(stdout).unwrap() } else { Vec::new() };
+    charliebot_registry::backend::FinalStdoutOutcome { events, exit_code, guard_error: None }
   }
 }
 

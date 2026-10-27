@@ -249,13 +249,26 @@ impl Worker {
     on_silence: Option<SilenceCallback>,
   ) -> anyhow::Result<i32> {
     let raw_path = self.raw_log_path();
+    charliebot_agents::transport::final_stdout::recover(
+      Arc::clone(&self.features.registry),
+      self.backend_option.as_ref(),
+      &self.cfg,
+      &self.data_dir,
+      || is_alive(),
+      || false,
+      follow::TAIL_POLL_INTERVAL,
+    )
+    .await?;
     let stderr_path = self.data_dir.join(STDERR_LOG_NAME);
     let cursor_path = self.data_dir.join(CURSOR_NAME);
     let sink = self.open_sink()?;
     // A dedicated translate instance for the stream: translate_event is stateful on some backends.
     let mut translator = self.build_backend(None, false)?.backend.translator();
     let failure: Arc<Mutex<Option<anyhow::Error>>> = Arc::new(Mutex::new(None));
-    let buffer_limit = subprocess_buffer_bytes(&self.cfg)?;
+    let buffer_limit = charliebot_agents::transport::final_stdout::event_buffer_limit(
+      &self.data_dir,
+      subprocess_buffer_bytes(&self.cfg)?,
+    );
     let follow_sink = Arc::clone(&sink);
     let follow_failure = Arc::clone(&failure);
     let alive = Arc::clone(&is_alive);
@@ -289,6 +302,12 @@ impl Worker {
       return Err(error);
     }
     followed?;
+
+    if let Some(outcome) = charliebot_agents::transport::final_stdout::read_outcome(&self.data_dir)?
+      && let Some(error) = outcome.guard_error
+    {
+      return Err(charliebot_agents::transport::final_stdout::GuardError(error).into());
+    }
 
     let mut scanned = self.build_backend(None, false)?.backend.translator();
     let (_, _, exit_code) = recovery::scan_result_exit(&raw_path, move |raw| scanned.translate(raw))?;

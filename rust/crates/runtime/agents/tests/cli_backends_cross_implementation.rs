@@ -558,8 +558,8 @@ async fn run_finish(fx: &Fixture, case: &Value) -> Value {
   let dir = PathBuf::from(text(&case["dir"]));
   let host = CliHost { path: path_text(&dir), home: fx.home.clone() };
   let launch = LaunchArgs { resume_session_id: opt_text(&case["resume"]), ..LaunchArgs::default() };
-  let backend = AntigravityFactory::new(host).build(Some(&option_of(case)), &fx.config(), launch).unwrap();
-  let runner = AgentRunner::new("antigravity", backend, LaunchArgs::default());
+  let backend = AntigravityFactory::new(host).build(Some(&option_of(case)), &fx.config(), launch.clone()).unwrap();
+  let runner = AgentRunner::new("antigravity", backend, launch);
   let environment =
     AgentBaseEnvironment { values: env_map(&json!({"PATH": format!("{}:/usr/bin:/bin", path_text(&dir))})) };
   let mut request = RunRequest::new(
@@ -570,6 +570,7 @@ async fn run_finish(fx: &Fixture, case: &Value) -> Value {
     Arc::new(Registry::new()),
   );
   request.child_env_policy = ChildEnvPolicy::Inherited;
+  request.final_stdout_supervisor = Some(PathBuf::from(env!("CARGO_BIN_EXE_fake_program")));
   let seen = Arc::new(Mutex::new(Vec::new()));
   let sink = Arc::clone(&seen);
   request.on_event = Arc::new(move |event| {

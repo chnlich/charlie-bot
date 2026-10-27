@@ -186,7 +186,7 @@ impl AgentBackend for AntigravityBackend {
   }
 
   fn translator(&self) -> Box<dyn Translate> {
-    unreachable!("a final-stdout run reads no translator")
+    Box::new(CapturedEvents)
   }
 
   fn transport(&self) -> TransportKind {
@@ -195,6 +195,14 @@ impl AgentBackend for AntigravityBackend {
 
   fn finish_final_stdout(&mut self, stdout: &str, stderr: &str, exit_code: i32) -> FinalStdoutOutcome {
     self.finish(stdout, stderr, exit_code)
+  }
+}
+
+struct CapturedEvents;
+
+impl Translate for CapturedEvents {
+  fn translate(&mut self, raw: Value) -> anyhow::Result<Vec<Value>> {
+    Ok(vec![raw])
   }
 }
 
@@ -257,9 +265,194 @@ fn usage_event(fields: &Map<String, Value>) -> anyhow::Result<Value> {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::agent_environment::AgentBaseEnvironment;
   use crate::one_shot::frame_system_prompt;
+  use crate::runner::{AgentRunner, RunRequest};
+  use crate::transport::cgroup::SessionCgroupConfig;
+  use crate::transport::{cursor, final_stdout, follow, identity, kill, recovery};
+  use std::fs;
+  use std::os::unix::fs::symlink;
+  use std::process::{Command, Stdio};
+  use std::sync::{Arc, Mutex};
+  use std::time::Duration;
 
   const SUCCESS: &str = r#"{"status":"SUCCESS","conversation_id":"conv-abc","num_turns":2,"response":"the answer","usage":{"input_tokens":10,"output_tokens":12,"thinking_tokens":11,"cache_read_tokens":3}}"#;
+
+  fn capture_backend(root: &Path) -> AntigravityBackend {
+    AntigravityBackend::from_launch(
+      root.join("agy").to_string_lossy().into_owned(),
+      root.to_string_lossy().into_owned(),
+      "test",
+      None,
+      LaunchArgs::default(),
+    )
+  }
+
+  async fn capture_run(root: &Path) -> anyhow::Result<(crate::runner::RunOutcome, Vec<Value>)> {
+    let runner = AgentRunner::new(
+      "antigravity",
+      Box::new(capture_backend(root)),
+      LaunchArgs { log_dir: Some(root.join("logs")), ..LaunchArgs::default() },
+    );
+    let mut request = RunRequest::new(
+      "test".into(),
+      root.to_path_buf(),
+      AgentBaseEnvironment { values: Env::from([("PATH".into(), "/bin:/usr/bin".into())]) },
+      SessionCgroupConfig::disabled(),
+      Arc::new(charliebot_registry::Registry::new()),
+    );
+    let pid_file = root.join("pid");
+    request.gate_child_until_on_spawn();
+    request.on_spawn = Some(Arc::new(move |identity| {
+      let path = pid_file.clone();
+      Box::pin(async move {
+        fs::write(path, identity.pid.to_string())?;
+        Ok(())
+      })
+    }));
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let events = seen.clone();
+    request.on_event = Arc::new(move |event| {
+      let events = events.clone();
+      Box::pin(async move {
+        events.lock().unwrap().push(event);
+        Ok(())
+      })
+    });
+    let outcome = runner.run(request).await?;
+    let events = seen.lock().unwrap().clone();
+    Ok((outcome, events))
+  }
+
+  #[test]
+  #[ignore = "subprocess server for restart tests"]
+  fn capturing_server() {
+    let root = std::env::var_os("CHARLIEBOT_TEST_AGY_ROOT").unwrap();
+    tokio::runtime::Runtime::new().unwrap().block_on(capture_run(Path::new(&root))).unwrap();
+  }
+
+  async fn wait_until(mut condition: impl FnMut() -> bool) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+      while !condition() {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+      }
+    })
+    .await
+    .unwrap();
+  }
+
+  fn stage_capture(root: &Path) {
+    fs::write(root.join("reply.json"), SUCCESS).unwrap();
+    symlink(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/final_stdout_agy.sh"), root.join("agy"))
+      .unwrap();
+  }
+
+  async fn cut_server(root: &Path) -> u32 {
+    let mut server = Command::new(std::env::current_exe().unwrap())
+      .args(["--exact", "backends::antigravity::antigravity_cli::tests::capturing_server", "--ignored"])
+      .env("CHARLIEBOT_TEST_AGY_ROOT", root)
+      .stdout(Stdio::null())
+      .stderr(Stdio::inherit())
+      .spawn()
+      .unwrap();
+    wait_until(|| root.join("started").exists()).await;
+    let pid = fs::read_to_string(root.join("pid")).unwrap().parse().unwrap();
+    server.kill().unwrap();
+    server.wait().unwrap();
+    assert!(identity::read_pid_stat(pid).is_some_and(|stat| stat.state != "Z"));
+    let agent_pid = fs::read_to_string(root.join("started")).unwrap().parse().unwrap();
+    assert!(identity::read_pid_stat(agent_pid).is_some_and(|stat| stat.state != "Z"));
+    pid
+  }
+
+  async fn drain_capture(root: &Path, alive: impl FnMut() -> bool) -> Vec<Value> {
+    let directory = root.join("logs");
+    let mut backend = capture_backend(root);
+    let outcome = final_stdout::materialize(&mut backend, &directory, None).unwrap();
+    assert_eq!(outcome.exit_code, 0);
+    assert!(outcome.guard_error.is_none());
+    let cursor_path = directory.join(charliebot_store::run_records::CURSOR_NAME);
+    let mut events = Vec::new();
+    follow::tail_follow_events(
+      &directory.join(charliebot_store::run_records::RAW_LOG_NAME),
+      |event| Ok(vec![event]),
+      |event| {
+        events.push(event);
+        std::future::ready(Ok(()))
+      },
+      alive,
+      Some(&cursor_path),
+      cursor::read_raw_cursor(&cursor_path),
+      Duration::ZERO,
+      usize::MAX,
+      follow::TAIL_POLL_INTERVAL,
+      None,
+      Duration::ZERO,
+    )
+    .await
+    .unwrap();
+    events
+  }
+
+  #[tokio::test]
+  async fn final_stdout_survives_server_death_and_matches_uninterrupted_events_and_usage() {
+    let uninterrupted = tempfile::tempdir().unwrap();
+    stage_capture(uninterrupted.path());
+    fs::write(uninterrupted.path().join("release"), "").unwrap();
+    let (expected, events) = capture_run(uninterrupted.path()).await.unwrap();
+    let restarted = tempfile::tempdir().unwrap();
+    stage_capture(restarted.path());
+    let pid = cut_server(restarted.path()).await;
+    assert!(!restarted.path().join("logs/final_stdout.exit.json").exists());
+    fs::write(restarted.path().join("release"), "").unwrap();
+    wait_until(|| restarted.path().join("logs/final_stdout.exit.json").exists()).await;
+    wait_until(|| identity::read_pid_stat(pid).is_none_or(|stat| stat.state == "Z")).await;
+    let adopted = drain_capture(restarted.path(), || false).await;
+    assert_eq!(adopted, events);
+    let (_, _, code) =
+      recovery::scan_result_exit(&restarted.path().join("logs/agent.raw.ndjson"), |event| Ok(vec![event])).unwrap();
+    assert_eq!(Some(code), expected.exit_code);
+    assert_eq!(
+      fs::read(restarted.path().join("logs/stdout.log")).unwrap(),
+      fs::read(uninterrupted.path().join("logs/stdout.log")).unwrap()
+    );
+    assert_eq!(
+      fs::read(restarted.path().join("logs").join(charliebot_store::run_records::STDERR_LOG_NAME)).unwrap(),
+      fs::read(uninterrupted.path().join("logs").join(charliebot_store::run_records::STDERR_LOG_NAME)).unwrap()
+    );
+    assert!(drain_capture(restarted.path(), || false).await.is_empty());
+  }
+
+  #[tokio::test]
+  async fn final_stdout_answer_written_during_downtime_uses_the_dead_process_completion_time() {
+    let root = tempfile::tempdir().unwrap();
+    stage_capture(root.path());
+    let pid = cut_server(root.path()).await;
+    fs::write(root.path().join("release"), "").unwrap();
+    wait_until(|| root.path().join("logs/final_stdout.exit.json").exists()).await;
+    wait_until(|| identity::read_pid_stat(pid).is_none_or(|stat| stat.state == "Z")).await;
+    let raw = root.path().join("logs/agent.raw.ndjson");
+    assert!(!raw.exists());
+    let completed = recovery::raw_completion_time(&raw).unwrap();
+    let expected =
+      time::OffsetDateTime::from(fs::metadata(root.path().join("logs/stdout.log")).unwrap().modified().unwrap());
+    assert_eq!(completed, expected);
+    let events = drain_capture(root.path(), || false).await;
+    assert!(events.iter().any(|event| event.to_string().contains("the answer")));
+    assert_eq!(recovery::raw_completion_time(&raw), Some(completed));
+  }
+
+  #[tokio::test]
+  async fn final_stdout_stop_after_server_death_ends_the_process_group() {
+    let root = tempfile::tempdir().unwrap();
+    stage_capture(root.path());
+    let pid = cut_server(root.path()).await;
+    kill::kill_group_escalating(pid, || identity::read_pid_stat(pid).is_some_and(|stat| stat.state != "Z")).await;
+    let agent_pid = fs::read_to_string(root.path().join("started")).unwrap().parse().unwrap();
+    assert!(identity::read_pid_stat(pid).is_none_or(|stat| stat.state == "Z"));
+    wait_until(|| identity::read_pid_stat(agent_pid).is_none_or(|stat| stat.state == "Z")).await;
+    assert_eq!(final_stdout::process_exit_code(&root.path().join("logs"), None).unwrap(), -15);
+  }
 
   fn backend(launch: LaunchArgs) -> AntigravityBackend {
     AntigravityBackend::from_launch(

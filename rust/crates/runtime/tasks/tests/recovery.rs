@@ -52,6 +52,156 @@ fn script_run_spec() -> TaskSpec {
   TaskSpec { goal: "synthetic worker task".to_string(), task_type: Some(TaskType::ScriptRun), ..TaskSpec::default() }
 }
 
+#[test]
+#[ignore = "subprocess entry point for durable capture recovery"]
+fn final_stdout_supervisor() {
+  charliebot_agents::transport::final_stdout::supervise(&[std::env::var_os("TEST_CAPTURE_DIR").unwrap()]).unwrap();
+}
+
+async fn captured_run(
+  stack: &Stack,
+  node: &SessionMetadata,
+  kind: RunKind,
+  guard: &ProcessGroupGuard,
+) -> anyhow::Result<std::process::Child> {
+  use charliebot_agents::transport::{cgroup, final_stdout, spawn};
+  let run_id = "captured";
+  stack
+    .register(RunRecord {
+      backend: Some("capture".into()),
+      model: Some("capture-model".into()),
+      ..synthetic_run(&node.id, run_id, kind)
+    })
+    .await?;
+  let directory = stack.store().run_dir(&node.id, run_id);
+  let response = json!([
+    {"type": "session_attached", "session_id": "captured-native-id"},
+    {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "captured answer"}]}},
+    {"type": "result", "subtype": "success", "result": "captured answer", "usage": {
+      "input_tokens": 10, "output_tokens": 23, "cache_read_input_tokens": 3
+    }}
+  ]);
+  let spec = spawn::SpawnSpec::new(
+    "/bin/sh",
+    vec![
+      "-c".into(),
+      format!("printf '%s' $$ > started; while [ ! -e release ]; do sleep 0.01; done; printf '%s' '{}'", response,)
+        .into(),
+    ],
+    Some(directory.clone()),
+    std::collections::HashMap::new(),
+    None,
+    cgroup::SessionCgroupConfig::disabled(),
+  );
+  final_stdout::prepare(&spec, &directory, &LaunchArgs::default(), None)?;
+  let child = Command::new(std::env::current_exe()?)
+    .args(["--exact", "final_stdout_supervisor", "--ignored"])
+    .env("TEST_CAPTURE_DIR", &directory)
+    .current_dir(&directory)
+    .process_group(0)
+    .stdout(std::process::Stdio::null())
+    .stderr(std::process::Stdio::inherit())
+    .spawn()?;
+  guard.track(child.id());
+  let pin = identity::pin_process_identity(child.id());
+  stack
+    .launch(&node.id, run_id, pin.pid, pin.pid_start.as_deref().context("capture supervisor has an identity")?)
+    .await?;
+  settle_until(|| Ok(directory.join("started").exists())).await.context("capture command starts")?;
+  Ok(child)
+}
+
+#[tokio::test]
+async fn final_stdout_recovery_delivers_live_and_dead_runs_and_parent_reports() -> anyhow::Result<()> {
+  for dead in [false, true] {
+    for profile in [TaskProfile::Worker, TaskProfile::Manager] {
+      let log = LogCapture::default();
+      let _capture = log.install();
+      let guard = ProcessGroupGuard::new();
+      let mut option = script_option("capture", "exit 0");
+      option.type_fields.insert("final_stdout".into(), true.into());
+      let stack = Stack::start_with(
+        vec![script_option(BACKEND_ID, &recovery_support::result_script("report noted")), option],
+        vec![BACKEND_ID.to_string()],
+      )
+      .await?;
+      stack.write_access_key()?;
+      let parent = stack.node("parent", None, TaskProfile::Manager, None).await?;
+      let node = stack
+        .node("captured", Some(&parent.id), profile, (profile == TaskProfile::Worker).then(script_run_spec))
+        .await?;
+      let kind = if profile == TaskProfile::Worker { RunKind::Work } else { RunKind::ManagerTurn };
+      let mut child = captured_run(&stack, &node, kind, &guard).await?;
+      let directory = stack.store().run_dir(&node.id, "captured");
+      let mut completed = None;
+      if dead {
+        std::fs::write(directory.join("release"), "")?;
+        settle_until(|| Ok(child.try_wait()?.is_some())).await?;
+        completed = charliebot_agents::transport::recovery::raw_completion_time(&directory.join(RAW_LOG_NAME));
+      }
+      let counters = stack.node_pass(&node.id).await?;
+      assert_eq!((counters.resumed, counters.drained), if dead { (0, 1) } else { (1, 0) });
+      if !dead {
+        assert!(child.try_wait()?.is_none());
+        assert!(run_records::terminal_outcome(&stack.run_events(&node.id)?, "captured")?.is_none());
+        std::fs::write(directory.join("release"), "")?;
+      }
+      assert_eq!(
+        stack
+          .wait_terminal(&node.id, "captured")
+          .await
+          .with_context(|| format!("profile={profile:?} dead={dead}: {}", log.text()))?,
+        RunOutcomeKind::Success
+      );
+      child.wait()?;
+      let run = stack.store().read_run_sync(&node.id, "captured")?.unwrap();
+      assert_eq!(run.exit_code, Some(0));
+      if let Some(completed) = completed {
+        assert_eq!(
+          run.ended_at.unwrap().into_inner().unix_timestamp_nanos() / 1_000,
+          completed.unix_timestamp_nanos() / 1_000
+        );
+      }
+      let events: Vec<Value> = if profile == TaskProfile::Worker {
+        std::fs::read_to_string(directory.join(run_records::RUN_EVENTS_NAME))?
+          .lines()
+          .map(serde_json::from_str)
+          .collect::<Result<_, _>>()?
+      } else {
+        stack.run_event_values(&node.id)?
+      };
+      assert!(events.iter().any(|event| event.to_string().contains("captured answer")), "{profile:?}: {events:?}");
+      assert!(events.iter().any(|event| event["usage"]["output_tokens"] == 23));
+      if profile == TaskProfile::Worker {
+        settle_until(|| Ok(!stack.child_reports(&parent.id)?.is_empty())).await?;
+        let report = stack.child_reports(&parent.id)?;
+        assert_eq!(report[0]["outcome"], "completed");
+        assert_eq!(report[0]["result_refs"], json!(["run:captured"]));
+      }
+    }
+  }
+  Ok(())
+}
+
+#[tokio::test]
+async fn final_stdout_stop_of_an_adopted_run_ends_its_process() -> anyhow::Result<()> {
+  let guard = ProcessGroupGuard::new();
+  let mut option = script_option("capture", "exit 0");
+  option.type_fields.insert("final_stdout".into(), true.into());
+  let stack =
+    Stack::start_with(vec![script_option(BACKEND_ID, "exit 0"), option], vec![BACKEND_ID.to_string()]).await?;
+  let node = stack.node("captured", None, TaskProfile::Worker, Some(script_run_spec())).await?;
+  let mut child = captured_run(&stack, &node, RunKind::Work, &guard).await?;
+  let agent_pid = std::fs::read_to_string(stack.store().run_dir(&node.id, "captured").join("started"))?.parse()?;
+  assert_eq!(stack.node_pass(&node.id).await?.resumed, 1);
+  settle_until(|| Ok(stack.adapter.resume_follows().contains(&(node.id.clone(), "captured".into())))).await?;
+  stack.store().request_stop(&node.id, "captured", "operator-stop").await?;
+  settle_until(|| Ok(child.try_wait()?.is_some())).await?;
+  settle_until(|| Ok(identity::read_pid_stat(agent_pid).is_none_or(|stat| stat.state == "Z"))).await?;
+  assert_eq!(stack.wait_terminal(&node.id, "captured").await?, RunOutcomeKind::Interrupted);
+  Ok(())
+}
+
 /// One JSON request to the delegated-worker route, authenticated as the synthetic operator.
 async fn post_delegate(router: &axum::Router, body: Value) -> anyhow::Result<(StatusCode, Value)> {
   let response = router

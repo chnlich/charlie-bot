@@ -42,6 +42,11 @@ enum Step {
 }
 
 fn main() {
+  let args: Vec<_> = env::args_os().skip(1).collect();
+  if args.first().is_some_and(|arg| arg == charliebot_agents::transport::final_stdout::SUPERVISOR_ARG) {
+    charliebot_agents::transport::final_stdout::supervise(&args[1..]).expect("capture supervisor succeeds");
+    return;
+  }
   let invoked = env::args_os().next().expect("the helper always receives argv[0]");
   let program = program_path(&invoked);
   let role = program.file_name().expect("argv[0] names the role").to_string_lossy().into_owned();

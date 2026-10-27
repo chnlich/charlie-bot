@@ -22,33 +22,11 @@ use crate::autonamer;
 use crate::master_run;
 use crate::master_state::{MasterResumeRequest, MasterTurnRequest, WorkItem};
 
-pub type PersistAndBroadcastFn = Arc<dyn Fn(String, Value) -> BoxFuture<'static, anyhow::Result<()>> + Send + Sync>;
-pub type MarkUnreadFn = Arc<dyn Fn(String) -> BoxFuture<'static, anyhow::Result<()>> + Send + Sync>;
-pub type PersistNativeIdFn =
-  Arc<dyn Fn(String, String, Option<String>) -> BoxFuture<'static, anyhow::Result<Option<String>>> + Send + Sync>;
-pub type PersistAccountLabelFn =
-  Arc<dyn Fn(String, String) -> BoxFuture<'static, anyhow::Result<Option<String>>> + Send + Sync>;
-pub type ContextStateFn = Arc<
-  dyn Fn(String, SessionMetadata) -> BoxFuture<'static, anyhow::Result<(Option<i64>, Option<UtcDateTime>)>>
-    + Send
-    + Sync,
->;
-pub type TaskTreeActivityFn = Arc<dyn Fn(&str) -> anyhow::Result<(bool, String)> + Send + Sync>;
-pub type AfterRoundFn =
-  Arc<dyn Fn(Arc<CharlieBotConfig>, String) -> BoxFuture<'static, anyhow::Result<()>> + Send + Sync>;
-
-/// Session block callbacks used by a manager turn.
-#[derive(Clone)]
-pub struct SessionCallbacks {
-  pub features: Arc<FeatureContext>,
-  pub persist_and_broadcast: PersistAndBroadcastFn,
-  pub mark_unread: MarkUnreadFn,
-  pub persist_cc_session_id: PersistNativeIdFn,
-  pub persist_account_label: Option<PersistAccountLabelFn>,
-  pub context_state: Option<ContextStateFn>,
-  pub task_tree_activity: TaskTreeActivityFn,
-  pub after_round: Option<AfterRoundFn>,
-}
+use crate::master_state::RunTracking;
+pub use crate::master_state::{
+  AfterRoundFn, ContextStateFn, MarkUnreadFn, PersistAccountLabelFn, PersistAndBroadcastFn, PersistNativeIdFn,
+  SessionCallbacks, TaskTreeActivityFn,
+};
 
 #[derive(Default)]
 struct QueueState {
@@ -302,36 +280,6 @@ impl MasterQueue {
       .unwrap_or_default()
   }
 
-  /// Append one acknowledged input id to the running session's binding (`running_user_event_ids`).
-  ///
-  /// Python's `_current_items` holds the live `_WorkItem`, so `midturn_delivery.record_ack`'s append is visible to a
-  /// web reply posted while the turn runs. This queue stores the ids by value, so the ack reaches the reader through
-  /// this method as well as through the item.
-  pub fn append_running_user_event_id(&self, session_id: &str, input_id: &str) {
-    let mut state = self.state.lock().expect("master queue mutex is not poisoned");
-    if let Some(ids) = state.current_items.get_mut(session_id)
-      && !ids.iter().any(|id| id == input_id)
-    {
-      ids.push(input_id.to_string());
-    }
-  }
-
-  pub fn running_turns_except(&self, session_id: &str) -> Vec<SessionMetadata> {
-    let metadata = {
-      let state = self.state.lock().expect("master queue mutex is not poisoned");
-      state
-        .running_turns
-        .iter()
-        .filter(|(running_id, _)| running_id.as_str() != session_id)
-        .map(|(_, metadata)| Arc::clone(metadata))
-        .collect::<Vec<_>>()
-    };
-    metadata
-      .into_iter()
-      .map(|metadata| metadata.lock().expect("running turn metadata mutex is not poisoned").clone())
-      .collect()
-  }
-
   pub async fn terminate_active(&self, session_id: &str) -> anyhow::Result<()> {
     let runner = self.state.lock().expect("master queue mutex is not poisoned").active_procs.get(session_id).cloned();
     if let Some(runner) = runner {
@@ -354,14 +302,6 @@ impl MasterQueue {
       handle.await.context("joining a master queue consumer")?;
     }
     Ok(())
-  }
-
-  pub(crate) fn set_active_runner(&self, session_id: &str, runner: Arc<AgentRunner>) {
-    self.state.lock().expect("master queue mutex is not poisoned").active_procs.insert(session_id.to_string(), runner);
-  }
-
-  pub(crate) fn clear_active_runner(&self, session_id: &str) {
-    self.state.lock().expect("master queue mutex is not poisoned").active_procs.remove(session_id);
   }
 
   async fn enqueue_and_notify(self: &Arc<Self>, item: WorkItem) -> anyhow::Result<()> {
@@ -513,10 +453,11 @@ impl MasterQueue {
     self.wait_for_idle_compaction_reservation(session_id).await?;
     item.callbacks.features.registry.settle_idle_compaction(session_id).await?;
     refresh_anchors_from_disk(item, last_cc_session_id, last_account_label)?;
+    let tracking: Arc<dyn RunTracking> = self.clone();
     let mut result = if item.resume_record.is_some() {
-      master_run::resume_cc(item).await?
+      master_run::resume_cc(Arc::clone(&tracking), item).await?
     } else {
-      master_run::run_cc(Arc::clone(self), item).await?
+      master_run::run_cc(tracking, item).await?
     };
     let ran_backend = result.finish_extras.get("native_backend").and_then(Value::as_str).map(str::to_string);
     arm_idle_after_round(self, item, session_id, ran_backend.clone()).await;
@@ -723,10 +664,57 @@ impl IdleStartGate for QueueIdleStartGate {
   }
 }
 
+/// The queue's run tracking, as the live turn and delivery modules read it.
+impl RunTracking for MasterQueue {
+  fn running_turns_except(&self, session_id: &str) -> Vec<SessionMetadata> {
+    let metadata = {
+      let state = self.state.lock().expect("master queue mutex is not poisoned");
+      state
+        .running_turns
+        .iter()
+        .filter(|(running_id, _)| running_id.as_str() != session_id)
+        .map(|(_, metadata)| Arc::clone(metadata))
+        .collect::<Vec<_>>()
+    };
+    metadata
+      .into_iter()
+      .map(|metadata| metadata.lock().expect("running turn metadata mutex is not poisoned").clone())
+      .collect()
+  }
+
+  fn set_active_runner(&self, session_id: &str, runner: Arc<AgentRunner>) {
+    self.state.lock().expect("master queue mutex is not poisoned").active_procs.insert(session_id.to_string(), runner);
+  }
+
+  fn clear_active_runner(&self, session_id: &str) {
+    self.state.lock().expect("master queue mutex is not poisoned").active_procs.remove(session_id);
+  }
+
+  /// Append one acknowledged input id to the running session's binding (`running_user_event_ids`).
+  ///
+  /// Python's `_current_items` holds the live `_WorkItem`, so `midturn_delivery.record_ack`'s append is visible to a
+  /// web reply posted while the turn runs. This queue stores the ids by value, so the ack reaches the reader through
+  /// this method as well as through the item.
+  fn append_running_user_event_id(&self, session_id: &str, input_id: &str) {
+    let mut state = self.state.lock().expect("master queue mutex is not poisoned");
+    if let Some(ids) = state.current_items.get_mut(session_id)
+      && !ids.iter().any(|id| id == input_id)
+    {
+      ids.push(input_id.to_string());
+    }
+  }
+}
+
 /// Return the event ids queued or running for one session.
 pub fn queued_user_event_ids(features: &FeatureContext, session_id: &str) -> anyhow::Result<HashSet<String>> {
   let queue = features.startup.require::<MasterQueue>()?;
   Ok(queue.queued_user_event_ids(session_id))
+}
+
+/// Return the current turn's input event ids from the startup-owned `MasterQueue`.
+pub fn running_user_event_ids(features: &FeatureContext, session_id: &str) -> anyhow::Result<Vec<String>> {
+  let queue = features.startup.require::<MasterQueue>()?;
+  Ok(queue.running_user_event_ids(session_id))
 }
 
 fn refresh_anchors_from_disk(

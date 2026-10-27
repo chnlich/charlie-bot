@@ -917,7 +917,7 @@ async fn manager_finish_claims_only_echoed_pending_user_ids() {
   std::fs::write(&raw_path, format!("{}\n{}\n{}\n", replay(run_id), replay(&echoed_id), replay(&agent_id))).unwrap();
 
   let claimed = charliebot_tasks::midturn_delivery::claim_finish_inputs(
-    &harness.dispatcher,
+    harness.dispatcher.as_ref(),
     &manager,
     run_id,
     &transport_dir,

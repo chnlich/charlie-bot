@@ -10,7 +10,7 @@ use charliebot_store::compact::CompactValue;
 use charliebot_store::metadata::SessionMetadata;
 use serde_json::{Map, Value};
 
-use crate::dispatch::{python_string, truthy_string};
+use crate::python_values::{python_string, truthy_string};
 
 /// Format a child report as the parent's typed task input (`session_dispatch.child_report_text` before it moved here).
 pub fn child_report_text(report: &Value, provenance: Option<&str>) -> String {

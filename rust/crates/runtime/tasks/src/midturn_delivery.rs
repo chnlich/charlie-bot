@@ -21,11 +21,13 @@ use charliebot_store::ChatEvent;
 use charliebot_store::compact::CompactValue;
 use charliebot_store::metadata::SessionMetadata;
 use charliebot_store::run_records::{RAW_LOG_NAME, RunKind, RunRecord};
+use futures_util::future::BoxFuture;
 use serde::de::{IgnoredAny, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value};
 
-use crate::dispatch::{Dispatcher, python_string};
+use crate::master_state::RunTracking;
+use crate::python_values::python_string;
 use crate::task_input_prompt::compose_input_prompt;
 
 /// True for a manager session that no Slack or Discord thread owns (`reply.is_web_session`).
@@ -62,7 +64,7 @@ pub async fn offer(
 /// binding. A reply posted while the turn runs reads the queue (`running_user_event_ids`), as it reads the live item
 /// in Python.
 pub fn record_ack(
-  queue: &crate::master_queue::MasterQueue,
+  tracking: &dyn RunTracking,
   session_id: &str,
   user_event_ids: &mut Vec<String>,
   item_run_id: &str,
@@ -79,7 +81,7 @@ pub fn record_ack(
   if !user_event_ids.contains(&input_id) {
     user_event_ids.push(input_id.clone());
   }
-  queue.append_running_user_event_id(session_id, &input_id);
+  tracking.append_running_user_event_id(session_id, &input_id);
   Ok(())
 }
 
@@ -177,13 +179,24 @@ fn echoed_input_ids(transport_dir: &Path, run_id: &str) -> anyhow::Result<HashSe
   Ok(echoed)
 }
 
+/// The dispatcher operation that binds replay evidence to a Run (`_Dispatcher` in Python's `midturn_delivery`).
+pub trait ClaimEchoedInputs: Send + Sync {
+  /// Append the still-pending USER events that the launched manager Run echoed.
+  fn claim_echoed_user_inputs<'a>(
+    &'a self,
+    session_id: &'a str,
+    run_id: &'a str,
+    echoed_ids: &'a HashSet<String>,
+  ) -> BoxFuture<'a, anyhow::Result<Vec<String>>>;
+}
+
 /// Claim only pending user events whose uuids the successful Run echoed (`claim_finish_inputs`).
 ///
 /// The scan parses every raw line of the Run, so it rides a blocking thread like the round-notice projection of the
 /// same files: on the async runtime's worker threads it would freeze every concurrent request and WebSocket at turn
 /// end (`b03c38579`).
 pub async fn claim_finish_inputs(
-  dispatcher: &Dispatcher,
+  dispatcher: &dyn ClaimEchoedInputs,
   meta: &SessionMetadata,
   run_id: &str,
   transport_dir: &Path,
@@ -200,7 +213,7 @@ pub async fn claim_finish_inputs(
   if echoed.is_empty() {
     return Ok(Vec::new());
   }
-  Ok(dispatcher.claim_echoed_user_inputs(&meta.id, run_id, &echoed).await?)
+  dispatcher.claim_echoed_user_inputs(&meta.id, run_id, &echoed).await
 }
 
 /// Build the fresh raw-log translator used to follow or reconcile one Run (`midturn_delivery.fresh_translate`).

@@ -4,5 +4,4 @@ cycle charliebot-registry: backend, context, lifespan, pages, registry, sequence
 cycle charliebot-server: app, auth, request_log, routes, routes::pages, routes::static_mounts, routes::system, routes::websockets, state
 cycle charliebot-session-api: crate, detail, fork_routes, prompt_routes, routes, websocket, write_routes
 cycle charliebot-store: events, listing, projection, run_records, session_events, store, task_tree, thinking, write_faults
-cycle charliebot-tasks: dispatch, master_queue, master_run, master_state, midturn_delivery, task_input_prompt
 cycle charliebot-usage-page: cool_storage, crate

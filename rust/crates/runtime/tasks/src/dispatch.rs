@@ -17,6 +17,8 @@ use charliebot_store::{
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
 
+use crate::python_values::{python_string, python_truthy, truthy_string};
+
 const INPUT_EVENT_TYPES: [&str; 4] =
   [event_types::USER, event_types::AGENT_MESSAGE, event_types::SCHEDULED_TRIGGER, event_types::CHILD_REPORT];
 const ADMIT_FIELDS: [&str; 8] = [
@@ -1023,28 +1025,15 @@ fn close_result_refs(close: &Value) -> Vec<String> {
     .unwrap_or_default()
 }
 
-pub(crate) fn truthy_string(value: Option<&Value>) -> String {
-  if python_truthy(value) { python_string(value) } else { String::new() }
-}
-
-fn python_truthy(value: Option<&Value>) -> bool {
-  match value {
-    None | Some(Value::Null) => false,
-    Some(Value::Bool(value)) => *value,
-    Some(Value::Number(value)) => value.as_f64().is_some_and(|value| value != 0.0),
-    Some(Value::String(value)) => !value.is_empty(),
-    Some(Value::Array(value)) => !value.is_empty(),
-    Some(Value::Object(value)) => !value.is_empty(),
-  }
-}
-
-pub(crate) fn python_string(value: Option<&Value>) -> String {
-  match value {
-    None | Some(Value::Null) => "None".to_string(),
-    Some(Value::String(value)) => value.clone(),
-    Some(Value::Bool(true)) => "True".to_string(),
-    Some(Value::Bool(false)) => "False".to_string(),
-    Some(value) => value.to_string(),
+/// The dispatcher's replay-evidence claim, as `midturn_delivery`'s finish scan reads it.
+impl crate::midturn_delivery::ClaimEchoedInputs for Dispatcher {
+  fn claim_echoed_user_inputs<'a>(
+    &'a self,
+    session_id: &'a str,
+    run_id: &'a str,
+    echoed_ids: &'a HashSet<String>,
+  ) -> BoxFuture<'a, anyhow::Result<Vec<String>>> {
+    Box::pin(async move { Ok(self.claim_echoed_user_inputs(session_id, run_id, echoed_ids).await?) })
   }
 }
 

@@ -27,7 +27,18 @@ Source code: the server is `rust/crates/`; the Python `charliebot` CLI is `src/`
 
 If the reviewer's push fails (base moved), the work branch and worktree are kept. Rebase and push from the kept worktree yourself (mechanical, no re-delegate). On a genuine conflict, stop and surface it to the user or delegate the resolution.
 
-Reviewer merge-back is a prompt-level instruction with no server-side backstop. After every implement delivery, compare `git rev-parse <branch> origin/<branch>`. When origin lacks the delivered commit, push it from the kept worktree. Keep the runtime checkout (the clone the server runs from) on its current branch and commit. The running server reads its prompts, templates and static files from that checkout, so a moved checkout swaps what it serves mid-flight. Only the user's deploy procedure moves it. Base each new delegation on `origin/<branch>`, because the local branch can lag origin. To read another revision, use `git show <rev>:<path>` or a worktree of your own.
+Reviewer merge-back is a prompt-level instruction with no server-side backstop. After every implement delivery, compare `git rev-parse <branch> origin/<branch>`. When origin lacks the delivered commit, push it from the kept worktree.
+
+Keep the runtime checkout (the clone the server runs from) and its `.venv` at their current commit. The live server and its agents then use the files of the live release.
+The live server and its agents read these files from the checkout:
+- prompt documents and skills;
+- page templates under `web/templates`;
+- `web/static` assets;
+- the `charliebot` CLI in `.venv`.
+
+Only a release switch or the rollback in README.md (Quick start) moves the checkout.
+
+Base each new delegation on `origin/<branch>`, because the local branch can lag origin. To read another revision, use `git show <rev>:<path>` or a worktree of your own.
 
 Before relying on local ancestry to verify a landed commit, check whether the clone is shallow.
 Before deploying through the runtime checkout, pause scheduled jobs that read repo content through it.
@@ -232,7 +243,19 @@ One Claude login carries a five-hour and a weekly window, so a long master turn 
 - The launcher `tee` keeps the server log open on fd 3 after cleanup unlinks its path.
 - Read an unlinked log through `/proc/<tee-pid>/fd/3`.
 - The server reloads prompt documents on each master run (`read_source_file` in `rust/crates/runtime/tasks/src/prompts/sources.rs` reads each file fresh). Static assets under `web/static` load on the next page load.
-- Server code goes live at the next release and switch: the switch (`scripts/switch-server.sh`) moves the runtime checkout and restarts the server, so every repo change — server code, prompts, skills and web static files alike — rides that release. The start and switch steps live in the README's Quick start section.
+- Each release pins two charlie-bot commits:
+  - its build commit, the sha that `scripts/switch-server.sh rust <sha>` takes, holds the server code;
+  - its `PORT_BASELINE` file names the commit of the runtime checkout, which holds the files listed above.
+
+  A server-code change goes live with the first release whose build commit contains the change.
+  A change to a file in the runtime checkout goes live with the first release whose `PORT_BASELINE` contains the change.
+  The two commits of one release can differ.
+  `scripts/switch-server.sh` switches the live release in these steps:
+  - it stops the live server;
+  - it fast-forwards the runtime checkout to the release's `PORT_BASELINE`;
+  - it runs `uv sync --frozen` in the checkout;
+  - it points `current` at the new release;
+  - it starts the live server from the new release.
 
 ## Backend Choice
 

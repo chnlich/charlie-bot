@@ -13,7 +13,7 @@ pub const RUNTIME: &[(&str, RegisterFn)] = &[
   ("runtime.usage", charliebot_usage::register),
   ("runtime.session_api", charliebot_session_api::register),
   ("runtime.tasks", charliebot_tasks::register),
-  ("runtime.triggers", charliebot_sched::register),
+  ("runtime.triggers", charliebot_triggers::register),
 ];
 
 fn register_python_only_package(_registry: &mut Registry) -> Result<(), RegistryError> {

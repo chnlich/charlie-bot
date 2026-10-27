@@ -295,7 +295,7 @@ impl Home {
     charliebot_chat_threads::test_support::install_test_dispatcher(&features);
     features
       .startup
-      .insert(Arc::new(charliebot_sched::triggers::TriggerManager::new(Arc::clone(&features))))
+      .insert(Arc::new(charliebot_triggers::triggers::TriggerManager::new(Arc::clone(&features))))
       .expect("the trigger manager inserts once");
     let fake_discord =
       FakeDiscord { user: json!({"id": "600000000000000001", "username": "synthetic-bot"}), ..FakeDiscord::default() };

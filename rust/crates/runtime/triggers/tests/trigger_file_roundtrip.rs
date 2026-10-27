@@ -2,8 +2,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use charliebot_sched::triggers::PendingTrigger;
 use charliebot_store::trigger_files;
+use charliebot_triggers::triggers::PendingTrigger;
 use serde_json::Value;
 
 fn repo_root() -> PathBuf {
@@ -12,7 +12,7 @@ fn repo_root() -> PathBuf {
 
 fn run_python(action: &str, directory: &Path) -> Vec<Value> {
   let root = repo_root();
-  let script = root.join("rust/crates/runtime/sched/tests/trigger_file_roundtrip.py");
+  let script = root.join("rust/crates/runtime/triggers/tests/trigger_file_roundtrip.py");
   let output = Command::new("uv")
     .args(["run", "python"])
     .arg(script)

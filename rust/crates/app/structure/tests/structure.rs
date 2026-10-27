@@ -38,8 +38,16 @@ const BACKEND_VARIANTS: [&str; 2] = ["anthropic_compatible", "openai_compatible"
 const CHAT_CHANNELS: [&str; 2] = ["slack", "discord"];
 
 /// The runtime layers, keyed by the crate's directory name under `rust/crates/runtime`.
-const RUNTIME_LAYERS: [(&str, usize); 7] =
-  [("store", 1), ("registry", 2), ("usage", 3), ("agents", 4), ("tasks", 5), ("sched", 6), ("session-api", 7)];
+const RUNTIME_LAYERS: [(&str, usize); 8] = [
+  ("store", 1),
+  ("registry", 2),
+  ("usage", 3),
+  ("agents", 4),
+  ("tasks", 5),
+  ("triggers", 6),
+  ("sched", 6),
+  ("session-api", 7),
+];
 
 const DEPEND_ON_THE_RUNTIME: &str = "Depend on the registry: the imported crate registers its implementation, and the \
                                     importer looks it up there.";
@@ -897,6 +905,7 @@ fn the_checks_find_each_break() {
     "crates/runtime/agents",
     "crates/runtime/tasks",
     "crates/runtime/sched",
+    "crates/runtime/triggers",
     "crates/runtime/mystery",
     "crates/misc/loose",
   ];
@@ -914,6 +923,7 @@ fn the_checks_find_each_break() {
       ("crates/runtime/agents/Cargo.toml", crate_manifest("agents-crate", &[], &[])),
       ("crates/runtime/tasks/Cargo.toml", crate_manifest("tasks-crate", &[], &[])),
       ("crates/runtime/sched/Cargo.toml", crate_manifest("sched-crate", &[], &[])),
+      ("crates/runtime/triggers/Cargo.toml", crate_manifest("triggers-crate", &[], &[])),
       ("crates/runtime/mystery/Cargo.toml", crate_manifest("mystery-crate", &[], &[])),
       ("crates/misc/loose/Cargo.toml", crate_manifest("loose-crate", &[], &[])),
     ]

@@ -69,6 +69,10 @@ pub fn registry() -> Result<Registry, RegistryError> {
 
 #[cfg(test)]
 mod tests {
+  use std::env;
+  use std::fs;
+  use std::path::PathBuf;
+
   use super::registry;
 
   #[test]
@@ -98,5 +102,41 @@ mod tests {
     // Python: tests/test_disk_sweep.py::test_feature_registers_cli_and_scheduled_handler
     let registry = registry().expect("the listed packages register");
     assert!(registry.scheduled_handler_named("disk_sweep").is_some());
+  }
+
+  #[test]
+  fn registration_inventory_matches_the_committed_file() {
+    let registry = registry().expect("the listed packages register");
+    let rendered = format!("{}\n", registry.inventory().join("\n"));
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("registration_inventory.txt");
+    let update = match env::var("UPDATE_REGISTRATION_INVENTORY") {
+      Ok(value) if value == "1" => true,
+      Ok(value) if value == "0" => false,
+      Ok(value) => panic!("UPDATE_REGISTRATION_INVENTORY must be 0 or 1, got {value:?}"),
+      Err(env::VarError::NotPresent) => false,
+      Err(error) => panic!("cannot read UPDATE_REGISTRATION_INVENTORY: {error}"),
+    };
+    if update {
+      fs::write(&path, &rendered).expect("write registration inventory");
+      panic!("wrote {}; rerun without UPDATE_REGISTRATION_INVENTORY=1", path.display());
+    }
+
+    let expected = fs::read_to_string(&path).expect("read committed registration inventory");
+    let expected_lines: Vec<&str> = expected.lines().collect();
+    let rendered_lines: Vec<&str> = rendered.lines().collect();
+    let first_difference =
+      expected_lines.iter().zip(&rendered_lines).position(|(expected, actual)| expected != actual).or_else(|| {
+        (expected_lines.len() != rendered_lines.len()).then_some(expected_lines.len().min(rendered_lines.len()))
+      });
+    if let Some(index) = first_difference {
+      let expected_line = expected_lines.get(index).copied().unwrap_or("<missing>");
+      let rendered_line = rendered_lines.get(index).copied().unwrap_or("<missing>");
+      panic!(
+        "registration inventory differs at line {}:\n expected: {}\n actual: {}",
+        index + 1,
+        expected_line,
+        rendered_line
+      );
+    }
   }
 }

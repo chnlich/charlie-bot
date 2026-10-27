@@ -46,10 +46,13 @@ registerWsMessageHandler('session_renamed', (ev) => {
 }, {advancesCursor: false});
 
 // A changed task node re-fetches the list the same way a group change does.
+// The archived view refreshes its loaded rows in place instead, so the
+// broadcast never clears the list.
 function refetchSessionList() {
   const searchInput = document.getElementById('sidebar-search');
   const query = searchInput ? searchInput.value.trim() : '';
   if (query) handleSidebarSearch(query);
+  else if (currentFilter === 'archived') refreshArchivedView();
   else switchSidebarFilter(currentFilter);
 }
 registerWsMessageHandler('session_group_changed', refetchSessionList, {advancesCursor: false});

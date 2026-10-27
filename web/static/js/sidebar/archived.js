@@ -8,12 +8,17 @@
 // previous page already carried); ordering, membership, and group aggregates
 // come from GET /api/sessions/archived (src/runtime/api/sessions.py), and in-list
 // operations (unarchive / delete / set group) update the merged list and the
-// strip counts in place with no refetch. The rendered cap and Load more count
-// archived rows only: a context row is the tree's scaffolding, never part of
-// the user's archived list.
+// strip counts in place with no refetch. A task-tree broadcast refreshes the
+// loaded range in place: the strip filter, the loaded pages and the scroll
+// position stay. The rendered cap and Load more count archived rows only: a
+// context row is the tree's scaffolding, never part of the user's archived list.
 // ---------------------------------------------------------------------------
 
 const ARCHIVED_PAGE_LIMIT = 100;
+// The server clamps limit to 500 (SESSION_PAGE_LIMIT_MAX in src/infra/constants.py;
+// clamp(1, 500) in rust/crates/runtime/session-api/src/routes.rs), so a refresh
+// asks for that many rows per request.
+const ARCHIVED_REFRESH_PAGE_LIMIT = 500;
 // Auto-append stops at the cap; the Load more button turns deeper scrolling
 // into an explicit action instead of an unbounded DOM.
 const ARCHIVED_RENDER_CAP = 2000;
@@ -31,6 +36,7 @@ const archivedState = {
   rowIds: {},      // delivered row id -> true, the merge's dedup key
   rowGroups: {},   // archived row id -> group ('' = ungrouped) for the strip's in-place updates
   loading: false,
+  refreshPending: false, // a broadcast arrived while loading: one trailing refresh runs when the in-flight work ends
   pillsEl: null,
   rowsEl: null,
   footEl: null,
@@ -90,18 +96,24 @@ function repaintArchivedTree() {
   });
 }
 
+// Merge one page into a list's rows: a row the list already holds keeps its
+// first delivery, and the rendered count moves for archived rows only.
+function mergeArchivedRows(list, sessions) {
+  const fresh = sessions.filter(s => !list.rowIds[s.id]);
+  fresh.forEach(s => {
+    list.rowIds[s.id] = true;
+    list.rows.push(s);
+    if (!s.context_only) list.rowGroups[s.id] = s.group || '';
+  });
+  list.renderedCount += fresh.filter(s => !s.context_only).length;
+}
+
 // Merge one page into the tree's row list and repaint the whole tree, so a
 // delivered firing always nests under its scheduled node whatever page each
 // arrived on.
 function appendArchivedRows(sessions) {
   if (!archivedState.rowsEl) return;
-  const fresh = sessions.filter(s => !archivedState.rowIds[s.id]);
-  fresh.forEach(s => {
-    archivedState.rowIds[s.id] = true;
-    archivedState.rows.push(s);
-    if (!s.context_only) archivedState.rowGroups[s.id] = s.group || '';
-  });
-  archivedState.renderedCount += fresh.filter(s => !s.context_only).length;
+  mergeArchivedRows(archivedState, sessions);
   repaintArchivedTree();
 }
 
@@ -118,20 +130,26 @@ function repaintWithoutRows(doomedIds) {
   repaintArchivedTree();
 }
 
+// One request on the archived list: the active strip filter, and the keyset
+// cursor when the request follows another page.
+async function requestArchivedPage(limit, before, beforeId) {
+  let qs = 'limit=' + limit;
+  if (archivedState.group !== null) qs += '&group=' + encodeURIComponent(archivedState.group);
+  if (before) {
+    qs += '&before=' + encodeURIComponent(before)
+        + '&before_id=' + encodeURIComponent(beforeId);
+  }
+  const res = await fetch('/api/sessions/archived?' + qs);
+  if (!res.ok) throw new Error(`Archived fetch failed: ${res.status}`);
+  return res.json();
+}
+
 async function fetchArchivedPage() {
   if (archivedState.loading || !archivedState.rowsEl) return;
   archivedState.loading = true;
   const epoch = archivedState.epoch;
   try {
-    let qs = 'limit=' + ARCHIVED_PAGE_LIMIT;
-    if (archivedState.group !== null) qs += '&group=' + encodeURIComponent(archivedState.group);
-    if (archivedState.nextBefore) {
-      qs += '&before=' + encodeURIComponent(archivedState.nextBefore)
-          + '&before_id=' + encodeURIComponent(archivedState.nextBeforeId);
-    }
-    const res = await fetch('/api/sessions/archived?' + qs);
-    if (!res.ok) throw new Error(`Archived fetch failed: ${res.status}`);
-    const page = await res.json();
+    const page = await requestArchivedPage(ARCHIVED_PAGE_LIMIT, archivedState.nextBefore, archivedState.nextBeforeId);
     if (epoch !== archivedState.epoch) return;
     archivedState.groups = page.groups;
     archivedState.hasMore = page.has_more;
@@ -143,8 +161,74 @@ async function fetchArchivedPage() {
   } catch (err) {
     console.error('Archived fetch failed:', err);
   } finally {
-    if (epoch === archivedState.epoch) archivedState.loading = false;
+    if (epoch === archivedState.epoch) {
+      archivedState.loading = false;
+      runPendingArchivedRefresh();
+    }
   }
+}
+
+// The one place a refresh rebuilds the list-derived state: the merged rows with
+// their bookkeeping, and the strip totals and cursor the walk's last page carries.
+function setArchivedList(list, lastPage) {
+  archivedState.rows = list.rows;
+  archivedState.rowIds = list.rowIds;
+  archivedState.rowGroups = list.rowGroups;
+  archivedState.renderedCount = list.renderedCount;
+  archivedState.groups = lastPage.groups;
+  archivedState.hasMore = lastPage.has_more;
+  archivedState.nextBefore = lastPage.next_before;
+  archivedState.nextBeforeId = lastPage.next_before_id;
+}
+
+// A broadcast refreshes the loaded range from the first page, in requests of the
+// server's row cap, until the delivered archived rows cover the loaded count. It
+// compares only after the last page; an unchanged list is not repainted.
+async function refreshArchivedView() {
+  if (archivedState.loading) {
+    archivedState.refreshPending = true;
+    return;
+  }
+  archivedState.loading = true;
+  const epoch = archivedState.epoch;
+  try {
+    const loadedCount = archivedState.renderedCount;
+    const list = {rows: [], rowIds: {}, rowGroups: {}, renderedCount: 0};
+    let before = null;
+    let beforeId = null;
+    let page;
+    do {
+      page = await requestArchivedPage(ARCHIVED_REFRESH_PAGE_LIMIT, before, beforeId);
+      if (epoch !== archivedState.epoch) return;
+      mergeArchivedRows(list, page.sessions);
+      before = page.next_before;
+      beforeId = page.next_before_id;
+    } while (page.has_more && list.renderedCount < loadedCount);
+    // Server rows are JSON with a fixed key order, so their serialized form
+    // compares every field the row render reads.
+    if (JSON.stringify(list.rows) === JSON.stringify(archivedState.rows)) return;
+    const nav = document.getElementById('session-list');
+    const scrollTop = nav.scrollTop;
+    setArchivedList(list, page);
+    repaintArchivedTree();
+    renderArchivedPills();
+    renderArchivedFoot();
+    nav.scrollTop = scrollTop;
+  } catch (err) {
+    console.error('Archived refresh failed:', err);
+  } finally {
+    if (epoch === archivedState.epoch) {
+      archivedState.loading = false;
+      runPendingArchivedRefresh();
+    }
+  }
+}
+
+// Broadcasts that arrived during the in-flight work share one trailing refresh.
+function runPendingArchivedRefresh() {
+  if (!archivedState.refreshPending) return;
+  archivedState.refreshPending = false;
+  refreshArchivedView();
 }
 
 function ensureArchivedScrollHandler(nav) {
@@ -168,6 +252,9 @@ function resetArchivedList() {
   archivedState.rowIds = {};
   archivedState.rowGroups = {};
   archivedState.loading = false;
+  // The page-1 request below starts after any earlier broadcast, so that
+  // broadcast needs no trailing refresh.
+  archivedState.refreshPending = false;
   const nav = document.getElementById('session-list');
   if (!nav) return;
   nav.innerHTML = '';
@@ -270,6 +357,7 @@ function applyArchivedGroupChange(sessionId, group) {
 
 const API = {
   loadArchivedView,
+  refreshArchivedView,
   setArchivedGroupFilter,
   loadArchivedNextPage,
   archivedStarToggled,

@@ -1,0 +1,32 @@
+{
+  "python_test": "test_main_rejects_bad_invocation_before_post",
+  "python_parameter": "removed-legacy-context",
+  "argv": [
+    "delegate",
+    "--session",
+    "s1",
+    "--repo",
+    "{root}",
+    "--base-branch",
+    "main",
+    "--task-spec-file",
+    "{root}/task_spec.md",
+    "--context",
+    "review hint",
+    "--keep-worktree",
+    "0"
+  ],
+  "cwd": "{root}",
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n",
+    "task_spec.md": "## Goal\nDo work.\n\n## Source Files\n- (none)\n\n## Required Behavior\nImplement the requested behavior.\n\n## Acceptance Tests\nRun focused tests.\n\n## Reviewer Checklist\nCheck the contract.\n\n## Out of Scope\nDo not change unrelated files.\n"
+  },
+  "responses": [],
+  "parser_generated": true,
+  "expect": {
+    "stdout": "",
+    "stderr": "usage: charliebot delegate [-h] [--session SESSION] [--repo REPO]\n                           --task-spec-file TASK_SPEC_FILE\n                           [--base-branch BASE_BRANCH] [--backend BACKEND]\n                           --keep-worktree {0,1} [--request-id REQUEST_ID]\n                           [--task-type {implement,quick-edit,script-run,verify}]\ncharliebot delegate: error: unrecognized arguments: --context review hint\n",
+    "exit": 2,
+    "requests": []
+  }
+}

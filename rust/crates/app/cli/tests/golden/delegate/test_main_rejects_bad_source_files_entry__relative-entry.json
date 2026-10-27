@@ -1,0 +1,27 @@
+{
+  "python_test": "test_main_rejects_bad_source_files_entry",
+  "python_parameter": "relative-entry",
+  "argv": [
+    "delegate",
+    "--repo",
+    "{root}",
+    "--base-branch",
+    "main",
+    "--task-spec-file",
+    "{root}/task_spec.md",
+    "--keep-worktree",
+    "0"
+  ],
+  "cwd": "{root}/home/sessions/abc",
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n",
+    "task_spec.md": "## Goal\nDo work.\n\n## Source Files\n- relative/source.md\n\n## Required Behavior\nImplement the requested behavior.\n\n## Acceptance Tests\nRun focused tests.\n\n## Reviewer Checklist\nCheck the contract.\n\n## Out of Scope\nDo not change unrelated files.\n"
+  },
+  "responses": [],
+  "expect": {
+    "stdout": "",
+    "stderr": "{\"error\": \"task spec source file entries must be absolute paths or - (none): - relative/source.md\"}\n",
+    "exit": 2,
+    "requests": []
+  }
+}

@@ -1,24 +1,17 @@
 //! Per-session queue for serialized manager turns.
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, anyhow};
 use charliebot_agents::agent_environment::AgentBaseEnvironment;
 use charliebot_agents::backend_pool::BackendPool;
-use charliebot_agents::backends::claude_code::{
-  claude_accounts, claude_compaction, claude_config, claude_idle_compaction, claude_metadata, login_dirs,
-};
 use charliebot_agents::runner::AgentRunner;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::event_types;
-use charliebot_registry::backend::BackendLifecycle;
+use charliebot_registry::backend::{BackendLifecycle, EmitFn, IdleArmContext, IdleStartGate, SessionContextStateFn};
 use charliebot_registry::context::FeatureContext;
-use charliebot_store::compact::CompactValue;
-use charliebot_store::metadata::{SessionMetadata, SessionStatus, UtcDateTime};
-use charliebot_store::run_records::RunKind;
+use charliebot_store::metadata::{SessionMetadata, UtcDateTime};
 use charliebot_usage::SessionUsage;
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
@@ -76,13 +69,8 @@ pub use charliebot_registry::backend::CompactionRunFn;
 pub struct MasterQueue {
   state: Mutex<QueueState>,
   backend_pool: Arc<BackendPool>,
-  compaction: CompactionRunFn,
-}
-
-fn run_real_compaction<'a>(
-  run: claude_compaction::CompactionRun<'a>,
-) -> BoxFuture<'a, anyhow::Result<claude_compaction::CompactionOutcome>> {
-  Box::pin(claude_compaction::run_compaction(run))
+  /// The idle compaction runner tests install; the round's backend supplies its own when this is `None`.
+  compaction: Option<CompactionRunFn>,
 }
 
 struct PersistedAccountLabel {
@@ -92,12 +80,12 @@ struct PersistedAccountLabel {
 
 impl MasterQueue {
   pub fn new(backend_pool: Arc<BackendPool>) -> Self {
-    Self::with_compaction_runner(backend_pool, Arc::new(run_real_compaction))
+    Self { state: Mutex::new(QueueState::default()), backend_pool, compaction: None }
   }
 
   /// The queue with the idle compaction runner the trigger path starts. Tests replace only the runner.
   pub fn with_compaction_runner(backend_pool: Arc<BackendPool>, compaction: CompactionRunFn) -> Self {
-    Self { state: Mutex::new(QueueState::default()), backend_pool, compaction }
+    Self { state: Mutex::new(QueueState::default()), backend_pool, compaction: Some(compaction) }
   }
 
   pub fn session_callbacks(
@@ -532,10 +520,9 @@ impl MasterQueue {
     last_cc_session_id: &mut Option<String>,
     last_account_label: &mut Option<String>,
   ) -> anyhow::Result<()> {
-    let idle = claude_idle_compaction::IdleCompaction::shared();
-    idle.settle_for_turn(session_id).await?;
+    item.callbacks.features.registry.settle_idle_compaction(session_id).await?;
     self.wait_for_idle_compaction_reservation(session_id).await?;
-    idle.settle_for_turn(session_id).await?;
+    item.callbacks.features.registry.settle_idle_compaction(session_id).await?;
     refresh_anchors_from_disk(item, last_cc_session_id, last_account_label)?;
     let mut result = if item.resume_record.is_some() {
       master_run::resume_cc(item).await?
@@ -670,7 +657,7 @@ async fn arm_idle_after_round(
   ran_backend: Option<String>,
 ) {
   let Some(backend_id) = ran_backend else {
-    claude_idle_compaction::IdleCompaction::shared().disarm(session_id);
+    item.callbacks.features.registry.disarm_idle_compaction(session_id);
     return;
   };
   let armed = arm_idle_compaction(
@@ -695,208 +682,56 @@ async fn arm_idle_compaction(
   backend_id: String,
   persist_and_broadcast: PersistAndBroadcastFn,
 ) -> anyhow::Result<()> {
+  features.registry.disarm_idle_compaction(&session_id);
   let Some(option) = cfg.get_backend_option(&backend_id).cloned() else {
-    claude_idle_compaction::IdleCompaction::shared().disarm(&session_id);
     return Ok(());
   };
-  if option.backend_type != "cc-claude" {
-    claude_idle_compaction::IdleCompaction::shared().disarm(&session_id);
-    return Ok(());
-  }
-  let Some(metadata) = features.store.read_metadata_fresh(&session_id)? else {
-    anyhow::bail!("session {session_id} disappeared before idle compaction was armed");
-  };
+  let lifecycle = features.registry.lifecycle_for(&option.backend_type)?;
   let usage = features.startup.require::<SessionUsage>()?;
-  let (_, last_request_at) = usage.context_state(&session_id, &metadata)?;
-  let idle = claude_idle_compaction::IdleCompaction::shared();
-  idle.disarm(&session_id);
-  let Some(armed_at) = last_request_at else {
-    return Ok(());
-  };
-  let compaction =
-    queue.upgrade().context("master queue disappeared before idle compaction was armed")?.compaction.clone();
+  let context_session_id = session_id.clone();
+  let context_state: SessionContextStateFn =
+    Arc::new(move |metadata| Ok(usage.context_state(&context_session_id, metadata)?));
   let base_environment = features.startup.require::<AgentBaseEnvironment>()?;
   let mut base_env = base_environment.values.clone();
   base_env.insert("GIT_CEILING_DIRECTORIES".to_string(), cfg.charliebot_home.to_string_lossy().into_owned());
   let cwd = cfg.sessions_dir().join(&session_id);
   let emit_session_id = session_id.clone();
-  let emit: charliebot_registry::backend::EmitFn = Arc::new(move |event| {
+  let emit: EmitFn = Arc::new(move |event| {
     let persist = Arc::clone(&persist_and_broadcast);
     let session_id = emit_session_id.clone();
     Box::pin(async move { persist(session_id, event).await })
   });
-  let inspect_features = Arc::clone(&features);
-  let inspect_option = option.clone();
-  let inspect_registry = Arc::clone(&features.registry);
-  let inspect_session_id = session_id.clone();
-  let inspect_queue = queue.clone();
-  let inspect_env = base_env.clone();
-  let inspect_cwd = cwd.clone();
-  let inspect_emit = Arc::clone(&emit);
-  let inspect_armed_at = armed_at;
-  let inspect_compaction = Arc::clone(&compaction);
-  let reservation_slot = Arc::new(Mutex::new(None::<Arc<AtomicBool>>));
-  let inspect_reservation_slot = Arc::clone(&reservation_slot);
-  let inspect = Arc::new(move |_now| {
-    let Some(metadata) = inspect_features.store.read_metadata_fresh(&inspect_session_id)? else {
-      return Ok(None);
-    };
-    let current_cfg = inspect_features.config.get().context("loading config.yaml for idle Claude compaction")?;
-    let usage = inspect_features.startup.require::<SessionUsage>()?;
-    let (context_tokens, last_request_at) = usage.context_state(&inspect_session_id, &metadata)?;
-    let compacted_after_request = if let Some(last_request_at) = last_request_at {
-      // Python scans its cached history in asyncio.to_thread (claude_idle_compaction.py:176-195).
-      let store = Arc::clone(&inspect_features.store);
-      let session_id = inspect_session_id.clone();
-      tokio::task::block_in_place(move || {
-        let events = store.load_chat_events_shared_sync(&session_id)?;
-        let newest_compaction = events
-          .iter()
-          .rev()
-          .find(|event| {
-            event.get("type").and_then(CompactValue::as_str) == Some(event_types::CONTEXT_COMPACTED)
-              && event.get("timestamp").and_then(CompactValue::as_str).is_some()
-          })
-          .and_then(|event| event.get("timestamp"))
-          .and_then(CompactValue::as_str)
-          .map(UtcDateTime::parse)
-          .transpose()?;
-        Ok::<_, anyhow::Error>(newest_compaction.is_some_and(|timestamp| timestamp > last_request_at))
-      })?
-    } else {
-      false
-    };
-    let account_label = claude_metadata::account_of(&metadata);
-    let default_dir = login_dirs::claude_config_dir()?;
-    let account = claude_idle_compaction::account_for_session(
-      &current_cfg,
-      &inspect_option,
-      account_label.as_deref(),
-      &default_dir,
-    )?;
-    let resume_id = metadata.cc_session_id.clone();
-    let transcript_present = match account.as_ref().zip(resume_id.as_deref()) {
-      Some((account, resume_id)) => {
-        !claude_accounts::transcript_matches(Path::new(&account.config_dir), resume_id)?.is_empty()
-      }
-      None => false,
-    };
-    let facts = claude_idle_compaction::IdleFacts {
-      archived: metadata.status == SessionStatus::Archived,
-      backend_unchanged: metadata.backend == inspect_option.id,
-      turn_busy: false,
-      armed_at: Some(inspect_armed_at),
-      last_request_at,
-      compacted_after_request,
-      context_tokens,
-      resume_id: resume_id.clone(),
-      transcript_present,
-    };
-    let reservation = Arc::new(AtomicBool::new(false));
-    *inspect_reservation_slot.lock().expect("idle reservation slot is not poisoned") = Some(Arc::clone(&reservation));
-    let run_reservation = Arc::clone(&reservation);
-    let run_queue = inspect_queue.clone();
-    let run_registry = Arc::clone(&inspect_registry);
-    let run_option = inspect_option.clone();
-    let run_cfg = Arc::clone(&current_cfg);
-    let run_account = account.clone();
-    let run_session_id = inspect_session_id.clone();
-    let run_cc_session_id = resume_id.clone();
-    let run_cwd = inspect_cwd.clone();
-    let run_env = inspect_env.clone();
-    let run_emit = Arc::clone(&inspect_emit);
-    let run_tokens = context_tokens;
-    let compaction = Arc::clone(&inspect_compaction);
-    let run: claude_idle_compaction::RunFn = Arc::new(move || {
-      let reserved = Arc::clone(&run_reservation);
-      let queue = run_queue.clone();
-      let registry = Arc::clone(&run_registry);
-      let option = run_option.clone();
-      let cfg = Arc::clone(&run_cfg);
-      let account = run_account.clone();
-      let session_id = run_session_id.clone();
-      let cc_session_id = run_cc_session_id.clone();
-      let cwd = run_cwd.clone();
-      let base_env = run_env.clone();
-      let emit = Arc::clone(&run_emit);
-      let pre_tokens = run_tokens;
-      let compaction = Arc::clone(&compaction);
-      Box::pin(async move {
-        if reserved.swap(false, Ordering::AcqRel) {
-          queue
-            .upgrade()
-            .context("master queue disappeared after idle compaction was reserved")?
-            .release_idle_compaction_reservation(&session_id);
-        }
-        let account = account.expect("a compaction candidate has an account");
-        let cc_session_id = cc_session_id.expect("a compaction candidate has a resume id");
-        let (argv, env) = claude_idle_compaction::build_idle_process(
-          registry,
-          &cfg,
-          &option,
-          &account,
-          claude_idle_compaction::IdleProcessIdentity {
-            session_id: session_id.clone(),
-            cc_session_id,
-            run_kind: RunKind::ManagerTurn,
-          },
-          &base_env,
-        )?;
-        let run = claude_idle_compaction::idle_run_options(&option, &account, &cwd, pre_tokens, argv, env);
-        let outcome = compaction(claude_compaction::CompactionRun {
-          argv: run.argv,
-          env: run.env,
-          cwd: &run.cwd,
-          config_dir: Path::new(&run.config_dir),
-          session_id: &session_id,
-          family: &run.family,
-          model: &run.model,
-          trigger: &run.trigger,
-          failure_trigger: run.failure_trigger.as_deref(),
-          pre_tokens: run.pre_tokens,
-          emit: &emit,
-          cfg: &cfg,
-          session_cgroup_id: Some(&session_id),
-          account_label: &account.label,
-          timeout_duration: claude_compaction::CLAUDE_COMPACTION_TIMEOUT,
-        })
-        .await?;
-        if outcome.ok {
-          tracing::info!(
-            target: "charliebot_tasks",
-            session = %session_id,
-            pre_tokens,
-            post_tokens = ?outcome.post_tokens,
-            cache_read_tokens = ?outcome.cache_read_tokens,
-            account = account.label,
-            "claude_idle_compaction_done"
-          );
-        }
-        Ok(())
-      }) as BoxFuture<'static, anyhow::Result<()>>
-    });
-    Ok(Some(claude_idle_compaction::IdleCandidate {
-      facts,
-      idle_tokens: current_cfg.section::<claude_config::AccountsConfig>("accounts").claude_compaction.idle_tokens,
-      run,
-    }))
-  });
-  let busy_queue = queue.clone();
-  let is_busy: claude_idle_compaction::BusyFn = Arc::new(move |session_id| {
-    let reservation = reservation_slot
-      .lock()
-      .expect("idle reservation slot is not poisoned")
-      .clone()
-      .context("idle compaction candidate has no reservation state")?;
-    let queue = busy_queue.upgrade().ok_or_else(|| anyhow!("master queue disappeared before idle compaction"))?;
-    let reserved = queue.reserve_idle_compaction(session_id);
-    if reserved {
-      reservation.store(true, Ordering::Release);
-    }
-    Ok(!reserved)
-  });
-  idle.arm(claude_idle_compaction::IdleTimerInput { session_id, armed_at, inspect, is_busy });
-  Ok(())
+  let compaction =
+    queue.upgrade().context("master queue disappeared before idle compaction was armed")?.compaction.clone();
+  lifecycle
+    .arm_idle_compaction(IdleArmContext {
+      features: &features,
+      option: &option,
+      session_id: &session_id,
+      context_state,
+      cwd,
+      base_env,
+      emit,
+      compaction,
+      gate: Arc::new(QueueIdleStartGate(queue)),
+    })
+    .await
+}
+
+/// The queue side of a backend's idle compaction: its start reservation outlives the arm call.
+struct QueueIdleStartGate(std::sync::Weak<MasterQueue>);
+
+impl IdleStartGate for QueueIdleStartGate {
+  fn reserve(&self, session_id: &str) -> anyhow::Result<bool> {
+    let queue = self.0.upgrade().ok_or_else(|| anyhow!("master queue disappeared before idle compaction"))?;
+    Ok(queue.reserve_idle_compaction(session_id))
+  }
+
+  fn release(&self, session_id: &str) -> anyhow::Result<()> {
+    let queue = self.0.upgrade().context("master queue disappeared after idle compaction was reserved")?;
+    queue.release_idle_compaction_reservation(session_id);
+    Ok(())
+  }
 }
 
 /// Return the event ids queued or running for one session.
@@ -1008,8 +843,11 @@ mod tests {
   use std::path::{Path, PathBuf};
 
   use charliebot_agents::backends::claude_code::EXCLUDE_DYNAMIC_SECTIONS_FLAG;
+  use charliebot_agents::backends::claude_code::claude_compaction;
+  use charliebot_agents::backends::claude_code::claude_idle_compaction;
   use charliebot_agents::backends::claude_code::claude_lifecycle::ClaudeCodeLifecycle;
   use charliebot_agents::backends::claude_code::claude_metadata;
+  use charliebot_agents::backends::claude_code::login_dirs;
   use charliebot_core::config::BackendOption;
   use charliebot_core::credentials::load_credentials;
   use charliebot_core::hot_reload::HotReload;

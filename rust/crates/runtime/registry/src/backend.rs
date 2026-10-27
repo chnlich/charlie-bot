@@ -1,7 +1,8 @@
 //! Backend hooks of the agent runtime (`src/runtime/hooks/backend_types.py`, `backend_type_registration.py`,
 //! `backend_lifecycle.py` and `backend_lifecycle_registration.py`): the backend types and their traits, the factory
-//! that builds a process runner per launch, the lifecycle that plans each run's processes, and the child-environment,
-//! reading-limit and usage-resolver registries.
+//! that builds a process runner per launch, the lifecycle that plans each run's processes and arms its idle
+//! compaction, the compaction process that round runs, and the child-environment, reading-limit and usage-resolver
+//! registries.
 //!
 //! This module holds the contracts only. The agent-runtime crates implement them: the process runner lives in
 //! `charliebot-agents`, and it calls these traits.
@@ -22,6 +23,7 @@ use futures_util::future::BoxFuture;
 use serde_json::{Map, Value};
 use tokio::io::AsyncWrite;
 
+use crate::context::FeatureContext;
 use crate::registry::{Registry, RegistryError};
 
 /// How a backend type resumes its conversation: a CLI flag, or the backend's own session id in its constructor.
@@ -283,6 +285,38 @@ pub struct CompactionOutcome {
 pub type CompactionRunFn =
   Arc<dyn for<'a> Fn(CompactionRun<'a>) -> BoxFuture<'a, anyhow::Result<CompactionOutcome>> + Send + Sync>;
 
+/// A session's context tokens and the time of its last request, as the usage owner reads them.
+pub type SessionContextStateFn =
+  Arc<dyn Fn(&SessionMetadata) -> anyhow::Result<(Option<i64>, Option<UtcDateTime>)> + Send + Sync>;
+
+/// The queue's control over one session's idle-compaction start.
+pub trait IdleStartGate: Send + Sync {
+  /// Take the session's start reservation, only while no turn is running or queued. `true` means it was taken.
+  fn reserve(&self, session_id: &str) -> anyhow::Result<bool>;
+  /// Return the reservation a started compaction took.
+  fn release(&self, session_id: &str) -> anyhow::Result<()>;
+}
+
+/// What the runtime gives a backend's idle-compaction hook after a round (`claude_idle_compaction.arm`).
+pub struct IdleArmContext<'a> {
+  /// The server handles: the config, the session store, the registry and the typed startup state.
+  pub features: &'a Arc<FeatureContext>,
+  pub option: &'a BackendOption,
+  pub session_id: &'a str,
+  /// The session's context tokens and last request time. The trigger path reads it again on each inspection.
+  pub context_state: SessionContextStateFn,
+  /// The session directory the compaction process runs in.
+  pub cwd: PathBuf,
+  /// The base agent environment of the compaction process.
+  pub base_env: Env,
+  /// Writes one event for the user.
+  pub emit: EmitFn,
+  /// The queue's compaction runner; `None` runs the hook's own.
+  pub compaction: Option<CompactionRunFn>,
+  /// The queue's start reservation.
+  pub gate: Arc<dyn IdleStartGate>,
+}
+
 /// What the runtime gives a lifecycle for one run.
 pub struct LaunchContext {
   pub cfg: Arc<CharlieBotConfig>,
@@ -385,6 +419,20 @@ pub trait BackendLifecycle: Send + Sync {
     _run_id: Option<&str>,
   ) -> anyhow::Result<Map<String, Value>> {
     Ok(Map::new())
+  }
+
+  /// Arms the session's idle compaction after a round (`claude_idle_compaction.arm`). The default arms none.
+  fn arm_idle_compaction<'a>(&'a self, _ctx: IdleArmContext<'a>) -> BoxFuture<'a, anyhow::Result<()>> {
+    Box::pin(async { Ok(()) })
+  }
+
+  /// Drops the session's pending idle timer, when this backend keeps one.
+  fn disarm_idle_compaction(&self, _session_id: &str) {}
+
+  /// Waits out the session's running idle compaction before a turn starts
+  /// (`claude_idle_compaction.settle_for_turn`). The default has none to wait for.
+  fn settle_idle_compaction<'a>(&'a self, _session_id: &'a str) -> BoxFuture<'a, anyhow::Result<()>> {
+    Box::pin(async { Ok(()) })
   }
 
   /// The notice events for the user that a finished round's events call for.
@@ -509,6 +557,22 @@ impl Registry {
       }
     }
     found
+  }
+
+  /// Drops the session's pending idle timer on every backend that keeps one: a session that changes backend keeps
+  /// none.
+  pub fn disarm_idle_compaction(&self, session_id: &str) {
+    for lifecycle in self.lifecycles() {
+      lifecycle.disarm_idle_compaction(session_id);
+    }
+  }
+
+  /// Waits out the session's running idle compaction on every backend that keeps one.
+  pub async fn settle_idle_compaction(&self, session_id: &str) -> anyhow::Result<()> {
+    for lifecycle in self.lifecycles() {
+      lifecycle.settle_idle_compaction(session_id).await?;
+    }
+    Ok(())
   }
 
   /// The type whose family prefix starts `backend_id`, or `None`. It names the type of a backend id that config no

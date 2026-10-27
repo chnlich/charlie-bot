@@ -775,12 +775,14 @@ def test_backend_registration_reads_the_layout_of_each_build(
   assert all(live.poll() is None for live in world.live)
 
 
-def test_pre_grouping_build_passes_the_preflight_with_a_live_run(world: World) -> None:
-  """A live switch from the build before the grouping to a grouped build passes: the preflight finds the live run's
-  re-attachable backend type in the agents crate registration, then in the grouped build's own."""
+@pytest.mark.parametrize("target", ["old", "rust"], ids=["grouped-layout", "split-layout"])
+def test_pre_grouping_build_passes_the_preflight_with_a_live_run(world: World, target: str) -> None:
+  """A live switch from the build before the crate grouping passes: the preflight finds the live run's re-attachable
+  backend type in the agents crate registration, then in the target build's own, grouped or split per backend."""
+  builds = {"old": world.old_sha, "rust": world.rust_sha}
   _seed_live_run(world, "run-pre-grouping", "claude-opus")
 
-  proc = _stubbed_preflight(world, f"rust {world.pre_sha}", "rust", world.rust_sha)
+  proc = _stubbed_preflight(world, f"rust {world.pre_sha}", "rust", builds[target])
 
   assert proc.returncode == 0, _report(world, proc)
   assert f"preflight passed: rust {world.pre_sha}" in proc.stdout, _report(world, proc)

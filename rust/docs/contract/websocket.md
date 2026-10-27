@@ -71,7 +71,7 @@ The subscription happens before the catch-up read. Thus no event falls between t
 - `cursor` is the number of chat events the client already has. It is read from the handshake URL, not from a client frame.
 - A missing `cursor`, a non-decimal or non-ASCII value and a value longer than 19 characters close the socket with code 4400 before the subscription. The server sends no frame first.
 - UNVERIFIED: a value above the signed 64-bit maximum (19 digits) was not probed. Python's `int()` holds it, and the catch-up then treats the cursor as at or past the total.
-- The Rust handler still reads the first client text frame, not the query (`rust/crates/charliebot-session-api/src/websocket.rs`, `receive_cursor`); its port is tracked in `PORT_STATUS.md`.
+- The Rust handler still reads the first client text frame, not the query (`rust/crates/runtime/session-api/src/websocket.rs`, `receive_cursor`); its port is tracked in `PORT_STATUS.md`.
 
 ### Catch-up
 

@@ -1,0 +1,63 @@
+[package]
+name = "charliebot-server"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "charliebot-server"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+axum.workspace = true
+bytes.workspace = true
+charliebot-artifacts.workspace = true
+charliebot-backup.workspace = true
+charliebot-chat-threads.workspace = true
+charliebot-code-server.workspace = true
+charliebot-compat.workspace = true
+charliebot-agents = { path = "../../runtime/agents" }
+charliebot-core.workspace = true
+charliebot-diag.workspace = true
+charliebot-disk-sweep.workspace = true
+charliebot-diff-view.workspace = true
+charliebot-discord.workspace = true
+charliebot-explain.workspace = true
+charliebot-files.workspace = true
+charliebot-host-auth.workspace = true
+charliebot-memory.workspace = true
+charliebot-ncu.workspace = true
+charliebot-registry.workspace = true
+charliebot-sched.workspace = true
+charliebot-slack.workspace = true
+charliebot-store.workspace = true
+charliebot-session-api.workspace = true
+charliebot-tasks.workspace = true
+charliebot-terminal.workspace = true
+charliebot-trace.workspace = true
+charliebot-usage.workspace = true
+charliebot-usage-page.workspace = true
+charliebot-voice.workspace = true
+charliebot-web-reply.workspace = true
+flate2.workspace = true
+futures-util.workspace = true
+http.workspace = true
+http-body.workspace = true
+http-body-util.workspace = true
+nix.workspace = true
+percent-encoding.workspace = true
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+subtle.workspace = true
+tokio.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+charliebot-core = { workspace = true, features = ["test-support"] }
+tempfile.workspace = true

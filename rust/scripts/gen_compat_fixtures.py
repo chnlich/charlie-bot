@@ -375,7 +375,7 @@ EXTRA_MIME_PATHS = [
 def mimetype_cases() -> dict:
   """The content type CPython's `mimetypes` guesses for each built-in suffix, and for paths that combine them.
 
-  `MimeTypes()` reads only the built-in tables, the tables rust/crates/charliebot-compat/src/mimetypes_table.rs holds.
+  `MimeTypes()` reads only the built-in tables, the tables rust/crates/infra/compat/src/mimetypes_table.rs holds.
   """
   database = mimetypes.MimeTypes()
   suffixes = [*mimetypes._types_map_default, *mimetypes._suffix_map_default, *mimetypes._encodings_map_default]

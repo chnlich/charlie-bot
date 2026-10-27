@@ -37,33 +37,7 @@ const EXTRA_COMPACTION_TOOLS: &str = concat!(
   "KillShell,BashOutput,AskUserQuestion,ExitPlanMode,Task"
 );
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CompactionOutcome {
-  pub ok: bool,
-  pub error: Option<String>,
-  pub models: Vec<String>,
-  pub post_tokens: Option<i64>,
-  pub cache_read_tokens: Option<i64>,
-}
-
-/// One Claude CLI compaction, with the caller-selected model family and chat event triggers.
-pub struct CompactionRun<'a> {
-  pub argv: Vec<String>,
-  pub env: Env,
-  pub cwd: &'a Path,
-  pub config_dir: &'a Path,
-  pub session_id: &'a str,
-  pub family: &'a str,
-  pub model: &'a str,
-  pub trigger: &'a str,
-  pub failure_trigger: Option<&'a str>,
-  pub pre_tokens: Option<i64>,
-  pub emit: &'a EmitFn,
-  pub cfg: &'a CharlieBotConfig,
-  pub session_cgroup_id: Option<&'a str>,
-  pub account_label: &'a str,
-  pub timeout_duration: StdDuration,
-}
+pub use charliebot_registry::backend::{CompactionOutcome, CompactionRun};
 
 pub fn is_fable(model: Option<&str>) -> bool {
   model_family(model) == FABLE_FAMILY

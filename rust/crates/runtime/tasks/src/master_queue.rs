@@ -70,13 +70,7 @@ struct QueueState {
 }
 
 /// The idle compaction runner: `claude_compaction::run_compaction` in production.
-pub type CompactionRunFn = Arc<
-  dyn for<'a> Fn(
-      claude_compaction::CompactionRun<'a>,
-    ) -> BoxFuture<'a, anyhow::Result<claude_compaction::CompactionOutcome>>
-    + Send
-    + Sync,
->;
+pub use charliebot_registry::backend::CompactionRunFn;
 
 /// Owns per-session queues, consumers, current work items, and active backend runners.
 pub struct MasterQueue {

@@ -516,7 +516,8 @@ fn dialog(args: &DialogArgs) -> Result<(), CliExit> {
         continue;
       }
       let Some(block) = format_message_block(message) else { continue };
-      if first.is_none() {
+      // Python re-takes the header's anchor while the first block's event index is None.
+      if first.as_ref().is_none_or(|(_, _, event_index)| event_index.is_null()) {
         first = Some((*page_start, position, message.get("event_index").cloned().unwrap_or(Value::Null)));
       }
       blocks.push(block);

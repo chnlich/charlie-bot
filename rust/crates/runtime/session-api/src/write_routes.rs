@@ -30,7 +30,7 @@ use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value, json};
 
 use crate::detail::response_metadata;
-use crate::routes::store_error;
+use crate::route_support::store_error;
 
 const LOG_TARGET: &str = "charliebot_session_api";
 const PROFILE_CHOICES: &[&str] = &["manager", "worker"];

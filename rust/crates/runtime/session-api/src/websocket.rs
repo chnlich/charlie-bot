@@ -14,7 +14,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use tokio::time;
 
-use crate::blocking_store;
+use crate::route_support::blocking_store;
 
 const KEEPALIVE_TIMEOUT: Duration = Duration::from_secs(30);
 const CATCHUP_SLICE_EVENTS: usize = 400;

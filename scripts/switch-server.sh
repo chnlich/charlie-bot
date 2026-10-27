@@ -8,23 +8,32 @@
 # stops the old server, moves the clone with `git reset --keep <commit>` (forward or back), starts the release and
 # reads it back. A refusal changes nothing and exits 1. The switch runs detached under setsid, because stopping the
 # old server ends the master turn that started this command. The command prints the log path, waits for the verdict
-# and exits with it: 0 when the readback and the probe turn passed; 2 when the switch failed and the previous
-# implementation serves again; 3 when the restore failed too, and the log ends with the state
+# and exits with it: 0 when the readback, the probe turn and the delegation check passed; 2 when the switch failed
+# and the previous implementation serves again; 3 when the restore failed too, and the log ends with the state
 # the server is in; 4 when the switch completed but a recorded run died during it: the new server keeps serving, nothing
 # is restored, and the log names the run and its outcome. When the pane stays busy after Ctrl-C, the restore sends
 # SIGTERM, then SIGKILL, to the server processes under the pane.
 #
-# The probe turn runs last, in a session of its own. It passes once the run records its first assistant output (a
-# message or a tool call) or ends success. The archive then stops every run of the session that has not ended, and
-# repeats the stop and the archive while the server answers 409: a follow-up run, such as the web reply nudge, can start
-# after the turn. It reads run states and message roles only, so the model's text cannot fail a healthy server.
+# The probe turn runs after the readback, in a session of its own. It passes once the run records its first assistant
+# output (a message or a tool call) or ends success. The archive then stops every run of the session that has not ended,
+# and repeats the stop and the archive while the server answers 409: a follow-up run, such as the web reply nudge, can
+# start after the turn. It reads run states and message roles only, so the model's text cannot fail a healthy server.
+#
+# The delegation check runs after the probe turn. The probe proves that the server answers. The check proves that the
+# server creates a worktree on a repository, which the probe does not exercise. The check opens a session of its own
+# with a user message, because the server delegates only from a task chain that holds one. Then it delegates one
+# script-run task on the runtime clone, with base branch main. It waits up to CHARLIEBOT_SWITCH_DELEGATION_WAIT_S for
+# the run to end. It passes when the run records success and the worktree the record names exists. It reads the run
+# record and the worktree path only. Pass or fail, it stops the run, removes the worktree and its branch, and archives
+# its session.
 #
 # Environment: CHARLIEBOT_HOME (default ~/.charliebot), CHARLIEBOT_RELEASES_DIR (default ~/charliebot-releases),
 # CHARLIEBOT_LOG_DIR (default /tmp/charliebot-logs), CHARLIEBOT_TMUX_SOCKET (a tmux -L socket; unset means the default
 # server, where the production pane runs). CHARLIEBOT_SWITCH_CTRL_C_WAIT_S, CHARLIEBOT_SWITCH_STOP_WAIT_S and
 # CHARLIEBOT_SWITCH_READY_WAIT_S replace the 60 s, 60 s and 15 min waits. CHARLIEBOT_SWITCH_PROBE_WAIT_S and
-# CHARLIEBOT_SWITCH_PROBE_CANCEL_WAIT_S replace the 300 s and 60 s probe waits. The tests shorten the stop, ready and
-# probe waits.
+# CHARLIEBOT_SWITCH_PROBE_CANCEL_WAIT_S replace the 300 s and 60 s probe waits.
+# CHARLIEBOT_SWITCH_DELEGATION_WAIT_S replaces the 300 s delegation wait. The tests shorten the stop, ready, probe and
+# delegation waits.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -38,6 +47,9 @@ STOP_WAIT_S="${CHARLIEBOT_SWITCH_STOP_WAIT_S:-60}"
 READY_WAIT_S="${CHARLIEBOT_SWITCH_READY_WAIT_S:-900}"
 PROBE_WAIT_S="${CHARLIEBOT_SWITCH_PROBE_WAIT_S:-300}"
 PROBE_CANCEL_WAIT_S="${CHARLIEBOT_SWITCH_PROBE_CANCEL_WAIT_S:-60}"
+# The delegation check's wait for its run. A release rehearsal of 2026-10-27 on a clone of this repository passed the
+# check in 14 s and 16 s; 300 s leaves room for a slower host.
+DELEGATION_WAIT_S="${CHARLIEBOT_SWITCH_DELEGATION_WAIT_S:-300}"
 # The commit that made a live agy run survive a Rust restart: a build with it hands the running agy process to its
 # successor, so the run continues. A build without it lets agy die with the server, and a target build without it has no
 # adoption path, so a Rust-to-Rust switch keeps the run only when both builds carry it.
@@ -382,15 +394,18 @@ print(json.load(open(sys.argv[1]))[sys.argv[2]])
 PY
 }
 
-# newest_run_field FIELD: a field of the newest Run in the runs response in $WORK/body (read with order=desc&limit=1);
-# empty while the session has no run.
-newest_run_field() {
-  python3 -I - "$WORK/body" "$1" <<'PY'
+# newest_run_fields FIELD...: the named fields of the newest Run in the runs response in $WORK/body (read with
+# order=desc&limit=1), joined by the unit separator (0x1f). read splits on that separator without collapsing empty
+# fields. A field is empty while the session has no run, and when the record holds it as null. One python start
+# reads all the fields.
+newest_run_fields() {
+  python3 -I - "$WORK/body" "$@" <<'PY'
 import json
 import sys
 
 items = json.load(open(sys.argv[1])).get("items") or []
-print(items[0][sys.argv[2]] if items else "")
+values = [items[0][field] if items else "" for field in sys.argv[2:]]
+print("\x1f".join("" if value is None else str(value) for value in values))
 PY
 }
 
@@ -557,8 +572,9 @@ check_read_run() {
     log "$CHECK_LABEL: listing the runs answered $API_STATUS"
     return 1
   }
-  CHECK_RUN="$(newest_run_field id)" || return 1
-  CHECK_STATE="$(newest_run_field state)" || return 1
+  local fields
+  fields="$(newest_run_fields id state)" || return 1
+  IFS=$'\x1f' read -r CHECK_RUN CHECK_STATE <<<"$fields"
 }
 
 # run_ended STATE: the run has ended. A stopped run never launched, so it never will.
@@ -745,6 +761,175 @@ probe_turn() {
   return "$verdict"
 }
 
+# The user message that opens the check's task chain. The server delegates only from a chain that holds a user message,
+# and the message content holds no quote or backslash, so the request body needs no escaping. The model reads it, so
+# each sentence states one instruction or the purpose of one.
+DELEGATION_OPEN='Reply with the single word READY. This message opens the task chain that the check delegates from.'
+
+# The goal of the check's task. The worker reads it, so each sentence states one instruction or the purpose of one.
+DELEGATION_TASK='Run `git rev-parse --short HEAD` once in your worktree. This reads the checked-out commit and '\
+'changes no file. Do not change or commit any file. The check needs the worktree as the server created it.'
+
+# delegation_fail STEP MESSAGE: logs the step of the check that failed, with the server's words. The caller returns 1
+# after it.
+delegation_fail() {
+  check_log "step $1 failed: $2"
+}
+
+# delegation_body: the delegate request that starts the task in CHECK_SESSION, as JSON. The base branch is main, and
+# keep_worktree keeps the worktree after the run so the judgment can find it.
+delegation_body() {
+  python3 -I - "$CHECK_SESSION" "$REPO_ROOT" "$DELEGATION_TASK" <<'PY'
+import json
+import sys
+
+session, repo, goal = sys.argv[1:]
+print(json.dumps({
+    "session_id": session,
+    "description": goal,
+    "repo_path": repo,
+    "base_branch": "main",
+    "task_type": "script-run",
+    "keep_worktree": True,
+    "request_id": f"switch-delegation:{session}",
+}))
+PY
+}
+
+# run_error: the message of the last error event in the check's run, read from the run's event log. Each line of that
+# log is one JSON object. Empty when the run logged no error.
+run_error() {
+  python3 -I - "$HOME_DIR/sessions/$DELEG_CHILD/data/runs/$CHECK_RUN/events.jsonl" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+events = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()] if path.is_file() else []
+errors = [event.get("message", "") for event in events if event.get("type") == "error"]
+print(" ".join(errors[-1].split()) if errors else "")
+PY
+}
+
+# delegation_open: creates the session that holds the task, then sends it the user message that opens the task chain.
+# The archive closes the session.
+delegation_open() {
+  api POST /api/sessions/ '{"name":"switch delegation"}'
+  [ "$API_STATUS" = 200 ] || {
+    delegation_fail session "creating a session answered $API_STATUS"
+    return 1
+  }
+  DELEG_PARENT="$(json_field id)" || return 1
+  CHECK_SESSION=$DELEG_PARENT
+  check_log "created"
+  api POST "/api/chat/$CHECK_SESSION/message" \
+    "{\"content\":\"$DELEGATION_OPEN\",\"request_id\":\"switch-open:$CHECK_SESSION\"}"
+  [ "$API_STATUS" = 202 ] || {
+    delegation_fail open "the message answered $API_STATUS: $(cat "$WORK/body")"
+    return 1
+  }
+  check_log "opened the task chain"
+}
+
+# delegation_run: delegates the task, waits for its run to end within DELEGATION_WAIT_S, then judges the run. A run that
+# ends failed reports the error text its event log holds.
+delegation_run() {
+  local end body error fields repo worktree
+  end=$(($(check_clock) + DELEGATION_WAIT_S * 1000000))
+  body="$(delegation_body)" || return 1
+  check_api "$end" POST /api/internal/delegate "$body"
+  [ "$API_STATUS" = 200 ] || {
+    delegation_fail delegate "the server answered $API_STATUS: $(cat "$WORK/body")"
+    return 1
+  }
+  DELEG_CHILD="$(json_field session_id)" || return 1
+  CHECK_RUN="$(json_field run_id)" || return 1
+  CHECK_SESSION=$DELEG_CHILD
+  check_log "delegated the task to $REPO_ROOT"
+  while :; do
+    check_read_run || return 1
+    run_ended "$CHECK_STATE" && break
+    if [ "$(check_clock)" -ge "$end" ]; then
+      delegation_fail run "run $CHECK_RUN did not end within ${DELEGATION_WAIT_S}s"
+      return 1
+    fi
+    check_sleep "$end"
+  done
+  fields="$(newest_run_fields worktree_path repo_path)" || return 1
+  IFS=$'\x1f' read -r worktree repo <<<"$fields"
+  if [ "$CHECK_STATE" != success ]; then
+    error="$(run_error)"
+    delegation_fail run "run $CHECK_RUN ended $CHECK_STATE; the server's error: ${error:-none recorded}"
+    return 1
+  fi
+  [ "$repo" = "$REPO_ROOT" ] || {
+    delegation_fail record "run $CHECK_RUN names the repository $repo, want $REPO_ROOT"
+    return 1
+  }
+  [ -n "$worktree" ] && [ -d "$worktree" ] || {
+    delegation_fail worktree "run $CHECK_RUN ended success, but no worktree exists at '$worktree'"
+    return 1
+  }
+  check_log "passed: run $CHECK_RUN ended success; worktree $worktree exists"
+}
+
+# delegation_remove_worktree: reads the run's record once the run has ended, then removes the worktree the record names
+# and the branch it created. A path or a branch that is already gone is skipped.
+delegation_remove_worktree() {
+  local fields worktree branch
+  check_read_run || return 1
+  fields="$(newest_run_fields worktree_path branch_name)" || return 1
+  IFS=$'\x1f' read -r worktree branch <<<"$fields"
+  if [ -n "$worktree" ] && [ -e "$worktree" ]; then
+    git -C "$REPO_ROOT" worktree remove --force "$worktree" || {
+      check_log "step cleanup failed: git worktree remove $worktree"
+      return 1
+    }
+  fi
+  if [ -n "$branch" ] && git -C "$REPO_ROOT" show-ref --verify --quiet "refs/heads/$branch"; then
+    git -C "$REPO_ROOT" branch -D "$branch" > /dev/null || {
+      check_log "step cleanup failed: git branch -D $branch"
+      return 1
+    }
+  fi
+  check_log "removed the worktree and branch of the task"
+}
+
+# delegation_cleanup: stops the task's run, removes its worktree and branch, and archives the check's session. Each step
+# runs whatever the verdict was. It returns 1 when a step leaves a run, a worktree, a branch or the session behind.
+delegation_cleanup() {
+  local verdict=0
+  if [ -n "$DELEG_CHILD" ]; then
+    CHECK_SESSION=$DELEG_CHILD
+    check_clear_runs "$(($(check_clock) + PROBE_CANCEL_WAIT_S * 1000000))" && delegation_remove_worktree || verdict=1
+  fi
+  if [ -n "$DELEG_PARENT" ]; then
+    CHECK_SESSION=$DELEG_PARENT
+    CHECK_RUN=""
+    check_archive || verdict=1
+  fi
+  return "$verdict"
+}
+
+# delegation_check: delegates one script-run task on the runtime clone, from a session of its own, and judges the
+# task by its run record. The check passes when the run ended success, its record names the runtime clone, and the
+# worktree it names exists. keep_worktree keeps that directory past the run, so its presence afterwards shows that it
+# existed during the run. Pass or fail, the check then stops the run, removes the worktree and its branch, and archives
+# its session.
+delegation_check() {
+  local verdict=0
+  CHECK_LABEL=delegation
+  CHECK_START="$(check_clock)"
+  CHECK_SESSION=""
+  CHECK_RUN=""
+  CHECK_STATE=""
+  DELEG_PARENT=""
+  DELEG_CHILD=""
+  delegation_open && delegation_run || verdict=1
+  delegation_cleanup || verdict=1
+  return "$verdict"
+}
+
 # set_current RELEASE: point current at a release with one rename; with no release, remove it.
 set_current() {
   if [ -n "$1" ]; then
@@ -919,6 +1104,7 @@ switch_forward() {
   serving "$WANT" || die "the new server failed its readback"
   adopted || die "a live run was not adopted"
   probe_turn || die "the probe turn failed"
+  delegation_check || die "the delegation check failed"
   local head
   head="$(git -C "$REPO_ROOT" rev-parse --short HEAD)"
   if [ "$DIED_RUNS" -gt 0 ]; then

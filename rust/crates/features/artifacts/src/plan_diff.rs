@@ -65,6 +65,11 @@ const HEADER_TEXT: &str = "This version · vs previous";
 const CJK_RANGES: &[(u32, u32)] = &[(0x3400, 0x4dbf), (0x4e00, 0x9fff), (0xf900, 0xfaff), (0x20000, 0x2fa1f)];
 static DISPLAY_RE: LazyLock<Regex> =
   LazyLock::new(|| Regex::new(r"(?:^|;)\s*display\s*:\s*([^;]+)").expect("the display rule is a valid regex"));
+/// `_section_label`'s leading section number, and the revision badge a changed heading carries.
+static LEADING_DIGITS_RE: LazyLock<Regex> =
+  LazyLock::new(|| Regex::new(r"^\d+\s*").expect("the section-number pattern is a valid regex"));
+static TRAILING_CHANGED_RE: LazyLock<Regex> =
+  LazyLock::new(|| Regex::new(r"changed\s*·\s*r\d+\s*$").expect("the revision-badge pattern is a valid regex"));
 
 #[derive(Debug)]
 struct Node {
@@ -1111,6 +1116,54 @@ pub fn annotate(base_html: &str, new_html: &str) -> Result<String, String> {
   render_leaf_changes(&context, &changes, &mut insertions, &mut classes, &mut details)?;
   render_start_tag_additions(new_html, &new_parser, &classes, &details, &mut insertions)?;
   append_style_and_header(&splice(new_html, &insertions))
+}
+
+/// Return a plain-text, one-section-per-changed-leaf comparison of `new_html` against `base_html`.
+pub fn diff_text(base_html: &str, new_html: &str) -> Result<String, String> {
+  let (base_parser, new_parser, old_leaves, new_leaves, changes) = analyse(base_html, new_html)?;
+  let mut sections = Vec::new();
+  for change in changes {
+    let old_text = change.old.map(|old| normalise(&leaf_text(&base_parser, &old_leaves[old]))).unwrap_or_default();
+    let new_text = change.new.map(|new| normalise(&leaf_text(&new_parser, &new_leaves[new]))).unwrap_or_default();
+    match (change.old, change.new) {
+      (Some(old), Some(new)) => {
+        let old_tokens = leaf_tokens(&base_parser, &old_leaves[old]);
+        let new_tokens = leaf_tokens(&new_parser, &new_leaves[new]);
+        if !merged_opcodes(&old_tokens, &new_tokens).iter().any(|opcode| opcode.tag != OpcodeTag::Equal) {
+          continue;
+        }
+      }
+      _ if old_text == new_text => continue,
+      _ => {}
+    }
+    let (parser, leaves, index) = match (change.new, change.old) {
+      (Some(new), _) => (&new_parser, &new_leaves, new),
+      (None, Some(old)) => (&base_parser, &old_leaves, old),
+      (None, None) => return Err("invalid empty leaf change".to_string()),
+    };
+    let label = section_label(parser, &leaves[index]);
+    sections.push(format!("[{label}]\n- {old_text}\n+ {new_text}"));
+  }
+  Ok(sections.join("\n\n"))
+}
+
+/// `_section_label`: the nearest `section`'s heading without its number or revision badge; a leaf outside any section
+/// takes the header chip marker for a `span.mtag`, else its tag.
+fn section_label(parser: &Parser, leaf: &Leaf) -> String {
+  let mut current = Some(leaf.element);
+  while let Some(node) = current {
+    if parser.nodes[node].tag == "section" {
+      let Some(h2) = first_descendant(parser, node, "h2") else { return "<unnamed section>".to_string() };
+      let heading: String =
+        visible_parts(parser, h2).into_iter().map(|part| parser.parts[part].text.as_str()).collect();
+      let heading = LEADING_DIGITS_RE.replace(&normalise(&heading), "").into_owned();
+      return pystr::strip(&TRAILING_CHANGED_RE.replace(&heading, "")).to_string();
+    }
+    current = parser.nodes[node].parent;
+  }
+  let element = &parser.nodes[leaf.element];
+  let classes = element.attrs.get("class").and_then(Option::as_deref).unwrap_or("");
+  if pystr::split_whitespace(classes).contains(&"mtag") { "header chip".to_string() } else { element.tag.clone() }
 }
 
 #[cfg(test)]

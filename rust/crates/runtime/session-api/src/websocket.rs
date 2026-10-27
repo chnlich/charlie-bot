@@ -658,21 +658,22 @@ mod tests {
     .expect("catchup completes within one second");
   }
 
-  #[tokio::test(start_paused = true)]
+  #[tokio::test]
   async fn keepalive_pings_at_thirty_seconds_and_binary_client_frames_end_the_socket() {
     let (_home, features) = test_context();
     write_session(&features, "synthetic", TaskProfile::Manager, 0);
     let (address, server) = start_server(Arc::clone(&features)).await;
     let mut client = connect(address, "synthetic", "cursor=0").await;
     receive_catchup_complete(&mut client).await;
+    time::pause();
     tokio::task::yield_now().await;
     time::advance(KEEPALIVE_TIMEOUT).await;
     tokio::task::yield_now().await;
     assert_eq!(receive_json(&mut client).await["type"], "ping");
+    time::resume();
 
     send_client_frame(&mut client, 2, b"binary").await;
-    // Paused time auto-advances while the server idles, so further pings may queue before the binary frame is
-    // read; only a close proves the handler ended.
+    // Pings queued while the clock was paused can precede the close frame.
     loop {
       let frame = time::timeout(Duration::from_secs(30), receive_frame(&mut client)).await.unwrap();
       match frame {

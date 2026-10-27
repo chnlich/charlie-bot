@@ -231,10 +231,21 @@ async fn tmux_session_and_pty_attachment_match_terminal_behavior() {
       .unwrap();
   assert_eq!(code, 0);
   assert!(pane_env.contains(&format!("CHARLIEBOT_HOME={}", profile.display())));
-  let (code, cwd) = pty::run_tmux(
-    &["display-message".into(), "-p".into(), "-t".into(), session_name.clone(), "#{pane_current_path}".into()],
-    true,
-  )
+  // The pane's process can change directory after tmux acknowledges new-session.
+  let (code, cwd) = tokio::time::timeout(Duration::from_secs(2), async {
+    loop {
+      let (code, cwd) = pty::run_tmux(
+        &["display-message".into(), "-p".into(), "-t".into(), session_name.clone(), "#{pane_current_path}".into()],
+        true,
+      )
+      .await
+      .unwrap();
+      if code != 0 || cwd.trim() == home_dir.to_string_lossy() {
+        break (code, cwd);
+      }
+      tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+  })
   .await
   .unwrap();
   assert_eq!(code, 0);

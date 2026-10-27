@@ -54,7 +54,7 @@ pub async fn land_work_branch_after_loop(
       return Landing { merge_result: Some(json!({"merged": true, "base_branch": base_branch})), end_error: None };
     }
     tracing::warn!(
-      target: "charliebot_sched",
+      target: "charliebot_improve",
       session = session_id,
       error = push_err.as_str(),
       "improve_loop_landing_ff_push_failed"
@@ -67,7 +67,7 @@ pub async fn land_work_branch_after_loop(
       )
     } else {
       tracing::warn!(
-        target: "charliebot_sched",
+        target: "charliebot_improve",
         session = session_id,
         error = push_branch_err.as_str(),
         "improve_loop_work_branch_push_failed"
@@ -89,7 +89,7 @@ pub async fn land_work_branch_after_loop(
   }
   let (ok, push_err) = git::git_push_branch(resolved_repo, work_branch).await;
   if !ok {
-    tracing::warn!(target: "charliebot_sched", session = session_id, error = push_err.as_str(), "improve_loop_push_failed");
+    tracing::warn!(target: "charliebot_improve", session = session_id, error = push_err.as_str(), "improve_loop_push_failed");
     return Landing {
       merge_result: None,
       end_error: Some(format!("Pushing the work branch to origin failed ({push_err}).")),

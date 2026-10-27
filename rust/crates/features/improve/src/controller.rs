@@ -14,7 +14,7 @@ use charliebot_store::metadata::{SessionMetadata, UtcDateTime};
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value};
 
-use super::sequence::{SEQUENCE_KIND, close_ended_loop_child, reconcile_interrupted_sequences};
+use crate::sequence::{SEQUENCE_KIND, close_ended_loop_child, reconcile_interrupted_sequences};
 
 /// The improve controller. It is stateless: the iteration context is composed by the runner, which holds the repo root.
 pub struct ImproveSequenceController;
@@ -40,7 +40,7 @@ impl SequenceController for ImproveSequenceController {
       let seq = run.sequence_ref.as_ref().filter(|seq| seq.kind == SEQUENCE_KIND).with_context(|| {
         format!("iteration run {} carries no improve sequence_ref; the controller that registered it is broken", run.id)
       })?;
-      tracing::debug!(target: "charliebot_sched", run_id = %run.id, owner_ref = %seq.owner_ref, "improve_launch_context");
+      tracing::debug!(target: "charliebot_improve", run_id = %run.id, owner_ref = %seq.owner_ref, "improve_launch_context");
       Ok(Some(launch_text.to_string()))
     })
   }

@@ -23,8 +23,8 @@ use charliebot_tasks::{recovery, spawner_backends};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::command::{self, ImproveLoopAlreadyRunningError, ImproveState, Reservation};
-use super::sequence::{self, LoopSpec, run_improve_sequence};
+use crate::command::{self, ImproveLoopAlreadyRunningError, ImproveState, Reservation};
+use crate::sequence::{self, LoopSpec, run_improve_sequence};
 
 /// The `ImproveRequest` fields in the model's declaration order, which fixes the order of its 422 errors.
 const IMPROVE_FIELDS: &[Field] = &[
@@ -219,7 +219,7 @@ async fn start_improve_sequence(features: &Arc<FeatureContext>, req: ImproveRequ
   }
 
   tracing::info!(
-    target: "charliebot_sched",
+    target: "charliebot_improve",
     session = req.session_id.as_str(),
     loop_id,
     child = child.id.as_str(),
@@ -285,7 +285,7 @@ async fn stop_improve(State(features): State<Arc<FeatureContext>>, request: axum
   };
   match command::stop_improve_loop(&cfg, &req.session_id) {
     Ok(true) => {
-      tracing::info!(target: "charliebot_sched", session = req.session_id.as_str(), "improve_loop_stopped");
+      tracing::info!(target: "charliebot_improve", session = req.session_id.as_str(), "improve_loop_stopped");
       responses::json(StatusCode::OK, &json!({ "status": "stopped", "session_id": req.session_id }))
     }
     Ok(false) => responses::json(StatusCode::CONFLICT, &json!({ "detail": "No active improve loop in this session" })),

@@ -38,16 +38,8 @@ const BACKEND_VARIANTS: [&str; 2] = ["anthropic_compatible", "openai_compatible"
 const CHAT_CHANNELS: [&str; 2] = ["slack", "discord"];
 
 /// The runtime layers, keyed by the crate's directory name under `rust/crates/runtime`.
-const RUNTIME_LAYERS: [(&str, usize); 8] = [
-  ("store", 1),
-  ("registry", 2),
-  ("usage", 3),
-  ("agents", 4),
-  ("tasks", 5),
-  ("triggers", 6),
-  ("sched", 6),
-  ("session-api", 7),
-];
+const RUNTIME_LAYERS: [(&str, usize); 7] =
+  [("store", 1), ("registry", 2), ("usage", 3), ("agents", 4), ("tasks", 5), ("triggers", 6), ("session-api", 7)];
 
 const DEPEND_ON_THE_RUNTIME: &str = "Depend on the registry: the imported crate registers its implementation, and the \
                                     importer looks it up there.";
@@ -904,7 +896,6 @@ fn the_checks_find_each_break() {
     "crates/runtime/usage",
     "crates/runtime/agents",
     "crates/runtime/tasks",
-    "crates/runtime/sched",
     "crates/runtime/triggers",
     "crates/runtime/mystery",
     "crates/misc/loose",
@@ -917,12 +908,11 @@ fn the_checks_find_each_break() {
     [
       ("crates/features/alpha/Cargo.toml", crate_manifest("alpha", &[("beta", "../beta")], &[])),
       ("crates/features/beta/Cargo.toml", crate_manifest("beta", &[], &[])),
-      ("crates/runtime/store/Cargo.toml", crate_manifest("store-crate", &[("sched-crate", "../sched")], &[])),
+      ("crates/runtime/store/Cargo.toml", crate_manifest("store-crate", &[("triggers-crate", "../triggers")], &[])),
       ("crates/runtime/registry/Cargo.toml", crate_manifest("registry-crate", &[], &[])),
       ("crates/runtime/usage/Cargo.toml", crate_manifest("usage-crate", &[], &[])),
       ("crates/runtime/agents/Cargo.toml", crate_manifest("agents-crate", &[], &[])),
       ("crates/runtime/tasks/Cargo.toml", crate_manifest("tasks-crate", &[], &[])),
-      ("crates/runtime/sched/Cargo.toml", crate_manifest("sched-crate", &[], &[])),
       ("crates/runtime/triggers/Cargo.toml", crate_manifest("triggers-crate", &[], &[])),
       ("crates/runtime/mystery/Cargo.toml", crate_manifest("mystery-crate", &[], &[])),
       ("crates/misc/loose/Cargo.toml", crate_manifest("loose-crate", &[], &[])),
@@ -945,8 +935,8 @@ fn the_checks_find_each_break() {
   assert_eq!(
     layer_break_failures(&groups),
     vec![format!(
-      "crates/runtime/store/Cargo.toml: layer 1 (store) crate store-crate depends on sched-crate (layer 6, sched); \
-       layer 1 may depend only on layers 1 to 1. {FIX_THE_UPWARD_IMPORT}"
+      "crates/runtime/store/Cargo.toml: layer 1 (store) crate store-crate depends on triggers-crate (layer 6, \
+       triggers); layer 1 may depend only on layers 1 to 1. {FIX_THE_UPWARD_IMPORT}"
     )],
     "case 2: a runtime crate that depends on a higher layer"
   );

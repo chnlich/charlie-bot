@@ -15,7 +15,7 @@ use charliebot_core::repo_root::RepoRoot;
 use charliebot_registry::context::FeatureContext;
 use serde_json::{Map, Value, json};
 
-use super::{config, loader, scheduler};
+use crate::{config, loader, scheduler};
 
 /// Build the cron task routes.
 pub fn routes(features: &Arc<FeatureContext>) -> Router {
@@ -367,8 +367,8 @@ mod tests {
       assert!(!route_claims.claims(path), "{path} should not be claimed");
     }
   }
-  use crate::cron::scheduler::CronScheduler;
-  use crate::cron::test_support::{feature_context, feature_context_with_extra_backends, manager};
+  use crate::scheduler::CronScheduler;
+  use crate::test_support::{feature_context, feature_context_with_extra_backends, manager};
 
   async fn send(router: &axum::Router, method: &str, path: &str, body: Value) -> (StatusCode, Value) {
     let response = router

@@ -452,6 +452,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "charliebot-cron"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "charliebot-agents",
+ "charliebot-compat",
+ "charliebot-core",
+ "charliebot-registry",
+ "charliebot-store",
+ "charliebot-tasks",
+ "chrono",
+ "chrono-tz",
+ "futures-util",
+ "nix",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "time",
+ "tokio",
+ "tower",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "charliebot-diag"
 version = "0.1.0"
 dependencies = [
@@ -667,8 +694,6 @@ dependencies = [
  "charliebot-registry",
  "charliebot-store",
  "charliebot-tasks",
- "chrono",
- "chrono-tz",
  "futures-util",
  "libc",
  "nix",
@@ -677,11 +702,9 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "tempfile",
- "time",
  "tokio",
  "tower",
  "tracing",
- "uuid",
 ]
 
 [[package]]
@@ -698,6 +721,7 @@ dependencies = [
  "charliebot-code-server",
  "charliebot-compat",
  "charliebot-core",
+ "charliebot-cron",
  "charliebot-diag",
  "charliebot-diff-view",
  "charliebot-discord",

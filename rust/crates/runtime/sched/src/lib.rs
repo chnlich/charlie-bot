@@ -1,4 +1,3 @@
-//! Scheduled cron tasks and the improve loop.
+//! The improve loop.
 
-pub mod cron;
 pub mod improve;

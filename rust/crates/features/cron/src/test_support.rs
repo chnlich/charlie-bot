@@ -34,7 +34,7 @@ pub fn feature_context_with_extra_backends(extra_backend_ids: &[&str]) -> (tempf
   std::fs::create_dir_all(home.path().join("config.d/cron.d")).expect("cron directory provisions");
   std::fs::create_dir_all(home.path().join("state")).expect("state directory provisions");
   let mut registry = Registry::new();
-  registry.register_package("src.features.cron", super::register).expect("cron registration");
+  registry.register_package("src.features.cron", crate::register).expect("cron registration");
   registry.register_package("test.cron_handlers", register_test_handler).expect("handler registration");
   registry.register_package("test.cron_backend", register_test_backend).expect("backend registration");
   let registry = Arc::new(registry);

@@ -18,8 +18,8 @@ use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
 use tokio::task::JoinHandle;
 
-use super::config::ScheduledTaskConfig;
-use super::loader;
+use crate::config::ScheduledTaskConfig;
+use crate::loader;
 
 const TICK_SECONDS: u64 = 60;
 const AUTO_BIND_PREFIX: &str = "scheduled-node:";
@@ -345,18 +345,18 @@ impl CronScheduler {
       let task_name = task.name.clone();
       let owner_ref = firing_ref(&task, &firing);
       let step_count = task.steps.as_ref().map_or(0, Vec::len);
-      let boundary = super::boundary::subscribe_boundary(&leaf_id, &owner_ref);
+      let boundary = crate::boundary::subscribe_boundary(&leaf_id, &owner_ref);
       let prompt = prompt.clone();
       let handle = tokio::spawn(async move {
         match executor.launch_and_settle(&leaf_id, &run_id, Some(&prompt)).await {
           Ok(settlement) if settlement.withheld.is_none() && step_count > 0 => {
             // Python keeps the firing task alive through the sequence chain (`src/features/cron/scheduler.py:413-434`).
             wait_for_steps_boundary(boundary).await;
-            super::boundary::remove_boundary(&leaf_id, &owner_ref);
+            crate::boundary::remove_boundary(&leaf_id, &owner_ref);
           }
-          Ok(_) => super::boundary::remove_boundary(&leaf_id, &owner_ref),
+          Ok(_) => crate::boundary::remove_boundary(&leaf_id, &owner_ref),
           Err(error) => {
-            super::boundary::remove_boundary(&leaf_id, &owner_ref);
+            crate::boundary::remove_boundary(&leaf_id, &owner_ref);
             tracing::error!(task = %task_name, error = %error, "scheduled_round_failed");
           }
         }
@@ -624,7 +624,7 @@ fn firing_ref(task: &ScheduledTaskConfig, firing: &str) -> String {
   format!("cron:{}:{firing}", task.name)
 }
 
-async fn wait_for_steps_boundary(mut boundary: tokio::sync::watch::Receiver<super::boundary::BoundaryNotice>) {
+async fn wait_for_steps_boundary(mut boundary: tokio::sync::watch::Receiver<crate::boundary::BoundaryNotice>) {
   loop {
     let notice = *boundary.borrow_and_update();
     if notice.done || notice.failed {
@@ -863,8 +863,8 @@ mod tests {
   use std::sync::Arc;
 
   use super::{CronExpression, CronScheduler, python_isoformat};
-  use crate::cron::config::{ScheduledTaskConfig, StepConfig};
-  use crate::cron::test_support::{feature_context, manager};
+  use crate::config::{ScheduledTaskConfig, StepConfig};
+  use crate::test_support::{feature_context, manager};
 
   fn write_task(home: &Path, name: &str, body: &Value) -> std::path::PathBuf {
     let path = home.join("config.d/cron.d").join(format!("{name}.yaml"));
@@ -968,7 +968,7 @@ mod tests {
 
     // Both ticks run at 08:00:30 of the task's default timezone on a fixed date, so no wall clock decides whether
     // the first tick fires the 0 8 * * * occurrence.
-    let clock_timezone = crate::cron::config::DEFAULT_TIMEZONE.parse::<chrono_tz::Tz>().unwrap();
+    let clock_timezone = crate::config::DEFAULT_TIMEZONE.parse::<chrono_tz::Tz>().unwrap();
     let clock = chrono::NaiveDate::from_ymd_opt(2026, 1, 5)
       .unwrap()
       .and_hms_opt(8, 0, 30)
@@ -1066,7 +1066,7 @@ mod tests {
     // Python: tests/test_cron_auto_bind.py::test_due_fire_after_migration_creates_its_leaf_under_the_node
     let (home, features) = feature_context();
     let repo_home = tempfile::tempdir().unwrap();
-    let repo = crate::cron::test_support::init_repo_with_origin(repo_home.path()).unwrap();
+    let repo = crate::test_support::init_repo_with_origin(repo_home.path()).unwrap();
     let task_name = "synthetic-migrated-task";
     let mut legacy_extra = Map::new();
     legacy_extra.insert("scheduled_task".to_string(), json!(task_name));
@@ -1153,7 +1153,7 @@ mod tests {
     let dispatcher = features.startup.require::<charliebot_tasks::dispatch::Dispatcher>().unwrap();
     dispatcher.set_executor(None);
     let adapter = features.startup.require::<charliebot_tasks::execution::TaskExecutionAdapter>().unwrap();
-    let mut process_guard = crate::cron::test_support::ProcessGroupGuard::new();
+    let mut process_guard = crate::test_support::ProcessGroupGuard::new();
     adapter.launch(&leaf.id, &run.id).unwrap();
 
     let (finished_run, outcome) = tokio::time::timeout(std::time::Duration::from_secs(15), async {
@@ -1313,7 +1313,7 @@ mod tests {
     // Python: tests/test_cron_auto_bind.py::test_sweep_archives_active_cron_session_of_bound_task_despite_stuck_running_thread
     let (home, features) = feature_context();
     let task_name = "synthetic-sweep-task";
-    let node = crate::cron::test_support::manager(&features, "synthetic-sweep-node").await.unwrap();
+    let node = crate::test_support::manager(&features, "synthetic-sweep-node").await.unwrap();
     let mut extra = Map::new();
     extra.insert("scheduled_task".to_string(), json!(task_name));
     let legacy = features
@@ -1351,8 +1351,8 @@ mod tests {
   #[tokio::test]
   async fn edited_yaml_backend_is_aligned_on_the_next_tick_without_rebinding() {
     // Python: tests/test_cron_auto_bind.py::test_hand_edited_yaml_backend_is_followed_on_the_next_tick
-    let (home, features) = crate::cron::test_support::feature_context_with_extra_backends(&["synthetic-alt"]);
-    let node = crate::cron::test_support::manager(&features, "synthetic-edit-backend-node").await.unwrap();
+    let (home, features) = crate::test_support::feature_context_with_extra_backends(&["synthetic-alt"]);
+    let node = crate::test_support::manager(&features, "synthetic-edit-backend-node").await.unwrap();
     let path = write_task(
       home.path(),
       "synthetic-edit-backend",
@@ -1375,8 +1375,8 @@ mod tests {
   #[tokio::test]
   async fn scheduler_aligns_a_bound_node_backend_in_place() {
     // Python: tests/test_cron_backend.py::test_scheduler_aligns_bound_node_backend_in_place
-    let (home, features) = crate::cron::test_support::feature_context_with_extra_backends(&["synthetic-alt"]);
-    let node = crate::cron::test_support::manager(&features, "synthetic-align-backend-node").await.unwrap();
+    let (home, features) = crate::test_support::feature_context_with_extra_backends(&["synthetic-alt"]);
+    let node = crate::test_support::manager(&features, "synthetic-align-backend-node").await.unwrap();
     write_task(
       home.path(),
       "synthetic-align-backend",
@@ -1393,7 +1393,7 @@ mod tests {
   async fn an_upcoming_occurrence_preserves_last_run_and_does_not_catch_up() {
     // Python: tests/test_cron_backend.py::test_backend_alignment_preserves_last_run_to_avoid_catchup_fire
     let (home, features) = feature_context();
-    let node = crate::cron::test_support::manager(&features, "synthetic-no-catchup-node").await.unwrap();
+    let node = crate::test_support::manager(&features, "synthetic-no-catchup-node").await.unwrap();
     let last_run = UtcDateTime::now().to_python_isoformat();
     let guard = features.store.control_lock().await;
     features

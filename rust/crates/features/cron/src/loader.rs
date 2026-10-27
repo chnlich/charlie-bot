@@ -12,7 +12,7 @@ use charliebot_registry::Registry;
 use charliebot_registry::context::FeatureContext;
 use serde_json::Value;
 
-use super::config::{ScheduledTaskConfig, ScheduledTaskError};
+use crate::config::{ScheduledTaskConfig, ScheduledTaskError};
 
 /// One sorted read of every visible cron file.
 #[derive(Clone, Debug, Default)]
@@ -268,7 +268,7 @@ pub fn validate_body(name: &str, mut body: Value, repo: &Path) -> Result<Schedul
   if let Some(repo) = body.get("repo").and_then(Value::as_str) {
     body["repo"] = Value::String(expand_home(repo)?);
   }
-  super::config::task_from_value(name, body)
+  crate::config::task_from_value(name, body)
 }
 
 fn resolve_pointer(
@@ -479,7 +479,7 @@ mod tests {
   use serde_json::{Value, json};
 
   use super::{alert_message, fire_error_alert, load_snapshot, validate_body};
-  use crate::cron::test_support::feature_context;
+  use crate::test_support::feature_context;
 
   fn write_task(cfg: &CharlieBotConfig, name: &str, body: &Value) {
     let directory = cfg.config_d_dir().join("cron.d");
@@ -626,7 +626,7 @@ mod tests {
     // Python: tests/test_cron_alerts.py::test_telegram_failure_is_log_only
     let (home, features) = feature_context();
     let cfg = features.config.get().unwrap();
-    let error = |name: &str| super::super::config::ScheduledTaskError {
+    let error = |name: &str| crate::config::ScheduledTaskError {
       name: name.to_string(),
       path: home.path().join(format!("config.d/cron.d/{name}.yaml")).display().to_string(),
       error: "synthetic load error".to_string(),
@@ -650,7 +650,7 @@ mod tests {
     // Python: tests/test_cron_alerts.py::test_no_event_loop_skips_send_without_persisting
     let (_home, features) = feature_context();
     let cfg = features.config.get().unwrap();
-    let error = super::super::config::ScheduledTaskError {
+    let error = crate::config::ScheduledTaskError {
       name: "synthetic".to_string(),
       path: "synthetic.yaml".to_string(),
       error: "synthetic load error".to_string(),

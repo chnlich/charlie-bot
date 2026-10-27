@@ -129,7 +129,8 @@ pub fn select_reviewer_backend(
   Ok(Some((worker_backend.to_string(), worker_model.map(str::to_string), tried)))
 }
 
-pub(crate) fn read_worker_summary_file(worker_log_path: &Path) -> anyhow::Result<Option<String>> {
+/// Return the newest worker summary directly from the run's events log, parsing only result and assistant events.
+pub fn read_worker_summary_file(worker_log_path: &Path) -> anyhow::Result<Option<String>> {
   let (summary, _) = visit_events_from_end(worker_log_path, &["result", "assistant"], |event| {
     worker_summary_from_events_log(std::slice::from_ref(&event))
   })?;

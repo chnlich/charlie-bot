@@ -5,6 +5,7 @@
 
 mod api;
 mod audit;
+pub mod cli;
 mod json_input;
 mod metadata;
 mod plan_links;

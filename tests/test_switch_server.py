@@ -428,6 +428,7 @@ def _build_world(root: pathlib.Path) -> World:
       "CHARLIEBOT_HOME": str(home),
       "CHARLIEBOT_RELEASES_DIR": str(releases),
       "CHARLIEBOT_LOG_DIR": str(logs),
+      # A long TMPDIR puts the sandbox's private TMUX_TMPDIR past the 108-byte unix socket path limit.
       "TMUX_TMPDIR": "/tmp",
       "CHARLIEBOT_TMUX_SOCKET": f"switch-test-{uuid.uuid4().hex[:8]}",
       "CHARLIEBOT_SWITCH_STOP_WAIT_S": "3",

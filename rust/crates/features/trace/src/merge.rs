@@ -1005,13 +1005,14 @@ mod differential_tests {
             Ok(_) => differences.push(format!("Rust succeeded for failing Python case {name}/{builder}")),
           }
         } else {
-          let expected = decode_hex(reference["gzip_hex"].as_str().unwrap());
+          let recorded = decode_hex(reference["gzip_hex"].as_str().unwrap());
+          let expected_json = decode_hex(reference["json_hex"].as_str().unwrap());
           match actual {
             Ok(actual) => {
-              if actual != expected {
+              if actual != expected_gzip(&recorded, &expected_json, &venv_bin()) {
                 differences.push(format!("gzip bytes differ for {name}/{builder}"));
               }
-              if decompress(&actual) != decode_hex(reference["json_hex"].as_str().unwrap()) {
+              if decompress(&actual) != expected_json {
                 differences.push(format!("JSON bytes differ for {name}/{builder}"));
               }
             }
@@ -1052,6 +1053,17 @@ mod differential_tests {
 
   fn normalize_root(value: &str, root: &Path) -> String {
     value.replace(root.to_str().unwrap(), "$TMPROOT")
+  }
+
+  /// isal's deflate body depends on the CPU implementation, so the recorded bytes are an artifact
+  /// of the recording host. Compare with the recording when this host's isal reproduces it, and
+  /// with this host's encoding of the same document otherwise.
+  fn expected_gzip(recorded: &[u8], document: &[u8], venv_bin: &Path) -> Vec<u8> {
+    let output = tempdir().unwrap();
+    let path = output.path().join("expected.json.gz");
+    gzip_bytes(document, &path, venv_bin).unwrap();
+    let local = fs::read(&path).unwrap();
+    if local == recorded { recorded.to_vec() } else { local }
   }
 
   fn decode_hex(value: &str) -> Vec<u8> {

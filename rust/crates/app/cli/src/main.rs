@@ -5,8 +5,8 @@
 //! the not-ported JSON error and exits 1 — it never calls the Python CLI.
 
 mod commands;
-mod launcher;
 mod host;
+mod launcher;
 
 use std::ffi::OsString;
 use std::path::Path;

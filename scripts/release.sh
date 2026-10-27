@@ -51,14 +51,15 @@ COMMIT=$1
 
 command -v gh > /dev/null 2>&1 || refuse "gh is not on PATH"
 gh auth status > /dev/null 2>&1 || refuse "gh is not authenticated"
-REPO_SLUG="$(gh repo view --json nameWithOwner --jq .nameWithOwner 2> /dev/null)" \
+REPO_SLUG="$(cd "$REPO_ROOT" && gh repo view --json nameWithOwner --jq .nameWithOwner 2> /dev/null)" \
   || refuse "gh is not authenticated for this repository"
 
 git -C "$REPO_ROOT" rev-parse --verify --quiet origin/main > /dev/null \
   || refuse "origin/main is not in $REPO_ROOT; fetch origin first"
 git -C "$REPO_ROOT" merge-base --is-ancestor "$COMMIT" origin/main 2> /dev/null \
   || refuse "$COMMIT is not on origin/main"
-[ ! -e "$RELEASES_DIR/$COMMIT" ] || refuse "release $RELEASES_DIR/$COMMIT already exists"
+[ ! -e "$RELEASES_DIR/$COMMIT" ] && [ ! -L "$RELEASES_DIR/$COMMIT" ] \
+  || refuse "release $RELEASES_DIR/$COMMIT already exists"
 
 # ci_run_id: the newest push run of the CI workflow for COMMIT whose release-build and rust-test jobs succeeded.
 ci_run_id() {

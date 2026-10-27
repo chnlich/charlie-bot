@@ -1,3 +1,4 @@
+from src.infra import config_registry
 from src.runtime.hooks import page_render, wiring
 
 
@@ -6,3 +7,4 @@ def register() -> None:
   wiring.register_service("host_auth", "src.features.host_auth.api")
   page_render.register_home_card(
       "Host login authorization", "/host-auth", "Per-host ssh login state and the estimated Okta renewal deadline.")
+  config_registry.register_config_section("host_auth", "src.features.host_auth.config:HostAuthConfig")

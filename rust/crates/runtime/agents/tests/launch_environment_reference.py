@@ -45,8 +45,8 @@ def main() -> None:
     venv_bin = pathlib.Path(str(case["venv_bin"]))
     base_env = agent_environment.agent_environment(process_env, venv_bin)
     server_bin_dir = str(case["server_bin_dir"])
-    path_entries = base_env["PATH"].split(os.pathsep)[1:]
-    path_entries = [entry for entry in path_entries if entry != server_bin_dir]
+    replaced_entries = (server_bin_dir, str(agent_environment.ENTRY_POINT_DIR))
+    path_entries = [entry for entry in base_env["PATH"].split(os.pathsep) if entry not in replaced_entries]
     base_env["PATH"] = os.pathsep.join([server_bin_dir, *path_entries])
     os.environ.clear()
     os.environ.update(base_env)

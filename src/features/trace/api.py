@@ -31,7 +31,7 @@ log = log_once.LazyStructlogLogger()
 
 router = fastapi.APIRouter()
 
-# The viewer route path. The auth whitelist (src.runtime.api.auth) does not admit it — it
+# The viewer route path. The Rust auth whitelist (rust/crates/app/server/src/auth.rs) does not admit it — it
 # reads local trace files, so it sits behind the access key like the file server.
 PERFETTO_VIEWER_PATH = "/perfetto"
 

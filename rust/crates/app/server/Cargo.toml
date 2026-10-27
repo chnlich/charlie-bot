@@ -31,6 +31,7 @@ charliebot-memory.workspace = true
 charliebot-ncu.workspace = true
 charliebot-registry.workspace = true
 charliebot-sched.workspace = true
+charliebot-triggers.workspace = true
 charliebot-slack.workspace = true
 charliebot-store.workspace = true
 charliebot-session-api.workspace = true

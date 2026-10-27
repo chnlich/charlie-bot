@@ -314,7 +314,7 @@ run-record work is `S2`; task-tree runtime and feature-owned files remain with t
 | explain temporary directories | features/explain | ported | Outside the home. A read-only history copy per run, removed when the run ends. |
 | headless-render temporary directories | features/artifacts | ported | Outside the home. Removed when a renderer closes or a measurement fails. |
 | memory proposal temporary extraction | features/memory | not applicable | Outside the home. The Python CLI stays (Trade-off 2). |
-| SSH ControlMaster sockets | foundation | ported | Outside the home. The control directory (mode 0700), `ControlPath`, `ControlPersist`, `ConnectTimeout` and `BatchMode` match Python (`infra/core/src/ssh.rs:17`, `:23`, `:35`; Python `src/infra/ssh.py:17-24`, `:27-53`). The host-auth probe and the sched launcher build their argv through it (`features/host_auth/src/probe.rs:57`, `runtime/sched/src/triggers.rs:624`). |
+| SSH ControlMaster sockets | foundation | ported | Outside the home. The control directory (mode 0700), `ControlPath`, `ControlPersist`, `ConnectTimeout` and `BatchMode` match Python (`infra/core/src/ssh.rs:17`, `:23`, `:35`; Python `src/infra/ssh.py:17-24`, `:27-53`). The host-auth probe and the sched launcher build their argv through it (`features/host_auth/src/probe.rs:57`, `runtime/triggers/src/triggers.rs:624`). |
 | artifact page-height probe files | features/artifacts | ported | Beside an artifact. Removed after every measurement outcome. |
 | tmux socket `charliebot` | features/terminal | ported | Outside the home. |
 | tmux session `charliebot-<id>` | features/terminal | ported | Detached terminal shell. |

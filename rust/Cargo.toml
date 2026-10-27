@@ -31,6 +31,7 @@ members = [
     "crates/runtime/registry",
     "crates/runtime/session-api",
     "crates/runtime/sched",
+    "crates/runtime/triggers",
     "crates/runtime/usage",
 ]
 
@@ -140,6 +141,7 @@ charliebot-slack = { path = "crates/features/slack" }
 charliebot-store = { path = "crates/runtime/store" }
 charliebot-session-api = { path = "crates/runtime/session-api" }
 charliebot-sched = { path = "crates/runtime/sched" }
+charliebot-triggers = { path = "crates/runtime/triggers" }
 charliebot-tasks = { path = "crates/runtime/tasks" }
 charliebot-terminal = { path = "crates/features/terminal" }
 charliebot-trace = { path = "crates/features/trace" }

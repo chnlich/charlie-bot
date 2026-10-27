@@ -13,8 +13,8 @@ use charliebot_compat::ws_client::{self, CloseFrame, Message as WsMessage, Optio
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::pystr;
 use charliebot_registry::FeatureContext;
-use charliebot_sched::triggers::TriggerManager;
 use charliebot_store::metadata::UtcDateTime;
+use charliebot_triggers::triggers::TriggerManager;
 use futures_util::future::BoxFuture;
 use regex::Regex;
 use serde_json::{Value, json};

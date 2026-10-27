@@ -11,7 +11,7 @@ use charliebot_chat_threads::thread_entry::{
 use charliebot_compat::ws_client::{self, Message, Options, Receiver, Sender, WEBSOCKETS_16_DEFAULTS};
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_registry::FeatureContext;
-use charliebot_sched::triggers::TriggerManager;
+use charliebot_triggers::triggers::TriggerManager;
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
 use uuid::Uuid;

@@ -5,13 +5,45 @@ use std::path::Path;
 use std::sync::Arc;
 
 use charliebot_compat::mimetypes::MimeTypes;
+use charliebot_compat::static_files::StaticDirectory;
 use charliebot_core::config::{self, CharlieBotConfig, ConfigError};
 use charliebot_core::credentials::{self, Credentials};
 use charliebot_core::hot_reload::HotReload;
+use charliebot_registry::pages::package_directory;
 use charliebot_registry::{FeatureContext, Registry};
 
 use crate::buildinfo::BuildInfo;
-use crate::routes::static_mounts::StaticMount;
+
+/// One `app.mount(prefix, StaticFiles(directory=...))`.
+pub struct StaticMount {
+  /// The URL prefix without a trailing slash: `/static/features/voice` or `/static`.
+  pub prefix: String,
+  pub directory: StaticDirectory,
+}
+
+impl StaticMount {
+  /// The Python app's `/static` mounts in its route order: one per page package in registration order, then
+  /// `web/static` when it exists at startup.
+  pub fn python_app_mounts(repo_root: &Path, packages: &[&str]) -> Vec<StaticMount> {
+    let mut mounts: Vec<StaticMount> = packages
+      .iter()
+      .map(|package| StaticMount {
+        prefix: format!("/static/{}", package.trim_start_matches("src.").replace('.', "/")),
+        directory: StaticDirectory::new(package_directory(repo_root, package).join("static")),
+      })
+      .collect();
+    let web_static = repo_root.join("web").join("static");
+    if web_static.exists() {
+      mounts.push(StaticMount { prefix: "/static".to_string(), directory: StaticDirectory::new(web_static) });
+    }
+    mounts
+  }
+
+  /// The path below this mount when `path` falls under it (starlette `Mount` matching), else `None`.
+  pub fn route_path<'a>(&self, path: &'a str) -> Option<&'a str> {
+    path.strip_prefix(&self.prefix).filter(|rest| rest.starts_with('/'))
+  }
+}
 
 pub struct AppState {
   /// The handles the registered features share: the live config and credentials, the store, the registry.

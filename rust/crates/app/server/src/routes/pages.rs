@@ -20,7 +20,7 @@ use futures_util::future::join_all;
 use percent_encoding::percent_decode_str;
 use serde_json::{Map, Value, json};
 
-use super::Family;
+use super::family::Family;
 use crate::state::AppState;
 
 pub const FAMILY: Family = Family { routes, matches: |_, path| is_page_path(path) };

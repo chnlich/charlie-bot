@@ -117,8 +117,8 @@ mod tests {
   use tracing::field::{Field, Visit};
 
   use super::*;
-  use crate::app::ConnectionInfo;
   use crate::buildinfo::BuildInfo;
+  use crate::connection::ConnectionInfo;
   use crate::state::AppState;
   use http::HeaderValue;
 

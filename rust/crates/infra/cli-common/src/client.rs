@@ -248,7 +248,7 @@ pub fn get(endpoint: &str, params: Option<Vec<(String, String)>>) -> Result<Valu
 fn run_call(call: ApiCall<'_>) -> Result<Value, CliExit> {
   let ctx = CallContext {
     base_url: crate::base_url::internal_base_url()?,
-    headers: crate::headers::internal_api_auth_headers(),
+    headers: crate::headers::internal_api_auth_headers()?,
     request_timeout: crate::timeouts::HTTP_INTERNAL_API_TIMEOUT.as_secs_f64(),
     connect_total_timeout: crate::timeouts::CLI_CONNECT_TOTAL_TIMEOUT.as_secs_f64(),
   };

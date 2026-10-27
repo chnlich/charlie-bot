@@ -3,6 +3,7 @@
 use charliebot_core::credentials;
 use charliebot_core::home;
 
+use crate::exit::CliExit;
 use crate::resolve;
 
 /// `constants.RUN_TOKEN_ENV`: the presented bearer a run carries. One spelling everywhere.
@@ -21,11 +22,11 @@ pub const CALLER_SESSION_HEADER: &str = "X-CharlieBot-Caller-Session";
 /// empty key). When `CHARLIEBOT_SESSION_ID` is non-empty the returned headers also carry
 /// `X-CharlieBot-Caller-Session` with that value, which the server records on operator caller
 /// identities only (an agent's session comes from its verified token, never the header).
-pub fn internal_api_auth_headers() -> Vec<(String, String)> {
+pub fn internal_api_auth_headers() -> Result<Vec<(String, String)>, CliExit> {
   let token = std::env::var(RUN_TOKEN_ENV).ok().map(|value| value.trim().to_string()).filter(|value| !value.is_empty());
   let bearer = match token {
     Some(token) => Some(token),
-    None => access_key(),
+    None => access_key()?,
   };
   match bearer {
     Some(bearer) => {
@@ -33,9 +34,9 @@ pub fn internal_api_auth_headers() -> Vec<(String, String)> {
       if let Some(session_id) = caller_session() {
         headers.push((CALLER_SESSION_HEADER.to_string(), session_id));
       }
-      headers
+      Ok(headers)
     }
-    None => Vec::new(),
+    None => Ok(Vec::new()),
   }
 }
 
@@ -47,8 +48,10 @@ fn caller_session() -> Option<String> {
   std::env::var(resolve::SESSION_ID_ENV_VAR).ok().filter(|value| !value.is_empty())
 }
 
-/// `configured_access_key()`: the `charliebot.access_key` credential, or `None` when unset.
-fn access_key() -> Option<String> {
-  let home = home::charliebot_home_dir().ok()?;
-  credentials::load_credentials(&home).ok()?.access_key()
+/// `configured_access_key()`: the `charliebot.access_key` credential, or `None` when unset. A
+/// credentials file that does not load is an error, as Python's `get_credentials()` raises it.
+fn access_key() -> Result<Option<String>, CliExit> {
+  let home = home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))?;
+  let credentials = credentials::load_credentials(&home).map_err(|error| CliExit::error(error.0))?;
+  Ok(credentials.access_key())
 }

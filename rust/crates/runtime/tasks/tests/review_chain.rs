@@ -35,7 +35,7 @@ fn gate_script(control_dir: &Path, summary: &str) -> String {
   let result = serde_json::to_string(&json!({"type": "result", "subtype": "success", "result": summary}))
     .expect("JSON event serializes");
   format!(
-    "counter=0; if [ -f '{control}/count' ]; then counter=$(/bin/cat '{control}/count'); fi; counter=$((counter + 1)); printf '%s' \"$counter\" > '{control}/count'; touch '{control}/started-'\"$counter\"; while [ ! -e '{control}/release-'\"$counter\" ]; do /bin/sleep 0.01; done; printf '%s\\n' '{result}'"
+    "counter=0; if [ -f '{control}/count' ]; then counter=$(/bin/cat '{control}/count'); fi; counter=$((counter + 1)); printf '%s' \"$counter\" > '{control}/count'; touch '{control}/started-'\"$counter\"; while [ ! -e '{control}/release-'\"$counter\" ]; do /bin/sleep 0.01; done; touch '{control}/passed-gate-'\"$counter\"; printf '%s\\n' '{result}'"
   )
 }
 
@@ -909,15 +909,18 @@ async fn failed_review_with_a_queued_retry_reports_nothing_and_stays_open() -> a
   assert!(child_reports(&stack, &manager.id)?.is_empty());
   assert_eq!(stack.store().task_state(&worker.id)?, "open");
   fs::write(control.path().join("release-1"), "release")?;
-  let control_entries: Vec<String> = fs::read_dir(control.path())?
-    .map(|entry| entry.map(|entry| entry.file_name().to_string_lossy().into_owned()))
-    .collect::<Result<_, _>>()?;
-  eprintln!(
-    "DIAG control={} count={:?} entries={control_entries:?}",
-    control.path().display(),
-    fs::read_to_string(control.path().join("count"))
-  );
-  assert_eq!(wait_for_run(&stack, &guard, &worker.id, &retry.id).await?, RunOutcomeKind::Success);
+  let retry_outcome = wait_for_run(&stack, &guard, &worker.id, &retry.id).await;
+  if retry_outcome.is_err() {
+    let control_entries: Vec<String> = fs::read_dir(control.path())?
+      .map(|entry| entry.map(|entry| entry.file_name().to_string_lossy().into_owned()))
+      .collect::<Result<_, _>>()?;
+    eprintln!(
+      "DIAG control={} count={:?} entries={control_entries:?}",
+      control.path().display(),
+      fs::read_to_string(control.path().join("count"))
+    );
+  }
+  assert_eq!(retry_outcome?, RunOutcomeKind::Success);
   wait_for_task_state(&stack, &worker.id, "completed").await?;
   Ok(())
 }

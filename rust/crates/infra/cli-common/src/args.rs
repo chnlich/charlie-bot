@@ -1,6 +1,30 @@
 //! The argument-parser shape every subcommand shares: argparse's unique long-option prefixes.
 
+use std::path::Path;
+
 use clap::Command;
+use clap::error::ErrorKind;
+
+/// `validate_repo_path`: reject a `--repo` value that is not an absolute path or does not exist
+/// as a directory.
+///
+/// Raises the parser's usage error (exit 2) before any network call, so a bad repo path never
+/// reaches the internal API.
+pub fn validate_repo_path(command: &mut Command, repo: &str) {
+  if !repo.starts_with('/') {
+    command
+      .error(
+        ErrorKind::ValueValidation,
+        format!("--repo must be an absolute path (starting with '/'), got: {}", charliebot_core::pyfmt::str_repr(repo)),
+      )
+      .exit();
+  }
+  if !Path::new(repo).is_dir() {
+    command
+      .error(ErrorKind::ValueValidation, format!("--repo does not exist: {}", charliebot_core::pyfmt::str_repr(repo)))
+      .exit();
+  }
+}
 
 /// `infer_long_args(true)` over the command and every nested subcommand.
 ///

@@ -24,6 +24,7 @@ pub mod session_fork;
 pub mod sidebar_state;
 mod store;
 pub mod streaming;
+pub mod task_child;
 mod task_tree;
 mod task_tree_state;
 mod thinking;

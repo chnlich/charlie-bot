@@ -2,7 +2,6 @@
 
 pub mod compaction_context;
 pub mod delegate;
-mod delegate_readback;
 pub mod gc_trash;
 pub mod schedule_trigger;
 pub mod session;

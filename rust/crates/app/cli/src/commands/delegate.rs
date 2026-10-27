@@ -3,7 +3,7 @@
 use std::ffi::OsString;
 use std::path::Path;
 
-use charliebot_cli_common::args::with_infer_long_args;
+use charliebot_cli_common::args::{self, with_infer_long_args};
 use charliebot_cli_common::client;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_cli_common::files;
@@ -12,8 +12,6 @@ use charliebot_cli_common::resolve;
 use clap::error::ErrorKind;
 use clap::{CommandFactory, FromArgMatches, Parser, ValueEnum};
 use serde_json::{Map, Value, json};
-
-use super::delegate_readback;
 
 const DELEGATE_EPILOG: &str = r#"Task spec (--task-spec-file), six sections:
 
@@ -142,7 +140,7 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
   if cli.task_type != TaskType::Verify
     && let Some(repo) = &cli.repo
   {
-    validate_repo_path(&mut command, repo);
+    args::validate_repo_path(&mut command, repo);
   }
 
   let session_id = resolve::resolve_from_env(cli.session.as_deref())?;
@@ -184,11 +182,11 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
   let readback_task_type = task_type.to_string();
   let readback_request_id = cli.request_id.clone();
   let readback = move || {
-    Ok(delegate_readback::find_local_task_child(
+    Ok(charliebot_store::task_child::find_local_task_child(
       &home,
       &readback_session,
       &readback_description,
-      &readback_task_type,
+      Some(&readback_task_type),
       readback_request_id.as_deref(),
     ))
   };
@@ -252,23 +250,6 @@ fn is_known_long_option(argument: &str) -> bool {
 
 fn parser_error(command: &mut clap::Command, kind: ErrorKind, message: impl std::fmt::Display) -> ! {
   command.error(kind, message).exit()
-}
-
-fn validate_repo_path(command: &mut clap::Command, repo: &str) {
-  if !repo.starts_with('/') {
-    parser_error(
-      command,
-      ErrorKind::ValueValidation,
-      format!("--repo must be an absolute path (starting with '/'), got: {}", charliebot_core::pyfmt::str_repr(repo)),
-    );
-  }
-  if !Path::new(repo).is_dir() {
-    parser_error(
-      command,
-      ErrorKind::ValueValidation,
-      format!("--repo does not exist: {}", charliebot_core::pyfmt::str_repr(repo)),
-    );
-  }
 }
 
 fn validate_repo_and_branch(task_type: TaskType, repo: Option<&str>, base_branch: Option<&str>) -> Result<(), String> {

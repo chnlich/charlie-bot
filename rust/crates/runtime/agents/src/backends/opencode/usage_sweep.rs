@@ -13,7 +13,7 @@ use charliebot_registry::usage::{FreelistResult, SourceSweep, SweepScope};
 use memchr::memmem;
 use rusqlite::Connection;
 
-use super::usage_logs::open_read_only;
+use super::sqlite::open_read_only;
 
 /// The report line of the store's free pages.
 const FREELIST: &str = "opencode-freelist";

@@ -10,16 +10,15 @@ use std::io;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 use std::sync::LazyLock;
-use std::time::Duration;
 
 use anyhow::Context;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::pyfmt::python_str;
 use charliebot_registry::usage::{RecordKind, SourceSweep, SweepScope, UsageOps, UsageRecord, UsageSourceImpl};
 use regex::Regex;
-use rusqlite::{Connection, OpenFlags};
 use serde_json::{Map, Value};
 
+use super::sqlite::open_read_only;
 use super::usage_sweep;
 use crate::backends::usage_time::utc_isoformat;
 use crate::cli_base::truthy;
@@ -29,9 +28,6 @@ pub const USAGE_SOURCE: &str = "opencode";
 
 /// The one account of the opencode database (`_ACCOUNT`).
 const ACCOUNT: &str = "default";
-
-/// The busy timeout of every read-only open: `sqlite3.connect`'s default `timeout=5.0`.
-const CONNECT_WAIT: Duration = Duration::from_secs(5);
 
 /// The row prefilter: a blob without a `tokens` key carries no token counts. The classes are ASCII, as SQLite's LIKE
 /// folds case.
@@ -96,16 +92,6 @@ pub fn read(path: &Path, _account: &str, previous: Option<&str>) -> anyhow::Resu
     }
   }
   Ok((format!("{state}:{max_updated}"), records))
-}
-
-/// The store opened read-only, as `sqlite3.connect("file:<path>?mode=ro", uri=True)` opens it.
-pub(super) fn open_read_only(path: &Path) -> rusqlite::Result<Connection> {
-  let connection = Connection::open_with_flags(
-    format!("file:{}?mode=ro", path.display()),
-    OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
-  )?;
-  connection.busy_timeout(CONNECT_WAIT)?;
-  Ok(connection)
 }
 
 /// `<main size>:<main mtime_ns>:<wal size>:<wal mtime_ns>`; an absent WAL file reads `0:0` (`_file_state`).

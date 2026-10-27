@@ -7,8 +7,8 @@ use charliebot_registry::backend::{AgentBackend, BackendFactory, LaunchArgs};
 use crate::cli_base::resolve_binary;
 use crate::transport::cgroup::SessionCgroupConfig;
 
-use super::CodexHost;
 use super::backend::CodexBackend;
+use super::host::CodexHost;
 use super::options;
 
 /// Builds one codex backend per launch, resolving the codex binary from the package's host.

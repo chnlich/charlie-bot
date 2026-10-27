@@ -83,8 +83,7 @@ RUNTIME_LAYERS = (
     Layer(8, "entry points", ("api", "cli")),
     Layer(
         7, "execution", (
-            "autonamer", "master_cc_queue", "master_cc_run", "master_trigger", "task_execution", "task_recovery",
-            "triggers")),
+            "autonamer", "master_cc_queue", "master_cc_run", "master_trigger", "task_execution", "triggers")),
     Layer(
         6, "task tree", (
             "midturn_delivery", "session_dispatch", "task_completion", "task_input_prompt", "task_prompts",

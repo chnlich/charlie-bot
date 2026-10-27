@@ -24,6 +24,9 @@ function loadWebsocketContext(extraContext) {
     reconnectDelay: 1000,
     thinkingStart: null,
     sessionUnread: {},
+    // The page global index.html renders next to the ?v= script URLs; websocket.js
+    // sends it as the handshake's asset_version.
+    STATIC_ASSET_VERSION: 'stub-asset-version',
     document: {getElementById: () => null},
     Chat: {activeTurnEngineFor: () => null},
     localStorage: {getItem: () => null},

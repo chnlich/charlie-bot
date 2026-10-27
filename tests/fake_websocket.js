@@ -30,8 +30,8 @@ function createFakeWebSocketClass() {
       if (this.onopen) this.onopen();
     }
 
-    emitClose() {
-      if (this.onclose) this.onclose();
+    emitClose(closeEvent) {
+      if (this.onclose) this.onclose(closeEvent);
     }
 
     emitMessage(data) {

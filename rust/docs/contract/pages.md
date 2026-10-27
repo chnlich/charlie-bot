@@ -17,7 +17,9 @@ Every page response is a Starlette `TemplateResponse`:
 
 - `content-type: text/html; charset=utf-8`;
 - status 200 unless the route says otherwise;
-- no `Cache-Control` header;
+- no `Cache-Control` header in Python. The Rust port sends `Cache-Control: no-store` on every templated
+  page (`Templating::render_page`, `rust/crates/runtime/registry/src/templating.rs`), so a back navigation
+  or a restored tab re-fetches the page instead of running a cached copy's older JavaScript;
 - gzip per [middleware.md](middleware.md#gzip). Pages are larger than 1000 bytes, so a gzip client gets a compressed page.
 
 A page route answers `GET` only. `HEAD` gives 405.

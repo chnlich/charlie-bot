@@ -50,17 +50,21 @@ Handler: `server.py:361`.
 - Path parameter `session_id`: any string. The handler does not check that the session exists.
 - Query parameter `token`: the access key, when one is configured.
 - Query parameter `cursor`: the number of chat events the client already has. Required; see the cursor section below.
+- Query parameter `asset_version`: the page's static asset version (`web/templates/index.html` renders it
+  into the `?v=` script URLs and `web/static/js/websocket.js` sends it here). Optional; see the asset
+  version section below.
 
 ### Sequence
 
 1. Auth, then `accept`.
 2. Log `session_ws_connected`.
 3. Read the `cursor` query parameter. A missing value, a value with a non-digit or non-ASCII character, or a value longer than 19 characters closes the socket with code 4400 (the `session_ws_cursor_invalid` warning) before any subscription. No frame is awaited.
-4. Subscribe the socket to the channels `session:<session_id>` and `sidebar`.
-5. Send the catch-up frames.
-6. Send `{"type":"catchup_complete"}`.
-7. Enter the keepalive loop until the client disconnects.
-8. Unsubscribe from both channels and log `session_ws_disconnected`.
+4. Read the optional `asset_version` query parameter. When it is present, the handler compares it with the server's current static asset version (`Templating::static_asset_version`, read off the async runtime). A differing value closes the socket with code 4409 (the `session_ws_asset_version_stale` warning, carrying the page's and the server's values) before the subscription, and no frame precedes the close. A failure to compute the current version logs `session_ws_asset_version_failed` and closes the socket with code 1011. An absent value skips the check. The page answers a 4409 by reloading itself once per tab per 60 seconds (`web/static/js/websocket.js`).
+5. Subscribe the socket to the channels `session:<session_id>` and `sidebar`.
+6. Send the catch-up frames.
+7. Send `{"type":"catchup_complete"}`.
+8. Enter the keepalive loop until the client disconnects.
+9. Unsubscribe from both channels and log `session_ws_disconnected`.
 
 The subscription happens before the catch-up read. Thus no event falls between the catch-up and the live stream. An event can arrive twice: once in catch-up and once live.
 
@@ -72,6 +76,27 @@ The subscription happens before the catch-up read. Thus no event falls between t
 - A missing `cursor`, a non-decimal or non-ASCII value and a value longer than 19 characters close the socket with code 4400 before the subscription. The server sends no frame first.
 - UNVERIFIED: a value above the signed 64-bit maximum (19 digits) was not probed. Python's `int()` holds it, and the catch-up then treats the cursor as at or past the total.
 - The Rust handler still reads the first client text frame, not the query (`rust/crates/runtime/session-api/src/websocket.rs`, `receive_cursor`); its port is tracked in `PORT_STATUS.md`.
+
+### Asset version query parameter
+
+`GET /ws/sessions/{session_id}?cursor=42&asset_version=<static asset version>`. The check runs after the
+cursor check and before the subscription, so a rejection sends no frame.
+
+- The value is the page's static asset version, URL-encoded by `encodeURIComponent`
+  (`web/static/js/websocket.js`) and decoded the way the `cursor` reader decodes.
+- The server's current value is `Templating::static_asset_version()` — the same function the page's
+  `?v=` script URLs come from (`rust/crates/runtime/registry/src/templating.rs`). Reading it walks the
+  served static trees, so the Rust handler runs it on the blocking pool.
+- When the two values differ, the handler logs `session_ws_asset_version_stale` (warning, with the
+  page's value as `page_version` and the server's as `server_version`) and closes the socket with code
+  4409. The page answers by reloading itself, so the tab runs the deploy's current JavaScript.
+- When computing the server's value fails, the handler logs `session_ws_asset_version_failed` (error,
+  with the error) and closes the socket with code 1011, the code a catch-up failure already uses.
+- When the parameter is absent, the handler skips the check and serves the connection as before.
+- The page reloads at most once per tab per 60 seconds: it stores the last automatic reload's time in
+  `sessionStorage`, and a second 4409 inside that window shows a page-level banner ("This page is out
+  of date. Reload to continue.", with a Reload button) instead of reloading. Any close with another
+  code keeps the reconnect backoff.
 
 ### Catch-up
 
@@ -202,7 +227,8 @@ The sidebar `backend_switched` frame differs from the persisted `backend_switche
 - `web_status_subtree`
 - `worker_summary`
 
-The browser reconnects after a close. The delay starts at 1 s and grows to at most 30 s.
+The browser reconnects after a close. The delay starts at 1 s and grows to at most 30 s. A close with
+code 4409 is the exception: the page reloads itself instead (see the asset version section above).
 
 ### Shutdown
 

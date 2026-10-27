@@ -73,7 +73,9 @@ function connectWS() {
   cancelReconnect();
   const targetSession = SESSION_ID;
   const generation = ++wsGeneration;
-  const wsUrl = wsUrlWithToken(`/ws/sessions/${SESSION_ID}?cursor=${encodeURIComponent(eventCursor)}`);
+  const wsUrl = wsUrlWithToken(
+      `/ws/sessions/${SESSION_ID}?cursor=${encodeURIComponent(eventCursor)}` +
+      `&asset_version=${encodeURIComponent(STATIC_ASSET_VERSION)}`);
   const socket = new WebSocket(wsUrl);
   ws = socket;
 
@@ -95,14 +97,57 @@ function connectWS() {
     handleWSEvent(data, targetSession, generation);
   };
 
-  socket.onclose = () => {
+  socket.onclose = (event) => {
     if (isStaleSocket(socket, targetSession, generation)) return;
+    // 4409: the server's static asset version moved past this page's, so the tab kept running
+    // pre-deploy JavaScript. Reload instead of reconnecting with the old code.
+    if (event && event.code === 4409) {
+      console.log('WS closed: this page is older than the server, reloading');
+      handleStalePageClose();
+      return;
+    }
     console.log('WS closed, reconnecting in', reconnectDelay, 'ms');
     reconnectTimer = setTimeout(connectWS, reconnectDelay);
     reconnectDelay = Math.min(reconnectDelay * 2, 30000);
   };
 
   socket.onerror = () => { if (!isStaleSocket(socket, targetSession, generation)) socket.close(); };
+}
+
+// ---------------------------------------------------------------------------
+// Stale-page reload guard
+// ---------------------------------------------------------------------------
+// The 4409 close asks this page to reload, and no-store page responses mean the reload gets the
+// current code. The guard caps the automatic reload at one per tab per 60 seconds, so a layer that
+// still serves old HTML (a stale cache in the path) cannot turn the close into a reload loop.
+const STALE_PAGE_RELOAD_KEY = 'charliebot-stale-page-reload-at';
+const STALE_PAGE_RELOAD_GUARD_MS = 60000;
+
+function handleStalePageClose() {
+  const now = Date.now();
+  const lastReload = Number(sessionStorage.getItem(STALE_PAGE_RELOAD_KEY));
+  if (lastReload && now - lastReload < STALE_PAGE_RELOAD_GUARD_MS) {
+    showStalePageBanner();
+    return;
+  }
+  sessionStorage.setItem(STALE_PAGE_RELOAD_KEY, String(now));
+  location.reload();
+}
+
+function showStalePageBanner() {
+  const banner = document.createElement('div');
+  banner.style.cssText =
+    'position:fixed;top:0;left:0;right:0;z-index:10000;display:flex;align-items:center;' +
+    'justify-content:center;gap:16px;padding:10px;background:#991b1b;color:#fecaca;font-size:14px;';
+  banner.textContent = 'This page is out of date. Reload to continue.';
+  const button = document.createElement('button');
+  button.style.cssText =
+    'padding:4px 12px;border-radius:6px;border:none;background:#fca5a5;color:#7f1d1d;' +
+    'font-size:13px;font-weight:600;cursor:pointer;';
+  button.textContent = 'Reload';
+  button.onclick = () => location.reload();
+  banner.appendChild(button);
+  document.body.appendChild(banner);
 }
 
 function _bumpEventCursor(ev) {

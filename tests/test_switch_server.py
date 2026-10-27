@@ -2,8 +2,9 @@
 
 Each test builds its own runtime clone, home, release root and log directory under tmp_path, so nothing touches
 ~/.charliebot, ~/charliebot-releases, the default tmux server or the live port. FAKE_SERVER is one program that stands
-in for the Rust release binary: the switch reads the server's argv to tell a release from any other process. Its
-behavior comes from a behavior.json beside it.
+in for the release binary: the switch reads the server's argv to tell a release from any other process. Its behavior
+comes from a behavior.json beside it. Each installed release has a matching commit in the runtime clone, and the
+switch moves the clone to the target release commit in either direction.
 
 The preflight refusals stop before any pane is looked up, so they need no tmux. The steps after the preflight drive a
 pane on a private tmux server (tmux -L). The repo caps integration tests at 50 and already uses all 50, so those steps
@@ -235,10 +236,10 @@ class World:
   logs: pathlib.Path
   socket: str
   env: dict[str, str]
-  base_head: str  # the runtime clone's HEAD before any switch; the PORT_BASELINE commit is one ahead
-  baseline: str
+  initial_head: str  # the runtime clone's HEAD before any switch
   old_sha: str  # the release current names: a build from before the agy adoption commit
   rust_sha: str  # the release the tests switch to: a build after it
+  new_sha: str  # the release commit used by the forward and back switch test
   port: int
   live: list[subprocess.Popen[bytes]] = dataclasses.field(default_factory=list)
 
@@ -256,8 +257,8 @@ def _sha256(path: pathlib.Path) -> str:
   return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _install_release(releases: pathlib.Path, sha: str, baseline: str) -> None:
-  """A release directory in the shape the host's build job leaves: binary, library, sums and PORT_BASELINE."""
+def _install_release(releases: pathlib.Path, sha: str) -> None:
+  """A release directory with its binary, library and checksums."""
   release = releases / sha
   release.mkdir(parents=True)
   binary = release / "charliebot-server"
@@ -266,7 +267,6 @@ def _install_release(releases: pathlib.Path, sha: str, baseline: str) -> None:
   (release / "libfake.so").write_bytes(b"fake shared object")
   sums = [f"{_sha256(release / name)}  {name}\n" for name in ("charliebot-server", "libfake.so")]
   (release / "sha256sums.txt").write_text("".join(sums), encoding="utf-8")
-  (release / "PORT_BASELINE").write_text(f"{baseline}\n", encoding="utf-8")
   _write_behavior(release)
 
 
@@ -288,28 +288,36 @@ def _build_world(root: pathlib.Path) -> World:
   shutil.copy2(SWITCH, clone / "scripts" / "switch-server.sh")
   # The launcher's preflight reads its expected limits from this directory.
   shutil.copytree(ROOT / "scripts" / "systemd", clone / "scripts" / "systemd")
-  _git(clone, "init", "-q", "-b", "main")
-  _git(clone, "add", "scripts")
-  _git(clone, "commit", "-q", "-m", "fake runtime clone")
-  old_sha = _git(clone, "rev-parse", "HEAD")
-  _git(clone, "commit", "-q", "--allow-empty", "-m", "adopt a live agy run across a restart")
+  _git(clone, "init", "-q")
+  _git(clone, "checkout", "--orphan", "agy-adoption")
+  marker = clone / "agy-adoption-marker"
+  marker.write_text("test adoption commit\n", encoding="utf-8")
+  _git(clone, "add", marker.name)
+  _git(clone, "commit", "-q", "-m", "adopt a live agy run across a restart")
   adoption = _git(clone, "rev-parse", "HEAD")
-  # The switch names one commit as what made agy survive a restart. Tests cannot create that commit, so this clone
-  # stands in with a commit of its own and its copy of the switch names it.
+  _git(clone, "checkout", "--orphan", "main")
+  marker.unlink()
+  _git(clone, "rm", "--cached", marker.name)
+  # The switch names one commit as what made agy survive a restart. This unrelated marker commit lets the older release
+  # refer to it while only the newer release contains it in its history.
   switch_copy = clone / "scripts" / "switch-server.sh"
   text, declared = re.subn(
       r"(?m)^AGY_ADOPTION_COMMIT=\S+$", f"AGY_ADOPTION_COMMIT={adoption}", switch_copy.read_text(encoding="utf-8"))
   assert declared == 1, "the switch declares AGY_ADOPTION_COMMIT once"
   switch_copy.write_text(text, encoding="utf-8")
   _git(clone, "add", "scripts")
-  _git(clone, "commit", "-q", "-m", "test: name this clone's adoption commit")
-  base_head = _git(clone, "rev-parse", "HEAD")
-  _git(clone, "checkout", "-q", "-b", "baseline")
-  _git(clone, "commit", "-q", "--allow-empty", "-m", "baseline")
-  baseline = _git(clone, "rev-parse", "HEAD")
-  _git(clone, "checkout", "-q", "main")
-  _install_release(releases, old_sha, baseline)
-  _install_release(releases, base_head, baseline)
+  _git(clone, "commit", "-q", "-m", "old release")
+  old_sha = _git(clone, "rev-parse", "HEAD")
+  _git(clone, "merge", "--no-ff", "--allow-unrelated-histories", "-m", "include agy adoption history", "agy-adoption")
+  rust_sha = _git(clone, "rev-parse", "HEAD")
+  _git(clone, "commit", "-q", "--allow-empty", "-m", "new release")
+  new_sha = _git(clone, "rev-parse", "HEAD")
+  subprocess.run(["git", "clone", "-q", "--bare", str(clone), str(root / "origin.git")], env=GIT_ENV, check=True)
+  _git(clone, "remote", "add", "origin", str(root / "origin.git"))
+  _git(clone, "checkout", "-q", old_sha)
+  _install_release(releases, old_sha)
+  _install_release(releases, rust_sha)
+  _install_release(releases, new_sha)
   (releases / "current").symlink_to(old_sha)
 
   (bin_dir / "uv").write_text(FAKE_UV, encoding="utf-8")
@@ -366,10 +374,10 @@ def _build_world(root: pathlib.Path) -> World:
       logs=logs,
       socket=env["CHARLIEBOT_TMUX_SOCKET"],
       env=env,
-      base_head=base_head,
-      baseline=baseline,
+      initial_head=old_sha,
       old_sha=old_sha,
-      rust_sha=base_head,
+      rust_sha=rust_sha,
+      new_sha=new_sha,
       port=port)
 
 
@@ -509,7 +517,7 @@ def _version_status(port: int) -> int:
 def _assert_untouched(world: World) -> None:
   """Nothing changed: current names the old release, the clone is where it was, and the old server answers."""
   assert os.readlink(world.releases / "current") == world.old_sha
-  assert _git(world.clone, "rev-parse", "HEAD") == world.base_head
+  assert _git(world.clone, "rev-parse", "HEAD") == world.initial_head
   assert _serves_release(world, world.old_sha)
   assert _version_status(world.port) == 200
 
@@ -640,7 +648,7 @@ def test_preflight_fails_when_a_build_is_not_in_the_clone(world: World, missing:
   """The switch reads each build's history from the clone: an absent build fails the preflight instead of guessing."""
   absent = hashlib.sha1(b"a build no clone has").hexdigest()
   if missing == "target":
-    _install_release(world.releases, absent, world.baseline)
+    _install_release(world.releases, absent)
     running_impl, target_sha = f"rust {world.rust_sha}", absent
   else:
     running_impl, target_sha = f"rust {absent}", world.rust_sha
@@ -686,7 +694,7 @@ def test_preflight_refusal_exits_1_and_changes_nothing(world: World, case: str) 
 
   assert proc.returncode == 1, _report(world, proc)
   assert (os.readlink(current) if current.is_symlink() else None) == current_before
-  assert _git(world.clone, "rev-parse", "HEAD") == world.base_head
+  assert _git(world.clone, "rev-parse", "HEAD") == world.initial_head
   assert {
       path.relative_to(world.home): path.read_bytes() for path in world.home.rglob("*") if path.is_file()
   } == home_before
@@ -850,7 +858,6 @@ def _switch_forward(world: World, run_pid: int, launch_output: str) -> subproces
   script = """
 source "$1" rust "$2"
 REPO_ROOT="$CLONE"
-BASE="$(git -C "$CLONE" rev-parse HEAD)"
 stop_old() { kill -KILL "$RUN_PID"; }
 start_in_pane() { :; }
 wait_ready() { :; }
@@ -1172,36 +1179,37 @@ def test_switch_on_a_real_pane_restores_then_round_trips_then_exits_3(world: Wor
   _start_server(world, pane)
   _seed_live_run(world, "run-live", "claude-opus")
 
-  # The Rust readback cannot adopt the live run: the switch fails after it stopped the old release and restores it.
-  _write_behavior(world.releases / world.rust_sha, adopt=False)
-  proc = _switch(world, "rust", world.rust_sha)
+  # The new release's readback cannot adopt the live run: the switch fails after it stopped the old release and
+  # restores it.
+  _write_behavior(world.releases / world.new_sha, adopt=False)
+  proc = _switch(world, "rust", world.new_sha)
   assert proc.returncode == 2, _report(world, proc)
   _assert_server_scope_records(world, 3)
   _assert_untouched(world)
 
-  # With a passing readback the live run is adopted, and the clone fast-forwards to the PORT_BASELINE commit. This
-  # release ignores SIGTERM, so the switch back has to SIGKILL it.
-  _write_behavior(world.releases / world.rust_sha, ignore_sigterm=True)
-  proc = _switch(world, "rust", world.rust_sha)
+  # With a passing readback the live run is adopted, and the clone moves to the new release's commit. This release
+  # ignores SIGTERM, so the switch back has to SIGKILL it.
+  _write_behavior(world.releases / world.new_sha, ignore_sigterm=True)
+  proc = _switch(world, "rust", world.new_sha)
   assert proc.returncode == 0, _report(world, proc)
   _assert_server_scope_records(world, 4)
-  assert os.readlink(world.releases / "current") == world.rust_sha
-  assert _git(world.clone, "rev-parse", "HEAD") == world.baseline
-  assert _serves_release(world, world.rust_sha)
+  assert os.readlink(world.releases / "current") == world.new_sha
+  assert _git(world.clone, "rev-parse", "HEAD") == world.new_sha
+  assert _serves_release(world, world.new_sha)
   assert _version_status(world.port) == 200
   assert '"run_id":"run-live"' in _latest_log(world)
 
-  # The way back to the old release: current names it again, and the clone stays at the baseline.
+  # The way back moves the clone to the earlier release commit.
   proc = _switch(world, "rust", world.old_sha)
   assert proc.returncode == 0, _report(world, proc)
   _assert_server_scope_records(world, 5)
   assert os.readlink(world.releases / "current") == world.old_sha
-  assert _git(world.clone, "rev-parse", "HEAD") == world.baseline
+  assert _git(world.clone, "rev-parse", "HEAD") == world.old_sha
   assert _serves_release(world, world.old_sha)
 
   # A sync that fails again during the restore leaves the server down, which is exit 3.
   (world.clone / "fail-sync").write_text("", encoding="utf-8")
-  proc = _switch(world, "rust", world.rust_sha)
+  proc = _switch(world, "rust", world.new_sha)
   assert proc.returncode == 3, _report(world, proc)
   _assert_server_scope_records(world, 5)
   assert _listener_pids(world.port) == set()

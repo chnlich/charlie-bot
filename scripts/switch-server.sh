@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
-# Switch the live CharlieBot server to a verified Rust release.
+# Switch the live CharlieBot server to an installed release and move the runtime clone to that release's commit.
 #
-#   scripts/switch-server.sh rust <full rust-backend sha> [--pane PANE]
+#   scripts/switch-server.sh rust <full main commit> [--pane PANE]
 #
-# The preflight checks release, clone, runs and config, then asks start-server.sh to test its slices and scope.
-# A refusal changes nothing and exits 1. The switch then runs detached under setsid, because stopping the old server
-# ends the master turn that started this command. The command prints the log
-# path, waits for the verdict and exits with it: 0 when the readback and the probe turn passed; 2 when the switch
-# failed and the previous implementation serves again; 3 when the restore failed too, and the log ends with the state
+# The preflight checks the release, the clone, the runs and the config, then asks start-server.sh to test its slices
+# and scope. It refuses a clone with local changes and a target commit that a fetch does not bring. The switch then
+# stops the old server, moves the clone with `git reset --keep <commit>` (forward or back), starts the release and
+# reads it back. A refusal changes nothing and exits 1. The switch runs detached under setsid, because stopping the
+# old server ends the master turn that started this command. The command prints the log path, waits for the verdict
+# and exits with it: 0 when the readback and the probe turn passed; 2 when the switch failed and the previous
+# implementation serves again; 3 when the restore failed too, and the log ends with the state
 # the server is in; 4 when the switch completed but a recorded run died during it: the new server keeps serving, nothing
 # is restored, and the log names the run and its outcome. When the pane stays busy after Ctrl-C, the restore sends
 # SIGTERM, then SIGKILL, to the server processes under the pane.
@@ -45,7 +47,7 @@ AGY_ADOPTION_COMMIT=5c80d0204a48a6ad5c4c606b4ccb0d438bb7294b
 export AGY_REATTACH_BLOCK=""
 
 usage() {
-  echo "usage: switch-server.sh rust <full rust-backend sha> [--pane PANE]" >&2
+  echo "usage: switch-server.sh rust <full main commit> [--pane PANE]" >&2
   exit 1
 }
 
@@ -768,20 +770,15 @@ preflight() {
   RELEASE_DIR="$RELEASES_DIR/$TARGET_SHA"
   [ -d "$RELEASE_DIR" ] || fail "no release $TARGET_SHA in $RELEASES_DIR"
   (cd "$RELEASE_DIR" && sha256sum -c sha256sums.txt) || fail "$RELEASE_DIR does not match its sha256sums.txt"
-  BASE="$(tr -d '[:space:]' < "$RELEASE_DIR/PORT_BASELINE")"
-  [[ "$BASE" =~ ^[0-9a-f]{40}$ ]] || fail "PORT_BASELINE of $TARGET_SHA is not a full commit sha"
   OLD_SHA="$(git -C "$REPO_ROOT" rev-parse HEAD)"
   [ -z "$(git -C "$REPO_ROOT" status --porcelain --untracked-files=no)" ] \
     || fail "runtime clone $REPO_ROOT has local changes"
-  if [ "$MODE" = rust ]; then
-    git -C "$REPO_ROOT" cat-file -e "$BASE^{commit}" 2> /dev/null \
-      || fail "baseline $BASE is not in the runtime clone; fetch origin first"
-    git -C "$REPO_ROOT" merge-base --is-ancestor "$OLD_SHA" "$BASE" \
-      || fail "runtime clone HEAD $OLD_SHA is not an ancestor of baseline $BASE"
-    CHARLIEBOT_HOME="$HOME_DIR" CHARLIEBOT_REPO_ROOT="$REPO_ROOT" CHARLIEBOT_VENV_BIN="$REPO_ROOT/.venv/bin" \
-      "$RELEASE_DIR/charliebot-server" --check-config \
-      || fail "--check-config of $TARGET_SHA rejects the home $HOME_DIR"
-  fi
+  git -C "$REPO_ROOT" fetch --quiet origin || fail "cannot fetch origin in $REPO_ROOT"
+  git -C "$REPO_ROOT" cat-file -e "$TARGET_SHA^{commit}" 2> /dev/null \
+    || fail "target commit $TARGET_SHA is not in the runtime clone after fetching origin"
+  CHARLIEBOT_HOME="$HOME_DIR" CHARLIEBOT_REPO_ROOT="$REPO_ROOT" CHARLIEBOT_VENV_BIN="$REPO_ROOT/.venv/bin" \
+    "$RELEASE_DIR/charliebot-server" --check-config \
+    || fail "--check-config of $TARGET_SHA rejects the home $HOME_DIR"
   CONFIG="$(home_helper config)" || fail "cannot read $HOME_DIR/config.yaml and credentials.yaml"
   PORT="$(sed -n 1p <<<"$CONFIG")"
   KEY="$(sed -n 2p <<<"$CONFIG")"
@@ -912,7 +909,7 @@ switch_forward() {
   [ -z "$BLOCKERS" ] || die "live work appeared after the preflight: ${BLOCKERS//$'\n'/; }"
   log "recorded $(wc -l < "$RUNS_FILE") live run(s) in $RUNS_FILE"
   stop_old || die "the old server did not stop"
-  git -C "$REPO_ROOT" merge --ff-only -q "$BASE" || die "fast-forward to $BASE failed"
+  git -C "$REPO_ROOT" reset --keep -q "$TARGET_SHA" || die "git reset --keep $TARGET_SHA failed"
   (cd "$REPO_ROOT" && uv sync --frozen) || die "uv sync failed"
   set_current "$TARGET_SHA" || die "could not point current at $TARGET_SHA"
   start_in_pane || die "could not type the launcher into pane $PANE"

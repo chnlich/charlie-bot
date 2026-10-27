@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 use crate::json_input::replace_unrepresentable_numbers;
+use crate::metadata::WaitingItem;
 use crate::plan_links::{self, PlanLinks};
 use crate::reply::{self, WebReplyError};
 
@@ -62,22 +63,6 @@ const SERVER_WRITTEN_ITEM_FIELDS: [&str; 2] = ["since", "since_exact"];
 const NOT_A_DATETIME: &str = "Input should be a valid datetime";
 /// The pydantic message a since_exact field that is not a boolean raises.
 const NOT_A_BOOLEAN: &str = "Input should be a valid boolean";
-
-/// One Waiting on you item: a decision or an action, its context, and the link to the place where the user answers it
-/// (`metadata.WaitingItem`). An absent context stays absent in stored legacy items. `since` and `since_exact` are
-/// written by the server: `since` is the time the item first appeared or a lower bound on it, and `since_exact` is
-/// false when `since` is that lower bound. An item stored before these fields existed carries neither.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct WaitingItem {
-  pub(crate) text: String,
-  #[serde(default, skip_serializing_if = "Option::is_none")]
-  pub(crate) context: Option<String>,
-  pub(crate) link: Option<String>,
-  #[serde(default, skip_serializing_if = "Option::is_none")]
-  since: Option<UtcDateTime>,
-  #[serde(default, skip_serializing_if = "Option::is_none")]
-  since_exact: Option<bool>,
-}
 
 /// The session status: Goal, Now and Waiting on you, and the time the last set stored them (`metadata.WebStatus`).
 #[derive(Clone, Debug, Serialize, Deserialize)]

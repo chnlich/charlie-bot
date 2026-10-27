@@ -16,8 +16,8 @@ use charliebot_core::paths;
 use regex::Regex;
 use serde_json::Value;
 
+use crate::metadata::WaitingItem;
 use crate::reply::WebReplyError;
-use crate::status::WaitingItem;
 
 /// A bare file-server path inside prose: the context and text fields carry these without a Markdown target
 /// (`plan_links._MOUNT_PATH`).

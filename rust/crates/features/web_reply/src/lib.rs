@@ -6,6 +6,7 @@
 mod api;
 mod audit;
 mod json_input;
+mod metadata;
 mod plan_links;
 mod reply;
 mod status;

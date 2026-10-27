@@ -1,0 +1,21 @@
+{
+  "argv": [
+    "discord",
+    "read",
+    "--limit",
+    "0",
+    "--session",
+    "abc"
+  ],
+  "cwd": "{root}",
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n"
+  },
+  "responses": [],
+  "expect": {
+    "stdout": "",
+    "stderr": "{\"error\": \"--limit must be between 1 and 100, got: 0\"}\n",
+    "exit": 2,
+    "requests": []
+  }
+}

@@ -1,0 +1,61 @@
+{
+  "argv": [
+    "web",
+    "reply",
+    "--file",
+    "{root}/reply.md",
+    "--session",
+    "abc"
+  ],
+  "cwd": "{root}",
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n",
+    "reply.md": "the answer"
+  },
+  "responses": [
+    {
+      "status": 409,
+      "body": {
+        "detail": "Language check: the user's last message is in Chinese.\nThis reply has almost no Chinese.\nThe command posted nothing.\nRewrite the reply in Chinese.\nThen post the reply again.\nTo post the reply as written, add --keep-language \"<reason>\" to the command."
+      }
+    },
+    {
+      "status": 404,
+      "body": {
+        "detail": "Not Found"
+      }
+    }
+  ],
+  "expect": {
+    "stdout": "",
+    "stderr": "{\"error\": \"Language check: the user's last message is in Chinese.\\nThis reply has almost no Chinese.\\nThe command posted nothing.\\nRewrite the reply in Chinese.\\nThen post the reply again.\\nTo post the reply as written, add --keep-language \\\"<reason>\\\" to the command.\", \"code\": \"server_error\", \"effect\": \"none\"}\n",
+    "exit": 1,
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/api/internal/web/reply",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "session_id": "abc",
+          "text": "the answer"
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/api/internal/version",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": null
+        },
+        "body": null
+      }
+    ]
+  }
+}

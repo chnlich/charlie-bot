@@ -1,0 +1,42 @@
+{
+  "argv": [
+    "web",
+    "status",
+    "show",
+    "--ses",
+    "abc"
+  ],
+  "cwd": "{root}",
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n"
+  },
+  "responses": [
+    {
+      "status": 200,
+      "body": {
+        "session_id": "abc",
+        "web_status": null,
+        "descendants": [],
+        "children": []
+      }
+    }
+  ],
+  "expect": {
+    "stdout": "No status yet\n",
+    "stderr": "",
+    "exit": 0,
+    "requests": [
+      {
+        "method": "GET",
+        "path": "/api/internal/web/status",
+        "query": "session_id=abc",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": null
+        },
+        "body": null
+      }
+    ]
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "argv": [
+    "discord",
+    "check"
+  ],
+  "cwd": "{root}",
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n"
+  },
+  "responses": [
+    {
+      "status": 200,
+      "body": {
+        "ok": true,
+        "bot_user": "charliebot",
+        "application_id": "app-1",
+        "message_content_intent": true,
+        "guilds": [
+          {
+            "id": "g1",
+            "name": "Guild",
+            "missing_permissions": []
+          }
+        ]
+      }
+    }
+  ],
+  "expect": {
+    "stdout": "{\"ok\": true, \"bot_user\": \"charliebot\", \"application_id\": \"app-1\", \"message_content_intent\": true, \"guilds\": [{\"id\": \"g1\", \"name\": \"Guild\", \"missing_permissions\": []}]}\n",
+    "stderr": "",
+    "exit": 0,
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/api/internal/discord/check",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": "application/json"
+        },
+        "body": {}
+      }
+    ]
+  }
+}

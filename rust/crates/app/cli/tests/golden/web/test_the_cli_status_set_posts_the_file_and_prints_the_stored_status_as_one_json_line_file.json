@@ -1,0 +1,68 @@
+{
+  "argv": [
+    "web",
+    "status",
+    "set",
+    "--file",
+    "{root}/status.json",
+    "--session",
+    "abc"
+  ],
+  "cwd": "{root}",
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n",
+    "status.json": "{\"now\": \"n\"}"
+  },
+  "responses": [
+    {
+      "status": 200,
+      "body": {
+        "unread": []
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "goal": "g",
+        "now": "n",
+        "waiting": [],
+        "updated_at": "2026-10-16T21:00:00+00:00"
+      }
+    }
+  ],
+  "expect": {
+    "stdout": "{\"goal\": \"g\", \"now\": \"n\", \"waiting\": [], \"updated_at\": \"2026-10-16T21:00:00+00:00\"}\n",
+    "stderr": "",
+    "exit": 0,
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/api/internal/web/status/unread",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "session_id": "abc",
+          "text": "{\"now\": \"n\"}"
+        }
+      },
+      {
+        "method": "POST",
+        "path": "/api/internal/web/status",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "session_id": "abc",
+          "text": "{\"now\": \"n\"}"
+        }
+      }
+    ]
+  }
+}

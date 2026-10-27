@@ -1,0 +1,62 @@
+{
+  "argv": [
+    "web",
+    "status",
+    "set",
+    "--file",
+    "{root}/status.json",
+    "--session",
+    "abc"
+  ],
+  "cwd": "{root}",
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n",
+    "status.json": "{\"waiting\": [{\"text\": \"Decide\", \"link\": null}]}"
+  },
+  "responses": [
+    {
+      "status": 422,
+      "body": {
+        "detail": "Waiting item needs context: Decide"
+      }
+    },
+    {
+      "status": 404,
+      "body": {
+        "detail": "Not Found"
+      }
+    }
+  ],
+  "expect": {
+    "stdout": "",
+    "stderr": "{\"error\": \"Waiting item needs context: Decide\", \"code\": \"server_error\", \"effect\": \"none\"}\n",
+    "exit": 1,
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/api/internal/web/status/unread",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "session_id": "abc",
+          "text": "{\"waiting\": [{\"text\": \"Decide\", \"link\": null}]}"
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/api/internal/version",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": null
+        },
+        "body": null
+      }
+    ]
+  }
+}

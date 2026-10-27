@@ -1,0 +1,46 @@
+{
+  "argv": [
+    "slack",
+    "ack",
+    "--mess",
+    "1700000000.000100",
+    "--session",
+    "abc"
+  ],
+  "cwd": "{root}",
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n"
+  },
+  "responses": [
+    {
+      "status": 200,
+      "body": {
+        "acked": 1,
+        "watermark_ts": "1700000000.000100"
+      }
+    }
+  ],
+  "expect": {
+    "stdout": "{\"acked\": 1, \"watermark_ts\": \"1700000000.000100\"}\n",
+    "stderr": "",
+    "exit": 0,
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/api/internal/slack/ack",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "session_id": "abc",
+          "message_ids": [
+            "1700000000.000100"
+          ]
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "argv": [
+    "discord",
+    "read",
+    "--li",
+    "5",
+    "--session",
+    "abc"
+  ],
+  "cwd": "{root}",
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n"
+  },
+  "responses": [
+    {
+      "status": 200,
+      "body": {
+        "messages": [],
+        "watermark_id": null,
+        "more_unread": false
+      }
+    }
+  ],
+  "expect": {
+    "stdout": "{\"messages\": [], \"watermark_id\": null, \"more_unread\": false}\n",
+    "stderr": "",
+    "exit": 0,
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/api/internal/discord/read",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "session_id": "abc",
+          "url": null,
+          "limit": 5
+        }
+      }
+    ]
+  }
+}

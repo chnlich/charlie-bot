@@ -1,0 +1,116 @@
+{
+  "argv": [
+    "web",
+    "status",
+    "set",
+    "--file",
+    "{root}/status.json",
+    "--session",
+    "abc"
+  ],
+  "cwd": "{root}",
+  "expect_from": "rust",
+  "env": {
+    "PATH": "{root}/bin",
+    "HOME": "{root}/user",
+    "CHARLIEBOT_REPO_ROOT": "{repo}"
+  },
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\nbackends:\n  pool:\n    - claude-light\n  options:\n    - id: claude-light\n      label: CC Light\n      type: cc-claude\n      model: claude-light-test\n",
+    "bin/claude": "#!/bin/sh\n/bin/cat > /dev/null\nprintf '%s\\n' 'Keep the file page.'\n",
+    "linked-page.html": "HOST-SERVED-PAGE-CONTENT",
+    "status.json": "{\"waiting\": [{\"text\": \"Should we use the file page?\", \"context\": \"The line is ready now. Options are keep or change; keep is recommended.\", \"link\": \"http://localhost:9443/absolute_filepath{root}/linked-page.html\"}, {\"text\": \"Should we use the remote page?\", \"context\": \"The review is open now. Options are merge or wait; wait is recommended.\", \"link\": \"https://code.example/example/project/pull/12\"}]}"
+  },
+  "responses": [
+    {
+      "status": 200,
+      "body": {
+        "unread": [
+          {
+            "text": "Should we use the file page?",
+            "context": "The line is ready now. Options are keep or change; keep is recommended.",
+            "link": "http://localhost:9443/absolute_filepath{root}/linked-page.html"
+          },
+          {
+            "text": "Should we use the remote page?",
+            "context": "The review is open now. Options are merge or wait; wait is recommended.",
+            "link": "https://code.example/example/project/pull/12"
+          }
+        ]
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "item_sha256": "digest"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "item_sha256": "digest"
+      }
+    }
+  ],
+  "expect": {
+    "stdout": "Waiting on you: Should we use the file page?\nBackend: claude-light\nKeep the file page.\n\nWaiting on you: Should we use the remote page?\nBackend: claude-light\nKeep the file page.\n\nNothing was stored.\n",
+    "stderr": "",
+    "exit": 3,
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/api/internal/web/status/unread",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "session_id": "abc",
+          "text": "{\"waiting\": [{\"text\": \"Should we use the file page?\", \"context\": \"The line is ready now. Options are keep or change; keep is recommended.\", \"link\": \"http://localhost:9443/absolute_filepath{root}/linked-page.html\"}, {\"text\": \"Should we use the remote page?\", \"context\": \"The review is open now. Options are merge or wait; wait is recommended.\", \"link\": \"https://code.example/example/project/pull/12\"}]}"
+        }
+      },
+      {
+        "method": "POST",
+        "path": "/api/internal/web/ask-check",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "session_id": "abc",
+          "item": {
+            "text": "Should we use the file page?",
+            "context": "The line is ready now. Options are keep or change; keep is recommended.",
+            "link": "http://localhost:9443/absolute_filepath{root}/linked-page.html"
+          },
+          "backend": "claude-light",
+          "answer": "Keep the file page."
+        }
+      },
+      {
+        "method": "POST",
+        "path": "/api/internal/web/ask-check",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "session_id": "abc",
+          "item": {
+            "text": "Should we use the remote page?",
+            "context": "The review is open now. Options are merge or wait; wait is recommended.",
+            "link": "https://code.example/example/project/pull/12"
+          },
+          "backend": "claude-light",
+          "answer": "Keep the file page."
+        }
+      }
+    ]
+  }
+}

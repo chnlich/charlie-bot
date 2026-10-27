@@ -2165,7 +2165,7 @@ impl TaskExecutionAdapter {
           Ok(true)
         }
         .await;
-        crate::midturn_delivery::claude_midturn::release_run(&run_id);
+        charliebot_registry::midturn_delivery::release_run(&run_id);
         finished?;
         // Inputs admitted during this turn waited for the serialized consumer; the turn's finish is what dispatches
         // their next run.

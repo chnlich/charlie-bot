@@ -22,7 +22,7 @@ use crate::transport::spawn::{ChildStdin, SpawnSetup, SpawnSpec, spawn_with_setu
 
 use super::claude_launch;
 use super::login_dirs;
-use super::midturn_delivery::{self, MidturnTranslate};
+use super::midturn_delivery::MidturnTranslate;
 
 pub const HEADLESS_DISALLOWED_TOOLS: &str = concat!(
   "Monitor,ScheduleWakeup,CronCreate,CronDelete,CronList,Agent,Workflow,TaskCreate,",
@@ -409,7 +409,9 @@ impl AgentBackend for ClaudeCodeBackend {
     }
     let run_id = self.midturn_run_id.clone();
     let prompt = prompt.to_string();
-    Some(Box::pin(async move { midturn_delivery::write_initial_prompt(run_id, stdin, exited, prompt).await }))
+    Some(Box::pin(async move {
+      charliebot_registry::midturn_delivery::write_initial_prompt(run_id, stdin, exited, prompt).await
+    }))
   }
 
   fn on_event<'a>(&'a self, event: &'a Value) -> Option<BoxFuture<'a, anyhow::Result<()>>> {
@@ -417,7 +419,7 @@ impl AgentBackend for ClaudeCodeBackend {
       return None;
     }
     let run_id = self.midturn_run_id.clone();
-    Some(Box::pin(async move { midturn_delivery::on_backend_event(run_id, event).await }))
+    Some(Box::pin(async move { charliebot_registry::midturn_delivery::on_backend_event(run_id, event).await }))
   }
 
   fn translator(&self) -> Box<dyn Translate> {

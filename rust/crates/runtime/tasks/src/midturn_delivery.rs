@@ -1,8 +1,9 @@
 //! The dispatcher half of live user-message delivery for web manager turns (`src/runtime/midturn_delivery.py`).
 //!
 //! The delivery state itself — the serialized stdin writes, the replay acknowledgements and the stdin close — lives in
-//! `charliebot_agents::backends::claude_code::midturn_delivery`; this module offers the pending inputs to the live Run,
-//! records the acknowledgements on the manager item, and claims the echoed inputs at the finish.
+//! the runtime (`charliebot_registry::midturn_delivery`), which the Claude Code backend writes into. This module
+//! offers the pending inputs to the live Run, records the acknowledgements on the manager item, and claims the echoed
+//! inputs at the finish.
 
 use std::collections::HashSet;
 use std::fmt;
@@ -15,6 +16,7 @@ use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::event_types;
 use charliebot_registry::backend::LaunchArgs;
 use charliebot_registry::context::FeatureContext;
+use charliebot_registry::midturn_delivery::{is_gated_turn, offer as offer_write};
 use charliebot_store::ChatEvent;
 use charliebot_store::compact::CompactValue;
 use charliebot_store::metadata::SessionMetadata;
@@ -26,13 +28,11 @@ use serde_json::{Map, Value};
 use crate::dispatch::{Dispatcher, python_string};
 use crate::task_input_prompt::compose_input_prompt;
 
-/// The delivery-state module: the serialized stdin writes, the replay acknowledgements and the stdin close.
-pub(crate) use charliebot_agents::backends::claude_code::midturn_delivery as claude_midturn;
+/// True for a manager session that no Slack or Discord thread owns (`reply.is_web_session`).
+pub use charliebot_registry::midturn_delivery::is_web_session;
 
 /// One fresh whole-file translator: the mutable event projection of one raw-log scan.
 pub type FreshTranslate = Box<dyn FnMut(Value) -> anyhow::Result<Vec<Value>> + Send>;
-
-use claude_midturn::{is_gated_turn, offer as offer_write};
 
 /// Write each eligible pending web-user event once to the live Run (`midturn_delivery.offer`).
 pub async fn offer(
@@ -206,8 +206,8 @@ pub async fn claim_finish_inputs(
 /// Build the fresh raw-log translator used to follow or reconcile one Run (`midturn_delivery.fresh_translate`).
 ///
 /// Stateful translates require one instance per scan. A gated web manager turn's replay lines need the gated backend's
-/// translator, so the launch carries the stream-json arguments; a build failure degrades to the raw claude shape the
-/// same way the worker side's reconcile translate does — never a crash of the follow.
+/// translator, so the launch carries the stream-json arguments its lifecycle returns; a build failure degrades to the
+/// raw claude shape the same way the worker side's reconcile translate does — never a crash of the follow.
 pub fn fresh_translate(
   features: &FeatureContext,
   cfg: &CharlieBotConfig,
@@ -215,25 +215,16 @@ pub fn fresh_translate(
   meta: &SessionMetadata,
   run_id: &str,
 ) -> anyhow::Result<FreshTranslate> {
-  use claude_midturn::{CLAUDE_BACKEND_TYPES, launch_kwargs};
   let Some(option) = option else {
     return Ok(Box::new(|event| Ok(vec![event])));
   };
-  let launch = if CLAUDE_BACKEND_TYPES.contains(&option.backend_type.as_str())
-    && is_gated_turn(meta, true, RunKind::ManagerTurn)
-  {
-    let Some(midturn_run_id) = launch_kwargs(meta, true, RunKind::ManagerTurn, Some(run_id))? else {
-      anyhow::bail!("a gated web manager turn needs its Run id");
-    };
-    LaunchArgs {
-      backend_kwargs: Map::from_iter([
-        ("midturn_delivery".to_string(), Value::Bool(true)),
-        ("midturn_run_id".to_string(), Value::String(midturn_run_id)),
-      ]),
-      ..LaunchArgs::default()
+  let launch = match features.registry.lifecycle_for(&option.backend_type) {
+    Ok(lifecycle) => {
+      let backend_kwargs = lifecycle.midturn_launch_kwargs(meta, true, RunKind::ManagerTurn, Some(run_id))?;
+      LaunchArgs { backend_kwargs, ..LaunchArgs::default() }
     }
-  } else {
-    LaunchArgs::default()
+    // A type no package registered has no lifecycle and no mid-turn input path; the build below reports it.
+    Err(_) => LaunchArgs::default(),
   };
   match backend_types::build_backend(std::sync::Arc::clone(&features.registry), option, cfg, launch) {
     Ok(built) => {
@@ -253,6 +244,7 @@ mod tests {
 
   use charliebot_agents::backend_types;
   use charliebot_registry::backend::LaunchArgs;
+  use charliebot_registry::midturn_delivery as claude_midturn;
   use charliebot_store::metadata::{SessionMetadata, TaskProfile};
   use charliebot_store::run_records::RunKind;
   use serde_json::json;

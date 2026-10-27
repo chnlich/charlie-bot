@@ -10,6 +10,7 @@ pub mod backend;
 pub mod caller;
 pub mod context;
 pub mod lifespan;
+pub mod midturn_delivery;
 pub mod pages;
 pub mod registry;
 pub mod route_claims;

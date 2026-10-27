@@ -131,7 +131,7 @@ pub fn call_api(
       body: body.clone(),
       timeout: Duration::from_secs_f64(ctx.request_timeout),
     };
-    match transport(&request) {
+    let lost = match transport(&request) {
       Err(TransportError::ConnectPhase(message)) => {
         let remaining = deadline - clock.now();
         if remaining <= 0.0 {
@@ -140,26 +140,24 @@ pub fn call_api(
         let delay = (0.25 * 2.0f64.powi(attempt as i32)).min(5.0).min(remaining);
         attempt += 1;
         clock.sleep(delay);
+        continue;
       }
-      Err(TransportError::SentButLost(message)) => {
-        // Sent but the response was lost — never re-issue the call (its effect may have landed).
-        // Read back this call's own on-disk artifact instead.
-        if let Some(artifact) = call.readback.take().and_then(|readback| readback()) {
-          return Ok(artifact);
-        }
-        return Err(outcome_unknown_exit(message, unknown_effect(call.method)));
-      }
+      Err(TransportError::SentButLost(message)) => message,
       Ok(response) if response.status >= 400 => {
         return Err(rejection_exit(&response, ctx, call.rejection_exit_codes, transport));
       }
       Ok(response) => match serde_json::from_slice::<Value>(&response.body) {
         Ok(value) => return Ok(value),
-        Err(error) => {
-          // A malformed response body is a sent-but-lost outcome: never send the request again.
-          return Err(outcome_unknown_exit(error.to_string(), unknown_effect(call.method)));
-        }
+        // A malformed response body is a sent-but-lost outcome too.
+        Err(error) => error.to_string(),
       },
+    };
+    // Sent but the response was lost or unreadable — never re-issue the call (its effect may have
+    // landed). Read back this call's own on-disk artifact instead.
+    if let Some(artifact) = call.readback.take().and_then(|readback| readback()) {
+      return Ok(artifact);
     }
+    return Err(outcome_unknown_exit(lost, unknown_effect(call.method)));
   }
 }
 
@@ -374,6 +372,23 @@ mod tests {
     let value = call_api(call, &ctx(), &mut transport, &mut clock).unwrap();
 
     assert_eq!(value, json!({ "session_id": "task-1" }));
+  }
+
+  #[test]
+  fn a_malformed_2xx_body_runs_the_readback_once_and_never_resends() {
+    let mut sends = 0;
+    let mut transport = |_request: &WireRequest| -> Result<WireResponse, TransportError> {
+      sends += 1;
+      Ok(WireResponse { status: 200, reason: "OK".to_string(), body: b"not json".to_vec() })
+    };
+    let mut clock = FakeClock::new();
+    let mut call = call(Method::Post);
+    call.readback = Some(Box::new(|| Some(json!({ "session_id": "task-1" }))));
+
+    let value = call_api(call, &ctx(), &mut transport, &mut clock).unwrap();
+
+    assert_eq!(value, json!({ "session_id": "task-1" }));
+    assert_eq!(sends, 1);
   }
 
   #[test]

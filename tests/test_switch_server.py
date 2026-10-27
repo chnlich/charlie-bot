@@ -13,7 +13,9 @@ waits, so each stays under the unit budget. The escalation cases run escalate_pa
 servers under a shell that plays the pane, so they need no tmux either. The adoption check's cases run adopted the same
 way, against a staged runs file and launch output, for the same reason: no integration slot is left for another
 pane-driven switch. The exit cases run switch_forward the same way, with its stop, pane, server and probe steps
-stubbed out.
+stubbed out. The delegation check's cases run delegation_check the probe's way, against a fake server that also answers
+the delegate, task and archive routes. That fake server adds real worktrees to a git repository, so each case can check
+that the check left no worktree and no branch behind.
 """
 
 from __future__ import annotations
@@ -58,6 +60,9 @@ SESSION = "11111111-2222-3333-4444-555555555555"
 # message) or tool (a tool call in the open draft); output_after_polls counts the bootstrap reads that see no output;
 # cancel is settles (a stop ends the run) or hangs (it does not); followup is none or nudge, which starts a second run
 # in the probe session at the first archive, as the web reply audit does after a turn, and that archive answers 409.
+# The delegation check's task: delegate is accepts or refused (the server answers 400); task_state is the state of the
+# task's run; worktree is created (the server makes the worktree) or missing; task_error is the error the run logs, or
+# empty.
 BEHAVIOR_DEFAULTS = {
     "check_config": "ok",
     "adopt": True,
@@ -69,6 +74,10 @@ BEHAVIOR_DEFAULTS = {
     "message_status": 202,
     "archive_runs_delay": 0,
     "ignore_sigterm": False,
+    "delegate": "accepts",
+    "task_state": "success",
+    "worktree": "created",
+    "task_error": "",
 }
 GIT_ENV = {
     **os.environ,
@@ -91,6 +100,7 @@ import os
 import pathlib
 import re
 import signal
+import subprocess
 import sys
 import time
 
@@ -101,6 +111,14 @@ CONFIG = (HOME / "config.yaml").read_text(encoding="utf-8")
 PORT = int(re.search(r"^\s*port:\s*(\d+)", CONFIG, re.MULTILINE).group(1))
 KEY = re.search(r"access_key:\s*(\S+)", (HOME / "credentials.yaml").read_text(encoding="utf-8")).group(1)
 PROBE_SESSION = "probe-session"
+# The delegation check's parent session, the child session its task runs in, and the task's run. TASK holds the run
+# record that the delegate call created.
+PARENT_SESSION = "delegation-session"
+CHILD_SESSION = "delegation-child"
+TASK_RUN = "task-run"
+TASK = {}
+# The user messages the parent session has received: the server delegates only from a chain that holds one.
+OPENED = []
 TERMINAL = {"success", "failed", "interrupted", "stopped"}
 # The session's runs, oldest first. The probe's message starts the probe run in behavior.run_state; behavior.followup
 # "nudge" adds the follow-up run "nudge-run" at the first archive. READS counts the bootstrap reads.
@@ -143,7 +161,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
       return self._reply(200, {"ok": True})
     with (HERE / "calls.log").open("a", encoding="utf-8") as calls:
       calls.write(f"{method} {self.path}\n")
+    if self.path.startswith(("/api/internal/delegate", f"/api/chat/{PARENT_SESSION}", f"/api/sessions/{PARENT_SESSION}",
+                             f"/api/sessions/{CHILD_SESSION}")):
+      return self._delegation(method, request_json)
     if method == "POST" and self.path == "/api/sessions/":
+      if request_json.get("name") == "switch delegation":
+        return self._reply(200, {"id": PARENT_SESSION})
       return self._reply(200, {"id": PROBE_SESSION})
     if method == "POST" and re.fullmatch(r"/api/chat/[^/]+/message", self.path):
       if not request_json.get("request_id"):
@@ -176,6 +199,51 @@ class Handler(http.server.BaseHTTPRequestHandler):
         return self._reply(409, {"detail": "a run of the session is unfinished"})
       return self._reply(200, {"archived": [PROBE_SESSION]})
     return self._reply(404, {"detail": "not found"})
+
+  def _delegation(self, method, request_json):
+    path = self.path.split("?")[0]
+    if method == "POST" and path == f"/api/chat/{PARENT_SESSION}/message":
+      OPENED.append(request_json["content"])
+      return self._reply(202, {"input_event_id": "open-input"})
+    if method == "POST" and path == "/api/internal/delegate":
+      if BEHAVIOR["delegate"] == "refused":
+        return self._reply(400, {"detail": "backend router failed: no backend is available"})
+      if not OPENED:  # the server's rule: a delegation needs a user message on its task chain
+        return self._reply(403, {"detail": "Delegation blocked: no user request on the task chain from task "
+                                           f"{PARENT_SESSION} to its root."})
+      TASK.clear()
+      TASK.update(self._start_task(request_json["repo_path"]))
+      return self._reply(200, {"session_id": CHILD_SESSION, "parent_session_id": request_json["session_id"],
+                               "run_id": TASK_RUN, "thread_id": TASK_RUN, "description": request_json["description"]})
+    if method == "GET" and path == f"/api/sessions/{CHILD_SESSION}/runs":
+      return self._reply(200, {"items": [dict(TASK)] if TASK else [], "next_cursor": None})
+    if method == "POST" and path == f"/api/sessions/{CHILD_SESSION}/runs/{TASK_RUN}/cancel":
+      if BEHAVIOR["cancel"] == "settles" and TASK["state"] not in TERMINAL:
+        TASK["state"] = "interrupted"
+      return self._reply(200, {"run_id": TASK_RUN, "stop_requested": True, "outcome": None})
+    if method == "GET" and path == f"/api/sessions/{PARENT_SESSION}/runs":
+      return self._reply(200, {"items": [], "next_cursor": None})
+    if method == "POST" and path == f"/api/sessions/{PARENT_SESSION}/archive":
+      return self._reply(200, {"archived": [PARENT_SESSION]})
+    return self._reply(404, {"detail": "not found"})
+
+  def _start_task(self, repo):
+    """The task's run record. A created worktree is a real git worktree of the repository, as the server makes one; a
+    task error goes to the run's event log, where the server writes its launch failures."""
+    task = {"id": TASK_RUN, "state": BEHAVIOR["task_state"], "repo_path": repo, "branch_name": None,
+            "worktree_path": None}
+    if BEHAVIOR["worktree"] == "created":
+      worktree = HOME / "worktrees" / "task-switch-check"
+      worktree.parent.mkdir(parents=True, exist_ok=True)
+      subprocess.run(["git", "-C", repo, "worktree", "add", "-q", "-b", "charliebot/task-switch-check", str(worktree),
+                      "main"], check=True)
+      task.update(branch_name="charliebot/task-switch-check", worktree_path=str(worktree.resolve()))
+    if BEHAVIOR["task_error"]:
+      run_dir = HOME / "sessions" / CHILD_SESSION / "data" / "runs" / TASK_RUN
+      run_dir.mkdir(parents=True, exist_ok=True)
+      (run_dir / "events.jsonl").write_text(
+          json.dumps({"type": "error", "message": BEHAVIOR["task_error"]}) + "\n", encoding="utf-8")
+    return task
 
   def _bootstrap(self):
     READS["bootstrap"] += 1
@@ -832,9 +900,12 @@ def test_adoption_treats_a_reused_pid_as_an_ended_run(world: World) -> None:
   assert "readback: run run-reused ended during the switch: outcome success" in proc.stdout
 
 
-def _switch_forward(world: World, run_pid: int, launch_output: str) -> subprocess.CompletedProcess[str]:
+def _switch_forward(world: World,
+                    run_pid: int,
+                    launch_output: str,
+                    delegation: str = ":") -> subprocess.CompletedProcess[str]:
   """The switch's forward path, from the scan through the readback to the exit, with its stop, pane, server and probe
-  steps stubbed out.
+  steps stubbed out. DELEGATION is the shell command that stands in for the delegation check.
 
   The scan records the live run, and the stub stop kills its process, as a stop that does not spare a run would. A
   restore touches a marker file and exits 2, so a test tells a restore from the switch's own exit.
@@ -854,6 +925,7 @@ def _switch_forward(world: World, run_pid: int, launch_output: str) -> subproces
       "NEW_LOG": str(launch_log),
       "NEW_OFFSET": "0",
       "WORK": str(work),
+      "DELEGATION": delegation,
   }
   script = """
 source "$1" rust "$2"
@@ -863,6 +935,7 @@ start_in_pane() { :; }
 wait_ready() { :; }
 serving() { :; }
 probe_turn() { :; }
+delegation_check() { $DELEGATION; }
 restore() { touch "$RESTORED"; exit 2; }
 switch_forward
 """
@@ -914,6 +987,22 @@ def _answers_version(port: int) -> bool:
     return False
 
 
+def _start_fake(
+    tmp_path: pathlib.Path, home: pathlib.Path, servers: list[subprocess.Popen[bytes]], port: int,
+    behavior: dict[str, object]) -> pathlib.Path:
+  """Starts one stand-in server on PORT over HOME with the behavior. Returns its directory, where calls.log lands."""
+  server_dir = tmp_path / "server"
+  server_dir.mkdir()
+  binary = server_dir / "charliebot-server"
+  binary.write_text(FAKE_SERVER, encoding="utf-8")
+  binary.chmod(0o755)
+  _write_behavior(server_dir, **behavior)
+  env = {**os.environ, "CHARLIEBOT_HOME": str(home)}
+  servers.append(subprocess.Popen([str(binary)], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+  _wait_until(lambda: _answers_version(port), 10)
+  return server_dir
+
+
 @pytest.fixture
 def probe(tmp_path: pathlib.Path) -> Iterator[ProbeRun]:
   """The switch's probe turn, run in a shell against a fake server that answers with the behavior the test gives.
@@ -929,22 +1018,13 @@ def probe(tmp_path: pathlib.Path) -> Iterator[ProbeRun]:
   servers: list[subprocess.Popen[bytes]] = []
 
   def run(**behavior: object) -> tuple[subprocess.CompletedProcess[str], list[str]]:
-    server_dir = tmp_path / "server"
-    server_dir.mkdir()
-    binary = server_dir / "charliebot-server"
-    binary.write_text(FAKE_SERVER, encoding="utf-8")
-    binary.chmod(0o755)
-    _write_behavior(server_dir, **behavior)
+    server_dir = _start_fake(tmp_path, home, servers, port, behavior)
     env = {
         **os.environ,
         "CHARLIEBOT_HOME": str(home),
         "CHARLIEBOT_SWITCH_PROBE_WAIT_S": "1",
         "CHARLIEBOT_SWITCH_PROBE_CANCEL_WAIT_S": "1",
     }
-    servers.append(
-        subprocess.Popen(
-            [str(server_dir / "charliebot-server")], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
-    _wait_until(lambda: _answers_version(port), 10)
     work = tmp_path / "work"
     work.mkdir()
     probe_env = {**env, "PORT": str(port), "KEY": ACCESS_KEY, "WORK": str(work)}
@@ -1013,7 +1093,7 @@ NUDGE_CANCEL = "POST /api/sessions/probe-session/runs/nudge-run/cancel"
 
 
 def test_probe_archive_stops_the_follow_up_run_that_refuses_the_archive(probe: ProbeRun) -> None:
-  """The probe run ends success, then the server starts a follow-up run; the archive's 409 sends the probe to stop it."""
+  """The probe run ends success, then the server starts a follow-up run. The archive's 409 makes the probe stop it."""
   proc, calls = probe(run_state="success", output="none", followup="nudge", cancel="settles")
   assert proc.returncode == 0, proc.stdout + proc.stderr
   assert calls.count(PROBE_ARCHIVE) == 2  # the first archive answers 409
@@ -1053,6 +1133,116 @@ def test_probe_archive_bounds_a_slow_run_list_by_its_wait(probe: ProbeRun) -> No
   assert any(line.startswith("GET /api/sessions/probe-session/runs?limit=500") for line in calls)
   assert "probe: listing the runs answered 000" in proc.stdout
   _assert_stage_lines(proc)
+
+
+DelegationRun = Callable[..., tuple[subprocess.CompletedProcess[str], list[str], pathlib.Path]]
+DELEGATE = "POST /api/internal/delegate"
+DELEGATION_CANCEL = "POST /api/sessions/delegation-child/runs/task-run/cancel"
+DELEGATION_ARCHIVE = "POST /api/sessions/delegation-session/archive"
+
+
+@pytest.fixture
+def delegation(tmp_path: pathlib.Path) -> Iterator[DelegationRun]:
+  """The switch's delegation check, run in a shell against a fake server that answers the delegate, task and archive
+  routes with the behavior the test gives. The runtime clone is a git repository with a main branch, so the fake server
+  adds real worktrees to it. The runner returns the check's result, the requests the fake served, and the clone."""
+  home = tmp_path / "home"
+  home.mkdir()
+  port = _free_port()
+  (home / "config.yaml").write_text(f"server:\n  host: 127.0.0.1\n  port: {port}\n", encoding="utf-8")
+  (home / "credentials.yaml").write_text(f"charliebot:\n  access_key: {ACCESS_KEY}\n", encoding="utf-8")
+  clone = tmp_path / "clone"
+  clone.mkdir()
+  _git(clone, "init", "-q", "-b", "main")
+  (clone / "trial.txt").write_text("before\n", encoding="utf-8")
+  _git(clone, "add", "trial.txt")
+  _git(clone, "commit", "-q", "-m", "baseline")
+  servers: list[subprocess.Popen[bytes]] = []
+
+  def run(**behavior: object) -> tuple[subprocess.CompletedProcess[str], list[str], pathlib.Path]:
+    server_dir = _start_fake(tmp_path, home, servers, port, behavior)
+    work = tmp_path / "work"
+    work.mkdir()
+    env = {
+        **os.environ,
+        "CHARLIEBOT_HOME": str(home),
+        "CHARLIEBOT_SWITCH_DELEGATION_WAIT_S": "1",
+        "CHARLIEBOT_SWITCH_PROBE_CANCEL_WAIT_S": "1",
+        "PORT": str(port),
+        "KEY": ACCESS_KEY,
+        "WORK": str(work),
+    }
+    script = 'source "$1" rust "$2" && REPO_ROOT="$3" && delegation_check'
+    proc = subprocess.run(
+        ["bash", "-c", script, "bash", str(SWITCH), STEP_TARGET_SHA,
+         str(clone)],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False)
+    calls_log = server_dir / "calls.log"
+    calls = calls_log.read_text(encoding="utf-8").splitlines() if calls_log.exists() else []
+    return proc, calls, clone
+
+  yield run
+  for server in servers:
+    server.kill()
+    server.wait()
+
+
+def _left_behind(clone: pathlib.Path) -> list[str]:
+  """The worktrees beyond the clone and the branches beyond main that the clone still holds."""
+  worktrees = _git(clone, "worktree", "list", "--porcelain").splitlines()
+  extra = [line for line in worktrees if line.startswith("worktree ") and line != f"worktree {clone.resolve()}"]
+  branches = [name for name in _git(clone, "branch", "--format=%(refname:short)").splitlines() if name != "main"]
+  return extra + branches
+
+
+def test_delegation_passes_when_the_run_succeeds_and_its_worktree_exists(delegation: DelegationRun) -> None:
+  proc, calls, clone = delegation(task_state="success", worktree="created")
+  assert proc.returncode == 0, proc.stdout + proc.stderr
+  assert "delegation: passed: run task-run ended success; worktree " in proc.stdout
+  assert calls.count(DELEGATE) == 1
+  assert not any(line.endswith("/cancel") for line in calls)  # a run that ended needs no stop
+  assert calls[-1] == DELEGATION_ARCHIVE
+  assert _left_behind(clone) == []
+
+
+def test_delegation_fails_with_the_run_error_and_leaves_nothing_behind(delegation: DelegationRun) -> None:
+  error = "RuntimeError: git worktree add timed out after 0.3s for charliebot/task-switch-check"
+  proc, calls, clone = delegation(task_state="failed", worktree="missing", task_error=error)
+  assert proc.returncode == 1, proc.stdout + proc.stderr
+  assert f"delegation: step run failed: run task-run ended failed; the server's error: {error}" in proc.stdout
+  assert calls[-1] == DELEGATION_ARCHIVE
+  assert _left_behind(clone) == []
+
+
+def test_delegation_refused_by_the_server_names_the_server_answer(delegation: DelegationRun) -> None:
+  proc, calls, clone = delegation(delegate="refused")
+  assert proc.returncode == 1, proc.stdout + proc.stderr
+  assert "delegation: step delegate failed: the server answered 400:" in proc.stdout
+  assert "backend router failed" in proc.stdout
+  assert calls[-1] == DELEGATION_ARCHIVE
+  assert _left_behind(clone) == []
+
+
+def test_delegation_times_out_then_stops_the_run_and_removes_its_worktree(delegation: DelegationRun) -> None:
+  proc, calls, clone = delegation(task_state="running", worktree="created", cancel="settles")
+  assert proc.returncode == 1, proc.stdout + proc.stderr
+  assert "delegation: step run failed: run task-run did not end within 1s" in proc.stdout
+  assert DELEGATION_CANCEL in calls
+  assert calls[-1] == DELEGATION_ARCHIVE
+  assert _left_behind(clone) == []
+
+
+def test_switch_restores_and_exits_2_when_the_delegation_check_fails(world: World) -> None:
+  """A failed delegation check takes the path of a failed probe turn, so the switch restores the previous release."""
+  proc = _switch_forward(world, _spawn_live(world).pid, "", delegation="return 1")
+  assert proc.returncode == 2, _report(world, proc)
+  assert (world.root / "restored").exists(), _report(world, proc)
+  assert "switch: step failed: the delegation check failed" in proc.stdout
+  assert "SWITCH COMPLETE" not in proc.stdout
 
 
 # A stand-in for a server under a pane. The escalation finds it by its argv, which names a release binary; stubborn mode

@@ -47,9 +47,11 @@ Runtime authorization is derived from the task tree and the chat event log — s
 
 Delegate every repository change: feature implementation, bug fixes, refactoring, tests, and tooling setup that creates or modifies tracked files.
 
-When a task explains, measures or reviews another deliverable, list that
-deliverable's URL and head revision under Source Files. Delegate that task
-after the deliverable exists.
+When a task explains, measures or reviews another deliverable, name that
+deliverable's URL and head revision in the task spec, and list its local path
+under Source Files. The worker then checks the exact revision, and
+`charliebot delegate` accepts the entry. Delegate that task after the
+deliverable exists.
 
 Answer questions, explain concepts, and update memory yourself.
 This keeps direct answers, explanations, and memory updates in the manager's task context.

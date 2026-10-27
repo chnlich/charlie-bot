@@ -229,23 +229,29 @@ A lead keeps only coordination state in its context: each later model call re-re
   Delegation runs through the server, so no worker starts while the server is down.
 - In the task spec, name the question, the scope of the read, and the rules for the read.
   Describe the scope with facts already in your context, such as "the code that the running server executes".
-  Under Source Files, list only paths already in your context, or `- (none)`.
+  Under Source Files, list only absolute paths already in your context, one bare path per line, or `- (none)`.
+  Put notes, URLs and revisions in another section: `charliebot delegate` refuses any other entry.
+- When `charliebot delegate` refuses a Source Files entry, fix the entry that the error names, and probe no path.
   The worker then resolves paths and revisions, and these probes stay out of your context.
 - When the Lessons rule applies as a lead, search the LESSONS.md title lines for the terms of your delegation step.
   Delegation terms are the task type, the worktree, push, and rebase.
   Read the newest ten matches, then the takeaways of the entries that fit your step.
   Put the lesson search for the task's own material in the task spec.
   You then get the lessons on how to delegate, and the worker gets the lessons on the material.
-- As a lead, run the Skills Discovery check on the skill list in your context.
-  Read each matching SKILL.md by its path.
+- As a lead, run the Skills Discovery check on the skill list in your context, in place of a look in the skill directories.
+  Load each matching skill by its name with your skill tool, or read `~/.claude/skills/<name>/SKILL.md` when you have no skill tool.
   The list names every skill, so a listing of the skill directories adds only material.
   When no listed skill fits your next step, put the skill search in the task spec.
-- Ask the worker for a report that opens with a conclusion no longer than an agent message (Between Agents).
+- Name the report file in the task spec, and ask for a report that opens with a conclusion no longer than an agent message (Between Agents).
+- When a material report arrives, read its conclusion from that file, and open no other file of the worker.
+  The worker's material then stays out of your context.
 - When a question needs material as a lead, ask the worker for a conclusion report without a page.
-  As soon as the report arrives, write your answer reply from its conclusion.
+  As soon as the report arrives, write your answer reply from its conclusion, under the web reply Form rules.
   The user then gets the answer within minutes, and the page and its checks follow.
 - When the answer needs a page, delegate the page in a second task after that reply.
   Put the page in that task spec, so the material of the page stays out of your context.
+- When the page worker reports, post the page link as the web reply of that turn.
+  The link completes the user's request, so this reply follows the web reply rule for a completed request.
 - Read the conclusion first. Then read only the sections that the current decision needs.
 - When another rule tells you to read, search, measure, or check evidence as a lead, have your worker do it.
 

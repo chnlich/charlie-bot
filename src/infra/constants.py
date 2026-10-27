@@ -30,7 +30,7 @@ def __getattr__(name: str):
 # Cross-process session-identity wire name: the server writes the master's
 # session id into every spawned process env (master_cc_run._build_master_env),
 # the backend supervisors strip any inherited value, and the CLIs read it back
-# (src.runtime.cli.common.resolve_session_id). One spelling everywhere.
+# (the Rust CLI's session resolution). One spelling everywhere.
 SESSION_ID_ENV_VAR = "CHARLIEBOT_SESSION_ID"
 
 # Run-bearer env wire name: run_token reads the presented bearer from it and the

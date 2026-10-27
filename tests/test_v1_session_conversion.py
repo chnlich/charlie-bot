@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import pathlib
+from unittest import mock
 
 import conftest
 import pytest
@@ -28,6 +29,12 @@ STAMP = "2026-01-01T00:00:00+00:00"
 COMPACT_ASCII = {}
 COMPACT_UTF8 = {"ensure_ascii": False}
 INDENT2_UTF8 = {"ensure_ascii": False, "indent": 2}
+
+
+@pytest.fixture(autouse=True)
+def _pinned_source_sha(monkeypatch: pytest.MonkeyPatch) -> None:
+  """The receipt pins the checkout's HEAD. A synced test tree has no ``.git``, so pin a fixed sha."""
+  monkeypatch.setattr(conversion, "source_sha", lambda: "0" * 40)
 
 
 def _event(event_id: str, event_type: str, **payload: object) -> dict:
@@ -193,10 +200,11 @@ def test_interrupted_apply_converges_to_the_clean_result(
     if session_dir.name == ARCHIVED_ID and event["id"] == conversion.import_event_id(ARCHIVED_ID):
       raise RuntimeError("simulated crash after task_imported")
 
-  monkeypatch.setattr(conversion, "append_event", fail_after_archived_import)
-  with pytest.raises(RuntimeError, match="after task_imported"):
+  with (
+      mock.patch.object(conversion, "append_event", fail_after_archived_import),
+      pytest.raises(RuntimeError, match="after task_imported"),
+  ):
     _run("apply", home)
-  monkeypatch.undo()
   assert conversion.load_receipt(home)["status"] == conversion.RECEIPT_IN_PROGRESS
   assert json.loads(_metadata_text(home, ARCHIVED_ID)).get("profile") is None
   assert _log_ids(home, ARCHIVED_ID) == ["b-1", "b-2", conversion.import_event_id(ARCHIVED_ID)]

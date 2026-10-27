@@ -1,11 +1,10 @@
 from src.infra import config_registry, metadata_slot_registration
-from src.runtime.hooks import turn_contributions, wiring
+from src.runtime.hooks import turn_contributions
 
 OWNER = "slack"
 
 
 def register() -> None:
-  wiring.register_command("slack", "src.features.slack.cli")
   config_registry.register_config_section(
       "slack",
       "src.features.slack.config:SlackConfig",

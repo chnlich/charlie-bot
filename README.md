@@ -61,7 +61,7 @@ CharlieBot is a self-hosted multi-agent orchestration system: a master agent dri
 
 ## Prerequisites
 
-- Python 3.14 (uv installs it; the `charliebot` CLI runs on it) and git (worker tasks run in git worktrees)
+- Python 3.14 (uv installs it; the setup steps, the Python helper scripts and the pytest suite run on it) and git (worker tasks run in git worktrees)
 - Node.js is only needed for frontend development
 
 ## Quick start
@@ -80,31 +80,32 @@ CharlieBot is a self-hosted multi-agent orchestration system: a master agent dri
 
 ## CLI at a glance
 
+The Rust `charliebot` binary is the only CLI. It ships beside `charliebot-server` in the same
+release, and each subcommand keeps the argv, stdout and exit codes of the Python CLI it replaced.
+
 - `charliebot artifact` — check a page's genre DOM assertions and cold-read probe, or wrap a content fragment into a genre page
 - `charliebot compaction-context` — restore the skills a manager session read before Claude compacted its context
-- `charliebot config` — print a config key's value through the loader (`config get <key>`)
 - `charliebot delegate` — delegate a task to a worker agent
 - `charliebot discord` — reply to or read the Discord thread a session was summoned from, and check the bot setup
-- `charliebot disk-sweep` — list or remove old task worktrees and scratch directories (`--yes` applies; without it the run is a read-only dry run)
+- `charliebot gc-trash` — inspect and purge quarantined worktree trash
 - `charliebot improve` — start an iterative improvement loop
 - `charliebot improve-stop` — stop this session's running improvement loop after the current iteration
-- `charliebot memory` — query and lint the store; `add` stages a capture
+- `charliebot memory` — query, lint and propose from the store; `add` stages a capture
 - `charliebot plan` — present (register), amend, approve, close, diff, and list a session's plans
 - `charliebot publish` — publish an artifact to the URL readers beyond the operator's devices open
-- `charliebot router` — choose backends for one task by asking a decision model whether the work is routine or design work
 - `charliebot schedule-trigger` — schedule a delayed trigger (timed, watching PIDs/SLURM jobs, or starting a command with `--cmd`)
 - `charliebot session` — create a session; `send` relays a message to another session as an agent_message
 - `charliebot slack` — reply to or ack the Slack thread a session was summoned from
-- `charliebot storage` — `cool` deletes the bytes no reader can reach again: cold sessions' transport files and cold-or-orphaned backend records
-- `charliebot voice-replay-eval` — replay recorded dictations through the transcription backends and score latency and accuracy
-- `charliebot usage-ledger` — `capture` writes this host's per-call usage into the ledger
-- `charliebot gc-trash` — inspect and purge quarantined worktree trash
 - `charliebot web` — reply to a web session, print its For-you layer as plain text, or set and show its status
+
+The Python-only `config`, `disk-sweep`, `router`, `storage`, `usage-ledger` and `voice-replay-eval`
+subcommands have no Rust port and no caller; the binary answers them with the unknown-subcommand
+error.
 
 ## Repository layout
 
 - `rust/crates/` — the server that runs: `app/server` is the `charliebot-server` entry point, `app/cli` holds the Rust CLI commands, `runtime/` carries the task tree, agent processes and the session store, `features/` one crate per feature, `infra/` the shared foundations
-- `src/` — the Python `charliebot` CLI (the "CLI at a glance" commands still run here); later tasks delete these as the CLI ports
+- `src/` — the Python modules the remaining Python programs load (setup, config, session conversion, voice transcription, the opencode bench) and the Rust server's static assets and templates
 - `web/` — Jinja2 templates + vanilla JS static assets, served by the Rust server
 - `skills/` — repo-shared agent skills
 - `prompts/` — agent prompt definitions

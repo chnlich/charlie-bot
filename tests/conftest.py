@@ -275,7 +275,6 @@ from src.runtime.agent_process import base as backend_base  # noqa: E402
 from src.backends.antigravity import antigravity_cli  # noqa: E402
 from src.backends.charlie_code import charlie_code  # noqa: E402
 from src.backends.codex import codex  # noqa: E402
-from src.backends.gemini import gemini_cli  # noqa: E402
 from src.backends.opencode import opencode  # noqa: E402
 from src.features.cron import loader as cron_loader  # noqa: E402
 from src.runtime.api import deps  # noqa: E402
@@ -286,18 +285,13 @@ from src.infra import backend_models, models  # noqa: E402
 from src.backends.claude_code import claude_accounts  # noqa: E402
 from src.backends.claude_code import claude_config  # noqa: E402
 from src.runtime import streaming  # noqa: E402
-from src.features.memory import memory  # noqa: E402
 from src.infra import constants  # noqa: E402
 from src.backends.claude_code import login_dirs  # noqa: E402
-from src.features.artifacts import plans  # noqa: E402
 from src.features.cron import scheduler  # noqa: E402
 from src.runtime.hooks import scheduled_handlers  # noqa: E402
 
-from src.features.artifacts import headless_render  # noqa: E402
-from src.app import registrations  # noqa: E402
-
-# Tests that build an app or run the CLI see the registered routers, commands and services
-# the way the server does; the registry fills before collection.
+# Tests that build an app see the registered routers, commands and services the way the server
+# does; the registry fills before collection.
 registrations.register_all()
 
 # Each session block module with the name of its process singleton.
@@ -327,24 +321,6 @@ def backend_option(**kwargs: Any) -> models.BackendOption:
 def fake_backends() -> dict[str, list[models.BackendOption]]:
   """One cc-claude entry so a root created without a backend has a default backend."""
   return {"options": [backend_option(id="fake", label="Fake", type="cc-claude", model="fake-model")]}
-
-
-@pytest.fixture(autouse=True)
-def _stub_headless_renderer(monkeypatch: pytest.MonkeyPatch) -> None:
-  """The suite's renderer is the write_stub_chrome shell script (answers --dump-dom only);
-  give the drive seam that shape."""
-
-  def dump_dom_drive(chrome_bin: pathlib.Path, probe_uri: str) -> int:
-    proc = subprocess.run(
-        [str(chrome_bin), "--headless", "--dump-dom", probe_uri], capture_output=True, check=False, timeout=60)
-    if proc.returncode != 0:
-      stderr = proc.stderr.decode("utf-8", errors="replace").strip()[-400:] or "no stderr output"
-      raise ValueError(f"headless renderer exited {proc.returncode} while measuring the plan page height: {stderr}")
-    if not (match := re.search(r'<pre id="page-height">(\d+)</pre>', proc.stdout.decode("utf-8", errors="replace"))):
-      raise ValueError("headless renderer output carried no page-height marker; cannot measure the plan page")
-    return int(match.group(1))
-
-  monkeypatch.setattr(headless_render, "render_height", dump_dom_drive)
 
 
 def mocked_callback_fields(**overrides: Any) -> dict[str, Any]:
@@ -1643,7 +1619,6 @@ OPENCODE_SPAWN_SUBPROCESS_PATCH_TARGET = BASE_SPAWN_SUBPROCESS_PATCH_TARGET
 CODEX_RESOLVE_BINARY_PATCH_TARGET = BASE_RESOLVE_BINARY_PATCH_TARGET
 ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET = BASE_RESOLVE_BINARY_PATCH_TARGET
 CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET = BASE_RESOLVE_BINARY_PATCH_TARGET
-GEMINI_RESOLVE_BINARY_PATCH_TARGET = BASE_RESOLVE_BINARY_PATCH_TARGET
 
 # Patch target for the atomic-write swap hook. src/infra/json_utils.py publishes each staged
 # payload with an ``os.replace`` attribute lookup on its module-scope ``import os`` binding, and
@@ -1685,31 +1660,25 @@ def build_cli_backend(
 # relies on. The per-backend test modules build through build_cli_backend_rig and
 # the cross-backend contract tables read these rows, so the (target, binary,
 # defaults) triple is spelled exactly once per backend.
-CLI_BACKEND_RIGS: dict[type[backend_base.AgentBackend],
-                       tuple[str, str, dict[str, Any]]] = {
-                           antigravity_cli.AntigravityCliBackend:
-                               (ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET, "/usr/bin/agy", {
-                                   "model": "agy-test-model"
-                               }),
-                           charlie_code.CharlieCodeBackend:
-                               (
-                                   CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET,
-                                   "/usr/bin/charlie-code",
-                                   {
-                                       "model": "charlie-code-test-model",
-                                       "api_base": "http://test.invalid/v1"
-                                   },
-                               ),
-                           codex.CodexBackend:
-                               (CODEX_RESOLVE_BINARY_PATCH_TARGET, "/usr/bin/codex", {
-                                   "model": "codex-test-model"
-                               }),
-                           gemini_cli.GeminiCliBackend:
-                               (GEMINI_RESOLVE_BINARY_PATCH_TARGET, "/usr/bin/gemini", {
-                                   "model": "gemini-test-model"
-                               }),
-                           opencode.OpenCodeBackend: (OPENCODE_RESOLVE_BINARY_PATCH_TARGET, "/usr/bin/opencode", {}),
-                       }
+CLI_BACKEND_RIGS: dict[type[backend_base.AgentBackend], tuple[str, str, dict[str, Any]]] = {
+    antigravity_cli.AntigravityCliBackend:
+        (ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET, "/usr/bin/agy", {
+            "model": "agy-test-model"
+        }),
+    charlie_code.CharlieCodeBackend:
+        (
+            CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET,
+            "/usr/bin/charlie-code",
+            {
+                "model": "charlie-code-test-model",
+                "api_base": "http://test.invalid/v1"
+            },
+        ),
+    codex.CodexBackend: (CODEX_RESOLVE_BINARY_PATCH_TARGET, "/usr/bin/codex", {
+        "model": "codex-test-model"
+    }),
+    opencode.OpenCodeBackend: (OPENCODE_RESOLVE_BINARY_PATCH_TARGET, "/usr/bin/opencode", {}),
+}
 
 
 def build_cli_backend_rig(
@@ -2171,17 +2140,6 @@ def make_scheduler_setup(
   return cfg, session_blocks, build_scheduler(cfg, session_blocks)
 
 
-async def make_plan_setup(
-    tmp_path: pathlib.Path,
-) -> tuple[core_config.CharlieBotConfig, SessionBlocks, plans.PlanRegistryManager, models.SessionMetadata]:
-  """Session blocks and the plan manager plus one created task for plan endpoint tests."""
-  cfg = build_plan_cfg(tmp_path)
-  session_blocks = build_session_blocks(cfg)
-  plan_mgr = plans.PlanRegistryManager(cfg, session_blocks.events)
-  meta = await create_root_session(session_blocks, models.CreateSessionRequest(name="Test"), backend=OPUS_BACKEND_ID)
-  return cfg, session_blocks, plan_mgr, meta
-
-
 async def make_trigger_setup(
     tmp_path: pathlib.Path) -> tuple[core_config.CharlieBotConfig, SessionBlocks, triggers.TriggerManager, str]:
   """Real cfg/blocks/trigger_mgr trio plus one created session, for the PID/SLURM watch tests."""
@@ -2638,47 +2596,6 @@ def write_nightly_task(
   if repo is not None:
     body["repo"] = repo
   return write_cron_task(home, "nightly", dump_yaml(body))
-
-
-def memory_entry_text(
-    topic: str,
-    slug: str,
-    *,
-    scope: str = "user",
-    audience: str = "master, worker",
-    title: str | None = None,
-    body: str | None = None,
-) -> str:
-  """One memory entry file's text: title in frontmatter, comma-list audience,
-  pure-markdown body."""
-  if title is None:
-    title = slug.replace("-", " ").title()
-  header = ["---", f"scope: {scope}", f"topic: {topic}", f"audience: {audience}", f"title: {title}"]
-  header.append("---")
-  if body is None:
-    body = f"body for {slug}\n"
-  return "\n".join(header) + "\n" + body
-
-
-def write_memory_topics(memory_dir: pathlib.Path, lines: list[str] | None = None) -> None:
-  """Write a memory store's ``topics`` file (one topic per line; the default is the
-  seeded production vocabulary DEFAULT_MEMORY_TOPICS) and create the ``entries/``
-  dir the loader scans."""
-  memory_dir.mkdir(parents=True, exist_ok=True)
-  (memory_dir / "entries").mkdir(exist_ok=True)
-  (memory_dir / "topics").write_text(
-      "".join(line + "\n" for line in (lines or memory.DEFAULT_MEMORY_TOPICS.splitlines())), encoding="utf-8")
-
-
-def write_memory_entry(memory_dir: pathlib.Path, topic: str, slug: str, **kw: Any) -> pathlib.Path:
-  """Write one entry file ``entries/<topic>/<slug>.md`` via memory_entry_text; the returned path is
-  what assertions read back."""
-  d = memory_dir / "entries" / topic
-  d.mkdir(parents=True, exist_ok=True)
-  p = d / f"{slug}.md"
-  text = memory_entry_text(topic, slug, **kw)
-  p.write_text(text, encoding="utf-8")
-  return p
 
 
 class FakeAsyncProcess:

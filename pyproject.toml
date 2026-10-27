@@ -9,7 +9,6 @@ dependencies = [
     "fastapi>=0.135.2",
     "httpx>=0.28.1",
     "isal>=1.8.0",
-    "jinja2>=3.1.6",
     "numpy>=2.5.1",
     "orjson>=3.11.0",
     "pydantic>=2.12.5",
@@ -25,13 +24,8 @@ dev = [
     "pylint-google-style==0.1.2",
     "pytest>=9.0.2",
     "pytest-asyncio>=1.3.0",
-    "python-multipart==0.0.22",
     "ruff==0.16.1",
-    "uvicorn[standard]>=0.42.0",
 ]
-
-[project.scripts]
-charliebot = "src.app.main:main"
 
 # Loads with every pytest run through this venv and restricts it before collection — see src/infra/pytest_sandbox.py.
 [project.entry-points.pytest11]
@@ -105,10 +99,10 @@ package-dir = {"" = "."}
 [tool.setuptools.packages.find]
 include = ["src", "src.*"]
 
-# The data directories hold no Python module, so they are listed by payload kind: the agent
-# PATH shims and the git stash guard beside the runtime package, and every package's "*.js" assets.
+# The data directories hold no Python module, so they are listed by payload kind: the git stash
+# guard beside the runtime package, and every package's "*.js" assets.
 [tool.setuptools.package-data]
-"src.runtime" = ["agent_entry_points/*", "git_stash_guard/*"]
+"src.runtime" = ["git_stash_guard/*"]
 "*" = ["*.js"]
 
 # The vfork spawn seam's child-side stub (pdeathsig, setsid, stdio dup2,

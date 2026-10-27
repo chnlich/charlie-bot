@@ -262,7 +262,7 @@ def _build_master_env(cfg: config.CharlieBotConfig, session_id: str) -> dict[str
 
   ``CHARLIEBOT_SESSION_ID`` carries this master's own session identity, so the
   session-scoped CLIs the master runs resolve to it wherever the shell cd's to
-  (``src.runtime.cli.common.resolve_session_id``). ``launch_loop.child_env`` strips any
+  (the Rust CLI's session resolution). ``launch_loop.child_env`` strips any
   inherited value first, so a server started from inside another session's
   environment hands down no stale id. PATH is the inherited one: it already
   carries the ``charliebot`` shim (``rust/crates/runtime/agents/src/agent_environment.rs``), and a venv

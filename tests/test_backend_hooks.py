@@ -76,7 +76,7 @@ def test_an_unregistered_type_raises_naming_the_type() -> None:
 
 
 def test_a_type_without_a_lifecycle_gets_the_default() -> None:
-  option = conftest.backend_option(id="g", label="G", type="gemini", model="m")
+  option = conftest.backend_option(id="c", label="C", type="charlie-code", model="m")
 
   assert type(backend_types.lifecycle_for(option)) is backend_lifecycle.BackendLifecycle
 

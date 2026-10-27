@@ -7,6 +7,5 @@
     "stderr": "",
     "exit": 0,
     "requests": []
-  },
-  "expect_from": "rust"
+  }
 }

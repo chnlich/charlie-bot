@@ -36,7 +36,7 @@
   ],
   "expect": {
     "stdout": "",
-    "stderr": "attempt claude-a failed: claude CLI failed (exit 1): boom\nattempt claude-b failed: claude CLI failed (exit 1): boom\n",
+    "stderr": "attempt claude-a failed: RuntimeError: claude CLI failed (exit 1): boom\nattempt claude-b failed: RuntimeError: claude CLI failed (exit 1): boom\n",
     "exit": 1,
     "requests": [
       {

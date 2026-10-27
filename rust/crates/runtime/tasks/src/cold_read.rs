@@ -108,10 +108,10 @@ pub async fn run_light_probe(host: &CliHost, prompt: &str, system_prompt: &str) 
   let mut tried: Vec<String> = Vec::new();
   while let Some(option) = host.pool.select(&host.cfg, "light_oneshot", &tried)? {
     tried.push(option.id.clone());
-    let outcome =
+    let (error_type, outcome) =
       match backend_types::build_backend(Arc::clone(&host.registry), &option, &host.cfg, LaunchArgs::default()) {
-        Ok(built) => one_shot_text(built, &host.base_env.values, prompt, system_prompt, None).await,
-        Err(error) => Err(error),
+        Ok(built) => ("RuntimeError", one_shot_text(built, &host.base_env.values, prompt, system_prompt, None).await),
+        Err(error) => ("ValueError", Err(error)),
       };
     match outcome {
       Ok(answer) => {
@@ -122,7 +122,7 @@ pub async fn run_light_probe(host: &CliHost, prompt: &str, system_prompt: &str) 
         if is_quota_error(&message) {
           host.pool.cool(&option.id, None);
         }
-        attempts.push((option.id, message));
+        attempts.push((option.id, format!("{error_type}: {message}")));
       }
     }
   }

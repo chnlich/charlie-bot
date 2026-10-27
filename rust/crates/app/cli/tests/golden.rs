@@ -105,6 +105,7 @@ const PORTED_PYTHON_TESTS: &[&str] = &[
   "test_plan_approve_posts_plan_id",
   "test_plan_close_posts",
   "test_plan_server_rejection_exits_nonzero_with_detail_on_stderr",
+  "test_plan_readback_listing_get_failure_exits_with_the_listing_error",
   "test_plan_session_auto_derived_from_cwd",
   "test_plan_diff_prints_five_keys_computed_locally",
   "test_cli_unknown_genre_is_usage_error",
@@ -492,6 +493,7 @@ fn run_case(case_path: &Path, record_command: Option<&str>) -> Result<(), String
     .current_dir(&cwd)
     .env_clear()
     .env("CHARLIEBOT_HOME", temp.path().join("home"))
+    .env("HOME", temp.path().join("user-home"))
     .env("CHARLIEBOT_REPO_ROOT", temp.path().join("repo"))
     .stdin(if stdin.is_some() { Stdio::piped() } else { Stdio::null() })
     .stdout(Stdio::piped())
@@ -777,6 +779,7 @@ fn changed_server_port_takes_effect_on_the_next_call() {
       .current_dir(temp.path())
       .env_clear()
       .env("CHARLIEBOT_HOME", temp.path().join("home"))
+      .env("HOME", temp.path().join("user-home"))
       .stdin(Stdio::null())
       .stdout(Stdio::null())
       .stderr(Stdio::piped())

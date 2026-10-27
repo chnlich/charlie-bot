@@ -325,7 +325,7 @@ fn archive(args: &ArchiveArgs) -> Result<(), CliExit> {
 
   let home = home_dir()?;
   let task_id = args.session_id.clone();
-  let readback = move || find_local_task_close(&home, &task_id, &request_id);
+  let readback = move || Ok(find_local_task_close(&home, &task_id, &request_id));
   let result = client::post(
     &format!("/api/sessions/{}/archive", args.session_id),
     Value::Object(body),
@@ -358,7 +358,7 @@ fn cancel(args: &CancelArgs) -> Result<(), CliExit> {
 
   let home = home_dir()?;
   let task_id = args.session_id.clone();
-  let readback = move || find_local_task_close(&home, &task_id, &request_id);
+  let readback = move || Ok(find_local_task_close(&home, &task_id, &request_id));
   let result =
     client::post(&format!("/api/sessions/{}/cancel", args.session_id), payload, Some(Box::new(readback)), &[])?;
   print_result(&result);

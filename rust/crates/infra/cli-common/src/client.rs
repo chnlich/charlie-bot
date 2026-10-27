@@ -50,8 +50,8 @@ pub struct CallContext {
   pub connect_total_timeout: f64,
 }
 
-/// The readback the sent-but-lost class runs once: `Some` value prints as the result.
-pub type Readback<'a> = Box<dyn FnOnce() -> Option<Value> + 'a>;
+/// The readback the sent-but-lost class runs once: `Some` value prints as the result, and its own failure propagates.
+pub type Readback<'a> = Box<dyn FnOnce() -> Result<Option<Value>, CliExit> + 'a>;
 
 /// One internal-API call under the contract.
 pub struct ApiCall<'a> {
@@ -113,7 +113,9 @@ pub fn call_api(
     };
     // Sent but the response was lost or unreadable — never re-issue the call (its effect may have
     // landed). Read back this call's own on-disk artifact instead.
-    if let Some(artifact) = call.readback.take().and_then(|readback| readback()) {
+    if let Some(readback) = call.readback.take()
+      && let Some(artifact) = readback()?
+    {
       return Ok(artifact);
     }
     return Err(outcome_unknown_exit(lost, unknown_effect(call.method)));
@@ -298,7 +300,7 @@ mod tests {
     let mut call = call(Method::Post);
     call.readback = Some(Box::new(|| {
       readback_runs += 1;
-      None
+      Ok(None)
     }));
 
     let error = call_api(call, &ctx(), &mut transport, &mut clock).unwrap_err();
@@ -329,7 +331,7 @@ mod tests {
     };
     let mut clock = FakeClock::new();
     let mut call = call(Method::Post);
-    call.readback = Some(Box::new(|| Some(json!({ "session_id": "task-1" }))));
+    call.readback = Some(Box::new(|| Ok(Some(json!({ "session_id": "task-1" })))));
 
     let value = call_api(call, &ctx(), &mut transport, &mut clock).unwrap();
 
@@ -345,7 +347,7 @@ mod tests {
     };
     let mut clock = FakeClock::new();
     let mut call = call(Method::Post);
-    call.readback = Some(Box::new(|| Some(json!({ "session_id": "task-1" }))));
+    call.readback = Some(Box::new(|| Ok(Some(json!({ "session_id": "task-1" })))));
 
     let value = call_api(call, &ctx(), &mut transport, &mut clock).unwrap();
 

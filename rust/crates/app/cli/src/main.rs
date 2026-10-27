@@ -12,6 +12,7 @@ use std::ffi::OsString;
 use std::path::Path;
 use std::process::exit;
 
+use charliebot_agents::cli_host::LazyHost;
 use charliebot_cli_common::json_out;
 
 /// The subcommand vocabulary, sorted — `_RUNTIME_COMMANDS` plus every registered command with a
@@ -63,24 +64,32 @@ fn main() {
     exit(2);
   }
 
-  charliebot_agents::cli_host::install(host::compose);
-  let result = match subcommand.as_str() {
-    "artifact" => charliebot_artifacts::cli::artifact::main(&args[1..]),
-    "compaction-context" => commands::compaction_context::main(&args[1..]),
-    "delegate" => commands::delegate::main(&args[1..]),
-    "discord" => charliebot_discord::cli::main(&args[1..]),
-    "gc-trash" => commands::gc_trash::main(&args[1..]),
-    "memory" => charliebot_memory::cli::main(&args[1..]),
-    "plan" => charliebot_artifacts::cli::plan::main(&args[1..]),
-    "schedule-trigger" => commands::schedule_trigger::main(&args[1..]),
-    "session" => commands::session::main(&args[1..]),
-    "slack" => charliebot_slack::cli::main(&args[1..]),
-    "web" => charliebot_web_reply::cli::main(&args[1..]),
-    name => Err(charliebot_cli_common::exit::CliExit::error(format!("{name} is not ported to the Rust CLI yet"))),
-  };
+  let host = LazyHost::new(host::compose);
+  let result = run_subcommand(&subcommand, &args[1..], &host);
   if let Err(failure) = result {
     eprint!("{}", json_out::render(&failure.body, None));
     exit(failure.code);
+  }
+}
+
+fn run_subcommand(
+  subcommand: &str,
+  args: &[OsString],
+  host: &LazyHost,
+) -> Result<(), charliebot_cli_common::exit::CliExit> {
+  match subcommand {
+    "artifact" => charliebot_artifacts::cli::artifact::main(args, host),
+    "compaction-context" => commands::compaction_context::main(args),
+    "delegate" => commands::delegate::main(args),
+    "discord" => charliebot_discord::cli::main(args),
+    "gc-trash" => commands::gc_trash::main(args, host),
+    "memory" => charliebot_memory::cli::main(args),
+    "plan" => charliebot_artifacts::cli::plan::main(args, host),
+    "schedule-trigger" => commands::schedule_trigger::main(args),
+    "session" => commands::session::main(args),
+    "slack" => charliebot_slack::cli::main(args),
+    "web" => charliebot_web_reply::cli::main(args, host),
+    name => Err(charliebot_cli_common::exit::CliExit::error(format!("{name} is not ported to the Rust CLI yet"))),
   }
 }
 
@@ -94,5 +103,68 @@ fn print_help(program: &str) {
   println!("Available subcommands:");
   for command in COMMANDS {
     println!("  {command}");
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use std::ffi::OsString;
+  use std::sync::Mutex;
+
+  use super::*;
+
+  static ENVIRONMENT_LOCK: Mutex<()> = Mutex::new(());
+
+  struct EnvironmentReset {
+    home: Option<OsString>,
+    repo_root: Option<OsString>,
+  }
+
+  impl EnvironmentReset {
+    fn set(home: &Path, repo_root: &Path) -> EnvironmentReset {
+      let previous = EnvironmentReset {
+        home: std::env::var_os(charliebot_core::home::CHARLIEBOT_HOME_ENV),
+        repo_root: std::env::var_os(charliebot_core::repo_root::REPO_ROOT_ENV),
+      };
+      unsafe {
+        std::env::set_var(charliebot_core::home::CHARLIEBOT_HOME_ENV, home);
+        std::env::set_var(charliebot_core::repo_root::REPO_ROOT_ENV, repo_root);
+      }
+      previous
+    }
+  }
+
+  impl Drop for EnvironmentReset {
+    fn drop(&mut self) {
+      unsafe {
+        match &self.home {
+          Some(value) => std::env::set_var(charliebot_core::home::CHARLIEBOT_HOME_ENV, value),
+          None => std::env::remove_var(charliebot_core::home::CHARLIEBOT_HOME_ENV),
+        }
+        match &self.repo_root {
+          Some(value) => std::env::set_var(charliebot_core::repo_root::REPO_ROOT_ENV, value),
+          None => std::env::remove_var(charliebot_core::repo_root::REPO_ROOT_ENV),
+        }
+      }
+    }
+  }
+
+  fn unexpected_host_composition() -> anyhow::Result<charliebot_agents::cli_host::CliHost> {
+    panic!("compaction-context does not need the CLI host")
+  }
+
+  #[test]
+  fn a_no_backend_verb_does_not_compose_the_cli_host() {
+    let _lock = ENVIRONMENT_LOCK.lock().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let repo_root = tempfile::tempdir().unwrap();
+    let session = home.path().join("sessions").join("synthetic-session").join("data");
+    std::fs::create_dir_all(&session).unwrap();
+    std::fs::write(session.join("chat_events.jsonl"), "").unwrap();
+    let _environment = EnvironmentReset::set(home.path(), repo_root.path());
+    let host = LazyHost::new(unexpected_host_composition);
+    let args = ["--session", "synthetic-session", "--slot", "1"].map(OsString::from);
+
+    run_subcommand("compaction-context", &args, &host).unwrap();
   }
 }

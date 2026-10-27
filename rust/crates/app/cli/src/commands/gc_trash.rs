@@ -10,14 +10,12 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use charliebot_agents::cli_host::LazyHost;
 use charliebot_cli_common::args::with_infer_long_args;
 use charliebot_cli_common::exit::CliExit;
-use charliebot_core::config::{self, PathsConfig};
-use charliebot_core::home;
 use charliebot_core::paths;
 use charliebot_core::pyfmt::format_f;
 use clap::{CommandFactory, FromArgMatches, Parser};
-use serde_yaml::{Mapping, Value};
 
 /// The on-disk trash directory name under the worktree root (`worktree_trash.TRASH_DIR_NAME`).
 const TRASH_DIR_NAME: &str = ".trash";
@@ -39,7 +37,7 @@ struct TrashEntry {
 
 /// Parse the arguments and run one sweep. Parser errors print and exit on their own
 /// (argparse-compatible: help 0, usage error 2).
-pub fn main(args: &[OsString]) -> Result<(), CliExit> {
+pub fn main(args: &[OsString], lazy_host: &LazyHost) -> Result<(), CliExit> {
   let command = with_infer_long_args(GcTrashCli::command());
   let argv = std::iter::once(OsString::from("charliebot gc-trash")).chain(args.iter().cloned());
   let matches = match command.try_get_matches_from(argv) {
@@ -47,8 +45,8 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
     Err(error) => error.exit(),
   };
   let cli = GcTrashCli::from_arg_matches(&matches).expect("try_get_matches_from validated the arguments");
-  let home = home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))?;
-  let worktree_dir = worktree_dir(&home)?;
+  let host = lazy_host.get().map_err(|error| CliExit::error(format!("{error:#}")))?;
+  let worktree_dir = paths::expanduser(&host.cfg.paths.worktree_dir);
   run(&PathBuf::from(worktree_dir).join(TRASH_DIR_NAME), cli.yes)
 }
 
@@ -170,29 +168,6 @@ fn format_size(size: u64) -> String {
     size /= 1024.0;
   }
   format!("{} PB", format_f(size, 1))
-}
-
-/// The `paths:` section of `<home>/config.yaml`, with the model defaults when the section is
-/// absent; only `worktree_dir` is read, so a section that does not parse is the one error the
-/// command can raise.
-fn worktree_dir(home: &Path) -> Result<String, CliExit> {
-  let path = home.join(config::CONFIG_FILENAME);
-  let path_text = paths::display(&path);
-  let document = config::read_yaml_document(&path).map_err(|error| CliExit::error(error.0))?;
-  let section = match &document {
-    Value::Mapping(mapping) => mapping.get(Value::String("paths".to_string())).cloned(),
-    Value::Null => None,
-    other => {
-      return Err(CliExit::error(format!(
-        "{path_text}: the document must be a mapping of sections, got {}",
-        config::yaml_value_kind(other)
-      )));
-    }
-  };
-  let paths_config: PathsConfig =
-    serde_path_to_error::deserialize(section.unwrap_or_else(|| Value::Mapping(Mapping::new())))
-      .map_err(|error| CliExit::error(format!("{path_text}: invalid config key paths: {}", error.into_inner())))?;
-  Ok(paths::expanduser(&paths_config.worktree_dir))
 }
 
 fn unix_seconds(moment: SystemTime) -> f64 {

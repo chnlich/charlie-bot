@@ -359,7 +359,7 @@ fn post_registration(payload: Value, key: &TriggerKey, sessions_dir: &Path) -> R
   client::post(
     ENDPOINT,
     payload,
-    Some(Box::new(move || readback_key.readback(&readback_dir))),
+    Some(Box::new(move || Ok(readback_key.readback(&readback_dir)))),
     &[(422, EXIT_VERIFY_REJECTED)],
   )
 }

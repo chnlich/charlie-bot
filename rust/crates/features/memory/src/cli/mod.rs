@@ -274,6 +274,9 @@ fn cli_clock() -> Result<OffsetDateTime, CliExit> {
 }
 
 fn session_slug8(sessions_root: &Path, cwd: &Path) -> String {
+  // Python compares against `sessions_dir.resolve()`: a symlinked CHARLIEBOT_HOME must not hide
+  // the session directory, since the cwd a process reads is already symlink-free.
+  let sessions_root = &fs::canonicalize(sessions_root).unwrap_or_else(|_| sessions_root.to_path_buf());
   if cwd.parent() == Some(sessions_root) {
     cwd.file_name().map(|name| name.to_string_lossy().chars().take(8).collect()).unwrap_or_else(|| "nosess".to_string())
   } else {
@@ -541,6 +544,18 @@ mod tests {
 
   fn fixed_clock() -> OffsetDateTime {
     OffsetDateTime::parse("2026-10-27T12:34:56Z", &Rfc3339).expect("the test timestamp parses")
+  }
+
+  #[test]
+  fn test_session_slug8_resolves_a_symlinked_sessions_root() {
+    run_with_timeout(|| {
+      let temp = tempfile::tempdir().unwrap();
+      let real = temp.path().join("real-home").join("sessions").join("12345678-session-id");
+      fs::create_dir_all(&real).unwrap();
+      let linked = temp.path().join("linked-home");
+      std::os::unix::fs::symlink(temp.path().join("real-home"), &linked).unwrap();
+      assert_eq!(session_slug8(&linked.join("sessions"), &real), "12345678");
+    });
   }
 
   #[test]

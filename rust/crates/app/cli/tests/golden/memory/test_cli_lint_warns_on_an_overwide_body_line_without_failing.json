@@ -7,11 +7,11 @@
   ],
   "files": {
     "store-wide/topics": "profile resident\n",
-    "store-wide/entries/profile/wide-body.md": "---\nscope: user\ntopic: profile\naudience: master\ntitle: Wide Body\n---\n- aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
+    "store-wide/entries/profile/wide-body.md": "---\nscope: user\ntopic: profile\naudience: master\ntitle: Wide Body\n---\n- aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
   },
   "expect": {
     "stdout": "clean\n",
-    "stderr": "",
+    "stderr": "warning: entries/profile/wide-body.md: body line over 120 columns (121): - aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
     "exit": 0,
     "requests": []
   }

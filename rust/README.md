@@ -15,6 +15,12 @@ cd rust
 cargo build --release        # target/release/charliebot-server
 ```
 
+CI (`.github/workflows/ci.yml`) runs two Rust jobs on `ubuntu-24.04`, whose glibc 2.39 matches the live host. `release-build`
+runs `cargo build --release --locked -p charliebot-server` on every pull request and push. On a push to `main` it uploads
+the artifact `charliebot-server-<full commit sha>`, which holds `charliebot-server` and `sha256sums.txt` and is kept for 30
+days. It builds no tests, so the binary is a plain release build. `rust-test` runs `cargo test --locked` with Rust 1.99.0 and
+the repo's `uv sync --locked` environment.
+
 ## Run
 
 ```sh

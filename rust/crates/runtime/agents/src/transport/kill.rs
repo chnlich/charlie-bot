@@ -7,7 +7,7 @@ use nix::sys::signal::{self, Signal};
 use nix::unistd::{self, Pid};
 use tokio::task::JoinHandle;
 
-use super::spawn::AgentChild;
+pub use super::spawn::{detach, terminate_child};
 
 pub const KILL_ESCALATION_GRACE: Duration = Duration::from_secs(5);
 pub const KILL_ESCALATION_POLL: Duration = Duration::from_millis(200);
@@ -83,63 +83,6 @@ where
   result
 }
 
-/// Drop a child handle without signalling it.
-pub fn detach(child: AgentChild) {
-  drop(child);
-}
-
-/// Terminate a child process group and wait for exit before returning.
-pub async fn terminate_child(child: &mut AgentChild) -> std::io::Result<()> {
-  let Some(pid) = child.id() else {
-    return wait_child(child).await;
-  };
-  let sent = kill_process_group(pid, Signal::SIGTERM);
-  if !sent {
-    return kill_child_and_reap(child).await;
-  }
-  match tokio::time::timeout(KILL_ESCALATION_GRACE, child.wait()).await {
-    Ok(Ok(_)) => return Ok(()),
-    Ok(Err(error)) if is_already_reaped(&error) => return Ok(()),
-    Ok(Err(error)) => return Err(error),
-    Err(_) => {
-      tracing::warn!(target: "charliebot_agents", pid, "backend_terminate_timeout");
-      kill_process_group(pid, Signal::SIGKILL);
-      kill_child_and_reap(child).await?;
-    }
-  }
-  Ok(())
-}
-
-async fn kill_child_and_reap(child: &mut AgentChild) -> std::io::Result<()> {
-  match child.try_wait() {
-    Ok(Some(_)) => return Ok(()),
-    Ok(None) => {}
-    Err(error) if is_already_reaped(&error) => return Ok(()),
-    Err(error) => return Err(error),
-  }
-  if let Err(error) = child.start_kill() {
-    match child.try_wait() {
-      Ok(Some(_)) => return Ok(()),
-      Err(wait_error) if is_already_reaped(&wait_error) => return Ok(()),
-      Ok(None) => return Err(error),
-      Err(wait_error) => return Err(wait_error),
-    }
-  }
-  wait_child(child).await
-}
-
-async fn wait_child(child: &mut AgentChild) -> std::io::Result<()> {
-  match child.wait().await {
-    Ok(_) => Ok(()),
-    Err(error) if is_already_reaped(&error) => Ok(()),
-    Err(error) => Err(error),
-  }
-}
-
-fn is_already_reaped(error: &std::io::Error) -> bool {
-  error.raw_os_error() == Some(nix::errno::Errno::ECHILD as i32)
-}
-
 /// Convert an exit status to Python's integer convention, including negative signal numbers.
 pub fn python_exit_code(status: std::process::ExitStatus) -> i32 {
   use std::os::unix::process::ExitStatusExt;
@@ -149,48 +92,12 @@ pub fn python_exit_code(status: std::process::ExitStatus) -> i32 {
 
 #[cfg(test)]
 mod tests {
-  use std::collections::HashMap;
-  use std::ffi::OsString;
-
   use super::*;
-  use crate::transport::cgroup::SessionCgroupConfig;
-  use crate::transport::spawn::{ChildStdin, SpawnSetup, SpawnSpec, spawn_with_setup};
-
-  async fn shell(args: &[&str]) -> AgentChild {
-    let spec = SpawnSpec::new(
-      "/bin/sh",
-      args.iter().map(OsString::from).collect(),
-      None,
-      HashMap::new(),
-      None,
-      SessionCgroupConfig::disabled(),
-    );
-    spawn_with_setup(&spec, None, ChildStdin::Null, SpawnSetup::None).await.unwrap().child
-  }
 
   #[tokio::test]
   async fn wait_without_a_limit_returns_and_cancels_stderr() {
     let stderr = tokio::spawn(async { tokio::time::sleep(Duration::from_secs(60)).await });
     let result = wait_or_kill_group(async { "done" }, None, 1, stderr).await.unwrap();
     assert_eq!(result, "done");
-  }
-
-  #[tokio::test]
-  async fn terminate_stops_the_spawned_process_group() {
-    let mut child = shell(&["-c", "exec /bin/sleep 30"]).await;
-    terminate_child(&mut child).await.unwrap();
-    assert!(child.try_wait().unwrap().is_some());
-  }
-
-  #[tokio::test]
-  async fn terminate_reaps_a_child_that_exited_before_its_group_signal() {
-    let mut child = shell(&["-c", "exit 0"]).await;
-    tokio::time::sleep(Duration::from_millis(20)).await;
-    terminate_child(&mut child).await.unwrap();
-    match child.try_wait() {
-      Ok(Some(_)) => {}
-      Err(error) if is_already_reaped(&error) => {}
-      status => panic!("the exited child was not reaped: {status:?}"),
-    }
   }
 }

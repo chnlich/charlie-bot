@@ -5,14 +5,14 @@
 //! read the registry through `GET /api/sessions/<sid>/plans`; `diff` then compares the two version files on disk.
 
 use std::ffi::OsString;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
+use charliebot_agents::cli_host::LazyHost;
 use charliebot_cli_common::args::with_infer_long_args;
 use charliebot_cli_common::client;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_cli_common::json_out;
 use charliebot_cli_common::resolve;
-use charliebot_core::home;
 use charliebot_core::paths;
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 use serde_json::{Value, json};
@@ -150,7 +150,7 @@ struct ListArgs {
 
 /// Parse the plan arguments and run one verb. Parser errors print and exit on their own (argparse-compatible:
 /// help 0, usage error 2).
-pub fn main(args: &[OsString]) -> Result<(), CliExit> {
+pub fn main(args: &[OsString], host: &LazyHost) -> Result<(), CliExit> {
   let command = with_infer_long_args(PlanCli::command());
   let argv = std::iter::once(OsString::from("charliebot plan")).chain(args.iter().cloned());
   let matches = match command.try_get_matches_from(argv) {
@@ -169,7 +169,7 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
   let session_id = resolve::resolve_from_env(session.as_deref())?;
   match verb {
     Verb::List => print_result(&client::get(&format!("/api/sessions/{session_id}/plans"), None)?),
-    Verb::Diff(args) => print_result(&build_diff(&session_id, &args)?),
+    Verb::Diff(args) => print_result(&build_diff(&session_id, &args, host)?),
     Verb::Present(args) => {
       let (title, file) = (args.title.clone(), args.file.clone());
       register(&session_id, "present", present_payload(&session_id, &args), move |plans| {
@@ -270,17 +270,18 @@ fn register(
   Ok(())
 }
 
-/// The registry listing the readbacks match against; an unreadable listing proves nothing.
-fn listing_plans(session_id: &str) -> Option<Vec<Value>> {
-  let listing = client::get(&format!("/api/sessions/{session_id}/plans"), None).ok()?;
-  match listing.get("plans") {
+/// The registry listing the readbacks match against; a failed GET keeps its own client error.
+fn listing_plans(session_id: &str) -> Result<Option<Vec<Value>>, CliExit> {
+  let listing = client::get(&format!("/api/sessions/{session_id}/plans"), None)?;
+  Ok(match listing.get("plans") {
     Some(Value::Array(plans)) => Some(plans.clone()),
     _ => None,
-  }
+  })
 }
 
-fn readback_plan(session_id: &str, readback: impl FnOnce(&[Value]) -> Option<Value>) -> Option<Value> {
-  readback(&listing_plans(session_id)?)
+fn readback_plan(session_id: &str, readback: impl FnOnce(&[Value]) -> Option<Value>) -> Result<Option<Value>, CliExit> {
+  let Some(plans) = listing_plans(session_id)? else { return Ok(None) };
+  Ok(readback(&plans))
 }
 
 /// `_same_file`: path-string equality tolerant of normalization (`./` prefixes, duplicate slashes).
@@ -350,14 +351,15 @@ fn readback_close(plans: &[Value], plan_id: i64, close_as: &str) -> Option<Value
 }
 
 /// `_build_diff`: the registry through the list endpoint, the two version files off disk, the diff local.
-fn build_diff(session_id: &str, args: &DiffArgs) -> Result<Value, CliExit> {
+fn build_diff(session_id: &str, args: &DiffArgs, lazy_host: &LazyHost) -> Result<Value, CliExit> {
   let listing = client::get(&format!("/api/sessions/{session_id}/plans"), None)?;
-  let session_dir = session_dir(session_id)?;
   let plans: Vec<Value> = match listing.get("plans") {
     Some(Value::Array(plans)) => plans.clone(),
     _ => Vec::new(),
   };
   let (plan, from_version, to_version) = resolve_diff_plan(&plans, args).map_err(CliExit::error)?;
+  let host = lazy_host.get().map_err(|error| CliExit::error(format!("{error:#}")))?;
+  let session_dir = host.cfg.sessions_dir().join(session_id);
   let old_html = read_version_file(&session_dir, from_version).map_err(CliExit::error)?;
   let new_html = read_version_file(&session_dir, to_version).map_err(CliExit::error)?;
   let text = plan_diff::diff_text(&old_html, &new_html).map_err(CliExit::error)?;
@@ -402,12 +404,6 @@ fn resolve_diff_plan<'a>(plans: &'a [Value], args: &DiffArgs) -> Result<(&'a Val
     .find(|version| version["v"].as_i64() == Some(target - 1))
     .ok_or_else(|| format!("predecessor version {} not found in plan {}", target - 1, plan["id"]))?;
   Ok((plan, from_version, to_version))
-}
-
-/// The profile home's `sessions` directory.
-fn session_dir(session_id: &str) -> Result<PathBuf, CliExit> {
-  let home = home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))?;
-  Ok(home.join("sessions").join(session_id))
 }
 
 /// `_read_version_file`: the version's artifact, a registry path relative to the session dir, read as text.

@@ -184,13 +184,13 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
   let readback_task_type = task_type.to_string();
   let readback_request_id = cli.request_id.clone();
   let readback = move || {
-    delegate_readback::find_local_task_child(
+    Ok(delegate_readback::find_local_task_child(
       &home,
       &readback_session,
       &readback_description,
       &readback_task_type,
       readback_request_id.as_deref(),
-    )
+    ))
   };
   let result = client::post("/api/internal/delegate", Value::Object(payload), Some(Box::new(readback)), &[])?;
 

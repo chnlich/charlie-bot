@@ -3,6 +3,3 @@
 
 pub mod artifact;
 pub mod plan;
-
-mod config;
-mod light_probe;

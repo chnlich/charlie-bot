@@ -8,12 +8,12 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
+use charliebot_agents::cli_host::{CliHost, LazyHost};
 use charliebot_cli_common::args::with_infer_long_args;
 use charliebot_cli_common::client;
 use charliebot_cli_common::exit::CliExit;
-use charliebot_core::home;
+use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::paths;
-use charliebot_core::repo_root::REPO_ROOT_ENV;
 use charliebot_store::control_events;
 use charliebot_store::run_identity::SESSION_METADATA_NAME;
 use charliebot_store::run_records::{DATA_DIR_NAME, RUN_METADATA_NAME, RUNS_DIR_NAME};
@@ -24,9 +24,6 @@ use sha2::{Digest, Sha256};
 use time::macros::format_description;
 
 use crate::artifact_check;
-
-use super::config::CliConfig;
-use super::light_probe;
 
 /// The cold-read delegation's task type.
 const COLD_READ_TASK_TYPE: &str = "cold-read";
@@ -82,7 +79,7 @@ enum CheckOutcome {
 
 /// Parse the artifact arguments and run one verb. Parser errors print and exit on their own (argparse-compatible:
 /// help 0, usage error 2).
-pub fn main(args: &[OsString]) -> Result<(), CliExit> {
+pub fn main(args: &[OsString], host: &LazyHost) -> Result<(), CliExit> {
   if args.first().is_some_and(|argument| argument == "wrap") {
     return Err(CliExit::error("artifact wrap is not ported to the Rust CLI yet"));
   }
@@ -94,7 +91,7 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
   };
   let cli = ArtifactCli::from_arg_matches(&matches).expect("try_get_matches_from validated the arguments");
   match cli.command {
-    ArtifactCommand::Check(args) => match check(&args, &CheckInputs::from_process()?)? {
+    ArtifactCommand::Check(args) => match check(&args, host)? {
       // The assertion lines print before a later failure, as Python's per-line prints do.
       CheckOutcome::Failed { stdout, exit } => {
         print!("{stdout}");
@@ -117,43 +114,21 @@ fn flush_stdout() -> Result<(), CliExit> {
 
 impl CheckInputs {
   /// The running process's inputs.
-  fn from_process() -> Result<CheckInputs, CliExit> {
-    let home = home::charliebot_home_dir().map_err(|error| CliExit::error(error.to_string()))?;
+  fn from_process(host: &CliHost) -> Result<CheckInputs, CliExit> {
     let cwd = std::env::current_dir().map_err(|error| CliExit::error(error.to_string()))?;
     Ok(CheckInputs {
-      home,
+      home: host.cfg.charliebot_home.clone(),
       cwd,
       session_env: std::env::var(charliebot_cli_common::resolve::SESSION_ID_ENV_VAR)
         .ok()
         .filter(|value| !value.is_empty()),
-      repo_root: resolve_repo_root()?,
+      repo_root: host.repo_root.clone(),
     })
   }
 }
 
-/// The checkout holding `prompts/cold_read.md`: the server-written variable when it names one, else the checkout
-/// above this executable. A tree holding neither is an error, never a guessed path.
-fn resolve_repo_root() -> Result<PathBuf, CliExit> {
-  if let Some(value) = std::env::var_os(REPO_ROOT_ENV) {
-    let candidate = PathBuf::from(value);
-    if candidate.join("prompts/cold_read.md").is_file() {
-      return Ok(candidate);
-    }
-  }
-  if let Ok(executable) = std::env::current_exe() {
-    for ancestor in executable.ancestors().skip(1) {
-      if ancestor.join("prompts/cold_read.md").is_file() {
-        return Ok(ancestor.to_path_buf());
-      }
-    }
-  }
-  Err(CliExit::error(format!(
-    "cannot locate the charlie-bot checkout: {REPO_ROOT_ENV} names no tree holding prompts/cold_read.md"
-  )))
-}
-
 /// `_run_check`: the assertion lines, then the cold read the session's shape selects.
-fn check(args: &CheckArgs, inputs: &CheckInputs) -> Result<CheckOutcome, CliExit> {
+fn check(args: &CheckArgs, lazy_host: &LazyHost) -> Result<CheckOutcome, CliExit> {
   if args.trigger.is_none() && !args.assertions_only {
     return Err(CliExit::usage(format!("--genre {} requires --trigger unless --assertions-only is given", args.genre)));
   }
@@ -161,14 +136,23 @@ fn check(args: &CheckArgs, inputs: &CheckInputs) -> Result<CheckOutcome, CliExit
   if !artifact.is_file() {
     return Err(CliExit::error(format!("artifact not found: {}", args.file)));
   }
-  let config = CliConfig::load_from(&inputs.home)?;
+  let host = lazy_host.get().map_err(|error| CliExit::error(format!("{error:#}")))?;
+  let inputs = CheckInputs::from_process(host)?;
+  check_with_host(args, &artifact, host, &inputs)
+}
 
+fn check_with_host(
+  args: &CheckArgs,
+  artifact: &Path,
+  host: &CliHost,
+  inputs: &CheckInputs,
+) -> Result<CheckOutcome, CliExit> {
   let runtime = tokio::runtime::Builder::new_current_thread()
     .enable_all()
     .build()
     .map_err(|error| CliExit::error(format!("could not start the assertion runtime: {error}")))?;
   let outcomes = runtime
-    .block_on(artifact_check::run_assertions(&args.genre, artifact.clone(), &config.config, inputs.repo_root.clone()))
+    .block_on(artifact_check::run_assertions(&args.genre, artifact.to_path_buf(), &host.cfg, inputs.repo_root.clone()))
     .map_err(|error| CliExit::error(format!("{error:#}")))?;
 
   let mut stdout = String::new();
@@ -193,13 +177,13 @@ fn check(args: &CheckArgs, inputs: &CheckInputs) -> Result<CheckOutcome, CliExit
     return Ok(CheckOutcome::Done(CheckOutput { stdout, exit: 0 }));
   }
 
-  if let Some(session_id) = session_identity(&config, inputs) {
-    let profile = match session_profile(&config, &session_id) {
+  if let Some(session_id) = session_identity(&host.cfg, inputs) {
+    let profile = match session_profile(&host.cfg, &session_id) {
       Ok(profile) => profile,
       Err(exit) => return Ok(CheckOutcome::Failed { stdout, exit }),
     };
     if profile == "manager" {
-      return match delegate_cold_read(args, &artifact, &session_id, inputs) {
+      return match delegate_cold_read(args, artifact, &session_id, inputs) {
         Ok(line) => {
           stdout.push_str(&line);
           Ok(CheckOutcome::Done(CheckOutput { stdout, exit: 0 }))
@@ -209,12 +193,12 @@ fn check(args: &CheckArgs, inputs: &CheckInputs) -> Result<CheckOutcome, CliExit
     }
   }
   let trigger = args.trigger.as_deref().expect("a non-assertions check requires --trigger");
-  let result = match run_probe(&config.config, &artifact, trigger, &inputs.repo_root) {
+  let result = match run_probe(&runtime, host, artifact, trigger) {
     Ok(result) => result,
     Err(exit) => return Ok(CheckOutcome::Failed { stdout, exit }),
   };
   stdout.push_str(&cold_read::format_report(
-    &paths::display(&artifact),
+    &paths::display(artifact),
     &result.page_sha256,
     &result.attempts,
     match &result.backend_id {
@@ -238,7 +222,7 @@ fn resolve_path(path: &Path) -> Result<PathBuf, CliExit> {
 }
 
 /// `_session_identity`: the server-written variable, else the cwd's name when the cwd is a session directory.
-fn session_identity(config: &CliConfig, inputs: &CheckInputs) -> Option<String> {
+fn session_identity(config: &CharlieBotConfig, inputs: &CheckInputs) -> Option<String> {
   if let Some(session) = &inputs.session_env {
     return Some(session.clone());
   }
@@ -251,7 +235,7 @@ fn session_identity(config: &CliConfig, inputs: &CheckInputs) -> Option<String> 
 }
 
 /// `_session_profile`: the requesting session's `profile` from its metadata.
-fn session_profile(config: &CliConfig, session_id: &str) -> Result<String, CliExit> {
+fn session_profile(config: &CharlieBotConfig, session_id: &str) -> Result<String, CliExit> {
   let path = config.sessions_dir().join(session_id).join(SESSION_METADATA_NAME);
   let unreadable = |detail: String| {
     CliExit::error(format!("cannot read the requesting session's profile from {}: {detail}", paths::display(&path)))
@@ -294,7 +278,7 @@ fn delegate_cold_read(
   let readback_description = description.clone();
   let readback_request_id = request_id.clone();
   let readback =
-    move || find_local_task_child(&home, &parent, &readback_description, COLD_READ_TASK_TYPE, &readback_request_id);
+    move || Ok(find_local_task_child(&home, &parent, &readback_description, COLD_READ_TASK_TYPE, &readback_request_id));
   let result = client::post("/api/internal/delegate", payload, Some(Box::new(readback)), &[])?;
   let child = result
     .get("session_id")
@@ -358,26 +342,46 @@ struct ProbeResult {
 
 /// `artifact_check.run_probe`: the page text and the eight questions to the light backends in rotation order.
 fn run_probe(
-  config: &charliebot_core::config::CharlieBotConfig,
+  runtime: &tokio::runtime::Runtime,
+  host: &CliHost,
   artifact: &Path,
   trigger: &str,
-  repo_root: &Path,
 ) -> Result<ProbeResult, CliExit> {
   let (system_prompt, questions) =
-    cold_read::load_texts(repo_root).map_err(|error| CliExit::error(format!("{error:#}")))?;
+    cold_read::load_texts(&host.repo_root).map_err(|error| CliExit::error(format!("{error:#}")))?;
   let page_bytes = std::fs::read(artifact).map_err(|error| CliExit::error(error.to_string()))?;
   let page_sha256 = cold_read::page_sha256(&page_bytes);
   let page_text =
     String::from_utf8(page_bytes).map_err(|error| CliExit::error(format!("the artifact is not UTF-8: {error}")))?;
   let prompt = cold_read::probe_input(&page_text, &questions, trigger);
-  let probe = light_probe::run_light_probe(config, &prompt, &system_prompt).map_err(CliExit::error)?;
+  let probe = runtime
+    .block_on(cold_read::run_light_probe(host, &prompt, &system_prompt))
+    .map_err(|error| CliExit::error(format!("{error:#}")))?;
   Ok(ProbeResult { attempts: probe.attempts, backend_id: probe.backend_id, answer: probe.answer, page_sha256 })
 }
 
 #[cfg(test)]
 mod tests {
+  use std::sync::Arc;
+
   use super::*;
   use crate::test_support::{plan_page, repo_root};
+  use charliebot_agents::agent_environment::AgentBaseEnvironment;
+  use charliebot_agents::backend_pool::BackendPool;
+  use charliebot_registry::Registry;
+
+  fn test_host(home: &Path, repo_root: &Path) -> CliHost {
+    let mut registry = Registry::new();
+    registry.register_package("src.features.artifacts", crate::register).unwrap();
+    let cfg = registry.load_config(home).unwrap();
+    CliHost {
+      cfg,
+      registry: Arc::new(registry),
+      repo_root: repo_root.to_path_buf(),
+      base_env: AgentBaseEnvironment { values: std::env::vars().collect() },
+      pool: BackendPool::default(),
+    }
+  }
 
   #[test]
   fn test_cli_assertions_only_passes_a_page_over_the_height_target() {
@@ -395,6 +399,7 @@ mod tests {
       trigger: None,
       assertions_only: true,
     };
+    let host = test_host(home.path(), &repo_root());
     let inputs = CheckInputs {
       home: home.path().to_path_buf(),
       cwd: home.path().to_path_buf(),
@@ -402,7 +407,7 @@ mod tests {
       repo_root: repo_root(),
     };
 
-    let CheckOutcome::Done(output) = check(&args, &inputs).unwrap() else {
+    let CheckOutcome::Done(output) = check_with_host(&args, &artifact, &host, &inputs).unwrap() else {
       panic!("the check finished");
     };
 
@@ -417,8 +422,8 @@ mod tests {
     std::fs::create_dir_all(&session).unwrap();
     std::fs::write(session.join(SESSION_METADATA_NAME), json!({ "id": "sess-1", "profile": "manager" }).to_string())
       .unwrap();
-    let config = CliConfig::load_from(home.path()).unwrap();
-    assert_eq!(session_profile(&config, "sess-1").unwrap(), "manager");
+    let host = test_host(home.path(), &repo_root());
+    assert_eq!(session_profile(&host.cfg, "sess-1").unwrap(), "manager");
   }
 
   #[test]
@@ -426,15 +431,15 @@ mod tests {
     let home = tempfile::tempdir().unwrap();
     let session = home.path().join("sessions").join("sess-2");
     std::fs::create_dir_all(&session).unwrap();
-    let config = CliConfig::load_from(home.path()).unwrap();
+    let host = test_host(home.path(), &repo_root());
     let inputs = CheckInputs {
       home: home.path().to_path_buf(),
       cwd: session.clone(),
       session_env: None,
       repo_root: home.path().to_path_buf(),
     };
-    assert_eq!(session_identity(&config, &inputs).as_deref(), Some("sess-2"));
+    assert_eq!(session_identity(&host.cfg, &inputs).as_deref(), Some("sess-2"));
     let outside = CheckInputs { cwd: home.path().to_path_buf(), ..inputs };
-    assert_eq!(session_identity(&config, &outside), None);
+    assert_eq!(session_identity(&host.cfg, &outside), None);
   }
 }

@@ -1,0 +1,77 @@
+{
+  "argv": [
+    "plan",
+    "present",
+    "--file",
+    "artifacts/plan_01.html",
+    "--title",
+    "P1"
+  ],
+  "cwd": "home/sessions/abc",
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n",
+    "home/sessions/abc/": ""
+  },
+  "responses": [
+    {
+      "drop_after_request": true
+    },
+    {
+      "status": 503,
+      "body": {
+        "detail": "listing unavailable"
+      }
+    },
+    {
+      "status": 200,
+      "body": {}
+    }
+  ],
+  "expect": {
+    "stdout": "",
+    "stderr": "{\"error\": \"listing unavailable\", \"code\": \"server_error\", \"effect\": \"none\"}\n",
+    "exit": 1,
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/api/internal/plan/present",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "session_id": "abc",
+          "file": "artifacts/plan_01.html",
+          "title": "P1",
+          "base_repo": null,
+          "base_branch": null,
+          "base_sha": null
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/api/sessions/abc/plans",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": null
+        },
+        "body": null
+      },
+      {
+        "method": "GET",
+        "path": "/api/internal/version",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": null
+        },
+        "body": null
+      }
+    ]
+  }
+}

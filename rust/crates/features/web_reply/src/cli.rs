@@ -8,7 +8,7 @@
 use std::ffi::OsString;
 use std::future::Future;
 
-use charliebot_agents::cli_host;
+use charliebot_agents::cli_host::LazyHost;
 use charliebot_cli_common::args::with_infer_long_args;
 use charliebot_cli_common::client;
 use charliebot_cli_common::exit::CliExit;
@@ -84,7 +84,7 @@ struct StatusSetArgs {
 
 /// Parse the web arguments and run one verb. Parser errors print and exit on their own (argparse-compatible: help 0,
 /// usage error 2).
-pub fn main(args: &[OsString]) -> Result<(), CliExit> {
+pub fn main(args: &[OsString], host: &LazyHost) -> Result<(), CliExit> {
   let command = with_infer_long_args(WebCli::command());
   let argv = std::iter::once(OsString::from("charliebot web")).chain(args.iter().cloned());
   let matches = match command.try_get_matches_from(argv) {
@@ -96,7 +96,7 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
     WebCommand::Reply(args) => reply(&args),
     WebCommand::Dialog(args) => dialog(&args),
     WebCommand::Status { command } => match command {
-      StatusCommand::Set(args) => status_set(&args),
+      StatusCommand::Set(args) => status_set(&args, host),
       StatusCommand::Confirm => status_confirm(),
       StatusCommand::Show(args) => status_show(&args),
     },
@@ -127,7 +127,7 @@ fn dialog(args: &SessionArgs) -> Result<(), CliExit> {
   Ok(())
 }
 
-fn status_set(args: &StatusSetArgs) -> Result<(), CliExit> {
+fn status_set(args: &StatusSetArgs, lazy_host: &LazyHost) -> Result<(), CliExit> {
   let session_id = resolve::resolve_from_env(args.session.as_deref())?;
   let text = files::read_reply_text(&args.file)?;
   let request = json!({ "session_id": session_id, "text": text });
@@ -139,7 +139,7 @@ fn status_set(args: &StatusSetArgs) -> Result<(), CliExit> {
     return Ok(());
   }
 
-  let host = cli_host::host().map_err(anyhow_exit)?;
+  let host = lazy_host.get().map_err(anyhow_exit)?;
   let (system_prompt, questions) = cold_read::load_ask_texts(&host.repo_root).map_err(anyhow_exit)?;
   for item in unread {
     let link = item.get("link").and_then(Value::as_str);

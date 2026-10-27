@@ -462,8 +462,6 @@ dependencies = [
  "nix",
  "regex",
  "serde_json",
- "serde_path_to_error",
- "serde_yaml",
  "tempfile",
  "time",
 ]

@@ -24,12 +24,9 @@ pub use backend::CodexBackend;
 pub use host::CodexHost;
 pub use resolver::{CodexSessionHost, CodexUsageResolver};
 pub use translate::FILE_WRITE;
-pub use usage_logs::session_id;
+pub use usage_logs::{USAGE_SOURCE, session_id};
 
 use factory::CodexFactory;
-
-/// The usage source's name: the ledger's source value and the usage page's card title.
-pub const USAGE_SOURCE: &str = "Codex";
 
 /// Registers the codex backend type, its usage resolver, its usage source, and the source's attribution.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {

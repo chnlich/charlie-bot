@@ -23,6 +23,9 @@ use super::text::{count_or_zero, object_or_empty, truthy};
 use super::usage_quota::CodexQuotaAccount;
 use super::usage_sweep;
 
+/// The usage source's name: the ledger's source value and the usage page's card title.
+pub const USAGE_SOURCE: &str = "Codex";
+
 /// Codex has one account: its default home.
 const ACCOUNT: &str = "work (default)";
 
@@ -158,7 +161,7 @@ fn read_rollout(codex_home: &Path, path: &Path, account: &str) -> anyhow::Result
     records.push(UsageRecord {
       record_id,
       kind: RecordKind::Native,
-      source: super::USAGE_SOURCE.to_string(),
+      source: USAGE_SOURCE.to_string(),
       model: model.clone().unwrap_or_else(|| "unknown".to_string()),
       account: account.to_string(),
       ts: timestamp_of(line),

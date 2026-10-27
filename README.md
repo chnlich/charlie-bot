@@ -104,7 +104,7 @@ CharlieBot is a self-hosted multi-agent orchestration system: a master agent dri
 ## Repository layout
 
 - `rust/crates/` — the server that runs: `app/server` is the `charliebot-server` entry point, `app/cli` holds the Rust CLI commands, `runtime/` carries the task tree, agent processes and the session store, `features/` one crate per feature, `infra/` the shared foundations
-- `src/` — the Python `charliebot` CLI (the "CLI at a glance" commands still run here) plus the modules the Rust test oracles and the parity harness still import; later tasks delete these as the CLI ports
+- `src/` — the Python `charliebot` CLI (the "CLI at a glance" commands still run here); later tasks delete these as the CLI ports
 - `web/` — Jinja2 templates + vanilla JS static assets, served by the Rust server
 - `skills/` — repo-shared agent skills
 - `prompts/` — agent prompt definitions

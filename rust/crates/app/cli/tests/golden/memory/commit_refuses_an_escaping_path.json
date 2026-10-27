@@ -1,0 +1,21 @@
+{
+  "argv": [
+    "memory",
+    "proposal",
+    "commit",
+    "../x",
+    "--message-file",
+    "m"
+  ],
+  "env": {
+    "GIT_CONFIG_NOSYSTEM": "1",
+    "HOME": "{root}/git-home",
+    "PATH": "/usr/bin:/bin"
+  },
+  "expect": {
+    "stdout": "",
+    "stderr": "error: path must be store-relative (e.g. entries/<topic>/<slug>.md or topics): '../x'\n",
+    "exit": 1,
+    "requests": []
+  }
+}

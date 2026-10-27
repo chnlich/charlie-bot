@@ -1,4 +1,6 @@
+use std::collections::hash_map::DefaultHasher;
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
@@ -63,9 +65,42 @@ impl Sandbox {
   }
 
   fn run_cli(&self, args: &[&str]) -> Run {
-    let mut command = self.command(env!("CARGO_BIN_EXE_charliebot"), &self.root);
+    self.run_cli_from(&self.root, args)
+  }
+
+  fn run_cli_from(&self, cwd: &Path, args: &[&str]) -> Run {
+    let mut command = self.command(env!("CARGO_BIN_EXE_charliebot"), cwd);
     command.arg("memory").args(args).env("CHARLIEBOT_HOME", &self.home);
     run_bounded(command)
+  }
+
+  /// One `proposal commit` call; the message file is written under the home, outside the store and its worktree.
+  fn commit(&self, path: &str, message: &str, extra: &[&str]) -> Run {
+    let message_file = self.message_file(message);
+    let message_file = message_file.to_str().expect("the message file path is UTF-8");
+    let mut args = vec!["proposal", "commit", path, "--message-file", message_file];
+    args.extend_from_slice(extra);
+    self.run_cli(&args)
+  }
+
+  fn message_file(&self, message: &str) -> PathBuf {
+    let directory = self.home.join("messages");
+    fs::create_dir_all(&directory).expect("the message directory is created");
+    let mut hasher = DefaultHasher::new();
+    message.hash(&mut hasher);
+    let path = directory.join(format!("{:x}.txt", hasher.finish()));
+    fs::write(&path, message).expect("the message file is written");
+    path
+  }
+
+  /// The head commit's full message, as `git log --format=%B` prints it.
+  fn head_message(&self, worktree: &Path) -> String {
+    self.git_output(worktree, &["log", "-1", "--format=%B"]).stdout
+  }
+
+  /// The commits the proposal holds ahead of the base.
+  fn pr_commit_count(&self, store: &Path) -> usize {
+    self.git(store, &["rev-list", "main..proposal"]).lines().count()
   }
 
   fn git(&self, cwd: &Path, args: &[&str]) -> String {
@@ -195,6 +230,40 @@ fn fields(output: &str) -> Vec<(String, String)> {
 
 fn field<'a>(fields: &'a [(String, String)], key: &str) -> &'a str {
   fields.iter().find(|(name, _)| name == key).expect("the result has the requested field").1.as_str()
+}
+
+fn write_file(path: &Path, text: &str) {
+  fs::create_dir_all(path.parent().expect("the file has a parent")).expect("the file's directory is created");
+  fs::write(path, text).expect("the file is written");
+}
+
+/// A 30-word sentence: over the 25-word cap the prose check enforces.
+fn long_sentence() -> &'static str {
+  concat!(
+    "The curator drafts each entry inside the proposal worktree so the diff against the base branch ",
+    "shows exactly the lines still awaiting review before any change reaches the live store.",
+  )
+}
+
+/// *count* short one-sentence bullet lines: a canon body of the v5-gap entry's shape.
+fn body_lines(count: usize) -> String {
+  (1..=count).map(|index| format!("- Body line {index} stands.\n")).collect()
+}
+
+/// One bullet line 121 terminal columns wide: the two-column "- " prefix plus 119 characters.
+fn wide_line(character: char) -> String {
+  format!("- {}", character.to_string().repeat(119))
+}
+
+fn negation_warning(word: &str, sentence: &str) -> String {
+  format!(
+    "negation or contrast '{word}': state the standing reality or the action to take, \
+     and keep the fact it carried: {sentence}"
+  )
+}
+
+fn first_chars(text: &str, count: usize) -> String {
+  text.chars().take(count).collect()
 }
 
 #[test]
@@ -492,4 +561,572 @@ fn test_status_dirty_dash_when_worktree_absent() {
   let fields = fields(&result.stdout);
   assert_eq!(field(&fields, "dirty"), "-");
   assert_eq!(field(&fields, "ahead"), "1");
+}
+
+#[test]
+fn test_commit_accepts_new_entry_file() {
+  let sandbox = Sandbox::new();
+  let store = sandbox.build_store();
+  sandbox.run_cli(&["proposal", "open"]);
+  let worktree = Sandbox::proposal_worktree(&store);
+  write_file(&worktree.join("entries/profile/new-entry.md"), &Sandbox::entry_text("new-entry", "body\n"));
+  let result = sandbox.commit("entries/profile/new-entry.md", "admit profile/new-entry (New Entry)", &[]);
+  assert_eq!(result.code, 0, "{}", result.stderr);
+  let fields = fields(&result.stdout);
+  assert_eq!(field(&fields, "committed"), sandbox.git(&store, &["rev-parse", "proposal"]));
+  assert_eq!(
+    sandbox.git(&worktree, &["ls-tree", "-r", "HEAD", "--name-only"]).lines().collect::<Vec<_>>(),
+    [".gitignore", "entries/profile/dark-mode.md", "entries/profile/new-entry.md", "topics"]
+  );
+}
+
+#[test]
+fn test_commit_accepts_existing_pr_entry_with_lines_appended() {
+  let sandbox = Sandbox::new();
+  let store = sandbox.build_store();
+  sandbox.run_cli(&["proposal", "open"]);
+  let relative = "entries/profile/appended.md";
+  let text = Sandbox::entry_text("appended", "first line\n");
+  sandbox.proposal_commit(&store, Path::new(relative), &text, "first");
+  let worktree = Sandbox::proposal_worktree(&store);
+  write_file(&worktree.join(relative), &format!("{text}second line\n"));
+  let result = sandbox.commit(relative, "second", &[]);
+  assert_eq!(result.code, 0, "{}", result.stderr);
+  assert!(fs::read_to_string(worktree.join(relative)).expect("the entry is readable").contains("second line"));
+}
+
+#[test]
+fn test_commit_resolves_a_relative_message_file_against_the_caller_cwd() {
+  let sandbox = Sandbox::new();
+  let store = sandbox.build_store();
+  sandbox.run_cli(&["proposal", "open"]);
+  let relative = "entries/profile/relative-message.md";
+  let worktree = Sandbox::proposal_worktree(&store);
+  write_file(&worktree.join(relative), &Sandbox::entry_text("relative-message", "body\n"));
+  let caller = sandbox.root.join("caller");
+  fs::create_dir_all(&caller).expect("the caller directory is created");
+  fs::write(caller.join("message.txt"), "admit via a relative message file\n").expect("the message file is written");
+  let result = sandbox.run_cli_from(&caller, &["proposal", "commit", relative, "--message-file", "message.txt"]);
+  assert_eq!(result.code, 0, "{}", result.stderr);
+  assert_eq!(sandbox.head_message(&worktree).trim(), "admit via a relative message file");
+}
+
+#[test]
+fn test_commit_refuses_reworded_pr_line_and_lists_it() {
+  let sandbox = Sandbox::new();
+  let store = sandbox.build_store();
+  sandbox.run_cli(&["proposal", "open"]);
+  let relative = "entries/profile/reworded.md";
+  let text = Sandbox::entry_text("reworded", "alpha bravo\n");
+  sandbox.proposal_commit(&store, Path::new(relative), &text, "first");
+  let worktree = Sandbox::proposal_worktree(&store);
+  write_file(&worktree.join(relative), &text.replace("alpha bravo", "alpha CHARLIE"));
+  let result = sandbox.commit(relative, "reword", &[]);
+  assert_eq!(result.code, 1);
+  assert!(result.stderr.contains("alpha bravo"), "{}", result.stderr);
+  assert_eq!(sandbox.pr_commit_count(&store), 1);
+}
+
+#[test]
+fn test_commit_refuses_line_reworded_to_the_base_wording() {
+  let sandbox = Sandbox::new();
+  let store = sandbox.build_store();
+  sandbox.run_cli(&["proposal", "open"]);
+  let relative = "entries/profile/swap.md";
+  let base_text = Sandbox::entry_text("swap", "original body\n");
+  sandbox.live_commit(&store, Path::new(relative), &base_text, "base side of swap");
+  let worktree = Sandbox::proposal_worktree(&store);
+  let reworded = Sandbox::entry_text("swap", "reworded body\n");
+  sandbox.proposal_commit(&store, Path::new(relative), &reworded, "pr rewrites the line");
+  write_file(&worktree.join(relative), &base_text);
+  let result = sandbox.commit(relative, "restore", &[]);
+  assert_eq!(result.code, 1);
+  assert!(result.stderr.contains("reworded body"), "{}", result.stderr);
+  assert_eq!(sandbox.pr_commit_count(&store), 1);
+}
+
+#[test]
+fn test_commit_counts_line_occurrences_as_a_multiset() {
+  let sandbox = Sandbox::new();
+  let store = sandbox.build_store();
+  sandbox.run_cli(&["proposal", "open"]);
+  let relative = "entries/profile/doubled.md";
+  let text = Sandbox::entry_text("doubled", "dup line\ndup line\n");
+  sandbox.proposal_commit(&store, Path::new(relative), &text, "first");
+  let worktree = Sandbox::proposal_worktree(&store);
+  write_file(&worktree.join(relative), &Sandbox::entry_text("doubled", "dup line\n"));
+  let result = sandbox.commit(relative, "drop one", &[]);
+  assert_eq!(result.code, 1);
+  assert!(result.stderr.contains("dup line"), "{}", result.stderr);
+}
+
+#[test]
+fn test_commit_refuses_deleted_pr_created_entry() {
+  let sandbox = Sandbox::new();
+  let store = sandbox.build_store();
+  sandbox.run_cli(&["proposal", "open"]);
+  let relative = "entries/profile/doomed.md";
+  sandbox.proposal_commit(&store, Path::new(relative), &Sandbox::entry_text("doomed", "keep me\n"), "first");
+  let worktree = Sandbox::proposal_worktree(&store);
+  fs::remove_file(worktree.join(relative)).expect("the entry is removed from the worktree");
+  let result = sandbox.commit(relative, "delete", &[]);
+  assert_eq!(result.code, 1);
+  assert!(result.stderr.contains("keep me"), "{}", result.stderr);
+  assert_eq!(sandbox.pr_commit_count(&store), 1);
+}
+
+#[test]
+fn test_commit_refuses_a_new_sentence_over_25_words() {
+  let sandbox = Sandbox::new();
+  let store = sandbox.build_store();
+  sandbox.run_cli(&["proposal", "open"]);
+  let relative = "entries/profile/long-sentence.md";
+  let sentence = long_sentence();
+  let worktree = Sandbox::proposal_worktree(&store);
+  write_file(&worktree.join(relative), &Sandbox::entry_text("long-sentence", &format!("- {sentence}\n")));
+  let result = sandbox.commit(relative, "admit", &[]);
+  assert_eq!(result.code, 1);
+  assert!(result.stderr.contains("prose check failed:"), "{}", result.stderr);
+  assert!(result.stderr.contains(&format!("sentence over 25 words (30): {sentence}")), "{}", result.stderr);
+  assert_eq!(sandbox.pr_commit_count(&store), 0);
+}
+
+#[test]
+fn test_commit_ignores_an_unchanged_long_sentence_in_an_old_entry() {
+  let sandbox = Sandbox::new();
+  let store = sandbox.build_store();
+  let relative = "entries/profile/legacy-long.md";
+  let (first, second) = long_sentence().split_once(" shows ").expect("the long sentence has a shows");
+  let base_text = Sandbox::entry_text("legacy-long", &format!("- {first}\n  shows {second}\n"));
+  sandbox.live_commit(&store, Path::new(relative), &base_text, "base holds the long sentence");
+  sandbox.run_cli(&["proposal", "open"]);
+  let worktree = Sandbox::proposal_worktree(&store);
+  write_file(&worktree.join(relative), &format!("{base_text}- Short added line.\n"));
+  let result = sandbox.commit(relative, "append", &[]);
+  assert_eq!(result.code, 0, "{}", result.stderr);
+  assert!(fs::read_to_string(worktree.join(relative)).expect("the entry is readable").contains("Short added line"));
+}
+
+#[test]
+fn test_commit_refuses_a_new_sentence_with_a_semicolon() {
+  let sandbox = Sandbox::new();
+  let store = sandbox.build_store();
+  sandbox.run_cli(&["proposal", "open"]);
+  let relative = "entries/profile/semicolon.md";
+  let bullet = "The curator drafts the entry; the reviewer commits it.";
+  let worktree = Sandbox::proposal_worktree(&store);
+  write_file(&worktree.join(relative), &Sandbox::entry_text("semicolon", &format!("- {bullet}\n")));
+  let result = sandbox.commit(relative, "admit", &[]);
+  assert_eq!(result.code, 1);
+  assert!(result.stderr.contains(&format!("semicolon joins clauses: {bullet}")), "{}", result.stderr);
+  assert_eq!(sandbox.pr_commit_count(&store), 0);
+}
+
+#[test]
+fn test_commit_allows_a_semicolon_inside_backticks() {
+  let sandbox = Sandbox::new();
+  let store = sandbox.build_store();
+  sandbox.run_cli(&["proposal", "open"]);
+  let relative = "entries/profile/backtick-semicolon.md";
+  let worktree = Sandbox::proposal_worktree(&store);
+  write_file(&worktree.join(relative), &Sandbox::entry_text("backtick-semicolon", "- Run `a; b` twice.\n"));
+  let result = sandbox.commit(relative, "admit", &[]);
+  assert_eq!(result.code, 0, "{}", result.stderr);
+  assert!(!result.stderr.contains("prose check"), "{}", result.stderr);
+}
+
+#[test]
+fn test_commit_refuses_a_long_sentence_in_the_lead() {
+  let sandbox = Sandbox::new();
+  let store = sandbox.build_store();
+  sandbox.run_cli(&["proposal", "open"]);
+  let relative = "entries/profile/long-lead.md";
+  let sentence = long_sentence();
+  let worktree = Sandbox::proposal_worktree(&store);
+  write_file(
+    &worktree.join(relative),
+    &Sandbox::entry_text("long-lead", &format!("{sentence}\n- Short bullet stands.\n")),
+  );
+  let result = sandbox.commit(relative, "admit", &[]);
+  assert_eq!(result.code, 1);
+  assert!(result.stderr.contains(&format!("sentence over 25 words (30): {sentence}")), "{}", result.stderr);
+  assert_eq!(sandbox.pr_commit_count(&store), 0);
+}
+
+#[test]
+fn test_commit_refuses_a_semicolon_in_the_lead() {
+  let sandbox = Sandbox::new();
+  let store = sandbox.build_store();
+  sandbox.run_cli(&["proposal", "open"]);
+  let relative = "entries/profile/semicolon-lead.md";
+  let lead = "The curator drafts the entry; the reviewer commits it.";
+  let worktree = Sandbox::proposal_worktree(&store);
+  write_file(
+    &worktree.join(relative),
+    &Sandbox::entry_text("semicolon-lead", &format!("{lead}\n- Short bullet stands.\n")),
+  );
+  let result = sandbox.commit(relative, "admit", &[]);
+  assert_eq!(result.code, 1);
+  assert!(result.stderr.contains(&format!("semicolon joins clauses: {lead}")), "{}", result.stderr);
+  assert_eq!(sandbox.pr_commit_count(&store), 0);
+}
+
+#[test]
+fn test_commit_refuses_a_long_sentence_in_an_entry_without_bullets() {
+  let sandbox = Sandbox::new();
+  let store = sandbox.build_store();
+  sandbox.run_cli(&["proposal", "open"]);
+  let relative = "entries/profile/no-bullets.md";
+  let sentence = long_sentence();
+  let (first, second) = sentence.split_once(" so the diff ").expect("the long sentence has the split point");
+  let worktree = Sandbox::proposal_worktree(&store);
+  write_file(&worktree.join(relative), &Sandbox::entry_text("no-bullets", &format!("{first}\nso the diff {second}\n")));
+  let result = sandbox.commit(relative, "admit", &[]);
+  assert_eq!(result.code, 1);
+  assert!(result.stderr.contains(&format!("sentence over 25 words (30): {sentence}")), "{}", result.stderr);
+  assert_eq!(sandbox.pr_commit_count(&store), 0);
+}
+
+#[test]
+fn test_commit_ignores_an_unchanged_long_sentence_in_an_old_lead() {
+  let sandbox = Sandbox::new();
+  let store = sandbox.build_store();
+  let relative = "entries/profile/legacy-lead.md";
+  let (first, second) = long_sentence().split_once(" shows ").expect("the long sentence has a shows");
+  let base_text = Sandbox::entry_text("legacy-lead", &format!("{first}\nshows {second}\n- Legacy bullet stands.\n"));
+  sandbox.live_commit(&store, Path::new(relative), &base_text, "base lead holds the long sentence");
+  sandbox.run_cli(&["proposal", "open"]);
+  let worktree = Sandbox::proposal_worktree(&store);
+  write_file(&worktree.join(relative), &format!("{base_text}- Short added line.\n"));
+  let result = sandbox.commit(relative, "append", &[]);
+  assert_eq!(result.code, 0, "{}", result.stderr);
+  assert!(fs::read_to_string(worktree.join(relative)).expect("the entry is readable").contains("Short added line"));
+}
+
+#[test]
+fn test_commit_keeps_the_lead_apart_from_the_first_bullet() {
+  let sandbox = Sandbox::new();
+  let store = sandbox.build_store();
+  sandbox.run_cli(&["proposal", "open"]);
+  let relative = "entries/profile/compliant-lead.md";
+  let body = concat!(
+    "Entries live under the store root. Each entry states one fact about the host and names the file that owns it\n",
+    "- Run the store lint before each commit so a broken entry never reaches the live store.\n",
+    "- Keep each bullet short.\n",
+  );
+  let worktree = Sandbox::proposal_worktree(&store);
+  write_file(&worktree.join(relative), &Sandbox::entry_text("compliant-lead", body));
+  let result = sandbox.commit(relative, "admit", &[]);
+  assert_eq!(result.code, 0, "{}", result.stderr);
+  assert!(!result.stderr.contains("prose check"), "{}", result.stderr);
+}
+
+#[test]
+fn test_commit_refuses_a_body_grown_past_12_lines() {
+  let sandbox = Sandbox::new();
+  let store = sandbox.build_store();
+  let relative = "entries/profile/grown.md";
+  let legacy: String = (1..=11).map(|index| format!("- Legacy line {index} stands.\n")).collect();
+  let base_text = Sandbox::entry_text("grown", &legacy);
+  sandbox.live_commit(&store, Path::new(relative), &base_text, "base body of 11 lines");
+  sandbox.run_cli(&["proposal", "open"]);
+  let worktree = Sandbox::proposal_worktree(&store);
+  write_file(&worktree.join(relative), &format!("{base_text}- New line one stands.\n- New line two stands.\n"));
+  let result = sandbox.commit(relative, "grow", &[]);
+  assert_eq!(result.code, 1);
+  assert!(result.stderr.contains("body has 13 lines (limit 12)"), "{}", result.stderr);
+  assert_eq!(sandbox.pr_commit_count(&store), 0);
+}
+
+#[test]
+fn test_commit_refuses_a_15_line_body_that_stays_at_15_lines() {
+  let sandbox = Sandbox::new();
+  let store = sandbox.build_store();
+  let relative = "entries/profile/rewritten-long.md";
+  let legacy: String = (1..=15).map(|index| format!("- Legacy line {index} stands.\n")).collect();
+  let base_text = Sandbox::entry_text("rewritten-long", &legacy);
+  sandbox.live_commit(&store, Path::new(relative), &base_text, "base body of 15 lines");
+  sandbox.run_cli(&["proposal", "open"]);
+  let worktree = Sandbox::proposal_worktree(&store);
+  write_file(
+    &worktree.join(relative),
+    &base_text.replace("- Legacy line 7 stands.\n", "- Line seven stands rewritten.\n"),
+  );
+  let result = sandbox.commit(relative, "rewrite", &[]);
+  assert_eq!(result.code, 1);
+  assert!(result.stderr.contains("body has 15 lines (limit 12)"), "{}", result.stderr);
+  assert!(!result.stderr.contains("Line seven stands rewritten"), "{}", result.stderr);
+  assert_eq!(sandbox.pr_commit_count(&store), 0);
+}
+
+#[test]
+fn test_commit_refuses_a_body_line_over_120_columns() {
+  let sandbox = Sandbox::new();
+  let store = sandbox.build_store();
+  sandbox.run_cli(&["proposal", "open"]);
+  let relative = "entries/profile/wide-line.md";
+  let line = wide_line('a');
+  let worktree = Sandbox::proposal_worktree(&store);
+  write_file(&worktree.join(relative), &Sandbox::entry_text("wide-line", &format!("{line}\n")));
+  let result = sandbox.commit(relative, "admit", &[]);
+  assert_eq!(result.code, 1);
+  assert!(result.stderr.contains("prose check failed:"), "{}", result.stderr);
+  assert!(
+    result.stderr.contains(&format!("body line over 120 columns (121): {}", first_chars(&line, 60))),
+    "{}",
+    result.stderr
+  );
+  assert_eq!(sandbox.pr_commit_count(&store), 0);
+}
+
+#[test]
+fn test_commit_allows_a_body_line_of_exactly_120_columns() {
+  let sandbox = Sandbox::new();
+  let store = sandbox.build_store();
+  sandbox.run_cli(&["proposal", "open"]);
+  let relative = "entries/profile/at-the-limit.md";
+  let worktree = Sandbox::proposal_worktree(&store);
+  write_file(&worktree.join(relative), &Sandbox::entry_text("at-the-limit", &format!("- {}\n", "b".repeat(118))));
+  let result = sandbox.commit(relative, "admit", &[]);
+  assert_eq!(result.code, 0, "{}", result.stderr);
+  assert!(!result.stderr.contains("prose check"), "{}", result.stderr);
+}
+
+#[test]
+fn test_commit_counts_a_cjk_character_as_two_columns() {
+  let sandbox = Sandbox::new();
+  let store = sandbox.build_store();
+  sandbox.run_cli(&["proposal", "open"]);
+  let relative = "entries/profile/cjk-line.md";
+  let line = "汉".repeat(61);
+  assert_eq!(line.chars().count(), 61);
+  let worktree = Sandbox::proposal_worktree(&store);
+  write_file(&worktree.join(relative), &Sandbox::entry_text("cjk-line", &format!("{line}\n")));
+  let result = sandbox.commit(relative, "admit", &[]);
+  assert_eq!(result.code, 1);
+  assert!(
+    result.stderr.contains(&format!("body line over 120 columns (122): {}", first_chars(&line, 60))),
+    "{}",
+    result.stderr
+  );
+  assert_eq!(sandbox.pr_commit_count(&store), 0);
+}
+
+#[test]
+fn test_commit_refuses_a_base_verbatim_line_over_120_columns() {
+  let sandbox = Sandbox::new();
+  let store = sandbox.build_store();
+  let relative = "entries/profile/legacy-wide.md";
+  let line = wide_line('c');
+  let base_text = Sandbox::entry_text("legacy-wide", &format!("{line}\n"));
+  sandbox.live_commit(&store, Path::new(relative), &base_text, "base holds the wide line");
+  sandbox.run_cli(&["proposal", "open"]);
+  let worktree = Sandbox::proposal_worktree(&store);
+  write_file(&worktree.join(relative), &format!("{base_text}- Short added line.\n"));
+  let result = sandbox.commit(relative, "append", &[]);
+  assert_eq!(result.code, 1);
+  assert!(
+    result.stderr.contains(&format!("body line over 120 columns (121): {}", first_chars(&line, 60))),
+    "{}",
+    result.stderr
+  );
+  assert_eq!(sandbox.pr_commit_count(&store), 0);
+}
+
+#[test]
+fn test_commit_allows_a_wide_line_folded_into_continuation_lines() {
+  let sandbox = Sandbox::new();
+  let store = sandbox.build_store();
+  sandbox.run_cli(&["proposal", "open"]);
+  let relative = "entries/profile/folded-line.md";
+  let words = ["word"; 24];
+  let first = format!("- {}", words[..12].join(" "));
+  let second = format!("  {}", words[12..].join(" "));
+  let worktree = Sandbox::proposal_worktree(&store);
+  write_file(&worktree.join(relative), &Sandbox::entry_text("folded-line", &format!("{first}\n{second}\n")));
+  let result = sandbox.commit(relative, "admit", &[]);
+  assert_eq!(result.code, 0, "{}", result.stderr);
+  assert!(!result.stderr.contains("prose check"), "{}", result.stderr);
+}
+
+#[test]
+fn test_commit_allows_a_pure_deletion_from_a_50_line_body() {
+  let sandbox = Sandbox::new();
+  let store = sandbox.build_store();
+  let relative = "entries/profile/v5-gap.md";
+  let base_text = Sandbox::entry_text("v5-gap", &body_lines(50));
+  sandbox.live_commit(&store, Path::new(relative), &base_text, "canon body of 50 lines");
+  sandbox.run_cli(&["proposal", "open"]);
+  let worktree = Sandbox::proposal_worktree(&store);
+  write_file(&worktree.join(relative), &base_text.replace("- Body line 25 stands.\n", ""));
+  let result = sandbox.commit(relative, "trim", &[]);
+  assert_eq!(result.code, 0, "{}", result.stderr);
+  assert!(!result.stderr.contains("prose check"), "{}", result.stderr);
+  assert_eq!(sandbox.pr_commit_count(&store), 1);
+}
+
+#[test]
+fn test_commit_refuses_a_deletion_that_also_adds_a_line() {
+  let sandbox = Sandbox::new();
+  let store = sandbox.build_store();
+  let relative = "entries/profile/swapped-line.md";
+  let base_text = Sandbox::entry_text("swapped-line", &body_lines(50));
+  sandbox.live_commit(&store, Path::new(relative), &base_text, "canon body of 50 lines");
+  sandbox.run_cli(&["proposal", "open"]);
+  let worktree = Sandbox::proposal_worktree(&store);
+  let edited = base_text.replace("- Body line 25 stands.\n", "- The replacement line stands.\n");
+  write_file(&worktree.join(relative), &edited);
+  let result = sandbox.commit(relative, "swap", &[]);
+  assert_eq!(result.code, 1);
+  assert!(result.stderr.contains("body has 50 lines (limit 12)"), "{}", result.stderr);
+  assert_eq!(sandbox.pr_commit_count(&store), 0);
+}
+
+#[test]
+fn test_commit_allows_trimming_a_13_line_body_to_12() {
+  let sandbox = Sandbox::new();
+  let store = sandbox.build_store();
+  let relative = "entries/profile/trim-to-limit.md";
+  let base_text = Sandbox::entry_text("trim-to-limit", &body_lines(13));
+  sandbox.live_commit(&store, Path::new(relative), &base_text, "canon body of 13 lines");
+  sandbox.run_cli(&["proposal", "open"]);
+  let worktree = Sandbox::proposal_worktree(&store);
+  write_file(&worktree.join(relative), &base_text.replace("- Body line 7 stands.\n", ""));
+  let result = sandbox.commit(relative, "trim", &[]);
+  assert_eq!(result.code, 0, "{}", result.stderr);
+  assert!(!result.stderr.contains("prose check"), "{}", result.stderr);
+  assert_eq!(sandbox.pr_commit_count(&store), 1);
+}
+
+#[test]
+fn test_commit_replace_pr_lines_commits_and_lists_the_replaced_lines() {
+  let sandbox = Sandbox::new();
+  let store = sandbox.build_store();
+  sandbox.run_cli(&["proposal", "open"]);
+  let relative = "entries/profile/replaced.md";
+  let text = Sandbox::entry_text("replaced", "alpha bravo\n");
+  sandbox.proposal_commit(&store, Path::new(relative), &text, "first");
+  let worktree = Sandbox::proposal_worktree(&store);
+  write_file(&worktree.join(relative), &text.replace("alpha bravo", "alpha CHARLIE"));
+  let result = sandbox.commit(relative, "replace", &["--replace-pr-lines"]);
+  assert_eq!(result.code, 0, "{}", result.stderr);
+  let fields = fields(&result.stdout);
+  assert_eq!(field(&fields, "committed"), sandbox.git(&store, &["rev-parse", "proposal"]));
+  assert_eq!(sandbox.head_message(&worktree), "replace\nReplaced PR lines:\n  alpha bravo\n\n");
+}
+
+#[test]
+fn test_commit_refuses_a_prose_violation_even_with_replace_pr_lines() {
+  let sandbox = Sandbox::new();
+  let store = sandbox.build_store();
+  sandbox.run_cli(&["proposal", "open"]);
+  let relative = "entries/profile/flagged.md";
+  let text = Sandbox::entry_text("flagged", "alpha bravo\n");
+  sandbox.proposal_commit(&store, Path::new(relative), &text, "first");
+  let worktree = Sandbox::proposal_worktree(&store);
+  let rewritten = Sandbox::entry_text("flagged", &format!("alpha CHARLIE\n- {}\n", long_sentence()));
+  write_file(&worktree.join(relative), &rewritten);
+  let result = sandbox.commit(relative, "replace", &["--replace-pr-lines"]);
+  assert_eq!(result.code, 1);
+  assert!(result.stderr.contains("prose check failed:"), "{}", result.stderr);
+  assert!(result.stderr.contains("sentence over 25 words"), "{}", result.stderr);
+  assert_eq!(sandbox.pr_commit_count(&store), 1);
+}
+
+#[test]
+fn test_commit_warns_on_a_new_sentence_with_a_negation_word() {
+  let sandbox = Sandbox::new();
+  let store = sandbox.build_store();
+  sandbox.run_cli(&["proposal", "open"]);
+  let relative = "entries/profile/warned.md";
+  let sentence = "The proposal branch holds the draft, not the live store.";
+  let worktree = Sandbox::proposal_worktree(&store);
+  write_file(&worktree.join(relative), &Sandbox::entry_text("warned", &format!("- {sentence}\n")));
+  let result = sandbox.commit(relative, "admit", &[]);
+  assert_eq!(result.code, 0, "{}", result.stderr);
+  let fields = fields(&result.stdout);
+  assert_eq!(field(&fields, "committed"), sandbox.git(&store, &["rev-parse", "proposal"]));
+  assert_eq!(result.stderr, format!("warning: {}\n", negation_warning("not", sentence)));
+  assert_eq!(
+    sandbox.head_message(&worktree),
+    format!("admit\nNegation warnings:\n  {}\n\n", negation_warning("not", sentence))
+  );
+}
+
+#[test]
+fn test_commit_warns_on_a_changed_title_with_a_negation_word() {
+  let sandbox = Sandbox::new();
+  let store = sandbox.build_store();
+  sandbox.run_cli(&["proposal", "open"]);
+  let relative = "entries/profile/retitled.md";
+  let worktree = Sandbox::proposal_worktree(&store);
+  write_file(
+    &worktree.join(relative),
+    "---\nscope: user\ntopic: profile\ntitle: The Draft Is Not The Store\n\
+     audience: master, worker\n---\nbody stands.\n",
+  );
+  let result = sandbox.commit(relative, "admit", &[]);
+  assert_eq!(result.code, 0, "{}", result.stderr);
+  assert_eq!(result.stderr, format!("warning: {}\n", negation_warning("Not", "The Draft Is Not The Store")));
+  assert!(sandbox.head_message(&worktree).contains("Negation warnings:"));
+}
+
+#[test]
+fn test_commit_ignores_a_negation_word_inside_backticks() {
+  let sandbox = Sandbox::new();
+  let store = sandbox.build_store();
+  sandbox.run_cli(&["proposal", "open"]);
+  let relative = "entries/profile/backtick-negation.md";
+  let worktree = Sandbox::proposal_worktree(&store);
+  write_file(&worktree.join(relative), &Sandbox::entry_text("backtick-negation", "- Run `git not-a-flag` twice.\n"));
+  let result = sandbox.commit(relative, "admit", &[]);
+  assert_eq!(result.code, 0, "{}", result.stderr);
+  assert_eq!(result.stderr, "");
+  assert!(!sandbox.head_message(&worktree).contains("Negation warnings"));
+}
+
+#[test]
+fn test_commit_ignores_a_base_verbatim_sentence_with_a_negation_word() {
+  let sandbox = Sandbox::new();
+  let store = sandbox.build_store();
+  let relative = "entries/profile/legacy-not.md";
+  let base_text = Sandbox::entry_text("legacy-not", "- The live store never holds the draft.\n");
+  sandbox.live_commit(&store, Path::new(relative), &base_text, "base holds the negation");
+  sandbox.run_cli(&["proposal", "open"]);
+  let worktree = Sandbox::proposal_worktree(&store);
+  write_file(&worktree.join(relative), &format!("{base_text}- Short added line.\n"));
+  let result = sandbox.commit(relative, "append", &[]);
+  assert_eq!(result.code, 0, "{}", result.stderr);
+  assert_eq!(result.stderr, "");
+}
+
+#[test]
+fn test_commit_warns_on_a_rewritten_pr_line_and_lists_both_trailer_sections() {
+  let sandbox = Sandbox::new();
+  let store = sandbox.build_store();
+  sandbox.run_cli(&["proposal", "open"]);
+  let relative = "entries/profile/replaced-warned.md";
+  let old_line = "- The draft lives in the worktree, not the live store.";
+  let new_line = "- The draft never lives in the live store.";
+  sandbox.proposal_commit(
+    &store,
+    Path::new(relative),
+    &Sandbox::entry_text("replaced-warned", &format!("{old_line}\n")),
+    "first",
+  );
+  let worktree = Sandbox::proposal_worktree(&store);
+  write_file(&worktree.join(relative), &Sandbox::entry_text("replaced-warned", &format!("{new_line}\n")));
+  let result = sandbox.commit(relative, "replace", &["--replace-pr-lines"]);
+  assert_eq!(result.code, 0, "{}", result.stderr);
+  let fields = fields(&result.stdout);
+  assert_eq!(field(&fields, "committed"), sandbox.git(&store, &["rev-parse", "proposal"]));
+  let sentence = new_line.strip_prefix("- ").expect("the bullet has its marker");
+  assert_eq!(result.stderr, format!("warning: {}\n", negation_warning("never", sentence)));
+  assert_eq!(
+    sandbox.head_message(&worktree),
+    format!(
+      "replace\nReplaced PR lines:\n  {old_line}\nNegation warnings:\n  {}\n\n",
+      negation_warning("never", sentence)
+    )
+  );
 }

@@ -19,6 +19,7 @@ use time::macros::format_description;
 use time::{OffsetDateTime, UtcOffset};
 
 mod proposal;
+mod proposal_check;
 mod store;
 
 const RUN_TOKEN_ENV: &str = "CHARLIEBOT_RUN_TOKEN";
@@ -76,9 +77,6 @@ struct LintArgs {
 /// Parse the memory arguments and run one local store verb.
 pub fn main(args: &[OsString]) -> Result<(), CliExit> {
   if args.first().and_then(|arg| arg.to_str()) == Some("proposal") {
-    if args.get(1).and_then(|arg| arg.to_str()) == Some("commit") {
-      return Err(CliExit::error("memory proposal is not ported to the Rust CLI yet"));
-    }
     return proposal::main(&args[1..]);
   }
   let command = with_infer_long_args(MemoryCli::command());

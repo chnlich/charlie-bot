@@ -1,0 +1,21 @@
+{
+  "argv": [
+    "memory",
+    "proposal",
+    "commit",
+    "entries/a/b.md",
+    "--message-file",
+    "m"
+  ],
+  "env": {
+    "GIT_CONFIG_NOSYSTEM": "1",
+    "HOME": "{root}/git-home",
+    "PATH": "/usr/bin:/bin"
+  },
+  "expect": {
+    "stdout": "",
+    "stderr": "error: no proposal worktree at {root}/home/memory-proposal; run 'charliebot memory proposal open' first\n",
+    "exit": 1,
+    "requests": []
+  }
+}

@@ -769,6 +769,7 @@ dependencies = [
  "charliebot-registry",
  "charliebot-store",
  "clap",
+ "regex",
  "serde_json",
  "tar",
  "tempfile",

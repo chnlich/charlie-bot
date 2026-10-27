@@ -1,6 +1,6 @@
 # Discord entrypoint
 
-The Discord entrypoint lets an allowed user summon CharlieBot from a Discord server and keep talking to it inside one thread. This guide is the operator path: what the entrypoint does, how to set the application up once, how to verify it, and how to operate it afterwards. The Discord half lives in `src/features/discord/discord_listener.py`, `src/features/discord/discord_commands.py`, and `src/features/discord/discord_client.py`; the platform-neutral half it shares with Slack lives in `src/features/chat_threads/thread_entry.py`.
+The Discord entrypoint lets an allowed user summon CharlieBot from a Discord server and keep talking to it inside one thread. This guide is the operator path: what the entrypoint does, how to set the application up once, how to verify it, and how to operate it afterwards. The Discord half lives in `src/features/discord/discord_listener.py`, `rust/crates/features/discord/src/discord_commands.rs`, and `src/features/discord/discord_client.py`; the platform-neutral half it shares with Slack lives in `src/features/chat_threads/thread_entry.py`.
 
 ## What it does and why
 

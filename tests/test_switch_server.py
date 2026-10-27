@@ -338,7 +338,7 @@ def _install_release(releases: pathlib.Path, sha: str) -> None:
   _write_behavior(release)
 
 
-def _write_backend_registration(clone: pathlib.Path, module: str, backend_type: str, enabled: bool) -> None:
+def _write_backend_registration(clone: pathlib.Path, module: str, backend_type: str, *, enabled: bool) -> None:
   path = clone / "rust/crates/runtime/agents/src/backends" / module / "mod.rs"
   path.parent.mkdir(parents=True, exist_ok=True)
   path.write_text(
@@ -372,15 +372,15 @@ def _build_world(root: pathlib.Path) -> World:
   shutil.copy2(SWITCH, clone / "scripts" / "switch-server.sh")
   # The launcher's preflight reads its expected limits from this directory.
   shutil.copytree(ROOT / "scripts" / "systemd", clone / "scripts" / "systemd")
-  _write_backend_registration(clone, "opencode", "opencode", False)
-  _write_backend_registration(clone, "antigravity", "antigravity", False)
-  _write_backend_registration(clone, "claude_code", "cc-claude", True)
+  _write_backend_registration(clone, "opencode", "opencode", enabled=False)
+  _write_backend_registration(clone, "antigravity", "antigravity", enabled=False)
+  _write_backend_registration(clone, "claude_code", "cc-claude", enabled=True)
   _git(clone, "init", "-q", "-b", "main")
   _git(clone, "add", "scripts", "rust")
   _git(clone, "commit", "-q", "-m", "fake runtime clone")
   old_sha = _git(clone, "rev-parse", "HEAD")
-  _write_backend_registration(clone, "opencode", "opencode", True)
-  _write_backend_registration(clone, "antigravity", "antigravity", True)
+  _write_backend_registration(clone, "opencode", "opencode", enabled=True)
+  _write_backend_registration(clone, "antigravity", "antigravity", enabled=True)
   _git(clone, "add", "rust")
   _git(clone, "commit", "-q", "-m", "enable backend restart re-attachment")
   rust_sha = _git(clone, "rev-parse", "HEAD")

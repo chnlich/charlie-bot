@@ -269,9 +269,9 @@ run-record work is `S2`; task-tree runtime and feature-owned files remain with t
 | `sessions/<sid>/data/chat_events.jsonl` | S1 | ported | Append, sync, tolerant NDJSON reads, cache and ranges. |
 | `sessions/<sid>/data/archives/chat_events.<year>-W<week>.jsonl` | S1 | ported | Archive rotation and global `archive_offset`. |
 | `sessions/<sid>/data/explain_results.json` | features/explain | ported | Written atomically as Python writes it; stale pending entries are reaped on read. The entry's error text is the anyhow root cause. It equals Python's `str(e)` for one-shot failures and differs for OS errors. |
-| `sessions/<sid>/data/runs/<run>/task_spec.md` | S2 | planned | |
-| `sessions/<sid>/data/runs/<run>/metadata.json` | S2 | planned | |
-| `sessions/<sid>/data/runs/<run>/events.jsonl` | S2 | planned | |
+| `sessions/<sid>/data/runs/<run>/task_spec.md` | S2 | ported | Pinned to the run directory at run registration (`runtime/store/src/run_records.rs`, `RUN_TASK_SPEC_NAME`); Python `src/runtime/task_execution.py`. |
+| `sessions/<sid>/data/runs/<run>/metadata.json` | S2 | ported | Written atomically at run registration and on each finish (`runtime/store/src/run_records.rs`, `RUN_METADATA_NAME`, `write_run_record`); Python `src/runtime/runs.py`. |
+| `sessions/<sid>/data/runs/<run>/events.jsonl` | S2 | ported | The run's `RunSink` in `runtime/tasks/src/worker.rs` appends the translated events there (`open_sink`, path from `run_records.rs` `RUN_EVENTS_NAME`); Python `src/runtime/runs.py`. |
 | `sessions/<sid>/data/runs/<run>/agent.raw.ndjson` | agent-runtime | ported | Written by the runner (`runtime/agents/src/runner.rs:195`, name `runtime/store/src/run_records.rs:31`); Python `src/runtime/runs.py:47`, `src/runtime/agent_process/base.py:969`. |
 | `sessions/<sid>/data/runs/<run>/agent.stderr.log` | agent-runtime | ported | Written by the runner (`runtime/agents/src/runner.rs:196`, name `runtime/store/src/run_records.rs:33`); Python `src/runtime/runs.py:48`, `src/runtime/agent_process/base.py:970`. |
 | `sessions/<sid>/data/runs/<run>/agent.raw.cursor` | agent-runtime | ported | Maintained by the runner (`runtime/agents/src/runner.rs:197`, name `runtime/store/src/run_records.rs:34`); Python `src/runtime/runs.py:49`, `src/runtime/agent_process/base.py:971`. |

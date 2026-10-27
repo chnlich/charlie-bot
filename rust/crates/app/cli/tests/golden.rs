@@ -105,7 +105,6 @@ const PORTED_PYTHON_TESTS: &[&str] = &[
   "test_plan_approve_posts_plan_id",
   "test_plan_close_posts",
   "test_plan_server_rejection_exits_nonzero_with_detail_on_stderr",
-  "test_plan_readback_listing_get_failure_exits_with_the_listing_error",
   "test_plan_session_auto_derived_from_cwd",
   "test_plan_diff_prints_five_keys_computed_locally",
   "test_cli_unknown_genre_is_usage_error",

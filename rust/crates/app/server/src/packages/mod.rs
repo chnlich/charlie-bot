@@ -68,6 +68,9 @@ pub fn registry() -> Result<Registry, RegistryError> {
 }
 
 #[cfg(test)]
+mod thread_rules_tests;
+
+#[cfg(test)]
 mod tests {
   use std::env;
   use std::fs;

@@ -576,7 +576,7 @@
             }
           ],
           "prompt_hash": "$PROMPT_HASH",
-          "char_count": 10387
+          "char_count": "$CHAR_COUNT"
         }
       },
       {
@@ -900,6 +900,7 @@
   "placeholders": {
     "temp_root": "$TMPROOT",
     "prompt_hash": "$PROMPT_HASH",
+    "char_count": "$CHAR_COUNT",
     "repo_root": "$REPO",
     "damaged_hash": "$DAMAGED_HASH"
   }

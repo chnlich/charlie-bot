@@ -454,6 +454,7 @@ fn snapshots_match_the_recorded_python_server_output_byte_for_byte() {
   assert_eq!(fixture["placeholders"]["repo_root"], "$REPO");
   assert_eq!(fixture["placeholders"]["prompt_hash"], "$PROMPT_HASH");
   assert_eq!(fixture["placeholders"]["damaged_hash"], "$DAMAGED_HASH");
+  assert_eq!(fixture["placeholders"]["char_count"], "$CHAR_COUNT");
   let checkout_root = repo_root();
   let mut expected = fixture["expected"].clone();
   for (expected_case, prepared_case) in expected["cases"].as_array_mut().unwrap().iter_mut().zip(&prepared) {
@@ -467,6 +468,12 @@ fn snapshots_match_the_recorded_python_server_output_byte_for_byte() {
     if expected_case["snapshot"]["prompt_hash"] == "$PROMPT_HASH" {
       let hash = recorded_prompt_hash(&expected_case["snapshot"]["blocks"]);
       expected_case["snapshot"]["prompt_hash"] = json!(hash);
+    }
+    // The count measures the joined text, which names the checkout path, so it is taken from the materialized text.
+    if expected_case["snapshot"]["char_count"] == "$CHAR_COUNT" {
+      let blocks = expected_case["snapshot"]["blocks"].as_array().unwrap();
+      let text = blocks.iter().map(|block| block["text"].as_str().unwrap()).collect::<Vec<_>>().join("\n\n");
+      expected_case["snapshot"]["char_count"] = json!(text.chars().count());
     }
   }
   let damaged_hash = expected["cases"]

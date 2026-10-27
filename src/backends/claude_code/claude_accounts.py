@@ -189,7 +189,7 @@ def continuation_domain(option: models.BackendOption, cfg: config.CharlieBotConf
   domains never compare equal, so copying the pre-pool resume-domain helper
   as-is would reopen a fresh conversation every turn), and two different
   options never do. One definition shared by the switch endpoint and the
-  turn-start continuation rule (``src/runtime/api/sessions.py``,
+  turn-start continuation rule (``rust/crates/charliebot-session-api/src/routes.rs``,
   ``src/runtime/master_cc_run.py``).
   """
   if option.type == "cc-claude":

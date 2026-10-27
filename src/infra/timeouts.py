@@ -205,11 +205,11 @@ KILL_ESCALATION_POLL_SECONDS = 0.2  # seconds between liveness probes during the
 WS_CLIENT_CLOSE_TIMEOUT = 1.0  # seconds
 
 # ---------------------------------------------------------------------------
-# Uvicorn shutdown
+# Server shutdown
 # ---------------------------------------------------------------------------
 
 # How long live HTTP handlers and WebSockets get to wind down after the
-# shutdown signal before uvicorn exits the process anyway.
+# shutdown signal before the server exits the process anyway.
 SERVER_GRACEFUL_SHUTDOWN_TIMEOUT = 5  # seconds
 
 # ---------------------------------------------------------------------------

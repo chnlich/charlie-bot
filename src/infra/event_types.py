@@ -251,7 +251,7 @@ BACKEND_OVERLAY_UNDECLARED = "backend_overlay_undeclared"
 # API's usage-block names, and they are persisted wire values: the token tally
 # re-reads them from Claude Code transcripts (src/backends/claude_code/usage_logs.py) and from
 # CharlieBot's own result events (src/features/usage/token_tally.py), and the
-# proxy answers carry the same shape (src/backends/openai_compatible/anthropic_proxy.py). The Codex
+# proxy answers carry the same shape (charliebot-agents' anthropic_proxy.rs). The Codex
 # rollout wire carries same-named ``input_tokens``/``output_tokens`` from a
 # different upstream (src/backends/codex/codex_usage.py, src/backends/codex/codex_pricing.py);
 # those readers keep their literals.
@@ -301,8 +301,7 @@ def is_real_user_message(event: dict) -> bool:
 
 
 # The thread platforms that can summon a session. Each platform listener writes
-# its summon block under its ``ThreadPlatform.name``; ``tests/test_run_token.py``
-# pins the two names to this tuple.
+# its summon block under its ``ThreadPlatform.name``; this tuple lists the two names.
 THREAD_PLATFORM_KEYS = ("slack", "discord")
 
 

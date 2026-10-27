@@ -990,7 +990,7 @@ async def deliver_done(
   Called as a fire-and-forget task from ``persist_and_broadcast`` for every
   ``master_done``; returns False without acting unless the round belongs to a
   thread-bound session and answered a summon or a nudge. Guard-path dones
-  (src/runtime/api/chat.py) carry no input_event_id and browser-typed rounds carry no
+  carry no input_event_id and browser-typed rounds carry no
   summon block, so both leave the thread alone.
   """
   platform = adapter.platform

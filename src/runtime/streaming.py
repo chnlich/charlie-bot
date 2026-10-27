@@ -43,7 +43,7 @@ _STREAM_COALESCE_INTERVAL = 0.2  # seconds
 _PREVIEW_HIDING_TYPES = frozenset({"message", ET.ASSISTANT_ERROR, ET.ERROR})
 
 # Channel vocabulary: the two named topic forms the fan-out routes on. The
-# websocket subscriber (server.py) and every publisher (session_events, autonamer,
+# websocket subscriber (charliebot-session-api's websocket.rs) and every publisher (session_events, autonamer,
 # ext_usage, master_cc_queue) name their channels through these.
 SIDEBAR_CHANNEL = "sidebar"
 

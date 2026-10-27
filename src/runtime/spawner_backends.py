@@ -45,7 +45,7 @@ def unknown_backend_pin_refusal(backend_id: str, fallback_id: str) -> str:
           f"refusing to substitute '{fallback_id}'")
 
 
-# The run-context preview route (src/runtime/api/sessions.py) reproduces this refusal
+# The run-context preview route reproduces this refusal
 # verbatim as its 400 detail: the preview must refuse exactly where a launch
 # would.
 EMPTY_BACKENDS_OPTIONS_REFUSAL = "session backend resolution requires a configured backends.options entry"

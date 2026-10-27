@@ -265,7 +265,7 @@ def _build_master_env(cfg: config.CharlieBotConfig, session_id: str) -> dict[str
   (``src.runtime.cli.common.resolve_session_id``). ``launch_loop.child_env`` strips any
   inherited value first, so a server started from inside another session's
   environment hands down no stale id. PATH is the inherited one: it already
-  carries the ``charliebot`` shim (``src.runtime.agent_environment``), and a venv
+  carries the ``charliebot`` shim (``rust/crates/charliebot-agents/src/agent_environment.rs``), and a venv
   bin directory on it would give uv an install target.
   """
   env = launch_loop.child_env(os.environ)

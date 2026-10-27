@@ -75,7 +75,7 @@ def get_config_on_loop() -> config.CharlieBotConfig:
 # serve it (require_found and the fork/elone/delete raisers, the events
 # viewer, and the Slack reply path via SlackReplyError) share this one
 # spelling, and tests pin it. Distinct deliberate wordings exist elsewhere
-# (e.g. internal.py's "Target session not found" for a wake's cross-session
+# (e.g. rust/crates/charliebot-tasks/src/routes.rs's "Target session not found" for a wake's cross-session
 # target); this constant homes only the unqualified one.
 SESSION_NOT_FOUND_DETAIL = "Session not found"
 

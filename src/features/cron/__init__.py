@@ -8,7 +8,4 @@ def register() -> None:
       "cron", "src.features.cron.sequence_controller:CronSequenceController")
   metadata_slot_registration.register_metadata_fields(
       "cron", "src.features.cron.metadata:CronMetadata", after="backend")
-  wiring.register_router("src.features.cron.api", prefix="/api/cron", tags=("cron",))
-  wiring.register_service("scheduler", "src.features.cron.service")
-  wiring.register_startup_check("src.features.cron.backend_refs", attr="check_backend_refs")
   wiring.register_setup_step("src.features.cron.seed", attr="setup_step")

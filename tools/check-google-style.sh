@@ -8,7 +8,7 @@ cd "$repo_root"
 
 # The probe's scope. The list is literal on purpose -- a new top-level path
 # joins it as a review-visible act.
-default_paths=(src tests tools scripts server.py)
+default_paths=(src tests tools scripts)
 
 paths=()
 if [[ $# -eq 0 ]]; then

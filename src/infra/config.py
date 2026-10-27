@@ -48,11 +48,11 @@ class HomeService(pydantic.BaseModel):
 
 
 class ServerConfig(pydantic.BaseModel):
-  """``server:`` section: the bind address uvicorn listens on."""
+  """``server:`` section: the bind address the server listens on."""
 
   model_config = pydantic.ConfigDict(extra='forbid')
 
-  # The bind address uvicorn listens on. Loopback by default; a host that
+  # The bind address the server listens on. Loopback by default; a host that
   # fronts the server itself (reverse proxy on another interface, Tailscale) sets it.
   host: str = "127.0.0.1"
   port: int = 18498

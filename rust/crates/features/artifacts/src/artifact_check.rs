@@ -19,12 +19,20 @@ use crate::headless_render;
 const STYLE_VERBATIM: &str = "style-verbatim";
 const SECTIONS_NUMBERED: &str = "sections-numbered";
 const FOOT_PRESENT: &str = "foot-present";
+const EXPLAIN_TRIAD: &str = "explain-triad";
 const FORK_OPEN_SHAPE: &str = "fork-open-shape";
 const FORK_EXPLAINER: &str = "fork-explainer";
+const FACT_ANCHORED: &str = "fact-anchored";
+const REQ_CHIPS: &str = "req-chips";
+const RUN_STATED: &str = "run-stated";
+const RENDER_PATH: &str = "render-path";
 const GOAL_BUDGET: &str = "goal-budget";
 const PAGE_HEIGHT: &str = "page-height";
 const ORDINAL_NAMED: &str = "ordinal-named";
 const BYTE_INTEGRITY: &str = "byte-integrity";
+
+/// The registered genres in the order the parser states them (`constants.ARTIFACT_GENRES`).
+pub const ARTIFACT_GENRES: [&str; 5] = ["plan", "understanding", "sitrep", "debug", "explain"];
 
 const GOAL_WEIGHTED_BUDGET: usize = 240;
 const PAGE_HEIGHT_TARGET: i32 = 2000;
@@ -66,6 +74,104 @@ const ORDINAL_BLOCK_TAGS: &[&str] =
 const ORDINAL_SKIP_TAGS: &[&str] = &["style", "script", "pre"];
 const EXPLAINER_BODY_TAGS: &[&str] = &["li", "p", "table", "pre"];
 
+/// `_FACT_ANCESTOR_TAGS`: a fact label's block, which must also carry a `span.src`.
+const FACT_ANCESTOR_TAGS: &[&str] = &["p", "li", "td", "blockquote", "h3"];
+/// `_REQ_BLOCK_TAGS`: the blocks that can hold a requirement chip's gloss.
+const REQ_BLOCK_TAGS: &[&str] = &["p", "li", "td", "th", "dt", "dd", "blockquote", "h1", "h2", "h3", "h4"];
+/// `_REQ_START` / `_REQ_END`: the sentinels that fence a requirement chip inside its block's text.
+const REQ_START: char = '\u{0003}';
+const REQ_END: char = '\u{0004}';
+/// `_SENTENCE_END_RE`: the terminators that end the sentence holding a requirement chip.
+const SENTENCE_END: [char; 5] = ['.', '。', '!', '?', '！'];
+/// `_KATEX_*_HINT`: the math render path's resource names.
+const KATEX_CSS_HINT: &str = "katex.min.css";
+const KATEX_JS_HINT: &str = "katex.min.js";
+const KATEX_AUTO_RENDER_HINT: &str = "auto-render.min.js";
+
+static RUN_DECIMAL_RE: LazyLock<Regex> = LazyLock::new(|| compile_python_regex(r"\d+\.\d+"));
+static RUN_HELD_RE: LazyLock<Regex> = LazyLock::new(|| {
+  compile_python_regex(
+    r"(?i)\b(?:held|kept|stayed|stays|remained|remains)\s+(?:the\s+)?(?:fixed|constant|unchanged|same)\b|\b(?:fixed|constant|unchanged|retained|controlled|same)\b|保持不变|固定不变|保持一致|不变|未变|没变|未改动|没改动|未改|没改|恒定|固定|控制变量",
+  )
+});
+static RUN_CHANGED_RE: LazyLock<Regex> = LazyLock::new(|| {
+  compile_python_regex(
+    r"(?i)\b(?:changed?|changing|changes?|varied|varying|modified|altered|variable|tweaked)\b|改(?:动|变|了|成|为)|更改|修改|变更|变量|变化",
+  )
+});
+
+/// `artifact_shared.GENRE_TEMPLATES`: the genre template whose `<style>` block a genre's pages carry.
+fn genre_template(genre: &str) -> &'static str {
+  match genre {
+    "plan" | "understanding" => "plan_template.html",
+    "sitrep" => "sitrep_template.html",
+    "debug" => "debug_template.html",
+    "explain" => "explain_template.html",
+    other => unreachable!("genre {other:?} is registered, so it has a template"),
+  }
+}
+
+/// `_SECTION_COUNT_RULES`: the numbered-h2 count per genre, and whether it is exact.
+fn section_count_rule(genre: &str) -> (usize, bool) {
+  match genre {
+    "plan" => (6, true),
+    "understanding" => (5, false),
+    "sitrep" | "debug" | "explain" => (5, true),
+    other => unreachable!("genre {other:?} is registered, so it has a section-count rule"),
+  }
+}
+
+/// `_ASSERTION_SETS`: the assertions of one genre, in the order their outcomes print.
+fn assertion_set(genre: &str) -> Option<&'static [&'static str]> {
+  match genre {
+    "plan" => Some(&[
+      BYTE_INTEGRITY,
+      STYLE_VERBATIM,
+      SECTIONS_NUMBERED,
+      FOOT_PRESENT,
+      FORK_OPEN_SHAPE,
+      FORK_EXPLAINER,
+      GOAL_BUDGET,
+      PAGE_HEIGHT,
+      ORDINAL_NAMED,
+    ]),
+    "understanding" => Some(&[
+      BYTE_INTEGRITY,
+      STYLE_VERBATIM,
+      SECTIONS_NUMBERED,
+      FOOT_PRESENT,
+      FORK_OPEN_SHAPE,
+      FORK_EXPLAINER,
+      PAGE_HEIGHT,
+      ORDINAL_NAMED,
+    ]),
+    "sitrep" => Some(&[
+      BYTE_INTEGRITY,
+      STYLE_VERBATIM,
+      SECTIONS_NUMBERED,
+      FORK_OPEN_SHAPE,
+      FORK_EXPLAINER,
+      FACT_ANCHORED,
+      REQ_CHIPS,
+      RUN_STATED,
+      ORDINAL_NAMED,
+    ]),
+    "debug" => {
+      Some(&[BYTE_INTEGRITY, STYLE_VERBATIM, SECTIONS_NUMBERED, FORK_OPEN_SHAPE, FACT_ANCHORED, ORDINAL_NAMED])
+    }
+    "explain" => Some(&[
+      BYTE_INTEGRITY,
+      STYLE_VERBATIM,
+      RENDER_PATH,
+      SECTIONS_NUMBERED,
+      EXPLAIN_TRIAD,
+      FORK_OPEN_SHAPE,
+      ORDINAL_NAMED,
+    ]),
+    _ => None,
+  }
+}
+
 static GOAL_SECTION_RE: LazyLock<Regex> =
   LazyLock::new(|| compile_python_regex(r"(?s)Problem / Goal</h2>(.*?)</section>"));
 static TAG_RE: LazyLock<Regex> = LazyLock::new(|| compile_python_regex(r"<[^>]+>"));
@@ -91,6 +197,8 @@ pub struct AssertionOutcome {
 struct Element {
   tag: String,
   classes: HashSet<String>,
+  /// Every attribute's raw value; a bare attribute is `None`, as Python's parser reports it.
+  attrs: HashMap<String, Option<String>>,
   parent: Option<usize>,
   children: Vec<Child>,
 }
@@ -102,6 +210,7 @@ enum Child {
 }
 
 struct Context<'a> {
+  genre: &'a str,
   artifact: &'a Path,
   chrome_bin: &'a str,
   repo_root: &'a Path,
@@ -117,7 +226,7 @@ struct CodeText {
 type AssertionCheck = for<'a> fn(&Context<'a>) -> anyhow::Result<Vec<AssertionOutcome>>;
 type OrdinalFailure = (usize, Vec<String>, String);
 
-/// Run the plan assertion set on a blocking thread.
+/// Run one genre's assertion set on a blocking thread.
 pub async fn run_assertions(
   genre: &str,
   artifact: PathBuf,
@@ -127,7 +236,7 @@ pub async fn run_assertions(
   run_assertions_with_chrome(genre, artifact, config.headless_chrome_bin.clone(), repo_root).await
 }
 
-/// Run the plan assertion set with an explicit Chrome path on a blocking thread.
+/// Run one genre's assertion set with an explicit Chrome path on a blocking thread.
 pub async fn run_assertions_with_chrome(
   genre: &str,
   artifact: PathBuf,
@@ -146,37 +255,48 @@ pub(crate) fn run_assertions_sync(
   chrome_bin: &str,
   repo_root: &Path,
 ) -> anyhow::Result<Vec<AssertionOutcome>> {
-  if genre != "plan" {
-    bail!(
+  let names = assertion_set(genre).ok_or_else(|| {
+    anyhow!(
       "no assertion set registered for genre {}; genres with a set: plan, understanding, sitrep, debug, explain",
       pyfmt::str_repr(genre)
-    );
-  }
+    )
+  })?;
   let source =
     fs::read_to_string(artifact).with_context(|| format!("could not read artifact {}", artifact.display()))?;
   let nodes = parse_dom(&source)?;
-  let context = Context { artifact, chrome_bin, repo_root, nodes };
-  let checks: [AssertionCheck; 9] = [
-    check_byte_integrity,
-    check_style_verbatim,
-    check_sections_numbered,
-    check_foot_present,
-    check_fork_open_shape,
-    check_fork_explainer,
-    check_goal_budget,
-    check_page_height,
-    check_ordinal_named,
-  ];
+  let context = Context { genre, artifact, chrome_bin, repo_root, nodes };
   let mut outcomes = Vec::new();
-  for check in checks {
+  for name in names {
+    let check: AssertionCheck = match *name {
+      BYTE_INTEGRITY => check_byte_integrity,
+      STYLE_VERBATIM => check_style_verbatim,
+      SECTIONS_NUMBERED => check_sections_numbered,
+      FOOT_PRESENT => check_foot_present,
+      EXPLAIN_TRIAD => check_explain_triad,
+      FORK_OPEN_SHAPE => check_fork_open_shape,
+      FORK_EXPLAINER => check_fork_explainer,
+      FACT_ANCHORED => check_fact_anchored,
+      REQ_CHIPS => check_req_chips,
+      RUN_STATED => check_run_stated,
+      RENDER_PATH => check_render_path,
+      GOAL_BUDGET => check_goal_budget,
+      PAGE_HEIGHT => check_page_height,
+      ORDINAL_NAMED => check_ordinal_named,
+      other => unreachable!("{other} is an assertion the sets do not name"),
+    };
     outcomes.extend(check(&context)?);
   }
   Ok(outcomes)
 }
 
 fn parse_dom(source: &str) -> anyhow::Result<Vec<Element>> {
-  let mut nodes =
-    vec![Element { tag: "#root".to_owned(), classes: HashSet::new(), parent: None, children: Vec::new() }];
+  let mut nodes = vec![Element {
+    tag: "#root".to_owned(),
+    classes: HashSet::new(),
+    attrs: HashMap::new(),
+    parent: None,
+    children: Vec::new(),
+  }];
   let mut stack = vec![0];
   parse_with(source, true, |mut event| match event.kind {
     EventKind::StartTag | EventKind::StartEndTag => {
@@ -197,7 +317,7 @@ fn parse_dom(source: &str) -> anyhow::Result<Vec<Element>> {
       let classes = pystr::split_whitespace(class_value).into_iter().map(str::to_owned).collect();
       let parent = *stack.last().expect("the root remains on the parser stack");
       let index = nodes.len();
-      nodes.push(Element { tag: tag.clone(), classes, parent: Some(parent), children: Vec::new() });
+      nodes.push(Element { tag: tag.clone(), classes, attrs: attributes, parent: Some(parent), children: Vec::new() });
       nodes[parent].children.push(Child::Element(index));
       if event.kind == EventKind::StartTag && !crate::plan_diff::VOID_TAGS.contains(&tag.as_str()) {
         stack.push(index);
@@ -312,8 +432,8 @@ fn check_style_verbatim(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOu
       format!("page carries {} <style> blocks, expected exactly one", page_styles.len()),
     )]);
   }
-  let template_rel = "prompts/plan_template.html";
-  let template_path = context.repo_root.join(template_rel);
+  let template_rel = format!("prompts/{}", genre_template(context.genre));
+  let template_path = context.repo_root.join(&template_rel);
   let template = fs::read_to_string(&template_path).with_context(|| format!("could not read {template_rel}"))?;
   let template_nodes = parse_dom(&template)?;
   let template_styles = find(&template_nodes, 0, "style", &[]);
@@ -368,11 +488,19 @@ fn check_sections_numbered(context: &Context<'_>) -> anyhow::Result<Vec<Assertio
       format!("section numbers read {read}, expected 1..{} contiguously", values.len()),
     )]);
   }
-  if values.len() != 6 {
+  let (required, exact) = section_count_rule(context.genre);
+  if exact && values.len() != required {
     return Ok(vec![outcome(
       SECTIONS_NUMBERED,
       false,
-      format!("plan requires exactly 6 numbered sections, found {}", values.len()),
+      format!("{} requires exactly {required} numbered sections, found {}", context.genre, values.len()),
+    )]);
+  }
+  if !exact && values.len() < required {
+    return Ok(vec![outcome(
+      SECTIONS_NUMBERED,
+      false,
+      format!("{} requires at least {required} numbered sections, found {}", context.genre, values.len()),
     )]);
   }
   Ok(vec![outcome(SECTIONS_NUMBERED, true, "")])
@@ -832,6 +960,274 @@ fn contains_any(text: &str, needles: &[&str]) -> bool {
 
 fn trim_chars<'a>(text: &'a str, characters: &str) -> &'a str {
   text.trim_matches(|character| characters.contains(character))
+}
+
+/// `_presence_check`: the page carries a `tag` with these classes.
+fn check_explain_triad(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOutcome>> {
+  if find(&context.nodes, 0, "div", &["triad"]).is_empty() {
+    Ok(vec![outcome(EXPLAIN_TRIAD, false, "no div.triad on the page")])
+  } else {
+    Ok(vec![outcome(EXPLAIN_TRIAD, true, "")])
+  }
+}
+
+/// `_check_fact_anchored`: every `span.tag.fact` label sits in a block that also carries a `span.src`.
+fn check_fact_anchored(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOutcome>> {
+  let mut failures = Vec::new();
+  for (index, fact) in find(&context.nodes, 0, "span", &["tag", "fact"]).into_iter().enumerate() {
+    let index = index + 1;
+    let mut block = context.nodes[fact].parent;
+    while let Some(current) = block {
+      if FACT_ANCESTOR_TAGS.contains(&context.nodes[current].tag.as_str()) {
+        break;
+      }
+      block = context.nodes[current].parent;
+    }
+    let heading = pyfmt::str_repr(&section_heading(&context.nodes, fact));
+    match block {
+      None => failures.push(outcome(
+        FACT_ANCHORED,
+        false,
+        format!("fact label #{index} (section {heading}) has no p/li/td/blockquote/h3 ancestor"),
+      )),
+      Some(block) => {
+        if find(&context.nodes, block, "span", &["src"]).is_empty() {
+          let tag = &context.nodes[block].tag;
+          failures.push(outcome(
+            FACT_ANCHORED,
+            false,
+            format!("fact label #{index} (section {heading}) sits in a {tag} with no span.src"),
+          ));
+        }
+      }
+    }
+  }
+  if failures.is_empty() { Ok(vec![outcome(FACT_ANCHORED, true, "")]) } else { Ok(failures) }
+}
+
+/// `_has_readable_text`: the text carries a Unicode letter or digit; punctuation alone is not a gloss.
+fn has_readable_text(text: &str) -> bool {
+  text.chars().any(pystr::is_python_alphanumeric)
+}
+
+/// `_marked_element_text`: the block's text with the target element fenced by the requirement sentinels, so the text
+/// after the chip is unambiguous.
+fn marked_element_text(nodes: &[Element], element: usize, target: usize) -> String {
+  fn walk(nodes: &[Element], element: usize, target: usize, output: &mut String) {
+    for child in &nodes[element].children {
+      match child {
+        Child::Element(child) if *child == target => {
+          output.push(REQ_START);
+          output.push_str(&element_text(nodes, *child));
+          output.push(REQ_END);
+        }
+        Child::Element(child) => walk(nodes, *child, target, output),
+        Child::Text(text) => output.push_str(text),
+      }
+    }
+  }
+  let mut output = String::new();
+  walk(nodes, element, target, &mut output);
+  output
+}
+
+/// `_check_req_chips`: each `span.req` chip carries a gloss, readable text after the chip in the sentence that holds
+/// it, before that sentence's terminator.
+fn check_req_chips(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOutcome>> {
+  let chips = find(&context.nodes, 0, "span", &["req"]);
+  if chips.is_empty() {
+    return Ok(vec![outcome(REQ_CHIPS, false, "no span.req requirement chips on the page")]);
+  }
+  let mut failures = Vec::new();
+  for (index, chip) in chips.iter().enumerate() {
+    let index = index + 1;
+    let mut block = context.nodes[*chip].parent;
+    while let Some(current) = block {
+      if REQ_BLOCK_TAGS.contains(&context.nodes[current].tag.as_str()) {
+        break;
+      }
+      block = context.nodes[current].parent;
+    }
+    let heading = pyfmt::str_repr(&section_heading(&context.nodes, *chip));
+    let chip_text = pyfmt::str_repr(&pystr::collapse_whitespace(&element_text(&context.nodes, *chip)));
+    let Some(block) = block else {
+      failures.push(outcome(
+        REQ_CHIPS,
+        false,
+        format!(
+          "requirement chip #{index} {chip_text} (section {heading}) has no p/li/td/blockquote ancestor to hold a gloss"
+        ),
+      ));
+      continue;
+    };
+    let marked = marked_element_text(&context.nodes, block, *chip);
+    let after = marked.split_once(REQ_END).map(|(_, after)| after).unwrap_or("");
+    let tail = after.split(SENTENCE_END).next().unwrap_or("");
+    if !has_readable_text(tail) {
+      failures.push(outcome(
+        REQ_CHIPS,
+        false,
+        format!("requirement chip #{index} {chip_text} (section {heading}) carries no gloss after it in its sentence"),
+      ));
+    }
+  }
+  if failures.is_empty() {
+    Ok(vec![outcome(REQ_CHIPS, true, format!("{} requirement chips carry a gloss", chips.len()))])
+  } else {
+    Ok(failures)
+  }
+}
+
+/// `_table_rows`: one text chunk per td/th cell of each row descendant.
+fn table_rows(nodes: &[Element], block: usize) -> Vec<Vec<String>> {
+  let mut rows = Vec::new();
+  for row in find(nodes, block, "tr", &[]) {
+    let cells: Vec<String> = nodes[row]
+      .children
+      .iter()
+      .filter_map(|child| match child {
+        Child::Element(child) if nodes[*child].tag == "td" || nodes[*child].tag == "th" => {
+          Some(element_text(nodes, *child))
+        }
+        _ => None,
+      })
+      .collect();
+    if !cells.is_empty() {
+      rows.push(cells);
+    }
+  }
+  rows
+}
+
+/// `_dl_rows`: one chunk list per dl entry, the dt text followed by the dd texts that belong to it.
+fn dl_rows(nodes: &[Element], block: usize) -> Vec<Vec<String>> {
+  let mut rows = Vec::new();
+  let mut chunks: Option<Vec<String>> = None;
+  for element in descendants(nodes, block) {
+    if nodes[element].tag == "dt" {
+      if let Some(finished) = chunks.take() {
+        rows.push(finished);
+      }
+      chunks = Some(vec![element_text(nodes, element)]);
+    } else if nodes[element].tag == "dd"
+      && let Some(current) = chunks.as_mut()
+    {
+      current.push(element_text(nodes, element));
+    }
+  }
+  if let Some(finished) = chunks {
+    rows.push(finished);
+  }
+  rows
+}
+
+/// `_run_row_role`: `held` or `changed` when a row names that role and carries readable text besides it.
+fn run_row_role(chunks: &[String]) -> Option<&'static str> {
+  for (role, pattern) in [("held", &*RUN_HELD_RE), ("changed", &*RUN_CHANGED_RE)] {
+    for (index, chunk) in chunks.iter().enumerate() {
+      let Ok(Some(found)) = pattern.find(chunk) else { continue };
+      let mut value = String::new();
+      value.push_str(&chunk[..found.start()]);
+      value.push_str(&chunk[found.end()..]);
+      for (other_index, other) in chunks.iter().enumerate() {
+        if other_index != index {
+          value.push(' ');
+          value.push_str(other);
+        }
+      }
+      if has_readable_text(&value) {
+        return Some(role);
+      }
+    }
+  }
+  None
+}
+
+/// `_check_run_stated`: a page that shows a decimal in a table cell states its run's changed and held-fixed factors,
+/// in another table or in a dl.
+fn check_run_stated(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOutcome>> {
+  let mut cells = find(&context.nodes, 0, "td", &[]);
+  cells.extend(find(&context.nodes, 0, "th", &[]));
+  let numeric_cells: Vec<usize> = cells
+    .into_iter()
+    .filter(|&cell| RUN_DECIMAL_RE.is_match(&element_text(&context.nodes, cell)).unwrap_or(false))
+    .collect();
+  if numeric_cells.is_empty() {
+    return Ok(vec![outcome(RUN_STATED, true, "no numeric table cell")]);
+  }
+
+  let mut numeric_tables = HashSet::new();
+  for cell in numeric_cells {
+    let mut table = context.nodes[cell].parent;
+    while let Some(current) = table {
+      if context.nodes[current].tag == "table" {
+        numeric_tables.insert(current);
+        break;
+      }
+      table = context.nodes[current].parent;
+    }
+  }
+
+  let mut observed_roles = HashSet::new();
+  for block in descendants(&context.nodes, 0) {
+    let tag = context.nodes[block].tag.as_str();
+    if tag != "table" && tag != "dl" {
+      continue;
+    }
+    if numeric_tables.contains(&block) && numeric_tables.len() == 1 {
+      continue;
+    }
+    let rows = if tag == "table" { table_rows(&context.nodes, block) } else { dl_rows(&context.nodes, block) };
+    let roles: HashSet<&str> = rows.iter().filter_map(|chunks| run_row_role(chunks)).collect();
+    if roles.contains("changed") && roles.contains("held") {
+      return Ok(vec![outcome(RUN_STATED, true, "another table or dl states the changed and held-fixed factors")]);
+    }
+    observed_roles.extend(roles);
+  }
+
+  let mut missing: Vec<&str> = Vec::new();
+  for (role, label) in [("changed", "changed-factor row"), ("held", "held-fixed-factor row")] {
+    if !observed_roles.contains(role) {
+      missing.push(label);
+    }
+  }
+  if missing.is_empty() {
+    missing.push("changed-factor row and held-fixed-factor row in the same block");
+  }
+  Ok(vec![outcome(
+    RUN_STATED,
+    false,
+    format!(
+      "a table cell holds a decimal number, but no other table or dl states the {} with a value",
+      missing.join(" and the ")
+    ),
+  )])
+}
+
+/// `_check_render_path`: pre-rendered `class="katex"` markup, or the full KaTeX script injection.
+fn check_render_path(context: &Context<'_>) -> anyhow::Result<Vec<AssertionOutcome>> {
+  let all = descendants(&context.nodes, 0);
+  if all.iter().any(|&element| context.nodes[element].classes.contains("katex")) {
+    return Ok(vec![outcome(RENDER_PATH, true, "pre-rendered class=\"katex\" markup")]);
+  }
+  let carries = |attribute: &str, hint: &str| {
+    all.iter().any(|&element| {
+      context.nodes[element].attrs.get(attribute).and_then(Option::as_deref).is_some_and(|value| value.contains(hint))
+    })
+  };
+  let has_css = carries("href", KATEX_CSS_HINT);
+  let has_katex_js = carries("src", KATEX_JS_HINT);
+  let has_auto_render = carries("src", KATEX_AUTO_RENDER_HINT);
+  if has_css && has_katex_js && has_auto_render {
+    return Ok(vec![outcome(RENDER_PATH, true, "KaTeX script injection")]);
+  }
+  Ok(vec![outcome(
+    RENDER_PATH,
+    false,
+    format!(
+      "no math render path: neither pre-rendered class=\"katex\" markup nor the KaTeX script injection ({KATEX_CSS_HINT} link + {KATEX_JS_HINT} + {KATEX_AUTO_RENDER_HINT})"
+    ),
+  )])
 }
 
 #[cfg(test)]

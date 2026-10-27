@@ -12,17 +12,18 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use charliebot_agents::agent_environment::AgentBaseEnvironment;
-use charliebot_agents::backends::anthropic_compatible::{self, factory::AnthropicCompatibleFactory};
-use charliebot_agents::backends::antigravity::factory::AntigravityFactory;
-use charliebot_agents::backends::charlie_code::factory::CharlieCodeFactory;
-use charliebot_agents::backends::gemini::factory::GeminiFactory;
 use charliebot_agents::cli_base::CliHost;
 use charliebot_agents::launch_loop::ChildEnvPolicy;
 use charliebot_agents::runner::{AgentRunner, RunRequest};
 use charliebot_agents::transport::cgroup::SessionCgroupConfig;
+use charliebot_anthropic_compatible as anthropic_compatible;
+use charliebot_anthropic_compatible::factory::AnthropicCompatibleFactory;
+use charliebot_antigravity::factory::AntigravityFactory;
+use charliebot_charlie_code::factory::CharlieCodeFactory;
 use charliebot_core::config::{
   BackendOption, BackendsConfig, CharlieBotConfig, PathsConfig, Sections, ServerConfig, TelegramConfig, UiConfig,
 };
+use charliebot_gemini::factory::GeminiFactory;
 use charliebot_registry::Registry;
 use charliebot_registry::backend::{AgentBackend, BackendFactory, Env, LaunchArgs};
 use charliebot_registry::usage::UsageSource;

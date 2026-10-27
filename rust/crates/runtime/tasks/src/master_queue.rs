@@ -820,12 +820,12 @@ mod tests {
   use std::path::{Path, PathBuf};
   use std::time::Duration;
 
-  use charliebot_agents::backends::claude_code::EXCLUDE_DYNAMIC_SECTIONS_FLAG;
-  use charliebot_agents::backends::claude_code::claude_compaction;
-  use charliebot_agents::backends::claude_code::claude_idle_compaction;
-  use charliebot_agents::backends::claude_code::claude_lifecycle::ClaudeCodeLifecycle;
-  use charliebot_agents::backends::claude_code::claude_metadata;
-  use charliebot_agents::backends::claude_code::login_dirs;
+  use charliebot_claude_code::EXCLUDE_DYNAMIC_SECTIONS_FLAG;
+  use charliebot_claude_code::claude_compaction;
+  use charliebot_claude_code::claude_idle_compaction;
+  use charliebot_claude_code::claude_lifecycle::ClaudeCodeLifecycle;
+  use charliebot_claude_code::claude_metadata;
+  use charliebot_claude_code::login_dirs;
   use charliebot_core::config::BackendOption;
   use charliebot_core::credentials::load_credentials;
   use charliebot_core::hot_reload::HotReload;

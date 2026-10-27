@@ -107,8 +107,8 @@ fn stop_sequence(reason: StopReason) -> Vec<StopAction> {
 
 fn main() -> ExitCode {
   let args: Vec<_> = std::env::args_os().skip(1).collect();
-  if args.first().is_some_and(|arg| arg == charliebot_agents::backends::opencode::relay::RELAY_ARG) {
-    return match charliebot_agents::backends::opencode::relay::run_args(&args[1..]) {
+  if args.first().is_some_and(|arg| arg == charliebot_opencode::relay::RELAY_ARG) {
+    return match charliebot_opencode::relay::run_args(&args[1..]) {
       Ok(()) => ExitCode::SUCCESS,
       Err(error) => {
         eprintln!("OpenCode relay: {error:#}");

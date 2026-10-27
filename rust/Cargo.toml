@@ -1,6 +1,14 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/backends/anthropic_compatible",
+    "crates/backends/antigravity",
+    "crates/backends/charlie_code",
+    "crates/backends/claude_code",
+    "crates/backends/codex",
+    "crates/backends/gemini",
+    "crates/backends/openai_compatible",
+    "crates/backends/opencode",
     "crates/runtime/agents",
     "crates/infra/core",
     "crates/infra/compat",
@@ -128,11 +136,16 @@ which = "8"
 
 charliebot-artifacts = { path = "crates/features/artifacts" }
 charliebot-agents = { path = "crates/runtime/agents" }
+charliebot-anthropic-compatible = { path = "crates/backends/anthropic_compatible" }
+charliebot-antigravity = { path = "crates/backends/antigravity" }
 charliebot-backup = { path = "crates/features/backup" }
 charliebot-chat-threads = { path = "crates/features/chat_threads" }
+charliebot-charlie-code = { path = "crates/backends/charlie_code" }
+charliebot-claude-code = { path = "crates/backends/claude_code" }
 charliebot-cli = { path = "crates/app/cli" }
 charliebot-cli-common = { path = "crates/infra/cli-common" }
 charliebot-code-server = { path = "crates/features/code_server" }
+charliebot-codex = { path = "crates/backends/codex" }
 charliebot-cron = { path = "crates/features/cron" }
 charliebot-compat = { path = "crates/infra/compat" }
 charliebot-core = { path = "crates/infra/core" }
@@ -142,10 +155,13 @@ charliebot-diff-view = { path = "crates/features/diff_view" }
 charliebot-discord = { path = "crates/features/discord" }
 charliebot-explain = { path = "crates/features/explain" }
 charliebot-files = { path = "crates/features/files" }
+charliebot-gemini = { path = "crates/backends/gemini" }
 charliebot-improve = { path = "crates/features/improve" }
 charliebot-host-auth = { path = "crates/features/host_auth" }
 charliebot-memory = { path = "crates/features/memory" }
 charliebot-ncu = { path = "crates/features/ncu" }
+charliebot-openai-compatible = { path = "crates/backends/openai_compatible" }
+charliebot-opencode = { path = "crates/backends/opencode" }
 charliebot-packages = { path = "crates/app/packages" }
 charliebot-pyhtml = { path = "crates/infra/pyhtml" }
 charliebot-registry = { path = "crates/runtime/registry" }

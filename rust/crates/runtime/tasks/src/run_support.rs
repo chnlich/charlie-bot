@@ -8,9 +8,10 @@ use std::sync::Arc;
 
 use anyhow::{Context, anyhow};
 use charliebot_agents::runner::EventFn;
+use charliebot_agents::transport::follow::SilenceCallback;
 use charliebot_core::config::{BackendOption, CharlieBotConfig};
 use charliebot_core::fsutil;
-use charliebot_registry::backend::ResumeStyle;
+use charliebot_registry::backend::{RecoverySilence, ResumeStyle};
 use charliebot_registry::context::FeatureContext;
 use memmap2::Mmap;
 use serde_json::{Map, Value};
@@ -215,6 +216,15 @@ pub(crate) fn route_resume_session_style(
     ResumeStyle::CliFlag => Ok((vec!["--resume".to_string(), cc_session_id.to_string()], None)),
     ResumeStyle::NativeId => Ok((Vec::new(), Some(cc_session_id.to_string()))),
   }
+}
+
+/// The follow's silence callback for a recovered serve turn, from the deadline the serve transport reported.
+pub(crate) fn silence_callback(silence: RecoverySilence) -> SilenceCallback {
+  let message = silence.message;
+  Box::new(move || {
+    let message = message.clone();
+    Box::pin(async move { Err(std::io::Error::new(std::io::ErrorKind::TimedOut, message)) })
+  })
 }
 
 /// The `extra_flags` a lifecycle put into a launch's backend arguments; empty when it put none.

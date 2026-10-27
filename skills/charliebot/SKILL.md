@@ -157,13 +157,13 @@ Some proxied backends (e.g. an opencode GLM endpoint) cap generation far below t
 
 ## Claude Code Backend Context Window
 
-The declared window is 433000 (compaction point 400000) for every run kind. The working knob is `CLAUDE_CODE_AUTO_COMPACT_WINDOW` (100k–1M, lowers only: it takes `Math.min(model window, set value)`), and a host export of it beats the per-kind value; `CLAUDE_CODE_MAX_CONTEXT_TOKENS` is a no-op for `claude-*` models in Claude Code 2.1.219. Compaction triggers at window − min(max_output, 20k) − 13k, with an early warmup at 0.8×; overrun compacts silently rather than erroring. charlie-bot side: `headless_claude_env(run_kind)` in `rust/crates/runtime/agents/src/backends/claude_code/claude_launch.rs`, whose per-kind table the session page's compaction line reads too.
+The declared window is 433000 (compaction point 400000) for every run kind. The working knob is `CLAUDE_CODE_AUTO_COMPACT_WINDOW` (100k–1M, lowers only: it takes `Math.min(model window, set value)`), and a host export of it beats the per-kind value; `CLAUDE_CODE_MAX_CONTEXT_TOKENS` is a no-op for `claude-*` models in Claude Code 2.1.219. Compaction triggers at window − min(max_output, 20k) − 13k, with an early warmup at 0.8×; overrun compacts silently rather than erroring. charlie-bot side: `headless_claude_env(run_kind)` in `rust/crates/backends/claude_code/src/claude_launch.rs`, whose per-kind table the session page's compaction line reads too.
 
 ---
 
 ## Claude Account Pool
 
-One Claude login carries a five-hour and a weekly window, so a long master turn or a delegated worker that crosses the line stops mid-work. The account pool keeps that work running on another login of the same subscription tier (`rust/crates/runtime/agents/src/backends/claude_code/claude_accounts.rs` owns account state and selection; `rust/crates/runtime/agents/src/backends/claude_code/claude_relay.rs` owns the relay mechanics both the master turn and workers use).
+One Claude login carries a five-hour and a weekly window, so a long master turn or a delegated worker that crosses the line stops mid-work. The account pool keeps that work running on another login of the same subscription tier (`rust/crates/backends/claude_code/src/claude_accounts.rs` owns account state and selection; `rust/crates/backends/claude_code/src/claude_relay.rs` owns the relay mechanics both the master turn and workers use).
 
 - **Config**: `accounts.claude:` in `$CHARLIEBOT_HOME/config.yaml` lists `label` + `config_dir` pairs, each directory one `CLAUDE_CONFIG_DIR` login. `accounts.claude_pools:` maps each pool name to the account labels it holds. Each `cc-claude` entry names its pool in `account_pool` when pools are defined; selection and relay stay inside that pool. One entry per model and pool.
 - The server reloads changed account-pool config at the next usage poll.
@@ -173,7 +173,7 @@ One Claude login carries a five-hour and a weekly window, so a long master turn 
 - **Headless calls**: pass the expanded command body and its arguments to `claude -p`; a bare `/command` can reach the model literally.
 - `claude -p --resume <session-id> --output-format json` reports session-cumulative `modelUsage`.
 - Subtract the latest pre-run `cost-state` row to isolate that resumed run's models.
-- **Sonnet compaction** (`rust/crates/runtime/agents/src/backends/claude_code/claude_compaction.rs`) runs only when the cache is already cold: before a relay (Fable, 100K tokens or more) and at turn start after more than 60 minutes idle (Fable, 50K or more), never at turn end. It runs `claude -p --resume <uuid> --model claude-sonnet-5` with `/compact`; success means a new `compact_boundary` row in the transcript and a Sonnet-only `modelUsage`. Chat shows "Context compacted (manual, by Sonnet)".
+- **Sonnet compaction** (`rust/crates/backends/claude_code/src/claude_compaction.rs`) runs only when the cache is already cold: before a relay (Fable, 100K tokens or more) and at turn start after more than 60 minutes idle (Fable, 50K or more), never at turn end. It runs `claude -p --resume <uuid> --model claude-sonnet-5` with `/compact`; success means a new `compact_boundary` row in the transcript and a Sonnet-only `modelUsage`. Chat shows "Context compacted (manual, by Sonnet)".
 - **Login loss**: the usage panel row shows `re-login needed: <config_dir>` while the account is unhealthy or its credential file is empty; chat gets one account-free notice. Re-login on the host with `CLAUDE_CONFIG_DIR=<config_dir> claude login`.
 - **Where the account shows**: session metadata `claude_account` only (not in backend options, chat, or the panel badge); server log events `master_cc_account_chosen`, `master_cc_account_relay`, `worker_account_relay`, `claude_account_login_required`; `master_done.account_relays` counts a turn's relays.
 

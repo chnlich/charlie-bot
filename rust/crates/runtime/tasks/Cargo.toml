@@ -35,7 +35,13 @@ tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+charliebot-anthropic-compatible.workspace = true
+charliebot-antigravity.workspace = true
+charliebot-charlie-code.workspace = true
+charliebot-claude-code.workspace = true
+charliebot-codex.workspace = true
 charliebot-core = { workspace = true, features = ["test-support"] }
+charliebot-gemini.workspace = true
 charliebot-store = { workspace = true, features = ["write-faults"] }
 charliebot-tasks = { path = ".", features = ["test-hooks"] }
 charliebot-web-reply.workspace = true

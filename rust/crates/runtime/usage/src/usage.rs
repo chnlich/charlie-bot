@@ -518,9 +518,10 @@ mod tests {
   use std::path::Path;
   use std::sync::OnceLock;
 
-  use charliebot_agents::backends::anthropic_compatible;
-  use charliebot_agents::backends::claude_code;
-  use charliebot_agents::backends::codex::{self, CodexHost};
+  use charliebot_anthropic_compatible as anthropic_compatible;
+  use charliebot_claude_code as claude_code;
+  use charliebot_codex as codex;
+  use charliebot_codex::CodexHost;
   use charliebot_core::hot_reload::HotReload;
   use charliebot_registry::backend::Env;
   use charliebot_registry::{RegisterFn, store_hooks};

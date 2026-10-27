@@ -7,11 +7,13 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use charliebot_agents::backends::claude_code::{self, ClaudeHost};
-use charliebot_agents::backends::codex::{self, CodexHost};
-use charliebot_agents::backends::opencode;
+use charliebot_claude_code as claude_code;
+use charliebot_claude_code::ClaudeHost;
+use charliebot_codex as codex;
+use charliebot_codex::CodexHost;
 use charliebot_core::home;
 use charliebot_core::paths::realpath;
+use charliebot_opencode as opencode;
 use charliebot_registry::Registry;
 use charliebot_store::metadata::UtcDateTime;
 use charliebot_usage_page::cool_storage::{format_sweep_line, run_cool_sweep};
@@ -411,7 +413,7 @@ fn hex(value: &[u8]) -> String {
 }
 
 fn hostname() -> String {
-  let mut name = [0_i8; 256];
+  let mut name = [0 as libc::c_char; 256];
   let result = unsafe { libc::gethostname(name.as_mut_ptr(), name.len()) };
   assert_eq!(result, 0, "gethostname");
   unsafe { CStr::from_ptr(name.as_ptr()) }.to_string_lossy().into_owned()

@@ -16,6 +16,7 @@ bytes.workspace = true
 charliebot-compat.workspace = true
 charliebot-agents = { path = "../../runtime/agents" }
 charliebot-core.workspace = true
+charliebot-opencode.workspace = true
 charliebot-packages.workspace = true
 charliebot-registry.workspace = true
 charliebot-store.workspace = true

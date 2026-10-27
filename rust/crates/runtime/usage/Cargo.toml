@@ -15,5 +15,8 @@ serde_json.workspace = true
 
 [dev-dependencies]
 charliebot-agents.workspace = true
+charliebot-anthropic-compatible.workspace = true
+charliebot-claude-code.workspace = true
+charliebot-codex.workspace = true
 tempfile.workspace = true
 tokio.workspace = true

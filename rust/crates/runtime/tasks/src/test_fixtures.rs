@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use charliebot_agents::agent_environment::AgentBaseEnvironment;
-use charliebot_agents::backends::claude_code::login_dirs;
+use charliebot_claude_code::login_dirs;
 use charliebot_core::credentials::load_credentials;
 use charliebot_core::hot_reload::HotReload;
 use charliebot_registry::backend::Env;
@@ -40,7 +40,7 @@ pub fn claude_features(home: &Path, config_body: &str) -> Arc<FeatureContext> {
   std::fs::create_dir_all(home).unwrap();
   std::fs::write(home.join("config.yaml"), config_body).unwrap();
   let mut registry = Registry::new();
-  registry.register_package("src.backends.claude_code", charliebot_agents::backends::claude_code::register).unwrap();
+  registry.register_package("src.backends.claude_code", charliebot_claude_code::register).unwrap();
   let registry = Arc::new(registry);
   let config = registry.load_config(home).unwrap();
   let store_config = config.clone();

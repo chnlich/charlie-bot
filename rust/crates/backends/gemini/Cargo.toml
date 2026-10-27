@@ -1,0 +1,16 @@
+[package]
+name = "charliebot-gemini"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+charliebot-agents.workspace = true
+charliebot-core.workspace = true
+charliebot-registry.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+tempfile.workspace = true
+tracing.workspace = true

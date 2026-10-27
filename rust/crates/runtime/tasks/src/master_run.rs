@@ -894,9 +894,20 @@ pub(crate) async fn resume_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkIte
   let callbacks = item.callbacks.clone();
   let cfg = Arc::clone(&item.cfg);
   let session_id = metadata.id.clone();
-  let buffer_limit = subprocess_buffer_bytes(&cfg)?;
+  let buffer_limit =
+    charliebot_agents::transport::final_stdout::event_buffer_limit(&log_dir, subprocess_buffer_bytes(&cfg)?);
   let resume_meta = metadata.clone();
   let resume_run_id = item.task_run.run_id.clone();
+  charliebot_agents::transport::final_stdout::recover(
+    Arc::clone(&features.registry),
+    option.as_ref(),
+    &cfg,
+    &log_dir,
+    || is_alive(),
+    || *item.cancel.borrow(),
+    follow::TAIL_POLL_INTERVAL,
+  )
+  .await?;
   let translate = build_fresh_translate(&features, &cfg, option.as_ref(), &resume_meta, &resume_run_id)?;
   let translate_stream = translate;
   let cursor_read = cursor::read_raw_cursor(&cursor_path);
@@ -958,6 +969,11 @@ pub(crate) async fn resume_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkIte
   .await;
   if let Err(error) = follow_result {
     error_msg = Some(error.to_string());
+  }
+  if let Some(outcome) = charliebot_agents::transport::final_stdout::read_outcome(&log_dir)?
+    && let Some(error) = outcome.guard_error
+  {
+    error_msg = Some(error);
   }
   let cancelled = *item.cancel.borrow();
   let restart_reattach = option

@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::ffi::{CString, OsStr, OsString};
 use std::fs::{self, OpenOptions};
 use std::future::Future;
-use std::io;
+use std::io::{self, Read, Seek};
 use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::OpenOptionsExt;
@@ -38,6 +38,18 @@ const TURN_TREE_NICE: i32 = 10;
 const PUMP_CHUNK_BYTES: usize = 8192;
 const LOG_FLUSH_BYTES: usize = 64 * 1024;
 pub const STDERR_TAIL_BYTES: usize = 64 * 1024;
+
+/// Read the trimmed final 64 KiB of a process's stderr file.
+pub fn read_stderr_tail(path: &Path) -> anyhow::Result<String> {
+  use anyhow::Context;
+  let mut file = fs::File::open(path).with_context(|| format!("opening stderr log {}", path.display()))?;
+  let length = file.metadata()?.len();
+  let start = length.saturating_sub(STDERR_TAIL_BYTES as u64);
+  file.seek(io::SeekFrom::Start(start))?;
+  let mut bytes = Vec::with_capacity((length - start) as usize);
+  file.read_to_end(&mut bytes)?;
+  Ok(String::from_utf8_lossy(&bytes).trim().to_string())
+}
 
 /// Required process inputs for each transport spawn.
 #[derive(Clone, Debug)]

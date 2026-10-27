@@ -16,6 +16,7 @@ futures-util.workspace = true
 ignore.workspace = true
 minijinja.workspace = true
 serde_json.workspace = true
+serde.workspace = true
 serde_yaml.workspace = true
 sha1.workspace = true
 tokio.workspace = true

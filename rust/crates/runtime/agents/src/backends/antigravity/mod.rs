@@ -31,7 +31,7 @@ pub fn register_with_host(registry: &mut Registry, host: CliHost) -> Result<(), 
     type_name: "antigravity",
     traits: BackendTraits {
       resume: ResumeStyle::NativeId,
-      restart_reattach: false,
+      restart_reattach: true,
       preassigned_session_id: false,
       family_prefix: None,
       manual_compact: false,

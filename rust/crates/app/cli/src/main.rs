@@ -38,6 +38,16 @@ fn main() {
   let program = argv.next().map(|argv0| program_name(&argv0)).unwrap_or_else(|| "charliebot".to_string());
   let args: Vec<OsString> = argv.collect();
 
+  if args.first().is_some_and(|arg| arg == charliebot_agents::transport::final_stdout::SUPERVISOR_ARG) {
+    match charliebot_agents::transport::final_stdout::supervise(&args[1..]) {
+      Ok(()) => exit(0),
+      Err(error) => {
+        eprintln!("final-stdout supervisor: {error:#}");
+        exit(1);
+      }
+    }
+  }
+
   if args.is_empty() || args[0] == "-h" || args[0] == "--help" {
     print_help(&program);
     exit(0);

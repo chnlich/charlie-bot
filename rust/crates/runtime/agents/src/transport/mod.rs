@@ -2,6 +2,7 @@
 
 pub mod cgroup;
 pub mod cursor;
+pub mod final_stdout;
 pub mod follow;
 pub mod identity;
 pub mod kill;

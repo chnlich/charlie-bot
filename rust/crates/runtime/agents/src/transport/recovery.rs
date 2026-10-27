@@ -108,6 +108,12 @@ where
 
 /// Return the raw log's final modification time in UTC.
 pub fn raw_completion_time(raw_path: &Path) -> Option<OffsetDateTime> {
+  let completion_path = super::final_stdout::completion_path(raw_path.parent()?);
+  let raw_path = if raw_path.file_name()? == charliebot_store::run_records::RAW_LOG_NAME {
+    completion_path.as_path()
+  } else {
+    raw_path
+  };
   let modified = fs::metadata(raw_path).ok()?.modified().ok()?;
   Some(OffsetDateTime::from(modified))
 }
@@ -132,7 +138,11 @@ where
 {
   let events = if raw_path.is_file() { project_raw_file(raw_path, translate, None)? } else { Vec::new() };
   let result = events.iter().rev().find(|event| event.get("type").and_then(Value::as_str) == Some("result")).cloned();
-  let exit_code = result_exit_code(&events);
+  let exit_code = match super::final_stdout::read_outcome(raw_path.parent().expect("raw log has a parent"))? {
+    Some(outcome) if outcome.guard_error.is_none() => outcome.exit_code,
+    Some(_) => -1,
+    None => result_exit_code(&events),
+  };
   Ok((events, result, exit_code))
 }
 

@@ -106,6 +106,16 @@ fn stop_sequence(reason: StopReason) -> Vec<StopAction> {
 }
 
 fn main() -> ExitCode {
+  let args: Vec<_> = std::env::args_os().skip(1).collect();
+  if args.first().is_some_and(|arg| arg == charliebot_agents::transport::final_stdout::SUPERVISOR_ARG) {
+    return match charliebot_agents::transport::final_stdout::supervise(&args[1..]) {
+      Ok(()) => ExitCode::SUCCESS,
+      Err(error) => {
+        eprintln!("final-stdout supervisor: {error:#}");
+        ExitCode::FAILURE
+      }
+    };
+  }
   let mut arguments = std::env::args_os().skip(1);
   match (arguments.next(), arguments.next()) {
     (None, None) => run_server(),

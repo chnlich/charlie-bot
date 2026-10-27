@@ -69,6 +69,7 @@ where
   }
 
   let mut file = tokio::fs::File::open(raw_path).await?;
+  let clamp_timestamps = !super::final_stdout::is_capture(raw_path.parent().expect("raw log has a parent"));
   file.seek(std::io::SeekFrom::Start(start_offset)).await?;
   let mut read_to = start_offset;
   let mut offset = start_offset;
@@ -126,7 +127,9 @@ where
               let event_mtime = event_file_metadata(&file)?.modified().ok();
               for mut translated in translate(event)? {
                 track_pending_tool_calls(&translated, &mut pending_tool_calls);
-                clamp_event_timestamp(&mut translated, event_mtime);
+                if clamp_timestamps {
+                  clamp_event_timestamp(&mut translated, event_mtime);
+                }
                 let is_result = translated.get("type").and_then(Value::as_str) == Some("result");
                 // A delivered input starts a same-process second turn: its result re-arms the post-result clock
                 // (`base.py` resets `saw_result` on every INPUT_DELIVERED event).

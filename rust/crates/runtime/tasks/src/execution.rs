@@ -2097,8 +2097,17 @@ impl TaskExecutionAdapter {
         Ok(())
       })
     }));
-    let exit_code = worker.resume(is_alive, None).await?;
-    let durable = self.finalize_worker_run(meta, run, option, exit_code, "", ended_at).await?;
+    let (exit_code, error_text) = match worker.resume(is_alive, None).await {
+      Ok(code) => (code, String::new()),
+      Err(error) => {
+        if error.downcast_ref::<charliebot_agents::transport::final_stdout::GuardError>().is_none() {
+          return Err(error);
+        }
+        tracing::error!(target: "charliebot_tasks", session_id, run_id, error = %error, "task_run_resume_failed");
+        (-1, error.to_string())
+      }
+    };
+    let durable = self.finalize_worker_run(meta, run, option, exit_code, &error_text, ended_at).await?;
     let fresh = self
       .features
       .store

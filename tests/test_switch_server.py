@@ -550,6 +550,48 @@ def test_home_helper_no_reattach_matches_registered_traits() -> None:
       backend_type for backend_type, registration in backend_type_registration.registrations().items()
       if not registration.traits.restart_reattach
   }
+  rust_declaration = re.search(r"^RUST_NO_REATTACH = (.+)$", SWITCH.read_text(encoding="utf-8"), re.MULTILINE)
+  assert rust_declaration is not None
+  rust_types = set()
+  for path in (ROOT / "rust/crates/runtime/agents/src/backends").glob("*/mod.rs"):
+    text = path.read_text(encoding="utf-8")
+    if re.search(r"restart_reattach:\s*false", text):
+      rust_types.add(re.search(r'type_name:\s*"([^"]+)"', text)[1])
+  assert ast.literal_eval(rust_declaration[1]) == rust_types
+
+
+@pytest.mark.parametrize("source,target", [("rust release", "rust"), ("rust release", "python"), ("python", "rust")])
+@pytest.mark.parametrize("backend", ["agy-gemini-flash", "oc-deepseek-flash"])
+def test_live_backend_switch_directions(world: World, source: str, target: str, backend: str) -> None:
+  _seed_live_run(world, "run-direction", backend)
+  proc = subprocess.run(
+      [
+          "bash", "-c", '''source "$1" "$2" ${3:+"$3"}
+OLD_SOURCE="$4"
+RUNS_FILE="$5"
+listener_impl() { echo "$OLD_SOURCE"; }
+listener_pids() { echo 999999; }
+impl_of_pid() { echo "$OLD_SOURCE"; }
+pane_of_pid() { echo '%1'; }
+tm() { echo 999999; }
+preflight
+''', "bash",
+          str(world.clone / "scripts/switch-server.sh"), target, RUST_SHA if target == "rust" else "", source,
+          str(world.root / "direction.runs")
+      ],
+      env=world.env,
+      capture_output=True,
+      text=True,
+      timeout=5,
+      check=False)
+  allowed = source.startswith("rust ") and target == "rust" and backend.startswith("agy-")
+  assert proc.returncode == (0 if allowed else 1), _report(world, proc)
+  if target == "python":
+    assert "usage: switch-server.sh rust" in proc.stderr
+  elif not allowed:
+    assert backend in proc.stdout
+    assert "run-direction" in proc.stdout
+  assert all(live.poll() is None for live in world.live)
 
 
 @pytest.mark.parametrize(

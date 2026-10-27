@@ -1,0 +1,41 @@
+{
+  "python_test": "test_improve_stop_cli_posts_to_stop_endpoint_and_prints_stopped",
+  "argv": [
+    "improve-stop",
+    "--session",
+    "s1"
+  ],
+  "cwd": "{root}",
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n"
+  },
+  "responses": [
+    {
+      "status": 200,
+      "body": {
+        "status": "stopped",
+        "session_id": "s1"
+      }
+    }
+  ],
+  "expect": {
+    "stdout": "stopped\n",
+    "stderr": "",
+    "exit": 0,
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/api/internal/improve/stop",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "session_id": "s1"
+        }
+      }
+    ]
+  }
+}

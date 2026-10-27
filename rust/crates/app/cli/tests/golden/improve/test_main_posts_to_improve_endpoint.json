@@ -1,0 +1,60 @@
+{
+  "python_test": "test_main_posts_to_improve_endpoint",
+  "argv": [
+    "improve",
+    "--session",
+    "s1",
+    "--repo",
+    "{root}",
+    "--base-branch",
+    "main",
+    "--goal-file",
+    "{root}/goal.md",
+    "--backend",
+    "codex-o3",
+    "--iterations",
+    "2"
+  ],
+  "cwd": "{root}",
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n",
+    "goal.md": "optimize"
+  },
+  "responses": [
+    {
+      "status": 200,
+      "body": {
+        "status": "started",
+        "session_id": "s1",
+        "iterations": 2
+      }
+    }
+  ],
+  "expect": {
+    "stdout": "{\n  \"status\": \"started\",\n  \"session_id\": \"s1\",\n  \"iterations\": 2\n}\n",
+    "stderr": "",
+    "exit": 0,
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/api/internal/improve",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "session_id": "s1",
+          "repo_path": "{root}",
+          "base_branch": "main",
+          "backend": "codex-o3",
+          "iterations": 2,
+          "goal": "optimize",
+          "work_branch": null,
+          "merge_back": false
+        }
+      }
+    ]
+  }
+}

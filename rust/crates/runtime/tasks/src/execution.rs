@@ -2150,7 +2150,7 @@ impl TaskExecutionAdapter {
           // The finish recorder claims only the echoed pending ids, so a queued message the live Run never took
           // stays pending for the next turn.
           crate::midturn_delivery::claim_finish_inputs(
-            &dispatch,
+            dispatch.as_ref(),
             &meta,
             &run_id,
             raw_log.parent().context("the run's raw log has no transport directory")?,
@@ -2978,7 +2978,7 @@ mod tests {
 
     let inputs = features.startup.require::<RunningTurnInputs>().expect("the startup step inserts the inputs");
     let session_id = "synthetic-session";
-    let reader = crate::master_state::running_user_event_ids(&features, session_id).expect("the queue is in startup");
+    let reader = crate::master_queue::running_user_event_ids(&features, session_id).expect("the queue is in startup");
     assert_eq!(inputs.user_event_ids(session_id), reader);
     assert!(reader.is_empty(), "no turn runs in an idle queue");
   }
@@ -3083,7 +3083,7 @@ mod tests {
     // append reaches a web reply posted while the turn runs.
     let mut acked = vec!["input-first".to_string(), "input-second".to_string()];
     crate::midturn_delivery::record_ack(
-      &queue,
+      queue.as_ref(),
       session_id,
       &mut acked,
       "synthetic-run",

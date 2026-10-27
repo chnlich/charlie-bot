@@ -22,8 +22,7 @@ use charliebot_store::run_records::{CURSOR_NAME, RAW_LOG_NAME, RunKind, STDERR_L
 use futures_util::future::BoxFuture;
 use serde_json::{Map, Value, json};
 
-use crate::master_queue::SessionCallbacks;
-use crate::master_state::WorkItem;
+use crate::master_state::{ContextStateFn, RunTracking, SessionCallbacks, WorkItem};
 use crate::run_support::{
   extra_flags_of, read_stderr_tail, route_resume_session, stream_event_channel, subprocess_buffer_bytes,
 };
@@ -356,7 +355,7 @@ fn resolve_turn_option(item: &WorkItem) -> Option<BackendOption> {
 }
 
 fn turn_launch_context(
-  queue: Arc<crate::master_queue::MasterQueue>,
+  tracking: Arc<dyn RunTracking>,
   item: &WorkItem,
   option: BackendOption,
   cwd: PathBuf,
@@ -367,7 +366,7 @@ fn turn_launch_context(
   let session_id = item.session_metadata().id;
   let running_session_id = session_id.clone();
   let shared_metadata = Arc::clone(&item.session_meta);
-  let running_queue = Arc::clone(&queue);
+  let running_tracking = Arc::clone(&tracking);
   let record_account = Arc::new(move |label: String| {
     let callbacks = callbacks.clone();
     let session_id = session_id.clone();
@@ -404,13 +403,13 @@ fn turn_launch_context(
     }),
     record_account,
     context_state,
-    running_turns: Some(Arc::new(move || running_queue.running_turns_except(&running_session_id))),
+    running_turns: Some(Arc::new(move || running_tracking.running_turns_except(&running_session_id))),
     run_id: Some(item.task_run.run_id.clone()),
   })
 }
 
 fn turn_context_state(
-  read: Option<crate::master_queue::ContextStateFn>,
+  read: Option<ContextStateFn>,
   session_id: String,
   session_meta: Arc<Mutex<SessionMetadata>>,
 ) -> TurnContextStateFn {
@@ -429,7 +428,7 @@ fn turn_context_state(
 }
 
 struct TurnProcess<'a> {
-  queue: &'a crate::master_queue::MasterQueue,
+  tracking: Arc<dyn RunTracking>,
   item: &'a mut WorkItem,
   features: Arc<FeatureContext>,
   option: BackendOption,
@@ -557,7 +556,7 @@ impl RunProcess for TurnProcess<'_> {
           })
         })
       });
-      self.queue.set_active_runner(&session_id, Arc::clone(&runner));
+      self.tracking.set_active_runner(&session_id, Arc::clone(&runner));
       let run_future = runner.run(request);
       tokio::pin!(run_future);
       let mut watch = watch;
@@ -568,7 +567,7 @@ impl RunProcess for TurnProcess<'_> {
               Ok(outcome) => break outcome,
               Err(error) => {
                 let _ = runner.terminate().await;
-                self.queue.clear_active_runner(&session_id);
+                self.tracking.clear_active_runner(&session_id);
                 return Err(error);
               }
             }
@@ -579,9 +578,9 @@ impl RunProcess for TurnProcess<'_> {
               if stream_event.event.get("type").and_then(Value::as_str) == Some(event_types::ERROR) {
                 self.error_event_messages.push(stream_event.event.get("message").and_then(Value::as_str).unwrap_or_default().to_string());
               }
-              let queue = self.queue;
+              let tracking = Arc::clone(&self.tracking);
               crate::midturn_delivery::record_ack(
-                queue,
+                tracking.as_ref(),
                 &session_id,
                 &mut self.item.user_event_ids,
                 &self.item.task_run.run_id,
@@ -611,7 +610,7 @@ impl RunProcess for TurnProcess<'_> {
             let _ = stream_event.acknowledged.send(ack_result);
             if let Err(error) = result {
               runner.terminate().await?;
-              self.queue.clear_active_runner(&session_id);
+              self.tracking.clear_active_runner(&session_id);
               return Err(error);
             }
           }
@@ -630,14 +629,14 @@ impl RunProcess for TurnProcess<'_> {
               } else {
                 runner.terminate().await?;
               }
-              self.queue.clear_active_runner(&session_id);
+              self.tracking.clear_active_runner(&session_id);
               *self.cancelled.lock().expect("cancel state mutex is not poisoned") = Some(covered);
               return Err(TurnCancelled.into());
             }
           }
         }
       };
-      self.queue.clear_active_runner(&session_id);
+      self.tracking.clear_active_runner(&session_id);
       if let Some(covered) = *self.cancelled.lock().expect("cancel state mutex is not poisoned") {
         let _ = covered;
         return Err(TurnCancelled.into());
@@ -723,10 +722,7 @@ async fn emit_round_notices(
   Ok(())
 }
 
-pub(crate) async fn run_cc(
-  queue: Arc<crate::master_queue::MasterQueue>,
-  item: &mut WorkItem,
-) -> anyhow::Result<MasterRunOutcome> {
+pub(crate) async fn run_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkItem) -> anyhow::Result<MasterRunOutcome> {
   let metadata = item.session_metadata();
   tokio::fs::create_dir_all(item.cfg.sessions_dir().join(&metadata.id)).await?;
   let option = match resolve_turn_option(item) {
@@ -765,7 +761,7 @@ pub(crate) async fn run_cc(
   let metadata = item.session_metadata();
   let held_native_id = (!fresh_native).then(|| metadata.cc_session_id.clone()).flatten();
   let cwd = item.cfg.sessions_dir().join(&metadata.id);
-  let context = turn_launch_context(Arc::clone(&queue), item, option.clone(), cwd.clone(), held_native_id.clone())?;
+  let context = turn_launch_context(Arc::clone(&tracking), item, option.clone(), cwd.clone(), held_native_id.clone())?;
   let env = build_master_env(item);
   let tracker = Arc::new(Mutex::new(RunTimingTracker::new(&metadata.id, &option.backend_type, Some(&option.model))));
   let log_dir = item.task_run.transport_dir.clone();
@@ -775,7 +771,7 @@ pub(crate) async fn run_cc(
   let relay_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
   let session_id = metadata.id.clone();
   let mut process = TurnProcess {
-    queue: &queue,
+    tracking: Arc::clone(&tracking),
     item,
     features: Arc::clone(&features),
     option: option.clone(),
@@ -878,7 +874,7 @@ pub(crate) fn build_fresh_translate(
   crate::midturn_delivery::fresh_translate(features, cfg, option, meta, run_id)
 }
 
-pub(crate) async fn resume_cc(item: &mut WorkItem) -> anyhow::Result<MasterRunOutcome> {
+pub(crate) async fn resume_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkItem) -> anyhow::Result<MasterRunOutcome> {
   let metadata = item.session_metadata();
   let record = item.resume_record.as_ref().context("resume item has no recorded run")?.clone();
   let is_alive = item.resume_is_alive.clone().context("resume item has no liveness probe")?;
@@ -908,7 +904,6 @@ pub(crate) async fn resume_cc(item: &mut WorkItem) -> anyhow::Result<MasterRunOu
   // The resume follow's acknowledgements join the item's web-reply binding like a fresh turn's do. The item keeps its
   // own ids so a failing follow leaves the binding as Python's in-place mutation does.
   let ack_run_id = item.task_run.run_id.clone();
-  let ack_queue = features.startup.require::<crate::master_queue::MasterQueue>()?;
   let ack_ids = Arc::new(std::sync::Mutex::new(item.user_event_ids.clone()));
   let stream_tracker = Arc::clone(&tracker);
   let stream_callbacks = callbacks.clone();
@@ -929,12 +924,12 @@ pub(crate) async fn resume_cc(item: &mut WorkItem) -> anyhow::Result<MasterRunOu
         let cc_session_id = Arc::clone(&stream_cc_session_id);
         let events = Arc::clone(&persisted_events);
         let ack_ids = Arc::clone(&stream_ack_ids);
-        let ack_queue = Arc::clone(&ack_queue);
+        let ack_tracking = Arc::clone(&tracking);
         let ack_run_id = ack_run_id.clone();
         async move {
           tracker.lock().expect("run timing mutex is not poisoned").on_event(&event);
           crate::midturn_delivery::record_ack(
-            &ack_queue,
+            ack_tracking.as_ref(),
             &session_id,
             &mut ack_ids.lock().expect("resume acknowledgement mutex is not poisoned"),
             &ack_run_id,
@@ -1126,7 +1121,7 @@ mod tests {
     let option = cfg.get_backend_option("fable").unwrap().clone();
     let item = test_fixtures::work_item(&queue, &features, meta.clone());
     let ctx = turn_launch_context(
-      Arc::clone(&queue),
+      Arc::clone(&queue) as Arc<dyn RunTracking>,
       &item,
       option.clone(),
       root.path().join("session"),

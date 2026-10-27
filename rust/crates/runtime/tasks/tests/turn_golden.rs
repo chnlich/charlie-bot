@@ -41,7 +41,7 @@ use charliebot_tasks::master_queue::{
 use charliebot_tasks::master_state::{
   MasterResumeRecord, MasterResumeRequest, MasterTurnRequest, TaskFinishCallback, TaskRunBinding, TaskSpawnCallback,
 };
-use charliebot_tasks::{master_queue, master_state, routes, task_sessions};
+use charliebot_tasks::{master_queue, routes, task_sessions};
 use futures_util::future::BoxFuture;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -1228,7 +1228,7 @@ async fn exported_queue_reads_fail_when_startup_has_no_master_queue() -> anyhow:
   let registry = registry();
   let (_cfg, features) = config_with_features(home.path(), None, registry, false)?;
   assert!(master_queue::queued_user_event_ids(&features, "synthetic-session").is_err());
-  assert!(master_state::running_user_event_ids(&features, "synthetic-session").is_err());
+  assert!(master_queue::running_user_event_ids(&features, "synthetic-session").is_err());
   Ok(())
 }
 
@@ -1264,7 +1264,7 @@ async fn queue_serializes_enqueues_and_exposes_running_and_queued_event_ids() ->
   ));
   tokio::time::timeout(std::time::Duration::from_secs(2), async {
     loop {
-      if master_state::running_user_event_ids(&features, &meta.id)? == ["first-input"] {
+      if master_queue::running_user_event_ids(&features, &meta.id)? == ["first-input"] {
         break anyhow::Ok(());
       }
       tokio::time::sleep(std::time::Duration::from_millis(10)).await;
@@ -1291,12 +1291,12 @@ async fn queue_serializes_enqueues_and_exposes_running_and_queued_event_ids() ->
     }
   })
   .await??;
-  assert_eq!(master_state::running_user_event_ids(&features, &meta.id)?, ["first-input"]);
+  assert_eq!(master_queue::running_user_event_ids(&features, &meta.id)?, ["first-input"]);
   assert!(features.store.busy_since(&meta.id).is_some());
   first.await??;
   tokio::time::timeout(std::time::Duration::from_secs(2), async {
     loop {
-      if master_state::running_user_event_ids(&features, &meta.id)? == ["second-input"] {
+      if master_queue::running_user_event_ids(&features, &meta.id)? == ["second-input"] {
         break anyhow::Ok(());
       }
       tokio::time::sleep(std::time::Duration::from_millis(10)).await;
@@ -1361,7 +1361,7 @@ async fn translation_failure_reports_the_turn_and_keeps_the_session_consumer_ali
   ));
   tokio::time::timeout(std::time::Duration::from_secs(2), async {
     loop {
-      if master_state::running_user_event_ids(&features, &meta.id)? == ["failing-input"] {
+      if master_queue::running_user_event_ids(&features, &meta.id)? == ["failing-input"] {
         break anyhow::Ok(());
       }
       tokio::time::sleep(std::time::Duration::from_millis(10)).await;

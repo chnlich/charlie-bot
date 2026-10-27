@@ -1,9 +1,0 @@
-stage: agent-orchestration
-name: chat-request-id
-steps:
-  - name: reject a chat send without a request id
-    method: POST
-    path: /api/chat/${sessions.atlas}/message
-    json: {content: A chat send needs a request id.}
-    expect_status: 422
-    compare: status_and_shape

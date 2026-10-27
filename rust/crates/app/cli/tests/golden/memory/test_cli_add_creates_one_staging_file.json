@@ -14,7 +14,7 @@
     "CHARLIEBOT_MEMORY_CLI_TEST_NOW": "2026-10-27T12:34:56Z"
   },
   "expect": {
-    "stdout": "{root}/home/memory/staging/20261027T123456Z-12345678-prefers-dark-mode.md\n",
+    "stdout": "{root}/home/memory/staging/{timestamp}-12345678-prefers-dark-mode.md\n",
     "stderr": "",
     "exit": 0,
     "requests": []

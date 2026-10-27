@@ -1535,67 +1535,6 @@ mod tests {
     assert_eq!(run.await.unwrap().unwrap().exit_code, Some(-15));
   }
 
-  #[tokio::test]
-  async fn registered_claude_child_edits_apply_at_the_spawn_boundary() {
-    let root = tempfile::tempdir().unwrap();
-    let mut registry = charliebot_registry::Registry::new();
-    registry.register_package("src.backends.claude_code", crate::backends::claude_code::register).unwrap();
-    let registry = Arc::new(registry);
-    let inherited = Env::from([
-      ("PATH".to_string(), "/bin".to_string()),
-      ("CHARLIEBOT_SESSION_ID".to_string(), "stale-session".to_string()),
-      ("CLAUDECODE".to_string(), "1".to_string()),
-      ("CLAUDE_CODE_DISABLE_AUTO_MEMORY".to_string(), "0".to_string()),
-    ]);
-    let script = r#"printf '%s\n' '{"type":"result","session":"'"$CHARLIEBOT_SESSION_ID"'","claudecode":"'"$CLAUDECODE"'","auto_memory":"'"$CLAUDE_CODE_DISABLE_AUTO_MEMORY"'"}'"#;
-    let master_event =
-      run_one_shell(root.path(), "master", inherited.clone(), Arc::clone(&registry), Some("current-session"), script)
-        .await;
-    assert_eq!(master_event["session"], "current-session");
-    assert_eq!(master_event["claudecode"], "");
-    assert_eq!(master_event["auto_memory"], "1");
-
-    let worker_event = run_one_shell(root.path(), "worker", inherited, registry, None, script).await;
-    assert_eq!(worker_event["session"], "");
-    assert_eq!(worker_event["claudecode"], "");
-    assert_eq!(worker_event["auto_memory"], "1");
-  }
-
-  async fn run_one_shell(
-    root: &Path,
-    name: &str,
-    env: Env,
-    registry: Arc<Registry>,
-    session_id: Option<&str>,
-    script: &str,
-  ) -> Value {
-    let log_dir = root.join(name);
-    let seen = Arc::new(Mutex::new(Vec::new()));
-    let events = Arc::clone(&seen);
-    let runner = AgentRunner::new(
-      "shell",
-      Box::new(ShellBackend::new(script.to_string())),
-      LaunchArgs { log_dir: Some(log_dir), ..LaunchArgs::default() },
-    );
-    let mut request = RunRequest::new(
-      "prompt".to_string(),
-      root.to_path_buf(),
-      AgentBaseEnvironment { values: env },
-      SessionCgroupConfig { base_dir: root.join("cgroups"), ..SessionCgroupConfig::disabled() },
-      registry,
-    );
-    request.session_id = session_id.map(str::to_string);
-    request.on_event = Arc::new(move |event| {
-      let events = Arc::clone(&events);
-      Box::pin(async move {
-        events.lock().unwrap().push(event);
-        Ok(())
-      })
-    });
-    runner.run(request).await.unwrap();
-    seen.lock().unwrap()[0].clone()
-  }
-
   fn test_request(prompt: String, cwd: PathBuf, values: Env, cgroup_base: PathBuf) -> RunRequest {
     let cgroup_config = SessionCgroupConfig { base_dir: cgroup_base, ..SessionCgroupConfig::disabled() };
     RunRequest::new(prompt, cwd, AgentBaseEnvironment { values }, cgroup_config, Arc::new(Registry::new()))

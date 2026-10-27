@@ -5,10 +5,10 @@ use std::sync::Arc;
 
 use charliebot_agents::agent_environment;
 use charliebot_agents::backend_types;
-use charliebot_agents::backends::claude_code;
-use charliebot_agents::backends::codex::CodexHost;
-use charliebot_agents::backends::codex::factory::CodexFactory;
 use charliebot_agents::launch_loop::{self, ChildEnvPolicy};
+use charliebot_claude_code as claude_code;
+use charliebot_codex::CodexHost;
+use charliebot_codex::factory::CodexFactory;
 use charliebot_core::config::{
   BackendOption, BackendsConfig, CharlieBotConfig, PathsConfig, Sections, ServerConfig, TelegramConfig, UiConfig,
 };

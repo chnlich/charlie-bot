@@ -45,5 +45,11 @@ walkdir.workspace = true
 which.workspace = true
 
 [dev-dependencies]
+charliebot-anthropic-compatible.workspace = true
+charliebot-antigravity.workspace = true
+charliebot-charlie-code.workspace = true
+charliebot-claude-code.workspace = true
+charliebot-codex.workspace = true
 charliebot-core = { workspace = true, features = ["test-support"] }
+charliebot-gemini.workspace = true
 tower.workspace = true

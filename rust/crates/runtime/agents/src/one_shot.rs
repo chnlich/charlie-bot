@@ -90,11 +90,11 @@ struct OneShotResult {
   saw_result: bool,
 }
 
-pub(crate) fn frame_system_prompt(system_prompt: &str, prompt: &str) -> String {
+pub fn frame_system_prompt(system_prompt: &str, prompt: &str) -> String {
   format!("<system-instructions>\n{system_prompt}\n</system-instructions>\n\n{prompt}")
 }
 
-pub(crate) fn assistant_text(event: &Value) -> String {
+pub fn assistant_text(event: &Value) -> String {
   let Some(blocks) = event.get("message").and_then(|message| message.get("content")).and_then(Value::as_array) else {
     return String::new();
   };

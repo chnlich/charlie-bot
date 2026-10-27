@@ -40,7 +40,7 @@ use time::OffsetDateTime;
 use charliebot_registry::context::FeatureContext;
 
 use crate::run_support::{
-  StreamEvent, extra_flags_of, read_stderr_tail, route_resume_session_style, stream_event_channel,
+  StreamEvent, extra_flags_of, read_stderr_tail, route_resume_session_style, silence_callback, stream_event_channel,
   subprocess_buffer_bytes,
 };
 
@@ -282,18 +282,25 @@ impl Worker {
     let follow_sink = Arc::clone(&sink);
     let follow_failure = Arc::clone(&failure);
     let alive = Arc::clone(&is_alive);
-    let is_opencode = self.backend_option.as_ref().is_some_and(|option| option.backend_type == "opencode");
-    let opencode_silence =
-      if is_opencode { charliebot_agents::backends::opencode::relay::recovery_silence(&self.data_dir)? } else { None };
-    let (on_silence, silence_threshold) = match opencode_silence {
-      Some((callback, threshold)) => (Some(callback), threshold),
+    let serve_transport =
+      self.backend_option.as_ref().and_then(|option| self.features.registry.serve_transport(&option.backend_type));
+    let serve_silence = match serve_transport.as_ref() {
+      Some(transport) => transport.recovery_silence(&self.data_dir)?,
+      None => None,
+    };
+    let (on_silence, silence_threshold) = match serve_silence {
+      Some(silence) => {
+        let threshold = silence.timeout;
+        (Some(silence_callback(silence)), threshold)
+      }
       None => (on_silence, NO_OUTPUT_REPORT_THRESHOLD),
     };
+    let reject_transport = serve_transport.clone();
     let followed = follow::tail_follow_events(
       &raw_path,
       move |raw| {
-        if is_opencode {
-          charliebot_agents::backends::opencode::reject_permission(&raw)?;
+        if let Some(transport) = &reject_transport {
+          transport.reject_event(&raw)?;
         }
         translator.translate(raw)
       },
@@ -325,7 +332,7 @@ impl Worker {
     }
     let follow_failed = match followed {
       Ok(_) => false,
-      Err(error) if is_opencode => {
+      Err(error) if serve_transport.is_some() => {
         let message = format!("OpenCode backend failed: {error}");
         handle_event(&sink, event_builders::make_error_event(&message), None::<&mut dyn LaunchWatch>, None).await?;
         let pid = self.thread.lock().expect("thread metadata mutex is not poisoned").pid;

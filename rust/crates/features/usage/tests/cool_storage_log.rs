@@ -5,9 +5,11 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::sync::{Arc, Mutex};
 
-use charliebot_agents::backends::claude_code::usage_quota::QuotaHttp;
-use charliebot_agents::backends::claude_code::{self, ClaudeHost};
-use charliebot_agents::backends::codex::{self, CodexHost};
+use charliebot_claude_code as claude_code;
+use charliebot_claude_code::ClaudeHost;
+use charliebot_claude_code::usage_quota::QuotaHttp;
+use charliebot_codex as codex;
+use charliebot_codex::CodexHost;
 use charliebot_core::paths::realpath;
 use charliebot_core::test_support::EventSink;
 use charliebot_registry::{Registry, RegistryError};

@@ -857,6 +857,18 @@ pub trait ServeTransport: Send + Sync {
   fn take_turn(&self, command: &[String]) -> anyhow::Result<Box<dyn ServeTurn>>;
   /// Finishes the turn whose process is `pid`, when that turn has registered its session.
   fn finish_active_turn(&self, pid: u32) -> BoxFuture<'static, anyhow::Result<()>>;
+  /// The progress deadline of a recovered turn whose run directory is `directory`, or `None` when the directory
+  /// holds no turn record of this backend. The caller builds the follow's silence callback from it.
+  fn recovery_silence(&self, directory: &Path) -> anyhow::Result<Option<RecoverySilence>>;
+  /// Rejects a raw event this backend cannot answer headless, ending the run. Called for every followed event of a
+  /// recovered turn.
+  fn reject_event(&self, event: &Value) -> anyhow::Result<()>;
+}
+
+/// A recovered serve turn's progress deadline: a follow that sees no event for `timeout` fails with `message`.
+pub struct RecoverySilence {
+  pub timeout: Duration,
+  pub message: String,
 }
 
 /// One turn of a serve transport, run in the process that the runner spawned for it.

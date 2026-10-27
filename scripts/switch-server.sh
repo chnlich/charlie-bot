@@ -108,10 +108,28 @@ target_sha, source_impl, target_impl = sys.argv[-3:]
 DEFAULT_SERVER_PORT = 18498
 # Owner: the restart_reattach field of the backend registration (BackendTypeRegistration in
 # rust/crates/runtime/registry/src/registry.rs), set by each backend's register() in
-# rust/crates/runtime/agents/src/backends/*/mod.rs.
+# rust/crates/backends/*/src/lib.rs.
 NO_REATTACH = {"opencode", "antigravity"}
+# Each backend is its own crate under rust/crates/backends from the crate split on; before it, all of them lived in
+# rust/crates/runtime/agents/src/backends. A build's tree says which layout it has, so each sha is read in its own.
+BACKEND_LAYOUTS = (("rust/crates/backends", "/src/lib.rs"), ("rust/crates/runtime/agents/src/backends", "/mod.rs"))
 rust_to_rust = source_impl.startswith("rust ") and target_impl == "rust"
 reattach_cache = {}
+
+
+def backend_registration_files(sha):
+  """The registration files of one build in the layout its tree has, and the error the tree read gave."""
+  for prefix, suffix in BACKEND_LAYOUTS:
+    listed = subprocess.run(
+      ["git", "-C", str(repo_root), "ls-tree", "-r", "--name-only", sha, prefix],
+      capture_output=True, text=True, check=False,
+    )
+    if listed.returncode:
+      return None, f"cannot inspect build {sha}: {listed.stderr.strip()}"
+    paths = [path for path in listed.stdout.splitlines() if path.endswith(suffix)]
+    if paths:
+      return paths, None
+  return [], None
 
 
 def rust_registration(sha, backend_type):
@@ -119,18 +137,12 @@ def rust_registration(sha, backend_type):
   key = (sha, backend_type)
   if key in reattach_cache:
     return reattach_cache[key]
-  prefix = "rust/crates/runtime/agents/src/backends"
-  listed = subprocess.run(
-    ["git", "-C", str(repo_root), "ls-tree", "-r", "--name-only", sha, prefix],
-    capture_output=True, text=True, check=False,
-  )
-  if listed.returncode:
-    result = (None, f"cannot inspect build {sha}: {listed.stderr.strip()}")
+  paths, error = backend_registration_files(sha)
+  if error is not None:
+    result = (None, error)
     reattach_cache[key] = result
     return result
-  for path in listed.stdout.splitlines():
-    if not path.endswith("/mod.rs"):
-      continue
+  for path in paths:
     shown = subprocess.run(
       ["git", "-C", str(repo_root), "show", f"{sha}:{path}"],
       capture_output=True, text=True, check=False,

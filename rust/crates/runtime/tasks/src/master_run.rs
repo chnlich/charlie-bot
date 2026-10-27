@@ -24,7 +24,8 @@ use serde_json::{Map, Value, json};
 
 use crate::master_state::{ContextStateFn, RunTracking, SessionCallbacks, WorkItem};
 use crate::run_support::{
-  extra_flags_of, read_stderr_tail, route_resume_session, stream_event_channel, subprocess_buffer_bytes,
+  extra_flags_of, read_stderr_tail, route_resume_session, silence_callback, stream_event_channel,
+  subprocess_buffer_bytes,
 };
 
 const NOTICE: &str = "[模型未输出正文，以下为其思考内容]";
@@ -934,20 +935,22 @@ pub(crate) async fn resume_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkIte
   let stream_events = Arc::new(Mutex::new(Vec::<Value>::new()));
   let persisted_events = Arc::clone(&stream_events);
   let stream_ack_ids = Arc::clone(&ack_ids);
-  let is_opencode = option.as_ref().is_some_and(|option| option.backend_type == "opencode");
-  let (on_silence, silence_threshold) = if is_opencode {
-    match charliebot_agents::backends::opencode::relay::recovery_silence(&log_dir)? {
-      Some((callback, threshold)) => (Some(callback), threshold),
+  let serve_transport = option.as_ref().and_then(|option| features.registry.serve_transport(&option.backend_type));
+  let (on_silence, silence_threshold) = match serve_transport.as_ref() {
+    Some(transport) => match transport.recovery_silence(&log_dir)? {
+      Some(silence) => {
+        let threshold = silence.timeout;
+        (Some(silence_callback(silence)), threshold)
+      }
       None => (None, Duration::ZERO),
-    }
-  } else {
-    (None, Duration::ZERO)
+    },
+    None => (None, Duration::ZERO),
   };
   let follow_result = follow::tail_follow_events(
     &raw_path,
     move |raw| {
-      if is_opencode {
-        charliebot_agents::backends::opencode::reject_permission(&raw)?;
+      if let Some(transport) = &serve_transport {
+        transport.reject_event(&raw)?;
       }
       translate_stream(raw)
     },
@@ -1095,9 +1098,9 @@ pub(crate) async fn resume_cc(tracking: Arc<dyn RunTracking>, item: &mut WorkIte
 
 #[cfg(test)]
 mod tests {
-  use charliebot_agents::backends::claude_code::claude_accounts;
-  use charliebot_agents::backends::claude_code::claude_idle_compaction::{self, IdleProcessIdentity};
-  use charliebot_agents::backends::claude_code::claude_lifecycle::ClaudeCodeLifecycle;
+  use charliebot_claude_code::claude_accounts;
+  use charliebot_claude_code::claude_idle_compaction::{self, IdleProcessIdentity};
+  use charliebot_claude_code::claude_lifecycle::ClaudeCodeLifecycle;
   use charliebot_registry::backend::{BackendLifecycle, ResumeStyle};
   use charliebot_store::metadata::TaskProfile;
 

@@ -305,9 +305,9 @@ class World:
   socket: str
   env: dict[str, str]
   initial_head: str  # the runtime clone's HEAD before any switch
-  old_sha: str  # the release current names: OpenCode and agy cannot re-attach
-  rust_sha: str  # the target release: OpenCode and agy can re-attach
-  new_sha: str  # the release commit used by the forward and back switch test
+  old_sha: str  # the release current names: the runtime/agents layout, OpenCode and agy cannot re-attach
+  rust_sha: str  # the target release: one crate per backend, OpenCode and agy can re-attach
+  new_sha: str  # the release commit used by the forward and back switch test: agy cannot re-attach
   port: int
   live: list[subprocess.Popen[bytes]] = dataclasses.field(default_factory=list)
 
@@ -338,8 +338,18 @@ def _install_release(releases: pathlib.Path, sha: str) -> None:
   _write_behavior(release)
 
 
-def _write_backend_registration(clone: pathlib.Path, module: str, backend_type: str, *, enabled: bool) -> None:
-  path = clone / "rust/crates/runtime/agents/src/backends" / module / "mod.rs"
+def _write_backend_registration(clone: pathlib.Path,
+                                module: str,
+                                backend_type: str,
+                                *,
+                                enabled: bool,
+                                layout: str = "old") -> None:
+  """Write one backend's registration in the layout that build has: `old` keeps the runtime/agents module, `new` has
+  the backend's own crate."""
+  if layout == "new":
+    path = clone / "rust/crates/backends" / module / "src/lib.rs"
+  else:
+    path = clone / "rust/crates/runtime/agents/src/backends" / module / "mod.rs"
   path.parent.mkdir(parents=True, exist_ok=True)
   path.write_text(
       f'''pub fn register() {{
@@ -372,6 +382,7 @@ def _build_world(root: pathlib.Path) -> World:
   shutil.copy2(SWITCH, clone / "scripts" / "switch-server.sh")
   # The launcher's preflight reads its expected limits from this directory.
   shutil.copytree(ROOT / "scripts" / "systemd", clone / "scripts" / "systemd")
+  # The first build predates the backend crate split: one module per backend under the runtime/agents crate.
   _write_backend_registration(clone, "opencode", "opencode", enabled=False)
   _write_backend_registration(clone, "antigravity", "antigravity", enabled=False)
   _write_backend_registration(clone, "claude_code", "cc-claude", enabled=True)
@@ -379,12 +390,20 @@ def _build_world(root: pathlib.Path) -> World:
   _git(clone, "add", "scripts", "rust")
   _git(clone, "commit", "-q", "-m", "fake runtime clone")
   old_sha = _git(clone, "rev-parse", "HEAD")
-  _write_backend_registration(clone, "opencode", "opencode", enabled=True)
-  _write_backend_registration(clone, "antigravity", "antigravity", enabled=True)
+  # The split moves each registration into its own crate, and OpenCode and agy start re-attaching.
+  for module in ("opencode", "antigravity", "claude_code"):
+    (clone / "rust/crates/runtime/agents/src/backends" / module / "mod.rs").unlink()
+  _write_backend_registration(clone, "opencode", "opencode", enabled=True, layout="new")
+  _write_backend_registration(clone, "antigravity", "antigravity", enabled=True, layout="new")
+  _write_backend_registration(clone, "claude_code", "cc-claude", enabled=True, layout="new")
   _git(clone, "add", "rust")
-  _git(clone, "commit", "-q", "-m", "enable backend restart re-attachment")
+  _git(clone, "commit", "-q", "-m", "move the backends into their own crates")
   rust_sha = _git(clone, "rev-parse", "HEAD")
-  _git(clone, "commit", "-q", "--allow-empty", "-m", "new release")
+  # A later build turns agy's re-attachment back off inside its own crate, so a switch away from a new-layout build
+  # is read there too.
+  _write_backend_registration(clone, "antigravity", "antigravity", enabled=False, layout="new")
+  _git(clone, "add", "rust")
+  _git(clone, "commit", "-q", "-m", "new release")
   new_sha = _git(clone, "rev-parse", "HEAD")
   subprocess.run(["git", "clone", "-q", "--bare", str(clone), str(root / "origin.git")], env=GIT_ENV, check=True)
   _git(clone, "remote", "add", "origin", str(root / "origin.git"))
@@ -685,7 +704,7 @@ preflight
     ids=["both-carry", "running-lacks", "target-lacks", "python-running", "python-target"])
 @pytest.mark.parametrize("backend", ["agy-gemini-flash", "oc-deepseek-flash", "claude-opus", "oc-retired"])
 def test_live_backend_switch_directions(world: World, running: str, target: str, backend: str) -> None:
-  """Rust builds read each backend's re-attachment declaration from their own source tree."""
+  """Rust builds read each backend's re-attachment declaration from their own source tree, in either layout."""
   _seed_live_run(world, "run-direction", backend)
   build = {"carries": world.rust_sha, "lacks": world.old_sha, "python": ""}
   running_impl = f"rust {build[running]}" if running != "python" else "python"
@@ -715,6 +734,29 @@ def test_live_backend_switch_directions(world: World, running: str, target: str,
     assert f"{lacking} build {world.old_sha} marks restart_reattach = false" in proc.stdout, _report(world, proc)
   if backend == "oc-retired" and target != "python":
     assert "restart re-attachment is unknown" in proc.stdout, _report(world, proc)
+  assert all(live.poll() is None for live in world.live)
+
+
+@pytest.mark.parametrize(
+    "running,target,reported,detail",
+    [
+        ("old", "rust", "running", "rust/crates/runtime/agents/src/backends/antigravity/mod.rs"),
+        ("rust", "new", "target", "rust/crates/backends/antigravity/src/lib.rs"),
+        ("new", "old", "target", "rust/crates/runtime/agents/src/backends/antigravity/mod.rs"),
+    ],
+    ids=["old-layout-to-new-layout", "new-layout-to-new-layout", "new-layout-back-to-old-layout"])
+def test_backend_registration_reads_the_layout_of_each_build(world: World, running: str, target: str, reported: str,
+                                                             detail: str) -> None:
+  """A switch between builds reads each build's registration where that build's tree keeps it: the backend's own crate
+  after the split, the runtime/agents module before it. The two directions of a switch across the split both read."""
+  builds = {"old": world.old_sha, "rust": world.rust_sha, "new": world.new_sha}
+  _seed_live_run(world, "run-layout", "agy-gemini-flash")
+
+  proc = _stubbed_preflight(world, f"rust {builds[running]}", "rust", builds[target])
+
+  assert proc.returncode == 1, _report(world, proc)
+  sha = builds[running] if reported == "running" else builds[target]
+  assert f"{reported} build {sha} marks restart_reattach = false ({detail})" in proc.stdout, _report(world, proc)
   assert all(live.poll() is None for live in world.live)
 
 

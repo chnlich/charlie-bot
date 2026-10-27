@@ -5,7 +5,7 @@ use charliebot_core::timefmt;
 use time::{Duration, OffsetDateTime};
 
 /// `datetime.fromtimestamp(seconds, tz=UTC).isoformat()`.
-pub(crate) fn utc_isoformat(seconds: f64) -> anyhow::Result<String> {
+pub fn utc_isoformat(seconds: f64) -> anyhow::Result<String> {
   let whole = seconds.floor();
   let mut micros = ((seconds - whole) * 1e6).round_ties_even() as i64;
   let mut instant = OffsetDateTime::from_unix_timestamp(whole as i64)

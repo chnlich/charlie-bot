@@ -9,12 +9,14 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use charliebot_agents::backends::claude_code::usage_quota::QuotaHttp;
-use charliebot_agents::backends::claude_code::{self, ClaudeHost};
-use charliebot_agents::backends::codex::{self, CodexHost};
-use charliebot_agents::backends::opencode::usage_logs::OpencodeLogs;
+use charliebot_claude_code as claude_code;
+use charliebot_claude_code::ClaudeHost;
+use charliebot_claude_code::usage_quota::QuotaHttp;
+use charliebot_codex as codex;
+use charliebot_codex::CodexHost;
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::paths::realpath;
+use charliebot_opencode::usage_logs::OpencodeLogs;
 use charliebot_registry::usage::{CategoryResult, UsageSource};
 use charliebot_registry::{Registry, RegistryError};
 use charliebot_store::metadata::UtcDateTime;

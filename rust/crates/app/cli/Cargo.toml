@@ -18,6 +18,7 @@ charliebot-core.workspace = true
 charliebot-discord.workspace = true
 charliebot-improve.workspace = true
 charliebot-memory.workspace = true
+charliebot-opencode.workspace = true
 charliebot-packages.workspace = true
 charliebot-slack.workspace = true
 charliebot-store.workspace = true

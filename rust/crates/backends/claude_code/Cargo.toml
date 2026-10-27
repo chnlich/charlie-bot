@@ -1,0 +1,30 @@
+[package]
+name = "charliebot-claude-code"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+backon.workspace = true
+charliebot-agents.workspace = true
+charliebot-compat.workspace = true
+charliebot-core.workspace = true
+charliebot-registry.workspace = true
+charliebot-store.workspace = true
+futures-util.workspace = true
+glob.workspace = true
+memchr.workspace = true
+nix.workspace = true
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+shellexpand.workspace = true
+tempfile.workspace = true
+time.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+walkdir.workspace = true
+reqwest = { workspace = true, features = ["json", "query", "stream"] }

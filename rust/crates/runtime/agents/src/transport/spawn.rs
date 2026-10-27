@@ -1083,7 +1083,7 @@ where
   }
 }
 
-pub(crate) fn parse_backend_line(line: &[u8]) -> Option<Value> {
+pub fn parse_backend_line(line: &[u8]) -> Option<Value> {
   if line.is_empty() || line.iter().all(u8::is_ascii_whitespace) {
     return None;
   }

@@ -306,8 +306,14 @@ dependencies = [
  "base64 0.22.1",
  "bstr",
  "cgfs",
+ "charliebot-anthropic-compatible",
+ "charliebot-antigravity",
+ "charliebot-charlie-code",
+ "charliebot-claude-code",
+ "charliebot-codex",
  "charliebot-compat",
  "charliebot-core",
+ "charliebot-gemini",
  "charliebot-registry",
  "charliebot-store",
  "futures-util",
@@ -337,6 +343,39 @@ dependencies = [
  "uuid",
  "walkdir",
  "which",
+]
+
+[[package]]
+name = "charliebot-anthropic-compatible"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "charliebot-agents",
+ "charliebot-claude-code",
+ "charliebot-core",
+ "charliebot-registry",
+ "charliebot-store",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "charliebot-antigravity"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "charliebot-agents",
+ "charliebot-core",
+ "charliebot-registry",
+ "charliebot-store",
+ "regex",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "time",
+ "tokio",
 ]
 
 [[package]]
@@ -395,6 +434,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "charliebot-charlie-code"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "charliebot-agents",
+ "charliebot-core",
+ "charliebot-registry",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "tracing",
+]
+
+[[package]]
 name = "charliebot-chat-threads"
 version = "0.1.0"
 dependencies = [
@@ -426,6 +479,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "charliebot-claude-code"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "backon",
+ "charliebot-agents",
+ "charliebot-compat",
+ "charliebot-core",
+ "charliebot-registry",
+ "charliebot-store",
+ "futures-util",
+ "glob",
+ "memchr",
+ "nix",
+ "regex",
+ "reqwest 0.13.5",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "shellexpand",
+ "tempfile",
+ "time",
+ "tokio",
+ "tracing",
+ "walkdir",
+]
+
+[[package]]
 name = "charliebot-cli"
 version = "0.1.0"
 dependencies = [
@@ -437,6 +518,7 @@ dependencies = [
  "charliebot-discord",
  "charliebot-improve",
  "charliebot-memory",
+ "charliebot-opencode",
  "charliebot-packages",
  "charliebot-slack",
  "charliebot-store",
@@ -487,6 +569,32 @@ dependencies = [
  "tower",
  "tracing",
  "which",
+]
+
+[[package]]
+name = "charliebot-codex"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "charliebot-agents",
+ "charliebot-core",
+ "charliebot-registry",
+ "charliebot-store",
+ "futures-util",
+ "lru",
+ "memchr",
+ "nix",
+ "regex",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "time",
+ "tokio",
+ "toml",
+ "tracing",
+ "uuid",
+ "walkdir",
 ]
 
 [[package]]
@@ -700,6 +808,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "charliebot-gemini"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "charliebot-agents",
+ "charliebot-core",
+ "charliebot-registry",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "tracing",
+]
+
+[[package]]
 name = "charliebot-host-auth"
 version = "0.1.0"
 dependencies = [
@@ -786,14 +908,78 @@ dependencies = [
 ]
 
 [[package]]
+name = "charliebot-openai-compatible"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "bstr",
+ "charliebot-agents",
+ "charliebot-claude-code",
+ "charliebot-compat",
+ "charliebot-core",
+ "charliebot-registry",
+ "charliebot-store",
+ "futures-util",
+ "http 1.5.0",
+ "memchr",
+ "regex",
+ "reqwest 0.13.5",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "tokio",
+ "tower",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "charliebot-opencode"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "charliebot-agents",
+ "charliebot-anthropic-compatible",
+ "charliebot-claude-code",
+ "charliebot-compat",
+ "charliebot-core",
+ "charliebot-registry",
+ "charliebot-store",
+ "futures-util",
+ "libc",
+ "memchr",
+ "nix",
+ "procfs",
+ "regex",
+ "reqwest 0.13.5",
+ "rusqlite",
+ "rustls",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "time",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "charliebot-packages"
 version = "0.1.0"
 dependencies = [
  "charliebot-agents",
+ "charliebot-anthropic-compatible",
+ "charliebot-antigravity",
  "charliebot-artifacts",
  "charliebot-backup",
+ "charliebot-charlie-code",
  "charliebot-chat-threads",
+ "charliebot-claude-code",
  "charliebot-code-server",
+ "charliebot-codex",
  "charliebot-cron",
  "charliebot-diag",
  "charliebot-diff-view",
@@ -801,10 +987,13 @@ dependencies = [
  "charliebot-disk-sweep",
  "charliebot-explain",
  "charliebot-files",
+ "charliebot-gemini",
  "charliebot-host-auth",
  "charliebot-improve",
  "charliebot-memory",
  "charliebot-ncu",
+ "charliebot-openai-compatible",
+ "charliebot-opencode",
  "charliebot-registry",
  "charliebot-session-api",
  "charliebot-slack",
@@ -862,6 +1051,7 @@ dependencies = [
  "charliebot-agents",
  "charliebot-compat",
  "charliebot-core",
+ "charliebot-opencode",
  "charliebot-packages",
  "charliebot-registry",
  "charliebot-session-api",
@@ -984,8 +1174,14 @@ dependencies = [
  "anyhow",
  "axum",
  "charliebot-agents",
+ "charliebot-anthropic-compatible",
+ "charliebot-antigravity",
+ "charliebot-charlie-code",
+ "charliebot-claude-code",
+ "charliebot-codex",
  "charliebot-compat",
  "charliebot-core",
+ "charliebot-gemini",
  "charliebot-registry",
  "charliebot-store",
  "charliebot-tasks",
@@ -1086,6 +1282,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "charliebot-agents",
+ "charliebot-anthropic-compatible",
+ "charliebot-claude-code",
+ "charliebot-codex",
  "charliebot-core",
  "charliebot-registry",
  "charliebot-store",
@@ -1103,8 +1302,11 @@ dependencies = [
  "axum",
  "caseless",
  "charliebot-agents",
+ "charliebot-claude-code",
+ "charliebot-codex",
  "charliebot-compat",
  "charliebot-core",
+ "charliebot-opencode",
  "charliebot-registry",
  "charliebot-store",
  "flate2",

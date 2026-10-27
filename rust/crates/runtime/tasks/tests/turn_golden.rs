@@ -241,9 +241,7 @@ fn register_scripted_backend(registry: &mut Registry) -> Result<(), charliebot_r
 fn registry() -> Arc<Registry> {
   let mut registry = Registry::new();
   registry.register_package("test.scripted_backend", register_scripted_backend).unwrap();
-  registry
-    .register_package("charliebot_agents.claude_code", charliebot_agents::backends::claude_code::register)
-    .unwrap();
+  registry.register_package("charliebot_agents.claude_code", charliebot_claude_code::register).unwrap();
   registry.register_package("charliebot.web_reply", charliebot_web_reply::register).unwrap();
   Arc::new(registry)
 }

@@ -18,11 +18,11 @@ use std::time::Duration;
 
 use axum::http::StatusCode;
 use charliebot_agents::backend_pool;
-use charliebot_agents::backends::claude_code::claude_accounts::{self, ClaudeAccountState};
-use charliebot_agents::backends::claude_code::claude_config;
-use charliebot_agents::backends::claude_code::claude_lifecycle::ClaudeCodeLifecycle;
-use charliebot_agents::backends::claude_code::claude_relay;
-use charliebot_agents::backends::claude_code::login_dirs;
+use charliebot_claude_code::claude_accounts::{self, ClaudeAccountState};
+use charliebot_claude_code::claude_config;
+use charliebot_claude_code::claude_lifecycle::ClaudeCodeLifecycle;
+use charliebot_claude_code::claude_relay;
+use charliebot_claude_code::login_dirs;
 use charliebot_core::config::{BackendOption, ConfigSection, RoutingConfig};
 use charliebot_core::event_types;
 use charliebot_registry::backend::{BackendLifecycle, BackendTraits, ResumeStyle};

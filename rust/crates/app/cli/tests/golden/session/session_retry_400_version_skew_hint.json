@@ -1,0 +1,66 @@
+{
+  "argv": [
+    "session",
+    "retry",
+    "sess-1",
+    "--run",
+    "run-1"
+  ],
+  "cwd": "{root}",
+  "env": {
+    "GIT_DIR": "{root}/repo/.git"
+  },
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n",
+    "repo/.git/HEAD": "ref: refs/heads/main\n",
+    "repo/.git/refs/heads/main": "1111111111111111111111111111111111111111\n",
+    "repo/.git/objects/": ""
+  },
+  "responses": [
+    {
+      "status": 400,
+      "body": {
+        "detail": "stale"
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "sha": "cafe567",
+        "started_at": "2026-01-02T03:04:05+00:00"
+      }
+    }
+  ],
+  "expect": {
+    "stdout": "",
+    "stderr": "{\"error\": \"stale\", \"code\": \"server_error\", \"effect\": \"none\", \"hint\": \"server running cafe567 (started 2026-01-02T03:04:05+00:00), repo at 1111111 — server restart may be required\"}\n",
+    "exit": 1,
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/api/sessions/sess-1/retry",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "request_id": "{uuid4}",
+          "run_id": "run-1"
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/api/internal/version",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": null
+        },
+        "body": null
+      }
+    ]
+  }
+}

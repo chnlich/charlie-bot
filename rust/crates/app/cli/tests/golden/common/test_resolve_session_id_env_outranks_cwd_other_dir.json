@@ -1,0 +1,46 @@
+{
+  "argv": [
+    "session",
+    "send",
+    "target-id",
+    "--message",
+    "x"
+  ],
+  "cwd": "{root}/home/sessions/other-session",
+  "env": {
+    "CHARLIEBOT_SESSION_ID": "env-session"
+  },
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n"
+  },
+  "responses": [
+    {
+      "status": 200,
+      "body": {
+        "status": "accepted"
+      }
+    }
+  ],
+  "expect": {
+    "stdout": "{\n  \"status\": \"accepted\"\n}\n",
+    "stderr": "{\"note\": \"cwd is session dir of other-session; using CHARLIEBOT_SESSION_ID=env-session\"}\n",
+    "exit": 0,
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/api/internal/session-message",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "session_id": "env-session",
+          "target_session_id": "target-id",
+          "content": "x"
+        }
+      }
+    ]
+  }
+}

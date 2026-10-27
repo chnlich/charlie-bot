@@ -4,6 +4,8 @@ members = [
     "crates/runtime/agents",
     "crates/infra/core",
     "crates/infra/compat",
+    "crates/infra/cli-common",
+    "crates/app/cli",
     "crates/app/server",
     "crates/app/structure",
     "crates/runtime/tasks",
@@ -50,6 +52,9 @@ bstr = "1"
 bytes = "1"
 caseless = "0.2"
 cgfs = "0.1"
+# The CLI's argument parser: argparse parity needs the unique long-option prefixes
+# (`infer_long_args`) and the usage-error exit code 2, both clap defaults off/own.
+clap = { version = "4", features = ["derive"] }
 chrono = "0.4"
 chrono-tz = "0.10"
 csv = "1"
@@ -124,6 +129,8 @@ charliebot-artifacts = { path = "crates/features/artifacts" }
 charliebot-agents = { path = "crates/runtime/agents" }
 charliebot-backup = { path = "crates/features/backup" }
 charliebot-chat-threads = { path = "crates/features/chat_threads" }
+charliebot-cli = { path = "crates/app/cli" }
+charliebot-cli-common = { path = "crates/infra/cli-common" }
 charliebot-code-server = { path = "crates/features/code_server" }
 charliebot-cron = { path = "crates/features/cron" }
 charliebot-compat = { path = "crates/infra/compat" }

@@ -1,0 +1,40 @@
+{
+  "argv": [
+    "session",
+    "tree"
+  ],
+  "cwd": "{root}",
+  "env": {
+    "LANG": "C",
+    "LC_ALL": "C"
+  },
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n"
+  },
+  "responses": [
+    {
+      "status": 200,
+      "body": {
+        "now": "中文"
+      }
+    }
+  ],
+  "expect": {
+    "stdout": "{\n  \"now\": \"中文\"\n}\n",
+    "stderr": "",
+    "exit": 0,
+    "requests": [
+      {
+        "method": "GET",
+        "path": "/api/sessions/tree",
+        "query": "limit=100&include_archived=false",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": null
+        },
+        "body": null
+      }
+    ]
+  }
+}

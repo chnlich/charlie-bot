@@ -1,0 +1,14 @@
+{
+  "argv": [
+    "config",
+    "get",
+    "server.port"
+  ],
+  "expect": {
+    "stdout": "",
+    "stderr": "charliebot: unknown subcommand 'config'. Available subcommands: artifact, compaction-context, delegate, discord, gc-trash, improve, improve-stop, memory, plan, publish, schedule-trigger, session, slack, web\n",
+    "exit": 2,
+    "requests": []
+  },
+  "expect_from": "rust"
+}

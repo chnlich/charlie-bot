@@ -1,0 +1,116 @@
+{
+  "argv": [
+    "session",
+    "dialog",
+    "--session",
+    "abc"
+  ],
+  "cwd": "{root}/home/sessions/abc",
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n"
+  },
+  "responses": [
+    {
+      "status": 200,
+      "body": {
+        "session": {
+          "id": "abc",
+          "name": "abc",
+          "archive_offset": 0
+        },
+        "messages": [
+          {
+            "role": "user",
+            "content": "newest ask",
+            "timestamp": "2026-07-10T08:00:09Z",
+            "event_index": 1009,
+            "id": "legacy:1009"
+          }
+        ],
+        "pending_draft": null,
+        "event_count": 1010,
+        "oldest_message_ordinal": 1005,
+        "has_more": true
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "messages": [
+          {
+            "role": "assistant",
+            "content": "middle answer",
+            "timestamp": "2026-07-10T08:00:06Z",
+            "event_index": 1006,
+            "id": "legacy:1006"
+          }
+        ],
+        "has_more": true,
+        "next_before": 805
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "oldest ask",
+            "timestamp": "2026-07-10T08:00:03Z",
+            "event_index": 1003,
+            "id": "legacy:1003"
+          },
+          {
+            "role": "assistant",
+            "content": "oldest answer",
+            "timestamp": "2026-07-10T08:00:04Z",
+            "event_index": 1004,
+            "id": "legacy:1004"
+          }
+        ],
+        "has_more": false,
+        "next_before": 0
+      }
+    }
+  ],
+  "expect": {
+    "stdout": "## user · 2026-07-10T08:00:03Z · event 1003\noldest ask\n\n## assistant · 2026-07-10T08:00:04Z · event 1004\noldest answer\n\n## assistant · 2026-07-10T08:00:06Z · event 1006\nmiddle answer\n\n## user · 2026-07-10T08:00:09Z · event 1009\nnewest ask\n",
+    "stderr": "",
+    "exit": 0,
+    "requests": [
+      {
+        "method": "GET",
+        "path": "/api/sessions/abc/bootstrap",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": null
+        },
+        "body": null
+      },
+      {
+        "method": "GET",
+        "path": "/api/sessions/abc/events",
+        "query": "before=1005&limit=200",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": null
+        },
+        "body": null
+      },
+      {
+        "method": "GET",
+        "path": "/api/sessions/abc/events",
+        "query": "before=805&limit=200",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": null
+        },
+        "body": null
+      }
+    ]
+  }
+}

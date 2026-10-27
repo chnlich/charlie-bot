@@ -1,0 +1,60 @@
+{
+  "argv": [
+    "session",
+    "dialog"
+  ],
+  "cwd": "{root}/home/sessions/abc",
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n"
+  },
+  "responses": [
+    {
+      "status": 200,
+      "body": {
+        "session": {
+          "id": "abc",
+          "name": "abc",
+          "archive_offset": 0
+        },
+        "messages": [
+          {
+            "role": "user",
+            "content": "the whole ask",
+            "timestamp": "2026-07-10T08:00:00Z",
+            "event_index": 0,
+            "id": "legacy:0"
+          },
+          {
+            "role": "assistant",
+            "content": "the whole answer",
+            "timestamp": "2026-07-10T08:00:01Z",
+            "event_index": 1,
+            "id": "legacy:1"
+          }
+        ],
+        "pending_draft": null,
+        "event_count": 2,
+        "oldest_message_ordinal": 0,
+        "has_more": false
+      }
+    }
+  ],
+  "expect": {
+    "stdout": "## user · 2026-07-10T08:00:00Z · event 0\nthe whole ask\n\n## assistant · 2026-07-10T08:00:01Z · event 1\nthe whole answer\n",
+    "stderr": "",
+    "exit": 0,
+    "requests": [
+      {
+        "method": "GET",
+        "path": "/api/sessions/abc/bootstrap",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": null
+        },
+        "body": null
+      }
+    ]
+  }
+}

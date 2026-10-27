@@ -1,0 +1,136 @@
+{
+  "argv": [
+    "session",
+    "dialog",
+    "--turns",
+    "2"
+  ],
+  "cwd": "{root}/home/sessions/abc",
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n"
+  },
+  "responses": [
+    {
+      "status": 200,
+      "body": {
+        "session": {
+          "id": "abc",
+          "name": "abc",
+          "archive_offset": 0
+        },
+        "messages": [
+          {
+            "role": "user",
+            "content": "third ask",
+            "timestamp": "2026-07-10T08:00:04Z",
+            "event_index": 1006,
+            "id": "legacy:1006"
+          },
+          {
+            "role": "assistant",
+            "content": "third answer",
+            "timestamp": "2026-07-10T08:00:05Z",
+            "event_index": 1007,
+            "id": "legacy:1007"
+          },
+          {
+            "role": "separator",
+            "event_index": 1008
+          },
+          {
+            "role": "user",
+            "content": "fourth ask",
+            "timestamp": "2026-07-10T08:00:06Z",
+            "event_index": 1009,
+            "id": "legacy:1009"
+          },
+          {
+            "role": "assistant",
+            "content": "fourth answer",
+            "timestamp": "2026-07-10T08:00:07Z",
+            "event_index": 1010,
+            "id": "legacy:1010"
+          }
+        ],
+        "pending_draft": null,
+        "event_count": 11,
+        "oldest_message_ordinal": 6,
+        "has_more": true
+      }
+    },
+    {
+      "status": 200,
+      "body": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "first ask",
+            "timestamp": "2026-07-10T08:00:00Z",
+            "event_index": 1000,
+            "id": "legacy:1000"
+          },
+          {
+            "role": "assistant",
+            "content": "first answer",
+            "timestamp": "2026-07-10T08:00:01Z",
+            "event_index": 1001,
+            "id": "legacy:1001"
+          },
+          {
+            "role": "separator",
+            "event_index": 1002
+          },
+          {
+            "role": "user",
+            "content": "second ask",
+            "timestamp": "2026-07-10T08:00:02Z",
+            "event_index": 1003,
+            "id": "legacy:1003"
+          },
+          {
+            "role": "assistant",
+            "content": "second answer",
+            "timestamp": "2026-07-10T08:00:03Z",
+            "event_index": 1004,
+            "id": "legacy:1004"
+          },
+          {
+            "role": "separator",
+            "event_index": 1005
+          }
+        ],
+        "has_more": false,
+        "next_before": 0
+      }
+    }
+  ],
+  "expect": {
+    "stdout": "last 2 turns · from event 1003 · 3 earlier messages\n\n## user · 2026-07-10T08:00:02Z · event 1003\nsecond ask\n\n## assistant · 2026-07-10T08:00:03Z · event 1004\nsecond answer\n\n## user · 2026-07-10T08:00:04Z · event 1006\nthird ask\n\n## assistant · 2026-07-10T08:00:05Z · event 1007\nthird answer\n\n## user · 2026-07-10T08:00:06Z · event 1009\nfourth ask\n\n## assistant · 2026-07-10T08:00:07Z · event 1010\nfourth answer\n",
+    "stderr": "",
+    "exit": 0,
+    "requests": [
+      {
+        "method": "GET",
+        "path": "/api/sessions/abc/bootstrap",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": null
+        },
+        "body": null
+      },
+      {
+        "method": "GET",
+        "path": "/api/sessions/abc/events",
+        "query": "before=6&limit=200",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": null
+        },
+        "body": null
+      }
+    ]
+  }
+}

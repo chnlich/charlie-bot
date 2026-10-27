@@ -103,6 +103,12 @@ impl<T> Ledger<T> {
   }
 }
 
+fn append_ledger_inventory<T>(inventory: &mut Vec<String>, ledger: &Ledger<T>) {
+  for entry in &ledger.entries {
+    inventory.push(format!("{}\t{}\t{}", ledger.kind, entry.package, entry.key));
+  }
+}
+
 /// What the registered packages contribute. Built at startup by [`Registry::register_package`] calls, then
 /// shared read-only (`Arc<Registry>`); nothing registers after startup.
 pub struct Registry {
@@ -192,6 +198,92 @@ impl Registry {
       let_go_steps: Ledger::new("let-go step"),
       feature_context: OnceLock::new(),
     }
+  }
+
+  /// Each registration as `<kind>\t<package>\t<key>`, in table and registration order.
+  pub fn inventory(&self) -> Vec<String> {
+    let Registry {
+      current: _,
+      page_packages,
+      routers,
+      websocket_routes,
+      services,
+      file_views,
+      startup_checks,
+      config_checks,
+      config_sections,
+      config_legacy_keys,
+      diff_roots,
+      template_globals,
+      home_cards,
+      scheduled_handlers,
+      metadata_slots,
+      metadata_slot_validators,
+      turn_contributions,
+      sidebar_contributions,
+      usage_sources,
+      usage_attributions,
+      backend_types,
+      child_envs,
+      reading_limits,
+      backend_reading_limits,
+      usage_resolvers,
+      sequence_controllers,
+      default_lifecycle: _,
+      pre_recovery_steps,
+      recovery_step,
+      trigger_step,
+      let_go_steps,
+      feature_context: _,
+    } = self;
+
+    let mut inventory = Vec::new();
+    for &package in page_packages {
+      inventory.push(format!("page_packages\t{package}\t{package}"));
+    }
+    for router in routers {
+      inventory.push(format!("routers\t{}\t{}", router.package, router.package));
+    }
+    append_ledger_inventory(&mut inventory, websocket_routes);
+    append_ledger_inventory(&mut inventory, services);
+    append_ledger_inventory(&mut inventory, file_views);
+    append_ledger_inventory(&mut inventory, startup_checks);
+    append_ledger_inventory(&mut inventory, config_checks);
+    append_ledger_inventory(&mut inventory, config_sections);
+    append_ledger_inventory(&mut inventory, config_legacy_keys);
+    append_ledger_inventory(&mut inventory, diff_roots);
+    append_ledger_inventory(&mut inventory, template_globals);
+    for card in home_cards {
+      inventory.push(format!("home_cards\t-\t{}", card.name));
+    }
+    append_ledger_inventory(&mut inventory, scheduled_handlers);
+    for slot in metadata_slots {
+      inventory.push(format!("metadata_slots\t-\t{}:{:?}", slot.owner, slot.on));
+    }
+    for &(owner, on, _) in metadata_slot_validators {
+      inventory.push(format!("metadata_slot_validators\t-\t{owner}:{on:?}"));
+    }
+    append_ledger_inventory(&mut inventory, turn_contributions);
+    append_ledger_inventory(&mut inventory, sidebar_contributions);
+    append_ledger_inventory(&mut inventory, usage_sources);
+    append_ledger_inventory(&mut inventory, usage_attributions);
+    append_ledger_inventory(&mut inventory, backend_types);
+    append_ledger_inventory(&mut inventory, child_envs);
+    append_ledger_inventory(&mut inventory, reading_limits);
+    for registration in backend_reading_limits {
+      inventory.push(format!(
+        "backend_reading_limits\t{}\t{}:{}",
+        registration.package, registration.backend_type, registration.reading_kind
+      ));
+    }
+    append_ledger_inventory(&mut inventory, usage_resolvers);
+    append_ledger_inventory(&mut inventory, sequence_controllers);
+    inventory.push(format!("default_lifecycle\t-\t{}", std::any::type_name::<DefaultLifecycle>()));
+    append_ledger_inventory(&mut inventory, pre_recovery_steps);
+    append_ledger_inventory(&mut inventory, recovery_step);
+    append_ledger_inventory(&mut inventory, trigger_step);
+    append_ledger_inventory(&mut inventory, let_go_steps);
+    inventory
   }
 
   /// Run one package's `register` and list the package's page parts after those of the earlier packages.

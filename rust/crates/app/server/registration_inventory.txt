@@ -1,0 +1,164 @@
+page_packages	runtime.agents	runtime.agents
+page_packages	runtime.usage	runtime.usage
+page_packages	runtime.session_api	runtime.session_api
+page_packages	runtime.tasks	runtime.tasks
+page_packages	runtime.triggers	runtime.triggers
+page_packages	src.features.artifacts	src.features.artifacts
+page_packages	src.features.backup	src.features.backup
+page_packages	src.features.backend_pool	src.features.backend_pool
+page_packages	src.features.chat_threads	src.features.chat_threads
+page_packages	src.features.code_server	src.features.code_server
+page_packages	src.features.cron	src.features.cron
+page_packages	src.features.diag	src.features.diag
+page_packages	src.features.slack	src.features.slack
+page_packages	src.features.discord	src.features.discord
+page_packages	src.features.disk_sweep	src.features.disk_sweep
+page_packages	src.features.web_reply	src.features.web_reply
+page_packages	src.features.host_auth	src.features.host_auth
+page_packages	src.features.diff_view	src.features.diff_view
+page_packages	src.features.explain	src.features.explain
+page_packages	src.features.improve	src.features.improve
+page_packages	src.features.memory	src.features.memory
+page_packages	src.features.ncu	src.features.ncu
+page_packages	src.features.router	src.features.router
+page_packages	src.features.terminal	src.features.terminal
+page_packages	src.features.trace	src.features.trace
+page_packages	src.features.usage	src.features.usage
+page_packages	src.features.voice	src.features.voice
+page_packages	src.backends.openai_compatible	src.backends.openai_compatible
+page_packages	src.backends.antigravity	src.backends.antigravity
+page_packages	src.backends.charlie_code	src.backends.charlie_code
+page_packages	src.backends.claude_code	src.backends.claude_code
+page_packages	src.backends.codex	src.backends.codex
+page_packages	src.backends.gemini	src.backends.gemini
+page_packages	src.backends.anthropic_compatible	src.backends.anthropic_compatible
+page_packages	src.backends.opencode	src.backends.opencode
+page_packages	src.features.files	src.features.files
+routers	runtime.session_api	runtime.session_api
+routers	runtime.session_api	runtime.session_api
+routers	runtime.tasks	runtime.tasks
+routers	runtime.triggers	runtime.triggers
+routers	src.features.artifacts	src.features.artifacts
+routers	src.features.chat_threads	src.features.chat_threads
+routers	src.features.code_server	src.features.code_server
+routers	src.features.cron	src.features.cron
+routers	src.features.diag	src.features.diag
+routers	src.features.slack	src.features.slack
+routers	src.features.discord	src.features.discord
+routers	src.features.web_reply	src.features.web_reply
+routers	src.features.host_auth	src.features.host_auth
+routers	src.features.diff_view	src.features.diff_view
+routers	src.features.diff_view	src.features.diff_view
+routers	src.features.explain	src.features.explain
+routers	src.features.improve	src.features.improve
+routers	src.features.ncu	src.features.ncu
+routers	src.features.trace	src.features.trace
+routers	src.features.usage	src.features.usage
+routers	src.features.usage	src.features.usage
+routers	src.features.voice	src.features.voice
+routers	src.backends.openai_compatible	src.backends.openai_compatible
+routers	src.features.files	src.features.files
+websocket route	runtime.session_api	/ws/sessions/*
+websocket route	src.features.terminal	/ws/terminal
+websocket route	src.features.voice	/ws/voice/*
+service	src.features.cron	cron_binding_context
+service	src.features.cron	scheduler
+service	src.features.slack	slack
+service	src.features.discord	discord
+service	src.features.host_auth	host_auth
+service	src.features.trace	merge_pool
+service	src.features.usage	ext_usage
+file view	src.features.artifacts	artifacts
+startup check	src.features.cron	cron_backend_refs
+startup check	src.features.usage	backend_ids
+config check	src.features.voice	check_default_backend
+config check	src.backends.claude_code	check_claude_pools
+config section	src.features.artifacts	publish
+config section	src.features.code_server	code_server
+config section	src.features.slack	slack
+config section	src.features.discord	discord
+config section	src.features.voice	voice
+config section	src.backends.claude_code	accounts
+legacy config key	src.features.artifacts	publish_dir
+legacy config key	src.features.artifacts	public_base_url
+legacy config key	src.features.code_server	code_server_bin
+legacy config key	src.features.code_server	code_server_config
+legacy config key	src.features.slack	slack_allowed_user_ids
+legacy config key	src.features.slack	credentials: slack_bot_token
+legacy config key	src.features.slack	credentials: slack_app_token
+legacy config key	src.features.slack	credentials: slack_user_token
+legacy config key	src.backends.claude_code	claude_accounts
+legacy config key	src.backends.claude_code	claude_compaction
+legacy config key	src.backends.gemini	credentials: gemini_api_key
+legacy config key	src.backends.gemini	credentials: gemini_model
+diff root	src.features.memory	memory
+template global	src.features.code_server	code_server_enabled
+template global	src.features.voice	voice_backends
+template global	src.features.voice	voice_default_backend
+home_cards	-	Host login authorization
+home_cards	-	Diff viewer
+home_cards	-	Token usage by model
+home_cards	-	File browser
+scheduled handler	src.features.backup	backup
+scheduled handler	src.features.disk_sweep	disk_sweep
+scheduled handler	src.features.usage	usage_ledger
+scheduled handler	src.features.usage	cool_storage
+metadata_slots	-	backend_pool:Session
+metadata_slots	-	cron:Session
+metadata_slots	-	slack:Session
+metadata_slots	-	discord:Session
+metadata_slots	-	web_reply:Session
+metadata_slots	-	claude_code:Session
+metadata_slots	-	claude_code:Thread
+metadata_slot_validators	-	backend_pool:Session
+metadata_slot_validators	-	cron:Session
+metadata_slot_validators	-	slack:Session
+metadata_slot_validators	-	discord:Session
+metadata_slot_validators	-	web_reply:Session
+metadata_slot_validators	-	claude_code:Session
+turn contribution	src.features.chat_threads	chat_threads
+turn contribution	src.features.cron	cron
+turn contribution	src.features.slack	slack
+turn contribution	src.features.discord	discord
+turn contribution	src.features.web_reply	web_reply
+turn contribution	src.features.memory	memory
+turn contribution	src.features.voice	voice
+turn contribution	src.backends.claude_code	claude_code
+sidebar contribution	src.features.artifacts	artifacts
+sidebar contribution	src.features.chat_threads	chat_threads
+usage source	src.backends.antigravity	Antigravity
+usage source	src.backends.charlie_code	CLC
+usage source	src.backends.claude_code	Claude Code
+usage source	src.backends.codex	Codex
+usage source	src.backends.opencode	opencode
+usage attribution	src.backends.openai_compatible	cc-openai-compatible
+usage attribution	src.backends.antigravity	antigravity
+usage attribution	src.backends.charlie_code	charlie-code
+usage attribution	src.backends.claude_code	cc-claude
+usage attribution	src.backends.codex	codex
+usage attribution	src.backends.anthropic_compatible	cc-anthropic-compatible
+usage attribution	src.backends.opencode	opencode
+backend type	src.backends.openai_compatible	cc-openai-compatible
+backend type	src.backends.antigravity	antigravity
+backend type	src.backends.charlie_code	charlie-code
+backend type	src.backends.claude_code	cc-claude
+backend type	src.backends.codex	codex
+backend type	src.backends.gemini	gemini
+backend type	src.backends.anthropic_compatible	cc-anthropic-compatible
+backend type	src.backends.opencode	opencode
+child env function	src.backends.claude_code	claude_child_env
+reading limits	src.backends.claude_code	claude
+reading limits	src.backends.opencode	snapshot
+backend_reading_limits	src.backends.anthropic_compatible	cc-anthropic-compatible:claude
+usage resolver	src.backends.codex	codex
+sequence controller	src.features.cron	cron
+sequence controller	src.features.improve	improve
+default_lifecycle	-	charliebot_registry::backend::DefaultLifecycle
+pre-recovery step	runtime.agents	session_cgroups
+pre-recovery step	runtime.agents	backend_pool
+pre-recovery step	runtime.usage	session_usage
+pre-recovery step	runtime.tasks	task_execution
+recovery step	runtime.tasks	task_recovery
+trigger step	runtime.triggers	triggers
+let-go step	runtime.tasks	task_execution
+let-go step	src.features.artifacts	headless_renderer

@@ -1,0 +1,22 @@
+{
+  "argv": [
+    "artifact",
+    "check",
+    "page.html",
+    "--genre",
+    "sitrep",
+    "--trigger",
+    "t",
+    "--background"
+  ],
+  "cwd": "{root}",
+  "files": {},
+  "responses": [],
+  "parser_generated": true,
+  "expect": {
+    "stdout": "",
+    "stderr": "usage: charliebot artifact [-h] {check,wrap} ...\ncharliebot artifact: error: unrecognized arguments: --background\n",
+    "exit": 2,
+    "requests": []
+  }
+}

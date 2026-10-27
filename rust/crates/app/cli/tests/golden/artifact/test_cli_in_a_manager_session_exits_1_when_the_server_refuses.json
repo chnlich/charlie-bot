@@ -1,0 +1,75 @@
+{
+  "argv": [
+    "artifact",
+    "check",
+    "{root}/page.html",
+    "--genre",
+    "sitrep",
+    "--trigger",
+    "where are we?"
+  ],
+  "cwd": "{root}",
+  "env": {
+    "CHARLIEBOT_SESSION_ID": "sess-manager-2"
+  },
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n",
+    "home/sessions/sess-manager-2/metadata.json": "{\"id\": \"sess-manager-2\", \"name\": \"S\", \"profile\": \"manager\"}",
+    "page.html": "{file:prompts/sitrep_template.html}",
+    "repo/prompts/sitrep_template.html": "{file:prompts/sitrep_template.html}",
+    "repo/prompts/cold_read.md": "{file:prompts/cold_read.md}"
+  },
+  "responses": [
+    {
+      "status": 422,
+      "body": {
+        "detail": "delegation blocked"
+      }
+    },
+    {
+      "status": 500,
+      "body": {
+        "detail": "no version"
+      }
+    }
+  ],
+  "expect": {
+    "stdout": "ok byte-integrity\nok style-verbatim\nok sections-numbered\nok fork-open-shape\nok fork-explainer\nok fact-anchored\nok req-chips 6 requirement chips carry a gloss\nok run-stated no numeric table cell\nok ordinal-named 0 external labels named in reach\n",
+    "stderr": "{\"error\": \"delegation blocked\", \"code\": \"server_error\", \"effect\": \"none\"}\n",
+    "exit": 1,
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/api/internal/delegate",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "session_id": "sess-manager-2",
+          "description": "cold read of {root}/page.html",
+          "task_type": "cold-read",
+          "cold_read": {
+            "page_path": "{root}/page.html",
+            "genre": "sitrep",
+            "trigger": "where are we?"
+          },
+          "request_id": "cold-read:sess-manager-2:418107106ce3:{timestamp}"
+        }
+      },
+      {
+        "method": "GET",
+        "path": "/api/internal/version",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": null
+        },
+        "body": null
+      }
+    ]
+  }
+}

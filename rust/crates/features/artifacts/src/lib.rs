@@ -1,10 +1,11 @@
 //! `src/features/artifacts`: the `publish:` config section, the session plan registry with its routes and its four verbs
-//! `present`, `amend`, `approve` and `close`, its sidebar contribution, and the artifact file view. The artifact and plan
-//! CLIs are not ported; the Python CLI keeps them.
+//! `present`, `amend`, `approve` and `close`, its sidebar contribution, the artifact file view, and the `plan` and
+//! `artifact check` subcommands.
 
 mod api;
 pub mod artifact_check;
 mod artifact_view;
+pub mod cli;
 mod headless_render;
 pub mod plan_diff;
 mod plan_paths;

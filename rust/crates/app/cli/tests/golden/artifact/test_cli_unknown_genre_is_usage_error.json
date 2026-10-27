@@ -1,0 +1,19 @@
+{
+  "argv": [
+    "artifact",
+    "check",
+    "page.html",
+    "--genre",
+    "weird"
+  ],
+  "cwd": "{root}",
+  "files": {},
+  "responses": [],
+  "parser_generated": true,
+  "expect": {
+    "stdout": "",
+    "stderr": "usage: charliebot artifact check [-h]\n                                 --genre {plan,understanding,sitrep,debug,explain}\n                                 [--trigger TRIGGER] [--assertions-only]\n                                 file\ncharliebot artifact check: error: argument --genre: invalid choice: 'weird' (choose from 'plan', 'understanding', 'sitrep', 'debug', 'explain')\n",
+    "exit": 2,
+    "requests": []
+  }
+}

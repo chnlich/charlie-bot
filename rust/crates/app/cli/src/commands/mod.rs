@@ -2,4 +2,5 @@
 
 pub mod delegate;
 mod delegate_readback;
+pub mod schedule_trigger;
 pub mod session;

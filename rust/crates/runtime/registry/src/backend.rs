@@ -249,6 +249,40 @@ pub type RunningTurnsFn = Arc<dyn Fn() -> Vec<SessionMetadata> + Send + Sync>;
 pub type ContextStateFn =
   Arc<dyn Fn() -> BoxFuture<'static, anyhow::Result<(Option<i64>, Option<UtcDateTime>)>> + Send + Sync>;
 
+/// One compaction process a backend runs (`claude_compaction.CompactionRun`): its command line, the account
+/// directory it reads and the chat event triggers of its outcome.
+pub struct CompactionRun<'a> {
+  pub argv: Vec<String>,
+  pub env: Env,
+  pub cwd: &'a Path,
+  pub config_dir: &'a Path,
+  pub session_id: &'a str,
+  pub family: &'a str,
+  pub model: &'a str,
+  pub trigger: &'a str,
+  pub failure_trigger: Option<&'a str>,
+  pub pre_tokens: Option<i64>,
+  pub emit: &'a EmitFn,
+  pub cfg: &'a CharlieBotConfig,
+  pub session_cgroup_id: Option<&'a str>,
+  pub account_label: &'a str,
+  pub timeout_duration: Duration,
+}
+
+/// What one compaction process did (`claude_compaction.CompactionOutcome`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CompactionOutcome {
+  pub ok: bool,
+  pub error: Option<String>,
+  pub models: Vec<String>,
+  pub post_tokens: Option<i64>,
+  pub cache_read_tokens: Option<i64>,
+}
+
+/// Runs one compaction process (`claude_compaction.run_compaction` in the Claude Code backend).
+pub type CompactionRunFn =
+  Arc<dyn for<'a> Fn(CompactionRun<'a>) -> BoxFuture<'a, anyhow::Result<CompactionOutcome>> + Send + Sync>;
+
 /// What the runtime gives a lifecycle for one run.
 pub struct LaunchContext {
   pub cfg: Arc<CharlieBotConfig>,
@@ -339,6 +373,18 @@ pub trait BackendLifecycle: Send + Sync {
     _succeeded: bool,
   ) -> BoxFuture<'a, anyhow::Result<()>> {
     Box::pin(async { Ok(()) })
+  }
+
+  /// The launch arguments that turn on this backend's mid-turn input path for the turn, or an empty map when the
+  /// backend keeps stdin closed (`midturn_delivery.launch_kwargs`).
+  fn midturn_launch_kwargs(
+    &self,
+    _meta: &SessionMetadata,
+    _turn: bool,
+    _run_kind: RunKind,
+    _run_id: Option<&str>,
+  ) -> anyhow::Result<Map<String, Value>> {
+    Ok(Map::new())
   }
 
   /// The notice events for the user that a finished round's events call for.

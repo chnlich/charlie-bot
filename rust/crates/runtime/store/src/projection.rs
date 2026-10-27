@@ -6,9 +6,10 @@ use lru::LruCache;
 use serde_json::Value;
 
 use crate::aggregator::MessageAggregator;
+use crate::event_types::{ChatEvent, SharedChatEvent};
 use crate::hooks::EventRenderer;
 use crate::message_events;
-use crate::{ChatEvent, SharedChatEvent, StoreError, StoreResult};
+use crate::{StoreError, StoreResult};
 
 const PAGE_BODY_CACHE_LIMIT: usize = 4;
 

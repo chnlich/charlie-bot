@@ -5,6 +5,8 @@ pub mod chat_events;
 pub mod compact;
 mod control;
 pub mod control_events;
+mod event_state;
+mod event_types;
 mod events;
 pub mod hooks;
 mod listing;
@@ -14,6 +16,7 @@ pub mod metadata;
 mod ndjson;
 pub mod projection;
 mod read_memos;
+mod run_facts;
 pub mod run_identity;
 pub mod run_records;
 mod session_events;
@@ -22,8 +25,11 @@ pub mod sidebar_state;
 mod store;
 pub mod streaming;
 mod task_tree;
+mod task_tree_state;
 mod thinking;
 pub mod trigger_files;
+#[cfg(any(test, feature = "write-faults"))]
+mod write_fault_types;
 #[cfg(any(test, feature = "write-faults"))]
 pub mod write_faults;
 

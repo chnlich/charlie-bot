@@ -12,102 +12,17 @@ use serde_json::Value;
 
 use crate::chat_events::is_chat_events_archive;
 use crate::compact::CompactValue;
+use crate::event_state::{
+  LIVE_RANGE_WALK_BYTE_BUDGET, LiveRangeMemo, ParsedLiveLine, SharedLiveLines, TAIL_WINDOW_SIZE, TYPE_HEAD_PROOF_BYTES,
+  TailLineWalk,
+};
+pub(crate) use crate::event_types::FileIdentity;
+pub use crate::event_types::{ChatEvent, SharedChatEvent};
 use crate::metadata::{SessionMetadata, UtcDateTime};
 use crate::ndjson;
-use crate::read_memos::{BoundedMemo, FileSignature, StatSignatureMemo};
+use crate::read_memos::FileSignature;
 use crate::store::{CachedChatEvents, HistoryWork};
 use crate::{ControlGuard, Store, StoreError, StoreResult};
-
-/// One parsed chat-log event: the compact interned-key form of its JSON.
-pub type ChatEvent = CompactValue;
-
-/// A reference counted parsed event shared by the live cache and task facts.
-pub type SharedChatEvent = Arc<ChatEvent>;
-
-// Match src/infra/ndjson.py:_COUNT_MEMO_LIMIT and its (mtime_ns, size) signatures.
-const EVENT_COUNT_MEMO_LIMIT: usize = 64;
-const EVENT_TAIL_MEMO_LIMIT: usize = 64;
-// Match src/runtime/chat_events.py:_ARCHIVE_MEMO_LIMIT for both archive memos.
-const ARCHIVE_MEMO_LIMIT: usize = 16;
-// Match src/runtime/chat_events.py:_LIVE_RANGE_MEMO_LIMIT and _WALK_BYTE_BUDGET.
-const LIVE_RANGE_MEMO_LIMIT: usize = 4;
-const TAIL_WINDOW_SIZE: usize = 512 * 1024;
-const LIVE_RANGE_WALK_BYTE_BUDGET: usize = 32 * 1024 * 1024;
-// The head a type walk reads before it parses a line: a type string within it is proven without the rest of the line.
-const TYPE_HEAD_PROOF_BYTES: usize = 256;
-
-#[derive(Clone)]
-struct LiveRangeMemo {
-  mtime_ns: i128,
-  size: u64,
-  inode: u64,
-  // Python's BoundedMemo returns the cached list by reference. Arc keeps a live-range hit just as cheap.
-  lines: Arc<Vec<Option<Arc<ChatEvent>>>>,
-  covered_byte_end: usize,
-  ends_on_boundary: bool,
-  first_line_index: usize,
-  covered_byte_start: usize,
-}
-
-type ParsedLiveLine = Option<Arc<ChatEvent>>;
-type SharedLiveLines = Arc<Vec<ParsedLiveLine>>;
-type TailPage = (Arc<Vec<ChatEvent>>, usize, bool);
-
-struct TailLineWalk {
-  lines: Vec<Vec<u8>>,
-  byte_start: usize,
-  ends_on_boundary: bool,
-  bytes_read: usize,
-}
-
-/// Bounded file-signature memos for the Python-equivalent event readers.
-pub(crate) struct EventReadCaches {
-  count: StatSignatureMemo<PathBuf, usize>,
-  tail: StatSignatureMemo<(PathBuf, usize), TailPage>,
-  archive_paths: StatSignatureMemo<PathBuf, Arc<Vec<PathBuf>>>,
-  archive_events: StatSignatureMemo<PathBuf, Arc<Vec<SharedChatEvent>>>,
-  live_ranges: BoundedMemo<PathBuf, LiveRangeMemo>,
-  #[cfg(test)]
-  tail_bytes_read: usize,
-  #[cfg(test)]
-  tail_lines_parsed: usize,
-  #[cfg(test)]
-  live_range_bytes_read: usize,
-  #[cfg(test)]
-  live_range_lines_parsed: usize,
-  #[cfg(test)]
-  archive_file_reads: usize,
-  #[cfg(test)]
-  archive_dir_walks: usize,
-  #[cfg(test)]
-  count_bytes_read: usize,
-}
-
-impl Default for EventReadCaches {
-  fn default() -> Self {
-    Self {
-      count: StatSignatureMemo::new(EVENT_COUNT_MEMO_LIMIT),
-      tail: StatSignatureMemo::new(EVENT_TAIL_MEMO_LIMIT),
-      archive_paths: StatSignatureMemo::new(ARCHIVE_MEMO_LIMIT),
-      archive_events: StatSignatureMemo::new(ARCHIVE_MEMO_LIMIT),
-      live_ranges: BoundedMemo::new(LIVE_RANGE_MEMO_LIMIT),
-      #[cfg(test)]
-      tail_bytes_read: 0,
-      #[cfg(test)]
-      tail_lines_parsed: 0,
-      #[cfg(test)]
-      live_range_bytes_read: 0,
-      #[cfg(test)]
-      live_range_lines_parsed: 0,
-      #[cfg(test)]
-      archive_file_reads: 0,
-      #[cfg(test)]
-      archive_dir_walks: 0,
-      #[cfg(test)]
-      count_bytes_read: 0,
-    }
-  }
-}
 
 /// Archived event values plus the live history's shared cache, traversed without cloning live events.
 pub struct ChatEventHistory {
@@ -129,36 +44,6 @@ impl ChatEventHistory {
   /// Whether the archive and live history are both empty.
   pub fn is_empty(&self) -> bool {
     self.archived.is_empty() && self.live.is_empty()
-  }
-}
-
-/// The identity of a live event log on disk: its inode, size and modification time, as Python's
-/// `_task_state_fast` keys its memo. An append moves the size, and a rewrite publishes a new inode.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct FileIdentity {
-  inode: u64,
-  size: u64,
-  mtime_ns: i128,
-}
-
-impl FileIdentity {
-  /// The byte length the identity covers: the offset a walk of this file starts from.
-  pub(crate) fn size(&self) -> u64 {
-    self.size
-  }
-
-  /// The identity of the file at `path`, or None when no file is there.
-  pub(crate) fn read(path: &Path) -> StoreResult<Option<Self>> {
-    use std::os::unix::fs::MetadataExt;
-    match fs::metadata(path) {
-      Ok(metadata) => Ok(Some(Self {
-        inode: metadata.ino(),
-        size: metadata.size(),
-        mtime_ns: i128::from(metadata.mtime()) * 1_000_000_000 + i128::from(metadata.mtime_nsec()),
-      })),
-      Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-      Err(error) => Err(StoreError::new(format!("{}: {error}", path.display()))),
-    }
   }
 }
 

@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 
 use crate::metadata::{SessionMetadata, SessionStatus, UtcDateTime};
+use crate::store::{CachedListing, DirNames};
 use crate::{Store, StoreError, StoreResult};
 
 /// One read-only view of session metadata and the sequence fields derived for its rows.
@@ -55,22 +56,6 @@ pub struct ArchivedPage {
 
 /// How long a memoized listing answers before the next call walks the sessions again (`_LISTINGS_SWEEP_INTERVAL`).
 const LISTINGS_SWEEP_INTERVAL: Duration = Duration::from_secs(10);
-
-/// The sessions directory's entry names at the root signature that produced them (`_dir_names_memo`).
-pub(crate) struct DirNames {
-  pub(crate) signature: (i64, i64),
-  pub(crate) names: std::sync::Arc<Vec<String>>,
-}
-
-/// One status filter's listing and what it was walked at: the listings revision, the time, and the sessions root's
-/// signature.
-pub(crate) struct CachedListing {
-  revision: u64,
-  generation: u64,
-  at: Instant,
-  root: (i64, i64),
-  rows: Arc<Vec<Arc<SessionMetadata>>>,
-}
 
 impl Store {
   /// Read all metadata rows, optionally restricted to one stored status.

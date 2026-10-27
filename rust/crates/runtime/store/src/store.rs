@@ -1,6 +1,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::future::Future;
+use std::num::NonZeroUsize;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -11,23 +12,25 @@ use std::time::{Duration, Instant};
 use charliebot_core::config::CharlieBotConfig;
 use charliebot_core::fsutil;
 use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot};
+use lru::LruCache;
 use serde_json::{Map, Value};
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
-use crate::aggregator::builtin_event_types;
+use crate::aggregator::{MessageAggregator, builtin_event_types};
 use crate::control::ControlLock;
-use crate::events::{EventReadCaches, SharedChatEvent};
+use crate::event_state::EventReadCaches;
+use crate::event_types::SharedChatEvent;
 use crate::hooks::{EventRenderer, RuntimeEventHooks};
-use crate::listing::{CachedListing, DirNames};
 use crate::metadata::{RoundRating, SessionMetadata, SessionStatus, UtcDateTime};
-use crate::run_records::RunFactsMemo;
-use crate::session_events::SessionEventState;
+use crate::projection::MessageProjection;
+use crate::run_facts::RunFactsMemo;
 use crate::streaming::StreamingManager;
-use crate::task_tree::{
-  CachedActivity, CachedNodeState, CachedRunFactsAt, CachedTaskStateTail, CachedTreeIndex, NodeFacts,
+#[cfg(test)]
+use crate::task_tree_state::IdentityHook;
+use crate::task_tree_state::{
+  CachedActivity, CachedNodeFacts, CachedNodeState, CachedRunFactsAt, CachedTaskStateTail, CachedTreeIndex,
 };
-use crate::thinking::ThinkingState;
 use crate::{ControlGuard, StoreError, StoreResult};
 
 pub(crate) const METADATA_CACHE_TTL: Duration = Duration::from_secs(30);
@@ -118,23 +121,6 @@ pub(crate) struct CachedChatEvents {
   pub(crate) events: Arc<Vec<SharedChatEvent>>,
 }
 
-/// The live history identity covered by a node-facts memo.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum NodeFactsKey {
-  Cached { generation: u64, covered: usize },
-  File(crate::events::FileIdentity),
-}
-
-/// A node's folded facts and the history they cover.
-#[derive(Clone)]
-pub(crate) struct CachedNodeFacts {
-  pub(crate) key: NodeFactsKey,
-  pub(crate) list_identity: Arc<()>,
-  pub(crate) archived: usize,
-  pub(crate) covered: usize,
-  pub(crate) facts: Arc<NodeFacts>,
-}
-
 /// Work done on node histories since the store opened, read through [`Store::history_work`].
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct HistoryWork {
@@ -166,6 +152,165 @@ pub(crate) struct HistoryWorkCounters {
   pub(crate) node_state_full_folds: AtomicU64,
   pub(crate) node_state_folded_events: AtomicU64,
   pub(crate) run_event_bytes_read: AtomicU64,
+}
+
+/// The sessions directory's entry names at the root signature that produced them (`_dir_names_memo`).
+pub(crate) struct DirNames {
+  pub(crate) signature: (i64, i64),
+  pub(crate) names: Arc<Vec<String>>,
+}
+
+/// One status filter's listing and what it was walked at: the listings revision, the time, and the sessions root's
+/// signature.
+pub(crate) struct CachedListing {
+  pub(crate) revision: u64,
+  pub(crate) generation: u64,
+  pub(crate) at: Instant,
+  pub(crate) root: (i64, i64),
+  pub(crate) rows: Arc<Vec<Arc<SessionMetadata>>>,
+}
+
+const PROJECTION_LRU_LIMIT: usize = 64;
+
+/// Per-session aggregator and message-projection state.
+pub(crate) struct SessionEventState {
+  pub(crate) aggregators: StdMutex<HashMap<String, Arc<Mutex<MessageAggregator>>>>,
+  pub(crate) init_locks: StdMutex<HashMap<String, Arc<Mutex<()>>>>,
+  pub(crate) event_locks: StdMutex<HashMap<String, Arc<Mutex<()>>>>,
+  pub(crate) epochs: StdMutex<HashMap<String, u64>>,
+  pub(crate) projections: StdMutex<ProjectionCache>,
+}
+
+impl Default for SessionEventState {
+  fn default() -> Self {
+    Self {
+      aggregators: StdMutex::new(HashMap::new()),
+      init_locks: StdMutex::new(HashMap::new()),
+      event_locks: StdMutex::new(HashMap::new()),
+      epochs: StdMutex::new(HashMap::new()),
+      projections: StdMutex::new(ProjectionCache::default()),
+    }
+  }
+}
+
+pub(crate) struct ProjectionCache {
+  values: LruCache<String, Arc<MessageProjection>>,
+}
+
+impl Default for ProjectionCache {
+  fn default() -> Self {
+    Self { values: LruCache::new(NonZeroUsize::new(PROJECTION_LRU_LIMIT).expect("the memo limit is nonzero")) }
+  }
+}
+
+impl ProjectionCache {
+  pub(crate) fn get(&mut self, session_id: &str) -> Option<Arc<MessageProjection>> {
+    self.values.get(session_id).cloned()
+  }
+
+  pub(crate) fn store(&mut self, session_id: &str, projection: Arc<MessageProjection>) {
+    self.values.put(session_id.to_string(), projection);
+  }
+
+  pub(crate) fn remove(&mut self, session_id: &str) {
+    self.values.pop(session_id);
+  }
+}
+
+#[derive(Default)]
+struct ThinkingMaps {
+  busy_since: HashMap<String, UtcDateTime>,
+  run_busy: HashMap<String, String>,
+  run_backends: HashMap<String, String>,
+}
+
+/// In-memory busy intervals and worker display backends.
+#[derive(Default)]
+pub(crate) struct ThinkingState {
+  maps: StdMutex<ThinkingMaps>,
+}
+
+impl Store {
+  /// Open a busy interval, keeping the earlier start when the session is already busy.
+  pub fn mark_busy(&self, session_id: &str, since: UtcDateTime) -> StoreResult<(UtcDateTime, bool)> {
+    Ok(self.mark_busy_inner(session_id, since))
+  }
+
+  fn mark_busy_inner(&self, session_id: &str, since: UtcDateTime) -> (UtcDateTime, bool) {
+    let mut maps = self.thinking_state.maps.lock().expect("thinking state mutex is not poisoned");
+    let result = match maps.busy_since.get(session_id) {
+      Some(existing) => (*existing, false),
+      None => {
+        maps.busy_since.insert(session_id.to_string(), since);
+        (since, true)
+      }
+    };
+    drop(maps);
+    if result.1 {
+      self.runtime_hooks.mark_sidebar_dirty(session_id);
+    }
+    result
+  }
+
+  /// Clear a busy interval when one is present.
+  pub fn clear_busy(&self, session_id: &str) {
+    let removed =
+      self.thinking_state.maps.lock().expect("thinking state mutex is not poisoned").busy_since.remove(session_id);
+    if removed.is_some() {
+      self.runtime_hooks.mark_sidebar_dirty(session_id);
+    }
+  }
+
+  /// Return the current busy interval start.
+  pub fn busy_since(&self, session_id: &str) -> Option<UtcDateTime> {
+    self.thinking_state.maps.lock().expect("thinking state mutex is not poisoned").busy_since.get(session_id).copied()
+  }
+
+  /// Open the busy interval owned by one worker run.
+  pub fn mark_run_busy(&self, session_id: &str, run_id: &str, since: UtcDateTime) {
+    self
+      .thinking_state
+      .maps
+      .lock()
+      .expect("thinking state mutex is not poisoned")
+      .run_busy
+      .insert(session_id.to_string(), run_id.to_string());
+    self.mark_busy_inner(session_id, since);
+  }
+
+  /// Clear a worker busy interval only when the run id owns it.
+  pub fn clear_run_busy(&self, session_id: &str, run_id: &str) {
+    let cleared = {
+      let mut maps = self.thinking_state.maps.lock().expect("thinking state mutex is not poisoned");
+      if maps.run_busy.get(session_id).map(String::as_str) != Some(run_id) {
+        false
+      } else {
+        maps.run_busy.remove(session_id);
+        maps.busy_since.remove(session_id).is_some()
+      }
+    };
+    if cleared {
+      self.runtime_hooks.mark_sidebar_dirty(session_id);
+    }
+  }
+
+  /// Record the newest worker run backend for display.
+  pub fn note_run_backend(&self, session_id: &str, backend: &str) {
+    if !backend.is_empty() {
+      self
+        .thinking_state
+        .maps
+        .lock()
+        .expect("thinking state mutex is not poisoned")
+        .run_backends
+        .insert(session_id.to_string(), backend.to_string());
+    }
+  }
+
+  /// Return the newest worker run backend known for display.
+  pub fn run_backend(&self, session_id: &str) -> Option<String> {
+    self.thinking_state.maps.lock().expect("thinking state mutex is not poisoned").run_backends.get(session_id).cloned()
+  }
 }
 
 /// Session metadata and event-log persistence for one configured CharlieBot home.
@@ -224,7 +369,7 @@ pub struct Store {
   #[cfg(test)]
   pub(crate) event_append_hook: StdMutex<Option<Arc<dyn Fn() + Send + Sync>>>,
   #[cfg(test)]
-  pub(crate) identity_hook: StdMutex<Option<crate::task_tree::IdentityHook>>,
+  pub(crate) identity_hook: StdMutex<Option<IdentityHook>>,
   #[cfg(test)]
   pub(crate) tree_rows_hook: StdMutex<Option<Arc<dyn Fn() + Send + Sync>>>,
   #[cfg(test)]
@@ -239,7 +384,7 @@ pub struct Store {
   pub(crate) task_tree_index_builds: AtomicU64,
   pub(crate) task_tree_generation: AtomicU64,
   #[cfg(any(test, feature = "write-faults"))]
-  pub(crate) write_faults: Arc<crate::write_faults::WriteFaults>,
+  pub(crate) write_faults: Arc<crate::write_fault_types::WriteFaults>,
 }
 
 impl Store {

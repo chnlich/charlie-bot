@@ -1285,7 +1285,7 @@ impl TaskExecutionAdapter {
   async fn worker_outcome(&self, run_dir: &Path, option: &BackendOption) -> anyhow::Result<String> {
     let raw_path = run_dir.join(run_records::RAW_LOG_NAME);
     if raw_path.is_file() {
-      let translate = self.fresh_translate(option);
+      let translate = self.fresh_translate(option, Some(run_dir));
       let (_, result, _) = charliebot_agents::transport::recovery::scan_result_exit(&raw_path, translate)?;
       if result.as_ref().is_some_and(result_success) {
         return Ok("success".to_string());
@@ -1308,7 +1308,7 @@ impl TaskExecutionAdapter {
     if !raw_path.is_file() {
       return Ok(None);
     }
-    let mut translate = self.fresh_translate(option);
+    let mut translate = self.fresh_translate(option, raw_path.parent());
     let raw_path = raw_path.to_path_buf();
     tokio::task::spawn_blocking(move || {
       let raw = fs::File::open(&raw_path).with_context(|| format!("reading raw run log {}", raw_path.display()))?;
@@ -1336,7 +1336,11 @@ impl TaskExecutionAdapter {
     .context("joining native session id reader")?
   }
 
-  fn fresh_translate(&self, option: &BackendOption) -> Box<dyn FnMut(Value) -> anyhow::Result<Vec<Value>> + Send> {
+  fn fresh_translate(
+    &self,
+    option: &BackendOption,
+    log_dir: Option<&Path>,
+  ) -> Box<dyn FnMut(Value) -> anyhow::Result<Vec<Value>> + Send> {
     let cfg = match self.features.config.get() {
       Ok(cfg) => cfg,
       Err(error) => {
@@ -1344,7 +1348,8 @@ impl TaskExecutionAdapter {
         return Box::new(|event| Ok(vec![event]));
       }
     };
-    match backend_types::build_backend(Arc::clone(&self.features.registry), option, &cfg, LaunchArgs::default()) {
+    let launch = LaunchArgs { log_dir: log_dir.map(Path::to_path_buf), ..LaunchArgs::default() };
+    match backend_types::build_backend(Arc::clone(&self.features.registry), option, &cfg, launch) {
       Ok(built) => {
         let mut translate = built.backend.translator();
         Box::new(move |event| translate.translate(event))

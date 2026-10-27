@@ -227,6 +227,7 @@ pub fn fresh_translate(
   option: Option<&BackendOption>,
   meta: &SessionMetadata,
   run_id: &str,
+  log_dir: Option<&Path>,
 ) -> anyhow::Result<FreshTranslate> {
   let Some(option) = option else {
     return Ok(Box::new(|event| Ok(vec![event])));
@@ -234,7 +235,7 @@ pub fn fresh_translate(
   let launch = match features.registry.lifecycle_for(&option.backend_type) {
     Ok(lifecycle) => {
       let backend_kwargs = lifecycle.midturn_launch_kwargs(meta, true, RunKind::ManagerTurn, Some(run_id))?;
-      LaunchArgs { backend_kwargs, ..LaunchArgs::default() }
+      LaunchArgs { backend_kwargs, log_dir: log_dir.map(Path::to_path_buf), ..LaunchArgs::default() }
     }
     // A type no package registered has no lifecycle and no mid-turn input path; the build below reports it.
     Err(_) => LaunchArgs::default(),

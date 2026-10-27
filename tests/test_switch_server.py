@@ -305,8 +305,8 @@ class World:
   socket: str
   env: dict[str, str]
   initial_head: str  # the runtime clone's HEAD before any switch
-  old_sha: str  # the release current names: a build from before the agy adoption commit
-  rust_sha: str  # the release the tests switch to: a build after it
+  old_sha: str  # the release current names: OpenCode and agy cannot re-attach
+  rust_sha: str  # the target release: OpenCode and agy can re-attach
   new_sha: str  # the release commit used by the forward and back switch test
   port: int
   live: list[subprocess.Popen[bytes]] = dataclasses.field(default_factory=list)
@@ -338,6 +338,22 @@ def _install_release(releases: pathlib.Path, sha: str) -> None:
   _write_behavior(release)
 
 
+def _write_backend_registration(clone: pathlib.Path, module: str, backend_type: str, enabled: bool) -> None:
+  path = clone / "rust/crates/runtime/agents/src/backends" / module / "mod.rs"
+  path.parent.mkdir(parents=True, exist_ok=True)
+  path.write_text(
+      f'''pub fn register() {{
+  BackendTypeRegistration {{
+    type_name: "{backend_type}",
+    traits: BackendTraits {{
+      restart_reattach: {str(enabled).lower()},
+    }},
+  }};
+}}
+''',
+      encoding="utf-8")
+
+
 def _free_port() -> int:
   with socket.socket() as sock:
     sock.bind(("127.0.0.1", 0))
@@ -356,27 +372,17 @@ def _build_world(root: pathlib.Path) -> World:
   shutil.copy2(SWITCH, clone / "scripts" / "switch-server.sh")
   # The launcher's preflight reads its expected limits from this directory.
   shutil.copytree(ROOT / "scripts" / "systemd", clone / "scripts" / "systemd")
-  _git(clone, "init", "-q")
-  _git(clone, "checkout", "--orphan", "agy-adoption")
-  marker = clone / "agy-adoption-marker"
-  marker.write_text("test adoption commit\n", encoding="utf-8")
-  _git(clone, "add", marker.name)
-  _git(clone, "commit", "-q", "-m", "adopt a live agy run across a restart")
-  adoption = _git(clone, "rev-parse", "HEAD")
-  _git(clone, "checkout", "--orphan", "main")
-  marker.unlink()
-  _git(clone, "rm", "--cached", marker.name)
-  # The switch names one commit as what made agy survive a restart. This unrelated marker commit lets the older release
-  # refer to it while only the newer release contains it in its history.
-  switch_copy = clone / "scripts" / "switch-server.sh"
-  text, declared = re.subn(
-      r"(?m)^AGY_ADOPTION_COMMIT=\S+$", f"AGY_ADOPTION_COMMIT={adoption}", switch_copy.read_text(encoding="utf-8"))
-  assert declared == 1, "the switch declares AGY_ADOPTION_COMMIT once"
-  switch_copy.write_text(text, encoding="utf-8")
-  _git(clone, "add", "scripts")
-  _git(clone, "commit", "-q", "-m", "old release")
+  _write_backend_registration(clone, "opencode", "opencode", False)
+  _write_backend_registration(clone, "antigravity", "antigravity", False)
+  _write_backend_registration(clone, "claude_code", "cc-claude", True)
+  _git(clone, "init", "-q", "-b", "main")
+  _git(clone, "add", "scripts", "rust")
+  _git(clone, "commit", "-q", "-m", "fake runtime clone")
   old_sha = _git(clone, "rev-parse", "HEAD")
-  _git(clone, "merge", "--no-ff", "--allow-unrelated-histories", "-m", "include agy adoption history", "agy-adoption")
+  _write_backend_registration(clone, "opencode", "opencode", True)
+  _write_backend_registration(clone, "antigravity", "antigravity", True)
+  _git(clone, "add", "rust")
+  _git(clone, "commit", "-q", "-m", "enable backend restart re-attachment")
   rust_sha = _git(clone, "rev-parse", "HEAD")
   _git(clone, "commit", "-q", "--allow-empty", "-m", "new release")
   new_sha = _git(clone, "rev-parse", "HEAD")
@@ -644,14 +650,6 @@ def test_home_helper_no_reattach_matches_registered_traits() -> None:
       backend_type for backend_type, registration in backend_type_registration.registrations().items()
       if not registration.traits.restart_reattach
   }
-  rust_declaration = re.search(r"^RUST_NO_REATTACH = (.+)$", SWITCH.read_text(encoding="utf-8"), re.MULTILINE)
-  assert rust_declaration is not None
-  rust_types = set()
-  for path in (ROOT / "rust/crates/runtime/agents/src/backends").glob("*/mod.rs"):
-    text = path.read_text(encoding="utf-8")
-    if re.search(r"restart_reattach:\s*false", text):
-      rust_types.add(re.search(r'type_name:\s*"([^"]+)"', text)[1])
-  assert ast.literal_eval(rust_declaration[1]) == rust_types
 
 
 def _stubbed_preflight(world: World, running_impl: str, mode: str, target_sha: str) -> subprocess.CompletedProcess[str]:
@@ -685,10 +683,9 @@ preflight
     "running,target",
     [("carries", "carries"), ("lacks", "carries"), ("carries", "lacks"), ("python", "carries"), ("carries", "python")],
     ids=["both-carry", "running-lacks", "target-lacks", "python-running", "python-target"])
-@pytest.mark.parametrize("backend", ["agy-gemini-flash", "oc-deepseek-flash"])
+@pytest.mark.parametrize("backend", ["agy-gemini-flash", "oc-deepseek-flash", "claude-opus", "oc-retired"])
 def test_live_backend_switch_directions(world: World, running: str, target: str, backend: str) -> None:
-  """A live run passes only where a restart can keep it: an agy run in a Rust-to-Rust switch whose two builds both
-  carry the adoption commit. Every other live run refuses before the old server stops."""
+  """Rust builds read each backend's re-attachment declaration from their own source tree."""
   _seed_live_run(world, "run-direction", backend)
   build = {"carries": world.rust_sha, "lacks": world.old_sha, "python": ""}
   running_impl = f"rust {build[running]}" if running != "python" else "python"
@@ -696,27 +693,36 @@ def test_live_backend_switch_directions(world: World, running: str, target: str,
 
   proc = _stubbed_preflight(world, running_impl, mode, build[target])
 
-  allowed = running == "carries" and target == "carries" and backend.startswith("agy-")
+  backend_type = {
+      "agy-gemini-flash": "antigravity",
+      "oc-deepseek-flash": "opencode",
+      "claude-opus": "cc-claude",
+  }.get(backend)
+  allowed = (running != "python" and target != "python" and backend_type == "cc-claude") or (
+      running == "carries" and target == "carries" and backend_type
+      in {"antigravity", "opencode"}) or (running == "python" and target == "carries" and backend_type == "cc-claude")
   assert proc.returncode == (0 if allowed else 1), _report(world, proc)
   if target == "python":
     assert "usage: switch-server.sh rust" in proc.stderr
-  elif not allowed:
+  elif target != "python" and not allowed:
     assert backend in proc.stdout
     assert "run-direction" in proc.stdout
-    assert "cannot be re-attached after a restart" in proc.stdout
-  if not allowed and backend.startswith("agy-") and running != "python" and target != "python":
+    if backend != "oc-retired":
+      assert "cannot be re-attached after a restart" in proc.stdout
+  if not allowed and backend in {"agy-gemini-flash", "oc-deepseek-flash", "claude-opus"
+                                } and running != "python" and target != "python":
     lacking = "running" if running == "lacks" else "target"
-    assert f"the {lacking} build {world.old_sha} lacks " in proc.stdout, _report(world, proc)
-  if not allowed and backend.startswith("oc-") and target != "python":
-    # The OpenCode refusal is the same line in every direction, with no adoption-commit reason.
-    assert "lacks " not in proc.stdout, _report(world, proc)
+    assert f"{lacking} build {world.old_sha} marks restart_reattach = false" in proc.stdout, _report(world, proc)
+  if backend == "oc-retired" and target != "python":
+    assert "restart re-attachment is unknown" in proc.stdout, _report(world, proc)
   assert all(live.poll() is None for live in world.live)
 
 
 @pytest.mark.parametrize("missing", ["running", "target"])
 def test_preflight_fails_when_a_build_is_not_in_the_clone(world: World, missing: str) -> None:
-  """The switch reads each build's history from the clone: an absent build fails the preflight instead of guessing."""
+  """The switch refuses a live run when one build has no readable backend registration."""
   absent = hashlib.sha1(b"a build no clone has").hexdigest()
+  _seed_live_run(world, "run-missing-build", "oc-deepseek-flash")
   if missing == "target":
     _install_release(world.releases, absent)
     running_impl, target_sha = f"rust {world.rust_sha}", absent
@@ -726,7 +732,9 @@ def test_preflight_fails_when_a_build_is_not_in_the_clone(world: World, missing:
   proc = _stubbed_preflight(world, running_impl, "rust", target_sha)
 
   assert proc.returncode == 1, _report(world, proc)
-  assert f"commit {absent} is not in the runtime clone" in proc.stdout, _report(world, proc)
+  build_label = "running build" if missing == "running" else "target build"
+  assert f"{build_label} {absent}" in proc.stdout, _report(world, proc)
+  assert "cannot inspect build" in proc.stdout, _report(world, proc)
 
 
 @pytest.mark.parametrize(

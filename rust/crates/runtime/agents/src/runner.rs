@@ -1,6 +1,7 @@
 //! The raw-log `AgentBackend.run` template method.
 
 use std::collections::HashMap;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -27,7 +28,7 @@ use crate::transport::follow::{self, FollowSummary};
 use crate::transport::identity::{self, ProcessIdentity};
 use crate::transport::kill::{self, python_exit_code};
 use crate::transport::rotation::rotate_stale_transport;
-use crate::transport::spawn::{self, AgentChild, RawStdin, SpawnSpec, read_stderr_tail};
+use crate::transport::spawn::{self, AgentChild, RawStdin, SpawnSetup, SpawnSpec, read_stderr_tail};
 
 pub const DEFAULT_POST_RESULT_TIMEOUT: Duration = Duration::from_secs(90);
 pub const DEFAULT_CLEANUP_TIMEOUT: Duration = Duration::from_secs(30);
@@ -215,7 +216,7 @@ impl AgentRunner {
       && let Some(serve) = request.registry.serve_transport(&self.backend_type)
     {
       drop(backend);
-      return self.run_serve(request, serve, &command, final_env).await;
+      return self.run_serve(request, serve, &command, final_env, &log_dir).await;
     }
     let raw_path = log_dir.join(RAW_LOG_NAME);
     let stderr_path = log_dir.join(STDERR_LOG_NAME);
@@ -399,18 +400,33 @@ impl AgentRunner {
     request: RunRequest,
     serve: Arc<dyn ServeTransport>,
     command: &[String],
-    env: Env,
+    mut env: Env,
+    run_directory: &Path,
   ) -> anyhow::Result<RunOutcome> {
     let serve_turn = serve.take_turn(command)?;
-    let original_program = command.first().context("serve backend command is empty")?.clone();
-    let (program, args): (std::ffi::OsString, Vec<std::ffi::OsString>) = if request.child_waits_for_spawn_callback {
-      let mut args =
-        vec!["-c".into(), "kill -STOP $$; exec \"$@\"".into(), "charliebot-run-gate".into(), original_program.into()];
-      args.extend(command.iter().skip(1).take(1).cloned().map(Into::into));
-      ("/bin/sh".into(), args)
-    } else {
-      (original_program.into(), command.iter().skip(1).take(1).cloned().map(Into::into).collect())
+    let raw_path = run_directory.join(RAW_LOG_NAME);
+    let stderr_path = run_directory.join(STDERR_LOG_NAME);
+    let cursor_path = run_directory.join(charliebot_store::run_records::CURSOR_NAME);
+    rotate_stale_transport(run_directory, &raw_path, &stderr_path, &cursor_path)?;
+    fs::write(&raw_path, [])?;
+    fs::write(run_directory.join("agent.stdout.log"), [])?;
+    let custom_process = serve_turn.identity_process(command, run_directory)?;
+    let (mut program, mut args) = match custom_process {
+      Some(process) => {
+        env.extend(process.env);
+        (process.program, process.args)
+      }
+      None => {
+        let program = command.first().context("serve backend command is empty")?.clone();
+        (program.into(), command.iter().skip(1).cloned().map(Into::into).collect())
+      }
     };
+    if request.child_waits_for_spawn_callback {
+      let mut gated = vec!["-c".into(), "kill -STOP $$; exec \"$@\"".into(), "charliebot-run-gate".into(), program];
+      gated.extend(args);
+      program = "/bin/sh".into();
+      args = gated;
+    }
     let spec = SpawnSpec::new(
       program,
       args,
@@ -419,7 +435,13 @@ impl AgentRunner {
       self.launch.cgroup_session_id.clone(),
       request.cgroup_config.clone(),
     );
-    let mut spawned = spawn::spawn_piped(&spec).await?;
+    let mut spawned = spawn::spawn_detached_files(
+      &spec,
+      &run_directory.join("agent.stdout.log"),
+      &stderr_path,
+      SpawnSetup::ParentSideTurnTree,
+    )
+    .await?;
     let gate = request.child_waits_for_spawn_callback.then(|| SpawnGate::arm(&spawned.child));
     if gate.is_some() {
       wait_until_stopped_or_terminate(&mut spawned.child).await?;
@@ -451,6 +473,11 @@ impl AgentRunner {
       .run(ServeTurnArgs {
         prompt: request.prompt,
         cwd: request.cwd,
+        run_directory: run_directory.to_path_buf(),
+        raw_log: raw_path,
+        raw_cursor: cursor_path,
+        buffer_limit: self.launch.buffer_limit.unwrap_or(follow::DEFAULT_BUFFER_LIMIT),
+        post_result_timeout: request.post_result_timeout,
         env,
         uploaded_files: request.uploaded_files,
         process_id: identity.pid,

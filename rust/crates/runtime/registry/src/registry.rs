@@ -2,6 +2,7 @@
 
 use std::any::{Any, TypeId, type_name};
 use std::collections::{BTreeMap, HashMap};
+use std::ffi::OsString;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, RwLock, Weak};
@@ -860,14 +861,31 @@ pub trait ServeTransport: Send + Sync {
 
 /// One turn of a serve transport, run in the process that the runner spawned for it.
 pub trait ServeTurn: Send {
+  /// The detached identity process that owns this turn. `None` uses the backend command as the identity process.
+  fn identity_process(&self, _command: &[String], _run_directory: &Path) -> anyhow::Result<Option<ServeProcessSpec>> {
+    Ok(None)
+  }
+
   /// Runs the turn to its end in the process that `args` describes.
   fn run(self: Box<Self>, args: ServeTurnArgs) -> BoxFuture<'static, anyhow::Result<ServeTurnResult>>;
+}
+
+/// A process command chosen by a serve backend to carry one run's identity.
+pub struct ServeProcessSpec {
+  pub program: OsString,
+  pub args: Vec<OsString>,
+  pub env: Env,
 }
 
 /// What the runner gives a serve turn once its process has spawned.
 pub struct ServeTurnArgs {
   pub prompt: String,
   pub cwd: PathBuf,
+  pub run_directory: PathBuf,
+  pub raw_log: PathBuf,
+  pub raw_cursor: PathBuf,
+  pub buffer_limit: usize,
+  pub post_result_timeout: Duration,
   pub env: Env,
   pub uploaded_files: Vec<Value>,
   /// The turn process's pid. `ServeTransport::finish_active_turn` finds the turn by it.

@@ -262,8 +262,18 @@ impl Worker {
     let stderr_path = self.data_dir.join(STDERR_LOG_NAME);
     let cursor_path = self.data_dir.join(CURSOR_NAME);
     let sink = self.open_sink()?;
-    // A dedicated translate instance for the stream: translate_event is stateful on some backends.
+    // Replay the delivered prefix through a dedicated translator to restore stateful backend accumulators.
     let mut translator = self.build_backend(None, false)?.backend.translator();
+    let cursor_offset = cursor::read_raw_cursor(&cursor_path);
+    let replay_path = raw_path.clone();
+    let prefix = tokio::task::spawn_blocking(move || {
+      charliebot_agents::transport::recovery::raw_events_before_cursor(&replay_path, cursor_offset)
+    })
+    .await
+    .context("joining OpenCode translator prefix replay")??;
+    for raw in prefix {
+      translator.translate(raw)?;
+    }
     let failure: Arc<Mutex<Option<anyhow::Error>>> = Arc::new(Mutex::new(None));
     let buffer_limit = charliebot_agents::transport::final_stdout::event_buffer_limit(
       &self.data_dir,
@@ -288,7 +298,7 @@ impl Worker {
       },
       move || alive(),
       Some(&cursor_path),
-      cursor::read_raw_cursor(&cursor_path),
+      cursor_offset,
       self.post_result_timeout,
       buffer_limit,
       follow::TAIL_POLL_INTERVAL,

@@ -2,6 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
@@ -11,8 +12,8 @@ use charliebot_core::event_types;
 use charliebot_core::pyfmt::python_str;
 use charliebot_core::pystr;
 use charliebot_registry::backend::{
-  AgentBackend, BackendFactory, BackendLifecycle, Env, LaunchArgs, ServeTransport, ServeTurn, ServeTurnArgs,
-  ServeTurnResult, Translate, TransportKind,
+  AgentBackend, BackendFactory, BackendLifecycle, Env, LaunchArgs, ServeProcessSpec, ServeTransport, ServeTurn,
+  ServeTurnArgs, ServeTurnResult, Translate, TransportKind,
 };
 use futures_util::future::BoxFuture;
 use nix::sys::signal::Signal;
@@ -22,17 +23,17 @@ use tokio::sync::watch;
 use uuid::Uuid;
 
 use super::options::{OpenCodeOption, model_overrides_config};
-use super::server::{OpenCodeHost, OpenCodeServer, OpenCodeServerPool, Turn, TurnEvent};
+use super::relay::{self, TurnRecord};
+use super::server::{OpenCodeHost, OpenCodeServer, OpenCodeServerPool, Turn};
 use crate::cli_base::{apply_proxy_env, image_mime};
 use crate::event_builders;
 use crate::runner::EventFn;
 use crate::transport::cgroup::SessionCgroupConfig;
+use crate::transport::follow::{self, SilenceCallback};
 use crate::transport::kill::{kill_process_group, python_exit_code};
 use crate::transport::spawn::{AgentPipeReader, SpawnSpec, spawn_one_shot};
 use charliebot_core::cgroup::SESSION_CGROUP_OOM_SCORE_ADJ;
 
-/// The turn's own process carries the run identity; OpenCode serves its events over HTTP.
-pub const TURN_PROCESS_CMD: [&str; 2] = ["/usr/bin/sleep", "infinity"];
 const RUN_PLAN_MARKER: &str = "__charliebot_opencode_run__=";
 const TOOL_EVENT_TYPES: [&str; 25] = [
   "permission.replied",
@@ -85,6 +86,7 @@ pub struct OpenCodeBackend {
   pool: Arc<OpenCodeServerPool>,
   launch: LaunchArgs,
   cgroup_config: SessionCgroupConfig,
+  recovered_model_limit: Option<Map<String, Value>>,
 }
 
 impl OpenCodeBackend {
@@ -97,7 +99,16 @@ impl OpenCodeBackend {
     launch: LaunchArgs,
     cgroup_config: SessionCgroupConfig,
   ) -> Self {
-    Self { model, proxy_url: option.proxy_url, one_shot_context, host, pool, launch, cgroup_config }
+    Self {
+      model,
+      proxy_url: option.proxy_url,
+      one_shot_context,
+      host,
+      pool,
+      launch,
+      cgroup_config,
+      recovered_model_limit: None,
+    }
   }
 
   fn run_plan(&self) -> Arc<OpenCodeRunPlan> {
@@ -151,7 +162,8 @@ impl AgentBackend for OpenCodeBackend {
       .lock()
       .expect("opencode run plan map is not poisoned")
       .insert(id.clone(), self.run_plan());
-    Ok(vec![TURN_PROCESS_CMD[0].to_string(), TURN_PROCESS_CMD[1].to_string(), format!("{RUN_PLAN_MARKER}{id}")])
+    let executable = std::env::current_exe()?;
+    Ok(vec![executable.to_string_lossy().into_owned(), relay::RELAY_ARG.to_string(), format!("{RUN_PLAN_MARKER}{id}")])
   }
 
   fn prepare_env(&self, env: Env) -> anyhow::Result<Env> {
@@ -163,7 +175,7 @@ impl AgentBackend for OpenCodeBackend {
   }
 
   fn translator(&self) -> Box<dyn Translate> {
-    Box::new(OpenCodeTranslator::new(self.model.clone()))
+    Box::new(OpenCodeTranslator::with_model_limit(self.model.clone(), self.recovered_model_limit.clone()))
   }
 
   fn transport(&self) -> TransportKind {
@@ -205,7 +217,12 @@ impl BackendFactory for OpenCodeFactory {
     let fields = OpenCodeOption::from_fields(&option.type_fields).map_err(anyhow::Error::msg)?;
     let one_shot_context = model_overrides_config(std::slice::from_ref(option))?;
     self.pool.record_options(&cfg.backends.options);
-    Ok(Box::new(OpenCodeBackend::new(
+    self.pool.adopt_existing()?;
+    let recovered_model_limit = match launch.log_dir.as_deref() {
+      Some(directory) => relay::read_turn_record(directory)?.and_then(|record| record.model_limit),
+      None => None,
+    };
+    let mut backend = OpenCodeBackend::new(
       model,
       fields,
       one_shot_context,
@@ -213,7 +230,9 @@ impl BackendFactory for OpenCodeFactory {
       Arc::clone(&self.pool),
       launch,
       SessionCgroupConfig::from_config(cfg),
-    )))
+    );
+    backend.recovered_model_limit = recovered_model_limit;
+    Ok(Box::new(backend))
   }
 }
 
@@ -275,6 +294,42 @@ struct OpenCodeTurn {
 }
 
 impl ServeTurn for OpenCodeTurn {
+  fn identity_process(&self, command: &[String], run_directory: &Path) -> anyhow::Result<Option<ServeProcessSpec>> {
+    let program = command.first().context("OpenCode relay command has no executable")?;
+    let parent = relay::parent_identity()?;
+    let parent_start = parent.pid_start.context("OpenCode relay parent pid has no start time")?;
+    let mut env = Env::from([
+      ("CHARLIEBOT_OPENCODE_RELAY_DIRECTORY".to_string(), run_directory.display().to_string()),
+      (
+        "CHARLIEBOT_OPENCODE_SERVER_DIRECTORY".to_string(),
+        self
+          .plan
+          .host
+          .profile_home
+          .join(charliebot_core::home::OPENCODE_DIR_NAME)
+          .join(relay::SERVER_DIRECTORY_NAME)
+          .display()
+          .to_string(),
+      ),
+      ("CHARLIEBOT_OPENCODE_PARENT_PID".to_string(), parent.pid.to_string()),
+      ("CHARLIEBOT_OPENCODE_PARENT_START".to_string(), parent_start.clone()),
+    ]);
+    #[cfg(test)]
+    let args = vec!["--exact".into(), "backends::opencode::test_backend::relay_subprocess".into(), "--ignored".into()];
+    #[cfg(not(test))]
+    let args = vec![
+      relay::RELAY_ARG.into(),
+      run_directory.as_os_str().to_owned(),
+      parent.pid.to_string().into(),
+      parent_start.into(),
+    ];
+    #[cfg(test)]
+    {
+      env.insert("CHARLIEBOT_OPENCODE_RELAY_TEST".to_string(), "1".to_string());
+    }
+    Ok(Some(ServeProcessSpec { program: program.clone().into(), args, env: std::mem::take(&mut env) }))
+  }
+
   fn run(self: Box<Self>, args: ServeTurnArgs) -> BoxFuture<'static, anyhow::Result<ServeTurnResult>> {
     Box::pin(run_turn(self.plan, args))
   }
@@ -282,18 +337,18 @@ impl ServeTurn for OpenCodeTurn {
 
 pub(crate) async fn run_turn(plan: Arc<OpenCodeRunPlan>, mut args: ServeTurnArgs) -> anyhow::Result<ServeTurnResult> {
   let server = plan.pool.server_for(plan.proxy_url.clone());
-  let mut translator = OpenCodeTranslator::new(plan.model.clone());
-  let mut model_limit = None;
   let mut turn: Option<Arc<Turn>> = None;
   let mut unregistered_claim: Option<String> = None;
   let mut failed = false;
   let mut succeeded = false;
-  let body_result =
-    run_turn_body(&plan, &server, &mut args, &mut translator, &mut model_limit, &mut turn, &mut unregistered_claim)
-      .await;
+  let body_result = run_turn_body(&plan, &server, &mut args, &mut turn, &mut unregistered_claim).await;
   let mut result = match body_result {
-    Ok(()) => {
+    Ok(true) => {
       succeeded = true;
+      Ok(())
+    }
+    Ok(false) => {
+      failed = true;
       Ok(())
     }
     Err(RunError::TurnExited) => Ok(()),
@@ -305,10 +360,6 @@ pub(crate) async fn run_turn(plan: Arc<OpenCodeRunPlan>, mut args: ServeTurnArgs
         .map_err(|error| anyhow::anyhow!(error.to_string()))
     }
     Err(RunError::Event(error)) => Err(error),
-    Err(RunError::AlreadyFailed) => {
-      failed = true;
-      Ok(())
-    }
   };
   let turn_end = if let Some(turn) = turn { turn.finish().await } else { Ok(()) };
   let claim_release =
@@ -338,22 +389,20 @@ async fn run_turn_body(
   plan: &OpenCodeRunPlan,
   server: &Arc<OpenCodeServer>,
   args: &mut ServeTurnArgs,
-  translator: &mut OpenCodeTranslator,
-  model_limit: &mut Option<Map<String, Value>>,
   turn: &mut Option<Arc<Turn>>,
   unregistered_claim: &mut Option<String>,
-) -> Result<(), RunError> {
+) -> Result<bool, RunError> {
   let directory = args.cwd.to_string_lossy().to_string();
   server.claim(&directory).await;
   *unregistered_claim = Some(directory.clone());
   await_or_exit(server.ensure_running(), &mut args.exit).await?.map_err(RunError::Backend)?;
   let session_id =
     await_or_exit(open_session(plan, server, &args.cwd), &mut args.exit).await?.map_err(RunError::Backend)?;
-  let current = server.register_claimed(&session_id, &directory, args.process_id).map_err(RunError::Backend)?;
+  let current = server.register_relay_claimed(&session_id, &directory, args.process_id).map_err(RunError::Backend)?;
   *unregistered_claim = None;
   *turn = Some(Arc::clone(&current));
   emit(&args.on_event, json!({"type": event_types::SESSION_ATTACHED, "session_id": session_id})).await?;
-  *model_limit = match await_or_exit(fetch_model_limit(plan, server, &args.cwd), &mut args.exit).await? {
+  let model_limit = match await_or_exit(fetch_model_limit(plan, server, &args.cwd), &mut args.exit).await? {
     Ok(limit) => limit,
     Err(error) => {
       tracing::warn!(target: "charliebot_agents", model = %plan.model, error = %error, "opencode_context_catalog_unavailable");
@@ -361,7 +410,6 @@ async fn run_turn_body(
     }
   };
   await_or_exit(server.wait_interrupts_settled(&session_id), &mut args.exit).await?.map_err(RunError::Backend)?;
-  current.drop_earlier_interrupts();
   await_or_exit(put_environment(plan, server, &session_id, &args.env, args.cgroup_path.as_deref()), &mut args.exit)
     .await?
     .map_err(RunError::Backend)?;
@@ -369,62 +417,111 @@ async fn run_turn_body(
     await_or_exit(reload_locations(server), &mut args.exit).await?.map_err(RunError::Backend)?;
   }
   let prompt = effective_prompt(plan, &args.prompt);
-  await_or_exit(send_prompt(server, &session_id, &prompt, &args.uploaded_files), &mut args.exit)
-    .await?
-    .map_err(RunError::Backend)?;
-  loop {
-    let next = tokio::time::timeout(server.progress_timeout()?, current.next_event());
-    let item = match await_or_exit(next, &mut args.exit).await {
-      Ok(Ok(item)) => item,
-      Ok(Err(_)) => {
-        tracing::error!(target: "charliebot_agents", session_id, "opencode_sse_silence_timeout");
-        return Err(RunError::Backend(anyhow::anyhow!(
-          "OpenCode session {session_id} produced no event for {} s",
-          server.progress_timeout()?.as_secs_f64()
-        )));
-      }
-      Err(()) => return Err(RunError::TurnExited),
-    };
-    let event = match item {
-      TurnEvent::Event(event) => event,
-      TurnEvent::ServerLost(reason) => return Err(RunError::Backend(anyhow::anyhow!(reason))),
-    };
-    let event_type = required_string(&event, "type").map_err(RunError::Backend)?;
-    let data = object_or_empty(event.get("data")).map_err(RunError::Backend)?;
-    match event_type {
-      "permission.asked" => {
+  let prompt_request = prompt_request(&prompt, &args.uploaded_files);
+  let record_name = server.record_name().map_err(RunError::Backend)?;
+  relay::write_turn_record(
+    &args.run_directory.join(relay::TURN_RECORD_NAME),
+    &TurnRecord {
+      server_record: record_name,
+      session_id: session_id.clone(),
+      prompt_request,
+      model_limit: model_limit.clone(),
+    },
+  )
+  .map_err(RunError::Backend)?;
+
+  let translator = Arc::new(Mutex::new(OpenCodeTranslator::with_model_limit(plan.model.clone(), model_limit)));
+  let callback_failure = Arc::new(Mutex::new(None));
+  let translate_state = Arc::clone(&translator);
+  let event_state = Arc::clone(&translator);
+  let callback_failure_for_handler = Arc::clone(&callback_failure);
+  let handler = args.on_event.clone();
+  let server_for_handler = Arc::clone(server);
+  let alive = args.exit.clone();
+  let relay_exit = args.exit.clone();
+  let progress_timeout = server.progress_timeout().map_err(RunError::Backend)?;
+  let silence_message =
+    format!("OpenCode session {session_id} produced no event for {} s", progress_timeout.as_secs_f64());
+  let silence: SilenceCallback = Box::new(move || {
+    let message = silence_message.clone();
+    Box::pin(async move { Err(io::Error::new(io::ErrorKind::TimedOut, message)) })
+  });
+  let follow_result = follow::tail_follow_events(
+    &args.raw_log,
+    move |event| {
+      if event.get("type").and_then(Value::as_str) == Some("permission.asked") {
+        let data = object_or_empty(event.get("data"))?;
         let permission = data.get("permission").map(python_str).unwrap_or_else(|| "None".to_string());
         let patterns = data.get("patterns").map(python_str).unwrap_or_else(|| "None".to_string());
-        return Err(RunError::Backend(anyhow::anyhow!(
+        return Err(anyhow::anyhow!(
           "OpenCode requested interactive permission '{permission}' (patterns={patterns}) but CharlieBot runs headless with no approval path; aborting run."
-        )));
+        ));
       }
-      "session.execution.succeeded" => {
-        let event = translator.accumulated_result(model_limit.as_ref());
-        emit(&args.on_event, event).await?;
-        return Ok(());
-      }
-      "session.execution.failed" => {
-        let message = error_text(data.get("error"));
-        emit(&args.on_event, event_builders::make_error_event(&message)).await?;
-        return Err(RunError::AlreadyFailed);
-      }
-      "session.execution.interrupted" => {
-        let reason = data.get("reason").map(python_str).unwrap_or_else(|| "None".to_string());
-        emit(
-          &args.on_event,
-          event_builders::make_error_event(&format!("OpenCode execution interrupted (reason: {reason})")),
-        )
-        .await?;
-        return Err(RunError::AlreadyFailed);
-      }
-      _ => {
-        let translated = translator.translate_event(&event).map_err(RunError::Backend)?;
-        for event in translated {
-          emit(&args.on_event, event).await?;
+      translate_state
+        .lock()
+        .expect("OpenCode translator mutex is not poisoned")
+        .translate_event(&event)
+    },
+    move |event| {
+      let handler = handler.clone();
+      let failure = Arc::clone(&callback_failure_for_handler);
+      let server = Arc::clone(&server_for_handler);
+      let mut relay_exit = relay_exit.clone();
+      async move {
+        let mut event = event;
+        if event.get("type").and_then(Value::as_str) == Some(event_types::ERROR)
+          && event
+            .get("message")
+            .and_then(Value::as_str)
+            .is_some_and(|message| message.starts_with("OpenCode backend failed:"))
+          && let Some(reason) = server.failure_reason_after_stream_end().await
+        {
+          let message = format!("OpenCode backend failed: {reason}");
+          let object = event.as_object_mut().expect("error event is an object");
+          object.insert("message".to_string(), json!(message));
+          object.insert("content".to_string(), json!(message));
         }
+        if event.get("type").and_then(Value::as_str) == Some(event_types::ERROR)
+          && event
+            .get("message")
+            .and_then(Value::as_str)
+            .is_some_and(|message| message.starts_with("OpenCode execution interrupted (reason: user)"))
+        {
+          wait_turn_process(&mut relay_exit).await;
+          if process_exit_code(&relay_exit) == Some(-libc::SIGTERM) {
+            return Ok(());
+          }
+        }
+        if let Err(error) = handler(event).await {
+          let message = format!("{error:#}");
+          *failure.lock().expect("OpenCode event callback mutex is not poisoned") = Some(error);
+          return Err(io::Error::other(message));
+        }
+        Ok(())
       }
-    }
+    },
+    move || alive.borrow().is_none(),
+    Some(&args.raw_cursor),
+    0,
+    args.post_result_timeout,
+    args.buffer_limit,
+    follow::TAIL_POLL_INTERVAL,
+    Some(silence),
+    progress_timeout,
+  )
+  .await;
+  if let Some(error) = callback_failure.lock().expect("OpenCode event callback mutex is not poisoned").take() {
+    return Err(RunError::Event(error));
+  }
+  let summary = follow_result.map_err(RunError::Backend)?;
+  let status = event_state.lock().expect("OpenCode translator mutex is not poisoned").terminal_status();
+  if status == Some(TurnTerminal::Interrupted) && process_exit_code(&args.exit) == Some(-libc::SIGTERM) {
+    return Err(RunError::TurnExited);
+  }
+  match (summary.saw_result, status) {
+    (true, Some(TurnTerminal::Succeeded)) => Ok(true),
+    (_, Some(TurnTerminal::Failed | TurnTerminal::Interrupted | TurnTerminal::RelayEnded)) => Ok(false),
+    _ => Err(RunError::Backend(anyhow::anyhow!("OpenCode relay exited without a terminal event"))),
   }
 }
 
@@ -433,7 +530,6 @@ enum RunError {
   TurnExited,
   Backend(anyhow::Error),
   Event(anyhow::Error),
-  AlreadyFailed,
 }
 
 impl std::fmt::Display for RunError {
@@ -441,7 +537,6 @@ impl std::fmt::Display for RunError {
     match self {
       Self::TurnExited => formatter.write_str("OpenCode turn process exited"),
       Self::Backend(error) | Self::Event(error) => write!(formatter, "{error}"),
-      Self::AlreadyFailed => formatter.write_str("OpenCode execution failed"),
     }
   }
 }
@@ -585,28 +680,13 @@ async fn reload_locations(server: &OpenCodeServer) -> anyhow::Result<()> {
   Ok(())
 }
 
-async fn send_prompt(
-  server: &OpenCodeServer,
-  session_id: &str,
-  prompt: &str,
-  uploaded_files: &[Value],
-) -> anyhow::Result<()> {
+fn prompt_request(prompt: &str, uploaded_files: &[Value]) -> Value {
   let mut body = json!({"text": prompt});
   let attachments = image_file_attachments(uploaded_files);
   if !attachments.is_empty() {
     body.as_object_mut().unwrap().insert("files".to_string(), Value::Array(attachments));
   }
-  let response = server
-    .client_request(reqwest::Method::POST, &format!("/api/session/{session_id}/prompt"))?
-    .json(&body)
-    .send()
-    .await?;
-  if response.status() != reqwest::StatusCode::OK {
-    let status = response.status();
-    let text = response.text().await?;
-    bail!("OpenCode prompt returned HTTP {status}: {text}");
-  }
-  Ok(())
+  body
 }
 
 fn effective_prompt(plan: &OpenCodeRunPlan, prompt: &str) -> String {
@@ -672,6 +752,7 @@ fn error_text(error: Option<&Value>) -> String {
 /// The event translator and usage accumulator for one turn.
 pub struct OpenCodeTranslator {
   model: String,
+  model_limit: Option<Map<String, Value>>,
   streamed_parts: HashSet<(String, i64)>,
   tool_names: HashMap<String, String>,
   usage_input: i64,
@@ -681,12 +762,26 @@ pub struct OpenCodeTranslator {
   usage_cost: f64,
   last_step_tokens: Option<Map<String, Value>>,
   pub model_request_started_ms: Option<i64>,
+  terminal: Option<TurnTerminal>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TurnTerminal {
+  Succeeded,
+  Failed,
+  Interrupted,
+  RelayEnded,
 }
 
 impl OpenCodeTranslator {
   pub fn new(model: String) -> Self {
+    Self::with_model_limit(model, None)
+  }
+
+  pub fn with_model_limit(model: String, model_limit: Option<Map<String, Value>>) -> Self {
     Self {
       model,
+      model_limit,
       streamed_parts: HashSet::new(),
       tool_names: HashMap::new(),
       usage_input: 0,
@@ -696,6 +791,7 @@ impl OpenCodeTranslator {
       usage_cost: 0.0,
       last_step_tokens: None,
       model_request_started_ms: None,
+      terminal: None,
     }
   }
 
@@ -704,6 +800,24 @@ impl OpenCodeTranslator {
     let event_type = required_string(event, "type")?;
     let data = object_or_empty(event.get("data"))?;
     match event_type {
+      "session.execution.succeeded" => {
+        self.terminal = Some(TurnTerminal::Succeeded);
+        Ok(vec![self.accumulated_result(self.model_limit.as_ref())])
+      }
+      "session.execution.failed" => {
+        self.terminal = Some(TurnTerminal::Failed);
+        Ok(vec![event_builders::make_error_event(&error_text(data.get("error")))])
+      }
+      "session.execution.interrupted" => {
+        self.terminal = Some(TurnTerminal::Interrupted);
+        let reason = data.get("reason").map(python_str).unwrap_or_else(|| "None".to_string());
+        Ok(vec![event_builders::make_error_event(&format!("OpenCode execution interrupted (reason: {reason})"))])
+      }
+      "charliebot.opencode_relay.ended" => {
+        self.terminal = Some(TurnTerminal::RelayEnded);
+        let reason = required_string(event, "reason")?;
+        Ok(vec![event_builders::make_error_event(&format!("OpenCode backend failed: {reason}"))])
+      }
       "session.step.started" => {
         if self.model_request_started_ms.is_none() {
           self.model_request_started_ms = Some(required_i64(data, "started")?);
@@ -840,6 +954,10 @@ impl OpenCodeTranslator {
       json!(self.usage_cost),
       snapshot,
     )
+  }
+
+  fn terminal_status(&self) -> Option<TurnTerminal> {
+    self.terminal
   }
 }
 

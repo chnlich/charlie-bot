@@ -315,6 +315,8 @@ fn normalize_text(value: &str, root: &Path, hostname: &str) -> String {
 }
 
 fn state_difference_count(left: &Value, right: &Value) -> usize {
+  let left = ordered_state(left);
+  let right = ordered_state(right);
   let mut count = usize::from(left["summary"] != right["summary"]);
   let left_files = left["files"].as_object().unwrap();
   let right_files = right["files"].as_object().unwrap();
@@ -332,7 +334,17 @@ fn state_difference_count(left: &Value, right: &Value) -> usize {
 }
 
 fn assert_state_eq(expected: &Value, actual: &Value, label: &str) {
-  assert_eq!(first_difference(expected, actual, "state"), None, "{label}");
+  assert_eq!(first_difference(&ordered_state(expected), &ordered_state(actual), "state"), None, "{label}");
+}
+
+/// The ledger query orders `captured_files` by absolute path, which differs by machine; the tree
+/// root is a temporary directory. Rows are therefore compared after sorting the normalized text.
+fn ordered_state(state: &Value) -> Value {
+  let mut state = state.clone();
+  if let Some(rows) = state["ledger"]["captured_files"].as_array_mut() {
+    rows.sort_by_cached_key(|row| serde_json::to_string(row).unwrap());
+  }
+  state
 }
 
 fn assert_state_matches_recorded_origin(expected_rust: &Value, expected_python: &Value, actual: &Value, label: &str) {

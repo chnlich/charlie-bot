@@ -1,5 +1,7 @@
-//! The feature-owned subcommands `charliebot plan` and `charliebot artifact` (`src/features/artifacts/plan_cli.py`,
-//! `src/features/artifacts/cli.py`). Deleting this package removes both subcommands with two dispatcher lines.
+//! The feature-owned subcommands `charliebot artifact`, `charliebot plan` and `charliebot publish`.
+//! Deleting this package removes each subcommand with one dispatcher line.
 
 pub mod artifact;
 pub mod plan;
+pub mod publish;
+mod wrap;

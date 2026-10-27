@@ -1,0 +1,17 @@
+{
+  "argv": [
+    "publish",
+    "{root}/gone.html"
+  ],
+  "cwd": ".",
+  "files": {
+    "home/config.yaml": "publish:\n  dir: {root}/publish\n  public_base_url: https://publish.example\n",
+    "publish/index.html": "index"
+  },
+  "expect": {
+    "stdout": "",
+    "stderr": "{\"error\": \"artifact is not an existing regular file: {root}/gone.html\"}\n",
+    "exit": 1,
+    "requests": []
+  }
+}

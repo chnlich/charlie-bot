@@ -121,6 +121,10 @@ const PORTED_PYTHON_TESTS: &[&str] = &[
   "test_cli_in_a_worker_session_runs_the_cold_read_in_the_foreground",
   "test_cli_with_no_session_identity_runs_the_cold_read_in_the_foreground",
   "test_cli_foreground_prints_every_model_failed_and_exits_1",
+  "test_missing_artifact_exits_non_zero_naming_the_path",
+  "test_arguments_after_double_dash_reach_the_program_unchanged",
+  "test_command_lane_failure_exits_one_with_the_programs_stderr_and_no_url",
+  "test_home_without_a_publish_section_exits_one_naming_publish_dir",
   "test_usage_errors",
   // The compaction hook and the trash purge run through golden cases too; the Python tests that
   // call private functions instead are Rust tests in the command modules:

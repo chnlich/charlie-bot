@@ -4,8 +4,8 @@
   ],
   "expect": {
     "stdout": "",
-    "stderr": "{\"error\": \"publish is not ported to the Rust CLI yet\"}\n",
-    "exit": 1,
+    "stderr": "error: the following required arguments were not provided:\n  <ARTIFACT>\n\nUsage: charliebot publish <ARTIFACT>\n\nFor more information, try '--help'.\n",
+    "exit": 2,
     "requests": []
   },
   "expect_from": "rust"

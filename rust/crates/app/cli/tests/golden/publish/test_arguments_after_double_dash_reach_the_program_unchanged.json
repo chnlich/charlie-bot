@@ -1,0 +1,27 @@
+{
+  "argv": [
+    "publish",
+    "{root}/page.html",
+    "--",
+    "--reader",
+    "reader@example.com",
+    "--",
+    "--group",
+    "staff"
+  ],
+  "cwd": ".",
+  "env": {
+    "PATH": "/usr/bin:/bin"
+  },
+  "files": {
+    "home/config.yaml": "publish:\n  command:\n    - {root}/bin/publisher\n",
+    "page.html": "<p>hello</p>",
+    "bin/publisher": "#!/bin/sh\n[ \"$#\" -eq 6 ] || exit 9\n[ \"$1\" = \"{root}/page.html\" ] || exit 9\n[ \"$2\" = \"--reader\" ] || exit 9\n[ \"$3\" = \"reader@example.com\" ] || exit 9\n[ \"$4\" = \"--\" ] || exit 9\n[ \"$5\" = \"--group\" ] || exit 9\n[ \"$6\" = \"staff\" ] || exit 9\nprintf '%s\\n' 'https://reader.example/page.html'\n"
+  },
+  "expect": {
+    "stdout": "https://reader.example/page.html\n",
+    "stderr": "",
+    "exit": 0,
+    "requests": []
+  }
+}

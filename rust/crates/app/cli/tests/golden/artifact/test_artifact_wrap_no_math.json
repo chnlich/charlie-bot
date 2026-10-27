@@ -1,0 +1,24 @@
+{
+  "argv": [
+    "artifact",
+    "wrap",
+    "{root}/fragment.html",
+    "--genre",
+    "explain",
+    "--output",
+    "{root}/output/page.html",
+    "--no-math"
+  ],
+  "cwd": ".",
+  "files": {
+    "fragment.html": "<p>$x^2$</p>\n",
+    "home/": "",
+    "repo/prompts/explain_template.html": "{file:prompts/explain_template.html}"
+  },
+  "expect": {
+    "stdout": "wrote {root}/output/page.html\n",
+    "stderr": "",
+    "exit": 0,
+    "requests": []
+  }
+}

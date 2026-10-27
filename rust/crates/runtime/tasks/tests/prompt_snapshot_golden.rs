@@ -449,7 +449,7 @@ fn snapshots_match_the_recorded_python_server_output_byte_for_byte() {
   let prepared: Vec<Prepared> = cases.iter().map(prepare).collect();
   let fixture: Value = serde_json::from_str(PYTHON_FIXTURE).unwrap();
   assert_eq!(fixture["source"], "rust/crates/runtime/tasks/tests/python_prompt_snapshot_golden.py");
-  assert_eq!(fixture["base_commit"], "a572e7ca71858d9ba52f0abc2726fa44213210ac");
+  assert_eq!(fixture["base_commit"], "2b212ebd8549c0d3bc86885ae9c30ac648039a0d");
   assert_eq!(fixture["placeholders"]["temp_root"], "$TMPROOT");
   assert_eq!(fixture["placeholders"]["repo_root"], "$REPO");
   assert_eq!(fixture["placeholders"]["prompt_hash"], "$PROMPT_HASH");
@@ -458,6 +458,12 @@ fn snapshots_match_the_recorded_python_server_output_byte_for_byte() {
   let mut expected = fixture["expected"].clone();
   for (expected_case, prepared_case) in expected["cases"].as_array_mut().unwrap().iter_mut().zip(&prepared) {
     materialize_paths(expected_case, prepared_case.home.path(), &checkout_root);
+    // A block whose text names the checkout hashes that path, so its hash is computed from the materialized text.
+    if let Some(blocks) = expected_case.pointer_mut("/snapshot/blocks").and_then(Value::as_array_mut) {
+      for block in blocks.iter_mut().filter(|block| block["body_ref"] == "$BODY_REF") {
+        block["body_ref"] = json!(sha256_hex(block["text"].as_str().unwrap()));
+      }
+    }
     if expected_case["snapshot"]["prompt_hash"] == "$PROMPT_HASH" {
       let hash = recorded_prompt_hash(&expected_case["snapshot"]["blocks"]);
       expected_case["snapshot"]["prompt_hash"] = json!(hash);

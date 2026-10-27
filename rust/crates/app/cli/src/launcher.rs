@@ -240,9 +240,12 @@ mod tests {
     }
   }
 
-  /// The wrapper is this test's child: reap it, so its PID stops answering `kill 0`.
+  /// The wrapper is this test's child: reap it, so its PID stops answering `kill 0`. ECHILD means it is already reaped.
   fn reap(launch: &Launch) {
-    let _ = waitpid(Pid::from_raw(launch.pid), None);
+    match waitpid(Pid::from_raw(launch.pid), None) {
+      Ok(_) | Err(Errno::ECHILD) => {}
+      Err(error) => panic!("waiting for the wrapper failed: {error}"),
+    }
   }
 
   fn assert_gone(pid: i32) {

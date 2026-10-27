@@ -285,6 +285,7 @@ from src.infra import backend_models, models  # noqa: E402
 from src.backends.claude_code import claude_accounts  # noqa: E402
 from src.backends.claude_code import claude_config  # noqa: E402
 from src.runtime import streaming  # noqa: E402
+from src.features.memory import memory  # noqa: E402
 from src.infra import constants  # noqa: E402
 from src.backends.claude_code import login_dirs  # noqa: E402
 from src.features.cron import scheduler  # noqa: E402
@@ -2596,6 +2597,47 @@ def write_nightly_task(
   if repo is not None:
     body["repo"] = repo
   return write_cron_task(home, "nightly", dump_yaml(body))
+
+
+def memory_entry_text(
+    topic: str,
+    slug: str,
+    *,
+    scope: str = "user",
+    audience: str = "master, worker",
+    title: str | None = None,
+    body: str | None = None,
+) -> str:
+  """One memory entry file's text: title in frontmatter, comma-list audience,
+  pure-markdown body."""
+  if title is None:
+    title = slug.replace("-", " ").title()
+  header = ["---", f"scope: {scope}", f"topic: {topic}", f"audience: {audience}", f"title: {title}"]
+  header.append("---")
+  if body is None:
+    body = f"body for {slug}\n"
+  return "\n".join(header) + "\n" + body
+
+
+def write_memory_topics(memory_dir: pathlib.Path, lines: list[str] | None = None) -> None:
+  """Write a memory store's ``topics`` file (one topic per line; the default is the
+  seeded production vocabulary DEFAULT_MEMORY_TOPICS) and create the ``entries/``
+  dir the loader scans."""
+  memory_dir.mkdir(parents=True, exist_ok=True)
+  (memory_dir / "entries").mkdir(exist_ok=True)
+  (memory_dir / "topics").write_text(
+      "".join(line + "\n" for line in (lines or memory.DEFAULT_MEMORY_TOPICS.splitlines())), encoding="utf-8")
+
+
+def write_memory_entry(memory_dir: pathlib.Path, topic: str, slug: str, **kw: Any) -> pathlib.Path:
+  """Write one entry file ``entries/<topic>/<slug>.md`` via memory_entry_text; the returned path is
+  what assertions read back."""
+  d = memory_dir / "entries" / topic
+  d.mkdir(parents=True, exist_ok=True)
+  p = d / f"{slug}.md"
+  text = memory_entry_text(topic, slug, **kw)
+  p.write_text(text, encoding="utf-8")
+  return p
 
 
 class FakeAsyncProcess:

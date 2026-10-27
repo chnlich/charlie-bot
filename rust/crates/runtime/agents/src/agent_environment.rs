@@ -206,8 +206,7 @@ mod tests {
     let path_entries: Vec<_> = env::split_paths(std::ffi::OsStr::new(&rewritten.values["PATH"])).collect();
     assert_eq!(path_entries[0], server_bin_dir);
     assert_eq!(path_entries, [server_bin_dir.clone(), tools, missing, system]);
-    let old_entry_point_dir = root.path().join("src/runtime").join(["agent", "entry", "points"].join("_"));
-    assert!(!path_entries.contains(&old_entry_point_dir));
+    assert!(!path_entries.iter().any(|entry| entry.starts_with(root.path().join("src"))), "{path_entries:?}");
     assert_eq!(rewritten.values[VENV_BIN_ENV], venv_bin.display().to_string());
     assert_eq!(rewritten.values["PYDANTIC_DISABLE_PLUGINS"], "__all__");
     assert_eq!(rewritten.values["KEPT"], "value");

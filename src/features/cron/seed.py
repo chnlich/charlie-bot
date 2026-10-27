@@ -23,7 +23,7 @@ def seed_default_cron_tasks(cfg: config.CharlieBotConfig, *, dry_run: bool = Fal
   ``./scripts/setup.sh -n`` shows must fail exactly where the real run would.
 
   Creates ``config.d/cron.d/`` when absent. Writes through
-  :func:`src.infra.yaml_utils.save_yaml` (the same writer ``src/features/cron/api.py``
+  :func:`src.infra.yaml_utils.save_yaml` (the same writer the cron API
   uses). Validates every default entry before writing: each must construct a
   :class:`cron_config.ScheduledTaskConfig` after ``prompt_file``/``local`` resolution (an
   entry with ``steps`` resolves each step's ``prompt_file`` exactly like the

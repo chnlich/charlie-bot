@@ -1,8 +1,8 @@
-"""The composition root: the one list of packages that register routers, CLI commands, background services and page parts.
+"""The composition root: the one list of packages that register CLI commands, config sections and runtime hooks.
 
 Each listed package defines ``register()`` in its ``__init__.py``. Deleting a package's line
-removes its routes, commands and services from the server and the CLI, and its static files,
-templates and page parts from the pages (``src.runtime.hooks.page_render``).
+removes its commands and hooks from the CLI, and its page packages from the page registry
+(``src.runtime.hooks.page_render``). The Rust server (``rust/crates/charliebot-server``) holds its own package list.
 """
 
 import importlib
@@ -10,9 +10,7 @@ from collections.abc import Iterable
 
 from src.runtime.hooks import page_render
 
-# Registration order is route inclusion order, service start order, home-page card order,
-# metadata-slot order and page-part order. The file server's catch-all routes come last among
-# the feature lines.
+# Registration order is metadata-slot order and turn-contribution order.
 PACKAGES = (
     "src.features.artifacts",
     "src.features.backup",
@@ -20,20 +18,13 @@ PACKAGES = (
     "src.features.chat_threads",
     "src.features.code_server",
     "src.features.cron",
-    "src.features.diag",
     "src.features.slack",  # Its registered session keys precede Discord's in the saved metadata.
     "src.features.discord",
     "src.features.disk_sweep",
     "src.features.web_reply",
-    "src.features.host_auth",
-    "src.features.diff_view",
-    "src.features.explain",
     "src.features.improve",
     "src.features.memory",
-    "src.features.ncu",
     "src.features.router",
-    "src.features.terminal",
-    "src.features.trace",
     "src.features.usage",
     "src.features.voice",
     "src.backends.openai_compatible",
@@ -44,7 +35,6 @@ PACKAGES = (
     "src.backends.gemini",
     "src.backends.anthropic_compatible",
     "src.backends.opencode",
-    "src.features.files",
 )
 
 _registered = False

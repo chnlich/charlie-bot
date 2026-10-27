@@ -1,7 +1,0 @@
-stage: features
-name: features-voice-startup
-steps:
-  - name: server remains available after startup
-    method: GET
-    path: /api/auth/status
-    expect_status: 200

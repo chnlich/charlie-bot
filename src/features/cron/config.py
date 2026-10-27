@@ -6,7 +6,7 @@ import pydantic
 
 from src.infra import config
 
-# The API request model TaskCreate (src/features/cron/api.py) inherits this default through
+# The cron API request model inherits this default through
 # ScheduledTaskFields; the web UI re-pins the value in literals (the cron-timezone input's
 # value in src/features/cron/templates/cron/page_modals.html and the modal fallbacks in
 # src/features/cron/static/cron.js) that cannot import from Python — a change moves every

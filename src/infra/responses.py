@@ -19,7 +19,7 @@ coercion.
 
 The splice byte-identity holds because orjson renders a dict context-free in
 the dict's own key order, and the splice sites' hand-rolled scalar pieces
-(src/runtime/api/sessions.py) render byte-identically to orjson's for their
+render byte-identically to orjson's for their
 code-fixed types (None, bool, int, ASCII strings).
 """
 

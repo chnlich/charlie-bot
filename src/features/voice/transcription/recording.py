@@ -1,6 +1,6 @@
 """Transcribe one finished recording through an online backend.
 
-The upload endpoint (src/features/voice/api.py) and the voice-notes skill
+The upload endpoint (rust/crates/features/voice) and the voice-notes skill
 (skills/voice-notes/scripts/decode_audio.py) both call this module, so the
 selection rules and the chunking live in one place. The recording's PCM is cut
 into the capture worklet's chunks, the cadence a live recording's audio carries,

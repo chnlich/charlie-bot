@@ -42,12 +42,17 @@ pub fn find_local_task_child(
     None => description.is_empty(),
     Some(_) => false,
   };
+  let recorded_task_type = match task.get("task_type") {
+    None | Some(Value::Null) => None,
+    Some(Value::String(task_type)) => Some(task_type.as_str()),
+    Some(_) => return None,
+  };
   let metadata_matches = metadata.get("id").and_then(Value::as_str) == Some(child_id.as_str())
     && metadata.get("name").and_then(Value::as_str).is_some()
     && metadata.get("task_parent_id").and_then(Value::as_str) == Some(session_id)
     && metadata.get("profile").and_then(Value::as_str) == Some("worker")
     && goal_matches
-    && task.get("task_type").and_then(Value::as_str) == task_type;
+    && recorded_task_type == task_type;
   if !metadata_matches {
     return None;
   }
@@ -135,6 +140,9 @@ mod tests {
 
     let typed = home_with_child(worker_metadata(json!({ "goal": GOAL, "task_type": "implement" })));
     assert_eq!(find(&typed, None), None, "a typed child never answers a task-type-less request");
+
+    let malformed = home_with_child(worker_metadata(json!({ "goal": GOAL, "task_type": 7 })));
+    assert_eq!(find(&malformed, None), None, "a malformed task type is not an untyped task");
   }
 
   #[test]

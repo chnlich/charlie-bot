@@ -4,15 +4,19 @@
 // into it, a delivered firing nests under its scheduled context node whatever
 // page each arrived on, a context ancestor renders dimmed and takes none of
 // the archived row's actions, the status poll id set excludes archived rows,
-// and in-list operations touch only the target row and the strip counts. The
-// render cap counts archived rows only. Harness follows
+// and in-list operations touch only the target row and the strip counts. A
+// task-tree broadcast refreshes the loaded range in place and repaints only
+// when the rows changed. The render cap counts archived rows only. Harness follows
 // test_sidebar_delete_backfill.test.js (session_context_stub +
 // createChatSidebarContext, timers inline).
 // ---------------------------------------------------------------------------
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
-const { createElement } = require('./dom_element_stub');
+const vm = require('node:vm');
+
+const { createElement, createEscapingElement } = require('./dom_element_stub');
+const { readStatic } = require('./read_static');
 const { baseSessionContext, buildSidebarFilterElements, createChatSidebarContext, inlinePageTimers,
   loadCronPackage, makeSessionMeta } = require('./session_context_stub');
 
@@ -475,4 +479,248 @@ test('the render cap counts archived rows only and Load more continues the walk'
   await new Promise(setImmediate);
   assert.equal(countRows(rows.innerHTML), 2121);
   assert.match(foot.innerHTML, /Load more/);
+});
+
+// ---------------------------------------------------------------------------
+// In-place refresh: a task-tree broadcast runs the handler websocket-handlers.js
+// registers for it, against the archived endpoint over one dataset (newest
+// first, keyset cursor, the server's 500-row cap). Each container logs its
+// innerHTML writes, so a test counts the DOM writes a refresh makes.
+// ---------------------------------------------------------------------------
+
+// n archived rows of one group (null = ungrouped), ids prefix-000, prefix-001, ...
+function archivedRows(prefix, n, group = null) {
+  return Array.from({length: n}, (_, i) =>
+    makeArchivedSession(`${prefix}-${String(i).padStart(3, '0')}`, {group}));
+}
+
+function groupTotals(sessions) {
+  const counts = new Map();
+  sessions.forEach((s) => counts.set(s.group || null, (counts.get(s.group || null) || 0) + 1));
+  return Array.from(counts, ([group, total]) => ({group, total}));
+}
+
+// The archived endpoint over one dataset: a page is the rows after the cursor
+// row, up to the limit clamped to 500. The strip totals count the whole dataset.
+function archivedEndpoint(dataset) {
+  return (url) => {
+    const q = new URL(url, 'http://localhost').searchParams;
+    const matching = q.has('group') ? dataset.filter((s) => (s.group || '') === q.get('group')) : dataset;
+    const start = q.has('before_id') ? matching.findIndex((s) => s.id === q.get('before_id')) + 1 : 0;
+    const sessions = matching.slice(start, start + Math.min(Number(q.get('limit')), 500));
+    const last = sessions[sessions.length - 1] || null;
+    return {
+      sessions,
+      has_more: start + sessions.length < matching.length,
+      next_before: last ? last.updated_at : null,
+      next_before_id: last ? last.id : null,
+      groups: groupTotals(dataset),
+    };
+  };
+}
+
+// A container whose innerHTML assignments are logged. The stub defines innerHTML
+// as a non-configurable accessor, so the element sits behind a proxy that logs
+// the write and forwards it.
+function recordedElement(tag, writes) {
+  const log = [];
+  const element = new Proxy(createEscapingElement(tag), {
+    set(target, prop, value, receiver) {
+      if (prop === 'innerHTML') log.push(value);
+      return Reflect.set(target, prop, value, receiver);
+    },
+  });
+  writes.set(element, log);
+  return element;
+}
+
+// The archived view on a sidebar context with websocket-handlers.js loaded.
+// `broadcast()` runs the task_tree_changed handler the file registers; `writes`
+// maps each container to its innerHTML log; `search` is the search endpoint's answer.
+function liveArchivedContext(dataset, {search = []} = {}) {
+  const nav = createElement();
+  const writes = new Map();
+  const elements = new Map([
+    ['session-list', nav],
+    ['sidebar-search', createElement({value: ''})],
+    ...buildSidebarFilterElements(),
+  ]);
+  const endpoint = archivedEndpoint(dataset);
+  const {context, fetchCalls} = buildContext({
+    elements,
+    fetch: async (url) => {
+      if (url.startsWith('/api/sessions/search')) return {ok: true, async json() { return search; }};
+      const page = endpoint(url);
+      return {ok: true, async json() { return page; }};
+    },
+  });
+  context.document.createElement = (tag) => recordedElement(tag, writes);
+  const handlers = {};
+  context.registerWsMessageHandler = (type, handler) => { handlers[type] = handler; };
+  vm.runInContext(readStatic('websocket-handlers.js'), context, {filename: 'websocket-handlers.js'});
+  const broadcast = () => handlers.task_tree_changed({type: 'task_tree_changed'});
+  return {context, nav, elements, fetchCalls, writes, broadcast};
+}
+
+function archivedRequests(fetchCalls) {
+  return fetchCalls.filter((url) => url.startsWith('/api/sessions/archived'));
+}
+
+function rowIdsOf(html) {
+  return [...html.matchAll(/<a\b[^>]*id="session-([^"]+)"/g)].map((m) => m[1]);
+}
+
+test('an unchanged broadcast leaves the archived list alone: same containers, no DOM write', async () => {
+  const {context, nav, fetchCalls, writes, broadcast} = liveArchivedContext(archivedRows('arch', 3));
+  context.switchSidebarFilter('archived');
+  await new Promise(setImmediate);
+  const [pills, rows, foot] = nav.children;
+  const containers = [pills, rows, foot];
+  const html = containers.map((el) => el.innerHTML);
+  const written = containers.map((el) => writes.get(el).length);
+
+  broadcast();
+  await new Promise(setImmediate);
+
+  // The refresh read the first page again and found the same rows.
+  assert.equal(archivedRequests(fetchCalls).length, 2);
+  assert.equal(nav.children.length, 3);
+  assert.equal(nav.children[1], rows);
+  assert.deepEqual(containers.map((el) => el.innerHTML), html);
+  assert.deepEqual(containers.map((el) => writes.get(el).length), written);
+});
+
+test('a broadcast keeps the group filter, the loaded pages and the scroll position', async () => {
+  const dataset = [...archivedRows('work', 150, 'Work'), ...archivedRows('loose', 30)];
+  const {context, nav, fetchCalls, broadcast} = liveArchivedContext(dataset);
+  context.switchSidebarFilter('archived');
+  await new Promise(setImmediate);
+  context.setArchivedGroupFilter('Work');
+  await new Promise(setImmediate);
+  context.loadArchivedNextPage();
+  await new Promise(setImmediate);
+  const rows = nav.children[1];
+  assert.equal(countRows(rows.innerHTML), 150);
+  nav.scrollTop = 900;
+
+  broadcast();
+  await new Promise(setImmediate);
+
+  assert.equal(nav.children[1], rows);
+  assert.equal(countRows(rows.innerHTML), 150);
+  assert.deepEqual([...new Set([...rows.innerHTML.matchAll(/data-sgroup-key="([^"]*)"/g)].map((m) => m[1]))],
+    ['Work']);
+  assert.equal(nav.scrollTop, 900);
+  assert.match(archivedRequests(fetchCalls).at(-1), /group=Work/);
+});
+
+test('a changed broadcast repaints each container once, shows the new row and keeps the scroll position', async () => {
+  const dataset = archivedRows('arch', 40);
+  const {context, nav, writes, broadcast} = liveArchivedContext(dataset);
+  context.switchSidebarFilter('archived');
+  await new Promise(setImmediate);
+  const containers = [nav.children[0], nav.children[1], nav.children[2]];
+  const [pills, rows] = containers;
+  nav.scrollTop = 120;
+  const written = containers.map((el) => writes.get(el).length);
+
+  dataset.unshift(makeArchivedSession('arch-new'));
+  broadcast();
+  await new Promise(setImmediate);
+
+  assert.equal(nav.children[1], rows);
+  assert.match(rows.innerHTML, /id="session-arch-new"/);
+  assert.deepEqual(containers.map((el, i) => writes.get(el).length - written[i]), [1, 1, 1]);
+  assert.equal(nav.scrollTop, 120);
+});
+
+test('five broadcasts in a burst run one refresh in flight and one trailing refresh', async () => {
+  const {context, fetchCalls, broadcast} = liveArchivedContext(archivedRows('arch', 3));
+  context.switchSidebarFilter('archived');
+  await new Promise(setImmediate);
+  const requested = archivedRequests(fetchCalls).length;
+
+  for (let i = 0; i < 5; i++) broadcast();
+  await new Promise(setImmediate);
+
+  assert.equal(archivedRequests(fetchCalls).length - requested, 2);
+});
+
+test('the Archive pill click empties the list, resets the group filter and loads page 1', async () => {
+  const dataset = [...archivedRows('work', 150, 'Work'), ...archivedRows('loose', 30)];
+  const {context, nav, fetchCalls} = liveArchivedContext(dataset);
+  context.switchSidebarFilter('archived');
+  await new Promise(setImmediate);
+  context.setArchivedGroupFilter('Work');
+  await new Promise(setImmediate);
+  const oldRows = nav.children[1];
+
+  context.enterSidebarFilter('archived');
+  // The reset clears the list before page 1 is requested.
+  assert.equal(nav.children[1].innerHTML, '');
+  await new Promise(setImmediate);
+
+  assert.notEqual(nav.children[1], oldRows);
+  assert.equal(archivedRequests(fetchCalls).at(-1), '/api/sessions/archived?limit=100');
+  assert.equal(countRows(nav.children[1].innerHTML), 100);
+  assert.match(nav.children[0].innerHTML, /All <span[^>]*>180<\/span>/);
+});
+
+test('after a refresh the next page starts where the refresh stopped: no row is skipped or repeated', async () => {
+  const dataset = archivedRows('a', 700);
+  const {context, nav, broadcast} = liveArchivedContext(dataset);
+  context.switchSidebarFilter('archived');
+  await new Promise(setImmediate);
+  context.loadArchivedNextPage();
+  await new Promise(setImmediate);
+  // A new row at the head pushes every loaded row one place down.
+  dataset.unshift(makeArchivedSession('new'));
+
+  broadcast();
+  await new Promise(setImmediate);
+  context.loadArchivedNextPage();
+  await new Promise(setImmediate);
+
+  assert.deepEqual(rowIdsOf(nav.children[1].innerHTML), dataset.slice(0, 600).map((s) => s.id));
+});
+
+test('a broadcast with text in the search box keeps the search results and sends no archived request', async () => {
+  const search = [makeSessionMeta('found', {name: 'debug notes'})];
+  const {context, nav, elements, fetchCalls, broadcast} = liveArchivedContext(archivedRows('arch', 3), {search});
+  context.switchSidebarFilter('archived');
+  await new Promise(setImmediate);
+  elements.get('sidebar-search').value = 'debug';
+  context.handleSidebarSearch('debug');
+  await new Promise(setImmediate);
+  const archived = archivedRequests(fetchCalls).length;
+
+  broadcast();
+  await new Promise(setImmediate);
+
+  assert.equal(archivedRequests(fetchCalls).length, archived);
+  assert.deepEqual(rowIdsOf(nav.innerHTML), ['found']);
+});
+
+test('a broadcast during a page append runs one refresh once the append lands', async () => {
+  const dataset = archivedRows('arch', 150);
+  const {context, nav, fetchCalls, writes, broadcast} = liveArchivedContext(dataset);
+  context.switchSidebarFilter('archived');
+  await new Promise(setImmediate);
+  const [pills, rows, foot] = nav.children;
+  const containers = [pills, rows, foot];
+  const requested = archivedRequests(fetchCalls).length;
+  const written = containers.map((el) => writes.get(el).length);
+
+  // The broadcast lands while the page-2 append is in flight.
+  context.loadArchivedNextPage();
+  broadcast();
+  await new Promise(setImmediate);
+
+  const sent = archivedRequests(fetchCalls).slice(requested);
+  assert.equal(sent.length, 2);
+  assert.match(sent[0], /limit=100&before=/);
+  assert.equal(sent[1], '/api/sessions/archived?limit=500');
+  assert.equal(countRows(rows.innerHTML), 150);
+  // The trailing refresh finds the rows the append already merged: no repaint.
+  assert.deepEqual(containers.map((el) => writes.get(el).length), written.map((n) => n + 1));
 });

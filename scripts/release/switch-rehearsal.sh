@@ -284,7 +284,7 @@ stop_pid() {
 }
 
 cleanup() {
-  local rc=$? pid dir id8 leftovers
+  local rc=$? pid dir id8 leftovers log_file evidence_copy_ok=1
   trap - EXIT INT TERM
   if [ -f "$HELPER" ]; then
     stop_pid "$PORT_PID"
@@ -308,19 +308,39 @@ cleanup() {
     fi
   fi
   if [ -d "$LOGS" ]; then
-    mkdir -p "$EVIDENCE/logs"
-    cp -p "$LOGS"/switch_*.log "$LOGS"/switch_*.runs "$LOGS"/server_*.log "$LOGS"/server-latest.log \
-      "$EVIDENCE/logs/" 2> /dev/null || true
+    if mkdir -p "$EVIDENCE/logs"; then
+      shopt -s nullglob
+      for log_file in "$LOGS"/switch_*.log "$LOGS"/switch_*.runs "$LOGS"/server_*.log "$LOGS"/server-latest.log; do
+        if ! cp -p "$log_file" "$EVIDENCE/logs/"; then
+          log "CLEANUP could not copy $log_file to $EVIDENCE/logs"
+          evidence_copy_ok=0
+          rc=1
+        fi
+      done
+      shopt -u nullglob
+    else
+      log "CLEANUP could not create $EVIDENCE/logs"
+      evidence_copy_ok=0
+      rc=1
+    fi
     if [ -d "$CB_HOME/sessions" ]; then
       mkdir -p "$EVIDENCE/rehearsal-home"
       (cd "$CB_HOME" && find sessions \( -path '*/data/runs/*/metadata.json' -o -name chat_events.jsonl \) -print0 \
         | xargs -0 -r cp --parents -t "$EVIDENCE/rehearsal-home") \
-        || log "CLEANUP run records of the rehearsal home could not be copied"
+        || {
+          log "CLEANUP run records of the rehearsal home could not be copied"
+          evidence_copy_ok=0
+          rc=1
+        }
     fi
   fi
   if [[ $TREE == /tmp/charliebot-release-rehearsal-* ]]; then
-    rm -rf -- "$TREE" || rc=1
-    log "CLEANUP tree $TREE removed: $([ -e "$TREE" ] && echo no || echo yes)"
+    if [ "$evidence_copy_ok" = 1 ]; then
+      rm -rf -- "$TREE" || rc=1
+      log "CLEANUP tree $TREE removed: $([ -e "$TREE" ] && echo no || echo yes)"
+    else
+      log "CLEANUP retained tree $TREE because evidence could not be copied"
+    fi
   fi
   log "EXIT $rc"
   exit "$rc"

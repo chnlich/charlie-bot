@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -5,8 +6,11 @@ use std::process::Command;
 
 use charliebot_cli_common::args::with_infer_long_args;
 use charliebot_cli_common::exit::CliExit;
-use charliebot_core::home;
+use charliebot_core::{home, paths, pyfmt, pystr};
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
+
+use super::proposal_check;
+use super::store;
 
 const PROPOSAL_BRANCH: &str = "proposal";
 const PROPOSAL_WORKTREE_SUFFIX: &str = "-proposal";
@@ -24,8 +28,23 @@ enum ProposalCommand {
   Open,
   /// Print the proposal state.
   Status,
+  /// Commit exactly one store-relative path on the proposal branch.
+  Commit(CommitArgs),
   /// Fast-forward the live checkout to one reviewed proposal commit.
   Land(LandArgs),
+}
+
+#[derive(Args)]
+struct CommitArgs {
+  /// Store-relative path: an entry file or topics.
+  path: String,
+  /// File holding the commit message.
+  #[arg(long)]
+  message_file: PathBuf,
+  /// Commit even when lines the PR already added are rewritten or gone; the commit message lists each replaced line
+  /// under 'Replaced PR lines:'.
+  #[arg(long)]
+  replace_pr_lines: bool,
 }
 
 #[derive(Args)]
@@ -64,8 +83,11 @@ pub(super) fn main(args: &[OsString]) -> Result<(), CliExit> {
     .map_err(|error| CliExit::error(format!("resolve {}: {error}", memory_dir.display())))?;
 
   match run_proposal(&memory_dir, cli.command) {
-    Ok(fields) => {
-      for (key, value) in fields {
+    Ok(output) => {
+      for warning in output.warnings {
+        eprintln!("warning: {warning}");
+      }
+      for (key, value) in output.fields {
         println!("{key}: {value}");
       }
       Ok(())
@@ -78,11 +100,27 @@ pub(super) fn main(args: &[OsString]) -> Result<(), CliExit> {
   }
 }
 
-fn run_proposal(memory_dir: &Path, command: ProposalCommand) -> ProposalResult<Vec<(String, String)>> {
+/// One verb's result: the warnings it prints on stderr, then the `key: value` fields it prints on stdout.
+struct Output {
+  warnings: Vec<String>,
+  fields: Vec<(String, String)>,
+}
+
+impl Output {
+  fn from_fields(fields: Vec<(String, String)>) -> Self {
+    Self { warnings: Vec::new(), fields }
+  }
+}
+
+fn run_proposal(memory_dir: &Path, command: ProposalCommand) -> ProposalResult<Output> {
   match command {
-    ProposalCommand::Open => open_proposal(memory_dir),
-    ProposalCommand::Status => status(memory_dir),
-    ProposalCommand::Land(args) => land(memory_dir, &args.sha),
+    ProposalCommand::Open => open_proposal(memory_dir).map(Output::from_fields),
+    ProposalCommand::Status => status(memory_dir).map(Output::from_fields),
+    ProposalCommand::Commit(args) => {
+      let committed = commit(memory_dir, &args.path, &args.message_file, args.replace_pr_lines)?;
+      Ok(Output { warnings: committed.warnings, fields: vec![("committed".to_string(), committed.sha)] })
+    }
+    ProposalCommand::Land(args) => land(memory_dir, &args.sha).map(Output::from_fields),
   }
 }
 
@@ -263,6 +301,183 @@ fn status(memory_dir: &Path) -> ProposalResult<Vec<(String, String)>> {
     ("dirty".to_string(), dirty),
     ("diff_path".to_string(), diff_path(memory_dir, &base, &head)),
   ])
+}
+
+/// A multiset of lines: each distinct line with its occurrence count.
+type LineCounts = BTreeMap<String, usize>;
+
+/// The result of one commit: the new head SHA and the negation warnings the committed text drew.
+struct Committed {
+  sha: String,
+  warnings: Vec<String>,
+}
+
+/// The store path `path` names, as components. An absolute path, an empty one, or one that escapes the store is a
+/// refusal.
+fn store_path(path: &str) -> ProposalResult<PathBuf> {
+  let parts: Vec<&str> = path.split('/').filter(|part| !part.is_empty() && *part != ".").collect();
+  if path.starts_with('/') || parts.is_empty() || parts.contains(&"..") {
+    return Err(ProposalError::Refusal(format!(
+      "path must be store-relative (e.g. entries/<topic>/<slug>.md or topics): {}",
+      pyfmt::str_repr(path)
+    )));
+  }
+  Ok(parts.iter().collect())
+}
+
+/// The message file as the caller named it: `~` expanded, and a relative path read from the caller's working directory.
+fn caller_path(path: &Path) -> ProposalResult<PathBuf> {
+  std::path::absolute(paths::expanduser(&path.to_string_lossy()))
+    .map_err(|error| ProposalError::Cli(CliExit::error(format!("resolve {}: {error}", path.display()))))
+}
+
+/// The text of `<rev>:<path>`, or `None` when the revision holds no such file. Git's output is read with universal
+/// newlines, as the Python CLI reads it.
+fn rev_text(memory_dir: &Path, rev: &str, path: &str) -> ProposalResult<Option<String>> {
+  let listing = run_git(memory_dir, &["ls-tree", rev, "--", path])?;
+  if !listing.success {
+    return Err(ProposalError::Refusal(format!(
+      "git ls-tree {rev} -- {path} failed in {}: {}",
+      memory_dir.display(),
+      listing.stderr.trim()
+    )));
+  }
+  if listing.stdout.trim().is_empty() {
+    return Ok(None);
+  }
+  let text = git(memory_dir, &["show", &format!("{rev}:{path}")])?;
+  Ok(Some(store::normalize_newlines(&text)))
+}
+
+fn rev_line_counts(memory_dir: &Path, rev: &str, path: &str) -> ProposalResult<LineCounts> {
+  Ok(match rev_text(memory_dir, rev, path)? {
+    Some(text) => non_blank_counts(&text),
+    None => LineCounts::new(),
+  })
+}
+
+fn line_counts<'a>(lines: impl IntoIterator<Item = &'a str>) -> LineCounts {
+  let mut counts = LineCounts::new();
+  for line in lines {
+    *counts.entry(line.to_string()).or_default() += 1;
+  }
+  counts
+}
+
+fn non_blank_counts(text: &str) -> LineCounts {
+  line_counts(text.split('\n').filter(|line| !pystr::strip(line).is_empty()))
+}
+
+fn body_counts(text: &str) -> LineCounts {
+  line_counts(store::entry_body(text))
+}
+
+/// The multiset difference `left - right`: each line keeps the occurrences that `right` does not cover.
+fn counts_minus(left: &LineCounts, right: &LineCounts) -> LineCounts {
+  left
+    .iter()
+    .filter_map(|(line, count)| {
+      let remaining = count.saturating_sub(right.get(line).copied().unwrap_or_default());
+      (remaining > 0).then(|| (line.clone(), remaining))
+    })
+    .collect()
+}
+
+/// Whether every line occurs in `right` at least as often as in `left`.
+fn counts_within(left: &LineCounts, right: &LineCounts) -> bool {
+  left.iter().all(|(line, count)| right.get(line).copied().unwrap_or_default() >= *count)
+}
+
+/// Each line repeated by its count, in sorted line order.
+fn repeated_lines(counts: &LineCounts) -> Vec<String> {
+  counts.iter().flat_map(|(line, count)| std::iter::repeat_n(line.clone(), *count)).collect()
+}
+
+/// Commit exactly one store-relative path on the proposal branch.
+///
+/// Every non-blank line the PR already added to the path must still be in the worktree's file, unless
+/// `replace_pr_lines` lists the lost ones under `Replaced PR lines:`. The prose check then refuses a commit whose
+/// added or rewritten text breaks the writing rules. The negation check never refuses: its hits come back as warnings
+/// and land under `Negation warnings:`.
+fn commit(memory_dir: &Path, path: &str, message_file: &Path, replace_pr_lines: bool) -> ProposalResult<Committed> {
+  let relative = store_path(path)?;
+  let message_file = caller_path(message_file)?;
+  let worktree = proposal_worktree(memory_dir);
+  if !worktree.exists() {
+    return Err(ProposalError::Refusal(format!(
+      "no proposal worktree at {}; run 'charliebot memory proposal open' first",
+      worktree.display()
+    )));
+  }
+  let base = base_branch(memory_dir)?;
+  let added =
+    counts_minus(&rev_line_counts(memory_dir, PROPOSAL_BRANCH, path)?, &rev_line_counts(memory_dir, &base, path)?);
+  let current_file = worktree.join(&relative);
+  let current_text =
+    if current_file.is_file() { Some(store::read_text(&current_file).map_err(ProposalError::Cli)?) } else { None };
+  let current = current_text.as_deref().map(non_blank_counts).unwrap_or_default();
+  let replaced = repeated_lines(&counts_minus(&added, &current));
+  if !replaced.is_empty() && !replace_pr_lines {
+    let listed: Vec<String> = replaced.iter().map(|line| format!("  {line}")).collect();
+    return Err(ProposalError::Refusal(format!(
+      "{path}: lines the PR already added are gone from the worktree; restore them or resolve the conflict in the \
+       report:\n{}",
+      listed.join("\n")
+    )));
+  }
+  let mut warnings = Vec::new();
+  if let Some(text) = current_text.as_deref()
+    && relative.as_path() != Path::new("topics")
+  {
+    let base_text = rev_text(memory_dir, &base, path)?;
+    let head_body = rev_text(memory_dir, PROPOSAL_BRANCH, path)?.as_deref().map(body_counts).unwrap_or_default();
+    // A pure deletion skips the body line limit: the worktree's body lines sit inside the proposal head's, so the
+    // commit adds no body line. A new file has no head version, so it never skips.
+    let pure_deletion = counts_within(&body_counts(text), &head_body);
+    let violations = proposal_check::prose_violations(text, base_text.as_deref(), pure_deletion);
+    if !violations.is_empty() {
+      let listed: Vec<String> = violations.iter().map(|violation| format!("  {violation}")).collect();
+      return Err(ProposalError::Refusal(format!("{path}: prose check failed:\n{}", listed.join("\n"))));
+    }
+    warnings = proposal_check::negation_warnings(text, base_text.as_deref());
+  }
+  let scratch = tempfile::tempdir()
+    .map_err(|error| ProposalError::Cli(CliExit::error(format!("create the commit message directory: {error}"))))?;
+  let commit_message = scratch.path().join("message");
+  if replaced.is_empty() && warnings.is_empty() {
+    fs::copy(&message_file, &commit_message).map_err(|error| {
+      ProposalError::Cli(CliExit::error(format!("copy {} to the commit message: {error}", message_file.display())))
+    })?;
+  } else {
+    let mut message = store::read_text(&message_file).map_err(ProposalError::Cli)?;
+    if !message.is_empty() && !message.ends_with('\n') {
+      message.push('\n');
+    }
+    if !replaced.is_empty() {
+      message.push_str("Replaced PR lines:\n");
+      for line in &replaced {
+        message.push_str(&format!("  {line}\n"));
+      }
+    }
+    if !warnings.is_empty() {
+      message.push_str("Negation warnings:\n");
+      for warning in &warnings {
+        message.push_str(&format!("  {warning}\n"));
+      }
+    }
+    fs::write(&commit_message, message)
+      .map_err(|error| ProposalError::Cli(CliExit::error(format!("write {}: {error}", commit_message.display()))))?;
+  }
+  let commit_message_path = commit_message
+    .to_str()
+    .ok_or_else(|| ProposalError::Cli(CliExit::error("the commit message path is not UTF-8")))?;
+  git(&worktree, &["add", "--", path])?;
+  let committing = run_git(&worktree, &["commit", "--only", "-F", commit_message_path, "--", path])?;
+  if !committing.success {
+    return Err(ProposalError::Refusal(format!("committing {path} failed: {}", committing.stderr.trim())));
+  }
+  let sha = git(&worktree, &["rev-parse", "HEAD"])?;
+  Ok(Committed { sha: sha.trim().to_string(), warnings })
 }
 
 fn land(memory_dir: &Path, sha: &str) -> ProposalResult<Vec<(String, String)>> {

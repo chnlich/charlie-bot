@@ -10,7 +10,7 @@ use unicode_width::UnicodeWidthChar;
 pub(super) const TOPICS_FILENAME: &str = "topics";
 const ENTRIES_DIRNAME: &str = "entries";
 pub(super) const STAGING_DIRNAME: &str = "staging";
-const BODY_LINE_COLUMN_LIMIT: usize = 120;
+pub(super) const BODY_LINE_COLUMN_LIMIT: usize = 120;
 
 pub(super) fn lint_store(root: &Path) -> Result<(Vec<String>, Vec<String>), CliExit> {
   let topics_path = root.join(TOPICS_FILENAME);
@@ -171,7 +171,7 @@ fn width_warnings(root: &Path, files: &[PathBuf]) -> Result<Vec<String>, CliExit
   Ok(warnings)
 }
 
-fn entry_body(text: &str) -> Vec<&str> {
+pub(super) fn entry_body(text: &str) -> Vec<&str> {
   let lines: Vec<&str> = text.split('\n').collect();
   if pystr::strip(lines[0]) != "---" {
     return lines.into_iter().filter(|line| !pystr::strip(line).is_empty()).collect();
@@ -184,7 +184,7 @@ fn entry_body(text: &str) -> Vec<&str> {
   Vec::new()
 }
 
-fn display_width(line: &str) -> usize {
+pub(super) fn display_width(line: &str) -> usize {
   line.chars().map(|character| UnicodeWidthChar::width(character).unwrap_or(1).max(1)).sum()
 }
 

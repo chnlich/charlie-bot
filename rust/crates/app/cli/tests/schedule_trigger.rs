@@ -651,15 +651,32 @@ fn test_launch_remote_unparseable_pid_raises() {
   assert!(run.stderr.contains("failed to parse remote PID from ssh stdout"), "stderr: {}", run.stderr);
 }
 
+/// Bounds the skip probe: Python's `subprocess.run(..., timeout=10)` around the same ssh command.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Whether `ssh localhost` works without a password: the probe the Python test skips on.
 fn ssh_localhost_works() -> bool {
-  Command::new("ssh")
+  let Ok(mut child) = Command::new("ssh")
     .args(["-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "localhost", "true"])
     .stdin(Stdio::null())
     .stdout(Stdio::null())
     .stderr(Stdio::null())
-    .status()
-    .is_ok_and(|status| status.success())
+    .spawn()
+  else {
+    return false;
+  };
+  let started = Instant::now();
+  loop {
+    match child.try_wait() {
+      Ok(Some(status)) => return status.success(),
+      Ok(None) if started.elapsed() < PROBE_TIMEOUT => std::thread::sleep(Duration::from_millis(10)),
+      _ => {
+        let _ = child.kill();
+        let _ = child.wait();
+        return false;
+      }
+    }
+  }
 }
 
 #[test]

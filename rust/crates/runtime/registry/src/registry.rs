@@ -24,6 +24,7 @@ use charliebot_store::{SharedChatEvent, Store};
 use futures_util::future::{BoxFuture, Shared};
 use serde_json::{Map, Value};
 use tokio::io::AsyncWrite;
+use tokio::sync::watch;
 
 use crate::route_claims::RouteClaims;
 use crate::sequence::{SequenceBinding, SequenceController};
@@ -838,6 +839,48 @@ pub trait BackendLifecycle: Send + Sync {
 
   /// Records on `thread` the conversation id the runtime chose for the task.
   fn assign_thread_native_id(&self, _thread: &mut ThreadMetadata, _native_id: Option<&str>) {}
+
+  /// The serve transport of this type's processes, when they answer each turn over a local protocol
+  /// (`TransportKind::Serve`). The default is `None`: the processes write a raw log or their final stdout.
+  fn serve_transport(&self) -> Option<Arc<dyn ServeTransport>> {
+    None
+  }
+}
+
+/// How the runner runs a turn of a serve backend type. The runner takes the turn's run plan before it spawns the
+/// process, then runs the turn in that process.
+pub trait ServeTransport: Send + Sync {
+  /// Takes the run plan that the backend registered for the process `command` starts. An error ends the run before
+  /// any process starts.
+  fn take_turn(&self, command: &[String]) -> anyhow::Result<Box<dyn ServeTurn>>;
+  /// Finishes the turn whose process is `pid`, when that turn has registered its session.
+  fn finish_active_turn(&self, pid: u32) -> BoxFuture<'static, anyhow::Result<()>>;
+}
+
+/// One turn of a serve transport, run in the process that the runner spawned for it.
+pub trait ServeTurn: Send {
+  /// Runs the turn to its end in the process that `args` describes.
+  fn run(self: Box<Self>, args: ServeTurnArgs) -> BoxFuture<'static, anyhow::Result<ServeTurnResult>>;
+}
+
+/// What the runner gives a serve turn once its process has spawned.
+pub struct ServeTurnArgs {
+  pub prompt: String,
+  pub cwd: PathBuf,
+  pub env: Env,
+  pub uploaded_files: Vec<Value>,
+  /// The turn process's pid. `ServeTransport::finish_active_turn` finds the turn by it.
+  pub process_id: u32,
+  /// The directory of the session cgroup that the process runs in, when it runs in one.
+  pub cgroup_path: Option<PathBuf>,
+  /// `None` while the turn process runs; then its exit code, or the error that ended it.
+  pub exit: watch::Receiver<Option<Result<i32, String>>>,
+  pub on_event: EmitFn,
+}
+
+/// The exit code that a serve turn chose, when it chose one.
+pub struct ServeTurnResult {
+  pub exit_code: Option<i32>,
 }
 
 impl Registry {
@@ -905,6 +948,11 @@ impl Registry {
       Some(registration) => Ok(registration.lifecycle.clone().unwrap_or_else(|| Arc::clone(&self.default_lifecycle))),
       None => bail!("Unknown backend type: {backend_type}"),
     }
+  }
+
+  /// The serve transport of `backend_type`, or `None` when the type registered none.
+  pub fn serve_transport(&self, backend_type: &str) -> Option<Arc<dyn ServeTransport>> {
+    self.backend_types.get(backend_type)?.lifecycle.as_ref()?.serve_transport()
   }
 
   /// Every registered lifecycle, each once, in registration order. Types without one are left out.

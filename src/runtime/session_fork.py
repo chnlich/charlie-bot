@@ -28,7 +28,7 @@ from src.runtime.hooks import sidebar_contributions
 
 log = log_once.LazyStructlogLogger()
 
-# The fork/elone API routes (rust/crates/charliebot-session-api/src/routes.rs) open their auto-injected
+# The fork/elone API routes (rust/crates/runtime/session-api/src/routes.rs) open their auto-injected
 # bootstrap prompts with an opener plus the note, and a feature that summarizes
 # sessions filters such injected messages by opener-prefix match; the clone/elone
 # bootstraps and the context-reset note (``session_anchors.context_reset_note``) share the

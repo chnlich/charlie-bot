@@ -2,7 +2,7 @@
 
 Each listed package defines ``register()`` in its ``__init__.py``. Deleting a package's line
 removes its commands and hooks from the CLI, and its page packages from the page registry
-(``src.runtime.hooks.page_render``). The Rust server (``rust/crates/charliebot-server``) holds its own package list.
+(``src.runtime.hooks.page_render``). The Rust server (``rust/crates/app/server``) holds its own package list.
 """
 
 import importlib

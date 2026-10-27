@@ -375,7 +375,7 @@ class SessionMetadata(pydantic.BaseModel):
   # at read time from thinking_state's display-backend map. A worker node's
   # persisted metadata.backend holds the backend its creator resolved for the
   # first work Run. The displayed-backend rule (which of the two a session
-  # shows) lives in rust/crates/charliebot-session-api/src/listing.rs (displayed_backend_id). Never
+  # shows) lives in rust/crates/runtime/session-api/src/listing.rs (displayed_backend_id). Never
   # persisted (excluded by session_store.TRANSIENT_METADATA_FIELDS).
   run_backend: str | None = None
   created_at: UtcDatetime = pydantic.Field(default_factory=utc_now)

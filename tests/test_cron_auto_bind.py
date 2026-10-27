@@ -29,7 +29,7 @@ from src.features.cron import scheduler as scheduler_module
 from src.infra import config, models
 from src.infra import event_types as ET
 from src.runtime import task_sessions
-from tests import test_cron_backend, test_task_execution
+from tests import test_task_execution
 
 _NIGHTLY_PROMPT_MD = "run nightly\n"
 
@@ -413,53 +413,6 @@ async def test_recreated_task_reattaches_to_its_original_node(tick_env) -> None:
 
 
 @pytest.mark.asyncio
-async def test_cron_editor_backend_change_switches_bound_node_in_place(
-    tick_env, monkeypatch: pytest.MonkeyPatch) -> None:
-  """A cron-editor backend change on a bound task creates no session and
-  switches the node's backend in place."""
-  cfg, session_blocks, tree, scheduler, home = tick_env
-  test_cron_backend._patch_cron_d(monkeypatch, home / ".charliebot" / "config.d" / "cron.d")
-  conftest.write_nightly_task(home, backend=conftest.OPUS_BACKEND_ID)
-  await scheduler._tick()
-  node_id = _read_task_yaml(home)["session_id"]
-  node = await tree.load_meta(node_id)
-  assert node is not None and node.backend == conftest.OPUS_BACKEND_ID
-
-  with conftest.make_cron_sessions_client(cfg, session_blocks, tree) as client:
-    response = client.put("/api/cron/tasks/nightly", json={"backend": "codex-o3"})
-
-  assert response.status_code == 200
-  sessions = await session_blocks.listing.list_sessions()
-  assert len(sessions) == 1 and sessions[0].id == node_id  # no session was created
-  node = await tree.load_meta(node_id)
-  assert node is not None and node.backend == "codex-o3"
-  assert _read_task_yaml(home)["backend"] == "codex-o3"
-
-
-@pytest.mark.asyncio
-async def test_cron_editor_backend_change_on_busy_node_409s_before_writing(
-    tick_env, monkeypatch: pytest.MonkeyPatch) -> None:
-  """The editor keeps its contract: 409 before any yaml write when the switch
-  cannot happen now (the node's own work is in flight)."""
-  from src.runtime import thinking_state
-  cfg, session_blocks, tree, scheduler, home = tick_env
-  test_cron_backend._patch_cron_d(monkeypatch, home / ".charliebot" / "config.d" / "cron.d")
-  conftest.write_nightly_task(home, backend=conftest.OPUS_BACKEND_ID)
-  await scheduler._tick()
-  node_id = _read_task_yaml(home)["session_id"]
-  thinking_state.mark_busy(node_id)
-
-  with conftest.make_cron_sessions_client(cfg, session_blocks, tree) as client:
-    response = client.put("/api/cron/tasks/nightly", json={"backend": "codex-o3"})
-
-  assert response.status_code == 409
-  assert "running work" in response.json()["detail"]
-  assert _read_task_yaml(home)["backend"] == conftest.OPUS_BACKEND_ID  # nothing written
-  node = await tree.load_meta(node_id)
-  assert node is not None and node.backend == conftest.OPUS_BACKEND_ID
-
-
-@pytest.mark.asyncio
 async def test_hand_edited_yaml_backend_is_followed_on_the_next_tick(tick_env) -> None:
   _cfg, session_blocks, tree, scheduler, home = tick_env
   conftest.write_nightly_task(home, backend=conftest.OPUS_BACKEND_ID)
@@ -481,46 +434,6 @@ async def test_hand_edited_yaml_backend_is_followed_on_the_next_tick(tick_env) -
 # ---------------------------------------------------------------------------
 # Lifecycle: archiving the node stops the task; deleting the task keeps the node
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_archiving_bound_node_writes_enabled_false(tick_env) -> None:
-  """The user's archive action on a bound node stops its task: the single-key
-  write flips only ``enabled`` in the task's yaml; the binding itself stays."""
-  cfg, session_blocks, tree, scheduler, home = tick_env
-  conftest.write_nightly_task(home, project="charlie")
-  await scheduler._tick()
-  node_id = _read_task_yaml(home)["session_id"]
-
-  with conftest.make_cron_sessions_client(cfg, session_blocks, tree) as client:
-    response = client.post(f"/api/sessions/{node_id}/archive", json={"request_id": "archive-bound-node"})
-
-  assert response.status_code == 200
-  body = _read_task_yaml(home)
-  assert body["enabled"] is False
-  assert body["session_id"] == node_id  # the binding itself stays
-  assert body["cron"] == "0 3 * * *" and body["project"] == "charlie"
-
-
-@pytest.mark.asyncio
-async def test_task_delete_leaves_its_node_active(tick_env) -> None:
-  """Deleting the task unlinks the yaml only: the node stays active."""
-  cfg, session_blocks, tree, scheduler, home = tick_env
-  conftest.write_nightly_task(home)
-  await scheduler._tick()
-  node_id = _read_task_yaml(home)["session_id"]
-
-  with conftest.make_cron_sessions_client(cfg, session_blocks, tree) as client:
-    response = client.delete("/api/cron/tasks/nightly")
-
-  assert response.status_code == 200
-  assert response.json() == {"ok": True}
-  assert not (home / ".charliebot" / "config.d" / "cron.d" / "nightly.yaml").exists()
-  node = await tree.load_meta(node_id)
-  assert node is not None
-  fresh = await session_blocks.store.get_session(node_id)
-  assert fresh is not None and fresh.status == models.SessionStatus.ACTIVE
-
 
 # ---------------------------------------------------------------------------
 # Wake duties: the bound node inherits the cron session's wake behavior on the

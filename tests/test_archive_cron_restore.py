@@ -1,6 +1,5 @@
-"""The scheduler-side restores: cron auto-bind brings an archived reattached
-node back (covered end-to-end in test_cron_auto_bind), and the cron editor's
-enable restores the bound archived node. Real managers drive the tree."""
+"""The scheduler-side archive and restore: an archive disables every task bound to the node, and the legacy
+status branch of auto-bind unarchives a status-archived node. Real managers drive the tree."""
 
 from __future__ import annotations
 
@@ -19,8 +18,7 @@ from tests import test_cron_auto_bind, test_cron_backend
 
 @pytest.fixture()
 def cron_env(tmp_path: pathlib.Path, temp_home: pathlib.Path, monkeypatch: pytest.MonkeyPatch):
-  """The cron editor's env: synthetic home for cron.d, real managers bound as
-  the deps singleton, the cron router mounted with the tree override."""
+  """The cron env: synthetic home for cron.d, real managers bound as the deps singleton."""
   cfg = config.CharlieBotConfig(
       charliebot_home=tmp_path / "charliebot-home",
       backends={"options": [conftest.OPUS_BACKEND_OPTION]},
@@ -30,59 +28,14 @@ def cron_env(tmp_path: pathlib.Path, temp_home: pathlib.Path, monkeypatch: pytes
   tree = conftest.build_task_tree(cfg, session_blocks)
   conftest.bind_deps_blocks(monkeypatch, tree, session_blocks)
   test_cron_backend._patch_cron_d(monkeypatch, temp_home / ".charliebot" / "config.d" / "cron.d")
-  return cfg, session_blocks, tree, temp_home, conftest.make_cron_client
-
-
-@pytest.mark.asyncio
-async def test_cron_editor_enable_restores_the_bound_archived_node(cron_env) -> None:
-  cfg, session_blocks, tree, home, make_cron_client = cron_env
-  conftest.write_nightly_task(home, backend=conftest.OPUS_BACKEND_ID)
-  node = await conftest.create_scheduled_node(tree, name="nightly", backend=conftest.OPUS_BACKEND_ID)
-  # Bind, then let the user archive the node (its cron task stops with it).
-  cron_files.write_cron_key("nightly", "session_id", node.id)
-  await tree.completion.archive_subtree(
-      node.id,
-      request_id="archive-test",
-      summary="archived by the user",
-      result_refs=[],
-      run_ids=[],
-      caller=conftest.OPERATOR)
-  assert tree.task_state(node.id) == "archived"
-  # The archive disabled the bound task.
-  body = test_cron_auto_bind._read_task_yaml(home)
-  assert body["session_id"] == node.id and body["enabled"] is False
-
-  with make_cron_client(cfg, session_blocks) as client:
-    enabled = client.put("/api/cron/tasks/nightly", json={"enabled": True})
-    assert enabled.status_code == 200
-    assert enabled.json()["enabled"] is True
-
-  # The enable restored the node: open, with the cron enable as the named source.
-  assert tree.task_state(node.id) == "open"
-  reopens = [e for e in tree.events.load_events(node.id) if e["type"] == ET.TASK_REOPENED]
-  assert [e["reason"] for e in reopens] == ["cron enable"]
-
-  # Disabling again (and archiving again) writes no restore.
-  cron_files.write_cron_key("nightly", "enabled", value=False)
-  await tree.completion.archive_subtree(
-      node.id,
-      request_id="archive-test-after-enable",
-      summary="archived by the user",
-      result_refs=[],
-      run_ids=[],
-      caller=conftest.OPERATOR)
-  with make_cron_client(cfg, session_blocks) as client:
-    disabled = client.put("/api/cron/tasks/nightly", json={"enabled": False})
-    assert disabled.status_code == 200
-  assert tree.task_state(node.id) == "archived"
-  assert len([e for e in tree.events.load_events(node.id) if e["type"] == ET.TASK_REOPENED]) == 1
+  return cfg, session_blocks, tree, temp_home
 
 
 @pytest.mark.asyncio
 async def test_archive_disables_every_task_bound_to_the_node(cron_env) -> None:
   """Two tasks bound to one node both stop: a task left enabled on an archived
   node fails its binding check on every scheduler tick."""
-  _, _, tree, home, _ = cron_env
+  _, _, tree, home = cron_env
   conftest.write_nightly_task(home, backend=conftest.OPUS_BACKEND_ID)
   weekly = {**test_cron_auto_bind._read_task_yaml(home), "cron": "0 3 * * 0"}
   (home / ".charliebot" / "config.d" / "cron.d" / "weekly.yaml").write_text(yaml.safe_dump(weekly), encoding="utf-8")

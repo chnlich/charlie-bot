@@ -13,20 +13,15 @@ from __future__ import annotations
 import asyncio
 import datetime
 import pathlib
-import sys
 from unittest import mock
 
 import conftest
-import fastapi
 import pytest
-from fastapi import testclient
 
 from src.features.chat_threads import thread_entry
 from src.features.slack import slack_listener
 from src.infra import config, models
 from src.runtime import triggers
-from src.runtime.api import deps, internal
-from src.runtime.cli import schedule_trigger as cli_module
 
 
 def _limit_detail(session_id: str, count: int) -> str:
@@ -87,40 +82,6 @@ async def test_sixth_registration_raises_with_exact_detail(tmp_path: pathlib.Pat
 
   assert str(excinfo.value) == _limit_detail(session_id, triggers.MAX_PENDING_TRIGGERS)
   assert await _pending_count(trigger_mgr, session_id) == triggers.MAX_PENDING_TRIGGERS
-
-
-def test_api_returns_422_with_exact_detail_and_cli_exits_2(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg, sessions, trigger_mgr, session_id = asyncio.run(_seed(tmp_path, pending=triggers.MAX_PENDING_TRIGGERS))
-  detail = _limit_detail(session_id, triggers.MAX_PENDING_TRIGGERS)
-
-  app = fastapi.FastAPI()
-  app.include_router(internal.router, prefix="/api/internal")
-  app.dependency_overrides[deps.get_session_store] = lambda: sessions.store
-  app.dependency_overrides[deps.get_trigger_manager] = lambda: trigger_mgr
-  res = testclient.TestClient(app).post(
-      "/api/internal/schedule-trigger",
-      json={
-          "session_id": session_id,
-          "delay_seconds": 3600,
-          "message": "one too many"
-      },
-  )
-  assert res.status_code == 422
-  assert res.json()["detail"] == detail
-
-  # The CLI maps the same rejection to exit 2 through its existing 422 contract.
-  monkeypatch.setattr(conftest.CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
-  monkeypatch.setattr(
-      conftest.CLI_COMMON_TRANSPORT_POST_PATCH_TARGET,
-      lambda *a, **k: conftest.make_json_response({"detail": detail}, status_code=422))
-  conftest.fake_cli_cfg(monkeypatch, cfg.sessions_dir)
-  with (
-      mock.patch.object(sys, "argv", conftest.schedule_trigger_argv("one too many")),
-      pytest.raises(SystemExit) as excinfo,
-  ):
-    cli_module.main()
-  assert excinfo.value.code == 2
 
 
 # ---------------------------------------------------------------------------

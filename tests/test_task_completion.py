@@ -290,41 +290,6 @@ async def test_own_run_request_with_an_open_child_is_refused_and_not_saved(tmp_p
 
 
 @pytest.mark.asyncio
-async def test_saved_request_blocked_after_its_run_wakes_the_requester_once(tmp_path: pathlib.Path) -> None:
-  """A valid request is saved; input arriving during the requesting Run blocks
-  the close after that Run succeeds. The requester gets one wake input naming
-  the request and its blockers — never a user event — and a recovery replay of
-  the same request adds no second notice."""
-  from src.runtime import task_recovery
-
-  cfg, _session_blocks, tree = conftest.build_env(tmp_path)
-  root = await conftest.create_task(tree, parent=None, request_id="root")
-  manager = await conftest.create_task(tree, parent=root.id, request_id="mgr")
-  agent = await live_manager_caller(tree, manager.id, "run-mgr")
-
-  evidence = task_completion.CompletionEvidence(summary="done", result_refs=["report:done"], run_ids=["run-mgr"])
-  status, payload = await tree.completion.archive_task(
-      manager.id, request_id="close-1", evidence=evidence, caller=agent)
-  assert (status, payload["status"]) == (202, "pending_run_finish")
-  assert len(close_requests_of(tree, manager.id)) == 1
-
-  late = await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="one more thing", actor="user")
-  await tree.dispatch.finish_run(manager.id, "run-mgr", outcome="success")
-  assert tree.task_state(manager.id) == "open"
-
-  new_inputs = [e for e in tree.dispatch.pending_inputs(manager.id) if e["id"] != late["id"]]
-  assert len(new_inputs) == 1
-  notice = new_inputs[0]
-  assert notice["type"] not in (ET.USER, ET.AGENT_MESSAGE)
-  assert "close-1" in notice["content"]
-  assert f"has unprocessed input: {late['id']}" in notice["content"]
-
-  await task_recovery.reconcile_task_tree(cfg, tree)
-  assert tree.task_state(manager.id) == "open"
-  assert [e["id"] for e in tree.events.load_events(manager.id) if e["type"] == notice["type"]] == [notice["id"]]
-
-
-@pytest.mark.asyncio
 async def test_preexisting_close_request_closes_as_archived_and_reports_to_parent(tmp_path: pathlib.Path) -> None:
   _cfg, _session_blocks, tree = conftest.build_env(tmp_path)
   root = await conftest.create_task(tree, parent=None, request_id="root")

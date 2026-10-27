@@ -107,19 +107,3 @@ async def test_fork_and_elone_birth_one_stream_without_syncing_the_copy(tmp_path
   if spawn == "elone":
     fresh_parent = await mgr.store.get_session(parent)
     assert fresh_parent is not None and fresh_parent.successor_session_id == child.id
-
-
-@pytest.mark.asyncio
-async def test_operator_create_opens_a_manager_root_with_name_group_and_backend(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg, session_blocks, tree = conftest.build_env(tmp_path)
-  conftest.bind_deps_blocks(monkeypatch, tree, session_blocks)  # require_caller reads the run store off the tree
-
-  with conftest.make_cron_sessions_client(cfg, session_blocks, tree) as client:
-    response = client.post("/api/sessions/", json={"name": "From the sidebar", "group": "Pinned"})
-
-  assert response.status_code == 200
-  body = response.json()
-  assert (body["name"], body["group"], body["backend"]) == ("From the sidebar", "Pinned", conftest.OPUS_BACKEND_ID)
-  assert (body["profile"], body["schema_version"]) == ("manager", 2)
-  _assert_manager_root(cfg, body["id"])

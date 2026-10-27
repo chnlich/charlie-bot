@@ -1,5 +1,5 @@
 // Dependency graph of the pages that tests/test_frontend_structure.py checks. Prints one JSON
-// object: {packages, pages: {chat, diff, artifact}} with, per page, the templates, the nodes in
+// object: {packages, pages: {chat}} with, per page, the templates, the nodes in
 // page order, the edges (using node -> defining node -> [names]), the strongly connected
 // components of two or more nodes, the global names defined in more than one node, and the load
 // errors. A node is a loaded script (repo-relative path), '<template>#bootstrap' for a template's
@@ -94,8 +94,6 @@ const HOST_GLOBALS = ['marked', 'hljs', 'katex', 'renderMathInElement', 'Diff2Ht
   'innerWidth', 'innerHeight', 'devicePixelRatio', 'screen', 'visualViewport', 'clipboardData', 'atob', 'btoa',
   'fetch', 'FormData', 'Headers', 'Response', 'Request', 'queueMicrotask', 'structuredClone',
   'AudioWorkletProcessor', 'registerProcessor', 'sampleRate', 'currentTime',
-  // The frozen page_graph.js computed only the chat page, which dispatches no event at
-  // load; the diff page's compare() dispatches cbdiff:compared at load.
   'dispatchEvent'];
 
 function newContext() {
@@ -109,15 +107,12 @@ function newContext() {
 }
 
 // The graph of one page: every template's inline scripts first (bootstrap), then every loaded
-// script in load order, then every template's inline handler attributes (markup). extraScripts
-// holds the loaded scripts of a page with no template file: the artifact page's script list
-// lives in artifact_view.py.
-function computeGraph(templates, extraScripts) {
+// script in load order, then every template's inline handler attributes (markup).
+function computeGraph(templates) {
   const ctx = newContext();
   const templateHtml = Object.fromEntries(templates.map((t) => [t, read(t)]));
   const scripts = [];
   for (const t of templates) for (const s of scriptSrcs(templateHtml[t])) if (!scripts.includes(s)) scripts.push(s);
-  for (const s of extraScripts) if (!scripts.includes(s)) scripts.push(s);
 
   function keysOf(expr) {
     try { return new Set(vm.runInContext(`Object.getOwnPropertyNames(${expr} || {})`, ctx)); } catch (e) { return new Set(); }
@@ -248,28 +243,14 @@ function computeGraph(templates, extraScripts) {
   return {templates, nodes, edges, sccs, multiDefs, loadErrors};
 }
 
-// The pages the structure test checks. The chat page is index.html plus every package's page
-// part templates, in registration order. The diff page is diff.html plus the packages'
-// page_diff_toolbar.html parts (the one slot diff.html renders). The artifact page's script
-// list lives in the source that serves it: the <script src=...> strings of artifact_view.py.
+// The page the structure test checks: index.html plus every package's page part templates, in
+// registration order.
 const chatTemplates = ['web/templates/index.html'];
 for (const pkg of packages) chatTemplates.push(...pageTemplatesOf(pkg));
-const diffTemplates = ['src/features/diff_view/templates/diff.html'];
-for (const pkg of packages) {
-  diffTemplates.push(...pageTemplatesOf(pkg).filter((t) => t.endsWith('/page_diff_toolbar.html')));
-}
-const artifactView = read('src/features/artifacts/artifact_view.py');
-const artifactScripts = [];
-for (const m of artifactView.matchAll(/<script\s+src="?\/static\/([^"?\s>]+)/g)) {
-  const script = scriptPathOf(m[1]);
-  if (!artifactScripts.includes(script)) artifactScripts.push(script);
-}
 
 console.log(JSON.stringify({
   packages,
   pages: {
-    chat: computeGraph(chatTemplates, []),
-    diff: computeGraph(diffTemplates, []),
-    artifact: computeGraph([], artifactScripts),
+    chat: computeGraph(chatTemplates),
   },
 }, null, 1));

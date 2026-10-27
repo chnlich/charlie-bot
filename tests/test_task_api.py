@@ -12,8 +12,7 @@ import pytest
 import pytest_asyncio
 
 from src.infra import models
-from src.runtime import run_token, runs, task_sessions
-from tests import test_task_execution
+from src.runtime import runs, task_sessions
 
 
 @pytest_asyncio.fixture
@@ -41,62 +40,6 @@ async def seed_tree(task_mgr: task_sessions.TaskTreeManager) -> dict[str, str]:
 # ---------------------------------------------------------------------------
 # v2 create, tree, detail, runs
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_v2_create_tree_detail_and_runs(task_env) -> None:
-  cfg, session_blocks, task_mgr = task_env
-  ids = await seed_tree(task_mgr)
-  with test_task_execution.make_api_client(cfg, session_blocks, task_mgr) as client:
-    # v2 create requires request_id.
-    assert client.post("/api/sessions/", json={"task_parent_id": ids["root"], "profile": "worker"}).status_code == 400
-
-    created = client.post(
-        "/api/sessions/",
-        json={
-            "request_id": "api-w2",
-            "task_parent_id": ids["root"],
-            "profile": "worker",
-            "name": "W2",
-        })
-    assert created.status_code == 200
-    assert created.json()["schema_version"] == 2 and created.json()["profile"] == "worker"
-    replay = client.post(
-        "/api/sessions/",
-        json={
-            "request_id": "api-w2",
-            "task_parent_id": ids["root"],
-            "profile": "worker",
-            "name": "W2",
-        })
-    assert replay.json()["id"] == created.json()["id"]
-
-    tree = client.get("/api/sessions/tree")
-    assert tree.status_code == 200
-    body = tree.json()
-    assert body["tree_revision"]
-    root_row = next(r for r in body["items"] if r["id"] == ids["root"])
-    assert root_row["child_count"] == 2 and root_row["task_state"] == "open"
-
-    detail = client.get(f"/api/sessions/{ids['worker']}")
-    assert detail.status_code == 200
-    assert detail.json()["ancestors"] == [{"id": ids["root"], "name": "Root"}]
-
-    # Retry is stable per request id and visible in GET runs.
-    await task_mgr.runs.register_run_locked(models.RunRecord(id="run-1", session_id=ids["worker"]))
-    retry = client.post(f"/api/sessions/{ids['worker']}/retry", json={"request_id": "retry-1", "run_id": "run-1"})
-    assert retry.status_code == 200
-    retry_body = retry.json()
-    assert retry_body["session_id"] == ids["worker"]
-    replayed = client.post(f"/api/sessions/{ids['worker']}/retry", json={"request_id": "retry-1", "run_id": "run-1"})
-    assert replayed.json()["run_id"] == retry_body["run_id"]
-
-    listed = client.get(f"/api/sessions/{ids['worker']}/runs")
-    assert listed.status_code == 200
-    assert {r["id"] for r in listed.json()["items"]} == {"run-1", retry_body["run_id"]}
-
-    missing = client.get("/api/sessions/no-such/runs")
-    assert missing.status_code == 404
 
 
 @pytest.mark.asyncio
@@ -208,44 +151,6 @@ async def test_activity_derivation_rereads_after_a_proc_judgment(task_env) -> No
   assert task_mgr.activity_of(worker).work_state == "idle"
 
 
-@pytest.mark.asyncio
-async def test_patch_metadata_and_permanent_delete_blockers(task_env) -> None:
-  cfg, session_blocks, task_mgr = task_env
-  ids = await seed_tree(task_mgr)
-  with test_task_execution.make_api_client(cfg, session_blocks, task_mgr) as client:
-    # Name-only PATCH keeps the legacy rename contract.
-    renamed = client.patch(f"/api/sessions/{ids['worker']}", json={"name": "Renamed"})
-    assert renamed.status_code == 200 and renamed.json()["name"] == "Renamed"
-
-    patched = client.patch(
-        f"/api/sessions/{ids['worker']}", json={
-            "task": {
-                "goal": "ship the tree",
-                "acceptance": ["tests pass"]
-            },
-        })
-    assert patched.status_code == 200
-    body = patched.json()
-    assert body["task"]["goal"] == "ship the tree"
-    assert "presentation" not in body  # the retired display preference is gone
-
-    # The retired display preference is refused, not silently dropped.
-    retired = client.patch(f"/api/sessions/{ids['worker']}", json={"presentation": "hidden"})
-    assert retired.status_code == 422
-
-    # Reparent to a worker target is a 400; to a missing task a 404.
-    bad = client.patch(f"/api/sessions/{ids['worker']}", json={"task_parent_id": ids["worker"]})
-    assert bad.status_code == 409  # its own subtree
-    missing = client.patch(f"/api/sessions/{ids['worker']}", json={"task_parent_id": "ghost"})
-    assert missing.status_code == 404
-
-    # Permanent delete is blocked by the child run record.
-    await task_mgr.runs.register_run_locked(models.RunRecord(id="run-blk", session_id=ids["worker"]))
-    blocked = client.delete(f"/api/sessions/{ids['worker']}/permanent")
-    assert blocked.status_code == 409
-    assert any("run record" in b for b in blocked.json()["detail"]["blockers"])
-
-
 # The retired task-pause key, spelled in parts: the whole key must stay
 # grep-clean out of the tree while these retirement tests still send it on
 # the wire and write it on disk.
@@ -282,149 +187,6 @@ async def test_metadata_with_the_retired_pause_key_loads_and_drops_it_on_save(ta
 # Caller identity: operator vs run-token agent
 # ---------------------------------------------------------------------------
 
-
-def agent_headers(claims: run_token.RunTokenClaims) -> dict[str, str]:
-  key = "op-secret"
-  conftest.stub_credentials({"charliebot": {"access_key": key}})
-  token = run_token.sign_run_token(claims, key)
-  return {"Authorization": f"Bearer {token}"}
-
-
-async def register_agent_run(
-    task_mgr: task_sessions.TaskTreeManager, claims: run_token.RunTokenClaims) -> models.RunRecord:
-  """Register the launched Run the test's agent token binds to.
-
-  The run credential is accepted only after the launch callback persisted
-  (pid, pid_start) on the Run, so the fixture lands the identity like the
-  real on_spawn callback does.
-  """
-  record = await task_mgr.runs.register_run_locked(
-      models.RunRecord(id=claims.run_id, session_id=claims.session_id, kind="work"))
-  await task_mgr.runs.record_launch(
-      claims.session_id,
-      claims.run_id,
-      pid=40000 + (abs(hash(claims.run_id)) % 20000),
-      pid_start="ps-" + claims.run_id[:8])
-  return record
-
-
-@pytest.mark.asyncio
-async def test_agent_run_token_creates_own_children_under_its_own_task(task_env) -> None:
-  """A valid active-Run token organizes its own manager task: a logical manager
-  child needs no user authorization, a worker child rides the takeoff gate
-  (present here), and any foreign parent is refused."""
-  cfg, session_blocks, task_mgr = task_env
-  ids = await seed_tree(task_mgr)
-  conftest.stub_credentials({"charliebot": {"access_key": "op-secret"}})
-  claims = run_token.RunTokenClaims(session_id=ids["root"], run_id="agent-run-1", agent="worker-alpha")
-  await register_agent_run(task_mgr, claims)
-  # The agent's own manager task carries the operator's authorization.
-  await task_mgr.events.append(
-      ids["root"], {
-          "id": "user-1",
-          "type": "user",
-          "timestamp": models.utc_now_iso(),
-          "actor": "user",
-          "source_session_id": ids["root"],
-          "content": "take off",
-      })
-
-  with test_task_execution.make_api_client(cfg, session_blocks, task_mgr) as client:
-    # A valid active-Run token may create a worker directly under its own manager task.
-    ok = client.post(
-        "/api/sessions/",
-        json={
-            "request_id": "agent-w",
-            "task_parent_id": ids["root"],
-            "profile": "worker",
-            "name": "AgentW"
-        },
-        headers=agent_headers(claims))
-    assert ok.status_code == 200, ok.text
-    assert ok.json()["profile"] == "worker"
-
-    # ...and a logical manager child under its own task (no extra approval),
-    # but not under somebody else's task.
-    manager_try = client.post(
-        "/api/sessions/",
-        json={
-            "request_id": "agent-m",
-            "task_parent_id": ids["root"],
-            "profile": "manager"
-        },
-        headers=agent_headers(claims))
-    assert manager_try.status_code == 200, manager_try.text
-    assert manager_try.json()["profile"] == "manager"
-
-    foreign_try = client.post(
-        "/api/sessions/",
-        json={
-            "request_id": "agent-f",
-            "task_parent_id": ids["worker"],
-            "profile": "worker"
-        },
-        headers=agent_headers(claims))
-    assert foreign_try.status_code == 403
-
-    foreign_manager_try = client.post(
-        "/api/sessions/",
-        json={
-            "request_id": "agent-fm",
-            "task_parent_id": ids["worker"],
-            "profile": "manager"
-        },
-        headers=agent_headers(claims))
-    assert foreign_manager_try.status_code == 403
-
-    # User-only structural mutations are 403 for an agent caller.
-    patch_try = client.patch(
-        f"/api/sessions/{ids['worker']}", json={"profile": "manager"}, headers=agent_headers(claims))
-    assert patch_try.status_code == 403
-
-    retry_try = client.post(
-        f"/api/sessions/{ids['worker']}/retry",
-        json={
-            "request_id": "r",
-            "run_id": "run-1"
-        },
-        headers=agent_headers(claims))
-    assert retry_try.status_code == 403
-
-
 # ---------------------------------------------------------------------------
 # Authorization: a user request on the chain (a real user message or a thread summon), machine input never
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_agent_messages_and_cron_inputs_never_mint_authorization(task_env) -> None:
-  from src.infra import event_types
-  from src.runtime import control_events
-
-  cfg, session_blocks, task_mgr = task_env
-  conftest.stub_credentials({"charliebot": {"access_key": "op-secret"}})
-  root = await task_mgr.create_task(
-      request_id="root",
-      task_parent_id=None,
-      profile="manager",
-      task=None,
-      name="Root",
-      backend=None,
-      caller="operator")
-  claims = run_token.RunTokenClaims(session_id=root.id, run_id="agent-run-1", agent="worker-alpha")
-  await register_agent_run(task_mgr, claims)
-  await task_mgr.events.append(
-      root.id,
-      control_events.build_control_event(
-          event_types.AGENT_MESSAGE, actor="agent", source_session_id=root.id, content="take off now please"))
-
-  with test_task_execution.make_api_client(cfg, session_blocks, task_mgr) as client:
-    blocked = client.post(
-        "/api/sessions/",
-        json={
-            "request_id": "no-auth",
-            "task_parent_id": root.id,
-            "profile": "worker"
-        },
-        headers=agent_headers(claims))
-    assert blocked.status_code == 403

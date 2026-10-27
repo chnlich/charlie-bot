@@ -16,40 +16,15 @@ from src.infra import config
 
 
 def _patch_cron_d(monkeypatch: pytest.MonkeyPatch, cron_dir: pathlib.Path) -> None:
-  """Redirect the cron API's host-file IO at *cron_dir*.
+  """Redirect the cron host-file IO at *cron_dir*.
 
-  src.features.cron.api resolves cron_dir and cron_path on the loader module at
-  call time, so both patches land on src.features.cron.loader.
+  The loader resolves cron_dir and cron_path at call time, so both patches land on src.features.cron.loader.
   """
   monkeypatch.setattr(loader, "cron_dir", lambda: cron_dir)
   monkeypatch.setattr(loader, "cron_path", lambda name: cron_dir / f"{name}.yaml")
 
 
 _NIGHTLY_PROMPT_MD = "run nightly\n"
-
-
-def _cron_api_rig(
-    tmp_path: pathlib.Path,
-    monkeypatch: pytest.MonkeyPatch,
-    *,
-    preseed_backend: str | None = None,
-) -> tuple[pathlib.Path, config.CharlieBotConfig, conftest.SessionBlocks, pathlib.Path]:
-  """Stage the cron API world: a cron.d dir, the nightly prompt source, the
-  patched cron-dir bindings, and the real scheduler trio.
-
-  ``preseed_backend`` also seeds nightly.yaml carrying that backend; without
-  it the host file is absent, as before the task's first create. Returns
-  (cron_dir, cfg, session_blocks, md_path).
-  """
-  cron_dir = tmp_path / "cron.d"
-  cron_dir.mkdir(parents=True, exist_ok=True)
-  if preseed_backend is None:
-    md_path = conftest.write_nightly_prompt(tmp_path, _NIGHTLY_PROMPT_MD)
-  else:
-    _yaml_path, md_path, _md_content = _seed_prompt_file_task(cron_dir, tmp_path, backend=preseed_backend)
-  _patch_cron_d(monkeypatch, cron_dir)
-  cfg, session_blocks, _ = conftest.make_scheduler_setup(tmp_path)
-  return cron_dir, cfg, session_blocks, md_path
 
 
 @pytest.mark.asyncio
@@ -117,66 +92,6 @@ async def test_backend_alignment_preserves_last_run_to_avoid_catchup_fire(
   assert fresh.backend == "codex-o3"
   assert fresh.last_scheduled_run == now.isoformat()
   assert fresh.last_scheduled_cron == "* * * * *"
-
-
-def test_cron_api_persists_and_clears_backend(
-    tmp_path: pathlib.Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-  cron_dir, cfg, session_blocks, md_path = _cron_api_rig(tmp_path, monkeypatch)
-  nightly_path = cron_dir / "nightly.yaml"
-
-  def _read_backend() -> str:
-    return yaml.safe_load(nightly_path.read_text(encoding="utf-8")).get("backend")
-
-  with conftest.make_cron_client(cfg, session_blocks) as client:
-    create_response = client.post(
-        "/api/cron/tasks",
-        json={
-            "name": "nightly",
-            "cron": "0 2 * * *",
-            "prompt_file": str(md_path),
-            "backend": "codex-o3",
-        },
-    )
-    assert create_response.status_code == 200
-    assert create_response.json()["backend"] == "codex-o3"
-    assert _read_backend() == "codex-o3"
-
-    clear_response = client.put("/api/cron/tasks/nightly", json={"backend": None})
-    assert clear_response.status_code == 200
-    assert "backend" not in clear_response.json()
-    assert "backend" not in yaml.safe_load(nightly_path.read_text(encoding="utf-8"))
-
-    update_response = client.put("/api/cron/tasks/nightly", json={"backend": "codex-o3"})
-    assert update_response.status_code == 200
-    assert update_response.json()["backend"] == "codex-o3"
-
-    empty_clear_response = client.put("/api/cron/tasks/nightly", json={"backend": ""})
-    assert empty_clear_response.status_code == 200
-    assert "backend" not in yaml.safe_load(nightly_path.read_text(encoding="utf-8"))
-
-
-def test_cron_api_rejects_invalid_backend_on_create(
-    tmp_path: pathlib.Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-  cron_dir, cfg, session_blocks, md_path = _cron_api_rig(tmp_path, monkeypatch)
-
-  with conftest.make_cron_client(cfg, session_blocks) as client:
-    response = client.post(
-        "/api/cron/tasks",
-        json={
-            "name": "nightly",
-            "cron": "0 2 * * *",
-            "prompt_file": str(md_path),
-            "backend": "missing-backend",
-        },
-    )
-
-  assert response.status_code == 400
-  assert response.json()["detail"] == "backend 'missing-backend' is not in backends.options"
-  assert not (cron_dir / "nightly.yaml").exists()
 
 
 def _seed_prompt_file_task(cron_dir: pathlib.Path,

@@ -17,7 +17,6 @@ import tempfile
 import time
 import types
 import uuid
-import wave
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterable, Iterator
 from collections.abc import Set as AbstractSet
 from typing import TYPE_CHECKING, Any, Self
@@ -27,9 +26,6 @@ import fastapi
 import pytest
 import yaml
 from _pytest import runner
-from fastapi import testclient
-from starlette import requests
-from starlette.middleware import gzip
 
 _REAL_ASYNCIO_SLEEP = asyncio.sleep
 
@@ -274,7 +270,6 @@ from src.runtime import (  # noqa: E402
     triggers,
 )
 from src.runtime import backend_pool  # noqa: E402
-from src.runtime import sidebar_state  # noqa: E402
 from src.runtime import worker as worker_module  # noqa: E402
 from src.runtime.agent_process import base as backend_base  # noqa: E402
 from src.backends.antigravity import antigravity_cli  # noqa: E402
@@ -283,9 +278,7 @@ from src.backends.codex import codex  # noqa: E402
 from src.backends.gemini import gemini_cli  # noqa: E402
 from src.backends.opencode import opencode  # noqa: E402
 from src.features.cron import loader as cron_loader  # noqa: E402
-from src.features.cron import api as cron_api  # noqa: E402
-from src.runtime.api import deps, internal, sessions  # noqa: E402
-from src.app import pages  # noqa: E402
+from src.runtime.api import deps  # noqa: E402
 from src.infra import event_types as ET  # noqa: E402
 from src.runtime import runs  # noqa: E402
 from src.runtime import thinking_state  # noqa: E402
@@ -298,7 +291,7 @@ from src.infra import constants  # noqa: E402
 from src.backends.claude_code import login_dirs  # noqa: E402
 from src.features.artifacts import plans  # noqa: E402
 from src.features.cron import scheduler  # noqa: E402
-from src.runtime.hooks import scheduled_handlers, wiring  # noqa: E402
+from src.runtime.hooks import scheduled_handlers  # noqa: E402
 
 from src.features.artifacts import headless_render  # noqa: E402
 from src.app import registrations  # noqa: E402
@@ -322,6 +315,7 @@ _BLOCK_SINGLETONS = (
 
 # The pytester fixture: the budget mechanism's own test drives inner pytest
 # sessions (tests/test_pytest_budget.py).
+
 pytest_plugins = ["pytester"]
 
 
@@ -640,19 +634,6 @@ def append_events(path: pathlib.Path, events: list[dict]) -> None:
 
 def read_events(path: pathlib.Path) -> list[dict]:
   """Parse one JSONL event log, blank lines skipped; each event stays an unmodeled dict."""
-  return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
-
-
-def read_chat_events(home: pathlib.Path, session_id: str) -> list[dict]:
-  """Parse a session's chat_events.jsonl under a staged CHARLIEBOT_HOME; [] when absent.
-
-  Each event stays an unmodeled dict so tests assert the exact persisted shape.
-  A missing file means the run never wrote events, which callers assert on
-  directly rather than treat as an error.
-  """
-  path = home / "sessions" / session_id / "data" / "chat_events.jsonl"
-  if not path.exists():
-    return []
   return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
@@ -1353,200 +1334,6 @@ def override_session_blocks(app: fastapi.FastAPI, session_blocks: Any) -> None:
   app.dependency_overrides[deps.get_session_anchors] = lambda: session_blocks.anchors
 
 
-def make_router_client(
-    cfg: core_config.CharlieBotConfig,
-    session_blocks: SessionBlocks,
-    router: fastapi.APIRouter,
-    prefix: str,
-) -> testclient.TestClient:
-  """TestClient mounting one router with cfg/session_blocks as dependency overrides; a test needing
-  extra routers or overrides builds its own FastAPI app."""
-  app = fastapi.FastAPI()
-  app.include_router(router, prefix=prefix)
-  apply_config_overrides(app, cfg)
-  override_session_blocks(app, session_blocks)
-  return testclient.TestClient(app)
-
-
-def include_registered_routers(app: fastapi.FastAPI, prefix: str, *, before_runtime: bool = False) -> None:
-  """Include the routers that packages registered under *prefix*, the way server.py includes them.
-
-  *before_runtime* picks the routers registered to answer ahead of the runtime's own: a rig that
-  mounts a runtime router includes those first.
-  """
-  for module, router_prefix, tags, attr in wiring.routers(before_runtime=before_runtime):
-    if router_prefix == prefix:
-      app.include_router(getattr(importlib.import_module(module), attr), prefix=router_prefix, tags=list(tags))
-
-
-def make_sessions_client(cfg: core_config.CharlieBotConfig, session_blocks: SessionBlocks) -> testclient.TestClient:
-  """make_router_client over the sessions router, mounted at /api/sessions."""
-  return make_router_client(cfg, session_blocks, sessions.router, "/api/sessions")
-
-
-def make_internal_router_client(cfg: Any, session_blocks: Any, task_mgr: Any | None = None) -> testclient.TestClient:
-  """make_router_client over the internal router, mounted at /api/internal, plus the feature routers
-  registered under that prefix; the internal routes take cfg through the on-loop dependency
-  (same instance the sync key serves), so the override keys in make_router_client cover them.
-  cfg may be a MagicMock when the tested route never reads it."""
-  client = make_router_client(cfg, session_blocks, internal.router, "/api/internal")
-  resolved_task_mgr = task_mgr or getattr(session_blocks, "tree", None)
-  if resolved_task_mgr is not None:
-    client.app.dependency_overrides[deps.get_task_manager] = lambda: resolved_task_mgr
-    client.app.dependency_overrides[deps.get_run_store] = lambda: resolved_task_mgr.runs
-  include_registered_routers(client.app, "/api/internal")
-  return client
-
-
-def make_cron_client(cfg: core_config.CharlieBotConfig, session_blocks: SessionBlocks) -> testclient.TestClient:
-  """make_router_client over the cron router, mounted at /api/cron."""
-  return make_router_client(cfg, session_blocks, cron_api.router, "/api/cron")
-
-
-def make_cron_sessions_client(
-    cfg: core_config.CharlieBotConfig, session_blocks: SessionBlocks,
-    tree: task_sessions.TaskTreeManager) -> testclient.TestClient:
-  """TestClient mounting the cron router plus the sessions router (the scheduled listing and
-  unarchive endpoints) with cfg/session_blocks/tree as dependency overrides."""
-  app = fastapi.FastAPI()
-  app.include_router(cron_api.router, prefix="/api/cron")
-  app.include_router(sessions.router, prefix="/api/sessions")
-  apply_config_overrides(app, cfg)
-  override_session_blocks(app, session_blocks)
-  app.dependency_overrides[deps.get_task_manager] = lambda: tree
-  return testclient.TestClient(app)
-
-
-def make_sessions_listing_client(
-    cfg: core_config.CharlieBotConfig, session_blocks: SessionBlocks,
-    tree: task_sessions.TaskTreeManager) -> testclient.TestClient:
-  """TestClient mounting the sessions router with its config and manager overrides."""
-  app = fastapi.FastAPI()
-  include_registered_routers(app, "/api/sessions", before_runtime=True)
-  app.include_router(sessions.router, prefix="/api/sessions")
-  apply_config_overrides(app, cfg)
-  override_session_blocks(app, session_blocks)
-  app.dependency_overrides[deps.get_task_manager] = lambda: tree
-  return testclient.TestClient(app)
-
-
-def make_sessions_listing_page_client(
-    cfg: core_config.CharlieBotConfig, session_blocks: SessionBlocks,
-    tree: task_sessions.TaskTreeManager) -> testclient.TestClient:
-  """TestClient mounting the pages router (the homepage's server-rendered sidebar) with the
-  same overrides make_sessions_listing_client carries."""
-  app = fastapi.FastAPI()
-  app.include_router(pages.router)
-  apply_config_overrides(app, cfg)
-  override_session_blocks(app, session_blocks)
-  app.dependency_overrides[deps.get_task_manager] = lambda: tree
-  return testclient.TestClient(app)
-
-
-def page_initial_sessions(page_client: testclient.TestClient, session_id: str) -> list[dict]:
-  """The homepage render's INITIAL_SESSIONS row list for *session_id*, parsed.
-
-  The sidebar-list tests read the server-rendered page, not a JSON endpoint:
-  the rows ride the page as ``const INITIAL_SESSIONS = [...]``.
-  """
-  resp = page_client.get("/", params={"session": session_id})
-  assert resp.status_code == 200
-  match = re.search(r"const INITIAL_SESSIONS = (\[.*?\]);", resp.text)
-  assert match is not None
-  return json.loads(match.group(1))
-
-
-def walk_archived_pages(client: testclient.TestClient, limit: int = 2) -> list[dict]:
-  """GET /api/sessions/archived page by page, threading the keyset cursor.
-
-  Returns every page's JSON body in walk order. The limit stays pinned, and
-  each page's ``next_before``/``next_before_id`` ride the next request only
-  while that page says ``has_more`` — the walk stops at the first exhausted
-  page. The 10-page bound keeps a runaway cursor a bounded failure: the last
-  returned page then still says ``has_more``, and the callers' exactly-once
-  and membership asserts catch the short walk.
-  """
-  bodies: list[dict] = []
-  before = None
-  before_id = None
-  for _ in range(10):
-    params: dict = {"limit": limit}
-    if before is not None:
-      params.update({"before": before, "before_id": before_id})
-    resp = client.get("/api/sessions/archived", params=params)
-    assert resp.status_code == 200
-    page = resp.json()
-    bodies.append(page)
-    if not page["has_more"]:
-      break
-    before, before_id = page["next_before"], page["next_before_id"]
-  return bodies
-
-
-def make_http_scope(url: str, *, headers: list[tuple[bytes, bytes]]) -> dict[str, Any]:
-  """HTTP ASGI scope for the tests that drive an app directly, no server boot.
-
-  *url* splits into ``path``, ``raw_path`` (the full URL, uvicorn's wire shape),
-  and ``query_string``; *headers* rides verbatim as the scope's header list.
-  """
-  path, _, qs = url.partition("?")
-  return {
-      "type": "http",
-      "asgi": {
-          "version": "3.0",
-          "spec_version": "2.3"
-      },
-      "http_version": "1.1",
-      "method": "GET",
-      "scheme": "http",
-      "path": path,
-      "raw_path": url.encode(),
-      "query_string": qs.encode(),
-      "root_path": "",
-      "headers": headers,
-      "client": ("t", 1),
-      "server": ("t", 80),
-  }
-
-
-def make_page_request(path: str) -> requests.Request:
-  """Starlette Request for a GET against path with the full test-server scope (scheme/server/client);
-  a test needing headers, cookies, or a non-GET method builds its own scope."""
-  scope = {
-      "type": "http",
-      "method": "GET",
-      "path": path,
-      "headers": [],
-      "query_string": b"",
-      "scheme": "http",
-      "server": ("testserver", 80),
-      "client": ("127.0.0.1", 12345),
-  }
-  return requests.Request(scope)
-
-
-def mount_production_gzip(app: fastapi.FastAPI) -> None:
-  """Mount the stock gzip middleware with the server's production numbers.
-
-  The precompressed-response tests' served-as-is and zero-deflate assertions pin production
-  behavior only while this pair matches the server's gzip mount — minimum_size=1000,
-  compresslevel=1 on ``_CharlieBotGZipMiddleware`` (server.py). The stock middleware is
-  deliberate: the subclass changes which responder deflates, not whether an already-compressed
-  body deflates, so the skip contract under test is the same.
-  """
-  app.add_middleware(gzip.GZipMiddleware, minimum_size=1000, compresslevel=1)
-
-
-def assert_gzip_served(resp: Any) -> None:
-  """Assert the response served a route's pre-compressed gzip form.
-
-  The route set the encoding upstream — that header is what makes the
-  middleware skip its own deflate — and carries the negotiation vary.
-  """
-  assert resp.headers["content-encoding"] == "gzip"
-  assert resp.headers["vary"] == "Accept-Encoding"
-
-
 def make_transcript(config_dir: pathlib.Path, cc_session_id: str) -> pathlib.Path:
   """Write a fake Claude Code session transcript under config_dir and return its path."""
   transcript = config_dir / "projects" / "slug" / f"{cc_session_id}.jsonl"
@@ -1635,13 +1422,6 @@ def fable_pool_cfg(
   )
 
 
-def session_dir_names(cfg: core_config.CharlieBotConfig) -> set[str]:
-  """Snapshot the names of session directories on disk (existence, not content)."""
-  if not cfg.sessions_dir.exists():
-    return set()
-  return {d.name for d in cfg.sessions_dir.iterdir() if d.is_dir()}
-
-
 # Backend id the conftest configs register for the Opus option; session fixtures across the
 # suite must spell it through this constant so a rename stays a one-line change. The option's
 # model is spelled through OPUS_BACKEND_OPTION.model wherever a fixture pairs it with the id
@@ -1654,19 +1434,6 @@ CODEX_BACKEND_OPTION = backend_option(id="codex-o3", label="Codex", type="codex"
 
 # Antigravity option used by routing tests.
 AGY_BACKEND_OPTION = backend_option(id="agy", label="Antigravity", type="antigravity", model="gemini-2.5-pro")
-
-THREE_BACKEND_OPTIONS = [
-    OPUS_BACKEND_OPTION,
-    CODEX_BACKEND_OPTION,
-    backend_option(
-        id="kimi-k2.5",
-        label="Kimi",
-        type="cc-anthropic-compatible",
-        model="kimi-k2.5",
-        api_base="https://test.invalid",
-        context_window=409600,
-    ),
-]
 
 PLAN_TEST_BACKEND_OPTIONS = [OPUS_BACKEND_OPTION]
 
@@ -2117,22 +1884,6 @@ class _PendingAudio:
     raise AssertionError("unreachable: the pending audio never yields")
 
 
-def wav_body(samples: int = 160) -> bytes:
-  """A 16 kHz mono 16-bit WAV of *samples* silent frames: the recording the voice upload tests post."""
-  buffer = io.BytesIO()
-  with wave.open(buffer, "wb") as writer:
-    writer.setnchannels(1)
-    writer.setsampwidth(2)
-    writer.setframerate(16_000)
-    writer.writeframes(b"\x00\x00" * samples)
-  return buffer.getvalue()
-
-
-def voice_upload_file(body: bytes) -> fastapi.UploadFile:
-  """*body* wrapped as the multipart ``recording.wav`` upload the voice endpoint tests drive."""
-  return fastapi.UploadFile(file=io.BytesIO(body), filename="recording.wav")
-
-
 async def assert_transcribe_cancel_honors_close_timeout(
     build_backend: Callable[[str], Any], handshake_reply: list[dict]) -> None:
   """Cancel a transcription driven into its open state against a stand-in that
@@ -2289,16 +2040,6 @@ def cfg_with_repo(repo_root: pathlib.Path) -> core_config.CharlieBotConfig:
   return _Cfg()  # type: ignore[return-value]
 
 
-def build_two_backend_cfg(tmp_path: pathlib.Path) -> core_config.CharlieBotConfig:
-  """CharlieBotConfig for cross-backend tests: the .charliebot home lives under tmp_path so each test owns its
-  own tree, and the backend list registers the opus-then-codex pair that pin-resolution and fallback-ordering
-  cases exercise."""
-  return core_config.CharlieBotConfig(
-      charliebot_home=tmp_path / ".charliebot",
-      backends={"options": [OPUS_BACKEND_OPTION, CODEX_BACKEND_OPTION]},
-  )
-
-
 def build_worktree_cfg(tmp_path: pathlib.Path) -> core_config.CharlieBotConfig:
   """CharlieBotConfig for tests that create and remove worktree dirs: both the charliebot-home and the
   worktrees dirs live under tmp_path so each test owns its own tree — the default (~/worktrees) would
@@ -2382,14 +2123,6 @@ def write_thread_meta(cfg: core_config.CharlieBotConfig, session_id: str, meta: 
   path = thread_dir / "metadata.json"
   path.write_text(json.dumps(meta), encoding="utf-8")
   return path
-
-
-def write_plans(cfg: core_config.CharlieBotConfig, session_id: str, data: dict) -> pathlib.Path:
-  """Write data as the session's plans.json and return the file path."""
-  plans_path = cfg.sessions_dir / session_id / "plans.json"
-  plans_path.parent.mkdir(parents=True, exist_ok=True)
-  plans_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-  return plans_path
 
 
 def plan_version_v1(file: str = "artifacts/plan_01.html") -> dict:
@@ -2675,16 +2408,6 @@ def reset_backend_pool_state() -> None:
     backend_pool._cooling_until.clear()
 
 
-def reset_sidebar_state() -> None:
-  """Clear the sidebar's dirty set, snapshot, probe signatures, poll counter and derived maps."""
-  sidebar_state._dirty.clear()
-  sidebar_state._snapshot.clear()
-  sidebar_state._probe_signatures.clear()
-  sidebar_state._poll_count = 0
-  sidebar_state._derived_generation = 0
-  sidebar_state._derived_maps.clear()
-
-
 def reset_claude_account_readings() -> None:
   """Drop the process-local Claude account readings: rate-limit, panel, auth-failure and login-notified state."""
   claude_accounts._event_readings.clear()
@@ -2698,19 +2421,6 @@ def stub_credentials(sections: dict[str, dict[str, str | int]]) -> None:
   Credentials, stamped with the current credentials.yaml fingerprint, so the answer comes from
   memory and no file is read."""
   core_config._credentials_cache.seed(core_config.Credentials(path=pathlib.Path("credentials.yaml"), sections=sections))
-
-
-def agent_headers(session_id: str, run_id: str) -> dict[str, str]:
-  """The run-token credential of one node's own active Run (agent="manager-agent").
-
-  The signing key must equal the access key planted via stub_credentials, or the API
-  rejects the token as a bad credential. This is the credential the delegating CLI
-  really carries — never the operator access key the operator-header tests use — and
-  the only credential that exercises the agent-creation check on the task tree.
-  """
-  token = run_token.sign_run_token(
-      run_token.RunTokenClaims(session_id=session_id, run_id=run_id, agent="manager-agent"), "op-secret")
-  return {"Authorization": f"Bearer {token}"}
 
 
 @pytest.fixture(autouse=True)
@@ -2971,27 +2681,6 @@ def write_memory_entry(memory_dir: pathlib.Path, topic: str, slug: str, **kw: An
   return p
 
 
-class FakeWebSocket:
-  """WebSocket double recording every sent frame in .sent, for tests that pass it to server
-  catchup/replay producers duck-typing the FastAPI WebSocket.
-
-  Frames arrive as pre-rendered text (the replay's send path) or dicts
-  (send_json callers); both land parsed in .sent, and send_text keeps the raw
-  strings in .sent_text for wire-byte assertions.
-  """
-
-  def __init__(self) -> None:
-    self.sent: list[dict] = []
-    self.sent_text: list[str] = []
-
-  async def send_json(self, payload: dict) -> None:
-    self.sent.append(payload)
-
-  async def send_text(self, text: str) -> None:
-    self.sent_text.append(text)
-    self.sent.append(json.loads(text))
-
-
 class FakeAsyncProcess:
   """asyncio.subprocess.Process double replaying canned stdout/stderr.
 
@@ -3013,29 +2702,6 @@ class FakeAsyncProcess:
 
   async def wait(self) -> int:
     return self.returncode
-
-
-class FakeChunkedResponse:
-  """httpx streaming-response double replaying the constructor's byte chunks from aiter_bytes().
-
-  Callers pass it where production code holds an httpx streaming response
-  (the SSE consumers) and rely on their pre-cut chunks reaching that consumer
-  as-is; raise_for_status() and aclose() no-op to mirror httpx's response
-  surface.
-  """
-
-  def __init__(self, chunks: list[bytes]) -> None:
-    self._chunks = chunks
-
-  def raise_for_status(self) -> None:
-    pass
-
-  async def aclose(self) -> None:
-    pass
-
-  async def aiter_bytes(self) -> AsyncIterator[bytes]:
-    for chunk in self._chunks:
-      yield chunk
 
 
 class ScriptedRelayBackend:
@@ -3340,11 +3006,6 @@ async def _ok_asgi_downstream(scope: Any, receive: Any, send: Any) -> None:
 _ok_asgi_downstream.called = False
 
 
-def asgi_downstream_called() -> bool:
-  """Whether the shared downstream ran during the last run_through_asgi_middleware call."""
-  return _ok_asgi_downstream.called
-
-
 async def run_through_asgi_middleware(middleware: Any, scope: dict) -> list[dict]:
   """Drive one ASGI middleware over *scope* with the shared OK downstream; return the sent messages."""
   _ok_asgi_downstream.called = False
@@ -3358,14 +3019,6 @@ async def run_through_asgi_middleware(middleware: Any, scope: dict) -> list[dict
 
   await middleware(scope, receive, send)
   return sent
-
-
-def asgi_response(sent: list[dict]) -> tuple[int, dict[bytes, bytes], bytes]:
-  """Flatten the messages run_through_asgi_middleware collected into (status, headers, body)."""
-  start = next(m for m in sent if m["type"] == "http.response.start")
-  headers = dict(start["headers"])
-  body = b"".join(m.get("body", b"") for m in sent if m["type"] == "http.response.body")
-  return start["status"], headers, body
 
 
 async def cancel_and_drain(task: asyncio.Task) -> None:

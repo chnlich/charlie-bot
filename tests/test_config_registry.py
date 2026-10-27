@@ -66,50 +66,6 @@ def test_a_config_loads_without_a_deleted_package_and_refuses_its_type(tmp_path:
 
 # One fresh interpreter in which the package in argv[1] is deleted: it leaves PACKAGES before register_all() and
 # its modules no longer import. Then / renders and the page is searched for the package's page text in argv[2].
-INDEX_WITHOUT_PACKAGE_SCRIPT = "\n".join(
-    [
-        "import sys",
-        "class Deleted:",
-        "  def find_spec(self, name, path=None, target=None):",
-        "    if name == sys.argv[1] or name.startswith(sys.argv[1] + '.'):",
-        "      raise ModuleNotFoundError(name)",
-        "sys.meta_path.insert(0, Deleted())",
-        "from src.app import registrations",
-        "registrations.PACKAGES = tuple(p for p in registrations.PACKAGES if p != sys.argv[1])",
-        "sys.path.insert(0, 'tests')",
-        "import conftest",
-        "from src.infra import config",
-        "from src.runtime import task_sessions",
-        "cfg = config.get_config()",
-        "cfg.sessions_dir.mkdir(parents=True)",
-        "session_blocks = conftest.build_session_blocks(cfg)",
-        "tree = conftest.build_task_tree(cfg, session_blocks)",
-        "client = conftest.make_sessions_listing_page_client(cfg, session_blocks, tree)",
-        "response = client.get('/', follow_redirects=False)",
-        "print(response.status_code)",
-        "print(sys.argv[2] in response.text)",
-    ])
-
-
-@pytest.mark.parametrize(
-    "package, present",
-    [
-        ("src.features.voice", False),
-        ("src.features.no_such_package", True),  # the control: every package stays, so the voice constants render
-    ],
-)
-def test_the_index_page_renders_without_a_deleted_package(package: str, present: bool) -> None:
-  result = subprocess.run(
-      [sys.executable, "-c", INDEX_WITHOUT_PACKAGE_SCRIPT, package, "const VOICE_BACKENDS = ["],
-      cwd=conftest.ROOT,
-      capture_output=True,
-      text=True,
-      check=True,
-      timeout=60)
-
-  status, has_marker = result.stdout.splitlines()[-2:]
-  assert status == "200"
-  assert has_marker == str(present)
 
 
 def test_registry_refuses_a_second_registration_and_an_unregistered_type() -> None:

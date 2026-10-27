@@ -1,6 +1,6 @@
 """Tests for the improve loop's durable state and report-reading helpers.
 
-The loop itself is the v2 improve sequence (tests/test_task_sequences.py); what
+The loop itself is the v2 improve sequence (tests/test_sequence_controller_runs.py); what
 lives here is the state store and the event-reading judgments its controller
 shares (src/features/improve/improve_command.py).
 """

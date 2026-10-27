@@ -3,9 +3,9 @@
 use std::path::Path;
 
 use charliebot_core::config::{CREDENTIALS_FILENAME, CharlieBotConfig};
+use charliebot_improve::command::{self, ImproveLoopAlreadyRunningError, Reservation};
+use charliebot_improve::judgment;
 use charliebot_registry::Registry;
-use charliebot_sched::improve::command::{self, ImproveLoopAlreadyRunningError, Reservation};
-use charliebot_sched::improve::judgment;
 use serde_json::{Value, json};
 
 const SESSION: &str = "synthetic-improve-session";

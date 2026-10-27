@@ -420,7 +420,7 @@ impl TriggerManager {
     self.save_trigger(&trigger).await.map_err(TriggerCreateError::Failure)?;
     self.start_task(trigger.clone());
     tracing::info!(
-      target: "charliebot_sched",
+      target: "charliebot_triggers",
       trigger_id = %trigger.id,
       session = session_id,
       fire_at = %trigger.fire_at,
@@ -498,7 +498,7 @@ impl TriggerManager {
       match self.load_trigger_path(&path).await {
         Ok(trigger) => triggers.push(trigger),
         Err(error) => {
-          tracing::warn!(target: "charliebot_sched", path = %path.display(), error = %error, "trigger_load_failed")
+          tracing::warn!(target: "charliebot_triggers", path = %path.display(), error = %error, "trigger_load_failed")
         }
       }
     }
@@ -517,7 +517,7 @@ impl TriggerManager {
     if let Some(task) = self.tasks.lock().expect("trigger task map is not poisoned").remove(trigger_id) {
       task.abort();
     }
-    tracing::info!(target: "charliebot_sched", trigger_id, session = session_id, "trigger_cancelled");
+    tracing::info!(target: "charliebot_triggers", trigger_id, session = session_id, "trigger_cancelled");
     Ok(())
   }
 
@@ -555,7 +555,7 @@ impl TriggerManager {
           Ok(trigger) => trigger,
           Err(error) => {
             tracing::warn!(
-              target: "charliebot_sched",
+              target: "charliebot_triggers",
               path = %path.display(),
               error = %error,
               "trigger_recovery_load_failed"
@@ -569,7 +569,7 @@ impl TriggerManager {
         if trigger.status == TriggerStatus::Pending {
           self.start_task(trigger.clone());
           tracing::info!(
-            target: "charliebot_sched",
+            target: "charliebot_triggers",
             trigger_id = %trigger.id,
             session = %trigger.session_id,
             "trigger_recovered"
@@ -588,7 +588,7 @@ impl TriggerManager {
     let handle = tokio::spawn(async move {
       let _ = wait.await;
       if let Err(error) = manager.wait_and_fire(trigger).await {
-        tracing::error!(target: "charliebot_sched", trigger_id = %id, error = %error, "trigger_wait_failed");
+        tracing::error!(target: "charliebot_triggers", trigger_id = %id, error = %error, "trigger_wait_failed");
       }
       manager.tasks.lock().expect("trigger task map is not poisoned").remove(&id);
     });
@@ -712,7 +712,7 @@ impl TriggerManager {
     if !output.status.success() {
       let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
       tracing::warn!(
-        target: "charliebot_sched",
+        target: "charliebot_triggers",
         trigger_id,
         host = host.unwrap_or(""),
         returncode = output.status.code().unwrap_or(-1),
@@ -746,14 +746,14 @@ impl TriggerManager {
     let remote = match remote_exit_read_command(target.exit_file.as_deref()?) {
       Ok(remote) => remote,
       Err(error) => {
-        tracing::debug!(target: "charliebot_sched", host = %target.host, error = %error, "ssh_exit_read_failed");
+        tracing::debug!(target: "charliebot_triggers", host = %target.host, error = %error, "ssh_exit_read_failed");
         return None;
       }
     };
     let command = match self.ssh_argv(&target.host, &remote) {
       Ok(command) => command,
       Err(error) => {
-        tracing::debug!(target: "charliebot_sched", host = %target.host, error = %error, "ssh_exit_read_failed");
+        tracing::debug!(target: "charliebot_triggers", host = %target.host, error = %error, "ssh_exit_read_failed");
         return None;
       }
     };
@@ -764,7 +764,7 @@ impl TriggerManager {
       }
       Ok(output) => {
         tracing::debug!(
-          target: "charliebot_sched",
+          target: "charliebot_triggers",
           host = %target.host,
           returncode = output.status.code().unwrap_or(-1),
           "ssh_exit_read_failed"
@@ -772,7 +772,7 @@ impl TriggerManager {
         None
       }
       Err(error) => {
-        tracing::debug!(target: "charliebot_sched", host = %target.host, error, "ssh_exit_read_failed");
+        tracing::debug!(target: "charliebot_triggers", host = %target.host, error, "ssh_exit_read_failed");
         None
       }
     }
@@ -789,7 +789,7 @@ impl TriggerManager {
         (!content.is_empty()).then_some(content)
       }
       Err(error) => {
-        tracing::debug!(target: "charliebot_sched", exit_file, error = %error, "local_exit_read_failed");
+        tracing::debug!(target: "charliebot_triggers", exit_file, error = %error, "local_exit_read_failed");
         None
       }
     };
@@ -881,7 +881,7 @@ impl TriggerManager {
       Err(error)
         if error.downcast_ref::<io::Error>().is_some_and(|io_error| io_error.kind() == io::ErrorKind::NotFound) =>
       {
-        tracing::warn!(target: "charliebot_sched", trigger_id = %trigger.id, "trigger_file_missing_after_sleep");
+        tracing::warn!(target: "charliebot_triggers", trigger_id = %trigger.id, "trigger_file_missing_after_sleep");
         return Ok(None);
       }
       Err(error) => return Err(error),
@@ -895,7 +895,7 @@ impl TriggerManager {
     self.save_trigger(trigger).await?;
     self.tasks.lock().expect("trigger task map is not poisoned").remove(&trigger.id);
     tracing::info!(
-      target: "charliebot_sched",
+      target: "charliebot_triggers",
       trigger_id = %trigger.id,
       session = %trigger.session_id,
       reason,
@@ -912,7 +912,7 @@ impl TriggerManager {
       Ok(_) => {}
       Err(StoreError::Archived(_)) => {
         tracing::info!(
-          target: "charliebot_sched",
+          target: "charliebot_triggers",
           trigger_id = %trigger.id,
           session = %trigger.session_id,
           "trigger_cancelled_archived_target"
@@ -924,7 +924,7 @@ impl TriggerManager {
     }
     dispatcher.dispatch_pending(&trigger.session_id).await?;
     tracing::info!(
-      target: "charliebot_sched",
+      target: "charliebot_triggers",
       trigger_id = %trigger.id,
       session = %trigger.session_id,
       "trigger_delivered_to_task_tree"
@@ -939,7 +939,7 @@ impl TriggerManager {
     self.save_trigger(trigger).await?;
     self.tasks.lock().expect("trigger task map is not poisoned").remove(&trigger.id);
     tracing::info!(
-      target: "charliebot_sched",
+      target: "charliebot_triggers",
       trigger_id = %trigger.id,
       session = %trigger.session_id,
       reason,
@@ -1045,7 +1045,7 @@ impl TriggerManager {
         } else {
           if status != "ALIVE" {
             tracing::debug!(
-              target: "charliebot_sched",
+              target: "charliebot_triggers",
               trigger_id = %trigger.id,
               host,
               pid,
@@ -1109,7 +1109,7 @@ impl TriggerManager {
   ) -> anyhow::Result<(Vec<String>, Vec<String>)> {
     remaining.sort_unstable();
     if host.is_none() && !program_available(&self.probe_programs.sacct) {
-      tracing::warn!(target: "charliebot_sched", trigger_id = %trigger.id, job_ids = ?remaining, "slurm_watch_no_sacct_skip");
+      tracing::warn!(target: "charliebot_triggers", trigger_id = %trigger.id, job_ids = ?remaining, "slurm_watch_no_sacct_skip");
       sleep(remaining_until(trigger.fire_at)).await;
       return Ok((Vec::new(), remaining.iter().map(|job_id| slurm_label(None, *job_id)).collect()));
     }
@@ -1119,11 +1119,11 @@ impl TriggerManager {
     loop {
       let (states, error) = self.probe_sacct(&remaining, &trigger.id, host).await;
       if let Some(error) = error {
-        tracing::debug!(target: "charliebot_sched", trigger_id = %trigger.id, host = host.unwrap_or(""), %error, "sacct_probe_transient_error");
+        tracing::debug!(target: "charliebot_triggers", trigger_id = %trigger.id, host = host.unwrap_or(""), %error, "sacct_probe_transient_error");
         let dark_for = last_success.elapsed();
         if host.is_some() && dark_for >= self.timing.remote_sacct_grace {
           tracing::warn!(
-            target: "charliebot_sched",
+            target: "charliebot_triggers",
             trigger_id = %trigger.id,
             host = host.unwrap_or_default(),
             dark_seconds = dark_for.as_secs(),
@@ -1154,7 +1154,7 @@ impl TriggerManager {
         } else if SLURM_TERMINAL_STATES.contains(&state_key) {
           finished.push(format!("{}: {state} {exit_code}", slurm_label(host, job_id)));
         } else {
-          tracing::warn!(target: "charliebot_sched", trigger_id = %trigger.id, job_id, %state, "slurm_unknown_state");
+          tracing::warn!(target: "charliebot_triggers", trigger_id = %trigger.id, job_id, %state, "slurm_unknown_state");
           keep.push(job_id);
         }
       }
@@ -1504,7 +1504,7 @@ async fn schedule_trigger(State(features): State<Arc<FeatureContext>>, request: 
     }
   };
   tracing::info!(
-    target: "charliebot_sched",
+    target: "charliebot_triggers",
     session = %request.session_id,
     trigger_id = %trigger.id,
     watch_targets = %serde_json::to_string(&trigger.watch_targets).expect("watch targets serialize"),

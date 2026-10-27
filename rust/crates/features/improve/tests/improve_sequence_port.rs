@@ -1,7 +1,7 @@
-#[path = "../../tasks/tests/process_guard.rs"]
+#[path = "../../../runtime/tasks/tests/process_guard.rs"]
 #[allow(dead_code)]
 mod process_guard;
-#[path = "../../tasks/tests/recovery_support.rs"]
+#[path = "../../../runtime/tasks/tests/recovery_support.rs"]
 mod recovery_support;
 
 use std::collections::{HashMap, HashSet};
@@ -12,12 +12,12 @@ use std::time::Duration;
 use charliebot_agents::backend_pool::{self, BackendPool};
 use charliebot_core::event_types;
 use charliebot_core::repo_root::RepoRoot;
+use charliebot_improve::{command, landing, register, sequence};
 use charliebot_registry::Registry;
 use charliebot_registry::backend::{
   BackendLifecycle, BackendTraits, Launch, LaunchContext, LaunchRefused, ResumeStyle,
 };
 use charliebot_registry::sequence::SequenceTree;
-use charliebot_sched::improve::{self, command, landing, sequence};
 use charliebot_store::StoreResult;
 use charliebot_store::metadata::{SessionMetadata, TaskProfile, TaskSpec, UtcDateTime};
 use charliebot_store::run_records::{self, RunKind, RunOutcomeKind, SequenceRef};
@@ -96,7 +96,7 @@ fn register_improve_port(registry: &mut Registry) -> Result<(), charliebot_regis
     },
     Some(Arc::new(QuotaOnceLifecycle)),
   ))?;
-  improve::register(registry)
+  register(registry)
 }
 
 struct ControllerTask {

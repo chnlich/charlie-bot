@@ -616,6 +616,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "charliebot-improve"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "charliebot-agents",
+ "charliebot-compat",
+ "charliebot-core",
+ "charliebot-registry",
+ "charliebot-store",
+ "charliebot-tasks",
+ "futures-util",
+ "libc",
+ "regex",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "tokio",
+ "tower",
+ "tracing",
+]
+
+[[package]]
 name = "charliebot-memory"
 version = "0.1.0"
 dependencies = [
@@ -683,31 +707,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "charliebot-sched"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "axum",
- "charliebot-agents",
- "charliebot-compat",
- "charliebot-core",
- "charliebot-registry",
- "charliebot-store",
- "charliebot-tasks",
- "futures-util",
- "libc",
- "nix",
- "regex",
- "serde",
- "serde_json",
- "serde_yaml",
- "tempfile",
- "tokio",
- "tower",
- "tracing",
-]
-
-[[package]]
 name = "charliebot-server"
 version = "0.1.0"
 dependencies = [
@@ -729,10 +728,10 @@ dependencies = [
  "charliebot-explain",
  "charliebot-files",
  "charliebot-host-auth",
+ "charliebot-improve",
  "charliebot-memory",
  "charliebot-ncu",
  "charliebot-registry",
- "charliebot-sched",
  "charliebot-session-api",
  "charliebot-slack",
  "charliebot-store",

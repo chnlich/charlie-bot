@@ -36,7 +36,7 @@ pub const PACKAGES: &[(&str, RegisterFn)] = &[
   ("src.features.host_auth", charliebot_host_auth::register),
   ("src.features.diff_view", charliebot_diff_view::register),
   ("src.features.explain", charliebot_explain::register),
-  ("src.features.improve", charliebot_sched::improve::register),
+  ("src.features.improve", charliebot_improve::register),
   ("src.features.memory", charliebot_memory::register),
   ("src.features.ncu", charliebot_ncu::register),
   ("src.features.router", register_python_only_package),

@@ -1,7 +1,7 @@
 //! The internal improve routes against a synthetic feature context, ported from `tests/test_cli_improve.py` and
 //! `tests/test_task_sequences.py`.
 
-#[path = "../../tasks/tests/recovery_support.rs"]
+#[path = "../../../runtime/tasks/tests/recovery_support.rs"]
 mod recovery_support;
 
 use std::sync::Arc;
@@ -12,11 +12,11 @@ use charliebot_agents::backend_pool::BackendPool;
 use charliebot_core::config::{CONFIG_FILENAME, CREDENTIALS_FILENAME};
 use charliebot_core::credentials::load_credentials;
 use charliebot_core::hot_reload::HotReload;
+use charliebot_improve::api;
+use charliebot_improve::command::{self, Reservation};
 use charliebot_registry::backend::{BackendTraits, ResumeStyle};
 use charliebot_registry::context::StartupState;
 use charliebot_registry::{FeatureContext, Registry, RegistryError, store_hooks};
-use charliebot_sched::improve::api;
-use charliebot_sched::improve::command::{self, Reservation};
 use charliebot_store::Store;
 use charliebot_store::metadata::{SessionMetadata, TaskProfile};
 use serde_json::{Value, json};

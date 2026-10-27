@@ -2442,7 +2442,7 @@ async fn boot_past_a_refused_sequence_node(
 #[tokio::test]
 async fn a_running_loop_beside_a_dead_manager_turn_leaves_the_turn_to_recover() -> anyhow::Result<()> {
   // Python: tests/test_task_sequences.py::test_restart_recovery_marks_improve_loop_through_registered_controller. The
-  // loop kind is the synthetic controller's; the improve controller itself is registered by charliebot-sched.
+  // loop kind is the synthetic controller's; the improve controller itself is registered by charliebot-improve.
   let stack = Stack::start("exit 0").await?;
   // The drain builds the manager run's child environment, which signs a run token with `charliebot.access_key`.
   stack.write_access_key()?;

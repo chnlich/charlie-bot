@@ -12,6 +12,7 @@ members = [
     "crates/features/backup",
     "crates/features/chat_threads",
     "crates/features/cron",
+    "crates/features/improve",
     "crates/features/code_server",
     "crates/features/diag",
     "crates/features/disk_sweep",
@@ -31,7 +32,6 @@ members = [
     "crates/runtime/store",
     "crates/runtime/registry",
     "crates/runtime/session-api",
-    "crates/runtime/sched",
     "crates/runtime/triggers",
     "crates/runtime/usage",
 ]
@@ -134,6 +134,7 @@ charliebot-diff-view = { path = "crates/features/diff_view" }
 charliebot-discord = { path = "crates/features/discord" }
 charliebot-explain = { path = "crates/features/explain" }
 charliebot-files = { path = "crates/features/files" }
+charliebot-improve = { path = "crates/features/improve" }
 charliebot-host-auth = { path = "crates/features/host_auth" }
 charliebot-memory = { path = "crates/features/memory" }
 charliebot-ncu = { path = "crates/features/ncu" }
@@ -142,7 +143,6 @@ charliebot-registry = { path = "crates/runtime/registry" }
 charliebot-slack = { path = "crates/features/slack" }
 charliebot-store = { path = "crates/runtime/store" }
 charliebot-session-api = { path = "crates/runtime/session-api" }
-charliebot-sched = { path = "crates/runtime/sched" }
 charliebot-triggers = { path = "crates/runtime/triggers" }
 charliebot-tasks = { path = "crates/runtime/tasks" }
 charliebot-terminal = { path = "crates/features/terminal" }

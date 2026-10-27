@@ -13,6 +13,10 @@ use crate::one_shot::frame_system_prompt;
 /// Local addresses that bypass an injected proxy (`base.LOCAL_NO_PROXY_ENTRIES`).
 pub const LOCAL_NO_PROXY_ENTRIES: [&str; 3] = ["localhost", "127.0.0.1", "::1"];
 
+/// The Claude Code flag that skips its permission prompts (`base.SKIP_PERMISSIONS_FLAG`). The Claude and Antigravity
+/// backends both pass it.
+pub const SKIP_PERMISSIONS_FLAG: &str = "--dangerously-skip-permissions";
+
 /// The Google API-key variables a Google CLI must not inherit (`base.strip_google_api_keys`).
 const GOOGLE_API_KEY_VARS: [&str; 2] = ["GEMINI_API_KEY", "GOOGLE_API_KEY"];
 

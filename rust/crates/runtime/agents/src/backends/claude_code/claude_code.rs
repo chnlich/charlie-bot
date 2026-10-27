@@ -16,6 +16,7 @@ use futures_util::future::BoxFuture;
 use serde_json::{Map, Value};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
+use crate::cli_base::SKIP_PERMISSIONS_FLAG;
 use crate::transport::cgroup::SessionCgroupConfig;
 use crate::transport::kill::{kill_process_group, python_exit_code};
 use crate::transport::spawn::{ChildStdin, SpawnSetup, SpawnSpec, spawn_with_setup};
@@ -29,7 +30,6 @@ pub const HEADLESS_DISALLOWED_TOOLS: &str = concat!(
   "TaskGet,TaskUpdate,TaskList,TaskStop,TaskOutput,SendMessage,ListAgents,ShareOnboardingGuide"
 );
 pub const DISALLOWED_TOOLS_FLAG: &str = "--disallowed-tools";
-pub const SKIP_PERMISSIONS_FLAG: &str = "--dangerously-skip-permissions";
 pub const INSTRUCTIONS_FILE_NAME: &str = "CLAUDE.md";
 pub const INSTRUCTIONS_WRITTEN_EVENT: &str = "claude_code_wrote_claude_md";
 pub const EXCLUDE_DYNAMIC_SECTIONS_FLAG: &str = "--exclude-dynamic-system-prompt-sections";

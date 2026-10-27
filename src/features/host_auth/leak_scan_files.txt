@@ -2,3 +2,7 @@ src/features/host_auth/host_auth.py
 src/features/host_auth/api.py
 src/features/host_auth/templates/host_auth.html
 tests/test_host_auth.py
+src/features/host_auth/config.py
+src/features/host_auth/browser_login.py
+src/features/host_auth/templates/browser_login.html
+tests/test_host_auth_browser_login.py

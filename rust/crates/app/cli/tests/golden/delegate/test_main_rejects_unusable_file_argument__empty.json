@@ -1,0 +1,27 @@
+{
+  "python_test": "test_main_rejects_unusable_file_argument",
+  "python_parameter": "empty",
+  "argv": [
+    "delegate",
+    "--repo",
+    "{root}",
+    "--base-branch",
+    "main",
+    "--task-spec-file",
+    "{root}/task_spec.md",
+    "--keep-worktree",
+    "0"
+  ],
+  "cwd": "{root}/home/sessions/abc",
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n",
+    "task_spec.md": "  \n"
+  },
+  "responses": [],
+  "expect": {
+    "stdout": "",
+    "stderr": "{\"error\": \"--task-spec-file is empty: {root}/task_spec.md\"}\n",
+    "exit": 2,
+    "requests": []
+  }
+}

@@ -117,6 +117,20 @@ const PORTED_PYTHON_TESTS: &[&str] = &[
   "test_cli_with_no_session_identity_runs_the_cold_read_in_the_foreground",
   "test_cli_foreground_prints_every_model_failed_and_exits_1",
   "test_usage_errors",
+  // The compaction hook and the trash purge run through golden cases too; the Python tests that
+  // call private functions instead are Rust tests in the command modules:
+  // `test_reads_bash_read_skill_and_split_path_inputs_in_latest_read_order`,
+  // `test_parts_obey_character_limit_and_split_only_at_line_ends`,
+  // `test_overflow_skills_are_listed_and_not_partially_attached`,
+  // `test_pattern_location_is_no_skill_read` and
+  // `test_plain_skill_name_with_dot_underscore_or_digit_is_read` in
+  // `commands/compaction_context.rs`, `test_gc_trash_yes_hard_deletes` in `commands/gc_trash.rs`.
+  "test_empty_slot_prints_nothing",
+  "test_missing_session_log_exits_nonzero_with_stderr_reason",
+  "test_deleted_skill_read_is_unresolved_while_other_skills_print",
+  "test_gc_trash_dry_run_lists_but_deletes_nothing",
+  "test_gc_trash_yes_hard_deletes",
+  "test_gc_trash_empty_reports_and_returns",
 ];
 
 #[test]
@@ -351,7 +365,7 @@ fn reason_phrase(status: u16) -> &'static str {
 fn run_case(case_path: &Path, record_command: Option<&str>) -> Result<(), String> {
   let case_text = std::fs::read_to_string(case_path).map_err(|error| error.to_string())?;
   let case: Value = serde_json::from_str(&case_text).map_err(|error| format!("invalid case JSON: {error}"))?;
-  let temp = tempfile::tempdir().map_err(|error| error.to_string())?;
+  let temp = case_tempdir().map_err(|error| error.to_string())?;
   let root = temp.path().to_str().ok_or("the temp root is not Unicode")?.to_string();
 
   // A case with `expect_from: "rust"` records from the Rust binary: its contract is the task
@@ -478,6 +492,16 @@ fn checkout_file(content: &str) -> Result<String, String> {
   };
   let path = Path::new(REPO_ROOT).join(relative);
   std::fs::read_to_string(&path).map_err(|error| format!("{}: {error}", path.display()))
+}
+
+/// One case's temp root. The base directory is fixed and the case directory name has a fixed
+/// length, so a recorded byte that depends on the root's length — a hook part's character count,
+/// a split boundary — replays identically on every host, whatever the run's `TMPDIR` is and how
+/// long its process id grew. The tempdir still cleans the case directory up on drop.
+fn case_tempdir() -> std::io::Result<tempfile::TempDir> {
+  let base = std::path::Path::new("/tmp").join("charliebot-golden");
+  std::fs::create_dir_all(&base)?;
+  tempfile::Builder::new().prefix("case-").rand_bytes(16).tempdir_in(&base)
 }
 
 /// Wait for one CLI process. Past `PROCESS_TIMEOUT` it is killed and `None` answers.

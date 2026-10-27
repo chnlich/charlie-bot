@@ -1,0 +1,21 @@
+{
+  "argv": [
+    "compaction-context",
+    "--sess",
+    "sess-1",
+    "--slot",
+    "1"
+  ],
+  "cwd": "{root}",
+  "files": {
+    "home/skills/unique-one/SKILL.md": "Unique skill body.\n",
+    "home/sessions/sess-1/data/chat_events.jsonl": "{\"type\": \"assistant\", \"timestamp\": \"2026-01-01T00:00:00Z\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Skill\", \"input\": {\"skill\": \"unique-one\"}}]}}\n"
+  },
+  "responses": [],
+  "expect": {
+    "stdout": "{\"hookSpecificOutput\": {\"hookEventName\": \"SessionStart\", \"additionalContext\": \"Re-attached skills: unique-one ({root}/home/skills/unique-one/SKILL.md)\\nSkill unique-one ({root}/home/skills/unique-one/SKILL.md), re-attached after compaction:\\nUnique skill body.\\n\"}}\n",
+    "stderr": "session=sess-1 slot=1 characters=256 skills=unique-one omitted=- unresolved=-\n",
+    "exit": 0,
+    "requests": []
+  }
+}

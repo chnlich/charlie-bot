@@ -1,0 +1,21 @@
+{
+  "argv": [
+    "compaction-context",
+    "--session",
+    "session-b",
+    "--slot",
+    "6"
+  ],
+  "cwd": "{root}",
+  "files": {
+    "home/skills/small/SKILL.md": "A small skill.\n",
+    "home/sessions/session-b/data/chat_events.jsonl": "{\"type\": \"assistant\", \"timestamp\": \"2026-01-01T00:00:00Z\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Skill\", \"input\": {\"skill\": \"small\"}}]}}\n"
+  },
+  "responses": [],
+  "expect": {
+    "stdout": "",
+    "stderr": "session=session-b slot=6 characters=0 skills=small omitted=- unresolved=-\n",
+    "exit": 0,
+    "requests": []
+  }
+}

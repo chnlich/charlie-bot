@@ -55,7 +55,9 @@ fn main() {
 
   let result = match subcommand.as_str() {
     "artifact" => charliebot_artifacts::cli::artifact::main(&args[1..]),
+    "compaction-context" => commands::compaction_context::main(&args[1..]),
     "delegate" => commands::delegate::main(&args[1..]),
+    "gc-trash" => commands::gc_trash::main(&args[1..]),
     "plan" => charliebot_artifacts::cli::plan::main(&args[1..]),
     "schedule-trigger" => commands::schedule_trigger::main(&args[1..]),
     "session" => commands::session::main(&args[1..]),

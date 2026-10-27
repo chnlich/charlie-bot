@@ -1,0 +1,21 @@
+{
+  "argv": [
+    "compaction-context",
+    "--session",
+    "session-deleted",
+    "--slot",
+    "1"
+  ],
+  "cwd": "{root}",
+  "files": {
+    "home/skills/present/SKILL.md": "Present skill text\n",
+    "home/sessions/session-deleted/data/chat_events.jsonl": "{\"type\": \"assistant\", \"timestamp\": \"2026-01-01T00:00:00Z\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Read\", \"input\": {\"file_path\": \"{root}/gone/skills/deleted/SKILL.md\"}}]}}\n{\"type\": \"assistant\", \"timestamp\": \"2026-01-01T00:01:00Z\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Skill\", \"input\": {\"skill\": \"present\"}}]}}\n"
+  },
+  "responses": [],
+  "expect": {
+    "stdout": "{\"hookSpecificOutput\": {\"hookEventName\": \"SessionStart\", \"additionalContext\": \"Re-attached skills: present ({root}/home/skills/present/SKILL.md)\\nSkill present ({root}/home/skills/present/SKILL.md), re-attached after compaction:\\nPresent skill text\\n\"}}\n",
+    "stderr": "session=session-deleted slot=1 characters=244 skills=present omitted=- unresolved=deleted\n",
+    "exit": 0,
+    "requests": []
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "argv": [
+    "compaction-context",
+    "--session",
+    "sess-bad",
+    "--slot",
+    "1"
+  ],
+  "cwd": "{root}",
+  "files": {
+    "home/skills/small/SKILL.md": "A small skill.\n",
+    "home/sessions/sess-bad/data/chat_events.jsonl": "{\"type\": \"assistant\", \"timestamp\": \"2026-01-01T00:00:00Z\", \"message\": {\"content\": [{\"type\": \"tool_use\", \"name\": \"Skill\", \"input\": {\"skill\": \"small\"}}]}}\nnot json\n"
+  },
+  "responses": [],
+  "expect": {
+    "stdout": "",
+    "stderr": "session=sess-bad slot=1 characters=0 skills=- error=Expecting value: line 1 column 1 (char 0)\n",
+    "exit": 1,
+    "requests": []
+  }
+}

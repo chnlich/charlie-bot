@@ -150,3 +150,174 @@ pub fn format_report(
   }
   lines.join("\n")
 }
+
+#[cfg(test)]
+mod tests {
+  use std::path::PathBuf;
+  use std::sync::Arc;
+  use std::time::Duration;
+
+  use anyhow::anyhow;
+  use charliebot_core::config::{
+    BackendOption, BackendsConfig, CharlieBotConfig, PathsConfig, Sections, ServerConfig, TelegramConfig, UiConfig,
+  };
+  use charliebot_registry::backend::{
+    AgentBackend, BackendFactory, BackendTraits, BackendTypeRegistration, Env, LaunchArgs, ResumeStyle, Translate,
+    TransportKind,
+  };
+  use charliebot_registry::{Registry, RegistryError};
+  use futures_util::future::BoxFuture;
+  use serde_json::Value;
+  use serde_yaml::Mapping;
+
+  use super::*;
+
+  /// A backend whose one-shot answers with `message` as an error; nothing starts a process.
+  struct FailingBackend {
+    message: String,
+  }
+
+  impl AgentBackend for FailingBackend {
+    fn instructions_target(&self) -> Option<(&'static str, &'static str)> {
+      None
+    }
+
+    fn prepare_transport(&mut self, _log_dir: &Path) -> anyhow::Result<()> {
+      Ok(())
+    }
+
+    fn build_command(&self, _prompt: &str) -> anyhow::Result<Vec<String>> {
+      panic!("a failing one-shot never builds a command")
+    }
+
+    fn prepare_env(&self, env: Env) -> anyhow::Result<Env> {
+      Ok(env)
+    }
+
+    fn stdin_prompt(&self, _prompt: &str) -> Option<String> {
+      None
+    }
+
+    fn translator(&self) -> Box<dyn Translate> {
+      Box::new(IdentityTranslate)
+    }
+
+    fn transport(&self) -> TransportKind {
+      TransportKind::RawLog
+    }
+
+    fn one_shot_text<'a>(
+      &'a mut self,
+      _base_env: &'a Env,
+      _prompt: &'a str,
+      _system: &'a str,
+      _timeout: Option<Duration>,
+    ) -> Option<BoxFuture<'a, anyhow::Result<String>>> {
+      let message = self.message.clone();
+      Some(Box::pin(async move { Err(anyhow!(message)) }))
+    }
+  }
+
+  struct IdentityTranslate;
+
+  impl Translate for IdentityTranslate {
+    fn translate(&mut self, event: Value) -> anyhow::Result<Vec<Value>> {
+      Ok(vec![event])
+    }
+  }
+
+  /// Builds one failing backend per option: `alpha` fails with an empty message, `beta` with `kaput`.
+  struct FailingFactory;
+
+  impl BackendFactory for FailingFactory {
+    fn build(
+      &self,
+      option: Option<&BackendOption>,
+      _cfg: &CharlieBotConfig,
+      _launch: LaunchArgs,
+    ) -> anyhow::Result<Box<dyn AgentBackend>> {
+      let id = option.expect("the probe builds a configured backend").id.clone();
+      let message = if id == "alpha" { String::new() } else { "kaput".to_string() };
+      Ok(Box::new(FailingBackend { message }))
+    }
+  }
+
+  fn register_failing(registry: &mut Registry) -> Result<(), RegistryError> {
+    registry.backend_type(BackendTypeRegistration {
+      type_name: "failing-probe",
+      traits: BackendTraits {
+        resume: ResumeStyle::NativeId,
+        restart_reattach: false,
+        preassigned_session_id: false,
+        family_prefix: None,
+        manual_compact: false,
+        compact_hint: None,
+      },
+      option_model: |_| Ok(()),
+      factory: Arc::new(FailingFactory),
+      lifecycle: None,
+      translate_fallback: false,
+    })
+  }
+
+  fn probe_cfg(ids: [&str; 2]) -> CharlieBotConfig {
+    let options = ids
+      .into_iter()
+      .map(|id| BackendOption {
+        id: id.to_string(),
+        label: id.to_string(),
+        model: "synthetic-model".to_string(),
+        prompt_overlay: None,
+        backend_type: "failing-probe".to_string(),
+        type_fields: Mapping::new(),
+      })
+      .collect();
+    CharlieBotConfig {
+      charliebot_home: PathBuf::from("/synthetic/home"),
+      headless_chrome_bin: "/synthetic/chrome".to_string(),
+      server: ServerConfig {
+        host: "127.0.0.1".to_string(),
+        port: 18650,
+        subprocess_buffer_limit_mb: 1,
+        session_memory_max_mb: 0,
+        session_swap_max_mb: 0,
+        session_tasks_max: 0,
+        min_free_disk_gib: 0,
+      },
+      paths: PathsConfig {
+        workspace_dirs: Vec::new(),
+        worktree_dir: "/synthetic/worktrees".to_string(),
+        scratch_dir: "/synthetic/scripts".to_string(),
+      },
+      backends: BackendsConfig { pool: ids.map(str::to_string).to_vec(), routing: None, options },
+      ui: UiConfig { home_services: Vec::new() },
+      telegram: TelegramConfig { chat_id: None },
+      sections: Sections::default(),
+    }
+  }
+
+  #[tokio::test]
+  async fn test_probe_records_each_failed_attempt_with_its_exception_type() {
+    // `tests/core/test_artifact_check.py::test_probe_records_each_failed_attempt_with_its_exception_type`.
+    // Python records `TimeoutError: ` and `RuntimeError: kaput`; the Rust probe names its own failure class, so the
+    // records below are `RuntimeError` for both failures, the first with an empty message.
+    let mut registry = Registry::new();
+    registry.register_package("tests.cold_read", register_failing).unwrap();
+    let host = CliHost {
+      cfg: probe_cfg(["alpha", "beta"]),
+      registry: Arc::new(registry),
+      repo_root: PathBuf::from("/synthetic/repo"),
+      base_env: charliebot_agents::agent_environment::AgentBaseEnvironment { values: Env::new() },
+      pool: charliebot_agents::backend_pool::BackendPool::default(),
+    };
+
+    let probe = run_light_probe(&host, "prompt", "system").await.unwrap();
+
+    assert_eq!(
+      probe.attempts,
+      [("alpha".to_string(), "RuntimeError: ".to_string()), ("beta".to_string(), "RuntimeError: kaput".to_string())]
+    );
+    assert_eq!(probe.backend_id, None);
+    assert_eq!(probe.answer, None);
+  }
+}

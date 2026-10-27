@@ -1451,4 +1451,191 @@ mod tests {
     assert_eq!(value["passed"], false);
     assert_eq!(value["detail"], "detail");
   }
+
+  /// `tests/core/test_artifact_check.py::_genre_doc`: the genre template's `<style>` block verbatim plus `body`.
+  fn genre_doc(genre: &str, body: &str) -> String {
+    let template = fs::read_to_string(repo_root().join("prompts").join(genre_template(genre))).unwrap();
+    let start = template.find("<style>").expect("the template carries a style block");
+    let end = template.find("</style>").expect("the style block closes") + "</style>".len();
+    format!("<html><head>{}</head><body>{body}</body></html>", &template[start..end])
+  }
+
+  /// `tests/core/test_artifact_check.py::_sitrep_ok_doc`: a sitrep page that passes every sitrep assertion.
+  fn sitrep_ok_doc() -> String {
+    genre_doc(
+      "sitrep",
+      concat!(
+        r#"<section><h2><span class="n">1</span> What waits on you?</h2><p>Nothing.</p></section>"#,
+        r#"<section><h2><span class="n">2</span> What is this and why?</h2>"#,
+        r#"<p>Why. <span class="req">r1</span> states the first requirement.</p></section>"#,
+        r#"<section><h2><span class="n">3</span> What was verified?</h2>"#,
+        r#"<p>Done. <span class="src">s</span></p></section>"#,
+        r#"<section><h2><span class="n">4</span> Risks</h2>"#,
+        r#"<p><span class="tag fact">Fact</span> The reading holds. <span class="src">s</span></p></section>"#,
+        r#"<section><h2><span class="n">5</span> What happens next?</h2><p>Next.</p></section>"#,
+      ),
+    )
+  }
+
+  const NUMERIC_TABLE: &str = concat!(
+    "<table><thead><tr><th>checkpoint</th><th>score</th></tr></thead>",
+    "<tbody><tr><td>10</td><td>0.002378</td></tr></tbody></table>",
+  );
+
+  /// `tests/core/test_artifact_check.py::_sitrep_run_doc`: the sitrep page with a measured table and `variable_block`.
+  fn sitrep_run_doc(variable_block: &str) -> String {
+    sitrep_ok_doc().replace(
+      r#"<p>Done. <span class="src">s</span></p>"#,
+      &format!("{NUMERIC_TABLE}{variable_block}{}", r#"<p>Done. <span class="src">s</span></p>"#),
+    )
+  }
+
+  fn run_sitrep(directory: &Path, source: &str) -> Vec<AssertionOutcome> {
+    // The sitrep set holds no page-height assertion, so it needs no renderer.
+    let page = write_page(directory, "page.html", source);
+    run_assertions_sync("sitrep", &page, "", &repo_root()).unwrap()
+  }
+
+  #[test]
+  fn test_req_chips_passes_when_the_chip_is_glossed_in_its_sentence() {
+    let directory = tempfile::tempdir().unwrap();
+    let outcomes = run_sitrep(directory.path(), &sitrep_ok_doc());
+    let chips = by_name(&outcomes, REQ_CHIPS);
+    assert_eq!(chips.len(), 1, "{outcomes:#?}");
+    assert!(chips[0].passed, "{:?}", chips[0].detail);
+  }
+
+  #[test]
+  fn test_req_chips_fails_when_the_sentence_ends_after_the_chip() {
+    let directory = tempfile::tempdir().unwrap();
+    let doc = sitrep_ok_doc().replace(
+      r#"<span class="req">r1</span> states the first requirement."#,
+      r#"<span class="req">r1</span>. A later sentence names the requirement."#,
+    );
+    let outcomes = run_sitrep(directory.path(), &doc);
+    let chips = by_name(&outcomes, REQ_CHIPS);
+    assert_eq!(chips.len(), 1, "{outcomes:#?}");
+    assert!(!chips[0].passed);
+    assert!(chips[0].detail.contains("'r1'"), "{}", chips[0].detail);
+    assert!(chips[0].detail.contains("no gloss"), "{}", chips[0].detail);
+  }
+
+  #[test]
+  fn test_req_chips_accepts_a_gloss_in_another_unicode_script() {
+    let directory = tempfile::tempdir().unwrap();
+    let doc = sitrep_ok_doc().replace(
+      r#"<span class="req">r1</span> states the first requirement."#,
+      r#"<span class="req">r1</span> 要件の説明です。"#,
+    );
+    let outcomes = run_sitrep(directory.path(), &doc);
+    let chips = by_name(&outcomes, REQ_CHIPS);
+    assert_eq!(chips.len(), 1, "{outcomes:#?}");
+    assert!(chips[0].passed, "{:?}", chips[0].detail);
+  }
+
+  #[test]
+  fn test_run_stated_passes_when_a_table_or_dl_states_both_roles() {
+    let directory = tempfile::tempdir().unwrap();
+    let variable_blocks = [
+      concat!(
+        "<table><tr><th>role</th><th>value</th></tr>",
+        "<tr><td>Changed</td><td>weights randomly initialized; 3,506 columns dropped</td></tr>",
+        "<tr><td>Held fixed</td><td>commit e0852cbb; seed 3</td></tr></table>",
+      ),
+      concat!(
+        "<table><tr><td>Changed</td><td>learning rate 0.0001</td></tr>",
+        "<tr><td>Held fixed</td><td>seed 3</td></tr></table>",
+      ),
+      concat!(
+        "<dl><dt>改了什么</dt><dd>权重随机初始化，删掉 3,506 列</dd>",
+        "<dt>保持不变</dt><dd>提交 e0852cbb，种子 3</dd></dl>",
+      ),
+    ];
+    for variable_block in variable_blocks {
+      let outcomes = run_sitrep(directory.path(), &sitrep_run_doc(variable_block));
+      let stated = by_name(&outcomes, RUN_STATED);
+      assert_eq!(stated.len(), 1, "{variable_block}: {outcomes:#?}");
+      assert!(stated[0].passed, "{variable_block}: {:?}", stated[0].detail);
+    }
+  }
+
+  #[test]
+  fn test_run_stated_fails_when_the_numeric_table_has_no_variable_block() {
+    let directory = tempfile::tempdir().unwrap();
+    let outcomes = run_sitrep(directory.path(), &sitrep_run_doc(""));
+    let stated = by_name(&outcomes, RUN_STATED);
+    assert_eq!(stated.len(), 1, "{outcomes:#?}");
+    assert!(!stated[0].passed);
+    assert!(stated[0].detail.contains("changed-factor row"), "{}", stated[0].detail);
+    assert!(stated[0].detail.contains("held-fixed-factor row"), "{}", stated[0].detail);
+  }
+
+  #[test]
+  fn test_run_stated_requires_a_block_separate_from_the_numeric_table() {
+    let directory = tempfile::tempdir().unwrap();
+    let table_with_inline_factors = NUMERIC_TABLE.replace(
+      "</tbody></table>",
+      concat!(
+        "<tr><td>Changed</td><td>3,506 columns dropped</td></tr>",
+        "<tr><td>Held fixed</td><td>seed 3</td></tr></tbody></table>",
+      ),
+    );
+    let doc = sitrep_ok_doc().replace(
+      r#"<p>Done. <span class="src">s</span></p>"#,
+      &format!("{table_with_inline_factors}{}", r#"<p>Done. <span class="src">s</span></p>"#),
+    );
+    let outcomes = run_sitrep(directory.path(), &doc);
+    let stated = by_name(&outcomes, RUN_STATED);
+    assert_eq!(stated.len(), 1, "{outcomes:#?}");
+    assert!(!stated[0].passed);
+    assert!(stated[0].detail.contains("changed-factor row"), "{}", stated[0].detail);
+    assert!(stated[0].detail.contains("held-fixed-factor row"), "{}", stated[0].detail);
+  }
+
+  #[test]
+  fn test_run_stated_requires_both_role_rows_in_one_block() {
+    let directory = tempfile::tempdir().unwrap();
+    let variable_blocks = concat!(
+      "<table><tr><td>Changed</td><td>3,506 columns dropped</td></tr></table>",
+      "<dl><dt>Held fixed</dt><dd>seed 3</dd></dl>",
+    );
+    let outcomes = run_sitrep(directory.path(), &sitrep_run_doc(variable_blocks));
+    let stated = by_name(&outcomes, RUN_STATED);
+    assert_eq!(stated.len(), 1, "{outcomes:#?}");
+    assert!(!stated[0].passed);
+    assert!(
+      stated[0].detail.contains("changed-factor row and held-fixed-factor row in the same block"),
+      "{}",
+      stated[0].detail
+    );
+  }
+
+  #[test]
+  fn test_run_stated_names_the_one_missing_role_row() {
+    let directory = tempfile::tempdir().unwrap();
+    let block = "<table><tr><td>Changed</td><td>3,506 columns dropped</td></tr></table>";
+    let outcomes = run_sitrep(directory.path(), &sitrep_run_doc(block));
+    let stated = by_name(&outcomes, RUN_STATED);
+    assert_eq!(stated.len(), 1, "{outcomes:#?}");
+    assert!(!stated[0].passed);
+    assert!(stated[0].detail.contains("held-fixed-factor row"), "{}", stated[0].detail);
+    assert!(!stated[0].detail.contains("changed-factor row"), "{}", stated[0].detail);
+  }
+
+  #[test]
+  fn test_run_stated_is_inert_without_a_decimal_table_cell() {
+    let directory = tempfile::tempdir().unwrap();
+    let doc = sitrep_ok_doc().replace(
+      r#"<p>Done. <span class="src">s</span></p>"#,
+      concat!(
+        r#"<table><tr><td>checkpoint</td><td>10</td></tr></table>"#,
+        r#"<p>Done. <span class="src">s</span></p>"#,
+      ),
+    );
+    let outcomes = run_sitrep(directory.path(), &doc);
+    let stated = by_name(&outcomes, RUN_STATED);
+    assert_eq!(stated.len(), 1, "{outcomes:#?}");
+    assert!(stated[0].passed, "{:?}", stated[0].detail);
+    assert_eq!(stated[0].detail, "no numeric table cell");
+  }
 }

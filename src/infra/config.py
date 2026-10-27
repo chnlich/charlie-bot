@@ -111,7 +111,7 @@ class RoutingConfig(pydantic.BaseModel):
 
   model_config = pydantic.ConfigDict(extra='forbid')
 
-  # The router argv (src/features/artifacts/publish.py's publish.command convention): the first
+  # The router argv (the publish.command convention): the first
   # item resolves on the server process's PATH. One invocation per selection; stdin and stdout
   # carry the router contract JSON (src/runtime/backend_pool.route). Absent (default): every
   # selection behaves as if the router did not exist.

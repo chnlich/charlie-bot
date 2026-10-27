@@ -1,0 +1,17 @@
+{
+  "argv": [
+    "memory",
+    "query",
+    "--topic",
+    "alpha/missing-entry"
+  ],
+  "files": {
+    "home/memory/topics": "alpha resident\n"
+  },
+  "expect": {
+    "stdout": "",
+    "stderr": "error: unknown topic: alpha/missing-entry (index lines are topic/slug; try --topic alpha)\n",
+    "exit": 1,
+    "requests": []
+  }
+}

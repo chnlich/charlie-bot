@@ -1,0 +1,21 @@
+{
+  "argv": [
+    "memory",
+    "query",
+    "--topic",
+    "alpha",
+    "--topic",
+    "beta"
+  ],
+  "files": {
+    "home/memory/topics": "alpha resident\nbeta\n",
+    "home/memory/entries/alpha/entry-a.md": "---\nscope: user\ntopic: alpha\naudience: master\ntitle: Alpha Entry\n---\nresident body\n",
+    "home/memory/entries/beta/entry-b.md": "---\nscope: host\ntopic: beta\naudience: master\ntitle: Beta Entry\n---\nnonresident body\n"
+  },
+  "expect": {
+    "stdout": "# Alpha Entry\n\nresident body\n# Beta Entry\n\nnonresident body\n",
+    "stderr": "",
+    "exit": 0,
+    "requests": []
+  }
+}

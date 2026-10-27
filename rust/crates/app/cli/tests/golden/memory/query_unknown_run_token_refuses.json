@@ -1,0 +1,21 @@
+{
+  "argv": [
+    "memory",
+    "query",
+    "--topic",
+    "beta"
+  ],
+  "env": {
+    "CHARLIEBOT_RUN_TOKEN": "eyJhZ2VudCI6IndvcmtlciIsInJ1bl9pZCI6Im1pc3NpbmctcnVuIiwic2Vzc2lvbl9pZCI6Im1pc3Npbmctc2Vzc2lvbiJ9.iXd71O4env_nFwi3Z--tA5npA2oFDt9fpbMbWPFLijk"
+  },
+  "files": {
+    "home/credentials.yaml": "charliebot:\n  access_key: query-op-key\n",
+    "home/memory/topics": "beta\n"
+  },
+  "expect": {
+    "stdout": "",
+    "stderr": "error: run token does not reference an active run\n",
+    "exit": 1,
+    "requests": []
+  }
+}

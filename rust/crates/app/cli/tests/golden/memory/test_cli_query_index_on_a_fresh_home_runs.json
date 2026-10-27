@@ -1,0 +1,18 @@
+{
+  "argv": [
+    "memory",
+    "query",
+    "--topic",
+    "profile",
+    "--index"
+  ],
+  "files": {
+    "home/config.yaml": "broken: [config must not be read\n"
+  },
+  "expect": {
+    "stdout": "",
+    "stderr": "",
+    "exit": 0,
+    "requests": []
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "argv": [
+    "memory",
+    "proposal",
+    "open"
+  ],
+  "expect_from": "rust",
+  "expect": {
+    "stdout": "",
+    "stderr": "{\"error\": \"memory proposal is not ported to the Rust CLI yet\"}\n",
+    "exit": 1,
+    "requests": []
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "argv": [
+    "memory",
+    "query",
+    "--topic",
+    "profile",
+    "--dir",
+    "{root}/proposal"
+  ],
+  "files": {
+    "home/memory/topics": "profile resident\n",
+    "home/memory/entries/profile/live-only.md": "---\nscope: user\ntopic: profile\naudience: master, worker\ntitle: Live Entry\n---\nlive body\n",
+    "proposal/topics": "profile resident\n",
+    "proposal/entries/profile/pr-only.md": "---\nscope: user\ntopic: profile\naudience: master, worker\ntitle: Proposal Entry\n---\nproposal body\n"
+  },
+  "expect": {
+    "stdout": "# Proposal Entry\n\nproposal body\n",
+    "stderr": "",
+    "exit": 0,
+    "requests": []
+  }
+}

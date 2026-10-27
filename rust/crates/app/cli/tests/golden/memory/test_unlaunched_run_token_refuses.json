@@ -1,0 +1,25 @@
+{
+  "argv": [
+    "memory",
+    "query",
+    "--topic",
+    "beta"
+  ],
+  "env": {
+    "CHARLIEBOT_RUN_TOKEN": "eyJhZ2VudCI6IndvcmtlciIsInJ1bl9pZCI6InVubGF1bmNoZWQtcnVuIiwic2Vzc2lvbl9pZCI6InF1ZXJ5LXNlc3Npb24ifQ.-U6XklEhs1_pfU9_2DIN6HtS4AxEj_cVxK4vVO2ukME"
+  },
+  "files": {
+    "home/credentials.yaml": "charliebot:\n  access_key: query-op-key\n",
+    "home/sessions/query-session/metadata.json": "{\"profile\":\"worker\"}\n",
+    "home/sessions/query-session/data/runs/unlaunched-run/metadata.json": "{\"id\":\"unlaunched-run\"}\n",
+    "home/sessions/query-session/data/chat_events.jsonl": "",
+    "home/memory/topics": "beta\n",
+    "home/memory/entries/beta/worker.md": "---\nscope: user\ntopic: beta\naudience: worker\ntitle: Worker Entry\n---\nworker body\n"
+  },
+  "expect": {
+    "stdout": "",
+    "stderr": "error: run token references a run that has not launched\n",
+    "exit": 1,
+    "requests": []
+  }
+}

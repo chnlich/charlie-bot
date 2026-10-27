@@ -1,0 +1,21 @@
+{
+  "argv": [
+    "memory",
+    "query",
+    "--topic",
+    "profile",
+    "--audience",
+    "worker"
+  ],
+  "files": {
+    "home/memory/topics": "profile resident\n",
+    "home/memory/entries/profile/for-master.md": "---\nscope: user\ntopic: profile\naudience: master\ntitle: Master Entry\n---\nmaster body\n",
+    "home/memory/entries/profile/for-both.md": "---\nscope: user\ntopic: profile\naudience: master, worker\ntitle: Both Entry\n---\nboth body\n"
+  },
+  "expect": {
+    "stdout": "# Both Entry\n\nboth body\n",
+    "stderr": "",
+    "exit": 0,
+    "requests": []
+  }
+}

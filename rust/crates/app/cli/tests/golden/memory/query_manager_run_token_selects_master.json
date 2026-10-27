@@ -1,0 +1,26 @@
+{
+  "argv": [
+    "memory",
+    "query",
+    "--topic",
+    "alpha"
+  ],
+  "env": {
+    "CHARLIEBOT_RUN_TOKEN": "eyJhZ2VudCI6IndvcmtlciIsInJ1bl9pZCI6InF1ZXJ5LXJ1biIsInNlc3Npb25faWQiOiJxdWVyeS1zZXNzaW9uIn0.Y1OaKnAN_kPUJ2MqGp1mQZCBgSXlCMHBMwxOjiK0oCc"
+  },
+  "files": {
+    "home/credentials.yaml": "charliebot:\n  access_key: query-op-key\n",
+    "home/sessions/query-session/metadata.json": "{\"profile\":\"manager\"}\n",
+    "home/sessions/query-session/data/runs/query-run/metadata.json": "{\"id\":\"query-run\",\"pid\":42,\"pid_start\":\"synthetic-start\"}\n",
+    "home/sessions/query-session/data/chat_events.jsonl": "",
+    "home/memory/topics": "alpha resident\nbeta\n",
+    "home/memory/entries/alpha/master.md": "---\nscope: user\ntopic: alpha\naudience: master\ntitle: Master Entry\n---\nmaster body\n",
+    "home/memory/entries/beta/worker.md": "---\nscope: user\ntopic: beta\naudience: worker\ntitle: Worker Entry\n---\nworker body\n"
+  },
+  "expect": {
+    "stdout": "# Master Entry\n\nmaster body\n",
+    "stderr": "",
+    "exit": 0,
+    "requests": []
+  }
+}

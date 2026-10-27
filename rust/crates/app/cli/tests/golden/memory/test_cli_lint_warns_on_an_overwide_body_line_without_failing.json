@@ -1,0 +1,18 @@
+{
+  "argv": [
+    "memory",
+    "lint",
+    "--dir",
+    "{root}/store-wide"
+  ],
+  "files": {
+    "store-wide/topics": "profile resident\n",
+    "store-wide/entries/profile/wide-body.md": "---\nscope: user\ntopic: profile\naudience: master\ntitle: Wide Body\n---\n- aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
+  },
+  "expect": {
+    "stdout": "clean\n",
+    "stderr": "",
+    "exit": 0,
+    "requests": []
+  }
+}

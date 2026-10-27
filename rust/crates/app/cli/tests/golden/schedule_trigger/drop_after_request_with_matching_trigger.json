@@ -1,0 +1,51 @@
+{
+  "argv": [
+    "schedule-trigger",
+    "--session",
+    "s1",
+    "--max-wait",
+    "60",
+    "--message",
+    "m",
+    "--watch",
+    "12345"
+  ],
+  "cwd": "{root}",
+  "files": {
+    "home/config.yaml": "server:\n  port: {port}\n",
+    "home/sessions/s1/triggers/trig-1.json": "{\"id\": \"trig-1\", \"status\": \"pending\", \"message\": \"m\", \"watch_targets\": [{\"kind\": \"local_pid\", \"pid\": 12345}], \"created_at\": \"2026-10-08T00:00:00+00:00\", \"fire_at\": \"2026-10-08T00:11:00+00:00\"}"
+  },
+  "responses": [
+    {
+      "drop_after_request": true
+    }
+  ],
+  "expect": {
+    "stdout": "{\n  \"trigger_id\": \"trig-1\",\n  \"fire_at\": \"2026-10-08T00:11:00+00:00\"\n}\n",
+    "stderr": "",
+    "exit": 0,
+    "requests": [
+      {
+        "method": "POST",
+        "path": "/api/internal/schedule-trigger",
+        "query": "",
+        "headers": {
+          "Authorization": null,
+          "X-CharlieBot-Caller-Session": null,
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "session_id": "s1",
+          "delay_seconds": 60,
+          "message": "m",
+          "watch_targets": [
+            {
+              "kind": "local_pid",
+              "pid": 12345
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

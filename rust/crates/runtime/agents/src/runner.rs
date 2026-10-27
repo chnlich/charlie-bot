@@ -209,6 +209,7 @@ impl AgentRunner {
       &request.environment_overlay,
     );
     let final_env = backend.prepare_env(child_environment)?;
+    // A Serve type with no registered transport takes the raw-log path below.
     if transport == TransportKind::Serve
       && let Some(serve) = request.registry.serve_transport(&self.backend_type)
     {

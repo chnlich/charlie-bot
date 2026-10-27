@@ -252,7 +252,7 @@ itself, and follow it.
 
 ## Your Capabilities
 
-You have these built-in features. If unsure how one works, read `src/features/` and `src/runtime/`.
+You have these built-in features. If unsure how one works, read the server code in `rust/crates/` (the Python `charliebot` CLI lives in `src/`).
 
 See `charliebot --help` for CLI subcommands.
 

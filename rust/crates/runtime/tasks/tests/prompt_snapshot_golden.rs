@@ -497,7 +497,27 @@ fn snapshots_match_the_recorded_python_server_output_byte_for_byte() {
   let damaged = damaged.expect("the damaged case is in the matrix");
   let rust = json!({"cases": results, "from_json_errors": damaged_errors(&damaged)});
 
-  assert_eq!(json_dumps(&rust, &PYTHON_STYLE), json_dumps(&expected, &PYTHON_STYLE));
+  let rust_text = json_dumps(&rust, &PYTHON_STYLE);
+  let expected_text = json_dumps(&expected, &PYTHON_STYLE);
+  assert!(rust_text == expected_text, "{}", first_difference(&rust_text, &expected_text));
+}
+
+/// Where two renderings first part ways, with the text around that byte on each side. The whole rendering is too long
+/// for a CI log to keep, so the window stands in for it.
+fn first_difference(actual: &str, recorded: &str) -> String {
+  let at = actual.bytes().zip(recorded.bytes()).position(|(left, right)| left != right);
+  let at = at.unwrap_or(actual.len().min(recorded.len()));
+  let window = |text: &str| {
+    let bytes = text.as_bytes();
+    String::from_utf8_lossy(&bytes[at.saturating_sub(160)..(at + 160).min(bytes.len())]).into_owned()
+  };
+  format!(
+    "renderings differ at byte {at} (lengths {} and {}):\nactual:   {}\nrecorded: {}",
+    actual.len(),
+    recorded.len(),
+    window(actual),
+    window(recorded)
+  )
 }
 
 fn materialize_paths(value: &mut Value, root: &Path, checkout_root: &Path) {

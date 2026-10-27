@@ -1,0 +1,21 @@
+{
+  "argv": [
+    "publish",
+    "{root}/artifacts/page.html",
+    "--",
+    "--reader",
+    "reader@example.com"
+  ],
+  "cwd": ".",
+  "files": {
+    "home/config.yaml": "publish:\n  command:\n    - {root}/bin/publisher\n    - --site\n    - main\n",
+    "artifacts/page.html": "<p>hello</p>",
+    "bin/publisher": "#!/bin/sh\n[ \"$#\" -eq 5 ] || exit 9\n[ \"$1\" = \"--site\" ] || exit 9\n[ \"$2\" = \"main\" ] || exit 9\n[ \"$3\" = \"{root}/artifacts/page.html\" ] || exit 9\n[ \"$4\" = \"--reader\" ] || exit 9\n[ \"$5\" = \"reader@example.com\" ] || exit 9\nprintf '%s\\n' 'https://reader.example/page.html'\n"
+  },
+  "expect": {
+    "stdout": "https://reader.example/page.html\n",
+    "stderr": "",
+    "exit": 0,
+    "requests": []
+  }
+}

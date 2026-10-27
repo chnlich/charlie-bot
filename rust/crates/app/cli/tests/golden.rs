@@ -125,6 +125,16 @@ const PORTED_PYTHON_TESTS: &[&str] = &[
   "test_arguments_after_double_dash_reach_the_program_unchanged",
   "test_command_lane_failure_exits_one_with_the_programs_stderr_and_no_url",
   "test_home_without_a_publish_section_exits_one_naming_publish_dir",
+  "test_missing_artifact_raises_naming_the_path",
+  "test_publish_without_index_html_refuses_and_writes_nothing",
+  "test_directory_lane_preflight_messages_stay_word_for_word",
+  "test_command_lane_returns_the_url_the_program_prints",
+  "test_command_lane_runs_the_command_on_the_absolute_artifact_path_then_the_lane_options",
+  "test_command_lane_nonzero_exit_raises_with_the_exit_code_and_stderr",
+  "test_command_lane_refuses_stdout_that_is_not_exactly_one_url",
+  "test_command_lane_names_a_program_that_cannot_start",
+  "test_command_lane_checks_the_artifact_before_running_the_program",
+  "test_lane_options_on_the_directory_lane_are_refused_before_any_write",
   "test_usage_errors",
   // The compaction hook and the trash purge run through golden cases too; the Python tests that
   // call private functions instead are Rust tests in the command modules:

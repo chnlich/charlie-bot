@@ -1,0 +1,18 @@
+{
+  "argv": [
+    "publish",
+    "{root}/artifacts/page.html"
+  ],
+  "cwd": ".",
+  "files": {
+    "home/config.yaml": "publish:\n  command:\n    - {root}/bin/publisher\n",
+    "artifacts/page.html": "<p>hello</p>",
+    "bin/publisher": "#!/bin/sh\nprintf '%s\\n' 'http://reader.example/page.html'\n"
+  },
+  "expect": {
+    "stdout": "http://reader.example/page.html\n",
+    "stderr": "",
+    "exit": 0,
+    "requests": []
+  }
+}

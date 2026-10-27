@@ -1,0 +1,17 @@
+{
+  "argv": [
+    "publish",
+    "{root}/artifacts/gone.html"
+  ],
+  "cwd": ".",
+  "files": {
+    "home/config.yaml": "publish:\n  command:\n    - {root}/bin/publisher\n",
+    "bin/publisher": "#!/bin/sh\ntouch '{root}/ran'\n"
+  },
+  "expect": {
+    "stdout": "",
+    "stderr": "{\"error\": \"artifact is not an existing regular file: {root}/artifacts/gone.html\"}\n",
+    "exit": 1,
+    "requests": []
+  }
+}

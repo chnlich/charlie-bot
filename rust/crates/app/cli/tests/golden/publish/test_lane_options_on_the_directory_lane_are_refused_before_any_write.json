@@ -1,0 +1,21 @@
+{
+  "argv": [
+    "publish",
+    "{root}/artifacts/page.html",
+    "--",
+    "--reader",
+    "reader@example.com"
+  ],
+  "cwd": ".",
+  "files": {
+    "home/config.yaml": "publish:\n  dir: {root}/publish\n  public_base_url: https://pub.example.test/charliebot_pub\n",
+    "artifacts/page.html": "<p>hello</p>",
+    "publish/index.html": "index"
+  },
+  "expect": {
+    "stdout": "",
+    "stderr": "{\"error\": \"the directory lane takes no lane options; set publish.command to publish through an external program\"}\n",
+    "exit": 1,
+    "requests": []
+  }
+}

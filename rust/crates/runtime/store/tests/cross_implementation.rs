@@ -1747,13 +1747,13 @@ impl SequenceListingFields for TestSequenceListing {
     Ok(HashMap::new())
   }
 
-  fn sequence_subtree_roots(&self, _metas: &[SessionMetadata]) -> Result<HashMap<String, String>, StoreError> {
+  fn sequence_subtree_roots(&self, _metas: &[Arc<SessionMetadata>]) -> Result<HashMap<String, String>, StoreError> {
     Ok(HashMap::new())
   }
 
   fn view_subtree_roots(
     &self,
-    _metas: &[SessionMetadata],
+    _metas: &[Arc<SessionMetadata>],
   ) -> Result<HashMap<String, HashMap<String, String>>, StoreError> {
     Ok(HashMap::new())
   }

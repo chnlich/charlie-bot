@@ -107,11 +107,14 @@ impl SequenceListingFields for RegisteredSequences {
     Ok(self.registry.sequence_listing_fields(session_ids, now))
   }
 
-  fn sequence_subtree_roots(&self, metas: &[SessionMetadata]) -> StoreResult<HashMap<String, String>> {
+  fn sequence_subtree_roots(&self, metas: &[Arc<SessionMetadata>]) -> StoreResult<HashMap<String, String>> {
     Ok(subtree_roots(metas, |meta| self.registry.sequence_owns_session(meta), false))
   }
 
-  fn view_subtree_roots(&self, metas: &[SessionMetadata]) -> StoreResult<HashMap<String, HashMap<String, String>>> {
+  fn view_subtree_roots(
+    &self,
+    metas: &[Arc<SessionMetadata>],
+  ) -> StoreResult<HashMap<String, HashMap<String, String>>> {
     let mut view_roots: HashMap<&'static str, HashSet<String>> = HashMap::new();
     for meta in metas {
       for contribution in self.registry.sidebar_contributions() {
@@ -133,11 +136,11 @@ impl SequenceListingFields for RegisteredSequences {
 }
 
 fn subtree_roots(
-  metas: &[SessionMetadata],
+  metas: &[Arc<SessionMetadata>],
   is_root: impl Fn(&SessionMetadata) -> bool,
   include_root: bool,
 ) -> HashMap<String, String> {
-  let by_id: HashMap<&str, &SessionMetadata> = metas.iter().map(|meta| (meta.id.as_str(), meta)).collect();
+  let by_id: HashMap<&str, &SessionMetadata> = metas.iter().map(|meta| (meta.id.as_str(), meta.as_ref())).collect();
   let mut roots: HashMap<String, String> = HashMap::new();
   for start in metas {
     let mut chain = Vec::new();

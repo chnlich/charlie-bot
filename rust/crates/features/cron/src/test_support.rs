@@ -122,8 +122,7 @@ impl AgentBackend for TestBackend {
     Ok(vec![
       "/bin/sh".to_string(),
       "-c".to_string(),
-      r#"sleep 0.1; printf '%s\n' '{"type":"result","subtype":"success","result":"synthetic migration completed"}'"#
-        .to_string(),
+      r#"printf '%s\n' '{"type":"result","subtype":"success","result":"synthetic migration completed"}'"#.to_string(),
     ])
   }
 

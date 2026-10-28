@@ -13,8 +13,11 @@ path = "src/main.rs"
 anyhow.workspace = true
 charliebot-agents.workspace = true
 charliebot-artifacts.workspace = true
+charliebot-charlie-code.workspace = true
 charliebot-cli-common.workspace = true
+charliebot-claude-code.workspace = true
 charliebot-core.workspace = true
+charliebot-cron.workspace = true
 charliebot-discord.workspace = true
 charliebot-improve.workspace = true
 charliebot-memory.workspace = true
@@ -45,3 +48,8 @@ tokio.workspace = true
 tokio-tungstenite.workspace = true
 url.workspace = true
 uuid.workspace = true
+wait-timeout.workspace = true
+
+[dev-dependencies]
+charliebot-shell-harness.workspace = true
+regex.workspace = true

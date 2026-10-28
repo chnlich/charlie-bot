@@ -558,8 +558,11 @@ dependencies = [
  "anyhow",
  "charliebot-agents",
  "charliebot-artifacts",
+ "charliebot-charlie-code",
+ "charliebot-claude-code",
  "charliebot-cli-common",
  "charliebot-core",
+ "charliebot-cron",
  "charliebot-discord",
  "charliebot-improve",
  "charliebot-memory",
@@ -567,6 +570,7 @@ dependencies = [
  "charliebot-packages",
  "charliebot-registry",
  "charliebot-session-api",
+ "charliebot-shell-harness",
  "charliebot-slack",
  "charliebot-store",
  "charliebot-switch-helper",
@@ -590,6 +594,7 @@ dependencies = [
  "tokio-tungstenite",
  "url",
  "uuid",
+ "wait-timeout",
 ]
 
 [[package]]

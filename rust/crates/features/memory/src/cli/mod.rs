@@ -20,6 +20,7 @@ use time::format_description::well_known::Rfc3339;
 use time::macros::format_description;
 use time::{OffsetDateTime, UtcOffset};
 
+mod digest;
 mod proposal;
 mod proposal_check;
 mod store;
@@ -40,6 +41,8 @@ enum MemoryCommand {
   Add(AddArgs),
   /// Validate the store.
   Lint(LintArgs),
+  /// Print the cross-session user-message digest for the memory curator.
+  UserDigest,
 }
 
 #[derive(Args)]
@@ -91,6 +94,7 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
     MemoryCommand::Query(args) => query(&args),
     MemoryCommand::Add(args) => add(&args),
     MemoryCommand::Lint(args) => lint(&args),
+    MemoryCommand::UserDigest => digest::run(),
   }
 }
 

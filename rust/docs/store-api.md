@@ -41,15 +41,15 @@ that was checked, so a concurrent write's cached result stays current.
 | `Store::list_sessions(&self, status: Option<SessionStatus>, starred: Option<bool>, scheduled: Option<bool>) -> StoreResult<MetadataListing>` | `src/runtime/session_listing.py::list_sessions`, `list_sessions_readonly` |
 | `Store::list_sessions_readonly(&self, status: SessionStatus) -> StoreResult<Vec<SessionMetadata>>` | `src/runtime/session_listing.py::list_sessions_readonly` |
 | `Store::list_group_names(&self) -> StoreResult<Vec<String>>` | `src/runtime/session_listing.py::list_group_names` |
-| `Store::sequence_subtree_roots(&self) -> StoreResult<HashMap<String, String>>` | `src/runtime/session_listing.py::sequence_subtree_roots`; `src/runtime/scheduled_sessions.py::sequence_subtree_roots` |
-| `Store::view_subtree_roots(&self) -> StoreResult<HashMap<String, HashMap<String, String>>>` | `src/runtime/session_listing.py::view_subtree_roots`; `src/runtime/scheduled_sessions.py::view_subtree_roots` |
+| `Store::sequence_subtree_roots(&self) -> StoreResult<Arc<HashMap<String, String>>>` | `src/runtime/session_listing.py::sequence_subtree_roots`; `src/runtime/scheduled_sessions.py::sequence_subtree_roots` |
+| `Store::view_subtree_roots(&self) -> StoreResult<Arc<HashMap<String, HashMap<String, String>>>>` | `src/runtime/session_listing.py::view_subtree_roots`; `src/runtime/scheduled_sessions.py::view_subtree_roots` |
 | `Store::list_archived_page(&self, group: Option<&str>, limit: usize, before: Option<&str>, before_id: Option<&str>) -> StoreResult<ArchivedPage>` | `src/runtime/session_listing.py::list_archived_page` |
 | `Store::archived_context_rows(&self, rows: &[SessionMetadata]) -> StoreResult<Vec<SessionMetadata>>` | `src/runtime/session_listing.py::archived_context_rows` |
 | `trigger_files::iter_trigger_file_stats(triggers_dir: impl AsRef<Path>) -> io::Result<Vec<(PathBuf, Metadata)>>` | `src/runtime/trigger_files.py::iter_trigger_file_stats` |
 | `trigger_files::pending_trigger_state(triggers_dir: impl AsRef<Path>) -> (usize, Option<UtcDateTime>)` | `src/runtime/session_sidebar.py:157` |
 | `Store::raw_metadata_scan(&self) -> StoreResult<Vec<RawMetadata>>` | `src/features/usage/storage_cool.py` raw metadata scan |
 
-Session listings apply `Store::derived_archived_ids` after stored-status reads. This overlay reads task-tree facts and leaves metadata unchanged. `SequenceListingFields` supplies controller fields and subtree ownership.
+Session listings apply `Store::derived_archived_ids` after stored-status reads. This overlay reads task-tree facts and leaves metadata unchanged. `SequenceListingFields` supplies controller fields and subtree ownership, borrowing the memoized `Arc` rows: `Store::subtree_roots_shared` keys both subtree maps on the corpus snapshot they were built from and hands out the cached `Arc` maps, which is what `sequence_subtree_roots` and `view_subtree_roots` return.
 
 The `*_at` variants of rename, group, backend switch, archive, unarchive, and native-id persistence
 take an explicit `UtcDateTime`. Production wrappers supply the current time; the explicit forms make

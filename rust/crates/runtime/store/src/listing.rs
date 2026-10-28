@@ -234,59 +234,35 @@ impl Store {
   }
 
   /// Return the sequence subtree root map over all stored metadata.
-  pub fn sequence_subtree_roots(&self) -> StoreResult<std::collections::HashMap<String, String>> {
-    let roots = self.subtree_roots_shared()?;
-    Ok((*roots.sequence).clone())
+  pub fn sequence_subtree_roots(&self) -> StoreResult<Arc<HashMap<String, String>>> {
+    Ok(Arc::clone(&self.subtree_roots_shared()?.sequence))
   }
 
   /// Return the view subtree roots over all stored metadata.
-  pub fn view_subtree_roots(
-    &self,
-  ) -> StoreResult<std::collections::HashMap<String, std::collections::HashMap<String, String>>> {
-    let roots = self.subtree_roots_shared()?;
-    Ok((*roots.views).clone())
+  pub fn view_subtree_roots(&self) -> StoreResult<Arc<HashMap<String, HashMap<String, String>>>> {
+    Ok(Arc::clone(&self.subtree_roots_shared()?.views))
   }
 
-  /// Return both cached subtree maps for the cached metadata-list identity.
+  /// Return both cached subtree maps for the memoized metadata corpus they were built from.
   ///
   /// This follows Python's `session_listing.py:139-164` memo key: reuse both maps while the cached metadata list
-  /// remains the same, and rebuild after a metadata cache identity or directory membership changes.
+  /// remains the same, and rebuild after a metadata cache identity or directory membership changes. The corpus is
+  /// shared with the listing memo rather than copied, so a hit costs one stat and two `Arc` clones.
   pub fn subtree_roots_shared(&self) -> StoreResult<SharedSubtreeRoots> {
-    let rows = self.load_session_metas(None)?;
-    // A concurrent read prunes an entry that outlived the cache TTL and a write invalidates one, so a row of `rows`
-    // can leave the metadata cache before this lookup. A missing entry proves nothing about the cached maps: the
-    // call then rebuilds them and leaves the cache alone, which the next call replaces with a matching identity.
-    let metadata_identity = {
-      let metadata_cache = self.metadata_cache.lock().expect("metadata cache mutex is not poisoned");
-      let mut metadata_identity = rows
-        .iter()
-        .map(|row| metadata_cache.get(&row.id).map(|entry| (row.id.clone(), Arc::clone(&entry.identity))))
-        .collect::<Option<Vec<_>>>();
-      if let Some(metadata_identity) = metadata_identity.as_mut() {
-        metadata_identity.sort_by(|left, right| left.0.cmp(&right.0));
-      }
-      metadata_identity
-    };
+    let (rows, _) = self.load_session_metas_snapshot_versioned(None)?;
     let mut cached = self.subtree_roots_cache.lock().expect("subtree roots cache mutex is not poisoned");
-    if let (Some(metadata_identity), Some(snapshot)) = (metadata_identity.as_ref(), cached.as_ref())
-      && snapshot.metadata_identity.len() == metadata_identity.len()
-      && snapshot
-        .metadata_identity
-        .iter()
-        .zip(metadata_identity)
-        .all(|((left_id, left), (right_id, right))| left_id == right_id && Arc::ptr_eq(left, right))
+    if let Some(snapshot) = cached.as_ref()
+      && Arc::ptr_eq(&snapshot.metadata_snapshot, &rows)
     {
       return Ok(SharedSubtreeRoots { sequence: Arc::clone(&snapshot.sequence), views: Arc::clone(&snapshot.views) });
     }
-    let sequence = Arc::new(self.sequence_listing.sequence_subtree_roots(&rows)?);
-    let views = Arc::new(self.sequence_listing.view_subtree_roots(&rows)?);
-    if let Some(metadata_identity) = metadata_identity {
-      *cached = Some(super::store::CachedSubtreeRoots {
-        metadata_identity,
-        sequence: Arc::clone(&sequence),
-        views: Arc::clone(&views),
-      });
-    }
+    let sequence = Arc::new(self.sequence_listing.sequence_subtree_roots(rows.as_slice())?);
+    let views = Arc::new(self.sequence_listing.view_subtree_roots(rows.as_slice())?);
+    *cached = Some(super::store::CachedSubtreeRoots {
+      metadata_snapshot: Arc::clone(&rows),
+      sequence: Arc::clone(&sequence),
+      views: Arc::clone(&views),
+    });
     Ok(SharedSubtreeRoots { sequence, views })
   }
 
@@ -342,7 +318,7 @@ impl Store {
     let limit = limit.clamp(1, 500);
     let mut metas = self
       .apply_derived_archive(self.load_session_metas(Some(SessionStatus::Archived))?, Some(SessionStatus::Archived))?;
-    let subtree: HashSet<String> = self.sequence_subtree_roots()?.into_keys().collect();
+    let subtree: HashSet<String> = self.sequence_subtree_roots()?.keys().cloned().collect();
     metas.retain(|meta| !subtree.contains(&meta.id));
 
     let mut group_counts: HashMap<Option<String>, usize> = HashMap::new();
@@ -535,10 +511,10 @@ mod tests {
     ) -> StoreResult<HashMap<String, serde_json::Map<String, Value>>> {
       Ok(HashMap::new())
     }
-    fn sequence_subtree_roots(&self, _: &[SessionMetadata]) -> StoreResult<HashMap<String, String>> {
+    fn sequence_subtree_roots(&self, _: &[Arc<SessionMetadata>]) -> StoreResult<HashMap<String, String>> {
       Ok(HashMap::new())
     }
-    fn view_subtree_roots(&self, _: &[SessionMetadata]) -> StoreResult<HashMap<String, HashMap<String, String>>> {
+    fn view_subtree_roots(&self, _: &[Arc<SessionMetadata>]) -> StoreResult<HashMap<String, HashMap<String, String>>> {
       Ok(HashMap::new())
     }
   }
@@ -555,11 +531,11 @@ mod tests {
     ) -> StoreResult<HashMap<String, serde_json::Map<String, Value>>> {
       Ok(HashMap::new())
     }
-    fn sequence_subtree_roots(&self, _: &[SessionMetadata]) -> StoreResult<HashMap<String, String>> {
+    fn sequence_subtree_roots(&self, _: &[Arc<SessionMetadata>]) -> StoreResult<HashMap<String, String>> {
       SUBTREE_MAP_BUILDS.fetch_add(1, Ordering::Relaxed);
       Ok(HashMap::new())
     }
-    fn view_subtree_roots(&self, _: &[SessionMetadata]) -> StoreResult<HashMap<String, HashMap<String, String>>> {
+    fn view_subtree_roots(&self, _: &[Arc<SessionMetadata>]) -> StoreResult<HashMap<String, HashMap<String, String>>> {
       SUBTREE_MAP_BUILDS.fetch_add(1, Ordering::Relaxed);
       Ok(HashMap::new())
     }
@@ -717,6 +693,21 @@ mod tests {
     store.invalidate_cache("node-a");
     store.subtree_roots_shared().unwrap();
     assert_eq!(SUBTREE_MAP_BUILDS.load(Ordering::Relaxed), 4);
+  }
+
+  /// The chat page reads the subtree maps on every request, over a corpus of every stored session. Keying those maps
+  /// on the memoized corpus keeps a warm read to one stat, two `Arc` clones and no per-row copy.
+  #[test]
+  fn a_subtree_map_read_borrows_the_memoized_corpus() {
+    let home = tempfile::tempdir().unwrap();
+    let store = counting_store(home.path());
+    write_metadata(&store, "node-a", SessionStatus::Active, "2026-08-01T12:00:00Z", None);
+
+    store.subtree_roots_shared().unwrap();
+    let (corpus, _) = store.load_session_metas_snapshot_versioned(None).unwrap();
+    let cached = store.subtree_roots_cache.lock().unwrap();
+    let snapshot = cached.as_ref().expect("the first read caches the maps with the corpus they came from");
+    assert!(Arc::ptr_eq(&snapshot.metadata_snapshot, &corpus), "a rebuild keys on the memoized corpus, not a copy");
   }
 
   /// `test_sessions_batch_metadata_read.py::test_batch_output_matches_sequential_get_session_for_mixed_fixture`:

@@ -1,6 +1,6 @@
 //! Stable task-tree identifiers and the ordered headers for durable control facts.
 
-use charliebot_core::event_types::EventFields;
+use charliebot_core::event_types::{self, EventFields};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
@@ -187,7 +187,7 @@ pub fn build_task_created_event(
   timestamp: Option<UtcDateTime>,
 ) -> Value {
   build_control_event(
-    "task_created",
+    event_types::TASK_CREATED,
     actor,
     task_id,
     event_id,

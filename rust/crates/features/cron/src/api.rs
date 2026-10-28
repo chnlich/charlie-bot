@@ -11,6 +11,7 @@ use axum::routing::{get, put};
 use charliebot_compat::fastapi_body::{self, RequestBody};
 use charliebot_compat::responses;
 use charliebot_compat::routing::{post_only, refuse_other_methods};
+use charliebot_core::event_types;
 use charliebot_core::repo_root::RepoRoot;
 use charliebot_registry::context::FeatureContext;
 use serde_json::{Map, Value, json};
@@ -257,7 +258,7 @@ async fn run_task(State(features): State<Arc<FeatureContext>>, Path(name): Path<
   match scheduler::run_task_now(&features, &name).await {
     Ok(result) => responses::fast_json(
       StatusCode::ACCEPTED,
-      &json!({"type":"task_triggered", "task":name, "session_id":result.session_id, "thread_id":result.thread_id}),
+      &json!({"type":event_types::TASK_TRIGGERED, "task":name, "session_id":result.session_id, "thread_id":result.thread_id}),
     ),
     Err(scheduler::RunError::Unavailable) => {
       detail(StatusCode::SERVICE_UNAVAILABLE, "Scheduler not available".to_string())

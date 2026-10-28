@@ -11,7 +11,7 @@ use axum::http::StatusCode;
 use charliebot_compat::file_urls;
 use charliebot_compat::file_urls::ScanContext;
 use charliebot_compat::python_json::{self, LoadError};
-use charliebot_core::event_types::{WEB_ASK_CHECK, WEB_STATUS, WEB_STATUS_CONFIRMED};
+use charliebot_core::event_types::{WEB_ASK_CHECK, WEB_REPLY, WEB_STATUS, WEB_STATUS_CONFIRMED};
 use charliebot_core::pyfmt::{JsonStyle, json_dumps};
 use charliebot_core::pystr;
 use charliebot_registry::FeatureContext;
@@ -27,10 +27,10 @@ use crate::plan_links::{self, PlanLinks};
 use crate::reply::{self, WebReplyError};
 
 /// The owner the web reply package registers its metadata under (`status.OWNER`).
-pub const OWNER: &str = "web_reply";
+pub const OWNER: &str = WEB_REPLY;
 
 /// The metadata field that holds the status, under the owner.
-const STATUS_FIELD: &str = "web_status";
+const STATUS_FIELD: &str = WEB_STATUS;
 
 /// The status items in the order a set lists them and the status line names them (`status.ITEMS`).
 const ITEMS: [&str; 4] = ["goal", "now", "waiting", "remaining"];
@@ -661,7 +661,7 @@ pub async fn confirm_status(features: &FeatureContext, session_id: &str) -> Resu
     .store
     .persist_and_broadcast(session_id, json!({"type": WEB_STATUS_CONFIRMED, "content": "Status confirmed"}))
     .await?;
-  tracing::info!(session = %session_id, "web_status_confirmed");
+  tracing::info!(session = %session_id, "{}", WEB_STATUS_CONFIRMED);
   Ok(status_payload(&status))
 }
 
@@ -734,7 +734,7 @@ pub async fn read_status(features: &FeatureContext, session_id: &str) -> Result<
   children.sort_by_key(|(updated_at, _)| std::cmp::Reverse(*updated_at));
   Ok(json!({
     "session_id": session_id,
-    "web_status": stored.as_ref().map(status_payload),
+    (WEB_STATUS): stored.as_ref().map(status_payload),
     "descendants": rows.into_iter().map(|(_, row)| row).collect::<Vec<_>>(),
     "children": children.into_iter().map(|(_, row)| row).collect::<Vec<_>>(),
   }))

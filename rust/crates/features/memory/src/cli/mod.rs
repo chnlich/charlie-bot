@@ -10,7 +10,7 @@ use std::process;
 use charliebot_cli_common::args::with_infer_long_args;
 use charliebot_cli_common::exit::CliExit;
 use charliebot_core::run_token::RUN_TOKEN_ENV;
-use charliebot_core::{credentials, home, pystr, run_token};
+use charliebot_core::{credentials, event_types, home, pystr, run_token};
 use charliebot_store::run_identity;
 use charliebot_store::run_records::RunRecord;
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
@@ -200,7 +200,7 @@ fn read_run_events(path: &Path) -> Result<Vec<Value>, CliExit> {
       .split('\n')
       .filter(|line| !line.is_empty())
       .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-      .filter(|event| event.get("type").and_then(Value::as_str) == Some("run_finished"))
+      .filter(|event| event.get("type").and_then(Value::as_str) == Some(event_types::RUN_FINISHED))
       .collect(),
   )
 }

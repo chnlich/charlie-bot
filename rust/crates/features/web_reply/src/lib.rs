@@ -21,6 +21,7 @@ use std::sync::Arc;
 use axum::Router;
 use axum::routing::post;
 use charliebot_compat::routing::{get_only, post_only, refuse_other_methods};
+use charliebot_core::event_types;
 use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot, SlotField};
 use charliebot_registry::{FeatureContext, Registry, RegistryError};
 use charliebot_store::metadata::UtcDateTime;
@@ -31,20 +32,20 @@ use turn_contribution::WebReplyTurnContribution;
 /// web-reply status field of each session.
 pub fn register(registry: &mut Registry) -> Result<(), RegistryError> {
   registry.router(routes, matches)?;
-  registry.turn_contribution("web_reply", Arc::new(WebReplyTurnContribution))?;
+  registry.turn_contribution(event_types::WEB_REPLY, Arc::new(WebReplyTurnContribution))?;
   registry.metadata_slot_with_validator(
     MetadataSlot {
-      owner: "web_reply",
+      owner: event_types::WEB_REPLY,
       on: MetadataFile::Session,
       after: None,
-      fields: vec![SlotField { name: "web_status", default: serde_json::Value::Null }],
+      fields: vec![SlotField { name: event_types::WEB_STATUS, default: serde_json::Value::Null }],
     },
     validate_session_fields,
   )
 }
 
 fn validate_session_fields(values: &mut Map<String, Value>) -> Option<String> {
-  if let Some(status) = values.get_mut("web_status")
+  if let Some(status) = values.get_mut(event_types::WEB_STATUS)
     && !normalize_web_status(status)
   {
     return Some("web_status must be a WebStatus or null".to_string());

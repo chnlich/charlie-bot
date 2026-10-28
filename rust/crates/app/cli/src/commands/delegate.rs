@@ -9,6 +9,7 @@ use charliebot_cli_common::exit::CliExit;
 use charliebot_cli_common::files;
 use charliebot_cli_common::json_out;
 use charliebot_cli_common::resolve;
+use charliebot_core::event_types;
 use clap::error::ErrorKind;
 use clap::{CommandFactory, FromArgMatches, Parser, ValueEnum};
 use serde_json::{Map, Value, json};
@@ -162,7 +163,7 @@ pub fn main(args: &[OsString]) -> Result<(), CliExit> {
   payload.insert("description".to_string(), json!(task_spec));
   payload.insert("keep_worktree".to_string(), json!(keep_worktree));
   payload.insert("task_type".to_string(), json!(task_type));
-  payload.insert("delegate_invocation".to_string(), Value::Object(invocation));
+  payload.insert(event_types::DELEGATE_INVOCATION.to_string(), Value::Object(invocation));
   if let Some(base_branch) = &cli.base_branch {
     payload.insert("base_branch".to_string(), json!(base_branch));
   }

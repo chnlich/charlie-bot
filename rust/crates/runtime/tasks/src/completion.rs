@@ -838,7 +838,7 @@ impl TaskCompletion {
     );
     self.store().append_control_fact(&guard, session_id, event).await?;
     drop(guard);
-    tracing::info!(target: "charliebot_tasks", session_id, request_id, owner_run_id, "task_close_requested");
+    tracing::info!(target: "charliebot_tasks", session_id, request_id, owner_run_id, "{}", event_types::TASK_CLOSE_REQUESTED);
     Ok((202, json!({"session_id": session_id, "request_id": request_id, "status": "pending_run_finish"})))
   }
 

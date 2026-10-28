@@ -32,9 +32,10 @@ use crate::{ControlGuard, Store, StoreError, StoreResult};
 
 const TREE_INDEX_TTL: Duration = Duration::from_secs(2);
 // The lifecycle facts that set a node's task state: the walk stops at the newest of these.
-const LIFECYCLE_STATE_TYPES: &[&str] = &["clone_start", "task_closed", "task_reopened"];
+const LIFECYCLE_STATE_TYPES: &[&str] =
+  &[event_types::CLONE_START, event_types::TASK_CLOSED, event_types::TASK_REOPENED];
 // The facts a node's Run verdicts read: terminal outcomes and stop requests.
-const RUN_FACT_TYPES: &[&str] = &["run_finished", "run_stop_requested"];
+const RUN_FACT_TYPES: &[&str] = &[event_types::RUN_FINISHED, event_types::RUN_STOP_REQUESTED];
 const TASK_ANCESTOR_HOP_LIMIT: usize = 1000;
 // Bound on the non-archived descendants one subtree walk may hold; archived ones do not count.
 const TASK_DESCENDANT_NODE_LIMIT: usize = 1000;
@@ -135,7 +136,7 @@ impl NodeState {
 fn has_withheld_reason<'a>(events: impl Iterator<Item = &'a ChatEvent>, run_id: &str) -> bool {
   let mut withheld = None;
   for event in events {
-    if event.get("type").and_then(CompactValue::as_str) == Some("run_launch_withheld")
+    if event.get("type").and_then(CompactValue::as_str) == Some(event_types::RUN_LAUNCH_WITHHELD)
       && event.get("run_id").and_then(CompactValue::as_str) == Some(run_id)
     {
       withheld = event.get("reason").and_then(CompactValue::as_str).filter(|reason| !reason.is_empty());
@@ -1340,7 +1341,7 @@ impl Store {
     let events = self.load_chat_events_shared_sync(session_id)?;
     let scope_name = scope.as_str();
     let last = events.iter().rev().find(|event| {
-      event.get("type").and_then(CompactValue::as_str) == Some("prompt_changed")
+      event.get("type").and_then(CompactValue::as_str) == Some(event_types::PROMPT_CHANGED)
         && event.get("scope").and_then(CompactValue::as_str) == Some(scope_name)
     });
     let current_ref = scope.metadata_ref(meta);
@@ -1352,7 +1353,7 @@ impl Store {
     }
     let previous_ref = last.and_then(|event| event.get("new_ref")).map(CompactValue::to_value).unwrap_or(Value::Null);
     let event = control_events::build_control_event(
-      "prompt_changed",
+      event_types::PROMPT_CHANGED,
       ACTOR_USER,
       session_id,
       None,
@@ -2050,8 +2051,8 @@ fn live_end(identity: Option<FileIdentity>) -> u64 {
 /// The task state a lifecycle fact sets, or None for any other event.
 fn lifecycle_state_of(event: &ChatEvent) -> Option<TaskState> {
   match event.get("type").and_then(CompactValue::as_str)? {
-    "clone_start" | "task_reopened" => Some("open".to_string()),
-    "task_closed" => Some(
+    event_types::CLONE_START | event_types::TASK_REOPENED => Some("open".to_string()),
+    event_types::TASK_CLOSED => Some(
       event
         .get("outcome")
         .and_then(CompactValue::as_str)
@@ -2226,7 +2227,7 @@ fn fold_task_facts_from(
     }
     let position = offset + index;
     match event.get("type").and_then(CompactValue::as_str) {
-      Some("clone_start") => facts.has_user_request = false,
+      Some(event_types::CLONE_START) => facts.has_user_request = false,
       _ if event_types::is_real_user_message(event) || event_types::is_platform_summon(event) => {
         facts.has_user_request = true;
       }
@@ -2239,7 +2240,7 @@ fn fold_task_facts_from(
     }
     let event_type = event.get("type").and_then(CompactValue::as_str).unwrap_or_default();
     match event_type {
-      "clone_start" => {
+      event_types::CLONE_START => {
         facts.task_state = "open".to_string();
         facts.boundary_index = None;
         facts.boundary_open = true;
@@ -2249,13 +2250,13 @@ fn fold_task_facts_from(
         facts.close_requests.clear();
         facts.delivered_reports.clear();
       }
-      "task_created" => {
+      event_types::TASK_CREATED => {
         if facts.boundary_index.is_none() {
           facts.boundary_index = Some(position);
           facts.input_candidates.clear();
         }
       }
-      "task_imported" => {
+      event_types::TASK_IMPORTED => {
         facts.boundary_index = Some(position);
         facts.imported_pending_ids.clear();
         for input_id in imported_pending_input_ids(event)? {
@@ -2273,7 +2274,7 @@ fn fold_task_facts_from(
           }
         }
       }
-      "task_closed" => {
+      event_types::TASK_CLOSED => {
         facts.task_state = event
           .get("outcome")
           .and_then(CompactValue::as_str)
@@ -2286,15 +2287,15 @@ fn fold_task_facts_from(
         facts.imported_pending_ids.clear();
         facts.input_candidates.clear();
       }
-      "task_reopened" => {
+      event_types::TASK_REOPENED => {
         facts.task_state = "open".to_string();
         facts.boundary_index = Some(position);
         facts.boundary_open = true;
       }
-      "task_close_requested" => {
+      event_types::TASK_CLOSE_REQUESTED => {
         facts.close_requests.push(Arc::clone(&events[index]));
       }
-      "run_finished" => {
+      event_types::RUN_FINISHED => {
         if let Some(run_id) = event.get("run_id").and_then(CompactValue::as_str) {
           let outcome = event.get("outcome").and_then(CompactValue::as_str).unwrap_or("None").to_string();
           if event.get("outcome").and_then(CompactValue::as_str) == Some("None") {
@@ -2305,18 +2306,18 @@ fn fold_task_facts_from(
           facts.run_outcomes.insert(run_id.to_string(), outcome.clone());
           facts.run_finish_positions.entry(run_id.to_string()).or_insert(position);
           if outcome == "success"
-            && let Some(input_ids) = event.get("input_event_ids").and_then(CompactValue::as_array)
+            && let Some(input_ids) = event.get(event_types::INPUT_EVENT_IDS).and_then(CompactValue::as_array)
           {
             facts.confirmed_input_ids.extend(input_ids.iter().filter_map(CompactValue::as_str).map(str::to_string));
           }
         }
       }
-      "task_input_acknowledged" => {
+      event_types::TASK_INPUT_ACKNOWLEDGED => {
         if let Some(input_ids) = event.get("input_ids").and_then(CompactValue::as_array) {
           facts.confirmed_input_ids.extend(input_ids.iter().filter_map(CompactValue::as_str).map(str::to_string));
         }
       }
-      "child_report" => {
+      event_types::CHILD_REPORT => {
         if let (Some(child_id), Some(child_event_id)) = (
           event.get("child_session_id").and_then(CompactValue::as_str),
           event.get("child_event_id").and_then(CompactValue::as_str),
@@ -2416,7 +2417,7 @@ fn observe_run_facts(
 fn admits_input(event: &ChatEvent) -> bool {
   match event.get("type").and_then(CompactValue::as_str) {
     Some("user") => event.get("content").is_some_and(CompactValue::is_string),
-    Some("agent_message" | "scheduled_trigger" | "child_report") => true,
+    Some("agent_message" | event_types::SCHEDULED_TRIGGER | event_types::CHILD_REPORT) => true,
     _ => false,
   }
 }

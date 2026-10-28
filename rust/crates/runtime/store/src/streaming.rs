@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
+use charliebot_core::event_types;
 use serde_json::Value;
 use tokio::sync::{mpsc, oneshot};
 
@@ -13,7 +14,7 @@ pub const SIDEBAR_CHANNEL: &str = "sidebar";
 /// The trailing stream-delta window used by the Python server.
 pub const STREAM_COALESCE_INTERVAL: Duration = Duration::from_millis(200);
 
-const PREVIEW_HIDING_TYPES: &[&str] = &["message", "assistant_error", "error"];
+const PREVIEW_HIDING_TYPES: &[&str] = &["message", event_types::ASSISTANT_ERROR, "error"];
 
 #[derive(Default)]
 struct StreamingState {

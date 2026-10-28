@@ -77,7 +77,7 @@ pub fn record_ack(
   if run_id != item_run_id {
     anyhow::bail!("input delivery for Run {run_id} reached manager Run {item_run_id}");
   }
-  let input_id = python_string(event.get("input_event_id"));
+  let input_id = python_string(event.get(event_types::INPUT_EVENT_ID));
   if !user_event_ids.contains(&input_id) {
     user_event_ids.push(input_id.clone());
   }

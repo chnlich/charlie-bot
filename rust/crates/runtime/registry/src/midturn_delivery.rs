@@ -240,7 +240,7 @@ pub fn translate_replay(run_id: Option<&str>, event: &Value) -> anyhow::Result<V
   }
   Ok(vec![json!({
     "type": event_types::INPUT_DELIVERED,
-    "input_event_id": input_id,
+    (event_types::INPUT_EVENT_ID): input_id,
     "run_id": run_id,
   })])
 }

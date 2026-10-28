@@ -15,6 +15,7 @@ use axum::response::Response;
 use charliebot_compat::routing::get_only;
 use charliebot_compat::{responses, static_files};
 use charliebot_core::config::CharlieBotConfig;
+use charliebot_core::event_types;
 use charliebot_core::pyfmt;
 use charliebot_registry::task_errors::task_http_error;
 use charliebot_registry::{FeatureContext, Registry};
@@ -92,7 +93,7 @@ pub fn build_bootstrap_payload(
   payload.insert("oldest_message_ordinal".to_string(), Value::from(oldest_message_ordinal));
   payload.insert("has_more".to_string(), Value::Bool(has_more));
   if let Some(summary) = worker_summary {
-    payload.insert("worker_summary".to_string(), summary);
+    payload.insert(event_types::WORKER_SUMMARY.to_string(), summary);
   }
   payload.extend(active_backend_payload(store, &response_meta, cfg, registry)?);
   Ok(Value::Object(payload))

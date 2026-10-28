@@ -297,7 +297,7 @@ impl TaskExecutionAdapter {
       let state = facts.task_state()?;
       if state != "open" {
         let reason = format!("task {session_id} is {state}");
-        tracing::info!(target: "charliebot_tasks", session_id, run_id, reason, "run_launch_withheld");
+        tracing::info!(target: "charliebot_tasks", session_id, run_id, reason, "{}", event_types::RUN_LAUNCH_WITHHELD);
         withheld = Some((reason, true));
       } else {
         self.features.store.require_open_ancestry(session_id)?;
@@ -310,11 +310,11 @@ impl TaskExecutionAdapter {
         }
         if facts.runs.stop_requested(run_id, None) {
           let reason = format!("run {run_id} has a durable stop request");
-          tracing::info!(target: "charliebot_tasks", session_id, run_id, reason, "run_launch_withheld");
+          tracing::info!(target: "charliebot_tasks", session_id, run_id, reason, "{}", event_types::RUN_LAUNCH_WITHHELD);
           withheld = Some((reason, false));
         } else if worker_run {
           if let Some(reason) = disk_headroom_withhold_reason(cfg.as_ref())? {
-            tracing::info!(target: "charliebot_tasks", session_id, run_id, reason, "run_launch_withheld");
+            tracing::info!(target: "charliebot_tasks", session_id, run_id, reason, "{}", event_types::RUN_LAUNCH_WITHHELD);
             withheld = Some((reason, false));
           } else {
             withheld = None;
@@ -2398,7 +2398,7 @@ impl TaskExecutionAdapter {
       ("timestamp".to_string(), json!(charliebot_store::metadata::UtcDateTime::now().to_python_isoformat())),
     ]);
     if let Some(quota_exhausted) = quota_exhausted {
-      event.insert("quota_exhausted".to_string(), json!(quota_exhausted));
+      event.insert(event_types::QUOTA_EXHAUSTED.to_string(), json!(quota_exhausted));
     }
     let mut line = serde_json::to_string(&Value::Object(event))?;
     line.push('\n');

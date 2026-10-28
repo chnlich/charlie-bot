@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
+use charliebot_core::event_types;
 use charliebot_core::fsutil;
 use charliebot_core::proc_identity;
 use charliebot_core::pyfmt::{self, JsonStyle};
@@ -221,13 +222,13 @@ impl RunFacts {
       self.observed_events += 1;
     }
     match event.get("type").and_then(CompactValue::as_str) {
-      Some("run_finished") => {
+      Some(event_types::RUN_FINISHED) => {
         if let Some(run_id) = event.get("run_id").and_then(CompactValue::as_str) {
           let outcome = event.get("outcome").and_then(CompactValue::as_str).map(str::to_string);
           self.outcomes.insert(run_id.to_string(), outcome);
         }
       }
-      Some("run_stop_requested") => {
+      Some(event_types::RUN_STOP_REQUESTED) => {
         if let Some(run_id) = event.get("run_id").and_then(CompactValue::as_str) {
           let request_id = event.get("request_id").and_then(CompactValue::as_str).map(str::to_string);
           self.stop_requests.entry(run_id.to_string()).or_default().insert(request_id);
@@ -594,7 +595,7 @@ impl Store {
     let events = self.load_all_facts(session_id)?;
     let mut fact_times = HashMap::<String, UtcDateTime>::new();
     for event in &events {
-      if event.get("type").and_then(CompactValue::as_str) != Some("run_finished") {
+      if event.get("type").and_then(CompactValue::as_str) != Some(event_types::RUN_FINISHED) {
         continue;
       }
       let Some(run_id) = event.get("run_id").and_then(CompactValue::as_str) else {
@@ -889,7 +890,7 @@ impl Store {
       let input_event_ids = events
         .iter()
         .find(|event| {
-          event.get("type").and_then(CompactValue::as_str) == Some("run_finished")
+          event.get("type").and_then(CompactValue::as_str) == Some(event_types::RUN_FINISHED)
             && event.get("run_id").and_then(CompactValue::as_str) == Some(run_id)
         })
         .map(|event| event_input_ids(event))
@@ -917,14 +918,14 @@ impl Store {
     }
     let event_id = self.next_control_event_id()?;
     let event = control_events::build_control_event(
-      "run_finished",
+      event_types::RUN_FINISHED,
       ACTOR_SYSTEM,
       session_id,
       Some(&event_id),
       None,
       [
         ("run_id".to_string(), Value::String(run_id.to_string())),
-        ("input_event_ids".to_string(), json!(input_event_ids)),
+        (event_types::INPUT_EVENT_IDS.to_string(), json!(input_event_ids)),
         ("outcome".to_string(), Value::String(outcome.outcome.as_str().to_string())),
       ],
     );
@@ -965,7 +966,7 @@ impl Store {
     let mut foreign = HashSet::new();
     for event in events {
       let event = event.as_ref();
-      if event.get("type").and_then(CompactValue::as_str) != Some("run_finished") {
+      if event.get("type").and_then(CompactValue::as_str) != Some(event_types::RUN_FINISHED) {
         continue;
       }
       if event.get("run_id").and_then(CompactValue::as_str).is_none_or(|other_run_id| other_run_id != run.id) {
@@ -1067,7 +1068,7 @@ impl Store {
     }
     let event_id = self.next_control_event_id()?;
     let event = control_events::build_control_event(
-      "run_stop_requested",
+      event_types::RUN_STOP_REQUESTED,
       ACTOR_SYSTEM,
       session_id,
       Some(&event_id),
@@ -1201,7 +1202,7 @@ fn finish_facts<'a, T: AsRef<ChatEvent>>(
 ) -> impl DoubleEndedIterator<Item = &'a ChatEvent> {
   events.iter().filter_map(move |event| {
     let event = event.as_ref();
-    (event.get("type").and_then(CompactValue::as_str) == Some("run_finished")
+    (event.get("type").and_then(CompactValue::as_str) == Some(event_types::RUN_FINISHED)
       && event.get("run_id").and_then(CompactValue::as_str) == Some(run_id))
     .then_some(event)
   })
@@ -1209,7 +1210,7 @@ fn finish_facts<'a, T: AsRef<ChatEvent>>(
 
 fn event_input_ids(event: &ChatEvent) -> Vec<String> {
   event
-    .get("input_event_ids")
+    .get(event_types::INPUT_EVENT_IDS)
     .and_then(CompactValue::as_array)
     .map(|values| values.iter().filter_map(CompactValue::as_str).map(str::to_string).collect())
     .unwrap_or_default()
@@ -1234,7 +1235,7 @@ pub fn terminal_outcome<T: AsRef<ChatEvent>>(events: &[T], run_id: &str) -> Stor
 pub fn stop_requested_in_events<T: AsRef<ChatEvent>>(events: &[T], run_id: &str, request_id: Option<&str>) -> bool {
   events.iter().any(|event| {
     let event = event.as_ref();
-    event.get("type").and_then(CompactValue::as_str) == Some("run_stop_requested")
+    event.get("type").and_then(CompactValue::as_str) == Some(event_types::RUN_STOP_REQUESTED)
       && event.get("run_id").and_then(CompactValue::as_str) == Some(run_id)
       && request_id.is_none_or(|request_id| event.get("request_id").and_then(CompactValue::as_str) == Some(request_id))
   })

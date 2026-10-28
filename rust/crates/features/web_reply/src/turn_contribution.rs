@@ -108,7 +108,7 @@ fn web_reply_notice_message(event: &Value) -> Value {
 
 /// `_web_status_message`: the chat line of a `web_status` event, with the event's status value, or `null`.
 fn web_status_message(event: &Value) -> Value {
-  json!({"role": WEB_STATUS, "content": content(event), "web_status": event.get(WEB_STATUS)})
+  json!({"role": WEB_STATUS, "content": content(event), (WEB_STATUS): event.get(WEB_STATUS)})
 }
 
 /// `_web_ask_check_message`: the chat line of a `web_ask_check` event.

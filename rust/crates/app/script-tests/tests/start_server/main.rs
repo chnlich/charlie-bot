@@ -334,6 +334,11 @@ fn shell_entry_points_parse_setup() {
   assert_shell_entry_point_parses("setup.sh");
 }
 
+#[test]
+fn shell_entry_points_parse_trial() {
+  assert_shell_entry_point_parses("release/trial.sh");
+}
+
 fn assert_shell_entry_point_parses(script: &str) {
   let sandbox = Sandbox::new();
   let path = harness::repo_root().join("scripts").join(script);

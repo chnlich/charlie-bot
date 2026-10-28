@@ -1246,6 +1246,7 @@ def test_probe_archive_names_the_run_when_its_listing_answers_after_the_wait(pro
       run_state="running", output="message", cancel="hangs", archive_runs_delay=2, archive_runs_delay_after=1)
   assert proc.returncode == 1, proc.stdout + proc.stderr
   assert PROBE_CANCEL in calls
+  assert calls.count("GET /api/sessions/probe-session/runs?limit=500") == 2
   assert re.search(r"probe: run did not settle within 1s session=probe-session run=probe-run elapsed=\d+s", proc.stdout)
   _assert_stage_lines(proc)
 

@@ -1,10 +1,9 @@
 """Transcribe one finished recording through an online backend.
 
-The upload endpoint (rust/crates/features/voice) and the voice-notes skill
-(skills/voice-notes/scripts/decode_audio.py) both call this module, so the
-selection rules and the chunking live in one place. The recording's PCM is cut
-into the capture worklet's chunks, the cadence a live recording's audio carries,
-and the backend's final event is the transcript.
+The Rust port in rust/crates/features/voice/src/recording.rs runs the upload endpoint and
+`charliebot voice transcribe`. This module is the reference that the port follows for the backend selection rules
+and the chunking. The recording's PCM is cut into the capture worklet's chunks, the cadence a live recording's audio
+carries, and the backend's final event is the transcript.
 """
 
 from __future__ import annotations

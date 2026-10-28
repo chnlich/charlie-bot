@@ -1047,6 +1047,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "charliebot-script-tests"
+version = "0.1.0"
+dependencies = [
+ "charliebot-shell-harness",
+ "chrono",
+ "http 1.5.0",
+ "libc",
+ "nix",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha1",
+ "sha2",
+ "uuid",
+ "wait-timeout",
+]
+
+[[package]]
 name = "charliebot-server"
 version = "0.1.0"
 dependencies = [
@@ -1109,6 +1127,15 @@ dependencies = [
  "tower",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "charliebot-shell-harness"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "tempfile",
+ "wait-timeout",
 ]
 
 [[package]]

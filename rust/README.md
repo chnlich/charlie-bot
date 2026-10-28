@@ -90,6 +90,33 @@ fixture generator are run by hand. The compatibility and SSH outputs under `rust
 The parity harness (`rust/parity/`) that compared the Rust server against the Python reference on synthetic homes was
 removed on 2026-10-27; `main` has no Python server to compare against.
 
+### Shell-script tests
+
+`charliebot-shell-harness` (`crates/infra/shell-harness`) runs a repository shell script for real, against stub
+commands. Run `uv sync --frozen` at the repository root first: the sandbox puts that `.venv/bin` on PATH, so a script's
+`python3` is the environment it built. A test:
+
+```rust
+use charliebot_shell_harness::{self as harness, Sandbox};
+
+let sandbox = Sandbox::new();                        // a temporary root; bin/ first on PATH
+let home = sandbox.dir("home");                      // a temporary home, with its parents
+sandbox.stub("tmux", "exit 0\n");                    // a stub: the body of a bash script, in bin/
+let mut env = sandbox.env();                         // the test's variables, PATH with the stubs first
+env.insert("CHARLIEBOT_HOME".to_string(), home.display().to_string());
+let script = harness::repo_root().join("scripts/switch-server.sh");
+let mut command = harness::command("bash", &env);    // a command that sees exactly env
+command.arg(&script).arg("rust").arg(sha);
+let run = harness::run(&mut command);                // stdout, stderr and exit code; killed after 120 s
+assert_eq!(run.code, 0, "{}", run.describe());
+```
+
+`harness::spawn` starts a background process, such as a stand-in server. Stubs are shell scripts or Rust programs; a
+stub never starts an interpreter. `sandbox.install_systemd_stubs()` adds the `systemctl` and `systemd-run` stubs for the
+launcher, and `sandbox.scope_records()` lists the scopes `systemd-run` started. The switch tests in
+`crates/app/script-tests/tests/switch_server/` show the full pattern, including the stand-in servers that the release
+roots copy.
+
 ## Development rules
 
 - **A name that two crates agree on has one owner.** A file or directory name, an environment variable name, an event
@@ -140,6 +167,8 @@ rust/
     responses.rs, headers.rs      response builders and the latin-1 header text
     routing.rs                    method refusals: GET-only, GET and HEAD, POST-only, and Starlette's `allow` list
     http_client.rs                outbound client: HTTPS_PROXY, NO_PROXY and SSL_CERT_FILE over rustls
+  crates/infra/shell-harness/src/lib.rs
+                                  the shell-script test harness: the stub sandbox, the command runner and spawn
   crates/runtime/registry/src/
     registry.rs                   the Registry: one ledger per hook kind, duplicate refusals, package order
     wiring.rs, pages.rs, turn.rs, sidebar.rs, usage.rs, sequence.rs
@@ -163,6 +192,8 @@ rust/
     request_log.rs, request_path.rs
     templating.rs                 Jinja2-compatible page rendering with minijinja
     home_init.rs, buildinfo.rs, state.rs
+  crates/app/script-tests/
+                                  the stand-in servers (src/bin) and the switch-server tests (tests/switch_server/)
 ```
 
 ## Differences from the Python server

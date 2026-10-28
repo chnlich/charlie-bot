@@ -755,11 +755,10 @@ mod tests {
     assert_eq!(raw, [("good-a".to_string(), "good-a".to_string()), ("good-b".to_string(), "good-b".to_string())]);
   }
 
-  /// `test_sessions_batch_metadata_read.py::test_metadata_without_profile_names_the_file_and_conversion_tool`:
-  /// a single-session read of a profile-less metadata file fails loudly, naming the file and the
-  /// conversion tool.
+  /// `test_sessions_batch_metadata_read.py::test_metadata_without_profile_names_the_file_and_restore_command`:
+  /// a single-session read of a profile-less metadata file fails loudly, naming the file and restore command.
   #[tokio::test]
-  async fn a_metadata_file_without_a_profile_fails_loudly_naming_the_file_and_the_conversion_tool() {
+  async fn a_metadata_file_without_a_profile_fails_loudly_naming_the_file_and_restore_command() {
     let home = tempfile::tempdir().unwrap();
     let store = test_store(home.path());
     let path = store.metadata_path("missing-profile");
@@ -767,7 +766,9 @@ mod tests {
     std::fs::write(&path, r#"{"id": "missing-profile", "name": "old session", "schema_version": 1}"#).unwrap();
     let error = store.get_session("missing-profile").await.unwrap_err().to_string();
     assert!(error.contains(path.to_str().unwrap()), "{error}");
+    assert!(error.contains("the conversion script was deleted"), "{error}");
     assert!(error.contains("scripts/v1_session_conversion.py"), "{error}");
+    assert!(error.contains("git show d4021ce:scripts/v1_session_conversion.py"), "{error}");
   }
 
   /// `test_archived_pagination.py::test_keyset_pages_walk_newest_first`.

@@ -448,6 +448,10 @@ class SessionMetadata(pydantic.BaseModel):
 
 metadata_slots.provide_metadata_models(SessionMetadata, ThreadMetadata)
 
+V1_SESSION_CONVERSION_GUIDANCE = (
+    "the conversion script was deleted. From the repository root, run "
+    "`git show d4021ce:scripts/v1_session_conversion.py > scripts/v1_session_conversion.py` to restore it.")
+
 
 def validate_session_metadata(data: Any, path: str | None = None) -> SessionMetadata:
   """Validate persisted session metadata and identify files needing conversion."""
@@ -457,8 +461,7 @@ def validate_session_metadata(data: Any, path: str | None = None) -> SessionMeta
   if isinstance(data, dict) and (data.get("profile") is None or data.get("schema_version", 2) != 2):
     location = f"{path}: " if path else ""
     raise ValueError(
-        f"{location}session metadata requires a schema_version 2 profile; "
-        "run scripts/v1_session_conversion.py")
+        f"{location}session metadata requires a schema_version 2 profile; {V1_SESSION_CONVERSION_GUIDANCE}")
   try:
     return SessionMetadata.model_validate(data)
   except pydantic.ValidationError as exc:

@@ -52,7 +52,7 @@ async def test_batch_output_matches_sequential_get_session_for_mixed_fixture(tmp
 
 
 @pytest.mark.asyncio
-async def test_metadata_without_profile_names_the_file_and_conversion_tool(tmp_path: pathlib.Path) -> None:
+async def test_metadata_without_profile_names_the_file_and_restore_command(tmp_path: pathlib.Path) -> None:
   mgr = conftest.make_session_blocks(tmp_path)
   session_id = "missing-profile"
   path = _write_metadata(
@@ -68,8 +68,11 @@ async def test_metadata_without_profile_names_the_file_and_conversion_tool(tmp_p
   with pytest.raises(ValueError) as excinfo:
     await mgr.store.get_session(session_id)
 
-  assert str(path) in str(excinfo.value)
-  assert "scripts/v1_session_conversion.py" in str(excinfo.value)
+  message = str(excinfo.value)
+  assert str(path) in message
+  assert "the conversion script was deleted" in message
+  assert "scripts/v1_session_conversion.py" in message
+  assert "git show d4021ce:scripts/v1_session_conversion.py" in message
 
 
 @pytest.mark.asyncio

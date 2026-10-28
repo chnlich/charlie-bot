@@ -4,6 +4,7 @@ use std::fmt;
 
 use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot};
 use charliebot_core::pyfmt::{self, JsonStyle};
+use charliebot_core::v1_sessions::V1_SESSION_CONVERSION_GUIDANCE;
 use serde::de::{MapAccess, Visitor};
 use serde::ser::SerializeMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -542,7 +543,7 @@ impl SessionMetadata {
     {
       let location = path.map_or_else(String::new, |path| format!("{path}: "));
       return Err(StoreError::new(format!(
-        "{location}session metadata requires a schema_version 2 profile; run scripts/v1_session_conversion.py"
+        "{location}session metadata requires a schema_version 2 profile; {V1_SESSION_CONVERSION_GUIDANCE}"
       )));
     }
     serde_json::from_value(value).map_err(|error| {
@@ -884,12 +885,16 @@ mod tests {
   }
 
   #[test]
-  fn v1_metadata_refusal_names_the_conversion_script() {
+  fn v1_metadata_refusal_explains_how_to_restore_the_conversion_script() {
     let error = SessionMetadata::from_json(r#"{"id":"legacy","name":"legacy"}"#, None).unwrap_err();
+    let message = error.to_string();
     assert!(
-      error
-        .to_string()
-        .ends_with("session metadata requires a schema_version 2 profile; run scripts/v1_session_conversion.py")
+      message
+        .ends_with(&format!("session metadata requires a schema_version 2 profile; {V1_SESSION_CONVERSION_GUIDANCE}")),
+      "{message}"
     );
+    assert!(message.contains("the conversion script was deleted"), "{message}");
+    assert!(message.contains("scripts/v1_session_conversion.py"), "{message}");
+    assert!(message.contains("git show d4021ce:scripts/v1_session_conversion.py"), "{message}");
   }
 }

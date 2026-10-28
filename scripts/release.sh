@@ -62,28 +62,21 @@ git -C "$REPO_ROOT" merge-base --is-ancestor "$COMMIT" origin/main 2> /dev/null 
 [ ! -e "$RELEASES_DIR/$COMMIT" ] && [ ! -L "$RELEASES_DIR/$COMMIT" ] \
   || refuse "release $RELEASES_DIR/$COMMIT already exists"
 
-# ci_run_id: the newest push run of the CI workflow for COMMIT whose release-build and rust-test jobs succeeded.
+# ci_run_id: the newest push run of the CI workflow for COMMIT whose release-build and rust-test jobs succeeded. gh
+# filters its own JSON; the preflight runs before any release binary is downloaded, and gh is already required.
 ci_run_id() {
-  local id jobs
+  local id
   while IFS= read -r id; do
     [ -n "$id" ] || continue
-    jobs="$(gh run view "$id" --repo "$REPO_SLUG" --json jobs 2> /dev/null)" || continue
-    if python3 -I -c '
-import json, sys
-jobs = json.load(sys.stdin).get("jobs", [])
-names = {job.get("name") for job in jobs if job.get("conclusion") == "success"}
-sys.exit(0 if {"release-build", "rust-test"} <= names else 1)
-' <<<"$jobs"; then
-      printf '%s' "$id"
-      return 0
-    fi
+    gh run view "$id" --repo "$REPO_SLUG" --json jobs \
+      --jq '([.jobs[] | select(.conclusion == "success") | .name] | (index("release-build") != null) and (index("rust-test") != null))' \
+      2> /dev/null | grep -qx true || continue
+    printf '%s' "$id"
+    return 0
   done < <(gh run list --repo "$REPO_SLUG" --workflow CI --commit "$COMMIT" --limit 20 \
-      --json databaseId,event,headSha,conclusion 2> /dev/null | python3 -I -c '
-import json, sys
-for run in json.load(sys.stdin):
-    if run.get("event") == "push" and run.get("headSha") == sys.argv[1] and run.get("conclusion") == "success":
-        print(run["databaseId"])
-' "$COMMIT")
+      --json databaseId,event,headSha,conclusion \
+      --jq '.[] | select(.event == "push" and .headSha == "'"$COMMIT"'" and .conclusion == "success") | .databaseId' \
+      2> /dev/null)
   return 1
 }
 

@@ -9,6 +9,7 @@ pub mod fence;
 pub mod fsutil;
 pub mod git;
 pub mod home;
+pub mod home_init;
 pub mod hot_reload;
 pub mod logging;
 pub mod metadata_slot;

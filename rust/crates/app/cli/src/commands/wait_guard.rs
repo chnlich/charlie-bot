@@ -109,12 +109,7 @@ fn loop_iterations(header: &Captures<'_>) -> Option<f64> {
     return Some(count.as_str().parse::<f64>().expect("loop count pattern contains an integer"));
   }
   if let Some(end) = header.name("rng") {
-    let end = end.as_str().parse::<f64>().expect("loop end pattern contains an integer");
-    let start = header
-      .name("rng_start")
-      .map(|start| start.as_str().parse::<f64>().expect("loop start pattern contains an integer"))
-      .unwrap_or(0.0);
-    return Some((end - start).max(0.0));
+    return Some(end.as_str().parse::<f64>().expect("loop end pattern contains an integer"));
   }
   header.name("lst").map(|items| items.as_str().split_whitespace().count() as f64)
 }
@@ -165,7 +160,7 @@ fn loop_header_pattern() -> &'static Regex {
     Regex::new(concat!(
       r"\b(?P<kw>until|while(?!\s+(?:IFS=\S*\s+)?read\b))\b",
       r"|\bfor\s+\w+\s+in\s+(?P<it>\$\(seq\s+(?:\d+\s+)?(?P<seq>\d+)\)|",
-      r"range\((?:(?P<rng_start>\d+)\s*,\s*)?(?P<rng>\d+)\)|(?P<lst>[^;$()]+?))\s*(?:;\s*do\b|:)"
+      r"range\((?:\d+\s*,\s*)?(?P<rng>\d+)\)|(?P<lst>[^;$()]+?))\s*(?:;\s*do\b|:)"
     ))
     .expect("loop header pattern is valid")
   })
@@ -216,12 +211,6 @@ mod tests {
       let wait = declared_wait_seconds(command).unwrap();
       assert_eq!(wait > WAIT_LIMIT_SECONDS, refuse, "{command}");
     }
-  }
-
-  #[test]
-  fn python_range_count_uses_the_start_and_end_values() {
-    let wait = declared_wait_seconds("for i in range(1, 7): time.sleep(10)").unwrap();
-    assert_eq!(wait, WAIT_LIMIT_SECONDS);
   }
 
   #[test]

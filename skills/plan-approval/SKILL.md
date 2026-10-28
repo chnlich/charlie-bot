@@ -24,8 +24,12 @@ user-invocable: false
 ## The principle
 
 The user judges each consequence step (Execution section) before it happens.
+The line's approver judges the reading on each understanding page before any work builds on it.
+A misread request then costs one page, not a built version.
+The approver is the user, or the parent node for a child that the user handed over end to end (`prompts/task_manager.md`).
+The user usually approved that child's reading already on the parent's understanding page.
 The user also gives each explicit user approval that a rule requires.
-The agent tree judges the rest, readings and design choices included.
+The agent tree judges the rest, design choices included.
 The user reviews these judgments on the delivered product.
 
 **approval object = sections 1 and 3 + 4.1 Schema + resolved Trade-offs + entries
@@ -72,15 +76,20 @@ An understanding page lists the divergences of a request that admits several rea
 - Facts before design: when the fix follows from why something happened, settle the
   root cause before drafting and state the case for it in one block between goal and
   deliverable, each claim carrying its evidence anchor.
-- Build a small first version on the recommendation of each divergence.
-  The first version is the smallest delivery that shows each recommendation at work.
-- Share the page together with the first version.
-- When the first version holds a consequence step, such as a long job on a shared cluster,
-  share the page first. Ask for the take off of that step on the page.
-- The user answers the divergences on the first version. Each answer is ordinary feedback
-  and introduces no new approval token. An unmentioned divergence keeps its recommendation.
+- Share the page with the line's approver before any work builds on its divergences.
+  The approver then corrects a misread request before it costs a build.
+- While the page waits, continue read-only research.
+  The plan that follows then starts from read evidence.
+- When the approver is the user, list the page as one Waiting on you item that names this rule.
+  The cold read then classifies the item as an approval that a rule requires.
+- When the approver is the parent node, send the page's divergences to the parent (Scope section).
+  The parent then answers them from the reading that the user approved for the parent's line.
+- The approver answers the divergences on the page.
+  An unmentioned divergence keeps its recommendation.
+- After the approver's reply on the page, in any wording, continue the line on the answered reading.
+  One reply then releases the line, with no special approval word.
 - The plan registry, the plan verify round, and plan approval start with the plan
-  that builds the first version.
+  that follows the page.
 - External system writes follow the master prompt's External System Writes rule.
 - Before sharing, the page passes the mechanical assertions with
   `--genre understanding`. Its cold read runs after sharing, with the originating request as the
@@ -136,8 +145,10 @@ An understanding page lists the divergences of a request that admits several rea
 
 ## Approval
 
-- Carry a line's reversible work to delivery on the recommended reading.
-- When a choice between reversible options comes up, take the recommended option.
+- Carry a line's reversible work to delivery on its reading.
+  The reading is the answered understanding page, or the recommended reading when no page exists.
+- When a design choice between reversible options comes up, take the recommended option.
+  The line then moves on without a wait, and the report names each alternative.
 - A user message in a running line is feedback.
 - A request to stop, in any wording or language, or a cancel stops the line.
 - The parent node approves a child line's plan. A root line approves its own plan.
@@ -204,6 +215,8 @@ The gate judges the chain alone; its definitions live in rust/crates/runtime/sto
 - Default to acting. This is the reversibility test: if you can undo an operation
   alone at similar cost and its effect stays within what you own (reaching neither
   other people nor systems they rely on), do it without asking.
+- Hold work that builds on an unanswered understanding page, reversible work included.
+  The approver's reading check then comes before the build.
 - These kinds of step always fail the test:
   - deleting data that has no backup;
   - a message in the user's name, or a publication outside CharlieBot;

@@ -1,0 +1,15 @@
+{
+  "files": {
+    "home/credentials.yaml": "google:\n  client_id: synthetic-client\n  client_secret: synthetic-secret\n  refresh_token: synthetic-refresh\ngoogle_account_personal:\n  description: personal mailbox\n"
+  },
+  "argv": [
+    "google",
+    "list"
+  ],
+  "expect": {
+    "stdout": "default\tdefault\tready\t\t\npersonal\t\tpending\t\tpersonal mailbox\n",
+    "stderr": "",
+    "exit": 0,
+    "requests": []
+  }
+}

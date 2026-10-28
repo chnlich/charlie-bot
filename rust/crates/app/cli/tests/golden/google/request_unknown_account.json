@@ -1,0 +1,19 @@
+{
+  "files": {
+    "home/credentials.yaml": "google:\n  client_id: synthetic-client\n  client_secret: synthetic-secret\n  refresh_token: synthetic-refresh\n"
+  },
+  "argv": [
+    "google",
+    "request",
+    "GET",
+    "https://example.invalid/api",
+    "--account",
+    "missing"
+  ],
+  "expect": {
+    "stdout": "",
+    "stderr": "{\"error\": \"unknown account. Available accounts: default\"}\n",
+    "exit": 2,
+    "requests": []
+  }
+}

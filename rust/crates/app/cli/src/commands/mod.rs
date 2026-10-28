@@ -5,6 +5,7 @@ pub mod config;
 pub mod delegate;
 pub mod files;
 pub mod gc_trash;
+pub mod google;
 pub mod linear;
 pub mod schedule_trigger;
 pub mod session;

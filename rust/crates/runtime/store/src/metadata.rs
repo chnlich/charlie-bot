@@ -1,7 +1,11 @@
-//! Session and thread metadata models with Python-compatible key ordering.
+//! Session and thread metadata models with Python-compatible key ordering, and the `metadata.json` file rules every
+//! reader and writer of the file kind shares.
 
 use std::fmt;
+use std::path::Path;
 
+use anyhow::Context as _;
+use charliebot_compat::python_json;
 use charliebot_core::metadata_slot::{MetadataFile, MetadataSlot};
 use charliebot_core::pyfmt::{self, JsonStyle};
 use charliebot_core::v1_sessions::V1_SESSION_CONVERSION_GUIDANCE;
@@ -617,6 +621,104 @@ impl SessionMetadata {
   }
 }
 
+// The metadata.json file rules. Session, thread and run `metadata.json` are one file kind the store owns: the
+// readers below open, read and decode the file for every caller, so a change to the format, the location or the
+// bad-file handling happens here.
+
+/// Why a metadata file could not be read or decoded. Like `chat_events::LogReadError`, the error carries the kind of
+/// the failure, and the caller decides what a missing file and each failure mean.
+#[derive(Debug)]
+pub enum MetadataReadError {
+  /// The file could not be opened or read as text.
+  Io(std::io::Error),
+  /// The file's text is not one JSON value the reader accepts; the message is the decoder's own.
+  Json(String),
+}
+
+impl MetadataReadError {
+  /// The I/O kind of the failure. A value that is not JSON is `InvalidData`, as a read that rejects bytes reports.
+  pub fn kind(&self) -> std::io::ErrorKind {
+    match self {
+      Self::Io(error) => error.kind(),
+      Self::Json(_) => std::io::ErrorKind::InvalidData,
+    }
+  }
+}
+
+impl fmt::Display for MetadataReadError {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    match self {
+      Self::Io(error) => fmt::Display::fmt(error, f),
+      Self::Json(message) => f.write_str(message),
+    }
+  }
+}
+
+/// The one decoder of a metadata document: the JSON value its text holds.
+pub(crate) fn decode_metadata(text: &str) -> Result<Value, serde_json::Error> {
+  serde_json::from_str(text)
+}
+
+/// A metadata file's text: the file opened and read whole. A missing file is `Err` with `NotFound`, so the caller
+/// decides whether that means no document.
+pub(crate) fn read_metadata_text(path: &Path) -> Result<String, MetadataReadError> {
+  std::fs::read_to_string(path).map_err(MetadataReadError::Io)
+}
+
+/// Read a metadata file as its JSON value: the store's one decode of the file kind's text. A missing file is `Err`
+/// with `NotFound`, and a value that is not an object is still a value, so the caller decides what each means.
+pub fn read_metadata_value(path: &Path) -> Result<Value, MetadataReadError> {
+  let text = read_metadata_text(path)?;
+  decode_metadata(&text).map_err(|error| MetadataReadError::Json(error.to_string()))
+}
+
+/// Read a metadata file as its JSON object, `None` when the value is not an object. A missing file is `Err` with
+/// `NotFound`, so the caller decides whether that means no document.
+pub fn read_metadata_object(path: &Path) -> Result<Option<Map<String, Value>>, MetadataReadError> {
+  Ok(read_metadata_value(path)?.as_object().cloned())
+}
+
+/// Read one session's metadata file as typed session metadata, `None` when the file is missing. The typed read is
+/// `SessionMetadata::from_json`, which enforces the v2 session schema.
+pub fn read_session_metadata(path: &Path) -> Result<Option<SessionMetadata>, MetadataReadError> {
+  let text = match read_metadata_text(path) {
+    Ok(text) => text,
+    Err(MetadataReadError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+    Err(error) => return Err(error),
+  };
+  SessionMetadata::from_json(&text, Some(&path.to_string_lossy()))
+    .map(Some)
+    .map_err(|error| MetadataReadError::Json(error.to_string()))
+}
+
+/// `json_utils.load_json_meta`: the document at `path` under Python's `json.load`, or `None` when the file does not
+/// exist, cannot be read, or is not JSON, or when it is JSON null. Invalid UTF-8 fails the read, as Python's
+/// uncaught `UnicodeDecodeError` does, and so does a document the port cannot hold (Python's NaN, for one). A read
+/// or a parse that Python answers `None` for logs `log_event` at debug level and answers `None`.
+pub fn read_metadata_python(path: &Path, log_event: &str) -> anyhow::Result<Option<Value>> {
+  // `Path.exists()` reads a failed stat as absent, and Python logs nothing for that.
+  if std::fs::metadata(path).is_err() {
+    return Ok(None);
+  }
+  let bytes = match std::fs::read(path) {
+    Ok(bytes) => bytes,
+    Err(error) => {
+      tracing::debug!(path = %path.display(), error = %error, "{log_event}");
+      return Ok(None);
+    }
+  };
+  let text = String::from_utf8(bytes).with_context(|| format!("{} is not UTF-8", path.display()))?;
+  match python_json::loads_text(&text) {
+    Ok(Value::Null) => Ok(None),
+    Ok(value) => Ok(Some(value)),
+    Err(python_json::LoadError::Value(error)) => {
+      tracing::debug!(path = %path.display(), error = %error, "{log_event}");
+      Ok(None)
+    }
+    Err(python_json::LoadError::Unrepresentable(error)) => Err(anyhow::anyhow!("{}: {error}", path.display())),
+  }
+}
+
 fn push<T: Serialize>(fields: &mut Vec<(&'static str, Value)>, name: &'static str, value: &T) {
   fields.push((name, serde_json::to_value(value).expect("metadata fields serialize to JSON")));
 }
@@ -896,5 +998,79 @@ mod tests {
     assert!(message.contains("the conversion script was deleted"), "{message}");
     assert!(message.contains("scripts/v1_session_conversion.py"), "{message}");
     assert!(message.contains("git show d4021ce:scripts/v1_session_conversion.py"), "{message}");
+  }
+
+  /// A metadata file holding `text` in a fresh temporary directory.
+  fn metadata_with(text: &[u8]) -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    let path = dir.path().join("metadata.json");
+    std::fs::write(&path, text).expect("write the metadata file");
+    (dir, path)
+  }
+
+  #[test]
+  fn read_metadata_value_decodes_the_document_and_reports_a_missing_file_by_kind() {
+    let (_dir, path) = metadata_with(br#"{"profile": "manager"}"#);
+    let value = super::read_metadata_value(&path).unwrap();
+    assert_eq!(value["profile"], "manager");
+
+    let missing = super::read_metadata_value(&path.with_extension("absent")).unwrap_err();
+    assert_eq!(missing.kind(), std::io::ErrorKind::NotFound);
+    assert_eq!(missing.to_string(), "No such file or directory (os error 2)");
+  }
+
+  #[test]
+  fn read_metadata_value_reports_bad_text_and_an_invalid_utf8_file_as_failures() {
+    let (_dir, path) = metadata_with(b"{not json");
+    let error = super::read_metadata_value(&path).unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    assert_eq!(error.to_string(), "key must be a string at line 1 column 2");
+
+    let (_dir, path) = metadata_with(b"\xff");
+    let error = super::read_metadata_value(&path).unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    assert_eq!(error.to_string(), "stream did not contain valid UTF-8");
+  }
+
+  #[test]
+  fn read_metadata_object_answers_none_for_a_value_that_is_not_an_object() {
+    let (_dir, path) = metadata_with(b"[1, 2]");
+    assert_eq!(super::read_metadata_object(&path).unwrap(), None);
+
+    let (_dir, path) = metadata_with(br#"{"profile": "worker"}"#);
+    let object = super::read_metadata_object(&path).unwrap().expect("the object");
+    assert_eq!(object["profile"], "worker");
+  }
+
+  #[test]
+  fn read_session_metadata_answers_none_for_a_missing_file_and_fails_a_v1_file() {
+    let (_dir, path) = metadata_with(br#"{"name": "Synthetic", "profile": "manager"}"#);
+    let metadata = super::read_session_metadata(&path).unwrap().expect("the metadata");
+    assert_eq!(metadata.name, "Synthetic");
+
+    let missing = super::read_session_metadata(&path.with_extension("absent")).unwrap();
+    assert_eq!(missing, None);
+
+    let (_dir, legacy) = metadata_with(br#"{"id": "legacy"}"#);
+    let error = super::read_session_metadata(&legacy).unwrap_err();
+    assert!(error.to_string().contains("schema_version 2 profile"), "{error}");
+  }
+
+  #[test]
+  fn read_metadata_python_answers_none_for_every_python_none_and_fails_a_nan_document() {
+    let (_dir, path) = metadata_with(br#"{"profile": "manager"}"#);
+    assert_eq!(super::read_metadata_python(&path, "probe_read_failed").unwrap().unwrap()["profile"], "manager");
+
+    for text in [b"".as_slice(), b"null".as_slice(), b"{not json".as_slice()] {
+      let (_dir, path) = metadata_with(text);
+      assert_eq!(super::read_metadata_python(&path, "probe_read_failed").unwrap(), None, "{text:?}");
+    }
+    // A document that parses but is not an object is still a document.
+    let (_dir, path) = metadata_with(b"[1]");
+    assert_eq!(super::read_metadata_python(&path, "probe_read_failed").unwrap().unwrap()[0], 1);
+
+    let (_dir, path) = metadata_with(b"NaN");
+    let error = super::read_metadata_python(&path, "probe_read_failed").unwrap_err();
+    assert_eq!(error.to_string(), format!("{}: JSON value NaN is not representable", path.display()));
   }
 }

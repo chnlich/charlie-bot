@@ -1217,6 +1217,8 @@ dependencies = [
 name = "charliebot-store"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "charliebot-compat",
  "charliebot-core",
  "charliebot-registry",
  "charliebot-tasks",

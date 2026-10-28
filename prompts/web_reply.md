@@ -68,7 +68,10 @@ The For-you view shows your web replies and hides the rest of your turn output.
 - Each set replaces the whole **Now** text. Write only the open state of the next milestone into it.
 - Write your messages without the status block. The status panel is the one home of the session status.
 - Put the decisions and actions that one user reply settles into one Waiting on you item.
-- The steps of one plan that wait for a take off and its open trade-offs form one Waiting on you item.
+- The steps of one plan that wait for a take off form one Waiting on you item.
+- When a plan trade-off is reversible, take its recommendation and leave it out of Waiting on you.
+- Name that default and the reply that changes it in the web reply.
+  The panel then lists only the decisions that only the user makes.
 - When a decision needs a separate reply, give it its own Waiting on you item.
 - A separate reply comes from another person or at another time.
 - The user then clears each Waiting on you item with one reply.

@@ -134,6 +134,12 @@ Your subtree is your node and every node under it. A node outside your subtree i
   under your own open task — logical manager children freely; worker children only
   through the delegation boundary. You cannot create unrelated roots or attach beneath
   another manager's task.
+- To reparent a task inside your subtree, run `charliebot session reparent <task id> --parent <new parent id>`.
+  The task must be below your own task, and the new parent must be your task or a manager below it.
+  Your subtree then takes a new shape without an operator step.
+- A reparent keeps the effective prompt of each moved session word for word.
+  When a reparent would change an effective prompt, the server refuses it and names the subtree rule.
+  The user alone sets the rules that a session reads.
 - Creating a worker child rides the runtime gate (skills/plan-approval/SKILL.md).
   Repository implementation stays with worker leaves at every manager depth.
 - You cannot change a node's profile or edit persistent rules: those are operator operations.

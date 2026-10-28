@@ -155,6 +155,29 @@ Some proxied backends (e.g. an opencode GLM endpoint) cap generation far below t
 
 ---
 
+## Task Reparent
+
+A manager reshapes its own subtree with `charliebot session reparent <task id> --parent <new parent id>`.
+The command sends `PATCH /api/sessions/{task id}` with the one field `task_parent_id`.
+
+- A run-token caller reparents a task from below its own task to its own task or a manager below it.
+  The server answers other targets with 403, so an agent rearranges only its own subtree.
+- A run-token PATCH that changes more than `task_parent_id` gets the operator-credentials refusal.
+  Profiles, task records and rules stay with the operator.
+- The structural refusals of an operator reparent apply to an agent reparent unchanged (409).
+- A reparent keeps the effective prompt (the managed instructions a run receives) of each moved session word for word.
+  When the reparent drops one subtree rule from above the task, the server puts that rule on the moved task.
+  This carry needs a moved task without its own subtree rule.
+  The server refuses (409) a reparent that adds a subtree rule or drops a rule it cannot carry.
+  The user alone sets the rules that a session reads.
+- A carried rule changes the prompt hash, so the next turn of each moved manager session starts a fresh native conversation.
+- Each reparent appends a `task_reparented` fact to the moved task's chat events.
+  The fact names the actor (`agent` or `user`) and the calling session.
+- To find who reparented a task, run `jq -c 'select(.type=="task_reparented")' $CHARLIEBOT_HOME/sessions/<task id>/data/chat_events.jsonl`.
+  The moved task's own history then answers the question.
+
+---
+
 ## Plan Registry
 
 `charliebot plan` (present/amend/approve/close): `amend` rejects duplicate artifact filenames — each version is a new `plan_NN_vK.html`. A delivered plan stays open; `close` covers superseded/abandoned/completed, and `approved` is the terminal delivery state.

@@ -25,6 +25,7 @@ use charliebot_core::paths;
 use charliebot_core::pyfmt::str_repr;
 use charliebot_core::pyregex::compile_python_regex;
 use charliebot_core::repo_root;
+use charliebot_store::chat_events::{self, LineRule, LogReadError};
 use charliebot_store::layout;
 use clap::{CommandFactory, FromArgMatches, Parser};
 use fancy_regex::Regex;
@@ -124,16 +125,17 @@ fn hook_json(part: &str) -> Value {
 // ---------------------------------------------------------------------------
 
 fn latest_skill_reads(events_path: &Path) -> Result<Vec<SkillRead>, String> {
-  let bytes = std::fs::read(events_path).map_err(|error| python_os_error(&paths::display(events_path), &error))?;
-  let text = decode_utf8(&bytes)?;
   // Python's file iteration hands json.loads each physical line with its terminator, so the JSON
-  // error positions see the same string here (`split_inclusive` keeps it).
+  // error positions see the same string here (`Terminated` keeps it).
   // Python's `latest` dict keeps a name's first position and overwrites its value on a later read.
   // Reads from one event share a key, and the stable sort keeps dict order for them, so a `Vec`
   // in first-seen order is the same answer; a `HashMap` would reorder them from run to run.
   let mut latest: Vec<SkillRead> = Vec::new();
-  for (order, line) in text.split_inclusive('\n').enumerate() {
-    let event = serde_json::from_str::<Value>(line).map_err(|error| python_json_error(line, &error))?;
+  let lines =
+    chat_events::read_lines(events_path, LineRule::Terminated).map_err(|error| log_read_error(events_path, error))?;
+  for line in lines {
+    let line = line.map_err(|error| log_read_error(events_path, error))?;
+    let event = line.decode().map_err(|error| python_json_error(&line.text, &error))?;
     let Some(message) = assistant_message(&event) else { continue };
     let Some(content) = message.get("content").and_then(Value::as_array) else { continue };
     for block in content {
@@ -142,7 +144,7 @@ fn latest_skill_reads(events_path: &Path) -> Result<Vec<SkillRead>, String> {
         continue;
       }
       for (name, named_path, command_cwd) in reads_from_tool(block) {
-        let read = SkillRead { read_at: timestamp(&event)?, order, name, named_path, command_cwd };
+        let read = SkillRead { read_at: timestamp(&event)?, order: line.number, name, named_path, command_cwd };
         match latest.iter_mut().find(|previous| previous.name == read.name) {
           Some(previous) => {
             if (read.read_at, read.order) > (previous.read_at, previous.order) {
@@ -360,6 +362,14 @@ fn python_newlines(text: &str) -> String {
 /// `str(OSError)` with a filename: `[Errno N] <strerror>: '<path>'`. The delete paths of
 /// `gc-trash` are the one place Rust cannot carry Python's inner filename; here the failing path
 /// is always the one the command opened.
+/// The error text of a chat log that could not be read, in the words Python gives for the same failure.
+fn log_read_error(events_path: &Path, error: LogReadError) -> String {
+  match error {
+    LogReadError::Io(error) | LogReadError::Line { error, .. } => python_os_error(&paths::display(events_path), &error),
+    LogReadError::Utf8(error) => python_utf8_error(error.as_bytes(), &error.utf8_error()),
+  }
+}
+
 fn python_os_error(path: &str, error: &std::io::Error) -> String {
   match error.raw_os_error() {
     Some(errno) => {

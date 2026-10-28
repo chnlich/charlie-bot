@@ -24,6 +24,7 @@ use charliebot_core::event_types;
 use charliebot_core::proc_identity;
 use charliebot_core::pyfmt::{self, JsonStyle};
 use charliebot_session_api::api;
+use charliebot_store::chat_events::{self, LineRule};
 use charliebot_store::layout;
 use charliebot_store::run_records;
 use regex::Regex;
@@ -658,19 +659,65 @@ fn timeout_error_line(text: &str) -> Option<String> {
   text.lines().map(str::trim).find(|line| line.contains("timed out after") && line.contains("git")).map(str::to_string)
 }
 
-/// The first git timeout the trial server reported for the delegation, as its sessions recorded it.
-fn delegation_error_text(sessions: &Path, manager_id: &str) -> Result<Option<String>, String> {
+/// The chat event logs a delegation's error can be in: the manager's, then each session's, in name order.
+fn chat_event_paths(sessions: &Path, manager_id: &str) -> Result<Vec<PathBuf>, String> {
   let mut paths = vec![layout::chat_events_path(&sessions.join(manager_id))];
   let mut own = if sessions.is_dir() { directory_entries(&sessions.to_string_lossy())? } else { Vec::new() };
   own.sort();
   paths.extend(own.iter().map(|directory| layout::chat_events_path(directory)));
+  Ok(paths)
+}
+
+/// The first git timeout that a chat event log names, read lossily.
+fn chat_timeout_text(path: &Path) -> Result<Option<String>, String> {
+  let lines =
+    chat_events::read_lines(path, LineRule::LossyLines).map_err(|error| format!("{}: {error}", path.display()))?;
+  for line in lines {
+    let line = line.map_err(|error| format!("{}: {error}", path.display()))?;
+    if !line.text.contains("timed out after") {
+      continue;
+    }
+    if let Some(found) = event_timeout(&line.text, &line.decode()) {
+      return Ok(Some(found));
+    }
+  }
+  Ok(None)
+}
+
+/// The git timeout that one event line names: a line that does not parse is its own candidate, and a parsed line gives
+/// each of its strings that names a timeout. The first candidate with a timeout line wins, joined and cut to 400 chars.
+fn event_timeout(line: &str, parsed: &Result<Value, serde_json::Error>) -> Option<String> {
+  let candidates: Vec<&str> = match parsed {
+    Ok(value) => {
+      let mut strings = Vec::new();
+      strings_in(value, &mut strings);
+      strings.into_iter().filter(|text| text.contains("timed out after")).collect()
+    }
+    Err(_) => vec![line],
+  };
+  candidates.into_iter().find_map(timeout_error_line).map(|found| {
+    let joined = found.split_whitespace().collect::<Vec<_>>().join(" ");
+    joined.chars().take(400).collect()
+  })
+}
+
+/// The first git timeout the trial server reported for the delegation, as its sessions recorded it.
+fn delegation_error_text(sessions: &Path, manager_id: &str) -> Result<Option<String>, String> {
+  let chat_paths = chat_event_paths(sessions, manager_id)?;
   let mut nested = Vec::new();
   collect_named_files(sessions, run_records::RUN_EVENTS_NAME, &mut nested)?;
   nested.sort();
-  paths.extend(nested);
 
   let mut seen: BTreeSet<PathBuf> = BTreeSet::new();
-  for path in paths {
+  for path in chat_paths {
+    if !seen.insert(path.clone()) || !path.is_file() {
+      continue;
+    }
+    if let Some(found) = chat_timeout_text(&path)? {
+      return Ok(Some(found));
+    }
+  }
+  for path in nested {
     if !seen.insert(path.clone()) || !path.is_file() {
       continue;
     }
@@ -679,20 +726,8 @@ fn delegation_error_text(sessions: &Path, manager_id: &str) -> Result<Option<Str
       if !line.contains("timed out after") {
         continue;
       }
-      let parsed = serde_json::from_str::<Value>(line);
-      let candidates: Vec<&str> = match &parsed {
-        Ok(value) => {
-          let mut strings = Vec::new();
-          strings_in(value, &mut strings);
-          strings.into_iter().filter(|text| text.contains("timed out after")).collect()
-        }
-        Err(_) => vec![line],
-      };
-      for candidate in candidates {
-        if let Some(found) = timeout_error_line(candidate) {
-          let joined = found.split_whitespace().collect::<Vec<_>>().join(" ");
-          return Ok(Some(joined.chars().take(400).collect()));
-        }
+      if let Some(found) = event_timeout(line, &serde_json::from_str::<Value>(line)) {
+        return Ok(Some(found));
       }
     }
   }
@@ -1394,7 +1429,7 @@ fn self_test(args: &[String]) -> Result<i32, String> {
   fs::create_dir_all(layout::data_dir(&session)).map_err(|error| error.to_string())?;
   let line = json!({"id": "report-1", "type": event_types::CHILD_REPORT, "outcome": "failed",
     "summary": "run run-a failed: git worktree add timed out after 0.3s for charliebot/task-x\nsee the worker log"});
-  fs::write(layout::chat_events_path(&session), format!("{line}\n")).map_err(|error| error.to_string())?;
+  chat_events::append_event(&layout::chat_events_path(&session), &line).map_err(|error| error.to_string())?;
   let reported = delegation_error_text(sessions, "manager")?;
   let wanted = "run run-a failed: git worktree add timed out after 0.3s for charliebot/task-x";
   if reported.as_deref() != Some(wanted) {

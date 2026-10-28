@@ -22,6 +22,7 @@ use charliebot_core::config;
 use charliebot_core::event_types;
 use charliebot_core::pyfmt::{self, JsonStyle};
 use charliebot_session_api::api as session_routes;
+use charliebot_store::chat_events::{self, LineRule};
 use charliebot_store::{control_events, layout};
 use charliebot_tasks::routes as task_routes;
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
@@ -444,11 +445,10 @@ fn send(args: &SendArgs) -> Result<(), CliExit> {
 fn find_local_task_close(home: &Path, task_id: &str, request_id: &str) -> Option<Value> {
   let session_dir = config::sessions_dir_in(home).join(task_id);
   let events_path = layout::chat_events_path(&session_dir);
-  let text = std::fs::read_to_string(events_path).ok()?;
   let closed_id = control_events::stable_close_event_id(task_id, request_id);
   let mut deferred: Option<Value> = None;
-  for line in text.lines() {
-    let Ok(event) = serde_json::from_str::<Value>(line) else { return None };
+  for line in chat_events::read_lines(&events_path, LineRule::Lines).ok()? {
+    let event = line.ok()?.decode().ok()?;
     let object = event.as_object()?;
     let event_type = object.get("type").and_then(Value::as_str);
     if event_type == Some(event_types::TASK_CLOSED)

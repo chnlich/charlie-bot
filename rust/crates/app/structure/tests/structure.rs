@@ -1405,13 +1405,17 @@ fn the_event_names_of_event_types_are_protected() {
       ("crates/infra/core/src/lib.rs", "pub mod event_types;\n".to_string()),
       (
         "crates/infra/core/src/event_types.rs",
-        "pub const CHILD_REPORT: &str = \"child_report\";\npub const TOOL_USE: &str = \"tool_use\";\npub const USER: &str = \"user\";\n"
+        "pub const CHILD_REPORT: &str = \"child_report\";\n\
+         pub const TOOL_USE: &str = \"tool_use\";\n\
+         pub const USER: &str = \"user\";\n"
           .to_string(),
       ),
       ("crates/features/writer/Cargo.toml", crate_manifest("writer", &[], &[])),
       (
         "crates/features/writer/src/lib.rs",
-        "pub fn reported() -> &'static str {\n  \"child_report\"\n}\n\npub fn tool_output() -> &'static str {\n  \"tool_use\"\n}\n\npub fn word() -> &'static str {\n  \"user\"\n}\n"
+        "pub fn reported() -> &'static str {\n  \"child_report\"\n}\n\n\
+         pub fn tool_output() -> &'static str {\n  \"tool_use\"\n}\n\n\
+         pub fn word() -> &'static str {\n  \"user\"\n}\n"
           .to_string(),
       ),
     ],

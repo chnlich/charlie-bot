@@ -297,7 +297,14 @@ impl TaskExecutionAdapter {
       let state = facts.task_state()?;
       if state != "open" {
         let reason = format!("task {session_id} is {state}");
-        tracing::info!(target: "charliebot_tasks", session_id, run_id, reason, "{}", event_types::RUN_LAUNCH_WITHHELD);
+        tracing::info!(
+          target: "charliebot_tasks",
+          session_id,
+          run_id,
+          reason,
+          "{}",
+          event_types::RUN_LAUNCH_WITHHELD
+        );
         withheld = Some((reason, true));
       } else {
         self.features.store.require_open_ancestry(session_id)?;
@@ -310,11 +317,25 @@ impl TaskExecutionAdapter {
         }
         if facts.runs.stop_requested(run_id, None) {
           let reason = format!("run {run_id} has a durable stop request");
-          tracing::info!(target: "charliebot_tasks", session_id, run_id, reason, "{}", event_types::RUN_LAUNCH_WITHHELD);
+          tracing::info!(
+            target: "charliebot_tasks",
+            session_id,
+            run_id,
+            reason,
+            "{}",
+            event_types::RUN_LAUNCH_WITHHELD
+          );
           withheld = Some((reason, false));
         } else if worker_run {
           if let Some(reason) = disk_headroom_withhold_reason(cfg.as_ref())? {
-            tracing::info!(target: "charliebot_tasks", session_id, run_id, reason, "{}", event_types::RUN_LAUNCH_WITHHELD);
+            tracing::info!(
+              target: "charliebot_tasks",
+              session_id,
+              run_id,
+              reason,
+              "{}",
+              event_types::RUN_LAUNCH_WITHHELD
+            );
             withheld = Some((reason, false));
           } else {
             withheld = None;

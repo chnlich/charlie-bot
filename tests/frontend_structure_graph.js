@@ -1,4 +1,4 @@
-// Dependency graph of the pages that tests/test_frontend_structure.py checks. Prints one JSON
+// Dependency graph of the pages that tests/frontend_structure.test.js checks. Prints one JSON
 // object: {packages, pages: {chat}} with, per page, the templates, the nodes in
 // page order, the edges (using node -> defining node -> [names]), the strongly connected
 // components of two or more nodes, the global names defined in more than one node, and the load

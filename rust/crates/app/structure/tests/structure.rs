@@ -765,6 +765,7 @@ fn cycle_failures(workspace: &Workspace) -> Vec<String> {
 // The owner rule.
 
 /// A name that one owner crate defines. A production literal that spells the name in another crate fails.
+#[derive(Clone, Copy)]
 struct OwnerRow {
   name: &'static str,
   /// The owner crate's directory under `rust/crates`.
@@ -776,6 +777,57 @@ struct OwnerRow {
 /// The names with an owner. A task that fixes the sites of a name adds the name's row in the same commit, so the rule
 /// stays green at every commit.
 const OWNER_TABLE: &[OwnerRow] = &[];
+
+/// The event names that the output formats of Claude Code, Codex and Charlie Code also use. A backend spelling one
+/// of them may be writing that output, so the owner rule cannot tell the two apart, and these stay unprotected.
+const EXTERNAL_EVENT_NAMES: [&str; 17] = [
+  "tool_use",
+  "tool_result",
+  "input_tokens",
+  "output_tokens",
+  "cache_read_input_tokens",
+  "cache_creation_input_tokens",
+  "total_cost_usd",
+  "agent_message",
+  "compact_boundary",
+  "compact_metadata",
+  "pre_tokens",
+  "post_tokens",
+  "rate_limit_event",
+  "rate_limit_info",
+  "context_tokens",
+  "context_full",
+  "command_progress",
+];
+
+/// The owner rows for the event names: the production literal values of `infra/core`'s `event_types.rs`, each owned
+/// by `infra/core`, so a new const there is protected with no table edit. A value without `_` stays unprotected: it
+/// is a single word with other meanings in the same code.
+fn event_name_rows(workspace: &'static Workspace) -> Vec<OwnerRow> {
+  const EVENT_NAME_HINT: &str = "Reference the const in `charliebot_core::event_types` that holds this name.";
+  let krate = workspace
+    .crates
+    .iter()
+    .find(|item| item.key() == "infra/core")
+    .unwrap_or_else(|| panic!("infra/core holds the event names; the owner rule has no owner without it"));
+  let module = krate
+    .targets
+    .iter()
+    .flat_map(|target| target.modules.values())
+    .find(|module| module.file.ends_with("event_types.rs"))
+    .unwrap_or_else(|| panic!("infra/core holds event_types.rs; the owner rule has no owner without it"));
+  let mut names: Vec<&str> = module
+    .literals
+    .iter()
+    .map(|literal| literal.value.as_str())
+    .filter(|value| {
+      !value.contains(char::is_whitespace) && value.contains('_') && !EXTERNAL_EVENT_NAMES.contains(value)
+    })
+    .collect();
+  names.sort_unstable();
+  names.dedup();
+  names.into_iter().map(|name| OwnerRow { name, owner: "infra/core", hint: EVENT_NAME_HINT }).collect()
+}
 
 /// A class of names that one crate must hold. A production literal that `name_of` maps to a name counts toward the
 /// crates that spell that name; a name spelled in two or more crates fails.
@@ -945,7 +997,9 @@ fn no_production_path_attribute_reaches_outside_its_crate() {
 
 #[test]
 fn no_name_is_spelled_outside_its_owner() {
-  let failures = owner_failures(real_workspace(), OWNER_TABLE, SPELLING_CLASSES);
+  let workspace = real_workspace();
+  let rows: Vec<OwnerRow> = OWNER_TABLE.iter().copied().chain(event_name_rows(workspace)).collect();
+  let failures = owner_failures(workspace, &rows, SPELLING_CLASSES);
   assert!(failures.is_empty(), "{}", failures.join("\n\n"));
 }
 
@@ -1333,6 +1387,52 @@ mod tests {
       .join("\n"),
     ],
     "the owner rule finds each break with its sites and hint, and passes the forms it allows"
+  );
+}
+
+/// The event names of `event_types.rs` become owner rows with no table edit: the derived set holds the value with
+/// `_`, and none of the names the backend output formats also use nor a single word. A writer crate spelling the
+/// protected name fails with its `file:line` and hint; its spellings of the unprotected ones pass.
+#[test]
+fn the_event_names_of_event_types_are_protected() {
+  let dir = tempfile::tempdir().expect("create a temporary directory");
+  let root = dir.path();
+  write_tree(
+    root,
+    &[
+      ("Cargo.toml", workspace_manifest(&["crates/infra/core", "crates/features/writer"])),
+      ("crates/infra/core/Cargo.toml", crate_manifest("core-crate", &[], &[])),
+      ("crates/infra/core/src/lib.rs", "pub mod event_types;\n".to_string()),
+      (
+        "crates/infra/core/src/event_types.rs",
+        "pub const CHILD_REPORT: &str = \"child_report\";\npub const TOOL_USE: &str = \"tool_use\";\npub const USER: &str = \"user\";\n"
+          .to_string(),
+      ),
+      ("crates/features/writer/Cargo.toml", crate_manifest("writer", &[], &[])),
+      (
+        "crates/features/writer/src/lib.rs",
+        "pub fn reported() -> &'static str {\n  \"child_report\"\n}\n\npub fn tool_output() -> &'static str {\n  \"tool_use\"\n}\n\npub fn word() -> &'static str {\n  \"user\"\n}\n"
+          .to_string(),
+      ),
+    ],
+  );
+  // The rows borrow the literal values, so the workspace outlives the test the way the real one does.
+  let workspace: &'static Workspace = Box::leak(Box::new(load_workspace(root)));
+  let rows = event_name_rows(workspace);
+
+  assert_eq!(
+    rows.iter().map(|row| row.name).collect::<Vec<_>>(),
+    ["child_report"],
+    "the value with `_` that the backend output formats do not use is the only protected name"
+  );
+  assert_eq!(
+    owner_failures(workspace, &rows, &[]),
+    vec![
+      "child_report: owner infra/core; spelled outside it at:\n  crates/features/writer/src/lib.rs:2\n\
+       Reference the const in `charliebot_core::event_types` that holds this name."
+        .to_string()
+    ],
+    "the owner rule fails the spelled name with its file:line and hint, and passes the unprotected words"
   );
 }
 

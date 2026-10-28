@@ -1088,33 +1088,39 @@ const FORMAT_TABLE: &[FormatRow] = &[
     owner: "runtime/store",
     names: &["metadata_path", "SESSION_METADATA_NAME", "METADATA_FILE_NAME"],
     hint: "Read it through `charliebot_store::metadata` (`read_metadata_value`, `read_metadata_object`, \
-           `read_session_metadata`), and write it through the store's metadata saves.",
+           `read_session_metadata`, `read_metadata_python`), and write it through the store's `persist_*` saves.",
   },
   FormatRow {
     kind: "thread metadata",
     owner: "runtime/store",
-    names: &["METADATA_FILE_NAME"],
-    hint: "Read it through `charliebot_store::metadata` (`read_metadata_value`, `read_metadata_object`), and write it \
-           through the store's metadata saves.",
+    names: &["thread_metadata_path", "METADATA_FILE_NAME"],
+    hint: "Read it through `Store::read_thread_metadata` or `charliebot_store::metadata::read_metadata_object`, and \
+           write it through `Store::write_thread_metadata`.",
   },
   FormatRow {
     kind: "run metadata",
     owner: "runtime/store",
-    names: &["RUN_METADATA_NAME", "run_metadata_path", "METADATA_NAME"],
+    names: &["RUN_METADATA_NAME", "METADATA_NAME", "run_metadata_path"],
     hint: "Read it through `charliebot_store::run_records` (`read_run_metadata`, `read_run_record_file`), and write it \
            through `write_run_metadata` or the store's run-record save.",
   },
   FormatRow {
     kind: "improve loop state",
     owner: "features/improve",
-    names: &["STATE_FILE", "read_loop_state", "load_loop_state"],
-    hint: "Read it through `charliebot_improve::command` (`read_loop_state`, `load_loop_state`), and write it through \
-           `save_loop_state`.",
+    names: &["STATE_FILE", "read_loop_state_value", "load_loop_state", "save_loop_state"],
+    hint: "Read it through `charliebot_improve::command` (`read_loop_state_value`, `load_loop_state`), and write it \
+           through `save_loop_state`.",
   },
   FormatRow {
     kind: "OpenCode server record",
     owner: "backends/opencode",
-    names: &["write_server_record", "read_server_record", "write_server_exit_reason"],
+    names: &[
+      "SERVER_DIRECTORY_NAME",
+      "server_directory",
+      "write_server_record",
+      "read_server_record",
+      "write_server_exit_reason",
+    ],
     hint: "Read it through `relay::read_server_record`, and write it through `relay::write_server_record` or \
            `write_server_exit_reason`.",
   },

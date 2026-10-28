@@ -1142,7 +1142,7 @@ mod tests {
 
   // Python: tests/test_claude_idle_compaction.py:186.
   #[tokio::test]
-  async fn idle_argv_equals_the_master_turn_argv_for_the_same_option_and_account() {
+  async fn idle_argv_matches_the_master_turn_except_for_wait_guard_and_json_mode() {
     let root = tempfile::tempdir().unwrap();
     let account_dir = root.path().join("account-a");
     test_fixtures::write_login(&account_dir);
@@ -1156,7 +1156,7 @@ mod tests {
     )));
     let meta = test_fixtures::manager_session(
       &features,
-      "idle_argv_equals_the_master_turn_argv_for_the_same_option_and_account",
+      "idle_argv_matches_the_master_turn_except_for_wait_guard_and_json_mode",
       "fable",
       Some("acct-a"),
       CC_SESSION_ID,
@@ -1212,9 +1212,17 @@ mod tests {
     )
     .unwrap();
 
-    let format_index = expected.iter().position(|value| value == "--input-format").unwrap();
+    let settings_index = expected.iter().position(|value| value == "--settings").unwrap();
+    let turn_settings: Value = serde_json::from_str(&expected[settings_index + 1]).unwrap();
+    let idle_settings: Value = serde_json::from_str(&argv[settings_index + 1]).unwrap();
+    assert!(turn_settings.pointer("/hooks/PreToolUse").is_some());
+    assert!(idle_settings.pointer("/hooks/PreToolUse").is_none());
+
+    let mut comparable_expected = expected.clone();
+    comparable_expected[settings_index + 1] = idle_settings.to_string();
+    let format_index = comparable_expected.iter().position(|value| value == "--input-format").unwrap();
     assert_eq!(&expected[format_index..format_index + 3], &["--input-format", "stream-json", "--replay-user-messages"]);
     assert!(!argv.iter().any(|value| value == "--input-format"));
-    assert_eq!(argv, [&expected[..format_index], &expected[format_index + 3..]].concat());
+    assert_eq!(argv, [&comparable_expected[..format_index], &comparable_expected[format_index + 3..]].concat());
   }
 }

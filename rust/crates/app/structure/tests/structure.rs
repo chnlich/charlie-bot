@@ -44,8 +44,16 @@ const BACKEND_VARIANTS: [&str; 2] = ["anthropic_compatible", "openai_compatible"
 const CHAT_CHANNELS: [&str; 2] = ["slack", "discord"];
 
 /// The runtime layers, keyed by the crate's directory name under `rust/crates/runtime`.
-const RUNTIME_LAYERS: [(&str, usize); 7] =
-  [("store", 1), ("registry", 2), ("usage", 3), ("agents", 4), ("tasks", 5), ("triggers", 6), ("session-api", 7)];
+const RUNTIME_LAYERS: [(&str, usize); 8] = [
+  ("store", 1),
+  ("registry", 2),
+  ("user_text_checks", 3),
+  ("usage", 3),
+  ("agents", 4),
+  ("tasks", 5),
+  ("triggers", 6),
+  ("session-api", 7),
+];
 
 const DEPEND_ON_THE_RUNTIME: &str = "Depend on the registry: the imported crate registers its implementation, and the \
                                     importer looks it up there.";
@@ -1504,7 +1512,10 @@ fn the_checks_find_each_break() {
   );
   assert_eq!(
     stale_layer_failures(&groups),
-    vec!["session-api: names no runtime module; remove it from the layer table.".to_string()],
+    vec![
+      "user_text_checks: names no runtime module; remove it from the layer table.".to_string(),
+      "session-api: names no runtime module; remove it from the layer table.".to_string(),
+    ],
     "case 5: the layer table names a crate that does not exist"
   );
 

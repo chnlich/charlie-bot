@@ -34,7 +34,7 @@
     }
   ],
   "expect": {
-    "stdout": "ok byte-integrity\nok style-verbatim\nok sections-numbered\nok fork-open-shape\nok fork-explainer\nok fact-anchored\nok req-chips 6 requirement chips carry a gloss\nok run-stated no numeric table cell\nok ordinal-named 0 external labels named in reach\n",
+    "stdout": "ok byte-integrity\nok style-verbatim\nok sections-numbered\nok fork-open-shape\nok fork-explainer\nok fact-anchored\nok req-chips 6 requirement chips carry a gloss\nok run-stated no numeric table cell\nok ordinal-named 0 external labels named in reach\nok tracker-id-nearby no violations\nok session-linked no violations\nok link-renderable no violations\n",
     "stderr": "{\"error\": \"delegation blocked\", \"code\": \"server_error\", \"effect\": \"none\"}\n",
     "exit": 1,
     "requests": [

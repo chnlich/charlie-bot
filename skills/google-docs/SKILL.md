@@ -1,7 +1,7 @@
 ---
 name: google-docs
 description: This skill should be used when the user asks to read, create, or edit Google Docs documents, or manage document content through the Google Docs and Drive APIs. This skill should also be used when the user asks to import a PPTX deck into Google Slides.
-version: 1.0.0
+version: 1.1.0
 ---
 
 # Google Docs
@@ -18,24 +18,15 @@ The `google` section can set `docs_default_folder_id` for the default account.
 
 ## API Reference
 
-All Google API requests use:
+Send every Google API request through `charliebot google request`.
+The command mints the selected account's access token inside its own process, so the token never appears in a command, in the output or in a run record.
+A JSON body goes in `--json`, which sets `Content-Type: application/json`; `--data-file <path>` reads the body from a file instead.
+The command prints the response body on stdout and exits 0 for an HTTP 2xx answer; another status exits 1.
 
-```bash
--H "Authorization: Bearer $ACCESS_TOKEN"
--H "Content-Type: application/json"
-```
+### Choose the Account
 
-Use the selected account's access token before making any calls.
-
-### Refresh an Access Token
-
-Choose the account using the **Accounts** section in the **google-oauth** skill, then mint its access token:
-
-```bash
-ACCESS_TOKEN=$(python3 skills/google-oauth/scripts/google_account.py token --account <name>)
-```
-
-For the default account, omit `--account`.
+Choose the account using the **Accounts** section in the **google-oauth** skill.
+Pass `--account <name>` on every request, and omit `--account` for the default account.
 
 If the refresh token is invalid or revoked, follow **Add or Re-Authorize an Account** in the **google-oauth** skill: `skills/google-oauth/SKILL.md`.
 
@@ -44,10 +35,7 @@ If the refresh token is invalid or revoked, follow **Add or Re-Authorize an Acco
 Docs API create defaults to the user's root folder:
 
 ```bash
-curl -s -X POST https://docs.googleapis.com/v1/documents \
-  -H "Authorization: Bearer $ACCESS_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"title":"Document Title"}'
+charliebot google request POST https://docs.googleapis.com/v1/documents --json '{"title":"Document Title"}'
 ```
 
 After a successful create, return the editor URL:
@@ -59,8 +47,7 @@ If you need explicit folder placement, use the Drive API instead. Docs API creat
 ### Read a Document
 
 ```bash
-curl -s "https://docs.googleapis.com/v1/documents/DOCUMENT_ID" \
-  -H "Authorization: Bearer $ACCESS_TOKEN"
+charliebot google request GET "https://docs.googleapis.com/v1/documents/DOCUMENT_ID"
 ```
 
 To turn `documents.get` JSON into readable plain text, walk `body.content[]`, then each `paragraph.elements[]`, and concatenate any `textRun.content` values. Preserve paragraph breaks when a paragraph ends; ignore non-paragraph structural elements unless you need tables, headers, or footnotes.
@@ -70,19 +57,8 @@ To turn `documents.get` JSON into readable plain text, walk `body.content[]`, th
 Use `documents.batchUpdate` with `insertText` requests:
 
 ```bash
-curl -s -X POST "https://docs.googleapis.com/v1/documents/DOCUMENT_ID:batchUpdate" \
-  -H "Authorization: Bearer $ACCESS_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "requests": [
-      {
-        "insertText": {
-          "location": { "index": 1 },
-          "text": "Hello, world\n"
-        }
-      }
-    ]
-  }'
+charliebot google request POST "https://docs.googleapis.com/v1/documents/DOCUMENT_ID:batchUpdate" \
+  --json '{"requests":[{"insertText":{"location":{"index":1},"text":"Hello, world\n"}}]}'
 ```
 
 For appending to an existing doc, fetch the current document first and insert at the last body `endIndex - 1`. For a freshly created empty doc, `index: 1` is the usual insertion point.
@@ -148,7 +124,7 @@ Choose an account in the **Accounts** section and follow **Add or Re-Authorize a
 ## Workflow
 
 1. Choose the account that matches the request using the **Accounts** section in the **google-oauth** skill.
-2. Mint its access token with `python3 skills/google-oauth/scripts/google_account.py token --account <name>`. Omit `--account` for the default account.
+2. Send each request with `charliebot google request <METHOD> <URL> [--json <body>] --account <name>`. Omit `--account` for the default account.
 3. For reads, call `documents.get` and convert paragraph text runs to plain text when you only need readable content.
 4. For writes, show the exact planned content first and wait for explicit `take off` approval.
 5. After approval, create or update via Docs API, and use Drive API only when folder placement or moving is required. After a successful create, return `https://docs.google.com/document/d/{documentId}/edit`.

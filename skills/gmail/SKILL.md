@@ -3,7 +3,7 @@ name: gmail
 description: >
   Use when the user asks to read, search, or list Gmail messages, threads, or labels.
   Readonly access only — no sending or modifying.
-version: 1.0.0
+version: 1.1.0
 ---
 
 # Gmail
@@ -16,41 +16,31 @@ The shared Google credential configuration is defined once in the **google-oauth
 
 ## API Reference
 
-All Gmail API requests use:
+Send every Gmail API request through `charliebot google request`.
+The command mints the selected account's access token inside its own process, so the token never appears in a command, in the output or in a run record.
+The command prints the response body on stdout and exits 0 for an HTTP 2xx answer; another status exits 1.
 
-```bash
--H "Authorization: Bearer $ACCESS_TOKEN"
-```
+### Choose the Account
 
-### Refresh an Access Token
-
-Choose the account using the **Accounts** section in the **google-oauth** skill, then mint its access token:
-
-```bash
-ACCESS_TOKEN=$(python3 skills/google-oauth/scripts/google_account.py token --account <name>)
-```
-
-For the default account, omit `--account`.
+Choose the account using the **Accounts** section in the **google-oauth** skill.
+Pass `--account <name>` on every request, and omit `--account` for the default account.
 
 ### List Messages
 
 ```bash
-curl -s "https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=10" \
-  -H "Authorization: Bearer $ACCESS_TOKEN"
+charliebot google request GET "https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=10"
 ```
 
 With search query (Gmail search syntax):
 
 ```bash
-curl -s "https://gmail.googleapis.com/gmail/v1/users/me/messages?q=from%3Aexample%40gmail.com&maxResults=10" \
-  -H "Authorization: Bearer $ACCESS_TOKEN"
+charliebot google request GET "https://gmail.googleapis.com/gmail/v1/users/me/messages?q=from%3Aexample%40gmail.com&maxResults=10" --account <name>
 ```
 
 ### Read a Message
 
 ```bash
-curl -s "https://gmail.googleapis.com/gmail/v1/users/me/messages/MESSAGE_ID?format=full" \
-  -H "Authorization: Bearer $ACCESS_TOKEN"
+charliebot google request GET "https://gmail.googleapis.com/gmail/v1/users/me/messages/MESSAGE_ID?format=full"
 ```
 
 To extract readable text from the response:
@@ -61,8 +51,7 @@ To extract readable text from the response:
 ### Read a Thread
 
 ```bash
-curl -s "https://gmail.googleapis.com/gmail/v1/users/me/threads/THREAD_ID?format=full" \
-  -H "Authorization: Bearer $ACCESS_TOKEN"
+charliebot google request GET "https://gmail.googleapis.com/gmail/v1/users/me/threads/THREAD_ID?format=full"
 ```
 
 Returns all messages in the thread.
@@ -70,8 +59,7 @@ Returns all messages in the thread.
 ### List Labels
 
 ```bash
-curl -s "https://gmail.googleapis.com/gmail/v1/users/me/labels" \
-  -H "Authorization: Bearer $ACCESS_TOKEN"
+charliebot google request GET "https://gmail.googleapis.com/gmail/v1/users/me/labels"
 ```
 
 ## Bootstrap / Re-Authorization
@@ -81,7 +69,7 @@ Choose an account in the **Accounts** section and follow **Add or Re-Authorize a
 ## Workflow
 
 1. Choose the account that matches the request using the **Accounts** section in the **google-oauth** skill.
-2. Mint its access token with `python3 skills/google-oauth/scripts/google_account.py token --account <name>`. Omit `--account` for the default account.
+2. Send each request with `charliebot google request GET <URL> --account <name>`. Omit `--account` for the default account.
 3. Search or list messages using Gmail search syntax (`q=` parameter).
 4. Fetch full message content and decode the body.
 5. Present extracted text to the user.

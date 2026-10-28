@@ -1260,7 +1260,6 @@
       let wrapper = this.forYouRoundButtonRows.get(key);
       if (!wrapper) {
         wrapper = document.createElement('div');
-        wrapper.className = 'flex justify-start';
         const row = document.createElement('div');
         row.className = 'flex items-center gap-3 py-2 px-4 separator-line';
         row.dataset.eventIndex = String(msg.event_index);

@@ -8,12 +8,14 @@ use charliebot_agents::transport::cgroup::SessionCgroupConfig;
 use charliebot_claude_code::AnthropicEndpointBackend;
 
 /// The backend for `model` behind the proxy at `proxy_base_url`, authenticated with the access key `auth_token`.
-/// The trailing slashes of the URL are dropped, as `rstrip("/")` drops them.
+/// `server_port` is the port of the CharlieBot server that serves the web search MCP tool. The trailing slashes of the
+/// URL are dropped, as `rstrip("/")` drops them.
 pub fn backend(
   proxy_base_url: &str,
   auth_token: &str,
   model: &str,
   claude_config_dir: Option<String>,
+  server_port: u16,
   launch: LaunchArgs,
   cgroup_config: SessionCgroupConfig,
 ) -> anyhow::Result<AnthropicEndpointBackend> {
@@ -33,6 +35,7 @@ pub fn backend(
     None,
     None,
     claude_config_dir,
+    server_port,
     launch,
     cgroup_config,
   )
@@ -48,11 +51,13 @@ mod tests {
     let message = |result: anyhow::Result<AnthropicEndpointBackend>| format!("{:#}", result.err().unwrap());
     let limits = SessionCgroupConfig::disabled();
     assert!(
-      message(backend("", "key", "model", None, LaunchArgs::default(), limits.clone()))
+      message(backend("", "key", "model", None, 8000, LaunchArgs::default(), limits.clone()))
         .contains("requires proxy_base_url")
     );
-    assert!(message(backend(url, "", "model", None, LaunchArgs::default(), limits.clone())).contains("auth_token"));
-    assert!(message(backend(url, "key", "", None, LaunchArgs::default(), limits)).contains("requires a model"));
+    assert!(
+      message(backend(url, "", "model", None, 8000, LaunchArgs::default(), limits.clone())).contains("auth_token")
+    );
+    assert!(message(backend(url, "key", "", None, 8000, LaunchArgs::default(), limits)).contains("requires a model"));
   }
 
   #[test]
@@ -62,6 +67,7 @@ mod tests {
       "charliebot-key",
       "nvidia/GLM-5.2-NVFP4",
       None,
+      8000,
       LaunchArgs::default(),
       SessionCgroupConfig::disabled(),
     )

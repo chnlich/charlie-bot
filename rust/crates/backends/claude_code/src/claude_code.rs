@@ -20,6 +20,8 @@ use charliebot_agents::cli_base::SKIP_PERMISSIONS_FLAG;
 use charliebot_agents::transport::cgroup::SessionCgroupConfig;
 use charliebot_agents::transport::kill::{kill_process_group, python_exit_code};
 use charliebot_agents::transport::spawn::{ChildStdin, SpawnSetup, SpawnSpec, spawn_with_setup};
+use charliebot_core::run_token;
+use charliebot_core::web_search::MCP_PATH;
 
 use super::claude_launch;
 use super::login_dirs;
@@ -30,9 +32,13 @@ pub const HEADLESS_DISALLOWED_TOOLS: &str = concat!(
   "TaskGet,TaskUpdate,TaskList,TaskStop,TaskOutput,SendMessage,ListAgents,ShareOnboardingGuide"
 );
 pub const DISALLOWED_TOOLS_FLAG: &str = "--disallowed-tools";
+pub const MCP_CONFIG_FLAG: &str = "--mcp-config";
 /// Claude Code's built-in web search tool. It asks the API endpoint to search, which the endpoint backends either
-/// refuse or answer without a search, so those backends disallow it and use the server's tool instead.
+/// refuse or answer without a search, so those backends disallow it and mount the server's tool instead.
 pub const BUILT_IN_WEB_SEARCH_TOOL: &str = "WebSearch";
+/// The MCP server name of the server's web search tool, which `features/web_search` serves. Its route path is that
+/// crate's `MCP_PATH`, which registers the route.
+pub const WEB_SEARCH_MCP_SERVER_NAME: &str = "charliebot-web";
 pub const INSTRUCTIONS_FILE_NAME: &str = "CLAUDE.md";
 pub const INSTRUCTIONS_WRITTEN_EVENT: &str = "claude_code_wrote_claude_md";
 pub const EXCLUDE_DYNAMIC_SECTIONS_FLAG: &str = "--exclude-dynamic-system-prompt-sections";
@@ -522,23 +528,43 @@ pub fn without_gateway_env(env: &Env) -> Env {
     .collect()
 }
 
+/// The `--mcp-config` value that mounts the server's web search tool over HTTP. The bearer names the run-token
+/// variable, which Claude Code expands from the run's environment, so the token stays out of the argv.
+pub fn web_search_mcp_config(server_port: u16) -> String {
+  let bearer = format!("Bearer ${{{}}}", run_token::RUN_TOKEN_ENV);
+  let mut headers = Map::new();
+  headers.insert("Authorization".to_string(), Value::String(bearer));
+  let mut server = Map::new();
+  server.insert("type".to_string(), Value::String("http".to_string()));
+  server.insert("url".to_string(), Value::String(format!("http://localhost:{server_port}{MCP_PATH}")));
+  server.insert("headers".to_string(), Value::Object(headers));
+  let mut servers = Map::new();
+  servers.insert(WEB_SEARCH_MCP_SERVER_NAME.to_string(), Value::Object(server));
+  let mut config = Map::new();
+  config.insert("mcpServers".to_string(), Value::Object(servers));
+  Value::Object(config).to_string()
+}
+
 /// Claude Code pointed at an Anthropic-compatible endpoint by environment. The endpoint URL and bearer token ride
 /// `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN`, and `claude_model_env` pins every model-selection variable, so the
-/// command carries no `--model` flag. Each backend type that names its endpoint builds one of these.
+/// command carries no `--model` flag. The command disallows the endpoint's built-in web search and mounts the server's
+/// web search tool in its place. Each backend type that names its endpoint builds one of these.
 pub struct AnthropicEndpointBackend {
   backend: ClaudeCodeBackend,
   base_url: String,
   auth_token: String,
   model: String,
+  server_port: u16,
   context_window: Option<u64>,
   headers: Vec<(String, String)>,
   extra_body: Map<String, Value>,
 }
 
 impl AnthropicEndpointBackend {
-  /// The backend for `model` at `base_url`, authenticated with `auth_token`. `effort` is the `--effort` level the
-  /// command carries when it is set. `launch` carries the per-launch arguments of [`ClaudeCodeBackend`], such as the
-  /// session id and the instructions file.
+  /// The backend for `model` at `base_url`, authenticated with `auth_token`. `server_port` is the port of the
+  /// CharlieBot server that serves the web search MCP tool. `effort` is the `--effort` level the command carries when
+  /// it is set. `launch` carries the per-launch arguments of [`ClaudeCodeBackend`], such as the session id and the
+  /// instructions file.
   #[allow(clippy::too_many_arguments)]
   pub fn new(
     base_url: String,
@@ -547,11 +573,21 @@ impl AnthropicEndpointBackend {
     context_window: Option<u64>,
     effort: Option<String>,
     claude_config_dir: Option<String>,
+    server_port: u16,
     launch: LaunchArgs,
     cgroup_config: SessionCgroupConfig,
   ) -> anyhow::Result<Self> {
     let backend = ClaudeCodeBackend::from_launch(None, effort, None, false, claude_config_dir, launch, cgroup_config)?;
-    Ok(Self { backend, base_url, auth_token, model, context_window, headers: Vec::new(), extra_body: Map::new() })
+    Ok(Self {
+      backend,
+      base_url,
+      auth_token,
+      model,
+      server_port,
+      context_window,
+      headers: Vec::new(),
+      extra_body: Map::new(),
+    })
   }
 
   /// Route `headers` as `ANTHROPIC_CUSTOM_HEADERS` lines, in the option's order.
@@ -600,6 +636,7 @@ impl AgentBackend for AnthropicEndpointBackend {
   fn build_command(&self, prompt: &str) -> anyhow::Result<Vec<String>> {
     let mut command = self.backend.build_command(prompt)?;
     disallow_tool(&mut command, BUILT_IN_WEB_SEARCH_TOOL);
+    command.extend([MCP_CONFIG_FLAG.to_string(), web_search_mcp_config(self.server_port)]);
     Ok(command)
   }
 
@@ -875,6 +912,7 @@ mod tests {
       Some(409_600),
       None,
       None,
+      8123,
       LaunchArgs { extra_flags: vec!["--resume".to_string(), "resume-id".to_string()], ..LaunchArgs::default() },
       SessionCgroupConfig::disabled(),
     )
@@ -1042,6 +1080,7 @@ mod tests {
       None,
       None,
       None,
+      8123,
       LaunchArgs::default(),
       SessionCgroupConfig::disabled(),
     )
@@ -1207,6 +1246,7 @@ mod tests {
       None,
       None,
       None,
+      8123,
       LaunchArgs::default(),
       SessionCgroupConfig::disabled(),
     )
@@ -1221,6 +1261,39 @@ mod tests {
       disallowed_tools_value(&one_shot),
       format!("{},{}", ONE_SHOT_DISALLOWED_TOOLS, BUILT_IN_WEB_SEARCH_TOOL)
     );
+  }
+
+  #[test]
+  fn endpoint_backend_mounts_the_server_web_search_with_the_run_token_variable() {
+    let backend = AnthropicEndpointBackend::new(
+      "http://localhost:8123/api/anthropic-proxy".to_string(),
+      "synthetic-token".to_string(),
+      "synthetic/model-1".to_string(),
+      None,
+      None,
+      None,
+      18498,
+      LaunchArgs::default(),
+      SessionCgroupConfig::disabled(),
+    )
+    .unwrap();
+    let command = backend.build_command("prompt").unwrap();
+    let index = command.iter().position(|value| value == MCP_CONFIG_FLAG).expect("the command carries --mcp-config");
+    let config: Value = serde_json::from_str(&command[index + 1]).expect("the --mcp-config value is JSON");
+    assert_eq!(
+      config,
+      serde_json::json!({"mcpServers": {"charliebot-web": {
+        "type": "http",
+        "url": "http://localhost:18498/api/web-search/mcp",
+        "headers": {"Authorization": "Bearer ${CHARLIEBOT_RUN_TOKEN}"},
+      }}})
+    );
+    assert!(
+      command.iter().all(|value| !value.contains("synthetic-token")),
+      "no argument carries a credential: {command:?}"
+    );
+    let one_shot = backend.one_shot_command("system");
+    assert!(!one_shot.iter().any(|value| value == MCP_CONFIG_FLAG), "a one-shot mounts no MCP tool");
   }
 
   fn disallowed_tools_value(command: &[String]) -> String {

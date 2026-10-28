@@ -42,6 +42,7 @@ members = [
     "crates/features/usage",
     "crates/features/voice",
     "crates/features/web_reply",
+    "crates/features/web_search",
     "crates/runtime/store",
     "crates/runtime/registry",
     "crates/runtime/session-api",
@@ -181,6 +182,7 @@ charliebot-usage = { path = "crates/runtime/usage" }
 charliebot-usage-page = { path = "crates/features/usage" }
 charliebot-voice = { path = "crates/features/voice" }
 charliebot-web-reply = { path = "crates/features/web_reply" }
+charliebot-web-search = { path = "crates/features/web_search" }
 
 # Line tables keep backtrace file and line numbers; full debug info bloats each test binary to ~400 MB.
 [profile.dev]

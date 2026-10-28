@@ -19,7 +19,6 @@ page_packages	src.features.diff_view	src.features.diff_view
 page_packages	src.features.explain	src.features.explain
 page_packages	src.features.improve	src.features.improve
 page_packages	src.features.memory	src.features.memory
-page_packages	src.features.ncu	src.features.ncu
 page_packages	src.features.terminal	src.features.terminal
 page_packages	src.features.trace	src.features.trace
 page_packages	src.features.usage	src.features.usage
@@ -50,7 +49,6 @@ routers	src.features.diff_view	src.features.diff_view
 routers	src.features.diff_view	src.features.diff_view
 routers	src.features.explain	src.features.explain
 routers	src.features.improve	src.features.improve
-routers	src.features.ncu	src.features.ncu
 routers	src.features.trace	src.features.trace
 routers	src.features.usage	src.features.usage
 routers	src.features.usage	src.features.usage

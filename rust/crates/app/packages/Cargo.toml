@@ -27,7 +27,6 @@ charliebot-gemini.workspace = true
 charliebot-host-auth.workspace = true
 charliebot-improve.workspace = true
 charliebot-memory.workspace = true
-charliebot-ncu.workspace = true
 charliebot-openai-compatible.workspace = true
 charliebot-opencode.workspace = true
 charliebot-registry.workspace = true

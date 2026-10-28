@@ -31,7 +31,7 @@ CharlieBot is a self-hosted multi-agent orchestration system: a master agent dri
 - Worker (thread) and plan panels
 - HTML artifact viewer with line-anchored comments
 - GitHub-style diff viewer with diff comments
-- Perfetto and NCU trace viewers
+- Perfetto trace viewer
 - Built-in web terminal (tmux)
 - Voice input with online speech transcription (Gemini and Muse backends)
 - Usage panels: external provider quotas and per-session context usage

@@ -91,7 +91,6 @@ GET	/api/sessions/{session_id}/explain	explain	access key	src/features/explain/a
 GET	/api/sessions/{session_id}/explain/status	explain	access key	src/features/explain/api.py:55	features
 POST	/api/internal/improve/stop	improve	access key	src/features/improve/api.py:40	triggers-cron-improve
 POST	/api/internal/improve	improve	access key	src/features/improve/api.py:59	triggers-cron-improve
-GET	/ncu	pages	access key	src/features/ncu/api.py:32	features
 WS	/ws/terminal	websocket	ws token	src/features/terminal/api.py:13	features
 GET	/perfetto	pages	access key	src/features/trace/api.py:78	features
 GET	/perfetto/merged	files	access key	src/features/trace/api.py:340	features
@@ -117,7 +116,6 @@ GET,HEAD	/static/features/diff_view	static	public	server.py:564	server-skeleton
 GET,HEAD	/static/features/explain	static	public	server.py:564	server-skeleton
 GET,HEAD	/static/features/improve	static	public	server.py:564	server-skeleton
 GET,HEAD	/static/features/memory	static	public	server.py:564	server-skeleton
-GET,HEAD	/static/features/ncu	static	public	server.py:564	server-skeleton
 GET,HEAD	/static/features/router	static	public	server.py:564	server-skeleton
 GET,HEAD	/static/features/terminal	static	public	server.py:564	server-skeleton
 GET,HEAD	/static/features/trace	static	public	server.py:564	server-skeleton

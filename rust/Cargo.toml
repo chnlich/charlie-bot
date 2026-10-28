@@ -35,7 +35,6 @@ members = [
     "crates/features/files",
     "crates/features/host_auth",
     "crates/features/memory",
-    "crates/features/ncu",
     "crates/features/slack",
     "crates/features/terminal",
     "crates/features/trace",
@@ -68,7 +67,6 @@ cgfs = "0.1"
 clap = { version = "4", features = ["derive"] }
 chrono = "0.4"
 chrono-tz = "0.10"
-csv = "1"
 data-encoding = "2"
 libc = "0.2"
 memchr = "2"
@@ -161,7 +159,6 @@ charliebot-gemini = { path = "crates/backends/gemini" }
 charliebot-improve = { path = "crates/features/improve" }
 charliebot-host-auth = { path = "crates/features/host_auth" }
 charliebot-memory = { path = "crates/features/memory" }
-charliebot-ncu = { path = "crates/features/ncu" }
 charliebot-openai-compatible = { path = "crates/backends/openai_compatible" }
 charliebot-opencode = { path = "crates/backends/opencode" }
 charliebot-packages = { path = "crates/app/packages" }

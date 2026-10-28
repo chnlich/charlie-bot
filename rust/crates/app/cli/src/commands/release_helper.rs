@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 
 use charliebot_cli_common::exit::CliExit;
 use charliebot_cli_common::route;
+use charliebot_core::cgroup;
 use charliebot_core::config;
 use charliebot_core::credentials;
 use charliebot_core::event_types;
@@ -50,8 +51,6 @@ const SWEEP_REMOVED: &str = "session_cgroup_sweep_removed";
 const CGROUP_ENABLED: &str = "session_cgroup_enabled";
 /// The event that names each session cgroup the server created.
 const CGROUP_CREATED: &str = "session_cgroup_created";
-/// A session cgroup's name prefix; the rest is the session directory name's first eight characters.
-const SESSION_CGROUP_PREFIX: &str = "charliebot-sess-";
 /// The display state of a run that finished successfully.
 const RUN_STATE_SUCCESS: &str = "success";
 
@@ -827,7 +826,7 @@ fn session_cgroup_names(sessions: &str) -> Result<BTreeSet<String>, String> {
       continue;
     }
     let name = entry.file_name().to_string_lossy().into_owned();
-    names.insert(format!("{SESSION_CGROUP_PREFIX}{}", name.chars().take(8).collect::<String>()));
+    names.insert(cgroup::session_cgroup_name(&name));
   }
   Ok(names)
 }
